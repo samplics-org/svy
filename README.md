@@ -66,6 +66,8 @@ All methods are grounded in established survey methodology.
 The example below shows the **intended public API**.
 It reflects the current design but **cannot yet be run** until the first release.
 
+### Design-based estimation
+
 ```python
 import svy
 
@@ -79,6 +81,8 @@ tot_exp_mean = hld_sample.estimation.mean(y="tot_exp")
 
 print(tot_exp_mean)
 ```
+
+### Fay Herriot Model - SAE
 
 ```python
 import svy_sae as sae
