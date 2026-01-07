@@ -143,7 +143,7 @@ If you work with complex surveys and want to influence the design of a modern Py
 ## License
 
 MIT License  
-Copyright © 2025 Samplics LLC
+Copyright © 2026 Samplics LLC
 
 ---
 
