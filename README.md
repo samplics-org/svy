@@ -69,16 +69,15 @@ It reflects the current design but **cannot yet be run** until the first release
 ```python
 import svy
 
-design = svy.SurveyDesign(
-    data=data,
-    strata="stratum",
-    cluster="psu",
-    weights="weight"
-)
+hld_data = svy.load_dataset(name="hld_sample_wb_2023", limit=None)
 
-result = design.mean("income")
+hld_design = svy.Design(stratum=("geo1", "urbrur"), psu="ea", wgt="hhweight")
 
-print(result)
+hld_sample = svy.Sample(data=hld_data, design=hld_design)
+
+tot_exp_mean = hld_sample.estimation.mean(y="tot_exp")
+
+print(tot_exp_mean)
 ```
 
 ```python
@@ -86,9 +85,9 @@ import svy_sae as sae
 
 milk = svy.load_dataset(name="milk", limit=None)
 
-model = sae.AreaLevel(milk)
+milk_model = sae.AreaLevel(milk)
 
-predictions = model.fh(
+milk_preds = milk_model.fh(
     y="yi",
     x=svy.Cat("MajorArea", ref=1),
     variance="variance",
@@ -97,7 +96,7 @@ predictions = model.fh(
     mse="prasad_rao",
 )
 
-print(predictions)
+print(milk_preds)
 ```
 
 No shortcuts.  
