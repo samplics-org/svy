@@ -1,70 +1,96 @@
 [project]
-name = "svy-ecosystem"
-version = "0.0.0"
-description = "Python ecosystem for complex survey design, analysis, and reporting"
+name = "svy-workspace"
+version = "0.0.1"
+description = "Workspace for the svy ecosystem (svy, svy-sae, svy-io, etc.)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [
-  { name = "Samplics LLC", email = "msdiallo@samplics.org" }
-]
+authors = [{ name = "Samplics LLC", email = "msdiallo@samplics.org" }]
 
-# This project is NOT meant to be installed as a package
-# It only exists to manage the workspace
+# Workspace root is NOT an installable distribution.
 dependencies = []
 
+# ------------------------------------------------------------
+# uv workspace configuration
+# ------------------------------------------------------------
 [tool.uv]
-# Declare workspace members
 workspace = [
   "packages/svy",
   "packages/svy-sae",
   "packages/svy-io",
+  # "packages/svy-agents",
 ]
 
-# Optional: central dependency overrides / pins
-# Useful when multiple packages depend on the same core libs
-[tool.uv.dependency-overrides]
-# polars = ">=1.36,<2.0"
-# pyarrow = ">=22,<23"
-
+# Force uv to treat these as workspace packages (avoid accidental PyPI resolution)
 [tool.uv.sources]
 svy = { workspace = true }
 svy-sae = { workspace = true }
 svy-io = { workspace = true }
-svy-agents = { workspace = true }
+# svy-agents = { workspace = true }
 
-# ---------------------------
-# Tooling (shared defaults)
-# ---------------------------
+# Optional central pins/overrides shared across packages
+[tool.uv.dependency-overrides]
+# numpy = ">=2.3"
+# polars = ">=1.36,<2.0"
+# pyarrow = ">=22,<23"
+
+# ------------------------------------------------------------
+# Shared tooling defaults (repo-wide)
+# ------------------------------------------------------------
 
 [tool.pytest.ini_options]
-addopts = "-ra"
+# Workspace runs all package tests via: `pytest`
+addopts = "-ra --import-mode=importlib"
 testpaths = ["packages"]
+markers = [
+  "optional: mark test as optional (e.g. requires extra dependencies)",
+]
 filterwarnings = [
   "error",
   "ignore::DeprecationWarning",
 ]
 
 [tool.ruff]
-line-length = 100
-target-version = "py310"
-select = ["E", "F", "I", "UP", "B"]
-ignore = ["E203"]
+line-length = 99
+target-version = "py311"
+exclude = [".venv", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I001", "UP", "B"]
+ignore = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"
 
 [tool.mypy]
-python_version = "3.10"
-warn_unused_configs = true
-warn_return_any = true
-strict_optional = true
+python_version = "3.11"
 ignore_missing_imports = true
+follow_imports = "silent"
+strict_optional = true
 
-# ---------------------------
-# Build / automation helpers
-# ---------------------------
+# Repo-wide strictness (you can relax in individual packages if needed)
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_decorators = true
 
+warn_no_return = true
+warn_return_any = true
+no_implicit_optional = true
+
+warn_unreachable = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unused_configs = true
+
+exclude = [".venv"]
+
+# ------------------------------------------------------------
+# Safety: prevent accidental packaging of workspace root
+# ------------------------------------------------------------
 [tool.setuptools]
-# Prevent accidental packaging
 packages = []
+
+[build-system]
+requires = []
+build-backend = "setuptools.build_meta:__legacy__"
