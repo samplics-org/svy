@@ -9,6 +9,10 @@ Modern Python tools for **complex survey analysis**, built for real-world statis
 
 ---
 
+> [!TIP]
+> **Validation**: Want to assess the correctness of svy?  
+> See our [comparison with R’s survey package](https://svylab.com/learn/notes/posts/svy-vs-r-comparison/), showing numerically identical results across Taylor linearization, replication methods, and complex survey designs.
+
 ## ⚠️ Current Status (Read This First)
 
 **The svy libraries are not yet publicly downloadable.**
