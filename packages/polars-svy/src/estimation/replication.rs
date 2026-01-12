@@ -10,6 +10,7 @@ pub enum RepMethod {
     BRR,
     Bootstrap,
     Jackknife,
+    SDR,
 }
 
 impl RepMethod {
@@ -18,6 +19,7 @@ impl RepMethod {
             "brr" => Some(RepMethod::BRR),
             "bootstrap" | "bs" => Some(RepMethod::Bootstrap),
             "jackknife" | "jk" | "jk1" => Some(RepMethod::Jackknife),
+            "sdr" | "acs" | "successive-difference" => Some(RepMethod::SDR),
             _ => None,
         }
     }
@@ -34,6 +36,10 @@ pub fn replicate_coefficients(method: RepMethod, n_reps: usize, fay_coef: f64) -
         RepMethod::Jackknife => {
             let coef = (n_reps as f64 - 1.0) / n_reps as f64;
             vec![coef; n_reps]
+        }
+        RepMethod::SDR => {
+            // SDR (e.g. ACS): coefficient = 4/R for each replicate
+            vec![4.0 / n_reps as f64; n_reps]
         }
     }
 }
@@ -93,8 +99,21 @@ pub fn variance_from_replicates(
 
             var
         }
+        RepMethod::SDR => {
+            // SDR always uses MSE formula (center on full sample estimate)
+            // Var = sum(coef * (theta_rep - theta_full)^2)
+            let var: f64 = theta_reps.iter()
+                .zip(rep_coefs.iter())
+                .map(|(&rep, &c)| {
+                    let diff = rep - theta_full;
+                    c * diff * diff
+                })
+                .sum();
+
+            var
+        }
         RepMethod::BRR | RepMethod::Bootstrap => {
-            // Simple squared difference from center
+            // Simple squared difference from mean of replicates
             let center: f64 = theta_reps.iter().sum::<f64>() / n_reps as f64;
 
             let var: f64 = theta_reps.iter()
@@ -564,4 +583,39 @@ pub fn matrix_prop_by_domain(
         .collect();
 
     (levels, theta_full, theta_reps, counts)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sdr_coefficients() {
+        let coefs = replicate_coefficients(RepMethod::SDR, 80, 0.0);
+        assert_eq!(coefs.len(), 80);
+        assert!((coefs[0] - 4.0 / 80.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_sdr_variance() {
+        // Simple test: 4 replicates
+        let theta_full = 100.0;
+        let theta_reps = vec![98.0, 102.0, 99.0, 101.0];
+        let rep_coefs = replicate_coefficients(RepMethod::SDR, 4, 0.0);
+
+        // Var = (4/4) * sum((rep - 100)^2)
+        //     = 1.0 * (4 + 4 + 1 + 1) = 10.0
+        let var = variance_from_replicates(RepMethod::SDR, theta_full, &theta_reps, &rep_coefs);
+        assert!((var - 10.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_sdr_from_str() {
+        assert_eq!(RepMethod::from_str("sdr"), Some(RepMethod::SDR));
+        assert_eq!(RepMethod::from_str("SDR"), Some(RepMethod::SDR));
+        assert_eq!(RepMethod::from_str("acs"), Some(RepMethod::SDR));
+        assert_eq!(RepMethod::from_str("ACS"), Some(RepMethod::SDR));
+        assert_eq!(RepMethod::from_str("successive-difference"), Some(RepMethod::SDR));
+    }
 }

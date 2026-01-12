@@ -753,7 +753,7 @@ fn replicate_mean(
 
     let rep_method = RepMethod::from_str(&method)
         .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            format!("Unknown method: {}. Use 'brr', 'bootstrap', or 'jackknife'", method)
+            format!("Unknown method: {}. Use 'BRR', 'Bootstrap', 'Jackknife', or 'SDR'", method)
         ))?;
 
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
@@ -878,7 +878,7 @@ fn replicate_total(
 
     let rep_method = RepMethod::from_str(&method)
         .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            format!("Unknown method: {}", method)
+            format!("Unknown method: {}. Use 'BRR', 'Bootstrap', 'Jackknife', or 'SDR'", method)
         ))?;
 
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
@@ -1004,7 +1004,7 @@ fn replicate_ratio(
 
     let rep_method = RepMethod::from_str(&method)
         .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            format!("Unknown method: {}", method)
+            format!("Unknown method: {}. Use 'BRR', 'Bootstrap', 'Jackknife', or 'SDR'", method)
         ))?;
 
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
@@ -1137,7 +1137,7 @@ fn replicate_prop(
 
     let rep_method = RepMethod::from_str(&method)
         .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            format!("Unknown method: {}", method)
+            format!("Unknown method: {}. Use 'BRR', 'Bootstrap', 'Jackknife', or 'SDR'", method)
         ))?;
 
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);

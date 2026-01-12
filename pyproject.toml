@@ -7,39 +7,36 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Samplics LLC", email = "msdiallo@samplics.org" }]
 
-# Workspace root is NOT an installable distribution.
 dependencies = []
 
+[dependency-groups]
+dev = [
+    "maturin>=1.7.7",
+    "pytest>=8.3.4",
+]
 # ------------------------------------------------------------
 # uv workspace configuration
 # ------------------------------------------------------------
-[tool.uv]
-workspace = [
-  "packages/svy",
-  "packages/svy-sae",
-  "packages/svy-io",
-  # "packages/svy-agents",
+[tool.uv.workspace]
+members = [
+  # "packages/svy",
+  # "packages/svy-sae",
+  # "packages/svy-io",
+  "packages/polars-svy",
 ]
 
-# Force uv to treat these as workspace packages (avoid accidental PyPI resolution)
 [tool.uv.sources]
-svy = { workspace = true }
-svy-sae = { workspace = true }
-svy-io = { workspace = true }
-# svy-agents = { workspace = true }
+# svy = { workspace = true }
+# svy-sae = { workspace = true }
+# svy-io = { workspace = true }
+polars-svy = { workspace = true }
 
-# Optional central pins/overrides shared across packages
-[tool.uv.dependency-overrides]
-# numpy = ">=2.3"
-# polars = ">=1.36,<2.0"
-# pyarrow = ">=22,<23"
+
 
 # ------------------------------------------------------------
 # Shared tooling defaults (repo-wide)
 # ------------------------------------------------------------
-
 [tool.pytest.ini_options]
-# Workspace runs all package tests via: `pytest`
 addopts = "-ra --import-mode=importlib"
 testpaths = ["packages"]
 markers = [
@@ -67,30 +64,15 @@ python_version = "3.11"
 ignore_missing_imports = true
 follow_imports = "silent"
 strict_optional = true
-
-# Repo-wide strictness (you can relax in individual packages if needed)
 disallow_untyped_calls = true
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 disallow_untyped_decorators = true
-
 warn_no_return = true
 warn_return_any = true
 no_implicit_optional = true
-
 warn_unreachable = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 warn_unused_configs = true
-
 exclude = [".venv"]
-
-# ------------------------------------------------------------
-# Safety: prevent accidental packaging of workspace root
-# ------------------------------------------------------------
-[tool.setuptools]
-packages = []
-
-[build-system]
-requires = []
-build-backend = "setuptools.build_meta:__legacy__"
