@@ -1,7 +1,6 @@
 // src/estimation/mod.rs
 mod taylor;
 pub mod replication;
-
 pub use taylor::{
     // Point estimates
     point_estimate_mean, point_estimate_total, point_estimate_ratio,
@@ -15,11 +14,10 @@ pub use taylor::{
     srs_variance_mean, srs_variance_mean_domain,
     srs_variance_total, srs_variance_total_domain,
     srs_variance_ratio, srs_variance_ratio_domain,
-    srs_variance_prop,
 };
-
 pub use replication::{
     RepMethod,
+    VarianceCenter,  // ← Add this
     replicate_coefficients, variance_from_replicates,
     extract_rep_weights_matrix, index_domains,
     matrix_mean_estimates, matrix_total_estimates, matrix_ratio_estimates,

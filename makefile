@@ -58,7 +58,7 @@ build-polars-svy:
 .PHONY: release-polars-svy
 release-polars-svy:
 	@echo "▶ Building RELEASE wheel for polars-svy..."
-	cd $(PKG_POLARS_SVY) && uv run maturin build --release
+	cd $(PKG_POLARS_SVY) && uv run maturin develop --uv --release
 
 # Install in editable mode (changes to Rust code take effect on next import)
 .PHONY: develop-polars-svy

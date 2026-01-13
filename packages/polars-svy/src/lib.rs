@@ -16,7 +16,8 @@ use estimation::{
 };
 
 use crate::estimation::replication::{
-    RepMethod, replicate_coefficients, variance_from_replicates,
+    RepMethod, VarianceCenter,
+    replicate_coefficients, variance_from_replicates,
     extract_rep_weights_matrix, index_domains,
     matrix_mean_estimates, matrix_total_estimates, matrix_ratio_estimates,
     matrix_mean_by_domain, matrix_total_by_domain, matrix_ratio_by_domain,
@@ -736,7 +737,7 @@ fn compute_prop_grouped(
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, fay_coef=0.0, degrees_of_freedom=None, by_col=None))]
+#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, fay_coef=0.0, center="rep_mean", degrees_of_freedom=None, by_col=None))]
 fn replicate_mean(
     _py: Python,
     data: PyDataFrame,
@@ -745,6 +746,7 @@ fn replicate_mean(
     rep_weight_cols: Vec<String>,
     method: String,
     fay_coef: f64,
+    center: &str,
     degrees_of_freedom: Option<u32>,
     by_col: Option<String>,
 ) -> PyResult<PyDataFrame> {
@@ -756,12 +758,17 @@ fn replicate_mean(
             format!("Unknown method: {}. Use 'BRR', 'Bootstrap', 'Jackknife', or 'SDR'", method)
         ))?;
 
+    let variance_center = VarianceCenter::from_str(&center)
+        .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            format!("Unknown center: {}. Use 'replicate_mean' or 'full_sample'", center)
+        ))?;
+
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 
     let result = if by_col.is_none() {
-        compute_replicate_mean_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols, rep_method, fay_coef, df_val)
+        compute_replicate_mean_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols, rep_method, fay_coef, variance_center, df_val)
     } else {
-        compute_replicate_mean_grouped(&df, &value_col, &weight_col, &rep_weight_cols, rep_method, fay_coef, df_val, by_col.as_ref().unwrap())
+        compute_replicate_mean_grouped(&df, &value_col, &weight_col, &rep_weight_cols, rep_method, fay_coef, variance_center, df_val, by_col.as_ref().unwrap())
     };
 
     result.map(PyDataFrame)
@@ -775,6 +782,7 @@ fn compute_replicate_mean_ungrouped(
     rep_weight_cols: &[String],
     method: RepMethod,
     fay_coef: f64,
+    center: VarianceCenter,
     df_val: u32,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
@@ -789,7 +797,7 @@ fn compute_replicate_mean_ungrouped(
     let (theta_full, theta_reps) = matrix_mean_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps);
 
     let rep_coefs = replicate_coefficients(method, n_reps, fay_coef);
-    let variance = variance_from_replicates(method, theta_full, &theta_reps, &rep_coefs);
+    let variance = variance_from_replicates(method, theta_full, &theta_reps, &rep_coefs, center);
     let se = variance.sqrt();
 
     df![
@@ -809,6 +817,7 @@ fn compute_replicate_mean_grouped(
     rep_weight_cols: &[String],
     method: RepMethod,
     fay_coef: f64,
+    center: VarianceCenter,
     df_val: u32,
     by_col: &str,
 ) -> PolarsResult<DataFrame> {
@@ -839,7 +848,7 @@ fn compute_replicate_mean_grouped(
     let mut ns: Vec<u32> = Vec::with_capacity(n_domains);
 
     for (k, domain_name) in domain_names.iter().enumerate() {
-        let variance = variance_from_replicates(method, theta_full_vec[k], &theta_reps_vec[k], &rep_coefs);
+        let variance = variance_from_replicates(method, theta_full_vec[k], &theta_reps_vec[k], &rep_coefs, center);
 
         by_vals.push(domain_name.clone());
         estimates.push(theta_full_vec[k]);
@@ -861,7 +870,7 @@ fn compute_replicate_mean_grouped(
 }
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, fay_coef=0.0, degrees_of_freedom=None, by_col=None))]
+#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, fay_coef=0.0, center="rep_mean", degrees_of_freedom=None, by_col=None))]
 fn replicate_total(
     _py: Python,
     data: PyDataFrame,
@@ -870,6 +879,7 @@ fn replicate_total(
     rep_weight_cols: Vec<String>,
     method: String,
     fay_coef: f64,
+    center: &str,
     degrees_of_freedom: Option<u32>,
     by_col: Option<String>,
 ) -> PyResult<PyDataFrame> {
@@ -881,12 +891,17 @@ fn replicate_total(
             format!("Unknown method: {}. Use 'BRR', 'Bootstrap', 'Jackknife', or 'SDR'", method)
         ))?;
 
+    let variance_center = VarianceCenter::from_str(&center)
+        .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            format!("Unknown center: {}. Use 'replicate_mean' or 'full_sample'", center)
+        ))?;
+
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 
     let result = if by_col.is_none() {
-        compute_replicate_total_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols, rep_method, fay_coef, df_val)
+        compute_replicate_total_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols, rep_method, fay_coef, variance_center, df_val)
     } else {
-        compute_replicate_total_grouped(&df, &value_col, &weight_col, &rep_weight_cols, rep_method, fay_coef, df_val, by_col.as_ref().unwrap())
+        compute_replicate_total_grouped(&df, &value_col, &weight_col, &rep_weight_cols, rep_method, fay_coef, variance_center, df_val, by_col.as_ref().unwrap())
     };
 
     result.map(PyDataFrame)
@@ -900,6 +915,7 @@ fn compute_replicate_total_ungrouped(
     rep_weight_cols: &[String],
     method: RepMethod,
     fay_coef: f64,
+    center: VarianceCenter,
     df_val: u32,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
@@ -914,7 +930,7 @@ fn compute_replicate_total_ungrouped(
     let (theta_full, theta_reps) = matrix_total_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps);
 
     let rep_coefs = replicate_coefficients(method, n_reps, fay_coef);
-    let variance = variance_from_replicates(method, theta_full, &theta_reps, &rep_coefs);
+    let variance = variance_from_replicates(method, theta_full, &theta_reps, &rep_coefs, center);
     let se = variance.sqrt();
 
     df![
@@ -934,6 +950,7 @@ fn compute_replicate_total_grouped(
     rep_weight_cols: &[String],
     method: RepMethod,
     fay_coef: f64,
+    center: VarianceCenter,
     df_val: u32,
     by_col: &str,
 ) -> PolarsResult<DataFrame> {
@@ -964,7 +981,7 @@ fn compute_replicate_total_grouped(
     let mut ns: Vec<u32> = Vec::with_capacity(n_domains);
 
     for (k, domain_name) in domain_names.iter().enumerate() {
-        let variance = variance_from_replicates(method, theta_full_vec[k], &theta_reps_vec[k], &rep_coefs);
+        let variance = variance_from_replicates(method, theta_full_vec[k], &theta_reps_vec[k], &rep_coefs, center);
 
         by_vals.push(domain_name.clone());
         estimates.push(theta_full_vec[k]);
@@ -986,7 +1003,7 @@ fn compute_replicate_total_grouped(
 }
 
 #[pyfunction]
-#[pyo3(signature = (data, numerator_col, denominator_col, weight_col, rep_weight_cols, method, fay_coef=0.0, degrees_of_freedom=None, by_col=None))]
+#[pyo3(signature = (data, numerator_col, denominator_col, weight_col, rep_weight_cols, method, fay_coef=0.0, center="rep_mean", degrees_of_freedom=None, by_col=None))]
 fn replicate_ratio(
     _py: Python,
     data: PyDataFrame,
@@ -996,6 +1013,7 @@ fn replicate_ratio(
     rep_weight_cols: Vec<String>,
     method: String,
     fay_coef: f64,
+    center: &str,
     degrees_of_freedom: Option<u32>,
     by_col: Option<String>,
 ) -> PyResult<PyDataFrame> {
@@ -1007,12 +1025,17 @@ fn replicate_ratio(
             format!("Unknown method: {}. Use 'BRR', 'Bootstrap', 'Jackknife', or 'SDR'", method)
         ))?;
 
+    let variance_center = VarianceCenter::from_str(&center)
+        .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            format!("Unknown center: {}. Use 'replicate_mean' or 'full_sample'", center)
+        ))?;
+
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 
     let result = if by_col.is_none() {
-        compute_replicate_ratio_ungrouped(&df, &numerator_col, &denominator_col, &weight_col, &rep_weight_cols, rep_method, fay_coef, df_val)
+        compute_replicate_ratio_ungrouped(&df, &numerator_col, &denominator_col, &weight_col, &rep_weight_cols, rep_method, fay_coef, variance_center, df_val)
     } else {
-        compute_replicate_ratio_grouped(&df, &numerator_col, &denominator_col, &weight_col, &rep_weight_cols, rep_method, fay_coef, df_val, by_col.as_ref().unwrap())
+        compute_replicate_ratio_grouped(&df, &numerator_col, &denominator_col, &weight_col, &rep_weight_cols, rep_method, fay_coef, variance_center, df_val, by_col.as_ref().unwrap())
     };
 
     result.map(PyDataFrame)
@@ -1027,6 +1050,7 @@ fn compute_replicate_ratio_ungrouped(
     rep_weight_cols: &[String],
     method: RepMethod,
     fay_coef: f64,
+    center: VarianceCenter,
     df_val: u32,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(numerator_col)?.f64()?;
@@ -1043,7 +1067,7 @@ fn compute_replicate_ratio_ungrouped(
     let (theta_full, theta_reps) = matrix_ratio_estimates(&y_arr, &x_arr, &w_arr, &rep_w_matrix, n, n_reps);
 
     let rep_coefs = replicate_coefficients(method, n_reps, fay_coef);
-    let variance = variance_from_replicates(method, theta_full, &theta_reps, &rep_coefs);
+    let variance = variance_from_replicates(method, theta_full, &theta_reps, &rep_coefs, center);
     let se = variance.sqrt();
 
     df![
@@ -1065,6 +1089,7 @@ fn compute_replicate_ratio_grouped(
     rep_weight_cols: &[String],
     method: RepMethod,
     fay_coef: f64,
+    center: VarianceCenter,
     df_val: u32,
     by_col: &str,
 ) -> PolarsResult<DataFrame> {
@@ -1097,7 +1122,7 @@ fn compute_replicate_ratio_grouped(
     let mut ns: Vec<u32> = Vec::with_capacity(n_domains);
 
     for (k, domain_name) in domain_names.iter().enumerate() {
-        let variance = variance_from_replicates(method, theta_full_vec[k], &theta_reps_vec[k], &rep_coefs);
+        let variance = variance_from_replicates(method, theta_full_vec[k], &theta_reps_vec[k], &rep_coefs, center);
 
         by_vals.push(domain_name.clone());
         estimates.push(theta_full_vec[k]);
@@ -1120,7 +1145,7 @@ fn compute_replicate_ratio_grouped(
 }
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, fay_coef=0.0, degrees_of_freedom=None, by_col=None))]
+#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, fay_coef=0.0, center="rep_mean", degrees_of_freedom=None, by_col=None))]
 fn replicate_prop(
     _py: Python,
     data: PyDataFrame,
@@ -1129,6 +1154,7 @@ fn replicate_prop(
     rep_weight_cols: Vec<String>,
     method: String,
     fay_coef: f64,
+    center: &str,
     degrees_of_freedom: Option<u32>,
     by_col: Option<String>,
 ) -> PyResult<PyDataFrame> {
@@ -1140,12 +1166,17 @@ fn replicate_prop(
             format!("Unknown method: {}. Use 'BRR', 'Bootstrap', 'Jackknife', or 'SDR'", method)
         ))?;
 
+    let variance_center = VarianceCenter::from_str(&center)
+        .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            format!("Unknown center: {}. Use 'replicate_mean' or 'full_sample'", center)
+        ))?;
+
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 
     let result = if by_col.is_none() {
-        compute_replicate_prop_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols, rep_method, fay_coef, df_val)
+        compute_replicate_prop_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols, rep_method, fay_coef, variance_center, df_val)
     } else {
-        compute_replicate_prop_grouped(&df, &value_col, &weight_col, &rep_weight_cols, rep_method, fay_coef, df_val, by_col.as_ref().unwrap())
+        compute_replicate_prop_grouped(&df, &value_col, &weight_col, &rep_weight_cols, rep_method, fay_coef, variance_center, df_val, by_col.as_ref().unwrap())
     };
 
     result.map(PyDataFrame)
@@ -1159,6 +1190,7 @@ fn compute_replicate_prop_ungrouped(
     rep_weight_cols: &[String],
     method: RepMethod,
     fay_coef: f64,
+    center: VarianceCenter,
     df_val: u32,
 ) -> PolarsResult<DataFrame> {
     let y_series = df.column(value_col)?;
@@ -1192,7 +1224,7 @@ fn compute_replicate_prop_ungrouped(
     let mut ns: Vec<u32> = Vec::with_capacity(n_levels);
 
     for (l, &level) in levels.iter().enumerate() {
-        let variance = variance_from_replicates(method, theta_full_vec[l], &theta_reps_vec[l], &rep_coefs);
+        let variance = variance_from_replicates(method, theta_full_vec[l], &theta_reps_vec[l], &rep_coefs, center);
 
         level_strs.push(level.to_string());
         estimates.push(theta_full_vec[l]);
@@ -1220,6 +1252,7 @@ fn compute_replicate_prop_grouped(
     rep_weight_cols: &[String],
     method: RepMethod,
     fay_coef: f64,
+    center: VarianceCenter,
     df_val: u32,
     by_col: &str,
 ) -> PolarsResult<DataFrame> {
@@ -1248,7 +1281,7 @@ fn compute_replicate_prop_grouped(
     );
 
     let rep_coefs = replicate_coefficients(method, n_reps, fay_coef);
-    let n_levels = levels.len();
+    let _n_levels = levels.len();
 
     // Output: one row per (domain, level)
     let mut by_vals: Vec<String> = Vec::new();
@@ -1263,7 +1296,7 @@ fn compute_replicate_prop_grouped(
         for (l, &level) in levels.iter().enumerate() {
             let theta_full = theta_full_mat[d][l];
             let theta_reps = &theta_reps_mat[d][l];
-            let variance = variance_from_replicates(method, theta_full, theta_reps, &rep_coefs);
+            let variance = variance_from_replicates(method, theta_full, theta_reps, &rep_coefs, center);
 
             by_vals.push(domain_name.clone());
             level_strs.push(level.to_string());

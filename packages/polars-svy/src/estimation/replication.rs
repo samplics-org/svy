@@ -25,6 +25,35 @@ impl RepMethod {
     }
 }
 
+/// Centering method for variance estimation
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VarianceCenter {
+    /// Center on mean of replicate estimates (default, matches Stata and R survey default)
+    ReplicateMean,
+    /// Center on full sample estimate (matches R survey mse=TRUE)
+    FullSample,
+}
+
+impl Default for VarianceCenter {
+    fn default() -> Self {
+        VarianceCenter::ReplicateMean
+    }
+}
+
+impl VarianceCenter {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "rep_mean" | "repmean" | "mean" | "average" | "replicates" => {
+                Some(VarianceCenter::ReplicateMean)
+            }
+            "full_sample" | "fullsample" | "full" | "estimate" | "mse" => {
+                Some(VarianceCenter::FullSample)
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Compute replicate coefficients based on method
 pub fn replicate_coefficients(method: RepMethod, n_reps: usize, fay_coef: f64) -> Vec<f64> {
     match method {
@@ -51,11 +80,13 @@ pub fn replicate_coefficients(method: RepMethod, n_reps: usize, fay_coef: f64) -
 /// * `theta_full` - Full sample estimate
 /// * `theta_reps` - Vector of replicate estimates
 /// * `rep_coefs` - Replicate coefficients
+/// * `center` - Centering method (ReplicateMean or FullSample)
 pub fn variance_from_replicates(
     method: RepMethod,
     theta_full: f64,
     theta_reps: &[f64],
     rep_coefs: &[f64],
+    center: VarianceCenter,
 ) -> f64 {
     let n_reps = theta_reps.len();
     if n_reps == 0 {
@@ -64,7 +95,7 @@ pub fn variance_from_replicates(
 
     match method {
         RepMethod::Jackknife => {
-            // Jackknife pseudo-value approach
+            // Jackknife pseudo-value approach (unchanged)
             // For JK1 with coef = (n-1)/n:
             // factor = 1 / (1 - coef) = n
             // pseudo = factor * theta_full - (factor - 1) * theta_rep
@@ -99,27 +130,21 @@ pub fn variance_from_replicates(
 
             var
         }
-        RepMethod::SDR => {
-            // SDR always uses MSE formula (center on full sample estimate)
-            // Var = sum(coef * (theta_rep - theta_full)^2)
-            let var: f64 = theta_reps.iter()
-                .zip(rep_coefs.iter())
-                .map(|(&rep, &c)| {
-                    let diff = rep - theta_full;
-                    c * diff * diff
-                })
-                .sum();
-
-            var
-        }
-        RepMethod::BRR | RepMethod::Bootstrap => {
-            // Simple squared difference from mean of replicates
-            let center: f64 = theta_reps.iter().sum::<f64>() / n_reps as f64;
+        RepMethod::SDR | RepMethod::BRR | RepMethod::Bootstrap => {
+            // Choose centering point based on parameter
+            let center_value = match center {
+                VarianceCenter::ReplicateMean => {
+                    theta_reps.iter().sum::<f64>() / n_reps as f64
+                }
+                VarianceCenter::FullSample => {
+                    theta_full
+                }
+            };
 
             let var: f64 = theta_reps.iter()
                 .zip(rep_coefs.iter())
                 .map(|(&rep, &c)| {
-                    let diff = rep - center;
+                    let diff = rep - center_value;
                     c * diff * diff
                 })
                 .sum();
@@ -591,6 +616,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_variance_center_from_str() {
+        assert_eq!(VarianceCenter::from_str("rep_mean"), Some(VarianceCenter::ReplicateMean));
+        assert_eq!(VarianceCenter::from_str("mean"), Some(VarianceCenter::ReplicateMean));
+        assert_eq!(VarianceCenter::from_str("full_sample"), Some(VarianceCenter::FullSample));
+        assert_eq!(VarianceCenter::from_str("estimate"), Some(VarianceCenter::FullSample));
+        assert_eq!(VarianceCenter::from_str("mse"), Some(VarianceCenter::FullSample));
+    }
+
+    #[test]
     fn test_sdr_coefficients() {
         let coefs = replicate_coefficients(RepMethod::SDR, 80, 0.0);
         assert_eq!(coefs.len(), 80);
@@ -598,16 +632,41 @@ mod tests {
     }
 
     #[test]
-    fn test_sdr_variance() {
-        // Simple test: 4 replicates
+    fn test_sdr_variance_replicate_mean() {
+        // Test with default centering (replicate mean)
         let theta_full = 100.0;
         let theta_reps = vec![98.0, 102.0, 99.0, 101.0];
         let rep_coefs = replicate_coefficients(RepMethod::SDR, 4, 0.0);
 
-        // Var = (4/4) * sum((rep - 100)^2)
-        //     = 1.0 * (4 + 4 + 1 + 1) = 10.0
-        let var = variance_from_replicates(RepMethod::SDR, theta_full, &theta_reps, &rep_coefs);
+        // Mean of replicates = 100.0
+        // Var = (4/4) * sum((rep - 100)^2) = 1.0 * (4 + 4 + 1 + 1) = 10.0
+        let var = variance_from_replicates(
+            RepMethod::SDR,
+            theta_full,
+            &theta_reps,
+            &rep_coefs,
+            VarianceCenter::ReplicateMean
+        );
         assert!((var - 10.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_sdr_variance_full_sample() {
+        // Test with mse=TRUE centering (full sample estimate)
+        let theta_full = 105.0;  // Different from mean of replicates
+        let theta_reps = vec![98.0, 102.0, 99.0, 101.0];
+        let rep_coefs = replicate_coefficients(RepMethod::SDR, 4, 0.0);
+
+        // Var = (4/4) * sum((rep - 105)^2)
+        //     = 1.0 * (49 + 9 + 36 + 16) = 110.0
+        let var = variance_from_replicates(
+            RepMethod::SDR,
+            theta_full,
+            &theta_reps,
+            &rep_coefs,
+            VarianceCenter::FullSample
+        );
+        assert!((var - 110.0).abs() < 1e-10);
     }
 
     #[test]
