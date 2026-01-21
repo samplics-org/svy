@@ -1,0 +1,178 @@
+
+# Byte-compiled / optimized / DLL files / C extensions and executables
+__pycache__/
+*.py[cod]
+*$py.class
+Thumbs.db
+*.so
+*.sh
+run
+*.o
+*.a
+*.dylib
+*.dll
+*.rlib
+
+# Build logs
+build/
+*.build
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.manifest
+*.spec
+
+# Unit test / coverage reports / linting
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+*.xml
+
+# Translations
+*.mo
+*.pot
+
+# Scrapy stuff:
+.scrapy
+
+# Documentation
+docs/src/
+docs/_build/
+docs/_static/
+docs/.quarto/
+_docs/
+._readthedocs.yaml
+
+# Compiled output
+target/
+
+# pyenv
+.python-version
+.venv
+
+# celery beat schedule file
+celerybeat-schedule
+
+# SageMath parsed files
+*.sage.py
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# Mr Developer
+.mr.developer.cfg
+.project
+.pydevproject
+
+# mkdocs documentation
+/site
+.virtual_documents/
+
+# mypy and other type checkers
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre
+.pytype
+
+# IDE and Editors
+.idea
+.vscode
+*.code-workspace
+.vim
+
+#MacOS
+.DS_Store
+
+# Github
+# .github
+
+#Extra
+issues/
+data/
+metadata/
+extra_data/
+docs/
+reference_material/
+notebooks/*
+presentations/*/
+*.ipynb_checkpoints/
+roadmap/
+specs/
+benchmarks/
+svy-old
+scripts/
+roadmap.md
+build.md
+CONTRIBUTING.md
+
+# cargo, uv, ruff and others
+*.lock
+*.ruff*
+ #Cargo.lock
+
+# Other
+/.luarc.json
+*.docx
+
+
+# Rust Toolchain state
+rust-toolchain
+rust-toolchain.toml
+
+# Editor directories and files
+.vscode/
+.idea/
+*.swp
+*~
+*.bk
+*.bak
+.Rproj.user
+*.Rhistory
+.pixi
+*.egg-info
+**/pkgs/
+
+# Environment variables (contains secrets)
+.env
+*.env
+
+# Log files
+*.log
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Test results
+*.profraw
+*.gcno
+*.gcda

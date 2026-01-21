@@ -1,0 +1,45 @@
+# native/svyreadstat_rs/Cargo.toml
+[package]
+name = "svyreadstat_rs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/samplics-org/svy-io"
+homepage = "https://svylab.com/docs/svy-io"
+description = "ReadStat-based readers for Python/Polars"
+
+[lib]
+name = "svyreadstat_rs"
+# Build a Python extension (cdylib) and also an rlib so tests/benches can link.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+anyhow = "1"
+# ABI-stable for CPython ≥3.11; still an extension module
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py311"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+arrow = "53"
+readstat-sys = { path = "../readstat-sys" }
+rayon = { version = "1", optional = true }
+
+[features]
+# Enable Rayon-powered parallel paths in Rust
+parallel = ["rayon"]
+# Forward a vendored build flag to readstat-sys (expects readstat-sys to define it)
+vendored = ["readstat-sys/vendored"]
+default = ["vendored"]
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+# For tests/benches only; do not re-declare extension-module here
+pyo3 = { version = "0.22", features = ["auto-initialize"] }
+
+[[bench]]
+name = "parse_benchmarks"
+harness = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3

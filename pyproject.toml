@@ -22,14 +22,14 @@ members = [
   # "packages/svy",
   # "packages/svy-sae",
   # "packages/svy-io",
-  "packages/polars-svy",
+  "packages/svy-rs",
 ]
 
 [tool.uv.sources]
 # svy = { workspace = true }
 # svy-sae = { workspace = true }
 # svy-io = { workspace = true }
-polars-svy = { workspace = true }
+svy-rs = { workspace = true }
 
 
 

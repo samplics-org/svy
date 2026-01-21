@@ -1,0 +1,23 @@
+[package]
+name = "readstat-sys"
+version = "0.1.0"
+edition = "2021"
+links = "readstat"
+license = "MIT"
+repository = "https://github.com/samplics-org/svy-io"
+homepage = "https://svylab.com/docs/svy-io"
+description = "ReadStat FFI (vendored or system)"
+
+[build-dependencies]
+bindgen = "0.70"
+pkg-config = "0.3"
+cc = "1"
+walkdir = "2"
+
+[dependencies]
+libc = "0.2"
+libz-sys = { version = "1.1", optional = true, default-features = false, features = ["static"] }
+
+[features]
+# Default to vendored in CI; you can leave it off locally if you prefer system libs
+vendored = ["libz-sys"]

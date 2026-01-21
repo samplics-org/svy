@@ -3,7 +3,7 @@ DIST_DIR := dist
 PYTHON   := uv run python
 
 # Paths
-PKG_POLARS_SVY := packages/polars-svy
+PKG_SVY_RS := packages/svy-rs
 
 # ====== helpers ======
 .PHONY: help
@@ -13,11 +13,11 @@ help:
 	@echo "  clean               - remove build artifacts (global)"
 	@echo "  test-all            - run tests for all packages"
 	@echo ""
-	@echo "Polars-Svy Targets:"
-	@echo "  build-polars-svy    - build wheel for polars-svy (maturin)"
-	@echo "  develop-polars-svy  - install polars-svy in editable mode (recompiles on import)"
-	@echo "  test-polars-svy     - run tests specifically for polars-svy"
-	@echo "  release-polars-svy  - build optimized release wheel"
+	@echo "svy-rs Targets:"
+	@echo "  build-svy-rs    - build wheel for svy-rs (maturin)"
+	@echo "  develop-svy-rs  - install svy-rs in editable mode (recompiles on import)"
+	@echo "  test-svy-rs     - run tests specifically for svy-rs"
+	@echo "  release-svy-rs  - build optimized release wheel"
 
 .PHONY: clean
 clean:
@@ -25,7 +25,7 @@ clean:
 	find . -name "__pycache__" -type d -prune -exec rm -rf {} +
 	find . -name "target" -type d -prune -exec rm -rf {} +
 	# Clean inside packages
-	rm -rf $(PKG_POLARS_SVY)/target $(PKG_POLARS_SVY)/dist
+	rm -rf $(PKG_SVY_RS)/target $(PKG_SVY_RS)/dist
 
 .PHONY: deps
 deps:
@@ -37,42 +37,42 @@ deps:
 # ====== Testing ======
 
 .PHONY: test-all
-test-all: test-polars-svy
+test-all: test-svy-rs
 	@echo "All tests passed."
 
-.PHONY: test-polars-svy
-test-polars-svy:
-	@echo "▶ Testing polars-svy..."
+.PHONY: test-svy-rs
+test-svy-rs:
+	@echo "▶ Testing svy-rs..."
 	# We run pytest inside the package directory so it picks up the local pyproject config
-	cd $(PKG_POLARS_SVY) && uv run pytest
+	cd $(PKG_SVY_RS) && uv run pytest
 
-# ====== Polars-Svy (Rust/Maturin) ======
+# ====== svy-rs (Rust/Maturin) ======
 
 # Build the wheel into the local dist/ folder
-.PHONY: build-polars-svy
-build-polars-svy:
-	@echo "▶ Building polars-svy (Maturin)..."
-	cd $(PKG_POLARS_SVY) && uv run maturin build
+.PHONY: build-svy-rs
+build-svy-rs:
+	@echo "▶ Building svy-rs (Maturin)..."
+	cd $(PKG_SVY_RS) && uv run maturin build
 
 # Build optimized release wheel
-.PHONY: release-polars-svy
-release-polars-svy:
-	@echo "▶ Building RELEASE wheel for polars-svy..."
-	cd $(PKG_POLARS_SVY) && uv run maturin develop --uv --release
+.PHONY: release-svy-rs
+release-svy-rs:
+	@echo "▶ Building RELEASE wheel for svy-rs..."
+	cd $(PKG_SVY_RS) && uv run maturin develop --uv --release
 
 # Install in editable mode (changes to Rust code take effect on next import)
-.PHONY: develop-polars-svy
-develop-polars-svy:
-	@echo "▶ Installing polars-svy in development mode..."
-	cd $(PKG_POLARS_SVY) && uv run maturin develop
+.PHONY: develop-svy-rs
+develop-svy-rs:
+	@echo "▶ Installing svy-rs in development mode..."
+	cd $(PKG_SVY_RS) && uv run maturin develop
 
 # ====== Publishing ======
 
 .PHONY: check
 check:
-	uv run twine check "$(PKG_POLARS_SVY)/target/wheels/"*
+	uv run twine check "$(PKG_SVY_RS)/target/wheels/"*
 
-.PHONY: upload-polars-svy
-upload-polars-svy:
+.PHONY: upload-svy-rs
+upload-svy-rs:
 	# Uploads whatever is in the target/wheels directory of the package
-	uv run twine upload "$(PKG_POLARS_SVY)/target/wheels/"*
+	uv run twine upload "$(PKG_SVY_RS)/target/wheels/"*
