@@ -13,6 +13,10 @@ pyo3-polars = { version = "0.25", features = ["derive"] }
 polars = { version = "0.52", default-features = false, features = ["dtype-categorical"] }
 faer = "0.19"
 ahash = "0.8"
+numpy = "0.26"
+ndarray = { version = "0.16", features = ["rayon"] }
+rayon = "1.10"
+thiserror = "2.0"
 
 [features]
 extension-module = ["pyo3/extension-module"]

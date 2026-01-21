@@ -5,6 +5,7 @@ use polars::prelude::*;
 
 mod estimation;
 mod regression;
+mod weighting;  // NEW: Add weighting module
 
 // Imports from taylor (via mod.rs re-exports)
 use estimation::{
@@ -30,6 +31,10 @@ use crate::estimation::replication::{
 
 // Imports from regression
 use regression::glm::fit_glm;
+
+// NEW: Import NumPy for weighting functions
+use ndarray::{Array1, ArrayView1};
+use numpy::{PyArray2, PyReadonlyArray1, PyReadonlyArray2, IntoPyArray};
 
 // ============================================================================
 // Taylor Linearization Functions
@@ -1114,6 +1119,426 @@ fn fit_glm_rs(
     ))
 }
 
+// ============================================================================
+// NEW: Weighting Adjustment Functions
+// ============================================================================
+
+/// Raking (Iterative Proportional Fitting) for weight adjustment
+#[pyfunction]
+#[pyo3(signature = (wgt, margin_indices, margin_targets, ll_bound=None, up_bound=None, tol=1e-6, max_iter=100))]
+fn rake(
+    py: Python<'_>,
+    wgt: PyReadonlyArray2<f64>,
+    margin_indices: Vec<PyReadonlyArray1<i64>>,
+    margin_targets: Vec<PyReadonlyArray1<f64>>,
+    ll_bound: Option<f64>,
+    up_bound: Option<f64>,
+    tol: f64,
+    max_iter: usize,
+) -> PyResult<Py<PyArray2<f64>>> {
+    let wgt_arr = wgt.as_array();
+
+    let indices: Vec<_> = margin_indices.iter()
+        .map(|x| x.as_array().to_owned())
+        .collect();
+
+    let targets: Vec<_> = margin_targets.iter()
+        .map(|x| x.as_array().to_owned())
+        .collect();
+
+    let result = weighting::raking::rake_impl(
+        wgt_arr,
+        &indices,
+        &targets,
+        ll_bound,
+        up_bound,
+        tol,
+        max_iter,
+    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+    Ok(result.into_pyarray(py).to_owned().into())
+}
+
+/// Non-response adjustment
+#[pyfunction]
+#[pyo3(signature = (wgts, adj_class, resp_status, unknown_to_inelig=true))]
+fn adjust_nr(
+    py: Python<'_>,
+    wgts: PyReadonlyArray2<f64>,
+    adj_class: PyReadonlyArray1<i64>,
+    resp_status: PyReadonlyArray1<i64>,
+    unknown_to_inelig: bool,
+) -> PyResult<Py<PyArray2<f64>>> {
+    let wgts_arr = wgts.as_array();
+    let class_arr = adj_class.as_array();
+    let status_arr = resp_status.as_array();
+
+    let result = weighting::nonresponse::adjust_nr_impl(
+        wgts_arr,
+        class_arr,
+        status_arr,
+        unknown_to_inelig,
+    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+    Ok(result.into_pyarray(py).to_owned().into())
+}
+
+/// Weight normalization
+#[pyfunction]
+#[pyo3(signature = (wgt, by_arr=None, control=None))]
+fn normalize(
+    py: Python<'_>,
+    wgt: PyReadonlyArray2<f64>,
+    by_arr: Option<PyReadonlyArray1<i64>>,
+    control: Option<PyReadonlyArray1<f64>>,
+) -> PyResult<Py<PyArray2<f64>>> {
+    let wgt_arr = wgt.as_array();
+    let by = by_arr.map(|x| x.as_array().to_owned());
+    let ctrl = control.map(|x| x.as_array().to_owned());
+
+    let result = weighting::normalization::normalize_impl(
+        wgt_arr,
+        by.as_ref(),
+        ctrl.as_ref(),
+    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+    Ok(result.into_pyarray(py).to_owned().into())
+}
+
+/// Post-stratification adjustment
+#[pyfunction]
+fn poststratify(
+    py: Python<'_>,
+    wgt: PyReadonlyArray2<f64>,
+    by_arr: PyReadonlyArray1<i64>,
+    control: PyReadonlyArray1<f64>,
+) -> PyResult<Py<PyArray2<f64>>> {
+    let wgt_arr = wgt.as_array();
+    let by = by_arr.as_array();
+    let ctrl = control.as_array().to_owned();
+
+    let result = weighting::poststratification::poststratify_impl(
+        wgt_arr,
+        by,
+        &ctrl,
+    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+    Ok(result.into_pyarray(py).to_owned().into())
+}
+
+/// Post-stratification with factors
+#[pyfunction]
+fn poststratify_factor(
+    py: Python<'_>,
+    wgt: PyReadonlyArray2<f64>,
+    by_arr: PyReadonlyArray1<i64>,
+    factor: PyReadonlyArray1<f64>,
+) -> PyResult<Py<PyArray2<f64>>> {
+    let wgt_arr = wgt.as_array();
+    let by = by_arr.as_array();
+    let fct = factor.as_array().to_owned();
+
+    let result = weighting::poststratification::poststratify_factor(
+        wgt_arr,
+        by,
+        &fct,
+    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+    Ok(result.into_pyarray(py).to_owned().into())
+}
+
+// ============================================================================
+// NEW: Calibration Functions
+// ============================================================================
+
+/// Linear calibration (Deville-Särndal method)
+///
+/// Calibrates sample weights to match known population totals using linear calibration.
+/// Minimizes chi-squared distance: Σᵢ (gᵢ - 1)² / sᵢ
+/// Subject to: Σᵢ wᵢ gᵢ xᵢⱼ = Tⱼ for all j
+///
+/// # Arguments
+/// * `wgt` - Initial weights matrix (n_obs, n_reps)
+/// * `x_matrix` - Auxiliary variables matrix (n_obs, n_aux)
+/// * `totals` - Known population totals (n_aux,)
+/// * `scale` - Optional scale factors for distance function (n_obs,)
+/// * `additive` - If true, return g-factors instead of calibrated weights
+///
+/// # Returns
+/// Calibrated weights or g-factors (n_obs, n_reps)
+#[pyfunction]
+#[pyo3(signature = (wgt, x_matrix, totals, scale=None, additive=false))]
+fn calibrate(
+    py: Python<'_>,
+    wgt: PyReadonlyArray2<f64>,
+    x_matrix: PyReadonlyArray2<f64>,
+    totals: PyReadonlyArray1<f64>,
+    scale: Option<PyReadonlyArray1<f64>>,
+    additive: bool,
+) -> PyResult<Py<PyArray2<f64>>> {
+    let wgt_arr = wgt.as_array();
+    let x_arr = x_matrix.as_array();
+    let totals_arr = totals.as_array();
+    let scale_owned: Option<Array1<f64>> = scale.map(|s| Array1::from(s.as_array().to_vec()));
+    let scale_view: Option<ArrayView1<f64>> = scale_owned.as_ref().map(|a| a.view());
+
+    let result = weighting::calibration::calibrate_linear(
+        wgt_arr,
+        x_arr,
+        totals_arr,
+        scale_view,
+        additive,
+    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+    Ok(result.into_pyarray(py).to_owned().into())
+}
+
+/// Calibration by domain (group-specific calibration)
+///
+/// Calibrates weights separately within each domain/group.
+/// More efficient than global calibration when different domains have different totals.
+///
+/// # Arguments
+/// * `wgt` - Initial weights matrix (n_obs, n_reps)
+/// * `x_matrix` - Auxiliary variables matrix (n_obs, n_aux)
+/// * `domain` - Domain identifiers (n_obs,)
+/// * `controls_dict` - Map from domain ID to control totals array
+/// * `scale` - Optional scale factors (n_obs,)
+/// * `additive` - If true, return g-factors
+///
+/// # Returns
+/// Calibrated weights or g-factors (n_obs, n_reps)
+#[pyfunction]
+#[pyo3(signature = (wgt, x_matrix, domain, controls_dict, scale=None, additive=false))]
+fn calibrate_by_domain(
+    py: Python<'_>,
+    wgt: PyReadonlyArray2<f64>,
+    x_matrix: PyReadonlyArray2<f64>,
+    domain: PyReadonlyArray1<i64>,
+    controls_dict: std::collections::HashMap<i64, Vec<f64>>,
+    scale: Option<PyReadonlyArray1<f64>>,
+    additive: bool,
+) -> PyResult<Py<PyArray2<f64>>> {
+    use ndarray::Array1;
+
+    let wgt_arr = wgt.as_array();
+    let x_arr = x_matrix.as_array();
+    let domain_arr = domain.as_array();
+    let scale_owned: Option<Array1<f64>> = scale.map(|s| Array1::from(s.as_array().to_vec()));
+    let scale_view: Option<ArrayView1<f64>> = scale_owned.as_ref().map(|a| a.view());
+
+    // Convert HashMap<i64, Vec<f64>> to HashMap<i64, Array1<f64>>
+    let controls: std::collections::HashMap<i64, Array1<f64>> = controls_dict
+        .into_iter()
+        .map(|(k, v)| (k, Array1::from(v)))
+        .collect();
+
+    let result = weighting::calibration::calibrate_by_domain(
+        wgt_arr,
+        x_arr,
+        domain_arr,
+        &controls,
+        scale_view,
+        additive,
+    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+
+    Ok(result.into_pyarray(py).to_owned().into())
+}
+
+/// Parallel calibration (optimized for many replicates)
+///
+/// Processes each replicate weight in parallel using multiple CPU cores.
+/// Recommended for 10+ replicates (e.g., jackknife, bootstrap).
+///
+/// # Arguments
+/// * `wgt` - Initial weights matrix (n_obs, n_reps)
+/// * `x_matrix` - Auxiliary variables matrix (n_obs, n_aux)
+/// * `totals` - Known population totals (n_aux,)
+/// * `scale` - Optional scale factors (n_obs,)
+///
+/// # Returns
+/// Calibrated weights (n_obs, n_reps)
+#[pyfunction]
+#[pyo3(signature = (wgt, x_matrix, totals, scale=None))]
+fn calibrate_parallel(
+    py: Python<'_>,
+    wgt: PyReadonlyArray2<f64>,
+    x_matrix: PyReadonlyArray2<f64>,
+    totals: PyReadonlyArray1<f64>,
+    scale: Option<PyReadonlyArray1<f64>>,
+) -> PyResult<Py<PyArray2<f64>>> {
+    let wgt_arr = wgt.as_array();
+    let x_arr = x_matrix.as_array();
+    let totals_arr = totals.as_array();
+    let scale_owned: Option<Array1<f64>> = scale.map(|s| Array1::from(s.as_array().to_vec()));
+    let scale_view: Option<ArrayView1<f64>> = scale_owned.as_ref().map(|a| a.view());
+
+    let result = weighting::calibration::calibrate_parallel(
+        wgt_arr,
+        x_arr,
+        totals_arr,
+        scale_view,
+    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+
+    Ok(result.into_pyarray(py).to_owned().into())
+}
+
+
+// ============================================================================
+// Replicate Weight Creation Functions (add to lib.rs)
+// ============================================================================
+
+// Add to imports at top of lib.rs:
+// use crate::weighting::replication::{
+//     create_brr_weights, create_jkn_weights, create_bootstrap_weights, create_sdr_weights
+// };
+
+/// Create BRR (Balanced Repeated Replication) weights
+///
+/// # Arguments
+/// * `wgt` - Base weights (n_obs,)
+/// * `stratum` - Stratum identifiers (n_obs,)
+/// * `psu` - PSU identifiers (n_obs,)
+/// * `n_reps` - Number of replicates (optional, defaults to min needed)
+/// * `fay_coef` - Fay adjustment (0.0 = standard BRR)
+///
+/// # Returns
+/// Tuple of (replicate_weights, degrees_of_freedom)
+#[pyfunction]
+#[pyo3(signature = (wgt, stratum, psu, n_reps=None, fay_coef=0.0))]
+fn create_brr_wgts(
+    py: Python<'_>,
+    wgt: PyReadonlyArray1<f64>,
+    stratum: PyReadonlyArray1<i64>,
+    psu: PyReadonlyArray1<i64>,
+    n_reps: Option<usize>,
+    fay_coef: f64,
+) -> PyResult<(Py<PyArray2<f64>>, f64)> {
+    let wgt_arr = wgt.as_array();
+    let stratum_arr = stratum.as_array();
+    let psu_arr = psu.as_array();
+
+    let (result, df) = weighting::replication::create_brr_weights(
+        wgt_arr,
+        stratum_arr,
+        psu_arr,
+        n_reps,
+        fay_coef,
+    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+    Ok((result.into_pyarray(py).to_owned().into(), df))
+}
+
+/// Create Jackknife (JKn) replicate weights
+///
+/// # Arguments
+/// * `wgt` - Base weights (n_obs,)
+/// * `stratum` - Stratum identifiers (n_obs,), optional
+/// * `psu` - PSU identifiers (n_obs,)
+///
+/// # Returns
+/// Tuple of (replicate_weights, degrees_of_freedom)
+#[pyfunction]
+#[pyo3(signature = (wgt, psu, stratum=None))]
+fn create_jkn_wgts(
+    py: Python<'_>,
+    wgt: PyReadonlyArray1<f64>,
+    psu: PyReadonlyArray1<i64>,
+    stratum: Option<PyReadonlyArray1<i64>>,
+) -> PyResult<(Py<PyArray2<f64>>, f64)> {
+    let wgt_arr = wgt.as_array();
+    let psu_arr = psu.as_array();
+    let stratum_view = stratum.as_ref().map(|s| s.as_array());
+
+    let (result, df) = weighting::replication::create_jkn_weights(
+        wgt_arr,
+        stratum_view,
+        psu_arr,
+    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+    Ok((result.into_pyarray(py).to_owned().into(), df))
+}
+
+/// Create Bootstrap replicate weights
+///
+/// # Arguments
+/// * `wgt` - Base weights (n_obs,)
+/// * `psu` - PSU identifiers (n_obs,)
+/// * `n_reps` - Number of bootstrap replicates
+/// * `stratum` - Stratum identifiers (n_obs,), optional
+/// * `seed` - Random seed for reproducibility
+///
+/// # Returns
+/// Tuple of (replicate_weights, degrees_of_freedom)
+#[pyfunction]
+#[pyo3(signature = (wgt, psu, n_reps, stratum=None, seed=None))]
+fn create_bootstrap_wgts(
+    py: Python<'_>,
+    wgt: PyReadonlyArray1<f64>,
+    psu: PyReadonlyArray1<i64>,
+    n_reps: usize,
+    stratum: Option<PyReadonlyArray1<i64>>,
+    seed: Option<u64>,
+) -> PyResult<(Py<PyArray2<f64>>, f64)> {
+    let wgt_arr = wgt.as_array();
+    let psu_arr = psu.as_array();
+    let stratum_view = stratum.as_ref().map(|s| s.as_array());
+
+    // Use provided seed or generate from system time
+    let seed = seed.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(42)
+    });
+
+    let (result, df) = weighting::replication::create_bootstrap_weights(
+        wgt_arr,
+        stratum_view,
+        psu_arr,
+        n_reps,
+        seed,
+    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+    Ok((result.into_pyarray(py).to_owned().into(), df))
+}
+
+/// Create SDR (Successive Difference Replication) weights
+///
+/// # Arguments
+/// * `wgt` - Base weights (n_obs,)
+/// * `n_reps` - Number of replicates
+/// * `stratum` - Stratum identifiers (n_obs,), optional
+/// * `order` - Sort order within strata (n_obs,), optional
+///
+/// # Returns
+/// Tuple of (replicate_weights, degrees_of_freedom)
+#[pyfunction]
+#[pyo3(signature = (wgt, n_reps, stratum=None, order=None))]
+fn create_sdr_wgts(
+    py: Python<'_>,
+    wgt: PyReadonlyArray1<f64>,
+    n_reps: usize,
+    stratum: Option<PyReadonlyArray1<i64>>,
+    order: Option<PyReadonlyArray1<i64>>,
+) -> PyResult<(Py<PyArray2<f64>>, f64)> {
+    let wgt_arr = wgt.as_array();
+    let stratum_view = stratum.as_ref().map(|s| s.as_array());
+    let order_view = order.as_ref().map(|o| o.as_array());
+
+    let (result, df) = weighting::replication::create_sdr_weights(
+        wgt_arr,
+        stratum_view,
+        order_view,
+        n_reps,
+    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+    Ok((result.into_pyarray(py).to_owned().into(), df))
+}
+
+
 #[pymodule]
 fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Taylor functions
@@ -1131,5 +1556,22 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // GLM Regression
     m.add_function(wrap_pyfunction!(fit_glm_rs, m)?)?;
 
+    // Weighting functions
+    m.add_function(wrap_pyfunction!(rake, m)?)?;
+    m.add_function(wrap_pyfunction!(adjust_nr, m)?)?;
+    m.add_function(wrap_pyfunction!(normalize, m)?)?;
+    m.add_function(wrap_pyfunction!(poststratify, m)?)?;
+    m.add_function(wrap_pyfunction!(poststratify_factor, m)?)?;
+
+    // Calibration functions (NEW)
+    m.add_function(wrap_pyfunction!(calibrate, m)?)?;
+    m.add_function(wrap_pyfunction!(calibrate_by_domain, m)?)?;
+    m.add_function(wrap_pyfunction!(calibrate_parallel, m)?)?;
+
+    // Replicate weight creation functions
+    m.add_function(wrap_pyfunction!(create_brr_wgts, m)?)?;
+    m.add_function(wrap_pyfunction!(create_jkn_wgts, m)?)?;
+    m.add_function(wrap_pyfunction!(create_bootstrap_wgts, m)?)?;
+    m.add_function(wrap_pyfunction!(create_sdr_wgts, m)?)?;
     Ok(())
 }
