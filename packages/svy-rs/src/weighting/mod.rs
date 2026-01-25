@@ -7,6 +7,7 @@ pub mod normalization;
 pub mod poststratification;
 pub mod calibration;
 pub mod replication;
+mod hadamard_tables;
 
 // Re-export main implementations for easier access
 pub use raking::rake_impl;

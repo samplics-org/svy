@@ -1390,10 +1390,6 @@ fn calibrate_parallel(
 // Replicate Weight Creation Functions (add to lib.rs)
 // ============================================================================
 
-// Add to imports at top of lib.rs:
-// use crate::weighting::replication::{
-//     create_brr_weights, create_jkn_weights, create_bootstrap_weights, create_sdr_weights
-// };
 
 /// Create BRR (Balanced Repeated Replication) weights
 ///
@@ -1403,11 +1399,12 @@ fn calibrate_parallel(
 /// * `psu` - PSU identifiers (n_obs,)
 /// * `n_reps` - Number of replicates (optional, defaults to min needed)
 /// * `fay_coef` - Fay adjustment (0.0 = standard BRR)
+/// * `seed` - Random seed for PSU ordering within strata (optional)
 ///
 /// # Returns
 /// Tuple of (replicate_weights, degrees_of_freedom)
 #[pyfunction]
-#[pyo3(signature = (wgt, stratum, psu, n_reps=None, fay_coef=0.0))]
+#[pyo3(signature = (wgt, stratum, psu, n_reps=None, fay_coef=0.0, seed=None))]
 fn create_brr_wgts(
     py: Python<'_>,
     wgt: PyReadonlyArray1<f64>,
@@ -1415,6 +1412,7 @@ fn create_brr_wgts(
     psu: PyReadonlyArray1<i64>,
     n_reps: Option<usize>,
     fay_coef: f64,
+    seed: Option<u64>,
 ) -> PyResult<(Py<PyArray2<f64>>, f64)> {
     let wgt_arr = wgt.as_array();
     let stratum_arr = stratum.as_array();
@@ -1426,36 +1424,43 @@ fn create_brr_wgts(
         psu_arr,
         n_reps,
         fay_coef,
+        seed,
     ).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
     Ok((result.into_pyarray(py).to_owned().into(), df))
 }
 
-/// Create Jackknife (JKn) replicate weights
+/// Create Jackknife replicate weights (unified interface)
 ///
 /// # Arguments
 /// * `wgt` - Base weights (n_obs,)
-/// * `stratum` - Stratum identifiers (n_obs,), optional
 /// * `psu` - PSU identifiers (n_obs,)
+/// * `stratum` - Stratum identifiers (n_obs,), optional
+/// * `paired` - If true, use JK2 (paired); if false, use JK1/JKn
+/// * `seed` - Random seed for JK2 PSU selection (optional, ignored for JK1/JKn)
 ///
 /// # Returns
 /// Tuple of (replicate_weights, degrees_of_freedom)
 #[pyfunction]
-#[pyo3(signature = (wgt, psu, stratum=None))]
-fn create_jkn_wgts(
+#[pyo3(signature = (wgt, psu, stratum=None, paired=false, seed=None))]
+fn create_jk_wgts(
     py: Python<'_>,
     wgt: PyReadonlyArray1<f64>,
     psu: PyReadonlyArray1<i64>,
     stratum: Option<PyReadonlyArray1<i64>>,
+    paired: bool,
+    seed: Option<u64>,
 ) -> PyResult<(Py<PyArray2<f64>>, f64)> {
     let wgt_arr = wgt.as_array();
     let psu_arr = psu.as_array();
     let stratum_view = stratum.as_ref().map(|s| s.as_array());
 
-    let (result, df) = weighting::replication::create_jkn_weights(
+    let (result, df) = weighting::replication::create_jk_weights(
         wgt_arr,
         stratum_view,
         psu_arr,
+        paired,
+        seed,
     ).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
     Ok((result.into_pyarray(py).to_owned().into(), df))
@@ -1570,8 +1575,9 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Replicate weight creation functions
     m.add_function(wrap_pyfunction!(create_brr_wgts, m)?)?;
-    m.add_function(wrap_pyfunction!(create_jkn_wgts, m)?)?;
+    m.add_function(wrap_pyfunction!(create_jk_wgts, m)?)?;
     m.add_function(wrap_pyfunction!(create_bootstrap_wgts, m)?)?;
     m.add_function(wrap_pyfunction!(create_sdr_wgts, m)?)?;
+
     Ok(())
 }

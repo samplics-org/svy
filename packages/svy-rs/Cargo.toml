@@ -17,6 +17,7 @@ numpy = "0.26"
 ndarray = { version = "0.16", features = ["rayon"] }
 rayon = "1.10"
 thiserror = "2.0"
+approx = "0.5.1"
 
 [features]
 extension-module = ["pyo3/extension-module"]

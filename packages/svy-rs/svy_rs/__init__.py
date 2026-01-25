@@ -18,7 +18,7 @@ from svy_rs.replication import (
 
 from svy_rs._internal import fit_glm_rs
 
-__version__ = "0.2.0"
+__version__ = "0.0.2"
 
 
 # Estimator classes for fluent API
