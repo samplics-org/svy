@@ -17,6 +17,9 @@ use estimation::{
     srs_variance_mean, srs_variance_mean_domain,
     srs_variance_total, srs_variance_total_domain,
     srs_variance_ratio, srs_variance_ratio_domain,
+    SvyQuantileMethod,
+    weighted_median, weighted_median_domain,
+    median_variance_woodruff, median_variance_woodruff_domain,
 };
 
 // Imports from replication (direct from module)
@@ -27,6 +30,8 @@ use crate::estimation::replication::{
     matrix_mean_estimates, matrix_total_estimates, matrix_ratio_estimates,
     matrix_mean_by_domain, matrix_total_by_domain, matrix_ratio_by_domain,
     matrix_prop_estimates, matrix_prop_by_domain,
+    // NEW: Median replication imports
+    matrix_median_estimates, matrix_median_by_domain,
 };
 
 // Imports from regression
@@ -1248,24 +1253,9 @@ fn poststratify_factor(
 }
 
 // ============================================================================
-// NEW: Calibration Functions
+// Calibration Functions
 // ============================================================================
 
-/// Linear calibration (Deville-Särndal method)
-///
-/// Calibrates sample weights to match known population totals using linear calibration.
-/// Minimizes chi-squared distance: Σᵢ (gᵢ - 1)² / sᵢ
-/// Subject to: Σᵢ wᵢ gᵢ xᵢⱼ = Tⱼ for all j
-///
-/// # Arguments
-/// * `wgt` - Initial weights matrix (n_obs, n_reps)
-/// * `x_matrix` - Auxiliary variables matrix (n_obs, n_aux)
-/// * `totals` - Known population totals (n_aux,)
-/// * `scale` - Optional scale factors for distance function (n_obs,)
-/// * `additive` - If true, return g-factors instead of calibrated weights
-///
-/// # Returns
-/// Calibrated weights or g-factors (n_obs, n_reps)
 #[pyfunction]
 #[pyo3(signature = (wgt, x_matrix, totals, scale=None, additive=false))]
 fn calibrate(
@@ -1295,19 +1285,7 @@ fn calibrate(
 
 /// Calibration by domain (group-specific calibration)
 ///
-/// Calibrates weights separately within each domain/group.
-/// More efficient than global calibration when different domains have different totals.
-///
-/// # Arguments
-/// * `wgt` - Initial weights matrix (n_obs, n_reps)
-/// * `x_matrix` - Auxiliary variables matrix (n_obs, n_aux)
-/// * `domain` - Domain identifiers (n_obs,)
-/// * `controls_dict` - Map from domain ID to control totals array
-/// * `scale` - Optional scale factors (n_obs,)
-/// * `additive` - If true, return g-factors
-///
-/// # Returns
-/// Calibrated weights or g-factors (n_obs, n_reps)
+
 #[pyfunction]
 #[pyo3(signature = (wgt, x_matrix, domain, controls_dict, scale=None, additive=false))]
 fn calibrate_by_domain(
@@ -1544,6 +1522,323 @@ fn create_sdr_wgts(
 }
 
 
+// ============================================================================
+// Median Estimation Functions (FIXED VERSION)
+// ============================================================================
+
+
+#[pyfunction]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_stage2_col=None, by_col=None, singleton_method=None, quantile_method=None))]
+fn taylor_median(
+    _py: Python,
+    data: PyDataFrame,
+    value_col: String,
+    weight_col: String,
+    strata_col: Option<String>,
+    psu_col: Option<String>,
+    ssu_col: Option<String>,
+    fpc_col: Option<String>,
+    fpc_stage2_col: Option<String>,
+    by_col: Option<String>,
+    singleton_method: Option<String>,
+    quantile_method: Option<String>,
+) -> PyResult<PyDataFrame> {
+    let df: DataFrame = data.into();
+
+    // Use SvyQuantileMethod (our own type, not polars::QuantileMethod)
+    let q_method = quantile_method
+        .as_deref()
+        .map(SvyQuantileMethod::from_str)
+        .unwrap_or(SvyQuantileMethod::Higher);
+
+    if by_col.is_none() {
+        let result = compute_median_ungrouped(
+            &df, &value_col, &weight_col, strata_col.as_deref(), psu_col.as_deref(),
+            ssu_col.as_deref(), fpc_col.as_deref(), fpc_stage2_col.as_deref(),
+            singleton_method.as_deref(), q_method
+        ).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        return Ok(PyDataFrame(result));
+    }
+
+    let by_col_name = by_col.unwrap();
+    let result = compute_median_grouped(
+        &df, &value_col, &weight_col, strata_col.as_deref(), psu_col.as_deref(),
+        ssu_col.as_deref(), fpc_col.as_deref(), fpc_stage2_col.as_deref(),
+        &by_col_name, singleton_method.as_deref(), q_method
+    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+    Ok(PyDataFrame(result))
+}
+
+fn compute_median_ungrouped(
+    df: &DataFrame,
+    value_col: &str,
+    weight_col: &str,
+    strata_col: Option<&str>,
+    psu_col: Option<&str>,
+    ssu_col: Option<&str>,
+    fpc_col: Option<&str>,
+    fpc_stage2_col: Option<&str>,
+    singleton_method: Option<&str>,
+    q_method: SvyQuantileMethod,
+) -> PolarsResult<DataFrame> {
+    let y = df.column(value_col)?.f64()?;
+    let weights = df.column(weight_col)?.f64()?;
+    let strata = strata_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
+    let psu = psu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
+    let ssu = ssu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
+    let fpc = fpc_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
+    let fpc_stage2 = fpc_stage2_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
+
+    // Compute weighted median
+    let estimate = weighted_median(y, weights, q_method)?;
+
+    // Compute variance using Woodruff method
+    let (var_p, se_p) = median_variance_woodruff(
+        y, weights, strata, psu, ssu, fpc, fpc_stage2, singleton_method, q_method
+    )?;
+
+    let df_val = degrees_of_freedom(weights, strata, psu)?;
+    let n = y.len() as u32;
+
+    // Return DataFrame with variance on proportion scale (for CI calculation in Python)
+    df![
+        "y" => vec![value_col],
+        "est" => vec![estimate],
+        "se" => vec![se_p],      // SE of proportion (for Woodruff CI)
+        "var" => vec![var_p],    // Variance of proportion
+        "df" => vec![df_val],
+        "n" => vec![n]
+    ]
+}
+
+fn compute_median_grouped(
+    df: &DataFrame,
+    value_col: &str,
+    weight_col: &str,
+    strata_col: Option<&str>,
+    psu_col: Option<&str>,
+    ssu_col: Option<&str>,
+    fpc_col: Option<&str>,
+    fpc_stage2_col: Option<&str>,
+    by_col: &str,
+    singleton_method: Option<&str>,
+    q_method: SvyQuantileMethod,
+) -> PolarsResult<DataFrame> {
+    let y = df.column(value_col)?.f64()?;
+    let weights = df.column(weight_col)?.f64()?;
+    let strata = strata_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
+    let psu = psu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
+    let ssu = ssu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
+    let fpc = fpc_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
+    let fpc_stage2 = fpc_stage2_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
+    let by_series = df.column(by_col)?;
+    let by_str = by_series.str()?;
+    let unique_groups = by_str.unique()?;
+
+    let mut by_vals: Vec<&str> = Vec::new();
+    let mut estimates: Vec<f64> = Vec::new();
+    let mut ses: Vec<f64> = Vec::new();
+    let mut variances: Vec<f64> = Vec::new();
+    let mut dfs: Vec<u32> = Vec::new();
+    let mut ns: Vec<u32> = Vec::new();
+
+    // Degrees of freedom is the same for all domains (proper domain estimation)
+    let df_val = degrees_of_freedom(weights, strata, psu)?;
+
+    for group_val in unique_groups.iter() {
+        if let Some(group) = group_val {
+            let domain_mask = by_str.equal(group);
+            let n_domain = domain_mask.sum().unwrap_or(0) as u32;
+
+            // Compute weighted median for this domain
+            let estimate = weighted_median_domain(y, weights, &domain_mask, q_method)?;
+
+            // Compute variance using Woodruff method with domain scores
+            let (var_p, se_p) = median_variance_woodruff_domain(
+                y, weights, &domain_mask, strata, psu, ssu, fpc, fpc_stage2,
+                singleton_method, q_method
+            )?;
+
+            by_vals.push(group);
+            estimates.push(estimate);
+            ses.push(se_p);
+            variances.push(var_p);
+            dfs.push(df_val);
+            ns.push(n_domain);
+        }
+    }
+
+    let n_groups = by_vals.len();
+    df![
+        by_col => by_vals,
+        "y" => vec![value_col; n_groups],
+        "est" => estimates,
+        "se" => ses,
+        "var" => variances,
+        "df" => dfs,
+        "n" => ns
+    ]
+}
+
+// ============================================================================
+// Replicate-Based Median Estimation (FIXED VERSION)
+// ============================================================================
+
+
+#[pyfunction]
+#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, fay_coef=0.0, center="rep_mean", degrees_of_freedom=None, by_col=None, quantile_method=None))]
+fn replicate_median(
+    _py: Python,
+    data: PyDataFrame,
+    value_col: String,
+    weight_col: String,
+    rep_weight_cols: Vec<String>,
+    method: String,
+    fay_coef: f64,
+    center: &str,
+    degrees_of_freedom: Option<u32>,
+    by_col: Option<String>,
+    quantile_method: Option<String>,
+) -> PyResult<PyDataFrame> {
+    let df: DataFrame = data.into();
+    let n_reps = rep_weight_cols.len();
+
+    let rep_method = RepMethod::from_str(&method)
+        .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            format!("Unknown method: {}. Use 'BRR', 'Bootstrap', 'Jackknife', or 'SDR'", method)
+        ))?;
+
+    let variance_center = VarianceCenter::from_str(&center)
+        .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            format!("Unknown center: {}. Use 'rep_mean' or 'full_sample'", center)
+        ))?;
+
+    // Use SvyQuantileMethod (our own type)
+    let q_method = quantile_method
+        .as_deref()
+        .map(SvyQuantileMethod::from_str)
+        .unwrap_or(SvyQuantileMethod::Higher);
+
+    let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
+
+    let result = if by_col.is_none() {
+        compute_replicate_median_ungrouped(
+            &df, &value_col, &weight_col, &rep_weight_cols,
+            rep_method, fay_coef, variance_center, df_val, q_method
+        )
+    } else {
+        compute_replicate_median_grouped(
+            &df, &value_col, &weight_col, &rep_weight_cols,
+            rep_method, fay_coef, variance_center, df_val,
+            by_col.as_ref().unwrap(), q_method
+        )
+    };
+
+    result.map(PyDataFrame)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+}
+
+fn compute_replicate_median_ungrouped(
+    df: &DataFrame,
+    value_col: &str,
+    weight_col: &str,
+    rep_weight_cols: &[String],
+    method: RepMethod,
+    fay_coef: f64,
+    center: VarianceCenter,
+    df_val: u32,
+    q_method: SvyQuantileMethod,
+) -> PolarsResult<DataFrame> {
+    let y = df.column(value_col)?.f64()?;
+    let weights = df.column(weight_col)?.f64()?;
+    let n = y.len();
+    let n_reps = rep_weight_cols.len();
+
+    let y_arr: Vec<f64> = y.into_iter().map(|v| v.unwrap_or(f64::NAN)).collect();
+    let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
+
+    let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
+    let (theta_full, theta_reps) = matrix_median_estimates(
+        &y_arr, &w_arr, &rep_w_matrix, n, n_reps, q_method
+    );
+
+    let rep_coefs = replicate_coefficients(method, n_reps, fay_coef);
+    let variance = variance_from_replicates(method, theta_full, &theta_reps, &rep_coefs, center);
+    let se = variance.sqrt();
+
+    df![
+        "y" => vec![value_col],
+        "est" => vec![theta_full],
+        "se" => vec![se],
+        "var" => vec![variance],
+        "df" => vec![df_val],
+        "n" => vec![n as u32],
+    ]
+}
+
+fn compute_replicate_median_grouped(
+    df: &DataFrame,
+    value_col: &str,
+    weight_col: &str,
+    rep_weight_cols: &[String],
+    method: RepMethod,
+    fay_coef: f64,
+    center: VarianceCenter,
+    df_val: u32,
+    by_col: &str,
+    q_method: SvyQuantileMethod,
+) -> PolarsResult<DataFrame> {
+    let y = df.column(value_col)?.f64()?;
+    let weights = df.column(weight_col)?.f64()?;
+    let by_series = df.column(by_col)?;
+    let by_str = by_series.str()?;
+    let n = y.len();
+    let n_reps = rep_weight_cols.len();
+
+    let y_arr: Vec<f64> = y.into_iter().map(|v| v.unwrap_or(f64::NAN)).collect();
+    let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
+
+    let (domain_ids, domain_names, n_domains) = index_domains(by_str);
+    let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
+
+    let (theta_full_vec, theta_reps_vec, counts) = matrix_median_by_domain(
+        &y_arr, &w_arr, &rep_w_matrix, &domain_ids, n_domains, n, n_reps, q_method
+    );
+
+    let rep_coefs = replicate_coefficients(method, n_reps, fay_coef);
+
+    let mut by_vals: Vec<String> = Vec::with_capacity(n_domains);
+    let mut estimates: Vec<f64> = Vec::with_capacity(n_domains);
+    let mut ses: Vec<f64> = Vec::with_capacity(n_domains);
+    let mut variances: Vec<f64> = Vec::with_capacity(n_domains);
+    let mut dfs: Vec<u32> = Vec::with_capacity(n_domains);
+    let mut ns: Vec<u32> = Vec::with_capacity(n_domains);
+
+    for (k, domain_name) in domain_names.iter().enumerate() {
+        let variance = variance_from_replicates(
+            method, theta_full_vec[k], &theta_reps_vec[k], &rep_coefs, center
+        );
+
+        by_vals.push(domain_name.clone());
+        estimates.push(theta_full_vec[k]);
+        ses.push(variance.sqrt());
+        variances.push(variance);
+        dfs.push(df_val);
+        ns.push(counts[k]);
+    }
+
+    df![
+        by_col => by_vals,
+        "y" => vec![value_col; n_domains],
+        "est" => estimates,
+        "se" => ses,
+        "var" => variances,
+        "df" => dfs,
+        "n" => ns,
+    ]
+}
+
 #[pymodule]
 fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Taylor functions
@@ -1551,12 +1846,14 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(taylor_total, m)?)?;
     m.add_function(wrap_pyfunction!(taylor_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(taylor_prop, m)?)?;
+    m.add_function(wrap_pyfunction!(taylor_median, m)?)?;
 
     // Replication functions
     m.add_function(wrap_pyfunction!(replicate_mean, m)?)?;
     m.add_function(wrap_pyfunction!(replicate_total, m)?)?;
     m.add_function(wrap_pyfunction!(replicate_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(replicate_prop, m)?)?;
+    m.add_function(wrap_pyfunction!(replicate_median, m)?)?;
 
     // GLM Regression
     m.add_function(wrap_pyfunction!(fit_glm_rs, m)?)?;

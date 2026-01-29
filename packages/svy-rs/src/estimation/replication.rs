@@ -4,6 +4,9 @@
 use polars::prelude::*;
 use std::collections::HashMap;
 
+// Import from taylor module for median functions
+use super::taylor::{weighted_quantile, SvyQuantileMethod};
+
 /// Replication method
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RepMethod {
@@ -611,6 +614,143 @@ pub fn matrix_prop_by_domain(
 }
 
 
+// ============================================================================
+// Median Estimation Functions
+// ============================================================================
+
+/// Compute weighted median for a single set of weights (used by replication)
+fn weighted_median_vec(
+    y: &[f64],
+    weights: &[f64],
+    n: usize,
+    q_method: SvyQuantileMethod,
+) -> f64 {
+    // Collect (y, w) pairs, filtering zeros/NaN
+    let mut pairs: Vec<(f64, f64)> = Vec::with_capacity(n);
+    for i in 0..n {
+        let yi = y[i];
+        let wi = weights[i];
+        if wi > 0.0 && yi.is_finite() {
+            pairs.push((yi, wi));
+        }
+    }
+
+    if pairs.is_empty() {
+        return f64::NAN;
+    }
+
+    // Sort by y value
+    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let y_sorted: Vec<f64> = pairs.iter().map(|(y, _)| *y).collect();
+    let w_sorted: Vec<f64> = pairs.iter().map(|(_, w)| *w).collect();
+
+    // Compute CDF
+    let total_w: f64 = w_sorted.iter().sum();
+    if total_w <= 0.0 {
+        return f64::NAN;
+    }
+
+    let mut cdf = Vec::with_capacity(w_sorted.len());
+    let mut cumsum = 0.0;
+    for w in &w_sorted {
+        cumsum += w;
+        cdf.push(cumsum / total_w);
+    }
+
+    weighted_quantile(&y_sorted, &cdf, 0.5, q_method)
+}
+
+/// Compute median estimates for all replicates simultaneously
+/// Returns (full_estimate, vec of replicate estimates)
+pub fn matrix_median_estimates(
+    y: &[f64],
+    full_weights: &[f64],
+    rep_weights: &[f64],  // Flattened (n × R) row-major
+    n: usize,
+    n_reps: usize,
+    q_method: SvyQuantileMethod,
+) -> (f64, Vec<f64>) {
+    // Full sample estimate
+    let theta_full = weighted_median_vec(y, full_weights, n, q_method);
+
+    // Replicate estimates
+    let mut theta_reps = Vec::with_capacity(n_reps);
+
+    // Extract each replicate's weights and compute median
+    for r in 0..n_reps {
+        let rep_w: Vec<f64> = (0..n)
+            .map(|i| rep_weights[i * n_reps + r])
+            .collect();
+
+        let theta_r = weighted_median_vec(y, &rep_w, n, q_method);
+        theta_reps.push(theta_r);
+    }
+
+    (theta_full, theta_reps)
+}
+
+/// Compute median estimates by domain for all replicates
+/// Returns (full_estimates[K], replicate_estimates[K][R], domain_counts[K])
+pub fn matrix_median_by_domain(
+    y: &[f64],
+    full_weights: &[f64],
+    rep_weights: &[f64],
+    domain_ids: &[u32],
+    n_domains: usize,
+    n: usize,
+    n_reps: usize,
+    q_method: SvyQuantileMethod,
+) -> (Vec<f64>, Vec<Vec<f64>>, Vec<u32>) {
+    // Organize data by domain
+    let mut domain_data: Vec<Vec<(f64, f64, usize)>> = vec![Vec::new(); n_domains];
+    let mut counts = vec![0u32; n_domains];
+
+    for i in 0..n {
+        let d = domain_ids[i] as usize;
+        if d >= n_domains {
+            continue;
+        }
+        domain_data[d].push((y[i], full_weights[i], i));
+        counts[d] += 1;
+    }
+
+    // Compute full sample estimates for each domain
+    let mut theta_full = Vec::with_capacity(n_domains);
+    for d in 0..n_domains {
+        let y_d: Vec<f64> = domain_data[d].iter().map(|(yi, _, _)| *yi).collect();
+        let w_d: Vec<f64> = domain_data[d].iter().map(|(_, wi, _)| *wi).collect();
+        let n_d = y_d.len();
+
+        let est = weighted_median_vec(&y_d, &w_d, n_d, q_method);
+        theta_full.push(est);
+    }
+
+    // Compute replicate estimates for each domain
+    let mut theta_reps: Vec<Vec<f64>> = vec![Vec::with_capacity(n_reps); n_domains];
+
+    for r in 0..n_reps {
+        for d in 0..n_domains {
+            let y_d: Vec<f64> = domain_data[d].iter().map(|(yi, _, _)| *yi).collect();
+            let w_d: Vec<f64> = domain_data[d].iter()
+                .map(|(_, _, i)| rep_weights[i * n_reps + r])
+                .collect();
+            let n_d = y_d.len();
+
+            let est = weighted_median_vec(&y_d, &w_d, n_d, q_method);
+            theta_reps[d].push(est);
+        }
+    }
+
+    (theta_full, theta_reps, counts)
+}
+
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -676,5 +816,49 @@ mod tests {
         assert_eq!(RepMethod::from_str("acs"), Some(RepMethod::SDR));
         assert_eq!(RepMethod::from_str("ACS"), Some(RepMethod::SDR));
         assert_eq!(RepMethod::from_str("successive-difference"), Some(RepMethod::SDR));
+    }
+
+
+    #[test]
+    fn test_weighted_median_vec_uniform() {
+        let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let w = vec![1.0, 1.0, 1.0, 1.0, 1.0];
+
+        let median = weighted_median_vec(&y, &w, 5, SvyQuantileMethod::Linear);
+        assert!(median >= 2.5 && median <= 3.5, "Median {} should be around 3", median);
+    }
+
+    #[test]
+    fn test_weighted_median_vec_nonuniform() {
+        // Heavy weight on 5.0
+        let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let w = vec![1.0, 1.0, 1.0, 1.0, 10.0];
+
+        let median = weighted_median_vec(&y, &w, 5, SvyQuantileMethod::Linear);
+        // With weight 10 on 5.0, median should be pulled towards 5
+        assert!(median >= 4.0, "Median {} should be >= 4 with heavy weight on 5", median);
+    }
+
+    #[test]
+    fn test_matrix_median_estimates() {
+        let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let full_w = vec![1.0, 1.0, 1.0, 1.0, 1.0];
+        // 2 replicates, flattened row-major
+        let rep_w = vec![
+            1.0, 1.0,  // obs 0: rep0=1, rep1=1
+            2.0, 0.5,  // obs 1: rep0=2, rep1=0.5
+            1.0, 1.0,  // obs 2
+            0.5, 2.0,  // obs 3
+            1.0, 1.0,  // obs 4
+        ];
+
+        let (theta_full, theta_reps) = matrix_median_estimates(
+            &y, &full_w, &rep_w, 5, 2, SvyQuantileMethod::Linear
+        );
+
+        assert!(theta_full.is_finite());
+        assert_eq!(theta_reps.len(), 2);
+        assert!(theta_reps[0].is_finite());
+        assert!(theta_reps[1].is_finite());
     }
 }
