@@ -1,6 +1,6 @@
 [project]
 name = "svy-workspace"
-version = "0.0.2"
+version = "0.0.3"
 description = "Workspace for the svy ecosystem (svy, svy-sae, svy-io, etc.)"
 readme = "README.md"
 requires-python = ">=3.11"

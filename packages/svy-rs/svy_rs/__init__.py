@@ -1,6 +1,7 @@
 # svy_rs/__init__.py
 """Survey statistics extension for Polars."""
 
+
 import polars as pl
 
 from svy_rs.taylor import (
@@ -8,17 +9,19 @@ from svy_rs.taylor import (
     taylor_total,
     taylor_ratio,
     taylor_prop,
+    taylor_median,
 )
 from svy_rs.replication import (
     replicate_mean,
     replicate_total,
     replicate_ratio,
     replicate_prop,
+    replicate_median,
 )
 
 from svy_rs._internal import fit_glm_rs
 
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 
 
 # Estimator classes for fluent API
@@ -204,11 +207,13 @@ __all__ = [
     "taylor_total",
     "taylor_ratio",
     "taylor_prop",
+    "taylor_median",
     # Replication functions
     "replicate_mean",
     "replicate_total",
     "replicate_ratio",
     "replicate_prop",
+    "replicate_median",
     # Regression
     "fit_glm_rs",
     # Classes
