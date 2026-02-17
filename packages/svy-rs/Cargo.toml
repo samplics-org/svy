@@ -8,7 +8,7 @@ name = "_internal"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.26", features = ["abi3-py38", "extension-module", "generate-import-lib"] }
+pyo3 = { version = "0.26", features = ["abi3-py311", "extension-module", "generate-import-lib"] }
 pyo3-polars = { version = "0.25", features = ["derive"] }
 polars = { version = "0.52", default-features = false, features = ["dtype-categorical"] }
 faer = "0.19"
