@@ -1,6 +1,6 @@
 [package]
 name = "svy_rs"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 
 [lib]
@@ -22,3 +22,8 @@ approx = "0.5.1"
 [features]
 extension-module = ["pyo3/extension-module"]
 default = ["extension-module"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16
