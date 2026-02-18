@@ -4,7 +4,7 @@ version = "0.3.0"
 description = "Internal Rust extension for the svy package. Do not depend on this directly."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { file = "../../LICENSE" }
+license = { file = "LICENSE" }
 authors = [{ name = "Samplics LLC", email = "msdiallo@samplics.org" }]
 classifiers = [
   "Programming Language :: Rust",
