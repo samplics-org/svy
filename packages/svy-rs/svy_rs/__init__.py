@@ -1,5 +1,10 @@
 # svy_rs/__init__.py
-"""Survey statistics extension for Polars."""
+"""
+svy-rs: Internal Rust extension for the svy package.
+
+WARNING: This is an internal package. Do not depend on it directly.
+Install `svy` instead: pip install svy
+"""
 
 
 import polars as pl
