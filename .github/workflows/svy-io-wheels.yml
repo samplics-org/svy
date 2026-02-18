@@ -1,62 +1,45 @@
-name: Build and Publish Wheels
+name: Build and Publish svy-io Wheels
+
 on:
   push:
     branches:
       - main
     tags:
-      - "v[0-9]+.[0-9]+.[0-9]+*"
+      - "svy-io-v[0-9]+.[0-9]+.[0-9]+*"
+    paths:
+      - "packages/svy-io/**"
   pull_request:
+    paths:
+      - "packages/svy-io/**"
   workflow_dispatch:
 
 jobs:
   build-wheels:
-    name: Wheels (${{ matrix.os }} / Py ${{ matrix.python-version }}${{ matrix.target && format(' / {0}', matrix.target) || '' }})
+    name: Wheels (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           # --- Linux x86_64 ---
-          - os: ubuntu-22.04
-            python-version: "3.11"
-            target: x86_64-unknown-linux-gnu
-          - os: ubuntu-22.04
-            python-version: "3.12"
-            target: x86_64-unknown-linux-gnu
-          - os: ubuntu-22.04
-            python-version: "3.13"
-            target: x86_64-unknown-linux-gnu
-          - os: ubuntu-22.04
-            python-version: "3.14"
+          - name: linux-x86_64
+            os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
 
-          # --- Linux aarch64 (cross, via manylinux cross container) ---
-          - os: ubuntu-22.04
-            python-version: "3.11"
-            target: aarch64-unknown-linux-gnu
-          - os: ubuntu-22.04
-            python-version: "3.12"
-            target: aarch64-unknown-linux-gnu
-          - os: ubuntu-22.04
-            python-version: "3.13"
-            target: aarch64-unknown-linux-gnu
-          - os: ubuntu-22.04
-            python-version: "3.14"
+          # --- Linux aarch64 (native ARM runner) ---
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
 
           # --- macOS (Apple Silicon) ---
-          - os: macos-latest
-            python-version: "3.11"
-          - os: macos-latest
-            python-version: "3.12"
-          - os: macos-latest
-            python-version: "3.13"
-          - os: macos-latest
-            python-version: "3.14"
+          - name: macos-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
 
-          # --- Windows (abi3 only needs one Python) ---
-          - os: windows-latest
-            python-version: "3.11"
+          # --- Windows ---
+          - name: windows-amd64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@v4
@@ -65,20 +48,12 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
 
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # (Optional) QEMU isn't required because we cross-compile inside the manylinux container,
-      # but keeping this is harmless if you later need to run aarch64 binaries.
-      - name: Set up QEMU (for aarch64 wheels)
-        if: runner.os == 'Linux' && matrix.target == 'aarch64-unknown-linux-gnu'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      # ----- libclang for bindgen -----
+      # ----- libclang for bindgen (svy-io needs this for ReadStat) -----
       - name: Install LLVM (macOS)
         if: runner.os == 'macOS'
         run: brew install llvm
@@ -114,31 +89,22 @@ jobs:
 
       - name: Clean dist directory
         shell: bash
-        run: rm -rf dist && mkdir -p dist
+        run: rm -rf packages/svy-io/dist && mkdir -p packages/svy-io/dist
 
-      # Build wheels
-      - name: Build wheels (maturin)
+      - name: Build wheels
         uses: PyO3/maturin-action@v1
         env:
-          # Speedup for *nix when using abi3
           PYO3_NO_PYTHON: ${{ runner.os != 'Windows' && '1' || '' }}
-          # MSVC linker search path for Python import libs
           LIB: ${{ runner.os == 'Windows' && format('{0}\libs', env.pythonLocation) || '' }}
-          # Windows: point to libclang
           LIBCLANG_PATH: ${{ runner.os == 'Windows' && 'C:\Program Files\LLVM\bin' || env.LIBCLANG_PATH }}
-          # Helpful diagnostics from build.rs
           READSTAT_BUILD_DEBUG: "1"
-          # macOS: disable remote sccache which can be flaky
           SCCACHE_GHA_ENABLED: ${{ runner.os == 'macOS' && '0' || '' }}
         with:
+          working-directory: packages/svy-io
           command: build
-          args: >-
-            --release
-            --out dist
-            --features vendored
+          args: --release --out dist -i python3.11 --features vendored
           manylinux: "2_28"
-          target: ${{ (runner.os == 'Linux') && matrix.target || '' }}
-          # sccache can be flaky on macOS runners (remote storage).
+          target: ${{ matrix.target }}
           sccache: ${{ runner.os != 'macOS' }}
           before-script-linux: |
             set -eux
@@ -164,7 +130,7 @@ jobs:
               fi
             fi
 
-            # libclang discovery for bindgen (export, don't write $GITHUB_ENV here)
+            # libclang discovery for bindgen
             if command -v llvm-config >/dev/null 2>&1; then
               export LIBCLANG_PATH="$(llvm-config --libdir || true)"
             fi
@@ -175,7 +141,7 @@ jobs:
             fi
             echo "LIBCLANG_PATH=${LIBCLANG_PATH:-unset}"
 
-            # If cross-compiling, pass sysroot to bindgen via *export* (no $GITHUB_ENV)
+            # If cross-compiling, pass sysroot to bindgen
             if [ "${{ matrix.target || '' }}" = "aarch64-unknown-linux-gnu" ]; then
               if command -v aarch64-unknown-linux-gnu-gcc >/dev/null 2>&1; then
                 SYSROOT="$(aarch64-unknown-linux-gnu-gcc -print-sysroot || true)"
@@ -186,23 +152,18 @@ jobs:
               fi
             fi
 
-      - name: Show wheels (Unix)
-        if: runner.os != 'Windows'
-        run: ls -lh dist
-
-      - name: Show wheels (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: Get-ChildItem dist
+      - name: Show wheels
+        shell: bash
+        run: ls -lh packages/svy-io/dist
 
       # Validate wheel integrity
-      - name: Validate wheels (Integrity Check)
+      - name: Validate wheels
         shell: bash
         run: |
           python - <<'PY'
           import glob, zipfile, sys
           bad = False
-          for whl in glob.glob("dist/*.whl"):
+          for whl in glob.glob("packages/svy-io/dist/*.whl"):
               ok = zipfile.is_zipfile(whl)
               print(f"{whl}: is_zipfile={ok}")
               if not ok:
@@ -219,43 +180,34 @@ jobs:
           sys.exit(1 if bad else 0)
           PY
 
-      # Only verify import on native-arch wheels we can actually import
+      # Verify import on native platforms
       - name: Verify import (Linux x86_64)
-        if: runner.os == 'Linux' && matrix.target == 'x86_64-unknown-linux-gnu'
+        if: matrix.name == 'linux-x86_64'
         shell: bash
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install dist/*manylinux*_*_x86_64.whl
-          python - <<'PY'
-          import svy_io, svy_io.svyreadstat_rs as _m
-          print("OK:", svy_io.__name__, getattr(svy_io, "__version__", "n/a"), _m.__name__)
-          PY
+          pip install packages/svy-io/dist/*.whl
+          python -c "import svy_io, svy_io.svyreadstat_rs as _m; print('OK:', svy_io.__name__, getattr(svy_io, '__version__', 'n/a'), _m.__name__)"
 
       - name: Verify import (macOS arm64)
-        if: runner.os == 'macOS'
+        if: matrix.name == 'macos-arm64'
         shell: bash
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install dist/*macosx*arm64.whl
-          python - <<'PY'
-          import svy_io, svy_io.svyreadstat_rs as _m
-          print("OK:", svy_io.__name__, getattr(svy_io, "__version__", "n/a"), _m.__name__)
-          PY
+          pip install packages/svy-io/dist/*.whl
+          python -c "import svy_io, svy_io.svyreadstat_rs as _m; print('OK:', svy_io.__name__, getattr(svy_io, '__version__', 'n/a'), _m.__name__)"
 
       - name: Verify import (Windows)
-        if: runner.os == 'Windows'
+        if: matrix.name == 'windows-amd64'
         shell: powershell
         run: |
-          python -m pip install --upgrade pip
-          $whl = (Get-ChildItem dist\*win_amd64.whl | Select-Object -First 1).FullName
-          python -m pip install $whl
+          $whl = (Get-ChildItem packages\svy-io\dist\*win_amd64.whl | Select-Object -First 1).FullName
+          pip install $whl
           python -c "import svy_io, svy_io.svyreadstat_rs as _m; print('OK:', svy_io.__name__, getattr(svy_io, '__version__', 'n/a'), _m.__name__)"
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-${{ matrix.python-version }}${{ matrix.target && format('-{0}', matrix.target) || '' }}
-          path: dist/*.whl
+          name: wheels-${{ matrix.name }}
+          path: packages/svy-io/dist/*.whl
 
   sdist:
     name: Source dist
@@ -268,20 +220,20 @@ jobs:
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
+          working-directory: packages/svy-io
           command: sdist
           args: --out dist
-          manylinux: "2_28"
       - name: Show sdist
-        run: ls -lh dist
+        run: ls -lh packages/svy-io/dist
       - uses: actions/upload-artifact@v4
         with:
           name: sdist
-          path: dist/*.tar.gz
+          path: packages/svy-io/dist/*.tar.gz
 
   publish:
     name: Publish to PyPI
     needs: [build-wheels, sdist]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/svy-io-v')
     runs-on: ubuntu-22.04
     permissions:
       id-token: write
@@ -292,15 +244,19 @@ jobs:
           pattern: wheels-*
           merge-multiple: true
           path: dist
+
       - uses: actions/download-artifact@v4
         with:
           name: sdist
           path: dist
 
-      - name: Validate wheels (publish)
+      - name: List artifacts
+        run: ls -lh dist/
+
+      - name: Validate wheels
         shell: bash
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           import glob, zipfile, sys
           bad = False
           for whl in glob.glob("dist/*.whl"):
@@ -310,7 +266,7 @@ jobs:
           sys.exit(1 if bad else 0)
           PY
 
-      - name: Upload (PyPI)
+      - name: Upload to PyPI
         uses: PyO3/maturin-action@v1
         with:
           command: upload

@@ -1,0 +1,206 @@
+name: Build and Publish svy-rs Wheels
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "svy-rs-v[0-9]+.[0-9]+.[0-9]+*"
+    paths:
+      - "packages/svy-rs/**"
+  pull_request:
+    paths:
+      - "packages/svy-rs/**"
+  workflow_dispatch:
+
+jobs:
+  build-wheels:
+    name: Wheels (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # --- Linux x86_64 ---
+          - name: linux-x86_64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+
+          # --- Linux aarch64 (native ARM runner) ---
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+
+          # --- macOS (Apple Silicon) ---
+          - name: macos-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+
+          # --- Windows ---
+          - name: windows-amd64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Ensure python3.lib exists for the MSVC linker (abi3)
+      - name: Ensure python3.lib (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $libDir = Join-Path $env:pythonLocation "libs"
+          Write-Host "Python libs: $libDir"
+          $candidates = @("python311.lib","python312.lib","python313.lib")
+          $target = Join-Path $libDir "python3.lib"
+          if (-not (Test-Path $target)) {
+            foreach ($c in $candidates) {
+              $src = Join-Path $libDir $c
+              if (Test-Path $src) { Copy-Item $src $target; break }
+            }
+          }
+          if (-not (Test-Path $target)) { Write-Error "python3.lib not found or created." }
+
+      - name: Clean dist directory
+        shell: bash
+        run: rm -rf packages/svy-rs/dist && mkdir -p packages/svy-rs/dist
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: packages/svy-rs
+          command: build
+          args: --release --out dist -i python3.11
+          manylinux: "2_28"
+          target: ${{ matrix.target }}
+          sccache: ${{ matrix.name != 'linux-aarch64' }}
+        env:
+          # Workaround: rustc SIGTRAP on aarch64-linux with opt-level=3
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: ${{ matrix.name == 'linux-aarch64' && '2' || '3' }}
+          # MSVC linker search path for Python import libs
+          LIB: ${{ runner.os == 'Windows' && format('{0}\libs', env.pythonLocation) || '' }}
+
+      - name: Show wheels
+        shell: bash
+        run: ls -lh packages/svy-rs/dist
+
+      # Validate wheel integrity
+      - name: Validate wheels
+        shell: bash
+        run: |
+          python - <<'PY'
+          import glob, zipfile, sys
+          bad = False
+          for whl in glob.glob("packages/svy-rs/dist/*.whl"):
+              ok = zipfile.is_zipfile(whl)
+              print(f"{whl}: is_zipfile={ok}")
+              if not ok:
+                  bad = True
+                  continue
+              try:
+                  with zipfile.ZipFile(whl) as zf:
+                      err = zf.testzip()
+                      print("  testzip:", err)
+                      if err: bad = True
+              except Exception as e:
+                  print(f"  Error testing zip: {e}")
+                  bad = True
+          sys.exit(1 if bad else 0)
+          PY
+
+      # Verify import on native platforms
+      - name: Verify import (Linux x86_64)
+        if: matrix.name == 'linux-x86_64'
+        shell: bash
+        run: |
+          pip install packages/svy-rs/dist/*.whl
+          python -c "import svy_rs; print('OK:', svy_rs.__name__)"
+
+      - name: Verify import (macOS arm64)
+        if: matrix.name == 'macos-arm64'
+        shell: bash
+        run: |
+          pip install packages/svy-rs/dist/*.whl
+          python -c "import svy_rs; print('OK:', svy_rs.__name__)"
+
+      - name: Verify import (Windows)
+        if: matrix.name == 'windows-amd64'
+        shell: powershell
+        run: |
+          $whl = (Get-ChildItem packages\svy-rs\dist\*win_amd64.whl | Select-Object -First 1).FullName
+          pip install $whl
+          python -c "import svy_rs; print('OK:', svy_rs.__name__)"
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.name }}
+          path: packages/svy-rs/dist/*.whl
+
+  sdist:
+    name: Source dist
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: packages/svy-rs
+          command: sdist
+          args: --out dist
+      - name: Show sdist
+        run: ls -lh packages/svy-rs/dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: packages/svy-rs/dist/*.tar.gz
+
+  publish:
+    name: Publish to PyPI
+    needs: [build-wheels, sdist]
+    if: startsWith(github.ref, 'refs/tags/svy-rs-v')
+    runs-on: ubuntu-22.04
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+      - name: List artifacts
+        run: ls -lh dist/
+
+      - name: Validate wheels
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import glob, zipfile, sys
+          bad = False
+          for whl in glob.glob("dist/*.whl"):
+              if not zipfile.is_zipfile(whl):
+                  print("Bad wheel:", whl)
+                  bad = True
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: Upload to PyPI
+        uses: PyO3/maturin-action@v1
+        with:
+          command: upload
+          args: --skip-existing dist/*

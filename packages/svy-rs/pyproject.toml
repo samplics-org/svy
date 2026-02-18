@@ -1,36 +1,30 @@
 [project]
 name = "svy_rs"
 version = "0.3.0"
-description = "Efficient survey statistics for Polars"
+description = "Internal Rust extension for the svy package. Do not depend on this directly."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
+license = { file = "../../LICENSE" }
+authors = [{ name = "Samplics LLC", email = "msdiallo@samplics.org" }]
 classifiers = [
   "Programming Language :: Rust",
   "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Development Status :: 4 - Beta",
+  "Operating System :: OS Independent",
+  "Topic :: Scientific/Engineering",
 ]
 dependencies = [
     "polars[pyarrow]>=1.8.2",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "black>=24.10.0",
-    "maturin>=1.7.7",
-    "mypy>=1.13.0",
-    "pytest>=8.3.4",
-    "ruff>=0.8.1",
-]
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
 
 [tool.maturin]
 module-name = "svy_rs._internal"
 python-source = "."
 features = ["pyo3/extension-module"]
-
-[build-system]
-requires = ["maturin>=1.0,<2.0"]
-build-backend = "maturin"
-
-[dependency-groups]
-dev = [
-    "pytest>=8.3.4",
-]
