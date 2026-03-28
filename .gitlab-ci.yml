@@ -1,269 +1,70 @@
-# packages/svy-rs/.gitlab-ci.yml
+# .gitlab-ci.yml (repo root)
 #
-# Build and publish svy-rs wheels to PyPI.
+# Monorepo CI for svy.
+# Each package has its own CI file, triggered by changes or tags.
 #
-# Trigger:
-#   - Tag push matching svy-rs-v* → build + publish
-#   - Changes to packages/svy-rs/** on MR → build only (no publish)
-#   - Manual trigger via web UI
+# Structure:
+#   packages/svy-rs/.gitlab-ci.yml   — Rust engine wheels
+#   packages/svy-io/.gitlab-ci.yml   — I/O engine wheels
+#   .gitlab-ci/svy.yml               — Main Python package tests
 #
-# Requirements:
-#   - CI/CD variable PYPI_TOKEN (masked, protected) for PyPI upload
-#   - macOS and Windows runners tagged "macos-arm64" and "windows" respectively,
-#     or remove/skip those jobs if only Linux wheels are needed.
 
 stages:
-  - build
-  - validate
-  - publish
-
-variables:
-  MATURIN_VERSION: "1.8"
-  PYTHON_VERSION: "3.11"
-  CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
-  RUSTUP_HOME: "$CI_PROJECT_DIR/.rustup"
-  SVY_RS_DIR: "packages/svy-rs"
+  - trigger
 
 # =============================================================================
-# Reusable rules
+# svy-rs: Rust engine
 # =============================================================================
 
-.rules-build:
+svy-rs:
+  stage: trigger
+  trigger:
+    include: packages/svy-rs/.gitlab-ci.yml
+    strategy: depend
   rules:
-    - if: $CI_COMMIT_TAG =~ /^svy-rs-v[0-9]+\.[0-9]+\.[0-9]+/
+    - if: $CI_COMMIT_TAG =~ /^svy-rs-v/
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes:
         - packages/svy-rs/**
     - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
 
-.rules-publish:
+# =============================================================================
+# svy-io: I/O engine
+# =============================================================================
+
+svy-io:
+  stage: trigger
+  trigger:
+    include: packages/svy-io/.gitlab-ci.yml
+    strategy: depend
   rules:
-    - if: $CI_COMMIT_TAG =~ /^svy-rs-v[0-9]+\.[0-9]+\.[0-9]+/
+    - if: $CI_COMMIT_TAG =~ /^svy-io-v/
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - packages/svy-io/**
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
 
 # =============================================================================
-# Build wheels
+# svy: Main Python package (tests, lint, publish)
 # =============================================================================
 
-# --- Linux x86_64 ---
-build-linux-x86_64:
-  stage: build
-  extends: .rules-build
-  image: quay.io/pypa/manylinux_2_28_x86_64
-  tags:
-    - linux
-  before_script:
-    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-    - source "$CARGO_HOME/env"
-    - pip${PYTHON_VERSION} install maturin==${MATURIN_VERSION}
-  script:
-    - cd ${SVY_RS_DIR}
-    - rm -rf dist && mkdir -p dist
-    - maturin build --release --out dist --manylinux 2_28 -i python${PYTHON_VERSION}
-    - ls -lh dist/
-    # Verify import
-    - pip${PYTHON_VERSION} install dist/*.whl
-    - python${PYTHON_VERSION} -c "import svy_rs; print('OK:', svy_rs.__name__)"
-  artifacts:
-    paths:
-      - ${SVY_RS_DIR}/dist/*.whl
-    expire_in: 7 days
-
-# --- Linux aarch64 ---
-build-linux-aarch64:
-  stage: build
-  extends: .rules-build
-  image: quay.io/pypa/manylinux_2_28_aarch64
-  tags:
-    - linux
-    - arm64
-  variables:
-    # Workaround: rustc issues on aarch64 with opt-level=3
-    CARGO_PROFILE_RELEASE_OPT_LEVEL: "2"
-  before_script:
-    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-    - source "$CARGO_HOME/env"
-    - pip${PYTHON_VERSION} install maturin==${MATURIN_VERSION}
-  script:
-    - cd ${SVY_RS_DIR}
-    - rm -rf dist && mkdir -p dist
-    - maturin build --release --out dist --manylinux 2_28 -i python${PYTHON_VERSION}
-    - ls -lh dist/
-    # Verify import (native ARM runner)
-    - pip${PYTHON_VERSION} install dist/*.whl
-    - python${PYTHON_VERSION} -c "import svy_rs; print('OK:', svy_rs.__name__)"
-  artifacts:
-    paths:
-      - ${SVY_RS_DIR}/dist/*.whl
-    expire_in: 7 days
-  allow_failure: true # Remove once ARM runner is confirmed available
-
-# --- macOS Apple Silicon ---
-build-macos-arm64:
-  stage: build
-  extends: .rules-build
-  tags:
-    - macos-arm64
-  before_script:
-    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-    - source "$HOME/.cargo/env"
-    - pip3 install maturin==${MATURIN_VERSION}
-  script:
-    - cd ${SVY_RS_DIR}
-    - rm -rf dist && mkdir -p dist
-    - maturin build --release --out dist -i python3
-    - ls -lh dist/
-    # Verify import
-    - pip3 install dist/*.whl
-    - python3 -c "import svy_rs; print('OK:', svy_rs.__name__)"
-  artifacts:
-    paths:
-      - ${SVY_RS_DIR}/dist/*.whl
-    expire_in: 7 days
-  allow_failure: true # Remove once macOS runner is confirmed available
-
-# --- Windows ---
-build-windows-amd64:
-  stage: build
-  extends: .rules-build
-  tags:
-    - windows
-  before_script:
-    - choco install -y rustup.install python311 --no-progress
-    - refreshenv
-    - rustup default stable
-    - pip install maturin==${MATURIN_VERSION}
-    # Ensure python3.lib exists for MSVC linker (abi3)
-    - |
-      $libDir = Join-Path (python -c "import sys; print(sys.prefix)") "libs"
-      $target = Join-Path $libDir "python3.lib"
-      if (-not (Test-Path $target)) {
-        foreach ($c in @("python311.lib","python312.lib","python313.lib")) {
-          $src = Join-Path $libDir $c
-          if (Test-Path $src) { Copy-Item $src $target; break }
-        }
-      }
-  script:
-    - cd ${SVY_RS_DIR}
-    - if (Test-Path dist) { Remove-Item -Recurse -Force dist }
-    - New-Item -ItemType Directory -Path dist -Force
-    - maturin build --release --out dist -i python
-    - Get-ChildItem dist
-    # Verify import
-    - pip install (Get-ChildItem dist\*win_amd64.whl | Select-Object -First 1).FullName
-    - python -c "import svy_rs; print('OK:', svy_rs.__name__)"
-  artifacts:
-    paths:
-      - ${SVY_RS_DIR}/dist/*.whl
-    expire_in: 7 days
-  allow_failure: true # Remove once Windows runner is confirmed available
-
-# --- Source distribution ---
-build-sdist:
-  stage: build
-  extends: .rules-build
-  image: python:${PYTHON_VERSION}-slim
-  tags:
-    - linux
-  before_script:
-    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-    - source "$CARGO_HOME/env"
-    - pip install maturin==${MATURIN_VERSION}
-  script:
-    - cd ${SVY_RS_DIR}
-    - rm -rf dist && mkdir -p dist
-    - maturin sdist --out dist
-    - ls -lh dist/
-  artifacts:
-    paths:
-      - ${SVY_RS_DIR}/dist/*.tar.gz
-    expire_in: 7 days
-
-# =============================================================================
-# Validate wheels
-# =============================================================================
-
-validate-wheels:
-  stage: validate
-  extends: .rules-build
-  image: python:${PYTHON_VERSION}-slim
-  tags:
-    - linux
-  needs:
-    - job: build-linux-x86_64
-      artifacts: true
-    - job: build-linux-aarch64
-      artifacts: true
-      optional: true
-    - job: build-macos-arm64
-      artifacts: true
-      optional: true
-    - job: build-windows-amd64
-      artifacts: true
-      optional: true
-    - job: build-sdist
-      artifacts: true
-  script:
-    - |
-      python3 - <<'PY'
-      import glob, zipfile, sys, os
-
-      dist_dir = os.path.join(os.environ.get("SVY_RS_DIR", "packages/svy-rs"), "dist")
-      bad = False
-
-      wheels = glob.glob(f"{dist_dir}/*.whl")
-      tarballs = glob.glob(f"{dist_dir}/*.tar.gz")
-
-      print(f"Found {len(wheels)} wheel(s), {len(tarballs)} sdist(s)")
-
-      if not wheels:
-          print("ERROR: No wheels found!")
-          sys.exit(1)
-
-      for whl in wheels:
-          name = os.path.basename(whl)
-          if not zipfile.is_zipfile(whl):
-              print(f"  FAIL: {name} is not a valid zip")
-              bad = True
-              continue
-          with zipfile.ZipFile(whl) as zf:
-              err = zf.testzip()
-              if err:
-                  print(f"  FAIL: {name} corrupt entry: {err}")
-                  bad = True
-              else:
-                  print(f"  OK:   {name}")
-
-      sys.exit(1 if bad else 0)
-      PY
-
-# =============================================================================
-# Publish to PyPI
-# =============================================================================
-
-publish-pypi:
-  stage: publish
-  extends: .rules-publish
-  image: python:${PYTHON_VERSION}-slim
-  tags:
-    - linux
-  needs:
-    - job: validate-wheels
-    - job: build-linux-x86_64
-      artifacts: true
-    - job: build-linux-aarch64
-      artifacts: true
-      optional: true
-    - job: build-macos-arm64
-      artifacts: true
-      optional: true
-    - job: build-windows-amd64
-      artifacts: true
-      optional: true
-    - job: build-sdist
-      artifacts: true
-  script:
-    - pip install maturin==${MATURIN_VERSION}
-    - ls -lh ${SVY_RS_DIR}/dist/
-    - maturin upload --skip-existing ${SVY_RS_DIR}/dist/*
-  variables:
-    MATURIN_PYPI_TOKEN: $PYPI_TOKEN
+svy:
+  stage: trigger
+  trigger:
+    include: .gitlab-ci/svy.yml
+    strategy: depend
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^svy-v/
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - src/svy/**
+        - tests/**
+        - pyproject.toml
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - src/svy/**
+        - tests/**
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
