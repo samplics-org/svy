@@ -1,6 +1,6 @@
 [project]
 name = "svy_rs"
-version = "0.3.0"
+version = "0.4.0"
 description = "Internal Rust extension for the svy package. Do not depend on this directly."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -19,6 +19,11 @@ classifiers = [
 dependencies = [
     "polars[pyarrow]>=1.8.2",
 ]
+
+[project.urls]
+Repository = "https://gitlab.com/samplics/svy"
+Homepage = "https://gitlab.com/samplics/svy"
+Issues = "https://gitlab.com/samplics/svy/-/issues"
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]

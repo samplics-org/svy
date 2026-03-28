@@ -497,6 +497,7 @@ fn variance_stratified_optimized(
     psu_indices: Option<&[u32]>,
     psu_per_stratum: Option<&[Vec<u32>]>,
     n_psus_per_stratum: Option<&[u32]>,
+    fpc_per_stratum: Option<&[f64]>,
     singleton_method: SingletonMethod,
 ) -> f64 {
     let n = scores.len();
@@ -526,10 +527,13 @@ fn variance_stratified_optimized(
             for h in 0..n_strata as usize {
                 let n_psus_h = n_psus[h];
                 if n_psus_h == 0 { continue; }
+
+                let fpc_h = fpc_per_stratum.map(|f| f[h]).unwrap_or(1.0);
+
                 if n_psus_h == 1 {
                     if singleton_method == SingletonMethod::Center {
                         if let Some(&p) = psu_map[h].first() {
-                            total_var += (psu_totals[p as usize] - grand_mean).powi(2);
+                            total_var += fpc_h * (psu_totals[p as usize] - grand_mean).powi(2);
                         }
                     }
                     continue;
@@ -539,7 +543,7 @@ fn variance_stratified_optimized(
                 let psu_totals_h: Vec<f64> = psu_indices_h.iter().map(|&p| psu_totals[p as usize]).collect();
                 let psu_mean_h = psu_totals_h.iter().sum::<f64>() / (n_psus_h as f64);
                 let sum_sq_diff: f64 = psu_totals_h.iter().map(|&t| (t - psu_mean_h).powi(2)).sum();
-                total_var += (n_psus_h as f64 / (n_psus_h as f64 - 1.0)) * sum_sq_diff;
+                total_var += fpc_h * (n_psus_h as f64 / (n_psus_h as f64 - 1.0)) * sum_sq_diff;
             }
             total_var
         }
@@ -573,14 +577,17 @@ fn variance_stratified_optimized(
             for h in 0..n_strata as usize {
                 let n_h = stratum_counts[h];
                 if n_h == 0 { continue; }
+
+                let fpc_h = fpc_per_stratum.map(|f| f[h]).unwrap_or(1.0);
+
                 if n_h == 1 {
                     if singleton_method == SingletonMethod::Center {
-                        total_var += (stratum_sums[h] - grand_mean).powi(2);
+                        total_var += fpc_h * (stratum_sums[h] - grand_mean).powi(2);
                     }
                     continue;
                 }
                 let var_h = (stratum_sum_sq[h] - stratum_sums[h].powi(2) / (n_h as f64)) / (n_h as f64 - 1.0) * (n_h as f64);
-                total_var += var_h;
+                total_var += fpc_h * var_h;
             }
             total_var
         }
@@ -588,14 +595,12 @@ fn variance_stratified_optimized(
 }
 
 fn compute_stage2_variance(
-    scores: &[f64], psu_indices: &[u32], ssu_indices: &[u32], _strata_indices: Option<&[u32]>,
-    fpc: f64, fpc_stage2: f64
+    scores: &[f64], psu_indices: &[u32], ssu_indices: &[u32], strata_indices: Option<&[u32]>,
+    fpc_per_stratum: Option<&[f64]>, fpc_ssu_arr: Option<&[f64]>,
+    strata_for_psu: Option<&[u32]>,
 ) -> f64 {
     let n = scores.len();
     if n == 0 { return 0.0; }
-
-    let stage1_sampling_fraction = 1.0 - fpc;
-    if stage1_sampling_fraction <= 0.0 { return 0.0; }
 
     let max_psu = psu_indices.iter().filter(|&&p| p != u32::MAX).max().copied().unwrap_or(0);
     let n_psus = (max_psu + 1) as usize;
@@ -609,6 +614,25 @@ fn compute_stage2_variance(
     for psu in 0..n_psus {
         let obs_indices = &psu_obs[psu];
         if obs_indices.is_empty() { continue; }
+
+        // Get the FPC for this PSU's stratum: (N_h - n_h) / N_h
+        // stage1_sampling_fraction = n_h / N_h = 1 - fpc_h
+        let fpc_psu_val = match (strata_for_psu, fpc_per_stratum) {
+            (Some(s_for_p), Some(fpc_s)) => {
+                let stratum_idx = s_for_p[psu] as usize;
+                if stratum_idx < fpc_s.len() { fpc_s[stratum_idx] } else { 1.0 }
+            }
+            _ => fpc_per_stratum.and_then(|f| f.first().copied()).unwrap_or(1.0),
+        };
+
+        let stage1_sampling_fraction = 1.0 - fpc_psu_val;
+        if stage1_sampling_fraction <= 0.0 { continue; }
+
+        // Get the unit-level FPC for this PSU
+        // Use the first observation in this PSU to look up the per-row fpc_ssu value
+        let fpc_ssu_val = fpc_ssu_arr
+            .map(|f| f[obs_indices[0]])
+            .unwrap_or(1.0);
 
         let psu_scores: Vec<f64> = obs_indices.iter().map(|&i| scores[i]).collect();
         let psu_ssu_raw: Vec<u32> = obs_indices.iter().map(|&i| ssu_indices[i]).collect();
@@ -624,7 +648,7 @@ fn compute_stage2_variance(
         let sum_sq_diff: f64 = ssu_totals.iter().map(|&t| (t - ssu_mean).powi(2)).sum();
         let var_within_psu = (n_ssus as f64 / (n_ssus as f64 - 1.0)) * sum_sq_diff;
 
-        total_stage2_var += stage1_sampling_fraction * fpc_stage2 * var_within_psu;
+        total_stage2_var += stage1_sampling_fraction * fpc_ssu_val * var_within_psu;
     }
     total_stage2_var
 }
@@ -639,7 +663,7 @@ pub fn taylor_variance(
     psu: Option<&StringChunked>,
     ssu: Option<&StringChunked>,
     fpc: Option<&Float64Chunked>,
-    fpc_stage2: Option<&Float64Chunked>,
+    fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
 ) -> PolarsResult<f64> {
     let n = scores.len();
@@ -651,11 +675,14 @@ pub fn taylor_variance(
     };
 
     let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-    let fpc_val = fpc.and_then(|f| f.get(0)).unwrap_or(1.0);
-    let fpc_stage2_val = fpc_stage2.and_then(|f| f.get(0)).unwrap_or(1.0);
+    let fpc_arr: Option<Vec<f64>> = fpc.map(|f| f.iter().map(|v| v.unwrap_or(1.0)).collect());
+    let fpc_ssu_arr: Option<Vec<f64>> = fpc_ssu.map(|f| f.iter().map(|v| v.unwrap_or(1.0)).collect());
 
     // --- STAGE 1 VARIANCE ---
-    let (var_stage1, psu_indices_opt, strata_indices_opt) = if strata.is_none() {
+    let (var_stage1, psu_indices_opt, strata_indices_opt, n_strata_val, fpc_per_stratum, psu_stratum_map) = if strata.is_none() {
+        // Unstratified: single FPC value (take first element or 1.0)
+        let fpc_val = fpc_arr.as_ref().and_then(|f| f.first().copied()).unwrap_or(1.0);
+
         let (psu_indices, n_psus) = match psu {
             Some(psu_col) => {
                 let (idx, n) = index_categorical(psu_col);
@@ -664,26 +691,52 @@ pub fn taylor_variance(
             None => (None, 0)
         };
         let var = variance_unstratified_optimized(&scores_arr, psu_indices.as_deref(), n_psus);
-        (fpc_val * var, psu_indices, None)
+        (fpc_val * var, psu_indices, None, 0u32, None, None)
     } else {
         let strata_col = strata.unwrap();
         let (strata_indices, n_strata) = index_categorical(strata_col);
+
+        // Build per-stratum FPC: for each stratum index h, take the FPC value
+        // from the first row belonging to that stratum.
+        let fpc_by_stratum: Option<Vec<f64>> = fpc_arr.as_ref().map(|fpc_vals| {
+            let mut per_stratum = vec![1.0; n_strata as usize];
+            let mut seen = vec![false; n_strata as usize];
+            for (i, &s) in strata_indices.iter().enumerate() {
+                if s != u32::MAX && !seen[s as usize] {
+                    per_stratum[s as usize] = fpc_vals[i];
+                    seen[s as usize] = true;
+                }
+            }
+            per_stratum
+        });
 
         match psu {
             Some(psu_col) => {
                 let (psu_indices, _) = index_categorical(psu_col);
                 let (psu_per_stratum, n_psus_per_stratum) = build_stratum_psu_map(&strata_indices, n_strata, &psu_indices);
+
+                // Build PSU -> stratum mapping for stage 2
+                let max_psu = psu_indices.iter().filter(|&&p| p != u32::MAX).max().copied().unwrap_or(0);
+                let mut psu_to_stratum = vec![0u32; (max_psu + 1) as usize];
+                for (&psu_idx, &str_idx) in psu_indices.iter().zip(strata_indices.iter()) {
+                    if psu_idx != u32::MAX && str_idx != u32::MAX {
+                        psu_to_stratum[psu_idx as usize] = str_idx;
+                    }
+                }
+
                 let var = variance_stratified_optimized(
                     &scores_arr, &strata_indices, n_strata, Some(&psu_indices),
-                    Some(&psu_per_stratum), Some(&n_psus_per_stratum), sm_enum
+                    Some(&psu_per_stratum), Some(&n_psus_per_stratum),
+                    fpc_by_stratum.as_deref(), sm_enum
                 );
-                (fpc_val * var, Some(psu_indices), Some(strata_indices))
+                (var, Some(psu_indices), Some(strata_indices), n_strata, fpc_by_stratum, Some(psu_to_stratum))
             }
             None => {
                 let var = variance_stratified_optimized(
-                    &scores_arr, &strata_indices, n_strata, None, None, None, sm_enum
+                    &scores_arr, &strata_indices, n_strata, None, None, None,
+                    fpc_by_stratum.as_deref(), sm_enum
                 );
-                (fpc_val * var, None, Some(strata_indices))
+                (var, None, Some(strata_indices), n_strata, fpc_by_stratum, None)
             }
         }
     };
@@ -696,18 +749,17 @@ pub fn taylor_variance(
     let ssu_col = ssu.unwrap();
     let (ssu_indices, _) = index_categorical(ssu_col);
 
-    // We need PSUs for stage 2. If design is unstratified element sampling (psu=None),
-    // then rows are PSUs.
     let psu_indices = match psu_indices_opt {
         Some(idx) => idx,
         None => {
-            // Implicit PSUs = rows.
             if let Some(p) = psu { index_categorical(p).0 } else { (0..n as u32).collect() }
         }
     };
 
     let var_stage2 = compute_stage2_variance(
-        &scores_arr, &psu_indices, &ssu_indices, strata_indices_opt.as_deref(), fpc_val, fpc_stage2_val
+        &scores_arr, &psu_indices, &ssu_indices, strata_indices_opt.as_deref(),
+        fpc_per_stratum.as_deref(), fpc_ssu_arr.as_deref(),
+        psu_stratum_map.as_deref(),
     );
 
     Ok(var_stage1 + var_stage2)
@@ -768,7 +820,7 @@ pub fn median_variance_woodruff(
     psu: Option<&StringChunked>,
     ssu: Option<&StringChunked>,
     fpc: Option<&Float64Chunked>,
-    fpc_stage2: Option<&Float64Chunked>,
+    fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
     quantile_method: SvyQuantileMethod,
 ) -> PolarsResult<(f64, f64)> {
@@ -788,7 +840,7 @@ pub fn median_variance_woodruff(
         psu,
         ssu,
         fpc,
-        fpc_stage2,
+        fpc_ssu,
         singleton_method,
     )?;
 
@@ -820,7 +872,7 @@ pub fn median_variance_woodruff_domain(
     psu: Option<&StringChunked>,
     ssu: Option<&StringChunked>,
     fpc: Option<&Float64Chunked>,
-    fpc_stage2: Option<&Float64Chunked>,
+    fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
     quantile_method: SvyQuantileMethod,
 ) -> PolarsResult<(f64, f64)> {
@@ -838,7 +890,7 @@ pub fn median_variance_woodruff_domain(
         psu,
         ssu,
         fpc,
-        fpc_stage2,
+        fpc_ssu,
         singleton_method,
     )?;
 

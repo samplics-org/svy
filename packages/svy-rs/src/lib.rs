@@ -46,7 +46,7 @@ use numpy::{PyArray2, PyReadonlyArray1, PyReadonlyArray2, IntoPyArray};
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_stage2_col=None, by_col=None, singleton_method=None))]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None))]
 fn taylor_mean(
     _py: Python,
     data: PyDataFrame,
@@ -56,7 +56,7 @@ fn taylor_mean(
     psu_col: Option<String>,
     ssu_col: Option<String>,
     fpc_col: Option<String>,
-    fpc_stage2_col: Option<String>,
+    fpc_ssu_col: Option<String>,
     by_col: Option<String>,
     singleton_method: Option<String>,
 ) -> PyResult<PyDataFrame> {
@@ -65,7 +65,7 @@ fn taylor_mean(
     if by_col.is_none() {
         let result = compute_mean_ungrouped(
             &df, &value_col, &weight_col, strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
-            fpc_col.as_deref(), fpc_stage2_col.as_deref(), singleton_method.as_deref()
+            fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref()
         ).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         return Ok(PyDataFrame(result));
     }
@@ -73,7 +73,7 @@ fn taylor_mean(
     let by_col_name = by_col.unwrap();
     let result = compute_mean_grouped(
         &df, &value_col, &weight_col, strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
-        fpc_col.as_deref(), fpc_stage2_col.as_deref(), &by_col_name, singleton_method.as_deref()
+        fpc_col.as_deref(), fpc_ssu_col.as_deref(), &by_col_name, singleton_method.as_deref()
     ).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
     Ok(PyDataFrame(result))
@@ -81,7 +81,7 @@ fn taylor_mean(
 
 fn compute_mean_ungrouped(
     df: &DataFrame, value_col: &str, weight_col: &str, strata_col: Option<&str>, psu_col: Option<&str>,
-    ssu_col: Option<&str>, fpc_col: Option<&str>, fpc_stage2_col: Option<&str>, singleton_method: Option<&str>
+    ssu_col: Option<&str>, fpc_col: Option<&str>, fpc_ssu_col: Option<&str>, singleton_method: Option<&str>
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -89,11 +89,11 @@ fn compute_mean_ungrouped(
     let psu = psu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let ssu = ssu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let fpc = fpc_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
-    let fpc_stage2 = fpc_stage2_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
+    let fpc_ssu = fpc_ssu_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
 
     let estimate = point_estimate_mean(y, weights)?;
     let scores = scores_mean(y, weights)?;
-    let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_stage2, singleton_method)?;
+    let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let se = variance.sqrt();
     let df_val = degrees_of_freedom(weights, strata, psu)?;
     let n = y.len() as u32;
@@ -105,7 +105,7 @@ fn compute_mean_ungrouped(
 
 fn compute_mean_grouped(
     df: &DataFrame, value_col: &str, weight_col: &str, strata_col: Option<&str>, psu_col: Option<&str>,
-    ssu_col: Option<&str>, fpc_col: Option<&str>, fpc_stage2_col: Option<&str>, by_col: &str, singleton_method: Option<&str>
+    ssu_col: Option<&str>, fpc_col: Option<&str>, fpc_ssu_col: Option<&str>, by_col: &str, singleton_method: Option<&str>
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -113,7 +113,7 @@ fn compute_mean_grouped(
     let psu = psu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let ssu = ssu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let fpc = fpc_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
-    let fpc_stage2 = fpc_stage2_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
+    let fpc_ssu = fpc_ssu_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
     let by_series = df.column(by_col)?;
     let by_str = by_series.str()?;
     let unique_groups = by_str.unique()?;
@@ -133,7 +133,7 @@ fn compute_mean_grouped(
             let n_domain = domain_mask.sum().unwrap_or(0) as u32;
             let estimate = point_estimate_mean_domain(y, weights, &domain_mask)?;
             let scores = scores_mean_domain(y, weights, &domain_mask)?;
-            let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_stage2, singleton_method)?;
+            let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
             let se = variance.sqrt();
             let srs_var = srs_variance_mean_domain(y, weights, &domain_mask)?;
             let deff = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
@@ -152,26 +152,26 @@ fn compute_mean_grouped(
 }
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_stage2_col=None, by_col=None, singleton_method=None))]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None))]
 fn taylor_total(
     _py: Python, data: PyDataFrame, value_col: String, weight_col: String, strata_col: Option<String>, psu_col: Option<String>,
-    ssu_col: Option<String>, fpc_col: Option<String>, fpc_stage2_col: Option<String>, by_col: Option<String>, singleton_method: Option<String>
+    ssu_col: Option<String>, fpc_col: Option<String>, fpc_ssu_col: Option<String>, by_col: Option<String>, singleton_method: Option<String>
 ) -> PyResult<PyDataFrame> {
     let df: DataFrame = data.into();
     if by_col.is_none() {
-        let result = compute_total_ungrouped(&df, &value_col, &weight_col, strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(), fpc_col.as_deref(), fpc_stage2_col.as_deref(), singleton_method.as_deref())
+        let result = compute_total_ungrouped(&df, &value_col, &weight_col, strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(), fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref())
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         return Ok(PyDataFrame(result));
     }
     let by_col_name = by_col.unwrap();
-    let result = compute_total_grouped(&df, &value_col, &weight_col, strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(), fpc_col.as_deref(), fpc_stage2_col.as_deref(), &by_col_name, singleton_method.as_deref())
+    let result = compute_total_grouped(&df, &value_col, &weight_col, strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(), fpc_col.as_deref(), fpc_ssu_col.as_deref(), &by_col_name, singleton_method.as_deref())
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok(PyDataFrame(result))
 }
 
 fn compute_total_ungrouped(
     df: &DataFrame, value_col: &str, weight_col: &str, strata_col: Option<&str>, psu_col: Option<&str>,
-    ssu_col: Option<&str>, fpc_col: Option<&str>, fpc_stage2_col: Option<&str>, singleton_method: Option<&str>
+    ssu_col: Option<&str>, fpc_col: Option<&str>, fpc_ssu_col: Option<&str>, singleton_method: Option<&str>
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -179,11 +179,11 @@ fn compute_total_ungrouped(
     let psu = psu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let ssu = ssu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let fpc = fpc_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
-    let fpc_stage2 = fpc_stage2_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
+    let fpc_ssu = fpc_ssu_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
 
     let estimate = point_estimate_total(y, weights)?;
     let scores = scores_total(y, weights)?;
-    let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_stage2, singleton_method)?;
+    let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let se = variance.sqrt();
     let df_val = degrees_of_freedom(weights, strata, psu)?;
     let n = y.len() as u32;
@@ -195,7 +195,7 @@ fn compute_total_ungrouped(
 
 fn compute_total_grouped(
     df: &DataFrame, value_col: &str, weight_col: &str, strata_col: Option<&str>, psu_col: Option<&str>,
-    ssu_col: Option<&str>, fpc_col: Option<&str>, fpc_stage2_col: Option<&str>, by_col: &str, singleton_method: Option<&str>
+    ssu_col: Option<&str>, fpc_col: Option<&str>, fpc_ssu_col: Option<&str>, by_col: &str, singleton_method: Option<&str>
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -203,7 +203,7 @@ fn compute_total_grouped(
     let psu = psu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let ssu = ssu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let fpc = fpc_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
-    let fpc_stage2 = fpc_stage2_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
+    let fpc_ssu = fpc_ssu_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
     let by_series = df.column(by_col)?;
     let by_str = by_series.str()?;
     let unique_groups = by_str.unique()?;
@@ -223,7 +223,7 @@ fn compute_total_grouped(
             let n_domain = domain_mask.sum().unwrap_or(0) as u32;
             let estimate = point_estimate_total_domain(y, weights, &domain_mask)?;
             let scores = scores_total_domain(y, weights, &domain_mask)?;
-            let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_stage2, singleton_method)?;
+            let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
             let se = variance.sqrt();
             let srs_var = srs_variance_total_domain(y, weights, &domain_mask)?;
             let deff = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
@@ -242,27 +242,27 @@ fn compute_total_grouped(
 }
 
 #[pyfunction]
-#[pyo3(signature = (data, numerator_col, denominator_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_stage2_col=None, by_col=None, singleton_method=None))]
+#[pyo3(signature = (data, numerator_col, denominator_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None))]
 fn taylor_ratio(
     _py: Python, data: PyDataFrame, numerator_col: String, denominator_col: String, weight_col: String,
     strata_col: Option<String>, psu_col: Option<String>, ssu_col: Option<String>, fpc_col: Option<String>,
-    fpc_stage2_col: Option<String>, by_col: Option<String>, singleton_method: Option<String>
+    fpc_ssu_col: Option<String>, by_col: Option<String>, singleton_method: Option<String>
 ) -> PyResult<PyDataFrame> {
     let df: DataFrame = data.into();
     if by_col.is_none() {
-        let result = compute_ratio_ungrouped(&df, &numerator_col, &denominator_col, &weight_col, strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(), fpc_col.as_deref(), fpc_stage2_col.as_deref(), singleton_method.as_deref())
+        let result = compute_ratio_ungrouped(&df, &numerator_col, &denominator_col, &weight_col, strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(), fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref())
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         return Ok(PyDataFrame(result));
     }
     let by_col_name = by_col.unwrap();
-    let result = compute_ratio_grouped(&df, &numerator_col, &denominator_col, &weight_col, strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(), fpc_col.as_deref(), fpc_stage2_col.as_deref(), &by_col_name, singleton_method.as_deref())
+    let result = compute_ratio_grouped(&df, &numerator_col, &denominator_col, &weight_col, strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(), fpc_col.as_deref(), fpc_ssu_col.as_deref(), &by_col_name, singleton_method.as_deref())
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok(PyDataFrame(result))
 }
 
 fn compute_ratio_ungrouped(
     df: &DataFrame, numerator_col: &str, denominator_col: &str, weight_col: &str, strata_col: Option<&str>,
-    psu_col: Option<&str>, ssu_col: Option<&str>, fpc_col: Option<&str>, fpc_stage2_col: Option<&str>, singleton_method: Option<&str>
+    psu_col: Option<&str>, ssu_col: Option<&str>, fpc_col: Option<&str>, fpc_ssu_col: Option<&str>, singleton_method: Option<&str>
 ) -> PolarsResult<DataFrame> {
     let y = df.column(numerator_col)?.f64()?;
     let x = df.column(denominator_col)?.f64()?;
@@ -271,11 +271,11 @@ fn compute_ratio_ungrouped(
     let psu = psu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let ssu = ssu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let fpc = fpc_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
-    let fpc_stage2 = fpc_stage2_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
+    let fpc_ssu = fpc_ssu_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
 
     let estimate = point_estimate_ratio(y, x, weights)?;
     let scores = scores_ratio(y, x, weights)?;
-    let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_stage2, singleton_method)?;
+    let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let se = variance.sqrt();
     let df_val = degrees_of_freedom(weights, strata, psu)?;
     let n = y.len() as u32;
@@ -287,7 +287,7 @@ fn compute_ratio_ungrouped(
 
 fn compute_ratio_grouped(
     df: &DataFrame, numerator_col: &str, denominator_col: &str, weight_col: &str, strata_col: Option<&str>,
-    psu_col: Option<&str>, ssu_col: Option<&str>, fpc_col: Option<&str>, fpc_stage2_col: Option<&str>, by_col: &str, singleton_method: Option<&str>
+    psu_col: Option<&str>, ssu_col: Option<&str>, fpc_col: Option<&str>, fpc_ssu_col: Option<&str>, by_col: &str, singleton_method: Option<&str>
 ) -> PolarsResult<DataFrame> {
     let y = df.column(numerator_col)?.f64()?;
     let x = df.column(denominator_col)?.f64()?;
@@ -296,7 +296,7 @@ fn compute_ratio_grouped(
     let psu = psu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let ssu = ssu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let fpc = fpc_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
-    let fpc_stage2 = fpc_stage2_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
+    let fpc_ssu = fpc_ssu_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
     let by_series = df.column(by_col)?;
     let by_str = by_series.str()?;
     let unique_groups = by_str.unique()?;
@@ -316,7 +316,7 @@ fn compute_ratio_grouped(
             let n_domain = domain_mask.sum().unwrap_or(0) as u32;
             let estimate = point_estimate_ratio_domain(y, x, weights, &domain_mask)?;
             let scores = scores_ratio_domain(y, x, weights, &domain_mask)?;
-            let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_stage2, singleton_method)?;
+            let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
             let se = variance.sqrt();
             let srs_var = srs_variance_ratio_domain(y, x, weights, &domain_mask)?;
             let deff = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
@@ -335,33 +335,33 @@ fn compute_ratio_grouped(
 }
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_stage2_col=None, by_col=None, singleton_method=None))]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None))]
 fn taylor_prop(
     _py: Python, data: PyDataFrame, value_col: String, weight_col: String, strata_col: Option<String>, psu_col: Option<String>,
-    ssu_col: Option<String>, fpc_col: Option<String>, fpc_stage2_col: Option<String>, by_col: Option<String>, singleton_method: Option<String>
+    ssu_col: Option<String>, fpc_col: Option<String>, fpc_ssu_col: Option<String>, by_col: Option<String>, singleton_method: Option<String>
 ) -> PyResult<PyDataFrame> {
     let df: DataFrame = data.into();
     if by_col.is_none() {
-        let result = compute_prop_ungrouped(&df, &value_col, &weight_col, strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(), fpc_col.as_deref(), fpc_stage2_col.as_deref(), singleton_method.as_deref())
+        let result = compute_prop_ungrouped(&df, &value_col, &weight_col, strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(), fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref())
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         return Ok(PyDataFrame(result));
     }
     let by_col_name = by_col.unwrap();
-    let result = compute_prop_grouped(&df, &value_col, &weight_col, strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(), fpc_col.as_deref(), fpc_stage2_col.as_deref(), &by_col_name, singleton_method.as_deref())
+    let result = compute_prop_grouped(&df, &value_col, &weight_col, strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(), fpc_col.as_deref(), fpc_ssu_col.as_deref(), &by_col_name, singleton_method.as_deref())
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok(PyDataFrame(result))
 }
 
 fn compute_prop_ungrouped(
     df: &DataFrame, value_col: &str, weight_col: &str, strata_col: Option<&str>, psu_col: Option<&str>,
-    ssu_col: Option<&str>, fpc_col: Option<&str>, fpc_stage2_col: Option<&str>, singleton_method: Option<&str>
+    ssu_col: Option<&str>, fpc_col: Option<&str>, fpc_ssu_col: Option<&str>, singleton_method: Option<&str>
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
     let strata = strata_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let psu = psu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let ssu = ssu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let fpc = fpc_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
-    let fpc_stage2 = fpc_stage2_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
+    let fpc_ssu = fpc_ssu_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
 
     let value_series = df.column(value_col)?;
     let value_str = value_series.cast(&DataType::String)?;
@@ -385,7 +385,7 @@ fn compute_prop_ungrouped(
         let indicator_ca = Float64Chunked::from_slice_options("indicator".into(), &indicator);
         let estimate = point_estimate_mean(&indicator_ca, weights)?;
         let scores = scores_mean(&indicator_ca, weights)?;
-        let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_stage2, singleton_method)?;
+        let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
         let se = variance.sqrt();
         let srs_var = srs_variance_mean(&indicator_ca, weights)?;
         let deff = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
@@ -404,14 +404,14 @@ fn compute_prop_ungrouped(
 
 fn compute_prop_grouped(
     df: &DataFrame, value_col: &str, weight_col: &str, strata_col: Option<&str>, psu_col: Option<&str>,
-    ssu_col: Option<&str>, fpc_col: Option<&str>, fpc_stage2_col: Option<&str>, by_col: &str, singleton_method: Option<&str>
+    ssu_col: Option<&str>, fpc_col: Option<&str>, fpc_ssu_col: Option<&str>, by_col: &str, singleton_method: Option<&str>
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
     let strata = strata_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let psu = psu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let ssu = ssu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let fpc = fpc_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
-    let fpc_stage2 = fpc_stage2_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
+    let fpc_ssu = fpc_ssu_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
 
     let value_series = df.column(value_col)?;
     let value_str = value_series.cast(&DataType::String)?;
@@ -443,7 +443,7 @@ fn compute_prop_grouped(
                 let indicator_ca = Float64Chunked::from_slice_options("indicator".into(), &indicator);
                 let estimate = point_estimate_mean_domain(&indicator_ca, weights, &domain_mask)?;
                 let scores = scores_mean_domain(&indicator_ca, weights, &domain_mask)?;
-                let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_stage2, singleton_method)?;
+                let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
                 let se = variance.sqrt();
                 let srs_var = srs_variance_mean_domain(&indicator_ca, weights, &domain_mask)?;
                 let deff = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
@@ -1528,7 +1528,7 @@ fn create_sdr_wgts(
 
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_stage2_col=None, by_col=None, singleton_method=None, quantile_method=None))]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, quantile_method=None))]
 fn taylor_median(
     _py: Python,
     data: PyDataFrame,
@@ -1538,7 +1538,7 @@ fn taylor_median(
     psu_col: Option<String>,
     ssu_col: Option<String>,
     fpc_col: Option<String>,
-    fpc_stage2_col: Option<String>,
+    fpc_ssu_col: Option<String>,
     by_col: Option<String>,
     singleton_method: Option<String>,
     quantile_method: Option<String>,
@@ -1554,7 +1554,7 @@ fn taylor_median(
     if by_col.is_none() {
         let result = compute_median_ungrouped(
             &df, &value_col, &weight_col, strata_col.as_deref(), psu_col.as_deref(),
-            ssu_col.as_deref(), fpc_col.as_deref(), fpc_stage2_col.as_deref(),
+            ssu_col.as_deref(), fpc_col.as_deref(), fpc_ssu_col.as_deref(),
             singleton_method.as_deref(), q_method
         ).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         return Ok(PyDataFrame(result));
@@ -1563,7 +1563,7 @@ fn taylor_median(
     let by_col_name = by_col.unwrap();
     let result = compute_median_grouped(
         &df, &value_col, &weight_col, strata_col.as_deref(), psu_col.as_deref(),
-        ssu_col.as_deref(), fpc_col.as_deref(), fpc_stage2_col.as_deref(),
+        ssu_col.as_deref(), fpc_col.as_deref(), fpc_ssu_col.as_deref(),
         &by_col_name, singleton_method.as_deref(), q_method
     ).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
@@ -1578,7 +1578,7 @@ fn compute_median_ungrouped(
     psu_col: Option<&str>,
     ssu_col: Option<&str>,
     fpc_col: Option<&str>,
-    fpc_stage2_col: Option<&str>,
+    fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
     q_method: SvyQuantileMethod,
 ) -> PolarsResult<DataFrame> {
@@ -1588,14 +1588,14 @@ fn compute_median_ungrouped(
     let psu = psu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let ssu = ssu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let fpc = fpc_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
-    let fpc_stage2 = fpc_stage2_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
+    let fpc_ssu = fpc_ssu_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
 
     // Compute weighted median
     let estimate = weighted_median(y, weights, q_method)?;
 
     // Compute variance using Woodruff method
     let (var_p, se_p) = median_variance_woodruff(
-        y, weights, strata, psu, ssu, fpc, fpc_stage2, singleton_method, q_method
+        y, weights, strata, psu, ssu, fpc, fpc_ssu, singleton_method, q_method
     )?;
 
     let df_val = degrees_of_freedom(weights, strata, psu)?;
@@ -1620,7 +1620,7 @@ fn compute_median_grouped(
     psu_col: Option<&str>,
     ssu_col: Option<&str>,
     fpc_col: Option<&str>,
-    fpc_stage2_col: Option<&str>,
+    fpc_ssu_col: Option<&str>,
     by_col: &str,
     singleton_method: Option<&str>,
     q_method: SvyQuantileMethod,
@@ -1631,7 +1631,7 @@ fn compute_median_grouped(
     let psu = psu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let ssu = ssu_col.map(|col| df.column(col).and_then(|s| s.str())).transpose()?;
     let fpc = fpc_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
-    let fpc_stage2 = fpc_stage2_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
+    let fpc_ssu = fpc_ssu_col.map(|col| df.column(col).and_then(|s| s.f64())).transpose()?;
     let by_series = df.column(by_col)?;
     let by_str = by_series.str()?;
     let unique_groups = by_str.unique()?;
@@ -1656,7 +1656,7 @@ fn compute_median_grouped(
 
             // Compute variance using Woodruff method with domain scores
             let (var_p, se_p) = median_variance_woodruff_domain(
-                y, weights, &domain_mask, strata, psu, ssu, fpc, fpc_stage2,
+                y, weights, &domain_mask, strata, psu, ssu, fpc, fpc_ssu,
                 singleton_method, q_method
             )?;
 
