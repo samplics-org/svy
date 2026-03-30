@@ -1,8 +1,8 @@
 // src/weighting/raking.rs
 
+use super::utils::{Result, WeightingError, check_bounds, check_convergence, sum_by_group_2d};
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2, Axis};
 use rayon::prelude::*;
-use super::utils::{sum_by_group_2d, check_convergence, check_bounds, Result, WeightingError};
 
 /// Margin structure for efficient raking
 struct MarginSpec {
@@ -51,14 +51,17 @@ pub fn rake_impl(
 
     // Validate inputs
     if margin_indices.is_empty() {
-        return Err(WeightingError::InvalidInput("No margins provided".to_string()));
+        return Err(WeightingError::InvalidInput(
+            "No margins provided".to_string(),
+        ));
     }
 
     if margin_indices.len() != margin_targets.len() {
-        return Err(WeightingError::InvalidInput(
-            format!("Margin count mismatch: {} indices vs {} targets",
-                    margin_indices.len(), margin_targets.len())
-        ));
+        return Err(WeightingError::InvalidInput(format!(
+            "Margin count mismatch: {} indices vs {} targets",
+            margin_indices.len(),
+            margin_targets.len()
+        )));
     }
 
     for (idx, indices) in margin_indices.iter().enumerate() {
@@ -88,11 +91,8 @@ pub fn rake_impl(
         // Cycle through margins (IPF steps)
         for margin in &margins {
             // Sum current weights by group
-            let current_sums = sum_by_group_2d(
-                raked_weights.view(),
-                &margin.indices,
-                margin.n_groups,
-            );
+            let current_sums =
+                sum_by_group_2d(raked_weights.view(), &margin.indices, margin.n_groups);
 
             // Calculate adjustment factors for each group
             let mut factors = Array2::zeros((margin.n_groups, n_reps));
@@ -123,11 +123,7 @@ pub fn rake_impl(
         }
 
         // Check convergence
-        let (conv, max_diff) = check_convergence(
-            raked_weights.view(),
-            weights_start.view(),
-            tol,
-        );
+        let (conv, max_diff) = check_convergence(raked_weights.view(), weights_start.view(), tol);
 
         converged = conv;
 
@@ -135,7 +131,7 @@ pub fn rake_impl(
             // Check bounds if specified
             if !check_bounds(raked_weights.view(), wgt, ll_bound, up_bound) {
                 return Err(WeightingError::InvalidInput(
-                    "Raking exceeded weight bounds".to_string()
+                    "Raking exceeded weight bounds".to_string(),
                 ));
             }
             break;
@@ -179,14 +175,7 @@ pub fn rake_parallel(
             let wgt_col = wgt.column(rep_idx).to_owned();
 
             // Rake this replicate
-            rake_single_replicate(
-                wgt_col.view(),
-                &margins,
-                ll_bound,
-                up_bound,
-                tol,
-                max_iter,
-            )
+            rake_single_replicate(wgt_col.view(), &margins, ll_bound, up_bound, tol, max_iter)
         })
         .collect();
 
@@ -270,8 +259,8 @@ fn rake_single_replicate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::array;
     use approx::assert_relative_eq;
+    use ndarray::array;
 
     #[test]
     fn test_simple_raking() {
@@ -280,17 +269,9 @@ mod tests {
 
         // One margin: 2 groups
         let indices = array![0, 0, 1, 1];
-        let targets = array![6.0, 2.0];  // Group 0 should sum to 6, group 1 to 2
+        let targets = array![6.0, 2.0]; // Group 0 should sum to 6, group 1 to 2
 
-        let result = rake_impl(
-            wgt.view(),
-            &[indices],
-            &[targets],
-            None,
-            None,
-            1e-6,
-            100,
-        ).unwrap();
+        let result = rake_impl(wgt.view(), &[indices], &[targets], None, None, 1e-6, 100).unwrap();
 
         // Check group sums
         let sum_g0 = result[[0, 0]] + result[[1, 0]];
@@ -321,7 +302,8 @@ mod tests {
             None,
             1e-6,
             100,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Total should be preserved
         let total: f64 = result.sum();

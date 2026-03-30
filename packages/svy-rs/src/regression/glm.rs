@@ -11,10 +11,10 @@
 // NOTE: This implements the classic "bread %*% meat %*% bread" route
 // (the one you had that was already extremely close to R).
 
-use polars::prelude::*;
 use faer::Mat;
 use faer::Side;
 use faer::prelude::SpSolver;
+use polars::prelude::*;
 use std::collections::HashMap;
 
 // ============================================================================
@@ -38,7 +38,9 @@ impl Family {
             "poisson" => Ok(Family::Poisson),
             "gamma" => Ok(Family::Gamma),
             "inversegaussian" | "inverse_gaussian" => Ok(Family::InverseGaussian),
-            _ => Err(PolarsError::ComputeError(format!("Unsupported family: {}", s).into())),
+            _ => Err(PolarsError::ComputeError(
+                format!("Unsupported family: {}", s).into(),
+            )),
         }
     }
 
@@ -79,7 +81,9 @@ impl Link {
             "log" => Ok(Link::Log),
             "inverse" => Ok(Link::Inverse),
             "inverse_squared" => Ok(Link::InverseSquared),
-            _ => Err(PolarsError::ComputeError(format!("Unsupported link: {}", s).into())),
+            _ => Err(PolarsError::ComputeError(
+                format!("Unsupported link: {}", s).into(),
+            )),
         }
     }
 
@@ -437,7 +441,7 @@ pub fn fit_glm(
     for i in 0..n {
         let y_i = Y.read(i, 0);
         mu[i] = family.initial_mu(y_i);
-        eta[i] = link.link(mu[i]);       // Initialize eta = g(mu)
+        eta[i] = link.link(mu[i]); // Initialize eta = g(mu)
     }
 
     // work arrays
@@ -464,8 +468,19 @@ pub fn fit_glm(
 
         // 2) build normal equations at current beta
         build_irls_normal_eqs(
-            family, link, n, k, &Y, &X, &w_samp, &eta, &mu,
-            &mut Z, &mut w_irls, &mut XtWX, &mut XtWz,
+            family,
+            link,
+            n,
+            k,
+            &Y,
+            &X,
+            &w_samp,
+            &eta,
+            &mu,
+            &mut Z,
+            &mut w_irls,
+            &mut XtWX,
+            &mut XtWz,
         );
 
         // 3) solve for beta_new
@@ -568,7 +583,11 @@ pub fn fit_glm(
                 let ss = s_ca.get(i).unwrap_or("__NULL__").to_string();
                 let pp = p_ca.get(i).unwrap_or("__NULL__").to_string();
                 let key = (ss, pp);
-                let v = *map.entry(key).or_insert_with(|| { let t = next; next += 1; t });
+                let v = *map.entry(key).or_insert_with(|| {
+                    let t = next;
+                    next += 1;
+                    t
+                });
                 idx.push(v);
             }
             (idx, next)
@@ -612,7 +631,6 @@ pub fn fit_glm(
 
             // Working residual
             let working_resid = (y_i - mu_i) / (d + d.signum() * 1e-12);
-
 
             // Score contribution: X * w_irls * working_resid
             // This matches R's: model.matrix * weights * resid(, "working")
@@ -704,7 +722,10 @@ pub fn fit_glm(
     };
 
     // scale (phi) for gaussian/gamma/invgauss (reporting only)
-    let scale = if matches!(family, Family::Gaussian | Family::Gamma | Family::InverseGaussian) {
+    let scale = if matches!(
+        family,
+        Family::Gaussian | Family::Gamma | Family::InverseGaussian
+    ) {
         let mut pearson = 0.0;
         for i in 0..n {
             let w_i = w_samp[i];
@@ -716,7 +737,11 @@ pub fn fit_glm(
             let y_i = Y.read(i, 0);
             pearson += w_i * (y_i - mu_i).powi(2) / v;
         }
-        if df_resid > 0.0 { pearson / df_resid } else { 1.0 }
+        if df_resid > 0.0 {
+            pearson / df_resid
+        } else {
+            1.0
+        }
     } else {
         1.0
     };

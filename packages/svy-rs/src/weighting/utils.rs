@@ -126,8 +126,8 @@ mod tests {
         let indices = vec![0, 1, 0];
         let sums = sum_by_group_2d(weights.view(), &indices, 2);
 
-        assert_eq!(sums[[0, 0]], 6.0);  // 1 + 5
-        assert_eq!(sums[[0, 1]], 8.0);  // 2 + 6
+        assert_eq!(sums[[0, 0]], 6.0); // 1 + 5
+        assert_eq!(sums[[0, 1]], 8.0); // 2 + 6
         assert_eq!(sums[[1, 0]], 3.0);
         assert_eq!(sums[[1, 1]], 4.0);
     }
@@ -137,11 +137,7 @@ mod tests {
         let current = array![[1.0, 2.0], [3.0, 4.0]];
         let previous = array![[1.01, 2.01], [3.01, 4.01]];
 
-        let (converged, max_diff) = check_convergence(
-            current.view(),
-            previous.view(),
-            0.02,
-        );
+        let (converged, max_diff) = check_convergence(current.view(), previous.view(), 0.02);
 
         assert!(converged);
         assert!(max_diff < 0.02);

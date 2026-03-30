@@ -29,17 +29,26 @@ pub enum ReplicationError {
 impl std::fmt::Display for ReplicationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::DimensionMismatch { expected, got } =>
-                write!(f, "Dimension mismatch: expected {}, got {}", expected, got),
+            Self::DimensionMismatch { expected, got } => {
+                write!(f, "Dimension mismatch: expected {}, got {}", expected, got)
+            }
             Self::InvalidInput(msg) => write!(f, "Invalid input: {}", msg),
-            Self::BrrPsuCount { stratum, count } =>
-                write!(f, "BRR requires 2 PSUs per stratum, stratum {} has {}", stratum, count),
-            Self::PairedJkPsuCount { stratum, count } =>
-                write!(f, "Paired JK requires ≥2 PSUs per stratum, stratum {} has {}", stratum, count),
-            Self::InsufficientPsus { required, got } =>
-                write!(f, "Insufficient PSUs: required {}, got {}", required, got),
-            Self::NoHadamardMatrix { size } =>
-                write!(f, "No Hadamard matrix available for size {}", size),
+            Self::BrrPsuCount { stratum, count } => write!(
+                f,
+                "BRR requires 2 PSUs per stratum, stratum {} has {}",
+                stratum, count
+            ),
+            Self::PairedJkPsuCount { stratum, count } => write!(
+                f,
+                "Paired JK requires ≥2 PSUs per stratum, stratum {} has {}",
+                stratum, count
+            ),
+            Self::InsufficientPsus { required, got } => {
+                write!(f, "Insufficient PSUs: required {}, got {}", required, got)
+            }
+            Self::NoHadamardMatrix { size } => {
+                write!(f, "No Hadamard matrix available for size {}", size)
+            }
         }
     }
 }
@@ -115,10 +124,18 @@ pub fn get_hadamard_for_strata(n_strata: usize) -> Result<(Array2<f64>, usize)> 
 }
 
 fn try_get_hadamard(n: usize) -> Option<Array2<f64>> {
-    if n < 2 { return None; }
-    if n == 2 { return Some(generate_hadamard_sylvester(2)); }
-    if n.is_power_of_two() { return Some(generate_hadamard_sylvester(n)); }
-    if n % 4 != 0 { return None; }
+    if n < 2 {
+        return None;
+    }
+    if n == 2 {
+        return Some(generate_hadamard_sylvester(2));
+    }
+    if n.is_power_of_two() {
+        return Some(generate_hadamard_sylvester(n));
+    }
+    if n % 4 != 0 {
+        return None;
+    }
     // Try Paley Type I (n-1 prime, ≡ 3 mod 4)
     if is_prime(n - 1) && (n - 1) % 4 == 3 {
         return Some(generate_hadamard_paley(n));
@@ -149,18 +166,31 @@ fn generate_hadamard_paley(n: usize) -> Array2<f64> {
     let p = n - 1;
     // Compute quadratic residues
     let mut is_residue = vec![false; p];
-    for i in 1..p { is_residue[(i * i) % p] = true; }
+    for i in 1..p {
+        is_residue[(i * i) % p] = true;
+    }
 
     // Build Paley matrix
     let mut h = Array2::zeros((n, n));
     // First row and column: all 1s
-    for j in 0..n { h[[0, j]] = 1.0; }
-    for i in 0..n { h[[i, 0]] = 1.0; }
+    for j in 0..n {
+        h[[0, j]] = 1.0;
+    }
+    for i in 0..n {
+        h[[i, 0]] = 1.0;
+    }
     // Lower-right block: Q - I
     for i in 0..p {
         for j in 0..p {
-            let q_val = if i == j { 0.0 }
-                else { if is_residue[(i + p - j) % p] { 1.0 } else { -1.0 } };
+            let q_val = if i == j {
+                0.0
+            } else {
+                if is_residue[(i + p - j) % p] {
+                    1.0
+                } else {
+                    -1.0
+                }
+            };
             h[[i + 1, j + 1]] = q_val - if i == j { 1.0 } else { 0.0 };
         }
     }
@@ -168,17 +198,28 @@ fn generate_hadamard_paley(n: usize) -> Array2<f64> {
 }
 
 fn is_prime(n: usize) -> bool {
-    if n < 2 { return false; }
-    if n == 2 { return true; }
-    if n % 2 == 0 { return false; }
+    if n < 2 {
+        return false;
+    }
+    if n == 2 {
+        return true;
+    }
+    if n % 2 == 0 {
+        return false;
+    }
     let sqrt_n = (n as f64).sqrt() as usize + 1;
     (3..=sqrt_n).step_by(2).all(|i| n % i != 0)
 }
 
 fn next_power_of_2(n: usize) -> usize {
-    if n == 0 { return 1; }
-    if n.is_power_of_two() { n }
-    else { 1 << (64 - (n - 1).leading_zeros()) }
+    if n == 0 {
+        return 1;
+    }
+    if n.is_power_of_two() {
+        n
+    } else {
+        1 << (64 - (n - 1).leading_zeros())
+    }
 }
 
 // ============================================================================
@@ -196,10 +237,15 @@ pub fn create_brr_weights(
 ) -> Result<(Array2<f64>, f64)> {
     let n_obs = wgt.len();
     if stratum.len() != n_obs || psu.len() != n_obs {
-        return Err(ReplicationError::DimensionMismatch { expected: n_obs, got: stratum.len().min(psu.len()) });
+        return Err(ReplicationError::DimensionMismatch {
+            expected: n_obs,
+            got: stratum.len().min(psu.len()),
+        });
     }
     if !(0.0..1.0).contains(&fay_coef) {
-        return Err(ReplicationError::InvalidInput("fay_coef must be in [0, 1)".into()));
+        return Err(ReplicationError::InvalidInput(
+            "fay_coef must be in [0, 1)".into(),
+        ));
     }
 
     let (stratum_map, psu_to_idx) = build_brr_stratum_map(&stratum, &psu, seed)?;
@@ -220,8 +266,11 @@ pub fn create_brr_weights(
                 let stratum_idx = stratum_map[&s].0 as usize;
                 let psu_idx = psu_to_idx[&(s, p)];
                 let h_val = hadamard[[stratum_idx % h_size, r % h_size]];
-                let mult = if (h_val > 0.0 && psu_idx == 0) || (h_val < 0.0 && psu_idx == 1)
-                    { k_plus } else { k_minus };
+                let mult = if (h_val > 0.0 && psu_idx == 0) || (h_val < 0.0 && psu_idx == 1) {
+                    k_plus
+                } else {
+                    k_minus
+                };
                 rep_wgt[i] = wgt[i] * mult;
             }
             rep_wgt
@@ -245,18 +294,25 @@ fn build_brr_stratum_map(
         let s = stratum[i];
         let p = psu[i];
         let psus = stratum_psus.entry(s).or_default();
-        if !psus.contains(&p) { psus.push(p); }
+        if !psus.contains(&p) {
+            psus.push(p);
+        }
     }
 
     for (&s, psus) in &stratum_psus {
         if psus.len() != 2 {
-            return Err(ReplicationError::BrrPsuCount { stratum: s, count: psus.len() });
+            return Err(ReplicationError::BrrPsuCount {
+                stratum: s,
+                count: psus.len(),
+            });
         }
     }
 
     if let Some(seed) = seed {
         let mut rng = Rng::new(seed);
-        for psus in stratum_psus.values_mut() { rng.shuffle(psus); }
+        for psus in stratum_psus.values_mut() {
+            rng.shuffle(psus);
+        }
     }
 
     let mut strata: Vec<i64> = stratum_psus.keys().copied().collect();
@@ -266,7 +322,9 @@ fn build_brr_stratum_map(
     let mut psu_to_idx = HashMap::new();
     for (idx, &s) in strata.iter().enumerate() {
         let psus = stratum_psus[&s].clone();
-        for (pi, &p) in psus.iter().enumerate() { psu_to_idx.insert((s, p), pi); }
+        for (pi, &p) in psus.iter().enumerate() {
+            psu_to_idx.insert((s, p), pi);
+        }
         stratum_map.insert(s, (idx as i64, psus));
     }
     Ok((stratum_map, psu_to_idx))
@@ -284,8 +342,11 @@ pub fn create_jk_weights(
     paired: bool,
     seed: Option<u64>,
 ) -> Result<(Array2<f64>, f64)> {
-    if paired { create_jk2_weights(wgt, stratum, psu, seed) }
-    else { create_jkn_weights(wgt, stratum, psu) }
+    if paired {
+        create_jk2_weights(wgt, stratum, psu, seed)
+    } else {
+        create_jkn_weights(wgt, stratum, psu)
+    }
 }
 
 /// JKn: delete-one-PSU-at-a-time
@@ -296,15 +357,23 @@ pub fn create_jkn_weights(
 ) -> Result<(Array2<f64>, f64)> {
     let n_obs = wgt.len();
     if psu.len() != n_obs {
-        return Err(ReplicationError::DimensionMismatch { expected: n_obs, got: psu.len() });
+        return Err(ReplicationError::DimensionMismatch {
+            expected: n_obs,
+            got: psu.len(),
+        });
     }
 
-    let stratum_vec = stratum.map(|s| s.to_owned()).unwrap_or_else(|| Array1::ones(n_obs));
+    let stratum_vec = stratum
+        .map(|s| s.to_owned())
+        .unwrap_or_else(|| Array1::ones(n_obs));
     let stratum_psus = build_stratum_psu_list(&stratum_vec, &psu);
     let n_reps: usize = stratum_psus.values().map(|v| v.len()).sum();
 
     if n_reps < 2 {
-        return Err(ReplicationError::InsufficientPsus { required: 2, got: n_reps });
+        return Err(ReplicationError::InsufficientPsus {
+            required: 2,
+            got: n_reps,
+        });
     }
 
     let mut psu_to_rep: HashMap<(i64, i64), usize> = HashMap::new();
@@ -319,8 +388,10 @@ pub fn create_jkn_weights(
         }
     }
 
-    let stratum_nh: HashMap<i64, f64> = stratum_psus.iter()
-        .map(|(&s, psus)| (s, psus.len() as f64)).collect();
+    let stratum_nh: HashMap<i64, f64> = stratum_psus
+        .iter()
+        .map(|(&s, psus)| (s, psus.len() as f64))
+        .collect();
 
     let rep_weights: Vec<Array1<f64>> = (0..n_reps)
         .into_par_iter()
@@ -357,20 +428,29 @@ fn create_jk2_weights(
 ) -> Result<(Array2<f64>, f64)> {
     let n_obs = wgt.len();
     if psu.len() != n_obs {
-        return Err(ReplicationError::DimensionMismatch { expected: n_obs, got: psu.len() });
+        return Err(ReplicationError::DimensionMismatch {
+            expected: n_obs,
+            got: psu.len(),
+        });
     }
 
-    let stratum_vec = stratum.ok_or_else(||
-        ReplicationError::InvalidInput("JK2 requires stratum".into()))?;
+    let stratum_vec =
+        stratum.ok_or_else(|| ReplicationError::InvalidInput("JK2 requires stratum".into()))?;
     if stratum_vec.len() != n_obs {
-        return Err(ReplicationError::DimensionMismatch { expected: n_obs, got: stratum_vec.len() });
+        return Err(ReplicationError::DimensionMismatch {
+            expected: n_obs,
+            got: stratum_vec.len(),
+        });
     }
     let stratum_vec = stratum_vec.to_owned();
     let stratum_psus = build_stratum_psu_list(&stratum_vec, &psu);
 
     for (&s, psus) in &stratum_psus {
         if psus.len() < 2 {
-            return Err(ReplicationError::PairedJkPsuCount { stratum: s, count: psus.len() });
+            return Err(ReplicationError::PairedJkPsuCount {
+                stratum: s,
+                count: psus.len(),
+            });
         }
     }
 
@@ -379,16 +459,22 @@ fn create_jk2_weights(
     let n_reps = strata.len();
 
     let mut rng = Rng::new(seed.unwrap_or(0));
-    let deleted_psu_idx: HashMap<i64, usize> = strata.iter()
-        .map(|&s| (s, rng.next_index(stratum_psus[&s].len()))).collect();
+    let deleted_psu_idx: HashMap<i64, usize> = strata
+        .iter()
+        .map(|&s| (s, rng.next_index(stratum_psus[&s].len())))
+        .collect();
 
     let mut psu_to_idx: HashMap<(i64, i64), usize> = HashMap::new();
     for (&s, psus) in &stratum_psus {
-        for (idx, &p) in psus.iter().enumerate() { psu_to_idx.insert((s, p), idx); }
+        for (idx, &p) in psus.iter().enumerate() {
+            psu_to_idx.insert((s, p), idx);
+        }
     }
 
-    let stratum_nh: HashMap<i64, usize> = stratum_psus.iter()
-        .map(|(&s, psus)| (s, psus.len())).collect();
+    let stratum_nh: HashMap<i64, usize> = stratum_psus
+        .iter()
+        .map(|(&s, psus)| (s, psus.len()))
+        .collect();
 
     let rep_weights: Vec<Array1<f64>> = (0..n_reps)
         .into_par_iter()
@@ -403,8 +489,11 @@ fn create_jk2_weights(
                 let s = stratum_vec[i];
                 if s == target {
                     let psu_idx = psu_to_idx[&(s, psu[i])];
-                    if psu_idx == del_idx { rep_wgt[i] = 0.0; }
-                    else { rep_wgt[i] *= adj; }
+                    if psu_idx == del_idx {
+                        rep_wgt[i] = 0.0;
+                    } else {
+                        rep_wgt[i] *= adj;
+                    }
                 }
             }
             rep_wgt
@@ -431,10 +520,15 @@ pub fn create_bootstrap_weights(
 ) -> Result<(Array2<f64>, f64)> {
     let n_obs = wgt.len();
     if psu.len() != n_obs {
-        return Err(ReplicationError::DimensionMismatch { expected: n_obs, got: psu.len() });
+        return Err(ReplicationError::DimensionMismatch {
+            expected: n_obs,
+            got: psu.len(),
+        });
     }
 
-    let stratum_vec = stratum.map(|s| s.to_owned()).unwrap_or_else(|| Array1::ones(n_obs));
+    let stratum_vec = stratum
+        .map(|s| s.to_owned())
+        .unwrap_or_else(|| Array1::ones(n_obs));
     let stratum_psus = build_stratum_psu_list(&stratum_vec, &psu);
 
     let rep_weights: Vec<Array1<f64>> = (0..n_reps)
@@ -479,11 +573,16 @@ pub fn create_sdr_weights(
 ) -> Result<(Array2<f64>, f64)> {
     let n_obs = wgt.len();
     if n_reps < 2 {
-        return Err(ReplicationError::InvalidInput("SDR requires ≥2 replicates".into()));
+        return Err(ReplicationError::InvalidInput(
+            "SDR requires ≥2 replicates".into(),
+        ));
     }
 
-    let stratum_vec = stratum.map(|s| s.to_owned()).unwrap_or_else(|| Array1::ones(n_obs));
-    let order_vec = order.map(|o| o.to_owned())
+    let stratum_vec = stratum
+        .map(|s| s.to_owned())
+        .unwrap_or_else(|| Array1::ones(n_obs));
+    let order_vec = order
+        .map(|o| o.to_owned())
         .unwrap_or_else(|| Array1::from_iter(0..n_obs as i64));
 
     let sorted_indices = build_stratum_sorted_indices(&stratum_vec, &order_vec);
@@ -495,7 +594,9 @@ pub fn create_sdr_weights(
             let mut rep_wgt = wgt.to_owned();
             for indices in sorted_indices.values() {
                 let n_h = indices.len();
-                if n_h < 2 { continue; }
+                if n_h < 2 {
+                    continue;
+                }
                 for k in 0..(n_h - 1) {
                     let i1 = indices[k];
                     let i2 = indices[k + 1];
@@ -524,20 +625,28 @@ fn build_stratum_psu_list(stratum: &Array1<i64>, psu: &ArrayView1<i64>) -> HashM
     let mut map: HashMap<i64, Vec<i64>> = HashMap::new();
     for i in 0..stratum.len() {
         let psus = map.entry(stratum[i]).or_default();
-        if !psus.contains(&psu[i]) { psus.push(psu[i]); }
+        if !psus.contains(&psu[i]) {
+            psus.push(psu[i]);
+        }
     }
     map
 }
 
-fn build_stratum_sorted_indices(stratum: &Array1<i64>, order: &Array1<i64>) -> HashMap<i64, Vec<usize>> {
+fn build_stratum_sorted_indices(
+    stratum: &Array1<i64>,
+    order: &Array1<i64>,
+) -> HashMap<i64, Vec<usize>> {
     let mut groups: HashMap<i64, Vec<(i64, usize)>> = HashMap::new();
     for i in 0..stratum.len() {
         groups.entry(stratum[i]).or_default().push((order[i], i));
     }
-    groups.into_iter().map(|(s, mut v)| {
-        v.sort_by_key(|(o, _)| *o);
-        (s, v.into_iter().map(|(_, i)| i).collect())
-    }).collect()
+    groups
+        .into_iter()
+        .map(|(s, mut v)| {
+            v.sort_by_key(|(o, _)| *o);
+            (s, v.into_iter().map(|(_, i)| i).collect())
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -550,7 +659,8 @@ mod tests {
         let wgt = array![1.0, 1.0, 1.0, 1.0];
         let stratum = array![1, 1, 2, 2];
         let psu = array![1, 2, 1, 2];
-        let (rep_wgt, df) = create_brr_weights(wgt.view(), stratum.view(), psu.view(), Some(4), 0.0, None).unwrap();
+        let (rep_wgt, df) =
+            create_brr_weights(wgt.view(), stratum.view(), psu.view(), Some(4), 0.0, None).unwrap();
         assert_eq!(rep_wgt.dim(), (4, 4));
         assert_eq!(df, 2.0);
     }
@@ -560,7 +670,8 @@ mod tests {
         let wgt = array![1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
         let stratum = array![1, 1, 1, 2, 2, 2];
         let psu = array![1, 2, 3, 1, 2, 3];
-        let (rep_wgt, df) = create_jkn_weights(wgt.view(), Some(stratum.view()), psu.view()).unwrap();
+        let (rep_wgt, df) =
+            create_jkn_weights(wgt.view(), Some(stratum.view()), psu.view()).unwrap();
         assert_eq!(rep_wgt.dim(), (6, 6));
         assert_eq!(df, 6.0);
     }
@@ -570,7 +681,9 @@ mod tests {
         let wgt = array![1.0, 1.0, 1.0, 1.0];
         let stratum = array![1, 1, 2, 2];
         let psu = array![1, 2, 1, 2];
-        let (rep_wgt, df) = create_jk_weights(wgt.view(), Some(stratum.view()), psu.view(), true, Some(42)).unwrap();
+        let (rep_wgt, df) =
+            create_jk_weights(wgt.view(), Some(stratum.view()), psu.view(), true, Some(42))
+                .unwrap();
         assert_eq!(rep_wgt.dim(), (4, 2)); // 2 strata = 2 replicates
         assert_eq!(df, 2.0);
     }
@@ -580,7 +693,8 @@ mod tests {
         let wgt = array![1.0, 1.0, 1.0, 1.0];
         let stratum = array![1, 1, 2, 2];
         let psu = array![1, 2, 1, 2];
-        let (rep_wgt, df) = create_bootstrap_weights(wgt.view(), Some(stratum.view()), psu.view(), 10, 42).unwrap();
+        let (rep_wgt, df) =
+            create_bootstrap_weights(wgt.view(), Some(stratum.view()), psu.view(), 10, 42).unwrap();
         assert_eq!(rep_wgt.dim(), (4, 10));
         assert_eq!(df, 9.0);
     }

@@ -1,8 +1,8 @@
 // src/weighting/calibration.rs
 
+use super::utils::{Result, WeightingError};
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2, s};
 use rayon::prelude::*;
-use super::utils::{Result, WeightingError};
 use std::collections::HashMap;
 
 /// Calibration method
@@ -85,13 +85,7 @@ pub fn calibrate_linear(
         .into_par_iter()
         .map(|r| {
             let wgt_col = wgt.column(r);
-            calibrate_linear_single(
-                wgt_col,
-                x_matrix,
-                totals,
-                s.view(),
-                additive,
-            )
+            calibrate_linear_single(wgt_col, x_matrix, totals, s.view(), additive)
         })
         .collect();
 
@@ -167,7 +161,7 @@ fn solve_linear_system(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> 
 
     if a.ncols() != n || b.len() != n {
         return Err(WeightingError::InvalidInput(
-            "Matrix dimensions incompatible for solving".to_string()
+            "Matrix dimensions incompatible for solving".to_string(),
         ));
     }
 
@@ -318,7 +312,9 @@ pub fn calibrate_by_domain(
     let domain_tasks: Vec<_> = boundaries
         .iter()
         .filter_map(|(&dom_val, &(start, end))| {
-            controls.get(&dom_val).map(|totals| (dom_val, start, end, totals.clone()))
+            controls
+                .get(&dom_val)
+                .map(|totals| (dom_val, start, end, totals.clone()))
         })
         .collect();
 
@@ -330,13 +326,8 @@ pub fn calibrate_by_domain(
             let x_slice = x_sorted.slice(s![*start..*end, ..]);
             let s_slice = s_sorted.slice(s![*start..*end]);
 
-            let cal_slice = calibrate_linear(
-                wgt_slice,
-                x_slice,
-                totals.view(),
-                Some(s_slice),
-                additive,
-            )?;
+            let cal_slice =
+                calibrate_linear(wgt_slice, x_slice, totals.view(), Some(s_slice), additive)?;
 
             Ok((*start, *end, cal_slice))
         })
@@ -352,7 +343,9 @@ pub fn calibrate_by_domain(
     };
 
     for (start, end, cal_slice) in calibrated_domains {
-        result_sorted.slice_mut(s![start..end, ..]).assign(&cal_slice);
+        result_sorted
+            .slice_mut(s![start..end, ..])
+            .assign(&cal_slice);
     }
 
     // Restore original order
@@ -462,13 +455,7 @@ mod tests {
         let x = array![[1.0], [2.0], [3.0], [4.0]];
         let totals = array![15.0];
 
-        let result = calibrate_linear(
-            wgt.view(),
-            x.view(),
-            totals.view(),
-            None,
-            false,
-        ).unwrap();
+        let result = calibrate_linear(wgt.view(), x.view(), totals.view(), None, false).unwrap();
 
         // Check calibrated totals
         let mut x_cal = 0.0;
