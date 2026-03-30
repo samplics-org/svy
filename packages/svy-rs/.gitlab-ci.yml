@@ -22,7 +22,8 @@ build-linux-x86_64:
   before_script:
     - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
     - source "$HOME/.cargo/env"
-    - pip3.11 install maturin>=1.8
+    - /opt/python/cp311-cp311/bin/pip install maturin>=1.8
+    - export PATH="/opt/python/cp311-cp311/bin:$PATH"
   script:
     - cd ${SVY_RS_DIR}
     - rm -rf dist && mkdir -p dist
@@ -106,6 +107,7 @@ build-sdist:
   stage: build
   image: python:3.11-slim
   before_script:
+    - apt-get update && apt-get install -y curl gcc
     - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
     - export PATH="$HOME/.cargo/bin:$PATH"
     - pip install maturin>=1.8
