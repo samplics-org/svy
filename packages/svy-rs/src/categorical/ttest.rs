@@ -29,6 +29,7 @@ use crate::regression::wols::{fit_wols, influence_se};
 // ============================================================================
 
 /// Result for a one-sample t-test.
+#[allow(dead_code)]
 pub struct TTestOneResult {
     /// Estimated mean
     pub estimate: f64,
@@ -49,6 +50,7 @@ pub struct TTestOneResult {
 }
 
 /// Result for a two-sample t-test.
+#[allow(dead_code)]
 pub struct TTestTwoResult {
     /// Difference in means (group1 - group0)
     pub diff: f64,

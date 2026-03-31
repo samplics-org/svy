@@ -1,8 +1,7 @@
 // src/weighting/normalization.rs
 
 use super::utils::{Result, WeightingError, sum_by_group_2d};
-use ndarray::{Array1, Array2, ArrayView1, ArrayView2, Axis};
-use rayon::prelude::*;
+use ndarray::{Array1, Array2, ArrayView2, Axis};
 
 /// Normalize weights to sum to a target
 ///
@@ -22,7 +21,7 @@ pub fn normalize_impl(
     by_arr: Option<&Array1<i64>>,
     control: Option<&Array1<f64>>,
 ) -> Result<Array2<f64>> {
-    let (n_obs, n_reps) = wgt.dim();
+    let (n_obs, _) = wgt.dim();
 
     match by_arr {
         None => normalize_global(wgt, control, n_obs),
@@ -187,106 +186,6 @@ fn create_group_mapping(groups: &Array1<i64>) -> (Vec<usize>, usize) {
     }
 
     (indices, next_id)
-}
-
-/// Parallel normalization - process each replicate independently
-pub fn normalize_parallel(
-    wgt: ArrayView2<f64>,
-    by_arr: Option<&Array1<i64>>,
-    control: Option<&Array1<f64>>,
-) -> Result<Array2<f64>> {
-    let (n_obs, n_reps) = wgt.dim();
-
-    // Process each replicate in parallel
-    let results: std::result::Result<Vec<_>, WeightingError> = (0..n_reps)
-        .into_par_iter()
-        .map(|r| {
-            let wgt_col = wgt.column(r);
-            let ctrl_val = control.map(|c| c[r.min(c.len() - 1)]);
-            normalize_single(wgt_col, by_arr, ctrl_val)
-        })
-        .collect();
-
-    let norm_cols = results?;
-
-    // Stack columns
-    let mut result = Array2::zeros((n_obs, n_reps));
-    for (col_idx, col) in norm_cols.iter().enumerate() {
-        result.column_mut(col_idx).assign(col);
-    }
-
-    Ok(result)
-}
-
-/// Normalize a single replicate
-fn normalize_single(
-    wgt: ArrayView1<f64>,
-    by_arr: Option<&Array1<i64>>,
-    control: Option<f64>,
-) -> Result<ndarray::Array1<f64>> {
-    let n_obs = wgt.len();
-
-    match by_arr {
-        None => {
-            // Global normalization
-            let current_sum: f64 = wgt.sum();
-            let target = control.unwrap_or(n_obs as f64);
-
-            let factor = if current_sum > 1e-10 {
-                target / current_sum
-            } else if target > 1e-10 {
-                return Err(WeightingError::InvalidInput(
-                    "Cannot normalize: weights sum to zero".to_string(),
-                ));
-            } else {
-                1.0
-            };
-
-            Ok(wgt.mapv(|x| x * factor))
-        }
-        Some(groups) => {
-            // Group normalization
-            let (group_indices, n_groups) = create_group_mapping(groups);
-
-            // Sum by group
-            let mut group_sums = vec![0.0; n_groups];
-            for (i, &g) in group_indices.iter().enumerate() {
-                group_sums[g] += wgt[i];
-            }
-
-            // Calculate targets
-            let group_targets: Vec<f64> = if let Some(ctrl) = control {
-                vec![ctrl; n_groups]
-            } else {
-                let mut counts = vec![0; n_groups];
-                for &g in &group_indices {
-                    counts[g] += 1;
-                }
-                counts.into_iter().map(|c| c as f64).collect()
-            };
-
-            // Calculate factors
-            let mut factors = vec![1.0; n_groups];
-            for g in 0..n_groups {
-                if group_sums[g] > 1e-10 {
-                    factors[g] = group_targets[g] / group_sums[g];
-                } else if group_targets[g] > 1e-10 {
-                    return Err(WeightingError::InvalidInput(format!(
-                        "Group {} has zero weights but non-zero target",
-                        g
-                    )));
-                }
-            }
-
-            // Apply factors
-            let mut normalized = ndarray::Array1::zeros(n_obs);
-            for (i, &g) in group_indices.iter().enumerate() {
-                normalized[i] = wgt[i] * factors[g];
-            }
-
-            Ok(normalized)
-        }
-    }
 }
 
 #[cfg(test)]

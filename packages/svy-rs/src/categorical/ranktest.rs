@@ -180,6 +180,7 @@ fn probit(p: f64) -> f64 {
 // ============================================================================
 
 /// Result for a two-sample rank test.
+#[allow(dead_code)]
 pub struct RankTestTwoResult {
     /// Difference in mean rank scores (group1 effect)
     pub delta: f64,
@@ -202,6 +203,7 @@ pub struct RankTestTwoResult {
 }
 
 /// Result for a k-sample rank test.
+#[allow(dead_code)]
 pub struct RankTestKResult {
     /// Numerator df (k - 1)
     pub ndf: usize,

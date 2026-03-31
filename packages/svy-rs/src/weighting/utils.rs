@@ -1,6 +1,6 @@
 // src/weighting/utils.rs
 
-use ndarray::{Array1, Array2, ArrayView1, ArrayView2, Axis};
+use ndarray::{Array2, ArrayView2};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -19,21 +19,6 @@ pub enum WeightingError {
 }
 
 pub type Result<T> = std::result::Result<T, WeightingError>;
-
-/// Sum weights by group for a 1D array
-pub fn sum_by_group_1d(
-    weights: ArrayView1<f64>,
-    indices: &[usize],
-    n_groups: usize,
-) -> Array1<f64> {
-    let mut sums = Array1::zeros(n_groups);
-
-    for (i, &group_id) in indices.iter().enumerate() {
-        sums[group_id] += weights[i];
-    }
-
-    sums
-}
 
 /// Sum weights by group for a 2D array (each column separately)
 pub fn sum_by_group_2d(
@@ -109,16 +94,6 @@ pub fn check_bounds(
 mod tests {
     use super::*;
     use ndarray::array;
-
-    #[test]
-    fn test_sum_by_group_1d() {
-        let weights = array![1.0, 2.0, 3.0, 4.0];
-        let indices = vec![0, 0, 1, 1];
-        let sums = sum_by_group_1d(weights.view(), &indices, 2);
-
-        assert_eq!(sums[0], 3.0);
-        assert_eq!(sums[1], 7.0);
-    }
 
     #[test]
     fn test_sum_by_group_2d() {

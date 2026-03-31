@@ -5,19 +5,6 @@ use ndarray::{Array1, Array2, ArrayView1, ArrayView2, s};
 use rayon::prelude::*;
 use std::collections::HashMap;
 
-/// Calibration method
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum CalibrationMethod {
-    /// Linear calibration (default, chi-squared distance)
-    Linear,
-    /// Raking (multiplicative, KL divergence)
-    Raking,
-    /// Logit with bounds
-    Logit { lower: f64, upper: f64 },
-    /// Truncated linear with bounds
-    Truncated { lower: f64, upper: f64 },
-}
-
 /// Linear calibration using Deville-Särndal method
 ///
 /// Calibrates weights to match auxiliary information using linear calibration.

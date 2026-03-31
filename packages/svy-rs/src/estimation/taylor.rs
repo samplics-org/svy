@@ -781,7 +781,7 @@ fn compute_stage2_variance(
     scores: &[f64],
     psu_indices: &[u32],
     ssu_indices: &[u32],
-    strata_indices: Option<&[u32]>,
+    _strata_indices: Option<&[u32]>,
     fpc_per_stratum: Option<&[f64]>,
     fpc_ssu_arr: Option<&[f64]>,
     strata_for_psu: Option<&[u32]>,
@@ -896,7 +896,7 @@ pub fn taylor_variance(
         var_stage1,
         psu_indices_opt,
         strata_indices_opt,
-        n_strata_val,
+        _n_strata_val,
         fpc_per_stratum,
         psu_stratum_map,
     ) = if strata.is_none() {

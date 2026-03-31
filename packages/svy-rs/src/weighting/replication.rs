@@ -23,7 +23,6 @@ pub enum ReplicationError {
     BrrPsuCount { stratum: i64, count: usize },
     PairedJkPsuCount { stratum: i64, count: usize },
     InsufficientPsus { required: usize, got: usize },
-    NoHadamardMatrix { size: usize },
 }
 
 impl std::fmt::Display for ReplicationError {
@@ -45,9 +44,6 @@ impl std::fmt::Display for ReplicationError {
             ),
             Self::InsufficientPsus { required, got } => {
                 write!(f, "Insufficient PSUs: required {}, got {}", required, got)
-            }
-            Self::NoHadamardMatrix { size } => {
-                write!(f, "No Hadamard matrix available for size {}", size)
             }
         }
     }

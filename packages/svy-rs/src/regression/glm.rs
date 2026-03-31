@@ -11,6 +11,12 @@
 // NOTE: This implements the classic "bread %*% meat %*% bread" route
 // (the one you had that was already extremely close to R).
 
+
+// #![allow(non_upper_case_globals)]
+#![allow(non_snake_case)]
+
+
+
 use faer::Mat;
 use faer::Side;
 use faer::prelude::SpSolver;
@@ -366,6 +372,7 @@ fn invert_matrix(A: &Mat<f64>, k: usize) -> Mat<f64> {
 // Result
 // ============================================================================
 
+#[allow(dead_code)]
 pub struct GlmResult {
     pub params: Vec<f64>,
     pub cov_params: Vec<f64>,
@@ -427,16 +434,6 @@ pub fn fit_glm(
     let mut beta = Mat::<f64>::zeros(k, 1);
     let mut mu = vec![0.0; n];
     let mut eta = vec![0.0; n];
-
-    let y_bar = if w_sum > 0.0 {
-        let mut sum_wy = 0.0;
-        for i in 0..n {
-            sum_wy += Y.read(i, 0) * w_samp[i];
-        }
-        sum_wy / w_sum
-    } else {
-        0.0
-    };
 
     for i in 0..n {
         let y_i = Y.read(i, 0);

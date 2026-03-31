@@ -1,8 +1,7 @@
 // src/weighting/raking.rs
 
 use super::utils::{Result, WeightingError, check_bounds, check_convergence, sum_by_group_2d};
-use ndarray::{Array1, Array2, ArrayView1, ArrayView2, Axis};
-use rayon::prelude::*;
+use ndarray::{Array1, Array2, ArrayView2};
 
 /// Margin structure for efficient raking
 struct MarginSpec {
@@ -64,7 +63,7 @@ pub fn rake_impl(
         )));
     }
 
-    for (idx, indices) in margin_indices.iter().enumerate() {
+    for (_, indices) in margin_indices.iter().enumerate() {
         if indices.len() != n_obs {
             return Err(WeightingError::DimensionMismatch {
                 expected: n_obs,
@@ -85,7 +84,7 @@ pub fn rake_impl(
     let mut converged = false;
 
     // Iteration loop
-    for iteration in 0..max_iter {
+    for _ in 0..max_iter {
         let weights_start = raked_weights.clone();
 
         // Cycle through margins (IPF steps)
@@ -123,7 +122,7 @@ pub fn rake_impl(
         }
 
         // Check convergence
-        let (conv, max_diff) = check_convergence(raked_weights.view(), weights_start.view(), tol);
+        let (conv, _) = check_convergence(raked_weights.view(), weights_start.view(), tol);
 
         converged = conv;
 
@@ -143,117 +142,6 @@ pub fn rake_impl(
     }
 
     Ok(raked_weights)
-}
-
-/// Parallel raking - rake each replicate independently in parallel
-///
-/// This is useful when you have many replicates and each might converge
-/// at different rates. Uses rayon for parallel processing.
-pub fn rake_parallel(
-    wgt: ArrayView2<f64>,
-    margin_indices: &[Array1<i64>],
-    margin_targets: &[Array1<f64>],
-    ll_bound: Option<f64>,
-    up_bound: Option<f64>,
-    tol: f64,
-    max_iter: usize,
-) -> Result<Array2<f64>> {
-    let (n_obs, n_reps) = wgt.dim();
-
-    // Pre-compute margin specifications (shared across threads)
-    let margins: Vec<MarginSpec> = margin_indices
-        .iter()
-        .zip(margin_targets.iter())
-        .map(|(idx, tgt)| MarginSpec::new(idx.clone(), tgt.clone()))
-        .collect();
-
-    // Rake each replicate in parallel
-    let results: std::result::Result<Vec<Array1<f64>>, WeightingError> = (0..n_reps)
-        .into_par_iter()
-        .map(|rep_idx| {
-            // Extract single replicate column
-            let wgt_col = wgt.column(rep_idx).to_owned();
-
-            // Rake this replicate
-            rake_single_replicate(wgt_col.view(), &margins, ll_bound, up_bound, tol, max_iter)
-        })
-        .collect();
-
-    let raked_cols = results?;
-
-    // Stack columns into matrix
-    let mut result = Array2::zeros((n_obs, n_reps));
-    for (col_idx, col) in raked_cols.iter().enumerate() {
-        result.column_mut(col_idx).assign(col);
-    }
-
-    Ok(result)
-}
-
-/// Rake a single replicate (1D weight array)
-fn rake_single_replicate(
-    wgt: ArrayView1<f64>,
-    margins: &[MarginSpec],
-    ll_bound: Option<f64>,
-    up_bound: Option<f64>,
-    tol: f64,
-    max_iter: usize,
-) -> Result<Array1<f64>> {
-    let n_obs = wgt.len();
-    let mut raked = wgt.to_owned();
-    let mut converged = false;
-
-    for _iteration in 0..max_iter {
-        let weights_start = raked.clone();
-
-        // Cycle through margins
-        for margin in margins {
-            // Sum by group
-            let mut current_sums: Array1<f64> = Array1::zeros(margin.n_groups);
-            for (obs_idx, &group_id) in margin.indices.iter().enumerate() {
-                current_sums[group_id] += raked[obs_idx];
-            }
-
-            // Calculate factors
-            let mut factors: Array1<f64> = Array1::zeros(margin.n_groups);
-            for g in 0..margin.n_groups {
-                if current_sums[g] > 1e-10 {
-                    factors[g] = margin.targets[g] / current_sums[g];
-                } else if margin.targets[g] > 1e-10 {
-                    return Err(WeightingError::ZeroWeights(g));
-                } else {
-                    factors[g] = 1.0;
-                }
-            }
-
-            // Apply factors
-            for (obs_idx, &group_id) in margin.indices.iter().enumerate() {
-                raked[obs_idx] *= factors[group_id];
-            }
-        }
-
-        // Check convergence
-        let mut max_rel_diff = 0.0;
-        for (&curr, &prev) in raked.iter().zip(weights_start.iter()) {
-            if prev.abs() > 1e-10 {
-                let rel_diff = (curr - prev).abs() / prev.abs();
-                if rel_diff > max_rel_diff {
-                    max_rel_diff = rel_diff;
-                }
-            }
-        }
-
-        if max_rel_diff < tol {
-            converged = true;
-            break;
-        }
-    }
-
-    if !converged {
-        return Err(WeightingError::ConvergenceFailed(max_iter));
-    }
-
-    Ok(raked)
 }
 
 #[cfg(test)]

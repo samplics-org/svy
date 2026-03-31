@@ -1,8 +1,7 @@
 // src/weighting/nonresponse.rs
 
-use super::utils::{Result, WeightingError, sum_by_group_2d};
-use ndarray::{Array2, ArrayView1, ArrayView2, Axis};
-use rayon::prelude::*;
+use super::utils::{Result, WeightingError};
+use ndarray::{Array2, ArrayView1, ArrayView2};
 
 /// Response status codes (numeric encoding)
 const RR: i64 = 0; // Respondent
@@ -163,128 +162,6 @@ fn sum_by_class_and_status(
     }
 
     sums
-}
-
-/// Parallel version - process each replicate independently
-pub fn adjust_nr_parallel(
-    wgts: ArrayView2<f64>,
-    adj_class: ArrayView1<i64>,
-    resp_status: ArrayView1<i64>,
-    unknown_to_inelig: bool,
-) -> Result<Array2<f64>> {
-    let (n_obs, n_reps) = wgts.dim();
-
-    // Process each replicate in parallel
-    let results: std::result::Result<Vec<_>, WeightingError> = (0..n_reps)
-        .into_par_iter()
-        .map(|r| {
-            let wgt_col = wgts.column(r);
-            adjust_nr_single(wgt_col, adj_class, resp_status, unknown_to_inelig)
-        })
-        .collect();
-
-    let adj_cols = results?;
-
-    // Stack columns into matrix
-    let mut result = Array2::zeros((n_obs, n_reps));
-    for (col_idx, col) in adj_cols.iter().enumerate() {
-        result.column_mut(col_idx).assign(col);
-    }
-
-    Ok(result)
-}
-
-/// Adjust a single replicate
-fn adjust_nr_single(
-    wgt: ArrayView1<f64>,
-    adj_class: ArrayView1<i64>,
-    resp_status: ArrayView1<i64>,
-    unknown_to_inelig: bool,
-) -> Result<ndarray::Array1<f64>> {
-    let n_obs = wgt.len();
-
-    // Create masks
-    let is_rr: Vec<bool> = resp_status.iter().map(|&s| s == RR).collect();
-    let is_nr: Vec<bool> = resp_status.iter().map(|&s| s == NR).collect();
-    let is_in: Vec<bool> = resp_status.iter().map(|&s| s == IN).collect();
-    let is_uk: Vec<bool> = resp_status.iter().map(|&s| s == UK).collect();
-
-    // Map classes
-    let (class_indices, n_classes) = create_class_mapping(&adj_class);
-
-    // Sum by class and status
-    let mut sum_rr = vec![0.0; n_classes];
-    let mut sum_nr = vec![0.0; n_classes];
-    let mut sum_in = vec![0.0; n_classes];
-    let mut sum_uk = vec![0.0; n_classes];
-
-    for i in 0..n_obs {
-        let c = class_indices[i];
-        let w = wgt[i];
-
-        if is_rr[i] {
-            sum_rr[c] += w;
-        }
-        if is_nr[i] {
-            sum_nr[c] += w;
-        }
-        if is_in[i] {
-            sum_in[c] += w;
-        }
-        if is_uk[i] {
-            sum_uk[c] += w;
-        }
-    }
-
-    // Calculate factors
-    let mut factor_rr = vec![1.0; n_classes];
-    let mut factor_in = vec![1.0; n_classes];
-
-    for c in 0..n_classes {
-        if unknown_to_inelig {
-            let denom_uk = sum_in[c] + sum_rr[c] + sum_nr[c];
-            let adj_uk = if denom_uk > 1e-10 {
-                (denom_uk + sum_uk[c]) / denom_uk
-            } else {
-                1.0
-            };
-
-            let denom_rr = sum_rr[c];
-            let adj_rr = if denom_rr > 1e-10 {
-                (sum_rr[c] + sum_nr[c]) / denom_rr
-            } else {
-                1.0
-            };
-
-            factor_rr[c] = adj_rr * adj_uk;
-            factor_in[c] = adj_uk;
-        } else {
-            let denom_rr = sum_rr[c];
-            let adj_rr = if denom_rr > 1e-10 {
-                (sum_rr[c] + sum_nr[c] + sum_uk[c]) / denom_rr
-            } else {
-                1.0
-            };
-
-            factor_rr[c] = adj_rr;
-            factor_in[c] = 1.0;
-        }
-    }
-
-    // Apply factors
-    let mut adj_wgt = ndarray::Array1::zeros(n_obs);
-
-    for i in 0..n_obs {
-        let c = class_indices[i];
-
-        if is_rr[i] {
-            adj_wgt[i] = wgt[i] * factor_rr[c];
-        } else if is_in[i] {
-            adj_wgt[i] = wgt[i] * factor_in[c];
-        }
-    }
-
-    Ok(adj_wgt)
 }
 
 #[cfg(test)]

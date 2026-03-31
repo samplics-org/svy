@@ -5,13 +5,12 @@
 //! Computes one-way or two-way frequency tables with:
 //!   - Proportion estimates and Taylor-linearized SEs
 //!   - Optional total estimates (when weights are not normalized)
-//!   - Rao-Scott adjusted Pearson and Likelihood Ratio chi-square tests (two-way)
+//!   - Rao-Scott adjusted Pearson chi-square test (two-way)
 //!
 //! Matches R's `survey::svytable` + `survey::svychisq`.
 
 use faer::Mat;
 use polars::prelude::*;
-use std::collections::HashMap;
 
 use crate::estimation::{
     degrees_of_freedom, point_estimate_mean, point_estimate_total, scores_mean, scores_total,
@@ -221,7 +220,6 @@ pub fn estimate_proportions(
     sort_levels(&mut levels);
 
     let k = levels.len();
-    let n = y.len();
     let df_val = degrees_of_freedom(weights, strata, psu)?;
 
     let sm = singleton_method;
@@ -315,6 +313,7 @@ pub fn estimate_totals(
 // ============================================================================
 
 /// Compute Rao-Scott adjusted chi-square statistics for a two-way table.
+/// Returns the 7 Pearson-based statistics: (chisq, df, p, adj_f, adj_ndf, adj_ddf, adj_p).
 pub fn rao_scott(
     proportions: &[f64],
     cov_survey: &[Vec<f64>],
@@ -323,22 +322,7 @@ pub fn rao_scott(
     n_obs: usize,
     n_strata: usize,
     n_psus: usize,
-) -> (
-    f64,
-    f64,
-    f64,
-    f64,
-    f64,
-    f64,
-    f64,
-    f64,
-    f64,
-    f64,
-    f64,
-    f64,
-    f64,
-    f64,
-) {
+) -> (f64, f64, f64, f64, f64, f64, f64) {
     let k = nr * nc;
     let n_f = n_obs as f64;
     let p = proportions;
@@ -422,21 +406,16 @@ pub fn rao_scott(
     }
 
     let mut chisq_p = 0.0;
-    let mut chisq_lr = 0.0;
     for r in 0..nr {
         for c in 0..nc {
             let i = r * nc + c;
             let expected = row_margin[r] * col_margin[c];
             if expected > 0.0 {
                 chisq_p += (p[i] - expected).powi(2) / expected;
-                if p[i] > 0.0 {
-                    chisq_lr += 2.0 * p[i] * (p[i] / expected).ln();
-                }
             }
         }
     }
     chisq_p *= n_f;
-    chisq_lr *= n_f;
 
     // 7. Rao-Scott corrections
     let df_base = ((nr - 1) * (nc - 1)) as f64;
@@ -454,11 +433,9 @@ pub fn rao_scott(
         1.0
     };
     let chisq_p_for_p = chisq_p / mean_delta;
-    let chisq_lr_for_p = chisq_lr / mean_delta;
 
     // Second-order (F) correction: F = X² / trace(delta), with Satterthwaite df
-    // R only computes F from the Pearson X², using the same F value for both
-    // Pearson and LR adjusted statistics (see surveychisq.R line 111).
+    // R only computes F from the Pearson X² (see surveychisq.R line 111).
     let (f_p, ndf, ddf) = if trace_d > 1e-9 {
         let fp = chisq_p / trace_d;
         let nd = trace_d.powi(2) / trace_d2;
@@ -469,13 +446,6 @@ pub fn rao_scott(
     };
 
     (
-        chisq_p,
-        df_base,
-        chi2_survival(chisq_p_for_p, df_base),
-        f_p,
-        ndf,
-        ddf,
-        f_survival(f_p, ndf, ddf),
         chisq_p,
         df_base,
         chi2_survival(chisq_p_for_p, df_base),

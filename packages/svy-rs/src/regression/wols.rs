@@ -25,6 +25,7 @@ use crate::estimation::taylor::taylor_variance;
 // ============================================================================
 
 /// Result of a weighted OLS fit with influence functions.
+#[allow(dead_code)]
 pub struct WolsResult {
     /// Regression coefficients, length k
     pub beta: Vec<f64>,
