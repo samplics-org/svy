@@ -16,6 +16,7 @@ use crate::estimation::replication::{
     matrix_mean_by_domain, matrix_mean_estimates,
     matrix_median_by_domain, matrix_median_estimates,
     matrix_prop_by_domain, matrix_prop_estimates,
+    matrix_prop_by_domain_str, matrix_prop_estimates_str,
     matrix_ratio_by_domain, matrix_ratio_estimates,
     matrix_total_by_domain, matrix_total_estimates,
     replicate_coefficients,
@@ -384,38 +385,56 @@ fn compute_replicate_prop_ungrouped(
     let weights  = df.column(weight_col)?.f64()?;
     let n = y_series.len();
     let n_reps = rep_weight_cols.len();
-
-    let y_arr: Vec<i64> = if y_series.dtype().is_integer() {
-        y_series.i64()?.into_iter().map(|v| v.unwrap_or(0)).collect()
-    } else if y_series.dtype() == &DataType::Boolean {
-        y_series.bool()?.into_iter().map(|v| if v.unwrap_or(false) { 1 } else { 0 }).collect()
-    } else {
-        y_series.cast(&DataType::Int64)?.i64()?.into_iter().map(|v| v.unwrap_or(0)).collect()
-    };
     let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
-
     let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
-    let (levels, theta_full_vec, theta_reps_vec) =
-        matrix_prop_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps);
     let rep_coefs = replicate_coefficients(method, n_reps, fay_coef);
-    let n_levels  = levels.len();
 
-    let mut level_strs: Vec<String> = Vec::with_capacity(n_levels);
-    let mut estimates:  Vec<f64>    = Vec::with_capacity(n_levels);
-    let mut ses:        Vec<f64>    = Vec::with_capacity(n_levels);
-    let mut variances:  Vec<f64>    = Vec::with_capacity(n_levels);
-    let mut dfs:        Vec<u32>    = Vec::with_capacity(n_levels);
-    let mut ns:         Vec<u32>    = Vec::with_capacity(n_levels);
+    // String/Categorical: use string-keyed level functions so level labels are
+    // preserved as-is without any numeric cast.
+    let is_string = matches!(y_series.dtype(), DataType::String | DataType::Categorical(_, _));
 
-    for (l, &level) in levels.iter().enumerate() {
-        let variance = variance_from_replicates(method, theta_full_vec[l], &theta_reps_vec[l], &rep_coefs, center);
-        level_strs.push(level.to_string());
-        estimates.push(theta_full_vec[l]);
-        ses.push(variance.sqrt());
-        variances.push(variance);
-        dfs.push(df_val);
-        ns.push(n as u32);
-    }
+    let (n_levels, level_strs, estimates, variances) = if is_string {
+        let y_cast = y_series.cast(&DataType::String)?;
+        let y_arr: Vec<String> = y_cast.str()?.into_iter()
+            .map(|v| v.unwrap_or("").to_string())
+            .collect();
+        let (levels, theta_full, theta_reps) =
+            matrix_prop_estimates_str(&y_arr, &w_arr, &rep_w_matrix, n, n_reps);
+        let n_l = levels.len();
+        let vars: Vec<f64> = (0..n_l)
+            .map(|l| variance_from_replicates(method, theta_full[l], &theta_reps[l], &rep_coefs, center))
+            .collect();
+        (n_l, levels, theta_full, vars)
+    } else {
+        // Integer or boolean: convert to i64 category codes.
+        let y_arr: Vec<i64> = if y_series.dtype().is_integer() {
+            y_series.i64()?.into_iter().map(|v| v.unwrap_or(0)).collect()
+        } else if y_series.dtype() == &DataType::Boolean {
+            y_series.bool()?.into_iter()
+                .map(|v| if v.unwrap_or(false) { 1 } else { 0 })
+                .collect()
+        } else {
+            return Err(PolarsError::InvalidOperation(
+                format!(
+                    "prop() does not support dtype {:?} for column '{}'. \
+                     Use a String, Categorical, Boolean, or integer column.",
+                    y_series.dtype(), value_col
+                ).into()
+            ));
+        };
+        let (levels, theta_full, theta_reps) =
+            matrix_prop_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps);
+        let n_l = levels.len();
+        let vars: Vec<f64> = (0..n_l)
+            .map(|l| variance_from_replicates(method, theta_full[l], &theta_reps[l], &rep_coefs, center))
+            .collect();
+        let str_levels: Vec<String> = levels.iter().map(|l| l.to_string()).collect();
+        (n_l, str_levels, theta_full, vars)
+    };
+
+    let ses: Vec<f64> = variances.iter().map(|v| v.sqrt()).collect();
+    let ns:  Vec<u32> = vec![n as u32; n_levels];
+    let dfs: Vec<u32> = vec![df_val; n_levels];
     df!["y" => vec![value_col; n_levels], "level" => level_strs, "est" => estimates,
         "se" => ses, "var" => variances, "df" => dfs, "n" => ns]
 }
@@ -431,22 +450,45 @@ fn compute_replicate_prop_grouped(
     let by_str   = df.column(by_col)?.str()?;
     let n = y_series.len();
     let n_reps = rep_weight_cols.len();
-
-    let y_arr: Vec<i64> = if y_series.dtype().is_integer() {
-        y_series.i64()?.into_iter().map(|v| v.unwrap_or(0)).collect()
-    } else if y_series.dtype() == &DataType::Boolean {
-        y_series.bool()?.into_iter().map(|v| if v.unwrap_or(false) { 1 } else { 0 }).collect()
-    } else {
-        y_series.cast(&DataType::Int64)?.i64()?.into_iter().map(|v| v.unwrap_or(0)).collect()
-    };
     let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
 
     let (domain_ids, domain_names, n_domains) = index_domains(by_str);
     let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
-    let (levels, theta_full_mat, theta_reps_mat, counts) =
-        matrix_prop_by_domain(&y_arr, &w_arr, &rep_w_matrix, &domain_ids, n_domains, n, n_reps);
     let rep_coefs = replicate_coefficients(method, n_reps, fay_coef);
 
+    let is_string = matches!(y_series.dtype(), DataType::String | DataType::Categorical(_, _));
+
+    let (levels_str, theta_full_mat, theta_reps_mat, counts) = if is_string {
+        let y_cast = y_series.cast(&DataType::String)?;
+        let y_arr: Vec<String> = y_cast.str()?.into_iter()
+            .map(|v| v.unwrap_or("").to_string())
+            .collect();
+        let (levels, tf, tr, counts) =
+            matrix_prop_by_domain_str(&y_arr, &w_arr, &rep_w_matrix, &domain_ids, n_domains, n, n_reps);
+        (levels, tf, tr, counts)
+    } else {
+        let y_arr: Vec<i64> = if y_series.dtype().is_integer() {
+            y_series.i64()?.into_iter().map(|v| v.unwrap_or(0)).collect()
+        } else if y_series.dtype() == &DataType::Boolean {
+            y_series.bool()?.into_iter()
+                .map(|v| if v.unwrap_or(false) { 1 } else { 0 })
+                .collect()
+        } else {
+            return Err(PolarsError::InvalidOperation(
+                format!(
+                    "prop() does not support dtype {:?} for column '{}'. \
+                     Use a String, Categorical, Boolean, or integer column.",
+                    y_series.dtype(), value_col
+                ).into()
+            ));
+        };
+        let (levels, tf, tr, counts) =
+            matrix_prop_by_domain(&y_arr, &w_arr, &rep_w_matrix, &domain_ids, n_domains, n, n_reps);
+        let str_levels: Vec<String> = levels.iter().map(|l| l.to_string()).collect();
+        (str_levels, tf, tr, counts)
+    };
+
+    let n_levels = levels_str.len();
     let mut by_vals:    Vec<String> = Vec::new();
     let mut level_strs: Vec<String> = Vec::new();
     let mut estimates:  Vec<f64>    = Vec::new();
@@ -456,11 +498,11 @@ fn compute_replicate_prop_grouped(
     let mut ns:         Vec<u32>    = Vec::new();
 
     for (d, domain_name) in domain_names.iter().enumerate() {
-        for (l, &level) in levels.iter().enumerate() {
+        for (l, level) in levels_str.iter().enumerate() {
             let theta_full = theta_full_mat[d][l];
             let variance   = variance_from_replicates(method, theta_full, &theta_reps_mat[d][l], &rep_coefs, center);
             by_vals.push(domain_name.clone());
-            level_strs.push(level.to_string());
+            level_strs.push(level.clone());
             estimates.push(theta_full);
             ses.push(variance.sqrt());
             variances.push(variance);
@@ -469,6 +511,7 @@ fn compute_replicate_prop_grouped(
         }
     }
     let n_rows = by_vals.len();
+    let _ = n_levels; // used implicitly via levels_str iteration above
     df![by_col => by_vals, "y" => vec![value_col; n_rows], "level" => level_strs,
         "est" => estimates, "se" => ses, "var" => variances, "df" => dfs, "n" => ns]
 }

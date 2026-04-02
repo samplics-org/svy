@@ -495,7 +495,8 @@ pub fn matrix_ratio_by_domain(
 // Proportion estimation (multi-category)
 // ============================================================================
 
-/// Compute proportion estimates by level for all replicates
+/// Compute proportion estimates by level for all replicates.
+/// Category values are integers (Boolean or numeric columns).
 /// Returns (levels, full_estimates[L], replicate_estimates[L][R])
 pub fn matrix_prop_estimates(
     y: &[i64], // Category values
@@ -570,7 +571,8 @@ pub fn matrix_prop_estimates(
     (levels, theta_full, theta_reps)
 }
 
-/// Compute proportion estimates by level and domain
+/// Compute proportion estimates by level and domain.
+/// Category values are integers (Boolean or numeric columns).
 pub fn matrix_prop_by_domain(
     y: &[i64],
     full_weights: &[f64],
@@ -613,6 +615,170 @@ pub fn matrix_prop_by_domain(
         }
 
         let lev_idx = level_map[&y[i]];
+        let wi = full_weights[i];
+
+        sum_w_level[d][lev_idx] += wi;
+        sum_w_total[d] += wi;
+        counts[d] += 1;
+
+        let base_idx = i * n_reps;
+        for r in 0..n_reps {
+            let w_ir = rep_weights[base_idx + r];
+            rep_sum_w_level[d][lev_idx][r] += w_ir;
+            rep_sum_w_total[d][r] += w_ir;
+        }
+    }
+
+    // Compute proportions [domain][level]
+    let theta_full: Vec<Vec<f64>> = sum_w_level
+        .iter()
+        .zip(sum_w_total.iter())
+        .map(|(w_l_vec, &w_t)| {
+            w_l_vec
+                .iter()
+                .map(|&w_l| if w_t > 0.0 { w_l / w_t } else { f64::NAN })
+                .collect()
+        })
+        .collect();
+
+    // [domain][level][rep]
+    let theta_reps: Vec<Vec<Vec<f64>>> = rep_sum_w_level
+        .iter()
+        .zip(rep_sum_w_total.iter())
+        .map(|(dom_levels, dom_totals)| {
+            dom_levels
+                .iter()
+                .map(|w_l_reps| {
+                    w_l_reps
+                        .iter()
+                        .zip(dom_totals.iter())
+                        .map(|(&w_l, &w_t)| if w_t > 0.0 { w_l / w_t } else { f64::NAN })
+                        .collect()
+                })
+                .collect()
+        })
+        .collect();
+
+    (levels, theta_full, theta_reps, counts)
+}
+
+/// Compute proportion estimates by level for all replicates.
+/// Category values are strings (String or Categorical columns).
+/// Levels are sorted lexicographically and preserved as-is in the output.
+/// Returns (levels, full_estimates[L], replicate_estimates[L][R])
+pub fn matrix_prop_estimates_str(
+    y: &[String],
+    full_weights: &[f64],
+    rep_weights: &[f64],
+    n: usize,
+    n_reps: usize,
+) -> (Vec<String>, Vec<f64>, Vec<Vec<f64>>) {
+    // Find unique levels
+    let mut level_map: HashMap<&str, usize> = HashMap::new();
+    let mut levels: Vec<String> = Vec::new();
+
+    for val in y {
+        if !level_map.contains_key(val.as_str()) {
+            level_map.insert(val.as_str(), levels.len());
+            levels.push(val.clone());
+        }
+    }
+    levels.sort();
+
+    // Re-index after sorting
+    for (idx, lev) in levels.iter().enumerate() {
+        level_map.insert(lev.as_str(), idx);
+    }
+
+    let n_levels = levels.len();
+
+    // Accumulate weighted counts per level
+    let mut sum_w_level = vec![0.0f64; n_levels];
+    let mut sum_w_total = 0.0f64;
+    let mut rep_sum_w_level = vec![vec![0.0f64; n_reps]; n_levels];
+    let mut rep_sum_w_total = vec![0.0f64; n_reps];
+
+    for i in 0..n {
+        let lev_idx = level_map[y[i].as_str()];
+        let wi = full_weights[i];
+
+        sum_w_level[lev_idx] += wi;
+        sum_w_total += wi;
+
+        let base_idx = i * n_reps;
+        for r in 0..n_reps {
+            let w_ir = rep_weights[base_idx + r];
+            rep_sum_w_level[lev_idx][r] += w_ir;
+            rep_sum_w_total[r] += w_ir;
+        }
+    }
+
+    // Compute proportions
+    let theta_full: Vec<f64> = sum_w_level
+        .iter()
+        .map(|&w_l| if sum_w_total > 0.0 { w_l / sum_w_total } else { f64::NAN })
+        .collect();
+
+    let theta_reps: Vec<Vec<f64>> = rep_sum_w_level
+        .iter()
+        .map(|w_l_vec| {
+            w_l_vec
+                .iter()
+                .zip(rep_sum_w_total.iter())
+                .map(|(&w_l, &w_t)| if w_t > 0.0 { w_l / w_t } else { f64::NAN })
+                .collect()
+        })
+        .collect();
+
+    (levels, theta_full, theta_reps)
+}
+
+/// Compute proportion estimates by level and domain.
+/// Category values are strings (String or Categorical columns).
+/// Returns (levels, full_estimates[D][L], replicate_estimates[D][L][R], counts[D])
+pub fn matrix_prop_by_domain_str(
+    y: &[String],
+    full_weights: &[f64],
+    rep_weights: &[f64],
+    domain_ids: &[u32],
+    n_domains: usize,
+    n: usize,
+    n_reps: usize,
+) -> (Vec<String>, Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>) {
+    // Find unique levels
+    let mut level_map: HashMap<&str, usize> = HashMap::new();
+    let mut levels: Vec<String> = Vec::new();
+
+    for val in y {
+        if !level_map.contains_key(val.as_str()) {
+            level_map.insert(val.as_str(), levels.len());
+            levels.push(val.clone());
+        }
+    }
+    levels.sort();
+
+    // Re-index after sorting
+    for (idx, lev) in levels.iter().enumerate() {
+        level_map.insert(lev.as_str(), idx);
+    }
+
+    let n_levels = levels.len();
+
+    // [domain][level]
+    let mut sum_w_level = vec![vec![0.0f64; n_levels]; n_domains];
+    let mut sum_w_total = vec![0.0f64; n_domains];
+    // [domain][level][rep]
+    let mut rep_sum_w_level = vec![vec![vec![0.0f64; n_reps]; n_levels]; n_domains];
+    let mut rep_sum_w_total = vec![vec![0.0f64; n_reps]; n_domains];
+    let mut counts = vec![0u32; n_domains];
+
+    for i in 0..n {
+        let d = domain_ids[i] as usize;
+        if d >= n_domains {
+            continue;
+        }
+
+        let lev_idx = level_map[y[i].as_str()];
         let wi = full_weights[i];
 
         sum_w_level[d][lev_idx] += wi;
@@ -922,5 +1088,54 @@ mod tests {
         assert_eq!(theta_reps.len(), 2);
         assert!(theta_reps[0].is_finite());
         assert!(theta_reps[1].is_finite());
+    }
+
+    #[test]
+    fn test_matrix_prop_estimates_str_two_levels() {
+        // 6 obs: 4 "yes", 2 "no", equal weights → yes=2/3, no=1/3
+        let y = vec![
+            "yes".to_string(), "yes".to_string(), "no".to_string(),
+            "yes".to_string(), "no".to_string(), "yes".to_string(),
+        ];
+        let w = vec![1.0; 6];
+        // 2 replicates, all weight = 1
+        let rep_w = vec![1.0f64; 6 * 2];
+
+        let (levels, theta_full, theta_reps) =
+            matrix_prop_estimates_str(&y, &w, &rep_w, 6, 2);
+
+        assert_eq!(levels, vec!["no".to_string(), "yes".to_string()]);
+        let no_idx = 0;
+        let yes_idx = 1;
+        assert!((theta_full[no_idx]  - 2.0 / 6.0).abs() < 1e-10);
+        assert!((theta_full[yes_idx] - 4.0 / 6.0).abs() < 1e-10);
+        assert!((theta_full[no_idx] + theta_full[yes_idx] - 1.0).abs() < 1e-10);
+        assert_eq!(theta_reps[no_idx].len(), 2);
+        assert_eq!(theta_reps[yes_idx].len(), 2);
+    }
+
+    #[test]
+    fn test_matrix_prop_by_domain_str_basic() {
+        // 4 obs: domain A (obs 0,1), domain B (obs 2,3)
+        // y: A→["yes","no"], B→["no","no"]
+        let y = vec![
+            "yes".to_string(), "no".to_string(),
+            "no".to_string(),  "no".to_string(),
+        ];
+        let w    = vec![1.0; 4];
+        let rep_w = vec![1.0f64; 4 * 2]; // 2 reps
+        let domain_ids = vec![0u32, 0, 1, 1];
+
+        let (levels, theta_full, _theta_reps, counts) =
+            matrix_prop_by_domain_str(&y, &w, &rep_w, &domain_ids, 2, 4, 2);
+
+        assert_eq!(levels, vec!["no".to_string(), "yes".to_string()]);
+        // Domain A: no=0.5, yes=0.5
+        assert!((theta_full[0][0] - 0.5).abs() < 1e-10, "A no");
+        assert!((theta_full[0][1] - 0.5).abs() < 1e-10, "A yes");
+        // Domain B: no=1.0, yes=0.0
+        assert!((theta_full[1][0] - 1.0).abs() < 1e-10, "B no");
+        assert!((theta_full[1][1] - 0.0).abs() < 1e-10, "B yes");
+        assert_eq!(counts, vec![2, 2]);
     }
 }

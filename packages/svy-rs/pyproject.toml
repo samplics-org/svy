@@ -1,6 +1,6 @@
 [project]
 name = "svy_rs"
-version = "0.6.0"
+version = "0.6.1"
 description = "Internal Rust extension for the svy package. Do not depend on this directly."
 readme = "README.md"
 requires-python = ">=3.11"
