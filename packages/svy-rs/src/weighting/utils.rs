@@ -5,9 +5,6 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum WeightingError {
-    #[error("Convergence failed after {0} iterations")]
-    ConvergenceFailed(usize),
-
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
@@ -101,8 +98,8 @@ mod tests {
         let indices = vec![0, 1, 0];
         let sums = sum_by_group_2d(weights.view(), &indices, 2);
 
-        assert_eq!(sums[[0, 0]], 6.0); // 1 + 5
-        assert_eq!(sums[[0, 1]], 8.0); // 2 + 6
+        assert_eq!(sums[[0, 0]], 6.0);
+        assert_eq!(sums[[0, 1]], 8.0);
         assert_eq!(sums[[1, 0]], 3.0);
         assert_eq!(sums[[1, 1]], 4.0);
     }
