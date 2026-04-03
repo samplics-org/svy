@@ -7,4 +7,5 @@ pub mod normalization;
 pub mod poststratification;
 pub mod raking;
 pub mod replication;
+pub mod trimming;
 pub mod utils;

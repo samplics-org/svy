@@ -276,3 +276,51 @@ pub fn create_sdr_wgts(
 
     Ok((result.into_pyarray(py).to_owned().into(), df))
 }
+
+// ============================================================================
+// Trimming
+// ============================================================================
+
+#[pyfunction]
+#[pyo3(signature = (weights, upper=None, lower=None, redistribute=true, max_iter=10, tol=1e-6))]
+pub fn trim_weights(
+    py: Python<'_>,
+    weights: PyReadonlyArray1<f64>,
+    upper: Option<f64>,
+    lower: Option<f64>,
+    redistribute: bool,
+    max_iter: usize,
+    tol: f64,
+) -> PyResult<(
+    Py<numpy::PyArray1<f64>>, // trimmed weights
+    usize,                    // n_trimmed_upper
+    usize,                    // n_trimmed_lower
+    f64,                      // weight_sum_before
+    f64,                      // weight_sum_after
+    f64,                      // ess_before
+    f64,                      // ess_after
+    usize,                    // iterations
+    bool,                     // converged
+)> {
+    let out = crate::weighting::trimming::trim_impl(
+        weights.as_array(),
+        upper,
+        lower,
+        redistribute,
+        max_iter,
+        tol,
+    )
+    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+    Ok((
+        out.weights.into_pyarray(py).to_owned().into(),
+        out.n_trimmed_upper,
+        out.n_trimmed_lower,
+        out.weight_sum_before,
+        out.weight_sum_after,
+        out.ess_before,
+        out.ess_after,
+        out.iterations,
+        out.converged,
+    ))
+}

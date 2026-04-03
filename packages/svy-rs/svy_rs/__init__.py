@@ -31,10 +31,11 @@ from svy_rs._internal import (
     calibrate,
     calibrate_by_domain,
     calibrate_parallel,
+    trim_weights,          # NEW
     create_brr_wgts,
     create_jk_wgts,
     create_bootstrap_wgts,
     create_sdr_wgts,
 )
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"

@@ -39,6 +39,7 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(weighting::api::calibrate, m)?)?;
     m.add_function(wrap_pyfunction!(weighting::api::calibrate_by_domain, m)?)?;
     m.add_function(wrap_pyfunction!(weighting::api::calibrate_parallel, m)?)?;
+    m.add_function(wrap_pyfunction!(weighting::api::trim_weights, m)?)?;
     // Replicate weight creation
     m.add_function(wrap_pyfunction!(weighting::api::create_brr_wgts, m)?)?;
     m.add_function(wrap_pyfunction!(weighting::api::create_jk_wgts, m)?)?;
