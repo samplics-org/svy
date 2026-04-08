@@ -324,3 +324,27 @@ pub fn trim_weights(
         out.converged,
     ))
 }
+
+#[pyfunction]
+#[pyo3(signature = (weights, upper=None, lower=None, redistribute=true, max_iter=10, tol=1e-6))]
+pub fn trim_weights_matrix(
+    py: Python<'_>,
+    weights: PyReadonlyArray2<f64>,
+    upper: Option<f64>,
+    lower: Option<f64>,
+    redistribute: bool,
+    max_iter: usize,
+    tol: f64,
+) -> PyResult<Py<PyArray2<f64>>> {
+    let out = crate::weighting::trimming::trim_matrix_impl(
+        weights.as_array(),
+        upper,
+        lower,
+        redistribute,
+        max_iter,
+        tol,
+    )
+    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+    Ok(out.into_pyarray(py).to_owned().into())
+}

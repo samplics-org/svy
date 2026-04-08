@@ -12,7 +12,7 @@
 // - All hot paths are branch-minimized and cache-friendly (sequential access)
 
 use super::utils::{Result, WeightingError};
-use ndarray::{Array1, ArrayView1};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 
 // ---------------------------------------------------------------------------
 // Output type
@@ -275,6 +275,51 @@ pub fn trim_impl(
         iterations,
         converged,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Matrix entry point (replicate weights)
+// ---------------------------------------------------------------------------
+
+/// Trim a weight matrix column-by-column using pre-resolved scalar thresholds.
+///
+/// Designed for replicate weight trimming. Thresholds are fixed scalars derived
+/// from the main weight distribution by the Python caller — replicates all use
+/// the same cutoffs so variance estimates reflect weighting variability only,
+/// not threshold variability.
+///
+/// No diagnostics are returned: audit stats (ESS, n_trimmed, …) are only
+/// meaningful for the main weight and are computed by `trim_impl` / `trim_weights`.
+///
+/// # Arguments
+/// * `weights`      - Input matrix, shape (n, n_reps). No negative values.
+/// * `upper`        - Pre-resolved upper cap, or None.
+/// * `lower`        - Pre-resolved lower floor, or None.
+/// * `redistribute` - Redistribute trimmed mass within each column.
+/// * `max_iter`     - Maximum iterations per column.
+/// * `tol`          - Convergence tolerance per column.
+///
+/// # Returns
+/// Trimmed weight matrix, same shape as input.
+pub fn trim_matrix_impl(
+    weights: ArrayView2<f64>,
+    upper: Option<f64>,
+    lower: Option<f64>,
+    redistribute: bool,
+    max_iter: usize,
+    tol: f64,
+) -> Result<Array2<f64>> {
+    let (n_rows, n_cols) = weights.dim();
+    let mut out = Array2::zeros((n_rows, n_cols));
+
+    for col in 0..n_cols {
+        let col_view = weights.column(col);
+        // trim_impl owns its input — cheap copy of one weight column
+        let result = trim_impl(col_view, upper, lower, redistribute, max_iter, tol)?;
+        out.column_mut(col).assign(&result.weights);
+    }
+
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
