@@ -24,7 +24,7 @@ from svy.core.constants import (
 )
 from svy.core.enumerations import PPSMethod
 from svy.core.types import DF, Category, Number, WhereArg
-from svy.engine.sampling.combine_stages import _apply_chaining_writeback
+from svy.selection.combine_stages import _apply_chaining_writeback
 from svy.engine.sampling.pps import _select_pps
 from svy.utils.checks import assert_no_missing, drop_missing
 from svy.utils.helpers import _colspec_to_list
@@ -41,7 +41,7 @@ from svy.selection._helpers import (
     _warn_n_exceeds_population,
     _warn_zero_mos,
 )
-from svy.selection.srs import _apply_where, _ensure_row_index
+from svy.selection.srs import _apply_where, _check_output_col_names, _ensure_row_index
 from svy.errors import MethodError
 
 if TYPE_CHECKING:
@@ -64,14 +64,16 @@ def pps_sys(
     where: WhereArg = None,
     order_by: str | Sequence[str] | None = None,
     order_type: Literal["ascending", "descending", "random"] = "ascending",
+    prob_name: str | None = None,
     wgt_name: str | None = None,
+    hit_name: str | None = None,
     rstate: RandomState = None,
     drop_nulls: bool = False,
 ) -> "Sample":
     """PPS systematic sampling without replacement."""
     return _pps(sample, n, method=PPSMethod.SYS, certainty_threshold=certainty_threshold,
                 by=by, where=where, wr=False, order_by=order_by, order_type=order_type,
-                wgt_name=wgt_name, rstate=rstate, drop_nulls=drop_nulls)
+                prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name, rstate=rstate, drop_nulls=drop_nulls)
 
 
 def pps_wr(
@@ -81,14 +83,16 @@ def pps_wr(
     certainty_threshold: float = 1.0,
     by: str | Sequence[str] | None = None,
     where: WhereArg = None,
+    prob_name: str | None = None,
     wgt_name: str | None = None,
+    hit_name: str | None = None,
     rstate: RandomState = None,
     drop_nulls: bool = False,
 ) -> "Sample":
     """PPS sampling with replacement."""
     return _pps(sample, n, method=PPSMethod.WR, certainty_threshold=certainty_threshold,
                 by=by, where=where, wr=True, order_by=None, order_type="ascending",
-                wgt_name=wgt_name, rstate=rstate, drop_nulls=drop_nulls)
+                prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name, rstate=rstate, drop_nulls=drop_nulls)
 
 
 def pps_brewer(
@@ -98,14 +102,16 @@ def pps_brewer(
     certainty_threshold: float = 1.0,
     by: str | Sequence[str] | None = None,
     where: WhereArg = None,
+    prob_name: str | None = None,
     wgt_name: str | None = None,
+    hit_name: str | None = None,
     rstate: RandomState = None,
     drop_nulls: bool = False,
 ) -> "Sample":
     """Brewer PPS sampling without replacement."""
     return _pps(sample, n, method=PPSMethod.BREWER, certainty_threshold=certainty_threshold,
                 by=by, where=where, wr=False, order_by=None, order_type="ascending",
-                wgt_name=wgt_name, rstate=rstate, drop_nulls=drop_nulls)
+                prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name, rstate=rstate, drop_nulls=drop_nulls)
 
 
 def pps_murphy(
@@ -115,14 +121,16 @@ def pps_murphy(
     certainty_threshold: float = 1.0,
     by: str | Sequence[str] | None = None,
     where: WhereArg = None,
+    prob_name: str | None = None,
     wgt_name: str | None = None,
+    hit_name: str | None = None,
     rstate: RandomState = None,
     drop_nulls: bool = False,
 ) -> "Sample":
     """Murphy PPS sampling without replacement (n=2 only)."""
     return _pps(sample, n, method=PPSMethod.MURPHY, certainty_threshold=certainty_threshold,
                 by=by, where=where, wr=False, order_by=None, order_type="ascending",
-                wgt_name=wgt_name, rstate=rstate, drop_nulls=drop_nulls)
+                prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name, rstate=rstate, drop_nulls=drop_nulls)
 
 
 def pps_rs(
@@ -132,14 +140,16 @@ def pps_rs(
     certainty_threshold: float = 1.0,
     by: str | Sequence[str] | None = None,
     where: WhereArg = None,
+    prob_name: str | None = None,
     wgt_name: str | None = None,
+    hit_name: str | None = None,
     rstate: RandomState = None,
     drop_nulls: bool = False,
 ) -> "Sample":
     """Rao-Sampford PPS sampling without replacement."""
     return _pps(sample, n, method=PPSMethod.RS, certainty_threshold=certainty_threshold,
                 by=by, where=where, wr=False, order_by=None, order_type="ascending",
-                wgt_name=wgt_name, rstate=rstate, drop_nulls=drop_nulls)
+                prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name, rstate=rstate, drop_nulls=drop_nulls)
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +168,9 @@ def _pps(
     wr: bool = False,
     order_by: str | Sequence[str] | None = None,
     order_type: Literal["ascending", "descending", "random"] = "ascending",
+    prob_name: str | None = None,
     wgt_name: str | None = None,
+    hit_name: str | None = None,
     rstate: RandomState = None,
     drop_nulls: bool = False,
 ) -> "Sample":
@@ -177,6 +189,13 @@ def _pps(
 
     # -- Apply where mask -------------------------------------------------
     eligible_df, where_mask = _apply_where(src_df, where)
+
+    # -- Guard: reject names that already exist in the frame -------------
+    _check_output_col_names(
+        src_df,
+        prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name,
+        where="Sample.sampling.pps",
+    )
 
     cols = design.specified_fields()
     cols += _colspec_to_list(by)
@@ -249,19 +268,20 @@ def _pps(
 
     return _pps_writeback(
         sample, src_df, data, design, sel_idx, hits, probs, certainty,
-        row_col=row_col, wgt_name=wgt_name, wr=wr, where_mask=where_mask,
+        row_col=row_col, prob_name=prob_name, wgt_name=wgt_name,
+        hit_name=hit_name, wr=wr, where_mask=where_mask,
     )
 
 
 def _pps_writeback(
     sample, src_df, data, design, sel_idx, hits, probs, certainty,
-    *, row_col, wgt_name, wr, where_mask,
+    *, row_col, prob_name, wgt_name, hit_name, wr, where_mask,
 ):
     """Merge PPS selection results back onto the Sample."""
     is_chaining = design.prob == SVY_PROB_STAGE1
-    out_prob_col = getattr(sample, "_stage_out_prob", None) or SVY_PROB
+    out_prob_col = prob_name or getattr(sample, "_stage_out_prob", None) or SVY_PROB
     wgt_col = wgt_name or getattr(sample, "_stage_out_wgt", None) or design.wgt or SVY_WEIGHT
-    hit_col = design.hit or SVY_HIT
+    hit_col = hit_name or design.hit or SVY_HIT
     join_how = "left" if where_mask is not None else "inner"
 
     if is_chaining:

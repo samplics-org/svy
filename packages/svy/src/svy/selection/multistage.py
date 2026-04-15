@@ -9,15 +9,14 @@ stage-1 sample.  Called from the Selection facade in base.py.
 from __future__ import annotations
 
 import copy
-
 from typing import TYPE_CHECKING, cast
 
 import polars as pl
 
-from svy.core.constants import SVY_PROB, SVY_ROW_INDEX, SVY_WEIGHT
-from svy.engine.sampling.combine_stages import CombineResult, _combine_stages
+from svy.core.constants import SVY_PROB, SVY_PROB_STAGE1, SVY_ROW_INDEX, SVY_WEIGHT
+from svy.selection.combine_stages import CombineResult, _combine_stages
+from svy.errors import MethodError
 from svy.selection._helpers import _psu_list
-
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample
@@ -85,12 +84,19 @@ def add_stage(
     s1_design = s1._design
 
     if s1_design.prob is None:
-        raise ValueError(
-            "Current stage has no selection probabilities. "
-            "Run a selection method (pps_sys, srs, etc.) before add_stage()."
+        raise MethodError.not_applicable(
+            where="Sample.sampling.add_stage",
+            method="add_stage",
+            reason="Current stage has no selection probabilities.",
+            hint="Run a selection method (pps_sys, srs, etc.) before add_stage().",
         )
     if s1_design.psu is None:
-        raise ValueError("Current stage Design has no PSU. Set psu= before add_stage().")
+        raise MethodError.not_applicable(
+            where="Sample.sampling.add_stage",
+            method="add_stage",
+            reason="Current stage Design has no PSU.",
+            hint="Set psu= on the Design before calling add_stage().",
+        )
 
     if isinstance(next_stage, (pl.DataFrame, pl.LazyFrame)):
         ns_df = next_stage if isinstance(next_stage, pl.DataFrame) else next_stage.collect()
@@ -105,9 +111,12 @@ def add_stage(
         ns_design = next_stage._design
         already_selected = ns_design.prob is not None
     else:
-        raise TypeError(
-            f"next_stage must be pl.DataFrame, pl.LazyFrame, or Sample; "
-            f"got {type(next_stage).__name__}"
+        raise MethodError.invalid_type(
+            where="Sample.sampling.add_stage",
+            param="next_stage",
+            got=next_stage,
+            expected="pl.DataFrame | pl.LazyFrame | Sample",
+            hint="Pass a DataFrame, LazyFrame, or Sample as next_stage.",
         )
 
     s1_df = s1._data
@@ -168,7 +177,9 @@ def add_stage(
         "ssu": None,
         "suffix": s1._internal_design.get("suffix", "_svy_internal_cols_concatenated"),
     }
-    combined._warnings = next_stage._warnings if isinstance(next_stage, _Sample) else s1._warnings
+    combined._warnings = (
+        next_stage._warnings if isinstance(next_stage, _Sample) else s1._warnings
+    )
     combined._print_width = None
     combined._singleton_result = None
     combined._stage_out_prob = result.out_prob_col

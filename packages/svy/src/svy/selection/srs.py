@@ -24,7 +24,7 @@ from svy.core.constants import (
     SVY_WEIGHT,
 )
 from svy.core.types import DF, Category, Number, WhereArg
-from svy.engine.sampling.combine_stages import _apply_chaining_writeback
+from svy.selection.combine_stages import _apply_chaining_writeback
 from svy.engine.sampling.srs import _select_srs
 from svy.utils.checks import assert_no_missing, drop_missing
 from svy.utils.helpers import _colspec_to_list
@@ -47,6 +47,42 @@ if TYPE_CHECKING:
     from svy.core.sample import Sample
 
 log = logging.getLogger(__name__)
+
+
+
+# ---------------------------------------------------------------------------
+# Output column name guard
+# ---------------------------------------------------------------------------
+
+
+def _check_output_col_names(
+    df,
+    *,
+    prob_name: str | None,
+    wgt_name: str | None,
+    hit_name: str | None,
+    where: str,
+) -> None:
+    """
+    Raise MethodError if any user-supplied output column name already exists
+    in the frame.  This prevents silently overwriting existing data.
+    """
+    existing = set(df.columns)
+    for col, param in [
+        (prob_name, "prob_name"),
+        (wgt_name, "wgt_name"),
+        (hit_name, "hit_name"),
+    ]:
+        if col is not None and col in existing:
+            raise MethodError.not_applicable(
+                where=where,
+                method="selection",
+                reason=f"Column {col!r} already exists in the frame.",
+                hint=(
+                    f"Choose a different {param}= or rename/drop the "
+                    f"existing column first."
+                ),
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +156,9 @@ def srs(
     wr: bool = False,
     order_by: str | Sequence[str] | None = None,
     order_type: Literal["ascending", "descending", "random"] = "ascending",
+    prob_name: str | None = None,
     wgt_name: str | None = None,
+    hit_name: str | None = None,
     rstate: RandomState = None,
     drop_nulls: bool = False,
 ) -> "Sample":
@@ -139,6 +177,12 @@ def srs(
     wr         : sample with replacement
     order_by   : column(s) to sort the frame before selection
     order_type : "ascending" | "descending" | "random"
+    prob_name  : name for the selection probability column.
+                 Defaults to svy_prob_selection.
+    wgt_name   : name for the sample weight column (1/prob).
+                 Defaults to svy_sample_weight.
+    hit_name   : name for the number-of-hits column.
+                 Defaults to svy_number_of_hits.
     rstate     : random state / seed
     drop_nulls : drop rows with missing values in design columns before
                  drawing (applied only within the eligible subset)
@@ -166,6 +210,13 @@ def srs(
 
     # -- Apply where mask -------------------------------------------------
     eligible_df, where_mask = _apply_where(src_df, where)
+
+    # -- Guard: reject names that already exist in the frame -------------
+    _check_output_col_names(
+        src_df,
+        prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name,
+        where="Sample.sampling.srs",
+    )
 
     # -- Column slicing on eligible subset --------------------------------
     cols: list[str] = design.specified_fields()
@@ -222,7 +273,8 @@ def srs(
     # Guard: if where filtered out all rows, return src_df with null selection columns.
     if len(data) == 0:
         return _srs_empty_writeback(
-            sample, src_df, design, wgt_name=wgt_name, wr=wr,
+            sample, src_df, design,
+            prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name, wr=wr,
         )
 
     frame: npt.NDArray[np.int_] = data[row_col].to_numpy().astype(np.int_, copy=False)
@@ -233,12 +285,13 @@ def srs(
 
     return _srs_writeback(
         sample, src_df, data, design, sel_idx, hits, probs,
-        row_col=row_col, wgt_name=wgt_name, wr=wr, where_mask=where_mask,
+        row_col=row_col, prob_name=prob_name, wgt_name=wgt_name,
+        hit_name=hit_name, wr=wr, where_mask=where_mask,
     )
 
 
 
-def _srs_empty_writeback(sample, src_df, design, *, wgt_name, wr):
+def _srs_empty_writeback(sample, src_df, design, *, prob_name, wgt_name, hit_name, wr):
     """
     Return src_df unchanged with null selection columns added.
 
@@ -246,9 +299,9 @@ def _srs_empty_writeback(sample, src_df, design, *, wgt_name, wr):
     Rather than raising, we add null prob/weight/hit columns to preserve
     the invariant that the output always has the same rows as the input.
     """
-    prob_col = design.prob or SVY_PROB
+    prob_col = prob_name or design.prob or SVY_PROB
     wgt_col = wgt_name or design.wgt or SVY_WEIGHT
-    hit_col = design.hit or SVY_HIT
+    hit_col = hit_name or design.hit or SVY_HIT
 
     n = len(src_df)
     df_new = src_df.with_columns([
@@ -268,13 +321,13 @@ def _srs_empty_writeback(sample, src_df, design, *, wgt_name, wr):
 
 def _srs_writeback(
     sample, src_df, data, design, sel_idx, hits, probs,
-    *, row_col, wgt_name, wr, where_mask,
+    *, row_col, prob_name, wgt_name, hit_name, wr, where_mask,
 ):
     """Merge SRS selection results back onto the Sample."""
     is_chaining = design.prob == SVY_PROB_STAGE1
-    out_prob_col = getattr(sample, "_stage_out_prob", None) or SVY_PROB
+    out_prob_col = prob_name or getattr(sample, "_stage_out_prob", None) or SVY_PROB
     wgt_col = wgt_name or getattr(sample, "_stage_out_wgt", None) or design.wgt or SVY_WEIGHT
-    hit_col = design.hit or SVY_HIT
+    hit_col = hit_name or design.hit or SVY_HIT
 
     if is_chaining:
         assert design.prob is not None
@@ -287,7 +340,7 @@ def _srs_writeback(
         join_how = "left" if where_mask is not None else "inner"
         df_new = src_df.join(other=temp, left_on=design.row_index, right_on=row_col, how=join_how)
     else:
-        prob_col = design.prob or SVY_PROB
+        prob_col = prob_name or design.prob or SVY_PROB
         if design.prob is not None:
             prev = pl.DataFrame({row_col: sel_idx}).join(
                 other=data.select(row_col, prob_col), on=row_col, how="left"

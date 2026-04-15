@@ -1,4 +1,4 @@
-# src/svy/engine/sampling/combine_stages.py
+# src/svy/selection/combine_stages.py
 from __future__ import annotations
 
 import warnings
@@ -17,6 +17,7 @@ from svy.core.constants import (
     SVY_WGT_STAGE1,
     SVY_WGT_STAGE2,
 )
+from svy.errors import DimensionError, MethodError
 
 
 # ---------------------------------------------------------------------------
@@ -121,15 +122,24 @@ def _combine_stages(
     # ------------------------------------------------------------------
     for col in stage1_psu:
         if col not in stage1_df.columns:
-            raise ValueError(
-                f"Stage-1 PSU column '{col}' not found in data. "
-                f"Available: {sorted(stage1_df.columns)}"
+            raise DimensionError.missing_columns(
+                where="Sample.sampling.add_stage",
+                param="design.psu",
+                missing=[col],
+                available=sorted(stage1_df.columns),
+                hint="The PSU column defined in the stage-1 Design was not found in the data.",
             )
     for col in next_psu:
         if col not in next_df.columns:
-            raise ValueError(
-                f"Next-stage PSU column '{col}' not found in data. "
-                f"Available: {sorted(next_df.columns)}"
+            raise DimensionError.missing_columns(
+                where="Sample.sampling.add_stage",
+                param="next_stage",
+                missing=[col],
+                available=sorted(next_df.columns),
+                hint=(
+                    f"PSU column {col!r} not found in next_stage. "
+                    "Ensure next_stage contains the same PSU column(s) as the stage-1 design."
+                ),
             )
 
     # ------------------------------------------------------------------
@@ -144,12 +154,18 @@ def _combine_stages(
 
     unmatched = ns_vals - s1_vals
     if unmatched:
-        sample_str = str(sorted(unmatched)[:5])
-        raise ValueError(
-            f"{len(unmatched)} PSU(s) in next_stage have no match in "
-            f"stage-1. All next_stage PSUs must be present in the selected "
-            f"stage-1 sample. Sample of unmatched: {sample_str}"
-            + (" ..." if len(unmatched) > 5 else "")
+        sample_unmatched = sorted(unmatched)[:5]
+        raise MethodError.invalid_choice(
+            where="Sample.sampling.add_stage",
+            param="next_stage PSU values",
+            got=sample_unmatched,
+            allowed=sorted(s1_vals),
+            hint=(
+                f"{len(unmatched)} PSU(s) in next_stage have no match in stage-1. "
+                "All next_stage PSUs must be present in the selected stage-1 sample. "
+                f"Sample of unmatched: {sample_unmatched}"
+                + (" ..." if len(unmatched) > 5 else "")
+            ),
         )
 
     not_in_ns = s1_vals - ns_vals

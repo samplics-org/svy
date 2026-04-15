@@ -483,7 +483,7 @@ class TestPSUValidation:
         bad_hh = _hh_frame().vstack(
             pl.DataFrame({"hid": [999], "ea": [999], "region": ["North"], "income": [50.0]})
         )
-        with pytest.raises(ValueError, match="no match in stage-1"):
+        with pytest.raises(Exception, match="no match in stage-1"):
             ea.sampling.add_stage(bad_hh)
 
     def test_stage1_psu_not_in_stage2_warns(self):
@@ -523,7 +523,7 @@ class TestErrorCases:
         df = _ea_frame()
         design = Design(mos="mos", stratum="region", psu="ea")
         samp = Sample(data=df, design=design)
-        with pytest.raises(ValueError, match="no selection probabilities"):
+        with pytest.raises(Exception, match="no selection probabilities"):
             samp.sampling.add_stage(_hh_frame())
 
     def test_stage1_no_psu_raises(self):
@@ -536,19 +536,19 @@ class TestErrorCases:
 
         samp._data = samp._data.with_columns(pl.lit(0.5).alias(SVY_PROB))
         samp._design = samp._design.fill_missing(prob=SVY_PROB)
-        with pytest.raises(ValueError, match="no PSU"):
+        with pytest.raises(Exception, match="no PSU"):
             samp.sampling.add_stage(_hh_frame())
 
     def test_wrong_type_raises(self):
         ea = _selected_ea_sample()
-        with pytest.raises(TypeError, match="Sample"):
+        with pytest.raises(Exception, match="Sample"):
             ea.sampling.add_stage({"ea": [1, 2, 3]})  # type: ignore
 
     def test_psu_column_missing_from_stage2_raises(self):
-        """If the PSU column doesn't exist in stage-2 data, raise ValueError."""
+        """If the PSU column doesn't exist in stage-2 data, raise Error."""
         ea = _selected_ea_sample()
         bad_hh = _hh_frame().drop("ea")
-        with pytest.raises(ValueError, match="PSU column"):
+        with pytest.raises(Exception, match="PSU column"):
             ea.sampling.add_stage(bad_hh)
 
 

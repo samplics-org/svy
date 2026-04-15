@@ -21,10 +21,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 
 from svy.core.types import Category, Number, WhereArg
-from svy.selection._group_keys import (
-    _build_group_keys,
-    _compute_pop_sizes,
-)
+from svy.utils.random_state import RandomState
+
 from svy.selection.allocation import allocate as _allocate
 from svy.selection.multistage import add_stage as _add_stage
 from svy.selection.pps import pps_brewer as _pps_brewer
@@ -33,8 +31,7 @@ from svy.selection.pps import pps_rs as _pps_rs
 from svy.selection.pps import pps_sys as _pps_sys
 from svy.selection.pps import pps_wr as _pps_wr
 from svy.selection.srs import srs as _srs
-from svy.utils.random_state import RandomState
-
+from svy.selection._group_keys import _compute_pop_sizes, _build_group_keys, _normalize_n_for_groups
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample
@@ -57,7 +54,9 @@ class Selection:
         wr: bool = False,
         order_by: str | Sequence[str] | None = None,
         order_type: Literal["ascending", "descending", "random"] = "ascending",
+        prob_name: str | None = None,
         wgt_name: str | None = None,
+        hit_name: str | None = None,
         rstate: RandomState = None,
         drop_nulls: bool = False,
     ) -> "Sample":
@@ -72,16 +71,11 @@ class Selection:
             in the output with prob=null, weight=null, hit=null.
         """
         return _srs(
-            self._sample,
-            n,
-            by=by,
-            where=where,
-            wr=wr,
-            order_by=order_by,
-            order_type=order_type,
-            wgt_name=wgt_name,
-            rstate=rstate,
-            drop_nulls=drop_nulls,
+            self._sample, n,
+            by=by, where=where, wr=wr,
+            order_by=order_by, order_type=order_type,
+            prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name,
+            rstate=rstate, drop_nulls=drop_nulls,
         )
 
     # ------------------------------------------------------------------ #
@@ -97,7 +91,9 @@ class Selection:
         where: WhereArg = None,
         order_by: str | Sequence[str] | None = None,
         order_type: Literal["ascending", "descending", "random"] = "ascending",
+        prob_name: str | None = None,
         wgt_name: str | None = None,
+        hit_name: str | None = None,
         rstate: RandomState = None,
         drop_nulls: bool = False,
     ) -> "Sample":
@@ -111,16 +107,11 @@ class Selection:
             are kept with null selection columns.
         """
         return _pps_sys(
-            self._sample,
-            n,
+            self._sample, n,
             certainty_threshold=certainty_threshold,
-            by=by,
-            where=where,
-            order_by=order_by,
-            order_type=order_type,
-            wgt_name=wgt_name,
-            rstate=rstate,
-            drop_nulls=drop_nulls,
+            by=by, where=where, order_by=order_by, order_type=order_type,
+            prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name,
+            rstate=rstate, drop_nulls=drop_nulls,
         )
 
     def pps_wr(
@@ -130,20 +121,18 @@ class Selection:
         certainty_threshold: float = 1.0,
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
+        prob_name: str | None = None,
         wgt_name: str | None = None,
+        hit_name: str | None = None,
         rstate: RandomState = None,
         drop_nulls: bool = False,
     ) -> "Sample":
         """PPS sampling with replacement."""
         return _pps_wr(
-            self._sample,
-            n,
+            self._sample, n,
             certainty_threshold=certainty_threshold,
-            by=by,
-            where=where,
-            wgt_name=wgt_name,
-            rstate=rstate,
-            drop_nulls=drop_nulls,
+            by=by, where=where, prob_name=prob_name, wgt_name=wgt_name,
+            hit_name=hit_name, rstate=rstate, drop_nulls=drop_nulls,
         )
 
     def pps_brewer(
@@ -153,20 +142,18 @@ class Selection:
         certainty_threshold: float = 1.0,
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
+        prob_name: str | None = None,
         wgt_name: str | None = None,
+        hit_name: str | None = None,
         rstate: RandomState = None,
         drop_nulls: bool = False,
     ) -> "Sample":
         """Brewer PPS sampling without replacement."""
         return _pps_brewer(
-            self._sample,
-            n,
+            self._sample, n,
             certainty_threshold=certainty_threshold,
-            by=by,
-            where=where,
-            wgt_name=wgt_name,
-            rstate=rstate,
-            drop_nulls=drop_nulls,
+            by=by, where=where, prob_name=prob_name, wgt_name=wgt_name,
+            hit_name=hit_name, rstate=rstate, drop_nulls=drop_nulls,
         )
 
     def pps_murphy(
@@ -176,20 +163,18 @@ class Selection:
         certainty_threshold: float = 1.0,
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
+        prob_name: str | None = None,
         wgt_name: str | None = None,
+        hit_name: str | None = None,
         rstate: RandomState = None,
         drop_nulls: bool = False,
     ) -> "Sample":
         """Murphy PPS sampling without replacement (n=2 only)."""
         return _pps_murphy(
-            self._sample,
-            n,
+            self._sample, n,
             certainty_threshold=certainty_threshold,
-            by=by,
-            where=where,
-            wgt_name=wgt_name,
-            rstate=rstate,
-            drop_nulls=drop_nulls,
+            by=by, where=where, prob_name=prob_name, wgt_name=wgt_name,
+            hit_name=hit_name, rstate=rstate, drop_nulls=drop_nulls,
         )
 
     def pps_rs(
@@ -199,20 +184,18 @@ class Selection:
         certainty_threshold: float = 1.0,
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
+        prob_name: str | None = None,
         wgt_name: str | None = None,
+        hit_name: str | None = None,
         rstate: RandomState = None,
         drop_nulls: bool = False,
     ) -> "Sample":
         """Rao-Sampford PPS sampling without replacement."""
         return _pps_rs(
-            self._sample,
-            n,
+            self._sample, n,
             certainty_threshold=certainty_threshold,
-            by=by,
-            where=where,
-            wgt_name=wgt_name,
-            rstate=rstate,
-            drop_nulls=drop_nulls,
+            by=by, where=where, prob_name=prob_name, wgt_name=wgt_name,
+            hit_name=hit_name, rstate=rstate, drop_nulls=drop_nulls,
         )
 
     # ------------------------------------------------------------------ #
@@ -244,9 +227,8 @@ class Selection:
         The returned dict can be passed directly to ``allocate()`` or used
         to inspect stratum balance before selecting.
         """
-        from typing import cast
-
         import polars as pl
+        from typing import cast
 
         data = self._sample._data
         if isinstance(data, pl.LazyFrame):
