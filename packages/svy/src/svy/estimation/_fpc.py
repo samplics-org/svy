@@ -17,6 +17,7 @@ import polars as pl
 from svy.core.design import PopSize
 from svy.errors import DimensionError, MethodError
 
+
 if TYPE_CHECKING:
     from svy.estimation.base import Estimation
 

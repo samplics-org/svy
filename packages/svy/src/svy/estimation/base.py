@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import math
 
-from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence, cast
+from typing import TYPE_CHECKING, Any, Literal, Sequence, cast
 
 import numpy as np
 import polars as pl
@@ -12,22 +12,31 @@ import polars as pl
 from scipy import stats
 
 from svy.core.constants import _BY_SEP, _INTERNAL_CONCAT_SUFFIX
-from svy.core.data_prep import PreparedData, prepare_data
-from svy.core.design import PopSize
-from svy.core.enumerations import EstimationMethod, PopParam, QuantileMethod as _QuantileMethod
-from svy.core.types import ExprLike, WhereArg
-from svy.errors import DimensionError, MethodError
+from svy.core.data_prep import prepare_data
+from svy.core.enumerations import EstimationMethod, PopParam
+from svy.core.enumerations import QuantileMethod as _QuantileMethod
+from svy.core.types import WhereArg
 from svy.estimation.estimate import Estimate, ParamEst
-from svy.estimation.taylor import (
-    taylor_mean as _taylor_mean,
-    taylor_total as _taylor_total,
-    taylor_ratio as _taylor_ratio,
-    taylor_prop as _taylor_prop,
-    taylor_median as _taylor_median,
-)
 from svy.estimation.replication import (
     replicate_estimate as _replicate_estimate,
+)
+from svy.estimation.replication import (
     replicate_median as _replicate_median,
+)
+from svy.estimation.taylor import (
+    taylor_mean as _taylor_mean,
+)
+from svy.estimation.taylor import (
+    taylor_median as _taylor_median,
+)
+from svy.estimation.taylor import (
+    taylor_prop as _taylor_prop,
+)
+from svy.estimation.taylor import (
+    taylor_ratio as _taylor_ratio,
+)
+from svy.estimation.taylor import (
+    taylor_total as _taylor_total,
 )
 from svy.ui.printing import format_where_clause
 from svy.utils.helpers import _colspec_to_list

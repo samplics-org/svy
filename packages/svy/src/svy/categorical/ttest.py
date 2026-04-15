@@ -956,6 +956,7 @@ class TTestByResult:
 
         if use_rich and rich_available():
             import sys
+
             from rich.console import Console
 
             Console(

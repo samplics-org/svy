@@ -32,10 +32,15 @@ from typing import TYPE_CHECKING, Any, Literal, Sequence
 import numpy as np
 import polars as pl
 
+
 try:
     from svy_rs._internal import calibrate as rust_calibrate  # type: ignore[import-untyped]
-    from svy_rs._internal import calibrate_by_domain as rust_calibrate_by_domain  # type: ignore[import-untyped]
-    from svy_rs._internal import calibrate_parallel as rust_calibrate_parallel  # type: ignore[import-untyped]
+    from svy_rs._internal import (
+        calibrate_by_domain as rust_calibrate_by_domain,  # type: ignore[import-untyped]
+    )
+    from svy_rs._internal import (
+        calibrate_parallel as rust_calibrate_parallel,  # type: ignore[import-untyped]
+    )
 except ImportError:  # pragma: no cover
     rust_calibrate = None
     rust_calibrate_by_domain = None
@@ -46,9 +51,9 @@ from svy.core.types import Category, Number
 from svy.errors import DimensionError, MethodError
 from svy.weighting._calibration_utils import _expand_term, _match_term_targets
 from svy.weighting._helpers import _build_by_array, _by_to_cols, _normalize_dict_keys
-
 from svy.weighting.raking import _trim_constraints_satisfied
 from svy.weighting.types import TrimConfig, resolve_threshold
+
 
 try:
     from svy_rs._internal import trim_weights as rust_trim_weights  # type: ignore[import-untyped]

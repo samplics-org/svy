@@ -38,6 +38,7 @@ from svy.wrangling.values import fill_null as _fill_null
 from svy.wrangling.values import recode as _recode
 from svy.wrangling.values import top_code as _top_code
 
+
 if TYPE_CHECKING:
     from svy.core.sample import Sample
 

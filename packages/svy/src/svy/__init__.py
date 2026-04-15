@@ -116,7 +116,8 @@ from svy.utils import (
     seed_from_random_state,
     temporary_log_level,
 )
-from svy.weighting import TrimResult, TrimConfig, Threshold
+from svy.weighting import Threshold, TrimConfig, TrimResult
+
 
 # ---------------------------------------------------------------------------
 # Configuration & Metadata

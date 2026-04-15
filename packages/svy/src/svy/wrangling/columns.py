@@ -15,11 +15,11 @@ from svy.errors import MethodError
 from svy.utils.helpers import _normalize_columns_arg
 from svy.wrangling._helpers import (
     _auto_clean_design,
+    _design_source_columns,
     _internal_columns,
     _rebuild_concat_columns,
     _required_columns,
     _resolve_target,
-    _design_source_columns,
 )
 from svy.wrangling._naming import (
     _design_with_renamed_columns,
@@ -27,6 +27,7 @@ from svy.wrangling._naming import (
     _normalize_letter_case,
     _update_metadata_keys,
 )
+
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample
@@ -60,9 +61,7 @@ def clean_names(
     if renames:
         _update_metadata_keys(target, renames)
         if getattr(target, "_design", None) is not None:
-            target._design = _design_with_renamed_columns(
-                target._design, renames
-            )
+            target._design = _design_with_renamed_columns(target._design, renames)
         _rebuild_concat_columns(target)
     return target
 
@@ -108,9 +107,7 @@ def rename_columns(
     _update_metadata_keys(target, renames)
 
     if getattr(target, "_design", None) is not None:
-        target._design = _design_with_renamed_columns(
-            target._design, renames
-        )
+        target._design = _design_with_renamed_columns(target._design, renames)
 
     if set(renames.keys()) & _design_source_columns(sample):
         _rebuild_concat_columns(target)

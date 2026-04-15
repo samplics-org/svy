@@ -43,7 +43,7 @@ from svy.core.singleton import (
     SingletonSummary,
     StratumInfo,
 )
-from svy.core.terms import RE, Cat, Cross, Feature, Cap
+from svy.core.terms import RE, Cap, Cat, Cross, Feature
 from svy.core.types import DF, DT, Category, Number
 
 

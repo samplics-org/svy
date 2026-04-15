@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import polars as pl
 
+
 try:
     from svy_rs._internal import normalize as rust_normalize  # type: ignore[import-untyped]
 except ImportError:  # pragma: no cover
@@ -18,6 +19,7 @@ except ImportError:  # pragma: no cover
 from svy.core.types import DomainScalarMap, Number
 from svy.errors import MethodError
 from svy.weighting._helpers import _build_by_array, _normalize_dict_keys
+
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

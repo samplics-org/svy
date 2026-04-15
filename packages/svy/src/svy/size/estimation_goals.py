@@ -14,15 +14,10 @@ Adding a new estimation goal:
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
-import numpy as np
-
-from typing import Literal
-
-from svy.core.enumerations import PopParam
 from svy.core.enumerations import OnePropSizeMethod as _OnePropSizeMethod
-from svy.size._normalize import _normalize_one_prop_method
+from svy.core.enumerations import PopParam
 from svy.core.types import DomainScalarMap, Number
 from svy.engine.size_and_power.size import (
     _apply_deff,
@@ -32,8 +27,10 @@ from svy.engine.size_and_power.size import (
     _wald_sample_size_mean,
     _wald_sample_size_prop,
 )
+from svy.size._normalize import _normalize_one_prop_method
 from svy.size.types import Size
 from svy.utils.helpers import _get_keys_from_maps
+
 
 if TYPE_CHECKING:
     from svy.size.base import SampleSize

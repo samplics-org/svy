@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import polars as pl
 
+
 try:
     from svy_rs._internal import adjust_nr as rust_adjust_nr  # type: ignore[import-untyped]
 except ImportError:  # pragma: no cover
@@ -18,9 +19,9 @@ except ImportError:  # pragma: no cover
 from svy.core.types import DomainScalarMap
 from svy.errors import MethodError
 from svy.weighting._helpers import _build_by_array
-
 from svy.weighting.trimming import _run_trim as _apply_trim
 from svy.weighting.types import TrimConfig
+
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

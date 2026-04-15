@@ -5,54 +5,16 @@ Row operations: filter, sort, deduplicate, add row index.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal, Mapping, Sequence
+from typing import TYPE_CHECKING, Literal, Sequence
 
-import polars as pl
-
-from svy.core.expr import to_polars_expr
 from svy.core.types import WhereArg
 from svy.errors import MethodError, SvyError
+from svy.utils.where import _compile_where as _compile_where_to_pl_expr
 from svy.wrangling._helpers import _resolve_target
+
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample
-
-
-# -------------------------------------------------------------------
-# Where-clause compiler (shared by filter_records)
-# -------------------------------------------------------------------
-
-
-def _compile_where_to_pl_expr(where: WhereArg) -> pl.Expr | None:
-    """Convert WhereArg to a Polars filter expression."""
-    if isinstance(where, Mapping):
-        preds: list[pl.Expr] = []
-        for k, v in where.items():
-            if isinstance(v, (list, tuple, set)) and not isinstance(
-                v, (str, bytes, bytearray)
-            ):
-                preds.append(pl.col(k).is_in(list(v)))
-            else:
-                preds.append(pl.col(k) == v)  # type: ignore[arg-type]
-        if not preds:
-            return None
-        acc = preds[0]
-        for p in preds[1:]:
-            acc = acc & p
-        return acc
-
-    if isinstance(where, (list, tuple)) and not isinstance(
-        where, (str, bytes, bytearray)
-    ):
-        if not where:
-            return None
-        compiled = [to_polars_expr(e) for e in where]
-        acc = compiled[0]
-        for p in compiled[1:]:
-            acc = acc & p
-        return acc
-
-    return to_polars_expr(where)
 
 
 # -------------------------------------------------------------------
@@ -90,24 +52,17 @@ def filter_records(
                     target.warn(
                         code="SINGLETONS_DETECTED",
                         title="Singleton PSUs/strata detected after filtering",
-                        detail=(
-                            f"Found {len(target._singletons or [])} "
-                            f"singleton group(s)."
-                        ),
+                        detail=(f"Found {len(target._singletons or [])} singleton group(s)."),
                         where="wrangling.filter_records",
                     )
                 elif on_singletons == "error":
                     raise MethodError(
                         title="Singletons detected after filtering",
-                        detail=(
-                            f"Found {len(target._singletons or [])} "
-                            f"singleton group(s)."
-                        ),
+                        detail=(f"Found {len(target._singletons or [])} singleton group(s)."),
                         code="SINGLETONS_AFTER_FILTER",
                         where="wrangling.filter_records",
                         hint=(
-                            "Collapse strata, adjust PSUs, or handle "
-                            "via the singleton utilities."
+                            "Collapse strata, adjust PSUs, or handle via the singleton utilities."
                         ),
                     )
 
@@ -133,9 +88,7 @@ def order_by(
     inplace: bool = False,
 ) -> "Sample":
     """Sort rows by one or more columns."""
-    new_data = sample._data.sort(
-        by=cols, descending=descending, nulls_last=nulls_last
-    )
+    new_data = sample._data.sort(by=cols, descending=descending, nulls_last=nulls_last)
     return _resolve_target(sample, new_data, inplace=inplace)
 
 

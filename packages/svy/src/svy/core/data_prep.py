@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Mapping, Sequence, cast
+from typing import TYPE_CHECKING, Mapping, Sequence, cast
 
 import polars as pl
 

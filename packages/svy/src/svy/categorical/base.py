@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 
-from typing import TYPE_CHECKING, Callable, Literal, Mapping, Sequence, cast
+from typing import TYPE_CHECKING, Callable, Literal, cast
 
 import numpy as np
 import polars as pl
@@ -27,7 +27,11 @@ from svy.core.containers import ChiSquare, FDist
 from svy.core.data_prep import prepare_data
 from svy.core.enumerations import (
     RankScoreMethod as _RankScoreMethod,
+)
+from svy.core.enumerations import (
     TableType,
+)
+from svy.core.enumerations import (
     TableUnits as _TableUnits,
 )
 from svy.core.types import (
@@ -436,7 +440,6 @@ class Categorical:
             first = results[0] if results else None
             _groups = first.groups if first and isinstance(first, TTestTwoGroups) else None
             _mean_h0 = mean_h0 if group is None else None
-            from svy.categorical.ttest import _where_arg_to_str
 
             return TTestByResult(
                 results,

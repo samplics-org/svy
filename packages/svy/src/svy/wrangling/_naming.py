@@ -9,14 +9,18 @@ and metadata-key updates.  Nothing here imports from Sample directly.
 from __future__ import annotations
 
 import math
+
 from typing import TYPE_CHECKING, Literal
 
 from svy.core.design import Design
 from svy.core.enumerations import (
     CaseStyle as _CaseStyle,
+)
+from svy.core.enumerations import (
     LetterCase as _LetterCase,
 )
 from svy.errors import LabelError
+
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample
@@ -43,14 +47,10 @@ def _check_nan_keys(mapping: dict, *, where: str, var: str | None = None) -> Non
 # -------------------------------------------------------------------
 
 
-def _map_name_in_design(
-    design_field: str | None, renames: dict[str, str]
-) -> str | None:
+def _map_name_in_design(design_field: str | None, renames: dict[str, str]) -> str | None:
     """Map a single string design field through *renames*."""
     return (
-        renames.get(design_field, design_field)
-        if isinstance(design_field, str)
-        else design_field
+        renames.get(design_field, design_field) if isinstance(design_field, str) else design_field
     )
 
 
@@ -63,22 +63,16 @@ def _map_tuple_in_design(
     return tuple(renames.get(s, s) for s in design_field)
 
 
-def _design_with_renamed_columns(
-    design: Design, renames: dict[str, str]
-) -> Design:
+def _design_with_renamed_columns(design: Design, renames: dict[str, str]) -> Design:
     """Return a new Design with all column references updated by *renames*."""
     if not renames:
         return design
 
     new_rep = design.rep_wgts
     if design.rep_wgts is not None:
-        mapped_wgts = tuple(
-            renames.get(s, s) for s in design.rep_wgts.columns
-        )
+        mapped_wgts = tuple(renames.get(s, s) for s in design.rep_wgts.columns)
         if mapped_wgts != tuple(design.rep_wgts.columns):
-            new_rep = design.rep_wgts.clone(
-                wgts=mapped_wgts, n_reps=len(mapped_wgts)
-            )
+            new_rep = design.rep_wgts.clone(wgts=mapped_wgts, n_reps=len(mapped_wgts))
 
     return design.update(
         row_index=_map_name_in_design(design.row_index, renames),
@@ -138,8 +132,7 @@ def _normalize_case_style(
     result = _MAP.get(case_style.strip().lower())
     if result is None:
         raise ValueError(
-            f"Unknown case_style {case_style!r}. "
-            f"Use 'snake', 'camel', 'pascal', or 'kebab'."
+            f"Unknown case_style {case_style!r}. Use 'snake', 'camel', 'pascal', or 'kebab'."
         )
     return result
 
@@ -165,7 +158,6 @@ def _normalize_letter_case(
     result = _MAP.get(letter_case.strip().lower())
     if result is None:
         raise ValueError(
-            f"Unknown letter_case {letter_case!r}. "
-            f"Use 'lower', 'upper', 'title', or 'original'."
+            f"Unknown letter_case {letter_case!r}. Use 'lower', 'upper', 'title', or 'original'."
         )
     return result

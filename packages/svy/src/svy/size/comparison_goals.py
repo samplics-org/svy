@@ -14,21 +14,11 @@ Adding a new comparison goal:
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, cast
-
-import numpy as np
-
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from svy.core.enumerations import PopParam
 from svy.core.enumerations import (
-    OnePropSizeMethod as _OnePropSizeMethod,
     TwoPropsSizeMethod as _TwoPropsSizeMethod,
-)
-from svy.size._normalize import (
-    _normalize_one_prop_method,
-    _normalize_two_props_method,
-    _normalize_prop_var_mode,
 )
 from svy.core.types import DomainScalarMap, Number
 from svy.engine.size_and_power.size import (
@@ -37,8 +27,13 @@ from svy.engine.size_and_power.size import (
     _apply_nonresponse_pair,
     _wald_sample_size_two_props,
 )
+from svy.size._normalize import (
+    _normalize_prop_var_mode,
+    _normalize_two_props_method,
+)
 from svy.size.types import Size
 from svy.utils.helpers import _get_keys_from_maps
+
 
 if TYPE_CHECKING:
     from svy.size.base import SampleSize

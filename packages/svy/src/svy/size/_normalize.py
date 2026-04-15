@@ -12,7 +12,11 @@ from typing import Literal
 
 from svy.core.enumerations import (
     OnePropSizeMethod as _OnePropSizeMethod,
+)
+from svy.core.enumerations import (
     PropVarMode as _PropVarMode,
+)
+from svy.core.enumerations import (
     TwoPropsSizeMethod as _TwoPropsSizeMethod,
 )
 

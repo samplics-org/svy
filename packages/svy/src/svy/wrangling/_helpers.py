@@ -14,6 +14,7 @@ module (columns, values, rows, mutate, labels).
 from __future__ import annotations
 
 import copy
+
 from typing import TYPE_CHECKING
 
 import polars as pl
@@ -23,6 +24,7 @@ from svy.core.constants import (
     SVY_ROW_INDEX,
 )
 from svy.core.design import Design
+
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample
@@ -60,9 +62,7 @@ def _fork(sample: "Sample", new_data: pl.DataFrame) -> "Sample":
     return new
 
 
-def _resolve_target(
-    sample: "Sample", new_data: pl.DataFrame, *, inplace: bool
-) -> "Sample":
+def _resolve_target(sample: "Sample", new_data: pl.DataFrame, *, inplace: bool) -> "Sample":
     """
     Return either the original sample (mutated) or a fresh fork.
 
@@ -212,14 +212,12 @@ def _rebuild_concat_columns(target: "Sample") -> None:
         target._data = target._data.drop(stale)
 
     # Re-create from current design + data
-    new_data, (_, stratum_cols, psu_cols, ssu_cols) = (
-        target._create_concatenated_cols_from_lists(
-            data=target._data,
-            design=design,
-            by=None,
-            null_token="__Null__",
-            suffix=_INTERNAL_CONCAT_SUFFIX,
-        )
+    new_data, (_, stratum_cols, psu_cols, ssu_cols) = target._create_concatenated_cols_from_lists(
+        data=target._data,
+        design=design,
+        by=None,
+        null_token="__Null__",
+        suffix=_INTERNAL_CONCAT_SUFFIX,
     )
     target._data = new_data
     target._internal_design = {
@@ -290,13 +288,9 @@ def _auto_clean_design(target: "Sample") -> None:
     )
 
     if current_design.rep_wgts:
-        new_wgts = tuple(
-            c for c in current_design.rep_wgts.wgts if c in cols
-        )
+        new_wgts = tuple(c for c in current_design.rep_wgts.wgts if c in cols)
         new_rep = (
-            current_design.rep_wgts.clone(
-                wgts=new_wgts, n_reps=len(new_wgts)
-            )
+            current_design.rep_wgts.clone(wgts=new_wgts, n_reps=len(new_wgts))
             if new_wgts
             else None
         )

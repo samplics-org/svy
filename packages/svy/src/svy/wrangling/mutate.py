@@ -18,6 +18,7 @@ from svy.wrangling._helpers import (
     _resolve_target,
 )
 
+
 if TYPE_CHECKING:
     from svy.core.sample import Sample
 
@@ -59,8 +60,7 @@ def _as_output_obj(obj: object, out_name: str, n_rows: int) -> object:
     if isinstance(obj, pl.Series):
         if obj.len() != n_rows:
             raise ValueError(
-                f"Series length {obj.len()} != n_rows {n_rows} "
-                f"for column '{out_name}'"
+                f"Series length {obj.len()} != n_rows {n_rows} for column '{out_name}'"
             )
         return obj.rename(out_name)
 
@@ -73,8 +73,7 @@ def _as_output_obj(obj: object, out_name: str, n_rows: int) -> object:
         vals = obj.tolist() if is_np else list(obj)  # type: ignore[arg-type]
         if len(vals) != n_rows:
             raise ValueError(
-                f"Sequence length {len(vals)} != n_rows {n_rows} "
-                f"for column '{out_name}'"
+                f"Sequence length {len(vals)} != n_rows {n_rows} for column '{out_name}'"
             )
         return pl.Series(out_name, vals)
 
@@ -137,11 +136,7 @@ def mutate(
                 ),
             ) from ex
 
-        deps: set[str] = (
-            _root_names_safe(out_obj)
-            if isinstance(out_obj, pl.Expr)
-            else set()
-        )
+        deps: set[str] = _root_names_safe(out_obj) if isinstance(out_obj, pl.Expr) else set()
         compiled[out_name] = (out_obj, deps)
 
     # Batch by readiness (topological sort)
@@ -150,11 +145,7 @@ def mutate(
     max_iters = len(pending) + 8
 
     for _ in range(max_iters):
-        ready = [
-            name
-            for name in pending
-            if compiled[name][1] <= current_cols
-        ]
+        ready = [name for name in pending if compiled[name][1] <= current_cols]
         if not ready:
             break
 
@@ -188,10 +179,7 @@ def mutate(
             break
 
     if pending:
-        unresolved = {
-            name: sorted(compiled[name][1] - current_cols)
-            for name in pending
-        }
+        unresolved = {name: sorted(compiled[name][1] - current_cols) for name in pending}
         missing_outside = sorted(
             {
                 col
@@ -214,10 +202,7 @@ def mutate(
             detail=f"Circular or mutually dependent outputs: {unresolved}",
             code="MUTATE_DEPENDENCY_ERROR",
             where="wrangling.mutate",
-            hint=(
-                "Split into multiple mutate() calls or break the "
-                "circular reference."
-            ),
+            hint=("Split into multiple mutate() calls or break the circular reference."),
         )
 
     target = _resolve_target(sample, local_data, inplace=inplace)

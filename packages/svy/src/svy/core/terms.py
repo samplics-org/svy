@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Union
 
 import numpy as np
+
 from numpy.typing import NDArray
 
 

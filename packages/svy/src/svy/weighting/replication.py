@@ -8,16 +8,25 @@ The Weighting class in base.py delegates to these functions directly.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, Sequence
+from typing import TYPE_CHECKING, Literal, Sequence
 
 import numpy as np
 import polars as pl
 
+
 try:
-    from svy_rs._internal import create_bootstrap_wgts as rust_create_bootstrap_wgts  # type: ignore[import-untyped]
-    from svy_rs._internal import create_brr_wgts as rust_create_brr_wgts  # type: ignore[import-untyped]
-    from svy_rs._internal import create_jk_wgts as rust_create_jk_wgts  # type: ignore[import-untyped]
-    from svy_rs._internal import create_sdr_wgts as rust_create_sdr_wgts  # type: ignore[import-untyped]
+    from svy_rs._internal import (
+        create_bootstrap_wgts as rust_create_bootstrap_wgts,  # type: ignore[import-untyped]
+    )
+    from svy_rs._internal import (
+        create_brr_wgts as rust_create_brr_wgts,  # type: ignore[import-untyped]
+    )
+    from svy_rs._internal import (
+        create_jk_wgts as rust_create_jk_wgts,  # type: ignore[import-untyped]
+    )
+    from svy_rs._internal import (
+        create_sdr_wgts as rust_create_sdr_wgts,  # type: ignore[import-untyped]
+    )
 except ImportError:  # pragma: no cover
     rust_create_bootstrap_wgts = None
     rust_create_brr_wgts = None
@@ -34,6 +43,7 @@ from svy.weighting._helpers import (
     _to_float_array,
     _to_int_array,
 )
+
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample

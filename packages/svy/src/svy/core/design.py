@@ -913,7 +913,6 @@ class Design:
         return fn() if callable(fn) else repr(self.rep_wgts)
 
     def __rich_console__(self, console, options):
-        from rich import box
         from rich.table import Table as RTable
         from rich.text import Text
 
@@ -1000,6 +999,7 @@ class Design:
 
         if use_rich and rich_available():
             import sys
+
             from rich.console import Console
 
             Console(

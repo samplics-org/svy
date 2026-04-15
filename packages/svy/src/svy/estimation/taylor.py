@@ -17,6 +17,7 @@ import svy_rs as rs
 from svy.core.enumerations import EstimationMethod, PopParam, QuantileMethod
 from svy.estimation.estimate import Estimate
 
+
 if TYPE_CHECKING:
     from svy.core.data_prep import PreparedData
     from svy.estimation.base import Estimation

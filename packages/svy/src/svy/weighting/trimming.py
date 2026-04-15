@@ -21,9 +21,12 @@ import polars as pl
 from svy.core.warnings import Severity, WarnCode
 from svy.errors import DimensionError, MethodError
 
+
 try:
     from svy_rs._internal import trim_weights as rust_trim_weights  # type: ignore[import-untyped]
-    from svy_rs._internal import trim_weights_matrix as rust_trim_weights_matrix  # type: ignore[import-untyped]
+    from svy_rs._internal import (
+        trim_weights_matrix as rust_trim_weights_matrix,  # type: ignore[import-untyped]
+    )
 except ImportError:  # pragma: no cover
     rust_trim_weights = None
     rust_trim_weights_matrix = None
@@ -33,6 +36,7 @@ from svy.weighting.types import (
     TrimResult,
     resolve_threshold,
 )
+
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample

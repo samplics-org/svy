@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Mapping, cast
 import numpy as np
 import polars as pl
 
+
 try:
     from svy_rs._internal import rake as rust_rake  # type: ignore[import-untyped]
     from svy_rs._internal import trim_weights as rust_trim_weights  # type: ignore[import-untyped]
@@ -23,8 +24,8 @@ except ImportError:  # pragma: no cover
 from svy.core.types import Category, ControlsType
 from svy.errors import DimensionError, MethodError
 from svy.weighting._helpers import _num_sort_key_label
-
 from svy.weighting.types import TrimConfig, resolve_threshold
+
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample

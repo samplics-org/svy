@@ -1002,9 +1002,11 @@ SAFE_FUNCS: Mapping[str, Any] = {
     "max": max,
     "sum": sum,
     "round": round,
-    "log": lambda x, base=None: x.log(base)
-    if isinstance(x, Expr)
-    else (math.log(x) if base is None else math.log(x, base)),
+    "log": lambda x, base=None: (
+        x.log(base)
+        if isinstance(x, Expr)
+        else (math.log(x) if base is None else math.log(x, base))
+    ),
     "log10": lambda x: x.log10() if isinstance(x, Expr) else math.log10(x),
     "log2": lambda x: x.log2() if isinstance(x, Expr) else math.log2(x),
     "exp": lambda x: x.exp() if isinstance(x, Expr) else math.exp(x),

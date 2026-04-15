@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Sequence
 import numpy as np
 import polars as pl
 
+
 try:
     from svy_rs._internal import poststratify as rust_poststratify  # type: ignore[import-untyped]
 except ImportError:  # pragma: no cover
@@ -21,9 +22,9 @@ except ImportError:  # pragma: no cover
 from svy.core.types import DomainScalarMap, Number
 from svy.errors import MethodError
 from svy.weighting._helpers import _build_by_array, _normalize_dict_keys
-
-from svy.weighting.types import TrimConfig, resolve_threshold
 from svy.weighting.raking import _trim_constraints_satisfied
+from svy.weighting.types import TrimConfig, resolve_threshold
+
 
 try:
     from svy_rs._internal import trim_weights as rust_trim_weights  # type: ignore[import-untyped]

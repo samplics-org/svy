@@ -6,7 +6,6 @@ import logging
 
 from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping, Self, Sequence, cast
 
-import msgspec
 import numpy as np
 import polars as pl
 
@@ -257,11 +256,11 @@ class Sample:
     # PRETTY STRING REPRESENTATION
     # ════════════════════════════════════════════════════════════════════════
     def __rich_console__(self, console, options):
-        from rich import box
         from rich.console import Group
         from rich.padding import Padding
         from rich.table import Table
         from rich.text import Text
+
         from svy.ui.printing import make_panel
 
         try:
@@ -360,7 +359,7 @@ class Sample:
         return "\n".join(lines)
 
     def __str__(self) -> str:
-        from svy.ui.printing import make_panel, render_rich_to_str, resolve_width
+        from svy.ui.printing import render_rich_to_str, resolve_width
 
         try:
             w = resolve_width(self, default=65)

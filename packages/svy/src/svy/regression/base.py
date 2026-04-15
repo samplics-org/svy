@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import math
 
-from typing import TYPE_CHECKING, ClassVar, Literal, Sequence, cast
+from typing import TYPE_CHECKING, ClassVar, Literal, Sequence
 
 import numpy as np
 import polars as pl
@@ -24,12 +24,11 @@ except ImportError:
 
 from svy.core.containers import FDist, TDist
 from svy.core.data_prep import prepare_data
-from svy.core.enumerations import DistFamily as _DistFamily, LinkFunction as _LinkFunction
 from svy.core.terms import Cat, Cross, Feature
 from svy.errors.model_errors import ModelError
+from svy.regression.glm import GLMCoef, GLMFit, GLMStats
 from svy.regression.links import link_inverse, link_mu_eta, resolve_link
 from svy.regression.prediction import GLMPred
-from svy.regression.glm import GLMCoef, GLMFit, GLMStats
 
 
 if TYPE_CHECKING:

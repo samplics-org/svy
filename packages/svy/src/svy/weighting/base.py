@@ -37,6 +37,7 @@ from svy.weighting.replication import create_variance_strata as _create_variance
 from svy.weighting.trimming import trim as _trim
 from svy.weighting.types import TrimConfig
 
+
 if TYPE_CHECKING:
     from svy.core.sample import Sample
 

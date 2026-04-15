@@ -20,18 +20,9 @@ import logging
 import re
 
 from collections.abc import Iterable, Mapping
-from typing import Self
-
-import numpy as np
-
 from typing import Literal
 
 from svy.core.enumerations import PopParam
-from svy.size._normalize import (
-    _normalize_one_prop_method,
-    _normalize_two_props_method,
-    _normalize_prop_var_mode,
-)
 from svy.core.types import DomainScalarMap, Number
 from svy.size.comparison_goals import compare_means as _compare_means
 from svy.size.comparison_goals import compare_props as _compare_props

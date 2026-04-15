@@ -23,6 +23,7 @@ from svy.wrangling._helpers import (
     _resolve_target,
 )
 
+
 if TYPE_CHECKING:
     from svy.core.sample import Sample
 
@@ -62,9 +63,7 @@ def bottom_code(
         if not isinstance(sample._data, pl.LazyFrame)
         else cast(pl.DataFrame, sample._data.collect())
     )
-    new_data = _bottom_code(
-        _df, bottom_codes=bottom_codes, replace=replace, into=into
-    )
+    new_data = _bottom_code(_df, bottom_codes=bottom_codes, replace=replace, into=into)
     target = _resolve_target(sample, new_data, inplace=inplace)
     if replace:
         _rebuild_concat_if_touched(sample, target, set(bottom_codes.keys()))
@@ -93,9 +92,7 @@ def bottom_and_top_code(
     )
     target = _resolve_target(sample, new_data, inplace=inplace)
     if replace:
-        _rebuild_concat_if_touched(
-            sample, target, set(bottom_and_top_codes.keys())
-        )
+        _rebuild_concat_if_touched(sample, target, set(bottom_and_top_codes.keys()))
     return target
 
 
@@ -114,9 +111,7 @@ def recode(
         if not isinstance(sample._data, pl.LazyFrame)
         else cast(pl.DataFrame, sample._data.collect())
     )
-    new_data = _recode(
-        _df, cols=cols, recodes=recodes, replace=replace, into=into
-    )
+    new_data = _recode(_df, cols=cols, recodes=recodes, replace=replace, into=into)
     target = _resolve_target(sample, new_data, inplace=inplace)
     if replace:
         touched = {cols} if isinstance(cols, str) else set(cols)
@@ -235,19 +230,12 @@ def cast_columns(
 ) -> "Sample":
     """Cast columns to specified data type(s)."""
 
-    def _cast_expr(
-        col_name: str, target_dt: pl.DataType, strict: bool
-    ) -> pl.Expr:
+    def _cast_expr(col_name: str, target_dt: pl.DataType, strict: bool) -> pl.Expr:
         base = pl.col(col_name)
         if target_dt in (pl.Categorical, pl.Enum) or (
-            isinstance(target_dt, pl.Categorical)
-            or isinstance(target_dt, pl.Enum)
+            isinstance(target_dt, pl.Categorical) or isinstance(target_dt, pl.Enum)
         ):
-            return (
-                base.cast(pl.Utf8)
-                .cast(target_dt, strict=strict)
-                .alias(col_name)
-            )
+            return base.cast(pl.Utf8).cast(target_dt, strict=strict).alias(col_name)
         return base.cast(target_dt, strict=strict).alias(col_name)
 
     if isinstance(cols, Mapping):
@@ -276,20 +264,14 @@ def fill_null(
     cols: str | Sequence[str],
     value: Any = None,
     *,
-    strategy: Literal[
-        "forward", "backward", "mean", "min", "max", "zero", "one"
-    ]
-    | None = None,
+    strategy: Literal["forward", "backward", "mean", "min", "max", "zero", "one"] | None = None,
     inplace: bool = False,
 ) -> "Sample":
     """Fill null values in specified columns."""
     col_list = [cols] if isinstance(cols, str) else list(cols)
 
     if strategy is not None:
-        exprs = [
-            pl.col(c).fill_null(strategy=strategy).alias(c)
-            for c in col_list
-        ]
+        exprs = [pl.col(c).fill_null(strategy=strategy).alias(c) for c in col_list]
     else:
         exprs = [pl.col(c).fill_null(value).alias(c) for c in col_list]
 

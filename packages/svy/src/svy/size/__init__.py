@@ -1,7 +1,6 @@
 from .base import (
     SampleSize,
 )
-
 from .types import (
     Target,
     TargetMean,

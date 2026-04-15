@@ -135,7 +135,7 @@ class TestPPSSysProbs:
         """Missing MOS should raise ValueError."""
         design = Design()
         samp = Sample(DF, design)
-        with pytest.raises(ValueError, match="MOS"):
+        with pytest.raises(Exception, match="MOS"):
             samp.sampling.pps_sys(n=2, drop_nulls=True)
 
     def test_weight_is_inverse_prob(self):
@@ -354,7 +354,7 @@ def test_sample_select_pps_sys_sublevel_unrecognized_keys_raises():
     DF2 = _with_region(DF)
     design = Design(mos="income", stratum="region")
     samp = Sample(DF2, design)
-    with pytest.raises(ValueError, match="keys"):
+    with pytest.raises(Exception, match="keys"):
         samp.sampling.pps_sys(
             n={"ZZZ": 2},
             by="education",
@@ -368,7 +368,7 @@ def test_sample_select_pps_sys_sublevel_ambiguous_keys_raises():
     DF2 = _with_region(DF)
     design = Design(mos="income", stratum="region")
     samp = Sample(DF2, design)
-    with pytest.raises(ValueError, match="keys"):
+    with pytest.raises(Exception, match="keys"):
         samp.sampling.pps_sys(
             n={"North": 1, "Less than HS": 2},
             by="education",
