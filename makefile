@@ -1,78 +1,128 @@
 # ====== config ======
-DIST_DIR := dist
-PYTHON   := uv run python
+DIST_DIR   := dist
+PYTHON     := uv run python
 
 # Paths
+PKG_SVY    := packages/svy
+PKG_SVY_IO := packages/svy-io
 PKG_SVY_RS := packages/svy-rs
 
 # ====== helpers ======
 .PHONY: help
 help:
 	@echo "Global Targets:"
-	@echo "  deps                - install dev dependencies (uv, maturin)"
-	@echo "  clean               - remove build artifacts (global)"
+	@echo "  deps                - install all workspace deps (uv sync)"
+	@echo "  clean               - remove build artifacts"
+	@echo "  lint                - ruff check across all packages"
+	@echo "  lint-fix            - auto-fix lint issues"
+	@echo "  fmt                 - check formatting (ruff format --check)"
+	@echo "  fmt-fix             - auto-format all code"
 	@echo "  test-all            - run tests for all packages"
+	@echo "  ci                  - full CI pipeline (lint + fmt + test)"
 	@echo ""
-	@echo "svy-rs Targets:"
-	@echo "  build-svy-rs    - build wheel for svy-rs (maturin)"
-	@echo "  develop-svy-rs  - install svy-rs in editable mode (recompiles on import)"
-	@echo "  test-svy-rs     - run tests specifically for svy-rs"
-	@echo "  release-svy-rs  - build optimized release wheel"
+	@echo "svy Targets:"
+	@echo "  build-svy           - build sdist + wheel for svy"
+	@echo "  test-svy            - run tests for svy"
+	@echo "  lint-svy            - lint svy"
+	@echo ""
+	@echo "svy-io Targets (local dev only — published separately):"
+	@echo "  build-svy-io        - build svy-io native extension locally"
+	@echo "  test-svy-io         - run tests for svy-io"
+	@echo "  lint-svy-io         - lint svy-io"
+	@echo ""
+	@echo "svy-rs Targets (local dev only — published separately):"
+	@echo "  develop-svy-rs      - install svy-rs in editable mode (maturin develop)"
+	@echo "  test-svy-rs         - run tests for svy-rs"
+	@echo "  lint-svy-rs         - lint svy-rs python bindings"
 
-.PHONY: clean
-clean:
-	rm -rf "$(DIST_DIR)" build *.egg-info
-	find . -name "__pycache__" -type d -prune -exec rm -rf {} +
-	find . -name "target" -type d -prune -exec rm -rf {} +
-	# Clean inside packages
-	rm -rf $(PKG_SVY_RS)/target $(PKG_SVY_RS)/dist
-
+# ====== Dependencies ======
 .PHONY: deps
 deps:
-	# Install global tools needed for rust builds
-	uv tool install maturin
-	uv sync
+	uv sync --all-packages
 	@echo "Deps installed."
 
-# ====== Testing ======
+# ====== Linting ======
+.PHONY: lint lint-fix fmt fmt-fix lint-svy lint-svy-io lint-svy-rs
 
-.PHONY: test-all
-test-all: test-svy-rs
+lint: lint-svy lint-svy-io lint-svy-rs
+	@echo "All lint checks passed."
+
+lint-svy:
+	@echo "▶ Linting svy..."
+	uv run ruff check $(PKG_SVY)/src $(PKG_SVY)/tests
+
+lint-svy-io:
+	@echo "▶ Linting svy-io..."
+	uv run ruff check $(PKG_SVY_IO)/python $(PKG_SVY_IO)/tests
+
+lint-svy-rs:
+	@echo "▶ Linting svy-rs..."
+	uv run ruff check $(PKG_SVY_RS)/tests
+
+lint-fix:
+	uv run ruff check --fix $(PKG_SVY)/src $(PKG_SVY)/tests
+	uv run ruff check --fix $(PKG_SVY_IO)/python $(PKG_SVY_IO)/tests
+	uv run ruff check --fix $(PKG_SVY_RS)/tests
+
+fmt:
+	@echo "▶ Checking formatting..."
+	uv run ruff format --check $(PKG_SVY)/src $(PKG_SVY)/tests
+	uv run ruff format --check $(PKG_SVY_IO)/python $(PKG_SVY_IO)/tests
+	uv run ruff format --check $(PKG_SVY_RS)/tests
+
+fmt-fix:
+	uv run ruff format $(PKG_SVY)/src $(PKG_SVY)/tests
+	uv run ruff format $(PKG_SVY_IO)/python $(PKG_SVY_IO)/tests
+	uv run ruff format $(PKG_SVY_RS)/tests
+
+# ====== Testing ======
+.PHONY: test-all test-svy test-svy-io test-svy-rs
+
+test-all: test-svy test-svy-io test-svy-rs
 	@echo "All tests passed."
 
-.PHONY: test-svy-rs
+test-svy:
+	@echo "▶ Testing svy..."
+	cd $(PKG_SVY) && uv run pytest
+
+test-svy-io:
+	@echo "▶ Testing svy-io..."
+	cd $(PKG_SVY_IO) && uv run pytest
+
 test-svy-rs:
 	@echo "▶ Testing svy-rs..."
-	# We run pytest inside the package directory so it picks up the local pyproject config
 	cd $(PKG_SVY_RS) && uv run pytest
 
-# ====== svy-rs (Rust/Maturin) ======
+# ====== svy (pure Python — the one we publish from this repo) ======
+.PHONY: build-svy
+build-svy:
+	@echo "▶ Building svy..."
+	cd $(PKG_SVY) && uv build
 
-# Build the wheel into the local dist/ folder
-.PHONY: build-svy-rs
-build-svy-rs:
-	@echo "▶ Building svy-rs (Maturin)..."
-	cd $(PKG_SVY_RS) && uv run maturin build
+# ====== svy-io (local dev convenience) ======
+.PHONY: build-svy-io
+build-svy-io:
+	@echo "▶ Building svy-io locally..."
+	cd $(PKG_SVY_IO) && uv build
 
-# Build optimized release wheel
-.PHONY: release-svy-rs
-release-svy-rs:
-	@echo "▶ Building RELEASE wheel for svy-rs..."
-	cd $(PKG_SVY_RS) && uv run maturin develop --uv --release
-
-# Install in editable mode (changes to Rust code take effect on next import)
+# ====== svy-rs (local dev convenience) ======
 .PHONY: develop-svy-rs
 develop-svy-rs:
-	@echo "▶ Installing svy-rs in development mode..."
+	@echo "▶ Installing svy-rs in dev mode (maturin develop)..."
 	cd $(PKG_SVY_RS) && uv run maturin develop
 
-# ====== Publishing ======
+# ====== CI aggregate ======
+.PHONY: ci
+ci: lint fmt test-all
+	@echo "CI passed."
 
-.PHONY: check
-check:
-	uv run twine check "$(PKG_SVY_RS)/target/wheels/"*
-
-.PHONY: upload-svy-rs
-upload-svy-rs:
-	# Uploads whatever is in the target/wheels directory of the package
-	uv run twine upload "$(PKG_SVY_RS)/target/wheels/"*
+# ====== Clean ======
+.PHONY: clean
+clean:
+	rm -rf "$(DIST_DIR)" build *.egg-info .ruff_cache
+	find . -name "__pycache__" -type d -prune -exec rm -rf {} +
+	find . -name ".pytest_cache" -type d -prune -exec rm -rf {} +
+	find . -name "*.egg-info" -type d -prune -exec rm -rf {} +
+	rm -rf $(PKG_SVY)/dist
+	rm -rf $(PKG_SVY_IO)/dist
+	rm -rf $(PKG_SVY_RS)/target $(PKG_SVY_RS)/dist
