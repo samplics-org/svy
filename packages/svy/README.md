@@ -6,7 +6,7 @@ Modern Python tools for **complex survey analysis**, built for real-world statis
 
 🌐 Website: [svylab.com](https://svylab.com)
 📘 Documentation: [svylab.com/docs/svy](https://svylab.com/docs/svy/)
-📦 Source: [gitlab.com/samplics/svy/packages](https://gitlab.com/samplics/svy/packages/svy)
+📦 Source: [github.com/samplics-org/svy/packages](https://github.com/samplics-org/svy/packages/svy)
 
 ---
 
@@ -60,7 +60,7 @@ print(tot_exp_mean)
 - **Categorical data analysis** — tabulation, crosstabulation, t-test, Rao-Scott test
 - **Generalized linear models** — logistic, Poisson, Gamma with survey weights
 - **Explicit, inspectable, reproducible outputs**
-- **Built on Polars, NumPy, SciPy, and Rust**
+- **Built on Polars, NumPy, SciPy, msgspec and Rust**
 
 ---
 
@@ -83,8 +83,8 @@ Full documentation, tutorials, and methodological notes:
 
 ## Feedback
 
-- Issues: [gitlab.com/samplics/svy/issues](https://github.com/samplics-org/svy/issues)
-- Discussions: [gitlab.com/samplics/svy/discussions](https://github.com/samplics-org/svy/discussions)
+- Issues: [github.com/samplics/svy/issues](https://github.com/samplics-org/svy/issues)
+- Discussions: [github.com/samplics-org/svy/discussions](https://github.com/samplics-org/svy/discussions)
 
 ---
 
