@@ -76,27 +76,29 @@ fn extract_certainty(p0: &[f64], n: usize, threshold: f64) -> (Vec<bool>, usize)
     let mut cert_mask = vec![false; big];
     let mut remaining = vec![true; big];
     let mut n_rem = n;
-    // Running sum of remaining probabilities — updated incrementally
     let mut total_rem: f64 = p0.iter().sum();
 
     loop {
         if n_rem == 0 || total_rem <= 0.0 {
             break;
         }
-        let threshold_scaled = threshold - 1e-12;
         let n_rem_f = n_rem as f64;
+        // Snapshot denominator at pass start — critical correctness requirement.
+        // If we updated total_rem mid-pass as units are extracted, the shrinking
+        // denominator would artificially inflate remaining units' ratios and cause
+        // over-extraction within a single pass.  Instead we commit extractions to
+        // total_rem but evaluate all units against the pass-start snapshot.
+        let total_rem_pass = total_rem;
+        let threshold_scaled = threshold - 1e-12;
         let mut found_any = false;
 
-        // Single pass: identify and extract certainty units
         for i in 0..big {
-            if remaining[i] && n_rem_f * p0[i] / total_rem >= threshold_scaled {
+            if remaining[i] && n_rem_f * p0[i] / total_rem_pass >= threshold_scaled {
                 cert_mask[i] = true;
                 remaining[i] = false;
-                total_rem -= p0[i];
+                total_rem -= p0[i];   // update running total for next pass only
                 n_rem = n_rem.saturating_sub(1);
                 found_any = true;
-                // Reset n_rem_f conceptually — re-evaluate next pass
-                // (cannot update n_rem_f mid-loop without re-scanning)
             }
         }
         if !found_any {

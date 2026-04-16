@@ -118,10 +118,12 @@ class TestApplyWhere:
     """Unit tests for the _apply_where helper directly."""
 
     def _df(self) -> pl.DataFrame:
-        return pl.DataFrame({
-            "a": [1, 2, 3, 4, 5],
-            "b": ["x", "y", "x", "z", "y"],
-        })
+        return pl.DataFrame(
+            {
+                "a": [1, 2, 3, 4, 5],
+                "b": ["x", "y", "x", "z", "y"],
+            }
+        )
 
     def test_none_returns_full_df_and_none_mask(self):
         df = self._df()
@@ -253,9 +255,7 @@ class TestSrsWhere:
         result = samp.sampling.srs(n=n, where={"eligible_flag": True}, rstate=RNG)
         df = result._data.filter(pl.col(SVY_PROB).is_not_null())
         expected_prob = n / n_eligible
-        np.testing.assert_allclose(
-            df[SVY_PROB].to_numpy(), expected_prob, rtol=1e-9
-        )
+        np.testing.assert_allclose(df[SVY_PROB].to_numpy(), expected_prob, rtol=1e-9)
 
     # -- Stratified ----------------------------------------------------------
 
@@ -263,7 +263,9 @@ class TestSrsWhere:
         """With stratum + where, selection happens per stratum on eligible rows only."""
         samp = _make_sample(20, stratum="region")
         result = samp.sampling.srs(
-            n=3, where={"eligible_flag": True}, rstate=RNG,
+            n=3,
+            where={"eligible_flag": True},
+            rstate=RNG,
         )
         df = result._data
         selected = df.filter(pl.col(SVY_HIT) == 1)
@@ -272,7 +274,10 @@ class TestSrsWhere:
     def test_stratified_with_by_and_where(self):
         samp = _make_sample(20)
         result = samp.sampling.srs(
-            n=2, by="region", where={"eligible_flag": True}, rstate=RNG,
+            n=2,
+            by="region",
+            where={"eligible_flag": True},
+            rstate=RNG,
         )
         df = result._data
         selected = df.filter(pl.col(SVY_HIT) == 1)
@@ -299,9 +304,7 @@ class TestSrsWhere:
 
     def test_where_pl_expr_form(self):
         samp = _make_sample(20)
-        result = samp.sampling.srs(
-            n=3, where=pl.col("eligible_flag") == True, rstate=RNG
-        )
+        result = samp.sampling.srs(n=3, where=pl.col("eligible_flag") == True, rstate=RNG)
         assert result._data.height == 20
         selected = result._data.filter(pl.col(SVY_HIT) == 1)
         assert all(selected["eligible_flag"].to_list())
@@ -402,15 +405,15 @@ class TestSrsWhere:
 
     def test_where_with_drop_nulls(self):
         """where and drop_nulls compose: drop_nulls applies within eligible set."""
-        data = pl.DataFrame({
-            "unit_id": list(range(20)),
-            "value": [None if i % 5 == 0 else float(i) for i in range(20)],
-            "eligible_flag": [True] * 15 + [False] * 5,
-        })
-        samp = Sample(data=data, design=Design())
-        result = samp.sampling.srs(
-            n=3, where={"eligible_flag": True}, drop_nulls=True, rstate=RNG
+        data = pl.DataFrame(
+            {
+                "unit_id": list(range(20)),
+                "value": [None if i % 5 == 0 else float(i) for i in range(20)],
+                "eligible_flag": [True] * 15 + [False] * 5,
+            }
         )
+        samp = Sample(data=data, design=Design())
+        result = samp.sampling.srs(n=3, where={"eligible_flag": True}, drop_nulls=True, rstate=RNG)
         assert result._data.height == 20
 
     def test_design_wgt_column_updated_in_design(self):
@@ -514,24 +517,20 @@ class TestPpsVariantsWhere:
         assert non_elig[SVY_PROB].null_count() == len(non_elig)
 
     def test_pps_wr(self):
-        self._check(self._samp().sampling.pps_wr(
-            n=3, where={"eligible_flag": True}, rstate=RNG
-        ))
+        self._check(self._samp().sampling.pps_wr(n=3, where={"eligible_flag": True}, rstate=RNG))
 
     def test_pps_brewer(self):
-        self._check(self._samp().sampling.pps_brewer(
-            n=2, where={"eligible_flag": True}, rstate=RNG
-        ))
+        self._check(
+            self._samp().sampling.pps_brewer(n=2, where={"eligible_flag": True}, rstate=RNG)
+        )
 
     def test_pps_murphy(self):
-        self._check(self._samp().sampling.pps_murphy(
-            n=2, where={"eligible_flag": True}, rstate=RNG
-        ))
+        self._check(
+            self._samp().sampling.pps_murphy(n=2, where={"eligible_flag": True}, rstate=RNG)
+        )
 
     def test_pps_rs(self):
-        self._check(self._samp().sampling.pps_rs(
-            n=2, where={"eligible_flag": True}, rstate=RNG
-        ))
+        self._check(self._samp().sampling.pps_rs(n=2, where={"eligible_flag": True}, rstate=RNG))
 
 
 # ---------------------------------------------------------------------------

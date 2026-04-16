@@ -100,6 +100,13 @@ build-svy:
 	cd $(PKG_SVY) && uv build
 
 # ====== svy-io (local dev convenience) ======
+
+# Build optimized release wheel
+.PHONY: release-svy-io
+release-svy-io:
+	@echo "▶ Building RELEASE wheel for svy-rs..."
+	cd $(PKG_SVY_IO) && uv run maturin develop --uv --release
+
 .PHONY: build-svy-io
 build-svy-io:
 	@echo "▶ Building svy-io locally..."

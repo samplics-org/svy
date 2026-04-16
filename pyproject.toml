@@ -1,36 +1,14 @@
-[project]
-name = "svy-workspace"
-version = "0.0.4"
-description = "Workspace for the svy ecosystem (svy, svy-sae, svy-io, etc.)"
-readme = "README.md"
-requires-python = ">=3.11"
-license = { text = "MIT" }
-authors = [{ name = "Samplics LLC", email = "msdiallo@samplics.org" }]
 
-dependencies = []
-
-[dependency-groups]
-dev = [
-    "maturin>=1.7.7",
-    "pytest>=8.3.4",
-]
 # ------------------------------------------------------------
 # uv workspace configuration
 # ------------------------------------------------------------
 [tool.uv.workspace]
 members = [
-  # "packages/svy",
+  "packages/svy",
   # "packages/svy-sae",
   "packages/svy-io",
   "packages/svy-rs",
 ]
-
-[tool.uv.sources]
-# svy = { workspace = true }
-# svy-sae = { workspace = true }
-svy-io = { workspace = true }
-svy-rs = { workspace = true }
-
 
 
 # ------------------------------------------------------------

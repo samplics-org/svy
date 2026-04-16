@@ -21,22 +21,20 @@ classifiers = [
 requires-python = ">=3.11"
 dependencies = [
   "httpx>=0.28.1",
-  "numpy>=2.3",
+  "numpy>=2.0",
   "msgspec>=0.19.0",
   "polars[pyarrow]>=1.33.1",
-  "svy-rs>=0.7.0",
-  "scipy>=1.16.0",
-  "svy-io>=0.0.10a",
+  "scipy>=1.13",
+  "svy-io>=0.1.0,<0.2.0",
+  "svy-rs>=0.7.1,<0.8.0",
 ]
 
 [tool.uv.sources]
-# svy-io = { path = "../svyreadstat", editable = true }
-# svy-io = { git = "ssh://git@github.com/samplics-org/svy-io.git", rev = "main" }
-svy-rs = { path = "../svy-rs", editable = true }
+svy-io = { workspace = true } # overrides the above during dev
+svy-rs = { workspace = true }
 
 [project.optional-dependencies]
 report = ["rich>=14.1", "great-tables>=0.18"]
-# sae = ["svy-sae>=0.1.0"]
 all = ["rich>=14.1", "great-tables>=0.18"]
 
 [dependency-groups]
@@ -54,29 +52,11 @@ dev = [
   "maturin",
   "rich",
   "ruff",
-  "samplics",
+  "samplics", # benchmarking comparison only — to be removed
 ]
 
 [project.scripts]
 svy = "svy.__main__:main"
-
-[tool.black]
-exclude = '''
-/(
-    \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | _build
-  | buck-out
-  | build
-  | dist
-)/
-'''
-# line-length = 99
-# target-version = ["py312", "py313"]
 
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"
@@ -90,13 +70,13 @@ markers = [
 
 [tool.ruff]
 line-length = 99
-target-version = "py313"
+target-version = "py311"
 src = ["src", "tests"]
 exclude = [".venv", "build", "dist"]
 
 [tool.ruff.lint]
-select = ["D", "E", "F", "W", "I001"]
-ignore = ["D", "E501"]                # for development we can ignore the docs
+select = ["E", "F", "W", "I001"]
+ignore = ["E501"]                # for development we can ignore the docs
 
 # Exclude a variety of commonly ignored directories.
 exclude = [".venv", "tests"]

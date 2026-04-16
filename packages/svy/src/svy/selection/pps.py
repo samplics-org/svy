@@ -35,11 +35,11 @@ def _select_pps(*, method, frame, n, mos, stratum, certainty_threshold, rstate):
     from svy.utils.random_state import seed_from_random_state
 
     method_str = {
-        PPSMethod.SYS:     "sys",
-        PPSMethod.WR:      "wr",
-        PPSMethod.BREWER:  "brewer",
-        PPSMethod.MURPHY:  "murphy",
-        PPSMethod.RS:      "rs",
+        PPSMethod.SYS: "sys",
+        PPSMethod.WR: "wr",
+        PPSMethod.BREWER: "brewer",
+        PPSMethod.MURPHY: "murphy",
+        PPSMethod.RS: "rs",
     }[method]
 
     seed = seed_from_random_state(rstate)
@@ -71,6 +71,8 @@ def _select_pps(*, method, frame, n, mos, stratum, certainty_threshold, rstate):
         np.asarray(probs, dtype=np.float64),
         np.asarray(cert, dtype=bool),
     )
+
+
 from svy.utils.checks import assert_no_missing, drop_missing
 from svy.utils.helpers import _colspec_to_list
 from svy.utils.random_state import RandomState, resolve_random_state, seed_from_random_state
@@ -86,7 +88,13 @@ from svy.selection._helpers import (
     _warn_n_exceeds_population,
     _warn_zero_mos,
 )
-from svy.selection.srs import _apply_where, _check_output_col_names, _encode_stratum, _ensure_row_index, _remap_n_map
+from svy.selection.srs import (
+    _apply_where,
+    _check_output_col_names,
+    _encode_stratum,
+    _ensure_row_index,
+    _remap_n_map,
+)
 from svy.errors import MethodError
 
 if TYPE_CHECKING:
@@ -116,9 +124,22 @@ def pps_sys(
     drop_nulls: bool = False,
 ) -> "Sample":
     """PPS systematic sampling without replacement."""
-    return _pps(sample, n, method=PPSMethod.SYS, certainty_threshold=certainty_threshold,
-                by=by, where=where, wr=False, order_by=order_by, order_type=order_type,
-                prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name, rstate=rstate, drop_nulls=drop_nulls)
+    return _pps(
+        sample,
+        n,
+        method=PPSMethod.SYS,
+        certainty_threshold=certainty_threshold,
+        by=by,
+        where=where,
+        wr=False,
+        order_by=order_by,
+        order_type=order_type,
+        prob_name=prob_name,
+        wgt_name=wgt_name,
+        hit_name=hit_name,
+        rstate=rstate,
+        drop_nulls=drop_nulls,
+    )
 
 
 def pps_wr(
@@ -135,9 +156,22 @@ def pps_wr(
     drop_nulls: bool = False,
 ) -> "Sample":
     """PPS sampling with replacement."""
-    return _pps(sample, n, method=PPSMethod.WR, certainty_threshold=certainty_threshold,
-                by=by, where=where, wr=True, order_by=None, order_type="ascending",
-                prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name, rstate=rstate, drop_nulls=drop_nulls)
+    return _pps(
+        sample,
+        n,
+        method=PPSMethod.WR,
+        certainty_threshold=certainty_threshold,
+        by=by,
+        where=where,
+        wr=True,
+        order_by=None,
+        order_type="ascending",
+        prob_name=prob_name,
+        wgt_name=wgt_name,
+        hit_name=hit_name,
+        rstate=rstate,
+        drop_nulls=drop_nulls,
+    )
 
 
 def pps_brewer(
@@ -154,9 +188,22 @@ def pps_brewer(
     drop_nulls: bool = False,
 ) -> "Sample":
     """Brewer PPS sampling without replacement."""
-    return _pps(sample, n, method=PPSMethod.BREWER, certainty_threshold=certainty_threshold,
-                by=by, where=where, wr=False, order_by=None, order_type="ascending",
-                prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name, rstate=rstate, drop_nulls=drop_nulls)
+    return _pps(
+        sample,
+        n,
+        method=PPSMethod.BREWER,
+        certainty_threshold=certainty_threshold,
+        by=by,
+        where=where,
+        wr=False,
+        order_by=None,
+        order_type="ascending",
+        prob_name=prob_name,
+        wgt_name=wgt_name,
+        hit_name=hit_name,
+        rstate=rstate,
+        drop_nulls=drop_nulls,
+    )
 
 
 def pps_murphy(
@@ -173,9 +220,22 @@ def pps_murphy(
     drop_nulls: bool = False,
 ) -> "Sample":
     """Murphy PPS sampling without replacement (n=2 only)."""
-    return _pps(sample, n, method=PPSMethod.MURPHY, certainty_threshold=certainty_threshold,
-                by=by, where=where, wr=False, order_by=None, order_type="ascending",
-                prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name, rstate=rstate, drop_nulls=drop_nulls)
+    return _pps(
+        sample,
+        n,
+        method=PPSMethod.MURPHY,
+        certainty_threshold=certainty_threshold,
+        by=by,
+        where=where,
+        wr=False,
+        order_by=None,
+        order_type="ascending",
+        prob_name=prob_name,
+        wgt_name=wgt_name,
+        hit_name=hit_name,
+        rstate=rstate,
+        drop_nulls=drop_nulls,
+    )
 
 
 def pps_rs(
@@ -192,9 +252,22 @@ def pps_rs(
     drop_nulls: bool = False,
 ) -> "Sample":
     """Rao-Sampford PPS sampling without replacement."""
-    return _pps(sample, n, method=PPSMethod.RS, certainty_threshold=certainty_threshold,
-                by=by, where=where, wr=False, order_by=None, order_type="ascending",
-                prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name, rstate=rstate, drop_nulls=drop_nulls)
+    return _pps(
+        sample,
+        n,
+        method=PPSMethod.RS,
+        certainty_threshold=certainty_threshold,
+        by=by,
+        where=where,
+        wr=False,
+        order_by=None,
+        order_type="ascending",
+        prob_name=prob_name,
+        wgt_name=wgt_name,
+        hit_name=hit_name,
+        rstate=rstate,
+        drop_nulls=drop_nulls,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -238,19 +311,25 @@ def _pps(
     # -- Guard: reject names that already exist in the frame -------------
     _check_output_col_names(
         src_df,
-        prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name,
+        prob_name=prob_name,
+        wgt_name=wgt_name,
+        hit_name=hit_name,
         where="Sample.sampling.pps",
     )
 
     cols = design.specified_fields()
     cols += _colspec_to_list(by)
     cols += _colspec_to_list(
-        [c for c in [
-            sample._internal_design["stratum"],
-            sample._internal_design["psu"],
-            sample._internal_design["ssu"],
-            design.mos,
-        ] if isinstance(c, str)]
+        [
+            c
+            for c in [
+                sample._internal_design["stratum"],
+                sample._internal_design["psu"],
+                sample._internal_design["ssu"],
+                design.mos,
+            ]
+            if isinstance(c, str)
+        ]
     )
     if order_by is not None:
         cols += _colspec_to_list(order_by)
@@ -307,20 +386,49 @@ def _pps(
     frame = data[row_col].to_numpy()
 
     sel_idx, hits, probs, certainty = _select_pps(
-        method=method, frame=frame, n=n_norm, mos=mos_arr,
-        stratum=stratum_by_arr, certainty_threshold=certainty_threshold, rstate=rng,
+        method=method,
+        frame=frame,
+        n=n_norm,
+        mos=mos_arr,
+        stratum=stratum_by_arr,
+        certainty_threshold=certainty_threshold,
+        rstate=rng,
     )
 
     return _pps_writeback(
-        sample, src_df, data, design, sel_idx, hits, probs, certainty,
-        row_col=row_col, prob_name=prob_name, wgt_name=wgt_name,
-        hit_name=hit_name, wr=wr, where_mask=where_mask,
+        sample,
+        src_df,
+        data,
+        design,
+        sel_idx,
+        hits,
+        probs,
+        certainty,
+        row_col=row_col,
+        prob_name=prob_name,
+        wgt_name=wgt_name,
+        hit_name=hit_name,
+        wr=wr,
+        where_mask=where_mask,
     )
 
 
 def _pps_writeback(
-    sample, src_df, data, design, sel_idx, hits, probs, certainty,
-    *, row_col, prob_name, wgt_name, hit_name, wr, where_mask,
+    sample,
+    src_df,
+    data,
+    design,
+    sel_idx,
+    hits,
+    probs,
+    certainty,
+    *,
+    row_col,
+    prob_name,
+    wgt_name,
+    hit_name,
+    wr,
+    where_mask,
 ):
     """Merge PPS selection results back onto the Sample."""
     is_chaining = design.prob == SVY_PROB_STAGE1
@@ -332,9 +440,17 @@ def _pps_writeback(
     if is_chaining:
         assert design.prob is not None
         temp = _apply_chaining_writeback(
-            src_df=src_df, sel_idx=sel_idx, hits=hits, probs=probs, certainty=certainty,
-            row_col=row_col, prev_prob_col=design.prob,
-            out_prob_col=out_prob_col, out_wgt_col=wgt_col, hit_col=hit_col, is_pps=True,
+            src_df=src_df,
+            sel_idx=sel_idx,
+            hits=hits,
+            probs=probs,
+            certainty=certainty,
+            row_col=row_col,
+            prev_prob_col=design.prob,
+            out_prob_col=out_prob_col,
+            out_wgt_col=wgt_col,
+            hit_col=hit_col,
+            is_pps=True,
         )
         df_new = src_df.join(other=temp, on=row_col, how=join_how).with_columns(
             pl.col(row_col).cast(pl.Int64)
@@ -345,20 +461,26 @@ def _pps_writeback(
             prev = pl.DataFrame({row_col: sel_idx}).join(
                 other=src_df.select(row_col, prev_prob_col), on=row_col, how="left"
             )
-            prev_probs = prev[prev_prob_col].fill_null(1.0).to_numpy().astype(np.float64, copy=False)
+            prev_probs = (
+                prev[prev_prob_col].fill_null(1.0).to_numpy().astype(np.float64, copy=False)
+            )
             probs = probs * prev_probs
         design = design.fill_missing(prob=out_prob_col)
-        temp = pl.DataFrame({
-            row_col: sel_idx,
-            out_prob_col: probs.astype(np.float64, copy=False),
-            hit_col: hits.astype(np.int_, copy=False),
-            SVY_CERTAINTY: certainty,
-        }).cast({
-            row_col: src_df[row_col].dtype,
-            out_prob_col: pl.Float64,
-            hit_col: pl.Int64,
-            SVY_CERTAINTY: pl.Boolean,
-        })
+        temp = pl.DataFrame(
+            {
+                row_col: sel_idx,
+                out_prob_col: probs.astype(np.float64, copy=False),
+                hit_col: hits.astype(np.int_, copy=False),
+                SVY_CERTAINTY: certainty,
+            }
+        ).cast(
+            {
+                row_col: src_df[row_col].dtype,
+                out_prob_col: pl.Float64,
+                hit_col: pl.Int64,
+                SVY_CERTAINTY: pl.Boolean,
+            }
+        )
         df_new = src_df.join(other=temp, on=row_col, how=join_how).with_columns(
             pl.col(row_col).cast(pl.Int64)
         )
@@ -370,9 +492,7 @@ def _pps_writeback(
                 .alias(wgt_col)
             )
         else:
-            df_new = df_new.with_columns(
-                (1.0 / pl.col(out_prob_col)).alias(wgt_col)
-            )
+            df_new = df_new.with_columns((1.0 / pl.col(out_prob_col)).alias(wgt_col))
 
     sample._data = df_new
     if is_chaining:

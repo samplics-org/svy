@@ -31,7 +31,11 @@ from svy.selection.pps import pps_rs as _pps_rs
 from svy.selection.pps import pps_sys as _pps_sys
 from svy.selection.pps import pps_wr as _pps_wr
 from svy.selection.srs import srs as _srs
-from svy.selection._group_keys import _compute_pop_sizes, _build_group_keys, _normalize_n_for_groups
+from svy.selection._group_keys import (
+    _compute_pop_sizes,
+    _build_group_keys,
+    _normalize_n_for_groups,
+)
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample
@@ -71,11 +75,18 @@ class Selection:
             in the output with prob=null, weight=null, hit=null.
         """
         return _srs(
-            self._sample, n,
-            by=by, where=where, wr=wr,
-            order_by=order_by, order_type=order_type,
-            prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name,
-            rstate=rstate, drop_nulls=drop_nulls,
+            self._sample,
+            n,
+            by=by,
+            where=where,
+            wr=wr,
+            order_by=order_by,
+            order_type=order_type,
+            prob_name=prob_name,
+            wgt_name=wgt_name,
+            hit_name=hit_name,
+            rstate=rstate,
+            drop_nulls=drop_nulls,
         )
 
     # ------------------------------------------------------------------ #
@@ -107,11 +118,18 @@ class Selection:
             are kept with null selection columns.
         """
         return _pps_sys(
-            self._sample, n,
+            self._sample,
+            n,
             certainty_threshold=certainty_threshold,
-            by=by, where=where, order_by=order_by, order_type=order_type,
-            prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name,
-            rstate=rstate, drop_nulls=drop_nulls,
+            by=by,
+            where=where,
+            order_by=order_by,
+            order_type=order_type,
+            prob_name=prob_name,
+            wgt_name=wgt_name,
+            hit_name=hit_name,
+            rstate=rstate,
+            drop_nulls=drop_nulls,
         )
 
     def pps_wr(
@@ -129,10 +147,16 @@ class Selection:
     ) -> "Sample":
         """PPS sampling with replacement."""
         return _pps_wr(
-            self._sample, n,
+            self._sample,
+            n,
             certainty_threshold=certainty_threshold,
-            by=by, where=where, prob_name=prob_name, wgt_name=wgt_name,
-            hit_name=hit_name, rstate=rstate, drop_nulls=drop_nulls,
+            by=by,
+            where=where,
+            prob_name=prob_name,
+            wgt_name=wgt_name,
+            hit_name=hit_name,
+            rstate=rstate,
+            drop_nulls=drop_nulls,
         )
 
     def pps_brewer(
@@ -150,10 +174,16 @@ class Selection:
     ) -> "Sample":
         """Brewer PPS sampling without replacement."""
         return _pps_brewer(
-            self._sample, n,
+            self._sample,
+            n,
             certainty_threshold=certainty_threshold,
-            by=by, where=where, prob_name=prob_name, wgt_name=wgt_name,
-            hit_name=hit_name, rstate=rstate, drop_nulls=drop_nulls,
+            by=by,
+            where=where,
+            prob_name=prob_name,
+            wgt_name=wgt_name,
+            hit_name=hit_name,
+            rstate=rstate,
+            drop_nulls=drop_nulls,
         )
 
     def pps_murphy(
@@ -171,10 +201,16 @@ class Selection:
     ) -> "Sample":
         """Murphy PPS sampling without replacement (n=2 only)."""
         return _pps_murphy(
-            self._sample, n,
+            self._sample,
+            n,
             certainty_threshold=certainty_threshold,
-            by=by, where=where, prob_name=prob_name, wgt_name=wgt_name,
-            hit_name=hit_name, rstate=rstate, drop_nulls=drop_nulls,
+            by=by,
+            where=where,
+            prob_name=prob_name,
+            wgt_name=wgt_name,
+            hit_name=hit_name,
+            rstate=rstate,
+            drop_nulls=drop_nulls,
         )
 
     def pps_rs(
@@ -192,10 +228,16 @@ class Selection:
     ) -> "Sample":
         """Rao-Sampford PPS sampling without replacement."""
         return _pps_rs(
-            self._sample, n,
+            self._sample,
+            n,
             certainty_threshold=certainty_threshold,
-            by=by, where=where, prob_name=prob_name, wgt_name=wgt_name,
-            hit_name=hit_name, rstate=rstate, drop_nulls=drop_nulls,
+            by=by,
+            where=where,
+            prob_name=prob_name,
+            wgt_name=wgt_name,
+            hit_name=hit_name,
+            rstate=rstate,
+            drop_nulls=drop_nulls,
         )
 
     # ------------------------------------------------------------------ #

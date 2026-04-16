@@ -177,9 +177,7 @@ def add_stage(
         "ssu": None,
         "suffix": s1._internal_design.get("suffix", "_svy_internal_cols_concatenated"),
     }
-    combined._warnings = (
-        next_stage._warnings if isinstance(next_stage, _Sample) else s1._warnings
-    )
+    combined._warnings = next_stage._warnings if isinstance(next_stage, _Sample) else s1._warnings
     combined._print_width = None
     combined._singleton_result = None
     combined._stage_out_prob = result.out_prob_col

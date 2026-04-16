@@ -163,8 +163,7 @@ def _combine_stages(
             hint=(
                 f"{len(unmatched)} PSU(s) in next_stage have no match in stage-1. "
                 "All next_stage PSUs must be present in the selected stage-1 sample. "
-                f"Sample of unmatched: {sample_unmatched}"
-                + (" ..." if len(unmatched) > 5 else "")
+                f"Sample of unmatched: {sample_unmatched}" + (" ..." if len(unmatched) > 5 else "")
             ),
         )
 

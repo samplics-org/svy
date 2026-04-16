@@ -2,15 +2,17 @@
 name = "svy-io"
 version = "0.1.0"
 description = "SAS/SPSS/Stata I/O with Polars, powered by ReadStat + PyO3"
-homepage = "https://svylab.com/docs/svy-io"
 readme = "README.md"
-license = { file = "LICENSE.md" }
+license = { file = "LICENSE" }
 authors = [{ name = "Samplics LLC" }]
 classifiers = [
   "License :: OSI Approved :: MIT License",
 ]
 requires-python = ">=3.11"
 dependencies = ["polars[pyarrow]>=1.34.0"]
+
+[project.urls]
+homepage = "https://svylab.com/docs/svy-io"
 
 [build-system]
 requires = ["maturin>=1.5,<2.0"]

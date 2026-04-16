@@ -21,7 +21,7 @@ from svy.core.types import DF, Category, Number
 from svy.errors import MethodError
 
 
-_SEP = "__by__"          # internal composite-key separator
+_SEP = "__by__"  # internal composite-key separator
 
 
 def _unique_as_str(a: Iterable[object]) -> list[str]:
@@ -267,7 +267,7 @@ def _normalize_n_for_groups(
     missing_from_G = sorted(G_set - n_keys)
     missing_from_B = sorted(B_set - n_keys) if B else []
     missing_from_S = sorted(S_set - n_keys) if S else []
-    extra_keys     = sorted(n_keys - G_set - B_set - S_set)
+    extra_keys = sorted(n_keys - G_set - B_set - S_set)
 
     if missing_from_B and not extra_keys:
         detail = (
@@ -276,8 +276,7 @@ def _normalize_n_for_groups(
         )
     elif missing_from_S and not extra_keys:
         detail = (
-            f"Keys look like stratum keys but are incomplete. "
-            f"Missing strata: {missing_from_S}."
+            f"Keys look like stratum keys but are incomplete. Missing strata: {missing_from_S}."
         )
     elif missing_from_G and not extra_keys:
         detail = (
@@ -285,10 +284,7 @@ def _normalize_n_for_groups(
             f"Missing cells: {missing_from_G}."
         )
     else:
-        detail = (
-            f"Keys do not match any valid universe. "
-            f"Unrecognised keys: {extra_keys}."
-        )
+        detail = f"Keys do not match any valid universe. Unrecognised keys: {extra_keys}."
 
     raise MethodError.invalid_choice(
         where="Sample.sampling",

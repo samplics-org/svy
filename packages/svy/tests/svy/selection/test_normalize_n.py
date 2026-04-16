@@ -70,25 +70,24 @@ from svy.selection._group_keys import _coerce_key, _normalize_n_for_groups
 # ---------------------------------------------------------------------------
 
 # Ungrouped
-UG   = dict(G=[], B=[], S=[])
+UG = dict(G=[], B=[], S=[])
 
 # Stratum only: region = North / South
-SO   = dict(G=["North", "South"], B=[], S=["North", "South"])
+SO = dict(G=["North", "South"], B=[], S=["North", "South"])
 
 # By only: area = urban / rural (no design stratum)
-BO   = dict(G=["urban", "rural"], B=["urban", "rural"], S=[])
+BO = dict(G=["urban", "rural"], B=["urban", "rural"], S=[])
 
 # Stratum + by: region x area
-SB   = dict(
-    G=["North__by__urban", "North__by__rural",
-       "South__by__urban", "South__by__rural"],
+SB = dict(
+    G=["North__by__urban", "North__by__rural", "South__by__urban", "South__by__rural"],
     B=["urban", "rural"],
     S=["North", "South"],
 )
 
 # Multi-column stratum (province x zone) + by area
 # S values are already __by__-joined composite stratum labels
-MC   = dict(
+MC = dict(
     G=[
         "Dakar__by__Zone1__by__urban",
         "Dakar__by__Zone1__by__rural",
@@ -101,6 +100,7 @@ MC   = dict(
     S=["Dakar__by__Zone1", "Dakar__by__Zone2", "Thies__by__Zone1"],
 )
 
+
 def nn(n, *, G, B, S):
     """Shorthand."""
     return _normalize_n_for_groups(n, G=G, B=B, S=S)
@@ -109,6 +109,7 @@ def nn(n, *, G, B, S):
 # ---------------------------------------------------------------------------
 # _coerce_key
 # ---------------------------------------------------------------------------
+
 
 class TestCoerceKey:
     def test_string_passthrough(self):
@@ -134,6 +135,7 @@ class TestCoerceKey:
 # Scalar n
 # ---------------------------------------------------------------------------
 
+
 class TestScalarN:
     def test_ungrouped_returns_int(self):
         assert nn(10, **UG) == 10
@@ -152,8 +154,10 @@ class TestScalarN:
     def test_stratum_and_by_broadcasts_to_all_cells(self):
         result = nn(3, **SB)
         assert result == {
-            "North__by__urban": 3, "North__by__rural": 3,
-            "South__by__urban": 3, "South__by__rural": 3,
+            "North__by__urban": 3,
+            "North__by__rural": 3,
+            "South__by__urban": 3,
+            "South__by__rural": 3,
         }
 
     def test_zero_scalar_broadcasts(self):
@@ -164,6 +168,7 @@ class TestScalarN:
 # ---------------------------------------------------------------------------
 # Dict n -- ungrouped (Problem 1)
 # ---------------------------------------------------------------------------
+
 
 class TestDictUngrouped:
     def test_dict_with_no_grouping_raises(self):
@@ -188,15 +193,24 @@ class TestDictUngrouped:
 # Dict n -- exact G match
 # ---------------------------------------------------------------------------
 
+
 class TestExactGMatch:
     def test_all_cells_passthrough(self):
-        n = {"North__by__urban": 5, "North__by__rural": 3,
-             "South__by__urban": 4, "South__by__rural": 2}
+        n = {
+            "North__by__urban": 5,
+            "North__by__rural": 3,
+            "South__by__urban": 4,
+            "South__by__rural": 2,
+        }
         assert nn(n, **SB) == n
 
     def test_all_cells_with_explicit_zero(self):
-        n = {"North__by__urban": 5, "North__by__rural": 0,
-             "South__by__urban": 4, "South__by__rural": 0}
+        n = {
+            "North__by__urban": 5,
+            "North__by__rural": 0,
+            "South__by__urban": 4,
+            "South__by__rural": 0,
+        }
         result = nn(n, **SB)
         assert result["North__by__rural"] == 0
         assert result["South__by__rural"] == 0
@@ -215,12 +229,15 @@ class TestExactGMatch:
 # Dict n -- exact B match (by-level broadcast)
 # ---------------------------------------------------------------------------
 
+
 class TestExactBMatch:
     def test_complete_b_keys_with_stratum_broadcasts(self):
         result = nn({"urban": 10, "rural": 15}, **SB)
         assert result == {
-            "North__by__urban": 10, "North__by__rural": 15,
-            "South__by__urban": 10, "South__by__rural": 15,
+            "North__by__urban": 10,
+            "North__by__rural": 15,
+            "South__by__urban": 10,
+            "South__by__rural": 15,
         }
 
     def test_complete_b_keys_no_stratum_passthrough(self):
@@ -253,12 +270,15 @@ class TestExactBMatch:
 # Dict n -- exact S match (stratum broadcast)
 # ---------------------------------------------------------------------------
 
+
 class TestExactSMatch:
     def test_complete_s_keys_with_by_broadcasts(self):
         result = nn({"North": 3, "South": 5}, **SB)
         assert result == {
-            "North__by__urban": 3, "North__by__rural": 3,
-            "South__by__urban": 5, "South__by__rural": 5,
+            "North__by__urban": 3,
+            "North__by__rural": 3,
+            "South__by__urban": 5,
+            "South__by__rural": 5,
         }
 
     def test_complete_s_keys_no_by_passthrough(self):
@@ -290,6 +310,7 @@ class TestExactSMatch:
 # ---------------------------------------------------------------------------
 # Dict n -- sublevel component match
 # ---------------------------------------------------------------------------
+
 
 class TestSublevelMatch:
     def test_all_cells_matched_by_component(self):
@@ -324,6 +345,7 @@ class TestSublevelMatch:
 # ---------------------------------------------------------------------------
 # Tuple key support
 # ---------------------------------------------------------------------------
+
 
 class TestTupleKeys:
     def test_s_level_tuple_keys_complete(self):
@@ -361,8 +383,7 @@ class TestTupleKeys:
 
     def test_mixed_tuple_and_string_keys(self):
         """Mixing tuple and string keys for the same level is valid."""
-        result = nn({("Dakar", "Zone1"): 5, "Dakar__by__Zone2": 3, ("Thies", "Zone1"): 4},
-                    **MC)
+        result = nn({("Dakar", "Zone1"): 5, "Dakar__by__Zone2": 3, ("Thies", "Zone1"): 4}, **MC)
         assert result["Dakar__by__Zone1__by__urban"] == 5
         assert result["Dakar__by__Zone2__by__rural"] == 3
 
@@ -374,6 +395,7 @@ class TestTupleKeys:
 # ---------------------------------------------------------------------------
 # Partial / incomplete coverage (Problem 2 consolidated)
 # ---------------------------------------------------------------------------
+
 
 class TestPartialCoverage:
     def test_partial_G_raises(self):
@@ -422,6 +444,7 @@ class TestPartialCoverage:
 # ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------
+
 
 class TestEdgeCases:
     def test_single_stratum_complete(self):

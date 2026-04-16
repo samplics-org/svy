@@ -28,7 +28,6 @@ from svy.selection.combine_stages import _apply_chaining_writeback
 from svy_rs import select_srs_rs as _select_srs_rs
 
 
-
 def _encode_stratum(stratum):
     """
     Convert a numpy object/string stratum array to (label_map, i64_list).
@@ -42,6 +41,7 @@ def _encode_stratum(stratum):
     if stratum is None:
         return {}, None
     import numpy as np
+
     unique_labels = []
     seen = {}
     for v in stratum:
@@ -88,6 +88,8 @@ def _select_srs(frame, n, *, stratum, wr, rstate):
         np.asarray(hits, dtype=np.int64),
         np.asarray(probs, dtype=np.float64),
     )
+
+
 from svy.utils.checks import assert_no_missing, drop_missing
 from svy.utils.helpers import _colspec_to_list
 from svy.utils.random_state import RandomState, resolve_random_state, seed_from_random_state
@@ -109,7 +111,6 @@ if TYPE_CHECKING:
     from svy.core.sample import Sample
 
 log = logging.getLogger(__name__)
-
 
 
 # ---------------------------------------------------------------------------
@@ -140,10 +141,7 @@ def _check_output_col_names(
                 where=where,
                 method="selection",
                 reason=f"Column {col!r} already exists in the frame.",
-                hint=(
-                    f"Choose a different {param}= or rename/drop the "
-                    f"existing column first."
-                ),
+                hint=(f"Choose a different {param}= or rename/drop the existing column first."),
             )
 
 
@@ -276,7 +274,9 @@ def srs(
     # -- Guard: reject names that already exist in the frame -------------
     _check_output_col_names(
         src_df,
-        prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name,
+        prob_name=prob_name,
+        wgt_name=wgt_name,
+        hit_name=hit_name,
         where="Sample.sampling.srs",
     )
 
@@ -284,11 +284,15 @@ def srs(
     cols: list[str] = design.specified_fields()
     cols += _colspec_to_list(by)
     cols += _colspec_to_list(
-        [c for c in [
-            sample._internal_design["stratum"],
-            sample._internal_design["psu"],
-            sample._internal_design["ssu"],
-        ] if isinstance(c, str)]
+        [
+            c
+            for c in [
+                sample._internal_design["stratum"],
+                sample._internal_design["psu"],
+                sample._internal_design["ssu"],
+            ]
+            if isinstance(c, str)
+        ]
     )
     if order_by is not None:
         cols += _colspec_to_list(order_by)
@@ -335,8 +339,13 @@ def srs(
     # Guard: if where filtered out all rows, return src_df with null selection columns.
     if len(data) == 0:
         return _srs_empty_writeback(
-            sample, src_df, design,
-            prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name, wr=wr,
+            sample,
+            src_df,
+            design,
+            prob_name=prob_name,
+            wgt_name=wgt_name,
+            hit_name=hit_name,
+            wr=wr,
         )
 
     frame: npt.NDArray[np.int_] = data[row_col].to_numpy().astype(np.int_, copy=False)
@@ -346,11 +355,20 @@ def srs(
     )
 
     return _srs_writeback(
-        sample, src_df, data, design, sel_idx, hits, probs,
-        row_col=row_col, prob_name=prob_name, wgt_name=wgt_name,
-        hit_name=hit_name, wr=wr, where_mask=where_mask,
+        sample,
+        src_df,
+        data,
+        design,
+        sel_idx,
+        hits,
+        probs,
+        row_col=row_col,
+        prob_name=prob_name,
+        wgt_name=wgt_name,
+        hit_name=hit_name,
+        wr=wr,
+        where_mask=where_mask,
     )
-
 
 
 def _srs_empty_writeback(sample, src_df, design, *, prob_name, wgt_name, hit_name, wr):
@@ -366,11 +384,13 @@ def _srs_empty_writeback(sample, src_df, design, *, prob_name, wgt_name, hit_nam
     hit_col = hit_name or design.hit or SVY_HIT
 
     n = len(src_df)
-    df_new = src_df.with_columns([
-        pl.lit(None).cast(pl.Float64).alias(prob_col),
-        pl.lit(None).cast(pl.Float64).alias(wgt_col),
-        pl.lit(None).cast(pl.Int64).alias(hit_col),
-    ])
+    df_new = src_df.with_columns(
+        [
+            pl.lit(None).cast(pl.Float64).alias(prob_col),
+            pl.lit(None).cast(pl.Float64).alias(wgt_col),
+            pl.lit(None).cast(pl.Int64).alias(hit_col),
+        ]
+    )
     sample._data = df_new
     sample._design = design.fill_missing(prob=prob_col, wgt=wgt_col, hit=hit_col, wr=wr)
     return sample
@@ -382,8 +402,20 @@ def _srs_empty_writeback(sample, src_df, design, *, prob_name, wgt_name, hit_nam
 
 
 def _srs_writeback(
-    sample, src_df, data, design, sel_idx, hits, probs,
-    *, row_col, prob_name, wgt_name, hit_name, wr, where_mask,
+    sample,
+    src_df,
+    data,
+    design,
+    sel_idx,
+    hits,
+    probs,
+    *,
+    row_col,
+    prob_name,
+    wgt_name,
+    hit_name,
+    wr,
+    where_mask,
 ):
     """Merge SRS selection results back onto the Sample."""
     is_chaining = design.prob == SVY_PROB_STAGE1
@@ -394,9 +426,17 @@ def _srs_writeback(
     if is_chaining:
         assert design.prob is not None
         temp = _apply_chaining_writeback(
-            src_df=src_df, sel_idx=sel_idx, hits=hits, probs=probs, certainty=None,
-            row_col=row_col, prev_prob_col=design.prob,
-            out_prob_col=out_prob_col, out_wgt_col=wgt_col, hit_col=hit_col, is_pps=False,
+            src_df=src_df,
+            sel_idx=sel_idx,
+            hits=hits,
+            probs=probs,
+            certainty=None,
+            row_col=row_col,
+            prev_prob_col=design.prob,
+            out_prob_col=out_prob_col,
+            out_wgt_col=wgt_col,
+            hit_col=hit_col,
+            is_pps=False,
         )
         # left join so non-eligible rows stay with null selection columns
         join_how = "left" if where_mask is not None else "inner"
@@ -410,16 +450,16 @@ def _srs_writeback(
             prev_probs = prev[prob_col].fill_null(1.0).to_numpy().astype(np.float64)
             probs = probs * prev_probs
         design = design.fill_missing(prob=prob_col)
-        temp = pl.DataFrame({
-            row_col: sel_idx,
-            prob_col: probs.astype(np.float64, copy=False),
-            hit_col: hits.astype(np.int_, copy=False),
-        })
+        temp = pl.DataFrame(
+            {
+                row_col: sel_idx,
+                prob_col: probs.astype(np.float64, copy=False),
+                hit_col: hits.astype(np.int_, copy=False),
+            }
+        )
         # left join: non-eligible rows get null for prob/hit/weight
         join_how = "left" if where_mask is not None else "inner"
-        df_new = src_df.join(
-            other=temp, left_on=design.row_index, right_on=row_col, how=join_how
-        )
+        df_new = src_df.join(other=temp, left_on=design.row_index, right_on=row_col, how=join_how)
         if join_how == "left":
             # weight is 1/prob only where prob is not null
             df_new = df_new.with_columns(
