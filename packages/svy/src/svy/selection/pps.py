@@ -25,7 +25,52 @@ from svy.core.constants import (
 from svy.core.enumerations import PPSMethod
 from svy.core.types import DF, Category, Number, WhereArg
 from svy.selection.combine_stages import _apply_chaining_writeback
-from svy.engine.sampling.pps import _select_pps
+from svy_rs import select_pps_rs as _select_pps_rs
+
+
+def _select_pps(*, method, frame, n, mos, stratum, certainty_threshold, rstate):
+    """Adapter: translate old Python engine calling convention to Rust."""
+    import numpy as np
+    from svy.core.enumerations import PPSMethod
+    from svy.utils.random_state import seed_from_random_state
+
+    method_str = {
+        PPSMethod.SYS:     "sys",
+        PPSMethod.WR:      "wr",
+        PPSMethod.BREWER:  "brewer",
+        PPSMethod.MURPHY:  "murphy",
+        PPSMethod.RS:      "rs",
+    }[method]
+
+    seed = seed_from_random_state(rstate)
+
+    if isinstance(n, dict):
+        n_scalar = None
+        n_map = {str(k): int(v) for k, v in n.items()}
+    else:
+        n_scalar = int(n)
+        n_map = None
+
+    # stratum_by_arr contains the composite group key strings (e.g. "North__by__urban")
+    # encoded as object dtype numpy array; convert to i64 index for Rust
+    strat_int, strat_list = _encode_stratum(stratum)
+
+    sel, hits, probs, cert = _select_pps_rs(
+        frame=frame.tolist(),
+        mos=mos.tolist(),
+        n_scalar=n_scalar,
+        n_map=(_remap_n_map(n_map, strat_int) if n_map is not None else None),
+        stratum=strat_list,
+        method=method_str,
+        certainty_threshold=certainty_threshold,
+        seed=seed,
+    )
+    return (
+        np.asarray(sel, dtype=np.int64),
+        np.asarray(hits, dtype=np.int64),
+        np.asarray(probs, dtype=np.float64),
+        np.asarray(cert, dtype=bool),
+    )
 from svy.utils.checks import assert_no_missing, drop_missing
 from svy.utils.helpers import _colspec_to_list
 from svy.utils.random_state import RandomState, resolve_random_state, seed_from_random_state
@@ -41,7 +86,7 @@ from svy.selection._helpers import (
     _warn_n_exceeds_population,
     _warn_zero_mos,
 )
-from svy.selection.srs import _apply_where, _check_output_col_names, _ensure_row_index
+from svy.selection.srs import _apply_where, _check_output_col_names, _encode_stratum, _ensure_row_index, _remap_n_map
 from svy.errors import MethodError
 
 if TYPE_CHECKING:

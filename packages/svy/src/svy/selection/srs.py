@@ -25,7 +25,69 @@ from svy.core.constants import (
 )
 from svy.core.types import DF, Category, Number, WhereArg
 from svy.selection.combine_stages import _apply_chaining_writeback
-from svy.engine.sampling.srs import _select_srs
+from svy_rs import select_srs_rs as _select_srs_rs
+
+
+
+def _encode_stratum(stratum):
+    """
+    Convert a numpy object/string stratum array to (label_map, i64_list).
+
+    The Rust API takes i64 stratum labels and i64-keyed n_map.
+    We assign each unique string label a stable integer index and return
+    both the mapping and the encoded list.
+
+    Returns (label_to_int: dict, encoded: list[int] | None)
+    """
+    if stratum is None:
+        return {}, None
+    import numpy as np
+    unique_labels = []
+    seen = {}
+    for v in stratum:
+        s = str(v)
+        if s not in seen:
+            seen[s] = len(unique_labels)
+            unique_labels.append(s)
+    encoded = [seen[str(v)] for v in stratum]
+    return seen, encoded
+
+
+def _remap_n_map(n_map, label_to_int):
+    """Remap string n_map keys to their i64 encoding."""
+    return {label_to_int[k]: v for k, v in n_map.items() if k in label_to_int}
+
+
+def _select_srs(frame, n, *, stratum, wr, rstate):
+    """Adapter: translate old Python engine calling convention to Rust."""
+    import numpy as np
+    from svy.utils.random_state import seed_from_random_state
+
+    seed = seed_from_random_state(rstate)
+
+    # n_norm is either int or dict[str, int]
+    if isinstance(n, dict):
+        n_scalar = None
+        n_map = {str(k): int(v) for k, v in n.items()}
+    else:
+        n_scalar = int(n)
+        n_map = None
+
+    strat_int, strat_list = _encode_stratum(stratum)
+
+    sel, hits, probs = _select_srs_rs(
+        frame=frame.tolist(),
+        n_scalar=n_scalar,
+        n_map=(_remap_n_map(n_map, strat_int) if n_map is not None else None),
+        stratum=strat_list,
+        wr=wr,
+        seed=seed,
+    )
+    return (
+        np.asarray(sel, dtype=np.int64),
+        np.asarray(hits, dtype=np.int64),
+        np.asarray(probs, dtype=np.float64),
+    )
 from svy.utils.checks import assert_no_missing, drop_missing
 from svy.utils.helpers import _colspec_to_list
 from svy.utils.random_state import RandomState, resolve_random_state, seed_from_random_state

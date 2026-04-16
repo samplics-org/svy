@@ -24,7 +24,7 @@ dependencies = [
   "numpy>=2.3",
   "msgspec>=0.19.0",
   "polars[pyarrow]>=1.33.1",
-  "svy-rs>=0.6.2",
+  "svy-rs>=0.7.0",
   "scipy>=1.16.0",
   "svy-io>=0.0.10a",
 ]
@@ -32,7 +32,7 @@ dependencies = [
 [tool.uv.sources]
 # svy-io = { path = "../svyreadstat", editable = true }
 # svy-io = { git = "ssh://git@github.com/samplics-org/svy-io.git", rev = "main" }
-# svy-rs = { path = "../svy-rs", editable = true }
+svy-rs = { path = "../svy-rs", editable = true }
 
 [project.optional-dependencies]
 report = ["rich>=14.1", "great-tables>=0.18"]
