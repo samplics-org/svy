@@ -57,16 +57,9 @@ class Estimation:
 
     def _get_factorized_design(self) -> dict[str, Any]:
         if self._design_cache is not None:
-            _d = self._sample._data
-            _h = (
-                cast(pl.DataFrame, _d.collect()).height
-                if isinstance(_d, pl.LazyFrame)
-                else cast(pl.DataFrame, _d).height
-            )
-            if self._design_cache["n_rows"] == _h:
+            if self._design_cache["_data_id"] == id(self._sample._data):
                 return self._design_cache
-            else:
-                self._design_cache = None
+            self._design_cache = None
 
         _raw_data = self._sample._data
         local_data: pl.DataFrame = (
@@ -77,7 +70,7 @@ class Estimation:
         design = self._sample._design
 
         cache: dict[str, Any] = {
-            "n_rows": local_data.height,
+            "_data_id": id(self._sample._data),
             "stratum": None,
             "psu": None,
             "ssu": None,
@@ -144,16 +137,9 @@ class Estimation:
 
     def _get_polars_design_info(self) -> dict[str, Any]:
         if self._polars_cache is not None:
-            _d2 = self._sample._data
-            _h2 = (
-                cast(pl.DataFrame, _d2.collect()).height
-                if isinstance(_d2, pl.LazyFrame)
-                else cast(pl.DataFrame, _d2).height
-            )
-            if self._polars_cache["n_rows"] == _h2:
+            if self._polars_cache["_data_id"] == id(self._sample._data):
                 return self._polars_cache
-            else:
-                self._polars_cache = None
+            self._polars_cache = None
 
         design = self._sample._design
         _data_raw = self._sample._data
@@ -252,14 +238,8 @@ class Estimation:
                 ssu_col=ssu_col,
             )
 
-        _fin = self._sample._data
-        _fin_h = (
-            cast(pl.DataFrame, _fin.collect()).height
-            if isinstance(_fin, pl.LazyFrame)
-            else cast(pl.DataFrame, _fin).height
-        )
         self._polars_cache = {
-            "n_rows": _fin_h,
+            "_data_id": id(self._sample._data),
             "data": data,
             "strata_col": strata_col,
             "psu_col": psu_col,
@@ -612,52 +592,121 @@ class Estimation:
         x_name: str | None = None,
         ci_method: str = "logit",
     ) -> list[ParamEst]:
-        est_list = []
-        for row in result_df.iter_rows(named=True):
-            est = row["est"]
-            se = row["se"]
-            df_val = row["df"]
-            n_val = row.get("n", 0)
-            cv = se / est if est != 0 else float("inf")
-            t_crit = stats.t.ppf(1 - alpha / 2, df_val) if df_val > 0 else 1.96
-            is_prop = (param == PopParam.PROP) or as_factor
-            if is_prop:
-                lci, uci = self._compute_prop_ci(
-                    p=est,
-                    se=se,
-                    alpha=alpha,
-                    df=df_val,
-                    n=n_val,
-                    method=ci_method,
-                )
-            else:
-                lci = est - t_crit * se
-                uci = est + t_crit * se
-            deff_val = row.get("deff") if deff else None
-            by_level = None
-            if by_col and by_col in row:
-                by_level = (row[by_col],)
-            y_level = None
-            if as_factor and "level" in row:
-                level_val = row["level"]
+        n_rows = result_df.height
+        if n_rows == 0:
+            return []
+
+        est_arr = result_df["est"].to_numpy()
+        se_arr = result_df["se"].to_numpy()
+        df_arr = result_df["df"].to_numpy().astype(np.float64)
+        n_arr = (
+            result_df["n"].to_numpy()
+            if "n" in result_df.columns
+            else np.zeros(n_rows, dtype=np.int64)
+        )
+        deff_arr = result_df["deff"].to_numpy() if (deff and "deff" in result_df.columns) else None
+
+        pos_df = df_arr > 0
+        t_crits = np.where(
+            pos_df, stats.t.ppf(1.0 - alpha / 2.0, np.where(pos_df, df_arr, 1.0)), 1.96
+        )
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            cv_arr = np.where(est_arr != 0, se_arr / est_arr, np.inf)
+
+        by_tuple = (by_col,) if by_col else None
+
+        by_levels: list = [None] * n_rows
+        if by_col and by_col in result_df.columns:
+            by_levels = [(v,) for v in result_df[by_col].to_list()]
+
+        y_levels: list = [None] * n_rows
+        if as_factor and "level" in result_df.columns:
+            for i, lv in enumerate(result_df["level"].to_list()):
                 try:
-                    y_level = int(level_val)
+                    y_levels[i] = int(lv)
                 except (ValueError, TypeError):
-                    y_level = level_val
-            p = ParamEst(
-                y=y_name,
-                est=est,
-                se=se,
-                cv=cv,
-                lci=lci,
-                uci=uci,
-                deff=deff_val,
-                by=(by_col,) if by_col else None,
-                by_level=by_level,
-                y_level=y_level,
-                x=x_name,
+                    y_levels[i] = lv
+
+        is_prop = (param == PopParam.PROP) or as_factor
+
+        if not is_prop:
+            lci_arr = est_arr - t_crits * se_arr
+            uci_arr = est_arr + t_crits * se_arr
+            return [
+                ParamEst(
+                    y=y_name,
+                    est=float(est_arr[i]),
+                    se=float(se_arr[i]),
+                    cv=float(cv_arr[i]),
+                    lci=float(lci_arr[i]),
+                    uci=float(uci_arr[i]),
+                    deff=float(deff_arr[i]) if deff_arr is not None else None,
+                    by=by_tuple,
+                    by_level=by_levels[i],
+                    y_level=y_levels[i],
+                    x=x_name,
+                )
+                for i in range(n_rows)
+            ]
+
+        ci_method_norm = self._normalize_ci_method(ci_method)
+
+        if ci_method_norm == "logit":
+            p_arr = est_arr
+            valid = (p_arr > 0) & (p_arr < 1)
+            lci_arr = p_arr.copy()
+            uci_arr = p_arr.copy()
+            if valid.any():
+                pv, sev, tv = p_arr[valid], se_arr[valid], t_crits[valid]
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    scale = np.where(sev > 0, sev / (pv * (1.0 - pv)), 0.0)
+                logit_p = np.log(pv / (1.0 - pv))
+                lci_arr[valid] = 1.0 / (1.0 + np.exp(-(logit_p - tv * scale)))
+                uci_arr[valid] = 1.0 / (1.0 + np.exp(-(logit_p + tv * scale)))
+            return [
+                ParamEst(
+                    y=y_name,
+                    est=float(est_arr[i]),
+                    se=float(se_arr[i]),
+                    cv=float(cv_arr[i]),
+                    lci=float(lci_arr[i]),
+                    uci=float(uci_arr[i]),
+                    deff=float(deff_arr[i]) if deff_arr is not None else None,
+                    by=by_tuple,
+                    by_level=by_levels[i],
+                    y_level=y_levels[i],
+                    x=x_name,
+                )
+                for i in range(n_rows)
+            ]
+
+        # beta / korn-graubard / wilson — per-row scalar fallback
+        est_list = []
+        for i in range(n_rows):
+            lci, uci = self._compute_prop_ci(
+                p=float(est_arr[i]),
+                se=float(se_arr[i]),
+                alpha=alpha,
+                df=int(df_arr[i]),
+                n=int(n_arr[i]),
+                method=ci_method_norm,
             )
-            est_list.append(p)
+            est_list.append(
+                ParamEst(
+                    y=y_name,
+                    est=float(est_arr[i]),
+                    se=float(se_arr[i]),
+                    cv=float(cv_arr[i]),
+                    lci=lci,
+                    uci=uci,
+                    deff=float(deff_arr[i]) if deff_arr is not None else None,
+                    by=by_tuple,
+                    by_level=by_levels[i],
+                    y_level=y_levels[i],
+                    x=x_name,
+                )
+            )
         return est_list
 
     def _median_result_to_param_est(
@@ -669,41 +718,93 @@ class Estimation:
         data,
         weight_col,
     ) -> list[ParamEst]:
+        n_rows = result_df.height
+        if n_rows == 0:
+            return []
+
+        if by_col and by_col in result_df.columns:
+            domain_vals = result_df[by_col].to_list()
+            unique_domains = list(dict.fromkeys(domain_vals))
+        else:
+            domain_vals = [None] * n_rows
+            unique_domains = [None]
+
+        domain_cache: dict = {}
+        for dv in unique_domains:
+            sub = (
+                data.filter(pl.col(by_col) == dv).select([y_name, weight_col]).drop_nulls()
+                if dv is not None
+                else data.select([y_name, weight_col]).drop_nulls()
+            )
+            if sub.height == 0:
+                domain_cache[dv] = None
+                continue
+            sub_sorted = sub.sort(y_name)
+            y_vals = sub_sorted[y_name].to_numpy()
+            w_vals = sub_sorted[weight_col].to_numpy()
+            cumsum = np.cumsum(w_vals)
+            total = cumsum[-1]
+            domain_cache[dv] = (y_vals, cumsum / total) if total > 0 else None
+
+        est_vals = result_df["est"].to_list()
+        se_vals = result_df["se"].to_list()
+        df_vals = result_df["df"].to_list()
+        by_tuple = (by_col,) if by_col else None
         est_list = []
-        for row in result_df.iter_rows(named=True):
-            est = row["est"]
-            se_p = row["se"]
-            df_val = row["df"]
-            t_crit = stats.t.ppf(1 - alpha / 2, df_val) if df_val > 0 else 1.96
+
+        for i in range(n_rows):
+            est = float(est_vals[i])
+            se_p = float(se_vals[i])
+            df_val = int(df_vals[i])
+            dv = domain_vals[i]
+
+            t_crit = stats.t.ppf(1.0 - alpha / 2.0, df_val) if df_val > 0 else 1.96
             p_lower = max(0.0, 0.5 - t_crit * se_p)
             p_upper = min(1.0, 0.5 + t_crit * se_p)
-            if by_col and by_col in row:
-                domain_val = row[by_col]
-                domain_data = data.filter(pl.col(by_col) == domain_val)
+
+            cached = domain_cache.get(dv)
+            if cached is None:
+                lci = uci = float("nan")
             else:
-                domain_data = data
-            lci = self._invert_cdf(domain_data, y_name, weight_col, p_lower)
-            uci = self._invert_cdf(domain_data, y_name, weight_col, p_upper)
-            se_q = (uci - lci) / (2 * t_crit) if t_crit > 0 else se_p
+                y_sorted, cdf = cached
+                lci = self._invert_cdf_sorted(y_sorted, cdf, p_lower)
+                uci = self._invert_cdf_sorted(y_sorted, cdf, p_upper)
+
+            se_q = (uci - lci) / (2.0 * t_crit) if t_crit > 0 else se_p
             cv = se_q / est if est != 0 else float("inf")
-            by_level = None
-            if by_col and by_col in row:
-                by_level = (row[by_col],)
-            p = ParamEst(
-                y=y_name,
-                est=est,
-                se=se_q,
-                cv=cv,
-                lci=lci,
-                uci=uci,
-                deff=None,
-                by=(by_col,) if by_col else None,
-                by_level=by_level,
-                y_level=None,
-                x=None,
+            est_list.append(
+                ParamEst(
+                    y=y_name,
+                    est=est,
+                    se=se_q,
+                    cv=cv,
+                    lci=lci,
+                    uci=uci,
+                    deff=None,
+                    by=by_tuple,
+                    by_level=(dv,) if dv is not None else None,
+                    y_level=None,
+                    x=None,
+                )
             )
-            est_list.append(p)
         return est_list
+
+    @staticmethod
+    def _invert_cdf_sorted(y_vals: np.ndarray, cdf: np.ndarray, p: float) -> float:
+        if p <= 0.0:
+            return float(y_vals[0])
+        if p >= 1.0:
+            return float(y_vals[-1])
+        idx = np.searchsorted(cdf, p)
+        if idx == 0:
+            return float(y_vals[0])
+        if idx >= len(y_vals):
+            return float(y_vals[-1])
+        p_low, p_high = cdf[idx - 1], cdf[idx]
+        if p_high == p_low:
+            return float(y_vals[idx])
+        frac = (p - p_low) / (p_high - p_low)
+        return float(y_vals[idx - 1] + frac * (y_vals[idx] - y_vals[idx - 1]))
 
     def _invert_cdf(self, data, y_col, weight_col, p):
         df = data.select([y_col, weight_col]).drop_nulls()
@@ -716,53 +817,47 @@ class Estimation:
         total = cumsum[-1]
         if total <= 0:
             return float("nan")
-        cdf = cumsum / total
-        if p <= 0:
-            return float(y_vals[0])
-        if p >= 1:
-            return float(y_vals[-1])
-        idx = np.searchsorted(cdf, p)
-        if idx == 0:
-            return float(y_vals[0])
-        if idx >= len(y_vals):
-            return float(y_vals[-1])
-        p_low = cdf[idx - 1]
-        p_high = cdf[idx]
-        y_low = y_vals[idx - 1]
-        y_high = y_vals[idx]
-        if p_high == p_low:
-            return float(y_high)
-        frac = (p - p_low) / (p_high - p_low)
-        return float(y_low + frac * (y_high - y_low))
+        return self._invert_cdf_sorted(y_vals, cumsum / total, p)
 
     def _replicate_median_result_to_param_est(self, result_df, y_name, alpha, by_col):
-        est_list = []
-        for row in result_df.iter_rows(named=True):
-            est = row["est"]
-            se = row["se"]
-            df_val = row["df"]
-            cv = se / est if est != 0 else float("inf")
-            t_crit = stats.t.ppf(1 - alpha / 2, df_val) if df_val > 0 else 1.96
-            lci = est - t_crit * se
-            uci = est + t_crit * se
-            by_level = None
-            if by_col and by_col in row:
-                by_level = (row[by_col],)
-            p = ParamEst(
+        n_rows = result_df.height
+        if n_rows == 0:
+            return []
+
+        est_arr = result_df["est"].to_numpy()
+        se_arr = result_df["se"].to_numpy()
+        df_arr = result_df["df"].to_numpy().astype(np.float64)
+
+        pos_df = df_arr > 0
+        t_crits = np.where(
+            pos_df, stats.t.ppf(1.0 - alpha / 2.0, np.where(pos_df, df_arr, 1.0)), 1.96
+        )
+        lci_arr = est_arr - t_crits * se_arr
+        uci_arr = est_arr + t_crits * se_arr
+        with np.errstate(divide="ignore", invalid="ignore"):
+            cv_arr = np.where(est_arr != 0, se_arr / est_arr, np.inf)
+
+        by_tuple = (by_col,) if by_col else None
+        by_levels: list = [None] * n_rows
+        if by_col and by_col in result_df.columns:
+            by_levels = [(v,) for v in result_df[by_col].to_list()]
+
+        return [
+            ParamEst(
                 y=y_name,
-                est=est,
-                se=se,
-                cv=cv,
-                lci=lci,
-                uci=uci,
+                est=float(est_arr[i]),
+                se=float(se_arr[i]),
+                cv=float(cv_arr[i]),
+                lci=float(lci_arr[i]),
+                uci=float(uci_arr[i]),
                 deff=None,
-                by=(by_col,) if by_col else None,
-                by_level=by_level,
+                by=by_tuple,
+                by_level=by_levels[i],
                 y_level=None,
                 x=None,
             )
-            est_list.append(p)
-        return est_list
+            for i in range(n_rows)
+        ]
 
     def _build_estimate_result_light(
         self,

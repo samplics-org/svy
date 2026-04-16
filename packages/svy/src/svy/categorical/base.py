@@ -230,16 +230,12 @@ class Categorical:
         psu_col = f"psu{_INTERNAL_CONCAT_SUFFIX}" if design.psu is not None else None
         ssu_col = f"ssu{_INTERNAL_CONCAT_SUFFIX}" if design.ssu is not None else None
 
-        # Cast columns to correct types
-        concat_data = concat_data.with_columns(pl.col(rowvar).cast(pl.String))
-        if colvar:
-            concat_data = concat_data.with_columns(pl.col(colvar).cast(pl.String))
-        if strata_col and strata_col in concat_data.columns:
-            concat_data = concat_data.with_columns(pl.col(strata_col).cast(pl.String))
-        if psu_col and psu_col in concat_data.columns:
-            concat_data = concat_data.with_columns(pl.col(psu_col).cast(pl.String))
-        if ssu_col and ssu_col in concat_data.columns:
-            concat_data = concat_data.with_columns(pl.col(ssu_col).cast(pl.String))
+        # Cast all design columns to String in a single with_columns call
+        _cast_cols = [rowvar] + ([colvar] if colvar else [])
+        for _c in [strata_col, psu_col, ssu_col]:
+            if _c and _c in concat_data.columns:
+                _cast_cols.append(_c)
+        concat_data = concat_data.with_columns([pl.col(c).cast(pl.String) for c in _cast_cols])
 
         # Determine whether to compute totals (weights not normalized)
         compute_totals = abs(float(wgt_arr.sum()) - 1.0) > 1e-6
@@ -256,12 +252,11 @@ class Categorical:
             compute_totals=compute_totals,
         )
 
-        # Unpack cells DataFrame into CellEst objects
+        # Unpack cells DataFrame into CellEst objects — vectorized CI computation
         df_val = int(cells_df["df"][0]) if cells_df.height > 0 else 1
         t_crit = float(t_dist.ppf(1 - alpha / 2, df_val))
         z_crit = float(norm_dist.ppf(1 - alpha / 2))
 
-        import math
         import re
 
         _NUMERIC_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$")
@@ -277,53 +272,64 @@ class Categorical:
                     pass
             return s
 
-        cell_rows = []
-        for row in cells_df.iter_rows(named=True):
-            est = row["est"]
-            se = row["se"]
+        # Extract all columns as numpy arrays — one pass, no iter_rows
+        est_arr = cells_df["est"].to_numpy()
+        se_arr = cells_df["se"].to_numpy()
+        cv_arr = cells_df["cv"].to_numpy()
+        rowvar_arr = cells_df["rowvar"].to_list()
+        colvar_arr = cells_df["colvar"].to_list()
 
-            if compute_totals:
-                lci = est - z_crit * se
-                uci = est + z_crit * se
-            else:
-                if est <= 0 or est >= 1 or se <= 0:
-                    lci, uci = est, est
-                else:
-                    scale = se / (est * (1.0 - est))
-                    logit = math.log(est / (1 - est))
-                    lci = 1.0 / (1.0 + math.exp(-(logit - t_crit * scale)))
-                    uci = 1.0 / (1.0 + math.exp(-(logit + t_crit * scale)))
-
-            cell_rows.append(
-                CellEst(
-                    rowvar=_norm_label(row["rowvar"]),
-                    colvar=_norm_label(row["colvar"]),
-                    est=est,
-                    se=se,
-                    cv=row["cv"],
-                    lci=lci,
-                    uci=uci,
-                )
+        if compute_totals:
+            lci_arr = est_arr - z_crit * se_arr
+            uci_arr = est_arr + z_crit * se_arr
+        else:
+            # Logit CI — fully vectorized with masked ops
+            valid = (est_arr > 0) & (est_arr < 1) & (se_arr > 0)
+            # Safe denominators for masked positions
+            _p = np.where(valid, est_arr, 0.5)
+            scale = np.where(valid, se_arr / (_p * (1.0 - _p)), 0.0)
+            logit = np.where(valid, np.log(_p / (1.0 - _p)), 0.0)
+            lci_arr = np.where(
+                valid,
+                1.0 / (1.0 + np.exp(-(logit - t_crit * scale))),
+                est_arr,
             )
+            uci_arr = np.where(
+                valid,
+                1.0 / (1.0 + np.exp(-(logit + t_crit * scale))),
+                est_arr,
+            )
+
+        cell_rows = [
+            CellEst(
+                rowvar=_norm_label(rowvar_arr[i]),
+                colvar=_norm_label(colvar_arr[i]),
+                est=float(est_arr[i]),
+                se=float(se_arr[i]),
+                cv=float(cv_arr[i]),
+                lci=float(lci_arr[i]),
+                uci=float(uci_arr[i]),
+            )
+            for i in range(len(est_arr))
+        ]
 
         # Unpack stats DataFrame into TableStats (two-way only)
         tbl_stats = None
         if colvar is not None and stats_df.height > 0:
-            stats_map = {row["stat"]: row for row in stats_df.iter_rows(named=True)}
-            cs = stats_map.get("chisq", {})
-            fs = stats_map.get("f", {})
+            cs = stats_df.filter(pl.col("stat") == "chisq").row(0, named=True)
+            fs = stats_df.filter(pl.col("stat") == "f").row(0, named=True)
 
             tbl_stats = TableStats(
                 chisq=ChiSquare(
-                    df=int(cs.get("df", 0)),
-                    value=cs.get("value", 0.0),
-                    p_value=cs.get("p_value", 1.0),
+                    df=int(cs["df"]),
+                    value=cs["value"],
+                    p_value=cs["p_value"],
                 ),
                 f=FDist(
-                    df_num=fs.get("df", 0.0),
-                    df_den=fs.get("df2", 0.0),
-                    value=fs.get("value", 0.0),
-                    p_value=fs.get("p_value", 1.0),
+                    df_num=fs["df"],
+                    df_den=fs["df2"],
+                    value=fs["value"],
+                    p_value=fs["p_value"],
                 ),
             )
 
@@ -844,16 +850,10 @@ class Categorical:
         cumw = np.cumsum(w_sorted)
         midrank_sorted = cumw - w_sorted / 2.0
 
-        # Average over ties
-        rankhat_sorted = np.empty(n, dtype=np.float64)
-        i = 0
-        while i < n:
-            j = i + 1
-            while j < n and y_sorted[j] == y_sorted[i]:
-                j += 1
-            avg_midrank = np.mean(midrank_sorted[i:j])
-            rankhat_sorted[i:j] = avg_midrank
-            i = j
+        # Average over ties — vectorized with np.unique + np.bincount
+        _, inverse, counts = np.unique(y_sorted, return_inverse=True, return_counts=True)
+        group_sums = np.bincount(inverse, weights=midrank_sorted, minlength=len(counts))
+        rankhat_sorted = (group_sums / counts)[inverse]
 
         rankhat = np.empty(n, dtype=np.float64)
         rankhat[ii] = rankhat_sorted

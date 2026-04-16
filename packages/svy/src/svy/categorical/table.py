@@ -740,21 +740,17 @@ class Table:
         if resolve_labels and self._metadata is not None:
             row_resolved = self._metadata.resolve_labels(self.rowvar)
             if row_resolved.has_value_labels:
+                _row_label_map = {str(k): str(v) for k, v in row_resolved.value_labels.items()}
                 df = df.with_columns(
-                    pl.col("rowvar").map_elements(
-                        lambda v: row_resolved.display(v),
-                        return_dtype=pl.Utf8,
-                    )
+                    pl.col("rowvar").replace_strict(_row_label_map, default=pl.col("rowvar"))
                 )
 
             if self.colvar is not None:
                 col_resolved = self._metadata.resolve_labels(self.colvar)
                 if col_resolved.has_value_labels:
+                    _col_label_map = {str(k): str(v) for k, v in col_resolved.value_labels.items()}
                     df = df.with_columns(
-                        pl.col("colvar").map_elements(
-                            lambda v: col_resolved.display(v),
-                            return_dtype=pl.Utf8,
-                        )
+                        pl.col("colvar").replace_strict(_col_label_map, default=pl.col("colvar"))
                     )
 
         row_levels = list(

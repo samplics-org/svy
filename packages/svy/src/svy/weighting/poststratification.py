@@ -70,10 +70,9 @@ def _encode_strata(by_arr: np.ndarray) -> tuple[np.ndarray, list, list]:
     return by_indices, unique_vals, normed
 
 
-def _stratum_sum(wgt_arr: np.ndarray, normed: list, val) -> float:
-    """Sum weights for units belonging to a given stratum."""
-    mask = np.array([v == val for v in normed])
-    return float(wgt_arr[mask].sum())
+def _stratum_sums(wgt_arr: np.ndarray, by_indices: np.ndarray, n_strata: int) -> np.ndarray:
+    """Sum weights per stratum using bincount — single C pass, no Python loop."""
+    return np.bincount(by_indices, weights=wgt_arr, minlength=n_strata)
 
 
 def _resolve_to_controls(
@@ -83,6 +82,7 @@ def _resolve_to_controls(
     wgt_arr: np.ndarray,
     unique_vals: list | None,
     normed: list | None,
+    by_indices: np.ndarray | None,
 ) -> np.ndarray:
     """Convert controls or factors to an absolute control array for Rust.
 
@@ -109,7 +109,8 @@ def _resolve_to_controls(
             val = fval * float(wgt_arr.sum())
         return np.array([val], dtype=np.float64)
 
-    assert unique_vals is not None and normed is not None
+    assert unique_vals is not None and normed is not None and by_indices is not None
+    n_strata = len(unique_vals)
 
     if controls is not None:
         if isinstance(controls, dict):
@@ -129,13 +130,8 @@ def _resolve_to_controls(
         else:
             # Scalar: proportional split by current stratum weight sums
             total = float(wgt_arr.sum())
-            return np.array(
-                [
-                    float(controls) * _stratum_sum(wgt_arr, normed, v) / total  # type: ignore[arg-type]
-                    for v in unique_vals
-                ],
-                dtype=np.float64,
-            )
+            sums = _stratum_sums(wgt_arr, by_indices, n_strata)
+            return (float(controls) / total * sums).astype(np.float64)  # type: ignore[arg-type]
     else:
         grand_total = float(wgt_arr.sum())
         if isinstance(factors, dict):
@@ -161,13 +157,7 @@ def _resolve_to_controls(
             )
         else:
             # Scalar factor: same proportion of grand total for every stratum
-            return np.array(
-                [
-                    float(factors) * grand_total  # type: ignore[arg-type]
-                    for v in unique_vals
-                ],
-                dtype=np.float64,
-            )
+            return np.full(n_strata, float(factors) * grand_total, dtype=np.float64)  # type: ignore[arg-type]
 
 
 def poststratify(
@@ -229,7 +219,9 @@ def poststratify(
         unique_vals = None
         normed = None
 
-    control_arr = _resolve_to_controls(controls, factors, by_arr, wgt_arr, unique_vals, normed)
+    control_arr = _resolve_to_controls(
+        controls, factors, by_arr, wgt_arr, unique_vals, normed, by_indices
+    )
 
     # Main weight: reshape to (n, 1), call Rust, extract column 0
     assert rust_poststratify is not None  # noqa: S101

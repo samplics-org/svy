@@ -109,8 +109,6 @@ def mutate(
     n_rows = local_data.height
     existing_cols = set(local_data.columns)
 
-    env = {name: pl.col(name) for name in local_data.columns}
-
     compiled: dict[str, tuple[object, set[str]]] = {}
 
     def _root_names_safe(expr: pl.Expr) -> set[str]:
@@ -119,9 +117,17 @@ def mutate(
         except Exception:
             return set()
 
+    # Build env lazily — only needed when a callable spec is present
+    _env: dict | None = None
+
     for out_name, spec in specs.items():
         try:
-            raw = spec(env) if callable(spec) else spec  # type: ignore[operator]
+            if callable(spec):
+                if _env is None:
+                    _env = {name: pl.col(name) for name in local_data.columns}
+                raw = spec(_env)
+            else:
+                raw = spec
             out_obj = _as_output_obj(raw, out_name, n_rows)
         except Exception as ex:
             raise MethodError(

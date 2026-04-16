@@ -457,8 +457,9 @@ class SampleSize:
         return render_rich_to_str(self, width=resolve_width(self))
 
     def __repr__(self) -> str:
-        n = len(self._iter_sizes())
-        stratified = n > 1 or (n == 1 and self._iter_sizes()[0].stratum is not None)
+        objs = self._iter_sizes()
+        n = len(objs)
+        stratified = n > 1 or (n == 1 and objs[0].stratum is not None)
         param = getattr(self._param, "name", None) or "uncomputed"
         return f"SampleSize(stratified={stratified}, strata={n}, param={param})"
 

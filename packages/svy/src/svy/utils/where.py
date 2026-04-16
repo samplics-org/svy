@@ -10,6 +10,7 @@ filter condition.
 
 from __future__ import annotations
 
+from functools import reduce
 from typing import Mapping
 
 import polars as pl
@@ -50,18 +51,12 @@ def _compile_where(where: WhereArg) -> pl.Expr | None:
                 preds.append(pl.col(k) == v)  # type: ignore[arg-type]
         if not preds:
             return None
-        acc = preds[0]
-        for p in preds[1:]:
-            acc = acc & p
-        return acc
+        return reduce(lambda a, b: a & b, preds)
 
     if isinstance(where, (list, tuple)) and not isinstance(where, (str, bytes, bytearray)):
         if not where:
             return None
         compiled = [to_polars_expr(e) for e in where]
-        acc = compiled[0]
-        for p in compiled[1:]:
-            acc = acc & p
-        return acc
+        return reduce(lambda a, b: a & b, compiled)
 
     return to_polars_expr(where)

@@ -399,9 +399,9 @@ def calibrate_matrix(
         # than calibrated weights and must not be exposed to callers.
         new_w = rust_calibrate(w.reshape(-1, 1), X, totals_arr, scale_arr, False)[:, 0]
     else:
-        unique_domains = np.unique(domain_vec)
+        unique_domains, domain_indices_inv = np.unique(domain_vec, return_inverse=True)
+        domain_indices = domain_indices_inv.astype(np.int64)
         domain_to_idx = {d: idx for idx, d in enumerate(unique_domains)}
-        domain_indices = np.array([domain_to_idx[d] for d in domain_vec], dtype=np.int64)
         for domain in unique_domains:
             domain_idx = domain_to_idx[domain]
             if isinstance(control, dict):

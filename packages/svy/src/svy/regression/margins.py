@@ -15,7 +15,7 @@ import polars as pl
 
 from scipy import stats
 
-from svy.regression.base import link_mu_eta
+from svy.regression.base import link_inverse, link_mu_eta
 from svy.ui.printing import make_panel, render_plain_table, render_rich_to_str, resolve_width
 
 
@@ -130,22 +130,22 @@ class GLMMargins(msgspec.Struct, frozen=True):
             headers = ["Value", "Margin", "SE", ci_header]
             rows = [
                 [
-                    f"{self.values[i]:.2f}",
-                    f"{self.margin[i]:.6f}",
-                    f"{self.se[i]:.6f}",
-                    f"[{self.lci[i]:.6f}, {self.uci[i]:.6f}]",
+                    f"{v:.2f}",
+                    f"{m:.6f}",
+                    f"{s:.6f}",
+                    f"[{l:.6f}, {u:.6f}]",
                 ]
-                for i in range(len(self.margin))
+                for v, m, s, l, u in zip(self.values, self.margin, self.se, self.lci, self.uci)
             ]
         else:
             headers = ["Margin", "SE", ci_header]
             rows = [
                 [
-                    f"{self.margin[i]:.6f}",
-                    f"{self.se[i]:.6f}",
-                    f"[{self.lci[i]:.6f}, {self.uci[i]:.6f}]",
+                    f"{m:.6f}",
+                    f"{s:.6f}",
+                    f"[{l:.6f}, {u:.6f}]",
                 ]
-                for i in range(len(self.margin))
+                for m, s, l, u in zip(self.margin, self.se, self.lci, self.uci)
             ]
         return f"{title}\n\n{render_plain_table(headers, rows)}"
 
@@ -176,17 +176,18 @@ class GLMMargins(msgspec.Struct, frozen=True):
         table.add_column("SE", justify="right")
         table.add_column(f"{conf_pct}% CI", justify="right")
 
-        for i in range(len(self.margin)):
-            row = []
-            if self.values is not None:
-                row.append(f"{self.values[i]:.2f}")
-            row.extend(
-                [
-                    f"{self.margin[i]:.6f}",
-                    f"{self.se[i]:.6f}",
-                    f"[{self.lci[i]:.6f}, {self.uci[i]:.6f}]",
-                ]
+        for row_data in zip(
+            *(
+                ([self.values] if self.values is not None else [])
+                + [self.margin, self.se, self.lci, self.uci]
             )
+        ):
+            if self.values is not None:
+                v, m, s, l, u = row_data
+                row = [f"{v:.2f}", f"{m:.6f}", f"{s:.6f}", f"[{l:.6f}, {u:.6f}]"]
+            else:
+                m, s, l, u = row_data
+                row = [f"{m:.6f}", f"{s:.6f}", f"[{l:.6f}, {u:.6f}]"]
             table.add_row(*row)
 
         title = f"GLM Margins: [bold]{self.term}[/bold] ({self.margin_type}, {conf_pct}% CI)"
@@ -354,26 +355,37 @@ def compute_predictive_margins(
     margins = np.zeros(n_values)
     se = np.zeros(n_values)
 
-    # For each value, compute mean prediction
-    for i, val in enumerate(at_values):
-        # Create counterfactual data with variable set to val
-        cf_data = data.with_columns(pl.lit(val).alias(variable))
+    # Build design matrix once and extract the column index for `variable`.
+    # Each counterfactual only changes one column — no need to rebuild X or
+    # call predict() (which materialises a full Polars DataFrame) per value.
+    X_base = glm._build_prediction_matrix(data, fit)
+    beta_vec = np.array([c.est for c in fit.coefs])
 
-        # Get predictions
-        pred = glm.predict(cf_data)
+    try:
+        col_idx = fit.feature_names.index(variable)
+    except ValueError:
+        # variable is not directly a feature column (e.g. categorical base name);
+        # fall back to the original per-value predict() path
+        col_idx = None
+
+    for i, val in enumerate(at_values):
+        if col_idx is not None:
+            X_cf = X_base.copy()
+            X_cf[:, col_idx] = float(val)
+            eta = X_cf @ beta_vec
+            yhat = link_inverse(fit.link, eta)
+        else:
+            cf_data = data.with_columns(pl.lit(val).alias(variable))
+            yhat = glm.predict(cf_data).yhat
 
         # Weighted mean
-        yhat = pred.yhat
         margins[i] = np.sum(weights * yhat) / w_sum
 
-        # Survey variance of mean
+        # Survey variance of mean with finite population correction
         ybar = margins[i]
+        n_obs = len(weights)
         var_est = np.sum(weights**2 * (yhat - ybar) ** 2) / (w_sum**2)
-
-        # Finite population correction: n/(n-1)
-        n = len(weights)
-        var_est *= n / (n - 1)
-
+        var_est *= n_obs / (n_obs - 1)
         se[i] = np.sqrt(var_est)
 
     # Confidence intervals

@@ -220,9 +220,20 @@ def create_variance_strata(
                     var_strata[indices[i + 1]] = var_stratum_counter
                     var_stratum_counter += 1
 
-    psu_to_var_stratum = dict(zip(psu_list, var_strata))
-    psu_vec = df[psu_col].to_list()
-    obs_var_strata = np.array([psu_to_var_stratum[p] for p in psu_vec], dtype=np.int64)
+    # psu_list/var_strata are PSU-level (one per PSU, in sort order).
+    # Build the mapping then expand to observation level via a left join.
+    # unique() on psu_col guards against psu_list having duplicate entries
+    # when order_by columns cause psu_df to contain repeated PSU rows.
+    mapping_df = pl.DataFrame({psu_col: psu_list, "__vs__": var_strata.tolist()}).unique(
+        subset=[psu_col], keep="first"
+    )
+    obs_var_strata = (
+        df.select(psu_col)
+        .join(mapping_df, on=psu_col, how="left")
+        .get_column("__vs__")
+        .to_numpy()
+        .astype(np.int64)
+    )
 
     sample._data = df.with_columns(pl.Series(name=into, values=obs_var_strata))
     sample._design = sample._design.update(stratum=into)

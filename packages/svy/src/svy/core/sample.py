@@ -485,6 +485,11 @@ class Sample:
         for group_name, cols in groups.items():
             if not cols:
                 continue
+            out_col = f"{group_name}{rename_suffix}"
+            # Skip if the concatenated column already exists (e.g. stratum/psu/ssu
+            # built at Sample.__init__ and still present in the data).
+            if out_col in names:
+                continue
             missing = [c for c in cols if c not in names]
             if missing:
                 raise KeyError(
@@ -494,7 +499,7 @@ class Sample:
             expr = pl.concat_str(parts, separator=sep)
             if categorical:
                 expr = expr.cast(pl.Categorical)
-            key_exprs.append(expr.alias(f"{group_name}{rename_suffix}"))
+            key_exprs.append(expr.alias(out_col))
             used_inputs.update(cols)
 
         out = data.with_columns(key_exprs)
@@ -621,7 +626,6 @@ class Sample:
             return dt in INTEGER_DTYPES or dt in FLOAT_DTYPES
 
         # 1. Validate explicit design fields (stratum, psu, wgt, etc.)
-        # FIX: Pass data_columns to enable auto-detection of replicate weight padding
         needed_cols = design.specified_fields(
             ignore_cols=("wr",),
             data_columns=data.columns,

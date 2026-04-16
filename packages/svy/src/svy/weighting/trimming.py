@@ -325,9 +325,14 @@ def _run_trim(
 def _build_domain_array(df: pl.DataFrame, by_cols: list[str]) -> np.ndarray:
     if len(by_cols) == 1:
         return df.get_column(by_cols[0]).to_numpy()
-    return np.array(
-        ["__".join(str(v) for v in row) for row in df.select(by_cols).iter_rows()],
-        dtype=object,
+    return (
+        df.select(
+            pl.concat_str([pl.col(c).cast(pl.Utf8) for c in by_cols], separator="__").alias(
+                "__d__"
+            )
+        )
+        .get_column("__d__")
+        .to_numpy()
     )
 
 

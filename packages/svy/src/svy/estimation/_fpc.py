@@ -135,21 +135,19 @@ def build_fpc_psu_column(
                 hint="Ensure each row in a stratum has the same population size value.",
             )
 
-        # Count distinct PSUs per stratum
-        if psu_col is not None:
-            n_per_stratum = data.group_by(strata_col).agg(
-                pl.col(psu_col).n_unique().alias("__n_h__")
-            )
-        else:
-            n_per_stratum = data.group_by(strata_col).agg(pl.len().alias("__n_h__"))
-
-        # Get N_h per stratum
-        pop_per_stratum = data.group_by(strata_col).agg(
-            pl.col(pop_col).first().cast(pl.Float64).alias("__N_h__")
+        # Count distinct PSUs and get N_h per stratum in one pass
+        n_agg = (
+            pl.col(psu_col).n_unique().alias("__n_h__")
+            if psu_col is not None
+            else pl.len().alias("__n_h__")
+        )
+        stratum_stats = data.group_by(strata_col).agg(
+            n_agg,
+            pl.col(pop_col).first().cast(pl.Float64).alias("__N_h__"),
         )
 
         # Validate: N_h >= n_h for every stratum
-        check = n_per_stratum.join(pop_per_stratum, on=strata_col)
+        check = stratum_stats
         bad = check.filter(pl.col("__N_h__") < pl.col("__n_h__").cast(pl.Float64))
         if bad.height > 0:
             bad_strata = bad[strata_col].to_list()
@@ -166,15 +164,11 @@ def build_fpc_psu_column(
             )
 
         # Compute FPC
-        stratum_fpc = (
-            n_per_stratum.join(pop_per_stratum, on=strata_col)
-            .with_columns(
-                ((pl.col("__N_h__") - pl.col("__n_h__").cast(pl.Float64)) / pl.col("__N_h__"))
-                .clip(0.0, 1.0)
-                .alias(out_col)
-            )
-            .select([strata_col, out_col])
-        )
+        stratum_fpc = stratum_stats.with_columns(
+            ((pl.col("__N_h__") - pl.col("__n_h__").cast(pl.Float64)) / pl.col("__N_h__"))
+            .clip(0.0, 1.0)
+            .alias(out_col)
+        ).select([strata_col, out_col])
 
         data = data.join(stratum_fpc, on=strata_col, how="left")
     else:
@@ -267,19 +261,19 @@ def build_fpc_ssu_column(
             hint="Ensure each row in a PSU has the same SSU population size value.",
         )
 
-    # Count distinct SSUs per PSU (or rows if no SSU column)
-    if ssu_col is not None and ssu_col in data.columns:
-        n_per_psu = data.group_by(psu_col).agg(pl.col(ssu_col).n_unique().alias("__m_hi__"))
-    else:
-        n_per_psu = data.group_by(psu_col).agg(pl.len().alias("__m_hi__"))
-
-    # Get M_hi per PSU
-    pop_per_psu = data.group_by(psu_col).agg(
-        pl.col(pop_col).first().cast(pl.Float64).alias("__M_hi__")
+    # Count distinct SSUs and get M_hi per PSU in one pass
+    ssu_agg = (
+        pl.col(ssu_col).n_unique().alias("__m_hi__")
+        if (ssu_col is not None and ssu_col in data.columns)
+        else pl.len().alias("__m_hi__")
+    )
+    psu_stats = data.group_by(psu_col).agg(
+        ssu_agg,
+        pl.col(pop_col).first().cast(pl.Float64).alias("__M_hi__"),
     )
 
     # Validate: M_hi >= m_hi for every PSU
-    check = n_per_psu.join(pop_per_psu, on=psu_col)
+    check = psu_stats
     bad = check.filter(pl.col("__M_hi__") < pl.col("__m_hi__").cast(pl.Float64))
     if bad.height > 0:
         bad_psus = bad[psu_col].to_list()
@@ -296,15 +290,11 @@ def build_fpc_ssu_column(
         )
 
     # Compute FPC
-    psu_fpc = (
-        n_per_psu.join(pop_per_psu, on=psu_col)
-        .with_columns(
-            ((pl.col("__M_hi__") - pl.col("__m_hi__").cast(pl.Float64)) / pl.col("__M_hi__"))
-            .clip(0.0, 1.0)
-            .alias(out_col)
-        )
-        .select([psu_col, out_col])
-    )
+    psu_fpc = psu_stats.with_columns(
+        ((pl.col("__M_hi__") - pl.col("__m_hi__").cast(pl.Float64)) / pl.col("__M_hi__"))
+        .clip(0.0, 1.0)
+        .alias(out_col)
+    ).select([psu_col, out_col])
 
     data = data.join(psu_fpc, on=psu_col, how="left")
     return data, out_col

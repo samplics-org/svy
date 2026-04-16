@@ -36,6 +36,46 @@ if TYPE_CHECKING:
     from svy.size.base import SampleSize
 
 
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+
+def _broadcast_scalars(strata: list, params: dict) -> None:
+    """Broadcast any non-Mapping param to a per-stratum dict in-place."""
+    m = len(strata)
+    for k, v in list(params.items()):
+        if not isinstance(v, Mapping):
+            params[k] = dict(zip(strata, [v] * m))
+
+
+def _has_pop(pop_size) -> bool:
+    """True if pop_size carries at least one non-None value."""
+    if isinstance(pop_size, Mapping):
+        return any(v is not None for v in pop_size.values())
+    return pop_size is not None
+
+
+def _build_sizes(ss, *, stratified: bool, strata, n0, n1_fpc, n2_deff, n_final) -> None:
+    """Assign Size object(s) to ss._size."""
+    if not stratified:
+        ss._size = Size(
+            stratum=None,
+            n0=cast(Number, n0),
+            n1_fpc=cast(Number, n1_fpc),
+            n2_deff=cast(Number, n2_deff),
+            n=cast(Number, n_final),
+        )
+    else:
+        _n0 = cast(DomainScalarMap, n0)
+        _n1 = cast(DomainScalarMap, n1_fpc)
+        _n2 = cast(DomainScalarMap, n2_deff)
+        _nf = cast(DomainScalarMap, n_final)
+        ss._size = [
+            Size(stratum=str(s), n0=_n0[s], n1_fpc=_n1[s], n2_deff=_n2[s], n=_nf[s]) for s in _n0
+        ]
+
+
 def estimate_prop(
     ss: SampleSize,
     p: Number | DomainScalarMap,
@@ -103,9 +143,7 @@ def estimate_prop(
             "deff": deff,
             "resp_rate": resp_rate,
         }
-        for k, v in list(params.items()):
-            if not isinstance(v, Mapping):
-                params[k] = dict(zip(strata, [v] * m))
+        _broadcast_scalars(strata, params)
         p, moe, pop_size, alpha, deff, resp_rate = (
             params["p"],
             params["moe"],
@@ -124,42 +162,18 @@ def estimate_prop(
     else:
         n0 = _fleiss_sample_size_prop(target=p, half_ci=moe, alpha=alpha)
 
-    _has_pop_size = (
-        isinstance(pop_size, Mapping) and any(v is not None for v in pop_size.values())
-    ) or (not isinstance(pop_size, Mapping) and pop_size is not None)
-
-    if _has_pop_size:
-        n1_fpc = _apply_fpc_srswor(n0=n0, pop_size=pop_size)
-    else:
-        n1_fpc = n0
-
+    n1_fpc = _apply_fpc_srswor(n0=n0, pop_size=pop_size) if _has_pop(pop_size) else n0
     n2_deff = _apply_deff(n=n1_fpc, deff=deff)
     n_final = _apply_nonresponse(n=n2_deff, resp_rate=resp_rate)
-
-    if not stratified:
-        ss._size = Size(
-            stratum=None,
-            n0=cast(Number, n0),
-            n1_fpc=cast(Number, n1_fpc),
-            n2_deff=cast(Number, n2_deff),
-            n=cast(Number, n_final),
-        )
-    else:
-        _n0 = cast(DomainScalarMap, n0)
-        _n1_fpc = cast(DomainScalarMap, n1_fpc)
-        _n2_deff = cast(DomainScalarMap, n2_deff)
-        _n_final = cast(DomainScalarMap, n_final)
-        ss._size = [
-            Size(
-                stratum=str(s),
-                n0=_n0[s],
-                n1_fpc=_n1_fpc[s],
-                n2_deff=_n2_deff[s],
-                n=_n_final[s],
-            )
-            for s in _n0
-        ]
-
+    _build_sizes(
+        ss,
+        stratified=stratified,
+        strata=strata if stratified else None,
+        n0=n0,
+        n1_fpc=n1_fpc,
+        n2_deff=n2_deff,
+        n_final=n_final,
+    )
     return ss
 
 
@@ -232,9 +246,7 @@ def estimate_mean(
             "deff": deff,
             "resp_rate": resp_rate,
         }
-        for k, v in list(params.items()):
-            if not isinstance(v, Mapping):
-                params[k] = dict(zip(strata, [v] * m))
+        _broadcast_scalars(strata, params)
         sigma, moe, pop_size, alpha, deff, resp_rate = (
             params["sigma"],
             params["moe"],
@@ -253,40 +265,16 @@ def estimate_mean(
     else:
         raise NotImplementedError("Fleiss method is not implemented for the mean.")
 
-    _has_pop_size = (
-        isinstance(pop_size, Mapping) and any(v is not None for v in pop_size.values())
-    ) or (not isinstance(pop_size, Mapping) and pop_size is not None)
-
-    if _has_pop_size:
-        n1_fpc = _apply_fpc_srswor(n0=n0, pop_size=pop_size)
-    else:
-        n1_fpc = n0
-
+    n1_fpc = _apply_fpc_srswor(n0=n0, pop_size=pop_size) if _has_pop(pop_size) else n0
     n2_deff = _apply_deff(n=n1_fpc, deff=deff)
     n_final = _apply_nonresponse(n=n2_deff, resp_rate=resp_rate)
-
-    if not stratified:
-        ss._size = Size(
-            stratum=None,
-            n0=cast(Number, n0),
-            n1_fpc=cast(Number, n1_fpc),
-            n2_deff=cast(Number, n2_deff),
-            n=cast(Number, n_final),
-        )
-    else:
-        _n0 = cast(DomainScalarMap, n0)
-        _n1_fpc = cast(DomainScalarMap, n1_fpc)
-        _n2_deff = cast(DomainScalarMap, n2_deff)
-        _n_final = cast(DomainScalarMap, n_final)
-        ss._size = [
-            Size(
-                stratum=str(s),
-                n0=_n0[s],
-                n1_fpc=_n1_fpc[s],
-                n2_deff=_n2_deff[s],
-                n=_n_final[s],
-            )
-            for s in _n0
-        ]
-
+    _build_sizes(
+        ss,
+        stratified=stratified,
+        strata=strata if stratified else None,
+        n0=n0,
+        n1_fpc=n1_fpc,
+        n2_deff=n2_deff,
+        n_final=n_final,
+    )
     return ss

@@ -31,7 +31,7 @@ from svy.size._normalize import (
     _normalize_prop_var_mode,
     _normalize_two_props_method,
 )
-from svy.size.types import Size
+from svy.size.estimation_goals import _broadcast_scalars, _build_sizes, _has_pop
 from svy.utils.helpers import _get_keys_from_maps
 
 
@@ -131,9 +131,7 @@ def compare_props(
             "deff": deff,
             "resp_rate": resp_rate,
         }
-        for k, v in list(params.items()):
-            if not isinstance(v, Mapping):
-                params[k] = dict(zip(strata, [v] * m))
+        _broadcast_scalars(strata, params)
         p1, p2, pop_size, delta, alloc_ratio, alpha, power, deff, resp_rate = (
             params["p1"],
             params["p2"],
@@ -179,42 +177,18 @@ def compare_props(
     else:
         raise NotImplementedError("farrington-manning method is not implemented yet.")
 
-    _has_pop_size = (
-        isinstance(pop_size, Mapping) and any(v is not None for v in pop_size.values())
-    ) or (not isinstance(pop_size, Mapping) and pop_size is not None)
-
-    if _has_pop_size:
-        n1_fpc = _apply_fpc_srswor_pair(n0=n0, pop_size=pop_size)
-    else:
-        n1_fpc = n0
-
+    n1_fpc = _apply_fpc_srswor_pair(n0=n0, pop_size=pop_size) if _has_pop(pop_size) else n0
     n2_deff = _apply_deff_pair(n=n1_fpc, deff=deff)
     n_final = _apply_nonresponse_pair(n=n2_deff, resp_rate=resp_rate)
-
-    if not stratified:
-        ss._size = Size(
-            stratum=None,
-            n0=cast(Number, n0),
-            n1_fpc=cast(Number, n1_fpc),
-            n2_deff=cast(Number, n2_deff),
-            n=cast(Number, n_final),
-        )
-    else:
-        _n0 = cast(DomainScalarMap, n0)
-        _n1_fpc = cast(DomainScalarMap, n1_fpc)
-        _n2_deff = cast(DomainScalarMap, n2_deff)
-        _n_final = cast(DomainScalarMap, n_final)
-        ss._size = [
-            Size(
-                stratum=str(s),
-                n0=_n0[s],
-                n1_fpc=_n1_fpc[s],
-                n2_deff=_n2_deff[s],
-                n=_n_final[s],
-            )
-            for s in _n0
-        ]
-
+    _build_sizes(
+        ss,
+        stratified=stratified,
+        strata=strata if stratified else None,
+        n0=n0,
+        n1_fpc=n1_fpc,
+        n2_deff=n2_deff,
+        n_final=n_final,
+    )
     return ss
 
 

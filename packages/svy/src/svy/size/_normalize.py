@@ -21,6 +21,12 @@ from svy.core.enumerations import (
 )
 
 
+_ONE_PROP_METHOD_MAP = {
+    "wald": _OnePropSizeMethod.WALD,
+    "fleiss": _OnePropSizeMethod.FLEISS,
+}
+
+
 def _normalize_one_prop_method(
     method: Literal["wald", "fleiss"] | None,
 ) -> _OnePropSizeMethod:
@@ -31,10 +37,6 @@ def _normalize_one_prop_method(
       - "wald"   → OnePropSizeMethod.WALD  (default)
       - "fleiss" → OnePropSizeMethod.FLEISS
     """
-    _MAP = {
-        "wald": _OnePropSizeMethod.WALD,
-        "fleiss": _OnePropSizeMethod.FLEISS,
-    }
     if method is None:
         return _OnePropSizeMethod.WALD
     if not isinstance(method, str):
@@ -42,10 +44,18 @@ def _normalize_one_prop_method(
             f"'method' must be a string or None, got {type(method).__name__}. "
             f"Use 'wald' or 'fleiss'."
         )
-    result = _MAP.get(method.strip().lower())
+    result = _ONE_PROP_METHOD_MAP.get(method.strip().lower())
     if result is None:
         raise ValueError(f"Unknown method {method!r}. Use 'wald' or 'fleiss'.")
     return result
+
+
+_TWO_PROPS_METHOD_MAP = {
+    "wald": _TwoPropsSizeMethod.WALD,
+    "miettinen-nurminen": _TwoPropsSizeMethod.MIETTINEN_NURMINEN,
+    "newcombe": _TwoPropsSizeMethod.NEWCOMBE,
+    "farrington-manning": _TwoPropsSizeMethod.FARRINGTON_MANNING,
+}
 
 
 def _normalize_two_props_method(
@@ -60,12 +70,6 @@ def _normalize_two_props_method(
       - "newcombe"              → TwoPropsSizeMethod.NEWCOMBE
       - "farrington-manning"    → TwoPropsSizeMethod.FARRINGTON_MANNING
     """
-    _MAP = {
-        "wald": _TwoPropsSizeMethod.WALD,
-        "miettinen-nurminen": _TwoPropsSizeMethod.MIETTINEN_NURMINEN,
-        "newcombe": _TwoPropsSizeMethod.NEWCOMBE,
-        "farrington-manning": _TwoPropsSizeMethod.FARRINGTON_MANNING,
-    }
     if method is None:
         return _TwoPropsSizeMethod.WALD
     if not isinstance(method, str):
@@ -73,13 +77,20 @@ def _normalize_two_props_method(
             f"'method' must be a string or None, got {type(method).__name__}. "
             f"Use 'wald', 'miettinen-nurminen', 'newcombe', or 'farrington-manning'."
         )
-    result = _MAP.get(method.strip().lower())
+    result = _TWO_PROPS_METHOD_MAP.get(method.strip().lower())
     if result is None:
         raise ValueError(
             f"Unknown method {method!r}. "
             f"Use 'wald', 'miettinen-nurminen', 'newcombe', or 'farrington-manning'."
         )
     return result
+
+
+_PROP_VAR_MODE_MAP = {
+    "alt-props": _PropVarMode.ALT_PROPS,
+    "pooled-prop": _PropVarMode.POOLED_PROP,
+    "max-var": _PropVarMode.MAX_VAR,
+}
 
 
 def _normalize_prop_var_mode(
@@ -93,11 +104,6 @@ def _normalize_prop_var_mode(
       - "pooled-prop" → PropVarMode.POOLED_PROP
       - "max-var"     → PropVarMode.MAX_VAR
     """
-    _MAP = {
-        "alt-props": _PropVarMode.ALT_PROPS,
-        "pooled-prop": _PropVarMode.POOLED_PROP,
-        "max-var": _PropVarMode.MAX_VAR,
-    }
     if var_mode is None:
         return _PropVarMode.ALT_PROPS
     if not isinstance(var_mode, str):
@@ -105,7 +111,7 @@ def _normalize_prop_var_mode(
             f"'var_mode' must be a string or None, got {type(var_mode).__name__}. "
             f"Use 'alt-props', 'pooled-prop', or 'max-var'."
         )
-    result = _MAP.get(var_mode.strip().lower())
+    result = _PROP_VAR_MODE_MAP.get(var_mode.strip().lower())
     if result is None:
         raise ValueError(
             f"Unknown var_mode {var_mode!r}. Use 'alt-props', 'pooled-prop', or 'max-var'."

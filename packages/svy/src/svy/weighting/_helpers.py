@@ -53,9 +53,14 @@ def _to_int_array(
     if len(cols) == 1:
         vec = data[cols[0]].to_numpy()
     else:
-        vec = np.array(
-            ["__".join(str(v) for v in row) for row in data.select(cols).iter_rows()],
-            dtype=object,
+        vec = (
+            data.select(
+                pl.concat_str([pl.col(c).cast(pl.Utf8) for c in cols], separator="__").alias(
+                    "__key__"
+                )
+            )
+            .get_column("__key__")
+            .to_numpy()
         )
     if vec.dtype.kind in ("U", "S", "O"):
         _, codes = np.unique(vec, return_inverse=True)

@@ -149,8 +149,26 @@ def _combine_stages(
         s1_vals = set(stage1_df[stage1_psu[0]].unique().to_list())
         ns_vals = set(next_df[next_psu[0]].unique().to_list())
     else:
-        s1_vals = set(map(tuple, stage1_df.select(stage1_psu).unique().rows()))
-        ns_vals = set(map(tuple, next_df.select(next_psu).unique().rows()))
+        # Form composite keys in Polars — avoids Python tuple allocation per row
+        _sep = "__"
+        s1_vals = set(
+            stage1_df.select(
+                pl.concat_str([pl.col(c).cast(pl.Utf8) for c in stage1_psu], separator=_sep).alias(
+                    "__k__"
+                )
+            )["__k__"]
+            .unique()
+            .to_list()
+        )
+        ns_vals = set(
+            next_df.select(
+                pl.concat_str([pl.col(c).cast(pl.Utf8) for c in next_psu], separator=_sep).alias(
+                    "__k__"
+                )
+            )["__k__"]
+            .unique()
+            .to_list()
+        )
 
     unmatched = ns_vals - s1_vals
     if unmatched:

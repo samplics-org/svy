@@ -300,6 +300,11 @@ def rake(
                 allowed=list(df.columns),
                 hint="All raking column names must exist in the data.",
             )
+
+    margin_df = df.select(rake_cols)
+
+    null_counts = margin_df.null_count().row(0)
+    for col, n_null in zip(rake_cols, null_counts):
         s = df.get_column(col)
         if s.len() != w0.size:
             raise DimensionError(
@@ -309,7 +314,7 @@ def rake(
                 where=where,
                 param=col,
             )
-        if s.null_count() > 0:
+        if n_null > 0:
             raise DimensionError(
                 title="Null values in raking column",
                 detail=f"Column {col!r} contains null values. Raking requires complete data.",
@@ -318,7 +323,10 @@ def rake(
                 param=col,
                 hint="Drop or impute missing values before raking.",
             )
-        processed[col] = s.to_numpy()
+
+    margin_np = margin_df.to_numpy()
+    for i, col in enumerate(rake_cols):
+        processed[col] = margin_np[:, i]
 
     control_final: ControlsType = controls_norm or _calculate_controls_from_factors(
         wgts=w0,

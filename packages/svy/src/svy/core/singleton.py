@@ -492,26 +492,31 @@ class Singleton:
                 }
             )
 
-        def compute_means(stratum_key: str) -> dict[str, float]:
-            subset = data.filter(pl.col(stratum_col) == stratum_key)
-            if subset.height == 0:
+        # Compute means for both strata in a single Polars pass
+        both_keys = [key1, key2]
+        subset2 = data.filter(pl.col(stratum_col).is_in(both_keys))
+
+        if wgt_col and wgt_col in data.columns:
+            mean_exprs = [
+                ((pl.col(v) * pl.col(wgt_col)).sum() / pl.col(wgt_col).sum()).alias(v)
+                for v in var_list
+                if v in data.columns
+            ]
+        else:
+            mean_exprs = [pl.col(v).mean().alias(v) for v in var_list if v in data.columns]
+
+        means_df = subset2.lazy().group_by(stratum_col).agg(mean_exprs).collect()
+
+        def _row_as_means(key: str) -> dict[str, float]:
+            rows = means_df.filter(pl.col(stratum_col) == key)
+            if rows.is_empty():
                 return {v: float("nan") for v in var_list}
+            d = rows.row(0, named=True)
+            d.pop(stratum_col, None)
+            return {v: d.get(v, float("nan")) for v in var_list}
 
-            means = {}
-            for var in var_list:
-                if var not in subset.columns:
-                    means[var] = float("nan")
-                    continue
-                if wgt_col and wgt_col in subset.columns:
-                    total = (subset[var] * subset[wgt_col]).sum()
-                    wgt_sum = subset[wgt_col].sum()
-                    means[var] = total / wgt_sum if wgt_sum > 0 else float("nan")
-                else:
-                    means[var] = subset[var].mean()
-            return means
-
-        means1 = compute_means(key1)
-        means2 = compute_means(key2)
+        means1 = _row_as_means(key1)
+        means2 = _row_as_means(key2)
 
         return pl.DataFrame(
             {
@@ -680,32 +685,51 @@ class Singleton:
             )
         psu_totals = cast(pl.DataFrame, psu_totals)
 
-        # Group by stratum to compute variance
+        # Compute per-stratum variance in Polars: V_h = (n_h/(n_h-1)) * sum((y_hi - ȳ_h)²)
+        stratum_stats = (
+            psu_totals.lazy()
+            .group_by(stratum_col)
+            .agg(
+                pl.col("psu_total").count().alias("n_psus"),
+                pl.col("n_obs").sum().alias("n_obs_total"),
+                pl.col("psu_total").mean().alias("mean_total"),
+                pl.col("psu_total").var(ddof=0).alias("var_pop"),  # population variance
+            )
+            .with_columns(
+                # V_h = (n/(n-1)) * n * pop_var  = n²/(n-1) * pop_var
+                # But pop_var = sum_sq_dev/n, so V_h = n/(n-1) * sum_sq_dev
+                # Use: V_h = n/(n-1) * n * var_pop  when n > 1, else null
+                pl.when(pl.col("n_psus") > 1)
+                .then(
+                    (pl.col("n_psus").cast(pl.Float64) / (pl.col("n_psus") - 1))
+                    * pl.col("n_psus").cast(pl.Float64)
+                    * pl.col("var_pop")
+                )
+                .otherwise(pl.lit(None))
+                .alias("variance")
+            )
+            .sort(stratum_col)
+            .collect()
+        )
+        stratum_stats = cast(pl.DataFrame, stratum_stats)
+
+        # Keep per-PSU totals for StratumVarianceInfo.psu_totals
+        totals_by_stratum: dict[Any, list[float]] = {}
+        for row in psu_totals.to_dicts():
+            k = row[stratum_col]
+            totals_by_stratum.setdefault(k, []).append(float(row["psu_total"]))
+
         result = []
-        for stratum_key in sorted(psu_totals.get_column(stratum_col).unique().to_list()):
-            stratum_data = psu_totals.filter(pl.col(stratum_col) == stratum_key)
-            totals = stratum_data.get_column("psu_total").to_list()
-            n_psus = len(totals)
-            n_obs = stratum_data.get_column("n_obs").sum()
-
-            is_singleton = n_psus == 1
-
-            if is_singleton:
-                variance = None
-            else:
-                # Compute within-stratum variance
-                # V_h = (n_h / (n_h - 1)) * Σᵢ(y_hi - ȳ_h)²
-                mean_total = sum(totals) / n_psus
-                sum_sq_dev = sum((t - mean_total) ** 2 for t in totals)
-                variance = (n_psus / (n_psus - 1)) * sum_sq_dev
-
+        for row in stratum_stats.to_dicts():
+            key = row[stratum_col]
+            totals = totals_by_stratum.get(key, [])
             result.append(
                 StratumVarianceInfo(
-                    stratum_key=str(stratum_key),
-                    n_psus=n_psus,
-                    is_singleton=is_singleton,
-                    variance_contribution=variance,
-                    n_observations=int(n_obs or 0),
+                    stratum_key=str(key),
+                    n_psus=row["n_psus"],
+                    is_singleton=row["n_psus"] == 1,
+                    variance_contribution=row["variance"],
+                    n_observations=int(row["n_obs_total"] or 0),
                     psu_totals=tuple(totals),
                 )
             )
@@ -1238,19 +1262,19 @@ class Singleton:
                 .select([stratum_col] + stratum_cols)
             )
 
-            for row in val_df.iter_rows(named=True):
+            for row in val_df.to_dicts():
                 k = row.pop(stratum_col)
                 values_map[k] = row
 
         # Construct objects
         result = [
             SingletonInfo(
-                stratum_key=str(key),
-                stratum_values=values_map.get(key, {}),
-                psu_key=str(psu),
-                n_observations=n_obs,
+                stratum_key=str(row[stratum_col]),
+                stratum_values=values_map.get(row[stratum_col], {}),
+                psu_key=str(row["any_psu"]),
+                n_observations=row["n_obs"],
             )
-            for key, _, n_obs, psu in agg.iter_rows()
+            for row in agg.to_dicts()
         ]
         # Sort for deterministic order
         return sorted(result, key=lambda s: s.stratum_key)
@@ -1299,13 +1323,13 @@ class Singleton:
                 .head(1)
                 .select([effective_stratum_col] + stratum_cols)
             )
-            for row in val_df.iter_rows(named=True):
+            for row in val_df.to_dicts():
                 k = row.pop(effective_stratum_col)
                 values_map[k] = row
 
         # Build StratumInfo objects
         result = []
-        for row in agg.iter_rows(named=True):
+        for row in agg.to_dicts():
             key = row[effective_stratum_col]
             sort_vals = tuple(row.get(f"_order_{col}") for col in order_cols)
             result.append(
@@ -1645,34 +1669,10 @@ class Singleton:
         This creates internal columns for variance calculation without
         modifying the original data or design columns.
         """
-        data = cast(pl.DataFrame, self._sample._data.clone())
-        design = cast("Design", copy.deepcopy(self._sample._design))
-
-        stratum_col, psu_col = self._internal_cols()
-        assert stratum_col is not None
-
+        data, design, n_strata_before, n_psus_before, n_strata_after, n_psus_after = (
+            self._apply_exclude_variance_cols(singles)
+        )
         singleton_keys = [s.stratum_key for s in singles]
-        n_strata_before, n_psus_before = self._counts_before(data, stratum_col, psu_col)
-
-        is_singleton = pl.col(stratum_col).is_in(singleton_keys)
-
-        # Create internal variance columns:
-        # - Keep original stratum and PSU structure
-        # - Mark singleton rows as excluded from variance
-        data = data.with_columns(
-            # Effective stratum for variance: same as original
-            pl.col(stratum_col).cast(pl.Utf8).alias(_VAR_STRATUM_COL),
-            # Effective PSU for variance: same as original
-            pl.col(psu_col).cast(pl.Utf8).alias(_VAR_PSU_COL),
-            # Exclude singleton strata from variance contribution
-            is_singleton.alias(_VAR_EXCLUDE_COL),
-        )
-
-        # Count effective strata/PSUs (excluding singletons)
-        non_excluded = data.filter(~pl.col(_VAR_EXCLUDE_COL))
-        n_strata_after, n_psus_after = self._counts_before(
-            non_excluded, _VAR_STRATUM_COL, _VAR_PSU_COL
-        )
 
         config = SingletonHandlingConfig(
             method=_SingletonHandling.SKIP,
@@ -1708,41 +1708,17 @@ class Singleton:
         This creates internal columns for variance calculation without
         modifying the original data or design columns.
         """
-        data = cast(pl.DataFrame, self._sample._data.clone())
-        design = cast("Design", copy.deepcopy(self._sample._design))
-
-        stratum_col, psu_col = self._internal_cols()
-        assert stratum_col is not None
-
+        data, design, n_strata_before, n_psus_before, n_strata_after, n_psus_after = (
+            self._apply_exclude_variance_cols(singles)
+        )
         singleton_keys = [s.stratum_key for s in singles]
-        n_strata_before, n_psus_before = self._counts_before(data, stratum_col, psu_col)
-
-        # Calculate singleton fraction for scaling
         singleton_frac = len(singles) / n_strata_before if n_strata_before > 0 else 0.0
-
-        is_singleton = pl.col(stratum_col).is_in(singleton_keys)
-
-        # Create internal variance columns (same as skip)
-        data = data.with_columns(
-            # Effective stratum for variance: same as original
-            pl.col(stratum_col).cast(pl.Utf8).alias(_VAR_STRATUM_COL),
-            # Effective PSU for variance: same as original
-            pl.col(psu_col).cast(pl.Utf8).alias(_VAR_PSU_COL),
-            # Exclude singleton strata from base variance calculation
-            is_singleton.alias(_VAR_EXCLUDE_COL),
-        )
-
-        # Count effective strata/PSUs (excluding singletons)
-        non_excluded = data.filter(~pl.col(_VAR_EXCLUDE_COL))
-        n_strata_after, n_psus_after = self._counts_before(
-            non_excluded, _VAR_STRATUM_COL, _VAR_PSU_COL
-        )
 
         config = SingletonHandlingConfig(
             method=_SingletonHandling.SCALE,
             singleton_keys=tuple(singleton_keys),
             stratum_mapping=None,
-            singleton_fraction=singleton_frac,  # Key difference from skip()
+            singleton_fraction=singleton_frac,
             var_stratum_col=_VAR_STRATUM_COL,
             var_psu_col=_VAR_PSU_COL,
             var_exclude_col=_VAR_EXCLUDE_COL,
@@ -1760,6 +1736,38 @@ class Singleton:
             config=config,
         )
         return data, design, result
+
+    def _apply_exclude_variance_cols(
+        self,
+        singles: list[SingletonInfo],
+    ) -> tuple[pl.DataFrame, "Design", int, int, int, int]:
+        """
+        Shared setup for skip/scale: clone data+design, add internal variance
+        columns that exclude singleton strata, return counts before/after.
+        Returns (data, design, n_strata_before, n_psus_before, n_strata_after, n_psus_after).
+        """
+        data = cast(pl.DataFrame, self._sample._data.clone())
+        design = cast("Design", copy.deepcopy(self._sample._design))
+
+        stratum_col, psu_col = self._internal_cols()
+        assert stratum_col is not None
+
+        singleton_keys = [s.stratum_key for s in singles]
+        n_strata_before, n_psus_before = self._counts_before(data, stratum_col, psu_col)
+
+        is_singleton = pl.col(stratum_col).is_in(singleton_keys)
+
+        data = data.with_columns(
+            pl.col(stratum_col).cast(pl.Utf8).alias(_VAR_STRATUM_COL),
+            pl.col(psu_col).cast(pl.Utf8).alias(_VAR_PSU_COL),
+            is_singleton.alias(_VAR_EXCLUDE_COL),
+        )
+
+        non_excluded = data.filter(~pl.col(_VAR_EXCLUDE_COL))
+        n_strata_after, n_psus_after = self._counts_before(
+            non_excluded, _VAR_STRATUM_COL, _VAR_PSU_COL
+        )
+        return data, design, n_strata_before, n_psus_before, n_strata_after, n_psus_after
 
     def _apply_center(
         self, singles: list[SingletonInfo]

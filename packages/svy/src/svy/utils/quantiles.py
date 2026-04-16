@@ -68,8 +68,8 @@ def weighted_quantiles(
     cum_w = np.cumsum(w)
     cum_w /= cum_w[-1]
 
-    # Interpolate at each requested probability
-    return [float(np.interp(p, cum_w, vals)) for p in probs]
+    # Interpolate at all requested probabilities in one vectorised call
+    return np.interp(probs, cum_w, vals).tolist()
 
 
 def weighted_quantile_bins(

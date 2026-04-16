@@ -32,15 +32,8 @@ def _encode_groups(by_arr: np.ndarray | None, n: int) -> np.ndarray | None:
         return None
     if np.issubdtype(by_arr.dtype, np.integer):
         return by_arr.astype(np.int64)
-    mapping: dict = {}
-    next_id = 0
-    result = np.empty(len(by_arr), dtype=np.int64)
-    for i, val in enumerate(by_arr):
-        if val not in mapping:
-            mapping[val] = next_id
-            next_id += 1
-        result[i] = mapping[val]
-    return result
+    _, result = np.unique(by_arr, return_inverse=True)
+    return result.astype(np.int64)
 
 
 def _build_control_array(

@@ -38,6 +38,10 @@ def _should_use_rich(stream) -> bool:
     return _tty(stream)
 
 
+# Public alias used by logconfig.py
+want_rich_default = _should_use_rich
+
+
 def print_error(err: Any, *, stream=None, prefer_rich: bool | str = "auto") -> None:
     """
     Print an error using Rich if available/desired, else plain text.
@@ -58,21 +62,5 @@ def print_error(err: Any, *, stream=None, prefer_rich: bool | str = "auto") -> N
     print(str(err), file=stream)
 
 
-def want_rich_default(stream: IO[str]) -> bool:
-    if not hasattr(stream, "isatty") or not stream.isatty():
-        return False
-    if os.getenv("NO_COLOR"):
-        return False
-    if os.getenv("TERM", "dumb") == "dumb":
-        return False
-    if os.getenv("CI"):
-        return False
-    return True
-
-
 def should_use_rich(stream: Optional[IO[str]] = None) -> bool:
-    stream = stream or sys.stderr
-    override = _env_flag("SVY_USE_RICH")
-    if override is not None:
-        return override
-    return want_rich_default(stream)
+    return _should_use_rich(stream or sys.stderr)

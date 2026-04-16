@@ -56,13 +56,9 @@ def check_same_length(*arrays: tuple[np.ndarray, str]) -> None:
 
 
 def check_weights_finite_positive(*, w: np.ndarray) -> None:
-    """Verify weights are finite and sum > 0."""
-    # np.min is faster than checking all elements for positivity
-    # w.sum() <= 0 handles the empty case implicitly (sum of empty is 0.0)
-    if w.size > 0 and w.min() < 0:
-        raise ValueError("Weights must be finite and sum to a positive value.")
-
-    if not np.isfinite(w).all() or w.sum() <= 0:
+    """Verify weights are finite and positive-summing."""
+    finite_mask = np.isfinite(w)
+    if not finite_mask.all() or w.sum() <= 0 or (w.size > 0 and w[finite_mask].min() < 0):
         raise ValueError("Weights must be finite and sum to a positive value.")
 
 

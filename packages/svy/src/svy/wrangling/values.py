@@ -6,7 +6,7 @@ casting, and null-filling.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence, cast
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 
 import polars as pl
 
@@ -19,6 +19,7 @@ from svy.engine.wrangling.cleaning import (
 )
 from svy.errors import DimensionError, MethodError
 from svy.wrangling._helpers import (
+    _eager_df,
     _rebuild_concat_if_touched,
     _resolve_target,
 )
@@ -37,11 +38,7 @@ def top_code(
     inplace: bool = False,
 ) -> "Sample":
     """Cap values at upper bounds (top coding)."""
-    _df = (
-        cast(pl.DataFrame, sample._data)
-        if not isinstance(sample._data, pl.LazyFrame)
-        else cast(pl.DataFrame, sample._data.collect())
-    )
+    _df = _eager_df(sample)
     new_data = _top_code(_df, top_codes=top_codes, replace=replace, into=into)
     target = _resolve_target(sample, new_data, inplace=inplace)
     if replace:
@@ -58,11 +55,7 @@ def bottom_code(
     inplace: bool = False,
 ) -> "Sample":
     """Cap values at lower bounds (bottom coding)."""
-    _df = (
-        cast(pl.DataFrame, sample._data)
-        if not isinstance(sample._data, pl.LazyFrame)
-        else cast(pl.DataFrame, sample._data.collect())
-    )
+    _df = _eager_df(sample)
     new_data = _bottom_code(_df, bottom_codes=bottom_codes, replace=replace, into=into)
     target = _resolve_target(sample, new_data, inplace=inplace)
     if replace:
@@ -79,11 +72,7 @@ def bottom_and_top_code(
     inplace: bool = False,
 ) -> "Sample":
     """Cap values at both lower and upper bounds."""
-    _df = (
-        cast(pl.DataFrame, sample._data)
-        if not isinstance(sample._data, pl.LazyFrame)
-        else cast(pl.DataFrame, sample._data.collect())
-    )
+    _df = _eager_df(sample)
     new_data = _bottom_and_top_code(
         _df,
         bottom_and_top_codes=bottom_and_top_codes,
@@ -106,11 +95,7 @@ def recode(
     inplace: bool = False,
 ) -> "Sample":
     """Map old values to new labels."""
-    _df = (
-        cast(pl.DataFrame, sample._data)
-        if not isinstance(sample._data, pl.LazyFrame)
-        else cast(pl.DataFrame, sample._data.collect())
-    )
+    _df = _eager_df(sample)
     new_data = _recode(_df, cols=cols, recodes=recodes, replace=replace, into=into)
     target = _resolve_target(sample, new_data, inplace=inplace)
     if replace:
@@ -156,11 +141,7 @@ def categorize(
 
     # -- Compute bins from percentiles if needed -------------------------
     if percentiles is not None:
-        _df = (
-            cast(pl.DataFrame, sample._data)
-            if not isinstance(sample._data, pl.LazyFrame)
-            else cast(pl.DataFrame, sample._data.collect())
-        )
+        _df = _eager_df(sample)
 
         if col not in _df.columns:
             raise DimensionError.missing_columns(
@@ -170,14 +151,14 @@ def categorize(
                 available=_df.columns,
             )
 
-        values = _df[col].drop_nulls().to_numpy().astype(float)
-
         wgt_col = getattr(sample._design, "wgt", None)
         if wgt_col and wgt_col in _df.columns:
-            non_null_mask = _df[col].is_not_null()
-            values = _df.filter(non_null_mask)[col].to_numpy().astype(float)
-            weights = _df.filter(non_null_mask)[wgt_col].to_numpy().astype(float)
+            # Fix 2: single filter pass — extract both columns at once
+            filtered = _df.filter(pl.col(col).is_not_null()).select([col, wgt_col])
+            values = filtered[col].to_numpy().astype(float)
+            weights = filtered[wgt_col].to_numpy().astype(float)
         else:
+            values = _df[col].drop_nulls().to_numpy().astype(float)
             weights = None
 
         if isinstance(percentiles, int):
@@ -200,13 +181,10 @@ def categorize(
         )
 
     # -- Delegate to existing _categorize --------------------------------
-    _df7 = (
-        cast(pl.DataFrame, sample._data)
-        if not isinstance(sample._data, pl.LazyFrame)
-        else cast(pl.DataFrame, sample._data.collect())
-    )
+    # Fix 3: reuse _df if already materialised, otherwise get it now
+    _df_cat = _df if percentiles is not None else _eager_df(sample)
     new_data = _categorize(
-        data=_df7,
+        data=_df_cat,
         varname=col,
         bins=bins,  # type: ignore[arg-type]
         labels=labels,

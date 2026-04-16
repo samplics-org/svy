@@ -27,6 +27,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Mapping, Sequence, cast
 
+
 import polars as pl
 
 from svy.core.constants import _INTERNAL_CONCAT_SUFFIX
@@ -38,6 +39,10 @@ if TYPE_CHECKING:
     from svy.core.sample import Sample
 
 log = logging.getLogger(__name__)
+
+# Cache for design.specified_fields() keyed on id(design).
+# Stores (design_obj, fields) so we can detect if a new object reuses the same id.
+_design_fields_cache: dict[int, tuple] = {}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -199,7 +204,14 @@ def prepare_data(
     if extra_cols:
         needed.extend(extra_cols)
     needed.extend(extract_where_cols(where))
-    needed.extend(design.specified_fields())
+    key = id(design)
+    cached = _design_fields_cache.get(key)
+    if cached is None or cached[0] is not design:
+        fields = design.specified_fields(data_columns=local_data.columns)
+        _design_fields_cache[key] = (design, fields)
+    else:
+        fields = cached[1]
+    needed.extend(fields)
     # Include singleton variance/exclude columns if present in data
     _sr_pre = getattr(sample, "_singleton_result", None)
     _sc_pre = _sr_pre.config if _sr_pre else None

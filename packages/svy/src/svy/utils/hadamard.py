@@ -15,7 +15,6 @@ found at: http://neilsloane.com/hadamard/
 """
 
 import logging
-import math
 
 import numpy as np
 
@@ -192,8 +191,8 @@ _HADAMARD_FUNCS = {
 
 
 def hadamard(n: int) -> np.ndarray:
-    n_log2 = int(math.log(n, 2))
-    if math.pow(2, n_log2) == n:
+    # Power-of-2 check using integer arithmetic — avoids float precision issues
+    if n > 0 and (n & (n - 1)) == 0:
         return np.asarray(hdd(n))
     elif n in _HADAMARD_FUNCS:
         return np.asarray(_HADAMARD_FUNCS[n]())

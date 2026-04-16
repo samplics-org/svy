@@ -146,18 +146,18 @@ def _top_code(
     """Cap values >= bound at bound."""
     if not top_codes:
         return data
-    out = data
     into_map = _normalize_into(into, list(top_codes.keys()))
+    exprs: list[pl.Expr] = []
     for col, bound in top_codes.items():
-        if col not in out.columns:
+        if col not in data.columns:
             raise KeyError(f"Column not found for top-code: {col!r}")
         target = _target_name(
-            data=out, src_col=col, replace=replace, into_map=into_map, auto_suffix="top_coded"
+            data=data, src_col=col, replace=replace, into_map=into_map, auto_suffix="top_coded"
         )
-        out = out.with_columns(
+        exprs.append(
             pl.when(pl.col(col) >= bound).then(bound).otherwise(pl.col(col)).alias(target)
         )
-    return out
+    return data.with_columns(exprs)
 
 
 def _bottom_code(
@@ -170,18 +170,18 @@ def _bottom_code(
     """Floor values <= bound at bound."""
     if not bottom_codes:
         return data
-    out = data
     into_map = _normalize_into(into, list(bottom_codes.keys()))
+    exprs: list[pl.Expr] = []
     for col, bound in bottom_codes.items():
-        if col not in out.columns:
+        if col not in data.columns:
             raise KeyError(f"Column not found for bottom-code: {col!r}")
         target = _target_name(
-            data=out, src_col=col, replace=replace, into_map=into_map, auto_suffix="bottom_coded"
+            data=data, src_col=col, replace=replace, into_map=into_map, auto_suffix="bottom_coded"
         )
-        out = out.with_columns(
+        exprs.append(
             pl.when(pl.col(col) <= bound).then(bound).otherwise(pl.col(col)).alias(target)
         )
-    return out
+    return data.with_columns(exprs)
 
 
 def _bottom_and_top_code(
@@ -197,6 +197,7 @@ def _bottom_and_top_code(
 
     out = data
     into_map = _normalize_into(into, list(bottom_and_top_codes.keys()))
+    exprs: list[pl.Expr] = []
     for col, bounds in bottom_and_top_codes.items():
         if col not in out.columns:
             raise KeyError(f"Column not found for clamp: {col!r}")
@@ -219,12 +220,11 @@ def _bottom_and_top_code(
             auto_suffix="bottom_and_top_coded",
         )
         c = pl.col(col)
-        # Original pl.when/then logic
         clamped = pl.when(c < bottom).then(bottom).otherwise(c)
         clamped = pl.when(clamped > top).then(top).otherwise(clamped)
-        out = out.with_columns(clamped.alias(target))
+        exprs.append(clamped.alias(target))
 
-    return out
+    return out.with_columns(exprs)
 
 
 # ----------------------------
@@ -273,6 +273,7 @@ def _recode(
 
     out = data
     into_map = _normalize_into(into, var_list)
+    exprs: list[pl.Expr] = []
 
     for col in var_list:
         if col not in out.columns:
@@ -300,14 +301,10 @@ def _recode(
                 builder = builder.when(cond).then(pl.lit(new_val))
 
         # Default: keep original value
-        if builder is not None:
-            final_expr = builder.otherwise(expr)
-        else:
-            final_expr = expr
+        final_expr = builder.otherwise(expr) if builder is not None else expr
+        exprs.append(final_expr.alias(target))
 
-        out = out.with_columns(final_expr.alias(target))
-
-    return out
+    return out.with_columns(exprs)
 
 
 def _categorize(

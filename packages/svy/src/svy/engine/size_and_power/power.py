@@ -83,6 +83,26 @@ def _power_from_lam_array(
     return cast(FloatArray, power)
 
 
+def _clamp01(v: float) -> float:
+    """Clamp a float to [0, 1]."""
+    return float(min(1.0, max(0.0, v)))
+
+
+def _scalar_power(
+    lam: float,
+    zc: float,
+    ttype: Literal["two-sided", "less", "greater"],
+) -> float:
+    """Compute clipped scalar power from non-centrality parameter lam and critical value zc."""
+    if ttype == "two-sided":
+        val = float(normal.cdf(lam - zc) + normal.cdf(-lam - zc))
+    elif ttype == "greater":
+        val = float(1.0 - normal.cdf(zc - lam))
+    else:  # "less"
+        val = float(normal.cdf(-zc - lam))
+    return _clamp01(val)
+
+
 # =========================
 # Mean-power (array flavor)
 # =========================
@@ -131,11 +151,8 @@ def calculate_power_number(
     if samp_size <= 0 or sigma <= 0:
         return float("nan")
     lam = float(delta) * math.sqrt(float(samp_size)) / float(sigma)
-    if two_sides:
-        val = float(normal.cdf(lam - zc) + normal.cdf(-lam - zc))
-    else:
-        val = float(1.0 - normal.cdf(zc - lam) if delta >= 0 else normal.cdf(-zc - lam))
-    return float(min(1.0, max(0.0, val)))
+    ttype: Literal["two-sided", "less", "greater"] = "two-sided" if two_sides else "greater"
+    return _scalar_power(lam, zc, ttype)
 
 
 # =========================
@@ -155,6 +172,7 @@ def calculate_power_map(
     if not (kd == ks == kn):
         raise KeyError("delta, sigma, and samp_size must have identical keys")
     out: dict[Category, float] = {}
+    ttype: Literal["two-sided", "less", "greater"] = "two-sided" if two_sides else "greater"
     for k in kd:
         n = float(samp_size[k])
         s = float(sigma[k])
@@ -162,11 +180,7 @@ def calculate_power_map(
             out[k] = float("nan")
             continue
         lam = float(delta[k]) * math.sqrt(n) / s
-        if two_sides:
-            val = float(normal.cdf(lam - zc) + normal.cdf(-lam - zc))
-        else:
-            val = float(1.0 - normal.cdf(zc - lam) if delta[k] >= 0 else normal.cdf(-zc - lam))
-        out[k] = float(min(1.0, max(0.0, val)))
+        out[k] = _scalar_power(lam, zc, ttype)
     return out
 
 
@@ -253,11 +267,11 @@ def power_for_one_proportion_number(
         z = (p1 - p0) / denom
 
     if testing_type == "two-sided":
-        return float(normal.cdf(z - zc) + normal.cdf(-z - zc))
+        return _scalar_power(z, zc, "two-sided")
     elif testing_type == "greater":
-        return float(1.0 - normal.cdf(zc - z))
+        return _scalar_power(z, zc, "greater")
     else:  # "less"
-        return float(normal.cdf(-zc - z))
+        return _scalar_power(z, zc, "less")
 
 
 def power_for_one_proportion_array(
@@ -328,12 +342,11 @@ def power_for_one_proportion_map(
             z = (p1 - p0) / denom
 
         if testing_type == "two-sided":
-            val = normal.cdf(z - zc) + normal.cdf(-z - zc)
+            out[k] = _scalar_power(z, zc, "two-sided")
         elif testing_type == "greater":
-            val = 1.0 - normal.cdf(zc - z)
+            out[k] = _scalar_power(z, zc, "greater")
         else:
-            val = normal.cdf(-zc - z)
-        out[k] = float(min(1.0, max(0.0, float(val))))
+            out[k] = _scalar_power(z, zc, "less")
     return out
 
 
@@ -495,13 +508,7 @@ def power_for_two_proportions(
                 out[k] = float("nan")
                 continue
             lam_f = (pa - pb) / se_f
-            if ttype == "two-sided":
-                val = normal.cdf(lam_f - zc_dict) + normal.cdf(-lam_f - zc_dict)
-            elif ttype == "greater":
-                val = 1.0 - normal.cdf(zc_dict - lam_f)
-            else:  # "less"
-                val = normal.cdf(-zc_dict - lam_f)
-            out[k] = float(min(1.0, max(0.0, float(val))))
+            out[k] = _scalar_power(lam_f, zc_dict, ttype)
         return out
 
     # --------------
@@ -568,13 +575,7 @@ def power_for_two_proportions(
             return float("nan")
         zc_s = float(_zcrit_from_type(float(alpha), ttype))
         lam_s = (pa_s - pb_s) / se_s
-        if ttype == "two-sided":
-            val = normal.cdf(lam_s - zc_s) + normal.cdf(-lam_s - zc_s)
-        elif ttype == "greater":
-            val = 1.0 - normal.cdf(zc_s - lam_s)
-        else:  # "less"
-            val = normal.cdf(-zc_s - lam_s)
-        return float(min(1.0, max(0.0, float(val))))
+        return _scalar_power(lam_s, zc_s, ttype)
 
     raise TypeError(
         "prop_a/prop_b must both be scalars, both ndarrays, or both dicts (with compatible size inputs)."
@@ -658,13 +659,7 @@ def power_for_one_mean(
                 out[k] = float("nan")
                 continue
             lam = (float(mean_1[k]) - float(mean_0[k])) * math.sqrt(n_s) / s_s  # type: ignore[index]
-            if ttype == "two-sided":
-                val = normal.cdf(lam - zc_map) + normal.cdf(-lam - zc_map)
-            elif ttype == "greater":
-                val = 1.0 - normal.cdf(zc_map - lam)
-            else:  # "less"
-                val = normal.cdf(-zc_map - lam)
-            out[k] = float(min(1.0, max(0.0, float(val))))
+            out[k] = _scalar_power(lam, zc_map, ttype)
         return out
 
     # --- array / vector flavor ---
@@ -697,13 +692,7 @@ def power_for_one_mean(
             return float("nan")
         lam_s = (float(mean_1) - float(mean_0)) * math.sqrt(n_s) / s_s
         zc_s = float(_zcrit_from_type(float(alpha), ttype))
-        if ttype == "two-sided":
-            val = normal.cdf(lam_s - zc_s) + normal.cdf(-lam_s - zc_s)
-        elif ttype == "greater":
-            val = 1.0 - normal.cdf(zc_s - lam_s)
-        else:  # "less"
-            val = normal.cdf(-zc_s - lam_s)
-        return float(min(1.0, max(0.0, float(val))))
+        return _scalar_power(lam_s, zc_s, ttype)
 
     raise TypeError(
         "mean_0/mean_1/sigma/samp_size must all be scalars, all ndarrays, or all dicts with identical keys."

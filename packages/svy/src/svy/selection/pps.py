@@ -458,12 +458,11 @@ def _pps_writeback(
     else:
         prev_prob_col = design.prob
         if prev_prob_col is not None:
-            prev = pl.DataFrame({row_col: sel_idx}).join(
-                other=src_df.select(row_col, prev_prob_col), on=row_col, how="left"
-            )
-            prev_probs = (
-                prev[prev_prob_col].fill_null(1.0).to_numpy().astype(np.float64, copy=False)
-            )
+            row_arr = src_df[row_col].to_numpy()
+            prob_arr = src_df[prev_prob_col].to_numpy().astype(np.float64)
+            order = np.argsort(row_arr, kind="stable")
+            positions = np.searchsorted(row_arr[order], sel_idx)
+            prev_probs = prob_arr[order[positions]]
             probs = probs * prev_probs
         design = design.fill_missing(prob=out_prob_col)
         temp = pl.DataFrame(

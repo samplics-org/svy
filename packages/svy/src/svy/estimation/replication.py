@@ -34,6 +34,8 @@ def get_rep_weight_cols(est: Estimation) -> list[str]:
     rw = est._sample._design.rep_wgts
     if rw is None:
         return []
+    if hasattr(rw, "_cached_cols") and rw._cached_cols is not None:
+        return rw._cached_cols
     _lraw = est._sample._data
     local_data: pl.DataFrame = (
         cast(pl.DataFrame, _lraw.collect())
@@ -45,13 +47,19 @@ def get_rep_weight_cols(est: Estimation) -> list[str]:
         def natural_keys(text):
             return [int(c) if c.isdigit() else c for c in re.split(r"(\d+)", text)]
 
-        return sorted(
+        cols = sorted(
             [c for c in local_data.columns if c.startswith(rw.prefix) and c != rw.prefix],
             key=natural_keys,
         )
     elif hasattr(rw, "wgts") and rw.wgts:
-        return list(cast(list[str], rw.wgts))
-    return []
+        cols = list(cast(list[str], rw.wgts))
+    else:
+        cols = []
+    try:
+        rw._cached_cols = cols
+    except Exception:
+        pass
+    return cols
 
 
 def get_rep_method_str(method: EstimationMethod) -> str:

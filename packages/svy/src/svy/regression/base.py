@@ -283,8 +283,7 @@ class GLM:
         term_info: dict = {}
 
         if intercept:
-            df = df.with_columns(pl.lit(1.0).alias("_intercept_"))
-            feature_exprs.append(pl.col("_intercept_"))
+            feature_exprs.append(pl.lit(1.0).alias("_intercept_"))
             feature_names.append("_intercept_")
 
         def _resolve_feature(feat: Feature) -> tuple[list[pl.Expr], list[str]]:
@@ -293,8 +292,9 @@ class GLM:
                 return [pl.col(feat).cast(pl.Float64)], [feat]
 
             elif isinstance(feat, Cat):
-                unique_vals = df.get_column(feat.name).drop_nulls().unique().to_list()
-                levels = sorted(unique_vals)
+                levels = (
+                    df.select(pl.col(feat.name).drop_nulls().unique().sort()).to_series().to_list()
+                )
 
                 if len(levels) < 2:
                     log.warning(f"Categorical '{feat.name}' has < 2 levels. Dropped.")
@@ -506,10 +506,33 @@ class GLM:
         term_info = fit.term_info or {}
         k = len(terms)
 
-        X = np.zeros((n, k))
+        # Identify simple continuous columns that can be batch-extracted in one select
+        simple_cont = {
+            t
+            for t in terms
+            if t in new_data.columns
+            and ":" not in t
+            and t != "_intercept_"
+            and term_info.get(t, {}).get("type") == "continuous"
+        }
 
+        # Batch-extract continuous columns in a single Polars select
+        batch_mat: np.ndarray | None = None
+        batch_cols: list[str] = []
+        if simple_cont:
+            batch_cols = [t for t in terms if t in simple_cont]  # preserves order
+            batch_mat = new_data.select(
+                [pl.col(c).cast(pl.Float64) for c in batch_cols]
+            ).to_numpy()
+
+        batch_idx = {col: i for i, col in enumerate(batch_cols)}
+
+        X = np.zeros((n, k))
         for j, term in enumerate(terms):
-            X[:, j] = self._resolve_pred_term(term, new_data, term_info)
+            if term in batch_idx:
+                X[:, j] = batch_mat[:, batch_idx[term]]
+            else:
+                X[:, j] = self._resolve_pred_term(term, new_data, term_info)
 
         return X
 
@@ -606,8 +629,8 @@ class GLM:
         """Compute design-based degrees of freedom."""
         if p_col and s_col:
             psu_per_stratum = df.group_by(s_col).agg(pl.col(p_col).n_unique())
-            total_psu = psu_per_stratum.get_column(p_col).sum()
-            n_strata = df.get_column(s_col).n_unique()
+            total_psu = psu_per_stratum[p_col].sum()
+            n_strata = psu_per_stratum.height  # already one row per stratum
             return int(max(1, total_psu - n_strata))
         elif p_col:
             return max(1, df.get_column(p_col).n_unique() - 1)

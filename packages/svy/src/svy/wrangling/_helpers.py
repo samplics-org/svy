@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import copy
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import polars as pl
 
@@ -28,6 +28,17 @@ from svy.core.design import Design
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample
+
+
+# -------------------------------------------------------------------
+# LazyFrame materialisation helper
+# -------------------------------------------------------------------
+
+
+def _eager_df(sample: "Sample") -> pl.DataFrame:
+    """Return sample._data as an eager DataFrame, collecting if LazyFrame."""
+    data = sample._data
+    return data if isinstance(data, pl.DataFrame) else cast(pl.DataFrame, data.collect())
 
 
 # -------------------------------------------------------------------

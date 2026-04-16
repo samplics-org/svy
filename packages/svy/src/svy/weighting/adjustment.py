@@ -62,15 +62,8 @@ def _encode_adj_class(adj_class_arr: np.ndarray | None, n: int) -> np.ndarray:
         return np.zeros(n, dtype=np.int64)
     if np.issubdtype(adj_class_arr.dtype, np.integer):
         return adj_class_arr.astype(np.int64)
-    mapping: dict = {}
-    next_id = 0
-    result = np.empty(len(adj_class_arr), dtype=np.int64)
-    for i, val in enumerate(adj_class_arr):
-        if val not in mapping:
-            mapping[val] = next_id
-            next_id += 1
-        result[i] = mapping[val]
-    return result
+    _, result = np.unique(adj_class_arr, return_inverse=True)
+    return result.astype(np.int64)
 
 
 def adjust(

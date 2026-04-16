@@ -315,11 +315,6 @@ def _compute_pop_sizes(
     """
     if not G or stratum_by_col is None:
         return {"__all__": len(data)}
-    counts = (
-        data.group_by(stratum_by_col)
-        .agg(pl.len().alias("__count__"))
-        .to_pandas()
-        .set_index(stratum_by_col)["__count__"]
-        .to_dict()
-    )
+    agg = data.group_by(stratum_by_col).agg(pl.len().alias("__count__"))
+    counts = dict(zip(agg[stratum_by_col].to_list(), agg["__count__"].to_list()))
     return {g: int(counts.get(g, 0)) for g in G}

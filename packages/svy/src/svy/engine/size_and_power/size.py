@@ -48,6 +48,43 @@ def _lookup_pair(
     return m  # Number or tuple — already correct type
 
 
+def _resolve_maps(
+    a: Number | DomainScalarMap,
+    b: Number | DomainScalarMap,
+    *,
+    name_a: str = "a",
+    name_b: str = "b",
+) -> tuple[dict[Category, Number], dict[Category, Number], list[Category]]:
+    """
+    Resolve two scalar-or-map arguments into aligned dicts + a shared key list.
+
+    Both-mapping: keys must match.
+    One-mapping:  the scalar is broadcast to the other's keys.
+    Returns (dict_a, dict_b, keys).
+    """
+    if isinstance(a, Mapping) and isinstance(b, Mapping):
+        da = cast(dict[Category, Number], dict(a))
+        db = cast(dict[Category, Number], dict(b))
+        ka, kb = set(da), set(db)
+        if ka != kb:
+            raise ValueError(
+                f"Domain key mismatch: missing in {name_b}={ka - kb or '{}'}, "
+                f"missing in {name_a}={kb - ka or '{}'}"
+            )
+        keys = list(ka)
+    elif isinstance(a, Mapping):
+        da = cast(dict[Category, Number], dict(a))
+        keys = list(da)
+        scalar_b = cast(Number, b)
+        db = {k: scalar_b for k in keys}
+    else:
+        db = cast(dict[Category, Number], dict(b))
+        keys = list(db)
+        scalar_a = cast(Number, a)
+        da = {k: scalar_a for k in keys}
+    return da, db, keys
+
+
 # ============================================================
 # Adjsut for nonrespone
 # ============================================================
@@ -89,33 +126,7 @@ def _apply_nonresponse(
     if not isinstance(n, Mapping) and not isinstance(resp_rate, Mapping):
         return _adj(n, resp_rate)
 
-    n_d: dict[Category, Number]
-    r_d: dict[Category, Number]
-    typed_keys: list[Category]
-
-    if isinstance(n, Mapping) and isinstance(resp_rate, Mapping):
-        n_d = cast(dict[Category, Number], dict(n))
-        r_d = cast(dict[Category, Number], dict(resp_rate))
-        keys_n: set[Category] = set(n_d.keys())
-        keys_r: set[Category] = set(r_d.keys())
-        if keys_n != keys_r:
-            raise ValueError(
-                f"Domain key mismatch: missing in resp_rate={keys_n - keys_r or '{}'}, "
-                f"missing in n={keys_r - keys_n or '{}'}"
-            )
-        typed_keys = list(keys_n)
-    elif isinstance(n, Mapping):
-        n_d = cast(dict[Category, Number], dict(n))
-        typed_keys = list(n_d.keys())
-        r_scalar = cast(Number, resp_rate)
-        r_d = {k: r_scalar for k in typed_keys}
-    else:
-        assert isinstance(resp_rate, Mapping)
-        r_d = cast(dict[Category, Number], dict(resp_rate))
-        typed_keys = list(r_d.keys())
-        n_scalar = cast(Number, n)
-        n_d = {k: n_scalar for k in typed_keys}
-
+    n_d, r_d, typed_keys = _resolve_maps(n, resp_rate, name_a="n", name_b="resp_rate")
     return {k: _adj(n_d[k], r_d[k]) for k in typed_keys}
 
 
@@ -154,35 +165,8 @@ def _apply_deff(
     if not isinstance(n, Mapping) and not isinstance(deff, Mapping):
         return _adjust(n, deff)
 
-    n_d2: dict[Category, Number]
-    d_d: dict[Category, Number]
-    typed_keys2: list[Category]
-
-    if isinstance(n, Mapping) and isinstance(deff, Mapping):
-        n_d2 = cast(dict[Category, Number], dict(n))
-        d_d = cast(dict[Category, Number], dict(deff))
-        keys_n2: set[Category] = set(n_d2.keys())
-        keys_d: set[Category] = set(d_d.keys())
-        if keys_n2 != keys_d:
-            raise ValueError(
-                f"Domain key mismatch: "
-                f"missing in deff={keys_n2 - keys_d or '{}'}, "
-                f"missing in n={keys_d - keys_n2 or '{}'}"
-            )
-        typed_keys2 = list(keys_n2)
-    elif isinstance(n, Mapping):
-        n_d2 = cast(dict[Category, Number], dict(n))
-        typed_keys2 = list(n_d2.keys())
-        d_scalar = cast(Number, deff)
-        d_d = {k: d_scalar for k in typed_keys2}
-    else:
-        assert isinstance(deff, Mapping)
-        d_d = cast(dict[Category, Number], dict(deff))
-        typed_keys2 = list(d_d.keys())
-        n_scalar2 = cast(Number, n)
-        n_d2 = {k: n_scalar2 for k in typed_keys2}
-
-    return {k: _adjust(n_d2[k], d_d[k]) for k in typed_keys2}
+    n_d, d_d, typed_keys = _resolve_maps(n, deff, name_a="n", name_b="deff")
+    return {k: _adjust(n_d[k], d_d[k]) for k in typed_keys}
 
 
 # ============================================================
@@ -221,35 +205,8 @@ def _apply_fpc_srswor(
     if not isinstance(n0, Mapping) and not isinstance(pop_size, Mapping):
         return _adjust(n0, pop_size)
 
-    n0_d: dict[Category, Number]
-    N_d: dict[Category, Number]
-    typed_keys3: list[Category]
-
-    if isinstance(n0, Mapping) and isinstance(pop_size, Mapping):
-        n0_d = cast(dict[Category, Number], dict(n0))
-        N_d = cast(dict[Category, Number], dict(pop_size))
-        keys_n0: set[Category] = set(n0_d.keys())
-        keys_N: set[Category] = set(N_d.keys())
-        if keys_n0 != keys_N:
-            raise ValueError(
-                f"Domain key mismatch: "
-                f"missing in pop_size={keys_n0 - keys_N or '{}'}, "
-                f"missing in n0={keys_N - keys_n0 or '{}'}"
-            )
-        typed_keys3 = list(keys_n0)
-    elif isinstance(n0, Mapping):
-        n0_d = cast(dict[Category, Number], dict(n0))
-        typed_keys3 = list(n0_d.keys())
-        N_scalar = cast(Number, pop_size)
-        N_d = {k: N_scalar for k in typed_keys3}
-    else:
-        assert isinstance(pop_size, Mapping)
-        N_d = cast(dict[Category, Number], dict(pop_size))
-        typed_keys3 = list(N_d.keys())
-        n0_scalar = cast(Number, n0)
-        n0_d = {k: n0_scalar for k in typed_keys3}
-
-    return {k: _adjust(n0_d[k], N_d[k]) for k in typed_keys3}
+    n0_d, N_d, typed_keys = _resolve_maps(n0, pop_size, name_a="n0", name_b="pop_size")
+    return {k: _adjust(n0_d[k], N_d[k]) for k in typed_keys}
 
 
 # ============================================================
@@ -675,6 +632,16 @@ def _wald_sample_size_one_mean_map(
 # ============================================================
 
 
+def _to_pair(x: Number | tuple[Number, Number]) -> tuple[float, float]:
+    """Coerce a scalar or 2-tuple to (float, float), broadcasting scalars."""
+    if isinstance(x, tuple):
+        if len(x) != 2:
+            raise ValueError(f"Expected a 2-tuple, got length {len(x)}.")
+        return float(x[0]), float(x[1])
+    xf = float(x)
+    return xf, xf
+
+
 def _apply_nonresponse_pair(
     *,
     n: tuple[Number, Number] | Mapping[Category, tuple[Number, Number]],
@@ -692,14 +659,6 @@ def _apply_nonresponse_pair(
                 raise ValueError(f"Invalid response rate: {rv} (must be finite and in (0, 1]).")
             return float(math.ceil(n_f))
         return float(math.ceil(n_f / r_f))
-
-    def _to_pair(x: Number | tuple[Number, Number]) -> tuple[float, float]:
-        if isinstance(x, tuple):
-            if len(x) != 2:
-                raise ValueError(f"Expected a 2-tuple, got length {len(x)}.")
-            return float(x[0]), float(x[1])
-        xf = float(x)
-        return xf, xf
 
     def _adj_pair(
         n_pair: tuple[Number, Number], r_pair: tuple[Number, Number]
@@ -770,14 +729,6 @@ def _apply_deff_pair(
         if not (d_f > 0.0):
             return float(math.ceil(n_f))
         return float(math.ceil(d_f * n_f))
-
-    def _to_pair(x: Number | tuple[Number, Number]) -> tuple[float, float]:
-        if isinstance(x, tuple):
-            if len(x) != 2:
-                raise ValueError(f"Expected a 2-tuple, got length {len(x)}.")
-            return float(x[0]), float(x[1])
-        xf = float(x)
-        return xf, xf
 
     def _adjust_pair(
         n_pair: tuple[Number, Number], d_pair: tuple[Number, Number]
@@ -850,14 +801,6 @@ def _apply_fpc_srswor_pair(
         if Nf <= 0.0 or denom <= 0.0:
             return float(math.ceil(n0f))
         return float(math.ceil((Nf * n0f) / denom))
-
-    def _to_pair(x: Number | tuple[Number, Number]) -> tuple[float, float]:
-        if isinstance(x, tuple):
-            if len(x) != 2:
-                raise ValueError(f"Expected a 2-tuple, got length {len(x)}.")
-            return float(x[0]), float(x[1])
-        xf = float(x)
-        return xf, xf
 
     def _adjust_pair(
         n0_pair: tuple[Number, Number], N_pair: tuple[Number, Number]

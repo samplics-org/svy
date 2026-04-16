@@ -42,15 +42,10 @@ def _encode_stratum(stratum):
         return {}, None
     import numpy as np
 
-    unique_labels = []
-    seen = {}
-    for v in stratum:
-        s = str(v)
-        if s not in seen:
-            seen[s] = len(unique_labels)
-            unique_labels.append(s)
-    encoded = [seen[str(v)] for v in stratum]
-    return seen, encoded
+    str_arr = np.asarray(stratum, dtype=str)
+    unique_labels, encoded_arr = np.unique(str_arr, return_inverse=True)
+    seen = {lbl: i for i, lbl in enumerate(unique_labels)}
+    return seen, encoded_arr.tolist()
 
 
 def _remap_n_map(n_map, label_to_int):
@@ -444,10 +439,12 @@ def _srs_writeback(
     else:
         prob_col = prob_name or design.prob or SVY_PROB
         if design.prob is not None:
-            prev = pl.DataFrame({row_col: sel_idx}).join(
-                other=data.select(row_col, prob_col), on=row_col, how="left"
-            )
-            prev_probs = prev[prob_col].fill_null(1.0).to_numpy().astype(np.float64)
+            # data already has row_col; use searchsorted instead of a join
+            row_arr = data[row_col].to_numpy()
+            prob_arr = data[prob_col].to_numpy().astype(np.float64)
+            order = np.argsort(row_arr, kind="stable")
+            positions = np.searchsorted(row_arr[order], sel_idx)
+            prev_probs = prob_arr[order[positions]]
             probs = probs * prev_probs
         design = design.fill_missing(prob=prob_col)
         temp = pl.DataFrame(
