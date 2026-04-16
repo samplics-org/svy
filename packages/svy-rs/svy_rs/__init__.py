@@ -3,6 +3,7 @@
 svy-rs: Internal Rust extension for the svy package.
 WARNING: This is an internal package. Do not depend on it directly.
 """
+
 from svy_rs._internal import (
     # Taylor linearization
     taylor_mean,
@@ -42,4 +43,4 @@ from svy_rs._internal import (
     select_pps_rs,
 )
 
-__version__ = "0.7.1"
+__version__ = "0.8.0"

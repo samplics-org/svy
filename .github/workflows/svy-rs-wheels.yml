@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - "svy-rs-v[0-9]+.[0-9]+.[0-9]+*"
-    paths:
-      - "packages/svy-rs/**"
   pull_request:
     paths:
       - "packages/svy-rs/**"
