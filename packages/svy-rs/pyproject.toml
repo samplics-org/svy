@@ -1,6 +1,6 @@
 [project]
 name = "svy_rs"
-version = "0.6.2"
+version = "0.7.1"
 description = "Internal Rust extension for the svy package. Do not depend on this directly."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,12 +12,13 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Development Status :: 4 - Beta",
   "Operating System :: OS Independent",
   "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-    "polars[pyarrow]>=1.8.2",
+    "polars[pyarrow]>=1.39.1",
 ]
 
 [project.urls]

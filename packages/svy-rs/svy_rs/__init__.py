@@ -37,6 +37,9 @@ from svy_rs._internal import (
     create_jk_wgts,
     create_bootstrap_wgts,
     create_sdr_wgts,
+    # Sampling
+    select_srs_rs,
+    select_pps_rs,
 )
 
-__version__ = "0.6.2"
+__version__ = "0.7.1"

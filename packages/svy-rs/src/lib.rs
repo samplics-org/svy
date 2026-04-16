@@ -4,6 +4,8 @@ use pyo3::prelude::*;
 mod categorical;
 mod estimation;
 mod regression;
+mod rng;
+mod sampling;
 mod weighting;
 
 // ============================================================================
@@ -12,13 +14,13 @@ mod weighting;
 
 #[pymodule]
 fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // Taylor linearization functions
+    // Taylor linearization
     m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_mean, m)?)?;
     m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_total, m)?)?;
     m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_prop, m)?)?;
     m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_median, m)?)?;
-    // Replication-based estimation functions
+    // Replication-based estimation
     m.add_function(wrap_pyfunction!(estimation::replication_api::replicate_mean, m)?)?;
     m.add_function(wrap_pyfunction!(estimation::replication_api::replicate_total, m)?)?;
     m.add_function(wrap_pyfunction!(estimation::replication_api::replicate_ratio, m)?)?;
@@ -46,5 +48,8 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(weighting::api::create_jk_wgts, m)?)?;
     m.add_function(wrap_pyfunction!(weighting::api::create_bootstrap_wgts, m)?)?;
     m.add_function(wrap_pyfunction!(weighting::api::create_sdr_wgts, m)?)?;
+    // Sampling
+    m.add_function(wrap_pyfunction!(sampling::api::select_srs_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(sampling::api::select_pps_rs, m)?)?;
     Ok(())
 }

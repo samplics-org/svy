@@ -1,6 +1,6 @@
 [package]
 name = "svy_rs"
-version = "0.6.2"
+version = "0.7.1"
 edition = "2024"
 repository = "https://gitlab.com/samplics/svy"
 homepage = "https://gitlab.com/samplics/svy"
@@ -14,11 +14,11 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.26", features = ["abi3-py311", "extension-module", "generate-import-lib"] }
 pyo3-polars = { version = "0.25", features = ["derive"] }
 polars = { version = "0.52", default-features = false, features = ["dtype-categorical"] }
-faer = "0.19"
+faer = "0.24"
 ahash = "0.8"
 numpy = "0.26"
 ndarray = { version = "0.16", features = ["rayon"] }
-rayon = "1.10"
+rayon = "1.12"
 thiserror = "2.0"
 approx = "0.5.1"
 

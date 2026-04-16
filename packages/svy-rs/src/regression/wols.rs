@@ -375,15 +375,19 @@ pub fn influence_covariance(
 
     let mut cov = vec![0.0; k * k];
 
+    // Pre-build strata → obs index to avoid O(n_strata × N) scan
+    let mut strata_obs: Vec<Vec<usize>> = vec![Vec::new(); n_strata as usize];
+    for i in 0..n {
+        if strata_idx[i] != u32::MAX {
+            strata_obs[strata_idx[i] as usize].push(i);
+        }
+    }
+
     for h in 0..n_strata {
-        // Collect PSU totals of influence functions within this stratum
         let mut psu_map: HashMap<u32, usize> = HashMap::new();
         let mut psu_totals: Vec<Vec<f64>> = Vec::new();
 
-        for i in 0..n {
-            if strata_idx[i] != h {
-                continue;
-            }
+        for &i in &strata_obs[h as usize] {
             let pid = psu_idx[i];
             let li = *psu_map.entry(pid).or_insert_with(|| {
                 let idx = psu_totals.len();

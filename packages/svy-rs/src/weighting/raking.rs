@@ -1,6 +1,6 @@
 // src/weighting/raking.rs
 
-use super::utils::{Result, WeightingError, check_bounds, check_convergence, sum_by_group_2d};
+use super::utils::{Result, WeightingError, check_bounds, sum_by_group_2d};
 use ndarray::{Array1, Array2, ArrayView2};
 
 struct MarginSpec {
@@ -56,7 +56,9 @@ pub fn rake_impl(
     let mut raked_weights = wgt.to_owned();
 
     for _ in 0..max_iter {
-        let weights_start = raked_weights.clone();
+        // Track max relative change inline — avoids cloning the full N×R matrix
+        // on every iteration for convergence checking.
+        let mut max_rel_diff = 0.0f64;
 
         for margin in &margins {
             let current_sums =
@@ -79,14 +81,20 @@ pub fn rake_impl(
 
             for (row_idx, &group_id) in margin.indices.iter().enumerate() {
                 for col_idx in 0..n_reps {
-                    raked_weights[[row_idx, col_idx]] *= factors[[group_id, col_idx]];
+                    let prev = raked_weights[[row_idx, col_idx]];
+                    let f = factors[[group_id, col_idx]];
+                    let next = prev * f;
+                    raked_weights[[row_idx, col_idx]] = next;
+                    // Track convergence: relative change = |f - 1|
+                    let rel = (f - 1.0).abs();
+                    if rel > max_rel_diff {
+                        max_rel_diff = rel;
+                    }
                 }
             }
         }
 
-        let (converged, _) = check_convergence(raked_weights.view(), weights_start.view(), tol);
-        if converged {
-            // Bounds check only on actual convergence — explicit constraint violation
+        if max_rel_diff < tol {
             if !check_bounds(raked_weights.view(), wgt, ll_bound, up_bound) {
                 return Err(WeightingError::InvalidInput(
                     "Raking exceeded weight bounds".to_string(),

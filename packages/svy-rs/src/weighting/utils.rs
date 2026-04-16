@@ -35,25 +35,6 @@ pub fn sum_by_group_2d(
     sums
 }
 
-/// Check convergence by comparing maximum relative difference
-pub fn check_convergence(
-    current: ArrayView2<f64>,
-    previous: ArrayView2<f64>,
-    tol: f64,
-) -> (bool, f64) {
-    let mut max_rel_diff = 0.0;
-
-    for (curr, prev) in current.iter().zip(previous.iter()) {
-        if prev.abs() > 1e-10 {
-            let rel_diff = (curr - prev).abs() / prev.abs();
-            if rel_diff > max_rel_diff {
-                max_rel_diff = rel_diff;
-            }
-        }
-    }
-
-    (max_rel_diff < tol, max_rel_diff)
-}
 
 /// Check if weights are within bounds
 pub fn check_bounds(

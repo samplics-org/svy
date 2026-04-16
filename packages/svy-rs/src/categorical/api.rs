@@ -177,14 +177,18 @@ where
                 by_mask
             };
 
-        let mask_str: StringChunked = combined_mask
+        // Build the domain mask column without cloning the full DataFrame.
+        // DataFrame::with_column requires ownership so we use hstack on a
+        // single-column DataFrame — avoids copying all existing columns.
+        let mask_col: Series = combined_mask
             .iter()
-            .map(|v| if v.unwrap_or(false) { Some("true") } else { Some("false") })
-            .collect();
-        let temp_df = df
-            .clone()
-            .with_column(mask_str.into_series().with_name("__svy_by_domain__".into()))?
-            .clone();
+            .map(|v| if v.unwrap_or(false) { "true" } else { "false" })
+            .collect::<StringChunked>()
+            .with_name("__svy_by_domain__".into())
+            .into_series();
+
+        // hstack adds columns without touching existing data; clone is shallow (Arc)
+        let temp_df = df.hstack(&[mask_col.into()])?;
 
         let mut single = run_single(&temp_df, Some("__svy_by_domain__"), Some("true"))?;
         let with_by    = single

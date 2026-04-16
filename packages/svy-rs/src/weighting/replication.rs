@@ -9,7 +9,7 @@
 use ndarray::{Array1, Array2, ArrayView1};
 use rayon::prelude::*;
 use std::collections::HashMap;
-
+use crate::rng::Rng;
 use super::hadamard_tables::get_hardcoded_hadamard;
 
 /// Result type for replication functions
@@ -50,53 +50,6 @@ impl std::fmt::Display for ReplicationError {
 }
 
 impl std::error::Error for ReplicationError {}
-
-// ============================================================================
-// Random Number Generator (xoshiro256**)
-// ============================================================================
-
-#[derive(Clone)]
-struct Rng {
-    state: [u64; 4],
-}
-
-impl Rng {
-    fn new(seed: u64) -> Self {
-        let mut sm_state = seed;
-        let mut state = [0u64; 4];
-        for s in &mut state {
-            sm_state = sm_state.wrapping_add(0x9e3779b97f4a7c15);
-            let mut z = sm_state;
-            z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-            *s = z ^ (z >> 31);
-        }
-        Rng { state }
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        let result = self.state[1].wrapping_mul(5).rotate_left(7).wrapping_mul(9);
-        let t = self.state[1] << 17;
-        self.state[2] ^= self.state[0];
-        self.state[3] ^= self.state[1];
-        self.state[1] ^= self.state[2];
-        self.state[0] ^= self.state[3];
-        self.state[2] ^= t;
-        self.state[3] = self.state[3].rotate_left(45);
-        result
-    }
-
-    fn next_index(&mut self, n: usize) -> usize {
-        (self.next_u64() % n as u64) as usize
-    }
-
-    fn shuffle<T>(&mut self, slice: &mut [T]) {
-        for i in (1..slice.len()).rev() {
-            let j = self.next_index(i + 1);
-            slice.swap(i, j);
-        }
-    }
-}
 
 // ============================================================================
 // Hadamard Matrix Generation
@@ -285,15 +238,15 @@ fn build_brr_stratum_map(
     psu: &ArrayView1<i64>,
     seed: Option<u64>,
 ) -> Result<(HashMap<i64, (i64, Vec<i64>)>, HashMap<(i64, i64), usize>)> {
-    let mut stratum_psus: HashMap<i64, Vec<i64>> = HashMap::new();
+    // Use HashSet for O(1) PSU deduplication, then convert to sorted Vec
+    use std::collections::HashSet as HSet;
+    let mut stratum_set: HashMap<i64, HSet<i64>> = HashMap::new();
     for i in 0..stratum.len() {
-        let s = stratum[i];
-        let p = psu[i];
-        let psus = stratum_psus.entry(s).or_default();
-        if !psus.contains(&p) {
-            psus.push(p);
-        }
+        stratum_set.entry(stratum[i]).or_default().insert(psu[i]);
     }
+    let mut stratum_psus: HashMap<i64, Vec<i64>> = stratum_set.into_iter()
+        .map(|(s, set)| { let mut v: Vec<i64> = set.into_iter().collect(); v.sort_unstable(); (s, v) })
+        .collect();
 
     for (&s, psus) in &stratum_psus {
         if psus.len() != 2 {
@@ -527,6 +480,13 @@ pub fn create_bootstrap_weights(
         .unwrap_or_else(|| Array1::ones(n_obs));
     let stratum_psus = build_stratum_psu_list(&stratum_vec, &psu);
 
+    // Pre-build PSU → observation indices map once, shared across replicates.
+    // Avoids O(N) full-scan per stratum per replicate.
+    let mut psu_obs: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for i in 0..n_obs {
+        psu_obs.entry((stratum_vec[i], psu[i])).or_default().push(i);
+    }
+
     let rep_weights: Vec<Array1<f64>> = (0..n_reps)
         .into_par_iter()
         .map(|r| {
@@ -535,14 +495,20 @@ pub fn create_bootstrap_weights(
 
             for (&s, psus) in &stratum_psus {
                 let n_psu = psus.len();
-                let mut counts: HashMap<i64, usize> = HashMap::new();
+                // Draw n_psu PSUs with replacement, count selections
+                let mut counts = vec![0usize; n_psu];
                 for _ in 0..n_psu {
-                    let sel = psus[rng.next_index(n_psu)];
-                    *counts.entry(sel).or_insert(0) += 1;
+                    counts[rng.next_index(n_psu)] += 1;
                 }
-                for i in 0..n_obs {
-                    if stratum_vec[i] == s {
-                        rep_wgt[i] = wgt[i] * *counts.get(&psu[i]).unwrap_or(&0) as f64;
+                // Apply counts via pre-built index — no O(N) scan
+                for (pi, &p) in psus.iter().enumerate() {
+                    let c = counts[pi] as f64;
+                    if c > 0.0 {
+                        if let Some(obs) = psu_obs.get(&(s, p)) {
+                            for &i in obs {
+                                rep_wgt[i] = wgt[i] * c;
+                            }
+                        }
                     }
                 }
             }
@@ -618,14 +584,20 @@ pub fn create_sdr_weights(
 // ============================================================================
 
 fn build_stratum_psu_list(stratum: &Array1<i64>, psu: &ArrayView1<i64>) -> HashMap<i64, Vec<i64>> {
-    let mut map: HashMap<i64, Vec<i64>> = HashMap::new();
+    use std::collections::HashSet;
+    // Two-pass: first collect unique PSUs per stratum using HashSet (O(1) lookup),
+    // then convert to sorted Vec for deterministic replicate assignment.
+    let mut set_map: HashMap<i64, HashSet<i64>> = HashMap::new();
     for i in 0..stratum.len() {
-        let psus = map.entry(stratum[i]).or_default();
-        if !psus.contains(&psu[i]) {
-            psus.push(psu[i]);
-        }
+        set_map.entry(stratum[i]).or_default().insert(psu[i]);
     }
-    map
+    set_map.into_iter()
+        .map(|(s, set)| {
+            let mut v: Vec<i64> = set.into_iter().collect();
+            v.sort_unstable(); // deterministic ordering
+            (s, v)
+        })
+        .collect()
 }
 
 fn build_stratum_sorted_indices(

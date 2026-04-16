@@ -267,10 +267,8 @@ pub fn weighted_median_domain(
     // Sort by y value
     pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    let y_sorted: Vec<f64> = pairs.iter().map(|(y, _)| *y).collect();
-    let w_sorted: Vec<f64> = pairs.iter().map(|(_, w)| *w).collect();
+    let (y_sorted, w_sorted): (Vec<f64>, Vec<f64>) = pairs.into_iter().unzip();
 
-    // Compute CDF
     let total_w: f64 = w_sorted.iter().sum();
     if total_w <= 0.0 {
         return Ok(f64::NAN);
@@ -307,10 +305,9 @@ pub fn weighted_quantile_chunked(
     // Sort by y value
     pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    let y_sorted: Vec<f64> = pairs.iter().map(|(y, _)| *y).collect();
-    let w_sorted: Vec<f64> = pairs.iter().map(|(_, w)| *w).collect();
+    // unzip consumes pairs in one allocation instead of two map+collect passes
+    let (y_sorted, w_sorted): (Vec<f64>, Vec<f64>) = pairs.into_iter().unzip();
 
-    // Compute CDF
     let total_w: f64 = w_sorted.iter().sum();
     if total_w <= 0.0 {
         return Ok(f64::NAN);
@@ -331,23 +328,33 @@ pub fn weighted_quantile_chunked(
 // ============================================================================
 
 pub fn scores_mean(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult<Float64Chunked> {
-    let est = point_estimate_mean(y, weights)?;
-    let sum_w: f64 = y
-        .iter()
-        .zip(weights.iter())
-        .filter_map(|(yi, wi)| {
-            yi?;
-            wi
-        })
-        .sum();
+    // Single pass: accumulate sum_wy, sum_w and collect (y,w) pairs simultaneously.
+    // Avoids the 3 separate iterations that the previous point_estimate_mean + sum_w + score
+    // build pattern required.
+    let n = y.len();
+    let mut sum_wy = 0.0f64;
+    let mut sum_w  = 0.0f64;
+    let mut pairs: Vec<Option<(f64, f64)>> = Vec::with_capacity(n);
 
-    let scores: Vec<Option<f64>> = y
+    for (yi, wi) in y.iter().zip(weights.iter()) {
+        match (yi, wi) {
+            (Some(yv), Some(wv)) => {
+                sum_wy += yv * wv;
+                sum_w  += wv;
+                pairs.push(Some((yv, wv)));
+            }
+            _ => pairs.push(None),
+        }
+    }
+
+    if sum_w == 0.0 {
+        return Err(PolarsError::ComputeError("Sum of weights is zero".into()));
+    }
+    let est = sum_wy / sum_w;
+
+    let scores: Vec<Option<f64>> = pairs
         .iter()
-        .zip(weights.iter())
-        .map(|(yi, wi)| match (yi, wi) {
-            (Some(y_val), Some(w_val)) => Some((w_val / sum_w) * (y_val - est)),
-            _ => None,
-        })
+        .map(|p| p.map(|(yv, wv)| (wv / sum_w) * (yv - est)))
         .collect();
 
     Ok(Float64Chunked::from_slice_options("scores".into(), &scores))
@@ -358,28 +365,35 @@ pub fn scores_mean_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<Float64Chunked> {
-    // If domain is empty or sum_w is 0, return 0 scores safely
-    let sum_w: f64 = weights
-        .iter()
-        .zip(domain_mask.iter())
-        .filter_map(|(w, m)| if m? { w } else { None })
-        .sum();
+    // Single pass: accumulate sum_wy / sum_w and collect triples.
+    let n = y.len();
+    let mut sum_wy = 0.0f64;
+    let mut sum_w  = 0.0f64;
+    let mut triples: Vec<Option<(f64, f64)>> = Vec::with_capacity(n); // (yv,wv) only in-domain
 
-    if sum_w == 0.0 {
-        let zeros = vec![Some(0.0); y.len()];
-        return Ok(Float64Chunked::from_slice_options("scores".into(), &zeros));
+    for ((yi, wi), mi) in y.iter().zip(weights.iter()).zip(domain_mask.iter()) {
+        match (yi, wi, mi) {
+            (Some(yv), Some(wv), Some(true)) => {
+                sum_wy += yv * wv;
+                sum_w  += wv;
+                triples.push(Some((yv, wv)));
+            }
+            _ => triples.push(None),
+        }
     }
 
-    let est = point_estimate_mean_domain(y, weights, domain_mask)?;
+    if sum_w == 0.0 {
+        let zeros = vec![Some(0.0); n];
+        return Ok(Float64Chunked::from_slice_options("scores".into(), &zeros));
+    }
+    let est = sum_wy / sum_w;
 
-    let scores: Vec<Option<f64>> = y
+    let scores: Vec<Option<f64>> = triples
         .iter()
-        .zip(weights.iter())
-        .zip(domain_mask.iter())
-        .map(|((yi, wi), m)| match (yi, wi, m) {
-            (Some(y_val), Some(w_val), Some(true)) => Some((w_val / sum_w) * (y_val - est)),
-            _ => Some(0.0), // Zero score outside domain
-        })
+        .map(|p| Some(match p {
+            Some((yv, wv)) => (wv / sum_w) * (yv - est),
+            None => 0.0,
+        }))
         .collect();
 
     Ok(Float64Chunked::from_slice_options("scores".into(), &scores))
@@ -419,23 +433,33 @@ pub fn scores_ratio(
     x: &Float64Chunked,
     weights: &Float64Chunked,
 ) -> PolarsResult<Float64Chunked> {
-    let r_hat = point_estimate_ratio(y, x, weights)?;
-    let sum_wx: f64 = x
-        .iter()
-        .zip(weights.iter())
-        .filter_map(|(xi, wi)| Some(xi? * wi?))
-        .sum();
+    // Single pass: accumulate sum_wy, sum_wx and collect (y,x,w) triples.
+    let n = y.len();
+    let mut sum_wy = 0.0f64;
+    let mut sum_wx = 0.0f64;
+    let mut triples: Vec<Option<(f64, f64, f64)>> = Vec::with_capacity(n);
 
-    let scores: Vec<Option<f64>> = y
-        .iter()
-        .zip(x.iter())
-        .zip(weights.iter())
-        .map(|((yi, xi), wi)| match (yi, xi, wi) {
-            (Some(y_val), Some(x_val), Some(w_val)) => {
-                Some((w_val / sum_wx) * (y_val - r_hat * x_val))
+    for ((yi, xi), wi) in y.iter().zip(x.iter()).zip(weights.iter()) {
+        match (yi, xi, wi) {
+            (Some(yv), Some(xv), Some(wv)) => {
+                sum_wy += yv * wv;
+                sum_wx += xv * wv;
+                triples.push(Some((yv, xv, wv)));
             }
-            _ => None,
-        })
+            _ => triples.push(None),
+        }
+    }
+
+    if sum_wx == 0.0 {
+        return Err(PolarsError::ComputeError(
+            "Weighted sum of denominator (x) is zero".into(),
+        ));
+    }
+    let r_hat = sum_wy / sum_wx;
+
+    let scores: Vec<Option<f64>> = triples
+        .iter()
+        .map(|t| t.map(|(yv, xv, wv)| (wv / sum_wx) * (yv - r_hat * xv)))
         .collect();
     Ok(Float64Chunked::from_slice_options("scores".into(), &scores))
 }
@@ -446,31 +470,35 @@ pub fn scores_ratio_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<Float64Chunked> {
-    let sum_wx: f64 = x
-        .iter()
-        .zip(weights.iter())
-        .zip(domain_mask.iter())
-        .filter_map(|((xi, wi), m)| if m? { Some(xi? * wi?) } else { None })
-        .sum();
+    // Single pass: accumulate sum_wy, sum_wx (in-domain) and collect quads.
+    let n = y.len();
+    let mut sum_wy = 0.0f64;
+    let mut sum_wx = 0.0f64;
+    let mut quads: Vec<Option<(f64, f64, f64)>> = Vec::with_capacity(n); // (yv,xv,wv)
 
-    if sum_wx == 0.0 {
-        let zeros = vec![Some(0.0); y.len()];
-        return Ok(Float64Chunked::from_slice_options("scores".into(), &zeros));
+    for (((yi, xi), wi), mi) in y.iter().zip(x.iter()).zip(weights.iter()).zip(domain_mask.iter()) {
+        match (yi, xi, wi, mi) {
+            (Some(yv), Some(xv), Some(wv), Some(true)) => {
+                sum_wy += yv * wv;
+                sum_wx += xv * wv;
+                quads.push(Some((yv, xv, wv)));
+            }
+            _ => quads.push(None),
+        }
     }
 
-    let r_hat = point_estimate_ratio_domain(y, x, weights, domain_mask)?;
+    if sum_wx == 0.0 {
+        let zeros = vec![Some(0.0); n];
+        return Ok(Float64Chunked::from_slice_options("scores".into(), &zeros));
+    }
+    let r_hat = sum_wy / sum_wx;
 
-    let scores: Vec<Option<f64>> = y
+    let scores: Vec<Option<f64>> = quads
         .iter()
-        .zip(x.iter())
-        .zip(weights.iter())
-        .zip(domain_mask.iter())
-        .map(|(((yi, xi), wi), m)| match (yi, xi, wi, m) {
-            (Some(y_val), Some(x_val), Some(w_val), Some(true)) => {
-                Some((w_val / sum_wx) * (y_val - r_hat * x_val))
-            }
-            _ => Some(0.0),
-        })
+        .map(|q| Some(match q {
+            Some((yv, xv, wv)) => (wv / sum_wx) * (yv - r_hat * xv),
+            None => 0.0,
+        }))
         .collect();
     Ok(Float64Chunked::from_slice_options("scores".into(), &scores))
 }
@@ -605,15 +633,16 @@ fn build_stratum_psu_map(
     n_strata: u32,
     psu_indices: &[u32],
 ) -> (Vec<Vec<u32>>, Vec<u32>) {
-    let mut stratum_psus: Vec<HashMap<u32, ()>> = vec![HashMap::new(); n_strata as usize];
+    use std::collections::HashSet;
+    let mut stratum_psus: Vec<HashSet<u32>> = vec![HashSet::new(); n_strata as usize];
     for (&stratum, &psu) in strata_indices.iter().zip(psu_indices.iter()) {
         if stratum != u32::MAX && psu != u32::MAX {
-            stratum_psus[stratum as usize].insert(psu, ());
+            stratum_psus[stratum as usize].insert(psu);
         }
     }
     let psu_per_stratum: Vec<Vec<u32>> = stratum_psus
         .iter()
-        .map(|m| m.keys().copied().collect())
+        .map(|s| s.iter().copied().collect())
         .collect();
     let n_psus_per_stratum: Vec<u32> = psu_per_stratum.iter().map(|v| v.len() as u32).collect();
     (psu_per_stratum, n_psus_per_stratum)
@@ -716,12 +745,13 @@ fn variance_stratified_optimized(
                 }
 
                 let psu_indices_h = &psu_map[h];
-                let psu_totals_h: Vec<f64> = psu_indices_h
-                    .iter()
+                // Compute mean directly from global psu_totals — no per-stratum Vec alloc
+                let psu_mean_h: f64 = psu_indices_h.iter()
                     .map(|&p| psu_totals[p as usize])
-                    .collect();
-                let psu_mean_h = psu_totals_h.iter().sum::<f64>() / (n_psus_h as f64);
-                let sum_sq_diff: f64 = psu_totals_h.iter().map(|&t| (t - psu_mean_h).powi(2)).sum();
+                    .sum::<f64>() / (n_psus_h as f64);
+                let sum_sq_diff: f64 = psu_indices_h.iter()
+                    .map(|&p| (psu_totals[p as usize] - psu_mean_h).powi(2))
+                    .sum();
                 total_var += fpc_h * (n_psus_h as f64 / (n_psus_h as f64 - 1.0)) * sum_sq_diff;
             }
             total_var
@@ -1591,12 +1621,13 @@ pub fn taylor_variance_matrix(
 
             // Accumulate covariance
             let scale = fpc_h * mf / (mf - 1.0);
+            // Use psu_totals directly indexed — no per-stratum copy
             for &p in &psu_per_stratum[h] {
+                let pt = &psu_totals[p as usize];
                 for j in 0..k {
-                    let dj = psu_totals[p as usize][j] - psu_mean_h[j];
+                    let dj = pt[j] - psu_mean_h[j];
                     for l in j..k {
-                        let dl = psu_totals[p as usize][l] - psu_mean_h[l];
-                        let v = scale * dj * dl;
+                        let v = scale * dj * (pt[l] - psu_mean_h[l]);
                         cov[j][l] += v;
                         if l != j {
                             cov[l][j] += v;

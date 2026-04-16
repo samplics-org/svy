@@ -226,8 +226,11 @@ pub fn ttest_two_sample(
         f64::NAN
     };
 
+    // Build chunked arrays once — reused for degrees_of_freedom and per-group SE
+    let y_chunked = Float64Chunked::from_slice("y".into(), y);
+    let weights_chunked = Float64Chunked::from_slice("w".into(), w);
+
     // df = degf(design) - 1 (matches R's m$df.resid for svyglm)
-    let weights_chunked = Float64Chunked::from_vec("w".into(), w.to_vec());
     let design_df = degrees_of_freedom(&weights_chunked, strata, psu)? as f64;
     let df = (design_df - 1.0).max(1.0);
 
@@ -236,9 +239,9 @@ pub fn ttest_two_sample(
     // Per-group means: beta[0] = mean of group 0, beta[0] + beta[1] = mean of group 1
     let group_means = vec![wols.beta[0], wols.beta[0] + wols.beta[1]];
 
-    // Per-group SEs from domain estimation
+    // Per-group SEs — pass pre-built chunked arrays to avoid cloning
     let group_ses =
-        compute_per_group_ses(y, g, w, n, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+        compute_per_group_ses(&y_chunked, g, &weights_chunked, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
     Ok(TTestTwoResult {
         diff: wols.beta[1], // raw difference (before subtracting null)
@@ -254,12 +257,11 @@ pub fn ttest_two_sample(
 }
 
 /// Compute per-group SEs using domain estimation.
-/// This gives the correct marginal SE for each group mean.
+/// Accepts pre-built Float64Chunked to avoid cloning y and w on every call.
 fn compute_per_group_ses(
-    y: &[f64],
+    y_chunked: &Float64Chunked,
     g: &[u32],
-    w: &[f64],
-    _n: usize,
+    w_chunked: &Float64Chunked,
     strata: Option<&StringChunked>,
     psu: Option<&StringChunked>,
     ssu: Option<&StringChunked>,
@@ -267,15 +269,12 @@ fn compute_per_group_ses(
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
 ) -> PolarsResult<Vec<f64>> {
-    let y_chunked = Float64Chunked::from_vec("y".into(), y.to_vec());
-    let w_chunked = Float64Chunked::from_vec("w".into(), w.to_vec());
-
-    let mut ses = Vec::new();
+    let mut ses = Vec::with_capacity(2);
     for group_val in 0..2u32 {
         let mask_vec: Vec<bool> = g.iter().map(|&gi| gi == group_val).collect();
         let mask = BooleanChunked::from_slice("mask".into(), &mask_vec);
 
-        let scores = scores_mean_domain(&y_chunked, &w_chunked, &mask)?;
+        let scores = scores_mean_domain(y_chunked, w_chunked, &mask)?;
         let var = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
         ses.push(var.max(0.0).sqrt());
     }

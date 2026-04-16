@@ -102,22 +102,12 @@ fn normalize_by_group(
     // Sum weights by group
     let current_sums = sum_by_group_2d(wgt, &group_indices, n_groups);
 
-    // Determine targets for each group
-    let targets = match control {
+    // Determine per-group targets (one value per group, same across all replicates)
+    let group_targets: Vec<f64> = match control {
         None => {
-            // Target = count of observations in each group
-            let mut counts = vec![0; n_groups];
-            for &g in &group_indices {
-                counts[g] += 1;
-            }
-
-            let mut target_matrix = Array2::zeros((n_groups, n_reps));
-            for g in 0..n_groups {
-                for r in 0..n_reps {
-                    target_matrix[[g, r]] = counts[g] as f64;
-                }
-            }
-            target_matrix
+            let mut counts = vec![0usize; n_groups];
+            for &g in &group_indices { counts[g] += 1; }
+            counts.iter().map(|&c| c as f64).collect()
         }
         Some(ctrl) => {
             if ctrl.len() != n_groups {
@@ -126,29 +116,21 @@ fn normalize_by_group(
                     got: ctrl.len(),
                 });
             }
-
-            // Broadcast targets to all replicates
-            let mut target_matrix = Array2::zeros((n_groups, n_reps));
-            for g in 0..n_groups {
-                for r in 0..n_reps {
-                    target_matrix[[g, r]] = ctrl[g];
-                }
-            }
-            target_matrix
+            ctrl.to_vec()
         }
     };
 
-    // Calculate factors for each group and replicate
+    // Calculate factors: target is the same across replicates so no n_groups×n_reps matrix needed
     let mut factors = Array2::zeros((n_groups, n_reps));
     for g in 0..n_groups {
+        let tgt = group_targets[g];
         for r in 0..n_reps {
             if current_sums[[g, r]] > 1e-10 {
-                factors[[g, r]] = targets[[g, r]] / current_sums[[g, r]];
-            } else if targets[[g, r]] > 1e-10 {
+                factors[[g, r]] = tgt / current_sums[[g, r]];
+            } else if tgt > 1e-10 {
                 return Err(WeightingError::InvalidInput(format!(
                     "Cannot normalize group {}: current sum is 0 but target is {}",
-                    g,
-                    targets[[g, r]]
+                    g, tgt
                 )));
             } else {
                 factors[[g, r]] = 1.0;

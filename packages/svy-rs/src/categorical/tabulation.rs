@@ -10,6 +10,7 @@
 //! Matches R's `survey::svytable` + `survey::svychisq`.
 
 use faer::Mat;
+use faer::prelude::Reborrow;
 use polars::prelude::*;
 
 use crate::estimation::{
@@ -224,27 +225,44 @@ pub fn estimate_proportions(
 
     let sm = singleton_method;
 
-    // Compute proportions and scores using the same functions as taylor.rs
-    // For each level, create an indicator variable and compute mean scores
+    // Build all k indicator columns in a SINGLE pass over y.
+    // Previously: k separate passes (one per level). Now: one pass, O(N) regardless of k.
+    let n_rows = y.len();
+    // level_idx[i] = index of level that row i belongs to, or u32::MAX for null
+    let level_map: std::collections::HashMap<&str, usize> = levels
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.as_str(), i))
+        .collect();
+
+    // indicators[j][i] = value for level j at row i (0.0, 1.0, or NaN-sentinel None)
+    let mut indicators: Vec<Vec<Option<f64>>> = vec![vec![Some(0.0); n_rows]; k];
+    for (i, opt_val) in y.iter().enumerate() {
+        match opt_val {
+            None => {
+                for j in 0..k {
+                    indicators[j][i] = None;
+                }
+            }
+            Some(val) => {
+                if let Some(&j) = level_map.get(val) {
+                    indicators[j][i] = Some(1.0);
+                }
+                // rows with a value not in levels stay 0.0 (already initialised)
+            }
+        }
+    }
+
     let mut proportions = Vec::with_capacity(k);
     let mut score_columns: Vec<Float64Chunked> = Vec::with_capacity(k);
     let mut deff_vec = Vec::with_capacity(k);
 
-    for lvl in &levels {
-        let indicator: Vec<Option<f64>> = y
-            .iter()
-            .map(|v| match v {
-                Some(val) if val == lvl => Some(1.0),
-                Some(_) => Some(0.0),
-                None => None,
-            })
-            .collect();
-        let ind_ca = Float64Chunked::from_slice_options("ind".into(), &indicator);
+    for (j, _lvl) in levels.iter().enumerate() {
+        let ind_ca = Float64Chunked::from_slice_options("ind".into(), &indicators[j]);
 
         let est = point_estimate_mean(&ind_ca, weights)?;
         let scores = scores_mean(&ind_ca, weights)?;
 
-        // Compute deff using scalar taylor_variance (proven to match R)
         let var_scalar = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, sm)?;
         let srs_var = srs_variance_mean(&ind_ca, weights)?;
         let deff = if srs_var > 0.0 {
@@ -288,16 +306,28 @@ pub fn estimate_totals(
     let mut totals = Vec::with_capacity(levels.len());
     let mut total_ses = Vec::with_capacity(levels.len());
 
-    for lvl in levels {
-        let indicator: Vec<Option<f64>> = y
-            .iter()
-            .map(|v| match v {
-                Some(val) if val == lvl => Some(1.0),
-                Some(_) => Some(0.0),
-                None => None,
-            })
-            .collect();
-        let ind_ca = Float64Chunked::from_slice_options("ind".into(), &indicator);
+    // Single pass over y to build all indicator columns at once
+    let n_rows = y.len();
+    let level_map: std::collections::HashMap<&str, usize> = levels
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.as_str(), i))
+        .collect();
+    let kk = levels.len();
+    let mut indicators: Vec<Vec<Option<f64>>> = vec![vec![Some(0.0); n_rows]; kk];
+    for (i, opt_val) in y.iter().enumerate() {
+        match opt_val {
+            None => { for j in 0..kk { indicators[j][i] = None; } }
+            Some(val) => {
+                if let Some(&j) = level_map.get(val) {
+                    indicators[j][i] = Some(1.0);
+                }
+            }
+        }
+    }
+
+    for j in 0..kk {
+        let ind_ca = Float64Chunked::from_slice_options("ind".into(), &indicators[j]);
         let est = point_estimate_total(&ind_ca, weights)?;
         let scores = scores_total(&ind_ca, weights)?;
         let var = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
@@ -337,15 +367,15 @@ pub fn rao_scott(
     for r in 0..nr {
         for c in 0..nc {
             let i = r * nc + c;
-            x1.write(i, 0, 1.0);
+            x1[(i, 0)] = 1.0;
             if r > 0 {
-                x1.write(i, r, 1.0);
+                x1[(i, r)] = 1.0;
             }
             if c > 0 {
-                x1.write(i, nr - 1 + c, 1.0);
+                x1[(i, nr - 1 + c)] = 1.0;
             }
             if r > 0 && c > 0 {
-                x2.write(i, (r - 1) * (nc - 1) + (c - 1), 1.0);
+                x2[(i, (r - 1) * (nc - 1) + (c - 1))] = 1.0;
             }
         }
     }
@@ -354,17 +384,17 @@ pub fn rao_scott(
     let mut v_surv = Mat::<f64>::zeros(k, k);
     for i in 0..k {
         for j in 0..k {
-            v_surv.write(i, j, cov_survey[i][j]);
+            v_surv[(i, j)] = cov_survey[i][j];
         }
     }
 
     // 3. Build full interaction model matrix X12 = [X1 | X2]
     //    Then extract Cmat = QR residuals of X2 columns projected off X1
     //    This matches R: Cmat <- qr.resid(qr(X1), X12[,-(1:(nr+nc-1))])
-    let x1_qr = x1.thin_svd();
+    let x1_qr = x1.rb().thin_svd().unwrap();
     let x1_proj = {
         // Q * Q' projection matrix (via thin SVD of X1)
-        let u = x1_qr.u();
+        let u = x1_qr.U();
         &u * u.transpose()
     };
     // Cmat = (I - X1 (X1'X1)^{-1} X1') X2 = X2 - proj(X1) X2
@@ -374,7 +404,7 @@ pub fn rao_scott(
     let mut idmat = Mat::<f64>::zeros(k, k);
     for i in 0..k {
         if p[i] != 0.0 {
-            idmat.write(i, i, 1.0 / p[i]);
+            idmat[(i, i)] = 1.0 / p[i];
         }
     }
 
@@ -385,14 +415,14 @@ pub fn rao_scott(
     let idmat_over_n = {
         let mut m = idmat.clone();
         for i in 0..k {
-            m.write(i, i, m.read(i, i) / n_f);
+            m[(i, i)] = m[(i, i)] / n_f;
         }
         m
     };
     let cmat_t = cmat.transpose();
     let denom = &cmat_t * &idmat_over_n * &cmat;
     let numr = &cmat_t * &idmat * &v_surv * &idmat * &cmat;
-    let denom_inv = denom.thin_svd().pseudoinverse();
+    let denom_inv = denom.rb().thin_svd().unwrap().pseudoinverse();
     let delta = &denom_inv * &numr;
 
     // 6. Chi-square statistics
@@ -420,9 +450,9 @@ pub fn rao_scott(
     // 7. Rao-Scott corrections
     let df_base = ((nr - 1) * (nc - 1)) as f64;
     let dd = delta.nrows().min(delta.ncols());
-    let trace_d: f64 = (0..dd).map(|i| delta.read(i, i)).sum();
+    let trace_d: f64 = (0..dd).map(|i| delta[(i, i)]).sum();
     let d2 = &delta * &delta;
-    let trace_d2: f64 = (0..dd).map(|i| d2.read(i, i)).sum();
+    let trace_d2: f64 = (0..dd).map(|i| d2[(i, i)]).sum();
 
     // First-order Rao-Scott correction (matches R's svychisq statistic="Chisq"):
     //   R reports the RAW X² as the displayed "X-squared" value, but computes

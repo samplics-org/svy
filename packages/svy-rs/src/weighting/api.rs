@@ -131,7 +131,7 @@ pub fn calibrate(
     scale: Option<PyReadonlyArray1<f64>>,
     additive: bool,
 ) -> PyResult<Py<PyArray2<f64>>> {
-    let scale_owned: Option<Array1<f64>> = scale.map(|s| Array1::from(s.as_array().to_vec()));
+    let scale_owned: Option<Array1<f64>> = scale.map(|s| s.as_array().to_owned());
     let scale_view: Option<ArrayView1<f64>> = scale_owned.as_ref().map(|a| a.view());
 
     let result = crate::weighting::calibration::calibrate_linear(
@@ -153,7 +153,7 @@ pub fn calibrate_by_domain(
     scale: Option<PyReadonlyArray1<f64>>,
     additive: bool,
 ) -> PyResult<Py<PyArray2<f64>>> {
-    let scale_owned: Option<Array1<f64>> = scale.map(|s| Array1::from(s.as_array().to_vec()));
+    let scale_owned: Option<Array1<f64>> = scale.map(|s| s.as_array().to_owned());
     let scale_view: Option<ArrayView1<f64>> = scale_owned.as_ref().map(|a| a.view());
 
     let controls: std::collections::HashMap<i64, Array1<f64>> = controls_dict
@@ -178,7 +178,7 @@ pub fn calibrate_parallel(
     totals: PyReadonlyArray1<f64>,
     scale: Option<PyReadonlyArray1<f64>>,
 ) -> PyResult<Py<PyArray2<f64>>> {
-    let scale_owned: Option<Array1<f64>> = scale.map(|s| Array1::from(s.as_array().to_vec()));
+    let scale_owned: Option<Array1<f64>> = scale.map(|s| s.as_array().to_owned());
     let scale_view: Option<ArrayView1<f64>> = scale_owned.as_ref().map(|a| a.view());
 
     let result = crate::weighting::calibration::calibrate_parallel(

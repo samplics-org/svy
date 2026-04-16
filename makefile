@@ -106,6 +106,19 @@ build-svy-io:
 	cd $(PKG_SVY_IO) && uv build
 
 # ====== svy-rs (local dev convenience) ======
+
+# Build the wheel into the local dist/ folder
+.PHONY: build-svy-rs
+build-svy-rs:
+	@echo "▶ Building svy-rs (Maturin)..."
+	cd $(PKG_SVY_RS) && uv run maturin build
+
+# Build optimized release wheel
+.PHONY: release-svy-rs
+release-svy-rs:
+	@echo "▶ Building RELEASE wheel for svy-rs..."
+	cd $(PKG_SVY_RS) && uv run maturin develop --uv --release
+
 .PHONY: develop-svy-rs
 develop-svy-rs:
 	@echo "▶ Installing svy-rs in dev mode (maturin develop)..."

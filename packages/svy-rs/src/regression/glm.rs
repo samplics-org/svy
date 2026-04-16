@@ -17,9 +17,10 @@
 
 
 
-use faer::Mat;
-use faer::Side;
-use faer::prelude::SpSolver;
+use faer::{Mat, MatRef, Side};
+use faer::prelude::Solve;
+
+
 use polars::prelude::*;
 use std::collections::HashMap;
 
@@ -172,7 +173,7 @@ fn cols_to_mat(cols: &[&Float64Chunked], nrows: usize) -> Mat<f64> {
     let mut mat = Mat::<f64>::zeros(nrows, ncols);
     for (j, col) in cols.iter().enumerate() {
         for (i, val) in col.into_no_null_iter().enumerate() {
-            mat.write(i, j, val);
+            mat[(i, j)] = val;
         }
     }
     mat
@@ -246,11 +247,11 @@ fn build_irls_normal_eqs(
         let w_i = w_samp[i];
         if w_i <= 0.0 {
             w_irls[i] = 0.0;
-            Z.write(i, 0, 0.0);
+            Z[(i, 0)] = 0.0;
             continue;
         }
 
-        let y_i = Y.read(i, 0);
+        let y_i = Y[(i, 0)];
         let mu_i = mu[i];
 
         let v = family.variance(mu_i).max(1e-12);
@@ -262,18 +263,18 @@ fn build_irls_normal_eqs(
 
         let safe_d = if d.abs() < 1e-12 { 1e-12 } else { d };
         let z_i = eta[i] + (y_i - mu_i) / safe_d;
-        Z.write(i, 0, z_i);
+        Z[(i, 0)] = z_i;
 
         if wi.abs() < 1e-18 {
             continue;
         }
 
         for r in 0..k {
-            let x_ir = X.read(i, r);
+            let x_ir = X[(i, r)];
             acc_wz[r].add(wi * x_ir * z_i);
 
             for c in r..k {
-                let x_ic = X.read(i, c);
+                let x_ic = X[(i, c)];
                 acc_wx[r * k + c].add(wi * x_ir * x_ic);
             }
         }
@@ -281,30 +282,30 @@ fn build_irls_normal_eqs(
 
     // XtWz
     for r in 0..k {
-        XtWz.write(r, 0, acc_wz[r].value());
+        XtWz[(r, 0)] = acc_wz[r].value();
     }
 
     // XtWX symmetric
     for r in 0..k {
         for c in r..k {
             let v = acc_wx[r * k + c].value();
-            XtWX.write(r, c, v);
-            XtWX.write(c, r, v);
+            XtWX[(r, c)] = v;
+            XtWX[(c, r)] = v;
         }
     }
 
     // force symmetry (numerical)
     for r in 0..k {
         for c in 0..k {
-            let v = 0.5 * (XtWX.read(r, c) + XtWX.read(c, r));
-            XtWX.write(r, c, v);
+            let v = 0.5 * (XtWX[(r, c)] + XtWX[(c, r)]);
+            XtWX[(r, c)] = v;
         }
     }
 }
 
 /// Solve A x = b with deterministic fallback chain.
-fn solve_linear_system(A: &Mat<f64>, b: &Mat<f64>) -> Mat<f64> {
-    if let Ok(chol) = A.cholesky(Side::Lower) {
+fn solve_linear_system(A: MatRef<'_, f64>, b: MatRef<'_, f64>) -> Mat<f64> {
+    if let Ok(chol) = A.llt(Side::Lower) {
         return chol.solve(b);
     }
 
@@ -313,7 +314,7 @@ fn solve_linear_system(A: &Mat<f64>, b: &Mat<f64>) -> Mat<f64> {
     let x = lblt.solve(b);
     let mut ok = true;
     for i in 0..x.nrows() {
-        if !x.read(i, 0).is_finite() {
+        if !x[(i, 0)].is_finite() {
             ok = false;
             break;
         }
@@ -326,37 +327,37 @@ fn solve_linear_system(A: &Mat<f64>, b: &Mat<f64>) -> Mat<f64> {
     let lu = A.partial_piv_lu();
     let x2 = lu.solve(b);
     for i in 0..x2.nrows() {
-        if !x2.read(i, 0).is_finite() {
-            return A.thin_svd().pseudoinverse() * b;
+        if !x2[(i, 0)].is_finite() {
+            return A.thin_svd().unwrap().pseudoinverse() * b;
         }
     }
     x2
 }
 
 /// Compute A^{-1} via solving A X = I with same solve strategy.
-fn invert_matrix(A: &Mat<f64>, k: usize) -> Mat<f64> {
-    if let Ok(chol) = A.cholesky(Side::Lower) {
+fn invert_matrix(A: MatRef<'_, f64>, k: usize) -> Mat<f64> {
+    if let Ok(chol) = A.llt(Side::Lower) {
         let mut inv = Mat::<f64>::identity(k, k);
-        chol.solve_in_place(&mut inv);
+        chol.solve_in_place(inv.as_mut());
         return inv;
     }
 
     let lblt = A.lblt(Side::Lower);
     let mut inv = Mat::<f64>::identity(k, k);
-    lblt.solve_in_place(&mut inv);
+    lblt.solve_in_place(inv.as_mut());
 
     // sanity: if not finite, LU then SVD
     for r in 0..k {
         for c in 0..k {
-            if !inv.read(r, c).is_finite() {
+            if !inv[(r, c)].is_finite() {
                 let lu = A.partial_piv_lu();
                 let mut inv2 = Mat::<f64>::identity(k, k);
-                lu.solve_in_place(&mut inv2);
+                lu.solve_in_place(inv2.as_mut());
 
                 for rr in 0..k {
                     for cc in 0..k {
-                        if !inv2.read(rr, cc).is_finite() {
-                            return A.thin_svd().pseudoinverse();
+                        if !inv2[(rr, cc)].is_finite() {
+                            return A.thin_svd().unwrap().pseudoinverse();
                         }
                     }
                 }
@@ -436,7 +437,7 @@ pub fn fit_glm(
     let mut eta = vec![0.0; n];
 
     for i in 0..n {
-        let y_i = Y.read(i, 0);
+        let y_i = Y[(i, 0)];
         mu[i] = family.initial_mu(y_i);
         eta[i] = link.link(mu[i]); // Initialize eta = g(mu)
     }
@@ -455,11 +456,13 @@ pub fn fit_glm(
         iter_count += 1;
 
         // 1) eta/mu from current beta
+        // Direct row-dot-product avoids allocating a N×1 Mat per iteration.
         if iter > 0 {
-            let pred = &X * &beta;
             for i in 0..n {
-                eta[i] = pred.read(i, 0);
-                mu[i] = link.inverse(eta[i]);
+                let mut s = 0.0f64;
+                for j in 0..k { s += X[(i, j)] * beta[(j, 0)]; }
+                eta[i] = s;
+                mu[i] = link.inverse(s);
             }
         }
 
@@ -481,24 +484,20 @@ pub fn fit_glm(
         );
 
         // 3) solve for beta_new
-        let beta_new = solve_linear_system(&XtWX, &XtWz);
+        let beta_new = solve_linear_system(XtWX.as_ref(), XtWz.as_ref());
 
-        // 4) recompute eta/mu at beta_new (THIS is what you were missing)
+        // 4) recompute eta/mu at beta_new — direct loop, no N×1 Mat alloc
         let mut dev_new = 0.0;
         {
-            let pred_new = &X * &beta_new;
             for i in 0..n {
-                let eta_i = pred_new.read(i, 0);
-                let mu_i = link.inverse(eta_i);
-
-                // update working state to the *new* values
-                eta[i] = eta_i;
+                let mut s = 0.0f64;
+                for j in 0..k { s += X[(i, j)] * beta_new[(j, 0)]; }
+                let mu_i = link.inverse(s);
+                eta[i] = s;
                 mu[i] = mu_i;
-
-                // deviance proxy (weighted SSE) at beta_new
                 let w_i = w_samp[i];
                 if w_i > 0.0 {
-                    let y_i = Y.read(i, 0);
+                    let y_i = Y[(i, 0)];
                     dev_new += w_i * (y_i - mu_i).powi(2);
                 }
             }
@@ -507,7 +506,7 @@ pub fn fit_glm(
         // 5) convergence check
         let mut max_delta = 0.0;
         for j in 0..k {
-            let d = (beta_new.read(j, 0) - beta.read(j, 0)).abs();
+            let d = (beta_new[(j, 0)] - beta[(j, 0)]).abs();
             if d > max_delta {
                 max_delta = d;
             }
@@ -532,13 +531,12 @@ pub fn fit_glm(
     // 4) Sandwich variance (R-alignment: rebuild XtWX at FINAL beta)
     // =========================================================================
 
-    // final eta/mu at converged beta
-    {
-        let pred = &X * &beta;
-        for i in 0..n {
-            eta[i] = pred.read(i, 0);
-            mu[i] = link.inverse(eta[i]);
-        }
+    // final eta/mu at converged beta — direct loop
+    for i in 0..n {
+        let mut s = 0.0f64;
+        for j in 0..k { s += X[(i, j)] * beta[(j, 0)]; }
+        eta[i] = s;
+        mu[i] = link.inverse(s);
     }
 
     // rebuild XtWX at final beta (bread must match fisherinf)
@@ -567,19 +565,20 @@ pub fn fit_glm(
     let (psu_idx, _n_psu_levels) = match (strata, psu) {
         (Some(s), Some(p)) => {
             // nest PSU within strata: id = (stratum, psu)
+            // Use &str keys to avoid String allocation per row.
             let s_str = s.cast(&DataType::String)?;
             let p_str = p.cast(&DataType::String)?;
             let s_ca = s_str.str()?;
             let p_ca = p_str.str()?;
+            let s_vals: Vec<&str> = s_ca.into_iter().map(|v| v.unwrap_or("__NULL__")).collect();
+            let p_vals: Vec<&str> = p_ca.into_iter().map(|v| v.unwrap_or("__NULL__")).collect();
 
-            let mut map: HashMap<(String, String), usize> = HashMap::new();
+            let mut map: HashMap<(&str, &str), usize> = HashMap::new();
             let mut idx = Vec::with_capacity(n);
             let mut next = 0usize;
 
             for i in 0..n {
-                let ss = s_ca.get(i).unwrap_or("__NULL__").to_string();
-                let pp = p_ca.get(i).unwrap_or("__NULL__").to_string();
-                let key = (ss, pp);
+                let key = (s_vals[i], p_vals[i]);
                 let v = *map.entry(key).or_insert_with(|| {
                     let t = next;
                     next += 1;
@@ -593,19 +592,20 @@ pub fn fit_glm(
         _ => ((0..n).collect::<Vec<_>>(), n),
     };
 
+    // Pre-build strata → obs index to avoid O(n_strata × N) scanning.
+    let mut strata_obs: Vec<Vec<usize>> = vec![Vec::new(); n_strata];
+    for i in 0..n {
+        strata_obs[strata_idx[i]].push(i);
+    }
+
     // MEAT = sum_h Var_h( PSU totals ) with svytotal-style centering
     let mut meat_acc = vec![Kahan::new(); k * k];
 
     for h in 0..n_strata {
-        // map global PSU id -> local index
         let mut local_map: HashMap<usize, usize> = HashMap::new();
-        // PSU totals: Vec[psu][k]
         let mut totals: Vec<Vec<Kahan>> = Vec::new();
 
-        for i in 0..n {
-            if strata_idx[i] != h {
-                continue;
-            }
+        for &i in &strata_obs[h] {
 
             let psu_id = psu_idx[i];
             let li = *local_map.entry(psu_id).or_insert_with(|| {
@@ -619,7 +619,7 @@ pub fn fit_glm(
                 continue;
             }
 
-            let y_i = Y.read(i, 0);
+            let y_i = Y[(i, 0)];
             let mu_i = mu[i];
             let v = family.variance(mu_i).max(1e-12);
             let d = link.mu_eta(mu_i, eta[i]);
@@ -632,7 +632,7 @@ pub fn fit_glm(
             // Score contribution: X * w_irls * working_resid
             // This matches R's: model.matrix * weights * resid(, "working")
             for j in 0..k {
-                totals[li][j].add(w_irls_i * X.read(i, j) * working_resid);
+                totals[li][j].add(w_irls_i * X[(i, j)] * working_resid);
             }
         }
 
@@ -672,44 +672,35 @@ pub fn fit_glm(
     let mut meat = Mat::<f64>::zeros(k, k);
     for a in 0..k {
         for b in 0..k {
-            meat.write(a, b, meat_acc[a * k + b].value());
+            meat[(a, b)] = meat_acc[a * k + b].value();
         }
     }
     // symmetrize
     for a in 0..k {
         for b in 0..k {
-            let v = 0.5 * (meat.read(a, b) + meat.read(b, a));
-            meat.write(a, b, v);
+            let v = 0.5 * (meat[(a, b)] + meat[(b, a)]);
+            meat[(a, b)] = v;
         }
     }
 
     // BREAD = (XtWX)^-1 at final beta
-    let bread = invert_matrix(&XtWX, k);
+    let bread = invert_matrix(XtWX.as_ref(), k);
 
     // Cov = bread * meat * bread
     let tmp = &bread * &meat;
     let cov = &tmp * &bread;
 
     // df_resid (your prior design-based df convention)
+    use std::collections::HashSet;
     let df_resid = if psu.is_some() && strata.is_some() {
-        let mut total_psus = 0usize;
-        for h in 0..n_strata {
-            let mut set: HashMap<usize, ()> = HashMap::new();
-            for i in 0..n {
-                if strata_idx[i] == h {
-                    set.insert(psu_idx[i], ());
-                }
-            }
-            total_psus += set.len();
-        }
+        // Reuse strata_obs index built for meat computation
+        let total_psus: usize = (0..n_strata)
+            .map(|h| strata_obs[h].iter().map(|&i| psu_idx[i]).collect::<HashSet<_>>().len())
+            .sum();
         let df = (total_psus as isize) - (n_strata as isize);
         if df <= 0 { 1.0 } else { df as f64 }
     } else if psu.is_some() {
-        let mut set: HashMap<usize, ()> = HashMap::new();
-        for i in 0..n {
-            set.insert(psu_idx[i], ());
-        }
-        let m = set.len() as isize;
+        let m = psu_idx.iter().collect::<HashSet<_>>().len() as isize;
         if m <= 1 { 1.0 } else { (m - 1) as f64 }
     } else if strata.is_some() {
         let df = (n as isize) - (n_strata as isize);
@@ -731,7 +722,7 @@ pub fn fit_glm(
             }
             let mu_i = mu[i];
             let v = family.variance(mu_i).max(1e-12);
-            let y_i = Y.read(i, 0);
+            let y_i = Y[(i, 0)];
             pearson += w_i * (y_i - mu_i).powi(2) / v;
         }
         if df_resid > 0.0 {
@@ -748,7 +739,7 @@ pub fn fit_glm(
         let y_mean = if w_sum > 0.0 {
             let mut sum_wy = 0.0;
             for i in 0..n {
-                sum_wy += Y.read(i, 0) * w_samp[i];
+                sum_wy += Y[(i, 0)] * w_samp[i];
             }
             sum_wy / w_sum
         } else {
@@ -761,18 +752,18 @@ pub fn fit_glm(
             if w_i <= 0.0 {
                 continue;
             }
-            let y_i = Y.read(i, 0);
+            let y_i = Y[(i, 0)];
             sse += w_i * (y_i - y_mean).powi(2);
         }
         sse
     };
 
     // flatten
-    let params: Vec<f64> = (0..k).map(|i| beta.read(i, 0)).collect();
+    let params: Vec<f64> = (0..k).map(|i| beta[(i, 0)]).collect();
     let mut cov_flat = Vec::with_capacity(k * k);
     for r in 0..k {
         for c in 0..k {
-            cov_flat.push(cov.read(r, c));
+            cov_flat.push(cov[(r, c)]);
         }
     }
 

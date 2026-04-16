@@ -294,7 +294,7 @@ pub fn ranktest_two_sample(
     };
 
     // 7. Degrees of freedom
-    let weights_chunked = Float64Chunked::from_vec("w".into(), w.to_vec());
+    let weights_chunked = Float64Chunked::from_slice("w".into(), w);
     let design_df = degrees_of_freedom(&weights_chunked, strata, psu)? as f64;
     let df = (design_df - 1.0).max(1.0);
 
@@ -392,7 +392,7 @@ pub fn ranktest_k_sample(
     };
 
     // Degrees of freedom
-    let weights_chunked = Float64Chunked::from_vec("w".into(), w.to_vec());
+    let weights_chunked = Float64Chunked::from_slice("w".into(), w);
     let design_df = degrees_of_freedom(&weights_chunked, strata, psu)? as f64;
     let ddf = (design_df - ndf as f64).max(1.0);
 
