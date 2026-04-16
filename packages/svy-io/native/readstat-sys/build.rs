@@ -64,6 +64,8 @@ fn bindgen_with_includes(include_dir: &Path) {
 
     let mut builder = bindgen::Builder::default()
         .header("wrapper.h")
+        .default_non_copy_union_style(bindgen::NonCopyUnionStyle::ManuallyDrop)
+        .wrap_unsafe_ops(true)
         .allowlist_function("readstat_.*")
         .allowlist_type("readstat_.*")
         .allowlist_var("READSTAT_.*")
@@ -83,11 +85,8 @@ fn bindgen_with_includes(include_dir: &Path) {
                 ""
             };
             if !trip.is_empty() {
-                builder = builder.clang_arg(format!(
-                    "-I{}/usr/include/{}",
-                    sysroot.display(),
-                    trip
-                ));
+                builder =
+                    builder.clang_arg(format!("-I{}/usr/include/{}", sysroot.display(), trip));
             }
             diag!("bindgen using sysroot {}", sysroot.display());
         }
@@ -159,7 +158,10 @@ fn configure_zlib(build: &mut cc::Build) -> bool {
         if on {
             println!("cargo:rustc-link-lib=z");
         }
-        diag!("READSTAT_WITH_ZLIB override -> {}", if on { "ON" } else { "OFF" });
+        diag!(
+            "READSTAT_WITH_ZLIB override -> {}",
+            if on { "ON" } else { "OFF" }
+        );
         return on;
     }
 
@@ -224,11 +226,19 @@ fn configure_zlib(build: &mut cc::Build) -> bool {
         };
         let candidates = [
             base.join("zlib.h"),
-            if trip.as_os_str().is_empty() { PathBuf::new() } else { trip.join("zlib.h") },
+            if trip.as_os_str().is_empty() {
+                PathBuf::new()
+            } else {
+                trip.join("zlib.h")
+            },
         ];
         if candidates.iter().any(|p| p.exists()) {
-            if base.exists() { build.include(&base); }
-            if !trip.as_os_str().is_empty() && trip.exists() { build.include(&trip); }
+            if base.exists() {
+                build.include(&base);
+            }
+            if !trip.as_os_str().is_empty() && trip.exists() {
+                build.include(&trip);
+            }
             println!("cargo:rustc-link-lib=z");
             diag!("Using zlib from sysroot {}", sysroot.display());
             return true;
@@ -310,17 +320,23 @@ fn build_vendored(rs_dir: &Path) {
     if cfg!(target_os = "windows") {
         build.define("HAVE_ICONV", Some("0"));
         let stub_h = out_dir.join("iconv.h");
-        fs::write(&stub_h, r#"
+        fs::write(
+            &stub_h,
+            r#"
 #ifndef ICONV_STUB_H
 #define ICONV_STUB_H
 #include <stddef.h>
 typedef void* iconv_t;
 #define ICONV_CONST const
 #endif
-"#).expect("write iconv.h stub");
+"#,
+        )
+        .expect("write iconv.h stub");
 
         let stub_c = out_dir.join("posix_stubs.c");
-        fs::write(&stub_c, r#"
+        fs::write(
+            &stub_c,
+            r#"
 #include <stddef.h>
 #include <errno.h>
 
@@ -338,7 +354,9 @@ size_t iconv(iconv_t cd, const char** inbuf, size_t* inbytesleft,
 // Fallback for Windows I/O init (real symbol lives in readstat_io_win.c)
 typedef struct readstat_io_s readstat_io_t;
 readstat_io_t* unistd_io_init(void) { return NULL; }
-"#).expect("write posix_stubs.c");
+"#,
+        )
+        .expect("write posix_stubs.c");
 
         build.file(&stub_c);
         println!("cargo:rerun-if-changed={}", stub_c.display());
@@ -366,27 +384,42 @@ readstat_io_t* unistd_io_init(void) { return NULL; }
     for entry in walkdir::WalkDir::new(&src_dir) {
         let entry = entry.unwrap();
         let p = entry.path();
-        if !entry.file_type().is_file() { continue; }
-        if p.extension().and_then(|s| s.to_str()) != Some("c") { continue; }
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        if p.extension().and_then(|s| s.to_str()) != Some("c") {
+            continue;
+        }
 
         let rel = p.strip_prefix(&src_dir).unwrap();
 
         let skip_dir = rel.components().any(|c| {
-            matches!(c.as_os_str().to_str(), Some("bin" | "fuzz" | "test" | "tests" | "txt"))
+            matches!(
+                c.as_os_str().to_str(),
+                Some("bin" | "fuzz" | "test" | "tests" | "txt")
+            )
         });
-        if skip_dir { continue; }
+        if skip_dir {
+            continue;
+        }
 
         let name = rel.file_name().and_then(|s| s.to_str()).unwrap_or("");
 
         if cfg!(target_os = "windows") {
-            if name == "readstat_io_unistd.c" { skipped_files.push(format!("{name} (Unix I/O)")); continue; }
+            if name == "readstat_io_unistd.c" {
+                skipped_files.push(format!("{name} (Unix I/O)"));
+                continue;
+            }
         } else if name == "readstat_io_win.c" {
-            skipped_files.push(format!("{name} (Windows I/O)")); continue;
+            skipped_files.push(format!("{name} (Windows I/O)"));
+            continue;
         }
 
-        if !has_zlib && (name == "readstat_zsav_compress.c"
-                      || name == "readstat_zsav_read.c"
-                      || name == "readstat_zsav_write.c") {
+        if !has_zlib
+            && (name == "readstat_zsav_compress.c"
+                || name == "readstat_zsav_read.c"
+                || name == "readstat_zsav_write.c")
+        {
             skipped_files.push(format!("{name} (requires zlib)"));
             continue;
         }
@@ -396,7 +429,9 @@ readstat_io_t* unistd_io_init(void) { return NULL; }
 
     if !skipped_files.is_empty() {
         diag!("Skipping {} files:", skipped_files.len());
-        for f in &skipped_files { diag!("  - {}", f); }
+        for f in &skipped_files {
+            diag!("  - {}", f);
+        }
     }
     diag!("Compiling {} C source files", files.len());
 
@@ -441,10 +476,21 @@ fn link_from_pkg_config() -> bool {
 fn main() {
     // Re-run on env changes
     for k in [
-        "READSTAT_BUILD_DEBUG","READSTAT_SRC","READSTAT_WITH_ZLIB","READSTAT_PREFIX",
-        "PKG_CONFIG","PKG_CONFIG_PATH","PKG_CONFIG_SYSROOT_DIR","PKG_CONFIG_LIBDIR",
-        "LIBCLANG_PATH","PKG_CONFIG_ALLOW_CROSS","DEP_Z_INCLUDE","DEP_Z_ROOT",
-        "DEP_Z_LIB","BINDGEN_SYSROOT","ZLIB_NO_PKG_CONFIG"
+        "READSTAT_BUILD_DEBUG",
+        "READSTAT_SRC",
+        "READSTAT_WITH_ZLIB",
+        "READSTAT_PREFIX",
+        "PKG_CONFIG",
+        "PKG_CONFIG_PATH",
+        "PKG_CONFIG_SYSROOT_DIR",
+        "PKG_CONFIG_LIBDIR",
+        "LIBCLANG_PATH",
+        "PKG_CONFIG_ALLOW_CROSS",
+        "DEP_Z_INCLUDE",
+        "DEP_Z_ROOT",
+        "DEP_Z_LIB",
+        "BINDGEN_SYSROOT",
+        "ZLIB_NO_PKG_CONFIG",
     ] {
         println!("cargo:rerun-if-env-changed={k}");
     }
@@ -462,9 +508,17 @@ fn main() {
         );
     }
 
-    if link_from_pkg_config() { return; }
-    if let Ok(prefix) = env::var("READSTAT_PREFIX") { link_from_prefix(&prefix); return; }
-    if let Ok(home) = env::var("HOME") { link_from_prefix(&format!("{home}/.local")); return; }
+    if link_from_pkg_config() {
+        return;
+    }
+    if let Ok(prefix) = env::var("READSTAT_PREFIX") {
+        link_from_prefix(&prefix);
+        return;
+    }
+    if let Ok(home) = env::var("HOME") {
+        link_from_prefix(&format!("{home}/.local"));
+        return;
+    }
 
     panic!(
         "Unable to locate ReadStat.\n\

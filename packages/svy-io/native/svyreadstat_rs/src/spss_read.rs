@@ -14,8 +14,8 @@ use readstat_sys::{
 };
 
 use crate::core::{
-    finalize_to_ipc, on_error_cb, on_metadata_cb, on_value_cb, on_value_label_cb, on_variable_cb,
-    ParseCtx,
+    ParseCtx, finalize_to_ipc, on_error_cb, on_metadata_cb, on_value_cb, on_value_label_cb,
+    on_variable_cb,
 };
 
 /// Parse SPSS .sav file
@@ -29,15 +29,19 @@ pub fn df_parse_sav_file(
     cols_skip: Option<Vec<String>>,
     n_max: Option<usize>,
     rows_skip: usize,
-) -> PyResult<(PyObject, String)> {
+) -> PyResult<(Py<PyAny>, String)> {
     // Release GIL during parsing for better Python concurrency
-    let result = py.allow_threads(|| parse_sav_impl(path, cols_skip, n_max, rows_skip));
+    let result = py.detach(|| parse_sav_impl(path, cols_skip, n_max, rows_skip));
 
     let (ipc, meta) = result?;
     let meta_json = serde_json::to_string(&meta).map_err(|e| {
         pyo3::exceptions::PyRuntimeError::new_err(format!("JSON serialize metadata: {e}"))
     })?;
-    let pybytes = PyBytes::new_bound(py, &ipc).into_py(py);
+    let pybytes = PyBytes::new(py, &ipc)
+        .into_pyobject(py)
+        .unwrap()
+        .into_any()
+        .unbind();
     Ok((pybytes, meta_json))
 }
 
@@ -52,15 +56,19 @@ pub fn df_parse_por_file(
     cols_skip: Option<Vec<String>>,
     n_max: Option<usize>,
     rows_skip: usize,
-) -> PyResult<(PyObject, String)> {
+) -> PyResult<(Py<PyAny>, String)> {
     // Release GIL during parsing for better Python concurrency
-    let result = py.allow_threads(|| parse_por_impl(path, cols_skip, n_max, rows_skip));
+    let result = py.detach(|| parse_por_impl(path, cols_skip, n_max, rows_skip));
 
     let (ipc, meta) = result?;
     let meta_json = serde_json::to_string(&meta).map_err(|e| {
         pyo3::exceptions::PyRuntimeError::new_err(format!("JSON serialize metadata: {e}"))
     })?;
-    let pybytes = PyBytes::new_bound(py, &ipc).into_py(py);
+    let pybytes = PyBytes::new(py, &ipc)
+        .into_pyobject(py)
+        .unwrap()
+        .into_any()
+        .unbind();
     Ok((pybytes, meta_json))
 }
 

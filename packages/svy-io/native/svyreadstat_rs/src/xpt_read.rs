@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use std::collections::HashMap;
@@ -13,8 +13,8 @@ use readstat_sys::{
 };
 
 use crate::core::{
-    finalize_to_ipc, on_error_cb, on_metadata_cb, on_value_cb, on_value_label_cb, on_variable_cb,
-    ParseCtx,
+    ParseCtx, finalize_to_ipc, on_error_cb, on_metadata_cb, on_value_cb, on_value_label_cb,
+    on_variable_cb,
 };
 
 fn parse_xpt_impl(
@@ -79,10 +79,14 @@ pub fn df_parse_xpt_file<'py>(
     n_max: Option<usize>,
     rows_skip: usize,
     cols_skip: Option<Vec<String>>,
-) -> PyResult<(PyObject, String)> {
+) -> PyResult<(Py<PyAny>, String)> {
     let (ipc, meta) = parse_xpt_impl(data_path, rows_skip, n_max, cols_skip)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
     let meta_json = serde_json::to_string(&meta).unwrap();
-    let pybytes = PyBytes::new_bound(py, &ipc).into_py(py);
+    let pybytes = PyBytes::new(py, &ipc)
+        .into_pyobject(py)
+        .unwrap()
+        .into_any()
+        .unbind();
     Ok((pybytes, meta_json))
 }

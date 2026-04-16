@@ -9,7 +9,7 @@ homepage = "https://svylab.com/docs/svy-io"
 description = "ReadStat FFI (vendored or system)"
 
 [build-dependencies]
-bindgen = "0.70"
+bindgen = "0.72"
 pkg-config = "0.3"
 cc = "1"
 walkdir = "2"

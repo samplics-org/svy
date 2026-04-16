@@ -1,5 +1,5 @@
 // native/svyreadstat_rs/src/spss_write.rs
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -13,14 +13,14 @@ use std::path::Path;
 use arrow::array::{
     Array, BooleanArray, Date32Array, Date64Array, DictionaryArray, DurationMicrosecondArray,
     DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray, Float32Array,
-    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray, StringArray,
+    Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, LargeStringArray, StringArray,
     StringViewArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
+    TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
+    UInt64Array,
 };
 use arrow::datatypes::{
-    DataType, Int16Type, Int32Type, Int64Type, Int8Type, TimeUnit, UInt16Type, UInt32Type,
-    UInt64Type, UInt8Type,
+    DataType, Int8Type, Int16Type, Int32Type, Int64Type, TimeUnit, UInt8Type, UInt16Type,
+    UInt32Type, UInt64Type,
 };
 use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::record_batch::RecordBatch;
@@ -333,8 +333,8 @@ fn write_spss_minimal(
 
     for j in 0..ncols {
         let dt = batches[0].column(j).data_type();
-        is_str_col[j] = is_text_dt(dt)
-            || matches!(dt, DataType::Dictionary(_, ref v) if is_text_dt(v.as_ref()));
+        is_str_col[j] =
+            is_text_dt(dt) || matches!(dt, DataType::Dictionary(_, v) if is_text_dt(v.as_ref()));
     }
 
     let mut rvars: Vec<*const readstat_variable_t> = Vec::with_capacity(ncols);
@@ -599,8 +599,8 @@ pub fn df_write_sav_file(
     file_label: Option<&str>,
     compress: &str,
     var_labels: Option<HashMap<String, String>>,
-    user_missing: Option<Vec<HashMap<String, PyObject>>>,
-    value_labels: Option<Vec<HashMap<String, PyObject>>>,
+    user_missing: Option<Vec<HashMap<String, Py<PyAny>>>>,
+    value_labels: Option<Vec<HashMap<String, Py<PyAny>>>>,
 ) -> PyResult<()> {
     let buf = ipc_bytes.as_bytes();
     let batches = ipc_to_batches(buf).map_err(|e| {
@@ -610,7 +610,7 @@ pub fn df_write_sav_file(
     // Convert user_missing from Python-friendly dicts
     let user_missing_converted: Option<Vec<UserMissingInfo>> =
         user_missing.as_ref().map(|um_vec| {
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 um_vec
                     .iter()
                     .filter_map(|um_dict| {
@@ -634,7 +634,7 @@ pub fn df_write_sav_file(
     // Convert value_labels from Python-friendly dicts
     let value_labels_converted: Option<Vec<ValueLabelsInfo>> =
         value_labels.as_ref().map(|vl_vec| {
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 vl_vec
                     .iter()
                     .filter_map(|vl_dict| {

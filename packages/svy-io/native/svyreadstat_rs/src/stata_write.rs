@@ -1,5 +1,5 @@
 // native/svyreadstat_rs/src/stata_write.rs
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -11,13 +11,13 @@ use std::os::raw::c_void;
 use std::path::Path;
 
 use arrow::array::{
-    Array, BooleanArray, DictionaryArray, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, LargeStringArray, StringArray, StringViewArray, UInt16Array,
-    UInt32Array, UInt64Array, UInt8Array,
+    Array, BooleanArray, DictionaryArray, Float32Array, Float64Array, Int8Array, Int16Array,
+    Int32Array, Int64Array, LargeStringArray, StringArray, StringViewArray, UInt8Array,
+    UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow::datatypes::{
-    DataType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    DataType, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type,
 };
 use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::record_batch::RecordBatch;
@@ -214,8 +214,8 @@ fn write_stata_minimal(
 
     for j in 0..ncols {
         let dt = batches[0].column(j).data_type();
-        is_str_col[j] = is_text_dt(dt)
-            || matches!(dt, DataType::Dictionary(_, ref v) if is_text_dt(v.as_ref()));
+        is_str_col[j] =
+            is_text_dt(dt) || matches!(dt, DataType::Dictionary(_, v) if is_text_dt(v.as_ref()));
     }
 
     let mut rvars: Vec<*const readstat_variable_t> = Vec::with_capacity(ncols);

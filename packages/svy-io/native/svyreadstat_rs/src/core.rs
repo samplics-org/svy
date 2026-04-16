@@ -151,7 +151,7 @@ impl ColBuilders {
 
 // ---------- Common callbacks ----------
 
-extern "C" {
+unsafe extern "C" {
     fn readstat_value_is_tagged_missing(
         value: readstat_sys::readstat_value_t,
     ) -> ::std::os::raw::c_int;

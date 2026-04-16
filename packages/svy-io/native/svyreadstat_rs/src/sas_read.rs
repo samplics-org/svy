@@ -1,5 +1,5 @@
 // native/svyreadstat_rs/src/sas_read.rs
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use std::collections::HashMap;
@@ -15,8 +15,8 @@ use readstat_sys::{
 };
 
 use crate::core::{
-    finalize_to_ipc, on_error_cb, on_metadata_cb, on_value_cb, on_value_label_cb, on_variable_cb,
-    ParseCtx,
+    ParseCtx, finalize_to_ipc, on_error_cb, on_metadata_cb, on_value_cb, on_value_label_cb,
+    on_variable_cb,
 };
 
 /// Optimized SAS file parser
@@ -161,10 +161,10 @@ pub fn df_parse_sas_file<'py>(
     cols_skip: Option<Vec<String>>,
     n_max: Option<usize>,
     rows_skip: usize,
-) -> PyResult<(PyObject, String)> {
+) -> PyResult<(Py<PyAny>, String)> {
     // Release GIL during parsing for better Python concurrency
     let result =
-        py.allow_threads(|| parse_sas_impl(data_path, catalog_path, rows_skip, n_max, cols_skip));
+        py.detach(|| parse_sas_impl(data_path, catalog_path, rows_skip, n_max, cols_skip));
 
     let (ipc, meta) =
         result.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
@@ -174,7 +174,11 @@ pub fn df_parse_sas_file<'py>(
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
     // Return Arrow IPC bytes and metadata
-    let pybytes = PyBytes::new_bound(py, &ipc).into_py(py);
+    let pybytes = PyBytes::new(py, &ipc)
+        .into_pyobject(py)
+        .unwrap()
+        .into_any()
+        .unbind();
     Ok((pybytes, meta_json))
 }
 
