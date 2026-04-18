@@ -36,7 +36,7 @@ pip install svy
 import svy
 
 # Load example data
-hld_data = svy.load_dataset(name="hld_sample_wb_2023")
+hld_data = svy.datasets.load("hld_sample_wb_2023")
 
 # Define the survey design
 hld_design = svy.Design(stratum=("geo1", "urbrur"), psu="ea", wgt="hhweight")
