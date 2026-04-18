@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 
+from svy import datasets  # noqa: F401
 from svy.categorical import (
     Categorical,
     CellEst,
@@ -59,15 +60,12 @@ from svy.core import (
     sum_horizontal,
     when,
 )
-from svy.datasets import load_dataset
 from svy.errors import (
-    CertaintyError,
+    DatasetError,
     DimensionError,
     LabelError,
     MethodError,
     ModelError,
-    ProbError,
-    SinglePSUError,
     SvyError,
 )
 from svy.estimation import Estimate, Estimation, ParamEst
@@ -126,14 +124,14 @@ from svy.weighting import Threshold, TrimConfig, TrimResult
 # Ensure no “No handlers could be found” warnings in user apps
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
-__version__ = "0.16.1"
+__version__ = "0.17.0"
 
 __all__ = [
+    # --- Modules ----
+    "datasets",
     # --- Core Classes ---
     "Design",
     "Sample",
-    # --- Datasets ---
-    "load_dataset",
     # --- Categorical Analysis ---
     "Table",
     "TableStats",
@@ -157,7 +155,7 @@ __all__ = [
     "TargetTwoProps",
     # --- Sample Selection ---
     "Selection",
-    # --- IO & Datasets ---
+    # --- IO ---
     "create_from_sas",
     "read_sas",
     "write_sas",
@@ -211,14 +209,12 @@ __all__ = [
     "TrimConfig",
     "TrimResult",
     # --- Errors ---
-    "CertaintyError",
+    "SvyError",
+    "DatasetError",
     "DimensionError",
     "LabelError",
     "MethodError",
     "ModelError",
-    "ProbError",
-    "SvyError",
-    "SinglePSUError",
     # --- Expressions ---
     "col",
     "cols",
@@ -248,7 +244,9 @@ __all__ = [
 ]
 
 
-# src/svy/__init__.py
+# ---------------------------------------------------------------------------
+# Rich integration (optional pretty printing + tracebacks)
+# ---------------------------------------------------------------------------
 
 
 def _maybe_install_rich() -> None:
@@ -258,7 +256,7 @@ def _maybe_install_rich() -> None:
     import os
     import sys
 
-    # Don’t double-install
+    # Don't double-install
     if getattr(sys, "_svy_rich_installed", False):
         return
 
@@ -299,10 +297,12 @@ def _maybe_install_rich() -> None:
         else:
             width = SVY_DEFAULT_PRINT_WIDTH
 
-        # Create the console with the unified width
+        # This Console carries SVY_PRINT_WIDTH / SVY_DEFAULT_PRINT_WIDTH into
+        # Rich's pretty-print and traceback formatters.  The install() calls
+        # below retain the reference internally — do not drop this variable
+        # even though it looks unused after the last install() call.
         svy_console = Console(width=width)
 
-        # Install using the configured console
         pretty_install(console=svy_console)
         tb_install(
             console=svy_console,

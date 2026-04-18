@@ -1,215 +1,331 @@
 # src/svy/datasets/base.py
+"""
+Dataset loader.
+
+Consumes the catalog API (``svy.datasets.api``) to resolve a slug into a
+``Dataset`` record, ensures the parquet file is cached + verified
+(``svy.datasets._cache``), then builds a lazy Polars pipeline for filtering,
+column selection, ordering, and slicing.
+
+Loading is intentionally decoupled from survey design: this function returns
+a bare ``DataFrame`` (or ``LazyFrame``).  To attach a design and run sampling,
+pass the result to ``svy.Sample`` and use ``sample.selection.srs(...)``.
+"""
+
 from __future__ import annotations
 
-import json
 import logging
-import os
-import shutil
 
-from pathlib import Path
-from typing import Any, Optional, Sequence, cast
+from typing import Literal, Mapping, Sequence, overload
 
-import httpx
+import numpy as np
 import polars as pl
+
+from svy.core.types import Category, RandomState, WhereArg
+from svy.datasets import _cache, api
+from svy.utils.where import _compile_where
 
 
 log = logging.getLogger(__name__)
 
-BASE_URL = os.getenv("SVYLAB_BASE_URL", "http://localhost:8080")
 
-# 1. Define Persistent Cache Directory
-# Uses user's home directory to persist files between sessions/reboots
-CACHE_DIR = Path.home() / ".svy" / "datasets"
+# --------------------------------------------------------------------------- #
+# Public API
+# --------------------------------------------------------------------------- #
 
 
-def load_dataset(
+@overload
+def load(
     name: str,
     *,
-    limit: Optional[int] = 100,  # None => get ALL rows via parquet
-    where: dict | list | None = None,  # JSON-friendly filter spec
-    select: Optional[Sequence[str]] = None,  # columns to keep
-    order_by: Optional[Sequence[str]] = None,  # sort columns
-    descending: bool | Sequence[bool] = False,  # bool or per-col flags
-    force_local: bool = False,
-    force_download: bool = False,  # New: Force re-download even if cached
-) -> pl.DataFrame:
+    lazy: Literal[False] = False,
+    **kwargs,
+) -> pl.DataFrame: ...
+
+
+@overload
+def load(
+    name: str,
+    *,
+    lazy: Literal[True],
+    **kwargs,
+) -> pl.LazyFrame: ...
+
+
+def load(
+    name: str,
+    *,
+    n: int | Mapping[Category, int] | None = None,
+    rate: float | Mapping[Category, float] | None = None,
+    by: str | Sequence[str] | None = None,
+    where: WhereArg = None,
+    select: Sequence[str] | None = None,
+    order_by: str | Sequence[str] | None = None,
+    order_type: Literal["ascending", "descending", "random"] = "ascending",
+    rstate: RandomState = None,
+    lazy: bool = False,
+    force_download: bool = False,
+) -> pl.DataFrame | pl.LazyFrame:
     """
-    Load an example dataset from svylab by short name (e.g., 'ea_listing') as a Polars DataFrame.
+    Load an example dataset from the svylab catalog.
 
-    - If limit is an int (default 100): use preview endpoint (prefers server-side filtering).
-    - If limit is None: download parquet (or load from cache), then apply filters locally.
+    Parameters
+    ----------
+    name : str
+        Dataset slug, e.g. ``"ea_listing"``.
+    n : int or Mapping[Category, int], optional
+        Number of rows to return.  With ``by`` set, an int applies per group;
+        a mapping gives per-group counts explicitly.  Mutually exclusive with
+        ``rate``.
+    rate : float or Mapping[Category, float], optional
+        Sampling fraction in ``(0, 1]``.  Scalar applies globally or per
+        group (with ``by``); a mapping gives per-group fractions.  Mutually
+        exclusive with ``n``.
+    by : str or Sequence[str], optional
+        Grouping column(s) for ``n`` / ``rate``.
+    where : WhereArg, optional
+        Row filter. Forms accepted:
+
+        - ``pl.col("age") >= 18``                     — Polars expression
+        - ``[pl.col("a") > 0, pl.col("b") < 10]``     — list, AND-combined
+        - ``{"region": "north"}``                     — scalar equality
+        - ``{"region": ["north", "south"]}``          — collection membership
+        - ``{"region": "north", "age": [18, 19, 20]}`` — multiple cols, AND-combined
+
+        For anything more complex (between, comparisons, string matching,
+        OR combinations), use Polars expressions directly.
+    select : Sequence[str], optional
+        Columns to keep.  Applied after filtering to maximize Parquet I/O
+        savings via column pruning.
+    order_by : str or Sequence[str], optional
+        Sort key(s) applied before slicing.
+    order_type : {"ascending", "descending", "random"}, default "ascending"
+        Sort direction.  ``"random"`` uses a reproducible hash-based shuffle.
+    rstate : RandomState, optional
+        Seed or Generator for reproducible random ordering.
+    lazy : bool, default False
+        Return a ``LazyFrame`` if True; collect to ``DataFrame`` otherwise.
+    force_download : bool, default False
+        Re-download the parquet file even if cached.
+
+    Returns
+    -------
+    pl.DataFrame or pl.LazyFrame
+
+    Notes
+    -----
+    For proper probability sampling (with design-consistent inclusion
+    probabilities and weights), use ``svy.Sample(...).selection.srs(...)``
+    or the ``pps_*`` methods.  This function only slices for convenience.
     """
-    preview_url = f"{BASE_URL}/api/data/examples/by-name/{name}/preview"
-    download_url = f"{BASE_URL}/api/data/examples/by-name/{name}/download"
+    _validate_args(n=n, rate=rate, by=by, order_type=order_type)
 
-    def _desc_flags(desc: bool | Sequence[bool], n: int) -> list[bool]:
-        if isinstance(desc, bool):
-            return [desc] * n
-        vals = list(desc)
-        if len(vals) != n:
-            raise ValueError("Length of `descending` must match `order_by`.")
-        return vals
+    # 1. Catalog lookup (cached in-process for a few minutes).
+    ds = api.describe(name)
 
-    # ---- Case 1: preview (server-side filters if supported) ----
-    if limit is not None and not force_local:
-        params: dict[str, Any] = {}
-        params["n"] = int(limit)
-        if where is not None:
-            params["where"] = json.dumps(where, separators=(",", ":"))
-        if select:
-            params["select"] = ",".join(select)
-        if order_by:
-            params["order_by"] = ",".join(order_by)
-            params["desc"] = ",".join(
-                "true" if d else "false" for d in _desc_flags(descending, len(order_by))
-            )
+    # 2. Ensure the file is on disk, verified.
+    path = _cache.ensure_cached(
+        slug=ds.slug,
+        version=ds.version,
+        url=ds.download_url,
+        sha256=ds.sha256,
+        force=force_download,
+    )
 
-        try:
-            with httpx.Client(timeout=httpx.Timeout(60.0)) as client:
-                r = client.get(preview_url, params=params)
-                r.raise_for_status()
-                rows = r.json()
-            return pl.DataFrame(rows)
-        except httpx.HTTPError as e:
-            # Fallback to local if server-side preview fails, unless forced otherwise
-            log.warning(f"Preview failed ({e}), falling back to full download.")
-
-    # ---- Case 2: full parquet + local (lazy) filtering ----
-
-    # Use cached download logic
-    path = _download_parquet_cached(download_url, name, force=force_download)
-
-    # Optimization: Scan parquet allows predicate pushdown (faster than reading all)
+    # 3. Build the lazy pipeline.
     lf = pl.scan_parquet(path)
 
-    if where:
-        lf = lf.filter(_to_polars_expr(where))
-    if select:
-        lf = lf.select([pl.col(c) for c in select])
-    if order_by:
-        lf = lf.sort(order_by, descending=_desc_flags(descending, len(order_by)))
+    # Filter first so Polars can push predicates into the Parquet reader.
+    if where is not None:
+        pred = _compile_where(where)
+        if pred is not None:
+            lf = lf.filter(pred)
 
-    return cast(pl.DataFrame, lf.collect())
+    # Column pruning: let Polars skip reading unneeded columns entirely.
+    if select is not None:
+        lf = lf.select(list(select))
+
+    # Ordering (or shuffling) — must precede slicing so head(n) is meaningful.
+    lf = _apply_order(lf, order_by=order_by, order_type=order_type, rstate=rstate)
+
+    # Slicing — global or per-group via `by`.
+    lf = _apply_slice(lf, n=n, rate=rate, by=by)
+
+    return lf if lazy else lf.collect()
 
 
-def _download_parquet_cached(url: str, slug: str, force: bool = False) -> str:
+# --------------------------------------------------------------------------- #
+# Validation
+# --------------------------------------------------------------------------- #
+
+
+def _validate_args(
+    *,
+    n: int | Mapping[Category, int] | None,
+    rate: float | Mapping[Category, float] | None,
+    by: str | Sequence[str] | None,
+    order_type: str,
+) -> None:
+    if n is not None and rate is not None:
+        raise ValueError("`n` and `rate` are mutually exclusive; pass only one.")
+    if by is None and isinstance(n, Mapping):
+        raise ValueError("`n` as a mapping requires `by` to be set.")
+    if by is None and isinstance(rate, Mapping):
+        raise ValueError("`rate` as a mapping requires `by` to be set.")
+    if order_type not in ("ascending", "descending", "random"):
+        raise ValueError(
+            f"order_type must be 'ascending', 'descending', or 'random'; got {order_type!r}"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Ordering
+# --------------------------------------------------------------------------- #
+
+
+def _apply_order(
+    lf: pl.LazyFrame,
+    *,
+    order_by: str | Sequence[str] | None,
+    order_type: Literal["ascending", "descending", "random"],
+    rstate: RandomState,
+) -> pl.LazyFrame:
+    if order_type == "random":
+        seed = _seed_from_rstate(rstate)
+        # Reproducible shuffle: hash(row_index + seed), sort on that.
+        # Stays fully lazy and avoids collecting to shuffle.
+        return (
+            lf.with_row_index("_svy_shuffle_idx")
+            .with_columns(
+                (pl.col("_svy_shuffle_idx").cast(pl.UInt64) + pl.lit(seed))
+                .hash()
+                .alias("_svy_shuffle_key")
+            )
+            .sort("_svy_shuffle_key")
+            .drop(["_svy_shuffle_idx", "_svy_shuffle_key"])
+        )
+
+    if order_by is None:
+        return lf
+
+    return lf.sort(order_by, descending=(order_type == "descending"))
+
+
+# --------------------------------------------------------------------------- #
+# Slicing
+# --------------------------------------------------------------------------- #
+
+
+def _apply_slice(
+    lf: pl.LazyFrame,
+    *,
+    n: int | Mapping[Category, int] | None,
+    rate: float | Mapping[Category, float] | None,
+    by: str | Sequence[str] | None,
+) -> pl.LazyFrame:
+    if n is None and rate is None:
+        return lf
+
+    by_cols = _normalize_by(by)
+
+    # --- No grouping: global head or fractional head -------------------- #
+    if by_cols is None:
+        if isinstance(n, int):
+            return lf.head(n)
+        if isinstance(rate, float):
+            _validate_rate(rate)
+            # Rate needs a height; collect once.  For teaching datasets this
+            # is trivial; power users can apply where/select first to shrink
+            # before rate-slicing.
+            df = lf.collect()
+            return df.head(int(round(len(df) * rate))).lazy()
+        return lf  # unreachable given validation, but defensive.
+
+    # --- Per-group slicing ---------------------------------------------- #
+    # Polars' lazy API doesn't expose a clean per-group head/sample, so we
+    # materialize here.  Filter/select/order have already pruned the frame.
+    df = lf.collect()
+
+    if isinstance(n, int):
+        return df.group_by(by_cols, maintain_order=True).head(n).lazy()
+
+    if isinstance(n, Mapping):
+        return _slice_per_group_mapping(df, by_cols, n, kind="n").lazy()
+
+    if isinstance(rate, float):
+        _validate_rate(rate)
+        parts = [
+            part.head(int(round(len(part) * rate)))
+            for _, part in df.group_by(by_cols, maintain_order=True)
+        ]
+        return (pl.concat(parts) if parts else df.head(0)).lazy()
+
+    if isinstance(rate, Mapping):
+        return _slice_per_group_mapping(df, by_cols, rate, kind="rate").lazy()
+
+    return df.lazy()
+
+
+def _slice_per_group_mapping(
+    df: pl.DataFrame,
+    by_cols: list[str],
+    spec: Mapping[Category, int] | Mapping[Category, float],
+    *,
+    kind: Literal["n", "rate"],
+) -> pl.DataFrame:
     """
-    Downloads file to ~/.svy/datasets/{slug}.parquet if not exists.
-    Uses streaming to be memory efficient and fast.
+    Apply a per-group ``n`` or ``rate`` mapping.
+
+    Keys must match the group identifier exactly: a scalar for single-column
+    ``by``, a tuple for multi-column ``by``.  Groups not in the mapping are
+    dropped (explicit-is-better-than-implicit).
+
+    For ``rate``, values must be in ``[0, 1]``.  Zero is allowed here (as
+    opposed to the global-rate case) to let users express "exclude this
+    group" without removing it from the mapping.
     """
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-    filename = f"{slug}.parquet"
-    local_path = CACHE_DIR / filename
-
-    # 1. Fast Path: Return immediately if exists
-    if local_path.exists() and not force:
-        log.info(f"Loading cached dataset from: {local_path}")
-        return str(local_path)
-
-    log.info(f"Downloading dataset '{slug}' to {local_path} ...")
-
-    # 2. Optimized Streaming Download
-    # We download to a temp file first, then move it, to prevent
-    # corrupted cache files if the process is interrupted.
-    temp_path = local_path.with_suffix(".tmp")
-
-    try:
-        with httpx.Client(timeout=None) as client:  # No timeout for large files
-            with client.stream("GET", url) as r:
-                r.raise_for_status()
-                with open(temp_path, "wb") as f:
-                    # 128KB chunks is a good balance for speed/memory
-                    for chunk in r.iter_bytes(chunk_size=128 * 1024):
-                        f.write(chunk)
-
-        # Atomic move (renaming is instant on same filesystem)
-        shutil.move(str(temp_path), str(local_path))
-        log.info("Download complete.")
-
-    except Exception as e:
-        if temp_path.exists():
-            temp_path.unlink()
-        raise RuntimeError(f"Failed to download dataset: {e}") from e
-
-    return str(local_path)
+    parts: list[pl.DataFrame] = []
+    for group_key, part in df.group_by(by_cols, maintain_order=True):
+        key = group_key[0] if len(by_cols) == 1 else group_key
+        if key not in spec:
+            continue
+        value = spec[key]
+        if kind == "n":
+            parts.append(part.head(int(value)))
+        else:
+            r = float(value)
+            if not (0.0 <= r <= 1.0):
+                raise ValueError(f"per-group rate must be in [0, 1]; got {r!r} for group {key!r}")
+            parts.append(part.head(int(round(len(part) * r))))
+    return pl.concat(parts) if parts else df.head(0)
 
 
-# ---- Local filter translation (safe subset of ops) ----
-def _to_polars_expr(where: Any) -> pl.Expr:
-    """
-    Supported:
-      {"col": value}                      # eq
-      {"col": (">=", 5)}                 # ge, gt, le, lt, !=, == / "eq"
-      {"col": ("in", [1,2,3])}
-      {"col": ("between", a, b)}         # inclusive
-      {"col": ("contains", "foo")}
-      {"col": ("ilike", "%foo%")}        # crude % wildcard
-      {"and": [ ... ]} / {"or": [ ... ]}
-    """
-    if isinstance(where, dict) and ("and" in where or "or" in where):
-        keys = "and" if "and" in where else "or"
-        parts = [_to_polars_expr(x) for x in where[keys]]
-        expr = parts[0]
-        for e in parts[1:]:
-            expr = (expr & e) if keys == "and" else (expr | e)
-        return expr
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
 
-    if isinstance(where, dict):
-        exprs = []
-        for col, spec in where.items():
-            c = pl.col(col)
-            c_txt = c.cast(pl.Utf8, strict=False)  # handles Categorical/String seamlessly
 
-            if not isinstance(spec, (tuple, list)):
-                # equality: case-sensitive by default
-                exprs.append((c_txt == spec) if isinstance(spec, str) else (c == spec))
-                continue
+def _normalize_by(by: str | Sequence[str] | None) -> list[str] | None:
+    if by is None:
+        return None
+    if isinstance(by, str):
+        return [by]
+    return list(by)
 
-            op = spec[0]
-            if op == "in":
-                vals = list(spec[1])
-                exprs.append(
-                    c_txt.is_in(vals) if all(isinstance(v, str) for v in vals) else c.is_in(vals)
-                )
-            elif op == "iin":  # case-insensitive IN
-                vals = [str(v).lower() for v in spec[1]]
-                exprs.append(c_txt.str.to_lowercase().is_in(vals))
-            elif op in ("==", "eq"):
-                rhs = spec[1]
-                exprs.append((c_txt == rhs) if isinstance(rhs, str) else (c == rhs))
-            elif op in ("eqi",):  # case-insensitive equality
-                exprs.append(c_txt.str.to_lowercase() == str(spec[1]).lower())
-            elif op == "contains":
-                exprs.append(c_txt.str.contains(str(spec[1])))  # case-sensitive
-            elif op == "ilike":  # case-insensitive contains with % wildcards
-                pat = str(spec[1]).replace("%", ".*")
-                exprs.append(c_txt.str.to_lowercase().str.contains(pat.lower()))
-            elif op == "between":
-                a, b = spec[1], spec[2]
-                exprs.append((c >= a) & (c <= b))
-            elif op in (">=", "ge"):
-                exprs.append(c >= spec[1])
-            elif op in (">", "gt"):
-                exprs.append(c > spec[1])
-            elif op in ("<=", "le"):
-                exprs.append(c <= spec[1])
-            elif op in ("<", "lt"):
-                exprs.append(c < spec[1])
-            elif op in ("!=", "ne"):
-                exprs.append(c != spec[1])
-            elif op in ("==", "eq"):
-                exprs.append(c == spec[1])
-            elif op == "contains":
-                exprs.append(c.cast(pl.Utf8).str.contains(str(spec[1])))
-            elif op == "ilike":
-                pat = str(spec[1]).replace("%", ".*")
-                exprs.append(c.cast(pl.Utf8).str.to_lowercase().str.contains(pat.lower()))
-            else:
-                raise ValueError(f"Unsupported operator: {op!r}")
-        out = exprs[0]
-        for e in exprs[1:]:
-            out = out & e
-        return out
 
-    raise TypeError(f"Invalid where spec: {where!r}")
+def _validate_rate(rate: float) -> None:
+    if not (0.0 < rate <= 1.0):
+        raise ValueError(f"rate must be in (0, 1]; got {rate!r}")
+
+
+def _seed_from_rstate(rstate: RandomState) -> int:
+    """Derive a 64-bit seed from any svy RandomState value."""
+    if rstate is None:
+        return int(np.random.default_rng().integers(0, 2**63 - 1))
+    if isinstance(rstate, int):
+        return rstate
+    if isinstance(rstate, np.random.Generator):
+        return int(rstate.integers(0, 2**63 - 1))
+    if isinstance(rstate, np.random.RandomState):
+        return int(rstate.randint(0, 2**31 - 1))
+    raise TypeError(f"Unsupported rstate type: {type(rstate).__name__}")

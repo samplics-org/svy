@@ -1,6 +1,6 @@
 [project]
 name = "svy"
-version = "0.16.1"
+version = "0.17.0"
 description = "End-to-end surveys: design, sample, analyze, report."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -41,10 +41,8 @@ all = ["rich>=14.1", "great-tables>=0.18"]
 dev = [
   "codecov",
   "coverage>=7.8.0",
-  "httpx",
   "jupyterlab",
   "line_profiler",
-  "mypy",
   "pytest",
   "pytest-cov",
   "tqdm",
@@ -55,14 +53,14 @@ dev = [
   "samplics", # benchmarking comparison only — to be removed
 ]
 
-[project.scripts]
-svy = "svy.__main__:main"
-
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"
 testpaths = ["tests"]
 markers = [
     "optional: mark test as optional (e.g. requires extra dependencies like rich)",
+]
+filterwarnings = [
+    "error::DeprecationWarning:polars",
 ]
 
 # testpaths = ["tests"]

@@ -1,31 +1,19 @@
-from svy.errors.base_errors import SvyError
+# from svy.errors.base_errors import SvyError
 
 
-class SinglePSUError(SvyError):
-    """Only one PSU in the stratum"""
+# class SinglePSUError(SvyError):
+#     """Only one PSU in the stratum"""
 
-    pass
-
-
-class ProbError(SvyError):
-    """Not a valid probability"""
-
-    pass
+#     pass
 
 
-class MethodError(SvyError):
-    """Method not applicable"""
+# class ProbError(SvyError):
+#     """Not a valid probability"""
 
-    pass
-
-
-class CertaintyError(SvyError):
-    """Method not applicable"""
-
-    pass
+#     pass
 
 
-class DimensionError(SvyError):
-    """Method not applicable"""
+# class CertaintyError(SvyError):
+#     """Method not applicable"""
 
-    pass
+#     pass

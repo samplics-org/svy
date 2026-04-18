@@ -133,6 +133,21 @@ class _Then:
 # =============================================================================
 
 
+def _as_membership_rhs(values: Any) -> Any:
+    """Normalize is_in's right-hand-side for Polars compatibility.
+
+    Routes Series and expression values through .implode() to avoid the
+    same-dtype ambiguity deprecation; Python iterables pass through as lists.
+    """
+    if isinstance(values, pl.Series):
+        return values.implode()
+    if isinstance(values, pl.Expr):
+        return values.implode()
+    if isinstance(values, Expr):
+        return values._e.implode()
+    return list(values)
+
+
 @dataclass(frozen=True)
 class Expr:
     """
@@ -436,14 +451,23 @@ class Expr:
     # Membership / Range Checks
     # -------------------------------------------------------------------------
     def is_in(self: T, values: Iterable[Any]) -> T:
-        """Check if values are in a list."""
-        return _typing.cast(T, Expr(self._e.is_in(list(values))))
+        """Check if values are in a collection.
+
+        Accepts Python iterables (list/tuple/set), Polars Series, and Polars
+        or svy expressions.  Series and expression values are routed through
+        ``.implode()`` to avoid Polars' same-dtype ambiguity warning
+        (pola-rs/polars#22149).
+        """
+        return _typing.cast(T, Expr(self._e.is_in(_as_membership_rhs(values))))
 
     isin = is_in  # Pandas-style alias
 
     def is_not_in(self: T, values: Iterable[Any]) -> T:
-        """Check if values are NOT in a list."""
-        return _typing.cast(T, Expr(~self._e.is_in(list(values))))
+        """Check if values are NOT in a collection.
+
+        Accepts the same value types as :meth:`is_in`.
+        """
+        return _typing.cast(T, Expr(~self._e.is_in(_as_membership_rhs(values))))
 
     def between(self: T, lower: Any, upper: Any, closed: str = "both") -> T:
         """Check if values are within a range (closed: 'both', 'left', 'right', 'none')."""
