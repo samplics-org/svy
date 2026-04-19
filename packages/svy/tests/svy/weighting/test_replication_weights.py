@@ -671,3 +671,86 @@ class TestCustomRepPrefix:
         )
         assert sample.design.rep_wgts.prefix == "sdr_rep"
         assert all(c.startswith("sdr_rep") for c in sample.design.rep_wgts.columns)
+
+# ===========================================================================
+# Determinism stress tests
+#
+# These tests loop many times to surface nondeterministic iteration order
+# bugs that pairwise comparisons would miss intermittently.  The existing
+# `test_*_reproducibility` tests compare only two calls; if a bug
+# manifests in ~35% of calls (as the HashMap iteration-order bug did),
+# a pairwise test passes ~70% of the time and only flakes occasionally.
+# A 50-run loop reduces the false-negative rate to effectively zero.
+# ===========================================================================
+
+
+class TestDeterminismStress:
+    """Loop-based tests that catch intermittent nondeterminism."""
+
+    def test_bootstrap_100_runs_identical(self, simple_stratified_sample):
+        """100 bootstrap calls with the same seed must all produce identical weights."""
+        baseline = simple_stratified_sample.weighting.create_bs_wgts(n_reps=20, rstate=147)
+        baseline_mat = baseline.data.select(baseline.design.rep_wgts.columns).to_numpy()
+
+        for trial in range(100):
+            s = simple_stratified_sample.weighting.create_bs_wgts(n_reps=20, rstate=147)
+            mat = s.data.select(s.design.rep_wgts.columns).to_numpy()
+            np.testing.assert_array_equal(
+                baseline_mat,
+                mat,
+                err_msg=f"Bootstrap weights drifted on trial {trial} with seed=147",
+            )
+
+    def test_bootstrap_100_runs_identical_generator(self, simple_stratified_sample):
+        """Same determinism requirement when rstate is a fresh Generator."""
+        baseline = simple_stratified_sample.weighting.create_bs_wgts(
+            n_reps=20, rstate=np.random.default_rng(147)
+        )
+        baseline_mat = baseline.data.select(baseline.design.rep_wgts.columns).to_numpy()
+
+        for trial in range(100):
+            s = simple_stratified_sample.weighting.create_bs_wgts(
+                n_reps=20, rstate=np.random.default_rng(147)
+            )
+            mat = s.data.select(s.design.rep_wgts.columns).to_numpy()
+            np.testing.assert_array_equal(
+                baseline_mat,
+                mat,
+                err_msg=f"Bootstrap weights drifted on trial {trial} with Generator(147)",
+            )
+
+    def test_bootstrap_many_strata_50_runs(self, multi_psu_sample):
+        """Stress with more strata to increase HashMap permutation space."""
+        baseline = multi_psu_sample.weighting.create_bs_wgts(n_reps=50, rstate=42)
+        baseline_mat = baseline.data.select(baseline.design.rep_wgts.columns).to_numpy()
+
+        for trial in range(50):
+            s = multi_psu_sample.weighting.create_bs_wgts(n_reps=50, rstate=42)
+            mat = s.data.select(s.design.rep_wgts.columns).to_numpy()
+            np.testing.assert_array_equal(
+                baseline_mat, mat, err_msg=f"Drifted on trial {trial}"
+            )
+
+    def test_brr_seeded_50_runs_identical(self, simple_stratified_sample):
+        """BRR with a seed must be deterministic across many calls."""
+        baseline = simple_stratified_sample.weighting.create_brr_wgts(rstate=147)
+        baseline_mat = baseline.data.select(baseline.design.rep_wgts.columns).to_numpy()
+
+        for trial in range(50):
+            s = simple_stratified_sample.weighting.create_brr_wgts(rstate=147)
+            mat = s.data.select(s.design.rep_wgts.columns).to_numpy()
+            np.testing.assert_array_equal(
+                baseline_mat, mat, err_msg=f"BRR drifted on trial {trial}"
+            )
+
+    def test_jk2_seeded_50_runs_identical(self, odd_psu_sample):
+        """JK2 with a seed must be deterministic across many calls."""
+        baseline = odd_psu_sample.weighting.create_jk_wgts(paired=True, rstate=42)
+        baseline_mat = baseline.data.select(baseline.design.rep_wgts.columns).to_numpy()
+
+        for trial in range(50):
+            s = odd_psu_sample.weighting.create_jk_wgts(paired=True, rstate=42)
+            mat = s.data.select(s.design.rep_wgts.columns).to_numpy()
+            np.testing.assert_array_equal(
+                baseline_mat, mat, err_msg=f"JK2 drifted on trial {trial}"
+            )
