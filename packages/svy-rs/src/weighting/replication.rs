@@ -6,11 +6,11 @@
 // - Bootstrap (stratified)
 // - SDR (Successive Difference Replication)
 
+use super::hadamard_tables::get_hardcoded_hadamard;
+use crate::rng::Rng;
 use ndarray::{Array1, Array2, ArrayView1};
 use rayon::prelude::*;
 use std::collections::HashMap;
-use crate::rng::Rng;
-use super::hadamard_tables::get_hardcoded_hadamard;
 
 /// Result type for replication functions
 pub type Result<T> = std::result::Result<T, ReplicationError>;
@@ -244,8 +244,13 @@ fn build_brr_stratum_map(
     for i in 0..stratum.len() {
         stratum_set.entry(stratum[i]).or_default().insert(psu[i]);
     }
-    let mut stratum_psus: HashMap<i64, Vec<i64>> = stratum_set.into_iter()
-        .map(|(s, set)| { let mut v: Vec<i64> = set.into_iter().collect(); v.sort_unstable(); (s, v) })
+    let mut stratum_psus: HashMap<i64, Vec<i64>> = stratum_set
+        .into_iter()
+        .map(|(s, set)| {
+            let mut v: Vec<i64> = set.into_iter().collect();
+            v.sort_unstable();
+            (s, v)
+        })
         .collect();
 
     for (&s, psus) in &stratum_psus {
@@ -259,8 +264,14 @@ fn build_brr_stratum_map(
 
     if let Some(seed) = seed {
         let mut rng = Rng::new(seed);
-        for psus in stratum_psus.values_mut() {
-            rng.shuffle(psus);
+        // Sort keys first so RNG is consumed in a deterministic order
+        // across runs (HashMap iteration order is otherwise nondeterministic).
+        let mut keys: Vec<i64> = stratum_psus.keys().copied().collect();
+        keys.sort_unstable();
+        for k in &keys {
+            if let Some(psus) = stratum_psus.get_mut(k) {
+                rng.shuffle(psus);
+            }
         }
     }
 
@@ -480,6 +491,15 @@ pub fn create_bootstrap_weights(
         .unwrap_or_else(|| Array1::ones(n_obs));
     let stratum_psus = build_stratum_psu_list(&stratum_vec, &psu);
 
+    // Materialize a sorted (stratum_key, &psus) list so the parallel loop
+    // iterates strata in a deterministic order across runs.  HashMap
+    // iteration order is otherwise nondeterministic, which would cause the
+    // per-replicate RNG to be consumed in a different order on each call
+    // and produce different replicate weights despite using the same seed.
+    let mut strata_sorted: Vec<(i64, &Vec<i64>)> =
+        stratum_psus.iter().map(|(&s, v)| (s, v)).collect();
+    strata_sorted.sort_unstable_by_key(|(s, _)| *s);
+
     // Pre-build PSU → observation indices map once, shared across replicates.
     // Avoids O(N) full-scan per stratum per replicate.
     let mut psu_obs: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
@@ -493,7 +513,7 @@ pub fn create_bootstrap_weights(
             let mut rng = Rng::new(seed.wrapping_add(r as u64));
             let mut rep_wgt = Array1::zeros(n_obs);
 
-            for (&s, psus) in &stratum_psus {
+            for &(s, psus) in &strata_sorted {
                 let n_psu = psus.len();
                 // Draw n_psu PSUs with replacement, count selections
                 let mut counts = vec![0usize; n_psu];
@@ -591,7 +611,8 @@ fn build_stratum_psu_list(stratum: &Array1<i64>, psu: &ArrayView1<i64>) -> HashM
     for i in 0..stratum.len() {
         set_map.entry(stratum[i]).or_default().insert(psu[i]);
     }
-    set_map.into_iter()
+    set_map
+        .into_iter()
         .map(|(s, set)| {
             let mut v: Vec<i64> = set.into_iter().collect();
             v.sort_unstable(); // deterministic ordering

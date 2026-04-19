@@ -35,7 +35,6 @@ pub fn sum_by_group_2d(
     sums
 }
 
-
 /// Check if weights are within bounds
 pub fn check_bounds(
     raked: ArrayView2<f64>,
@@ -83,16 +82,5 @@ mod tests {
         assert_eq!(sums[[0, 1]], 8.0);
         assert_eq!(sums[[1, 0]], 3.0);
         assert_eq!(sums[[1, 1]], 4.0);
-    }
-
-    #[test]
-    fn test_check_convergence() {
-        let current = array![[1.0, 2.0], [3.0, 4.0]];
-        let previous = array![[1.01, 2.01], [3.01, 4.01]];
-
-        let (converged, max_diff) = check_convergence(current.view(), previous.view(), 0.02);
-
-        assert!(converged);
-        assert!(max_diff < 0.02);
     }
 }

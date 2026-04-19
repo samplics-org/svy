@@ -43,4 +43,4 @@ from svy_rs._internal import (
     select_pps_rs,
 )
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"

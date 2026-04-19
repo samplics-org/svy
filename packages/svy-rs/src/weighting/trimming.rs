@@ -43,11 +43,7 @@ fn ess(weights: &[f64]) -> f64 {
         s += w;
         s2 += w * w;
     }
-    if s2 < 1e-300 {
-        0.0
-    } else {
-        (s * s) / s2
-    }
+    if s2 < 1e-300 { 0.0 } else { (s * s) / s2 }
 }
 
 // ---------------------------------------------------------------------------
@@ -86,17 +82,22 @@ fn trim_once(
                 }
             }
             if excess > 0.0 {
-                // Sum of non-trimmed active weights (post-cap)
+                // Sum of non-trimmed active weights, strictly below cap.
+                // Units that were just capped (w[i] == cap) must not receive any
+                // redistributed mass, otherwise they overshoot and trigger another
+                // trim pass, producing instability.
                 let mut denom = 0.0_f64;
                 for i in 0..n {
-                    if !zero_mask[i] && w[i] <= cap {
+                    if !zero_mask[i] && w[i] < cap {
+                        // strict
                         denom += w[i];
                     }
                 }
                 if denom > 1e-300 {
                     let factor = excess / denom;
                     for i in 0..n {
-                        if !zero_mask[i] && w[i] <= cap {
+                        if !zero_mask[i] && w[i] < cap {
+                            // strict
                             w[i] += w[i] * factor;
                         }
                     }
@@ -242,8 +243,7 @@ pub fn trim_impl(
 
     for _ in 0..max_iter {
         iterations += 1;
-        let (n_up, n_lo, n_changed) =
-            trim_once(&mut w, &zero_mask, upper, lower, redistribute);
+        let (n_up, n_lo, n_changed) = trim_once(&mut w, &zero_mask, upper, lower, redistribute);
 
         n_upper_total += n_up;
         n_lower_total += n_lo;
@@ -330,14 +330,8 @@ pub fn trim_matrix_impl(
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
-    use ndarray::array;
 
-    fn trim(
-        w: &[f64],
-        upper: Option<f64>,
-        lower: Option<f64>,
-        redistribute: bool,
-    ) -> TrimOutput {
+    fn trim(w: &[f64], upper: Option<f64>, lower: Option<f64>, redistribute: bool) -> TrimOutput {
         trim_impl(
             ndarray::ArrayView1::from(w),
             upper,
@@ -496,7 +490,7 @@ mod tests {
             Some(2.0),
             None,
             true,
-            1,    // force 1 iteration
+            1,     // force 1 iteration
             1e-20, // impossible tolerance
         )
         .unwrap();
