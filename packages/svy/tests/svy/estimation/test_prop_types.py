@@ -204,3 +204,95 @@ def test_prop_float_replication_raises(base_df):
     )
     with pytest.raises((TypeError, Exception), match="[Ff]loat|prop"):
         _make_rep_sample(df).estimation.prop("score")
+
+
+# ============================================================================
+# Float — integer-valued floats are accepted, continuous floats still raise
+# ============================================================================
+
+
+@pytest.mark.parametrize("float_dtype", [pl.Float32, pl.Float64])
+def test_prop_float_binary_taylor(base_df, float_dtype):
+    """Binary 0/1 indicator stored as float (common after CSV reads with nulls)."""
+    df = base_df.with_columns(
+        pl.Series("a4", [1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0]).cast(float_dtype)
+    )
+    result = _taylor_sample(df).estimation.prop("a4")
+    assert len(result.estimates) == 2
+    assert sum(p.est for p in result.estimates) == pytest.approx(1.0, abs=1e-10)
+    ests = {p.y_level: p.est for p in result.estimates}
+    # Values should round-trip to integer levels 0 and 1
+    assert set(ests.keys()) == {0, 1}
+    assert ests[1] == pytest.approx(0.5, abs=1e-10)
+
+
+@pytest.mark.parametrize("float_dtype", [pl.Float32, pl.Float64])
+def test_prop_float_binary_replication(base_df, float_dtype):
+    df = base_df.with_columns(
+        pl.Series("a4", [1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0]).cast(float_dtype)
+    )
+    result = _make_rep_sample(df).estimation.prop("a4")
+    assert len(result.estimates) == 2
+    assert sum(p.est for p in result.estimates) == pytest.approx(1.0, abs=1e-10)
+
+
+def test_prop_float_binary_matches_integer(base_df):
+    """Float 0.0/1.0 should produce identical estimates to Int64 0/1."""
+    df_float = base_df.with_columns(
+        pl.Series("a4", [1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0])
+    )
+    df_int = base_df.with_columns(pl.Series("a4", [1, 0, 1, 0, 1, 0, 1, 0, 1, 0], dtype=pl.Int64))
+    r_float = _taylor_sample(df_float).estimation.prop("a4")
+    r_int = _taylor_sample(df_int).estimation.prop("a4")
+
+    f_ests = {p.y_level: (p.est, p.se) for p in r_float.estimates}
+    i_ests = {p.y_level: (p.est, p.se) for p in r_int.estimates}
+    assert f_ests.keys() == i_ests.keys()
+    for level in f_ests:
+        assert f_ests[level][0] == pytest.approx(i_ests[level][0], abs=1e-12)
+        assert f_ests[level][1] == pytest.approx(i_ests[level][1], abs=1e-12)
+
+
+def test_prop_float_multi_category(base_df):
+    """Discrete float codes 1.0/2.0/3.0 (e.g. from a Likert CSV with nulls)."""
+    df = base_df.with_columns(
+        pl.Series("grade_code", [1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 1.0])
+    )
+    result = _taylor_sample(df).estimation.prop("grade_code")
+    assert len(result.estimates) == 3
+    assert {p.y_level for p in result.estimates} == {1, 2, 3}
+    assert sum(p.est for p in result.estimates) == pytest.approx(1.0, abs=1e-10)
+
+
+def test_prop_float_with_nan(base_df):
+    """NaN in a float indicator column should be treated as missing."""
+    df = base_df.with_columns(
+        pl.Series("a4", [1.0, 0.0, float("nan"), 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0])
+    )
+    result = _taylor_sample(df).estimation.prop("a4", drop_nulls=True)
+    # With one observation dropped, proportions should still sum to 1
+    assert sum(p.est for p in result.estimates) == pytest.approx(1.0, abs=1e-10)
+
+
+def test_prop_float_with_null(base_df):
+    """Polars null in a float indicator column should be treated as missing."""
+    df = base_df.with_columns(pl.Series("a4", [1.0, 0.0, None, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]))
+    result = _taylor_sample(df).estimation.prop("a4", drop_nulls=True)
+    assert sum(p.est for p in result.estimates) == pytest.approx(1.0, abs=1e-10)
+
+
+def test_prop_float_continuous_taylor_raises(base_df):
+    """Genuinely continuous floats should still raise with a helpful message."""
+    df = base_df.with_columns(
+        pl.Series("score", [0.1, 0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 0.6, 0.5, 0.55])
+    )
+    with pytest.raises(TypeError, match="non-integer"):
+        _taylor_sample(df).estimation.prop("score")
+
+
+def test_prop_float_continuous_replication_raises(base_df):
+    df = base_df.with_columns(
+        pl.Series("score", [0.1, 0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 0.6, 0.5, 0.55])
+    )
+    with pytest.raises(TypeError, match="non-integer"):
+        _make_rep_sample(df).estimation.prop("score")

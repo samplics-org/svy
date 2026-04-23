@@ -154,93 +154,65 @@ class RepWeights(msgspec.Struct, frozen=True):
         if self.padding is not None and self.padding < 0:
             raise ValueError(f"padding must be >= 0. Got {self.padding}.")
 
+
     def _detect_padding(self, data_columns: Sequence[str]) -> int:
         """
         Detect zero-padding width from existing column names in data.
 
-        Parameters
-        ----------
-        data_columns : Sequence[str]
-            Column names from the actual data
-
-        Returns
-        -------
-        int
-            Detected padding width (0 if no padding detected)
-
-        Examples
-        --------
-        btwt1, btwt2, ... -> 0 (no padding)
-        btwt01, btwt02, ... -> 2 (2-digit padding)
-        btwt001, btwt002, ... -> 3 (3-digit padding)
+        Matches are case-insensitive on the prefix.
         """
-        pattern = re.compile(rf"^{re.escape(self.prefix)}(\d+)$")
+        pattern = re.compile(rf"^{re.escape(self.prefix)}(\d+)$", re.IGNORECASE)
         max_padding = 0
-
         for col in data_columns:
             match = pattern.match(col)
             if match:
                 num_str = match.group(1)
-                # Zero-padded numbers start with '0' and have multiple digits
                 if len(num_str) > 1 and num_str[0] == "0":
                     max_padding = max(max_padding, len(num_str))
-
         return max_padding
 
+
     def _generate_columns(self, padding: int) -> list[str]:
-        """
-        Generate column names with specified padding.
-
-        Parameters
-        ----------
-        padding : int
-            Zero-padding width (0 = no padding)
-
-        Returns
-        -------
-        list[str]
-            Column names like ['btwt1', 'btwt2', ...] or ['btwt001', 'btwt002', ...]
-        """
+        """Generate canonical column names with specified padding (exact case)."""
         if padding > 0:
             return [f"{self.prefix}{i:0{padding}d}" for i in range(1, self.n_reps + 1)]
         else:
             return [f"{self.prefix}{i}" for i in range(1, self.n_reps + 1)]
 
+
     def columns_from_data(self, data_columns: Sequence[str]) -> list[str]:
         """
         Generate column names, auto-detecting padding from actual data columns.
 
-        This is the preferred method when validating against actual data,
-        as it handles both padded and unpadded column naming conventions.
+        Prefix matching is case-insensitive for padding detection. The returned
+        names use the casing of the *first* matching column in ``data_columns``
+        if any match the prefix; otherwise the casing specified at construction.
 
-        Parameters
-        ----------
-        data_columns : Sequence[str]
-            Column names from the actual data
-
-        Returns
-        -------
-        list[str]
-            Expected replicate weight column names with appropriate padding
-
-        Examples
-        --------
-        >>> # Data has btwt001, btwt002, ...
-        >>> rw = RepWeights(method=EstMethod.JACKKNIFE, prefix="btwt", n_reps=3)
-        >>> rw.columns_from_data(["btwt001", "btwt002", "btwt003"])
-        ['btwt001', 'btwt002', 'btwt003']
-
-        >>> # Data has btwt1, btwt2, ...
-        >>> rw.columns_from_data(["btwt1", "btwt2", "btwt3"])
-        ['btwt1', 'btwt2', 'btwt3']
+        Does NOT validate that all n_reps columns exist in data — this is a
+        pure name generator. Validation happens downstream in
+        ``Sample._validate_design``.
         """
         # Use explicit padding if provided
         if self.padding is not None:
-            return self._generate_columns(self.padding)
+            padding = self.padding
+        else:
+            padding = self._detect_padding(data_columns)
 
-        # Auto-detect padding from data
-        detected_padding = self._detect_padding(data_columns)
-        return self._generate_columns(detected_padding)
+        # Determine the canonical casing of the prefix from actual data, if
+        # any column starts with it (case-insensitive). This lets
+        # Sample._validate_design find the columns when the data is in a
+        # different case than the user-specified prefix.
+        pattern = re.compile(rf"^{re.escape(self.prefix)}\d+$", re.IGNORECASE)
+        resolved_prefix = self.prefix
+        for col in data_columns:
+            if pattern.match(col):
+                resolved_prefix = col[: len(self.prefix)]
+                break
+
+        if padding > 0:
+            return [f"{resolved_prefix}{i:0{padding}d}" for i in range(1, self.n_reps + 1)]
+        else:
+            return [f"{resolved_prefix}{i}" for i in range(1, self.n_reps + 1)]
 
     @property
     def columns(self) -> list[str]:

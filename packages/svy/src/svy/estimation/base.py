@@ -276,13 +276,39 @@ class Estimation:
         if y not in data.columns:
             return data
         dtype = data[y].dtype
+
+        # Floats: accept if non-null values are integer-valued (e.g. 0.0/1.0 indicators,
+        # or discrete codes 1.0/2.0/3.0 that ended up as float after a CSV read with nulls).
         if dtype in (pl.Float32, pl.Float64):
-            raise TypeError(
-                f"prop() does not support float column '{y}'. "
-                f"Use a String, Categorical, Enum, Boolean, or integer column."
+            s = data[y]
+            # Strip nulls and NaNs before checking integrality.
+            non_null = s.drop_nulls().drop_nans()
+            if non_null.len() == 0:
+                # All-null column: nothing to validate, cast to Int64 and let downstream handle it.
+                return data.with_columns(
+                    pl.col(y).cast(pl.Int64, strict=False).alias(y)
+                )
+            # Integer-valued check: floor(x) == x for every non-null value.
+            is_integral = (non_null == non_null.floor()).all()
+            if not is_integral:
+                raise TypeError(
+                    f"prop() received float column '{y}' with non-integer values. "
+                    f"prop() expects a categorical/indicator variable (e.g. 0/1 or discrete "
+                    f"codes). Cast to String/Categorical/Enum if this is a label, or recode "
+                    f"to integer levels."
+                )
+            # NaN → null, then cast to Int64 so the Rust side sees a clean nullable integer.
+            return data.with_columns(
+                pl.when(pl.col(y).is_nan())
+                .then(None)
+                .otherwise(pl.col(y))
+                .cast(pl.Int64, strict=False)
+                .alias(y)
             )
+
         if dtype.is_integer() and dtype != pl.Int64:
             return data.with_columns(pl.col(y).cast(pl.Int64))
+
         return data
 
     def _get_enum_value(self, config, attr="method") -> str:

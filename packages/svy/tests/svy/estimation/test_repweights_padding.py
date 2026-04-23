@@ -11,9 +11,10 @@ Tests various column naming patterns to ensure robust auto-detection:
 """
 
 import pytest
-
+import numpy as np
+import polars as pl
+import svy
 from svy.core.design import Design, RepWeights
-from svy.core.enumerations import EstimationMethod
 
 
 class TestRepWeightsPadding:
@@ -25,7 +26,7 @@ class TestRepWeightsPadding:
 
     def test_no_padding_detection(self):
         """Test detection of unpadded column names."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=5)
+        rw = RepWeights(method="jackknife", prefix="wt", n_reps=5)
         data_cols = ["id", "wt1", "wt2", "wt3", "wt4", "wt5", "other"]
 
         detected = rw._detect_padding(data_cols)
@@ -36,7 +37,7 @@ class TestRepWeightsPadding:
 
     def test_two_digit_padding_detection(self):
         """Test detection of 2-digit zero-padded columns."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=15)
+        rw = RepWeights(method="jackknife", prefix="wt", n_reps=15)
         data_cols = ["id", "wt01", "wt02", "wt03", "wt10", "wt15", "other"]
 
         detected = rw._detect_padding(data_cols)
@@ -48,7 +49,7 @@ class TestRepWeightsPadding:
 
     def test_three_digit_padding_detection(self):
         """Test detection of 3-digit zero-padded columns (like btwt001)."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="btwt", n_reps=277)
+        rw = RepWeights(method="jackknife", prefix="btwt", n_reps=277)
         data_cols = ["id", "btwt001", "btwt002", "btwt050", "btwt100", "btwt277", "other"]
 
         detected = rw._detect_padding(data_cols)
@@ -60,7 +61,7 @@ class TestRepWeightsPadding:
 
     def test_four_digit_padding_detection(self):
         """Test detection of 4-digit zero-padded columns."""
-        rw = RepWeights(method=EstimationMethod.BRR, prefix="rep", n_reps=1000)
+        rw = RepWeights(method="brr", prefix="rep", n_reps=1000)
         data_cols = ["id", "rep0001", "rep0002", "rep0100", "rep1000"]
 
         detected = rw._detect_padding(data_cols)
@@ -76,7 +77,7 @@ class TestRepWeightsPadding:
 
     def test_explicit_no_padding(self):
         """Test explicit padding=0 setting."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=5, padding=0)
+        rw = RepWeights(method="jackknife", prefix="wt", n_reps=5, padding=0)
 
         columns = rw.columns
         assert columns == ["wt1", "wt2", "wt3", "wt4", "wt5"]
@@ -88,7 +89,7 @@ class TestRepWeightsPadding:
 
     def test_explicit_two_digit_padding(self):
         """Test explicit padding=2 setting."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=100, padding=2)
+        rw = RepWeights(method="jackknife", prefix="wt", n_reps=100, padding=2)
 
         columns = rw.columns
         expected = [f"wt{i:02d}" for i in range(1, 101)]
@@ -96,7 +97,7 @@ class TestRepWeightsPadding:
 
     def test_explicit_three_digit_padding(self):
         """Test explicit padding=3 setting."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="btwt", n_reps=277, padding=3)
+        rw = RepWeights(method="jackknife", prefix="btwt", n_reps=277, padding=3)
 
         columns = rw.columns
         expected = [f"btwt{i:03d}" for i in range(1, 278)]
@@ -108,7 +109,7 @@ class TestRepWeightsPadding:
 
     def test_empty_data_columns(self):
         """Test with no matching columns in data."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=5)
+        rw = RepWeights(method="jackknife", prefix="wt", n_reps=5)
         data_cols = ["id", "age", "income"]  # No wt columns
 
         detected = rw._detect_padding(data_cols)
@@ -119,7 +120,7 @@ class TestRepWeightsPadding:
 
     def test_single_digit_not_padded(self):
         """Test that single digits without leading zeros are not treated as padded."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=3)
+        rw = RepWeights(method="jackknife", prefix="wt", n_reps=3)
         data_cols = ["wt1", "wt2", "wt3"]  # Single digits, no padding
 
         detected = rw._detect_padding(data_cols)
@@ -127,7 +128,7 @@ class TestRepWeightsPadding:
 
     def test_mixed_padding_uses_max(self):
         """Test that mixed padding levels use the maximum detected."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=5)
+        rw = RepWeights(method="jackknife", prefix="wt", n_reps=5)
         # Mix of 2-digit and 3-digit padding (weird but test it)
         data_cols = ["wt01", "wt002", "wt003"]
 
@@ -136,7 +137,7 @@ class TestRepWeightsPadding:
 
     def test_non_matching_prefix_ignored(self):
         """Test that columns with different prefixes are ignored."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=5)
+        rw = RepWeights(method="jackknife", prefix="wt", n_reps=5)
         data_cols = ["other001", "other002", "wt1", "wt2", "wt3"]
 
         detected = rw._detect_padding(data_cols)
@@ -144,7 +145,7 @@ class TestRepWeightsPadding:
 
     def test_partial_match_ignored(self):
         """Test that partial prefix matches are ignored."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=3)
+        rw = RepWeights(method="jackknife", prefix="wt", n_reps=3)
         data_cols = ["weight1", "wt1", "wt2", "wt_extra"]
 
         detected = rw._detect_padding(data_cols)
@@ -155,7 +156,7 @@ class TestRepWeightsPadding:
 
     def test_special_characters_in_prefix(self):
         """Test prefix with special regex characters."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt_rep", n_reps=3)
+        rw = RepWeights(method="jackknife", prefix="wt_rep", n_reps=3)
         data_cols = ["wt_rep1", "wt_rep2", "wt_rep3"]
 
         columns = rw.columns_from_data(data_cols)
@@ -163,7 +164,7 @@ class TestRepWeightsPadding:
 
     def test_prefix_with_dots(self):
         """Test prefix containing dots (common in some datasets)."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt.rep", n_reps=3)
+        rw = RepWeights(method="jackknife", prefix="wt.rep", n_reps=3)
         data_cols = ["wt.rep001", "wt.rep002", "wt.rep003"]
 
         detected = rw._detect_padding(data_cols)
@@ -178,7 +179,7 @@ class TestRepWeightsPadding:
 
     def test_nhanes_pattern(self):
         """Test pattern similar to NHANES survey data."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wtmec", n_reps=80)
+        rw = RepWeights(method="jackknife", prefix="wtmec", n_reps=80)
         data_cols = [f"wtmec{i}" for i in range(1, 81)] + ["seqn", "age"]
 
         columns = rw.columns_from_data(data_cols)
@@ -186,7 +187,7 @@ class TestRepWeightsPadding:
 
     def test_census_pattern(self):
         """Test pattern similar to census replicate weights."""
-        rw = RepWeights(method=EstimationMethod.BRR, prefix="repwt", n_reps=80)
+        rw = RepWeights(method="brr", prefix="repwt", n_reps=80)
         data_cols = [f"repwt{i:02d}" for i in range(1, 81)] + ["serialno", "st"]
 
         columns = rw.columns_from_data(data_cols)
@@ -194,7 +195,7 @@ class TestRepWeightsPadding:
 
     def test_survey_package_r_pattern(self):
         """Test pattern from R survey package (often unpadded)."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="rep", n_reps=50)
+        rw = RepWeights(method="jackknife", prefix="rep", n_reps=50)
         data_cols = [f"rep{i}" for i in range(1, 51)] + ["id", "stratum"]
 
         columns = rw.columns_from_data(data_cols)
@@ -202,7 +203,7 @@ class TestRepWeightsPadding:
 
     def test_stata_pattern(self):
         """Test pattern common in Stata datasets (3-digit padding)."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="rw", n_reps=200)
+        rw = RepWeights(method="jackknife", prefix="rw", n_reps=200)
         data_cols = [f"rw{i:03d}" for i in [1, 2, 50, 100, 200]] + ["_id"]
 
         columns = rw.columns_from_data(data_cols)
@@ -214,7 +215,7 @@ class TestRepWeightsPadding:
 
     def test_design_specified_fields_no_padding(self):
         """Test Design.specified_fields() with unpadded rep weights."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=3)
+        rw = RepWeights(method="jackknife", prefix="wt", n_reps=3)
         design = Design(wgt="weight", stratum="strat", psu="psu", rep_wgts=rw)
 
         data_cols = ["id", "weight", "strat", "psu", "wt1", "wt2", "wt3"]
@@ -229,7 +230,7 @@ class TestRepWeightsPadding:
 
     def test_design_specified_fields_with_padding(self):
         """Test Design.specified_fields() with zero-padded rep weights."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="btwt", n_reps=277)
+        rw = RepWeights(method="jackknife", prefix="btwt", n_reps=277)
         design = Design(wgt="btwt0", rep_wgts=rw)
 
         data_cols = ["id", "btwt0"] + [f"btwt{i:03d}" for i in range(1, 278)]
@@ -243,7 +244,7 @@ class TestRepWeightsPadding:
 
     def test_design_specified_fields_without_data(self):
         """Test Design.specified_fields() without data_columns (fallback)."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=3, padding=2)
+        rw = RepWeights(method="jackknife", prefix="wt", n_reps=3, padding=2)
         design = Design(wgt="weight", rep_wgts=rw)
 
         # Without data_columns, should use explicit padding
@@ -261,11 +262,11 @@ class TestRepWeightsPadding:
     def test_invalid_padding_negative(self):
         """Test that negative padding raises error."""
         with pytest.raises(ValueError, match="padding must be >= 0"):
-            RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=5, padding=-1)
+            RepWeights(method="jackknife", prefix="wt", n_reps=5, padding=-1)
 
     def test_columns_property_without_data(self):
         """Test .columns property (no data) uses explicit padding or defaults to 0."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=3)
+        rw = RepWeights(method="jackknife", prefix="wt", n_reps=3)
 
         # Without explicit padding, defaults to no padding
         columns = rw.columns
@@ -273,14 +274,14 @@ class TestRepWeightsPadding:
 
     def test_columns_property_with_explicit_padding(self):
         """Test .columns property with explicit padding."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=3, padding=2)
+        rw = RepWeights(method="jackknife", prefix="wt", n_reps=3, padding=2)
 
         columns = rw.columns
         assert columns == ["wt01", "wt02", "wt03"]
 
     def test_update_rep_weights_preserves_padding(self):
         """Test that updating rep weights preserves padding."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=5, padding=3)
+        rw = RepWeights(method="jackknife", prefix="wt", n_reps=5, padding=3)
         design = Design(wgt="weight", rep_wgts=rw)
 
         # Update n_reps, padding should be preserved
@@ -291,7 +292,7 @@ class TestRepWeightsPadding:
 
     def test_update_rep_weights_change_padding(self):
         """Test changing padding via update_rep_weights."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=5, padding=2)
+        rw = RepWeights(method="jackknife", prefix="wt", n_reps=5, padding=2)
         design = Design(wgt="weight", rep_wgts=rw)
 
         # Change padding
@@ -310,7 +311,7 @@ class TestRepWeightsPadding:
 
         This was the actual failing case that prompted the fix.
         """
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="btwt", n_reps=277)
+        rw = RepWeights(method="jackknife", prefix="btwt", n_reps=277)
 
         # Data has zero-padded columns
         data_cols = ["id", "btwt0"] + [f"btwt{i:03d}" for i in range(1, 278)]
@@ -327,7 +328,7 @@ class TestRepWeightsPadding:
 
     def test_large_n_reps_performance(self):
         """Test with large number of replicates (performance check)."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=1000)
+        rw = RepWeights(method="jackknife", prefix="wt", n_reps=1000)
 
         # Should complete quickly even with 1000 replicates
         data_cols = [f"wt{i:04d}" for i in [1, 500, 1000]]
@@ -344,7 +345,7 @@ class TestRepWeightsPadding:
 
     def test_repr_without_padding(self):
         """Test __repr__ without explicit padding."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=5)
+        rw = RepWeights(method="jackknife", prefix="wt", n_reps=5)
 
         repr_str = repr(rw)
         assert "method=" in repr_str
@@ -354,7 +355,7 @@ class TestRepWeightsPadding:
 
     def test_repr_with_padding(self):
         """Test __repr__ with explicit padding."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=5, padding=3)
+        rw = RepWeights(method="jackknife", prefix="wt", n_reps=5, padding=3)
 
         repr_str = repr(rw)
         assert "padding=3" in repr_str
@@ -365,10 +366,8 @@ class TestRepWeightsPadding:
 
     def test_columns_from_data_matches_explicit(self):
         """Test that auto-detection matches explicit setting when data is consistent."""
-        rw_explicit = RepWeights(
-            method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=5, padding=2
-        )
-        rw_auto = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=5)
+        rw_explicit = RepWeights(method="jackknife", prefix="wt", n_reps=5, padding=2)
+        rw_auto = RepWeights(method="jackknife", prefix="wt", n_reps=5)
 
         data_cols = ["wt01", "wt02", "wt03", "wt04", "wt05"]
 
@@ -379,7 +378,7 @@ class TestRepWeightsPadding:
 
     def test_columns_from_data_different_from_explicit(self):
         """Test that auto-detection overrides explicit when data differs."""
-        rw = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=5, padding=2)
+        rw = RepWeights(method="jackknife", prefix="wt", n_reps=5, padding=2)
 
         # Data has 3-digit padding but we set padding=2
         data_cols = ["wt001", "wt002", "wt003", "wt004", "wt005"]
@@ -419,9 +418,7 @@ class TestRepWeightsPaddingParametrized:
         self, prefix, n_reps, padding, expected_first, expected_last
     ):
         """Test various explicit padding patterns."""
-        rw = RepWeights(
-            method=EstimationMethod.JACKKNIFE, prefix=prefix, n_reps=n_reps, padding=padding
-        )
+        rw = RepWeights(method="jackknife", prefix=prefix, n_reps=n_reps, padding=padding)
 
         columns = rw.columns
         assert columns[0] == expected_first
@@ -442,12 +439,40 @@ class TestRepWeightsPaddingParametrized:
     )
     def test_auto_detection_patterns(self, data_pattern, expected_padding):
         """Test auto-detection across various patterns."""
-        rw = RepWeights(
-            method=EstimationMethod.JACKKNIFE, prefix=data_pattern[0][:-1].rstrip("0"), n_reps=3
-        )
+        rw = RepWeights(method="jackknife", prefix=data_pattern[0][:-1].rstrip("0"), n_reps=3)
 
         detected = rw._detect_padding(data_pattern)
         assert detected == expected_padding
+
+
+@pytest.fixture
+def base_df():
+    return pl.DataFrame(
+        {
+            "stratum": ["A"] * 5 + ["B"] * 5,
+            "psu": [1, 1, 2, 2, 3, 4, 4, 5, 5, 6],
+            "wgt": [2.0] * 10,
+            "answer": ["yes", "no", "yes", "yes", "no", "no", "no", "yes", "no", "yes"],
+        }
+    )
+
+
+@pytest.fixture(params=["rep", "REP", "Rep"])
+def mixed_case_rep_sample(base_df, request):
+    rng = np.random.default_rng(99)
+    n, n_reps = len(base_df), 8
+    case = request.param
+    rep_cols = [pl.Series(f"{case}{r + 1}", rng.uniform(0.5, 1.5, n) * 2.0) for r in range(n_reps)]
+    df = base_df.with_columns(rep_cols)
+    # Design still uses lowercase "rep" as prefix — should resolve either way.
+    rep_wgts = svy.RepWeights(prefix="rep", method="brr", n_reps=n_reps)
+    design = svy.Design(stratum="stratum", psu="psu", wgt="wgt", rep_wgts=rep_wgts)
+    return svy.Sample(data=df, design=design)
+
+
+def test_prop_rep_weights_case_insensitive(base_df, mixed_case_rep_sample):
+    result = mixed_case_rep_sample.estimation.prop("answer")
+    assert sum(p.est for p in result.estimates) == pytest.approx(1.0, abs=1e-10)
 
 
 # =============================================================================
@@ -467,9 +492,7 @@ try:
         )
         def test_column_generation_consistency(self, n_reps, padding):
             """Property: Generated columns should always have correct count and format."""
-            rw = RepWeights(
-                method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=n_reps, padding=padding
-            )
+            rw = RepWeights(method="jackknife", prefix="wt", n_reps=n_reps, padding=padding)
 
             columns = rw.columns
 
@@ -492,9 +515,9 @@ try:
         )
         def test_auto_detection_matches_explicit(self, n_reps, padding):
             """Property: Auto-detection should match explicit when data is consistent."""
-            rw_auto = RepWeights(method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=n_reps)
+            rw_auto = RepWeights(method="jackknife", prefix="wt", n_reps=n_reps)
             rw_explicit = RepWeights(
-                method=EstimationMethod.JACKKNIFE, prefix="wt", n_reps=n_reps, padding=padding
+                method="jackknife", prefix="wt", n_reps=n_reps, padding=padding
             )
 
             # Generate data with explicit padding

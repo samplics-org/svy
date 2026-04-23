@@ -36,25 +36,51 @@ def get_rep_weight_cols(est: Estimation) -> list[str]:
         return []
     if hasattr(rw, "_cached_cols") and rw._cached_cols is not None:
         return rw._cached_cols
+
     _lraw = est._sample._data
     local_data: pl.DataFrame = (
         cast(pl.DataFrame, _lraw.collect())
         if isinstance(_lraw, pl.LazyFrame)
         else cast(pl.DataFrame, _lraw)
     )
+
+    def natural_keys(text: str):
+        return [int(c) if c.isdigit() else c for c in re.split(r"(\d+)", text)]
+
     if rw.prefix:
-
-        def natural_keys(text):
-            return [int(c) if c.isdigit() else c for c in re.split(r"(\d+)", text)]
-
+        prefix_lower = rw.prefix.lower()
         cols = sorted(
-            [c for c in local_data.columns if c.startswith(rw.prefix) and c != rw.prefix],
-            key=natural_keys,
+            [
+                c
+                for c in local_data.columns
+                if c.lower().startswith(prefix_lower) and c.lower() != prefix_lower
+            ],
+            key=lambda c: natural_keys(c.lower()),
         )
     elif hasattr(rw, "wgts") and rw.wgts:
-        cols = list(cast(list[str], rw.wgts))
+        # Resolve explicit column names case-insensitively against actual columns.
+        lower_index: dict[str, str] = {}
+        for c in local_data.columns:
+            # First occurrence wins; collisions are rare but possible.
+            lower_index.setdefault(c.lower(), c)
+
+        requested = list(cast(list[str], rw.wgts))
+        cols = []
+        missing = []
+        for name in requested:
+            actual = lower_index.get(name.lower())
+            if actual is None:
+                missing.append(name)
+            else:
+                cols.append(actual)
+        if missing:
+            raise ValueError(
+                f"Replicate weight columns not found (case-insensitive match): "
+                f"{missing}. Available columns: {local_data.columns}"
+            )
     else:
         cols = []
+
     try:
         rw._cached_cols = cols
     except Exception:
