@@ -115,7 +115,7 @@ class RepWeights(msgspec.Struct, frozen=True):
         if isinstance(self.method, _EstimationMethod):
             pass  # already an enum, let step 1 validate it
         elif isinstance(self.method, str):
-            object.__setattr__(self, "method", _normalize_rep_method(self.method))
+            msgspec.structs.force_setattr(self, "method", _normalize_rep_method(self.method))
         else:
             raise TypeError(
                 f"'method' must be a string or EstimationMethod, got {type(self.method).__name__}."
@@ -154,7 +154,6 @@ class RepWeights(msgspec.Struct, frozen=True):
         if self.padding is not None and self.padding < 0:
             raise ValueError(f"padding must be >= 0. Got {self.padding}.")
 
-
     def _detect_padding(self, data_columns: Sequence[str]) -> int:
         """
         Detect zero-padding width from existing column names in data.
@@ -171,14 +170,12 @@ class RepWeights(msgspec.Struct, frozen=True):
                     max_padding = max(max_padding, len(num_str))
         return max_padding
 
-
     def _generate_columns(self, padding: int) -> list[str]:
         """Generate canonical column names with specified padding (exact case)."""
         if padding > 0:
             return [f"{self.prefix}{i:0{padding}d}" for i in range(1, self.n_reps + 1)]
         else:
             return [f"{self.prefix}{i}" for i in range(1, self.n_reps + 1)]
-
 
     def columns_from_data(self, data_columns: Sequence[str]) -> list[str]:
         """
