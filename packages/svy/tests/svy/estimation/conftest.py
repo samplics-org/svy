@@ -23,7 +23,7 @@ def load_survey_data():
         if not data_path.exists():
             pytest.skip(f"Data file not found: {filename}")
 
-        df = pl.read_csv(data_path)
+        df = pl.read_csv(data_path).fill_nan(None).drop_nulls()  # .filter(pl.col("sex") != "None")
 
         # Standard transformations used in all replication tests
         return df.with_columns(

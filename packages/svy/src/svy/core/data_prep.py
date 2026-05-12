@@ -14,7 +14,8 @@ categorical) needs before calling Rust:
   7. Type casting (y→Float64, group/strata/psu→String)
   8. Singleton filtering
   9. FPC column computation
-  10. Where clause → domain column + zero weights for non-domain
+  10. Where clause → domain column + zero weights (main AND replicate)
+      for non-domain observations
 
 Both ``estimation.base.Estimation`` and ``categorical.base.Categorical``
 call :func:`prepare_data` rather than maintaining their own prep logic.
@@ -23,6 +24,7 @@ call :func:`prepare_data` rather than maintaining their own prep logic.
 from __future__ import annotations
 
 import logging
+import re
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Mapping, Sequence, cast
@@ -43,6 +45,10 @@ log = logging.getLogger(__name__)
 # Cache for design.specified_fields() keyed on id(design).
 # Stores (design_obj, fields) so we can detect if a new object reuses the same id.
 _design_fields_cache: dict[int, tuple] = {}
+
+# Internal column name for the materialized where-clause boolean mask.
+# Created and dropped within prepare_data; never exposed to the caller.
+_MASK_COL = "__svy_where_mask__"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -121,6 +127,76 @@ def extract_where_cols(where: WhereArg) -> list[str]:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Replicate-weight column resolution
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _natural_keys(text: str) -> list:
+    """Natural sort key for replicate weight column names like 'repwtp1', 'repwtp2', ..."""
+    return [int(c) if c.isdigit() else c for c in re.split(r"(\d+)", text)]
+
+
+def _resolve_rep_weight_cols(data: pl.DataFrame, design) -> list[str]:
+    """Resolve replicate weight column names from the design.
+
+    Operates on raw data + design with no dependency on an Estimation
+    instance. Caches the result on ``rep_wgts._cached_cols`` so repeated
+    calls within the same Sample lifetime are O(1).
+
+    Mirrors the logic in ``svy.estimation.replication.get_rep_weight_cols``;
+    that function may delegate to this helper to avoid duplication.
+    """
+    rw = getattr(design, "rep_wgts", None)
+    if rw is None:
+        return []
+
+    cached = getattr(rw, "_cached_cols", None)
+    if cached is not None:
+        return cached
+
+    data_cols = data.columns
+
+    if rw.prefix:
+        prefix_lower = rw.prefix.lower()
+        cols = sorted(
+            [
+                c
+                for c in data_cols
+                if c.lower().startswith(prefix_lower) and c.lower() != prefix_lower
+            ],
+            key=lambda c: _natural_keys(c.lower()),
+        )
+    elif hasattr(rw, "wgts") and rw.wgts:
+        # First-occurrence wins on case-insensitive collision.
+        lower_index: dict[str, str] = {}
+        for c in data_cols:
+            lower_index.setdefault(c.lower(), c)
+
+        cols = []
+        missing = []
+        for name in list(rw.wgts):
+            actual = lower_index.get(name.lower())
+            if actual is None:
+                missing.append(name)
+            else:
+                cols.append(actual)
+        if missing:
+            raise ValueError(
+                f"Replicate weight columns not found (case-insensitive match): "
+                f"{missing}. Available columns: {data_cols}"
+            )
+    else:
+        cols = []
+
+    try:
+        rw._cached_cols = cols
+    except Exception:
+        # rep_wgts may be frozen or otherwise non-mutable; cache miss is fine.
+        pass
+    return cols
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Main data preparation function
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -184,6 +260,12 @@ def prepare_data(
     )
     design = sample._design
 
+    # ── Resolve replicate weight columns (cached on design.rep_wgts) ─────
+    # These must be carried through `needed` so they survive select_columns,
+    # and they must be zeroed alongside the main weight when `where` is set.
+    # Empty list for Taylor-linearization designs.
+    rep_weight_cols: list[str] = _resolve_rep_weight_cols(local_data, design)
+
     # ── Build analysis-relevant column list ─────────────────────────────
     # This list is ALWAYS built, regardless of select_columns, because:
     #   1. drop_nulls/assert_no_missing should only check columns involved
@@ -219,20 +301,32 @@ def prepare_data(
         for _col in [_sc_pre.var_stratum_col, _sc_pre.var_psu_col, _sc_pre.var_exclude_col]:
             if _col and _col in local_data.columns:
                 needed.append(_col)
+    # Carry replicate weights through column selection.
+    # Without this, ``select_columns=True`` would drop them before the where
+    # block can zero them out, leaving downstream Rust calls with full-sample
+    # replicate weights and the wrong variance.
+    needed.extend(rep_weight_cols)
     needed = sample._dedup_preserve_order(needed)
 
     # ── Missing handling ─────────────────────────────────────────────────
     # Applied BEFORE column selection so that the same rows are dropped
     # regardless of select_columns. Only analysis-relevant columns are
-    # checked — irrelevant columns (e.g., replicate weights) are ignored.
+    # checked — replicate weights are excluded from the null check because
+    # a rare NA in one of N replicate columns should not drop rows from
+    # the entire analysis.
+    if rep_weight_cols:
+        rep_set = set(rep_weight_cols)
+        null_check_cols = [c for c in needed if c not in rep_set]
+    else:
+        null_check_cols = needed
     if drop_nulls:
         local_data = drop_missing(
             df=local_data,
-            cols=needed,
+            cols=null_check_cols,
             treat_infinite_as_missing=True,
         )
     else:
-        assert_no_missing(df=local_data, subset=needed)
+        assert_no_missing(df=local_data, subset=null_check_cols)
 
     # ── Column selection (optional optimization) ─────────────────────────
     if select_columns:
@@ -310,51 +404,104 @@ def prepare_data(
 
     # ── Weight column ────────────────────────────────────────────────────
     weight_col = design.wgt if design.wgt else "__svy_ones__"
-    if not design.wgt:
-        df = df.with_columns(pl.lit(1.0).alias(weight_col))
-    else:
-        # Cast to Float64 — Rust backend requires it
-        if df[weight_col].dtype != pl.Float64:
-            df = df.with_columns(pl.col(weight_col).cast(pl.Float64))
 
-    # ── Where clause → domain column + zero weights ──────────────────────
-    # Must happen BEFORE type casting so where expressions reference original
-    # column types (e.g. pl.col("sex") == 2 where sex is still Int32).
+    # Rep weight columns that actually exist in df after select/singleton.
+    rep_weight_cols_in_df = [c for c in rep_weight_cols if c in df.columns]
+
+    # ── Where clause → domain column + zero weights (main + replicate) ───
+    # Must happen BEFORE the categorical/by/strata type casting below so
+    # where expressions reference original column types (e.g. pl.col("sex")
+    # == 2 where sex is still Int32).
+    #
+    # For replication designs: zero the main weight AND every replicate
+    # weight, so that downstream Rust variance computation sees only
+    # domain-active observations across all replicates. Without zeroing
+    # the replicate weights, the point estimate (which uses the main weight)
+    # correctly reflects the domain but the replicate-variance computation
+    # sees the full sample, producing SEs identical to the unfiltered
+    # estimate.
+    #
+    # Performance: the where_expr is materialized once as a Boolean column
+    # (__svy_where_mask__) and reused across all downstream zeroing
+    # operations. This guarantees a single evaluation of the predicate
+    # regardless of Polars' CSE behavior, then folds the (cast + zero)
+    # for the main weight and every replicate weight into one parallelized
+    # ``with_columns`` call. The mask column is dropped before returning.
     domain_col = None
     domain_val = None
+
     if where is not None:
         where_expr = sample.estimation._compile_where_expr(where)
-        df = df.with_columns(
-            where_expr.cast(pl.String).alias("__svy_domain__"),
-            # Zero weights for non-domain observations.
-            # This ensures degrees_of_freedom, taylor_variance, and all
-            # downstream Rust functions see only domain-active observations,
-            # matching R's subset() behavior.
-            pl.when(where_expr).then(pl.col(weight_col)).otherwise(0.0).alias(weight_col),
-        )
+
+        # Step 1: materialize the boolean mask once.
+        df = df.with_columns(where_expr.alias(_MASK_COL))
+        mask = pl.col(_MASK_COL)
+
+        # Step 2: build the fused expression list for the domain flag and
+        # all weight zeroing in a single pass over the frame.
+        exprs: list[pl.Expr] = [mask.cast(pl.String).alias("__svy_domain__")]
+
+        # Main weight: zero on the non-domain branch. If design has no wgt
+        # the column doesn't exist yet — synthesize it inline.
+        if design.wgt:
+            exprs.append(
+                pl.when(mask)
+                .then(pl.col(weight_col).cast(pl.Float64))
+                .otherwise(0.0)
+                .alias(weight_col)
+            )
+        else:
+            exprs.append(pl.when(mask).then(pl.lit(1.0)).otherwise(0.0).alias(weight_col))
+
+        # Replicate weights: cast + zero in one pass per column. The Python
+        # loop only builds expression objects; the actual column rewrites
+        # happen in parallel inside Polars/Rust.
+        for c in rep_weight_cols_in_df:
+            exprs.append(pl.when(mask).then(pl.col(c).cast(pl.Float64)).otherwise(0.0).alias(c))
+
+        df = df.with_columns(exprs).drop(_MASK_COL)
         domain_col = "__svy_domain__"
         domain_val = "true"
+    else:
+        # No where → still need (a) the main weight column to exist and be
+        # Float64 for Rust, and (b) replicate weights to be Float64. Bundle
+        # both into a single ``with_columns`` call to minimize passes.
+        no_where_exprs: list[pl.Expr] = []
 
-    # ── Type casting ─────────────────────────────────────────────────────
-    casts = []
+        if design.wgt:
+            if df[weight_col].dtype != pl.Float64:
+                no_where_exprs.append(pl.col(weight_col).cast(pl.Float64))
+        else:
+            no_where_exprs.append(pl.lit(1.0).alias(weight_col))
+
+        for c in rep_weight_cols_in_df:
+            if df[c].dtype != pl.Float64:
+                no_where_exprs.append(pl.col(c).cast(pl.Float64))
+
+        if no_where_exprs:
+            df = df.with_columns(no_where_exprs)
+
+    # ── Type casting (y, x, group, strata, psu, ssu, by) ─────────────────
+    # Fused into a single with_columns call. Each cast checks the current
+    # dtype and is skipped when already correct (Polars treats same-type
+    # cast as a no-op anyway, but the explicit guard keeps the expression
+    # list short).
+    casts: list[pl.Expr] = []
     if cast_y_float:
-        casts.append(pl.col(y_col).cast(pl.Float64))
-    if x:
+        if df[y_col].dtype != pl.Float64:
+            casts.append(pl.col(y_col).cast(pl.Float64))
+    if x and df[x].dtype != pl.Float64:
         casts.append(pl.col(x).cast(pl.Float64))
-    if group:
+    if group and df[group].dtype != pl.String:
         casts.append(pl.col(group).cast(pl.String))
-    if strata_col and strata_col in df.columns:
-        if df[strata_col].dtype != pl.String:
-            casts.append(pl.col(strata_col).cast(pl.String))
-    if psu_col and psu_col in df.columns:
-        if df[psu_col].dtype != pl.String:
-            casts.append(pl.col(psu_col).cast(pl.String))
-    if ssu_col and ssu_col in df.columns:
-        if df[ssu_col].dtype != pl.String:
-            casts.append(pl.col(ssu_col).cast(pl.String))
-    if by_col and by_col in df.columns:
-        if df[by_col].dtype != pl.String:
-            casts.append(pl.col(by_col).cast(pl.String))
+    if strata_col and strata_col in df.columns and df[strata_col].dtype != pl.String:
+        casts.append(pl.col(strata_col).cast(pl.String))
+    if psu_col and psu_col in df.columns and df[psu_col].dtype != pl.String:
+        casts.append(pl.col(psu_col).cast(pl.String))
+    if ssu_col and ssu_col in df.columns and df[ssu_col].dtype != pl.String:
+        casts.append(pl.col(ssu_col).cast(pl.String))
+    if by_col and by_col in df.columns and df[by_col].dtype != pl.String:
+        casts.append(pl.col(by_col).cast(pl.String))
     if casts:
         df = df.with_columns(casts)
 
