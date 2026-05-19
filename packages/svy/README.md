@@ -25,7 +25,13 @@ svy has been validated against R's `survey` package, producing numerically ident
 ## Installation
 
 ```bash
-pip install svy
+pip install svy # svy[report] for rich outputs
+```
+
+or
+
+```bash
+uv add svy
 ```
 
 ---
