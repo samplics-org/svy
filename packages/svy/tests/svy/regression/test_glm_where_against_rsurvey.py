@@ -1,5 +1,4 @@
 # tests/svy/regression/test_glm_where_against_rsurvey.py
-# tests/svy/regression/test_glm_where_against_Rsurvey.py
 """
 GLM domain-estimation (`where=`) tests against R's svyglm + subset() as the
 oracle. R is the natural reference because:
