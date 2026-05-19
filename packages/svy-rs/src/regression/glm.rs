@@ -8,18 +8,19 @@
 // - Build bread from FINAL (converged) Fisher information (XtWX) at final eta/mu.
 // - Meat: PSU totals of per-row score contributions, centered within stratum, scaled m/(m-1).
 //
-// NOTE: This implements the classic "bread %*% meat %*% bread" route
-// (the one you had that was already extremely close to R).
-
+// Domain estimation (by_col / where):
+// - Out-of-domain rows contribute 0 to both IRLS normal equations and sandwich meat.
+// - Strata/PSU enumeration uses the full design — domain only affects which rows
+//   contribute, not the m/(m-1) centering structure. This matches R's
+//   subset(design, ...) semantics and the estimation namespace's by_col pattern.
+//
+// NOTE: This implements the classic "bread %*% meat %*% bread" route.
 
 // #![allow(non_upper_case_globals)]
 #![allow(non_snake_case)]
 
-
-
-use faer::{Mat, MatRef, Side};
 use faer::prelude::Solve;
-
+use faer::{Mat, MatRef, Side};
 
 use polars::prelude::*;
 use std::collections::HashMap;
@@ -224,6 +225,10 @@ fn index_groups(series: &Series) -> PolarsResult<(Vec<usize>, usize)> {
 
 /// Build XtWX and XtWz deterministically from current eta/mu (IRLS step),
 /// mirroring fisherinf: t(D) %*% (w * D / V), D = X * d, d = dmu/deta
+///
+/// When `domain_mask` is `Some`, rows where mask[i] is false contribute 0 to
+/// both XtWX and XtWz (and have w_irls[i] set to 0). When `None`, every row
+/// contributes (original behavior).
 fn build_irls_normal_eqs(
     family: Family,
     link: Link,
@@ -234,6 +239,7 @@ fn build_irls_normal_eqs(
     w_samp: &[f64],
     eta: &[f64],
     mu: &[f64],
+    domain_mask: Option<&[bool]>,
     Z: &mut Mat<f64>,
     w_irls: &mut [f64],
     XtWX: &mut Mat<f64>,
@@ -244,8 +250,10 @@ fn build_irls_normal_eqs(
     let mut acc_wx = vec![Kahan::new(); k * k];
 
     for i in 0..n {
+        let in_domain = domain_mask.map_or(true, |m| m[i]);
         let w_i = w_samp[i];
-        if w_i <= 0.0 {
+
+        if !in_domain || w_i <= 0.0 {
             w_irls[i] = 0.0;
             Z[(i, 0)] = 0.0;
             continue;
@@ -389,12 +397,94 @@ pub struct GlmResult {
 // Core Algorithm
 // ============================================================================
 
+/// Full-sample GLM fit (no domain restriction).
+///
+/// Equivalent to `fit_glm_domain(..., domain_mask=None)`. Kept as a thin
+/// wrapper to preserve the existing public API and call sites.
 pub fn fit_glm(
     y: &Series,
     x_cols: Vec<Series>,
     weights: &Series,
     strata: Option<&Series>,
     psu: Option<&Series>,
+    family_str: &str,
+    link_str: &str,
+    tol: f64,
+    max_iter: usize,
+) -> PolarsResult<GlmResult> {
+    fit_glm_domain(
+        y, x_cols, weights, strata, psu, None, family_str, link_str, tol, max_iter,
+    )
+}
+
+/// Per-domain GLM fits over the levels of `by_col`.
+///
+/// Returns one (level, GlmResult) pair per unique level of by_col. The full
+/// design (strata, PSU) is preserved across all fits — only the rows
+/// contributing to the IRLS and the sandwich meat are restricted to the
+/// domain. This produces correct domain-estimation SEs matching R's
+/// `svyglm(..., design = subset(d, ...))`.
+pub fn fit_glm_by(
+    y: &Series,
+    x_cols: Vec<Series>,
+    weights: &Series,
+    strata: Option<&Series>,
+    psu: Option<&Series>,
+    by_col: &Series,
+    family_str: &str,
+    link_str: &str,
+    tol: f64,
+    max_iter: usize,
+) -> PolarsResult<Vec<(String, GlmResult)>> {
+    // Materialize by_col as strings, enumerate unique levels.
+    let by_str_series = by_col.cast(&DataType::String)?;
+    let by_str = by_str_series.str()?;
+    let unique_groups = by_str.unique()?;
+
+    let mut results: Vec<(String, GlmResult)> = Vec::new();
+
+    for group_opt in unique_groups.iter() {
+        if let Some(group_val) = group_opt {
+            let mask_vec: Vec<bool> = by_str
+                .iter()
+                .map(|v| v.map_or(false, |s| s == group_val))
+                .collect();
+
+            // Clone the x_cols Vec for each domain fit. The Series themselves
+            // are cheap reference-counted handles in polars; the clone copies
+            // only the Vec, not the underlying data.
+            let xs = x_cols.iter().cloned().collect();
+            let res = fit_glm_domain(
+                y,
+                xs,
+                weights,
+                strata,
+                psu,
+                Some(&mask_vec),
+                family_str,
+                link_str,
+                tol,
+                max_iter,
+            )?;
+
+            results.push((group_val.to_string(), res));
+        }
+    }
+
+    Ok(results)
+}
+
+/// Core GLM fit. When `domain_mask` is `None`, behavior is byte-identical to
+/// the original `fit_glm`. When `Some`, out-of-domain rows contribute 0 to
+/// both the IRLS loop and the sandwich meat, while the strata/PSU
+/// enumeration remains based on the full design.
+fn fit_glm_domain(
+    y: &Series,
+    x_cols: Vec<Series>,
+    weights: &Series,
+    strata: Option<&Series>,
+    psu: Option<&Series>,
+    domain_mask: Option<&[bool]>,
     family_str: &str,
     link_str: &str,
     tol: f64,
@@ -431,15 +521,17 @@ pub fn fit_glm(
         w_sum = n as f64;
     }
 
-    // 2) IRLS init
+    // 2) IRLS init — only meaningful for in-domain rows; out-of-domain rows
+    //    get a neutral placeholder since they won't contribute.
     let mut beta = Mat::<f64>::zeros(k, 1);
     let mut mu = vec![0.0; n];
     let mut eta = vec![0.0; n];
 
     for i in 0..n {
-        let y_i = Y[(i, 0)];
-        mu[i] = family.initial_mu(y_i);
-        eta[i] = link.link(mu[i]); // Initialize eta = g(mu)
+        let in_domain = domain_mask.map_or(true, |m| m[i]);
+        let y_init = if in_domain { Y[(i, 0)] } else { 0.5 };
+        mu[i] = family.initial_mu(y_init);
+        eta[i] = link.link(mu[i]);
     }
 
     // work arrays
@@ -456,11 +548,12 @@ pub fn fit_glm(
         iter_count += 1;
 
         // 1) eta/mu from current beta
-        // Direct row-dot-product avoids allocating a N×1 Mat per iteration.
         if iter > 0 {
             for i in 0..n {
                 let mut s = 0.0f64;
-                for j in 0..k { s += X[(i, j)] * beta[(j, 0)]; }
+                for j in 0..k {
+                    s += X[(i, j)] * beta[(j, 0)];
+                }
                 eta[i] = s;
                 mu[i] = link.inverse(s);
             }
@@ -477,6 +570,7 @@ pub fn fit_glm(
             &w_samp,
             &eta,
             &mu,
+            domain_mask,
             &mut Z,
             &mut w_irls,
             &mut XtWX,
@@ -491,10 +585,16 @@ pub fn fit_glm(
         {
             for i in 0..n {
                 let mut s = 0.0f64;
-                for j in 0..k { s += X[(i, j)] * beta_new[(j, 0)]; }
+                for j in 0..k {
+                    s += X[(i, j)] * beta_new[(j, 0)];
+                }
                 let mu_i = link.inverse(s);
                 eta[i] = s;
                 mu[i] = mu_i;
+                let in_domain = domain_mask.map_or(true, |m| m[i]);
+                if !in_domain {
+                    continue;
+                }
                 let w_i = w_samp[i];
                 if w_i > 0.0 {
                     let y_i = Y[(i, 0)];
@@ -534,7 +634,9 @@ pub fn fit_glm(
     // final eta/mu at converged beta — direct loop
     for i in 0..n {
         let mut s = 0.0f64;
-        for j in 0..k { s += X[(i, j)] * beta[(j, 0)]; }
+        for j in 0..k {
+            s += X[(i, j)] * beta[(j, 0)];
+        }
         eta[i] = s;
         mu[i] = link.inverse(s);
     }
@@ -550,13 +652,14 @@ pub fn fit_glm(
         &w_samp,
         &eta,
         &mu,
+        domain_mask,
         &mut Z,
         &mut w_irls,
         &mut XtWX,
         &mut XtWz,
     );
 
-    // strata/psu indices
+    // strata/psu indices — FULL design (not affected by domain)
     let (strata_idx, n_strata) = match strata {
         Some(s) => index_groups(s)?,
         None => (vec![0usize; n], 1usize),
@@ -565,7 +668,6 @@ pub fn fit_glm(
     let (psu_idx, _n_psu_levels) = match (strata, psu) {
         (Some(s), Some(p)) => {
             // nest PSU within strata: id = (stratum, psu)
-            // Use &str keys to avoid String allocation per row.
             let s_str = s.cast(&DataType::String)?;
             let p_str = p.cast(&DataType::String)?;
             let s_ca = s_str.str()?;
@@ -592,13 +694,15 @@ pub fn fit_glm(
         _ => ((0..n).collect::<Vec<_>>(), n),
     };
 
-    // Pre-build strata → obs index to avoid O(n_strata × N) scanning.
+    // Pre-build strata → obs index
     let mut strata_obs: Vec<Vec<usize>> = vec![Vec::new(); n_strata];
     for i in 0..n {
         strata_obs[strata_idx[i]].push(i);
     }
 
-    // MEAT = sum_h Var_h( PSU totals ) with svytotal-style centering
+    // MEAT = sum_h Var_h( PSU totals ) with svytotal-style centering.
+    // Out-of-domain rows have w_irls[i] == 0 from build_irls_normal_eqs, so
+    // their score contributions are naturally 0.
     let mut meat_acc = vec![Kahan::new(); k * k];
 
     for h in 0..n_strata {
@@ -606,7 +710,6 @@ pub fn fit_glm(
         let mut totals: Vec<Vec<Kahan>> = Vec::new();
 
         for &i in &strata_obs[h] {
-
             let psu_id = psu_idx[i];
             let li = *local_map.entry(psu_id).or_insert_with(|| {
                 let new_i = totals.len();
@@ -615,22 +718,21 @@ pub fn fit_glm(
             });
 
             let w_i = w_samp[i];
-            if w_i <= 0.0 {
+            let w_irls_i = w_irls[i];
+
+            // Domain-aware: w_irls_i is 0 for out-of-domain rows.
+            if w_i <= 0.0 || w_irls_i <= 0.0 {
                 continue;
             }
 
             let y_i = Y[(i, 0)];
             let mu_i = mu[i];
-            let v = family.variance(mu_i).max(1e-12);
             let d = link.mu_eta(mu_i, eta[i]);
-            // IRLS weight (same as used in XtWX)
-            let w_irls_i = w_i * (d * d) / v;
 
             // Working residual
             let working_resid = (y_i - mu_i) / (d + d.signum() * 1e-12);
 
             // Score contribution: X * w_irls * working_resid
-            // This matches R's: model.matrix * weights * resid(, "working")
             for j in 0..k {
                 totals[li][j].add(w_irls_i * X[(i, j)] * working_resid);
             }
@@ -690,32 +792,72 @@ pub fn fit_glm(
     let tmp = &bread * &meat;
     let cov = &tmp * &bread;
 
-    // df_resid (your prior design-based df convention)
+    // df_resid — domain-aware. We restrict the PSU and stratum counts to
+    // those with at least one in-domain row with positive weight. This
+    // matches R's behavior: domains shrink the effective df when entire
+    // PSUs/strata fall outside the domain.
     use std::collections::HashSet;
     let df_resid = if psu.is_some() && strata.is_some() {
-        // Reuse strata_obs index built for meat computation
-        let total_psus: usize = (0..n_strata)
-            .map(|h| strata_obs[h].iter().map(|&i| psu_idx[i]).collect::<HashSet<_>>().len())
-            .sum();
-        let df = (total_psus as isize) - (n_strata as isize);
+        let mut total_psus: usize = 0;
+        let mut nonempty_strata: usize = 0;
+        for h in 0..n_strata {
+            let psus_in_dom: HashSet<usize> = strata_obs[h]
+                .iter()
+                .filter(|&&i| domain_mask.map_or(true, |m| m[i]) && w_samp[i] > 0.0)
+                .map(|&i| psu_idx[i])
+                .collect();
+            if !psus_in_dom.is_empty() {
+                total_psus += psus_in_dom.len();
+                nonempty_strata += 1;
+            }
+        }
+        let df = (total_psus as isize) - (nonempty_strata as isize);
         if df <= 0 { 1.0 } else { df as f64 }
     } else if psu.is_some() {
-        let m = psu_idx.iter().collect::<HashSet<_>>().len() as isize;
+        let psus_in_dom: HashSet<usize> = (0..n)
+            .filter(|&i| domain_mask.map_or(true, |m| m[i]) && w_samp[i] > 0.0)
+            .map(|i| psu_idx[i])
+            .collect();
+        let m = psus_in_dom.len() as isize;
         if m <= 1 { 1.0 } else { (m - 1) as f64 }
     } else if strata.is_some() {
-        let df = (n as isize) - (n_strata as isize);
+        // Count rows in domain and strata containing in-domain rows.
+        let mut n_dom: isize = 0;
+        let mut strata_in_dom: HashSet<usize> = HashSet::new();
+        for i in 0..n {
+            let in_domain = domain_mask.map_or(true, |m| m[i]);
+            if in_domain && w_samp[i] > 0.0 {
+                n_dom += 1;
+                strata_in_dom.insert(strata_idx[i]);
+            }
+        }
+        let df = n_dom - (strata_in_dom.len() as isize);
         if df <= 0 { 1.0 } else { df as f64 }
     } else {
-        if n <= 1 { 1.0 } else { (n - 1) as f64 }
+        let n_dom: isize = (0..n)
+            .filter(|&i| domain_mask.map_or(true, |m| m[i]) && w_samp[i] > 0.0)
+            .count() as isize;
+        if n_dom <= 1 { 1.0 } else { (n_dom - 1) as f64 }
     };
 
-    // scale (phi) for gaussian/gamma/invgauss (reporting only)
+    // n_obs: full sample size when no domain, in-domain count when domain.
+    let n_obs = match domain_mask {
+        Some(m) => (0..n).filter(|&i| m[i] && w_samp[i] > 0.0).count(),
+        None => n,
+    };
+
+    // scale (phi) for gaussian/gamma/invgauss (reporting only).
+    // Pearson sum is computed over in-domain rows only.
     let scale = if matches!(
         family,
         Family::Gaussian | Family::Gamma | Family::InverseGaussian
     ) {
         let mut pearson = 0.0;
         for i in 0..n {
+            let in_domain = domain_mask.map_or(true, |m| m[i]);
+            if !in_domain {
+                continue;
+            }
             let w_i = w_samp[i];
             if w_i <= 0.0 {
                 continue;
@@ -734,20 +876,27 @@ pub fn fit_glm(
         1.0
     };
 
-    // null deviance proxy
+    // null deviance proxy — weighted SSE around weighted mean over domain.
     let null_deviance = {
-        let y_mean = if w_sum > 0.0 {
-            let mut sum_wy = 0.0;
-            for i in 0..n {
-                sum_wy += Y[(i, 0)] * w_samp[i];
+        // domain-restricted weighted mean
+        let mut sum_wy = 0.0;
+        let mut sum_w = 0.0;
+        for i in 0..n {
+            let in_domain = domain_mask.map_or(true, |m| m[i]);
+            if !in_domain || w_samp[i] <= 0.0 {
+                continue;
             }
-            sum_wy / w_sum
-        } else {
-            0.0
-        };
+            sum_wy += Y[(i, 0)] * w_samp[i];
+            sum_w += w_samp[i];
+        }
+        let y_mean = if sum_w > 0.0 { sum_wy / sum_w } else { 0.0 };
 
         let mut sse = 0.0;
         for i in 0..n {
+            let in_domain = domain_mask.map_or(true, |m| m[i]);
+            if !in_domain {
+                continue;
+            }
             let w_i = w_samp[i];
             if w_i <= 0.0 {
                 continue;
@@ -757,6 +906,9 @@ pub fn fit_glm(
         }
         sse
     };
+
+    // Suppress unused-var warning when no domain restriction is active.
+    let _ = w_sum;
 
     // flatten
     let params: Vec<f64> = (0..k).map(|i| beta[(i, 0)]).collect();
@@ -775,6 +927,6 @@ pub fn fit_glm(
         deviance,
         null_deviance,
         iterations: iter_count as u32,
-        n_obs: n,
+        n_obs,
     })
 }
