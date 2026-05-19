@@ -8,8 +8,9 @@ from __future__ import annotations
 import logging
 import math
 
-from typing import TYPE_CHECKING, ClassVar, Literal, Sequence
+from typing import TYPE_CHECKING, ClassVar, Literal, Sequence, cast
 
+import msgspec
 import numpy as np
 import polars as pl
 
@@ -25,10 +26,13 @@ except ImportError:
 from svy.core.containers import FDist, TDist
 from svy.core.data_prep import prepare_data
 from svy.core.terms import Cat, Cross, Feature
+from svy.core.types import WhereArg
 from svy.errors.model_errors import ModelError
 from svy.regression.glm import GLMCoef, GLMFit, GLMStats
 from svy.regression.links import link_inverse, link_mu_eta, resolve_link
 from svy.regression.prediction import GLMPred
+from svy.ui.printing import format_where_clause
+from svy.wrangling.rows import _compile_where_to_pl_expr
 
 
 if TYPE_CHECKING:
@@ -115,6 +119,7 @@ class GLM:
     Examples
     --------
     >>> sample.glm.fit(y="outcome", x=["age", Cat("region")])
+    >>> sample.glm.fit(y="outcome", x=["age"], where=svy.col("sex") == "F")
     >>> sample.glm.predict(new_data)
     """
 
@@ -208,6 +213,7 @@ class GLM:
         intercept: bool = True,
         family: Literal["gaussian", "binomial", "poisson", "gamma"] = "gaussian",
         link: Literal["identity", "logit", "log", "inverse", "inverse_squared"] | None = None,
+        where: WhereArg = None,
         drop_nulls: bool = True,
         tol: float = 1e-8,
         max_iter: int = 100,
@@ -229,6 +235,12 @@ class GLM:
         link : str, optional
             Link function: ``'identity'``, ``'logit'``, ``'log'``, ``'inverse'``, or
             ``'inverse_squared'``. If None, uses the canonical link for the family.
+        where : WhereArg, optional
+            Domain restriction (e.g. ``svy.col("sex") == "F"``). Unlike pre-filtering
+            with ``wrangling.filter_records``, this preserves the full design
+            structure for the variance computation, producing correct domain-
+            estimation standard errors that match R's
+            ``svyglm(..., design = subset(d, ...))``.
         drop_nulls : bool
             Drop rows with missing values.
         tol : float
@@ -255,7 +267,6 @@ class GLM:
         # prepare_data handles: materialise, column selection, missing values,
         # weight casting, singleton filter, and correct strata/psu resolution
         # (including singleton variance columns when present).
-
         prep = prepare_data(
             self._sample,
             y=y,
@@ -270,6 +281,19 @@ class GLM:
         w_col = prep.weight_col
         s_col = prep.strata_col
         p_col = prep.psu_col
+
+        # ── Materialise the where predicate as a boolean by-column ───────
+        # We don't pass `where` to prepare_data because the GLM engine needs
+        # the full design rows in the dataframe (the Rust side does the
+        # domain restriction via by_col). Instead, compile the predicate to
+        # a polars expression and add it as a string column ("true"/"false").
+        # The Rust engine receives this as by_col and produces one fit per
+        # level; the Python side then picks the "true" level.
+        by_col_name: str | None = None
+        if where is not None:
+            by_col_name = "__where_domain__"
+            bool_expr = _compile_where_to_pl_expr(where)
+            df = df.with_columns(cast(pl.Expr, bool_expr).cast(pl.Utf8).alias(by_col_name))
 
         # Filter invalid weights
         if self._sample._design.wgt is not None:
@@ -340,7 +364,7 @@ class GLM:
             feature_exprs.extend(exprs)
             feature_names.extend(names)
 
-        # Build final selection
+        # Build final selection — include the by_col when domain is set
         final_selects = (
             [pl.col(y).cast(pl.Float64)] + feature_exprs + [pl.col(w_col).cast(pl.Float64)]
         )
@@ -348,6 +372,8 @@ class GLM:
             final_selects.append(pl.col(s_col))
         if p_col and p_col in df.columns:
             final_selects.append(pl.col(p_col))
+        if by_col_name and by_col_name in df.columns:
+            final_selects.append(pl.col(by_col_name))
 
         try:
             eng_df: pl.DataFrame = df.select(final_selects)
@@ -358,25 +384,65 @@ class GLM:
         y_data = eng_df.get_column(y)
         self._validate_response(y_data, fam_str)
 
-        # Call Rust
+        # ── Call Rust ─────────────────────────────────────────────────────
+        # Always returns Vec<(level, ...)> with one entry per by-level, or a
+        # single entry with level="" when by_col is None.
         try:
-            res = rs.fit_glm_rs(
-                y, feature_names, w_col, s_col, p_col, fam_str, link_str, tol, max_iter, eng_df
+            results = rs.fit_glm_rs(
+                y_name=y,
+                x_names=feature_names,
+                weight_name=w_col,
+                stratum_name=s_col,
+                psu_name=p_col,
+                by_col=by_col_name,
+                family=fam_str,
+                link=link_str,
+                tol=tol,
+                max_iter=max_iter,
+                data=eng_df,
             )
         except Exception as e:
             raise RuntimeError(f"Rust GLM engine failed: {e}") from e
 
-        beta, cov_flat, scale, df_resid, dev, null_dev, iters = res
+        if not results:
+            raise RuntimeError("GLM engine returned no results.")
 
-        # Post-process
+        # ── Pick the relevant fit ─────────────────────────────────────────
+        if by_col_name is None:
+            chosen = results[0]
+        else:
+            # where supplied — pick the "true" level
+            true_results = [r for r in results if str(r[0]).lower() == "true"]
+            if not true_results:
+                raise RuntimeError(
+                    "where clause produced no in-domain observations; cannot fit GLM."
+                )
+            chosen = true_results[0]
+
+        _level, beta, cov_flat, scale, df_resid, dev, null_dev, iters, n_obs = chosen
+
+        # ── Post-process ──────────────────────────────────────────────────
         k = len(feature_names)
-        n = eng_df.height
+        n = n_obs if where is not None else eng_df.height
         cov_mat = np.array(cov_flat).reshape(k, k)
         se_arr = np.sqrt(np.diag(cov_mat))
         params_arr = np.array(beta)
 
-        # Design DF
-        df_design = self._compute_design_df(eng_df, s_col, p_col, n)
+        # Design DF — for GLM we follow the regression convention used by
+        # R's svyglm: df_resid = degf(design) - (k - 1), where k - 1 is the
+        # number of non-intercept fitted parameters. This differs from the
+        # estimation namespace (mean, prop, ratio) which uses the raw design
+        # df since no parameters are fitted. The max(1, ...) guard protects
+        # against degenerate designs with very few PSUs relative to k.
+        # When domain is set, restrict to in-domain rows for the df.
+        # (Rust returns its own df_resid; we recompute here on the Python
+        # side for the t-quantile to match the convention.)
+        if where is not None:
+            domain_df = eng_df.filter(pl.col(by_col_name).str.to_lowercase() == "true")
+            df_design = self._compute_design_df(domain_df, s_col, p_col, domain_df.height)
+        else:
+            df_design = self._compute_design_df(eng_df, s_col, p_col, n)
+        df_design = max(1, df_design - (k - 1))
 
         # Statistics
         stats_struct = self._build_stats(
@@ -411,7 +477,7 @@ class GLM:
                 )
             )
 
-        self.fitted = GLMFit(
+        fit_obj = GLMFit(
             y=y,
             family=fam_str.capitalize(),
             link=link_str,
@@ -421,6 +487,20 @@ class GLM:
             term_info=term_info,
             feature_names=feature_names,
         )
+
+        # Stamp the where clause for display (mirrors the estimation namespace).
+        # Only attempt if GLMFit declares a where_clause field; otherwise skip
+        # silently — display will still work without it.
+        if where is not None and hasattr(fit_obj, "where_clause"):
+            try:
+                fit_obj = msgspec.structs.replace(
+                    fit_obj,
+                    where_clause=format_where_clause(where),
+                )
+            except Exception:
+                pass
+
+        self.fitted = fit_obj
         return self
 
     def predict(
