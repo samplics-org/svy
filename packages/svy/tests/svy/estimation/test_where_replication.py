@@ -596,7 +596,7 @@ class TestWhereReplicationGolden:
     def test_mean_overall_with_where(
         self, load_survey_data, make_design, method, csv, prefix, reps, df, psu_col, gold
     ):
-        data = load_survey_data(csv)
+        data = load_survey_data(csv).filter(pl.col("sex") != "None")
         design = make_design(method, prefix, reps, df, psu_col)
         sample = Sample(data, design)
 
@@ -614,7 +614,7 @@ class TestWhereReplicationGolden:
         The ``"None"`` sex value is a single-row degenerate case in the
         fixture (SE = 0); excluded from the assertions.
         """
-        data = load_survey_data(csv)
+        data = load_survey_data(csv).filter(pl.col("sex") != "None")
         design = make_design(method, prefix, reps, df, psu_col)
         sample = Sample(data, design)
 
@@ -641,7 +641,7 @@ class TestWhereReplicationGolden:
     def test_total_overall_with_where(
         self, load_survey_data, make_design, method, csv, prefix, reps, df, psu_col, gold
     ):
-        data = load_survey_data(csv)
+        data = load_survey_data(csv).filter(pl.col("sex") != "None")
         design = make_design(method, prefix, reps, df, psu_col)
         sample = Sample(data, design)
 
@@ -654,7 +654,7 @@ class TestWhereReplicationGolden:
     def test_prop_overall_with_where(
         self, load_survey_data, make_design, method, csv, prefix, reps, df, psu_col, gold
     ):
-        data = load_survey_data(csv)
+        data = load_survey_data(csv).filter(pl.col("sex") != "None")
         design = make_design(method, prefix, reps, df, psu_col)
         sample = Sample(data, design)
 
@@ -669,7 +669,7 @@ class TestWhereReplicationGolden:
     def test_ratio_overall_with_where(
         self, load_survey_data, make_design, method, csv, prefix, reps, df, psu_col, gold
     ):
-        data = load_survey_data(csv)
+        data = load_survey_data(csv).filter(pl.col("sex") != "None")
         design = make_design(method, prefix, reps, df, psu_col)
         sample = Sample(data, design)
 

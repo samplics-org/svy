@@ -278,3 +278,23 @@ def test_where_differs_from_filter_records_se():
         f"where= and filter_records should give different SEs; "
         f"got max relative diff = {rel_diff.max():.4g}"
     )
+
+
+# ===========================================================================
+# Where variable(s) not part of y, x, and design variables
+# ===========================================================================
+
+
+def test_where_references_unused_column():
+    """The where predicate may reference columns outside the model.
+    Regression test for column-projection bug fixed in <version>."""
+    sample = make_sample(api_strat, weight=WEIGHT_COL, stratum=STRATUM_COL, psu=PSU_COL)
+    res = sample.glm.fit(
+        y="y_bin",
+        x=["ell"],  # only ell in x
+        where=svy.col("meals") > 50,  # meals not in y, x, wgt, strata, psu
+        family=DistFamily.BINOMIAL,
+        link=LinkFunction.LOGIT,
+    )
+    # Should not raise. The model fits.
+    assert res.coefs[0].est is not None

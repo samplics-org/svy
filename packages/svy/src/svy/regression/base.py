@@ -263,6 +263,15 @@ class GLM:
         feature_specs = list(x) if x else []
         x_cols = self._collect_feature_cols(feature_specs)
 
+        # If a where predicate was passed, harvest the column names it
+        # references and add them to extra_cols. Otherwise prepare_data's
+        # projection (select_columns=True) drops them before line 296 can
+        # evaluate the predicate, raising ColumnNotFoundError.
+        where_cols: list[str] = []
+        if where is not None:
+            where_expr = _compile_where_to_pl_expr(where)
+            where_cols = list(where_expr.meta.root_names())
+
         # ── Centralised data preparation ─────────────────────────────────
         # prepare_data handles: materialise, column selection, missing values,
         # weight casting, singleton filter, and correct strata/psu resolution
@@ -270,7 +279,7 @@ class GLM:
         prep = prepare_data(
             self._sample,
             y=y,
-            extra_cols=x_cols,
+            extra_cols=x_cols + where_cols,
             drop_nulls=drop_nulls,
             cast_y_float=True,
             apply_singleton_filter=True,
