@@ -7,6 +7,7 @@ from svy.core.enumerations import DistFamily
 from svy.core.sample import Sample
 from svy.regression.glm import GLMFit
 
+
 DATA_PATH = Path("tests/test_data/apistrat.csv")
 
 data = pl.read_csv(DATA_PATH)

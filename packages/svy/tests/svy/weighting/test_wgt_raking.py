@@ -132,7 +132,6 @@ def test_rake_wgt_name_overrides_default(sample_data_for_raking, mock_design):
 
 def test_rake_replicate_weights_auto_prefix(sample_data_for_raking, mock_design):
     """Replicate weight prefix matches the full-sample weight name."""
-    import numpy as np
     import polars as pl
 
     df = sample_data_for_raking.with_columns(
@@ -232,7 +231,6 @@ def _skewed_raking_sample():
     Two margins: age_group and region.
     Controls are set so raking converges easily.
     """
-    import numpy as np
 
     return pl.DataFrame(
         {
@@ -245,7 +243,6 @@ def _skewed_raking_sample():
 
 def test_trim_rake_produces_raked_result(mock_design):
     """With trimming=None, rake() behaves exactly as before."""
-    from svy.weighting.types import TrimConfig
 
     sample = Sample(data=_skewed_raking_sample(), design=mock_design)
     controls = {
@@ -329,8 +326,6 @@ def test_trim_rake_single_cycle_max_iter_1(mock_design):
 
 def test_trim_rake_without_trimming_unchanged(mock_design):
     """rake() with no trimming gives identical result to previous behaviour."""
-    import numpy as np
-    from svy.weighting.types import TrimConfig
 
     controls = {
         "age_group": {"18-34": 35.0, "35-54": 30.0, "55+": 15.0},

@@ -53,7 +53,6 @@ svyquantile(~income, subset(design, stratum == "A"), quantiles = 0.5, ci = TRUE)
 ```
 """
 
-import numpy as np
 import polars as pl
 import pytest
 
@@ -408,14 +407,14 @@ class TestMedianRComparison:
         # Simple median
         result1 = sample.estimation.median("income")
         est1 = result1.estimates[0]
-        print(f"\n1. Simple Median:")
+        print("\n1. Simple Median:")
         print(f"   Estimate: {est1.est}")
         print(f"   SE:       {est1.se}")
         print(f"   95% CI:   ({est1.lci}, {est1.uci})")
 
         # By region
         result2 = sample.estimation.median("income", by="region")
-        print(f"\n2. Median by Region:")
+        print("\n2. Median by Region:")
         for est in result2.estimates:
             print(f"   {est.by_level[0]}: est={est.est}, se={est.se}")
 

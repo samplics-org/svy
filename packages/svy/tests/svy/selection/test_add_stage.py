@@ -24,6 +24,7 @@ import pytest
 
 from svy import Design, Sample
 from svy.core.constants import (
+    SVY_CERT_STAGE1,
     SVY_CERTAINTY,
     SVY_HIT,
     SVY_PROB,
@@ -33,8 +34,6 @@ from svy.core.constants import (
     SVY_WEIGHT,
     SVY_WGT_STAGE1,
     SVY_WGT_STAGE2,
-    SVY_CERT_STAGE1,
-    SVY_HITS_STAGE1,
 )
 
 

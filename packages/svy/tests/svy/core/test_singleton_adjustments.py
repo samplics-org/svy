@@ -8,7 +8,6 @@ import svy
 from svy.core.constants import SVY_ROW_INDEX
 from svy.core.enumerations import PopParam, SingletonHandling
 from svy.core.singleton import _VAR_EXCLUDE_COL
-from svy.estimation.base import Estimation
 
 
 @pytest.fixture

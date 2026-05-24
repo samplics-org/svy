@@ -10,11 +10,14 @@ combinatorial draw is delegated to svy.engine.sampling.srs._select_srs.
 from __future__ import annotations
 
 import logging
+
 from typing import TYPE_CHECKING, Literal, Mapping, Sequence, cast
 
 import numpy as np
 import numpy.typing as npt
 import polars as pl
+
+from svy_rs import select_srs_rs as _select_srs_rs
 
 from svy.core.constants import (
     SVY_HIT,
@@ -25,7 +28,6 @@ from svy.core.constants import (
 )
 from svy.core.types import DF, Category, Number, WhereArg
 from svy.selection.combine_stages import _apply_chaining_writeback
-from svy_rs import select_srs_rs as _select_srs_rs
 
 
 def _encode_stratum(stratum):
@@ -56,6 +58,7 @@ def _remap_n_map(n_map, label_to_int):
 def _select_srs(frame, n, *, stratum, wr, rstate):
     """Adapter: translate old Python engine calling convention to Rust."""
     import numpy as np
+
     from svy.utils.random_state import seed_from_random_state
 
     seed = seed_from_random_state(rstate)
@@ -85,12 +88,7 @@ def _select_srs(frame, n, *, stratum, wr, rstate):
     )
 
 
-from svy.utils.checks import assert_no_missing, drop_missing
-from svy.utils.helpers import _colspec_to_list
-from svy.utils.random_state import RandomState, resolve_random_state, seed_from_random_state
-from svy.utils.where import _compile_where
 from svy.errors import MethodError
-
 from svy.selection._group_keys import (
     _build_group_keys,
     _compute_pop_sizes,
@@ -101,6 +99,11 @@ from svy.selection._helpers import (
     _warn_empty_strata,
     _warn_n_exceeds_population,
 )
+from svy.utils.checks import assert_no_missing, drop_missing
+from svy.utils.helpers import _colspec_to_list
+from svy.utils.random_state import RandomState, resolve_random_state, seed_from_random_state
+from svy.utils.where import _compile_where
+
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample

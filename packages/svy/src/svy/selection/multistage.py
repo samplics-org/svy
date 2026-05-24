@@ -9,14 +9,16 @@ stage-1 sample.  Called from the Selection facade in base.py.
 from __future__ import annotations
 
 import copy
+
 from typing import TYPE_CHECKING, cast
 
 import polars as pl
 
-from svy.core.constants import SVY_PROB, SVY_PROB_STAGE1, SVY_ROW_INDEX, SVY_WEIGHT
-from svy.selection.combine_stages import CombineResult, _combine_stages
+from svy.core.constants import SVY_PROB, SVY_ROW_INDEX, SVY_WEIGHT
 from svy.errors import MethodError
 from svy.selection._helpers import _psu_list
+from svy.selection.combine_stages import CombineResult, _combine_stages
+
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample

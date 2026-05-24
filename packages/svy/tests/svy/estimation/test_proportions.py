@@ -25,8 +25,10 @@ from __future__ import annotations
 import math
 
 import pytest
+
 from scipy import stats
-from scipy.stats import beta as beta_dist, f as f_dist
+from scipy.stats import beta as beta_dist
+from scipy.stats import f as f_dist
 
 
 # =========================================================================

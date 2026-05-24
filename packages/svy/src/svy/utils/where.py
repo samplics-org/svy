@@ -7,9 +7,12 @@ other module that needs to evaluate a user-supplied filter condition.
 """
 
 from __future__ import annotations
+
 from functools import reduce
 from typing import Mapping
+
 import polars as pl
+
 from svy.core.expr import to_polars_expr
 from svy.core.types import WhereArg
 

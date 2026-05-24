@@ -672,6 +672,7 @@ class TestCustomRepPrefix:
         assert sample.design.rep_wgts.prefix == "sdr_rep"
         assert all(c.startswith("sdr_rep") for c in sample.design.rep_wgts.columns)
 
+
 # ===========================================================================
 # Determinism stress tests
 #
@@ -727,9 +728,7 @@ class TestDeterminismStress:
         for trial in range(50):
             s = multi_psu_sample.weighting.create_bs_wgts(n_reps=50, rstate=42)
             mat = s.data.select(s.design.rep_wgts.columns).to_numpy()
-            np.testing.assert_array_equal(
-                baseline_mat, mat, err_msg=f"Drifted on trial {trial}"
-            )
+            np.testing.assert_array_equal(baseline_mat, mat, err_msg=f"Drifted on trial {trial}")
 
     def test_brr_seeded_50_runs_identical(self, simple_stratified_sample):
         """BRR with a seed must be deterministic across many calls."""

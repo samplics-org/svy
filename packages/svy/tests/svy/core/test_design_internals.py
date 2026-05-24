@@ -14,7 +14,7 @@ import polars as pl
 import pytest
 
 from svy.core.constants import _INTERNAL_CONCAT_SUFFIX
-from svy.core.data_prep import PreparedData, prepare_data
+from svy.core.data_prep import prepare_data
 from svy.core.design import Design
 from svy.core.sample import Sample
 

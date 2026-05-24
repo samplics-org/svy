@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import polars as pl
 import pytest
+
 import svy
 
 from svy.utils.where import _compile_where
@@ -181,6 +182,7 @@ class TestSingleExpr:
     def test_svy_col_is_in_with_series(self, df):
         """svy.col routes through the wrapper, which handles implode internally."""
         import svy
+
         values = pl.Series(["north", "south"])
         pred = _compile_where(svy.col("region").is_in(values))
         result = df.filter(pred)

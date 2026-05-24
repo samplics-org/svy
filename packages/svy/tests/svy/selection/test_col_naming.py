@@ -52,7 +52,7 @@ import polars as pl
 import pytest
 
 from svy import Sample
-from svy.core.constants import SVY_HIT, SVY_PROB, SVY_WEIGHT, SVY_CERTAINTY
+from svy.core.constants import SVY_CERTAINTY, SVY_HIT, SVY_PROB, SVY_WEIGHT
 from svy.core.design import Design
 from svy.errors import MethodError
 

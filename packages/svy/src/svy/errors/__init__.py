@@ -1,11 +1,11 @@
 from .base_errors import SvyError
+
+# from .other_errors import CertaintyError, ProbError, SinglePSUError
+from .dataset_errors import DatasetError
 from .dimension_errors import DimensionError
 from .label_errors import LabelError
 from .method_errors import MethodError
 from .model_errors import ModelError
-
-# from .other_errors import CertaintyError, ProbError, SinglePSUError
-from .dataset_errors import DatasetError
 
 
 __all__ = [

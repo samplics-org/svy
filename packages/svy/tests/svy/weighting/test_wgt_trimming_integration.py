@@ -13,11 +13,11 @@ from __future__ import annotations
 import numpy as np
 import polars as pl
 import pytest
+
 from numpy.testing import assert_allclose
 
 from svy import EstimationMethod
 from svy.core.sample import Design, Sample
-from svy.core.terms import Cat
 from svy.weighting.types import TrimConfig
 
 

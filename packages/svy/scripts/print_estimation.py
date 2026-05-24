@@ -1,6 +1,9 @@
 from pathlib import Path
+
 import polars as pl
+
 import svy
+
 
 BASE_DIR = Path("tests/test_data")
 DATA_PATH = BASE_DIR / "svy_synthetic_sample_07082025.csv"

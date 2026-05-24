@@ -9,6 +9,7 @@ from svy import EstimationMethod
 from svy.core.sample import Design, Sample
 from svy.core.terms import Cat, Cross
 
+
 CALIB_WGT = "calib_wgt"
 
 

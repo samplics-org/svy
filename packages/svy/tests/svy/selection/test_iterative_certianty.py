@@ -9,10 +9,10 @@
 #   - n_selected == expected total
 #   - n_rem == n - n_certain units selected
 
-import numpy as np
 import polars as pl
-import pytest
+
 import svy
+
 
 RNG = 42
 

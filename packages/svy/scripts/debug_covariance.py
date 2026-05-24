@@ -7,9 +7,10 @@ import numpy as np
 import polars as pl
 
 from svy.engine.estimation.taylor import (
-    _taylor_variance,
     _get_dummies_and_categories,
+    _taylor_variance,
 )
+
 
 df = pl.read_csv("tests/test_data/svy_synthetic_sample_07082025.csv")
 df = df.fill_nan(None).drop_nulls()
@@ -52,7 +53,7 @@ print(f"Cov(0,1) single: {cov_01_single:.18e}")
 print(f"Diff: {abs(cov_01_polar - cov_01_single):.2e}")
 
 # Also print some PSU totals for verification
-print(f"\n--- PSU total verification (first 5 PSUs) ---")
+print("\n--- PSU total verification (first 5 PSUs) ---")
 unique_psus = np.unique(psu)
 for p in unique_psus[:5]:
     mask = psu == p

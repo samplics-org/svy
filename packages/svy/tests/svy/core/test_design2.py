@@ -1,8 +1,8 @@
 import polars as pl
 import pytest
 
-from svy.core.enumerations import EstimationMethod
 from svy.core.design import make_rep_weights
+from svy.core.enumerations import EstimationMethod
 from svy.core.sample import SVY_ROW_INDEX, Design, RepWeights, Sample
 
 

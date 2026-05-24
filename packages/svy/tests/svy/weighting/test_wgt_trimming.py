@@ -28,16 +28,17 @@ import polars as pl
 import pytest
 
 from numpy.testing import assert_allclose
+from svy_rs._internal import trim_weights as _rust_trim_weights  # type: ignore[import-untyped]
 
 from svy.core.sample import Design, Sample
 from svy.core.warnings import Severity, WarnCode
-from svy_rs._internal import trim_weights as _rust_trim_weights  # type: ignore[import-untyped]
 from svy.weighting.types import (
     Threshold,
     TrimConfig,
     TrimResult,
     resolve_threshold,
 )
+
 
 TRIM_WGT = "trim_wgt"
 

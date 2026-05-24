@@ -1,5 +1,6 @@
 import polars as pl
 
+
 data = pl.read_csv("tests/test_data/fake_survey_brr_24122025.csv")
 print(f"Total rows: {data.height}")
 print(f"NAs in income: {data['income'].null_count()}")

@@ -10,10 +10,12 @@ Tests various column naming patterns to ensure robust auto-detection:
 - Mixed scenarios and edge cases
 """
 
-import pytest
 import numpy as np
 import polars as pl
+import pytest
+
 import svy
+
 from svy.core.design import Design, RepWeights
 
 

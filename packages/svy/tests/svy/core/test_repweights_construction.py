@@ -29,6 +29,7 @@ import sys
 import pytest
 
 import svy
+
 from svy.core.design import RepWeights, make_rep_weights
 from svy.core.enumerations import EstimationMethod
 

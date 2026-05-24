@@ -1,7 +1,8 @@
 # tests/core/test_expr_is_in.py
-import polars as pl
-import pytest
 import warnings
+
+import polars as pl
+
 import svy
 
 

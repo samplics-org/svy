@@ -29,7 +29,6 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Mapping, Sequence, cast
 
-
 import polars as pl
 
 from svy.core.constants import _INTERNAL_CONCAT_SUFFIX

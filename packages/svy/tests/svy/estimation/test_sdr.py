@@ -9,7 +9,6 @@ The estimation path is:
     → rs.replicate_*(...)  [Rust backend]
 """
 
-import numpy as np
 import polars as pl
 import pytest
 

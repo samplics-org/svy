@@ -21,8 +21,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 
 from svy.core.types import Category, Number, WhereArg
-from svy.utils.random_state import RandomState
-
+from svy.selection._group_keys import (
+    _build_group_keys,
+    _compute_pop_sizes,
+)
 from svy.selection.allocation import allocate as _allocate
 from svy.selection.multistage import add_stage as _add_stage
 from svy.selection.pps import pps_brewer as _pps_brewer
@@ -31,11 +33,8 @@ from svy.selection.pps import pps_rs as _pps_rs
 from svy.selection.pps import pps_sys as _pps_sys
 from svy.selection.pps import pps_wr as _pps_wr
 from svy.selection.srs import srs as _srs
-from svy.selection._group_keys import (
-    _compute_pop_sizes,
-    _build_group_keys,
-    _normalize_n_for_groups,
-)
+from svy.utils.random_state import RandomState
+
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample
@@ -269,8 +268,9 @@ class Selection:
         The returned dict can be passed directly to ``allocate()`` or used
         to inspect stratum balance before selecting.
         """
-        import polars as pl
         from typing import cast
+
+        import polars as pl
 
         data = self._sample._data
         if isinstance(data, pl.LazyFrame):

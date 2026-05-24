@@ -9,10 +9,13 @@ All dispatch to the shared _pps() engine function.
 from __future__ import annotations
 
 import logging
+
 from typing import TYPE_CHECKING, Literal, Mapping, Sequence, cast
 
 import numpy as np
 import polars as pl
+
+from svy_rs import select_pps_rs as _select_pps_rs
 
 from svy.core.constants import (
     SVY_CERTAINTY,
@@ -23,14 +26,14 @@ from svy.core.constants import (
     SVY_WEIGHT,
 )
 from svy.core.enumerations import PPSMethod
-from svy.core.types import DF, Category, Number, WhereArg
+from svy.core.types import Category, Number, WhereArg
 from svy.selection.combine_stages import _apply_chaining_writeback
-from svy_rs import select_pps_rs as _select_pps_rs
 
 
 def _select_pps(*, method, frame, n, mos, stratum, certainty_threshold, rstate):
     """Adapter: translate old Python engine calling convention to Rust."""
     import numpy as np
+
     from svy.core.enumerations import PPSMethod
     from svy.utils.random_state import seed_from_random_state
 
@@ -73,10 +76,7 @@ def _select_pps(*, method, frame, n, mos, stratum, certainty_threshold, rstate):
     )
 
 
-from svy.utils.checks import assert_no_missing, drop_missing
-from svy.utils.helpers import _colspec_to_list
-from svy.utils.random_state import RandomState, resolve_random_state, seed_from_random_state
-
+from svy.errors import MethodError
 from svy.selection._group_keys import (
     _build_group_keys,
     _compute_pop_sizes,
@@ -95,7 +95,10 @@ from svy.selection.srs import (
     _ensure_row_index,
     _remap_n_map,
 )
-from svy.errors import MethodError
+from svy.utils.checks import assert_no_missing, drop_missing
+from svy.utils.helpers import _colspec_to_list
+from svy.utils.random_state import RandomState, resolve_random_state, seed_from_random_state
+
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample

@@ -285,9 +285,7 @@ class Estimation:
             non_null = s.drop_nulls().drop_nans()
             if non_null.len() == 0:
                 # All-null column: nothing to validate, cast to Int64 and let downstream handle it.
-                return data.with_columns(
-                    pl.col(y).cast(pl.Int64, strict=False).alias(y)
-                )
+                return data.with_columns(pl.col(y).cast(pl.Int64, strict=False).alias(y))
             # Integer-valued check: floor(x) == x for every non-null value.
             is_integral = (non_null == non_null.floor()).all()
             if not is_integral:

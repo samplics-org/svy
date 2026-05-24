@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 import polars as pl
+import pytest
 
 from svy.core.design import Design, PopSize
 from svy.core.sample import Sample

@@ -2,6 +2,7 @@
 import numpy as np
 import polars as pl
 import pytest
+
 from svy.core.sample import Design, Sample
 from svy.errors import DimensionError
 

@@ -123,7 +123,6 @@ class TestArgValidation:
 class TestMultiColumnBy:
     def test_n_int_with_multi_column_by(self, routes, make_parquet, make_dataset_dict):
         """`by` as a list of columns should stratify on the cross."""
-        import polars as pl
 
         # Build a fixture with two grouping columns.
         data, sha = make_parquet(
