@@ -2,11 +2,11 @@
 
 Modern Python tools for **complex survey analysis**, built for real-world statistical workflows.
 
-**svy** is a rigorously design-based yet production-oriented library for survey design, weighting, and estimation — without sacrificing transparency or scalability.
+**svy** is a rigorously design-based, production-oriented library for survey design, weighting, and estimation.
 
 🌐 Website: [svylab.com](https://svylab.com)
 📘 Documentation: [svylab.com/docs/svy](https://svylab.com/docs/svy/)
-📦 Source: [github.com/samplics-org/svy/packages](https://github.com/samplics-org/svy/packages/svy)
+📦 Source: [github.com/samplics-org/svy](https://github.com/samplics-org/svy)
 
 ---
 
@@ -18,7 +18,7 @@ svy is designed for people who **actually work with complex survey data**, inclu
 
 ### Validation
 
-svy has been validated against R's `survey` package, producing numerically identical results across Taylor linearization, replication methods, and complex survey designs. See the [full comparison](https://svylab.com/learn/notes/posts/svy-vs-r-comparison/).
+svy has been validated against R's `survey` package, producing numerically identical results (to at least six significant digits) across Taylor linearization, replication methods, and complex survey designs — except where `svy` adopts a different, justifiable adjustment by design, most of which align with the conventions used in established software such as Stata. See the [full comparison](https://svylab.com/learn/notes/posts/svy-vs-r-comparison/).
 
 ---
 
@@ -52,7 +52,6 @@ hld_sample = svy.Sample(data=hld_data, design=hld_design)
 
 # Estimate the mean of total expenditure
 tot_exp_mean = hld_sample.estimation.mean(y="tot_exp")
-
 print(tot_exp_mean)
 ```
 
@@ -66,7 +65,7 @@ print(tot_exp_mean)
 - **Categorical data analysis** — tabulation, crosstabulation, t-test, Rao-Scott test
 - **Generalized linear models** — logistic, Poisson, Gamma with survey weights
 - **Explicit, inspectable, reproducible outputs**
-- **Built on Polars, NumPy, SciPy, msgspec and Rust**
+- **Built on Polars, NumPy, SciPy, and msgspec**
 
 ---
 
@@ -89,7 +88,7 @@ Full documentation, tutorials, and methodological notes:
 
 ## Feedback
 
-- Issues: [github.com/samplics/svy/issues](https://github.com/samplics-org/svy/issues)
+- Issues: [github.com/samplics-org/svy/issues](https://github.com/samplics-org/svy/issues)
 - Discussions: [github.com/samplics-org/svy/discussions](https://github.com/samplics-org/svy/discussions)
 
 ---
