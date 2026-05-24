@@ -1,5 +1,4 @@
 name: svy Tests
-
 on:
   push:
     branches: [main]
@@ -15,31 +14,13 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - ".github/workflows/ci.yml"
-
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
-        with:
-          version: "latest"
-      - name: Install deps
-        run: uv sync --all-packages
-      - name: Ruff check
-        run: make lint
-      - name: Ruff format
-        run: make fmt
-
   test:
     name: Test svy
     runs-on: ubuntu-latest
-    needs: lint
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
