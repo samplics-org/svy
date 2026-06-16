@@ -3,7 +3,7 @@
 
 from svy.core.containers import ChiSquare, FDist
 from svy.core.describe import DescribeResult
-from svy.core.design import Design, RepWeights
+from svy.core.design import Design, PopSize, RepWeights
 from svy.core.enumerations import (
     CaseStyle,
     EstimationMethod,
@@ -73,6 +73,7 @@ __all__ = [
     "DT",
     "FDist",
     "Number",
+    "PopSize",
     "RepWeights",
     "Sample",
     "Singleton",

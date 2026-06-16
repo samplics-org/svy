@@ -82,7 +82,7 @@ class PopSize(NamedTuple):
     """
 
     psu: str
-    ssu: str
+    ssu: str | None = None
 
 
 # =============================================================================
