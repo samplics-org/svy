@@ -7,9 +7,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-
 import svy_rs as ps
-
 
 TOL = 1e-7  # For overall estimates
 
@@ -21,9 +19,7 @@ def synthetic_sample_df():
     df = pl.read_csv(BASE_DIR / "data/svy_synthetic_sample_07082025.csv")
 
     # Convert NaN to null in float columns (so is_not_null() filtering works)
-    float_cols = [
-        col for col, dtype in zip(df.columns, df.dtypes) if dtype == pl.Float64
-    ]
+    float_cols = [col for col, dtype in zip(df.columns, df.dtypes) if dtype == pl.Float64]
     for col in float_cols:
         df = df.with_columns(
             pl.when(pl.col(col).is_nan()).then(None).otherwise(pl.col(col)).alias(col)
@@ -148,12 +144,8 @@ def test_mean_domain_estimates(synthetic_sample_df, design_kwargs, expected):
             continue
 
         exp = expected[domain]
-        assert row["est"] == pytest.approx(exp["est"], rel=TOL), (
-            f"Failed for domain {domain}"
-        )
-        assert row["se"] == pytest.approx(exp["se"], rel=TOL), (
-            f"Failed for domain {domain}"
-        )
+        assert row["est"] == pytest.approx(exp["est"], rel=TOL), f"Failed for domain {domain}"
+        assert row["se"] == pytest.approx(exp["se"], rel=TOL), f"Failed for domain {domain}"
 
 
 # =============================================================================
@@ -257,9 +249,7 @@ def test_total_domain_estimates(synthetic_sample_df, design_kwargs, expected):
         & pl.col("educ").is_not_null()
     )
 
-    result = (
-        df.svy.design(**design_kwargs).group_by("educ").agg(est=ps.total("resp2_new"))
-    )
+    result = df.svy.design(**design_kwargs).group_by("educ").agg(est=ps.total("resp2_new"))
 
     for row in result.iter_rows(named=True):
         domain = row["educ"]
@@ -267,12 +257,8 @@ def test_total_domain_estimates(synthetic_sample_df, design_kwargs, expected):
             continue
 
         exp = expected[domain]
-        assert row["est"] == pytest.approx(exp["est"], rel=TOL), (
-            f"Failed for domain {domain}"
-        )
-        assert row["se"] == pytest.approx(exp["se"], rel=TOL), (
-            f"Failed for domain {domain}"
-        )
+        assert row["est"] == pytest.approx(exp["est"], rel=TOL), f"Failed for domain {domain}"
+        assert row["se"] == pytest.approx(exp["se"], rel=TOL), f"Failed for domain {domain}"
 
 
 # =============================================================================
@@ -380,9 +366,7 @@ def test_ratio_domain_estimates(synthetic_sample_df, design_kwargs, expected):
     )
 
     result = (
-        df.svy.design(**design_kwargs)
-        .group_by("educ")
-        .agg(est=ps.ratio("income", "fam_size"))
+        df.svy.design(**design_kwargs).group_by("educ").agg(est=ps.ratio("income", "fam_size"))
     )
 
     for row in result.iter_rows(named=True):
@@ -391,12 +375,8 @@ def test_ratio_domain_estimates(synthetic_sample_df, design_kwargs, expected):
             continue
 
         exp = expected[domain]
-        assert row["est"] == pytest.approx(exp["est"], rel=TOL), (
-            f"Failed for domain {domain}"
-        )
-        assert row["se"] == pytest.approx(exp["se"], rel=TOL), (
-            f"Failed for domain {domain}"
-        )
+        assert row["est"] == pytest.approx(exp["est"], rel=TOL), f"Failed for domain {domain}"
+        assert row["se"] == pytest.approx(exp["se"], rel=TOL), f"Failed for domain {domain}"
 
 
 # =============================================================================
@@ -498,7 +478,6 @@ def test_ratio():
     assert result["est"][0] == pytest.approx(10.0, rel=1e-10)
 
 
-
 # =============================================================================
 # PROPORTION ESTIMATION TESTS
 # =============================================================================
@@ -562,8 +541,7 @@ def test_prop_estimation_variants(synthetic_sample_df, design_kwargs, expected):
     """Test proportion estimation for both levels under different survey design configurations."""
     # Drop nulls from y and weight
     df = synthetic_sample_df.filter(
-        pl.col("resp2_new").is_not_null() &
-        pl.col("samp_wgt").is_not_null()
+        pl.col("resp2_new").is_not_null() & pl.col("samp_wgt").is_not_null()
     )
 
     # Cast columns
@@ -626,9 +604,9 @@ def test_prop_domain_estimates(synthetic_sample_df, design_kwargs, expected):
     """Test proportion estimates by education domain and response level."""
     # Drop nulls from y, weight, and domain
     df = synthetic_sample_df.filter(
-        pl.col("resp2_new").is_not_null() &
-        pl.col("samp_wgt").is_not_null() &
-        pl.col("educ").is_not_null()
+        pl.col("resp2_new").is_not_null()
+        & pl.col("samp_wgt").is_not_null()
+        & pl.col("educ").is_not_null()
     )
 
     # Cast columns
