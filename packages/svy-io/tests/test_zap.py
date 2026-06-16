@@ -99,9 +99,7 @@ def test_zap_labels_strips_value_labels():
     # Attach a value-label set to y1/y2 (simulating labelled numeric) and ensure removal
     meta_in["vars"][0]["label_set"] = "$DUMMY"
     meta_in["vars"][1]["label_set"] = "$DUMMY"
-    meta_in["value_labels"].append(
-        {"set_name": "$DUMMY", "mapping": {"1": "good", "2": "bad"}}
-    )
+    meta_in["value_labels"].append({"set_name": "$DUMMY", "mapping": {"1": "good", "2": "bad"}})
 
     meta_out = zap_labels(copy.deepcopy(meta_in))
     vmap = {v["name"]: v for v in meta_out["vars"]}
@@ -135,9 +133,7 @@ def test_zap_labels_spss_user_na_conversion_default_false():
     meta = {
         "vars": [{"name": "x", "label": None, "label_set": None, "fmt": None}],
         "value_labels": [{"set_name": "$LAB", "mapping": {"1": "a"}}],
-        "user_missing": [
-            {"col": "x", "type": "spss", "na_values": [2, 4], "na_range": None}
-        ],
+        "user_missing": [{"col": "x", "type": "spss", "na_values": [2, 4], "na_range": None}],
     }
     df2, meta2 = zap_labels(df, meta, user_na=False)  # expect 2 and 4 -> nulls
     assert df2["x"].to_list() == [1, None, 3, None, 5]
@@ -149,9 +145,7 @@ def test_zap_labels_spss_user_na_true_keeps_values():
     meta = {
         "vars": [{"name": "x", "label": None, "label_set": None, "fmt": None}],
         "value_labels": [{"set_name": "$LAB", "mapping": {"1": "a"}}],
-        "user_missing": [
-            {"col": "x", "type": "spss", "na_values": [2, 4], "na_range": None}
-        ],
+        "user_missing": [{"col": "x", "type": "spss", "na_values": [2, 4], "na_range": None}],
     }
     df2, _ = zap_labels(df, meta, user_na=True)  # keep 2 and 4 as values
     assert df2["x"].to_list() == [1, 2, 3, 4, 5]
@@ -168,9 +162,7 @@ def test_zap_missing_converts_special_missings():
     meta = {
         "vars": [{"name": "x", "label": None, "label_set": "$LAB", "fmt": None}],
         "value_labels": [{"set_name": "$LAB", "mapping": {"99": "missing"}}],
-        "user_missing": [
-            {"col": "x", "type": "spss", "na_values": [99], "na_range": None}
-        ],
+        "user_missing": [{"col": "x", "type": "spss", "na_values": [99], "na_range": None}],
     }
     df2, meta2 = zap_missing_with_meta(df, meta)
     assert df2["x"].to_list() == [1, 2, None]

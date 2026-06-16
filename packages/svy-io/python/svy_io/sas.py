@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import polars as pl
-import svy_io.svyreadstat_rs as native
 
 from polars.exceptions import ComputeError
+
+import svy_io.svyreadstat_rs as native
 
 from .factor import as_factor
 from .helpers import _normalize_n_max

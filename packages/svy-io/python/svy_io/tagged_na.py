@@ -1,7 +1,9 @@
 # python/svy_io/tagged_na.py
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any, List, Optional, Sequence, Union
+
 
 Scalar = Union[int, float, str, None]
 

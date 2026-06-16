@@ -4,14 +4,17 @@ from __future__ import annotations
 import io
 import json
 import os
+
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import polars as pl
-import svy_io.svyreadstat_rs as native
+
 from polars.exceptions import ComputeError
 
-from .helpers import _normalize_n_max, _as_path
+import svy_io.svyreadstat_rs as native
+
+from .helpers import _as_path, _normalize_n_max
 from .labelled import LabelledSPSS, labelled_spss
 
 

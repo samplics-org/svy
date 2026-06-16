@@ -12,9 +12,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import polars as pl
-import svy_io.svyreadstat_rs as native
 
 from polars.exceptions import ComputeError
+
+import svy_io.svyreadstat_rs as native
 
 from .helpers import _as_path, _normalize_n_max
 from .tagged_na import TaggedNA

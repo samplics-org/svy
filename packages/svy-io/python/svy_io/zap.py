@@ -79,9 +79,7 @@ def _zap_widths_meta(meta: Dict[str, Any]) -> Dict[str, Any]:
 @overload
 def zap_label(meta: Dict[str, Any]) -> Dict[str, Any]: ...
 @overload
-def zap_label(
-    df: pl.DataFrame, meta: Dict[str, Any]
-) -> Tuple[pl.DataFrame, Dict[str, Any]]: ...
+def zap_label(df: pl.DataFrame, meta: Dict[str, Any]) -> Tuple[pl.DataFrame, Dict[str, Any]]: ...
 
 
 def zap_label(arg1, meta: Dict[str, Any] | None = None):
@@ -167,9 +165,7 @@ def zap_labels(obj, meta: Dict[str, Any] | None = None, *, user_na: bool = False
 @overload
 def zap_formats(meta: Dict[str, Any]) -> Dict[str, Any]: ...
 @overload
-def zap_formats(
-    df: pl.DataFrame, meta: Dict[str, Any]
-) -> Tuple[pl.DataFrame, Dict[str, Any]]: ...
+def zap_formats(df: pl.DataFrame, meta: Dict[str, Any]) -> Tuple[pl.DataFrame, Dict[str, Any]]: ...
 
 
 def zap_formats(arg1, meta: Dict[str, Any] | None = None):
@@ -187,9 +183,7 @@ def zap_formats(arg1, meta: Dict[str, Any] | None = None):
 @overload
 def zap_widths(meta: Dict[str, Any]) -> Dict[str, Any]: ...
 @overload
-def zap_widths(
-    df: pl.DataFrame, meta: Dict[str, Any]
-) -> Tuple[pl.DataFrame, Dict[str, Any]]: ...
+def zap_widths(df: pl.DataFrame, meta: Dict[str, Any]) -> Tuple[pl.DataFrame, Dict[str, Any]]: ...
 
 
 def zap_widths(obj, meta: Dict[str, Any] | None = None):
@@ -234,10 +228,7 @@ def zap_empty(x: Any):
         for name, dtype in x.schema.items():
             if dtype == pl.Utf8:
                 mods.append(
-                    pl.when(pl.col(name) == "")
-                    .then(None)
-                    .otherwise(pl.col(name))
-                    .alias(name)
+                    pl.when(pl.col(name) == "").then(None).otherwise(pl.col(name)).alias(name)
                 )
         return x.with_columns(mods) if mods else x
 
@@ -272,14 +263,10 @@ def _user_missing_map(meta: dict) -> dict:
     umap = {}
     for spec in meta.get("user_missing", []) or []:
         # add "col" to the acceptable aliases
-        col = (
-            spec.get("col") or spec.get("name") or spec.get("column") or spec.get("var")
-        )
+        col = spec.get("col") or spec.get("name") or spec.get("column") or spec.get("var")
         if col:
             umap[col] = {
-                k: spec.get(k)
-                for k in ("na_values", "na_range")
-                if spec.get(k) is not None
+                k: spec.get(k) for k in ("na_values", "na_range") if spec.get(k) is not None
             }
     return umap
 
@@ -354,9 +341,7 @@ def zap_missing(df: pl.DataFrame, meta: dict) -> pl.DataFrame:
                 cond = c if cond is None else (cond | c)
 
         if cond is not None:
-            exprs.append(
-                pl.when(cond).then(pl.lit(None)).otherwise(col_clean).alias(name)
-            )
+            exprs.append(pl.when(cond).then(pl.lit(None)).otherwise(col_clean).alias(name))
         else:
             # still apply the TaggedNA sweep even if no cond
             exprs.append(col_clean.alias(name))
