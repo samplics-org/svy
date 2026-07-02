@@ -331,6 +331,18 @@ def test_sample_select_pps_sys_sublevel_mapping_broadcasts_by_component():
     assert int(samp2.data["svy_number_of_hits"].sum()) <= sum(n_map.values()) * n_regions
     assert samp2.data["svy_certainty"].dtype == pl.Boolean
 
+    # After certainty extraction, the remaining n_rem units are drawn from the
+    # remaining MOS pool, so pi = n_rem * mos_i / mos_rem (renormalised),
+    # not n_g * mos_i / total_mos.  Certainty units per cell are all selected,
+    # so they can be recovered from the output.
+    cert_n: dict = {}
+    cert_mos: dict = {}
+    for row in samp2.data.iter_rows(named=True):
+        if row["svy_certainty"]:
+            key = (row["region"], row["education"])
+            cert_n[key] = cert_n.get(key, 0) + 1
+            cert_mos[key] = cert_mos.get(key, 0.0) + DF2[row["svy_row_index"], "income"]
+
     for row in samp2.data.iter_rows(named=True):
         if row["svy_certainty"]:
             assert row["svy_prob_selection"] == 1.0
@@ -342,7 +354,10 @@ def test_sample_select_pps_sys_sublevel_mapping_broadcasts_by_component():
             income_i = DF2[idx, "income"]
             cell = DF2.filter((pl.col("region") == reg) & (pl.col("education") == ed))
             total_mos = cell["income"].sum()
-            expected = min(1.0, n_g * income_i / total_mos)
+            key = (reg, ed)
+            n_rem = n_g - cert_n.get(key, 0)
+            rem_mos = total_mos - cert_mos.get(key, 0.0)
+            expected = min(1.0, n_rem * income_i / rem_mos)
             assert np.isclose(row["svy_prob_selection"], expected, atol=1e-8), (
                 f"reg={reg}, ed={ed}, idx={idx}, income={income_i}, "
                 f"got={row['svy_prob_selection']:.6f}, expected={expected:.6f}"

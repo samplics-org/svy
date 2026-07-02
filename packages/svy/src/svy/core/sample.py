@@ -702,9 +702,9 @@ class Sample:
     def _check_rep_wgts_against_df(self, rw: RepWeights | None) -> None:
         if rw is None:
             return
-        if rw.n_reps and rw.wgts and rw.n_reps != len(rw.wgts):  # type: ignore[attr-defined]
-            raise ValueError(f"RepWeights.n_reps ({rw.n_reps}) != len(rw.wgts) ({len(rw.wgts)})")  # type: ignore[attr-defined]
-        missing = [c for c in rw.wgts if c not in cast(pl.DataFrame, self._data).columns]  # type: ignore[attr-defined]
+        data_columns = cast(pl.DataFrame, self._data).columns
+        expected = rw.columns_from_data(data_columns)
+        missing = [c for c in expected if c not in data_columns]
         if missing:
             raise ValueError(f"Replicate weight columns not in data: {missing}")
 
@@ -712,9 +712,18 @@ class Sample:
     # COPYING / REPLACEMENT (internal)
     # ════════════════════════════════════════════════════════════════════════
     def _replace_data(self, data: pl.DataFrame) -> "Sample":
-        """Return a shallow copy of this Sample with new data."""
+        """Return a shallow copy of this Sample with new data.
+
+        The Design is frozen/immutable so sharing it is fine, but mutable
+        per-sample stores (metadata, warnings, internal design map) are
+        deep-copied so edits on the derived sample never leak back into
+        the original (and vice versa).
+        """
         new = copy.copy(self)
         new._data = data
+        new._metadata = copy.deepcopy(self._metadata)
+        new._internal_design = copy.deepcopy(self._internal_design)
+        new._warnings = copy.deepcopy(self._warnings)
         return new
 
     def _remove_invalid_weight(
@@ -1252,10 +1261,12 @@ class Sample:
         if dtype not in INTEGER_DTYPES and dtype not in FLOAT_DTYPES:
             raise TypeError(f"Weight column {wgt!r} must be numeric; got {dtype}.")
 
-        # 2. Create a shallow copy of the current sample
-        # We use copy.copy() to duplicate the Sample shell (slots/attributes)
-        # without duplicating the heavy _data DataFrame (which Polars handles efficiently).
-        new_sample = copy.copy(self)
+        # 2. Create a lightweight copy of the current sample
+        # _replace_data duplicates the Sample shell without duplicating the
+        # heavy _data DataFrame, while isolating mutable state (metadata,
+        # warnings, internal design map) so edits on the derived sample do
+        # not mutate the original.
+        new_sample = self._replace_data(self._data)
 
         # 3. Update the design in the new sample
         # We must deepcopy the design so we don't mutate the original sample's design

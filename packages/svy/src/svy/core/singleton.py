@@ -335,10 +335,11 @@ class Singleton:
                 log.warning(f"Variable {var!r} not in data, skipping")
                 continue
             if wgt_col and wgt_col in data.columns:
-                # Weighted mean
+                # Weighted mean (alias the whole ratio, not just the denominator)
                 agg_exprs.append(
-                    (pl.col(var) * pl.col(wgt_col)).sum()
-                    / pl.col(wgt_col).sum().alias(f"mean_{var}")
+                    ((pl.col(var) * pl.col(wgt_col)).sum() / pl.col(wgt_col).sum()).alias(
+                        f"mean_{var}"
+                    )
                 )
             else:
                 agg_exprs.append(pl.col(var).mean().alias(f"mean_{var}"))

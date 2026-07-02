@@ -9,10 +9,13 @@ and metadata-key updates.  Nothing here imports from Sample directly.
 from __future__ import annotations
 
 import math
+import re
 
 from typing import TYPE_CHECKING, Literal
 
-from svy.core.design import Design
+from msgspec.structs import replace as _struct_replace
+
+from svy.core.design import Design, RepWeights
 from svy.core.enumerations import (
     CaseStyle as _CaseStyle,
 )
@@ -63,6 +66,36 @@ def _map_tuple_in_design(
     return tuple(renames.get(s, s) for s in design_field)
 
 
+def _rep_wgts_with_renames(rep_wgts: RepWeights, renames: dict[str, str]) -> RepWeights:
+    """Return RepWeights updated for column renames.
+
+    Replicate weight columns are identified by ``prefix`` + replicate number,
+    so a rename can only be represented when the trailing number is preserved
+    and all renamed columns share one new prefix.  Otherwise raise.
+    """
+    pattern = re.compile(rf"^{re.escape(rep_wgts.prefix)}(\d+)$", re.IGNORECASE)
+    new_prefixes: set[str] = set()
+    for old, new in renames.items():
+        m = pattern.match(old)
+        if m is None:
+            continue
+        digits = m.group(1)
+        if not new.endswith(digits):
+            raise ValueError(
+                f"Cannot rename replicate weight column {old!r} to {new!r}: "
+                f"the replicate number suffix {digits!r} must be preserved."
+            )
+        new_prefixes.add(new[: len(new) - len(digits)])
+    if not new_prefixes:
+        return rep_wgts
+    if len(new_prefixes) > 1:
+        raise ValueError(
+            "Replicate weight columns must all be renamed with the same prefix; "
+            f"got prefixes {sorted(new_prefixes)}."
+        )
+    return _struct_replace(rep_wgts, prefix=new_prefixes.pop())
+
+
 def _design_with_renamed_columns(design: Design, renames: dict[str, str]) -> Design:
     """Return a new Design with all column references updated by *renames*."""
     if not renames:
@@ -70,9 +103,7 @@ def _design_with_renamed_columns(design: Design, renames: dict[str, str]) -> Des
 
     new_rep = design.rep_wgts
     if design.rep_wgts is not None:
-        mapped_wgts = tuple(renames.get(s, s) for s in design.rep_wgts.columns)
-        if mapped_wgts != tuple(design.rep_wgts.columns):
-            new_rep = design.rep_wgts.clone(wgts=mapped_wgts, n_reps=len(mapped_wgts))
+        new_rep = _rep_wgts_with_renames(design.rep_wgts, renames)
 
     return design.update(
         row_index=_map_name_in_design(design.row_index, renames),

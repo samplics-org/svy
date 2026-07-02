@@ -56,12 +56,14 @@ def _design_with_renamed_columns(design: Any, renames: dict[str, str]) -> Any:
     new_psu = _map_tuple_in_design(d.psu, renames)
     new_ssu = _map_tuple_in_design(d.ssu, renames)
 
-    # Replicate weights
+    # Replicate weights (identified by prefix + replicate number; delegate
+    # to the shared prefix-aware rename helper).  Function-level import to
+    # avoid a circular import between svy.wrangling and svy.engine.wrangling.
     new_rep = d.rep_wgts
     if d.rep_wgts is not None:
-        mapped_wgts = tuple(renames.get(s, s) for s in d.rep_wgts.wgts)
-        if mapped_wgts != d.rep_wgts.wgts:
-            new_rep = d.rep_wgts.clone(wgts=mapped_wgts, n_reps=len(mapped_wgts))
+        from svy.wrangling._naming import _rep_wgts_with_renames
+
+        new_rep = _rep_wgts_with_renames(d.rep_wgts, renames)
 
     return d.update(
         row_index=new_row_index,
