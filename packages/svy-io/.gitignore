@@ -138,6 +138,7 @@ CONTRIBUTING.md
 
 # cargo, uv, ruff and others
 *.lock
+!Cargo.lock
 *.ruff*
  #Cargo.lock
 

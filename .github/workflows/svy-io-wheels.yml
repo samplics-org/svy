@@ -9,6 +9,9 @@ on:
       - "packages/svy-io/**"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build-wheels:
     name: Wheels (${{ matrix.name }})
@@ -38,16 +41,18 @@ jobs:
             target: x86_64-pc-windows-msvc
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
 
       - name: Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable
 
       # ----- libclang for bindgen (svy-io needs this for ReadStat) -----
       - name: Install LLVM (macOS)
@@ -88,7 +93,7 @@ jobs:
         run: rm -rf packages/svy-io/dist && mkdir -p packages/svy-io/dist
 
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         env:
           PYO3_NO_PYTHON: ${{ runner.os != 'Windows' && '1' || '' }}
           LIB: ${{ runner.os == 'Windows' && format('{0}\libs', env.pythonLocation) || '' }}
@@ -200,7 +205,7 @@ jobs:
           python -c "import svy_io, svy_io.svyreadstat_rs as _m; print('OK:', svy_io.__name__, getattr(svy_io, '__version__', 'n/a'), _m.__name__)"
 
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: wheels-${{ matrix.name }}
           path: packages/svy-io/dist/*.whl
@@ -209,19 +214,21 @@ jobs:
     name: Source dist
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable
       - name: Build sdist
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           working-directory: packages/svy-io
           command: sdist
           args: --out dist
       - name: Show sdist
         run: ls -lh packages/svy-io/dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sdist
           path: packages/svy-io/dist/*.tar.gz
@@ -235,13 +242,13 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: wheels-*
           merge-multiple: true
           path: dist
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: sdist
           path: dist
@@ -263,7 +270,7 @@ jobs:
           PY
 
       - name: Upload to PyPI
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           command: upload
           args: --skip-existing dist/*
