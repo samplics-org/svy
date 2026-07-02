@@ -28,9 +28,11 @@ use readstat_sys::{
     readstat_insert_string_value, readstat_set_data_writer,
     readstat_type_e_READSTAT_TYPE_DOUBLE as T_DOUBLE,
     readstat_type_e_READSTAT_TYPE_STRING as T_STRING, readstat_variable_set_label,
-    readstat_variable_t, readstat_writer_free, readstat_writer_init,
-    readstat_writer_set_file_format_version, readstat_writer_set_file_label,
+    readstat_variable_t, readstat_writer_init, readstat_writer_set_file_format_version,
+    readstat_writer_set_file_label,
 };
+
+use crate::core::WriterGuard;
 
 unsafe extern "C" fn data_writer_cb(
     data: *const std::os::raw::c_void,
@@ -96,8 +98,13 @@ fn dict_string_at_any(a: &dyn Array, row: usize) -> Option<&str> {
                 if !is_text_dt(d.values().data_type()) || d.is_null(row) {
                     return None;
                 }
-                let key_usize = d.keys().value(row) as usize;
+                // A corrupt dictionary can hold a negative or out-of-range
+                // key; a plain `as usize` cast would wrap and panic below.
+                let key_usize = usize::try_from(d.keys().value(row)).ok()?;
                 let values = d.values();
+                if key_usize >= values.len() {
+                    return None;
+                }
                 return get_string_value(values.as_ref(), key_usize);
             }
         }};
@@ -194,6 +201,8 @@ fn write_stata_minimal(
     if writer.is_null() {
         return Err(anyhow!("readstat_writer_init() failed"));
     }
+    // Frees the writer on every exit path (including early `?` returns).
+    let _writer_guard = WriterGuard(writer);
     unsafe {
         readstat_writer_set_file_format_version(writer, version_internal as u8);
         readstat_set_data_writer(writer, Some(data_writer_cb));
@@ -235,7 +244,6 @@ fn write_stata_minimal(
             let needs_strl = (stats.max_len as i32) > strl_threshold;
 
             if needs_strl {
-                unsafe { readstat_writer_free(writer) };
                 return Err(anyhow!(
                     "Column '{}' contains strings longer than {} bytes (max: {}).\n\
                      \n\
@@ -260,7 +268,6 @@ fn write_stata_minimal(
         let cname = CString::new(field.name().as_str())?;
         let var = unsafe { readstat_add_variable(writer, cname.as_ptr(), typ, width as _) };
         if var.is_null() {
-            unsafe { readstat_writer_free(writer) };
             return Err(anyhow!(
                 "readstat_add_variable failed for '{}'",
                 field.name()
@@ -285,14 +292,16 @@ fn write_stata_minimal(
 
     let mut outfile = File::create(Path::new(out_path))?;
     let total_rows: i64 = batches.iter().map(|b| b.num_rows() as i64).sum();
+    let row_count = total_rows
+        .try_into()
+        .map_err(|_| anyhow!("row count {total_rows} exceeds platform limit"))?;
     unsafe {
         let rc = readstat_begin_writing_dta(
             writer,
             &mut outfile as *mut File as *mut c_void,
-            total_rows.try_into().expect("row count overflow"),
+            row_count,
         );
         if rc != 0 {
-            readstat_writer_free(writer);
             return Err(anyhow!("readstat_begin_writing_dta failed with rc={}", rc));
         }
     }
@@ -302,7 +311,6 @@ fn write_stata_minimal(
             unsafe {
                 let rc = readstat_begin_row(writer);
                 if rc != 0 {
-                    readstat_writer_free(writer);
                     return Err(anyhow!("readstat_begin_row failed with rc={}", rc));
                 }
             };
@@ -316,7 +324,6 @@ fn write_stata_minimal(
                                     let rc =
                                         readstat_insert_string_value(writer, rvars[j], cs.as_ptr());
                                     if rc != 0 {
-                                        readstat_writer_free(writer);
                                         return Err(anyhow!(
                                             "insert_string_value failed with rc={}",
                                             rc
@@ -326,7 +333,6 @@ fn write_stata_minimal(
                                 Err(_) => {
                                     let rc = readstat_insert_missing_value(writer, rvars[j]);
                                     if rc != 0 {
-                                        readstat_writer_free(writer);
                                         return Err(anyhow!(
                                             "insert_missing_value (embedded NUL) failed with rc={}",
                                             rc
@@ -339,7 +345,6 @@ fn write_stata_minimal(
                         unsafe {
                             let rc = readstat_insert_missing_value(writer, rvars[j]);
                             if rc != 0 {
-                                readstat_writer_free(writer);
                                 return Err(anyhow!(
                                     "insert_missing_value (null) failed with rc={}",
                                     rc
@@ -352,7 +357,6 @@ fn write_stata_minimal(
                         unsafe {
                             let rc = readstat_insert_double_value(writer, rvars[j], v);
                             if rc != 0 {
-                                readstat_writer_free(writer);
                                 return Err(anyhow!("insert_double_value failed with rc={}", rc));
                             }
                         }
@@ -360,7 +364,6 @@ fn write_stata_minimal(
                         unsafe {
                             let rc = readstat_insert_missing_value(writer, rvars[j]);
                             if rc != 0 {
-                                readstat_writer_free(writer);
                                 return Err(anyhow!(
                                     "insert_missing_value (double) failed with rc={}",
                                     rc
@@ -374,7 +377,6 @@ fn write_stata_minimal(
             unsafe {
                 let rc = readstat_end_row(writer);
                 if rc != 0 {
-                    readstat_writer_free(writer);
                     return Err(anyhow!("readstat_end_row failed with rc={}", rc));
                 }
             }
@@ -384,10 +386,8 @@ fn write_stata_minimal(
     unsafe {
         let rc = readstat_end_writing(writer);
         if rc != 0 {
-            readstat_writer_free(writer);
             return Err(anyhow!("readstat_end_writing failed with rc={}", rc));
         }
-        readstat_writer_free(writer);
     }
 
     Ok(())

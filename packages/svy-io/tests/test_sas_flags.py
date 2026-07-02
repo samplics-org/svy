@@ -1,4 +1,5 @@
 # tests/test_sas_flags.py
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import polars as pl
@@ -32,7 +33,18 @@ def test_zap_empty_string_if_present():
     assert isinstance(df, pl.DataFrame)
 
 
-# For temporals, once you implement SAS format-based coercion, assert resulting dtypes
-# def test_coerce_temporals_datetime_file():
-#     df, _ = read_sas(tpath("datetime.sas7bdat"), coerce_temporals=True)
-#     assert "VAR1" in df.columns  # and dtype checks once implemented
+def test_coerce_temporals_datetime_file():
+    df, _ = read_sas(tpath("datetime.sas7bdat"), coerce_temporals=True)
+
+    # VAR1: DATETIME (seconds since 1960-01-01) -> Datetime, time-of-day preserved
+    assert isinstance(df.schema["VAR1"], pl.Datetime)
+    assert df["VAR1"][0] == datetime(2015, 2, 2, 14, 42, 12)
+
+    # VAR2/VAR3/VAR4: MMDDYY / DATE / WEEKDATE (days since 1960-01-01) -> Date
+    for col in ("VAR2", "VAR3", "VAR4"):
+        assert df.schema[col] == pl.Date, col
+        assert df[col][0] == date(2015, 2, 2), col
+
+    # VAR5: TIME (seconds since midnight) -> Duration
+    assert df.schema["VAR5"] == pl.Duration
+    assert df["VAR5"][0] == timedelta(seconds=52932)

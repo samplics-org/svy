@@ -43,6 +43,7 @@ fn parse_dta_impl(
         notes: Vec::with_capacity(8),
         detect_tagged: true,
         row_capacity: None, // Filled in metadata callback
+        panic_err: None,
     };
 
     unsafe {
@@ -60,6 +61,11 @@ fn parse_dta_impl(
         let c_path = CString::new(data_path)?;
         let rc = readstat_parse_dta(p, c_path.as_ptr(), &mut ctx as *mut _ as *mut c_void);
         readstat_parser_free(p);
+
+        // A panic caught inside a handler callback is an internal error.
+        if let Some(msg) = ctx.panic_err.take() {
+            return Err(anyhow!("internal error in readstat callback: {msg}"));
+        }
 
         let early_ok = ctx
             .n_max

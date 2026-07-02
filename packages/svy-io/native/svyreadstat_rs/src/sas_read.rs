@@ -59,6 +59,7 @@ fn parse_sas_impl(
         notes: Vec::with_capacity(4),
         detect_tagged: false, // SAS: no tagged-missing semantics like Stata
         row_capacity: None,   // Will be filled by on_metadata_cb
+        panic_err: None,
     };
 
     // Step 1: Parse catalog file if provided (for value labels)
@@ -77,6 +78,11 @@ fn parse_sas_impl(
                 readstat_parse_sas7bcat(parser, c_path.as_ptr(), &mut ctx as *mut _ as *mut c_void);
 
             readstat_parser_free(parser);
+
+            // A panic caught inside a handler callback is an internal error.
+            if let Some(msg) = ctx.panic_err.take() {
+                return Err(anyhow!("internal error in readstat callback: {msg}"));
+            }
 
             // Catalog parse errors are not fatal, but we should report them
             if rc != RS_OK && rc != RS_USER_ABORT {
@@ -108,6 +114,11 @@ fn parse_sas_impl(
             readstat_parse_sas7bdat(parser, c_path.as_ptr(), &mut ctx as *mut _ as *mut c_void);
 
         readstat_parser_free(parser);
+
+        // A panic caught inside a handler callback is an internal error.
+        if let Some(msg) = ctx.panic_err.take() {
+            return Err(anyhow!("internal error in readstat callback: {msg}"));
+        }
 
         // Check for early termination (user requested n_max rows)
         let early_ok = ctx

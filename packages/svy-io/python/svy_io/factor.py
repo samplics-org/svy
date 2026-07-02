@@ -28,8 +28,9 @@ def as_factor(
         raise ValueError("levels must be one of: default, labels, values, both")
 
     # No mapping: just categorize the raw values
+    # (stringify first: numeric -> Categorical casts are invalid in Polars)
     if not mapping:
-        return s.cast(pl.Categorical)
+        return s.cast(pl.Utf8).cast(pl.Categorical)
 
     # tolerant lookup: exact match first, else try str(value)
     def _lookup(val: Any) -> Optional[str]:
@@ -40,8 +41,8 @@ def as_factor(
         return mapping.get(str(val))
 
     if levels == "values":
-        # Keep raw values as categories
-        return s.cast(pl.Categorical)
+        # Keep raw values as categories (stringified for non-string dtypes)
+        return s.cast(pl.Utf8).cast(pl.Categorical)
 
     if levels == "labels":
         # Only labels; unlabelled values become null

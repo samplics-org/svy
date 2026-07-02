@@ -77,6 +77,44 @@ def test_as_factor_default_and_modes():
     assert out_both.to_list()[:2] == ["[f] Female", "[m] Male"]
 
 
+def test_as_factor_numeric_codes():
+    """Numeric coded columns must factorize without invalid numeric->Categorical casts."""
+    s = pl.Series("q1", [1, 2, 1, None])
+    mapping = {1: "Agree", 2: "Disagree"}
+
+    out_def = as_factor(s, labels=mapping, levels="default")
+    assert out_def.dtype == pl.Categorical
+    assert out_def.to_list() == ["Agree", "Disagree", "Agree", None]
+
+    out_values = as_factor(s, labels=mapping, levels="values")
+    assert out_values.dtype == pl.Categorical
+    assert out_values.to_list() == ["1", "2", "1", None]
+
+    out_none = as_factor(s)  # no mapping at all
+    assert out_none.dtype == pl.Categorical
+    assert out_none.to_list() == ["1", "2", "1", None]
+
+
+def test_as_factor_expr_levels_both():
+    """levels='both' must render '[value] label' (literals, not column refs)."""
+    from svy_io.sas import as_factor_expr
+
+    df = pl.DataFrame({"gender": ["f", "m", None]})
+    out = df.select(
+        as_factor_expr("gender", value_labels={"f": "Female", "m": "Male"}, levels="both").alias(
+            "gender"
+        )
+    )
+    assert out["gender"].dtype == pl.Categorical
+    assert out["gender"].to_list() == ["[f] Female", "[m] Male", None]
+
+    # numeric column with no labels: must not raise
+    df2 = pl.DataFrame({"x": [1, 2]})
+    out2 = df2.select(as_factor_expr("x", value_labels=None))
+    assert out2["x"].dtype == pl.Categorical
+    assert out2["x"].to_list() == ["1", "2"]
+
+
 def test_apply_value_labels_dataframe():
     meta = _fake_meta()
     df = pl.DataFrame(

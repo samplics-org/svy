@@ -3,7 +3,10 @@
 
 use anyhow::{anyhow, Result};
 use arrow::array::*;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{
+    DataType, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type,
+};
 use arrow::ipc::reader::FileReader;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -18,10 +21,12 @@ use readstat_sys::{
     readstat_end_writing, readstat_insert_double_value, readstat_insert_missing_value,
     readstat_insert_string_value, readstat_set_data_writer, readstat_type_e_READSTAT_TYPE_DOUBLE,
     readstat_type_e_READSTAT_TYPE_STRING, readstat_variable_set_format,
-    readstat_variable_set_label, readstat_variable_t, readstat_writer_free, readstat_writer_init,
+    readstat_variable_set_label, readstat_variable_t, readstat_writer_init,
     readstat_writer_set_file_format_version, readstat_writer_set_file_label,
     readstat_writer_set_table_name,
 };
+
+use crate::core::WriterGuard;
 
 unsafe extern "C" fn data_writer_cb(data: *const c_void, len: usize, ctx: *mut c_void) -> isize {
     if data.is_null() || ctx.is_null() {
@@ -35,6 +40,14 @@ unsafe extern "C" fn data_writer_cb(data: *const c_void, len: usize, ctx: *mut c
     }
 }
 
+#[inline]
+fn is_text_dt(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
+}
+
 fn get_string_value(arr: &dyn Array, row: usize) -> Option<&str> {
     if arr.is_null(row) {
         return None;
@@ -43,9 +56,42 @@ fn get_string_value(arr: &dyn Array, row: usize) -> Option<&str> {
         Some(s.value(row))
     } else if let Some(s) = arr.as_any().downcast_ref::<LargeStringArray>() {
         Some(s.value(row))
+    } else if let Some(s) = arr.as_any().downcast_ref::<StringViewArray>() {
+        Some(s.value(row))
+    } else if matches!(arr.data_type(), DataType::Dictionary(_, _)) {
+        dict_string_at_any(arr, row)
     } else {
         None
     }
+}
+
+fn dict_string_at_any(a: &dyn Array, row: usize) -> Option<&str> {
+    macro_rules! try_dict {
+        ($T:ty) => {{
+            if let Some(d) = a.as_any().downcast_ref::<DictionaryArray<$T>>() {
+                if !is_text_dt(d.values().data_type()) || d.is_null(row) {
+                    return None;
+                }
+                // A corrupt dictionary can hold a negative or out-of-range
+                // key; a plain `as usize` cast would wrap and panic below.
+                let key_usize = usize::try_from(d.keys().value(row)).ok()?;
+                let values = d.values();
+                if key_usize >= values.len() {
+                    return None;
+                }
+                return get_string_value(values.as_ref(), key_usize);
+            }
+        }};
+    }
+    try_dict!(Int8Type);
+    try_dict!(Int16Type);
+    try_dict!(Int32Type);
+    try_dict!(Int64Type);
+    try_dict!(UInt8Type);
+    try_dict!(UInt16Type);
+    try_dict!(UInt32Type);
+    try_dict!(UInt64Type);
+    None
 }
 
 fn as_f64_opt(arr: &dyn Array, row: usize) -> Option<f64> {
@@ -141,13 +187,12 @@ fn write_xpt_impl(
         return Ok(());
     }
 
-    let batch = &batches[0];
-    let n_rows = batch.num_rows();
-
     let writer = unsafe { readstat_writer_init() };
     if writer.is_null() {
         return Err(anyhow!("readstat_writer_init() failed"));
     }
+    // Frees the writer on every exit path (including early `?` returns).
+    let _writer_guard = WriterGuard(writer);
 
     unsafe {
         let xpt_version = if version == 5 { 5 } else { 8 };
@@ -187,7 +232,8 @@ fn write_xpt_impl(
 
     for (j, field) in schema.fields().iter().enumerate() {
         let col_name = CString::new(field.name().as_str())?;
-        is_str_col[j] = matches!(field.data_type(), DataType::Utf8 | DataType::LargeUtf8);
+        is_str_col[j] = is_text_dt(field.data_type())
+            || matches!(field.data_type(), DataType::Dictionary(_, v) if is_text_dt(v.as_ref()));
 
         let (var_type, width) = if is_str_col[j] {
             (readstat_type_e_READSTAT_TYPE_STRING, 200)
@@ -197,7 +243,6 @@ fn write_xpt_impl(
 
         let var = unsafe { readstat_add_variable(writer, col_name.as_ptr(), var_type, width) };
         if var.is_null() {
-            unsafe { readstat_writer_free(writer) };
             return Err(anyhow!("Failed to add variable: {}", field.name()));
         }
 
@@ -224,14 +269,20 @@ fn write_xpt_impl(
     // Create file and begin writing
     let mut outfile = File::create(Path::new(path))?;
 
+    // All record batches are written; a large frame is commonly split into
+    // several batches by Arrow IPC serialization.
+    let total_rows: i64 = batches.iter().map(|b| b.num_rows() as i64).sum();
+    let row_count = total_rows
+        .try_into()
+        .map_err(|_| anyhow!("row count {total_rows} exceeds platform limit"))?;
+
     unsafe {
         let rc = readstat_begin_writing_xport(
             writer,
             &mut outfile as *mut File as *mut c_void,
-            n_rows.try_into().expect("row count overflow"),
+            row_count,
         );
         if rc != 0 {
-            readstat_writer_free(writer);
             return Err(anyhow!(
                 "readstat_begin_writing_xport failed with rc={}",
                 rc
@@ -240,74 +291,69 @@ fn write_xpt_impl(
     }
 
     // NOW write data row by row using readstat API
-    for i in 0..n_rows {
-        unsafe {
-            let rc = readstat_begin_row(writer);
-            if rc != 0 {
-                readstat_writer_free(writer);
-                return Err(anyhow!("readstat_begin_row failed at row {}", i));
-            }
-        }
-
-        for (j, arr) in batch.columns().iter().enumerate() {
+    for batch in &batches {
+        for i in 0..batch.num_rows() {
             unsafe {
-                if is_str_col[j] {
-                    if let Some(s) = get_string_value(arr.as_ref(), i) {
-                        match CString::new(s) {
-                            Ok(cs) => {
-                                let rc =
-                                    readstat_insert_string_value(writer, rvars[j], cs.as_ptr());
-                                if rc != 0 {
-                                    readstat_writer_free(writer);
-                                    return Err(anyhow!(
-                                        "insert_string_value failed at row {}, col {}",
-                                        i,
-                                        j
-                                    ));
+                let rc = readstat_begin_row(writer);
+                if rc != 0 {
+                    return Err(anyhow!("readstat_begin_row failed at row {}", i));
+                }
+            }
+
+            for (j, arr) in batch.columns().iter().enumerate() {
+                unsafe {
+                    if is_str_col[j] {
+                        if let Some(s) = get_string_value(arr.as_ref(), i) {
+                            match CString::new(s) {
+                                Ok(cs) => {
+                                    let rc =
+                                        readstat_insert_string_value(writer, rvars[j], cs.as_ptr());
+                                    if rc != 0 {
+                                        return Err(anyhow!(
+                                            "insert_string_value failed at row {}, col {}",
+                                            i,
+                                            j
+                                        ));
+                                    }
+                                }
+                                Err(_) => {
+                                    let rc = readstat_insert_missing_value(writer, rvars[j]);
+                                    if rc != 0 {
+                                        return Err(anyhow!("insert_missing_value failed"));
+                                    }
                                 }
                             }
-                            Err(_) => {
-                                let rc = readstat_insert_missing_value(writer, rvars[j]);
-                                if rc != 0 {
-                                    readstat_writer_free(writer);
-                                    return Err(anyhow!("insert_missing_value failed"));
-                                }
+                        } else {
+                            let rc = readstat_insert_missing_value(writer, rvars[j]);
+                            if rc != 0 {
+                                return Err(anyhow!("insert_missing_value failed"));
                             }
                         }
                     } else {
-                        let rc = readstat_insert_missing_value(writer, rvars[j]);
-                        if rc != 0 {
-                            readstat_writer_free(writer);
-                            return Err(anyhow!("insert_missing_value failed"));
-                        }
-                    }
-                } else {
-                    if let Some(v) = as_f64_opt(arr.as_ref(), i) {
-                        let rc = readstat_insert_double_value(writer, rvars[j], v);
-                        if rc != 0 {
-                            readstat_writer_free(writer);
-                            return Err(anyhow!(
-                                "insert_double_value failed at row {}, col {}",
-                                i,
-                                j
-                            ));
-                        }
-                    } else {
-                        let rc = readstat_insert_missing_value(writer, rvars[j]);
-                        if rc != 0 {
-                            readstat_writer_free(writer);
-                            return Err(anyhow!("insert_missing_value failed"));
+                        if let Some(v) = as_f64_opt(arr.as_ref(), i) {
+                            let rc = readstat_insert_double_value(writer, rvars[j], v);
+                            if rc != 0 {
+                                return Err(anyhow!(
+                                    "insert_double_value failed at row {}, col {}",
+                                    i,
+                                    j
+                                ));
+                            }
+                        } else {
+                            let rc = readstat_insert_missing_value(writer, rvars[j]);
+                            if rc != 0 {
+                                return Err(anyhow!("insert_missing_value failed"));
+                            }
                         }
                     }
                 }
             }
-        }
 
-        unsafe {
-            let rc = readstat_end_row(writer);
-            if rc != 0 {
-                readstat_writer_free(writer);
-                return Err(anyhow!("readstat_end_row failed at row {}", i));
+            unsafe {
+                let rc = readstat_end_row(writer);
+                if rc != 0 {
+                    return Err(anyhow!("readstat_end_row failed at row {}", i));
+                }
             }
         }
     }
@@ -316,10 +362,8 @@ fn write_xpt_impl(
     unsafe {
         let rc = readstat_end_writing(writer);
         if rc != 0 {
-            readstat_writer_free(writer);
             return Err(anyhow!("readstat_end_writing failed with rc={}", rc));
         }
-        readstat_writer_free(writer);
     }
 
     Ok(())
