@@ -52,7 +52,16 @@ pub fn select_srs(
             };
             srs_unstratified_indexed(frame, &(0..frame.len()).collect::<Vec<_>>(), n_scalar, wr, seed)
         }
-        Some(strat) => select_srs_stratified(frame, n, strat, wr, seed),
+        Some(strat) => {
+            if strat.len() != frame.len() {
+                return Err(SamplingError::InvalidInput(format!(
+                    "stratum length ({}) must match frame length ({})",
+                    strat.len(),
+                    frame.len()
+                )));
+            }
+            select_srs_stratified(frame, n, strat, wr, seed)
+        }
     }
 }
 
@@ -196,4 +205,22 @@ fn select_srs_stratified(
     }
 
     Ok((selected, out_hits, out_probs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression: stratum length mismatch used to panic (longer) or silently
+    // truncate the frame (shorter); both must now be clean errors.
+    #[test]
+    fn test_stratum_length_mismatch_rejected() {
+        let frame = vec![1, 2];
+        let stratum_long = vec![0, 0, 0];
+        assert!(select_srs(&frame, SrsN::Scalar(1), Some(&stratum_long), false, None).is_err());
+
+        let frame = vec![1, 2, 3];
+        let stratum_short = vec![0, 0];
+        assert!(select_srs(&frame, SrsN::Scalar(1), Some(&stratum_short), false, None).is_err());
+    }
 }

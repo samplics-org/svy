@@ -187,11 +187,17 @@ pub fn trim_impl(
     // and ensures we own the data regardless of input memory layout.
     let raw: Vec<f64> = weights.iter().copied().collect();
 
-    // Guard: caller should have caught negatives, but assert at boundary
+    // Guard: caller should have caught negatives, but assert at boundary.
+    // NaN would otherwise pass every comparison below and silently propagate.
     for &w in &raw {
         if w < 0.0 {
             return Err(WeightingError::InvalidInput(
                 "Negative weights found. Trimming cannot proceed.".to_string(),
+            ));
+        }
+        if w.is_nan() {
+            return Err(WeightingError::InvalidInput(
+                "NaN weights found. Trimming cannot proceed.".to_string(),
             ));
         }
     }
@@ -392,6 +398,19 @@ mod tests {
     fn test_negative_weight_error() {
         let result = trim_impl(
             ndarray::ArrayView1::from(&[-1.0_f64, 10.0, 10.0][..]),
+            Some(50.0),
+            None,
+            false,
+            10,
+            1e-6,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_nan_weight_error() {
+        let result = trim_impl(
+            ndarray::ArrayView1::from(&[f64::NAN, 10.0, 10.0][..]),
             Some(50.0),
             None,
             false,

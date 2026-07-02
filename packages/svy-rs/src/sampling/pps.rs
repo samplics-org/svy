@@ -47,6 +47,22 @@ pub fn select_pps(
             "certainty_threshold must be in (0, 1]".into(),
         ));
     }
+    if mos.len() != frame.len() {
+        return Err(SamplingError::InvalidInput(format!(
+            "mos length ({}) must match frame length ({})",
+            mos.len(),
+            frame.len()
+        )));
+    }
+    if let Some(strat) = stratum {
+        if strat.len() != frame.len() {
+            return Err(SamplingError::InvalidInput(format!(
+                "stratum length ({}) must match frame length ({})",
+                strat.len(),
+                frame.len()
+            )));
+        }
+    }
     match stratum {
         None => {
             let n_scalar = match n {
@@ -93,11 +109,16 @@ fn extract_certainty(p0: &[f64], n: usize, threshold: f64) -> (Vec<bool>, usize)
         let mut found_any = false;
 
         for i in 0..big {
+            // Never mark more than n units certain: once the remaining sample
+            // size is exhausted, stop extracting even mid-pass.
+            if n_rem == 0 {
+                break;
+            }
             if remaining[i] && n_rem_f * p0[i] / total_rem_pass >= threshold_scaled {
                 cert_mask[i] = true;
                 remaining[i] = false;
                 total_rem -= p0[i];   // update running total for next pass only
-                n_rem = n_rem.saturating_sub(1);
+                n_rem -= 1;
                 found_any = true;
             }
         }
@@ -137,12 +158,14 @@ fn pps_indexed(
     }
 
     // Validate and compute normalised probabilities from positions
+    if positions.iter().any(|&p| !mos[p].is_finite() || mos[p] < 0.0) {
+        return Err(SamplingError::InvalidInput(
+            "All MOS values must be finite and non-negative".into(),
+        ));
+    }
     let total_mos: f64 = positions.iter().map(|&p| mos[p]).sum();
     if total_mos <= 0.0 {
         return Err(SamplingError::InvalidInput("sum(MOS) must be > 0".into()));
-    }
-    if positions.iter().any(|&p| mos[p] < 0.0) {
-        return Err(SamplingError::InvalidInput("All MOS values must be non-negative".into()));
     }
 
     // p0[i] = normalised probability for positions[i] — one allocation here
@@ -257,6 +280,11 @@ fn pps_sys(
             .filter(|&(_, &c)| !c)
             .map(|(i, _)| p0[i])
             .sum();
+        if total_rem <= 0.0 {
+            return Err(SamplingError::InvalidInput(
+                "sample size exceeds number of units with positive measure of size".into(),
+            ));
+        }
 
         cum.push(0.0_f64);
         for (i, &c) in cert_mask.iter().enumerate() {
@@ -281,7 +309,7 @@ fn pps_sys(
         }
     }
 
-    assemble_pps_output(frame, positions, p0, &hits, &cert_mask, n)
+    assemble_pps_output(frame, positions, p0, &hits, &cert_mask, n_rem)
 }
 
 // ---------------------------------------------------------------------------
@@ -343,6 +371,15 @@ fn pps_brewer(
         if c { hits[i] = 1; available[i] = false; }
     }
 
+    if n_rem > 0 {
+        let rem_mass: f64 = (0..cap).filter(|&i| available[i]).map(|i| p0[i]).sum();
+        if rem_mass <= 0.0 {
+            return Err(SamplingError::InvalidInput(
+                "sample size exceeds number of units with positive measure of size".into(),
+            ));
+        }
+    }
+
     // Pre-allocate working weight buffer — reused across iterations, no heap alloc in loop
     let mut w_buf = vec![0.0f64; cap];
 
@@ -384,7 +421,7 @@ fn pps_brewer(
         to_draw -= 1;
     }
 
-    assemble_pps_output(frame, positions, p0, &hits, &cert_mask, n)
+    assemble_pps_output(frame, positions, p0, &hits, &cert_mask, n_rem)
 }
 
 // ---------------------------------------------------------------------------
@@ -469,6 +506,11 @@ fn pps_rs(
 
         if rem_len >= n_rem {
             let total_rem: f64 = rem_idx.iter().map(|&i| p0[i]).sum();
+            if total_rem <= 0.0 {
+                return Err(SamplingError::InvalidInput(
+                    "sample size exceeds number of units with positive measure of size".into(),
+                ));
+            }
             let p_rem: Vec<f64> = rem_idx.iter().map(|&i| p0[i] / total_rem).collect();
 
             if n_rem == 1 {
@@ -537,7 +579,7 @@ fn pps_rs(
         }
     }
 
-    assemble_pps_output(frame, positions, p0, &hits, &cert_mask, n)
+    assemble_pps_output(frame, positions, p0, &hits, &cert_mask, n_rem)
 }
 
 // ---------------------------------------------------------------------------
@@ -551,8 +593,18 @@ fn assemble_pps_output(
     p0: &[f64],
     hits: &[i64],
     cert_mask: &[bool],
-    n: usize,
+    n_rem: usize,
 ) -> Result<(Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>)> {
+    // Non-certainty units were selected via n_rem draws over the *remaining*
+    // pool, so their inclusion probability must be renormalised over the
+    // remaining MOS mass: pi_i = n_rem * p0_i / total_rem, not n * p0_i.
+    // With no certainties (the common case) total_rem == 1 and this reduces
+    // to n * p0_i as before.
+    let total_rem: f64 = p0.iter().zip(cert_mask.iter())
+        .filter(|&(_, &c)| !c)
+        .map(|(&p, _)| p)
+        .sum();
+
     let n_sel = hits.iter().filter(|&&h| h > 0).count();
     let mut sel   = Vec::with_capacity(n_sel);
     let mut ohits = Vec::with_capacity(n_sel);
@@ -563,9 +615,109 @@ fn assemble_pps_output(
         if h > 0 {
             sel.push(frame[positions[i]]);
             ohits.push(h);
-            probs.push(if cert_mask[i] { 1.0 } else { (n as f64 * p0[i]).min(1.0) });
+            probs.push(if cert_mask[i] {
+                1.0
+            } else if total_rem > 0.0 {
+                (n_rem as f64 * p0[i] / total_rem).min(1.0)
+            } else {
+                0.0
+            });
             cert.push(cert_mask[i]);
         }
     }
     Ok((sel, ohits, probs, cert))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression: reported pi for non-certainty units must be renormalised
+    // over the remaining pool after certainty extraction.
+    // MOS [100, 1, 1], n=2: unit 0 is a certainty (pi=1); one of the two
+    // remaining units is drawn with true pi = 1 * (1/102)/(2/102) = 0.5.
+    // The old code reported min(1, 2*100/102) share = 0.0196 (weight ~51).
+    #[test]
+    fn test_pi_renormalised_after_certainty_extraction() {
+        for method in [PpsMethod::Sys, PpsMethod::Brewer, PpsMethod::Rs] {
+            let frame = vec![10, 20, 30];
+            let mos = vec![100.0, 1.0, 1.0];
+            let (sel, _hits, probs, cert) = select_pps(
+                &frame, PpsN::Scalar(2), &mos, None, method, 1.0, Some(7),
+            )
+            .unwrap();
+            assert_eq!(sel.len(), 2, "{method:?}: expected 2 selected units");
+            for (i, &s) in sel.iter().enumerate() {
+                if s == 10 {
+                    assert!(cert[i], "{method:?}: unit 10 should be a certainty");
+                    assert!((probs[i] - 1.0).abs() < 1e-12);
+                } else {
+                    assert!(!cert[i]);
+                    assert!(
+                        (probs[i] - 0.5).abs() < 1e-9,
+                        "{method:?}: expected pi=0.5 for non-certainty unit, got {}",
+                        probs[i]
+                    );
+                }
+            }
+        }
+    }
+
+    // Regression: certainty extraction must never mark more than n units.
+    #[test]
+    fn test_certainty_extraction_capped_at_n_equal_units() {
+        let p0 = vec![0.1; 10];
+        let (mask, n_rem) = extract_certainty(&p0, 1, 0.1);
+        let n_cert = mask.iter().filter(|&&c| c).count();
+        assert!(n_cert <= 1, "extracted {n_cert} certainties for n=1");
+        assert_eq!(n_cert + n_rem, 1);
+    }
+
+    #[test]
+    fn test_certainty_extraction_capped_at_n_two_units() {
+        let p0 = vec![0.5, 0.5];
+        let (mask, n_rem) = extract_certainty(&p0, 1, 0.5);
+        let n_cert = mask.iter().filter(|&&c| c).count();
+        assert_eq!(n_cert, 1, "extracted {n_cert} certainties for n=1");
+        assert_eq!(n_rem, 0);
+    }
+
+    // Regression: n larger than the number of positive-MOS units must be a
+    // clean error, not NaN probabilities selecting zero-MOS units with pi=0.
+    #[test]
+    fn test_n_exceeding_positive_mos_units_errors() {
+        for method in [PpsMethod::Sys, PpsMethod::Brewer, PpsMethod::Rs] {
+            let frame = vec![1, 2, 3, 4];
+            let mos = vec![5.0, 5.0, 0.0, 0.0];
+            let res = select_pps(&frame, PpsN::Scalar(3), &mos, None, method, 1.0, Some(1));
+            assert!(res.is_err(), "{method:?}: expected error, got {res:?}");
+        }
+    }
+
+    #[test]
+    fn test_mos_nan_rejected() {
+        let frame = vec![1, 2, 3];
+        let mos = vec![1.0, f64::NAN, 1.0];
+        let res = select_pps(&frame, PpsN::Scalar(2), &mos, None, PpsMethod::Sys, 1.0, None);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_mos_length_mismatch_rejected() {
+        let frame = vec![1, 2, 3];
+        let mos = vec![1.0];
+        let res = select_pps(&frame, PpsN::Scalar(2), &mos, None, PpsMethod::Sys, 1.0, None);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_stratum_length_mismatch_rejected() {
+        let frame = vec![1, 2, 3];
+        let mos = vec![1.0, 1.0, 1.0];
+        let stratum = vec![0, 0, 1, 1];
+        let res = select_pps(
+            &frame, PpsN::Scalar(1), &mos, Some(&stratum), PpsMethod::Sys, 1.0, None,
+        );
+        assert!(res.is_err());
+    }
 }

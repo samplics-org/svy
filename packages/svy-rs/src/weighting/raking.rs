@@ -45,6 +45,13 @@ pub fn rake_impl(
         if indices.len() != n_obs {
             return Err(WeightingError::DimensionMismatch { expected: n_obs, got: indices.len() });
         }
+        // Negative indices would wrap to huge usize values in MarginSpec::new
+        // and abort on allocation — reject them with a clean error.
+        if indices.iter().any(|&x| x < 0) {
+            return Err(WeightingError::InvalidInput(
+                "Margin indices must be non-negative".to_string(),
+            ));
+        }
     }
 
     let margins: Vec<MarginSpec> = margin_indices
@@ -52,6 +59,17 @@ pub fn rake_impl(
         .zip(margin_targets.iter())
         .map(|(idx, tgt)| MarginSpec::new(idx.clone(), tgt.clone()))
         .collect();
+
+    // Each group id present in a margin must have a target — a short target
+    // array would panic on `margin.targets[g]` below.
+    for margin in &margins {
+        if margin.targets.len() < margin.n_groups {
+            return Err(WeightingError::DimensionMismatch {
+                expected: margin.n_groups,
+                got: margin.targets.len(),
+            });
+        }
+    }
 
     let mut raked_weights = wgt.to_owned();
 
@@ -144,6 +162,26 @@ mod tests {
             None, None, 1e-20, 1,
         );
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_negative_margin_index_is_error() {
+        let wgt = array![[1.0], [1.0]];
+        let result = rake_impl(
+            wgt.view(), &[array![-1, 0]], &[array![6.0]],
+            None, None, 1e-6, 100,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_short_margin_targets_is_error() {
+        let wgt = array![[1.0], [1.0], [1.0]];
+        let result = rake_impl(
+            wgt.view(), &[array![0, 1, 2]], &[array![6.0]],
+            None, None, 1e-6, 100,
+        );
+        assert!(result.is_err());
     }
 
     #[test]
