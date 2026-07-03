@@ -38,6 +38,7 @@ fn parse_xpt_impl(
         notes: Vec::new(),
         detect_tagged: false, // XPT: no tagged-missing semantics
         row_capacity: None,   // set via on_metadata_cb
+        panic_err: None,
     };
 
     unsafe {
@@ -57,6 +58,11 @@ fn parse_xpt_impl(
             &mut ctx as *mut _ as *mut c_void,
         );
         readstat_parser_free(p);
+
+        // A panic caught inside a handler callback is an internal error.
+        if let Some(msg) = ctx.panic_err.take() {
+            return Err(anyhow!("internal error in readstat callback: {msg}"));
+        }
 
         let early_ok = ctx
             .n_max

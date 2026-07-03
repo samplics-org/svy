@@ -322,6 +322,14 @@ pub fn create_jkn_weights(
             got: psu.len(),
         });
     }
+    if let Some(s) = &stratum {
+        if s.len() != n_obs {
+            return Err(ReplicationError::DimensionMismatch {
+                expected: n_obs,
+                got: s.len(),
+            });
+        }
+    }
 
     let stratum_vec = stratum
         .map(|s| s.to_owned())
@@ -485,6 +493,19 @@ pub fn create_bootstrap_weights(
             got: psu.len(),
         });
     }
+    if let Some(s) = &stratum {
+        if s.len() != n_obs {
+            return Err(ReplicationError::DimensionMismatch {
+                expected: n_obs,
+                got: s.len(),
+            });
+        }
+    }
+    if n_reps < 1 {
+        return Err(ReplicationError::InvalidInput(
+            "Bootstrap requires n_reps >= 1".into(),
+        ));
+    }
 
     let stratum_vec = stratum
         .map(|s| s.to_owned())
@@ -515,9 +536,24 @@ pub fn create_bootstrap_weights(
 
             for &(s, psus) in &strata_sorted {
                 let n_psu = psus.len();
-                // Draw n_psu PSUs with replacement, count selections
+                // Rao-Wu-Yue rescaling bootstrap: draw m_h = n_h - 1 PSUs
+                // with replacement and rescale by n_h / (n_h - 1).  The naive
+                // n_h-draw scheme without rescaling understates variance by a
+                // factor of (n_h - 1) / n_h per stratum (50% for 2-PSU strata).
+                if n_psu == 1 {
+                    // Single-PSU stratum: no resampling variability; keep the
+                    // original weights.
+                    if let Some(obs) = psu_obs.get(&(s, psus[0])) {
+                        for &i in obs {
+                            rep_wgt[i] = wgt[i];
+                        }
+                    }
+                    continue;
+                }
+                let m = n_psu - 1;
+                let adj = n_psu as f64 / m as f64;
                 let mut counts = vec![0usize; n_psu];
-                for _ in 0..n_psu {
+                for _ in 0..m {
                     counts[rng.next_index(n_psu)] += 1;
                 }
                 // Apply counts via pre-built index — no O(N) scan
@@ -526,7 +562,7 @@ pub fn create_bootstrap_weights(
                     if c > 0.0 {
                         if let Some(obs) = psu_obs.get(&(s, p)) {
                             for &i in obs {
-                                rep_wgt[i] = wgt[i] * c;
+                                rep_wgt[i] = wgt[i] * c * adj;
                             }
                         }
                     }
@@ -558,6 +594,22 @@ pub fn create_sdr_weights(
         return Err(ReplicationError::InvalidInput(
             "SDR requires ≥2 replicates".into(),
         ));
+    }
+    if let Some(s) = &stratum {
+        if s.len() != n_obs {
+            return Err(ReplicationError::DimensionMismatch {
+                expected: n_obs,
+                got: s.len(),
+            });
+        }
+    }
+    if let Some(o) = &order {
+        if o.len() != n_obs {
+            return Err(ReplicationError::DimensionMismatch {
+                expected: n_obs,
+                got: o.len(),
+            });
+        }
     }
 
     let stratum_vec = stratum
@@ -695,5 +747,70 @@ mod tests {
         let (rep_wgt, df) = create_sdr_weights(wgt.view(), None, Some(order.view()), 4).unwrap();
         assert_eq!(rep_wgt.dim(), (6, 4));
         assert_eq!(df, 4.0);
+    }
+
+    // Regression: mismatched stratum/order lengths used to panic with an
+    // index out of bounds; n_reps=0 underflowed the df computation.
+    #[test]
+    fn test_bootstrap_zero_reps_is_error() {
+        let wgt = array![1.0, 1.0];
+        let psu = array![1, 2];
+        assert!(create_bootstrap_weights(wgt.view(), None, psu.view(), 0, 42).is_err());
+    }
+
+    #[test]
+    fn test_bootstrap_stratum_length_mismatch_is_error() {
+        let wgt = array![1.0, 1.0];
+        let psu = array![1, 2];
+        let stratum = array![1, 1, 2];
+        assert!(
+            create_bootstrap_weights(wgt.view(), Some(stratum.view()), psu.view(), 5, 42).is_err()
+        );
+    }
+
+    #[test]
+    fn test_jkn_stratum_length_mismatch_is_error() {
+        let wgt = array![1.0, 1.0];
+        let psu = array![1, 2];
+        let stratum = array![1, 1, 2];
+        assert!(create_jkn_weights(wgt.view(), Some(stratum.view()), psu.view()).is_err());
+    }
+
+    #[test]
+    fn test_sdr_length_mismatch_is_error() {
+        let wgt = array![1.0, 1.0, 1.0, 1.0];
+        let stratum_long = array![0, 0, 0, 0, 0, 0];
+        assert!(create_sdr_weights(wgt.view(), Some(stratum_long.view()), None, 4).is_err());
+        let order_short = array![0, 1];
+        assert!(create_sdr_weights(wgt.view(), None, Some(order_short.view()), 4).is_err());
+    }
+
+    // Rao-Wu rescaled bootstrap: for a stratified design with 2 PSUs per
+    // stratum, the bootstrap variance of the estimated total must match the
+    // standard paired estimator sum_h (t_h1 - t_h2)^2.  Here the PSU totals
+    // are (2, 3) and (2, 5), so the target variance is 1 + 9 = 10.  The old
+    // unrescaled scheme converged to 5 (biased low by (n_h-1)/n_h = 1/2).
+    #[test]
+    fn test_bootstrap_variance_matches_paired_estimator() {
+        let wgt = array![1.0, 1.0, 3.0, 2.0, 5.0];
+        let stratum = array![1, 1, 1, 2, 2];
+        let psu = array![1, 1, 2, 1, 2];
+        let n_reps = 2000usize;
+        let (rep_wgt, _df) =
+            create_bootstrap_weights(wgt.view(), Some(stratum.view()), psu.view(), n_reps, 42)
+                .unwrap();
+
+        let t_full: f64 = wgt.sum(); // 12
+        let mut v = 0.0f64;
+        for r in 0..n_reps {
+            let t_r: f64 = rep_wgt.column(r).sum();
+            v += (t_r - t_full).powi(2);
+        }
+        v /= n_reps as f64; // bootstrap coefficient 1/R with full-sample centering
+
+        assert!(
+            (v - 10.0).abs() < 1.0,
+            "bootstrap variance {v} should be near 10 (paired estimator)"
+        );
     }
 }

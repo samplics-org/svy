@@ -27,6 +27,14 @@ pub(crate) const HANDLER_ABORT: c_int = 1;
 // Performance tuning constants
 const DEFAULT_CAPACITY: usize = 8192;
 const STRING_CAPACITY_MULTIPLIER: usize = 16;
+/// Upper bound on the number of rows used for builder *pre-allocation*.
+///
+/// The row count comes from untrusted file metadata: a crafted file can
+/// declare billions of rows in its header, which would otherwise drive
+/// multi-gigabyte eager allocations before any data is read. Arrow builders
+/// grow dynamically, so this clamp only affects pre-reservation, never
+/// correctness or `n_max` semantics.
+const MAX_PREALLOC_ROWS: usize = 65_536;
 
 /// ---------- Metadata we ship back to Python ----------
 
@@ -112,39 +120,71 @@ pub(crate) struct ParseCtx {
     pub(crate) notes: Vec<String>,
     pub(crate) detect_tagged: bool,
     pub(crate) row_capacity: Option<usize>,
+    /// Set when a Rust panic was caught inside a readstat handler callback.
+    /// Panicking across the C FFI boundary would abort the whole process, so
+    /// callbacks catch panics, record the message here, and abort the parse;
+    /// callers must check this after `readstat_parse_*` returns.
+    pub(crate) panic_err: Option<String>,
 }
 
 #[inline(always)]
 fn safe_capacity(maybe: Option<usize>) -> usize {
     match maybe {
-        Some(n) if n > 0 && n < 1_000_000_000 => n,
+        Some(n) if n > 0 => n.min(MAX_PREALLOC_ROWS),
         _ => DEFAULT_CAPACITY,
     }
 }
 
 /// ---------- Helpers on builders ----------
+// These are called from readstat handler callbacks; they must not panic on a
+// kind/builder mismatch (the mismatch cannot happen by construction, but a
+// panic here would otherwise cross the FFI boundary).
 impl ColBuilders {
     #[inline(always)]
     pub(crate) fn push_missing(&mut self) {
         match self.kind {
-            ColKind::Str => self.sb.as_mut().unwrap().append_null(),
-            ColKind::F64 => self.fb.as_mut().unwrap().append_null(),
+            ColKind::Str => {
+                if let Some(sb) = self.sb.as_mut() {
+                    sb.append_null();
+                }
+            }
+            ColKind::F64 => {
+                if let Some(fb) = self.fb.as_mut() {
+                    fb.append_null();
+                }
+            }
         }
     }
 
     #[inline(always)]
     pub(crate) fn push_str(&mut self, s: &str) {
         match self.kind {
-            ColKind::Str => self.sb.as_mut().unwrap().append_value(s),
-            ColKind::F64 => self.fb.as_mut().unwrap().append_null(),
+            ColKind::Str => {
+                if let Some(sb) = self.sb.as_mut() {
+                    sb.append_value(s);
+                }
+            }
+            ColKind::F64 => {
+                if let Some(fb) = self.fb.as_mut() {
+                    fb.append_null();
+                }
+            }
         }
     }
 
     #[inline(always)]
     pub(crate) fn push_f64(&mut self, v: f64) {
         match self.kind {
-            ColKind::F64 => self.fb.as_mut().unwrap().append_value(v),
-            ColKind::Str => self.sb.as_mut().unwrap().append_value(format!("{v}")),
+            ColKind::F64 => {
+                if let Some(fb) = self.fb.as_mut() {
+                    fb.append_value(v);
+                }
+            }
+            ColKind::Str => {
+                if let Some(sb) = self.sb.as_mut() {
+                    sb.append_value(format!("{v}"));
+                }
+            }
         }
     }
 }
@@ -158,13 +198,52 @@ unsafe extern "C" {
     fn readstat_value_tag(value: readstat_sys::readstat_value_t) -> ::std::os::raw::c_char;
 }
 
+fn describe_panic(p: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = p.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = p.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
+/// Run a handler callback body with a panic guard.
+///
+/// Panicking across the `extern "C"` boundary into readstat would abort the
+/// whole process (e.g. Arrow's "offset overflow" panic when a malicious file
+/// feeds >2 GiB of string data into one column). Instead, catch the panic,
+/// record it on the context, and tell readstat to abort the parse; callers
+/// surface `panic_err` as a regular error after `readstat_parse_*` returns.
+///
+/// Safety: `ctx` must be a valid, non-null pointer to a `ParseCtx`.
+#[inline]
+unsafe fn guard_cb(ctx: *mut c_void, f: impl FnOnce(&mut ParseCtx) -> c_int) -> c_int {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let rctx = unsafe { &mut *(ctx as *mut ParseCtx) };
+        f(rctx)
+    })) {
+        Ok(rc) => rc,
+        Err(p) => {
+            // The panicking closure (and its &mut borrow) has been unwound.
+            let rctx = unsafe { &mut *(ctx as *mut ParseCtx) };
+            rctx.panic_err = Some(describe_panic(p.as_ref()));
+            HANDLER_ABORT
+        }
+    }
+}
+
 pub(crate) unsafe extern "C" fn on_error_cb(message: *const c_char, ctx: *mut c_void) {
     if message.is_null() || ctx.is_null() {
         return;
     }
-    let msg = CStr::from_ptr(message).to_string_lossy().into_owned();
-    let rctx = &mut *(ctx as *mut ParseCtx);
-    rctx.last_err = Some(msg);
+    guard_cb(ctx, |rctx| {
+        let msg = unsafe { CStr::from_ptr(message) }
+            .to_string_lossy()
+            .into_owned();
+        rctx.last_err = Some(msg);
+        HANDLER_OK
+    });
 }
 
 pub(crate) unsafe extern "C" fn on_metadata_cb(
@@ -174,8 +253,10 @@ pub(crate) unsafe extern "C" fn on_metadata_cb(
     if metadata.is_null() || ctx.is_null() {
         return HANDLER_OK;
     }
-    let rctx = &mut *(ctx as *mut ParseCtx);
+    guard_cb(ctx, |rctx| unsafe { on_metadata_impl(metadata, rctx) })
+}
 
+unsafe fn on_metadata_impl(metadata: *mut readstat_metadata_t, rctx: &mut ParseCtx) -> c_int {
     let label_ptr = readstat_get_file_label(metadata);
     if !label_ptr.is_null() {
         let label = CStr::from_ptr(label_ptr).to_string_lossy().into_owned();
@@ -203,8 +284,17 @@ pub(crate) unsafe extern "C" fn on_variable_cb(
     if var.is_null() || ctx.is_null() {
         return HANDLER_OK;
     }
-    let rctx = &mut *(ctx as *mut ParseCtx);
+    guard_cb(ctx, |rctx| unsafe {
+        on_variable_impl(index, var, label_set_name, rctx)
+    })
+}
 
+unsafe fn on_variable_impl(
+    index: c_int,
+    var: *mut readstat_variable_t,
+    label_set_name: *const c_char,
+    rctx: &mut ParseCtx,
+) -> c_int {
     let name = {
         let p = readstat_variable_get_name(var);
         if p.is_null() {
@@ -364,8 +454,19 @@ pub(crate) unsafe extern "C" fn on_value_cb(
     if var.is_null() || ctx.is_null() {
         return HANDLER_OK;
     }
-    let rctx = &mut *(ctx as *mut ParseCtx);
+    guard_cb(ctx, |rctx| unsafe { on_value_impl(row, var, value, rctx) })
+}
 
+unsafe fn on_value_impl(
+    row: c_int,
+    var: *mut readstat_variable_t,
+    value: readstat_value_t,
+    rctx: &mut ParseCtx,
+) -> c_int {
+    // Defensive: a negative row index would wrap to a huge usize below.
+    if row < 0 {
+        return HANDLER_OK;
+    }
     let row_us = row as usize;
     rctx.n_rows_seen = rctx.n_rows_seen.max(row_us + 1);
 
@@ -398,7 +499,10 @@ pub(crate) unsafe extern "C" fn on_value_cb(
         Some(i) => *i,
         None => return HANDLER_OK,
     };
-    let col = &mut rctx.cols[idx];
+    let col = match rctx.cols.get_mut(idx) {
+        Some(c) => c,
+        None => return HANDLER_OK,
+    };
 
     if rctx.detect_tagged && readstat_value_is_tagged_missing(value) != 0 {
         let tag_ch = readstat_value_tag(value) as u8 as char;
@@ -441,10 +545,11 @@ pub(crate) unsafe extern "C" fn on_note_cb(
     if note.is_null() || ctx.is_null() {
         return HANDLER_OK;
     }
-    let rctx = &mut *(ctx as *mut ParseCtx);
-    let s = CStr::from_ptr(note).to_string_lossy().into_owned();
-    rctx.notes.push(s);
-    HANDLER_OK
+    guard_cb(ctx, |rctx| {
+        let s = unsafe { CStr::from_ptr(note) }.to_string_lossy().into_owned();
+        rctx.notes.push(s);
+        HANDLER_OK
+    })
 }
 
 pub(crate) unsafe extern "C" fn on_value_label_cb(
@@ -456,8 +561,17 @@ pub(crate) unsafe extern "C" fn on_value_label_cb(
     if ctx.is_null() {
         return HANDLER_OK;
     }
-    let rctx = &mut *(ctx as *mut ParseCtx);
+    guard_cb(ctx, |rctx| unsafe {
+        on_value_label_impl(set_name, val, label, rctx)
+    })
+}
 
+unsafe fn on_value_label_impl(
+    set_name: *const c_char,
+    val: readstat_value_t,
+    label: *const c_char,
+    rctx: &mut ParseCtx,
+) -> c_int {
     let set = if set_name.is_null() {
         "__default__".to_string()
     } else {
@@ -597,4 +711,87 @@ pub(crate) fn finalize_to_ipc(mut ctx: ParseCtx) -> Result<(Vec<u8>, MetaOut)> {
     };
 
     Ok((buf, meta))
+}
+
+/// ---------- Writer guard ----------
+
+/// RAII guard that frees a readstat writer on drop, so early `?`/error
+/// returns in the write paths cannot leak the writer (and everything it
+/// owns: variables, label sets, row buffers).
+pub(crate) struct WriterGuard(pub(crate) *mut readstat_sys::readstat_writer_t);
+
+impl Drop for WriterGuard {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { readstat_sys::readstat_writer_free(self.0) };
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_capacity_uses_default_when_unknown() {
+        assert_eq!(safe_capacity(None), DEFAULT_CAPACITY);
+        assert_eq!(safe_capacity(Some(0)), DEFAULT_CAPACITY);
+    }
+
+    #[test]
+    fn safe_capacity_passes_small_counts_through() {
+        assert_eq!(safe_capacity(Some(1)), 1);
+        assert_eq!(safe_capacity(Some(10_000)), 10_000);
+        assert_eq!(safe_capacity(Some(MAX_PREALLOC_ROWS)), MAX_PREALLOC_ROWS);
+    }
+
+    #[test]
+    fn safe_capacity_clamps_untrusted_huge_counts() {
+        // A crafted header may declare billions of rows; pre-allocation must
+        // stay bounded (~1 MB of string data per column, not tens of GB).
+        assert_eq!(safe_capacity(Some(999_999_999)), MAX_PREALLOC_ROWS);
+        assert_eq!(safe_capacity(Some(usize::MAX)), MAX_PREALLOC_ROWS);
+        assert!(MAX_PREALLOC_ROWS * STRING_CAPACITY_MULTIPLIER <= 16 * 1024 * 1024);
+    }
+
+    #[test]
+    fn describe_panic_extracts_messages() {
+        let p: Box<dyn std::any::Any + Send> = Box::new("static message");
+        assert_eq!(describe_panic(p.as_ref()), "static message");
+        let p: Box<dyn std::any::Any + Send> = Box::new(String::from("owned message"));
+        assert_eq!(describe_panic(p.as_ref()), "owned message");
+        let p: Box<dyn std::any::Any + Send> = Box::new(42_u32);
+        assert_eq!(describe_panic(p.as_ref()), "unknown panic");
+    }
+
+    #[test]
+    fn guard_cb_converts_panic_into_abort_and_stored_error() {
+        let mut ctx = ParseCtx {
+            cols: Vec::new(),
+            name_to_idx: HashMap::new(),
+            cols_skip: None,
+            rows_skip: 0,
+            n_max: None,
+            n_rows_seen: 0,
+            n_rows_emitted: 0,
+            label_sets: HashMap::new(),
+            file_label: None,
+            last_err: None,
+            tagged: HashMap::new(),
+            notes: Vec::new(),
+            detect_tagged: false,
+            row_capacity: None,
+            panic_err: None,
+        };
+        let ctx_ptr = &mut ctx as *mut ParseCtx as *mut c_void;
+
+        let rc = unsafe { guard_cb(ctx_ptr, |_| panic!("boom in callback")) };
+        assert_eq!(rc, HANDLER_ABORT);
+        assert_eq!(ctx.panic_err.as_deref(), Some("boom in callback"));
+
+        ctx.panic_err = None;
+        let rc = unsafe { guard_cb(ctx_ptr, |_| HANDLER_OK) };
+        assert_eq!(rc, HANDLER_OK);
+        assert!(ctx.panic_err.is_none());
+    }
 }

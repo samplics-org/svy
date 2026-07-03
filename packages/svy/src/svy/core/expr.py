@@ -148,13 +148,17 @@ def _as_membership_rhs(values: Any) -> Any:
     return list(values)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Expr:
     """
     A wrapped Polars expression with a fluent, survey-friendly API.
 
     Supports arithmetic, comparisons, boolean logic, string operations,
     aggregations, and window functions.
+
+    Note: ``__eq__`` builds an element-wise comparison expression (it does
+    not return a bool), so Expr is deliberately unhashable and must not be
+    used as a dict key or set member.
     """
 
     _e: pl.Expr
@@ -164,6 +168,18 @@ class Expr:
     # -------------------------------------------------------------------------
     def __repr__(self) -> str:
         return f"Expr({self._e!r})"
+
+    def __bool__(self) -> bool:
+        raise TypeError(
+            "the truth value of an Expr is ambiguous. "
+            "You probably got here by using a Python standard library function "
+            "instead of the native expressions API. Here are some things you "
+            "might want to try:\n"
+            "- instead of `expr1 and expr2`, use `expr1 & expr2`\n"
+            "- instead of `expr1 or expr2`, use `expr1 | expr2`\n"
+            "- instead of `not expr`, use `~expr`\n"
+            "- instead of `lo <= expr <= hi`, use `expr.between(lo, hi)`"
+        )
 
     # -------------------------------------------------------------------------
     # Unary Operations

@@ -345,6 +345,15 @@ pub fn ranktest_k_sample(
     singleton_method: Option<&str>,
     levels: Vec<String>,
 ) -> PolarsResult<RankTestKResult> {
+    if n_groups < 2 {
+        return Err(PolarsError::ComputeError(
+            format!(
+                "Rank test requires at least 2 groups with positive weight, found {}",
+                n_groups
+            )
+            .into(),
+        ));
+    }
     let ndf = n_groups - 1;
 
     // 1 & 2. Compute rank scores

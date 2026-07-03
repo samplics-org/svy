@@ -313,8 +313,10 @@ def as_factor_expr(
     col_expr = pl.col(col) if isinstance(col, str) else col
 
     if not value_labels:
-        # No labels: cast directly to categorical
-        return col_expr.cast(pl.Categorical(ordering="physical" if ordered else "lexical"))
+        # No labels: stringify first (numeric -> Categorical casts are invalid)
+        return col_expr.cast(pl.Utf8).cast(
+            pl.Categorical(ordering="physical" if ordered else "lexical")
+        )
 
     # Build Utf8 mapping (works regardless of the column's real dtype)
     mapping_utf8 = pl.DataFrame(
@@ -341,7 +343,7 @@ def as_factor_expr(
         if levels == "both":
             disp = (
                 pl.when(label_expr.is_not_null() & key_expr.is_not_null())
-                .then(pl.concat_str(["[", key_expr, "] ", label_expr]))
+                .then(pl.concat_str([pl.lit("["), key_expr, pl.lit("] "), label_expr]))
                 .when(label_expr.is_not_null())
                 .then(label_expr)
                 .otherwise(key_expr)
@@ -451,6 +453,7 @@ def read_xpt(
     n_max: int | None = None,
     # mirror read_sas post-processing knobs for consistency
     coerce_temporals: bool = True,  # XPT usually needs this
+    infer_temporal_formats: bool = False,
     zap_empty_str: bool = False,
     factorize: bool = False,
     levels: str = "default",
@@ -487,30 +490,19 @@ def read_xpt(
     if coerce_temporals:
         from svy_io.temporals import coerce_sas_temporals  # type: ignore
 
-        # If SAS formats are missing, infer from variable names so coercion works.
-        for v in meta.get("vars", []):
-            if not v.get("fmt"):
-                name = (v.get("name") or "").lower()
-                if "datetime" in name or "timestamp" in name or name.endswith("_dt"):
-                    v["fmt"] = "DATETIME"
-                elif name.endswith("_time") or name == "time":
-                    v["fmt"] = "TIME"
-                elif "date" in name:
-                    v["fmt"] = "DATE"
+        # Optionally (opt-in) infer missing SAS formats from variable names.
+        if infer_temporal_formats:
+            for v in meta.get("vars", []):
+                if not v.get("fmt"):
+                    name = (v.get("name") or "").lower()
+                    if "datetime" in name or "timestamp" in name or name.endswith("_dt"):
+                        v["fmt"] = "DATETIME"
+                    elif name.endswith("_time") or name == "time":
+                        v["fmt"] = "TIME"
+                    elif "date" in name:
+                        v["fmt"] = "DATE"
 
         df = coerce_sas_temporals(df, meta)
-
-        # Ensure DATETIME columns are actually pl.Datetime (writer may have truncated to Date)
-        fixes: list[pl.Expr] = []
-        for v in meta.get("vars", []):
-            if (
-                (v.get("fmt") or "").upper().startswith("DATETIME")
-                and v.get("name") in df.columns
-                and df.schema.get(v["name"]) == pl.Date
-            ):
-                fixes.append(pl.col(v["name"]).cast(pl.Datetime))
-        if fixes:
-            df = df.with_columns(fixes)
 
     if zap_empty_str:
         from svy_io.zap import zap_empty  # type: ignore
@@ -537,6 +529,7 @@ def read_sas(
     rows_skip: int = 0,
     # New optional post-processing toggles:
     coerce_temporals: bool = False,
+    infer_temporal_formats: bool = False,
     zap_empty_str: bool = False,
     factorize: bool = False,
     levels: str = "default",  # "default" | "labels" | "values" | "both"
@@ -554,6 +547,7 @@ def read_sas(
             data_path,
             n_max=n_max,
             coerce_temporals=coerce_temporals,
+            infer_temporal_formats=infer_temporal_formats,
             zap_empty_str=zap_empty_str,
             factorize=factorize,
             levels=levels,
@@ -615,30 +609,19 @@ def read_sas(
     if coerce_temporals:
         from svy_io.temporals import coerce_sas_temporals  # type: ignore
 
-        # If formats are missing, infer from variable names so coercion works.
-        for v in meta.get("vars", []):
-            if not v.get("fmt"):
-                name = (v.get("name") or "").lower()
-                if "datetime" in name or "timestamp" in name or name.endswith("_dt"):
-                    v["fmt"] = "DATETIME"
-                elif name.endswith("_time") or name == "time":
-                    v["fmt"] = "TIME"
-                elif "date" in name:
-                    v["fmt"] = "DATE"
+        # Optionally (opt-in) infer missing SAS formats from variable names.
+        if infer_temporal_formats:
+            for v in meta.get("vars", []):
+                if not v.get("fmt"):
+                    name = (v.get("name") or "").lower()
+                    if "datetime" in name or "timestamp" in name or name.endswith("_dt"):
+                        v["fmt"] = "DATETIME"
+                    elif name.endswith("_time") or name == "time":
+                        v["fmt"] = "TIME"
+                    elif "date" in name:
+                        v["fmt"] = "DATE"
 
         df = coerce_sas_temporals(df, meta)
-
-        # Ensure DATETIME columns are actually pl.Datetime (in case upstream truncated)
-        fixes: list[pl.Expr] = []
-        for v in meta.get("vars", []):
-            if (
-                (v.get("fmt") or "").upper().startswith("DATETIME")
-                and v.get("name") in df.columns
-                and df.schema.get(v["name"]) == pl.Date
-            ):
-                fixes.append(pl.col(v["name"]).cast(pl.Datetime))
-        if fixes:
-            df = df.with_columns(fixes)
 
     if zap_empty_str:
         from svy_io.zap import zap_empty  # type: ignore

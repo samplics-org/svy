@@ -191,11 +191,14 @@ pub fn weighted_quantile(y_sorted: &[f64], cdf: &[f64], p: f64, method: SvyQuant
         return f64::NAN;
     }
 
-    // Find bracketing indices
+    // Find bracketing indices. At the boundaries the quantile is exactly the
+    // first (resp. last) value, so left == right — a two-point bracket there
+    // would return the wrong value for Higher/Middle and let Linear
+    // extrapolate outside the data range.
     let (left, right) = if p <= cdf[0] {
-        (0, 1.min(n - 1))
+        (0, 0)
     } else if p >= cdf[n - 1] {
-        ((n - 2).max(0), n - 1)
+        (n - 1, n - 1)
     } else {
         // Binary search for the right position
         let idx = cdf.partition_point(|&x| x < p);
@@ -608,6 +611,28 @@ fn index_categorical(col: &StringChunked) -> (Vec<u32>, u32) {
     (indices, next_idx)
 }
 
+/// Index PSUs nested within strata: the PSU id is the (stratum, psu) pair,
+/// so PSU labels reused across strata (e.g. psu "1" in every stratum, as in
+/// NHANES/DHS-style data) are treated as distinct PSUs. This matches R's
+/// survey package and glm.rs, which key PSUs on (stratum, psu).
+fn index_categorical_pair(a: &StringChunked, b: &StringChunked) -> (Vec<u32>, u32) {
+    let mut map: HashMap<(&str, &str), u32> = HashMap::new();
+    let mut next_idx = 0u32;
+    let indices: Vec<u32> = a
+        .iter()
+        .zip(b.iter())
+        .map(|(oa, ob)| match (oa, ob) {
+            (Some(sa), Some(sb)) => *map.entry((sa, sb)).or_insert_with(|| {
+                let i = next_idx;
+                next_idx += 1;
+                i
+            }),
+            _ => u32::MAX,
+        })
+        .collect();
+    (indices, next_idx)
+}
+
 fn reindex_within_subset(raw: &[u32]) -> (Vec<u32>, u32) {
     let mut map: HashMap<u32, u32> = HashMap::new();
     let mut next_idx = 0u32;
@@ -944,7 +969,17 @@ pub fn taylor_variance(
             None => (None, 0),
         };
         let var = variance_unstratified_optimized(&scores_arr, psu_indices.as_deref(), n_psus);
-        (fpc_val * var, psu_indices, None, 0u32, None, None)
+        // Pass the (single) stage-1 FPC through so compute_stage2_variance
+        // can derive the stage-1 sampling fraction; returning None here would
+        // silently drop the stage-2 contribution for unstratified designs.
+        (
+            fpc_val * var,
+            psu_indices,
+            None,
+            0u32,
+            Some(vec![fpc_val]),
+            None,
+        )
     } else {
         let strata_col = strata.unwrap();
         let (strata_indices, n_strata) = index_categorical(strata_col);
@@ -965,7 +1000,9 @@ pub fn taylor_variance(
 
         match psu {
             Some(psu_col) => {
-                let (psu_indices, _) = index_categorical(psu_col);
+                // Nest PSU within stratum so PSU labels reused across strata
+                // are distinct PSUs (matches R survey / glm.rs).
+                let (psu_indices, _) = index_categorical_pair(strata_col, psu_col);
                 let (psu_per_stratum, n_psus_per_stratum) =
                     build_stratum_psu_map(&strata_indices, n_strata, &psu_indices);
 
@@ -1349,6 +1386,9 @@ pub fn srs_variance_ratio(
         return Ok(f64::NAN);
     }
     let sum_w: f64 = weights.into_iter().filter_map(|v| v).sum();
+    if sum_w <= 0.0 {
+        return Ok(f64::NAN);
+    }
     let wn: Vec<f64> = weights
         .into_iter()
         .map(|v| v.unwrap_or(0.0) / sum_w)
@@ -1396,6 +1436,9 @@ pub fn srs_variance_ratio_domain(
         return Ok(f64::NAN);
     }
     let sum_w: f64 = wv.iter().sum();
+    if sum_w <= 0.0 {
+        return Ok(f64::NAN);
+    }
     let wn: Vec<f64> = wv.iter().map(|w| w / sum_w).collect();
     let ybar: f64 = yv.iter().zip(wn.iter()).map(|(yi, wi)| wi * yi).sum();
     let xbar: f64 = xv.iter().zip(wn.iter()).map(|(xi, wi)| wi * xi).sum();
@@ -1519,8 +1562,10 @@ pub fn taylor_variance_matrix(
         let strata_col = strata.unwrap();
         let (strata_indices, n_strata) = index_categorical(strata_col);
 
+        // Nest PSU within stratum (same convention as taylor_variance/glm.rs)
+        // so PSU labels reused across strata are distinct PSUs.
         let (psu_indices, _n_psus_global) = match psu {
-            Some(psu_col) => index_categorical(psu_col),
+            Some(psu_col) => index_categorical_pair(strata_col, psu_col),
             None => ((0..n as u32).collect(), n as u32),
         };
 
@@ -1694,6 +1739,127 @@ mod tests {
         // p=0.5 falls between 0.25 and 0.75
         // Should interpolate between y[0]=1 and y[1]=2
         assert!(median_linear >= 1.0 && median_linear <= 2.0);
+    }
+
+    #[test]
+    fn test_weighted_quantile_lower_boundary() {
+        // y=1 carries 80% of the weight: cdf = [0.8, 0.9, 1.0].
+        // The median (p=0.5 <= cdf[0]) must be 1.0 for every method, and
+        // Linear must never extrapolate outside [1, 3].
+        let y = vec![1.0, 2.0, 3.0];
+        let cdf = vec![0.8, 0.9, 1.0];
+
+        assert_eq!(weighted_quantile(&y, &cdf, 0.5, SvyQuantileMethod::Higher), 1.0);
+        assert_eq!(weighted_quantile(&y, &cdf, 0.5, SvyQuantileMethod::Lower), 1.0);
+        assert_eq!(weighted_quantile(&y, &cdf, 0.5, SvyQuantileMethod::Middle), 1.0);
+        assert_eq!(weighted_quantile(&y, &cdf, 0.5, SvyQuantileMethod::Nearest), 1.0);
+        let linear = weighted_quantile(&y, &cdf, 0.5, SvyQuantileMethod::Linear);
+        assert_eq!(linear, 1.0);
+        assert!(linear >= 1.0 && linear <= 3.0, "Linear must stay in data range");
+
+        // Upper boundary: p >= cdf[n-1] must return the maximum.
+        for m in [
+            SvyQuantileMethod::Higher,
+            SvyQuantileMethod::Lower,
+            SvyQuantileMethod::Middle,
+            SvyQuantileMethod::Nearest,
+            SvyQuantileMethod::Linear,
+        ] {
+            assert_eq!(weighted_quantile(&y, &cdf, 1.0, m), 3.0);
+        }
+    }
+
+    #[test]
+    fn test_psu_labels_reused_across_strata() {
+        // Two strata with 2 PSUs each. PSU labels "1","2" are reused in both
+        // strata (NHANES-style). The variance must match the same design with
+        // globally unique PSU labels; hand-computed value is 1.25 (SE 1.118).
+        let y = Float64Chunked::from_slice(
+            "y".into(),
+            &[1.0, 2.0, 3.0, 4.0, 10.0, 12.0, 14.0, 16.0],
+        );
+        let w = Float64Chunked::from_slice("w".into(), &[1.0; 8]);
+        let strata = StringChunked::from_slice(
+            "s".into(),
+            &["A", "A", "A", "A", "B", "B", "B", "B"],
+        );
+        let psu_reused = StringChunked::from_slice(
+            "p".into(),
+            &["1", "1", "2", "2", "1", "1", "2", "2"],
+        );
+        let psu_unique = StringChunked::from_slice(
+            "p".into(),
+            &["A1", "A1", "A2", "A2", "B1", "B1", "B2", "B2"],
+        );
+
+        let scores = scores_mean(&y, &w).unwrap();
+        let var_reused =
+            taylor_variance(&scores, Some(&strata), Some(&psu_reused), None, None, None, None)
+                .unwrap();
+        let var_unique =
+            taylor_variance(&scores, Some(&strata), Some(&psu_unique), None, None, None, None)
+                .unwrap();
+
+        assert!((var_reused - 1.25).abs() < 1e-12, "got {}", var_reused);
+        assert!((var_unique - 1.25).abs() < 1e-12, "got {}", var_unique);
+        assert!((var_reused - var_unique).abs() < 1e-12);
+
+        // The full covariance matrix path must agree with the scalar path.
+        let cov_reused = taylor_variance_matrix(
+            &[scores.clone()],
+            Some(&strata),
+            Some(&psu_reused),
+            None,
+            None,
+        )
+        .unwrap();
+        assert!((cov_reused[0][0] - 1.25).abs() < 1e-12, "got {}", cov_reused[0][0]);
+    }
+
+    #[test]
+    fn test_unstratified_two_stage_fpc_stage2() {
+        // Unstratified two-stage design with FPC at both stages must include
+        // the stage-2 contribution and match the identical design expressed
+        // with a single constant stratum. Hand-computed total variance = 2.8
+        // (stage 1 = 2.6667, stage 2 = 0.1333).
+        let y = Float64Chunked::from_slice(
+            "y".into(),
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+        );
+        let w = Float64Chunked::from_slice("w".into(), &[1.0; 12]);
+        let psu = StringChunked::from_slice(
+            "p".into(),
+            &["p1", "p1", "p1", "p1", "p2", "p2", "p2", "p2", "p3", "p3", "p3", "p3"],
+        );
+        let ssu = StringChunked::from_slice(
+            "u".into(),
+            &["s1", "s1", "s2", "s2", "s1", "s1", "s2", "s2", "s1", "s1", "s2", "s2"],
+        );
+        let fpc = Float64Chunked::from_slice("f".into(), &[0.5; 12]);
+        let fpc_ssu = Float64Chunked::from_slice("f2".into(), &[0.8; 12]);
+        let strata_const = StringChunked::from_slice("s".into(), &["S"; 12]);
+
+        let scores = scores_mean(&y, &w).unwrap();
+        let var_nostrata = taylor_variance(
+            &scores, None, Some(&psu), Some(&ssu), Some(&fpc), Some(&fpc_ssu), None,
+        )
+        .unwrap();
+        let var_conststrata = taylor_variance(
+            &scores, Some(&strata_const), Some(&psu), Some(&ssu), Some(&fpc), Some(&fpc_ssu), None,
+        )
+        .unwrap();
+
+        assert!((var_nostrata - 2.8).abs() < 1e-12, "got {}", var_nostrata);
+        assert!((var_nostrata - var_conststrata).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_srs_variance_ratio_zero_weights() {
+        let y = Float64Chunked::from_slice("y".into(), &[1.0, 2.0, 3.0]);
+        let x = Float64Chunked::from_slice("x".into(), &[1.0, 1.0, 1.0]);
+        let w = Float64Chunked::from_slice("w".into(), &[0.0, 0.0, 0.0]);
+        let v = srs_variance_ratio(&y, &x, &w).unwrap();
+        assert!(v.is_nan());
     }
 
     #[test]

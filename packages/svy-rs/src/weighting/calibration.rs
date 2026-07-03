@@ -277,6 +277,20 @@ pub fn calibrate_by_domain(
             got: domain.len(),
         });
     }
+    if x_matrix.nrows() != n_obs {
+        return Err(WeightingError::DimensionMismatch {
+            expected: n_obs,
+            got: x_matrix.nrows(),
+        });
+    }
+    if let Some(s_arr) = &scale {
+        if s_arr.len() != n_obs {
+            return Err(WeightingError::DimensionMismatch {
+                expected: n_obs,
+                got: s_arr.len(),
+            });
+        }
+    }
 
     // Handle scale
     let s = match scale {
@@ -400,35 +414,17 @@ fn find_domain_boundaries(domain_sorted: &Array1<i64>) -> HashMap<i64, (usize, u
 }
 
 /// Parallel calibration
+///
+/// Identical computation to `calibrate_linear` with `additive=false`;
+/// delegates so all input validation (dimension checks, scale sanitization)
+/// lives in one place.
 pub fn calibrate_parallel(
     wgt: ArrayView2<f64>,
     x_matrix: ArrayView2<f64>,
     totals: ArrayView1<f64>,
     scale: Option<ArrayView1<f64>>,
 ) -> Result<Array2<f64>> {
-    let (n_obs, n_reps) = wgt.dim();
-
-    let s = match scale {
-        Some(s_arr) => s_arr.to_owned(),
-        None => Array1::ones(n_obs),
-    };
-
-    let results: std::result::Result<Vec<_>, WeightingError> = (0..n_reps)
-        .into_par_iter()
-        .map(|r| {
-            let wgt_col = wgt.column(r);
-            calibrate_linear_single(wgt_col, x_matrix, totals, s.view(), false)
-        })
-        .collect();
-
-    let cal_cols = results?;
-
-    let mut result = Array2::zeros((n_obs, n_reps));
-    for (col_idx, col) in cal_cols.iter().enumerate() {
-        result.column_mut(col_idx).assign(col);
-    }
-
-    Ok(result)
+    calibrate_linear(wgt, x_matrix, totals, scale, false)
 }
 
 #[cfg(test)]
@@ -450,5 +446,44 @@ mod tests {
             x_cal += x[[i, 0]] * result[[i, 0]];
         }
         assert!((x_cal - 15.0).abs() < 1e-6);
+    }
+
+    // Regression: these used to panic (index out of bounds) instead of
+    // returning clean errors.
+    #[test]
+    fn test_calibrate_parallel_bad_dims_are_errors() {
+        let wgt = array![[1.0], [1.0], [1.0]];
+        let x = array![[1.0], [2.0], [3.0]];
+        let totals = array![10.0];
+
+        // scale shorter than n_obs
+        let short_scale = array![1.0];
+        let res = calibrate_parallel(wgt.view(), x.view(), totals.view(), Some(short_scale.view()));
+        assert!(res.is_err());
+
+        // totals longer than n_aux
+        let long_totals = array![10.0, 20.0];
+        let res = calibrate_parallel(wgt.view(), x.view(), long_totals.view(), None);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_calibrate_by_domain_bad_dims_are_errors() {
+        let wgt = array![[1.0], [1.0], [1.0]];
+        let x_short = array![[1.0], [2.0]]; // fewer rows than wgt
+        let domain = array![0, 0, 1];
+        let mut controls = HashMap::new();
+        controls.insert(0i64, Array1::from(vec![10.0]));
+        controls.insert(1i64, Array1::from(vec![5.0]));
+
+        let res = calibrate_by_domain(wgt.view(), x_short.view(), domain.view(), &controls, None, false);
+        assert!(res.is_err());
+
+        let x = array![[1.0], [2.0], [3.0]];
+        let short_scale = array![1.0];
+        let res = calibrate_by_domain(
+            wgt.view(), x.view(), domain.view(), &controls, Some(short_scale.view()), false,
+        );
+        assert!(res.is_err());
     }
 }

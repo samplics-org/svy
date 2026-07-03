@@ -8,6 +8,7 @@ import polars as pl
 
 # Epochs
 _SAS_EPOCH_DATE = _dt.date(1960, 1, 1)
+_SAS_EPOCH_DT = _dt.datetime(1960, 1, 1)
 _STATA_TD_EPOCH = _dt.date(1960, 1, 1)
 _STATA_TC_EPOCH = _dt.datetime(1960, 1, 1)
 _SPSS_EPOCH_DATE = _dt.date(1582, 10, 14)
@@ -55,15 +56,21 @@ def coerce_sas_temporals(df: pl.DataFrame, meta: dict) -> pl.DataFrame:
         fmt = (v.get("fmt") or v.get("format") or "").lower()
         col_ref = pl.col(name)
 
-        if fmt.startswith(("date", "mmddyy", "ddmmyy", "yymmdd", "eur")):
+        # DATETIME must be checked before DATE ("datetime".startswith("date")).
+        if fmt.startswith(("datetime", "e8601dt")):
+            # Seconds since 1960-01-01 00:00:00; use a Datetime base so the
+            # time-of-day is preserved (a Date base truncates to whole days).
+            conversions.append(
+                (
+                    pl.lit(_SAS_EPOCH_DT)
+                    + pl.duration(
+                        milliseconds=(col_ref.cast(pl.Float64) * 1000).round(0).cast(pl.Int64)
+                    )
+                ).alias(name)
+            )
+        elif fmt.startswith(("date", "mmddyy", "ddmmyy", "yymmdd", "weekdate", "eur")):
             conversions.append(
                 (pl.lit(_SAS_EPOCH_DATE) + pl.duration(days=col_ref.cast(pl.Int64))).alias(name)
-            )
-        elif fmt.startswith(("datetime", "e8601dt")):
-            conversions.append(
-                (pl.lit(_SAS_EPOCH_DATE) + pl.duration(seconds=col_ref.cast(pl.Int64)))
-                .cast(pl.Datetime)
-                .alias(name)
             )
         elif fmt.startswith("time"):
             conversions.append(pl.duration(seconds=col_ref.cast(pl.Int64)).alias(name))
@@ -193,7 +200,12 @@ def _coerce_string_iso_time(series: pl.Series) -> pl.Series | None:
         return None
 
 
-def coerce_spss_temporals(df: pl.DataFrame, meta: dict) -> pl.DataFrame:
+def coerce_spss_temporals(
+    df: pl.DataFrame,
+    meta: dict,
+    *,
+    infer_formats: bool = False,
+) -> pl.DataFrame:
     """
     OPTIMIZED: Batch process conversions, early exits, cache metadata lookup.
 
@@ -202,6 +214,11 @@ def coerce_spss_temporals(df: pl.DataFrame, meta: dict) -> pl.DataFrame:
     - DATETIME*/E8601DT -> pl.Datetime (SPSS epoch)
     - POSIX datetime -> pl.Datetime (Unix epoch)
     - TIME*/E8601TM  -> pl.Duration
+
+    When `infer_formats=True`, columns *without* a format in the metadata are
+    additionally guessed from their name (e.g. "*date*") or value magnitude.
+    This is opt-in because guessing can silently convert ordinary numeric
+    columns (IDs, counts) into temporals.
     """
     # Build metadata lookup once (O(1) access)
     var_meta = {v.get("name"): v for v in meta.get("vars", []) if v.get("name")}
@@ -213,18 +230,18 @@ def coerce_spss_temporals(df: pl.DataFrame, meta: dict) -> pl.DataFrame:
         s = df[col_name]
         v = var_meta.get(col_name)
 
-        # Get format
-        fmt = v.get("fmt") or v.get("format") if v else ""
+        # Get format (may be missing/None in metadata)
+        fmt = (v.get("fmt") or v.get("format") or "") if v else ""
         fmt_u = fmt.upper()
 
-        # Infer from name if no format
-        if not fmt_u:
+        # Infer from name if no format (opt-in)
+        if not fmt_u and infer_formats:
             name_hint = _infer_spss_fmt_from_name(col_name)
             if name_hint:
                 fmt_u = name_hint
 
-        # Additional heuristics for numeric columns
-        if not fmt_u and _is_numeric(s.dtype):
+        # Additional heuristics for numeric columns (opt-in)
+        if not fmt_u and infer_formats and _is_numeric(s.dtype):
             if _looks_like_unix_milliseconds(s):
                 fmt_u = "POSIX_MS"
             elif _looks_like_unix_seconds(s):
@@ -284,8 +301,8 @@ def coerce_spss_temporals(df: pl.DataFrame, meta: dict) -> pl.DataFrame:
                 parsed = _coerce_string_iso_datetime(s)
             elif fmt_u.startswith(("TIME", "MTIME", "E8601TM")):
                 parsed = _coerce_string_iso_time(s)
-            elif not fmt_u:
-                # Generic fallback
+            elif not fmt_u and infer_formats:
+                # Generic fallback (opt-in)
                 parsed = _coerce_string_iso_datetime(s)
                 if parsed is None:
                     parsed = _coerce_string_iso_time(s)

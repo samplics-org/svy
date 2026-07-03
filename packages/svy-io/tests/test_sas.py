@@ -101,50 +101,29 @@ def test_value_labels_read_in_as_same_type_as_vector():
 
 
 def test_date_times_are_converted_into_corresponding_r_types():
-    """Date/time values should convert correctly from SAS epoch"""
-    df, _ = read_sas(tpath("datetime.sas7bdat"))
+    """Date/time values should convert exactly from the SAS epoch (1960-01-01)"""
+    df, _ = read_sas(tpath("datetime.sas7bdat"), coerce_temporals=True)
 
-    # SAS epoch is 1960-01-01 00:00:00 UTC
-    SAS_EPOCH = datetime(1960, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    # VAR1: SAS datetime (seconds since 1960-01-01) -> Datetime, time-of-day preserved
+    # Expected: 2015-02-02 14:42:12
+    assert isinstance(df.schema["VAR1"], pl.Datetime)
+    assert df["VAR1"][0] == datetime(2015, 2, 2, 14, 42, 12)
 
-    # VAR1: SAS datetime (seconds since 1960-01-01)
-    # Expected: 2015-02-02 14:42:12 UTC
-    var1 = df["VAR1"][0]
-    if isinstance(df.schema["VAR1"], pl.Datetime):
-        var1_str = df["VAR1"].dt.strftime("%Y-%m-%d %H:%M:%S").to_list()[0]
-        assert var1_str == "2015-02-02 14:42:12"
-    else:
-        # Raw numeric -> convert manually
-        secs = float(var1)
-        ts = SAS_EPOCH + timedelta(seconds=secs)
-        assert ts.strftime("%Y-%m-%d %H:%M:%S") == "2015-02-02 14:42:12"
-
-    # VAR2, VAR3, VAR4: SAS date (days since 1960-01-01)
+    # VAR2, VAR3, VAR4: SAS date (days since 1960-01-01) -> Date
     # Expected: 2015-02-02
     for col in ("VAR2", "VAR3", "VAR4"):
-        val = df[col][0]
-        if df.schema[col] == pl.Date:
-            date_str = df[col].dt.strftime("%Y-%m-%d").to_list()[0]
-            assert date_str == "2015-02-02"
-        else:
-            # Raw numeric days -> convert manually
-            days = float(val)
-            d = (SAS_EPOCH + timedelta(days=days)).date()
-            assert d.strftime("%Y-%m-%d") == "2015-02-02"
+        assert df.schema[col] == pl.Date, col
+        assert df[col][0] == date(2015, 2, 2), col
 
-    # VAR5: SAS time (seconds since midnight)
+    # VAR5: SAS time (seconds since midnight) -> Duration
     # Expected: 14:42:12 (52932 seconds)
-    var5 = df["VAR5"][0]
-    if isinstance(df.schema["VAR5"], pl.Time):
-        time_str = pl.Series([var5]).dt.strftime("%H:%M:%S").to_list()[0]
-        assert time_str == "14:42:12"
-    elif isinstance(df.schema["VAR5"], pl.Duration):
-        secs = int(pl.Series([var5]).dt.total_seconds().to_list()[0])
-        assert secs == 52932
-    else:
-        # Raw numeric seconds
-        secs = int(float(var5))
-        assert secs == 52932
+    assert df.schema["VAR5"] == pl.Duration
+    assert df["VAR5"][0] == timedelta(seconds=52932)
+
+    # Without coercion, raw numerics are returned untouched
+    raw, _ = read_sas(tpath("datetime.sas7bdat"))
+    assert raw.schema["VAR1"] == pl.Float64
+    assert float(raw["VAR1"][0]) == 1738507332.0
 
 
 @pytest.mark.xfail(reason="SAS tagged missings (.a/.h/.z) not surfaced by reader yet")
@@ -333,7 +312,9 @@ def test_xpt_can_read_date_times(tmp_path):
         }
     )
     write_xpt(df, path)
-    df2, _meta = read_xpt(path)  # <-- unpack
+    # XPT roundtrip loses SAS formats, so temporal detection relies on
+    # (opt-in) name-based inference here.
+    df2, _meta = read_xpt(path, infer_temporal_formats=True)  # <-- unpack
 
     assert df2.schema["date"] == pl.Date
     # datetime dtype can include a time unit; check via isinstance

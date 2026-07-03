@@ -6,17 +6,20 @@ on:
       - "packages/svy/**"
       - "pyproject.toml"
       - "uv.lock"
-      - ".github/workflows/ci.yml"
+      - ".github/workflows/svy-tests.yml"
   pull_request:
     branches: [main]
     paths:
       - "packages/svy/**"
       - "pyproject.toml"
       - "uv.lock"
-      - ".github/workflows/ci.yml"
+      - ".github/workflows/svy-tests.yml"
 concurrency:
   group: ci-${{ github.ref }}-${{ github.workflow }}
   cancel-in-progress: true
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test svy (py${{ matrix.python-version }})
@@ -26,8 +29,8 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
         with:
           version: "latest"
           python-version: ${{ matrix.python-version }}

@@ -141,6 +141,8 @@ chats
 
 # uv, ruff and others
 *.lock
+!/uv.lock
+!Cargo.lock
 *.ruff*
 
 # Temporary exclusions

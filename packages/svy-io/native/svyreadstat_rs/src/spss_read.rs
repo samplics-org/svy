@@ -104,6 +104,7 @@ fn parse_sav_impl(
         notes: Vec::with_capacity(8),
         detect_tagged: false, // SPSS: no tagged-missing semantics
         row_capacity: None,   // Set via on_metadata_cb
+        panic_err: None,
     };
 
     unsafe {
@@ -124,6 +125,13 @@ fn parse_sav_impl(
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid path: {e}")))?;
         let rc = readstat_parse_sav(p, cpath.as_ptr(), &mut ctx as *mut _ as *mut c_void);
         readstat_parser_free(p);
+
+        // A panic caught inside a handler callback is an internal error.
+        if let Some(msg) = ctx.panic_err.take() {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "internal error in readstat callback: {msg}"
+            )));
+        }
 
         let early_ok = ctx
             .n_max
@@ -173,6 +181,7 @@ fn parse_por_impl(
         notes: Vec::with_capacity(8),
         detect_tagged: false,
         row_capacity: None, // Set via on_metadata_cb
+        panic_err: None,
     };
 
     unsafe {
@@ -193,6 +202,13 @@ fn parse_por_impl(
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid path: {e}")))?;
         let rc = readstat_parse_por(p, cpath.as_ptr(), &mut ctx as *mut _ as *mut c_void);
         readstat_parser_free(p);
+
+        // A panic caught inside a handler callback is an internal error.
+        if let Some(msg) = ctx.panic_err.take() {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "internal error in readstat callback: {msg}"
+            )));
+        }
 
         let early_ok = ctx
             .n_max

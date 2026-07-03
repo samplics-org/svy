@@ -173,8 +173,11 @@ fn cols_to_mat(cols: &[&Float64Chunked], nrows: usize) -> Mat<f64> {
     let ncols = cols.len();
     let mut mat = Mat::<f64>::zeros(nrows, ncols);
     for (j, col) in cols.iter().enumerate() {
-        for (i, val) in col.into_no_null_iter().enumerate() {
-            mat[(i, j)] = val;
+        // Null-aware iteration: `into_no_null_iter` would silently compact
+        // rows past a null, misaligning y/X/w. Nulls are rejected upstream in
+        // fit_glm_domain; any that slip through become 0.0 at the right row.
+        for (i, val) in col.iter().enumerate() {
+            mat[(i, j)] = val.unwrap_or(0.0);
         }
     }
     mat
@@ -497,9 +500,39 @@ fn fit_glm_domain(
     let n = y.len();
     let k = x_cols.len();
 
-    let y_ca = y.f64()?;
-    let w_ca = weights.f64()?;
-    let x_ca_list: Vec<&Float64Chunked> = x_cols.iter().map(|s| s.f64().unwrap()).collect();
+    // Cast y/weights/x to Float64 (error, not panic, on incompatible dtypes),
+    // then reject nulls: a null anywhere would otherwise silently misalign
+    // the y/X/w rows via null-skipping iteration.
+    let y_cast = y.cast(&DataType::Float64)?;
+    let y_ca = y_cast.f64()?;
+    let w_cast = weights.cast(&DataType::Float64)?;
+    let w_ca = w_cast.f64()?;
+    let x_cast: Vec<Series> = x_cols
+        .iter()
+        .map(|s| s.cast(&DataType::Float64))
+        .collect::<PolarsResult<Vec<_>>>()?;
+    let mut x_ca_list: Vec<&Float64Chunked> = Vec::with_capacity(x_cast.len());
+    for s in &x_cast {
+        x_ca_list.push(s.f64()?);
+    }
+
+    if y_ca.null_count() > 0 {
+        return Err(PolarsError::ComputeError(
+            format!("GLM response column '{}' contains null values", y.name()).into(),
+        ));
+    }
+    if w_ca.null_count() > 0 {
+        return Err(PolarsError::ComputeError(
+            format!("GLM weight column '{}' contains null values", weights.name()).into(),
+        ));
+    }
+    for s in &x_cast {
+        if s.null_count() > 0 {
+            return Err(PolarsError::ComputeError(
+                format!("GLM predictor column '{}' contains null values", s.name()).into(),
+            ));
+        }
+    }
 
     let Y = cols_to_mat(&[y_ca], n);
     let X = cols_to_mat(&x_ca_list, n);
@@ -507,7 +540,8 @@ fn fit_glm_domain(
     // sampling weights
     let mut w_samp = vec![0.0; n];
     let mut w_sum = 0.0;
-    for (i, v) in w_ca.into_no_null_iter().enumerate() {
+    for (i, v) in w_ca.iter().enumerate() {
+        let v = v.unwrap_or(0.0);
         w_samp[i] = v;
         w_sum += v;
     }

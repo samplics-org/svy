@@ -13,8 +13,6 @@ module (columns, values, rows, mutate, labels).
 
 from __future__ import annotations
 
-import copy
-
 from typing import TYPE_CHECKING, cast
 
 import polars as pl
@@ -64,13 +62,10 @@ def _fork(sample: "Sample", new_data: pl.DataFrame) -> "Sample":
         A new Sample with its own ``_data``, ``_metadata``,
         ``_internal_design``, and ``_warnings``.
     """
-    new = sample._replace_data(new_data)
-    # _replace_data does copy.copy (shallow).  Design is frozen/immutable
-    # so sharing it is fine, but mutable stores must be isolated.
-    new._metadata = copy.deepcopy(sample._metadata)
-    new._internal_design = copy.deepcopy(sample._internal_design)
-    new._warnings = copy.deepcopy(sample._warnings)
-    return new
+    # _replace_data shares the frozen/immutable Design but deep-copies the
+    # mutable stores (_metadata, _internal_design, _warnings) so they are
+    # already isolated on the returned sample.
+    return sample._replace_data(new_data)
 
 
 def _resolve_target(sample: "Sample", new_data: pl.DataFrame, *, inplace: bool) -> "Sample":
@@ -177,8 +172,8 @@ def _required_columns(sample: "Sample") -> set[str]:
         add(design.hit)
         add(design.mos)
         add(design.pop_size)
-        if design.rep_wgts and design.rep_wgts.wgts:
-            req.update(design.rep_wgts.wgts)
+        if design.rep_wgts is not None:
+            req.update(design.rep_wgts.columns_from_data(sample._data.columns))
 
     for k in ("stratum", "psu", "ssu"):
         cname = internal_design.get(k)
@@ -298,14 +293,14 @@ def _auto_clean_design(target: "Sample") -> None:
         mos=keep_name(current_design.mos),
     )
 
-    if current_design.rep_wgts:
-        new_wgts = tuple(c for c in current_design.rep_wgts.wgts if c in cols)
-        new_rep = (
-            current_design.rep_wgts.clone(wgts=new_wgts, n_reps=len(new_wgts))
-            if new_wgts
-            else None
-        )
-        updated_design = updated_design.update(rep_wgts=new_rep)
+    if current_design.rep_wgts is not None:
+        # RepWeights identifies its columns by prefix + n_reps.  If any of
+        # the expected replicate columns was removed, the replicate design
+        # is no longer valid and must be dropped as a whole (a partial set
+        # of replicates cannot be represented and would give wrong variances).
+        expected = current_design.rep_wgts.columns_from_data(sorted(cols))
+        if not all(c in cols for c in expected):
+            updated_design = updated_design.update(rep_wgts=None)
 
     internal_design = dict(getattr(target, "_internal_design", {}) or {})
     for k in ("stratum", "psu", "ssu"):

@@ -1,5 +1,7 @@
 # tests/test_spss.py
 
+import copy
+import io
 import os
 import tempfile
 
@@ -758,3 +760,40 @@ def test_data_dir():
     if not test_dir.exists():
         pytest.skip("Test data directory not found")
     return test_dir
+
+
+# File-like input & writer argument safety ---------------------------------
+
+
+def test_read_sav_accepts_file_like_object(test_data_dir):
+    """A BytesIO buffer must read identically to a filesystem path."""
+    path = test_data_dir / "spss/labelled-num-na.sav"
+    df_path, _ = read_sav(path)
+
+    buf = io.BytesIO(path.read_bytes())
+    df_bio, _ = read_sav(buf)
+
+    assert df_bio.equals(df_path)
+
+
+def test_write_sav_does_not_mutate_caller_value_labels():
+    """write_sav must not modify the caller's value_labels in place."""
+    df = pl.DataFrame(
+        {
+            "grp": pl.Series(["a", "b", "a"], dtype=pl.Categorical),
+            "x": [1.0, 2.0, 3.0],
+        }
+    )
+    # Entry for the categorical column exercises the merge/update path.
+    value_labels = [{"col": "grp", "labels": {"9": "missing"}}]
+    before = copy.deepcopy(value_labels)
+
+    with tempfile.NamedTemporaryFile(suffix=".sav", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        write_sav(df, tmp_path, value_labels=value_labels)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    assert value_labels == before

@@ -1,6 +1,7 @@
 # python/svy_io/helpers.py
 import contextlib
 import os
+import tempfile
 
 from typing import Any
 

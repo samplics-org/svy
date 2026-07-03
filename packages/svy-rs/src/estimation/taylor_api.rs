@@ -85,7 +85,7 @@ fn compute_mean_ungrouped(
     let estimate = point_estimate_mean(y, weights)?;
     let scores   = scores_mean(y, weights)?;
     let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
-    let se       = variance.sqrt();
+    let se       = variance.max(0.0).sqrt();
     let df_val   = degrees_of_freedom(weights, strata, psu)?;
     let n        = y.len() as u32;
     let srs_var  = srs_variance_mean(y, weights)?;
@@ -128,7 +128,7 @@ fn compute_mean_grouped(
             let estimate    = point_estimate_mean_domain(y, weights, &domain_mask)?;
             let scores      = scores_mean_domain(y, weights, &domain_mask)?;
             let variance    = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
-            let se          = variance.sqrt();
+            let se          = variance.max(0.0).sqrt();
             let srs_var     = srs_variance_mean_domain(y, weights, &domain_mask)?;
             let deff        = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
 
@@ -203,7 +203,7 @@ fn compute_total_ungrouped(
     let estimate = point_estimate_total(y, weights)?;
     let scores   = scores_total(y, weights)?;
     let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
-    let se       = variance.sqrt();
+    let se       = variance.max(0.0).sqrt();
     let df_val   = degrees_of_freedom(weights, strata, psu)?;
     let n        = y.len() as u32;
     let srs_var  = srs_variance_total(y, weights)?;
@@ -246,7 +246,7 @@ fn compute_total_grouped(
             let estimate    = point_estimate_total_domain(y, weights, &domain_mask)?;
             let scores      = scores_total_domain(y, weights, &domain_mask)?;
             let variance    = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
-            let se          = variance.sqrt();
+            let se          = variance.max(0.0).sqrt();
             let srs_var     = srs_variance_total_domain(y, weights, &domain_mask)?;
             let deff        = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
 
@@ -323,7 +323,7 @@ fn compute_ratio_ungrouped(
     let estimate = point_estimate_ratio(y, x, weights)?;
     let scores   = scores_ratio(y, x, weights)?;
     let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
-    let se       = variance.sqrt();
+    let se       = variance.max(0.0).sqrt();
     let df_val   = degrees_of_freedom(weights, strata, psu)?;
     let n        = y.len() as u32;
     let srs_var  = srs_variance_ratio(y, x, weights)?;
@@ -367,7 +367,7 @@ fn compute_ratio_grouped(
             let estimate    = point_estimate_ratio_domain(y, x, weights, &domain_mask)?;
             let scores      = scores_ratio_domain(y, x, weights, &domain_mask)?;
             let variance    = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
-            let se          = variance.sqrt();
+            let se          = variance.max(0.0).sqrt();
             let srs_var     = srs_variance_ratio_domain(y, x, weights, &domain_mask)?;
             let deff        = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
 
@@ -467,7 +467,7 @@ fn compute_prop_ungrouped(
         let estimate = point_estimate_mean(&indicator_ca, weights)?;
         let scores   = scores_mean(&indicator_ca, weights)?;
         let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
-        let se       = variance.sqrt();
+        let se       = variance.max(0.0).sqrt();
         let srs_var  = srs_variance_mean(&indicator_ca, weights)?;
         let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
 
@@ -534,7 +534,7 @@ fn compute_prop_grouped(
                 let estimate = point_estimate_mean_domain(&indicator_ca, weights, &domain_mask)?;
                 let scores   = scores_mean_domain(&indicator_ca, weights, &domain_mask)?;
                 let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
-                let se       = variance.sqrt();
+                let se       = variance.max(0.0).sqrt();
                 let srs_var  = srs_variance_mean_domain(&indicator_ca, weights, &domain_mask)?;
                 let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
 

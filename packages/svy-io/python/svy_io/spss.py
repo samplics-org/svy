@@ -253,6 +253,7 @@ def read_sav(
     n_max: int | None = None,
     rows_skip: int = 0,
     coerce_temporals: bool = True,
+    infer_temporal_formats: bool = False,
     zap_empty_str: bool = False,
 ) -> Tuple[pl.DataFrame, Dict[str, Any]]:
     """Fast, file-like–safe SPSS .sav reader (ReadStat backend)."""
@@ -298,7 +299,7 @@ def read_sav(
     if coerce_temporals:
         from svy_io.temporals import coerce_spss_temporals
 
-        df = coerce_spss_temporals(df, meta)
+        df = coerce_spss_temporals(df, meta, infer_formats=infer_temporal_formats)
 
     if zap_empty_str:
         from svy_io.zap import zap_empty
@@ -318,6 +319,7 @@ def read_por(
     n_max: int | None = None,
     rows_skip: int = 0,
     coerce_temporals: bool = False,
+    infer_temporal_formats: bool = False,
     zap_empty_str: bool = False,
 ) -> Tuple[pl.DataFrame, Dict[str, Any]]:
     """Fast, file-like–safe SPSS .por reader (ReadStat backend)."""
@@ -361,7 +363,7 @@ def read_por(
     if coerce_temporals:
         from svy_io.temporals import coerce_spss_temporals
 
-        df = coerce_spss_temporals(df, meta)
+        df = coerce_spss_temporals(df, meta, infer_formats=infer_temporal_formats)
 
     if zap_empty_str:
         from svy_io.zap import zap_empty
@@ -382,6 +384,7 @@ def read_spss(
     n_max: int | None = None,
     rows_skip: int = 0,
     coerce_temporals: bool = False,
+    infer_temporal_formats: bool = False,
     zap_empty_str: bool = False,
 ) -> Tuple[pl.DataFrame, Dict[str, Any]]:
     """
@@ -399,6 +402,7 @@ def read_spss(
             n_max=n_max,
             rows_skip=rows_skip,
             coerce_temporals=coerce_temporals,
+            infer_temporal_formats=infer_temporal_formats,
             zap_empty_str=zap_empty_str,
         )
     elif ext == ".por":
@@ -409,6 +413,7 @@ def read_spss(
             n_max=n_max,
             rows_skip=rows_skip,
             coerce_temporals=coerce_temporals,
+            infer_temporal_formats=infer_temporal_formats,
             zap_empty_str=zap_empty_str,
         )
     else:
@@ -505,10 +510,13 @@ def write_sav(
     if categorical_exprs:
         to_write = to_write.with_columns(categorical_exprs)
 
-    # Merge categorical labels with user-provided
+    # Merge categorical labels with user-provided.
+    # Copy first so the caller's list/dicts are never mutated.
     if categorical_labels:
         if value_labels is None:
             value_labels = []
+        else:
+            value_labels = [{**vl, "labels": dict(vl.get("labels", {}))} for vl in value_labels]
 
         for col_name, labels in categorical_labels.items():
             existing = next((vl for vl in value_labels if vl["col"] == col_name), None)

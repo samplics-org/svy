@@ -304,6 +304,18 @@ fn build_vendored(rs_dir: &Path) {
     build.define("HAVE_STRING_H", Some("1"));
     build.define("HAVE_STRINGS_H", Some("1"));
 
+    // Hardening: ReadStat parses untrusted binary files, so enable stack
+    // protectors and fortified libc wrappers where the toolchain supports them.
+    if !cfg!(target_env = "msvc") {
+        build.flag_if_supported("-fstack-protector-strong");
+        // _FORTIFY_SOURCE requires optimization to be effective; glibc warns
+        // if it is defined at -O0, so only enable it for optimized builds.
+        if env::var("OPT_LEVEL").map(|v| v != "0").unwrap_or(false) {
+            build.flag_if_supported("-U_FORTIFY_SOURCE");
+            build.define("_FORTIFY_SOURCE", Some("2"));
+        }
+    }
+
     // zlib detection
     let has_zlib = configure_zlib(&mut build);
     if has_zlib {

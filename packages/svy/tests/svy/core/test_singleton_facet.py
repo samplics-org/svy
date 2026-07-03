@@ -378,6 +378,21 @@ class TestStrataProfile:
         assert "mean_income" in profile.columns
         assert "mean_age" in profile.columns
 
+    def test_strata_profile_weighted_column_names(self, sample_with_weight):
+        # Regression: .alias() used to bind to the denominator only, leaving
+        # the weighted mean column named after the variable itself.
+        profile = sample_with_weight.singleton.strata_profile(
+            variables=["income"], weighted=True
+        )
+        assert "mean_income" in profile.columns
+        assert "income" not in profile.columns
+
+    def test_rank_strata_weighted_sorts_by_mean(self, sample_with_weight):
+        ranked = sample_with_weight.singleton.rank_strata(by="income", weighted=True)
+        assert "mean_income" in ranked.columns
+        means = ranked.get_column("mean_income").to_list()
+        assert means == sorted(means)
+
 
 class TestCandidatesFor:
     """Tests for candidates_for() method."""
