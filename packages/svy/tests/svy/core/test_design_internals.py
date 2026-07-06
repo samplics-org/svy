@@ -27,8 +27,8 @@ def survey_df():
     """Survey data with two stratification variables, PSU, weight, and outcome."""
     rng = np.random.default_rng(42)
     n = 200
-    geo = np.random.choice(["North", "South", "East", "West"], size=n)
-    area = np.random.choice(["Urban", "Rural"], size=n)
+    geo = rng.choice(["North", "South", "East", "West"], size=n)
+    area = rng.choice(["Urban", "Rural"], size=n)
     psu = np.array([f"psu_{i}" for i in rng.integers(1, 21, size=n)])
     wgt = rng.uniform(0.5, 3.0, size=n)
     income = rng.normal(50000, 15000, size=n)
