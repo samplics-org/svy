@@ -7,13 +7,11 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - ".github/workflows/svy-tests.yml"
+  # No path filter on PRs: these jobs are required status checks on main,
+  # so they must report on every PR (a path-filtered required check would
+  # leave non-matching PRs stuck waiting forever).
   pull_request:
     branches: [main]
-    paths:
-      - "packages/svy/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/svy-tests.yml"
 concurrency:
   group: ci-${{ github.ref }}-${{ github.workflow }}
   cancel-in-progress: true
