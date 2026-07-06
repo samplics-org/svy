@@ -186,6 +186,24 @@ update-deps: ## Update Rust dependencies
 	cd $(NATIVE_DIR) && cargo update
 	@echo "$(GREEN)✓ Dependencies updated$(NC)"
 
+# ReadStat is vendored as a git subtree (see build.md, "Vendored ReadStat").
+READSTAT_REMOTE := https://github.com/WizardMac/ReadStat.git
+READSTAT_PREFIX := packages/svy-io/ReadStat
+
+update-readstat: ## Update vendored ReadStat subtree (usage: make update-readstat REF=v1.1.10)
+ifndef REF
+	@echo "$(RED)Usage: make update-readstat REF=<upstream tag or commit>$(NC)"
+	@echo "$(YELLOW)Example: make update-readstat REF=v1.1.10$(NC)"
+	@exit 1
+endif
+	@echo "$(BLUE)Pulling ReadStat $(REF) from $(READSTAT_REMOTE)...$(NC)"
+	@cd $$(git rev-parse --show-toplevel) && \
+		git diff --quiet && git diff --cached --quiet || { \
+			echo "$(RED)Working tree not clean — commit or stash first$(NC)"; exit 1; } && \
+		git subtree pull --squash --prefix=$(READSTAT_PREFIX) $(READSTAT_REMOTE) $(REF) \
+			-m "chore(svy-io): update vendored ReadStat to $(REF)"
+	@echo "$(GREEN)✓ ReadStat updated to $(REF) — now run: make dev && make test$(NC)"
+
 ##@ Documentation
 
 docs: ## Build Rust documentation
