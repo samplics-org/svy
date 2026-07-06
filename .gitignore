@@ -157,6 +157,33 @@ chats
 .pixi
 *.egg-info
 
+# C / Rust build artifacts (native packages)
+*.o
+*.a
+*.dylib
+*.dll
+*.rlib
+debug/
+**/*.rs.bk
+*.pdb
+*.profraw
+*.gcno
+*.gcda
+
+# Editor / OS extras
+Thumbs.db
+*.swp
+*~
+*.bk
+*.bak
+
+# Environment variables (may contain secrets)
+.env
+*.env
+
+# Log files
+*.log
+
 # Other
 /.luarc.json
 *.docx
