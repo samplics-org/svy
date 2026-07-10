@@ -1,0 +1,32 @@
+{
+  "alpha": 0.05,
+  "degrees_freedom": 9,
+  "estimates": [
+    {
+      "by": [
+        "region"
+      ],
+      "by_level": [
+        "North"
+      ],
+      "cv": 0.02,
+      "deff": 1.5,
+      "est": 50000.0,
+      "lci": 48000.0,
+      "se": 1000.0,
+      "uci": 52000.0,
+      "x": null,
+      "x_level": null,
+      "y": "income",
+      "y_level": null
+    }
+  ],
+  "kind": "estimate",
+  "method": "Taylor",
+  "n_psus": 20,
+  "n_strata": 10,
+  "param": "Mean",
+  "q_method": "Linear",
+  "schema_version": "svy-result/0.1",
+  "where_clause": null
+}

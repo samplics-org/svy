@@ -1,0 +1,29 @@
+{
+  "alpha": 0.05,
+  "colvals": [
+    "North",
+    "South"
+  ],
+  "colvar": "region",
+  "estimates": [
+    {
+      "colvar": "region",
+      "cv": 0.057,
+      "est": 0.35,
+      "lci": 0.31,
+      "rowvar": "education",
+      "se": 0.02,
+      "uci": 0.39
+    }
+  ],
+  "kind": "table",
+  "rowvals": [
+    "Low",
+    "Med",
+    "High"
+  ],
+  "rowvar": "education",
+  "schema_version": "svy-result/0.1",
+  "stats": null,
+  "type": "Two-Way"
+}

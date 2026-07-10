@@ -1,0 +1,39 @@
+{
+  "alpha": 0.05,
+  "alternative": "two-sided",
+  "diff": [
+    {
+      "by": null,
+      "by_level": null,
+      "diff": 5000.0,
+      "lci": 3000.0,
+      "se": 1000.0,
+      "uci": 7000.0,
+      "y": "income"
+    }
+  ],
+  "estimates": [
+    {
+      "by": null,
+      "by_level": null,
+      "cv": 0.02,
+      "est": 50000.0,
+      "group": null,
+      "group_level": null,
+      "lci": 48000.0,
+      "se": 1000.0,
+      "uci": 52000.0,
+      "y": "income",
+      "y_level": null
+    }
+  ],
+  "kind": "ttest_one_group",
+  "mean_h0": 45000.0,
+  "schema_version": "svy-result/0.1",
+  "stats": {
+    "df": 9.0,
+    "p_value": 0.001,
+    "t": 5.0
+  },
+  "y": "income"
+}
