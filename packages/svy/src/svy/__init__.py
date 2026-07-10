@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 
 from svy import datasets  # noqa: F401
+from svy import serialize  # noqa: F401
 from svy.categorical import (
     Categorical,
     CellEst,
@@ -130,6 +131,7 @@ __version__ = "0.18.2"
 __all__ = [
     # --- Modules ----
     "datasets",
+    "serialize",
     # --- Core Classes ---
     "Design",
     "Sample",

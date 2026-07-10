@@ -1,0 +1,46 @@
+{
+  "alpha": 0.05,
+  "alternative": "two-sided",
+  "diff": [
+    {
+      "by": null,
+      "by_level": null,
+      "diff": 3000.0,
+      "lci": 1400.0,
+      "se": 800.0,
+      "uci": 4600.0,
+      "y": "income"
+    }
+  ],
+  "estimates": [
+    {
+      "by": null,
+      "by_level": null,
+      "cv": 0.01875,
+      "est": 48000.0,
+      "group": "urban",
+      "group_level": "Rural",
+      "lci": 46200.0,
+      "se": 900.0,
+      "uci": 49800.0,
+      "y": "income",
+      "y_level": null
+    }
+  ],
+  "groups": {
+    "levels": [
+      "Rural",
+      "Urban"
+    ],
+    "var": "urban"
+  },
+  "kind": "ttest_two_groups",
+  "paired": false,
+  "schema_version": "svy-result/0.1",
+  "stats": {
+    "df": 18.0,
+    "p_value": 0.0015,
+    "t": 3.75
+  },
+  "y": "income"
+}

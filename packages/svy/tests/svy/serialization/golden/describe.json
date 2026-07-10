@@ -1,0 +1,35 @@
+{
+  "drop_nulls": false,
+  "generated_at": "2026-07-10T12:00:00",
+  "items": [
+    {
+      "drop_nulls": false,
+      "max": 90000.0,
+      "mean": 50000.0,
+      "min": 20000.0,
+      "mtype": "Numerical Continuous",
+      "n": 500,
+      "n_missing": 5,
+      "name": "income",
+      "p25": 43000.0,
+      "p50": 50000.0,
+      "p75": 57000.0,
+      "percentiles": [],
+      "std": 10000.0,
+      "sum": 25000000.0,
+      "var": 100000000.0,
+      "weighted": true
+    }
+  ],
+  "kind": "describe",
+  "notes": "test describe",
+  "percentiles": [
+    0.25,
+    0.5,
+    0.75
+  ],
+  "schema_version": "svy-result/0.1",
+  "top_k": 10,
+  "weight_col": "wgt",
+  "weighted": true
+}

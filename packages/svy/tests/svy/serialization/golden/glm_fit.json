@@ -1,0 +1,52 @@
+{
+  "coefs": [
+    {
+      "est": 32000.0,
+      "lci": 28000.0,
+      "se": 2000.0,
+      "term": "intercept",
+      "uci": 36000.0,
+      "wald": {
+        "df": 496.0,
+        "p_value": 0.0001,
+        "value": 16.0
+      },
+      "wald_adj": {
+        "df": 450.0,
+        "p_value": 0.0001,
+        "value": 15.5
+      }
+    }
+  ],
+  "family": "gaussian",
+  "feature_names": [
+    "age",
+    "education"
+  ],
+  "kind": "glm_fit",
+  "link": "identity",
+  "schema_version": "svy-result/0.1",
+  "stats": {
+    "aic": 6020.5,
+    "bic": 6040.3,
+    "deviance": 59000000000.0,
+    "iterations": 4,
+    "n": 500,
+    "r_squared": 0.215,
+    "r_squared_adj": 0.21,
+    "scale": 120000000.0,
+    "wald": {
+      "df_den": 496.0,
+      "df_num": 3.0,
+      "p_value": 0.001,
+      "value": 45.2
+    },
+    "wald_adj": {
+      "df_den": 450.0,
+      "df_num": 3.0,
+      "p_value": 0.001,
+      "value": 42.1
+    }
+  },
+  "y": "income"
+}
