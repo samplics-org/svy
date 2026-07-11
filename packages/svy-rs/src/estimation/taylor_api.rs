@@ -26,6 +26,20 @@ use crate::estimation::taylor::{
     weighted_median, weighted_median_domain,
 };
 
+/// Convert the incoming Python DataFrame and ensure one chunk per column.
+///
+/// After `prepare_data` the frame is usually already single-chunk, but scaled or
+/// concatenated inputs can arrive fragmented. A single rechunk here (one copy)
+/// lets every downstream kernel take its contiguous `cont_slice` fast path
+/// instead of the per-element chunked-iterator fallback.
+fn into_contiguous(data: PyDataFrame) -> DataFrame {
+    let mut df: DataFrame = data.into();
+    if df.first_col_n_chunks() > 1 {
+        df.as_single_chunk_par();
+    }
+    df
+}
+
 // ============================================================================
 // Mean
 // ============================================================================
@@ -45,7 +59,7 @@ pub fn taylor_mean(
     by_col: Option<String>,
     singleton_method: Option<String>,
 ) -> PyResult<PyDataFrame> {
-    let df: DataFrame = data.into();
+    let df = into_contiguous(data);
 
     if by_col.is_none() {
         let result = compute_mean_ungrouped(
@@ -165,7 +179,7 @@ pub fn taylor_total(
     by_col: Option<String>,
     singleton_method: Option<String>,
 ) -> PyResult<PyDataFrame> {
-    let df: DataFrame = data.into();
+    let df = into_contiguous(data);
     if by_col.is_none() {
         let result = compute_total_ungrouped(
             &df, &value_col, &weight_col,
@@ -284,7 +298,7 @@ pub fn taylor_ratio(
     by_col: Option<String>,
     singleton_method: Option<String>,
 ) -> PyResult<PyDataFrame> {
-    let df: DataFrame = data.into();
+    let df = into_contiguous(data);
     if by_col.is_none() {
         let result = compute_ratio_ungrouped(
             &df, &numerator_col, &denominator_col, &weight_col,
@@ -404,7 +418,7 @@ pub fn taylor_prop(
     by_col: Option<String>,
     singleton_method: Option<String>,
 ) -> PyResult<PyDataFrame> {
-    let df: DataFrame = data.into();
+    let df = into_contiguous(data);
     if by_col.is_none() {
         let result = compute_prop_ungrouped(
             &df, &value_col, &weight_col,
@@ -574,7 +588,7 @@ pub fn taylor_median(
     singleton_method: Option<String>,
     quantile_method: Option<String>,
 ) -> PyResult<PyDataFrame> {
-    let df: DataFrame = data.into();
+    let df = into_contiguous(data);
     let q_method = quantile_method
         .as_deref()
         .map(SvyQuantileMethod::from_str)

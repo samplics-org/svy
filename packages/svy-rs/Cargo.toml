@@ -28,6 +28,7 @@ ahash = "0.8"
 numpy = "0.26"
 ndarray = { version = "0.16", features = ["rayon"] }
 rayon = "1.12"
+rustc-hash = "2.1"
 thiserror = "2.0"
 approx = "0.5.1"
 
