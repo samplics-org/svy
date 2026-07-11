@@ -105,17 +105,33 @@ pub fn point_estimate_mean_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<f64> {
-    let sum_wy: f64 = y
-        .iter()
-        .zip(weights.iter())
-        .zip(domain_mask.iter())
-        .filter_map(|((yi, wi), m)| if m? { Some(yi? * wi?) } else { None })
-        .sum();
-    let sum_w: f64 = weights
-        .iter()
-        .zip(domain_mask.iter())
-        .filter_map(|(w, m)| if m? { w } else { None })
-        .sum();
+    // Fast path: y/weights are contiguous null-free (post-prepare_data), so
+    // index them as slices while iterating the mask once — no per-element
+    // Option unwrap on y/w, and a single pass. Bit-identical (same rows, order).
+    let (sum_wy, sum_w) = if let Some((ys, ws)) = cont_pair(y, weights) {
+        let mut sum_wy = 0.0f64;
+        let mut sum_w = 0.0f64;
+        for (i, m) in domain_mask.iter().enumerate() {
+            if m == Some(true) {
+                sum_wy += ys[i] * ws[i];
+                sum_w += ws[i];
+            }
+        }
+        (sum_wy, sum_w)
+    } else {
+        let sum_wy: f64 = y
+            .iter()
+            .zip(weights.iter())
+            .zip(domain_mask.iter())
+            .filter_map(|((yi, wi), m)| if m? { Some(yi? * wi?) } else { None })
+            .sum();
+        let sum_w: f64 = weights
+            .iter()
+            .zip(domain_mask.iter())
+            .filter_map(|(w, m)| if m? { w } else { None })
+            .sum();
+        (sum_wy, sum_w)
+    };
 
     if sum_w == 0.0 {
         return Err(PolarsError::ComputeError(
@@ -440,7 +456,31 @@ pub fn scores_mean_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<Float64Chunked> {
-    // Single pass: accumulate sum_wy / sum_w and collect triples.
+    // Fast path: contiguous null-free y/weights. Materialise the in-domain flag
+    // once (a Vec<bool>, vs the fallback's Vec<Option<(f64,f64)>>), then two
+    // branch-free slice passes. Same rows/order → bit-identical.
+    if let Some((ys, ws)) = cont_pair(y, weights) {
+        let n = ys.len();
+        let in_domain: Vec<bool> = domain_mask.iter().map(|m| m == Some(true)).collect();
+        let mut sum_wy = 0.0f64;
+        let mut sum_w = 0.0f64;
+        for i in 0..n {
+            if in_domain[i] {
+                sum_wy += ys[i] * ws[i];
+                sum_w += ws[i];
+            }
+        }
+        if sum_w == 0.0 {
+            return Ok(Float64Chunked::from_slice("scores".into(), &vec![0.0; n]));
+        }
+        let est = sum_wy / sum_w;
+        let scores: Vec<f64> = (0..n)
+            .map(|i| if in_domain[i] { (ws[i] / sum_w) * (ys[i] - est) } else { 0.0 })
+            .collect();
+        return Ok(Float64Chunked::from_slice("scores".into(), &scores));
+    }
+
+    // Fallback: single pass accumulating sums while collecting in-domain pairs.
     let n = y.len();
     let mut sum_wy = 0.0f64;
     let mut sum_w  = 0.0f64;
@@ -1505,18 +1545,32 @@ pub fn srs_variance_mean_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<f64> {
-    let mut yv = Vec::new();
-    let mut wv = Vec::new();
-    for ((yi, wi), mi) in y
-        .into_iter()
-        .zip(weights.into_iter())
-        .zip(domain_mask.into_iter())
-    {
-        if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi) {
-            yv.push(y_val);
-            wv.push(w_val);
+    let (yv, wv) = if let Some((ys, ws)) = cont_pair(y, weights) {
+        // Fast path: slice-index y/weights while filtering by the mask.
+        let mut yv = Vec::new();
+        let mut wv = Vec::new();
+        for (i, m) in domain_mask.iter().enumerate() {
+            if m == Some(true) {
+                yv.push(ys[i]);
+                wv.push(ws[i]);
+            }
         }
-    }
+        (yv, wv)
+    } else {
+        let mut yv = Vec::new();
+        let mut wv = Vec::new();
+        for ((yi, wi), mi) in y
+            .into_iter()
+            .zip(weights.into_iter())
+            .zip(domain_mask.into_iter())
+        {
+            if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi) {
+                yv.push(y_val);
+                wv.push(w_val);
+            }
+        }
+        (yv, wv)
+    };
     let n = yv.len() as f64;
     if n < 2.0 {
         return Ok(f64::NAN);
