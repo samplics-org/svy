@@ -17,8 +17,8 @@ use crate::estimation::replication::{
     matrix_median_by_domain, matrix_median_estimates,
     matrix_prop_by_domain, matrix_prop_estimates,
     matrix_prop_by_domain_str, matrix_prop_estimates_str,
-    matrix_ratio_by_domain, matrix_ratio_estimates,
-    matrix_total_by_domain, matrix_total_estimates,
+    matrix_ratio_by_domain, matrix_ratio_estimates, matrix_ratio_estimates_cols,
+    matrix_total_by_domain, matrix_total_estimates, matrix_total_estimates_cols,
     replicate_coefficients,
     variance_from_replicates,
 };
@@ -26,6 +26,24 @@ use crate::estimation::replication::{
 // ============================================================================
 // Shared helpers
 // ============================================================================
+
+/// Borrow every replicate-weight column as a contiguous null-free slice, or
+/// `None` if any column is chunked/nullable (→ caller uses the flat-matrix
+/// fallback). Lets the ungrouped estimators accumulate straight from the
+/// columns with no n×R matrix materialised.
+fn get_cont_rep_cols<'a>(
+    df: &'a DataFrame,
+    rep_weight_cols: &[String],
+) -> PolarsResult<Option<Vec<&'a [f64]>>> {
+    let mut cols = Vec::with_capacity(rep_weight_cols.len());
+    for name in rep_weight_cols {
+        match df.column(name)?.f64()?.cont_slice() {
+            Ok(s) => cols.push(s),
+            Err(_) => return Ok(None),
+        }
+    }
+    Ok(Some(cols))
+}
 
 fn parse_rep_method(method: &str) -> PyResult<RepMethod> {
     RepMethod::from_str(method).ok_or_else(|| {
@@ -91,15 +109,9 @@ fn compute_replicate_mean_ungrouped(
     let y_arr: Vec<f64> = y.into_iter().map(|v| v.unwrap_or(0.0)).collect();
     let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
 
-    // Prefer the no-materialisation path: accumulate straight from the
-    // contiguous replicate columns (parallel over replicates). Falls back to the
-    // flat-matrix path for chunked/nullable columns.
-    let f64_cols: Vec<&Float64Chunked> = rep_weight_cols
-        .iter()
-        .map(|c| df.column(c)?.f64())
-        .collect::<PolarsResult<_>>()?;
-    let cont: Option<Vec<&[f64]>> = f64_cols.iter().map(|c| c.cont_slice().ok()).collect();
-    let (theta_full, theta_reps) = match cont {
+    // No-materialisation path: accumulate from the contiguous replicate columns
+    // (parallel over replicates); flat-matrix fallback for chunked/nullable.
+    let (theta_full, theta_reps) = match get_cont_rep_cols(df, rep_weight_cols)? {
         Some(cols) => matrix_mean_estimates_cols(&y_arr, &w_arr, &cols, n),
         None => {
             let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
@@ -200,8 +212,13 @@ fn compute_replicate_total_ungrouped(
     let y_arr: Vec<f64> = y.into_iter().map(|v| v.unwrap_or(0.0)).collect();
     let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
 
-    let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
-    let (theta_full, theta_reps) = matrix_total_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps);
+    let (theta_full, theta_reps) = match get_cont_rep_cols(df, rep_weight_cols)? {
+        Some(cols) => matrix_total_estimates_cols(&y_arr, &w_arr, &cols, n),
+        None => {
+            let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
+            matrix_total_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps)
+        }
+    };
     let rep_coefs = replicate_coefficients(method, n_reps, fay_coef);
     let variance  = variance_from_replicates(method, theta_full, &theta_reps, &rep_coefs, center);
     let se = variance.sqrt();
@@ -301,9 +318,13 @@ fn compute_replicate_ratio_ungrouped(
     let x_arr: Vec<f64> = x.into_iter().map(|v| v.unwrap_or(0.0)).collect();
     let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
 
-    let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
-    let (theta_full, theta_reps) =
-        matrix_ratio_estimates(&y_arr, &x_arr, &w_arr, &rep_w_matrix, n, n_reps);
+    let (theta_full, theta_reps) = match get_cont_rep_cols(df, rep_weight_cols)? {
+        Some(cols) => matrix_ratio_estimates_cols(&y_arr, &x_arr, &w_arr, &cols, n),
+        None => {
+            let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
+            matrix_ratio_estimates(&y_arr, &x_arr, &w_arr, &rep_w_matrix, n, n_reps)
+        }
+    };
     let rep_coefs = replicate_coefficients(method, n_reps, fay_coef);
     let variance  = variance_from_replicates(method, theta_full, &theta_reps, &rep_coefs, center);
     let se = variance.sqrt();

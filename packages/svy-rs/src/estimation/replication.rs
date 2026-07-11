@@ -389,6 +389,62 @@ pub fn matrix_ratio_estimates(
     (theta_full, theta_reps)
 }
 
+/// Replicate total estimates from the contiguous replicate columns (no matrix).
+/// Bit-identical to `matrix_total_estimates`; see `matrix_mean_estimates_cols`.
+pub fn matrix_total_estimates_cols(
+    y: &[f64],
+    full_weights: &[f64],
+    rep_cols: &[&[f64]],
+    n: usize,
+) -> (f64, Vec<f64>) {
+    let theta_full: f64 = y.iter().zip(full_weights.iter()).map(|(a, b)| a * b).sum();
+
+    use rayon::prelude::*;
+    let theta_reps: Vec<f64> = rep_cols
+        .par_iter()
+        .map(|col| {
+            let mut swy = 0.0f64;
+            for i in 0..n {
+                swy += y[i] * col[i];
+            }
+            swy
+        })
+        .collect();
+
+    (theta_full, theta_reps)
+}
+
+/// Replicate ratio estimates from the contiguous replicate columns (no matrix).
+/// Bit-identical to `matrix_ratio_estimates`; see `matrix_mean_estimates_cols`.
+pub fn matrix_ratio_estimates_cols(
+    y: &[f64],
+    x: &[f64],
+    full_weights: &[f64],
+    rep_cols: &[&[f64]],
+    n: usize,
+) -> (f64, Vec<f64>) {
+    let sum_wy: f64 = y.iter().zip(full_weights.iter()).map(|(a, b)| a * b).sum();
+    let sum_wx: f64 = x.iter().zip(full_weights.iter()).map(|(a, b)| a * b).sum();
+    let theta_full = if sum_wx > 0.0 { sum_wy / sum_wx } else { f64::NAN };
+
+    use rayon::prelude::*;
+    let theta_reps: Vec<f64> = rep_cols
+        .par_iter()
+        .map(|col| {
+            let mut swy = 0.0f64;
+            let mut swx = 0.0f64;
+            for i in 0..n {
+                let w = col[i];
+                swy += y[i] * w;
+                swx += x[i] * w;
+            }
+            if swx > 0.0 { swy / swx } else { f64::NAN }
+        })
+        .collect();
+
+    (theta_full, theta_reps)
+}
+
 // ============================================================================
 // Domain-level computation
 // ============================================================================
