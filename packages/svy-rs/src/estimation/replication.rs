@@ -867,6 +867,131 @@ pub fn matrix_prop_estimates(
     (levels, theta_full, theta_reps)
 }
 
+/// Sorted category levels and the per-row level index for integer category data.
+fn prop_level_index(y: &[i64]) -> (Vec<i64>, Vec<usize>) {
+    let mut level_map: HashMap<i64, usize> = HashMap::new();
+    let mut levels: Vec<i64> = Vec::new();
+    for &val in y {
+        if !level_map.contains_key(&val) {
+            level_map.insert(val, levels.len());
+            levels.push(val);
+        }
+    }
+    levels.sort();
+    for (idx, &lev) in levels.iter().enumerate() {
+        level_map.insert(lev, idx);
+    }
+    let lev_idx: Vec<usize> = y.iter().map(|v| level_map[v]).collect();
+    (levels, lev_idx)
+}
+
+/// `matrix_prop_estimates` from the contiguous replicate columns (no matrix).
+/// Bit-identical: each replicate accumulates per-level weight in row order,
+/// parallel over replicates, reshaped to `[level][rep]`.
+pub fn matrix_prop_estimates_cols(
+    y: &[i64],
+    full_weights: &[f64],
+    rep_cols: &[&[f64]],
+    n: usize,
+) -> (Vec<i64>, Vec<f64>, Vec<Vec<f64>>) {
+    let (levels, lev_idx) = prop_level_index(y);
+    let n_levels = levels.len();
+
+    let mut sum_w_level = vec![0.0; n_levels];
+    let mut sum_w_total = 0.0;
+    for i in 0..n {
+        sum_w_level[lev_idx[i]] += full_weights[i];
+        sum_w_total += full_weights[i];
+    }
+    let theta_full: Vec<f64> = sum_w_level
+        .iter()
+        .map(|&w_l| if sum_w_total > 0.0 { w_l / sum_w_total } else { f64::NAN })
+        .collect();
+
+    use rayon::prelude::*;
+    let per_rep: Vec<Vec<f64>> = rep_cols
+        .par_iter()
+        .map(|col| {
+            let mut swl = vec![0.0; n_levels];
+            let mut swt = 0.0;
+            for i in 0..n {
+                let w = col[i];
+                swl[lev_idx[i]] += w;
+                swt += w;
+            }
+            (0..n_levels)
+                .map(|l| if swt > 0.0 { swl[l] / swt } else { f64::NAN })
+                .collect()
+        })
+        .collect();
+
+    let n_reps = rep_cols.len();
+    let theta_reps: Vec<Vec<f64>> = (0..n_levels)
+        .map(|l| (0..n_reps).map(|r| per_rep[r][l]).collect())
+        .collect();
+
+    (levels, theta_full, theta_reps)
+}
+
+/// `matrix_prop_estimates_str` from the contiguous replicate columns. Same as
+/// the integer version but with string category levels. Bit-identical.
+pub fn matrix_prop_estimates_str_cols(
+    y: &[String],
+    full_weights: &[f64],
+    rep_cols: &[&[f64]],
+    n: usize,
+) -> (Vec<String>, Vec<f64>, Vec<Vec<f64>>) {
+    let mut level_map: HashMap<&str, usize> = HashMap::new();
+    let mut levels: Vec<String> = Vec::new();
+    for val in y {
+        if !level_map.contains_key(val.as_str()) {
+            level_map.insert(val.as_str(), levels.len());
+            levels.push(val.clone());
+        }
+    }
+    levels.sort();
+    for (idx, lev) in levels.iter().enumerate() {
+        level_map.insert(lev.as_str(), idx);
+    }
+    let n_levels = levels.len();
+    let lev_idx: Vec<usize> = y.iter().map(|v| level_map[v.as_str()]).collect();
+
+    let mut sum_w_level = vec![0.0; n_levels];
+    let mut sum_w_total = 0.0;
+    for i in 0..n {
+        sum_w_level[lev_idx[i]] += full_weights[i];
+        sum_w_total += full_weights[i];
+    }
+    let theta_full: Vec<f64> = sum_w_level
+        .iter()
+        .map(|&w_l| if sum_w_total > 0.0 { w_l / sum_w_total } else { f64::NAN })
+        .collect();
+
+    use rayon::prelude::*;
+    let per_rep: Vec<Vec<f64>> = rep_cols
+        .par_iter()
+        .map(|col| {
+            let mut swl = vec![0.0; n_levels];
+            let mut swt = 0.0;
+            for i in 0..n {
+                let w = col[i];
+                swl[lev_idx[i]] += w;
+                swt += w;
+            }
+            (0..n_levels)
+                .map(|l| if swt > 0.0 { swl[l] / swt } else { f64::NAN })
+                .collect()
+        })
+        .collect();
+
+    let n_reps = rep_cols.len();
+    let theta_reps: Vec<Vec<f64>> = (0..n_levels)
+        .map(|l| (0..n_reps).map(|r| per_rep[r][l]).collect())
+        .collect();
+
+    (levels, theta_full, theta_reps)
+}
+
 /// Compute proportion estimates by level and domain.
 /// Category values are integers (Boolean or numeric columns).
 pub fn matrix_prop_by_domain(

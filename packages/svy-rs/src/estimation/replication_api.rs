@@ -16,8 +16,8 @@ use crate::estimation::replication::{
     matrix_mean_by_domain, matrix_mean_by_domain_cols, matrix_mean_estimates,
     matrix_mean_estimates_cols,
     matrix_median_by_domain, matrix_median_estimates,
-    matrix_prop_by_domain, matrix_prop_estimates,
-    matrix_prop_by_domain_str, matrix_prop_estimates_str,
+    matrix_prop_by_domain, matrix_prop_estimates, matrix_prop_estimates_cols,
+    matrix_prop_by_domain_str, matrix_prop_estimates_str, matrix_prop_estimates_str_cols,
     matrix_ratio_by_domain, matrix_ratio_by_domain_cols, matrix_ratio_estimates,
     matrix_ratio_estimates_cols,
     matrix_total_by_domain, matrix_total_by_domain_cols, matrix_total_estimates,
@@ -441,7 +441,7 @@ fn compute_replicate_prop_ungrouped(
     let n = y_series.len();
     let n_reps = rep_weight_cols.len();
     let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
-    let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
+    let cont_cols = get_cont_rep_cols(df, rep_weight_cols)?;
     let rep_coefs = replicate_coefficients(method, n_reps, fay_coef);
 
     // String/Categorical: use string-keyed level functions so level labels are
@@ -453,8 +453,13 @@ fn compute_replicate_prop_ungrouped(
         let y_arr: Vec<String> = y_cast.str()?.into_iter()
             .map(|v| v.unwrap_or("").to_string())
             .collect();
-        let (levels, theta_full, theta_reps) =
-            matrix_prop_estimates_str(&y_arr, &w_arr, &rep_w_matrix, n, n_reps);
+        let (levels, theta_full, theta_reps) = match &cont_cols {
+            Some(cols) => matrix_prop_estimates_str_cols(&y_arr, &w_arr, cols, n),
+            None => {
+                let (m, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
+                matrix_prop_estimates_str(&y_arr, &w_arr, &m, n, n_reps)
+            }
+        };
         let n_l = levels.len();
         let vars: Vec<f64> = (0..n_l)
             .map(|l| variance_from_replicates(method, theta_full[l], &theta_reps[l], &rep_coefs, center))
@@ -477,8 +482,13 @@ fn compute_replicate_prop_ungrouped(
                 ).into()
             ));
         };
-        let (levels, theta_full, theta_reps) =
-            matrix_prop_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps);
+        let (levels, theta_full, theta_reps) = match &cont_cols {
+            Some(cols) => matrix_prop_estimates_cols(&y_arr, &w_arr, cols, n),
+            None => {
+                let (m, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
+                matrix_prop_estimates(&y_arr, &w_arr, &m, n, n_reps)
+            }
+        };
         let n_l = levels.len();
         let vars: Vec<f64> = (0..n_l)
             .map(|l| variance_from_replicates(method, theta_full[l], &theta_reps[l], &rep_coefs, center))
