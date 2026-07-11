@@ -74,18 +74,22 @@ pub fn fit_glm_rs(
 
     // No by_col: single fit, wrap in one-element vec for API uniformity.
     if by_col.is_none() {
-        let result = fit_glm(
-            &y,
-            x_cols,
-            &weights,
-            stratum.as_ref(),
-            psu.as_ref(),
-            &family,
-            &link,
-            tol,
-            max_iter,
-        )
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        // Release the GIL for the (iterative, CPU-bound) IRLS solve.
+        let result = _py
+            .detach(|| {
+                fit_glm(
+                    &y,
+                    x_cols,
+                    &weights,
+                    stratum.as_ref(),
+                    psu.as_ref(),
+                    &family,
+                    &link,
+                    tol,
+                    max_iter,
+                )
+            })
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
         return Ok(vec![(
             String::new(),
@@ -100,22 +104,26 @@ pub fn fit_glm_rs(
         )]);
     }
 
-    // by_col supplied: one fit per domain level.
+    // by_col supplied: one fit per domain level (fanned out in parallel, GIL
+    // released — the domain fits are independent).
     let by_series = column_to_series(&df, &by_col.unwrap())?;
 
-    let results = fit_glm_by(
-        &y,
-        x_cols,
-        &weights,
-        stratum.as_ref(),
-        psu.as_ref(),
-        &by_series,
-        &family,
-        &link,
-        tol,
-        max_iter,
-    )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    let results = _py
+        .detach(|| {
+            fit_glm_by(
+                &y,
+                x_cols,
+                &weights,
+                stratum.as_ref(),
+                psu.as_ref(),
+                &by_series,
+                &family,
+                &link,
+                tol,
+                max_iter,
+            )
+        })
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
     Ok(results
         .into_iter()
