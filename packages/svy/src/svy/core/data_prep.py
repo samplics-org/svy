@@ -42,7 +42,10 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 # Cache for design.specified_fields() keyed on id(design).
-# Stores (design_obj, fields) so we can detect if a new object reuses the same id.
+# Stores (design_obj, data_version, fields). The held design_obj reference
+# catches CPython id-reuse (a new design reusing a freed id), and the
+# data_version — globally unique per Sample mutation — catches the case where
+# the same design object persists while the underlying data columns change.
 _design_fields_cache: dict[int, tuple] = {}
 
 # Internal column name for the materialized where-clause boolean mask.
@@ -286,12 +289,13 @@ def prepare_data(
         needed.extend(extra_cols)
     needed.extend(extract_where_cols(where))
     key = id(design)
+    data_version = getattr(sample, "_data_version", None)
     cached = _design_fields_cache.get(key)
-    if cached is None or cached[0] is not design:
+    if cached is None or cached[0] is not design or cached[1] != data_version:
         fields = design.specified_fields(data_columns=local_data.columns)
-        _design_fields_cache[key] = (design, fields)
+        _design_fields_cache[key] = (design, data_version, fields)
     else:
-        fields = cached[1]
+        fields = cached[2]
     needed.extend(fields)
     # Include singleton variance/exclude columns if present in data
     _sr_pre = getattr(sample, "_singleton_result", None)

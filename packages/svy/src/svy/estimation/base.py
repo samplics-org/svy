@@ -57,7 +57,7 @@ class Estimation:
 
     def _get_factorized_design(self) -> dict[str, Any]:
         if self._design_cache is not None:
-            if self._design_cache["_data_id"] == id(self._sample._data):
+            if self._design_cache["_data_version"] == self._sample._data_version:
                 return self._design_cache
             self._design_cache = None
 
@@ -70,7 +70,7 @@ class Estimation:
         design = self._sample._design
 
         cache: dict[str, Any] = {
-            "_data_id": id(self._sample._data),
+            "_data_version": self._sample._data_version,
             "stratum": None,
             "psu": None,
             "ssu": None,
@@ -137,7 +137,7 @@ class Estimation:
 
     def _get_polars_design_info(self) -> dict[str, Any]:
         if self._polars_cache is not None:
-            if self._polars_cache["_data_id"] == id(self._sample._data):
+            if self._polars_cache["_data_version"] == self._sample._data_version:
                 return self._polars_cache
             self._polars_cache = None
 
@@ -239,7 +239,7 @@ class Estimation:
             )
 
         self._polars_cache = {
-            "_data_id": id(self._sample._data),
+            "_data_version": self._sample._data_version,
             "data": data,
             "strata_col": strata_col,
             "psu_col": psu_col,
