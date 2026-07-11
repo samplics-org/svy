@@ -7,6 +7,7 @@
 use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
+use rayon::prelude::*;
 
 use crate::estimation::taylor::{
     SvyQuantileMethod,
@@ -72,13 +73,17 @@ pub fn taylor_mean(
         return Ok(PyDataFrame(result));
     }
 
-    let result = compute_mean_grouped(
-        &df, &value_col, &weight_col,
-        strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
-        fpc_col.as_deref(), fpc_ssu_col.as_deref(),
-        &by_col.unwrap(), singleton_method.as_deref(),
-    )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    let by = by_col.unwrap();
+    let result = _py
+        .detach(|| {
+            compute_mean_grouped(
+                &df, &value_col, &weight_col,
+                strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
+                fpc_col.as_deref(), fpc_ssu_col.as_deref(),
+                &by, singleton_method.as_deref(),
+            )
+        })
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok(PyDataFrame(result))
 }
 
@@ -127,20 +132,17 @@ fn compute_mean_grouped(
     let by_str = df.column(by_col)?.str()?;
     let unique_groups = by_str.unique()?;
 
-    let mut by_vals: Vec<&str> = Vec::new();
-    let mut estimates: Vec<f64> = Vec::new();
-    let mut ses: Vec<f64> = Vec::new();
-    let mut variances: Vec<f64> = Vec::new();
-    let mut dfs: Vec<u32> = Vec::new();
-    let mut ns: Vec<u32> = Vec::new();
-    let mut deffs: Vec<f64> = Vec::new();
     let df_val = degrees_of_freedom(weights, strata, psu)?;
     // Index the design once — it is identical across by-groups; only the
     // domain-masked scores change per group.
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
-    for group_val in unique_groups.iter() {
-        if let Some(group) = group_val {
+    // Groups are independent; fan the per-group work out over the rayon pool
+    // and collect in group order (deterministic, thread-count-independent).
+    let groups: Vec<&str> = unique_groups.iter().flatten().collect();
+    let rows = groups
+        .par_iter()
+        .map(|&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64)> {
             let domain_mask = by_str.equal(group);
             let n_domain    = domain_mask.sum().unwrap_or(0) as u32;
             let estimate    = point_estimate_mean_domain(y, weights, &domain_mask)?;
@@ -150,17 +152,26 @@ fn compute_mean_grouped(
             let se          = variance.max(0.0).sqrt();
             let srs_var     = srs_variance_mean_domain(y, weights, &domain_mask)?;
             let deff        = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
+            Ok((group, estimate, se, variance, n_domain, deff))
+        })
+        .collect::<PolarsResult<Vec<_>>>()?;
 
-            by_vals.push(group);
-            estimates.push(estimate);
-            ses.push(se);
-            variances.push(variance);
-            dfs.push(df_val);
-            ns.push(n_domain);
-            deffs.push(deff);
-        }
+    let n_groups = rows.len();
+    let mut by_vals: Vec<&str> = Vec::with_capacity(n_groups);
+    let mut estimates: Vec<f64> = Vec::with_capacity(n_groups);
+    let mut ses: Vec<f64> = Vec::with_capacity(n_groups);
+    let mut variances: Vec<f64> = Vec::with_capacity(n_groups);
+    let mut ns: Vec<u32> = Vec::with_capacity(n_groups);
+    let mut deffs: Vec<f64> = Vec::with_capacity(n_groups);
+    for (g, est, se, var, n, deff) in rows {
+        by_vals.push(g);
+        estimates.push(est);
+        ses.push(se);
+        variances.push(var);
+        ns.push(n);
+        deffs.push(deff);
     }
-    let n_groups = by_vals.len();
+    let dfs = vec![df_val; n_groups];
     df![by_col => by_vals, "y" => vec![value_col; n_groups], "est" => estimates,
         "se" => ses, "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs]
 }
@@ -194,13 +205,17 @@ pub fn taylor_total(
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         return Ok(PyDataFrame(result));
     }
-    let result = compute_total_grouped(
-        &df, &value_col, &weight_col,
-        strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
-        fpc_col.as_deref(), fpc_ssu_col.as_deref(),
-        &by_col.unwrap(), singleton_method.as_deref(),
-    )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    let by = by_col.unwrap();
+    let result = _py
+        .detach(|| {
+            compute_total_grouped(
+                &df, &value_col, &weight_col,
+                strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
+                fpc_col.as_deref(), fpc_ssu_col.as_deref(),
+                &by, singleton_method.as_deref(),
+            )
+        })
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok(PyDataFrame(result))
 }
 
@@ -249,18 +264,13 @@ fn compute_total_grouped(
     let by_str = df.column(by_col)?.str()?;
     let unique_groups = by_str.unique()?;
 
-    let mut by_vals: Vec<&str> = Vec::new();
-    let mut estimates: Vec<f64> = Vec::new();
-    let mut ses: Vec<f64> = Vec::new();
-    let mut variances: Vec<f64> = Vec::new();
-    let mut dfs: Vec<u32> = Vec::new();
-    let mut ns: Vec<u32> = Vec::new();
-    let mut deffs: Vec<f64> = Vec::new();
     let df_val = degrees_of_freedom(weights, strata, psu)?;
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
-    for group_val in unique_groups.iter() {
-        if let Some(group) = group_val {
+    let groups: Vec<&str> = unique_groups.iter().flatten().collect();
+    let rows = groups
+        .par_iter()
+        .map(|&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64)> {
             let domain_mask = by_str.equal(group);
             let n_domain    = domain_mask.sum().unwrap_or(0) as u32;
             let estimate    = point_estimate_total_domain(y, weights, &domain_mask)?;
@@ -270,17 +280,26 @@ fn compute_total_grouped(
             let se          = variance.max(0.0).sqrt();
             let srs_var     = srs_variance_total_domain(y, weights, &domain_mask)?;
             let deff        = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
+            Ok((group, estimate, se, variance, n_domain, deff))
+        })
+        .collect::<PolarsResult<Vec<_>>>()?;
 
-            by_vals.push(group);
-            estimates.push(estimate);
-            ses.push(se);
-            variances.push(variance);
-            dfs.push(df_val);
-            ns.push(n_domain);
-            deffs.push(deff);
-        }
+    let n_groups = rows.len();
+    let mut by_vals: Vec<&str> = Vec::with_capacity(n_groups);
+    let mut estimates: Vec<f64> = Vec::with_capacity(n_groups);
+    let mut ses: Vec<f64> = Vec::with_capacity(n_groups);
+    let mut variances: Vec<f64> = Vec::with_capacity(n_groups);
+    let mut ns: Vec<u32> = Vec::with_capacity(n_groups);
+    let mut deffs: Vec<f64> = Vec::with_capacity(n_groups);
+    for (g, est, se, var, n, deff) in rows {
+        by_vals.push(g);
+        estimates.push(est);
+        ses.push(se);
+        variances.push(var);
+        ns.push(n);
+        deffs.push(deff);
     }
-    let n_groups = by_vals.len();
+    let dfs = vec![df_val; n_groups];
     df![by_col => by_vals, "y" => vec![value_col; n_groups], "est" => estimates,
         "se" => ses, "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs]
 }
@@ -315,13 +334,17 @@ pub fn taylor_ratio(
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         return Ok(PyDataFrame(result));
     }
-    let result = compute_ratio_grouped(
-        &df, &numerator_col, &denominator_col, &weight_col,
-        strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
-        fpc_col.as_deref(), fpc_ssu_col.as_deref(),
-        &by_col.unwrap(), singleton_method.as_deref(),
-    )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    let by = by_col.unwrap();
+    let result = _py
+        .detach(|| {
+            compute_ratio_grouped(
+                &df, &numerator_col, &denominator_col, &weight_col,
+                strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
+                fpc_col.as_deref(), fpc_ssu_col.as_deref(),
+                &by, singleton_method.as_deref(),
+            )
+        })
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok(PyDataFrame(result))
 }
 
@@ -372,18 +395,13 @@ fn compute_ratio_grouped(
     let by_str = df.column(by_col)?.str()?;
     let unique_groups = by_str.unique()?;
 
-    let mut by_vals: Vec<&str> = Vec::new();
-    let mut estimates: Vec<f64> = Vec::new();
-    let mut ses: Vec<f64> = Vec::new();
-    let mut variances: Vec<f64> = Vec::new();
-    let mut dfs: Vec<u32> = Vec::new();
-    let mut ns: Vec<u32> = Vec::new();
-    let mut deffs: Vec<f64> = Vec::new();
     let df_val = degrees_of_freedom(weights, strata, psu)?;
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
-    for group_val in unique_groups.iter() {
-        if let Some(group) = group_val {
+    let groups: Vec<&str> = unique_groups.iter().flatten().collect();
+    let rows = groups
+        .par_iter()
+        .map(|&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64)> {
             let domain_mask = by_str.equal(group);
             let n_domain    = domain_mask.sum().unwrap_or(0) as u32;
             let estimate    = point_estimate_ratio_domain(y, x, weights, &domain_mask)?;
@@ -393,17 +411,26 @@ fn compute_ratio_grouped(
             let se          = variance.max(0.0).sqrt();
             let srs_var     = srs_variance_ratio_domain(y, x, weights, &domain_mask)?;
             let deff        = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
+            Ok((group, estimate, se, variance, n_domain, deff))
+        })
+        .collect::<PolarsResult<Vec<_>>>()?;
 
-            by_vals.push(group);
-            estimates.push(estimate);
-            ses.push(se);
-            variances.push(variance);
-            dfs.push(df_val);
-            ns.push(n_domain);
-            deffs.push(deff);
-        }
+    let n_groups = rows.len();
+    let mut by_vals: Vec<&str> = Vec::with_capacity(n_groups);
+    let mut estimates: Vec<f64> = Vec::with_capacity(n_groups);
+    let mut ses: Vec<f64> = Vec::with_capacity(n_groups);
+    let mut variances: Vec<f64> = Vec::with_capacity(n_groups);
+    let mut ns: Vec<u32> = Vec::with_capacity(n_groups);
+    let mut deffs: Vec<f64> = Vec::with_capacity(n_groups);
+    for (g, est, se, var, n, deff) in rows {
+        by_vals.push(g);
+        estimates.push(est);
+        ses.push(se);
+        variances.push(var);
+        ns.push(n);
+        deffs.push(deff);
     }
-    let n_groups = by_vals.len();
+    let dfs = vec![df_val; n_groups];
     df![by_col => by_vals, "y" => vec![numerator_col; n_groups], "x" => vec![denominator_col; n_groups],
         "est" => estimates, "se" => ses, "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs]
 }
@@ -437,13 +464,17 @@ pub fn taylor_prop(
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         return Ok(PyDataFrame(result));
     }
-    let result = compute_prop_grouped(
-        &df, &value_col, &weight_col,
-        strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
-        fpc_col.as_deref(), fpc_ssu_col.as_deref(),
-        &by_col.unwrap(), singleton_method.as_deref(),
-    )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    let by = by_col.unwrap();
+    let result = _py
+        .detach(|| {
+            compute_prop_grouped(
+                &df, &value_col, &weight_col,
+                strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
+                fpc_col.as_deref(), fpc_ssu_col.as_deref(),
+                &by, singleton_method.as_deref(),
+            )
+        })
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok(PyDataFrame(result))
 }
 
@@ -534,22 +565,20 @@ fn compute_prop_grouped(
     let by_str = df.column(by_col)?.str()?;
     let unique_groups = by_str.unique()?;
 
-    let mut by_vals: Vec<String> = Vec::new();
-    let mut level_vals: Vec<String> = Vec::new();
-    let mut estimates: Vec<f64> = Vec::new();
-    let mut ses: Vec<f64> = Vec::new();
-    let mut variances: Vec<f64> = Vec::new();
-    let mut dfs_vec: Vec<u32> = Vec::new();
-    let mut ns: Vec<u32> = Vec::new();
-    let mut deffs: Vec<f64> = Vec::new();
     let df_val = degrees_of_freedom(weights, strata, psu)?;
     // Design is identical across all (group, level) cells; index it once.
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
-    for group_val in unique_groups.iter() {
-        if let Some(group) = group_val {
+    // Fan out over groups; each group emits its level rows in `levels` order,
+    // then flatten in group order for a deterministic layout.
+    type PropRow = (String, String, f64, f64, f64, u32, f64);
+    let groups: Vec<&str> = unique_groups.iter().flatten().collect();
+    let per_group = groups
+        .par_iter()
+        .map(|&group| -> PolarsResult<Vec<PropRow>> {
             let domain_mask = by_str.equal(group);
             let n_domain    = domain_mask.sum().unwrap_or(0) as u32;
+            let mut out: Vec<PropRow> = Vec::with_capacity(levels.len());
             for lvl in &levels {
                 let indicator: Vec<Option<f64>> = value_str.iter()
                     .map(|v| match v {
@@ -566,19 +595,32 @@ fn compute_prop_grouped(
                 let se       = variance.max(0.0).sqrt();
                 let srs_var  = srs_variance_mean_domain(&indicator_ca, weights, &domain_mask)?;
                 let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
-
-                by_vals.push(group.to_string());
-                level_vals.push(lvl.clone());
-                estimates.push(estimate);
-                ses.push(se);
-                variances.push(variance);
-                dfs_vec.push(df_val);
-                ns.push(n_domain);
-                deffs.push(deff);
+                out.push((group.to_string(), lvl.clone(), estimate, se, variance, n_domain, deff));
             }
+            Ok(out)
+        })
+        .collect::<PolarsResult<Vec<_>>>()?;
+
+    let mut by_vals: Vec<String> = Vec::new();
+    let mut level_vals: Vec<String> = Vec::new();
+    let mut estimates: Vec<f64> = Vec::new();
+    let mut ses: Vec<f64> = Vec::new();
+    let mut variances: Vec<f64> = Vec::new();
+    let mut ns: Vec<u32> = Vec::new();
+    let mut deffs: Vec<f64> = Vec::new();
+    for group_rows in per_group {
+        for (g, lvl, est, se, var, n, deff) in group_rows {
+            by_vals.push(g);
+            level_vals.push(lvl);
+            estimates.push(est);
+            ses.push(se);
+            variances.push(var);
+            ns.push(n);
+            deffs.push(deff);
         }
     }
     let n_rows = by_vals.len();
+    let dfs_vec = vec![df_val; n_rows];
     df![by_col => by_vals, "y" => vec![value_col; n_rows], "level" => level_vals,
         "est" => estimates, "se" => ses, "var" => variances, "df" => dfs_vec, "n" => ns, "deff" => deffs]
 }
