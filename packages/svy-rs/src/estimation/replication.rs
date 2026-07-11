@@ -590,6 +590,106 @@ pub fn matrix_mean_by_domain_cols(
     (theta_full, theta_reps, counts)
 }
 
+/// By-domain replicate total from the contiguous replicate columns (no matrix).
+/// Bit-identical to `matrix_total_by_domain`.
+pub fn matrix_total_by_domain_cols(
+    y: &[f64],
+    full_weights: &[f64],
+    rep_cols: &[&[f64]],
+    domain_ids: &[u32],
+    n_domains: usize,
+    n: usize,
+) -> (Vec<f64>, Vec<Vec<f64>>, Vec<u32>) {
+    let mut sum_wy = vec![0.0; n_domains];
+    let mut counts = vec![0u32; n_domains];
+    for i in 0..n {
+        let d = domain_ids[i] as usize;
+        if d >= n_domains {
+            continue;
+        }
+        sum_wy[d] += y[i] * full_weights[i];
+        counts[d] += 1;
+    }
+
+    use rayon::prelude::*;
+    let per_rep: Vec<Vec<f64>> = rep_cols
+        .par_iter()
+        .map(|col| {
+            let mut swy = vec![0.0; n_domains];
+            for i in 0..n {
+                let d = domain_ids[i] as usize;
+                if d < n_domains {
+                    swy[d] += y[i] * col[i];
+                }
+            }
+            swy
+        })
+        .collect();
+
+    let n_reps = rep_cols.len();
+    let theta_reps: Vec<Vec<f64>> = (0..n_domains)
+        .map(|d| (0..n_reps).map(|r| per_rep[r][d]).collect())
+        .collect();
+
+    (sum_wy, theta_reps, counts)
+}
+
+/// By-domain replicate ratio from the contiguous replicate columns (no matrix).
+/// Bit-identical to `matrix_ratio_by_domain`.
+pub fn matrix_ratio_by_domain_cols(
+    y: &[f64],
+    x: &[f64],
+    full_weights: &[f64],
+    rep_cols: &[&[f64]],
+    domain_ids: &[u32],
+    n_domains: usize,
+    n: usize,
+) -> (Vec<f64>, Vec<Vec<f64>>, Vec<u32>) {
+    let mut sum_wy = vec![0.0; n_domains];
+    let mut sum_wx = vec![0.0; n_domains];
+    let mut counts = vec![0u32; n_domains];
+    for i in 0..n {
+        let d = domain_ids[i] as usize;
+        if d >= n_domains {
+            continue;
+        }
+        let w = full_weights[i];
+        sum_wy[d] += y[i] * w;
+        sum_wx[d] += x[i] * w;
+        counts[d] += 1;
+    }
+    let theta_full: Vec<f64> = (0..n_domains)
+        .map(|d| if sum_wx[d] > 0.0 { sum_wy[d] / sum_wx[d] } else { f64::NAN })
+        .collect();
+
+    use rayon::prelude::*;
+    let per_rep: Vec<Vec<f64>> = rep_cols
+        .par_iter()
+        .map(|col| {
+            let mut swy = vec![0.0; n_domains];
+            let mut swx = vec![0.0; n_domains];
+            for i in 0..n {
+                let d = domain_ids[i] as usize;
+                if d < n_domains {
+                    let w = col[i];
+                    swy[d] += y[i] * w;
+                    swx[d] += x[i] * w;
+                }
+            }
+            (0..n_domains)
+                .map(|d| if swx[d] > 0.0 { swy[d] / swx[d] } else { f64::NAN })
+                .collect()
+        })
+        .collect();
+
+    let n_reps = rep_cols.len();
+    let theta_reps: Vec<Vec<f64>> = (0..n_domains)
+        .map(|d| (0..n_reps).map(|r| per_rep[r][d]).collect())
+        .collect();
+
+    (theta_full, theta_reps, counts)
+}
+
 /// Compute total estimates by domain
 pub fn matrix_total_by_domain(
     y: &[f64],
