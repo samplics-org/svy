@@ -160,6 +160,15 @@ pub fn point_estimate_total_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<f64> {
+    if let Some((ys, ws)) = cont_pair(y, weights) {
+        let mut sum_wy = 0.0f64;
+        for (i, m) in domain_mask.iter().enumerate() {
+            if m == Some(true) {
+                sum_wy += ys[i] * ws[i];
+            }
+        }
+        return Ok(sum_wy);
+    }
     Ok(y.iter()
         .zip(weights.iter())
         .zip(domain_mask.iter())
@@ -213,18 +222,35 @@ pub fn point_estimate_ratio_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<f64> {
-    let sum_wy: f64 = y
-        .iter()
-        .zip(weights.iter())
-        .zip(domain_mask.iter())
-        .filter_map(|((yi, wi), m)| if m? { Some(yi? * wi?) } else { None })
-        .sum();
-    let sum_wx: f64 = x
-        .iter()
-        .zip(weights.iter())
-        .zip(domain_mask.iter())
-        .filter_map(|((xi, wi), m)| if m? { Some(xi? * wi?) } else { None })
-        .sum();
+    let fast = match (cont_pair(y, weights), x.null_count() == 0) {
+        (Some((ys, ws)), true) => x.cont_slice().ok().map(|xs| (ys, ws, xs)),
+        _ => None,
+    };
+    let (sum_wy, sum_wx) = if let Some((ys, ws, xs)) = fast {
+        let mut sum_wy = 0.0f64;
+        let mut sum_wx = 0.0f64;
+        for (i, m) in domain_mask.iter().enumerate() {
+            if m == Some(true) {
+                sum_wy += ys[i] * ws[i];
+                sum_wx += xs[i] * ws[i];
+            }
+        }
+        (sum_wy, sum_wx)
+    } else {
+        let sum_wy: f64 = y
+            .iter()
+            .zip(weights.iter())
+            .zip(domain_mask.iter())
+            .filter_map(|((yi, wi), m)| if m? { Some(yi? * wi?) } else { None })
+            .sum();
+        let sum_wx: f64 = x
+            .iter()
+            .zip(weights.iter())
+            .zip(domain_mask.iter())
+            .filter_map(|((xi, wi), m)| if m? { Some(xi? * wi?) } else { None })
+            .sum();
+        (sum_wy, sum_wx)
+    };
 
     if sum_wx == 0.0 {
         return Err(PolarsError::ComputeError(
@@ -531,6 +557,14 @@ pub fn scores_total_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<Float64Chunked> {
+    if let Some((ys, ws)) = cont_pair(y, weights) {
+        let scores: Vec<f64> = domain_mask
+            .iter()
+            .enumerate()
+            .map(|(i, m)| if m == Some(true) { ws[i] * ys[i] } else { 0.0 })
+            .collect();
+        return Ok(Float64Chunked::from_slice("scores".into(), &scores));
+    }
     let scores: Vec<Option<f64>> = y
         .iter()
         .zip(weights.iter())
@@ -585,6 +619,37 @@ pub fn scores_ratio_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<Float64Chunked> {
+    let fast = match (cont_pair(y, weights), x.null_count() == 0) {
+        (Some((ys, ws)), true) => x.cont_slice().ok().map(|xs| (ys, ws, xs)),
+        _ => None,
+    };
+    if let Some((ys, ws, xs)) = fast {
+        let n = ys.len();
+        let in_domain: Vec<bool> = domain_mask.iter().map(|m| m == Some(true)).collect();
+        let mut sum_wy = 0.0f64;
+        let mut sum_wx = 0.0f64;
+        for i in 0..n {
+            if in_domain[i] {
+                sum_wy += ys[i] * ws[i];
+                sum_wx += xs[i] * ws[i];
+            }
+        }
+        if sum_wx == 0.0 {
+            return Ok(Float64Chunked::from_slice("scores".into(), &vec![0.0; n]));
+        }
+        let r_hat = sum_wy / sum_wx;
+        let scores: Vec<f64> = (0..n)
+            .map(|i| {
+                if in_domain[i] {
+                    (ws[i] / sum_wx) * (ys[i] - r_hat * xs[i])
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        return Ok(Float64Chunked::from_slice("scores".into(), &scores));
+    }
+
     // Single pass: accumulate sum_wy, sum_wx (in-domain) and collect quads.
     let n = y.len();
     let mut sum_wy = 0.0f64;
@@ -1607,18 +1672,31 @@ pub fn srs_variance_total_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<f64> {
-    let mut yv = Vec::new();
-    let mut wv = Vec::new();
-    for ((yi, wi), mi) in y
-        .into_iter()
-        .zip(weights.into_iter())
-        .zip(domain_mask.into_iter())
-    {
-        if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi) {
-            yv.push(y_val);
-            wv.push(w_val);
+    let (yv, wv) = if let Some((ys, ws)) = cont_pair(y, weights) {
+        let mut yv = Vec::new();
+        let mut wv = Vec::new();
+        for (i, m) in domain_mask.iter().enumerate() {
+            if m == Some(true) {
+                yv.push(ys[i]);
+                wv.push(ws[i]);
+            }
         }
-    }
+        (yv, wv)
+    } else {
+        let mut yv = Vec::new();
+        let mut wv = Vec::new();
+        for ((yi, wi), mi) in y
+            .into_iter()
+            .zip(weights.into_iter())
+            .zip(domain_mask.into_iter())
+        {
+            if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi) {
+                yv.push(y_val);
+                wv.push(w_val);
+            }
+        }
+        (yv, wv)
+    };
     let n = yv.len() as f64;
     if n < 2.0 {
         return Ok(f64::NAN);
@@ -1672,21 +1750,40 @@ pub fn srs_variance_ratio_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<f64> {
-    let mut yv = Vec::new();
-    let mut xv = Vec::new();
-    let mut wv = Vec::new();
-    for (((yi, xi), wi), mi) in y
-        .into_iter()
-        .zip(x.into_iter())
-        .zip(weights.into_iter())
-        .zip(domain_mask.into_iter())
-    {
-        if let (Some(y_val), Some(x_val), Some(w_val), Some(true)) = (yi, xi, wi, mi) {
-            yv.push(y_val);
-            xv.push(x_val);
-            wv.push(w_val);
+    let fast = match (cont_pair(y, weights), x.null_count() == 0) {
+        (Some((ys, ws)), true) => x.cont_slice().ok().map(|xs| (ys, ws, xs)),
+        _ => None,
+    };
+    let (yv, xv, wv) = if let Some((ys, ws, xs)) = fast {
+        let mut yv = Vec::new();
+        let mut xv = Vec::new();
+        let mut wv = Vec::new();
+        for (i, m) in domain_mask.iter().enumerate() {
+            if m == Some(true) {
+                yv.push(ys[i]);
+                xv.push(xs[i]);
+                wv.push(ws[i]);
+            }
         }
-    }
+        (yv, xv, wv)
+    } else {
+        let mut yv = Vec::new();
+        let mut xv = Vec::new();
+        let mut wv = Vec::new();
+        for (((yi, xi), wi), mi) in y
+            .into_iter()
+            .zip(x.into_iter())
+            .zip(weights.into_iter())
+            .zip(domain_mask.into_iter())
+        {
+            if let (Some(y_val), Some(x_val), Some(w_val), Some(true)) = (yi, xi, wi, mi) {
+                yv.push(y_val);
+                xv.push(x_val);
+                wv.push(w_val);
+            }
+        }
+        (yv, xv, wv)
+    };
     let n = yv.len() as f64;
     if n < 2.0 {
         return Ok(f64::NAN);
