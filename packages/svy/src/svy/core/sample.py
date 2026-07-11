@@ -571,11 +571,20 @@ class Sample:
         suffix: str = _INTERNAL_CONCAT_SUFFIX,
         categorical: bool = True,
         drop_original: bool = False,
+        include_design: bool = True,
     ) -> tuple[DF, tuple[list[str], list[str], list[str], list[str]]]:
         by_cols = self._to_cols(by)
-        stratum_cols = self._to_cols(design.stratum)
-        psu_cols = self._to_cols(design.psu)
-        ssu_cols = self._to_cols(design.ssu)
+        # ``include_design=False`` builds only the ``by`` concat and skips the
+        # stratum/psu/ssu string columns — used by the Phase C estimation path,
+        # which passes integer design *codes* to Rust instead of string concats.
+        if include_design:
+            stratum_cols = self._to_cols(design.stratum)
+            psu_cols = self._to_cols(design.psu)
+            ssu_cols = self._to_cols(design.ssu)
+        else:
+            stratum_cols = []
+            psu_cols = []
+            ssu_cols = []
 
         out = self._concatenate_cols(
             data=data,

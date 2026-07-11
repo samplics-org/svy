@@ -335,6 +335,10 @@ pub fn influence_covariance(
     // directly rather than via design_col_codes.
     let (strata_idx, n_strata) = match strata {
         Some(s) => {
+            // Cast to String first so this accepts either string labels or the
+            // Phase C integer code columns (a no-op for strings). Correct either
+            // way — codes become "0"/"1"/… which partition identically.
+            let s = s.cast(&DataType::String)?;
             let s = s.str()?;
             let mut map: HashMap<&str, u32> = HashMap::new();
             let mut next = 0u32;
@@ -356,6 +360,7 @@ pub fn influence_covariance(
 
     let psu_idx: Vec<u32> = match psu {
         Some(p) => {
+            let p = p.cast(&DataType::String)?;
             let p = p.str()?;
             let mut map: HashMap<&str, u32> = HashMap::new();
             let mut next = 0u32;

@@ -13,8 +13,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from svy.core.constants import _INTERNAL_CONCAT_SUFFIX
-from svy.core.data_prep import prepare_data
+from svy.core.data_prep import _STRATUM_CODE, prepare_data
 from svy.core.design import Design
 from svy.core.sample import Sample
 
@@ -231,9 +230,6 @@ class TestInternalDesignConsistency:
 
     def test_internal_design_stale_after_rename(self, single_stratum_sample):
         """After rename, _internal_design still references old column names."""
-        # Before rename, _internal_design should have the stratum column
-        idesign_before = single_stratum_sample._internal_design.copy()
-
         sample = single_stratum_sample.wrangling.rename_columns({"geo": "region"})
 
         # _internal_design may be stale (this documents the known behavior)
@@ -266,16 +262,16 @@ class TestInternalDesignConsistency:
             apply_singleton_filter=False,
         )
 
-        suffix = _INTERNAL_CONCAT_SUFFIX
-        expected_strata_col = f"stratum{suffix}"
-
-        assert prep.strata_col == expected_strata_col
+        # Phase C: design columns resolve to the integer code column, built
+        # from the *current* design (design.stratum), not the stale
+        # _internal_design.
+        assert prep.strata_col == _STRATUM_CODE
         assert prep.strata_col in prep.df.columns
         assert prep.psu_col is not None
         assert prep.psu_col in prep.df.columns
 
     def test_prepare_data_stratum_col_has_correct_values(self, survey_df):
-        """Concatenated stratum column has correct crossed values."""
+        """Crossed stratum codes have the correct cardinality (geo × area)."""
         design = Design(stratum=("geo", "area"), psu="psu", wgt="wgt")
         sample = Sample(data=survey_df, design=design)
 
@@ -288,18 +284,15 @@ class TestInternalDesignConsistency:
             apply_singleton_filter=False,
         )
 
-        strata_values = prep.df[prep.strata_col].unique().sort().to_list()
+        n_codes = prep.df[prep.strata_col].n_unique()
+        # Should have up to 4 × 2 = 8 strata (geo × area), and more than one.
+        assert 1 < n_codes <= 8
+        # The code partition must match the crossed-string partition exactly.
+        n_groups = sample._data.select(pl.struct(["geo", "area"])).n_unique()
+        assert n_codes == n_groups
 
-        # Should have up to 4 × 2 = 8 strata (geo × area)
-        assert len(strata_values) <= 8
-        assert len(strata_values) > 1
-
-        # Each value should contain the separator
-        for v in strata_values:
-            assert "__by__" in v
-
-    def test_prepare_data_single_stratum_no_separator(self, single_stratum_sample):
-        """Single stratum column should not have separator in values."""
+    def test_prepare_data_single_stratum_partition(self, single_stratum_sample):
+        """A single-column stratum yields one code per distinct region value."""
         prep = prepare_data(
             single_stratum_sample,
             y="income",
@@ -309,9 +302,8 @@ class TestInternalDesignConsistency:
             apply_singleton_filter=False,
         )
 
-        strata_values = prep.df[prep.strata_col].unique().sort().to_list()
-        # Single column — values are just the original column values
-        assert set(strata_values) == {"East", "North", "South", "West"}
+        # 4 regions → 4 distinct codes (the codes are the integer factorization).
+        assert prep.df[prep.strata_col].n_unique() == 4
 
     def test_prepare_data_no_stratum(self, weight_only_sample):
         """No stratum in design → strata_col is None."""
@@ -326,8 +318,8 @@ class TestInternalDesignConsistency:
         assert prep.strata_col is None
         assert prep.psu_col is None
 
-    def test_prepare_data_casts_stratum_to_string(self, multi_stratum_sample):
-        """Concatenated stratum should be cast to String (not Categorical)."""
+    def test_prepare_data_stratum_code_is_uint32(self, multi_stratum_sample):
+        """Stratum design column is a UInt32 code (Phase C fast path)."""
         prep = prepare_data(
             multi_stratum_sample,
             y="income",
@@ -336,7 +328,7 @@ class TestInternalDesignConsistency:
             select_columns=True,
             apply_singleton_filter=False,
         )
-        assert prep.df[prep.strata_col].dtype == pl.String
+        assert prep.df[prep.strata_col].dtype == pl.UInt32
 
 
 # ==================== Weight-Only Design ====================
