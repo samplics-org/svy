@@ -22,12 +22,15 @@ use crate::categorical::ttest::{ttest_one_sample, ttest_one_sample_domain, ttest
 // Shared column-extraction helpers
 // ============================================================================
 
-pub(crate) fn get_opt_str<'a>(
+/// Fetch an optional design column as a `&Column` (dtype-agnostic). The
+/// downstream variance/df kernels dispatch on dtype: String is hashed, integer
+/// codes (Phase C) are densified.
+pub(crate) fn get_opt_col<'a>(
     df: &'a DataFrame,
     col: Option<&str>,
-) -> PolarsResult<Option<&'a StringChunked>> {
+) -> PolarsResult<Option<&'a Column>> {
     match col {
-        Some(c) => Ok(Some(df.column(c)?.as_materialized_series().str()?)),
+        Some(c) => Ok(Some(df.column(c)?)),
         None => Ok(None),
     }
 }
@@ -288,9 +291,9 @@ fn compute_svyttest_single(
     null_value: f64,
     domain_col: Option<&str>, domain_val: Option<&str>,
 ) -> PolarsResult<DataFrame> {
-    let strata  = get_opt_str(df, strata_col)?;
-    let psu     = get_opt_str(df, psu_col)?;
-    let ssu     = get_opt_str(df, ssu_col)?;
+    let strata  = get_opt_col(df, strata_col)?;
+    let psu     = get_opt_col(df, psu_col)?;
+    let ssu     = get_opt_col(df, ssu_col)?;
     let fpc     = get_opt_f64(df, fpc_col)?;
     let fpc_ssu = get_opt_f64(df, fpc_ssu_col)?;
 
@@ -453,9 +456,9 @@ fn compute_svyranktest_single(
         RankScoreMethod::Median => "median",
     };
 
-    let strata  = get_opt_str(df, strata_col)?;
-    let psu     = get_opt_str(df, psu_col)?;
-    let ssu     = get_opt_str(df, ssu_col)?;
+    let strata  = get_opt_col(df, strata_col)?;
+    let psu     = get_opt_col(df, psu_col)?;
+    let ssu     = get_opt_col(df, ssu_col)?;
     let fpc     = get_opt_f64(df, fpc_col)?;
     let fpc_ssu = get_opt_f64(df, fpc_ssu_col)?;
 
@@ -552,15 +555,11 @@ fn compute_tabulate(
     compute_totals: bool,
 ) -> PolarsResult<(DataFrame, DataFrame)> {
     let weights = df.column(weight_col)?.as_materialized_series().f64()?;
-    let strata = strata_col
-        .map(|c| df.column(c).and_then(|s| Ok(s.as_materialized_series().str()?.clone())))
-        .transpose()?;
-    let psu = psu_col
-        .map(|c| df.column(c).and_then(|s| Ok(s.as_materialized_series().str()?.clone())))
-        .transpose()?;
-    let ssu = ssu_col
-        .map(|c| df.column(c).and_then(|s| Ok(s.as_materialized_series().str()?.clone())))
-        .transpose()?;
+    // Design columns as owned Columns (cheap Arc clone); the variance/df kernels
+    // dispatch on dtype. Tabulate always supplies String columns today.
+    let strata = strata_col.map(|c| df.column(c).map(|col| col.clone())).transpose()?;
+    let psu = psu_col.map(|c| df.column(c).map(|col| col.clone())).transpose()?;
+    let ssu = ssu_col.map(|c| df.column(c).map(|col| col.clone())).transpose()?;
     let fpc = fpc_col
         .map(|c| df.column(c).and_then(|s| Ok(s.as_materialized_series().f64()?.clone())))
         .transpose()?;

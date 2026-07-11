@@ -90,9 +90,9 @@ fn compute_mean_ungrouped(
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
-    let strata = strata_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let psu    = psu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let ssu    = ssu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
+    let strata = strata_col.map(|c| df.column(c)).transpose()?;
+    let psu    = psu_col.map(|c| df.column(c)).transpose()?;
+    let ssu    = ssu_col.map(|c| df.column(c)).transpose()?;
     let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
 
@@ -118,9 +118,9 @@ fn compute_mean_grouped(
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
-    let strata = strata_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let psu    = psu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let ssu    = ssu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
+    let strata = strata_col.map(|c| df.column(c)).transpose()?;
+    let psu    = psu_col.map(|c| df.column(c)).transpose()?;
+    let ssu    = ssu_col.map(|c| df.column(c)).transpose()?;
     let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let by_str = df.column(by_col)?.str()?;
@@ -208,9 +208,9 @@ fn compute_total_ungrouped(
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
-    let strata = strata_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let psu    = psu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let ssu    = ssu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
+    let strata = strata_col.map(|c| df.column(c)).transpose()?;
+    let psu    = psu_col.map(|c| df.column(c)).transpose()?;
+    let ssu    = ssu_col.map(|c| df.column(c)).transpose()?;
     let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
 
@@ -236,9 +236,9 @@ fn compute_total_grouped(
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
-    let strata = strata_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let psu    = psu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let ssu    = ssu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
+    let strata = strata_col.map(|c| df.column(c)).transpose()?;
+    let psu    = psu_col.map(|c| df.column(c)).transpose()?;
+    let ssu    = ssu_col.map(|c| df.column(c)).transpose()?;
     let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let by_str = df.column(by_col)?.str()?;
@@ -328,9 +328,9 @@ fn compute_ratio_ungrouped(
     let y = df.column(numerator_col)?.f64()?;
     let x = df.column(denominator_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
-    let strata = strata_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let psu    = psu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let ssu    = ssu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
+    let strata = strata_col.map(|c| df.column(c)).transpose()?;
+    let psu    = psu_col.map(|c| df.column(c)).transpose()?;
+    let ssu    = ssu_col.map(|c| df.column(c)).transpose()?;
     let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
 
@@ -357,9 +357,9 @@ fn compute_ratio_grouped(
     let y = df.column(numerator_col)?.f64()?;
     let x = df.column(denominator_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
-    let strata = strata_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let psu    = psu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let ssu    = ssu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
+    let strata = strata_col.map(|c| df.column(c)).transpose()?;
+    let psu    = psu_col.map(|c| df.column(c)).transpose()?;
+    let ssu    = ssu_col.map(|c| df.column(c)).transpose()?;
     let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let by_str = df.column(by_col)?.str()?;
@@ -446,9 +446,9 @@ fn compute_prop_ungrouped(
     singleton_method: Option<&str>,
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
-    let strata = strata_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let psu    = psu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let ssu    = ssu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
+    let strata = strata_col.map(|c| df.column(c)).transpose()?;
+    let psu    = psu_col.map(|c| df.column(c)).transpose()?;
+    let ssu    = ssu_col.map(|c| df.column(c)).transpose()?;
     let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
 
@@ -506,9 +506,9 @@ fn compute_prop_grouped(
     by_col: &str, singleton_method: Option<&str>,
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
-    let strata = strata_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let psu    = psu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let ssu    = ssu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
+    let strata = strata_col.map(|c| df.column(c)).transpose()?;
+    let psu    = psu_col.map(|c| df.column(c)).transpose()?;
+    let ssu    = ssu_col.map(|c| df.column(c)).transpose()?;
     let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
 
@@ -624,9 +624,9 @@ fn compute_median_ungrouped(
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
-    let strata = strata_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let psu    = psu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let ssu    = ssu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
+    let strata = strata_col.map(|c| df.column(c)).transpose()?;
+    let psu    = psu_col.map(|c| df.column(c)).transpose()?;
+    let ssu    = ssu_col.map(|c| df.column(c)).transpose()?;
     let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
 
@@ -650,9 +650,9 @@ fn compute_median_grouped(
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
-    let strata = strata_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let psu    = psu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let ssu    = ssu_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
+    let strata = strata_col.map(|c| df.column(c)).transpose()?;
+    let psu    = psu_col.map(|c| df.column(c)).transpose()?;
+    let ssu    = ssu_col.map(|c| df.column(c)).transpose()?;
     let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let by_str = df.column(by_col)?.str()?;

@@ -199,9 +199,9 @@ fn beta_cf(x: f64, a: f64, b: f64) -> f64 {
 pub fn estimate_proportions(
     y: &StringChunked,
     weights: &Float64Chunked,
-    strata: Option<&StringChunked>,
-    psu: Option<&StringChunked>,
-    ssu: Option<&StringChunked>,
+    strata: Option<&Column>,
+    psu: Option<&Column>,
+    ssu: Option<&Column>,
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
@@ -295,9 +295,9 @@ pub fn estimate_proportions(
 pub fn estimate_totals(
     y: &StringChunked,
     weights: &Float64Chunked,
-    strata: Option<&StringChunked>,
-    psu: Option<&StringChunked>,
-    ssu: Option<&StringChunked>,
+    strata: Option<&Column>,
+    psu: Option<&Column>,
+    ssu: Option<&Column>,
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
@@ -488,20 +488,27 @@ pub fn rao_scott(
 
 /// Count unique strata and PSUs for Rao-Scott df calculation.
 pub fn count_strata_psus(
-    strata: Option<&StringChunked>,
-    psu: Option<&StringChunked>,
+    strata: Option<&Column>,
+    psu: Option<&Column>,
     n: usize,
 ) -> (usize, usize) {
     match (strata, psu) {
         (Some(s), Some(p)) => {
             let n_strata = s.unique().map(|u| u.len()).unwrap_or(1);
-            let mut pairs = std::collections::HashSet::new();
-            for (si, pi) in s.iter().zip(p.iter()) {
-                if let (Some(sv), Some(pv)) = (si, pi) {
-                    pairs.insert((sv.to_string(), pv.to_string()));
+            // Tabulate always passes String design columns; borrow &str pairs.
+            let n_pairs = match (s.str(), p.str()) {
+                (Ok(s), Ok(p)) => {
+                    let mut pairs = std::collections::HashSet::new();
+                    for (si, pi) in s.iter().zip(p.iter()) {
+                        if let (Some(sv), Some(pv)) = (si, pi) {
+                            pairs.insert((sv, pv));
+                        }
+                    }
+                    pairs.len()
                 }
-            }
-            (n_strata, pairs.len())
+                _ => 0,
+            };
+            (n_strata, n_pairs)
         }
         (None, Some(p)) => (1, p.unique().map(|u| u.len()).unwrap_or(n)),
         (Some(s), None) => (s.unique().map(|u| u.len()).unwrap_or(1), n),
