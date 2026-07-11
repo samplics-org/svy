@@ -1,6 +1,16 @@
 """
-Tests for svy-rs survey estimation functions.
-Expected values from R survey package / svy library.
+Tests for svy-rs survey estimation functions, exercised through the current
+``_internal`` API re-exported at the ``svy_rs`` top level:
+``taylor_mean`` / ``taylor_total`` / ``taylor_ratio`` / ``taylor_prop``.
+
+Expected values from the R survey package / the svy library. These are golden
+tests on an independent synthetic dataset (packages/svy-rs/data/), complementing
+the svy-package suite which drives the same kernels through the Python layer.
+
+Note: the ``_internal`` functions do NOT auto-cast — the svy Python layer owns
+that. So the caller must hand the kernel Float64 value/weight columns and String
+strata/psu/by columns (see ``_cast_for_kernel``). The removed ``df.svy`` polars
+accessor used to do this implicitly.
 """
 
 from pathlib import Path
@@ -19,7 +29,9 @@ def synthetic_sample_df():
     df = pl.read_csv(BASE_DIR / "data/svy_synthetic_sample_07082025.csv")
 
     # Convert NaN to null in float columns (so is_not_null() filtering works)
-    float_cols = [col for col, dtype in zip(df.columns, df.dtypes) if dtype == pl.Float64]
+    float_cols = [
+        col for col, dtype in zip(df.columns, df.dtypes, strict=False) if dtype == pl.Float64
+    ]
     for col in float_cols:
         df = df.with_columns(
             pl.when(pl.col(col).is_nan()).then(None).otherwise(pl.col(col)).alias(col)
@@ -33,6 +45,27 @@ def synthetic_sample_df():
         .otherwise(None)
         .alias("resp2_new")
     )
+
+
+def _cast_for_kernel(df, design_kwargs, *, by_col=None, float_cols=()):
+    """Cast columns to the dtypes the ``_internal`` kernels require.
+
+    - strata/psu (and any ``by`` column) → String
+    - the given value/denominator columns → Float64
+
+    The removed ``df.svy.design`` accessor did this implicitly; the direct
+    kernel API expects the columns already in the right dtype.
+    """
+    casts = []
+    for key in ("strata", "psu"):
+        col = design_kwargs.get(key)
+        if col:
+            casts.append(pl.col(col).cast(pl.String))
+    if by_col:
+        casts.append(pl.col(by_col).cast(pl.String))
+    for col in float_cols:
+        casts.append(pl.col(col).cast(pl.Float64))
+    return df.with_columns(casts) if casts else df
 
 
 # =============================================================================
@@ -85,8 +118,15 @@ def test_mean_estimation_variants(synthetic_sample_df, design_kwargs, expected):
     df = synthetic_sample_df.filter(
         pl.col("income").is_not_null() & pl.col("samp_wgt").is_not_null()
     )
+    df = _cast_for_kernel(df, design_kwargs)
 
-    result = df.svy.design(**design_kwargs).agg(est=ps.mean("income"))
+    result = ps.taylor_mean(
+        df,
+        value_col="income",
+        weight_col=design_kwargs["weight"],
+        strata_col=design_kwargs.get("strata"),
+        psu_col=design_kwargs.get("psu"),
+    )
 
     assert result["est"][0] == pytest.approx(expected["est"], rel=TOL)
     assert result["se"][0] == pytest.approx(expected["se"], rel=TOL)
@@ -135,8 +175,16 @@ def test_mean_domain_estimates(synthetic_sample_df, design_kwargs, expected):
         & pl.col("samp_wgt").is_not_null()
         & pl.col("educ").is_not_null()
     )
+    df = _cast_for_kernel(df, design_kwargs, by_col="educ")
 
-    result = df.svy.design(**design_kwargs).group_by("educ").agg(est=ps.mean("income"))
+    result = ps.taylor_mean(
+        df,
+        value_col="income",
+        weight_col=design_kwargs["weight"],
+        strata_col=design_kwargs.get("strata"),
+        psu_col=design_kwargs.get("psu"),
+        by_col="educ",
+    )
 
     for row in result.iter_rows(named=True):
         domain = row["educ"]
@@ -198,8 +246,15 @@ def test_total_estimation_variants(synthetic_sample_df, design_kwargs, expected)
     df = synthetic_sample_df.filter(
         pl.col("resp2_new").is_not_null() & pl.col("samp_wgt").is_not_null()
     )
+    df = _cast_for_kernel(df, design_kwargs)
 
-    result = df.svy.design(**design_kwargs).agg(est=ps.total("resp2_new"))
+    result = ps.taylor_total(
+        df,
+        value_col="resp2_new",
+        weight_col=design_kwargs["weight"],
+        strata_col=design_kwargs.get("strata"),
+        psu_col=design_kwargs.get("psu"),
+    )
 
     assert result["est"][0] == pytest.approx(expected["est"], rel=TOL)
     assert result["se"][0] == pytest.approx(expected["se"], rel=TOL)
@@ -248,8 +303,16 @@ def test_total_domain_estimates(synthetic_sample_df, design_kwargs, expected):
         & pl.col("samp_wgt").is_not_null()
         & pl.col("educ").is_not_null()
     )
+    df = _cast_for_kernel(df, design_kwargs, by_col="educ")
 
-    result = df.svy.design(**design_kwargs).group_by("educ").agg(est=ps.total("resp2_new"))
+    result = ps.taylor_total(
+        df,
+        value_col="resp2_new",
+        weight_col=design_kwargs["weight"],
+        strata_col=design_kwargs.get("strata"),
+        psu_col=design_kwargs.get("psu"),
+        by_col="educ",
+    )
 
     for row in result.iter_rows(named=True):
         domain = row["educ"]
@@ -313,8 +376,17 @@ def test_ratio_estimation_variants(synthetic_sample_df, design_kwargs, expected)
         & pl.col("fam_size").is_not_null()
         & pl.col("samp_wgt").is_not_null()
     )
+    # fam_size is Int64 in the CSV; the kernel needs Float64.
+    df = _cast_for_kernel(df, design_kwargs, float_cols=("fam_size",))
 
-    result = df.svy.design(**design_kwargs).agg(est=ps.ratio("income", "fam_size"))
+    result = ps.taylor_ratio(
+        df,
+        numerator_col="income",
+        denominator_col="fam_size",
+        weight_col=design_kwargs["weight"],
+        strata_col=design_kwargs.get("strata"),
+        psu_col=design_kwargs.get("psu"),
+    )
 
     assert result["est"][0] == pytest.approx(expected["est"], rel=TOL)
     assert result["se"][0] == pytest.approx(expected["se"], rel=TOL)
@@ -364,9 +436,16 @@ def test_ratio_domain_estimates(synthetic_sample_df, design_kwargs, expected):
         & pl.col("samp_wgt").is_not_null()
         & pl.col("educ").is_not_null()
     )
+    df = _cast_for_kernel(df, design_kwargs, by_col="educ", float_cols=("fam_size",))
 
-    result = (
-        df.svy.design(**design_kwargs).group_by("educ").agg(est=ps.ratio("income", "fam_size"))
+    result = ps.taylor_ratio(
+        df,
+        numerator_col="income",
+        denominator_col="fam_size",
+        weight_col=design_kwargs["weight"],
+        strata_col=design_kwargs.get("strata"),
+        psu_col=design_kwargs.get("psu"),
+        by_col="educ",
     )
 
     for row in result.iter_rows(named=True):
@@ -393,7 +472,7 @@ def test_simple_mean():
         }
     )
 
-    result = df.svy.design(weight="weight").agg(est=ps.mean("value"))
+    result = ps.taylor_mean(df, value_col="value", weight_col="weight")
 
     assert result["est"][0] == pytest.approx(3.0, rel=1e-10)
     assert result["n"][0] == 5
@@ -408,29 +487,14 @@ def test_weighted_mean():
         }
     )
 
-    result = df.svy.design(weight="weight").agg(est=ps.mean("value"))
+    result = ps.taylor_mean(df, value_col="value", weight_col="weight")
 
     # Weighted mean: (1*1 + 2*3) / (1+3) = 7/4 = 1.75
     assert result["est"][0] == pytest.approx(1.75, rel=1e-10)
 
 
-def test_auto_cast_integers():
-    """Test that integer columns are auto-cast to float."""
-    df = pl.DataFrame(
-        {
-            "value": [10, 20, 30, 40, 50],  # integers
-            "weight": [1, 1, 1, 1, 1],  # integers
-        }
-    )
-
-    # Should not raise an error
-    result = df.svy.design(weight="weight").agg(est=ps.mean("value"))
-
-    assert result["est"][0] == pytest.approx(30.0, rel=1e-10)
-
-
 def test_group_by():
-    """Test domain estimation with group_by."""
+    """Test domain estimation with a by column."""
     df = pl.DataFrame(
         {
             "value": [1.0, 2.0, 10.0, 20.0],
@@ -439,7 +503,7 @@ def test_group_by():
         }
     )
 
-    result = df.svy.design(weight="weight").group_by("group").agg(est=ps.mean("value"))
+    result = ps.taylor_mean(df, value_col="value", weight_col="weight", by_col="group")
 
     result_dict = {row["group"]: row["est"] for row in result.iter_rows(named=True)}
 
@@ -456,7 +520,7 @@ def test_total():
         }
     )
 
-    result = df.svy.design(weight="weight").agg(est=ps.total("value"))
+    result = ps.taylor_total(df, value_col="value", weight_col="weight")
 
     # Total: 10*2 + 20*2 + 30*2 = 120
     assert result["est"][0] == pytest.approx(120.0, rel=1e-10)
@@ -472,7 +536,7 @@ def test_ratio():
         }
     )
 
-    result = df.svy.design(weight="weight").agg(est=ps.ratio("num", "denom"))
+    result = ps.taylor_ratio(df, numerator_col="num", denominator_col="denom", weight_col="weight")
 
     # Ratio: (100+200+300) / (10+20+30) = 600/60 = 10
     assert result["est"][0] == pytest.approx(10.0, rel=1e-10)
@@ -481,21 +545,6 @@ def test_ratio():
 # =============================================================================
 # PROPORTION ESTIMATION TESTS
 # =============================================================================
-
-
-def _prepare_df_for_prop(df, design_kwargs, by_col=None):
-    """Cast columns to appropriate types for taylor_prop."""
-    casts = []
-
-    # Cast strata/psu to String
-    if design_kwargs.get("strata"):
-        casts.append(pl.col(design_kwargs["strata"]).cast(pl.String))
-    if design_kwargs.get("psu"):
-        casts.append(pl.col(design_kwargs["psu"]).cast(pl.String))
-    if by_col:
-        casts.append(pl.col(by_col).cast(pl.String))
-
-    return df.with_columns(casts) if casts else df
 
 
 @pytest.mark.parametrize(
@@ -545,7 +594,7 @@ def test_prop_estimation_variants(synthetic_sample_df, design_kwargs, expected):
     )
 
     # Cast columns
-    df = _prepare_df_for_prop(df, design_kwargs)
+    df = _cast_for_kernel(df, design_kwargs)
 
     result = ps.taylor_prop(
         df,
@@ -610,7 +659,7 @@ def test_prop_domain_estimates(synthetic_sample_df, design_kwargs, expected):
     )
 
     # Cast columns
-    df = _prepare_df_for_prop(df, design_kwargs, by_col="educ")
+    df = _cast_for_kernel(df, design_kwargs, by_col="educ")
 
     result = ps.taylor_prop(
         df,
