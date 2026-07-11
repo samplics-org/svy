@@ -134,7 +134,11 @@ presentations/*/
 roadmap/
 roadmap.md
 specs/
-benchmarks/
+# Benchmark scripts are local-only by default (many depend on the gitignored WB
+# CSVs), but the self-contained Phase-A harness is tracked so it — and its
+# recorded baseline — travel with the branch to CI and other machines.
+**/benchmarks/*
+!packages/svy/benchmarks/bench_kernel.py
 examples/
 svy-old
 testwheels
