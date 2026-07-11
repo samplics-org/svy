@@ -594,7 +594,8 @@ pub fn scores_median_domain(
 // Variance Helpers (Indexing & Math)
 // ============================================================================
 
-fn index_categorical(col: &StringChunked) -> (Vec<u32>, u32) {
+#[doc(hidden)] // internal; exposed only so criterion benches can measure it
+pub fn index_categorical(col: &StringChunked) -> (Vec<u32>, u32) {
     let mut map: HashMap<&str, u32> = HashMap::new();
     let mut next_idx = 0u32;
     let indices: Vec<u32> = col
@@ -615,7 +616,8 @@ fn index_categorical(col: &StringChunked) -> (Vec<u32>, u32) {
 /// so PSU labels reused across strata (e.g. psu "1" in every stratum, as in
 /// NHANES/DHS-style data) are treated as distinct PSUs. This matches R's
 /// survey package and glm.rs, which key PSUs on (stratum, psu).
-fn index_categorical_pair(a: &StringChunked, b: &StringChunked) -> (Vec<u32>, u32) {
+#[doc(hidden)] // internal; exposed only so criterion benches can measure it
+pub fn index_categorical_pair(a: &StringChunked, b: &StringChunked) -> (Vec<u32>, u32) {
     let mut map: HashMap<(&str, &str), u32> = HashMap::new();
     let mut next_idx = 0u32;
     let indices: Vec<u32> = a

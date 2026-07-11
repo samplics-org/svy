@@ -2,7 +2,11 @@
 use pyo3::prelude::*;
 
 mod categorical;
-mod estimation;
+// `pub` so the criterion benches in benches/ (a separate crate that links this
+// one as an rlib) can reach the kernel functions. The crate's real public
+// surface is the `_internal` PyModule below; these Rust-level items are only
+// consumed by benches and integration tests.
+pub mod estimation;
 mod regression;
 mod rng;
 mod sampling;
