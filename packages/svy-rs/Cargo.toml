@@ -8,10 +8,19 @@ homepage = "https://gitlab.com/samplics/svy"
 
 [lib]
 name = "_internal"
-crate-type = ["cdylib"]
+# cdylib: the Python extension module (what maturin builds into the wheel).
+# rlib:   lets `cargo test`/`cargo bench` and the criterion benches link the
+#         crate as an ordinary Rust library.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pyo3 = { version = "0.26", features = ["abi3-py311", "extension-module", "generate-import-lib"] }
+# `extension-module` is intentionally NOT listed here — it is pulled in only
+# through this crate's own `extension-module` feature (default-on, and also
+# passed explicitly by maturin via pyproject.toml). Keeping it off the direct
+# dependency lets host builds drop it with `--no-default-features`, so
+# `cargo test`/`cargo bench` link a normal binary instead of failing on
+# undefined libpython symbols. See the [features] section below.
+pyo3 = { version = "0.26", features = ["abi3-py311", "generate-import-lib"] }
 pyo3-polars = { version = "0.25", features = ["derive"] }
 polars = { version = "0.52", default-features = false, features = ["dtype-categorical"] }
 faer = "0.24"
@@ -19,9 +28,23 @@ ahash = "0.8"
 numpy = "0.26"
 ndarray = { version = "0.16", features = ["rayon"] }
 rayon = "1.12"
+rustc-hash = "2.1"
 thiserror = "2.0"
 approx = "0.5.1"
 
 [features]
 extension-module = ["pyo3/extension-module"]
 default = ["extension-module"]
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Criterion micro-benchmarks for the estimation kernel. Run WITHOUT the
+# extension-module feature so the bench binary links as a normal executable:
+#   PYO3_PYTHON=../../.venv/bin/python cargo bench --no-default-features
+# (see `make bench-svy-rs`). Measures the individual functions Phase B/C touch
+# — string vs integer design indexing, fused point estimates, variance passes —
+# in isolation, free of Python/PyO3 marshalling noise.
+[[bench]]
+name = "kernel_bench"
+harness = false

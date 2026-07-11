@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import itertools
 import logging
 
 from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping, Self, Sequence, cast
@@ -53,6 +54,20 @@ log = logging.getLogger(__name__)
 INTEGER_DTYPES = {pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64}
 FLOAT_DTYPES = {pl.Float32, pl.Float64}
 
+# Globally monotonic data-version counter. Every Sample (and every fork or
+# in-place mutation of one) draws a fresh value, so a version stamp is unique
+# across ALL Sample instances for the process lifetime. Caches that key on the
+# data version (estimation design caches, prepared-fields cache, and the
+# Phase-C design code columns) can therefore never serve a stale cross-object
+# hit — a mismatch always means "rebuild". This replaces the previous
+# ``id(df)``-based cache keys, which CPython id-reuse could alias after an
+# in-place mutation freed and reallocated the underlying frame.
+_DATA_VERSION_COUNTER = itertools.count(1)
+
+
+def _next_data_version() -> int:
+    return next(_DATA_VERSION_COUNTER)
+
 
 class Sample:
     """A sample class for survey data."""
@@ -72,6 +87,7 @@ class Sample:
     # ════════════════════════════════════════════════════════════════════════
     __slots__ = (
         "_data",
+        "_data_version",
         "_fpc",
         "_design",
         "_metadata",
@@ -141,6 +157,7 @@ class Sample:
 
         self._warnings: WarningStore = WarningStore()
         self._data = local_data
+        self._data_version = _next_data_version()
 
         # Initialize MetadataStore (replaces _labels)
         self._metadata = MetadataStore(catalog=catalog)
@@ -153,6 +170,20 @@ class Sample:
 
         self._check_for_singletons()
         self._validate_design()
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        # Any rebind of the data or design invalidates every version-keyed
+        # cache (estimation design caches, the prepared-fields cache, and the
+        # Phase-C design code columns). Enforcing the bump here — rather than at
+        # each of the ~40 call sites in wrangling/weighting/selection — makes
+        # the invariant impossible to miss for current and future code. Only
+        # *writes* are intercepted; reads of ``self._data`` remain direct slot
+        # access with zero overhead. Forks that must diverge deterministically
+        # (see ``_replace_data``) reassign ``_data_version`` explicitly after
+        # copying, so this hook's copy-time ordering does not matter there.
+        object.__setattr__(self, name, value)
+        if name == "_data" or name == "_design":
+            object.__setattr__(self, "_data_version", _next_data_version())
 
     def __hash__(self) -> int:
         _d = (
@@ -720,6 +751,11 @@ class Sample:
         the original (and vice versa).
         """
         new = copy.copy(self)
+        # This assignment runs *after* copy.copy completes, so ``__setattr__``
+        # deterministically stamps the fork with a fresh, globally-unique data
+        # version. That matters: a fork carries different (or independently
+        # mutable) data, and without a distinct version a cache populated by
+        # the parent could be served to the fork through a shared design object.
         new._data = data
         new._metadata = copy.deepcopy(self._metadata)
         new._internal_design = copy.deepcopy(self._internal_design)

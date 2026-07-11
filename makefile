@@ -93,6 +93,28 @@ test-svy-rs:
 	@echo "▶ Testing svy-rs..."
 	cd $(PKG_SVY_RS) && uv run pytest
 
+# ====== Benchmarks & native Rust tests ======
+# The svy-rs crate builds the Python extension by default (pyo3/extension-module).
+# Host-native `cargo test`/`cargo bench` must drop that feature (--no-default-
+# features) so the binary links normally, and point pyo3 at the venv interpreter.
+.PHONY: test-svy-rs-cargo bench-svy-rs bench-svy bench
+PYO3_PYTHON := $(CURDIR)/.venv/bin/python
+
+test-svy-rs-cargo:
+	@echo "▶ Rust unit tests (svy-rs, host build)..."
+	cd $(PKG_SVY_RS) && PYO3_PYTHON=$(PYO3_PYTHON) cargo test --lib --no-default-features
+
+bench-svy-rs:
+	@echo "▶ Criterion kernel benches (svy-rs)..."
+	cd $(PKG_SVY_RS) && PYO3_PYTHON=$(PYO3_PYTHON) cargo bench --no-default-features
+
+bench-svy:
+	@echo "▶ Python end-to-end + direct-kernel benches..."
+	cd $(PKG_SVY) && uv run python benchmarks/bench_kernel.py
+
+bench: bench-svy-rs bench-svy
+	@echo "All benchmarks complete."
+
 # ====== svy (pure Python — the one we publish from this repo) ======
 .PHONY: build-svy
 build-svy:

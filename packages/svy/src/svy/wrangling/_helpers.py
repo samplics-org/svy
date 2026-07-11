@@ -83,6 +83,9 @@ def _resolve_target(sample: "Sample", new_data: pl.DataFrame, *, inplace: bool) 
         If False, return a new sample via :func:`_fork`.
     """
     if inplace:
+        # Rebinding _data triggers Sample.__setattr__, which bumps the data
+        # version and invalidates version-keyed caches. (The fork path is
+        # versioned via _replace_data.)
         sample._data = new_data
         return sample
     return _fork(sample, new_data)
@@ -232,6 +235,8 @@ def _rebuild_concat_columns(target: "Sample") -> None:
         "ssu": f"ssu{_INTERNAL_CONCAT_SUFFIX}" if ssu_cols else None,
         "suffix": _INTERNAL_CONCAT_SUFFIX,
     }
+    # The two ``target._data = ...`` rebinds above each trip Sample.__setattr__,
+    # which bumps the data version — no explicit invalidation needed here.
 
 
 def _rebuild_concat_if_touched(

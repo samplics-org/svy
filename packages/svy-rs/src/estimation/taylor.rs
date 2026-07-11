@@ -1,7 +1,7 @@
 // src/estimation/taylor.rs
 
 use polars::prelude::*;
-use std::collections::HashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 // ============================================================================
 // Enums & Config
@@ -47,20 +47,52 @@ impl SvyQuantileMethod {
 // Point Estimates
 // ============================================================================
 
+/// Contiguous, null-free slices of two columns, if available.
+///
+/// After `prepare_data` the y/weight columns are typically single-chunk and
+/// null-free, so this is the common case. When it holds, callers take a
+/// branch-free fused loop over `&[f64]` instead of iterating `Option<f64>` and
+/// checking the validity bitmap per element. Returns `None` (→ Option-iterator
+/// fallback with identical semantics) when either column is chunked or has any
+/// null; `cont_slice()` returns `Err` in those cases rather than panicking.
+#[inline]
+fn cont_pair<'a>(a: &'a Float64Chunked, b: &'a Float64Chunked) -> Option<(&'a [f64], &'a [f64])> {
+    if a.null_count() == 0 && b.null_count() == 0 {
+        if let (Ok(sa), Ok(sb)) = (a.cont_slice(), b.cont_slice()) {
+            return Some((sa, sb));
+        }
+    }
+    None
+}
+
 pub fn point_estimate_mean(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult<f64> {
-    let sum_wy: f64 = y
-        .iter()
-        .zip(weights.iter())
-        .filter_map(|(yi, wi)| Some(yi? * wi?))
-        .sum();
-    let sum_w: f64 = y
-        .iter()
-        .zip(weights.iter())
-        .filter_map(|(yi, wi)| {
-            yi?;
-            wi
-        })
-        .sum();
+    // Fast path: single fused pass over contiguous null-free slices. Summation
+    // order is unchanged (sequential 0..n; f64 add is not auto-vectorized
+    // without fast-math), so the result is bit-identical to the fallback.
+    let (sum_wy, sum_w) = if let Some((ys, ws)) = cont_pair(y, weights) {
+        let mut sum_wy = 0.0f64;
+        let mut sum_w = 0.0f64;
+        for i in 0..ys.len() {
+            sum_wy += ys[i] * ws[i];
+            sum_w += ws[i];
+        }
+        (sum_wy, sum_w)
+    } else {
+        let sum_wy: f64 = y
+            .iter()
+            .zip(weights.iter())
+            .filter_map(|(yi, wi)| Some(yi? * wi?))
+            .sum();
+        let sum_w: f64 = y
+            .iter()
+            .zip(weights.iter())
+            .filter_map(|(yi, wi)| {
+                yi?;
+                wi
+            })
+            .sum();
+        (sum_wy, sum_w)
+    };
 
     if sum_w == 0.0 {
         return Err(PolarsError::ComputeError("Sum of weights is zero".into()));
@@ -94,6 +126,13 @@ pub fn point_estimate_mean_domain(
 }
 
 pub fn point_estimate_total(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult<f64> {
+    if let Some((ys, ws)) = cont_pair(y, weights) {
+        let mut sum_wy = 0.0f64;
+        for i in 0..ys.len() {
+            sum_wy += ys[i] * ws[i];
+        }
+        return Ok(sum_wy);
+    }
     Ok(y.iter()
         .zip(weights.iter())
         .filter_map(|(yi, wi)| Some(yi? * wi?))
@@ -117,16 +156,32 @@ pub fn point_estimate_ratio(
     x: &Float64Chunked,
     weights: &Float64Chunked,
 ) -> PolarsResult<f64> {
-    let sum_wy: f64 = y
-        .iter()
-        .zip(weights.iter())
-        .filter_map(|(yi, wi)| Some(yi? * wi?))
-        .sum();
-    let sum_wx: f64 = x
-        .iter()
-        .zip(weights.iter())
-        .filter_map(|(xi, wi)| Some(xi? * wi?))
-        .sum();
+    // Fast path only when y, x and w are all contiguous and null-free.
+    let fast = match (cont_pair(y, weights), x.null_count() == 0) {
+        (Some((ys, ws)), true) => x.cont_slice().ok().map(|xs| (ys, ws, xs)),
+        _ => None,
+    };
+    let (sum_wy, sum_wx) = if let Some((ys, ws, xs)) = fast {
+        let mut sum_wy = 0.0f64;
+        let mut sum_wx = 0.0f64;
+        for i in 0..ys.len() {
+            sum_wy += ys[i] * ws[i];
+            sum_wx += xs[i] * ws[i];
+        }
+        (sum_wy, sum_wx)
+    } else {
+        let sum_wy: f64 = y
+            .iter()
+            .zip(weights.iter())
+            .filter_map(|(yi, wi)| Some(yi? * wi?))
+            .sum();
+        let sum_wx: f64 = x
+            .iter()
+            .zip(weights.iter())
+            .filter_map(|(xi, wi)| Some(xi? * wi?))
+            .sum();
+        (sum_wy, sum_wx)
+    };
 
     if sum_wx == 0.0 {
         return Err(PolarsError::ComputeError(
@@ -331,19 +386,36 @@ pub fn weighted_quantile_chunked(
 // ============================================================================
 
 pub fn scores_mean(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult<Float64Chunked> {
-    // Single pass: accumulate sum_wy, sum_w and collect (y,w) pairs simultaneously.
-    // Avoids the 3 separate iterations that the previous point_estimate_mean + sum_w + score
-    // build pattern required.
+    // Fast path: contiguous null-free slices → two branch-free passes and a
+    // plain Vec<f64> output, skipping the Vec<Option<(f64,f64)>> the fallback
+    // must allocate. Summation order is unchanged, so results are bit-identical.
+    if let Some((ys, ws)) = cont_pair(y, weights) {
+        let mut sum_wy = 0.0f64;
+        let mut sum_w = 0.0f64;
+        for i in 0..ys.len() {
+            sum_wy += ys[i] * ws[i];
+            sum_w += ws[i];
+        }
+        if sum_w == 0.0 {
+            return Err(PolarsError::ComputeError("Sum of weights is zero".into()));
+        }
+        let est = sum_wy / sum_w;
+        let scores: Vec<f64> = (0..ys.len()).map(|i| (ws[i] / sum_w) * (ys[i] - est)).collect();
+        return Ok(Float64Chunked::from_slice("scores".into(), &scores));
+    }
+
+    // Fallback: single pass accumulating sums while collecting (y,w) pairs so
+    // null positions are preserved in the output.
     let n = y.len();
     let mut sum_wy = 0.0f64;
-    let mut sum_w  = 0.0f64;
+    let mut sum_w = 0.0f64;
     let mut pairs: Vec<Option<(f64, f64)>> = Vec::with_capacity(n);
 
     for (yi, wi) in y.iter().zip(weights.iter()) {
         match (yi, wi) {
             (Some(yv), Some(wv)) => {
                 sum_wy += yv * wv;
-                sum_w  += wv;
+                sum_w += wv;
                 pairs.push(Some((yv, wv)));
             }
             _ => pairs.push(None),
@@ -594,8 +666,13 @@ pub fn scores_median_domain(
 // Variance Helpers (Indexing & Math)
 // ============================================================================
 
-fn index_categorical(col: &StringChunked) -> (Vec<u32>, u32) {
-    let mut map: HashMap<&str, u32> = HashMap::new();
+#[doc(hidden)] // internal; exposed only so criterion benches can measure it
+pub fn index_categorical(col: &StringChunked) -> (Vec<u32>, u32) {
+    // FxHashMap (non-cryptographic) instead of the default SipHash map: a pure
+    // hot-path speedup. Codes are assigned in first-appearance order via
+    // `next_idx`, independent of the map's internal order, so the output is
+    // byte-for-byte identical to the SipHash version.
+    let mut map: FxHashMap<&str, u32> = FxHashMap::default();
     let mut next_idx = 0u32;
     let indices: Vec<u32> = col
         .iter()
@@ -615,8 +692,11 @@ fn index_categorical(col: &StringChunked) -> (Vec<u32>, u32) {
 /// so PSU labels reused across strata (e.g. psu "1" in every stratum, as in
 /// NHANES/DHS-style data) are treated as distinct PSUs. This matches R's
 /// survey package and glm.rs, which key PSUs on (stratum, psu).
-fn index_categorical_pair(a: &StringChunked, b: &StringChunked) -> (Vec<u32>, u32) {
-    let mut map: HashMap<(&str, &str), u32> = HashMap::new();
+#[doc(hidden)] // internal; exposed only so criterion benches can measure it
+pub fn index_categorical_pair(a: &StringChunked, b: &StringChunked) -> (Vec<u32>, u32) {
+    // FxHashMap: see index_categorical — codes are first-appearance order, so
+    // the map's hash function does not affect the output.
+    let mut map: FxHashMap<(&str, &str), u32> = FxHashMap::default();
     let mut next_idx = 0u32;
     let indices: Vec<u32> = a
         .iter()
@@ -634,7 +714,8 @@ fn index_categorical_pair(a: &StringChunked, b: &StringChunked) -> (Vec<u32>, u3
 }
 
 fn reindex_within_subset(raw: &[u32]) -> (Vec<u32>, u32) {
-    let mut map: HashMap<u32, u32> = HashMap::new();
+    // FxHashMap: codes assigned in first-appearance order, hash-independent.
+    let mut map: FxHashMap<u32, u32> = FxHashMap::default();
     let mut next_idx = 0u32;
     let indices: Vec<u32> = raw
         .iter()
@@ -1120,11 +1201,13 @@ pub fn degrees_of_freedom(
         }
         // No strata, with PSU: df = n_unique_active_psus - 1
         let psu_col = psu.unwrap();
-        let mut seen = std::collections::HashSet::new();
+        // Borrow &str into the set instead of allocating a String per row; df is
+        // an order-independent unique count, so the result is unchanged.
+        let mut seen: FxHashSet<&str> = FxHashSet::default();
         for (opt_p, &act) in psu_col.iter().zip(active.iter()) {
             if act {
                 if let Some(p) = opt_p {
-                    seen.insert(p.to_string());
+                    seen.insert(p);
                 }
             }
         }
@@ -1136,16 +1219,13 @@ pub fn degrees_of_freedom(
     match psu {
         Some(psu_col) => {
             // Stratified + clustered: df = sum_h(n_active_psus_h - 1)
-            // Count unique active PSUs per stratum
-            let mut stratum_psus: HashMap<String, std::collections::HashSet<String>> =
-                HashMap::new();
+            // Count unique active PSUs per stratum. Keys/values borrow &str from
+            // the columns (no per-row String alloc); counts are order-independent.
+            let mut stratum_psus: FxHashMap<&str, FxHashSet<&str>> = FxHashMap::default();
             for ((opt_s, opt_p), &act) in strata_col.iter().zip(psu_col.iter()).zip(active.iter()) {
                 if act {
                     if let (Some(s), Some(p)) = (opt_s, opt_p) {
-                        stratum_psus
-                            .entry(s.to_string())
-                            .or_default()
-                            .insert(p.to_string());
+                        stratum_psus.entry(s).or_default().insert(p);
                     }
                 }
             }
@@ -1157,11 +1237,11 @@ pub fn degrees_of_freedom(
         }
         None => {
             // Stratified, no PSU: df = sum_h(n_active_h - 1)
-            let mut stratum_counts: HashMap<String, u32> = HashMap::new();
+            let mut stratum_counts: FxHashMap<&str, u32> = FxHashMap::default();
             for (opt_s, &act) in strata_col.iter().zip(active.iter()) {
                 if act {
                     if let Some(s) = opt_s {
-                        *stratum_counts.entry(s.to_string()).or_insert(0) += 1;
+                        *stratum_counts.entry(s).or_insert(0) += 1;
                     }
                 }
             }
@@ -1276,7 +1356,23 @@ fn weighted_s2(y: &[f64], wn: &[f64]) -> f64 {
 }
 
 pub fn srs_variance_mean(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult<f64> {
-    // Only use observations where both y and w are non-null
+    // Fast path: contiguous null-free slices are used directly, skipping the
+    // yv/wv copies the fallback builds. Same accumulation order → bit-identical.
+    if let Some((ys, ws)) = cont_pair(y, weights) {
+        let n = ys.len() as f64;
+        if n < 2.0 {
+            return Ok(f64::NAN);
+        }
+        let sum_w: f64 = ws.iter().sum();
+        if sum_w <= 0.0 {
+            return Ok(f64::NAN);
+        }
+        let wn: Vec<f64> = ws.iter().map(|w| w / sum_w).collect();
+        let s2_y = weighted_s2(ys, &wn);
+        return Ok((s2_y / n) * (1.0 - (n / sum_w)));
+    }
+
+    // Fallback: only use observations where both y and w are non-null.
     let mut yv = Vec::new();
     let mut wv = Vec::new();
     for (yi, wi) in y.into_iter().zip(weights.into_iter()) {
