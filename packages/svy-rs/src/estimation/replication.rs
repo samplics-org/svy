@@ -278,6 +278,42 @@ pub fn matrix_mean_estimates(
     (theta_full, theta_reps)
 }
 
+/// Replicate mean estimates computed directly from the (contiguous) replicate
+/// weight columns — no n×R matrix is materialised.
+///
+/// Each replicate is summed over rows in order, in parallel across replicates,
+/// so the result is bit-identical to `matrix_mean_estimates`. Reading each
+/// column once, contiguously, avoids both the 3× memory traffic (zero + write +
+/// read) of building the flat matrix and its strided gather, which dominate at
+/// large replicate counts.
+pub fn matrix_mean_estimates_cols(
+    y: &[f64],
+    full_weights: &[f64],
+    rep_cols: &[&[f64]],
+    n: usize,
+) -> (f64, Vec<f64>) {
+    let sum_wy: f64 = y.iter().zip(full_weights.iter()).map(|(a, b)| a * b).sum();
+    let sum_w: f64 = full_weights.iter().sum();
+    let theta_full = if sum_w > 0.0 { sum_wy / sum_w } else { f64::NAN };
+
+    use rayon::prelude::*;
+    let theta_reps: Vec<f64> = rep_cols
+        .par_iter()
+        .map(|col| {
+            let mut swy = 0.0f64;
+            let mut sw = 0.0f64;
+            for i in 0..n {
+                let w = col[i];
+                swy += y[i] * w;
+                sw += w;
+            }
+            if sw > 0.0 { swy / sw } else { f64::NAN }
+        })
+        .collect();
+
+    (theta_full, theta_reps)
+}
+
 /// Compute total estimates for all replicates
 pub fn matrix_total_estimates(
     y: &[f64],

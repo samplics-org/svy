@@ -13,7 +13,7 @@ use crate::estimation::replication::{
     RepMethod, VarianceCenter,
     extract_rep_weights_matrix,
     index_domains,
-    matrix_mean_by_domain, matrix_mean_estimates,
+    matrix_mean_by_domain, matrix_mean_estimates, matrix_mean_estimates_cols,
     matrix_median_by_domain, matrix_median_estimates,
     matrix_prop_by_domain, matrix_prop_estimates,
     matrix_prop_by_domain_str, matrix_prop_estimates_str,
@@ -91,8 +91,21 @@ fn compute_replicate_mean_ungrouped(
     let y_arr: Vec<f64> = y.into_iter().map(|v| v.unwrap_or(0.0)).collect();
     let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
 
-    let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
-    let (theta_full, theta_reps) = matrix_mean_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps);
+    // Prefer the no-materialisation path: accumulate straight from the
+    // contiguous replicate columns (parallel over replicates). Falls back to the
+    // flat-matrix path for chunked/nullable columns.
+    let f64_cols: Vec<&Float64Chunked> = rep_weight_cols
+        .iter()
+        .map(|c| df.column(c)?.f64())
+        .collect::<PolarsResult<_>>()?;
+    let cont: Option<Vec<&[f64]>> = f64_cols.iter().map(|c| c.cont_slice().ok()).collect();
+    let (theta_full, theta_reps) = match cont {
+        Some(cols) => matrix_mean_estimates_cols(&y_arr, &w_arr, &cols, n),
+        None => {
+            let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
+            matrix_mean_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps)
+        }
+    };
     let rep_coefs = replicate_coefficients(method, n_reps, fay_coef);
     let variance  = variance_from_replicates(method, theta_full, &theta_reps, &rep_coefs, center);
     let se = variance.sqrt();
