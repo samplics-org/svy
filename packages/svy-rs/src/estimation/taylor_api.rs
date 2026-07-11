@@ -10,6 +10,7 @@ use pyo3_polars::PyDataFrame;
 
 use crate::estimation::taylor::{
     SvyQuantileMethod,
+    build_taylor_design,
     degrees_of_freedom,
     median_variance_woodruff,
     median_variance_woodruff_domain,
@@ -22,7 +23,7 @@ use crate::estimation::taylor::{
     srs_variance_mean, srs_variance_mean_domain,
     srs_variance_ratio, srs_variance_ratio_domain,
     srs_variance_total, srs_variance_total_domain,
-    taylor_variance,
+    taylor_variance, taylor_variance_apply,
     weighted_median, weighted_median_domain,
 };
 
@@ -134,6 +135,9 @@ fn compute_mean_grouped(
     let mut ns: Vec<u32> = Vec::new();
     let mut deffs: Vec<f64> = Vec::new();
     let df_val = degrees_of_freedom(weights, strata, psu)?;
+    // Index the design once — it is identical across by-groups; only the
+    // domain-masked scores change per group.
+    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
     for group_val in unique_groups.iter() {
         if let Some(group) = group_val {
@@ -141,7 +145,8 @@ fn compute_mean_grouped(
             let n_domain    = domain_mask.sum().unwrap_or(0) as u32;
             let estimate    = point_estimate_mean_domain(y, weights, &domain_mask)?;
             let scores      = scores_mean_domain(y, weights, &domain_mask)?;
-            let variance    = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+            let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+            let variance    = taylor_variance_apply(&scores_arr, &design);
             let se          = variance.max(0.0).sqrt();
             let srs_var     = srs_variance_mean_domain(y, weights, &domain_mask)?;
             let deff        = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
@@ -252,6 +257,7 @@ fn compute_total_grouped(
     let mut ns: Vec<u32> = Vec::new();
     let mut deffs: Vec<f64> = Vec::new();
     let df_val = degrees_of_freedom(weights, strata, psu)?;
+    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
     for group_val in unique_groups.iter() {
         if let Some(group) = group_val {
@@ -259,7 +265,8 @@ fn compute_total_grouped(
             let n_domain    = domain_mask.sum().unwrap_or(0) as u32;
             let estimate    = point_estimate_total_domain(y, weights, &domain_mask)?;
             let scores      = scores_total_domain(y, weights, &domain_mask)?;
-            let variance    = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+            let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+            let variance    = taylor_variance_apply(&scores_arr, &design);
             let se          = variance.max(0.0).sqrt();
             let srs_var     = srs_variance_total_domain(y, weights, &domain_mask)?;
             let deff        = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
@@ -373,6 +380,7 @@ fn compute_ratio_grouped(
     let mut ns: Vec<u32> = Vec::new();
     let mut deffs: Vec<f64> = Vec::new();
     let df_val = degrees_of_freedom(weights, strata, psu)?;
+    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
     for group_val in unique_groups.iter() {
         if let Some(group) = group_val {
@@ -380,7 +388,8 @@ fn compute_ratio_grouped(
             let n_domain    = domain_mask.sum().unwrap_or(0) as u32;
             let estimate    = point_estimate_ratio_domain(y, x, weights, &domain_mask)?;
             let scores      = scores_ratio_domain(y, x, weights, &domain_mask)?;
-            let variance    = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+            let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+            let variance    = taylor_variance_apply(&scores_arr, &design);
             let se          = variance.max(0.0).sqrt();
             let srs_var     = srs_variance_ratio_domain(y, x, weights, &domain_mask)?;
             let deff        = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
@@ -468,6 +477,8 @@ fn compute_prop_ungrouped(
     let mut deffs: Vec<f64> = Vec::new();
     let df_val = degrees_of_freedom(weights, strata, psu)?;
     let n = weights.len() as u32;
+    // Design is identical across levels; index it once.
+    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
     for lvl in &levels {
         let indicator: Vec<Option<f64>> = value_str.iter()
@@ -480,7 +491,8 @@ fn compute_prop_ungrouped(
         let indicator_ca = Float64Chunked::from_slice_options("indicator".into(), &indicator);
         let estimate = point_estimate_mean(&indicator_ca, weights)?;
         let scores   = scores_mean(&indicator_ca, weights)?;
-        let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+        let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+        let variance = taylor_variance_apply(&scores_arr, &design);
         let se       = variance.max(0.0).sqrt();
         let srs_var  = srs_variance_mean(&indicator_ca, weights)?;
         let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
@@ -531,6 +543,8 @@ fn compute_prop_grouped(
     let mut ns: Vec<u32> = Vec::new();
     let mut deffs: Vec<f64> = Vec::new();
     let df_val = degrees_of_freedom(weights, strata, psu)?;
+    // Design is identical across all (group, level) cells; index it once.
+    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
     for group_val in unique_groups.iter() {
         if let Some(group) = group_val {
@@ -547,7 +561,8 @@ fn compute_prop_grouped(
                 let indicator_ca = Float64Chunked::from_slice_options("indicator".into(), &indicator);
                 let estimate = point_estimate_mean_domain(&indicator_ca, weights, &domain_mask)?;
                 let scores   = scores_mean_domain(&indicator_ca, weights, &domain_mask)?;
-                let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+                let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+                let variance = taylor_variance_apply(&scores_arr, &design);
                 let se       = variance.max(0.0).sqrt();
                 let srs_var  = srs_variance_mean_domain(&indicator_ca, weights, &domain_mask)?;
                 let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };

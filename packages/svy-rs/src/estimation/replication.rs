@@ -169,6 +169,15 @@ pub fn variance_from_replicates(
 
 /// Extract replicate weights matrix from DataFrame columns
 /// Returns flattened row-major matrix (n × R)
+///
+/// The naive build (column-outer loop writing `matrix[i*n_reps + r]`) is a
+/// strided write — a cache miss on essentially every store — and dominated the
+/// whole replication call (~530 ms at 1M rows × 40 reps). Instead, when the
+/// replicate columns are contiguous and null-free (the common post-`prepare_data`
+/// case) this does a **cache-blocked parallel transpose**: each row block's
+/// slice of the row-major matrix (BLOCK × R floats) fits in L2, so its writes
+/// stay hot, and blocks are filled in parallel. The output matrix is byte-for-
+/// byte identical to the naive build, so downstream results are unchanged.
 pub fn extract_rep_weights_matrix(
     df: &DataFrame,
     rep_weight_cols: &[String],
@@ -176,11 +185,47 @@ pub fn extract_rep_weights_matrix(
     let n = df.height();
     let n_reps = rep_weight_cols.len();
     let mut matrix = vec![0.0; n * n_reps];
+    if n == 0 || n_reps == 0 {
+        return Ok((matrix, n, n_reps));
+    }
 
-    for (r, col_name) in rep_weight_cols.iter().enumerate() {
-        let col = df.column(col_name)?.f64()?;
-        for (i, v) in col.into_iter().enumerate() {
-            matrix[i * n_reps + r] = v.unwrap_or(0.0);
+    let f64_cols: Vec<&Float64Chunked> = rep_weight_cols
+        .iter()
+        .map(|c| df.column(c)?.f64())
+        .collect::<PolarsResult<_>>()?;
+
+    // Borrow each column as one contiguous null-free slice, if possible.
+    let contiguous: Option<Vec<&[f64]>> = f64_cols
+        .iter()
+        .map(|c| c.cont_slice().ok())
+        .collect();
+
+    match contiguous {
+        Some(cols) => {
+            use rayon::prelude::*;
+            const BLOCK: usize = 256; // BLOCK * n_reps * 8 bytes stays in L2
+            matrix
+                .par_chunks_mut(BLOCK * n_reps)
+                .enumerate()
+                .for_each(|(b, chunk)| {
+                    let start = b * BLOCK;
+                    let rows = chunk.len() / n_reps;
+                    for local_i in 0..rows {
+                        let i = start + local_i;
+                        let dst = &mut chunk[local_i * n_reps..local_i * n_reps + n_reps];
+                        for (r, col) in cols.iter().enumerate() {
+                            dst[r] = col[i];
+                        }
+                    }
+                });
+        }
+        None => {
+            // Fallback for chunked/nullable columns — identical semantics.
+            for (r, col) in f64_cols.iter().enumerate() {
+                for (i, v) in col.into_iter().enumerate() {
+                    matrix[i * n_reps + r] = v.unwrap_or(0.0);
+                }
+            }
         }
     }
 
@@ -228,6 +273,42 @@ pub fn matrix_mean_estimates(
         .iter()
         .zip(rep_sum_w.iter())
         .map(|(&wy, &w)| if w > 0.0 { wy / w } else { f64::NAN })
+        .collect();
+
+    (theta_full, theta_reps)
+}
+
+/// Replicate mean estimates computed directly from the (contiguous) replicate
+/// weight columns — no n×R matrix is materialised.
+///
+/// Each replicate is summed over rows in order, in parallel across replicates,
+/// so the result is bit-identical to `matrix_mean_estimates`. Reading each
+/// column once, contiguously, avoids both the 3× memory traffic (zero + write +
+/// read) of building the flat matrix and its strided gather, which dominate at
+/// large replicate counts.
+pub fn matrix_mean_estimates_cols(
+    y: &[f64],
+    full_weights: &[f64],
+    rep_cols: &[&[f64]],
+    n: usize,
+) -> (f64, Vec<f64>) {
+    let sum_wy: f64 = y.iter().zip(full_weights.iter()).map(|(a, b)| a * b).sum();
+    let sum_w: f64 = full_weights.iter().sum();
+    let theta_full = if sum_w > 0.0 { sum_wy / sum_w } else { f64::NAN };
+
+    use rayon::prelude::*;
+    let theta_reps: Vec<f64> = rep_cols
+        .par_iter()
+        .map(|col| {
+            let mut swy = 0.0f64;
+            let mut sw = 0.0f64;
+            for i in 0..n {
+                let w = col[i];
+                swy += y[i] * w;
+                sw += w;
+            }
+            if sw > 0.0 { swy / sw } else { f64::NAN }
+        })
         .collect();
 
     (theta_full, theta_reps)
@@ -303,6 +384,62 @@ pub fn matrix_ratio_estimates(
         .iter()
         .zip(rep_sum_wx.iter())
         .map(|(&wy, &wx)| if wx > 0.0 { wy / wx } else { f64::NAN })
+        .collect();
+
+    (theta_full, theta_reps)
+}
+
+/// Replicate total estimates from the contiguous replicate columns (no matrix).
+/// Bit-identical to `matrix_total_estimates`; see `matrix_mean_estimates_cols`.
+pub fn matrix_total_estimates_cols(
+    y: &[f64],
+    full_weights: &[f64],
+    rep_cols: &[&[f64]],
+    n: usize,
+) -> (f64, Vec<f64>) {
+    let theta_full: f64 = y.iter().zip(full_weights.iter()).map(|(a, b)| a * b).sum();
+
+    use rayon::prelude::*;
+    let theta_reps: Vec<f64> = rep_cols
+        .par_iter()
+        .map(|col| {
+            let mut swy = 0.0f64;
+            for i in 0..n {
+                swy += y[i] * col[i];
+            }
+            swy
+        })
+        .collect();
+
+    (theta_full, theta_reps)
+}
+
+/// Replicate ratio estimates from the contiguous replicate columns (no matrix).
+/// Bit-identical to `matrix_ratio_estimates`; see `matrix_mean_estimates_cols`.
+pub fn matrix_ratio_estimates_cols(
+    y: &[f64],
+    x: &[f64],
+    full_weights: &[f64],
+    rep_cols: &[&[f64]],
+    n: usize,
+) -> (f64, Vec<f64>) {
+    let sum_wy: f64 = y.iter().zip(full_weights.iter()).map(|(a, b)| a * b).sum();
+    let sum_wx: f64 = x.iter().zip(full_weights.iter()).map(|(a, b)| a * b).sum();
+    let theta_full = if sum_wx > 0.0 { sum_wy / sum_wx } else { f64::NAN };
+
+    use rayon::prelude::*;
+    let theta_reps: Vec<f64> = rep_cols
+        .par_iter()
+        .map(|col| {
+            let mut swy = 0.0f64;
+            let mut swx = 0.0f64;
+            for i in 0..n {
+                let w = col[i];
+                swy += y[i] * w;
+                swx += x[i] * w;
+            }
+            if swx > 0.0 { swy / swx } else { f64::NAN }
+        })
         .collect();
 
     (theta_full, theta_reps)
@@ -389,6 +526,165 @@ pub fn matrix_mean_by_domain(
                 .map(|(&wy, &w)| if w > 0.0 { wy / w } else { f64::NAN })
                 .collect()
         })
+        .collect();
+
+    (theta_full, theta_reps, counts)
+}
+
+/// By-domain replicate mean from the contiguous replicate columns (no matrix).
+/// Each replicate accumulates per-domain sums over rows in order, in parallel
+/// across replicates; the per-replicate results are reshaped to the
+/// `[domain][rep]` layout `matrix_mean_by_domain` returns. Bit-identical.
+pub fn matrix_mean_by_domain_cols(
+    y: &[f64],
+    full_weights: &[f64],
+    rep_cols: &[&[f64]],
+    domain_ids: &[u32],
+    n_domains: usize,
+    n: usize,
+) -> (Vec<f64>, Vec<Vec<f64>>, Vec<u32>) {
+    let mut sum_wy = vec![0.0; n_domains];
+    let mut sum_w = vec![0.0; n_domains];
+    let mut counts = vec![0u32; n_domains];
+    for i in 0..n {
+        let d = domain_ids[i] as usize;
+        if d >= n_domains {
+            continue;
+        }
+        sum_wy[d] += y[i] * full_weights[i];
+        sum_w[d] += full_weights[i];
+        counts[d] += 1;
+    }
+    let theta_full: Vec<f64> = sum_wy
+        .iter()
+        .zip(sum_w.iter())
+        .map(|(&wy, &w)| if w > 0.0 { wy / w } else { f64::NAN })
+        .collect();
+
+    use rayon::prelude::*;
+    let per_rep: Vec<Vec<f64>> = rep_cols
+        .par_iter()
+        .map(|col| {
+            let mut swy = vec![0.0; n_domains];
+            let mut sw = vec![0.0; n_domains];
+            for i in 0..n {
+                let d = domain_ids[i] as usize;
+                if d < n_domains {
+                    let w = col[i];
+                    swy[d] += y[i] * w;
+                    sw[d] += w;
+                }
+            }
+            (0..n_domains)
+                .map(|d| if sw[d] > 0.0 { swy[d] / sw[d] } else { f64::NAN })
+                .collect()
+        })
+        .collect();
+
+    // Reshape per_rep[rep][domain] → theta_reps[domain][rep].
+    let n_reps = rep_cols.len();
+    let theta_reps: Vec<Vec<f64>> = (0..n_domains)
+        .map(|d| (0..n_reps).map(|r| per_rep[r][d]).collect())
+        .collect();
+
+    (theta_full, theta_reps, counts)
+}
+
+/// By-domain replicate total from the contiguous replicate columns (no matrix).
+/// Bit-identical to `matrix_total_by_domain`.
+pub fn matrix_total_by_domain_cols(
+    y: &[f64],
+    full_weights: &[f64],
+    rep_cols: &[&[f64]],
+    domain_ids: &[u32],
+    n_domains: usize,
+    n: usize,
+) -> (Vec<f64>, Vec<Vec<f64>>, Vec<u32>) {
+    let mut sum_wy = vec![0.0; n_domains];
+    let mut counts = vec![0u32; n_domains];
+    for i in 0..n {
+        let d = domain_ids[i] as usize;
+        if d >= n_domains {
+            continue;
+        }
+        sum_wy[d] += y[i] * full_weights[i];
+        counts[d] += 1;
+    }
+
+    use rayon::prelude::*;
+    let per_rep: Vec<Vec<f64>> = rep_cols
+        .par_iter()
+        .map(|col| {
+            let mut swy = vec![0.0; n_domains];
+            for i in 0..n {
+                let d = domain_ids[i] as usize;
+                if d < n_domains {
+                    swy[d] += y[i] * col[i];
+                }
+            }
+            swy
+        })
+        .collect();
+
+    let n_reps = rep_cols.len();
+    let theta_reps: Vec<Vec<f64>> = (0..n_domains)
+        .map(|d| (0..n_reps).map(|r| per_rep[r][d]).collect())
+        .collect();
+
+    (sum_wy, theta_reps, counts)
+}
+
+/// By-domain replicate ratio from the contiguous replicate columns (no matrix).
+/// Bit-identical to `matrix_ratio_by_domain`.
+pub fn matrix_ratio_by_domain_cols(
+    y: &[f64],
+    x: &[f64],
+    full_weights: &[f64],
+    rep_cols: &[&[f64]],
+    domain_ids: &[u32],
+    n_domains: usize,
+    n: usize,
+) -> (Vec<f64>, Vec<Vec<f64>>, Vec<u32>) {
+    let mut sum_wy = vec![0.0; n_domains];
+    let mut sum_wx = vec![0.0; n_domains];
+    let mut counts = vec![0u32; n_domains];
+    for i in 0..n {
+        let d = domain_ids[i] as usize;
+        if d >= n_domains {
+            continue;
+        }
+        let w = full_weights[i];
+        sum_wy[d] += y[i] * w;
+        sum_wx[d] += x[i] * w;
+        counts[d] += 1;
+    }
+    let theta_full: Vec<f64> = (0..n_domains)
+        .map(|d| if sum_wx[d] > 0.0 { sum_wy[d] / sum_wx[d] } else { f64::NAN })
+        .collect();
+
+    use rayon::prelude::*;
+    let per_rep: Vec<Vec<f64>> = rep_cols
+        .par_iter()
+        .map(|col| {
+            let mut swy = vec![0.0; n_domains];
+            let mut swx = vec![0.0; n_domains];
+            for i in 0..n {
+                let d = domain_ids[i] as usize;
+                if d < n_domains {
+                    let w = col[i];
+                    swy[d] += y[i] * w;
+                    swx[d] += x[i] * w;
+                }
+            }
+            (0..n_domains)
+                .map(|d| if swx[d] > 0.0 { swy[d] / swx[d] } else { f64::NAN })
+                .collect()
+        })
+        .collect();
+
+    let n_reps = rep_cols.len();
+    let theta_reps: Vec<Vec<f64>> = (0..n_domains)
+        .map(|d| (0..n_reps).map(|r| per_rep[r][d]).collect())
         .collect();
 
     (theta_full, theta_reps, counts)
@@ -566,6 +862,131 @@ pub fn matrix_prop_estimates(
                 .map(|(&w_l, &w_t)| if w_t > 0.0 { w_l / w_t } else { f64::NAN })
                 .collect()
         })
+        .collect();
+
+    (levels, theta_full, theta_reps)
+}
+
+/// Sorted category levels and the per-row level index for integer category data.
+fn prop_level_index(y: &[i64]) -> (Vec<i64>, Vec<usize>) {
+    let mut level_map: HashMap<i64, usize> = HashMap::new();
+    let mut levels: Vec<i64> = Vec::new();
+    for &val in y {
+        if !level_map.contains_key(&val) {
+            level_map.insert(val, levels.len());
+            levels.push(val);
+        }
+    }
+    levels.sort();
+    for (idx, &lev) in levels.iter().enumerate() {
+        level_map.insert(lev, idx);
+    }
+    let lev_idx: Vec<usize> = y.iter().map(|v| level_map[v]).collect();
+    (levels, lev_idx)
+}
+
+/// `matrix_prop_estimates` from the contiguous replicate columns (no matrix).
+/// Bit-identical: each replicate accumulates per-level weight in row order,
+/// parallel over replicates, reshaped to `[level][rep]`.
+pub fn matrix_prop_estimates_cols(
+    y: &[i64],
+    full_weights: &[f64],
+    rep_cols: &[&[f64]],
+    n: usize,
+) -> (Vec<i64>, Vec<f64>, Vec<Vec<f64>>) {
+    let (levels, lev_idx) = prop_level_index(y);
+    let n_levels = levels.len();
+
+    let mut sum_w_level = vec![0.0; n_levels];
+    let mut sum_w_total = 0.0;
+    for i in 0..n {
+        sum_w_level[lev_idx[i]] += full_weights[i];
+        sum_w_total += full_weights[i];
+    }
+    let theta_full: Vec<f64> = sum_w_level
+        .iter()
+        .map(|&w_l| if sum_w_total > 0.0 { w_l / sum_w_total } else { f64::NAN })
+        .collect();
+
+    use rayon::prelude::*;
+    let per_rep: Vec<Vec<f64>> = rep_cols
+        .par_iter()
+        .map(|col| {
+            let mut swl = vec![0.0; n_levels];
+            let mut swt = 0.0;
+            for i in 0..n {
+                let w = col[i];
+                swl[lev_idx[i]] += w;
+                swt += w;
+            }
+            (0..n_levels)
+                .map(|l| if swt > 0.0 { swl[l] / swt } else { f64::NAN })
+                .collect()
+        })
+        .collect();
+
+    let n_reps = rep_cols.len();
+    let theta_reps: Vec<Vec<f64>> = (0..n_levels)
+        .map(|l| (0..n_reps).map(|r| per_rep[r][l]).collect())
+        .collect();
+
+    (levels, theta_full, theta_reps)
+}
+
+/// `matrix_prop_estimates_str` from the contiguous replicate columns. Same as
+/// the integer version but with string category levels. Bit-identical.
+pub fn matrix_prop_estimates_str_cols(
+    y: &[String],
+    full_weights: &[f64],
+    rep_cols: &[&[f64]],
+    n: usize,
+) -> (Vec<String>, Vec<f64>, Vec<Vec<f64>>) {
+    let mut level_map: HashMap<&str, usize> = HashMap::new();
+    let mut levels: Vec<String> = Vec::new();
+    for val in y {
+        if !level_map.contains_key(val.as_str()) {
+            level_map.insert(val.as_str(), levels.len());
+            levels.push(val.clone());
+        }
+    }
+    levels.sort();
+    for (idx, lev) in levels.iter().enumerate() {
+        level_map.insert(lev.as_str(), idx);
+    }
+    let n_levels = levels.len();
+    let lev_idx: Vec<usize> = y.iter().map(|v| level_map[v.as_str()]).collect();
+
+    let mut sum_w_level = vec![0.0; n_levels];
+    let mut sum_w_total = 0.0;
+    for i in 0..n {
+        sum_w_level[lev_idx[i]] += full_weights[i];
+        sum_w_total += full_weights[i];
+    }
+    let theta_full: Vec<f64> = sum_w_level
+        .iter()
+        .map(|&w_l| if sum_w_total > 0.0 { w_l / sum_w_total } else { f64::NAN })
+        .collect();
+
+    use rayon::prelude::*;
+    let per_rep: Vec<Vec<f64>> = rep_cols
+        .par_iter()
+        .map(|col| {
+            let mut swl = vec![0.0; n_levels];
+            let mut swt = 0.0;
+            for i in 0..n {
+                let w = col[i];
+                swl[lev_idx[i]] += w;
+                swt += w;
+            }
+            (0..n_levels)
+                .map(|l| if swt > 0.0 { swl[l] / swt } else { f64::NAN })
+                .collect()
+        })
+        .collect();
+
+    let n_reps = rep_cols.len();
+    let theta_reps: Vec<Vec<f64>> = (0..n_levels)
+        .map(|l| (0..n_reps).map(|r| per_rep[r][l]).collect())
         .collect();
 
     (levels, theta_full, theta_reps)

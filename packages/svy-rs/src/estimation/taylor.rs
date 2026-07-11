@@ -105,17 +105,33 @@ pub fn point_estimate_mean_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<f64> {
-    let sum_wy: f64 = y
-        .iter()
-        .zip(weights.iter())
-        .zip(domain_mask.iter())
-        .filter_map(|((yi, wi), m)| if m? { Some(yi? * wi?) } else { None })
-        .sum();
-    let sum_w: f64 = weights
-        .iter()
-        .zip(domain_mask.iter())
-        .filter_map(|(w, m)| if m? { w } else { None })
-        .sum();
+    // Fast path: y/weights are contiguous null-free (post-prepare_data), so
+    // index them as slices while iterating the mask once — no per-element
+    // Option unwrap on y/w, and a single pass. Bit-identical (same rows, order).
+    let (sum_wy, sum_w) = if let Some((ys, ws)) = cont_pair(y, weights) {
+        let mut sum_wy = 0.0f64;
+        let mut sum_w = 0.0f64;
+        for (i, m) in domain_mask.iter().enumerate() {
+            if m == Some(true) {
+                sum_wy += ys[i] * ws[i];
+                sum_w += ws[i];
+            }
+        }
+        (sum_wy, sum_w)
+    } else {
+        let sum_wy: f64 = y
+            .iter()
+            .zip(weights.iter())
+            .zip(domain_mask.iter())
+            .filter_map(|((yi, wi), m)| if m? { Some(yi? * wi?) } else { None })
+            .sum();
+        let sum_w: f64 = weights
+            .iter()
+            .zip(domain_mask.iter())
+            .filter_map(|(w, m)| if m? { w } else { None })
+            .sum();
+        (sum_wy, sum_w)
+    };
 
     if sum_w == 0.0 {
         return Err(PolarsError::ComputeError(
@@ -144,6 +160,15 @@ pub fn point_estimate_total_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<f64> {
+    if let Some((ys, ws)) = cont_pair(y, weights) {
+        let mut sum_wy = 0.0f64;
+        for (i, m) in domain_mask.iter().enumerate() {
+            if m == Some(true) {
+                sum_wy += ys[i] * ws[i];
+            }
+        }
+        return Ok(sum_wy);
+    }
     Ok(y.iter()
         .zip(weights.iter())
         .zip(domain_mask.iter())
@@ -197,18 +222,35 @@ pub fn point_estimate_ratio_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<f64> {
-    let sum_wy: f64 = y
-        .iter()
-        .zip(weights.iter())
-        .zip(domain_mask.iter())
-        .filter_map(|((yi, wi), m)| if m? { Some(yi? * wi?) } else { None })
-        .sum();
-    let sum_wx: f64 = x
-        .iter()
-        .zip(weights.iter())
-        .zip(domain_mask.iter())
-        .filter_map(|((xi, wi), m)| if m? { Some(xi? * wi?) } else { None })
-        .sum();
+    let fast = match (cont_pair(y, weights), x.null_count() == 0) {
+        (Some((ys, ws)), true) => x.cont_slice().ok().map(|xs| (ys, ws, xs)),
+        _ => None,
+    };
+    let (sum_wy, sum_wx) = if let Some((ys, ws, xs)) = fast {
+        let mut sum_wy = 0.0f64;
+        let mut sum_wx = 0.0f64;
+        for (i, m) in domain_mask.iter().enumerate() {
+            if m == Some(true) {
+                sum_wy += ys[i] * ws[i];
+                sum_wx += xs[i] * ws[i];
+            }
+        }
+        (sum_wy, sum_wx)
+    } else {
+        let sum_wy: f64 = y
+            .iter()
+            .zip(weights.iter())
+            .zip(domain_mask.iter())
+            .filter_map(|((yi, wi), m)| if m? { Some(yi? * wi?) } else { None })
+            .sum();
+        let sum_wx: f64 = x
+            .iter()
+            .zip(weights.iter())
+            .zip(domain_mask.iter())
+            .filter_map(|((xi, wi), m)| if m? { Some(xi? * wi?) } else { None })
+            .sum();
+        (sum_wy, sum_wx)
+    };
 
     if sum_wx == 0.0 {
         return Err(PolarsError::ComputeError(
@@ -440,7 +482,31 @@ pub fn scores_mean_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<Float64Chunked> {
-    // Single pass: accumulate sum_wy / sum_w and collect triples.
+    // Fast path: contiguous null-free y/weights. Materialise the in-domain flag
+    // once (a Vec<bool>, vs the fallback's Vec<Option<(f64,f64)>>), then two
+    // branch-free slice passes. Same rows/order → bit-identical.
+    if let Some((ys, ws)) = cont_pair(y, weights) {
+        let n = ys.len();
+        let in_domain: Vec<bool> = domain_mask.iter().map(|m| m == Some(true)).collect();
+        let mut sum_wy = 0.0f64;
+        let mut sum_w = 0.0f64;
+        for i in 0..n {
+            if in_domain[i] {
+                sum_wy += ys[i] * ws[i];
+                sum_w += ws[i];
+            }
+        }
+        if sum_w == 0.0 {
+            return Ok(Float64Chunked::from_slice("scores".into(), &vec![0.0; n]));
+        }
+        let est = sum_wy / sum_w;
+        let scores: Vec<f64> = (0..n)
+            .map(|i| if in_domain[i] { (ws[i] / sum_w) * (ys[i] - est) } else { 0.0 })
+            .collect();
+        return Ok(Float64Chunked::from_slice("scores".into(), &scores));
+    }
+
+    // Fallback: single pass accumulating sums while collecting in-domain pairs.
     let n = y.len();
     let mut sum_wy = 0.0f64;
     let mut sum_w  = 0.0f64;
@@ -491,6 +557,14 @@ pub fn scores_total_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<Float64Chunked> {
+    if let Some((ys, ws)) = cont_pair(y, weights) {
+        let scores: Vec<f64> = domain_mask
+            .iter()
+            .enumerate()
+            .map(|(i, m)| if m == Some(true) { ws[i] * ys[i] } else { 0.0 })
+            .collect();
+        return Ok(Float64Chunked::from_slice("scores".into(), &scores));
+    }
     let scores: Vec<Option<f64>> = y
         .iter()
         .zip(weights.iter())
@@ -545,6 +619,37 @@ pub fn scores_ratio_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<Float64Chunked> {
+    let fast = match (cont_pair(y, weights), x.null_count() == 0) {
+        (Some((ys, ws)), true) => x.cont_slice().ok().map(|xs| (ys, ws, xs)),
+        _ => None,
+    };
+    if let Some((ys, ws, xs)) = fast {
+        let n = ys.len();
+        let in_domain: Vec<bool> = domain_mask.iter().map(|m| m == Some(true)).collect();
+        let mut sum_wy = 0.0f64;
+        let mut sum_wx = 0.0f64;
+        for i in 0..n {
+            if in_domain[i] {
+                sum_wy += ys[i] * ws[i];
+                sum_wx += xs[i] * ws[i];
+            }
+        }
+        if sum_wx == 0.0 {
+            return Ok(Float64Chunked::from_slice("scores".into(), &vec![0.0; n]));
+        }
+        let r_hat = sum_wy / sum_wx;
+        let scores: Vec<f64> = (0..n)
+            .map(|i| {
+                if in_domain[i] {
+                    (ws[i] / sum_wx) * (ys[i] - r_hat * xs[i])
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        return Ok(Float64Chunked::from_slice("scores".into(), &scores));
+    }
+
     // Single pass: accumulate sum_wy, sum_wx (in-domain) and collect quads.
     let n = y.len();
     let mut sum_wy = 0.0f64;
@@ -1069,6 +1174,208 @@ fn compute_stage2_variance(
 // Main Public Variance Function
 // ============================================================================
 
+/// Design-only intermediates for the Taylor variance, factored out of
+/// `taylor_variance` so a domain/by-group loop can build them ONCE (the design
+/// is identical across groups — only the scores change) instead of re-indexing
+/// the strata/PSU/SSU columns on every group. See `taylor_variance` (which is
+/// just `build_taylor_design` + `taylor_variance_apply`) for the reference
+/// semantics; splitting it here keeps a single source of truth.
+pub struct TaylorDesign {
+    sm_enum: SingletonMethod,
+    // Stage 1 — one of {unstratified, stratified}
+    strata_indices: Option<Vec<u32>>, // None ⇒ unstratified
+    n_strata: u32,
+    psu_indices: Option<Vec<u32>>, // stage-1 PSU codes (nested when stratified)
+    n_psus: u32,                   // unstratified PSU count
+    psu_per_stratum: Option<Vec<Vec<u32>>>,
+    n_psus_per_stratum: Option<Vec<u32>>,
+    fpc_val: f64,                     // unstratified single FPC
+    fpc_per_stratum: Option<Vec<f64>>, // stratified per-stratum FPC (or [fpc_val] unstrat)
+    // Stage 2
+    has_stage2: bool,
+    ssu_indices: Option<Vec<u32>>,
+    fpc_ssu_arr: Option<Vec<f64>>,
+    psu_to_stratum: Option<Vec<u32>>,
+}
+
+pub fn build_taylor_design(
+    strata: Option<&Column>,
+    psu: Option<&Column>,
+    ssu: Option<&Column>,
+    fpc: Option<&Float64Chunked>,
+    fpc_ssu: Option<&Float64Chunked>,
+    singleton_method: Option<&str>,
+) -> PolarsResult<TaylorDesign> {
+    let sm_enum = match singleton_method {
+        Some(s) if s.eq_ignore_ascii_case("center") || s.eq_ignore_ascii_case("adjust") => {
+            SingletonMethod::Center
+        }
+        _ => SingletonMethod::None,
+    };
+
+    let fpc_arr: Option<Vec<f64>> = fpc.map(|f| f.iter().map(|v| v.unwrap_or(1.0)).collect());
+    let fpc_ssu_arr: Option<Vec<f64>> =
+        fpc_ssu.map(|f| f.iter().map(|v| v.unwrap_or(1.0)).collect());
+
+    let has_stage2 = ssu.is_some() && psu.is_some();
+
+    if strata.is_none() {
+        // Unstratified: single FPC value (take first element or 1.0)
+        let fpc_val = fpc_arr
+            .as_ref()
+            .and_then(|f| f.first().copied())
+            .unwrap_or(1.0);
+        let (psu_indices, n_psus) = match psu {
+            Some(psu_col) => {
+                let (idx, cnt) = design_col_codes(psu_col)?;
+                (Some(idx), cnt)
+            }
+            None => (None, 0),
+        };
+        let ssu_indices = if has_stage2 {
+            Some(design_col_codes(ssu.unwrap())?.0)
+        } else {
+            None
+        };
+        return Ok(TaylorDesign {
+            sm_enum,
+            strata_indices: None,
+            n_strata: 0,
+            psu_indices,
+            n_psus,
+            psu_per_stratum: None,
+            n_psus_per_stratum: None,
+            fpc_val,
+            // Pass the single stage-1 FPC through so stage 2 can derive the
+            // stage-1 sampling fraction (mirrors the original tuple).
+            fpc_per_stratum: Some(vec![fpc_val]),
+            has_stage2,
+            ssu_indices,
+            fpc_ssu_arr,
+            psu_to_stratum: None,
+        });
+    }
+
+    let strata_col = strata.unwrap();
+    let (strata_indices, n_strata) = design_col_codes(strata_col)?;
+
+    // Per-stratum FPC: for each stratum h, the FPC of its first row.
+    let fpc_by_stratum: Option<Vec<f64>> = fpc_arr.as_ref().map(|fpc_vals| {
+        let mut per_stratum = vec![1.0; n_strata as usize];
+        let mut seen = vec![false; n_strata as usize];
+        for (i, &s) in strata_indices.iter().enumerate() {
+            if s != u32::MAX && !seen[s as usize] {
+                per_stratum[s as usize] = fpc_vals[i];
+                seen[s as usize] = true;
+            }
+        }
+        per_stratum
+    });
+
+    let ssu_indices = if has_stage2 {
+        Some(design_col_codes(ssu.unwrap())?.0)
+    } else {
+        None
+    };
+
+    match psu {
+        Some(psu_col) => {
+            // Nest PSU within stratum so PSU labels reused across strata are
+            // distinct PSUs (matches R survey / glm.rs).
+            let (psu_indices, _) = design_pair_codes(strata_col, psu_col)?;
+            let (psu_per_stratum, n_psus_per_stratum) =
+                build_stratum_psu_map(&strata_indices, n_strata, &psu_indices);
+
+            // PSU → stratum mapping for stage 2.
+            let max_psu = psu_indices
+                .iter()
+                .filter(|&&p| p != u32::MAX)
+                .max()
+                .copied()
+                .unwrap_or(0);
+            let mut psu_to_stratum = vec![0u32; (max_psu + 1) as usize];
+            for (&psu_idx, &str_idx) in psu_indices.iter().zip(strata_indices.iter()) {
+                if psu_idx != u32::MAX && str_idx != u32::MAX {
+                    psu_to_stratum[psu_idx as usize] = str_idx;
+                }
+            }
+
+            Ok(TaylorDesign {
+                sm_enum,
+                strata_indices: Some(strata_indices),
+                n_strata,
+                psu_indices: Some(psu_indices),
+                n_psus: 0,
+                psu_per_stratum: Some(psu_per_stratum),
+                n_psus_per_stratum: Some(n_psus_per_stratum),
+                fpc_val: 1.0,
+                fpc_per_stratum: fpc_by_stratum,
+                has_stage2,
+                ssu_indices,
+                fpc_ssu_arr,
+                psu_to_stratum: Some(psu_to_stratum),
+            })
+        }
+        None => Ok(TaylorDesign {
+            sm_enum,
+            strata_indices: Some(strata_indices),
+            n_strata,
+            psu_indices: None,
+            n_psus: 0,
+            psu_per_stratum: None,
+            n_psus_per_stratum: None,
+            fpc_val: 1.0,
+            fpc_per_stratum: fpc_by_stratum,
+            has_stage2,
+            ssu_indices,
+            fpc_ssu_arr,
+            psu_to_stratum: None,
+        }),
+    }
+}
+
+/// Apply a prebuilt [`TaylorDesign`] to a score vector. This is the only
+/// scores-dependent part; a by-group loop calls it once per group.
+pub fn taylor_variance_apply(scores_arr: &[f64], d: &TaylorDesign) -> f64 {
+    // --- STAGE 1 ---
+    let var_stage1 = if d.strata_indices.is_none() {
+        d.fpc_val * variance_unstratified_optimized(scores_arr, d.psu_indices.as_deref(), d.n_psus)
+    } else {
+        variance_stratified_optimized(
+            scores_arr,
+            d.strata_indices.as_deref().unwrap(),
+            d.n_strata,
+            d.psu_indices.as_deref(),
+            d.psu_per_stratum.as_deref(),
+            d.n_psus_per_stratum.as_deref(),
+            d.fpc_per_stratum.as_deref(),
+            d.sm_enum,
+        )
+    };
+
+    // --- STAGE 2 ---
+    if !d.has_stage2 {
+        return var_stage1;
+    }
+
+    // Stage 2 needs a per-row PSU vector; for the two-stage designs that reach
+    // here it is always the stage-1 PSU codes (present whenever psu is set).
+    let psu_indices = d.psu_indices.as_deref().unwrap();
+    let ssu_indices = d.ssu_indices.as_deref().unwrap();
+
+    let var_stage2 = compute_stage2_variance(
+        scores_arr,
+        psu_indices,
+        ssu_indices,
+        d.strata_indices.as_deref(),
+        d.fpc_per_stratum.as_deref(),
+        d.fpc_ssu_arr.as_deref(),
+        d.psu_to_stratum.as_deref(),
+    );
+
+    var_stage1 + var_stage2
+}
+
 pub fn taylor_variance(
     scores: &Float64Chunked,
     strata: Option<&Column>,
@@ -1082,165 +1389,9 @@ pub fn taylor_variance(
     if n == 0 {
         return Ok(0.0);
     }
-
-    let sm_enum = match singleton_method {
-        Some(s) if s.eq_ignore_ascii_case("center") || s.eq_ignore_ascii_case("adjust") => {
-            SingletonMethod::Center
-        }
-        _ => SingletonMethod::None,
-    };
-
+    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-    let fpc_arr: Option<Vec<f64>> = fpc.map(|f| f.iter().map(|v| v.unwrap_or(1.0)).collect());
-    let fpc_ssu_arr: Option<Vec<f64>> =
-        fpc_ssu.map(|f| f.iter().map(|v| v.unwrap_or(1.0)).collect());
-
-    // --- STAGE 1 VARIANCE ---
-    let (
-        var_stage1,
-        psu_indices_opt,
-        strata_indices_opt,
-        _n_strata_val,
-        fpc_per_stratum,
-        psu_stratum_map,
-    ) = if strata.is_none() {
-        // Unstratified: single FPC value (take first element or 1.0)
-        let fpc_val = fpc_arr
-            .as_ref()
-            .and_then(|f| f.first().copied())
-            .unwrap_or(1.0);
-
-        let (psu_indices, n_psus) = match psu {
-            Some(psu_col) => {
-                let (idx, n) = design_col_codes(psu_col)?;
-                (Some(idx), n)
-            }
-            None => (None, 0),
-        };
-        let var = variance_unstratified_optimized(&scores_arr, psu_indices.as_deref(), n_psus);
-        // Pass the (single) stage-1 FPC through so compute_stage2_variance
-        // can derive the stage-1 sampling fraction; returning None here would
-        // silently drop the stage-2 contribution for unstratified designs.
-        (
-            fpc_val * var,
-            psu_indices,
-            None,
-            0u32,
-            Some(vec![fpc_val]),
-            None,
-        )
-    } else {
-        let strata_col = strata.unwrap();
-        let (strata_indices, n_strata) = design_col_codes(strata_col)?;
-
-        // Build per-stratum FPC: for each stratum index h, take the FPC value
-        // from the first row belonging to that stratum.
-        let fpc_by_stratum: Option<Vec<f64>> = fpc_arr.as_ref().map(|fpc_vals| {
-            let mut per_stratum = vec![1.0; n_strata as usize];
-            let mut seen = vec![false; n_strata as usize];
-            for (i, &s) in strata_indices.iter().enumerate() {
-                if s != u32::MAX && !seen[s as usize] {
-                    per_stratum[s as usize] = fpc_vals[i];
-                    seen[s as usize] = true;
-                }
-            }
-            per_stratum
-        });
-
-        match psu {
-            Some(psu_col) => {
-                // Nest PSU within stratum so PSU labels reused across strata
-                // are distinct PSUs (matches R survey / glm.rs).
-                let (psu_indices, _) = design_pair_codes(strata_col, psu_col)?;
-                let (psu_per_stratum, n_psus_per_stratum) =
-                    build_stratum_psu_map(&strata_indices, n_strata, &psu_indices);
-
-                // Build PSU -> stratum mapping for stage 2
-                let max_psu = psu_indices
-                    .iter()
-                    .filter(|&&p| p != u32::MAX)
-                    .max()
-                    .copied()
-                    .unwrap_or(0);
-                let mut psu_to_stratum = vec![0u32; (max_psu + 1) as usize];
-                for (&psu_idx, &str_idx) in psu_indices.iter().zip(strata_indices.iter()) {
-                    if psu_idx != u32::MAX && str_idx != u32::MAX {
-                        psu_to_stratum[psu_idx as usize] = str_idx;
-                    }
-                }
-
-                let var = variance_stratified_optimized(
-                    &scores_arr,
-                    &strata_indices,
-                    n_strata,
-                    Some(&psu_indices),
-                    Some(&psu_per_stratum),
-                    Some(&n_psus_per_stratum),
-                    fpc_by_stratum.as_deref(),
-                    sm_enum,
-                );
-                (
-                    var,
-                    Some(psu_indices),
-                    Some(strata_indices),
-                    n_strata,
-                    fpc_by_stratum,
-                    Some(psu_to_stratum),
-                )
-            }
-            None => {
-                let var = variance_stratified_optimized(
-                    &scores_arr,
-                    &strata_indices,
-                    n_strata,
-                    None,
-                    None,
-                    None,
-                    fpc_by_stratum.as_deref(),
-                    sm_enum,
-                );
-                (
-                    var,
-                    None,
-                    Some(strata_indices),
-                    n_strata,
-                    fpc_by_stratum,
-                    None,
-                )
-            }
-        }
-    };
-
-    // --- STAGE 2 VARIANCE ---
-    if ssu.is_none() || psu.is_none() {
-        return Ok(var_stage1);
-    }
-
-    let ssu_col = ssu.unwrap();
-    let (ssu_indices, _) = design_col_codes(ssu_col)?;
-
-    let psu_indices = match psu_indices_opt {
-        Some(idx) => idx,
-        None => {
-            if let Some(p) = psu {
-                design_col_codes(p)?.0
-            } else {
-                (0..n as u32).collect()
-            }
-        }
-    };
-
-    let var_stage2 = compute_stage2_variance(
-        &scores_arr,
-        &psu_indices,
-        &ssu_indices,
-        strata_indices_opt.as_deref(),
-        fpc_per_stratum.as_deref(),
-        fpc_ssu_arr.as_deref(),
-        psu_stratum_map.as_deref(),
-    );
-
-    Ok(var_stage1 + var_stage2)
+    Ok(taylor_variance_apply(&scores_arr, &design))
 }
 
 pub fn degrees_of_freedom(
@@ -1459,18 +1610,32 @@ pub fn srs_variance_mean_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<f64> {
-    let mut yv = Vec::new();
-    let mut wv = Vec::new();
-    for ((yi, wi), mi) in y
-        .into_iter()
-        .zip(weights.into_iter())
-        .zip(domain_mask.into_iter())
-    {
-        if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi) {
-            yv.push(y_val);
-            wv.push(w_val);
+    let (yv, wv) = if let Some((ys, ws)) = cont_pair(y, weights) {
+        // Fast path: slice-index y/weights while filtering by the mask.
+        let mut yv = Vec::new();
+        let mut wv = Vec::new();
+        for (i, m) in domain_mask.iter().enumerate() {
+            if m == Some(true) {
+                yv.push(ys[i]);
+                wv.push(ws[i]);
+            }
         }
-    }
+        (yv, wv)
+    } else {
+        let mut yv = Vec::new();
+        let mut wv = Vec::new();
+        for ((yi, wi), mi) in y
+            .into_iter()
+            .zip(weights.into_iter())
+            .zip(domain_mask.into_iter())
+        {
+            if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi) {
+                yv.push(y_val);
+                wv.push(w_val);
+            }
+        }
+        (yv, wv)
+    };
     let n = yv.len() as f64;
     if n < 2.0 {
         return Ok(f64::NAN);
@@ -1507,18 +1672,31 @@ pub fn srs_variance_total_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<f64> {
-    let mut yv = Vec::new();
-    let mut wv = Vec::new();
-    for ((yi, wi), mi) in y
-        .into_iter()
-        .zip(weights.into_iter())
-        .zip(domain_mask.into_iter())
-    {
-        if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi) {
-            yv.push(y_val);
-            wv.push(w_val);
+    let (yv, wv) = if let Some((ys, ws)) = cont_pair(y, weights) {
+        let mut yv = Vec::new();
+        let mut wv = Vec::new();
+        for (i, m) in domain_mask.iter().enumerate() {
+            if m == Some(true) {
+                yv.push(ys[i]);
+                wv.push(ws[i]);
+            }
         }
-    }
+        (yv, wv)
+    } else {
+        let mut yv = Vec::new();
+        let mut wv = Vec::new();
+        for ((yi, wi), mi) in y
+            .into_iter()
+            .zip(weights.into_iter())
+            .zip(domain_mask.into_iter())
+        {
+            if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi) {
+                yv.push(y_val);
+                wv.push(w_val);
+            }
+        }
+        (yv, wv)
+    };
     let n = yv.len() as f64;
     if n < 2.0 {
         return Ok(f64::NAN);
@@ -1572,21 +1750,40 @@ pub fn srs_variance_ratio_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<f64> {
-    let mut yv = Vec::new();
-    let mut xv = Vec::new();
-    let mut wv = Vec::new();
-    for (((yi, xi), wi), mi) in y
-        .into_iter()
-        .zip(x.into_iter())
-        .zip(weights.into_iter())
-        .zip(domain_mask.into_iter())
-    {
-        if let (Some(y_val), Some(x_val), Some(w_val), Some(true)) = (yi, xi, wi, mi) {
-            yv.push(y_val);
-            xv.push(x_val);
-            wv.push(w_val);
+    let fast = match (cont_pair(y, weights), x.null_count() == 0) {
+        (Some((ys, ws)), true) => x.cont_slice().ok().map(|xs| (ys, ws, xs)),
+        _ => None,
+    };
+    let (yv, xv, wv) = if let Some((ys, ws, xs)) = fast {
+        let mut yv = Vec::new();
+        let mut xv = Vec::new();
+        let mut wv = Vec::new();
+        for (i, m) in domain_mask.iter().enumerate() {
+            if m == Some(true) {
+                yv.push(ys[i]);
+                xv.push(xs[i]);
+                wv.push(ws[i]);
+            }
         }
-    }
+        (yv, xv, wv)
+    } else {
+        let mut yv = Vec::new();
+        let mut xv = Vec::new();
+        let mut wv = Vec::new();
+        for (((yi, xi), wi), mi) in y
+            .into_iter()
+            .zip(x.into_iter())
+            .zip(weights.into_iter())
+            .zip(domain_mask.into_iter())
+        {
+            if let (Some(y_val), Some(x_val), Some(w_val), Some(true)) = (yi, xi, wi, mi) {
+                yv.push(y_val);
+                xv.push(x_val);
+                wv.push(w_val);
+            }
+        }
+        (yv, xv, wv)
+    };
     let n = yv.len() as f64;
     if n < 2.0 {
         return Ok(f64::NAN);
