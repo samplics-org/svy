@@ -290,9 +290,9 @@ pub fn influence_se(
     w: &[f64],
     n: usize,
     k: usize,
-    strata: Option<&StringChunked>,
-    psu: Option<&StringChunked>,
-    ssu: Option<&StringChunked>,
+    strata: Option<&Column>,
+    psu: Option<&Column>,
+    ssu: Option<&Column>,
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
@@ -325,13 +325,21 @@ pub fn influence_covariance(
     w: &[f64],
     n: usize,
     k: usize,
-    strata: Option<&StringChunked>,
-    psu: Option<&StringChunked>,
+    strata: Option<&Column>,
+    psu: Option<&Column>,
     singleton_method: Option<&str>,
 ) -> PolarsResult<Vec<f64>> {
-    // Index strata and PSUs
+    // Index strata and PSUs. The GLM/WOLS prep always passes String design
+    // columns (it does not use the Phase C integer-code cache), and this path
+    // keeps its own null-as-a-group convention, so it indexes the strings
+    // directly rather than via design_col_codes.
     let (strata_idx, n_strata) = match strata {
         Some(s) => {
+            // Cast to String first so this accepts either string labels or the
+            // Phase C integer code columns (a no-op for strings). Correct either
+            // way — codes become "0"/"1"/… which partition identically.
+            let s = s.cast(&DataType::String)?;
+            let s = s.str()?;
             let mut map: HashMap<&str, u32> = HashMap::new();
             let mut next = 0u32;
             let indices: Vec<u32> = s
@@ -352,6 +360,8 @@ pub fn influence_covariance(
 
     let psu_idx: Vec<u32> = match psu {
         Some(p) => {
+            let p = p.cast(&DataType::String)?;
+            let p = p.str()?;
             let mut map: HashMap<&str, u32> = HashMap::new();
             let mut next = 0u32;
             p.iter()

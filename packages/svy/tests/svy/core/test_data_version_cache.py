@@ -136,3 +136,46 @@ def test_polars_design_cache_also_rebuilds(sample, df):
     info2 = est._get_polars_design_info()
     assert info2["_data_version"] == sample._data_version
     assert info2["_data_version"] != info1["_data_version"]
+
+
+# ── Phase C: the cached integer design-code columns ─────────────────────────
+
+
+def test_design_codes_cache_builds_and_reuses(sample):
+    """The Phase C design-code columns are cached per data version and reused."""
+    from svy.core.data_prep import _get_design_codes
+
+    codes1 = _get_design_codes(sample, sample._design)
+    assert codes1 is not None and "stratum" in codes1 and "psu" in codes1
+    assert codes1["stratum"].dtype == pl.UInt32
+    # Second call at the same version returns the identical cached object.
+    codes2 = _get_design_codes(sample, sample._design)
+    assert codes2 is codes1
+    assert sample._design_codes_cache[0] == sample._data_version
+
+
+def test_design_codes_rebuild_after_mutation(sample, df):
+    """Codes are rebuilt (not served stale) after the data mutates."""
+    from svy.core.data_prep import _get_design_codes
+
+    codes_before = _get_design_codes(sample, sample._design)
+    ver_before = sample._data_version
+
+    # Mutate the design source values in place → version bumps.
+    sample.set_data(df.with_columns((pl.col("stratum") + "_x").alias("stratum")))
+    assert sample._data_version != ver_before
+
+    codes_after = _get_design_codes(sample, sample._design)
+    assert codes_after is not codes_before
+    assert sample._design_codes_cache[0] == sample._data_version
+
+
+def test_domain_estimate_uses_codes(sample):
+    """A held facade with a domain filter still produces a correct estimate via
+    the integer code path (codes survive the where-mask zeroing)."""
+    est = sample.estimation
+    full = est.mean("y").estimates[0].est
+    dom = est.mean("y", where=svy.col("stratum") == "a").estimates[0].est
+    assert dom != pytest.approx(full)
+    # stratum 'a' rows: y = 10, 12, 11 with w = 1, 2, 1 → (10 + 24 + 11) / 4.
+    assert dom == pytest.approx(11.25)

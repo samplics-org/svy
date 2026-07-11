@@ -20,7 +20,7 @@ import polars as pl
 import pytest
 
 from svy.core.constants import _INTERNAL_CONCAT_SUFFIX
-from svy.core.data_prep import extract_where_cols, prepare_data
+from svy.core.data_prep import _PSU_CODE, _STRATUM_CODE, extract_where_cols, prepare_data
 from svy.core.design import Design
 from svy.core.sample import Sample
 
@@ -334,7 +334,7 @@ class TestDesignColumnResolution:
     """Design columns are resolved from the current Design, not _internal_design."""
 
     def test_single_stratum(self, sample_clean):
-        """Single stratum produces correct strata_col."""
+        """Design columns resolve to the Phase C integer code columns."""
         prep = prepare_data(
             sample_clean,
             y="income",
@@ -343,9 +343,8 @@ class TestDesignColumnResolution:
             select_columns=True,
             apply_singleton_filter=False,
         )
-        suffix = _INTERNAL_CONCAT_SUFFIX
-        assert prep.strata_col == f"stratum{suffix}"
-        assert prep.psu_col == f"psu{suffix}"
+        assert prep.strata_col == _STRATUM_CODE
+        assert prep.psu_col == _PSU_CODE
 
     def test_no_stratum(self, sample_no_design):
         """No stratum in design → strata_col is None."""
@@ -360,8 +359,8 @@ class TestDesignColumnResolution:
         assert prep.strata_col is None
         assert prep.psu_col is None
 
-    def test_strata_col_cast_to_string(self, sample_clean):
-        """Strata column is cast to String for Rust backend."""
+    def test_strata_col_is_integer_code(self, sample_clean):
+        """Strata column is a UInt32 code column (Phase C fast path)."""
         prep = prepare_data(
             sample_clean,
             y="income",
@@ -370,10 +369,10 @@ class TestDesignColumnResolution:
             select_columns=True,
             apply_singleton_filter=False,
         )
-        assert prep.df[prep.strata_col].dtype == pl.String
+        assert prep.df[prep.strata_col].dtype == pl.UInt32
 
-    def test_psu_col_cast_to_string(self, sample_clean):
-        """PSU column is cast to String for Rust backend."""
+    def test_psu_col_is_integer_code(self, sample_clean):
+        """PSU column is a UInt32 code column (Phase C fast path)."""
         prep = prepare_data(
             sample_clean,
             y="income",
@@ -382,7 +381,7 @@ class TestDesignColumnResolution:
             select_columns=True,
             apply_singleton_filter=False,
         )
-        assert prep.df[prep.psu_col].dtype == pl.String
+        assert prep.df[prep.psu_col].dtype == pl.UInt32
 
 
 # ==================== Weight Handling ====================

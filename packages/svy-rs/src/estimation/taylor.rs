@@ -713,6 +713,74 @@ pub fn index_categorical_pair(a: &StringChunked, b: &StringChunked) -> (Vec<u32>
     (indices, next_idx)
 }
 
+/// Densify an integer design column to dense 0-based codes in FIRST-APPEARANCE
+/// order (nulls → `u32::MAX`).
+///
+/// Phase C: the Python layer factorizes each design column to integer codes
+/// once per data version and passes them instead of strings. Because those
+/// codes are bijective with the string labels they came from, re-densifying in
+/// first-appearance order here reproduces *exactly* the code assignment
+/// `index_categorical` would make on the original strings — so the variance /
+/// df results are bit-identical to the string path regardless of the incoming
+/// code values (which may be sparse or arbitrarily ordered). Integer hashing is
+/// ~10× cheaper than hashing the label strings, which is the whole point.
+fn densify_int_codes(col: &Column) -> PolarsResult<(Vec<u32>, u32)> {
+    let s = col.cast(&DataType::Int64)?;
+    let ca = s.i64()?;
+    let mut map: FxHashMap<i64, u32> = FxHashMap::default();
+    let mut next_idx = 0u32;
+    let indices: Vec<u32> = ca
+        .iter()
+        .map(|opt| match opt {
+            Some(v) => *map.entry(v).or_insert_with(|| {
+                let i = next_idx;
+                next_idx += 1;
+                i
+            }),
+            None => u32::MAX,
+        })
+        .collect();
+    Ok((indices, next_idx))
+}
+
+/// Build dense first-appearance codes for one design column, dispatching on
+/// dtype: `String` is hashed (`index_categorical`); any integer dtype is
+/// treated as pre-factorized codes and densified. This is the fallback-safe
+/// polymorphic entry — the String path keeps svy-rs's public API working for
+/// direct callers, the integer path is the Phase C fast path.
+fn design_col_codes(col: &Column) -> PolarsResult<(Vec<u32>, u32)> {
+    let dt = col.dtype();
+    if matches!(dt, DataType::String) {
+        Ok(index_categorical(col.str()?))
+    } else if dt.is_integer() {
+        densify_int_codes(col)
+    } else {
+        Err(PolarsError::ComputeError(
+            format!("design column must be String or integer, got {dt:?}").into(),
+        ))
+    }
+}
+
+/// Build nested PSU codes from `(strata, psu)`.
+///
+/// String columns are keyed on the `(stratum, psu)` pair so PSU labels reused
+/// across strata are distinct PSUs (`index_categorical_pair`). For integer
+/// columns the PSU code is assumed already pair-nested by the Python layer
+/// (`__svy_psu_code__` encodes the (stratum, psu) pair), so it is densified
+/// directly — matching the string pair's first-appearance order.
+fn design_pair_codes(strata: &Column, psu: &Column) -> PolarsResult<(Vec<u32>, u32)> {
+    let dt = psu.dtype();
+    if matches!(dt, DataType::String) {
+        Ok(index_categorical_pair(strata.str()?, psu.str()?))
+    } else if dt.is_integer() {
+        densify_int_codes(psu)
+    } else {
+        Err(PolarsError::ComputeError(
+            format!("psu column must be String or integer, got {dt:?}").into(),
+        ))
+    }
+}
+
 fn reindex_within_subset(raw: &[u32]) -> (Vec<u32>, u32) {
     // FxHashMap: codes assigned in first-appearance order, hash-independent.
     let mut map: FxHashMap<u32, u32> = FxHashMap::default();
@@ -1003,9 +1071,9 @@ fn compute_stage2_variance(
 
 pub fn taylor_variance(
     scores: &Float64Chunked,
-    strata: Option<&StringChunked>,
-    psu: Option<&StringChunked>,
-    ssu: Option<&StringChunked>,
+    strata: Option<&Column>,
+    psu: Option<&Column>,
+    ssu: Option<&Column>,
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
@@ -1044,7 +1112,7 @@ pub fn taylor_variance(
 
         let (psu_indices, n_psus) = match psu {
             Some(psu_col) => {
-                let (idx, n) = index_categorical(psu_col);
+                let (idx, n) = design_col_codes(psu_col)?;
                 (Some(idx), n)
             }
             None => (None, 0),
@@ -1063,7 +1131,7 @@ pub fn taylor_variance(
         )
     } else {
         let strata_col = strata.unwrap();
-        let (strata_indices, n_strata) = index_categorical(strata_col);
+        let (strata_indices, n_strata) = design_col_codes(strata_col)?;
 
         // Build per-stratum FPC: for each stratum index h, take the FPC value
         // from the first row belonging to that stratum.
@@ -1083,7 +1151,7 @@ pub fn taylor_variance(
             Some(psu_col) => {
                 // Nest PSU within stratum so PSU labels reused across strata
                 // are distinct PSUs (matches R survey / glm.rs).
-                let (psu_indices, _) = index_categorical_pair(strata_col, psu_col);
+                let (psu_indices, _) = design_pair_codes(strata_col, psu_col)?;
                 let (psu_per_stratum, n_psus_per_stratum) =
                     build_stratum_psu_map(&strata_indices, n_strata, &psu_indices);
 
@@ -1149,13 +1217,13 @@ pub fn taylor_variance(
     }
 
     let ssu_col = ssu.unwrap();
-    let (ssu_indices, _) = index_categorical(ssu_col);
+    let (ssu_indices, _) = design_col_codes(ssu_col)?;
 
     let psu_indices = match psu_indices_opt {
         Some(idx) => idx,
         None => {
             if let Some(p) = psu {
-                index_categorical(p).0
+                design_col_codes(p)?.0
             } else {
                 (0..n as u32).collect()
             }
@@ -1177,8 +1245,8 @@ pub fn taylor_variance(
 
 pub fn degrees_of_freedom(
     weights: &Float64Chunked,
-    strata: Option<&StringChunked>,
-    psu: Option<&StringChunked>,
+    strata: Option<&Column>,
+    psu: Option<&Column>,
 ) -> PolarsResult<u32> {
     let n = weights.len();
     if n == 0 {
@@ -1193,63 +1261,55 @@ pub fn degrees_of_freedom(
         .map(|w| w.map_or(false, |v| v > 0.0))
         .collect();
 
-    if strata.is_none() {
-        if psu.is_none() {
+    // Design columns are resolved to dense first-appearance integer codes,
+    // dispatching on dtype (String hashed, integer densified). The unique
+    // counts below are order-independent, so this is identical to the previous
+    // string-only implementation and to the integer-code fast path.
+    match (strata, psu) {
+        (None, None) => {
             // No strata, no PSU: each obs is its own PSU, df = n_active - 1
             let n_active = active.iter().filter(|&&a| a).count();
-            return Ok(n_active.saturating_sub(1) as u32);
+            Ok(n_active.saturating_sub(1) as u32)
         }
-        // No strata, with PSU: df = n_unique_active_psus - 1
-        let psu_col = psu.unwrap();
-        // Borrow &str into the set instead of allocating a String per row; df is
-        // an order-independent unique count, so the result is unchanged.
-        let mut seen: FxHashSet<&str> = FxHashSet::default();
-        for (opt_p, &act) in psu_col.iter().zip(active.iter()) {
-            if act {
-                if let Some(p) = opt_p {
+        (None, Some(psu_col)) => {
+            // No strata, with PSU: df = n_unique_active_psus - 1
+            let (psu_idx, _) = design_col_codes(psu_col)?;
+            let mut seen: FxHashSet<u32> = FxHashSet::default();
+            for (&p, &act) in psu_idx.iter().zip(active.iter()) {
+                if act && p != u32::MAX {
                     seen.insert(p);
                 }
             }
+            Ok(seen.len().saturating_sub(1) as u32)
         }
-        return Ok(seen.len().saturating_sub(1) as u32);
-    }
-
-    let strata_col = strata.unwrap();
-
-    match psu {
-        Some(psu_col) => {
-            // Stratified + clustered: df = sum_h(n_active_psus_h - 1)
-            // Count unique active PSUs per stratum. Keys/values borrow &str from
-            // the columns (no per-row String alloc); counts are order-independent.
-            let mut stratum_psus: FxHashMap<&str, FxHashSet<&str>> = FxHashMap::default();
-            for ((opt_s, opt_p), &act) in strata_col.iter().zip(psu_col.iter()).zip(active.iter()) {
-                if act {
-                    if let (Some(s), Some(p)) = (opt_s, opt_p) {
-                        stratum_psus.entry(s).or_default().insert(p);
-                    }
-                }
-            }
-            let total_df: u32 = stratum_psus
-                .values()
-                .map(|psus| psus.len().saturating_sub(1) as u32)
-                .sum();
-            Ok(total_df)
-        }
-        None => {
+        (Some(strata_col), None) => {
             // Stratified, no PSU: df = sum_h(n_active_h - 1)
-            let mut stratum_counts: FxHashMap<&str, u32> = FxHashMap::default();
-            for (opt_s, &act) in strata_col.iter().zip(active.iter()) {
-                if act {
-                    if let Some(s) = opt_s {
-                        *stratum_counts.entry(s).or_insert(0) += 1;
-                    }
+            let (str_idx, n_strata) = design_col_codes(strata_col)?;
+            let mut counts = vec![0u32; n_strata as usize];
+            for (&s, &act) in str_idx.iter().zip(active.iter()) {
+                if act && s != u32::MAX {
+                    counts[s as usize] += 1;
                 }
             }
-            let total_df: u32 = stratum_counts
-                .values()
-                .map(|&count| count.saturating_sub(1))
-                .sum();
-            Ok(total_df)
+            Ok(counts.iter().map(|&c| c.saturating_sub(1)).sum())
+        }
+        (Some(strata_col), Some(psu_col)) => {
+            // Stratified + clustered: df = sum_h(n_active_psus_h - 1), where
+            // PSUs are nested within stratum (so labels reused across strata are
+            // distinct). psu codes are pair-nested; strata codes give the stratum.
+            let (str_idx, n_strata) = design_col_codes(strata_col)?;
+            let (psu_idx, _) = design_pair_codes(strata_col, psu_col)?;
+            let mut stratum_psus: Vec<FxHashSet<u32>> =
+                vec![FxHashSet::default(); n_strata as usize];
+            for ((&s, &p), &act) in str_idx.iter().zip(psu_idx.iter()).zip(active.iter()) {
+                if act && s != u32::MAX && p != u32::MAX {
+                    stratum_psus[s as usize].insert(p);
+                }
+            }
+            Ok(stratum_psus
+                .iter()
+                .map(|psus| psus.len().saturating_sub(1) as u32)
+                .sum())
         }
     }
 }
@@ -1270,9 +1330,9 @@ pub fn degrees_of_freedom(
 pub fn median_variance_woodruff(
     y: &Float64Chunked,
     weights: &Float64Chunked,
-    strata: Option<&StringChunked>,
-    psu: Option<&StringChunked>,
-    ssu: Option<&StringChunked>,
+    strata: Option<&Column>,
+    psu: Option<&Column>,
+    ssu: Option<&Column>,
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
@@ -1314,9 +1374,9 @@ pub fn median_variance_woodruff_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
-    strata: Option<&StringChunked>,
-    psu: Option<&StringChunked>,
-    ssu: Option<&StringChunked>,
+    strata: Option<&Column>,
+    psu: Option<&Column>,
+    ssu: Option<&Column>,
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
@@ -1565,8 +1625,8 @@ pub fn srs_variance_ratio_domain(
 /// in a single pass over PSU totals.
 pub fn taylor_variance_matrix(
     score_columns: &[Float64Chunked], // k score columns, each length n
-    strata: Option<&StringChunked>,
-    psu: Option<&StringChunked>,
+    strata: Option<&Column>,
+    psu: Option<&Column>,
     fpc: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
 ) -> PolarsResult<Vec<Vec<f64>>> {
@@ -1604,7 +1664,7 @@ pub fn taylor_variance_matrix(
             .unwrap_or(1.0);
 
         let (psu_indices, n_psus) = match psu {
-            Some(psu_col) => index_categorical(psu_col),
+            Some(psu_col) => design_col_codes(psu_col)?,
             None => {
                 // No PSU: each observation is its own PSU
                 ((0..n as u32).collect(), n as u32)
@@ -1656,12 +1716,12 @@ pub fn taylor_variance_matrix(
     } else {
         // ── Stratified ──
         let strata_col = strata.unwrap();
-        let (strata_indices, n_strata) = index_categorical(strata_col);
+        let (strata_indices, n_strata) = design_col_codes(strata_col)?;
 
         // Nest PSU within stratum (same convention as taylor_variance/glm.rs)
         // so PSU labels reused across strata are distinct PSUs.
         let (psu_indices, _n_psus_global) = match psu {
-            Some(psu_col) => index_categorical_pair(strata_col, psu_col),
+            Some(psu_col) => design_pair_codes(strata_col, psu_col)?,
             None => ((0..n as u32).collect(), n as u32),
         };
 
@@ -1790,6 +1850,63 @@ pub fn taylor_variance_matrix(
 mod tests {
     use super::*;
 
+    /// Build a String design column for the variance kernels, which now take
+    /// `&Column` (dtype-polymorphic since Phase C).
+    fn scol(name: PlSmallStr, vals: &[&str]) -> Column {
+        Column::from(StringChunked::from_slice(name, vals).into_series())
+    }
+
+    /// Build an integer design code column (Phase C fast path).
+    fn icol(name: PlSmallStr, vals: &[i64]) -> Column {
+        Column::from(Int64Chunked::from_slice(name, vals).into_series())
+    }
+
+    /// Phase C: integer design codes must produce bit-identical variance and df
+    /// to the equivalent string labels, even when the codes are sparse and
+    /// arbitrarily valued — because the kernel re-densifies them in
+    /// first-appearance order, reproducing exactly what index_categorical would
+    /// assign to the strings.
+    #[test]
+    fn test_integer_codes_match_string_path() {
+        let y = Float64Chunked::from_slice("y".into(), &[1.0, 2.0, 3.0, 4.0, 10.0, 12.0, 14.0, 16.0]);
+        let w = Float64Chunked::from_slice("w".into(), &[1.0; 8]);
+        let scores = scores_mean(&y, &w).unwrap();
+
+        // String design: PSU labels "1"/"2" are reused across strata A and B.
+        let strata_s = scol("s".into(), &["A", "A", "A", "A", "B", "B", "B", "B"]);
+        let psu_s = scol("p".into(), &["1", "1", "2", "2", "1", "1", "2", "2"]);
+        // Integer codes: deliberately SPARSE and not first-appearance-ordered.
+        // strata codes densify to {10→0, 99→1}; the nested psu codes encode the
+        // four (stratum, psu) pairs (so reused labels are distinct PSUs).
+        let strata_i = icol("s".into(), &[10, 10, 10, 10, 99, 99, 99, 99]);
+        let psu_i = icol("p".into(), &[20, 20, 55, 55, 71, 71, 88, 88]);
+
+        // Stratified + clustered
+        let var_s =
+            taylor_variance(&scores, Some(&strata_s), Some(&psu_s), None, None, None, None).unwrap();
+        let var_i =
+            taylor_variance(&scores, Some(&strata_i), Some(&psu_i), None, None, None, None).unwrap();
+        assert_eq!(var_s.to_bits(), var_i.to_bits(), "strat+cluster: {var_s} vs {var_i}");
+
+        let df_s = degrees_of_freedom(&w, Some(&strata_s), Some(&psu_s)).unwrap();
+        let df_i = degrees_of_freedom(&w, Some(&strata_i), Some(&psu_i)).unwrap();
+        assert_eq!(df_s, df_i, "strat+cluster df");
+
+        // Unstratified (PSU only): psu codes here are the plain PSU identity.
+        let psu_flat_s = scol("p".into(), &["a", "a", "b", "b", "c", "c", "d", "d"]);
+        let psu_flat_i = icol("p".into(), &[7, 7, 3, 3, 9, 9, 1, 1]);
+        let uv_s =
+            taylor_variance(&scores, None, Some(&psu_flat_s), None, None, None, None).unwrap();
+        let uv_i =
+            taylor_variance(&scores, None, Some(&psu_flat_i), None, None, None, None).unwrap();
+        assert_eq!(uv_s.to_bits(), uv_i.to_bits(), "unstratified: {uv_s} vs {uv_i}");
+
+        // Stratified, no PSU
+        let sv_s = taylor_variance(&scores, Some(&strata_s), None, None, None, None, None).unwrap();
+        let sv_i = taylor_variance(&scores, Some(&strata_i), None, None, None, None, None).unwrap();
+        assert_eq!(sv_s.to_bits(), sv_i.to_bits(), "stratified-only: {sv_s} vs {sv_i}");
+    }
+
     #[test]
     fn test_weighted_quantile_uniform_weights() {
         let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
@@ -1875,15 +1992,15 @@ mod tests {
             &[1.0, 2.0, 3.0, 4.0, 10.0, 12.0, 14.0, 16.0],
         );
         let w = Float64Chunked::from_slice("w".into(), &[1.0; 8]);
-        let strata = StringChunked::from_slice(
+        let strata = scol(
             "s".into(),
             &["A", "A", "A", "A", "B", "B", "B", "B"],
         );
-        let psu_reused = StringChunked::from_slice(
+        let psu_reused = scol(
             "p".into(),
             &["1", "1", "2", "2", "1", "1", "2", "2"],
         );
-        let psu_unique = StringChunked::from_slice(
+        let psu_unique = scol(
             "p".into(),
             &["A1", "A1", "A2", "A2", "B1", "B1", "B2", "B2"],
         );
@@ -1923,17 +2040,17 @@ mod tests {
             &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
         );
         let w = Float64Chunked::from_slice("w".into(), &[1.0; 12]);
-        let psu = StringChunked::from_slice(
+        let psu = scol(
             "p".into(),
             &["p1", "p1", "p1", "p1", "p2", "p2", "p2", "p2", "p3", "p3", "p3", "p3"],
         );
-        let ssu = StringChunked::from_slice(
+        let ssu = scol(
             "u".into(),
             &["s1", "s1", "s2", "s2", "s1", "s1", "s2", "s2", "s1", "s1", "s2", "s2"],
         );
         let fpc = Float64Chunked::from_slice("f".into(), &[0.5; 12]);
         let fpc_ssu = Float64Chunked::from_slice("f2".into(), &[0.8; 12]);
-        let strata_const = StringChunked::from_slice("s".into(), &["S"; 12]);
+        let strata_const = scol("s".into(), &["S"; 12]);
 
         let scores = scores_mean(&y, &w).unwrap();
         let var_nostrata = taylor_variance(

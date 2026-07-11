@@ -31,15 +31,81 @@ from typing import TYPE_CHECKING, Mapping, Sequence, cast
 
 import polars as pl
 
-from svy.core.constants import _INTERNAL_CONCAT_SUFFIX
+from svy.core.constants import _BY_SEP, _INTERNAL_CONCAT_SUFFIX
 from svy.core.types import WhereArg
 from svy.utils.checks import assert_no_missing, drop_missing
+from svy.utils.helpers import _colspec_to_list
 
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample
 
 log = logging.getLogger(__name__)
+
+# ── Phase C: cached integer design-code columns ─────────────────────────────
+# Hidden UInt32 columns that are bijective with the string design labels. The
+# Rust variance/df kernels re-densify them (first-appearance order) to exactly
+# the partition the string labels would produce, so results are bit-identical
+# but the per-call string hashing is replaced by cheap integer densification.
+# Built once per Sample data version and reused across estimation calls.
+_STRATUM_CODE = "__svy_stratum_code__"
+_PSU_CODE = "__svy_psu_code__"
+_SSU_CODE = "__svy_ssu_code__"
+
+
+def _code_expr(cols: list[str], alias: str) -> pl.Expr:
+    """Factorize one design group to UInt32 codes. Mirrors the string-concat
+    null handling (null → "__Null__" token, so nulls form a group) so the code
+    partition matches the string path exactly."""
+    parts = [pl.col(c).cast(pl.Utf8).fill_null("__Null__") for c in cols]
+    concat = pl.concat_str(parts, separator=_BY_SEP) if len(parts) > 1 else parts[0]
+    return concat.cast(pl.Categorical).to_physical().cast(pl.UInt32).alias(alias)
+
+
+def _get_design_codes(sample: Sample, design) -> dict[str, pl.Series] | None:
+    """Full-data UInt32 design codes, cached on the Sample per data version.
+
+    - stratum code: factorizes the stratum column(s).
+    - psu code: factorizes the (stratum + psu) columns, so PSU labels reused
+      across strata become distinct PSUs (matches the Rust pair-nesting).
+    - ssu code: factorizes the ssu column(s).
+
+    Returns ``None`` when the design has neither stratum nor psu (nothing to
+    factorize). The codes are full-length (unfiltered) so callers can attach
+    them before row filtering and let them filter along.
+    """
+    strat_cols = _colspec_to_list(design.stratum) if design.stratum else []
+    psu_cols = _colspec_to_list(design.psu) if design.psu else []
+    ssu_cols = _colspec_to_list(design.ssu) if design.ssu else []
+    if not strat_cols and not psu_cols:
+        return None
+
+    version = getattr(sample, "_data_version", None)
+    cached = getattr(sample, "_design_codes_cache", None)
+    if cached is not None and cached[0] == version:
+        return cached[1]
+
+    data = sample._data
+    if isinstance(data, pl.LazyFrame):
+        data = data.collect()
+
+    exprs: list[pl.Expr] = []
+    key_to_name: dict[str, str] = {}
+    if strat_cols:
+        exprs.append(_code_expr(strat_cols, _STRATUM_CODE))
+        key_to_name["stratum"] = _STRATUM_CODE
+    if psu_cols:
+        exprs.append(_code_expr(strat_cols + psu_cols, _PSU_CODE))
+        key_to_name["psu"] = _PSU_CODE
+    if ssu_cols:
+        exprs.append(_code_expr(ssu_cols, _SSU_CODE))
+        key_to_name["ssu"] = _SSU_CODE
+
+    code_df = cast(pl.DataFrame, data).select(exprs)
+    codes = {key: code_df[name] for key, name in key_to_name.items()}
+    sample._design_codes_cache = (version, codes)
+    return codes
+
 
 # Cache for design.specified_fields() keyed on id(design).
 # Stores (design_obj, data_version, fields). The held design_obj reference
@@ -262,6 +328,18 @@ def prepare_data(
     )
     design = sample._design
 
+    # ── Phase C: attach cached integer design codes ─────────────────────
+    # Attach the (cached, full-data) UInt32 stratum/psu/ssu codes BEFORE any
+    # row filtering so they filter along with the data; the Rust kernel then
+    # densifies the filtered subset, matching the string path bit-for-bit.
+    # Skipped when singleton variance columns take over the design (that path
+    # keeps its own string columns).
+    _sr_early = getattr(sample, "_singleton_result", None)
+    _use_codes = not (_sr_early and _sr_early.config and _sr_early.config.var_stratum_col)
+    _design_codes = _get_design_codes(sample, design) if _use_codes else None
+    if _design_codes:
+        local_data = local_data.with_columns(list(_design_codes.values()))
+
     # ── Resolve replicate weight columns (cached on design.rep_wgts) ─────
     # These must be carried through `needed` so they survive select_columns,
     # and they must be zeroed alongside the main weight when `where` is set.
@@ -309,6 +387,9 @@ def prepare_data(
     # block can zero them out, leaving downstream Rust calls with full-sample
     # replicate weights and the wrong variance.
     needed.extend(rep_weight_cols)
+    # Carry the Phase C design-code columns through column selection.
+    if _design_codes:
+        needed.extend(s.name for s in _design_codes.values())
     needed = sample._dedup_preserve_order(needed)
 
     # ── Missing handling ─────────────────────────────────────────────────
@@ -343,6 +424,9 @@ def prepare_data(
             local_data = local_data.filter(~pl.col(_VAR_EXCLUDE_COL))
 
     # ── Concatenated design columns ──────────────────────────────────────
+    # When Phase C codes are active, skip the stratum/psu/ssu string concats
+    # (the kernel uses the integer codes instead) and build only the ``by``
+    # concat. This removes the per-call concat_str work from the hot path.
     _cc, _ = sample._create_concatenated_cols_from_lists(
         data=local_data,
         design=design,
@@ -351,6 +435,7 @@ def prepare_data(
         suffix=_INTERNAL_CONCAT_SUFFIX,
         categorical=True,
         drop_original=False,
+        include_design=_design_codes is None,
     )
     df: pl.DataFrame = cast(pl.DataFrame, _cc)
 
@@ -368,11 +453,17 @@ def prepare_data(
     if _singleton_config and _singleton_config.var_stratum_col:
         strata_col = _singleton_config.var_stratum_col
         psu_col = _singleton_config.var_psu_col
+        ssu_col = f"ssu{suffix}" if design.ssu else None
+    elif _design_codes:
+        # Phase C: point the kernel at the integer code columns (dtype-dispatch
+        # picks the fast path). PSU codes are already stratum-nested.
+        strata_col = _STRATUM_CODE if "stratum" in _design_codes else None
+        psu_col = _PSU_CODE if "psu" in _design_codes else None
+        ssu_col = _SSU_CODE if "ssu" in _design_codes else None
     else:
         strata_col = f"stratum{suffix}" if design.stratum else None
         psu_col = f"psu{suffix}" if design.psu else None
-
-    ssu_col = f"ssu{suffix}" if design.ssu else None
+        ssu_col = f"ssu{suffix}" if design.ssu else None
 
     # ── By column resolution ─────────────────────────────────────────────
     if isinstance(by, str):
@@ -497,11 +588,29 @@ def prepare_data(
         casts.append(pl.col(x).cast(pl.Float64))
     if group and df[group].dtype != pl.String:
         casts.append(pl.col(group).cast(pl.String))
-    if strata_col and strata_col in df.columns and df[strata_col].dtype != pl.String:
+    # Design columns → String, EXCEPT the Phase C integer code columns, which
+    # must stay UInt32 so the Rust kernel takes its integer fast path.
+    _code_cols = {_STRATUM_CODE, _PSU_CODE, _SSU_CODE}
+    if (
+        strata_col
+        and strata_col not in _code_cols
+        and strata_col in df.columns
+        and df[strata_col].dtype != pl.String
+    ):
         casts.append(pl.col(strata_col).cast(pl.String))
-    if psu_col and psu_col in df.columns and df[psu_col].dtype != pl.String:
+    if (
+        psu_col
+        and psu_col not in _code_cols
+        and psu_col in df.columns
+        and df[psu_col].dtype != pl.String
+    ):
         casts.append(pl.col(psu_col).cast(pl.String))
-    if ssu_col and ssu_col in df.columns and df[ssu_col].dtype != pl.String:
+    if (
+        ssu_col
+        and ssu_col not in _code_cols
+        and ssu_col in df.columns
+        and df[ssu_col].dtype != pl.String
+    ):
         casts.append(pl.col(ssu_col).cast(pl.String))
     if by_col and by_col in df.columns and df[by_col].dtype != pl.String:
         casts.append(pl.col(by_col).cast(pl.String))
