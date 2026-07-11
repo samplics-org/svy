@@ -169,6 +169,15 @@ pub fn variance_from_replicates(
 
 /// Extract replicate weights matrix from DataFrame columns
 /// Returns flattened row-major matrix (n × R)
+///
+/// The naive build (column-outer loop writing `matrix[i*n_reps + r]`) is a
+/// strided write — a cache miss on essentially every store — and dominated the
+/// whole replication call (~530 ms at 1M rows × 40 reps). Instead, when the
+/// replicate columns are contiguous and null-free (the common post-`prepare_data`
+/// case) this does a **cache-blocked parallel transpose**: each row block's
+/// slice of the row-major matrix (BLOCK × R floats) fits in L2, so its writes
+/// stay hot, and blocks are filled in parallel. The output matrix is byte-for-
+/// byte identical to the naive build, so downstream results are unchanged.
 pub fn extract_rep_weights_matrix(
     df: &DataFrame,
     rep_weight_cols: &[String],
@@ -176,11 +185,47 @@ pub fn extract_rep_weights_matrix(
     let n = df.height();
     let n_reps = rep_weight_cols.len();
     let mut matrix = vec![0.0; n * n_reps];
+    if n == 0 || n_reps == 0 {
+        return Ok((matrix, n, n_reps));
+    }
 
-    for (r, col_name) in rep_weight_cols.iter().enumerate() {
-        let col = df.column(col_name)?.f64()?;
-        for (i, v) in col.into_iter().enumerate() {
-            matrix[i * n_reps + r] = v.unwrap_or(0.0);
+    let f64_cols: Vec<&Float64Chunked> = rep_weight_cols
+        .iter()
+        .map(|c| df.column(c)?.f64())
+        .collect::<PolarsResult<_>>()?;
+
+    // Borrow each column as one contiguous null-free slice, if possible.
+    let contiguous: Option<Vec<&[f64]>> = f64_cols
+        .iter()
+        .map(|c| c.cont_slice().ok())
+        .collect();
+
+    match contiguous {
+        Some(cols) => {
+            use rayon::prelude::*;
+            const BLOCK: usize = 256; // BLOCK * n_reps * 8 bytes stays in L2
+            matrix
+                .par_chunks_mut(BLOCK * n_reps)
+                .enumerate()
+                .for_each(|(b, chunk)| {
+                    let start = b * BLOCK;
+                    let rows = chunk.len() / n_reps;
+                    for local_i in 0..rows {
+                        let i = start + local_i;
+                        let dst = &mut chunk[local_i * n_reps..local_i * n_reps + n_reps];
+                        for (r, col) in cols.iter().enumerate() {
+                            dst[r] = col[i];
+                        }
+                    }
+                });
+        }
+        None => {
+            // Fallback for chunked/nullable columns — identical semantics.
+            for (r, col) in f64_cols.iter().enumerate() {
+                for (i, v) in col.into_iter().enumerate() {
+                    matrix[i * n_reps + r] = v.unwrap_or(0.0);
+                }
+            }
         }
     }
 
