@@ -531,6 +531,65 @@ pub fn matrix_mean_by_domain(
     (theta_full, theta_reps, counts)
 }
 
+/// By-domain replicate mean from the contiguous replicate columns (no matrix).
+/// Each replicate accumulates per-domain sums over rows in order, in parallel
+/// across replicates; the per-replicate results are reshaped to the
+/// `[domain][rep]` layout `matrix_mean_by_domain` returns. Bit-identical.
+pub fn matrix_mean_by_domain_cols(
+    y: &[f64],
+    full_weights: &[f64],
+    rep_cols: &[&[f64]],
+    domain_ids: &[u32],
+    n_domains: usize,
+    n: usize,
+) -> (Vec<f64>, Vec<Vec<f64>>, Vec<u32>) {
+    let mut sum_wy = vec![0.0; n_domains];
+    let mut sum_w = vec![0.0; n_domains];
+    let mut counts = vec![0u32; n_domains];
+    for i in 0..n {
+        let d = domain_ids[i] as usize;
+        if d >= n_domains {
+            continue;
+        }
+        sum_wy[d] += y[i] * full_weights[i];
+        sum_w[d] += full_weights[i];
+        counts[d] += 1;
+    }
+    let theta_full: Vec<f64> = sum_wy
+        .iter()
+        .zip(sum_w.iter())
+        .map(|(&wy, &w)| if w > 0.0 { wy / w } else { f64::NAN })
+        .collect();
+
+    use rayon::prelude::*;
+    let per_rep: Vec<Vec<f64>> = rep_cols
+        .par_iter()
+        .map(|col| {
+            let mut swy = vec![0.0; n_domains];
+            let mut sw = vec![0.0; n_domains];
+            for i in 0..n {
+                let d = domain_ids[i] as usize;
+                if d < n_domains {
+                    let w = col[i];
+                    swy[d] += y[i] * w;
+                    sw[d] += w;
+                }
+            }
+            (0..n_domains)
+                .map(|d| if sw[d] > 0.0 { swy[d] / sw[d] } else { f64::NAN })
+                .collect()
+        })
+        .collect();
+
+    // Reshape per_rep[rep][domain] → theta_reps[domain][rep].
+    let n_reps = rep_cols.len();
+    let theta_reps: Vec<Vec<f64>> = (0..n_domains)
+        .map(|d| (0..n_reps).map(|r| per_rep[r][d]).collect())
+        .collect();
+
+    (theta_full, theta_reps, counts)
+}
+
 /// Compute total estimates by domain
 pub fn matrix_total_by_domain(
     y: &[f64],

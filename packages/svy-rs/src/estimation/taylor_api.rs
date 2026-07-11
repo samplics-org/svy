@@ -137,7 +137,7 @@ fn compute_mean_grouped(
     let df_val = degrees_of_freedom(weights, strata, psu)?;
     // Index the design once — it is identical across by-groups; only the
     // domain-masked scores change per group.
-    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method, y.len())?;
+    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
     for group_val in unique_groups.iter() {
         if let Some(group) = group_val {
@@ -257,7 +257,7 @@ fn compute_total_grouped(
     let mut ns: Vec<u32> = Vec::new();
     let mut deffs: Vec<f64> = Vec::new();
     let df_val = degrees_of_freedom(weights, strata, psu)?;
-    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method, y.len())?;
+    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
     for group_val in unique_groups.iter() {
         if let Some(group) = group_val {
@@ -380,7 +380,7 @@ fn compute_ratio_grouped(
     let mut ns: Vec<u32> = Vec::new();
     let mut deffs: Vec<f64> = Vec::new();
     let df_val = degrees_of_freedom(weights, strata, psu)?;
-    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method, y.len())?;
+    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
     for group_val in unique_groups.iter() {
         if let Some(group) = group_val {
@@ -478,7 +478,7 @@ fn compute_prop_ungrouped(
     let df_val = degrees_of_freedom(weights, strata, psu)?;
     let n = weights.len() as u32;
     // Design is identical across levels; index it once.
-    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method, n as usize)?;
+    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
     for lvl in &levels {
         let indicator: Vec<Option<f64>> = value_str.iter()
@@ -544,7 +544,7 @@ fn compute_prop_grouped(
     let mut deffs: Vec<f64> = Vec::new();
     let df_val = degrees_of_freedom(weights, strata, psu)?;
     // Design is identical across all (group, level) cells; index it once.
-    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method, weights.len())?;
+    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
     for group_val in unique_groups.iter() {
         if let Some(group) = group_val {

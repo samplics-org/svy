@@ -1100,7 +1100,6 @@ pub fn build_taylor_design(
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
-    n: usize,
 ) -> PolarsResult<TaylorDesign> {
     let sm_enum = match singleton_method {
         Some(s) if s.eq_ignore_ascii_case("center") || s.eq_ignore_ascii_case("adjust") => {
@@ -1285,7 +1284,7 @@ pub fn taylor_variance(
     if n == 0 {
         return Ok(0.0);
     }
-    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method, n)?;
+    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
     Ok(taylor_variance_apply(&scores_arr, &design))
 }

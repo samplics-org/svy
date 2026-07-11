@@ -13,7 +13,8 @@ use crate::estimation::replication::{
     RepMethod, VarianceCenter,
     extract_rep_weights_matrix,
     index_domains,
-    matrix_mean_by_domain, matrix_mean_estimates, matrix_mean_estimates_cols,
+    matrix_mean_by_domain, matrix_mean_by_domain_cols, matrix_mean_estimates,
+    matrix_mean_estimates_cols,
     matrix_median_by_domain, matrix_median_estimates,
     matrix_prop_by_domain, matrix_prop_estimates,
     matrix_prop_by_domain_str, matrix_prop_estimates_str,
@@ -141,9 +142,15 @@ fn compute_replicate_mean_grouped(
     let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
 
     let (domain_ids, domain_names, n_domains) = index_domains(by_str);
-    let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
-    let (theta_full_vec, theta_reps_vec, counts) =
-        matrix_mean_by_domain(&y_arr, &w_arr, &rep_w_matrix, &domain_ids, n_domains, n, n_reps);
+    let (theta_full_vec, theta_reps_vec, counts) = match get_cont_rep_cols(df, rep_weight_cols)? {
+        Some(cols) => {
+            matrix_mean_by_domain_cols(&y_arr, &w_arr, &cols, &domain_ids, n_domains, n)
+        }
+        None => {
+            let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
+            matrix_mean_by_domain(&y_arr, &w_arr, &rep_w_matrix, &domain_ids, n_domains, n, n_reps)
+        }
+    };
     let rep_coefs = replicate_coefficients(method, n_reps, fay_coef);
 
     let mut by_vals: Vec<String> = Vec::with_capacity(n_domains);
