@@ -147,7 +147,9 @@ that affect `native/readstat-sys/wrapper.h` before merging.
 ## Versioning & releases
 
 - **SemVer** per package; breaking changes require a major bump.
-- Add entries to `CHANGELOG.md` (Keep a Changelog style).
+- Add entries to the affected package's `CHANGELOG.md` (Keep a Changelog style):
+  `packages/svy/CHANGELOG.md`, `packages/svy-io/CHANGELOG.md`, or
+  `packages/svy-rs/CHANGELOG.md`.
 - Packages are published separately; tagging a release triggers CI wheel builds
   (manylinux/macOS/Windows for native packages).
 
