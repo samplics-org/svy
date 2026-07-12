@@ -20,7 +20,9 @@ mod weighting;
 fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Taylor linearization
     m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_mean, m)?)?;
+    m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_mean_multi, m)?)?;
     m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_total, m)?)?;
+    m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_total_multi, m)?)?;
     m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_prop, m)?)?;
     m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_median, m)?)?;

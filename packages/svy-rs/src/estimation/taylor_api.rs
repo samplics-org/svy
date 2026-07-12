@@ -87,6 +87,35 @@ pub fn taylor_mean(
     Ok(PyDataFrame(result))
 }
 
+/// Batched ungrouped mean over many variables sharing one design (see
+/// `compute_mean_multi`). Returns one row per variable, in input order.
+#[pyfunction]
+#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None))]
+pub fn taylor_mean_multi(
+    _py: Python,
+    data: PyDataFrame,
+    value_cols: Vec<String>,
+    weight_col: String,
+    strata_col: Option<String>,
+    psu_col: Option<String>,
+    ssu_col: Option<String>,
+    fpc_col: Option<String>,
+    fpc_ssu_col: Option<String>,
+    singleton_method: Option<String>,
+) -> PyResult<PyDataFrame> {
+    let df = into_contiguous(data);
+    let result = _py
+        .detach(|| {
+            compute_mean_multi(
+                &df, &value_cols, &weight_col,
+                strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
+                fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref(),
+            )
+        })
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    Ok(PyDataFrame(result))
+}
+
 fn compute_mean_ungrouped(
     df: &DataFrame,
     value_col: &str, weight_col: &str,
@@ -113,6 +142,75 @@ fn compute_mean_ungrouped(
 
     df!["y" => vec![value_col], "est" => vec![estimate], "se" => vec![se],
         "var" => vec![variance], "df" => vec![df_val], "n" => vec![n], "deff" => vec![deff]]
+}
+
+/// Batched ungrouped means: build the design ONCE and estimate every variable
+/// against it, in parallel. The design build (index strata/PSU, per-stratum
+/// maps, FPC) is ~half the cost of a single call and identical across variables,
+/// so amortising it over N variables is the whole win. Each variable is still
+/// computed with the same kernels as `compute_mean_ungrouped`, so every row is
+/// bit-identical to the corresponding single-variable call. Output is one row
+/// per variable, in input order.
+fn compute_mean_multi(
+    df: &DataFrame,
+    value_cols: &[String], weight_col: &str,
+    strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
+    fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
+    singleton_method: Option<&str>,
+) -> PolarsResult<DataFrame> {
+    let weights = df.column(weight_col)?.f64()?;
+    let strata = strata_col.map(|c| df.column(c)).transpose()?;
+    let psu    = psu_col.map(|c| df.column(c)).transpose()?;
+    let ssu    = ssu_col.map(|c| df.column(c)).transpose()?;
+    let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
+    let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
+
+    let df_val = degrees_of_freedom(weights, strata, psu)?;
+    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+
+    // Resolve every response column to its typed slice BEFORE fanning out.
+    // `df.column()` mutates the frame's internal schema cache, so calling it
+    // from parallel closures is a data race; hoisting it makes each worker read
+    // only already-borrowed, immutable `&Float64Chunked`s (deterministic).
+    let y_cols: Vec<&Float64Chunked> = value_cols
+        .iter()
+        .map(|vc| df.column(vc).and_then(|c| c.f64()))
+        .collect::<PolarsResult<Vec<_>>>()?;
+
+    let rows = (0..value_cols.len())
+        .into_par_iter()
+        .map(|i| -> PolarsResult<(String, f64, f64, f64, u32, f64)> {
+            let y        = y_cols[i];
+            let estimate = point_estimate_mean(y, weights)?;
+            let scores   = scores_mean(y, weights)?;
+            let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+            let variance = taylor_variance_apply(&scores_arr, &design);
+            let se       = variance.max(0.0).sqrt();
+            let n        = y.len() as u32;
+            let srs_var  = srs_variance_mean(y, weights)?;
+            let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
+            Ok((value_cols[i].clone(), estimate, se, variance, n, deff))
+        })
+        .collect::<PolarsResult<Vec<_>>>()?;
+
+    let nv = rows.len();
+    let mut ys: Vec<String> = Vec::with_capacity(nv);
+    let mut estimates: Vec<f64> = Vec::with_capacity(nv);
+    let mut ses: Vec<f64> = Vec::with_capacity(nv);
+    let mut variances: Vec<f64> = Vec::with_capacity(nv);
+    let mut ns: Vec<u32> = Vec::with_capacity(nv);
+    let mut deffs: Vec<f64> = Vec::with_capacity(nv);
+    for (y, est, se, var, n, deff) in rows {
+        ys.push(y);
+        estimates.push(est);
+        ses.push(se);
+        variances.push(var);
+        ns.push(n);
+        deffs.push(deff);
+    }
+    let dfs = vec![df_val; nv];
+    df!["y" => ys, "est" => estimates, "se" => ses, "var" => variances,
+        "df" => dfs, "n" => ns, "deff" => deffs]
 }
 
 fn compute_mean_grouped(
@@ -219,6 +317,34 @@ pub fn taylor_total(
     Ok(PyDataFrame(result))
 }
 
+/// Batched ungrouped total over many variables sharing one design build.
+#[pyfunction]
+#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None))]
+pub fn taylor_total_multi(
+    _py: Python,
+    data: PyDataFrame,
+    value_cols: Vec<String>,
+    weight_col: String,
+    strata_col: Option<String>,
+    psu_col: Option<String>,
+    ssu_col: Option<String>,
+    fpc_col: Option<String>,
+    fpc_ssu_col: Option<String>,
+    singleton_method: Option<String>,
+) -> PyResult<PyDataFrame> {
+    let df = into_contiguous(data);
+    let result = _py
+        .detach(|| {
+            compute_total_multi(
+                &df, &value_cols, &weight_col,
+                strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
+                fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref(),
+            )
+        })
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    Ok(PyDataFrame(result))
+}
+
 fn compute_total_ungrouped(
     df: &DataFrame,
     value_col: &str, weight_col: &str,
@@ -245,6 +371,67 @@ fn compute_total_ungrouped(
 
     df!["y" => vec![value_col], "est" => vec![estimate], "se" => vec![se],
         "var" => vec![variance], "df" => vec![df_val], "n" => vec![n], "deff" => vec![deff]]
+}
+
+/// Batched ungrouped totals: design built once, variables in parallel. See
+/// `compute_mean_multi`. Each row is bit-identical to `compute_total_ungrouped`.
+fn compute_total_multi(
+    df: &DataFrame,
+    value_cols: &[String], weight_col: &str,
+    strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
+    fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
+    singleton_method: Option<&str>,
+) -> PolarsResult<DataFrame> {
+    let weights = df.column(weight_col)?.f64()?;
+    let strata = strata_col.map(|c| df.column(c)).transpose()?;
+    let psu    = psu_col.map(|c| df.column(c)).transpose()?;
+    let ssu    = ssu_col.map(|c| df.column(c)).transpose()?;
+    let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
+    let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
+
+    let df_val = degrees_of_freedom(weights, strata, psu)?;
+    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+
+    // Hoist column resolution out of the parallel region (see compute_mean_multi).
+    let y_cols: Vec<&Float64Chunked> = value_cols
+        .iter()
+        .map(|vc| df.column(vc).and_then(|c| c.f64()))
+        .collect::<PolarsResult<Vec<_>>>()?;
+
+    let rows = (0..value_cols.len())
+        .into_par_iter()
+        .map(|i| -> PolarsResult<(String, f64, f64, f64, u32, f64)> {
+            let y        = y_cols[i];
+            let estimate = point_estimate_total(y, weights)?;
+            let scores   = scores_total(y, weights)?;
+            let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+            let variance = taylor_variance_apply(&scores_arr, &design);
+            let se       = variance.max(0.0).sqrt();
+            let n        = y.len() as u32;
+            let srs_var  = srs_variance_total(y, weights)?;
+            let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
+            Ok((value_cols[i].clone(), estimate, se, variance, n, deff))
+        })
+        .collect::<PolarsResult<Vec<_>>>()?;
+
+    let nv = rows.len();
+    let mut ys: Vec<String> = Vec::with_capacity(nv);
+    let mut estimates: Vec<f64> = Vec::with_capacity(nv);
+    let mut ses: Vec<f64> = Vec::with_capacity(nv);
+    let mut variances: Vec<f64> = Vec::with_capacity(nv);
+    let mut ns: Vec<u32> = Vec::with_capacity(nv);
+    let mut deffs: Vec<f64> = Vec::with_capacity(nv);
+    for (y, est, se, var, n, deff) in rows {
+        ys.push(y);
+        estimates.push(est);
+        ses.push(se);
+        variances.push(var);
+        ns.push(n);
+        deffs.push(deff);
+    }
+    let dfs = vec![df_val; nv];
+    df!["y" => ys, "est" => estimates, "se" => ses, "var" => variances,
+        "df" => dfs, "n" => ns, "deff" => deffs]
 }
 
 fn compute_total_grouped(

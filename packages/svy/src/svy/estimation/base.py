@@ -28,6 +28,12 @@ from svy.estimation.taylor import (
     taylor_mean as _taylor_mean,
 )
 from svy.estimation.taylor import (
+    taylor_mean_multi as _taylor_mean_multi,
+)
+from svy.estimation.taylor import (
+    taylor_total_multi as _taylor_total_multi,
+)
+from svy.estimation.taylor import (
     taylor_median as _taylor_median,
 )
 from svy.estimation.taylor import (
@@ -1059,9 +1065,79 @@ class Estimation:
         est.covariance = np.array([])
         return est
 
+    def _taylor_multi(
+        self,
+        ys: list[str],
+        *,
+        single_method,
+        batched_fn,
+        by: str | Sequence[str] | None,
+        where: WhereArg,
+        method: str | None,
+        deff: bool,
+        fay_coef: float,
+        as_factor: bool,
+        variance_center: str,
+        alpha: float,
+        drop_nulls: bool,
+    ) -> list[Estimate]:
+        """Estimate a list of variables, sharing one Taylor design build.
+
+        Fast path (ungrouped Taylor, no as_factor/drop_nulls/scale double-pass):
+        one batched Rust call that indexes the design once and fans the variables
+        out in parallel. Everything else falls back to independent per-variable
+        calls via ``single_method`` — identical results, no design amortisation.
+        Returns one ``Estimate`` per variable, in ``ys`` order.
+        """
+        if not ys:
+            return []
+
+        target_method = self._resolve_method(method)
+        batched = (
+            target_method == EstimationMethod.TAYLOR
+            and by is None
+            and not as_factor
+            and not drop_nulls
+            and not self._should_run_double_pass()
+        )
+        if not batched:
+            return [
+                single_method(
+                    y,
+                    by=by,
+                    where=where,
+                    method=method,
+                    deff=deff,
+                    fay_coef=fay_coef,
+                    as_factor=as_factor,
+                    variance_center=variance_center,
+                    alpha=alpha,
+                    drop_nulls=drop_nulls,
+                )
+                for y in ys
+            ]
+
+        prep = prepare_data(
+            self._sample,
+            y=ys[0],
+            extra_cols=ys[1:],
+            by=None,
+            where=where,
+            drop_nulls=drop_nulls,
+            cast_y_float=True,
+            apply_singleton_filter=True,
+            select_columns=True,
+        )
+        results = batched_fn(self, prep=prep, ys=ys, deff=deff, alpha=alpha)
+        if where is not None:
+            wc = format_where_clause(where)
+            for r in results:
+                r.where_clause = wc
+        return results
+
     def mean(
         self,
-        y: str,
+        y: str | Sequence[str],
         *,
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
@@ -1072,16 +1148,38 @@ class Estimation:
         variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
         alpha: float = 0.05,
         drop_nulls: bool = False,
-    ) -> Estimate:
+    ) -> Estimate | list[Estimate]:
         """Estimate population mean with standard errors.
 
         Parameters
         ----------
+        y : str or sequence of str
+            A single response column, or a list of columns. With a list, each
+            variable is estimated independently and a ``list[Estimate]`` is
+            returned (one per variable, in order); a single string returns a
+            single ``Estimate``. For ungrouped Taylor means the list form shares
+            one design build across variables (faster than a manual loop).
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design (Taylor when strata/PSU
             are available, replication otherwise).
         """
+        if not isinstance(y, str):
+            return self._taylor_multi(
+                list(y),
+                single_method=self.mean,
+                batched_fn=_taylor_mean_multi,
+                by=by,
+                where=where,
+                method=method,
+                deff=deff,
+                fay_coef=fay_coef,
+                as_factor=as_factor,
+                variance_center=variance_center,
+                alpha=alpha,
+                drop_nulls=drop_nulls,
+            )
+
         target_method = self._resolve_method(method)
         prep = prepare_data(
             self._sample,
@@ -1136,7 +1234,7 @@ class Estimation:
 
     def total(
         self,
-        y: str,
+        y: str | Sequence[str],
         *,
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
@@ -1147,15 +1245,35 @@ class Estimation:
         variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
         alpha: float = 0.05,
         drop_nulls: bool = False,
-    ) -> Estimate:
+    ) -> Estimate | list[Estimate]:
         """Estimate population total with standard errors.
 
         Parameters
         ----------
+        y : str or sequence of str
+            A single response column, or a list of columns. A list returns a
+            ``list[Estimate]`` (one per variable, in order); ungrouped Taylor
+            totals share one design build across variables.
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
         """
+        if not isinstance(y, str):
+            return self._taylor_multi(
+                list(y),
+                single_method=self.total,
+                batched_fn=_taylor_total_multi,
+                by=by,
+                where=where,
+                method=method,
+                deff=deff,
+                fay_coef=fay_coef,
+                as_factor=as_factor,
+                variance_center=variance_center,
+                alpha=alpha,
+                drop_nulls=drop_nulls,
+            )
+
         target_method = self._resolve_method(method)
         prep = prepare_data(
             self._sample,
