@@ -53,11 +53,15 @@ class SingletonError(SvyError):
             lines.append(f"  ... and {n - 5} more")
 
         lines.append("")
-        lines.append("Variance cannot be estimated with singleton PSUs.")
-        lines.append("Consider using one of these handling methods:")
-        lines.append("  • sample.singleton.certainty()")
-        lines.append("  • sample.singleton.skip()")
-        lines.append("  • sample.singleton.combine(mapping)")
+        lines.append("Variance cannot be estimated with unhandled singleton PSUs.")
+        lines.append("Inspect them with sample.singleton.summary(), then pick a strategy:")
+        lines.append("  • sample.singleton.certainty()  — treat as self-representing units")
+        lines.append("  • sample.singleton.skip()       — drop from variance (R 'remove')")
+        lines.append("  • sample.singleton.center()     — grand-mean centering (R 'adjust')")
+        lines.append("  • sample.singleton.scale()      — variance inflation (R 'average')")
+        lines.append("  • sample.singleton.collapse()   — merge into nearby strata")
+        lines.append("  • sample.singleton.pool()       — pool singletons into one stratum")
+        lines.append("  • sample.singleton.combine(map) — manual stratum/PSU remapping")
 
         # Convert to plain Python types; works for msgspec.Struct, dataclasses, dicts, etc.
         payload = [msgspec.to_builtins(s) for s in singletons]
