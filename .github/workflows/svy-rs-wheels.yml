@@ -35,6 +35,13 @@ jobs:
             os: macos-14
             target: aarch64-apple-darwin
 
+          # --- macOS (Intel) — cross-compiled on the arm64 runner ---
+          # GitHub's Intel macos-13 runners are scarce/being retired, so build
+          # x86_64 on macos-14 via --target instead of a native Intel job.
+          - name: macos-x86_64
+            os: macos-14
+            target: x86_64-apple-darwin
+
           # --- Windows ---
           - name: windows-amd64
             os: windows-latest
@@ -124,6 +131,8 @@ jobs:
           pip install packages/svy-rs/dist/*.whl
           python -c "import svy_rs; print('OK:', svy_rs.__name__)"
 
+      # Only the native arm64 wheel can be imported on the arm64 runner;
+      # the x86_64 wheel is cross-compiled and validated at build time.
       - name: Verify import (macOS arm64)
         if: matrix.name == 'macos-arm64'
         shell: bash

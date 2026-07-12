@@ -27,7 +27,7 @@ python-packages = ["svy_io"]
 include = [
   "native/readstat-sys/build.rs",
   "native/readstat-sys/wrapper.h",
-  "ReadStat/src/**",
+  "ReadStat/src/**/*",
   "ReadStat/LICENSE",
   "ReadStat/README.md",
 ]
