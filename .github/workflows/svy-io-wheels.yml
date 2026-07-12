@@ -214,7 +214,7 @@ jobs:
           python -c "import svy_io, svy_io.svyreadstat_rs as _m; print('OK:', svy_io.__name__, getattr(svy_io, '__version__', 'n/a'), _m.__name__)"
 
       - name: Upload wheels
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheels-${{ matrix.name }}
           path: packages/svy-io/dist/*.whl
@@ -237,7 +237,7 @@ jobs:
           args: --out dist
       - name: Show sdist
         run: ls -lh packages/svy-io/dist
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sdist
           path: packages/svy-io/dist/*.tar.gz
