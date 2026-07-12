@@ -35,6 +35,11 @@ jobs:
             os: macos-14
             target: aarch64-apple-darwin
 
+          # --- macOS (Intel) ---
+          - name: macos-x86_64
+            os: macos-13
+            target: x86_64-apple-darwin
+
           # --- Windows ---
           - name: windows-amd64
             os: windows-latest
@@ -189,8 +194,8 @@ jobs:
           pip install packages/svy-io/dist/*.whl
           python -c "import svy_io, svy_io.svyreadstat_rs as _m; print('OK:', svy_io.__name__, getattr(svy_io, '__version__', 'n/a'), _m.__name__)"
 
-      - name: Verify import (macOS arm64)
-        if: matrix.name == 'macos-arm64'
+      - name: Verify import (macOS)
+        if: startsWith(matrix.name, 'macos')
         shell: bash
         run: |
           pip install packages/svy-io/dist/*.whl
