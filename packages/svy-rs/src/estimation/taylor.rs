@@ -912,8 +912,13 @@ fn build_stratum_psu_map(
     n_strata: u32,
     psu_indices: &[u32],
 ) -> (Vec<Vec<u32>>, Vec<u32>) {
-    use std::collections::HashSet;
-    let mut stratum_psus: Vec<HashSet<u32>> = vec![HashSet::new(); n_strata as usize];
+    // FxHashSet (deterministic, fixed-seed) not std HashSet (RandomState): the
+    // collected PSU order becomes the summation order in the stratified variance
+    // (`variance_stratified_optimized`), so a randomised order made the variance
+    // — and thus every standard error — differ at the ULP level run-to-run.
+    // Sort each stratum's PSUs so the order is canonical and the result is
+    // bit-reproducible.
+    let mut stratum_psus: Vec<FxHashSet<u32>> = vec![FxHashSet::default(); n_strata as usize];
     for (&stratum, &psu) in strata_indices.iter().zip(psu_indices.iter()) {
         if stratum != u32::MAX && psu != u32::MAX {
             stratum_psus[stratum as usize].insert(psu);
@@ -921,7 +926,11 @@ fn build_stratum_psu_map(
     }
     let psu_per_stratum: Vec<Vec<u32>> = stratum_psus
         .iter()
-        .map(|s| s.iter().copied().collect())
+        .map(|s| {
+            let mut v: Vec<u32> = s.iter().copied().collect();
+            v.sort_unstable();
+            v
+        })
         .collect();
     let n_psus_per_stratum: Vec<u32> = psu_per_stratum.iter().map(|v| v.len() as u32).collect();
     (psu_per_stratum, n_psus_per_stratum)
