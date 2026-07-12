@@ -41,8 +41,8 @@ svy-io = { workspace = true } # overrides the above during dev
 svy-rs = { workspace = true }
 
 [project.optional-dependencies]
-report = ["rich>=14.1", "great-tables>=0.18"]
-all = ["rich>=14.1", "great-tables>=0.18"]
+report = ["rich>=14.1", "great-tables>=0.22.0"]
+all = ["rich>=14.1", "great-tables>=0.22.0"]
 
 [dependency-groups]
 dev = [
