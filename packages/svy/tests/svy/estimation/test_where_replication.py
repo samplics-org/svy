@@ -9,8 +9,9 @@ point estimates that reflect the domain but standard errors that reflect
 the full sample (identical SEs for filtered vs. unfiltered runs).
 
 Convention: the where clause restricts on ``educ``, and the ``by`` variable
-is always ``sex``. The library forbids overlap between ``where`` and ``by``
-on the same column, so we keep them strictly separate throughout.
+is usually ``sex``. A variable may appear in both ``where`` and ``by`` on the
+same column (issue #9); that overlap case is covered by
+``test_where_and_by_same_column``.
 
 The file is organized in five sections:
 
@@ -127,9 +128,9 @@ def assert_est_prop(result, expected):
     assert result.se == pytest.approx(expected["se"], rel=TOL)
 
 
-# Domain: educ values that exist in the test CSVs. The library raises if a
-# column appears in both `where` and `by`, so `educ` is reserved for `where`
-# and `sex` is reserved for `by` throughout this file.
+# Domain: educ values that exist in the test CSVs. `educ` is used for `where`
+# and `sex` for `by` in most tests here; a variable may also appear in both
+# (see test_where_and_by_same_column, issue #9).
 def _default_where():
     return col("educ").is_in(["Med", "High"])
 
@@ -353,7 +354,8 @@ class TestWhereReplicationSmoke:
         """The where+by combination that surfaced the original bug.
 
         ``by`` is on ``sex`` (a different column from the where clause's
-        ``educ``), since the library forbids overlap.
+        ``educ``). Overlap of the two on the same column is covered separately
+        by ``test_where_and_by_same_column``.
 
         Note: single-observation by-groups (e.g. ``sex="None"`` in the test
         fixtures) produce NaN SEs under Bootstrap/Jackknife because some
@@ -383,22 +385,37 @@ class TestWhereReplicationSmoke:
                 assert est.lci <= est.uci
 
     @pytest.mark.parametrize("method, csv, prefix, reps, df, psu_col, _gold", SCENARIOS)
-    def test_where_and_by_same_column_raises(
+    def test_where_and_by_same_column(
         self, load_survey_data, make_design, method, csv, prefix, reps, df, psu_col, _gold
     ):
-        """Using the same column in `where` and `by` must raise."""
+        """A column may appear in both `where` and `by` (issue #9).
+
+        Grouping ``by="educ"`` while restricting ``where=educ in {Med, High}``
+        keeps the domain estimate for each surviving level and drops the
+        excluded ones (e.g. ``Low``) entirely — no zero-weight/NaN rows for
+        levels the ``where`` clause filtered out.
+        """
+        import math
+
         data = load_survey_data(csv)
         design = make_design(method, prefix, reps, df, psu_col)
         sample = Sample(data, design)
 
-        with pytest.raises(ValueError, match="both 'by' and 'where'"):
-            sample.estimation.mean(
-                y="income",
-                by="educ",  # same column as the where clause
-                method="replication",
-                where=_default_where(),
-                drop_nulls=True,
-            )
+        result = sample.estimation.mean(
+            y="income",
+            by="educ",  # same column as the where clause
+            method="replication",
+            where=_default_where(),
+            drop_nulls=True,
+        )
+
+        by_levels = {est.by_level[0] for est in result.estimates}
+        # Only the domain's levels survive; excluded educ levels are absent.
+        assert by_levels <= {"Med", "High"}
+        assert by_levels  # at least one surviving level
+        for est in result.estimates:
+            assert est.est > 0
+            assert math.isnan(est.se) or est.se >= 0
 
 
 # ═════════════════════════════════════════════════════════════════════════

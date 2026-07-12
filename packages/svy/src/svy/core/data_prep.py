@@ -484,16 +484,13 @@ def prepare_data(
         by_cols_list = []
         by_col = None
 
-    # Validate: by and where cannot reference the same column
-    if by_cols_list and where is not None:
-        where_cols = set(extract_where_cols(where))
-        by_cols_set = set(by_cols_list)
-        overlap = by_cols_set & where_cols
-        if overlap:
-            raise ValueError(
-                f"Column(s) {sorted(overlap)} appear in both 'by' and 'where'. "
-                f"Use 'by' to stratify or 'where' to restrict, not both on the same variable."
-            )
+    # A variable may appear in BOTH `by` and `where` (issue #9). The two are
+    # orthogonal: `where` is domain estimation (out-of-domain rows keep their
+    # place but have their weight zeroed and are flagged via `__svy_domain__`),
+    # while `by` groups on the original values. When a `where` predicate
+    # excludes an entire `by` level, that level is dropped from the results by
+    # blanking its grouping label in the `where` block below, matching R's
+    # `design %>% filter(...) %>% group_by(...)`.
 
     # ── Paired difference ────────────────────────────────────────────────
     y_col = y
@@ -577,6 +574,35 @@ def prepare_data(
         df = df.with_columns(exprs).drop(_MASK_COL)
         domain_col = "__svy_domain__"
         domain_val = "true"
+
+        # A variable may appear in BOTH `by` and `where` (issue #9). When a
+        # `where` predicate excludes an entire `by` level (every one of its rows
+        # out of the domain, e.g. a "don't know"/missing code), that level has
+        # no domain estimate to report and must simply be absent from the
+        # results — matching R's `design %>% filter(...) %>% group_by(...)`.
+        #
+        # We do NOT drop those rows: domain estimation requires the full sample
+        # with out-of-domain weights zeroed so the design-based (Taylor /
+        # replicate) variance of the surviving groups stays correct. Instead we
+        # blank the grouping *label* of a fully-excluded level, so it forms no
+        # group in the kernel (which iterates `by.unique()` and skips nulls) and
+        # produces no row — while every row still flows to Rust and continues to
+        # contribute to the shared design/df exactly as before. Partially
+        # excluded levels keep their label (they have in-domain rows) and are
+        # domain-estimated over their surviving observations as usual.
+        if by_col is not None and by_col in df.columns:
+            live_levels = (
+                df.filter(pl.col(domain_col) == domain_val)
+                .get_column(by_col)
+                .unique()
+                .to_list()
+            )
+            df = df.with_columns(
+                pl.when(pl.col(by_col).is_in(live_levels))
+                .then(pl.col(by_col))
+                .otherwise(None)
+                .alias(by_col)
+            )
     else:
         # No where → still need (a) the main weight column to exist and be
         # Float64 for Rust, and (b) replicate weights to be Float64. Bundle
