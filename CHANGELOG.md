@@ -14,6 +14,15 @@ change under `[Unreleased]` in the same PR that makes it; on release, rename
 
 ### Changed
 
+- **Estimation now fails fast on unhandled singleton PSUs** instead of silently
+  under-reporting the variance. Taylor estimation (`mean`, `total`, `prop`,
+  `ratio`, `median`) raises `SingletonError` when a design has single-PSU strata
+  and no handling strategy was chosen — matching R's
+  `options(survey.lonely.psu = "fail")`. Pick a strategy explicitly with
+  `sample.singleton.skip()` / `.certainty()` / `.center()` / `.scale()` /
+  `.collapse()` / `.pool()`. Previously such strata were dropped from the
+  variance with no error or warning.
+
 ### Fixed
 
 <!-- Also available when needed: ### Deprecated, ### Removed, ### Security -->

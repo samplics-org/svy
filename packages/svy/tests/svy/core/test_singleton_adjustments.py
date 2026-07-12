@@ -143,8 +143,23 @@ def test_center_arg_passing(adjustment_sample, monkeypatch):
     assert captured_kwargs.get("singleton_method") == "center"
 
 
-def test_center_idempotent_if_not_configured(adjustment_sample, monkeypatch):
-    sample = adjustment_sample
+def test_center_idempotent_if_not_configured(monkeypatch):
+    # A design WITHOUT singletons: without a .center() call the engine must
+    # receive singleton_method=None. (A singleton design would instead raise;
+    # that fail-fast policy is covered in tests/svy/estimation/test_singletons.py.)
+    rows = [
+        (0, "B", "201", 20.0, 1.0),
+        (1, "B", "202", 22.0, 1.0),
+        (2, "D", "401", 40.0, 1.0),
+        (3, "D", "402", 42.0, 1.0),
+    ]
+    df = pl.DataFrame(
+        rows,
+        schema=[SVY_ROW_INDEX, "stratum", "cluster", "income", "weight"],
+        orient="row",
+    )
+    design = svy.Design(stratum="stratum", psu="cluster", wgt="weight")
+    sample = svy.Sample(data=df, design=design)
     captured_kwargs = {}
 
     def mock_taylor_mean(*args, **kwargs):
