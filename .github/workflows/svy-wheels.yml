@@ -23,7 +23,7 @@ jobs:
     name: Build svy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
         with:
           version: "latest"
