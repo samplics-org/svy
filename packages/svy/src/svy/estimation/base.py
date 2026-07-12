@@ -1081,6 +1081,11 @@ class Estimation:
             cast_y_float=True,
             apply_singleton_filter=True,
             select_columns=True,
+            # Ungrouped replication only: the mask path covers the ungrouped
+            # kernels. Grouped (by=) replication keeps the zeroing path.
+            domain_mask_for_replication=(
+                target_method != EstimationMethod.TAYLOR and by is None
+            ),
         )
 
         try:
@@ -1150,6 +1155,11 @@ class Estimation:
             cast_y_float=True,
             apply_singleton_filter=True,
             select_columns=True,
+            # Ungrouped replication only: the mask path covers the ungrouped
+            # kernels. Grouped (by=) replication keeps the zeroing path.
+            domain_mask_for_replication=(
+                target_method != EstimationMethod.TAYLOR and by is None
+            ),
         )
 
         try:
@@ -1218,6 +1228,11 @@ class Estimation:
             cast_y_float=False,
             apply_singleton_filter=True,
             select_columns=True,
+            # Ungrouped replication only: the mask path covers the ungrouped
+            # kernels. Grouped (by=) replication keeps the zeroing path.
+            domain_mask_for_replication=(
+                target_method != EstimationMethod.TAYLOR and by is None
+            ),
         )
 
         try:
@@ -1288,6 +1303,11 @@ class Estimation:
             cast_y_float=True,
             apply_singleton_filter=True,
             select_columns=True,
+            # Ungrouped replication only: the mask path covers the ungrouped
+            # kernels. Grouped (by=) replication keeps the zeroing path.
+            domain_mask_for_replication=(
+                target_method != EstimationMethod.TAYLOR and by is None
+            ),
         )
 
         try:

@@ -118,6 +118,12 @@ _design_fields_cache: dict[int, tuple] = {}
 # Created and dropped within prepare_data; never exposed to the caller.
 _MASK_COL = "__svy_where_mask__"
 
+# Internal Float64 domain-mask column (1.0 inside the `where=` domain, 0.0
+# outside). Emitted instead of zeroing R replicate columns when
+# ``domain_mask_for_replication=True``; the Rust replicate kernels apply it on
+# the fly. Carried through to Rust (not dropped), so it stays namespaced.
+_DOMAIN_MASK_COL = "__svy_domain_mask__"
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Return type
@@ -138,6 +144,7 @@ class PreparedData:
     fpc_ssu_col: str | None = None
     domain_col: str | None = None
     domain_val: str | None = None
+    domain_mask_col: str | None = None
     by_col: str | None = None
     by_cols: list[str] = field(default_factory=list)
     singleton_method: str | None = None
@@ -283,6 +290,7 @@ def prepare_data(
     cast_y_float: bool,
     select_columns: bool,
     apply_singleton_filter: bool,
+    domain_mask_for_replication: bool = False,
 ) -> PreparedData:
     """
     Unified data preparation for all Rust backend calls.
@@ -523,6 +531,7 @@ def prepare_data(
     # ``with_columns`` call. The mask column is dropped before returning.
     domain_col = None
     domain_val = None
+    domain_mask_col = None
 
     if where is not None:
         where_expr = sample.estimation._compile_where_expr(where)
@@ -536,7 +545,9 @@ def prepare_data(
         exprs: list[pl.Expr] = [mask.cast(pl.String).alias("__svy_domain__")]
 
         # Main weight: zero on the non-domain branch. If design has no wgt
-        # the column doesn't exist yet — synthesize it inline.
+        # the column doesn't exist yet — synthesize it inline. This one column
+        # is what the Taylor path and the replicate full-sample estimate read,
+        # so it is always zeroed (cheap).
         if design.wgt:
             exprs.append(
                 pl.when(mask)
@@ -547,11 +558,21 @@ def prepare_data(
         else:
             exprs.append(pl.when(mask).then(pl.lit(1.0)).otherwise(0.0).alias(weight_col))
 
-        # Replicate weights: cast + zero in one pass per column. The Python
-        # loop only builds expression objects; the actual column rewrites
-        # happen in parallel inside Polars/Rust.
-        for c in rep_weight_cols_in_df:
-            exprs.append(pl.when(mask).then(pl.col(c).cast(pl.Float64)).otherwise(0.0).alias(c))
+        if domain_mask_for_replication and rep_weight_cols_in_df:
+            # Fast path (ungrouped replication): emit ONE Float64 domain mask
+            # (1.0/0.0) and cast the replicate weights to Float64 WITHOUT
+            # zeroing them. The Rust replicate kernels multiply the mask in on
+            # the fly, avoiding the R materialised zeroed columns this loop
+            # would otherwise write (R×n float stores per `where=` call).
+            exprs.append(mask.cast(pl.Float64).alias(_DOMAIN_MASK_COL))
+            for c in rep_weight_cols_in_df:
+                exprs.append(pl.col(c).cast(pl.Float64).alias(c))
+            domain_mask_col = _DOMAIN_MASK_COL
+        else:
+            # Default: cast + zero every replicate weight in one pass per
+            # column (grouped/median replication and non-mask-aware callers).
+            for c in rep_weight_cols_in_df:
+                exprs.append(pl.when(mask).then(pl.col(c).cast(pl.Float64)).otherwise(0.0).alias(c))
 
         df = df.with_columns(exprs).drop(_MASK_COL)
         domain_col = "__svy_domain__"
@@ -631,6 +652,7 @@ def prepare_data(
         fpc_ssu_col=None,  # when needed (not all APIs use FPC)
         domain_col=domain_col,
         domain_val=domain_val,
+        domain_mask_col=domain_mask_col,
         by_col=by_col,
         by_cols=by_cols_list,
         singleton_method=singleton_method,
