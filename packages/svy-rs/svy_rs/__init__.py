@@ -33,10 +33,15 @@ from svy_rs._internal import (
     tabulate_rs,
     # Taylor linearization
     taylor_mean,
+    taylor_mean_multi,
     taylor_median,
+    taylor_median_multi,
     taylor_prop,
+    taylor_prop_multi,
     taylor_ratio,
+    taylor_ratio_multi,
     taylor_total,
+    taylor_total_multi,
     trim_weights,
     trim_weights_matrix,
     # Categorical

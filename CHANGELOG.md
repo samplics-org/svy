@@ -12,6 +12,16 @@ change under `[Unreleased]` in the same PR that makes it; on release, rename
 
 ### Added
 
+- **Batched multi-variable estimation.** `estimation.mean`, `total`, `ratio`,
+  `prop`, and `median` now accept a list of columns and return a
+  `list[Estimate]` (one per variable; `ratio` pairs numerator/denominator
+  element-wise and broadcasts a scalar side). A single string still returns a
+  single `Estimate`. For ungrouped Taylor estimation the list form shares one
+  design build across variables and runs them in parallel — 4–13× faster than a
+  manual loop at 1M rows depending on the estimator. `by=`, replication,
+  `drop_nulls`, and the singleton scale double-pass transparently fall back to
+  independent per-variable calls (identical results).
+
 ### Changed
 
 - **Estimation now fails fast on unhandled singleton PSUs** instead of silently
@@ -24,6 +34,13 @@ change under `[Unreleased]` in the same PR that makes it; on release, rename
   variance with no error or warning.
 
 ### Fixed
+
+- **Taylor standard errors are now bit-reproducible.** The stratified variance
+  summed each stratum's PSUs in the iteration order of a randomized hash set, so
+  a repeated estimate on identical data could differ in its last digits
+  run-to-run (far below reporting precision, but not reproducible). PSUs are now
+  summed in a canonical order, so `mean`/`total`/`ratio`/`prop`/`median` return
+  identical standard errors across runs.
 
 <!-- Also available when needed: ### Deprecated, ### Removed, ### Security -->
 

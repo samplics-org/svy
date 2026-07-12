@@ -16,6 +16,7 @@ from svy.core.data_prep import prepare_data
 from svy.core.enumerations import EstimationMethod, PopParam
 from svy.core.enumerations import QuantileMethod as _QuantileMethod
 from svy.core.types import WhereArg
+from svy.errors import DimensionError
 from svy.errors.singleton_errors import SingletonError
 from svy.estimation.estimate import Estimate, ParamEst
 from svy.estimation.replication import (
@@ -26,6 +27,21 @@ from svy.estimation.replication import (
 )
 from svy.estimation.taylor import (
     taylor_mean as _taylor_mean,
+)
+from svy.estimation.taylor import (
+    taylor_mean_multi as _taylor_mean_multi,
+)
+from svy.estimation.taylor import (
+    taylor_total_multi as _taylor_total_multi,
+)
+from svy.estimation.taylor import (
+    taylor_ratio_multi as _taylor_ratio_multi,
+)
+from svy.estimation.taylor import (
+    taylor_prop_multi as _taylor_prop_multi,
+)
+from svy.estimation.taylor import (
+    taylor_median_multi as _taylor_median_multi,
 )
 from svy.estimation.taylor import (
     taylor_median as _taylor_median,
@@ -1059,9 +1075,64 @@ class Estimation:
         est.covariance = np.array([])
         return est
 
+    def _taylor_multi(
+        self,
+        items: list,
+        *,
+        single_call,
+        batched_call,
+        prep_y: str,
+        prep_extra_cols: list[str],
+        by: str | Sequence[str] | None,
+        where: WhereArg,
+        method: str | None,
+        drop_nulls: bool,
+        as_factor: bool = False,
+        cast_y_float: bool = True,
+    ) -> list[Estimate]:
+        """Estimate a list of items, sharing one Taylor design build.
+
+        Fast path (ungrouped Taylor, no as_factor/drop_nulls/scale double-pass):
+        one batched Rust call that indexes the design once and fans the items out
+        in parallel, via ``batched_call(prep)``. Everything else falls back to
+        independent per-item calls via ``single_call(item)`` — identical results,
+        no design amortisation. Returns one ``Estimate`` per item, in order.
+        """
+        if not items:
+            return []
+
+        target_method = self._resolve_method(method)
+        batched = (
+            target_method == EstimationMethod.TAYLOR
+            and by is None
+            and not as_factor
+            and not drop_nulls
+            and not self._should_run_double_pass()
+        )
+        if not batched:
+            return [single_call(it) for it in items]
+
+        prep = prepare_data(
+            self._sample,
+            y=prep_y,
+            extra_cols=prep_extra_cols,
+            by=None,
+            where=where,
+            drop_nulls=drop_nulls,
+            cast_y_float=cast_y_float,
+            apply_singleton_filter=True,
+            select_columns=True,
+        )
+        results = batched_call(prep)
+        if where is not None:
+            wc = format_where_clause(where)
+            for r in results:
+                r.where_clause = wc
+        return results
+
     def mean(
         self,
-        y: str,
+        y: str | Sequence[str],
         *,
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
@@ -1072,16 +1143,39 @@ class Estimation:
         variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
         alpha: float = 0.05,
         drop_nulls: bool = False,
-    ) -> Estimate:
+    ) -> Estimate | list[Estimate]:
         """Estimate population mean with standard errors.
 
         Parameters
         ----------
+        y : str or sequence of str
+            A single response column, or a list of columns. With a list, each
+            variable is estimated independently and a ``list[Estimate]`` is
+            returned (one per variable, in order); a single string returns a
+            single ``Estimate``. For ungrouped Taylor means the list form shares
+            one design build across variables (faster than a manual loop).
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design (Taylor when strata/PSU
             are available, replication otherwise).
         """
+        if not isinstance(y, str):
+            ys = list(y)
+            return self._taylor_multi(
+                ys,
+                single_call=lambda yy: self.mean(
+                    yy, by=by, where=where, method=method, deff=deff, fay_coef=fay_coef,
+                    as_factor=as_factor, variance_center=variance_center, alpha=alpha,
+                    drop_nulls=drop_nulls,
+                ),
+                batched_call=lambda prep: _taylor_mean_multi(
+                    self, prep=prep, ys=ys, deff=deff, alpha=alpha
+                ),
+                prep_y=(ys[0] if ys else ""),
+                prep_extra_cols=ys[1:],
+                by=by, where=where, method=method, as_factor=as_factor, drop_nulls=drop_nulls,
+            )
+
         target_method = self._resolve_method(method)
         prep = prepare_data(
             self._sample,
@@ -1136,7 +1230,7 @@ class Estimation:
 
     def total(
         self,
-        y: str,
+        y: str | Sequence[str],
         *,
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
@@ -1147,15 +1241,36 @@ class Estimation:
         variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
         alpha: float = 0.05,
         drop_nulls: bool = False,
-    ) -> Estimate:
+    ) -> Estimate | list[Estimate]:
         """Estimate population total with standard errors.
 
         Parameters
         ----------
+        y : str or sequence of str
+            A single response column, or a list of columns. A list returns a
+            ``list[Estimate]`` (one per variable, in order); ungrouped Taylor
+            totals share one design build across variables.
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
         """
+        if not isinstance(y, str):
+            ys = list(y)
+            return self._taylor_multi(
+                ys,
+                single_call=lambda yy: self.total(
+                    yy, by=by, where=where, method=method, deff=deff, fay_coef=fay_coef,
+                    as_factor=as_factor, variance_center=variance_center, alpha=alpha,
+                    drop_nulls=drop_nulls,
+                ),
+                batched_call=lambda prep: _taylor_total_multi(
+                    self, prep=prep, ys=ys, deff=deff, alpha=alpha
+                ),
+                prep_y=(ys[0] if ys else ""),
+                prep_extra_cols=ys[1:],
+                by=by, where=where, method=method, as_factor=as_factor, drop_nulls=drop_nulls,
+            )
+
         target_method = self._resolve_method(method)
         prep = prepare_data(
             self._sample,
@@ -1209,7 +1324,7 @@ class Estimation:
 
     def prop(
         self,
-        y: str,
+        y: str | Sequence[str],
         *,
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
@@ -1220,15 +1335,36 @@ class Estimation:
         variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
         alpha: float = 0.05,
         drop_nulls: bool = False,
-    ) -> Estimate:
+    ) -> Estimate | list[Estimate]:
         """Estimate population proportion with standard errors.
 
         Parameters
         ----------
+        y : str or sequence of str
+            A single category column, or a list. A list returns a
+            ``list[Estimate]`` (one multi-row, per-level estimate per variable);
+            ungrouped Taylor proportions share one design build across variables.
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
         """
+        if not isinstance(y, str):
+            ys = list(y)
+            return self._taylor_multi(
+                ys,
+                single_call=lambda yy: self.prop(
+                    yy, by=by, where=where, method=method, ci_method=ci_method, deff=deff,
+                    fay_coef=fay_coef, variance_center=variance_center, alpha=alpha,
+                    drop_nulls=drop_nulls,
+                ),
+                batched_call=lambda prep: _taylor_prop_multi(
+                    self, prep=prep, ys=ys, deff=deff, alpha=alpha, ci_method=ci_method
+                ),
+                prep_y=(ys[0] if ys else ""),
+                prep_extra_cols=ys[1:],
+                by=by, where=where, method=method, drop_nulls=drop_nulls, cast_y_float=False,
+            )
+
         target_method = self._resolve_method(method)
         prep = prepare_data(
             self._sample,
@@ -1283,8 +1419,8 @@ class Estimation:
 
     def ratio(
         self,
-        y: str,
-        x: str,
+        y: str | Sequence[str],
+        x: str | Sequence[str],
         *,
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
@@ -1294,15 +1430,59 @@ class Estimation:
         variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
         alpha: float = 0.05,
         drop_nulls: bool = False,
-    ) -> Estimate:
+    ) -> Estimate | list[Estimate]:
         """Estimate population ratio (y/x) with standard errors.
 
         Parameters
         ----------
+        y, x : str or sequence of str
+            Numerator and denominator columns. If either is a list, the call is
+            batched and returns a ``list[Estimate]``: numerator/denominator are
+            paired element-wise (a scalar side is broadcast to the other's
+            length). Ungrouped Taylor ratios share one design build.
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
         """
+        if not (isinstance(y, str) and isinstance(x, str)):
+            ys = [y] if isinstance(y, str) else list(y)
+            xs = [x] if isinstance(x, str) else list(x)
+            if len(ys) == 1 and len(xs) > 1:
+                ys = ys * len(xs)
+            if len(xs) == 1 and len(ys) > 1:
+                xs = xs * len(ys)
+            if len(ys) != len(xs):
+                raise DimensionError(
+                    title="Mismatched numerator/denominator lengths",
+                    detail=(
+                        "ratio() requires the numerator and denominator to be the "
+                        "same length (or one of them a single column, which is "
+                        "broadcast to the other)."
+                    ),
+                    code="RATIO_LENGTH_MISMATCH",
+                    where="estimation.ratio",
+                    param="x",
+                    expected=f"len == {len(ys)} (or a single column)",
+                    got=len(xs),
+                    hint="Pass equal-length y and x lists, or a scalar for one side.",
+                )
+            pairs = list(zip(ys, xs))
+            return self._taylor_multi(
+                pairs,
+                single_call=lambda pr: self.ratio(
+                    pr[0], pr[1], by=by, where=where, method=method, deff=deff,
+                    fay_coef=fay_coef, variance_center=variance_center, alpha=alpha,
+                    drop_nulls=drop_nulls,
+                ),
+                batched_call=lambda prep: _taylor_ratio_multi(
+                    self, prep=prep, ys=[p[0] for p in pairs], xs=[p[1] for p in pairs],
+                    deff=deff, alpha=alpha,
+                ),
+                prep_y=(ys[0] if ys else ""),
+                prep_extra_cols=list(dict.fromkeys([*ys[1:], *xs])),
+                by=by, where=where, method=method, drop_nulls=drop_nulls,
+            )
+
         target_method = self._resolve_method(method)
         prep = prepare_data(
             self._sample,
@@ -1357,7 +1537,7 @@ class Estimation:
 
     def median(
         self,
-        y: str,
+        y: str | Sequence[str],
         *,
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
@@ -1367,15 +1547,37 @@ class Estimation:
         variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
         alpha: float = 0.05,
         drop_nulls: bool = False,
-    ) -> Estimate:
+    ) -> Estimate | list[Estimate]:
         """Estimate population median with standard errors.
 
         Parameters
         ----------
+        y : str or sequence of str
+            A single column, or a list. A list returns a ``list[Estimate]``.
+            Ungrouped Taylor medians run in parallel across variables (median
+            amortises no design build; the sort dominates).
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
         """
+        if not isinstance(y, str):
+            ys = list(y)
+            resolved_q = self._normalize_q_method(q_method)
+            return self._taylor_multi(
+                ys,
+                single_call=lambda yy: self.median(
+                    yy, by=by, where=where, method=method, fay_coef=fay_coef,
+                    q_method=q_method, variance_center=variance_center, alpha=alpha,
+                    drop_nulls=drop_nulls,
+                ),
+                batched_call=lambda prep: _taylor_median_multi(
+                    self, prep=prep, ys=ys, q_method=resolved_q, alpha=alpha
+                ),
+                prep_y=(ys[0] if ys else ""),
+                prep_extra_cols=ys[1:],
+                by=by, where=where, method=method, drop_nulls=drop_nulls,
+            )
+
         target_method = self._resolve_method(method)
         resolved_q_method = self._normalize_q_method(q_method)
         prep = prepare_data(
