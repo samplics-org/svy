@@ -281,6 +281,178 @@ class TestWhereWithBy:
 
 
 # =============================================================================
+# Where and By on the SAME variable (issue #9)
+# =============================================================================
+
+
+@pytest.fixture
+def dk_survey_data() -> pl.DataFrame:
+    """
+    Survey data with a categorical variable that carries a "don't know" /
+    missing sentinel code (99) alongside its real levels.
+
+    This is the canonical use case for issue #9: restrict to the real levels
+    of a variable via ``where`` while simultaneously breaking the estimate
+    down ``by`` that same variable. The 99 code is sprinkled across every PSU
+    so that physically filtering it out never removes a whole PSU (keeping the
+    filtered-vs-domain point estimates exactly comparable).
+    """
+    np.random.seed(2024)
+    n = 600
+
+    return pl.DataFrame(
+        {
+            "id": range(1, n + 1),
+            "stratum": np.random.choice(["A", "B", "C"], n),
+            "psu": np.random.choice(range(1, 21), n),
+            "weight": np.random.uniform(0.5, 2.0, n),
+            # sex carries a 99 "don't know" code on ~6% of rows.
+            "sex": np.random.choice([1, 2, 99], n, p=[0.47, 0.47, 0.06]),
+            "income": np.random.exponential(50000, n),
+            "positive": np.random.choice([0, 1], n, p=[0.4, 0.6]),
+        }
+    )
+
+
+@pytest.fixture
+def dk_sample(dk_survey_data: pl.DataFrame) -> Sample:
+    """Stratified Sample built on the DK-coded survey data."""
+    design = Design(stratum="stratum", psu="psu", wgt="weight")
+    return Sample(dk_survey_data, design)
+
+
+class TestWhereAndByOnSameVariable:
+    """
+    A variable may appear in BOTH ``by`` and ``where`` (issue #9).
+
+    Semantics: ``where`` performs domain estimation by zeroing out-of-domain
+    weights; ``by`` groups on the original values. When a ``where`` predicate
+    excludes an entire ``by`` level (e.g. the 99 "don't know" code), that level
+    must simply be absent from the result — matching R's
+    ``design %>% filter(sex != 99) %>% group_by(sex) %>% survey_prop()`` —
+    rather than surfacing as a zero-weight / NaN row.
+    """
+
+    def test_prop_by_and_where_same_variable_does_not_raise(self, dk_sample: Sample):
+        """The historical guard against by/where overlap is gone."""
+        result = dk_sample.estimation.prop(
+            "positive",
+            by="sex",
+            where=col("sex") != 99,
+        )
+        assert isinstance(result, Estimate)
+
+    def test_excluded_level_is_absent(self, dk_sample: Sample):
+        """The filtered-out 99 level must not appear as a (NaN) row."""
+        result = dk_sample.estimation.prop(
+            "positive",
+            by="sex",
+            where=col("sex") != 99,
+        )
+
+        by_levels = {est.by_level[0] for est in result.estimates}
+        assert "99" not in by_levels
+        assert by_levels == {"1", "2"}
+
+        # Nothing NaN slips through.
+        for est in result.estimates:
+            assert not np.isnan(est.est)
+            assert est.se > 0
+            assert 0 <= est.est <= 1
+
+    def test_remaining_levels_unaffected_by_exclusion(self, dk_sample: Sample):
+        """
+        Excluding one by-level via ``where`` must leave every other level's
+        estimate untouched: filtering on the grouping variable itself cannot
+        perturb the domain estimate of a different group.
+        """
+        with_where = dk_sample.estimation.mean(
+            "income",
+            by="sex",
+            where=col("sex") != 99,
+        )
+        without_where = dk_sample.estimation.mean("income", by="sex")
+
+        wo_by_level = {e.by_level[0]: e for e in without_where.estimates}
+
+        for est in with_where.estimates:
+            ref = wo_by_level[est.by_level[0]]
+            assert est.est == pytest.approx(ref.est, rel=1e-9)
+            assert est.se == pytest.approx(ref.se, rel=1e-6)
+
+    def test_point_estimates_match_physical_filter(self, dk_sample: Sample):
+        """
+        Point estimates for the surviving levels must equal those from a
+        physically pre-filtered sample (domain vs. filtering agree on the
+        point estimate; only SEs may differ by design accounting).
+        """
+        domain = dk_sample.estimation.mean(
+            "income",
+            by="sex",
+            where=col("sex") != 99,
+        )
+
+        filtered_data = dk_sample._data.filter(pl.col("sex") != 99)
+        filtered = Sample(filtered_data, dk_sample._design).estimation.mean(
+            "income", by="sex"
+        )
+
+        filtered_by_level = {e.by_level[0]: e for e in filtered.estimates}
+        assert {e.by_level[0] for e in domain.estimates} == set(filtered_by_level)
+
+        for est in domain.estimates:
+            ref = filtered_by_level[est.by_level[0]]
+            assert est.est == pytest.approx(ref.est, rel=1e-9)
+
+    def test_multi_predicate_overlap(self, dk_sample: Sample):
+        """
+        One predicate on the by-variable, one cross-cutting: the by-variable
+        predicate drops its level; the cross-cutting one is a genuine domain
+        restriction within the surviving levels.
+        """
+        result = dk_sample.estimation.prop(
+            "positive",
+            by="sex",
+            where=[col("sex") != 99, col("income") > 10000],
+        )
+
+        by_levels = {est.by_level[0] for est in result.estimates}
+        assert "99" not in by_levels
+        for est in result.estimates:
+            assert 0 <= est.est <= 1
+            assert est.se > 0
+
+    def test_multi_by_with_where_on_one_by_variable(self, dk_sample: Sample):
+        """
+        The issue's literal request: group ``by`` two variables while the
+        ``where`` restricts one of them. Every ``(excluded_level, *)`` cell —
+        i.e. each concatenated group whose first component is the excluded
+        level — must drop out, leaving the full cross of surviving levels.
+        """
+        # Add a second grouping variable with no missing code.
+        data = dk_sample._data.with_columns(
+            pl.Series("region", ["North", "South"] * (dk_sample._data.height // 2))
+        )
+        sample = Sample(data, dk_sample._design)
+
+        result = sample.estimation.mean(
+            "income",
+            by=["sex", "region"],
+            where=col("sex") != 99,
+        )
+
+        sex_levels = {est.by_level[0] for est in result.estimates}
+        region_levels = {est.by_level[1] for est in result.estimates}
+        assert sex_levels == {"1", "2"}  # 99 fully dropped
+        assert region_levels == {"North", "South"}  # region untouched
+        # Full cross of the surviving sex levels x regions.
+        assert len(result.estimates) == 2 * 2
+        for est in result.estimates:
+            assert est.est > 0
+            assert est.se > 0
+
+
+# =============================================================================
 # Domain Estimation Correctness Tests
 # =============================================================================
 
