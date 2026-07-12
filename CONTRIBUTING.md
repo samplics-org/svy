@@ -147,9 +147,16 @@ that affect `native/readstat-sys/wrapper.h` before merging.
 ## Versioning & releases
 
 - **SemVer** per package; breaking changes require a major bump.
-- Add entries to `CHANGELOG.md` (Keep a Changelog style).
-- Packages are published separately; tagging a release triggers CI wheel builds
-  (manylinux/macOS/Windows for native packages).
+- Document user-facing changes in the affected package's `CHANGELOG.md`
+  (`packages/svy/`, `packages/svy-io/`, or `packages/svy-rs/`), Keep a Changelog
+  style. Add each entry under `[Unreleased]` in the same PR that makes the
+  change, written for readers — *what changed and why it matters*, not a raw
+  commit summary.
+- On release, rename that package's `[Unreleased]` section to the new version +
+  date, open a fresh empty `[Unreleased]`, and update the compare/tag links at
+  the bottom of the file.
+- Packages are published separately; tagging a release (e.g. `svy-v0.19.0`)
+  triggers CI wheel builds (manylinux/macOS/Windows for native packages).
 
 ---
 

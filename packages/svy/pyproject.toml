@@ -1,6 +1,6 @@
 [project]
 name = "svy"
-version = "0.18.2"
+version = "0.19.0"
 description = "End-to-end surveys: design, sample, analyze, report."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -25,9 +25,16 @@ dependencies = [
   "msgspec>=0.19.0",
   "polars[pyarrow]>=1.33.1",
   "scipy>=1.13",
-  "svy-io>=0.1.0,<0.2.0",
-  "svy-rs>=0.9.0,<0.10.0",
+  "svy-io>=0.1.1,<0.2.0",
+  "svy-rs>=0.10.0,<0.11.0",
 ]
+
+[project.urls]
+Homepage = "https://svylab.com/docs/svy"
+Documentation = "https://svylab.com/docs/svy"
+Changelog = "https://github.com/samplics-org/svy/blob/main/packages/svy/CHANGELOG.md"
+Source = "https://github.com/samplics-org/svy"
+Issues = "https://github.com/samplics-org/svy/issues"
 
 [tool.uv.sources]
 svy-io = { workspace = true } # overrides the above during dev
