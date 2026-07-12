@@ -23,6 +23,7 @@ use faer::prelude::Solve;
 use faer::{Mat, MatRef, Side};
 
 use polars::prelude::*;
+use rayon::prelude::*;
 use std::collections::HashMap;
 
 // ============================================================================
@@ -444,10 +445,13 @@ pub fn fit_glm_by(
     let by_str = by_str_series.str()?;
     let unique_groups = by_str.unique()?;
 
-    let mut results: Vec<(String, GlmResult)> = Vec::new();
-
-    for group_opt in unique_groups.iter() {
-        if let Some(group_val) = group_opt {
+    // Domain fits are independent; fan them out over the rayon pool and collect
+    // in level order (deterministic, thread-count-independent — see the policy
+    // note in estimation/mod.rs). Each fit is a full, self-contained IRLS solve.
+    let groups: Vec<&str> = unique_groups.iter().flatten().collect();
+    let results = groups
+        .par_iter()
+        .map(|&group_val| -> PolarsResult<(String, GlmResult)> {
             let mask_vec: Vec<bool> = by_str
                 .iter()
                 .map(|v| v.map_or(false, |s| s == group_val))
@@ -470,9 +474,9 @@ pub fn fit_glm_by(
                 max_iter,
             )?;
 
-            results.push((group_val.to_string(), res));
-        }
-    }
+            Ok((group_val.to_string(), res))
+        })
+        .collect::<PolarsResult<Vec<_>>>()?;
 
     Ok(results)
 }

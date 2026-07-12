@@ -90,13 +90,15 @@ pub fn replicate_mean(
     let variance_center  = parse_variance_center(center)?;
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 
-    let result = if by_col.is_none() {
-        compute_replicate_mean_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
-            rep_method, fay_coef, variance_center, df_val)
-    } else {
-        compute_replicate_mean_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
-            rep_method, fay_coef, variance_center, df_val, by_col.as_ref().unwrap())
-    };
+    let result = _py.detach(|| {
+        if by_col.is_none() {
+            compute_replicate_mean_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
+                rep_method, fay_coef, variance_center, df_val)
+        } else {
+            compute_replicate_mean_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
+                rep_method, fay_coef, variance_center, df_val, by_col.as_ref().unwrap())
+        }
+    });
     result.map(PyDataFrame).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
 }
 
@@ -199,13 +201,15 @@ pub fn replicate_total(
     let variance_center = parse_variance_center(center)?;
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 
-    let result = if by_col.is_none() {
-        compute_replicate_total_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
-            rep_method, fay_coef, variance_center, df_val)
-    } else {
-        compute_replicate_total_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
-            rep_method, fay_coef, variance_center, df_val, by_col.as_ref().unwrap())
-    };
+    let result = _py.detach(|| {
+        if by_col.is_none() {
+            compute_replicate_total_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
+                rep_method, fay_coef, variance_center, df_val)
+        } else {
+            compute_replicate_total_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
+                rep_method, fay_coef, variance_center, df_val, by_col.as_ref().unwrap())
+        }
+    });
     result.map(PyDataFrame).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
 }
 
@@ -307,14 +311,16 @@ pub fn replicate_ratio(
     let variance_center = parse_variance_center(center)?;
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 
-    let result = if by_col.is_none() {
-        compute_replicate_ratio_ungrouped(&df, &numerator_col, &denominator_col, &weight_col,
-            &rep_weight_cols, rep_method, fay_coef, variance_center, df_val)
-    } else {
-        compute_replicate_ratio_grouped(&df, &numerator_col, &denominator_col, &weight_col,
-            &rep_weight_cols, rep_method, fay_coef, variance_center, df_val,
-            by_col.as_ref().unwrap())
-    };
+    let result = _py.detach(|| {
+        if by_col.is_none() {
+            compute_replicate_ratio_ungrouped(&df, &numerator_col, &denominator_col, &weight_col,
+                &rep_weight_cols, rep_method, fay_coef, variance_center, df_val)
+        } else {
+            compute_replicate_ratio_grouped(&df, &numerator_col, &denominator_col, &weight_col,
+                &rep_weight_cols, rep_method, fay_coef, variance_center, df_val,
+                by_col.as_ref().unwrap())
+        }
+    });
     result.map(PyDataFrame).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
 }
 
@@ -421,13 +427,15 @@ pub fn replicate_prop(
     let variance_center = parse_variance_center(center)?;
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 
-    let result = if by_col.is_none() {
-        compute_replicate_prop_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
-            rep_method, fay_coef, variance_center, df_val)
-    } else {
-        compute_replicate_prop_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
-            rep_method, fay_coef, variance_center, df_val, by_col.as_ref().unwrap())
-    };
+    let result = _py.detach(|| {
+        if by_col.is_none() {
+            compute_replicate_prop_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
+                rep_method, fay_coef, variance_center, df_val)
+        } else {
+            compute_replicate_prop_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
+                rep_method, fay_coef, variance_center, df_val, by_col.as_ref().unwrap())
+        }
+    });
     result.map(PyDataFrame).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
 }
 
@@ -610,13 +618,15 @@ pub fn replicate_median(
         .unwrap_or(SvyQuantileMethod::Higher);
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 
-    let result = if by_col.is_none() {
-        compute_replicate_median_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
-            rep_method, fay_coef, variance_center, df_val, q_method)
-    } else {
-        compute_replicate_median_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
-            rep_method, fay_coef, variance_center, df_val, by_col.as_ref().unwrap(), q_method)
-    };
+    let result = _py.detach(|| {
+        if by_col.is_none() {
+            compute_replicate_median_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
+                rep_method, fay_coef, variance_center, df_val, q_method)
+        } else {
+            compute_replicate_median_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
+                rep_method, fay_coef, variance_center, df_val, by_col.as_ref().unwrap(), q_method)
+        }
+    });
     result.map(PyDataFrame).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
 }
 
