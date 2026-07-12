@@ -213,6 +213,7 @@ def replicate_mean(
         center=variance_center,
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
+        domain_mask_col=prep.domain_mask_col,
     )
     est_list = est._polars_result_to_param_est(
         result_df, y, PopParam.MEAN, alpha, deff=False, by_col=prep.by_col, as_factor=False
@@ -251,6 +252,7 @@ def replicate_total(
         center=variance_center,
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
+        domain_mask_col=prep.domain_mask_col,
     )
     est_list = est._polars_result_to_param_est(
         result_df, y, PopParam.TOTAL, alpha, deff=False, by_col=prep.by_col, as_factor=False
@@ -291,6 +293,7 @@ def replicate_ratio(
         center=variance_center,
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
+        domain_mask_col=prep.domain_mask_col,
     )
     est_list = est._polars_result_to_param_est(
         result_df,
@@ -338,6 +341,7 @@ def replicate_prop(
         center=variance_center,
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
+        domain_mask_col=prep.domain_mask_col,
     )
     est_list = est._polars_result_to_param_est(
         result_df,

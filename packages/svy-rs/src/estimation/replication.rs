@@ -240,6 +240,7 @@ pub fn matrix_mean_estimates(
     rep_weights: &[f64], // Flattened (n × R) row-major
     n: usize,
     n_reps: usize,
+    domain_mask: Option<&[f64]>,
 ) -> (f64, Vec<f64>) {
     // Full sample estimate
     let sum_wy: f64 = y
@@ -254,15 +255,18 @@ pub fn matrix_mean_estimates(
         f64::NAN
     };
 
-    // Replicate estimates - single pass
+    // Replicate estimates - single pass. `domain_mask` (1.0 inside the domain,
+    // 0.0 outside) zeroes the replicate weight on the fly for `where=` domains,
+    // avoiding materialising R zeroed columns upstream. mask=None ⇒ mi=1.0.
     let mut rep_sum_wy = vec![0.0; n_reps];
     let mut rep_sum_w = vec![0.0; n_reps];
 
     for i in 0..n {
         let yi = y[i];
+        let mi = domain_mask.map_or(1.0, |m| m[i]);
         let base_idx = i * n_reps;
         for r in 0..n_reps {
-            let w_ir = rep_weights[base_idx + r];
+            let w_ir = rep_weights[base_idx + r] * mi;
             rep_sum_wy[r] += yi * w_ir;
             rep_sum_w[r] += w_ir;
         }
@@ -291,21 +295,36 @@ pub fn matrix_mean_estimates_cols(
     full_weights: &[f64],
     rep_cols: &[&[f64]],
     n: usize,
+    domain_mask: Option<&[f64]>,
 ) -> (f64, Vec<f64>) {
     let sum_wy: f64 = y.iter().zip(full_weights.iter()).map(|(a, b)| a * b).sum();
     let sum_w: f64 = full_weights.iter().sum();
     let theta_full = if sum_w > 0.0 { sum_wy / sum_w } else { f64::NAN };
 
     use rayon::prelude::*;
+    // `domain_mask` zeroes the replicate weight for `where=` domain rows in the
+    // accumulation loop, so no R zeroed columns are materialised upstream. The
+    // mask=None path stays multiply-free (the hot, non-domain case).
     let theta_reps: Vec<f64> = rep_cols
         .par_iter()
         .map(|col| {
             let mut swy = 0.0f64;
             let mut sw = 0.0f64;
-            for i in 0..n {
-                let w = col[i];
-                swy += y[i] * w;
-                sw += w;
+            match domain_mask {
+                None => {
+                    for i in 0..n {
+                        let w = col[i];
+                        swy += y[i] * w;
+                        sw += w;
+                    }
+                }
+                Some(m) => {
+                    for i in 0..n {
+                        let w = col[i] * m[i];
+                        swy += y[i] * w;
+                        sw += w;
+                    }
+                }
             }
             if sw > 0.0 { swy / sw } else { f64::NAN }
         })
@@ -321,6 +340,7 @@ pub fn matrix_total_estimates(
     rep_weights: &[f64],
     n: usize,
     n_reps: usize,
+    domain_mask: Option<&[f64]>,
 ) -> (f64, Vec<f64>) {
     let theta_full: f64 = y
         .iter()
@@ -332,9 +352,10 @@ pub fn matrix_total_estimates(
 
     for i in 0..n {
         let yi = y[i];
+        let mi = domain_mask.map_or(1.0, |m| m[i]);
         let base_idx = i * n_reps;
         for r in 0..n_reps {
-            theta_reps[r] += yi * rep_weights[base_idx + r];
+            theta_reps[r] += yi * rep_weights[base_idx + r] * mi;
         }
     }
 
@@ -349,6 +370,7 @@ pub fn matrix_ratio_estimates(
     rep_weights: &[f64],
     n: usize,
     n_reps: usize,
+    domain_mask: Option<&[f64]>,
 ) -> (f64, Vec<f64>) {
     let sum_wy: f64 = y
         .iter()
@@ -372,9 +394,10 @@ pub fn matrix_ratio_estimates(
     for i in 0..n {
         let yi = y[i];
         let xi = x[i];
+        let mi = domain_mask.map_or(1.0, |m| m[i]);
         let base_idx = i * n_reps;
         for r in 0..n_reps {
-            let w_ir = rep_weights[base_idx + r];
+            let w_ir = rep_weights[base_idx + r] * mi;
             rep_sum_wy[r] += yi * w_ir;
             rep_sum_wx[r] += xi * w_ir;
         }
@@ -396,6 +419,7 @@ pub fn matrix_total_estimates_cols(
     full_weights: &[f64],
     rep_cols: &[&[f64]],
     n: usize,
+    domain_mask: Option<&[f64]>,
 ) -> (f64, Vec<f64>) {
     let theta_full: f64 = y.iter().zip(full_weights.iter()).map(|(a, b)| a * b).sum();
 
@@ -404,8 +428,17 @@ pub fn matrix_total_estimates_cols(
         .par_iter()
         .map(|col| {
             let mut swy = 0.0f64;
-            for i in 0..n {
-                swy += y[i] * col[i];
+            match domain_mask {
+                None => {
+                    for i in 0..n {
+                        swy += y[i] * col[i];
+                    }
+                }
+                Some(m) => {
+                    for i in 0..n {
+                        swy += y[i] * col[i] * m[i];
+                    }
+                }
             }
             swy
         })
@@ -422,6 +455,7 @@ pub fn matrix_ratio_estimates_cols(
     full_weights: &[f64],
     rep_cols: &[&[f64]],
     n: usize,
+    domain_mask: Option<&[f64]>,
 ) -> (f64, Vec<f64>) {
     let sum_wy: f64 = y.iter().zip(full_weights.iter()).map(|(a, b)| a * b).sum();
     let sum_wx: f64 = x.iter().zip(full_weights.iter()).map(|(a, b)| a * b).sum();
@@ -433,10 +467,21 @@ pub fn matrix_ratio_estimates_cols(
         .map(|col| {
             let mut swy = 0.0f64;
             let mut swx = 0.0f64;
-            for i in 0..n {
-                let w = col[i];
-                swy += y[i] * w;
-                swx += x[i] * w;
+            match domain_mask {
+                None => {
+                    for i in 0..n {
+                        let w = col[i];
+                        swy += y[i] * w;
+                        swx += x[i] * w;
+                    }
+                }
+                Some(m) => {
+                    for i in 0..n {
+                        let w = col[i] * m[i];
+                        swy += y[i] * w;
+                        swx += x[i] * w;
+                    }
+                }
             }
             if swx > 0.0 { swy / swx } else { f64::NAN }
         })
@@ -800,6 +845,7 @@ pub fn matrix_prop_estimates(
     rep_weights: &[f64],
     n: usize,
     n_reps: usize,
+    domain_mask: Option<&[f64]>,
 ) -> (Vec<i64>, Vec<f64>, Vec<Vec<f64>>) {
     // Find unique levels
     let mut level_map: HashMap<i64, usize> = HashMap::new();
@@ -833,9 +879,10 @@ pub fn matrix_prop_estimates(
         sum_w_level[lev_idx] += wi;
         sum_w_total += wi;
 
+        let mi = domain_mask.map_or(1.0, |m| m[i]);
         let base_idx = i * n_reps;
         for r in 0..n_reps {
-            let w_ir = rep_weights[base_idx + r];
+            let w_ir = rep_weights[base_idx + r] * mi;
             rep_sum_w_level[lev_idx][r] += w_ir;
             rep_sum_w_total[r] += w_ir;
         }
@@ -893,6 +940,7 @@ pub fn matrix_prop_estimates_cols(
     full_weights: &[f64],
     rep_cols: &[&[f64]],
     n: usize,
+    domain_mask: Option<&[f64]>,
 ) -> (Vec<i64>, Vec<f64>, Vec<Vec<f64>>) {
     let (levels, lev_idx) = prop_level_index(y);
     let n_levels = levels.len();
@@ -914,10 +962,21 @@ pub fn matrix_prop_estimates_cols(
         .map(|col| {
             let mut swl = vec![0.0; n_levels];
             let mut swt = 0.0;
-            for i in 0..n {
-                let w = col[i];
-                swl[lev_idx[i]] += w;
-                swt += w;
+            match domain_mask {
+                None => {
+                    for i in 0..n {
+                        let w = col[i];
+                        swl[lev_idx[i]] += w;
+                        swt += w;
+                    }
+                }
+                Some(m) => {
+                    for i in 0..n {
+                        let w = col[i] * m[i];
+                        swl[lev_idx[i]] += w;
+                        swt += w;
+                    }
+                }
             }
             (0..n_levels)
                 .map(|l| if swt > 0.0 { swl[l] / swt } else { f64::NAN })
@@ -940,6 +999,7 @@ pub fn matrix_prop_estimates_str_cols(
     full_weights: &[f64],
     rep_cols: &[&[f64]],
     n: usize,
+    domain_mask: Option<&[f64]>,
 ) -> (Vec<String>, Vec<f64>, Vec<Vec<f64>>) {
     let mut level_map: HashMap<&str, usize> = HashMap::new();
     let mut levels: Vec<String> = Vec::new();
@@ -973,10 +1033,21 @@ pub fn matrix_prop_estimates_str_cols(
         .map(|col| {
             let mut swl = vec![0.0; n_levels];
             let mut swt = 0.0;
-            for i in 0..n {
-                let w = col[i];
-                swl[lev_idx[i]] += w;
-                swt += w;
+            match domain_mask {
+                None => {
+                    for i in 0..n {
+                        let w = col[i];
+                        swl[lev_idx[i]] += w;
+                        swt += w;
+                    }
+                }
+                Some(m) => {
+                    for i in 0..n {
+                        let w = col[i] * m[i];
+                        swl[lev_idx[i]] += w;
+                        swt += w;
+                    }
+                }
             }
             (0..n_levels)
                 .map(|l| if swt > 0.0 { swl[l] / swt } else { f64::NAN })
@@ -1093,6 +1164,7 @@ pub fn matrix_prop_estimates_str(
     rep_weights: &[f64],
     n: usize,
     n_reps: usize,
+    domain_mask: Option<&[f64]>,
 ) -> (Vec<String>, Vec<f64>, Vec<Vec<f64>>) {
     // Find unique levels
     let mut level_map: HashMap<&str, usize> = HashMap::new();
@@ -1126,9 +1198,10 @@ pub fn matrix_prop_estimates_str(
         sum_w_level[lev_idx] += wi;
         sum_w_total += wi;
 
+        let mi = domain_mask.map_or(1.0, |m| m[i]);
         let base_idx = i * n_reps;
         for r in 0..n_reps {
-            let w_ir = rep_weights[base_idx + r];
+            let w_ir = rep_weights[base_idx + r] * mi;
             rep_sum_w_level[lev_idx][r] += w_ir;
             rep_sum_w_total[r] += w_ir;
         }
@@ -1523,7 +1596,7 @@ mod tests {
         let rep_w = vec![1.0f64; 6 * 2];
 
         let (levels, theta_full, theta_reps) =
-            matrix_prop_estimates_str(&y, &w, &rep_w, 6, 2);
+            matrix_prop_estimates_str(&y, &w, &rep_w, 6, 2, None);
 
         assert_eq!(levels, vec!["no".to_string(), "yes".to_string()]);
         let no_idx = 0;

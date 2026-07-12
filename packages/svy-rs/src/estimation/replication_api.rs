@@ -48,6 +48,21 @@ fn get_cont_rep_cols<'a>(
     Ok(Some(cols))
 }
 
+/// Materialise the `where=` domain mask as a dense `Vec<f64>` (1.0 inside the
+/// domain, 0.0 outside), or `None` when no domain is set. Passed to the
+/// ungrouped replicate kernels so they zero out-of-domain replicate weights on
+/// the fly — replacing the R materialised zeroed columns the Python side would
+/// otherwise build per `where=` call.
+fn get_domain_mask(df: &DataFrame, mask_col: Option<&str>) -> PolarsResult<Option<Vec<f64>>> {
+    match mask_col {
+        None => Ok(None),
+        Some(name) => {
+            let ca = df.column(name)?.f64()?;
+            Ok(Some(ca.into_iter().map(|o| o.unwrap_or(0.0)).collect()))
+        }
+    }
+}
+
 fn parse_rep_method(method: &str) -> PyResult<RepMethod> {
     RepMethod::from_str(method).ok_or_else(|| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
@@ -71,7 +86,7 @@ fn parse_variance_center(center: &str) -> PyResult<VarianceCenter> {
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, fay_coef=0.0, center="rep_mean", degrees_of_freedom=None, by_col=None))]
+#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, fay_coef=0.0, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
 pub fn replicate_mean(
     _py: Python,
     data: PyDataFrame,
@@ -83,6 +98,7 @@ pub fn replicate_mean(
     center: &str,
     degrees_of_freedom: Option<u32>,
     by_col: Option<String>,
+    domain_mask_col: Option<String>,
 ) -> PyResult<PyDataFrame> {
     let df: DataFrame = data.into();
     let n_reps = rep_weight_cols.len();
@@ -93,7 +109,7 @@ pub fn replicate_mean(
     let result = _py.detach(|| {
         if by_col.is_none() {
             compute_replicate_mean_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
-                rep_method, fay_coef, variance_center, df_val)
+                rep_method, fay_coef, variance_center, df_val, domain_mask_col.as_deref())
         } else {
             compute_replicate_mean_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
                 rep_method, fay_coef, variance_center, df_val, by_col.as_ref().unwrap())
@@ -106,6 +122,7 @@ fn compute_replicate_mean_ungrouped(
     df: &DataFrame,
     value_col: &str, weight_col: &str, rep_weight_cols: &[String],
     method: RepMethod, fay_coef: f64, center: VarianceCenter, df_val: u32,
+    domain_mask_col: Option<&str>,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -113,14 +130,16 @@ fn compute_replicate_mean_ungrouped(
     let n_reps = rep_weight_cols.len();
     let y_arr: Vec<f64> = y.into_iter().map(|v| v.unwrap_or(0.0)).collect();
     let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
+    let domain_mask = get_domain_mask(df, domain_mask_col)?;
+    let mask = domain_mask.as_deref();
 
     // No-materialisation path: accumulate from the contiguous replicate columns
     // (parallel over replicates); flat-matrix fallback for chunked/nullable.
     let (theta_full, theta_reps) = match get_cont_rep_cols(df, rep_weight_cols)? {
-        Some(cols) => matrix_mean_estimates_cols(&y_arr, &w_arr, &cols, n),
+        Some(cols) => matrix_mean_estimates_cols(&y_arr, &w_arr, &cols, n, mask),
         None => {
             let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
-            matrix_mean_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps)
+            matrix_mean_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps, mask)
         }
     };
     let rep_coefs = replicate_coefficients(method, n_reps, fay_coef);
@@ -182,7 +201,7 @@ fn compute_replicate_mean_grouped(
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, fay_coef=0.0, center="rep_mean", degrees_of_freedom=None, by_col=None))]
+#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, fay_coef=0.0, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
 pub fn replicate_total(
     _py: Python,
     data: PyDataFrame,
@@ -194,6 +213,7 @@ pub fn replicate_total(
     center: &str,
     degrees_of_freedom: Option<u32>,
     by_col: Option<String>,
+    domain_mask_col: Option<String>,
 ) -> PyResult<PyDataFrame> {
     let df: DataFrame = data.into();
     let n_reps = rep_weight_cols.len();
@@ -204,7 +224,7 @@ pub fn replicate_total(
     let result = _py.detach(|| {
         if by_col.is_none() {
             compute_replicate_total_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
-                rep_method, fay_coef, variance_center, df_val)
+                rep_method, fay_coef, variance_center, df_val, domain_mask_col.as_deref())
         } else {
             compute_replicate_total_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
                 rep_method, fay_coef, variance_center, df_val, by_col.as_ref().unwrap())
@@ -217,6 +237,7 @@ fn compute_replicate_total_ungrouped(
     df: &DataFrame,
     value_col: &str, weight_col: &str, rep_weight_cols: &[String],
     method: RepMethod, fay_coef: f64, center: VarianceCenter, df_val: u32,
+    domain_mask_col: Option<&str>,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -224,12 +245,14 @@ fn compute_replicate_total_ungrouped(
     let n_reps = rep_weight_cols.len();
     let y_arr: Vec<f64> = y.into_iter().map(|v| v.unwrap_or(0.0)).collect();
     let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
+    let domain_mask = get_domain_mask(df, domain_mask_col)?;
+    let mask = domain_mask.as_deref();
 
     let (theta_full, theta_reps) = match get_cont_rep_cols(df, rep_weight_cols)? {
-        Some(cols) => matrix_total_estimates_cols(&y_arr, &w_arr, &cols, n),
+        Some(cols) => matrix_total_estimates_cols(&y_arr, &w_arr, &cols, n, mask),
         None => {
             let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
-            matrix_total_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps)
+            matrix_total_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps, mask)
         }
     };
     let rep_coefs = replicate_coefficients(method, n_reps, fay_coef);
@@ -291,7 +314,7 @@ fn compute_replicate_total_grouped(
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, numerator_col, denominator_col, weight_col, rep_weight_cols, method, fay_coef=0.0, center="rep_mean", degrees_of_freedom=None, by_col=None))]
+#[pyo3(signature = (data, numerator_col, denominator_col, weight_col, rep_weight_cols, method, fay_coef=0.0, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
 pub fn replicate_ratio(
     _py: Python,
     data: PyDataFrame,
@@ -304,6 +327,7 @@ pub fn replicate_ratio(
     center: &str,
     degrees_of_freedom: Option<u32>,
     by_col: Option<String>,
+    domain_mask_col: Option<String>,
 ) -> PyResult<PyDataFrame> {
     let df: DataFrame = data.into();
     let n_reps = rep_weight_cols.len();
@@ -314,7 +338,8 @@ pub fn replicate_ratio(
     let result = _py.detach(|| {
         if by_col.is_none() {
             compute_replicate_ratio_ungrouped(&df, &numerator_col, &denominator_col, &weight_col,
-                &rep_weight_cols, rep_method, fay_coef, variance_center, df_val)
+                &rep_weight_cols, rep_method, fay_coef, variance_center, df_val,
+                domain_mask_col.as_deref())
         } else {
             compute_replicate_ratio_grouped(&df, &numerator_col, &denominator_col, &weight_col,
                 &rep_weight_cols, rep_method, fay_coef, variance_center, df_val,
@@ -329,6 +354,7 @@ fn compute_replicate_ratio_ungrouped(
     numerator_col: &str, denominator_col: &str, weight_col: &str,
     rep_weight_cols: &[String],
     method: RepMethod, fay_coef: f64, center: VarianceCenter, df_val: u32,
+    domain_mask_col: Option<&str>,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(numerator_col)?.f64()?;
     let x = df.column(denominator_col)?.f64()?;
@@ -338,12 +364,14 @@ fn compute_replicate_ratio_ungrouped(
     let y_arr: Vec<f64> = y.into_iter().map(|v| v.unwrap_or(0.0)).collect();
     let x_arr: Vec<f64> = x.into_iter().map(|v| v.unwrap_or(0.0)).collect();
     let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
+    let domain_mask = get_domain_mask(df, domain_mask_col)?;
+    let mask = domain_mask.as_deref();
 
     let (theta_full, theta_reps) = match get_cont_rep_cols(df, rep_weight_cols)? {
-        Some(cols) => matrix_ratio_estimates_cols(&y_arr, &x_arr, &w_arr, &cols, n),
+        Some(cols) => matrix_ratio_estimates_cols(&y_arr, &x_arr, &w_arr, &cols, n, mask),
         None => {
             let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
-            matrix_ratio_estimates(&y_arr, &x_arr, &w_arr, &rep_w_matrix, n, n_reps)
+            matrix_ratio_estimates(&y_arr, &x_arr, &w_arr, &rep_w_matrix, n, n_reps, mask)
         }
     };
     let rep_coefs = replicate_coefficients(method, n_reps, fay_coef);
@@ -408,7 +436,7 @@ fn compute_replicate_ratio_grouped(
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, fay_coef=0.0, center="rep_mean", degrees_of_freedom=None, by_col=None))]
+#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, fay_coef=0.0, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
 pub fn replicate_prop(
     _py: Python,
     data: PyDataFrame,
@@ -420,6 +448,7 @@ pub fn replicate_prop(
     center: &str,
     degrees_of_freedom: Option<u32>,
     by_col: Option<String>,
+    domain_mask_col: Option<String>,
 ) -> PyResult<PyDataFrame> {
     let df: DataFrame = data.into();
     let n_reps = rep_weight_cols.len();
@@ -430,7 +459,7 @@ pub fn replicate_prop(
     let result = _py.detach(|| {
         if by_col.is_none() {
             compute_replicate_prop_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
-                rep_method, fay_coef, variance_center, df_val)
+                rep_method, fay_coef, variance_center, df_val, domain_mask_col.as_deref())
         } else {
             compute_replicate_prop_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
                 rep_method, fay_coef, variance_center, df_val, by_col.as_ref().unwrap())
@@ -443,6 +472,7 @@ fn compute_replicate_prop_ungrouped(
     df: &DataFrame,
     value_col: &str, weight_col: &str, rep_weight_cols: &[String],
     method: RepMethod, fay_coef: f64, center: VarianceCenter, df_val: u32,
+    domain_mask_col: Option<&str>,
 ) -> PolarsResult<DataFrame> {
     let y_series = df.column(value_col)?;
     let weights  = df.column(weight_col)?.f64()?;
@@ -450,6 +480,8 @@ fn compute_replicate_prop_ungrouped(
     let n_reps = rep_weight_cols.len();
     let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
     let cont_cols = get_cont_rep_cols(df, rep_weight_cols)?;
+    let domain_mask = get_domain_mask(df, domain_mask_col)?;
+    let mask = domain_mask.as_deref();
     let rep_coefs = replicate_coefficients(method, n_reps, fay_coef);
 
     // String/Categorical: use string-keyed level functions so level labels are
@@ -462,10 +494,10 @@ fn compute_replicate_prop_ungrouped(
             .map(|v| v.unwrap_or("").to_string())
             .collect();
         let (levels, theta_full, theta_reps) = match &cont_cols {
-            Some(cols) => matrix_prop_estimates_str_cols(&y_arr, &w_arr, cols, n),
+            Some(cols) => matrix_prop_estimates_str_cols(&y_arr, &w_arr, cols, n, mask),
             None => {
                 let (m, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
-                matrix_prop_estimates_str(&y_arr, &w_arr, &m, n, n_reps)
+                matrix_prop_estimates_str(&y_arr, &w_arr, &m, n, n_reps, mask)
             }
         };
         let n_l = levels.len();
@@ -491,10 +523,10 @@ fn compute_replicate_prop_ungrouped(
             ));
         };
         let (levels, theta_full, theta_reps) = match &cont_cols {
-            Some(cols) => matrix_prop_estimates_cols(&y_arr, &w_arr, cols, n),
+            Some(cols) => matrix_prop_estimates_cols(&y_arr, &w_arr, cols, n, mask),
             None => {
                 let (m, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
-                matrix_prop_estimates(&y_arr, &w_arr, &m, n, n_reps)
+                matrix_prop_estimates(&y_arr, &w_arr, &m, n, n_reps, mask)
             }
         };
         let n_l = levels.len();
