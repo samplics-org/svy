@@ -2370,7 +2370,7 @@ dev = [
 
 [[package]]
 name = "svy-io"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/svy-io" }
 dependencies = [
     { name = "polars", extra = ["pyarrow"] },
@@ -2397,7 +2397,7 @@ dev = [
 
 [[package]]
 name = "svy-rs"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/svy-rs" }
 dependencies = [
     { name = "polars", extra = ["pyarrow"] },
