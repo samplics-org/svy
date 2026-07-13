@@ -47,7 +47,7 @@ all = ["rich>=14.1", "great-tables>=0.18"]
 [dependency-groups]
 dev = [
   "codecov",
-  "coverage>=7.8.0",
+  "coverage>=7.15.1",
   "jupyterlab",
   "line_profiler",
   "pytest",
