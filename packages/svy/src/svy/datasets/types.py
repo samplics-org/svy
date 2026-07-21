@@ -65,6 +65,10 @@ class Dataset(msgspec.Struct, frozen=True, kw_only=True):
         entries (``label``, ``unit``, ``categories``, etc.).
     tags : tuple[str, ...]
         Free-form tags for discovery.
+    notes : str
+        Important caveats about this specific dataset — e.g. how a bundled
+        subset was derived/tweaked from the full remote version.  Empty for
+        datasets with nothing to flag.
     """
 
     slug: str
@@ -82,6 +86,7 @@ class Dataset(msgspec.Struct, frozen=True, kw_only=True):
     design: Mapping[str, Any] | None = None
     variables: Mapping[str, Mapping[str, Any]] = {}
     tags: tuple[str, ...] = ()
+    notes: str = ""
 
     def summary(self) -> str:
         """One-line human-readable summary for list displays."""
@@ -113,6 +118,8 @@ class Dataset(msgspec.Struct, frozen=True, kw_only=True):
 
         t.add_row("Title", self.title)
         t.add_row("Description", self.description or "—")
+        if self.notes:
+            t.add_row("Notes", self.notes)
         t.add_row("Rows × Cols", f"{self.n_rows:,} × {self.n_cols}")
         t.add_row("Size", _fmt_size(self.size_bytes))
         t.add_row("Version", self.version)
@@ -134,6 +141,10 @@ class Dataset(msgspec.Struct, frozen=True, kw_only=True):
             f"Dataset: {self.slug}",
             f"  Title       : {self.title}",
             f"  Description : {self.description}",
+        ]
+        if self.notes:
+            lines.append(f"  Notes       : {self.notes}")
+        lines += [
             f"  Rows x Cols : {self.n_rows:,} x {self.n_cols}",
             f"  Size        : {_fmt_size(self.size_bytes)}",
             f"  Version     : {self.version}",

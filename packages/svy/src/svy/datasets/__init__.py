@@ -98,7 +98,11 @@ def describe(slug: str, *, use_cache: bool = True, source: Source = "auto") -> D
     if source == "bundled" or (source == "auto" and _offline_env()):
         ds = _bundled.describe(slug)
         if ds is None:
-            raise DatasetError.not_found(where="datasets.describe(source='bundled')", slug=slug)
+            raise DatasetError.not_bundled(
+                where="datasets.describe(source='bundled')",
+                slug=slug,
+                bundled=sorted(_bundled.slugs()),
+            )
         return ds
     if source == "remote":
         return api.describe(slug, use_cache=use_cache)

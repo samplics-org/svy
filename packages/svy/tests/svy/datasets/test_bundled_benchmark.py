@@ -44,10 +44,9 @@ BENCHMARK: dict[str, dict] = json.loads(
 SLUGS = sorted(BENCHMARK)
 EXPECTED_SLUGS = {
     "ea_frame_wb_2023",
+    "hld_pop_wb_2023",
     "hld_sample_wb_2023",
     "ind_sample_wb_2023",
-    "hld_pop_wb_2023",
-    "ind_pop_wb_2023",
 }
 
 
@@ -129,22 +128,21 @@ def test_design_based_estimate_matches_benchmark(slug):
 
 
 def test_sample_is_subset_of_census():
+    # The sample households are a subset of the census (the sample is drawn
+    # from the census).
     hh_s = d.load("hld_sample_wb_2023", source="bundled")
     hh_p = d.load("hld_pop_wb_2023", source="bundled")
     assert set(hh_s["hid"]).issubset(set(hh_p["hid"]))
-
-    ind_s = d.load("ind_sample_wb_2023", source="bundled")
-    ind_p = d.load("ind_pop_wb_2023", source="bundled")
-    assert set(ind_s["hid"]).issubset(set(ind_p["hid"]))
 
 
 def test_ea_sets_reconcile():
     frame = d.load("ea_frame_wb_2023", source="bundled")
     hh_s = d.load("hld_sample_wb_2023", source="bundled")
     hh_p = d.load("hld_pop_wb_2023", source="bundled")
-    eas_frame = set(frame["ea"])
-    assert eas_frame == set(hh_s["ea"]) == set(hh_p["ea"])
-    # frame's n_hlds_census reconciles with the reduced census counts
+    # The census covers exactly the frame's EAs; the sample's EAs are a subset.
+    assert set(frame["ea"]) == set(hh_p["ea"])
+    assert set(hh_s["ea"]).issubset(set(frame["ea"]))
+    # The frame's MOS (n_hlds_census) equals the census household count per EA.
     counts = hh_p.group_by("ea").len().sort("ea")
     frame_sorted = frame.sort("ea")
     assert frame_sorted["n_hlds_census"].to_list() == counts["len"].to_list()
@@ -153,11 +151,15 @@ def test_ea_sets_reconcile():
 def test_design_is_valid_no_singleton_strata():
     hh_s = d.load("hld_sample_wb_2023", source="bundled")
     psu = hh_s.group_by(["geo1", "urbrur"]).agg(pl.col("ea").n_unique().alias("n_psu"))
-    assert psu.height == 19
+    assert psu.height == 7  # 4 regions x urban/rural (geo_01 is urban-only)
     assert psu["n_psu"].min() >= 2  # no singleton strata → variance is defined
-    # the deliberate unequal allocation: 16x2, 2x3, 1x5
-    dist = dict(sorted(psu["n_psu"].value_counts().iter_rows()))
-    assert dist == {2: 16, 3: 2, 5: 1}
+
+
+def test_sample_weights_sum_to_census():
+    # The self-drawn design weights inflate to the bundled population.
+    hh_s = d.load("hld_sample_wb_2023", source="bundled")
+    hh_p = d.load("hld_pop_wb_2023", source="bundled")
+    assert hh_s["hhweight"].sum() == pytest.approx(hh_p.height, rel=1e-9)
 
 
 @pytest.mark.parametrize("slug", ["hld_sample_wb_2023", "ind_sample_wb_2023"])

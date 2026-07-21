@@ -76,7 +76,11 @@ def _resolve_source(name: str, *, source: Source, force_download: bool) -> pl.La
 
     if source == "bundled":
         if not _bundled.has(name):
-            raise DatasetError.not_found(where="datasets.load(source='bundled')", slug=name)
+            raise DatasetError.not_bundled(
+                where="datasets.load(source='bundled')",
+                slug=name,
+                bundled=sorted(_bundled.slugs()),
+            )
         return _bundled.read_lazy(name)
 
     if source == "remote":

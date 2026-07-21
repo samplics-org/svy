@@ -86,6 +86,7 @@ def _to_dataset(entry: dict[str, Any]) -> Dataset:
         design=entry.get("design"),
         variables=entry.get("variables", {}),
         tags=tuple(entry.get("tags", ())),
+        notes=entry.get("notes", ""),
     )
 
 

@@ -111,6 +111,33 @@ class DatasetError(SvyError):
     # ---- Bundled (packaged) data -----------------------------------------
 
     @classmethod
+    def not_bundled(
+        cls,
+        *,
+        where: Optional[str],
+        slug: str,
+        bundled: "list[str]",
+        hint: Optional[str] = None,
+        docs_url: Optional[str] = None,
+    ) -> "DatasetError":
+        listed = ", ".join(bundled) if bundled else "(none)"
+        return cls(
+            title="Dataset not bundled",
+            detail=(f"Dataset {slug!r} is not available offline as a bundled dataset."),
+            code="DATASET_NOT_BUNDLED",
+            where=where,
+            param="source",
+            got="bundled",
+            hint=hint
+            or (
+                f"Use source='remote' (or the default source='auto') to download "
+                f"it. Bundled datasets: {listed}."
+            ),
+            docs_url=docs_url,
+            extra={"slug": slug, "bundled": list(bundled)},
+        )
+
+    @classmethod
     def bundled_unavailable(
         cls,
         *,
