@@ -83,3 +83,60 @@ def test_load_bundled_applies_pipeline_args():
     df = d.load(SLUG, source="bundled", select=["ea", "geo1", "pc_exp"], n=10)
     assert df.columns == ["ea", "geo1", "pc_exp"]
     assert df.height == 10
+
+
+# --------------------------------------------------------------------------- #
+# Download-failure errors (catalog reachable, parquet fetch fails)
+# --------------------------------------------------------------------------- #
+
+
+def _wire_download_failure(routes, make_backend_entry):
+    """Catalog lists SLUG, but its parquet download returns 500."""
+    entry = make_backend_entry(slug=SLUG, download_url="https://svylab.test/data/dl.parquet")
+    routes.add_json("/api/data/examples/registry", [entry])
+    routes.add_status("/data/dl.parquet", 500)
+
+
+def test_source_remote_download_failure_raises_typed_error(routes, make_backend_entry):
+    _wire_download_failure(routes, make_backend_entry)
+    with pytest.raises(DatasetError) as ei:
+        d.load(SLUG, source="remote")
+    assert ei.value.code == "DATASET_DOWNLOAD_FAILED"
+
+
+def test_source_auto_falls_back_to_bundled_on_download_failure(routes, make_backend_entry):
+    _wire_download_failure(routes, make_backend_entry)
+    with pytest.warns(UserWarning, match="bundled subset"):
+        df = d.load(SLUG, source="auto")
+    assert df.height == BUNDLED_ROWS
+
+
+# --------------------------------------------------------------------------- #
+# Bundled data integrity
+# --------------------------------------------------------------------------- #
+
+
+def test_bundled_missing_file_raises_bundled_unavailable(monkeypatch):
+    from svy.datasets import _bundled
+
+    bogus = {SLUG: {"slug": SLUG, "filename": "does_not_exist.parquet", "version": "1.0.0"}}
+    monkeypatch.setattr(_bundled, "_registry", lambda: bogus)
+    with pytest.raises(DatasetError) as ei:
+        d.load(SLUG, source="bundled")
+    assert ei.value.code == "BUNDLED_UNAVAILABLE"
+
+
+def test_corrupt_registry_degrades_to_no_bundled(monkeypatch):
+    # A missing/broken _bundled dir should not crash; it means "no bundled".
+    from svy.datasets import _bundled
+
+    def _boom():
+        raise FileNotFoundError("no _bundled dir")
+
+    monkeypatch.setattr(_bundled, "_dir", _boom)
+    _bundled._registry.cache_clear()
+    try:
+        assert _bundled.slugs() == frozenset()
+        assert _bundled.has(SLUG) is False
+    finally:
+        _bundled._registry.cache_clear()

@@ -32,6 +32,7 @@ from typing import Any
 import polars as pl
 
 from svy.datasets.types import Dataset
+from svy.errors.dataset_errors import DatasetError
 
 
 _PACKAGE = "svy.datasets"
@@ -46,13 +47,21 @@ def _dir():
 
 @lru_cache(maxsize=1)
 def _registry() -> dict[str, dict[str, Any]]:
-    """Parse ``registry.json`` once, keyed by slug."""
+    """Parse ``registry.json`` once, keyed by slug.
+
+    Degrades to an empty registry (i.e. "no bundled data") if the file is
+    absent or unparseable, so a broken/partial install never breaks the
+    remote path.  The build-time benchmark test guards registry validity.
+    """
     try:
         raw = (_dir() / _REGISTRY).read_text(encoding="utf-8")
-    except (FileNotFoundError, ModuleNotFoundError):
+    except (FileNotFoundError, ModuleNotFoundError, OSError):
         return {}
-    entries = json.loads(raw)
-    return {e["slug"]: e for e in entries}
+    try:
+        entries = json.loads(raw)
+        return {e["slug"]: e for e in entries}
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return {}
 
 
 def _to_dataset(entry: dict[str, Any]) -> Dataset:
@@ -107,12 +116,22 @@ def read_lazy(slug: str) -> pl.LazyFrame:
     Raises
     ------
     KeyError
-        If ``slug`` is not bundled.
+        If ``slug`` is not bundled (callers should check ``has(slug)`` first).
+    DatasetError
+        With code ``BUNDLED_UNAVAILABLE`` if the packaged file is missing or
+        unreadable.
     """
     entry = _registry().get(slug)
     if entry is None:
         raise KeyError(slug)
     resource = _dir() / entry["filename"]
-    with as_file(resource) as path:
-        df = pl.read_parquet(path)
+    try:
+        with as_file(resource) as path:
+            df = pl.read_parquet(path)
+    except DatasetError:
+        raise
+    except Exception as ex:  # missing file, unreadable parquet, extraction error
+        raise DatasetError.bundled_unavailable(
+            where="datasets._bundled.read_lazy", slug=slug, reason=str(ex)
+        ) from ex
     return df.lazy()

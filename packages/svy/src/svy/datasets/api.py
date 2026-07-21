@@ -106,12 +106,10 @@ def _fetch(path: str) -> bytes:
         r.raise_for_status()
         return r.content
     except httpx.HTTPStatusError as e:
-        status = e.response.status_code
-        if status == 404:
-            # Re-raised by callers with dataset-specific context.
-            raise
+        # Any HTTP error status on the registry endpoint is a catalog problem;
+        # surface it as a typed DatasetError rather than a raw httpx error.
         raise DatasetError.catalog_bad_status(
-            where="datasets.api._fetch", url=url, status=status
+            where="datasets.api._fetch", url=url, status=e.response.status_code
         ) from e
     except httpx.HTTPError as e:
         raise DatasetError.catalog_unreachable(

@@ -36,6 +36,13 @@ Source = Literal["auto", "remote", "bundled"]
 # Env values that force offline (bundled-first) resolution in "auto" mode.
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
+# Remote-failure codes that "auto" recovers from by falling back to bundled.
+# Note: DATASET_SHA_MISMATCH is deliberately excluded — a hash mismatch is an
+# integrity failure that should surface, not be silently swapped for bundled.
+_FALLBACK_CODES = frozenset(
+    {"CATALOG_UNREACHABLE", "CATALOG_BAD_STATUS", "DATASET_DOWNLOAD_FAILED"}
+)
+
 
 def _offline_env() -> bool:
     """Whether SVYLAB_OFFLINE requests bundled-first resolution."""
@@ -79,7 +86,7 @@ def _resolve_source(name: str, *, source: Source, force_download: bool) -> pl.La
     try:
         return _scan_remote(name, force_download=force_download)
     except DatasetError as exc:
-        if exc.code in {"CATALOG_UNREACHABLE", "CATALOG_BAD_STATUS"} and _bundled.has(name):
+        if exc.code in _FALLBACK_CODES and _bundled.has(name):
             b = _bundled.describe(name)
             warnings.warn(
                 f"Could not reach the dataset catalog; using the bundled subset of "
