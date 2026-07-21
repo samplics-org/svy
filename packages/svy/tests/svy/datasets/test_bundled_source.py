@@ -140,3 +140,46 @@ def test_corrupt_registry_degrades_to_no_bundled(monkeypatch):
         assert _bundled.has(SLUG) is False
     finally:
         _bundled._registry.cache_clear()
+
+
+# --------------------------------------------------------------------------- #
+# DatasetCatalog / Dataset display types
+# --------------------------------------------------------------------------- #
+
+
+def test_catalog_is_dataset_catalog_and_tuple():
+    from svy.datasets import DatasetCatalog
+
+    cat = d.catalog(source="bundled")
+    assert isinstance(cat, DatasetCatalog)
+    assert isinstance(cat, tuple)  # backward compatible: still indexable/iterable
+    assert cat[1].slug == SLUG
+    assert SLUG in cat.slugs
+
+
+def test_catalog_get_returns_dataset():
+    ds = d.catalog(source="bundled").get(SLUG)
+    assert ds.slug == SLUG
+    assert ds.design == {"stratum": ["geo1", "urbrur"], "psu": "ea", "wgt": "hhweight"}
+
+
+def test_catalog_get_unknown_raises_not_found():
+    with pytest.raises(DatasetError) as ei:
+        d.catalog(source="bundled").get("does_not_exist")
+    assert ei.value.code == "DATASET_NOT_FOUND"
+
+
+def test_catalog_to_polars():
+    df = d.catalog(source="bundled").to_polars()
+    assert df.height == 5
+    assert {"slug", "title", "rows", "cols", "size_mb"}.issubset(df.columns)
+
+
+def test_catalog_and_dataset_str_render():
+    cat = d.catalog(source="bundled")
+    # DatasetCatalog renders a table listing the slugs
+    assert SLUG in str(cat)
+    # A single Dataset renders a panel with its slug and a Description field
+    ds_str = str(cat.get(SLUG))
+    assert SLUG in ds_str
+    assert "Description" in ds_str

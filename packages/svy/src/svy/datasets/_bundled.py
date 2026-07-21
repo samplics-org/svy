@@ -31,7 +31,7 @@ from typing import Any
 
 import polars as pl
 
-from svy.datasets.types import Dataset
+from svy.datasets.types import Dataset, DatasetCatalog
 from svy.errors.dataset_errors import DatasetError
 
 
@@ -105,9 +105,9 @@ def describe(slug: str) -> Dataset | None:
     return _to_dataset(entry) if entry is not None else None
 
 
-def catalog() -> tuple[Dataset, ...]:
-    """Return all bundled datasets as ``Dataset`` records."""
-    return tuple(_to_dataset(e) for e in _registry().values())
+def catalog() -> DatasetCatalog:
+    """Return all bundled datasets as a ``DatasetCatalog``."""
+    return DatasetCatalog(_to_dataset(e) for e in _registry().values())
 
 
 def read_lazy(slug: str) -> pl.LazyFrame:

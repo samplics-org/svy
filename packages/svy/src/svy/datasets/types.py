@@ -18,7 +18,7 @@ Design notes
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, ClassVar, Mapping
 
 import msgspec
 
@@ -79,3 +79,149 @@ class Dataset(msgspec.Struct, frozen=True, kw_only=True):
         """One-line human-readable summary for list displays."""
         size_mb = self.size_bytes / (1024 * 1024)
         return f"{self.slug:<24} {self.title:<40} {self.n_rows:>10,} rows  {size_mb:>6.1f} MB"
+
+    # ---- display ---------------------------------------------------------
+    # Class-level print-width override (ClassVar so msgspec treats it as a
+    # class attribute, not a struct field).
+    PRINT_WIDTH: ClassVar[int | None] = None
+
+    def _size_mb(self) -> float:
+        return self.size_bytes / (1024 * 1024)
+
+    def _design_str(self) -> str:
+        if not self.design:
+            return "—"
+        return ", ".join(f"{k}={v!r}" for k, v in self.design.items())
+
+    def __rich_console__(self, console, options):
+        from rich.table import Table as RTable
+
+        from svy.ui.printing import make_panel
+
+        t = RTable(show_header=False, box=None, show_edge=False, pad_edge=False, expand=False)
+        t.add_column("Field", justify="left", no_wrap=True, style="bold")
+        t.add_column("Value", justify="left", overflow="fold")
+        rows = [
+            ("Title", self.title),
+            ("Description", self.description or "—"),
+            ("Rows × Cols", f"{self.n_rows:,} × {self.n_cols}"),
+            ("Size", f"{self._size_mb():.1f} MB"),
+            ("Version", self.version),
+            ("Design", self._design_str()),
+            ("Source", self.source or "—"),
+            ("License", self.license or "—"),
+        ]
+        if self.tags:
+            rows.append(("Tags", ", ".join(self.tags)))
+        for key, value in rows:
+            t.add_row(key, str(value))
+        yield make_panel([t], title=f"Dataset: {self.slug}", obj=self, kind="panel")
+
+    def __plain_str__(self) -> str:
+        lines = [
+            f"Dataset: {self.slug}",
+            f"  Title       : {self.title}",
+            f"  Description : {self.description}",
+            f"  Rows x Cols : {self.n_rows:,} x {self.n_cols}",
+            f"  Size        : {self._size_mb():.1f} MB",
+            f"  Version     : {self.version}",
+            f"  Design      : {self._design_str()}",
+        ]
+        return "\n".join(lines)
+
+    def __str__(self) -> str:
+        from svy.ui.printing import render_rich_to_str, resolve_width
+
+        try:
+            return render_rich_to_str(self, width=resolve_width(self))
+        except Exception:
+            return self.__plain_str__()
+
+    # Plain (no ANSI) repr — safe in logs and renders cleanly as a bare
+    # expression in notebooks. Use print() / str() for the rich panel.
+    def __repr__(self) -> str:
+        return self.__plain_str__()
+
+
+class DatasetCatalog(tuple):
+    """
+    An immutable, iterable collection of :class:`Dataset` records.
+
+    Behaves exactly like a ``tuple`` (index it, iterate it, ``len()`` it) but
+    prints as a compact table and can be exported to Polars.  Use
+    :meth:`get` to drill into a single dataset's full metadata.
+    """
+
+    PRINT_WIDTH: int | None = None
+
+    def get(self, slug: str) -> Dataset:
+        """Return the :class:`Dataset` with ``slug``.
+
+        Raises
+        ------
+        DatasetError
+            With code ``DATASET_NOT_FOUND`` if no dataset has that slug.
+        """
+        for ds in self:
+            if ds.slug == slug:
+                return ds
+        from svy.errors.dataset_errors import DatasetError
+
+        raise DatasetError.not_found(where="DatasetCatalog.get", slug=slug)
+
+    @property
+    def slugs(self) -> tuple[str, ...]:
+        """The slugs of every dataset in the catalog."""
+        return tuple(ds.slug for ds in self)
+
+    def to_polars(self):
+        """Return the catalog as a Polars DataFrame (one row per dataset)."""
+        import polars as pl
+
+        return pl.DataFrame(
+            {
+                "slug": [d.slug for d in self],
+                "title": [d.title for d in self],
+                "rows": [d.n_rows for d in self],
+                "cols": [d.n_cols for d in self],
+                "size_mb": [round(d.size_bytes / (1024 * 1024), 2) for d in self],
+            }
+        )
+
+    def __rich_console__(self, console, options):
+        from svy.ui.printing import make_panel, make_table
+
+        t = make_table(
+            header_names=["slug", "title", "rows", "cols", "size"],
+            numeric={"rows", "cols", "size"},
+            obj=self,
+            kind="panel",
+        )
+        for d in self:
+            t.add_row(
+                d.slug,
+                d.title,
+                f"{d.n_rows:,}",
+                str(d.n_cols),
+                f"{d.size_bytes / (1024 * 1024):.1f} MB",
+            )
+        yield make_panel([t], title=f"Datasets ({len(self)})", obj=self, kind="panel")
+
+    def __plain_str__(self) -> str:
+        lines = [f"Datasets ({len(self)})"]
+        for d in self:
+            lines.append(f"  {d.slug:<24} {d.n_rows:>10,} rows  {d.n_cols:>3} cols")
+        return "\n".join(lines)
+
+    def __str__(self) -> str:
+        from svy.ui.printing import render_rich_to_str, resolve_width
+
+        try:
+            return render_rich_to_str(self, width=resolve_width(self))
+        except Exception:
+            return self.__plain_str__()
+
+    # Plain (no ANSI) repr — safe in logs; use print() / str() for the rich
+    # table.
+    def __repr__(self) -> str:
+        return self.__plain_str__()

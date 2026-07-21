@@ -39,7 +39,7 @@ from typing import Any, Final
 import httpx
 import msgspec
 
-from svy.datasets.types import Dataset
+from svy.datasets.types import Dataset, DatasetCatalog
 from svy.errors.dataset_errors import DatasetError
 
 
@@ -237,7 +237,7 @@ def clear_cache() -> None:
 # --- Public API ----------------------------------------------------------- #
 
 
-def catalog(*, use_cache: bool = True) -> tuple[Dataset, ...]:
+def catalog(*, use_cache: bool = True) -> DatasetCatalog:
     """
     Return all datasets known to the svylab catalog.
 
@@ -251,7 +251,7 @@ def catalog(*, use_cache: bool = True) -> tuple[Dataset, ...]:
 
     raw = _fetch(_REGISTRY_PATH)
     entries = _RAW_LIST_DECODER.decode(raw)
-    datasets = tuple(_from_backend(e) for e in entries)
+    datasets = DatasetCatalog(_from_backend(e) for e in entries)
     _cache_put_list(datasets)
 
     # Populate per-slug cache too — saves a round-trip on the next describe().
