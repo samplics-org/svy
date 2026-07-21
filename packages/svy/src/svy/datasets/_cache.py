@@ -106,9 +106,9 @@ def ensure_cached(
     Raises
     ------
     DatasetError
-        With code ``DATASET_SHA_MISMATCH`` if the hash check fails.
-    RuntimeError
-        On network or filesystem errors during download.
+        With code ``DATASET_SHA_MISMATCH`` if the hash check fails, or
+        ``DATASET_DOWNLOAD_FAILED`` on network/filesystem errors during
+        download.
     """
     local_path = path_for(slug, version)
 
@@ -242,4 +242,6 @@ def _download(*, url: str, dest: Path, sha256: str, slug: str) -> None:
         raise
     except Exception as ex:
         tmp_path.unlink(missing_ok=True)
-        raise RuntimeError(f"Failed to download {slug!r}: {ex}") from ex
+        raise DatasetError.download_failed(
+            where="datasets._cache._download", slug=slug, url=url, reason=str(ex)
+        ) from ex

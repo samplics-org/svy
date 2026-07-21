@@ -169,13 +169,14 @@ class TestDownloadFailure:
     def test_http_error_cleans_up_tempfile(self, routes):
         routes.add_status("/data/gone.parquet", 500)
 
-        with pytest.raises(RuntimeError):
+        with pytest.raises(DatasetError) as exc_info:
             _cache.ensure_cached(
                 slug="gone",
                 version="1.0.0",
                 url="https://svylab.test/data/gone.parquet",
                 sha256="0" * 64,
             )
+        assert exc_info.value.code == "DATASET_DOWNLOAD_FAILED"
         # No leftover tempfiles.
         assert not list(_cache.CACHE_DIR.glob("*.tmp*"))
         assert not list(_cache.CACHE_DIR.glob(".gone*"))

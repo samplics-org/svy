@@ -1,4 +1,6 @@
 # tests/svy/core/test_singleton_adjustments.py
+from pathlib import Path
+
 import polars as pl
 import pytest
 import svy_rs as ps
@@ -8,6 +10,9 @@ import svy
 from svy.core.constants import SVY_ROW_INDEX
 from svy.core.enumerations import PopParam, SingletonHandling
 from svy.core.singleton import _VAR_EXCLUDE_COL
+
+
+DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
 
 
 @pytest.fixture
@@ -187,14 +192,10 @@ def test_center_idempotent_if_not_configured(monkeypatch):
 
 
 def test_verify_singleton_methods():
-    csv_path = "test_data/singleton_test_20012026.csv"
     try:
-        data = pl.read_csv(csv_path)
+        data = pl.read_csv(DATA_DIR / "singleton_test_20012026.csv")
     except FileNotFoundError:
-        try:
-            data = pl.read_csv("tests/test_data/singleton_test_20012026.csv")
-        except FileNotFoundError:
-            pytest.skip("Verification CSV not found. Run generation script first.")
+        pytest.skip("Verification CSV not found. Run generation script first.")
 
     design = svy.Design(stratum="stratum", psu="psu", wgt="weight")
     sample = svy.Sample(data, design)

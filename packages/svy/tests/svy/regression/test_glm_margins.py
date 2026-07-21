@@ -3,12 +3,17 @@
 Tests for GLM margins against R.
 """
 
+from pathlib import Path
+
 import numpy as np
 import polars as pl
 import pytest
 
 from svy.core.enumerations import DistFamily
 from svy.core.sample import Design, Sample
+
+
+DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
 
 
 # =============================================================================
@@ -56,7 +61,7 @@ ATOL = 1e-4
 
 @pytest.fixture
 def api_strat():
-    return pl.read_csv("tests/test_data/apistrat.csv")
+    return pl.read_csv(DATA_DIR / "apistrat.csv")
 
 
 @pytest.fixture

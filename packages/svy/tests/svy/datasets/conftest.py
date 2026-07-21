@@ -190,7 +190,11 @@ def isolate_module_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, routes
     After each test:
       * tear the client down to avoid leaking across tests.
     """
-    from svy.datasets import _cache, api
+    from svy.datasets import _bundled, _cache, api
+
+    # 0. Reset the bundled registry lru_cache so a test that patches the
+    #    bundled dir/contents can't poison later tests.
+    _bundled._registry.cache_clear()
 
     # 1. Cache directory
     cache_dir = tmp_path / ".svy" / "datasets"

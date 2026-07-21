@@ -14,6 +14,8 @@ identical results to R and Stata for bootstrap variance estimation.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import polars as pl
 import pytest
 
@@ -25,7 +27,9 @@ from svy.core.sample import Sample
 
 # ---------- Fixtures ----------
 
-DATA_PATH = "tests/test_data/fake_survey_bootstrap_25122025.csv"
+DATA_PATH = (
+    Path(__file__).resolve().parents[2] / "test_data" / "fake_survey_bootstrap_25122025.csv"
+)
 
 
 @pytest.fixture(scope="module")

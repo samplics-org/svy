@@ -83,6 +83,58 @@ class DatasetError(SvyError):
             docs_url=docs_url,
         )
 
+    # ---- Download ---------------------------------------------------------
+
+    @classmethod
+    def download_failed(
+        cls,
+        *,
+        where: Optional[str],
+        slug: str,
+        url: str,
+        reason: str,
+        hint: Optional[str] = (
+            "Check your network connection, or use source='bundled' for the offline subset."
+        ),
+        docs_url: Optional[str] = None,
+    ) -> "DatasetError":
+        return cls(
+            title="Dataset download failed",
+            detail=f"Could not download dataset {slug!r} from {url}: {reason}",
+            code="DATASET_DOWNLOAD_FAILED",
+            where=where,
+            hint=hint,
+            docs_url=docs_url,
+            extra={"slug": slug, "url": url},
+        )
+
+    # ---- Bundled (packaged) data -----------------------------------------
+
+    @classmethod
+    def bundled_unavailable(
+        cls,
+        *,
+        where: Optional[str],
+        slug: str,
+        reason: str,
+        hint: Optional[str] = (
+            "The packaged dataset file is missing or unreadable; reinstalling "
+            "svy should restore it."
+        ),
+        docs_url: Optional[str] = None,
+    ) -> "DatasetError":
+        return cls(
+            title="Bundled dataset unavailable",
+            detail=f"The bundled copy of dataset {slug!r} could not be read: {reason}",
+            code="BUNDLED_UNAVAILABLE",
+            where=where,
+            param="source",
+            got="bundled",
+            hint=hint,
+            docs_url=docs_url,
+            extra={"slug": slug},
+        )
+
     # ---- Integrity --------------------------------------------------------
 
     @classmethod

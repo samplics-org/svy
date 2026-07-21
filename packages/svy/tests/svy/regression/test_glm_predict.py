@@ -3,6 +3,8 @@
 Tests for GLM prediction against R's predict.svyglm().
 """
 
+from pathlib import Path
+
 import numpy as np
 import polars as pl
 import pytest
@@ -10,6 +12,9 @@ import pytest
 from svy.core.enumerations import DistFamily
 from svy.core.sample import Design, Sample
 from svy.core.terms import Cat
+
+
+DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
 
 
 # =============================================================================
@@ -20,7 +25,7 @@ from svy.core.terms import Cat
 @pytest.fixture
 def api_strat():
     """Load apistrat dataset."""
-    return pl.read_csv("tests/test_data/apistrat.csv")
+    return pl.read_csv(DATA_DIR / "apistrat.csv")
 
 
 @pytest.fixture
