@@ -15,6 +15,8 @@ pass the result to ``svy.Sample`` and use ``sample.selection.srs(...)``.
 from __future__ import annotations
 
 import logging
+import os
+import warnings
 
 from typing import Literal, Mapping, Sequence, overload
 
@@ -22,11 +24,72 @@ import numpy as np
 import polars as pl
 
 from svy.core.types import Category, RandomState, WhereArg
-from svy.datasets import _cache, api
+from svy.datasets import _bundled, _cache, api
+from svy.errors.dataset_errors import DatasetError
 from svy.utils.where import _compile_where
 
 
 log = logging.getLogger(__name__)
+
+Source = Literal["auto", "remote", "bundled"]
+
+# Env values that force offline (bundled-first) resolution in "auto" mode.
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def _offline_env() -> bool:
+    """Whether SVYLAB_OFFLINE requests bundled-first resolution."""
+    return os.getenv("SVYLAB_OFFLINE", "").strip().lower() in _TRUTHY
+
+
+def _scan_remote(name: str, *, force_download: bool) -> pl.LazyFrame:
+    """Resolve a slug from the remote catalog, download+cache, and scan it."""
+    ds = api.describe(name)
+    path = _cache.ensure_cached(
+        slug=ds.slug,
+        version=ds.version,
+        url=ds.download_url,
+        sha256=ds.sha256,
+        force=force_download,
+    )
+    return pl.scan_parquet(path)
+
+
+def _resolve_source(name: str, *, source: Source, force_download: bool) -> pl.LazyFrame:
+    """Return a LazyFrame for ``name`` per the requested ``source`` policy.
+
+    - ``"bundled"``: read the packaged subset; never touch the network.
+    - ``"remote"``: require the online catalog; error if unreachable.
+    - ``"auto"``: bundled-first when ``SVYLAB_OFFLINE`` is set; otherwise try
+      remote and, if the catalog/download is unreachable, fall back to the
+      bundled subset (with a warning) when one exists.
+    """
+    if source == "auto" and _offline_env():
+        source = "bundled"
+
+    if source == "bundled":
+        if not _bundled.has(name):
+            raise DatasetError.not_found(where="datasets.load(source='bundled')", slug=name)
+        return _bundled.read_lazy(name)
+
+    if source == "remote":
+        return _scan_remote(name, force_download=force_download)
+
+    # auto: remote, then bundled fallback on network/catalog failure.
+    try:
+        return _scan_remote(name, force_download=force_download)
+    except DatasetError as exc:
+        if exc.code in {"CATALOG_UNREACHABLE", "CATALOG_BAD_STATUS"} and _bundled.has(name):
+            b = _bundled.describe(name)
+            warnings.warn(
+                f"Could not reach the dataset catalog; using the bundled subset of "
+                f"{name!r} ({b.n_rows:,} rows). This is a reduced dataset — results "
+                f"will differ from the full online data. Use source='remote' once "
+                f"online, or set source='bundled' to silence this.",
+                stacklevel=3,
+            )
+            return _bundled.read_lazy(name)
+        raise
 
 
 # --------------------------------------------------------------------------- #
@@ -65,6 +128,7 @@ def load(
     rstate: RandomState = None,
     lazy: bool = False,
     force_download: bool = False,
+    source: Source = "auto",
 ) -> pl.DataFrame | pl.LazyFrame:
     """
     Load an example dataset from the svylab catalog.
@@ -106,7 +170,21 @@ def load(
     lazy : bool, default False
         Return a ``LazyFrame`` if True; collect to ``DataFrame`` otherwise.
     force_download : bool, default False
-        Re-download the parquet file even if cached.
+        Re-download the parquet file even if cached.  Applies to remote data
+        only; ignored when the bundled subset is used.
+    source : {"auto", "remote", "bundled"}, default "auto"
+        Where to load the data from.
+
+        - ``"remote"``  — the full online dataset; errors if the catalog is
+          unreachable.
+        - ``"bundled"`` — the small subset shipped inside the package; never
+          touches the network. Deterministic and offline-safe (used by docs
+          and CI). Note this is a *reduced* dataset, so results differ from
+          the full data.
+        - ``"auto"``    — remote first, falling back to the bundled subset
+          (with a warning) if the catalog/download is unreachable. Set the
+          ``SVYLAB_OFFLINE`` environment variable to make ``"auto"`` prefer
+          the bundled subset without any network attempt.
 
     Returns
     -------
@@ -120,20 +198,9 @@ def load(
     """
     _validate_args(n=n, rate=rate, by=by, order_type=order_type)
 
-    # 1. Catalog lookup (cached in-process for a few minutes).
-    ds = api.describe(name)
-
-    # 2. Ensure the file is on disk, verified.
-    path = _cache.ensure_cached(
-        slug=ds.slug,
-        version=ds.version,
-        url=ds.download_url,
-        sha256=ds.sha256,
-        force=force_download,
-    )
-
-    # 3. Build the lazy pipeline.
-    lf = pl.scan_parquet(path)
+    # 1. Resolve the slug to a LazyFrame per the source policy (remote /
+    #    bundled / auto-with-offline-fallback).
+    lf = _resolve_source(name, source=source, force_download=force_download)
 
     # Filter first so Polars can push predicates into the Parquet reader.
     if where is not None:
