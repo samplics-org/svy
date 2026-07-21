@@ -23,6 +23,14 @@ from typing import Any, ClassVar, Mapping
 import msgspec
 
 
+def _fmt_size(n_bytes: int) -> str:
+    """Human-readable file size (KB under 1 MB, else MB)."""
+    mb = n_bytes / (1024 * 1024)
+    if mb >= 1:
+        return f"{mb:.1f} MB"
+    return f"{n_bytes / 1024:.0f} KB"
+
+
 class Dataset(msgspec.Struct, frozen=True, kw_only=True):
     """
     Metadata for a single example dataset in the svylab catalog.
@@ -85,36 +93,40 @@ class Dataset(msgspec.Struct, frozen=True, kw_only=True):
     # class attribute, not a struct field).
     PRINT_WIDTH: ClassVar[int | None] = None
 
-    def _size_mb(self) -> float:
-        return self.size_bytes / (1024 * 1024)
-
-    def _design_str(self) -> str:
-        if not self.design:
-            return "—"
-        return ", ".join(f"{k}={v!r}" for k, v in self.design.items())
-
     def __rich_console__(self, console, options):
         from rich.table import Table as RTable
 
         from svy.ui.printing import make_panel
 
-        t = RTable(show_header=False, box=None, show_edge=False, pad_edge=False, expand=False)
+        t = RTable(
+            show_header=False,
+            box=None,
+            show_edge=False,
+            pad_edge=False,
+            expand=False,
+            padding=(0, 2),
+        )
         t.add_column("Field", justify="left", no_wrap=True, style="bold")
-        t.add_column("Value", justify="left", overflow="fold")
-        rows = [
-            ("Title", self.title),
-            ("Description", self.description or "—"),
-            ("Rows × Cols", f"{self.n_rows:,} × {self.n_cols}"),
-            ("Size", f"{self._size_mb():.1f} MB"),
-            ("Version", self.version),
-            ("Design", self._design_str()),
-            ("Source", self.source or "—"),
-            ("License", self.license or "—"),
-        ]
+        # Cap the value width so long descriptions wrap instead of stretching
+        # the panel.
+        t.add_column("Value", justify="left", overflow="fold", max_width=60)
+
+        t.add_row("Title", self.title)
+        t.add_row("Description", self.description or "—")
+        t.add_row("Rows × Cols", f"{self.n_rows:,} × {self.n_cols}")
+        t.add_row("Size", _fmt_size(self.size_bytes))
+        t.add_row("Version", self.version)
+        # One row per design key so long designs stay readable.
+        if self.design:
+            t.add_row("Design", "")
+            for key, value in self.design.items():
+                t.add_row("", f"{key} = {value!r}")
+        else:
+            t.add_row("Design", "—")
+        t.add_row("Source", self.source or "—")
+        t.add_row("License", self.license or "—")
         if self.tags:
-            rows.append(("Tags", ", ".join(self.tags)))
-        for key, value in rows:
-            t.add_row(key, str(value))
+            t.add_row("Tags", ", ".join(self.tags))
         yield make_panel([t], title=f"Dataset: {self.slug}", obj=self, kind="panel")
 
     def __plain_str__(self) -> str:
@@ -123,10 +135,15 @@ class Dataset(msgspec.Struct, frozen=True, kw_only=True):
             f"  Title       : {self.title}",
             f"  Description : {self.description}",
             f"  Rows x Cols : {self.n_rows:,} x {self.n_cols}",
-            f"  Size        : {self._size_mb():.1f} MB",
+            f"  Size        : {_fmt_size(self.size_bytes)}",
             f"  Version     : {self.version}",
-            f"  Design      : {self._design_str()}",
         ]
+        if self.design:
+            lines.append("  Design      :")
+            for key, value in self.design.items():
+                lines.append(f"      {key} = {value!r}")
+        else:
+            lines.append("  Design      : —")
         return "\n".join(lines)
 
     def __str__(self) -> str:
@@ -189,26 +206,49 @@ class DatasetCatalog(tuple):
         )
 
     def __rich_console__(self, console, options):
-        from svy.ui.printing import make_panel, make_table
+        from rich import box
+        from rich.table import Table
+        from rich.text import Text
 
-        t = make_table(
-            header_names=["slug", "title", "rows", "cols", "size"],
-            numeric={"rows", "cols", "size"},
-            obj=self,
-            kind="panel",
+        from svy.ui.printing import make_panel
+
+        # Header: summary stats (borderless key/value grid).
+        header = Table(show_header=False, box=None, pad_edge=False, expand=False, padding=(0, 2))
+        header.add_column(justify="left", style="bold")
+        header.add_column(justify="left")
+        header.add_row("Number of datasets", str(len(self)))
+        if self:
+            sizes = [d.size_bytes for d in self]
+            header.add_row("Max size", _fmt_size(max(sizes)))
+            header.add_row("Min size", _fmt_size(min(sizes)))
+
+        # Body: one row per dataset, with a header rule (svy house style).
+        # The title is cropped with an ellipsis when it exceeds the column.
+        table = Table(
+            show_header=True,
+            header_style="bold",
+            box=box.SIMPLE_HEAVY,
+            show_edge=True,
+            show_lines=False,
+            pad_edge=False,
+            expand=False,
+            padding=(0, 2),
         )
+        table.add_column("slug", justify="left", no_wrap=True)
+        table.add_column("title", justify="left", no_wrap=True, overflow="ellipsis", max_width=40)
+        table.add_column("rows", justify="right", no_wrap=True)
+        table.add_column("cols", justify="right", no_wrap=True)
         for d in self:
-            t.add_row(
-                d.slug,
-                d.title,
-                f"{d.n_rows:,}",
-                str(d.n_cols),
-                f"{d.size_bytes / (1024 * 1024):.1f} MB",
-            )
-        yield make_panel([t], title=f"Datasets ({len(self)})", obj=self, kind="panel")
+            table.add_row(d.slug, d.title, f"{d.n_rows:,}", str(d.n_cols))
+
+        yield make_panel([header, Text(""), table], title="Datasets", obj=self, kind="panel")
 
     def __plain_str__(self) -> str:
-        lines = [f"Datasets ({len(self)})"]
+        lines = [f"Datasets: {len(self)}"]
+        if self:
+            sizes = [d.size_bytes for d in self]
+            lines.append(f"Size: {_fmt_size(min(sizes))} – {_fmt_size(max(sizes))}")
+        lines.append("")
         for d in self:
             lines.append(f"  {d.slug:<24} {d.n_rows:>10,} rows  {d.n_cols:>3} cols")
         return "\n".join(lines)
