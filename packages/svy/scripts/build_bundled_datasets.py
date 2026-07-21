@@ -83,8 +83,8 @@ _META = {
     ),
     "ind_sample_wb_2023": dict(
         title="WB Synthetic Individual Sample 2023 (bundled subset)",
-        description="Individual-level survey records; join to the household sample on 'hid' for design variables.",
-        design=None,
+        description="Individual-level survey records, enriched with household design variables (geo1/geo2/ea/urbrur) and weights so design-based estimation works directly.",
+        design={"stratum": ["geo1", "urbrur"], "psu": "ea", "wgt": "hhweight"},
         tags=("wb", "synthetic", "individual", "sample", "bundled"),
     ),
     "hld_pop_wb_2023": dict(
@@ -134,7 +134,18 @@ def main() -> None:
     # 2. bundled sample -----------------------------------------------------
     b_hld_s = hld_s.filter(pl.col("ea").is_in(sel_set)).sort(["ea", "hid"])
     samp_hids = set(b_hld_s["hid"].to_list())
-    b_ind_s = ind_s.filter(pl.col("hid").is_in(samp_hids)).sort(list(ind_s.columns[:2]))
+
+    # Enrich the individual sample with the household's design variables
+    # (geo1/geo2/ea/urbrur) so design-based estimation works without a manual
+    # join.  hhweight already travels with the individual file.
+    hh_geo = b_hld_s.select(["hid", "geo1", "geo2", "ea", "urbrur"])
+    front = ["hid", "idno", "geo1", "geo2", "ea", "urbrur"]
+    b_ind_s = (
+        ind_s.filter(pl.col("hid").is_in(samp_hids))
+        .join(hh_geo, on="hid", how="left")
+        .sort(["hid", "idno"])
+    )
+    b_ind_s = b_ind_s.select(front + [c for c in b_ind_s.columns if c not in front])
 
     # 3. reduced census (keep sampled HHs; random top-up to a varied target)
     hld_p_full = (

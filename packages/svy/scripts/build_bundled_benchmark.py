@@ -30,6 +30,13 @@ import svy.datasets as d
 OUT = Path(__file__).resolve().parents[1] / "tests" / "svy" / "datasets" / "bundled_benchmark.json"
 _ROUND = 4
 
+# The outcome variable used to pin a design-based mean per dataset that has a
+# design (household uses per-capita expenditure; individual uses age).
+DESIGN_Y = {
+    "hld_sample_wb_2023": "pc_exp",
+    "ind_sample_wb_2023": "age",
+}
+
 
 def _sha(slug: str, filename: str) -> tuple[str, int]:
     resource = files("svy.datasets") / "_bundled" / filename
@@ -61,11 +68,13 @@ def main() -> None:
             "columns": df.columns,
             "numeric_sums": _numeric_sums(df),
         }
-        if ds.design:
+        y = DESIGN_Y.get(ds.slug)
+        if ds.design and y:
             smp = svy.Sample(data=df, design=svy.Design(**ds.design))
-            est = smp.estimation.mean("pc_exp")
+            est = smp.estimation.mean(y)
             row = est.to_dicts()[0]
-            entry["design_mean_pc_exp"] = {
+            entry["design_mean"] = {
+                "y": y,
                 "est": round(float(row["est"]), _ROUND),
                 "se": round(float(row["se"]), _ROUND),
                 "n_strata": int(est.n_strata),

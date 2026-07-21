@@ -146,11 +146,12 @@
       "hhweight",
       "popweight"
     ],
-    "design_mean_pc_exp": {
+    "design_mean": {
       "est": 3410.7432,
       "n_psus": 43,
       "n_strata": 19,
-      "se": 255.1439
+      "se": 255.1439,
+      "y": "pc_exp"
     },
     "n_cols": 49,
     "n_rows": 1075,
@@ -231,6 +232,10 @@
     "columns": [
       "hid",
       "idno",
+      "geo1",
+      "geo2",
+      "ea",
+      "urbrur",
       "relation",
       "sex",
       "age",
@@ -257,7 +262,14 @@
       "births_12m",
       "hhweight"
     ],
-    "n_cols": 27,
+    "design_mean": {
+      "est": 26.6547,
+      "n_psus": 43,
+      "n_strata": 19,
+      "se": 1.4024,
+      "y": "age"
+    },
+    "n_cols": 31,
     "n_rows": 4580,
     "numeric_sums": {
       "age": 122352.0,
@@ -267,11 +279,12 @@
       "ch_weight": 5770.31,
       "children_born": 3664.0,
       "children_surv": 3304.0,
+      "ea": 266483412.0,
       "hhweight": 1462012.9931,
       "idno": 13878.0,
       "yrs_school": 19137.0
     },
-    "sha256": "be936b9dca6be8e57abe98451033893e34d01eb0bd23d7a130b9fed02ec2a4c8",
-    "size_bytes": 54406
+    "sha256": "78551e6b17f50aa96453d2193ea0baf3ba4d39e9522a8d403a72bf5a29f43a8e",
+    "size_bytes": 62703
   }
 }

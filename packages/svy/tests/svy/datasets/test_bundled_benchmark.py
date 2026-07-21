@@ -107,12 +107,15 @@ def test_numeric_sums_match_benchmark(slug):
         assert got == pytest.approx(expected, rel=1e-9, abs=1e-4), col
 
 
-def test_design_based_estimate_matches_benchmark():
-    slug = "hld_sample_wb_2023"
-    bench = BENCHMARK[slug]["design_mean_pc_exp"]
+DESIGN_SLUGS = [s for s in SLUGS if "design_mean" in BENCHMARK[s]]
+
+
+@pytest.mark.parametrize("slug", DESIGN_SLUGS)
+def test_design_based_estimate_matches_benchmark(slug):
+    bench = BENCHMARK[slug]["design_mean"]
     info = d.describe(slug, source="bundled")
     df = d.load(slug, source="bundled")
-    est = svy.Sample(data=df, design=svy.Design(**info.design)).estimation.mean("pc_exp")
+    est = svy.Sample(data=df, design=svy.Design(**info.design)).estimation.mean(bench["y"])
     row = est.to_dicts()[0]
     assert row["est"] == pytest.approx(bench["est"], rel=1e-6, abs=1e-4)
     assert row["se"] == pytest.approx(bench["se"], rel=1e-6, abs=1e-4)
@@ -157,6 +160,24 @@ def test_design_is_valid_no_singleton_strata():
     assert dist == {2: 16, 3: 2, 5: 1}
 
 
-def test_household_sample_has_design_metadata():
-    info = d.describe("hld_sample_wb_2023", source="bundled")
+@pytest.mark.parametrize("slug", ["hld_sample_wb_2023", "ind_sample_wb_2023"])
+def test_sample_has_design_metadata(slug):
+    info = d.describe(slug, source="bundled")
     assert info.design == {"stratum": ["geo1", "urbrur"], "psu": "ea", "wgt": "hhweight"}
+
+
+def test_individual_sample_carries_design_columns():
+    # ind_sample is enriched with the household's design vars so design-based
+    # estimation works without a manual join.
+    df = d.load("ind_sample_wb_2023", source="bundled")
+    for col in ("geo1", "geo2", "ea", "urbrur", "hhweight"):
+        assert col in df.columns
+    # every individual's geo/ea matches its household in the household sample
+    hh = d.load("hld_sample_wb_2023", source="bundled").select(
+        ["hid", "geo1", "geo2", "ea", "urbrur"]
+    )
+    joined = df.select(["hid", "geo1", "geo2", "ea", "urbrur"]).join(
+        hh, on="hid", how="left", suffix="_hh"
+    )
+    for col in ("geo1", "geo2", "ea", "urbrur"):
+        assert (joined[col] == joined[f"{col}_hh"]).all()

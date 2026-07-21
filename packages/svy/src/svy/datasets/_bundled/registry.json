@@ -54,17 +54,24 @@
   {
     "slug": "ind_sample_wb_2023",
     "title": "WB Synthetic Individual Sample 2023 (bundled subset)",
-    "description": "Individual-level survey records; join to the household sample on 'hid' for design variables.",
+    "description": "Individual-level survey records, enriched with household design variables (geo1/geo2/ea/urbrur) and weights so design-based estimation works directly.",
     "version": "1.0.0",
     "filename": "ind_sample_wb_2023.parquet",
-    "sha256": "be936b9dca6be8e57abe98451033893e34d01eb0bd23d7a130b9fed02ec2a4c8",
-    "size_bytes": 54406,
+    "sha256": "78551e6b17f50aa96453d2193ea0baf3ba4d39e9522a8d403a72bf5a29f43a8e",
+    "size_bytes": 62703,
     "n_rows": 4580,
-    "n_cols": 27,
+    "n_cols": 31,
     "license": "World Bank synthetic microdata terms",
     "citation": "World Bank (2023). Synthetic Data for Household Surveys and Census (World Bank Synthetic Data 2023). https://doi.org/10.48529/78M1-AE09",
     "source": "World Bank Microdata Library (catalog 5906)",
-    "design": null,
+    "design": {
+      "stratum": [
+        "geo1",
+        "urbrur"
+      ],
+      "psu": "ea",
+      "wgt": "hhweight"
+    },
     "variables": {},
     "tags": [
       "wb",
