@@ -9,6 +9,8 @@ The estimation path is:
     → rs.replicate_*(...)  [Rust backend]
 """
 
+from pathlib import Path
+
 import polars as pl
 import pytest
 
@@ -17,10 +19,13 @@ import svy
 from svy.core.enumerations import EstimationMethod
 
 
+DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
+
+
 @pytest.fixture(scope="module")
 def sdr_data():
     """Load SDR test data."""
-    return pl.read_csv("tests/test_data/sdr_test_data.csv")
+    return pl.read_csv(DATA_DIR / "sdr_test_data.csv")
 
 
 @pytest.fixture(scope="module")
