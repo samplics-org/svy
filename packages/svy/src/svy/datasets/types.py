@@ -118,8 +118,6 @@ class Dataset(msgspec.Struct, frozen=True, kw_only=True):
 
         t.add_row("Title", self.title)
         t.add_row("Description", self.description or "—")
-        if self.notes:
-            t.add_row("Notes", self.notes)
         t.add_row("Rows × Cols", f"{self.n_rows:,} × {self.n_cols}")
         t.add_row("Size", _fmt_size(self.size_bytes))
         t.add_row("Version", self.version)
@@ -134,6 +132,9 @@ class Dataset(msgspec.Struct, frozen=True, kw_only=True):
         t.add_row("License", self.license or "—")
         if self.tags:
             t.add_row("Tags", ", ".join(self.tags))
+        # Notes last — it's the longest, wrapping field.
+        if self.notes:
+            t.add_row("Notes", self.notes)
         yield make_panel([t], title=f"Dataset: {self.slug}", obj=self, kind="panel")
 
     def __plain_str__(self) -> str:
@@ -141,10 +142,6 @@ class Dataset(msgspec.Struct, frozen=True, kw_only=True):
             f"Dataset: {self.slug}",
             f"  Title       : {self.title}",
             f"  Description : {self.description}",
-        ]
-        if self.notes:
-            lines.append(f"  Notes       : {self.notes}")
-        lines += [
             f"  Rows x Cols : {self.n_rows:,} x {self.n_cols}",
             f"  Size        : {_fmt_size(self.size_bytes)}",
             f"  Version     : {self.version}",
@@ -155,6 +152,8 @@ class Dataset(msgspec.Struct, frozen=True, kw_only=True):
                 lines.append(f"      {key} = {value!r}")
         else:
             lines.append("  Design      : —")
+        if self.notes:
+            lines.append(f"  Notes       : {self.notes}")
         return "\n".join(lines)
 
     def __str__(self) -> str:
@@ -229,9 +228,7 @@ class DatasetCatalog(tuple):
         header.add_column(justify="left")
         header.add_row("Number of datasets", str(len(self)))
         if self:
-            sizes = [d.size_bytes for d in self]
-            header.add_row("Max size", _fmt_size(max(sizes)))
-            header.add_row("Min size", _fmt_size(min(sizes)))
+            header.add_row("Total size", _fmt_size(sum(d.size_bytes for d in self)))
 
         # Body: one row per dataset, with a header rule (svy house style).
         # The title is cropped with an ellipsis when it exceeds the column.
@@ -249,19 +246,24 @@ class DatasetCatalog(tuple):
         table.add_column("title", justify="left", no_wrap=True, overflow="ellipsis", max_width=40)
         table.add_column("rows", justify="right", no_wrap=True)
         table.add_column("cols", justify="right", no_wrap=True)
+        table.add_column("size", justify="right", no_wrap=True)
         for d in self:
-            table.add_row(d.slug, d.title, f"{d.n_rows:,}", str(d.n_cols))
+            table.add_row(
+                d.slug, d.title, f"{d.n_rows:,}", str(d.n_cols), _fmt_size(d.size_bytes)
+            )
 
         yield make_panel([header, Text(""), table], title="Datasets", obj=self, kind="panel")
 
     def __plain_str__(self) -> str:
         lines = [f"Datasets: {len(self)}"]
         if self:
-            sizes = [d.size_bytes for d in self]
-            lines.append(f"Size: {_fmt_size(min(sizes))} – {_fmt_size(max(sizes))}")
+            lines.append(f"Total size: {_fmt_size(sum(d.size_bytes for d in self))}")
         lines.append("")
         for d in self:
-            lines.append(f"  {d.slug:<24} {d.n_rows:>10,} rows  {d.n_cols:>3} cols")
+            lines.append(
+                f"  {d.slug:<24} {d.n_rows:>10,} rows  {d.n_cols:>3} cols  "
+                f"{_fmt_size(d.size_bytes):>8}"
+            )
         return "\n".join(lines)
 
     def __str__(self) -> str:
