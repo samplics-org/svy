@@ -462,5 +462,89 @@ class TestWhereWithBy:
         assert r1.stats.p_value == pytest.approx(r2.stats.p_value, rel=1e-10)
 
 
+# =============================================================================
+# D9: Group labels must reflect the levels actually tested
+# =============================================================================
+
+
+class TestD9GroupLabelsUnderWhere:
+    """Regression tests: reported group levels must be the ones the Rust
+    kernel actually tested (rows in-domain with positive weight), not all
+    levels present in the data."""
+
+    @pytest.fixture
+    def three_group_data(self) -> pl.DataFrame:
+        # Group A out-of-domain under `where`; B clearly below C so the
+        # delta sign is unambiguous.
+        return pl.DataFrame(
+            {
+                "grp": ["A"] * 8 + ["B"] * 8 + ["C"] * 8,
+                "y": (
+                    [50.0, 52.0, 48.0, 51.0, 49.0, 53.0, 47.0, 50.0]  # A
+                    + [10.0, 12.0, 11.0, 9.0, 13.0, 10.0, 12.0, 11.0]  # B
+                    + [90.0, 92.0, 91.0, 89.0, 93.0, 90.0, 92.0, 91.0]  # C
+                ),
+                "wgt": [1.5] * 24,
+                "keep": [0] * 8 + [1] * 16,
+            }
+        )
+
+    def test_labels_are_active_levels(self, three_group_data):
+        sample = Sample(three_group_data, Design(wgt="wgt"))
+        r = sample.categorical.ranktest(
+            y="y",
+            group="grp",
+            method=RankScoreMethod.KRUSKAL_WALLIS,
+            drop_nulls=True,
+            where=pl.col("keep") == 1,
+        )
+        # Domain leaves only B and C: a two-sample test on (B, C)
+        assert r.groups.levels == ("B", "C")
+
+    def test_delta_matches_filtered_data(self, three_group_data):
+        """where= (weights zeroed) must agree with physically filtering the
+        rows for an unclustered design: same labels, same delta sign."""
+        s_where = Sample(three_group_data, Design(wgt="wgt"))
+        r_where = s_where.categorical.ranktest(
+            y="y",
+            group="grp",
+            method=RankScoreMethod.KRUSKAL_WALLIS,
+            drop_nulls=True,
+            where=pl.col("keep") == 1,
+        )
+        filtered = three_group_data.filter(pl.col("keep") == 1)
+        r_filtered = Sample(filtered, Design(wgt="wgt")).categorical.ranktest(
+            y="y",
+            group="grp",
+            method=RankScoreMethod.KRUSKAL_WALLIS,
+            drop_nulls=True,
+        )
+        assert r_where.groups.levels == r_filtered.groups.levels
+        assert r_where.diff[0].diff * r_filtered.diff[0].diff > 0
+
+    def test_by_levels_get_their_own_labels(self):
+        """Different by-levels can have different active groups; each result
+        must carry the labels of its own by-level."""
+        data = pl.DataFrame(
+            {
+                "site": ["s1"] * 16 + ["s2"] * 16,
+                "grp": ["A"] * 8 + ["B"] * 8 + ["B"] * 8 + ["C"] * 8,
+                "y": [float(v) for v in range(1, 33)],
+                "wgt": [1.0] * 32,
+            }
+        )
+        sample = Sample(data, Design(wgt="wgt"))
+        results = sample.categorical.ranktest(
+            y="y",
+            group="grp",
+            method=RankScoreMethod.KRUSKAL_WALLIS,
+            drop_nulls=True,
+            by="site",
+        )
+        by_map = {str(r.diff[0].by_level): r for r in results}
+        assert by_map["s1"].groups.levels == ("A", "B")
+        assert by_map["s2"].groups.levels == ("B", "C")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

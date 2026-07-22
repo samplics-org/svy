@@ -678,12 +678,30 @@ class Categorical:
             by_col=prep.by_col,
         )
 
-        # Get unique group levels from prepared data for k-sample display
-        _group_levels = (
-            sorted(str(v) for v in prep.df[group].unique().to_list() if v is not None)
-            if group in prep.df.columns
-            else []
-        )
+        # Group levels actually used by the Rust kernel: rows in-domain with
+        # positive weight (mirrors prepare_two_sample_data in svy-rs
+        # categorical/api.rs). Under `where=` out-of-domain rows survive with
+        # zeroed weights, so deriving labels from all rows would report
+        # excluded levels and mislabel the two-sample delta.
+        def _active_group_levels(by_level: object = None) -> list[str]:
+            if group not in prep.df.columns:
+                return []
+            mask = pl.col(prep.weight_col).cast(pl.Float64) > 0
+            if prep.domain_col is not None and prep.domain_col in prep.df.columns:
+                mask = mask & (pl.col(prep.domain_col) == prep.domain_val)
+            if by_level is not None and prep.by_col is not None:
+                mask = mask & (pl.col(prep.by_col).cast(pl.String) == str(by_level))
+            vals = (
+                prep.df.filter(mask)
+                .get_column(group)
+                .drop_nulls()
+                .cast(pl.String)
+                .unique()
+                .to_list()
+            )
+            return sorted(vals)
+
+        _group_levels = _active_group_levels()
 
         # Unpack result rows into Python containers
         if by is not None:
@@ -695,7 +713,7 @@ class Categorical:
                     row_idx=i,
                     y_name=y,
                     group=group,
-                    group_levels=_group_levels,
+                    group_levels=_active_group_levels(by_level),
                     alpha=alpha,
                     alternative=alternative,
                     by=by,
