@@ -2,7 +2,7 @@
 
 Modern Python tools for **complex survey analysis**, built for real-world statistical workflows.
 
-**svy** is a rigorously design-based yet production-oriented ecosystem for survey design, weighting, estimation, and small area estimation — without sacrificing transparency or scalability.
+**svy** is a rigorously design-based, production-oriented ecosystem for survey design, weighting, estimation, and small area estimation, without sacrificing transparency or scalability.
 
 🌐 Website: https://svylab.com  
 📘 Documentation: https://svylab.com/docs
@@ -13,137 +13,96 @@ Modern Python tools for **complex survey analysis**, built for real-world statis
 > **Validation**: Want to assess the correctness of svy?  
 > See our [comparison with R’s survey package](https://svylab.com/learn/notes/posts/svy-vs-r-comparison/), showing numerically identical results across Taylor linearization, replication methods, and complex survey designs.
 
-## ⚠️ Current Status (Read This First)
-
-**The svy libraries are not yet publicly downloadable.**
-
-This repository is intentionally public **before the code release** so that early users can:
-
-- ask questions,
-- report documentation gaps,
-- suggest features,
-- discuss real-world survey use cases,
-- help shape stable APIs.
-
-📘 **Documentation is live**  
-🧪 **Code is under finalization**  
-🐞 **Issues & discussions are open**
-
-When the first public releases are ready, this repository will become the main code home.
-
----
-
 ## What is svy?
 
 svy is designed for people who **actually work with complex survey data**, including:
 
 - National statistical offices
 - Public health and development programs
-- Survey methodologists
+- Opinion polling and market research organizations
+- Survey methodologists and social science researchers
 - Data scientists working with complex samples
 
 The guiding principle is:
 
-> **Correct inference first — without hiding assumptions or sacrificing usability.**
+> **Correct inference first, without hiding assumptions or sacrificing usability.**
 
 svy prioritizes statistical validity while remaining compatible with modern Python workflows.
 
 ---
 
-## Planned Capabilities
+## Installation
 
-The svy ecosystem is being built to support:
+```bash
+pip install svy # svy[report] for rich outputs
+```
 
-- Complex survey design (strata, clusters, weights)
-- Design-based estimation with valid standard errors
-- Replication methods (BRR, bootstrap, jackknife)
-- Small Area Estimation (area- and unit-level models)
-- Explicit, inspectable, reproducible outputs
-- Integration with Polars, NumPy, SciPy, and JAX-based tooling
+or
+
+```bash
+uv add svy
+```
+
+---
+
+## Quick Start
+
+```python
+import svy
+
+# Load example data
+hld_data = svy.datasets.load("hld_sample_wb_2023")
+
+# Define the survey design
+hld_design = svy.Design(stratum=("geo1", "urbrur"), psu="ea", wgt="hhweight")
+
+# Create a sample object
+hld_sample = svy.Sample(data=hld_data, design=hld_design)
+
+# Estimate the mean of total expenditure
+tot_exp_mean = hld_sample.estimation.mean(y="tot_exp")
+print(tot_exp_mean)
+```
+
+---
+
+## Capabilities
+
+- **Sample size calculation** for estimation and comparison objectives
+- **Sample selection** including SRS, systematic, PPS, and multi-stage designs
+- **Weight adjustments**: nonresponse, poststratification, calibration (GREG), raking, trimming
+- **Design-based estimation** with valid standard errors (Taylor linearization)
+- **Replication methods**: BRR, bootstrap, jackknife, SDR
+- **Categorical data analysis**: tabulation, crosstabulation, t-test, rank tests, Rao-Scott test
+- **Generalized linear models**: linear, logistic, Poisson, Gamma with survey weights
+- **Explicit, inspectable, reproducible outputs**
+- **Built on Polars, NumPy, SciPy, and msgspec**, with a Rust computational engine
 
 All methods are grounded in established survey methodology.
 
 ---
 
-## Example (Illustrative API)
+## Ecosystem Packages
 
-The example below shows the **intended public API**.
-It reflects the current design but **cannot yet be run** until the first release.
+| Package                                     | Purpose                                 | Install                  |
+| ------------------------------------------- | --------------------------------------- | ------------------------ |
+| **svy**                                     | Core survey design & estimation         | `pip install svy`        |
+| [svy-sae](https://svylab.com/docs/svy-sae/) | Small Area Estimation                   | `pip install svy-sae`    |
+| [svy-io](https://svylab.com/docs/svy-io/)   | SPSS / Stata / SAS I/O                  | `pip install svy-io`     |
+| [svy-rs](https://pypi.org/project/svy-rs/)  | Rust computational engine used by svy   | installed automatically  |
 
-### Design-based estimation
-
-```python
-pip install svy
-```
-
-```python
-import svy
-
-hld_data = svy.load_dataset(name="hld_sample_wb_2023", limit=None)
-
-hld_design = svy.Design(stratum=("geo1", "urbrur"), psu="ea", wgt="hhweight")
-
-hld_sample = svy.Sample(data=hld_data, design=hld_design)
-
-tot_exp_mean = hld_sample.estimation.mean(y="tot_exp")
-
-print(tot_exp_mean)
-```
-
-### Fay Herriot Model - SAE
-
-```python
-pip install svy-sae
-```
-
-```python
-import svy_sae as sae
-
-milk = svy.load_dataset(name="milk", limit=None)
-
-milk_model = sae.AreaLevel(milk)
-
-milk_preds = milk_model.fh(
-    y="yi",
-    x=svy.Cat("MajorArea", ref=1),
-    variance="variance",
-    area="SmallArea",
-    method="REML",
-    mse="prasad_rao",
-)
-
-print(milk_preds)
-```
-
-No shortcuts.  
-No hidden assumptions.  
-Just correct survey inference.
+This repository is a monorepo: the Python package lives in [`packages/svy`](packages/svy), the Rust engine in [`packages/svy-rs`](packages/svy-rs), and the I/O library in [`packages/svy-io`](packages/svy-io).
 
 ---
 
-## Ecosystem Packages (Upcoming)
+## Documentation
 
-| Package | Purpose                         | Status      |
-| ------- | ------------------------------- | ----------- |
-| svy     | Core survey design & estimation | In progress |
-| svy-sae | Small Area Estimation           | In progress |
-| svy-io  | SPSS / Stata / SAS I/O          | In progress |
-
-Installation instructions will be added once packages are published.
-
----
-
-## Documentation (Available Now)
-
+Full documentation, tutorials, and methodological notes:
 👉 https://svylab.com/docs
 
-Includes conceptual guides, tutorials, and methodological notes reflecting the intended stable APIs.
-
 ---
 
-## Feedback & Early Engagement
-
-Early feedback is strongly encouraged.
+## Feedback
 
 - Issues: https://github.com/samplics-org/svy/issues
 - Discussions: https://github.com/samplics-org/svy/discussions
