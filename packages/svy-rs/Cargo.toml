@@ -37,7 +37,7 @@ extension-module = ["pyo3/extension-module"]
 default = ["extension-module"]
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 
 # Criterion micro-benchmarks for the estimation kernel. Run WITHOUT the
 # extension-module feature so the bench binary links as a normal executable:
