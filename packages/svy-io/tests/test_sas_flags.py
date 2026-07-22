@@ -48,3 +48,21 @@ def test_coerce_temporals_datetime_file():
     # VAR5: TIME (seconds since midnight) -> Duration
     assert df.schema["VAR5"] == pl.Duration
     assert df["VAR5"][0] == timedelta(seconds=52932)
+
+
+def test_n_max_zero_returns_schema_and_metadata():
+    """n_max=0 must open the file: full schema + metadata, zero rows
+    (haven behavior), not a schemaless empty frame."""
+    sas_file = next((Path(__file__).parent / "data" / "sas").glob("*.sas7bdat"))
+    df, meta = read_sas(sas_file, n_max=0)
+    assert df.height == 0
+    assert len(df.columns) > 0
+    assert [v["name"] for v in meta["vars"]] == df.columns
+    assert meta["n_rows"] == 0
+
+
+def test_n_max_zero_nonexistent_path_raises():
+    import pytest
+
+    with pytest.raises(Exception):
+        read_sas(Path(__file__).parent / "data" / "sas" / "does_not_exist.sas7bdat", n_max=0)

@@ -134,16 +134,12 @@ def read_dta(
         from svy_io.sas import apply_value_labels  # reuse shared impl
 
     n_max = _normalize_n_max(n_max)
-    if n_max == 0:
-        empty = pl.DataFrame({})
-        meta: Dict[str, Any] = {
-            "file_label": None,
-            "vars": [],
-            "value_labels": [],
-            "user_missing": [],
-            "n_rows": 0,
-        }
-        return empty, meta
+    # n_max=0: still open and validate the file, returning the full schema
+    # and metadata with zero rows (haven behavior). The native layer treats
+    # n_max=0 as 1, so fetch one row and truncate after parsing.
+    zero_rows = n_max == 0
+    if zero_rows:
+        n_max = 1
 
     # Rust does the heavy lifting here (with GIL released).
     with _as_path(data_path) as _path:
@@ -168,6 +164,10 @@ def read_dta(
             df = pl.read_ipc_stream(bio)
         else:
             raise
+
+    if zero_rows:
+        df = df.head(0)
+        meta["n_rows"] = 0
 
     # Apply transformations
     if coerce_temporals:
@@ -201,16 +201,12 @@ def read_stata_arrow(
     from pyarrow import ArrowInvalid
 
     n_max = _normalize_n_max(n_max)
-    if n_max == 0:
-        empty = pa.table({})
-        meta = {
-            "file_label": None,
-            "vars": [],
-            "value_labels": [],
-            "user_missing": [],
-            "n_rows": 0,
-        }
-        return empty, meta
+    # n_max=0: still open and validate the file, returning the full schema
+    # and metadata with zero rows (haven behavior). The native layer treats
+    # n_max=0 as 1, so fetch one row and truncate after parsing.
+    zero_rows = n_max == 0
+    if zero_rows:
+        n_max = 1
 
     with _as_path(data_path) as _path:
         ipc_bytes, meta_json = native.df_parse_dta_file(  # type: ignore[attr-defined]
@@ -229,6 +225,9 @@ def read_stata_arrow(
 
     meta = json.loads(meta_json)
     meta["user_missing"] = normalize_user_missing(meta)
+    if zero_rows:
+        table = table.slice(0, 0)
+        meta["n_rows"] = 0
     return table, meta
 
 
@@ -238,9 +237,16 @@ def read_stata_arrow(
 
 
 def _stata_file_format(version: int) -> int:
-    """Pre-computed dict lookup"""
+    """Map a Stata release (8-15) or internal format code to a format code."""
     v = int(version)
+    # Internal format codes: only these actually exist (116 and 120 don't).
+    _VALID_FORMATS = {113, 114, 115, 117, 118, 119}
     if v >= 113:
+        if v not in _VALID_FORMATS:
+            raise ValueError(
+                f"Unsupported Stata file format {version!r} "
+                f"(valid formats: {sorted(_VALID_FORMATS)}, or Stata versions 8-15)"
+            )
         return v
 
     version_map = {
@@ -385,9 +391,15 @@ def _adjust_temporals(df: pl.DataFrame, *, adjust_tz: bool) -> pl.DataFrame:
                 else s.dt.convert_time_zone("UTC").dt.replace_time_zone(None)
             )
             new_series.append(s2.alias(name))
-        except Exception:
-            # If any conversion fails, skip that column silently
-            pass
+        except (pl.exceptions.PolarsError, ValueError) as ex:
+            import warnings
+
+            warnings.warn(
+                f"Could not adjust timezone for column {name!r}; "
+                f"writing it unchanged ({ex}).",
+                UserWarning,
+                stacklevel=2,
+            )
 
     return df.with_columns(new_series) if new_series else df
 

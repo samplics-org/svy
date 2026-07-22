@@ -797,3 +797,24 @@ def test_write_sav_does_not_mutate_caller_value_labels():
             os.unlink(tmp_path)
 
     assert value_labels == before
+
+
+def test_write_sav_labels_per_column_under_global_string_cache(tmp_path):
+    """Regression: under a global pl.StringCache, categorical columns used to
+    emit value labels for EVERY string in the cache (and cache-order codes),
+    not just their own categories."""
+    with pl.StringCache():
+        df = pl.DataFrame(
+            {
+                "a": pl.Series(["x", "y", "x"]).cast(pl.Categorical),
+                "b": pl.Series(["p", "q", "q"]).cast(pl.Categorical),
+            }
+        )
+    path = tmp_path / "cache.sav"
+    write_sav(df, path)
+    _, meta = read_sav(path)
+
+    by_col = {v["name"]: v.get("label_set") for v in meta["vars"]}
+    label_sets = {vl["set_name"]: vl["mapping"] for vl in meta["value_labels"]}
+    assert set(label_sets[by_col["a"]].values()) == {"x", "y"}
+    assert set(label_sets[by_col["b"]].values()) == {"p", "q"}

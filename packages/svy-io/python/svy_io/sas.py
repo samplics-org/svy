@@ -347,7 +347,10 @@ def as_factor_expr(
             mapping_utf8["__svy_label"].to_list(),
         )
     )
-    label_expr = key_expr.replace(repl)
+    # Unlabelled values map to null (haven / factor.as_factor behavior);
+    # the "default"/"both" branches below fall back to the raw value
+    # explicitly via otherwise(key_expr).
+    label_expr = key_expr.replace_strict(repl, default=None)
 
     if levels in {"default", "both"}:
         if levels == "both":
@@ -569,16 +572,12 @@ def read_sas(
     n_max = _normalize_n_max(n_max)
 
     # Fast-path: explicitly requesting zero rows
-    if n_max == 0:
-        empty = pl.DataFrame({})
-        meta: Dict[str, Any] = {
-            "file_label": None,
-            "vars": [],
-            "value_labels": [],
-            "user_missing": [],
-            "n_rows": 0,
-        }
-        return empty, meta
+    # n_max=0: still open and validate the file, returning the full schema
+    # and metadata with zero rows (haven behavior). The native layer treats
+    # n_max=0 as 1, so fetch one row and truncate after parsing.
+    zero_rows = n_max == 0
+    if zero_rows:
+        n_max = 1
 
     # Temp artifacts (spooled file-like inputs, zip extraction dir) live
     # only for the duration of the native parse.
@@ -619,6 +618,10 @@ def read_sas(
     # Decode metadata JSON
     meta: Dict[str, Any] = json.loads(meta_json)
     meta["user_missing"] = normalize_user_missing(meta)
+
+    if zero_rows:
+        df = df.head(0)
+        meta["n_rows"] = 0
 
     # Optional post-processing (order chosen to mirror typical haven workflows)
     if coerce_temporals:
@@ -673,17 +676,12 @@ def read_sas_arrow(
     from pyarrow import ArrowInvalid
 
     n_max = _normalize_n_max(n_max)
-    if n_max == 0:
-        # empty table with no fields; keep behavior consistent
-        empty = pa.table({})
-        meta = {
-            "file_label": None,
-            "vars": [],
-            "value_labels": [],
-            "user_missing": [],
-            "n_rows": 0,
-        }
-        return empty, meta
+    # n_max=0: still open and validate the file, returning the full schema
+    # and metadata with zero rows (haven behavior). The native layer treats
+    # n_max=0 as 1, so fetch one row and truncate after parsing.
+    zero_rows = n_max == 0
+    if zero_rows:
+        n_max = 1
 
     ipc_bytes, meta_json = native.df_parse_sas_file(  # type: ignore[attr-defined]
         data_path, catalog_path, encoding, catalog_encoding, cols_skip, n_max, rows_skip
@@ -699,6 +697,9 @@ def read_sas_arrow(
 
     meta = json.loads(meta_json)
     meta["user_missing"] = normalize_user_missing(meta)
+    if zero_rows:
+        table = table.slice(0, 0)
+        meta["n_rows"] = 0
     return table, meta
 
 

@@ -562,11 +562,11 @@ class LabelledSPSS(Labelled):
             label=self.label or template.label,
         )
 
-    def to_int(self) -> List[int]:
-        """Convert to integer list"""
+    def to_int(self) -> List[Optional[int]]:
+        """Convert to integer list; missing values stay None (never 0)."""
         if not _is_numeric_seq(self.data):
             raise TypeError("Cannot convert string labelled to int")
-        return [int(v) if v is not None else 0 for v in self.data]
+        return [int(v) if v is not None else None for v in self.data]
 
     def to_float(self) -> List[float]:
         """Convert to float list"""

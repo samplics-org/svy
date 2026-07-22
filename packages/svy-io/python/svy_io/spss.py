@@ -274,14 +274,12 @@ def read_sav(
     """Fast, file-like–safe SPSS .sav reader (ReadStat backend)."""
     n_max = _normalize_n_max(n_max)
 
-    if n_max == 0:
-        return pl.DataFrame({}), {
-            "file_label": None,
-            "vars": [],
-            "value_labels": [],
-            "user_missing": [],
-            "n_rows": 0,
-        }
+    # n_max=0: still open and validate the file, returning the full schema
+    # and metadata with zero rows (haven behavior). The native layer treats
+    # n_max=0 as 1, so fetch one row and truncate below.
+    zero_rows = n_max == 0
+    if zero_rows:
+        n_max = 1
 
     normalized_cols_skip = _normalize_cols_skip(cols_skip)
 
@@ -307,6 +305,10 @@ def read_sav(
             df = pl.read_ipc_stream(bio)
         else:
             raise
+
+    if zero_rows:
+        df = df.head(0)
+        meta["n_rows"] = 0
 
     # Normalize names BEFORE downstream processing
     df, meta = _normalize_names(df, meta)
@@ -340,14 +342,12 @@ def read_por(
     """Fast, file-like–safe SPSS .por reader (ReadStat backend)."""
     n_max = _normalize_n_max(n_max)
 
-    if n_max == 0:
-        return pl.DataFrame({}), {
-            "file_label": None,
-            "vars": [],
-            "value_labels": [],
-            "user_missing": [],
-            "n_rows": 0,
-        }
+    # n_max=0: still open and validate the file, returning the full schema
+    # and metadata with zero rows (haven behavior). The native layer treats
+    # n_max=0 as 1, so fetch one row and truncate below.
+    zero_rows = n_max == 0
+    if zero_rows:
+        n_max = 1
 
     normalized_cols_skip = _normalize_cols_skip(cols_skip)
 
@@ -372,6 +372,10 @@ def read_por(
             df = pl.read_ipc_stream(bio)
         else:
             raise
+
+    if zero_rows:
+        df = df.head(0)
+        meta["n_rows"] = 0
 
     df, meta = _normalize_names(df, meta)
 
@@ -512,14 +516,21 @@ def write_sav(
 
     for col_name in to_write.columns:
         if to_write[col_name].dtype == pl.Categorical:
-            cats = to_write[col_name].cat.get_categories()
+            # Encode against the categories actually present in THIS column.
+            # get_categories()/to_physical() reflect the dtype's category
+            # store, which under a global pl.StringCache contains every
+            # string interned by any column — leaking foreign labels and
+            # cache-order-dependent codes into the file.
+            str_col = to_write[col_name].cast(pl.String)
+            cats = str_col.drop_nulls().unique(maintain_order=True).to_list()
+            code_map = {c: float(i + 1) for i, c in enumerate(cats)}
 
-            # Convert to 1-based codes
-            codes = (to_write[col_name].to_physical() + 1).cast(pl.Float64)
+            # Convert to per-column 1-based codes
+            codes = str_col.replace_strict(code_map, default=None, return_dtype=pl.Float64)
             categorical_exprs.append(codes.alias(col_name))
 
-            # Create value labels
-            labels = {str(i + 1): cats[i] for i in range(len(cats))}
+            # Create value labels (only this column's categories)
+            labels = {str(i + 1): c for i, c in enumerate(cats)}
             categorical_labels[col_name] = labels
 
     if categorical_exprs:
