@@ -329,3 +329,188 @@ class TestClear:
         )
         removed = _cache.clear("s")
         assert removed == 2
+
+
+# --------------------------------------------------------------------------- #
+# Security: slug validation, https enforcement, TOFU pinning
+# --------------------------------------------------------------------------- #
+
+
+class TestSlugValidation:
+    @pytest.mark.parametrize(
+        "bad_slug",
+        [
+            "../evil",
+            "..",
+            "a/../../b",
+            "a/b",
+            "a\\b",
+            ".hidden",
+            "*",
+            "toy@1",
+            "",
+            "a b",
+        ],
+    )
+    def test_bad_slugs_rejected(self, bad_slug):
+        with pytest.raises(DatasetError) as exc_info:
+            _cache.ensure_cached(
+                slug=bad_slug,
+                version="1.0",
+                url="https://svylab.test/data/x.parquet",
+                sha256="",
+            )
+        assert exc_info.value.code == "DATASET_INVALID_SLUG"
+
+    def test_traversal_slug_writes_nothing_outside_cache(self, tmp_path):
+        with pytest.raises(DatasetError):
+            _cache.path_for("../outside", "1.0")
+
+    def test_clear_rejects_glob_slug(self):
+        with pytest.raises(DatasetError):
+            _cache.clear("*")
+
+    @pytest.mark.parametrize("good_slug", ["toy", "phia_like", "acs.2023", "a-b_c", "x1"])
+    def test_good_slugs_accepted(self, good_slug):
+        p = _cache.path_for(good_slug, "1.0")
+        assert p.name == f"{good_slug}@1.0.parquet"
+
+
+class TestHttpsEnforcement:
+    def test_http_url_rejected(self):
+        with pytest.raises(DatasetError) as exc_info:
+            _cache.ensure_cached(
+                slug="toy",
+                version="1.0",
+                url="http://svylab.test/data/toy.parquet",
+                sha256="",
+            )
+        assert exc_info.value.code == "DATASET_INSECURE_URL"
+
+    def test_non_http_scheme_rejected(self):
+        with pytest.raises(DatasetError) as exc_info:
+            _cache.ensure_cached(
+                slug="toy",
+                version="1.0",
+                url="ftp://svylab.test/data/toy.parquet",
+                sha256="",
+            )
+        assert exc_info.value.code == "DATASET_INSECURE_URL"
+
+    def test_http_localhost_allowed(self, routes, make_parquet):
+        data, sha = make_parquet(n_rows=5)
+        routes.add_bytes("/data/toy.parquet", data)
+        path = _cache.ensure_cached(
+            slug="toy",
+            version="1.0",
+            url="http://127.0.0.1/data/toy.parquet",
+            sha256=sha,
+        )
+        assert Path(path).exists()
+
+    def test_redirect_downgrade_to_http_rejected(self, routes, make_parquet):
+        """An https download 302'd to plain http must fail, not follow."""
+        import httpx
+
+        data, _sha = make_parquet(n_rows=5)
+        routes.add(
+            "/data/redirect.parquet",
+            lambda req: httpx.Response(
+                302, headers={"location": "http://evil.test/data/payload.parquet"}
+            ),
+        )
+        routes.add_bytes("/data/payload.parquet", data)
+        with pytest.raises(DatasetError) as exc_info:
+            _cache.ensure_cached(
+                slug="toy",
+                version="1.0",
+                url="https://svylab.test/data/redirect.parquet",
+                sha256="",
+            )
+        assert exc_info.value.code == "DATASET_INSECURE_URL"
+        assert not list(_cache.CACHE_DIR.glob("*.parquet"))
+
+
+class TestTofuPinning:
+    def _url(self):
+        return "https://svylab.test/data/toy.parquet"
+
+    def test_first_download_writes_pin(self, routes, make_parquet):
+        data, sha = make_parquet(n_rows=10)
+        routes.add_bytes("/data/toy.parquet", data)
+        path = _cache.ensure_cached(slug="toy", version="1.0", url=self._url(), sha256="")
+        pin = _cache._pin_path(Path(path))
+        assert pin.exists()
+        assert pin.read_text().strip() == sha
+
+    def test_pin_enforced_on_redownload(self, routes, make_parquet):
+        """Content change without a version bump must be rejected."""
+        data1, _ = make_parquet(n_rows=10)
+        data2, _ = make_parquet(n_rows=11)  # different content
+        routes.add_bytes("/data/toy.parquet", data1)
+        _cache.ensure_cached(slug="toy", version="1.0", url=self._url(), sha256="")
+
+        # Server now returns different bytes for the same slug@version.
+        routes._routes.clear()
+        routes.add_bytes("/data/toy.parquet", data2)
+        with pytest.raises(DatasetError) as exc_info:
+            _cache.ensure_cached(
+                slug="toy", version="1.0", url=self._url(), sha256="", force=True
+            )
+        assert exc_info.value.code == "DATASET_SHA_MISMATCH"
+
+    def test_corrupted_cache_restored_from_pin(self, routes, make_parquet):
+        data, sha = make_parquet(n_rows=10)
+        routes.add_bytes("/data/toy.parquet", data)
+        path = _cache.ensure_cached(slug="toy", version="1.0", url=self._url(), sha256="")
+
+        # Corrupt the cached file and wipe the session-verified memo.
+        Path(path).write_bytes(b"corrupted")
+        _cache._verified.clear()
+
+        path2 = _cache.ensure_cached(slug="toy", version="1.0", url=self._url(), sha256="")
+        assert Path(path2).read_bytes() == data
+
+    def test_preexisting_cache_entry_gets_pinned(self, routes, make_parquet):
+        """A cache file from before TOFU pinning is adopted, not re-fetched."""
+        data, sha = make_parquet(n_rows=10)
+        dest = _cache.path_for("toy", "1.0")
+        dest.write_bytes(data)
+
+        path = _cache.ensure_cached(slug="toy", version="1.0", url=self._url(), sha256="")
+        assert Path(path) == dest
+        assert _cache._read_pin(dest) == sha
+        assert len(routes.hits) == 0  # no network
+
+    def test_catalog_hash_takes_precedence_over_pin(self, routes, make_parquet):
+        """Once the backend serves sha256, it wins over any local pin."""
+        data1, _ = make_parquet(n_rows=10)
+        data2, sha2 = make_parquet(n_rows=11)
+        routes.add_bytes("/data/toy.parquet", data1)
+        _cache.ensure_cached(slug="toy", version="1.0", url=self._url(), sha256="")
+
+        routes._routes.clear()
+        routes.add_bytes("/data/toy.parquet", data2)
+        # Catalog-provided hash for the new content: accepted despite old pin.
+        path = _cache.ensure_cached(
+            slug="toy", version="1.0", url=self._url(), sha256=sha2, force=True
+        )
+        assert Path(path).read_bytes() == data2
+
+    def test_clear_removes_pins(self, routes, make_parquet):
+        data, _ = make_parquet(n_rows=10)
+        routes.add_bytes("/data/toy.parquet", data)
+        _cache.ensure_cached(slug="toy", version="1.0", url=self._url(), sha256="")
+        assert len(list(_cache.CACHE_DIR.glob("*.sha256"))) == 1
+        _cache.clear("toy")
+        assert not list(_cache.CACHE_DIR.glob("*.sha256"))
+
+    def test_corrupt_pin_is_ignored_and_rewritten(self, routes, make_parquet):
+        data, sha = make_parquet(n_rows=10)
+        routes.add_bytes("/data/toy.parquet", data)
+        dest = _cache.path_for("toy", "1.0")
+        _cache._pin_path(dest).parent.mkdir(parents=True, exist_ok=True)
+        _cache._pin_path(dest).write_text("not-a-hash\n")
+
+        _cache.ensure_cached(slug="toy", version="1.0", url=self._url(), sha256="")
+        assert _cache._read_pin(dest) == sha
