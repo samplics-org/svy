@@ -4,9 +4,11 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import tempfile
 import zipfile
 
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -134,7 +136,12 @@ def get_na_tag(value) -> str | None:
 
 
 # ----------------  Helper functions ----------------
-def _as_path_like(obj) -> str:
+def _as_path_like(obj, stack: ExitStack) -> str:
+    """Resolve a path or file-like object to a filesystem path.
+
+    File-like objects are spooled to a private temp file that is removed
+    when ``stack`` closes (i.e. right after the native parse).
+    """
     # already a path-like?
     if isinstance(obj, (str, os.PathLike)):
         return str(obj)
@@ -142,18 +149,21 @@ def _as_path_like(obj) -> str:
     if hasattr(obj, "read"):
         with tempfile.NamedTemporaryFile(suffix=".sas7bdat", delete=False) as tmp:
             tmp.write(obj.read())
-            return tmp.name
+        stack.callback(lambda p=tmp.name: os.unlink(p) if os.path.exists(p) else None)
+        return tmp.name
     raise TypeError("data_path must be a path or a file-like object")
 
 
-def _maybe_from_zip(path: str) -> tuple[str, str | None]:
+def _maybe_from_zip(path: str, stack: ExitStack) -> tuple[str, str | None]:
     """
     Extract SAS files from a zip archive.
     Returns (sas_path, catalog_path_or_None).
 
-    Note: Creates temporary files in a system temp directory.
-    The caller doesn't need to clean up - the OS will handle it eventually,
-    but for immediate cleanup you could track the temp dir if needed.
+    Extraction goes into a fresh private directory (not the shared system
+    temp dir, whose predictable member-derived paths invited cross-run
+    collisions and symlink planting on multi-user machines).  The
+    directory is removed when ``stack`` closes, right after the native
+    parse — the caller never needs the extracted files afterwards.
     """
     if not str(path).lower().endswith(".zip"):
         return path, None
@@ -181,10 +191,9 @@ def _maybe_from_zip(path: str) -> tuple[str, str | None]:
                 UserWarning,
             )
 
-        # Extract to temp directory
-        # Note: Using tempfile with delete=False means files persist
-        # but are in the system temp dir which gets cleaned periodically
-        temp_base = tempfile.gettempdir()
+        # Private per-call extraction dir, cleaned up with the stack.
+        temp_base = tempfile.mkdtemp(prefix="svy_io_zip_")
+        stack.callback(shutil.rmtree, temp_base, ignore_errors=True)
 
         # Extract data file
         sas_path = z.extract(sas_files[0], path=temp_base)
@@ -571,27 +580,30 @@ def read_sas(
         }
         return empty, meta
 
-    data_path = _as_path_like(data_path)
+    # Temp artifacts (spooled file-like inputs, zip extraction dir) live
+    # only for the duration of the native parse.
+    with ExitStack() as _tmp_stack:
+        data_path = _as_path_like(data_path, _tmp_stack)
 
-    # Handle zip files
-    if str(data_path).lower().endswith(".zip"):
-        extracted_path, extracted_catalog = _maybe_from_zip(data_path)
-        data_path = extracted_path
-        # Use extracted catalog if no explicit catalog_path was provided
-        if catalog_path is None and extracted_catalog:
-            catalog_path = extracted_catalog
-    elif catalog_path is not None:
-        catalog_path = _as_path_like(catalog_path)
+        # Handle zip files
+        if str(data_path).lower().endswith(".zip"):
+            extracted_path, extracted_catalog = _maybe_from_zip(data_path, _tmp_stack)
+            data_path = extracted_path
+            # Use extracted catalog if no explicit catalog_path was provided
+            if catalog_path is None and extracted_catalog:
+                catalog_path = extracted_catalog
+        elif catalog_path is not None:
+            catalog_path = _as_path_like(catalog_path, _tmp_stack)
 
-    ipc_bytes, meta_json = native.df_parse_sas_file(  # type: ignore[attr-defined]
-        data_path,
-        catalog_path,
-        encoding,
-        catalog_encoding,
-        cols_skip,
-        n_max,
-        rows_skip,
-    )
+        ipc_bytes, meta_json = native.df_parse_sas_file(  # type: ignore[attr-defined]
+            data_path,
+            catalog_path,
+            encoding,
+            catalog_encoding,
+            cols_skip,
+            n_max,
+            rows_skip,
+        )
 
     # Robust loader: try FILE first; if footer is missing, use STREAM.
     bio = io.BytesIO(ipc_bytes)
