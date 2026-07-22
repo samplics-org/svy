@@ -18,9 +18,17 @@ Design notes
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, ClassVar, Mapping
 
 import msgspec
+
+
+def _fmt_size(n_bytes: int) -> str:
+    """Human-readable file size (KB under 1 MB, else MB)."""
+    mb = n_bytes / (1024 * 1024)
+    if mb >= 1:
+        return f"{mb:.1f} MB"
+    return f"{n_bytes / 1024:.0f} KB"
 
 
 class Dataset(msgspec.Struct, frozen=True, kw_only=True):
@@ -57,6 +65,10 @@ class Dataset(msgspec.Struct, frozen=True, kw_only=True):
         entries (``label``, ``unit``, ``categories``, etc.).
     tags : tuple[str, ...]
         Free-form tags for discovery.
+    notes : str
+        Important caveats about this specific dataset — e.g. how a bundled
+        subset was derived/tweaked from the full remote version.  Empty for
+        datasets with nothing to flag.
     """
 
     slug: str
@@ -74,8 +86,195 @@ class Dataset(msgspec.Struct, frozen=True, kw_only=True):
     design: Mapping[str, Any] | None = None
     variables: Mapping[str, Mapping[str, Any]] = {}
     tags: tuple[str, ...] = ()
+    notes: str = ""
 
     def summary(self) -> str:
         """One-line human-readable summary for list displays."""
         size_mb = self.size_bytes / (1024 * 1024)
         return f"{self.slug:<24} {self.title:<40} {self.n_rows:>10,} rows  {size_mb:>6.1f} MB"
+
+    # ---- display ---------------------------------------------------------
+    # Class-level print-width override (ClassVar so msgspec treats it as a
+    # class attribute, not a struct field).
+    PRINT_WIDTH: ClassVar[int | None] = None
+
+    def __rich_console__(self, console, options):
+        from rich.table import Table as RTable
+
+        from svy.ui.printing import make_panel
+
+        t = RTable(
+            show_header=False,
+            box=None,
+            show_edge=False,
+            pad_edge=False,
+            expand=False,
+            padding=(0, 2),
+        )
+        t.add_column("Field", justify="left", no_wrap=True, style="bold")
+        # Cap the value width so long descriptions wrap instead of stretching
+        # the panel.
+        t.add_column("Value", justify="left", overflow="fold", max_width=60)
+
+        t.add_row("Title", self.title)
+        t.add_row("Description", self.description or "—")
+        t.add_row("Rows × Cols", f"{self.n_rows:,} × {self.n_cols}")
+        t.add_row("Size", _fmt_size(self.size_bytes))
+        t.add_row("Version", self.version)
+        # One row per design key so long designs stay readable.
+        if self.design:
+            t.add_row("Design", "")
+            for key, value in self.design.items():
+                t.add_row("", f"{key} = {value!r}")
+        else:
+            t.add_row("Design", "—")
+        t.add_row("Source", self.source or "—")
+        t.add_row("License", self.license or "—")
+        if self.tags:
+            t.add_row("Tags", ", ".join(self.tags))
+        # Notes last — it's the longest, wrapping field.
+        if self.notes:
+            t.add_row("Notes", self.notes)
+        yield make_panel([t], title=f"Dataset: {self.slug}", obj=self, kind="panel")
+
+    def __plain_str__(self) -> str:
+        lines = [
+            f"Dataset: {self.slug}",
+            f"  Title       : {self.title}",
+            f"  Description : {self.description}",
+            f"  Rows x Cols : {self.n_rows:,} x {self.n_cols}",
+            f"  Size        : {_fmt_size(self.size_bytes)}",
+            f"  Version     : {self.version}",
+        ]
+        if self.design:
+            lines.append("  Design      :")
+            for key, value in self.design.items():
+                lines.append(f"      {key} = {value!r}")
+        else:
+            lines.append("  Design      : —")
+        if self.notes:
+            lines.append(f"  Notes       : {self.notes}")
+        return "\n".join(lines)
+
+    def __str__(self) -> str:
+        from svy.ui.printing import render_rich_to_str, resolve_width
+
+        try:
+            return render_rich_to_str(self, width=resolve_width(self))
+        except Exception:
+            return self.__plain_str__()
+
+    # Plain (no ANSI) repr — safe in logs and renders cleanly as a bare
+    # expression in notebooks. Use print() / str() for the rich panel.
+    def __repr__(self) -> str:
+        return self.__plain_str__()
+
+
+class DatasetCatalog(tuple):
+    """
+    An immutable, iterable collection of :class:`Dataset` records.
+
+    Behaves exactly like a ``tuple`` (index it, iterate it, ``len()`` it) but
+    prints as a compact table and can be exported to Polars.  Use
+    :meth:`get` to drill into a single dataset's full metadata.
+    """
+
+    PRINT_WIDTH: int | None = None
+
+    def get(self, slug: str) -> Dataset:
+        """Return the :class:`Dataset` with ``slug``.
+
+        Raises
+        ------
+        DatasetError
+            With code ``DATASET_NOT_FOUND`` if no dataset has that slug.
+        """
+        for ds in self:
+            if ds.slug == slug:
+                return ds
+        from svy.errors.dataset_errors import DatasetError
+
+        raise DatasetError.not_found(where="DatasetCatalog.get", slug=slug)
+
+    @property
+    def slugs(self) -> tuple[str, ...]:
+        """The slugs of every dataset in the catalog."""
+        return tuple(ds.slug for ds in self)
+
+    def to_polars(self):
+        """Return the catalog as a Polars DataFrame (one row per dataset)."""
+        import polars as pl
+
+        return pl.DataFrame(
+            {
+                "slug": [d.slug for d in self],
+                "title": [d.title for d in self],
+                "rows": [d.n_rows for d in self],
+                "cols": [d.n_cols for d in self],
+                "size_mb": [round(d.size_bytes / (1024 * 1024), 2) for d in self],
+            }
+        )
+
+    def __rich_console__(self, console, options):
+        from rich import box
+        from rich.table import Table
+        from rich.text import Text
+
+        from svy.ui.printing import make_panel
+
+        # Header: summary stats (borderless key/value grid).
+        header = Table(show_header=False, box=None, pad_edge=False, expand=False, padding=(0, 2))
+        header.add_column(justify="left", style="bold")
+        header.add_column(justify="left")
+        header.add_row("Number of datasets", str(len(self)))
+        if self:
+            header.add_row("Total size", _fmt_size(sum(d.size_bytes for d in self)))
+
+        # Body: one row per dataset, with a header rule (svy house style).
+        # The title is cropped with an ellipsis when it exceeds the column.
+        table = Table(
+            show_header=True,
+            header_style="bold",
+            box=box.SIMPLE_HEAVY,
+            show_edge=True,
+            show_lines=False,
+            pad_edge=False,
+            expand=False,
+            padding=(0, 2),
+        )
+        table.add_column("slug", justify="left", no_wrap=True)
+        table.add_column("title", justify="left", no_wrap=True, overflow="ellipsis", max_width=40)
+        table.add_column("rows", justify="right", no_wrap=True)
+        table.add_column("cols", justify="right", no_wrap=True)
+        table.add_column("size", justify="right", no_wrap=True)
+        for d in self:
+            table.add_row(
+                d.slug, d.title, f"{d.n_rows:,}", str(d.n_cols), _fmt_size(d.size_bytes)
+            )
+
+        yield make_panel([header, Text(""), table], title="Datasets", obj=self, kind="panel")
+
+    def __plain_str__(self) -> str:
+        lines = [f"Datasets: {len(self)}"]
+        if self:
+            lines.append(f"Total size: {_fmt_size(sum(d.size_bytes for d in self))}")
+        lines.append("")
+        for d in self:
+            lines.append(
+                f"  {d.slug:<24} {d.n_rows:>10,} rows  {d.n_cols:>3} cols  "
+                f"{_fmt_size(d.size_bytes):>8}"
+            )
+        return "\n".join(lines)
+
+    def __str__(self) -> str:
+        from svy.ui.printing import render_rich_to_str, resolve_width
+
+        try:
+            return render_rich_to_str(self, width=resolve_width(self))
+        except Exception:
+            return self.__plain_str__()
+
+    # Plain (no ANSI) repr — safe in logs; use print() / str() for the rich
+    # table.
+    def __repr__(self) -> str:
+        return self.__plain_str__()

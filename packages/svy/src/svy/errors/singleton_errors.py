@@ -55,6 +55,7 @@ class SingletonError(SvyError):
         lines.append("")
         lines.append("Variance cannot be estimated with unhandled singleton PSUs.")
         lines.append("Inspect them with sample.singleton.summary(), then pick a strategy:")
+        lines.append("")
         lines.append("  • sample.singleton.certainty()  — treat as self-representing units")
         lines.append("  • sample.singleton.skip()       — drop from variance (R 'remove')")
         lines.append("  • sample.singleton.center()     — grand-mean centering (R 'adjust')")

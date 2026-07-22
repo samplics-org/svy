@@ -19,7 +19,7 @@ from svy.errors.dataset_errors import DatasetError
 
 
 SLUG = "hld_sample_wb_2023"
-BUNDLED_ROWS = 1075
+BUNDLED_ROWS = 825
 
 
 def _simulate_offline(routes) -> None:
@@ -58,10 +58,19 @@ def test_offline_env_makes_auto_use_bundled_without_network(monkeypatch, routes)
     assert routes.hits == []
 
 
-def test_source_bundled_unknown_slug_raises_not_found():
+def test_source_bundled_unknown_slug_raises_not_bundled():
     with pytest.raises(DatasetError) as ei:
         d.load("does_not_exist", source="bundled")
-    assert ei.value.code == "DATASET_NOT_FOUND"
+    assert ei.value.code == "DATASET_NOT_BUNDLED"
+
+
+def test_online_only_dataset_bundled_raises_clean_not_bundled():
+    # The individual census exists online but is intentionally not bundled;
+    # asking for it offline should point the user at source="remote".
+    with pytest.raises(DatasetError) as ei:
+        d.load("ind_pop_wb_2023", source="bundled")
+    assert ei.value.code == "DATASET_NOT_BUNDLED"
+    assert "remote" in (ei.value.hint or "")
 
 
 def test_catalog_bundled_lists_only_bundled(routes):
@@ -140,3 +149,53 @@ def test_corrupt_registry_degrades_to_no_bundled(monkeypatch):
         assert _bundled.has(SLUG) is False
     finally:
         _bundled._registry.cache_clear()
+
+
+# --------------------------------------------------------------------------- #
+# DatasetCatalog / Dataset display types
+# --------------------------------------------------------------------------- #
+
+
+def test_catalog_is_dataset_catalog_and_tuple():
+    from svy.datasets import DatasetCatalog
+
+    cat = d.catalog(source="bundled")
+    assert isinstance(cat, DatasetCatalog)
+    assert isinstance(cat, tuple)  # backward compatible: still indexable/iterable
+    assert cat.get(SLUG).slug == SLUG
+    assert SLUG in cat.slugs
+
+
+def test_catalog_get_returns_dataset():
+    ds = d.catalog(source="bundled").get(SLUG)
+    assert ds.slug == SLUG
+    assert ds.design == {"stratum": ["geo1", "urbrur"], "psu": "ea", "wgt": "hhweight"}
+
+
+def test_catalog_get_unknown_raises_not_found():
+    with pytest.raises(DatasetError) as ei:
+        d.catalog(source="bundled").get("does_not_exist")
+    assert ei.value.code == "DATASET_NOT_FOUND"
+
+
+def test_catalog_to_polars():
+    df = d.catalog(source="bundled").to_polars()
+    assert df.height == 4
+    assert {"slug", "title", "rows", "cols", "size_mb"}.issubset(df.columns)
+
+
+def test_bundled_datasets_carry_notes():
+    # Every bundled dataset documents that it was derived from the remote data.
+    for ds in d.catalog(source="bundled"):
+        assert ds.notes
+        assert "remote" in ds.notes
+
+
+def test_catalog_and_dataset_str_render():
+    cat = d.catalog(source="bundled")
+    # DatasetCatalog renders a table listing the slugs
+    assert SLUG in str(cat)
+    # A single Dataset renders a panel with its slug and a Description field
+    ds_str = str(cat.get(SLUG))
+    assert SLUG in ds_str
+    assert "Description" in ds_str

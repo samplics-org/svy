@@ -233,18 +233,20 @@ class SvyError(Exception):
             from rich.table import Table
             from rich.text import Text
 
-            # Try to import custom renderers from the library.
-            # console.renderers is optional — fall back to plain text if absent.
+            # Try to import the shared Rich renderers from the library.
+            # Optional — fall back to plain text if absent.
             try:
-                from ..console.renderers import make_panel, styles  # type: ignore[import]
+                from ..ui.printing import make_panel, styles  # type: ignore[import]
             except ImportError:
                 yield self.text()
                 return
 
             s = styles(self, kind="error")  # ← use theme-driven error styles
 
-            # Header
-            header = Text("❌ ", style=s["title"])
+            # Header. Use a width-1 marker (✗) rather than an emoji: emoji
+            # occupy two terminal cells but render ~1 in HTML/browser fonts,
+            # which knocks the panel's right border out of alignment in docs.
+            header = Text("✗ ", style=s["title"])
             header.append(self.title, style=s["title"])
             header.append(f" [{self.code}]", style="dim")
 
@@ -273,14 +275,19 @@ class SvyError(Exception):
             if self.docs_url:
                 add("docs", Text(self.docs_url, style="link " + self.docs_url))
 
-            # Assemble inside a branded panel
+            # Assemble inside a branded panel, with blank rows separating the
+            # title, body, and metadata so the panel breathes.
             content = Table.grid()
             content.add_row(header)
+            content.add_row(Text(""))
             content.add_row(body)
             if len(meta.rows):
+                content.add_row(Text(""))
                 content.add_row(meta)
 
-            yield make_panel([content], title="", obj=self, kind="error")
+            from rich.padding import Padding
+
+            yield make_panel([Padding(content, (1, 1))], title="", obj=self, kind="error")
         except Exception:
             # Graceful fallback if rich missing or any error
             yield self.text()

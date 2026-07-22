@@ -50,14 +50,14 @@ import warnings
 from svy.datasets import _bundled, api
 from svy.datasets._cache import clear as _clear_cache
 from svy.datasets.base import Source, _offline_env, load
-from svy.datasets.types import Dataset
+from svy.datasets.types import Dataset, DatasetCatalog
 from svy.errors.dataset_errors import DatasetError
 
 
 _CATALOG_UNREACHABLE = {"CATALOG_UNREACHABLE", "CATALOG_BAD_STATUS"}
 
 
-def catalog(*, use_cache: bool = True, source: Source = "auto") -> tuple[Dataset, ...]:
+def catalog(*, use_cache: bool = True, source: Source = "auto") -> DatasetCatalog:
     """
     Return all available datasets.
 
@@ -98,7 +98,11 @@ def describe(slug: str, *, use_cache: bool = True, source: Source = "auto") -> D
     if source == "bundled" or (source == "auto" and _offline_env()):
         ds = _bundled.describe(slug)
         if ds is None:
-            raise DatasetError.not_found(where="datasets.describe(source='bundled')", slug=slug)
+            raise DatasetError.not_bundled(
+                where="datasets.describe(source='bundled')",
+                slug=slug,
+                bundled=sorted(_bundled.slugs()),
+            )
         return ds
     if source == "remote":
         return api.describe(slug, use_cache=use_cache)
@@ -142,6 +146,7 @@ __all__ = [
     "clear_cache",
     # Types
     "Dataset",
+    "DatasetCatalog",
     # Errors (re-exported for convenience; canonical location is svy.errors)
     "DatasetError",
 ]

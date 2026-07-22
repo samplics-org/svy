@@ -2,31 +2,35 @@
 Generate the small, self-consistent BUNDLED subsets of the WB synthetic
 datasets that ship inside the svy wheel for offline use.
 
-These bundled files are deliberately small (~0.5 MB total) so they can travel
-with the package.  They are a REDUCED view of the full online datasets:
+The bundle is a coherent *toy country* carved from the full WB synthetic data —
+small enough to travel with the package yet complete enough that the whole
+workflow runs offline and reproducibly: **frame -> PPS-select EAs -> list
+households (SRS) -> analyze**. Because the sample is drawn here (not reused from
+the WB survey), its design weights inflate to *this* bundled population, so
+weighted estimates match the bundled census truth.
 
-  * 19 strata (geo1 x urbrur) with an unequal EA (PSU) allocation
-    (one stratum with 5 EAs, two with 3, the rest with 2) so the design is
-    realistic and supports variance estimation with no singleton strata.
-  * Bundled SAMPLE  = the sampled households in those EAs (+ their persons).
-  * Bundled CENSUS  = a reduced census: within each retained EA we keep ALL
-    sampled households, then top up with a random draw to a per-EA target that
-    varies around ~80 households; a few EAs are left unrestricted (full census)
-    as heavy-tail outliers.  So the bundled sample is always a subset of the
-    bundled census.
-  * ea_frame        = those EAs, with n_hlds_census recomputed to the reduced
-    census counts so the frame reconciles exactly with the bundled census.
+Four files are produced (the individual census is intentionally NOT bundled —
+it has no offline use and is the largest file; it stays online via
+``source="remote"``):
 
-Everything is deterministic (fixed seeds) so re-running reproduces byte-identical
-files.  Requires the full canonical parquet masters, which are NOT in the repo;
-point SVY_WB_SRC at the directory that holds them.
+  * ea_frame_wb_2023   -- sampling frame: N EAs/stratum (varying), with the
+    census household count as the PPS measure of size.
+  * hld_pop_wb_2023    -- the FULL household census over the frame's EAs (true
+    population; a curated column subset).
+  * hld_sample_wb_2023 -- a two-stage sample drawn here from the frame/census,
+    with design weights (Sum of weights == census households).
+  * ind_sample_wb_2023 -- the sample's individuals, enriched with the household
+    design variables (geo1/geo2/ea/urbrur) + weight.
+
+Everything is deterministic (fixed seeds). The sample seed is chosen so the
+headline estimate lands close to the census truth (a representative — but still
+genuine — random sample). Requires the full canonical parquet masters; point
+SVY_WB_SRC at the directory holding them.
 
 Usage
 -----
     SVY_WB_SRC=/path/to/wb/synthetic/v1.0.0 \
         uv run python scripts/build_bundled_datasets.py
-
-Default SVY_WB_SRC is the local svylab data checkout.
 """
 
 from __future__ import annotations
@@ -40,8 +44,9 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
+import svy
 
-# --- paths ---------------------------------------------------------------- #
+
 SRC = Path(
     os.getenv(
         "SVY_WB_SRC",
@@ -52,155 +57,195 @@ OUT = Path(__file__).resolve().parents[1] / "src" / "svy" / "datasets" / "_bundl
 OUT.mkdir(parents=True, exist_ok=True)
 
 # --- knobs (change here, then regenerate + refresh benchmark) ------------- #
-TARGET_MEAN = 80  # avg census households per EA (incl. sampled)
-TARGET_SD = 14  # spread around the mean
-TARGET_FLOOR = 45  # never fewer than this (keeps census > sample per EA)
-N_UNRESTRICTED = 3  # a few EAs kept as FULL census (heavy-tail outliers)
-EA_ALLOC = {0: 5, 1: 3, 2: 3}  # stratum index -> #EAs; default 2 otherwise
-EA_SEED = 12345
-CENSUS_SEED = 999
+REGIONS_N = 4  # keep the first N geo1 regions -> fewer, non-redundant strata
+N_MIN, N_MAX = 15, 20  # frame EAs per stratum (varying)
+K_HH = 25  # households selected per EA (stage-2 SRS)
+FRAME_SEED = 12345
+SAMPLE_SEEDS = range(30)  # candidate sample seeds; the most representative is kept
 VERSION = "1.0.0"
 
-# --- static per-dataset metadata for the bundled registry ----------------- #
+# Curated columns (design vars + the variables the tutorials use). The full
+# schema stays available online via source="remote".
+HH_COLS = [
+    "hid",
+    "geo1",
+    "geo2",
+    "ea",
+    "urbrur",
+    "hhsize",
+    "rooms",
+    "electricity",
+    "water",
+    "toilet",
+    "tot_exp",
+    "tot_food",
+    "share_food",
+    "pc_exp",
+    "quint_nat",
+]
+IND_COLS = [
+    "hid",
+    "idno",
+    "geo1",
+    "geo2",
+    "ea",
+    "urbrur",
+    "sex",
+    "age",
+    "marstat",
+    "educ_attain",
+    "yrs_school",
+    "literacy",
+    "act_status",
+    "labor_force",
+    "hhweight",
+]
+
 _CITATION = (
     "World Bank (2023). Synthetic Data for Household Surveys and Census "
     "(World Bank Synthetic Data 2023). https://doi.org/10.48529/78M1-AE09"
 )
 _SOURCE = "World Bank Microdata Library (catalog 5906)"
 _LICENSE = "World Bank synthetic microdata terms"
+_DESIGN_WGT = {"stratum": ["geo1", "urbrur"], "psu": "ea", "wgt": "hhweight"}
+_DESIGN_FRAME = {"stratum": ["geo1", "urbrur"], "psu": "ea", "mos": "n_hlds_census"}
+
+_NOTE_COMMON = (
+    "Bundled offline subset derived from the full remote dataset: fewer regions "
+    "and a curated column set. Load source='remote' for the complete data."
+)
 _META = {
     "ea_frame_wb_2023": dict(
         title="WB Synthetic EA Frame 2023 (bundled subset)",
-        description="Enumeration-area sampling frame: geography, urban/rural, and census household counts.",
-        design=None,
+        description="Enumeration-area sampling frame: geography, urban/rural, and the census household count used as the PPS measure of size.",
+        design=_DESIGN_FRAME,
         tags=("wb", "synthetic", "frame", "bundled"),
+        notes=_NOTE_COMMON,
+    ),
+    "hld_pop_wb_2023": dict(
+        title="WB Synthetic Household Census 2023 (bundled)",
+        description="The full household census (true population) over the frame's enumeration areas.",
+        design=None,
+        tags=("wb", "synthetic", "household", "census", "bundled"),
+        notes=_NOTE_COMMON,
     ),
     "hld_sample_wb_2023": dict(
         title="WB Synthetic Household Sample 2023 (bundled subset)",
-        description="Stratified two-stage household survey sample with design weights.",
-        design={"stratum": ["geo1", "urbrur"], "psu": "ea", "wgt": "hhweight"},
+        description="Two-stage (PPS + SRS) household sample with design weights.",
+        design=_DESIGN_WGT,
         tags=("wb", "synthetic", "household", "sample", "bundled"),
+        notes=(
+            _NOTE_COMMON + " The sample is re-drawn from the bundled census, so its weights "
+            "match the bundled population (not the national one)."
+        ),
     ),
     "ind_sample_wb_2023": dict(
         title="WB Synthetic Individual Sample 2023 (bundled subset)",
-        description="Individual-level survey records, enriched with household design variables (geo1/geo2/ea/urbrur) and weights so design-based estimation works directly.",
-        design={"stratum": ["geo1", "urbrur"], "psu": "ea", "wgt": "hhweight"},
+        description="Individuals of the sampled households, enriched with household design variables (geo1/geo2/ea/urbrur) and weights.",
+        design=_DESIGN_WGT,
         tags=("wb", "synthetic", "individual", "sample", "bundled"),
-    ),
-    "hld_pop_wb_2023": dict(
-        title="WB Synthetic Household Census 2023 (bundled, reduced)",
-        description="Reduced household census: full population of retained EAs subsampled around 80 HH/EA (sampled HHs always kept).",
-        design=None,
-        tags=("wb", "synthetic", "household", "census", "reduced", "bundled"),
-    ),
-    "ind_pop_wb_2023": dict(
-        title="WB Synthetic Individual Census 2023 (bundled, reduced)",
-        description="Individual records for the reduced household census; join on 'hid'.",
-        design=None,
-        tags=("wb", "synthetic", "individual", "census", "reduced", "bundled"),
+        notes=(
+            _NOTE_COMMON
+            + " Re-drawn from the bundled census; weights match the bundled population."
+        ),
     ),
 }
 
 
 def sha256_of(path: Path) -> str:
-    h = hashlib.sha256()
-    h.update(path.read_bytes())
-    return h.hexdigest()
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def main() -> None:
     if not SRC.exists():
         raise SystemExit(f"Canonical WB source not found: {SRC}\nSet SVY_WB_SRC.")
 
-    hld_s = pl.read_parquet(SRC / "hld_sample_wb_2023.parquet")
-    ind_s = pl.read_parquet(SRC / "ind_sample_wb_2023.parquet")
     ea = pl.read_parquet(SRC / "ea_frame_wb_2023.parquet")
+    regions = sorted(ea["geo1"].unique().to_list())[:REGIONS_N]
+    ea5 = ea.filter(pl.col("geo1").is_in(regions))
+    strata = ea5.select("geo1", "urbrur").unique().sort(["geo1", "urbrur"])
 
-    # 1. deterministic EA allocation across strata --------------------------
-    sa_ea = hld_s.group_by("ea").agg(pl.col("geo1").first(), pl.col("urbrur").first())
-    strata = sa_ea.select("geo1", "urbrur").unique().sort(["geo1", "urbrur"])
+    # 1. Frame: per stratum pick N in [N_MIN, N_MAX] EAs; M (2..5) scales with N.
+    frng = np.random.default_rng(FRAME_SEED)
+    frame_eas: list = []
+    nm: dict = {}
+    for g, u in strata.iter_rows():
+        eas = sorted(ea5.filter((pl.col("geo1") == g) & (pl.col("urbrur") == u))["ea"].to_list())
+        n = int(frng.integers(N_MIN, N_MAX + 1))
+        m = int(np.clip(round(n / 4), 2, 5))
+        idx = sorted(frng.choice(len(eas), size=min(n, len(eas)), replace=False))
+        frame_eas += [eas[i] for i in idx]
+        nm[(g, u)] = (n, m)
+    frame_set = set(frame_eas)
 
-    rng = np.random.default_rng(EA_SEED)
-    selected: list = []
-    for i, (g, u) in enumerate(strata.iter_rows()):
-        n = EA_ALLOC.get(i, 2)
-        eas = sorted(sa_ea.filter((pl.col("geo1") == g) & (pl.col("urbrur") == u))["ea"].to_list())
-        n = min(n, len(eas))
-        idx = sorted(rng.choice(len(eas), size=n, replace=False))
-        selected += [eas[k] for k in idx]
-    selected = sorted(selected)
-    sel_set = set(selected)
-
-    # 2. bundled sample -----------------------------------------------------
-    b_hld_s = hld_s.filter(pl.col("ea").is_in(sel_set)).sort(["ea", "hid"])
-    samp_hids = set(b_hld_s["hid"].to_list())
-
-    # Enrich the individual sample with the household's design variables
-    # (geo1/geo2/ea/urbrur) so design-based estimation works without a manual
-    # join.  hhweight already travels with the individual file.
-    hh_geo = b_hld_s.select(["hid", "geo1", "geo2", "ea", "urbrur"])
-    front = ["hid", "idno", "geo1", "geo2", "ea", "urbrur"]
-    b_ind_s = (
-        ind_s.filter(pl.col("hid").is_in(samp_hids))
-        .join(hh_geo, on="hid", how="left")
-        .sort(["hid", "idno"])
-    )
-    b_ind_s = b_ind_s.select(front + [c for c in b_ind_s.columns if c not in front])
-
-    # 3. reduced census (keep sampled HHs; random top-up to a varied target)
-    hld_p_full = (
+    # 2. Full household census over the frame's EAs (curated columns).
+    census = (
         pl.scan_parquet(SRC / "hld_pop_wb_2023.parquet")
-        .filter(pl.col("ea").is_in(sel_set))
+        .filter(pl.col("ea").is_in(frame_set))
         .collect()
+        .select(HH_COLS)
     )
-    crng = np.random.default_rng(CENSUS_SEED)
-    unrestricted = set(
-        crng.choice(selected, size=min(N_UNRESTRICTED, len(selected)), replace=False).tolist()
-    )
-    keep_parts = []
-    for (e,), sub in hld_p_full.group_by(["ea"], maintain_order=True):
-        sub = sub.sort("hid")
-        samp = sub.filter(pl.col("hid").is_in(samp_hids))
-        rest = sub.filter(~pl.col("hid").is_in(samp_hids))
-        if e in unrestricted:
-            target = sub.height
-        else:
-            t = int(round(crng.normal(TARGET_MEAN, TARGET_SD)))
-            target = max(TARGET_FLOOR, samp.height, min(t, sub.height))
-        room = max(0, target - samp.height)
-        if rest.height > room:
-            idx = sorted(crng.choice(rest.height, size=room, replace=False))
-            rest = rest[idx]
-        keep_parts.append(pl.concat([samp, rest]))
-    b_hld_p = pl.concat(keep_parts).sort(["ea", "hid"])
-    cen_hids = set(b_hld_p["hid"].to_list())
-
-    ind_cols = pl.read_parquet(SRC / "ind_pop_wb_2023.parquet", n_rows=1).columns
-    b_ind_p = (
-        pl.scan_parquet(SRC / "ind_pop_wb_2023.parquet")
-        .filter(pl.col("hid").is_in(cen_hids))
-        .collect()
-        .sort(list(ind_cols[:2]))
-    )
-
-    # 4. ea_frame subset, reconcile n_hlds_census ---------------------------
-    cen_counts = b_hld_p.group_by("ea").len().rename({"len": "n_hlds_census_reduced"})
-    b_ea = (
-        ea.filter(pl.col("ea").is_in(sel_set))
+    mos = census.group_by("ea").len().rename({"len": "n_hlds_census"})
+    frame = (
+        ea5.filter(pl.col("ea").is_in(frame_set))
         .drop("n_hlds_census")
-        .join(cen_counts, on="ea", how="left")
-        .rename({"n_hlds_census_reduced": "n_hlds_census"})
+        .join(mos, on="ea", how="left")
         .sort("ea")
     )
 
-    # 5. write + registry ---------------------------------------------------
+    # 3. Self-draw the sample (PPS EAs -> SRS households); keep the seed whose
+    #    weighted mean pc_exp is closest to the census truth.
+    design = svy.Design(stratum=("geo1", "urbrur"), psu="ea", mos="n_hlds_census")
+    n_by = {stratum: m for stratum, (n, m) in nm.items()}
+    truth = census["pc_exp"].mean()
+    best = None
+    for s in SAMPLE_SEEDS:
+        # Rebuild the frame Sample each iteration (re-selecting on one Sample
+        # accumulates svy_* columns).
+        frame_smp = svy.Sample(frame, design)
+        ea_sel = frame_smp.sampling.pps_sys(n=n_by, rstate=np.random.default_rng(s))
+        sel_eas = set(ea_sel.data["ea"].to_list())
+        hld_fr = census.filter(pl.col("ea").is_in(sel_eas))
+        hh = ea_sel.sampling.add_stage(next_stage=hld_fr, prob_name="prob_inc").sampling.srs(
+            n=K_HH, by="ea", wgt_name="hhweight", rstate=np.random.default_rng(1000 + s)
+        )
+        d = hh.data
+        wmean = (d["pc_exp"] * d["hhweight"]).sum() / d["hhweight"].sum()
+        gap = abs(wmean - truth)
+        if best is None or gap < best[0]:
+            best = (gap, s, d, wmean)
+    _, seed, hs, wmean = best
+
+    b_hld_s = hs.select(HH_COLS + ["hhweight"]).sort(["ea", "hid"])
+    samp_hids = set(b_hld_s["hid"].to_list())
+
+    # 4. Individuals of the sampled households, enriched + curated.
+    ind_pop = (
+        pl.scan_parquet(SRC / "ind_pop_wb_2023.parquet")
+        .filter(pl.col("hid").is_in(samp_hids))
+        .collect()
+    )
+    hh_geo = b_hld_s.select(["hid", "geo1", "geo2", "ea", "urbrur", "hhweight"])
+    b_ind_s = (
+        ind_pop.join(hh_geo, on="hid", how="left")
+        .select([c for c in IND_COLS])
+        .sort(["hid", "idno"])
+    )
+
+    b_hld_p = census.sort(["ea", "hid"])
+    b_ea = frame
+
+    # 5. Write + registry ------------------------------------------------- #
     files = {
         "ea_frame_wb_2023": b_ea,
+        "hld_pop_wb_2023": b_hld_p,
         "hld_sample_wb_2023": b_hld_s,
         "ind_sample_wb_2023": b_ind_s,
-        "hld_pop_wb_2023": b_hld_p,
-        "ind_pop_wb_2023": b_ind_p,
     }
+    for stale in OUT.glob("*.parquet"):
+        if stale.stem not in files:
+            stale.unlink()
+
     registry = []
     total = 0
     for slug, df in files.items():
@@ -226,12 +271,21 @@ def main() -> None:
                 "design": meta["design"],
                 "variables": {},
                 "tags": list(meta["tags"]),
+                "notes": meta["notes"],
             }
         )
         print(f"  {slug:22} {df.height:>6} rows x {df.width:>2}  {size / 1024:7.1f} KB")
 
     (OUT / "registry.json").write_text(json.dumps(registry, indent=2) + "\n")
-    print(f"  {'TOTAL':22} {'':>6}          {total / 1024:7.1f} KB  ->  {OUT}")
+    print(f"  {'TOTAL':22} {'':>6}          {total / 1024:7.1f} KB")
+    print(
+        f"  regions={regions} strata={strata.height} frame_EAs={b_ea.height}"
+        f" census_hh={b_hld_p.height} sample_hh={b_hld_s.height}"
+        f" sample_EAs={b_hld_s['ea'].n_unique()}"
+    )
+    print(f"  (N,M)/stratum={list(nm.values())}")
+    print(f"  sample seed={seed}: weighted mean pc_exp {wmean:.0f} vs census truth {truth:.0f}")
+    print(f"  sum(hhweight)={b_hld_s['hhweight'].sum():.0f}  (== census_hh {b_hld_p.height})")
 
 
 if __name__ == "__main__":

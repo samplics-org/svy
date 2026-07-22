@@ -2,35 +2,67 @@
   {
     "slug": "ea_frame_wb_2023",
     "title": "WB Synthetic EA Frame 2023 (bundled subset)",
-    "description": "Enumeration-area sampling frame: geography, urban/rural, and census household counts.",
+    "description": "Enumeration-area sampling frame: geography, urban/rural, and the census household count used as the PPS measure of size.",
     "version": "1.0.0",
     "filename": "ea_frame_wb_2023.parquet",
-    "sha256": "2699b03a31e79152edf075908f443b2c41a3ce2614d2ba605d19e122f270068e",
-    "size_bytes": 2317,
-    "n_rows": 43,
+    "sha256": "cf32c38f7df0cd44b7dda80ca7012ac09e6fb9e00ebb365267820f6a62823fea",
+    "size_bytes": 2806,
+    "n_rows": 133,
     "n_cols": 5,
     "license": "World Bank synthetic microdata terms",
     "citation": "World Bank (2023). Synthetic Data for Household Surveys and Census (World Bank Synthetic Data 2023). https://doi.org/10.48529/78M1-AE09",
     "source": "World Bank Microdata Library (catalog 5906)",
-    "design": null,
+    "design": {
+      "stratum": [
+        "geo1",
+        "urbrur"
+      ],
+      "psu": "ea",
+      "mos": "n_hlds_census"
+    },
     "variables": {},
     "tags": [
       "wb",
       "synthetic",
       "frame",
       "bundled"
-    ]
+    ],
+    "notes": "Bundled offline subset derived from the full remote dataset: fewer regions and a curated column set. Load source='remote' for the complete data."
+  },
+  {
+    "slug": "hld_pop_wb_2023",
+    "title": "WB Synthetic Household Census 2023 (bundled)",
+    "description": "The full household census (true population) over the frame's enumeration areas.",
+    "version": "1.0.0",
+    "filename": "hld_pop_wb_2023.parquet",
+    "sha256": "7458321d93dd02893c3c69543b39432f689140b555393f2e5959abec9d4f1110",
+    "size_bytes": 1043122,
+    "n_rows": 57867,
+    "n_cols": 15,
+    "license": "World Bank synthetic microdata terms",
+    "citation": "World Bank (2023). Synthetic Data for Household Surveys and Census (World Bank Synthetic Data 2023). https://doi.org/10.48529/78M1-AE09",
+    "source": "World Bank Microdata Library (catalog 5906)",
+    "design": null,
+    "variables": {},
+    "tags": [
+      "wb",
+      "synthetic",
+      "household",
+      "census",
+      "bundled"
+    ],
+    "notes": "Bundled offline subset derived from the full remote dataset: fewer regions and a curated column set. Load source='remote' for the complete data."
   },
   {
     "slug": "hld_sample_wb_2023",
     "title": "WB Synthetic Household Sample 2023 (bundled subset)",
-    "description": "Stratified two-stage household survey sample with design weights.",
+    "description": "Two-stage (PPS + SRS) household sample with design weights.",
     "version": "1.0.0",
     "filename": "hld_sample_wb_2023.parquet",
-    "sha256": "ac3f25e9d2f76fd7f2c80cd081b47e2e39c368886b537e025d80643264ffd224",
-    "size_bytes": 75112,
-    "n_rows": 1075,
-    "n_cols": 49,
+    "sha256": "c3a00bb37705ade0807543efeda2109e5b472141f6df2d73d17aa8445971a015",
+    "size_bytes": 24210,
+    "n_rows": 825,
+    "n_cols": 16,
     "license": "World Bank synthetic microdata terms",
     "citation": "World Bank (2023). Synthetic Data for Household Surveys and Census (World Bank Synthetic Data 2023). https://doi.org/10.48529/78M1-AE09",
     "source": "World Bank Microdata Library (catalog 5906)",
@@ -49,18 +81,19 @@
       "household",
       "sample",
       "bundled"
-    ]
+    ],
+    "notes": "Bundled offline subset derived from the full remote dataset: fewer regions and a curated column set. Load source='remote' for the complete data. The sample is re-drawn from the bundled census, so its weights match the bundled population (not the national one)."
   },
   {
     "slug": "ind_sample_wb_2023",
     "title": "WB Synthetic Individual Sample 2023 (bundled subset)",
-    "description": "Individual-level survey records, enriched with household design variables (geo1/geo2/ea/urbrur) and weights so design-based estimation works directly.",
+    "description": "Individuals of the sampled households, enriched with household design variables (geo1/geo2/ea/urbrur) and weights.",
     "version": "1.0.0",
     "filename": "ind_sample_wb_2023.parquet",
-    "sha256": "78551e6b17f50aa96453d2193ea0baf3ba4d39e9522a8d403a72bf5a29f43a8e",
-    "size_bytes": 62703,
-    "n_rows": 4580,
-    "n_cols": 31,
+    "sha256": "31f0be4f3083c6d853e8d469e3c04cf5e68b13117b1c7a5a92e12fe4857618f9",
+    "size_bytes": 30121,
+    "n_rows": 3246,
+    "n_cols": 15,
     "license": "World Bank synthetic microdata terms",
     "citation": "World Bank (2023). Synthetic Data for Household Surveys and Census (World Bank Synthetic Data 2023). https://doi.org/10.48529/78M1-AE09",
     "source": "World Bank Microdata Library (catalog 5906)",
@@ -79,54 +112,7 @@
       "individual",
       "sample",
       "bundled"
-    ]
-  },
-  {
-    "slug": "hld_pop_wb_2023",
-    "title": "WB Synthetic Household Census 2023 (bundled, reduced)",
-    "description": "Reduced household census: full population of retained EAs subsampled around 80 HH/EA (sampled HHs always kept).",
-    "version": "1.0.0",
-    "filename": "hld_pop_wb_2023.parquet",
-    "sha256": "673cac503794e8175c2993b93bd0dff746a15f7e4ce5a3ed03b7169ee5861b62",
-    "size_bytes": 214055,
-    "n_rows": 4500,
-    "n_cols": 47,
-    "license": "World Bank synthetic microdata terms",
-    "citation": "World Bank (2023). Synthetic Data for Household Surveys and Census (World Bank Synthetic Data 2023). https://doi.org/10.48529/78M1-AE09",
-    "source": "World Bank Microdata Library (catalog 5906)",
-    "design": null,
-    "variables": {},
-    "tags": [
-      "wb",
-      "synthetic",
-      "household",
-      "census",
-      "reduced",
-      "bundled"
-    ]
-  },
-  {
-    "slug": "ind_pop_wb_2023",
-    "title": "WB Synthetic Individual Census 2023 (bundled, reduced)",
-    "description": "Individual records for the reduced household census; join on 'hid'.",
-    "version": "1.0.0",
-    "filename": "ind_pop_wb_2023.parquet",
-    "sha256": "d5e88add37cf8e30569c67fc099570fb2926cbcd6032fa9d8487e37bbe08b23d",
-    "size_bytes": 175222,
-    "n_rows": 19766,
-    "n_cols": 26,
-    "license": "World Bank synthetic microdata terms",
-    "citation": "World Bank (2023). Synthetic Data for Household Surveys and Census (World Bank Synthetic Data 2023). https://doi.org/10.48529/78M1-AE09",
-    "source": "World Bank Microdata Library (catalog 5906)",
-    "design": null,
-    "variables": {},
-    "tags": [
-      "wb",
-      "synthetic",
-      "individual",
-      "census",
-      "reduced",
-      "bundled"
-    ]
+    ],
+    "notes": "Bundled offline subset derived from the full remote dataset: fewer regions and a curated column set. Load source='remote' for the complete data. Re-drawn from the bundled census; weights match the bundled population."
   }
 ]

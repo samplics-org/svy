@@ -8,6 +8,21 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+## [0.19.1] — 2026-07-21
+
+### Added
+
+- **Bundled offline example datasets.** `svy.datasets.load` / `catalog` / `describe` now take a `source=` argument — `"bundled"`, `"remote"`, or `"auto"` (default: remote if reachable, else bundled). A small, self-consistent synthetic survey — a sampling frame, its household census, and a two-stage sample drawn from that census (design weights sum to the census) — ships inside the wheel, so the docs and your own experiments run fully offline and reproducibly. `SVYLAB_OFFLINE=1` forces the bundled path.
+- **`DatasetCatalog` type and richer `Dataset` metadata.** `catalog()` returns a `DatasetCatalog` that prints as a compact table and drills into any entry's full metadata with `.get(slug)` (also `.slugs`, `.to_polars()`). `Dataset` prints as a branded panel and gained a `notes` field documenting how a bundled subset was derived from its remote counterpart.
+
+### Changed
+
+- **All dataset failures route through the `DatasetError` taxonomy** with actionable messages and codes: `DATASET_NOT_BUNDLED` (lists the available bundled slugs), `DATASET_DOWNLOAD_FAILED`, and `BUNDLED_UNAVAILABLE`, alongside the existing not-found, catalog, and integrity errors.
+
+### Fixed
+
+- **`SvyError` panels render again.** The Rich panel path imported its renderers from a module that had since been renamed, so every error silently fell back to plain text; it now renders the branded panel. The panel also stays aligned in HTML/notebook output — the status marker is a width-1 glyph instead of a two-cell emoji — and the title, body, and metadata are spaced for readability.
+
 ## [0.19.0] — 2026-07-12
 
 ### Added
@@ -31,6 +46,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.19.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.19.1...HEAD
+[0.19.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.19.1
 [0.19.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.19.0
 [0.18.2]: https://github.com/samplics-org/svy/releases/tag/svy-v0.18.2
