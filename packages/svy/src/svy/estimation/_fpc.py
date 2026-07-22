@@ -76,7 +76,7 @@ def compute_fpc_columns(
 
         if ssu_pop_col in data.columns and psu_col is not None:
             data, fpc_ssu_col_name = build_fpc_ssu_column(
-                data, ssu_pop_col, psu_col, ssu_col, _FPC_SSU_COL
+                data, ssu_pop_col, strata_col, psu_col, ssu_col, _FPC_SSU_COL
             )
         elif ssu_pop_col not in data.columns:
             log.warning("FPC SSU column '%s' not found in data; skipping SSU FPC.", ssu_pop_col)
@@ -216,6 +216,7 @@ def build_fpc_psu_column(
 def build_fpc_ssu_column(
     data: pl.DataFrame,
     pop_col: str,
+    strata_col: str | None,
     psu_col: str,
     ssu_col: str | None,
     out_col: str,
@@ -223,11 +224,16 @@ def build_fpc_ssu_column(
     """
     Build per-row FPC column for SSU level: (M_hi - m_hi) / M_hi.
 
-    M_hi is the SSU population size within PSU i (from pop_col, constant within PSU).
-    m_hi is the number of distinct SSUs sampled in PSU i.
+    M_hi is the SSU population size within PSU hi (from pop_col, constant within PSU).
+    m_hi is the number of distinct SSUs sampled in PSU hi.
     If ssu_col is None, falls back to counting rows per PSU.
+
+    PSUs are identified by (stratum, psu) when strata_col is given: PSU labels
+    are commonly reused across strata (numbered 1..k within each stratum), so
+    grouping by the PSU label alone would merge distinct PSUs.
     """
     _WHERE = "estimation.fpc"
+    psu_keys = [strata_col, psu_col] if strata_col is not None else [psu_col]
 
     # Validate: all values must be >= 1 (population counts)
     min_val = data[pop_col].cast(pl.Float64).min()
@@ -244,11 +250,11 @@ def build_fpc_ssu_column(
             hint="Use population counts (e.g., 50), not sampling fractions (e.g., 0.3).",
         )
 
-    # Validate: pop_col must be constant within each PSU
-    n_unique_per_psu = data.group_by(psu_col).agg(pl.col(pop_col).n_unique().alias("__nuniq__"))
+    # Validate: pop_col must be constant within each (stratum, PSU)
+    n_unique_per_psu = data.group_by(psu_keys).agg(pl.col(pop_col).n_unique().alias("__nuniq__"))
     non_constant = n_unique_per_psu.filter(pl.col("__nuniq__") > 1)
     if non_constant.height > 0:
-        bad_psus = non_constant[psu_col].to_list()
+        bad_psus = non_constant.select(psu_keys).rows()
         raise DimensionError(
             title="FPC not constant within PSUs",
             detail=f"FPC column '{pop_col}' varies within PSUs: {bad_psus}. "
@@ -267,7 +273,7 @@ def build_fpc_ssu_column(
         if (ssu_col is not None and ssu_col in data.columns)
         else pl.len().alias("__m_hi__")
     )
-    psu_stats = data.group_by(psu_col).agg(
+    psu_stats = data.group_by(psu_keys).agg(
         ssu_agg,
         pl.col(pop_col).first().cast(pl.Float64).alias("__M_hi__"),
     )
@@ -276,7 +282,7 @@ def build_fpc_ssu_column(
     check = psu_stats
     bad = check.filter(pl.col("__M_hi__") < pl.col("__m_hi__").cast(pl.Float64))
     if bad.height > 0:
-        bad_psus = bad[psu_col].to_list()
+        bad_psus = bad.select(psu_keys).rows()
         raise DimensionError(
             title="FPC population size < sample size",
             detail=f"FPC column '{pop_col}' has population size < sample size "
@@ -294,7 +300,7 @@ def build_fpc_ssu_column(
         ((pl.col("__M_hi__") - pl.col("__m_hi__").cast(pl.Float64)) / pl.col("__M_hi__"))
         .clip(0.0, 1.0)
         .alias(out_col)
-    ).select([psu_col, out_col])
+    ).select([*psu_keys, out_col])
 
-    data = data.join(psu_fpc, on=psu_col, how="left")
+    data = data.join(psu_fpc, on=psu_keys, how="left")
     return data, out_col
