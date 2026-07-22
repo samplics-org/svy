@@ -179,8 +179,16 @@ class Categorical:
         -------
         Table
             Frequency table with estimates and statistics.
+
+        Notes
+        -----
+        Confidence intervals use the t distribution with design degrees of
+        freedom (#PSUs - #strata) throughout: logit-transformed for
+        proportions, Wald for counts. This matches Stata's ``svy: tabulate``
+        and svy's ``estimation.total``. R's ``confint()`` default on
+        ``svytotal`` uses the normal critical value instead; to reproduce
+        svy's count CIs in R, pass ``df = degf(design)`` to ``confint()``.
         """
-        from scipy.stats import norm as norm_dist
         from scipy.stats import t as t_dist
 
         _raw = self._sample._data
@@ -256,7 +264,6 @@ class Categorical:
         # Unpack cells DataFrame into CellEst objects — vectorized CI computation
         df_val = int(cells_df["df"][0]) if cells_df.height > 0 else 1
         t_crit = float(t_dist.ppf(1 - alpha / 2, df_val))
-        z_crit = float(norm_dist.ppf(1 - alpha / 2))
 
         import re
 
@@ -281,8 +288,10 @@ class Categorical:
         colvar_arr = cells_df["colvar"].to_list()
 
         if compute_totals:
-            lci_arr = est_arr - z_crit * se_arr
-            uci_arr = est_arr + z_crit * se_arr
+            # Wald CI with design-df t, matching estimation.total and the
+            # proportion branch below (z was anti-conservative for few PSUs)
+            lci_arr = est_arr - t_crit * se_arr
+            uci_arr = est_arr + t_crit * se_arr
         else:
             # Logit CI — fully vectorized with masked ops
             valid = (est_arr > 0) & (est_arr < 1) & (se_arr > 0)
