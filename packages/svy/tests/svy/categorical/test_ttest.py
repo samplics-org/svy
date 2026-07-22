@@ -17,7 +17,10 @@ def synthetic_sample_df():
 
 # =============================================================================
 # One-sample t-tests (validated against R survey::svyttest)
-# R code: svyttest((income - 49000) ~ 0, design)
+# R code (domain semantics — drop_nulls=True zero-weights null-y rows,
+# matching R's subset()/na.rm rather than complete-case filtering):
+#   d <- d[!is.na(d$samp_wgt), ]
+#   svyttest(I(income - 49000) ~ 0, subset(design, !is.na(income)))
 # =============================================================================
 
 
@@ -32,13 +35,13 @@ def synthetic_sample_df():
                 "mean_h0": 49000.0,
                 "diff": {
                     "diff": 1074.67752319406,
-                    "lci": -23.6195289575892,
-                    "uci": 2172.97457534571,
+                    "lci": -23.6138630618943,
+                    "uci": 2172.96890945002,
                 },
                 "stats": {
                     "df": 978,
-                    "t": 1.92019015818427,
-                    "p_value": 0.0551244705549979,
+                    "t": 1.92020006411387,
+                    "p_value": 0.0551232181108886,
                 },
             },
             id="wgt_only",
@@ -51,13 +54,13 @@ def synthetic_sample_df():
                 "mean_h0": 49000.0,
                 "diff": {
                     "diff": 1074.67752319406,
-                    "lci": -22.9486460227943,
-                    "uci": 2172.30369241092,
+                    "lci": -22.9479087984971,
+                    "uci": 2172.30295518662,
                 },
                 "stats": {
                     "df": 975,
-                    "t": 1.9213711278677,
-                    "p_value": 0.0549762171990232,
+                    "t": 1.92137241836393,
+                    "p_value": 0.0549760544033834,
                 },
             },
             id="stratified",
@@ -138,7 +141,8 @@ def test_ttest_one_sample(synthetic_sample_df, design_kwargs, expected):
 
 # =============================================================================
 # Two-sample t-tests (validated against R survey::svyttest)
-# R code: svyttest(income ~ sex, design)
+# R code (domain semantics, as above):
+#   svyttest(income ~ sex, subset(design, !is.na(income) & !is.na(sex)))
 # =============================================================================
 
 
@@ -153,13 +157,13 @@ def test_ttest_one_sample(synthetic_sample_df, design_kwargs, expected):
                 "group": "sex",
                 "diff": {
                     "diff": 613.853666827849,
-                    "lci": -1602.5984722108,
-                    "uci": 2830.3058058665,
+                    "lci": -1602.57536792248,
+                    "uci": 2830.28270157818,
                 },
                 "stats": {
                     "df": 968,
-                    "t": 0.543497996398159,
-                    "p_value": 0.586912107586439,
+                    "t": 0.543503661878178,
+                    "p_value": 0.586908209384493,
                 },
             },
             id="wgt_only",
@@ -172,13 +176,13 @@ def test_ttest_one_sample(synthetic_sample_df, design_kwargs, expected):
                 "group": "sex",
                 "diff": {
                     "diff": 613.853666827849,
-                    "lci": -1605.59049367938,
-                    "uci": 2833.29782733508,
+                    "lci": -1605.50597009859,
+                    "uci": 2833.21330375429,
                 },
                 "stats": {
                     "df": 965,
-                    "t": 0.542767421877551,
-                    "p_value": 0.587415277179469,
+                    "t": 0.542788092996043,
+                    "p_value": 0.587401048592969,
                 },
             },
             id="stratified",
