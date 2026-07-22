@@ -546,5 +546,95 @@ class TestD9GroupLabelsUnderWhere:
         assert by_map["s2"].groups.levels == ("B", "C")
 
 
+# =============================================================================
+# D10: Custom score_fn must honor by= (one test per by-level, not pooled)
+# =============================================================================
+
+
+def _wilcoxon_score(rankhat, n_hat):
+    # Same transformation as the Rust built-in Wilcoxon/Kruskal-Wallis score
+    # (svy-rs categorical/ranktest.rs: g(r) = r / N), so results must match
+    # the built-in method exactly.
+    return rankhat / n_hat
+
+
+class TestD10CustomScoreFnBy:
+    """Regression tests: score_fn used to silently ignore by= and return a
+    single pooled test presented as the per-group answer."""
+
+    def test_custom_wilcoxon_matches_builtin(self, sample_strat_clust):
+        r_custom = sample_strat_clust.categorical.ranktest(
+            y="income",
+            group="sex",
+            score_fn=_wilcoxon_score,
+            drop_nulls=True,
+        )
+        r_builtin = sample_strat_clust.categorical.ranktest(
+            y="income",
+            group="sex",
+            method=RankScoreMethod.KRUSKAL_WALLIS,
+            drop_nulls=True,
+        )
+        assert r_custom.groups.levels == r_builtin.groups.levels
+        assert r_custom.stats.value == pytest.approx(r_builtin.stats.value, rel=1e-10)
+        assert r_custom.stats.df == pytest.approx(r_builtin.stats.df, rel=1e-10)
+        assert r_custom.stats.p_value == pytest.approx(r_builtin.stats.p_value, rel=1e-10)
+        assert r_custom.diff[0].diff == pytest.approx(r_builtin.diff[0].diff, rel=1e-10)
+
+    def test_custom_score_by_returns_per_level_results(self, sample_strat_clust):
+        from svy.categorical.ranktest import RankTestByResult
+
+        r_custom = sample_strat_clust.categorical.ranktest(
+            y="income",
+            group="sex",
+            score_fn=_wilcoxon_score,
+            by="region",
+            drop_nulls=True,
+        )
+        r_builtin = sample_strat_clust.categorical.ranktest(
+            y="income",
+            group="sex",
+            method=RankScoreMethod.KRUSKAL_WALLIS,
+            by="region",
+            drop_nulls=True,
+        )
+        assert isinstance(r_custom, RankTestByResult)
+        assert len(r_custom) == len(r_builtin) == 4
+
+        builtin_by = {str(r.diff[0].by_level): r for r in r_builtin}
+        for rc in r_custom:
+            rb = builtin_by[str(rc.diff[0].by_level)]
+            assert rc.groups.levels == rb.groups.levels
+            assert rc.stats.value == pytest.approx(rb.stats.value, rel=1e-10)
+            assert rc.stats.df == pytest.approx(rb.stats.df, rel=1e-10)
+            assert rc.stats.p_value == pytest.approx(rb.stats.p_value, rel=1e-10)
+            assert rc.diff[0].diff == pytest.approx(rb.diff[0].diff, rel=1e-10)
+
+    def test_custom_score_by_with_where(self, sample_strat_clust):
+        """by= combined with where= — per-level results, not pooled."""
+        r_custom = sample_strat_clust.categorical.ranktest(
+            y="income",
+            group="sex",
+            score_fn=_wilcoxon_score,
+            by="region",
+            where=pl.col("income") > 50000,
+            drop_nulls=True,
+        )
+        r_builtin = sample_strat_clust.categorical.ranktest(
+            y="income",
+            group="sex",
+            method=RankScoreMethod.KRUSKAL_WALLIS,
+            by="region",
+            where=pl.col("income") > 50000,
+            drop_nulls=True,
+        )
+        assert len(r_custom) == len(r_builtin)
+        builtin_by = {str(r.diff[0].by_level): r for r in r_builtin}
+        for rc in r_custom:
+            rb = builtin_by[str(rc.diff[0].by_level)]
+            assert rc.stats.value == pytest.approx(rb.stats.value, rel=1e-10)
+            assert rc.diff[0].diff == pytest.approx(rb.diff[0].diff, rel=1e-10)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

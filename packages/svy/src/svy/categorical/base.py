@@ -54,6 +54,7 @@ except ImportError:
 
 # For type checkers only
 if TYPE_CHECKING:
+    from svy.categorical.ranktest import RankTestByResult
     from svy.core.sample import Sample
 
 log = logging.getLogger(__name__)
@@ -603,7 +604,7 @@ class Categorical:
         alpha: float = 0.05,
         alternative: Literal["two-sided", "less", "greater"] = "two-sided",
         drop_nulls: bool = False,
-    ) -> RankTestTwoSample | RankTestKSample | list[RankTestTwoSample] | list[RankTestKSample]:
+    ) -> RankTestTwoSample | RankTestKSample | RankTestByResult:
         """
         Perform a design-based rank test.
 
@@ -888,15 +889,20 @@ class Categorical:
         alpha: float,
         alternative: str,
         drop_nulls: bool,
-    ) -> RankTestTwoSample | RankTestKSample | list[RankTestTwoSample] | list[RankTestKSample]:
+    ) -> RankTestTwoSample | RankTestByResult:
         """
         Rank test with a custom score function.
 
         Computes weighted mid-ranks and applies score_fn in Python,
         then delegates to rs.ttest_rs on the scores as the y variable.
+        With ``by``, ranks and scores are computed within each by-level
+        and one test is returned per level.
         """
+        from scipy.stats import t as t_dist
+
         from svy.categorical.ttest import DiffEst, GroupLevels
         from svy.core.containers import TDist
+        from svy.errors import MethodError
 
         prep = prepare_data(
             self._sample,
@@ -916,17 +922,20 @@ class Categorical:
         # so w_arr > 0 correctly identifies domain-active observations.
         mask = w_arr > 0
 
-        # Compute ranks on active observations
-        y_active = y_arr[mask]
-        w_active = w_arr[mask]
-        rankhat_active, N_hat = self._compute_midranks(y_active, w_active)
-
-        # Apply custom score function
-        scores_active = score_fn(rankhat_active, N_hat)
-
-        # Build full-length score column (0 for non-active)
+        # Build full-length score column (0 for non-active rows). With by=,
+        # each by-level is its own domain: ranks and scores are computed
+        # within the level's active rows, matching the per-level tests the
+        # Rust backend runs for the built-in methods.
         scores_full = np.zeros(len(y_arr), dtype=np.float64)
-        scores_full[mask] = scores_active
+        if prep.by_col is not None:
+            by_arr = prep.df[prep.by_col].cast(pl.String).to_numpy()
+            for level in dict.fromkeys(by_arr[mask]):
+                m = mask & (by_arr == level)
+                rankhat, n_hat = self._compute_midranks(y_arr[m], w_arr[m])
+                scores_full[m] = score_fn(rankhat, n_hat)
+        else:
+            rankhat, n_hat = self._compute_midranks(y_arr[mask], w_arr[mask])
+            scores_full[mask] = score_fn(rankhat, n_hat)
 
         # Add scores as a column and use ttest_rs on scores ~ group
         score_col_name = "__svy_custom_rankscore__"
@@ -946,13 +955,19 @@ class Categorical:
             null_value=0.0,
             domain_col=prep.domain_col,
             domain_val=prep.domain_val,
+            by_col=prep.by_col,
         )
 
-        row = result_df.row(0, named=True)
-        test_type = row["type"]
-
-        if test_type == "two-sample":
-            from scipy.stats import t as t_dist
+        def _unpack_row(row_idx: int, by_level: object) -> RankTestTwoSample:
+            row = result_df.row(row_idx, named=True)
+            if row["type"] != "two-sample":
+                raise MethodError.not_applicable(
+                    where="ranktest",
+                    method="ranktest",
+                    reason="Custom score_fn with more than 2 groups is not yet supported. "
+                    "Use a built-in method for k-sample tests.",
+                    param="score_fn",
+                )
 
             diff_value = row["diff"]
             se = row["se"]
@@ -975,7 +990,7 @@ class Categorical:
                 lci=diff_value - t_crit * se,
                 uci=diff_value + t_crit * se,
                 by=by,
-                by_level=None,
+                by_level=by_level if by else None,
             )
 
             return RankTestTwoSample(
@@ -988,13 +1003,23 @@ class Categorical:
                 stats=TDist(df=df_val, value=t_stat, p_value=p_value),
                 alpha=alpha,
             )
-        else:
-            from svy.errors import MethodError
 
-            raise MethodError.not_applicable(
-                where="ranktest",
-                method="ranktest",
-                reason="Custom score_fn with more than 2 groups is not yet supported. "
-                "Use a built-in method for k-sample tests.",
-                param="score_fn",
+        if by is not None:
+            from svy.categorical.ranktest import RankTestByResult
+
+            _by_levels = [result_df[prep.by_col][i] for i in range(result_df.height)]
+            results = [_unpack_row(i, lvl) for i, lvl in enumerate(_by_levels)]
+            first = results[0] if results else None
+            return RankTestByResult(
+                results,
+                by=by,
+                y=y,
+                group_var=group,
+                method_name=method_name,
+                groups=first.groups if first else None,
+                alpha=alpha,
+                where_clause=format_where_clause(where),
+                by_levels=_by_levels,
             )
+
+        return _unpack_row(0, None)
