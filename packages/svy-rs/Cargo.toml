@@ -22,7 +22,7 @@ crate-type = ["cdylib", "rlib"]
 # undefined libpython symbols. See the [features] section below.
 pyo3 = { version = "0.26", features = ["abi3-py311", "generate-import-lib"] }
 pyo3-polars = { version = "0.25", features = ["derive"] }
-polars = { version = "0.52", default-features = false, features = ["dtype-categorical"] }
+polars = { version = "0.54", default-features = false, features = ["dtype-categorical"] }
 faer = "0.24"
 ahash = "0.8"
 numpy = "0.26"
