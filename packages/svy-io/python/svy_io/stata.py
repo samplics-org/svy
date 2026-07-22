@@ -17,6 +17,7 @@ from polars.exceptions import ComputeError
 
 import svy_io.svyreadstat_rs as native
 
+from .metadata import normalize_user_missing
 from .helpers import _as_path, _normalize_n_max
 from .tagged_na import TaggedNA
 
@@ -155,6 +156,7 @@ def read_dta(
 
     # Parse JSON once
     meta: Dict[str, Any] = json.loads(meta_json)
+    meta["user_missing"] = normalize_user_missing(meta)
 
     # Read IPC with proper error handling
     bio = io.BytesIO(ipc_bytes)
@@ -226,6 +228,7 @@ def read_stata_arrow(
         table = pa_ipc.open_stream(bio).read_all()
 
     meta = json.loads(meta_json)
+    meta["user_missing"] = normalize_user_missing(meta)
     return table, meta
 
 

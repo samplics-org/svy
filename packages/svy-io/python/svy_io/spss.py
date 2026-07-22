@@ -16,6 +16,7 @@ import svy_io.svyreadstat_rs as native
 
 from .helpers import _as_path, _normalize_n_max
 from .labelled import LabelledSPSS, labelled_spss
+from .metadata import normalize_user_missing
 
 
 # -------------------- User-defined missing integration --------------------
@@ -78,14 +79,12 @@ def _hydrate_user_missing(
 
     if user_na:
         labelled_columns: Dict[str, LabelledSPSS] = {}
-        user_missing_list = []
 
         for var in meta.get("vars", []):
             col_name = var["name"]
             if col_name not in df.columns or not var.get("user_missing"):
                 continue
 
-            user_miss = var["user_missing"]
             label_set = var.get("label_set")
             value_labels = value_label_sets.get(label_set) if label_set else None
 
@@ -93,16 +92,7 @@ def _hydrate_user_missing(
             labelled_col = _apply_user_missing_to_column(values, var, value_labels)
             labelled_columns[col_name] = labelled_col
 
-            # Build missing spec
-            missing_spec = {"col": col_name}
-            if user_miss.get("values"):
-                missing_spec["values"] = user_miss["values"]
-            if user_miss.get("range"):
-                missing_spec["range"] = user_miss["range"]
-            user_missing_list.append(missing_spec)
-
         meta["labelled_columns"] = labelled_columns
-        meta["user_missing"] = user_missing_list
     else:
         # Vectorized conversion to null
         replacements = []
@@ -145,6 +135,11 @@ def _hydrate_user_missing(
 
         if replacements:
             df = df.with_columns(replacements)
+
+    # Canonical user-missing schema, rebuilt from the per-variable
+    # definitions (post-rename), so zap_missing and downstream consumers
+    # see one shape regardless of user_na.
+    meta["user_missing"] = normalize_user_missing(meta)
 
     return df, meta
 
@@ -192,6 +187,13 @@ def get_user_missing_for_column(meta: dict, col_name: str) -> dict[str, Any] | N
 # ---------------- Name normalization ----------------
 
 
+def _normalize_one_name(name: str) -> str:
+    nc = name.strip().lower().replace(".", "_").replace(" ", "_").replace("-", "_")
+    while "__" in nc:
+        nc = nc.replace("__", "_")
+    return nc.strip("_")
+
+
 def _normalize_names(
     df: pl.DataFrame, meta: Dict[str, Any]
 ) -> tuple[pl.DataFrame, Dict[str, Any]]:
@@ -201,28 +203,41 @@ def _normalize_names(
     - lowercase
     - replace dots/spaces/dashes with underscores
     - collapse multiple underscores
+
+    Collisions (two source columns normalizing to the same name, e.g.
+    "A.B" and "a_b") disambiguate with a numeric suffix instead of
+    producing a duplicate-column rename error.
     """
     rename: Dict[str, str] = {}
+    taken = set(df.columns)
 
     for c in df.columns:
-        nc = c.strip().lower().replace(".", "_").replace(" ", "_").replace("-", "_")
-        while "__" in nc:
-            nc = nc.replace("__", "_")
-        nc = nc.strip("_")
-
-        if nc != c:
-            rename[c] = nc
+        nc = _normalize_one_name(c)
+        if nc == c:
+            continue
+        # Disambiguate collisions with columns that already have (or will
+        # get) the normalized name.
+        candidate = nc
+        suffix = 1
+        while candidate in (taken - {c}) or candidate in rename.values():
+            suffix += 1
+            candidate = f"{nc}_{suffix}"
+        rename[c] = candidate
+        taken.add(candidate)
 
     if rename:
         df = df.rename(rename)
 
     for v in meta.get("vars", []):
         if isinstance(v.get("name"), str):
-            orig = v["name"]
-            normalized = orig.strip().lower().replace(".", "_").replace(" ", "_").replace("-", "_")
-            while "__" in normalized:
-                normalized = normalized.replace("__", "_")
-            v["name"] = normalized.strip("_")
+            v["name"] = rename.get(v["name"], _normalize_one_name(v["name"]))
+
+    # Keep user-missing specs pointing at the renamed columns.
+    for spec in meta.get("user_missing") or []:
+        col = spec.get("col") or spec.get("var")
+        if isinstance(col, str):
+            key = "col" if "col" in spec else "var"
+            spec[key] = rename.get(col, _normalize_one_name(col))
 
     return df, meta
 

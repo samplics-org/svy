@@ -17,6 +17,7 @@ from polars.exceptions import ComputeError
 import svy_io.svyreadstat_rs as native
 
 from .factor import as_factor
+from .metadata import normalize_user_missing
 from .helpers import _normalize_n_max
 from .tagged_na import TaggedNA
 
@@ -485,6 +486,7 @@ def read_xpt(
         df = pl.read_ipc_stream(bio)  # Fallback: IPC stream
 
     meta: Dict[str, Any] = json.loads(meta_json)
+    meta["user_missing"] = normalize_user_missing(meta)
 
     # Optional post-processing (same order as read_sas)
     if coerce_temporals:
@@ -604,6 +606,7 @@ def read_sas(
 
     # Decode metadata JSON
     meta: Dict[str, Any] = json.loads(meta_json)
+    meta["user_missing"] = normalize_user_missing(meta)
 
     # Optional post-processing (order chosen to mirror typical haven workflows)
     if coerce_temporals:
@@ -683,6 +686,7 @@ def read_sas_arrow(
         table = pa_ipc.open_stream(bio).read_all()
 
     meta = json.loads(meta_json)
+    meta["user_missing"] = normalize_user_missing(meta)
     return table, meta
 
 

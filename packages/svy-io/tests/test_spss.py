@@ -252,9 +252,9 @@ def test_user_defined_missing_values_can_be_preserved(test_data_dir):
     col = df.columns[0]
     assert df[col][1] == 9
 
-    # Check metadata for na_values
+    # Check metadata for na_values (canonical schema: col/na_values/na_range)
     user_missing = meta.get("user_missing", [])
-    assert any(um.get("col") == col and 9 in um.get("values", []) for um in user_missing)
+    assert any(um.get("col") == col and 9 in um.get("na_values", []) for um in user_missing)
 
 
 def test_system_missings_read_as_none():

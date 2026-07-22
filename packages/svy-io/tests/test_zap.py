@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import copy
 
+from pathlib import Path
+
 import polars as pl
 import polars.testing as plt
 import pytest
@@ -218,3 +220,31 @@ def test_zap_missing_converts_tagged_na_in_series():
     df = pl.DataFrame({"x": [1.0, tagged_na("a"), 3.0]}, strict=False)
     out = zap_missing(df, meta={"vars": [], "value_labels": [], "user_missing": []})
     assert out["x"].to_list() == [1.0, None, 3.0]
+
+
+def test_zap_missing_works_on_real_read_sav_metadata():
+    """Regression: zap_missing must consume the metadata read_sav actually
+    produces (three schemas used to coexist and zap matched none of them,
+    silently doing nothing)."""
+    from svy_io import read_sav
+
+    fixture = Path(__file__).parent / "data" / "spss" / "labelled-num-na.sav"
+    df, meta = read_sav(fixture, user_na=True)
+    col = df.columns[0]
+    assert 9.0 in df[col].to_list()  # user_na preserved the sentinel
+
+    out = zap_missing(df, meta)
+    assert 9.0 not in out[col].to_list()
+    assert out[col].null_count() == 1
+
+
+def test_read_sav_user_missing_schema_is_canonical():
+    """All readers emit one schema: {col, na_values, na_range}."""
+    from svy_io import read_sav
+
+    fixture = Path(__file__).parent / "data" / "spss" / "labelled-num-na.sav"
+    _, meta = read_sav(fixture, user_na=True)
+    (spec,) = meta["user_missing"]
+    assert set(spec) == {"col", "na_values", "na_range"}
+    assert spec["na_values"] == [9.0]
+    assert spec["na_range"] is None
