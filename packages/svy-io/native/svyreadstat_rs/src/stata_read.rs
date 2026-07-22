@@ -36,6 +36,8 @@ fn parse_dta_impl(
         n_max,
         n_rows_seen: 0,
         n_rows_emitted: 0,
+        last_counted_row: None,
+        had_invalid_utf8: false,
         label_sets: HashMap::with_capacity(32), // Pre-allocate
         file_label: None,
         last_err: None,
@@ -55,6 +57,16 @@ fn parse_dta_impl(
         readstat_set_metadata_handler(p, Some(on_metadata_cb));
         readstat_set_variable_handler(p, Some(on_variable_cb));
         readstat_set_value_handler(p, Some(on_value_cb));
+
+        // Defensive row limit for untrusted files (n_max already aborts in
+        // the value callback; this stops the C parser earlier too).
+        let _keep_enc = match crate::core::configure_parser(p, None, rows_skip, n_max) {
+            Ok(k) => k,
+            Err(msg) => {
+                readstat_parser_free(p);
+                return Err(pyo3::exceptions::PyValueError::new_err(msg).into());
+            }
+        };
         readstat_set_value_label_handler(p, Some(on_value_label_cb));
         readstat_set_note_handler(p, Some(on_note_cb));
 

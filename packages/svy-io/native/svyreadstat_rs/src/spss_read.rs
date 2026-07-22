@@ -20,18 +20,18 @@ use crate::core::{
 
 /// Parse SPSS .sav file
 #[pyfunction]
-#[pyo3(signature = (path, _encoding=None, _user_na=false, cols_skip=None, n_max=None, rows_skip=0))]
+#[pyo3(signature = (path, encoding=None, _user_na=false, cols_skip=None, n_max=None, rows_skip=0))]
 pub fn df_parse_sav_file(
     py: Python<'_>,
     path: &str,
-    _encoding: Option<&str>,
+    encoding: Option<&str>,
     _user_na: bool,
     cols_skip: Option<Vec<String>>,
     n_max: Option<usize>,
     rows_skip: usize,
 ) -> PyResult<(Py<PyAny>, String)> {
     // Release GIL during parsing for better Python concurrency
-    let result = py.detach(|| parse_sav_impl(path, cols_skip, n_max, rows_skip));
+    let result = py.detach(|| parse_sav_impl(path, encoding, cols_skip, n_max, rows_skip));
 
     let (ipc, meta) = result?;
     let meta_json = serde_json::to_string(&meta).map_err(|e| {
@@ -47,18 +47,18 @@ pub fn df_parse_sav_file(
 
 /// Parse SPSS portable (.por) file
 #[pyfunction]
-#[pyo3(signature = (path, _encoding=None, _user_na=false, cols_skip=None, n_max=None, rows_skip=0))]
+#[pyo3(signature = (path, encoding=None, _user_na=false, cols_skip=None, n_max=None, rows_skip=0))]
 pub fn df_parse_por_file(
     py: Python<'_>,
     path: &str,
-    _encoding: Option<&str>,
+    encoding: Option<&str>,
     _user_na: bool,
     cols_skip: Option<Vec<String>>,
     n_max: Option<usize>,
     rows_skip: usize,
 ) -> PyResult<(Py<PyAny>, String)> {
     // Release GIL during parsing for better Python concurrency
-    let result = py.detach(|| parse_por_impl(path, cols_skip, n_max, rows_skip));
+    let result = py.detach(|| parse_por_impl(path, encoding, cols_skip, n_max, rows_skip));
 
     let (ipc, meta) = result?;
     let meta_json = serde_json::to_string(&meta).map_err(|e| {
@@ -76,6 +76,7 @@ pub fn df_parse_por_file(
 #[inline]
 fn parse_sav_impl(
     path: &str,
+    encoding: Option<&str>,
     cols_skip: Option<Vec<String>>,
     n_max: Option<usize>,
     rows_skip: usize,
@@ -97,6 +98,8 @@ fn parse_sav_impl(
         n_max,
         n_rows_seen: 0,
         n_rows_emitted: 0,
+        last_counted_row: None,
+        had_invalid_utf8: false,
         label_sets: HashMap::with_capacity(64), // Pre-allocate for value labels
         file_label: None,
         last_err: None,
@@ -120,6 +123,14 @@ fn parse_sav_impl(
         readstat_set_variable_handler(p, Some(on_variable_cb));
         readstat_set_value_handler(p, Some(on_value_cb));
         readstat_set_value_label_handler(p, Some(on_value_label_cb));
+
+        let _keep_enc = match crate::core::configure_parser(p, encoding, rows_skip, n_max) {
+            Ok(k) => k,
+            Err(msg) => {
+                readstat_parser_free(p);
+                return Err(pyo3::exceptions::PyValueError::new_err(msg));
+            }
+        };
 
         let cpath = CString::new(path)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid path: {e}")))?;
@@ -153,6 +164,7 @@ fn parse_sav_impl(
 #[inline]
 fn parse_por_impl(
     path: &str,
+    encoding: Option<&str>,
     cols_skip: Option<Vec<String>>,
     n_max: Option<usize>,
     rows_skip: usize,
@@ -174,6 +186,8 @@ fn parse_por_impl(
         n_max,
         n_rows_seen: 0,
         n_rows_emitted: 0,
+        last_counted_row: None,
+        had_invalid_utf8: false,
         label_sets: HashMap::with_capacity(64), // Pre-allocate for value labels
         file_label: None,
         last_err: None,
@@ -197,6 +211,14 @@ fn parse_por_impl(
         readstat_set_variable_handler(p, Some(on_variable_cb));
         readstat_set_value_handler(p, Some(on_value_cb));
         readstat_set_value_label_handler(p, Some(on_value_label_cb));
+
+        let _keep_enc = match crate::core::configure_parser(p, encoding, rows_skip, n_max) {
+            Ok(k) => k,
+            Err(msg) => {
+                readstat_parser_free(p);
+                return Err(pyo3::exceptions::PyValueError::new_err(msg));
+            }
+        };
 
         let cpath = CString::new(path)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid path: {e}")))?;
