@@ -79,7 +79,8 @@ pub fn get_hadamard_for_brr(n_strata: usize) -> Result<(Array2<f64>, usize)> {
 }
 
 /// Get Hadamard matrix for n strata. Returns (matrix, actual_size).
-/// Used by SDR, whose row-usage convention is reviewed separately.
+/// Used by SDR, which assigns rows 1..size-1 cyclically (row 0 of a
+/// normalized Hadamard matrix is all ones and is never assigned).
 pub fn get_hadamard_for_strata(n_strata: usize) -> Result<(Array2<f64>, usize)> {
     // Try exact size
     if let Some(h) = try_get_hadamard(n_strata) {
@@ -684,22 +685,36 @@ pub fn create_sdr_weights(
     let sorted_indices = build_stratum_sorted_indices(&stratum_vec, &order_vec);
     let (hadamard, h_size) = get_hadamard_for_strata(n_reps)?;
 
+    // Fay–Train successive difference replication: unit k (in systematic
+    // order within its stratum) is assigned the cyclic Hadamard-row pair
+    // (row(k), row(k+1)) over rows 1..h_size-1 — row 0 of a normalized
+    // Hadamard matrix is all ones and would give a constant adjustment
+    // with zero between-replicate variance. Each unit gets ONE additive
+    // factor per replicate:
+    //     f = 1 + 2^{-3/2} (h[row(k), r] - h[row(k+1), r])
+    // so f is in {1, 1 +- 2^{-1/2}}. Successive units share a row, which
+    // is what makes the resulting variance (with the 4/R coefficient) the
+    // successive-difference estimator. The previous construction instead
+    // composed pair adjustments multiplicatively (introducing a spurious
+    // +-1/2 cross-term on interior units) and used rows from 0.
+    let n_rows = h_size - 1;
+    let sqrt2_over_4 = std::f64::consts::SQRT_2 / 4.0; // 2^{-3/2}
+
     let rep_weights: Vec<Array1<f64>> = (0..n_reps)
         .into_par_iter()
         .map(|r| {
             let mut rep_wgt = wgt.to_owned();
+            let col = r % h_size;
             for indices in sorted_indices.values() {
                 let n_h = indices.len();
                 if n_h < 2 {
                     continue;
                 }
-                for k in 0..(n_h - 1) {
-                    let i1 = indices[k];
-                    let i2 = indices[k + 1];
-                    let h_val = hadamard[[k % h_size, r % h_size]];
-                    let adj = std::f64::consts::SQRT_2 * h_val / 2.0;
-                    rep_wgt[i1] *= 1.0 + adj;
-                    rep_wgt[i2] *= 1.0 - adj;
+                for (k, &i) in indices.iter().enumerate() {
+                    let row_a = 1 + (k % n_rows);
+                    let row_b = 1 + ((k + 1) % n_rows);
+                    let diff = hadamard[[row_a, col]] - hadamard[[row_b, col]];
+                    rep_wgt[i] *= 1.0 + sqrt2_over_4 * diff;
                 }
             }
             rep_wgt
@@ -885,6 +900,33 @@ mod tests {
         let psu = array![1, 2];
         let stratum = array![1, 1, 2];
         assert!(create_jkn_weights(wgt.view(), Some(stratum.view()), psu.view()).is_err());
+    }
+
+    #[test]
+    fn test_sdr_factors_are_fay_train() {
+        // Every replicate factor must be one of {1, 1 +- 2^{-1/2}}, and with
+        // n_reps equal to the Hadamard order the mean replicate weight over
+        // all replicates equals the full-sample weight exactly (each
+        // non-first Hadamard row sums to zero).
+        let wgt = array![2.0, 2.0, 2.0, 2.0, 2.0, 2.0];
+        let order = array![0, 1, 2, 3, 4, 5];
+        let (rep, _) = create_sdr_weights(wgt.view(), None, Some(order.view()), 8).unwrap();
+        let f_hi = 1.0 + std::f64::consts::FRAC_1_SQRT_2;
+        let f_lo = 1.0 - std::f64::consts::FRAC_1_SQRT_2;
+        for i in 0..6 {
+            let mut mean = 0.0;
+            for r in 0..8 {
+                let f = rep[[i, r]] / 2.0;
+                assert!(
+                    (f - 1.0).abs() < 1e-12
+                        || (f - f_hi).abs() < 1e-12
+                        || (f - f_lo).abs() < 1e-12,
+                    "factor {f} not a Fay-Train factor"
+                );
+                mean += f;
+            }
+            assert!((mean / 8.0 - 1.0).abs() < 1e-12);
+        }
     }
 
     #[test]
