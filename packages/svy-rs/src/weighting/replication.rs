@@ -340,7 +340,7 @@ pub fn create_jk_weights(
     psu: ArrayView1<i64>,
     paired: bool,
     seed: Option<u64>,
-) -> Result<(Array2<f64>, f64)> {
+) -> Result<(Array2<f64>, f64, Vec<f64>)> {
     if paired {
         create_jk2_weights(wgt, stratum, psu, seed)
     } else {
@@ -348,12 +348,20 @@ pub fn create_jk_weights(
     }
 }
 
-/// JKn: delete-one-PSU-at-a-time
+/// JKn: delete-one-PSU-at-a-time.
+///
+/// Returns (replicate weights, design df, per-replicate rscales).
+/// df is the stratified-jackknife convention #PSUs - #strata (n - 1 for
+/// unstratified JK1); the previous total-PSU df was anti-conservative.
+/// rscales[r] = (n_h - 1)/n_h for the stratum whose PSU replicate r
+/// deletes — R's svrepdesign(type="JKn") convention. The estimation layer
+/// previously applied a global (R-1)/R to every replicate, which is only
+/// correct for unstratified JK1.
 pub fn create_jkn_weights(
     wgt: ArrayView1<f64>,
     stratum: Option<ArrayView1<i64>>,
     psu: ArrayView1<i64>,
-) -> Result<(Array2<f64>, f64)> {
+) -> Result<(Array2<f64>, f64, Vec<f64>)> {
     let n_obs = wgt.len();
     if psu.len() != n_obs {
         return Err(ReplicationError::DimensionMismatch {
@@ -423,16 +431,31 @@ pub fn create_jkn_weights(
     for (r, col) in rep_weights.into_iter().enumerate() {
         result.column_mut(r).assign(&col);
     }
-    Ok((result, n_reps as f64))
+
+    let n_strata = stratum_psus.len();
+    let df = (n_reps - n_strata) as f64;
+    let rscales: Vec<f64> = rep_to_stratum
+        .iter()
+        .map(|s| {
+            let nh = stratum_nh[s];
+            (nh - 1.0) / nh
+        })
+        .collect();
+    Ok((result, df, rscales))
 }
 
 /// JK2: paired jackknife (one replicate per stratum)
+/// Returns (replicate weights, design df, per-replicate rscales).
+/// One random delete-one replicate per stratum with the surviving PSUs
+/// reweighted by n_h/(n_h-1): the single-replicate-per-stratum jackknife,
+/// whose variance coefficient is 1.0 per replicate (a global (R-1)/R
+/// would understate the variance by that factor).
 fn create_jk2_weights(
     wgt: ArrayView1<f64>,
     stratum: Option<ArrayView1<i64>>,
     psu: ArrayView1<i64>,
     seed: Option<u64>,
-) -> Result<(Array2<f64>, f64)> {
+) -> Result<(Array2<f64>, f64, Vec<f64>)> {
     let n_obs = wgt.len();
     if psu.len() != n_obs {
         return Err(ReplicationError::DimensionMismatch {
@@ -511,7 +534,7 @@ fn create_jk2_weights(
     for (r, col) in rep_weights.into_iter().enumerate() {
         result.column_mut(r).assign(&col);
     }
-    Ok((result, n_reps as f64))
+    Ok((result, n_reps as f64, vec![1.0; n_reps]))
 }
 
 // ============================================================================
@@ -795,10 +818,13 @@ mod tests {
         let wgt = array![1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
         let stratum = array![1, 1, 1, 2, 2, 2];
         let psu = array![1, 2, 3, 1, 2, 3];
-        let (rep_wgt, df) =
+        let (rep_wgt, df, rscales) =
             create_jkn_weights(wgt.view(), Some(stratum.view()), psu.view()).unwrap();
         assert_eq!(rep_wgt.dim(), (6, 6));
-        assert_eq!(df, 6.0);
+        // Stratified jackknife df = #PSUs - #strata (was: total PSUs).
+        assert_eq!(df, 4.0);
+        // R's JKn rscales: (n_h - 1)/n_h per replicate; 3 PSUs per stratum.
+        assert_eq!(rscales, vec![2.0 / 3.0; 6]);
     }
 
     #[test]
@@ -806,11 +832,12 @@ mod tests {
         let wgt = array![1.0, 1.0, 1.0, 1.0];
         let stratum = array![1, 1, 2, 2];
         let psu = array![1, 2, 1, 2];
-        let (rep_wgt, df) =
+        let (rep_wgt, df, rscales) =
             create_jk_weights(wgt.view(), Some(stratum.view()), psu.view(), true, Some(42))
                 .unwrap();
         assert_eq!(rep_wgt.dim(), (4, 2)); // 2 strata = 2 replicates
         assert_eq!(df, 2.0);
+        assert_eq!(rscales, vec![1.0; 2]);
     }
 
     #[test]
