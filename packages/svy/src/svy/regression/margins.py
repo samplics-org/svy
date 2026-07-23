@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar
 
 import msgspec
 import numpy as np
@@ -15,12 +15,13 @@ import polars as pl
 
 from scipy import stats
 
-from svy.regression.base import link_inverse, link_mu_eta
+from svy.regression.links import link_inverse, link_mu_eta, link_mu_eta2
 from svy.ui.printing import make_panel, render_plain_table, render_rich_to_str, resolve_width
 
 
 if TYPE_CHECKING:
-    from svy.regression.glm import GLM
+    from svy.regression.base import GLM
+    from svy.regression.glm import GLMFit
 
 log = logging.getLogger(__name__)
 
@@ -317,6 +318,77 @@ def _validate_ame_variables(glm: GLM, variables: list[str]) -> list[str]:
 # =============================================================================
 
 
+def _fitted_frame(glm: GLM, fit: GLMFit) -> tuple[pl.DataFrame, np.ndarray]:
+    """
+    Return the (data, weights) the fit actually used.
+
+    The frame is persisted by ``GLM.fit`` (post null-drop, post weight
+    filter) and restricted here to in-domain rows when the fit had a
+    ``where=`` clause, so margins average over exactly the fitted
+    observations — matching Stata ``margins`` after a domain fit and R
+    ``marginaleffects`` on ``svyglm(design = subset(...))``.
+    """
+    from svy.errors.model_errors import ModelError
+
+    frame = glm._fit_frame
+    w_col = glm._fit_weight_col
+    if frame is None or w_col is None:
+        raise ModelError.not_fitted(where="GLM.margins")
+
+    d_col = glm._fit_domain_col
+    if d_col is not None and d_col in frame.columns:
+        frame = frame.filter(pl.col(d_col).str.to_lowercase() == "true").drop(d_col)
+
+    weights = frame.get_column(w_col).to_numpy().astype(float)
+    return frame, weights
+
+
+def _model_df(fit: GLMFit) -> float:
+    """Design degrees of freedom used for t-based intervals."""
+    return fit.coefs[0].wald.df if fit.coefs[0].wald else 1e6
+
+
+def _term_derivative_matrix(
+    glm: GLM,
+    fit: GLMFit,
+    data: pl.DataFrame,
+    var: str,
+) -> np.ndarray:
+    """
+    Build the n x k matrix D with D[:, j] = d X_j / d var.
+
+    Each engineered feature column is a product of factors (split on
+    ':'). The derivative w.r.t. a continuous variable follows the
+    product rule: sum over each occurrence of `var` of the product of
+    the remaining factors (Cat dummies and other covariates evaluated
+    at their observed values). Terms not involving `var` have zero
+    derivative.
+    """
+    term_info = fit.term_info or {}
+    terms = fit.feature_names
+    n = data.height
+    D = np.zeros((n, len(terms)))
+
+    for j, term in enumerate(terms):
+        if term == "_intercept_":
+            continue
+        parts = term.split(":")
+        occurrences = [i for i, p in enumerate(parts) if p == var]
+        if not occurrences:
+            continue
+        dcol = np.zeros(n)
+        for occ in occurrences:
+            prod = np.ones(n)
+            for i, part in enumerate(parts):
+                if i == occ:
+                    continue
+                prod = prod * glm._resolve_pred_term(part, data, term_info)
+            dcol += prod
+        D[:, j] = dcol
+
+    return D
+
+
 def compute_predictive_margins(
     glm: GLM,
     variable: str,
@@ -325,29 +397,23 @@ def compute_predictive_margins(
 ) -> GLMMargins:
     """
     Compute predictive margins at specific values of a variable.
+
+    For each value v, every fitted observation is set counterfactually
+    to ``variable = v``, predictions are averaged with the survey
+    weights, and the SE comes from the delta method over the
+    design-based V(beta): se^2 = g' V g with
+    g = sum_i w_i mu'(eta_i) x_i / sum_i w_i  (Stata ``margins``
+    convention; covariates treated as fixed).
     """
     fit = glm.fitted
-    sample = glm._sample
-
-    # Get original data
-    _raw = sample._data
-    data: pl.DataFrame = (
-        _raw if isinstance(_raw, pl.DataFrame) else cast(pl.DataFrame, _raw.collect())
-    )
-
-    # Get weights
-    design = sample._design
-    w_col = design.wgt or "_svy_ones_"
-    if design.wgt is None:
-        data = data.with_columns(pl.lit(1.0).alias(w_col))
-
-    weights = data.get_column(w_col).to_numpy().astype(float)
-    w_sum = weights.sum()
-
-    # Get df from model
     if fit is None:
         raise ValueError("Model not fitted")
-    df = fit.coefs[0].wald.df if fit.coefs[0].wald else 1e6
+    if fit.cov_matrix is None:
+        raise ValueError("Covariance matrix not available")
+
+    data, weights = _fitted_frame(glm, fit)
+    w_sum = weights.sum()
+    df = _model_df(fit)
 
     at_values = np.asarray(at_values)
     n_values = len(at_values)
@@ -355,38 +421,39 @@ def compute_predictive_margins(
     margins = np.zeros(n_values)
     se = np.zeros(n_values)
 
-    # Build design matrix once and extract the column index for `variable`.
-    # Each counterfactual only changes one column — no need to rebuild X or
-    # call predict() (which materialises a full Polars DataFrame) per value.
-    X_base = glm._build_prediction_matrix(data, fit)
     beta_vec = np.array([c.est for c in fit.coefs])
+    cov = fit.cov_matrix
+    terms = fit.feature_names
 
+    # The single-column fast path is only valid when `variable` is a plain
+    # feature column that appears in no interaction term; otherwise the
+    # interaction columns must be rebuilt from the counterfactual data.
+    in_interaction = any(":" in t and variable in t.split(":") for t in terms)
+    col_idx: int | None
     try:
-        col_idx = fit.feature_names.index(variable)
+        col_idx = terms.index(variable)
     except ValueError:
-        # variable is not directly a feature column (e.g. categorical base name);
-        # fall back to the original per-value predict() path
+        # e.g. categorical base name — needs the full rebuild path
         col_idx = None
 
+    X_base = glm._build_prediction_matrix(data, fit) if col_idx is not None else None
+
     for i, val in enumerate(at_values):
-        if col_idx is not None:
+        if col_idx is not None and not in_interaction:
             X_cf = X_base.copy()
             X_cf[:, col_idx] = float(val)
-            eta = X_cf @ beta_vec
-            yhat = link_inverse(fit.link, eta)
         else:
             cf_data = data.with_columns(pl.lit(val).alias(variable))
-            yhat = glm.predict(cf_data).yhat
+            X_cf = glm._build_prediction_matrix(cf_data, fit)
 
-        # Weighted mean
+        eta = X_cf @ beta_vec
+        yhat = link_inverse(fit.link, eta)
         margins[i] = np.sum(weights * yhat) / w_sum
 
-        # Survey variance of mean with finite population correction
-        ybar = margins[i]
-        n_obs = len(weights)
-        var_est = np.sum(weights**2 * (yhat - ybar) ** 2) / (w_sum**2)
-        var_est *= n_obs / (n_obs - 1)
-        se[i] = np.sqrt(var_est)
+        # Delta method: gradient of the weighted mean prediction w.r.t. beta
+        dmu_deta = link_mu_eta(fit.link, eta)
+        grad = (weights * dmu_deta) @ X_cf / w_sum
+        se[i] = np.sqrt(max(float(grad @ cov @ grad), 0.0))
 
     # Confidence intervals
     t_crit = stats.t.ppf(1 - alpha / 2, df)
@@ -413,37 +480,31 @@ def compute_average_marginal_effects(
 ) -> list[GLMMargins]:
     """
     Compute average marginal effects (AME) for continuous variables.
+
+    The marginal effect differentiates the full linear predictor, so a
+    variable appearing in interaction terms contributes
+    beta_x + beta_{x:z} * z (evaluated at observed z). SEs use the full
+    delta method over the design-based V(beta):
+    g_j = mean_w(mu''(eta) X_j deta_dx + mu'(eta) D_j), se^2 = g' V g.
     """
     fit = glm.fitted
-    sample = glm._sample
-
-    # Get original data
-    _raw2 = sample._data
-    data: pl.DataFrame = (
-        _raw2 if isinstance(_raw2, pl.DataFrame) else cast(pl.DataFrame, _raw2.collect())
-    )
-
-    # Get weights
-    design = sample._design
-    w_col = design.wgt or "_svy_ones_"
-    if design.wgt is None:
-        data = data.with_columns(pl.lit(1.0).alias(w_col))
-
-    weights = data.get_column(w_col).to_numpy().astype(float)
-    w_sum = weights.sum()
-
-    # Get df and coefficients
     if fit is None:
         raise ValueError("Model not fitted")
-    df = fit.coefs[0].wald.df if fit.coefs[0].wald else 1e6
-    beta = {c.term: c.est for c in fit.coefs}
-    beta_se = {c.term: c.se for c in fit.coefs}
+    if fit.cov_matrix is None:
+        raise ValueError("Covariance matrix not available")
 
-    # Get predictions on link scale
-    X = glm._build_prediction_matrix(data, fit)
+    data, weights = _fitted_frame(glm, fit)
+    w_sum = weights.sum()
+    df = _model_df(fit)
+
     beta_vec = np.array([c.est for c in fit.coefs])
+    cov = fit.cov_matrix
+
+    # Predictions on the link scale over the fitted rows
+    X = glm._build_prediction_matrix(data, fit)
     eta = X @ beta_vec
     dmu_deta = link_mu_eta(fit.link, eta)
+    d2mu_deta2 = link_mu_eta2(fit.link, eta)
 
     # Determine which variables to compute AME for
     term_info = fit.term_info or {}
@@ -459,16 +520,20 @@ def compute_average_marginal_effects(
     t_crit = stats.t.ppf(1 - alpha / 2, df)
 
     for var in variables:
-        if var not in beta:
+        D = _term_derivative_matrix(glm, fit, data, var)
+        if not D.any():
             log.warning(f"Variable '{var}' not found in model coefficients")
             continue
 
-        # AME = weighted mean of (dmu/deta * beta)
-        ame = np.sum(weights * dmu_deta * beta[var]) / w_sum
+        # d(eta)/d(var) per observation, including interaction terms
+        deta_dx = D @ beta_vec
+        ame = np.sum(weights * dmu_deta * deta_dx) / w_sum
 
-        # SE via delta method (simplified)
-        mean_dmu_deta = np.sum(weights * dmu_deta) / w_sum
-        se_val = abs(mean_dmu_deta) * beta_se[var]
+        # Full delta method: gradient of AME w.r.t. beta
+        grad_rows = (weights * d2mu_deta2 * deta_dx)[:, None] * X
+        grad_rows += (weights * dmu_deta)[:, None] * D
+        grad = grad_rows.sum(axis=0) / w_sum
+        se_val = np.sqrt(max(float(grad @ cov @ grad), 0.0))
 
         lci = ame - t_crit * se_val
         uci = ame + t_crit * se_val

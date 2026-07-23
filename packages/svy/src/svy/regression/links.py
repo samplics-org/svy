@@ -1,4 +1,4 @@
-# src/svy/regression/base.py
+# src/svy/regression/links.py
 """
 Base definitions for regression module.
 """
@@ -57,6 +57,32 @@ def link_mu_eta(link: str, eta: np.ndarray) -> np.ndarray:
     elif name == "inverse_squared":
         mu = link_inverse(link, eta)
         return -0.5 * (mu**3)
+
+    else:
+        raise ValueError(f"Unknown link: {name}")
+
+
+def link_mu_eta2(link: str, eta: np.ndarray) -> np.ndarray:
+    """Compute d^2(mu)/d(eta)^2 for the AME delta method."""
+    name = link.lower()
+
+    if name == "identity":
+        return np.zeros_like(eta)
+
+    elif name == "logit":
+        mu = link_inverse(link, eta)
+        return mu * (1.0 - mu) * (1.0 - 2.0 * mu)
+
+    elif name == "log":
+        return link_inverse(link, eta)
+
+    elif name == "inverse":
+        mu = link_inverse(link, eta)
+        return 2.0 * (mu**3)
+
+    elif name == "inverse_squared":
+        mu = link_inverse(link, eta)
+        return 0.75 * (mu**5)
 
     else:
         raise ValueError(f"Unknown link: {name}")
