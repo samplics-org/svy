@@ -150,24 +150,29 @@ fn normalize_by_group(
     Ok(normalized)
 }
 
-/// Create integer mapping for groups
+/// Create integer mapping for groups.
+///
+/// Group ids follow SORTED group-value order — the same convention
+/// `poststratify` validates controls against. (This previously used
+/// first-appearance order, so a direct caller passing sorted controls to
+/// `normalize_by_group` silently normalized against the wrong targets
+/// whenever the data's first-appearance order differed from sorted order;
+/// the svy Python caller was safe only because it pre-encodes labels.)
 fn create_group_mapping(groups: &Array1<i64>) -> (Vec<usize>, usize) {
     use std::collections::HashMap;
 
-    let mut group_map: HashMap<i64, usize> = HashMap::new();
-    let mut indices = Vec::with_capacity(groups.len());
-    let mut next_id = 0;
+    let mut sorted_vals: Vec<i64> = groups.iter().copied().collect();
+    sorted_vals.sort_unstable();
+    sorted_vals.dedup();
 
-    for &group_val in groups.iter() {
-        let id = *group_map.entry(group_val).or_insert_with(|| {
-            let id = next_id;
-            next_id += 1;
-            id
-        });
-        indices.push(id);
-    }
+    let group_map: HashMap<i64, usize> = sorted_vals
+        .iter()
+        .enumerate()
+        .map(|(id, &v)| (v, id))
+        .collect();
 
-    (indices, next_id)
+    let indices = groups.iter().map(|v| group_map[v]).collect();
+    (indices, sorted_vals.len())
 }
 
 #[cfg(test)]

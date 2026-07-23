@@ -193,6 +193,16 @@ pub fn calibrate_parallel(
 // Replicate weight creation
 // ============================================================================
 
+/// Hadamard matrix size used for BRR with `n_strata` strata — the maximum
+/// number of distinct replicates. Lets the Python layer validate a
+/// requested n_reps (raising a typed svy error) before calling into Rust.
+#[pyfunction]
+pub fn brr_hadamard_size(n_strata: usize) -> PyResult<usize> {
+    let (_h, size) = crate::weighting::replication::get_hadamard_for_brr(n_strata)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    Ok(size)
+}
+
 #[pyfunction]
 #[pyo3(signature = (wgt, stratum, psu, n_reps=None, fay_coef=0.0, seed=None))]
 pub fn create_brr_wgts(

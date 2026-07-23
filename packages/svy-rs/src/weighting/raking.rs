@@ -73,6 +73,7 @@ pub fn rake_impl(
 
     let mut raked_weights = wgt.to_owned();
 
+    let mut converged = false;
     for _ in 0..max_iter {
         // Track max relative change inline — avoids cloning the full N×R matrix
         // on every iteration for convergence checking.
@@ -113,16 +114,21 @@ pub fn rake_impl(
         }
 
         if max_rel_diff < tol {
-            if !check_bounds(raked_weights.view(), wgt, ll_bound, up_bound) {
-                return Err(WeightingError::InvalidInput(
-                    "Raking exceeded weight bounds".to_string(),
-                ));
-            }
+            converged = true;
             break;
         }
     }
 
-    // Non-convergence: return best weights reached, no error
+    // The documented bounds contract applies on BOTH exit paths: bounds
+    // violations ARE errors, converged or not (the non-converged path
+    // previously skipped this check and returned violating weights).
+    if !check_bounds(raked_weights.view(), wgt, ll_bound, up_bound) {
+        return Err(WeightingError::InvalidInput(if converged {
+            "Raking exceeded weight bounds".to_string()
+        } else {
+            "Raking exceeded weight bounds (max_iter reached without convergence)".to_string()
+        }));
+    }
     Ok(raked_weights)
 }
 
