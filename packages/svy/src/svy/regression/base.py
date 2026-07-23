@@ -125,12 +125,22 @@ class GLM:
 
     PRINT_WIDTH: ClassVar[int | None] = None
 
-    __slots__ = ("_sample", "fitted", "_print_width")
+    __slots__ = (
+        "_sample",
+        "fitted",
+        "_print_width",
+        "_fit_frame",
+        "_fit_weight_col",
+        "_fit_domain_col",
+    )
 
     def __init__(self, sample: Sample) -> None:
         self._sample = sample
         self.fitted: GLMFit | None = None
         self._print_width: int | None = None
+        self._fit_frame: pl.DataFrame | None = None
+        self._fit_weight_col: str | None = None
+        self._fit_domain_col: str | None = None
 
     def _ensure_fitted(self) -> GLMFit:
         if self.fitted is None:
@@ -508,6 +518,13 @@ class GLM:
                 )
             except Exception:
                 pass
+
+        # Persist the exact rows the fit used (post null-drop, post weight
+        # filter, with the domain column) so margins() reproduces the fitted
+        # frame instead of recomputing from the raw sample data.
+        self._fit_frame = df
+        self._fit_weight_col = w_col
+        self._fit_domain_col = by_col_name
 
         self.fitted = fit_obj
         return self
