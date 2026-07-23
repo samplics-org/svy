@@ -425,8 +425,10 @@ def _norm_pop_size(
     if isinstance(value, PopSize):
         if not value.psu or not isinstance(value.psu, str):
             raise ValueError("PopSize.psu must be a non-empty string")
-        if not value.ssu or not isinstance(value.ssu, str):
-            raise ValueError("PopSize.ssu must be a non-empty string")
+        # ssu is optional: PopSize(psu=...) alone specifies a PSU-only FPC
+        # (the type signature always allowed it; validation rejected it).
+        if value.ssu is not None and (not value.ssu or not isinstance(value.ssu, str)):
+            raise ValueError("PopSize.ssu must be a non-empty string or None")
         return value
     if isinstance(value, str):
         if not value:

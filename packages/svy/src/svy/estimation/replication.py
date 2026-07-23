@@ -49,13 +49,10 @@ def get_rep_weight_cols(est: Estimation) -> list[str]:
         return [int(c) if c.isdigit() else c for c in re.split(r"(\d+)", text)]
 
     if rw.prefix:
-        prefix_lower = rw.prefix.lower()
+        # Strict ^prefix\d+$ matching — see core.data_prep._resolve_rep_weight_cols.
+        pattern = re.compile(rf"^{re.escape(rw.prefix)}\d+$", re.IGNORECASE)
         cols = sorted(
-            [
-                c
-                for c in local_data.columns
-                if c.lower().startswith(prefix_lower) and c.lower() != prefix_lower
-            ],
+            [c for c in local_data.columns if pattern.match(c)],
             key=lambda c: natural_keys(c.lower()),
         )
     elif hasattr(rw, "wgts") and rw.wgts:

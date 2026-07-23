@@ -1049,6 +1049,16 @@ class Estimation:
                 )
             return self._sample._design.rep_wgts.method
 
+        if normalized is None:
+            # Auto-detect, as documented: Taylor when the design carries
+            # structure for linearization; replication when the only
+            # variance information available is the replicate weights.
+            # (Previously None always resolved to Taylor, silently giving a
+            # replication-only design SRS-like variance.)
+            design = self._sample._design
+            if design.rep_wgts is not None and design.stratum is None and design.psu is None:
+                return design.rep_wgts.method
+
         return EstimationMethod.TAYLOR
 
     # ----------------------------------------------------------------

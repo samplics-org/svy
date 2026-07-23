@@ -185,37 +185,9 @@ class Sample:
         if name == "_data" or name == "_design":
             object.__setattr__(self, "_data_version", _next_data_version())
 
-    def __hash__(self) -> int:
-        _d = (
-            cast(pl.DataFrame, self._data)
-            if not isinstance(self._data, pl.LazyFrame)
-            else cast(pl.DataFrame, self._data.collect())
-        )
-        sorted_data = _d.select(sorted(_d.columns))
-        row_hashes = sorted_data.hash_rows().to_list()
-        design_hash = hash(self._design) if self._design else hash(None)
-        return hash(tuple([design_hash] + row_hashes))
-
     # ════════════════════════════════════════════════════════════════════════
     # INITIALIZATION HELPERS
     # ════════════════════════════════════════════════════════════════════════
-
-    def _calculate_fpc(
-        self, pop_size: dict[Category, Number] | Number
-    ) -> dict[Category, Number] | Number:
-        if isinstance(pop_size, Number):
-            return int(1 - cast(pl.DataFrame, self._data).height / pop_size)
-        elif isinstance(pop_size, dict):
-            fpc: dict[Category, Number] = {}
-            for key, value in pop_size.items():
-                if not isinstance(key, str) or not isinstance(value, Number):
-                    raise TypeError("pop_size must be a Number or a dict[Categoryber, Number]")
-                fpc[key] = int(
-                    1 - cast(pl.DataFrame, self._data).shape[0] / sum(pop_size.values())
-                )
-            return fpc
-        else:
-            raise TypeError("pop_size must be a Number or a dict[Categoryber, Number]")
 
     # ════════════════════════════════════════════════════════════════════════
     # PRIVATE HELPERS FOR DUNDERS
@@ -1249,12 +1221,54 @@ class Sample:
         self._metadata.set_na_as_level(col, flag)
         return self
 
+    def _refresh_internal_state(self) -> None:
+        """Rebuild the internal concat columns, singleton detection and
+        design validation after the data or design is replaced.
+
+        Mirrors the tail of ``__init__``: without this, mutators left the
+        stale (or missing) ``*_svy_internal_cols_concatenated`` columns and
+        skipped singleton/validity checks entirely.
+        """
+        local_data = cast(pl.DataFrame, self._data)
+        if self._design is not None and any(
+            getattr(self._design, f, None) for f in ("stratum", "psu", "ssu")
+        ):
+            local_data, (_, stratum_cols, psu_cols, ssu_cols) = (
+                self._create_concatenated_cols_from_lists(
+                    data=local_data,
+                    design=self._design,
+                    by=None,
+                    null_token="__Null__",
+                    suffix=_INTERNAL_CONCAT_SUFFIX,
+                )
+            )
+            self._internal_design = {
+                "stratum": f"stratum{_INTERNAL_CONCAT_SUFFIX}" if stratum_cols else None,
+                "psu": f"psu{_INTERNAL_CONCAT_SUFFIX}" if psu_cols else None,
+                "ssu": f"ssu{_INTERNAL_CONCAT_SUFFIX}" if ssu_cols else None,
+                "suffix": _INTERNAL_CONCAT_SUFFIX,
+            }
+            self._data = local_data
+        else:
+            self._internal_design = {
+                "stratum": None,
+                "psu": None,
+                "ssu": None,
+                "suffix": _INTERNAL_CONCAT_SUFFIX,
+            }
+        self._check_for_singletons()
+        self._validate_design()
+
     def set_data(self, data: pl.DataFrame) -> Self:
         self._data = data
         if "svy_row_index" not in self._data.columns:
             self._data = self._data.with_row_index(name=SVY_ROW_INDEX)
         # Infer metadata for new columns (don't overwrite existing)
         self._metadata.infer_from_dataframe(self._data, overwrite=False)
+        # New data can change the design's validity and singleton structure;
+        # rebuild internal state exactly as __init__ does (version-keyed
+        # caches are already invalidated by the __setattr__ hook).
+        self._refresh_internal_state()
         return self
 
     def update_data(self, data: pl.DataFrame) -> Self:
@@ -1262,16 +1276,19 @@ class Sample:
         if "svy_row_index" not in self._data.columns:
             self._data = self._data.with_row_index(name=SVY_ROW_INDEX)
         self._metadata.align_to_dataframe(self._data)
+        self._refresh_internal_state()
         return self
 
     def set_design(self, design: Design) -> Self:
         """Replace the entire Design."""
         self._design = design
+        self._refresh_internal_state()
         return self
 
     def update_design(self, **kwargs) -> Self:
         """Update selected Design fields in place."""
         self._design = self._design.update(**kwargs)
+        self._refresh_internal_state()
         return self
 
     # ════════════════════════════════════════════════════════════════════════

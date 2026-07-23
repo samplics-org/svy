@@ -982,16 +982,21 @@ class Singleton:
 
         Notes
         -----
-        When variance is computed:
-        1. Singleton strata are excluded from the base variance calculation
-        2. The result is multiplied by: 1 / (1 - n_singletons / n_strata)
+        Singleton strata are excluded from the base variance calculation,
+        then the estimator-specific scaling matching R's
+        ``lonely.psu = "average"`` is applied (R-validated):
 
-        For example, if 20% of strata are singletons:
-        - Base variance is computed on the 80% of non-singleton strata
-        - Then multiplied by 1/0.8 = 1.25
+        - TOTAL: the variance is multiplied by ``1 / (1 - f)`` where
+          ``f = n_singletons / n_strata`` — e.g. with 20% singleton strata,
+          base variance on the other 80% is multiplied by ``1/0.8 = 1.25``.
+        - MEAN / PROP / RATIO: these are ratios of totals, whose linearized
+          variance already reflects the reduced stratum set; the adjustment
+          enters through the ``(1 - f)`` factor in the combined
+          linearization rather than a plain multiplication of the final
+          variance.
 
-        This assumes singleton strata would have contributed "average" variance
-        if they had multiple PSUs.
+        Both paths assume singleton strata would have contributed "average"
+        variance had they held multiple PSUs.
 
         Examples
         --------
@@ -1108,7 +1113,11 @@ class Singleton:
             "center": self.center,
         }
 
-        handler = dispatch.get(method.strip().lower())
+        # Accept both the enum and its string value ('.strip()' on a plain
+        # Enum raised AttributeError, so handle(SingletonHandling.POOL)
+        # crashed while handle("pool") worked).
+        key = method.strip().lower() if isinstance(method, str) else method
+        handler = dispatch.get(key)
         if handler is None:
             raise ValueError(f"Unknown method {method!r}. Use one of: {tuple(dispatch)}.")
 

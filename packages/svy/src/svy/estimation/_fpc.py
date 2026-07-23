@@ -74,7 +74,9 @@ def compute_fpc_columns(
             data, psu_pop_col, strata_col, psu_col, _FPC_PSU_COL
         )
 
-        if ssu_pop_col in data.columns and psu_col is not None:
+        if ssu_pop_col is None:
+            pass  # PSU-only FPC: PopSize(psu=...) with no SSU stage
+        elif ssu_pop_col in data.columns and psu_col is not None:
             data, fpc_ssu_col_name = build_fpc_ssu_column(
                 data, ssu_pop_col, strata_col, psu_col, ssu_col, _FPC_SSU_COL
             )

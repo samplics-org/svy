@@ -149,6 +149,34 @@ def _desc_continuous(
             if denom and denom > 0 and s.len():
                 ssum = _to_float((s * w_nonnull).sum())
                 mean = (ssum / denom) if ssum is not None else None
+                # Weighted dispersion and quantiles: previously these kept
+                # their UNWEIGHTED values while the result said
+                # weighted=True. Variance follows the aweight convention
+                # (n/(n-1)) * sum(w (x-mean_w)^2) / sum(w); quantiles use
+                # the weighted inverted-CDF.
+                if mean is not None:
+                    n_eff = s.len()
+                    wss = _to_float(((s - mean) ** 2 * w_nonnull).sum())
+                    if wss is not None and n_eff > 1:
+                        var = (n_eff / (n_eff - 1)) * wss / denom
+                        std = var**0.5
+                    elif wss is not None:
+                        var = 0.0
+                        std = 0.0
+                sort_idx = s.arg_sort()
+                s_sorted = s.gather(sort_idx)
+                w_sorted = w_nonnull.gather(sort_idx)
+                cumw = w_sorted.cum_sum()
+
+                def _wq(p: float) -> float | None:
+                    target = p * denom
+                    ge = (cumw >= target - 1e-12).arg_max()
+                    if ge is None:
+                        return None
+                    return _to_float(s_sorted[int(ge)])
+
+                p25, p50, p75 = _wq(0.25), _wq(0.50), _wq(0.75)
+                q_items = [Quantile(p=float(p), value=_wq(float(p))) for p in percentiles]
 
     return DescribeContinuous(
         name=col,
@@ -202,44 +230,7 @@ def _desc_discrete(
         s = s_base
         w = _weight_series(df, weight_col)
 
-    if s.len() == 0:
-        levels: tuple[Freq, ...] = ()
-    else:
-        if weighted and w is not None:
-            tbl = (
-                pl.DataFrame({col: s, "_w": w})
-                .group_by(col)
-                .agg(pl.col("_w").sum().alias("count"))
-                .sort("count", descending=True)
-                .head(top_k)
-            )
-            denom = _to_float(tbl["count"].sum()) if tbl.height else 0.0
-            levels = tuple(
-                Freq(
-                    level=row[col],
-                    count=float(row["count"]),
-                    prop=(float(row["count"]) / denom if denom and denom > 0 else 0.0),
-                )
-                for row in tbl.iter_rows(named=True)
-            )
-        else:
-            tbl = (
-                pl.DataFrame({col: s})
-                .group_by(col)
-                .len()
-                .rename({"len": "count"})
-                .sort("count", descending=True)
-                .head(top_k)
-            )
-            denom = float(s.len())
-            levels = tuple(
-                Freq(
-                    level=row[col],
-                    count=float(row["count"]),
-                    prop=(float(row["count"]) / denom if denom > 0 else 0.0),
-                )
-                for row in tbl.iter_rows(named=True)
-            )
+    levels, _n_levels = _build_freqs(s, weighted=weighted, w=w, top_k=top_k)
 
     return DescribeDiscrete(
         name=cont.name,
@@ -267,44 +258,43 @@ def _build_freqs(
     weighted: bool,
     w: pl.Series | None,
     top_k: int,
-) -> tuple[Freq, ...]:
+) -> tuple[tuple[Freq, ...], int]:
+    """Return (top-k level frequencies, TRUE number of distinct levels).
+
+    Proportions are computed over ALL levels, not the displayed top-k
+    subset (the previous weighted branch renormalized over the top-k sum,
+    so displayed proportions summed to 1.0 even when levels were cut).
+    """
     if s.len() == 0:
-        return ()
+        return (), 0
     if weighted and w is not None:
-        tbl = (
+        full = (
             pl.DataFrame({"__k": s, "__w": w})
             .group_by("__k")
             .agg(pl.col("__w").sum().alias("count"))
             .sort("count", descending=True)
-            .head(top_k)
         )
-        denom = _to_float(tbl["count"].sum()) if tbl.height else 0.0
-        return tuple(
-            Freq(
-                level=row["__k"],
-                count=float(row["count"]),
-                prop=(float(row["count"]) / denom if denom and denom > 0 else 0.0),
-            )
-            for row in tbl.iter_rows(named=True)
-        )
+        denom = _to_float(full["count"].sum()) if full.height else 0.0
     else:
-        tbl = (
+        full = (
             pl.DataFrame({"__k": s})
             .group_by("__k")
             .len()
             .rename({"len": "count"})
             .sort("count", descending=True)
-            .head(top_k)
         )
         denom = float(s.len())
-        return tuple(
-            Freq(
-                level=row["__k"],
-                count=float(row["count"]),
-                prop=(float(row["count"]) / denom if denom > 0 else 0.0),
-            )
-            for row in tbl.iter_rows(named=True)
+    n_levels = int(full.height)
+    tbl = full.head(top_k)
+    levels = tuple(
+        Freq(
+            level=row["__k"],
+            count=float(row["count"]),
+            prop=(float(row["count"]) / denom if denom and denom > 0 else 0.0),
         )
+        for row in tbl.iter_rows(named=True)
+    )
+    return levels, n_levels
 
 
 def _desc_nominal_or_ordinal(
@@ -332,8 +322,8 @@ def _desc_nominal_or_ordinal(
     n_total = df.height
     n_missing = int(s_base.null_count())
 
-    levels = _build_freqs(s, weighted=weighted, w=w, top_k=top_k)
-    n_levels = int(len(levels))
+    levels, n_levels = _build_freqs(s, weighted=weighted, w=w, top_k=top_k)
+    truncated = n_levels > len(levels)
     mode = levels[0].level if levels else None
 
     if ordinal:
@@ -347,7 +337,7 @@ def _desc_nominal_or_ordinal(
             levels=levels,
             n_levels=n_levels,
             mode=mode,
-            truncated=False,
+            truncated=truncated,
         )
     return DescribeNominal(
         name=col,
@@ -359,7 +349,7 @@ def _desc_nominal_or_ordinal(
         levels=levels,
         n_levels=n_levels,
         mode=mode,
-        truncated=False,
+        truncated=truncated,
     )
 
 
@@ -390,19 +380,25 @@ def _desc_boolean(
         f_false = None
         f_true = None
     else:
+        # Nulls are missing, not False: count over the non-null subset
+        # (n_missing reports them separately). Previously, with
+        # drop_nulls=False every null row inflated the False bucket.
+        nn_mask = ~s.is_null()
+        s_nn = s.filter(nn_mask)
         if weighted and w is not None:
+            w_nn = w.filter(nn_mask)
             c_true = float(
-                pl.DataFrame({"b": s.cast(pl.Int8), "w": w})
+                pl.DataFrame({"b": s_nn.cast(pl.Int8), "w": w_nn})
                 .with_columns((pl.col("b") * pl.col("w")).alias("wt"))
                 .select(pl.col("wt").sum())
                 .item()
             )
-            c_false = float(w.sum()) - c_true
+            c_false = float(w_nn.sum()) - c_true
             denom = c_true + c_false
         else:
-            c_true = float(s.sum())
-            c_false = float(s.len() - s.sum())
-            denom = float(s.len())
+            c_true = float(s_nn.sum())
+            c_false = float(s_nn.len() - s_nn.sum())
+            denom = float(s_nn.len())
 
         p_true = (c_true / denom) if denom > 0 else 0.0
         p_false = (c_false / denom) if denom > 0 else 0.0
@@ -478,7 +474,7 @@ def _desc_string(
     n_total = df.height
     n_missing = int(s_base.null_count())
 
-    top = _build_freqs(s, weighted=weighted, w=w, top_k=top_k)
+    top, _n_levels = _build_freqs(s, weighted=weighted, w=w, top_k=top_k)
     try:
         n_unique = int(s.n_unique())
     except Exception:
