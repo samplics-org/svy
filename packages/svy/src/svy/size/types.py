@@ -63,7 +63,7 @@ Target = TargetProp | TargetMean | TargetTwoProps | TargetTwoMeans
 
 class Size(msgspec.Struct, frozen=True, tag="size"):
     stratum: str | None = None
-    n0: Number | tuple[Number, Number] = 0  # base (no FPC/DEFF/nonresponse)
-    n1_fpc: Number | tuple[Number, Number] | None = None  # after FPC (if pop_size provided)
-    n2_deff: Number | tuple[Number, Number] | None = None  # after DEFF
+    n0: Number | tuple[Number, Number] = 0  # base (no DEFF/FPC/nonresponse)
+    n1_deff: Number | tuple[Number, Number] | None = None  # after DEFF
+    n2_fpc: Number | tuple[Number, Number] | None = None  # after FPC (if pop_size provided)
     n: Number | tuple[Number, Number] = 0  # final after nonresponse adjustment

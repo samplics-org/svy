@@ -17,10 +17,15 @@ def test_samp_size_dict_wald():
 # ============================================================
 # Sample size to estimate proportion
 # ============================================================
+# Pipeline (round 8, SZ6): n0 (SRS) -> DEFF -> FPC -> nonresponse.
+# Expected chains recomputed by hand from the pinned n0 values:
+#   n1_deff = ceil(deff * n0)
+#   n2_fpc  = ceil(N * n1_deff / (N + n1_deff - 1))   (when pop_size given)
+#   n       = ceil(n2_fpc / resp_rate)
 
 
 @pytest.mark.parametrize(
-    "args,n0,n_fpc,n_deff,n",
+    "args,n0,n_deff,n_fpc,n",
     [
         (
             dict(p=0.8, moe=0.10, pop_size=None, deff=1.0, resp_rate=1.0),
@@ -32,23 +37,23 @@ def test_samp_size_dict_wald():
         (
             dict(p=0.8, moe=0.10, pop_size=1000, deff=1.0, resp_rate=1.0),
             62,
-            59,
+            62,
             59,
             59,
         ),
         (
             dict(p=0.8, moe=0.10, pop_size=1000, deff=1.5, resp_rate=1.0),
             62,
-            59,
-            89,
-            89,
+            93,
+            86,
+            86,
         ),
         (
             dict(p=0.8, moe=0.10, pop_size=1000, deff=1.5, resp_rate=0.85),
             62,
-            59,
-            89,
-            105,
+            93,
+            86,
+            102,
         ),
     ],
     ids=[
@@ -58,17 +63,17 @@ def test_samp_size_dict_wald():
         "finite_pop_deff_nr_85",
     ],
 )
-def test_samp_size_prop_wald(args, n0, n_fpc, n_deff, n):
+def test_samp_size_prop_wald(args, n0, n_deff, n_fpc, n):
     ss = SampleSize().estimate_prop(**args)
 
     assert ss.size.n0 == n0
-    assert ss.size.n1_fpc == n_fpc
-    assert ss.size.n2_deff == n_deff
+    assert ss.size.n1_deff == n_deff
+    assert ss.size.n2_fpc == n_fpc
     assert ss.size.n == n
 
 
 @pytest.mark.parametrize(
-    "args,n0,n_fpc,n_deff,n",
+    "args,n0,n_deff,n_fpc,n",
     [
         (
             dict(
@@ -94,7 +99,7 @@ def test_samp_size_prop_wald(args, n0, n_fpc, n_deff, n):
                 resp_rate=1.0,
             ),
             88,
-            81,
+            88,
             81,
             81,
         ),
@@ -108,9 +113,9 @@ def test_samp_size_prop_wald(args, n0, n_fpc, n_deff, n):
                 resp_rate=1.0,
             ),
             88,
-            81,
-            122,
-            122,
+            132,
+            117,
+            117,
         ),
         (
             dict(
@@ -122,9 +127,9 @@ def test_samp_size_prop_wald(args, n0, n_fpc, n_deff, n):
                 resp_rate=0.85,
             ),
             88,
-            81,
-            122,
-            144,
+            132,
+            117,
+            138,
         ),
     ],
     ids=[
@@ -134,12 +139,12 @@ def test_samp_size_prop_wald(args, n0, n_fpc, n_deff, n):
         "finite_pop_deff_nr_85",
     ],
 )
-def test_samp_size_prop_fleiss(args, n0, n_fpc, n_deff, n):
+def test_samp_size_prop_fleiss(args, n0, n_deff, n_fpc, n):
     ss = SampleSize().estimate_prop(**args)
 
     assert ss.size.n0 == n0
-    assert ss.size.n1_fpc == n_fpc
-    assert ss.size.n2_deff == n_deff
+    assert ss.size.n1_deff == n_deff
+    assert ss.size.n2_fpc == n_fpc
     assert ss.size.n == n
 
 
@@ -149,7 +154,7 @@ def test_samp_size_prop_fleiss(args, n0, n_fpc, n_deff, n):
 
 
 @pytest.mark.parametrize(
-    "args,n0,n_fpc,n_deff,n",
+    "args,n0,n_deff,n_fpc,n",
     [
         (
             dict(sigma=30, moe=5, pop_size=None, deff=1.0, resp_rate=1.0),
@@ -161,23 +166,23 @@ def test_samp_size_prop_fleiss(args, n0, n_fpc, n_deff, n):
         (
             dict(sigma=30, moe=5, pop_size=1000, deff=1.0, resp_rate=1.0),
             139,
-            123,
+            139,
             123,
             123,
         ),
         (
             dict(sigma=30, moe=5, pop_size=1000, deff=1.5, resp_rate=1.0),
             139,
-            123,
-            185,
-            185,
+            209,
+            174,
+            174,
         ),
         (
             dict(sigma=30, moe=5, pop_size=1000, deff=1.5, resp_rate=0.85),
             139,
-            123,
-            185,
-            218,
+            209,
+            174,
+            205,
         ),
     ],
     ids=[
@@ -187,12 +192,12 @@ def test_samp_size_prop_fleiss(args, n0, n_fpc, n_deff, n):
         "finite_pop_deff_nr_85",
     ],
 )
-def test_samp_size_mean_wald(args, n0, n_fpc, n_deff, n):
+def test_samp_size_mean_wald(args, n0, n_deff, n_fpc, n):
     ss = SampleSize().estimate_mean(**args)
 
     assert ss.size.n0 == n0
-    assert ss.size.n1_fpc == n_fpc
-    assert ss.size.n2_deff == n_deff
+    assert ss.size.n1_deff == n_deff
+    assert ss.size.n2_fpc == n_fpc
     assert ss.size.n == n
 
 
@@ -202,7 +207,7 @@ def test_samp_size_mean_wald(args, n0, n_fpc, n_deff, n):
 
 
 @pytest.mark.parametrize(
-    "args,n0,n_fpc,n_deff,n",
+    "args,n0,n_deff,n_fpc,n",
     [
         (
             dict(
@@ -251,9 +256,9 @@ def test_samp_size_mean_wald(args, n0, n_fpc, n_deff, n):
                 resp_rate=1.0,
             ),
             (25, 25),
-            (25, 25),
             (38, 38),
-            (38, 38),
+            (37, 37),
+            (37, 37),
         ),
         (
             dict(
@@ -268,9 +273,9 @@ def test_samp_size_mean_wald(args, n0, n_fpc, n_deff, n):
                 resp_rate=0.85,
             ),
             (25, 25),
-            (25, 25),
             (38, 38),
-            (45, 45),
+            (37, 37),
+            (44, 44),
         ),
     ],
     ids=[
@@ -280,10 +285,10 @@ def test_samp_size_mean_wald(args, n0, n_fpc, n_deff, n):
         "finite_pop_deff_nr_85",
     ],
 )
-def test_samp_size_compare_props(args, n0, n_fpc, n_deff, n):
+def test_samp_size_compare_props(args, n0, n_deff, n_fpc, n):
     ss = SampleSize().compare_props(**args)
 
     assert ss.size.n0 == n0
-    assert ss.size.n1_fpc == n_fpc
-    assert ss.size.n2_deff == n_deff
+    assert ss.size.n1_deff == n_deff
+    assert ss.size.n2_fpc == n_fpc
     assert ss.size.n == n

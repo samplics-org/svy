@@ -56,23 +56,23 @@ def _has_pop(pop_size) -> bool:
     return pop_size is not None
 
 
-def _build_sizes(ss, *, stratified: bool, strata, n0, n1_fpc, n2_deff, n_final) -> None:
+def _build_sizes(ss, *, stratified: bool, strata, n0, n1_deff, n2_fpc, n_final) -> None:
     """Assign Size object(s) to ss._size."""
     if not stratified:
         ss._size = Size(
             stratum=None,
             n0=cast(Number, n0),
-            n1_fpc=cast(Number, n1_fpc),
-            n2_deff=cast(Number, n2_deff),
+            n1_deff=cast(Number, n1_deff),
+            n2_fpc=cast(Number, n2_fpc),
             n=cast(Number, n_final),
         )
     else:
         _n0 = cast(DomainScalarMap, n0)
-        _n1 = cast(DomainScalarMap, n1_fpc)
-        _n2 = cast(DomainScalarMap, n2_deff)
+        _n1 = cast(DomainScalarMap, n1_deff)
+        _n2 = cast(DomainScalarMap, n2_fpc)
         _nf = cast(DomainScalarMap, n_final)
         ss._size = [
-            Size(stratum=str(s), n0=_n0[s], n1_fpc=_n1[s], n2_deff=_n2[s], n=_nf[s]) for s in _n0
+            Size(stratum=str(s), n0=_n0[s], n1_deff=_n1[s], n2_fpc=_n2[s], n=_nf[s]) for s in _n0
         ]
 
 
@@ -162,16 +162,19 @@ def estimate_prop(
     else:
         n0 = _fleiss_sample_size_prop(target=p, half_ci=moe, alpha=alpha)
 
-    n1_fpc = _apply_fpc_srswor(n0=n0, pop_size=pop_size) if _has_pop(pop_size) else n0
-    n2_deff = _apply_deff(n=n1_fpc, deff=deff)
-    n_final = _apply_nonresponse(n=n2_deff, resp_rate=resp_rate)
+    # Pipeline: n0 (SRS) -> DEFF -> FPC -> nonresponse. The design effect
+    # inflates the SRS size first; the FPC then shrinks toward pop_size, so
+    # the final n can never exceed the population.
+    n1_deff = _apply_deff(n=n0, deff=deff)
+    n2_fpc = _apply_fpc_srswor(n0=n1_deff, pop_size=pop_size) if _has_pop(pop_size) else n1_deff
+    n_final = _apply_nonresponse(n=n2_fpc, resp_rate=resp_rate)
     _build_sizes(
         ss,
         stratified=stratified,
         strata=strata if stratified else None,
         n0=n0,
-        n1_fpc=n1_fpc,
-        n2_deff=n2_deff,
+        n1_deff=n1_deff,
+        n2_fpc=n2_fpc,
         n_final=n_final,
     )
     return ss
@@ -265,16 +268,17 @@ def estimate_mean(
     else:
         raise NotImplementedError("Fleiss method is not implemented for the mean.")
 
-    n1_fpc = _apply_fpc_srswor(n0=n0, pop_size=pop_size) if _has_pop(pop_size) else n0
-    n2_deff = _apply_deff(n=n1_fpc, deff=deff)
-    n_final = _apply_nonresponse(n=n2_deff, resp_rate=resp_rate)
+    # Pipeline: n0 (SRS) -> DEFF -> FPC -> nonresponse (see estimate_prop).
+    n1_deff = _apply_deff(n=n0, deff=deff)
+    n2_fpc = _apply_fpc_srswor(n0=n1_deff, pop_size=pop_size) if _has_pop(pop_size) else n1_deff
+    n_final = _apply_nonresponse(n=n2_fpc, resp_rate=resp_rate)
     _build_sizes(
         ss,
         stratified=stratified,
         strata=strata if stratified else None,
         n0=n0,
-        n1_fpc=n1_fpc,
-        n2_deff=n2_deff,
+        n1_deff=n1_deff,
+        n2_fpc=n2_fpc,
         n_final=n_final,
     )
     return ss

@@ -8,7 +8,6 @@ from typing import Literal, cast
 
 import numpy as np
 
-from numpy._core.numeric import inf
 from scipy.stats import norm
 
 from svy.core.enumerations import MeanVarMode, PropVarMode
@@ -19,6 +18,7 @@ from svy.core.types import (
     FloatArray,
     Number,
 )
+from svy.errors.method_errors import MethodError
 
 
 # ============================================================
@@ -90,11 +90,22 @@ def _resolve_maps(
 # ============================================================
 
 
+def _resp_rate_error(rv: object) -> MethodError:
+    return MethodError.invalid_range(
+        where=None,
+        param="resp_rate",
+        got=rv,
+        min_=0.0,
+        max_=1.0,
+        hint="resp_rate is a fraction in (0, 1], e.g. 0.85 for 85% response.",
+    )
+
+
 def _apply_nonresponse(
     *,
     n: Number | DomainScalarMap,
     resp_rate: Number | DomainScalarMap,
-    strict: bool = False,
+    strict: bool = True,
 ) -> Number | DomainScalarMap:
     """
     Adjust for nonresponse:
@@ -107,18 +118,18 @@ def _apply_nonresponse(
       * If both mappings, keys must match.
 
     Validation:
-    - resp_rate must be in (0, 1].
-      * strict=False: if invalid (<=0, >1, non-finite) -> leave n unchanged for that key.
-      * strict=True: raise ValueError on invalid entries.
+    - resp_rate must be finite and in (0, 1].
+      * strict=True (default): raise MethodError on invalid entries.
+      * strict=False: leave n unchanged for that key.
     """
 
     def _adj(nv: Number, rv: Number) -> float:
         n_f = float(nv)
         r_f = float(rv)
-        valid = (r_f > 0.0) and (r_f <= 1.0)
-        if not valid or not (r_f == r_f):  # NaN check
+        valid = math.isfinite(r_f) and (r_f > 0.0) and (r_f <= 1.0)
+        if not valid:
             if strict:
-                raise ValueError(f"Invalid response rate: {rv} (must be in (0,1]).")
+                raise _resp_rate_error(rv)
             return float(math.ceil(n_f))
         return float(math.ceil(n_f / r_f))
 
@@ -133,6 +144,15 @@ def _apply_nonresponse(
 # ============================================================
 # Adjsut for the design effect
 # ============================================================
+
+
+def _deff_error(dv: object) -> MethodError:
+    return MethodError.invalid_range(
+        where=None,
+        param="deff",
+        got=dv,
+        hint="deff must be a positive finite number (deff=1 means SRS).",
+    )
 
 
 def _apply_deff(
@@ -150,15 +170,15 @@ def _apply_deff(
         * Scalars are broadcast to the mapping's keys.
         * Mapping keys must match if both are mappings.
 
-    Safeguards:
-      - If deff is non-finite or <= 0 for a key, returns the unadjusted n for that key.
+    Validation:
+      - deff must be finite and > 0; invalid values raise MethodError.
     """
 
     def _adjust(n_val: Number, d_val: Number) -> float:
         n_f = float(n_val)
         d_f = float(d_val)
-        if not (d_f > 0.0):
-            return float(math.ceil(n_f))
+        if not (math.isfinite(d_f) and d_f > 0.0):
+            raise _deff_error(d_val)
         return float(math.ceil(d_f * n_f))
 
     # Scalar-scalar
@@ -214,6 +234,89 @@ def _apply_fpc_srswor(
 # ============================================================
 
 _EPS = 1e-12
+
+
+def _validate_prob(p: Number, *, param: str) -> float:
+    p_f = float(p)
+    if not (math.isfinite(p_f) and 0.0 < p_f < 1.0):
+        raise MethodError.invalid_range(where=None, param=param, got=p, min_=0.0, max_=1.0)
+    return p_f
+
+
+def _validate_power(power: Number) -> float:
+    b = float(power)
+    if not (math.isfinite(b) and 0.0 < b < 1.0):
+        raise MethodError.invalid_range(
+            where=None,
+            param="power",
+            got=power,
+            min_=0.0,
+            max_=1.0,
+            hint="power is a probability, e.g. 0.80 for 80% power.",
+        )
+    return b
+
+
+def _validate_sigma(sigma: Number, *, param: str = "sigma") -> float:
+    s = float(sigma)
+    if not (math.isfinite(s) and s > 0.0):
+        raise MethodError.invalid_range(
+            where=None,
+            param=param,
+            got=sigma,
+            hint=f"{param} must be a positive finite number.",
+        )
+    return s
+
+
+def _validate_moe(moe: Number, *, upper: float | None = None) -> float:
+    d = float(moe)
+    ok = math.isfinite(d) and d > 0.0 and (upper is None or d < upper)
+    if not ok:
+        raise MethodError.invalid_range(
+            where=None,
+            param="moe",
+            got=moe,
+            min_=0.0,
+            max_=upper,
+            hint="moe is the half-width of the confidence interval"
+            + (" on the proportion scale." if upper is not None else "."),
+        )
+    return d
+
+
+def _infeasible(detail: str) -> MethodError:
+    return MethodError(
+        title="Infeasible design",
+        detail=detail,
+        code="INFEASIBLE_DESIGN",
+    )
+
+
+def _test_denominator(*, epsilon: float, delta: float, two_sides: bool) -> float:
+    """
+    Effect denominator for power-based sizing (Chow–Shao–Wang conventions,
+    epsilon signed = true difference under the alternative):
+
+      - standard test (delta == 0):            epsilon
+      - equivalence (two-sided, delta != 0):   delta - |epsilon|  (must be > 0)
+      - non-inferiority / superiority (else):  epsilon - delta    (H0: eps <= delta)
+    """
+    if two_sides and delta != 0.0:
+        denom = delta - abs(epsilon)
+        if denom <= _EPS:
+            raise _infeasible(
+                f"Equivalence requires |epsilon| < delta; got epsilon={epsilon}, "
+                f"delta={delta}."
+            )
+        return denom
+    denom = epsilon - delta
+    if abs(denom) <= _EPS:
+        raise _infeasible(
+            f"epsilon - delta is (near) zero (epsilon={epsilon}, delta={delta}); "
+            "the required sample size is unbounded."
+        )
+    return denom
 
 
 def _as_float(x: Number) -> float:
@@ -308,8 +411,8 @@ def _wald_sample_size_prop_scalar(
     half_ci: Number,
     alpha: Number,
 ) -> float:
-    p = _as_float(target)
-    d = max(_EPS, _as_float(half_ci))
+    p = _validate_prob(target, param="p")
+    d = _validate_moe(half_ci, upper=1.0)
     z = _zcrit(_as_float(alpha), True)
     n = (z * z) * p * (1.0 - p) / (d * d)
     return float(math.ceil(n))
@@ -376,8 +479,8 @@ def _fleiss_sample_size_prop_scalar(
     half_ci: Number,
     alpha: Number,
 ) -> float:
-    p = _as_float(target)
-    d = max(_EPS, _as_float(half_ci))
+    p = _validate_prob(target, param="p")
+    d = _validate_moe(half_ci, upper=1.0)
     z = _zcrit(_as_float(alpha), True)
     f = _fleiss_factor_scalar(p=p, d=d)
     n = (f * (z * z) / (4.0 * d * d)) + (1.0 / d) - (2.0 * z * z) + ((z + 2.0) / f)
@@ -433,8 +536,8 @@ def _wilson_sample_size_prop_scalar(
     half_ci: Number,
     alpha: Number,
 ) -> float:
-    p = _as_float(target)
-    d = max(_EPS, _as_float(half_ci))
+    p = _validate_prob(target, param="p")
+    d = _as_float(half_ci)
     if not (0.0 < d < 0.5):
         raise ValueError("Wilson requires 0 < half_ci < 0.5 for a proportion.")
 
@@ -502,8 +605,8 @@ def _wald_sample_size_mean_scalar(
     sigma: Number,
     alpha: Number,
 ) -> float:
-    d = max(_EPS, _as_float(half_ci))
-    s2 = max(_EPS, _as_float(sigma)) ** 2
+    d = _validate_moe(half_ci)
+    s2 = _validate_sigma(sigma) ** 2
     z2 = _zcrit(_as_float(alpha), True) ** 2
     n = z2 * s2 / (d * d)
     return float(math.ceil(n))
@@ -578,22 +681,13 @@ def _wald_sample_size_one_mean_scalar(
     power: Number,
 ) -> float:
     d0 = _as_float(delta)
-    eps = abs(_as_float(epsilon))
-    s = max(_EPS, _as_float(sigma))
+    eps = _as_float(epsilon)  # signed
+    s = _validate_sigma(sigma)
     a = _as_float(alpha)
-    b = _as_float(power)
+    b = _validate_power(power)
 
-    if two_sides and d0 == 0.0:
-        z_a = _zcrit(a, True)
-        z_b = float(norm.ppf(b))
-    elif two_sides:
-        z_a = _zcrit(a, False)
-        z_b = float(norm.ppf((1.0 + b) / 2.0))
-    else:
-        z_a = _zcrit(a, False)
-        z_b = float(norm.ppf(b))
-
-    denom = max(_EPS, d0 - eps)
+    z_a, z_b = _zcrit_pair(two_sides=two_sides, alpha=a, power=b, delta=d0)
+    denom = _test_denominator(epsilon=eps, delta=d0, two_sides=two_sides)
     n = ((z_a + z_b) * s / denom) ** 2
     return float(math.ceil(n))
 
@@ -646,7 +740,7 @@ def _apply_nonresponse_pair(
     *,
     n: tuple[Number, Number] | Mapping[Category, tuple[Number, Number]],
     resp_rate: Number | tuple[Number, Number] | Mapping[Category, Number | tuple[Number, Number]],
-    strict: bool = False,
+    strict: bool = True,
 ) -> tuple[Number, Number] | dict[Category, tuple[Number, Number]]:
     def _valid_rr(r: float) -> bool:
         return math.isfinite(r) and (r > 0.0) and (r <= 1.0)
@@ -656,7 +750,7 @@ def _apply_nonresponse_pair(
         r_f = float(rv)
         if not _valid_rr(r_f):
             if strict:
-                raise ValueError(f"Invalid response rate: {rv} (must be finite and in (0, 1]).")
+                raise _resp_rate_error(rv)
             return float(math.ceil(n_f))
         return float(math.ceil(n_f / r_f))
 
@@ -726,8 +820,8 @@ def _apply_deff_pair(
     def _adjust_scalar(n_val: Number, d_val: Number) -> float:
         n_f = float(n_val)
         d_f = float(d_val)
-        if not (d_f > 0.0):
-            return float(math.ceil(n_f))
+        if not (math.isfinite(d_f) and d_f > 0.0):
+            raise _deff_error(d_val)
         return float(math.ceil(d_f * n_f))
 
     def _adjust_pair(
@@ -882,12 +976,11 @@ def _zcrit_pair(
 
 
 def _wald_n2_from_varfactor(*, var_factor: float, denom: float, z_a: float, z_b: float) -> int:
-    n2 = var_factor * (((z_a + z_b) / denom) ** 2) if abs(denom) > _EPS else inf
-    return int(math.ceil(n2))
-
-
-def _prob_clip(p: float) -> float:
-    return min(max(p, _EPS), 1.0 - _EPS)
+    if abs(denom) <= _EPS:
+        raise _infeasible(
+            "Effect denominator is (near) zero; the required sample size is unbounded."
+        )
+    return int(math.ceil(var_factor * (((z_a + z_b) / denom) ** 2)))
 
 
 def _choose_kappa(user_kappa: float | None, default_kappa: float) -> float:
@@ -927,10 +1020,10 @@ def _wald_sample_size_two_means(
     delta: Number | DomainScalarMap,
     sigma_1: Number | DomainScalarMap,
     sigma_2: Number | DomainScalarMap | None,
-    equal_var: bool | DomainScalarMap,
     alloc_ratio: Number | DomainScalarMap,
     alpha: Number | DomainScalarMap,
     power: Number | DomainScalarMap,
+    var_mode: MeanVarMode = MeanVarMode.EQUAL_VAR,
 ) -> tuple[Number, Number] | dict[Category, tuple[Number, Number]]:
     if (
         _is_number(epsilon)
@@ -949,6 +1042,7 @@ def _wald_sample_size_two_means(
             kappa=cast(Number, alloc_ratio),
             alpha=cast(Number, alpha),
             power=cast(Number, power),
+            var_mode=var_mode,
         )
     elif _is_map(epsilon) and _is_map(alpha) and _is_map(power):
         return _wald_sample_size_two_means_map(
@@ -960,6 +1054,7 @@ def _wald_sample_size_two_means(
             kappa=cast(DomainScalarMap, alloc_ratio),
             alpha=alpha,
             power=power,
+            var_mode=var_mode,
         )
     else:
         raise ValueError("Invalid input types")
@@ -978,12 +1073,12 @@ def _wald_sample_size_two_means_scalar(
     var_mode: MeanVarMode = MeanVarMode.EQUAL_VAR,
 ) -> tuple[Number, Number]:
     d0 = _as_float(delta)
-    eps = abs(_as_float(epsilon))
-    s1 = max(_EPS, _as_float(sigma_1))
-    s2 = max(_EPS, _as_float(sigma_2) if sigma_2 is not None else s1)
+    eps = _as_float(epsilon)  # signed
+    s1 = _validate_sigma(sigma_1, param="sigma1")
+    s2 = _validate_sigma(sigma_2, param="sigma2") if sigma_2 is not None else s1
     a = _as_float(alpha)
-    b = _as_float(power)
-    denom = d0 - eps
+    b = _validate_power(power)
+    denom = _test_denominator(epsilon=eps, delta=d0, two_sides=two_sides)
 
     match var_mode:
         case MeanVarMode.EQUAL_VAR:
@@ -991,7 +1086,8 @@ def _wald_sample_size_two_means_scalar(
             k = _choose_kappa(float(kappa) if kappa is not None else None, default_kappa=1.0)
         case MeanVarMode.UNEQUAL_VAR:
             v1, v2 = s1 * s1, s2 * s2
-            k_opt = s1 / s2
+            # kappa = n2/n1; total-n-minimizing allocation is sigma2/sigma1
+            k_opt = s2 / s1
             k = _choose_kappa(float(kappa) if kappa is not None else None, default_kappa=k_opt)
 
     return _wald_two_group_sizes(
@@ -1108,23 +1204,25 @@ def _wald_sample_size_two_props_scalar(
     var_mode: PropVarMode = PropVarMode.ALT_PROPS,
 ) -> tuple[Number, Number]:
     d0 = _as_float(delta)
-    eps = abs(_as_float(epsilon))
-    pa = _prob_clip(_as_float(p1))
-    pb = _prob_clip(_as_float(p2))
+    eps = _as_float(epsilon)  # signed
+    pa = _validate_prob(p1, param="p1")
+    pb = _validate_prob(p2, param="p2")
     a = _as_float(alpha)
-    b = _as_float(power)
-    denom = d0 - eps
+    b = _validate_power(power)
+    denom = _test_denominator(epsilon=eps, delta=d0, two_sides=two_sides)
 
     match var_mode:
         case PropVarMode.POOLED_PROP:
             k_tmp = _choose_kappa(float(kappa) if kappa is not None else None, default_kappa=1.0)
-            ppool = (k_tmp * pa + pb) / (k_tmp + 1.0)
+            # kappa = n2/n1: pooled p = (n1*p1 + n2*p2)/(n1+n2)
+            ppool = (pa + k_tmp * pb) / (1.0 + k_tmp)
             v1 = v2 = ppool * (1.0 - ppool)
             k = k_tmp
         case PropVarMode.ALT_PROPS:
             v1 = pa * (1.0 - pa)
             v2 = pb * (1.0 - pb)
-            k_opt = math.sqrt(v1 / v2) if v2 > 0 else 1.0
+            # kappa = n2/n1; total-n-minimizing allocation is sqrt(v2/v1)
+            k_opt = math.sqrt(v2 / v1) if v1 > 0 else 1.0
             k = _choose_kappa(float(kappa) if kappa is not None else None, default_kappa=k_opt)
         case PropVarMode.MAX_VAR:
             v1 = v2 = 0.25

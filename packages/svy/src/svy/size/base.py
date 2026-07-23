@@ -83,7 +83,7 @@ class SampleSize:
 
     @staticmethod
     def _is_size_obj(obj) -> bool:
-        return all(hasattr(obj, a) for a in ("n0", "n1_fpc", "n2_deff", "n"))
+        return all(hasattr(obj, a) for a in ("n0", "n1_deff", "n2_fpc", "n"))
 
     def _iter_sizes(self):
         """Return a flat list of Size-like objects from self._size."""
@@ -148,7 +148,7 @@ class SampleSize:
             include_stratum = stratified
 
         if not objs:
-            cols = (["stratum"] if include_stratum else []) + ["n0", "n1_fpc", "n2_deff", "n"]
+            cols = (["stratum"] if include_stratum else []) + ["n0", "n1_deff", "n2_fpc", "n"]
             return pl.DataFrame({c: [] for c in cols})
 
         from collections.abc import Iterable as _Iterable
@@ -156,7 +156,7 @@ class SampleSize:
         def _len_if_iter(x):
             return len(x) if isinstance(x, _Iterable) and not isinstance(x, (str, bytes)) else None
 
-        fields = ("n0", "n1_fpc", "n2_deff", "n")
+        fields = ("n0", "n1_deff", "n2_fpc", "n")
         group_len = None
         for s in objs:
             lens = {f: _len_if_iter(getattr(s, f)) for f in fields}
@@ -178,15 +178,15 @@ class SampleSize:
                 label = getattr(s, "stratum", None) or getattr(s, "domain", None) or "overall"
                 row: dict[str, object] = {
                     "n0": float(s.n0),
-                    "n1_fpc": float(s.n1_fpc),
-                    "n2_deff": float(s.n2_deff),
+                    "n1_deff": float(s.n1_deff),
+                    "n2_fpc": float(s.n2_fpc),
                     "n": float(s.n),
                 }
                 if include_stratum:
                     row["stratum"] = "" if label is None else str(label)
                 rows.append(row)
             df = pl.DataFrame(rows)
-            cols = (["stratum"] if include_stratum else []) + ["n0", "n1_fpc", "n2_deff", "n"]
+            cols = (["stratum"] if include_stratum else []) + ["n0", "n1_deff", "n2_fpc", "n"]
             df = df.select(cols)
         else:
             if not group_labels:
@@ -200,8 +200,8 @@ class SampleSize:
                     row: dict[str, object] = {
                         "group": group_labels[i],
                         "n0": float(n0[i]),
-                        "n1_fpc": float(n1[i]),
-                        "n2_deff": float(n2[i]),
+                        "n1_deff": float(n1[i]),
+                        "n2_fpc": float(n2[i]),
                         "n": float(n[i]),
                     }
                     if include_stratum:
@@ -211,8 +211,8 @@ class SampleSize:
             cols = (["stratum"] if include_stratum else []) + [
                 "group",
                 "n0",
-                "n1_fpc",
-                "n2_deff",
+                "n1_deff",
+                "n2_fpc",
                 "n",
             ]
             df = df.select(cols)
@@ -256,7 +256,7 @@ class SampleSize:
                 )
             else:
                 df = df.sort("group", descending=not ascending)
-        elif order_by in {"n", "n0", "n1_fpc", "n2_deff"}:
+        elif order_by in {"n", "n0", "n2_fpc", "n1_deff"}:
             df = df.sort(order_by, descending=not ascending)
 
         if include_stratum and "group" in df.columns and order_by in {"stratum", "group"}:
@@ -303,14 +303,14 @@ class SampleSize:
 
         if any_tuple:
             headers = (
-                ("group", "n0", "n1_fpc", "n2_deff", "n")
+                ("group", "n0", "n1_deff", "n2_fpc", "n")
                 if not stratified
-                else ("stratum", "group", "n0", "n1_fpc", "n2_deff", "n")
+                else ("stratum", "group", "n0", "n1_deff", "n2_fpc", "n")
             )
             rows = []
             for s in objs:
                 label = getattr(s, "stratum", None) or getattr(s, "domain", None) or "overall"
-                n0, n1, n2, n = s.n0, s.n1_fpc, s.n2_deff, s.n
+                n0, n1, n2, n = s.n0, s.n1_deff, s.n2_fpc, s.n
                 m = len(n)
                 _glabels = self._group_labels or [f"group{j + 1}" for j in range(m)]
                 for i in range(m):
@@ -324,17 +324,17 @@ class SampleSize:
                 rows.sort(key=lambda r: self._nat_key(r[0]))
         else:
             headers = (
-                ("n0", "n1_fpc", "n2_deff", "n")
+                ("n0", "n1_deff", "n2_fpc", "n")
                 if not stratified
-                else ("stratum", "n0", "n1_fpc", "n2_deff", "n")
+                else ("stratum", "n0", "n1_deff", "n2_fpc", "n")
             )
             rows = []
             for s in objs:
                 label = getattr(s, "stratum", None) or getattr(s, "domain", None) or "overall"
                 if stratified:
-                    rows.append((str(label), s.n0, s.n1_fpc, s.n2_deff, s.n))
+                    rows.append((str(label), s.n0, s.n1_deff, s.n2_fpc, s.n))
                 else:
-                    rows.append((s.n0, s.n1_fpc, s.n2_deff, s.n))
+                    rows.append((s.n0, s.n1_deff, s.n2_fpc, s.n))
             if stratified:
                 rows.sort(key=lambda r: self._nat_key(r[0]))
 
@@ -384,14 +384,14 @@ class SampleSize:
 
         if any_tuple:
             h = (
-                ["group", "n0", "n1_fpc", "n2_deff", "n"]
+                ["group", "n0", "n1_deff", "n2_fpc", "n"]
                 if not stratified
-                else ["stratum", "group", "n0", "n1_fpc", "n2_deff", "n"]
+                else ["stratum", "group", "n0", "n1_deff", "n2_fpc", "n"]
             )
             rows = []
             for s in objs:
                 label = getattr(s, "stratum", None) or getattr(s, "domain", None) or "overall"
-                n0, n1, n2, n = s.n0, s.n1_fpc, s.n2_deff, s.n
+                n0, n1, n2, n = s.n0, s.n1_deff, s.n2_fpc, s.n
                 m = len(n)
                 _glabels = self._group_labels or [f"group{j + 1}" for j in range(m)]
                 for i in range(m):
@@ -422,9 +422,9 @@ class SampleSize:
                 rows.sort(key=lambda r: self._nat_key(r[0]))
         else:
             h = (
-                ["n0", "n1_fpc", "n2_deff", "n"]
+                ["n0", "n1_deff", "n2_fpc", "n"]
                 if not stratified
-                else ["stratum", "n0", "n1_fpc", "n2_deff", "n"]
+                else ["stratum", "n0", "n1_deff", "n2_fpc", "n"]
             )
             rows = []
             for s in objs:
@@ -434,8 +434,8 @@ class SampleSize:
                         [
                             str(label),
                             self._fmt_num(s.n0),
-                            self._fmt_num(s.n1_fpc),
-                            self._fmt_num(s.n2_deff),
+                            self._fmt_num(s.n1_deff),
+                            self._fmt_num(s.n2_fpc),
                             self._fmt_num(s.n),
                         ]
                     )
@@ -443,8 +443,8 @@ class SampleSize:
                     rows.append(
                         [
                             self._fmt_num(s.n0),
-                            self._fmt_num(s.n1_fpc),
-                            self._fmt_num(s.n2_deff),
+                            self._fmt_num(s.n1_deff),
+                            self._fmt_num(s.n2_fpc),
                             self._fmt_num(s.n),
                         ]
                     )
@@ -611,14 +611,18 @@ class SampleSize:
 
     def compare_means(
         self,
-        mu1: Number,
-        mu2: Number,
+        mu1: Number | DomainScalarMap,
+        mu2: Number | DomainScalarMap,
+        sigma1: Number | DomainScalarMap,
+        sigma2: Number | DomainScalarMap | None = None,
         *,
         pop_size: Number | DomainScalarMap | None = None,
-        method: Literal["wald", "fleiss"] = "wald",
-        alloc_ratio: Number = 1.0,
-        alpha: Number = 0.05,
-        power: Number = 0.80,
+        two_sides: bool = True,
+        delta: Number | DomainScalarMap = 0.0,
+        alloc_ratio: Number | DomainScalarMap = 1.0,
+        method: Literal["wald"] = "wald",
+        alpha: Number | DomainScalarMap = 0.05,
+        power: Number | DomainScalarMap = 0.80,
         deff: Number | DomainScalarMap = 1.0,
         resp_rate: Number | DomainScalarMap = 1.0,
         group_labels: list[str] | None = None,
@@ -629,9 +633,13 @@ class SampleSize:
             self,
             mu1,
             mu2,
+            sigma1,
+            sigma2,
             pop_size=pop_size,
-            method=method,
+            two_sides=two_sides,
+            delta=delta,
             alloc_ratio=alloc_ratio,
+            method=method,
             alpha=alpha,
             power=power,
             deff=deff,
