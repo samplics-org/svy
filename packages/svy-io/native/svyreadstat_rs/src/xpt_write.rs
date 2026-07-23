@@ -231,12 +231,46 @@ fn write_xpt_impl(
     let mut _keep_names: Vec<CString> = Vec::with_capacity(ncols);
 
     for (j, field) in schema.fields().iter().enumerate() {
-        let col_name = CString::new(field.name().as_str())?;
         is_str_col[j] = is_text_dt(field.data_type())
             || matches!(field.data_type(), DataType::Dictionary(_, v) if is_text_dt(v.as_ref()));
+    }
+
+    // Derive string widths from the data and validate BEFORE any bytes are
+    // written. The transport format caps character fields at 200 bytes; the
+    // old hardcoded width failed at insert time, leaving a truncated file
+    // on disk.
+    const XPT_MAX_STR_BYTES: usize = 200;
+    let mut str_widths: Vec<usize> = vec![0; ncols];
+    for b in &batches {
+        for (j, w) in str_widths.iter_mut().enumerate() {
+            if !is_str_col[j] {
+                continue;
+            }
+            let col = b.column(j);
+            for i in 0..col.len() {
+                if let Some(s) = get_string_value(col.as_ref(), i) {
+                    *w = (*w).max(s.len());
+                }
+            }
+        }
+    }
+    for (j, field) in schema.fields().iter().enumerate() {
+        if is_str_col[j] && str_widths[j] > XPT_MAX_STR_BYTES {
+            return Err(anyhow!(
+                "column '{}' contains strings up to {} bytes; the XPT transport \
+                 format supports at most {} bytes per character value",
+                field.name(),
+                str_widths[j],
+                XPT_MAX_STR_BYTES
+            ));
+        }
+    }
+
+    for (j, field) in schema.fields().iter().enumerate() {
+        let col_name = CString::new(field.name().as_str())?;
 
         let (var_type, width) = if is_str_col[j] {
-            (readstat_type_e_READSTAT_TYPE_STRING, 200)
+            (readstat_type_e_READSTAT_TYPE_STRING, str_widths[j].max(1))
         } else {
             (readstat_type_e_READSTAT_TYPE_DOUBLE, 0)
         };

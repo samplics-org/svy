@@ -406,3 +406,26 @@ def test_empty_file_handling():
     # - Corrupted files
     # Add tests when you have such test files
     pass
+
+
+def test_write_xpt_overlong_string_errors_up_front(tmp_path):
+    """>200-byte strings error before any bytes are written (the old
+    hardcoded width failed mid-write, leaving a truncated file)."""
+    import pytest
+
+    from svy_io.sas import write_xpt
+
+    df = pl.DataFrame({"x": ["b" * 201]})
+    target = tmp_path / "long.xpt"
+    with pytest.raises(Exception, match="200"):
+        write_xpt(df, target)
+    assert not target.exists()
+
+
+def test_write_xpt_width_derived_from_data(tmp_path):
+    from svy_io.sas import read_xpt, write_xpt
+
+    df = pl.DataFrame({"x": ["hello", "wo"]})
+    write_xpt(df, tmp_path / "ok.xpt")
+    back, _ = read_xpt(tmp_path / "ok.xpt")
+    assert back["x"].to_list() == ["hello", "wo"]

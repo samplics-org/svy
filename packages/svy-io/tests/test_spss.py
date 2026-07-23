@@ -818,3 +818,35 @@ def test_write_sav_labels_per_column_under_global_string_cache(tmp_path):
     label_sets = {vl["set_name"]: vl["mapping"] for vl in meta["value_labels"]}
     assert set(label_sets[by_col["a"]].values()) == {"x", "y"}
     assert set(label_sets[by_col["b"]].values()) == {"p", "q"}
+
+
+def test_n_rows_metadata_correct_when_first_column_skipped(test_data_dir):
+    """Regression: n_rows was counted only on the first variable's value
+    callback, so cols_skip on the first column reported n_rows=0."""
+    df_all, _ = read_sav(test_data_dir / "spss/datetime.sav")
+    df, meta = read_sav(test_data_dir / "spss/datetime.sav", cols_skip=[df_all.columns[0]])
+    assert df.height == df_all.height
+    assert meta["n_rows"] == df_all.height
+
+
+def test_had_invalid_utf8_flag_false_on_clean_file(test_data_dir):
+    _, meta = read_sav(test_data_dir / "spss/umlauts.sav")
+    assert meta["had_invalid_utf8"] is False
+
+
+def test_encoding_parameter_is_wired(test_data_dir):
+    """encoding= used to be accepted and silently ignored."""
+    df, _ = read_sav(test_data_dir / "spss/umlauts.sav", encoding="UTF-8")
+    assert df.height > 0
+    with pytest.raises(Exception, match="(?i)pars|charset|encoding"):
+        read_sav(test_data_dir / "spss/umlauts.sav", encoding="NOT-A-CODEC")
+
+
+def test_write_sav_overlong_string_errors_up_front(tmp_path):
+    """>2000-byte strings error clearly instead of a silent cap and a
+    confusing rc error at row-insert time; no partial file is left."""
+    df = pl.DataFrame({"x": ["a" * 2001]})
+    target = tmp_path / "long.sav"
+    with pytest.raises(Exception, match="2000"):
+        write_sav(df, target)
+    assert not target.exists()

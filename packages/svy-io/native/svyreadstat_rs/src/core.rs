@@ -15,13 +15,48 @@ use readstat_sys::{
     readstat_string_value, readstat_type_class_e_READSTAT_TYPE_CLASS_STRING as TCLASS_STRING,
     readstat_type_e_READSTAT_TYPE_STRING as T_STRING,
     readstat_type_e_READSTAT_TYPE_STRING_REF as T_STRING_REF, readstat_value_is_system_missing,
-    readstat_value_t, readstat_value_type as rs_value_type, readstat_variable_get_format,
+    readstat_value_is_tagged_missing, readstat_value_t, readstat_value_tag,
+    readstat_value_type as rs_value_type, readstat_variable_get_format,
     readstat_variable_get_label, readstat_variable_get_missing_range_hi,
     readstat_variable_get_missing_range_lo, readstat_variable_get_missing_ranges_count,
     readstat_variable_get_name, readstat_variable_get_type_class, readstat_variable_t,
 };
 
 pub(crate) const HANDLER_OK: c_int = 0;
+
+/// Apply optional input character encoding and a defensive row limit to a
+/// freshly initialized parser.
+///
+/// The encoding goes through readstat's iconv support, so legacy code-page
+/// files (e.g. "WINDOWS-1252") decode correctly instead of arriving as
+/// U+FFFD-riddled lossy UTF-8. The row limit backstops the callback-side
+/// n_max abort for untrusted files. Returns the CString holding the
+/// encoding so it outlives the parse.
+pub(crate) unsafe fn configure_parser(
+    parser: *mut readstat_sys::readstat_parser_t,
+    encoding: Option<&str>,
+    rows_skip: usize,
+    n_max: Option<usize>,
+) -> Result<Option<std::ffi::CString>, String> {
+    let mut keep_enc = None;
+    if let Some(enc) = encoding {
+        let c = std::ffi::CString::new(enc).map_err(|_| format!("invalid encoding {enc:?}"))?;
+        let rc = unsafe { readstat_sys::readstat_set_file_character_encoding(parser, c.as_ptr()) };
+        if rc != readstat_sys::readstat_error_e_READSTAT_OK {
+            return Err(format!("unsupported encoding {enc:?} (rc={rc})"));
+        }
+        keep_enc = Some(c);
+    }
+    if let Some(nm) = n_max {
+        let limit = rows_skip.saturating_add(nm);
+        if limit > 0 {
+            unsafe {
+                readstat_sys::readstat_set_row_limit(parser, limit as ::std::os::raw::c_long)
+            };
+        }
+    }
+    Ok(keep_enc)
+}
 pub(crate) const HANDLER_ABORT: c_int = 1;
 
 // Performance tuning constants
@@ -79,6 +114,10 @@ pub struct MetaOut {
     pub n_rows: usize,
     pub tagged_missings: Vec<TaggedSpec>,
     pub notes: Vec<String>,
+    /// True when any string decoded from the file contained invalid UTF-8
+    /// (replaced with U+FFFD). Usually means the file uses a legacy code
+    /// page: re-read with an explicit `encoding=` to decode it correctly.
+    pub had_invalid_utf8: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -113,6 +152,11 @@ pub(crate) struct ParseCtx {
     pub(crate) n_max: Option<usize>,
     pub(crate) n_rows_seen: usize,
     pub(crate) n_rows_emitted: usize,
+    /// Last row index counted into n_rows_emitted (rows are counted once,
+    /// on their first delivered value, regardless of which columns are kept).
+    pub(crate) last_counted_row: Option<usize>,
+    /// Any string in the file failed strict UTF-8 decoding (lossy-replaced).
+    pub(crate) had_invalid_utf8: bool,
     pub(crate) label_sets: HashMap<String, BTreeMap<String, String>>,
     pub(crate) file_label: Option<String>,
     pub(crate) last_err: Option<String>,
@@ -190,13 +234,6 @@ impl ColBuilders {
 }
 
 // ---------- Common callbacks ----------
-
-unsafe extern "C" {
-    fn readstat_value_is_tagged_missing(
-        value: readstat_sys::readstat_value_t,
-    ) -> ::std::os::raw::c_int;
-    fn readstat_value_tag(value: readstat_sys::readstat_value_t) -> ::std::os::raw::c_char;
-}
 
 fn describe_panic(p: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = p.downcast_ref::<&str>() {
@@ -475,10 +512,18 @@ unsafe fn on_value_impl(
     }
 
     if let Some(nm) = rctx.n_max {
-        let last_allowed = rctx.rows_skip.saturating_add(nm.saturating_sub(1));
-        if row_us > last_allowed {
+        // First disallowed row is rows_skip + n_max; n_max == 0 emits no rows.
+        if row_us >= rctx.rows_skip.saturating_add(nm) {
             return HANDLER_ABORT;
         }
+    }
+
+    // Count each included row exactly once, independent of which columns are
+    // kept (the old `idx == 0` check reported n_rows = 0 whenever cols_skip
+    // dropped the first column).
+    if rctx.last_counted_row != Some(row_us) {
+        rctx.last_counted_row = Some(row_us);
+        rctx.n_rows_emitted += 1;
     }
 
     let name = {
@@ -522,8 +567,14 @@ unsafe fn on_value_impl(
             if sp.is_null() {
                 col.push_missing();
             } else {
-                let s = CStr::from_ptr(sp).to_string_lossy();
-                col.push_str(&s);
+                let cs = CStr::from_ptr(sp);
+                match cs.to_str() {
+                    Ok(s) => col.push_str(s),
+                    Err(_) => {
+                        rctx.had_invalid_utf8 = true;
+                        col.push_str(&cs.to_string_lossy());
+                    }
+                }
             }
         } else {
             let d = readstat_double_value(value);
@@ -531,9 +582,6 @@ unsafe fn on_value_impl(
         }
     }
 
-    if idx == 0 {
-        rctx.n_rows_emitted += 1;
-    }
     HANDLER_OK
 }
 
@@ -708,6 +756,7 @@ pub(crate) fn finalize_to_ipc(mut ctx: ParseCtx) -> Result<(Vec<u8>, MetaOut)> {
         n_rows: ctx.n_rows_emitted,
         tagged_missings: tagged_specs,
         notes: ctx.notes,
+        had_invalid_utf8: ctx.had_invalid_utf8,
     };
 
     Ok((buf, meta))
@@ -774,6 +823,8 @@ mod tests {
             n_max: None,
             n_rows_seen: 0,
             n_rows_emitted: 0,
+            last_counted_row: None,
+            had_invalid_utf8: false,
             label_sets: HashMap::new(),
             file_label: None,
             last_err: None,

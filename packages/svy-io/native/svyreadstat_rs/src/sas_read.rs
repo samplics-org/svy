@@ -31,6 +31,8 @@ use crate::core::{
 fn parse_sas_impl(
     data_path: &str,
     catalog_path: Option<&str>,
+    encoding: Option<&str>,
+    catalog_encoding: Option<&str>,
     rows_skip: usize,
     n_max: Option<usize>,
     cols_skip: Option<Vec<String>>,
@@ -52,6 +54,8 @@ fn parse_sas_impl(
         n_max,
         n_rows_seen: 0,
         n_rows_emitted: 0,
+        last_counted_row: None,
+        had_invalid_utf8: false,
         label_sets: HashMap::with_capacity(64), // Pre-allocate for value labels
         file_label: None,
         last_err: None,
@@ -72,6 +76,15 @@ fn parse_sas_impl(
 
             // Only need value label handler for catalog
             readstat_set_value_label_handler(parser, Some(on_value_label_cb));
+
+            let _keep_enc = match crate::core::configure_parser(parser, catalog_encoding, 0, None)
+            {
+                Ok(k) => k,
+                Err(msg) => {
+                    readstat_parser_free(parser);
+                    return Err(anyhow!(msg));
+                }
+            };
 
             let c_path = CString::new(cat_path)?;
             let rc =
@@ -109,6 +122,14 @@ fn parse_sas_impl(
         readstat_set_variable_handler(parser, Some(on_variable_cb));
         readstat_set_value_handler(parser, Some(on_value_cb));
 
+        let _keep_enc = match crate::core::configure_parser(parser, encoding, rows_skip, n_max) {
+            Ok(k) => k,
+            Err(msg) => {
+                readstat_parser_free(parser);
+                return Err(anyhow!(msg));
+            }
+        };
+
         let c_path = CString::new(data_path)?;
         let rc =
             readstat_parse_sas7bdat(parser, c_path.as_ptr(), &mut ctx as *mut _ as *mut c_void);
@@ -145,8 +166,8 @@ fn parse_sas_impl(
 /// Arguments:
 ///   data_path: Path to .sas7bdat file
 ///   catalog_path: Optional path to .sas7bcat catalog file for value labels
-///   _encoding: Deprecated, kept for compatibility (ignored)
-///   _catalog_encoding: Deprecated, kept for compatibility (ignored)
+///   encoding: Optional input character encoding (iconv name) for the data file
+///   catalog_encoding: Optional input character encoding for the catalog file
 ///   cols_skip: Optional list of column names to skip
 ///   n_max: Optional maximum number of rows to read
 ///   rows_skip: Number of rows to skip from start (default: 0)
@@ -157,8 +178,8 @@ fn parse_sas_impl(
 #[pyo3(signature = (
     data_path,
     catalog_path=None,
-    _encoding=None,
-    _catalog_encoding=None,
+    encoding=None,
+    catalog_encoding=None,
     cols_skip=None,
     n_max=None,
     rows_skip=0
@@ -167,15 +188,25 @@ pub fn df_parse_sas_file<'py>(
     py: Python<'py>,
     data_path: &str,
     catalog_path: Option<&str>,
-    _encoding: Option<&str>,
-    _catalog_encoding: Option<&str>,
+    encoding: Option<&str>,
+    catalog_encoding: Option<&str>,
     cols_skip: Option<Vec<String>>,
     n_max: Option<usize>,
     rows_skip: usize,
 ) -> PyResult<(Py<PyAny>, String)> {
     // Release GIL during parsing for better Python concurrency
     let result =
-        py.detach(|| parse_sas_impl(data_path, catalog_path, rows_skip, n_max, cols_skip));
+        py.detach(|| {
+            parse_sas_impl(
+                data_path,
+                catalog_path,
+                encoding,
+                catalog_encoding,
+                rows_skip,
+                n_max,
+                cols_skip,
+            )
+        });
 
     let (ipc, meta) =
         result.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
@@ -199,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_parse_sas_validates_path() {
-        let result = parse_sas_impl("nonexistent.sas7bdat", None, 0, None, None);
+        let result = parse_sas_impl("nonexistent.sas7bdat", None, None, None, 0, None, None);
         assert!(result.is_err());
     }
 

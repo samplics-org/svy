@@ -358,8 +358,18 @@ fn write_spss_minimal(
 
         if is_str_col[j] {
             let stats = str_stats[j].unwrap_or(StringColStats { max_len: 1 });
+            // Validate up front: silently capping at 2000 produced a
+            // confusing readstat rc error at row-insert time.
+            if stats.max_len > 2000 {
+                return Err(anyhow!(
+                    "column '{}' contains strings up to {} bytes; the SAV \
+                     writer supports at most 2000 bytes per string value",
+                    field.name(),
+                    stats.max_len
+                ));
+            }
             typ = T_STRING;
-            width = std::cmp::max(1, std::cmp::min(2000, stats.max_len));
+            width = std::cmp::max(1, stats.max_len);
         }
 
         let cname = CString::new(field.name().as_str())?;
