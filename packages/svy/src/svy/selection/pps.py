@@ -58,16 +58,27 @@ def _select_pps(*, method, frame, n, mos, stratum, certainty_threshold, rstate):
     # encoded as object dtype numpy array; convert to i64 index for Rust
     strat_int, strat_list = _encode_stratum(stratum)
 
-    sel, hits, probs, cert = _select_pps_rs(
-        frame=frame.tolist(),
-        mos=mos.tolist(),
-        n_scalar=n_scalar,
-        n_map=(_remap_n_map(n_map, strat_int) if n_map is not None else None),
-        stratum=strat_list,
-        method=method_str,
-        certainty_threshold=certainty_threshold,
-        seed=seed,
-    )
+    from svy.errors import MethodError
+
+    try:
+        sel, hits, probs, cert = _select_pps_rs(
+            frame=frame.tolist(),
+            mos=mos.tolist(),
+            n_scalar=n_scalar,
+            n_map=(_remap_n_map(n_map, strat_int) if n_map is not None else None),
+            stratum=strat_list,
+            method=method_str,
+            certainty_threshold=certainty_threshold,
+            seed=seed,
+        )
+    except ValueError as e:
+        # Kernel-side validation (Murphy n != 2, Sampford n*p >= 1 or
+        # degenerate acceptance, invalid MOS, ...) as a typed svy error.
+        raise MethodError.not_applicable(
+            where=f"Sample.selection.pps_{method_str}",
+            method=f"pps_{method_str}",
+            reason=str(e),
+        ) from None
     return (
         np.asarray(sel, dtype=np.int64),
         np.asarray(hits, dtype=np.int64),
