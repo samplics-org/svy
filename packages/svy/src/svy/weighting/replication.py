@@ -19,6 +19,9 @@ try:
         create_bootstrap_wgts as rust_create_bootstrap_wgts,  # type: ignore[import-untyped]
     )
     from svy_rs._internal import (
+        brr_hadamard_size as rust_brr_hadamard_size,  # type: ignore[import-untyped]
+    )
+    from svy_rs._internal import (
         create_brr_wgts as rust_create_brr_wgts,  # type: ignore[import-untyped]
     )
     from svy_rs._internal import (
@@ -29,6 +32,7 @@ try:
     )
 except ImportError:  # pragma: no cover
     rust_create_bootstrap_wgts = None
+    rust_brr_hadamard_size = None
     rust_create_brr_wgts = None
     rust_create_jk_wgts = None
     rust_create_sdr_wgts = None
@@ -276,6 +280,24 @@ def create_brr_wgts(
     main_weights = _to_float_array(data, design.wgt, len(data))
     stratum_int = _to_int_array(data, design.stratum)
     psu_int = _to_int_array(data, design.psu)
+
+    # BRR replicate count is bounded by the Hadamard matrix size for the
+    # design's strata: fewer requested reps are rounded UP to it (balance
+    # needs the full Hadamard set); more cannot exist without silently
+    # duplicating replicate columns, so that is an error.
+    if n_reps is not None and rust_brr_hadamard_size is not None:
+        h_size = rust_brr_hadamard_size(len(set(stratum_int.tolist())))
+        if n_reps > h_size:
+            raise MethodError.invalid_range(
+                where="Sample.weighting.create_brr_wgts",
+                param="n_reps",
+                got=n_reps,
+                min_=1,
+                max_=h_size,
+                hint=f"BRR with this design supports at most {h_size} distinct "
+                f"replicates (the Hadamard matrix size). Pass n_reps<={h_size} "
+                "or omit n_reps to use the full set.",
+            )
 
     assert rust_create_brr_wgts is not None  # noqa: S101
     rep_mat, df_val = rust_create_brr_wgts(

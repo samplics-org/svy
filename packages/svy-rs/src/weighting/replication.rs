@@ -55,7 +55,31 @@ impl std::error::Error for ReplicationError {}
 // Hadamard Matrix Generation
 // ============================================================================
 
+/// Get a Hadamard matrix for BRR with `n_strata` strata. Returns
+/// (matrix, order); the order is the number of replicates.
+///
+/// The order must EXCEED n_strata because strata are assigned to rows
+/// 1..order-1, skipping row 0: in a normalized Hadamard matrix row 0 is
+/// all +1s, and a stratum assigned to it would keep the same PSU doubled
+/// in every replicate — its partner PSU would carry zero weight in all
+/// replicates and silently vanish from variance estimation (the previous
+/// behavior for the stratum mapped to row 0).
+pub fn get_hadamard_for_brr(n_strata: usize) -> Result<(Array2<f64>, usize)> {
+    let need = n_strata + 1;
+    if let Some(h) = try_get_hadamard(need) {
+        return Ok((h, need));
+    }
+    for size in (need + 1)..=(need * 2) {
+        if let Some(h) = try_get_hadamard(size) {
+            return Ok((h, size));
+        }
+    }
+    let pow2 = next_power_of_2(need);
+    Ok((generate_hadamard_sylvester(pow2), pow2))
+}
+
 /// Get Hadamard matrix for n strata. Returns (matrix, actual_size).
+/// Used by SDR, whose row-usage convention is reviewed separately.
 pub fn get_hadamard_for_strata(n_strata: usize) -> Result<(Array2<f64>, usize)> {
     // Try exact size
     if let Some(h) = try_get_hadamard(n_strata) {
@@ -199,7 +223,20 @@ pub fn create_brr_weights(
 
     let (stratum_map, psu_to_idx) = build_brr_stratum_map(&stratum, &psu, seed)?;
     let n_strata = stratum_map.len();
-    let (hadamard, h_size) = get_hadamard_for_strata(n_strata)?;
+    let (hadamard, h_size) = get_hadamard_for_brr(n_strata)?;
+    // n_reps below the Hadamard order is rounded UP to it (balance requires
+    // a full Hadamard set). Requesting MORE would silently duplicate columns
+    // via `r % h_size` — duplicated replicates add no information while
+    // looking like more — so that is an error.
+    if let Some(r) = n_reps {
+        if r > h_size {
+            return Err(ReplicationError::InvalidInput(format!(
+                "n_reps={r} exceeds the Hadamard matrix order {h_size} for {n_strata} strata; \
+                 BRR supports at most {h_size} distinct replicates here (n_reps <= {h_size}, \
+                 or omit n_reps to use {h_size})"
+            )));
+        }
+    }
     let n_reps = n_reps.map(|r| r.max(h_size)).unwrap_or(h_size);
 
     let k_plus = 2.0 - fay_coef;
@@ -214,7 +251,9 @@ pub fn create_brr_weights(
                 let p = psu[i];
                 let stratum_idx = stratum_map[&s].0 as usize;
                 let psu_idx = psu_to_idx[&(s, p)];
-                let h_val = hadamard[[stratum_idx % h_size, r % h_size]];
+                // Rows 1..h_size: row 0 (all +1s) is never assigned — see
+                // get_hadamard_for_brr.
+                let h_val = hadamard[[(stratum_idx + 1) % h_size, r % h_size]];
                 let mult = if (h_val > 0.0 && psu_idx == 0) || (h_val < 0.0 && psu_idx == 1) {
                     k_plus
                 } else {
@@ -700,10 +739,55 @@ mod tests {
         let wgt = array![1.0, 1.0, 1.0, 1.0];
         let stratum = array![1, 1, 2, 2];
         let psu = array![1, 2, 1, 2];
+        // 2 strata -> Hadamard order 4 (rows 1..3 usable; row 0 skipped).
         let (rep_wgt, df) =
             create_brr_weights(wgt.view(), stratum.view(), psu.view(), Some(4), 0.0, None).unwrap();
         assert_eq!(rep_wgt.dim(), (4, 4));
         assert_eq!(df, 2.0);
+    }
+
+    #[test]
+    fn test_brr_n_reps_beyond_hadamard_is_error() {
+        // Requesting more replicates than the Hadamard order used to silently
+        // duplicate columns (r % h_size); it is now an error.
+        let wgt = array![1.0, 1.0, 1.0, 1.0];
+        let stratum = array![1, 1, 2, 2];
+        let psu = array![1, 2, 1, 2];
+        let err = create_brr_weights(wgt.view(), stratum.view(), psu.view(), Some(8), 0.0, None)
+            .unwrap_err();
+        assert!(err.to_string().contains("Hadamard"), "got: {err}");
+    }
+
+    #[test]
+    fn test_brr_is_balanced_every_psu_participates() {
+        // Balance: every PSU must carry weight in exactly half the
+        // replicates, so the mean replicate weight equals the base weight.
+        // Previously the stratum assigned to the all-ones Hadamard row had
+        // one PSU zeroed in EVERY replicate.
+        for n_strata in 2..=6usize {
+            let n_obs = n_strata * 2;
+            let wgt = Array1::from_elem(n_obs, 1.0);
+            let stratum = Array1::from_iter((0..n_obs).map(|i| (i / 2) as i64 + 1));
+            let psu = Array1::from_iter((0..n_obs).map(|i| (i % 2) as i64 + 1));
+            let (rep_wgt, _df) =
+                create_brr_weights(wgt.view(), stratum.view(), psu.view(), None, 0.0, None)
+                    .unwrap();
+            let n_reps = rep_wgt.ncols();
+            for i in 0..n_obs {
+                let row_sum: f64 = rep_wgt.row(i).sum();
+                let mean = row_sum / n_reps as f64;
+                assert!(
+                    (mean - 1.0).abs() < 1e-12,
+                    "n_strata={n_strata}, obs {i}: mean replicate weight {mean} != base 1.0"
+                );
+                let n_nonzero = rep_wgt.row(i).iter().filter(|&&w| w > 0.0).count();
+                assert_eq!(
+                    n_nonzero,
+                    n_reps / 2,
+                    "n_strata={n_strata}, obs {i}: PSU active in {n_nonzero}/{n_reps} replicates"
+                );
+            }
+        }
     }
 
     #[test]

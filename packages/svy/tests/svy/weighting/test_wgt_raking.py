@@ -199,11 +199,11 @@ def test_rake_stops_at_max_iter_on_no_convergence(sample_data_for_raking, mock_d
 
 
 def test_rake_stops_when_bounds_exceeded(sample_data_for_raking, mock_design):
+    from svy.errors import MethodError
+
     sample = Sample(data=sample_data_for_raking, design=mock_design)
     controls = {"region": {"North": 50.0, "South": 30.0}}
-    with pytest.raises(
-        ValueError, match="Raking failed: Weight ratios exceeded specified bounds."
-    ):
+    with pytest.raises(MethodError, match="exceeded the specified bounds"):
         sample.weighting.rake(controls=controls, up_bound=1.2)
 
 

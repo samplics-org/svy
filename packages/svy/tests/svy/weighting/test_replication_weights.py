@@ -110,9 +110,35 @@ class TestBRRWeights:
         sample = simple_stratified_sample.weighting.create_brr_wgts(fay_coef=0.5)
         assert sample.design.rep_wgts.fay_coef == 0.5
 
-    def test_brr_custom_n_reps(self, simple_stratified_sample):
-        sample = simple_stratified_sample.weighting.create_brr_wgts(n_reps=8)
-        assert sample.design.rep_wgts.n_reps >= 8
+    def test_brr_custom_n_reps_beyond_hadamard_errors(self, simple_stratified_sample):
+        """3 strata -> Hadamard order 4; requesting more replicates than the
+        order used to silently duplicate columns and is now a typed error."""
+        from svy.errors import MethodError
+
+        with pytest.raises(MethodError, match="n_reps"):
+            simple_stratified_sample.weighting.create_brr_wgts(n_reps=8)
+
+    def test_brr_small_n_reps_rounds_up_to_hadamard(self, simple_stratified_sample):
+        """Balance needs the full Hadamard set: n_reps below the order is
+        rounded up (documented behavior)."""
+        sample = simple_stratified_sample.weighting.create_brr_wgts(n_reps=2)
+        assert sample.design.rep_wgts.n_reps == 4
+
+    def test_brr_every_psu_participates(self, simple_stratified_sample):
+        """Regression: the stratum on the all-ones Hadamard row had one PSU
+        zeroed in EVERY replicate. Mean replicate weight must equal the base
+        weight for every observation."""
+        sample = simple_stratified_sample.weighting.create_brr_wgts()
+        prefix = sample.design.rep_wgts.prefix
+        rep_cols = [c for c in sample.data.columns if c.startswith(prefix) and c != "wgt"]
+        rep_cols = [c for c in rep_cols if c[len(prefix) :].isdigit()]
+        assert rep_cols
+        import numpy as np
+
+        mat = sample.data.select(rep_cols).to_numpy()
+        base = sample.data.get_column("wgt").to_numpy()
+        assert np.allclose(mat.mean(axis=1), base)
+        assert (mat > 0).sum(axis=1).min() == len(rep_cols) // 2
 
     def test_brr_custom_rep_prefix(self, simple_stratified_sample):
         sample = simple_stratified_sample.weighting.create_brr_wgts(n_reps=4, rep_prefix="brr_rep")
