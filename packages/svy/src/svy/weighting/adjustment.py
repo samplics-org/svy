@@ -35,10 +35,21 @@ def _encode_resp_status(
     resp_status_arr: np.ndarray,
     resp_mapping: DomainScalarMap | None,
 ) -> np.ndarray:
-    codes = np.zeros(len(resp_status_arr), dtype=np.int64)
+    """
+    Encode response statuses to the Rust integer codes (0=rr, 1=nr, 2=in, 3=uk).
+
+    Every row must match a mapping entry (or a canonical label when no mapping
+    is given) — code 0 means "respondent", so letting unmatched rows fall
+    through would silently inflate their weights. Mapping values may be
+    scalars or collections (e.g. {"nr": ["refusal", "noncontact"]}).
+    """
+    n = len(resp_status_arr)
+    codes = np.zeros(n, dtype=np.int64)
+    matched = np.zeros(n, dtype=bool)
     lower = np.char.lower(resp_status_arr.astype(str))
 
     if resp_mapping is not None:
+        allowed_labels: list[str] = []
         for canonical_key, data_label in resp_mapping.items():
             key_lower = str(canonical_key).lower()
             if key_lower not in _CANONICAL_TO_INT:
@@ -49,10 +60,34 @@ def _encode_resp_status(
                     allowed=list(_CANONICAL_TO_INT.keys()),
                     hint="Use canonical response status codes: rr, nr, in, uk.",
                 )
-            codes[lower == str(data_label).lower()] = _CANONICAL_TO_INT[key_lower]
+            labels = (
+                list(data_label)
+                if isinstance(data_label, (list, tuple, set, frozenset, np.ndarray))
+                else [data_label]
+            )
+            for lab in labels:
+                mask = lower == str(lab).lower()
+                codes[mask] = _CANONICAL_TO_INT[key_lower]
+                matched |= mask
+                allowed_labels.append(str(lab))
     else:
+        allowed_labels = list(_CANONICAL_TO_INT.keys())
         for label, code in _CANONICAL_TO_INT.items():
-            codes[lower == label] = code
+            mask = lower == label
+            codes[mask] = code
+            matched |= mask
+
+    if not matched.all():
+        unmatched = sorted(set(resp_status_arr[~matched].astype(str)))
+        raise MethodError.invalid_choice(
+            where="Sample.weighting.adjust",
+            param="resp_status",
+            got=unmatched[:10],
+            allowed=allowed_labels,
+            hint="Every response status value (including nulls) must match a "
+            "resp_mapping entry, or a canonical code (rr/nr/in/uk) when "
+            "resp_mapping is None.",
+        )
 
     return codes
 
@@ -166,24 +201,43 @@ def adjust(
     sample._data = df
 
     if respondents_only:
-
-        def _resp_mask_expr(col: str, mapping: dict | None) -> pl.Expr:
-            if mapping is None:
-                return pl.col(col) == "rr"
-            rr_codes = mapping.get("rr", "rr")
-            if isinstance(rr_codes, (list, tuple, set, np.ndarray)):
-                return pl.col(col).is_in(list(rr_codes))
-            return pl.col(col) == rr_codes
-
-        sample._data = sample._data.filter(_resp_mask_expr(resp_status, resp_mapping))
+        # Filter from the encoded codes (0 == respondent) — the single source
+        # of truth already used for the adjustment itself. Re-deriving the
+        # mask from raw strings was case-sensitive while the encoder is not,
+        # which could silently empty the sample.
+        sample._data = sample._data.filter(pl.Series("__resp_mask__", resp_codes == 0))
 
     if trimming is not None:
-        sample = _apply_trim(
-            sample,
-            trimming,
-            replace=True,
-            update_design_wgts=update_design_wgts,
-            where="Sample.weighting.adjust",
-        )
+        if update_design_wgts:
+            sample = _apply_trim(
+                sample,
+                trimming,
+                replace=True,
+                update_design_wgts=True,
+                where="Sample.weighting.adjust",
+            )
+        else:
+            # The trim must target the freshly created adjusted weight (and
+            # its replicate columns), not the caller's original design weight:
+            # point the design at the new columns for the trim, then restore.
+            original_design = sample._design
+            tmp_design = original_design.update(wgt=wgt_name)
+            if not ignore_reps and design.rep_wgts is not None:
+                tmp_design = tmp_design.update_rep_weights(
+                    method=design.rep_wgts.method,
+                    prefix=wgt_name,
+                    n_reps=len(design.rep_wgts.columns),
+                    fay_coef=design.rep_wgts.fay_coef,
+                    df=design.rep_wgts.df,
+                )
+            sample._design = tmp_design
+            sample = _apply_trim(
+                sample,
+                trimming,
+                replace=True,
+                update_design_wgts=False,
+                where="Sample.weighting.adjust",
+            )
+            sample._design = original_design
 
     return sample

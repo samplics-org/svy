@@ -9,13 +9,14 @@ construction — they are not general-purpose weighting utilities.
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Any, Sequence
 
 import numpy as np
 import polars as pl
 
 from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import Category, Number
+from svy.errors import DimensionError
 
 
 def _expand_term(
@@ -24,7 +25,21 @@ def _expand_term(
     if isinstance(term, str):
         if term not in df.columns:
             raise KeyError(f"{where}: Continuous term '{term}' not found in data.")
-        return [pl.col(term).cast(pl.Float64).fill_null(0.0)], [term]
+        n_null = int(df.get_column(term).is_null().sum())
+        if n_null > 0:
+            # Silently filling with 0 would bias the calibration totals; the
+            # Cat branch treats null as an explicit level needing a target,
+            # so a continuous auxiliary must be complete.
+            raise DimensionError(
+                title="Missing values in continuous auxiliary",
+                detail=f"Column '{term}' has {n_null} null value(s).",
+                code="AUX_NA",
+                where=where,
+                param=str(term),
+                hint="Impute or drop missing values (e.g. wrangling.fill_null) "
+                "before calibrating on this auxiliary.",
+            )
+        return [pl.col(term).cast(pl.Float64)], [term]
 
     if isinstance(term, Cat):
         col_name = term.name
