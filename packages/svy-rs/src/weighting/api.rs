@@ -221,14 +221,14 @@ pub fn create_jk_wgts(
     stratum: Option<PyReadonlyArray1<i64>>,
     paired: bool,
     seed: Option<u64>,
-) -> PyResult<(Py<PyArray2<f64>>, f64)> {
+) -> PyResult<(Py<PyArray2<f64>>, f64, Vec<f64>)> {
     let stratum_view = stratum.as_ref().map(|s| s.as_array());
-    let (result, df) = crate::weighting::replication::create_jk_weights(
+    let (result, df, rscales) = crate::weighting::replication::create_jk_weights(
         wgt.as_array(), stratum_view, psu.as_array(), paired, seed,
     )
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
-    Ok((result.into_pyarray(py).to_owned().into(), df))
+    Ok((result.into_pyarray(py).to_owned().into(), df, rscales))
 }
 
 #[pyfunction]

@@ -85,7 +85,7 @@ pub fn replicate_coefficients(method: RepMethod, n_reps: usize, fay_coef: f64) -
 /// * `rep_coefs` - Replicate coefficients
 /// * `center` - Centering method (ReplicateMean or FullSample)
 pub fn variance_from_replicates(
-    method: RepMethod,
+    _method: RepMethod,
     theta_full: f64,
     theta_reps: &[f64],
     rep_coefs: &[f64],
@@ -96,71 +96,31 @@ pub fn variance_from_replicates(
         return 0.0;
     }
 
-    match method {
-        RepMethod::Jackknife => {
-            // Jackknife pseudo-value approach (unchanged)
-            // For JK1 with coef = (n-1)/n:
-            // factor = 1 / (1 - coef) = n
-            // pseudo = factor * theta_full - (factor - 1) * theta_rep
+    // One formula for every replication method (R's svrVar):
+    //   v = sum_r c_r * (theta_r - center)^2
+    // with c_r the per-replicate coefficient (scale * rscales_r) and the
+    // center either the replicate mean (mse=FALSE) or the full-sample
+    // estimate (mse=TRUE).
+    //
+    // The jackknife previously went through an equivalent pseudo-value
+    // construction that (a) silently ignored `center`, so requesting R's
+    // mse=TRUE returned the mse=FALSE estimator, and (b) degenerated for
+    // any coefficient >= 1 (factor -> inf contributed 0), which broke
+    // per-stratum JKn/JK2 rscales. For uniform coefficients and
+    // replicate-mean centering the two are algebraically identical.
+    let center_value = match center {
+        VarianceCenter::ReplicateMean => theta_reps.iter().sum::<f64>() / n_reps as f64,
+        VarianceCenter::FullSample => theta_full,
+    };
 
-            let factors: Vec<f64> = rep_coefs
-                .iter()
-                .map(|&c| {
-                    if c < 1.0 {
-                        1.0 / (1.0 - c)
-                    } else {
-                        f64::INFINITY
-                    }
-                })
-                .collect();
-
-            // Compute pseudo values
-            let pseudo: Vec<f64> = theta_reps
-                .iter()
-                .zip(factors.iter())
-                .map(|(&rep, &f)| f * theta_full - (f - 1.0) * rep)
-                .collect();
-
-            // Center (mean of pseudo values)
-            let center: f64 = pseudo.iter().sum::<f64>() / n_reps as f64;
-
-            // Variance = sum(c * ((pseudo - center) / (factor - 1))^2)
-            let var: f64 = pseudo
-                .iter()
-                .zip(rep_coefs.iter())
-                .zip(factors.iter())
-                .map(|((&p, &c), &f)| {
-                    let denom = f - 1.0;
-                    if denom > 0.0 {
-                        let diff = (p - center) / denom;
-                        c * diff * diff
-                    } else {
-                        0.0
-                    }
-                })
-                .sum();
-
-            var
-        }
-        RepMethod::SDR | RepMethod::BRR | RepMethod::Bootstrap => {
-            // Choose centering point based on parameter
-            let center_value = match center {
-                VarianceCenter::ReplicateMean => theta_reps.iter().sum::<f64>() / n_reps as f64,
-                VarianceCenter::FullSample => theta_full,
-            };
-
-            let var: f64 = theta_reps
-                .iter()
-                .zip(rep_coefs.iter())
-                .map(|(&rep, &c)| {
-                    let diff = rep - center_value;
-                    c * diff * diff
-                })
-                .sum();
-
-            var
-        }
-    }
+    theta_reps
+        .iter()
+        .zip(rep_coefs.iter())
+        .map(|(&rep, &c)| {
+            let diff = rep - center_value;
+            c * diff * diff
+        })
+        .sum()
 }
 
 // ============================================================================
