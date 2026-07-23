@@ -41,9 +41,28 @@ impl Rng {
         result
     }
 
-    /// Uniform random integer in [0, n).
+    /// Uniform random integer in [0, n), exactly uniform.
+    ///
+    /// Lemire's nearly-divisionless bounded sampling. The previous
+    /// `next_u64() % n` had modulo bias: values below 2^64 mod n were
+    /// selected slightly more often (negligible for small n, but free to
+    /// avoid). NOTE: this changed the sampled units for a given seed.
     pub fn next_index(&mut self, n: usize) -> usize {
-        (self.next_u64() % n as u64) as usize
+        debug_assert!(n > 0, "next_index requires n > 0");
+        let n = n as u64;
+        let mut x = self.next_u64();
+        let mut m = (x as u128) * (n as u128);
+        let mut low = m as u64;
+        if low < n {
+            // Rejection threshold: 2^64 mod n
+            let t = n.wrapping_neg() % n;
+            while low < t {
+                x = self.next_u64();
+                m = (x as u128) * (n as u128);
+                low = m as u64;
+            }
+        }
+        (m >> 64) as usize
     }
 
     /// Uniform random f64 in [0, 1).
@@ -74,4 +93,50 @@ impl Rng {
         weights.len() - 1
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn next_index_stays_in_range() {
+        let mut rng = Rng::new(42);
+        for n in [1usize, 2, 3, 7, 100] {
+            for _ in 0..1000 {
+                assert!(rng.next_index(n) < n);
+            }
+        }
+    }
+
+    #[test]
+    fn next_index_is_close_to_uniform() {
+        // 60k draws over 3 buckets: each expected 20k, sd ~ 115. A bound of
+        // 5 sd catches gross non-uniformity without being flaky.
+        let mut rng = Rng::new(7);
+        let n = 3usize;
+        let draws = 60_000;
+        let mut counts = [0usize; 3];
+        for _ in 0..draws {
+            counts[rng.next_index(n)] += 1;
+        }
+        let expected = draws / n;
+        for (i, &c) in counts.iter().enumerate() {
+            let dev = (c as f64 - expected as f64).abs();
+            assert!(dev < 600.0, "bucket {i}: {c} vs expected {expected}");
+        }
+    }
+
+    #[test]
+    fn deterministic_for_seed() {
+        let a: Vec<usize> = {
+            let mut r = Rng::new(123);
+            (0..16).map(|_| r.next_index(10)).collect()
+        };
+        let b: Vec<usize> = {
+            let mut r = Rng::new(123);
+            (0..16).map(|_| r.next_index(10)).collect()
+        };
+        assert_eq!(a, b);
+    }
 }
