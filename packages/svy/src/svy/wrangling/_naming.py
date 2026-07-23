@@ -75,6 +75,7 @@ def _rep_wgts_with_renames(rep_wgts: RepWeights, renames: dict[str, str]) -> Rep
     """
     pattern = re.compile(rf"^{re.escape(rep_wgts.prefix)}(\d+)$", re.IGNORECASE)
     new_prefixes: set[str] = set()
+    matched_olds: set[str] = set()
     for old, new in renames.items():
         m = pattern.match(old)
         if m is None:
@@ -86,12 +87,24 @@ def _rep_wgts_with_renames(rep_wgts: RepWeights, renames: dict[str, str]) -> Rep
                 f"the replicate number suffix {digits!r} must be preserved."
             )
         new_prefixes.add(new[: len(new) - len(digits)])
+        matched_olds.add(old)
     if not new_prefixes:
         return rep_wgts
     if len(new_prefixes) > 1:
         raise ValueError(
             "Replicate weight columns must all be renamed with the same prefix; "
             f"got prefixes {sorted(new_prefixes)}."
+        )
+    # Replicate columns are identified as prefix + number, so a partial
+    # rename cannot be represented: the new prefix would claim columns that
+    # were never renamed, corrupting the replicate metadata.
+    not_renamed = [c for c in rep_wgts.columns if c not in matched_olds]
+    if not_renamed:
+        raise ValueError(
+            f"Partial replicate-weight rename: {len(not_renamed)} of "
+            f"{len(rep_wgts.columns)} replicate columns were not renamed "
+            f"(e.g. {not_renamed[:3]}). Rename all replicate columns together "
+            "with a common new prefix, keeping the numeric suffixes."
         )
     return _struct_replace(rep_wgts, prefix=new_prefixes.pop())
 

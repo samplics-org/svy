@@ -106,8 +106,10 @@ def test_chain_categorize_then_recode():
     df = pl.DataFrame({"value": [5, 15, 25, 35, 45]})
     s = Sample(df)
 
+    # First-bin auto-label is "[0, 20]" — the outermost edge is closed
+    # (round 8, WR1) so x == bins[0] no longer vanishes to null.
     out = s.wrangling.categorize("value", bins=[0, 20, 40, 60]).wrangling.recode(
-        "svy_value_categorized", {"Low": ["(0, 20]"], "Mid": ["(20, 40]"], "High": ["(40, 60]"]}
+        "svy_value_categorized", {"Low": ["[0, 20]"], "Mid": ["(20, 40]"], "High": ["(40, 60]"]}
     )
 
     recoded = out._data["svy_svy_value_categorized_recoded"].to_list()

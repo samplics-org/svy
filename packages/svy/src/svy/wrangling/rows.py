@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal, Sequence
 
+import polars as pl
+
 from svy.core.types import WhereArg
 from svy.errors import MethodError, SvyError
 from svy.utils.where import _compile_where as _compile_where_to_pl_expr
@@ -42,8 +44,30 @@ def filter_records(
         if negate:
             pred = ~pred
 
+        # Kleene logic: a null predicate is not true, so those rows are
+        # dropped by BOTH the filter and its negation. Count them so the
+        # user is told instead of rows silently vanishing from either side.
+        _null_df = sample._data.select(pred.is_null().sum().alias("__n_null__"))
+        if isinstance(_null_df, pl.LazyFrame):
+            _null_df = _null_df.collect()
+        n_null_pred = int(_null_df.item())
+
         filtered_data = sample._data.filter(pred)
         target = _resolve_target(sample, filtered_data, inplace=inplace)
+
+        if n_null_pred > 0:
+            target.warn(
+                code="NULL_PREDICATE_ROWS_DROPPED",
+                title="Rows with null filter predicate dropped",
+                detail=(
+                    f"{n_null_pred} row(s) evaluated to null under the filter "
+                    "predicate and were dropped (Kleene logic: null is not "
+                    "true). Such rows are excluded by both the filter and "
+                    "its negation."
+                ),
+                where="wrangling.filter_records",
+                hint="fill_null the referenced columns first to keep these rows.",
+            )
 
         if check_singletons:
             target._check_for_singletons()

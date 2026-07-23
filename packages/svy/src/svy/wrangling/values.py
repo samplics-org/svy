@@ -206,7 +206,13 @@ def cast_columns(
     strict: bool = True,
     inplace: bool = False,
 ) -> "Sample":
-    """Cast columns to specified data type(s)."""
+    """Cast columns to specified data type(s).
+
+    With ``strict=True`` (the default), a float-to-integer cast that would
+    lose fractional parts raises — Polars' own strict cast only guards
+    overflow, so 1.7 -> 1 would otherwise truncate silently (risky on
+    weight columns). Pass ``strict=False`` to allow truncation.
+    """
 
     def _cast_expr(col_name: str, target_dt: pl.DataType, strict: bool) -> pl.Expr:
         base = pl.col(col_name)
@@ -216,8 +222,15 @@ def cast_columns(
             return base.cast(pl.Utf8).cast(target_dt, strict=strict).alias(col_name)
         return base.cast(target_dt, strict=strict).alias(col_name)
 
+    def _is_integer_dtype(dt: object) -> bool:
+        try:
+            return bool(dt.is_integer())  # type: ignore[attr-defined]
+        except Exception:
+            return False
+
     if isinstance(cols, Mapping):
         col_names = set(cols.keys())
+        pairs = list(cols.items())
         exprs = [_cast_expr(c, dt, strict) for c, dt in cols.items()]  # type: ignore[arg-type]
     else:
         if dtype is None:
@@ -229,7 +242,45 @@ def cast_columns(
             )
         col_list = [cols] if isinstance(cols, str) else list(cols)
         col_names = set(col_list)
+        pairs = [(c, dtype) for c in col_list]
         exprs = [_cast_expr(c, dtype, strict) for c in col_list]
+
+    if strict:
+        data = sample._data
+        schema = data.collect_schema() if isinstance(data, pl.LazyFrame) else data.schema
+        to_check = [
+            c
+            for c, dt in pairs
+            if _is_integer_dtype(dt) and c in schema and schema[c].is_float()
+        ]
+        if to_check:
+            check_df = data.select(
+                [
+                    (
+                        pl.col(c).is_not_null()
+                        & (pl.col(c) != pl.col(c).cast(pl.Int64, strict=False))
+                    )
+                    .sum()
+                    .alias(c)
+                    for c in to_check
+                ]
+            )
+            if isinstance(check_df, pl.LazyFrame):
+                check_df = check_df.collect()
+            offenders = {c: int(check_df[c][0]) for c in to_check if int(check_df[c][0]) > 0}
+            if offenders:
+                raise MethodError(
+                    title="Lossy float-to-integer cast",
+                    detail=(
+                        f"Value(s) with fractional parts per column: {offenders}. "
+                        "Casting would silently truncate them (Polars strict "
+                        "casting only guards overflow)."
+                    ),
+                    code="CAST_TRUNCATION",
+                    where="wrangling.cast",
+                    hint="Round explicitly first (e.g. .round(0)) or pass strict=False "
+                    "to allow truncation.",
+                )
 
     new_data = sample._data.with_columns(exprs)
     target = _resolve_target(sample, new_data, inplace=inplace)
@@ -245,11 +296,39 @@ def fill_null(
     strategy: Literal["forward", "backward", "mean", "min", "max", "zero", "one"] | None = None,
     inplace: bool = False,
 ) -> "Sample":
-    """Fill null values in specified columns."""
+    """Fill null values in specified columns.
+
+    With ``strategy="mean"``, integer columns are cast to Float64 so the
+    fill value is the exact mean rather than a truncated integer; a
+    warning records the dtype change.
+    """
     col_list = [cols] if isinstance(cols, str) else list(cols)
 
     if strategy is not None:
-        exprs = [pl.col(c).fill_null(strategy=strategy).alias(c) for c in col_list]
+        int_cols: set[str] = set()
+        if strategy == "mean":
+            data = sample._data
+            schema = (
+                data.collect_schema() if isinstance(data, pl.LazyFrame) else data.schema
+            )
+            int_cols = {c for c in col_list if c in schema and schema[c].is_integer()}
+            if int_cols:
+                sample.warn(
+                    code="MEAN_FILL_INT_CAST",
+                    title="Integer column(s) cast to Float64 for mean fill",
+                    detail=(
+                        f"Column(s) {sorted(int_cols)} are integer-typed; the "
+                        "mean is generally fractional, so they were cast to "
+                        "Float64 instead of truncating the fill value."
+                    ),
+                    where="wrangling.fill_null",
+                )
+        exprs = [
+            (pl.col(c).cast(pl.Float64) if c in int_cols else pl.col(c))
+            .fill_null(strategy=strategy)
+            .alias(c)
+            for c in col_list
+        ]
     else:
         exprs = [pl.col(c).fill_null(value).alias(c) for c in col_list]
 
