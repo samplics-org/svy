@@ -10,7 +10,6 @@ __pycache__/
 
 # C extensions and executables
 *.so
-*.sh
 run
 
 # Distribution / packaging
