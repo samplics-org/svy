@@ -273,9 +273,11 @@ def _maybe_install_rich() -> None:
         return
     if want in {"1", "true", "yes", "on"}:
         enable = True
+        explicit = True
     else:  # "auto"
         # default: enable on TTY; disable under pytest unless forced
         enable = is_tty and not under_pytest
+        explicit = False
 
     if not enable:
         return
@@ -307,12 +309,17 @@ def _maybe_install_rich() -> None:
         # even though it looks unused after the last install() call.
         svy_console = Console(width=width)
 
+        # Pretty-printing only touches the interactive displayhook.
         pretty_install(console=svy_console)
-        tb_install(
-            console=svy_console,
-            show_locals=False,
-            extra_lines=1,
-        )
+        # Replacing sys.excepthook affects the whole host application (any
+        # program that merely imports svy), so Rich tracebacks are installed
+        # only on explicit opt-in (SVY_RICH=1) — never in "auto" mode.
+        if explicit:
+            tb_install(
+                console=svy_console,
+                show_locals=False,
+                extra_lines=1,
+            )
         sys._svy_rich_installed = True  # type: ignore[attr-defined]
     except Exception:
         # Never make import of svy fail just because Rich init blew up

@@ -33,6 +33,7 @@ import polars as pl
 
 from svy.core.constants import _BY_SEP, _INTERNAL_CONCAT_SUFFIX
 from svy.core.types import WhereArg
+from svy.errors import DimensionError
 from svy.utils.checks import assert_no_missing, drop_missing
 from svy.utils.helpers import _colspec_to_list
 
@@ -112,7 +113,10 @@ def _get_design_codes(sample: Sample, design) -> dict[str, pl.Series] | None:
 # catches CPython id-reuse (a new design reusing a freed id), and the
 # data_version — globally unique per Sample mutation — catches the case where
 # the same design object persists while the underlying data columns change.
+# Bounded: cleared when it exceeds _DESIGN_FIELDS_CACHE_MAX so long-lived
+# processes creating many Samples don't pin Design objects forever.
 _design_fields_cache: dict[int, tuple] = {}
+_DESIGN_FIELDS_CACHE_MAX = 512
 
 # Internal column name for the materialized where-clause boolean mask.
 # Created and dropped within prepare_data; never exposed to the caller.
@@ -232,15 +236,28 @@ def _resolve_rep_weight_cols(data: pl.DataFrame, design) -> list[str]:
     data_cols = data.columns
 
     if rw.prefix:
-        prefix_lower = rw.prefix.lower()
+        # Strict `^prefix\d+$` matching (the same rule as
+        # RepWeights.columns_from_data). A loose startswith() absorbed any
+        # column sharing the prefix (e.g. 'repwt_flag' for prefix 'repwt')
+        # into the replicate set, corrupting the variance.
+        pattern = re.compile(rf"^{re.escape(rw.prefix)}\d+$", re.IGNORECASE)
         cols = sorted(
-            [
-                c
-                for c in data_cols
-                if c.lower().startswith(prefix_lower) and c.lower() != prefix_lower
-            ],
+            [c for c in data_cols if pattern.match(c)],
             key=lambda c: _natural_keys(c.lower()),
         )
+        if cols and len(cols) != rw.n_reps:
+            raise DimensionError(
+                title="Replicate weight column count mismatch",
+                detail=f"Found {len(cols)} columns matching '{rw.prefix}<number>' "
+                f"but RepWeights declares n_reps={rw.n_reps}.",
+                code="REP_WEIGHT_COUNT_MISMATCH",
+                where="core.data_prep",
+                param="rep_wgts",
+                expected=rw.n_reps,
+                got=len(cols),
+                hint="Check the replicate weight prefix and n_reps, or drop "
+                "stray columns that match the prefix-number pattern.",
+            )
     elif hasattr(rw, "wgts") and rw.wgts:
         # First-occurrence wins on case-insensitive collision.
         lower_index: dict[str, str] = {}
@@ -380,6 +397,8 @@ def prepare_data(
     cached = _design_fields_cache.get(key)
     if cached is None or cached[0] is not design or cached[1] != data_version:
         fields = design.specified_fields(data_columns=local_data.columns)
+        if len(_design_fields_cache) >= _DESIGN_FIELDS_CACHE_MAX:
+            _design_fields_cache.clear()
         _design_fields_cache[key] = (design, data_version, fields)
     else:
         fields = cached[2]

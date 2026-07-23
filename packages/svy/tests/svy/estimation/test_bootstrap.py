@@ -190,9 +190,23 @@ class TestBootstrapTotal:
 
 
 class TestBootstrapMethodResolution:
-    def test_default_is_taylor(self, boot_sample):
-        """With both wgt and rep_wgts, default should be Taylor."""
+    def test_default_autodetects_replication_only_design(self, boot_sample):
+        """boot_sample has weight + replicate weights but no strata/PSU:
+        the documented auto-detection resolves method=None to replication.
+        (Previously None always meant Taylor, silently giving a
+        replication-only design SRS-like variance.)"""
         result = boot_sample.estimation.mean(y="income")
+        assert result.method.name == "BOOTSTRAP"
+
+    def test_default_is_taylor_when_design_has_structure(self, boot_sample):
+        """With strata/PSU present, method=None still defaults to Taylor."""
+        import polars as pl
+
+        df = boot_sample.data.with_columns(
+            (pl.col("id") % 5).alias("_psu_"),
+        )
+        s = Sample(data=df, design=boot_sample.design.update(psu="_psu_"))
+        result = s.estimation.mean(y="income")
         assert result.method.name == "TAYLOR"
 
     def test_explicit_replication(self, boot_sample):

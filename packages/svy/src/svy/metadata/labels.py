@@ -604,7 +604,12 @@ def polars_mask(col, scheme: CategoryScheme | None, kinds: set[MissingKind] | No
             codes = [code for code, mk in scheme.missing_kinds.items() if mk in kinds]
             if codes:
                 mask = mask | expr.is_in(codes)
-    return mask
+    # Null-safe: under Kleene logic `False | null = null`, and a null mask
+    # entry behaves differently depending on the consumer (when() takes the
+    # otherwise-branch; filter() drops the row). A null in any sub-check can
+    # only arise from a null input, which IS missing-by-policy, so pin the
+    # mask to True there explicitly.
+    return mask.fill_null(True)
 
 
 def polars_to_analysis(
