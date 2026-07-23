@@ -32,12 +32,8 @@ default = ["vendored"]
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
-# For tests/benches only; do not re-declare extension-module here
+# For tests only; do not re-declare extension-module here
 pyo3 = { version = "0.29", features = ["auto-initialize"] }
-
-[[bench]]
-name = "parse_benchmarks"
-harness = false
 
 [profile.release]
 lto = true
