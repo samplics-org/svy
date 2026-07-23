@@ -36,6 +36,28 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
+
+def _rake_or_raise(*args, where: str = "Sample.weighting.rake"):
+    """Call the Rust raking kernel, translating bounds violations into a
+    typed svy error. Bounds violations are errors on every exit path,
+    converged or not."""
+    assert rust_rake is not None  # noqa: S101
+    try:
+        return rust_rake(*args)
+    except ValueError as e:
+        msg = str(e)
+        if "exceeded weight bounds" in msg or "Raking exceeded" in msg:
+            raise MethodError.not_applicable(
+                where=where,
+                method="rake",
+                reason="Weight ratios exceeded the specified bounds "
+                "(ll_bound/up_bound).",
+                param="ll_bound/up_bound",
+                hint="Widen the bounds, relax the margins, or increase max_iter.",
+            ) from None
+        raise
+
+
 def _normalize_controls_like(x: ControlsType | None) -> ControlsType | None:
     """Return x unchanged if it's a non-empty dict, else None."""
     if x is None:
@@ -391,23 +413,15 @@ def rake(
 
     for cycle in range(n_cycles):
         # ── Rake step ────────────────────────────────────────────────────
-        try:
-            raked_result = rust_rake(
-                current_w.reshape(-1, 1),
-                margin_indices,
-                margin_targets,
-                ll_bound,
-                up_bound,
-                tol,
-                max_iter,
-            )
-        except ValueError as e:
-            msg = str(e)
-            if "exceeded weight bounds" in msg or "Raking exceeded" in msg:
-                raise ValueError(
-                    "Raking failed: Weight ratios exceeded specified bounds."
-                ) from None
-            raise
+        raked_result = _rake_or_raise(
+            current_w.reshape(-1, 1),
+            margin_indices,
+            margin_targets,
+            ll_bound,
+            up_bound,
+            tol,
+            max_iter,
+        )
 
         raked_w = raked_result[:, 0]
         rake_converged = _check_and_warn_convergence(
@@ -464,29 +478,21 @@ def rake(
 
         if rake_converged and trim_unchanged:
             # Final rake to restore margins after last trim
-            try:
-                final_result = rust_rake(
-                    current_w.reshape(-1, 1),
-                    margin_indices,
-                    margin_targets,
-                    ll_bound,
-                    up_bound,
-                    tol,
-                    max_iter,
-                )
-                current_w = final_result[:, 0]
-                rake_converged = _check_and_warn_convergence(
-                    current_w, margin_indices, margin_targets, tol, max_iter
-                )
-                # Re-check trim after final rake — rake could push weights back above threshold
-                trim_unchanged = _trim_constraints_satisfied(current_w, upper_val, lower_val, tol)
-            except ValueError as e:
-                msg = str(e)
-                if "exceeded weight bounds" in msg or "Raking exceeded" in msg:
-                    raise ValueError(
-                        "Raking failed: Weight ratios exceeded specified bounds."
-                    ) from None
-                raise
+            final_result = _rake_or_raise(
+                current_w.reshape(-1, 1),
+                margin_indices,
+                margin_targets,
+                ll_bound,
+                up_bound,
+                tol,
+                max_iter,
+            )
+            current_w = final_result[:, 0]
+            rake_converged = _check_and_warn_convergence(
+                current_w, margin_indices, margin_targets, tol, max_iter
+            )
+            # Re-check trim after final rake — rake could push weights back above threshold
+            trim_unchanged = _trim_constraints_satisfied(current_w, upper_val, lower_val, tol)
             if display_iter:
                 final_margin_err = _max_margin_error(current_w, margin_indices, margin_targets)
                 both_ok = rake_converged and trim_unchanged
@@ -499,27 +505,19 @@ def rake(
     else:
         # Loop exhausted without clean convergence — do a final rake
         if trimming is not None:
-            try:
-                final_result = rust_rake(
-                    current_w.reshape(-1, 1),
-                    margin_indices,
-                    margin_targets,
-                    ll_bound,
-                    up_bound,
-                    tol,
-                    max_iter,
-                )
-                current_w = final_result[:, 0]
-                rake_converged = _check_and_warn_convergence(
-                    current_w, margin_indices, margin_targets, tol, max_iter
-                )
-            except ValueError as e:
-                msg = str(e)
-                if "exceeded weight bounds" in msg or "Raking exceeded" in msg:
-                    raise ValueError(
-                        "Raking failed: Weight ratios exceeded specified bounds."
-                    ) from None
-                raise
+            final_result = _rake_or_raise(
+                current_w.reshape(-1, 1),
+                margin_indices,
+                margin_targets,
+                ll_bound,
+                up_bound,
+                tol,
+                max_iter,
+            )
+            current_w = final_result[:, 0]
+            rake_converged = _check_and_warn_convergence(
+                current_w, margin_indices, margin_targets, tol, max_iter
+            )
 
     raked_w = current_w
 
@@ -554,7 +552,7 @@ def rake(
 
             # Replicates: one rake pass with the final converged main weights
             # as starting point. Cycling replicates is not standard practice.
-            raked_reps = rust_rake(
+            raked_reps = _rake_or_raise(
                 wgts_arr,
                 margin_indices,
                 margin_targets,

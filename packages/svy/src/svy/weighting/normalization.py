@@ -45,8 +45,14 @@ def _build_control_array(
         return None
     if by_arr is None:
         return np.array([float(controls)], dtype=np.float64)  # type: ignore[arg-type]
+    # Controls are ordered by SORTED group id — the convention the Rust
+    # kernels (normalize_by_group, poststratify) share. np.unique returns
+    # sorted unique ids with the first-occurrence index of each, so
+    # by_arr[idx] yields each group's label in sorted-id order. (This
+    # previously used first-appearance order, matching a first-appearance
+    # mapping the Rust side no longer uses.)
     _, idx = np.unique(group_ids, return_index=True)
-    ordered_labels = by_arr[np.sort(idx)]
+    ordered_labels = by_arr[idx]
     if isinstance(controls, dict):
         controls = _normalize_dict_keys(controls)
         return np.array([float(controls[lbl]) for lbl in ordered_labels], dtype=np.float64)
