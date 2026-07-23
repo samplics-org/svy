@@ -150,8 +150,12 @@ def calculate_power_number(
     zc = _zcrit(alpha, two_sides)
     if samp_size <= 0 or sigma <= 0:
         return float("nan")
-    lam = float(delta) * math.sqrt(float(samp_size)) / float(sigma)
-    ttype: Literal["two-sided", "less", "greater"] = "two-sided" if two_sides else "greater"
+    d = float(delta)
+    lam = d * math.sqrt(float(samp_size)) / float(sigma)
+    # One-sided direction follows the sign of delta (matches the array flavor)
+    ttype: Literal["two-sided", "less", "greater"] = (
+        "two-sided" if two_sides else ("greater" if d >= 0.0 else "less")
+    )
     return _scalar_power(lam, zc, ttype)
 
 
@@ -172,14 +176,18 @@ def calculate_power_map(
     if not (kd == ks == kn):
         raise KeyError("delta, sigma, and samp_size must have identical keys")
     out: dict[Category, float] = {}
-    ttype: Literal["two-sided", "less", "greater"] = "two-sided" if two_sides else "greater"
     for k in kd:
         n = float(samp_size[k])
         s = float(sigma[k])
         if n <= 0 or s <= 0:
             out[k] = float("nan")
             continue
-        lam = float(delta[k]) * math.sqrt(n) / s
+        d = float(delta[k])
+        lam = d * math.sqrt(n) / s
+        # One-sided direction follows the sign of delta (matches the array flavor)
+        ttype: Literal["two-sided", "less", "greater"] = (
+            "two-sided" if two_sides else ("greater" if d >= 0.0 else "less")
+        )
         out[k] = _scalar_power(lam, zc, ttype)
     return out
 

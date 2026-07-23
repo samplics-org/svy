@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Literal, cast
 
+from svy.core.enumerations import MeanVarMode as _MeanVarMode
 from svy.core.enumerations import PopParam
 from svy.core.enumerations import (
     TwoPropsSizeMethod as _TwoPropsSizeMethod,
@@ -25,6 +26,7 @@ from svy.engine.size_and_power.size import (
     _apply_deff_pair,
     _apply_fpc_srswor_pair,
     _apply_nonresponse_pair,
+    _wald_sample_size_two_means,
     _wald_sample_size_two_props,
 )
 from svy.size._normalize import (
@@ -177,16 +179,17 @@ def compare_props(
     else:
         raise NotImplementedError("farrington-manning method is not implemented yet.")
 
-    n1_fpc = _apply_fpc_srswor_pair(n0=n0, pop_size=pop_size) if _has_pop(pop_size) else n0
-    n2_deff = _apply_deff_pair(n=n1_fpc, deff=deff)
-    n_final = _apply_nonresponse_pair(n=n2_deff, resp_rate=resp_rate)
+    # Pipeline: n0 (SRS) -> DEFF -> FPC -> nonresponse (see estimate_prop).
+    n1_deff = _apply_deff_pair(n=n0, deff=deff)
+    n2_fpc = _apply_fpc_srswor_pair(n0=n1_deff, pop_size=pop_size) if _has_pop(pop_size) else n1_deff
+    n_final = _apply_nonresponse_pair(n=n2_fpc, resp_rate=resp_rate)
     _build_sizes(
         ss,
         stratified=stratified,
         strata=strata if stratified else None,
         n0=n0,
-        n1_fpc=n1_fpc,
-        n2_deff=n2_deff,
+        n1_deff=n1_deff,
+        n2_fpc=n2_fpc,
         n_final=n_final,
     )
     return ss
@@ -194,14 +197,18 @@ def compare_props(
 
 def compare_means(
     ss: SampleSize,
-    mu1: Number,
-    mu2: Number,
+    mu1: Number | DomainScalarMap,
+    mu2: Number | DomainScalarMap,
+    sigma1: Number | DomainScalarMap,
+    sigma2: Number | DomainScalarMap | None = None,
     *,
     pop_size: Number | DomainScalarMap | None = None,
-    method: Literal["wald", "fleiss"] = "wald",
-    alloc_ratio: Number = 1.0,
-    alpha: Number = 0.05,
-    power: Number = 0.80,
+    two_sides: bool = True,
+    delta: Number | DomainScalarMap = 0.0,
+    alloc_ratio: Number | DomainScalarMap = 1.0,
+    method: Literal["wald"] = "wald",
+    alpha: Number | DomainScalarMap = 0.05,
+    power: Number | DomainScalarMap = 0.80,
     deff: Number | DomainScalarMap = 1.0,
     resp_rate: Number | DomainScalarMap = 1.0,
 ) -> SampleSize:
@@ -212,19 +219,28 @@ def compare_means(
     ----------
     ss : SampleSize
         The SampleSize instance to update.
-    mu1 : Number
-        Mean in group 1.
-    mu2 : Number
-        Mean in group 2.
+    mu1 : Number | DomainScalarMap
+        Mean in group 1. Scalar or per-stratum mapping.
+    mu2 : Number | DomainScalarMap
+        Mean in group 2. Scalar or per-stratum mapping.
+    sigma1 : Number | DomainScalarMap
+        Standard deviation in group 1. Scalar or per-stratum mapping.
+    sigma2 : Number | DomainScalarMap | None, default None
+        Standard deviation in group 2. If None, assumes equal variances
+        (sigma2 = sigma1).
     pop_size : Number | DomainScalarMap | None, default None
         Target population size. If None, no finite population correction is applied.
-    method : str, default 'wald'
-        Calculation method: ``'wald'`` or ``'fleiss'``.
-    alloc_ratio : Number, default 1.0
+    two_sides : bool, default True
+        Whether to use a two-sided test.
+    delta : Number | DomainScalarMap, default 0.0
+        Non-inferiority / equivalence margin.
+    alloc_ratio : Number | DomainScalarMap, default 1.0
         Allocation ratio n2/n1.
-    alpha : Number, default 0.05
+    method : str, default 'wald'
+        Calculation method. Only ``'wald'`` is currently implemented.
+    alpha : Number | DomainScalarMap, default 0.05
         Significance level.
-    power : Number, default 0.80
+    power : Number | DomainScalarMap, default 0.80
         Desired statistical power.
     deff : Number | DomainScalarMap, default 1.0
         Design effect. Scalar or per-stratum mapping.
@@ -235,10 +251,122 @@ def compare_means(
     -------
     SampleSize
         The updated SampleSize instance (chainable).
-
-    Notes
-    -----
-    Placeholder for future implementation; kept for API symmetry.
     """
+    from svy.errors.method_errors import MethodError
+
     ss._param = PopParam.MEAN
+
+    if method != "wald":
+        raise MethodError.invalid_choice(
+            where="SampleSize.compare_means",
+            param="method",
+            got=method,
+            allowed=["wald"],
+        )
+
+    stratified = any(
+        isinstance(v, Mapping)
+        for v in [
+            mu1,
+            mu2,
+            sigma1,
+            sigma2,
+            pop_size,
+            delta,
+            alloc_ratio,
+            alpha,
+            power,
+            deff,
+            resp_rate,
+        ]
+    )
+
+    if stratified:
+        strata = _get_keys_from_maps(
+            **{
+                k: v
+                for k, v in dict(
+                    mu1=mu1,
+                    mu2=mu2,
+                    sigma1=sigma1,
+                    sigma2=sigma2,
+                    pop_size=pop_size,
+                    delta=delta,
+                    alloc_ratio=alloc_ratio,
+                    alpha=alpha,
+                    power=power,
+                    deff=deff,
+                    resp_rate=resp_rate,
+                ).items()
+                if isinstance(v, Mapping)
+            }
+        )
+        params = {
+            "mu1": mu1,
+            "mu2": mu2,
+            "sigma1": sigma1,
+            "pop_size": pop_size,
+            "delta": delta,
+            "alloc_ratio": alloc_ratio,
+            "alpha": alpha,
+            "power": power,
+            "deff": deff,
+            "resp_rate": resp_rate,
+        }
+        if sigma2 is not None:
+            params["sigma2"] = sigma2
+        _broadcast_scalars(strata, params)
+        mu1, mu2, sigma1, pop_size, delta, alloc_ratio, alpha, power, deff, resp_rate = (
+            params["mu1"],
+            params["mu2"],
+            params["sigma1"],
+            params["pop_size"],
+            params["delta"],
+            params["alloc_ratio"],
+            params["alpha"],
+            params["power"],
+            params["deff"],
+            params["resp_rate"],
+        )
+        sigma2 = params.get("sigma2")
+    else:
+        all_scalars = all(
+            isinstance(x, (int, float))
+            for x in [mu1, mu2, sigma1, delta, alloc_ratio, alpha, power]
+        ) and (sigma2 is None or isinstance(sigma2, (int, float)))
+        assert all_scalars, "All inputs must be scalars when not stratified."
+
+    if stratified:
+        _mu1_map = cast(DomainScalarMap, mu1)
+        _mu2_map = cast(DomainScalarMap, mu2)
+        epsilon: Number | DomainScalarMap = {s: _mu2_map[s] - _mu1_map[s] for s in _mu1_map}
+    else:
+        epsilon = cast(Number, mu2) - cast(Number, mu1)
+
+    var_mode = _MeanVarMode.EQUAL_VAR if sigma2 is None else _MeanVarMode.UNEQUAL_VAR
+    n0 = _wald_sample_size_two_means(
+        two_sides=two_sides,
+        epsilon=epsilon,
+        delta=delta,
+        sigma_1=sigma1,
+        sigma_2=sigma2,
+        alloc_ratio=alloc_ratio,
+        alpha=alpha,
+        power=power,
+        var_mode=var_mode,
+    )
+
+    # Pipeline: n0 (SRS) -> DEFF -> FPC -> nonresponse (see estimate_prop).
+    n1_deff = _apply_deff_pair(n=n0, deff=deff)
+    n2_fpc = _apply_fpc_srswor_pair(n0=n1_deff, pop_size=pop_size) if _has_pop(pop_size) else n1_deff
+    n_final = _apply_nonresponse_pair(n=n2_fpc, resp_rate=resp_rate)
+    _build_sizes(
+        ss,
+        stratified=stratified,
+        strata=strata if stratified else None,
+        n0=n0,
+        n1_deff=n1_deff,
+        n2_fpc=n2_fpc,
+        n_final=n_final,
+    )
     return ss
