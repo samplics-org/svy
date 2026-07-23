@@ -54,22 +54,20 @@ def generate_and_save():
         }
     )
 
-    # 5. Generate 8 BRR Replicate Weights (Hadamard 8)
-    # We have 4 strata. We use the first 4 columns of an H8 matrix.
-    # Rows = Replicates (8), Cols = Strata (4 used)
-    # Rule: 1 -> Keep PSU 1; -1 -> Keep PSU 2
-    H8 = np.array(
-        [
-            [1, 1, 1, 1],
-            [1, -1, 1, -1],
-            [1, 1, -1, -1],
-            [1, -1, -1, 1],
-            [1, 1, 1, 1],
-            [1, -1, 1, -1],
-            [1, 1, -1, -1],
-            [1, -1, -1, 1],
-        ]
-    )
+    # 5. Generate 8 BRR Replicate Weights from a true Hadamard H(8)
+    # (Sylvester construction). Rows = replicates (8), columns = strata.
+    # Rule: 1 -> Keep PSU 1; -1 -> Keep PSU 2.
+    #
+    # Column 0 of a Sylvester Hadamard matrix is all ones and must NOT be
+    # assigned to a stratum: that stratum would keep the same PSU in every
+    # replicate, so its other PSU would be zero across all replicates and
+    # the half-samples would not be balanced. (The original fixture had
+    # exactly this defect — its "H8" was H(4) stacked twice, whose first
+    # column is all ones.) Strata S1..S4 use columns 1..4; each of those
+    # columns has four +1s and four -1s and all are mutually orthogonal.
+    H2 = np.array([[1, 1], [1, -1]])
+    H8_full = np.kron(H2, np.kron(H2, H2))
+    H8 = H8_full[:, 1:5]
 
     # Map Strata Labels "S1".."S4" to column indices 0..3 of the H matrix
     s_map = {"S1": 0, "S2": 1, "S3": 2, "S4": 3}
@@ -99,16 +97,11 @@ def generate_and_save():
     # Attach replicates to DataFrame and remove helper column
     df = df.with_columns([pl.Series(k, v) for k, v in rep_cols.items()]).drop("psu_local")
 
-    # 6. Save with Date
-    # Format: DDMMYYYY (e.g. 24122025)
-    today_str = date.today().strftime("%d%m%Y")
-    filename = f"fake_survey_brr_{today_str}.csv"
+    # 6. Save under the canonical fixture name (the date suffix is
+    # historical — tests reference this exact filename).
+    filename = "fake_survey_brr_24122025.csv"
+    out_path = Path(__file__).parent / filename
 
-    # Construct path relative to this script or project root
-    # Adjust 'tests/data' if your folder structure differs
-    out_path = Path(f"tests/data/{filename}")
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
     df.write_csv(out_path)
 
     print(f"Generated {N} rows with 8 BRR weights.")

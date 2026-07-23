@@ -2,43 +2,56 @@
 
 # ==============================================================================
 # BRR (Balanced Repeated Replication) - 8 Replicates, df=7
+#
+# Regenerated 2026-07-23 with R survey 4.5 after fixing the fixture
+# generator's Hadamard matrix (svy_test_data_bbr.py): the original "H8"
+# was H(4) stacked twice, whose all-ones first column kept the same PSU
+# of stratum S1 in every replicate (unbalanced half-samples). The
+# corrected fixture uses columns 1..4 of the Sylvester H(8). Point
+# estimates are unchanged (data columns identical); SEs changed.
+#
+# R: svrepdesign(repweights=brr_1..8, weights=weight, type="BRR",
+#    combined.weights=TRUE) on the conftest-prepared frame (drop_nulls,
+#    low_income = income < 40000, hh_size = id %% 4 + 1); svymean /
+#    svytotal / svyratio (+ svyby ~educ); CIs are t(7); proportions use
+#    logit-transformed t(7) intervals.
 # ==============================================================================
 BRR = {
-    "mean_overall": {"est": 54687.65, "se": 919.1987, "lci": 52514.09, "uci": 56861.21},
+    "mean_overall": {"est": 54687.65, "se": 1038.5553, "lci": 52231.86, "uci": 57143.44},
     "mean_educ": {
-        "High": {"est": 53927.07, "se": 1392.485, "lci": 50634.37, "uci": 57219.78},
-        "Low": {"est": 53918.5, "se": 1069.231, "lci": 51390.17, "uci": 56446.83},
-        "Med": {"est": 55315.36, "se": 851.4913, "lci": 53301.9, "uci": 57328.82},
+        "High": {"est": 53927.07, "se": 1271.7015, "lci": 50919.98, "uci": 56934.17},
+        "Low": {"est": 53918.5, "se": 1153.6354, "lci": 51190.58, "uci": 56646.41},
+        "Med": {"est": 55315.36, "se": 1446.7566, "lci": 51894.32, "uci": 58736.4},
     },
-    "total_overall": {"est": 23.14286, "se": 1.027621, "lci": 20.71293, "uci": 25.5728},
+    "total_overall": {"est": 23.14286, "se": 2.8326446, "lci": 16.444724, "uci": 29.841004},
     "total_educ": {
-        "High": {"est": 2.032223, "se": 0.8765375, "lci": -0.0404587, "uci": 4.104905},
-        "Low": {"est": 4.136101, "se": 1.392176, "lci": 0.8441278, "uci": 7.428074},
-        "Med": {"est": 16.97454, "se": 2.146034, "lci": 11.89998, "uci": 22.0491},
+        "High": {"est": 2.032223, "se": 1.4504921, "lci": -1.397646, "uci": 5.462092},
+        "Low": {"est": 4.136101, "se": 2.6170633, "lci": -2.05227, "uci": 10.324472},
+        "Med": {"est": 16.97454, "se": 6.3829818, "lci": 1.881186, "uci": 32.067893},
     },
     "prop_overall": {
-        0: {"est": 0.9092026, "se": 0.009738, "lci": 0.8833977, "uci": 0.9297508},
-        1: {"est": 0.0907974, "se": 0.009738, "lci": 0.0702492, "uci": 0.1166023},
+        0: {"est": 0.9092026, "se": 0.0124768, "lci": 0.8750706, "uci": 0.9347052},
+        1: {"est": 0.0907974, "se": 0.0124768, "lci": 0.0652948, "uci": 0.1249294},
     },
     "prop_educ": {
         "High": {
-            0: {"est": 0.9655841, "se": 0.0162968, "lci": 0.8979448, "uci": 0.9889458},
-            1: {"est": 0.0344159, "se": 0.0162968, "lci": 0.0110542, "uci": 0.1020552},
+            0: {"est": 0.9655841, "se": 0.0234257, "lci": 0.84122, "uci": 0.9933144},
+            1: {"est": 0.0344159, "se": 0.0234257, "lci": 0.0066856, "uci": 0.15878},
         },
         "Low": {
-            0: {"est": 0.9259446, "se": 0.0306621, "lci": 0.812851, "uci": 0.9729688},
-            1: {"est": 0.0740554, "se": 0.0306621, "lci": 0.0270312, "uci": 0.187149},
+            0: {"est": 0.9259446, "se": 0.0567244, "lci": 0.6387408, "uci": 0.9888168},
+            1: {"est": 0.0740554, "se": 0.0567244, "lci": 0.0111832, "uci": 0.3612592},
         },
         "Med": {
-            0: {"est": 0.8787396, "se": 0.0156307, "lci": 0.8366736, "uci": 0.9111221},
-            1: {"est": 0.1212604, "se": 0.0156307, "lci": 0.0888779, "uci": 0.1633264},
+            0: {"est": 0.8787396, "se": 0.0370274, "lci": 0.7611258, "uci": 0.9427965},
+            1: {"est": 0.1212604, "se": 0.0370274, "lci": 0.0572035, "uci": 0.2388742},
         },
     },
-    "ratio_overall": {"est": 21945.59, "se": 444.0192, "lci": 20895.66, "uci": 22995.53},
+    "ratio_overall": {"est": 21945.59, "se": 494.6305, "lci": 20775.98, "uci": 23115.21},
     "ratio_educ": {
-        "High": {"est": 21821.85, "se": 1099.049, "lci": 19223.01, "uci": 24420.69},
-        "Low": {"est": 21370.63, "se": 832.8918, "lci": 19401.15, "uci": 23340.11},
-        "Med": {"est": 22230.04, "se": 681.7568, "lci": 20617.94, "uci": 23842.14},
+        "High": {"est": 21821.85, "se": 1041.6098, "lci": 19358.83, "uci": 24284.86},
+        "Low": {"est": 21370.63, "se": 1303.562, "lci": 18288.19, "uci": 24453.06},
+        "Med": {"est": 22230.04, "se": 849.5388, "lci": 20221.2, "uci": 24238.88},
     },
 }
 
@@ -85,7 +98,17 @@ BOOTSTRAP = {
 }
 
 # ==============================================================================
-# JACKKNIFE (JKn) - 8 Replicates, df=7
+# JACKKNIFE - 8 Replicates, df=7 — GLOBAL-SCALE convention, not JKn
+#
+# These goldens validate the documented no-rscales fallback: a RepWeights
+# without rscales uses the uniform (R-1)/R coefficient, and the R
+# reference was configured identically (svrepdesign(type="other",
+# scale=(R-1)/R, rscales=1)). For this fixture (4 strata x 2 PSUs) the
+# JKn-correct coefficients are (n_h-1)/n_h = 0.5, giving SEs exactly
+# sqrt(7/4) smaller — that convention is validated end-to-end in
+# test_jackknife_r_validation.py (svy-generated weights) and
+# test_jackknife_fixture_jkn.py (this fixture with explicit rscales
+# against R svrepdesign(type="JKn")).
 # ==============================================================================
 JACKKNIFE = {
     "mean_overall": {"est": 54687.65, "se": 1334.084, "lci": 51533.04, "uci": 57842.26},
@@ -140,65 +163,70 @@ JACKKNIFE = {
 # Confidence intervals for non-prop estimators use df = n_reps - 1
 # (matching Python's convention of n_reps - 1 returned from Rust).
 
+# Regenerated 2026-07-23 alongside the BRR block above (corrected
+# Sylvester H(8) fixture; see that block's provenance note). R survey
+# 4.5: subset(rd, educ %in% c("Med","High")) on the sex != "None"
+# frame; means/totals/ratios t(7); prop_overall via svyciprop (logit,
+# degf(subset) = 3); prop_by_sex via svyby + svyciprop vartype="ci".
 WHERE_BRR = {
     "mean_overall": {
         "est": 54944.21712125,
-        "se": 914.418293527094,
-        "lci": 52781.9614482721,
-        "uci": 57106.4727942206,
+        "se": 1157.5829811,
+        "lci": 52206.968331,
+        "uci": 57681.465912,
     },
     "mean_by_sex": {
         "Female": {
             "est": 56999.8198660894,
-            "se": 1693.683292482651,
-            "lci": 52994.8952781674,
-            "uci": 61004.7444540114,
+            "se": 1821.4183586,
+            "lci": 52692.849843,
+            "uci": 61306.789889,
         },
         "Male": {
             "est": 52801.4188536413,
-            "se": 631.725873657032,
-            "lci": 51307.6245324332,
-            "uci": 54295.2131748494,
+            "se": 976.1935616,
+            "lci": 50493.087884,
+            "uci": 55109.749824,
         },
     },
     "total_overall": {
         "est": 19.00676263288,
-        "se": 1.62084351090935,
-        "lci": 15.1740767589434,
-        "uci": 22.8394485068095,
+        "se": 5.1190965,
+        "lci": 6.902023,
+        "uci": 31.111502,
     },
     "ratio_overall": {
         "est": 22091.1380445766,
-        "se": 578.915431463779,
-        "lci": 20722.220575716,
-        "uci": 23460.0555134371,
+        "se": 637.0740095,
+        "lci": 20584.697392,
+        "uci": 23597.578697,
     },
     "prop_overall": {
         0: {
-            "est": 0.903731780369117,
-            "se": 0.0135812941918936,
-            "lci": 0.860982797573342,
-            "uci": 0.934337631893122,
+            "est": 0.9037317804,
+            "se": 0.0249428064,
+            "lci": 0.806613334,
+            "uci": 0.9548099743,
         },
         1: {
-            "est": 0.0962682196308831,
-            "se": 0.0135812941918935,
-            "lci": 0.0656623681068781,
-            "uci": 0.139017202426658,
+            "est": 0.0962682196,
+            "se": 0.0249428064,
+            "lci": 0.0451900257,
+            "uci": 0.193386666,
         },
     },
     "prop_by_sex": {
         "Female": {
             "est": 0.0481956286694167,
             "se": None,  # svyby + svyciprop doesn't return SE in vartype="ci"
-            "lci": 0.0187268727976523,
-            "uci": 0.118439526790651,
+            "lci": 0.01260535,
+            "uci": 0.1672514,
         },
         "Male": {
             "est": 0.1463799739724606,
             "se": None,
-            "lci": 0.1110712657432508,
-            "uci": 0.190507541257323,
+            "lci": 0.07452247,
+            "uci": 0.2674985,
         },
     },
 }
@@ -266,6 +294,7 @@ WHERE_BOOTSTRAP = {
     },
 }
 
+# Same global-scale (no-rscales) convention as JACKKNIFE above.
 WHERE_JACKKNIFE = {
     "mean_overall": {
         "est": 54944.21712125,
