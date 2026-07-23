@@ -39,6 +39,7 @@ from typing import Any, Final
 import httpx
 import msgspec
 
+from svy.datasets._cache import validate_slug
 from svy.datasets.types import Dataset, DatasetCatalog
 from svy.errors.dataset_errors import DatasetError
 
@@ -147,7 +148,9 @@ def _from_backend(entry: dict[str, Any]) -> Dataset:
             "subpath": "..."
         }
     """
-    slug = entry["slug"]
+    # The slug flows into cache paths, glob patterns and tempfile prefixes;
+    # the registry is untrusted input, so validate before anything else.
+    slug = validate_slug(entry["slug"], where="datasets.api._from_backend")
 
     # Prefer a URL the backend constructs; fall back to synthesizing one.
     src = entry.get("source") or {}
@@ -252,7 +255,15 @@ def catalog(*, use_cache: bool = True) -> DatasetCatalog:
 
     raw = _fetch(_REGISTRY_PATH)
     entries = _RAW_LIST_DECODER.decode(raw)
-    datasets = DatasetCatalog(_from_backend(e) for e in entries)
+    # One malformed/hostile registry entry must not take down the whole
+    # catalog: skip it (with a warning) and list the valid ones.
+    translated: list[Dataset] = []
+    for e in entries:
+        try:
+            translated.append(_from_backend(e))
+        except (DatasetError, KeyError, TypeError) as ex:
+            log.warning("Skipping invalid registry entry %r: %s", e.get("slug", "<no slug>"), ex)
+    datasets = DatasetCatalog(translated)
     _cache_put_list(datasets)
 
     # Populate per-slug cache too — saves a round-trip on the next describe().

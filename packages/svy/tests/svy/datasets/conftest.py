@@ -230,7 +230,11 @@ def isolate_module_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, routes
         """Context-manager-compatible replacement for httpx.Client in _cache."""
 
         def __init__(self, *_args, **_kwargs):
-            self._client = real_httpx_client(transport=routes.transport())
+            # Mirror the production client's redirect behavior so tests
+            # exercise the post-redirect https check.
+            self._client = real_httpx_client(
+                transport=routes.transport(), follow_redirects=True
+            )
 
         def __enter__(self):
             return self._client

@@ -495,6 +495,40 @@ class TestFPCValidation:
         with pytest.raises(DimensionError, match="FPC not constant within PSU"):
             sample.estimation.mean("y")
 
+    def test_ssu_fpc_psu_labels_reused_across_strata(self):
+        """PSU labels reused across strata are distinct PSUs for SSU FPC.
+
+        Regression test: grouping by the PSU label alone merged stratum A's
+        PSU "1" with stratum B's PSU "1", raising FPC_NOT_CONSTANT on a valid
+        design (or pooling SSU counts when the M_hi values happened to match).
+        """
+        base = {
+            "stratum": ["A"] * 6 + ["B"] * 6,
+            "psu": [1, 1, 1, 2, 2, 2] * 2,
+            "ssu": [1, 2, 3] * 4,
+            "fpc_psu": [10] * 6 + [20] * 6,
+            # SSU pop size differs between stratum A's PSU 1 and stratum B's PSU 1
+            "fpc_ssu": [30, 30, 30, 40, 40, 40, 50, 50, 50, 60, 60, 60],
+            "y": [12.0, 15.0, 11.0, 20.0, 18.0, 22.0, 30.0, 28.0, 35.0, 40.0, 38.0, 44.0],
+            "wgt": [2.0] * 12,
+        }
+        reused = pl.DataFrame(base)
+        unique = reused.with_columns(
+            (pl.col("stratum") + pl.col("psu").cast(pl.String)).alias("psu")
+        )
+        design = Design(
+            stratum="stratum",
+            psu="psu",
+            ssu="ssu",
+            wgt="wgt",
+            pop_size=PopSize(psu="fpc_psu", ssu="fpc_ssu"),
+        )
+
+        r_reused = Sample(reused, design).estimation.mean("y")  # must not raise
+        r_unique = Sample(unique, design).estimation.mean("y")
+        assert r_reused.estimates[0].est == pytest.approx(r_unique.estimates[0].est, rel=1e-12)
+        assert r_reused.estimates[0].se == pytest.approx(r_unique.estimates[0].se, rel=1e-12)
+
     def test_pop_size_column_not_numeric_raises(self, data):
         """Non-numeric pop_size column should raise at Sample construction."""
         design = Design(stratum="stratum", psu="psu", wgt="wgt", pop_size="stratum")

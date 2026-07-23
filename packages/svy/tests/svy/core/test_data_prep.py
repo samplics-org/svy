@@ -108,9 +108,14 @@ class TestDropNullsScope:
         # All 100 rows should survive — nulls are only in irrelevant columns
         assert prep.df.height == 100
 
-    def test_relevant_nulls_do_drop_rows(self, base_df):
-        """Nulls in the y column should cause those rows to be dropped."""
-        # Inject nulls into y_var
+    def test_relevant_nulls_zero_weights_not_drop(self, base_df):
+        """Nulls in the y column keep their rows with zeroed weights.
+
+        Physically dropping null-y rows deletes PSUs/strata from the design
+        (wrong domain SEs and df). They are treated as out-of-domain instead:
+        row kept, main weight zeroed, y filled with 0.0 for the kernels —
+        matching R's na.rm=TRUE / subset() semantics.
+        """
         df = base_df.with_columns(
             pl.when(pl.col("y_var") > 110).then(None).otherwise(pl.col("y_var")).alias("y_var")
         )
@@ -128,7 +133,11 @@ class TestDropNullsScope:
             select_columns=False,
             apply_singleton_filter=False,
         )
-        assert prep.df.height == 100 - n_nulls
+        # All rows survive; the null-y rows are out-of-domain with weight 0
+        assert prep.df.height == 100
+        assert prep.df.filter(pl.col(prep.weight_col) == 0.0).height == n_nulls
+        assert prep.df[prep.y_col].null_count() == 0
+        assert prep.df.filter(pl.col(prep.weight_col) > 0).height == 100 - n_nulls
 
     def test_nulls_in_x_column_drop_rows(self, base_df):
         """Nulls in extra_cols (x variables) should cause drops."""
@@ -152,8 +161,8 @@ class TestDropNullsScope:
         )
         assert prep.df.height == 100 - n_nulls
 
-    def test_nulls_in_by_column_drop_rows(self, base_df):
-        """Nulls in by column should cause drops."""
+    def test_nulls_in_by_column_zero_weights_not_drop(self, base_df):
+        """Nulls in the by column keep their rows with zeroed weights."""
         df = base_df.with_columns(
             pl.when(pl.arange(0, pl.len()) < 5)
             .then(None)
@@ -172,7 +181,9 @@ class TestDropNullsScope:
             select_columns=False,
             apply_singleton_filter=False,
         )
-        assert prep.df.height == 95
+        # All rows survive; null-by rows are out-of-domain with weight 0
+        assert prep.df.height == 100
+        assert prep.df.filter(pl.col(prep.weight_col) == 0.0).height == 5
 
     def test_nulls_in_weight_column_drop_rows(self, base_df):
         """Nulls in the weight column should cause drops."""

@@ -1575,43 +1575,54 @@ fn weighted_s2(y: &[f64], wn: &[f64]) -> f64 {
     (n / (n - 1.0)) * ss
 }
 
+fn srs_mean_from(yv: &[f64], wv: &[f64]) -> f64 {
+    let n = yv.len() as f64;
+    if n < 2.0 {
+        return f64::NAN;
+    }
+    let sum_w: f64 = wv.iter().sum();
+    if sum_w <= 0.0 {
+        return f64::NAN;
+    }
+    let wn: Vec<f64> = wv.iter().map(|w| w / sum_w).collect();
+    let s2_y = weighted_s2(yv, &wn);
+    (s2_y / n) * (1.0 - (n / sum_w))
+}
+
 pub fn srs_variance_mean(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult<f64> {
-    // Fast path: contiguous null-free slices are used directly, skipping the
-    // yv/wv copies the fallback builds. Same accumulation order → bit-identical.
+    // Zero-weight rows (out-of-domain / missing-y under domain semantics)
+    // carry no information and must not inflate n — matching R's deff on
+    // subset()/na.rm designs, and the *_domain variants below.
+    //
+    // Fast path: contiguous null-free all-positive slices are used directly,
+    // skipping the yv/wv copies. Same accumulation order → bit-identical.
     if let Some((ys, ws)) = cont_pair(y, weights) {
-        let n = ys.len() as f64;
-        if n < 2.0 {
-            return Ok(f64::NAN);
+        if ws.iter().all(|&w| w > 0.0) {
+            return Ok(srs_mean_from(ys, ws));
         }
-        let sum_w: f64 = ws.iter().sum();
-        if sum_w <= 0.0 {
-            return Ok(f64::NAN);
+        let mut yv = Vec::new();
+        let mut wv = Vec::new();
+        for (yi, wi) in ys.iter().zip(ws.iter()) {
+            if *wi > 0.0 {
+                yv.push(*yi);
+                wv.push(*wi);
+            }
         }
-        let wn: Vec<f64> = ws.iter().map(|w| w / sum_w).collect();
-        let s2_y = weighted_s2(ys, &wn);
-        return Ok((s2_y / n) * (1.0 - (n / sum_w)));
+        return Ok(srs_mean_from(&yv, &wv));
     }
 
-    // Fallback: only use observations where both y and w are non-null.
+    // Fallback: only observations where y and w are non-null and w > 0.
     let mut yv = Vec::new();
     let mut wv = Vec::new();
     for (yi, wi) in y.into_iter().zip(weights.into_iter()) {
         if let (Some(y_val), Some(w_val)) = (yi, wi) {
-            yv.push(y_val);
-            wv.push(w_val);
+            if w_val > 0.0 {
+                yv.push(y_val);
+                wv.push(w_val);
+            }
         }
     }
-    let n = yv.len() as f64;
-    if n < 2.0 {
-        return Ok(f64::NAN);
-    }
-    let sum_w: f64 = wv.iter().sum();
-    if sum_w <= 0.0 {
-        return Ok(f64::NAN);
-    }
-    let wn: Vec<f64> = wv.iter().map(|w| w / sum_w).collect();
-    let s2_y = weighted_s2(&yv, &wn);
-    Ok((s2_y / n) * (1.0 - (n / sum_w)))
+    Ok(srs_mean_from(&yv, &wv))
 }
 
 pub fn srs_variance_mean_domain(
@@ -1659,19 +1670,25 @@ pub fn srs_variance_mean_domain(
 }
 
 pub fn srs_variance_total(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult<f64> {
-    let n = y.len() as f64;
+    // Zero-weight rows are excluded from n (see srs_variance_mean).
+    let mut yv: Vec<f64> = Vec::new();
+    let mut wv: Vec<f64> = Vec::new();
+    for (yi, wi) in y.into_iter().zip(weights.into_iter()) {
+        let w_val = wi.unwrap_or(0.0);
+        if w_val > 0.0 {
+            yv.push(yi.unwrap_or(0.0));
+            wv.push(w_val);
+        }
+    }
+    let n = yv.len() as f64;
     if n < 2.0 {
         return Ok(f64::NAN);
     }
-    let sum_w: f64 = weights.into_iter().filter_map(|v| v).sum();
+    let sum_w: f64 = wv.iter().sum();
     if sum_w <= 0.0 {
         return Ok(f64::NAN);
     }
-    let wn: Vec<f64> = weights
-        .into_iter()
-        .map(|v| v.unwrap_or(0.0) / sum_w)
-        .collect();
-    let yv: Vec<f64> = y.into_iter().map(|v| v.unwrap_or(0.0)).collect();
+    let wn: Vec<f64> = wv.iter().map(|w| w / sum_w).collect();
     let s2_y = weighted_s2(&yv, &wn);
     Ok(((sum_w.powi(2) / n) * s2_y) * (1.0 - (n / sum_w)))
 }
@@ -1724,20 +1741,27 @@ pub fn srs_variance_ratio(
     x: &Float64Chunked,
     weights: &Float64Chunked,
 ) -> PolarsResult<f64> {
-    let n = y.len() as f64;
+    // Zero-weight rows are excluded from n (see srs_variance_mean).
+    let mut yv: Vec<f64> = Vec::new();
+    let mut xv: Vec<f64> = Vec::new();
+    let mut wv: Vec<f64> = Vec::new();
+    for ((yi, xi), wi) in y.into_iter().zip(x.into_iter()).zip(weights.into_iter()) {
+        let w_val = wi.unwrap_or(0.0);
+        if w_val > 0.0 {
+            yv.push(yi.unwrap_or(0.0));
+            xv.push(xi.unwrap_or(0.0));
+            wv.push(w_val);
+        }
+    }
+    let n = yv.len() as f64;
     if n < 2.0 {
         return Ok(f64::NAN);
     }
-    let sum_w: f64 = weights.into_iter().filter_map(|v| v).sum();
+    let sum_w: f64 = wv.iter().sum();
     if sum_w <= 0.0 {
         return Ok(f64::NAN);
     }
-    let wn: Vec<f64> = weights
-        .into_iter()
-        .map(|v| v.unwrap_or(0.0) / sum_w)
-        .collect();
-    let yv: Vec<f64> = y.into_iter().map(|v| v.unwrap_or(0.0)).collect();
-    let xv: Vec<f64> = x.into_iter().map(|v| v.unwrap_or(0.0)).collect();
+    let wn: Vec<f64> = wv.iter().map(|w| w / sum_w).collect();
     let ybar: f64 = yv.iter().zip(wn.iter()).map(|(yi, wi)| wi * yi).sum();
     let xbar: f64 = xv.iter().zip(wn.iter()).map(|(xi, wi)| wi * xi).sum();
     if xbar == 0.0 {

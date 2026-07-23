@@ -353,3 +353,24 @@ def test_two_way_print_alignment():
     )
     wide = t.crosstab("est")
     assert wide.drop("r").to_numpy().tolist() == [[1, 2], [3, 4], [5, 6]]
+
+
+def test_units_count_ci_uses_design_df_t(df_basic, mock_design):
+    """Count CIs must use the design-df t quantile, not z.
+
+    Regression test: compute_totals selected a normal critical value even
+    though design df is available, giving anti-conservative CIs for few
+    PSUs. df_basic has 4 PSUs in 2 strata -> df = 2, t(0.975, 2) = 4.30.
+    """
+    from scipy.stats import t as t_dist
+
+    sample = Sample(data=df_basic, design=mock_design)
+    tbl = sample.categorical.tabulate(rowvar="row", units=TableUnits.COUNT, drop_nulls=True)
+    t_crit = float(t_dist.ppf(0.975, 2))
+    checked = 0
+    for cell in tbl.estimates:
+        if cell.se > 0:
+            assert (cell.uci - cell.est) / cell.se == pytest.approx(t_crit, rel=1e-9)
+            assert (cell.est - cell.lci) / cell.se == pytest.approx(t_crit, rel=1e-9)
+            checked += 1
+    assert checked > 0

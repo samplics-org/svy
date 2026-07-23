@@ -372,6 +372,10 @@ def test_proportion_domain_estimates(synthetic_sample_df, design_kwargs, expecte
 
 
 ## RATIO
+## R: svyratio(~income, ~fam_size, design, na.rm=TRUE, deff=TRUE) — na.rm
+## zero-weights rows with missing income/fam_size (domain semantics, what
+## drop_nulls=True does), rather than complete-case filtering. CIs use the
+## design-df t quantile (df = active PSUs - strata).
 @pytest.mark.parametrize(
     "design_kwargs,expected",
     [
@@ -379,22 +383,22 @@ def test_proportion_domain_estimates(synthetic_sample_df, design_kwargs, expecte
             dict(wr=False, wgt="samp_wgt"),
             {
                 "est": 16672.1357678339,
-                "se": 459.843564734807,
-                "cv": 0.027581563102551,
-                "lci": 15769.7317862477,
-                "uci": 17574.53974942,
-                "deff": 1.511649361341728,
+                "se": 459.83877132731,
+                "cv": 0.0275812755924465,
+                "lci": 15769.7411929033,
+                "uci": 17574.5303427645,
+                "deff": 1.51161784665207,
             },
         ),
         (
             dict(wr=False, wgt="samp_wgt", stratum="region"),
             {
                 "est": 16672.1357678339,
-                "se": 430.583615215761,
-                "cv": 0.0258265420346745,
-                "lci": 15827.1486729081,
-                "uci": 17517.1228627597,
-                "deff": 1.3253965574884292,
+                "se": 431.022318374662,
+                "cv": 0.0258528555895189,
+                "lci": 15826.2877518357,
+                "uci": 17517.9837838321,
+                "deff": 1.32809871263838,
             },
         ),
         (
