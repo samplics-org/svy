@@ -4,9 +4,11 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import tempfile
 import zipfile
 
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -17,6 +19,7 @@ from polars.exceptions import ComputeError
 import svy_io.svyreadstat_rs as native
 
 from .factor import as_factor
+from .metadata import normalize_user_missing
 from .helpers import _normalize_n_max
 from .tagged_na import TaggedNA
 
@@ -133,7 +136,12 @@ def get_na_tag(value) -> str | None:
 
 
 # ----------------  Helper functions ----------------
-def _as_path_like(obj) -> str:
+def _as_path_like(obj, stack: ExitStack) -> str:
+    """Resolve a path or file-like object to a filesystem path.
+
+    File-like objects are spooled to a private temp file that is removed
+    when ``stack`` closes (i.e. right after the native parse).
+    """
     # already a path-like?
     if isinstance(obj, (str, os.PathLike)):
         return str(obj)
@@ -141,18 +149,21 @@ def _as_path_like(obj) -> str:
     if hasattr(obj, "read"):
         with tempfile.NamedTemporaryFile(suffix=".sas7bdat", delete=False) as tmp:
             tmp.write(obj.read())
-            return tmp.name
+        stack.callback(lambda p=tmp.name: os.unlink(p) if os.path.exists(p) else None)
+        return tmp.name
     raise TypeError("data_path must be a path or a file-like object")
 
 
-def _maybe_from_zip(path: str) -> tuple[str, str | None]:
+def _maybe_from_zip(path: str, stack: ExitStack) -> tuple[str, str | None]:
     """
     Extract SAS files from a zip archive.
     Returns (sas_path, catalog_path_or_None).
 
-    Note: Creates temporary files in a system temp directory.
-    The caller doesn't need to clean up - the OS will handle it eventually,
-    but for immediate cleanup you could track the temp dir if needed.
+    Extraction goes into a fresh private directory (not the shared system
+    temp dir, whose predictable member-derived paths invited cross-run
+    collisions and symlink planting on multi-user machines).  The
+    directory is removed when ``stack`` closes, right after the native
+    parse — the caller never needs the extracted files afterwards.
     """
     if not str(path).lower().endswith(".zip"):
         return path, None
@@ -180,10 +191,9 @@ def _maybe_from_zip(path: str) -> tuple[str, str | None]:
                 UserWarning,
             )
 
-        # Extract to temp directory
-        # Note: Using tempfile with delete=False means files persist
-        # but are in the system temp dir which gets cleaned periodically
-        temp_base = tempfile.gettempdir()
+        # Private per-call extraction dir, cleaned up with the stack.
+        temp_base = tempfile.mkdtemp(prefix="svy_io_zip_")
+        stack.callback(shutil.rmtree, temp_base, ignore_errors=True)
 
         # Extract data file
         sas_path = z.extract(sas_files[0], path=temp_base)
@@ -337,7 +347,10 @@ def as_factor_expr(
             mapping_utf8["__svy_label"].to_list(),
         )
     )
-    label_expr = key_expr.replace(repl)
+    # Unlabelled values map to null (haven / factor.as_factor behavior);
+    # the "default"/"both" branches below fall back to the raw value
+    # explicitly via otherwise(key_expr).
+    label_expr = key_expr.replace_strict(repl, default=None)
 
     if levels in {"default", "both"}:
         if levels == "both":
@@ -485,6 +498,7 @@ def read_xpt(
         df = pl.read_ipc_stream(bio)  # Fallback: IPC stream
 
     meta: Dict[str, Any] = json.loads(meta_json)
+    meta["user_missing"] = normalize_user_missing(meta)
 
     # Optional post-processing (same order as read_sas)
     if coerce_temporals:
@@ -558,38 +572,37 @@ def read_sas(
     n_max = _normalize_n_max(n_max)
 
     # Fast-path: explicitly requesting zero rows
-    if n_max == 0:
-        empty = pl.DataFrame({})
-        meta: Dict[str, Any] = {
-            "file_label": None,
-            "vars": [],
-            "value_labels": [],
-            "user_missing": [],
-            "n_rows": 0,
-        }
-        return empty, meta
+    # n_max=0: still open and validate the file, returning the full schema
+    # and metadata with zero rows (haven behavior). The native layer treats
+    # n_max=0 as 1, so fetch one row and truncate after parsing.
+    zero_rows = n_max == 0
+    if zero_rows:
+        n_max = 1
 
-    data_path = _as_path_like(data_path)
+    # Temp artifacts (spooled file-like inputs, zip extraction dir) live
+    # only for the duration of the native parse.
+    with ExitStack() as _tmp_stack:
+        data_path = _as_path_like(data_path, _tmp_stack)
 
-    # Handle zip files
-    if str(data_path).lower().endswith(".zip"):
-        extracted_path, extracted_catalog = _maybe_from_zip(data_path)
-        data_path = extracted_path
-        # Use extracted catalog if no explicit catalog_path was provided
-        if catalog_path is None and extracted_catalog:
-            catalog_path = extracted_catalog
-    elif catalog_path is not None:
-        catalog_path = _as_path_like(catalog_path)
+        # Handle zip files
+        if str(data_path).lower().endswith(".zip"):
+            extracted_path, extracted_catalog = _maybe_from_zip(data_path, _tmp_stack)
+            data_path = extracted_path
+            # Use extracted catalog if no explicit catalog_path was provided
+            if catalog_path is None and extracted_catalog:
+                catalog_path = extracted_catalog
+        elif catalog_path is not None:
+            catalog_path = _as_path_like(catalog_path, _tmp_stack)
 
-    ipc_bytes, meta_json = native.df_parse_sas_file(  # type: ignore[attr-defined]
-        data_path,
-        catalog_path,
-        encoding,
-        catalog_encoding,
-        cols_skip,
-        n_max,
-        rows_skip,
-    )
+        ipc_bytes, meta_json = native.df_parse_sas_file(  # type: ignore[attr-defined]
+            data_path,
+            catalog_path,
+            encoding,
+            catalog_encoding,
+            cols_skip,
+            n_max,
+            rows_skip,
+        )
 
     # Robust loader: try FILE first; if footer is missing, use STREAM.
     bio = io.BytesIO(ipc_bytes)
@@ -604,6 +617,11 @@ def read_sas(
 
     # Decode metadata JSON
     meta: Dict[str, Any] = json.loads(meta_json)
+    meta["user_missing"] = normalize_user_missing(meta)
+
+    if zero_rows:
+        df = df.head(0)
+        meta["n_rows"] = 0
 
     # Optional post-processing (order chosen to mirror typical haven workflows)
     if coerce_temporals:
@@ -658,17 +676,12 @@ def read_sas_arrow(
     from pyarrow import ArrowInvalid
 
     n_max = _normalize_n_max(n_max)
-    if n_max == 0:
-        # empty table with no fields; keep behavior consistent
-        empty = pa.table({})
-        meta = {
-            "file_label": None,
-            "vars": [],
-            "value_labels": [],
-            "user_missing": [],
-            "n_rows": 0,
-        }
-        return empty, meta
+    # n_max=0: still open and validate the file, returning the full schema
+    # and metadata with zero rows (haven behavior). The native layer treats
+    # n_max=0 as 1, so fetch one row and truncate after parsing.
+    zero_rows = n_max == 0
+    if zero_rows:
+        n_max = 1
 
     ipc_bytes, meta_json = native.df_parse_sas_file(  # type: ignore[attr-defined]
         data_path, catalog_path, encoding, catalog_encoding, cols_skip, n_max, rows_skip
@@ -683,6 +696,10 @@ def read_sas_arrow(
         table = pa_ipc.open_stream(bio).read_all()
 
     meta = json.loads(meta_json)
+    meta["user_missing"] = normalize_user_missing(meta)
+    if zero_rows:
+        table = table.slice(0, 0)
+        meta["n_rows"] = 0
     return table, meta
 
 

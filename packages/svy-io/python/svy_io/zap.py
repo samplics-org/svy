@@ -104,14 +104,6 @@ def zap_labels(
 ) -> Tuple[pl.DataFrame, Dict[str, Any]]: ...
 
 
-def _zap_labels_meta(meta: Dict[str, Any]) -> Dict[str, Any]:
-    out = copy.deepcopy(meta)
-    for v in out.get("vars", []):
-        v["label_set"] = None
-    out["value_labels"] = []
-    return out
-
-
 def zap_labels(obj, meta: Dict[str, Any] | None = None, *, user_na: bool = False):
     """
     Remove value labels.

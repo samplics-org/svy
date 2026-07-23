@@ -448,3 +448,14 @@ def test_write_dta_returns_input_unaltered_invisibly(tmp_path):
     out = tmp_path / "inv.dta"
     df_returned = _write_dta(df, out, version=118)
     assert df_returned is df
+
+
+def test_stata_nonexistent_format_codes_rejected():
+    """116 and 120 are not real Stata file formats."""
+    from svy_io.stata import _stata_file_format
+
+    assert _stata_file_format(118) == 118
+    assert _stata_file_format(15) == 119
+    for bad in (116, 120, 130):
+        with pytest.raises(ValueError):
+            _stata_file_format(bad)

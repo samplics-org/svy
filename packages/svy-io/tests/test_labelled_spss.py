@@ -520,3 +520,9 @@ def test_realistic_spss_workflow():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_to_int_preserves_missing_as_none():
+    """Regression: to_int used to map None -> 0, a legitimate value."""
+    x = labelled_spss([1.0, None, 3.0], {1.0: "One"}, na_values=[9.0])
+    assert x.to_int() == [1, None, 3]
