@@ -48,10 +48,12 @@ except ImportError:  # pragma: no cover
 
 from svy.core.terms import Feature
 from svy.core.types import Category, Number
+from svy.core.warnings import Severity, WarnCode
 from svy.errors import DimensionError, MethodError
 from svy.weighting._calibration_utils import _expand_term, _match_term_targets
 from svy.weighting._helpers import _build_by_array, _by_to_cols, _normalize_dict_keys
 from svy.weighting.raking import _trim_constraints_satisfied
+from svy.weighting.trimming import _build_domain_array
 from svy.weighting.types import TrimConfig, resolve_threshold
 
 
@@ -214,26 +216,27 @@ def calibrate(
 
     X, shape_template = build_aux_matrix(sample, x=terms, by=by)
 
-    if is_global:
-        x_labels = list(shape_template.keys())
-    else:
-        x_labels = list(next(iter(shape_template.values())).keys())
+    # Ordered per-term label lists. Targets are matched per term and kept as
+    # ordered flat lists end-to-end — routing them through label-keyed dicts
+    # collapsed duplicate level labels across terms (e.g. two Cats sharing
+    # numeric codes), breaking the column alignment.
+    term_label_lists: list[tuple[Feature, list[Category]]] = []
+    x_labels: list[Category] = []
+    for term in terms:
+        _, term_labs = _expand_term(term, sample.data, where)
+        term_label_lists.append((term, term_labs))
+        x_labels.extend(term_labs)
+
+    if X.shape[1] != len(x_labels):
+        raise RuntimeError("Internal error: Design matrix label alignment mismatch.")
 
     final_control_arg: Any
 
     if is_global:
         flat_targets = []
-        cursor = 0
-        for term in terms:
-            _, term_labs = _expand_term(term, sample.data, where)
-            k = len(term_labs)
-            segment_labels = x_labels[cursor : cursor + k]
-            if segment_labels != term_labs:
-                raise RuntimeError("Internal error: Design matrix label alignment mismatch.")
-            spec = controls[term]
-            vals = _match_term_targets(segment_labels, spec, str(term))
+        for term, term_labs in term_label_lists:
+            vals = _match_term_targets(term_labs, controls[term], str(term))
             flat_targets.extend(vals)
-            cursor += k
         final_control_arg = np.array(flat_targets, dtype=float)
     else:
         final_control_arg = {}
@@ -251,22 +254,17 @@ def calibrate(
 
         for domain, domain_specs in controls.items():
             flat_targets = []
-            cursor = 0
-            for term in terms:
+            for term, term_labs in term_label_lists:
                 if term not in domain_specs:
                     raise MethodError.invalid_mapping_keys(
                         where=where,
                         param=f"controls[{domain!r}]",
                         missing=[str(term)],
                     )
-                _, term_labs = _expand_term(term, sample.data, where)
-                k = len(term_labs)
-                segment_labels = x_labels[cursor : cursor + k]
-                spec = domain_specs[term]
-                vals = _match_term_targets(segment_labels, spec, str(term))
+                vals = _match_term_targets(term_labs, domain_specs[term], str(term))
                 flat_targets.extend(vals)
-                cursor += k
-            final_control_arg[domain] = dict(zip(x_labels, flat_targets))
+            # Ordered list (not a label-keyed dict): aligned with X columns
+            final_control_arg[domain] = flat_targets
 
     return calibrate_matrix(
         sample,
@@ -277,7 +275,7 @@ def calibrate(
         bounded=bounded,
         wgt_name=wgt_name,
         update_design_wgts=update_design_wgts,
-        labels=x_labels,
+        labels=None,
         weights_only=False,
         ignore_reps=ignore_reps,
         strict=strict,
@@ -316,6 +314,16 @@ def calibrate_matrix(
     trimming: TrimConfig | None = None,
 ) -> Any:
     where = "Sample.weighting.calibrate_matrix"
+
+    if bounded:
+        # Accepting-and-ignoring this flag previously produced bit-identical
+        # results to bounded=False.
+        raise NotImplementedError(
+            "bounded calibration (distance-bounded g-weights, as in R survey's "
+            "calibrate(bounds=)) is not implemented yet. Use trimming= to "
+            "constrain calibrated weights, or leave bounded=False."
+        )
+
     df: pl.DataFrame = sample.data
     design = sample._design
 
@@ -467,6 +475,150 @@ def calibrate_matrix(
             reason=f"Column '{wgt_name}' already exists. Choose a different wgt_name.",
         )
 
+    # ── Trim-calibrate cycle ──────────────────────────────────────────────
+    # Runs on arrays BEFORE anything is written to the sample, so a strict
+    # failure genuinely leaves the data and design untouched.
+    if trimming is not None:
+        # Resolve trim domains (honor TrimConfig.by / min_cell_size, matching
+        # the contract adjust()/trim() already implement)
+        if trimming.by is not None:
+            t_by_cols = (
+                [trimming.by] if isinstance(trimming.by, str) else list(trimming.by)
+            )
+            missing_by = [c for c in t_by_cols if c not in df.columns]
+            if missing_by:
+                raise MethodError.invalid_choice(
+                    where=where,
+                    param="trimming.by",
+                    got=missing_by,
+                    allowed=list(df.columns),
+                    hint="All trimming by= columns must exist in the data.",
+                )
+            _trim_dom_arr = _build_domain_array(df, t_by_cols)
+            _group_masks = [(str(d), _trim_dom_arr == d) for d in np.unique(_trim_dom_arr)]
+        else:
+            _group_masks = [("(global)", np.ones(len(new_w), dtype=bool))]
+
+        # Thresholds resolved once per domain from the initial calibrated
+        # weights; domains below min_cell_size are skipped with a warning.
+        trim_groups: list[tuple[np.ndarray, float | None, float | None]] = []
+        for _label, _mask in _group_masks:
+            _w_pos = new_w[_mask]
+            _w_pos = _w_pos[_w_pos > 0].astype(np.float64)
+            if len(_w_pos) < trimming.min_cell_size:
+                sample.warn(
+                    code=WarnCode.DOMAIN_SKIPPED,
+                    title="Domain skipped — cell too small",
+                    detail=(
+                        f"Trim domain {_label!r} has {len(_w_pos)} positive-weight "
+                        f"unit(s), below min_cell_size={trimming.min_cell_size}. "
+                        "Trimming skipped."
+                    ),
+                    where=where,
+                    level=Severity.WARNING,
+                )
+                continue
+            _up = (
+                resolve_threshold(trimming.upper, _w_pos)
+                if trimming.upper is not None
+                else None
+            )
+            _lo = (
+                resolve_threshold(trimming.lower, _w_pos)
+                if trimming.lower is not None
+                else None
+            )
+            trim_groups.append((_mask, _up, _lo))
+
+        assert rust_trim_weights is not None  # noqa: S101
+
+        _current_w = new_w.copy()
+        _calib_converged = True  # already checked above if strict
+        _trim_ok = True  # nothing to trim when every domain was skipped
+        _scale_arr_cycle = (
+            np.full(len(w), float(scale), dtype=np.float64)
+            if isinstance(scale, (int, float))
+            else np.asarray(scale, dtype=np.float64)
+        )
+
+        def _cycle_calibrate(w_in: np.ndarray) -> np.ndarray:
+            if domain_vec is None:
+                return rust_calibrate(
+                    w_in.reshape(-1, 1),
+                    X,
+                    totals_arr,
+                    _scale_arr_cycle,
+                    False,  # additive=False always — see module docstring
+                )[:, 0]
+            return rust_calibrate_by_domain(
+                w_in.reshape(-1, 1),
+                X,
+                domain_indices,
+                controls_dict_main,
+                _scale_arr_cycle,
+                False,  # additive=False always — see module docstring
+            )[:, 0]
+
+        def _cycle_fit_ok(w_in: np.ndarray) -> bool:
+            if domain_vec is None:
+                return _check_calibration_fit(w_in, X, totals_arr)
+            return all(
+                _check_calibration_fit(
+                    w_in[domain_vec == d],
+                    X[domain_vec == d],
+                    np.array(controls_dict_main[domain_to_idx[d]], dtype=np.float64),
+                )
+                for d in unique_domains
+            )
+
+        def _cycle_trim_ok(w_in: np.ndarray) -> bool:
+            return all(
+                _trim_constraints_satisfied(w_in[m], u, lo, 1e-4) for m, u, lo in trim_groups
+            )
+
+        if trim_groups:
+            _trim_ok = False
+            for _cycle in range(trimming.max_iter):
+                # Calibrate step — restore control totals
+                _current_w = _cycle_calibrate(_current_w)
+                _calib_converged = _cycle_fit_ok(_current_w)
+
+                # Trim step — per domain with its own thresholds
+                for _mask, _up, _lo in trim_groups:
+                    (_trimmed_w, *_) = rust_trim_weights(
+                        _current_w[_mask],
+                        _up,
+                        _lo,
+                        trimming.redistribute,
+                        trimming.max_iter,
+                        trimming.tol,
+                    )
+                    _current_w[_mask] = _trimmed_w
+                _trim_ok = _cycle_trim_ok(_current_w)
+
+                if _trim_ok:
+                    # Final calibrate to restore totals after last trim
+                    _current_w = _cycle_calibrate(_current_w)
+                    # Re-check trim and fit after final calibrate
+                    _trim_ok = _cycle_trim_ok(_current_w)
+                    _calib_converged = _cycle_fit_ok(_current_w)
+                    break
+
+        if strict and not (_calib_converged and _trim_ok):
+            raise MethodError.not_applicable(
+                where=where,
+                method="calibrate",
+                reason=(
+                    f"Trim-calibrate cycle did not converge after {trimming.max_iter} cycles. "
+                    "The design has NOT been modified. "
+                    "Pass strict=False to store partial results."
+                ),
+                hint="Increase max_iter, relax tol, or use a less restrictive TrimConfig.",
+            )
+
+        new_w = _current_w
+
+    # ── Write results (only after the strict guard above) ────────────────
     df = df.with_columns(pl.Series(name=wgt_name, values=new_w))
 
     if update_design_wgts:
@@ -525,130 +677,6 @@ def calibrate_matrix(
                     fay_coef=design.rep_wgts.fay_coef,
                     df=design.rep_wgts.df,
                 )
-
-    sample._data = df
-
-    # ── Trim-calibrate cycle ──────────────────────────────────────────────
-    if trimming is not None:
-        # Resolve thresholds once from the initial calibrated weights
-        _w_pos = new_w[new_w > 0].astype(np.float64)
-        _upper_val = (
-            resolve_threshold(trimming.upper, _w_pos) if trimming.upper is not None else None
-        )
-        _lower_val = (
-            resolve_threshold(trimming.lower, _w_pos) if trimming.lower is not None else None
-        )
-
-        assert rust_trim_weights is not None  # noqa: S101
-
-        _current_w = new_w.copy()
-        _calib_converged = True  # already checked above if strict
-        _trim_ok = False
-        _scale_arr_cycle = (
-            np.full(len(w), float(scale), dtype=np.float64)
-            if isinstance(scale, (int, float))
-            else np.asarray(scale, dtype=np.float64)
-        )
-        _n_cycles = trimming.max_iter
-
-        for _cycle in range(_n_cycles):
-            # Calibrate step — restore control totals
-            if domain_vec is None:
-                _cal_result = rust_calibrate(
-                    _current_w.reshape(-1, 1),
-                    X,
-                    totals_arr,
-                    _scale_arr_cycle,
-                    False,  # additive=False always — see module docstring
-                )
-            else:
-                # domain_indices and controls_dict_main are populated above
-                _cal_result = rust_calibrate_by_domain(
-                    _current_w.reshape(-1, 1),
-                    X,
-                    domain_indices,
-                    controls_dict_main,
-                    _scale_arr_cycle,
-                    False,  # additive=False always — see module docstring
-                )
-            _current_w = _cal_result[:, 0]
-
-            # FIX: check calibration fit for domain case too
-            if domain_vec is None:
-                _calib_converged = _check_calibration_fit(_current_w, X, totals_arr)
-            else:
-                _calib_converged = all(
-                    _check_calibration_fit(
-                        _current_w[domain_vec == d],
-                        X[domain_vec == d],
-                        np.array(controls_dict_main[domain_to_idx[d]], dtype=np.float64),
-                    )
-                    for d in unique_domains
-                )
-
-            # Trim step
-            (_trimmed_w, *_) = rust_trim_weights(
-                _current_w,
-                _upper_val,
-                _lower_val,
-                trimming.redistribute,
-                trimming.max_iter,
-                trimming.tol,
-            )
-            _current_w = _trimmed_w
-            _trim_ok = _trim_constraints_satisfied(_current_w, _upper_val, _lower_val, 1e-4)
-
-            if _trim_ok:
-                # Final calibrate to restore totals after last trim
-                if domain_vec is None:
-                    _final = rust_calibrate(
-                        _current_w.reshape(-1, 1),
-                        X,
-                        totals_arr,
-                        _scale_arr_cycle,
-                        False,  # additive=False always — see module docstring
-                    )
-                else:
-                    _final = rust_calibrate_by_domain(
-                        _current_w.reshape(-1, 1),
-                        X,
-                        domain_indices,
-                        controls_dict_main,
-                        _scale_arr_cycle,
-                        False,  # additive=False always — see module docstring
-                    )
-                _current_w = _final[:, 0]
-                # Re-check trim and fit after final calibrate
-                _trim_ok = _trim_constraints_satisfied(_current_w, _upper_val, _lower_val, 1e-4)
-                if domain_vec is None:
-                    _calib_converged = _check_calibration_fit(_current_w, X, totals_arr)
-                else:
-                    _calib_converged = all(
-                        _check_calibration_fit(
-                            _current_w[domain_vec == d],
-                            X[domain_vec == d],
-                            np.array(controls_dict_main[domain_to_idx[d]], dtype=np.float64),
-                        )
-                        for d in unique_domains
-                    )
-                break
-
-        if strict and not (_calib_converged and _trim_ok):
-            raise MethodError.not_applicable(
-                where=where,
-                method="calibrate",
-                reason=(
-                    f"Trim-calibrate cycle did not converge after {trimming.max_iter} cycles. "
-                    "The design has NOT been modified. "
-                    "Pass strict=False to store partial results."
-                ),
-                hint="Increase max_iter, relax tol, or use a less restrictive TrimConfig.",
-            )
-
-        # Update the stored weight with the final cycled result
-        new_w = _current_w
-        # FIX: was wgt_col_name (NameError) — correct variable is wgt_name
-        df = df.with_columns(pl.Series(name=wgt_name, values=new_w))
 
     sample._data = df
     return sample

@@ -129,20 +129,26 @@ def test_build_aux_matrix_with_by_single_and_multi_keys():
     assert X1.shape[0] == n and X2.shape[0] == n
 
 
-def test_build_aux_matrix_continuous_na_handling():
+def test_build_aux_matrix_continuous_na_raises():
+    """Nulls in a continuous auxiliary raise (round 8, W8) — silently
+    filling 0.0 biased the calibration totals."""
+    from svy.errors import DimensionError
+
     s = _make_sample()
-    # 'x' has a None. Default behavior for continuous terms is fill_null(0.0).
-    X, shape = s.weighting.build_aux_matrix(x=["x"])
+    with pytest.raises(DimensionError, match="null value"):
+        s.weighting.build_aux_matrix(x=["x"])
+
+
+def test_build_aux_matrix_continuous_complete_ok():
+    s = _make_sample()
+    df = s.data.with_columns(pl.col("x").fill_null(0.0))
+    s2 = Sample(df)
+    X, shape = s2.weighting.build_aux_matrix(x=["x"])
 
     # one continuous column -> 1 feature
     assert X.shape[1] == 1
     # shape contains one label (the column name)
     assert list(shape.keys()) == ["x"]
-
-    # Verify fillna behavior: last row is None, should be 0.0
-    import numpy as np
-
-    assert np.isclose(X[-1, 0], 0.0)
 
 
 def test_build_aux_matrix_requires_some_output_columns():
