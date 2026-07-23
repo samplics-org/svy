@@ -14,7 +14,18 @@ use pyo3_polars::PyDataFrame;
 
 use crate::regression::glm::{fit_glm, fit_glm_by};
 
-type GlmTuple = (String, Vec<f64>, Vec<f64>, f64, f64, f64, f64, u32, usize);
+type GlmTuple = (
+    String,
+    Vec<f64>,
+    Vec<f64>,
+    Vec<f64>,
+    f64,
+    f64,
+    f64,
+    f64,
+    u32,
+    usize,
+);
 
 fn column_to_series(df: &DataFrame, name: &str) -> PyResult<Series> {
     df.column(name)
@@ -36,6 +47,7 @@ fn optional_column_to_series(df: &DataFrame, name: &Option<String>) -> PyResult<
     weight_name,
     stratum_name=None,
     psu_name=None,
+    fpc_name=None,
     by_col=None,
     family="gaussian".to_string(),
     link="identity".to_string(),
@@ -50,6 +62,7 @@ pub fn fit_glm_rs(
     weight_name: String,
     stratum_name: Option<String>,
     psu_name: Option<String>,
+    fpc_name: Option<String>,
     by_col: Option<String>,
     family: String,
     link: String,
@@ -71,6 +84,7 @@ pub fn fit_glm_rs(
 
     let stratum = optional_column_to_series(&df, &stratum_name)?;
     let psu = optional_column_to_series(&df, &psu_name)?;
+    let fpc = optional_column_to_series(&df, &fpc_name)?;
 
     // No by_col: single fit, wrap in one-element vec for API uniformity.
     if by_col.is_none() {
@@ -83,6 +97,7 @@ pub fn fit_glm_rs(
                     &weights,
                     stratum.as_ref(),
                     psu.as_ref(),
+                    fpc.as_ref(),
                     &family,
                     &link,
                     tol,
@@ -95,6 +110,7 @@ pub fn fit_glm_rs(
             String::new(),
             result.params,
             result.cov_params,
+            result.naive_cov,
             result.scale,
             result.df_resid,
             result.deviance,
@@ -116,6 +132,7 @@ pub fn fit_glm_rs(
                 &weights,
                 stratum.as_ref(),
                 psu.as_ref(),
+                fpc.as_ref(),
                 &by_series,
                 &family,
                 &link,
@@ -132,6 +149,7 @@ pub fn fit_glm_rs(
                 level,
                 r.params,
                 r.cov_params,
+                r.naive_cov,
                 r.scale,
                 r.df_resid,
                 r.deviance,

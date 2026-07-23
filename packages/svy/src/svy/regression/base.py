@@ -282,14 +282,33 @@ class GLM:
             where_expr = _compile_where_to_pl_expr(where)
             where_cols = list(where_expr.meta.root_names())
 
+        # Replicate weight columns (replicate variance is computed when the
+        # design carries them) and the FPC population column, both of which
+        # must survive prepare_data's projection.
+        design0 = self._sample._design
+        rep_cols: list[str] = (
+            list(design0.rep_wgts.columns) if design0.rep_wgts is not None else []
+        )
+        pop_size = design0.pop_size
+        pop_cols: list[str] = []
+        if pop_size is not None:
+            _pop_col = pop_size if isinstance(pop_size, str) else pop_size.psu
+            if isinstance(_pop_col, str):
+                pop_cols = [_pop_col]
+
         # ── Centralised data preparation ─────────────────────────────────
         # prepare_data handles: materialise, column selection, missing values,
         # weight casting, singleton filter, and correct strata/psu resolution
         # (including singleton variance columns when present).
+        # Covariate and where-clause columns go through null_zero_cols: rows
+        # with missing values are KEPT with zeroed weights (main + replicate)
+        # so the design structure (PSUs in stratum centering, df) is
+        # preserved — matching R svyglm — instead of physically dropped.
         prep = prepare_data(
             self._sample,
             y=y,
-            extra_cols=x_cols + where_cols,
+            extra_cols=x_cols + where_cols + rep_cols + pop_cols,
+            null_zero_cols=x_cols + where_cols,
             drop_nulls=drop_nulls,
             cast_y_float=True,
             apply_singleton_filter=True,
@@ -314,11 +333,24 @@ class GLM:
             bool_expr = _compile_where_to_pl_expr(where)
             df = df.with_columns(cast(pl.Expr, bool_expr).cast(pl.Utf8).alias(by_col_name))
 
-        # Filter invalid weights
-        if self._sample._design.wgt is not None:
-            df = df.filter(
-                (pl.col(w_col) > 0) & pl.col(w_col).is_not_null() & pl.col(w_col).is_finite()
+        # Drop rows with INVALID weights (null / non-finite / negative) —
+        # unconditionally: prepare_data always provides a weight column,
+        # synthesizing ones for unweighted designs. Zero-weight rows are
+        # KEPT: prepare_data zero-weights missing-value rows so they
+        # preserve the design structure while contributing nothing.
+        df = df.filter(
+            pl.col(w_col).is_not_null() & pl.col(w_col).is_finite() & (pl.col(w_col) >= 0)
+        )
+
+        # In-domain rows: where == true (when set) and positive weight.
+        # Cat level enumeration, reference validation, and response
+        # validation all use exactly the rows the fit will use.
+        _in_dom_expr = pl.col(w_col) > 0
+        if by_col_name is not None:
+            _in_dom_expr = _in_dom_expr & (
+                pl.col(by_col_name).str.to_lowercase() == "true"
             )
+        level_df = df.filter(_in_dom_expr)
 
         # ── Build feature matrix ──────────────────────────────────────────
         feature_exprs: list[pl.Expr] = []
@@ -335,15 +367,36 @@ class GLM:
                 return [pl.col(feat).cast(pl.Float64)], [feat]
 
             elif isinstance(feat, Cat):
+                # Levels enumerated over the rows the fit will use (in-domain
+                # under where=), so out-of-domain-only levels cannot create
+                # phantom all-zero dummies that inflate df and zero the Wald F.
                 levels = (
-                    df.select(pl.col(feat.name).drop_nulls().unique().sort()).to_series().to_list()
+                    level_df.select(pl.col(feat.name).drop_nulls().unique().sort())
+                    .to_series()
+                    .to_list()
                 )
 
                 if len(levels) < 2:
                     log.warning(f"Categorical '{feat.name}' has < 2 levels. Dropped.")
                     return [], []
 
-                ref_val = feat.ref if feat.ref in levels else levels[0]
+                if feat.ref is not None and feat.ref not in levels:
+                    raise ModelError(
+                        title="Reference level not found",
+                        detail=(
+                            f"Cat({feat.name!r}, ref={feat.ref!r}): the reference "
+                            f"level is not among the observed levels {levels!r}. "
+                            "A silently substituted reference would change the "
+                            "meaning of every coefficient."
+                        ),
+                        code="CAT_REF_NOT_FOUND",
+                        where="GLM.fit",
+                        param=feat.name,
+                        got=feat.ref,
+                        expected=levels,
+                        hint="Check the level's value and dtype (e.g. 1 vs '1').",
+                    )
+                ref_val = feat.ref if feat.ref is not None else levels[0]
                 levels = [ref_val] + [v for v in levels if v != ref_val]
 
                 term_info[feat.name] = {
@@ -383,6 +436,18 @@ class GLM:
             feature_exprs.extend(exprs)
             feature_names.extend(names)
 
+        # ── FPC (single-stage) ───────────────────────────────────────────
+        # Per-stratum (1 - f_h) factors matching R svyglm on a design with
+        # fpc=. Only the PSU-level factor applies (the sandwich meat is
+        # first-stage); PopSize SSU information is ignored here.
+        fpc_name: str | None = None
+        if pop_cols and pop_cols[0] in df.columns:
+            from svy.estimation._fpc import build_fpc_psu_column
+
+            df, fpc_name = build_fpc_psu_column(
+                df, pop_cols[0], s_col, p_col, "__svy_fpc_psu__"
+            )
+
         # Build final selection — include the by_col when domain is set
         final_selects = (
             [pl.col(y).cast(pl.Float64)] + feature_exprs + [pl.col(w_col).cast(pl.Float64)]
@@ -393,26 +458,39 @@ class GLM:
             final_selects.append(pl.col(p_col))
         if by_col_name and by_col_name in df.columns:
             final_selects.append(pl.col(by_col_name))
+        if fpc_name and fpc_name in df.columns:
+            final_selects.append(pl.col(fpc_name))
+        for rc in rep_cols:
+            if rc in df.columns:
+                final_selects.append(pl.col(rc).cast(pl.Float64))
 
         try:
             eng_df: pl.DataFrame = df.select(final_selects)
         except Exception as e:
             raise ValueError(f"Failed to prepare data: {e}")
 
-        # Validate response
-        y_data = eng_df.get_column(y)
+        # Zero-weight rows (kept for design structure) may carry nulls in
+        # engineered features (e.g. Cat dummies of a null value); the Rust
+        # engine requires dense y/X and these rows contribute nothing.
+        _dense_cols = [y] + [c for c in feature_names if c != "_intercept_"]
+        eng_df = eng_df.with_columns([pl.col(c).fill_null(0.0) for c in _dense_cols])
+
+        # Validate response over the rows the fit will actually use (the
+        # full frame may hold out-of-domain rows with other y values).
+        y_data = level_df.get_column(y).drop_nulls()
         self._validate_response(y_data, fam_str)
 
         # ── Call Rust ─────────────────────────────────────────────────────
         # Always returns Vec<(level, ...)> with one entry per by-level, or a
         # single entry with level="" when by_col is None.
-        try:
-            results = rs.fit_glm_rs(
+        def _run_engine(weight_name: str, fpc: str | None):
+            res = rs.fit_glm_rs(
                 y_name=y,
                 x_names=feature_names,
-                weight_name=w_col,
+                weight_name=weight_name,
                 stratum_name=s_col,
                 psu_name=p_col,
+                fpc_name=fpc,
                 by_col=by_col_name,
                 family=fam_str,
                 link=link_str,
@@ -420,32 +498,71 @@ class GLM:
                 max_iter=max_iter,
                 data=eng_df,
             )
-        except Exception as e:
-            raise RuntimeError(f"Rust GLM engine failed: {e}") from e
-
-        if not results:
-            raise RuntimeError("GLM engine returned no results.")
-
-        # ── Pick the relevant fit ─────────────────────────────────────────
-        if by_col_name is None:
-            chosen = results[0]
-        else:
-            # where supplied — pick the "true" level
-            true_results = [r for r in results if str(r[0]).lower() == "true"]
-            if not true_results:
+            if not res:
+                raise RuntimeError("GLM engine returned no results.")
+            if by_col_name is None:
+                return res[0]
+            true_res = [r for r in res if str(r[0]).lower() == "true"]
+            if not true_res:
                 raise RuntimeError(
                     "where clause produced no in-domain observations; cannot fit GLM."
                 )
-            chosen = true_results[0]
+            return true_res[0]
 
-        _level, beta, cov_flat, scale, df_resid, dev, null_dev, iters, n_obs = chosen
+        try:
+            chosen = _run_engine(w_col, fpc_name)
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"Rust GLM engine failed: {e}") from e
+
+        (
+            _level,
+            beta,
+            cov_flat,
+            naive_flat,
+            scale,
+            df_resid,
+            dev,
+            null_dev,
+            iters,
+            n_obs,
+        ) = chosen
 
         # ── Post-process ──────────────────────────────────────────────────
         k = len(feature_names)
-        n = n_obs if where is not None else eng_df.height
+        # n counts the rows that actually contributed: in-domain, positive
+        # weight (zero-weight missing-value rows are structural only).
+        n = n_obs
         cov_mat = np.array(cov_flat).reshape(k, k)
-        se_arr = np.sqrt(np.diag(cov_mat))
+        naive_cov = np.array(naive_flat).reshape(k, k)
         params_arr = np.array(beta)
+
+        # ── R svyglm weight scale ────────────────────────────────────────
+        # The Rust engine normalizes weights over ALL rows passed; R svyglm
+        # normalizes over the fitted rows only. Deviance and the model-based
+        # information are linear in that scale; rho converts to R's scale
+        # (rho == 1 for full-sample fits with no zero-weight rows).
+        w_all = eng_df.get_column(w_col).to_numpy().astype(float)
+        if by_col_name is not None:
+            _dom_arr = (
+                eng_df.get_column(by_col_name).cast(pl.Utf8).str.to_lowercase() == "true"
+            ).to_numpy()
+            in_dom_mask = _dom_arr & (w_all > 0)
+        else:
+            in_dom_mask = w_all > 0
+        _n_in = int(in_dom_mask.sum())
+        _sum_in = float(w_all[in_dom_mask].sum())
+        _n_all = int(len(w_all))
+        _sum_all = float(w_all.sum())
+        rho = (
+            (_n_in / _sum_in) * (_sum_all / _n_all)
+            if _sum_in > 0 and _n_all > 0 and _sum_all > 0
+            else 1.0
+        )
+        dev = dev * rho
+        null_dev = null_dev * rho
+        naive_cov = naive_cov / rho
 
         # Design DF — for GLM we follow the regression convention used by
         # R's svyglm: df_resid = degf(design) - (k - 1), where k - 1 is the
@@ -453,15 +570,63 @@ class GLM:
         # estimation namespace (mean, prop, ratio) which uses the raw design
         # df since no parameters are fitted. The max(1, ...) guard protects
         # against degenerate designs with very few PSUs relative to k.
-        # When domain is set, restrict to in-domain rows for the df.
-        # (Rust returns its own df_resid; we recompute here on the Python
-        # side for the t-quantile to match the convention.)
-        if where is not None:
-            domain_df = eng_df.filter(pl.col(by_col_name).str.to_lowercase() == "true")
-            df_design = self._compute_design_df(domain_df, s_col, p_col, domain_df.height)
-        else:
-            df_design = self._compute_design_df(eng_df, s_col, p_col, n)
+        # Restricted to in-domain, positive-weight rows (Rust returns its
+        # own df_resid; we recompute here for the t-quantile convention).
+        in_dom_df = eng_df.filter(pl.Series(in_dom_mask))
+        df_design = self._compute_design_df(in_dom_df, s_col, p_col, n)
         df_design = max(1, df_design - (k - 1))
+
+        # ── Replicate variance (R svrepglm) ──────────────────────────────
+        # When the design carries replicate weights, V(beta) comes from the
+        # spread of per-replicate refits: V = sum_r c_r (b_r - mean)(...)^T
+        # with the method's coefficients (previously the replicate design
+        # silently fell back to Taylor SEs).
+        rep_wgts = design0.rep_wgts
+        if rep_wgts is not None and rep_cols:
+            rep_betas = []
+            for rc in rep_cols:
+                try:
+                    r_chosen = _run_engine(rc, None)
+                except Exception as e:
+                    raise ModelError(
+                        title="Replicate GLM fit failed",
+                        detail=f"Refit with replicate weight {rc!r} failed: {e}",
+                        code="REPLICATE_FIT_FAILED",
+                        where="GLM.fit",
+                    ) from e
+                rep_betas.append(np.asarray(r_chosen[1], dtype=float))
+            B = np.vstack(rep_betas)
+            coefs_r = np.asarray(
+                self._rep_coefficients(rep_wgts, B.shape[0]), dtype=float
+            )
+            Bc = B - B.mean(axis=0)
+            cov_mat = (Bc * coefs_r[:, None]).T @ Bc
+            rep_df = getattr(rep_wgts, "df", None)
+            if rep_df:
+                df_design = max(1, int(rep_df) - (k - 1))
+
+        se_arr = np.sqrt(np.diag(cov_mat))
+
+        # ── Design-adjusted AIC (R survey's dAIC, Lumley & Scott 2015) ───
+        # Generic families: deviance + 2*eff.p with eff.p the trace of the
+        # generalized design-effect matrix. Gaussian/identity models follow
+        # R's extractAIC_svylm: profile-likelihood -2l plus a sigma^2
+        # design-effect term. Both validated against AIC(svyglm).
+        eff_p = self._effective_parameters(naive_cov, cov_mat, intercept)
+        if fam_str == "gaussian" and link_str == "identity":
+            aic_val = self._gaussian_daic(
+                eng_df=eng_df,
+                y=y,
+                feature_names=feature_names,
+                params=params_arr,
+                w_all=w_all,
+                in_dom_mask=in_dom_mask,
+                naive_cov=naive_cov,
+                cov=cov_mat,
+                intercept=intercept,
+            )
+        else:
+            aic_val = dev + 2.0 * eff_p if eff_p is not None else None
 
         # Statistics
         stats_struct = self._build_stats(
@@ -475,6 +640,7 @@ class GLM:
             intercept,
             params_arr,
             cov_mat,
+            aic_val,
         )
 
         # Coefficients
@@ -729,6 +895,104 @@ class GLM:
                 where="GLM.fit", family=family, violation="Negative values"
             )
 
+    @staticmethod
+    def _rep_coefficients(rep_wgts, n_reps: int) -> list[float]:
+        """Per-replicate variance coefficients c_r (R svrVar's scale*rscales)."""
+        rscales = getattr(rep_wgts, "rscales", None)
+        if rscales is not None:
+            return [float(r) for r in rscales]
+        m = str(getattr(rep_wgts, "method", "")).lower()
+        if "boot" in m:
+            return [1.0 / n_reps] * n_reps
+        if "brr" in m or "balanced" in m:
+            fay = float(getattr(rep_wgts, "fay_coef", 0.0) or 0.0)
+            return [1.0 / (n_reps * (1.0 - fay) ** 2)] * n_reps
+        if "jack" in m:
+            return [(n_reps - 1.0) / n_reps] * n_reps
+        if "sdr" in m:
+            return [4.0 / n_reps] * n_reps
+        raise ModelError(
+            title="Unknown replication method",
+            detail=f"Cannot derive replicate variance coefficients for method {m!r}.",
+            code="UNKNOWN_REP_METHOD",
+            where="GLM.fit",
+        )
+
+    @staticmethod
+    def _effective_parameters(
+        naive_cov: np.ndarray, cov: np.ndarray, intercept: bool
+    ) -> float | None:
+        """
+        Rao-Scott effective parameters: tr of the generalized design-effect
+        matrix solve(V0, V) over the non-intercept coefficients — R survey's
+        eff.p in extractAIC.svyglm (Lumley & Scott 2015).
+        """
+        k = naive_cov.shape[0]
+        idx = slice(1, k) if (intercept and k > 1) else slice(0, k)
+        v0 = naive_cov[idx, idx]
+        v = cov[idx, idx]
+        if v0.size == 0:
+            return None
+        try:
+            lam = np.linalg.eigvals(np.linalg.solve(v0, v))
+            return float(np.sum(np.real(lam)))
+        except np.linalg.LinAlgError:
+            return None
+
+    @staticmethod
+    def _gaussian_daic(
+        *,
+        eng_df: pl.DataFrame,
+        y: str,
+        feature_names: list[str],
+        params: np.ndarray,
+        w_all: np.ndarray,
+        in_dom_mask: np.ndarray,
+        naive_cov: np.ndarray,
+        cov: np.ndarray,
+        intercept: bool,
+    ) -> float | None:
+        """
+        Design-adjusted AIC for gaussian/identity models — mirrors R
+        survey's extractAIC_svylm (Lumley & Scott 2015): profile Gaussian
+        -2loglik at (beta_hat, sigma2_hat) plus 2*eff.p, where eff.p adds a
+        sigma^2 design-effect term to the trace of solve(V0*sigma2, V).
+        """
+        w_norm = np.zeros_like(w_all)
+        sum_in = float(w_all[in_dom_mask].sum())
+        n_in = int(in_dom_mask.sum())
+        if sum_in <= 0 or n_in == 0:
+            return None
+        w_norm[in_dom_mask] = w_all[in_dom_mask] * (n_in / sum_in)
+        n_hat = float(w_norm.sum())  # == n_in by construction
+
+        x_mat = eng_df.select(feature_names).to_numpy()
+        y_arr = eng_df.get_column(y).to_numpy().astype(float)
+        r2_arr = (y_arr - x_mat @ params) ** 2
+        sigma2 = float((w_norm * r2_arr).sum() / n_hat)
+        if sigma2 <= 0:
+            return None
+        minus2ll = n_hat * math.log(sigma2) + n_hat + n_hat * math.log(2.0 * math.pi)
+
+        k = naive_cov.shape[0]
+        idx = slice(1, k) if (intercept and k > 1) else slice(0, k)
+        v0s = naive_cov[idx, idx] * sigma2
+        v = cov[idx, idx]
+        if v0s.size == 0:
+            return None
+        try:
+            tr_mu = float(np.trace(np.linalg.solve(v0s, v)))
+        except np.linalg.LinAlgError:
+            return None
+        # sigma^2 design effect: I_sigma2 / H_sigma2
+        i_s2 = n_hat / (2.0 * sigma2**2)
+        u = -1.0 / (2.0 * sigma2) + r2_arr / (2.0 * sigma2**2)
+        h_s2 = float((w_norm * u**2).sum())
+        if h_s2 <= 0:
+            return None
+        eff_p = tr_mu + i_s2 / h_s2
+        return minus2ll + 2.0 * eff_p
+
     def _compute_design_df(
         self, df: pl.DataFrame, s_col: str | None, p_col: str | None, n: int
     ) -> int:
@@ -757,10 +1021,16 @@ class GLM:
         intercept: bool,
         params: np.ndarray | None = None,
         cov_mat: np.ndarray | None = None,
+        aic: float | None = None,
     ) -> GLMStats:
-        """Build model statistics including the adjusted Wald F-test."""
-        aic = dev + 2 * k
-        bic = aic - 2 * k + k * math.log(n) if n > 0 else None
+        """Build model statistics including the adjusted Wald F-test.
+
+        AIC is the design-adjusted dAIC computed by the caller (R survey's
+        AIC.svyglm convention, Lumley & Scott 2015). BIC is None: R survey
+        provides no plain BIC for svyglm (its dBIC requires an explicit
+        maximal model).
+        """
+        bic = None
 
         r2 = 1.0 - dev / null_dev if null_dev > 1e-12 else None
         r2_adj = None

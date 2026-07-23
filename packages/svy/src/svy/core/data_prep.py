@@ -303,6 +303,7 @@ def prepare_data(
     by: str | Sequence[str] | None = None,
     where: WhereArg = None,
     extra_cols: list[str] | None = None,
+    null_zero_cols: list[str] | None = None,
     drop_nulls: bool,
     cast_y_float: bool,
     select_columns: bool,
@@ -465,6 +466,11 @@ def prepare_data(
                 _domain_roles.append(x)
             if y_pair:
                 _domain_roles.append(y_pair)
+        if null_zero_cols:
+            # Caller-designated columns (e.g. regression covariates) whose
+            # nulls make the row out-of-domain (kept, weight-zeroed) instead
+            # of physically dropped — preserving PSUs/strata in the design.
+            _domain_roles.extend(null_zero_cols)
         if group:
             _domain_roles.append(group)
         if isinstance(by, str):
@@ -667,6 +673,17 @@ def prepare_data(
             _fill_targets = [y_col] if cast_y_float else []
             if x:
                 _fill_targets.append(x)
+            if null_zero_cols:
+                # Numeric caller-designated columns only: string/categorical
+                # columns cannot carry a 0.0 fill (the caller's engineered
+                # exprs handle their nulls downstream).
+                _fill_targets.extend(
+                    c
+                    for c in null_zero_cols
+                    if c in df.columns
+                    and df.schema[c].is_numeric()
+                    and c not in _fill_targets
+                )
             for c in _fill_targets:
                 if c not in df.columns:
                     continue

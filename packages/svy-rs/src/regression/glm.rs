@@ -71,6 +71,36 @@ impl Family {
             Family::Gaussian => y,
         }
     }
+
+    /// Unit deviance d(y, mu) — matches R's family$dev.resids (squared,
+    /// per-observation) so that sum_i w_i * d(y_i, mu_i) reproduces R's
+    /// glm/svyglm deviance on the same weight scale.
+    fn unit_deviance(&self, y: f64, mu: f64) -> f64 {
+        match self {
+            Family::Gaussian => (y - mu).powi(2),
+            Family::Binomial => {
+                let mu_c = mu.clamp(1e-10, 1.0 - 1e-10);
+                let t1 = if y > 0.0 { y * (y / mu_c).ln() } else { 0.0 };
+                let t2 = if y < 1.0 {
+                    (1.0 - y) * ((1.0 - y) / (1.0 - mu_c)).ln()
+                } else {
+                    0.0
+                };
+                2.0 * (t1 + t2)
+            }
+            Family::Poisson => {
+                let mu_c = mu.max(1e-10);
+                let t = if y > 0.0 { y * (y / mu_c).ln() } else { 0.0 };
+                2.0 * (t - (y - mu_c))
+            }
+            Family::Gamma => {
+                let mu_c = mu.max(1e-10);
+                let y_c = y.max(1e-10);
+                2.0 * (-(y_c / mu_c).ln() + (y - mu_c) / mu_c)
+            }
+            Family::InverseGaussian => (y - mu).powi(2) / (y.max(1e-10) * mu * mu),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -340,7 +370,14 @@ fn solve_linear_system(A: MatRef<'_, f64>, b: MatRef<'_, f64>) -> Mat<f64> {
     let x2 = lu.solve(b);
     for i in 0..x2.nrows() {
         if !x2[(i, 0)].is_finite() {
-            return A.thin_svd().unwrap().pseudoinverse() * b;
+            // Last resort: SVD pseudoinverse. If even the SVD fails to
+            // converge (degenerate system, e.g. a constant response in a
+            // complement domain), return the non-finite LU solution — the
+            // caller surfaces it as a fit error instead of a panic.
+            return match A.thin_svd() {
+                Ok(svd) => svd.pseudoinverse() * b,
+                Err(_) => x2,
+            };
         }
     }
     x2
@@ -389,6 +426,10 @@ fn invert_matrix(A: MatRef<'_, f64>, k: usize) -> Mat<f64> {
 pub struct GlmResult {
     pub params: Vec<f64>,
     pub cov_params: Vec<f64>,
+    /// Model-based (inverse-information) covariance (X'WX)^-1 at the final
+    /// beta — R svyglm's naive.cov, used for the Rao-Scott/dAIC design
+    /// effects. Same weight scale as the fit (weights normalized to mean 1).
+    pub naive_cov: Vec<f64>,
     pub scale: f64,
     pub df_resid: f64,
     pub deviance: f64,
@@ -411,13 +452,14 @@ pub fn fit_glm(
     weights: &Series,
     strata: Option<&Series>,
     psu: Option<&Series>,
+    fpc: Option<&Series>,
     family_str: &str,
     link_str: &str,
     tol: f64,
     max_iter: usize,
 ) -> PolarsResult<GlmResult> {
     fit_glm_domain(
-        y, x_cols, weights, strata, psu, None, family_str, link_str, tol, max_iter,
+        y, x_cols, weights, strata, psu, fpc, None, family_str, link_str, tol, max_iter,
     )
 }
 
@@ -434,6 +476,7 @@ pub fn fit_glm_by(
     weights: &Series,
     strata: Option<&Series>,
     psu: Option<&Series>,
+    fpc: Option<&Series>,
     by_col: &Series,
     family_str: &str,
     link_str: &str,
@@ -449,9 +492,9 @@ pub fn fit_glm_by(
     // in level order (deterministic, thread-count-independent — see the policy
     // note in estimation/mod.rs). Each fit is a full, self-contained IRLS solve.
     let groups: Vec<&str> = unique_groups.iter().flatten().collect();
-    let results = groups
+    let attempts: Vec<(String, PolarsResult<GlmResult>)> = groups
         .par_iter()
-        .map(|&group_val| -> PolarsResult<(String, GlmResult)> {
+        .map(|&group_val| {
             let mask_vec: Vec<bool> = by_str
                 .iter()
                 .map(|v| v.map_or(false, |s| s == group_val))
@@ -467,17 +510,38 @@ pub fn fit_glm_by(
                 weights,
                 strata,
                 psu,
+                fpc,
                 Some(&mask_vec),
                 family_str,
                 link_str,
                 tol,
                 max_iter,
-            )?;
-
-            Ok((group_val.to_string(), res))
+            );
+            (group_val.to_string(), res)
         })
-        .collect::<PolarsResult<Vec<_>>>()?;
+        .collect();
 
+    // A level that fails to fit (e.g. a complement domain with a constant
+    // binomial response) is dropped rather than failing the whole call —
+    // the caller typically needs only one level. If every level fails,
+    // propagate the first error.
+    let mut results = Vec::with_capacity(attempts.len());
+    let mut first_err: Option<PolarsError> = None;
+    for (level, res) in attempts {
+        match res {
+            Ok(r) => results.push((level, r)),
+            Err(e) => {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
+    }
+    if results.is_empty() {
+        if let Some(e) = first_err {
+            return Err(e);
+        }
+    }
     Ok(results)
 }
 
@@ -491,6 +555,7 @@ fn fit_glm_domain(
     weights: &Series,
     strata: Option<&Series>,
     psu: Option<&Series>,
+    fpc: Option<&Series>,
     domain_mask: Option<&[bool]>,
     family_str: &str,
     link_str: &str,
@@ -636,7 +701,7 @@ fn fit_glm_domain(
                 let w_i = w_samp[i];
                 if w_i > 0.0 {
                     let y_i = Y[(i, 0)];
-                    dev_new += w_i * (y_i - mu_i).powi(2);
+                    dev_new += w_i * family.unit_deviance(y_i, mu_i);
                 }
             }
         }
@@ -662,6 +727,17 @@ fn fit_glm_domain(
 
         if iter > 0 && (rel_dev < tol || max_delta < tol) {
             break;
+        }
+    }
+
+    // A degenerate system (e.g. constant response under binomial) must
+    // surface as an error, not NaN coefficients or a panic downstream.
+    for j in 0..k {
+        if !beta[(j, 0)].is_finite() {
+            return Err(PolarsError::ComputeError(
+                "GLM did not produce finite coefficients (degenerate or non-convergent fit)"
+                    .into(),
+            ));
         }
     }
 
@@ -738,6 +814,18 @@ fn fit_glm_domain(
         strata_obs[strata_idx[i]].push(i);
     }
 
+    // Per-row FPC factor (1 - f_h), constant within a stratum; each
+    // stratum's meat contribution is multiplied by its factor (matches R
+    // svyglm on a design with fpc=). Missing/absent -> 1.0 (no correction).
+    let fpc_rows: Option<Vec<f64>> = match fpc {
+        Some(s) => {
+            let s_cast = s.cast(&DataType::Float64)?;
+            let ca = s_cast.f64()?;
+            Some(ca.iter().map(|v| v.unwrap_or(1.0)).collect())
+        }
+        None => None,
+    };
+
     // MEAT = sum_h Var_h( PSU totals ) with svytotal-style centering.
     // Out-of-domain rows have w_irls[i] == 0 from build_irls_normal_eqs, so
     // their score contributions are naturally 0.
@@ -792,8 +880,12 @@ fn fit_glm_domain(
             mean[j] /= m as f64;
         }
 
-        // with-replacement factor m/(m-1)
-        let scale_h = (m as f64) / ((m - 1) as f64);
+        // with-replacement factor m/(m-1), times the stratum FPC (1 - f_h)
+        let fpc_h = match &fpc_rows {
+            Some(f) => strata_obs[h].first().map(|&i| f[i]).unwrap_or(1.0),
+            None => 1.0,
+        };
+        let scale_h = fpc_h * (m as f64) / ((m - 1) as f64);
 
         for a in 0..k {
             for b in 0..k {
@@ -878,10 +970,12 @@ fn fit_glm_domain(
         if n_dom <= 1 { 1.0 } else { (n_dom - 1) as f64 }
     };
 
-    // n_obs: full sample size when no domain, in-domain count when domain.
+    // n_obs: rows actually contributing to the fit — in-domain with
+    // positive weight. Zero-weight rows (e.g. missing-value rows kept for
+    // the design structure) are excluded in both branches.
     let n_obs = match domain_mask {
         Some(m) => (0..n).filter(|&i| m[i] && w_samp[i] > 0.0).count(),
-        None => n,
+        None => (0..n).filter(|&i| w_samp[i] > 0.0).count(),
     };
 
     // scale (phi) for gaussian/gamma/invgauss (reporting only).
@@ -914,7 +1008,10 @@ fn fit_glm_domain(
         1.0
     };
 
-    // null deviance proxy — weighted SSE around weighted mean over domain.
+    // Null deviance — family unit deviance at the intercept-only fit. For a
+    // GLM with only an intercept the MLE of mu is the weighted mean of y
+    // regardless of link (the constant score sum_i w_i (y_i - mu) c = 0), so
+    // this reproduces R's null.deviance on the same weight scale.
     let null_deviance = {
         // domain-restricted weighted mean
         let mut sum_wy = 0.0;
@@ -929,7 +1026,7 @@ fn fit_glm_domain(
         }
         let y_mean = if sum_w > 0.0 { sum_wy / sum_w } else { 0.0 };
 
-        let mut sse = 0.0;
+        let mut dev0 = 0.0;
         for i in 0..n {
             let in_domain = domain_mask.map_or(true, |m| m[i]);
             if !in_domain {
@@ -940,9 +1037,9 @@ fn fit_glm_domain(
                 continue;
             }
             let y_i = Y[(i, 0)];
-            sse += w_i * (y_i - y_mean).powi(2);
+            dev0 += w_i * family.unit_deviance(y_i, y_mean);
         }
-        sse
+        dev0
     };
 
     // Suppress unused-var warning when no domain restriction is active.
@@ -951,15 +1048,18 @@ fn fit_glm_domain(
     // flatten
     let params: Vec<f64> = (0..k).map(|i| beta[(i, 0)]).collect();
     let mut cov_flat = Vec::with_capacity(k * k);
+    let mut naive_flat = Vec::with_capacity(k * k);
     for r in 0..k {
         for c in 0..k {
             cov_flat.push(cov[(r, c)]);
+            naive_flat.push(bread[(r, c)]);
         }
     }
 
     Ok(GlmResult {
         params,
         cov_params: cov_flat,
+        naive_cov: naive_flat,
         scale,
         df_resid,
         deviance,
