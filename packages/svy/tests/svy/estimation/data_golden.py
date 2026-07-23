@@ -98,7 +98,17 @@ BOOTSTRAP = {
 }
 
 # ==============================================================================
-# JACKKNIFE (JKn) - 8 Replicates, df=7
+# JACKKNIFE - 8 Replicates, df=7 — GLOBAL-SCALE convention, not JKn
+#
+# These goldens validate the documented no-rscales fallback: a RepWeights
+# without rscales uses the uniform (R-1)/R coefficient, and the R
+# reference was configured identically (svrepdesign(type="other",
+# scale=(R-1)/R, rscales=1)). For this fixture (4 strata x 2 PSUs) the
+# JKn-correct coefficients are (n_h-1)/n_h = 0.5, giving SEs exactly
+# sqrt(7/4) smaller — that convention is validated end-to-end in
+# test_jackknife_r_validation.py (svy-generated weights) and
+# test_jackknife_fixture_jkn.py (this fixture with explicit rscales
+# against R svrepdesign(type="JKn")).
 # ==============================================================================
 JACKKNIFE = {
     "mean_overall": {"est": 54687.65, "se": 1334.084, "lci": 51533.04, "uci": 57842.26},
@@ -284,6 +294,7 @@ WHERE_BOOTSTRAP = {
     },
 }
 
+# Same global-scale (no-rscales) convention as JACKKNIFE above.
 WHERE_JACKKNIFE = {
     "mean_overall": {
         "est": 54944.21712125,
