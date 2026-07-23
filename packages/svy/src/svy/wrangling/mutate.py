@@ -145,13 +145,24 @@ def mutate(
         deps: set[str] = _root_names_safe(out_obj) if isinstance(out_obj, pl.Expr) else set()
         compiled[out_name] = (out_obj, deps)
 
-    # Batch by readiness (topological sort)
+    # Batch by readiness (topological sort). A spec that depends on a column
+    # another spec in this call (re)defines waits for that spec, so
+    # dependents always see the updated value — whether the dependency is a
+    # brand-new column or a redefinition of an existing one. (Previously
+    # redefinitions were "ready" immediately and same-call dependents
+    # silently saw the OLD values.) Self-references (x = f(old x)) are fine;
+    # mutual redefinitions raise the dependency error below.
     current_cols = set(local_data.columns)
     pending = set(compiled.keys())
     max_iters = len(pending) + 8
 
     for _ in range(max_iters):
-        ready = [name for name in pending if compiled[name][1] <= current_cols]
+        ready = [
+            name
+            for name in pending
+            if compiled[name][1] <= current_cols
+            and not (compiled[name][1] & (pending - {name}))
+        ]
         if not ready:
             break
 

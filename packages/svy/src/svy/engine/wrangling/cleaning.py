@@ -362,28 +362,26 @@ def _categorize(
 
     col_expr = pl.col(varname)
 
-    # First bin
-    lower, upper = bins[0], bins[1]
-    first_label = (
-        labels[0] if labels else (f"({lower}, {upper}]" if right else f"[{lower}, {upper})")
-    )
-    if right:
-        builder = pl.when((col_expr > lower) & (col_expr <= upper)).then(pl.lit(first_label))
-    else:
-        builder = pl.when((col_expr >= lower) & (col_expr < upper)).then(pl.lit(first_label))
-
-    # Remaining bins
-    for i in range(2, len(bins)):
+    # The outermost edge is closed (like R cut(include.lowest=TRUE)): with
+    # right=True, x == bins[0] falls in the first bin; with right=False,
+    # x == bins[-1] falls in the last bin. Otherwise those boundary values
+    # would silently become null and vanish from tabulations.
+    builder = None
+    for i in range(1, len(bins)):
         lower, upper = bins[i - 1], bins[i]
-        lab = (
-            labels[i - 1]
-            if labels
-            else (f"({lower}, {upper}]" if right else f"[{lower}, {upper})")
-        )
+        is_first = i == 1
+        is_last = i == len(bins) - 1
         if right:
-            builder = builder.when((col_expr > lower) & (col_expr <= upper)).then(pl.lit(lab))
+            cond = (col_expr >= lower if is_first else col_expr > lower) & (col_expr <= upper)
+            auto_lab = f"{'[' if is_first else '('}{lower}, {upper}]"
         else:
-            builder = builder.when((col_expr >= lower) & (col_expr < upper)).then(pl.lit(lab))
+            cond = (col_expr >= lower) & (col_expr <= upper if is_last else col_expr < upper)
+            auto_lab = f"[{lower}, {upper}{']' if is_last else ')'}"
+        lab = labels[i - 1] if labels else auto_lab
+        if builder is None:
+            builder = pl.when(cond).then(pl.lit(lab))
+        else:
+            builder = builder.when(cond).then(pl.lit(lab))
 
     # Everything else -> None
     return data.with_columns(builder.otherwise(pl.lit(None)).alias(target))
@@ -550,6 +548,8 @@ def _clean_names(
     old_cols = list(data.columns)
     RESERVED = {"svy_row_index", "svy_weight", "svy_prob", "svy_hit"}
 
+    from svy.core.constants import _INTERNAL_CONCAT_SUFFIX
+
     def _remove_non_alnum(name: str, pat: str) -> str:
         # remove per-character only if it matches `pat` AND is not alphanumeric/underscore
         return "".join(
@@ -557,8 +557,10 @@ def _clean_names(
         )
 
     def normalize(name: str) -> tuple[str, bool]:
-        # preserve reserved/internal columns exactly
-        if name in RESERVED:
+        # preserve reserved/internal columns exactly — renaming the internal
+        # concat columns would orphan them (a fresh lowercase copy gets
+        # rebuilt, leaving the renamed one behind as junk)
+        if name in RESERVED or _INTERNAL_CONCAT_SUFFIX in name:
             return name, False
 
         orig = name

@@ -296,6 +296,13 @@ def _auto_clean_design(target: "Sample") -> None:
         prob=keep_name(current_design.prob),
         hit=keep_name(current_design.hit),
         mos=keep_name(current_design.mos),
+        # pop_size may be a column name (clean like the others) or a
+        # PopSize object (no column reference — keep as is)
+        pop_size=(
+            keep_name(current_design.pop_size)
+            if isinstance(current_design.pop_size, str)
+            else current_design.pop_size
+        ),
     )
 
     if current_design.rep_wgts is not None:
