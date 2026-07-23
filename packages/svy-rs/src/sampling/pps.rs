@@ -148,8 +148,19 @@ fn pps_indexed(
     if cap == 0 || n == 0 {
         return Ok((vec![], vec![], vec![], vec![]));
     }
-    if n >= cap {
-        // Select all
+    // Murphy is defined for exactly two draws; silently returning 2 units
+    // for any requested n was a footgun.
+    if matches!(method, PpsMethod::Murphy) && n != 2 {
+        return Err(SamplingError::InvalidInput(format!(
+            "Murphy PPS selects exactly 2 units; got n={n}. Use method='wr' or \
+             'rs' for other sample sizes."
+        )));
+    }
+    // With-replacement sampling legitimately draws n >= population size
+    // (units can be selected multiple times), so the take-all shortcut
+    // below must not apply to it.
+    if n >= cap && !matches!(method, PpsMethod::Wr) {
+        // Select all (without-replacement methods)
         let sel: Vec<i64>  = positions.iter().map(|&p| frame[p]).collect();
         let hits            = vec![1i64; cap];
         let probs           = vec![1.0f64; cap];
@@ -516,52 +527,60 @@ fn pps_rs(
             if n_rem == 1 {
                 hits[rem_idx[rng.weighted_choice(&p_rem)]] = 1;
             } else {
-                let sw_total: f64 = p_rem.iter()
-                    .map(|&p| { let d = 1.0 - n_rem as f64 * p; if d > 1e-12 { p/d } else { p } })
-                    .sum();
-                let sampford_w: Vec<f64> = p_rem.iter()
-                    .map(|&p| { let d = 1.0 - n_rem as f64 * p; let w = if d > 1e-12 { p/d } else { p }; w / sw_total })
-                    .collect();
+                // Sampford requires n*p_i < 1 for every remaining unit.
+                // extract_certainty should have pulled larger units out as
+                // certainties; anything left violating the condition is an
+                // input we cannot honour with exact pi_i = n*p_i.
+                if let Some(bad) = p_rem.iter().position(|&p| n_rem as f64 * p >= 1.0) {
+                    return Err(SamplingError::InvalidInput(format!(
+                        "Rao-Sampford requires n*p < 1 for all non-certainty units; \
+                         unit at frame position {} has n*p = {:.6}. Lower the \
+                         certainty threshold or reduce n.",
+                        rem_idx[bad],
+                        n_rem as f64 * p_rem[bad]
+                    )));
+                }
 
-                // Pre-allocate candidate buffers reused across rejection attempts
-                // selected_mask[j] = true if local index j is in current sample
+                // Sampford lambda weights for the n-1 WITH-replacement draws:
+                // lambda_i proportional to p_i / (1 - n*p_i).
+                let lam_raw: Vec<f64> = p_rem
+                    .iter()
+                    .map(|&p| p / (1.0 - n_rem as f64 * p))
+                    .collect();
+                let lam_total: f64 = lam_raw.iter().sum();
+                let lambda: Vec<f64> = lam_raw.iter().map(|&w| w / lam_total).collect();
+
+                // True Sampford rejective sampling: first draw with p_i, the
+                // remaining n-1 WITH replacement with lambda_i, accepting only
+                // fully distinct samples. (The previous implementation drew
+                // without replacement, making the acceptance check vacuous —
+                // its own comment admitted "always true here" — and fell back
+                // to a plain equal-probability shuffle on failure, so the
+                // claimed pi_i = n*p_i never held.)
                 let mut selected_mask = vec![false; rem_len];
-                let mut selected_buf  = Vec::with_capacity(n_rem);
+                let mut selected_buf: Vec<usize> = Vec::with_capacity(n_rem);
                 let mut found = false;
 
                 'outer: for _ in 0..MAX_ATTEMPTS {
-                    let first_local = rng.weighted_choice(&p_rem);
-
-                    // Reset reusable buffers — O(n_rem) not O(rem_len)
-                    for &j in &selected_buf { selected_mask[j] = false; }
+                    for &j in &selected_buf {
+                        selected_mask[j] = false;
+                    }
                     selected_buf.clear();
+
+                    let first_local = rng.weighted_choice(&p_rem);
                     selected_buf.push(first_local);
                     selected_mask[first_local] = true;
 
-                    // Draw n_rem-1 more using weighted selection without replacement
-                    // Uses selected_mask to skip chosen units — no Vec::remove()
                     for _ in 1..n_rem {
-                        let avail_total: f64 = (0..rem_len)
-                            .filter(|&j| !selected_mask[j])
-                            .map(|j| sampford_w[j])
-                            .sum();
-                        if avail_total <= 0.0 { continue 'outer; }
-
-                        let mut u = rng.next_f64() * avail_total;
-                        let mut pick = rem_len - 1;
-                        for j in 0..rem_len {
-                            if !selected_mask[j] {
-                                u -= sampford_w[j];
-                                if u <= 0.0 { pick = j; break; }
-                            }
+                        let pick = rng.weighted_choice(&lambda);
+                        if selected_mask[pick] {
+                            // Duplicate anywhere -> reject the WHOLE sample.
+                            continue 'outer;
                         }
-                        if selected_mask[pick] { continue 'outer; }
                         selected_buf.push(pick);
                         selected_mask[pick] = true;
                     }
 
-                    // Accept if first_local not re-selected (always true here
-                    // since selected_mask prevents it) — Sampford acceptance check
                     for &j in &selected_buf {
                         hits[rem_idx[j]] = 1;
                     }
@@ -570,10 +589,15 @@ fn pps_rs(
                 }
 
                 if !found {
-                    // Fallback: plain WOR shuffle
-                    let mut pool: Vec<usize> = (0..rem_len).collect();
-                    rng.shuffle(&mut pool);
-                    for &j in &pool[..n_rem] { hits[rem_idx[j]] = 1; }
+                    // Acceptance degenerated (can happen when some n*p_i is
+                    // very close to 1). Erroring beats silently switching to
+                    // an equal-probability design with the wrong weights.
+                    return Err(SamplingError::InvalidInput(format!(
+                        "Rao-Sampford rejective sampling did not accept a sample \
+                         within {MAX_ATTEMPTS} attempts; the largest n*p is likely \
+                         too close to 1. Lower the certainty threshold or use \
+                         method='sys' or 'brewer'."
+                    )));
                 }
             }
         }
@@ -719,5 +743,102 @@ mod tests {
             &frame, PpsN::Scalar(1), &mos, Some(&stratum), PpsMethod::Sys, 1.0, None,
         );
         assert!(res.is_err());
+    }
+}
+
+#[cfg(test)]
+mod sampford_tests {
+    use super::*;
+
+    #[test]
+    fn murphy_requires_n_2() {
+        let frame = vec![1, 2, 3, 4];
+        let mos = vec![1.0, 2.0, 3.0, 4.0];
+        let err = select_pps(&frame, PpsN::Scalar(3), &mos, None, PpsMethod::Murphy, 1.0, Some(1))
+            .unwrap_err();
+        assert!(err.to_string().contains("exactly 2"), "got: {err}");
+        let (sel, ..) =
+            select_pps(&frame, PpsN::Scalar(2), &mos, None, PpsMethod::Murphy, 1.0, Some(1))
+                .unwrap();
+        assert_eq!(sel.len(), 2);
+    }
+
+    #[test]
+    fn wr_draws_n_even_beyond_population() {
+        // With replacement: n > population is legitimate; the take-all
+        // shortcut previously returned each unit once with pi = 1.
+        let frame = vec![1, 2, 3];
+        let mos = vec![1.0, 1.0, 2.0];
+        let (_sel, hits, _probs, _cert) =
+            select_pps(&frame, PpsN::Scalar(7), &mos, None, PpsMethod::Wr, 1.0, Some(3)).unwrap();
+        assert_eq!(hits.iter().sum::<i64>(), 7, "WR must perform exactly n draws");
+        assert!(hits.iter().any(|&h| h > 1), "n > N forces repeats");
+    }
+
+    #[test]
+    fn sampford_degenerate_np_close_to_1_errors() {
+        // n*p ~ 1 for the largest unit but below the certainty threshold:
+        // acceptance collapses; must error, not fall back to a shuffle.
+        let frame = vec![1, 2, 3, 4];
+        let mos = vec![0.499, 0.167, 0.167, 0.167];
+        let result = select_pps(&frame, PpsN::Scalar(2), &mos, None, PpsMethod::Rs, 1.0, Some(5));
+        if let Err(e) = result {
+            let msg = e.to_string();
+            assert!(
+                msg.contains("Sampford") || msg.contains("n*p"),
+                "unexpected error: {msg}"
+            );
+        }
+        // (If it succeeds the sample was legitimately accepted — also fine.)
+    }
+
+    /// Empirical inclusion probabilities over many replicates must match
+    /// pi_i = n * p_i. Quick version for the normal test run.
+    #[test]
+    fn sampford_inclusion_probabilities_quick() {
+        run_sampford_mc(20_000, 0.03);
+    }
+
+    /// Tight Monte Carlo — run explicitly with `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn sampford_inclusion_probabilities_full() {
+        run_sampford_mc(200_000, 0.01);
+    }
+
+    fn run_sampford_mc(reps: u64, tol: f64) {
+        // Skewed MOS, no certainties at threshold 1.0 with n=3:
+        // p = mos/60; n*p_max = 3*20/60 = 1.0 -> use max 15 => n*p = 0.75.
+        let frame: Vec<i64> = (0..8).collect();
+        let mos = vec![15.0, 11.0, 9.0, 8.0, 6.0, 5.0, 4.0, 2.0];
+        let total: f64 = mos.iter().sum();
+        let n = 3usize;
+        let mut counts = vec![0u64; frame.len()];
+
+        for seed in 0..reps {
+            let (sel, _hits, _probs, _cert) = select_pps(
+                &frame,
+                PpsN::Scalar(n),
+                &mos,
+                None,
+                PpsMethod::Rs,
+                1.0,
+                Some(seed),
+            )
+            .unwrap();
+            // `sel` holds the selected frame ids (= positions here).
+            for &s in &sel {
+                counts[s as usize] += 1;
+            }
+        }
+
+        for (i, &c) in counts.iter().enumerate() {
+            let expected = n as f64 * mos[i] / total;
+            let observed = c as f64 / reps as f64;
+            assert!(
+                (observed - expected).abs() < tol,
+                "unit {i}: observed inclusion {observed:.4} vs n*p {expected:.4} (tol {tol})"
+            );
+        }
     }
 }

@@ -561,3 +561,30 @@ class TestWhereRegressionGuard:
         result = samp.sampling.pps_sys(n=3, rstate=RNG)
         assert result._data.height == 3
         assert result._data[SVY_PROB].null_count() == 0
+
+
+class TestPpsMethodBoundaries:
+    """Round-3 semantics: murphy is n=2 only; kernel errors are typed."""
+
+    def _samp(self):
+        import numpy as np
+
+        rng = np.random.default_rng(3)
+        df = pl.DataFrame(
+            {
+                "id": list(range(12)),
+                "size": rng.uniform(5.0, 50.0, 12).tolist(),
+                "eligible_flag": [True] * 12,
+            }
+        )
+        return Sample(df, Design(mos="size"))
+
+    def test_murphy_rejects_n_not_2(self):
+        from svy.errors import MethodError
+
+        with pytest.raises(MethodError, match="exactly 2"):
+            self._samp().sampling.pps_murphy(n=3, rstate=RNG)
+
+    def test_murphy_n_2_works(self):
+        result = self._samp().sampling.pps_murphy(n=2, rstate=RNG)
+        assert result.data.height == 2
