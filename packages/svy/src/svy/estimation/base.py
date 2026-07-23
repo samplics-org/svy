@@ -131,6 +131,11 @@ class Estimation:
             s = local_data[target_col]
             if s.dtype in (pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.UInt8, pl.UInt32, pl.UInt64):
                 return s.to_numpy(), None
+            # Categorical only accepts string input: float-typed design
+            # columns (e.g. numeric stratum/PSU codes read as f64) and other
+            # non-string dtypes go through Utf8 first.
+            if s.dtype not in (pl.Utf8, pl.Categorical, pl.Enum):
+                s = s.cast(pl.Utf8)
             return (s.cast(pl.Categorical).to_physical().to_numpy(), s.unique().to_list())
 
         cache["stratum"] = _process_component(design.stratum, "stratum")
