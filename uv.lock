@@ -2332,7 +2332,7 @@ wheels = [
 
 [[package]]
 name = "svy"
-version = "0.20.0"
+version = "0.20.1"
 source = { editable = "packages/svy" }
 dependencies = [
     { name = "httpx" },
