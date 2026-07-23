@@ -227,10 +227,33 @@ class Categorical:
         if not design.wgt:
             concat_data = concat_data.with_columns(pl.lit(1.0).alias(weight_col))
 
-        # Scale weights for units
+        # Scale weights for units.
+        #
+        # Proportions and percents are the SAME ratio (Hajek) estimator —
+        # percent is just proportion x 100 for display. Both must use the
+        # centered variance from ``estimate_proportions`` (which subtracts the
+        # cell proportion before forming the score), so that the SE matches
+        # ``estimation.prop`` and R's ``svymean(~interaction(...))``.
+        #
+        # ``compute_totals`` below is inferred from ``sum(weights) != 1``, so if
+        # percent weights were scaled to sum to 100 the run would route to the
+        # un-centered ``estimate_totals`` path and inflate the SE by the dropped
+        # covariance term. To avoid that, percent (without an explicit known
+        # population total) is computed on the 0-1 proportion scale and scaled
+        # to 0-100 afterwards via ``_display_scale``. Counts, and an explicit
+        # ``count_total`` (a known/fixed denominator), keep the total path.
         _units = _normalize_units(units)
         wgt_arr = concat_data[weight_col].to_numpy().copy()
-        wgt_arr = _scale_weights_for_units(wgt_arr, units=_units, count_total=count_total)
+        if count_total is None and _units is _TableUnits.PERCENT:
+            wgt_arr = _scale_weights_for_units(
+                wgt_arr, units=_TableUnits.PROPORTION, count_total=None
+            )
+            _display_scale = 100.0
+        else:
+            wgt_arr = _scale_weights_for_units(
+                wgt_arr, units=_units, count_total=count_total
+            )
+            _display_scale = 1.0
         concat_data = concat_data.with_columns(
             pl.Series(name="__svy_scaled_wgt__", values=wgt_arr)
         )
@@ -309,6 +332,16 @@ class Categorical:
                 1.0 / (1.0 + np.exp(-(logit + t_crit * scale))),
                 est_arr,
             )
+
+        # Percent is computed on the 0-1 proportion scale (centered variance
+        # and logit CI above); rescale the estimate, SE, and CI bounds to
+        # 0-100 for display. ``cv = se / est`` is scale-invariant, so it is
+        # left unchanged.
+        if _display_scale != 1.0:
+            est_arr = est_arr * _display_scale
+            se_arr = se_arr * _display_scale
+            lci_arr = lci_arr * _display_scale
+            uci_arr = uci_arr * _display_scale
 
         cell_rows = [
             CellEst(

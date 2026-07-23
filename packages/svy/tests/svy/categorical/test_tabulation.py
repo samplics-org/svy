@@ -147,6 +147,98 @@ def test_units_count_one_way_custom_total(df_basic, mock_design):
     assert math.isclose(_sum_estimates(tbl), target, rel_tol=1e-12, abs_tol=1e-9)
 
 
+# ------ Regression: percent must be proportion x 100 (centered variance) -------
+#
+# Percent is the same ratio (Hajek) estimator as proportion, just scaled by 100
+# for display. A prior bug scaled the weights so they summed to 100, which
+# flipped the internal ``compute_totals`` flag and routed percent through the
+# un-centered total-variance path — inflating the SE by the dropped num/denom
+# covariance term (and switching the CI from logit to Wald). These tests pin the
+# invariant so percent can never again diverge from proportion.
+
+
+def _by_cell(tbl: Table) -> dict[tuple[str | None, str | None], CellEst]:
+    return {(c.rowvar, c.colvar): c for c in (tbl.estimates or [])}
+
+
+@pytest.mark.parametrize("colvar", [None, "col"])
+def test_percent_is_proportion_scaled_by_100(df_basic, mock_design, colvar):
+    sample = Sample(data=df_basic, design=mock_design)
+    prop = sample.categorical.tabulate(
+        rowvar="row", colvar=colvar, units=TableUnits.PROPORTION, drop_nulls=True
+    )
+    pct = sample.categorical.tabulate(
+        rowvar="row", colvar=colvar, units=TableUnits.PERCENT, drop_nulls=True
+    )
+    prop_cells, pct_cells = _by_cell(prop), _by_cell(pct)
+    assert prop_cells.keys() == pct_cells.keys()
+    for key, pc in prop_cells.items():
+        cc = pct_cells[key]
+        for attr in ("est", "se", "lci", "uci"):
+            assert math.isclose(
+                getattr(pc, attr) * 100.0,
+                getattr(cc, attr),
+                rel_tol=1e-12,
+                abs_tol=1e-9,
+            ), f"{attr} mismatch at {key}"
+        # cv is scale-invariant and must be identical
+        assert math.isclose(pc.cv, cc.cv, rel_tol=1e-12, abs_tol=1e-12)
+
+
+def test_percent_cell_se_uses_centered_ratio_variance(df_basic, mock_design):
+    """A cell SE must equal the design SE of the cell's 0/1 indicator mean.
+
+    This is the centered (Hajek) linearization used by ``estimation.mean`` and
+    by R's ``svymean(~interaction(...))``. It guards against reverting to the
+    un-centered ``svytotal``-based SE (``SE(total)/sum(weights)``).
+    """
+    import svy
+
+    sample = Sample(data=df_basic, design=mock_design)
+    pct = sample.categorical.tabulate(
+        rowvar="row", colvar="col", units=TableUnits.PERCENT, drop_nulls=True
+    )
+    for cell in pct.estimates or []:
+        indicator = sample.wrangling.mutate(
+            {
+                "__ind__": svy.when(
+                    (svy.col("row") == cell.rowvar)
+                    & (svy.col("col") == cell.colvar)
+                )
+                .then(1)
+                .otherwise(0)
+            }
+        )
+        ref = indicator.estimation.mean("__ind__").to_polars().row(0, named=True)
+        assert math.isclose(cell.est, ref["est"] * 100.0, rel_tol=1e-10, abs_tol=1e-9)
+        assert math.isclose(cell.se, ref["se"] * 100.0, rel_tol=1e-10, abs_tol=1e-9)
+
+
+def test_count_cell_se_unaffected_matches_total(df_basic, mock_design):
+    """Count units keep the total estimator (SE == design SE of the weighted
+    indicator total); the percent fix must not touch this path."""
+    import svy
+
+    sample = Sample(data=df_basic, design=mock_design)
+    cnt = sample.categorical.tabulate(
+        rowvar="row", colvar="col", units=TableUnits.COUNT, drop_nulls=True
+    )
+    for cell in cnt.estimates or []:
+        indicator = sample.wrangling.mutate(
+            {
+                "__ind__": svy.when(
+                    (svy.col("row") == cell.rowvar)
+                    & (svy.col("col") == cell.colvar)
+                )
+                .then(1)
+                .otherwise(0)
+            }
+        )
+        ref = indicator.estimation.total("__ind__").to_polars().row(0, named=True)
+        assert math.isclose(cell.est, ref["est"], rel_tol=1e-10, abs_tol=1e-9)
+        assert math.isclose(cell.se, ref["se"], rel_tol=1e-10, abs_tol=1e-9)
+
+
 @pytest.fixture
 def df_multikey():
     # Construct a small dataset with two-key strata and two-key PSUs.
