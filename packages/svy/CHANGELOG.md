@@ -8,6 +8,14 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+## [0.20.1] — 2026-07-23
+
+Patch release on top of 0.20.0; [`svy-rs`](../svy-rs/CHANGELOG.md) (0.11.0) and [`svy-io`](../svy-io/CHANGELOG.md) (0.2.0) are unchanged.
+
+### Fixed
+
+- **`tabulate` percent and `count_total` cells used an un-centered variance.** A cell percentage is a ratio of two estimated totals, so its variance needs the centered (Hájek) linearization. Because the internal totals flag was inferred from `sum(weights) != 1`, scaling weights to sum to 100 (`units="percent"`) or to a caller-supplied `count_total` routed the standard error through the un-centered total path, dropping the numerator/denominator covariance term. Cell SEs were inflated by a `p`-dependent amount (up to ~12% on high-proportion cells) and the confidence interval fell back to Wald, which could dip below zero. `units="proportion"`, `units="percent"`, and `count_total=N` are now the same estimator scaled by a constant and agree exactly; they match `estimation.prop` and R `survey`'s `svymean(~interaction(...))`. Bare `units="count"` is unchanged and still matches R's `svytotal`, and the Rao-Scott chi-square/F test was never affected.
+
 ## [0.20.0] — 2026-07-23
 
 Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHANGELOG.md) 0.2.0. This release lands the round 7–8 review: correctness fixes across estimation, regression, weighting, size/power, categorical, and the dataset downloader, several of which shift standard errors closer to R `survey` 4.5.
@@ -74,7 +82,8 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.20.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.20.1...HEAD
+[0.20.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.20.1
 [0.20.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.20.0
 [0.19.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.19.1
 [0.19.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.19.0
