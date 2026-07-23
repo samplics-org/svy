@@ -214,6 +214,58 @@ def test_percent_cell_se_uses_centered_ratio_variance(df_basic, mock_design):
         assert math.isclose(cell.se, ref["se"] * 100.0, rel_tol=1e-10, abs_tol=1e-9)
 
 
+@pytest.mark.parametrize("total", [100.0, 1_000_000.0])
+def test_count_total_scaling_uses_centered_variance(df_basic, mock_design, total):
+    """Scaling to a caller-supplied total N is ``N x p_hat`` with N constant,
+    so every cell must equal the proportion cell scaled by N — SE included."""
+    sample = Sample(data=df_basic, design=mock_design)
+    prop = sample.categorical.tabulate(
+        rowvar="row", colvar="col", units=TableUnits.PROPORTION, drop_nulls=True
+    )
+    scaled = sample.categorical.tabulate(
+        rowvar="row",
+        colvar="col",
+        units=TableUnits.COUNT,
+        count_total=total,
+        drop_nulls=True,
+    )
+    prop_cells, scaled_cells = _by_cell(prop), _by_cell(scaled)
+    assert prop_cells.keys() == scaled_cells.keys()
+    for key, pc in prop_cells.items():
+        sc = scaled_cells[key]
+        for attr in ("est", "se", "lci", "uci"):
+            assert math.isclose(
+                getattr(pc, attr) * total,
+                getattr(sc, attr),
+                rel_tol=1e-10,
+                abs_tol=1e-9,
+            ), f"{attr} mismatch at {key}"
+
+
+def test_count_total_100_matches_percent(df_basic, mock_design):
+    """``count_total=100`` and ``units='percent'`` are the same estimand and
+    must not disagree on the SE."""
+    sample = Sample(data=df_basic, design=mock_design)
+    pct = sample.categorical.tabulate(
+        rowvar="row", colvar="col", units=TableUnits.PERCENT, drop_nulls=True
+    )
+    scaled = sample.categorical.tabulate(
+        rowvar="row",
+        colvar="col",
+        units=TableUnits.COUNT,
+        count_total=100,
+        drop_nulls=True,
+    )
+    pct_cells, scaled_cells = _by_cell(pct), _by_cell(scaled)
+    assert pct_cells.keys() == scaled_cells.keys()
+    for key, pc in pct_cells.items():
+        sc = scaled_cells[key]
+        for attr in ("est", "se", "lci", "uci"):
+            assert math.isclose(
+                getattr(pc, attr), getattr(sc, attr), rel_tol=1e-10, abs_tol=1e-9
+            ), f"{attr} mismatch at {key}"
+
+
 def test_count_cell_se_unaffected_matches_total(df_basic, mock_design):
     """Count units keep the total estimator (SE == design SE of the weighted
     indicator total); the percent fix must not touch this path."""

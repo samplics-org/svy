@@ -229,29 +229,44 @@ class Categorical:
 
         # Scale weights for units.
         #
-        # Proportions and percents are the SAME ratio (Hajek) estimator —
-        # percent is just proportion x 100 for display. Both must use the
-        # centered variance from ``estimate_proportions`` (which subtracts the
-        # cell proportion before forming the score), so that the SE matches
-        # ``estimation.prop`` and R's ``svymean(~interaction(...))``.
+        # There are two distinct estimands here, and they need different
+        # variances:
         #
-        # ``compute_totals`` below is inferred from ``sum(weights) != 1``, so if
-        # percent weights were scaled to sum to 100 the run would route to the
-        # un-centered ``estimate_totals`` path and inflate the SE by the dropped
-        # covariance term. To avoid that, percent (without an explicit known
-        # population total) is computed on the 0-1 proportion scale and scaled
-        # to 0-100 afterwards via ``_display_scale``. Counts, and an explicit
-        # ``count_total`` (a known/fixed denominator), keep the total path.
+        # 1. A *proportion of the estimated total* — ``proportion``,
+        #    ``percent``, or scaling to a caller-supplied ``count_total`` N.
+        #    All three are the same ratio (Hajek) estimator ``p_hat`` times a
+        #    constant (1, 100, or N), so the variance is ``scale^2 *
+        #    Var(p_hat)`` using the CENTERED score from
+        #    ``estimate_proportions`` (which subtracts the cell proportion
+        #    before forming the score). This matches ``estimation.prop`` and
+        #    R's ``svymean(~interaction(...))``.
+        # 2. A *population total* — bare ``count`` with no ``count_total``.
+        #    The estimand is the total itself, including uncertainty in its
+        #    overall scale, so the un-centered ``estimate_totals`` path is
+        #    correct (it matches R's ``svytotal``).
+        #
+        # ``compute_totals`` below is inferred from ``sum(weights) != 1``, so
+        # any regime in group (1) must hand the Rust backend weights that sum
+        # to 1; the display scaling is re-applied afterwards via
+        # ``_display_scale``. Scaling the weights themselves (e.g. to sum to
+        # 100 for percent) would route to the un-centered path and inflate the
+        # SE by the dropped numerator/denominator covariance term.
         _units = _normalize_units(units)
         wgt_arr = concat_data[weight_col].to_numpy().copy()
-        if count_total is None and _units is _TableUnits.PERCENT:
+        if count_total is not None:
+            wgt_arr = _scale_weights_for_units(
+                wgt_arr, units=_TableUnits.PROPORTION, count_total=None
+            )
+            _display_scale = float(count_total)
+        elif _units is _TableUnits.PERCENT:
             wgt_arr = _scale_weights_for_units(
                 wgt_arr, units=_TableUnits.PROPORTION, count_total=None
             )
             _display_scale = 100.0
         else:
+            # PROPORTION (0-1, centered) or bare COUNT (raw weights, totals).
             wgt_arr = _scale_weights_for_units(
-                wgt_arr, units=_units, count_total=count_total
+                wgt_arr, units=_units, count_total=None
             )
             _display_scale = 1.0
         concat_data = concat_data.with_columns(
@@ -333,10 +348,11 @@ class Categorical:
                 est_arr,
             )
 
-        # Percent is computed on the 0-1 proportion scale (centered variance
-        # and logit CI above); rescale the estimate, SE, and CI bounds to
-        # 0-100 for display. ``cv = se / est`` is scale-invariant, so it is
-        # left unchanged.
+        # Percent and ``count_total`` scaling are computed on the 0-1
+        # proportion scale (centered variance and logit CI above); rescale the
+        # estimate, SE, and CI bounds by the display factor (100, or the
+        # caller's N). ``cv = se / est`` is scale-invariant, so it is left
+        # unchanged.
         if _display_scale != 1.0:
             est_arr = est_arr * _display_scale
             se_arr = se_arr * _display_scale
