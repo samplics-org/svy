@@ -373,7 +373,8 @@ def prepare_data(
         needed.extend(by)
     if extra_cols:
         needed.extend(extra_cols)
-    needed.extend(extract_where_cols(where))
+    where_cols = extract_where_cols(where)
+    needed.extend(where_cols)
     key = id(design)
     data_version = getattr(sample, "_data_version", None)
     cached = _design_fields_cache.get(key)
@@ -386,10 +387,12 @@ def prepare_data(
     # Include singleton variance/exclude columns if present in data
     _sr_pre = getattr(sample, "_singleton_result", None)
     _sc_pre = _sr_pre.config if _sr_pre else None
+    _singleton_check_cols: list[str] = []
     if _sc_pre:
         for _col in [_sc_pre.var_stratum_col, _sc_pre.var_psu_col, _sc_pre.var_exclude_col]:
             if _col and _col in local_data.columns:
                 needed.append(_col)
+                _singleton_check_cols.append(_col)
     # Carry replicate weights through column selection.
     # Without this, ``select_columns=True`` would drop them before the where
     # block can zero them out, leaving downstream Rust calls with full-sample
@@ -401,22 +404,69 @@ def prepare_data(
     needed = sample._dedup_preserve_order(needed)
 
     # ── Missing handling ─────────────────────────────────────────────────
-    # Applied BEFORE column selection so that the same rows are dropped
+    # Applied BEFORE column selection so that the same rows are affected
     # regardless of select_columns. Only analysis-relevant columns are
     # checked — replicate weights are excluded from the null check because
-    # a rare NA in one of N replicate columns should not drop rows from
+    # a rare NA in one of N replicate columns should not affect rows for
     # the entire analysis.
+    #
+    # With drop_nulls=True, missing values (null/NaN/±inf) fall in two
+    # classes:
+    #   * ANALYSIS values — numeric y/x/y_pair (cast_y_float paths), group,
+    #     and by labels: the row is KEPT and treated like an out-of-domain
+    #     observation — its weights (main + replicate) are zeroed in the
+    #     domain block below. Physically dropping such rows deleted whole
+    #     PSUs/strata under standard skip patterns (y null outside the
+    #     domain), silently understating domain SEs and df; keeping them
+    #     preserves the design structure, matching R's na.rm=TRUE /
+    #     subset() domain semantics.
+    #   * Everything else (design fields, singleton helpers, extra_cols —
+    #     regression covariates and multi-y batches — and categorical y
+    #     when cast_y_float=False): rows are physically dropped, as before.
+    # Columns referenced only by `where` are excluded from the drop: a null
+    # predicate value makes the row out-of-domain via Kleene logic in the
+    # domain block.
     if rep_weight_cols:
         rep_set = set(rep_weight_cols)
         null_check_cols = [c for c in needed if c not in rep_set]
     else:
         null_check_cols = needed
+
+    _domain_missing_cols: list[str] = []
     if drop_nulls:
-        local_data = drop_missing(
-            df=local_data,
-            cols=null_check_cols,
-            treat_infinite_as_missing=True,
-        )
+        _structural = set(fields)
+        _structural.update(_singleton_check_cols)
+        if _design_codes:
+            _structural.update(s.name for s in _design_codes.values())
+
+        _domain_roles: list[str] = []
+        if cast_y_float:
+            _domain_roles.append(y)
+            if x:
+                _domain_roles.append(x)
+            if y_pair:
+                _domain_roles.append(y_pair)
+        if group:
+            _domain_roles.append(group)
+        if isinstance(by, str):
+            _domain_roles.append(by)
+        elif isinstance(by, (list, tuple)):
+            _domain_roles.extend(by)
+
+        _domain_missing_cols = [
+            c
+            for c in sample._dedup_preserve_order(_domain_roles)
+            if c in local_data.columns and c not in _structural
+        ]
+        _dm_set = set(_domain_missing_cols)
+        _where_only = (set(where_cols) - _structural) - _dm_set
+        drop_cols = [c for c in null_check_cols if c not in _dm_set and c not in _where_only]
+        if drop_cols:
+            local_data = drop_missing(
+                df=local_data,
+                cols=drop_cols,
+                treat_infinite_as_missing=True,
+            )
     else:
         assert_no_missing(df=local_data, subset=null_check_cols)
 
@@ -530,8 +580,27 @@ def prepare_data(
     domain_val = None
     domain_mask_col = None
 
-    if where is not None:
-        where_expr = sample.estimation._compile_where_expr(where)
+    # Missing analysis values → out-of-domain (see the missing-handling
+    # block above). Only engaged when something is actually missing, so the
+    # no-missing fast path is unchanged.
+    _miss_checks: list[pl.Expr] = []
+    if _domain_missing_cols:
+        _dm_schema = df.schema
+        for c in _domain_missing_cols:
+            e = pl.col(c).is_null()
+            if _dm_schema[c] in (pl.Float32, pl.Float64):
+                e = e | pl.col(c).is_nan() | pl.col(c).is_infinite()
+            _miss_checks.append(e)
+        if not df.select(pl.any_horizontal(_miss_checks).any()).item():
+            _miss_checks = []
+
+    if where is not None or _miss_checks:
+        _keep_exprs: list[pl.Expr] = []
+        if where is not None:
+            _keep_exprs.append(sample.estimation._compile_where_expr(where))
+        if _miss_checks:
+            _keep_exprs.append(~pl.any_horizontal(_miss_checks))
+        where_expr = pl.all_horizontal(_keep_exprs) if len(_keep_exprs) > 1 else _keep_exprs[0]
 
         # Step 1: materialize the boolean mask once.
         df = df.with_columns(where_expr.alias(_MASK_COL))
@@ -570,6 +639,27 @@ def prepare_data(
             # column (grouped/median replication and non-mask-aware callers).
             for c in rep_weight_cols_in_df:
                 exprs.append(pl.when(mask).then(pl.col(c).cast(pl.Float64)).otherwise(0.0).alias(c))
+
+        # Fill missing numeric analysis values with 0.0 — every such row is
+        # out-of-domain with zero weight, but the Rust kernels require
+        # non-null y/x. Non-missing values on out-of-domain rows are kept
+        # untouched (rank tests read them).
+        if _miss_checks:
+            _fill_targets = [y_col] if cast_y_float else []
+            if x:
+                _fill_targets.append(x)
+            for c in _fill_targets:
+                if c not in df.columns:
+                    continue
+                _miss_c = pl.col(c).is_null()
+                if df.schema[c] in (pl.Float32, pl.Float64):
+                    _miss_c = _miss_c | pl.col(c).is_nan() | pl.col(c).is_infinite()
+                exprs.append(
+                    pl.when(_miss_c)
+                    .then(0.0)
+                    .otherwise(pl.col(c).cast(pl.Float64))
+                    .alias(c)
+                )
 
         df = df.with_columns(exprs).drop(_MASK_COL)
         domain_col = "__svy_domain__"
