@@ -854,13 +854,17 @@ fn fit_glm_domain(
             let y_i = Y[(i, 0)];
             let mu_i = mu[i];
             let d = link.mu_eta(mu_i, eta[i]);
+            let v = family.variance(mu_i).max(1e-12);
 
-            // Working residual
-            let working_resid = (y_i - mu_i) / (d + d.signum() * 1e-12);
+            // Score contribution (estimating function): w (y - mu) (dmu/deta) / V.
+            // Computed directly instead of w_irls * working_resid: the
+            // working-residual guard (d + eps) biased scores wherever
+            // dmu/deta is small (visible at ~1e-7 in SEs), while for
+            // canonical links d/V cancels exactly.
+            let s_i = w_i * (y_i - mu_i) * d / v;
 
-            // Score contribution: X * w_irls * working_resid
             for j in 0..k {
-                totals[li][j].add(w_irls_i * X[(i, j)] * working_resid);
+                totals[li][j].add(s_i * X[(i, j)]);
             }
         }
 
