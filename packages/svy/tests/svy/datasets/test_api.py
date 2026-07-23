@@ -207,3 +207,30 @@ class TestTTL:
 
         api.describe("a")
         assert len(routes.hits) > n_hits
+
+
+class TestRegistrySlugValidation:
+    def test_catalog_skips_traversal_slug_entry(self, routes, make_backend_entry):
+        """A hostile registry entry must be skipped, not break the catalog."""
+        from svy.datasets import api
+
+        routes.add_json(
+            "/api/data/examples/registry",
+            [
+                make_backend_entry(slug="good"),
+                make_backend_entry(slug="../../evil"),
+            ],
+        )
+        cat = api.catalog(use_cache=False)
+        assert cat.slugs == ("good",)
+
+    def test_describe_traversal_slug_not_found(self, routes, make_backend_entry):
+        from svy.datasets import api
+        from svy.errors.dataset_errors import DatasetError
+
+        routes.add_json(
+            "/api/data/examples/registry",
+            [make_backend_entry(slug="../../evil")],
+        )
+        with pytest.raises(DatasetError):
+            api.describe("../../evil", use_cache=False)

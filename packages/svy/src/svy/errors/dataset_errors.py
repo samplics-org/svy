@@ -165,6 +165,52 @@ class DatasetError(SvyError):
     # ---- Integrity --------------------------------------------------------
 
     @classmethod
+    def invalid_slug(
+        cls,
+        *,
+        where: Optional[str],
+        slug: str,
+        hint: Optional[str] = "Slugs may only contain letters, digits, '.', '_' and '-', "
+        "and must start with a letter or digit.",
+        docs_url: Optional[str] = None,
+    ) -> "DatasetError":
+        return cls(
+            title="Invalid dataset slug",
+            detail=f"Dataset slug {slug!r} contains disallowed characters.",
+            code="DATASET_INVALID_SLUG",
+            where=where,
+            param="slug",
+            got=slug,
+            hint=hint,
+            docs_url=docs_url,
+            extra={"slug": slug},
+        )
+
+    @classmethod
+    def insecure_url(
+        cls,
+        *,
+        where: Optional[str],
+        slug: str,
+        url: str,
+        hint: Optional[str] = "Dataset downloads require https (plain http is allowed "
+        "only for localhost).",
+        docs_url: Optional[str] = None,
+    ) -> "DatasetError":
+        return cls(
+            title="Insecure dataset download URL",
+            detail=f"Refusing to download dataset {slug!r} over an insecure URL.",
+            code="DATASET_INSECURE_URL",
+            where=where,
+            param="download_url",
+            expected="https://...",
+            got=url,
+            hint=hint,
+            docs_url=docs_url,
+            extra={"slug": slug, "url": url},
+        )
+
+    @classmethod
     def sha_mismatch(
         cls,
         *,
