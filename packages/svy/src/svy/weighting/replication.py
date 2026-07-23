@@ -337,7 +337,7 @@ def create_jk_wgts(
     stratum_int = _to_int_array(data, design.stratum)
 
     assert rust_create_jk_wgts is not None  # noqa: S101
-    rep_mat, df_val = rust_create_jk_wgts(
+    rep_mat, df_val, rscales = rust_create_jk_wgts(
         main_weights,
         psu_int,
         stratum_int,
@@ -359,6 +359,9 @@ def create_jk_wgts(
             prefix=rep_prefix,
             n_reps=n_reps,
             df=df_val,
+            # Per-replicate (n_h-1)/n_h coefficients: exact stratified-JKn
+            # variance instead of the global (R-1)/R approximation.
+            rscales=tuple(rscales),
         )
     )
 

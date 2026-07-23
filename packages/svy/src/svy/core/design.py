@@ -105,6 +105,13 @@ class RepWeights(msgspec.Struct, frozen=True):
     fay_coef: float = 0.0
     df: int | None = None  # None = "Calculate from data", Int = "User Override"
     padding: int | None = None  # None = auto-detect, 0 = no padding, >0 = zero-pad width
+    # Per-replicate variance coefficients (R's scale*rscales combined), e.g.
+    # (n_h-1)/n_h per deleted-PSU replicate for stratified JKn. None = the
+    # method's global default — correct for BRR/bootstrap/SDR/JK1, but for
+    # user-supplied stratified-JKn weights pass the file's documented
+    # rscales, or the variance uses (R-1)/R uniformly. svy-generated
+    # jackknife weights (create_jk_wgts) fill this automatically.
+    rscales: tuple[float, ...] | None = None
 
     def __post_init__(self):
         """
@@ -613,6 +620,7 @@ class Design:
         fay_coef: float | _MissingType = _MISSING,
         df: int | None | _MissingType = _MISSING,
         padding: int | None | _MissingType = _MISSING,
+        rscales: tuple[float, ...] | None | _MissingType = _MISSING,
     ) -> Self:
         """
         Return a new Design with selected RepWeights fields updated.
@@ -627,6 +635,7 @@ class Design:
             and isinstance(fay_coef, _MissingType)
             and isinstance(df, _MissingType)
             and isinstance(padding, _MissingType)
+            and isinstance(rscales, _MissingType)
         ):
             return self
 
@@ -663,6 +672,9 @@ class Design:
         if isinstance(padding, _MissingType):
             padding = cur.padding if cur else None
 
+        if isinstance(rscales, _MissingType):
+            rscales = cur.rscales if cur else None
+
         # 5. Create new RepWeights object
         _resolved_method = (
             _normalize_rep_method(resolved_method)
@@ -676,6 +688,7 @@ class Design:
             fay_coef=fay_coef,
             df=df,
             padding=padding,
+            rscales=rscales,
         )
 
         return self.update(rep_wgts=updated_rep_wgts)
