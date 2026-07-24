@@ -19,7 +19,7 @@ import msgspec
 # Constants
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = "svy-result/0.1"
+SCHEMA_VERSION = "svy-result/0.2"
 
 # JSON-safe alias for svy's Category type (str | int | float | bool).
 CatValue = str | int | float | bool
@@ -105,6 +105,7 @@ class ParamEstData(msgspec.Struct, kw_only=True, frozen=True):
     x: str | None = None
     x_level: CatValue | None = None
     deff: float | None = None
+    df: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +233,6 @@ class EstimateData(msgspec.Struct, kw_only=True, frozen=True):
     estimates: list[ParamEstData]
     n_strata: int
     n_psus: int
-    degrees_freedom: int
     where_clause: str | None = None
     q_method: str = "Linear"
 

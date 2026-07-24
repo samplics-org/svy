@@ -36,7 +36,7 @@
   },
   "kind": "ttest_two_groups",
   "paired": false,
-  "schema_version": "svy-result/0.1",
+  "schema_version": "svy-result/0.2",
   "stats": {
     "df": 18.0,
     "p_value": 0.0015,

@@ -2,6 +2,6 @@
   "df": 4.0,
   "kind": "chi_square",
   "p_value": 0.05,
-  "schema_version": "svy-result/0.1",
+  "schema_version": "svy-result/0.2",
   "value": 9.488
 }

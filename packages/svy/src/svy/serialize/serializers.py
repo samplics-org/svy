@@ -118,6 +118,7 @@ def _param_est_to_data(p: Any) -> ParamEstData:
         x=p.x,
         x_level=p.x_level,
         deff=_f(p.deff) if p.deff is not None else None,
+        df=int(p.df) if p.df is not None else None,
     )
 
 
@@ -267,7 +268,6 @@ def _serialize_estimate(result: Estimate) -> EstimateData:
         estimates=[_param_est_to_data(p) for p in result.estimates],
         n_strata=_i(result.n_strata),
         n_psus=_i(result.n_psus),
-        degrees_freedom=_i(result.degrees_freedom),
         where_clause=result.where_clause,
         q_method=_enum(result.q_method),
     )

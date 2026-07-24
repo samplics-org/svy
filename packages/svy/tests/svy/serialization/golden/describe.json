@@ -28,7 +28,7 @@
     0.5,
     0.75
   ],
-  "schema_version": "svy-result/0.1",
+  "schema_version": "svy-result/0.2",
   "top_k": 10,
   "weight_col": "wgt",
   "weighted": true
