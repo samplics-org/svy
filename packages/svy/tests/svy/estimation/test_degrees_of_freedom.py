@@ -29,6 +29,8 @@ These assertions read ``ParamEst.df`` directly rather than inverting a
 t-quantile from the CI, which is what made this rule untestable before.
 """
 
+import math
+
 import polars as pl
 import pytest
 
@@ -281,3 +283,67 @@ def test_user_supplied_rep_df_overrides_everywhere(jkn):
     sample = _rep_sample(jkn, df=9)
     assert _df_of(sample, method="replication") == 9
     assert _df_of(sample, method="replication", where=col("dom") == 1) == 9
+
+
+# ---------------------------------------------------------------------------
+# df == 0 — NaN bounds, not a zero-width CI (issue #96)
+# ---------------------------------------------------------------------------
+#
+# `d_one_psu_in_b` keeps stratum B as a single PSU while the full design stays
+# clean (3 PSUs per stratum), so the B cell has 0 residual df — the case R
+# reports as qt(., 0) = NaN. Before the fix svy substituted z = 1.96, and with
+# se = 0 for a lone PSU produced a zero-width interval reading as certainty.
+
+
+def test_mean_df_zero_cell_has_nan_ci(toy):
+    """A by-cell that collapses to one PSU gets NaN bounds; its neighbour does not."""
+    sample = Sample(toy, Design(wgt="w", stratum="stratum", psu="psu"))
+    cells = {
+        p.by_level[0]: p
+        for p in sample.estimation.mean(
+            "y", by="stratum", where=col("d_one_psu_in_b") == 1
+        ).estimates
+    }
+    b = cells["B"]
+    assert b.df == 0
+    assert math.isnan(b.lci) and math.isnan(b.uci)
+    a = cells["A"]
+    assert a.df > 0
+    assert not math.isnan(a.lci) and not math.isnan(a.uci)
+
+
+@pytest.mark.parametrize("ci_method", ["logit", "wilson"])
+def test_prop_df_zero_cell_has_nan_ci(toy, ci_method):
+    """Proportion CIs that lean on the t-quantile go NaN at df 0, matching R's
+    svyciprop(method="logit"); the design carries no information for the width.
+
+    Uses ``row == 1`` so every cell has p = 0.5 — an interior proportion, not
+    the degenerate p in {0, 1} that returns a point regardless of df.
+    """
+    d = toy.with_columns((pl.col("row") == 1).cast(pl.Int64).alias("hi"))
+    sample = Sample(d, Design(wgt="w", stratum="stratum", psu="psu"))
+    b_rows = [
+        p
+        for p in sample.estimation.prop(
+            "hi", by="stratum", where=col("d_one_psu_in_b") == 1, ci_method=ci_method
+        ).estimates
+        if p.by_level[0] == "B"
+    ]
+    assert b_rows
+    for p in b_rows:
+        assert p.df == 0
+        assert math.isnan(p.lci) and math.isnan(p.uci)
+
+
+def test_median_df_zero_cell_has_nan_ci(toy):
+    """The median path clamps its CDF-inversion probabilities, so it needs the
+    explicit df<=0 guard rather than NaN propagation."""
+    sample = Sample(toy, Design(wgt="w", stratum="stratum", psu="psu"))
+    cells = {
+        p.by_level[0]: p
+        for p in sample.estimation.median(
+            "y", by="stratum", where=col("d_one_psu_in_b") == 1
+        ).estimates
+    }
+    assert cells["B"].df == 0
+    assert math.isnan(cells["B"].lci) and math.isnan(cells["B"].uci)

@@ -435,6 +435,24 @@ class Estimation:
         }
         return aliases.get(m, m)
 
+    @staticmethod
+    def _t_crit(alpha: float, df: float) -> float:
+        """Two-sided t critical value, or NaN when df <= 0.
+
+        R's ``qt(1 - alpha/2, 0)`` is NaN: with no residual degrees of freedom
+        the interval width is undefined. Returning NaN — rather than the old
+        fallback to a normal 1.96 — makes a domain resting on a single PSU
+        report NaN bounds, matching survey, instead of a zero-width CI that
+        reads as a point estimate known with certainty (issue #96).
+        """
+        return float(stats.t.ppf(1 - alpha / 2, df)) if df > 0 else float("nan")
+
+    @staticmethod
+    def _t_crit_arr(alpha: float, df_arr: np.ndarray) -> np.ndarray:
+        """Vectorised :meth:`_t_crit`; NaN wherever df <= 0."""
+        pos = df_arr > 0
+        return np.where(pos, stats.t.ppf(1 - alpha / 2, np.where(pos, df_arr, 1.0)), np.nan)
+
     def _compute_prop_ci(
         self,
         p: float,
@@ -493,7 +511,7 @@ class Estimation:
         if method == "logit":
             if p <= 0 or p >= 1:
                 return (p, p)
-            t_crit = stats.t.ppf(1 - alpha / 2, df) if df > 0 else 1.96
+            t_crit = self._t_crit(alpha, df)
             scale = se / (p * (1.0 - p)) if se > 0 else 0
             logit_p = math.log(p / (1 - p))
             lci = 1.0 / (1.0 + math.exp(-(logit_p - t_crit * scale)))
@@ -611,7 +629,15 @@ class Estimation:
             # Uses the score-test inversion with effective sample size.
             # Replaces n with n_eff = p(1-p)/se² and uses t-quantile for df.
             # Reference: Wilson (1927); Franco et al. (2019, JSSAM).
-            if p <= 0 or p >= 1 or se <= 0:
+            if p <= 0 or p >= 1:
+                return (p, p)
+            # No residual df: width undefined (issue #96). Checked before the
+            # se <= 0 short-circuit, because a lone-PSU cell has se == 0 as the
+            # same artifact and must go NaN, not to a point — matching the logit
+            # branch. The max/min clamps below would otherwise swallow the NaN.
+            if df <= 0:
+                return (float("nan"), float("nan"))
+            if se <= 0:
                 return (p, p)
 
             # Effective sample size
@@ -624,7 +650,7 @@ class Estimation:
                 n_eff = n_eff * (t_n / t_df) ** 2
 
             # Wilson score interval: roots of the score-test quadratic
-            z = stats.t.ppf(1 - alpha / 2, df) if df > 0 else 1.96
+            z = self._t_crit(alpha, df)
             z2 = z * z
             denom = 1 + z2 / n_eff
             center = (p + z2 / (2 * n_eff)) / denom
@@ -662,10 +688,7 @@ class Estimation:
         )
         deff_arr = result_df["deff"].to_numpy() if (deff and "deff" in result_df.columns) else None
 
-        pos_df = df_arr > 0
-        t_crits = np.where(
-            pos_df, stats.t.ppf(1.0 - alpha / 2.0, np.where(pos_df, df_arr, 1.0)), 1.96
-        )
+        t_crits = self._t_crit_arr(alpha, df_arr)
 
         with np.errstate(divide="ignore", invalid="ignore"):
             cv_arr = np.where(est_arr != 0, se_arr / est_arr, np.inf)
@@ -817,14 +840,16 @@ class Estimation:
             df_val = int(df_vals[i])
             dv = domain_vals[i]
 
-            t_crit = stats.t.ppf(1.0 - alpha / 2.0, df_val) if df_val > 0 else 1.96
-            p_lower = max(0.0, 0.5 - t_crit * se_p)
-            p_upper = min(1.0, 0.5 + t_crit * se_p)
-
+            t_crit = self._t_crit(alpha, df_val)
             cached = domain_cache.get(dv)
-            if cached is None:
+            if df_val <= 0 or cached is None:
+                # No residual df (issue #96) or an empty domain: the interval
+                # is undefined. Skip the CDF inversion, whose probability
+                # arguments would otherwise be silently clamped into [0, 1].
                 lci = uci = float("nan")
             else:
+                p_lower = max(0.0, 0.5 - t_crit * se_p)
+                p_upper = min(1.0, 0.5 + t_crit * se_p)
                 y_sorted, cdf = cached
                 lci = self._invert_cdf_sorted(y_sorted, cdf, p_lower)
                 uci = self._invert_cdf_sorted(y_sorted, cdf, p_upper)
@@ -840,6 +865,7 @@ class Estimation:
                     lci=lci,
                     uci=uci,
                     deff=None,
+                    df=df_val,
                     by=by_tuple,
                     by_level=(dv,) if dv is not None else None,
                     y_level=None,
@@ -887,10 +913,7 @@ class Estimation:
         se_arr = result_df["se"].to_numpy()
         df_arr = result_df["df"].to_numpy().astype(np.float64)
 
-        pos_df = df_arr > 0
-        t_crits = np.where(
-            pos_df, stats.t.ppf(1.0 - alpha / 2.0, np.where(pos_df, df_arr, 1.0)), 1.96
-        )
+        t_crits = self._t_crit_arr(alpha, df_arr)
         lci_arr = est_arr - t_crits * se_arr
         uci_arr = est_arr + t_crits * se_arr
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -1178,8 +1201,15 @@ class Estimation:
             return self._taylor_multi(
                 ys,
                 single_call=lambda yy: self.mean(
-                    yy, by=by, where=where, method=method, deff=deff, fay_coef=fay_coef,
-                    as_factor=as_factor, variance_center=variance_center, alpha=alpha,
+                    yy,
+                    by=by,
+                    where=where,
+                    method=method,
+                    deff=deff,
+                    fay_coef=fay_coef,
+                    as_factor=as_factor,
+                    variance_center=variance_center,
+                    alpha=alpha,
                     drop_nulls=drop_nulls,
                 ),
                 batched_call=lambda prep: _taylor_mean_multi(
@@ -1187,7 +1217,11 @@ class Estimation:
                 ),
                 prep_y=(ys[0] if ys else ""),
                 prep_extra_cols=ys[1:],
-                by=by, where=where, method=method, as_factor=as_factor, drop_nulls=drop_nulls,
+                by=by,
+                where=where,
+                method=method,
+                as_factor=as_factor,
+                drop_nulls=drop_nulls,
             )
 
         target_method = self._resolve_method(method)
@@ -1202,9 +1236,7 @@ class Estimation:
             select_columns=True,
             # Ungrouped replication only: the mask path covers the ungrouped
             # kernels. Grouped (by=) replication keeps the zeroing path.
-            domain_mask_for_replication=(
-                target_method != EstimationMethod.TAYLOR and by is None
-            ),
+            domain_mask_for_replication=(target_method != EstimationMethod.TAYLOR and by is None),
         )
 
         try:
@@ -1273,8 +1305,15 @@ class Estimation:
             return self._taylor_multi(
                 ys,
                 single_call=lambda yy: self.total(
-                    yy, by=by, where=where, method=method, deff=deff, fay_coef=fay_coef,
-                    as_factor=as_factor, variance_center=variance_center, alpha=alpha,
+                    yy,
+                    by=by,
+                    where=where,
+                    method=method,
+                    deff=deff,
+                    fay_coef=fay_coef,
+                    as_factor=as_factor,
+                    variance_center=variance_center,
+                    alpha=alpha,
                     drop_nulls=drop_nulls,
                 ),
                 batched_call=lambda prep: _taylor_total_multi(
@@ -1282,7 +1321,11 @@ class Estimation:
                 ),
                 prep_y=(ys[0] if ys else ""),
                 prep_extra_cols=ys[1:],
-                by=by, where=where, method=method, as_factor=as_factor, drop_nulls=drop_nulls,
+                by=by,
+                where=where,
+                method=method,
+                as_factor=as_factor,
+                drop_nulls=drop_nulls,
             )
 
         target_method = self._resolve_method(method)
@@ -1297,9 +1340,7 @@ class Estimation:
             select_columns=True,
             # Ungrouped replication only: the mask path covers the ungrouped
             # kernels. Grouped (by=) replication keeps the zeroing path.
-            domain_mask_for_replication=(
-                target_method != EstimationMethod.TAYLOR and by is None
-            ),
+            domain_mask_for_replication=(target_method != EstimationMethod.TAYLOR and by is None),
         )
 
         try:
@@ -1367,8 +1408,15 @@ class Estimation:
             return self._taylor_multi(
                 ys,
                 single_call=lambda yy: self.prop(
-                    yy, by=by, where=where, method=method, ci_method=ci_method, deff=deff,
-                    fay_coef=fay_coef, variance_center=variance_center, alpha=alpha,
+                    yy,
+                    by=by,
+                    where=where,
+                    method=method,
+                    ci_method=ci_method,
+                    deff=deff,
+                    fay_coef=fay_coef,
+                    variance_center=variance_center,
+                    alpha=alpha,
                     drop_nulls=drop_nulls,
                 ),
                 batched_call=lambda prep: _taylor_prop_multi(
@@ -1376,7 +1424,11 @@ class Estimation:
                 ),
                 prep_y=(ys[0] if ys else ""),
                 prep_extra_cols=ys[1:],
-                by=by, where=where, method=method, drop_nulls=drop_nulls, cast_y_float=False,
+                by=by,
+                where=where,
+                method=method,
+                drop_nulls=drop_nulls,
+                cast_y_float=False,
             )
 
         target_method = self._resolve_method(method)
@@ -1391,9 +1443,7 @@ class Estimation:
             select_columns=True,
             # Ungrouped replication only: the mask path covers the ungrouped
             # kernels. Grouped (by=) replication keeps the zeroing path.
-            domain_mask_for_replication=(
-                target_method != EstimationMethod.TAYLOR and by is None
-            ),
+            domain_mask_for_replication=(target_method != EstimationMethod.TAYLOR and by is None),
         )
 
         try:
@@ -1484,17 +1534,31 @@ class Estimation:
             return self._taylor_multi(
                 pairs,
                 single_call=lambda pr: self.ratio(
-                    pr[0], pr[1], by=by, where=where, method=method, deff=deff,
-                    fay_coef=fay_coef, variance_center=variance_center, alpha=alpha,
+                    pr[0],
+                    pr[1],
+                    by=by,
+                    where=where,
+                    method=method,
+                    deff=deff,
+                    fay_coef=fay_coef,
+                    variance_center=variance_center,
+                    alpha=alpha,
                     drop_nulls=drop_nulls,
                 ),
                 batched_call=lambda prep: _taylor_ratio_multi(
-                    self, prep=prep, ys=[p[0] for p in pairs], xs=[p[1] for p in pairs],
-                    deff=deff, alpha=alpha,
+                    self,
+                    prep=prep,
+                    ys=[p[0] for p in pairs],
+                    xs=[p[1] for p in pairs],
+                    deff=deff,
+                    alpha=alpha,
                 ),
                 prep_y=(ys[0] if ys else ""),
                 prep_extra_cols=list(dict.fromkeys([*ys[1:], *xs])),
-                by=by, where=where, method=method, drop_nulls=drop_nulls,
+                by=by,
+                where=where,
+                method=method,
+                drop_nulls=drop_nulls,
             )
 
         target_method = self._resolve_method(method)
@@ -1510,9 +1574,7 @@ class Estimation:
             select_columns=True,
             # Ungrouped replication only: the mask path covers the ungrouped
             # kernels. Grouped (by=) replication keeps the zeroing path.
-            domain_mask_for_replication=(
-                target_method != EstimationMethod.TAYLOR and by is None
-            ),
+            domain_mask_for_replication=(target_method != EstimationMethod.TAYLOR and by is None),
         )
 
         try:
@@ -1580,8 +1642,14 @@ class Estimation:
             return self._taylor_multi(
                 ys,
                 single_call=lambda yy: self.median(
-                    yy, by=by, where=where, method=method, fay_coef=fay_coef,
-                    q_method=q_method, variance_center=variance_center, alpha=alpha,
+                    yy,
+                    by=by,
+                    where=where,
+                    method=method,
+                    fay_coef=fay_coef,
+                    q_method=q_method,
+                    variance_center=variance_center,
+                    alpha=alpha,
                     drop_nulls=drop_nulls,
                 ),
                 batched_call=lambda prep: _taylor_median_multi(
@@ -1589,7 +1657,10 @@ class Estimation:
                 ),
                 prep_y=(ys[0] if ys else ""),
                 prep_extra_cols=ys[1:],
-                by=by, where=where, method=method, drop_nulls=drop_nulls,
+                by=by,
+                where=where,
+                method=method,
+                drop_nulls=drop_nulls,
             )
 
         target_method = self._resolve_method(method)
