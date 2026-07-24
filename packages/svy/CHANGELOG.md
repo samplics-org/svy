@@ -8,6 +8,24 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+## [0.21.0] — 2026-07-24
+
+Requires [`svy-rs`](../svy-rs/CHANGELOG.md) 0.12.0, which carries the two variance-estimation fixes below; [`svy-io`](../svy-io/CHANGELOG.md) 0.2.0 is unchanged. Grouped confidence intervals and domain design effects change in this release — point estimates and standard errors do not.
+
+### Fixed
+
+- **`by=` groups now use their own degrees of freedom.** A by-group is a domain, so its df must be counted on the PSUs and strata that group covers. It was instead given the df of the surrounding analysis — the full design with no filter, or the `where=` mask with one — so the same subpopulation got a different interval depending on whether it was reached through `by=` or `where=`. Confidence intervals for grouped means, totals, ratios, proportions and medians were consistently **too narrow**; the effect is negligible for groups spanning most of the sample and large for small ones (22% on a 10-record domain with 6 df rather than 56). `est`, `se`, `cv` are unaffected. Verified against R `survey` 4.5 `degf(subset(design, ...))`.
+- **Design effects no longer count zero-weight rows.** Under `drop_nulls`, rows with a missing response are kept and zero-weighted rather than dropped; they were still counted in the domain SRS variance's `n`, inflating `deff` for any group containing them (~1–2% on the synthetic fixtures). Only `deff` is affected.
+
+### Removed
+
+- **`Estimate.degrees_freedom`.** Degrees of freedom are a per-row property — a domain or by-group is counted on its own active PSUs and strata, so grouped results legitimately carry a different df per cell. The scalar could not represent that: it was `min()` across rows, so a grouped estimate reported its *smallest* group, and for a by-group inside a domain that meant a headline df of 0. Use `ParamEst.df` (also a `df` column in `to_polars()`) for the per-row value, and `n_psus - n_strata` for the full-design df, which stays at design level under a domain filter.
+- **`EstimateData.degrees_freedom`** leaves the serialized payload; `SCHEMA_VERSION` moves to `svy-result/0.2`. Strictly a field removal warrants a major bump under the policy in `serialize/DESIGN.md`; 0.2 was chosen deliberately because no known consumer binds to the field, and the reasoning is recorded there.
+
+### Added
+
+- **`ParamEst.df`** — the design df backing each row's t-quantile, carried through `to_polars()` and the serialized payload. It is deliberately not shown in the printed table: it is constant for most results, so a column would repeat one number down the page and widen every table.
+
 ## [0.20.1] — 2026-07-23
 
 Patch release on top of 0.20.0; [`svy-rs`](../svy-rs/CHANGELOG.md) (0.11.0) and [`svy-io`](../svy-io/CHANGELOG.md) (0.2.0) are unchanged.
@@ -82,7 +100,8 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.20.1...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.21.0...HEAD
+[0.21.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.21.0
 [0.20.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.20.1
 [0.20.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.20.0
 [0.19.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.19.1
