@@ -103,7 +103,14 @@ class RepWeights(msgspec.Struct, frozen=True):
 
     # Optional / defaulted fields
     fay_coef: float = 0.0
-    df: int | None = None  # None = "Calculate from data", Int = "User Override"
+    # Design df for the t-quantile in CIs. None = n_reps - 1, a property of the
+    # weight set and therefore the same for every domain: a file shipping only
+    # replicate weights carries no strata/PSU from which a design df could be
+    # recovered. R instead uses qr(analysis weights)$rank - 1, recomputed on the
+    # subset rows, so it is smaller whenever the matrix is rank-deficient (any
+    # stratified JKn) and smaller again on a domain. Pass that value here to
+    # reproduce R. Estimates and SEs are unaffected either way.
+    df: int | None = None  # None = n_reps - 1, Int = user override
     padding: int | None = None  # None = auto-detect, 0 = no padding, >0 = zero-pad width
     # Per-replicate variance coefficients (R's scale*rscales combined), e.g.
     # (n_h-1)/n_h per deleted-PSU replicate for stratified JKn. None = the
