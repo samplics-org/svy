@@ -6,6 +6,13 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+## [0.12.0] — 2026-07-24
+
+### Fixed
+
+- **A by-group's degrees of freedom are counted on that group's own PSUs and strata.** The five grouped Taylor kernels (mean, total, ratio, prop, median) computed one frame-level df and broadcast it to every row — `vec![df_val; n_groups]` — so the per-group `domain_mask` that drives the estimate and the scores never reached the df. A `where=` domain was unaffected, because a filter arrives as zero weights and `degrees_of_freedom` already masks on those; the two paths therefore disagreed for the same subpopulation. On a 4×4×5 design (full df 12), `by="dom"` reported 12 for both groups where R's `degf(subset(...))` gives 7 and 3, and `by="stratum"` inside a domain reported 7 for all four cells against R's 1, 3, 3, 0. The error ran one way — a cell inherited the df of a larger population — so **every grouped confidence interval was too narrow**, by 22% on the smallest domain of a realistic fixture. `degrees_of_freedom` gains a `degrees_of_freedom_in_domain` variant taking an optional membership mask; the existing signature delegates to it with `None`, so there is still one implementation of the rule.
+- **Zero-weight rows no longer inflate `n` in the domain SRS variance.** `srs_variance_mean_domain`, `srs_variance_total_domain` and `srs_variance_ratio_domain` counted every in-domain row when building `n`, including rows carrying zero weight. Under `drop_nulls` a missing-`y` row is kept and zero-weighted rather than dropped, so those rows understated the SRS variance and inflated `deff` by exactly the row-count ratio (293/290, 187/185, 291/286 on the synthetic education fixture) while groups with no dropped rows were exact. The ungrouped `srs_variance_mean` already excluded them and its comment asserted the `_domain` variants did the same.
+
 ## [0.11.0] — 2026-07-23
 
 ### Changed
@@ -56,7 +63,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 Baseline for this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.11.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.12.0...HEAD
+[0.12.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.12.0
 [0.11.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.11.0
 [0.10.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.10.0
 [0.9.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.9.0
