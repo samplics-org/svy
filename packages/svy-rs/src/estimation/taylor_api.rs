@@ -13,6 +13,7 @@ use crate::estimation::taylor::{
     SvyQuantileMethod,
     build_taylor_design,
     degrees_of_freedom,
+    degrees_of_freedom_in_domain,
     median_variance_woodruff,
     median_variance_woodruff_domain,
     point_estimate_mean, point_estimate_mean_domain,
@@ -230,7 +231,6 @@ fn compute_mean_grouped(
     let by_str = df.column(by_col)?.str()?;
     let unique_groups = by_str.unique()?;
 
-    let df_val = degrees_of_freedom(weights, strata, psu)?;
     // Index the design once — it is identical across by-groups; only the
     // domain-masked scores change per group.
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
@@ -238,6 +238,13 @@ fn compute_mean_grouped(
     // Groups are independent; fan the per-group work out over the rayon pool
     // and collect in group order (deterministic, thread-count-independent).
     let groups: Vec<&str> = unique_groups.iter().flatten().collect();
+    // A by-group is a domain, so its df must be counted on its own active
+    // PSUs/strata. Broadcasting one frame-level df here would hand every group
+    // the df of the surrounding analysis mask instead (issue #3).
+    let group_dfs: Vec<u32> = groups
+        .par_iter()
+        .map(|&g| degrees_of_freedom_in_domain(weights, strata, psu, Some(&by_str.equal(g))))
+        .collect::<PolarsResult<Vec<_>>>()?;
     let rows = groups
         .par_iter()
         .map(|&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64)> {
@@ -269,7 +276,7 @@ fn compute_mean_grouped(
         ns.push(n);
         deffs.push(deff);
     }
-    let dfs = vec![df_val; n_groups];
+    let dfs = group_dfs;
     df![by_col => by_vals, "y" => vec![value_col; n_groups], "est" => estimates,
         "se" => ses, "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs]
 }
@@ -451,10 +458,16 @@ fn compute_total_grouped(
     let by_str = df.column(by_col)?.str()?;
     let unique_groups = by_str.unique()?;
 
-    let df_val = degrees_of_freedom(weights, strata, psu)?;
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
     let groups: Vec<&str> = unique_groups.iter().flatten().collect();
+    // A by-group is a domain, so its df must be counted on its own active
+    // PSUs/strata. Broadcasting one frame-level df here would hand every group
+    // the df of the surrounding analysis mask instead (issue #3).
+    let group_dfs: Vec<u32> = groups
+        .par_iter()
+        .map(|&g| degrees_of_freedom_in_domain(weights, strata, psu, Some(&by_str.equal(g))))
+        .collect::<PolarsResult<Vec<_>>>()?;
     let rows = groups
         .par_iter()
         .map(|&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64)> {
@@ -486,7 +499,7 @@ fn compute_total_grouped(
         ns.push(n);
         deffs.push(deff);
     }
-    let dfs = vec![df_val; n_groups];
+    let dfs = group_dfs;
     df![by_col => by_vals, "y" => vec![value_col; n_groups], "est" => estimates,
         "se" => ses, "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs]
 }
@@ -684,10 +697,16 @@ fn compute_ratio_grouped(
     let by_str = df.column(by_col)?.str()?;
     let unique_groups = by_str.unique()?;
 
-    let df_val = degrees_of_freedom(weights, strata, psu)?;
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
     let groups: Vec<&str> = unique_groups.iter().flatten().collect();
+    // A by-group is a domain, so its df must be counted on its own active
+    // PSUs/strata. Broadcasting one frame-level df here would hand every group
+    // the df of the surrounding analysis mask instead (issue #3).
+    let group_dfs: Vec<u32> = groups
+        .par_iter()
+        .map(|&g| degrees_of_freedom_in_domain(weights, strata, psu, Some(&by_str.equal(g))))
+        .collect::<PolarsResult<Vec<_>>>()?;
     let rows = groups
         .par_iter()
         .map(|&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64)> {
@@ -719,7 +738,7 @@ fn compute_ratio_grouped(
         ns.push(n);
         deffs.push(deff);
     }
-    let dfs = vec![df_val; n_groups];
+    let dfs = group_dfs;
     df![by_col => by_vals, "y" => vec![numerator_col; n_groups], "x" => vec![denominator_col; n_groups],
         "est" => estimates, "se" => ses, "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs]
 }
@@ -984,7 +1003,6 @@ fn compute_prop_grouped(
     let by_str = df.column(by_col)?.str()?;
     let unique_groups = by_str.unique()?;
 
-    let df_val = degrees_of_freedom(weights, strata, psu)?;
     // Design is identical across all (group, level) cells; index it once.
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
@@ -992,6 +1010,13 @@ fn compute_prop_grouped(
     // then flatten in group order for a deterministic layout.
     type PropRow = (String, String, f64, f64, f64, u32, f64);
     let groups: Vec<&str> = unique_groups.iter().flatten().collect();
+    // A by-group is a domain, so its df must be counted on its own active
+    // PSUs/strata. Broadcasting one frame-level df here would hand every group
+    // the df of the surrounding analysis mask instead (issue #3).
+    let group_dfs: Vec<u32> = groups
+        .par_iter()
+        .map(|&g| degrees_of_freedom_in_domain(weights, strata, psu, Some(&by_str.equal(g))))
+        .collect::<PolarsResult<Vec<_>>>()?;
     let per_group = groups
         .par_iter()
         .map(|&group| -> PolarsResult<Vec<PropRow>> {
@@ -1039,7 +1064,11 @@ fn compute_prop_grouped(
         }
     }
     let n_rows = by_vals.len();
-    let dfs_vec = vec![df_val; n_rows];
+    let dfs_vec: Vec<u32> = group_dfs
+        .iter()
+        .flat_map(|d| std::iter::repeat(*d).take(levels.len()))
+        .collect();
+    debug_assert_eq!(dfs_vec.len(), n_rows);
     df![by_col => by_vals, "y" => vec![value_col; n_rows], "level" => level_vals,
         "est" => estimates, "se" => ses, "var" => variances, "df" => dfs_vec, "n" => ns, "deff" => deffs]
 }
@@ -1232,7 +1261,6 @@ fn compute_median_grouped(
     let mut variances: Vec<f64> = Vec::new();
     let mut dfs: Vec<u32> = Vec::new();
     let mut ns: Vec<u32> = Vec::new();
-    let df_val = degrees_of_freedom(weights, strata, psu)?;
 
     for group_val in unique_groups.iter() {
         if let Some(group) = group_val {
@@ -1248,7 +1276,8 @@ fn compute_median_grouped(
             estimates.push(estimate);
             ses.push(se_p);
             variances.push(var_p);
-            dfs.push(df_val);
+            // Per-group df: see the note in compute_mean_grouped.
+            dfs.push(degrees_of_freedom_in_domain(weights, strata, psu, Some(&domain_mask))?);
             ns.push(n_domain);
         }
     }

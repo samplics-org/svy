@@ -1408,18 +1408,41 @@ pub fn degrees_of_freedom(
     strata: Option<&Column>,
     psu: Option<&Column>,
 ) -> PolarsResult<u32> {
+    degrees_of_freedom_in_domain(weights, strata, psu, None)
+}
+
+/// Design df restricted to a domain.
+///
+/// `domain` is an optional per-row membership mask, ANDed into the positive-weight
+/// mask. `where=` filters reach this function as zero weights and so need no mask,
+/// but a by-group is only known as a mask — without it every group would report the
+/// df of the surrounding analysis mask instead of its own.
+pub fn degrees_of_freedom_in_domain(
+    weights: &Float64Chunked,
+    strata: Option<&Column>,
+    psu: Option<&Column>,
+    domain: Option<&BooleanChunked>,
+) -> PolarsResult<u32> {
     let n = weights.len();
     if n == 0 {
         return Ok(0);
     }
 
-    // Build mask of active (positive weight) observations.
-    // This ensures domain estimation (where non-domain obs have w=0)
-    // gives the correct df, matching R's degf() on subsetted designs.
-    let active: Vec<bool> = weights
-        .iter()
-        .map(|w| w.map_or(false, |v| v > 0.0))
-        .collect();
+    // Build mask of active (positive weight, in-domain) observations.
+    // This ensures domain estimation (where non-domain obs have w=0, or are
+    // excluded by `domain`) gives the correct df, matching R's degf() on
+    // subsetted designs.
+    let active: Vec<bool> = match domain {
+        None => weights
+            .iter()
+            .map(|w| w.map_or(false, |v| v > 0.0))
+            .collect(),
+        Some(mask) => weights
+            .iter()
+            .zip(mask.iter())
+            .map(|(w, d)| w.map_or(false, |v| v > 0.0) && d.unwrap_or(false))
+            .collect(),
+    };
 
     // Design columns are resolved to dense first-appearance integer codes,
     // dispatching on dtype (String hashed, integer densified). The unique
