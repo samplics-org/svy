@@ -2332,7 +2332,7 @@ wheels = [
 
 [[package]]
 name = "svy"
-version = "0.20.1"
+version = "0.21.0"
 source = { editable = "packages/svy" }
 dependencies = [
     { name = "httpx" },
@@ -2431,7 +2431,7 @@ dev = [
 
 [[package]]
 name = "svy-rs"
-version = "0.11.0"
+version = "0.12.0"
 source = { editable = "packages/svy-rs" }
 dependencies = [
     { name = "polars", extra = ["pyarrow"] },
