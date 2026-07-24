@@ -214,7 +214,7 @@ def test_verify_singleton_methods():
 
     assert est_scale.est == pytest.approx(R_EXPECTED["MEAN"], abs=1e-6)
     assert est_scale.se == pytest.approx(R_EXPECTED["SCALE_SE"], abs=1e-6)
-    assert res_scale.degrees_freedom == pytest.approx(R_EXPECTED["DF"], abs=1e-6)
+    assert est_scale.df == pytest.approx(R_EXPECTED["DF"], abs=1e-6)
 
     # CENTER
     s_center = sample.singleton.center()
@@ -223,4 +223,4 @@ def test_verify_singleton_methods():
 
     assert est_center.est == pytest.approx(R_EXPECTED["MEAN"], abs=1e-6)
     assert est_center.se == pytest.approx(R_EXPECTED["CENTER_SE"], abs=1e-6)
-    assert res_center.degrees_freedom == pytest.approx(R_EXPECTED["DF"], abs=1e-6)
+    assert est_center.df == pytest.approx(R_EXPECTED["DF"], abs=1e-6)

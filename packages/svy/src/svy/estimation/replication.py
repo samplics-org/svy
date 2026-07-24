@@ -239,7 +239,6 @@ def replicate_mean(
         prep.by_cols,
         as_factor=False,
         method=method,
-        rust_df=int(result_df["df"].min()),
     )
 
 
@@ -279,7 +278,6 @@ def replicate_total(
         prep.by_cols,
         as_factor=False,
         method=method,
-        rust_df=int(result_df["df"].min()),
     )
 
 
@@ -328,7 +326,6 @@ def replicate_ratio(
         prep.by_cols,
         as_factor=False,
         method=method,
-        rust_df=int(result_df["df"].min()),
     )
 
 
@@ -377,7 +374,6 @@ def replicate_prop(
         prep.by_cols,
         as_factor=True,
         method=method,
-        rust_df=int(result_df["df"].min()),
     )
 
 
@@ -417,5 +413,4 @@ def replicate_median(
         prep.by_cols,
         as_factor=False,
         method=method,
-        rust_df=int(result_df["df"].min()),
     )

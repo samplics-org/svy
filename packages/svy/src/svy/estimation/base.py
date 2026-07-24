@@ -32,28 +32,28 @@ from svy.estimation.taylor import (
     taylor_mean_multi as _taylor_mean_multi,
 )
 from svy.estimation.taylor import (
-    taylor_total_multi as _taylor_total_multi,
-)
-from svy.estimation.taylor import (
-    taylor_ratio_multi as _taylor_ratio_multi,
-)
-from svy.estimation.taylor import (
-    taylor_prop_multi as _taylor_prop_multi,
+    taylor_median as _taylor_median,
 )
 from svy.estimation.taylor import (
     taylor_median_multi as _taylor_median_multi,
 )
 from svy.estimation.taylor import (
-    taylor_median as _taylor_median,
+    taylor_prop as _taylor_prop,
 )
 from svy.estimation.taylor import (
-    taylor_prop as _taylor_prop,
+    taylor_prop_multi as _taylor_prop_multi,
 )
 from svy.estimation.taylor import (
     taylor_ratio as _taylor_ratio,
 )
 from svy.estimation.taylor import (
+    taylor_ratio_multi as _taylor_ratio_multi,
+)
+from svy.estimation.taylor import (
     taylor_total as _taylor_total,
+)
+from svy.estimation.taylor import (
+    taylor_total_multi as _taylor_total_multi,
 )
 from svy.ui.printing import format_where_clause
 from svy.utils.helpers import _colspec_to_list
@@ -698,6 +698,7 @@ class Estimation:
                     lci=float(lci_arr[i]),
                     uci=float(uci_arr[i]),
                     deff=float(deff_arr[i]) if deff_arr is not None else None,
+                    df=int(df_arr[i]),
                     by=by_tuple,
                     by_level=by_levels[i],
                     y_level=y_levels[i],
@@ -729,6 +730,7 @@ class Estimation:
                     lci=float(lci_arr[i]),
                     uci=float(uci_arr[i]),
                     deff=float(deff_arr[i]) if deff_arr is not None else None,
+                    df=int(df_arr[i]),
                     by=by_tuple,
                     by_level=by_levels[i],
                     y_level=y_levels[i],
@@ -757,6 +759,7 @@ class Estimation:
                     lci=lci,
                     uci=uci,
                     deff=float(deff_arr[i]) if deff_arr is not None else None,
+                    df=int(df_arr[i]),
                     by=by_tuple,
                     by_level=by_levels[i],
                     y_level=y_levels[i],
@@ -907,6 +910,7 @@ class Estimation:
                 lci=float(lci_arr[i]),
                 uci=float(uci_arr[i]),
                 deff=None,
+                df=int(df_arr[i]),
                 by=by_tuple,
                 by_level=by_levels[i],
                 y_level=None,
@@ -924,7 +928,6 @@ class Estimation:
         by_cols,
         as_factor,
         method: EstimationMethod = EstimationMethod.TAYLOR,
-        rust_df=None,
     ) -> Estimate:
         metadata = getattr(self._sample, "_metadata", None)
         estimate = Estimate(param, alpha=alpha, metadata=metadata)
@@ -947,6 +950,7 @@ class Estimation:
                     lci=p.lci,
                     uci=p.uci,
                     deff=p.deff,
+                    df=p.df,
                     by=by_tuple,
                     by_level=by_level,
                     y_level=p.y_level,
@@ -976,11 +980,6 @@ class Estimation:
                 estimate.n_psus = len(np.unique(arr))
         elif d_cache["wgt"] is not None:
             estimate.n_psus = len(d_cache["wgt"])
-        estimate.degrees_freedom = (
-            rust_df
-            if rust_df is not None
-            else max(0, (estimate.n_psus or 0) - (estimate.n_strata or 0))
-        )
         return estimate
 
     @staticmethod

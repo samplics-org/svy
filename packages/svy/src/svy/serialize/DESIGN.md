@@ -52,7 +52,7 @@ consumers can switch on the result type without introspection.
 ### 2.5 `schema_version` on top-level structs
 
 Every top-level struct carries `schema_version: str = SCHEMA_VERSION` where
-`SCHEMA_VERSION = "svy-result/0.1"`. Consumers can check the version to know
+`SCHEMA_VERSION = "svy-result/0.2"`. Consumers can check the version to know
 what fields to expect.
 
 **Versioning policy:** bump the minor version (0.1 → 0.2) when fields are added
@@ -60,6 +60,18 @@ what fields to expect.
 are removed or renamed (breaking). Existing encoded JSON should always decode
 into the current version if only additive changes were made; consumers should
 ignore unknown fields.
+
+**History**
+
+- `0.2` — `ParamEstData.df` added: the design df backing each row's t-quantile.
+  It lives on the row because a domain or by-group is counted on its own active
+  PSUs and strata, so grouped results legitimately carry a different df per cell.
+  `EstimateData.degrees_freedom` removed: a single scalar could not represent
+  that, and for grouped results it reported the smallest group's df. Consumers
+  that bound to it should read `estimates[].df`; for the full-design df, use
+  `n_psus - n_strata`, which stays at design level even under a `where=` domain.
+  Strictly this removal warrants a major bump under the policy above; 0.2 was
+  chosen deliberately because no known consumer binds to the removed field.
 
 ### 2.6 Sub-structs are untagged
 
@@ -150,7 +162,6 @@ Source: `svy.estimation.estimate.Estimate` (not msgspec; `__slots__`)
 | `estimates`       | `list[ParamEstData]`    | `estimates`            |
 | `n_strata`        | `int`                   | `n_strata`             |
 | `n_psus`          | `int`                   | `n_psus`               |
-| `degrees_freedom` | `int`                   | `degrees_freedom`      |
 | `where_clause`    | `str \| None`           | `where_clause`         |
 | `q_method`        | `str`                   | `q_method` (QuantMethod)|
 
@@ -283,6 +294,7 @@ Source: `svy.estimation.estimate.ParamEst`
 | `x`        | `str \| None`         |
 | `x_level`  | `str \| int \| float \| bool \| None` |
 | `deff`     | `float \| None`       |
+| `df`       | `int \| None`         |
 
 #### DiffEstData
 

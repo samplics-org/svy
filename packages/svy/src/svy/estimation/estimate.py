@@ -30,6 +30,15 @@ log = logging.getLogger(__name__)
 
 _DECIMAL_KEYS = ("est", "se", "lci", "uci", "cv", "deff")
 
+# Carried by to_polars() but kept out of the printed table: df is a per-row
+# value that is constant for most results, so a column would repeat one number
+# down the page and widen every table. Reach for it via to_polars().
+_HIDDEN_DISPLAY_COLS = ("df",)
+
+
+def _display_columns(df: pl.DataFrame) -> list[str]:
+    return [c for c in df.columns if c not in _HIDDEN_DISPLAY_COLS]
+
 
 # -----------------------------------------------------------------------------
 # Data Classes
@@ -49,6 +58,7 @@ class ParamEst(msgspec.Struct, frozen=True):
     x: str | None = None
     x_level: Category | None = None
     deff: Number | None = None
+    df: int | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {f: getattr(self, f) for f in self.__struct_fields__}
@@ -75,7 +85,6 @@ class Estimate:
         "method",
         "n_strata",
         "n_psus",
-        "degrees_freedom",
         "as_factor",
         "where_clause",
         "_decimals",
@@ -103,7 +112,6 @@ class Estimate:
         self.method: EstimationMethod = EstimationMethod.TAYLOR
         self.n_strata: int = 0
         self.n_psus: int = 0
-        self.degrees_freedom: int = 0
         self.as_factor: bool = False
         self.q_method: QuantileMethod = QuantileMethod.LINEAR
         self.where_clause: str | None = None
@@ -316,6 +324,8 @@ class Estimate:
                 val = getattr(est, key, None)
                 if val is not None:
                     r[key] = val
+            if est.df is not None:
+                r["df"] = est.df
             rows.append(r)
 
         sort_display_rows(rows, numeric_keys=set(_DECIMAL_KEYS))
@@ -364,9 +374,10 @@ class Estimate:
             lines.append(f"  where: {self.where_clause}")
         lines.append("")
 
-        headers = [f"{c} (%)" if c == "cv" else c for c in df.columns]
+        shown = _display_columns(df)
+        headers = [f"{c} (%)" if c == "cv" else c for c in shown]
         rows = [
-            [self._format_val(c, row[c]) for c in df.columns] for row in df.iter_rows(named=True)
+            [self._format_val(c, row[c]) for c in shown] for row in df.iter_rows(named=True)
         ]
         lines.append(render_plain_table(headers, rows))
 
@@ -419,13 +430,15 @@ class Estimate:
             expand=False,
         )
 
-        for col in df.columns:
+        shown = _display_columns(df)
+
+        for col in shown:
             justify = "right" if col in _DECIMAL_KEYS else "left"
             header = f"{col} (%)" if col == "cv" else col
             table.add_column(header, justify=justify)
 
         for row in df.iter_rows(named=True):
-            vals = [self._format_val(col, row[col]) for col in df.columns]
+            vals = [self._format_val(col, row[col]) for col in shown]
             table.add_row(*vals)
 
         content.append(table)

@@ -56,7 +56,6 @@ def _make_estimate() -> Estimate:
     est.method = EstimationMethod.TAYLOR
     est.n_strata = 10
     est.n_psus = 20
-    est.degrees_freedom = 9
     est.q_method = QuantileMethod.LINEAR
     est.where_clause = None
     est.estimates = [
@@ -305,7 +304,6 @@ def test_estimate_fields():
     assert data.alpha == 0.05
     assert data.n_strata == 10
     assert data.n_psus == 20
-    assert data.degrees_freedom == 9
     assert data.where_clause is None
     assert len(data.estimates) == 1
     pe = data.estimates[0]

@@ -87,7 +87,6 @@ def taylor_mean(
         prep.by_cols,
         as_factor,
         method=EstimationMethod.TAYLOR,
-        rust_df=int(result_df["df"].min()),
     )
 
 
@@ -144,7 +143,6 @@ def taylor_mean_multi(
                 [],
                 as_factor=False,
                 method=EstimationMethod.TAYLOR,
-                rust_df=int(sub["df"].min()),
             )
         )
     return results
@@ -211,7 +209,6 @@ def taylor_total(
         prep.by_cols,
         as_factor=False,
         method=EstimationMethod.TAYLOR,
-        rust_df=int(result_df["df"].min()),
     )
 
 
@@ -265,7 +262,6 @@ def taylor_total_multi(
                 [],
                 as_factor=False,
                 method=EstimationMethod.TAYLOR,
-                rust_df=int(sub["df"].min()),
             )
         )
     return results
@@ -334,7 +330,6 @@ def taylor_ratio(
         prep.by_cols,
         as_factor=False,
         method=EstimationMethod.TAYLOR,
-        rust_df=int(result_df["df"].min()),
     )
 
 
@@ -405,7 +400,6 @@ def taylor_prop(
         prep.by_cols,
         as_factor=True,
         method=EstimationMethod.TAYLOR,
-        rust_df=int(result_df["df"].min()),
     )
 
 
@@ -455,7 +449,6 @@ def taylor_median(
         prep.by_cols,
         as_factor=False,
         method=EstimationMethod.TAYLOR,
-        rust_df=int(result_df["df"].min()),
     )
 
 
@@ -502,7 +495,7 @@ def taylor_ratio_multi(
         results.append(
             est._build_estimate_result_light(
                 est_list, est_cov, PopParam.RATIO, alpha, [], as_factor=False,
-                method=EstimationMethod.TAYLOR, rust_df=int(sub["df"].min()),
+                method=EstimationMethod.TAYLOR,
             )
         )
     return results
@@ -551,7 +544,7 @@ def taylor_prop_multi(
         results.append(
             est._build_estimate_result_light(
                 est_list, est_cov, PopParam.PROP, alpha, [], as_factor=True,
-                method=EstimationMethod.TAYLOR, rust_df=int(sub["df"].min()),
+                method=EstimationMethod.TAYLOR,
             )
         )
     return results
@@ -602,7 +595,7 @@ def taylor_median_multi(
         results.append(
             est._build_estimate_result_light(
                 est_list, est_cov, PopParam.MEDIAN, alpha, [], as_factor=False,
-                method=EstimationMethod.TAYLOR, rust_df=int(sub["df"].min()),
+                method=EstimationMethod.TAYLOR,
             )
         )
     return results
