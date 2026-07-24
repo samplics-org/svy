@@ -1635,7 +1635,10 @@ pub fn srs_variance_mean_domain(
         let mut yv = Vec::new();
         let mut wv = Vec::new();
         for (i, m) in domain_mask.iter().enumerate() {
-            if m == Some(true) {
+            // w > 0 mirrors srs_variance_mean: zero-weight rows (out-of-domain
+            // or missing-y under drop_nulls) carry no information and must not
+            // inflate n, or deff comes out too large.
+            if m == Some(true) && ws[i] > 0.0 {
                 yv.push(ys[i]);
                 wv.push(ws[i]);
             }
@@ -1650,8 +1653,10 @@ pub fn srs_variance_mean_domain(
             .zip(domain_mask.into_iter())
         {
             if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi) {
-                yv.push(y_val);
-                wv.push(w_val);
+                if w_val > 0.0 {
+                    yv.push(y_val);
+                    wv.push(w_val);
+                }
             }
         }
         (yv, wv)
@@ -1702,7 +1707,10 @@ pub fn srs_variance_total_domain(
         let mut yv = Vec::new();
         let mut wv = Vec::new();
         for (i, m) in domain_mask.iter().enumerate() {
-            if m == Some(true) {
+            // w > 0 mirrors srs_variance_mean: zero-weight rows (out-of-domain
+            // or missing-y under drop_nulls) carry no information and must not
+            // inflate n, or deff comes out too large.
+            if m == Some(true) && ws[i] > 0.0 {
                 yv.push(ys[i]);
                 wv.push(ws[i]);
             }
@@ -1717,8 +1725,10 @@ pub fn srs_variance_total_domain(
             .zip(domain_mask.into_iter())
         {
             if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi) {
-                yv.push(y_val);
-                wv.push(w_val);
+                if w_val > 0.0 {
+                    yv.push(y_val);
+                    wv.push(w_val);
+                }
             }
         }
         (yv, wv)
@@ -1792,7 +1802,8 @@ pub fn srs_variance_ratio_domain(
         let mut xv = Vec::new();
         let mut wv = Vec::new();
         for (i, m) in domain_mask.iter().enumerate() {
-            if m == Some(true) {
+            // See srs_variance_mean_domain: zero-weight rows must not inflate n.
+            if m == Some(true) && ws[i] > 0.0 {
                 yv.push(ys[i]);
                 xv.push(xs[i]);
                 wv.push(ws[i]);
@@ -1810,9 +1821,11 @@ pub fn srs_variance_ratio_domain(
             .zip(domain_mask.into_iter())
         {
             if let (Some(y_val), Some(x_val), Some(w_val), Some(true)) = (yi, xi, wi, mi) {
-                yv.push(y_val);
-                xv.push(x_val);
-                wv.push(w_val);
+                if w_val > 0.0 {
+                    yv.push(y_val);
+                    xv.push(x_val);
+                    wv.push(w_val);
+                }
             }
         }
         (yv, xv, wv)
