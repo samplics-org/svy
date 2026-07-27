@@ -8,6 +8,28 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+## [0.21.1] — 2026-07-27
+
+### Removed
+
+- **`svy.questionnaire`, `MetadataStore.import_from_questionnaire`, and the `Sample(questionnaire=)` parameter.** Describing an instrument is a different job from analysing the data it produced, and svy had come to own a small piece of it: a flat question model with no notion of rosters, ordered scales, or analysis units. That work now lives in **svy-spec**, which inverts the dependency — svy no longer needs to know what a questionnaire is.
+
+  This is a removal without a deprecation cycle, which the version number alone does not convey. `Questionnaire` was exported from `svy.questionnaire`, but never from the top-level `svy` namespace, never documented, and never used anywhere in svy beyond the one `Sample(questionnaire=)` hook — which only forwarded to `import_from_questionnaire`. A patch bump reflects a path with no known consumer; if you were importing it, pin `svy==0.21.0` and migrate at your convenience.
+
+  To attach instrument metadata, resolve a spec and project it:
+
+  ```python
+  from svy_spec.bridge import to_metadata_store
+  from svy_spec.resolve import resolve
+
+  spec_meta = to_metadata_store(resolve(spec), catalog=catalog)
+  sample = svy.Sample(data, design, catalog=catalog)
+  for name in spec_meta.variables:
+      sample.meta.set(name, spec_meta.get(name))
+  ```
+
+  `MetadataSource.QUESTIONNAIRE` stays — it is what the bridge sets, and it remains the right provenance for a field-collected variable.
+
 ## [0.21.0] — 2026-07-24
 
 Requires [`svy-rs`](../svy-rs/CHANGELOG.md) 0.12.0, which carries the two variance-estimation fixes below; [`svy-io`](../svy-io/CHANGELOG.md) 0.2.0 is unchanged. Grouped confidence intervals and domain design effects change in this release — point estimates and standard errors do not.

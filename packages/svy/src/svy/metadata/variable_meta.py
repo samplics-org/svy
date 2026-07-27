@@ -31,7 +31,6 @@ from msgspec.structs import replace
 
 if TYPE_CHECKING:
     from svy.metadata.labels import CategoryScheme, LabellingCatalog
-    from svy.questionnaire import Questionnaire
 
 from svy.core.enumerations import MeasurementType, MetadataSource, MissingKind
 from svy.core.types import Category
@@ -1444,98 +1443,6 @@ class MetadataStore:
 
             self._vars[name] = meta
             self._invalidate_cache(name)
-
-        return self
-
-    def import_from_questionnaire(
-        self,
-        questionnaire: Questionnaire,
-        catalog: LabellingCatalog | None = None,
-    ) -> Self:
-        """
-        Import variable and value labels from a Questionnaire.
-
-        Parameters
-        ----------
-        questionnaire : Questionnaire
-            The questionnaire to import from.
-        catalog : LabellingCatalog | None
-            Catalog for resolving choice concepts.
-            Falls back to self._catalog if not provided.
-
-        Returns
-        -------
-        Self
-            For method chaining.
-        """
-        cat = catalog or self._catalog
-
-        for q in questionnaire.questions:
-            existing = self._vars.get(q.name)
-
-            # Determine measurement type from question type
-            from svy.questionnaire import QuestionType
-
-            mtype = MeasurementType.STRING
-            if q.qtype == QuestionType.SINGLE:
-                mtype = MeasurementType.NOMINAL
-            elif q.qtype == QuestionType.MULTI:
-                mtype = MeasurementType.NOMINAL
-            elif q.qtype == QuestionType.BOOLEAN:
-                mtype = MeasurementType.BOOLEAN
-            elif q.qtype == QuestionType.NUMERIC:
-                mtype = MeasurementType.CONTINUOUS
-            elif q.qtype == QuestionType.DATE:
-                mtype = MeasurementType.DATETIME
-
-            # Get value labels
-            value_labels: dict[Category, str] | None = None
-            scheme_ref: SchemeRef | None = None
-            categories: tuple[Category, ...] | None = None
-
-            if q.choices is not None:
-                if q.choices.mapping is not None:
-                    value_labels = dict(q.choices.mapping)
-                    categories = tuple(q.choices.mapping.keys())
-                elif q.choices.concept is not None:
-                    scheme_ref = SchemeRef(
-                        concept=q.choices.concept,
-                        locale=q.choices.locale,
-                    )
-                    # Try to resolve categories from catalog
-                    if cat is not None:
-                        try:
-                            scheme = cat.pick(q.choices.concept, locale=q.choices.locale)
-                            categories = tuple(scheme.mapping.keys())
-                        except Exception:
-                            pass
-
-            # Build/update metadata
-            if existing is None:
-                meta = VariableMeta(
-                    name=q.name,
-                    label=q.text,
-                    value_labels=value_labels,
-                    scheme_ref=scheme_ref,
-                    mtype=mtype,
-                    categories=categories,
-                    source=MetadataSource.QUESTIONNAIRE,
-                )
-            else:
-                # Merge: questionnaire provides labels if not already set
-                meta = existing.clone(
-                    label=q.text if not existing.label else existing.label,
-                    value_labels=value_labels
-                    if not existing.value_labels
-                    else existing.value_labels,
-                    scheme_ref=scheme_ref if not existing.scheme_ref else existing.scheme_ref,
-                    mtype=mtype,
-                    categories=categories if categories else existing.categories,
-                    source=MetadataSource.QUESTIONNAIRE,
-                )
-
-            self._vars[q.name] = meta
-            self._invalidate_cache(q.name)
 
         return self
 
