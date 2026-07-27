@@ -10,23 +10,36 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [0.21.1] — 2026-07-27
 
+### Added
+
+- **`MetadataStore.update(other, *, overwrite=False)`** — merge one store into another, field by field.
+
+  Metadata for a variable arrives from several places that each know a different part of it: measurement types inferred from the data, missing-value codes declared by the analyst, question wording carried by an instrument spec. The only way to combine two stores was `set`, which replaces a whole `VariableMeta` — so applying a spec silently cleared missing codes, because a questionnaire has no concept of them and its record carries `missing=None`. That loss is invisible until an export drops the declarations.
+
+  `update` merges per field, which means a source can only ever *add* what it knows and can never clear what it has no opinion about. `overwrite=False` (the default) fills only gaps, keeping labels you have already chosen; `overwrite=True` lets `other` win where both are set — for a spec whose question wording should be definitive. A field `other` has not set is left alone in either mode, which is the property that makes the merge safe.
+
+  ```python
+  store.update(other)                    # fill gaps only
+  store.update(other, overwrite=True)    # `other` wins on conflicts
+  ```
+
 ### Removed
 
 - **`svy.questionnaire`, `MetadataStore.import_from_questionnaire`, and the `Sample(questionnaire=)` parameter.** Describing an instrument is a different job from analysing the data it produced, and svy had come to own a small piece of it: a flat question model with no notion of rosters, ordered scales, or analysis units. That work now lives in **svy-spec**, which inverts the dependency — svy no longer needs to know what a questionnaire is.
 
   This is a removal without a deprecation cycle, which the version number alone does not convey. `Questionnaire` was exported from `svy.questionnaire`, but never from the top-level `svy` namespace, never documented, and never used anywhere in svy beyond the one `Sample(questionnaire=)` hook — which only forwarded to `import_from_questionnaire`. A patch bump reflects a path with no known consumer; if you were importing it, pin `svy==0.21.0` and migrate at your convenience.
 
-  To attach instrument metadata, resolve a spec and project it:
+  To attach instrument metadata, resolve a spec, project it, and merge it in:
 
   ```python
   from svy_spec.bridge import to_metadata_store
   from svy_spec.resolve import resolve
 
-  spec_meta = to_metadata_store(resolve(spec), catalog=catalog)
   sample = svy.Sample(data, design, catalog=catalog)
-  for name in spec_meta.variables:
-      sample.meta.set(name, spec_meta.get(name))
+  sample.meta.update(to_metadata_store(resolve(spec), catalog=catalog))
   ```
+
+  Use `update` rather than a loop over `set`: it merges per field, so anything you have already recorded on the data side — missing codes, corrected labels — survives the spec being applied.
 
   `MetadataSource.QUESTIONNAIRE` stays — it is what the bridge sets, and it remains the right provenance for a field-collected variable.
 

@@ -1446,6 +1446,68 @@ class MetadataStore:
 
         return self
 
+    def update(self, other: MetadataStore, *, overwrite: bool = False) -> Self:
+        """
+        Merge another store into this one, field by field.
+
+        Metadata for one variable usually arrives from several places that each
+        know a different part of it: types inferred from the data, missing-value
+        codes declared by the analyst, question wording carried by an instrument
+        spec. ``set`` replaces a whole ``VariableMeta``, so combining sources
+        with it drops whatever the incoming record does not model. This merges
+        per field instead, which means a source can only ever *add* what it
+        knows — never clear what it has no opinion about.
+
+        Parameters
+        ----------
+        other : MetadataStore
+            The store to merge in. Left unmodified.
+        overwrite : bool
+            How to resolve a field both stores have set. ``False`` (the default)
+            keeps this store's value, so the merge only fills gaps. ``True``
+            lets `other` win — useful when it is the authority, e.g. applying an
+            instrument spec whose question wording should be definitive.
+
+            Either way a field `other` has not set is left alone, so a store
+            that does not model missing codes cannot wipe them.
+
+        Returns
+        -------
+        Self
+            For method chaining.
+
+        Examples
+        --------
+        >>> store.update(other)                    # fill gaps only
+        >>> store.update(other, overwrite=True)    # `other` wins on conflicts
+        """
+        for var in other.variables:
+            incoming = other.get(var)
+            if incoming is None:  # pragma: no cover - variables() lists real keys
+                continue
+
+            existing = self._vars.get(var)
+            if existing is None:
+                self.set(var, incoming)
+                continue
+
+            patch = {}
+            for field in msgspec.structs.fields(VariableMeta):
+                if field.name == "name":
+                    continue
+                default = None if field.default is msgspec.NODEFAULT else field.default
+                new = getattr(incoming, field.name)
+                if new == default:
+                    continue  # `other` has nothing to say about this field
+                if overwrite or getattr(existing, field.name) == default:
+                    patch[field.name] = new
+
+            if patch:
+                self._vars[var] = existing.clone(**patch)
+                self._invalidate_cache(var)
+
+        return self
+
     def align_to_dataframe(self, df: pl.DataFrame) -> Self:
         """
         Sync metadata with DataFrame columns.
