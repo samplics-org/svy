@@ -36,10 +36,12 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
   from svy_spec.resolve import resolve
 
   sample = svy.Sample(data, design, catalog=catalog)
-  sample.meta.update(to_metadata_store(resolve(spec), catalog=catalog))
+  sample.meta.update(to_metadata_store(resolve(spec), catalog=catalog), overwrite=True)
   ```
 
-  Use `update` rather than a loop over `set`: it merges per field, so anything you have already recorded on the data side — missing codes, corrected labels — survives the spec being applied.
+  Use `update` rather than a loop over `set`: it merges per field, so a field the spec does not model — missing codes you declared, notes you added — is never cleared by applying it.
+
+  Pass `overwrite=True` when the spec is the authority, which it is here. `Sample.__init__` runs `infer_from_dataframe`, which sets `mtype` by guessing from each column's storage type; under the default fill-only merge that guess wins and the spec's declared level never lands, so an ordered single-select stays *Numerical Discrete* instead of becoming *Categorical Ordinal*. Apply the spec first, then any adjustments of your own.
 
   `MetadataSource.QUESTIONNAIRE` stays — it is what the bridge sets, and it remains the right provenance for a field-collected variable.
 
