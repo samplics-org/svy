@@ -8,6 +8,20 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Fixed
+
+- **A `MissingDef` carrying `kinds` could not survive JSON.** JSON object keys are always strings, so `dict[Category, MissingKind]` encodes `{98: DONT_KNOW}` as `{"98": "dnk"}` and decodes it back with a *string* key — while `codes`, a JSON array, returns as `int`. The subset check in `__post_init__` then saw `{'98'} - {98}` and raised, so neither a `MissingDef` with kinds nor any `VariableMeta` holding one could be decoded at all:
+
+  ```
+  msgspec.ValidationError: missing_kinds contains codes not in codes: {'98'} - at `$.missing`
+  ```
+
+  A decoded key is now matched back to the code it was written from before the check runs. Where two codes share a text form — `1` and `"1"` — neither is recovered, since choosing one would be a guess; that still raises, as does a genuine mismatch.
+
+  Latent until now: nothing serializes a `MetadataStore` wholesale, and the SAS writer takes `missing.codes` alone. It surfaces as soon as anything saves variable metadata, which projecting an instrument spec does. The sibling class shows the intended treatment — `CategoryScheme` carries the same `set` and `Category`-keyed `dict`, and round-trips because `LabellingCatalog` serializes it as pairs and lists explicitly for this reason.
+
+- **`MissingDef`'s docstring referenced two enum members that do not exist**, `MissingKind.REFUSAL` and `MissingKind.NOT_APPLICABLE`. The enum defines `DONT_KNOW`, `REFUSED`, `NO_ANSWER`, `STRUCTURAL`, `SYSTEM`; the example had never been run.
+
 ## [0.21.1] — 2026-07-27
 
 ### Added

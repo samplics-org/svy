@@ -3,11 +3,61 @@
 Tests for the unified variable metadata system.
 """
 
+import msgspec
 import polars as pl
 import pytest
 
 from svy.core.enumerations import MeasurementType, MetadataSource, MissingKind
 from svy.metadata import MetadataStore, MissingDef, ResolvedLabels, SchemeRef, VariableMeta
+
+
+class TestMissingDefRoundTrip:
+    """A MissingDef carrying kinds must survive JSON.
+
+    JSON object keys are always strings, so `dict[Category, MissingKind]`
+    encodes {98: DONT_KNOW} as {"98": "dnk"} and decodes with a *string* key,
+    while `codes` — a JSON array — returns as int. The subset check in
+    __post_init__ then failed, so the struct could not round-trip at all.
+    """
+
+    def test_kinds_survive_json(self):
+        m = MissingDef.from_kinds({98: MissingKind.DONT_KNOW, 99: MissingKind.REFUSED})
+        back = msgspec.json.decode(msgspec.json.encode(m), type=MissingDef)
+        assert back.kinds == {98: MissingKind.DONT_KNOW, 99: MissingKind.REFUSED}
+        assert all(isinstance(k, int) for k in back.kinds)
+        assert back == m
+
+    def test_the_decoded_form_still_answers_queries(self):
+        # a repaired key must be the code itself, not a lookalike, or every
+        # lookup silently misses
+        m = MissingDef.from_kinds({98: MissingKind.DONT_KNOW, 99: MissingKind.REFUSED})
+        back = msgspec.json.decode(msgspec.json.encode(m), type=MissingDef)
+        assert back.is_missing(98)
+        assert back.is_missing_by_kind(99, MissingKind.REFUSED)
+        assert back.by_kind(MissingKind.DONT_KNOW) == frozenset({98})
+        assert back.user_missing() == frozenset({98, 99})
+
+    def test_a_variable_meta_carrying_kinds_round_trips(self):
+        v = VariableMeta(name="age", missing=MissingDef.from_kinds({98: MissingKind.DONT_KNOW}))
+        back = msgspec.json.decode(msgspec.json.encode(v), type=VariableMeta)
+        assert back.missing.kinds == {98: MissingKind.DONT_KNOW}
+        assert back == v
+
+    def test_string_and_float_codes_are_untouched(self):
+        m = MissingDef.from_kinds({"NA": MissingKind.NO_ANSWER, -1.5: MissingKind.SYSTEM})
+        back = msgspec.json.decode(msgspec.json.encode(m), type=MissingDef)
+        assert back.kinds == {"NA": MissingKind.NO_ANSWER, -1.5: MissingKind.SYSTEM}
+
+    def test_a_genuine_mismatch_still_raises(self):
+        # the repair must not turn a real error into a silent pass
+        with pytest.raises(ValueError, match="not in codes"):
+            MissingDef(codes=frozenset([1]), kinds={2: MissingKind.DONT_KNOW})
+
+    def test_an_ambiguous_text_form_is_not_guessed(self):
+        # 1 and "1" share a text form, so a decoded "1" could be either;
+        # recovering one would be a coin flip
+        with pytest.raises(ValueError, match="not in codes"):
+            MissingDef(codes=frozenset([1, "1"]), kinds={"x": MissingKind.DONT_KNOW})
 
 
 class TestMissingDef:

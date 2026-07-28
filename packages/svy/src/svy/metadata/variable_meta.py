@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any, Iterable, Mapping, Self
 import msgspec
 import polars as pl
 
-from msgspec.structs import replace
+from msgspec.structs import force_setattr, replace
 
 
 if TYPE_CHECKING:
@@ -96,8 +96,8 @@ class MissingDef(msgspec.Struct, frozen=True, eq=False):
     ...     codes=frozenset([-99, -98, -97]),
     ...     kinds={
     ...         -99: MissingKind.DONT_KNOW,
-    ...         -98: MissingKind.REFUSAL,
-    ...         -97: MissingKind.NOT_APPLICABLE,
+    ...         -98: MissingKind.REFUSED,
+    ...         -97: MissingKind.STRUCTURAL,
     ...     }
     ... )
 
@@ -112,11 +112,43 @@ class MissingDef(msgspec.Struct, frozen=True, eq=False):
     nan_is_missing: bool = True
 
     def __post_init__(self) -> None:
-        """Validate that kinds keys are subset of codes."""
-        if self.kinds is not None:
-            invalid = set(self.kinds.keys()) - self.codes
-            if invalid:
-                raise ValueError(f"missing_kinds contains codes not in codes: {invalid}")
+        """Validate that kinds keys are a subset of codes, repairing JSON keys.
+
+        JSON object keys are always strings, so a ``dict[Category, MissingKind]``
+        encodes ``{98: DONT_KNOW}`` as ``{"98": "dnk"}`` and decodes it back with
+        a *string* key, while ``codes`` — a JSON array — comes back as ``int``.
+        The subset check then fails and a ``MissingDef`` carrying kinds could not
+        survive a round trip at all.
+
+        The sibling class solves this with a bespoke encoder: ``CategoryScheme``
+        is serialized by ``LabellingCatalog`` as pairs and lists precisely
+        because "JSON object keys must be strings, and sets are not
+        JSON-native". Nothing serializes ``VariableMeta`` centrally, so the
+        repair happens here instead — a decoded key is matched back to the code
+        it was written from before the subset check runs.
+        """
+        if self.kinds is None:
+            return
+
+        invalid = set(self.kinds.keys()) - self.codes
+        if invalid:
+            by_text = {}
+            for code in self.codes:
+                # ambiguous only if two codes share a text form, e.g. 1 and "1";
+                # recovering either would be a guess, so recover neither
+                by_text[str(code)] = None if str(code) in by_text else code
+
+            repaired = {}
+            for key, kind in self.kinds.items():
+                if key in self.codes:
+                    repaired[key] = kind
+                elif isinstance(key, str) and by_text.get(key) is not None:
+                    repaired[by_text[key]] = kind
+                else:
+                    raise ValueError(f"missing_kinds contains codes not in codes: {invalid}")
+            # not object.__setattr__: that raises "can't apply this __setattr__"
+            # on a frozen Struct under 3.11 and 3.12
+            force_setattr(self, "kinds", repaired)
 
     def __eq__(self, other: object) -> bool:
         """Custom equality that handles NaN in frozensets."""
