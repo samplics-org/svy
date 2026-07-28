@@ -1476,6 +1476,16 @@ class MetadataStore:
         Self
             For method chaining.
 
+        Notes
+        -----
+        Merging a store built from an instrument spec wants ``overwrite=True``.
+        A `Sample` runs `infer_from_dataframe` at construction, which sets
+        `mtype` by guessing from each column's storage type — so under the
+        default that guess is already present and the spec's *declared* level
+        never lands. An ordered single-select stays `NUMERICAL_DISCRETE` rather
+        than becoming `CATEGORICAL_ORDINAL`. Apply the authoritative source
+        first and make local adjustments after it.
+
         Examples
         --------
         >>> store.update(other)                    # fill gaps only
