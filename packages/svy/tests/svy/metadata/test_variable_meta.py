@@ -865,6 +865,98 @@ class TestMetadataStore:
         assert "new_var" not in result  # not in metadata
 
 
+class TestUpdate:
+    """Merging one store into another, field by field.
+
+    The property that matters is that a source can only add what it knows. A
+    store built from an instrument spec has no concept of missing codes, so
+    applying one must never clear them — that is the whole difference between
+    `update` and a loop over `set`.
+    """
+
+    @staticmethod
+    def _analyst() -> MetadataStore:
+        """Data-side knowledge: a missing code, and a label already chosen."""
+        store = MetadataStore()
+        store.set_missing("age", dont_know=[98])
+        store.set_label("sex", "Sex (recoded 2024)")
+        return store
+
+    @staticmethod
+    def _spec() -> MetadataStore:
+        """Instrument-side knowledge: question wording and value labels."""
+        store = MetadataStore()
+        store.set_label("age", "How old are you?")
+        store.set_label("sex", "Sex?")
+        store.set_value_labels("sex", {1: "Male", 2: "Female"})
+        return store
+
+    def test_fills_a_field_this_store_lacks(self):
+        store = self._analyst()
+        store.update(self._spec())
+        assert store.get("age").label == "How old are you?"
+
+    def test_keeps_this_stores_value_by_default(self):
+        store = self._analyst()
+        store.update(self._spec())
+        assert store.get("sex").label == "Sex (recoded 2024)"
+
+    def test_overwrite_lets_the_other_store_win(self):
+        store = self._analyst()
+        store.update(self._spec(), overwrite=True)
+        assert store.get("sex").label == "Sex?"
+
+    @pytest.mark.parametrize("overwrite", [False, True])
+    def test_a_field_the_other_store_does_not_model_survives(self, overwrite):
+        # the regression that motivated this method: a spec knows nothing about
+        # missing codes, so it must not be able to clear them in either mode
+        store = self._analyst()
+        store.update(self._spec(), overwrite=overwrite)
+        assert store.get("age").missing.codes == frozenset({98})
+
+    @pytest.mark.parametrize("overwrite", [False, True])
+    def test_new_information_lands_in_both_modes(self, overwrite):
+        # filling a gap is not a conflict, so it does not need overwrite=True
+        store = self._analyst()
+        store.update(self._spec(), overwrite=overwrite)
+        assert store.get("sex").value_labels == {1: "Male", 2: "Female"}
+
+    def test_a_variable_absent_here_is_added_whole(self):
+        store = MetadataStore()
+        store.update(self._spec())
+        assert set(store.variables) == {"age", "sex"}
+        assert store.get("sex").value_labels == {1: "Male", 2: "Female"}
+
+    def test_the_other_store_is_not_modified(self):
+        other = self._spec()
+        self._analyst().update(other, overwrite=True)
+        assert other.get("sex").label == "Sex?"
+        assert other.get("age").missing is None
+
+    def test_variables_only_in_this_store_are_untouched(self):
+        store = self._analyst()
+        store.set_label("weight", "Sampling weight")
+        store.update(self._spec())
+        assert store.get("weight").label == "Sampling weight"
+
+    def test_returns_self_for_chaining(self):
+        store = self._analyst()
+        assert store.update(self._spec()) is store
+
+    def test_merging_an_empty_store_changes_nothing(self):
+        store = self._analyst()
+        store.update(MetadataStore())
+        assert store.get("sex").label == "Sex (recoded 2024)"
+        assert store.get("age").missing.codes == frozenset({98})
+
+    def test_resolved_labels_see_the_merged_value(self):
+        # the cache is keyed per variable, so a merge must invalidate it
+        store = self._analyst()
+        assert store.resolve_labels("sex").value_labels == {}
+        store.update(self._spec())
+        assert store.resolve_labels("sex").value_labels == {1: "Male", 2: "Female"}
+
+
 class TestIntegration:
     """Integration tests combining multiple components."""
 

@@ -31,7 +31,6 @@ from msgspec.structs import replace
 
 if TYPE_CHECKING:
     from svy.metadata.labels import CategoryScheme, LabellingCatalog
-    from svy.questionnaire import Questionnaire
 
 from svy.core.enumerations import MeasurementType, MetadataSource, MissingKind
 from svy.core.types import Category
@@ -1447,95 +1446,65 @@ class MetadataStore:
 
         return self
 
-    def import_from_questionnaire(
-        self,
-        questionnaire: Questionnaire,
-        catalog: LabellingCatalog | None = None,
-    ) -> Self:
+    def update(self, other: MetadataStore, *, overwrite: bool = False) -> Self:
         """
-        Import variable and value labels from a Questionnaire.
+        Merge another store into this one, field by field.
+
+        Metadata for one variable usually arrives from several places that each
+        know a different part of it: types inferred from the data, missing-value
+        codes declared by the analyst, question wording carried by an instrument
+        spec. ``set`` replaces a whole ``VariableMeta``, so combining sources
+        with it drops whatever the incoming record does not model. This merges
+        per field instead, which means a source can only ever *add* what it
+        knows — never clear what it has no opinion about.
 
         Parameters
         ----------
-        questionnaire : Questionnaire
-            The questionnaire to import from.
-        catalog : LabellingCatalog | None
-            Catalog for resolving choice concepts.
-            Falls back to self._catalog if not provided.
+        other : MetadataStore
+            The store to merge in. Left unmodified.
+        overwrite : bool
+            How to resolve a field both stores have set. ``False`` (the default)
+            keeps this store's value, so the merge only fills gaps. ``True``
+            lets `other` win — useful when it is the authority, e.g. applying an
+            instrument spec whose question wording should be definitive.
+
+            Either way a field `other` has not set is left alone, so a store
+            that does not model missing codes cannot wipe them.
 
         Returns
         -------
         Self
             For method chaining.
+
+        Examples
+        --------
+        >>> store.update(other)                    # fill gaps only
+        >>> store.update(other, overwrite=True)    # `other` wins on conflicts
         """
-        cat = catalog or self._catalog
+        for var in other.variables:
+            incoming = other.get(var)
+            if incoming is None:  # pragma: no cover - variables() lists real keys
+                continue
 
-        for q in questionnaire.questions:
-            existing = self._vars.get(q.name)
-
-            # Determine measurement type from question type
-            from svy.questionnaire import QuestionType
-
-            mtype = MeasurementType.STRING
-            if q.qtype == QuestionType.SINGLE:
-                mtype = MeasurementType.NOMINAL
-            elif q.qtype == QuestionType.MULTI:
-                mtype = MeasurementType.NOMINAL
-            elif q.qtype == QuestionType.BOOLEAN:
-                mtype = MeasurementType.BOOLEAN
-            elif q.qtype == QuestionType.NUMERIC:
-                mtype = MeasurementType.CONTINUOUS
-            elif q.qtype == QuestionType.DATE:
-                mtype = MeasurementType.DATETIME
-
-            # Get value labels
-            value_labels: dict[Category, str] | None = None
-            scheme_ref: SchemeRef | None = None
-            categories: tuple[Category, ...] | None = None
-
-            if q.choices is not None:
-                if q.choices.mapping is not None:
-                    value_labels = dict(q.choices.mapping)
-                    categories = tuple(q.choices.mapping.keys())
-                elif q.choices.concept is not None:
-                    scheme_ref = SchemeRef(
-                        concept=q.choices.concept,
-                        locale=q.choices.locale,
-                    )
-                    # Try to resolve categories from catalog
-                    if cat is not None:
-                        try:
-                            scheme = cat.pick(q.choices.concept, locale=q.choices.locale)
-                            categories = tuple(scheme.mapping.keys())
-                        except Exception:
-                            pass
-
-            # Build/update metadata
+            existing = self._vars.get(var)
             if existing is None:
-                meta = VariableMeta(
-                    name=q.name,
-                    label=q.text,
-                    value_labels=value_labels,
-                    scheme_ref=scheme_ref,
-                    mtype=mtype,
-                    categories=categories,
-                    source=MetadataSource.QUESTIONNAIRE,
-                )
-            else:
-                # Merge: questionnaire provides labels if not already set
-                meta = existing.clone(
-                    label=q.text if not existing.label else existing.label,
-                    value_labels=value_labels
-                    if not existing.value_labels
-                    else existing.value_labels,
-                    scheme_ref=scheme_ref if not existing.scheme_ref else existing.scheme_ref,
-                    mtype=mtype,
-                    categories=categories if categories else existing.categories,
-                    source=MetadataSource.QUESTIONNAIRE,
-                )
+                self.set(var, incoming)
+                continue
 
-            self._vars[q.name] = meta
-            self._invalidate_cache(q.name)
+            patch = {}
+            for field in msgspec.structs.fields(VariableMeta):
+                if field.name == "name":
+                    continue
+                default = None if field.default is msgspec.NODEFAULT else field.default
+                new = getattr(incoming, field.name)
+                if new == default:
+                    continue  # `other` has nothing to say about this field
+                if overwrite or getattr(existing, field.name) == default:
+                    patch[field.name] = new
+
+            if patch:
+                self._vars[var] = existing.clone(**patch)
+                self._invalidate_cache(var)
 
         return self
 

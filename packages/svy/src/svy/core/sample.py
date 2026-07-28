@@ -43,7 +43,6 @@ if TYPE_CHECKING:
     from svy.core.singleton import Singleton
     from svy.estimation import Estimation
     from svy.metadata import LabellingCatalog
-    from svy.questionnaire import Questionnaire
     from svy.regression import GLM
     from svy.selection import Selection
     from svy.weighting import Weighting
@@ -110,7 +109,6 @@ class Sample:
         design: Design | None = None,
         *,
         catalog: LabellingCatalog | None = None,
-        questionnaire: Questionnaire | None = None,
     ) -> None:
         if design is None:
             local_design = Design(row_index=SVY_ROW_INDEX)
@@ -162,9 +160,6 @@ class Sample:
         # Initialize MetadataStore (replaces _labels)
         self._metadata = MetadataStore(catalog=catalog)
         self._metadata.infer_from_dataframe(cast(pl.DataFrame, self._data))
-
-        if questionnaire is not None:
-            self._metadata.import_from_questionnaire(questionnaire, catalog=catalog)
 
         self._print_width = None
 
