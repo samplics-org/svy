@@ -969,8 +969,14 @@ class MetadataStore:
             try:
                 scheme = meta.scheme_ref.resolve(self._catalog)
                 value_labels = scheme.labels
-                # Also get missing from scheme if not defined on meta
-                if meta.missing is None and scheme.missing:
+                # Also get missing from scheme if not defined on meta.
+                # `scheme.missing_codes`, not `scheme.missing`: a scheme holds
+                # one SchemeEntry per code carrying its own missing kind, and
+                # has had no `missing` collection since that change. The broad
+                # `except` below turned the AttributeError into a logged warning
+                # and an empty result, so a catalog-labelled variable silently
+                # lost its missing codes.
+                if meta.missing is None and scheme.missing_codes:
                     missing_codes = scheme.missing_codes
             except Exception as e:
                 log.warning(

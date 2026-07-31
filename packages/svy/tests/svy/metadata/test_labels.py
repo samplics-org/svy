@@ -219,3 +219,32 @@ def test_a_missing_code_outside_the_scheme_is_unrepresentable():
     """
     scheme = _scheme()
     assert scheme.missing_codes <= set(scheme.codes)
+
+
+def test_a_catalog_labelled_variable_keeps_its_missing_codes():
+    """resolve_labels read `scheme.missing`, which stopped existing when a
+    scheme became one SchemeEntry per code. The broad `except Exception` around
+    it logged a warning and returned an empty set, so the codes vanished with
+    no error — the failure mode a bare except is supposed to prevent and here
+    caused."""
+    from svy.core.enumerations import MissingKind
+    from svy.metadata import CategoryScheme, LabellingCatalog, MetadataStore, VariableMeta
+    from svy.metadata.labels import SchemeEntry
+    from svy.metadata.variable_meta import SchemeRef
+
+    scheme = CategoryScheme(
+        concept="yesno",
+        entries=[
+            SchemeEntry(1, "Yes"),
+            SchemeEntry(0, "No"),
+            SchemeEntry(9, "Refused", missing=MissingKind.REFUSED),
+        ],
+    )
+    catalog = LabellingCatalog()
+    catalog.register(scheme)
+    store = MetadataStore(catalog=catalog)
+    store.set("q", VariableMeta(name="q", scheme_ref=SchemeRef(concept="yesno")))
+
+    resolved = store.resolve_labels("q")
+    assert resolved.missing_codes == frozenset({9})
+    assert resolved.labels == {1: "Yes", 0: "No", 9: "Refused"}
