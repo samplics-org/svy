@@ -100,6 +100,8 @@ def _write_sas(
 
     for var in df.columns:
         meta = store.get(var)
+        # `missing` stays in the shape svy-io expects, and stays empty: svy has
+        # no model of user-missing values to fill it from (design 001 §2.2).
         entry: Dict[str, Any] = {"label": None, "values": {}, "missing": []}
 
         if meta is not None:
@@ -109,10 +111,6 @@ def _write_sas(
             resolved = store.resolve_labels(var)
             if resolved.has_value_labels:
                 entry["values"] = resolved.labels
-
-            # Get missing codes
-            if meta.missing is not None:
-                entry["missing"] = list(meta.missing.codes)
 
         variables_meta["variables"][var] = entry
 

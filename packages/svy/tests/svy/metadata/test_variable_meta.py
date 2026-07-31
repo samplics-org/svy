@@ -7,58 +7,8 @@ import msgspec
 import polars as pl
 import pytest
 
-from svy.core.enumerations import MeasurementType, MetadataSource, MissingKind
-from svy.metadata import MetadataStore, MissingDef, ResolvedLabels, SchemeRef, VariableMeta
-
-
-class TestMissingDefRoundTrip:
-    """A MissingDef carrying kinds must survive JSON.
-
-    `kinds` was a `dict[Category, MissingKind]`. JSON object keys are always
-    strings, so {98: DONT_KNOW} encoded as {"98": "dnk"} and decoded with a
-    string key, while `codes` — a JSON array — returned as int. The subset
-    check then compared {'98'} against {98} and raised, so the struct could not
-    round-trip at all.
-
-    It is now (code, kind) pairs, which keep the code's type by any route. The
-    repair step that briefly papered over this is gone; there is nothing left
-    to repair.
-    """
-
-    def test_kinds_survive_json(self):
-        m = MissingDef.from_kinds({98: MissingKind.DONT_KNOW, 99: MissingKind.REFUSED})
-        back = msgspec.json.decode(msgspec.json.encode(m), type=MissingDef)
-        assert back.kind_map == {98: MissingKind.DONT_KNOW, 99: MissingKind.REFUSED}
-        assert all(isinstance(code, int) for code, _ in back.kinds)
-        assert back == m
-
-    def test_the_decoded_form_still_answers_queries(self):
-        m = MissingDef.from_kinds({98: MissingKind.DONT_KNOW, 99: MissingKind.REFUSED})
-        back = msgspec.json.decode(msgspec.json.encode(m), type=MissingDef)
-        assert back.is_missing(98)
-        assert back.is_missing_by_kind(99, MissingKind.REFUSED)
-        assert back.by_kind(MissingKind.DONT_KNOW) == frozenset({98})
-        assert back.user_missing() == frozenset({98, 99})
-
-    def test_a_variable_meta_carrying_kinds_round_trips(self):
-        v = VariableMeta(name="age", missing=MissingDef.from_kinds({98: MissingKind.DONT_KNOW}))
-        back = msgspec.json.decode(msgspec.json.encode(v), type=VariableMeta)
-        assert back.missing.kind_map == {98: MissingKind.DONT_KNOW}
-        assert back == v
-
-    def test_string_and_float_codes_are_untouched(self):
-        m = MissingDef.from_kinds({"NA": MissingKind.NO_ANSWER, -1.5: MissingKind.SYSTEM})
-        back = msgspec.json.decode(msgspec.json.encode(m), type=MissingDef)
-        assert back.kind_map == {"NA": MissingKind.NO_ANSWER, -1.5: MissingKind.SYSTEM}
-
-    def test_a_mapping_is_still_accepted_when_constructing(self):
-        # {98: DONT_KNOW} reads better than a list of tuples, so it is coerced
-        m = MissingDef(codes=frozenset([98]), kinds={98: MissingKind.DONT_KNOW})
-        assert m.kinds == ((98, MissingKind.DONT_KNOW),)
-
-    def test_a_kind_for_a_code_that_is_not_missing_raises(self):
-        with pytest.raises(ValueError, match="not in codes"):
-            MissingDef(codes=frozenset([1]), kinds={2: MissingKind.DONT_KNOW})
+from svy.core.enumerations import MeasurementType, MetadataSource
+from svy.metadata import MetadataStore, ResolvedLabels, SchemeRef, VariableMeta
 
 
 class TestValueLabelRoundTrip:
@@ -95,168 +45,12 @@ class TestValueLabelRoundTrip:
         """
         store = MetadataStore()
         store.set_label("sex", "Sex of respondent")
-        store.set_value_labels("sex", {1: "Male", 2: "Female"})
-        store.set_missing("sex", dont_know=[8])
+        # 8 is a value like any other: it gets a label and prints as one.
+        store.set_value_labels("sex", {1: "Male", 2: "Female", 8: "Don't know"})
 
         payload = {name: store.get(name) for name in store.variables}
         back = msgspec.json.decode(msgspec.json.encode(payload), type=dict[str, VariableMeta])
-        assert back["sex"].labels == {1: "Male", 2: "Female"}
-        assert back["sex"].missing.codes == frozenset({8})
-        assert back["sex"].missing.kind_map == {8: MissingKind.DONT_KNOW}
-
-
-class TestMissingDef:
-    """Tests for MissingDef class."""
-
-    def test_create_empty(self):
-        """Empty MissingDef should work."""
-        m = MissingDef()
-        assert m.codes == frozenset()
-        assert m.kinds is None
-        assert m.na_is_missing is True
-        assert m.nan_is_missing is True
-
-    def test_create_with_codes(self):
-        """Create with simple codes."""
-        m = MissingDef(codes=frozenset([-99, -98, -97]))
-        assert -99 in m.codes
-        assert -98 in m.codes
-        assert -97 in m.codes
-        assert len(m.codes) == 3
-
-    def test_create_with_kinds(self):
-        """Create with codes and kinds."""
-        m = MissingDef(
-            codes=frozenset([-99, -98]),
-            kinds={
-                -99: MissingKind.DONT_KNOW,
-                -98: MissingKind.REFUSED,
-            },
-        )
-        assert m.kind_map[-99] == MissingKind.DONT_KNOW
-        assert m.kind_map[-98] == MissingKind.REFUSED
-
-    def test_kinds_must_be_subset_of_codes(self):
-        """Kinds keys must be in codes."""
-        with pytest.raises(ValueError, match="not in codes"):
-            MissingDef(
-                codes=frozenset([-99]),
-                kinds={-99: MissingKind.DONT_KNOW, -98: MissingKind.REFUSED},
-            )
-
-    def test_is_missing_with_none(self):
-        """None should be missing when na_is_missing=True."""
-        m = MissingDef(codes=frozenset([-99]))
-        assert m.is_missing(None) is True
-
-        m2 = MissingDef(codes=frozenset([-99]), na_is_missing=False)
-        assert m2.is_missing(None) is False
-
-    def test_is_missing_with_nan(self):
-        """NaN should be missing when nan_is_missing=True."""
-        m = MissingDef(codes=frozenset([-99]))
-        assert m.is_missing(float("nan")) is True
-
-        m2 = MissingDef(codes=frozenset([-99]), nan_is_missing=False)
-        assert m2.is_missing(float("nan")) is False
-
-    def test_is_missing_with_code(self):
-        """Codes in the set should be missing."""
-        m = MissingDef(codes=frozenset([-99, -98]))
-        assert m.is_missing(-99) is True
-        assert m.is_missing(-98) is True
-        assert m.is_missing(1) is False
-        assert m.is_missing(0) is False
-
-    def test_is_missing_by_kind(self):
-        """Test filtering by kind."""
-        m = MissingDef(
-            codes=frozenset([-99, -98, -97]),
-            kinds={
-                -99: MissingKind.DONT_KNOW,
-                -98: MissingKind.REFUSED,
-                -97: MissingKind.STRUCTURAL,
-            },
-        )
-        assert m.is_missing_by_kind(-99, MissingKind.DONT_KNOW) is True
-        assert m.is_missing_by_kind(-99, MissingKind.REFUSED) is False
-        assert m.is_missing_by_kind(-98, MissingKind.DONT_KNOW, MissingKind.REFUSED) is True
-
-    def test_by_kind(self):
-        """Get codes by kind."""
-        m = MissingDef(
-            codes=frozenset([-99, -98, -97, -96]),
-            kinds={
-                -99: MissingKind.DONT_KNOW,
-                -98: MissingKind.REFUSED,
-                -97: MissingKind.STRUCTURAL,
-                -96: MissingKind.SYSTEM,
-            },
-        )
-        user_missing = m.by_kind(MissingKind.DONT_KNOW, MissingKind.REFUSED)
-        assert user_missing == frozenset([-99, -98])
-
-    def test_user_missing(self):
-        """Get user-generated missing codes."""
-        m = MissingDef(
-            codes=frozenset([-99, -98, -97]),
-            kinds={
-                -99: MissingKind.DONT_KNOW,
-                -98: MissingKind.REFUSED,
-                -97: MissingKind.STRUCTURAL,
-            },
-        )
-        # User missing includes DONT_KNOW, REFUSED, NO_ANSWER
-        assert m.user_missing() == frozenset([-99, -98])
-
-    def test_system_missing(self):
-        """Get system-generated missing codes."""
-        m = MissingDef(
-            codes=frozenset([-99, -98, -97]),
-            kinds={
-                -99: MissingKind.DONT_KNOW,
-                -98: MissingKind.REFUSED,
-                -97: MissingKind.STRUCTURAL,
-            },
-        )
-        # System missing includes SYSTEM, STRUCTURAL
-        assert m.system_missing() == frozenset([-97])
-
-    def test_from_codes_factory(self):
-        """Test from_codes factory method."""
-        m = MissingDef.from_codes([-99, -98])
-        assert m.codes == frozenset([-99, -98])
-        assert m.kinds is None
-
-    def test_from_kinds_factory(self):
-        """Test from_kinds factory method."""
-        m = MissingDef.from_kinds(
-            {
-                -99: MissingKind.DONT_KNOW,
-                -98: MissingKind.REFUSED,
-            }
-        )
-        assert m.codes == frozenset([-99, -98])
-        assert m.kinds is not None
-        assert m.kind_map[-99] == MissingKind.DONT_KNOW
-
-    def test_equality(self):
-        """Test equality comparison."""
-        m1 = MissingDef(codes=frozenset([-99, -98]))
-        m2 = MissingDef(codes=frozenset([-99, -98]))
-        m3 = MissingDef(codes=frozenset([-99]))
-
-        assert m1 == m2
-        assert m1 != m3
-
-    def test_clone(self):
-        """Test cloning with overrides."""
-        m1 = MissingDef(codes=frozenset([-99]))
-        m2 = m1.clone(na_is_missing=False)
-
-        assert m1.na_is_missing is True
-        assert m2.na_is_missing is False
-        assert m1.codes == m2.codes
+        assert back["sex"].labels == {1: "Male", 2: "Female", 8: "Don't know"}
 
 
 class TestSchemeRef:
@@ -336,17 +130,6 @@ class TestVariableMeta:
         m3 = VariableMeta(name="q1", scheme_ref=SchemeRef(concept="yes_no"))
         assert m3.has_labels is True
 
-    def test_has_missing(self):
-        """Test has_missing property."""
-        m1 = VariableMeta(name="q1")
-        assert m1.has_missing is False
-
-        m2 = VariableMeta(name="q1", missing=MissingDef(codes=frozenset([-99])))
-        assert m2.has_missing is True
-
-        m3 = VariableMeta(name="q1", missing=MissingDef())
-        assert m3.has_missing is False  # Empty codes
-
     def test_is_categorical(self):
         """Test is_categorical property."""
         assert VariableMeta(name="q1", mtype=MeasurementType.NOMINAL).is_categorical
@@ -393,15 +176,6 @@ class TestVariableMeta:
         assert m2.value_labels is None  # Cleared by default
         assert m2.scheme_ref.concept == "yes_no"
 
-    def test_with_missing(self):
-        """Test with_missing method."""
-        m1 = VariableMeta(name="q1")
-        missing = MissingDef.from_codes([-99])
-        m2 = m1.with_missing(missing)
-
-        assert m1.missing is None
-        assert m2.missing is missing
-
     def test_with_categories(self):
         """Test with_categories method."""
         m1 = VariableMeta(name="q1", mtype=MeasurementType.NOMINAL)
@@ -420,18 +194,15 @@ class TestResolvedLabels:
         r = ResolvedLabels()
         assert r.var_label == ""
         assert r.labels == {}
-        assert r.missing_codes == frozenset()
 
     def test_create_with_labels(self):
         """Create with labels."""
         r = ResolvedLabels(
             var_label="How satisfied are you?",
             value_labels={1: "Very dissatisfied", 5: "Very satisfied"},
-            missing_codes=frozenset([-99]),
         )
         assert r.var_label == "How satisfied are you?"
         assert r.labels[1] == "Very dissatisfied"
-        assert -99 in r.missing_codes
 
     def test_display_with_label(self):
         """Display a value with a label."""
@@ -468,24 +239,6 @@ class TestResolvedLabels:
         assert ResolvedLabels(value_labels={1: "Yes"}).has_value_labels is True
         assert ResolvedLabels(value_labels={}).has_value_labels is False
         assert ResolvedLabels().has_value_labels is False
-
-    def test_is_missing(self):
-        """Test is_missing method."""
-        r = ResolvedLabels(missing_codes=frozenset([-99, -98]))
-        assert r.is_missing(-99) is True
-        assert r.is_missing(-98) is True
-        assert r.is_missing(1) is False
-        assert r.is_missing(None) is True
-
-    def test_non_missing_labels(self):
-        """Get labels excluding missing codes."""
-        r = ResolvedLabels(
-            value_labels={1: "Yes", 0: "No", -99: "Don't know"},
-            missing_codes=frozenset([-99]),
-        )
-        non_missing = r.non_missing_labels()
-        assert non_missing == {1: "Yes", 0: "No"}
-        assert -99 not in non_missing
 
     def test_display_series(self):
         """Apply labels to a Polars series."""
@@ -581,39 +334,6 @@ class TestMetadataStore:
         meta = store.get("q1")
         assert meta.scheme_ref is not None
         assert meta.scheme_ref.concept == "agreement"
-
-    def test_set_missing_with_user_friendly_names(self):
-        """Set missing values using user-friendly parameter names."""
-        store = MetadataStore()
-        store.set_missing(
-            "q1",
-            dont_know=[-99],
-            refused=[-98],
-            skipped=[-97],  # maps to STRUCTURAL
-            not_applicable=[-96],  # maps to STRUCTURAL
-        )
-
-        meta = store.get("q1")
-        assert meta.missing is not None
-        assert -99 in meta.missing.codes
-        assert -98 in meta.missing.codes
-        assert -97 in meta.missing.codes
-        assert -96 in meta.missing.codes
-
-        # Check mechanism mapping
-        assert meta.missing.kind_map[-99] == MissingKind.DONT_KNOW
-        assert meta.missing.kind_map[-98] == MissingKind.REFUSED
-        assert meta.missing.kind_map[-97] == MissingKind.STRUCTURAL  # skipped -> STRUCTURAL
-        assert meta.missing.kind_map[-96] == MissingKind.STRUCTURAL  # not_applicable -> STRUCTURAL
-
-    def test_set_missing_simple_codes(self):
-        """Set missing with simple codes (no kinds)."""
-        store = MetadataStore()
-        store.set_missing("q1", codes=[-99, -98])
-
-        meta = store.get("q1")
-        assert meta.missing.codes == frozenset([-99, -98])
-        assert meta.missing.kinds is None
 
     def test_set_type(self):
         """Set measurement type."""
@@ -754,7 +474,6 @@ class TestMetadataStore:
             store.set_label("q1", "Question 1")
             .set_label("q2", "Question 2")
             .set_value_labels("q1", {1: "Yes", 0: "No"})
-            .set_missing("q1", dont_know=[-99])
             .set_type("q2", MeasurementType.ORDINAL)
         )
 
@@ -844,9 +563,6 @@ class TestMetadataStore:
                 value_labels={1: "Very dissatisfied", 5: "Very satisfied"},
                 mtype=MeasurementType.ORDINAL,
                 categories=(1, 2, 3, 4, 5),
-                missing=MissingDef.from_kinds(
-                    {-99: MissingKind.DONT_KNOW, -98: MissingKind.REFUSED}
-                ),
                 unit="scale",
                 notes="5-point Likert scale",
                 source=MetadataSource.QUESTIONNAIRE,
@@ -863,9 +579,6 @@ class TestMetadataStore:
         assert "1=Very dissatisfied" in row["value_labels"]
         assert "5=Very satisfied" in row["value_labels"]
         assert row["categories"] == "1, 2, 3, 4, 5"
-        assert "-99" in row["missing_codes"]
-        assert "-98" in row["missing_codes"]
-        assert "dnk" in row["missing_kinds"]  # MissingKind.DONT_KNOW.value
         assert row["unit"] == "scale"
         assert row["notes"] == "5-point Likert scale"
         assert row["source"] == "questionnaire"
@@ -968,9 +681,9 @@ class TestUpdate:
 
     @staticmethod
     def _analyst() -> MetadataStore:
-        """Data-side knowledge: a missing code, and a label already chosen."""
+        """Data-side knowledge: labels already chosen."""
         store = MetadataStore()
-        store.set_missing("age", dont_know=[98])
+        store.set_value_labels("age", {98: "Don't know"})
         store.set_label("sex", "Sex (recoded 2024)")
         return store
 
@@ -1004,7 +717,7 @@ class TestUpdate:
         # missing codes, so it must not be able to clear them in either mode
         store = self._analyst()
         store.update(self._spec(), overwrite=overwrite)
-        assert store.get("age").missing.codes == frozenset({98})
+        assert store.get("age").labels == {98: "Don't know"}
 
     @pytest.mark.parametrize("overwrite", [False, True])
     def test_new_information_lands_in_both_modes(self, overwrite):
@@ -1023,7 +736,7 @@ class TestUpdate:
         other = self._spec()
         self._analyst().update(other, overwrite=True)
         assert other.get("sex").label == "Sex?"
-        assert other.get("age").missing is None
+        assert other.get("age").value_labels is None
 
     def test_variables_only_in_this_store_are_untouched(self):
         store = self._analyst()
@@ -1039,7 +752,7 @@ class TestUpdate:
         store = self._analyst()
         store.update(MetadataStore())
         assert store.get("sex").label == "Sex (recoded 2024)"
-        assert store.get("age").missing.codes == frozenset({98})
+        assert store.get("age").labels == {98: "Don't know"}
 
     def test_resolved_labels_see_the_merged_value(self):
         # the cache is keyed per variable, so a merge must invalidate it
@@ -1103,51 +816,6 @@ class TestIntegration:
         labeled_gender = gender_labels.display_series(df["gender"])
         assert labeled_gender.to_list() == ["Male", "Female", "Male", "Female", "Male"]
 
-    def test_missing_handling_workflow(self):
-        """Test workflow with missing values using user-friendly names."""
-        store = MetadataStore()
-
-        # Set up variable with missing codes using user-friendly names
-        store.set_value_labels(
-            "q1",
-            {
-                1: "Yes",
-                0: "No",
-                -99: "Don't know",
-                -98: "Refused",
-                -97: "Skipped",
-            },
-        )
-        store.set_missing(
-            "q1",
-            dont_know=[-99],
-            refused=[-98],
-            skipped=[-97],  # maps to STRUCTURAL
-        )
-
-        # Resolve
-        resolved = store.resolve_labels("q1")
-        meta = store.get("q1")
-
-        # Check that missing codes are identified
-        assert meta.missing.is_missing(-99)
-        assert meta.missing.is_missing(-98)
-        assert meta.missing.is_missing(-97)
-        assert not meta.missing.is_missing(1)
-
-        # Check mechanism mapping
-        assert meta.missing.kind_map[-99] == MissingKind.DONT_KNOW
-        assert meta.missing.kind_map[-98] == MissingKind.REFUSED
-        assert meta.missing.kind_map[-97] == MissingKind.STRUCTURAL
-
-        # Check user vs system missing
-        assert meta.missing.user_missing() == frozenset([-99, -98])
-        assert meta.missing.system_missing() == frozenset([-97])
-
-        # Non-missing labels
-        non_missing = resolved.non_missing_labels()
-        assert non_missing == {1: "Yes", 0: "No"}
-
     def test_inspect_and_coverage_workflow(self):
         """Test using inspect and coverage for metadata review."""
         store = MetadataStore()
@@ -1158,8 +826,7 @@ class TestIntegration:
             q2="Would you recommend us?",
             old_q="Old question (removed from survey)",
         )
-        store.set_value_labels("q1", {1: "Very dissatisfied", 5: "Very satisfied"})
-        store.set_missing("q1", dont_know=[-99])
+        store.set_value_labels("q1", {1: "Very dissatisfied", 5: "Very satisfied", -99: "DK"})
 
         # Simulate data that doesn't have all variables
         df = pl.DataFrame(
