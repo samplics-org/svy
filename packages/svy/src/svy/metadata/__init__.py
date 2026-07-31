@@ -1,10 +1,9 @@
 # src/svy/metadata/__init__.py
-from svy.core.enumerations import MetadataSource
+from svy.core.enumerations import MetadataSource, MissingKind
 from svy.metadata.labels import (
     CategoryScheme,
     Label,
     LabellingCatalog,
-    MissingKind,
 )
 from svy.metadata.variable_meta import (
     # Registry

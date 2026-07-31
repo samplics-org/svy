@@ -404,18 +404,15 @@ class SchemeRef(msgspec.Struct, frozen=True):
     ----------
     concept : str
         The concept identifier in the catalog (e.g., "agreement", "yes_no").
-    locale : str | None
-        Optional locale override. If None, uses the catalog's default.
 
     Examples
     --------
-    >>> ref = SchemeRef(concept="agreement", locale="en")
+    >>> ref = SchemeRef(concept="agreement")
     >>> # Later, resolve against a catalog:
-    >>> scheme = catalog.pick(ref.concept, locale=ref.locale)
+    >>> scheme = catalog.pick(ref.concept)
     """
 
     concept: str
-    locale: str | None = None
 
     def resolve(self, catalog: LabellingCatalog) -> CategoryScheme:
         """
@@ -436,7 +433,7 @@ class SchemeRef(msgspec.Struct, frozen=True):
         LabelError
             If the concept is not found in the catalog.
         """
-        return catalog.pick(self.concept, locale=self.locale)
+        return catalog.pick(self.concept)
 
 
 # =============================================================================
@@ -498,7 +495,7 @@ class VariableMeta(msgspec.Struct, frozen=True):
     >>> meta = VariableMeta(
     ...     name="q1",
     ...     label="How satisfied are you with the service?",
-    ...     scheme_ref=SchemeRef(concept="satisfaction", locale="en"),
+    ...     scheme_ref=SchemeRef(concept="satisfaction"),
     ...     mtype=MeasurementType.ORDINAL,
     ... )
     """
@@ -581,12 +578,10 @@ class VariableMeta(msgspec.Struct, frozen=True):
             source=MetadataSource.USER,
         )
 
-    def with_scheme_ref(
-        self, concept: str, locale: str | None = None, *, clear_labels: bool = True
-    ) -> VariableMeta:
+    def with_scheme_ref(self, concept: str, *, clear_labels: bool = True) -> VariableMeta:
         """Return a copy referencing a catalog scheme."""
         return self.clone(
-            scheme_ref=SchemeRef(concept=concept, locale=locale),
+            scheme_ref=SchemeRef(concept=concept),
             value_labels=None if clear_labels else self.value_labels,
             source=MetadataSource.USER,
         )
@@ -769,28 +764,21 @@ class MetadataStore:
     ----------
     catalog : LabellingCatalog | None
         Optional catalog for resolving scheme references.
-    default_locale : str | None
-        Default locale for catalog lookups.
 
     Examples
     --------
-    >>> store = MetadataStore(catalog=my_catalog, default_locale="en")
+    >>> store = MetadataStore(catalog=my_catalog)
     >>> store.infer_from_dataframe(df)
     >>> store.set_label("q1", "How satisfied are you?")
     >>> store.set_scheme("q1", "satisfaction")
     >>> resolved = store.resolve_labels("q1")
     """
 
-    __slots__ = ("_vars", "_catalog", "_locale", "_resolved_cache")
+    __slots__ = ("_vars", "_catalog", "_resolved_cache")
 
-    def __init__(
-        self,
-        catalog: LabellingCatalog | None = None,
-        default_locale: str | None = None,
-    ):
+    def __init__(self, catalog: LabellingCatalog | None = None):
         self._vars: dict[str, VariableMeta] = {}
         self._catalog = catalog
-        self._locale = default_locale
         self._resolved_cache: dict[str, ResolvedLabels] = {}
 
     # =========================================================================
@@ -806,17 +794,6 @@ class MetadataStore:
     def catalog(self, value: LabellingCatalog | None) -> None:
         """Set the catalog (clears resolved cache)."""
         self._catalog = value
-        self._resolved_cache.clear()
-
-    @property
-    def locale(self) -> str | None:
-        """Default locale for catalog lookups."""
-        return self._locale
-
-    @locale.setter
-    def locale(self, value: str | None) -> None:
-        """Set default locale (clears resolved cache)."""
-        self._locale = value
         self._resolved_cache.clear()
 
     @property
@@ -1093,7 +1070,7 @@ class MetadataStore:
         self.set(var, meta)
         return self
 
-    def set_scheme(self, var: str, concept: str, locale: str | None = None) -> Self:
+    def set_scheme(self, var: str, concept: str) -> Self:
         """
         Link a variable to a catalog scheme.
 
@@ -1105,8 +1082,6 @@ class MetadataStore:
             Variable name.
         concept : str
             The concept identifier in the catalog.
-        locale : str | None
-            Optional locale override.
 
         Returns
         -------
@@ -1117,11 +1092,11 @@ class MetadataStore:
         if meta is None:
             meta = VariableMeta(
                 name=var,
-                scheme_ref=SchemeRef(concept=concept, locale=locale),
+                scheme_ref=SchemeRef(concept=concept),
                 source=MetadataSource.USER,
             )
         else:
-            meta = meta.with_scheme_ref(concept, locale)
+            meta = meta.with_scheme_ref(concept)
         self.set(var, meta)
         return self
 
@@ -1773,8 +1748,6 @@ class MetadataStore:
                 scheme_str = None
                 if meta.scheme_ref:
                     scheme_str = meta.scheme_ref.concept
-                    if meta.scheme_ref.locale:
-                        scheme_str += f" ({meta.scheme_ref.locale})"
 
                 rows.append(
                     {

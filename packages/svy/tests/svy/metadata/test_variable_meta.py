@@ -266,13 +266,12 @@ class TestSchemeRef:
         """Create a scheme reference."""
         ref = SchemeRef(concept="agreement")
         assert ref.concept == "agreement"
-        assert ref.locale is None
 
-    def test_create_with_locale(self):
-        """Create with explicit locale."""
-        ref = SchemeRef(concept="agreement", locale="en-US")
+    def test_a_ref_is_only_a_concept(self):
+        """svy does not switch languages, so a reference needs no locale."""
+        ref = SchemeRef(concept="agreement")
+        assert not hasattr(ref, "locale")
         assert ref.concept == "agreement"
-        assert ref.locale == "en-US"
 
     def test_immutable(self):
         """SchemeRef should be immutable."""
@@ -388,7 +387,7 @@ class TestVariableMeta:
     def test_with_scheme_ref(self):
         """Test with_scheme_ref method."""
         m1 = VariableMeta(name="q1", value_labels={1: "Yes"})
-        m2 = m1.with_scheme_ref("yes_no", locale="en")
+        m2 = m1.with_scheme_ref("yes_no")
 
         assert m1.value_labels is not None
         assert m2.value_labels is None  # Cleared by default
@@ -513,7 +512,6 @@ class TestMetadataStore:
         store = MetadataStore()
         assert len(store) == 0
         assert store.catalog is None
-        assert store.locale is None
 
     def test_set_and_get(self):
         """Set and retrieve metadata."""
@@ -578,12 +576,11 @@ class TestMetadataStore:
     def test_set_scheme(self):
         """Set scheme reference."""
         store = MetadataStore()
-        store.set_scheme("q1", "agreement", locale="en")
+        store.set_scheme("q1", "agreement")
 
         meta = store.get("q1")
         assert meta.scheme_ref is not None
         assert meta.scheme_ref.concept == "agreement"
-        assert meta.scheme_ref.locale == "en"
 
     def test_set_missing_with_user_friendly_names(self):
         """Set missing values using user-friendly parameter names."""

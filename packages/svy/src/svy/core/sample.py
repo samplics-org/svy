@@ -1063,7 +1063,7 @@ class Sample:
         self._metadata.set_value_labels(var, labels)
         return self
 
-    def use_scheme(self, var: str, concept: str, locale: str | None = None) -> Self:
+    def use_scheme(self, var: str, concept: str) -> Self:
         """
         Link a variable to a label scheme in the catalog.
 
@@ -1073,8 +1073,6 @@ class Sample:
             Variable name.
         concept : str
             The concept identifier in the catalog (e.g., "agreement", "yes_no").
-        locale : str | None
-            Optional locale override.
 
         Returns
         -------
@@ -1083,9 +1081,9 @@ class Sample:
 
         Examples
         --------
-        >>> svy.use_scheme("q1", "satisfaction", locale="en")
+        >>> svy.use_scheme("q1", "satisfaction")
         """
-        self._metadata.set_scheme(var, concept, locale)
+        self._metadata.set_scheme(var, concept)
         return self
 
     def set_missing(
