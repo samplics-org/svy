@@ -9,7 +9,6 @@ import threading
 from typing import Iterable, Mapping, Self
 
 import msgspec
-import polars as pl
 
 from msgspec.structs import force_setattr, replace
 
@@ -235,32 +234,6 @@ def _is_nan(x: object) -> bool:
 # =============================
 
 
-def validate_scheme_missing(s: CategoryScheme, *, strict: bool = True) -> None:
-    """Retained as a no-op seam.
-
-    Everything it used to check is now unrepresentable. A missing code outside
-    the scheme, a kind for a code that is not missing, a NaN code, a duplicate —
-    each was a way for four parallel collections to disagree, and there is one
-    collection now. NaN and duplicate codes are rejected in ``__post_init__``,
-    where they cannot be skipped by a caller who forgets to validate.
-    """
-    return None
-
-
-def normalize_scheme_missing(s: CategoryScheme) -> CategoryScheme:
-    """Retained as a no-op seam.
-
-    There is nothing left to derive: ``missing`` used to be recoverable from
-    ``missing_kinds``, and both are now one field on the entry.
-    """
-    return s
-
-
-def missing_codes_by_kind(s: CategoryScheme, kinds: set[MissingKind]) -> set[Category]:
-    """Collect codes matching any of the requested kinds."""
-    return set(s.codes_of_kind(*kinds))
-
-
 # =============================
 # Scheme factory
 # =============================
@@ -376,8 +349,6 @@ class LabellingCatalog:
                     where="labels.LabellingCatalog.register",
                     scheme_id=scheme.id,
                 )
-            # Validate again here (defensive) when bringing external schemes
-            validate_scheme_missing(scheme, strict=True)
             if scheme.id is not None:
                 self._schemes[scheme.id] = scheme
         return self
@@ -570,153 +541,11 @@ class LabellingCatalog:
 # =============================
 
 
-class SchemeCatalogView:
-    def __init__(self, catalog: LabellingCatalog):
-        self._c = catalog
-
-    @property
-    def locale(self):
-        return self._c.locale
-
-    def set_locale(self, locale: str | None):
-        self._c.set_locale(locale)
-
-    def list(self, **kw):
-        return self._c.list(**kw)
-
-    def search(self, q: str):
-        return self._c.search(q)
-
-    def get(self, scheme_id: str):
-        return self._c.get(scheme_id)
-
-    def pick(self, concept: str, *, locale: str | None = None):
-        return self._c.pick(concept, locale=locale)
-
-    def to_label(self, var_label: str, scheme_id: str, **kw):
-        return self._c.to_label(var_label, scheme_id, **kw)
-
-    def to_label_by_concept(self, var_label: str, concept: str, **kw):
-        return self._c.to_label_by_concept(var_label, concept, **kw)
-
-
 # =============================
 # Missing policies & simple transforms
 # =============================
 
 
-def is_missing_value(
-    value: Category | None,
-    *,
-    scheme: CategoryScheme | None,
-    kinds: set[MissingKind] | None = None,
-    treat_null: bool = True,
-    treat_nan: bool = True,
-) -> bool:
-    """Test missingness with an optional policy by kind."""
-    if value is None and treat_null:
-        return True
-    if _is_nan(value) and treat_nan:
-        return True
-    if not scheme:
-        return False
-
-    if kinds is None:
-        return value in scheme.missing_codes
-
-    if not scheme.missing_codes:
-        return False
-    if value is None:
-        return False
-    k = scheme.kind_of(value)
-    return (k in kinds) if k is not None else False
-
-
-def recode_for_analysis(
-    seq: Iterable[Category | None],
-    *,
-    scheme: CategoryScheme | None,
-    kinds: set[MissingKind] | None = None,
-    treat_null: bool = True,
-    treat_nan: bool = True,
-) -> list[Category | None]:
-    """Return a new list where selected missing codes are turned into None."""
-    out: list[Category | None] = []
-    for v in seq:
-        out.append(
-            None
-            if is_missing_value(
-                v, scheme=scheme, kinds=kinds, treat_null=treat_null, treat_nan=treat_nan
-            )
-            else v
-        )
-    return out
-
-
-def display_text(
-    value: Category | None,
-    *,
-    scheme: CategoryScheme | None,
-    null_text: str = "",
-) -> str:
-    """Return display label (or empty/null_text for NA)."""
-    if value is None or _is_nan(value):
-        return null_text
-    if scheme is not None:
-        entry = scheme.entry(value)
-        if entry is not None:
-            return entry.label
-    return str(value)
-
-
 # =============================
 # Optional adapters (Polars/Pandas)
 # =============================
-
-
-def polars_mask(col, scheme: CategoryScheme | None, kinds: set[MissingKind] | None = None):
-    """
-    Returns a Polars expression masking values that are missing by policy.
-    Safe on non-float columns (guards is_nan via cast).
-    Usage:
-      df.with_columns(pl.when(polars_mask("q1", s)).then(None).otherwise(pl.col("q1")))
-    """
-    import polars as pl
-
-    expr = pl.col(col) if isinstance(col, str) else col
-    mask = expr.is_null()
-    # Guarded NaN check via permissive cast
-    mask = mask | expr.cast(pl.Float64, strict=False).is_nan()
-    if scheme:
-        if kinds is None and scheme.missing_codes:
-            mask = mask | expr.is_in(list(scheme.missing_codes))
-        elif kinds and scheme.missing_codes:
-            codes = list(scheme.codes_of_kind(*kinds))
-            if codes:
-                mask = mask | expr.is_in(codes)
-    # Null-safe: under Kleene logic `False | null = null`, and a null mask
-    # entry behaves differently depending on the consumer (when() takes the
-    # otherwise-branch; filter() drops the row). A null in any sub-check can
-    # only arise from a null input, which IS missing-by-policy, so pin the
-    # mask to True there explicitly.
-    return mask.fill_null(True)
-
-
-def polars_to_analysis(
-    col,
-    scheme: CategoryScheme | None,
-    kinds: set[MissingKind] | None = None,
-    alias: str | None = None,
-):
-    expr = pl.col(col) if isinstance(col, str) else col
-    alias = alias or (col if isinstance(col, str) else None)
-    return pl.when(polars_mask(expr, scheme, kinds)).then(None).otherwise(expr).alias(alias)
-
-
-def polars_to_display(col, scheme: CategoryScheme | None, alias: str | None = None):
-    import polars as pl
-
-    expr = pl.col(col) if isinstance(col, str) else col
-    alias = alias or (f"{col}_label" if isinstance(col, str) else "label")
-    mapping = scheme.labels if scheme else {}
-    return expr.replace(mapping).cast(pl.Utf8).alias(alias)
