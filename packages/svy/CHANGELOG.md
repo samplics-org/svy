@@ -8,6 +8,26 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Added
+
+- **`CategoryScheme.parents`** — a hierarchy, as `(code, parent_code)` pairs. It lets one scheme describe a cascading list — region → district → ward → enumeration area — so a survey can reference it by concept instead of inlining thousands of codes.
+
+  That matters because a geography is revised on its own cycle. Inlined into a specification, a census redraw that adds sixty enumeration areas changes the document's content hash and shows up as sixty changes to review, while the questionnaire is untouched. Held in the catalog, it does not.
+
+  ```python
+  CategoryScheme(
+      concept="gm_district", locale="en",
+      mapping={101: "Banjul", 102: "Kanifing", 201: "Lower Saloum"},
+      parents=((101, 1), (102, 1), (201, 2)),      # district -> region
+  )
+  scheme.parent_of(201)     # 2
+  scheme.children_of(1)     # (101, 102)
+  ```
+
+  **Pairs rather than a `dict`, unlike `mapping` and `missing_kinds`.** JSON object keys are always strings, so a `Category`-keyed dict survives only through `LabellingCatalog`'s custom encoder — put a scheme through plain msgspec and `{101: "Banjul"}` returns as `{"101": "Banjul"}`, silently. A dict here would inherit that and depend on the encoder being extended in step, which is exactly what did not happen for `MissingDef`. Pairs are correct by any route, and there is a test asserting it.
+
+  Validation covers the child side only: a code with a parent must exist in this scheme's `mapping`. Parent codes belong to a *different* scheme — the region list — which this one cannot see, so checking them here would reject every real hierarchy.
+
 ### Fixed
 
 - **A `MissingDef` carrying `kinds` could not survive JSON.** JSON object keys are always strings, so `dict[Category, MissingKind]` encodes `{98: DONT_KNOW}` as `{"98": "dnk"}` and decodes it back with a *string* key — while `codes`, a JSON array, returns as `int`. The subset check in `__post_init__` then saw `{'98'} - {98}` and raised, so neither a `MissingDef` with kinds nor any `VariableMeta` holding one could be decoded at all:

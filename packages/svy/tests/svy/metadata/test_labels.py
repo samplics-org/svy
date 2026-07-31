@@ -94,3 +94,102 @@ def test_create_labels_from_scratch(synthetic_sample_df: pl.DataFrame):
     assert labels["resp2"].categories[1] == "Yes"
     assert labels["resp2_new"].categories[0] == "No"
     assert "High School" in labels["educ"].categories.values()
+
+
+# ---------------------------------------------------------------------------
+# CategoryScheme.parents — hierarchical schemes
+#
+# A cascading list (region -> district -> ward -> EA) referenced by concept
+# rather than inlined into a survey specification, because a geography is
+# revised on its own cycle and a census redraw should not read as a change to
+# the questionnaire.
+# ---------------------------------------------------------------------------
+
+
+GM_DISTRICT = dict(
+    concept="gm_district",
+    locale="en",
+    mapping={101: "Banjul", 102: "Kanifing", 201: "Lower Saloum", 202: "Nianija"},
+    parents=((101, 1), (102, 1), (201, 2), (202, 2)),
+)
+
+
+def _scheme(**overrides):
+    from svy.metadata import CategoryScheme
+
+    return CategoryScheme(**{**GM_DISTRICT, **overrides})
+
+
+def test_parent_and_children_lookups():
+    scheme = _scheme()
+    assert scheme.parent_of(201) == 2
+    assert scheme.children_of(1) == (101, 102)
+
+
+def test_a_code_with_no_parent_returns_none():
+    assert _scheme().parent_of(999) is None
+
+
+def test_a_scheme_without_a_hierarchy_answers_emptily():
+    assert _scheme(parents=None).parent_of(101) is None
+    assert _scheme(parents=None).children_of(1) == ()
+
+
+def test_children_keep_declaration_order():
+    scheme = _scheme(parents=((102, 1), (101, 1)))
+    assert scheme.children_of(1) == (102, 101)
+
+
+def test_parents_survive_the_catalog_round_trip():
+    catalog = LabellingCatalog().register(_scheme())
+    back = LabellingCatalog.from_bytes(catalog.to_bytes()).pick("gm_district", locale="en")
+    assert back.parents == GM_DISTRICT["parents"]
+    assert all(isinstance(child, int) for child, _ in back.parents)
+
+
+def test_parents_survive_plain_msgspec_too():
+    """The reason this field is pairs and not a dict.
+
+    `mapping` is a Category-keyed dict and only survives through the catalog's
+    custom encoder — plain msgspec turns {101: "Banjul"} into {"101": "Banjul"}
+    silently. Pairs are correct by any route, so a scheme serialized by some
+    future path that forgets the encoder still holds its codes.
+    """
+    import msgspec
+
+    from svy.metadata import CategoryScheme
+
+    back = msgspec.json.decode(msgspec.json.encode(_scheme()), type=CategoryScheme)
+    assert back.parents == GM_DISTRICT["parents"]
+    assert all(isinstance(child, int) for child, _ in back.parents)
+
+
+def test_a_child_code_absent_from_the_mapping_is_rejected():
+    from svy.errors import LabelError
+    from svy.metadata.labels import validate_scheme_missing
+
+    with pytest.raises(LabelError):
+        validate_scheme_missing(_scheme(parents=((999, 1),)), strict=True)
+
+
+def test_a_parent_code_is_not_validated_against_this_mapping():
+    # parents belong to a *different* scheme — the region list — which this one
+    # cannot see, so validating them here would reject every real hierarchy
+    from svy.metadata.labels import validate_scheme_missing
+
+    validate_scheme_missing(_scheme(), strict=True)
+
+
+def test_a_hierarchy_coexists_with_missing_semantics():
+    from svy.core.enumerations import MissingKind
+
+    scheme = _scheme(
+        mapping={**GM_DISTRICT["mapping"], 99: "Refused"},
+        missing={99},
+        missing_kinds={99: MissingKind.REFUSED},
+    )
+    catalog = LabellingCatalog().register(scheme)
+    back = LabellingCatalog.from_bytes(catalog.to_bytes()).pick("gm_district", locale="en")
+    assert back.parents == GM_DISTRICT["parents"]
+    assert back.missing == {99}
+    assert back.missing_kinds == {99: MissingKind.REFUSED}

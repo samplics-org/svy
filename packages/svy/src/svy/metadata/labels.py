@@ -60,12 +60,43 @@ class CategoryScheme(msgspec.Struct, kw_only=True, frozen=True):
     missing: set[Category] | None = None
     missing_kinds: dict[Category, MissingKind] | None = None
 
+    #: Hierarchy, as ``(code, parent_code)`` pairs — a district and the region
+    #: it sits in. This is what lets a *cascading* list (region → district →
+    #: ward → enumeration area) be referenced by concept instead of inlined
+    #: into a survey specification, which matters because a geography is
+    #: revised on its own cycle: a census redraw should not read as a change to
+    #: the questionnaire.
+    #:
+    #: **Pairs rather than a dict**, unlike ``mapping`` and ``missing_kinds``.
+    #: JSON object keys are always strings, so a ``Category``-keyed dict only
+    #: survives through ``LabellingCatalog``'s custom encoder — put a scheme
+    #: through plain msgspec and ``{101: "Banjul"}`` comes back as
+    #: ``{"101": "Banjul"}``, silently and with no error. A dict here would
+    #: inherit that, and would depend on the encoder being extended in step —
+    #: which is exactly what did not happen for ``MissingDef``. Pairs are
+    #: correct by any route.
+    #:
+    #: Parent codes belong to a *different* scheme, so they are not validated
+    #: here; only that each child code exists in this ``mapping``.
+    parents: tuple[tuple[Category, Category], ...] | None = None
+
     def __post_init__(self):
         # Auto-generate id if not provided
         if self.id is None:
             generated_id = f"{self.concept}:{self.locale or 'default'}"
             # For frozen structs, use object.__setattr__
             object.__setattr__(self, "id", generated_id)
+
+    def parent_of(self, code: Category) -> Category | None:
+        """The parent of one code, or None if this scheme declares no hierarchy."""
+        for child, parent in self.parents or ():
+            if child == code:
+                return parent
+        return None
+
+    def children_of(self, parent: Category) -> tuple[Category, ...]:
+        """Every code under a given parent, in declaration order."""
+        return tuple(child for child, p in self.parents or () if p == parent)
 
     def clone(self, **overrides) -> Self:
         return replace(self, **overrides)
@@ -153,6 +184,17 @@ def validate_scheme_missing(s: CategoryScheme, *, strict: bool = True) -> None:
                     where="labels.validate_scheme_missing",
                     offending_keys=sorted(diff2),
                 )
+
+    if s.parents is not None:
+        # only the child side: a parent code belongs to a different scheme, and
+        # this one has no way to see it
+        orphans = {child for child, _ in s.parents} - keys
+        if orphans and strict:
+            raise LabelError.invalid_missing_codes(
+                where="labels.validate_scheme_missing",
+                param="parents",
+                not_in_mapping=sorted(orphans, key=repr),
+            )
 
 
 def normalize_scheme_missing(s: CategoryScheme) -> CategoryScheme:
@@ -404,6 +446,10 @@ class LabellingCatalog:
             "missing_kind_pairs": (
                 [[k, mk.value] for k, mk in s.missing_kinds.items()] if s.missing_kinds else None
             ),
+            # already pairs, so this survives a plain msgspec round-trip too —
+            # the encoder is belt and braces rather than the only thing holding
+            # the types up, which is the point of the shape
+            "parent_pairs": [[c, p] for c, p in s.parents] if s.parents else None,
         }
 
     @staticmethod
@@ -412,6 +458,8 @@ class LabellingCatalog:
         missing_set = set(d.get("missing_list") or []) or None
         mk_pairs = d.get("missing_kind_pairs") or []
         missing_kinds = {k: MissingKind(mv) for k, mv in mk_pairs} if mk_pairs else None
+        parent_pairs = d.get("parent_pairs") or []
+        parents = tuple((c, p) for c, p in parent_pairs) if parent_pairs else None
         sch = CategoryScheme(
             id=d["id"],
             concept=d["concept"],
@@ -421,6 +469,7 @@ class LabellingCatalog:
             ordered=bool(d.get("ordered", False)),
             missing=missing_set,
             missing_kinds=missing_kinds,
+            parents=parents,
         )
         # Validate on load as well
         validate_scheme_missing(sch, strict=True)
