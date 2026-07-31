@@ -8,7 +8,43 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Added
+
+- **`CategoryScheme` holds one entry per code** rather than several collections keyed by it. `SchemeEntry(code, label, parent, missing)` replaces `mapping`, `missing` and `missing_kinds`, and carries a hierarchy besides.
+
+  ```python
+  CategoryScheme(concept="sex", entries={1: "Male", 2: "Female"})     # a dict is still accepted
+
+  CategoryScheme(concept="gm_district", entries=[
+      SchemeEntry(code=101, label="Banjul", parent=1),                 # district -> region
+      SchemeEntry(code=99, label="Refused", missing=MissingKind.REFUSED),
+  ])
+  ```
+
+  Two problems went with the old shape. Three of the collections were dicts or sets keyed by `Category`, and **JSON object keys are always strings** — so `{101: "Banjul"}` returned as `{"101": "Banjul"}` unless it went through a hand-written encoder, silently and with no error. And because the collections could disagree, ~77 lines of `validate_scheme_missing` and `normalize_scheme_missing` existed only to check that they did not.
+
+  One entry per code removes both. Every field is JSON-native, so **the bespoke encoder is gone** — `to_bytes` is a single `msgspec.json.encode` — and a scheme keeps its code types by any route, which a test asserts rather than trusting the encoder to be remembered. The invariants those 77 lines checked are now unrepresentable: a missing code outside the scheme, or a kind for a code that is not missing, cannot be written down. Both functions remain as no-op seams; NaN and duplicate codes are rejected in `__post_init__`, where a caller cannot skip them by forgetting to validate.
+
+  New lookups: `labels`, `codes`, `substantive`, `missing_codes`, `kind_of`, `codes_of_kind`, `parent_of`, `children_of`, `entry`. `make_scheme` still takes the facets apart — `mapping=`, `missing=`, `missing_kinds=`, `parents=` — and folds them, for callers who hold the pieces separately.
+
+  **The hierarchy is what forced the question.** A cascading list — region → district → ward → enumeration area — could not be described at all, so a survey specification had to inline every code. Inlined, a census redraw adding sixty EAs changes the spec's content hash and reads as sixty changes to a questionnaire nobody touched. Held in the catalog, it does not.
+
 ### Fixed
+
+- **Category-keyed dicts could not round-trip, in four places.** JSON object keys are always strings, so `dict[Category, str]` writes `{101: "Banjul"}` as `{"101": "Banjul"}` and decodes it with a *string* key. Every join against an integer-coded column then misses. Each field is now `(code, label)` pairs, with a mapping still accepted when constructing and a dict-view property for lookup:
+
+  | field | was | now |
+  |---|---|---|
+  | `VariableMeta.value_labels` | corrupted silently | pairs; `.labels` for lookup |
+  | `ResolvedLabels.value_labels` | corrupted silently | pairs; `.labels` |
+  | `Label.categories` | raised on decode | pairs; `.label_map` |
+  | `MissingDef.kinds` | raised on decode | pairs; `.kind_map` |
+
+  The two silent ones are the dangerous half: a store of variable metadata written and read back had string codes, no error, and every value label quietly stopped matching its column.
+
+  `Label.categories` also **dropped `_MissingType` from its union**. msgspec refuses to decode any union containing a custom type, so the struct raised regardless of the key problem — and nothing ever set the field to the sentinel, since `None` already meant "no value labels". It bought no distinction and cost the ability to decode at all.
+
+  `MissingDef.__post_init__` **loses its repair step**. That was added to recover integer codes from decoded string keys; with pairs there is nothing to repair, and the subset check now means what it says.
 
 - **A `MissingDef` carrying `kinds` could not survive JSON.** JSON object keys are always strings, so `dict[Category, MissingKind]` encodes `{98: DONT_KNOW}` as `{"98": "dnk"}` and decodes it back with a *string* key — while `codes`, a JSON array, returns as `int`. The subset check in `__post_init__` then saw `{'98'} - {98}` and raised, so neither a `MissingDef` with kinds nor any `VariableMeta` holding one could be decoded at all:
 

@@ -175,7 +175,7 @@ def test_labels_preserved_through_filter():
 
     meta = filtered.meta.get("sex")
     assert meta is not None
-    assert meta.value_labels == {1: "Male", 2: "Female"}
+    assert meta.labels == {1: "Male", 2: "Female"}
 
 
 def test_labels_updated_on_rename():

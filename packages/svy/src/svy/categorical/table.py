@@ -740,7 +740,7 @@ class Table:
         if resolve_labels and self._metadata is not None:
             row_resolved = self._metadata.resolve_labels(self.rowvar)
             if row_resolved.has_value_labels:
-                _row_label_map = {str(k): str(v) for k, v in row_resolved.value_labels.items()}
+                _row_label_map = {str(k): str(v) for k, v in row_resolved.labels.items()}
                 df = df.with_columns(
                     pl.col("rowvar").replace_strict(_row_label_map, default=pl.col("rowvar"))
                 )
@@ -748,7 +748,7 @@ class Table:
             if self.colvar is not None:
                 col_resolved = self._metadata.resolve_labels(self.colvar)
                 if col_resolved.has_value_labels:
-                    _col_label_map = {str(k): str(v) for k, v in col_resolved.value_labels.items()}
+                    _col_label_map = {str(k): str(v) for k, v in col_resolved.labels.items()}
                     df = df.with_columns(
                         pl.col("colvar").replace_strict(_col_label_map, default=pl.col("colvar"))
                     )

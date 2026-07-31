@@ -91,6 +91,131 @@ def test_create_labels_from_scratch(synthetic_sample_df: pl.DataFrame):
     }
 
     # 3) Quick sanity checks
-    assert labels["resp2"].categories[1] == "Yes"
-    assert labels["resp2_new"].categories[0] == "No"
-    assert "High School" in labels["educ"].categories.values()
+    assert labels["resp2"].label_map[1] == "Yes"
+    assert labels["resp2_new"].label_map[0] == "No"
+    assert "High School" in labels["educ"].label_map.values()
+
+
+# ---------------------------------------------------------------------------
+# SchemeEntry — one entry per code, rather than parallel collections
+#
+# The scheme used to hold mapping, missing, missing_kinds and a hierarchy as
+# four collections keyed by code. Three serialized badly, and because they could
+# disagree, seventy-odd lines existed to check that they did not. One entry per
+# code makes those states unrepresentable.
+# ---------------------------------------------------------------------------
+
+
+def _scheme(**overrides):
+    from svy.core.enumerations import MissingKind
+    from svy.metadata.labels import CategoryScheme, SchemeEntry
+
+    base = dict(
+        concept="gm_district",
+        locale="en",
+        entries=[
+            SchemeEntry(code=101, label="Banjul", parent=1),
+            SchemeEntry(code=102, label="Kanifing", parent=1),
+            SchemeEntry(code=201, label="Lower Saloum", parent=2),
+            SchemeEntry(code=99, label="Refused", missing=MissingKind.REFUSED),
+        ],
+    )
+    return CategoryScheme(**{**base, **overrides})
+
+
+def test_a_dict_is_still_accepted_when_constructing():
+    from svy.metadata.labels import CategoryScheme
+
+    scheme = CategoryScheme(concept="sex", entries={1: "Male", 2: "Female"})
+    assert scheme.labels == {1: "Male", 2: "Female"}
+    assert all(e.missing is None for e in scheme.entries)
+
+
+def test_labels_covers_every_code_and_substantive_does_not():
+    scheme = _scheme()
+    assert set(scheme.labels) == {101, 102, 201, 99}
+    assert [e.code for e in scheme.substantive] == [101, 102, 201]
+
+
+def test_missing_semantics_live_on_the_entry():
+    from svy.core.enumerations import MissingKind
+
+    scheme = _scheme()
+    assert scheme.missing_codes == frozenset({99})
+    assert scheme.kind_of(99) is MissingKind.REFUSED
+    assert scheme.kind_of(101) is None
+    assert scheme.codes_of_kind(MissingKind.REFUSED) == frozenset({99})
+
+
+def test_hierarchy_lookups():
+    scheme = _scheme()
+    assert scheme.parent_of(201) == 2
+    assert scheme.children_of(1) == (101, 102)
+    assert scheme.parent_of(99) is None
+
+
+def test_children_keep_declaration_order():
+    from svy.metadata.labels import SchemeEntry
+
+    scheme = _scheme(
+        entries=[
+            SchemeEntry(code=102, label="Kanifing", parent=1),
+            SchemeEntry(code=101, label="Banjul", parent=1),
+        ]
+    )
+    assert scheme.children_of(1) == (102, 101)
+
+
+def test_a_code_that_is_not_there_answers_none():
+    scheme = _scheme()
+    assert scheme.entry(999) is None
+    assert scheme.parent_of(999) is None
+    assert scheme.kind_of(999) is None
+
+
+def test_a_scheme_round_trips_through_plain_msgspec():
+    """The whole reason for the shape.
+
+    Every field is JSON-native now, so no bespoke encoder is involved and codes
+    keep their types by any route. The old shape returned {"101": "Banjul"} for
+    {101: "Banjul"} unless it went through the catalog's hand-written pairs.
+    """
+    import msgspec
+
+    from svy.metadata.labels import CategoryScheme
+
+    scheme = _scheme()
+    back = msgspec.json.decode(msgspec.json.encode(scheme), type=CategoryScheme)
+    assert back == scheme
+    assert all(isinstance(c, int) for c in back.codes)
+
+
+def test_a_scheme_round_trips_through_the_catalog():
+    scheme = _scheme()
+    catalog = LabellingCatalog().register(scheme)
+    back = LabellingCatalog.from_bytes(catalog.to_bytes()).pick("gm_district", locale="en")
+    assert back.entries == scheme.entries
+
+
+def test_a_duplicate_code_is_rejected():
+    from svy.errors import LabelError
+    from svy.metadata.labels import SchemeEntry
+
+    with pytest.raises(LabelError):
+        _scheme(
+            entries=[
+                SchemeEntry(code=101, label="Banjul"),
+                SchemeEntry(code=101, label="Banjul again"),
+            ]
+        )
+
+
+def test_a_missing_code_outside_the_scheme_is_unrepresentable():
+    """What validate_scheme_missing used to check, now impossible to express.
+
+    A missing code had to be added to `missing` *and* to `mapping`, and the two
+    could disagree. There is one list now, so a code that is missing is by
+    construction a code that exists.
+    """
+    scheme = _scheme()
+    assert scheme.missing_codes <= set(scheme.codes)

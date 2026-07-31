@@ -14,22 +14,25 @@ from svy.metadata import MetadataStore, MissingDef, ResolvedLabels, SchemeRef, V
 class TestMissingDefRoundTrip:
     """A MissingDef carrying kinds must survive JSON.
 
-    JSON object keys are always strings, so `dict[Category, MissingKind]`
-    encodes {98: DONT_KNOW} as {"98": "dnk"} and decodes with a *string* key,
-    while `codes` — a JSON array — returns as int. The subset check in
-    __post_init__ then failed, so the struct could not round-trip at all.
+    `kinds` was a `dict[Category, MissingKind]`. JSON object keys are always
+    strings, so {98: DONT_KNOW} encoded as {"98": "dnk"} and decoded with a
+    string key, while `codes` — a JSON array — returned as int. The subset
+    check then compared {'98'} against {98} and raised, so the struct could not
+    round-trip at all.
+
+    It is now (code, kind) pairs, which keep the code's type by any route. The
+    repair step that briefly papered over this is gone; there is nothing left
+    to repair.
     """
 
     def test_kinds_survive_json(self):
         m = MissingDef.from_kinds({98: MissingKind.DONT_KNOW, 99: MissingKind.REFUSED})
         back = msgspec.json.decode(msgspec.json.encode(m), type=MissingDef)
-        assert back.kinds == {98: MissingKind.DONT_KNOW, 99: MissingKind.REFUSED}
-        assert all(isinstance(k, int) for k in back.kinds)
+        assert back.kind_map == {98: MissingKind.DONT_KNOW, 99: MissingKind.REFUSED}
+        assert all(isinstance(code, int) for code, _ in back.kinds)
         assert back == m
 
     def test_the_decoded_form_still_answers_queries(self):
-        # a repaired key must be the code itself, not a lookalike, or every
-        # lookup silently misses
         m = MissingDef.from_kinds({98: MissingKind.DONT_KNOW, 99: MissingKind.REFUSED})
         back = msgspec.json.decode(msgspec.json.encode(m), type=MissingDef)
         assert back.is_missing(98)
@@ -40,24 +43,66 @@ class TestMissingDefRoundTrip:
     def test_a_variable_meta_carrying_kinds_round_trips(self):
         v = VariableMeta(name="age", missing=MissingDef.from_kinds({98: MissingKind.DONT_KNOW}))
         back = msgspec.json.decode(msgspec.json.encode(v), type=VariableMeta)
-        assert back.missing.kinds == {98: MissingKind.DONT_KNOW}
+        assert back.missing.kind_map == {98: MissingKind.DONT_KNOW}
         assert back == v
 
     def test_string_and_float_codes_are_untouched(self):
         m = MissingDef.from_kinds({"NA": MissingKind.NO_ANSWER, -1.5: MissingKind.SYSTEM})
         back = msgspec.json.decode(msgspec.json.encode(m), type=MissingDef)
-        assert back.kinds == {"NA": MissingKind.NO_ANSWER, -1.5: MissingKind.SYSTEM}
+        assert back.kind_map == {"NA": MissingKind.NO_ANSWER, -1.5: MissingKind.SYSTEM}
 
-    def test_a_genuine_mismatch_still_raises(self):
-        # the repair must not turn a real error into a silent pass
+    def test_a_mapping_is_still_accepted_when_constructing(self):
+        # {98: DONT_KNOW} reads better than a list of tuples, so it is coerced
+        m = MissingDef(codes=frozenset([98]), kinds={98: MissingKind.DONT_KNOW})
+        assert m.kinds == ((98, MissingKind.DONT_KNOW),)
+
+    def test_a_kind_for_a_code_that_is_not_missing_raises(self):
         with pytest.raises(ValueError, match="not in codes"):
             MissingDef(codes=frozenset([1]), kinds={2: MissingKind.DONT_KNOW})
 
-    def test_an_ambiguous_text_form_is_not_guessed(self):
-        # 1 and "1" share a text form, so a decoded "1" could be either;
-        # recovering one would be a coin flip
-        with pytest.raises(ValueError, match="not in codes"):
-            MissingDef(codes=frozenset([1, "1"]), kinds={"x": MissingKind.DONT_KNOW})
+
+class TestValueLabelRoundTrip:
+    """The same defect, in the two places it also lived.
+
+    `VariableMeta.value_labels` and `ResolvedLabels.value_labels` were
+    `dict[Category, str]` and corrupted *silently* — {1: "Male"} decoded as
+    {"1": "Male"}, with no error — so every join against an integer-coded
+    column would then miss.
+    """
+
+    def test_variable_meta_value_labels_keep_their_code_types(self):
+        v = VariableMeta(name="sex", value_labels={1: "Male", 2: "Female"})
+        back = msgspec.json.decode(msgspec.json.encode(v), type=VariableMeta)
+        assert back.labels == {1: "Male", 2: "Female"}
+        assert all(isinstance(vl.code, int) for vl in back.value_labels)
+        assert back == v
+
+    def test_resolved_labels_keep_their_code_types(self):
+        r = ResolvedLabels(var_label="Sex", value_labels={1: "Male"})
+        back = msgspec.json.decode(msgspec.json.encode(r), type=ResolvedLabels)
+        assert back.labels == {1: "Male"}
+        assert back == r
+
+    def test_a_dict_is_still_accepted_when_constructing(self):
+        assert VariableMeta(name="q", value_labels={1: "One"}).labels == {1: "One"}
+
+    def test_a_whole_store_of_metadata_survives_a_round_trip(self):
+        """The case that made this worth fixing.
+
+        Nothing serialized a store when the defect went in, so it stayed
+        latent. Projecting an instrument spec into one and saving it is exactly
+        the workflow that would have hit it.
+        """
+        store = MetadataStore()
+        store.set_label("sex", "Sex of respondent")
+        store.set_value_labels("sex", {1: "Male", 2: "Female"})
+        store.set_missing("sex", dont_know=[8])
+
+        payload = {name: store.get(name) for name in store.variables}
+        back = msgspec.json.decode(msgspec.json.encode(payload), type=dict[str, VariableMeta])
+        assert back["sex"].labels == {1: "Male", 2: "Female"}
+        assert back["sex"].missing.codes == frozenset({8})
+        assert back["sex"].missing.kind_map == {8: MissingKind.DONT_KNOW}
 
 
 class TestMissingDef:
@@ -88,8 +133,8 @@ class TestMissingDef:
                 -98: MissingKind.REFUSED,
             },
         )
-        assert m.kinds[-99] == MissingKind.DONT_KNOW
-        assert m.kinds[-98] == MissingKind.REFUSED
+        assert m.kind_map[-99] == MissingKind.DONT_KNOW
+        assert m.kind_map[-98] == MissingKind.REFUSED
 
     def test_kinds_must_be_subset_of_codes(self):
         """Kinds keys must be in codes."""
@@ -193,7 +238,7 @@ class TestMissingDef:
         )
         assert m.codes == frozenset([-99, -98])
         assert m.kinds is not None
-        assert m.kinds[-99] == MissingKind.DONT_KNOW
+        assert m.kind_map[-99] == MissingKind.DONT_KNOW
 
     def test_equality(self):
         """Test equality comparison."""
@@ -258,7 +303,7 @@ class TestVariableMeta:
             mtype=MeasurementType.NOMINAL,
         )
         assert meta.label == "What is your gender?"
-        assert meta.value_labels[1] == "Male"
+        assert meta.labels[1] == "Male"
         assert meta.has_labels is True
 
     def test_create_with_scheme_ref(self):
@@ -338,7 +383,7 @@ class TestVariableMeta:
 
         assert m1.scheme_ref is not None
         assert m2.scheme_ref is None  # Cleared by default
-        assert m2.value_labels == {1: "Yes", 0: "No"}
+        assert m2.labels == {1: "Yes", 0: "No"}
 
     def test_with_scheme_ref(self):
         """Test with_scheme_ref method."""
@@ -375,7 +420,7 @@ class TestResolvedLabels:
         """Create empty resolved labels."""
         r = ResolvedLabels()
         assert r.var_label == ""
-        assert r.value_labels == {}
+        assert r.labels == {}
         assert r.missing_codes == frozenset()
 
     def test_create_with_labels(self):
@@ -386,7 +431,7 @@ class TestResolvedLabels:
             missing_codes=frozenset([-99]),
         )
         assert r.var_label == "How satisfied are you?"
-        assert r.value_labels[1] == "Very dissatisfied"
+        assert r.labels[1] == "Very dissatisfied"
         assert -99 in r.missing_codes
 
     def test_display_with_label(self):
@@ -528,7 +573,7 @@ class TestMetadataStore:
         store = MetadataStore()
         store.set_value_labels("gender", {1: "Male", 2: "Female"})
 
-        assert store.get("gender").value_labels == {1: "Male", 2: "Female"}
+        assert store.get("gender").labels == {1: "Male", 2: "Female"}
 
     def test_set_scheme(self):
         """Set scheme reference."""
@@ -559,10 +604,10 @@ class TestMetadataStore:
         assert -96 in meta.missing.codes
 
         # Check mechanism mapping
-        assert meta.missing.kinds[-99] == MissingKind.DONT_KNOW
-        assert meta.missing.kinds[-98] == MissingKind.REFUSED
-        assert meta.missing.kinds[-97] == MissingKind.STRUCTURAL  # skipped -> STRUCTURAL
-        assert meta.missing.kinds[-96] == MissingKind.STRUCTURAL  # not_applicable -> STRUCTURAL
+        assert meta.missing.kind_map[-99] == MissingKind.DONT_KNOW
+        assert meta.missing.kind_map[-98] == MissingKind.REFUSED
+        assert meta.missing.kind_map[-97] == MissingKind.STRUCTURAL  # skipped -> STRUCTURAL
+        assert meta.missing.kind_map[-96] == MissingKind.STRUCTURAL  # not_applicable -> STRUCTURAL
 
     def test_set_missing_simple_codes(self):
         """Set missing with simple codes (no kinds)."""
@@ -603,7 +648,7 @@ class TestMetadataStore:
 
         resolved = store.resolve_labels("q1")
         assert resolved.var_label == "Test"
-        assert resolved.value_labels == {1: "Yes", 0: "No"}
+        assert resolved.labels == {1: "Yes", 0: "No"}
 
     def test_resolve_labels_empty(self):
         """Resolve returns empty for unknown variable."""
@@ -611,7 +656,7 @@ class TestMetadataStore:
         resolved = store.resolve_labels("unknown")
 
         assert resolved.var_label == ""
-        assert resolved.value_labels == {}
+        assert resolved.labels == {}
 
     def test_resolve_labels_cached(self):
         """Resolved labels are cached."""
@@ -969,13 +1014,13 @@ class TestUpdate:
         # filling a gap is not a conflict, so it does not need overwrite=True
         store = self._analyst()
         store.update(self._spec(), overwrite=overwrite)
-        assert store.get("sex").value_labels == {1: "Male", 2: "Female"}
+        assert store.get("sex").labels == {1: "Male", 2: "Female"}
 
     def test_a_variable_absent_here_is_added_whole(self):
         store = MetadataStore()
         store.update(self._spec())
         assert set(store.variables) == {"age", "sex"}
-        assert store.get("sex").value_labels == {1: "Male", 2: "Female"}
+        assert store.get("sex").labels == {1: "Male", 2: "Female"}
 
     def test_the_other_store_is_not_modified(self):
         other = self._spec()
@@ -1002,9 +1047,9 @@ class TestUpdate:
     def test_resolved_labels_see_the_merged_value(self):
         # the cache is keyed per variable, so a merge must invalidate it
         store = self._analyst()
-        assert store.resolve_labels("sex").value_labels == {}
+        assert store.resolve_labels("sex").labels == {}
         store.update(self._spec())
-        assert store.resolve_labels("sex").value_labels == {1: "Male", 2: "Female"}
+        assert store.resolve_labels("sex").labels == {1: "Male", 2: "Female"}
 
 
 class TestIntegration:
@@ -1094,9 +1139,9 @@ class TestIntegration:
         assert not meta.missing.is_missing(1)
 
         # Check mechanism mapping
-        assert meta.missing.kinds[-99] == MissingKind.DONT_KNOW
-        assert meta.missing.kinds[-98] == MissingKind.REFUSED
-        assert meta.missing.kinds[-97] == MissingKind.STRUCTURAL
+        assert meta.missing.kind_map[-99] == MissingKind.DONT_KNOW
+        assert meta.missing.kind_map[-98] == MissingKind.REFUSED
+        assert meta.missing.kind_map[-97] == MissingKind.STRUCTURAL
 
         # Check user vs system missing
         assert meta.missing.user_missing() == frozenset([-99, -98])

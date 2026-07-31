@@ -60,6 +60,41 @@ def _normalize_codes(codes: Iterable[Category] | None) -> frozenset[Category]:
 
 
 # =============================================================================
+# ValueLabel: one code and its display text
+# =============================================================================
+
+
+class ValueLabel(msgspec.Struct, frozen=True):
+    """One code and the text shown for it.
+
+    A *pair*, not an entry in a ``dict[Category, str]``. JSON object keys are
+    always strings, so a Category-keyed dict returns ``{"1": "Male"}`` for
+    ``{1: "Male"}`` — silently, with no error, and every join against an
+    integer-coded column then misses. Holding the code as a value keeps its
+    type through serialization by any route.
+
+    This is the same shape, and the same reason, as ``CategoryScheme``'s
+    ``SchemeEntry`` and svy-spec's ``ChoiceOption``.
+    """
+
+    code: Category
+    label: str
+
+
+def _coerce_labels(value) -> tuple[ValueLabel, ...] | None:
+    """Accept a dict, pairs, or ValueLabels; store pairs.
+
+    The dict is authoring sugar — ``{1: "Male"}`` reads better than a list of
+    structs — and never reaches serialization, so it carries none of the risk.
+    """
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return tuple(ValueLabel(code=c, label=lbl) for c, lbl in value.items())
+    return tuple(v if isinstance(v, ValueLabel) else ValueLabel(*v) for v in value)
+
+
+# =============================================================================
 # MissingDef: Unified missing value definition
 # =============================================================================
 
@@ -78,9 +113,9 @@ class MissingDef(msgspec.Struct, frozen=True, eq=False):
     ----------
     codes : frozenset[Category]
         All values that should be treated as missing.
-    kinds : dict[Category, MissingKind] | None
-        Optional mapping of codes to their semantic meaning.
-        Keys must be a subset of `codes`.
+    kinds : tuple[tuple[Category, MissingKind], ...] | None
+        Optional (code, kind) pairs giving each code's semantic meaning. A
+        mapping is accepted and coerced. Codes must be a subset of `codes`.
     na_is_missing : bool
         Whether to treat None/null as missing (default True).
     nan_is_missing : bool
@@ -107,48 +142,41 @@ class MissingDef(msgspec.Struct, frozen=True, eq=False):
     """
 
     codes: frozenset[Category] = frozenset()
-    kinds: dict[Category, MissingKind] | None = None
+    #: ``(code, kind)`` pairs. Pairs rather than a dict for the reason
+    #: ``ValueLabel`` exists: a Category-keyed dict does not survive JSON. This
+    #: field used to be one, and the mismatch it caused — string keys against
+    #: integer codes — made the subset check below raise on every decode.
+    kinds: tuple[tuple[Category, MissingKind], ...] | None = None
     na_is_missing: bool = True
     nan_is_missing: bool = True
 
     def __post_init__(self) -> None:
-        """Validate that kinds keys are a subset of codes, repairing JSON keys.
+        """Coerce a kinds mapping to pairs, then check it against ``codes``.
 
-        JSON object keys are always strings, so a ``dict[Category, MissingKind]``
-        encodes ``{98: DONT_KNOW}`` as ``{"98": "dnk"}`` and decodes it back with
-        a *string* key, while ``codes`` — a JSON array — comes back as ``int``.
-        The subset check then fails and a ``MissingDef`` carrying kinds could not
-        survive a round trip at all.
+        This used to carry a repair step: ``kinds`` was a ``dict[Category,
+        MissingKind]``, JSON object keys are always strings, and the decoded
+        ``{"98": ...}`` never matched the integer ``98`` in ``codes`` — so the
+        check below raised on every round trip. Pairs keep the code's type, so
+        there is nothing to repair and the check means what it says.
 
-        The sibling class solves this with a bespoke encoder: ``CategoryScheme``
-        is serialized by ``LabellingCatalog`` as pairs and lists precisely
-        because "JSON object keys must be strings, and sets are not
-        JSON-native". Nothing serializes ``VariableMeta`` centrally, so the
-        repair happens here instead — a decoded key is matched back to the code
-        it was written from before the subset check runs.
+        A dict is still accepted here, since ``{98: DONT_KNOW}`` reads better
+        than a list of tuples.
         """
         if self.kinds is None:
             return
+        if isinstance(self.kinds, Mapping):
+            force_setattr(self, "kinds", tuple(self.kinds.items()))
+        else:
+            force_setattr(self, "kinds", tuple(tuple(k) for k in self.kinds))
 
-        invalid = set(self.kinds.keys()) - self.codes
+        invalid = {code for code, _ in self.kinds} - self.codes
         if invalid:
-            by_text = {}
-            for code in self.codes:
-                # ambiguous only if two codes share a text form, e.g. 1 and "1";
-                # recovering either would be a guess, so recover neither
-                by_text[str(code)] = None if str(code) in by_text else code
+            raise ValueError(f"missing_kinds contains codes not in codes: {invalid}")
 
-            repaired = {}
-            for key, kind in self.kinds.items():
-                if key in self.codes:
-                    repaired[key] = kind
-                elif isinstance(key, str) and by_text.get(key) is not None:
-                    repaired[by_text[key]] = kind
-                else:
-                    raise ValueError(f"missing_kinds contains codes not in codes: {invalid}")
-            # not object.__setattr__: that raises "can't apply this __setattr__"
-            # on a frozen Struct under 3.11 and 3.12
-            force_setattr(self, "kinds", repaired)
+    @property
+    def kind_map(self) -> dict[Category, MissingKind]:
+        """The pairs as a mapping, for lookup."""
+        return dict(self.kinds or ())
 
     def __eq__(self, other: object) -> bool:
         """Custom equality that handles NaN in frozensets."""
@@ -169,11 +197,8 @@ class MissingDef(msgspec.Struct, frozen=True, eq=False):
             return True
         if self.kinds is None or other.kinds is None:
             return False
-        if set(self.kinds.keys()) != set(other.kinds.keys()):
+        if self.kind_map != other.kind_map:
             return False
-        for k, v in self.kinds.items():
-            if other.kinds.get(k) != v:
-                return False
 
         return True
 
@@ -182,7 +207,7 @@ class MissingDef(msgspec.Struct, frozen=True, eq=False):
         # Convert codes to a hashable representation
         code_tuple = tuple(sorted(str(c) for c in self.codes))
         kinds_tuple = (
-            tuple(sorted((str(k), v.value) for k, v in self.kinds.items())) if self.kinds else None
+            tuple(sorted((str(k), v.value) for k, v in self.kinds)) if self.kinds else None
         )
         return hash((code_tuple, kinds_tuple, self.na_is_missing, self.nan_is_missing))
 
@@ -251,7 +276,7 @@ class MissingDef(msgspec.Struct, frozen=True, eq=False):
         if not self.kinds:
             return False
 
-        kind = self.kinds.get(value)
+        kind = self.kind_map.get(value)
         return kind in kinds if kind is not None else False
 
     def by_kind(self, *kinds: MissingKind) -> frozenset[Category]:
@@ -277,7 +302,7 @@ class MissingDef(msgspec.Struct, frozen=True, eq=False):
             return frozenset()
 
         kind_set = set(kinds)
-        return frozenset(code for code, kind in self.kinds.items() if kind in kind_set)
+        return frozenset(code for code, kind in self.kinds if kind in kind_set)
 
     def user_missing(self) -> frozenset[Category]:
         """
@@ -357,7 +382,7 @@ class MissingDef(msgspec.Struct, frozen=True, eq=False):
         """
         return cls(
             codes=frozenset(kinds.keys()),
-            kinds=dict(kinds),
+            kinds=tuple(kinds.items()),
             na_is_missing=na_is_missing,
             nan_is_missing=nan_is_missing,
         )
@@ -480,7 +505,10 @@ class VariableMeta(msgspec.Struct, frozen=True):
 
     name: str
     label: str | None = None
-    value_labels: dict[Category, str] | None = None
+    #: ``(code, label)`` pairs. A dict is accepted when constructing and
+    #: coerced; ``labels`` gives the mapping back for lookup. Pairs because a
+    #: Category-keyed dict does not survive JSON — see ``ValueLabel``.
+    value_labels: tuple[ValueLabel, ...] | None = None
     scheme_ref: SchemeRef | None = None
     mtype: MeasurementType = MeasurementType.STRING
     categories: tuple[Category, ...] | None = None
@@ -491,11 +519,17 @@ class VariableMeta(msgspec.Struct, frozen=True):
     source: MetadataSource = MetadataSource.INFERRED
 
     def __post_init__(self) -> None:
-        """Validate that value_labels and scheme_ref aren't both set."""
+        """Coerce labels to pairs; a variable cannot have both sources."""
+        force_setattr(self, "value_labels", _coerce_labels(self.value_labels))
         if self.value_labels is not None and self.scheme_ref is not None:
             raise ValueError(
                 f"Variable {self.name!r}: cannot specify both value_labels and scheme_ref"
             )
+
+    @property
+    def labels(self) -> dict[Category, str]:
+        """The value labels as a mapping, for lookup. Empty when unset."""
+        return {vl.code: vl.label for vl in self.value_labels or ()}
 
     @property
     def has_labels(self) -> bool:
@@ -608,8 +642,17 @@ class ResolvedLabels(msgspec.Struct, frozen=True):
     """
 
     var_label: str = ""
-    value_labels: dict[Category, str] = msgspec.field(default_factory=dict)
+    #: ``(code, label)`` pairs; ``labels`` is the mapping view. See
+    #: ``ValueLabel`` for why this is not a dict.
+    value_labels: tuple[ValueLabel, ...] = ()
     missing_codes: frozenset[Category] = frozenset()
+
+    def __post_init__(self) -> None:
+        force_setattr(self, "value_labels", _coerce_labels(self.value_labels) or ())
+
+    @property
+    def labels(self) -> dict[Category, str]:
+        return {vl.code: vl.label for vl in self.value_labels}
 
     @property
     def has_var_label(self) -> bool:
@@ -643,7 +686,7 @@ class ResolvedLabels(msgspec.Struct, frozen=True):
         if _is_nan(value):
             return null_text
 
-        return self.value_labels.get(value, str(value))
+        return self.labels.get(value, str(value))
 
     def display_series(
         self,
@@ -684,14 +727,14 @@ class ResolvedLabels(msgspec.Struct, frozen=True):
             # Use map_dict for partial replacement (returns null for unmapped)
             result = df.select(
                 pl.col(name)
-                .replace_strict(self.value_labels, default=None)
+                .replace_strict(self.labels, default=None)
                 .fill_null(pl.col(name).cast(pl.Utf8))
                 .fill_null(null_text)
                 .alias(name)
             ).to_series()
         else:
             result = df.select(
-                pl.col(name).replace_strict(self.value_labels, default=null_text).alias(name)
+                pl.col(name).replace_strict(self.labels, default=null_text).alias(name)
             ).to_series()
 
         return result
@@ -704,7 +747,7 @@ class ResolvedLabels(msgspec.Struct, frozen=True):
 
     def non_missing_labels(self) -> dict[Category, str]:
         """Get value labels excluding missing codes."""
-        return {k: v for k, v in self.value_labels.items() if k not in self.missing_codes}
+        return {k: v for k, v in self.labels.items() if k not in self.missing_codes}
 
 
 # =============================================================================
@@ -921,14 +964,14 @@ class MetadataStore:
 
         # Resolve value labels
         if meta.value_labels is not None:
-            value_labels = dict(meta.value_labels)
+            value_labels = meta.labels
         elif meta.scheme_ref is not None and self._catalog is not None:
             try:
                 scheme = meta.scheme_ref.resolve(self._catalog)
-                value_labels = dict(scheme.mapping)
+                value_labels = scheme.labels
                 # Also get missing from scheme if not defined on meta
                 if meta.missing is None and scheme.missing:
-                    missing_codes = frozenset(scheme.missing)
+                    missing_codes = scheme.missing_codes
             except Exception as e:
                 log.warning(
                     f"Failed to resolve scheme {meta.scheme_ref.concept!r} "
@@ -1699,7 +1742,7 @@ class MetadataStore:
                 # Format value labels as string for display
                 vl_str = None
                 if meta.value_labels:
-                    vl_str = "; ".join(f"{k}={v}" for k, v in meta.value_labels.items())
+                    vl_str = "; ".join(f"{k}={v}" for k, v in meta.labels.items())
 
                 # Format categories
                 cat_str = None
@@ -1717,7 +1760,7 @@ class MetadataStore:
                         )
                     if meta.missing.kinds:
                         missing_kinds_str = "; ".join(
-                            f"{k}={v.value}" for k, v in meta.missing.kinds.items()
+                            f"{k}={v.value}" for k, v in meta.missing.kinds
                         )
 
                 # Format scheme ref
