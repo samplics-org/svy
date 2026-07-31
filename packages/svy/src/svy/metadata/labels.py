@@ -120,9 +120,12 @@ class CategoryScheme(msgspec.Struct, kw_only=True, frozen=True):
     ordered: bool = False
 
     def __post_init__(self):
-        object.__setattr__(self, "entries", _coerce_entries(self.entries))
+        # force_setattr, not object.__setattr__: the latter raises "can't apply
+        # this __setattr__" on a frozen msgspec Struct under 3.11 and 3.12, and
+        # works on 3.13+, so a matrix is the only thing that catches it.
+        force_setattr(self, "entries", _coerce_entries(self.entries))
         if self.id is None:
-            object.__setattr__(self, "id", f"{self.concept}:{self.locale or 'default'}")
+            force_setattr(self, "id", f"{self.concept}:{self.locale or 'default'}")
 
         seen: set[Category] = set()
         for entry in self.entries:
