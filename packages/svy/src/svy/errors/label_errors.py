@@ -137,6 +137,29 @@ class LabelError(SvyError):
         )
 
     @classmethod
+    def duplicate_code(
+        cls,
+        *,
+        where: Optional[str],
+        code: object,
+        docs_url: Optional[str] = None,
+    ) -> "LabelError":
+        return cls(
+            title="Duplicate category code",
+            detail=(
+                f"The code {code!r} appears more than once. A scheme holds one "
+                f"entry per code, so a second would silently shadow the first."
+            ),
+            code="LABEL_DUPLICATE_CODE",
+            where=where,
+            param="entries",
+            expected="each code once",
+            got=repr(code),
+            hint="Remove the duplicate, or merge the two entries.",
+            docs_url=docs_url,
+        )
+
+    @classmethod
     def invalid_locale(
         cls,
         *,

@@ -925,10 +925,10 @@ class MetadataStore:
         elif meta.scheme_ref is not None and self._catalog is not None:
             try:
                 scheme = meta.scheme_ref.resolve(self._catalog)
-                value_labels = dict(scheme.mapping)
+                value_labels = scheme.labels
                 # Also get missing from scheme if not defined on meta
                 if meta.missing is None and scheme.missing:
-                    missing_codes = frozenset(scheme.missing)
+                    missing_codes = scheme.missing_codes
             except Exception as e:
                 log.warning(
                     f"Failed to resolve scheme {meta.scheme_ref.concept!r} "

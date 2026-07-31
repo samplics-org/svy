@@ -10,23 +10,24 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
-- **`CategoryScheme.parents`** — a hierarchy, as `(code, parent_code)` pairs. It lets one scheme describe a cascading list — region → district → ward → enumeration area — so a survey can reference it by concept instead of inlining thousands of codes.
-
-  That matters because a geography is revised on its own cycle. Inlined into a specification, a census redraw that adds sixty enumeration areas changes the document's content hash and shows up as sixty changes to review, while the questionnaire is untouched. Held in the catalog, it does not.
+- **`CategoryScheme` holds one entry per code** rather than several collections keyed by it. `SchemeEntry(code, label, parent, missing)` replaces `mapping`, `missing` and `missing_kinds`, and carries a hierarchy besides.
 
   ```python
-  CategoryScheme(
-      concept="gm_district", locale="en",
-      mapping={101: "Banjul", 102: "Kanifing", 201: "Lower Saloum"},
-      parents=((101, 1), (102, 1), (201, 2)),      # district -> region
-  )
-  scheme.parent_of(201)     # 2
-  scheme.children_of(1)     # (101, 102)
+  CategoryScheme(concept="sex", entries={1: "Male", 2: "Female"})     # a dict is still accepted
+
+  CategoryScheme(concept="gm_district", entries=[
+      SchemeEntry(code=101, label="Banjul", parent=1),                 # district -> region
+      SchemeEntry(code=99, label="Refused", missing=MissingKind.REFUSED),
+  ])
   ```
 
-  **Pairs rather than a `dict`, unlike `mapping` and `missing_kinds`.** JSON object keys are always strings, so a `Category`-keyed dict survives only through `LabellingCatalog`'s custom encoder — put a scheme through plain msgspec and `{101: "Banjul"}` returns as `{"101": "Banjul"}`, silently. A dict here would inherit that and depend on the encoder being extended in step, which is exactly what did not happen for `MissingDef`. Pairs are correct by any route, and there is a test asserting it.
+  Two problems went with the old shape. Three of the collections were dicts or sets keyed by `Category`, and **JSON object keys are always strings** — so `{101: "Banjul"}` returned as `{"101": "Banjul"}` unless it went through a hand-written encoder, silently and with no error. And because the collections could disagree, ~77 lines of `validate_scheme_missing` and `normalize_scheme_missing` existed only to check that they did not.
 
-  Validation covers the child side only: a code with a parent must exist in this scheme's `mapping`. Parent codes belong to a *different* scheme — the region list — which this one cannot see, so checking them here would reject every real hierarchy.
+  One entry per code removes both. Every field is JSON-native, so **the bespoke encoder is gone** — `to_bytes` is a single `msgspec.json.encode` — and a scheme keeps its code types by any route, which a test asserts rather than trusting the encoder to be remembered. The invariants those 77 lines checked are now unrepresentable: a missing code outside the scheme, or a kind for a code that is not missing, cannot be written down. Both functions remain as no-op seams; NaN and duplicate codes are rejected in `__post_init__`, where a caller cannot skip them by forgetting to validate.
+
+  New lookups: `labels`, `codes`, `substantive`, `missing_codes`, `kind_of`, `codes_of_kind`, `parent_of`, `children_of`, `entry`. `make_scheme` still takes the facets apart — `mapping=`, `missing=`, `missing_kinds=`, `parents=` — and folds them, for callers who hold the pieces separately.
+
+  **The hierarchy is what forced the question.** A cascading list — region → district → ward → enumeration area — could not be described at all, so a survey specification had to inline every code. Inlined, a census redraw adding sixty EAs changes the spec's content hash and reads as sixty changes to a questionnaire nobody touched. Held in the catalog, it does not.
 
 ### Fixed
 
