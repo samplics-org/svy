@@ -307,6 +307,20 @@ class VariableMeta(msgspec.Struct, frozen=True):
 # =============================================================================
 
 
+def _numeric_variants(value: object) -> tuple[Category, ...]:
+    """The same number written the other ways a code is commonly stored."""
+    try:
+        f = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return ()
+    if f != f:  # NaN
+        return ()
+    out: list[Category] = [f]
+    if f.is_integer():
+        out += [int(f), str(int(f))]
+    return tuple(v for v in out if v != value)
+
+
 class ResolvedLabels(msgspec.Struct, frozen=True):
     """
     Fully resolved labels ready for display.
@@ -377,17 +391,22 @@ class ResolvedLabels(msgspec.Struct, frozen=True):
         if value in labels:
             return labels[value]
 
-        # Codes and values can disagree in type without disagreeing in meaning.
-        # SPSS stores value-label keys as strings, so a `.sav` read back gives
-        # {"1": "Yes"} against a Float64 column, and a literal lookup misses.
-        # `display_series` never hit this because it stringifies both sides.
+        # Codes and values can disagree in *type* without disagreeing in
+        # meaning, and it happens in both directions:
+        #
+        #   - SPSS stores value-label keys as strings, so a `.sav` read back
+        #     gives {"1": "Yes"} against a Float64 column;
+        #   - a Table's `rowvals` holds stringified codes ("1") while the
+        #     labels are keyed by the ints they came from ({1: "Yes"}).
+        #
+        # A literal lookup misses both. `display_series` never showed it
+        # because it stringifies both sides before replacing.
         text = str(value)
         if text in labels:
             return labels[text]
-        if isinstance(value, float) and value.is_integer():
-            for key in (int(value), str(int(value))):
-                if key in labels:
-                    return labels[key]
+        for key in _numeric_variants(value):
+            if key in labels:
+                return labels[key]
         return text
 
     def display_series(

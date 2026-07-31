@@ -100,3 +100,56 @@ def test_the_writers_have_nothing_to_declare_as_user_missing():
     assert resolved.var_label == "Q"
     assert resolved.labels == {1: "Yes", 99: "Refused"}
     assert not hasattr(store.get("q"), "missing")
+
+
+# ---------------------------------------------------------------------------
+# Codes and values disagreeing in type
+# ---------------------------------------------------------------------------
+
+
+def test_display_bridges_a_code_type_mismatch_in_both_directions():
+    """A code stored one way and looked up another still finds its label.
+
+    Both directions occur in practice: SPSS writes string keys against a
+    numeric column, and a Table's `rowvals` holds stringified codes against
+    int-keyed labels. A literal lookup missed both, and `display` returned the
+    bare value — the one thing labels exist to prevent.
+    """
+    int_keyed = ResolvedLabels(value_labels={1: "Yes", 0: "No"})
+    assert int_keyed.display("1") == "Yes"  # string value, int key
+    assert int_keyed.display(1.0) == "Yes"  # float value, int key
+    assert int_keyed.display(1) == "Yes"
+
+    str_keyed = ResolvedLabels(value_labels={"1": "Yes", "0": "No"})
+    assert str_keyed.display(1) == "Yes"  # int value, string key
+    assert str_keyed.display(1.0) == "Yes"
+    assert str_keyed.display("1") == "Yes"
+
+    # an unlabelled value still renders as itself, and a genuine string code is
+    # not coerced into a number it never was
+    assert int_keyed.display(7) == "7"
+    assert ResolvedLabels(value_labels={"north": "North"}).display("north") == "North"
+
+
+def test_a_labelled_crosstab_keeps_its_estimates_and_its_order():
+    """`crosstab` returned all-null estimates whenever labels were applied.
+
+    `rowvals` holds stringified codes while the labels are int-keyed, so the
+    label lookup missed, the row skeleton stayed as codes while the frame held
+    labels, and the left join matched nothing. Order comes from the codes, so
+    labels that sort differently from their codes must not reorder the table.
+    """
+    import svy
+
+    df = pl.DataFrame({"mood": [1, 2, 3, 1, 2, 3, 1, 2], "w": [1.0] * 8})
+    sample = svy.Sample(df, svy.Design(wgt="w"))
+    # deliberately labelled so alphabetical order disagrees with code order
+    sample.set_value_labels("mood", {1: "Zebra", 2: "Apple", 3: "Mango"})
+    table = sample.categorical.tabulate("mood")
+
+    out = table.crosstab(use_labels=True)
+    assert out["mood"].to_list() == ["Zebra", "Apple", "Mango"]
+    assert out["est"].to_list() == pytest.approx([0.375, 0.375, 0.25])
+
+    unlabelled = table.crosstab(use_labels=False)
+    assert unlabelled["est"].to_list() == pytest.approx([0.375, 0.375, 0.25])
