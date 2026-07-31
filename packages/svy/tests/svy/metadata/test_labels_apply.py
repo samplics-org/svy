@@ -238,14 +238,14 @@ def test_apply_labels_variable_labels_only_ok(sample):
 def test_apply_labels_with_global_categories_to_categorical(sample):
     cats = {1: "Male", 2: "Female"}
     sample.apply_labels(["sex"], ["Sex"], categories=cats)
-    assert sample._labels["sex"].categories == cats
+    assert sample._labels["sex"].label_map == cats
 
 
 def test_apply_labels_with_per_var_categories(sample):
     per = {"sex": {1: "M", 2: "F"}, "edu": {0: "None", 1: "HS", 2: "College"}}
     sample.apply_labels(["sex", "edu"], ["Sex", "Education"], categories=per)
-    assert sample._labels["sex"].categories == {1: "M", 2: "F"}
-    assert sample._labels["edu"].categories == {0: "None", 1: "HS", 2: "College"}
+    assert sample._labels["sex"].label_map == {1: "M", 2: "F"}
+    assert sample._labels["edu"].label_map == {0: "None", 1: "HS", 2: "College"}
 
 
 def test_apply_labels_rejects_nan_key_in_categories_global(sample):

@@ -31,6 +31,21 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **Category-keyed dicts could not round-trip, in four places.** JSON object keys are always strings, so `dict[Category, str]` writes `{101: "Banjul"}` as `{"101": "Banjul"}` and decodes it with a *string* key. Every join against an integer-coded column then misses. Each field is now `(code, label)` pairs, with a mapping still accepted when constructing and a dict-view property for lookup:
+
+  | field | was | now |
+  |---|---|---|
+  | `VariableMeta.value_labels` | corrupted silently | pairs; `.labels` for lookup |
+  | `ResolvedLabels.value_labels` | corrupted silently | pairs; `.labels` |
+  | `Label.categories` | raised on decode | pairs; `.label_map` |
+  | `MissingDef.kinds` | raised on decode | pairs; `.kind_map` |
+
+  The two silent ones are the dangerous half: a store of variable metadata written and read back had string codes, no error, and every value label quietly stopped matching its column.
+
+  `Label.categories` also **dropped `_MissingType` from its union**. msgspec refuses to decode any union containing a custom type, so the struct raised regardless of the key problem — and nothing ever set the field to the sentinel, since `None` already meant "no value labels". It bought no distinction and cost the ability to decode at all.
+
+  `MissingDef.__post_init__` **loses its repair step**. That was added to recover integer codes from decoded string keys; with pairs there is nothing to repair, and the subset check now means what it says.
+
 - **A `MissingDef` carrying `kinds` could not survive JSON.** JSON object keys are always strings, so `dict[Category, MissingKind]` encodes `{98: DONT_KNOW}` as `{"98": "dnk"}` and decodes it back with a *string* key — while `codes`, a JSON array, returns as `int`. The subset check in `__post_init__` then saw `{'98'} - {98}` and raised, so neither a `MissingDef` with kinds nor any `VariableMeta` holding one could be decoded at all:
 
   ```

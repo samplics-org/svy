@@ -91,9 +91,9 @@ def test_create_labels_from_scratch(synthetic_sample_df: pl.DataFrame):
     }
 
     # 3) Quick sanity checks
-    assert labels["resp2"].categories[1] == "Yes"
-    assert labels["resp2_new"].categories[0] == "No"
-    assert "High School" in labels["educ"].categories.values()
+    assert labels["resp2"].label_map[1] == "Yes"
+    assert labels["resp2_new"].label_map[0] == "No"
+    assert "High School" in labels["educ"].label_map.values()
 
 
 # ---------------------------------------------------------------------------

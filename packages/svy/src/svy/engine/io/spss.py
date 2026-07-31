@@ -103,7 +103,7 @@ def _write_spss(
             # Get value labels (direct or resolved from scheme)
             resolved = store.resolve_labels(var)
             if resolved.has_value_labels:
-                entry["values"] = dict(resolved.value_labels)
+                entry["values"] = resolved.labels
 
             # Get missing codes
             if meta.missing is not None:

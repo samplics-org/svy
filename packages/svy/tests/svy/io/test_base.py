@@ -46,7 +46,7 @@ def test_read_spss_attaches_labels(dummy_svyio, tmp_path):
     meta = sample.meta
     assert isinstance(meta.get("sex"), VariableMeta)
     assert meta.get("sex").label == "Sex of respondent"
-    cats = meta.get("sex").value_labels or {}
+    cats = meta.get("sex").labels
     assert cats[1] == "Male" and cats[2] == "Female"
 
 

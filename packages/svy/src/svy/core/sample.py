@@ -985,7 +985,7 @@ class Sample:
         for var in self._metadata:
             resolved = self._metadata.resolve_labels(var)
             if resolved.has_value_labels:
-                result[var] = dict(resolved.value_labels)
+                result[var] = resolved.labels
         return result
 
     # ════════════════════════════════════════════════════════════════════════

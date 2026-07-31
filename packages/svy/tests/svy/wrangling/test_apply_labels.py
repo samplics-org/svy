@@ -52,7 +52,7 @@ def test_apply_labels_categories_only(sample_basic: Sample):
     out = sample_basic.wrangling.apply_labels(categories={"sex": {1: "Male", 2: "Female"}})
     meta = out.meta.get("sex")
     assert meta is not None
-    assert meta.value_labels == {1: "Male", 2: "Female"}
+    assert meta.labels == {1: "Male", 2: "Female"}
 
 
 def test_apply_labels_both(sample_basic: Sample):
@@ -63,7 +63,7 @@ def test_apply_labels_both(sample_basic: Sample):
     meta = out.meta.get("sex")
     assert meta is not None
     assert meta.label == "Sex of respondent"
-    assert meta.value_labels == {1: "Male", 2: "Female"}
+    assert meta.labels == {1: "Male", 2: "Female"}
 
 
 def test_apply_labels_multiple_variables(sample_basic: Sample):
@@ -75,9 +75,9 @@ def test_apply_labels_multiple_variables(sample_basic: Sample):
         },
     )
     assert out.meta.get("sex").label == "Sex"
-    assert out.meta.get("sex").value_labels == {1: "Male", 2: "Female"}
+    assert out.meta.get("sex").labels == {1: "Male", 2: "Female"}
     assert out.meta.get("region").label == "Region"
-    assert out.meta.get("region").value_labels == {
+    assert out.meta.get("region").labels == {
         "N": "North",
         "S": "South",
         "E": "East",
@@ -92,7 +92,7 @@ def test_apply_labels_independent_keys(sample_basic: Sample):
         categories={"sex": {1: "Male", 2: "Female"}},
     )
     assert out.meta.get("age").label == "Age in years"
-    assert out.meta.get("sex").value_labels == {1: "Male", 2: "Female"}
+    assert out.meta.get("sex").labels == {1: "Male", 2: "Female"}
 
 
 def test_apply_labels_returns_new_instance_by_default(sample_basic: Sample):
@@ -257,7 +257,7 @@ def test_apply_labels_string_categories():
         labels={"status": "Status code"},
         categories={"status": {"A": "Active", "B": "Blocked", "C": "Closed"}},
     )
-    assert out.meta.get("status").value_labels == {
+    assert out.meta.get("status").labels == {
         "A": "Active",
         "B": "Blocked",
         "C": "Closed",
@@ -271,7 +271,7 @@ def test_apply_labels_partial_categories():
     out = s.wrangling.apply_labels(
         categories={"tenure": {"Occupied for free": "Free use"}},
     )
-    assert out.meta.get("tenure").value_labels == {"Occupied for free": "Free use"}
+    assert out.meta.get("tenure").labels == {"Occupied for free": "Free use"}
     warns = [w for w in out.warnings if w.code == "DATA_VALUE_NOT_LABELED"]
     assert len(warns) == 1
 
@@ -283,7 +283,7 @@ def test_apply_labels_extra_category_keys_warns():
     out = s.wrangling.apply_labels(
         categories={"a": {1: "One", 2: "Two", 99: "Unknown"}},
     )
-    assert out.meta.get("a").value_labels == {1: "One", 2: "Two", 99: "Unknown"}
+    assert out.meta.get("a").labels == {1: "One", 2: "Two", 99: "Unknown"}
     warns = [w for w in out.warnings if w.code == "LABEL_KEY_NOT_IN_DATA"]
     assert len(warns) == 1
 
@@ -301,7 +301,7 @@ def test_labels_preserved_after_filter(sample_basic: Sample):
     filtered = labeled.wrangling.filter_records(col("age") > 25)
     meta = filtered.meta.get("sex")
     assert meta is not None
-    assert meta.value_labels == {1: "M", 2: "F"}
+    assert meta.labels == {1: "M", 2: "F"}
 
 
 def test_labels_updated_on_rename(sample_basic: Sample):
@@ -346,7 +346,7 @@ def test_label_object_attributes():
     meta = out.meta.get("x")
     assert isinstance(meta, VariableMeta)
     assert meta.label == "X Variable"
-    assert meta.value_labels == {1: "Low", 2: "Med", 3: "High"}
+    assert meta.labels == {1: "Low", 2: "Med", 3: "High"}
 
 
 def test_label_without_categories():
@@ -365,7 +365,7 @@ def test_apply_labels_empty_labels_dict():
     df = pl.DataFrame({"a": [1, 2, 3]})
     s = Sample(df)
     out = s.wrangling.apply_labels(labels={}, categories={"a": {1: "One"}})
-    assert out.meta.get("a").value_labels == {1: "One"}
+    assert out.meta.get("a").labels == {1: "One"}
 
 
 def test_apply_labels_empty_categories_dict():
@@ -384,7 +384,7 @@ def test_apply_labels_single_row_dataframe():
         labels={"a": "Single value"},
         categories={"a": {1: "One"}},
     )
-    assert out.meta.get("a").value_labels == {1: "One"}
+    assert out.meta.get("a").labels == {1: "One"}
 
 
 def test_apply_labels_with_all_nulls():

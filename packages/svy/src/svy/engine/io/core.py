@@ -200,8 +200,7 @@ def build_metadata_for_export(
         if resolved.has_value_labels:
             # ensure codes are JSON-serializable primitives; texts are str
             value_labels[var] = {
-                _py_scalar(k): ("" if v is None else str(v))
-                for k, v in resolved.value_labels.items()
+                _py_scalar(k): ("" if v is None else str(v)) for k, v in resolved.labels.items()
             }
 
     return {"var_labels": var_labels, "value_labels": value_labels}

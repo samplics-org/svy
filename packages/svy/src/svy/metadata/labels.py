@@ -11,11 +11,12 @@ from typing import Iterable, Mapping, Self
 import msgspec
 import polars as pl
 
-from msgspec.structs import replace
+from msgspec.structs import force_setattr, replace
 
 from svy.core.enumerations import MissingKind
-from svy.core.types import Category, _MissingType
+from svy.core.types import Category
 from svy.errors.label_errors import LabelError
+from svy.metadata.variable_meta import ValueLabel, _coerce_labels
 
 
 log = logging.getLogger(__name__)
@@ -29,10 +30,29 @@ class Label(msgspec.Struct, frozen=True):
     -----
     Label/value-labels are intended for variables measured as
     NOMINAL, ORDINAL, or BOOLEAN (see MeasurementType).
+
+    ``categories`` holds ``ValueLabel`` pairs and accepts a dict when
+    constructing. It was ``dict[Category, str] | None | _MissingType``, which
+    could not be decoded at all — two defects stacked. A ``Category``-keyed
+    dict loses its code types through JSON (see ``ValueLabel``), and msgspec
+    refuses any union containing a custom type, so the struct raised on every
+    round trip regardless.
+
+    The ``_MissingType`` member is gone with it. Nothing ever set this field to
+    the sentinel — ``None`` already means "no value labels" — so it bought no
+    distinction and cost the ability to decode.
     """
 
     label: str
-    categories: dict[Category, str] | None | _MissingType = None
+    categories: tuple[ValueLabel, ...] | None = None
+
+    def __post_init__(self) -> None:
+        force_setattr(self, "categories", _coerce_labels(self.categories))
+
+    @property
+    def label_map(self) -> dict[Category, str]:
+        """The categories as a mapping, for lookup. Empty when unset."""
+        return {vl.code: vl.label for vl in self.categories or ()}
 
     def clone(self, **overrides) -> Self:
         return replace(self, **overrides)

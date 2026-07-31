@@ -117,7 +117,7 @@ def _write_stata(
             # Get value labels (direct or resolved from scheme)
             resolved = store.resolve_labels(var)
             if resolved.has_value_labels:
-                value_labels[var] = dict(resolved.value_labels)
+                value_labels[var] = resolved.labels
 
     # 2. Prepare Table
     table = to_writer_table(df)
