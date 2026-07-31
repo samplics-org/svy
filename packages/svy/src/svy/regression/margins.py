@@ -134,9 +134,9 @@ class GLMMargins(msgspec.Struct, frozen=True):
                     f"{v:.2f}",
                     f"{m:.6f}",
                     f"{s:.6f}",
-                    f"[{l:.6f}, {u:.6f}]",
+                    f"[{lo:.6f}, {hi:.6f}]",
                 ]
-                for v, m, s, l, u in zip(self.values, self.margin, self.se, self.lci, self.uci)
+                for v, m, s, lo, hi in zip(self.values, self.margin, self.se, self.lci, self.uci)
             ]
         else:
             headers = ["Margin", "SE", ci_header]
@@ -144,9 +144,9 @@ class GLMMargins(msgspec.Struct, frozen=True):
                 [
                     f"{m:.6f}",
                     f"{s:.6f}",
-                    f"[{l:.6f}, {u:.6f}]",
+                    f"[{lo:.6f}, {hi:.6f}]",
                 ]
-                for m, s, l, u in zip(self.margin, self.se, self.lci, self.uci)
+                for m, s, lo, hi in zip(self.margin, self.se, self.lci, self.uci)
             ]
         return f"{title}\n\n{render_plain_table(headers, rows)}"
 
@@ -184,11 +184,11 @@ class GLMMargins(msgspec.Struct, frozen=True):
             )
         ):
             if self.values is not None:
-                v, m, s, l, u = row_data
-                row = [f"{v:.2f}", f"{m:.6f}", f"{s:.6f}", f"[{l:.6f}, {u:.6f}]"]
+                v, m, s, lo, hi = row_data
+                row = [f"{v:.2f}", f"{m:.6f}", f"{s:.6f}", f"[{lo:.6f}, {hi:.6f}]"]
             else:
-                m, s, l, u = row_data
-                row = [f"{m:.6f}", f"{s:.6f}", f"[{l:.6f}, {u:.6f}]"]
+                m, s, lo, hi = row_data
+                row = [f"{m:.6f}", f"{s:.6f}", f"[{lo:.6f}, {hi:.6f}]"]
             table.add_row(*row)
 
         title = f"GLM Margins: [bold]{self.term}[/bold] ({self.margin_type}, {conf_pct}% CI)"

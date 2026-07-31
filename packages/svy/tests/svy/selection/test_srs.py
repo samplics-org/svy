@@ -134,6 +134,11 @@ def test_sample_select_srswr_n_stratified():
 
 def test_sample_select_srswr_by():
     samp = Sample(DF).sampling.srs(n={"Less than HS": 2, "HS or higher": 3}, by="education")
+    hits = samp._data.group_by("education").agg(pl.col("svy_number_of_hits").sum())
+    assert dict(zip(hits["education"], hits["svy_number_of_hits"])) == {
+        "Less than HS": 2,
+        "HS or higher": 3,
+    }
 
 
 # === Additions start here ===

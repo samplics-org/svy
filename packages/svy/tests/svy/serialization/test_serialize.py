@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+
 from pathlib import Path
 
 import msgspec
@@ -24,27 +25,26 @@ from svy import (
     CellEst,
     ChiSquare,
     DescribeResult,
-    Design,
     Estimate,
     FDist,
     GLMFit,
     GLMPred,
     ParamEst,
     PopParam,
-    Sample,
     Table,
     TableType,
     TTestOneGroup,
     TTestTwoGroups,
 )
+from svy.categorical.ttest import DiffEst, GroupLevels, TtestEst, TTestStats
 from svy.core.containers import TDist
 from svy.core.describe import DescribeContinuous
 from svy.core.enumerations import EstimationMethod, MeasurementType, QuantileMethod
-from svy.categorical.ttest import DiffEst, GroupLevels, TtestEst, TTestStats
 from svy.regression.glm import GLMCoef, GLMStats
 from svy.serialize import from_json, serialize, to_dict, to_json
 from svy.serialize.serializers import _SERIALIZERS
 from svy.serialize.structs import SCHEMA_VERSION
+
 
 # ---------------------------------------------------------------------------
 # Helpers — construct minimal result objects

@@ -1,5 +1,4 @@
 # tests/data/svy_test_data_bbr.py
-from datetime import date
 from pathlib import Path
 
 import numpy as np

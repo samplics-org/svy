@@ -100,7 +100,7 @@ class SingletonResult(msgspec.Struct, frozen=True):
     n_psus_after: int = 0
 
     # The config to be attached to the sample for variance estimation
-    config: _SingletonHandlingConfig | None = None
+    config: SingletonHandlingConfig | None = None
 
 
 class SingletonSummary(msgspec.Struct, frozen=True):

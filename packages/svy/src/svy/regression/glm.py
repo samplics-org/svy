@@ -230,9 +230,9 @@ class GLMFit(msgspec.Struct, frozen=True):
         _R = 13  # right label width
 
         def _row(lbl, val, rbl="", rval=""):
-            l = f"{lbl:<{_L}}: {str(val):<{_V}}"
-            r = f"  {rbl:<{_R}}: {rval}" if rbl else ""
-            return f"  {l}{r}".rstrip()
+            left = f"{lbl:<{_L}}: {str(val):<{_V}}"
+            right = f"  {rbl:<{_R}}: {rval}" if rbl else ""
+            return f"  {left}{right}".rstrip()
 
         lines = [
             f"GLM: {self.family} ({self.link})",

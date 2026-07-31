@@ -16,10 +16,10 @@ import polars as pl
 
 try:
     from svy_rs._internal import (
-        create_bootstrap_wgts as rust_create_bootstrap_wgts,  # type: ignore[import-untyped]
+        brr_hadamard_size as rust_brr_hadamard_size,  # type: ignore[import-untyped]
     )
     from svy_rs._internal import (
-        brr_hadamard_size as rust_brr_hadamard_size,  # type: ignore[import-untyped]
+        create_bootstrap_wgts as rust_create_bootstrap_wgts,  # type: ignore[import-untyped]
     )
     from svy_rs._internal import (
         create_brr_wgts as rust_create_brr_wgts,  # type: ignore[import-untyped]

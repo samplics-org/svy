@@ -1012,17 +1012,13 @@ def ttest_to_polars(tt: TTestOneGroup | TTestTwoGroups):
 
 
 def ttest_to_markdown(tt: TTestOneGroup | TTestTwoGroups, *, dec: int = 4) -> str:
-    """Simple Markdown table of estimates; stats summarized below."""
+    """Simple Markdown table of estimates."""
     rows = list(_rows_for_plain(tt, dec=dec))
     headers = ["Group", "Level", "y_level", "Estimate", "Std Err", "CV", "Lower", "Upper"]
     md = ["| " + " | ".join(headers) + " |", "| " + " | ".join(["---"] * len(headers)) + " |"]
     for r in rows:
         md.append("| " + " | ".join(r) + " |")
 
-    s = _stats_summary_line(tt)
-    if s:
-        md.append("")
-        md.append(s)
     return "\n".join(md)
 
 

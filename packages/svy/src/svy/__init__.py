@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import logging
 
-from svy import datasets  # noqa: F401
-from svy import serialize  # noqa: F401
+from svy import (
+    datasets,  # noqa: F401
+    serialize,  # noqa: F401
+)
 from svy.categorical import (
     Categorical,
     CellEst,
