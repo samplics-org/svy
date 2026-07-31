@@ -8,55 +8,135 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
-### Added
+**svy labels values so results print nicely. That is the whole job.** Everything that made
+a label list *shareable* — concepts across locales, hierarchies, the semantics of why an
+answer is absent — moves to **svy-spec**, where a questionnaire gives it meaning. A
+catalogue without one is machinery with no job.
 
-- **`CategoryScheme` holds one entry per code** rather than several collections keyed by it. `SchemeEntry(code, label, parent, missing)` replaces `mapping`, `missing` and `missing_kinds`, and carries a hierarchy besides.
+If you set labels by hand, read them from a `.sav`/`.dta`, or print them on estimates,
+nothing you do changes. If you used missing-value definitions, see **Removed**.
+
+### Removed
+
+- **`MissingDef`, and every API keyed on it**: `VariableMeta.missing`, `.na_as_level`,
+  `.has_missing`, `.with_missing`; `ResolvedLabels.missing_codes`, `.is_missing`,
+  `.non_missing_labels`; `MetadataStore.set_missing`, `.set_na_as_level`; the same two on
+  `Sample`; the `has_missing` columns in `summary()` and `coverage()`. `svy.metadata` no
+  longer exports `MissingDef` or `MissingKind` (the enum stays in `svy.core.enumerations`).
+
+  **A 99 labelled "Refusal" is the integer 99 with the label "Refusal".** svy reads it,
+  prints it, and forms no opinion. Absence is a polars null, which needs no metadata.
+
+  The evidence for removing rather than slimming: **import never populated it.** svy-io
+  surfaces `MissingRule` and `TaggedNA`, and svy's importer reads variable labels and value
+  labels only — so the field's only source was a hand-set value or svy-spec's bridge, and
+  its only consumer was writing it back out. Nothing ever acted on it: a declared code did
+  not change an estimate then, and does not now.
 
   ```python
-  CategoryScheme(concept="sex", entries={1: "Male", 2: "Female"})     # a dict is still accepted
-
-  CategoryScheme(concept="gm_district", entries=[
-      SchemeEntry(code=101, label="Banjul", parent=1),                 # district -> region
-      SchemeEntry(code=99, label="Refused", missing=MissingKind.REFUSED),
-  ])
+  # before
+  store.set_missing("age", dont_know=[98], refused=[99])
+  # after — the code is a value, and a value needs a label
+  store.set_value_labels("age", {98: "Don't know", 99: "Refused"})
   ```
 
-  Two problems went with the old shape. Three of the collections were dicts or sets keyed by `Category`, and **JSON object keys are always strings** — so `{101: "Banjul"}` returned as `{"101": "Banjul"}` unless it went through a hand-written encoder, silently and with no error. And because the collections could disagree, ~77 lines of `validate_scheme_missing` and `normalize_scheme_missing` existed only to check that they did not.
+  To declare user-missing in an exported `.sav`, pass it at the boundary that has the
+  concept: `svy_io.write_sav(..., user_missing=[...])`.
 
-  One entry per code removes both. Every field is JSON-native, so **the bespoke encoder is gone** — `to_bytes` is a single `msgspec.json.encode` — and a scheme keeps its code types by any route, which a test asserts rather than trusting the encoder to be remembered. The invariants those 77 lines checked are now unrepresentable: a missing code outside the scheme, or a kind for a code that is not missing, cannot be written down. Both functions remain as no-op seams; NaN and duplicate codes are rejected in `__post_init__`, where a caller cannot skip them by forgetting to validate.
+- **`locale`, everywhere.** `CategoryScheme.locale`, `SchemeRef.locale`,
+  `LabellingCatalog(locale=)`/`.locale`/`.set_locale`, the `locale=` argument on `pick`,
+  `list`, `add_scheme`, `make_scheme`, `MetadataStore(default_locale=)`,
+  `MetadataStore.set_scheme`, and `Sample.use_scheme`.
 
-  New lookups: `labels`, `codes`, `substantive`, `missing_codes`, `kind_of`, `codes_of_kind`, `parent_of`, `children_of`, `entry`. `make_scheme` still takes the facets apart — `mapping=`, `missing=`, `missing_kinds=`, `parents=` — and folds them, for callers who hold the pieces separately.
+  svy does not translate. All `locale` did was choose between two schemes registered under
+  one concept — and two concept names do that with no matching algorithm. **A label is a
+  string:** write `"Femme"` and svy prints `"Femme"`. svy holds one set of strings;
+  choosing which set is svy-spec's job.
 
-  **The hierarchy is what forced the question.** A cascading list — region → district → ward → enumeration area — could not be described at all, so a survey specification had to inline every code. Inlined, a census redraw adding sixty EAs changes the spec's content hash and reads as sixty changes to a questionnaire nobody touched. Held in the catalog, it does not.
+  ```python
+  catalog.add_scheme(concept="sex_en", mapping={1: "Male", 2: "Female"})
+  catalog.add_scheme(concept="sex_fr", mapping={1: "Homme", 2: "Femme"})
+  ```
+
+- **`CategoryScheme.id`** — it only ever meant `concept:locale`. The catalogue is keyed by
+  concept now, one concept holds one scheme, and `pick()` is a lookup. `get`, `remove` and
+  `to_label` take a concept where they took a scheme id.
+
+- **`SchemeEntry.parent`, `.missing`, `.is_missing`**, and the lookups over them:
+  `parent_of`, `children_of`, `codes_of_kind`, `kind_of`, `substantive`, `missing_codes`.
+  A scheme is a code→label map. svy has no cascading selects, and why an answer is absent
+  is a questionnaire fact.
+
+- **`CategoryScheme.ordered`.** Order lives in the codes; "is this ordinal" is
+  `VariableMeta.mtype`.
+
+- **`to_label_by_concept`**, folded into `to_label` now that concept is the key.
+
+- **171 lines with no caller anywhere** in the monorepo, in svy-spec, or in any test:
+  `is_missing_value`, `recode_for_analysis`, `display_text`, `polars_mask`,
+  `polars_to_analysis`, `polars_to_display` (none exported), `SchemeCatalogView`, and the
+  no-op seams `validate_scheme_missing`, `normalize_scheme_missing`,
+  `missing_codes_by_kind`. `labels.py` no longer imports polars.
 
 ### Fixed
 
-- **Category-keyed dicts could not round-trip, in four places.** JSON object keys are always strings, so `dict[Category, str]` writes `{101: "Banjul"}` as `{"101": "Banjul"}` and decodes it with a *string* key. Every join against an integer-coded column then misses. Each field is now `(code, label)` pairs, with a mapping still accepted when constructing and a dict-view property for lookup:
+- **The SPSS and SAS writers could not run at all.** `_write_spss` called
+  `svy_io.write_spss` and `_write_sas` called `svy_io.write_sas`; neither name has ever
+  existed. Both calls carried `# type: ignore[attr-defined]` — the type checker had said
+  so and been silenced.
 
-  | field | was | now |
-  |---|---|---|
-  | `VariableMeta.value_labels` | corrupted silently | pairs; `.labels` for lookup |
-  | `ResolvedLabels.value_labels` | corrupted silently | pairs; `.labels` |
-  | `Label.categories` | raised on decode | pairs; `.label_map` |
-  | `MissingDef.kinds` | raised on decode | pairs; `.kind_map` |
+  The real API is `write_sav(df, path, *, var_labels, value_labels, user_missing, ...)`,
+  taking labels as separate arguments rather than one `metadata` dict.
 
-  The two silent ones are the dangerous half: a store of variable metadata written and read back had string codes, no error, and every value label quietly stopped matching its column.
+  SAS is more than a rename: ReadStat writes **SAS Transport (XPT) only** — there is no
+  `sas7bdat` writer — and XPT carries no variable or value labels. `_write_sas` now writes
+  XPT and **warns** that the labels did not travel, pointing at `write_spss` or
+  `write_stata`. `format=` and `encoding=` are reported as ignored, and `_write_spss` loses
+  its `encoding` parameter, which `write_sav` does not take.
 
-  `Label.categories` also **dropped `_MissingType` from its union**. msgspec refuses to decode any union containing a custom type, so the struct raised regardless of the key problem — and nothing ever set the field to the sentinel, since `None` already meant "no value labels". It bought no distinction and cost the ability to decode at all.
+  It survived because the only test used a stub that **defined `write_spss` and
+  `write_sas` itself**. A stub that invents the interface it stands in for cannot catch a
+  call to a function that is not there.
 
-  `MissingDef.__post_init__` **loses its repair step**. That was added to recover integer codes from decoded string keys; with pairs there is nothing to repair, and the subset check now means what it says.
+- **A labelled `Table.crosstab()` returned `None` for every estimate.** The frame's rows
+  were replaced with labels while the skeleton they are joined against stayed as codes.
 
-- **A `MissingDef` carrying `kinds` could not survive JSON.** JSON object keys are always strings, so `dict[Category, MissingKind]` encodes `{98: DONT_KNOW}` as `{"98": "dnk"}` and decodes it back with a *string* key — while `codes`, a JSON array, returns as `int`. The subset check in `__post_init__` then saw `{'98'} - {98}` and raised, so neither a `MissingDef` with kinds nor any `VariableMeta` holding one could be decoded at all:
+- **A value label did not apply when the code and the value disagreed in type.** SPSS
+  stores value-label keys as strings, so a `.sav` read back gives `{"1": "Yes"}` against a
+  `Float64` column, and `ResolvedLabels.display` returned the bare number. `display` now
+  bridges both directions. `display_series` was never affected.
 
-  ```
-  msgspec.ValidationError: missing_kinds contains codes not in codes: {'98'} - at `$.missing`
-  ```
+- **`ttest_to_markdown()` raised `NameError`** on any call — it referenced a
+  `_stats_summary_line` that does not exist. The docstring promised a summary line the code
+  never had; both are gone.
 
-  A decoded key is now matched back to the code it was written from before the check runs. Where two codes share a text form — `1` and `"1"` — neither is recovered, since choosing one would be a guess; that still raises, as does a genuine mismatch.
+- **`SingletonResult.config` named a class that does not exist**
+  (`_SingletonHandlingConfig` for `SingletonHandlingConfig`). Latent only because
+  `from __future__ import annotations` left it unresolved; it would have broken on
+  `get_type_hints` or a typed decode.
 
-  Latent until now: nothing serializes a `MetadataStore` wholesale, and the SAS writer takes `missing.codes` alone. It surfaces as soon as anything saves variable metadata, which projecting an instrument spec does. The sibling class shows the intended treatment — `CategoryScheme` carries the same `set` and `Category`-keyed `dict`, and round-trips because `LabellingCatalog` serializes it as pairs and lists explicitly for this reason.
+- **Two tests shared a name**, so the second replaced the first and one never ran. Three
+  further tests had no assertions at all.
 
-- **`MissingDef`'s docstring referenced two enum members that do not exist**, `MissingKind.REFUSAL` and `MissingKind.NOT_APPLICABLE`. The enum defines `DONT_KNOW`, `REFUSED`, `NO_ANSWER`, `STRUCTURAL`, `SYSTEM`; the example had never been run.
+- **`ruff check` passes on `packages/svy/{src,tests}`** for the first time.
+
+### Changed
+
+- **`VariableMeta.value_labels`, `ResolvedLabels.value_labels` and `Label.categories` hold
+  `(code, label)` pairs**, with a mapping accepted when constructing and a dict view for
+  lookup — `.labels`, `.labels`, `.label_map`. JSON object keys are always strings, so a
+  `dict[Category, str]` wrote `{101: "Banjul"}` and read it back with a *string* key,
+  silently, after which every join against an integer-coded column missed.
+
+  `Label.categories` also dropped `_MissingType` from its union: msgspec refuses to decode
+  any union containing a custom type, so the struct raised regardless — and nothing ever
+  set the field to the sentinel, since `None` already meant "no value labels".
+
+- **`CategoryScheme` holds one entry per code**, `SchemeEntry(code, label)`, replacing the
+  `mapping` / `missing` / `missing_kinds` collections keyed by code. Three of those were
+  `Category`-keyed dicts or sets that survived only through a hand-written encoder; every
+  field is JSON-native now, so **the bespoke encoder is gone** — `to_bytes` is a single
+  `msgspec.json.encode` — and a scheme keeps its code types by any route.
 
 ## [0.21.1] — 2026-07-27
 
