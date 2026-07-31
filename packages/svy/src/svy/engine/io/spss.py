@@ -73,8 +73,6 @@ def _write_spss(
     df: pl.DataFrame,
     store: MetadataStore,
     path: str | Path,
-    *,
-    encoding: str | None = None,
     **kwargs,
 ) -> None:
     """
@@ -88,28 +86,39 @@ def _write_spss(
         The metadata store with labels.
     path : str | Path
         Output file path.
-    encoding : str | None
-        File encoding.
+
+    Notes
+    -----
+    There is no ``encoding`` parameter: ``svy_io.write_sav`` writes UTF-8 and
+    takes none. The old signature accepted one and passed it to a function that
+    did not exist.
     """
-    variables_meta: Dict[str, Any] = {"variables": {}}
+    var_labels: Dict[str, str] = {}
+    value_labels: list[Dict[str, Any]] = []
 
     for var in df.columns:
         meta = store.get(var)
-        entry: Dict[str, Any] = {"label": None, "values": {}, "missing": []}
-
-        if meta is not None:
-            entry["label"] = meta.label
-
-            # Get value labels (direct or resolved from scheme)
-            resolved = store.resolve_labels(var)
-            if resolved.has_value_labels:
-                entry["values"] = resolved.labels
-
-            # Get missing codes
-            if meta.missing is not None:
-                entry["missing"] = list(meta.missing.codes)
-
-        variables_meta["variables"][var] = entry
+        if meta is None:
+            continue
+        if meta.label:
+            var_labels[var] = meta.label
+        resolved = store.resolve_labels(var)
+        if resolved.has_value_labels:
+            # SPSS stores value-label keys as strings.
+            value_labels.append(
+                {"col": var, "labels": {str(k): v for k, v in resolved.labels.items()}}
+            )
 
     table = to_writer_table(df)
-    sio.write_spss(table, str(path), metadata=variables_meta, encoding=encoding, **kwargs)  # type: ignore[attr-defined]
+    # `write_sav`, not `write_spss`: the latter has never existed in svy-io, and
+    # the `# type: ignore[attr-defined]` that used to sit here was the type
+    # checker saying so. `user_missing` is deliberately not passed — svy holds
+    # no model of it (design 001 §2.2), and an exporter that wants one supplies
+    # it here, at the boundary that has the concept.
+    sio.write_sav(
+        table,
+        str(path),
+        var_labels=var_labels or None,
+        value_labels=value_labels or None,
+        **kwargs,
+    )

@@ -5,6 +5,9 @@ from svy import SampleSize
 
 def test_samp_size_number_wald():
     samp_size = SampleSize().estimate_mean(sigma=7000, moe=1000, deff=1.2, resp_rate=0.90)
+    assert samp_size.size.n0 == 189.0
+    assert samp_size.size.n1_deff == 227.0  # ceil(1.2 * n0)
+    assert samp_size.size.n == 253.0  # inflated for 90% response
 
 
 def test_samp_size_dict_wald():
@@ -12,6 +15,9 @@ def test_samp_size_dict_wald():
     sigma = {"region1": 7000, "region2": 11000, "region3": 5000}
     moe = {"region1": 1000, "region2": 1300, "region3": 700}
     samp_size = SampleSize().estimate_mean(sigma=sigma, moe=moe, deff=1.2, resp_rate=resp_rate)
+    sizes = {s.stratum: s.n for s in samp_size.size}
+    assert set(sizes) == {"region1", "region2", "region3"}
+    assert all(n > 0 for n in sizes.values())
 
 
 # ============================================================

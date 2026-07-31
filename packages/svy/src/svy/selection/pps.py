@@ -27,7 +27,29 @@ from svy.core.constants import (
 )
 from svy.core.enumerations import PPSMethod
 from svy.core.types import Category, Number, WhereArg
+from svy.errors import MethodError
+from svy.selection._group_keys import (
+    _build_group_keys,
+    _compute_pop_sizes,
+    _normalize_n_for_groups,
+)
+from svy.selection._helpers import (
+    _apply_order,
+    _warn_empty_strata,
+    _warn_n_exceeds_population,
+    _warn_zero_mos,
+)
 from svy.selection.combine_stages import _apply_chaining_writeback
+from svy.selection.srs import (
+    _apply_where,
+    _check_output_col_names,
+    _encode_stratum,
+    _ensure_row_index,
+    _remap_n_map,
+)
+from svy.utils.checks import assert_no_missing, drop_missing
+from svy.utils.helpers import _colspec_to_list
+from svy.utils.random_state import RandomState, resolve_random_state, seed_from_random_state
 
 
 def _select_pps(*, method, frame, n, mos, stratum, certainty_threshold, rstate):
@@ -85,30 +107,6 @@ def _select_pps(*, method, frame, n, mos, stratum, certainty_threshold, rstate):
         np.asarray(probs, dtype=np.float64),
         np.asarray(cert, dtype=bool),
     )
-
-
-from svy.errors import MethodError
-from svy.selection._group_keys import (
-    _build_group_keys,
-    _compute_pop_sizes,
-    _normalize_n_for_groups,
-)
-from svy.selection._helpers import (
-    _apply_order,
-    _warn_empty_strata,
-    _warn_n_exceeds_population,
-    _warn_zero_mos,
-)
-from svy.selection.srs import (
-    _apply_where,
-    _check_output_col_names,
-    _encode_stratum,
-    _ensure_row_index,
-    _remap_n_map,
-)
-from svy.utils.checks import assert_no_missing, drop_missing
-from svy.utils.helpers import _colspec_to_list
-from svy.utils.random_state import RandomState, resolve_random_state, seed_from_random_state
 
 
 if TYPE_CHECKING:

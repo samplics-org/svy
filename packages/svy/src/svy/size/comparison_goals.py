@@ -121,7 +121,6 @@ def compare_props(
                 if isinstance(v, Mapping)
             }
         )
-        m = len(strata)
         params = {
             "p1": p1,
             "p2": p2,

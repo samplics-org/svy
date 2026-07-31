@@ -306,8 +306,7 @@ def _test_denominator(*, epsilon: float, delta: float, two_sides: bool) -> float
         denom = delta - abs(epsilon)
         if denom <= _EPS:
             raise _infeasible(
-                f"Equivalence requires |epsilon| < delta; got epsilon={epsilon}, "
-                f"delta={delta}."
+                f"Equivalence requires |epsilon| < delta; got epsilon={epsilon}, delta={delta}."
             )
         return denom
     denom = epsilon - delta

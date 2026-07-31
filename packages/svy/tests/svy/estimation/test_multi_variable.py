@@ -23,6 +23,7 @@ from svy.core.sample import Sample
 from svy.errors import DimensionError
 from svy.estimation.estimate import Estimate
 
+
 RTOL = 1e-9
 ATOL = 1e-12
 

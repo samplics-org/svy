@@ -10,7 +10,6 @@ This module provides a comprehensive metadata model that unifies:
 
 The core types are:
 - VariableMeta: Complete metadata for a single variable
-- MissingDef: Unified missing value definition
 - SchemeRef: Lazy reference to a catalog scheme
 - ResolvedLabels: Cached, ready-to-use labels for display
 - MetadataStore: Per-Sample registry with resolution and caching
@@ -32,7 +31,7 @@ from msgspec.structs import force_setattr, replace
 if TYPE_CHECKING:
     from svy.metadata.labels import CategoryScheme, LabellingCatalog
 
-from svy.core.enumerations import MeasurementType, MetadataSource, MissingKind
+from svy.core.enumerations import MeasurementType, MetadataSource
 from svy.core.types import Category
 
 
@@ -95,297 +94,7 @@ def _coerce_labels(value) -> tuple[ValueLabel, ...] | None:
 
 
 # =============================================================================
-# MissingDef: Unified missing value definition
 # =============================================================================
-
-
-class MissingDef(msgspec.Struct, frozen=True, eq=False):
-    """
-    Unified missing value definition.
-
-    Consolidates the various missing value representations in svy into
-    a single, immutable structure that supports:
-    - Simple missing codes (any value treated as missing)
-    - Semantic kinds (don't know, refusal, not applicable, etc.)
-    - Control over null/NaN handling
-
-    Parameters
-    ----------
-    codes : frozenset[Category]
-        All values that should be treated as missing.
-    kinds : tuple[tuple[Category, MissingKind], ...] | None
-        Optional (code, kind) pairs giving each code's semantic meaning. A
-        mapping is accepted and coerced. Codes must be a subset of `codes`.
-    na_is_missing : bool
-        Whether to treat None/null as missing (default True).
-    nan_is_missing : bool
-        Whether to treat NaN as missing (default True).
-
-    Examples
-    --------
-    >>> # Simple missing codes
-    >>> m = MissingDef(codes=frozenset([-99, -98]))
-
-    >>> # With semantic kinds
-    >>> m = MissingDef(
-    ...     codes=frozenset([-99, -98, -97]),
-    ...     kinds={
-    ...         -99: MissingKind.DONT_KNOW,
-    ...         -98: MissingKind.REFUSED,
-    ...         -97: MissingKind.STRUCTURAL,
-    ...     }
-    ... )
-
-    >>> # Check if a value is missing
-    >>> m.is_missing(-99)  # True
-    >>> m.is_missing(1)    # False
-    """
-
-    codes: frozenset[Category] = frozenset()
-    #: ``(code, kind)`` pairs. Pairs rather than a dict for the reason
-    #: ``ValueLabel`` exists: a Category-keyed dict does not survive JSON. This
-    #: field used to be one, and the mismatch it caused — string keys against
-    #: integer codes — made the subset check below raise on every decode.
-    kinds: tuple[tuple[Category, MissingKind], ...] | None = None
-    na_is_missing: bool = True
-    nan_is_missing: bool = True
-
-    def __post_init__(self) -> None:
-        """Coerce a kinds mapping to pairs, then check it against ``codes``.
-
-        This used to carry a repair step: ``kinds`` was a ``dict[Category,
-        MissingKind]``, JSON object keys are always strings, and the decoded
-        ``{"98": ...}`` never matched the integer ``98`` in ``codes`` — so the
-        check below raised on every round trip. Pairs keep the code's type, so
-        there is nothing to repair and the check means what it says.
-
-        A dict is still accepted here, since ``{98: DONT_KNOW}`` reads better
-        than a list of tuples.
-        """
-        if self.kinds is None:
-            return
-        if isinstance(self.kinds, Mapping):
-            force_setattr(self, "kinds", tuple(self.kinds.items()))
-        else:
-            force_setattr(self, "kinds", tuple(tuple(k) for k in self.kinds))
-
-        invalid = {code for code, _ in self.kinds} - self.codes
-        if invalid:
-            raise ValueError(f"missing_kinds contains codes not in codes: {invalid}")
-
-    @property
-    def kind_map(self) -> dict[Category, MissingKind]:
-        """The pairs as a mapping, for lookup."""
-        return dict(self.kinds or ())
-
-    def __eq__(self, other: object) -> bool:
-        """Custom equality that handles NaN in frozensets."""
-        if not isinstance(other, MissingDef):
-            return NotImplemented
-
-        if self.na_is_missing != other.na_is_missing:
-            return False
-        if self.nan_is_missing != other.nan_is_missing:
-            return False
-
-        # Compare codes (need special NaN handling)
-        if not self._codes_equal(self.codes, other.codes):
-            return False
-
-        # Compare kinds
-        if self.kinds is None and other.kinds is None:
-            return True
-        if self.kinds is None or other.kinds is None:
-            return False
-        if self.kind_map != other.kind_map:
-            return False
-
-        return True
-
-    def __hash__(self) -> int:
-        """Hash that works with NaN values."""
-        # Convert codes to a hashable representation
-        code_tuple = tuple(sorted(str(c) for c in self.codes))
-        kinds_tuple = (
-            tuple(sorted((str(k), v.value) for k, v in self.kinds)) if self.kinds else None
-        )
-        return hash((code_tuple, kinds_tuple, self.na_is_missing, self.nan_is_missing))
-
-    @staticmethod
-    def _codes_equal(a: frozenset[Category], b: frozenset[Category]) -> bool:
-        """Compare code sets with NaN handling."""
-        if len(a) != len(b):
-            return False
-
-        a_no_nan = {x for x in a if not _is_nan(x)}
-        b_no_nan = {x for x in b if not _is_nan(x)}
-
-        if a_no_nan != b_no_nan:
-            return False
-
-        # Check NaN presence matches
-        a_has_nan = any(_is_nan(x) for x in a)
-        b_has_nan = any(_is_nan(x) for x in b)
-
-        return a_has_nan == b_has_nan
-
-    def is_missing(self, value: Category | None) -> bool:
-        """
-        Test if a value should be treated as missing.
-
-        Parameters
-        ----------
-        value : Category | None
-            The value to test.
-
-        Returns
-        -------
-        bool
-            True if the value is missing.
-        """
-        # Handle None/null
-        if value is None:
-            return self.na_is_missing
-
-        # Handle NaN
-        if _is_nan(value):
-            return self.nan_is_missing
-
-        # Handle explicit codes
-        return value in self.codes
-
-    def is_missing_by_kind(self, value: Category | None, *kinds: MissingKind) -> bool:
-        """
-        Test if a value is missing with one of the specified kinds.
-
-        Parameters
-        ----------
-        value : Category | None
-            The value to test.
-        *kinds : MissingKind
-            The kinds to check for.
-
-        Returns
-        -------
-        bool
-            True if value is missing and has one of the specified kinds.
-        """
-        if value is None or _is_nan(value):
-            return False  # null/NaN don't have kinds
-
-        if not self.kinds:
-            return False
-
-        kind = self.kind_map.get(value)
-        return kind in kinds if kind is not None else False
-
-    def by_kind(self, *kinds: MissingKind) -> frozenset[Category]:
-        """
-        Get codes matching specific missing kinds.
-
-        Parameters
-        ----------
-        *kinds : MissingKind
-            The kinds to filter by.
-
-        Returns
-        -------
-        frozenset[Category]
-            Codes that have any of the specified kinds.
-
-        Examples
-        --------
-        >>> m.by_kind(MissingKind.DONT_KNOW, MissingKind.REFUSED)
-        frozenset({-99, -98})
-        """
-        if not self.kinds or not kinds:
-            return frozenset()
-
-        kind_set = set(kinds)
-        return frozenset(code for code, kind in self.kinds if kind in kind_set)
-
-    def user_missing(self) -> frozenset[Category]:
-        """
-        Get codes representing user/respondent-generated missing values.
-
-        This includes: DONT_KNOW, REFUSED, NO_ANSWER.
-        """
-        return self.by_kind(
-            MissingKind.DONT_KNOW,
-            MissingKind.REFUSED,
-            MissingKind.NO_ANSWER,
-        )
-
-    def system_missing(self) -> frozenset[Category]:
-        """
-        Get codes representing system/design-generated missing values.
-
-        This includes: SYSTEM, STRUCTURAL.
-        """
-        return self.by_kind(
-            MissingKind.SYSTEM,
-            MissingKind.STRUCTURAL,
-        )
-
-    def clone(self, **overrides: Any) -> MissingDef:
-        """Create a copy with optional field overrides."""
-        return replace(self, **overrides)
-
-    @classmethod
-    def from_codes(
-        cls,
-        codes: Iterable[Category],
-        *,
-        na_is_missing: bool = True,
-        nan_is_missing: bool = True,
-    ) -> MissingDef:
-        """
-        Create a MissingDef from simple codes (no kinds).
-
-        Parameters
-        ----------
-        codes : Iterable[Category]
-            Values to treat as missing.
-        na_is_missing : bool
-            Whether None is missing.
-        nan_is_missing : bool
-            Whether NaN is missing.
-        """
-        return cls(
-            codes=frozenset(codes),
-            kinds=None,
-            na_is_missing=na_is_missing,
-            nan_is_missing=nan_is_missing,
-        )
-
-    @classmethod
-    def from_kinds(
-        cls,
-        kinds: Mapping[Category, MissingKind],
-        *,
-        na_is_missing: bool = True,
-        nan_is_missing: bool = True,
-    ) -> MissingDef:
-        """
-        Create a MissingDef from a kinds mapping.
-
-        The codes set is automatically derived from the mapping keys.
-
-        Parameters
-        ----------
-        kinds : Mapping[Category, MissingKind]
-            Mapping of code → kind.
-        na_is_missing : bool
-            Whether None is missing.
-        nan_is_missing : bool
-            Whether NaN is missing.
-        """
-        return cls(
-            codes=frozenset(kinds.keys()),
-            kinds=tuple(kinds.items()),
-            na_is_missing=na_is_missing,
-            nan_is_missing=nan_is_missing,
-        )
 
 
 # =============================================================================
@@ -404,18 +113,15 @@ class SchemeRef(msgspec.Struct, frozen=True):
     ----------
     concept : str
         The concept identifier in the catalog (e.g., "agreement", "yes_no").
-    locale : str | None
-        Optional locale override. If None, uses the catalog's default.
 
     Examples
     --------
-    >>> ref = SchemeRef(concept="agreement", locale="en")
+    >>> ref = SchemeRef(concept="agreement")
     >>> # Later, resolve against a catalog:
-    >>> scheme = catalog.pick(ref.concept, locale=ref.locale)
+    >>> scheme = catalog.pick(ref.concept)
     """
 
     concept: str
-    locale: str | None = None
 
     def resolve(self, catalog: LabellingCatalog) -> CategoryScheme:
         """
@@ -436,7 +142,7 @@ class SchemeRef(msgspec.Struct, frozen=True):
         LabelError
             If the concept is not found in the catalog.
         """
-        return catalog.pick(self.concept, locale=self.locale)
+        return catalog.pick(self.concept)
 
 
 # =============================================================================
@@ -473,8 +179,6 @@ class VariableMeta(msgspec.Struct, frozen=True):
         The measurement level (nominal, ordinal, continuous, etc.).
     categories : tuple[Category, ...] | None
         Valid values for categorical variables (order matters for ordinal).
-    missing : MissingDef | None
-        Missing value definition.
     unit : str | None
         Unit of measurement (e.g., "kg", "years", "$").
     notes : str | None
@@ -491,14 +195,13 @@ class VariableMeta(msgspec.Struct, frozen=True):
     ...     value_labels={1: "Male", 2: "Female", 3: "Other", -99: "Prefer not to say"},
     ...     mtype=MeasurementType.NOMINAL,
     ...     categories=(1, 2, 3, -99),
-    ...     missing=MissingDef.from_codes([-99]),
     ... )
 
     >>> # Variable referencing a catalog scheme
     >>> meta = VariableMeta(
     ...     name="q1",
     ...     label="How satisfied are you with the service?",
-    ...     scheme_ref=SchemeRef(concept="satisfaction", locale="en"),
+    ...     scheme_ref=SchemeRef(concept="satisfaction"),
     ...     mtype=MeasurementType.ORDINAL,
     ... )
     """
@@ -512,8 +215,6 @@ class VariableMeta(msgspec.Struct, frozen=True):
     scheme_ref: SchemeRef | None = None
     mtype: MeasurementType = MeasurementType.STRING
     categories: tuple[Category, ...] | None = None
-    missing: MissingDef | None = None
-    na_as_level: bool = False  # Whether to treat NA as a category level in analysis
     unit: str | None = None
     notes: str | None = None
     source: MetadataSource = MetadataSource.INFERRED
@@ -535,11 +236,6 @@ class VariableMeta(msgspec.Struct, frozen=True):
     def has_labels(self) -> bool:
         """Check if this variable has labels (direct or by reference)."""
         return self.value_labels is not None or self.scheme_ref is not None
-
-    @property
-    def has_missing(self) -> bool:
-        """Check if this variable has missing value definitions."""
-        return self.missing is not None and len(self.missing.codes) > 0
 
     @property
     def is_categorical(self) -> bool:
@@ -581,19 +277,13 @@ class VariableMeta(msgspec.Struct, frozen=True):
             source=MetadataSource.USER,
         )
 
-    def with_scheme_ref(
-        self, concept: str, locale: str | None = None, *, clear_labels: bool = True
-    ) -> VariableMeta:
+    def with_scheme_ref(self, concept: str, *, clear_labels: bool = True) -> VariableMeta:
         """Return a copy referencing a catalog scheme."""
         return self.clone(
-            scheme_ref=SchemeRef(concept=concept, locale=locale),
+            scheme_ref=SchemeRef(concept=concept),
             value_labels=None if clear_labels else self.value_labels,
             source=MetadataSource.USER,
         )
-
-    def with_missing(self, missing: MissingDef) -> VariableMeta:
-        """Return a copy with updated missing definition."""
-        return self.clone(missing=missing, source=MetadataSource.USER)
 
     def with_categories(
         self, categories: Iterable[Category], *, ordered: bool | None = None
@@ -617,6 +307,20 @@ class VariableMeta(msgspec.Struct, frozen=True):
 # =============================================================================
 
 
+def _numeric_variants(value: object) -> tuple[Category, ...]:
+    """The same number written the other ways a code is commonly stored."""
+    try:
+        f = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return ()
+    if f != f:  # NaN
+        return ()
+    out: list[Category] = [f]
+    if f.is_integer():
+        out += [int(f), str(int(f))]
+    return tuple(v for v in out if v != value)
+
+
 class ResolvedLabels(msgspec.Struct, frozen=True):
     """
     Fully resolved labels ready for display.
@@ -630,8 +334,6 @@ class ResolvedLabels(msgspec.Struct, frozen=True):
         The variable label (empty string if none).
     value_labels : dict[Category, str]
         Mapping of codes to display text (empty dict if none).
-    missing_codes : frozenset[Category]
-        Set of codes that are missing values.
 
     Examples
     --------
@@ -645,7 +347,6 @@ class ResolvedLabels(msgspec.Struct, frozen=True):
     #: ``(code, label)`` pairs; ``labels`` is the mapping view. See
     #: ``ValueLabel`` for why this is not a dict.
     value_labels: tuple[ValueLabel, ...] = ()
-    missing_codes: frozenset[Category] = frozenset()
 
     def __post_init__(self) -> None:
         force_setattr(self, "value_labels", _coerce_labels(self.value_labels) or ())
@@ -686,7 +387,27 @@ class ResolvedLabels(msgspec.Struct, frozen=True):
         if _is_nan(value):
             return null_text
 
-        return self.labels.get(value, str(value))
+        labels = self.labels
+        if value in labels:
+            return labels[value]
+
+        # Codes and values can disagree in *type* without disagreeing in
+        # meaning, and it happens in both directions:
+        #
+        #   - SPSS stores value-label keys as strings, so a `.sav` read back
+        #     gives {"1": "Yes"} against a Float64 column;
+        #   - a Table's `rowvals` holds stringified codes ("1") while the
+        #     labels are keyed by the ints they came from ({1: "Yes"}).
+        #
+        # A literal lookup misses both. `display_series` never showed it
+        # because it stringifies both sides before replacing.
+        text = str(value)
+        if text in labels:
+            return labels[text]
+        for key in _numeric_variants(value):
+            if key in labels:
+                return labels[key]
+        return text
 
     def display_series(
         self,
@@ -739,16 +460,6 @@ class ResolvedLabels(msgspec.Struct, frozen=True):
 
         return result
 
-    def is_missing(self, value: Category | None) -> bool:
-        """Check if a value is a missing code."""
-        if value is None:
-            return True
-        return value in self.missing_codes
-
-    def non_missing_labels(self) -> dict[Category, str]:
-        """Get value labels excluding missing codes."""
-        return {k: v for k, v in self.labels.items() if k not in self.missing_codes}
-
 
 # =============================================================================
 # MetadataStore: Per-Sample registry
@@ -769,28 +480,21 @@ class MetadataStore:
     ----------
     catalog : LabellingCatalog | None
         Optional catalog for resolving scheme references.
-    default_locale : str | None
-        Default locale for catalog lookups.
 
     Examples
     --------
-    >>> store = MetadataStore(catalog=my_catalog, default_locale="en")
+    >>> store = MetadataStore(catalog=my_catalog)
     >>> store.infer_from_dataframe(df)
     >>> store.set_label("q1", "How satisfied are you?")
     >>> store.set_scheme("q1", "satisfaction")
     >>> resolved = store.resolve_labels("q1")
     """
 
-    __slots__ = ("_vars", "_catalog", "_locale", "_resolved_cache")
+    __slots__ = ("_vars", "_catalog", "_resolved_cache")
 
-    def __init__(
-        self,
-        catalog: LabellingCatalog | None = None,
-        default_locale: str | None = None,
-    ):
+    def __init__(self, catalog: LabellingCatalog | None = None):
         self._vars: dict[str, VariableMeta] = {}
         self._catalog = catalog
-        self._locale = default_locale
         self._resolved_cache: dict[str, ResolvedLabels] = {}
 
     # =========================================================================
@@ -806,17 +510,6 @@ class MetadataStore:
     def catalog(self, value: LabellingCatalog | None) -> None:
         """Set the catalog (clears resolved cache)."""
         self._catalog = value
-        self._resolved_cache.clear()
-
-    @property
-    def locale(self) -> str | None:
-        """Default locale for catalog lookups."""
-        return self._locale
-
-    @locale.setter
-    def locale(self, value: str | None) -> None:
-        """Set default locale (clears resolved cache)."""
-        self._locale = value
         self._resolved_cache.clear()
 
     @property
@@ -960,33 +653,19 @@ class MetadataStore:
 
         var_label = meta.label or ""
         value_labels: dict[Category, str] = {}
-        missing_codes: frozenset[Category] = frozenset()
 
-        # Resolve value labels
         if meta.value_labels is not None:
             value_labels = meta.labels
         elif meta.scheme_ref is not None and self._catalog is not None:
             try:
-                scheme = meta.scheme_ref.resolve(self._catalog)
-                value_labels = scheme.labels
-                # Also get missing from scheme if not defined on meta
-                if meta.missing is None and scheme.missing:
-                    missing_codes = scheme.missing_codes
+                value_labels = meta.scheme_ref.resolve(self._catalog).labels
             except Exception as e:
                 log.warning(
                     f"Failed to resolve scheme {meta.scheme_ref.concept!r} "
                     f"for variable {var!r}: {e}"
                 )
 
-        # Get missing codes
-        if meta.missing is not None:
-            missing_codes = meta.missing.codes
-
-        resolved = ResolvedLabels(
-            var_label=var_label,
-            value_labels=value_labels,
-            missing_codes=missing_codes,
-        )
+        resolved = ResolvedLabels(var_label=var_label, value_labels=value_labels)
         self._resolved_cache[var] = resolved
         return resolved
 
@@ -1087,7 +766,7 @@ class MetadataStore:
         self.set(var, meta)
         return self
 
-    def set_scheme(self, var: str, concept: str, locale: str | None = None) -> Self:
+    def set_scheme(self, var: str, concept: str) -> Self:
         """
         Link a variable to a catalog scheme.
 
@@ -1099,8 +778,6 @@ class MetadataStore:
             Variable name.
         concept : str
             The concept identifier in the catalog.
-        locale : str | None
-            Optional locale override.
 
         Returns
         -------
@@ -1111,129 +788,11 @@ class MetadataStore:
         if meta is None:
             meta = VariableMeta(
                 name=var,
-                scheme_ref=SchemeRef(concept=concept, locale=locale),
+                scheme_ref=SchemeRef(concept=concept),
                 source=MetadataSource.USER,
             )
         else:
-            meta = meta.with_scheme_ref(concept, locale)
-        self.set(var, meta)
-        return self
-
-    def set_missing(
-        self,
-        var: str,
-        codes: Iterable[Category] | None = None,
-        *,
-        # User-friendly parameter names
-        dont_know: Iterable[Category] | None = None,
-        refused: Iterable[Category] | None = None,
-        no_answer: Iterable[Category] | None = None,
-        skipped: Iterable[Category] | None = None,
-        not_applicable: Iterable[Category] | None = None,
-        system: Iterable[Category] | None = None,
-        structural: Iterable[Category] | None = None,
-        na_is_missing: bool = True,
-        nan_is_missing: bool = True,
-    ) -> Self:
-        """
-        Define missing values for a variable.
-
-        Can specify either simple codes or codes with semantic kinds.
-        User-friendly parameter names are mapped to underlying missing mechanisms:
-
-        - dont_know → DONT_KNOW (typically MNAR)
-        - refused → REFUSED (typically MNAR)
-        - no_answer → NO_ANSWER (ambiguous)
-        - skipped → STRUCTURAL (design-driven, typically MAR)
-        - not_applicable → STRUCTURAL (design-driven, typically MAR)
-        - system → SYSTEM (typically MCAR)
-        - structural → STRUCTURAL (design-driven, typically MAR)
-
-        Parameters
-        ----------
-        var : str
-            Variable name.
-        codes : Iterable[Category] | None
-            Simple missing codes (no kind attached).
-        dont_know : Iterable[Category] | None
-            Codes meaning "don't know" → DONT_KNOW mechanism.
-        refused : Iterable[Category] | None
-            Codes meaning "refused to answer" → REFUSED mechanism.
-        no_answer : Iterable[Category] | None
-            Codes for no answer provided → NO_ANSWER mechanism.
-        skipped : Iterable[Category] | None
-            Codes for skipped questions (routing/skip logic) → STRUCTURAL mechanism.
-        not_applicable : Iterable[Category] | None
-            Codes meaning "not applicable" → STRUCTURAL mechanism.
-        system : Iterable[Category] | None
-            System-generated missing codes → SYSTEM mechanism.
-        structural : Iterable[Category] | None
-            Codes for values missing by study design → STRUCTURAL mechanism.
-        na_is_missing : bool
-            Whether None is treated as missing.
-        nan_is_missing : bool
-            Whether NaN is treated as missing.
-
-        Returns
-        -------
-        Self
-            For method chaining.
-
-        Examples
-        --------
-        >>> # Simple codes
-        >>> store.set_missing("q1", codes=[-99, -98])
-
-        >>> # With user-friendly names (mapped to mechanisms)
-        >>> store.set_missing(
-        ...     "q1",
-        ...     dont_know=[-99],
-        ...     refused=[-98],
-        ...     not_applicable=[-97],  # maps to STRUCTURAL
-        ...     skipped=[-96],          # maps to STRUCTURAL
-        ... )
-        """
-        all_codes: set[Category] = set()
-        kinds: dict[Category, MissingKind] = {}
-
-        # Add simple codes
-        if codes is not None:
-            all_codes.update(codes)
-
-        # Map user-friendly names to MissingKind mechanisms
-        # Note: skipped and not_applicable both map to STRUCTURAL
-        kind_mapping = [
-            (dont_know, MissingKind.DONT_KNOW),
-            (refused, MissingKind.REFUSED),
-            (no_answer, MissingKind.NO_ANSWER),
-            (skipped, MissingKind.STRUCTURAL),  # user-friendly → mechanism
-            (not_applicable, MissingKind.STRUCTURAL),  # user-friendly → mechanism
-            (system, MissingKind.SYSTEM),
-            (structural, MissingKind.STRUCTURAL),
-        ]
-
-        for code_iter, kind in kind_mapping:
-            if code_iter is not None:
-                for code in code_iter:
-                    all_codes.add(code)
-                    kinds[code] = kind
-
-        missing_def = MissingDef(
-            codes=frozenset(all_codes),
-            kinds=kinds if kinds else None,
-            na_is_missing=na_is_missing,
-            nan_is_missing=nan_is_missing,
-        )
-
-        meta = self._vars.get(var)
-        if meta is None:
-            meta = VariableMeta(
-                name=var,
-                missing=missing_def,
-                source=MetadataSource.USER,
-            )
-        else:
-            meta = meta.with_missing(missing_def)
+            meta = meta.with_scheme_ref(concept)
         self.set(var, meta)
         return self
 
@@ -1301,30 +860,6 @@ class MetadataStore:
         self.set(var, meta)
         return self
 
-    def set_na_as_level(self, var: str, flag: bool = True) -> Self:
-        """
-        Set whether NA should be treated as a category level in analysis.
-
-        Parameters
-        ----------
-        var : str
-            Variable name.
-        flag : bool
-            If True, NA values are treated as a valid category level.
-
-        Returns
-        -------
-        Self
-            For method chaining.
-        """
-        meta = self._vars.get(var)
-        if meta is None:
-            meta = VariableMeta(name=var, na_as_level=flag, source=MetadataSource.USER)
-        else:
-            meta = meta.clone(na_as_level=flag, source=MetadataSource.USER)
-        self.set(var, meta)
-        return self
-
     def rename_variables(self, renames: Mapping[str, str]) -> Self:
         """
         Rename variables in the store.
@@ -1357,8 +892,6 @@ class MetadataStore:
                     scheme_ref=meta.scheme_ref,
                     mtype=meta.mtype,
                     categories=meta.categories,
-                    missing=meta.missing,
-                    na_as_level=meta.na_as_level,
                     unit=meta.unit,
                     notes=meta.notes,
                     source=meta.source,
@@ -1649,7 +1182,7 @@ class MetadataStore:
         -------
         pl.DataFrame
             Summary with columns: name, label, mtype, has_value_labels,
-            has_missing, n_categories, source.
+            n_categories, source.
         """
         if vars is None:
             var_list = list(self._vars.keys())
@@ -1669,7 +1202,6 @@ class MetadataStore:
                         "mtype": None,
                         "has_value_labels": False,
                         "has_scheme_ref": False,
-                        "has_missing": False,
                         "n_categories": None,
                         "source": None,
                     }
@@ -1682,7 +1214,6 @@ class MetadataStore:
                         "mtype": meta.mtype.value,
                         "has_value_labels": meta.value_labels is not None,
                         "has_scheme_ref": meta.scheme_ref is not None,
-                        "has_missing": meta.has_missing,
                         "n_categories": len(meta.categories) if meta.categories else None,
                         "source": meta.source.value,
                     }
@@ -1706,7 +1237,7 @@ class MetadataStore:
         -------
         pl.DataFrame
             Detailed metadata with columns: name, label, mtype, categories,
-            value_labels, missing_codes, missing_kinds, scheme_ref, unit,
+            value_labels, scheme_ref, unit,
             notes, source.
 
         Examples
@@ -1730,8 +1261,6 @@ class MetadataStore:
                         "mtype": None,
                         "categories": None,
                         "value_labels": None,
-                        "missing_codes": None,
-                        "missing_kinds": None,
                         "scheme_ref": None,
                         "unit": None,
                         "notes": None,
@@ -1749,26 +1278,10 @@ class MetadataStore:
                 if meta.categories:
                     cat_str = ", ".join(str(c) for c in meta.categories)
 
-                # Format missing
-                missing_codes_str = None
-                missing_kinds_str = None
-                if meta.missing:
-                    if meta.missing.codes:
-                        missing_codes_str = ", ".join(
-                            str(c)
-                            for c in sorted(meta.missing.codes, key=str)  # type: ignore[type-var]
-                        )
-                    if meta.missing.kinds:
-                        missing_kinds_str = "; ".join(
-                            f"{k}={v.value}" for k, v in meta.missing.kinds
-                        )
-
                 # Format scheme ref
                 scheme_str = None
                 if meta.scheme_ref:
                     scheme_str = meta.scheme_ref.concept
-                    if meta.scheme_ref.locale:
-                        scheme_str += f" ({meta.scheme_ref.locale})"
 
                 rows.append(
                     {
@@ -1777,8 +1290,6 @@ class MetadataStore:
                         "mtype": meta.mtype.value if meta.mtype else None,
                         "categories": cat_str,
                         "value_labels": vl_str,
-                        "missing_codes": missing_codes_str,
-                        "missing_kinds": missing_kinds_str,
                         "scheme_ref": scheme_str,
                         "unit": meta.unit,
                         "notes": meta.notes,
@@ -1801,7 +1312,7 @@ class MetadataStore:
         -------
         pl.DataFrame
             Coverage report with columns: name, in_data, has_label,
-            has_value_labels, has_missing, source.
+            has_value_labels, source.
 
         Examples
         --------
@@ -1820,7 +1331,6 @@ class MetadataStore:
                     "in_metadata": name in self._vars,
                     "has_label": meta.label is not None if meta else False,
                     "has_value_labels": meta.value_labels is not None if meta else False,
-                    "has_missing": meta.has_missing if meta else False,
                     "source": meta.source.value if meta else None,
                 }
             )

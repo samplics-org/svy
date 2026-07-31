@@ -134,7 +134,6 @@ def estimate_prop(
                 if isinstance(v, Mapping)
             }
         )
-        m = len(strata)
         params = {
             "p": p,
             "moe": moe,
@@ -240,7 +239,6 @@ def estimate_mean(
                 if isinstance(v, Mapping)
             }
         )
-        m = len(strata)
         params = {
             "sigma": sigma,
             "moe": moe,

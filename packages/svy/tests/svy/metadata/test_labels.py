@@ -42,7 +42,7 @@ def test_create_labels_from_scratch(synthetic_sample_df: pl.DataFrame):
 
     # 1) Create a catalog with reusable schemes (chainable API, locale inferred)
     catalog = (
-        LabellingCatalog(locale="en")
+        LabellingCatalog()
         .add_scheme(
             concept="yes_no01",
             mapping={1: "Yes", 0: "No"},
@@ -63,13 +63,11 @@ def test_create_labels_from_scratch(synthetic_sample_df: pl.DataFrame):
                 5: "Strongly agree",
             },
             title="Agreement (5-point)",
-            ordered=True,
         )
         .add_scheme(
             concept="likert3",
             mapping={1: "Positive", 2: "Neutral", 3: "Negative"},
             title="Sentiment (3-point)",
-            ordered=True,
         )
         .add_scheme(
             concept="sex",
@@ -80,11 +78,11 @@ def test_create_labels_from_scratch(synthetic_sample_df: pl.DataFrame):
 
     # 2) Build per-variable labels (mix of reusable schemes + auto from data)
     labels: dict[str, Label] = {
-        "resp2_new": catalog.to_label_by_concept("Consent (derived)", concept="yes_no01"),
-        "resp2": catalog.to_label_by_concept("Consent (Q2)", concept="yes_no02"),
-        "resp3": catalog.to_label_by_concept("Satisfaction (Q3)", concept="likert5"),
-        "resp5": catalog.to_label_by_concept("Trust (Q5)", concept="likert5"),
-        "sex": catalog.to_label_by_concept("Respondent sex", concept="sex"),
+        "resp2_new": catalog.to_label("Consent (derived)", "yes_no01"),
+        "resp2": catalog.to_label("Consent (Q2)", "yes_no02"),
+        "resp3": catalog.to_label("Satisfaction (Q3)", "likert5"),
+        "resp5": catalog.to_label("Trust (Q5)", "likert5"),
+        "sex": catalog.to_label("Respondent sex", "sex"),
         # Auto-build from the dataset when you don’t have a predefined scheme
         "educ": Label(label="Education", categories=categories_from_polars(df, "educ")),
         "region": Label(label="Region", categories=categories_from_polars(df, "region")),
@@ -97,89 +95,67 @@ def test_create_labels_from_scratch(synthetic_sample_df: pl.DataFrame):
 
 
 # ---------------------------------------------------------------------------
-# SchemeEntry — one entry per code, rather than parallel collections
+# A scheme is a code→label map
 #
-# The scheme used to hold mapping, missing, missing_kinds and a hierarchy as
-# four collections keyed by code. Three serialized badly, and because they could
-# disagree, seventy-odd lines existed to check that they did not. One entry per
-# code makes those states unrepresentable.
+# svy labels values so results print nicely, and that is the whole job (design
+# 001 §2.2). Everything a scheme used to carry beyond code and label — a
+# hierarchy, why a code is a non-answer, a locale, an ordering flag — has moved
+# to svy-spec, which is the only place anything could act on it.
 # ---------------------------------------------------------------------------
 
 
 def _scheme(**overrides):
-    from svy.core.enumerations import MissingKind
     from svy.metadata.labels import CategoryScheme, SchemeEntry
 
     base = dict(
         concept="gm_district",
-        locale="en",
         entries=[
-            SchemeEntry(code=101, label="Banjul", parent=1),
-            SchemeEntry(code=102, label="Kanifing", parent=1),
-            SchemeEntry(code=201, label="Lower Saloum", parent=2),
-            SchemeEntry(code=99, label="Refused", missing=MissingKind.REFUSED),
+            SchemeEntry(code=101, label="Banjul"),
+            SchemeEntry(code=102, label="Kanifing"),
+            SchemeEntry(code=201, label="Lower Saloum"),
+            SchemeEntry(code=99, label="Refused"),
         ],
     )
     return CategoryScheme(**{**base, **overrides})
 
 
-def test_a_dict_is_still_accepted_when_constructing():
+def test_a_dict_is_accepted_when_constructing():
     from svy.metadata.labels import CategoryScheme
 
     scheme = CategoryScheme(concept="sex", entries={1: "Male", 2: "Female"})
     assert scheme.labels == {1: "Male", 2: "Female"}
-    assert all(e.missing is None for e in scheme.entries)
+    assert scheme.codes == (1, 2)
 
 
-def test_labels_covers_every_code_and_substantive_does_not():
-    scheme = _scheme()
-    assert set(scheme.labels) == {101, 102, 201, 99}
-    assert [e.code for e in scheme.substantive] == [101, 102, 201]
-
-
-def test_missing_semantics_live_on_the_entry():
-    from svy.core.enumerations import MissingKind
-
-    scheme = _scheme()
-    assert scheme.missing_codes == frozenset({99})
-    assert scheme.kind_of(99) is MissingKind.REFUSED
-    assert scheme.kind_of(101) is None
-    assert scheme.codes_of_kind(MissingKind.REFUSED) == frozenset({99})
-
-
-def test_hierarchy_lookups():
-    scheme = _scheme()
-    assert scheme.parent_of(201) == 2
-    assert scheme.children_of(1) == (101, 102)
-    assert scheme.parent_of(99) is None
-
-
-def test_children_keep_declaration_order():
-    from svy.metadata.labels import SchemeEntry
-
-    scheme = _scheme(
-        entries=[
-            SchemeEntry(code=102, label="Kanifing", parent=1),
-            SchemeEntry(code=101, label="Banjul", parent=1),
-        ]
-    )
-    assert scheme.children_of(1) == (102, 101)
+def test_labels_covers_every_code():
+    # Including 99. A declared refusal is an ordinary value with an ordinary
+    # label; svy prints "Refused" and forms no opinion about it.
+    assert _scheme().labels == {
+        101: "Banjul",
+        102: "Kanifing",
+        201: "Lower Saloum",
+        99: "Refused",
+    }
 
 
 def test_a_code_that_is_not_there_answers_none():
-    scheme = _scheme()
-    assert scheme.entry(999) is None
-    assert scheme.parent_of(999) is None
-    assert scheme.kind_of(999) is None
+    assert _scheme().entry(404) is None
+
+
+def test_a_scheme_carries_nothing_beyond_code_and_label():
+    from svy.metadata.labels import SchemeEntry
+
+    entry = SchemeEntry(code=1, label="Yes")
+    assert (entry.code, entry.label) == (1, "Yes")
+    # A parent belongs to a cascading choice list and a missing kind is a
+    # questionnaire fact. Both are svy-spec's; neither is expressible here.
+    for gone in ("parent", "missing", "is_missing"):
+        assert not hasattr(entry, gone), f"SchemeEntry should not carry {gone!r}"
+    for gone in ("locale", "ordered", "id", "parent_of", "children_of", "missing_codes"):
+        assert not hasattr(_scheme(), gone), f"CategoryScheme should not carry {gone!r}"
 
 
 def test_a_scheme_round_trips_through_plain_msgspec():
-    """The whole reason for the shape.
-
-    Every field is JSON-native now, so no bespoke encoder is involved and codes
-    keep their types by any route. The old shape returned {"101": "Banjul"} for
-    {101: "Banjul"} unless it went through the catalog's hand-written pairs.
-    """
     import msgspec
 
     from svy.metadata.labels import CategoryScheme
@@ -187,35 +163,97 @@ def test_a_scheme_round_trips_through_plain_msgspec():
     scheme = _scheme()
     back = msgspec.json.decode(msgspec.json.encode(scheme), type=CategoryScheme)
     assert back == scheme
-    assert all(isinstance(c, int) for c in back.codes)
-
-
-def test_a_scheme_round_trips_through_the_catalog():
-    scheme = _scheme()
-    catalog = LabellingCatalog().register(scheme)
-    back = LabellingCatalog.from_bytes(catalog.to_bytes()).pick("gm_district", locale="en")
-    assert back.entries == scheme.entries
+    # The codes keep their types. JSON object keys are always strings, which is
+    # why entries are a tuple of structs rather than a dict keyed by code.
+    assert [type(c) for c in back.codes] == [int, int, int, int]
 
 
 def test_a_duplicate_code_is_rejected():
-    from svy.errors import LabelError
-    from svy.metadata.labels import SchemeEntry
+    import pytest
+
+    from svy.errors.label_errors import LabelError
+    from svy.metadata.labels import CategoryScheme, SchemeEntry
 
     with pytest.raises(LabelError):
-        _scheme(
-            entries=[
-                SchemeEntry(code=101, label="Banjul"),
-                SchemeEntry(code=101, label="Banjul again"),
-            ]
+        CategoryScheme(
+            concept="x",
+            entries=[SchemeEntry(code=1, label="A"), SchemeEntry(code=1, label="B")],
         )
 
 
-def test_a_missing_code_outside_the_scheme_is_unrepresentable():
-    """What validate_scheme_missing used to check, now impossible to express.
+# ---------------------------------------------------------------------------
+# The catalogue is keyed by concept
+# ---------------------------------------------------------------------------
 
-    A missing code had to be added to `missing` *and* to `mapping`, and the two
-    could disagree. There is one list now, so a code that is missing is by
-    construction a code that exists.
+
+def test_a_scheme_round_trips_through_the_catalog():
+    from svy.metadata.labels import LabellingCatalog
+
+    catalog = LabellingCatalog().register(_scheme())
+    back = LabellingCatalog.from_bytes(catalog.to_bytes())
+    assert back.pick("gm_district").labels == _scheme().labels
+
+
+def test_pick_and_get_are_the_same_lookup():
+    # One concept, one scheme. There is no id to disambiguate locales, because
+    # there are no locales.
+    from svy.metadata.labels import LabellingCatalog
+
+    catalog = LabellingCatalog().register(_scheme())
+    assert catalog.pick("gm_district") is catalog.get("gm_district")
+
+
+def test_a_concept_is_normalised_on_the_way_in_and_out():
+    from svy.metadata.labels import LabellingCatalog, make_scheme
+
+    catalog = LabellingCatalog().register(make_scheme(concept="Yes No", mapping={1: "Yes"}))
+    assert catalog.pick("yes_no").labels == {1: "Yes"}
+    assert catalog.pick("Yes No").labels == {1: "Yes"}
+
+
+def test_registering_one_concept_twice_needs_overwrite():
+    import pytest
+
+    from svy.errors.label_errors import LabelError
+    from svy.metadata.labels import LabellingCatalog, make_scheme
+
+    catalog = LabellingCatalog().register(make_scheme(concept="sex", mapping={1: "M"}))
+    with pytest.raises(LabelError):
+        catalog.register(make_scheme(concept="sex", mapping={1: "Male"}))
+    catalog.register(make_scheme(concept="sex", mapping={1: "Male"}), overwrite=True)
+    assert catalog.pick("sex").labels == {1: "Male"}
+
+
+def test_two_languages_are_two_concepts():
+    # What `locale` used to do, without a matching algorithm: svy holds one set
+    # of strings, and choosing which set is svy-spec's job (§2.2).
+    from svy.metadata.labels import LabellingCatalog, make_scheme
+
+    catalog = (
+        LabellingCatalog()
+        .register(make_scheme(concept="sex_en", mapping={1: "Male", 2: "Female"}))
+        .register(make_scheme(concept="sex_fr", mapping={1: "Homme", 2: "Femme"}))
+    )
+    assert catalog.pick("sex_fr").labels[2] == "Femme"
+    assert catalog.pick("sex_en").labels[2] == "Female"
+
+
+def test_a_catalog_labelled_variable_prints_every_code():
+    """A 99 labelled "Refusal" is the integer 99 with the label "Refusal".
+
+    This replaces a test that asserted resolve_labels recovered *missing codes*
+    from a scheme. Schemes no longer carry missingness, so there is nothing to
+    recover — and nothing to lose, which is what the bug it guarded did.
     """
-    scheme = _scheme()
-    assert scheme.missing_codes <= set(scheme.codes)
+    from svy.metadata import LabellingCatalog, MetadataStore, VariableMeta
+    from svy.metadata.variable_meta import SchemeRef
+
+    catalog = LabellingCatalog().register(_scheme())
+    store = MetadataStore(catalog=catalog)
+    store.set(
+        "district", VariableMeta(name="district", scheme_ref=SchemeRef(concept="gm_district"))
+    )
+
+    resolved = store.resolve_labels("district")
+    assert resolved.labels[99] == "Refused"
+    assert resolved.labels[101] == "Banjul"

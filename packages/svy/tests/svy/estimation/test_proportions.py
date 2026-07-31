@@ -674,8 +674,10 @@ class TestWilsonComparison:
         # Wilson doesn't modify the point estimate
         lci_w, uci_w = compute_prop_ci(self.p, self.se, ALPHA, self.df, self.n, "wilson")
         midpoint = (lci_w + uci_w) / 2
-        # Wilson center is shifted toward 0.5, but point estimate is unchanged
-        # (it's the p passed in, not the CI midpoint)
+        # Wilson center is shifted toward 0.5, but the point estimate is
+        # unchanged — it is the p passed in, not the CI midpoint.
+        assert midpoint != pytest.approx(self.p, abs=1e-6)
+        assert abs(midpoint - 0.5) < abs(self.p - 0.5)
         assert self.p == pytest.approx(0.507348, abs=1e-4)
 
     def test_wilson_and_kg_similar_width(self):

@@ -37,12 +37,15 @@ def test_use_weight_metadata_is_isolated(base_sample):
     assert derived.resolve_labels("age").var_label == "Age in years"
 
 
-def test_use_weight_missing_defs_are_isolated(base_sample):
+def test_use_weight_value_labels_are_isolated(base_sample):
+    # Was written against set_missing; the guarantee under test is isolation of
+    # metadata state, not the missing model, so it moves to a field that exists.
     derived = base_sample.use_weight("w2")
-    derived.set_missing("age", codes=[-99])
+    derived.set_value_labels("age", {-99: "Don't know"})
 
     base_meta = base_sample.meta.get("age")
-    assert base_meta is None or base_meta.missing is None
+    assert base_meta is None or base_meta.value_labels is None
+    assert derived.meta.get("age").labels == {-99: "Don't know"}
 
 
 def test_use_weight_warnings_are_isolated(base_sample):

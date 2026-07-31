@@ -207,7 +207,7 @@ def test_full_data_cleaning_workflow(sample_complex: Sample):
         .wrangling.categorize(
             "age_years", bins=[0, 30, 50, 100], labels=["Young", "Middle", "Senior"]
         )
-        .wrangling.filter_records(col("active") == True)
+        .wrangling.filter_records(col("active"))
         .wrangling.apply_labels(
             labels={"region": "Geographic Region"},
             categories={"region": {"N": "North", "S": "South", "E": "East", "W": "West"}},

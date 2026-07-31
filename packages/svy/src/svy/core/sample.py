@@ -1063,7 +1063,7 @@ class Sample:
         self._metadata.set_value_labels(var, labels)
         return self
 
-    def use_scheme(self, var: str, concept: str, locale: str | None = None) -> Self:
+    def use_scheme(self, var: str, concept: str) -> Self:
         """
         Link a variable to a label scheme in the catalog.
 
@@ -1073,8 +1073,6 @@ class Sample:
             Variable name.
         concept : str
             The concept identifier in the catalog (e.g., "agreement", "yes_no").
-        locale : str | None
-            Optional locale override.
 
         Returns
         -------
@@ -1083,96 +1081,9 @@ class Sample:
 
         Examples
         --------
-        >>> svy.use_scheme("q1", "satisfaction", locale="en")
+        >>> svy.use_scheme("q1", "satisfaction")
         """
-        self._metadata.set_scheme(var, concept, locale)
-        return self
-
-    def set_missing(
-        self,
-        var: str,
-        codes: Iterable[Category] | None = None,
-        *,
-        dont_know: Iterable[Category] | None = None,
-        refused: Iterable[Category] | None = None,
-        no_answer: Iterable[Category] | None = None,
-        skipped: Iterable[Category] | None = None,
-        not_applicable: Iterable[Category] | None = None,
-        system: Iterable[Category] | None = None,
-        structural: Iterable[Category] | None = None,
-        na_is_missing: bool = True,
-        nan_is_missing: bool = True,
-    ) -> Self:
-        """
-        Define missing values for a variable.
-
-        Can specify either simple codes or codes with semantic kinds.
-        User-friendly parameter names are mapped to underlying mechanisms:
-
-        - dont_know → DONT_KNOW (typically MNAR)
-        - refused → REFUSED (typically MNAR)
-        - no_answer → NO_ANSWER (ambiguous)
-        - skipped → STRUCTURAL (design-driven, typically MAR)
-        - not_applicable → STRUCTURAL (design-driven, typically MAR)
-        - system → SYSTEM (typically MCAR)
-        - structural → STRUCTURAL (design-driven, typically MAR)
-
-        Parameters
-        ----------
-        var : str
-            Variable name.
-        codes : Iterable[Category] | None
-            Simple missing codes (no kind attached).
-        dont_know : Iterable[Category] | None
-            Codes meaning "don't know".
-        refused : Iterable[Category] | None
-            Codes meaning "refused to answer".
-        no_answer : Iterable[Category] | None
-            Codes for no answer provided.
-        skipped : Iterable[Category] | None
-            Codes for skipped questions (routing/skip logic).
-        not_applicable : Iterable[Category] | None
-            Codes meaning "not applicable".
-        system : Iterable[Category] | None
-            System-generated missing codes.
-        structural : Iterable[Category] | None
-            Codes for values missing by study design.
-        na_is_missing : bool
-            Whether None is treated as missing.
-        nan_is_missing : bool
-            Whether NaN is treated as missing.
-
-        Returns
-        -------
-        Self
-            For method chaining.
-
-        Examples
-        --------
-        >>> # Simple codes
-        >>> svy.set_missing("q1", codes=[-99, -98])
-
-        >>> # With semantic kinds
-        >>> svy.set_missing(
-        ...     "q1",
-        ...     dont_know=[-99],
-        ...     refused=[-98],
-        ...     not_applicable=[-97],
-        ... )
-        """
-        self._metadata.set_missing(
-            var,
-            codes,
-            dont_know=dont_know,
-            refused=refused,
-            no_answer=no_answer,
-            skipped=skipped,
-            not_applicable=not_applicable,
-            system=system,
-            structural=structural,
-            na_is_missing=na_is_missing,
-            nan_is_missing=nan_is_missing,
-        )
+        self._metadata.set_scheme(var, concept)
         return self
 
     def resolve_labels(self, var: str):
@@ -1209,11 +1120,6 @@ class Sample:
     ) -> "Sample":
         """Set valid categories for a column."""
         self._metadata.set_categories(col, categories, ordered=ordered)
-        return self
-
-    def set_na_as_level(self, col: str, flag: bool = True) -> "Sample":
-        """Set whether NA should be treated as a category level."""
-        self._metadata.set_na_as_level(col, flag)
         return self
 
     def _refresh_internal_state(self) -> None:

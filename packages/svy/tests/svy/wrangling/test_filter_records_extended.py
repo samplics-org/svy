@@ -96,7 +96,7 @@ def test_filter_list_of_expressions_and(sample_basic: Sample):
     out = sample_basic.wrangling.filter_records(
         [
             col("age") >= 30,
-            col("active") == True,
+            col("active"),
         ]
     )
     assert out._data.height == 2

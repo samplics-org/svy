@@ -14,15 +14,15 @@ from typing import Any, Callable
 import msgspec
 import numpy as np
 
-from svy.core.containers import ChiSquare
-from svy.core.describe import DescribeResult
 from svy.categorical.table import Table
 from svy.categorical.ttest import TTestOneGroup, TTestTwoGroups
+from svy.core.containers import ChiSquare
+from svy.core.describe import DescribeResult
 from svy.estimation.estimate import Estimate
 from svy.regression.glm import GLMFit
 from svy.regression.prediction import GLMPred
-
 from svy.serialize.structs import (
+    _KIND_TO_STRUCT,
     CellEstData,
     ChiSquareData,
     DescribeResultData,
@@ -39,12 +39,12 @@ from svy.serialize.structs import (
     TableData,
     TableStatsData,
     TDistData,
+    TtestEstData,
     TTestOneGroupData,
     TTestStatsData,
     TTestTwoGroupsData,
-    TtestEstData,
-    _KIND_TO_STRUCT,
 )
+
 
 # ---------------------------------------------------------------------------
 # Type-conversion helpers

@@ -27,7 +27,22 @@ from svy.core.constants import (
     SVY_WEIGHT,
 )
 from svy.core.types import DF, Category, Number, WhereArg
+from svy.errors import MethodError
+from svy.selection._group_keys import (
+    _build_group_keys,
+    _compute_pop_sizes,
+    _normalize_n_for_groups,
+)
+from svy.selection._helpers import (
+    _apply_order,
+    _warn_empty_strata,
+    _warn_n_exceeds_population,
+)
 from svy.selection.combine_stages import _apply_chaining_writeback
+from svy.utils.checks import assert_no_missing, drop_missing
+from svy.utils.helpers import _colspec_to_list
+from svy.utils.random_state import RandomState, resolve_random_state, seed_from_random_state
+from svy.utils.where import _compile_where
 
 
 def _encode_stratum(stratum):
@@ -86,23 +101,6 @@ def _select_srs(frame, n, *, stratum, wr, rstate):
         np.asarray(hits, dtype=np.int64),
         np.asarray(probs, dtype=np.float64),
     )
-
-
-from svy.errors import MethodError
-from svy.selection._group_keys import (
-    _build_group_keys,
-    _compute_pop_sizes,
-    _normalize_n_for_groups,
-)
-from svy.selection._helpers import (
-    _apply_order,
-    _warn_empty_strata,
-    _warn_n_exceeds_population,
-)
-from svy.utils.checks import assert_no_missing, drop_missing
-from svy.utils.helpers import _colspec_to_list
-from svy.utils.random_state import RandomState, resolve_random_state, seed_from_random_state
-from svy.utils.where import _compile_where
 
 
 if TYPE_CHECKING:
@@ -381,7 +379,6 @@ def _srs_empty_writeback(sample, src_df, design, *, prob_name, wgt_name, hit_nam
     wgt_col = wgt_name or design.wgt or SVY_WEIGHT
     hit_col = hit_name or design.hit or SVY_HIT
 
-    n = len(src_df)
     df_new = src_df.with_columns(
         [
             pl.lit(None).cast(pl.Float64).alias(prob_col),

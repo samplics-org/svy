@@ -191,7 +191,6 @@ class TestNByGroup:
             n={"north": 3, "south": 7, "east": 2, "west": 0},
             by="region",
         )
-        counts = dict(zip(*result.group_by("region").len().select(["region", "len"])))
         # Build manually — group_by order not guaranteed
         by_region = {
             r: len(result.filter(pl.col("region") == r))

@@ -33,11 +33,12 @@ from svy.serialize.structs import (
     TableData,
     TableStatsData,
     TDistData,
+    TtestEstData,
     TTestOneGroupData,
     TTestStatsData,
     TTestTwoGroupsData,
-    TtestEstData,
 )
+
 
 __all__ = [
     # Public API

@@ -304,7 +304,7 @@ class TestSrsWhere:
 
     def test_where_pl_expr_form(self):
         samp = _make_sample(20)
-        result = samp.sampling.srs(n=3, where=pl.col("eligible_flag") == True, rstate=RNG)
+        result = samp.sampling.srs(n=3, where=pl.col("eligible_flag"), rstate=RNG)
         assert result._data.height == 20
         selected = result._data.filter(pl.col(SVY_HIT) == 1)
         assert all(selected["eligible_flag"].to_list())
@@ -313,7 +313,7 @@ class TestSrsWhere:
         samp = _make_sample(20)
         result = samp.sampling.srs(
             n=3,
-            where=[pl.col("eligible_flag") == True, pl.col("region") == "North"],
+            where=[pl.col("eligible_flag"), pl.col("region") == "North"],
             rstate=RNG,
         )
         assert result._data.height == 20

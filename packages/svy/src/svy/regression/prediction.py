@@ -89,9 +89,9 @@ class GLMPred(msgspec.Struct, frozen=True):
         _L, _V, _R = 10, 10, 10
 
         def _row(lbl, val, rbl="", rval=""):
-            l = f"{lbl:<{_L}}: {str(val):<{_V}}"
-            r = f"  {rbl:<{_R}}: {rval}" if rbl else ""
-            return f"  {l}{r}".rstrip()
+            left = f"{lbl:<{_L}}: {str(val):<{_V}}"
+            right = f"  {rbl:<{_R}}: {rval}" if rbl else ""
+            return f"  {left}{right}".rstrip()
 
         lines = [
             f"GLM Predictions ({conf_pct}% CI)",

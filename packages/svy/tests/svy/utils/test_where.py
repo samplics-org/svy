@@ -173,16 +173,10 @@ class TestSingleExpr:
         assert result["id"].to_list() == [2, 3, 4]
 
     def test_svy_col_is_in_with_series(self, df):
-        """The form users should reach for when they have a pl.Series of values."""
-        values = pl.Series(["north", "south"])
-        pred = _compile_where(svy.col("region").is_in(values))
-        result = df.filter(pred)
-        assert len(result) == 3
+        """The form users reach for with a pl.Series of values.
 
-    def test_svy_col_is_in_with_series(self, df):
-        """svy.col routes through the wrapper, which handles implode internally."""
-        import svy
-
+        svy.col routes through the wrapper, which handles implode internally.
+        """
         values = pl.Series(["north", "south"])
         pred = _compile_where(svy.col("region").is_in(values))
         result = df.filter(pred)
