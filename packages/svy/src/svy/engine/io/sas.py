@@ -1,6 +1,8 @@
 # svy/engine/io/sas.py
 from __future__ import annotations
 
+import warnings
+
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
 
@@ -92,29 +94,39 @@ def _write_sas(
     path : str | Path
         Output file path.
     format : str | None
-        SAS format (e.g., 'sas7bdat').
-    encoding : str | None
-        File encoding.
+        Deprecated and ignored; kept so existing callers do not break.
+
+    Notes
+    -----
+    Writes **SAS Transport (XPT)**, which is the only SAS format ReadStat can
+    write — there is no sas7bdat writer, and ``svy_io.write_sas`` never existed
+    (the ``# type: ignore[attr-defined]`` that used to sit on the call was the
+    type checker saying exactly that).
+
+    XPT carries no variable or value labels, so metadata is *not* written and a
+    warning says so rather than letting it vanish quietly. Use ``write_spss``
+    or ``write_stata`` when the labels have to travel with the data.
     """
-    variables_meta: Dict[str, Any] = {"variables": {}}
+    if format is not None:
+        warnings.warn(
+            f"format={format!r} is ignored: ReadStat writes SAS Transport (XPT) only.",
+            UserWarning,
+            stacklevel=2,
+        )
+    if encoding is not None:
+        warnings.warn("encoding is ignored by the XPT writer.", UserWarning, stacklevel=2)
 
-    for var in df.columns:
-        meta = store.get(var)
-        # `missing` stays in the shape svy-io expects, and stays empty: svy has
-        # no model of user-missing values to fill it from (design 001 §2.2).
-        entry: Dict[str, Any] = {"label": None, "values": {}, "missing": []}
-
-        if meta is not None:
-            entry["label"] = meta.label
-
-            # Get value labels (direct or resolved from scheme)
-            resolved = store.resolve_labels(var)
-            if resolved.has_value_labels:
-                entry["values"] = resolved.labels
-
-        variables_meta["variables"][var] = entry
+    labelled = [
+        v for v in df.columns if (m := store.get(v)) is not None and (m.label or m.value_labels)
+    ]
+    if labelled:
+        warnings.warn(
+            f"SAS Transport carries no variable or value labels, so metadata for "
+            f"{', '.join(sorted(labelled))} is not written. Use write_spss or "
+            f"write_stata to keep labels with the data.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     table = to_writer_table(df)
-    sio.write_sas(  # type: ignore[attr-defined]
-        table, str(path), metadata=variables_meta, format=format, encoding=encoding, **kwargs
-    )
+    sio.write_xpt(table, str(path), **kwargs)

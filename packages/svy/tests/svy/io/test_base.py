@@ -105,13 +105,14 @@ def test_write_spss_renders_metadata_and_calls_backend(tmp_path, dummy_svyio):
     out = tmp_path / "out.sav"
     write_spss(s, out)
 
-    # last call at svy_io layer should be write_spss with expected metadata
-    last = [c for c in dummy_svyio.calls if c.fn == "write_spss"][-1]
-    meta = last.kwargs["metadata"]
-    assert "variables" in meta and "sex" in meta["variables"]
-    v = meta["variables"]["sex"]
-    assert v["label"] == "Sex of respondent"
-    assert v["values"][1] == "Male" and v["values"][2] == "Female"
+    # svy_io's SPSS writer is `write_sav`, and it takes var_labels and
+    # value_labels separately — not one `metadata` dict. This test asserted the
+    # dict shape against a dummy that invented a `write_spss` method, so it
+    # passed while the real call raised AttributeError.
+    last = [c for c in dummy_svyio.calls if c.fn == "write_sav"][-1]
+    assert last.kwargs["var_labels"]["sex"] == "Sex of respondent"
+    sex_labels = next(vl for vl in last.kwargs["value_labels"] if vl["col"] == "sex")
+    assert sex_labels["labels"] == {"1": "Male", "2": "Female"}
 
 
 def test_write_stata_splits_metadata_correctly(tmp_path, dummy_svyio):

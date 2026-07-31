@@ -68,11 +68,17 @@ class DummySvyIO:
         return self._read_template("read_sas", **kwargs)
 
     # -------- Writes --------
-    def write_spss(self, table_like, path: str, **kwargs):
-        # kwargs captures 'metadata', 'encoding', etc.
+    #
+    # These mirror svy_io's real writer names. They previously did not: the
+    # dummy defined `write_spss` and `write_sas`, which svy_io has never had,
+    # so the tests passed while the production calls raised AttributeError.
+    # A stub that invents the interface it stands in for cannot catch that.
+
+    def write_sav(self, table_like, path: str, **kwargs):
+        # kwargs captures 'var_labels', 'value_labels', 'user_missing', etc.
         self.calls.append(
             CallRecord(
-                fn="write_spss",
+                fn="write_sav",
                 args=(path,),
                 kwargs={"nrows": len(table_like), **kwargs},
             )
@@ -88,11 +94,12 @@ class DummySvyIO:
             )
         )
 
-    def write_sas(self, table_like, path: str, **kwargs):
-        # kwargs captures 'metadata', 'format', etc.
+    def write_xpt(self, table_like, path: str, **kwargs):
+        # SAS Transport is the only SAS format ReadStat writes, and it carries
+        # no labels, so there is no metadata argument to capture.
         self.calls.append(
             CallRecord(
-                fn="write_sas",
+                fn="write_xpt",
                 args=(path,),
                 kwargs={"nrows": len(table_like), **kwargs},
             )

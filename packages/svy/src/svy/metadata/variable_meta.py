@@ -373,7 +373,22 @@ class ResolvedLabels(msgspec.Struct, frozen=True):
         if _is_nan(value):
             return null_text
 
-        return self.labels.get(value, str(value))
+        labels = self.labels
+        if value in labels:
+            return labels[value]
+
+        # Codes and values can disagree in type without disagreeing in meaning.
+        # SPSS stores value-label keys as strings, so a `.sav` read back gives
+        # {"1": "Yes"} against a Float64 column, and a literal lookup misses.
+        # `display_series` never hit this because it stringifies both sides.
+        text = str(value)
+        if text in labels:
+            return labels[text]
+        if isinstance(value, float) and value.is_integer():
+            for key in (int(value), str(int(value))):
+                if key in labels:
+                    return labels[key]
+        return text
 
     def display_series(
         self,
