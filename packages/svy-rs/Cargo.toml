@@ -22,11 +22,11 @@ crate-type = ["cdylib", "rlib"]
 # undefined libpython symbols. See the [features] section below.
 pyo3 = { version = "0.26", features = ["abi3-py311", "generate-import-lib"] }
 pyo3-polars = { version = "0.25", features = ["derive"] }
-polars = { version = "0.52", default-features = false, features = ["dtype-categorical"] }
+polars = { version = "0.54", default-features = false, features = ["dtype-categorical"] }
 faer = "0.24"
 ahash = "0.8"
 numpy = "0.26"
-ndarray = { version = "0.16", features = ["rayon"] }
+ndarray = { version = "0.17", features = ["rayon"] }
 rayon = "1.12"
 rustc-hash = "2.1"
 thiserror = "2.0"
@@ -37,7 +37,7 @@ extension-module = ["pyo3/extension-module"]
 default = ["extension-module"]
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 
 # Criterion micro-benchmarks for the estimation kernel. Run WITHOUT the
 # extension-module feature so the bench binary links as a normal executable:
