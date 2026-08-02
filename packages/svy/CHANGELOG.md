@@ -8,6 +8,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+## [0.22.0] — 2026-08-02
+
 **svy labels values so results print nicely. That is the whole job.** Everything that made
 a label list *shareable* — concepts across locales, hierarchies, the semantics of why an
 answer is absent — moves to **svy-spec**, where a questionnaire gives it meaning. A
@@ -15,6 +17,42 @@ catalogue without one is machinery with no job.
 
 If you set labels by hand, read them from a `.sav`/`.dta`, or print them on estimates,
 nothing you do changes. If you used missing-value definitions, see **Removed**.
+
+> **0.21.1 was never published.** It was numbered and its notes written on 2026-07-27,
+> then further work landed before a tag was cut. Its changes ship here, and are kept
+> below under their own headings so nothing is lost — but no `svy==0.21.1` exists to
+> install, which is why there is no section for it.
+
+### Added
+
+- **`MetadataStore.update(other, *, overwrite=False)`** — merge one store into another, field by field.
+
+  Metadata for a variable arrives from several places that each know a different part of it: measurement types inferred from the data, missing-value codes declared by the analyst, question wording carried by an instrument spec. The only way to combine two stores was `set`, which replaces a whole `VariableMeta` — so applying a spec silently cleared missing codes, because a questionnaire has no concept of them and its record carries `missing=None`. That loss is invisible until an export drops the declarations.
+
+  `update` merges per field, which means a source can only ever *add* what it knows and can never clear what it has no opinion about. `overwrite=False` (the default) fills only gaps, keeping labels you have already chosen; `overwrite=True` lets `other` win where both are set — for a spec whose question wording should be definitive. A field `other` has not set is left alone in either mode, which is the property that makes the merge safe.
+
+  ```python
+  store.update(other)                    # fill gaps only
+  store.update(other, overwrite=True)    # `other` wins on conflicts
+  ```
+
+### Changed
+
+- **`VariableMeta.value_labels`, `ResolvedLabels.value_labels` and `Label.categories` hold
+  `(code, label)` pairs**, with a mapping accepted when constructing and a dict view for
+  lookup — `.labels`, `.labels`, `.label_map`. JSON object keys are always strings, so a
+  `dict[Category, str]` wrote `{101: "Banjul"}` and read it back with a *string* key,
+  silently, after which every join against an integer-coded column missed.
+
+  `Label.categories` also dropped `_MissingType` from its union: msgspec refuses to decode
+  any union containing a custom type, so the struct raised regardless — and nothing ever
+  set the field to the sentinel, since `None` already meant "no value labels".
+
+- **`CategoryScheme` holds one entry per code**, `SchemeEntry(code, label)`, replacing the
+  `mapping` / `missing` / `missing_kinds` collections keyed by code. Three of those were
+  `Category`-keyed dicts or sets that survived only through a hand-written encoder; every
+  field is JSON-native now, so **the bespoke encoder is gone** — `to_bytes` is a single
+  `msgspec.json.encode` — and a scheme keeps its code types by any route.
 
 ### Removed
 
@@ -78,6 +116,26 @@ nothing you do changes. If you used missing-value definitions, see **Removed**.
   no-op seams `validate_scheme_missing`, `normalize_scheme_missing`,
   `missing_codes_by_kind`. `labels.py` no longer imports polars.
 
+- **`svy.questionnaire`, `MetadataStore.import_from_questionnaire`, and the `Sample(questionnaire=)` parameter.** Describing an instrument is a different job from analysing the data it produced, and svy had come to own a small piece of it: a flat question model with no notion of rosters, ordered scales, or analysis units. That work now lives in **svy-spec**, which inverts the dependency — svy no longer needs to know what a questionnaire is.
+
+  This is a removal without a deprecation cycle, which the version number alone does not convey. `Questionnaire` was exported from `svy.questionnaire`, but never from the top-level `svy` namespace, never documented, and never used anywhere in svy beyond the one `Sample(questionnaire=)` hook — which only forwarded to `import_from_questionnaire`. A patch bump reflects a path with no known consumer; if you were importing it, pin `svy==0.21.0` and migrate at your convenience.
+
+  To attach instrument metadata, resolve a spec, project it, and merge it in:
+
+  ```python
+  from svy_spec.bridge import to_metadata_store
+  from svy_spec.resolve import resolve
+
+  sample = svy.Sample(data, design, catalog=catalog)
+  sample.meta.update(to_metadata_store(resolve(spec), catalog=catalog), overwrite=True)
+  ```
+
+  Use `update` rather than a loop over `set`: it merges per field, so a field the spec does not model — missing codes you declared, notes you added — is never cleared by applying it.
+
+  Pass `overwrite=True` when the spec is the authority, which it is here. `Sample.__init__` runs `infer_from_dataframe`, which sets `mtype` by guessing from each column's storage type; under the default fill-only merge that guess wins and the spec's declared level never lands, so an ordered single-select stays *Numerical Discrete* instead of becoming *Categorical Ordinal*. Apply the spec first, then any adjustments of your own.
+
+  `MetadataSource.QUESTIONNAIRE` stays — it is what the bridge sets, and it remains the right provenance for a field-collected variable.
+
 ### Fixed
 
 - **The SPSS and SAS writers could not run at all.** `_write_spss` called
@@ -119,61 +177,6 @@ nothing you do changes. If you used missing-value definitions, see **Removed**.
   further tests had no assertions at all.
 
 - **`ruff check` passes on `packages/svy/{src,tests}`** for the first time.
-
-### Changed
-
-- **`VariableMeta.value_labels`, `ResolvedLabels.value_labels` and `Label.categories` hold
-  `(code, label)` pairs**, with a mapping accepted when constructing and a dict view for
-  lookup — `.labels`, `.labels`, `.label_map`. JSON object keys are always strings, so a
-  `dict[Category, str]` wrote `{101: "Banjul"}` and read it back with a *string* key,
-  silently, after which every join against an integer-coded column missed.
-
-  `Label.categories` also dropped `_MissingType` from its union: msgspec refuses to decode
-  any union containing a custom type, so the struct raised regardless — and nothing ever
-  set the field to the sentinel, since `None` already meant "no value labels".
-
-- **`CategoryScheme` holds one entry per code**, `SchemeEntry(code, label)`, replacing the
-  `mapping` / `missing` / `missing_kinds` collections keyed by code. Three of those were
-  `Category`-keyed dicts or sets that survived only through a hand-written encoder; every
-  field is JSON-native now, so **the bespoke encoder is gone** — `to_bytes` is a single
-  `msgspec.json.encode` — and a scheme keeps its code types by any route.
-
-## [0.21.1] — 2026-07-27
-
-### Added
-
-- **`MetadataStore.update(other, *, overwrite=False)`** — merge one store into another, field by field.
-
-  Metadata for a variable arrives from several places that each know a different part of it: measurement types inferred from the data, missing-value codes declared by the analyst, question wording carried by an instrument spec. The only way to combine two stores was `set`, which replaces a whole `VariableMeta` — so applying a spec silently cleared missing codes, because a questionnaire has no concept of them and its record carries `missing=None`. That loss is invisible until an export drops the declarations.
-
-  `update` merges per field, which means a source can only ever *add* what it knows and can never clear what it has no opinion about. `overwrite=False` (the default) fills only gaps, keeping labels you have already chosen; `overwrite=True` lets `other` win where both are set — for a spec whose question wording should be definitive. A field `other` has not set is left alone in either mode, which is the property that makes the merge safe.
-
-  ```python
-  store.update(other)                    # fill gaps only
-  store.update(other, overwrite=True)    # `other` wins on conflicts
-  ```
-
-### Removed
-
-- **`svy.questionnaire`, `MetadataStore.import_from_questionnaire`, and the `Sample(questionnaire=)` parameter.** Describing an instrument is a different job from analysing the data it produced, and svy had come to own a small piece of it: a flat question model with no notion of rosters, ordered scales, or analysis units. That work now lives in **svy-spec**, which inverts the dependency — svy no longer needs to know what a questionnaire is.
-
-  This is a removal without a deprecation cycle, which the version number alone does not convey. `Questionnaire` was exported from `svy.questionnaire`, but never from the top-level `svy` namespace, never documented, and never used anywhere in svy beyond the one `Sample(questionnaire=)` hook — which only forwarded to `import_from_questionnaire`. A patch bump reflects a path with no known consumer; if you were importing it, pin `svy==0.21.0` and migrate at your convenience.
-
-  To attach instrument metadata, resolve a spec, project it, and merge it in:
-
-  ```python
-  from svy_spec.bridge import to_metadata_store
-  from svy_spec.resolve import resolve
-
-  sample = svy.Sample(data, design, catalog=catalog)
-  sample.meta.update(to_metadata_store(resolve(spec), catalog=catalog), overwrite=True)
-  ```
-
-  Use `update` rather than a loop over `set`: it merges per field, so a field the spec does not model — missing codes you declared, notes you added — is never cleared by applying it.
-
-  Pass `overwrite=True` when the spec is the authority, which it is here. `Sample.__init__` runs `infer_from_dataframe`, which sets `mtype` by guessing from each column's storage type; under the default fill-only merge that guess wins and the spec's declared level never lands, so an ordered single-select stays *Numerical Discrete* instead of becoming *Categorical Ordinal*. Apply the spec first, then any adjustments of your own.
-
-  `MetadataSource.QUESTIONNAIRE` stays — it is what the bridge sets, and it remains the right provenance for a field-collected variable.
 
 ## [0.21.0] — 2026-07-24
 
@@ -267,7 +270,8 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.21.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.22.0...HEAD
+[0.22.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.22.0
 [0.21.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.21.0
 [0.20.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.20.1
 [0.20.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.20.0
