@@ -477,6 +477,35 @@ pub fn scores_mean(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult
     Ok(Float64Chunked::from_slice_options("scores".into(), &scores))
 }
 
+/// `scores_mean` returning the raw score array the variance actually consumes.
+///
+/// `taylor_variance` immediately turns the `Float64Chunked` from `scores_mean`
+/// back into a `Vec<f64>` (`unwrap_or(0.0)` per element), so the Chunked is a
+/// pure round-trip: one copy into an arrow buffer and one copy back out, 2 x 8 MB
+/// at 1M rows. Callers that only need the array skip both. Null positions map to
+/// 0.0 exactly as `taylor_variance` does, so the variance is bit-identical.
+pub fn scores_mean_arr(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult<Vec<f64>> {
+    if let Some((ys, ws)) = cont_pair(y, weights) {
+        let mut sum_wy = 0.0f64;
+        let mut sum_w = 0.0f64;
+        for i in 0..ys.len() {
+            sum_wy += ys[i] * ws[i];
+            sum_w += ws[i];
+        }
+        if sum_w == 0.0 {
+            return Err(PolarsError::ComputeError("Sum of weights is zero".into()));
+        }
+        let est = sum_wy / sum_w;
+        return Ok((0..ys.len()).map(|i| (ws[i] / sum_w) * (ys[i] - est)).collect());
+    }
+    // Nulls or chunking: defer to the reference implementation and flatten,
+    // which is exactly what `taylor_variance` did with its result.
+    Ok(scores_mean(y, weights)?
+        .iter()
+        .map(|s| s.unwrap_or(0.0))
+        .collect())
+}
+
 pub fn scores_mean_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
@@ -1432,7 +1461,59 @@ pub fn degrees_of_freedom_in_domain(
     // This ensures domain estimation (where non-domain obs have w=0, or are
     // excluded by `domain`) gives the correct df, matching R's degf() on
     // subsetted designs.
-    let active: Vec<bool> = match domain {
+    let active = active_mask(weights, domain);
+
+    // Design columns are resolved to dense first-appearance integer codes,
+    // dispatching on dtype (String hashed, integer densified). The unique
+    // counts below are order-independent, so this is identical to the previous
+    // string-only implementation and to the integer-code fast path.
+    let str_idx = strata.map(design_col_codes).transpose()?;
+    let psu_idx = match (strata, psu) {
+        // PSUs are nested within stratum when stratified (so labels reused
+        // across strata are distinct); plain codes otherwise.
+        (Some(s), Some(p)) => Some(design_pair_codes(s, p)?.0),
+        (None, Some(p)) => Some(design_col_codes(p)?.0),
+        _ => None,
+    };
+
+    Ok(df_from_codes(
+        &active,
+        str_idx.as_ref().map(|(v, n)| (v.as_slice(), *n)),
+        psu_idx.as_deref(),
+    ))
+}
+
+/// Design df from a [`TaylorDesign`]'s already-resolved codes.
+///
+/// `degrees_of_freedom_in_domain` re-derives the strata and (stratum, psu) code
+/// vectors that `build_taylor_design` has just built from the very same columns
+/// — at 1M rows that duplicate densification was ~6.5 ms, a third of the whole
+/// ungrouped kernel. The codes are produced by identical calls
+/// (`design_col_codes` / `design_pair_codes`) on identical inputs, so reusing
+/// them is bit-identical by construction, not merely equivalent.
+pub fn degrees_of_freedom_from_design(
+    weights: &Float64Chunked,
+    design: &TaylorDesign,
+    domain: Option<&BooleanChunked>,
+) -> u32 {
+    if weights.is_empty() {
+        return 0;
+    }
+    let active = active_mask(weights, domain);
+    df_from_codes(
+        &active,
+        design
+            .strata_indices
+            .as_ref()
+            .map(|v| (v.as_slice(), design.n_strata)),
+        design.psu_indices.as_deref(),
+    )
+}
+
+/// Mask of active (positive weight, in-domain) observations. Shared so the
+/// column-driven and design-driven df entry points cannot drift apart.
+fn active_mask(weights: &Float64Chunked, domain: Option<&BooleanChunked>) -> Vec<bool> {
+    match domain {
         None => weights
             .iter()
             .map(|w| w.map_or(false, |v| v > 0.0))
@@ -1442,46 +1523,45 @@ pub fn degrees_of_freedom_in_domain(
             .zip(mask.iter())
             .map(|(w, d)| w.map_or(false, |v| v > 0.0) && d.unwrap_or(false))
             .collect(),
-    };
+    }
+}
 
-    // Design columns are resolved to dense first-appearance integer codes,
-    // dispatching on dtype (String hashed, integer densified). The unique
-    // counts below are order-independent, so this is identical to the previous
-    // string-only implementation and to the integer-code fast path.
+/// The df arithmetic itself, over resolved design codes.
+fn df_from_codes(
+    active: &[bool],
+    strata: Option<(&[u32], u32)>,
+    psu: Option<&[u32]>,
+) -> u32 {
     match (strata, psu) {
         (None, None) => {
             // No strata, no PSU: each obs is its own PSU, df = n_active - 1
             let n_active = active.iter().filter(|&&a| a).count();
-            Ok(n_active.saturating_sub(1) as u32)
+            n_active.saturating_sub(1) as u32
         }
-        (None, Some(psu_col)) => {
+        (None, Some(psu_idx)) => {
             // No strata, with PSU: df = n_unique_active_psus - 1
-            let (psu_idx, _) = design_col_codes(psu_col)?;
             let mut seen: FxHashSet<u32> = FxHashSet::default();
             for (&p, &act) in psu_idx.iter().zip(active.iter()) {
                 if act && p != u32::MAX {
                     seen.insert(p);
                 }
             }
-            Ok(seen.len().saturating_sub(1) as u32)
+            seen.len().saturating_sub(1) as u32
         }
-        (Some(strata_col), None) => {
+        (Some((str_idx, n_strata)), None) => {
             // Stratified, no PSU: df = sum_h(n_active_h - 1)
-            let (str_idx, n_strata) = design_col_codes(strata_col)?;
             let mut counts = vec![0u32; n_strata as usize];
             for (&s, &act) in str_idx.iter().zip(active.iter()) {
                 if act && s != u32::MAX {
                     counts[s as usize] += 1;
                 }
             }
-            Ok(counts.iter().map(|&c| c.saturating_sub(1)).sum())
+            counts.iter().map(|&c| c.saturating_sub(1)).sum()
         }
-        (Some(strata_col), Some(psu_col)) => {
+        (Some((str_idx, n_strata)), Some(psu_idx)) => {
             // Stratified + clustered: df = sum_h(n_active_psus_h - 1), where
             // PSUs are nested within stratum (so labels reused across strata are
             // distinct). psu codes are pair-nested; strata codes give the stratum.
-            let (str_idx, n_strata) = design_col_codes(strata_col)?;
-            let (psu_idx, _) = design_pair_codes(strata_col, psu_col)?;
             let mut stratum_psus: Vec<FxHashSet<u32>> =
                 vec![FxHashSet::default(); n_strata as usize];
             for ((&s, &p), &act) in str_idx.iter().zip(psu_idx.iter()).zip(active.iter()) {
@@ -1489,10 +1569,10 @@ pub fn degrees_of_freedom_in_domain(
                     stratum_psus[s as usize].insert(p);
                 }
             }
-            Ok(stratum_psus
+            stratum_psus
                 .iter()
                 .map(|psus| psus.len().saturating_sub(1) as u32)
-                .sum())
+                .sum()
         }
     }
 }
@@ -2359,5 +2439,71 @@ mod tests {
             SvyQuantileMethod::from_str("unknown"),
             SvyQuantileMethod::Higher
         ); // default
+    }
+
+    /// `degrees_of_freedom_from_design` exists so the ungrouped kernels stop
+    /// densifying the strata/PSU columns a second time just to count df. It has
+    /// to agree with the column-driven entry point on every design shape,
+    /// including the zero-weight rows a `where=` filter produces.
+    #[test]
+    fn test_df_from_design_matches_column_path() {
+        let strata_i = icol("s".into(), &[10, 10, 10, 10, 99, 99, 99, 99]);
+        let psu_i = icol("p".into(), &[7, 7, 3, 3, 7, 7, 3, 3]);
+        let strata_s = scol("s".into(), &["A", "A", "A", "A", "B", "B", "B", "B"]);
+        let psu_s = scol("p".into(), &["1", "1", "2", "2", "1", "1", "2", "2"]);
+
+        let w_all = Float64Chunked::from_slice("w".into(), &[1.0; 8]);
+        // Zero weights: two PSUs drop out, and stratum B loses one entirely.
+        let w_some =
+            Float64Chunked::from_slice("w".into(), &[1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]);
+
+        for (label, strata, psu) in [
+            ("integer codes", Some(&strata_i), Some(&psu_i)),
+            ("string labels", Some(&strata_s), Some(&psu_s)),
+            ("stratified, no psu", Some(&strata_i), None),
+            ("psu, no strata", None, Some(&psu_i)),
+            ("no design", None, None),
+        ] {
+            for (wlabel, w) in [("all positive", &w_all), ("some zero", &w_some)] {
+                let design =
+                    build_taylor_design(strata, psu, None, None, None, None).unwrap();
+                let from_design = degrees_of_freedom_from_design(w, &design, None);
+                let from_cols = degrees_of_freedom(w, strata, psu).unwrap();
+                assert_eq!(
+                    from_design, from_cols,
+                    "df mismatch for {label} / {wlabel}: design path {from_design} \
+                     vs column path {from_cols}"
+                );
+            }
+        }
+    }
+
+    /// `scores_mean_arr` skips the `Float64Chunked` round-trip that
+    /// `taylor_variance` used to undo immediately. It must produce exactly the
+    /// bits that round-trip produced, on both the contiguous fast path and the
+    /// null-bearing fallback.
+    #[test]
+    fn test_scores_mean_arr_matches_chunked_roundtrip() {
+        let w = Float64Chunked::from_slice("w".into(), &[1.0, 2.5, 0.5, 3.0, 1.25]);
+
+        let dense = Float64Chunked::from_slice("y".into(), &[1.0, 2.0, 3.0, 4.0, 5.0]);
+        let with_nulls = Float64Chunked::from_slice_options(
+            "y".into(),
+            &[Some(1.0), None, Some(3.0), Some(4.0), None],
+        );
+
+        for (label, y) in [("contiguous", &dense), ("with nulls", &with_nulls)] {
+            let roundtrip: Vec<f64> = scores_mean(y, &w)
+                .unwrap()
+                .iter()
+                .map(|s| s.unwrap_or(0.0))
+                .collect();
+            let direct = scores_mean_arr(y, &w).unwrap();
+            assert_eq!(
+                roundtrip.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                direct.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                "scores_mean_arr diverged from the chunked round-trip ({label})"
+            );
+        }
     }
 }

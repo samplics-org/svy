@@ -8,6 +8,29 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Changed
+
+- **Taylor estimation uses the cores it is given.** On a 10-core machine at 1M rows a single-variable mean used 1.15 cores and an 8-variable batched mean reached 1.8 of a possible 8. None of it was a rayon width problem — three pieces of redundant *serial* work sat around the fan-out, and removing them is what freed the parallelism:
+
+  - `sample.estimation` returned a **new `Estimation` on every attribute access**, so the `_data_version`-keyed caches it carries — the factorized design arrays and prepared design info — were discarded before they could ever be reused, and every `sample.estimation.mean(...)` re-derived the whole design. The accessor is now retained per `Sample`. Derived samples are handled by an identity check: `_replace_data` forks with `copy.copy`, which carries the cached accessor over verbatim, and without the check a fork would answer with an `Estimation` still bound to its parent's data.
+  - The reporting metadata on each `Estimate` (unique stratum labels, PSU count) was computed with `np.unique` over the **full-length** design arrays *per estimate*. A batched call produces one `Estimate` per variable, so an 8-variable mean did 16 full-length passes — **63% of that call's wall time** at 1M rows, all serial. These are properties of the design, not of the variable, so they are memoised on the design cache and invalidate with it.
+  - The Rust kernels stopped indexing the design twice per estimate and now overlap their independent halves — see [`svy-rs`](../svy-rs/CHANGELOG.md).
+
+  Measured on a 10-core M1 Max at 1M rows, 50 strata, 2000 PSUs:
+
+  | case | before | after | speedup | cores used |
+  | --- | ---: | ---: | ---: | --- |
+  | mean, 1 variable | 70.9 ms | 22.4 ms | 3.2× | 1.15 → 1.60 |
+  | total, 1 variable | 83.8 ms | 27.4 ms | 3.1× | 1.12 → 1.86 |
+  | mean, 8 batched | 163.2 ms | 38.6 ms | 4.2× | 1.78 → 3.47 |
+  | mean by group | 144.4 ms | 131.9 ms | 1.1× | 3.45 → 3.46 |
+
+  Thread scaling from 1 to 10 threads went from 1.11× to 1.54× for a single variable and 1.58× to 3.03× for the batched call. A single estimate overlaps two halves rather than fanning out, so its ceiling is ~2× by construction.
+
+  **Estimates, standard errors and degrees of freedom are unchanged** — bit-for-bit, and identical at 1, 2 and 10 threads.
+
+  One trade-off worth knowing: retaining the accessor means its cached design arrays (~31 B/row) stay alive as long as the `Sample` rather than being freed between calls. **Peak memory is unchanged** — those arrays were rebuilt on every call before, so the high-water mark was always there (2433.8 MB before vs 2434.5 MB after, over six calls at 10M rows). What is new is that a long-lived process holding many large `Sample` objects idle now holds their design caches too.
+
 ## [0.22.0] — 2026-08-02
 
 **svy labels values so results print nicely. That is the whole job.** Everything that made

@@ -6,6 +6,16 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Changed
+
+- **A Taylor estimate indexes its design once instead of twice.** `degrees_of_freedom` re-derived the stratum codes and nested (stratum, PSU) codes that `build_taylor_design` had just built, from the same columns via the same calls — two full densification passes over the design columns per estimate. At 1M rows over 2000 PSUs that was 11.3 ms on top of the design build's 11.0 ms, i.e. **63% of a 35 ms kernel spent indexing the same two columns twice.** A new `degrees_of_freedom_from_design` takes the df off the design's own code vectors; because those codes come from identical calls on identical inputs, the df is bit-identical by construction rather than merely equivalent. Applied to the ungrouped and batched mean, total, ratio and proportion kernels. The median kernels still double-index — their design is built inside the Woodruff variance and is not available to reuse — but they are sort-bound, so the share is smaller.
+
+- **The ungrouped kernels overlap their two independent halves.** Indexing the design reads none of the response columns, and the point estimate, scores and SRS variance read none of the design columns; likewise the variance and the df both read the finished design but neither feeds the other. Both pairs now run under `rayon::join`, and the ungrouped entry points release the GIL (`Python::detach`) so the second half can actually be picked up — previously only the by-group and batched paths did, and `taylor_mean`'s ungrouped branch held the interpreter lock through the whole call. Each half is internally unchanged and still accumulates in row order.
+
+- **`scores_mean_arr` skips a score-vector round-trip.** `taylor_variance` immediately converted the `Float64Chunked` from `scores_mean` back into a `Vec<f64>`, so the chunked array was two 8 MB copies at 1M rows that existed only to be undone. Callers that need the array take it directly; null positions still map to `0.0` exactly as before.
+
+**Results are numerically inert.** Estimates, standard errors, variances and degrees of freedom are bit-for-bit identical to 0.12.0 across stratified/clustered, stratified-only, PSU-only and unstratified designs, with and without `where=` zero weights, and identical at 1, 2 and 10 rayon threads — the thread-count invariance the parallelism policy in `estimation/mod.rs` requires.
+
 ## [0.12.0] — 2026-07-24
 
 ### Fixed
