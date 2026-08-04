@@ -8,6 +8,21 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Fixed
+
+- **Replication variance no longer costs O(B²) in the replicate count B.** The replicate kernels themselves were never at fault — they already do a single O(n·B) pass — but two sites in the Python prep layer tested column membership once per replicate weight column: `prepare_data` with `[c for c in rep_weight_cols if c in df.columns]`, and `Estimation._ensure_float64` with `c in data.columns and data[c].dtype != ...`. `df.columns` is a property that rebuilds the entire column-name list across the FFI boundary on every access, so B lookups cost O(B²) Python-string constructions; `_ensure_float64` also materialised a Series per column. A cProfile run at n=25,000 / B=800 put `PyDataFrame.columns` at 57% of total runtime, called ~2·B times per estimate.
+
+  With total work n·B held constant at 20M cells — an identical 160 MB replicate weight matrix in every case — the sweep spanned 36× across cases doing identical arithmetic. Column names are now snapshotted into a set once, and dtypes read from a single `data.schema` snapshot that answers both existence and dtype:
+
+  | n | B | before | after | speedup |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 200,000 | 100 | 0.0067 s | 0.0059 s | 1.1× |
+  | 50,000 | 400 | 0.0219 s | 0.0077 s | 2.8× |
+  | 25,000 | 800 | 0.0704 s | 0.0116 s | 6.1× |
+  | 12,500 | 1600 | 0.2442 s | 0.0201 s | 12.1× |
+
+  Sweep spread drops from 36.2× to 3.4×. This matters most for bootstrap designs at B=1000+; it is negligible for BRR (32–64) and SDR/ACS (80). **Results are numerically inert** — mean, total, ratio, prop and mean-by-domain are bit-for-bit identical to the previous build.
+
 ## [0.22.0] — 2026-08-02
 
 **svy labels values so results print nicely. That is the whole job.** Everything that made
