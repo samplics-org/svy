@@ -580,7 +580,11 @@ def prepare_data(
     weight_col = design.wgt if design.wgt else "__svy_ones__"
 
     # Rep weight columns that actually exist in df after select/singleton.
-    rep_weight_cols_in_df = [c for c in rep_weight_cols if c in df.columns]
+    # `df.columns` rebuilds the whole name list on every access, so testing it
+    # once per replicate is O(B^2) in Python-string construction — the dominant
+    # cost at bootstrap replicate counts. Snapshot it once into a set instead.
+    _df_col_set = set(df.columns)
+    rep_weight_cols_in_df = [c for c in rep_weight_cols if c in _df_col_set]
 
     # ── Where clause → domain column + zero weights (main + replicate) ───
     # Must happen BEFORE the categorical/by/strata type casting below so
