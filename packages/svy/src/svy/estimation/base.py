@@ -990,25 +990,53 @@ class Estimation:
         else:
             estimate.estimates = est_list
         d_cache = self._get_factorized_design()
-        if d_cache["stratum"] is not None:
+        strata_labels = self._design_strata_labels(d_cache)
+        if strata_labels is not None:
+            # Copy: the memo is shared by every Estimate built off this design,
+            # and the attribute is a plain mutable list on a user-facing object.
+            estimate.strata = list(strata_labels)
+            estimate.n_strata = len(strata_labels)
+        n_psus = self._design_n_psus(d_cache)
+        if n_psus is not None:
+            estimate.n_psus = n_psus
+        return estimate
+
+    # The two helpers below exist only to populate reporting metadata, but they
+    # run per *estimate*. Batched calls produce one Estimate per variable, so an
+    # 8-variable mean() was doing 16 `np.unique` passes over the full-length
+    # design arrays — 63% of that call's wall time at 1M rows, and entirely
+    # serial, which is what held the batched path near 1.8 cores. The unique
+    # strata and PSU count are properties of the design, not of the variable, so
+    # they are memoised on the design cache (already keyed on `_data_version`,
+    # so they invalidate exactly when the design arrays do).
+
+    @staticmethod
+    def _design_strata_labels(d_cache: dict[str, Any]) -> list[Any] | None:
+        """Sorted unique stratum labels, or None when the design is unstratified."""
+        if d_cache["stratum"] is None:
+            return None
+        if "_strata_labels" not in d_cache:
             strata_info = d_cache["stratum"]
             if isinstance(strata_info, tuple) and strata_info[1] is not None:
-                estimate.strata = strata_info[1]
-                estimate.n_strata = len(strata_info[1])
+                d_cache["_strata_labels"] = strata_info[1]
             else:
                 arr = strata_info[0] if isinstance(strata_info, tuple) else strata_info
-                estimate.strata = np.unique(arr).tolist()
-                estimate.n_strata = len(estimate.strata)
-        if d_cache["psu"] is not None:
+                d_cache["_strata_labels"] = np.unique(arr).tolist()
+        return d_cache["_strata_labels"]
+
+    @staticmethod
+    def _design_n_psus(d_cache: dict[str, Any]) -> int | None:
+        """Number of distinct PSUs, falling back to the row count when no PSU is set."""
+        if d_cache["psu"] is None:
+            return len(d_cache["wgt"]) if d_cache["wgt"] is not None else None
+        if "_n_psus" not in d_cache:
             psu_info = d_cache["psu"]
             if isinstance(psu_info, tuple) and psu_info[1] is not None:
-                estimate.n_psus = len(psu_info[1])
+                d_cache["_n_psus"] = len(psu_info[1])
             else:
                 arr = psu_info[0] if isinstance(psu_info, tuple) else psu_info
-                estimate.n_psus = len(np.unique(arr))
-        elif d_cache["wgt"] is not None:
-            estimate.n_psus = len(d_cache["wgt"])
-        return estimate
+                d_cache["_n_psus"] = len(np.unique(arr))
+        return d_cache["_n_psus"]
 
     @staticmethod
     def _normalize_method(method: str | None) -> Literal["taylor", "replication"] | None:

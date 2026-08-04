@@ -807,7 +807,24 @@ class Sample:
     def estimation(self) -> Estimation:
         from svy.estimation import Estimation
 
-        return Estimation(self)
+        # Retain the instance. `Estimation` carries caches of the factorized
+        # design (stratum/PSU code arrays, unique-label metadata, prepared design
+        # info) that are already guarded on `_data_version`, but handing out a
+        # fresh object per attribute access threw them away before they could
+        # ever be reused — so every `sample.estimation.mean(...)` re-derived the
+        # whole design. Those caches invalidate themselves whenever
+        # `__setattr__` bumps `_data_version` on a data/design rebind, so a
+        # retained instance can never serve stale arrays.
+        #
+        # The identity check is what makes this safe across forks: `_replace_data`
+        # builds a derived Sample with `copy.copy`, which carries this `__dict__`
+        # entry over verbatim. Without the check the fork would answer with an
+        # `Estimation` still bound to its parent, and estimate the parent's data.
+        est = self.__dict__.get("_estimation_api")
+        if est is None or est._sample is not self:
+            est = Estimation(self)
+            self.__dict__["_estimation_api"] = est
+        return est
 
     @property
     def categorical(self) -> Categorical:

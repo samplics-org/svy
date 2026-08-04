@@ -13,19 +13,20 @@ use crate::estimation::taylor::{
     SvyQuantileMethod,
     build_taylor_design,
     degrees_of_freedom,
+    degrees_of_freedom_from_design,
     degrees_of_freedom_in_domain,
     median_variance_woodruff,
     median_variance_woodruff_domain,
     point_estimate_mean, point_estimate_mean_domain,
     point_estimate_ratio, point_estimate_ratio_domain,
     point_estimate_total, point_estimate_total_domain,
-    scores_mean, scores_mean_domain,
+    scores_mean, scores_mean_arr, scores_mean_domain,
     scores_ratio, scores_ratio_domain,
     scores_total, scores_total_domain,
     srs_variance_mean, srs_variance_mean_domain,
     srs_variance_ratio, srs_variance_ratio_domain,
     srs_variance_total, srs_variance_total_domain,
-    taylor_variance, taylor_variance_apply,
+    taylor_variance_apply,
     weighted_median, weighted_median_domain,
 };
 
@@ -65,12 +66,19 @@ pub fn taylor_mean(
     let df = into_contiguous(data);
 
     if by_col.is_none() {
-        let result = compute_mean_ungrouped(
-            &df, &value_col, &weight_col,
-            strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
-            fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref(),
-        )
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        // Detach for the ungrouped path too: `compute_mean_ungrouped` overlaps
+        // the design build with the score pass via `rayon::join`, and holding
+        // the GIL would keep the rayon worker from ever picking up the second
+        // half (see the policy note in estimation/mod.rs).
+        let result = _py
+            .detach(|| {
+                compute_mean_ungrouped(
+                    &df, &value_col, &weight_col,
+                    strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
+                    fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref(),
+                )
+            })
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         return Ok(PyDataFrame(result));
     }
 
@@ -117,6 +125,54 @@ pub fn taylor_mean_multi(
     Ok(PyDataFrame(result))
 }
 
+/// Shared skeleton for the ungrouped single-estimate Taylor kernels.
+///
+/// Two overlaps, both free of any effect on the numbers:
+///
+/// 1. Indexing the design (densify strata, nest PSU codes, per-stratum maps)
+///    reads none of the response columns, and the point estimate / scores / SRS
+///    variance read none of the design columns. They run concurrently.
+/// 2. The variance and the df both read the finished design but neither feeds
+///    the other, so they run concurrently too — and taking df from the design's
+///    codes drops the second densification pass over the same columns, which at
+///    1M rows was on its own about a third of the kernel.
+///
+/// Every half is internally unchanged and still accumulates in row order, so the
+/// output is bit-identical and independent of `RAYON_NUM_THREADS`, as
+/// `estimation/mod.rs` requires.
+///
+/// `value_work` returns the score vector plus whatever else the caller needs out
+/// of the response columns.
+fn ungrouped_estimate<T: Send>(
+    weights: &Float64Chunked,
+    strata: Option<&Column>,
+    psu: Option<&Column>,
+    ssu: Option<&Column>,
+    fpc: Option<&Float64Chunked>,
+    fpc_ssu: Option<&Float64Chunked>,
+    singleton_method: Option<&str>,
+    value_work: impl FnOnce() -> PolarsResult<(Vec<f64>, T)> + Send,
+) -> PolarsResult<(f64, u32, T)> {
+    let (design_res, value_res) = rayon::join(
+        || build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method),
+        value_work,
+    );
+    let design = design_res?;
+    let (scores, extra) = value_res?;
+
+    let (variance, df_val) = rayon::join(
+        || taylor_variance_apply(&scores, &design),
+        || degrees_of_freedom_from_design(weights, &design, None),
+    );
+    Ok((variance, df_val, extra))
+}
+
+/// Flatten a score `Float64Chunked` to the array the variance consumes, mapping
+/// nulls to 0.0 exactly as `taylor_variance` did.
+fn scores_to_arr(scores: &Float64Chunked) -> Vec<f64> {
+    scores.iter().map(|s| s.unwrap_or(0.0)).collect()
+}
+
 fn compute_mean_ungrouped(
     df: &DataFrame,
     value_col: &str, weight_col: &str,
@@ -132,14 +188,19 @@ fn compute_mean_ungrouped(
     let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
 
-    let estimate = point_estimate_mean(y, weights)?;
-    let scores   = scores_mean(y, weights)?;
-    let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
-    let se       = variance.max(0.0).sqrt();
-    let df_val   = degrees_of_freedom(weights, strata, psu)?;
-    let n        = y.len() as u32;
-    let srs_var  = srs_variance_mean(y, weights)?;
-    let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
+    let (variance, df_val, (estimate, srs_var)) = ungrouped_estimate(
+        weights, strata, psu, ssu, fpc, fpc_ssu, singleton_method,
+        || {
+            let estimate = point_estimate_mean(y, weights)?;
+            let scores   = scores_mean_arr(y, weights)?;
+            let srs_var  = srs_variance_mean(y, weights)?;
+            Ok((scores, (estimate, srs_var)))
+        },
+    )?;
+
+    let se   = variance.max(0.0).sqrt();
+    let n    = y.len() as u32;
+    let deff = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
 
     df!["y" => vec![value_col], "est" => vec![estimate], "se" => vec![se],
         "var" => vec![variance], "df" => vec![df_val], "n" => vec![n], "deff" => vec![deff]]
@@ -166,8 +227,13 @@ fn compute_mean_multi(
     let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
 
-    let df_val = degrees_of_freedom(weights, strata, psu)?;
+    // Serial head, previously ~22 ms of a ~35 ms kernel at 1M rows and the whole
+    // reason the batched path stalled well under its available width: the design
+    // was indexed once here and *again* inside `degrees_of_freedom`. Building it
+    // once and deriving df from the same codes roughly halves the head, which is
+    // the term Amdahl's law was multiplying.
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+    let df_val = degrees_of_freedom_from_design(weights, &design, None);
 
     // Resolve every response column to its typed slice BEFORE fanning out.
     // `df.column()` mutates the frame's internal schema cache, so calling it
@@ -183,8 +249,7 @@ fn compute_mean_multi(
         .map(|i| -> PolarsResult<(String, f64, f64, f64, u32, f64)> {
             let y        = y_cols[i];
             let estimate = point_estimate_mean(y, weights)?;
-            let scores   = scores_mean(y, weights)?;
-            let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+            let scores_arr = scores_mean_arr(y, weights)?;
             let variance = taylor_variance_apply(&scores_arr, &design);
             let se       = variance.max(0.0).sqrt();
             let n        = y.len() as u32;
@@ -367,14 +432,19 @@ fn compute_total_ungrouped(
     let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
 
-    let estimate = point_estimate_total(y, weights)?;
-    let scores   = scores_total(y, weights)?;
-    let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
-    let se       = variance.max(0.0).sqrt();
-    let df_val   = degrees_of_freedom(weights, strata, psu)?;
-    let n        = y.len() as u32;
-    let srs_var  = srs_variance_total(y, weights)?;
-    let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
+    let (variance, df_val, (estimate, srs_var)) = ungrouped_estimate(
+        weights, strata, psu, ssu, fpc, fpc_ssu, singleton_method,
+        || {
+            let estimate = point_estimate_total(y, weights)?;
+            let scores   = scores_to_arr(&scores_total(y, weights)?);
+            let srs_var  = srs_variance_total(y, weights)?;
+            Ok((scores, (estimate, srs_var)))
+        },
+    )?;
+
+    let se   = variance.max(0.0).sqrt();
+    let n    = y.len() as u32;
+    let deff = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
 
     df!["y" => vec![value_col], "est" => vec![estimate], "se" => vec![se],
         "var" => vec![variance], "df" => vec![df_val], "n" => vec![n], "deff" => vec![deff]]
@@ -396,8 +466,10 @@ fn compute_total_multi(
     let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
 
-    let df_val = degrees_of_freedom(weights, strata, psu)?;
+    // Design indexed once; df taken off its codes rather than densifying the
+    // same strata/PSU columns a second time (see `compute_mean_multi`).
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+    let df_val = degrees_of_freedom_from_design(weights, &design, None);
 
     // Hoist column resolution out of the parallel region (see compute_mean_multi).
     let y_cols: Vec<&Float64Chunked> = value_cols
@@ -594,14 +666,19 @@ fn compute_ratio_ungrouped(
     let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
 
-    let estimate = point_estimate_ratio(y, x, weights)?;
-    let scores   = scores_ratio(y, x, weights)?;
-    let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
-    let se       = variance.max(0.0).sqrt();
-    let df_val   = degrees_of_freedom(weights, strata, psu)?;
-    let n        = y.len() as u32;
-    let srs_var  = srs_variance_ratio(y, x, weights)?;
-    let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
+    let (variance, df_val, (estimate, srs_var)) = ungrouped_estimate(
+        weights, strata, psu, ssu, fpc, fpc_ssu, singleton_method,
+        || {
+            let estimate = point_estimate_ratio(y, x, weights)?;
+            let scores   = scores_to_arr(&scores_ratio(y, x, weights)?);
+            let srs_var  = srs_variance_ratio(y, x, weights)?;
+            Ok((scores, (estimate, srs_var)))
+        },
+    )?;
+
+    let se   = variance.max(0.0).sqrt();
+    let n    = y.len() as u32;
+    let deff = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
 
     df!["y" => vec![numerator_col], "x" => vec![denominator_col], "est" => vec![estimate],
         "se" => vec![se], "var" => vec![variance], "df" => vec![df_val], "n" => vec![n], "deff" => vec![deff]]
@@ -623,8 +700,10 @@ fn compute_ratio_multi(
     let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
 
-    let df_val = degrees_of_freedom(weights, strata, psu)?;
+    // Design indexed once; df taken off its codes rather than densifying the
+    // same strata/PSU columns a second time (see `compute_mean_multi`).
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+    let df_val = degrees_of_freedom_from_design(weights, &design, None);
 
     // Hoist column resolution out of the parallel region (see compute_mean_multi).
     let y_cols: Vec<&Float64Chunked> = numerator_cols
@@ -843,10 +922,11 @@ fn compute_prop_ungrouped(
     let mut dfs_vec: Vec<u32> = Vec::new();
     let mut ns: Vec<u32> = Vec::new();
     let mut deffs: Vec<f64> = Vec::new();
-    let df_val = degrees_of_freedom(weights, strata, psu)?;
     let n = weights.len() as u32;
-    // Design is identical across levels; index it once.
+    // Design is identical across levels; index it once — and take the df off its
+    // codes rather than densifying the same columns a second time.
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+    let df_val = degrees_of_freedom_from_design(weights, &design, None);
 
     for lvl in &levels {
         let indicator: Vec<Option<f64>> = value_str.iter()
@@ -896,9 +976,10 @@ fn compute_prop_multi(
     let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
     let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
 
-    let df_val = degrees_of_freedom(weights, strata, psu)?;
     let n = weights.len() as u32;
+    // Design indexed once; df taken off its codes (see `compute_mean_multi`).
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+    let df_val = degrees_of_freedom_from_design(weights, &design, None);
 
     // Hoist String-cast + level enumeration out of the parallel region: keep the
     // owned casted columns alive, borrow their StringChunked, and precompute each
