@@ -297,10 +297,15 @@ class Estimation:
     # ----------------------------------------------------------------
 
     def _ensure_float64(self, data: pl.DataFrame, cols: list[str]) -> pl.DataFrame:
+        # One `data.schema` lookup answers both "does the column exist" and
+        # "what is its dtype". The previous `c in data.columns and data[c].dtype`
+        # rebuilt the full column-name list *and* materialised a Series per
+        # column, making this O(B^2) when `cols` is a set of replicate weights.
+        schema = data.schema
         casts = [
             pl.col(c).cast(pl.Float64)
             for c in cols
-            if c in data.columns and data[c].dtype != pl.Float64
+            if (dtype := schema.get(c)) is not None and dtype != pl.Float64
         ]
         return data.with_columns(casts) if casts else data
 
