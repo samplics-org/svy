@@ -8,6 +8,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+## [0.22.1] — 2026-08-04
+
 ### Changed
 
 - **Taylor estimation uses the cores it is given.** On a 10-core machine at 1M rows a single-variable mean used 1.15 cores and an 8-variable batched mean reached 1.8 of a possible 8. None of it was a rayon width problem — three pieces of redundant *serial* work sat around the fan-out, and removing them is what freed the parallelism:
@@ -308,7 +310,8 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.22.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.22.1...HEAD
+[0.22.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.22.1
 [0.22.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.22.0
 [0.21.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.21.0
 [0.20.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.20.1

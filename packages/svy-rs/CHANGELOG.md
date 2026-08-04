@@ -6,6 +6,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+## [0.12.1] — 2026-08-04
+
 ### Changed
 
 - **A Taylor estimate indexes its design once instead of twice.** `degrees_of_freedom` re-derived the stratum codes and nested (stratum, PSU) codes that `build_taylor_design` had just built, from the same columns via the same calls — two full densification passes over the design columns per estimate. At 1M rows over 2000 PSUs that was 11.3 ms on top of the design build's 11.0 ms, i.e. **63% of a 35 ms kernel spent indexing the same two columns twice.** A new `degrees_of_freedom_from_design` takes the df off the design's own code vectors; because those codes come from identical calls on identical inputs, the df is bit-identical by construction rather than merely equivalent. Applied to the ungrouped and batched mean, total, ratio and proportion kernels. The median kernels still double-index — their design is built inside the Woodruff variance and is not available to reuse — but they are sort-bound, so the share is smaller.
@@ -73,7 +75,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 Baseline for this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.12.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.12.1...HEAD
+[0.12.1]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.12.1
 [0.12.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.12.0
 [0.11.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.11.0
 [0.10.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.10.0
