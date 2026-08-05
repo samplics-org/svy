@@ -6,6 +6,10 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Fixed
+
+- **The Woodruff score is centered on its own weighted mean.** The linearization used `(w_i / sum_w) * (I(y_i > q) - (1 - p))`, centering the residual on the *nominal* target rather than on the mean it actually realizes. `u_bar` is zero only when `F(q)` lands exactly on `p`, which discreteness prevents — on a 5000-record fixture it sits near -4e-5, and omitting it moved the probability-scale SE by ~2e-4 relative. R reaches the centered form by computing the variance as `svymean(U, design)`. The `Higher`/`Lower` rules were unaffected in their output, because the CDF inversion snaps to an order statistic and absorbs the wobble, so medians and default-`q_method` quantiles do not move; `Linear`, `Middle` and `Nearest` interpolate continuously and did drift — up to 4e-4 relative on the confidence limits. All rules now agree with R to floating-point noise.
+
 ### Added
 
 - **The Woodruff kernels take a probability instead of assuming 0.5.** `scores_median` hardcoded `let _p = 0.5` and its indicator `I(y > q) - 0.5`; the generalized `scores_quantile` uses `I(y > q) - (1 - p)`, which reduces to the old expression at `p = 0.5`. `weighted_quantile_domain`, `scores_quantile_domain` and the replication kernels (`weighted_quantiles_vec`, `matrix_quantile_estimates`, `matrix_quantile_by_domain`) are generalized the same way. The median entry points remain, delegating with `probs = [0.5]` and dropping the probability column, so their result schema is unchanged.

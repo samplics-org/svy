@@ -5,35 +5,56 @@ Standard errors follow Woodruff (1952): the design-based variance of the
 estimated proportion P(Y <= q) is taken on the probability scale, and the
 interval comes from inverting the weighted CDF at ``p +/- t*se_p``.
 
-The reference values below come from R's ``oldsvyquantile`` with
-``interval.type="Wald"``, which is the same construction. svy's ``q_method``
-maps onto R's ``method``/``f`` pair:
+Reference values come from R's ``oldsvyquantile`` with ``interval.type="Wald"``,
+which is the same construction. svy's ``q_method`` maps onto R's ``method``/``f``:
 
     q_method="higher"  <->  method="constant", f=1
     q_method="linear"  <->  method="linear"
 
+Point estimates and both confidence limits agree with R **exactly** — every
+value below is bit-identical. Standard errors agree to ~1e-15 relative, and the
+residual is not the survey math: ``se`` is the back-solved half-width
+``(uci - lci) / (2t)``, and scipy's ``t.ppf(0.975, 190)`` differs from R's
+``qt(0.975, 190)`` by 1.0e-15 relative. Hence the 1e-12 tolerance below, which
+still leaves three orders of magnitude of headroom.
+
+The fixture deliberately stresses the estimator: 5000 records, 10 strata x 20
+PSUs (df = 190), skewed income spanning 1.9k to 536k, and continuous unequal
+weights spanning a 425x range with 4997 distinct values. The extreme
+probabilities (0.001, 0.999) exercise the sparse tails where the CDF inversion
+rule matters most, and 0.0345 / 0.679 are deliberately off-grid.
+
 R Setup Code:
 -------------
 ```r
+options(digits = 15)
 library(survey)
 
-d <- read.csv("fixture.csv")   # the frame built by make_quantile_data() below
+d <- read.csv("packages/svy/tests/test_data/quantile_ref_20260805.csv")
 des <- svydesign(id = ~psu, strata = ~stratum, weights = ~wgt, data = d, nest = TRUE)
-degf(des)   # 12
+degf(des)   # 190
 
-for (p in c(0.1, 0.25, 0.5, 0.75, 0.9)) {
+probs <- c(0.001, 0.01, 0.0345, 0.1, 0.25, 0.5, 0.679, 0.75, 0.9, 0.99, 0.999)
+
+# R_HIGHER: method="constant", f=1   |   R_LINEAR: method="linear"
+for (p in probs) {
     q <- oldsvyquantile(~income, des, quantiles = p, ci = TRUE,
                         interval.type = "Wald", method = "constant", f = 1)
-    print(c(coef(q), SE(q), confint(q)))
+    cat(sprintf("%g %.15g %.15g %.15g %.15g\n",
+        p, coef(q), SE(q), confint(q)[1], confint(q)[2]))
 }
 
-# Domains
+# R_BY_REGION
 for (rg in c("North", "South")) {
-    oldsvyquantile(~income, subset(des, region == rg), quantiles = 0.5, ci = TRUE,
-                   interval.type = "Wald", method = "constant", f = 1)
+    for (p in c(0.1, 0.25, 0.5, 0.75, 0.9)) {
+        oldsvyquantile(~income, subset(des, region == rg), quantiles = p, ci = TRUE,
+                       interval.type = "Wald", method = "constant", f = 1)
+    }
 }
 ```
 """
+
+from pathlib import Path
 
 import polars as pl
 import pytest
@@ -43,31 +64,21 @@ from svy.core.enumerations import PopParam
 from svy.estimation import EstimateList
 
 
+# Point estimates and confidence limits match R exactly; SEs carry only the
+# scipy-vs-R t-quantile difference (~1e-15).
+REL = 1e-12
+
+FIXTURE = Path(__file__).resolve().parents[2] / "test_data" / "quantile_ref_20260805.csv"
+
+
 # ============================================================================
 # Test Dataset
 # ============================================================================
 
 
 def make_quantile_data() -> pl.DataFrame:
-    """Deterministic 80-row design: 4 strata x 4 PSUs x 5 units, df = 12."""
-    rows = []
-    for si, stratum in enumerate("ABCD"):
-        for psu in range(4):
-            for unit in range(5):
-                rows.append(
-                    {
-                        "stratum": stratum,
-                        "psu": f"{stratum}{psu}",
-                        "income": 10000
-                        + 2500 * si
-                        + 1700 * psu
-                        + 900 * unit
-                        + 130 * ((si * 7 + psu * 3 + unit * 11) % 13),
-                        "wgt": 1.0 + 0.25 * ((si + psu + unit) % 5),
-                        "region": "North" if (psu + unit) % 2 == 0 else "South",
-                    }
-                )
-    return pl.DataFrame(rows)
+    """The committed fixture R was run against — the single source of truth."""
+    return pl.read_csv(FIXTURE)
 
 
 @pytest.fixture
@@ -81,31 +92,47 @@ def sample() -> Sample:
 # R: oldsvyquantile(..., interval.type="Wald", method="constant", f=1)
 # (prob, est, se, lci, uci)
 R_HIGHER = [
-    (0.10, 14180.000000, 1252.975916, 10000.000000, 15460.000000),
-    (0.25, 15900.000000, 904.162108, 14050.000000, 17990.000000),
-    (0.50, 18540.000000, 736.639687, 17420.000000, 20630.000000),
-    (0.75, 21470.000000, 1076.274184, 19310.000000, 24000.000000),
-    (0.90, 23760.000000, 1177.246602, 22240.000000, 27370.000000),
+    (0.001, 2453.7738, 213.058781027707, 1884.0742, 2724.6031),
+    (0.01, 4400.0454, 309.189448122974, 3746.2698, 4966.0396),
+    (0.0345, 6732.2575, 363.915079414323, 5895.4843, 7331.1498),
+    (0.1, 10884.6084, 466.970514492444, 10008.7569, 11850.9819),
+    (0.25, 18668.346, 647.96767501857, 17512.9969, 20069.2659),
+    (0.5, 33429.9866, 951.332516879979, 31452.3191, 35205.3795),
+    (0.679, 46769.1758, 1280.00883487419, 44568.8496, 49618.5566),
+    (0.75, 54394.0689, 1448.50196619299, 51534.3152, 57248.7371),
+    (0.9, 91935.9034, 4311.02884997682, 82793.11, 99800.3618),
+    (0.99, 187573.6841, 13035.146663361, 175198.0666, 226622.4549),
+    (0.999, 329662.0411, 60382.1082440284, 297789.5347, 536000.3551),
 ]
 
 # R: oldsvyquantile(..., interval.type="Wald", method="linear")
 R_LINEAR = [
-    (0.10, 14136.666667, 1248.405948, 10000.000000, 15440.085792),
-    (0.25, 15842.857143, 969.404522, 13737.455091, 17961.757110),
-    (0.50, 18517.142857, 743.926890, 17321.477035, 20563.231942),
-    (0.75, 21470.000000, 1079.828430, 19280.108457, 23985.596530),
-    (0.90, 23760.000000, 1205.897832, 22115.148664, 27370.000000),
+    (0.001, 2453.72704364921, 198.621982194827, 1903.09341254061, 2686.66832742913),
+    (0.01, 4396.7486276543, 304.082344033955, 3759.85592845707, 4959.47791496906),
+    (0.0345, 6724.26363172486, 366.361944026794, 5883.45354369663, 7328.77206250791),
+    (0.1, 10881.6789867565, 466.616284466675, 10002.3754831598, 11843.2030257423),
+    (0.25, 18659.0719519676, 647.820558592866, 17511.7229625745, 20067.411579983),
+    (0.5, 33427.4974064113, 950.170122774319, 31444.011999696, 35192.486689432),
+    (0.679, 46763.5698205693, 1277.212283491, 44560.7738211196, 49599.4482682881),
+    (0.75, 54391.3922866024, 1444.97993749059, 51531.6430418443, 57232.1703400977),
+    (0.9, 91931.3113738885, 4199.47078591178, 82742.5269409024, 99309.6758903069),
+    (0.99, 187465.615949273, 13034.1119176631, 175182.646153341, 226602.95232324),
+    (0.999, 329485.233713584, 64601.8585499204, 281142.381901239, 536000.3551),
 ]
 
 # R: per-domain via subset(des, region == ...), method="constant", f=1
 # (region, prob, est, se)
 R_BY_REGION = [
-    ("North", 0.25, 15700.000000, 1076.274184),
-    ("North", 0.50, 18540.000000, 844.496588),
-    ("North", 0.75, 21270.000000, 1076.274184),
-    ("South", 0.25, 16270.000000, 727.460376),
-    ("South", 0.50, 18740.000000, 858.265554),
-    ("South", 0.75, 21910.000000, 1122.170738),
+    ("North", 0.1, 11291.8521, 832.885289511911),
+    ("North", 0.25, 18968.7621, 1127.72739273457),
+    ("North", 0.5, 34150.2656, 1700.52818455268),
+    ("North", 0.75, 55752.9531, 2791.97633349401),
+    ("North", 0.9, 95245.4547, 6984.59821460462),
+    ("South", 0.1, 10501.6883, 768.451836836439),
+    ("South", 0.25, 18557.5425, 1211.78278106246),
+    ("South", 0.5, 32525.2997, 1781.16202603899),
+    ("South", 0.75, 52340.9449, 2388.09701981651),
+    ("South", 0.9, 85969.1396, 4649.84105888204),
 ]
 
 
@@ -121,11 +148,11 @@ class TestMatchesR:
         result = sample.estimation.quantile("income", p=prob, q_method="higher")
         got = result.estimates[0]
 
-        assert got.est == pytest.approx(est, rel=1e-9)
-        assert got.se == pytest.approx(se, rel=1e-9)
-        assert got.lci == pytest.approx(lci, rel=1e-9)
-        assert got.uci == pytest.approx(uci, rel=1e-9)
-        assert got.df == 12
+        assert got.est == pytest.approx(est, rel=REL)
+        assert got.se == pytest.approx(se, rel=REL)
+        assert got.lci == pytest.approx(lci, rel=REL)
+        assert got.uci == pytest.approx(uci, rel=REL)
+        assert got.df == 190
 
     @pytest.mark.parametrize("prob, est, se, lci, uci", R_LINEAR)
     def test_linear_matches_r(self, sample, prob, est, se, lci, uci):
@@ -139,14 +166,14 @@ class TestMatchesR:
         result = sample.estimation.quantile("income", p=prob, q_method="linear")
         got = result.estimates[0]
 
-        assert got.est == pytest.approx(est, rel=1e-9)
-        assert got.se == pytest.approx(se, rel=1e-9)
-        assert got.lci == pytest.approx(lci, rel=1e-9)
-        assert got.uci == pytest.approx(uci, rel=1e-9)
+        assert got.est == pytest.approx(est, rel=REL)
+        assert got.se == pytest.approx(se, rel=REL)
+        assert got.lci == pytest.approx(lci, rel=REL)
+        assert got.uci == pytest.approx(uci, rel=REL)
 
     def test_domains_match_r(self, sample):
         """by= domains reproduce R's subset() estimates."""
-        results = sample.estimation.quantile("income", p=(0.25, 0.50, 0.75), by="region")
+        results = sample.estimation.quantile("income", p=(0.1, 0.25, 0.5, 0.75, 0.9), by="region")
 
         got = {
             (e.by_level[0], round(float(e.prob), 2)): e for est in results for e in est.estimates
@@ -155,8 +182,8 @@ class TestMatchesR:
 
         for region, prob, est, se in R_BY_REGION:
             row = got[(region, prob)]
-            assert row.est == pytest.approx(est, rel=1e-9), f"{region} p={prob}"
-            assert row.se == pytest.approx(se, rel=1e-9), f"{region} p={prob}"
+            assert row.est == pytest.approx(est, rel=REL), f"{region} p={prob}"
+            assert row.se == pytest.approx(se, rel=REL), f"{region} p={prob}"
 
     def test_tail_probabilities(self, sample):
         """Extreme probabilities stay inside the observed support."""
