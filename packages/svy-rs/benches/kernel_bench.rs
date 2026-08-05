@@ -135,8 +135,10 @@ fn bench_taylor_variance(c: &mut Criterion) {
         let w = make_w(n);
         let scores = scores_mean(&y, &w).unwrap();
         for &long in &[false, true] {
-            let strata = make_strata(n, long);
-            let psu = make_psu(n, long);
+            // taylor_variance takes design columns; build them outside the
+            // timed closure so the conversion is not measured.
+            let strata = Column::from(make_strata(n, long).into_series());
+            let psu = Column::from(make_psu(n, long).into_series());
             let id = format!("{n}/{}", if long { "long" } else { "short" });
             g.throughput(Throughput::Elements(n as u64));
             g.bench_function(BenchmarkId::from_parameter(id), |b| {

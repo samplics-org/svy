@@ -195,7 +195,7 @@ where
 
         let mut single = run_single(&temp_df, Some("__svy_by_domain__"), Some("true"))?;
         let with_by    = single
-            .with_column(Series::new(by_col.into(), vec![level.as_str()]))?
+            .with_column(Column::new(by_col.into(), vec![level.as_str()]))?
             .clone();
 
         result_dfs.push(with_by);

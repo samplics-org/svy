@@ -58,7 +58,7 @@ fn get_domain_mask(df: &DataFrame, mask_col: Option<&str>) -> PolarsResult<Optio
         None => Ok(None),
         Some(name) => {
             let ca = df.column(name)?.f64()?;
-            Ok(Some(ca.into_iter().map(|o| o.unwrap_or(0.0)).collect()))
+            Ok(Some(ca.iter().map(|o| o.unwrap_or(0.0)).collect()))
         }
     }
 }
@@ -139,8 +139,8 @@ fn compute_replicate_mean_ungrouped(
     let weights = df.column(weight_col)?.f64()?;
     let n = y.len();
     let n_reps = rep_weight_cols.len();
-    let y_arr: Vec<f64> = y.into_iter().map(|v| v.unwrap_or(0.0)).collect();
-    let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
+    let y_arr: Vec<f64> = y.iter().map(|v| v.unwrap_or(0.0)).collect();
+    let w_arr: Vec<f64> = weights.iter().map(|v| v.unwrap_or(0.0)).collect();
     let domain_mask = get_domain_mask(df, domain_mask_col)?;
     let mask = domain_mask.as_deref();
 
@@ -174,8 +174,8 @@ fn compute_replicate_mean_grouped(
     let by_str = df.column(by_col)?.str()?;
     let n = y.len();
     let n_reps = rep_weight_cols.len();
-    let y_arr: Vec<f64> = y.into_iter().map(|v| v.unwrap_or(0.0)).collect();
-    let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
+    let y_arr: Vec<f64> = y.iter().map(|v| v.unwrap_or(0.0)).collect();
+    let w_arr: Vec<f64> = weights.iter().map(|v| v.unwrap_or(0.0)).collect();
 
     let (domain_ids, domain_names, n_domains) = index_domains(by_str);
     let (theta_full_vec, theta_reps_vec, counts) = match get_cont_rep_cols(df, rep_weight_cols)? {
@@ -268,8 +268,8 @@ fn compute_replicate_total_ungrouped(
     let weights = df.column(weight_col)?.f64()?;
     let n = y.len();
     let n_reps = rep_weight_cols.len();
-    let y_arr: Vec<f64> = y.into_iter().map(|v| v.unwrap_or(0.0)).collect();
-    let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
+    let y_arr: Vec<f64> = y.iter().map(|v| v.unwrap_or(0.0)).collect();
+    let w_arr: Vec<f64> = weights.iter().map(|v| v.unwrap_or(0.0)).collect();
     let domain_mask = get_domain_mask(df, domain_mask_col)?;
     let mask = domain_mask.as_deref();
 
@@ -301,8 +301,8 @@ fn compute_replicate_total_grouped(
     let by_str = df.column(by_col)?.str()?;
     let n = y.len();
     let n_reps = rep_weight_cols.len();
-    let y_arr: Vec<f64> = y.into_iter().map(|v| v.unwrap_or(0.0)).collect();
-    let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
+    let y_arr: Vec<f64> = y.iter().map(|v| v.unwrap_or(0.0)).collect();
+    let w_arr: Vec<f64> = weights.iter().map(|v| v.unwrap_or(0.0)).collect();
 
     let (domain_ids, domain_names, n_domains) = index_domains(by_str);
     let (theta_full_vec, theta_reps_vec, counts) = match get_cont_rep_cols(df, rep_weight_cols)? {
@@ -400,9 +400,9 @@ fn compute_replicate_ratio_ungrouped(
     let weights = df.column(weight_col)?.f64()?;
     let n = y.len();
     let n_reps = rep_weight_cols.len();
-    let y_arr: Vec<f64> = y.into_iter().map(|v| v.unwrap_or(0.0)).collect();
-    let x_arr: Vec<f64> = x.into_iter().map(|v| v.unwrap_or(0.0)).collect();
-    let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
+    let y_arr: Vec<f64> = y.iter().map(|v| v.unwrap_or(0.0)).collect();
+    let x_arr: Vec<f64> = x.iter().map(|v| v.unwrap_or(0.0)).collect();
+    let w_arr: Vec<f64> = weights.iter().map(|v| v.unwrap_or(0.0)).collect();
     let domain_mask = get_domain_mask(df, domain_mask_col)?;
     let mask = domain_mask.as_deref();
 
@@ -436,9 +436,9 @@ fn compute_replicate_ratio_grouped(
     let by_str = df.column(by_col)?.str()?;
     let n = y.len();
     let n_reps = rep_weight_cols.len();
-    let y_arr: Vec<f64> = y.into_iter().map(|v| v.unwrap_or(0.0)).collect();
-    let x_arr: Vec<f64> = x.into_iter().map(|v| v.unwrap_or(0.0)).collect();
-    let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
+    let y_arr: Vec<f64> = y.iter().map(|v| v.unwrap_or(0.0)).collect();
+    let x_arr: Vec<f64> = x.iter().map(|v| v.unwrap_or(0.0)).collect();
+    let w_arr: Vec<f64> = weights.iter().map(|v| v.unwrap_or(0.0)).collect();
 
     let (domain_ids, domain_names, n_domains) = index_domains(by_str);
     let (theta_full_vec, theta_reps_vec, counts) = match get_cont_rep_cols(df, rep_weight_cols)? {
@@ -531,7 +531,7 @@ fn compute_replicate_prop_ungrouped(
     let weights  = df.column(weight_col)?.f64()?;
     let n = y_series.len();
     let n_reps = rep_weight_cols.len();
-    let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
+    let w_arr: Vec<f64> = weights.iter().map(|v| v.unwrap_or(0.0)).collect();
     let cont_cols = get_cont_rep_cols(df, rep_weight_cols)?;
     let domain_mask = get_domain_mask(df, domain_mask_col)?;
     let mask = domain_mask.as_deref();
@@ -544,7 +544,7 @@ fn compute_replicate_prop_ungrouped(
 
     let (n_levels, level_strs, estimates, variances) = if is_string {
         let y_cast = y_series.cast(&DataType::String)?;
-        let y_arr: Vec<String> = y_cast.str()?.into_iter()
+        let y_arr: Vec<String> = y_cast.str()?.iter()
             .map(|v| v.unwrap_or("").to_string())
             .collect();
         let (levels, theta_full, theta_reps) = match &cont_cols {
@@ -562,9 +562,9 @@ fn compute_replicate_prop_ungrouped(
     } else {
         // Integer or boolean: convert to i64 category codes.
         let y_arr: Vec<i64> = if y_series.dtype().is_integer() {
-            y_series.i64()?.into_iter().map(|v| v.unwrap_or(0)).collect()
+            y_series.i64()?.iter().map(|v| v.unwrap_or(0)).collect()
         } else if y_series.dtype() == &DataType::Boolean {
-            y_series.bool()?.into_iter()
+            y_series.bool()?.iter()
                 .map(|v| if v.unwrap_or(false) { 1 } else { 0 })
                 .collect()
         } else {
@@ -610,7 +610,7 @@ fn compute_replicate_prop_grouped(
     let by_str   = df.column(by_col)?.str()?;
     let n = y_series.len();
     let n_reps = rep_weight_cols.len();
-    let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
+    let w_arr: Vec<f64> = weights.iter().map(|v| v.unwrap_or(0.0)).collect();
 
     let (domain_ids, domain_names, n_domains) = index_domains(by_str);
     let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
@@ -621,7 +621,7 @@ fn compute_replicate_prop_grouped(
 
     let (levels_str, theta_full_mat, theta_reps_mat, counts) = if is_string {
         let y_cast = y_series.cast(&DataType::String)?;
-        let y_arr: Vec<String> = y_cast.str()?.into_iter()
+        let y_arr: Vec<String> = y_cast.str()?.iter()
             .map(|v| v.unwrap_or("").to_string())
             .collect();
         let (levels, tf, tr, counts) =
@@ -629,9 +629,9 @@ fn compute_replicate_prop_grouped(
         (levels, tf, tr, counts)
     } else {
         let y_arr: Vec<i64> = if y_series.dtype().is_integer() {
-            y_series.i64()?.into_iter().map(|v| v.unwrap_or(0)).collect()
+            y_series.i64()?.iter().map(|v| v.unwrap_or(0)).collect()
         } else if y_series.dtype() == &DataType::Boolean {
-            y_series.bool()?.into_iter()
+            y_series.bool()?.iter()
                 .map(|v| if v.unwrap_or(false) { 1 } else { 0 })
                 .collect()
         } else {
@@ -771,8 +771,8 @@ fn compute_replicate_quantile_ungrouped(
     let weights = df.column(weight_col)?.f64()?;
     let n = y.len();
     let n_reps = rep_weight_cols.len();
-    let y_arr: Vec<f64> = y.into_iter().map(|v| v.unwrap_or(f64::NAN)).collect();
-    let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
+    let y_arr: Vec<f64> = y.iter().map(|v| v.unwrap_or(f64::NAN)).collect();
+    let w_arr: Vec<f64> = weights.iter().map(|v| v.unwrap_or(0.0)).collect();
 
     let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
     let (theta_full, theta_reps) =
@@ -802,8 +802,8 @@ fn compute_replicate_quantile_grouped(
     let by_str  = df.column(by_col)?.str()?;
     let n = y.len();
     let n_reps = rep_weight_cols.len();
-    let y_arr: Vec<f64> = y.into_iter().map(|v| v.unwrap_or(f64::NAN)).collect();
-    let w_arr: Vec<f64> = weights.into_iter().map(|v| v.unwrap_or(0.0)).collect();
+    let y_arr: Vec<f64> = y.iter().map(|v| v.unwrap_or(f64::NAN)).collect();
+    let w_arr: Vec<f64> = weights.iter().map(|v| v.unwrap_or(0.0)).collect();
 
     let (domain_ids, domain_names, n_domains) = index_domains(by_str);
     let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;

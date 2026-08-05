@@ -6,7 +6,23 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Changed
+
+- **polars 0.52 → 0.55.1, and the three crates version-locked to it** ([#109](https://github.com/samplics-org/svy/issues/109)). `pyo3-polars` pins polars, and `pyo3` pins `pyo3-polars`, and `numpy` pins `pyo3`, so the polars bump is really a four-crate move: `pyo3-polars` 0.25 → 0.28, `pyo3` 0.26 → 0.29.1, `numpy` 0.26 → 0.29. `criterion` 0.5 → 0.8.2 rides along as a dev-dependency.
+
+  Three API changes carried the migration. `IntoIterator for &ChunkedArray<T>` is gone, so 50 call sites move from `.into_iter()` to `.iter()` — both yield `Option<T>`, so the iteration is unchanged. `DataFrame::as_single_chunk_par` is renamed `rechunk_mut_par` (same parallel rechunk, same doc contract). `DataFrame::with_column` takes a `Column` rather than a `Series`.
+
+  **Results are numerically inert.** Estimates, standard errors and confidence limits are bit-for-bit identical to the polars 0.52 build, and the quantile path still agrees bit-for-bit with R's `oldsvyquantile` across p = 0.01 to 0.99. 80 Rust and 2844 Python tests pass, including the suite's R and Stata reference comparisons.
+
+- **`ndarray` stays at 0.16 and is no longer safe to bump on its own.** `numpy` requires `>= 0.15, <=0.17`, which cargo reads as ≤ 0.17.0, so bumping to 0.17 resolves 0.17.x for this crate while numpy keeps its own 0.16 — two `ArrayBase` types in one graph, and every ndarray-typed call stops typechecking. It moves only when numpy's range moves.
+
+### Security
+
+- **`pyo3` 0.26 → 0.29.1** closes the bump deferred on 2026-07-22, when it was blocked on `pyo3-polars` not yet supporting a current pyo3. `svy-io` moved to 0.29 at the time ([#66](https://github.com/samplics-org/svy/pull/66)); both native crates are now on the same major.
+
 ### Added
+
+- **`rust-version = "1.91"`.** polars calls `i64::strict_abs` (`strict_overflow_ops`, stable since 1.91) and declares no `rust-version` itself, so on an older toolchain the build failed with a raw `E0658` inside `polars-core` instead of an MSRV error. CI is unaffected — it floats on stable.
 
 - **The Woodruff kernels take a probability instead of assuming 0.5.** `scores_median` hardcoded `let _p = 0.5` and its indicator `I(y > q) - 0.5`; the generalized `scores_quantile` uses `I(y > q) - (1 - p)`, which reduces to the old expression at `p = 0.5`. `weighted_quantile_domain`, `scores_quantile_domain` and the replication kernels (`weighted_quantiles_vec`, `matrix_quantile_estimates`, `matrix_quantile_by_domain`) are generalized the same way. The median entry points remain, delegating with `probs = [0.5]` and dropping the probability column, so their result schema is unchanged.
 

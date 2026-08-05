@@ -40,7 +40,7 @@ use crate::estimation::taylor::{
 fn into_contiguous(data: PyDataFrame) -> DataFrame {
     let mut df: DataFrame = data.into();
     if df.first_col_n_chunks() > 1 {
-        df.as_single_chunk_par();
+        df.rechunk_mut_par();
     }
     df
 }
