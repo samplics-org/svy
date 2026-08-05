@@ -8,6 +8,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+## [0.23.0] — 2026-08-05
+
 ### Added
 
 - **`sample.estimation.quantile()` — design-based quantiles with standard errors** ([#112](https://github.com/samplics-org/svy/issues/112)). Previously only the median carried a standard error; every other quantile was available as a point estimate through `describe(percentiles=)`, with no variance. `quantile()` estimates any set of probabilities under Taylor linearization or replicate weights, with `by=` domains and `where=` filters:
