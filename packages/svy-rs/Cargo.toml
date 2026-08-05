@@ -2,6 +2,10 @@
 name = "svy_rs"
 version = "0.12.1"
 edition = "2024"
+# polars calls i64::strict_abs (strict_overflow_ops, stable since 1.91) and
+# declares no rust-version of its own, so without this the failure on an older
+# toolchain is a raw E0658 inside polars-core rather than an MSRV error.
+rust-version = "1.91"
 repository = "https://gitlab.com/samplics/svy"
 homepage = "https://gitlab.com/samplics/svy"
 
@@ -20,12 +24,16 @@ crate-type = ["cdylib", "rlib"]
 # dependency lets host builds drop it with `--no-default-features`, so
 # `cargo test`/`cargo bench` link a normal binary instead of failing on
 # undefined libpython symbols. See the [features] section below.
-pyo3 = { version = "0.26", features = ["abi3-py311", "generate-import-lib"] }
-pyo3-polars = { version = "0.25", features = ["derive"] }
-polars = { version = "0.52", default-features = false, features = ["dtype-categorical"] }
+pyo3 = { version = "0.29", features = ["abi3-py311", "generate-import-lib"] }
+pyo3-polars = { version = "0.28", features = ["derive"] }
+polars = { version = "0.55", default-features = false, features = ["dtype-categorical"] }
 faer = "0.24"
 ahash = "0.8"
-numpy = "0.26"
+numpy = "0.29"
+# Pinned to whatever numpy accepts, NOT bumped independently: numpy requires
+# `>= 0.15, <=0.17`, which cargo reads as <= 0.17.0, so a 0.17 bump resolves to
+# 0.17.x here while numpy keeps its own 0.16 — two ArrayBase types in one graph
+# and every ndarray-typed call fails to typecheck. Move this only with numpy.
 ndarray = { version = "0.16", features = ["rayon"] }
 rayon = "1.12"
 rustc-hash = "2.1"
@@ -37,7 +45,7 @@ extension-module = ["pyo3/extension-module"]
 default = ["extension-module"]
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 
 # Criterion micro-benchmarks for the estimation kernel. Run WITHOUT the
 # extension-module feature so the bench binary links as a normal executable:

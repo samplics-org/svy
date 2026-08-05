@@ -182,7 +182,7 @@ pub fn extract_rep_weights_matrix(
         None => {
             // Fallback for chunked/nullable columns — identical semantics.
             for (r, col) in f64_cols.iter().enumerate() {
-                for (i, v) in col.into_iter().enumerate() {
+                for (i, v) in col.iter().enumerate() {
                     matrix[i * n_reps + r] = v.unwrap_or(0.0);
                 }
             }
@@ -462,7 +462,7 @@ pub fn index_domains(by: &StringChunked) -> (Vec<u32>, Vec<String>, usize) {
     let mut next_idx = 0u32;
 
     let indices: Vec<u32> = by
-        .into_iter()
+        .iter()
         .map(|opt| match opt {
             Some(s) => *map.entry(s).or_insert_with(|| {
                 let idx = next_idx;

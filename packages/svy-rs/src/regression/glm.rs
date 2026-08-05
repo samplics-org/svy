@@ -223,7 +223,7 @@ fn index_groups(series: &Series) -> PolarsResult<(Vec<usize>, usize)> {
     match series.dtype() {
         DataType::String => {
             let ca = series.str()?;
-            for opt_s in ca.into_iter() {
+            for opt_s in ca.iter() {
                 let s = opt_s.unwrap_or("__NULL__");
                 let idx = *map.entry(s.to_string()).or_insert_with(|| {
                     let i = next_idx;
@@ -238,7 +238,7 @@ fn index_groups(series: &Series) -> PolarsResult<(Vec<usize>, usize)> {
             let ca = physical.u32()?;
             let mut phys_map: HashMap<u32, usize> = HashMap::new();
 
-            for opt_v in ca.into_iter() {
+            for opt_v in ca.iter() {
                 let v = opt_v.unwrap_or(u32::MAX);
                 let idx = *phys_map.entry(v).or_insert_with(|| {
                     let i = next_idx;
@@ -786,8 +786,8 @@ fn fit_glm_domain(
             let p_str = p.cast(&DataType::String)?;
             let s_ca = s_str.str()?;
             let p_ca = p_str.str()?;
-            let s_vals: Vec<&str> = s_ca.into_iter().map(|v| v.unwrap_or("__NULL__")).collect();
-            let p_vals: Vec<&str> = p_ca.into_iter().map(|v| v.unwrap_or("__NULL__")).collect();
+            let s_vals: Vec<&str> = s_ca.iter().map(|v| v.unwrap_or("__NULL__")).collect();
+            let p_vals: Vec<&str> = p_ca.iter().map(|v| v.unwrap_or("__NULL__")).collect();
 
             let mut map: HashMap<(&str, &str), usize> = HashMap::new();
             let mut idx = Vec::with_capacity(n);

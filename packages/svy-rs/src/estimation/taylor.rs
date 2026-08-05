@@ -1800,7 +1800,7 @@ pub fn srs_variance_mean(y: &Float64Chunked, weights: &Float64Chunked) -> Polars
     // Fallback: only observations where y and w are non-null and w > 0.
     let mut yv = Vec::new();
     let mut wv = Vec::new();
-    for (yi, wi) in y.into_iter().zip(weights.into_iter()) {
+    for (yi, wi) in y.iter().zip(weights.iter()) {
         if let (Some(y_val), Some(w_val)) = (yi, wi) {
             if w_val > 0.0 {
                 yv.push(y_val);
@@ -1834,9 +1834,9 @@ pub fn srs_variance_mean_domain(
         let mut yv = Vec::new();
         let mut wv = Vec::new();
         for ((yi, wi), mi) in y
-            .into_iter()
-            .zip(weights.into_iter())
-            .zip(domain_mask.into_iter())
+            .iter()
+            .zip(weights.iter())
+            .zip(domain_mask.iter())
         {
             if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi) {
                 if w_val > 0.0 {
@@ -1864,7 +1864,7 @@ pub fn srs_variance_total(y: &Float64Chunked, weights: &Float64Chunked) -> Polar
     // Zero-weight rows are excluded from n (see srs_variance_mean).
     let mut yv: Vec<f64> = Vec::new();
     let mut wv: Vec<f64> = Vec::new();
-    for (yi, wi) in y.into_iter().zip(weights.into_iter()) {
+    for (yi, wi) in y.iter().zip(weights.iter()) {
         let w_val = wi.unwrap_or(0.0);
         if w_val > 0.0 {
             yv.push(yi.unwrap_or(0.0));
@@ -1906,9 +1906,9 @@ pub fn srs_variance_total_domain(
         let mut yv = Vec::new();
         let mut wv = Vec::new();
         for ((yi, wi), mi) in y
-            .into_iter()
-            .zip(weights.into_iter())
-            .zip(domain_mask.into_iter())
+            .iter()
+            .zip(weights.iter())
+            .zip(domain_mask.iter())
         {
             if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi) {
                 if w_val > 0.0 {
@@ -1941,7 +1941,7 @@ pub fn srs_variance_ratio(
     let mut yv: Vec<f64> = Vec::new();
     let mut xv: Vec<f64> = Vec::new();
     let mut wv: Vec<f64> = Vec::new();
-    for ((yi, xi), wi) in y.into_iter().zip(x.into_iter()).zip(weights.into_iter()) {
+    for ((yi, xi), wi) in y.iter().zip(x.iter()).zip(weights.iter()) {
         let w_val = wi.unwrap_or(0.0);
         if w_val > 0.0 {
             yv.push(yi.unwrap_or(0.0));
@@ -2001,10 +2001,10 @@ pub fn srs_variance_ratio_domain(
         let mut xv = Vec::new();
         let mut wv = Vec::new();
         for (((yi, xi), wi), mi) in y
-            .into_iter()
-            .zip(x.into_iter())
-            .zip(weights.into_iter())
-            .zip(domain_mask.into_iter())
+            .iter()
+            .zip(x.iter())
+            .zip(weights.iter())
+            .zip(domain_mask.iter())
         {
             if let (Some(y_val), Some(x_val), Some(w_val), Some(true)) = (yi, xi, wi, mi) {
                 if w_val > 0.0 {
