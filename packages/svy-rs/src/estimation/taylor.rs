@@ -718,11 +718,25 @@ pub fn scores_ratio_domain(
 
 /// Influence-function scores for a quantile already located at `q`.
 ///
-/// The estimator of F(q) has contribution (w_i / sum_w) * (I(y_i <= q) - p);
-/// this returns its negation, (w_i / sum_w) * (I(y_i > q) - (1 - p)), which has
-/// the same variance and matches the sign convention used by R's survey
-/// package. Rows outside `domain_mask` (when given) score zero, so the domain
-/// estimator is linearized against the full design.
+/// `u_i = I(y_i > q) - (1 - p)` is the negation of the contribution to
+/// `F(q) - p`; it carries the same variance and matches the sign convention in
+/// R's survey package. The score is that residual **centered on its own
+/// weighted mean**, exactly as the linearization of a weighted mean does:
+///
+///     score_i = (w_i / sum_w) * (u_i - u_bar),   u_bar = sum(w_i u_i) / sum_w
+///
+/// The centering is not cosmetic. `u_bar` is zero only if `F(q)` lands exactly
+/// on `p`, which discreteness prevents — on a 5000-row fixture it sits around
+/// -4e-5, and dropping it moves the probability-scale SE by ~2e-4 relative.
+/// That is invisible under the `Higher`/`Lower` rules, whose CDF inversion
+/// snaps to an order statistic and absorbs it, but it propagates straight
+/// through the continuous `Linear` rule. R reaches the same place by computing
+/// the variance as `svymean(U, design)`, whose influence function centers on
+/// the realized mean.
+///
+/// Rows outside `domain_mask` (when given) score zero, so the domain estimator
+/// is linearized against the full design; `u_bar` is then the domain's own
+/// weighted mean, since `sum_w` covers only the domain.
 ///
 /// `q` and `sum_w` are passed in rather than recomputed, so a caller estimating
 /// several probabilities sorts the data only once.
@@ -735,16 +749,18 @@ fn scores_quantile_arr(
     sum_w: f64,
 ) -> Vec<f64> {
     let complement = 1.0 - p;
-    match domain_mask {
+
+    // u_i for in-scope rows, 0.0 elsewhere; weights folded in afterwards so the
+    // centering can use the weighted mean of u.
+    let residuals: Vec<(f64, f64)> = match domain_mask {
         None => y
             .iter()
             .zip(weights.iter())
             .map(|(yi, wi)| match (yi, wi) {
                 (Some(y_val), Some(w_val)) => {
-                    let u = if y_val > q { 1.0 } else { 0.0 } - complement;
-                    (w_val / sum_w) * u
+                    (w_val, if y_val > q { 1.0 } else { 0.0 } - complement)
                 }
-                _ => 0.0,
+                _ => (0.0, 0.0),
             })
             .collect(),
         Some(mask) => y
@@ -753,13 +769,25 @@ fn scores_quantile_arr(
             .zip(mask.iter())
             .map(|((yi, wi), m)| match (yi, wi, m) {
                 (Some(y_val), Some(w_val), Some(true)) => {
-                    let u = if y_val > q { 1.0 } else { 0.0 } - complement;
-                    (w_val / sum_w) * u
+                    (w_val, if y_val > q { 1.0 } else { 0.0 } - complement)
                 }
-                _ => 0.0, // Zero score outside the domain
+                _ => (0.0, 0.0), // Out of scope: contributes nothing, scores zero
             })
             .collect(),
-    }
+    };
+
+    let u_bar: f64 = residuals.iter().map(|(w, u)| w * u).sum::<f64>() / sum_w;
+
+    residuals
+        .iter()
+        .map(|&(w, u)| {
+            if w == 0.0 {
+                0.0
+            } else {
+                (w / sum_w) * (u - u_bar)
+            }
+        })
+        .collect()
 }
 
 /// Compute influence function scores for quantile estimation.
