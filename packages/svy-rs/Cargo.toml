@@ -1,6 +1,6 @@
 [package]
 name = "svy_rs"
-version = "0.12.1"
+version = "0.13.0"
 edition = "2024"
 # polars calls i64::strict_abs (strict_overflow_ops, stable since 1.91) and
 # declares no rust-version of its own, so without this the failure on an older
