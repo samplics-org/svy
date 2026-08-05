@@ -32,6 +32,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
   This changes `median()` standard errors and confidence limits. Point estimates are unaffected.
 
+- **The Woodruff linearization is centered on its own weighted mean**, matching how R computes the variance (`svymean(U, design)`). Only the `linear`, `middle` and `nearest` tie rules moved — up to 4e-4 relative on the confidence limits — because the `higher`/`lower` inversion snaps to an order statistic and absorbed the difference. `median()` and default-`q_method` results are unchanged by this one. See [`svy-rs`](../svy-rs/CHANGELOG.md).
+
 ## [0.22.1] — 2026-08-04
 
 ### Changed

@@ -6,6 +6,10 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Fixed
+
+- **The Woodruff score is centered on its own weighted mean.** The linearization used `(w_i / sum_w) * (I(y_i > q) - (1 - p))`, centering the residual on the *nominal* target rather than on the mean it actually realizes. `u_bar` is zero only when `F(q)` lands exactly on `p`, which discreteness prevents — on a 5000-record fixture it sits near -4e-5, and omitting it moved the probability-scale SE by ~2e-4 relative. R reaches the centered form by computing the variance as `svymean(U, design)`. The `Higher`/`Lower` rules were unaffected in their output, because the CDF inversion snaps to an order statistic and absorbs the wobble, so medians and default-`q_method` quantiles do not move; `Linear`, `Middle` and `Nearest` interpolate continuously and did drift — up to 4e-4 relative on the confidence limits. All rules now agree with R to floating-point noise.
+
 ### Changed
 
 - **polars 0.52 → 0.55.1, and the three crates version-locked to it** ([#109](https://github.com/samplics-org/svy/issues/109)). `pyo3-polars` pins polars, and `pyo3` pins `pyo3-polars`, and `numpy` pins `pyo3`, so the polars bump is really a four-crate move: `pyo3-polars` 0.25 → 0.28, `pyo3` 0.26 → 0.29.1, `numpy` 0.26 → 0.29. `criterion` 0.5 → 0.8.2 rides along as a dev-dependency.
