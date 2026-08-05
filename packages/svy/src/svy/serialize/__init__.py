@@ -14,6 +14,7 @@ Public API::
 See ``DESIGN.md`` in this directory for the full design rationale and
 struct reference.
 """
+
 from svy.serialize.serializers import from_json, serialize, to_dict, to_json
 from svy.serialize.structs import (
     SCHEMA_VERSION,
@@ -22,6 +23,7 @@ from svy.serialize.structs import (
     DescribeResultData,
     DiffEstData,
     EstimateData,
+    EstimateListData,
     FDistData,
     GLMCoefData,
     GLMFitData,
@@ -51,6 +53,7 @@ __all__ = [
     # Top-level structs (kind-tagged)
     "ResultData",
     "EstimateData",
+    "EstimateListData",
     "TTestOneGroupData",
     "TTestTwoGroupsData",
     "ChiSquareData",

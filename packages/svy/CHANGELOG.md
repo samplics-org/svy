@@ -8,6 +8,30 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Added
+
+- **`sample.estimation.quantile()` — design-based quantiles with standard errors** ([#112](https://github.com/samplics-org/svy/issues/112)). Previously only the median carried a standard error; every other quantile was available as a point estimate through `describe(percentiles=)`, with no variance. `quantile()` estimates any set of probabilities under Taylor linearization or replicate weights, with `by=` domains and `where=` filters:
+
+  ```python
+  sample.estimation.quantile("income")                       # quartiles, the default
+  sample.estimation.quantile("income", p=0.9)                # a single Estimate
+  sample.estimation.quantile("income", p=(0.1, 0.5, 0.9), by="region")
+  ```
+
+  Standard errors follow Woodruff (1952), the construction behind R's `svyquantile`: the design-based variance of the estimated proportion `P(Y <= q)` is taken on the probability scale, and the interval comes from inverting the weighted CDF at `p ± t·se_p`. The reported `se` is the back-solved half-width.
+
+  `p` follows the same rule as `y`: a scalar returns one `Estimate`, a sequence returns one per probability. `median()` is unchanged and remains the `p = 0.5` case reported as `PopParam.MEDIAN`.
+
+- **`EstimateList`** — the `list` subclass now returned wherever a call estimates several things at once (`mean(["a", "b"])`, `quantile(y, p=(...))`). Printing a bare list previously showed object reprs (`[<svy.estimation.estimate.Estimate object at 0x…>, …]`); an `EstimateList` renders its members as one table and adds `to_polars()`. It *is* a `list`, so indexing, iteration, unpacking, and `isinstance(result, list)` are unaffected.
+
+  Serializing a multi-estimate result also works for the first time — `serialize()` dispatches on exact type and previously raised `TypeError: No serializer registered for list`. The new `estimate_list` kind wraps the members, each serialized exactly as a standalone `Estimate`.
+
+### Fixed
+
+- **Quantile and median confidence limits now invert the CDF with the rule that located the point estimate.** The Woodruff interval endpoints were always interpolated linearly, regardless of `q_method`. R's `oldsvyquantile` hands one `method`/`f` pair to both its point `approxfun` and its endpoint `approx`; interpolating linearly while estimating with, say, `"higher"` pulls both endpoints inward and **understates** the standard error. The error grows where consecutive order statistics are far apart: on a 2000-row stratified design it was 2.0% at the median and **10.3% at `p = 0.99`**, always in the anti-conservative direction. Estimates, standard errors and both confidence limits now agree with R to machine precision at every probability tested from 0.01 to 0.99, including domains.
+
+  This changes `median()` standard errors and confidence limits. Point estimates are unaffected.
+
 ## [0.22.1] — 2026-08-04
 
 ### Changed

@@ -167,6 +167,7 @@ class PopParam(StrEnum):
     PROP = "Proportion"
     RATIO = "Ratio"
     MEDIAN = "Median"
+    QUANTILE = "Quantile"
 
 
 @unique

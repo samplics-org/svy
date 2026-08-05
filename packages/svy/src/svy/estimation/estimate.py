@@ -59,6 +59,8 @@ class ParamEst(msgspec.Struct, frozen=True):
     x_level: Category | None = None
     deff: Number | None = None
     df: int | None = None
+    #: Target probability, set only for quantile estimates (0.5 for the median).
+    prob: Number | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {f: getattr(self, f) for f in self.__struct_fields__}
@@ -294,8 +296,13 @@ class Estimate:
         # the user expects to see.
         rows = []
 
+        show_prob = self.param == PopParam.QUANTILE
+
         for est in self.estimates:
             r = {}
+            if show_prob and est.prob is not None:
+                # Leading column, so quantiles read p → estimate left to right.
+                r["prob"] = est.prob
             if by_cols:
                 levels = est.by_level or (None,) * len(by_cols)
                 for i, col in enumerate(by_cols):
@@ -376,9 +383,7 @@ class Estimate:
 
         shown = _display_columns(df)
         headers = [f"{c} (%)" if c == "cv" else c for c in shown]
-        rows = [
-            [self._format_val(c, row[c]) for c in shown] for row in df.iter_rows(named=True)
-        ]
+        rows = [[self._format_val(c, row[c]) for c in shown] for row in df.iter_rows(named=True)]
         lines.append(render_plain_table(headers, rows))
 
         return "\n".join(lines)
@@ -484,3 +489,145 @@ class Estimate:
         if layout is not None:
             self.layout = layout
         return self
+
+
+class EstimateList(list):
+    """A list of :class:`Estimate` results that prints as one table.
+
+    Returned wherever a call estimates several things at once — a sequence of
+    variables (``mean(["a", "b"])``) or a sequence of probabilities
+    (``quantile("x", p=(0.25, 0.75))``).
+
+    This is a plain ``list`` subclass, so indexing, iteration, ``len()``, and
+    ``isinstance(result, list)`` all behave exactly as before; the only addition
+    is rendering. Printing stacks the members into a single table with a leading
+    column for whatever differs between them (``y``, ``prob``, or both), because
+    a bare list would otherwise print object reprs.
+    """
+
+    __slots__ = ()
+
+    def _members(self) -> list["Estimate"]:
+        return [e for e in self if isinstance(e, Estimate) and e.estimates]
+
+    def to_polars(self, *, use_labels: bool | None = None) -> pl.DataFrame:
+        """Concatenate the members into one frame, one row per estimate."""
+        frames = [e.to_polars_printable(use_labels=use_labels) for e in self._members()]
+        frames = [f for f in frames if not f.is_empty()]
+        if not frames:
+            return pl.DataFrame()
+        return pl.concat(frames, how="diagonal_relaxed")
+
+    def _combined(self, *, use_labels: bool | None = None) -> pl.DataFrame:
+        """The printable frame, with a ``y`` column added when variables differ.
+
+        ``prob`` already arrives as a column on quantile members, so only the
+        variable needs re-attaching: a single-variable result keeps ``y`` out of
+        the table (it is in the title), while a multi-variable one needs it to
+        stay readable.
+        """
+        members = self._members()
+        if not members:
+            return pl.DataFrame()
+
+        ys = [m.estimates[0].y for m in members]
+        show_y = len(set(ys)) > 1
+
+        frames = []
+        for m, y in zip(members, ys):
+            f = m.to_polars_printable(use_labels=use_labels)
+            if f.is_empty():
+                continue
+            if show_y and "y" not in f.columns:
+                f = f.select(pl.lit(y).alias("y"), pl.all())
+            frames.append(f)
+
+        if not frames:
+            return pl.DataFrame()
+        return pl.concat(frames, how="diagonal_relaxed")
+
+    def _title(self) -> str:
+        members = self._members()
+        if not members:
+            return "Estimates"
+        params = {m.param.name for m in members}
+        methods = {m.method.name for m in members}
+        param = params.pop() if len(params) == 1 else "MIXED"
+        method = methods.pop() if len(methods) == 1 else "MIXED"
+        ys = {m.estimates[0].y for m in members}
+        suffix = f": {next(iter(ys))}" if len(ys) == 1 else ""
+        return f"Estimate: [bold]{param}[/bold] ({method}){suffix}"
+
+    def __plain_str__(self) -> str:
+        """Plain-text fallback used when rich is not installed."""
+        members = self._members()
+        if not members:
+            return "Estimates — <no estimates>"
+
+        df = self._combined()
+        if df.is_empty():
+            return "Estimates — <no estimates>"
+
+        # Strip the rich markup the panel title carries.
+        title = self._title().replace("[bold]", "").replace("[/bold]", "")
+        lines = [title, ""]
+        shown = _display_columns(df)
+        headers = [f"{c} (%)" if c == "cv" else c for c in shown]
+        fmt = members[0]._format_val
+        rows = [[fmt(c, row[c]) for c in shown] for row in df.iter_rows(named=True)]
+        lines.append(render_plain_table(headers, rows))
+        return "\n".join(lines)
+
+    def __str__(self) -> str:
+        if not self._members():
+            return super().__repr__()
+        try:
+            return render_rich_to_str(self, width=resolve_width(self))
+        except Exception:
+            return self.__plain_str__()
+
+    # A list's repr is what `print([...])` and the REPL both reach for, so the
+    # table has to be the repr, not only __str__.
+    __repr__ = __str__
+
+    def __rich_console__(self, console, options):
+        from rich import box
+        from rich.table import Table
+        from rich.text import Text
+
+        members = self._members()
+        df = self._combined() if members else pl.DataFrame()
+        if df.is_empty():
+            yield Text("<no estimates>", style="italic dim")
+            return
+
+        table = Table(
+            show_header=True,
+            header_style="bold",
+            box=box.SIMPLE_HEAVY,
+            show_edge=True,
+            show_lines=False,
+            pad_edge=False,
+            expand=False,
+        )
+
+        shown = _display_columns(df)
+        for col in shown:
+            justify = "right" if col in _DECIMAL_KEYS else "left"
+            table.add_column(f"{col} (%)" if col == "cv" else col, justify=justify)
+
+        fmt = members[0]._format_val
+        for row in df.iter_rows(named=True):
+            table.add_row(*[fmt(col, row[col]) for col in shown])
+
+        content: list = []
+        wheres = {m.where_clause for m in members if m.where_clause}
+        if len(wheres) == 1:
+            where_text = Text()
+            where_text.append("where: ", style="dim")
+            where_text.append(wheres.pop())
+            content.append(where_text)
+            content.append(Text(""))
+        content.append(table)
+
+        yield make_panel(content, title=self._title(), obj=self, kind="estimate")

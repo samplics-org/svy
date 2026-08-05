@@ -6,20 +6,22 @@
 
 use polars::prelude::*;
 use pyo3::prelude::*;
+use numpy::PyReadonlyArray1;
 use pyo3_polars::PyDataFrame;
 use rayon::prelude::*;
 
 use crate::estimation::taylor::{
     SvyQuantileMethod,
+    TaylorDesign,
     build_taylor_design,
     degrees_of_freedom,
     degrees_of_freedom_from_design,
     degrees_of_freedom_in_domain,
-    median_variance_woodruff,
-    median_variance_woodruff_domain,
     point_estimate_mean, point_estimate_mean_domain,
     point_estimate_ratio, point_estimate_ratio_domain,
     point_estimate_total, point_estimate_total_domain,
+    quantiles_woodruff,
+    weighted_quantile,
     scores_mean, scores_mean_arr, scores_mean_domain,
     scores_ratio, scores_ratio_domain,
     scores_total, scores_total_domain,
@@ -27,7 +29,6 @@ use crate::estimation::taylor::{
     srs_variance_ratio, srs_variance_ratio_domain,
     srs_variance_total, srs_variance_total_domain,
     taylor_variance_apply,
-    weighted_median, weighted_median_domain,
 };
 
 /// Convert the incoming Python DataFrame and ensure one chunk per column.
@@ -1155,16 +1156,20 @@ fn compute_prop_grouped(
 }
 
 // ============================================================================
-// Median
+// Quantiles (median is the p = 0.5 case)
 // ============================================================================
 
+/// Woodruff quantiles for one variable. One row per probability (and per
+/// domain when `by_col` is set), carrying the probability in a `prob` column.
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, quantile_method=None))]
-pub fn taylor_median(
+#[pyo3(signature = (data, value_col, weight_col, probs, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, quantile_method=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn taylor_quantile(
     _py: Python,
     data: PyDataFrame,
     value_col: String,
     weight_col: String,
+    probs: Vec<f64>,
     strata_col: Option<String>,
     psu_col: Option<String>,
     ssu_col: Option<String>,
@@ -1180,36 +1185,36 @@ pub fn taylor_median(
         .map(SvyQuantileMethod::from_str)
         .unwrap_or(SvyQuantileMethod::Higher);
 
-    if by_col.is_none() {
-        let result = compute_median_ungrouped(
+    let result = match by_col.as_deref() {
+        None => compute_quantile_ungrouped(
             &df, &value_col, &weight_col,
             strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
             fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref(),
-            q_method,
-        )
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-        return Ok(PyDataFrame(result));
+            &probs, q_method,
+        ),
+        Some(by) => compute_quantile_grouped(
+            &df, &value_col, &weight_col,
+            strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
+            fpc_col.as_deref(), fpc_ssu_col.as_deref(),
+            by, singleton_method.as_deref(), &probs, q_method,
+        ),
     }
-
-    let result = compute_median_grouped(
-        &df, &value_col, &weight_col,
-        strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
-        fpc_col.as_deref(), fpc_ssu_col.as_deref(),
-        &by_col.unwrap(), singleton_method.as_deref(), q_method,
-    )
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok(PyDataFrame(result))
 }
 
-/// Batched ungrouped median over many variables (run in parallel; see
-/// `compute_median_multi`). One row per variable, in input order.
+/// Batched ungrouped quantiles over many variables (run in parallel; see
+/// `compute_quantile_multi`). Rows are ordered variable-major, then by
+/// probability, matching the input order of both.
 #[pyfunction]
-#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, quantile_method=None))]
-pub fn taylor_median_multi(
+#[pyo3(signature = (data, value_cols, weight_col, probs, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, quantile_method=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn taylor_quantile_multi(
     _py: Python,
     data: PyDataFrame,
     value_cols: Vec<String>,
     weight_col: String,
+    probs: Vec<f64>,
     strata_col: Option<String>,
     psu_col: Option<String>,
     ssu_col: Option<String>,
@@ -1225,144 +1230,272 @@ pub fn taylor_median_multi(
         .unwrap_or(SvyQuantileMethod::Higher);
     let result = _py
         .detach(|| {
-            compute_median_multi(
+            compute_quantile_multi(
                 &df, &value_cols, &weight_col,
                 strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
                 fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref(),
-                q_method,
+                &probs, q_method,
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok(PyDataFrame(result))
 }
 
-fn compute_median_ungrouped(
+/// Evaluate the weighted quantile rule at arbitrary probabilities, given a
+/// pre-sorted variable and its normalised weighted CDF.
+///
+/// Exposed so the Python side can invert the CDF for Woodruff confidence
+/// limits using the *same* interpolation rule as the point estimate, the way
+/// R's `oldsvyquantile` passes one `method`/`f` pair to both its point
+/// `approxfun` and its endpoint `approx`. Keeping the rule in one place stops
+/// the two from drifting.
+#[pyfunction]
+#[pyo3(signature = (values_sorted, cdf, probs, quantile_method=None))]
+pub fn weighted_quantile_at(
+    values_sorted: PyReadonlyArray1<f64>,
+    cdf: PyReadonlyArray1<f64>,
+    probs: Vec<f64>,
+    quantile_method: Option<String>,
+) -> PyResult<Vec<f64>> {
+    let y = values_sorted.as_slice()?;
+    let c = cdf.as_slice()?;
+    if y.len() != c.len() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "values_sorted has {} entries but cdf has {}",
+            y.len(),
+            c.len()
+        )));
+    }
+    let q_method = quantile_method
+        .as_deref()
+        .map(SvyQuantileMethod::from_str)
+        .unwrap_or(SvyQuantileMethod::Higher);
+    Ok(probs
+        .iter()
+        .map(|&p| weighted_quantile(y, c, p, q_method))
+        .collect())
+}
+
+/// Drop the `prob` column so the legacy median entry points keep their exact
+/// pre-quantile schema.
+fn without_prob(mut df: DataFrame) -> PolarsResult<DataFrame> {
+    let _ = df.drop_in_place("prob")?;
+    Ok(df)
+}
+
+#[pyfunction]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, quantile_method=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn taylor_median(
+    _py: Python,
+    data: PyDataFrame,
+    value_col: String,
+    weight_col: String,
+    strata_col: Option<String>,
+    psu_col: Option<String>,
+    ssu_col: Option<String>,
+    fpc_col: Option<String>,
+    fpc_ssu_col: Option<String>,
+    by_col: Option<String>,
+    singleton_method: Option<String>,
+    quantile_method: Option<String>,
+) -> PyResult<PyDataFrame> {
+    let out = taylor_quantile(
+        _py, data, value_col, weight_col, vec![0.5],
+        strata_col, psu_col, ssu_col, fpc_col, fpc_ssu_col, by_col,
+        singleton_method, quantile_method,
+    )?;
+    let result = without_prob(out.0)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    Ok(PyDataFrame(result))
+}
+
+/// Batched ungrouped median over many variables. One row per variable, in
+/// input order.
+#[pyfunction]
+#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, quantile_method=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn taylor_median_multi(
+    _py: Python,
+    data: PyDataFrame,
+    value_cols: Vec<String>,
+    weight_col: String,
+    strata_col: Option<String>,
+    psu_col: Option<String>,
+    ssu_col: Option<String>,
+    fpc_col: Option<String>,
+    fpc_ssu_col: Option<String>,
+    singleton_method: Option<String>,
+    quantile_method: Option<String>,
+) -> PyResult<PyDataFrame> {
+    let out = taylor_quantile_multi(
+        _py, data, value_cols, weight_col, vec![0.5],
+        strata_col, psu_col, ssu_col, fpc_col, fpc_ssu_col,
+        singleton_method, quantile_method,
+    )?;
+    let result = without_prob(out.0)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    Ok(PyDataFrame(result))
+}
+
+/// The design columns every quantile path needs, resolved once.
+struct QuantileCols<'a> {
+    weights: &'a Float64Chunked,
+    strata: Option<&'a Column>,
+    psu: Option<&'a Column>,
+    design: TaylorDesign,
+}
+
+fn resolve_quantile_cols<'a>(
+    df: &'a DataFrame,
+    weight_col: &str,
+    strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
+    fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
+    singleton_method: Option<&str>,
+) -> PolarsResult<QuantileCols<'a>> {
+    let weights = df.column(weight_col)?.f64()?;
+    let strata = strata_col.map(|c| df.column(c)).transpose()?;
+    let psu    = psu_col.map(|c| df.column(c)).transpose()?;
+    let ssu    = ssu_col.map(|c| df.column(c)).transpose()?;
+    let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
+    let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
+
+    // The design is independent of both the variable and the probability, so
+    // indexing it once serves every (variable, prob) pair below.
+    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+    Ok(QuantileCols { weights, strata, psu, design })
+}
+
+fn compute_quantile_ungrouped(
     df: &DataFrame,
     value_col: &str, weight_col: &str,
     strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
     fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
-    singleton_method: Option<&str>, q_method: SvyQuantileMethod,
+    singleton_method: Option<&str>, probs: &[f64], q_method: SvyQuantileMethod,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
-    let weights = df.column(weight_col)?.f64()?;
-    let strata = strata_col.map(|c| df.column(c)).transpose()?;
-    let psu    = psu_col.map(|c| df.column(c)).transpose()?;
-    let ssu    = ssu_col.map(|c| df.column(c)).transpose()?;
-    let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
-    let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
-
-    let estimate = weighted_median(y, weights, q_method)?;
-    let (var_p, se_p) = median_variance_woodruff(
-        y, weights, strata, psu, ssu, fpc, fpc_ssu, singleton_method, q_method,
+    let cols = resolve_quantile_cols(
+        df, weight_col, strata_col, psu_col, ssu_col, fpc_col, fpc_ssu_col, singleton_method,
     )?;
-    let df_val = degrees_of_freedom(weights, strata, psu)?;
-    let n = y.len() as u32;
 
-    df!["y" => vec![value_col], "est" => vec![estimate], "se" => vec![se_p],
-        "var" => vec![var_p], "df" => vec![df_val], "n" => vec![n]]
+    let rows = quantiles_woodruff(y, cols.weights, None, &cols.design, probs, q_method)?;
+    let df_val = degrees_of_freedom(cols.weights, cols.strata, cols.psu)?;
+    let n = y.len() as u32;
+    let k = rows.len();
+
+    let (estimates, ses, variances) = unzip_woodruff(rows);
+    df!["y" => vec![value_col; k], "prob" => probs.to_vec(), "est" => estimates,
+        "se" => ses, "var" => variances, "df" => vec![df_val; k], "n" => vec![n; k]]
 }
 
-/// Batched ungrouped medians: variables fanned out over rayon. Median is
-/// sort-bound and the Woodruff variance rebuilds its own design per variable, so
-/// unlike mean/total this amortises nothing — the win is running independent
-/// medians in parallel. Each row is identical to `compute_median_ungrouped`.
-fn compute_median_multi(
+/// Batched ungrouped quantiles: variables fanned out over rayon. Quantiles are
+/// sort-bound, so unlike mean/total this amortises no design work beyond the
+/// shared `TaylorDesign` — the win is running independent variables in
+/// parallel. Each row is identical to `compute_quantile_ungrouped`.
+fn compute_quantile_multi(
     df: &DataFrame,
     value_cols: &[String], weight_col: &str,
     strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
     fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
-    singleton_method: Option<&str>, q_method: SvyQuantileMethod,
+    singleton_method: Option<&str>, probs: &[f64], q_method: SvyQuantileMethod,
 ) -> PolarsResult<DataFrame> {
-    let weights = df.column(weight_col)?.f64()?;
-    let strata = strata_col.map(|c| df.column(c)).transpose()?;
-    let psu    = psu_col.map(|c| df.column(c)).transpose()?;
-    let ssu    = ssu_col.map(|c| df.column(c)).transpose()?;
-    let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
-    let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
+    let cols = resolve_quantile_cols(
+        df, weight_col, strata_col, psu_col, ssu_col, fpc_col, fpc_ssu_col, singleton_method,
+    )?;
 
     // df is design-only, identical across variables — compute once.
-    let df_val = degrees_of_freedom(weights, strata, psu)?;
+    let df_val = degrees_of_freedom(cols.weights, cols.strata, cols.psu)?;
 
     let y_cols: Vec<&Float64Chunked> = value_cols
         .iter()
         .map(|c| df.column(c).and_then(|s| s.f64()))
         .collect::<PolarsResult<Vec<_>>>()?;
 
-    let rows = (0..value_cols.len())
+    let per_var = (0..value_cols.len())
         .into_par_iter()
-        .map(|i| -> PolarsResult<(String, f64, f64, f64, u32)> {
-            let y = y_cols[i];
-            let estimate = weighted_median(y, weights, q_method)?;
-            let (var_p, se_p) = median_variance_woodruff(
-                y, weights, strata, psu, ssu, fpc, fpc_ssu, singleton_method, q_method,
-            )?;
-            let n = y.len() as u32;
-            Ok((value_cols[i].clone(), estimate, se_p, var_p, n))
+        .map(|i| {
+            quantiles_woodruff(y_cols[i], cols.weights, None, &cols.design, probs, q_method)
         })
         .collect::<PolarsResult<Vec<_>>>()?;
 
-    let nv = rows.len();
-    let mut ys: Vec<String> = Vec::with_capacity(nv);
-    let mut estimates: Vec<f64> = Vec::with_capacity(nv);
-    let mut ses: Vec<f64> = Vec::with_capacity(nv);
-    let mut variances: Vec<f64> = Vec::with_capacity(nv);
-    let mut ns: Vec<u32> = Vec::with_capacity(nv);
-    for (y, est, se, var, n) in rows {
-        ys.push(y);
-        estimates.push(est);
-        ses.push(se);
-        variances.push(var);
-        ns.push(n);
+    let k = probs.len();
+    let n_rows = per_var.len() * k;
+    let mut ys: Vec<String> = Vec::with_capacity(n_rows);
+    let mut ns: Vec<u32> = Vec::with_capacity(n_rows);
+    let mut flat: Vec<(f64, f64, f64)> = Vec::with_capacity(n_rows);
+    for (i, rows) in per_var.into_iter().enumerate() {
+        ys.extend(std::iter::repeat_n(value_cols[i].clone(), k));
+        ns.extend(std::iter::repeat_n(y_cols[i].len() as u32, k));
+        flat.extend(rows);
     }
-    let dfs = vec![df_val; nv];
-    df!["y" => ys, "est" => estimates, "se" => ses, "var" => variances,
-        "df" => dfs, "n" => ns]
+
+    let (estimates, ses, variances) = unzip_woodruff(flat);
+    let probs_rep: Vec<f64> = std::iter::repeat_n(probs, value_cols.len())
+        .flatten()
+        .copied()
+        .collect();
+    df!["y" => ys, "prob" => probs_rep, "est" => estimates, "se" => ses,
+        "var" => variances, "df" => vec![df_val; n_rows], "n" => ns]
 }
 
-fn compute_median_grouped(
+fn compute_quantile_grouped(
     df: &DataFrame,
     value_col: &str, weight_col: &str,
     strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
     fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
-    by_col: &str, singleton_method: Option<&str>, q_method: SvyQuantileMethod,
+    by_col: &str, singleton_method: Option<&str>, probs: &[f64],
+    q_method: SvyQuantileMethod,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
-    let weights = df.column(weight_col)?.f64()?;
-    let strata = strata_col.map(|c| df.column(c)).transpose()?;
-    let psu    = psu_col.map(|c| df.column(c)).transpose()?;
-    let ssu    = ssu_col.map(|c| df.column(c)).transpose()?;
-    let fpc    = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
-    let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
+    let cols = resolve_quantile_cols(
+        df, weight_col, strata_col, psu_col, ssu_col, fpc_col, fpc_ssu_col, singleton_method,
+    )?;
     let by_str = df.column(by_col)?.str()?;
     let unique_groups = by_str.unique()?;
 
+    let k = probs.len();
     let mut by_vals: Vec<&str> = Vec::new();
-    let mut estimates: Vec<f64> = Vec::new();
-    let mut ses: Vec<f64> = Vec::new();
-    let mut variances: Vec<f64> = Vec::new();
     let mut dfs: Vec<u32> = Vec::new();
     let mut ns: Vec<u32> = Vec::new();
+    let mut flat: Vec<(f64, f64, f64)> = Vec::new();
 
     for group_val in unique_groups.iter() {
         if let Some(group) = group_val {
             let domain_mask = by_str.equal(group);
             let n_domain    = domain_mask.sum().unwrap_or(0) as u32;
-            let estimate    = weighted_median_domain(y, weights, &domain_mask, q_method)?;
-            let (var_p, se_p) = median_variance_woodruff_domain(
-                y, weights, &domain_mask, strata, psu, ssu, fpc, fpc_ssu,
-                singleton_method, q_method,
+            let rows = quantiles_woodruff(
+                y, cols.weights, Some(&domain_mask), &cols.design, probs, q_method,
+            )?;
+            // Per-group df: see the note in compute_mean_grouped.
+            let df_val = degrees_of_freedom_in_domain(
+                cols.weights, cols.strata, cols.psu, Some(&domain_mask),
             )?;
 
-            by_vals.push(group);
-            estimates.push(estimate);
-            ses.push(se_p);
-            variances.push(var_p);
-            // Per-group df: see the note in compute_mean_grouped.
-            dfs.push(degrees_of_freedom_in_domain(weights, strata, psu, Some(&domain_mask))?);
-            ns.push(n_domain);
+            by_vals.extend(std::iter::repeat_n(group, k));
+            dfs.extend(std::iter::repeat_n(df_val, k));
+            ns.extend(std::iter::repeat_n(n_domain, k));
+            flat.extend(rows);
         }
     }
-    let n_groups = by_vals.len();
-    df![by_col => by_vals, "y" => vec![value_col; n_groups], "est" => estimates,
-        "se" => ses, "var" => variances, "df" => dfs, "n" => ns]
+
+    let n_rows = by_vals.len();
+    let probs_rep: Vec<f64> = std::iter::repeat_n(probs, n_rows / k.max(1))
+        .flatten()
+        .copied()
+        .collect();
+    let (estimates, ses, variances) = unzip_woodruff(flat);
+    df![by_col => by_vals, "y" => vec![value_col; n_rows], "prob" => probs_rep,
+        "est" => estimates, "se" => ses, "var" => variances, "df" => dfs, "n" => ns]
+}
+
+fn unzip_woodruff(rows: Vec<(f64, f64, f64)>) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    let mut estimates = Vec::with_capacity(rows.len());
+    let mut ses = Vec::with_capacity(rows.len());
+    let mut variances = Vec::with_capacity(rows.len());
+    for (est, var, se) in rows {
+        estimates.push(est);
+        ses.push(se);
+        variances.push(var);
+    }
+    (estimates, ses, variances)
 }

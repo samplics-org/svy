@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal, Sequence, cast
 
 import numpy as np
 import polars as pl
+import svy_rs as rs
 
 from scipy import stats
 
@@ -18,12 +19,15 @@ from svy.core.enumerations import QuantileMethod as _QuantileMethod
 from svy.core.types import WhereArg
 from svy.errors import DimensionError
 from svy.errors.singleton_errors import SingletonError
-from svy.estimation.estimate import Estimate, ParamEst
+from svy.estimation.estimate import Estimate, EstimateList, ParamEst
 from svy.estimation.replication import (
     replicate_estimate as _replicate_estimate,
 )
 from svy.estimation.replication import (
     replicate_median as _replicate_median,
+)
+from svy.estimation.replication import (
+    replicate_quantile as _replicate_quantile,
 )
 from svy.estimation.taylor import (
     taylor_mean as _taylor_mean,
@@ -42,6 +46,9 @@ from svy.estimation.taylor import (
 )
 from svy.estimation.taylor import (
     taylor_prop_multi as _taylor_prop_multi,
+)
+from svy.estimation.taylor import (
+    taylor_quantile as _taylor_quantile,
 )
 from svy.estimation.taylor import (
     taylor_ratio as _taylor_ratio,
@@ -796,7 +803,7 @@ class Estimation:
             )
         return est_list
 
-    def _median_result_to_param_est(
+    def _quantile_result_to_param_est(
         self,
         result_df,
         y_name,
@@ -804,10 +811,27 @@ class Estimation:
         by_col,
         data,
         weight_col,
+        q_method: _QuantileMethod = _QuantileMethod.HIGHER,
+        set_prob: bool = True,
     ) -> list[ParamEst]:
+        """Turn a Woodruff result frame into ``ParamEst`` rows.
+
+        The Rust side returns the estimate and the standard error *on the
+        probability scale*; the interval comes from inverting the weighted CDF
+        at ``p ± t·se_p``, and the reported SE is the back-solved half-width.
+        The per-domain CDF is built once and reused across probabilities.
+
+        ``set_prob=False`` leaves ``ParamEst.prob`` unset, which is what the
+        median path wants — it reports as MEDIAN, not as a quantile at 0.5.
+        """
         n_rows = result_df.height
         if n_rows == 0:
             return []
+
+        q_method_str = q_method.value if hasattr(q_method, "value") else str(q_method).lower()
+
+        # The median entry points drop the column; default those rows to 0.5.
+        probs = result_df["prob"].to_list() if "prob" in result_df.columns else [0.5] * n_rows
 
         if by_col and by_col in result_df.columns:
             domain_vals = result_df[by_col].to_list()
@@ -844,6 +868,7 @@ class Estimation:
             se_p = float(se_vals[i])
             df_val = int(df_vals[i])
             dv = domain_vals[i]
+            p = float(probs[i])
 
             t_crit = self._t_crit(alpha, df_val)
             cached = domain_cache.get(dv)
@@ -853,11 +878,18 @@ class Estimation:
                 # arguments would otherwise be silently clamped into [0, 1].
                 lci = uci = float("nan")
             else:
-                p_lower = max(0.0, 0.5 - t_crit * se_p)
-                p_upper = min(1.0, 0.5 + t_crit * se_p)
+                p_lower = max(0.0, p - t_crit * se_p)
+                p_upper = min(1.0, p + t_crit * se_p)
                 y_sorted, cdf = cached
-                lci = self._invert_cdf_sorted(y_sorted, cdf, p_lower)
-                uci = self._invert_cdf_sorted(y_sorted, cdf, p_upper)
+                # Invert with the same rule that located the point estimate.
+                # R's oldsvyquantile hands one method/f pair to both its point
+                # approxfun and its endpoint approx; inverting linearly here
+                # while estimating with, say, "higher" shrinks the interval —
+                # badly so in sparse tails, where consecutive order statistics
+                # are far apart.
+                lci, uci = rs.weighted_quantile_at(
+                    y_sorted, cdf, [p_lower, p_upper], quantile_method=q_method_str
+                )
 
             se_q = (uci - lci) / (2.0 * t_crit) if t_crit > 0 else se_p
             cv = se_q / est if est != 0 else float("inf")
@@ -875,44 +907,40 @@ class Estimation:
                     by_level=(dv,) if dv is not None else None,
                     y_level=None,
                     x=None,
+                    prob=p if set_prob else None,
                 )
             )
         return est_list
 
-    @staticmethod
-    def _invert_cdf_sorted(y_vals: np.ndarray, cdf: np.ndarray, p: float) -> float:
-        if p <= 0.0:
-            return float(y_vals[0])
-        if p >= 1.0:
-            return float(y_vals[-1])
-        idx = np.searchsorted(cdf, p)
-        if idx == 0:
-            return float(y_vals[0])
-        if idx >= len(y_vals):
-            return float(y_vals[-1])
-        p_low, p_high = cdf[idx - 1], cdf[idx]
-        if p_high == p_low:
-            return float(y_vals[idx])
-        frac = (p - p_low) / (p_high - p_low)
-        return float(y_vals[idx - 1] + frac * (y_vals[idx] - y_vals[idx - 1]))
+    def _median_result_to_param_est(
+        self,
+        result_df,
+        y_name,
+        alpha,
+        by_col,
+        data,
+        weight_col,
+        q_method: _QuantileMethod = _QuantileMethod.HIGHER,
+    ) -> list[ParamEst]:
+        """The p = 0.5 case, reported as a median rather than as a quantile."""
+        return self._quantile_result_to_param_est(
+            result_df, y_name, alpha, by_col, data, weight_col, q_method, set_prob=False
+        )
 
-    def _invert_cdf(self, data, y_col, weight_col, p):
-        df = data.select([y_col, weight_col]).drop_nulls()
-        if df.height == 0:
-            return float("nan")
-        df = df.sort(y_col)
-        y_vals = df[y_col].to_numpy()
-        w_vals = df[weight_col].to_numpy()
-        cumsum = np.cumsum(w_vals)
-        total = cumsum[-1]
-        if total <= 0:
-            return float("nan")
-        return self._invert_cdf_sorted(y_vals, cumsum / total, p)
+    def _replicate_quantile_result_to_param_est(
+        self, result_df, y_name, alpha, by_col, set_prob: bool = True
+    ):
+        """Replicate-weight quantiles.
 
-    def _replicate_median_result_to_param_est(self, result_df, y_name, alpha, by_col):
+        Unlike Taylor, the replicate variance is already on the quantile scale
+        (each replicate re-estimates the quantile itself), so the interval is
+        the usual ``est ± t·se`` — no CDF inversion.
+        """
         n_rows = result_df.height
         if n_rows == 0:
             return []
+
+        probs = result_df["prob"].to_list() if "prob" in result_df.columns else [0.5] * n_rows
 
         est_arr = result_df["est"].to_numpy()
         se_arr = result_df["se"].to_numpy()
@@ -943,9 +971,16 @@ class Estimation:
                 by_level=by_levels[i],
                 y_level=None,
                 x=None,
+                prob=float(probs[i]) if set_prob else None,
             )
             for i in range(n_rows)
         ]
+
+    def _replicate_median_result_to_param_est(self, result_df, y_name, alpha, by_col):
+        """The p = 0.5 case, reported as a median rather than as a quantile."""
+        return self._replicate_quantile_result_to_param_est(
+            result_df, y_name, alpha, by_col, set_prob=False
+        )
 
     def _build_estimate_result_light(
         self,
@@ -984,6 +1019,7 @@ class Estimation:
                     y_level=p.y_level,
                     x=p.x,
                     x_level=p.x_level,
+                    prob=p.prob,
                 )
                 final_ests.append(new_p)
             estimate.estimates = final_ests
@@ -1159,7 +1195,7 @@ class Estimation:
         drop_nulls: bool,
         as_factor: bool = False,
         cast_y_float: bool = True,
-    ) -> list[Estimate]:
+    ) -> EstimateList:
         """Estimate a list of items, sharing one Taylor design build.
 
         Fast path (ungrouped Taylor, no as_factor/drop_nulls/scale double-pass):
@@ -1180,7 +1216,7 @@ class Estimation:
             and not self._should_run_double_pass()
         )
         if not batched:
-            return [single_call(it) for it in items]
+            return EstimateList(single_call(it) for it in items)
 
         prep = prepare_data(
             self._sample,
@@ -1198,7 +1234,7 @@ class Estimation:
             wc = format_where_clause(where)
             for r in results:
                 r.where_clause = wc
-        return results
+        return EstimateList(results)
 
     def mean(
         self,
@@ -1644,6 +1680,150 @@ class Estimation:
             result.where_clause = format_where_clause(where)
         return result
 
+    @staticmethod
+    def _normalize_probs(p: float | Sequence[float]) -> tuple[list[float], bool]:
+        """Validate ``p`` and report whether it was a scalar.
+
+        A scalar returns a single ``Estimate``; a sequence returns one per
+        probability, matching how ``y`` already behaves.
+        """
+        scalar = isinstance(p, (int, float)) and not isinstance(p, bool)
+        probs = [float(p)] if scalar else [float(v) for v in p]
+
+        if not probs:
+            raise ValueError("p must contain at least one probability.")
+        for v in probs:
+            if not (0.0 < v < 1.0):
+                raise ValueError(f"Each probability must lie strictly in (0, 1); got {v}.")
+        if len(set(probs)) != len(probs):
+            raise ValueError(f"p contains duplicate probabilities: {probs}.")
+        return probs, scalar
+
+    def quantile(
+        self,
+        y: str | Sequence[str],
+        *,
+        p: float | Sequence[float] = (0.25, 0.50, 0.75),
+        by: str | Sequence[str] | None = None,
+        where: WhereArg = None,
+        method: Literal["taylor", "replication"] | None = None,
+        fay_coef: float = 0.0,
+        q_method: Literal["higher", "lower", "nearest", "linear", "middle"] = "higher",
+        variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
+        alpha: float = 0.05,
+        drop_nulls: bool = False,
+    ) -> Estimate | EstimateList:
+        """Estimate population quantiles with standard errors.
+
+        Standard errors follow Woodruff (1952): the design-based variance of
+        the estimated proportion ``P(Y <= q)`` is computed on the probability
+        scale, and the interval comes from inverting the weighted CDF at
+        ``p ± t·se_p`` — the construction behind R's ``svyquantile``. The
+        reported ``se`` is the back-solved half-width ``(uci - lci) / (2t)``.
+
+        Parameters
+        ----------
+        y : str or sequence of str
+            A single column, or a list. A list returns one result per variable.
+        p : float or sequence of float, default (0.25, 0.50, 0.75)
+            Target probabilities, each strictly inside (0, 1). A scalar returns
+            a single ``Estimate``; a sequence returns an ``EstimateList`` with
+            one member per probability, in the order given.
+        by : str or sequence of str, optional
+            Domain columns. Each result then carries one row per domain.
+        method : str | None
+            Variance estimation method: ``'taylor'`` or ``'replication'``.
+            If None, auto-detected from the design.
+        q_method : str, default "higher"
+            Tie-handling rule when a probability falls between observations,
+            analogous to R's ``qrule``.
+
+        Returns
+        -------
+        Estimate or EstimateList
+            One ``Estimate`` per (variable, probability) pair. Scalar ``y`` and
+            scalar ``p`` give a bare ``Estimate``; anything else is an
+            ``EstimateList``.
+
+        See Also
+        --------
+        median : The p = 0.5 case, reported as ``PopParam.MEDIAN``.
+        """
+        probs, p_is_scalar = self._normalize_probs(p)
+
+        if not isinstance(y, str):
+            # Variables expand across results too; flatten so a list of
+            # variables and a list of probabilities compose predictably.
+            out = EstimateList()
+            for yy in y:
+                res = self.quantile(
+                    yy,
+                    p=probs,
+                    by=by,
+                    where=where,
+                    method=method,
+                    fay_coef=fay_coef,
+                    q_method=q_method,
+                    variance_center=variance_center,
+                    alpha=alpha,
+                    drop_nulls=drop_nulls,
+                )
+                out.extend(res if isinstance(res, list) else [res])
+            return out
+
+        target_method = self._resolve_method(method)
+        resolved_q_method = self._normalize_q_method(q_method)
+        prep = prepare_data(
+            self._sample,
+            y=y,
+            by=by,
+            where=where,
+            drop_nulls=drop_nulls,
+            cast_y_float=True,
+            apply_singleton_filter=True,
+            select_columns=True,
+        )
+
+        try:
+            if target_method == EstimationMethod.TAYLOR:
+                results = _taylor_quantile(
+                    self,
+                    prep=prep,
+                    y=y,
+                    probs=probs,
+                    q_method=resolved_q_method,
+                    alpha=alpha,
+                )
+            else:
+                results = _replicate_quantile(
+                    self,
+                    prep=prep,
+                    y=y,
+                    probs=probs,
+                    method=target_method,
+                    fay_coef=fay_coef,
+                    q_method=resolved_q_method,
+                    variance_center=variance_center,
+                    alpha=alpha,
+                )
+        except RuntimeError as e:
+            if "weights is zero" in str(e).lower() or "sum of weights" in str(e).lower():
+                results = [
+                    self._empty_estimate(
+                        PopParam.QUANTILE, alpha, _colspec_to_list(by), target_method
+                    )
+                    for _ in probs
+                ]
+            else:
+                raise
+
+        if where is not None:
+            wc = format_where_clause(where)
+            for r in results:
+                r.where_clause = wc
+
+        return results[0] if p_is_scalar else EstimateList(results)
+
     def median(
         self,
         y: str | Sequence[str],
@@ -1668,6 +1848,11 @@ class Estimation:
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
+
+        See Also
+        --------
+        quantile : Any probability. ``median(y)`` equals ``quantile(y, p=0.5)``
+            numerically; only the reported ``param`` differs.
         """
         if not isinstance(y, str):
             ys = list(y)

@@ -6,6 +6,7 @@ Serializer functions that translate svy result objects into the stable
 No existing svy classes are modified — these functions read public
 attributes and convert types (numpy → list, StrEnum → str, etc.).
 """
+
 from __future__ import annotations
 
 from enum import Enum
@@ -18,7 +19,7 @@ from svy.categorical.table import Table
 from svy.categorical.ttest import TTestOneGroup, TTestTwoGroups
 from svy.core.containers import ChiSquare
 from svy.core.describe import DescribeResult
-from svy.estimation.estimate import Estimate
+from svy.estimation.estimate import Estimate, EstimateList
 from svy.regression.glm import GLMFit
 from svy.regression.prediction import GLMPred
 from svy.serialize.structs import (
@@ -28,6 +29,7 @@ from svy.serialize.structs import (
     DescribeResultData,
     DiffEstData,
     EstimateData,
+    EstimateListData,
     FDistData,
     GLMCoefData,
     GLMFitData,
@@ -119,6 +121,7 @@ def _param_est_to_data(p: Any) -> ParamEstData:
         x_level=p.x_level,
         deff=_f(p.deff) if p.deff is not None else None,
         df=int(p.df) if p.df is not None else None,
+        prob=_f(p.prob) if getattr(p, "prob", None) is not None else None,
     )
 
 
@@ -271,6 +274,12 @@ def _serialize_estimate(result: Estimate) -> EstimateData:
         where_clause=result.where_clause,
         q_method=_enum(result.q_method),
     )
+
+
+@_register(EstimateList)
+def _serialize_estimate_list(result: EstimateList) -> EstimateListData:
+    """Serialize ``svy.estimation.estimate.EstimateList``."""
+    return EstimateListData(estimates=[_serialize_estimate(e) for e in result])
 
 
 @_register(TTestOneGroup)
@@ -435,7 +444,5 @@ def from_json(data: bytes) -> ResultData:
         raise ValueError("JSON payload is missing the 'kind' discriminator.")
     cls = _KIND_TO_STRUCT.get(kind)
     if cls is None:
-        raise ValueError(
-            f"Unknown kind {kind!r}. Known kinds: {sorted(_KIND_TO_STRUCT)}"
-        )
+        raise ValueError(f"Unknown kind {kind!r}. Known kinds: {sorted(_KIND_TO_STRUCT)}")
     return msgspec.json.decode(data, type=cls)
