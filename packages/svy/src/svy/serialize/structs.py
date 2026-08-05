@@ -9,6 +9,7 @@ if an internal class changes, only the serializer function (in
 
 See ``DESIGN.md`` in this directory for the full design rationale.
 """
+
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -107,6 +108,7 @@ class ParamEstData(msgspec.Struct, kw_only=True, frozen=True):
     x_level: CatValue | None = None
     deff: float | None = None
     df: int | None = None
+    prob: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +240,20 @@ class EstimateData(msgspec.Struct, kw_only=True, frozen=True):
     q_method: str = "Linear"
 
 
+@_kinded("estimate_list")
+class EstimateListData(msgspec.Struct, kw_only=True, frozen=True):
+    """
+    Serialization struct for ``svy.estimation.estimate.EstimateList``.
+
+    A multi-estimate result — several variables, several probabilities, or
+    both. Each member serializes exactly as a standalone ``Estimate`` would.
+    """
+
+    kind: Literal["estimate_list"] = "estimate_list"
+    schema_version: str = SCHEMA_VERSION
+    estimates: list[EstimateData]
+
+
 @_kinded("ttest_one_group")
 class TTestOneGroupData(msgspec.Struct, kw_only=True, frozen=True):
     """Serialization struct for ``svy.categorical.ttest.TTestOneGroup``."""
@@ -346,6 +362,7 @@ class DescribeResultData(msgspec.Struct, kw_only=True, frozen=True):
 
 ResultData = (
     EstimateData
+    | EstimateListData
     | TTestOneGroupData
     | TTestTwoGroupsData
     | ChiSquareData

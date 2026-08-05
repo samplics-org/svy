@@ -1284,8 +1284,17 @@ pub fn matrix_prop_by_domain_str(
 // Median Estimation Functions
 // ============================================================================
 
-/// Compute weighted median for a single set of weights (used by replication)
-fn weighted_median_vec(y: &[f64], weights: &[f64], n: usize, q_method: SvyQuantileMethod) -> f64 {
+/// Compute weighted quantiles for a single set of weights (used by replication).
+///
+/// Sorts once and evaluates every probability against the same CDF, returning
+/// one value per entry of `probs`.
+fn weighted_quantiles_vec(
+    y: &[f64],
+    weights: &[f64],
+    n: usize,
+    probs: &[f64],
+    q_method: SvyQuantileMethod,
+) -> Vec<f64> {
     // Collect (y, w) pairs, filtering zeros/NaN
     let mut pairs: Vec<(f64, f64)> = Vec::with_capacity(n);
     for i in 0..n {
@@ -1297,7 +1306,7 @@ fn weighted_median_vec(y: &[f64], weights: &[f64], n: usize, q_method: SvyQuanti
     }
 
     if pairs.is_empty() {
-        return f64::NAN;
+        return vec![f64::NAN; probs.len()];
     }
 
     // Sort by y value
@@ -1309,7 +1318,7 @@ fn weighted_median_vec(y: &[f64], weights: &[f64], n: usize, q_method: SvyQuanti
     // Compute CDF
     let total_w: f64 = w_sorted.iter().sum();
     if total_w <= 0.0 {
-        return f64::NAN;
+        return vec![f64::NAN; probs.len()];
     }
 
     let mut cdf = Vec::with_capacity(w_sorted.len());
@@ -1319,7 +1328,119 @@ fn weighted_median_vec(y: &[f64], weights: &[f64], n: usize, q_method: SvyQuanti
         cdf.push(cumsum / total_w);
     }
 
-    weighted_quantile(&y_sorted, &cdf, 0.5, q_method)
+    probs
+        .iter()
+        .map(|&p| weighted_quantile(&y_sorted, &cdf, p, q_method))
+        .collect()
+}
+
+/// Compute a weighted median for a single set of weights. The production paths
+/// all go through `weighted_quantiles_vec`; this shorthand is for the tests.
+#[cfg(test)]
+fn weighted_median_vec(y: &[f64], weights: &[f64], n: usize, q_method: SvyQuantileMethod) -> f64 {
+    weighted_quantiles_vec(y, weights, n, &[0.5], q_method)[0]
+}
+
+/// Compute quantile estimates for all replicates simultaneously.
+///
+/// Returns `(full_estimates[P], replicate_estimates[P][R])`, indexed by the
+/// position of each probability in `probs`.
+pub fn matrix_quantile_estimates(
+    y: &[f64],
+    full_weights: &[f64],
+    rep_weights: &[f64], // Flattened (n × R) row-major
+    n: usize,
+    n_reps: usize,
+    probs: &[f64],
+    q_method: SvyQuantileMethod,
+) -> (Vec<f64>, Vec<Vec<f64>>) {
+    // Full sample estimates
+    let theta_full = weighted_quantiles_vec(y, full_weights, n, probs, q_method);
+
+    // Replicate estimates
+    let mut theta_reps: Vec<Vec<f64>> = vec![Vec::with_capacity(n_reps); probs.len()];
+
+    // Extract each replicate's weights and compute every quantile from one sort
+    for r in 0..n_reps {
+        let rep_w: Vec<f64> = (0..n).map(|i| rep_weights[i * n_reps + r]).collect();
+
+        for (j, theta_r) in weighted_quantiles_vec(y, &rep_w, n, probs, q_method)
+            .into_iter()
+            .enumerate()
+        {
+            theta_reps[j].push(theta_r);
+        }
+    }
+
+    (theta_full, theta_reps)
+}
+
+/// Compute quantile estimates by domain for all replicates.
+///
+/// Returns `(full_estimates[K][P], replicate_estimates[K][P][R], domain_counts[K])`.
+pub fn matrix_quantile_by_domain(
+    y: &[f64],
+    full_weights: &[f64],
+    rep_weights: &[f64],
+    domain_ids: &[u32],
+    n_domains: usize,
+    n: usize,
+    n_reps: usize,
+    probs: &[f64],
+    q_method: SvyQuantileMethod,
+) -> (Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>) {
+    // Organize data by domain
+    let mut domain_data: Vec<Vec<(f64, f64, usize)>> = vec![Vec::new(); n_domains];
+    let mut counts = vec![0u32; n_domains];
+
+    for i in 0..n {
+        let d = domain_ids[i] as usize;
+        if d >= n_domains {
+            continue;
+        }
+        domain_data[d].push((y[i], full_weights[i], i));
+        counts[d] += 1;
+    }
+
+    // The domain's y values never change across replicates — hoist them out of
+    // the replicate loop; only the weights are re-read per replicate.
+    let y_by_domain: Vec<Vec<f64>> = domain_data
+        .iter()
+        .map(|rows| rows.iter().map(|(yi, _, _)| *yi).collect())
+        .collect();
+
+    // Compute full sample estimates for each domain
+    let mut theta_full = Vec::with_capacity(n_domains);
+    for d in 0..n_domains {
+        let w_d: Vec<f64> = domain_data[d].iter().map(|(_, wi, _)| *wi).collect();
+        let n_d = y_by_domain[d].len();
+
+        theta_full.push(weighted_quantiles_vec(&y_by_domain[d], &w_d, n_d, probs, q_method));
+    }
+
+    // Compute replicate estimates for each domain
+    let mut theta_reps: Vec<Vec<Vec<f64>>> =
+        vec![vec![Vec::with_capacity(n_reps); probs.len()]; n_domains];
+
+    for r in 0..n_reps {
+        for d in 0..n_domains {
+            let w_d: Vec<f64> = domain_data[d]
+                .iter()
+                .map(|(_, _, i)| rep_weights[i * n_reps + r])
+                .collect();
+            let n_d = y_by_domain[d].len();
+
+            for (j, est) in
+                weighted_quantiles_vec(&y_by_domain[d], &w_d, n_d, probs, q_method)
+                    .into_iter()
+                    .enumerate()
+            {
+                theta_reps[d][j].push(est);
+            }
+        }
+    }
+
+    (theta_full, theta_reps, counts)
 }
 
 /// Compute median estimates for all replicates simultaneously
@@ -1332,21 +1453,9 @@ pub fn matrix_median_estimates(
     n_reps: usize,
     q_method: SvyQuantileMethod,
 ) -> (f64, Vec<f64>) {
-    // Full sample estimate
-    let theta_full = weighted_median_vec(y, full_weights, n, q_method);
-
-    // Replicate estimates
-    let mut theta_reps = Vec::with_capacity(n_reps);
-
-    // Extract each replicate's weights and compute median
-    for r in 0..n_reps {
-        let rep_w: Vec<f64> = (0..n).map(|i| rep_weights[i * n_reps + r]).collect();
-
-        let theta_r = weighted_median_vec(y, &rep_w, n, q_method);
-        theta_reps.push(theta_r);
-    }
-
-    (theta_full, theta_reps)
+    let (full, reps) =
+        matrix_quantile_estimates(y, full_weights, rep_weights, n, n_reps, &[0.5], q_method);
+    (full[0], reps.into_iter().next().unwrap_or_default())
 }
 
 /// Compute median estimates by domain for all replicates
@@ -1361,48 +1470,16 @@ pub fn matrix_median_by_domain(
     n_reps: usize,
     q_method: SvyQuantileMethod,
 ) -> (Vec<f64>, Vec<Vec<f64>>, Vec<u32>) {
-    // Organize data by domain
-    let mut domain_data: Vec<Vec<(f64, f64, usize)>> = vec![Vec::new(); n_domains];
-    let mut counts = vec![0u32; n_domains];
-
-    for i in 0..n {
-        let d = domain_ids[i] as usize;
-        if d >= n_domains {
-            continue;
-        }
-        domain_data[d].push((y[i], full_weights[i], i));
-        counts[d] += 1;
-    }
-
-    // Compute full sample estimates for each domain
-    let mut theta_full = Vec::with_capacity(n_domains);
-    for d in 0..n_domains {
-        let y_d: Vec<f64> = domain_data[d].iter().map(|(yi, _, _)| *yi).collect();
-        let w_d: Vec<f64> = domain_data[d].iter().map(|(_, wi, _)| *wi).collect();
-        let n_d = y_d.len();
-
-        let est = weighted_median_vec(&y_d, &w_d, n_d, q_method);
-        theta_full.push(est);
-    }
-
-    // Compute replicate estimates for each domain
-    let mut theta_reps: Vec<Vec<f64>> = vec![Vec::with_capacity(n_reps); n_domains];
-
-    for r in 0..n_reps {
-        for d in 0..n_domains {
-            let y_d: Vec<f64> = domain_data[d].iter().map(|(yi, _, _)| *yi).collect();
-            let w_d: Vec<f64> = domain_data[d]
-                .iter()
-                .map(|(_, _, i)| rep_weights[i * n_reps + r])
-                .collect();
-            let n_d = y_d.len();
-
-            let est = weighted_median_vec(&y_d, &w_d, n_d, q_method);
-            theta_reps[d].push(est);
-        }
-    }
-
-    (theta_full, theta_reps, counts)
+    let (full, reps, counts) = matrix_quantile_by_domain(
+        y, full_weights, rep_weights, domain_ids, n_domains, n, n_reps, &[0.5], q_method,
+    );
+    (
+        full.into_iter().map(|v| v[0]).collect(),
+        reps.into_iter()
+            .map(|v| v.into_iter().next().unwrap_or_default())
+            .collect(),
+        counts,
+    )
 }
 
 // ============================================================================

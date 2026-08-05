@@ -6,6 +6,14 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Added
+
+- **The Woodruff kernels take a probability instead of assuming 0.5.** `scores_median` hardcoded `let _p = 0.5` and its indicator `I(y > q) - 0.5`; the generalized `scores_quantile` uses `I(y > q) - (1 - p)`, which reduces to the old expression at `p = 0.5`. `weighted_quantile_domain`, `scores_quantile_domain` and the replication kernels (`weighted_quantiles_vec`, `matrix_quantile_estimates`, `matrix_quantile_by_domain`) are generalized the same way. The median entry points remain, delegating with `probs = [0.5]` and dropping the probability column, so their result schema is unchanged.
+
+- **`quantiles_woodruff` evaluates many probabilities in one pass.** Quantiles are sort-bound, so the sort behind the weighted CDF and the design indexing are done once and only the score vector and its variance are per-probability. New `taylor_quantile`, `taylor_quantile_multi` and `replicate_quantile` entry points return one row per probability in a `prob` column.
+
+- **`weighted_quantile_at`** exposes the interpolation rule to Python over a pre-sorted variable and its CDF, so `svy` can invert the CDF for confidence limits using the same rule as the point estimate rather than reimplementing it. One implementation, no drift.
+
 ## [0.12.1] — 2026-08-04
 
 ### Changed

@@ -1,5 +1,5 @@
 from .base import Estimation
-from .estimate import Estimate, ParamEst
+from .estimate import Estimate, EstimateList, ParamEst
 
 
-__all__ = ["Estimation", "Estimate", "ParamEst"]
+__all__ = ["Estimation", "Estimate", "EstimateList", "ParamEst"]

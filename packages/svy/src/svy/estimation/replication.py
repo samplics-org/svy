@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Sequence, cast
 
 import numpy as np
 import polars as pl
@@ -414,3 +414,56 @@ def replicate_median(
         as_factor=False,
         method=method,
     )
+
+
+def replicate_quantile(
+    est: Estimation,
+    prep: PreparedData,
+    y: str,
+    probs: Sequence[float],
+    *,
+    method: EstimationMethod,
+    fay_coef: float = 0.0,
+    q_method: QuantileMethod = QuantileMethod.HIGHER,
+    variance_center: str = "rep_mean",
+    alpha: float = 0.05,
+) -> list[Estimate]:
+    """Replicate-weight quantiles, one ``Estimate`` per probability.
+
+    Every probability is estimated from the same pass over the replicate
+    weights; the frame is then sliced by probability.
+    """
+    rep_weight_cols, df_val, final_fay, rscales = _get_rep_params(est, fay_coef)
+    data = est._ensure_float64(prep.df, rep_weight_cols)
+    q_method_str = q_method.value if hasattr(q_method, "value") else str(q_method).lower()
+    result_df = rs.replicate_quantile(
+        data,
+        value_col=y,
+        weight_col=prep.weight_col,
+        rep_weight_cols=rep_weight_cols,
+        method=get_rep_method_str(method),
+        probs=list(probs),
+        fay_coef=final_fay,
+        rscales=rscales,
+        center=variance_center,
+        degrees_of_freedom=df_val,
+        by_col=prep.by_col,
+        quantile_method=q_method_str,
+    )
+
+    results: list[Estimate] = []
+    for p in probs:
+        sub = result_df.filter(pl.col("prob") == p)
+        est_list = est._replicate_quantile_result_to_param_est(sub, y, alpha, prep.by_col)
+        results.append(
+            est._build_estimate_result_light(
+                est_list,
+                np.diag(sub["var"].to_numpy()),
+                PopParam.QUANTILE,
+                alpha,
+                prep.by_cols,
+                as_factor=False,
+                method=method,
+            )
+        )
+    return results

@@ -330,6 +330,57 @@ pub fn weighted_quantile(y_sorted: &[f64], cdf: &[f64], p: f64, method: SvyQuant
     }
 }
 
+/// Sort `(value, weight)` pairs by value and build the normalised weighted CDF.
+///
+/// Returns `None` when the pairs are empty or carry no positive weight, i.e.
+/// whenever the quantile is undefined. Callers that need several quantiles of
+/// the same variable build this once and evaluate every probability against it.
+fn sorted_weighted_cdf(mut pairs: Vec<(f64, f64)>) -> Option<(Vec<f64>, Vec<f64>, f64)> {
+    if pairs.is_empty() {
+        return None;
+    }
+
+    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // unzip consumes pairs in one allocation instead of two map+collect passes
+    let (y_sorted, w_sorted): (Vec<f64>, Vec<f64>) = pairs.into_iter().unzip();
+
+    let total_w: f64 = w_sorted.iter().sum();
+    if total_w <= 0.0 {
+        return None;
+    }
+
+    let mut cdf = Vec::with_capacity(w_sorted.len());
+    let mut cumsum = 0.0;
+    for w in &w_sorted {
+        cumsum += w;
+        cdf.push(cumsum / total_w);
+    }
+
+    Some((y_sorted, cdf, total_w))
+}
+
+/// Collect the non-null `(value, weight)` pairs, optionally restricted to a domain.
+fn quantile_pairs(
+    y: &Float64Chunked,
+    weights: &Float64Chunked,
+    domain_mask: Option<&BooleanChunked>,
+) -> Vec<(f64, f64)> {
+    match domain_mask {
+        None => y
+            .iter()
+            .zip(weights.iter())
+            .filter_map(|(yi, wi)| Some((yi?, wi?)))
+            .collect(),
+        Some(mask) => y
+            .iter()
+            .zip(weights.iter())
+            .zip(mask.iter())
+            .filter_map(|((yi, wi), m)| if m? { Some((yi?, wi?)) } else { None })
+            .collect(),
+    }
+}
+
 /// Compute weighted median (p=0.5 quantile)
 pub fn weighted_median(
     y: &Float64Chunked,
@@ -339,6 +390,20 @@ pub fn weighted_median(
     weighted_quantile_chunked(y, weights, 0.5, method)
 }
 
+/// Compute weighted quantile for a domain subset
+pub fn weighted_quantile_domain(
+    y: &Float64Chunked,
+    weights: &Float64Chunked,
+    domain_mask: &BooleanChunked,
+    p: f64,
+    method: SvyQuantileMethod,
+) -> PolarsResult<f64> {
+    match sorted_weighted_cdf(quantile_pairs(y, weights, Some(domain_mask))) {
+        None => Ok(f64::NAN),
+        Some((y_sorted, cdf, _)) => Ok(weighted_quantile(&y_sorted, &cdf, p, method)),
+    }
+}
+
 /// Compute weighted median for a domain subset
 pub fn weighted_median_domain(
     y: &Float64Chunked,
@@ -346,42 +411,7 @@ pub fn weighted_median_domain(
     domain_mask: &BooleanChunked,
     method: SvyQuantileMethod,
 ) -> PolarsResult<f64> {
-    // Collect values in domain
-    let mut pairs: Vec<(f64, f64)> = y
-        .iter()
-        .zip(weights.iter())
-        .zip(domain_mask.iter())
-        .filter_map(|((yi, wi), m)| {
-            if m? && yi.is_some() && wi.is_some() {
-                Some((yi.unwrap(), wi.unwrap()))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    if pairs.is_empty() {
-        return Ok(f64::NAN);
-    }
-
-    // Sort by y value
-    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    let (y_sorted, w_sorted): (Vec<f64>, Vec<f64>) = pairs.into_iter().unzip();
-
-    let total_w: f64 = w_sorted.iter().sum();
-    if total_w <= 0.0 {
-        return Ok(f64::NAN);
-    }
-
-    let mut cdf = Vec::with_capacity(w_sorted.len());
-    let mut cumsum = 0.0;
-    for w in &w_sorted {
-        cumsum += w;
-        cdf.push(cumsum / total_w);
-    }
-
-    Ok(weighted_quantile(&y_sorted, &cdf, 0.5, method))
+    weighted_quantile_domain(y, weights, domain_mask, 0.5, method)
 }
 
 /// Compute weighted quantile from Polars chunked arrays
@@ -391,36 +421,10 @@ pub fn weighted_quantile_chunked(
     p: f64,
     method: SvyQuantileMethod,
 ) -> PolarsResult<f64> {
-    // Collect non-null pairs
-    let mut pairs: Vec<(f64, f64)> = y
-        .iter()
-        .zip(weights.iter())
-        .filter_map(|(yi, wi)| Some((yi?, wi?)))
-        .collect();
-
-    if pairs.is_empty() {
-        return Ok(f64::NAN);
+    match sorted_weighted_cdf(quantile_pairs(y, weights, None)) {
+        None => Ok(f64::NAN),
+        Some((y_sorted, cdf, _)) => Ok(weighted_quantile(&y_sorted, &cdf, p, method)),
     }
-
-    // Sort by y value
-    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    // unzip consumes pairs in one allocation instead of two map+collect passes
-    let (y_sorted, w_sorted): (Vec<f64>, Vec<f64>) = pairs.into_iter().unzip();
-
-    let total_w: f64 = w_sorted.iter().sum();
-    if total_w <= 0.0 {
-        return Ok(f64::NAN);
-    }
-
-    let mut cdf = Vec::with_capacity(w_sorted.len());
-    let mut cumsum = 0.0;
-    for w in &w_sorted {
-        cumsum += w;
-        cdf.push(cumsum / total_w);
-    }
-
-    Ok(weighted_quantile(&y_sorted, &cdf, p, method))
 }
 
 // ============================================================================
@@ -712,57 +716,96 @@ pub fn scores_ratio_domain(
     Ok(Float64Chunked::from_slice_options("scores".into(), &scores))
 }
 
-/// Compute influence function scores for median (quantile) estimation.
+/// Influence-function scores for a quantile already located at `q`.
 ///
-/// For median, the influence function is based on the indicator I(y <= q) - p
-/// where q is the quantile and p is the target probability (0.5 for median).
+/// The estimator of F(q) has contribution (w_i / sum_w) * (I(y_i <= q) - p);
+/// this returns its negation, (w_i / sum_w) * (I(y_i > q) - (1 - p)), which has
+/// the same variance and matches the sign convention used by R's survey
+/// package. Rows outside `domain_mask` (when given) score zero, so the domain
+/// estimator is linearized against the full design.
 ///
-/// Score_i = (w_i / sum_w) * (I(y_i > q) - (1 - p))
-///
-/// This follows the approach used in R's survey package.
-pub fn scores_median(
+/// `q` and `sum_w` are passed in rather than recomputed, so a caller estimating
+/// several probabilities sorts the data only once.
+fn scores_quantile_arr(
     y: &Float64Chunked,
     weights: &Float64Chunked,
+    domain_mask: Option<&BooleanChunked>,
+    q: f64,
+    p: f64,
+    sum_w: f64,
+) -> Vec<f64> {
+    let complement = 1.0 - p;
+    match domain_mask {
+        None => y
+            .iter()
+            .zip(weights.iter())
+            .map(|(yi, wi)| match (yi, wi) {
+                (Some(y_val), Some(w_val)) => {
+                    let u = if y_val > q { 1.0 } else { 0.0 } - complement;
+                    (w_val / sum_w) * u
+                }
+                _ => 0.0,
+            })
+            .collect(),
+        Some(mask) => y
+            .iter()
+            .zip(weights.iter())
+            .zip(mask.iter())
+            .map(|((yi, wi), m)| match (yi, wi, m) {
+                (Some(y_val), Some(w_val), Some(true)) => {
+                    let u = if y_val > q { 1.0 } else { 0.0 } - complement;
+                    (w_val / sum_w) * u
+                }
+                _ => 0.0, // Zero score outside the domain
+            })
+            .collect(),
+    }
+}
+
+/// Compute influence function scores for quantile estimation.
+///
+/// Score_i = (w_i / sum_w) * (I(y_i > q) - (1 - p))
+pub fn scores_quantile(
+    y: &Float64Chunked,
+    weights: &Float64Chunked,
+    p: f64,
     method: SvyQuantileMethod,
 ) -> PolarsResult<Float64Chunked> {
-    let _p = 0.5; // median
-    let q = weighted_median(y, weights, method)?;
+    let q = weighted_quantile_chunked(y, weights, p, method)?;
 
     if q.is_nan() {
         let nans = vec![Some(f64::NAN); y.len()];
         return Ok(Float64Chunked::from_slice_options("scores".into(), &nans));
     }
 
-    let sum_w: f64 = weights.iter().filter_map(|w| w).sum();
+    let sum_w: f64 = weights.iter().flatten().sum();
     if sum_w <= 0.0 {
         let zeros = vec![Some(0.0); y.len()];
         return Ok(Float64Chunked::from_slice_options("scores".into(), &zeros));
     }
 
-    let scores: Vec<Option<f64>> = y
-        .iter()
-        .zip(weights.iter())
-        .map(|(yi, wi)| match (yi, wi) {
-            (Some(y_val), Some(w_val)) => {
-                // u = I(y > q) - (1 - p) = I(y > q) - 0.5
-                let u = if y_val > q { 1.0 } else { 0.0 } - 0.5;
-                Some((w_val / sum_w) * u)
-            }
-            _ => None,
-        })
-        .collect();
-
-    Ok(Float64Chunked::from_slice_options("scores".into(), &scores))
+    let scores = scores_quantile_arr(y, weights, None, q, p, sum_w);
+    Ok(Float64Chunked::from_slice("scores".into(), &scores))
 }
 
-/// Compute influence function scores for median within a domain.
-pub fn scores_median_domain(
+/// Compute influence function scores for the median (p = 0.5).
+pub fn scores_median(
+    y: &Float64Chunked,
+    weights: &Float64Chunked,
+    method: SvyQuantileMethod,
+) -> PolarsResult<Float64Chunked> {
+    scores_quantile(y, weights, 0.5, method)
+}
+
+/// Compute influence function scores for a quantile within a domain.
+pub fn scores_quantile_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
+    p: f64,
     method: SvyQuantileMethod,
 ) -> PolarsResult<Float64Chunked> {
-    let q = weighted_median_domain(y, weights, domain_mask, method)?;
+    let q = weighted_quantile_domain(y, weights, domain_mask, p, method)?;
 
     if q.is_nan() {
         let zeros = vec![Some(0.0); y.len()];
@@ -780,20 +823,18 @@ pub fn scores_median_domain(
         return Ok(Float64Chunked::from_slice_options("scores".into(), &zeros));
     }
 
-    let scores: Vec<Option<f64>> = y
-        .iter()
-        .zip(weights.iter())
-        .zip(domain_mask.iter())
-        .map(|((yi, wi), m)| match (yi, wi, m) {
-            (Some(y_val), Some(w_val), Some(true)) => {
-                let u = if y_val > q { 1.0 } else { 0.0 } - 0.5;
-                Some((w_val / sum_w) * u)
-            }
-            _ => Some(0.0), // Zero score outside domain
-        })
-        .collect();
+    let scores = scores_quantile_arr(y, weights, Some(domain_mask), q, p, sum_w);
+    Ok(Float64Chunked::from_slice("scores".into(), &scores))
+}
 
-    Ok(Float64Chunked::from_slice_options("scores".into(), &scores))
+/// Compute influence function scores for the median within a domain.
+pub fn scores_median_domain(
+    y: &Float64Chunked,
+    weights: &Float64Chunked,
+    domain_mask: &BooleanChunked,
+    method: SvyQuantileMethod,
+) -> PolarsResult<Float64Chunked> {
+    scores_quantile_domain(y, weights, domain_mask, 0.5, method)
 }
 
 // ============================================================================
@@ -1578,8 +1619,50 @@ fn df_from_codes(
 }
 
 // ============================================================================
-// Median Variance using Woodruff Method
+// Quantile Variance using Woodruff Method
 // ============================================================================
+
+/// Woodruff estimates for several probabilities in one pass.
+///
+/// Both the sort behind the weighted CDF and the design indexing are done once;
+/// only the score vector and its variance are per-probability. Pass
+/// `domain_mask` to restrict the CDF to a domain — scores outside it are zero,
+/// so the variance is still taken over the full design.
+///
+/// Returns one `(estimate, var_p, se_p)` per entry of `probs`, in the same
+/// order. Entries are all-NaN where the quantile is undefined.
+pub fn quantiles_woodruff(
+    y: &Float64Chunked,
+    weights: &Float64Chunked,
+    domain_mask: Option<&BooleanChunked>,
+    design: &TaylorDesign,
+    probs: &[f64],
+    quantile_method: SvyQuantileMethod,
+) -> PolarsResult<Vec<(f64, f64, f64)>> {
+    let nan_rows = || vec![(f64::NAN, f64::NAN, f64::NAN); probs.len()];
+
+    let Some((y_sorted, cdf, sum_w)) =
+        sorted_weighted_cdf(quantile_pairs(y, weights, domain_mask))
+    else {
+        return Ok(nan_rows());
+    };
+
+    Ok(probs
+        .iter()
+        .map(|&p| {
+            let q = weighted_quantile(&y_sorted, &cdf, p, quantile_method);
+            if q.is_nan() {
+                return (f64::NAN, f64::NAN, f64::NAN);
+            }
+            // Variance of the estimated proportion P(Y <= q), on the
+            // probability scale; the caller inverts the CDF to get the
+            // interval on the quantile scale.
+            let scores = scores_quantile_arr(y, weights, domain_mask, q, p, sum_w);
+            let var_p = taylor_variance_apply(&scores, design);
+            (q, var_p, var_p.max(0.0).sqrt())
+        })
+        .collect())
+}
 
 /// Compute variance of the median using the Woodruff (1952) method.
 ///

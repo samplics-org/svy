@@ -72,7 +72,7 @@ from svy.errors import (
     ModelError,
     SvyError,
 )
-from svy.estimation import Estimate, Estimation, ParamEst
+from svy.estimation import Estimate, EstimateList, Estimation, ParamEst
 from svy.extensions import register_sample_accessor
 from svy.io import (
     create_from_csv,
@@ -147,6 +147,7 @@ __all__ = [
     # --- Estimation & Stats ---
     "Estimation",
     "Estimate",
+    "EstimateList",
     "ParamEst",
     "ChiSquare",
     "FDist",

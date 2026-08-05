@@ -15,7 +15,7 @@ use crate::estimation::replication::{
     index_domains,
     matrix_mean_by_domain, matrix_mean_by_domain_cols, matrix_mean_estimates,
     matrix_mean_estimates_cols,
-    matrix_median_by_domain, matrix_median_estimates,
+    matrix_quantile_by_domain, matrix_quantile_estimates,
     matrix_prop_by_domain, matrix_prop_estimates, matrix_prop_estimates_cols,
     matrix_prop_by_domain_str, matrix_prop_estimates_str, matrix_prop_estimates_str_cols,
     matrix_ratio_by_domain, matrix_ratio_by_domain_cols, matrix_ratio_estimates,
@@ -678,18 +678,22 @@ fn compute_replicate_prop_grouped(
 }
 
 // ============================================================================
-// Median
+// Quantiles (median is the p = 0.5 case)
 // ============================================================================
 
+/// Replicate-weight quantiles. One row per probability (and per domain when
+/// `by_col` is set), carrying the probability in a `prob` column.
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, fay_coef=0.0, rscales=None, center="rep_mean", degrees_of_freedom=None, by_col=None, quantile_method=None))]
-pub fn replicate_median(
+#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, probs, fay_coef=0.0, rscales=None, center="rep_mean", degrees_of_freedom=None, by_col=None, quantile_method=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn replicate_quantile(
     _py: Python,
     data: PyDataFrame,
     value_col: String,
     weight_col: String,
     rep_weight_cols: Vec<String>,
     method: String,
+    probs: Vec<f64>,
     fay_coef: f64,
     rscales: Option<Vec<f64>>,
     center: &str,
@@ -717,22 +721,50 @@ pub fn replicate_median(
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 
     let result = _py.detach(|| {
-        if by_col.is_none() {
-            compute_replicate_median_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
-                rep_method, fay_coef, rscales.as_deref(), variance_center, df_val, q_method)
-        } else {
-            compute_replicate_median_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
-                rep_method, fay_coef, rscales.as_deref(), variance_center, df_val, by_col.as_ref().unwrap(), q_method)
+        match by_col.as_deref() {
+            None => compute_replicate_quantile_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
+                rep_method, fay_coef, rscales.as_deref(), variance_center, df_val, &probs, q_method),
+            Some(by) => compute_replicate_quantile_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
+                rep_method, fay_coef, rscales.as_deref(), variance_center, df_val, by, &probs, q_method),
         }
     });
     result.map(PyDataFrame).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
 }
 
-fn compute_replicate_median_ungrouped(
+#[pyfunction]
+#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, fay_coef=0.0, rscales=None, center="rep_mean", degrees_of_freedom=None, by_col=None, quantile_method=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn replicate_median(
+    _py: Python,
+    data: PyDataFrame,
+    value_col: String,
+    weight_col: String,
+    rep_weight_cols: Vec<String>,
+    method: String,
+    fay_coef: f64,
+    rscales: Option<Vec<f64>>,
+    center: &str,
+    degrees_of_freedom: Option<u32>,
+    by_col: Option<String>,
+    quantile_method: Option<String>,
+) -> PyResult<PyDataFrame> {
+    let out = replicate_quantile(
+        _py, data, value_col, weight_col, rep_weight_cols, method, vec![0.5],
+        fay_coef, rscales, center, degrees_of_freedom, by_col, quantile_method,
+    )?;
+    // Keep the legacy median schema: drop the probability column.
+    let mut result = out.0;
+    result
+        .drop_in_place("prob")
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    Ok(PyDataFrame(result))
+}
+
+fn compute_replicate_quantile_ungrouped(
     df: &DataFrame,
     value_col: &str, weight_col: &str, rep_weight_cols: &[String],
     method: RepMethod, fay_coef: f64, rscales: Option<&[f64]>,
-    center: VarianceCenter, df_val: u32,
+    center: VarianceCenter, df_val: u32, probs: &[f64],
     q_method: SvyQuantileMethod,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
@@ -744,22 +776,26 @@ fn compute_replicate_median_ungrouped(
 
     let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
     let (theta_full, theta_reps) =
-        matrix_median_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps, q_method);
+        matrix_quantile_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps, probs, q_method);
     let rep_coefs = rscales.map(<[f64]>::to_vec)
         .unwrap_or_else(|| replicate_coefficients(method, n_reps, fay_coef));
-    let variance  = variance_from_replicates(method, theta_full, &theta_reps, &rep_coefs, center);
-    let se = variance.sqrt();
 
-    df!["y" => vec![value_col], "est" => vec![theta_full], "se" => vec![se],
-        "var" => vec![variance], "df" => vec![df_val], "n" => vec![n as u32]]
+    let variances: Vec<f64> = (0..probs.len())
+        .map(|j| variance_from_replicates(method, theta_full[j], &theta_reps[j], &rep_coefs, center))
+        .collect();
+    let ses: Vec<f64> = variances.iter().map(|v| v.sqrt()).collect();
+    let k = probs.len();
+
+    df!["y" => vec![value_col; k], "prob" => probs.to_vec(), "est" => theta_full,
+        "se" => ses, "var" => variances, "df" => vec![df_val; k], "n" => vec![n as u32; k]]
 }
 
-fn compute_replicate_median_grouped(
+fn compute_replicate_quantile_grouped(
     df: &DataFrame,
     value_col: &str, weight_col: &str, rep_weight_cols: &[String],
     method: RepMethod, fay_coef: f64, rscales: Option<&[f64]>,
     center: VarianceCenter, df_val: u32,
-    by_col: &str, q_method: SvyQuantileMethod,
+    by_col: &str, probs: &[f64], q_method: SvyQuantileMethod,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -771,27 +807,32 @@ fn compute_replicate_median_grouped(
 
     let (domain_ids, domain_names, n_domains) = index_domains(by_str);
     let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
-    let (theta_full_vec, theta_reps_vec, counts) =
-        matrix_median_by_domain(&y_arr, &w_arr, &rep_w_matrix, &domain_ids, n_domains, n, n_reps, q_method);
+    let (theta_full_vec, theta_reps_vec, counts) = matrix_quantile_by_domain(
+        &y_arr, &w_arr, &rep_w_matrix, &domain_ids, n_domains, n, n_reps, probs, q_method);
     let rep_coefs = rscales.map(<[f64]>::to_vec)
         .unwrap_or_else(|| replicate_coefficients(method, n_reps, fay_coef));
 
-    let mut by_vals:   Vec<String> = Vec::with_capacity(n_domains);
-    let mut estimates: Vec<f64>    = Vec::with_capacity(n_domains);
-    let mut ses:       Vec<f64>    = Vec::with_capacity(n_domains);
-    let mut variances: Vec<f64>    = Vec::with_capacity(n_domains);
-    let mut dfs:       Vec<u32>    = Vec::with_capacity(n_domains);
-    let mut ns:        Vec<u32>    = Vec::with_capacity(n_domains);
+    let k = probs.len();
+    let n_rows = n_domains * k;
+    let mut by_vals:   Vec<String> = Vec::with_capacity(n_rows);
+    let mut estimates: Vec<f64>    = Vec::with_capacity(n_rows);
+    let mut ses:       Vec<f64>    = Vec::with_capacity(n_rows);
+    let mut variances: Vec<f64>    = Vec::with_capacity(n_rows);
+    let mut ns:        Vec<u32>    = Vec::with_capacity(n_rows);
 
-    for (k, domain_name) in domain_names.iter().enumerate() {
-        let variance = variance_from_replicates(method, theta_full_vec[k], &theta_reps_vec[k], &rep_coefs, center);
-        by_vals.push(domain_name.clone());
-        estimates.push(theta_full_vec[k]);
-        ses.push(variance.sqrt());
-        variances.push(variance);
-        dfs.push(df_val);
-        ns.push(counts[k]);
+    for (d, domain_name) in domain_names.iter().enumerate() {
+        for j in 0..k {
+            let variance = variance_from_replicates(
+                method, theta_full_vec[d][j], &theta_reps_vec[d][j], &rep_coefs, center);
+            by_vals.push(domain_name.clone());
+            estimates.push(theta_full_vec[d][j]);
+            ses.push(variance.sqrt());
+            variances.push(variance);
+            ns.push(counts[d]);
+        }
     }
-    df![by_col => by_vals, "y" => vec![value_col; n_domains], "est" => estimates,
-        "se" => ses, "var" => variances, "df" => dfs, "n" => ns]
+    let probs_rep: Vec<f64> = std::iter::repeat_n(probs, n_domains).flatten().copied().collect();
+    df![by_col => by_vals, "y" => vec![value_col; n_rows], "prob" => probs_rep,
+        "est" => estimates, "se" => ses, "var" => variances,
+        "df" => vec![df_val; n_rows], "n" => ns]
 }

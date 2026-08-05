@@ -8,7 +8,7 @@ Helper methods are called on the Estimation instance (est._*).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 import polars as pl
@@ -438,7 +438,7 @@ def taylor_median(
     )
 
     est_list = est._median_result_to_param_est(
-        result_df, y, alpha, prep.by_col, df, prep.weight_col
+        result_df, y, alpha, prep.by_col, df, prep.weight_col, q_method
     )
     est_cov = np.diag(result_df["var"].to_numpy())
     return est._build_estimate_result_light(
@@ -494,7 +494,12 @@ def taylor_ratio_multi(
         est_cov = np.diag(sub["var"].to_numpy())
         results.append(
             est._build_estimate_result_light(
-                est_list, est_cov, PopParam.RATIO, alpha, [], as_factor=False,
+                est_list,
+                est_cov,
+                PopParam.RATIO,
+                alpha,
+                [],
+                as_factor=False,
                 method=EstimationMethod.TAYLOR,
             )
         )
@@ -543,7 +548,12 @@ def taylor_prop_multi(
         est_cov = np.diag(sub["var"].to_numpy())
         results.append(
             est._build_estimate_result_light(
-                est_list, est_cov, PopParam.PROP, alpha, [], as_factor=True,
+                est_list,
+                est_cov,
+                PopParam.PROP,
+                alpha,
+                [],
+                as_factor=True,
                 method=EstimationMethod.TAYLOR,
             )
         )
@@ -590,11 +600,80 @@ def taylor_median_multi(
     results: list[Estimate] = []
     for i, y in enumerate(ys):
         sub = result_df.slice(i, 1)
-        est_list = est._median_result_to_param_est(sub, y, alpha, None, df, prep.weight_col)
+        est_list = est._median_result_to_param_est(
+            sub, y, alpha, None, df, prep.weight_col, q_method
+        )
         est_cov = np.diag(sub["var"].to_numpy())
         results.append(
             est._build_estimate_result_light(
-                est_list, est_cov, PopParam.MEDIAN, alpha, [], as_factor=False,
+                est_list,
+                est_cov,
+                PopParam.MEDIAN,
+                alpha,
+                [],
+                as_factor=False,
+                method=EstimationMethod.TAYLOR,
+            )
+        )
+    return results
+
+
+def taylor_quantile(
+    est: Estimation,
+    prep: PreparedData,
+    y: str,
+    probs: Sequence[float],
+    *,
+    q_method: QuantileMethod = QuantileMethod.HIGHER,
+    alpha: float = 0.05,
+) -> list[Estimate]:
+    """Woodruff quantiles for one variable, one ``Estimate`` per probability.
+
+    A single Rust call covers every probability — the sort behind the weighted
+    CDF and the design indexing are shared — and the result frame is then sliced
+    by probability so each one gets its own ``Estimate``.
+    """
+    if prep.df[y].null_count() > 0:
+        raise ValueError(f"Missing values found in '{y}'. Use drop_nulls=True to ignore.")
+
+    pop_size = getattr(est._sample._design, "pop_size", None)
+    df, fpc_col, fpc_ssu_col = (
+        est._compute_fpc_columns(prep.df, pop_size, prep.strata_col, prep.psu_col, prep.ssu_col)
+        if pop_size is not None
+        else (prep.df, None, None)
+    )
+    center_arg = est._get_center_method()
+    q_method_str = q_method.value if hasattr(q_method, "value") else str(q_method).lower()
+
+    result_df = rs.taylor_quantile(
+        df,
+        value_col=y,
+        weight_col=prep.weight_col,
+        probs=list(probs),
+        strata_col=prep.strata_col,
+        psu_col=prep.psu_col,
+        ssu_col=prep.ssu_col,
+        fpc_col=fpc_col,
+        fpc_ssu_col=fpc_ssu_col,
+        by_col=prep.by_col,
+        singleton_method=center_arg,
+        quantile_method=q_method_str,
+    )
+
+    results: list[Estimate] = []
+    for p in probs:
+        sub = result_df.filter(pl.col("prob") == p)
+        est_list = est._quantile_result_to_param_est(
+            sub, y, alpha, prep.by_col, df, prep.weight_col, q_method
+        )
+        results.append(
+            est._build_estimate_result_light(
+                est_list,
+                np.diag(sub["var"].to_numpy()),
+                PopParam.QUANTILE,
+                alpha,
+                prep.by_cols,
+                as_factor=False,
                 method=EstimationMethod.TAYLOR,
             )
         )
