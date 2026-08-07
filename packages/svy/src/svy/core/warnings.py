@@ -4,6 +4,7 @@ from __future__ import annotations
 import builtins
 import logging
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import IntEnum, StrEnum
 from typing import Any, Iterable, Sequence
@@ -127,10 +128,16 @@ class SvyWarning(msgspec.Struct, frozen=True):
 
 
 # ---------- Aggregation / escalation ----------
+@dataclass(eq=False)
 class SvyWarningsError(SvyError):
     """
     Escalation exception that keeps your formatting surfaces.
     """
+
+    def __post_init__(self) -> None:
+        # If caller didn't set a specific code, use a type-specific default.
+        if self.code == "SVY_ERROR":
+            self.code = "SVY_WARNINGS_ERROR"
 
     @classmethod
     def from_warnings(
