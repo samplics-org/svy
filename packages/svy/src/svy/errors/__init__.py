@@ -6,6 +6,7 @@ from .dimension_errors import DimensionError
 from .label_errors import LabelError
 from .method_errors import MethodError
 from .model_errors import ModelError
+from .serialization_errors import SerializationError
 
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "ModelError",
     # "ProbError",
     # "SinglePSUError",
+    "SerializationError",
     "SvyError",
     "DatasetError",
 ]

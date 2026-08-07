@@ -19,6 +19,8 @@ from svy.categorical.table import Table
 from svy.categorical.ttest import TTestOneGroup, TTestTwoGroups
 from svy.core.containers import ChiSquare
 from svy.core.describe import DescribeResult
+from svy.errors.model_errors import ModelError
+from svy.errors.serialization_errors import SerializationError
 from svy.estimation.estimate import Estimate, EstimateList
 from svy.regression.glm import GLMFit
 from svy.regression.prediction import GLMPred
@@ -397,24 +399,27 @@ def serialize(result: Any) -> ResultData:
 
     Raises
     ------
-    TypeError
-        If no serializer is registered for the result's type.
+    SerializationError
+        If no serializer is registered for the result's type
+        (code ``UNSUPPORTED_RESULT_TYPE``).
+    ModelError
+        If ``result`` is an unfitted ``GLM`` (code ``MODEL_NOT_FITTED``).
     """
     # Handle the GLM wrapper — GLM.fit() returns GLM, not GLMFit.
     from svy.regression.base import GLM
 
     if isinstance(result, GLM):
         if result.fitted is None:
-            raise ValueError("Cannot serialize an unfitted GLM model (call .fit() first).")
+            raise ModelError.not_fitted(where="serialize", method="serialize")
         result = result.fitted
 
     cls = type(result)
     serializer = _SERIALIZERS.get(cls)
 
     if serializer is None:
-        raise TypeError(
-            f"No serializer registered for {cls.__name__}. "
-            f"Registered types: {[c.__name__ for c in _SERIALIZERS]}"
+        raise SerializationError.unsupported_type(
+            got_type=cls.__name__,
+            registered=[c.__name__ for c in _SERIALIZERS],
         )
 
     return serializer(result)
@@ -437,12 +442,18 @@ def from_json(data: bytes) -> ResultData:
     The ``kind`` field in the JSON determines which struct type is returned.
     Discrimination is manual (not via msgspec's ``tag_field``) so that
     ``kind`` remains a real, accessible attribute on the decoded struct.
+
+    Raises
+    ------
+    SerializationError
+        If the payload has no ``kind`` field (code ``PAYLOAD_MISSING_KIND``)
+        or an unrecognized one (code ``PAYLOAD_UNKNOWN_KIND``).
     """
     raw = msgspec.json.decode(data)
     kind = raw.get("kind")
     if kind is None:
-        raise ValueError("JSON payload is missing the 'kind' discriminator.")
+        raise SerializationError.missing_kind()
     cls = _KIND_TO_STRUCT.get(kind)
     if cls is None:
-        raise ValueError(f"Unknown kind {kind!r}. Known kinds: {sorted(_KIND_TO_STRUCT)}")
+        raise SerializationError.unknown_kind(kind=kind, known=sorted(_KIND_TO_STRUCT))
     return msgspec.json.decode(data, type=cls)

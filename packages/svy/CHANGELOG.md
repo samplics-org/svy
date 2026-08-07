@@ -8,6 +8,19 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Changed
+
+- **`svy.serialize` raises svy's structured errors instead of bare built-ins.** The serialize module was the last public surface still raising `TypeError`/`ValueError` where the rest of the library uses the `SvyError` hierarchy — structured errors with a stable `code`, `expected`/`got` context, and a hint. The new `SerializationError` (exported as `svy.SerializationError`) covers the serialize-specific failures, and the unfitted-model case now reuses the same `ModelError` that `GLM.predict()` already raises:
+
+  | call | before | now | code |
+  | --- | --- | --- | --- |
+  | `serialize(<unsupported type>)` | `TypeError` | `SerializationError` | `UNSUPPORTED_RESULT_TYPE` |
+  | `serialize(<unfitted GLM>)` | `ValueError` | `ModelError` | `MODEL_NOT_FITTED` |
+  | `from_json(<no "kind">)` | `ValueError` | `SerializationError` | `PAYLOAD_MISSING_KIND` |
+  | `from_json(<unknown "kind">)` | `ValueError` | `SerializationError` | `PAYLOAD_UNKNOWN_KIND` |
+
+  **Breaking** for callers that catch the old built-ins: `SvyError` subclasses `Exception`, not `TypeError`/`ValueError`. Catch `SerializationError`/`ModelError` (or `svy.SvyError` to cover every svy failure) instead, or match on the `code` field, which is the stable contract.
+
 ## [0.23.0] — 2026-08-05
 
 ### Added

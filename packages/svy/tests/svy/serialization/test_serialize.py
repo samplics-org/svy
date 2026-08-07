@@ -439,14 +439,17 @@ def test_serialize_glm_wrapper_delegates_to_fitted():
 
 
 def test_serialize_unfitted_glm_raises():
-    """serialize() on an unfitted GLM raises ValueError."""
+    """serialize() on an unfitted GLM raises ModelError (MODEL_NOT_FITTED)."""
+    from svy.errors import ModelError
     from svy.regression.base import GLM
 
     glm = GLM.__new__(GLM)
     glm.fitted = None
 
-    with pytest.raises(ValueError, match="unfitted"):
+    with pytest.raises(ModelError, match="not been fitted") as exc_info:
         serialize(glm)
+    assert exc_info.value.code == "MODEL_NOT_FITTED"
+    assert exc_info.value.where == "serialize"
 
 
 # ---------------------------------------------------------------------------
@@ -491,9 +494,34 @@ def test_to_dict_returns_json_safe():
 
 
 def test_unregistered_type_raises():
-    """serialize() on an unregistered type raises TypeError."""
-    with pytest.raises(TypeError, match="No serializer"):
+    """serialize() on an unregistered type raises SerializationError."""
+    from svy.errors import SerializationError
+
+    with pytest.raises(SerializationError, match="No serializer") as exc_info:
         serialize("not a result object")
+    assert exc_info.value.code == "UNSUPPORTED_RESULT_TYPE"
+    assert exc_info.value.got == "str"
+    assert "Estimate" in (exc_info.value.expected or [])
+
+
+def test_from_json_missing_kind_raises():
+    """from_json() on a payload without 'kind' raises SerializationError."""
+    from svy.errors import SerializationError
+
+    with pytest.raises(SerializationError, match="kind") as exc_info:
+        from_json(b'{"schema_version": "svy-result/0.2"}')
+    assert exc_info.value.code == "PAYLOAD_MISSING_KIND"
+
+
+def test_from_json_unknown_kind_raises():
+    """from_json() on an unrecognized 'kind' raises SerializationError."""
+    from svy.errors import SerializationError
+
+    with pytest.raises(SerializationError, match="Unknown payload kind") as exc_info:
+        from_json(b'{"kind": "flux_capacitor"}')
+    assert exc_info.value.code == "PAYLOAD_UNKNOWN_KIND"
+    assert exc_info.value.got == "flux_capacitor"
+    assert "estimate" in (exc_info.value.expected or [])
 
 
 # ---------------------------------------------------------------------------

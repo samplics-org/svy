@@ -70,6 +70,7 @@ from svy.errors import (
     LabelError,
     MethodError,
     ModelError,
+    SerializationError,
     SvyError,
 )
 from svy.estimation import Estimate, EstimateList, Estimation, ParamEst
@@ -222,6 +223,7 @@ __all__ = [
     "LabelError",
     "MethodError",
     "ModelError",
+    "SerializationError",
     # --- Expressions ---
     "col",
     "cols",
