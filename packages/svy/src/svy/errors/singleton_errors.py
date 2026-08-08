@@ -30,6 +30,11 @@ else:
 
 @dataclass(eq=False)
 class SingletonError(SvyError):
+    def __post_init__(self) -> None:
+        # If caller didn't set a specific code, use a type-specific default.
+        if self.code == "SVY_ERROR":
+            self.code = "SINGLETON_ERROR"
+
     @classmethod
     def from_singletons(
         cls,
