@@ -6,6 +6,28 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+## [0.14.0] — 2026-08-10
+
+### Added
+
+- **Association kernels: design-based covariance and Pearson correlation** ([#124](https://github.com/samplics-org/svy/pull/124)). Both are smooth functions of the same six weighted totals, so they share one moment routine and differ only in the final combination and the linearization handed to the variance machinery. Exposed as `taylor_assoc` and `replicate_assoc`, which take column pairs rather than a single response.
+
+  The linearization is the load-bearing part. For the covariance the terms from estimating the means cancel identically, leaving `a*b - m_yx` — which is why R's `svymean(a*b*n/(n-1))` shortcut is exactly the delta method rather than an approximation. For the correlation they do not cancel, because the standard deviations are themselves estimated, so the score carries `-(rho/2)(yt² + xt²)`. Feeding a covariance-style score to a correlation would silently understate its variance.
+
+  Moments accumulate in two passes rather than from raw sums of squares: the one-pass form cancels catastrophically when the mean is large relative to the spread, and the second pass is free on the Taylor path since scores cannot be formed until rho and the means are known.
+
+  Two optimizations, both benchmarked. Replication precomputes the weight-independent products once, turning each replicate into six dot products — 12.8x faster at n=100k with 200 replicates. An all-pairs sweep builds the whole moment matrix in one pass, cutting column traffic from O(k²) to O(k): level at k=5, ~1.5–1.8x at k=10.
+
+- **The simple-random-sample reference for a design effect is now explicit.** `SrsRef` selects what the design variance is compared against — `WithReplacement` (`S²/n`) or `WithoutReplacement { pop_total }` (`S²/n · (1 - n/N)`) — and is threaded through every `srs_variance_*` kernel. The nine estimator entry points that report a design effect gain `deff_ref` and `deff_pop_total`; both default to the previous behaviour, so no reported number changes. `taylor_quantile`/`taylor_median` are untouched, having no design effect to report.
+
+  The finite-population correction is the only scale-dependent term in the whole calculation — the design variance and the population variance are both invariant to the weight scale. So once weights stop being reciprocals of selection probabilities, only that factor moves: halving them shifted a design effect by 0.94%, exactly the FPC ratio. `WithReplacement` omits it and is therefore scale-free.
+
+  A degenerate correction is reported as NaN rather than as an error. The kernels compute the reference on every call, including calls that never asked for a design effect, so failing there would break estimation for anyone whose weights merely sum to about `n` — unit weights being the obvious case. `svy` diagnoses it where the request is known.
+
+  The guard uses a tolerance rather than a sign test: weights normalized to sum to `n` land within ~1e-12 of it on either side, and a hair above zero yields an FPC near 1e-16 and a design effect of ~1e16. A genuine near-census design bottoms out around 1e-6, well clear of the threshold.
+
+  Validated against R survey 4.5 across five design shapes — stratified SRS, one-stage cluster, stratified plus cluster, each with and without a design fpc, plus domain variants — crossed with both references: 16 golden values, all reproduced. The design's own fpc and the reference's are independent, and a test asserts that directly rather than by coincidence of values.
+
 ## [0.13.0] — 2026-08-05
 
 ### Fixed
@@ -105,7 +127,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 Baseline for this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.13.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.14.0...HEAD
+[0.14.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.14.0
 [0.13.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.13.0
 [0.12.1]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.12.1
 [0.12.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.12.0

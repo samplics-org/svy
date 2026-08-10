@@ -15,6 +15,7 @@ accessor used to do this implicitly.
 
 from pathlib import Path
 
+import numpy as np
 import polars as pl
 import pytest
 import svy_rs as ps
@@ -812,3 +813,248 @@ def test_assoc_rejects_mismatched_pairs(assoc_df):
     """Pair columns are positional, so unequal lengths are a caller error."""
     with pytest.raises(Exception, match="equal length"):
         ps.taylor_assoc(assoc_df, ["y", "x"], ["x"], "corr", "w")
+
+
+# =============================================================================
+# SRS REFERENCE FOR THE DESIGN EFFECT (deff_ref)
+#
+# deff compares the design variance to a hypothetical SRS of the same size. The
+# two available references differ by exactly the finite-population correction
+# 1 - n/N, which is also the only scale-dependent part of the calculation --
+# so "wr" is invariant to the weight scale and "wor" is not. These tests drive
+# every entry point that exposes the knob, because the parameter was threaded
+# mechanically and a mis-wired estimator would otherwise go unnoticed.
+# =============================================================================
+
+
+@pytest.fixture
+def srs_ref_df():
+    rng = np.random.default_rng(11)
+    n = 1200
+    psu = rng.integers(0, 30, n)
+    return pl.DataFrame(
+        {
+            "stratum": (psu % 5).astype(str),
+            "psu": psu.astype(str),
+            "w": rng.uniform(20.0, 200.0, n),
+            "y": rng.normal(100.0, 20.0, n),
+            "x": np.clip(rng.normal(50.0, 8.0, n), 1.0, None),
+            "flag": (rng.random(n) < 0.4).astype(float),
+        }
+    )
+
+
+def _call(fn, df, **kw):
+    """Invoke an estimator with the design columns it needs."""
+    base = dict(weight_col="w", strata_col="stratum", psu_col="psu")
+    return fn(df, **base, **kw)
+
+
+_ESTIMATORS = [
+    ("mean", lambda df, **kw: _call(ps.taylor_mean, df, value_col="y", **kw)),
+    ("total", lambda df, **kw: _call(ps.taylor_total, df, value_col="y", **kw)),
+    ("ratio", lambda df, **kw: _call(ps.taylor_ratio, df, numerator_col="y", denominator_col="x", **kw)),
+    ("prop", lambda df, **kw: _call(ps.taylor_prop, df, value_col="flag", **kw)),
+    ("assoc", lambda df, **kw: ps.taylor_assoc(df, ["y"], ["x"], "corr", "w", strata_col="stratum", psu_col="psu", **kw)),
+    # Batched entry points are a separate plumbing route from the single-variable
+    # ones -- they build the design once and fan out over columns -- so the
+    # reference has to reach them independently. Row 0 is the first variable.
+    ("mean_multi", lambda df, **kw: _call(ps.taylor_mean_multi, df, value_cols=["y", "x"], **kw)),
+    ("total_multi", lambda df, **kw: _call(ps.taylor_total_multi, df, value_cols=["y", "x"], **kw)),
+    ("ratio_multi", lambda df, **kw: _call(ps.taylor_ratio_multi, df, numerator_cols=["y"], denominator_cols=["x"], **kw)),
+    ("prop_multi", lambda df, **kw: _call(ps.taylor_prop_multi, df, value_cols=["flag"], **kw)),
+    ("assoc_multi", lambda df, **kw: ps.taylor_assoc(df, ["y", "y"], ["x", "x"], "corr", "w", strata_col="stratum", psu_col="psu", **kw)),
+]
+
+
+@pytest.mark.parametrize("name,fn", _ESTIMATORS, ids=[e[0] for e in _ESTIMATORS])
+def test_wr_reference_is_scale_invariant(srs_ref_df, name, fn):
+    """Every estimator must honour the reference it is handed.
+
+    A mis-threaded argument shows up here: the with-replacement reference has
+    no N in it, so scaling the weights cannot move the design effect.
+    """
+    base = fn(srs_ref_df, deff_ref="wr")["deff"][0]
+    for scale in (0.5, 1000.0):
+        scaled = srs_ref_df.with_columns(pl.col("w") * scale)
+        assert fn(scaled, deff_ref="wr")["deff"][0] == pytest.approx(base, rel=1e-12), name
+
+
+@pytest.mark.parametrize("name,fn", _ESTIMATORS, ids=[e[0] for e in _ESTIMATORS])
+def test_wor_reference_moves_with_the_weight_scale(srs_ref_df, name, fn):
+    """The mirror image: the without-replacement reference carries the FPC, so
+    it does depend on the weight scale. This is the behaviour that made
+    rescaled weights shift deff silently."""
+    base = fn(srs_ref_df, deff_ref="wor")["deff"][0]
+    halved = srs_ref_df.with_columns(pl.col("w") * 0.5)
+    assert fn(halved, deff_ref="wor")["deff"][0] != pytest.approx(base, rel=1e-9), name
+
+
+@pytest.mark.parametrize("name,fn", _ESTIMATORS, ids=[e[0] for e in _ESTIMATORS])
+def test_default_reference_is_without_replacement(srs_ref_df, name, fn):
+    """Omitting the argument must reproduce the historical behaviour exactly."""
+    assert fn(srs_ref_df)["deff"][0] == pytest.approx(
+        fn(srs_ref_df, deff_ref="wor")["deff"][0], rel=1e-15
+    ), name
+
+
+@pytest.mark.parametrize("name,fn", _ESTIMATORS, ids=[e[0] for e in _ESTIMATORS])
+def test_references_differ_by_the_finite_population_correction(srs_ref_df, name, fn):
+    """The whole basis for saying the choice is immaterial at small sampling
+    fractions: the two differ by 1 - n/N and nothing else."""
+    n = srs_ref_df.height
+    fpc = 1.0 - n / srs_ref_df["w"].sum()
+    wor = fn(srs_ref_df, deff_ref="wor")["deff"][0]
+    wr = fn(srs_ref_df, deff_ref="wr")["deff"][0]
+    assert wor / wr == pytest.approx(1.0 / fpc, rel=1e-10), name
+
+
+@pytest.mark.parametrize("name,fn", _ESTIMATORS, ids=[e[0] for e in _ESTIMATORS])
+def test_declared_pop_total_survives_normalized_weights(srs_ref_df, name, fn):
+    """Weights normalized to sum to n destroy the inferred N, but a design that
+    declares its own population size still gets the correct reference."""
+    n = srs_ref_df.height
+    true_n = srs_ref_df["w"].sum()
+    normalized = srs_ref_df.with_columns(pl.col("w") / true_n * n)
+
+    recovered = fn(normalized, deff_ref="wor", deff_pop_total=float(true_n))["deff"][0]
+    assert recovered == pytest.approx(fn(srs_ref_df, deff_ref="wor")["deff"][0], rel=1e-9), name
+
+    # Without it the correction is degenerate, reported as NaN for the Python
+    # layer to diagnose rather than as a failure here.
+    assert np.isnan(fn(normalized, deff_ref="wor")["deff"][0]), name
+
+
+@pytest.mark.parametrize("name,fn", _ESTIMATORS, ids=[e[0] for e in _ESTIMATORS])
+def test_unknown_reference_is_rejected(srs_ref_df, name, fn):
+    with pytest.raises(Exception, match="unknown deff reference"):
+        fn(srs_ref_df, deff_ref="srswor")
+
+
+# =============================================================================
+# DESIGN FPC x SRS REFERENCE x DESIGN SHAPE  (R golden, survey 4.5)
+#
+# Two finite-population corrections are in play and they are independent:
+# the design's own fpc corrects the variance (numerator), while deff_ref
+# decides whether the SRS reference carries one (denominator). Crossing them
+# across design shapes is the only way to show neither leaks into the other.
+#
+#   st  <- svydesign(id=~1,    strata=~stype, weights=~pw,           data=apistrat)
+#   stf <- svydesign(id=~1,    strata=~stype, weights=~pw, fpc=~fpc, data=apistrat)
+#   cl  <- svydesign(id=~dnum,                weights=~pw,           data=apiclus1)
+#   clf <- svydesign(id=~dnum,                weights=~pw, fpc=~fpc, data=apiclus1)
+#   sc  <- svydesign(id=~dnum, strata=~stype, weights=~pw, data=apiclus1, nest=TRUE)
+#   svymean(~api00, d, deff=TRUE)       # -> "wor"
+#   svymean(~api00, d, deff="replace")  # -> "wr"
+#
+# Domain rows come from subset(d, sch.wide == "Yes"), where R uses that
+# subset's own n and sum of weights in the reference -- so each domain gets a
+# different correction. That is the case most likely to drift, which is why it
+# is pinned rather than assumed.
+# =============================================================================
+
+# (shape, design fpc applied, domain) -> (se, deff_wor, deff_wr)
+_R_DEFF_MATRIX = {
+    ("stratSRS", False, False): (9.5361322969, 1.237241445022, 1.197291769419),
+    ("stratSRS", True, False): (9.4089408028, 1.204457268538, 1.165566171454),
+    ("cluster", False, False): (23.7790107209, 9.534802121425, 9.253099070589),
+    ("cluster", True, False): (23.5422406938, 9.345869450591, 9.069748362453),
+    ("strat+cluster", False, False): (18.3076135248, 5.651810485034, 5.484829331560),
+    ("stratSRS", False, True): (10.6540738828, 1.228801107524, 1.192380187135),
+    ("stratSRS", True, True): (10.5203892001, 1.198157193016, 1.162644539689),
+    ("cluster", False, True): (23.6621771021, 8.044653756919, 7.806976721006),
+}
+
+# shape -> (csv, psu column, stratum column)
+_DEFF_SHAPES = {
+    "stratSRS": ("apistrat_deff.csv", None, "stype"),
+    "cluster": ("apiclus1_deff.csv", "dnum", None),
+    "strat+cluster": ("apiclus1_deff.csv", "dnum", "stype"),
+}
+
+
+def _deff_frame(csv: str, psu: str | None, stratum: str | None) -> pl.DataFrame:
+    """Load an api dataset with the FPC expressed the way the kernel wants it.
+
+    The kernel takes the correction factor ``(N_h - n_h) / N_h``, not the raw
+    stratum population that R's ``fpc=`` accepts. ``n_h`` counts PSUs, so for a
+    design without clusters every row is its own PSU.
+    """
+    df = pl.read_csv(
+        Path(__file__).parent.parent / "data" / csv, infer_schema_length=10000
+    ).with_columns(
+        pl.col("pw").cast(pl.Float64),
+        pl.col("api00").cast(pl.Float64),
+        pl.col("fpc").cast(pl.Float64),
+        pl.col("stype").cast(pl.String),
+        pl.col("dnum").cast(pl.String),
+        pl.col("sch.wide").cast(pl.String),
+    )
+    unit = psu
+    if unit is None:
+        df = df.with_columns(pl.int_range(pl.len()).cast(pl.String).alias("__unit"))
+        unit = "__unit"
+    n_h = pl.col(unit).n_unique().over(stratum) if stratum else pl.col(unit).n_unique()
+    return df.with_columns(((pl.col("fpc") - n_h) / pl.col("fpc")).alias("fpcf"))
+
+
+@pytest.mark.parametrize("key", sorted(_R_DEFF_MATRIX))
+@pytest.mark.parametrize("ref", ["wor", "wr"])
+def test_deff_matches_r_across_designs(key, ref):
+    shape, use_fpc, domain = key
+    se, deff_wor, deff_wr = _R_DEFF_MATRIX[key]
+    csv, psu, stratum = _DEFF_SHAPES[shape]
+
+    out = ps.taylor_mean(
+        _deff_frame(csv, psu, stratum),
+        value_col="api00",
+        weight_col="pw",
+        strata_col=stratum,
+        psu_col=psu,
+        fpc_col="fpcf" if use_fpc else None,
+        by_col="sch.wide" if domain else None,
+        deff_ref=ref,
+    )
+    row = (
+        [r for r in out.to_dicts() if r["sch.wide"] == "Yes"][0]
+        if domain
+        else out.to_dicts()[0]
+    )
+    assert row["se"] == pytest.approx(se, rel=1e-9)
+    assert row["deff"] == pytest.approx(deff_wor if ref == "wor" else deff_wr, rel=1e-10)
+
+
+@pytest.mark.parametrize("key", sorted(_R_DEFF_MATRIX))
+def test_the_two_corrections_stay_independent(key):
+    """The reference must never touch the standard error, and the wor/wr ratio
+    must be 1/(1 - n/N) whether or not the design carries its own fpc. If
+    either correction leaked into the other, one of these would fail."""
+    shape, use_fpc, domain = key
+    csv, psu, stratum = _DEFF_SHAPES[shape]
+    df = _deff_frame(csv, psu, stratum)
+
+    got = {}
+    for ref in ("wor", "wr"):
+        out = ps.taylor_mean(
+            df,
+            value_col="api00",
+            weight_col="pw",
+            strata_col=stratum,
+            psu_col=psu,
+            fpc_col="fpcf" if use_fpc else None,
+            by_col="sch.wide" if domain else None,
+            deff_ref=ref,
+        )
+        got[ref] = (
+            [r for r in out.to_dicts() if r["sch.wide"] == "Yes"][0]
+            if domain
+            else out.to_dicts()[0]
+        )
+
+    assert got["wor"]["se"] == pytest.approx(got["wr"]["se"], rel=1e-15)
+
+    # n and sum(w) are the domain's own when a domain is in play, which is what
+    # makes each domain carry a different correction.
+    sub = df.filter(pl.col("sch.wide") == "Yes") if domain else df
+    expected = 1.0 / (1.0 - sub.height / sub["pw"].sum())
+    assert got["wor"]["deff"] / got["wr"]["deff"] == pytest.approx(expected, rel=1e-9)

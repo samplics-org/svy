@@ -87,7 +87,7 @@ def test_mean_domain_estimates(synthetic_sample_df, design_kwargs, expected):
     """Test mean estimation by education domain."""
     design = Design(**design_kwargs)
     sample = Sample(data=synthetic_sample_df, design=design)
-    est = sample.estimation.mean(y="income", by="educ", deff=True, drop_nulls=True)
+    est = sample.estimation.mean(y="income", by="educ", deff="wor", drop_nulls=True)
 
     estimates = est.estimates if isinstance(est.estimates, list) else [est.estimates]
 
@@ -214,7 +214,7 @@ def test_prop_estimation_variants(synthetic_sample_df, design_kwargs, expected):
     """Test proportion estimation for both levels under different survey design configurations."""
     design = Design(**design_kwargs)
     sample = Sample(data=synthetic_sample_df, design=design)
-    est = sample.estimation.prop(y="resp2_new", deff=True, drop_nulls=True)
+    est = sample.estimation.prop(y="resp2_new", deff="wor", drop_nulls=True)
     estimates = [est.estimates] if isinstance(est.estimates, ParamEst) else est.estimates
 
     for result in estimates:
@@ -353,7 +353,7 @@ def test_proportion_domain_estimates(synthetic_sample_df, design_kwargs, expecte
     """Test proportion estimates by education domain and response level."""
     design = Design(**design_kwargs)
     sample = Sample(data=synthetic_sample_df, design=design)
-    est = sample.estimation.prop(y="resp2_new", by="educ", deff=True, drop_nulls=True)
+    est = sample.estimation.prop(y="resp2_new", by="educ", deff="wor", drop_nulls=True)
 
     estimates = est.estimates if isinstance(est.estimates, list) else [est.estimates]
 
@@ -438,7 +438,7 @@ def test_ratio_estimation_variants(synthetic_sample_df, design_kwargs, expected)
     """Test total estimation under different survey design configurations."""
     design = Design(**design_kwargs)
     sample = Sample(data=synthetic_sample_df, design=design)
-    est = sample.estimation.ratio(y="income", x="fam_size", deff=True, drop_nulls=True)
+    est = sample.estimation.ratio(y="income", x="fam_size", deff="wor", drop_nulls=True)
 
     if isinstance(est.estimates, ParamEst):
         result = est.estimates
@@ -517,7 +517,7 @@ def test_ratio_domain_estimates(synthetic_sample_df, design_kwargs, expected):
     """Test ratio estimation by education domain."""
     design = Design(**design_kwargs)
     sample = Sample(data=synthetic_sample_df, design=design)
-    est = sample.estimation.ratio(y="income", x="fam_size", by="educ", deff=True, drop_nulls=True)
+    est = sample.estimation.ratio(y="income", x="fam_size", by="educ", deff="wor", drop_nulls=True)
 
     estimates = est.estimates if isinstance(est.estimates, list) else [est.estimates]
 

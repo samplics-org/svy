@@ -17,7 +17,7 @@ from svy.core.data_prep import prepare_data
 from svy.core.enumerations import EstimationMethod, PopParam
 from svy.core.enumerations import QuantileMethod as _QuantileMethod
 from svy.core.types import WhereArg
-from svy.errors import DimensionError
+from svy.errors import DimensionError, MethodError
 from svy.errors.singleton_errors import SingletonError
 from svy.estimation.estimate import Estimate, EstimateList, ParamEst
 from svy.estimation.replication import (
@@ -436,6 +436,72 @@ class Estimation:
         )
 
     @staticmethod
+    def _normalize_deff(deff: object) -> str | None:
+        """Canonicalize ``deff`` to ``"wor"``, ``"wr"`` or ``None``.
+
+        ``deff`` names the simple-random-sample reference the design variance is
+        compared against; it says nothing about how the sample was drawn. The
+        two references differ by exactly the finite-population correction
+        ``1 - n/N``, so they agree closely when the sampling fraction is small
+        and diverge sharply when it is not -- at a 50% sampling rate they differ
+        by a factor of two.
+
+        Booleans are rejected rather than mapped. ``True`` used to select the
+        without-replacement reference, but it never said which reference it
+        meant, and quietly accepting an undocumented spelling would leave two
+        ways to ask for the same thing indefinitely. Rejecting it loudly also
+        avoids the trap that ``Literal`` is not enforced at runtime: a
+        string-only implementation would read ``deff=True`` as "off" and
+        silently stop reporting a design effect the caller asked for.
+        """
+        if deff is None:
+            return None
+        if isinstance(deff, bool):
+            hint = (
+                "Use deff='wor' for the reference True used to select, or "
+                "deff='wr' for the with-replacement reference (Kish's deft^2), "
+                "which needs no population size and is unaffected by rescaled "
+                "weights."
+                if deff
+                else "Omit the argument, or pass deff=None."
+            )
+            raise MethodError(
+                title=f"deff no longer accepts {deff!r}",
+                detail=(
+                    "deff now names the SRS reference the design variance is "
+                    "compared against: 'wor' (without replacement, the previous "
+                    "behaviour) or 'wr' (with replacement). A boolean cannot say "
+                    "which reference is wanted."
+                ),
+                code="DEFF_BOOL_REJECTED",
+                where="estimation.deff",
+                param="deff",
+                expected="'wor', 'wr', or None",
+                got=deff,
+                hint=hint,
+            )
+        m = str(deff).lower().replace("_", "-").strip()
+        m = {
+            "without-replacement": "wor",
+            "srswor": "wor",
+            "with-replacement": "wr",
+            "srswr": "wr",
+            "replace": "wr",  # R spells the with-replacement reference this way
+        }.get(m, m)
+        if m not in ("wor", "wr"):
+            raise MethodError(
+                title=f"Unknown deff reference {deff!r}",
+                detail="deff selects the SRS reference: 'wor' or 'wr'.",
+                code="DEFF_REFERENCE_UNKNOWN",
+                where="estimation.deff",
+                param="deff",
+                expected="'wor', 'wr', or None",
+                got=deff,
+                hint="Use deff='wor' for Kish's design effect, deff='wr' for deft^2.",
+            )
+        return m
+
+    @staticmethod
     def _normalize_ci_method(method: str) -> str:
         """Normalize CI method name to canonical form.
 
@@ -705,6 +771,38 @@ class Estimation:
             else np.zeros(n_rows, dtype=np.int64)
         )
         deff_arr = result_df["deff"].to_numpy() if (deff and "deff" in result_df.columns) else None
+
+        if deff_arr is not None and n_rows and bool(np.all(np.isnan(deff_arr))):
+            # The with-replacement reference has no N in it and cannot go
+            # degenerate, so an entirely missing design effect means the
+            # without-replacement correction 1 - n/N collapsed: the weights sum
+            # to no more than the sample size. Raise rather than hand back a
+            # column of NaN, which reads as "no design effect" instead of "this
+            # could not be computed". A partially missing column is left alone --
+            # one degenerate by-group should not fail the whole call.
+            raise MethodError(
+                title="Design effect is not computable for this design",
+                detail=(
+                    "The without-replacement reference divides by 1 - n/N, with "
+                    "N taken from the sum of the weights. Here that sum is no "
+                    "greater than the sample size, so the correction is zero or "
+                    "negative and no design effect exists. Either the weights "
+                    "have been rescaled -- normalize() makes them sum to the "
+                    "sample size -- and no longer count population units, or "
+                    "this is a census, in which case there is no sampling "
+                    "variance to compare against."
+                ),
+                code="DEFF_NOT_COMPUTABLE",
+                where="estimation.deff",
+                param="deff",
+                expected="weights summing to more than the sample size",
+                got="sum(weights) <= n",
+                hint=(
+                    "Use deff='wr', which compares against a with-replacement "
+                    "reference, needs no population size and is unaffected by "
+                    "rescaled weights."
+                ),
+            )
 
         t_crits = self._t_crit_arr(alpha, df_arr)
 
@@ -997,10 +1095,12 @@ class Estimation:
         by_cols,
         as_factor,
         method: EstimationMethod = EstimationMethod.TAYLOR,
+        deff_ref: str | None = None,
     ) -> Estimate:
         metadata = getattr(self._sample, "_metadata", None)
         estimate = Estimate(param, alpha=alpha, metadata=metadata)
         estimate.method = method
+        estimate.deff_ref = deff_ref
         estimate.covariance = est_cov
         estimate.as_factor = as_factor
         if by_cols and len(by_cols) > 0:
@@ -1249,7 +1349,7 @@ class Estimation:
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
         method: Literal["taylor", "replication"] | None = None,
-        deff: bool = False,
+        deff: Literal["wor", "wr"] | None = None,
         fay_coef: float = 0.0,
         as_factor: bool = False,
         variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
@@ -1266,15 +1366,45 @@ class Estimation:
             returned (one per variable, in order); a single string returns a
             single ``Estimate``. For ungrouped Taylor means the list form shares
             one design build across variables (faster than a manual loop).
+        deff : {'wor', 'wr'} | None, default None
+            Report the design effect against a simple-random-sample reference.
+            ``None`` omits it.
+
+            The reference is a modelling choice about the *denominator*; it says
+            nothing about how the sample was drawn. ``'wor'`` compares against
+            SRS without replacement (Kish's design effect); ``'wr'`` compares
+            against SRS with replacement (the square of Kish's "deft"). The two
+            differ by exactly the finite-population correction ``1 - n/N``, so
+            they agree closely when the sampling fraction is small and diverge
+            sharply when it is not -- at a 50% sampling rate, common in
+            evaluation studies, they differ by a factor of two, and ``'wor'``
+            grows without bound as the sample approaches a census.
+
+            ``'wor'`` infers ``N`` from the sum of the weights, so it is only
+            meaningful while the weights remain reciprocals of selection
+            probabilities. After ``normalize``, and to a lesser degree after
+            raking or calibration, that sum is no longer a population count and
+            the design effect is silently wrong -- svy cannot detect this in
+            general, since it cannot tell a rescaled weight vector from a small
+            population. ``'wr'`` has no ``N`` in it at all and is therefore
+            unaffected; prefer it whenever the weights have been rescaled.
+
+            The one detectable case raises: if the weights sum to no more than
+            the sample size, the correction is non-positive and no design effect
+            exists to report.
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design (Taylor when strata/PSU
             are available, replication otherwise).
         """
+        deff_ref = self._normalize_deff(deff)
+
         if not isinstance(y, str):
             ys = list(y)
             return self._taylor_multi(
                 ys,
+                # `single_call` re-enters mean(), which normalizes again, so it
+                # must carry the caller's spelling rather than the canonical one.
                 single_call=lambda yy: self.mean(
                     yy,
                     by=by,
@@ -1288,7 +1418,7 @@ class Estimation:
                     drop_nulls=drop_nulls,
                 ),
                 batched_call=lambda prep: _taylor_mean_multi(
-                    self, prep=prep, ys=ys, deff=deff, alpha=alpha
+                    self, prep=prep, ys=ys, deff_ref=deff_ref, alpha=alpha
                 ),
                 prep_y=(ys[0] if ys else ""),
                 prep_extra_cols=ys[1:],
@@ -1320,7 +1450,7 @@ class Estimation:
                     self,
                     prep=prep,
                     y=y,
-                    deff=deff,
+                    deff_ref=deff_ref,
                     alpha=alpha,
                     as_factor=as_factor,
                     param=PopParam.MEAN,
@@ -1356,7 +1486,7 @@ class Estimation:
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
         method: Literal["taylor", "replication"] | None = None,
-        deff: bool = False,
+        deff: Literal["wor", "wr"] | None = None,
         fay_coef: float = 0.0,
         as_factor: bool = False,
         variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
@@ -1371,10 +1501,38 @@ class Estimation:
             A single response column, or a list of columns. A list returns a
             ``list[Estimate]`` (one per variable, in order); ungrouped Taylor
             totals share one design build across variables.
+        deff : {'wor', 'wr'} | None, default None
+            Report the design effect against a simple-random-sample reference.
+            ``None`` omits it.
+
+            The reference is a modelling choice about the *denominator*; it says
+            nothing about how the sample was drawn. ``'wor'`` compares against
+            SRS without replacement (Kish's design effect); ``'wr'`` compares
+            against SRS with replacement (the square of Kish's "deft"). The two
+            differ by exactly the finite-population correction ``1 - n/N``, so
+            they agree closely when the sampling fraction is small and diverge
+            sharply when it is not -- at a 50% sampling rate, common in
+            evaluation studies, they differ by a factor of two, and ``'wor'``
+            grows without bound as the sample approaches a census.
+
+            ``'wor'` infers ``N`` from the sum of the weights, so it is only
+            meaningful while the weights remain reciprocals of selection
+            probabilities. After ``normalize``, and to a lesser degree after
+            raking or calibration, that sum is no longer a population count and
+            the design effect is silently wrong -- svy cannot detect this in
+            general, since it cannot tell a rescaled weight vector from a small
+            population. ``'wr'`` has no ``N`` in it at all and is therefore
+            unaffected; prefer it whenever the weights have been rescaled.
+
+            The one detectable case raises: if the weights sum to no more than
+            the sample size, the correction is non-positive and no design effect
+            exists to report.
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
         """
+        deff_ref = self._normalize_deff(deff)
+
         if not isinstance(y, str):
             ys = list(y)
             return self._taylor_multi(
@@ -1392,7 +1550,7 @@ class Estimation:
                     drop_nulls=drop_nulls,
                 ),
                 batched_call=lambda prep: _taylor_total_multi(
-                    self, prep=prep, ys=ys, deff=deff, alpha=alpha
+                    self, prep=prep, ys=ys, deff_ref=deff_ref, alpha=alpha
                 ),
                 prep_y=(ys[0] if ys else ""),
                 prep_extra_cols=ys[1:],
@@ -1424,7 +1582,7 @@ class Estimation:
                     self,
                     prep=prep,
                     y=y,
-                    deff=deff,
+                    deff_ref=deff_ref,
                     alpha=alpha,
                     as_factor=as_factor,
                 )
@@ -1460,7 +1618,7 @@ class Estimation:
         where: WhereArg = None,
         method: Literal["taylor", "replication"] | None = None,
         ci_method: Literal["logit", "beta", "korn-graubard", "wilson"] = "logit",
-        deff: bool = False,
+        deff: Literal["wor", "wr"] | None = None,
         fay_coef: float = 0.0,
         variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
         alpha: float = 0.05,
@@ -1474,10 +1632,38 @@ class Estimation:
             A single category column, or a list. A list returns a
             ``list[Estimate]`` (one multi-row, per-level estimate per variable);
             ungrouped Taylor proportions share one design build across variables.
+        deff : {'wor', 'wr'} | None, default None
+            Report the design effect against a simple-random-sample reference.
+            ``None`` omits it.
+
+            The reference is a modelling choice about the *denominator*; it says
+            nothing about how the sample was drawn. ``'wor'`` compares against
+            SRS without replacement (Kish's design effect); ``'wr'`` compares
+            against SRS with replacement (the square of Kish's "deft"). The two
+            differ by exactly the finite-population correction ``1 - n/N``, so
+            they agree closely when the sampling fraction is small and diverge
+            sharply when it is not -- at a 50% sampling rate, common in
+            evaluation studies, they differ by a factor of two, and ``'wor'``
+            grows without bound as the sample approaches a census.
+
+            ``'wor'` infers ``N`` from the sum of the weights, so it is only
+            meaningful while the weights remain reciprocals of selection
+            probabilities. After ``normalize``, and to a lesser degree after
+            raking or calibration, that sum is no longer a population count and
+            the design effect is silently wrong -- svy cannot detect this in
+            general, since it cannot tell a rescaled weight vector from a small
+            population. ``'wr'`` has no ``N`` in it at all and is therefore
+            unaffected; prefer it whenever the weights have been rescaled.
+
+            The one detectable case raises: if the weights sum to no more than
+            the sample size, the correction is non-positive and no design effect
+            exists to report.
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
         """
+        deff_ref = self._normalize_deff(deff)
+
         if not isinstance(y, str):
             ys = list(y)
             return self._taylor_multi(
@@ -1495,7 +1681,7 @@ class Estimation:
                     drop_nulls=drop_nulls,
                 ),
                 batched_call=lambda prep: _taylor_prop_multi(
-                    self, prep=prep, ys=ys, deff=deff, alpha=alpha, ci_method=ci_method
+                    self, prep=prep, ys=ys, deff_ref=deff_ref, alpha=alpha, ci_method=ci_method
                 ),
                 prep_y=(ys[0] if ys else ""),
                 prep_extra_cols=ys[1:],
@@ -1527,7 +1713,7 @@ class Estimation:
                     self,
                     prep=prep,
                     y=y,
-                    deff=deff,
+                    deff_ref=deff_ref,
                     alpha=alpha,
                     ci_method=ci_method,
                 )
@@ -1564,7 +1750,7 @@ class Estimation:
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
         method: Literal["taylor", "replication"] | None = None,
-        deff: bool = False,
+        deff: Literal["wor", "wr"] | None = None,
         fay_coef: float = 0.0,
         variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
         alpha: float = 0.05,
@@ -1579,10 +1765,38 @@ class Estimation:
             batched and returns a ``list[Estimate]``: numerator/denominator are
             paired element-wise (a scalar side is broadcast to the other's
             length). Ungrouped Taylor ratios share one design build.
+        deff : {'wor', 'wr'} | None, default None
+            Report the design effect against a simple-random-sample reference.
+            ``None`` omits it.
+
+            The reference is a modelling choice about the *denominator*; it says
+            nothing about how the sample was drawn. ``'wor'`` compares against
+            SRS without replacement (Kish's design effect); ``'wr'`` compares
+            against SRS with replacement (the square of Kish's "deft"). The two
+            differ by exactly the finite-population correction ``1 - n/N``, so
+            they agree closely when the sampling fraction is small and diverge
+            sharply when it is not -- at a 50% sampling rate, common in
+            evaluation studies, they differ by a factor of two, and ``'wor'``
+            grows without bound as the sample approaches a census.
+
+            ``'wor'` infers ``N`` from the sum of the weights, so it is only
+            meaningful while the weights remain reciprocals of selection
+            probabilities. After ``normalize``, and to a lesser degree after
+            raking or calibration, that sum is no longer a population count and
+            the design effect is silently wrong -- svy cannot detect this in
+            general, since it cannot tell a rescaled weight vector from a small
+            population. ``'wr'`` has no ``N`` in it at all and is therefore
+            unaffected; prefer it whenever the weights have been rescaled.
+
+            The one detectable case raises: if the weights sum to no more than
+            the sample size, the correction is non-positive and no design effect
+            exists to report.
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
         """
+        deff_ref = self._normalize_deff(deff)
+
         if not (isinstance(y, str) and isinstance(x, str)):
             ys = [y] if isinstance(y, str) else list(y)
             xs = [x] if isinstance(x, str) else list(x)
@@ -1625,7 +1839,7 @@ class Estimation:
                     prep=prep,
                     ys=[p[0] for p in pairs],
                     xs=[p[1] for p in pairs],
-                    deff=deff,
+                    deff_ref=deff_ref,
                     alpha=alpha,
                 ),
                 prep_y=(ys[0] if ys else ""),
@@ -1659,7 +1873,7 @@ class Estimation:
                     prep=prep,
                     y=y,
                     x=x,
-                    deff=deff,
+                    deff_ref=deff_ref,
                     alpha=alpha,
                 )
             else:
@@ -1695,7 +1909,7 @@ class Estimation:
         where,
         method,
         ci_method: str,
-        deff: bool,
+        deff_ref: str | None,
         fay_coef: float,
         variance_center: str,
         alpha: float,
@@ -1733,7 +1947,7 @@ class Estimation:
                     prep=prep,
                     pairs=pairs,
                     param=param,
-                    deff=deff,
+                    deff_ref=deff_ref,
                     alpha=alpha,
                     ci_method=ci_method,
                 )
@@ -1768,7 +1982,7 @@ class Estimation:
         where: WhereArg = None,
         method: Literal["taylor", "replication"] | None = None,
         ci_method: Literal["fisher", "wald"] = "fisher",
-        deff: bool = False,
+        deff: Literal["wor", "wr"] | None = None,
         fay_coef: float = 0.0,
         variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
         alpha: float = 0.05,
@@ -1814,6 +2028,8 @@ class Estimation:
         """
         _guard_pandas_method(method)
         _normalize_assoc_kind(kind)
+        deff_ref = self._normalize_deff(deff)
+        deff_ref = self._normalize_deff(deff)
         return self._assoc(
             PopParam.CORR,
             cols,
@@ -1821,7 +2037,7 @@ class Estimation:
             where=where,
             method=method,
             ci_method=ci_method,
-            deff=deff,
+            deff_ref=deff_ref,
             fay_coef=fay_coef,
             variance_center=variance_center,
             alpha=alpha,
@@ -1835,7 +2051,7 @@ class Estimation:
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
         method: Literal["taylor", "replication"] | None = None,
-        deff: bool = False,
+        deff: Literal["wor", "wr"] | None = None,
         fay_coef: float = 0.0,
         variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
         alpha: float = 0.05,
@@ -1855,6 +2071,7 @@ class Estimation:
         Estimate
             One row per pair, or per (group, pair) when ``by`` is set.
         """
+        deff_ref = self._normalize_deff(deff)
         return self._assoc(
             PopParam.COV,
             cols,
@@ -1862,7 +2079,7 @@ class Estimation:
             where=where,
             method=method,
             ci_method="wald",
-            deff=deff,
+            deff_ref=deff_ref,
             fay_coef=fay_coef,
             variance_center=variance_center,
             alpha=alpha,

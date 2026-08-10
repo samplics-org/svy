@@ -85,6 +85,7 @@ class Estimate:
         "singletons",
         "domains",
         "method",
+        "deff_ref",
         "n_strata",
         "n_psus",
         "as_factor",
@@ -112,6 +113,10 @@ class Estimate:
         self.singletons: Sequence[Category] = []
         self.domains: Sequence[Category] = []
         self.method: EstimationMethod = EstimationMethod.TAYLOR
+        #: Which SRS reference the design effect was measured against, or None
+        #: when no design effect was requested. Recorded because a deff is
+        #: ambiguous without it: the two references differ by 1 - n/N.
+        self.deff_ref: str | None = None
         self.n_strata: int = 0
         self.n_psus: int = 0
         self.as_factor: bool = False
@@ -172,6 +177,17 @@ class Estimate:
     def use_labels(self, value: bool | None) -> None:
         """Set per-instance label usage preference."""
         self._use_labels = value
+
+    def _context(self) -> str:
+        """Variance method, plus the design-effect reference when one applies.
+
+        The reference belongs in the header rather than the frame: a deff is
+        ambiguous without it, since the two references differ by 1 - n/N, but
+        `to_polars` deliberately carries no provenance at all.
+        """
+        if self.deff_ref:
+            return f"{self.method.name}, deff={self.deff_ref}"
+        return self.method.name
 
     @classmethod
     def set_default_use_labels(cls, use: bool) -> None:
@@ -374,9 +390,9 @@ class Estimate:
         """
         df = self.to_polars_printable()
         if df.is_empty():
-            return f"Estimate: {self.param.name} ({self.method.name}) — <no estimates>"
+            return f"Estimate: {self.param.name} ({self._context()}) — <no estimates>"
 
-        lines = [f"Estimate: {self.param.name} ({self.method.name})"]
+        lines = [f"Estimate: {self.param.name} ({self._context()})"]
         if self.where_clause:
             lines.append(f"  where: {self.where_clause}")
         lines.append("")
@@ -448,7 +464,7 @@ class Estimate:
 
         content.append(table)
 
-        title = f"Estimate: [bold]{self.param.name}[/bold] ({self.method.name})"
+        title = f"Estimate: [bold]{self.param.name}[/bold] ({self._context()})"
 
         # PANEL CONFIGURATION
         yield make_panel(content, title=title, obj=self, kind="estimate")

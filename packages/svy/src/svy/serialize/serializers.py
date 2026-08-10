@@ -275,6 +275,7 @@ def _serialize_estimate(result: Estimate) -> EstimateData:
         n_psus=_i(result.n_psus),
         where_clause=result.where_clause,
         q_method=_enum(result.q_method),
+        deff_ref=result.deff_ref,
     )
 
 

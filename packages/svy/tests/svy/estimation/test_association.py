@@ -245,7 +245,7 @@ def test_param_carries_the_full_word(sample):
 
 
 def test_deff_exceeds_one_under_clustering(sample):
-    r = _row(sample.estimation.corr(("y", "x"), deff=True))
+    r = _row(sample.estimation.corr(("y", "x"), deff="wor"))
     assert r["deff"] > 1.0
 
 

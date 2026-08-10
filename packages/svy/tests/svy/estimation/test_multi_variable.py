@@ -54,7 +54,7 @@ def multi_sample() -> Sample:
     return Sample(df, Design(stratum="stratum", psu="psu", wgt="weight"))
 
 
-def _batched_and_loop(est, kind, ys, cs, *, where=None, by=None, deff=False):
+def _batched_and_loop(est, kind, ys, cs, *, where=None, by=None, deff=None):
     """Return (list_result, per-variable-loop_result) for the given estimator."""
     opts = dict(where=where, by=by)
     if kind == "ratio":
@@ -104,7 +104,7 @@ def test_by_falls_back_to_loop(multi_sample, kind):
 
 @pytest.mark.parametrize("kind", DEFF)
 def test_deff_matches_loop(multi_sample, kind):
-    _assert_matches_loop(*_batched_and_loop(multi_sample.estimation, kind, YS, CS, deff=True))
+    _assert_matches_loop(*_batched_and_loop(multi_sample.estimation, kind, YS, CS, deff="wor"))
 
 
 @pytest.mark.parametrize("kind", ALL)

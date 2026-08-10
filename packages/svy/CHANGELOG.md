@@ -8,7 +8,48 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+## [0.24.0] — 2026-08-10
+
+### Added
+
+- **`corr` and `cov`: design-based correlation and covariance** ([#124](https://github.com/samplics-org/svy/pull/124)). Both are available on `sample.estimation` with Taylor and replication variance, `by=`, `where=`, domains and `deff`.
+
+  Neither statistic has a direction, so neither takes `y`/`x`. A call names a set of columns through one symmetric `cols` argument, and every requested pair is returned as its own row:
+
+  ```python
+  sample.estimation.corr(("income", "age"))                        # one pair
+  sample.estimation.corr(["income", "age", "educ"])                # every unique pair
+  sample.estimation.corr([("income", "age"), ("income", "educ")])  # exactly these
+  ```
+
+  The three spellings are disambiguated by element type and agree wherever they overlap, so a two-element list and a two-element tuple mean the same thing. A flat list yields off-diagonal pairs only — for covariance as much as correlation — so a variance is requested explicitly as `cov(("a", "a"))`.
+
+  `kind=` selects the coefficient (`"pearson"` today) while `method=` remains the variance estimator. Since pandas spells the coefficient `method=`, that mix-up is caught by name and redirected; a recognised but unimplemented coefficient reports that it is *not supported yet* rather than *invalid*.
+
+  Correlation is bounded, so its interval is built on Fisher's z scale and transformed back — the same move `prop` makes with a logit, and for the same reason: a symmetric Wald interval can otherwise report bounds outside [-1, 1]. `ci_method="wald"` opts out. Covariance is unbounded and takes Wald.
+
+  Validated against R survey 4.5: covariance and its SE against `svyvar`, correlation and its SE against `svycontrast`'s own delta method over the moment means — R has no correlation SE of its own, so that agreement is an independent check of the linearization rather than a restatement of it — plus stratified and JK1 replicate fixtures. Adds `PopParam.CORR` and `PopParam.COV`.
+
 ### Changed
+
+- **BREAKING: `deff` now names the SRS reference instead of taking a boolean.** `deff=True` and `deff=False` are rejected with a structured `MethodError` that names the replacement; the argument takes `"wor"`, `"wr"` or `None`.
+
+  | before | now |
+  | --- | --- |
+  | `deff=True` | `deff="wor"` — without replacement, Kish's design effect. Same numbers as before. |
+  | `deff=False` | omit the argument, or `deff=None` |
+  | — | `deff="wr"` — with replacement, the square of Kish's "deft" |
+
+  A boolean never said *which* reference it meant. Accepting it silently would leave two spellings for one thing indefinitely, and ignoring it would be worse: `Literal` is not enforced at runtime, so a string-only implementation would read `deff=True` as "off" and quietly stop reporting a design effect the caller asked for. Rejecting it loudly is the only option that cannot mislead. `"replace"` is accepted as an alias for `"wr"`, since that is R's spelling.
+
+  The reference describes the *denominator* — what the design variance is compared against — and says nothing about how the sample was drawn; `deff="wr"` is not a claim of with-replacement sampling. The two differ by exactly the finite-population correction `1 - n/N`, so they agree closely at small sampling fractions and diverge sharply otherwise: at f = 0.8, an evaluation-study shape, they differ five-fold (5.027 against 1.005, both matching R).
+
+  `"wor"` infers `N` from the sum of the weights, so it is meaningful only while those weights remain reciprocals of selection probabilities. After `normalize`, or to a lesser degree raking or calibration, that sum is no longer a population count and the design effect is silently wrong — svy cannot detect this in general, since weights normalized to twice the sample size pass every check and yield a plausible wrong answer. `"wr"` has no `N` in it and is unaffected. The one provable case now raises rather than returning a column of NaN: when the weights sum to no more than the sample size, the correction is zero or negative, which means either rescaled weights or a census with no sampling variance to compare against.
+
+  The reference is recorded on the result. It appears in the printed header beside the variance method — `Estimate: MEAN (TAYLOR, deff=wr)` — is available as `Estimate.deff_ref`, and round-trips through serialization as an optional `deff_ref` field. `to_polars()` is deliberately unchanged: that frame carries no method, param or design either, and a deff column there was already provenance-free.
+
+
+- **Error codes default per class.** `SingletonError` and `SvyWarningsError` fell back to the base `SvyError` code when raised without an explicit one, so two distinct failures could surface under the same identifier. Each now carries its own default ([#123](https://github.com/samplics-org/svy/pull/123)).
 
 - **`svy.serialize` raises svy's structured errors instead of bare built-ins.** The serialize module was the last public surface still raising `TypeError`/`ValueError` where the rest of the library uses the `SvyError` hierarchy — structured errors with a stable `code`, `expected`/`got` context, and a hint. The new `SerializationError` (exported as `svy.SerializationError`) covers the serialize-specific failures, and the unfitted-model case now reuses the same `ModelError` that `GLM.predict()` already raises:
 
@@ -351,7 +392,8 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.23.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.24.0...HEAD
+[0.24.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.24.0
 [0.23.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.23.0
 [0.22.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.22.1
 [0.22.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.22.0
