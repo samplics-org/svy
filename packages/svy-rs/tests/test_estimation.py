@@ -856,6 +856,14 @@ _ESTIMATORS = [
     ("ratio", lambda df, **kw: _call(ps.taylor_ratio, df, numerator_col="y", denominator_col="x", **kw)),
     ("prop", lambda df, **kw: _call(ps.taylor_prop, df, value_col="flag", **kw)),
     ("assoc", lambda df, **kw: ps.taylor_assoc(df, ["y"], ["x"], "corr", "w", strata_col="stratum", psu_col="psu", **kw)),
+    # Batched entry points are a separate plumbing route from the single-variable
+    # ones -- they build the design once and fan out over columns -- so the
+    # reference has to reach them independently. Row 0 is the first variable.
+    ("mean_multi", lambda df, **kw: _call(ps.taylor_mean_multi, df, value_cols=["y", "x"], **kw)),
+    ("total_multi", lambda df, **kw: _call(ps.taylor_total_multi, df, value_cols=["y", "x"], **kw)),
+    ("ratio_multi", lambda df, **kw: _call(ps.taylor_ratio_multi, df, numerator_cols=["y"], denominator_cols=["x"], **kw)),
+    ("prop_multi", lambda df, **kw: _call(ps.taylor_prop_multi, df, value_cols=["flag"], **kw)),
+    ("assoc_multi", lambda df, **kw: ps.taylor_assoc(df, ["y", "y"], ["x", "x"], "corr", "w", strata_col="stratum", psu_col="psu", **kw)),
 ]
 
 
