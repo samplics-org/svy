@@ -21,7 +21,7 @@ import msgspec
 # Constants
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = "svy-result/0.2"
+SCHEMA_VERSION = "svy-result/0.3"
 
 # JSON-safe alias for svy's Category type (str | int | float | bool).
 CatValue = str | int | float | bool

@@ -6,6 +6,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+## [0.14.0] — 2026-08-10
+
 ### Added
 
 - **Association kernels: design-based covariance and Pearson correlation** ([#124](https://github.com/samplics-org/svy/pull/124)). Both are smooth functions of the same six weighted totals, so they share one moment routine and differ only in the final combination and the linearization handed to the variance machinery. Exposed as `taylor_assoc` and `replicate_assoc`, which take column pairs rather than a single response.
@@ -125,7 +127,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 Baseline for this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.13.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.14.0...HEAD
+[0.14.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.14.0
 [0.13.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.13.0
 [0.12.1]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.12.1
 [0.12.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.12.0

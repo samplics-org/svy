@@ -23,7 +23,7 @@
     "High"
   ],
   "rowvar": "education",
-  "schema_version": "svy-result/0.2",
+  "schema_version": "svy-result/0.3",
   "stats": null,
   "type": "Two-Way"
 }
