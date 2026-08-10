@@ -15,6 +15,7 @@
 // rayon worker threads from ever running the closures, so the `par_iter` /
 // per-replicate parallelism silently executes serially. Release-then-parallelise
 // is what turns the fan-out into real wall-clock speedup (measured 3–6×).
+pub mod association;
 pub mod replication;
 pub mod replication_api;
 pub mod taylor;

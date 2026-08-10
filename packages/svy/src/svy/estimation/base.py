@@ -66,6 +66,12 @@ from svy.ui.printing import format_where_clause
 from svy.utils.helpers import _colspec_to_list
 from svy.wrangling.rows import _compile_where_to_pl_expr
 
+from .association import guard_pandas_method as _guard_pandas_method
+from .association import normalize_kind as _normalize_assoc_kind
+from .association import parse_cols as _parse_assoc_cols
+from .association import replicate_assoc as _replicate_assoc
+from .association import taylor_assoc as _taylor_assoc
+
 
 log = logging.getLogger(__name__)
 
@@ -1679,6 +1685,189 @@ class Estimation:
         if where is not None:
             result.where_clause = format_where_clause(where)
         return result
+
+    def _assoc(
+        self,
+        param: PopParam,
+        cols,
+        *,
+        by,
+        where,
+        method,
+        ci_method: str,
+        deff: bool,
+        fay_coef: float,
+        variance_center: str,
+        alpha: float,
+        drop_nulls: bool,
+    ) -> Estimate:
+        """Shared machinery behind ``corr`` and ``cov``.
+
+        The two differ only in which coefficient the kernel computes and, for
+        the interval, whether the parameter is bounded.
+        """
+        verb = "corr" if param == PopParam.CORR else "cov"
+        pairs = _parse_assoc_cols(cols, where=f"estimation.{verb}")
+        target_method = self._resolve_method(method)
+
+        # Every named column must survive preparation, so the first drives
+        # `y` and the rest ride along as extras.
+        named = list(dict.fromkeys([c for pair in pairs for c in pair]))
+        prep = prepare_data(
+            self._sample,
+            y=named[0],
+            extra_cols=named[1:],
+            by=by,
+            where=where,
+            drop_nulls=drop_nulls,
+            cast_y_float=True,
+            apply_singleton_filter=True,
+            select_columns=True,
+            domain_mask_for_replication=(target_method != EstimationMethod.TAYLOR and by is None),
+        )
+
+        try:
+            if target_method == EstimationMethod.TAYLOR:
+                result = _taylor_assoc(
+                    self,
+                    prep=prep,
+                    pairs=pairs,
+                    param=param,
+                    deff=deff,
+                    alpha=alpha,
+                    ci_method=ci_method,
+                )
+            else:
+                result = _replicate_assoc(
+                    self,
+                    prep=prep,
+                    pairs=pairs,
+                    param=param,
+                    method=target_method,
+                    fay_coef=fay_coef,
+                    variance_center=variance_center,
+                    alpha=alpha,
+                    ci_method=ci_method,
+                )
+        except RuntimeError as e:
+            if "weights is zero" in str(e).lower() or "sum of weights" in str(e).lower():
+                result = self._empty_estimate(param, alpha, _colspec_to_list(by), target_method)
+            else:
+                raise
+
+        if where is not None:
+            result.where_clause = format_where_clause(where)
+        return result
+
+    def corr(
+        self,
+        cols: tuple[str, str] | Sequence[str] | Sequence[tuple[str, str]],
+        *,
+        kind: Literal["pearson"] = "pearson",
+        by: str | Sequence[str] | None = None,
+        where: WhereArg = None,
+        method: Literal["taylor", "replication"] | None = None,
+        ci_method: Literal["fisher", "wald"] = "fisher",
+        deff: bool = False,
+        fay_coef: float = 0.0,
+        variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
+        alpha: float = 0.05,
+        drop_nulls: bool = False,
+    ) -> Estimate:
+        """Estimate design-based correlation with standard errors.
+
+        Correlation is symmetric, so there is no numerator/denominator here and
+        no ``y``/``x`` argument: name the columns and every requested pair is
+        returned as its own row.
+
+        Parameters
+        ----------
+        cols : pair, sequence of str, or sequence of pairs
+            ``("a", "b")`` estimates that one pair. A flat list of three or
+            more columns estimates every unique pair, in ``i < j`` order. A
+            list of 2-tuples estimates exactly those pairs, which is how you
+            ask for one column against several without also getting the pairs
+            among the others.
+        kind : {'pearson'}, default 'pearson'
+            Which coefficient. Rank-based kinds are planned; asking for one
+            today reports that it is not implemented rather than silently
+            falling back.
+        method : {'taylor', 'replication'} | None
+            Variance estimator, auto-detected from the design when None. Note
+            this selects the *variance* method — pandas spells the coefficient
+            ``method=``, which here is ``kind=``.
+        ci_method : {'fisher', 'wald'}, default 'fisher'
+            ``'fisher'`` builds the interval on the arctanh scale and
+            transforms back, keeping it inside [-1, 1]. ``'wald'`` gives the
+            symmetric ``est ± t·se``, which can exceed the bounds.
+
+        Returns
+        -------
+        Estimate
+            One row per pair, or per (group, pair) when ``by`` is set.
+
+        Examples
+        --------
+        >>> sample.est.corr(("income", "age"))                    # doctest: +SKIP
+        >>> sample.est.corr(["income", "age", "educ"])            # 3 pairs
+        >>> sample.est.corr([("income", "age"), ("income", "educ")])
+        """
+        _guard_pandas_method(method)
+        _normalize_assoc_kind(kind)
+        return self._assoc(
+            PopParam.CORR,
+            cols,
+            by=by,
+            where=where,
+            method=method,
+            ci_method=ci_method,
+            deff=deff,
+            fay_coef=fay_coef,
+            variance_center=variance_center,
+            alpha=alpha,
+            drop_nulls=drop_nulls,
+        )
+
+    def cov(
+        self,
+        cols: tuple[str, str] | Sequence[str] | Sequence[tuple[str, str]],
+        *,
+        by: str | Sequence[str] | None = None,
+        where: WhereArg = None,
+        method: Literal["taylor", "replication"] | None = None,
+        deff: bool = False,
+        fay_coef: float = 0.0,
+        variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
+        alpha: float = 0.05,
+        drop_nulls: bool = False,
+    ) -> Estimate:
+        """Estimate design-based covariance with standard errors.
+
+        Takes the same symmetric ``cols`` argument as :meth:`corr`. Estimates
+        are on R ``svyvar``'s scale, carrying its n/(n-1) factor. There is no
+        ``ci_method``: a covariance is unbounded, so the interval is Wald.
+
+        A flat list gives off-diagonal pairs only, exactly as for ``corr``. To
+        get a variance, name the self-pair: ``cov(("income", "income"))``.
+
+        Returns
+        -------
+        Estimate
+            One row per pair, or per (group, pair) when ``by`` is set.
+        """
+        return self._assoc(
+            PopParam.COV,
+            cols,
+            by=by,
+            where=where,
+            method=method,
+            ci_method="wald",
+            deff=deff,
+            fay_coef=fay_coef,
+            variance_center=variance_center,
+            alpha=alpha,
+            drop_nulls=drop_nulls,
+        )
 
     @staticmethod
     def _normalize_probs(p: float | Sequence[float]) -> tuple[list[float], bool]:

@@ -682,3 +682,133 @@ def test_prop_domain_estimates(synthetic_sample_df, design_kwargs, expected):
         exp = expected[domain][level]
         assert row["est"] == pytest.approx(exp["est"], rel=TOL), f"Failed est for {domain}/{level}"
         assert row["se"] == pytest.approx(exp["se"], rel=TOL), f"Failed se for {domain}/{level}"
+
+
+# =============================================================================
+# ASSOCIATION (COVARIANCE / CORRELATION) TESTS
+#
+# Golden values from R survey 4.5 on a single-stage cluster design (8 PSUs of
+# 3 rows, unequal weights):
+#
+#   d  <- svydesign(id=~psu, weights=~w, data=dat)
+#   v  <- svyvar(~y+x, d)                       # covariance + its SE
+#   ct <- svycontrast(svymean(~y+x+yy+xx+yx, d),
+#                     quote((yx - y*x)/sqrt((yy-y^2)*(xx-x^2))))
+#
+# The correlation targets come from svycontrast rather than svyvar because R
+# offers no correlation SE: svycontrast applies its own delta method over the
+# moment means, so it is an independent check of our linearization.
+# =============================================================================
+
+_ASSOC_Y = [12, 15, 11, 22, 25, 19, 31, 29, 35, 41, 44, 39,
+            18, 16, 21, 27, 30, 24, 36, 33, 38, 45, 49, 43]
+_ASSOC_X = [9, 4, 14, 6, 17, 8, 21, 11, 13, 12, 26, 7,
+            19, 5, 23, 10, 28, 15, 8, 22, 16, 18, 31, 20]
+_ASSOC_W = [2, 2, 2, 3, 3, 3, 1.5, 1.5, 1.5, 4, 4, 4,
+            2.5, 2.5, 2.5, 3.5, 3.5, 3.5, 1, 1, 1, 5, 5, 5]
+
+
+@pytest.fixture
+def assoc_df():
+    """Clustered fixture matching the R golden design."""
+    return pl.DataFrame(
+        {
+            "y": [float(v) for v in _ASSOC_Y],
+            "x": [float(v) for v in _ASSOC_X],
+            "w": [float(v) for v in _ASSOC_W],
+            "psu": [str(i // 3 + 1) for i in range(24)],
+            "stratum": ["1"] * 12 + ["2"] * 12,
+            "grp": ["A"] * 12 + ["B"] * 12,
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "kind,strata,expected",
+    [
+        ("cov", None, {"est": 50.138658078368209, "se": 21.498361515848689}),
+        ("corr", None, {"est": 0.52860852253793722, "se": 0.15921590459764234}),
+        # svyvar under svydesign(id=~psu, strata=~stratum, ...)
+        ("cov", "stratum", {"est": 50.138658078368209, "se": 23.178556453025269}),
+    ],
+)
+def test_assoc_matches_r(assoc_df, kind, strata, expected):
+    """Point estimate and SE both match R; the SE is what validates the score."""
+    result = ps.taylor_assoc(
+        assoc_df, ["y"], ["x"], kind, "w", strata_col=strata, psu_col="psu"
+    )
+    assert result["est"][0] == pytest.approx(expected["est"], rel=1e-10)
+    assert result["se"][0] == pytest.approx(expected["se"], rel=1e-9)
+    assert result["kind"][0] == kind
+
+
+def test_assoc_is_symmetric(assoc_df):
+    """Both statistics are symmetric, so argument order cannot matter."""
+    fwd = ps.taylor_assoc(assoc_df, ["y"], ["x"], "corr", "w", psu_col="psu")
+    rev = ps.taylor_assoc(assoc_df, ["x"], ["y"], "corr", "w", psu_col="psu")
+    assert fwd["est"][0] == pytest.approx(rev["est"][0], rel=1e-14)
+    assert fwd["se"][0] == pytest.approx(rev["se"][0], rel=1e-14)
+
+
+def test_assoc_batches_pairs(assoc_df):
+    """One row per pair, in the order requested; corr(y,y) is 1 by definition."""
+    result = ps.taylor_assoc(
+        assoc_df, ["y", "y"], ["x", "y"], "corr", "w", psu_col="psu"
+    )
+    assert result.height == 2
+    assert list(result["y"]) == ["y", "y"]
+    assert list(result["x"]) == ["x", "y"]
+    assert result["est"][1] == pytest.approx(1.0, abs=1e-12)
+
+
+def test_assoc_by_group(assoc_df):
+    """`by` yields one row per (group, pair) with the group column first."""
+    result = ps.taylor_assoc(
+        assoc_df, ["y"], ["x"], "corr", "w", psu_col="psu", by_col="grp"
+    )
+    assert result.height == 2
+    assert result.columns[0] == "grp"
+    assert sorted(result["grp"]) == ["A", "B"]
+
+
+def test_assoc_reports_deff(assoc_df):
+    """The clustered fixture must show a design effect above 1."""
+    result = ps.taylor_assoc(assoc_df, ["y"], ["x"], "corr", "w", psu_col="psu")
+    assert result["deff"][0] > 1.0
+
+
+@pytest.mark.parametrize(
+    "kind,expected_est",
+    [("cov", 50.138658078368209), ("corr", 0.52860852253793722)],
+)
+def test_replicate_assoc_matches_r_jk1(assoc_df, kind, expected_est):
+    """JK1 replicate weights: full-sample estimate and SE both match R.
+
+    R: svyvar(~y+x, as.svrepdesign(d, type="JK1")) gives cov SE
+    29.751032168261617.
+    """
+    reps = {
+        f"rep{r}": [
+            0.0 if i // 3 == r else _ASSOC_W[i] * 8 / 7 for i in range(24)
+        ]
+        for r in range(8)
+    }
+    df = assoc_df.with_columns([pl.Series(k, v) for k, v in reps.items()])
+    result = ps.replicate_assoc(
+        df, ["y"], ["x"], kind, "w", list(reps), "Jackknife"
+    )
+    assert result["est"][0] == pytest.approx(expected_est, rel=1e-10)
+    if kind == "cov":
+        assert result["se"][0] == pytest.approx(29.751032168261617, rel=1e-9)
+
+
+def test_assoc_rejects_unknown_kind(assoc_df):
+    """An unimplemented coefficient must say so, not fall back silently."""
+    with pytest.raises(Exception, match="unknown association kind"):
+        ps.taylor_assoc(assoc_df, ["y"], ["x"], "spearman", "w")
+
+
+def test_assoc_rejects_mismatched_pairs(assoc_df):
+    """Pair columns are positional, so unequal lengths are a caller error."""
+    with pytest.raises(Exception, match="equal length"):
+        ps.taylor_assoc(assoc_df, ["y", "x"], ["x"], "corr", "w")
