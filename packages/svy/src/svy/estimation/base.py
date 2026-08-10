@@ -17,7 +17,7 @@ from svy.core.data_prep import prepare_data
 from svy.core.enumerations import EstimationMethod, PopParam
 from svy.core.enumerations import QuantileMethod as _QuantileMethod
 from svy.core.types import WhereArg
-from svy.errors import DimensionError
+from svy.errors import DimensionError, MethodError
 from svy.errors.singleton_errors import SingletonError
 from svy.estimation.estimate import Estimate, EstimateList, ParamEst
 from svy.estimation.replication import (
@@ -434,6 +434,72 @@ class Estimation:
             (pl.col("var") * inflation_factor).alias("var"),
             (pl.col("se") * sqrt_factor).alias("se"),
         )
+
+    @staticmethod
+    def _normalize_deff(deff: object) -> str | None:
+        """Canonicalize ``deff`` to ``"wor"``, ``"wr"`` or ``None``.
+
+        ``deff`` names the simple-random-sample reference the design variance is
+        compared against; it says nothing about how the sample was drawn. The
+        two references differ by exactly the finite-population correction
+        ``1 - n/N``, so they agree closely when the sampling fraction is small
+        and diverge sharply when it is not -- at a 50% sampling rate they differ
+        by a factor of two.
+
+        Booleans are rejected rather than mapped. ``True`` used to select the
+        without-replacement reference, but it never said which reference it
+        meant, and quietly accepting an undocumented spelling would leave two
+        ways to ask for the same thing indefinitely. Rejecting it loudly also
+        avoids the trap that ``Literal`` is not enforced at runtime: a
+        string-only implementation would read ``deff=True`` as "off" and
+        silently stop reporting a design effect the caller asked for.
+        """
+        if deff is None:
+            return None
+        if isinstance(deff, bool):
+            hint = (
+                "Use deff='wor' for the reference True used to select, or "
+                "deff='wr' for the with-replacement reference (Kish's deft^2), "
+                "which needs no population size and is unaffected by rescaled "
+                "weights."
+                if deff
+                else "Omit the argument, or pass deff=None."
+            )
+            raise MethodError(
+                title=f"deff no longer accepts {deff!r}",
+                detail=(
+                    "deff now names the SRS reference the design variance is "
+                    "compared against: 'wor' (without replacement, the previous "
+                    "behaviour) or 'wr' (with replacement). A boolean cannot say "
+                    "which reference is wanted."
+                ),
+                code="DEFF_BOOL_REJECTED",
+                where="estimation.deff",
+                param="deff",
+                expected="'wor', 'wr', or None",
+                got=deff,
+                hint=hint,
+            )
+        m = str(deff).lower().replace("_", "-").strip()
+        m = {
+            "without-replacement": "wor",
+            "srswor": "wor",
+            "with-replacement": "wr",
+            "srswr": "wr",
+            "replace": "wr",  # R spells the with-replacement reference this way
+        }.get(m, m)
+        if m not in ("wor", "wr"):
+            raise MethodError(
+                title=f"Unknown deff reference {deff!r}",
+                detail="deff selects the SRS reference: 'wor' or 'wr'.",
+                code="DEFF_REFERENCE_UNKNOWN",
+                where="estimation.deff",
+                param="deff",
+                expected="'wor', 'wr', or None",
+                got=deff,
+                hint="Use deff='wor' for Kish's design effect, deff='wr' for deft^2.",
+            )
+        return m
 
     @staticmethod
     def _normalize_ci_method(method: str) -> str:
