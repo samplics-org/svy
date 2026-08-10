@@ -232,13 +232,13 @@ def test_deff_ignores_zero_weight_rows(toy):
         .alias("y")
     )
     sample = Sample(d, Design(wgt="w", stratum="stratum", psu="psu"))
-    with_null = sample.estimation.mean("y", deff=True, drop_nulls=True).estimates[0]
+    with_null = sample.estimation.mean("y", deff="wor", drop_nulls=True).estimates[0]
 
     # The same 11 contributing rows, with the null row physically absent.
     physical = Sample(
         d.filter(pl.col("y").is_not_null()), Design(wgt="w", stratum="stratum", psu="psu")
     )
-    dropped = physical.estimation.mean("y", deff=True).estimates[0]
+    dropped = physical.estimation.mean("y", deff="wor").estimates[0]
 
     assert with_null.deff == pytest.approx(dropped.deff, rel=1e-12)
 

@@ -29,7 +29,7 @@ def taylor_mean(
     y: str,
     *,
     param: PopParam = PopParam.MEAN,
-    deff: bool = False,
+    deff_ref: str | None = None,
     as_factor: bool = False,
     alpha: float = 0.05,
 ) -> Estimate:
@@ -54,6 +54,7 @@ def taylor_mean(
         fpc_ssu_col=fpc_ssu_col,
         by_col=prep.by_col,
         singleton_method=center_arg,
+        deff_ref=deff_ref,
     )
 
     if est._should_run_double_pass():
@@ -76,7 +77,7 @@ def taylor_mean(
         result_df = est._apply_scale_adjustment(result_full, result_df, param=param)
 
     est_list = est._polars_result_to_param_est(
-        result_df, y, param, alpha, deff, prep.by_col, as_factor
+        result_df, y, param, alpha, deff_ref is not None, prep.by_col, as_factor
     )
     est_cov = np.diag(result_df["var"].to_numpy())
     return est._build_estimate_result_light(
@@ -95,7 +96,7 @@ def taylor_mean_multi(
     prep: PreparedData,
     ys: list[str],
     *,
-    deff: bool = False,
+    deff_ref: str | None = None,
     alpha: float = 0.05,
     param: PopParam = PopParam.MEAN,
 ) -> list[Estimate]:
@@ -127,12 +128,13 @@ def taylor_mean_multi(
         fpc_col=fpc_col,
         fpc_ssu_col=fpc_ssu_col,
         singleton_method=center_arg,
+        deff_ref=deff_ref,
     )
 
     results: list[Estimate] = []
     for y in ys:
         sub = result_df.filter(pl.col("y") == y)
-        est_list = est._polars_result_to_param_est(sub, y, param, alpha, deff, None, False)
+        est_list = est._polars_result_to_param_est(sub, y, param, alpha, deff_ref is not None, None, False)
         est_cov = np.diag(sub["var"].to_numpy())
         results.append(
             est._build_estimate_result_light(

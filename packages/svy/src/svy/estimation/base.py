@@ -1315,7 +1315,7 @@ class Estimation:
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
         method: Literal["taylor", "replication"] | None = None,
-        deff: bool = False,
+        deff: Literal["wor", "wr"] | None = None,
         fay_coef: float = 0.0,
         as_factor: bool = False,
         variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
@@ -1337,10 +1337,14 @@ class Estimation:
             If None, auto-detected from the design (Taylor when strata/PSU
             are available, replication otherwise).
         """
+        deff_ref = self._normalize_deff(deff)
+
         if not isinstance(y, str):
             ys = list(y)
             return self._taylor_multi(
                 ys,
+                # `single_call` re-enters mean(), which normalizes again, so it
+                # must carry the caller's spelling rather than the canonical one.
                 single_call=lambda yy: self.mean(
                     yy,
                     by=by,
@@ -1354,7 +1358,7 @@ class Estimation:
                     drop_nulls=drop_nulls,
                 ),
                 batched_call=lambda prep: _taylor_mean_multi(
-                    self, prep=prep, ys=ys, deff=deff, alpha=alpha
+                    self, prep=prep, ys=ys, deff_ref=deff_ref, alpha=alpha
                 ),
                 prep_y=(ys[0] if ys else ""),
                 prep_extra_cols=ys[1:],
@@ -1386,7 +1390,7 @@ class Estimation:
                     self,
                     prep=prep,
                     y=y,
-                    deff=deff,
+                    deff_ref=deff_ref,
                     alpha=alpha,
                     as_factor=as_factor,
                     param=PopParam.MEAN,

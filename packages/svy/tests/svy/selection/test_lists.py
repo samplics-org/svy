@@ -53,7 +53,7 @@ def test_select_stratified_pps(synthetic_sample_df):
 #     design = Design(stratum=["region", "sex"])
 #     sample = Sample(data=synthetic_sample_df, design=design)
 
-#     est = sample.estimation.mean(y="income", deff=True, drop_nulls=True)
+#     est = sample.estimation.mean(y="income", deff="wor", drop_nulls=True)
 #     assert est is not None
 
 
@@ -62,7 +62,7 @@ def test_select_stratified_pps(synthetic_sample_df):
 #     design = Design(psu=["cluster"])  # list form instead of "cluster"
 #     sample = Sample(data=synthetic_sample_df, design=design)
 
-#     est = sample.estimation.mean(y="income", deff=True, drop_nulls=True)
+#     est = sample.estimation.mean(y="income", deff="wor", drop_nulls=True)
 #     assert est is not None
 
 
@@ -72,7 +72,7 @@ def test_select_stratified_pps(synthetic_sample_df):
 #     design = Design(psu=["region", "cluster"])
 #     sample = Sample(data=synthetic_sample_df, design=design)
 
-#     est = sample.estimation.mean(y="income", deff=True, drop_nulls=True)
+#     est = sample.estimation.mean(y="income", deff="wor", drop_nulls=True)
 #     assert est is not None
 
 
@@ -81,7 +81,7 @@ def test_select_stratified_pps(synthetic_sample_df):
 #     design = Design(ssu=["id"])  # list form instead of "id"
 #     sample = Sample(data=synthetic_sample_df, design=design)
 
-#     est = sample.estimation.mean(y="income", deff=True, drop_nulls=True)
+#     est = sample.estimation.mean(y="income", deff="wor", drop_nulls=True)
 #     assert est is not None
 
 
@@ -97,7 +97,7 @@ def test_select_stratified_pps(synthetic_sample_df):
 #     est = sample.estimation.mean(
 #         y="income",
 #         by=["region", "educ"],
-#         deff=True,
+#         deff="wor",
 #         drop_nulls=True,
 #     )
 #     assert est is not None

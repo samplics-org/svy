@@ -355,7 +355,7 @@ class TestMedianDeff:
     @pytest.mark.skip(reason="deff not yet supported for median/quantile estimation")
     def test_median_with_deff(self, sample):
         """Test median estimation with design effect calculation."""
-        result = sample.estimation.median("income", deff=True)
+        result = sample.estimation.median("income", deff="wor")
 
         assert result is not None
         assert len(result.estimates) == 1
