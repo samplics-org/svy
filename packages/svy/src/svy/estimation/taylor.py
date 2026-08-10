@@ -88,7 +88,7 @@ def taylor_mean(
         prep.by_cols,
         as_factor,
         method=EstimationMethod.TAYLOR,
-            deff_ref=deff_ref,
+        deff_ref=deff_ref,
     )
 
 
@@ -135,7 +135,9 @@ def taylor_mean_multi(
     results: list[Estimate] = []
     for y in ys:
         sub = result_df.filter(pl.col("y") == y)
-        est_list = est._polars_result_to_param_est(sub, y, param, alpha, deff_ref is not None, None, False)
+        est_list = est._polars_result_to_param_est(
+            sub, y, param, alpha, deff_ref is not None, None, False
+        )
         est_cov = np.diag(sub["var"].to_numpy())
         results.append(
             est._build_estimate_result_light(
@@ -146,6 +148,7 @@ def taylor_mean_multi(
                 [],
                 as_factor=False,
                 method=EstimationMethod.TAYLOR,
+                deff_ref=deff_ref,
             )
         )
     return results
@@ -213,7 +216,7 @@ def taylor_total(
         prep.by_cols,
         as_factor=False,
         method=EstimationMethod.TAYLOR,
-            deff_ref=deff_ref,
+        deff_ref=deff_ref,
     )
 
 
@@ -268,6 +271,7 @@ def taylor_total_multi(
                 [],
                 as_factor=False,
                 method=EstimationMethod.TAYLOR,
+                deff_ref=deff_ref,
             )
         )
     return results
@@ -326,7 +330,14 @@ def taylor_ratio(
         result_df = est._apply_scale_adjustment(result_full, result_df, param=PopParam.RATIO)
 
     est_list = est._polars_result_to_param_est(
-        result_df, y, PopParam.RATIO, alpha, deff_ref is not None, prep.by_col, as_factor=False, x_name=x
+        result_df,
+        y,
+        PopParam.RATIO,
+        alpha,
+        deff_ref is not None,
+        prep.by_col,
+        as_factor=False,
+        x_name=x,
     )
     est_cov = np.diag(result_df["var"].to_numpy())
     return est._build_estimate_result_light(
@@ -337,7 +348,7 @@ def taylor_ratio(
         prep.by_cols,
         as_factor=False,
         method=EstimationMethod.TAYLOR,
-            deff_ref=deff_ref,
+        deff_ref=deff_ref,
     )
 
 
@@ -409,7 +420,7 @@ def taylor_prop(
         prep.by_cols,
         as_factor=True,
         method=EstimationMethod.TAYLOR,
-            deff_ref=deff_ref,
+        deff_ref=deff_ref,
     )
 
 
@@ -512,6 +523,7 @@ def taylor_ratio_multi(
                 [],
                 as_factor=False,
                 method=EstimationMethod.TAYLOR,
+                deff_ref=deff_ref,
             )
         )
     return results
@@ -555,7 +567,14 @@ def taylor_prop_multi(
     for y in ys:
         sub = result_df.filter(pl.col("y") == y)
         est_list = est._polars_result_to_param_est(
-            sub, y, PopParam.PROP, alpha, deff_ref is not None, None, as_factor=True, ci_method=ci_method
+            sub,
+            y,
+            PopParam.PROP,
+            alpha,
+            deff_ref is not None,
+            None,
+            as_factor=True,
+            ci_method=ci_method,
         )
         est_cov = np.diag(sub["var"].to_numpy())
         results.append(
@@ -567,6 +586,7 @@ def taylor_prop_multi(
                 [],
                 as_factor=True,
                 method=EstimationMethod.TAYLOR,
+                deff_ref=deff_ref,
             )
         )
     return results

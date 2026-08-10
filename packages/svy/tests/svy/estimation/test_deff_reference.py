@@ -10,6 +10,8 @@ replacement.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import polars as pl
 import pytest
@@ -184,3 +186,108 @@ def test_honest_weights_still_report_a_design_effect():
     est = _sample(_honest()).estimation
     value = est.mean("y", deff="wor").to_dicts()[0]["deff"]
     assert np.isfinite(value) and value > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Large sampling fractions
+#
+# The regime where the reference choice stops being academic. R survey 4.5 on
+# an evaluation-study shape -- 120 beneficiary schools drawn from a frame of
+# 150, so f = 0.8:
+#
+#   des <- svydesign(id=~1, strata=~st, weights=~w, data=d)
+#   svymean(~y, des, deff=TRUE)       -> deff 5.027365680015
+#   svymean(~y, des, deff="replace")  -> deff 1.005473136003
+# ---------------------------------------------------------------------------
+
+R_BIGF_SE = 1.8976514768
+R_BIGF_WOR = 5.027365680015
+R_BIGF_WR = 1.005473136003
+
+
+@pytest.fixture
+def large_fraction_sample() -> Sample:
+    path = Path(__file__).parents[2] / "test_data" / "deff_large_fraction.csv"
+    df = pl.read_csv(path, infer_schema_length=10000).with_columns(
+        pl.col("y").cast(pl.Float64), pl.col("w").cast(pl.Float64), pl.col("st").cast(pl.String)
+    )
+    return Sample(df, Design(row_index="id", stratum="st", wgt="w"))
+
+
+@pytest.mark.parametrize(
+    "ref,expected", [("wor", R_BIGF_WOR), ("wr", R_BIGF_WR)]
+)
+def test_large_sampling_fraction_matches_r(large_fraction_sample, ref, expected):
+    row = large_fraction_sample.estimation.mean("y", deff=ref).to_dicts()[0]
+    assert row["se"] == pytest.approx(R_BIGF_SE, rel=1e-9)
+    assert row["deff"] == pytest.approx(expected, rel=1e-10)
+
+
+def test_the_choice_is_decisive_at_a_large_fraction(large_fraction_sample):
+    """At f = 0.8 the two references differ five-fold, so the documentation
+    must not describe the choice as immaterial. Everything else validated here
+    sits near f = 0.03, where they agree to a few percent."""
+    est = large_fraction_sample.estimation
+    wor = est.mean("y", deff="wor").to_dicts()[0]["deff"]
+    wr = est.mean("y", deff="wr").to_dicts()[0]["deff"]
+    assert wor / wr == pytest.approx(1.0 / (1.0 - 120 / 150), rel=1e-9)
+    assert wor / wr == pytest.approx(5.0, rel=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Batched calls
+#
+# `y=[...]` goes through _taylor_multi, which chooses between a shared design
+# build and a per-variable loop. That is a different dispatch from the single
+# variable path, so the reference has to survive it independently.
+# ---------------------------------------------------------------------------
+
+
+def _multi_sample() -> Sample:
+    rng = np.random.default_rng(17)
+    n = 900
+    psu = rng.integers(0, 30, n)
+    return Sample(
+        pl.DataFrame(
+            {
+                "id": range(n),
+                "stratum": (psu % 4).astype(str),
+                "psu": psu.astype(str),
+                "w": rng.uniform(20.0, 200.0, n),
+                "y1": rng.normal(100.0, 20.0, n),
+                "y2": rng.normal(50.0, 8.0, n),
+            }
+        ),
+        Design(row_index="id", stratum="stratum", psu="psu", wgt="w"),
+    )
+
+
+@pytest.mark.parametrize("ref", ["wor", "wr"])
+def test_batched_call_reports_a_deff_per_variable(ref):
+    est = _multi_sample().estimation
+    results = est.mean(["y1", "y2"], deff=ref)
+    assert len(results) == 2
+    for r in results:
+        value = r.to_dicts()[0]["deff"]
+        assert np.isfinite(value) and value > 0.0
+        assert r.deff_ref == ref
+
+
+@pytest.mark.parametrize("ref", ["wor", "wr"])
+def test_batched_matches_the_per_variable_loop(ref):
+    """The batched form shares one design build; the loop does not. They must
+    still agree, or batching would quietly change the reference."""
+    est = _multi_sample().estimation
+    batched = [r.to_dicts()[0]["deff"] for r in est.mean(["y1", "y2"], deff=ref)]
+    looped = [est.mean(v, deff=ref).to_dicts()[0]["deff"] for v in ("y1", "y2")]
+    for b, single in zip(batched, looped, strict=True):
+        assert b == pytest.approx(single, rel=1e-12)
+
+
+def test_batched_rejects_a_boolean_before_fanning_out():
+    """Normalization happens ahead of the batched dispatch, so an invalid value
+    fails once rather than once per variable."""
+    est = _multi_sample().estimation
+    with pytest.raises(MethodError) as exc:
+        est.mean(["y1", "y2"], deff=True)
+    assert "DEFF_BOOL_REJECTED" in str(exc.value)
