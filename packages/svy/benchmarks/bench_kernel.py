@@ -27,6 +27,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 
 import numpy as np
@@ -95,6 +96,20 @@ def emit(label: str, rows: int, ms: float) -> None:
     print(f"BENCH\t{label}\t{rows}\t{ms:.3f}")
 
 
+def emit_case(label: str, rows: int, fn, reps: int) -> None:
+    """Time and emit one case, skipping it if this svy version lacks the API.
+
+    Skipping rather than failing is what lets the same harness run against an
+    older release to record a historical baseline: a version predating
+    ``corr``/``cov`` simply omits those lines, and the comparison tool reports
+    them as new rather than as a regression.
+    """
+    try:
+        emit(label, rows, best_ms(fn, reps))
+    except (AttributeError, TypeError, NotImplementedError) as exc:
+        print(f"SKIP\t{label}\t{rows}\t{type(exc).__name__}: {exc}", file=sys.stderr)
+
+
 # ── End-to-end cases (full Python + PyO3 + Rust) ────────────────────────────
 
 
@@ -111,9 +126,21 @@ def run_end_to_end(n_rows: int, reps: int, n_reps: int) -> None:
         "ratio/strat+cluster": lambda: est.ratio(y="tot_exp", x="hhsize"),
         "mean/by=sex": lambda: est.mean(y="tot_exp", by="sex"),
         "mean/domain(region==0)": lambda: est.mean(y="tot_exp", where=svy.col("region") == 0),
+        # Estimators beyond the original PERF_PLAN set. `prop` and the quantile
+        # family have their own kernels; corr/cov share a moment kernel and are
+        # absent before 0.23, so they skip cleanly on older releases.
+        "prop/sex": lambda: est.prop(y="sex"),
+        "median/tot_exp": lambda: est.median(y="tot_exp"),
+        "quantile/tot_exp": lambda: est.quantile(y="tot_exp", p=(0.25, 0.5, 0.75)),
+        "corr/tot_exp~hhsize": lambda: est.corr(("tot_exp", "hhsize")),
+        "cov/tot_exp~hhsize": lambda: est.cov(("tot_exp", "hhsize")),
+        # Batching shares one design build across variables; regressions here
+        # show up as the batched call drifting toward the looped cost.
+        "mean/batched(2 vars)": lambda: est.mean(y=["tot_exp", "hhsize"]),
+        "mean/looped(2 vars)": lambda: [est.mean(y=v) for v in ("tot_exp", "hhsize")],
     }
     for label, fn in cases.items():
-        emit(label, n_rows, best_ms(fn, reps))
+        emit_case(label, n_rows, fn, reps)
 
     # Replication path (matrix pass scales differently from Taylor).
     if n_reps > 0:

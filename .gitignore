@@ -136,8 +136,14 @@ specs/
 # Benchmark scripts are local-only by default (many depend on the gitignored WB
 # CSVs), but the self-contained Phase-A harness is tracked so it — and its
 # recorded baseline — travel with the branch to CI and other machines.
+# The regression checker and the baseline it compares against are tracked for
+# the same reason: a baseline nobody else can see cannot catch a regression.
+# Note the baselines/ directory itself must be un-ignored, not just the file —
+# git does not descend into an excluded directory to find a negated pattern.
 **/benchmarks/*
 !packages/svy/benchmarks/bench_kernel.py
+!packages/svy/benchmarks/check_regression.py
+!packages/svy/benchmarks/baselines/
 examples/
 svy-old
 testwheels
