@@ -8,6 +8,28 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Added
+
+- **`corr` and `cov`: design-based correlation and covariance** ([#124](https://github.com/samplics-org/svy/pull/124)). Both are available on `sample.estimation` with Taylor and replication variance, `by=`, `where=`, domains and `deff`.
+
+  Neither statistic has a direction, so neither takes `y`/`x`. A call names a set of columns through one symmetric `cols` argument, and every requested pair is returned as its own row:
+
+  ```python
+  sample.estimation.corr(("income", "age"))                        # one pair
+  sample.estimation.corr(["income", "age", "educ"])                # every unique pair
+  sample.estimation.corr([("income", "age"), ("income", "educ")])  # exactly these
+  ```
+
+  The three spellings are disambiguated by element type and agree wherever they overlap, so a two-element list and a two-element tuple mean the same thing. A flat list yields off-diagonal pairs only — for covariance as much as correlation — so a variance is requested explicitly as `cov(("a", "a"))`.
+
+  `kind=` selects the coefficient (`"pearson"` today) while `method=` remains the variance estimator. Since pandas spells the coefficient `method=`, that mix-up is caught by name and redirected; a recognised but unimplemented coefficient reports that it is *not supported yet* rather than *invalid*.
+
+  Correlation is bounded, so its interval is built on Fisher's z scale and transformed back — the same move `prop` makes with a logit, and for the same reason: a symmetric Wald interval can otherwise report bounds outside [-1, 1]. `ci_method="wald"` opts out. Covariance is unbounded and takes Wald.
+
+  Validated against R survey 4.5: covariance and its SE against `svyvar`, correlation and its SE against `svycontrast`'s own delta method over the moment means — R has no correlation SE of its own, so that agreement is an independent check of the linearization rather than a restatement of it — plus stratified and JK1 replicate fixtures. Adds `PopParam.CORR` and `PopParam.COV`.
+
+### Changed
+
 - **BREAKING: `deff` now names the SRS reference instead of taking a boolean.** `deff=True` and `deff=False` are rejected with a structured `MethodError` that names the replacement; the argument takes `"wor"`, `"wr"` or `None`.
 
   | before | now |
@@ -24,6 +46,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
   The reference is recorded on the result. It appears in the printed header beside the variance method — `Estimate: MEAN (TAYLOR, deff=wr)` — is available as `Estimate.deff_ref`, and round-trips through serialization as an optional `deff_ref` field. `to_polars()` is deliberately unchanged: that frame carries no method, param or design either, and a deff column there was already provenance-free.
 
+
+- **Error codes default per class.** `SingletonError` and `SvyWarningsError` fell back to the base `SvyError` code when raised without an explicit one, so two distinct failures could surface under the same identifier. Each now carries its own default ([#123](https://github.com/samplics-org/svy/pull/123)).
 
 - **`svy.serialize` raises svy's structured errors instead of bare built-ins.** The serialize module was the last public surface still raising `TypeError`/`ValueError` where the rest of the library uses the `SvyError` hierarchy — structured errors with a stable `code`, `expected`/`got` context, and a hint. The new `SerializationError` (exported as `svy.SerializationError`) covers the serialize-specific failures, and the unfitted-model case now reuses the same `ModelError` that `GLM.predict()` already raises:
 

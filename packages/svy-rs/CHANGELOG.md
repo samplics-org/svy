@@ -8,6 +8,14 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ### Added
 
+- **Association kernels: design-based covariance and Pearson correlation** ([#124](https://github.com/samplics-org/svy/pull/124)). Both are smooth functions of the same six weighted totals, so they share one moment routine and differ only in the final combination and the linearization handed to the variance machinery. Exposed as `taylor_assoc` and `replicate_assoc`, which take column pairs rather than a single response.
+
+  The linearization is the load-bearing part. For the covariance the terms from estimating the means cancel identically, leaving `a*b - m_yx` — which is why R's `svymean(a*b*n/(n-1))` shortcut is exactly the delta method rather than an approximation. For the correlation they do not cancel, because the standard deviations are themselves estimated, so the score carries `-(rho/2)(yt² + xt²)`. Feeding a covariance-style score to a correlation would silently understate its variance.
+
+  Moments accumulate in two passes rather than from raw sums of squares: the one-pass form cancels catastrophically when the mean is large relative to the spread, and the second pass is free on the Taylor path since scores cannot be formed until rho and the means are known.
+
+  Two optimizations, both benchmarked. Replication precomputes the weight-independent products once, turning each replicate into six dot products — 12.8x faster at n=100k with 200 replicates. An all-pairs sweep builds the whole moment matrix in one pass, cutting column traffic from O(k²) to O(k): level at k=5, ~1.5–1.8x at k=10.
+
 - **The simple-random-sample reference for a design effect is now explicit.** `SrsRef` selects what the design variance is compared against — `WithReplacement` (`S²/n`) or `WithoutReplacement { pop_total }` (`S²/n · (1 - n/N)`) — and is threaded through every `srs_variance_*` kernel. The nine estimator entry points that report a design effect gain `deff_ref` and `deff_pop_total`; both default to the previous behaviour, so no reported number changes. `taylor_quantile`/`taylor_median` are untouched, having no design effect to report.
 
   The finite-population correction is the only scale-dependent term in the whole calculation — the design variance and the population variance are both invariant to the weight scale. So once weights stop being reciprocals of selection probabilities, only that factor moves: halving them shifted a design effect by 0.94%, exactly the FPC ratio. `WithReplacement` omits it and is therefore scale-free.
