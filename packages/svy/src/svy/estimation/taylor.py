@@ -155,7 +155,7 @@ def taylor_total(
     prep: PreparedData,
     y: str,
     *,
-    deff: bool = False,
+    deff_ref: str | None = None,
     as_factor: bool = False,
     alpha: float = 0.05,
 ) -> Estimate:
@@ -178,6 +178,7 @@ def taylor_total(
         fpc_ssu_col=fpc_ssu_col,
         by_col=prep.by_col,
         singleton_method=center_arg,
+        deff_ref=deff_ref,
     )
 
     if est._should_run_double_pass():
@@ -200,7 +201,7 @@ def taylor_total(
         result_df = est._apply_scale_adjustment(result_full, result_df, param=PopParam.TOTAL)
 
     est_list = est._polars_result_to_param_est(
-        result_df, y, PopParam.TOTAL, alpha, deff, prep.by_col, as_factor=False
+        result_df, y, PopParam.TOTAL, alpha, deff_ref is not None, prep.by_col, as_factor=False
     )
     est_cov = np.diag(result_df["var"].to_numpy())
     return est._build_estimate_result_light(
@@ -219,7 +220,7 @@ def taylor_total_multi(
     prep: PreparedData,
     ys: list[str],
     *,
-    deff: bool = False,
+    deff_ref: str | None = None,
     alpha: float = 0.05,
 ) -> list[Estimate]:
     """Ungrouped Taylor totals for many variables, sharing one design build.
@@ -246,13 +247,14 @@ def taylor_total_multi(
         fpc_col=fpc_col,
         fpc_ssu_col=fpc_ssu_col,
         singleton_method=center_arg,
+        deff_ref=deff_ref,
     )
 
     results: list[Estimate] = []
     for y in ys:
         sub = result_df.filter(pl.col("y") == y)
         est_list = est._polars_result_to_param_est(
-            sub, y, PopParam.TOTAL, alpha, deff, None, as_factor=False
+            sub, y, PopParam.TOTAL, alpha, deff_ref is not None, None, as_factor=False
         )
         est_cov = np.diag(sub["var"].to_numpy())
         results.append(
@@ -275,7 +277,7 @@ def taylor_ratio(
     y: str,
     x: str,
     *,
-    deff: bool = False,
+    deff_ref: str | None = None,
     alpha: float = 0.05,
 ) -> Estimate:
     pop_size = getattr(est._sample._design, "pop_size", None)
@@ -298,6 +300,7 @@ def taylor_ratio(
         fpc_ssu_col=fpc_ssu_col,
         by_col=prep.by_col,
         singleton_method=center_arg,
+        deff_ref=deff_ref,
     )
 
     if est._should_run_double_pass():
@@ -321,7 +324,7 @@ def taylor_ratio(
         result_df = est._apply_scale_adjustment(result_full, result_df, param=PopParam.RATIO)
 
     est_list = est._polars_result_to_param_est(
-        result_df, y, PopParam.RATIO, alpha, deff, prep.by_col, as_factor=False, x_name=x
+        result_df, y, PopParam.RATIO, alpha, deff_ref is not None, prep.by_col, as_factor=False, x_name=x
     )
     est_cov = np.diag(result_df["var"].to_numpy())
     return est._build_estimate_result_light(
@@ -340,7 +343,7 @@ def taylor_prop(
     prep: PreparedData,
     y: str,
     *,
-    deff: bool = False,
+    deff_ref: str | None = None,
     alpha: float = 0.05,
     ci_method: str = "logit",
 ) -> Estimate:
@@ -364,6 +367,7 @@ def taylor_prop(
         fpc_ssu_col=fpc_ssu_col,
         by_col=prep.by_col,
         singleton_method=center_arg,
+        deff_ref=deff_ref,
     )
 
     if est._should_run_double_pass():
@@ -388,7 +392,7 @@ def taylor_prop(
         y,
         PopParam.PROP,
         alpha,
-        deff,
+        deff_ref is not None,
         prep.by_col,
         as_factor=True,
         ci_method=ci_method,
@@ -460,7 +464,7 @@ def taylor_ratio_multi(
     ys: list[str],
     xs: list[str],
     *,
-    deff: bool = False,
+    deff_ref: str | None = None,
     alpha: float = 0.05,
 ) -> list[Estimate]:
     """Ungrouped Taylor ratios for paired (numerator, denominator) columns,
@@ -485,13 +489,14 @@ def taylor_ratio_multi(
         fpc_col=fpc_col,
         fpc_ssu_col=fpc_ssu_col,
         singleton_method=center_arg,
+        deff_ref=deff_ref,
     )
 
     results: list[Estimate] = []
     for i, (y, x) in enumerate(zip(ys, xs)):
         sub = result_df.slice(i, 1)
         est_list = est._polars_result_to_param_est(
-            sub, y, PopParam.RATIO, alpha, deff, None, as_factor=False, x_name=x
+            sub, y, PopParam.RATIO, alpha, deff_ref is not None, None, as_factor=False, x_name=x
         )
         est_cov = np.diag(sub["var"].to_numpy())
         results.append(
@@ -513,7 +518,7 @@ def taylor_prop_multi(
     prep: PreparedData,
     ys: list[str],
     *,
-    deff: bool = False,
+    deff_ref: str | None = None,
     alpha: float = 0.05,
     ci_method: str = "logit",
 ) -> list[Estimate]:
@@ -539,13 +544,14 @@ def taylor_prop_multi(
         fpc_col=fpc_col,
         fpc_ssu_col=fpc_ssu_col,
         singleton_method=center_arg,
+        deff_ref=deff_ref,
     )
 
     results: list[Estimate] = []
     for y in ys:
         sub = result_df.filter(pl.col("y") == y)
         est_list = est._polars_result_to_param_est(
-            sub, y, PopParam.PROP, alpha, deff, None, as_factor=True, ci_method=ci_method
+            sub, y, PopParam.PROP, alpha, deff_ref is not None, None, as_factor=True, ci_method=ci_method
         )
         est_cov = np.diag(sub["var"].to_numpy())
         results.append(

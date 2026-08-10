@@ -268,7 +268,7 @@ def taylor_assoc(
     pairs: list[tuple[str, str]],
     param: PopParam,
     *,
-    deff: bool = False,
+    deff_ref: str | None = None,
     alpha: float = 0.05,
     ci_method: str = "fisher",
 ) -> Estimate:
@@ -294,9 +294,12 @@ def taylor_assoc(
         fpc_ssu_col=fpc_ssu_col,
         by_col=prep.by_col,
         singleton_method=est._get_center_method(),
+        deff_ref=deff_ref,
     )
 
-    est_list = result_to_param_est(est, result_df, param, alpha, deff, prep.by_col, ci_method)
+    est_list = result_to_param_est(
+        est, result_df, param, alpha, deff_ref is not None, prep.by_col, ci_method
+    )
     est_cov = np.diag(result_df["var"].to_numpy())
     return est._build_estimate_result_light(
         est_list,

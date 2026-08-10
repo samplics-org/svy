@@ -1426,7 +1426,7 @@ class Estimation:
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
         method: Literal["taylor", "replication"] | None = None,
-        deff: bool = False,
+        deff: Literal["wor", "wr"] | None = None,
         fay_coef: float = 0.0,
         as_factor: bool = False,
         variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
@@ -1445,6 +1445,8 @@ class Estimation:
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
         """
+        deff_ref = self._normalize_deff(deff)
+
         if not isinstance(y, str):
             ys = list(y)
             return self._taylor_multi(
@@ -1462,7 +1464,7 @@ class Estimation:
                     drop_nulls=drop_nulls,
                 ),
                 batched_call=lambda prep: _taylor_total_multi(
-                    self, prep=prep, ys=ys, deff=deff, alpha=alpha
+                    self, prep=prep, ys=ys, deff_ref=deff_ref, alpha=alpha
                 ),
                 prep_y=(ys[0] if ys else ""),
                 prep_extra_cols=ys[1:],
@@ -1494,7 +1496,7 @@ class Estimation:
                     self,
                     prep=prep,
                     y=y,
-                    deff=deff,
+                    deff_ref=deff_ref,
                     alpha=alpha,
                     as_factor=as_factor,
                 )
@@ -1530,7 +1532,7 @@ class Estimation:
         where: WhereArg = None,
         method: Literal["taylor", "replication"] | None = None,
         ci_method: Literal["logit", "beta", "korn-graubard", "wilson"] = "logit",
-        deff: bool = False,
+        deff: Literal["wor", "wr"] | None = None,
         fay_coef: float = 0.0,
         variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
         alpha: float = 0.05,
@@ -1548,6 +1550,8 @@ class Estimation:
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
         """
+        deff_ref = self._normalize_deff(deff)
+
         if not isinstance(y, str):
             ys = list(y)
             return self._taylor_multi(
@@ -1565,7 +1569,7 @@ class Estimation:
                     drop_nulls=drop_nulls,
                 ),
                 batched_call=lambda prep: _taylor_prop_multi(
-                    self, prep=prep, ys=ys, deff=deff, alpha=alpha, ci_method=ci_method
+                    self, prep=prep, ys=ys, deff_ref=deff_ref, alpha=alpha, ci_method=ci_method
                 ),
                 prep_y=(ys[0] if ys else ""),
                 prep_extra_cols=ys[1:],
@@ -1597,7 +1601,7 @@ class Estimation:
                     self,
                     prep=prep,
                     y=y,
-                    deff=deff,
+                    deff_ref=deff_ref,
                     alpha=alpha,
                     ci_method=ci_method,
                 )
@@ -1634,7 +1638,7 @@ class Estimation:
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
         method: Literal["taylor", "replication"] | None = None,
-        deff: bool = False,
+        deff: Literal["wor", "wr"] | None = None,
         fay_coef: float = 0.0,
         variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
         alpha: float = 0.05,
@@ -1653,6 +1657,8 @@ class Estimation:
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
         """
+        deff_ref = self._normalize_deff(deff)
+
         if not (isinstance(y, str) and isinstance(x, str)):
             ys = [y] if isinstance(y, str) else list(y)
             xs = [x] if isinstance(x, str) else list(x)
@@ -1695,7 +1701,7 @@ class Estimation:
                     prep=prep,
                     ys=[p[0] for p in pairs],
                     xs=[p[1] for p in pairs],
-                    deff=deff,
+                    deff_ref=deff_ref,
                     alpha=alpha,
                 ),
                 prep_y=(ys[0] if ys else ""),
@@ -1729,7 +1735,7 @@ class Estimation:
                     prep=prep,
                     y=y,
                     x=x,
-                    deff=deff,
+                    deff_ref=deff_ref,
                     alpha=alpha,
                 )
             else:
@@ -1765,7 +1771,7 @@ class Estimation:
         where,
         method,
         ci_method: str,
-        deff: bool,
+        deff_ref: str | None,
         fay_coef: float,
         variance_center: str,
         alpha: float,
@@ -1803,7 +1809,7 @@ class Estimation:
                     prep=prep,
                     pairs=pairs,
                     param=param,
-                    deff=deff,
+                    deff_ref=deff_ref,
                     alpha=alpha,
                     ci_method=ci_method,
                 )
@@ -1838,7 +1844,7 @@ class Estimation:
         where: WhereArg = None,
         method: Literal["taylor", "replication"] | None = None,
         ci_method: Literal["fisher", "wald"] = "fisher",
-        deff: bool = False,
+        deff: Literal["wor", "wr"] | None = None,
         fay_coef: float = 0.0,
         variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
         alpha: float = 0.05,
@@ -1884,6 +1890,8 @@ class Estimation:
         """
         _guard_pandas_method(method)
         _normalize_assoc_kind(kind)
+        deff_ref = self._normalize_deff(deff)
+        deff_ref = self._normalize_deff(deff)
         return self._assoc(
             PopParam.CORR,
             cols,
@@ -1891,7 +1899,7 @@ class Estimation:
             where=where,
             method=method,
             ci_method=ci_method,
-            deff=deff,
+            deff_ref=deff_ref,
             fay_coef=fay_coef,
             variance_center=variance_center,
             alpha=alpha,
@@ -1905,7 +1913,7 @@ class Estimation:
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
         method: Literal["taylor", "replication"] | None = None,
-        deff: bool = False,
+        deff: Literal["wor", "wr"] | None = None,
         fay_coef: float = 0.0,
         variance_center: Literal["rep_mean", "estimate"] = "rep_mean",
         alpha: float = 0.05,
@@ -1925,6 +1933,7 @@ class Estimation:
         Estimate
             One row per pair, or per (group, pair) when ``by`` is set.
         """
+        deff_ref = self._normalize_deff(deff)
         return self._assoc(
             PopParam.COV,
             cols,
@@ -1932,7 +1941,7 @@ class Estimation:
             where=where,
             method=method,
             ci_method="wald",
-            deff=deff,
+            deff_ref=deff_ref,
             fay_coef=fay_coef,
             variance_center=variance_center,
             alpha=alpha,
