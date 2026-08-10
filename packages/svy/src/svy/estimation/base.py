@@ -1332,6 +1332,32 @@ class Estimation:
             returned (one per variable, in order); a single string returns a
             single ``Estimate``. For ungrouped Taylor means the list form shares
             one design build across variables (faster than a manual loop).
+        deff : {'wor', 'wr'} | None, default None
+            Report the design effect against a simple-random-sample reference.
+            ``None`` omits it.
+
+            The reference is a modelling choice about the *denominator*; it says
+            nothing about how the sample was drawn. ``'wor'`` compares against
+            SRS without replacement (Kish's design effect); ``'wr'`` compares
+            against SRS with replacement (the square of Kish's "deft"). The two
+            differ by exactly the finite-population correction ``1 - n/N``, so
+            they agree closely when the sampling fraction is small and diverge
+            sharply when it is not -- at a 50% sampling rate, common in
+            evaluation studies, they differ by a factor of two, and ``'wor'``
+            grows without bound as the sample approaches a census.
+
+            ``'wor'`` infers ``N`` from the sum of the weights, so it is only
+            meaningful while the weights remain reciprocals of selection
+            probabilities. After ``normalize``, and to a lesser degree after
+            raking or calibration, that sum is no longer a population count and
+            the design effect is silently wrong -- svy cannot detect this in
+            general, since it cannot tell a rescaled weight vector from a small
+            population. ``'wr'`` has no ``N`` in it at all and is therefore
+            unaffected; prefer it whenever the weights have been rescaled.
+
+            The one detectable case raises: if the weights sum to no more than
+            the sample size, the correction is non-positive and no design effect
+            exists to report.
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design (Taylor when strata/PSU
@@ -1441,6 +1467,32 @@ class Estimation:
             A single response column, or a list of columns. A list returns a
             ``list[Estimate]`` (one per variable, in order); ungrouped Taylor
             totals share one design build across variables.
+        deff : {'wor', 'wr'} | None, default None
+            Report the design effect against a simple-random-sample reference.
+            ``None`` omits it.
+
+            The reference is a modelling choice about the *denominator*; it says
+            nothing about how the sample was drawn. ``'wor'`` compares against
+            SRS without replacement (Kish's design effect); ``'wr'`` compares
+            against SRS with replacement (the square of Kish's "deft"). The two
+            differ by exactly the finite-population correction ``1 - n/N``, so
+            they agree closely when the sampling fraction is small and diverge
+            sharply when it is not -- at a 50% sampling rate, common in
+            evaluation studies, they differ by a factor of two, and ``'wor'``
+            grows without bound as the sample approaches a census.
+
+            ``'wor'` infers ``N`` from the sum of the weights, so it is only
+            meaningful while the weights remain reciprocals of selection
+            probabilities. After ``normalize``, and to a lesser degree after
+            raking or calibration, that sum is no longer a population count and
+            the design effect is silently wrong -- svy cannot detect this in
+            general, since it cannot tell a rescaled weight vector from a small
+            population. ``'wr'`` has no ``N`` in it at all and is therefore
+            unaffected; prefer it whenever the weights have been rescaled.
+
+            The one detectable case raises: if the weights sum to no more than
+            the sample size, the correction is non-positive and no design effect
+            exists to report.
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
@@ -1546,6 +1598,32 @@ class Estimation:
             A single category column, or a list. A list returns a
             ``list[Estimate]`` (one multi-row, per-level estimate per variable);
             ungrouped Taylor proportions share one design build across variables.
+        deff : {'wor', 'wr'} | None, default None
+            Report the design effect against a simple-random-sample reference.
+            ``None`` omits it.
+
+            The reference is a modelling choice about the *denominator*; it says
+            nothing about how the sample was drawn. ``'wor'`` compares against
+            SRS without replacement (Kish's design effect); ``'wr'`` compares
+            against SRS with replacement (the square of Kish's "deft"). The two
+            differ by exactly the finite-population correction ``1 - n/N``, so
+            they agree closely when the sampling fraction is small and diverge
+            sharply when it is not -- at a 50% sampling rate, common in
+            evaluation studies, they differ by a factor of two, and ``'wor'``
+            grows without bound as the sample approaches a census.
+
+            ``'wor'` infers ``N`` from the sum of the weights, so it is only
+            meaningful while the weights remain reciprocals of selection
+            probabilities. After ``normalize``, and to a lesser degree after
+            raking or calibration, that sum is no longer a population count and
+            the design effect is silently wrong -- svy cannot detect this in
+            general, since it cannot tell a rescaled weight vector from a small
+            population. ``'wr'`` has no ``N`` in it at all and is therefore
+            unaffected; prefer it whenever the weights have been rescaled.
+
+            The one detectable case raises: if the weights sum to no more than
+            the sample size, the correction is non-positive and no design effect
+            exists to report.
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
@@ -1653,6 +1731,32 @@ class Estimation:
             batched and returns a ``list[Estimate]``: numerator/denominator are
             paired element-wise (a scalar side is broadcast to the other's
             length). Ungrouped Taylor ratios share one design build.
+        deff : {'wor', 'wr'} | None, default None
+            Report the design effect against a simple-random-sample reference.
+            ``None`` omits it.
+
+            The reference is a modelling choice about the *denominator*; it says
+            nothing about how the sample was drawn. ``'wor'`` compares against
+            SRS without replacement (Kish's design effect); ``'wr'`` compares
+            against SRS with replacement (the square of Kish's "deft"). The two
+            differ by exactly the finite-population correction ``1 - n/N``, so
+            they agree closely when the sampling fraction is small and diverge
+            sharply when it is not -- at a 50% sampling rate, common in
+            evaluation studies, they differ by a factor of two, and ``'wor'``
+            grows without bound as the sample approaches a census.
+
+            ``'wor'` infers ``N`` from the sum of the weights, so it is only
+            meaningful while the weights remain reciprocals of selection
+            probabilities. After ``normalize``, and to a lesser degree after
+            raking or calibration, that sum is no longer a population count and
+            the design effect is silently wrong -- svy cannot detect this in
+            general, since it cannot tell a rescaled weight vector from a small
+            population. ``'wr'`` has no ``N`` in it at all and is therefore
+            unaffected; prefer it whenever the weights have been rescaled.
+
+            The one detectable case raises: if the weights sum to no more than
+            the sample size, the correction is non-positive and no design effect
+            exists to report.
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
