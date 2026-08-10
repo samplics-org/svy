@@ -24,6 +24,8 @@ help:
 	@echo "  build-svy           - build sdist + wheel for svy"
 	@echo "  test-svy            - run tests for svy"
 	@echo "  lint-svy            - lint svy"
+	@echo "  bench-check         - check for perf regressions vs the baseline (needs release build)"
+	@echo "  bench-record        - re-record the perf baseline (commit the result)"
 	@echo ""
 	@echo "svy-io Targets (local dev only — published separately):"
 	@echo "  build-svy-io        - build svy-io native extension locally"
@@ -114,6 +116,22 @@ bench-svy:
 
 bench: bench-svy-rs bench-svy
 	@echo "All benchmarks complete."
+
+# ------ Performance regression gate (LOCAL only, not CI) ------
+# Absolute timings only mean something on the machine that recorded them, so
+# this is deliberately not a CI check: hosted runners are too noisy to gate on.
+# Run before a release, or after touching a hot path. Requires a RELEASE build
+# (`maturin develop --release`) -- a debug build is detected and reported as
+# such rather than as a wall of regressions.
+.PHONY: bench-check bench-record
+
+bench-check:
+	@echo "▶ Checking for performance regressions vs the recorded baseline..."
+	cd $(PKG_SVY) && uv run python benchmarks/check_regression.py
+
+bench-record:
+	@echo "▶ Recording a new performance baseline (deliberate: commit the result)..."
+	cd $(PKG_SVY) && uv run python benchmarks/check_regression.py --record
 
 # ====== svy (pure Python — the one we publish from this repo) ======
 .PHONY: build-svy
