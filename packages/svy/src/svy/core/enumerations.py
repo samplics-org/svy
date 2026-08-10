@@ -168,6 +168,10 @@ class PopParam(StrEnum):
     RATIO = "Ratio"
     MEDIAN = "Median"
     QUANTILE = "Quantile"
+    # Member names stay abbreviated for code, values carry the full word for
+    # display — the same split PROP = "Proportion" already uses.
+    CORR = "Correlation"
+    COV = "Covariance"
 
 
 @unique
