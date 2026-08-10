@@ -8,7 +8,22 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
-### Changed
+- **BREAKING: `deff` now names the SRS reference instead of taking a boolean.** `deff=True` and `deff=False` are rejected with a structured `MethodError` that names the replacement; the argument takes `"wor"`, `"wr"` or `None`.
+
+  | before | now |
+  | --- | --- |
+  | `deff=True` | `deff="wor"` — without replacement, Kish's design effect. Same numbers as before. |
+  | `deff=False` | omit the argument, or `deff=None` |
+  | — | `deff="wr"` — with replacement, the square of Kish's "deft" |
+
+  A boolean never said *which* reference it meant. Accepting it silently would leave two spellings for one thing indefinitely, and ignoring it would be worse: `Literal` is not enforced at runtime, so a string-only implementation would read `deff=True` as "off" and quietly stop reporting a design effect the caller asked for. Rejecting it loudly is the only option that cannot mislead. `"replace"` is accepted as an alias for `"wr"`, since that is R's spelling.
+
+  The reference describes the *denominator* — what the design variance is compared against — and says nothing about how the sample was drawn; `deff="wr"` is not a claim of with-replacement sampling. The two differ by exactly the finite-population correction `1 - n/N`, so they agree closely at small sampling fractions and diverge sharply otherwise: at f = 0.8, an evaluation-study shape, they differ five-fold (5.027 against 1.005, both matching R).
+
+  `"wor"` infers `N` from the sum of the weights, so it is meaningful only while those weights remain reciprocals of selection probabilities. After `normalize`, or to a lesser degree raking or calibration, that sum is no longer a population count and the design effect is silently wrong — svy cannot detect this in general, since weights normalized to twice the sample size pass every check and yield a plausible wrong answer. `"wr"` has no `N` in it and is unaffected. The one provable case now raises rather than returning a column of NaN: when the weights sum to no more than the sample size, the correction is zero or negative, which means either rescaled weights or a census with no sampling variance to compare against.
+
+  The reference is recorded on the result. It appears in the printed header beside the variance method — `Estimate: MEAN (TAYLOR, deff=wr)` — is available as `Estimate.deff_ref`, and round-trips through serialization as an optional `deff_ref` field. `to_polars()` is deliberately unchanged: that frame carries no method, param or design either, and a deff column there was already provenance-free.
+
 
 - **`svy.serialize` raises svy's structured errors instead of bare built-ins.** The serialize module was the last public surface still raising `TypeError`/`ValueError` where the rest of the library uses the `SvyError` hierarchy — structured errors with a stable `code`, `expected`/`got` context, and a hint. The new `SerializationError` (exported as `svy.SerializationError`) covers the serialize-specific failures, and the unfitted-model case now reuses the same `ModelError` that `GLM.predict()` already raises:
 
