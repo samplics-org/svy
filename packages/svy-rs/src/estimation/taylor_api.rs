@@ -49,12 +49,28 @@ fn into_contiguous(data: PyDataFrame) -> DataFrame {
     df
 }
 
+/// Resolve the SRS reference the design effect is measured against.
+///
+/// `None` keeps the historical behaviour -- without replacement, with the
+/// population size inferred from the sum of weights. `deff_pop_total` is the
+/// design's declared population size when it has one, which is what keeps the
+/// without-replacement reference correct after weights have been rescaled.
+fn parse_srs_ref(deff_ref: Option<&str>, deff_pop_total: Option<f64>) -> PolarsResult<SrsRef> {
+    match deff_ref.unwrap_or("wor") {
+        "wr" => Ok(SrsRef::WithReplacement),
+        "wor" => Ok(SrsRef::WithoutReplacement { pop_total: deff_pop_total }),
+        other => Err(PolarsError::ComputeError(
+            format!("unknown deff reference '{other}'; expected 'wor' or 'wr'").into(),
+        )),
+    }
+}
+
 // ============================================================================
 // Mean
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None))]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None))]
 pub fn taylor_mean(
     _py: Python,
     data: PyDataFrame,
@@ -67,8 +83,12 @@ pub fn taylor_mean(
     fpc_ssu_col: Option<String>,
     by_col: Option<String>,
     singleton_method: Option<String>,
+    deff_ref: Option<String>,
+    deff_pop_total: Option<f64>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
+    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
     if by_col.is_none() {
         // Detach for the ungrouped path too: `compute_mean_ungrouped` overlaps
@@ -81,6 +101,7 @@ pub fn taylor_mean(
                     &df, &value_col, &weight_col,
                     strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
                     fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref(),
+                srs
                 )
             })
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -95,6 +116,7 @@ pub fn taylor_mean(
                 strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
                 fpc_col.as_deref(), fpc_ssu_col.as_deref(),
                 &by, singleton_method.as_deref(),
+                srs
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -104,7 +126,7 @@ pub fn taylor_mean(
 /// Batched ungrouped mean over many variables sharing one design (see
 /// `compute_mean_multi`). Returns one row per variable, in input order.
 #[pyfunction]
-#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None))]
+#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None))]
 pub fn taylor_mean_multi(
     _py: Python,
     data: PyDataFrame,
@@ -116,14 +138,19 @@ pub fn taylor_mean_multi(
     fpc_col: Option<String>,
     fpc_ssu_col: Option<String>,
     singleton_method: Option<String>,
+    deff_ref: Option<String>,
+    deff_pop_total: Option<f64>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
+    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
     let result = _py
         .detach(|| {
             compute_mean_multi(
                 &df, &value_cols, &weight_col,
                 strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
                 fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref(),
+                srs
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -184,6 +211,7 @@ fn compute_mean_ungrouped(
     strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
     fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    srs: SrsRef,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -198,7 +226,7 @@ fn compute_mean_ungrouped(
         || {
             let estimate = point_estimate_mean(y, weights)?;
             let scores   = scores_mean_arr(y, weights)?;
-            let srs_var  = srs_variance_mean(y, weights, SrsRef::WithoutReplacement { pop_total: None })?;
+            let srs_var  = srs_variance_mean(y, weights, srs)?;
             Ok((scores, (estimate, srs_var)))
         },
     )?;
@@ -224,6 +252,7 @@ fn compute_mean_multi(
     strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
     fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    srs: SrsRef,
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -258,7 +287,7 @@ fn compute_mean_multi(
             let variance = taylor_variance_apply(&scores_arr, &design);
             let se       = variance.max(0.0).sqrt();
             let n        = y.len() as u32;
-            let srs_var  = srs_variance_mean(y, weights, SrsRef::WithoutReplacement { pop_total: None })?;
+            let srs_var  = srs_variance_mean(y, weights, srs)?;
             let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
             Ok((value_cols[i].clone(), estimate, se, variance, n, deff))
         })
@@ -290,6 +319,7 @@ fn compute_mean_grouped(
     strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
     fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
     by_col: &str, singleton_method: Option<&str>,
+    srs: SrsRef,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -325,7 +355,7 @@ fn compute_mean_grouped(
             let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
             let variance    = taylor_variance_apply(&scores_arr, &design);
             let se          = variance.max(0.0).sqrt();
-            let srs_var     = srs_variance_mean_domain(y, weights, &domain_mask, SrsRef::WithoutReplacement { pop_total: None })?;
+            let srs_var     = srs_variance_mean_domain(y, weights, &domain_mask, srs)?;
             let deff        = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
             Ok((group, estimate, se, variance, n_domain, deff))
         })
@@ -356,7 +386,7 @@ fn compute_mean_grouped(
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None))]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None))]
 pub fn taylor_total(
     _py: Python,
     data: PyDataFrame,
@@ -369,13 +399,17 @@ pub fn taylor_total(
     fpc_ssu_col: Option<String>,
     by_col: Option<String>,
     singleton_method: Option<String>,
+    deff_ref: Option<String>,
+    deff_pop_total: Option<f64>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
+    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
     if by_col.is_none() {
         let result = compute_total_ungrouped(
             &df, &value_col, &weight_col,
             strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
-            fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref(),
+            fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref(), srs,
         )
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         return Ok(PyDataFrame(result));
@@ -388,6 +422,7 @@ pub fn taylor_total(
                 strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
                 fpc_col.as_deref(), fpc_ssu_col.as_deref(),
                 &by, singleton_method.as_deref(),
+                srs
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -396,7 +431,7 @@ pub fn taylor_total(
 
 /// Batched ungrouped total over many variables sharing one design build.
 #[pyfunction]
-#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None))]
+#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None))]
 pub fn taylor_total_multi(
     _py: Python,
     data: PyDataFrame,
@@ -408,14 +443,19 @@ pub fn taylor_total_multi(
     fpc_col: Option<String>,
     fpc_ssu_col: Option<String>,
     singleton_method: Option<String>,
+    deff_ref: Option<String>,
+    deff_pop_total: Option<f64>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
+    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
     let result = _py
         .detach(|| {
             compute_total_multi(
                 &df, &value_cols, &weight_col,
                 strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
                 fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref(),
+                srs
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -428,6 +468,7 @@ fn compute_total_ungrouped(
     strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
     fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    srs: SrsRef,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -442,7 +483,7 @@ fn compute_total_ungrouped(
         || {
             let estimate = point_estimate_total(y, weights)?;
             let scores   = scores_to_arr(&scores_total(y, weights)?);
-            let srs_var  = srs_variance_total(y, weights, SrsRef::WithoutReplacement { pop_total: None })?;
+            let srs_var  = srs_variance_total(y, weights, srs)?;
             Ok((scores, (estimate, srs_var)))
         },
     )?;
@@ -463,6 +504,7 @@ fn compute_total_multi(
     strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
     fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    srs: SrsRef,
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -492,7 +534,7 @@ fn compute_total_multi(
             let variance = taylor_variance_apply(&scores_arr, &design);
             let se       = variance.max(0.0).sqrt();
             let n        = y.len() as u32;
-            let srs_var  = srs_variance_total(y, weights, SrsRef::WithoutReplacement { pop_total: None })?;
+            let srs_var  = srs_variance_total(y, weights, srs)?;
             let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
             Ok((value_cols[i].clone(), estimate, se, variance, n, deff))
         })
@@ -524,6 +566,7 @@ fn compute_total_grouped(
     strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
     fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
     by_col: &str, singleton_method: Option<&str>,
+    srs: SrsRef,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -555,7 +598,7 @@ fn compute_total_grouped(
             let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
             let variance    = taylor_variance_apply(&scores_arr, &design);
             let se          = variance.max(0.0).sqrt();
-            let srs_var     = srs_variance_total_domain(y, weights, &domain_mask, SrsRef::WithoutReplacement { pop_total: None })?;
+            let srs_var     = srs_variance_total_domain(y, weights, &domain_mask, srs)?;
             let deff        = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
             Ok((group, estimate, se, variance, n_domain, deff))
         })
@@ -586,7 +629,7 @@ fn compute_total_grouped(
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, numerator_col, denominator_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None))]
+#[pyo3(signature = (data, numerator_col, denominator_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None))]
 pub fn taylor_ratio(
     _py: Python,
     data: PyDataFrame,
@@ -600,13 +643,17 @@ pub fn taylor_ratio(
     fpc_ssu_col: Option<String>,
     by_col: Option<String>,
     singleton_method: Option<String>,
+    deff_ref: Option<String>,
+    deff_pop_total: Option<f64>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
+    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
     if by_col.is_none() {
         let result = compute_ratio_ungrouped(
             &df, &numerator_col, &denominator_col, &weight_col,
             strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
-            fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref(),
+            fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref(), srs,
         )
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         return Ok(PyDataFrame(result));
@@ -619,6 +666,7 @@ pub fn taylor_ratio(
                 strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
                 fpc_col.as_deref(), fpc_ssu_col.as_deref(),
                 &by, singleton_method.as_deref(),
+                srs
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -628,7 +676,7 @@ pub fn taylor_ratio(
 /// Batched ungrouped ratio over paired numerator/denominator columns sharing one
 /// design build. `numerator_cols` and `denominator_cols` must be equal length.
 #[pyfunction]
-#[pyo3(signature = (data, numerator_cols, denominator_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None))]
+#[pyo3(signature = (data, numerator_cols, denominator_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None))]
 pub fn taylor_ratio_multi(
     _py: Python,
     data: PyDataFrame,
@@ -641,14 +689,19 @@ pub fn taylor_ratio_multi(
     fpc_col: Option<String>,
     fpc_ssu_col: Option<String>,
     singleton_method: Option<String>,
+    deff_ref: Option<String>,
+    deff_pop_total: Option<f64>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
+    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
     let result = _py
         .detach(|| {
             compute_ratio_multi(
                 &df, &numerator_cols, &denominator_cols, &weight_col,
                 strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
                 fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref(),
+                srs
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -661,6 +714,7 @@ fn compute_ratio_ungrouped(
     strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
     fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    srs: SrsRef,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(numerator_col)?.f64()?;
     let x = df.column(denominator_col)?.f64()?;
@@ -676,7 +730,7 @@ fn compute_ratio_ungrouped(
         || {
             let estimate = point_estimate_ratio(y, x, weights)?;
             let scores   = scores_to_arr(&scores_ratio(y, x, weights)?);
-            let srs_var  = srs_variance_ratio(y, x, weights, SrsRef::WithoutReplacement { pop_total: None })?;
+            let srs_var  = srs_variance_ratio(y, x, weights, srs)?;
             Ok((scores, (estimate, srs_var)))
         },
     )?;
@@ -697,6 +751,7 @@ fn compute_ratio_multi(
     strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
     fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    srs: SrsRef,
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -731,7 +786,7 @@ fn compute_ratio_multi(
             let variance = taylor_variance_apply(&scores_arr, &design);
             let se       = variance.max(0.0).sqrt();
             let n        = y.len() as u32;
-            let srs_var  = srs_variance_ratio(y, x, weights, SrsRef::WithoutReplacement { pop_total: None })?;
+            let srs_var  = srs_variance_ratio(y, x, weights, srs)?;
             let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
             Ok((
                 numerator_cols[i].clone(),
@@ -769,6 +824,7 @@ fn compute_ratio_grouped(
     strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
     fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
     by_col: &str, singleton_method: Option<&str>,
+    srs: SrsRef,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(numerator_col)?.f64()?;
     let x = df.column(denominator_col)?.f64()?;
@@ -801,7 +857,7 @@ fn compute_ratio_grouped(
             let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
             let variance    = taylor_variance_apply(&scores_arr, &design);
             let se          = variance.max(0.0).sqrt();
-            let srs_var     = srs_variance_ratio_domain(y, x, weights, &domain_mask, SrsRef::WithoutReplacement { pop_total: None })?;
+            let srs_var     = srs_variance_ratio_domain(y, x, weights, &domain_mask, srs)?;
             let deff        = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
             Ok((group, estimate, se, variance, n_domain, deff))
         })
@@ -840,7 +896,7 @@ fn compute_ratio_grouped(
 /// pair columns are named `y`/`x` positionally, and carry no directional
 /// meaning, since both statistics are symmetric.
 #[pyfunction]
-#[pyo3(signature = (data, y_cols, x_cols, kind, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None))]
+#[pyo3(signature = (data, y_cols, x_cols, kind, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None))]
 pub fn taylor_assoc(
     _py: Python,
     data: PyDataFrame,
@@ -855,8 +911,12 @@ pub fn taylor_assoc(
     fpc_ssu_col: Option<String>,
     by_col: Option<String>,
     singleton_method: Option<String>,
+    deff_ref: Option<String>,
+    deff_pop_total: Option<f64>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
+    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
     let result = _py
         .detach(|| {
             let kind = AssocKind::from_name(&kind)?;
@@ -888,6 +948,7 @@ pub fn taylor_assoc(
                 fpc_ssu_col.as_deref(),
                 by_col.as_deref(),
                 singleton_method.as_deref(),
+                srs
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -908,6 +969,7 @@ fn compute_assoc(
     fpc_ssu_col: Option<&str>,
     by_col: Option<&str>,
     singleton_method: Option<&str>,
+    srs: SrsRef,
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -968,7 +1030,7 @@ fn compute_assoc(
             let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
             let variance = taylor_variance_apply(&scores_arr, &design);
             let se = variance.max(0.0).sqrt();
-            let srs_var = srs_variance_assoc_of(kind, y, x, weights, mask.as_ref())?;
+            let srs_var = srs_variance_assoc_of(kind, y, x, weights, mask.as_ref(), srs)?;
             let deff = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
             let n = match mask.as_ref() {
                 Some(m) => m.sum().unwrap_or(0),
@@ -1018,7 +1080,7 @@ fn compute_assoc(
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None))]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None))]
 pub fn taylor_prop(
     _py: Python,
     data: PyDataFrame,
@@ -1031,13 +1093,17 @@ pub fn taylor_prop(
     fpc_ssu_col: Option<String>,
     by_col: Option<String>,
     singleton_method: Option<String>,
+    deff_ref: Option<String>,
+    deff_pop_total: Option<f64>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
+    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
     if by_col.is_none() {
         let result = compute_prop_ungrouped(
             &df, &value_col, &weight_col,
             strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
-            fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref(),
+            fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref(), srs,
         )
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         return Ok(PyDataFrame(result));
@@ -1050,6 +1116,7 @@ pub fn taylor_prop(
                 strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
                 fpc_col.as_deref(), fpc_ssu_col.as_deref(),
                 &by, singleton_method.as_deref(),
+                srs
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -1059,7 +1126,7 @@ pub fn taylor_prop(
 /// Batched ungrouped proportions over many category columns sharing one design
 /// build. Rows are (variable, level), grouped by variable in input order.
 #[pyfunction]
-#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None))]
+#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None))]
 pub fn taylor_prop_multi(
     _py: Python,
     data: PyDataFrame,
@@ -1071,14 +1138,19 @@ pub fn taylor_prop_multi(
     fpc_col: Option<String>,
     fpc_ssu_col: Option<String>,
     singleton_method: Option<String>,
+    deff_ref: Option<String>,
+    deff_pop_total: Option<f64>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
+    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
     let result = _py
         .detach(|| {
             compute_prop_multi(
                 &df, &value_cols, &weight_col,
                 strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
                 fpc_col.as_deref(), fpc_ssu_col.as_deref(), singleton_method.as_deref(),
+                srs
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -1091,6 +1163,7 @@ fn compute_prop_ungrouped(
     strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
     fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    srs: SrsRef,
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -1133,7 +1206,7 @@ fn compute_prop_ungrouped(
         let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
         let variance = taylor_variance_apply(&scores_arr, &design);
         let se       = variance.max(0.0).sqrt();
-        let srs_var  = srs_variance_mean(&indicator_ca, weights, SrsRef::WithoutReplacement { pop_total: None })?;
+        let srs_var  = srs_variance_mean(&indicator_ca, weights, srs)?;
         let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
 
         level_vals.push(lvl.clone());
@@ -1159,6 +1232,7 @@ fn compute_prop_multi(
     strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
     fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    srs: SrsRef,
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -1219,7 +1293,7 @@ fn compute_prop_multi(
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
                 let variance = taylor_variance_apply(&scores_arr, &design);
                 let se       = variance.max(0.0).sqrt();
-                let srs_var  = srs_variance_mean(&indicator_ca, weights, SrsRef::WithoutReplacement { pop_total: None })?;
+                let srs_var  = srs_variance_mean(&indicator_ca, weights, srs)?;
                 let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
                 out.push((value_cols[i].clone(), lvl.clone(), estimate, se, variance, n, deff));
             }
@@ -1257,6 +1331,7 @@ fn compute_prop_grouped(
     strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
     fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
     by_col: &str, singleton_method: Option<&str>,
+    srs: SrsRef,
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -1309,7 +1384,7 @@ fn compute_prop_grouped(
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
                 let variance = taylor_variance_apply(&scores_arr, &design);
                 let se       = variance.max(0.0).sqrt();
-                let srs_var  = srs_variance_mean_domain(&indicator_ca, weights, &domain_mask, SrsRef::WithoutReplacement { pop_total: None })?;
+                let srs_var  = srs_variance_mean_domain(&indicator_ca, weights, &domain_mask, srs)?;
                 let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
                 out.push((group.to_string(), lvl.clone(), estimate, se, variance, n_domain, deff));
             }

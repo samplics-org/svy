@@ -1802,30 +1802,27 @@ pub enum SrsRef {
 impl SrsRef {
     /// The finite-population correction for this reference.
     ///
-    /// Errors rather than returning a non-positive factor: `sum(w) <= n` means
-    /// the weights cannot be a population count, so the caller asked for a
-    /// reference that is not computable from this input. Silently returning
-    /// NaN there is what made rescaled weights produce a blank design effect
-    /// with no explanation.
+    /// Returns NaN rather than an error when the correction is degenerate.
+    /// That is deliberate: the kernels compute the SRS reference on every call,
+    /// including calls that never asked for a design effect, so failing here
+    /// would break estimation for anyone whose weights merely happen to sum to
+    /// about `n` -- unit weights being the obvious case. NaN propagates to the
+    /// `deff` column, and the Python layer, which knows whether a design effect
+    /// was actually requested, turns it into a structured error there.
+    ///
+    /// The comparison uses a tolerance rather than `> 0.0`: weights normalized
+    /// to sum to `n` land within ~1e-12 of it, on either side by luck, and a
+    /// hair above zero would otherwise yield an FPC near 1e-16 and a design
+    /// effect of ~1e16. A genuine near-census design bottoms out around 1e-6
+    /// (n = 999_999 of 1_000_000), well clear of this threshold.
     #[inline]
-    pub fn fpc(&self, n: f64, sum_w: f64) -> PolarsResult<f64> {
+    pub fn fpc(&self, n: f64, sum_w: f64) -> f64 {
         match self {
-            SrsRef::WithReplacement => Ok(1.0),
+            SrsRef::WithReplacement => 1.0,
             SrsRef::WithoutReplacement { pop_total } => {
                 let n_pop = pop_total.unwrap_or(sum_w);
                 let factor = 1.0 - (n / n_pop);
-                if factor > 0.0 {
-                    Ok(factor)
-                } else {
-                    Err(PolarsError::ComputeError(
-                        format!(
-                            "DEFF_FPC_DEGENERATE: population size {n_pop} is not greater than \
-                             the sample size {n}, so the finite-population correction is \
-                             non-positive"
-                        )
-                        .into(),
-                    ))
-                }
+                if factor > 1e-9 { factor } else { f64::NAN }
             }
         }
     }
@@ -1856,7 +1853,7 @@ fn srs_mean_from(yv: &[f64], wv: &[f64], srs: SrsRef) -> PolarsResult<f64> {
     }
     let wn: Vec<f64> = wv.iter().map(|w| w / sum_w).collect();
     let s2_y = weighted_s2(yv, &wn);
-    Ok((s2_y / n) * srs.fpc(n, sum_w)?)
+    Ok((s2_y / n) * srs.fpc(n, sum_w))
 }
 
 pub fn srs_variance_mean(
@@ -1946,7 +1943,7 @@ pub fn srs_variance_mean_domain(
     }
     let wn: Vec<f64> = wv.iter().map(|w| w / sum_w).collect();
     let s2_y = weighted_s2(&yv, &wn);
-    Ok((s2_y / n) * srs.fpc(n, sum_w)?)
+    Ok((s2_y / n) * srs.fpc(n, sum_w))
 }
 
 pub fn srs_variance_total(
@@ -1974,7 +1971,7 @@ pub fn srs_variance_total(
     }
     let wn: Vec<f64> = wv.iter().map(|w| w / sum_w).collect();
     let s2_y = weighted_s2(&yv, &wn);
-    Ok(((sum_w.powi(2) / n) * s2_y) * srs.fpc(n, sum_w)?)
+    Ok(((sum_w.powi(2) / n) * s2_y) * srs.fpc(n, sum_w))
 }
 
 pub fn srs_variance_total_domain(
@@ -2023,7 +2020,7 @@ pub fn srs_variance_total_domain(
     }
     let wn: Vec<f64> = wv.iter().map(|w| w / sum_w).collect();
     let s2_y = weighted_s2(&yv, &wn);
-    Ok(((sum_w.powi(2) / n) * s2_y) * srs.fpc(n, sum_w)?)
+    Ok(((sum_w.powi(2) / n) * s2_y) * srs.fpc(n, sum_w))
 }
 
 pub fn srs_variance_ratio(
@@ -2065,7 +2062,7 @@ pub fn srs_variance_ratio(
         .map(|(yi, xi)| yi - rhat * xi)
         .collect();
     let s2_e = weighted_s2(&ev, &wn);
-    Ok((s2_e / (n * xbar.powi(2))) * srs.fpc(n, sum_w)?)
+    Ok((s2_e / (n * xbar.powi(2))) * srs.fpc(n, sum_w))
 }
 
 pub fn srs_variance_ratio_domain(
@@ -2133,7 +2130,7 @@ pub fn srs_variance_ratio_domain(
         .map(|(yi, xi)| yi - rhat * xi)
         .collect();
     let s2_e = weighted_s2(&ev, &wn);
-    Ok((s2_e / (n * xbar.powi(2))) * srs.fpc(n, sum_w)?)
+    Ok((s2_e / (n * xbar.powi(2))) * srs.fpc(n, sum_w))
 }
 
 // ============================================================================
@@ -2672,17 +2669,39 @@ mod tests {
     /// Without a declared population size, normalized weights make the
     /// without-replacement reference uncomputable. It must say so rather than
     /// return a silent NaN.
+    /// Weights normalized to sum to n land within ~1e-12 of n, on either side
+    /// by luck. A hair above zero would otherwise slip through the guard and
+    /// yield an FPC near 1e-16 -- a design effect of ~1e16 rather than an error.
     #[test]
-    fn test_degenerate_fpc_is_an_error_not_a_nan() {
+    fn test_fpc_guard_survives_float_noise_around_n() {
+        let (y, _) = srs_fixture();
+        for delta in [-1e-11, -1e-13, 0.0, 1e-13, 1e-11] {
+            let each = (6.0 + delta) / 6.0;
+            let w = Float64Chunked::from_slice("w".into(), &[each; 6]);
+            let got = srs_variance_mean(&y, &w, SrsRef::WithoutReplacement { pop_total: None })
+                .unwrap();
+            assert!(got.is_nan(), "sum(w) = n{delta:+e} should be degenerate, got {got}");
+        }
+    }
+
+    /// A genuine near-census design must still be allowed through.
+    #[test]
+    fn test_near_census_design_is_still_computable() {
+        let y = Float64Chunked::from_slice("y".into(), &[10.0, 12.0, 9.0, 15.0, 11.0, 13.0]);
+        // 6 sampled from a population of 6.6 -- FPC ~0.09, extreme but real.
+        let w = Float64Chunked::from_slice("w".into(), &[1.1; 6]);
+        let v = srs_variance_mean(&y, &w, SrsRef::WithoutReplacement { pop_total: None }).unwrap();
+        assert!(v > 0.0 && v.is_finite(), "got {v}");
+    }
+
+    #[test]
+    fn test_degenerate_fpc_is_nan_for_the_python_layer_to_diagnose() {
         let (y, _) = srs_fixture();
         for w in [vec![1.0; 6], vec![1.0 / 6.0; 6]] {
             let wc = Float64Chunked::from_slice("w".into(), &w);
-            let err = srs_variance_mean(&y, &wc, SrsRef::WithoutReplacement { pop_total: None })
-                .unwrap_err();
-            assert!(
-                err.to_string().contains("DEFF_FPC_DEGENERATE"),
-                "unexpected error: {err}"
-            );
+            let v = srs_variance_mean(&y, &wc, SrsRef::WithoutReplacement { pop_total: None })
+                .unwrap();
+            assert!(v.is_nan(), "expected a degenerate reference, got {v}");
         }
         // The with-replacement reference is unaffected.
         let wc = Float64Chunked::from_slice("w".into(), &[1.0; 6]);

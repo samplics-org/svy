@@ -543,7 +543,7 @@ fn srs_variance_assoc(
     }
     let wn: Vec<f64> = wv.iter().map(|w| w / sum_w).collect();
     let s2_u = crate::estimation::taylor::weighted_s2(&uv, &wn);
-    Ok((s2_u / n) * srs.fpc(n, sum_w)?)
+    Ok((s2_u / n) * srs.fpc(n, sum_w))
 }
 
 pub fn srs_variance_corr(
@@ -875,8 +875,9 @@ pub fn srs_variance_assoc_of(
     x: &Float64Chunked,
     weights: &Float64Chunked,
     domain: Option<&BooleanChunked>,
+    srs: SrsRef,
 ) -> PolarsResult<f64> {
-    srs_variance_assoc(y, x, weights, domain, kind, SrsRef::WithoutReplacement { pop_total: None })
+    srs_variance_assoc(y, x, weights, domain, kind, srs)
 }
 
 /// Full-sample-centered products for one pair, reused across every replicate.
