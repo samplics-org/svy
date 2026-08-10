@@ -10,8 +10,12 @@ replacement.
 
 from __future__ import annotations
 
+import numpy as np
+import polars as pl
 import pytest
 
+from svy import Sample
+from svy.core.design import Design
 from svy.errors import MethodError
 from svy.estimation.base import Estimation
 
@@ -92,3 +96,91 @@ def test_bool_check_precedes_string_handling():
         normalize(True)
     assert "DEFF_BOOL_REJECTED" in str(exc.value)
     assert "DEFF_REFERENCE_UNKNOWN" not in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# The one detectable failure: a degenerate finite-population correction
+# ---------------------------------------------------------------------------
+
+
+def _sample(weights) -> Sample:
+    rng = np.random.default_rng(3)
+    n = len(weights)
+    psu = rng.integers(0, 30, n)
+    return Sample(
+        pl.DataFrame(
+            {
+                "id": range(n),
+                "stratum": (psu % 5).astype(str),
+                "psu": psu.astype(str),
+                "w": np.asarray(weights, dtype=float),
+                "y": rng.normal(100.0, 20.0, n),
+            }
+        ),
+        Design(row_index="id", stratum="stratum", psu="psu", wgt="w"),
+    )
+
+
+def _honest(n=1200):
+    return np.random.default_rng(11).uniform(20.0, 200.0, n)
+
+
+@pytest.mark.parametrize(
+    "label,make",
+    [
+        ("normalized to n", lambda w: w / w.sum() * len(w)),
+        ("normalized to 1", lambda w: w / w.sum()),
+        ("unit weights", lambda w: np.ones(len(w))),
+    ],
+)
+def test_degenerate_correction_raises_rather_than_returning_nan(label, make):
+    """sum(w) <= n makes 1 - n/N zero or negative, so no design effect exists.
+
+    Returning a column of NaN would read as "no design effect" rather than
+    "this could not be computed", which is the distinction the error draws.
+    """
+    est = _sample(make(_honest())).estimation
+    with pytest.raises(MethodError) as exc:
+        est.mean("y", deff="wor")
+    assert "DEFF_NOT_COMPUTABLE" in str(exc.value)
+
+
+def test_error_names_both_causes_and_the_remedy():
+    """Rescaled weights and a census produce the same condition, so the message
+    has to offer both readings -- and say what to do instead."""
+    est = _sample(np.ones(500)).estimation
+    with pytest.raises(MethodError) as exc:
+        est.mean("y", deff="wor")
+    message = str(exc.value)
+    assert "rescaled" in message
+    assert "census" in message
+    assert "deff='wr'" in message
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda w: w / w.sum() * len(w),
+        lambda w: np.ones(len(w)),
+    ],
+)
+def test_wr_is_unaffected_by_the_same_weights(make):
+    """The with-replacement reference has no N in it, so the condition that
+    breaks 'wor' cannot touch it."""
+    est = _sample(make(_honest())).estimation
+    value = est.mean("y", deff="wr").to_dicts()[0]["deff"]
+    assert np.isfinite(value) and value > 0.0
+
+
+def test_no_deff_requested_is_unaffected():
+    """The guard must not fire when the caller never asked for a design effect;
+    the kernel computes the reference regardless."""
+    est = _sample(np.ones(500)).estimation
+    out = est.mean("y").to_polars()
+    assert "deff" not in out.columns
+
+
+def test_honest_weights_still_report_a_design_effect():
+    est = _sample(_honest()).estimation
+    value = est.mean("y", deff="wor").to_dicts()[0]["deff"]
+    assert np.isfinite(value) and value > 0.0

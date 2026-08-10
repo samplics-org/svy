@@ -772,6 +772,38 @@ class Estimation:
         )
         deff_arr = result_df["deff"].to_numpy() if (deff and "deff" in result_df.columns) else None
 
+        if deff_arr is not None and n_rows and bool(np.all(np.isnan(deff_arr))):
+            # The with-replacement reference has no N in it and cannot go
+            # degenerate, so an entirely missing design effect means the
+            # without-replacement correction 1 - n/N collapsed: the weights sum
+            # to no more than the sample size. Raise rather than hand back a
+            # column of NaN, which reads as "no design effect" instead of "this
+            # could not be computed". A partially missing column is left alone --
+            # one degenerate by-group should not fail the whole call.
+            raise MethodError(
+                title="Design effect is not computable for this design",
+                detail=(
+                    "The without-replacement reference divides by 1 - n/N, with "
+                    "N taken from the sum of the weights. Here that sum is no "
+                    "greater than the sample size, so the correction is zero or "
+                    "negative and no design effect exists. Either the weights "
+                    "have been rescaled -- normalize() makes them sum to the "
+                    "sample size -- and no longer count population units, or "
+                    "this is a census, in which case there is no sampling "
+                    "variance to compare against."
+                ),
+                code="DEFF_NOT_COMPUTABLE",
+                where="estimation.deff",
+                param="deff",
+                expected="weights summing to more than the sample size",
+                got="sum(weights) <= n",
+                hint=(
+                    "Use deff='wr', which compares against a with-replacement "
+                    "reference, needs no population size and is unaffected by "
+                    "rescaled weights."
+                ),
+            )
+
         t_crits = self._t_crit_arr(alpha, df_arr)
 
         with np.errstate(divide="ignore", invalid="ignore"):
