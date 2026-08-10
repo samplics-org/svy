@@ -309,6 +309,7 @@ def taylor_assoc(
         prep.by_cols,
         as_factor=False,
         method=EstimationMethod.TAYLOR,
+            deff_ref=deff_ref,
     )
 
 

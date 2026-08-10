@@ -238,6 +238,11 @@ class EstimateData(msgspec.Struct, kw_only=True, frozen=True):
     n_psus: int
     where_clause: str | None = None
     q_method: str = "Linear"
+    #: Which SRS reference the design effect was measured against, or None when
+    #: none was requested. Optional so payloads written before it existed still
+    #: decode; a deff is ambiguous without it, since the two references differ
+    #: by 1 - n/N.
+    deff_ref: str | None = None
 
 
 @_kinded("estimate_list")

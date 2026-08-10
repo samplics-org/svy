@@ -1095,10 +1095,12 @@ class Estimation:
         by_cols,
         as_factor,
         method: EstimationMethod = EstimationMethod.TAYLOR,
+        deff_ref: str | None = None,
     ) -> Estimate:
         metadata = getattr(self._sample, "_metadata", None)
         estimate = Estimate(param, alpha=alpha, metadata=metadata)
         estimate.method = method
+        estimate.deff_ref = deff_ref
         estimate.covariance = est_cov
         estimate.as_factor = as_factor
         if by_cols and len(by_cols) > 0:

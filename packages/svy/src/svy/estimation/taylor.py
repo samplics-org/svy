@@ -88,6 +88,7 @@ def taylor_mean(
         prep.by_cols,
         as_factor,
         method=EstimationMethod.TAYLOR,
+            deff_ref=deff_ref,
     )
 
 
@@ -212,6 +213,7 @@ def taylor_total(
         prep.by_cols,
         as_factor=False,
         method=EstimationMethod.TAYLOR,
+            deff_ref=deff_ref,
     )
 
 
@@ -335,6 +337,7 @@ def taylor_ratio(
         prep.by_cols,
         as_factor=False,
         method=EstimationMethod.TAYLOR,
+            deff_ref=deff_ref,
     )
 
 
@@ -406,6 +409,7 @@ def taylor_prop(
         prep.by_cols,
         as_factor=True,
         method=EstimationMethod.TAYLOR,
+            deff_ref=deff_ref,
     )
 
 
