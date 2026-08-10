@@ -64,6 +64,8 @@
 
 use polars::prelude::*;
 
+use crate::estimation::taylor::SrsRef;
+
 /// Weighted bivariate moments shared by the covariance and correlation paths.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BivarMoments {
@@ -506,6 +508,7 @@ fn srs_variance_assoc(
     weights: &Float64Chunked,
     domain: Option<&BooleanChunked>,
     kind: AssocKind,
+    srs: SrsRef,
 ) -> PolarsResult<f64> {
     let m = bivar_moments(y, x, weights, domain)?;
     if m.sum_w == 0.0 || (kind == AssocKind::Corr && !(m.m_yy > 0.0 && m.m_xx > 0.0)) {
@@ -540,7 +543,7 @@ fn srs_variance_assoc(
     }
     let wn: Vec<f64> = wv.iter().map(|w| w / sum_w).collect();
     let s2_u = crate::estimation::taylor::weighted_s2(&uv, &wn);
-    Ok((s2_u / n) * (1.0 - (n / sum_w)))
+    Ok((s2_u / n) * srs.fpc(n, sum_w)?)
 }
 
 pub fn srs_variance_corr(
@@ -548,7 +551,7 @@ pub fn srs_variance_corr(
     x: &Float64Chunked,
     weights: &Float64Chunked,
 ) -> PolarsResult<f64> {
-    srs_variance_assoc(y, x, weights, None, AssocKind::Corr)
+    srs_variance_assoc(y, x, weights, None, AssocKind::Corr, SrsRef::WithoutReplacement { pop_total: None })
 }
 
 pub fn srs_variance_corr_domain(
@@ -557,7 +560,7 @@ pub fn srs_variance_corr_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<f64> {
-    srs_variance_assoc(y, x, weights, Some(domain_mask), AssocKind::Corr)
+    srs_variance_assoc(y, x, weights, Some(domain_mask), AssocKind::Corr, SrsRef::WithoutReplacement { pop_total: None })
 }
 
 pub fn srs_variance_cov(
@@ -565,7 +568,7 @@ pub fn srs_variance_cov(
     x: &Float64Chunked,
     weights: &Float64Chunked,
 ) -> PolarsResult<f64> {
-    srs_variance_assoc(y, x, weights, None, AssocKind::Cov)
+    srs_variance_assoc(y, x, weights, None, AssocKind::Cov, SrsRef::WithoutReplacement { pop_total: None })
 }
 
 pub fn srs_variance_cov_domain(
@@ -574,7 +577,7 @@ pub fn srs_variance_cov_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<f64> {
-    srs_variance_assoc(y, x, weights, Some(domain_mask), AssocKind::Cov)
+    srs_variance_assoc(y, x, weights, Some(domain_mask), AssocKind::Cov, SrsRef::WithoutReplacement { pop_total: None })
 }
 
 // ============================================================================
@@ -873,7 +876,7 @@ pub fn srs_variance_assoc_of(
     weights: &Float64Chunked,
     domain: Option<&BooleanChunked>,
 ) -> PolarsResult<f64> {
-    srs_variance_assoc(y, x, weights, domain, kind)
+    srs_variance_assoc(y, x, weights, domain, kind, SrsRef::WithoutReplacement { pop_total: None })
 }
 
 /// Full-sample-centered products for one pair, reused across every replicate.

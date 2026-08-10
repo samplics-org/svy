@@ -14,6 +14,7 @@ use crate::estimation::association::{
     AssocKind, point_estimate_assoc, scores_assoc, srs_variance_assoc_of,
 };
 use crate::estimation::taylor::{
+    SrsRef,
     SvyQuantileMethod,
     TaylorDesign,
     build_taylor_design,
@@ -197,7 +198,7 @@ fn compute_mean_ungrouped(
         || {
             let estimate = point_estimate_mean(y, weights)?;
             let scores   = scores_mean_arr(y, weights)?;
-            let srs_var  = srs_variance_mean(y, weights)?;
+            let srs_var  = srs_variance_mean(y, weights, SrsRef::WithoutReplacement { pop_total: None })?;
             Ok((scores, (estimate, srs_var)))
         },
     )?;
@@ -257,7 +258,7 @@ fn compute_mean_multi(
             let variance = taylor_variance_apply(&scores_arr, &design);
             let se       = variance.max(0.0).sqrt();
             let n        = y.len() as u32;
-            let srs_var  = srs_variance_mean(y, weights)?;
+            let srs_var  = srs_variance_mean(y, weights, SrsRef::WithoutReplacement { pop_total: None })?;
             let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
             Ok((value_cols[i].clone(), estimate, se, variance, n, deff))
         })
@@ -324,7 +325,7 @@ fn compute_mean_grouped(
             let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
             let variance    = taylor_variance_apply(&scores_arr, &design);
             let se          = variance.max(0.0).sqrt();
-            let srs_var     = srs_variance_mean_domain(y, weights, &domain_mask)?;
+            let srs_var     = srs_variance_mean_domain(y, weights, &domain_mask, SrsRef::WithoutReplacement { pop_total: None })?;
             let deff        = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
             Ok((group, estimate, se, variance, n_domain, deff))
         })
@@ -441,7 +442,7 @@ fn compute_total_ungrouped(
         || {
             let estimate = point_estimate_total(y, weights)?;
             let scores   = scores_to_arr(&scores_total(y, weights)?);
-            let srs_var  = srs_variance_total(y, weights)?;
+            let srs_var  = srs_variance_total(y, weights, SrsRef::WithoutReplacement { pop_total: None })?;
             Ok((scores, (estimate, srs_var)))
         },
     )?;
@@ -491,7 +492,7 @@ fn compute_total_multi(
             let variance = taylor_variance_apply(&scores_arr, &design);
             let se       = variance.max(0.0).sqrt();
             let n        = y.len() as u32;
-            let srs_var  = srs_variance_total(y, weights)?;
+            let srs_var  = srs_variance_total(y, weights, SrsRef::WithoutReplacement { pop_total: None })?;
             let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
             Ok((value_cols[i].clone(), estimate, se, variance, n, deff))
         })
@@ -554,7 +555,7 @@ fn compute_total_grouped(
             let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
             let variance    = taylor_variance_apply(&scores_arr, &design);
             let se          = variance.max(0.0).sqrt();
-            let srs_var     = srs_variance_total_domain(y, weights, &domain_mask)?;
+            let srs_var     = srs_variance_total_domain(y, weights, &domain_mask, SrsRef::WithoutReplacement { pop_total: None })?;
             let deff        = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
             Ok((group, estimate, se, variance, n_domain, deff))
         })
@@ -675,7 +676,7 @@ fn compute_ratio_ungrouped(
         || {
             let estimate = point_estimate_ratio(y, x, weights)?;
             let scores   = scores_to_arr(&scores_ratio(y, x, weights)?);
-            let srs_var  = srs_variance_ratio(y, x, weights)?;
+            let srs_var  = srs_variance_ratio(y, x, weights, SrsRef::WithoutReplacement { pop_total: None })?;
             Ok((scores, (estimate, srs_var)))
         },
     )?;
@@ -730,7 +731,7 @@ fn compute_ratio_multi(
             let variance = taylor_variance_apply(&scores_arr, &design);
             let se       = variance.max(0.0).sqrt();
             let n        = y.len() as u32;
-            let srs_var  = srs_variance_ratio(y, x, weights)?;
+            let srs_var  = srs_variance_ratio(y, x, weights, SrsRef::WithoutReplacement { pop_total: None })?;
             let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
             Ok((
                 numerator_cols[i].clone(),
@@ -800,7 +801,7 @@ fn compute_ratio_grouped(
             let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
             let variance    = taylor_variance_apply(&scores_arr, &design);
             let se          = variance.max(0.0).sqrt();
-            let srs_var     = srs_variance_ratio_domain(y, x, weights, &domain_mask)?;
+            let srs_var     = srs_variance_ratio_domain(y, x, weights, &domain_mask, SrsRef::WithoutReplacement { pop_total: None })?;
             let deff        = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
             Ok((group, estimate, se, variance, n_domain, deff))
         })
@@ -1132,7 +1133,7 @@ fn compute_prop_ungrouped(
         let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
         let variance = taylor_variance_apply(&scores_arr, &design);
         let se       = variance.max(0.0).sqrt();
-        let srs_var  = srs_variance_mean(&indicator_ca, weights)?;
+        let srs_var  = srs_variance_mean(&indicator_ca, weights, SrsRef::WithoutReplacement { pop_total: None })?;
         let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
 
         level_vals.push(lvl.clone());
@@ -1218,7 +1219,7 @@ fn compute_prop_multi(
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
                 let variance = taylor_variance_apply(&scores_arr, &design);
                 let se       = variance.max(0.0).sqrt();
-                let srs_var  = srs_variance_mean(&indicator_ca, weights)?;
+                let srs_var  = srs_variance_mean(&indicator_ca, weights, SrsRef::WithoutReplacement { pop_total: None })?;
                 let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
                 out.push((value_cols[i].clone(), lvl.clone(), estimate, se, variance, n, deff));
             }
@@ -1308,7 +1309,7 @@ fn compute_prop_grouped(
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
                 let variance = taylor_variance_apply(&scores_arr, &design);
                 let se       = variance.max(0.0).sqrt();
-                let srs_var  = srs_variance_mean_domain(&indicator_ca, weights, &domain_mask)?;
+                let srs_var  = srs_variance_mean_domain(&indicator_ca, weights, &domain_mask, SrsRef::WithoutReplacement { pop_total: None })?;
                 let deff     = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
                 out.push((group.to_string(), lvl.clone(), estimate, se, variance, n_domain, deff));
             }

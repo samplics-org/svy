@@ -1775,6 +1775,62 @@ pub fn median_variance_woodruff_domain(
 // SRS Variance (Simple Random Sampling)
 // ============================================================================
 
+/// Which simple-random-sample reference the design effect is measured against.
+///
+/// deff is a ratio of the design variance to the variance of a hypothetical SRS
+/// of the same size, and the *reference* is a modelling choice separate from how
+/// the sample was actually drawn. The two differ by exactly one factor, the
+/// finite-population correction `1 - n/N`, so they diverge only as the sampling
+/// fraction grows: at n/N = 0.01 they agree to 1%, at n/N = 0.3 they differ by
+/// 43%.
+///
+/// `WithoutReplacement` is Kish's classic design effect. `WithReplacement` is
+/// the square of Kish's "deft"; because it omits the FPC entirely it does not
+/// depend on the scale of the weights, which is what makes it the usable option
+/// once weights have been normalized, raked or calibrated and `sum(w)` is no
+/// longer a population count.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SrsRef {
+    /// `S^2/n` -- no finite-population correction.
+    WithReplacement,
+    /// `S^2/n * (1 - n/N)`. `pop_total` is the design's declared population
+    /// size; when absent the sum of weights stands in for N, which is only
+    /// valid while the weights remain reciprocals of selection probabilities.
+    WithoutReplacement { pop_total: Option<f64> },
+}
+
+impl SrsRef {
+    /// The finite-population correction for this reference.
+    ///
+    /// Errors rather than returning a non-positive factor: `sum(w) <= n` means
+    /// the weights cannot be a population count, so the caller asked for a
+    /// reference that is not computable from this input. Silently returning
+    /// NaN there is what made rescaled weights produce a blank design effect
+    /// with no explanation.
+    #[inline]
+    pub fn fpc(&self, n: f64, sum_w: f64) -> PolarsResult<f64> {
+        match self {
+            SrsRef::WithReplacement => Ok(1.0),
+            SrsRef::WithoutReplacement { pop_total } => {
+                let n_pop = pop_total.unwrap_or(sum_w);
+                let factor = 1.0 - (n / n_pop);
+                if factor > 0.0 {
+                    Ok(factor)
+                } else {
+                    Err(PolarsError::ComputeError(
+                        format!(
+                            "DEFF_FPC_DEGENERATE: population size {n_pop} is not greater than \
+                             the sample size {n}, so the finite-population correction is \
+                             non-positive"
+                        )
+                        .into(),
+                    ))
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn weighted_s2(y: &[f64], wn: &[f64]) -> f64 {
     let n = y.len() as f64;
     if n <= 1.0 {
@@ -1789,21 +1845,25 @@ pub(crate) fn weighted_s2(y: &[f64], wn: &[f64]) -> f64 {
     (n / (n - 1.0)) * ss
 }
 
-fn srs_mean_from(yv: &[f64], wv: &[f64]) -> f64 {
+fn srs_mean_from(yv: &[f64], wv: &[f64], srs: SrsRef) -> PolarsResult<f64> {
     let n = yv.len() as f64;
     if n < 2.0 {
-        return f64::NAN;
+        return Ok(f64::NAN);
     }
     let sum_w: f64 = wv.iter().sum();
     if sum_w <= 0.0 {
-        return f64::NAN;
+        return Ok(f64::NAN);
     }
     let wn: Vec<f64> = wv.iter().map(|w| w / sum_w).collect();
     let s2_y = weighted_s2(yv, &wn);
-    (s2_y / n) * (1.0 - (n / sum_w))
+    Ok((s2_y / n) * srs.fpc(n, sum_w)?)
 }
 
-pub fn srs_variance_mean(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult<f64> {
+pub fn srs_variance_mean(
+    y: &Float64Chunked,
+    weights: &Float64Chunked,
+    srs: SrsRef,
+) -> PolarsResult<f64> {
     // Zero-weight rows (out-of-domain / missing-y under domain semantics)
     // carry no information and must not inflate n — matching R's deff on
     // subset()/na.rm designs, and the *_domain variants below.
@@ -1812,7 +1872,7 @@ pub fn srs_variance_mean(y: &Float64Chunked, weights: &Float64Chunked) -> Polars
     // skipping the yv/wv copies. Same accumulation order → bit-identical.
     if let Some((ys, ws)) = cont_pair(y, weights) {
         if ws.iter().all(|&w| w > 0.0) {
-            return Ok(srs_mean_from(ys, ws));
+            return srs_mean_from(ys, ws, srs);
         }
         let mut yv = Vec::new();
         let mut wv = Vec::new();
@@ -1822,7 +1882,7 @@ pub fn srs_variance_mean(y: &Float64Chunked, weights: &Float64Chunked) -> Polars
                 wv.push(*wi);
             }
         }
-        return Ok(srs_mean_from(&yv, &wv));
+        return srs_mean_from(&yv, &wv, srs);
     }
 
     // Fallback: only observations where y and w are non-null and w > 0.
@@ -1836,13 +1896,14 @@ pub fn srs_variance_mean(y: &Float64Chunked, weights: &Float64Chunked) -> Polars
             }
         }
     }
-    Ok(srs_mean_from(&yv, &wv))
+    srs_mean_from(&yv, &wv, srs)
 }
 
 pub fn srs_variance_mean_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
+    srs: SrsRef,
 ) -> PolarsResult<f64> {
     let (yv, wv) = if let Some((ys, ws)) = cont_pair(y, weights) {
         // Fast path: slice-index y/weights while filtering by the mask.
@@ -1885,10 +1946,14 @@ pub fn srs_variance_mean_domain(
     }
     let wn: Vec<f64> = wv.iter().map(|w| w / sum_w).collect();
     let s2_y = weighted_s2(&yv, &wn);
-    Ok((s2_y / n) * (1.0 - (n / sum_w)))
+    Ok((s2_y / n) * srs.fpc(n, sum_w)?)
 }
 
-pub fn srs_variance_total(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult<f64> {
+pub fn srs_variance_total(
+    y: &Float64Chunked,
+    weights: &Float64Chunked,
+    srs: SrsRef,
+) -> PolarsResult<f64> {
     // Zero-weight rows are excluded from n (see srs_variance_mean).
     let mut yv: Vec<f64> = Vec::new();
     let mut wv: Vec<f64> = Vec::new();
@@ -1909,13 +1974,14 @@ pub fn srs_variance_total(y: &Float64Chunked, weights: &Float64Chunked) -> Polar
     }
     let wn: Vec<f64> = wv.iter().map(|w| w / sum_w).collect();
     let s2_y = weighted_s2(&yv, &wn);
-    Ok(((sum_w.powi(2) / n) * s2_y) * (1.0 - (n / sum_w)))
+    Ok(((sum_w.powi(2) / n) * s2_y) * srs.fpc(n, sum_w)?)
 }
 
 pub fn srs_variance_total_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
+    srs: SrsRef,
 ) -> PolarsResult<f64> {
     let (yv, wv) = if let Some((ys, ws)) = cont_pair(y, weights) {
         let mut yv = Vec::new();
@@ -1957,13 +2023,14 @@ pub fn srs_variance_total_domain(
     }
     let wn: Vec<f64> = wv.iter().map(|w| w / sum_w).collect();
     let s2_y = weighted_s2(&yv, &wn);
-    Ok(((sum_w.powi(2) / n) * s2_y) * (1.0 - (n / sum_w)))
+    Ok(((sum_w.powi(2) / n) * s2_y) * srs.fpc(n, sum_w)?)
 }
 
 pub fn srs_variance_ratio(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
+    srs: SrsRef,
 ) -> PolarsResult<f64> {
     // Zero-weight rows are excluded from n (see srs_variance_mean).
     let mut yv: Vec<f64> = Vec::new();
@@ -1998,7 +2065,7 @@ pub fn srs_variance_ratio(
         .map(|(yi, xi)| yi - rhat * xi)
         .collect();
     let s2_e = weighted_s2(&ev, &wn);
-    Ok((s2_e / (n * xbar.powi(2))) * (1.0 - (n / sum_w)))
+    Ok((s2_e / (n * xbar.powi(2))) * srs.fpc(n, sum_w)?)
 }
 
 pub fn srs_variance_ratio_domain(
@@ -2006,6 +2073,7 @@ pub fn srs_variance_ratio_domain(
     x: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
+    srs: SrsRef,
 ) -> PolarsResult<f64> {
     let fast = match (cont_pair(y, weights), x.null_count() == 0) {
         (Some((ys, ws)), true) => x.cont_slice().ok().map(|xs| (ys, ws, xs)),
@@ -2065,7 +2133,7 @@ pub fn srs_variance_ratio_domain(
         .map(|(yi, xi)| yi - rhat * xi)
         .collect();
     let s2_e = weighted_s2(&ev, &wn);
-    Ok((s2_e / (n * xbar.powi(2))) * (1.0 - (n / sum_w)))
+    Ok((s2_e / (n * xbar.powi(2))) * srs.fpc(n, sum_w)?)
 }
 
 // ============================================================================
@@ -2528,8 +2596,97 @@ mod tests {
         let y = Float64Chunked::from_slice("y".into(), &[1.0, 2.0, 3.0]);
         let x = Float64Chunked::from_slice("x".into(), &[1.0, 1.0, 1.0]);
         let w = Float64Chunked::from_slice("w".into(), &[0.0, 0.0, 0.0]);
-        let v = srs_variance_ratio(&y, &x, &w).unwrap();
+        let v = srs_variance_ratio(&y, &x, &w, SrsRef::WithoutReplacement { pop_total: None }).unwrap();
         assert!(v.is_nan());
+    }
+
+    // ------------------------------------------------------------------
+    // SRS reference for the design effect
+    // ------------------------------------------------------------------
+
+    fn srs_fixture() -> (Float64Chunked, Float64Chunked) {
+        let y = Float64Chunked::from_slice("y".into(), &[10.0, 12.0, 9.0, 15.0, 11.0, 13.0]);
+        // sum(w) = 600, n = 6, so the sampling fraction is 1%.
+        let w = Float64Chunked::from_slice("w".into(), &[100.0; 6]);
+        (y, w)
+    }
+
+    /// The two references differ by exactly the finite-population correction,
+    /// which is the whole basis for saying they agree when n/N is small.
+    #[test]
+    fn test_wr_and_wor_differ_by_exactly_the_fpc() {
+        let (y, w) = srs_fixture();
+        let wr = srs_variance_mean(&y, &w, SrsRef::WithReplacement).unwrap();
+        let wor =
+            srs_variance_mean(&y, &w, SrsRef::WithoutReplacement { pop_total: None }).unwrap();
+        let expected_fpc = 1.0 - 6.0 / 600.0;
+        assert!((wor / wr - expected_fpc).abs() < 1e-12, "{wor} / {wr}");
+    }
+
+    /// The with-replacement reference ignores the scale of the weights. This is
+    /// the property that makes it usable once weights have been normalized or
+    /// calibrated and their sum is no longer a population count.
+    #[test]
+    fn test_wr_reference_is_scale_invariant() {
+        let (y, _) = srs_fixture();
+        let mut prev: Option<f64> = None;
+        for scale in [1.0, 0.5, 1e-3, 400.0] {
+            let w: Vec<f64> = vec![100.0 * scale; 6];
+            let v = srs_variance_mean(&y, &Float64Chunked::from_slice("w".into(), &w), SrsRef::WithReplacement)
+                .unwrap();
+            if let Some(p) = prev {
+                assert!((v - p).abs() < 1e-12, "scale {scale} changed the reference");
+            }
+            prev = Some(v);
+        }
+    }
+
+    /// The without-replacement reference is NOT scale-invariant -- the reason
+    /// rescaled weights silently shifted deff before this existed.
+    #[test]
+    fn test_wor_reference_moves_with_the_weight_scale() {
+        let (y, w) = srs_fixture();
+        let full =
+            srs_variance_mean(&y, &w, SrsRef::WithoutReplacement { pop_total: None }).unwrap();
+        let halved = Float64Chunked::from_slice("w".into(), &[50.0; 6]);
+        let half =
+            srs_variance_mean(&y, &halved, SrsRef::WithoutReplacement { pop_total: None }).unwrap();
+        assert!((full - half).abs() > 1e-9, "expected the FPC to move: {full} vs {half}");
+    }
+
+    /// A declared population size is used in place of the weight sum, so the
+    /// without-replacement reference stays correct under rescaled weights.
+    #[test]
+    fn test_declared_pop_total_overrides_the_weight_sum() {
+        let (y, _) = srs_fixture();
+        // Weights normalized to sum to n: sum(w) is useless as a population
+        // count, but the design still knows N = 600.
+        let norm = Float64Chunked::from_slice("w".into(), &[1.0; 6]);
+        let with_pop =
+            srs_variance_mean(&y, &norm, SrsRef::WithoutReplacement { pop_total: Some(600.0) })
+                .unwrap();
+        let wr = srs_variance_mean(&y, &norm, SrsRef::WithReplacement).unwrap();
+        assert!((with_pop / wr - (1.0 - 6.0 / 600.0)).abs() < 1e-12);
+    }
+
+    /// Without a declared population size, normalized weights make the
+    /// without-replacement reference uncomputable. It must say so rather than
+    /// return a silent NaN.
+    #[test]
+    fn test_degenerate_fpc_is_an_error_not_a_nan() {
+        let (y, _) = srs_fixture();
+        for w in [vec![1.0; 6], vec![1.0 / 6.0; 6]] {
+            let wc = Float64Chunked::from_slice("w".into(), &w);
+            let err = srs_variance_mean(&y, &wc, SrsRef::WithoutReplacement { pop_total: None })
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("DEFF_FPC_DEGENERATE"),
+                "unexpected error: {err}"
+            );
+        }
+        // The with-replacement reference is unaffected.
+        let wc = Float64Chunked::from_slice("w".into(), &[1.0; 6]);
+        assert!(srs_variance_mean(&y, &wc, SrsRef::WithReplacement).unwrap() > 0.0);
     }
 
     #[test]
