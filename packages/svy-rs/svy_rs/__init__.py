@@ -22,6 +22,7 @@ from svy_rs._internal import (
     rake,
     ranktest_rs,
     # Replication
+    replicate_assoc,
     replicate_mean,
     replicate_median,
     replicate_prop,
@@ -33,6 +34,7 @@ from svy_rs._internal import (
     select_srs_rs,
     tabulate_rs,
     # Taylor linearization
+    taylor_assoc,
     taylor_mean,
     taylor_mean_multi,
     taylor_median,

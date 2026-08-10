@@ -797,11 +797,83 @@ pub fn multi_moments(
 // Replication: precomputed products, one dot product set per replicate
 // ============================================================================
 
-/// Which association a replicate recomputes.
+/// Which association is being estimated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssocKind {
     Corr,
     Cov,
+}
+
+impl AssocKind {
+    /// Parse the selector the Python layer sends. Aliases are accepted the way
+    /// `_normalize_ci_method` accepts them: case-insensitive, underscores and
+    /// hyphens interchangeable.
+    pub fn from_name(s: &str) -> PolarsResult<Self> {
+        match s.to_lowercase().replace('_', "-").as_str() {
+            "corr" | "correlation" | "pearson" => Ok(AssocKind::Corr),
+            "cov" | "covariance" => Ok(AssocKind::Cov),
+            other => Err(PolarsError::ComputeError(
+                format!("unknown association kind '{other}'; expected 'corr' or 'cov'").into(),
+            )),
+        }
+    }
+
+    /// Label carried into the result frame.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AssocKind::Corr => "corr",
+            AssocKind::Cov => "cov",
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Kind-dispatching entry points
+//
+// The API layer works in terms of (kind, optional domain) rather than four
+// separately-named functions per statistic, so the dispatch lives here once
+// instead of being rebuilt at every call site.
+// ---------------------------------------------------------------------------
+
+pub fn point_estimate_assoc(
+    kind: AssocKind,
+    y: &Float64Chunked,
+    x: &Float64Chunked,
+    weights: &Float64Chunked,
+    domain: Option<&BooleanChunked>,
+) -> PolarsResult<f64> {
+    match (kind, domain) {
+        (AssocKind::Corr, None) => point_estimate_corr(y, x, weights),
+        (AssocKind::Corr, Some(d)) => point_estimate_corr_domain(y, x, weights, d),
+        (AssocKind::Cov, None) => point_estimate_cov(y, x, weights),
+        (AssocKind::Cov, Some(d)) => point_estimate_cov_domain(y, x, weights, d),
+    }
+}
+
+pub fn scores_assoc(
+    kind: AssocKind,
+    y: &Float64Chunked,
+    x: &Float64Chunked,
+    weights: &Float64Chunked,
+    domain: Option<&BooleanChunked>,
+) -> PolarsResult<Float64Chunked> {
+    match (kind, domain) {
+        (AssocKind::Corr, None) => scores_corr(y, x, weights),
+        (AssocKind::Corr, Some(d)) => scores_corr_domain(y, x, weights, d),
+        (AssocKind::Cov, None) => scores_cov(y, x, weights),
+        (AssocKind::Cov, Some(d)) => scores_cov_domain(y, x, weights, d),
+    }
+}
+
+/// SRS reference variance for either association, over an optional domain.
+pub fn srs_variance_assoc_of(
+    kind: AssocKind,
+    y: &Float64Chunked,
+    x: &Float64Chunked,
+    weights: &Float64Chunked,
+    domain: Option<&BooleanChunked>,
+) -> PolarsResult<f64> {
+    srs_variance_assoc(y, x, weights, domain, kind)
 }
 
 /// Full-sample-centered products for one pair, reused across every replicate.
@@ -823,6 +895,10 @@ pub struct PairProducts {
     aa: Vec<f64>,
     bb: Vec<f64>,
     ab: Vec<f64>,
+    /// Domain indicator as a 0/1 float, matching the replication layer's
+    /// convention. Held rather than baked into the products because the
+    /// per-replicate weight sum must also exclude out-of-domain rows.
+    mask: Option<Vec<f64>>,
     /// Full-sample n, held fixed across replicates as R holds it.
     n: usize,
 }
@@ -832,9 +908,20 @@ impl PairProducts {
         y: &Float64Chunked,
         x: &Float64Chunked,
         weights: &Float64Chunked,
-        domain: Option<&BooleanChunked>,
+        domain: Option<&[f64]>,
     ) -> PolarsResult<Self> {
-        let full = bivar_moments(y, x, weights, domain)?;
+        // Fold the domain into the weights for the full-sample moments: a
+        // zeroed weight is exactly how an out-of-domain row drops out, and
+        // `bivar_moments` already keeps zero-weight rows out of `n`.
+        let masked: Option<Float64Chunked> = domain.map(|m| {
+            let v: Vec<f64> = (0..y.len())
+                .map(|i| {
+                    weights.get(i).unwrap_or(0.0) * m.get(i).copied().unwrap_or(0.0)
+                })
+                .collect();
+            Float64Chunked::from_slice("w".into(), &v)
+        });
+        let full = bivar_moments(y, x, masked.as_ref().unwrap_or(weights), None)?;
         let (mean_y, mean_x) = if full.sum_w == 0.0 {
             (0.0, 0.0)
         } else {
@@ -849,12 +936,10 @@ impl PairProducts {
         let mut ab = Vec::with_capacity(len);
 
         for i in 0..len {
-            // A row excluded here contributes zero to every replicate sum,
-            // which is how nulls and out-of-domain rows drop out without
-            // disturbing the design structure.
-            let keep = domain.is_none_or(|d| d.get(i) == Some(true));
-            let (av, bv) = match (y.get(i), x.get(i), keep) {
-                (Some(yv), Some(xv), true) => (yv - mean_y, xv - mean_x),
+            // A null row contributes zero to every replicate sum, which drops
+            // it without disturbing the design structure.
+            let (av, bv) = match (y.get(i), x.get(i)) {
+                (Some(yv), Some(xv)) => (yv - mean_y, xv - mean_x),
                 _ => (0.0, 0.0),
             };
             a.push(av);
@@ -864,7 +949,7 @@ impl PairProducts {
             ab.push(av * bv);
         }
 
-        Ok(PairProducts { a, b, aa, bb, ab, n: full.n })
+        Ok(PairProducts { a, b, aa, bb, ab, mask: domain.map(<[f64]>::to_vec), n: full.n })
     }
 
     /// Recompute the association under one replicate weight column.
@@ -878,14 +963,18 @@ impl PairProducts {
 
         // Pre-slicing all six arrays to a common length lets the bounds checks
         // fall out of the loop body. The traversal is six-way parallel, so an
-        // index walk expresses it more directly than nested zips would.
+        // index walk expresses it more directly than nested zips would. The
+        // domain branch is hoisted out of the loop rather than tested per row.
         let n = self.a.len().min(rep_w.len());
         let (w_s, a_s, b_s) = (&rep_w[..n], &self.a[..n], &self.b[..n]);
         let (aa_s, bb_s, ab_s) = (&self.aa[..n], &self.bb[..n], &self.ab[..n]);
 
         #[allow(clippy::needless_range_loop)]
         for i in 0..n {
-            let w = w_s[i];
+            let w = match &self.mask {
+                Some(m) => w_s[i] * m[i],
+                None => w_s[i],
+            };
             sw += w;
             sa += w * a_s[i];
             sb += w * b_s[i];

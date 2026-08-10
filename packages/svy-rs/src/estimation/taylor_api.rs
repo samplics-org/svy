@@ -10,6 +10,9 @@ use numpy::PyReadonlyArray1;
 use pyo3_polars::PyDataFrame;
 use rayon::prelude::*;
 
+use crate::estimation::association::{
+    AssocKind, point_estimate_assoc, scores_assoc, srs_variance_assoc_of,
+};
 use crate::estimation::taylor::{
     SvyQuantileMethod,
     TaylorDesign,
@@ -821,6 +824,192 @@ fn compute_ratio_grouped(
     let dfs = group_dfs;
     df![by_col => by_vals, "y" => vec![numerator_col; n_groups], "x" => vec![denominator_col; n_groups],
         "est" => estimates, "se" => ses, "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs]
+}
+
+// ============================================================================
+// Association (covariance / correlation)
+// ============================================================================
+
+/// Covariance or correlation over one or more column pairs sharing one design.
+///
+/// Pairs are always plural at this boundary. `corr`/`cov` take a set of columns
+/// and report every requested pair, so unlike `ratio` there is no single-pair
+/// entry point to mirror -- `taylor_assoc` covers the batched and grouped cases
+/// alike. With `by_col` set the result carries one row per (group, pair); the
+/// pair columns are named `y`/`x` positionally, and carry no directional
+/// meaning, since both statistics are symmetric.
+#[pyfunction]
+#[pyo3(signature = (data, y_cols, x_cols, kind, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None))]
+pub fn taylor_assoc(
+    _py: Python,
+    data: PyDataFrame,
+    y_cols: Vec<String>,
+    x_cols: Vec<String>,
+    kind: String,
+    weight_col: String,
+    strata_col: Option<String>,
+    psu_col: Option<String>,
+    ssu_col: Option<String>,
+    fpc_col: Option<String>,
+    fpc_ssu_col: Option<String>,
+    by_col: Option<String>,
+    singleton_method: Option<String>,
+) -> PyResult<PyDataFrame> {
+    let df = into_contiguous(data);
+    let result = _py
+        .detach(|| {
+            let kind = AssocKind::from_name(&kind)?;
+            if y_cols.len() != x_cols.len() {
+                return Err(PolarsError::ComputeError(
+                    format!(
+                        "pair columns must be equal length, got {} and {}",
+                        y_cols.len(),
+                        x_cols.len()
+                    )
+                    .into(),
+                ));
+            }
+            if y_cols.is_empty() {
+                return Err(PolarsError::ComputeError(
+                    "at least one column pair is required".into(),
+                ));
+            }
+            compute_assoc(
+                &df,
+                &y_cols,
+                &x_cols,
+                kind,
+                &weight_col,
+                strata_col.as_deref(),
+                psu_col.as_deref(),
+                ssu_col.as_deref(),
+                fpc_col.as_deref(),
+                fpc_ssu_col.as_deref(),
+                by_col.as_deref(),
+                singleton_method.as_deref(),
+            )
+        })
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    Ok(PyDataFrame(result))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_assoc(
+    df: &DataFrame,
+    y_cols: &[String],
+    x_cols: &[String],
+    kind: AssocKind,
+    weight_col: &str,
+    strata_col: Option<&str>,
+    psu_col: Option<&str>,
+    ssu_col: Option<&str>,
+    fpc_col: Option<&str>,
+    fpc_ssu_col: Option<&str>,
+    by_col: Option<&str>,
+    singleton_method: Option<&str>,
+) -> PolarsResult<DataFrame> {
+    let weights = df.column(weight_col)?.f64()?;
+    let strata = strata_col.map(|c| df.column(c)).transpose()?;
+    let psu = psu_col.map(|c| df.column(c)).transpose()?;
+    let ssu = ssu_col.map(|c| df.column(c)).transpose()?;
+    let fpc = fpc_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
+    let fpc_ssu = fpc_ssu_col.map(|c| df.column(c).and_then(|s| s.f64())).transpose()?;
+
+    // Hoist column resolution out of the parallel region, as the other multi
+    // kernels do.
+    let ys: Vec<&Float64Chunked> = y_cols
+        .iter()
+        .map(|c| df.column(c).and_then(|s| s.f64()))
+        .collect::<PolarsResult<Vec<_>>>()?;
+    let xs: Vec<&Float64Chunked> = x_cols
+        .iter()
+        .map(|c| df.column(c).and_then(|s| s.f64()))
+        .collect::<PolarsResult<Vec<_>>>()?;
+
+    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+
+    // Ungrouped is modelled as a single group with no domain mask, so the
+    // (group x pair) fan-out below covers both shapes with one code path.
+    let by_str = by_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
+    let unique_groups = by_str.map(|s| s.unique()).transpose()?;
+    let groups: Vec<Option<&str>> = match unique_groups.as_ref() {
+        Some(u) => u.iter().flatten().map(Some).collect(),
+        None => vec![None],
+    };
+
+    // A by-group is a domain, so its df is counted on its own active
+    // PSUs/strata rather than inherited from the frame (issue #3).
+    let group_dfs: Vec<u32> = groups
+        .par_iter()
+        .map(|g| match (g, by_str) {
+            (Some(gv), Some(bs)) => {
+                degrees_of_freedom_in_domain(weights, strata, psu, Some(&bs.equal(*gv)))
+            }
+            _ => Ok(degrees_of_freedom_from_design(weights, &design, None)),
+        })
+        .collect::<PolarsResult<Vec<_>>>()?;
+
+    let n_pairs = ys.len();
+    let combos: Vec<(usize, usize)> = (0..groups.len())
+        .flat_map(|gi| (0..n_pairs).map(move |pi| (gi, pi)))
+        .collect();
+
+    let rows = combos
+        .par_iter()
+        .map(|&(gi, pi)| -> PolarsResult<(usize, usize, f64, f64, f64, u32, f64)> {
+            let mask = match (groups[gi], by_str) {
+                (Some(g), Some(bs)) => Some(bs.equal(g)),
+                _ => None,
+            };
+            let (y, x) = (ys[pi], xs[pi]);
+            let estimate = point_estimate_assoc(kind, y, x, weights, mask.as_ref())?;
+            let scores = scores_assoc(kind, y, x, weights, mask.as_ref())?;
+            let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+            let variance = taylor_variance_apply(&scores_arr, &design);
+            let se = variance.max(0.0).sqrt();
+            let srs_var = srs_variance_assoc_of(kind, y, x, weights, mask.as_ref())?;
+            let deff = if srs_var > 0.0 { variance / srs_var } else { f64::NAN };
+            let n = match mask.as_ref() {
+                Some(m) => m.sum().unwrap_or(0),
+                None => y.len() as u32,
+            };
+            Ok((gi, pi, estimate, se, variance, n, deff))
+        })
+        .collect::<PolarsResult<Vec<_>>>()?;
+
+    let nv = rows.len();
+    let mut by_vals: Vec<&str> = Vec::with_capacity(nv);
+    let mut y_names: Vec<&str> = Vec::with_capacity(nv);
+    let mut x_names: Vec<&str> = Vec::with_capacity(nv);
+    let mut estimates: Vec<f64> = Vec::with_capacity(nv);
+    let mut ses: Vec<f64> = Vec::with_capacity(nv);
+    let mut variances: Vec<f64> = Vec::with_capacity(nv);
+    let mut dfs: Vec<u32> = Vec::with_capacity(nv);
+    let mut ns: Vec<u32> = Vec::with_capacity(nv);
+    let mut deffs: Vec<f64> = Vec::with_capacity(nv);
+    for (gi, pi, est, se, var, n, deff) in rows {
+        if let Some(g) = groups[gi] {
+            by_vals.push(g);
+        }
+        y_names.push(y_cols[pi].as_str());
+        x_names.push(x_cols[pi].as_str());
+        estimates.push(est);
+        ses.push(se);
+        variances.push(var);
+        dfs.push(group_dfs[gi]);
+        ns.push(n);
+        deffs.push(deff);
+    }
+
+    let kinds = vec![kind.as_str(); nv];
+    let mut out = df![
+        "y" => y_names, "x" => x_names, "kind" => kinds, "est" => estimates,
+        "se" => ses, "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs
+    ]?;
+    if let Some(name) = by_col {
+        out.insert_column(0, Column::new(name.into(), by_vals))?;
+    }
+    Ok(out)
 }
 
 // ============================================================================
