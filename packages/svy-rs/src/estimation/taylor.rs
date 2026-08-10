@@ -1775,7 +1775,7 @@ pub fn median_variance_woodruff_domain(
 // SRS Variance (Simple Random Sampling)
 // ============================================================================
 
-fn weighted_s2(y: &[f64], wn: &[f64]) -> f64 {
+pub(crate) fn weighted_s2(y: &[f64], wn: &[f64]) -> f64 {
     let n = y.len() as f64;
     if n <= 1.0 {
         return f64::NAN;
