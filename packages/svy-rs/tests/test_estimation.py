@@ -921,3 +921,132 @@ def test_declared_pop_total_survives_normalized_weights(srs_ref_df, name, fn):
 def test_unknown_reference_is_rejected(srs_ref_df, name, fn):
     with pytest.raises(Exception, match="unknown deff reference"):
         fn(srs_ref_df, deff_ref="srswor")
+
+
+# =============================================================================
+# DESIGN FPC x SRS REFERENCE x DESIGN SHAPE  (R golden, survey 4.5)
+#
+# Two finite-population corrections are in play and they are independent:
+# the design's own fpc corrects the variance (numerator), while deff_ref
+# decides whether the SRS reference carries one (denominator). Crossing them
+# across design shapes is the only way to show neither leaks into the other.
+#
+#   st  <- svydesign(id=~1,    strata=~stype, weights=~pw,           data=apistrat)
+#   stf <- svydesign(id=~1,    strata=~stype, weights=~pw, fpc=~fpc, data=apistrat)
+#   cl  <- svydesign(id=~dnum,                weights=~pw,           data=apiclus1)
+#   clf <- svydesign(id=~dnum,                weights=~pw, fpc=~fpc, data=apiclus1)
+#   sc  <- svydesign(id=~dnum, strata=~stype, weights=~pw, data=apiclus1, nest=TRUE)
+#   svymean(~api00, d, deff=TRUE)       # -> "wor"
+#   svymean(~api00, d, deff="replace")  # -> "wr"
+#
+# Domain rows come from subset(d, sch.wide == "Yes"), where R uses that
+# subset's own n and sum of weights in the reference -- so each domain gets a
+# different correction. That is the case most likely to drift, which is why it
+# is pinned rather than assumed.
+# =============================================================================
+
+# (shape, design fpc applied, domain) -> (se, deff_wor, deff_wr)
+_R_DEFF_MATRIX = {
+    ("stratSRS", False, False): (9.5361322969, 1.237241445022, 1.197291769419),
+    ("stratSRS", True, False): (9.4089408028, 1.204457268538, 1.165566171454),
+    ("cluster", False, False): (23.7790107209, 9.534802121425, 9.253099070589),
+    ("cluster", True, False): (23.5422406938, 9.345869450591, 9.069748362453),
+    ("strat+cluster", False, False): (18.3076135248, 5.651810485034, 5.484829331560),
+    ("stratSRS", False, True): (10.6540738828, 1.228801107524, 1.192380187135),
+    ("stratSRS", True, True): (10.5203892001, 1.198157193016, 1.162644539689),
+    ("cluster", False, True): (23.6621771021, 8.044653756919, 7.806976721006),
+}
+
+# shape -> (csv, psu column, stratum column)
+_DEFF_SHAPES = {
+    "stratSRS": ("apistrat_deff.csv", None, "stype"),
+    "cluster": ("apiclus1_deff.csv", "dnum", None),
+    "strat+cluster": ("apiclus1_deff.csv", "dnum", "stype"),
+}
+
+
+def _deff_frame(csv: str, psu: str | None, stratum: str | None) -> pl.DataFrame:
+    """Load an api dataset with the FPC expressed the way the kernel wants it.
+
+    The kernel takes the correction factor ``(N_h - n_h) / N_h``, not the raw
+    stratum population that R's ``fpc=`` accepts. ``n_h`` counts PSUs, so for a
+    design without clusters every row is its own PSU.
+    """
+    df = pl.read_csv(
+        Path(__file__).parent.parent / "data" / csv, infer_schema_length=10000
+    ).with_columns(
+        pl.col("pw").cast(pl.Float64),
+        pl.col("api00").cast(pl.Float64),
+        pl.col("fpc").cast(pl.Float64),
+        pl.col("stype").cast(pl.String),
+        pl.col("dnum").cast(pl.String),
+        pl.col("sch.wide").cast(pl.String),
+    )
+    unit = psu
+    if unit is None:
+        df = df.with_columns(pl.int_range(pl.len()).cast(pl.String).alias("__unit"))
+        unit = "__unit"
+    n_h = pl.col(unit).n_unique().over(stratum) if stratum else pl.col(unit).n_unique()
+    return df.with_columns(((pl.col("fpc") - n_h) / pl.col("fpc")).alias("fpcf"))
+
+
+@pytest.mark.parametrize("key", sorted(_R_DEFF_MATRIX))
+@pytest.mark.parametrize("ref", ["wor", "wr"])
+def test_deff_matches_r_across_designs(key, ref):
+    shape, use_fpc, domain = key
+    se, deff_wor, deff_wr = _R_DEFF_MATRIX[key]
+    csv, psu, stratum = _DEFF_SHAPES[shape]
+
+    out = ps.taylor_mean(
+        _deff_frame(csv, psu, stratum),
+        value_col="api00",
+        weight_col="pw",
+        strata_col=stratum,
+        psu_col=psu,
+        fpc_col="fpcf" if use_fpc else None,
+        by_col="sch.wide" if domain else None,
+        deff_ref=ref,
+    )
+    row = (
+        [r for r in out.to_dicts() if r["sch.wide"] == "Yes"][0]
+        if domain
+        else out.to_dicts()[0]
+    )
+    assert row["se"] == pytest.approx(se, rel=1e-9)
+    assert row["deff"] == pytest.approx(deff_wor if ref == "wor" else deff_wr, rel=1e-10)
+
+
+@pytest.mark.parametrize("key", sorted(_R_DEFF_MATRIX))
+def test_the_two_corrections_stay_independent(key):
+    """The reference must never touch the standard error, and the wor/wr ratio
+    must be 1/(1 - n/N) whether or not the design carries its own fpc. If
+    either correction leaked into the other, one of these would fail."""
+    shape, use_fpc, domain = key
+    csv, psu, stratum = _DEFF_SHAPES[shape]
+    df = _deff_frame(csv, psu, stratum)
+
+    got = {}
+    for ref in ("wor", "wr"):
+        out = ps.taylor_mean(
+            df,
+            value_col="api00",
+            weight_col="pw",
+            strata_col=stratum,
+            psu_col=psu,
+            fpc_col="fpcf" if use_fpc else None,
+            by_col="sch.wide" if domain else None,
+            deff_ref=ref,
+        )
+        got[ref] = (
+            [r for r in out.to_dicts() if r["sch.wide"] == "Yes"][0]
+            if domain
+            else out.to_dicts()[0]
+        )
+
+    assert got["wor"]["se"] == pytest.approx(got["wr"]["se"], rel=1e-15)
+
+    # n and sum(w) are the domain's own when a domain is in play, which is what
+    # makes each domain carry a different correction.
+    sub = df.filter(pl.col("sch.wide") == "Yes") if domain else df
+    expected = 1.0 / (1.0 - sub.height / sub["pw"].sum())
+    assert got["wor"]["deff"] / got["wr"]["deff"] == pytest.approx(expected, rel=1e-9)
