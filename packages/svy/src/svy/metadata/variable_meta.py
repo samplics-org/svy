@@ -99,13 +99,15 @@ _StructT = TypeVar("_StructT", bound=msgspec.Struct)
 def _clone_struct(struct: _StructT, overrides: dict[str, Any]) -> _StructT:
     """Copy a frozen struct through its constructor, so ``__post_init__`` runs.
 
-    Not ``msgspec.structs.replace``: it skips ``__post_init__`` before msgspec
-    0.21, and svy supports 0.19+. The structs here normalize in
-    ``__post_init__`` — a dict of value labels becomes ``ValueLabel`` pairs —
-    so ``replace`` on an older msgspec stored the authoring dict verbatim and
-    every later read of ``.labels`` raised ``AttributeError: 'int' object has
-    no attribute 'code'``. The constructor normalizes on every version we
-    support, and re-checks the invariants while it is there.
+    The structs here normalize in ``__post_init__`` — a dict of value labels
+    becomes ``ValueLabel`` pairs — so a copy that skips it stores the authoring
+    dict verbatim, and every later read of ``.labels`` raises ``AttributeError:
+    'int' object has no attribute 'code'``.
+
+    ``msgspec.structs.replace`` did exactly that before msgspec 0.21, which is
+    why the floor is pinned there. This does not depend on that pin: the
+    constructor runs the normalization by definition, on any version, and
+    re-checks the invariants while it is there.
     """
     return type(struct)(**{**asdict(struct), **overrides})
 

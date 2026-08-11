@@ -16,9 +16,17 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
   s.wrangling.apply_labels(categories={"q1": {1: "Yes", 2: "No"}}).labels
   ```
 
-  `VariableMeta.clone` copied through `msgspec.structs.replace`, which does not run `__post_init__` before msgspec 0.21 — and svy accepts `msgspec>=0.19.0`. `__post_init__` is the one place that turns the authoring dict `{1: "Yes"}` into the `ValueLabel` pairs the field is declared to hold, so on a resolved 0.20 the dict was stored verbatim and the failure surfaced at the next read rather than at the write. Since `apply_labels` reaches `clone` through `set_value_labels`, the whole documented path for labelling a variable was affected on that msgspec.
+  `VariableMeta.clone` copied through `msgspec.structs.replace`, which does not run `__post_init__` before msgspec 0.21 — and the floor was `>=0.19.0`. `__post_init__` is the one place that turns the authoring dict `{1: "Yes"}` into the `ValueLabel` pairs the field is declared to hold, so on a resolved 0.20 the dict was stored verbatim and the failure surfaced at the next read rather than at the write. Since `apply_labels` reaches `clone` through `set_value_labels`, the whole documented path for labelling a variable was affected on that msgspec.
 
-  Cloning now goes through the constructor, which normalizes and re-checks the invariants on every version supported. Applied to `VariableMeta`, `Label` and `CategoryScheme` — the three structs that normalize in `__post_init__`.
+  Cloning now goes through the constructor, which normalizes and re-checks the invariants by definition, on any msgspec. The floor moved to 0.21 as well (see below) — two fixes for one defect, deliberately: the pin closes it for `replace` everywhere in the codebase, and the constructor closes it here regardless of what the pin later becomes. Applied to `VariableMeta`, `Label` and `CategoryScheme` — the three structs that normalize in `__post_init__`.
+
+### Changed
+
+- **msgspec floor raised to 0.21.** `msgspec>=0.19.0` became `msgspec>=0.21.0` ([#127](https://github.com/samplics-org/svy/pull/127)).
+
+  0.21 is the first release where `structs.replace` runs `__post_init__`; 0.19 and 0.20 skip it, verified directly against each. Any struct that normalizes or validates in `__post_init__` is therefore only as sound as the resolved msgspec, and svy has several — the value-label defect above is what that looks like in practice, and it reached users because a lockfile resolving 0.21 hid it from the test suite while a docs environment resolving 0.20 published the traceback.
+
+  Nothing in svy needs a 0.20 or 0.19 runtime, and 0.21.1 was already what every lockfile here resolved, so this only rules out an installation that was never tested.
 
 ## [0.24.0] — 2026-08-10
 

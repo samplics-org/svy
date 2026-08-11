@@ -67,14 +67,15 @@ class TestCloneNormalizes:
     """`clone` must normalize exactly like the constructor.
 
     It used to delegate to `msgspec.structs.replace`, which does not run
-    `__post_init__` before msgspec 0.21 — and svy supports 0.19+. So
-    `with_value_labels({1: "Yes"})` stored the authoring dict verbatim on an
-    older msgspec, and the next read of `.labels` raised
+    `__post_init__` before msgspec 0.21 — and the floor was 0.19. So
+    `with_value_labels({1: "Yes"})` stored the authoring dict verbatim on a
+    resolved 0.20, and the next read of `.labels` raised
     `AttributeError: 'int' object has no attribute 'code'`.
 
-    These assert the stored *shape*, not `.labels`: a `.labels` assertion
-    passes on 0.21+ whether or not `clone` normalizes, so it cannot catch a
-    regression here.
+    These assert the stored *shape*, not `.labels`. Now that the floor is
+    0.21 the dependency alone would keep `replace` honest, so a `.labels`
+    assertion cannot tell a normalizing `clone` from a lucky one — only the
+    shape can.
     """
 
     def test_with_value_labels_stores_pairs(self):
