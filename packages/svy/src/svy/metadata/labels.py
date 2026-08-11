@@ -10,11 +10,11 @@ from typing import Iterable, Mapping, Self
 
 import msgspec
 
-from msgspec.structs import force_setattr, replace
+from msgspec.structs import force_setattr
 
 from svy.core.types import Category
 from svy.errors.label_errors import LabelError
-from svy.metadata.variable_meta import ValueLabel, _coerce_labels
+from svy.metadata.variable_meta import ValueLabel, _clone_struct, _coerce_labels
 
 
 log = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ class Label(msgspec.Struct, frozen=True):
         return {vl.code: vl.label for vl in self.categories or ()}
 
     def clone(self, **overrides) -> Self:
-        return replace(self, **overrides)
+        return _clone_struct(self, overrides)
 
 
 class SchemeEntry(msgspec.Struct, frozen=True):
@@ -135,7 +135,7 @@ class CategoryScheme(msgspec.Struct, kw_only=True, frozen=True):
         return {e.code: e.label for e in self.entries}
 
     def clone(self, **overrides) -> Self:
-        return replace(self, **overrides)
+        return _clone_struct(self, overrides)
 
 
 def _coerce_entries(value) -> tuple[SchemeEntry, ...]:
