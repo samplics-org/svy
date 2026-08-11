@@ -8,6 +8,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+## [0.24.1] — 2026-08-11
+
 ### Fixed
 
 - **Value labels survive being written.** Reading back what `apply_labels` had just stored raised `AttributeError: 'int' object has no attribute 'code'` ([#127](https://github.com/samplics-org/svy/pull/127)):
@@ -412,7 +414,8 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.24.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.24.1...HEAD
+[0.24.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.24.1
 [0.24.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.24.0
 [0.23.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.23.0
 [0.22.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.22.1

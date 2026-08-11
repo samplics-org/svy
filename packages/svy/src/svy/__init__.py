@@ -129,7 +129,7 @@ from svy.weighting import Threshold, TrimConfig, TrimResult
 # Ensure no “No handlers could be found” warnings in user apps
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
-__version__ = "0.24.0"
+__version__ = "0.24.1"
 
 __all__ = [
     # --- Modules ----
