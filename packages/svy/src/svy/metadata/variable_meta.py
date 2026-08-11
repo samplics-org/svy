@@ -20,12 +20,12 @@ from __future__ import annotations
 import logging
 import math
 
-from typing import TYPE_CHECKING, Any, Iterable, Mapping, Self
+from typing import TYPE_CHECKING, Any, Iterable, Mapping, Self, TypeVar
 
 import msgspec
 import polars as pl
 
-from msgspec.structs import force_setattr, replace
+from msgspec.structs import asdict, force_setattr
 
 
 if TYPE_CHECKING:
@@ -91,6 +91,25 @@ def _coerce_labels(value) -> tuple[ValueLabel, ...] | None:
     if isinstance(value, Mapping):
         return tuple(ValueLabel(code=c, label=lbl) for c, lbl in value.items())
     return tuple(v if isinstance(v, ValueLabel) else ValueLabel(*v) for v in value)
+
+
+_StructT = TypeVar("_StructT", bound=msgspec.Struct)
+
+
+def _clone_struct(struct: _StructT, overrides: dict[str, Any]) -> _StructT:
+    """Copy a frozen struct through its constructor, so ``__post_init__`` runs.
+
+    The structs here normalize in ``__post_init__`` — a dict of value labels
+    becomes ``ValueLabel`` pairs — so a copy that skips it stores the authoring
+    dict verbatim, and every later read of ``.labels`` raises ``AttributeError:
+    'int' object has no attribute 'code'``.
+
+    ``msgspec.structs.replace`` did exactly that before msgspec 0.21, which is
+    why the floor is pinned there. This does not depend on that pin: the
+    constructor runs the normalization by definition, on any version, and
+    re-checks the invariants while it is there.
+    """
+    return type(struct)(**{**asdict(struct), **overrides})
 
 
 # =============================================================================
@@ -261,7 +280,7 @@ class VariableMeta(msgspec.Struct, frozen=True):
 
     def clone(self, **overrides: Any) -> VariableMeta:
         """Create a copy with optional field overrides."""
-        return replace(self, **overrides)
+        return _clone_struct(self, overrides)
 
     def with_label(self, label: str) -> VariableMeta:
         """Return a copy with updated variable label."""

@@ -7,8 +7,18 @@ import msgspec
 import polars as pl
 import pytest
 
+from svy import Sample
 from svy.core.enumerations import MeasurementType, MetadataSource
-from svy.metadata import MetadataStore, ResolvedLabels, SchemeRef, VariableMeta
+from svy.metadata import (
+    CategoryScheme,
+    Label,
+    MetadataStore,
+    ResolvedLabels,
+    SchemeRef,
+    VariableMeta,
+)
+from svy.metadata.labels import SchemeEntry
+from svy.metadata.variable_meta import ValueLabel
 
 
 class TestValueLabelRoundTrip:
@@ -51,6 +61,60 @@ class TestValueLabelRoundTrip:
         payload = {name: store.get(name) for name in store.variables}
         back = msgspec.json.decode(msgspec.json.encode(payload), type=dict[str, VariableMeta])
         assert back["sex"].labels == {1: "Male", 2: "Female", 8: "Don't know"}
+
+
+class TestCloneNormalizes:
+    """`clone` must normalize exactly like the constructor.
+
+    It used to delegate to `msgspec.structs.replace`, which does not run
+    `__post_init__` before msgspec 0.21 — and the floor was 0.19. So
+    `with_value_labels({1: "Yes"})` stored the authoring dict verbatim on a
+    resolved 0.20, and the next read of `.labels` raised
+    `AttributeError: 'int' object has no attribute 'code'`.
+
+    These assert the stored *shape*, not `.labels`. Now that the floor is
+    0.21 the dependency alone would keep `replace` honest, so a `.labels`
+    assertion cannot tell a normalizing `clone` from a lucky one — only the
+    shape can.
+    """
+
+    def test_with_value_labels_stores_pairs(self):
+        m = VariableMeta(name="q1", label="Satisfied?").with_value_labels({1: "Yes", 2: "No"})
+        assert m.value_labels == (
+            ValueLabel(code=1, label="Yes"),
+            ValueLabel(code=2, label="No"),
+        )
+        assert m.labels == {1: "Yes", 2: "No"}
+
+    def test_clone_stores_pairs(self):
+        m = VariableMeta(name="q1").clone(value_labels={1: "Yes"})
+        assert m.value_labels == (ValueLabel(code=1, label="Yes"),)
+
+    def test_clone_still_enforces_the_invariants(self):
+        m = VariableMeta(name="q1")
+        with pytest.raises(ValueError, match="both value_labels and scheme_ref"):
+            m.clone(value_labels={1: "Yes"}, scheme_ref=SchemeRef(concept="yes_no"))
+
+    def test_label_clone_stores_pairs(self):
+        lab = Label(label="Sex").clone(categories={1: "Male", 2: "Female"})
+        assert lab.categories == (
+            ValueLabel(code=1, label="Male"),
+            ValueLabel(code=2, label="Female"),
+        )
+
+    def test_scheme_clone_stores_entries(self):
+        scheme = CategoryScheme(concept="sex").clone(entries={1: "Male", 2: "Female"})
+        assert scheme.labels == {1: "Male", 2: "Female"}
+        assert all(isinstance(e, SchemeEntry) for e in scheme.entries)
+
+    def test_apply_labels_survives_the_read_back(self):
+        """The tutorial cell that surfaced this, end to end."""
+        s = Sample(pl.DataFrame({"q1": [1, 2, 1, 2]}))
+        out = s.wrangling.apply_labels(
+            labels={"q1": "Satisfaction with service"},
+            categories={"q1": {1: "Yes", 2: "No"}},
+        )
+        assert out.labels["q1"] == {1: "Yes", 2: "No"}
 
 
 class TestSchemeRef:

@@ -22,7 +22,10 @@ requires-python = ">=3.11"
 dependencies = [
   "httpx>=0.28.1",
   "numpy>=2.0",
-  "msgspec>=0.19.0",
+  # 0.21 is the first release where structs.replace runs __post_init__.
+  # Below it, every clone silently skipped the normalization that keeps
+  # value labels as ValueLabel pairs (see CHANGELOG, value-label clone fix).
+  "msgspec>=0.21.0",
   "polars[pyarrow]>=1.33.1",
   "scipy>=1.13",
   "svy-io>=0.2.0,<0.3.0",
