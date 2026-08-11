@@ -8,6 +8,18 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Fixed
+
+- **Value labels survive being written.** Reading back what `apply_labels` had just stored raised `AttributeError: 'int' object has no attribute 'code'` ([#127](https://github.com/samplics-org/svy/pull/127)):
+
+  ```python
+  s.wrangling.apply_labels(categories={"q1": {1: "Yes", 2: "No"}}).labels
+  ```
+
+  `VariableMeta.clone` copied through `msgspec.structs.replace`, which does not run `__post_init__` before msgspec 0.21 — and svy accepts `msgspec>=0.19.0`. `__post_init__` is the one place that turns the authoring dict `{1: "Yes"}` into the `ValueLabel` pairs the field is declared to hold, so on a resolved 0.20 the dict was stored verbatim and the failure surfaced at the next read rather than at the write. Since `apply_labels` reaches `clone` through `set_value_labels`, the whole documented path for labelling a variable was affected on that msgspec.
+
+  Cloning now goes through the constructor, which normalizes and re-checks the invariants on every version supported. Applied to `VariableMeta`, `Label` and `CategoryScheme` — the three structs that normalize in `__post_init__`.
+
 ## [0.24.0] — 2026-08-10
 
 ### Added
