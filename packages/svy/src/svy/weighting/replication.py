@@ -42,6 +42,7 @@ except ImportError:  # pragma: no cover
 
 from svy.core.design import RepWeights
 from svy.core.enumerations import EstimationMethod
+from svy.core.repwgts import Poisson, RaoWu, normalize_bootstrap_kind
 from svy.errors import DimensionError, MethodError
 from svy.utils.checks import drop_missing
 from svy.utils.random_state import RandomState, resolve_random_state
@@ -385,6 +386,7 @@ def create_jk_wgts(
             prefix=rep_prefix,
             n_reps=n_reps,
             df=df_val,
+            paired=paired,
             # Per-replicate (n_h-1)/n_h coefficients: exact stratified-JKn
             # variance instead of the global (R-1)/R approximation.
             rscales=tuple(rscales),
@@ -392,33 +394,6 @@ def create_jk_wgts(
     )
 
     return sample
-
-
-_BS_KIND_ALIASES = {
-    "rao-wu": "rao-wu",
-    "rao_wu": "rao-wu",
-    "raowu": "rao-wu",
-    "rao wu": "rao-wu",
-    "rw": "rao-wu",
-    "rao-wu-yue": "rao-wu",
-    "poisson": "poisson",
-}
-
-
-def _normalize_bs_kind(kind: str) -> str:
-    """Normalize the bootstrap `kind` string (case- and separator-insensitive)."""
-    if not isinstance(kind, str):
-        raise TypeError(
-            f"'kind' must be a string, got {type(kind).__name__}. Use 'rao-wu' or 'poisson'."
-        )
-    result = _BS_KIND_ALIASES.get(kind.strip().lower())
-    if result is None:
-        raise ValueError(
-            f"Unknown bootstrap kind {kind!r}. Use 'rao-wu' (stratified "
-            f"Rao-Wu-Yue rescaling bootstrap, requires psu) or 'poisson' "
-            f"(Beaumont-Patak generalized bootstrap, requires only a weight)."
-        )
-    return result
 
 
 def _domain_codes(
@@ -505,7 +480,7 @@ def create_bs_wgts(
     """
     df = sample._data
     design = sample._design
-    kind = _normalize_bs_kind(kind)
+    kind_spec = normalize_bootstrap_kind(kind)
 
     if n_reps is None:
         raise MethodError.not_applicable(
@@ -513,7 +488,7 @@ def create_bs_wgts(
             method="create_bs_wgts",
             reason="n_reps must be specified for Bootstrap.",
         )
-    if kind == "rao-wu" and calib_domains is not None:
+    if isinstance(kind_spec, RaoWu) and calib_domains is not None:
         raise MethodError.not_applicable(
             where="Sample.weighting.create_bs_wgts",
             method="create_bs_wgts",
@@ -526,7 +501,7 @@ def create_bs_wgts(
     # The Rao-Wu guard is deliberately not shared: the Poisson bootstrap exists
     # precisely for files that have no psu, so requiring one would reject the
     # only case it serves.
-    if kind == "rao-wu" and design.psu is None:
+    if isinstance(kind_spec, RaoWu) and design.psu is None:
         raise MethodError.not_applicable(
             where="Sample.weighting.create_bs_wgts",
             method="create_bs_wgts",
@@ -534,7 +509,7 @@ def create_bs_wgts(
         )
 
     if drop_nulls:
-        if kind == "poisson":
+        if isinstance(kind_spec, Poisson):
             domain_cols = _by_to_cols(calib_domains) if calib_domains is not None else []
             candidates = [design.wgt, *domain_cols]
         else:
@@ -553,7 +528,7 @@ def create_bs_wgts(
         else int(rng.randint(0, 2**31 - 1))
     )
 
-    if kind == "poisson":
+    if isinstance(kind_spec, Poisson):
         domain_codes = _domain_codes(data, calib_domains, where="Sample.weighting.create_bs_wgts")
         assert rust_create_poisson_bs_wgts is not None  # noqa: S101
         rep_mat, df_val = rust_create_poisson_bs_wgts(
@@ -581,11 +556,16 @@ def create_bs_wgts(
         [pl.Series(name=col, values=vals) for col, vals in rep_dicts.items()]
     )
 
+    if isinstance(kind_spec, Poisson):
+        domain_cols = _by_to_cols(calib_domains)
+        kind_spec = Poisson(calib_domains=tuple(domain_cols) if domain_cols else None)
+
     sample._design = sample._design.update_rep_weights(
         method=EstimationMethod.BOOTSTRAP,
         prefix=rep_prefix,
         n_reps=n_reps,
         df=df_val,
+        kind=kind_spec,
     )
 
     return sample

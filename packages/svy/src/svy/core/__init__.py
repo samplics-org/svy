@@ -35,6 +35,15 @@ from svy.core.expr import (
     sum_horizontal,
     when,
 )
+from svy.core.repwgts import (
+    BootstrapWgts,
+    BrrWgts,
+    JackknifeWgts,
+    Poisson,
+    RaoWu,
+    RepWgts,
+    SdrWgts,
+)
 from svy.core.sample import Sample
 from svy.core.singleton import (
     Singleton,
@@ -74,7 +83,14 @@ __all__ = [
     "FDist",
     "Number",
     "PopSize",
+    "BootstrapWgts",
+    "BrrWgts",
+    "JackknifeWgts",
+    "Poisson",
+    "RaoWu",
     "RepWeights",
+    "RepWgts",
+    "SdrWgts",
     "Sample",
     "Singleton",
     "SingletonInfo",
