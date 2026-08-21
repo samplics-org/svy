@@ -18,10 +18,11 @@ from typing import (
 from svy.core.enumerations import EstimationMethod as _EstimationMethod
 from svy.core.repwgts import (
     BootstrapKind,
+    BrrWgts,
     RepWeights,
     RepWgts,
-    _normalize_rep_method,
     _RepWgtsBase,
+    resolve_rep_variant,
 )
 from svy.ui.printing import make_panel, render_rich_to_str, resolve_width
 
@@ -132,7 +133,7 @@ def make_rep_weights(
     >>> rw = make_rep_weights("brr", prefix="brr_", n_reps=32, fay_coef=0.5)
     """
     return RepWeights(
-        method=_normalize_rep_method(method),
+        method=method,
         prefix=prefix,
         n_reps=n_reps,
         fay_coef=fay_coef,
@@ -463,25 +464,21 @@ class Design:
             rscales = cur.rscales if cur else None
 
         # 5. Create the new variant.
-        _resolved_method = (
-            _normalize_rep_method(resolved_method)
-            if isinstance(resolved_method, str)
-            else resolved_method
-        )
+        _variant = resolve_rep_variant(resolved_method)
 
         # Variant-specific parameters carry over only within the same method:
         # a bootstrap kind means nothing on a jackknife design.
-        _same = cur is not None and cur.method == _resolved_method
+        _same = cur is not None and type(cur) is _variant
         if isinstance(kind, _MissingType):
             kind = getattr(cur, "kind", None) if _same else None
         if isinstance(paired, _MissingType):
             paired = getattr(cur, "paired", False) if _same else False
 
         updated_rep_wgts = RepWeights(
-            method=_resolved_method,
+            method=resolved_method,
             prefix=resolved_prefix,
             n_reps=resolved_n_reps,
-            fay_coef=fay_coef if _resolved_method == _EstimationMethod.BRR else 0.0,
+            fay_coef=fay_coef if _variant is BrrWgts else 0.0,
             df=df,
             padding=padding,
             rscales=rscales,

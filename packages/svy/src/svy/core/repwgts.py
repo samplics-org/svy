@@ -269,49 +269,59 @@ class SdrWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="SDR", tag_field="met
 
 RepWgts = Union[BootstrapWgts, JackknifeWgts, BrrWgts, SdrWgts]
 
-_METHOD_TO_VARIANT: dict[_EstimationMethod, type] = {
-    _EstimationMethod.BOOTSTRAP: BootstrapWgts,
-    _EstimationMethod.JACKKNIFE: JackknifeWgts,
-    _EstimationMethod.BRR: BrrWgts,
-    _EstimationMethod.SDR: SdrWgts,
-}
-
-
 # =============================================================================
 # Normalization + the RepWeights factory
 # =============================================================================
 
-_REP_METHOD_ALIASES: dict[str, _EstimationMethod] = {
-    "brr": _EstimationMethod.BRR,
-    "bootstrap": _EstimationMethod.BOOTSTRAP,
-    "bs": _EstimationMethod.BOOTSTRAP,
-    "jackknife": _EstimationMethod.JACKKNIFE,
-    "jk": _EstimationMethod.JACKKNIFE,
-    "jkn": _EstimationMethod.JACKKNIFE,
-    "sdr": _EstimationMethod.SDR,
+# A method name resolves straight to its variant. There is no enum in the
+# middle: EstimationMethod is a StrEnum, so a member *is* a string and
+# EstimationMethod.BOOTSTRAP.lower() is already "bootstrap". Taylor normalizes
+# to "taylor", which is absent here and therefore rejected -- linearization
+# carries no replicate weights.
+_REP_METHOD_ALIASES: dict[str, type] = {
+    "brr": BrrWgts,
+    "bootstrap": BootstrapWgts,
+    "bs": BootstrapWgts,
+    "jackknife": JackknifeWgts,
+    "jk": JackknifeWgts,
+    "jkn": JackknifeWgts,
+    "sdr": SdrWgts,
 }
 
+_REPLICATE_METHOD_NAMES = ("Bootstrap", "Jackknife", "BRR", "SDR")
 
-def _normalize_rep_method(
-    method: Literal["brr", "bootstrap", "jackknife", "sdr"],
-) -> _EstimationMethod:
-    """Normalize a user-facing method string to the internal enum.
 
-    Accepts (case-insensitive): "brr", "bootstrap"/"bs", "jackknife"/"jk"/"jkn",
-    "sdr".
+def resolve_rep_variant(
+    method: Literal["brr", "bootstrap", "jackknife", "sdr"] | _EstimationMethod,
+) -> type:
+    """Resolve a method name to its RepWeights variant.
+
+    Accepts (case-insensitive): "brr", "bootstrap"/"bs",
+    "jackknife"/"jk"/"jkn", "sdr", or the corresponding EstimationMethod.
     """
     if not isinstance(method, str):
         raise TypeError(
             f"'method' must be a string, got {type(method).__name__}. "
             f"Use 'brr', 'bootstrap', 'jackknife', or 'sdr'."
         )
-    result = _REP_METHOD_ALIASES.get(method.strip().lower())
-    if result is None:
+    normalized = method.strip().lower()
+    variant = _REP_METHOD_ALIASES.get(normalized)
+    if variant is not None:
+        return variant
+
+    # A real estimation method that simply has no replicate weights (Taylor) is
+    # a different mistake from a typo, and gets a different message. Compared
+    # case-insensitively so the string and the enum member behave alike.
+    if normalized in {m.lower() for m in _EstimationMethod}:
         raise ValueError(
-            f"Unknown replication method {method!r}. "
-            f"Use 'brr', 'bootstrap', 'jackknife', or 'sdr'."
+            f"Method '{method}' is not a valid replication method "
+            f"(expected one of: {list(_REPLICATE_METHOD_NAMES)}). "
+            f"Taylor linearization carries no replicate weights: leave "
+            f"Design.rep_wgts as None and pass method='taylor' at estimation time."
         )
-    return result
+    raise ValueError(
+        f"Unknown replication method {method!r}. Use 'brr', 'bootstrap', 'jackknife', or 'sdr'."
+    )
 
 
 def normalize_bootstrap_kind(kind: str | RaoWu | Poisson) -> BootstrapKind:
@@ -375,33 +385,22 @@ def RepWeights(  # noqa: N802 - a factory that replaced a class of this name
         if _val is _MISSING_ARG:
             raise TypeError(f"Missing required argument {_name!r}")
 
-    resolved = method if isinstance(method, _EstimationMethod) else _normalize_rep_method(method)
-
-    variant = _METHOD_TO_VARIANT.get(resolved)
-    if variant is None:
-        # Pre-existing contract: ValueError with this wording. Kept as-is so
-        # `except ValueError` keeps working; the orientation is in the message.
-        raise ValueError(
-            f"Method '{resolved}' is not a valid replication method "
-            f"(expected one of: {[m.value for m in _METHOD_TO_VARIANT]}). "
-            f"Taylor linearization carries no replicate weights: leave "
-            f"Design.rep_wgts as None and pass method='taylor' at estimation time."
-        )
+    variant = resolve_rep_variant(method)
 
     common = dict(prefix=prefix, n_reps=n_reps, df=df, padding=padding, rscales=rscales)
 
     if variant is BootstrapWgts:
-        _reject(resolved, fay_coef=fay_coef, paired=paired)
+        _reject(variant, fay_coef=fay_coef, paired=paired)
         return BootstrapWgts(
             **common, kind=normalize_bootstrap_kind(kind) if kind is not None else RaoWu()
         )
     if variant is JackknifeWgts:
-        _reject(resolved, fay_coef=fay_coef, kind=kind)
+        _reject(variant, fay_coef=fay_coef, kind=kind)
         return JackknifeWgts(**common, paired=paired)
     if variant is BrrWgts:
-        _reject(resolved, kind=kind, paired=paired)
+        _reject(variant, kind=kind, paired=paired)
         return BrrWgts(**common, fay_coef=fay_coef)
-    _reject(resolved, fay_coef=fay_coef, kind=kind, paired=paired)
+    _reject(variant, fay_coef=fay_coef, kind=kind, paired=paired)
     return SdrWgts(**common)
 
 
@@ -412,7 +411,7 @@ _PARAM_OWNER = {
 }
 
 
-def _reject(method: _EstimationMethod, **supplied) -> None:
+def _reject(variant: type, **supplied) -> None:
     """Reject parameters that belong to a different method.
 
     The flat signature can express combinations the union cannot; this is where
@@ -430,7 +429,7 @@ def _reject(method: _EstimationMethod, **supplied) -> None:
             allowed=[empty],
             hint=(
                 f"'{name}' is a {owner_method} parameter and is not stored on a "
-                f"{method.value} design. Each method now carries only its own "
+                f"{variant.__name__} design. Each method carries only its own "
                 f"parameters: {owner} has '{name}'."
             ),
         )

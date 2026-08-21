@@ -18,6 +18,7 @@ from svy.core.repwgts import (
     RepWeights,
     RepWgts,
     SdrWgts,
+    resolve_rep_variant,
 )
 from svy.errors import MethodError
 
@@ -149,6 +150,47 @@ def test_factory_rejects_foreign_parameters_and_names_the_owner(kwargs, param):
     rendered = str(exc.value)
     assert param in rendered
     assert "Wgts" in rendered  # hint names the variant that owns it
+
+
+@pytest.mark.parametrize(
+    "given, expected",
+    [
+        ("bootstrap", BootstrapWgts),
+        ("BOOTSTRAP", BootstrapWgts),
+        ("bs", BootstrapWgts),
+        ("jackknife", JackknifeWgts),
+        ("jk", JackknifeWgts),
+        ("jkn", JackknifeWgts),
+        ("brr", BrrWgts),
+        ("BRR", BrrWgts),
+        ("  sdr  ", SdrWgts),
+        (EstimationMethod.BOOTSTRAP, BootstrapWgts),
+        (EstimationMethod.JACKKNIFE, JackknifeWgts),
+        (EstimationMethod.BRR, BrrWgts),
+        (EstimationMethod.SDR, SdrWgts),
+    ],
+)
+def test_method_names_resolve_straight_to_a_variant(given, expected):
+    """No enum in the middle: EstimationMethod is a StrEnum, so a member is
+    already a string and needs no special case."""
+    assert resolve_rep_variant(given) is expected
+
+
+@pytest.mark.parametrize("given", ["taylor", "Taylor", "TAYLOR", EstimationMethod.TAYLOR])
+def test_taylor_is_rejected_the_same_way_however_it_is_spelled(given):
+    """A real method that carries no replicate weights, not a typo."""
+    with pytest.raises(ValueError, match="not a valid replication method"):
+        resolve_rep_variant(given)
+
+
+def test_a_typo_gets_a_different_message_from_taylor():
+    with pytest.raises(ValueError, match="Unknown replication method"):
+        resolve_rep_variant("bootstrp")
+
+
+def test_non_string_method_raises_type_error():
+    with pytest.raises(TypeError, match="'method' must be a string"):
+        resolve_rep_variant(42)
 
 
 def test_missing_required_argument_message_is_preserved():
