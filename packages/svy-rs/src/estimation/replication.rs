@@ -79,13 +79,11 @@ pub fn replicate_coefficients(method: RepMethod, n_reps: usize, fay_coef: f64) -
 /// Compute variance from replicate estimates
 ///
 /// # Arguments
-/// * `method` - Replication method
 /// * `theta_full` - Full sample estimate
 /// * `theta_reps` - Vector of replicate estimates
 /// * `rep_coefs` - Replicate coefficients
 /// * `center` - Centering method (ReplicateMean or FullSample)
 pub fn variance_from_replicates(
-    _method: RepMethod,
     theta_full: f64,
     theta_reps: &[f64],
     rep_coefs: &[f64],
@@ -1531,7 +1529,6 @@ mod tests {
         // Mean of replicates = 100.0
         // Var = (4/4) * sum((rep - 100)^2) = 1.0 * (4 + 4 + 1 + 1) = 10.0
         let var = variance_from_replicates(
-            RepMethod::SDR,
             theta_full,
             &theta_reps,
             &rep_coefs,
@@ -1550,13 +1547,92 @@ mod tests {
         // Var = (4/4) * sum((rep - 105)^2)
         //     = 1.0 * (49 + 9 + 36 + 16) = 110.0
         let var = variance_from_replicates(
-            RepMethod::SDR,
             theta_full,
             &theta_reps,
             &rep_coefs,
             VarianceCenter::FullSample,
         );
         assert!((var - 110.0).abs() < 1e-10);
+    }
+
+    // ---- Contract pinned before removing `method` from the FFI layer -------
+    //
+    // Python computes the per-replicate coefficients from the RepWeights
+    // variant and passes the vector across. These tests fix the two facts that
+    // makes safe: the variance formula does not consult the method, and the
+    // coefficients each method implies are exactly what the Python side
+    // reproduces.
+
+    #[test]
+    fn variance_is_independent_of_the_method_label() {
+        // Same coefficients, every method: the label must not change the result.
+        let theta_full = 105.0;
+        let theta_reps = vec![98.0, 102.0, 99.0, 101.0];
+        let coefs = vec![0.25, 0.25, 0.25, 0.25];
+
+        for center in [VarianceCenter::ReplicateMean, VarianceCenter::FullSample] {
+            let expected =
+                variance_from_replicates(theta_full, &theta_reps, &coefs, center);
+            // The signature no longer admits a method at all; this pins the
+            // property that made removing it safe -- the coefficients are the
+            // only thing that distinguishes one replication scheme from another.
+            for coefs_same in [coefs.clone(), coefs.clone()] {
+                assert_eq!(
+                    variance_from_replicates(theta_full, &theta_reps, &coefs_same, center),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn variance_honours_non_uniform_coefficients() {
+        // The stratified-JKn / user-rscales path: coefficients vary per replicate.
+        let theta_reps = vec![98.0, 102.0, 99.0, 101.0];
+        let coefs = vec![0.5, 1.0, 1.5, 2.0];
+        // center = mean = 100; sum c_r * (rep - 100)^2
+        //        = 0.5*4 + 1.0*4 + 1.5*1 + 2.0*1 = 2 + 4 + 1.5 + 2 = 9.5
+        let var = variance_from_replicates(
+            100.0, &theta_reps, &coefs, VarianceCenter::ReplicateMean,
+        );
+        assert!((var - 9.5).abs() < 1e-12, "got {var}");
+    }
+
+    #[test]
+    fn bootstrap_coefficients_are_one_over_b() {
+        let coefs = replicate_coefficients(RepMethod::Bootstrap, 500, 0.0);
+        assert_eq!(coefs.len(), 500);
+        assert!(coefs.iter().all(|c| (c - 1.0 / 500.0).abs() < 1e-15));
+    }
+
+    #[test]
+    fn jackknife_coefficients_are_b_minus_one_over_b() {
+        let coefs = replicate_coefficients(RepMethod::Jackknife, 20, 0.0);
+        assert!(coefs.iter().all(|c| (c - 19.0 / 20.0).abs() < 1e-15));
+    }
+
+    #[test]
+    fn brr_coefficients_collapse_to_one_over_b_at_fay_zero() {
+        // Plain BRR *is* Fay's BRR at 0: 1/(B(1-0)^2) = 1/B.
+        let plain = replicate_coefficients(RepMethod::BRR, 32, 0.0);
+        assert!(plain.iter().all(|c| (c - 1.0 / 32.0).abs() < 1e-15));
+
+        let fay = replicate_coefficients(RepMethod::BRR, 32, 0.5);
+        let expected = 1.0 / (32.0 * 0.25);
+        assert!(fay.iter().all(|c| (c - expected).abs() < 1e-15));
+    }
+
+    #[test]
+    fn fay_coefficient_only_affects_brr() {
+        // Which is why it has no business crossing the boundary for the others.
+        for method in [RepMethod::Bootstrap, RepMethod::Jackknife, RepMethod::SDR] {
+            assert_eq!(
+                replicate_coefficients(method, 16, 0.0),
+                replicate_coefficients(method, 16, 0.7),
+                "{:?} coefficients moved with fay_coef",
+                method
+            );
+        }
     }
 
     #[test]

@@ -88,16 +88,6 @@ def get_rep_weight_cols(est: Estimation) -> list[str]:
     return cols
 
 
-def get_rep_method_str(method: EstimationMethod) -> str:
-    method_map = {
-        EstimationMethod.BRR: "BRR",
-        EstimationMethod.BOOTSTRAP: "Bootstrap",
-        EstimationMethod.JACKKNIFE: "Jackknife",
-        EstimationMethod.SDR: "SDR",
-    }
-    return method_map.get(method, "jackknife")
-
-
 def _get_rep_params(est: Estimation, fay_coef: float = 0.0):
     design = est._sample._design
     rw = design.rep_wgts
@@ -230,9 +220,7 @@ def replicate_mean(
         value_col=y,
         weight_col=prep.weight_col,
         rep_weight_cols=rep_weight_cols,
-        method=get_rep_method_str(method),
-        fay_coef=0.0,  # unused: coefficients are supplied below
-        rscales=rep_coefs,
+        rep_coefs=rep_coefs,
         center=variance_center,
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
@@ -269,9 +257,7 @@ def replicate_total(
         value_col=y,
         weight_col=prep.weight_col,
         rep_weight_cols=rep_weight_cols,
-        method=get_rep_method_str(method),
-        fay_coef=0.0,  # unused: coefficients are supplied below
-        rscales=rep_coefs,
+        rep_coefs=rep_coefs,
         center=variance_center,
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
@@ -310,9 +296,7 @@ def replicate_ratio(
         denominator_col=x,
         weight_col=prep.weight_col,
         rep_weight_cols=rep_weight_cols,
-        method=get_rep_method_str(method),
-        fay_coef=0.0,  # unused: coefficients are supplied below
-        rscales=rep_coefs,
+        rep_coefs=rep_coefs,
         center=variance_center,
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
@@ -358,9 +342,7 @@ def replicate_prop(
         value_col=y,
         weight_col=prep.weight_col,
         rep_weight_cols=rep_weight_cols,
-        method=get_rep_method_str(method),
-        fay_coef=0.0,  # unused: coefficients are supplied below
-        rscales=rep_coefs,
+        rep_coefs=rep_coefs,
         center=variance_center,
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
@@ -406,9 +388,7 @@ def replicate_median(
         value_col=y,
         weight_col=prep.weight_col,
         rep_weight_cols=rep_weight_cols,
-        method=get_rep_method_str(method),
-        fay_coef=0.0,  # unused: coefficients are supplied below
-        rscales=rep_coefs,
+        rep_coefs=rep_coefs,
         center=variance_center,
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
@@ -451,10 +431,8 @@ def replicate_quantile(
         value_col=y,
         weight_col=prep.weight_col,
         rep_weight_cols=rep_weight_cols,
-        method=get_rep_method_str(method),
+        rep_coefs=rep_coefs,
         probs=list(probs),
-        fay_coef=0.0,  # unused: coefficients are supplied below
-        rscales=rep_coefs,
         center=variance_center,
         degrees_of_freedom=df_val,
         by_col=prep.by_col,

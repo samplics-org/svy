@@ -26,7 +26,7 @@ from svy.core.enumerations import EstimationMethod, PopParam
 from svy.errors import DimensionError, MethodError
 
 from .estimate import Estimate, ParamEst
-from .replication import _get_rep_params, get_rep_method_str
+from .replication import _get_rep_params
 
 
 if TYPE_CHECKING:
@@ -335,9 +335,7 @@ def replicate_assoc(
         _kind_arg(param),
         weight_col=prep.weight_col,
         rep_weight_cols=rep_weight_cols,
-        method=get_rep_method_str(method),
-        fay_coef=0.0,  # unused: coefficients are supplied below
-        rscales=rep_coefs,
+        rep_coefs=rep_coefs,
         center=variance_center,
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
