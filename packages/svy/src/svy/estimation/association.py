@@ -309,7 +309,7 @@ def taylor_assoc(
         prep.by_cols,
         as_factor=False,
         method=EstimationMethod.TAYLOR,
-            deff_ref=deff_ref,
+        deff_ref=deff_ref,
     )
 
 
@@ -326,7 +326,7 @@ def replicate_assoc(
     ci_method: str = "fisher",
 ) -> Estimate:
     """Replicate-weight correlation or covariance over ``pairs``."""
-    rep_weight_cols, df_val, final_fay, rscales = _get_rep_params(est, fay_coef)
+    rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
     data = est._ensure_float64(prep.df, [*rep_weight_cols, *sorted({c for p in pairs for c in p})])
     result_df = rs.replicate_assoc(
         data,
@@ -336,8 +336,8 @@ def replicate_assoc(
         weight_col=prep.weight_col,
         rep_weight_cols=rep_weight_cols,
         method=get_rep_method_str(method),
-        fay_coef=final_fay,
-        rscales=rscales,
+        fay_coef=0.0,  # unused: coefficients are supplied below
+        rscales=rep_coefs,
         center=variance_center,
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
