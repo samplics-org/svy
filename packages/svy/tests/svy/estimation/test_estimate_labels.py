@@ -3,7 +3,7 @@
 
 import pytest
 
-from svy.core.enumerations import EstimationMethod, PopParam
+from svy.core.enumerations import PopParam
 from svy.estimation.estimate import Estimate, ParamEst
 from svy.metadata import MetadataStore
 
@@ -53,7 +53,7 @@ def estimate_no_meta():
             by_level=("S",),
         ),
     ]
-    est.method = EstimationMethod.TAYLOR
+    est.method = "Taylor"
     return est
 
 
@@ -83,7 +83,7 @@ def estimate_with_meta(metadata_store):
             by_level=("S",),
         ),
     ]
-    est.method = EstimationMethod.TAYLOR
+    est.method = "Taylor"
     return est
 
 
@@ -116,7 +116,7 @@ def prop_estimate_with_meta(metadata_store):
             y_level=1,
         ),
     ]
-    est.method = EstimationMethod.TAYLOR
+    est.method = "Taylor"
     return est
 
 

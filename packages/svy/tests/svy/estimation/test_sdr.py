@@ -16,8 +16,6 @@ import pytest
 
 import svy
 
-from svy.core.enumerations import EstimationMethod
-
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
 
@@ -32,7 +30,7 @@ def sdr_data():
 def sdr_sample(sdr_data):
     """Create svy Sample with SDR design."""
     rep_weights = svy.RepWeights(
-        method=EstimationMethod.SDR,
+        method="SDR",
         prefix="repwtp",
         n_reps=80,
         df=79,  # ACS standard: n_reps - 1
@@ -130,12 +128,12 @@ class TestSDRvsBootstrap:
         so SDR SE = 2× Bootstrap SE (sqrt(4) = 2).
         """
         # SDR design
-        rep_sdr = svy.RepWeights(method=EstimationMethod.SDR, prefix="repwtp", n_reps=80)
+        rep_sdr = svy.RepWeights(method="SDR", prefix="repwtp", n_reps=80)
         design_sdr = svy.Design(wgt="pwgtp", rep_wgts=rep_sdr)
         sample_sdr = svy.Sample(data=sdr_data, design=design_sdr)
 
         # Bootstrap design (same weights, different method)
-        rep_bs = svy.RepWeights(method=EstimationMethod.BOOTSTRAP, prefix="repwtp", n_reps=80)
+        rep_bs = svy.RepWeights(method="Bootstrap", prefix="repwtp", n_reps=80)
         design_bs = svy.Design(wgt="pwgtp", rep_wgts=rep_bs)
         sample_bs = svy.Sample(data=sdr_data, design=design_bs)
 

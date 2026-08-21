@@ -21,7 +21,7 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
-from svy import EstimationMethod, Sample
+from svy import Sample
 from svy.core.design import Design, RepWeights
 from svy.core.enumerations import PopParam
 from svy.errors import DimensionError, MethodError
@@ -105,7 +105,7 @@ def rep_sample() -> Sample:
         row_index="id",
         wgt="w",
         psu="psu",
-        rep_wgts=RepWeights(method=EstimationMethod.JACKKNIFE, prefix="jk_", n_reps=8, df=7),
+        rep_wgts=RepWeights(method="Jackknife", prefix="jk_", n_reps=8, df=7),
     )
     return Sample(df, design)
 

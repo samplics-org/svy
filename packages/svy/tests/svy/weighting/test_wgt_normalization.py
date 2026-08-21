@@ -5,7 +5,7 @@ import pytest
 
 from numpy.testing import assert_allclose
 
-from svy import Design, EstimationMethod, Sample
+from svy import Design, Sample
 
 
 # ---------------------------------------------------------------------------
@@ -13,7 +13,6 @@ from svy import Design, EstimationMethod, Sample
 # ---------------------------------------------------------------------------
 
 NORM_WGT = "norm_wgt"
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -143,9 +142,7 @@ def test_normalize_replicate_weights_auto_prefix(sample_data, mock_design):
         pl.Series("rw2", np.ones(sample_data.height)),
     )
     sample = Sample(data=df, design=mock_design)
-    sample._design = sample.design.update_rep_weights(
-        method=EstimationMethod.BRR, prefix="rw", n_reps=2
-    )
+    sample._design = sample.design.update_rep_weights(method="BRR", prefix="rw", n_reps=2)
     sample.weighting.normalize(update_design_wgts=True)
     assert f"{NORM_WGT}1" in sample.data.columns
     assert f"{NORM_WGT}2" in sample.data.columns
@@ -160,9 +157,7 @@ def test_normalize_replicate_weights_custom_wgt_name(sample_data, mock_design):
         pl.Series("rw2", np.ones(sample_data.height)),
     )
     sample = Sample(data=df, design=mock_design)
-    sample._design = sample.design.update_rep_weights(
-        method=EstimationMethod.BRR, prefix="rw", n_reps=2
-    )
+    sample._design = sample.design.update_rep_weights(method="BRR", prefix="rw", n_reps=2)
     sample.weighting.normalize(wgt_name="my_norm")
     assert "my_norm" in sample.data.columns
     assert "my_norm1" in sample.data.columns
@@ -176,9 +171,7 @@ def test_normalize_replicate_weights_ignored_when_flag_set(sample_data, mock_des
         pl.Series("rw2", np.ones(sample_data.height)),
     )
     sample = Sample(data=df, design=mock_design)
-    sample._design = sample.design.update_rep_weights(
-        method=EstimationMethod.BRR, prefix="rw", n_reps=2
-    )
+    sample._design = sample.design.update_rep_weights(method="BRR", prefix="rw", n_reps=2)
     sample.weighting.normalize(ignore_reps=True)
     assert f"{NORM_WGT}1" not in sample.data.columns
     assert sample.design.rep_wgts.columns == ["rw1", "rw2"]
@@ -190,9 +183,7 @@ def test_normalize_no_design_update(sample_data, mock_design):
         pl.Series("rw2", np.ones(sample_data.height)),
     )
     sample = Sample(data=df, design=mock_design)
-    sample._design = sample.design.update_rep_weights(
-        method=EstimationMethod.BRR, prefix="rw", n_reps=2
-    )
+    sample._design = sample.design.update_rep_weights(method="BRR", prefix="rw", n_reps=2)
     sample.weighting.normalize(update_design_wgts=False)
     assert NORM_WGT in sample.data.columns
     assert f"{NORM_WGT}1" in sample.data.columns

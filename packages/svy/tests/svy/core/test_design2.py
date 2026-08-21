@@ -2,7 +2,6 @@ import polars as pl
 import pytest
 
 from svy.core.design import make_rep_weights
-from svy.core.enumerations import EstimationMethod
 from svy.core.sample import SVY_ROW_INDEX, Design, RepWeights, Sample
 
 
@@ -58,7 +57,7 @@ def design_ok() -> Design:
 def test_valid_design_passes(df_base, design_ok):
     s = Sample(df_base, design_ok)
     # Ensure the method was correctly attached
-    assert s.design.rep_wgts.method == EstimationMethod.BRR
+    assert s.design.rep_wgts.method == "BRR"
     assert s.design.rep_wgts.columns == ["rep1", "rep2", "rep3"]
 
 
@@ -66,7 +65,7 @@ def test_valid_design_update_method(df_base, design_ok):
     # Test updating just the method (should inherit prefix/n_reps from existing)
     new_design = design_ok.update_rep_weights(method="jackknife")
     s = Sample(df_base, new_design)
-    assert s.design.rep_wgts.method == EstimationMethod.JACKKNIFE
+    assert s.design.rep_wgts.method == "Jackknife"
     assert s.design.rep_wgts.n_reps == 3
 
 
@@ -101,7 +100,7 @@ def test_rep_weights_init_requires_method():
 def test_rep_weights_invalid_method():
     # Taylor is not a replicate method
     with pytest.raises(ValueError, match="is not a valid replication method"):
-        RepWeights(method=EstimationMethod.TAYLOR, prefix="rep", n_reps=10)
+        RepWeights(method="Taylor", prefix="rep", n_reps=10)
 
 
 def test_rep_weights_n_reps_too_small():
@@ -122,7 +121,7 @@ def test_rep_weights_invalid_df():
 
 def test_rep_weights_accepts_string_method():
     rw = RepWeights(method="bootstrap", prefix="rep", n_reps=10)
-    assert rw.method == EstimationMethod.BOOTSTRAP
+    assert rw.method == "Bootstrap"
 
 
 # ---------------------------

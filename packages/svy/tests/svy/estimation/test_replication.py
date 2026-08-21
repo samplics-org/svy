@@ -1,7 +1,7 @@
 # tests/svy/estimation/test_replication.py
 import pytest
 
-from svy import EstimationMethod, Sample
+from svy import Sample
 
 from . import data_golden as golden
 
@@ -12,9 +12,9 @@ TOL = 1e-4
 # SCENARIOS Configuration:
 # (Method, CSV_Filename, Prefix, N_Reps, DF, PSU_Column, Golden_Data_Dict)
 SCENARIOS = [
-    (EstimationMethod.BRR, "fake_survey_brr_24122025.csv", "brr_", 8, 7, "psu", golden.BRR),
+    ("BRR", "fake_survey_brr_24122025.csv", "brr_", 8, 7, "psu", golden.BRR),
     (
-        EstimationMethod.BOOTSTRAP,
+        "Bootstrap",
         "fake_survey_bootstrap_25122025.csv",
         "bs_",
         20,
@@ -23,7 +23,7 @@ SCENARIOS = [
         golden.BOOTSTRAP,
     ),
     (
-        EstimationMethod.JACKKNIFE,
+        "Jackknife",
         "fake_survey_jackknife_25122025.csv",
         "jk_",
         8,

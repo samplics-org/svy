@@ -724,8 +724,6 @@ class TestTrimWarnings:
 
     def test_replicate_weights_are_trimmed(self, skewed_sample):
         """Replicate weights get the same proportional adjustment as the main weight."""
-        from svy import EstimationMethod
-
         height = skewed_sample.data.height
         rw1 = [10.0] * (height - 1) + [999.0]
         rw2 = [10.0] * (height - 1) + [999.0]
@@ -735,9 +733,7 @@ class TestTrimWarnings:
             pl.Series("rw2", rw2),
         )
         sample = Sample(data=df, design=Design(wgt="weight"))
-        sample._design = sample.design.update_rep_weights(
-            method=EstimationMethod.BRR, prefix="rw", n_reps=2
-        )
+        sample._design = sample.design.update_rep_weights(method="BRR", prefix="rw", n_reps=2)
         out = sample.weighting.trim(upper=50.0)
 
         # No REPLICATE_SKIPPED warning

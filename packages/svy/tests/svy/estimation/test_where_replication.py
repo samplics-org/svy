@@ -40,7 +40,7 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
-from svy import EstimationMethod, Sample, col
+from svy import Sample, col
 
 from . import data_golden as golden
 
@@ -53,9 +53,9 @@ TOL = 1e-4
 
 # (Method, CSV, Prefix, N_Reps, DF, PSU_Column, Golden_Dict)
 SCENARIOS = [
-    (EstimationMethod.BRR, "fake_survey_brr_24122025.csv", "brr_", 8, 7, "psu", golden.BRR),
+    ("BRR", "fake_survey_brr_24122025.csv", "brr_", 8, 7, "psu", golden.BRR),
     (
-        EstimationMethod.BOOTSTRAP,
+        "Bootstrap",
         "fake_survey_bootstrap_25122025.csv",
         "bs_",
         20,
@@ -64,7 +64,7 @@ SCENARIOS = [
         golden.BOOTSTRAP,
     ),
     (
-        EstimationMethod.JACKKNIFE,
+        "Jackknife",
         "fake_survey_jackknife_25122025.csv",
         "jk_",
         8,
@@ -478,7 +478,7 @@ class TestWhereReplicationEdgeCases:
     def test_where_matching_no_rows_returns_empty_or_nan(self, load_survey_data, make_design):
         """A where clause matching zero rows should not crash."""
         data = load_survey_data("fake_survey_brr_24122025.csv")
-        design = make_design(EstimationMethod.BRR, "brr_", 8, 7, "psu")
+        design = make_design("BRR", "brr_", 8, 7, "psu")
         sample = Sample(data, design)
 
         result = sample.estimation.mean(
@@ -497,7 +497,7 @@ class TestWhereReplicationEdgeCases:
     def test_where_matching_all_rows_matches_unfiltered(self, load_survey_data, make_design):
         """A where clause matching every row must equal the unfiltered estimate exactly."""
         data = load_survey_data("fake_survey_brr_24122025.csv")
-        design = make_design(EstimationMethod.BRR, "brr_", 8, 7, "psu")
+        design = make_design("BRR", "brr_", 8, 7, "psu")
         sample = Sample(data, design)
 
         always_true = col("income") >= -1e18
@@ -513,7 +513,7 @@ class TestWhereReplicationEdgeCases:
     def test_multiple_where_conditions_list_form(self, load_survey_data, make_design):
         """List form of where should produce same result as combined &-expression."""
         data = load_survey_data("fake_survey_brr_24122025.csv")
-        design = make_design(EstimationMethod.BRR, "brr_", 8, 7, "psu")
+        design = make_design("BRR", "brr_", 8, 7, "psu")
         sample = Sample(data, design)
 
         list_form = sample.estimation.mean(
@@ -541,7 +541,7 @@ class TestWhereReplicationEdgeCases:
         columns on the sample's underlying data.
         """
         data = load_survey_data("fake_survey_brr_24122025.csv")
-        design = make_design(EstimationMethod.BRR, "brr_", 8, 7, "psu")
+        design = make_design("BRR", "brr_", 8, 7, "psu")
         sample = Sample(data, design)
 
         first = sample.estimation.mean(
@@ -565,7 +565,6 @@ class TestWhereReplicationEdgeCases:
 # First: Re-run R and drop df <- df[df$sex != "None", ] or leave it and update Python affected tests
 # Second: Sort out the DF calculation for domain (by and where) when replication is used.
 
-
 WHERE_GOLDEN_AVAILABLE = all(
     hasattr(golden, name) for name in ("WHERE_BRR", "WHERE_BOOTSTRAP", "WHERE_JACKKNIFE")
 )
@@ -581,7 +580,7 @@ class TestWhereReplicationGolden:
 
     WHERE_SCENARIOS = [
         (
-            EstimationMethod.BRR,
+            "BRR",
             "fake_survey_brr_24122025.csv",
             "brr_",
             8,
@@ -590,7 +589,7 @@ class TestWhereReplicationGolden:
             getattr(golden, "WHERE_BRR", {}),
         ),
         (
-            EstimationMethod.BOOTSTRAP,
+            "Bootstrap",
             "fake_survey_bootstrap_25122025.csv",
             "bs_",
             20,
@@ -599,7 +598,7 @@ class TestWhereReplicationGolden:
             getattr(golden, "WHERE_BOOTSTRAP", {}),
         ),
         (
-            EstimationMethod.JACKKNIFE,
+            "Jackknife",
             "fake_survey_jackknife_25122025.csv",
             "jk_",
             8,

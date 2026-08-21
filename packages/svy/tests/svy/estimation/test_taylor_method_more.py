@@ -11,8 +11,6 @@ import pytest
 
 import svy
 
-from svy.core.enumerations import EstimationMethod
-
 
 # ============================================================================
 # Fixtures
@@ -258,7 +256,7 @@ class TestReplicateWeightCasting:
         """Jackknife mean should work with integer replicate weights."""
         rep_wgts = svy.RepWeights(
             prefix="repwgt",
-            method=EstimationMethod.JACKKNIFE,
+            method="Jackknife",
             n_reps=6,  # We have repwgt1 through repwgt6
         )
         design = svy.Design(wgt="wgt", rep_wgts=rep_wgts)
@@ -276,7 +274,7 @@ class TestReplicateWeightCasting:
         """Jackknife total should work with integer replicate weights."""
         rep_wgts = svy.RepWeights(
             prefix="repwgt",
-            method=EstimationMethod.JACKKNIFE,
+            method="Jackknife",
             n_reps=6,  # We have repwgt1 through repwgt6
         )
         design = svy.Design(wgt="wgt", rep_wgts=rep_wgts)

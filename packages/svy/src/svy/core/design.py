@@ -322,9 +322,8 @@ class Design:
     def method(self) -> str:
         """Convenience accessor for the estimation method, as a display label.
 
-        ``"Taylor"`` when the design carries no replicate weights, otherwise the
-        variant's own label. A plain string: ``EstimationMethod`` is a
-        ``StrEnum``, so comparisons against it still hold.
+        ``"Taylor"`` when the design carries no replicate weights, otherwise
+        the variant's own label. For display and reporting only.
         """
         if self.rep_wgts is None:
             return "Taylor"

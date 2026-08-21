@@ -6,7 +6,6 @@ from svy.core.describe import DescribeResult
 from svy.core.design import Design, PopSize, RepWeights
 from svy.core.enumerations import (
     CaseStyle,
-    EstimationMethod,
     FitMethod,
     LetterCase,
     LinkFunction,
@@ -59,7 +58,6 @@ from svy.core.types import DF, DT, Category, Number
 __all__ = [
     # Enums
     "CaseStyle",
-    "EstimationMethod",
     "FitMethod",
     "LetterCase",
     "LinkFunction",

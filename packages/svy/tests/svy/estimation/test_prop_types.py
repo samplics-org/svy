@@ -6,8 +6,6 @@ import pytest
 
 import svy
 
-from svy.core.enumerations import EstimationMethod
-
 
 # ============================================================================
 # Shared fixtures
@@ -41,7 +39,7 @@ def rep_sample(base_df):
     n_reps = 8
     rep_cols = [pl.Series(f"rep{r + 1}", rng.uniform(0.5, 1.5, n) * 2.0) for r in range(n_reps)]
     df = base_df.with_columns(rep_cols)
-    rep_wgts = svy.RepWeights(prefix="rep", method=EstimationMethod.BRR, n_reps=n_reps)
+    rep_wgts = svy.RepWeights(prefix="rep", method="BRR", n_reps=n_reps)
     design = svy.Design(stratum="stratum", psu="psu", wgt="wgt", rep_wgts=rep_wgts)
     return svy.Sample(data=df, design=design)
 
@@ -52,7 +50,7 @@ def _make_rep_sample(df):
     n, n_reps = len(df), 8
     rep_cols = [pl.Series(f"rep{r + 1}", rng.uniform(0.5, 1.5, n) * 2.0) for r in range(n_reps)]
     df2 = df.with_columns(rep_cols)
-    rep_wgts = svy.RepWeights(prefix="rep", method=EstimationMethod.BRR, n_reps=n_reps)
+    rep_wgts = svy.RepWeights(prefix="rep", method="BRR", n_reps=n_reps)
     design = svy.Design(stratum="stratum", psu="psu", wgt="wgt", rep_wgts=rep_wgts)
     return svy.Sample(data=df2, design=design)
 

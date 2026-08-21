@@ -123,10 +123,9 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     def method(self) -> str:
         """The coarse method family, as a display label.
 
-        A plain string rather than an enum: ``EstimationMethod`` is a
-        ``StrEnum``, so ``rw.method == EstimationMethod.BOOTSTRAP`` still holds
-        for anyone comparing against it, while nothing here depends on the enum
-        existing.
+        One of ``"Bootstrap"``, ``"Jackknife"``, ``"BRR"``, ``"SDR"``. A label
+        for display and reporting: the variant's own type is what decides
+        anything, so nothing reads this to choose a code path.
         """
         return self.__struct_config__.tag
 
@@ -278,10 +277,8 @@ RepWgts = Union[BootstrapWgts, JackknifeWgts, BrrWgts, SdrWgts]
 # =============================================================================
 
 # A method name resolves straight to its variant. There is no enum in the
-# middle: EstimationMethod is a StrEnum, so a member *is* a string and
-# EstimationMethod.BOOTSTRAP.lower() is already "bootstrap". Taylor normalizes
-# to "taylor", which is absent here and therefore rejected -- linearization
-# carries no replicate weights.
+# middle. "taylor" is absent, and therefore rejected: linearization carries no
+# replicate weights, so there is no variant to resolve it to.
 _REP_METHOD_ALIASES: dict[str, type] = {
     "brr": BrrWgts,
     "bootstrap": BootstrapWgts,
@@ -305,7 +302,7 @@ def resolve_rep_variant(
     """Resolve a method name to its RepWeights variant.
 
     Accepts (case-insensitive): "brr", "bootstrap"/"bs",
-    "jackknife"/"jk"/"jkn", "sdr", or the corresponding EstimationMethod.
+    "jackknife"/"jk"/"jkn", "sdr".
     """
     if not isinstance(method, str):
         raise TypeError(

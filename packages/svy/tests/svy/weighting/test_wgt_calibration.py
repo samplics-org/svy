@@ -5,13 +5,11 @@ import pytest
 
 from numpy.testing import assert_allclose
 
-from svy import EstimationMethod
 from svy.core.sample import Design, Sample
 from svy.core.terms import Cat, Cross
 
 
 CALIB_WGT = "calib_wgt"
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -311,9 +309,7 @@ def test_calibrate_replicate_weights_auto_prefix(sample_num_df):
         pl.Series("rw2", np.ones(sample_num_df.height)),
     )
     s = Sample(data=df, design=Design(wgt="wgt"))
-    s._design = s.design.update_rep_weights(
-        method=EstimationMethod.BOOTSTRAP, prefix="rw", n_reps=2
-    )
+    s._design = s.design.update_rep_weights(method="Bootstrap", prefix="rw", n_reps=2)
     s2 = s.weighting.calibrate(controls={"A": 3945, "B": 3355}, wgt_name="_calib_wgt")
     assert "_calib_wgt1" in s2.data.columns
     assert "_calib_wgt2" in s2.data.columns
@@ -374,9 +370,7 @@ def test_calibrate_replicate_weights_auto_prefix_uses_svy_calib(sample_num_df):
         pl.Series("rw2", np.ones(sample_num_df.height)),
     )
     s = Sample(data=df, design=Design(wgt="wgt"))
-    s._design = s.design.update_rep_weights(
-        method=EstimationMethod.BOOTSTRAP, prefix="rw", n_reps=2
-    )
+    s._design = s.design.update_rep_weights(method="Bootstrap", prefix="rw", n_reps=2)
     s2 = s.weighting.calibrate(controls={"A": 3945, "B": 3355}, wgt_name="_calib_wgt")
     assert "_calib_wgt1" in s2.data.columns
     assert "_calib_wgt2" in s2.data.columns
@@ -390,9 +384,7 @@ def test_calibrate_replicate_weights_custom_wgt_name(sample_num_df):
         pl.Series("rw2", np.ones(sample_num_df.height)),
     )
     s = Sample(data=df, design=Design(wgt="wgt"))
-    s._design = s.design.update_rep_weights(
-        method=EstimationMethod.BOOTSTRAP, prefix="rw", n_reps=2
-    )
+    s._design = s.design.update_rep_weights(method="Bootstrap", prefix="rw", n_reps=2)
     s2 = s.weighting.calibrate(
         controls={"A": 3945, "B": 3355},
         wgt_name="_calib_wgt",
@@ -409,9 +401,7 @@ def test_calibrate_replicate_weights_ignored_when_flag_set(sample_num_df):
         pl.Series("rw2", np.ones(sample_num_df.height)),
     )
     s = Sample(data=df, design=Design(wgt="wgt"))
-    s._design = s.design.update_rep_weights(
-        method=EstimationMethod.BOOTSTRAP, prefix="rw", n_reps=2
-    )
+    s._design = s.design.update_rep_weights(method="Bootstrap", prefix="rw", n_reps=2)
     s2 = s.weighting.calibrate(
         controls={"A": 3945, "B": 3355},
         wgt_name="_calib_wgt",

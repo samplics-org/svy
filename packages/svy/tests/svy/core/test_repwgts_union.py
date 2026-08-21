@@ -8,7 +8,6 @@ import pytest
 
 import svy
 
-from svy.core.enumerations import EstimationMethod
 from svy.core.repwgts import (
     BootstrapWgts,
     BrrWgts,
@@ -31,16 +30,16 @@ from svy.errors import MethodError
 @pytest.mark.parametrize(
     "variant, expected_method",
     [
-        (BootstrapWgts(prefix="w", n_reps=10), EstimationMethod.BOOTSTRAP),
-        (JackknifeWgts(prefix="w", n_reps=10), EstimationMethod.JACKKNIFE),
-        (BrrWgts(prefix="w", n_reps=10), EstimationMethod.BRR),
-        (SdrWgts(prefix="w", n_reps=10), EstimationMethod.SDR),
+        (BootstrapWgts(prefix="w", n_reps=10), "Bootstrap"),
+        (JackknifeWgts(prefix="w", n_reps=10), "Jackknife"),
+        (BrrWgts(prefix="w", n_reps=10), "BRR"),
+        (SdrWgts(prefix="w", n_reps=10), "SDR"),
     ],
 )
-def test_method_property_returns_the_enum(variant, expected_method):
-    """`.method` stays an EstimationMethod so existing comparisons hold."""
+def test_method_property_is_the_display_label(variant, expected_method):
+    """`.method` is a plain string naming the method family."""
     assert variant.method == expected_method
-    assert variant.method == expected_method.value  # StrEnum
+    assert isinstance(variant.method, str)
 
 
 @pytest.mark.parametrize(
@@ -164,19 +163,19 @@ def test_factory_rejects_foreign_parameters_and_names_the_owner(kwargs, param):
         ("brr", BrrWgts),
         ("BRR", BrrWgts),
         ("  sdr  ", SdrWgts),
-        (EstimationMethod.BOOTSTRAP, BootstrapWgts),
-        (EstimationMethod.JACKKNIFE, JackknifeWgts),
-        (EstimationMethod.BRR, BrrWgts),
-        (EstimationMethod.SDR, SdrWgts),
+        ("Bootstrap", BootstrapWgts),
+        ("Jackknife", JackknifeWgts),
+        ("BRR", BrrWgts),
+        ("SDR", SdrWgts),
     ],
 )
 def test_method_names_resolve_straight_to_a_variant(given, expected):
-    """No enum in the middle: EstimationMethod is a StrEnum, so a member is
-    already a string and needs no special case."""
+    """A method name resolves straight to its variant, with no enum in
+    between."""
     assert resolve_rep_variant(given) is expected
 
 
-@pytest.mark.parametrize("given", ["taylor", "Taylor", "TAYLOR", EstimationMethod.TAYLOR])
+@pytest.mark.parametrize("given", ["taylor", "Taylor", "TAYLOR", "Taylor"])
 def test_taylor_is_rejected_the_same_way_however_it_is_spelled(given):
     """A real method that carries no replicate weights, not a typo."""
     with pytest.raises(ValueError, match="not a valid replication method"):
@@ -200,7 +199,7 @@ def test_missing_required_argument_message_is_preserved():
 
 def test_taylor_rejection_keeps_its_valueerror_contract():
     with pytest.raises(ValueError, match="not a valid replication method"):
-        RepWeights(method=EstimationMethod.TAYLOR, prefix="w", n_reps=10)
+        RepWeights(method="Taylor", prefix="w", n_reps=10)
 
 
 # ---------------------------------------------------------------------------

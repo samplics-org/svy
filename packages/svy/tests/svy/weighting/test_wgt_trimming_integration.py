@@ -16,7 +16,6 @@ import pytest
 
 from numpy.testing import assert_allclose
 
-from svy import EstimationMethod
 from svy.core.sample import Design, Sample
 from svy.weighting.types import TrimConfig
 
@@ -137,9 +136,7 @@ class TestPostStratifyTrimming:
             pl.Series("rw2", [1.0] * skewed_ps_sample.height),
         )
         sample = Sample(data=df, design=Design(wgt="weight"))
-        sample._design = sample.design.update_rep_weights(
-            method=EstimationMethod.BRR, prefix="rw", n_reps=2
-        )
+        sample._design = sample.design.update_rep_weights(method="BRR", prefix="rw", n_reps=2)
         out = sample.weighting.poststratify(
             controls={"A": 50.0, "B": 50.0},
             by="strat",
@@ -200,9 +197,7 @@ class TestCalibrateTrimming:
         )
         target = float((skewed_calib_sample["x"] * skewed_calib_sample["weight"]).sum())
         sample = Sample(data=df, design=Design(wgt="weight"))
-        sample._design = sample.design.update_rep_weights(
-            method=EstimationMethod.BRR, prefix="rw", n_reps=2
-        )
+        sample._design = sample.design.update_rep_weights(method="BRR", prefix="rw", n_reps=2)
         out = sample.weighting.calibrate(
             controls={"x": target},
             trimming=TrimConfig(upper=50.0, redistribute=True, min_cell_size=1),
@@ -263,9 +258,7 @@ class TestTrimInPlace:
             }
         )
         sample = Sample(data=df, design=Design(wgt="weight"))
-        sample._design = sample.design.update_rep_weights(
-            method=EstimationMethod.BRR, prefix="rw", n_reps=2
-        )
+        sample._design = sample.design.update_rep_weights(method="BRR", prefix="rw", n_reps=2)
         out = sample.weighting.trim(upper=50.0, wgt_name=None, redistribute=False)
 
         # No new rep columns created

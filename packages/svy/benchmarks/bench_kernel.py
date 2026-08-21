@@ -149,7 +149,7 @@ def run_end_to_end(n_rows: int, reps: int, n_reps: int) -> None:
             psu="ea",
             wgt="hhweight",
             rep_wgts=RepWeights(
-                method=svy.EstimationMethod.BOOTSTRAP, prefix="rep_", n_reps=n_reps
+                method="Bootstrap", prefix="rep_", n_reps=n_reps
             ),
         )
         rep_sample = Sample(data=df, design=rep_design)

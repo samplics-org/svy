@@ -3,7 +3,6 @@ import numpy as np
 import polars as pl
 import pytest
 
-from svy import EstimationMethod
 from svy.core.sample import Design, Sample
 
 
@@ -13,7 +12,6 @@ from svy.core.sample import Design, Sample
 
 # Default auto-generated weight name for nonresponse adjustment
 NR_WGT = "nr_wgt"
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -229,7 +227,7 @@ def test_adjust_replicate_weights_auto_prefix(sample_data_basic):
     )
     sample = Sample(data=df, design=Design(wgt="weight"))
     sample._design = sample.design.update_rep_weights(
-        method=EstimationMethod.BRR,
+        method="BRR",
         prefix="rw",
         n_reps=2,
     )
@@ -254,7 +252,7 @@ def test_adjust_replicate_weights_custom_wgt_name(sample_data_basic):
     )
     sample = Sample(data=df, design=Design(wgt="weight"))
     sample._design = sample.design.update_rep_weights(
-        method=EstimationMethod.BRR,
+        method="BRR",
         prefix="rw",
         n_reps=2,
     )
@@ -277,7 +275,7 @@ def test_adjust_replicate_weights_ignored_when_flag_set(sample_data_basic):
     )
     sample = Sample(data=df, design=Design(wgt="weight"))
     sample._design = sample.design.update_rep_weights(
-        method=EstimationMethod.BRR,
+        method="BRR",
         prefix="rw",
         n_reps=2,
     )
@@ -298,7 +296,7 @@ def test_adjust_no_design_update(sample_data_basic):
     )
     sample = Sample(data=df, design=Design(wgt="weight"))
     sample._design = sample.design.update_rep_weights(
-        method=EstimationMethod.BRR,
+        method="BRR",
         prefix="rw",
         n_reps=2,
     )

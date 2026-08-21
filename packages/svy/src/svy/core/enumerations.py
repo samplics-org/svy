@@ -36,18 +36,6 @@ class DistFamily(StrEnum):
 
 
 @unique
-class EstimationMethod(StrEnum):
-    # Standard variance estimation (Linearization)
-    TAYLOR = "Taylor"
-
-    # Replicate variance estimation methods
-    BRR = "BRR"
-    BOOTSTRAP = "Bootstrap"
-    JACKKNIFE = "Jackknife"
-    SDR = "SDR"  # Successive Difference Replication (e.g. used by ACS)
-
-
-@unique
 class FitMethod(StrEnum):
     # OLS = "OLS"
     # WLS = "WLS"
