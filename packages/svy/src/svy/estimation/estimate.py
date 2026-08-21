@@ -9,7 +9,7 @@ import msgspec
 import numpy as np
 import polars as pl
 
-from svy.core.enumerations import EstimationMethod, PopParam, QuantileMethod
+from svy.core.enumerations import PopParam, QuantileMethod
 from svy.core.types import Category, Number, RandomState
 
 # Import central UI helpers
@@ -112,7 +112,7 @@ class Estimate:
         self.strata: Sequence[Category] = []
         self.singletons: Sequence[Category] = []
         self.domains: Sequence[Category] = []
-        self.method: EstimationMethod = EstimationMethod.TAYLOR
+        self.method: str = "Taylor"
         #: Which SRS reference the design effect was measured against, or None
         #: when no design effect was requested. Recorded because a deff is
         #: ambiguous without it: the two references differ by 1 - n/N.
@@ -186,8 +186,8 @@ class Estimate:
         `to_polars` deliberately carries no provenance at all.
         """
         if self.deff_ref:
-            return f"{self.method.name}, deff={self.deff_ref}"
-        return self.method.name
+            return f"{self.method.upper()}, deff={self.deff_ref}"
+        return self.method.upper()
 
     @classmethod
     def set_default_use_labels(cls, use: bool) -> None:
@@ -567,7 +567,7 @@ class EstimateList(list):
         if not members:
             return "Estimates"
         params = {m.param.name for m in members}
-        methods = {m.method.name for m in members}
+        methods = {m.method.upper() for m in members}
         param = params.pop() if len(params) == 1 else "MIXED"
         method = methods.pop() if len(methods) == 1 else "MIXED"
         ys = {m.estimates[0].y for m in members}

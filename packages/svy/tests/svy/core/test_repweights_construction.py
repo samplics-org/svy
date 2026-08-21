@@ -56,15 +56,19 @@ from svy.core.enumerations import EstimationMethod
     ],
 )
 def test_string_method_normalized_in_constructor(method_str, expected):
-    """RepWeights(method='<string>') must succeed and normalize to enum."""
+    """RepWeights(method='<string>') must succeed and normalize.
+
+    Compared by equality, not identity: the label is a plain string now, and
+    EstimationMethod is a StrEnum so the comparison still holds.
+    """
     rw = RepWeights(method=method_str, prefix="rw", n_reps=10)
-    assert rw.method is expected
+    assert rw.method == expected
 
 
 def test_enum_method_accepted_unchanged():
     """Passing the enum directly must also work."""
     rw = RepWeights(method=EstimationMethod.BOOTSTRAP, prefix="rw", n_reps=10)
-    assert rw.method is EstimationMethod.BOOTSTRAP
+    assert rw.method == EstimationMethod.BOOTSTRAP
 
 
 # -----------------------------------------------------------------------------
@@ -75,20 +79,20 @@ def test_enum_method_accepted_unchanged():
 def test_paper_example_bootstrap():
     """Mirrors svy_vs_rsurvey_comparison.qmd verbatim."""
     rw = svy.RepWeights(method="bootstrap", prefix="bsrw", n_reps=1000)
-    assert rw.method is EstimationMethod.BOOTSTRAP
+    assert rw.method == EstimationMethod.BOOTSTRAP
     assert rw.prefix == "bsrw"
     assert rw.n_reps == 1000
 
 
 def test_paper_example_jackknife():
     rw = svy.RepWeights(method="jackknife", prefix="jkw_", n_reps=62)
-    assert rw.method is EstimationMethod.JACKKNIFE
+    assert rw.method == EstimationMethod.JACKKNIFE
     assert rw.n_reps == 62
 
 
 def test_paper_example_brr_with_fay():
     rw = svy.RepWeights(method="brr", prefix="brr_", n_reps=32, fay_coef=0.5)
-    assert rw.method is EstimationMethod.BRR
+    assert rw.method == EstimationMethod.BRR
     assert rw.fay_coef == 0.5
 
 
@@ -169,12 +173,12 @@ def test_repweights_remains_frozen_for_method():
 
 def test_make_rep_weights_factory_with_string():
     rw = make_rep_weights("bootstrap", prefix="bsrw", n_reps=1000)
-    assert rw.method is EstimationMethod.BOOTSTRAP
+    assert rw.method == EstimationMethod.BOOTSTRAP
 
 
 def test_make_rep_weights_factory_with_alias():
     rw = make_rep_weights("jk", prefix="jkw_", n_reps=62)
-    assert rw.method is EstimationMethod.JACKKNIFE
+    assert rw.method == EstimationMethod.JACKKNIFE
 
 
 # -----------------------------------------------------------------------------

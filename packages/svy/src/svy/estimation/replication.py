@@ -17,8 +17,8 @@ import numpy as np
 import polars as pl
 import svy_rs as rs
 
-from svy.core.enumerations import EstimationMethod, PopParam, QuantileMethod
-from svy.core.repwgts import BrrWgts
+from svy.core.enumerations import PopParam, QuantileMethod
+from svy.core.repwgts import BrrWgts, RepWgts, _RepWgtsBase
 from svy.errors import DimensionError
 from svy.estimation.estimate import Estimate
 
@@ -132,7 +132,7 @@ def _get_rep_params(est: Estimation, fay_coef: float = 0.0):
 def replicate_estimate(
     est: Estimation,
     prep: PreparedData,
-    method: EstimationMethod,
+    method: RepWgts,
     param: PopParam,
     y: str,
     *,
@@ -143,13 +143,14 @@ def replicate_estimate(
     alpha: float = 0.05,
     ci_method: str = "logit",
 ) -> Estimate:
-    if method not in (
-        EstimationMethod.BRR,
-        EstimationMethod.BOOTSTRAP,
-        EstimationMethod.JACKKNIFE,
-        EstimationMethod.SDR,
-    ):
-        raise ValueError(f"Method {method} is not a valid replication method.")
+    # The variant *is* the method: anything that is not one has no replicate
+    # weights and cannot be estimated by replication.
+    if not isinstance(method, _RepWgtsBase):
+        raise ValueError(
+            f"replicate_estimate requires replicate weights, got {method!r}. "
+            f"Create them with sample.weighting.create_*_wgts, or use "
+            f"method='taylor'."
+        )
     if param == PopParam.MEAN:
         return replicate_mean(
             est,
@@ -208,7 +209,7 @@ def replicate_mean(
     prep: PreparedData,
     y: str,
     *,
-    method: EstimationMethod,
+    method: RepWgts,
     fay_coef: float = 0.0,
     variance_center: str = "rep_mean",
     alpha: float = 0.05,
@@ -245,7 +246,7 @@ def replicate_total(
     prep: PreparedData,
     y: str,
     *,
-    method: EstimationMethod,
+    method: RepWgts,
     fay_coef: float = 0.0,
     variance_center: str = "rep_mean",
     alpha: float = 0.05,
@@ -283,7 +284,7 @@ def replicate_ratio(
     y: str,
     x: str,
     *,
-    method: EstimationMethod,
+    method: RepWgts,
     fay_coef: float = 0.0,
     variance_center: str = "rep_mean",
     alpha: float = 0.05,
@@ -328,7 +329,7 @@ def replicate_prop(
     prep: PreparedData,
     y: str,
     *,
-    method: EstimationMethod,
+    method: RepWgts,
     fay_coef: float = 0.0,
     variance_center: str = "rep_mean",
     alpha: float = 0.05,
@@ -374,7 +375,7 @@ def replicate_median(
     prep: PreparedData,
     y: str,
     *,
-    method: EstimationMethod,
+    method: RepWgts,
     fay_coef: float = 0.0,
     q_method: QuantileMethod = QuantileMethod.HIGHER,
     variance_center: str = "rep_mean",
@@ -412,7 +413,7 @@ def replicate_quantile(
     y: str,
     probs: Sequence[float],
     *,
-    method: EstimationMethod,
+    method: RepWgts,
     fay_coef: float = 0.0,
     q_method: QuantileMethod = QuantileMethod.HIGHER,
     variance_center: str = "rep_mean",

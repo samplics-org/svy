@@ -90,7 +90,7 @@ class TestBRRWeights:
     def test_brr_basic(self, simple_stratified_sample):
         sample = simple_stratified_sample.weighting.create_brr_wgts()
         assert sample.design.rep_wgts is not None
-        assert sample.design.rep_wgts.method.value == "BRR"
+        assert sample.design.rep_wgts.method == "BRR"
         assert sample.design.rep_wgts.n_reps >= 3
         for col in sample.design.rep_wgts.columns:
             assert col in sample.data.columns
@@ -181,7 +181,7 @@ class TestBRRWeights:
 class TestJackknifeWeights:
     def test_jkn_basic(self, simple_stratified_sample):
         sample = simple_stratified_sample.weighting.create_jk_wgts(paired=False)
-        assert sample.design.rep_wgts.method.value == "Jackknife"
+        assert sample.design.rep_wgts.method == "Jackknife"
         assert sample.design.rep_wgts.n_reps == 6
 
     def test_jkn_default_prefix_uses_design_wgt(self, simple_stratified_sample):
@@ -206,7 +206,7 @@ class TestJackknifeWeights:
 
     def test_jk2_basic(self, simple_stratified_sample):
         sample = simple_stratified_sample.weighting.create_jk_wgts(paired=True)
-        assert sample.design.rep_wgts.method.value == "Jackknife"
+        assert sample.design.rep_wgts.method == "Jackknife"
         assert sample.design.rep_wgts.n_reps == 3
 
     def test_jk2_triplet(self, odd_psu_sample):
@@ -247,7 +247,7 @@ class TestJackknifeWeights:
 class TestBootstrapWeights:
     def test_bootstrap_basic(self, simple_stratified_sample):
         sample = simple_stratified_sample.weighting.create_bs_wgts(n_reps=100, rstate=42)
-        assert sample.design.rep_wgts.method.value == "Bootstrap"
+        assert sample.design.rep_wgts.method == "Bootstrap"
         assert sample.design.rep_wgts.n_reps == 100
 
     def test_bootstrap_default_prefix_uses_design_wgt(self, simple_stratified_sample):
@@ -340,7 +340,7 @@ class TestBootstrapAdjustment:
 class TestSDRWeights:
     def test_sdr_basic(self, simple_stratified_sample):
         sample = simple_stratified_sample.weighting.create_sdr_wgts(n_reps=4)
-        assert sample.design.rep_wgts.method.value == "SDR"
+        assert sample.design.rep_wgts.method == "SDR"
         assert sample.design.rep_wgts.n_reps == 4
 
     def test_sdr_default_prefix_uses_design_wgt(self, simple_stratified_sample):
@@ -444,13 +444,13 @@ class TestReplicationIntegration:
         sample = multi_psu_sample.weighting.create_variance_strata(
             method="brr"
         ).weighting.create_brr_wgts()
-        assert sample.design.rep_wgts.method.value == "BRR"
+        assert sample.design.rep_wgts.method == "BRR"
 
     def test_variance_strata_then_jk2(self, multi_psu_sample):
         sample = multi_psu_sample.weighting.create_variance_strata(
             method="jk2"
         ).weighting.create_jk_wgts(paired=True)
-        assert sample.design.rep_wgts.method.value == "Jackknife"
+        assert sample.design.rep_wgts.method == "Jackknife"
 
 
 class TestEdgeCases:
@@ -568,7 +568,7 @@ class TestTupleStrata:
         sample = tuple_stratum_sample.weighting.create_bs_wgts(n_reps=50, rstate=42)
         assert sample.design.rep_wgts is not None
         assert sample.design.rep_wgts.n_reps == 50
-        assert sample.design.rep_wgts.method.value == "Bootstrap"
+        assert sample.design.rep_wgts.method == "Bootstrap"
 
     def test_jkn_with_tuple_strata(self, tuple_stratum_sample):
         sample = tuple_stratum_sample.weighting.create_jk_wgts(paired=False)

@@ -22,7 +22,8 @@ import numpy as np
 import polars as pl
 import svy_rs as rs
 
-from svy.core.enumerations import EstimationMethod, PopParam
+from svy.core.enumerations import PopParam
+from svy.core.repwgts import RepWgts
 from svy.errors import DimensionError, MethodError
 
 from .estimate import Estimate, ParamEst
@@ -308,7 +309,7 @@ def taylor_assoc(
         alpha,
         prep.by_cols,
         as_factor=False,
-        method=EstimationMethod.TAYLOR,
+        method=None,
         deff_ref=deff_ref,
     )
 
@@ -318,7 +319,7 @@ def replicate_assoc(
     prep: PreparedData,
     pairs: list[tuple[str, str]],
     param: PopParam,
-    method: EstimationMethod,
+    method: RepWgts,
     *,
     fay_coef: float = 0.0,
     variance_center: str = "rep_mean",

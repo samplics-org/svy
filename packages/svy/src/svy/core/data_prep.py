@@ -667,7 +667,9 @@ def prepare_data(
             # Default: cast + zero every replicate weight in one pass per
             # column (grouped/median replication and non-mask-aware callers).
             for c in rep_weight_cols_in_df:
-                exprs.append(pl.when(mask).then(pl.col(c).cast(pl.Float64)).otherwise(0.0).alias(c))
+                exprs.append(
+                    pl.when(mask).then(pl.col(c).cast(pl.Float64)).otherwise(0.0).alias(c)
+                )
 
         # Fill missing numeric analysis values with 0.0 — every such row is
         # out-of-domain with zero weight, but the Rust kernels require
@@ -684,9 +686,7 @@ def prepare_data(
                 _fill_targets.extend(
                     c
                     for c in null_zero_cols
-                    if c in df.columns
-                    and df.schema[c].is_numeric()
-                    and c not in _fill_targets
+                    if c in df.columns and df.schema[c].is_numeric() and c not in _fill_targets
                 )
             for c in _fill_targets:
                 if c not in df.columns:
@@ -695,10 +695,7 @@ def prepare_data(
                 if df.schema[c] in (pl.Float32, pl.Float64):
                     _miss_c = _miss_c | pl.col(c).is_nan() | pl.col(c).is_infinite()
                 exprs.append(
-                    pl.when(_miss_c)
-                    .then(0.0)
-                    .otherwise(pl.col(c).cast(pl.Float64))
-                    .alias(c)
+                    pl.when(_miss_c).then(0.0).otherwise(pl.col(c).cast(pl.Float64)).alias(c)
                 )
 
         df = df.with_columns(exprs).drop(_MASK_COL)
@@ -722,10 +719,7 @@ def prepare_data(
         # domain-estimated over their surviving observations as usual.
         if by_col is not None and by_col in df.columns:
             live_levels = (
-                df.filter(pl.col(domain_col) == domain_val)
-                .get_column(by_col)
-                .unique()
-                .to_list()
+                df.filter(pl.col(domain_col) == domain_val).get_column(by_col).unique().to_list()
             )
             df = df.with_columns(
                 pl.when(pl.col(by_col).is_in(live_levels))

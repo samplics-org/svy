@@ -15,7 +15,6 @@ from typing import (
     overload,
 )
 
-from svy.core.enumerations import EstimationMethod as _EstimationMethod
 from svy.core.repwgts import (
     BootstrapKind,
     BrrWgts,
@@ -320,10 +319,15 @@ class Design:
     # Properties
     # -----------------------------
     @property
-    def method(self) -> _EstimationMethod:
-        """Convenience accessor for the estimation method."""
+    def method(self) -> str:
+        """Convenience accessor for the estimation method, as a display label.
+
+        ``"Taylor"`` when the design carries no replicate weights, otherwise the
+        variant's own label. A plain string: ``EstimationMethod`` is a
+        ``StrEnum``, so comparisons against it still hold.
+        """
         if self.rep_wgts is None:
-            return _EstimationMethod.TAYLOR
+            return "Taylor"
         return self.rep_wgts.method
 
     # -----------------------------

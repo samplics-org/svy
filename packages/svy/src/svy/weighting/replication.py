@@ -41,7 +41,6 @@ except ImportError:  # pragma: no cover
     rust_create_sdr_wgts = None
 
 from svy.core.design import RepWeights
-from svy.core.enumerations import EstimationMethod
 from svy.core.repwgts import Poisson, RaoWu, normalize_bootstrap_kind
 from svy.errors import DimensionError, MethodError
 from svy.utils.checks import drop_missing
@@ -324,7 +323,7 @@ def create_brr_wgts(
 
     sample._design = sample._design.fill_missing(
         rep_wgts=RepWeights(
-            method=EstimationMethod.BRR,
+            method="brr",
             prefix=rep_prefix,
             n_reps=n_reps_actual,
             fay_coef=fay_coef,
@@ -382,7 +381,7 @@ def create_jk_wgts(
 
     sample._design = sample._design.fill_missing(
         rep_wgts=RepWeights(
-            method=EstimationMethod.JACKKNIFE,
+            method="jackknife",
             prefix=rep_prefix,
             n_reps=n_reps,
             df=df_val,
@@ -561,7 +560,7 @@ def create_bs_wgts(
         kind_spec = Poisson(calib_domains=tuple(domain_cols) if domain_cols else None)
 
     sample._design = sample._design.update_rep_weights(
-        method=EstimationMethod.BOOTSTRAP,
+        method="bootstrap",
         prefix=rep_prefix,
         n_reps=n_reps,
         df=df_val,
@@ -622,7 +621,7 @@ def create_sdr_wgts(
     )
 
     sample._design = sample._design.update_rep_weights(
-        method=EstimationMethod.SDR,
+        method="sdr",
         prefix=rep_prefix,
         n_reps=n_reps,
         df=df_val,

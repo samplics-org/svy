@@ -23,7 +23,6 @@ from typing import Literal, Sequence, Union
 
 import msgspec
 
-from svy.core.enumerations import EstimationMethod as _EstimationMethod
 from svy.errors import MethodError
 
 
@@ -121,10 +120,15 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     # ---- back-compat read surface ------------------------------------------
 
     @property
-    def method(self) -> _EstimationMethod:
-        """The coarse method family. Kept as an enum so ``rw.method ==
-        EstimationMethod.BOOTSTRAP`` continues to hold."""
-        return _EstimationMethod(self.__struct_config__.tag)
+    def method(self) -> str:
+        """The coarse method family, as a display label.
+
+        A plain string rather than an enum: ``EstimationMethod`` is a
+        ``StrEnum``, so ``rw.method == EstimationMethod.BOOTSTRAP`` still holds
+        for anyone comparing against it, while nothing here depends on the enum
+        existing.
+        """
+        return self.__struct_config__.tag
 
     @property
     def fay_coef(self) -> float:
@@ -196,7 +200,7 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
         return f"RepWeights({', '.join(parts)})"
 
     def __plain_str__(self) -> str:
-        method_name = self.method.value
+        method_name = self.method
         lines = [
             method_name,
             f"Method   : {method_name}",
@@ -290,9 +294,13 @@ _REP_METHOD_ALIASES: dict[str, type] = {
 
 _REPLICATE_METHOD_NAMES = ("Bootstrap", "Jackknife", "BRR", "SDR")
 
+# Recognised estimation methods that carry no replicate weights, so that
+# `method="taylor"` earns a useful message rather than being read as a typo.
+_NON_REPLICATE_METHODS = frozenset({"taylor"})
+
 
 def resolve_rep_variant(
-    method: Literal["brr", "bootstrap", "jackknife", "sdr"] | _EstimationMethod,
+    method: Literal["brr", "bootstrap", "jackknife", "sdr"] | str,
 ) -> type:
     """Resolve a method name to its RepWeights variant.
 
@@ -312,7 +320,7 @@ def resolve_rep_variant(
     # A real estimation method that simply has no replicate weights (Taylor) is
     # a different mistake from a typo, and gets a different message. Compared
     # case-insensitively so the string and the enum member behave alike.
-    if normalized in {m.lower() for m in _EstimationMethod}:
+    if normalized in _NON_REPLICATE_METHODS:
         raise ValueError(
             f"Method '{method}' is not a valid replication method "
             f"(expected one of: {list(_REPLICATE_METHOD_NAMES)}). "
@@ -356,7 +364,7 @@ _MISSING_ARG: object = object()
 
 
 def RepWeights(  # noqa: N802 - a factory that replaced a class of this name
-    method: _EstimationMethod | str = _MISSING_ARG,  # type: ignore[assignment]
+    method: str = _MISSING_ARG,  # type: ignore[assignment]
     prefix: str = _MISSING_ARG,  # type: ignore[assignment]
     n_reps: int = _MISSING_ARG,  # type: ignore[assignment]
     fay_coef: float = 0.0,
