@@ -63,6 +63,7 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(weighting::api::create_brr_wgts, m)?)?;
     m.add_function(wrap_pyfunction!(weighting::api::create_jk_wgts, m)?)?;
     m.add_function(wrap_pyfunction!(weighting::api::create_bootstrap_wgts, m)?)?;
+    m.add_function(wrap_pyfunction!(weighting::api::create_poisson_bootstrap_wgts, m)?)?;
     m.add_function(wrap_pyfunction!(weighting::api::create_sdr_wgts, m)?)?;
     // Sampling
     m.add_function(wrap_pyfunction!(sampling::api::select_srs_rs, m)?)?;

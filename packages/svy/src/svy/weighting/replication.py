@@ -28,6 +28,9 @@ try:
         create_jk_wgts as rust_create_jk_wgts,  # type: ignore[import-untyped]
     )
     from svy_rs._internal import (
+        create_poisson_bootstrap_wgts as rust_create_poisson_bs_wgts,  # type: ignore[import-untyped]
+    )
+    from svy_rs._internal import (
         create_sdr_wgts as rust_create_sdr_wgts,  # type: ignore[import-untyped]
     )
 except ImportError:  # pragma: no cover
@@ -43,6 +46,7 @@ from svy.errors import DimensionError, MethodError
 from svy.utils.checks import drop_missing
 from svy.utils.random_state import RandomState, resolve_random_state
 from svy.weighting._helpers import (
+    _by_to_cols,
     _name_rep_cols,
     _to_float_array,
     _to_int_array,
@@ -390,39 +394,157 @@ def create_jk_wgts(
     return sample
 
 
+_BS_KIND_ALIASES = {
+    "rao-wu": "rao-wu",
+    "rao_wu": "rao-wu",
+    "raowu": "rao-wu",
+    "rao wu": "rao-wu",
+    "rw": "rao-wu",
+    "rao-wu-yue": "rao-wu",
+    "poisson": "poisson",
+}
+
+
+def _normalize_bs_kind(kind: str) -> str:
+    """Normalize the bootstrap `kind` string (case- and separator-insensitive)."""
+    if not isinstance(kind, str):
+        raise TypeError(
+            f"'kind' must be a string, got {type(kind).__name__}. Use 'rao-wu' or 'poisson'."
+        )
+    result = _BS_KIND_ALIASES.get(kind.strip().lower())
+    if result is None:
+        raise ValueError(
+            f"Unknown bootstrap kind {kind!r}. Use 'rao-wu' (stratified "
+            f"Rao-Wu-Yue rescaling bootstrap, requires psu) or 'poisson' "
+            f"(Beaumont-Patak generalized bootstrap, requires only a weight)."
+        )
+    return result
+
+
+def _domain_codes(
+    data: pl.DataFrame,
+    by: str | Sequence[str] | None,
+    *,
+    where: str,
+) -> np.ndarray | None:
+    """Dense integer codes for the calibration domains, or None.
+
+    Only distinctness matters: the Rust side re-indexes the codes, so no
+    ordering is implied. Nulls form their own domain rather than being dropped,
+    which keeps every observation inside exactly one calibration group.
+    """
+    cols = _by_to_cols(by)
+    if cols is None:
+        return None
+    if not cols:
+        raise MethodError.not_applicable(
+            where=where,
+            method="create_bs_wgts",
+            reason="`calib_domains` sequence must not be empty.",
+        )
+    missing = [c for c in cols if c not in data.columns]
+    if missing:
+        raise MethodError.not_applicable(
+            where=where,
+            method="create_bs_wgts",
+            reason=f"`calib_domains` column(s) not found: {missing}.",
+        )
+    key = pl.concat_str(
+        [pl.col(c).cast(pl.Utf8).fill_null("__NA__") for c in cols],
+        separator="_&_",
+    )
+    return (
+        data.select(key.cast(pl.Categorical).to_physical().cast(pl.Int64).alias("__d"))["__d"]
+        .to_numpy()
+        .astype(np.int64, copy=False)
+    )
+
+
 def create_bs_wgts(
     sample: Sample,
     n_reps: int = 500,
     *,
+    kind: Literal["rao-wu", "poisson"] = "rao-wu",
+    calib_domains: str | Sequence[str] | None = None,
     rep_prefix: str | None = None,
     drop_nulls: bool = False,
     rstate: RandomState = None,
 ) -> Sample:
+    """Create bootstrap replicate weights.
+
+    Parameters
+    ----------
+    kind : {"rao-wu", "poisson"}, default "rao-wu"
+        ``"rao-wu"`` is the stratified Rao-Wu-Yue rescaling bootstrap: PSUs are
+        resampled within strata, so it requires ``psu`` on the design.
+
+        ``"poisson"`` is the Beaumont-Patak generalized bootstrap with
+        independent per-unit adjustment factors. It requires only a weight
+        column and is the method producers document for public use files, where
+        stratum and PSU identifiers are suppressed for confidentiality. Because
+        the draws are independent across units the weights are themselves
+        non-disclosive.
+    calib_domains : str | Sequence[str] | None, default None
+        ``"poisson"`` only. Columns defining the domains within which every
+        replicate is post-stratified back to the base weight's own total.
+
+        Supply these whenever the base weight was calibrated to population
+        controls, which is the usual case for a published file: the Poisson
+        draws do not otherwise inherit that constraint. The effect is
+        estimator-dependent and easy to under-estimate from a single check. It
+        is negligible for ratios such as an unemployment rate, roughly a factor
+        of two for totals aligned with the domains, and the difference between
+        zero and a spurious standard error for a calibration control itself.
+        Leave as None only when the weight is a pure design weight.
+
+    Notes
+    -----
+    References for ``"poisson"``: Beaumont, J.-F. and Patak, Z. (2012). On the
+    generalized bootstrap for sample surveys with special attention to Poisson
+    sampling. *International Statistical Review*, 80(1), 127-148.
+    """
     df = sample._data
     design = sample._design
+    kind = _normalize_bs_kind(kind)
 
-    if design.psu is None:
-        raise MethodError.not_applicable(
-            where="Sample.weighting.create_bs_wgts",
-            method="create_bs_wgts",
-            reason="Bootstrap requires psu in Design (got psu=None).",
-        )
     if n_reps is None:
         raise MethodError.not_applicable(
             where="Sample.weighting.create_bs_wgts",
             method="create_bs_wgts",
             reason="n_reps must be specified for Bootstrap.",
         )
+    if kind == "rao-wu" and calib_domains is not None:
+        raise MethodError.not_applicable(
+            where="Sample.weighting.create_bs_wgts",
+            method="create_bs_wgts",
+            reason=(
+                "calib_domains applies to kind='poisson' only; the Rao-Wu "
+                "bootstrap resamples PSUs and carries the design's calibration "
+                "through the resampling."
+            ),
+        )
+    # The Rao-Wu guard is deliberately not shared: the Poisson bootstrap exists
+    # precisely for files that have no psu, so requiring one would reject the
+    # only case it serves.
+    if kind == "rao-wu" and design.psu is None:
+        raise MethodError.not_applicable(
+            where="Sample.weighting.create_bs_wgts",
+            method="create_bs_wgts",
+            reason="Bootstrap requires psu in Design (got psu=None).",
+        )
 
     if drop_nulls:
-        needed = list({c for c in [design.wgt, design.stratum, design.psu] if isinstance(c, str)})
+        if kind == "poisson":
+            domain_cols = _by_to_cols(calib_domains) if calib_domains is not None else []
+            candidates = [design.wgt, *domain_cols]
+        else:
+            candidates = [design.wgt, design.stratum, design.psu]
+        needed = list({c for c in candidates if isinstance(c, str)})
         data = drop_missing(df=df, cols=needed, treat_infinite_as_missing=True)
     else:
         data = df
 
     main_weights = _to_float_array(data, design.wgt, len(data))
-    psu_int = _to_int_array(data, design.psu)
-    stratum_int = _to_int_array(data, design.stratum)
 
     rng = resolve_random_state(rstate)
     seed = (
@@ -431,14 +553,26 @@ def create_bs_wgts(
         else int(rng.randint(0, 2**31 - 1))
     )
 
-    assert rust_create_bootstrap_wgts is not None  # noqa: S101
-    rep_mat, df_val = rust_create_bootstrap_wgts(
-        main_weights,
-        psu_int,
-        n_reps,
-        stratum_int,
-        seed,
-    )
+    if kind == "poisson":
+        domain_codes = _domain_codes(data, calib_domains, where="Sample.weighting.create_bs_wgts")
+        assert rust_create_poisson_bs_wgts is not None  # noqa: S101
+        rep_mat, df_val = rust_create_poisson_bs_wgts(
+            main_weights,
+            n_reps,
+            domain_codes,
+            seed,
+        )
+    else:
+        psu_int = _to_int_array(data, design.psu)
+        stratum_int = _to_int_array(data, design.stratum)
+        assert rust_create_bootstrap_wgts is not None  # noqa: S101
+        rep_mat, df_val = rust_create_bootstrap_wgts(
+            main_weights,
+            psu_int,
+            n_reps,
+            stratum_int,
+            seed,
+        )
 
     rep_prefix = rep_prefix or design.wgt
     rep_cols = _name_rep_cols(rep_prefix, n_reps)

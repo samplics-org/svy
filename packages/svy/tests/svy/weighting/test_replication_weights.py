@@ -779,3 +779,261 @@ class TestDeterminismStress:
             np.testing.assert_array_equal(
                 baseline_mat, mat, err_msg=f"JK2 drifted on trial {trial}"
             )
+
+
+# ===========================================================================
+# Poisson bootstrap (kind="poisson")
+# ===========================================================================
+#
+# Beaumont & Patak (2012) generalized bootstrap with independent per-unit
+# factors. Reference: Statistics Canada, Labour Force Survey PUMF User Guide
+# (2025), section 6 and appendices A-D.
+
+
+@pytest.fixture
+def pumf_like_sample():
+    """A weight-only file: no stratum, no psu, as a PUMF is published."""
+    rng = np.random.default_rng(20260821)
+    n = 4000
+    data = pl.DataFrame(
+        {
+            "wgt": rng.uniform(50.0, 500.0, n),
+            "prov": rng.integers(0, 4, n),
+            "sex": rng.integers(0, 2, n),
+            "y": rng.normal(100.0, 15.0, n),
+            "flag": rng.random(n) < 0.3,
+        }
+    )
+    return Sample(data=data, design=Design(wgt="wgt"))
+
+
+def _rep_matrix(sample, prefix, n_reps):
+    return np.column_stack(
+        [sample._data[f"{prefix}{i + 1}"].to_numpy() for i in range(n_reps)]
+    )
+
+
+@pytest.mark.parametrize(
+    "given",
+    ["poisson", "Poisson", "POISSON", "  PoIsSoN  "],
+)
+def test_poisson_kind_is_case_and_whitespace_insensitive(pumf_like_sample, given):
+    s = pumf_like_sample.weighting.create_bs_wgts(
+        n_reps=8, kind=given, rep_prefix="r", rstate=1
+    )
+    assert s._design.rep_wgts.n_reps == 8
+
+
+@pytest.mark.parametrize(
+    "given", ["rao-wu", "RAO-WU", "Rao_Wu", "raowu", "rw", "rao wu", "rao-wu-yue"]
+)
+def test_rao_wu_kind_aliases_normalize(multi_psu_sample, given):
+    s = multi_psu_sample.weighting.create_bs_wgts(
+        n_reps=8, kind=given, rep_prefix="r", rstate=1
+    )
+    assert s._design.rep_wgts.n_reps == 8
+
+
+def test_unknown_kind_raises_value_error(pumf_like_sample):
+    with pytest.raises(ValueError, match="Unknown bootstrap kind"):
+        pumf_like_sample.weighting.create_bs_wgts(n_reps=4, kind="rao–wu")  # en dash
+
+
+def test_non_string_kind_raises_type_error(pumf_like_sample):
+    with pytest.raises(TypeError, match="'kind' must be a string"):
+        pumf_like_sample.weighting.create_bs_wgts(n_reps=4, kind=1)
+
+
+def test_poisson_does_not_require_psu(pumf_like_sample):
+    """The whole point of the method: it works where Rao-Wu cannot."""
+    assert pumf_like_sample._design.psu is None
+    s = pumf_like_sample.weighting.create_bs_wgts(
+        n_reps=16, kind="poisson", rep_prefix="r", rstate=3
+    )
+    assert _rep_matrix(s, "r", 16).shape == (4000, 16)
+
+
+def test_rao_wu_still_requires_psu(pumf_like_sample):
+    with pytest.raises(MethodError, match="psu"):
+        pumf_like_sample.weighting.create_bs_wgts(n_reps=8, kind="rao-wu")
+
+
+def test_calib_domains_rejected_for_rao_wu(multi_psu_sample):
+    with pytest.raises(MethodError, match="calib_domains applies to kind='poisson'"):
+        multi_psu_sample.weighting.create_bs_wgts(
+            n_reps=8, kind="rao-wu", calib_domains="stratum"
+        )
+
+
+def test_poisson_df_is_n_reps_minus_one(pumf_like_sample):
+    s = pumf_like_sample.weighting.create_bs_wgts(
+        n_reps=32, kind="poisson", rep_prefix="r", rstate=5
+    )
+    assert s._design.rep_wgts.df == 31.0
+
+
+def test_poisson_weights_are_strictly_positive(pumf_like_sample):
+    """Non-negativity is what makes these weights publishable."""
+    s = pumf_like_sample.weighting.create_bs_wgts(
+        n_reps=64, kind="poisson", rep_prefix="r", rstate=7
+    )
+    assert (_rep_matrix(s, "r", 64) > 0).all()
+
+
+def test_poisson_is_deterministic_under_rstate(pumf_like_sample):
+    kw = dict(n_reps=16, kind="poisson", rep_prefix="r", rstate=11)
+    a = _rep_matrix(pumf_like_sample.weighting.create_bs_wgts(**kw), "r", 16)
+    b = _rep_matrix(pumf_like_sample.weighting.create_bs_wgts(**kw), "r", 16)
+    np.testing.assert_array_equal(a, b)
+
+
+def test_poisson_replicates_differ_from_each_other(pumf_like_sample):
+    s = pumf_like_sample.weighting.create_bs_wgts(
+        n_reps=8, kind="poisson", rep_prefix="r", rstate=13
+    )
+    m = _rep_matrix(s, "r", 8)
+    assert not np.allclose(m[:, 0], m[:, 1])
+
+
+def test_poisson_matches_published_worked_example():
+    """Appendix C.1 of the LFS PUMF user guide, worked by hand.
+
+    A unit weighted 500 has adjustment factor 1 +/- sqrt(499/500), giving
+    replicate weights of 999.500 and 0.50025. The square root is the step the
+    guide's prose loses to PDF extraction, so pin it against the published
+    arithmetic rather than against our own formula.
+    """
+    data = pl.DataFrame({"wgt": [500.0, 450.0, 150.0, 250.0]})
+    s = Sample(data=data, design=Design(wgt="wgt"))
+    s = s.weighting.create_bs_wgts(n_reps=200, kind="poisson", rep_prefix="r", rstate=17)
+    m = _rep_matrix(s, "r", 200)
+
+    expected = {
+        500.0: (500.0 * (1 + np.sqrt(499 / 500)), 500.0 * (1 - np.sqrt(499 / 500))),
+        450.0: (450.0 * (1 + np.sqrt(449 / 450)), 450.0 * (1 - np.sqrt(449 / 450))),
+    }
+    np.testing.assert_allclose(sorted(np.unique(m[0].round(9)))[::-1][:1], [expected[500.0][0]])
+    np.testing.assert_allclose(np.unique(m[0].round(9))[:1], [expected[500.0][1]])
+    # Published values, to the five decimals the guide prints.
+    assert round(expected[500.0][0], 3) == 999.500
+    assert round(expected[500.0][1], 5) == 0.50025
+
+
+def test_poisson_rejects_weights_below_one():
+    """sqrt((w - 1) / w) is not real below 1; a NaN here would be silent."""
+    data = pl.DataFrame({"wgt": [10.0, 0.5, 20.0]})
+    s = Sample(data=data, design=Design(wgt="wgt"))
+    with pytest.raises(ValueError, match="requires weights >= 1"):
+        s.weighting.create_bs_wgts(n_reps=4, kind="poisson")
+
+
+def test_poisson_accepts_weight_of_exactly_one():
+    """The boundary is admissible: adjustment is 0, so the replicate is w."""
+    data = pl.DataFrame({"wgt": [1.0, 10.0, 20.0]})
+    s = Sample(data=data, design=Design(wgt="wgt"))
+    s = s.weighting.create_bs_wgts(n_reps=8, kind="poisson", rep_prefix="r", rstate=19)
+    np.testing.assert_allclose(_rep_matrix(s, "r", 8)[0], 1.0)
+
+
+def test_calibration_reproduces_base_weight_domain_totals(pumf_like_sample):
+    """The defining property of the calibrated variant."""
+    n_reps = 32
+    s = pumf_like_sample.weighting.create_bs_wgts(
+        n_reps=n_reps, kind="poisson", calib_domains=["prov", "sex"],
+        rep_prefix="r", rstate=23,
+    )
+    m = _rep_matrix(s, "r", n_reps)
+    wgt = s._data["wgt"].to_numpy()
+    key = (s._data["prov"].to_numpy() * 2 + s._data["sex"].to_numpy())
+    for d in np.unique(key):
+        mask = key == d
+        np.testing.assert_allclose(m[mask].sum(axis=0), wgt[mask].sum(), rtol=1e-12)
+
+
+def test_uncalibrated_does_not_reproduce_domain_totals(pumf_like_sample):
+    """Guards against calibration being applied when it was not requested."""
+    n_reps = 32
+    s = pumf_like_sample.weighting.create_bs_wgts(
+        n_reps=n_reps, kind="poisson", rep_prefix="r", rstate=23
+    )
+    m = _rep_matrix(s, "r", n_reps)
+    wgt = s._data["wgt"].to_numpy()
+    assert not np.allclose(m.sum(axis=0), wgt.sum(), rtol=1e-6)
+
+
+def test_calibration_zeroes_variance_of_a_calibration_control(pumf_like_sample):
+    """A domain total is fixed by the calibration, so it has no sampling error.
+
+    This is the failure that makes calibration matter: uncalibrated, the same
+    quantity gets a large and entirely spurious standard error.
+    """
+    n_reps = 64
+    wgt = pumf_like_sample._data["wgt"].to_numpy()
+    total = wgt.sum()
+
+    cal = _rep_matrix(
+        pumf_like_sample.weighting.create_bs_wgts(
+            n_reps=n_reps, kind="poisson", calib_domains=["prov", "sex"],
+            rep_prefix="r", rstate=29,
+        ),
+        "r", n_reps,
+    )
+    unc = _rep_matrix(
+        pumf_like_sample.weighting.create_bs_wgts(
+            n_reps=n_reps, kind="poisson", rep_prefix="r", rstate=29
+        ),
+        "r", n_reps,
+    )
+    se_cal = np.sqrt(np.mean((cal.sum(axis=0) - total) ** 2))
+    se_unc = np.sqrt(np.mean((unc.sum(axis=0) - total) ** 2))
+    assert se_cal / total < 1e-12
+    assert se_unc / total > 1e-4
+
+
+def test_calibration_matches_poststratifying_the_replicates(pumf_like_sample):
+    """The calibration step is post-stratification, and must stay identical to it.
+
+    Two implementations of the same semantics now exist, one in Rust inside the
+    bootstrap and one in `weighting.poststratify`. This pins them together.
+    """
+    n_reps = 16
+    uncal = pumf_like_sample.weighting.create_bs_wgts(
+        n_reps=n_reps, kind="poisson", rep_prefix="r", rstate=31
+    )
+    key = uncal._data["prov"].to_numpy() * 2 + uncal._data["sex"].to_numpy()
+    uncal._data = uncal._data.with_columns(dom=pl.Series(key))
+    wgt = uncal._data["wgt"].to_numpy()
+    controls = {int(d): float(wgt[key == d].sum()) for d in np.unique(key)}
+    via_ps = uncal.weighting.poststratify(controls=controls, by="dom", ignore_reps=False)
+    ps_mat = np.column_stack(
+        [via_ps._data[f"ps_wgt{i + 1}"].to_numpy() for i in range(n_reps)]
+    )
+
+    via_rust = _rep_matrix(
+        pumf_like_sample.weighting.create_bs_wgts(
+            n_reps=n_reps, kind="poisson", calib_domains=["prov", "sex"],
+            rep_prefix="r", rstate=31,
+        ),
+        "r", n_reps,
+    )
+    np.testing.assert_allclose(via_rust, ps_mat, rtol=1e-12)
+
+
+def test_poisson_leaves_the_point_estimate_untouched(pumf_like_sample):
+    """Replicate weights change the variance, never the estimate."""
+    s = pumf_like_sample.weighting.create_bs_wgts(
+        n_reps=64, kind="poisson", calib_domains=["prov", "sex"],
+        rep_prefix="r", rstate=37,
+    )
+    taylor = pumf_like_sample.estimation.mean("y")
+    rep = s.estimation.mean("y", method="replication")
+    np.testing.assert_allclose(
+        taylor.to_dicts()[0]["est"], rep.to_dicts()[0]["est"], rtol=1e-12
+    )
+
+
+def test_calib_domains_missing_column_raises(pumf_like_sample):
+    with pytest.raises(MethodError, match="not found"):
+        pumf_like_sample.weighting.create_bs_wgts(
+            n_reps=4, kind="poisson", calib_domains=["prov", "nope"]
+        )
