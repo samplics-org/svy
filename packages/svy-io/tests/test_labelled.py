@@ -106,8 +106,11 @@ def test_median_quantile_error_on_character():
 # ---- combining / casting: out of scope (vctrs) ----
 
 
-@pytest.mark.xfail(reason="vctrs-style casting/combining not implemented in Python")
+@pytest.mark.skip(reason="vctrs-style casting/combining is out of scope in Python")
 def test_vec_cast_vec_c_behaviors():
+    # Placeholder only: there is no body to run. xfail was the wrong marker --
+    # it promises a test that runs and fails, and this one asserts nothing, so
+    # it reported XPASS forever.
     pass
 
 
