@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 import polars as pl
 
-from svy.core.enumerations import MetadataSource
+from svy.core.enumerations import MeasurementType, MetadataSource
 from svy.core.types import Category
 from svy.metadata import MetadataStore, VariableMeta
 
@@ -75,9 +75,109 @@ def to_writer_table(df: pl.DataFrame) -> Any:
     return df.to_pandas()
 
 
+def _canonical_code(x: Any) -> str:
+    """
+    Render a value-label code and a data value into one comparable form.
+
+    Codes arrive from svy-io as strings ("1"), while the column that carries
+    them is usually Float64 (1.0), so the two never compare equal as-is. Whole
+    floats collapse to their integer spelling; everything else falls back to
+    str().
+    """
+    x = _py_scalar(x)
+    if isinstance(x, bool):
+        return str(int(x))
+    if isinstance(x, float):
+        if x != x or x in (float("inf"), float("-inf")):  # NaN / +-Inf
+            return str(x)
+        if x.is_integer():
+            return str(int(x))
+        return str(x)
+    if isinstance(x, int):
+        return str(x)
+    if isinstance(x, str):
+        # A string code may itself be a numeric spelling ("1.0" vs "1").
+        try:
+            return _canonical_code(float(x))
+        except ValueError:
+            return x
+    return str(x)
+
+
+def _labels_cover_all_observed(series: pl.Series, codes: set[str]) -> bool:
+    """
+    True when every observed non-null value in `series` carries a label.
+
+    This is what separates a real categorical from a continuous variable that
+    merely labels a few sentinel codes. A survey's "how many TVs?" labels only
+    `0 = none` and `4 = 4 or more` out of {0,1,2,3,4}, so it fails here and
+    stays continuous; a 4-category nominal labels all four and passes.
+    """
+    if not codes:
+        return False
+    try:
+        observed = series.drop_nulls().unique().to_list()
+    except Exception:
+        return False
+    if not observed:
+        # Nothing observed (all-null column): no evidence either way, and
+        # calling it categorical on an empty column would be a guess.
+        return False
+    return all(_canonical_code(v) in codes for v in observed)
+
+
+def _resolve_mtype(
+    measure: str | None,
+    value_labels: dict[Category, str],
+    series: pl.Series,
+) -> MeasurementType | None:
+    """
+    Decide the measurement type a file implies, or None to keep what the
+    dtype-based inference already chose.
+
+    `measure` is authoritative only when it positively says nominal or ordinal.
+    SPSS defaults every numeric variable to "scale" and Stata carries no such
+    attribute at all, so those cases fall through to the label-coverage rule.
+    """
+    if measure == "ordinal":
+        return MeasurementType.ORDINAL
+    if measure == "nominal":
+        return MeasurementType.NOMINAL
+
+    if not value_labels:
+        return None
+
+    codes = {_canonical_code(c) for c in value_labels}
+    if _labels_cover_all_observed(series, codes):
+        return MeasurementType.NOMINAL
+    return None
+
+
+def _mtype_for(
+    var: str,
+    measure: str | None,
+    values: dict[Category, str],
+    df: pl.DataFrame,
+    store: MetadataStore,
+) -> MeasurementType | None:
+    """
+    Measurement type to apply to `var` on import, or None to leave it alone.
+
+    A type the user set by hand outranks anything the file claims, so those are
+    left untouched.
+    """
+    if var not in df.columns:
+        return None
+    existing = store.get(var)
+    if existing is not None and existing.source == MetadataSource.USER:
+        return None
+    return _resolve_mtype(measure, values, df.get_column(var))
+
+
 def import_labels_from_svyio_meta(
     store: MetadataStore,
     meta: Dict[str, Any],
+    df: pl.DataFrame,
 ) -> None:
     """
     Import variable and value labels from svy-io metadata into a MetadataStore.
@@ -95,6 +195,10 @@ def import_labels_from_svyio_meta(
         The metadata store to populate.
     meta : dict
         The metadata dict from svy-io.
+    df : pl.DataFrame
+        The frame the metadata describes. Required: the measurement type is
+        resolved partly from how well the value labels cover the observed
+        values, which cannot be judged without the data.
     """
     # New/normalized form (A)
     variables = meta.get("variables")
@@ -102,6 +206,7 @@ def import_labels_from_svyio_meta(
         for var, vmeta in variables.items():
             var_label = vmeta.get("label") or None
             values = vmeta.get("values") or {}
+            mtype = _mtype_for(var, vmeta.get("measure"), values, df, store)
 
             existing = store.get(var)
             if existing is not None:
@@ -109,6 +214,7 @@ def import_labels_from_svyio_meta(
                 new_meta = existing.clone(
                     label=var_label if var_label else existing.label,
                     value_labels=dict(values) if values else existing.value_labels,
+                    mtype=mtype if mtype is not None else existing.mtype,
                     source=MetadataSource.IMPORTED,
                 )
                 store.set(var, new_meta)
@@ -120,6 +226,7 @@ def import_labels_from_svyio_meta(
                         name=var,
                         label=var_label,
                         value_labels=dict(values) if values else None,
+                        **({"mtype": mtype} if mtype is not None else {}),
                         source=MetadataSource.IMPORTED,
                     ),
                 )
@@ -139,6 +246,7 @@ def import_labels_from_svyio_meta(
             var_label = v.get("label") or None
             set_name = v.get("label_set")
             values = lblsets.get(set_name) or {}
+            mtype = _mtype_for(var, v.get("measure"), values, df, store)
 
             existing = store.get(var)
             if existing is not None:
@@ -146,6 +254,7 @@ def import_labels_from_svyio_meta(
                 new_meta = existing.clone(
                     label=var_label if var_label else existing.label,
                     value_labels=dict(values) if values else existing.value_labels,
+                    mtype=mtype if mtype is not None else existing.mtype,
                     source=MetadataSource.IMPORTED,
                 )
                 store.set(var, new_meta)
@@ -157,6 +266,7 @@ def import_labels_from_svyio_meta(
                         name=var,
                         label=var_label,
                         value_labels=dict(values) if values else None,
+                        **({"mtype": mtype} if mtype is not None else {}),
                         source=MetadataSource.IMPORTED,
                     ),
                 )

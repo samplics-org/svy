@@ -8,6 +8,15 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Fixed
+
+- **Labelled variables were never `is_categorical` ([#130](https://github.com/samplics-org/svy/issues/130)).** `Sample(data=df)` infers `mtype` from the polars dtype, and `import_labels_from_svyio_meta` brought across labels while leaving that untouched — so every labelled variable in a survey recode stayed `Numerical Continuous` and `is_categorical` was `False`. Deriving a codebook from it classified an entire DHS-style file as continuous. The importer now revises `mtype` on import: it honours a measurement level the file declares, and otherwise asks whether the value labels cover every observed value. On a Stata census file this takes 16 labelled variables from 0 categorical to 16.
+- **Measurement type is inferred from label coverage, not label presence.** "Has labels" alone would misread a continuous variable that labels only a sentinel code — a "how many TVs?" count labelling just `0 = none` and `4 = 4 or more` is not a five-level factor. A variable becomes `NOMINAL` only when every observed non-null value carries a label; partial coverage, an all-null column, and a column absent from the frame all leave `mtype` alone, as does a type the user set by hand. `ORDINAL` is assigned only when the file says so, since coverage cannot distinguish it from `NOMINAL`.
+
+### Changed
+
+- **`import_labels_from_svyio_meta` now requires the frame** the metadata describes as its third argument. Resolving a measurement type depends on how well the value labels cover the observed values, which cannot be judged without the data. It is required rather than optional on purpose: an omitted frame would silently fall back to the very behavior this release fixes. The function is internal (`svy.engine.io`, not exported from the top-level `svy` namespace) and had a single production call site.
+
 ## [0.24.1] — 2026-08-11
 
 ### Fixed

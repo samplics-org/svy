@@ -11,15 +11,19 @@ use std::os::raw::{c_char, c_int, c_void};
 use std::sync::Arc;
 
 use readstat_sys::{
-    readstat_double_value, readstat_get_file_label, readstat_get_row_count, readstat_metadata_t,
+    readstat_double_value, readstat_get_file_label, readstat_get_row_count,
+    readstat_measure_e_READSTAT_MEASURE_NOMINAL as MEASURE_NOMINAL,
+    readstat_measure_e_READSTAT_MEASURE_ORDINAL as MEASURE_ORDINAL,
+    readstat_measure_e_READSTAT_MEASURE_SCALE as MEASURE_SCALE, readstat_metadata_t,
     readstat_string_value, readstat_type_class_e_READSTAT_TYPE_CLASS_STRING as TCLASS_STRING,
     readstat_type_e_READSTAT_TYPE_STRING as T_STRING,
     readstat_type_e_READSTAT_TYPE_STRING_REF as T_STRING_REF, readstat_value_is_system_missing,
     readstat_value_is_tagged_missing, readstat_value_t, readstat_value_tag,
     readstat_value_type as rs_value_type, readstat_variable_get_format,
-    readstat_variable_get_label, readstat_variable_get_missing_range_hi,
-    readstat_variable_get_missing_range_lo, readstat_variable_get_missing_ranges_count,
-    readstat_variable_get_name, readstat_variable_get_type_class, readstat_variable_t,
+    readstat_variable_get_label, readstat_variable_get_measure,
+    readstat_variable_get_missing_range_hi, readstat_variable_get_missing_range_lo,
+    readstat_variable_get_missing_ranges_count, readstat_variable_get_name,
+    readstat_variable_get_type_class, readstat_variable_t,
 };
 
 pub(crate) const HANDLER_OK: c_int = 0;
@@ -88,6 +92,12 @@ pub struct VarMeta {
     pub label_set: Option<String>,
     pub fmt: Option<String>,
     pub kind: String,
+    /// The measurement level the file declares: "nominal", "ordinal", or
+    /// "scale". `None` when the format carries no such attribute (Stata) or
+    /// the writer never set one. Note that SPSS defaults numeric variables to
+    /// "scale", so only "nominal"/"ordinal" are positive declarations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub measure: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_missing: Option<UserMissing>,
 }
@@ -134,6 +144,7 @@ pub(crate) struct ColBuilders {
     pub(crate) label: Option<String>,
     pub(crate) label_set: Option<String>,
     pub(crate) fmt: Option<String>,
+    pub(crate) measure: Option<String>,
     pub(crate) user_missing: Option<UserMissing>,
     pub(crate) sb: Option<StringBuilder>,
     pub(crate) fb: Option<Float64Builder>,
@@ -351,6 +362,7 @@ unsafe fn on_variable_impl(
                 label: None,
                 label_set: None,
                 fmt: None,
+                measure: None,
                 user_missing: None,
                 sb: Some(StringBuilder::with_capacity(
                     cap,
@@ -392,6 +404,16 @@ unsafe fn on_variable_impl(
                 Some(st.to_string())
             }
         }
+    };
+
+    // The measurement level the file declares. SPSS carries this; Stata has
+    // no equivalent and always reports UNKNOWN, which we surface as None so a
+    // caller can tell "not declared" from "declared as scale".
+    let measure = match readstat_variable_get_measure(var) {
+        m if m == MEASURE_NOMINAL => Some("nominal".to_string()),
+        m if m == MEASURE_ORDINAL => Some("ordinal".to_string()),
+        m if m == MEASURE_SCALE => Some("scale".to_string()),
+        _ => None,
     };
 
     let kind = if readstat_variable_get_type_class(var) == TCLASS_STRING {
@@ -458,6 +480,7 @@ unsafe fn on_variable_impl(
             label,
             label_set,
             fmt,
+            measure,
             user_missing,
             sb: Some(StringBuilder::with_capacity(
                 cap,
@@ -471,6 +494,7 @@ unsafe fn on_variable_impl(
             label,
             label_set,
             fmt,
+            measure,
             user_missing,
             sb: None,
             fb: Some(Float64Builder::with_capacity(cap)),
@@ -697,6 +721,7 @@ pub(crate) fn finalize_to_ipc(mut ctx: ParseCtx) -> Result<(Vec<u8>, MetaOut)> {
                     label_set: col.label_set,
                     fmt: col.fmt,
                     kind: "string".into(),
+                    measure: col.measure,
                     user_missing: col.user_missing,
                 });
             }
@@ -719,6 +744,7 @@ pub(crate) fn finalize_to_ipc(mut ctx: ParseCtx) -> Result<(Vec<u8>, MetaOut)> {
                     label_set: col.label_set,
                     fmt: col.fmt,
                     kind: "double".into(),
+                    measure: col.measure,
                     user_missing: col.user_missing,
                 });
             }

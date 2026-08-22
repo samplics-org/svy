@@ -295,6 +295,19 @@ def test_factors_become_labelleds_on_write(tmp_path):
     assert df2.schema["category"] == pl.Float64  # Stata reads as numeric
 
 
+def test_stata_has_no_declared_measure(tmp_path):
+    """
+    dta carries no measurement-level attribute, so `measure` must be absent
+    rather than guessed. Consumers fall back to other signals for Stata.
+    """
+    if not HAVE_READ_DTA:
+        pytest.xfail("stub pending")
+
+    _df, meta = _read_dta(tpath("types.dta"))
+
+    assert all(v.get("measure") is None for v in meta["vars"])
+
+
 def test_labels_are_preserved(tmp_path):
     """Variable labels should survive roundtrip"""
     if not HAVE_READ_DTA or not HAVE_WRITE_DTA:
