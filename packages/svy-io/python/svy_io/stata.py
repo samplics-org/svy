@@ -24,6 +24,12 @@ from .tagged_na import TaggedNA
 
 _STATA_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+# Stata holds a value-label code in an int32 and reserves 0x7FFFFFE5 upward for
+# the missing values (. and .a through .z), so the usable span stops just short
+# of int32 max.
+_DTA_CODE_MIN = -2147483647
+_DTA_CODE_MAX = 2147483620
+
 
 def _hydrate_tagged_na(df: pl.DataFrame, meta: Dict[str, Any]) -> pl.DataFrame:
     """
@@ -292,7 +298,30 @@ def _validate_dta_names_and_labels(
 
     # Validate value labels
     if value_labels:
+        # A label set is written per column, so a key naming a column that is
+        # not in the frame would be dropped without a trace.
+        unknown = [v for v in value_labels if v not in df.columns]
+        if unknown:
+            raise ValueError(
+                "Value labels name columns that are not in the DataFrame: "
+                f"{sorted(unknown)}. Available columns: {df.columns}"
+            )
+
+        # Stata attaches label sets to numeric variables only; there is no
+        # string equivalent (unlike SPSS, where write_sav accepts both).
+        string_cols = [
+            v
+            for v, mp in value_labels.items()
+            if mp and df.schema[v] in (pl.String, pl.Categorical, pl.Enum)
+        ]
+        if string_cols:
+            raise ValueError(
+                "Stata value labels apply only to numeric variables; these columns hold "
+                f"strings: {sorted(string_cols)}"
+            )
+
         offenders: dict[str, list] = {}
+        out_of_range: dict[str, list] = {}
         for var, mp in value_labels.items():
             bad_keys = [
                 k
@@ -305,9 +334,27 @@ def _validate_dta_names_and_labels(
             if bad_keys:
                 offenders[var] = bad_keys
 
+            # Stata stores a value-label code as int32 and reserves the top of
+            # that range for the missing values (. through .z, from
+            # 0x7FFFFFE5 up). A code outside the usable span is silently
+            # truncated by the writer, so reject it here.
+            wide = [
+                k
+                for k in mp.keys()
+                if k not in bad_keys and not (_DTA_CODE_MIN <= int(k) <= _DTA_CODE_MAX)
+            ]
+            if wide:
+                out_of_range[var] = wide
+
         if offenders:
             raise ValueError(
                 "Value labels must use integer codes; offending keys: " + str(offenders)
+            )
+        if out_of_range:
+            raise ValueError(
+                f"Value label codes must be within [{_DTA_CODE_MIN}, {_DTA_CODE_MAX}] "
+                "(Stata stores them as int32 and reserves the top of the range for "
+                f"missing values); offending keys: {out_of_range}"
             )
 
 
@@ -395,8 +442,7 @@ def _adjust_temporals(df: pl.DataFrame, *, adjust_tz: bool) -> pl.DataFrame:
             import warnings
 
             warnings.warn(
-                f"Could not adjust timezone for column {name!r}; "
-                f"writing it unchanged ({ex}).",
+                f"Could not adjust timezone for column {name!r}; writing it unchanged ({ex}).",
                 UserWarning,
                 stacklevel=2,
             )
@@ -526,7 +572,15 @@ def write_dta(
 
     ipc_bytes = _df_to_ipc_bytes(df_w)
     var_labels_json = json.dumps(var_labels) if var_labels else None
-    value_labels_json = json.dumps(value_labels) if value_labels else None
+    # Codes are validated as integers above, but may arrive as bool or whole
+    # float; canonicalize so json.dumps emits "1" rather than "true"/"1.0".
+    value_labels_json = (
+        json.dumps(
+            {v: {str(int(k)): lbl for k, lbl in mp.items()} for v, mp in value_labels.items()}
+        )
+        if value_labels
+        else None
+    )
     user_missing_json = json.dumps(user_missing_specs) if user_missing_specs else None
 
     if not hasattr(native, "df_write_dta_file"):
