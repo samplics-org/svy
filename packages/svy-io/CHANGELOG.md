@@ -6,6 +6,10 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Added
+
+- **Readers surface the declared measurement level ([#130](https://github.com/samplics-org/svy/issues/130)).** Each entry in `meta["vars"]` now carries `measure` — `"nominal"`, `"ordinal"`, or `"scale"` — read from ReadStat's `readstat_variable_get_measure`. A format that carries no such attribute (Stata) or a variable whose writer never set one reports `None` rather than `"scale"`, so a caller can tell "declared continuous" from "never declared". Worth knowing before relying on it: SPSS defaults numeric variables to `"scale"` whether or not anyone meant it, so only `"nominal"` and `"ordinal"` are positive declarations.
+
 ## [0.2.0] — 2026-07-23
 
 ### Changed
