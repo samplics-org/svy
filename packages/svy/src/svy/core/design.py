@@ -16,7 +16,6 @@ from typing import (
 )
 
 from svy.core.repwgts import (
-    BootstrapKind,
     BrrWgts,
     RepWeights,
     RepWgts,
@@ -408,7 +407,7 @@ class Design:
         df: int | None | _MissingType = _MISSING,
         padding: int | None | _MissingType = _MISSING,
         rscales: tuple[float, ...] | None | _MissingType = _MISSING,
-        kind: str | BootstrapKind | None | _MissingType = _MISSING,
+        kind: str | None | _MissingType = _MISSING,
         paired: bool | _MissingType = _MISSING,
     ) -> Self:
         """

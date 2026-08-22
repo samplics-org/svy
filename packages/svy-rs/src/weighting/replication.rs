@@ -655,32 +655,21 @@ pub fn create_bootstrap_weights(
 /// weights encode no stratum or PSU structure, which is why producers can
 /// release them on public use files where Rao-Wu weights would be disclosive.
 ///
-/// For each unit `k` and replicate `b`:
+/// Equations (1) and (2) of the method, and nothing else:
 ///
 /// ```text
 /// bsw_kb = w_k + f_kb * w_k * sqrt((w_k - 1) / w_k),   f_kb = +/-1 w.p. 1/2
 /// ```
 ///
-/// `calib_domains`, when supplied, post-stratifies every replicate back to the
-/// base weight's own total within each domain:
-///
-/// ```text
-/// bsw_kb <- bsw_kb * (sum of w over domain) / (sum of bsw_b over domain)
-/// ```
-///
-/// This reimposes the constraint that the producer's calibration already put on
-/// the base weights.  Without it the bootstrap describes a Horvitz-Thompson
-/// estimator rather than a calibrated one, and reports positive variance for
-/// quantities the calibration holds fixed.  It is a no-op for ratios but
-/// roughly halves the standard error of totals aligned with the domains.
-///
-/// The scale factors are held as a `n_domains x 1` scratch vector per replicate
-/// rather than a full `n_obs x n_reps` matrix, so peak memory is the single
-/// output allocation.
+/// Calibrating the replicates afterwards is a separate, optional step -- the
+/// source guide introduces it as "a calibrated version" that "can" bring the
+/// variance closer to a master-file estimate -- and is not performed here.  It
+/// is ordinary post-stratification and belongs with the other weighting
+/// adjustments, where it applies to any replicate method rather than only this
+/// one.
 pub fn create_poisson_bootstrap_weights(
     wgt: ArrayView1<f64>,
     n_reps: usize,
-    calib_domains: Option<ArrayView1<i64>>,
     seed: u64,
 ) -> Result<(Array2<f64>, f64)> {
     let n_obs = wgt.len();
@@ -694,20 +683,13 @@ pub fn create_poisson_bootstrap_weights(
             "Poisson bootstrap requires at least one observation".into(),
         ));
     }
-    if let Some(d) = &calib_domains {
-        if d.len() != n_obs {
-            return Err(ReplicationError::DimensionMismatch {
-                expected: n_obs,
-                got: d.len(),
-            });
-        }
-    }
 
     // sqrt((w - 1) / w) is not real below 1, and a NaN here would propagate
     // silently into every downstream estimate.  `!(w >= 1.0)` also rejects NaN.
     if let Some(bad) = wgt.iter().position(|&w| !(w >= 1.0)) {
         return Err(ReplicationError::InvalidInput(format!(
-            "Poisson bootstrap requires weights >= 1 (the adjustment factor is              sqrt((w - 1) / w)); observation {} has weight {}",
+            "Poisson bootstrap requires weights >= 1 (the adjustment factor is \
+             sqrt((w - 1) / w)); observation {} has weight {}",
             bad, wgt[bad]
         )));
     }
@@ -716,27 +698,9 @@ pub fn create_poisson_bootstrap_weights(
     // positive: sqrt((w - 1) / w) < 1 for every finite w >= 1.
     let adj: Vec<f64> = wgt.iter().map(|&w| w * ((w - 1.0) / w).sqrt()).collect();
 
-    // Dense domain codes plus the base-weight total per domain, computed once.
-    let calib: Option<(Vec<usize>, Vec<f64>)> = calib_domains.map(|d| {
-        let mut codes: HashMap<i64, usize> = HashMap::new();
-        let mut idx = Vec::with_capacity(n_obs);
-        let mut totals: Vec<f64> = Vec::new();
-        for i in 0..n_obs {
-            let next = codes.len();
-            let c = *codes.entry(d[i]).or_insert(next);
-            if c == totals.len() {
-                totals.push(0.0);
-            }
-            totals[c] += wgt[i];
-            idx.push(c);
-        }
-        (idx, totals)
-    });
-
     // One flat buffer, filled column-wise, then handed to a Fortran-ordered
     // Array2.  Building `Vec<Array1>` and copying into an Array2 (as the
-    // Rao-Wu path does) would hold two full matrices at once, which at
-    // production replicate counts is the dominant cost of the whole call.
+    // Rao-Wu path does) would hold two full matrices at once.
     let mut buf = vec![0.0f64; n_obs * n_reps];
     buf.par_chunks_mut(n_obs).enumerate().for_each(|(r, col)| {
         let mut rng = Rng::new(seed.wrapping_add(r as u64));
@@ -754,21 +718,6 @@ pub fn create_poisson_bootstrap_weights(
             bits >>= 1;
             n_bits -= 1;
             col[i] = wgt[i] + sign * adj[i];
-        }
-
-        if let Some((idx, fw_totals)) = &calib {
-            let mut bs_totals = vec![0.0f64; fw_totals.len()];
-            for i in 0..n_obs {
-                bs_totals[idx[i]] += col[i];
-            }
-            // Every bsw is strictly positive, so a zero total means an empty
-            // domain, which cannot be indexed here.  Guarded anyway.
-            for i in 0..n_obs {
-                let d = idx[i];
-                if bs_totals[d] != 0.0 {
-                    col[i] *= fw_totals[d] / bs_totals[d];
-                }
-            }
         }
     });
 

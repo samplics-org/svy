@@ -38,8 +38,6 @@ from svy.core.repwgts import (
     BootstrapWgts,
     BrrWgts,
     JackknifeWgts,
-    Poisson,
-    RaoWu,
     RepWgts,
     SdrWgts,
 )
@@ -84,8 +82,6 @@ __all__ = [
     "BootstrapWgts",
     "BrrWgts",
     "JackknifeWgts",
-    "Poisson",
-    "RaoWu",
     "RepWeights",
     "RepWgts",
     "SdrWgts",

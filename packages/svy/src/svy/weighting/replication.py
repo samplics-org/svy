@@ -41,12 +41,11 @@ except ImportError:  # pragma: no cover
     rust_create_sdr_wgts = None
 
 from svy.core.design import RepWeights
-from svy.core.repwgts import Poisson, RaoWu, normalize_bootstrap_kind
+from svy.core.repwgts import normalize_bootstrap_kind
 from svy.errors import DimensionError, MethodError
 from svy.utils.checks import drop_missing
 from svy.utils.random_state import RandomState, resolve_random_state
 from svy.weighting._helpers import (
-    _by_to_cols,
     _name_rep_cols,
     _to_float_array,
     _to_int_array,
@@ -395,51 +394,11 @@ def create_jk_wgts(
     return sample
 
 
-def _domain_codes(
-    data: pl.DataFrame,
-    by: str | Sequence[str] | None,
-    *,
-    where: str,
-) -> np.ndarray | None:
-    """Dense integer codes for the calibration domains, or None.
-
-    Only distinctness matters: the Rust side re-indexes the codes, so no
-    ordering is implied. Nulls form their own domain rather than being dropped,
-    which keeps every observation inside exactly one calibration group.
-    """
-    cols = _by_to_cols(by)
-    if cols is None:
-        return None
-    if not cols:
-        raise MethodError.not_applicable(
-            where=where,
-            method="create_bs_wgts",
-            reason="`calib_domains` sequence must not be empty.",
-        )
-    missing = [c for c in cols if c not in data.columns]
-    if missing:
-        raise MethodError.not_applicable(
-            where=where,
-            method="create_bs_wgts",
-            reason=f"`calib_domains` column(s) not found: {missing}.",
-        )
-    key = pl.concat_str(
-        [pl.col(c).cast(pl.Utf8).fill_null("__NA__") for c in cols],
-        separator="_&_",
-    )
-    return (
-        data.select(key.cast(pl.Categorical).to_physical().cast(pl.Int64).alias("__d"))["__d"]
-        .to_numpy()
-        .astype(np.int64, copy=False)
-    )
-
-
 def create_bs_wgts(
     sample: Sample,
     n_reps: int = 500,
     *,
     kind: Literal["rao-wu", "poisson"] = "rao-wu",
-    calib_domains: str | Sequence[str] | None = None,
     rep_prefix: str | None = None,
     drop_nulls: bool = False,
     rstate: RandomState = None,
@@ -450,36 +409,41 @@ def create_bs_wgts(
     ----------
     kind : {"rao-wu", "poisson"}, default "rao-wu"
         ``"rao-wu"`` is the stratified Rao-Wu-Yue rescaling bootstrap: PSUs are
-        resampled within strata, so it requires ``psu`` on the design.
+        resampled within strata, so it requires ``psu`` on the design. Where the
+        design is available this is the better choice, because resampling PSUs
+        carries the stratification and clustering with it.
 
         ``"poisson"`` is the Beaumont-Patak generalized bootstrap with
         independent per-unit adjustment factors. It requires only a weight
-        column and is the method producers document for public use files, where
-        stratum and PSU identifiers are suppressed for confidentiality. Because
-        the draws are independent across units the weights are themselves
-        non-disclosive.
-    calib_domains : str | Sequence[str] | None, default None
-        ``"poisson"`` only. Columns defining the domains within which every
-        replicate is post-stratified back to the base weight's own total.
-
-        Supply these whenever the base weight was calibrated to population
-        controls, which is the usual case for a published file: the Poisson
-        draws do not otherwise inherit that constraint. The effect is
-        estimator-dependent and easy to under-estimate from a single check. It
-        is negligible for ratios such as an unemployment rate, roughly a factor
-        of two for totals aligned with the domains, and the difference between
-        zero and a spurious standard error for a calibration control itself.
-        Leave as None only when the weight is a pure design weight.
+        column, which is why producers document it for public use files where
+        stratum and PSU identifiers are suppressed. The draws being independent
+        across units is also what makes the weights non-disclosive. It cannot
+        recover clustering, so use it when the design is genuinely unavailable
+        rather than as a default.
 
     Notes
     -----
+    Calibrating the replicates is a separate step and is not performed here.
+    Producers sometimes document one -- Statistics Canada's LFS guide describes
+    "a calibrated version" of the Poisson bootstrap that "can" bring the
+    variance closer to a master-file estimate -- but it is ordinary
+    post-stratification, it applies to any replicate method, and it belongs with
+    the other weighting adjustments:
+
+    >>> s = sample.weighting.create_bs_wgts(n_reps=1000, kind="poisson")
+    >>> s = s.weighting.poststratify(controls=totals, by=["prov", "sex", "age"])
+
+    :meth:`Sample.weighting.poststratify`, :meth:`~rake` and :meth:`~calibrate`
+    all adjust the replicate columns alongside the main weight unless
+    ``ignore_reps=True``.
+
     References for ``"poisson"``: Beaumont, J.-F. and Patak, Z. (2012). On the
     generalized bootstrap for sample surveys with special attention to Poisson
     sampling. *International Statistical Review*, 80(1), 127-148.
     """
     df = sample._data
     design = sample._design
-    kind_spec = normalize_bootstrap_kind(kind)
+    kind = normalize_bootstrap_kind(kind)
 
     if n_reps is None:
         raise MethodError.not_applicable(
@@ -487,20 +451,10 @@ def create_bs_wgts(
             method="create_bs_wgts",
             reason="n_reps must be specified for Bootstrap.",
         )
-    if isinstance(kind_spec, RaoWu) and calib_domains is not None:
-        raise MethodError.not_applicable(
-            where="Sample.weighting.create_bs_wgts",
-            method="create_bs_wgts",
-            reason=(
-                "calib_domains applies to kind='poisson' only; the Rao-Wu "
-                "bootstrap resamples PSUs and carries the design's calibration "
-                "through the resampling."
-            ),
-        )
     # The Rao-Wu guard is deliberately not shared: the Poisson bootstrap exists
     # precisely for files that have no psu, so requiring one would reject the
     # only case it serves.
-    if isinstance(kind_spec, RaoWu) and design.psu is None:
+    if kind == "rao-wu" and design.psu is None:
         raise MethodError.not_applicable(
             where="Sample.weighting.create_bs_wgts",
             method="create_bs_wgts",
@@ -508,9 +462,8 @@ def create_bs_wgts(
         )
 
     if drop_nulls:
-        if isinstance(kind_spec, Poisson):
-            domain_cols = _by_to_cols(calib_domains) if calib_domains is not None else []
-            candidates = [design.wgt, *domain_cols]
+        if kind == "poisson":
+            candidates = [design.wgt]
         else:
             candidates = [design.wgt, design.stratum, design.psu]
         needed = list({c for c in candidates if isinstance(c, str)})
@@ -527,15 +480,9 @@ def create_bs_wgts(
         else int(rng.randint(0, 2**31 - 1))
     )
 
-    if isinstance(kind_spec, Poisson):
-        domain_codes = _domain_codes(data, calib_domains, where="Sample.weighting.create_bs_wgts")
+    if kind == "poisson":
         assert rust_create_poisson_bs_wgts is not None  # noqa: S101
-        rep_mat, df_val = rust_create_poisson_bs_wgts(
-            main_weights,
-            n_reps,
-            domain_codes,
-            seed,
-        )
+        rep_mat, df_val = rust_create_poisson_bs_wgts(main_weights, n_reps, seed)
     else:
         psu_int = _to_int_array(data, design.psu)
         stratum_int = _to_int_array(data, design.stratum)
@@ -555,16 +502,12 @@ def create_bs_wgts(
         [pl.Series(name=col, values=vals) for col, vals in rep_dicts.items()]
     )
 
-    if isinstance(kind_spec, Poisson):
-        domain_cols = _by_to_cols(calib_domains)
-        kind_spec = Poisson(calib_domains=tuple(domain_cols) if domain_cols else None)
-
     sample._design = sample._design.update_rep_weights(
         method="bootstrap",
         prefix=rep_prefix,
         n_reps=n_reps,
         df=df_val,
-        kind=kind_spec,
+        kind=kind,
     )
 
     return sample

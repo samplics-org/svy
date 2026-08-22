@@ -6,8 +6,7 @@ its algorithm has. See ``docs/design/rep-weights-tagged-union.md``.
 
 The rule for adding a variant: **a type exists exactly when the data differs.**
 Behaviour differences are handled by a method on the variant, not a new type.
-That is why Rao-Wu and Poisson are separate kinds (Poisson carries
-``calib_domains``) while Fay's BRR is a ``fay_coef`` value rather than a type —
+That is why Fay's BRR is a ``fay_coef`` value rather than a type —
 plain BRR *is* Fay's BRR at 0.0, so splitting it would make
 ``FayWgts(fay_coef=0.0)`` constructible and self-contradictory.
 
@@ -36,50 +35,20 @@ from svy.errors import MethodError
 # bootstrap uses tau^2/B rather than 1/B -- needs no change anywhere else.
 
 
-class RaoWu(msgspec.Struct, frozen=True, tag="rao-wu", tag_field="kind"):
-    """Stratified Rao-Wu-Yue rescaling bootstrap. Resamples PSUs within strata."""
+# The two bootstrap kinds differ in how the replicates are drawn, not in what
+# they carry, so this is a field rather than a nested union. Calibrating the
+# replicates afterwards is a separate weighting step (see
+# ``Sample.weighting.poststratify``) and is not recorded here.
+BOOTSTRAP_KINDS = ("rao-wu", "poisson")
 
-    def coefficients(self, n_reps: int) -> list[float]:
-        return [1.0 / n_reps] * n_reps
-
-    def __str__(self) -> str:
-        return "rao-wu"
-
-
-class Poisson(msgspec.Struct, frozen=True, tag="poisson", tag_field="kind"):
-    """Beaumont-Patak generalized bootstrap with independent per-unit factors.
-
-    Requires only a weight, which is why producers document it for public use
-    files where stratum and PSU identifiers are suppressed. The draws being
-    independent across units is also what makes the weights non-disclosive.
-
-    ``calib_domains`` records the columns each replicate was post-stratified
-    back to the base weight's own total within. It is stored because a consumer
-    needs it: post-stratifying replicates that are already calibrated on the
-    same margins is a double-calibration bug.
-    """
-
-    calib_domains: tuple[str, ...] | None = None
-
-    def coefficients(self, n_reps: int) -> list[float]:
-        return [1.0 / n_reps] * n_reps
-
-    def __str__(self) -> str:
-        if self.calib_domains:
-            return f"poisson (calibrated on {', '.join(self.calib_domains)})"
-        return "poisson"
-
-
-BootstrapKind = Union[RaoWu, Poisson]
-
-_BS_KIND_ALIASES: dict[str, type[RaoWu] | type[Poisson]] = {
-    "rao-wu": RaoWu,
-    "rao_wu": RaoWu,
-    "raowu": RaoWu,
-    "rao wu": RaoWu,
-    "rw": RaoWu,
-    "rao-wu-yue": RaoWu,
-    "poisson": Poisson,
+_BS_KIND_ALIASES: dict[str, str] = {
+    "rao-wu": "rao-wu",
+    "rao_wu": "rao-wu",
+    "raowu": "rao-wu",
+    "rao wu": "rao-wu",
+    "rw": "rao-wu",
+    "rao-wu-yue": "rao-wu",
+    "poisson": "poisson",
 }
 
 
@@ -220,13 +189,17 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
 
 
 class BootstrapWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="Bootstrap", tag_field="method"):
-    kind: BootstrapKind = RaoWu()
+    kind: str = "rao-wu"
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        msgspec.structs.force_setattr(self, "kind", normalize_bootstrap_kind(self.kind))
 
     def coefficients(self) -> list[float]:
-        return self.kind.coefficients(self.n_reps)
+        return [1.0 / self.n_reps] * self.n_reps
 
     def _variant_parts(self) -> list[str]:
-        return [] if isinstance(self.kind, RaoWu) else [f"kind={self.kind}"]
+        return [] if self.kind == "rao-wu" else [f"kind={self.kind}"]
 
     def _plain_variant_lines(self) -> list[str]:
         return [f"Kind     : {self.kind}"]
@@ -329,18 +302,16 @@ def resolve_rep_variant(
     )
 
 
-def normalize_bootstrap_kind(kind: str | RaoWu | Poisson) -> BootstrapKind:
-    """Normalize a bootstrap ``kind`` to its variant.
+def normalize_bootstrap_kind(kind: str) -> str:
+    """Normalize a bootstrap ``kind``.
 
     Case-insensitive and tolerant of hyphen, underscore or space separators,
-    matching :func:`_normalize_rep_method`.
+    matching :func:`resolve_rep_variant`.
     """
-    if isinstance(kind, (RaoWu, Poisson)):
-        return kind
     if not isinstance(kind, str):
-        raise TypeError(f"'kind' must be a string, RaoWu or Poisson, got {type(kind).__name__}.")
-    cls = _BS_KIND_ALIASES.get(kind.strip().lower())
-    if cls is None:
+        raise TypeError(f"'kind' must be a string, got {type(kind).__name__}.")
+    resolved = _BS_KIND_ALIASES.get(kind.strip().lower())
+    if resolved is None:
         raise MethodError.invalid_choice(
             where="svy.RepWeights",
             param="kind",
@@ -350,11 +321,10 @@ def normalize_bootstrap_kind(kind: str | RaoWu | Poisson) -> BootstrapKind:
             hint=(
                 "'rao-wu' is the stratified Rao-Wu-Yue rescaling bootstrap and needs "
                 "psu on the design; 'poisson' is the Beaumont-Patak generalized "
-                "bootstrap and needs only a weight. Construct the variant directly "
-                "with svy.RaoWu() or svy.Poisson(calib_domains=...) for full control."
+                "bootstrap and needs only a weight."
             ),
         )
-    return cls()
+    return resolved
 
 
 _MISSING_ARG: object = object()
@@ -369,7 +339,7 @@ def RepWeights(  # noqa: N802 - a factory that replaced a class of this name
     padding: int | None = None,
     rscales: tuple[float, ...] | None = None,
     *,
-    kind: str | RaoWu | Poisson | None = None,
+    kind: str | None = None,
     paired: bool = False,
 ) -> RepWgts:
     """Build the replicate-weight variant for ``method``.
@@ -377,7 +347,7 @@ def RepWeights(  # noqa: N802 - a factory that replaced a class of this name
     Kept as a factory with the pre-union signature so existing call sites keep
     working. New code can construct the variant directly:
 
-    >>> BootstrapWgts(prefix="bsw", n_reps=1000, kind=Poisson())
+    >>> BootstrapWgts(prefix="bsw", n_reps=1000, kind="poisson")
     >>> BrrWgts(prefix="brr_", n_reps=32, fay_coef=0.5)
 
     Parameters that do not belong to ``method`` are rejected rather than stored:
@@ -397,7 +367,7 @@ def RepWeights(  # noqa: N802 - a factory that replaced a class of this name
     if variant is BootstrapWgts:
         _reject(variant, fay_coef=fay_coef, paired=paired)
         return BootstrapWgts(
-            **common, kind=normalize_bootstrap_kind(kind) if kind is not None else RaoWu()
+            **common, kind=normalize_bootstrap_kind(kind) if kind is not None else "rao-wu"
         )
     if variant is JackknifeWgts:
         _reject(variant, fay_coef=fay_coef, kind=kind)

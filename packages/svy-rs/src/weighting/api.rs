@@ -268,15 +268,13 @@ pub fn create_bootstrap_wgts(
 }
 
 #[pyfunction]
-#[pyo3(signature = (wgt, n_reps, calib_domains=None, seed=None))]
+#[pyo3(signature = (wgt, n_reps, seed=None))]
 pub fn create_poisson_bootstrap_wgts(
     py: Python<'_>,
     wgt: PyReadonlyArray1<f64>,
     n_reps: usize,
-    calib_domains: Option<PyReadonlyArray1<i64>>,
     seed: Option<u64>,
 ) -> PyResult<(Py<PyArray2<f64>>, f64)> {
-    let domains_view = calib_domains.as_ref().map(|d| d.as_array());
     let seed = seed.unwrap_or_else(|| {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -287,7 +285,6 @@ pub fn create_poisson_bootstrap_wgts(
     let (result, df) = crate::weighting::replication::create_poisson_bootstrap_weights(
         wgt.as_array(),
         n_reps,
-        domains_view,
         seed,
     )
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;

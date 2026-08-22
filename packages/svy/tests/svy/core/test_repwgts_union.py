@@ -12,8 +12,6 @@ from svy.core.repwgts import (
     BootstrapWgts,
     BrrWgts,
     JackknifeWgts,
-    Poisson,
-    RaoWu,
     RepWeights,
     RepWgts,
     SdrWgts,
@@ -47,9 +45,9 @@ def test_method_property_is_the_display_label(variant, expected_method):
     [
         (BootstrapWgts, {"fay_coef": 0.5}),
         (BootstrapWgts, {"paired": True}),
-        (JackknifeWgts, {"kind": Poisson()}),
+        (JackknifeWgts, {"kind": "poisson"}),
         (JackknifeWgts, {"fay_coef": 0.5}),
-        (BrrWgts, {"kind": Poisson()}),
+        (BrrWgts, {"kind": "poisson"}),
         (BrrWgts, {"paired": True}),
         (SdrWgts, {"fay_coef": 0.5}),
     ],
@@ -60,10 +58,18 @@ def test_foreign_parameters_are_unrepresentable(ctor, kwargs):
         ctor(prefix="w", n_reps=10, **kwargs)
 
 
-def test_rao_wu_cannot_carry_calibration_domains():
-    """Calibrating replicates is not a Rao-Wu concept."""
-    with pytest.raises(TypeError):
-        RaoWu(calib_domains=("PROV",))
+def test_bootstrap_kind_is_a_value_not_a_type():
+    """The two kinds differ in how replicates are drawn, not in what they carry.
+
+    Calibration used to live on the Poisson kind, which made it carry data the
+    other did not. With calibration moved to the weighting adjustments, both
+    kinds are bare labels and a field is the right shape.
+    """
+    rw = BootstrapWgts(prefix="w", n_reps=10)
+    po = BootstrapWgts(prefix="w", n_reps=10, kind="poisson")
+    assert type(rw) is type(po)
+    assert (rw.kind, po.kind) == ("rao-wu", "poisson")
+    assert rw.coefficients() == po.coefficients()
 
 
 def test_fay_is_a_value_not_a_type():
@@ -77,13 +83,6 @@ def test_fay_is_a_value_not_a_type():
 # ---------------------------------------------------------------------------
 # Coefficients live on the variant
 # ---------------------------------------------------------------------------
-
-
-def test_bootstrap_kinds_share_the_coefficient():
-    """Both bootstraps are 1/B; the kernel dispatches on Bootstrap as one arm."""
-    rw = BootstrapWgts(prefix="w", n_reps=500)
-    poisson = BootstrapWgts(prefix="w", n_reps=500, kind=Poisson())
-    assert rw.coefficients() == poisson.coefficients() == [1 / 500] * 500
 
 
 def test_coefficients_match_the_rust_kernel():
@@ -122,14 +121,12 @@ def test_factory_routes_to_the_right_variant():
 @pytest.mark.parametrize("given", ["poisson", "POISSON", " Poisson "])
 def test_factory_normalizes_the_bootstrap_kind(given):
     rw = RepWeights(method="bootstrap", prefix="w", n_reps=10, kind=given)
-    assert isinstance(rw.kind, Poisson)
+    assert rw.kind == "poisson"
 
 
-def test_factory_accepts_a_constructed_kind():
-    rw = RepWeights(
-        method="bootstrap", prefix="w", n_reps=10, kind=Poisson(calib_domains=("a", "b"))
-    )
-    assert rw.kind.calib_domains == ("a", "b")
+@pytest.mark.parametrize("given", ["rao-wu", "RAO_WU", "rw", "raowu"])
+def test_bootstrap_kind_aliases_normalize(given):
+    assert BootstrapWgts(prefix="w", n_reps=10, kind=given).kind == "rao-wu"
 
 
 @pytest.mark.parametrize(
@@ -208,11 +205,11 @@ def test_taylor_rejection_keeps_its_valueerror_contract():
 
 
 def test_round_trips_through_the_tagged_union():
-    rw = BootstrapWgts(prefix="bsw", n_reps=1000, kind=Poisson(calib_domains=("PROV", "SEX")))
+    rw = BootstrapWgts(prefix="bsw", n_reps=1000, kind="poisson")
     raw = msgspec.json.encode(rw)
     back = msgspec.json.Decoder(RepWgts).decode(raw)
     assert back == rw
-    assert back.kind.calib_domains == ("PROV", "SEX")
+    assert back.kind == "poisson"
 
 
 def test_tag_is_the_method_name():
@@ -242,15 +239,15 @@ def test_design_rejects_a_non_variant():
 
 
 def test_update_rep_weights_carries_kind_within_the_same_method():
-    d = svy.Design(wgt="w", rep_wgts=BootstrapWgts(prefix="b", n_reps=10, kind=Poisson()))
+    d = svy.Design(wgt="w", rep_wgts=BootstrapWgts(prefix="b", n_reps=10, kind="poisson"))
     updated = d.update_rep_weights(n_reps=20)
-    assert isinstance(updated.rep_wgts.kind, Poisson)
+    assert updated.rep_wgts.kind == "poisson"
     assert updated.rep_wgts.n_reps == 20
 
 
 def test_update_rep_weights_drops_kind_when_the_method_changes():
     """A bootstrap kind means nothing on a jackknife design."""
-    d = svy.Design(wgt="w", rep_wgts=BootstrapWgts(prefix="b", n_reps=10, kind=Poisson()))
+    d = svy.Design(wgt="w", rep_wgts=BootstrapWgts(prefix="b", n_reps=10, kind="poisson"))
     updated = d.update_rep_weights(method="jackknife")
     assert isinstance(updated.rep_wgts, JackknifeWgts)
     assert not hasattr(updated.rep_wgts, "kind")
@@ -258,13 +255,12 @@ def test_update_rep_weights_drops_kind_when_the_method_changes():
 
 def test_variants_are_publicly_exported():
     """They are on the read path: rep_wgts hands one back."""
+
     for name in (
         "RepWgts",
         "BootstrapWgts",
         "JackknifeWgts",
         "BrrWgts",
         "SdrWgts",
-        "RaoWu",
-        "Poisson",
     ):
         assert hasattr(svy, name), name
