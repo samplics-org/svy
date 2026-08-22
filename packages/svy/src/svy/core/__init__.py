@@ -6,7 +6,6 @@ from svy.core.describe import DescribeResult
 from svy.core.design import Design, PopSize, RepWeights
 from svy.core.enumerations import (
     CaseStyle,
-    EstimationMethod,
     FitMethod,
     LetterCase,
     LinkFunction,
@@ -35,6 +34,13 @@ from svy.core.expr import (
     sum_horizontal,
     when,
 )
+from svy.core.repwgts import (
+    BootstrapWgts,
+    BrrWgts,
+    JackknifeWgts,
+    RepWgts,
+    SdrWgts,
+)
 from svy.core.sample import Sample
 from svy.core.singleton import (
     Singleton,
@@ -50,7 +56,6 @@ from svy.core.types import DF, DT, Category, Number
 __all__ = [
     # Enums
     "CaseStyle",
-    "EstimationMethod",
     "FitMethod",
     "LetterCase",
     "LinkFunction",
@@ -74,7 +79,12 @@ __all__ = [
     "FDist",
     "Number",
     "PopSize",
+    "BootstrapWgts",
+    "BrrWgts",
+    "JackknifeWgts",
     "RepWeights",
+    "RepWgts",
+    "SdrWgts",
     "Sample",
     "Singleton",
     "SingletonInfo",

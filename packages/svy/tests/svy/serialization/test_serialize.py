@@ -9,6 +9,7 @@ Covers:
 - Type conversion (numpy → list, StrEnum → str, tuple → list)
 - Golden-file fixtures (stable JSON output per result kind)
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -39,7 +40,7 @@ from svy import (
 from svy.categorical.ttest import DiffEst, GroupLevels, TtestEst, TTestStats
 from svy.core.containers import TDist
 from svy.core.describe import DescribeContinuous
-from svy.core.enumerations import EstimationMethod, MeasurementType, QuantileMethod
+from svy.core.enumerations import MeasurementType, QuantileMethod
 from svy.regression.glm import GLMCoef, GLMStats
 from svy.serialize import from_json, serialize, to_dict, to_json
 from svy.serialize.serializers import _SERIALIZERS
@@ -53,7 +54,7 @@ from svy.serialize.structs import SCHEMA_VERSION
 
 def _make_estimate() -> Estimate:
     est = Estimate(PopParam.MEAN, alpha=0.05)
-    est.method = EstimationMethod.TAYLOR
+    est.method = "Taylor"
     est.n_strata = 10
     est.n_psus = 20
     est.q_method = QuantileMethod.LINEAR
@@ -142,7 +143,15 @@ def _make_table() -> Table:
         colvar="region",
         alpha=0.05,
         estimates=[
-            CellEst(rowvar="education", colvar="region", est=0.35, se=0.02, cv=0.057, lci=0.31, uci=0.39),
+            CellEst(
+                rowvar="education",
+                colvar="region",
+                est=0.35,
+                se=0.02,
+                cv=0.057,
+                lci=0.31,
+                uci=0.39,
+            ),
         ],
         stats=None,
         rowvals=["Low", "Med", "High"],

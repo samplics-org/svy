@@ -19,8 +19,6 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-import svy
-
 from svy.core.design import Design, RepWeights
 from svy.core.sample import Sample
 
@@ -52,7 +50,7 @@ def boot_sample():
     design = Design(
         wgt="weight",
         rep_wgts=RepWeights(
-            method=svy.EstimationMethod.BOOTSTRAP,
+            method="Bootstrap",
             prefix="bs_",
             n_reps=20,
         ),
@@ -97,7 +95,6 @@ GOLDEN = GOLDEN_R
 
 # Tolerances
 TOL = 1e-7
-
 
 # ==================== Mean ====================
 
@@ -196,7 +193,7 @@ class TestBootstrapMethodResolution:
         (Previously None always meant Taylor, silently giving a
         replication-only design SRS-like variance.)"""
         result = boot_sample.estimation.mean(y="income")
-        assert result.method.name == "BOOTSTRAP"
+        assert result.method.upper() == "BOOTSTRAP"
 
     def test_default_is_taylor_when_design_has_structure(self, boot_sample):
         """With strata/PSU present, method=None still defaults to Taylor."""
@@ -207,12 +204,12 @@ class TestBootstrapMethodResolution:
         )
         s = Sample(data=df, design=boot_sample.design.update(psu="_psu_"))
         result = s.estimation.mean(y="income")
-        assert result.method.name == "TAYLOR"
+        assert result.method.upper() == "TAYLOR"
 
     def test_explicit_replication(self, boot_sample):
         """method='replication' should use bootstrap."""
         result = boot_sample.estimation.mean(y="income", method="replication")
-        assert result.method.name == "BOOTSTRAP"
+        assert result.method.upper() == "BOOTSTRAP"
 
     def test_method_string_case_insensitive(self, boot_sample):
         """Method string should be case-insensitive."""
@@ -225,7 +222,7 @@ class TestBootstrapMethodResolution:
         """'rep', 'replicate', 'bootstrap' all work."""
         r1 = boot_sample.estimation.mean(y="income", method="rep")
         r2 = boot_sample.estimation.mean(y="income", method="replicate")
-        r3 = boot_sample.estimation.mean(y="income", method=svy.EstimationMethod.BOOTSTRAP)
+        r3 = boot_sample.estimation.mean(y="income", method="Bootstrap")
         assert r1.estimates[0].se == r2.estimates[0].se == r3.estimates[0].se
 
 

@@ -28,6 +28,9 @@ try:
         create_jk_wgts as rust_create_jk_wgts,  # type: ignore[import-untyped]
     )
     from svy_rs._internal import (
+        create_poisson_bootstrap_wgts as rust_create_poisson_bs_wgts,  # type: ignore[import-untyped]
+    )
+    from svy_rs._internal import (
         create_sdr_wgts as rust_create_sdr_wgts,  # type: ignore[import-untyped]
     )
 except ImportError:  # pragma: no cover
@@ -38,7 +41,7 @@ except ImportError:  # pragma: no cover
     rust_create_sdr_wgts = None
 
 from svy.core.design import RepWeights
-from svy.core.enumerations import EstimationMethod
+from svy.core.repwgts import normalize_bootstrap_kind
 from svy.errors import DimensionError, MethodError
 from svy.utils.checks import drop_missing
 from svy.utils.random_state import RandomState, resolve_random_state
@@ -319,7 +322,7 @@ def create_brr_wgts(
 
     sample._design = sample._design.fill_missing(
         rep_wgts=RepWeights(
-            method=EstimationMethod.BRR,
+            method="brr",
             prefix=rep_prefix,
             n_reps=n_reps_actual,
             fay_coef=fay_coef,
@@ -377,10 +380,11 @@ def create_jk_wgts(
 
     sample._design = sample._design.fill_missing(
         rep_wgts=RepWeights(
-            method=EstimationMethod.JACKKNIFE,
+            method="jackknife",
             prefix=rep_prefix,
             n_reps=n_reps,
             df=df_val,
+            paired=paired,
             # Per-replicate (n_h-1)/n_h coefficients: exact stratified-JKn
             # variance instead of the global (R-1)/R approximation.
             rscales=tuple(rscales),
@@ -394,35 +398,80 @@ def create_bs_wgts(
     sample: Sample,
     n_reps: int = 500,
     *,
+    kind: Literal["rao-wu", "poisson"] = "rao-wu",
     rep_prefix: str | None = None,
     drop_nulls: bool = False,
     rstate: RandomState = None,
 ) -> Sample:
+    """Create bootstrap replicate weights.
+
+    Parameters
+    ----------
+    kind : {"rao-wu", "poisson"}, default "rao-wu"
+        ``"rao-wu"`` is the stratified Rao-Wu-Yue rescaling bootstrap: PSUs are
+        resampled within strata, so it requires ``psu`` on the design. Where the
+        design is available this is the better choice, because resampling PSUs
+        carries the stratification and clustering with it.
+
+        ``"poisson"`` is the Beaumont-Patak generalized bootstrap with
+        independent per-unit adjustment factors. It requires only a weight
+        column, which is why producers document it for public use files where
+        stratum and PSU identifiers are suppressed. The draws being independent
+        across units is also what makes the weights non-disclosive. It cannot
+        recover clustering, so use it when the design is genuinely unavailable
+        rather than as a default.
+
+    Notes
+    -----
+    Calibrating the replicates is a separate step and is not performed here.
+    Producers sometimes document one -- Statistics Canada's LFS guide describes
+    "a calibrated version" of the Poisson bootstrap that "can" bring the
+    variance closer to a master-file estimate -- but it is ordinary
+    post-stratification, it applies to any replicate method, and it belongs with
+    the other weighting adjustments:
+
+    >>> s = sample.weighting.create_bs_wgts(n_reps=1000, kind="poisson")
+    >>> s = s.weighting.poststratify(controls=totals, by=["prov", "sex", "age"])
+
+    :meth:`Sample.weighting.poststratify`, :meth:`~rake` and :meth:`~calibrate`
+    all adjust the replicate columns alongside the main weight unless
+    ``ignore_reps=True``.
+
+    References for ``"poisson"``: Beaumont, J.-F. and Patak, Z. (2012). On the
+    generalized bootstrap for sample surveys with special attention to Poisson
+    sampling. *International Statistical Review*, 80(1), 127-148.
+    """
     df = sample._data
     design = sample._design
+    kind = normalize_bootstrap_kind(kind)
 
-    if design.psu is None:
-        raise MethodError.not_applicable(
-            where="Sample.weighting.create_bs_wgts",
-            method="create_bs_wgts",
-            reason="Bootstrap requires psu in Design (got psu=None).",
-        )
     if n_reps is None:
         raise MethodError.not_applicable(
             where="Sample.weighting.create_bs_wgts",
             method="create_bs_wgts",
             reason="n_reps must be specified for Bootstrap.",
         )
+    # The Rao-Wu guard is deliberately not shared: the Poisson bootstrap exists
+    # precisely for files that have no psu, so requiring one would reject the
+    # only case it serves.
+    if kind == "rao-wu" and design.psu is None:
+        raise MethodError.not_applicable(
+            where="Sample.weighting.create_bs_wgts",
+            method="create_bs_wgts",
+            reason="Bootstrap requires psu in Design (got psu=None).",
+        )
 
     if drop_nulls:
-        needed = list({c for c in [design.wgt, design.stratum, design.psu] if isinstance(c, str)})
+        if kind == "poisson":
+            candidates = [design.wgt]
+        else:
+            candidates = [design.wgt, design.stratum, design.psu]
+        needed = list({c for c in candidates if isinstance(c, str)})
         data = drop_missing(df=df, cols=needed, treat_infinite_as_missing=True)
     else:
         data = df
 
     main_weights = _to_float_array(data, design.wgt, len(data))
-    psu_int = _to_int_array(data, design.psu)
-    stratum_int = _to_int_array(data, design.stratum)
 
     rng = resolve_random_state(rstate)
     seed = (
@@ -431,14 +480,20 @@ def create_bs_wgts(
         else int(rng.randint(0, 2**31 - 1))
     )
 
-    assert rust_create_bootstrap_wgts is not None  # noqa: S101
-    rep_mat, df_val = rust_create_bootstrap_wgts(
-        main_weights,
-        psu_int,
-        n_reps,
-        stratum_int,
-        seed,
-    )
+    if kind == "poisson":
+        assert rust_create_poisson_bs_wgts is not None  # noqa: S101
+        rep_mat, df_val = rust_create_poisson_bs_wgts(main_weights, n_reps, seed)
+    else:
+        psu_int = _to_int_array(data, design.psu)
+        stratum_int = _to_int_array(data, design.stratum)
+        assert rust_create_bootstrap_wgts is not None  # noqa: S101
+        rep_mat, df_val = rust_create_bootstrap_wgts(
+            main_weights,
+            psu_int,
+            n_reps,
+            stratum_int,
+            seed,
+        )
 
     rep_prefix = rep_prefix or design.wgt
     rep_cols = _name_rep_cols(rep_prefix, n_reps)
@@ -448,10 +503,11 @@ def create_bs_wgts(
     )
 
     sample._design = sample._design.update_rep_weights(
-        method=EstimationMethod.BOOTSTRAP,
+        method="bootstrap",
         prefix=rep_prefix,
         n_reps=n_reps,
         df=df_val,
+        kind=kind,
     )
 
     return sample
@@ -508,7 +564,7 @@ def create_sdr_wgts(
     )
 
     sample._design = sample._design.update_rep_weights(
-        method=EstimationMethod.SDR,
+        method="sdr",
         prefix=rep_prefix,
         n_reps=n_reps,
         df=df_val,

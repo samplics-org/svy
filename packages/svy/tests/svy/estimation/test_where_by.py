@@ -393,9 +393,7 @@ class TestWhereAndByOnSameVariable:
         )
 
         filtered_data = dk_sample._data.filter(pl.col("sex") != 99)
-        filtered = Sample(filtered_data, dk_sample._design).estimation.mean(
-            "income", by="sex"
-        )
+        filtered = Sample(filtered_data, dk_sample._design).estimation.mean("income", by="sex")
 
         filtered_by_level = {e.by_level[0]: e for e in filtered.estimates}
         assert {e.by_level[0] for e in domain.estimates} == set(filtered_by_level)

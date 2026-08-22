@@ -14,8 +14,9 @@ from scipy import stats
 
 from svy.core.constants import _BY_SEP, _INTERNAL_CONCAT_SUFFIX
 from svy.core.data_prep import prepare_data
-from svy.core.enumerations import EstimationMethod, PopParam
+from svy.core.enumerations import PopParam
 from svy.core.enumerations import QuantileMethod as _QuantileMethod
+from svy.core.repwgts import RepWgts
 from svy.core.types import WhereArg
 from svy.errors import DimensionError, MethodError
 from svy.errors.singleton_errors import SingletonError
@@ -1094,12 +1095,12 @@ class Estimation:
         alpha,
         by_cols,
         as_factor,
-        method: EstimationMethod = EstimationMethod.TAYLOR,
+        method: RepWgts | None = None,
         deff_ref: str | None = None,
     ) -> Estimate:
         metadata = getattr(self._sample, "_metadata", None)
         estimate = Estimate(param, alpha=alpha, metadata=metadata)
-        estimate.method = method
+        estimate.method = method.method if method is not None else "Taylor"
         estimate.deff_ref = deff_ref
         estimate.covariance = est_cov
         estimate.as_factor = as_factor
@@ -1240,7 +1241,12 @@ class Estimation:
             raise ValueError(f"Unknown quantile method {q_method!r}. Use one of: {tuple(_MAP)}.")
         return result
 
-    def _resolve_method(self, method: str | None) -> EstimationMethod:
+    def _resolve_method(self, method: str | None) -> RepWgts | None:
+        """Resolve to the replicate-weight variant, or None for Taylor.
+
+        The presence of a variant *is* the method: there is nothing to return
+        for linearization, because it carries no replicate weights.
+        """
         normalized = self._normalize_method(method)
 
         if normalized == "replication":
@@ -1249,7 +1255,7 @@ class Estimation:
                     "Replication requires rep_wgts in the design. "
                     "Create replicate weights first or use method='taylor'."
                 )
-            return self._sample._design.rep_wgts.method
+            return self._sample._design.rep_wgts
 
         if normalized is None:
             # Auto-detect, as documented: Taylor when the design carries
@@ -1259,9 +1265,9 @@ class Estimation:
             # replication-only design SRS-like variance.)
             design = self._sample._design
             if design.rep_wgts is not None and design.stratum is None and design.psu is None:
-                return design.rep_wgts.method
+                return design.rep_wgts
 
-        return EstimationMethod.TAYLOR
+        return None
 
     # ----------------------------------------------------------------
     # Domain Estimation Helpers
@@ -1277,12 +1283,12 @@ class Estimation:
     # ----------------------------------------------------------------
 
     def _empty_estimate(
-        self, param: PopParam, alpha: float, by_cols: list[str], method: EstimationMethod
+        self, param: PopParam, alpha: float, by_cols: list[str], method: RepWgts | None
     ) -> Estimate:
         """Return an empty Estimate for cases like zero-weight domains."""
         metadata = getattr(self._sample, "_metadata", None)
         est = Estimate(param, alpha=alpha, metadata=metadata)
-        est.method = method
+        est.method = method.method if method is not None else "Taylor"
         est.estimates = []
         est.covariance = np.array([])
         return est
@@ -1315,7 +1321,7 @@ class Estimation:
 
         target_method = self._resolve_method(method)
         batched = (
-            target_method == EstimationMethod.TAYLOR
+            target_method is None
             and by is None
             and not as_factor
             and not drop_nulls
@@ -1441,11 +1447,11 @@ class Estimation:
             select_columns=True,
             # Ungrouped replication only: the mask path covers the ungrouped
             # kernels. Grouped (by=) replication keeps the zeroing path.
-            domain_mask_for_replication=(target_method != EstimationMethod.TAYLOR and by is None),
+            domain_mask_for_replication=(target_method is not None and by is None),
         )
 
         try:
-            if target_method == EstimationMethod.TAYLOR:
+            if target_method is None:
                 result = _taylor_mean(
                     self,
                     prep=prep,
@@ -1573,11 +1579,11 @@ class Estimation:
             select_columns=True,
             # Ungrouped replication only: the mask path covers the ungrouped
             # kernels. Grouped (by=) replication keeps the zeroing path.
-            domain_mask_for_replication=(target_method != EstimationMethod.TAYLOR and by is None),
+            domain_mask_for_replication=(target_method is not None and by is None),
         )
 
         try:
-            if target_method == EstimationMethod.TAYLOR:
+            if target_method is None:
                 result = _taylor_total(
                     self,
                     prep=prep,
@@ -1704,11 +1710,11 @@ class Estimation:
             select_columns=True,
             # Ungrouped replication only: the mask path covers the ungrouped
             # kernels. Grouped (by=) replication keeps the zeroing path.
-            domain_mask_for_replication=(target_method != EstimationMethod.TAYLOR and by is None),
+            domain_mask_for_replication=(target_method is not None and by is None),
         )
 
         try:
-            if target_method == EstimationMethod.TAYLOR:
+            if target_method is None:
                 result = _taylor_prop(
                     self,
                     prep=prep,
@@ -1863,11 +1869,11 @@ class Estimation:
             select_columns=True,
             # Ungrouped replication only: the mask path covers the ungrouped
             # kernels. Grouped (by=) replication keeps the zeroing path.
-            domain_mask_for_replication=(target_method != EstimationMethod.TAYLOR and by is None),
+            domain_mask_for_replication=(target_method is not None and by is None),
         )
 
         try:
-            if target_method == EstimationMethod.TAYLOR:
+            if target_method is None:
                 result = _taylor_ratio(
                     self,
                     prep=prep,
@@ -1937,11 +1943,11 @@ class Estimation:
             cast_y_float=True,
             apply_singleton_filter=True,
             select_columns=True,
-            domain_mask_for_replication=(target_method != EstimationMethod.TAYLOR and by is None),
+            domain_mask_for_replication=(target_method is not None and by is None),
         )
 
         try:
-            if target_method == EstimationMethod.TAYLOR:
+            if target_method is None:
                 result = _taylor_assoc(
                     self,
                     prep=prep,
@@ -2191,7 +2197,7 @@ class Estimation:
         )
 
         try:
-            if target_method == EstimationMethod.TAYLOR:
+            if target_method is None:
                 results = _taylor_quantile(
                     self,
                     prep=prep,
@@ -2301,7 +2307,7 @@ class Estimation:
         )
 
         try:
-            if target_method == EstimationMethod.TAYLOR:
+            if target_method is None:
                 result = _taylor_median(
                     self,
                     prep=prep,

@@ -268,6 +268,31 @@ pub fn create_bootstrap_wgts(
 }
 
 #[pyfunction]
+#[pyo3(signature = (wgt, n_reps, seed=None))]
+pub fn create_poisson_bootstrap_wgts(
+    py: Python<'_>,
+    wgt: PyReadonlyArray1<f64>,
+    n_reps: usize,
+    seed: Option<u64>,
+) -> PyResult<(Py<PyArray2<f64>>, f64)> {
+    let seed = seed.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(42)
+    });
+
+    let (result, df) = crate::weighting::replication::create_poisson_bootstrap_weights(
+        wgt.as_array(),
+        n_reps,
+        seed,
+    )
+    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+    Ok((result.into_pyarray(py).to_owned().into(), df))
+}
+
+#[pyfunction]
 #[pyo3(signature = (wgt, n_reps, stratum=None, order=None))]
 pub fn create_sdr_wgts(
     py: Python<'_>,

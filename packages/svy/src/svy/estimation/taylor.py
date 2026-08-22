@@ -14,7 +14,7 @@ import numpy as np
 import polars as pl
 import svy_rs as rs
 
-from svy.core.enumerations import EstimationMethod, PopParam, QuantileMethod
+from svy.core.enumerations import PopParam, QuantileMethod
 from svy.estimation.estimate import Estimate
 
 
@@ -87,7 +87,7 @@ def taylor_mean(
         alpha,
         prep.by_cols,
         as_factor,
-        method=EstimationMethod.TAYLOR,
+        method=None,
         deff_ref=deff_ref,
     )
 
@@ -147,7 +147,7 @@ def taylor_mean_multi(
                 alpha,
                 [],
                 as_factor=False,
-                method=EstimationMethod.TAYLOR,
+                method=None,
                 deff_ref=deff_ref,
             )
         )
@@ -215,7 +215,7 @@ def taylor_total(
         alpha,
         prep.by_cols,
         as_factor=False,
-        method=EstimationMethod.TAYLOR,
+        method=None,
         deff_ref=deff_ref,
     )
 
@@ -270,7 +270,7 @@ def taylor_total_multi(
                 alpha,
                 [],
                 as_factor=False,
-                method=EstimationMethod.TAYLOR,
+                method=None,
                 deff_ref=deff_ref,
             )
         )
@@ -347,7 +347,7 @@ def taylor_ratio(
         alpha,
         prep.by_cols,
         as_factor=False,
-        method=EstimationMethod.TAYLOR,
+        method=None,
         deff_ref=deff_ref,
     )
 
@@ -419,7 +419,7 @@ def taylor_prop(
         alpha,
         prep.by_cols,
         as_factor=True,
-        method=EstimationMethod.TAYLOR,
+        method=None,
         deff_ref=deff_ref,
     )
 
@@ -469,7 +469,7 @@ def taylor_median(
         alpha,
         prep.by_cols,
         as_factor=False,
-        method=EstimationMethod.TAYLOR,
+        method=None,
     )
 
 
@@ -522,7 +522,7 @@ def taylor_ratio_multi(
                 alpha,
                 [],
                 as_factor=False,
-                method=EstimationMethod.TAYLOR,
+                method=None,
                 deff_ref=deff_ref,
             )
         )
@@ -585,7 +585,7 @@ def taylor_prop_multi(
                 alpha,
                 [],
                 as_factor=True,
-                method=EstimationMethod.TAYLOR,
+                method=None,
                 deff_ref=deff_ref,
             )
         )
@@ -644,7 +644,7 @@ def taylor_median_multi(
                 alpha,
                 [],
                 as_factor=False,
-                method=EstimationMethod.TAYLOR,
+                method=None,
             )
         )
     return results
@@ -706,7 +706,7 @@ def taylor_quantile(
                 alpha,
                 prep.by_cols,
                 as_factor=False,
-                method=EstimationMethod.TAYLOR,
+                method=None,
             )
         )
     return results

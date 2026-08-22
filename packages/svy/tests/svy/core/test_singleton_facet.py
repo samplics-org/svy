@@ -381,9 +381,7 @@ class TestStrataProfile:
     def test_strata_profile_weighted_column_names(self, sample_with_weight):
         # Regression: .alias() used to bind to the denominator only, leaving
         # the weighted mean column named after the variable itself.
-        profile = sample_with_weight.singleton.strata_profile(
-            variables=["income"], weighted=True
-        )
+        profile = sample_with_weight.singleton.strata_profile(variables=["income"], weighted=True)
         assert "mean_income" in profile.columns
         assert "income" not in profile.columns
 

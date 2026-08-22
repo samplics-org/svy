@@ -8,7 +8,7 @@
 
 use super::hadamard_tables::get_hardcoded_hadamard;
 use crate::rng::Rng;
-use ndarray::{Array1, Array2, ArrayView1};
+use ndarray::{Array1, Array2, ArrayView1, ShapeBuilder};
 use rayon::prelude::*;
 use std::collections::HashMap;
 
@@ -639,6 +639,90 @@ pub fn create_bootstrap_weights(
     for (r, col) in rep_weights.into_iter().enumerate() {
         result.column_mut(r).assign(&col);
     }
+    Ok((result, (n_reps - 1) as f64))
+}
+
+// ============================================================================
+// Poisson bootstrap (Beaumont & Patak 2012)
+// ============================================================================
+
+/// Poisson bootstrap replicate weights for files with no design information.
+///
+/// A special case of the generalized bootstrap: adjustment factors are drawn
+/// independently per unit with mean 1 and variance `(w - 1) / w`, the design
+/// variance of a Poisson sample in which unit `k` has inclusion probability
+/// `1 / w_k`.  Because the draws are independent across units, the resulting
+/// weights encode no stratum or PSU structure, which is why producers can
+/// release them on public use files where Rao-Wu weights would be disclosive.
+///
+/// Equations (1) and (2) of the method, and nothing else:
+///
+/// ```text
+/// bsw_kb = w_k + f_kb * w_k * sqrt((w_k - 1) / w_k),   f_kb = +/-1 w.p. 1/2
+/// ```
+///
+/// Calibrating the replicates afterwards is a separate, optional step -- the
+/// source guide introduces it as "a calibrated version" that "can" bring the
+/// variance closer to a master-file estimate -- and is not performed here.  It
+/// is ordinary post-stratification and belongs with the other weighting
+/// adjustments, where it applies to any replicate method rather than only this
+/// one.
+pub fn create_poisson_bootstrap_weights(
+    wgt: ArrayView1<f64>,
+    n_reps: usize,
+    seed: u64,
+) -> Result<(Array2<f64>, f64)> {
+    let n_obs = wgt.len();
+    if n_reps < 1 {
+        return Err(ReplicationError::InvalidInput(
+            "Poisson bootstrap requires n_reps >= 1".into(),
+        ));
+    }
+    if n_obs == 0 {
+        return Err(ReplicationError::InvalidInput(
+            "Poisson bootstrap requires at least one observation".into(),
+        ));
+    }
+
+    // sqrt((w - 1) / w) is not real below 1, and a NaN here would propagate
+    // silently into every downstream estimate.  `!(w >= 1.0)` also rejects NaN.
+    if let Some(bad) = wgt.iter().position(|&w| !(w >= 1.0)) {
+        return Err(ReplicationError::InvalidInput(format!(
+            "Poisson bootstrap requires weights >= 1 (the adjustment factor is \
+             sqrt((w - 1) / w)); observation {} has weight {}",
+            bad, wgt[bad]
+        )));
+    }
+
+    // adj_k = w_k * sqrt((w_k - 1) / w_k), so bsw = w +/- adj is strictly
+    // positive: sqrt((w - 1) / w) < 1 for every finite w >= 1.
+    let adj: Vec<f64> = wgt.iter().map(|&w| w * ((w - 1.0) / w).sqrt()).collect();
+
+    // One flat buffer, filled column-wise, then handed to a Fortran-ordered
+    // Array2.  Building `Vec<Array1>` and copying into an Array2 (as the
+    // Rao-Wu path does) would hold two full matrices at once.
+    let mut buf = vec![0.0f64; n_obs * n_reps];
+    buf.par_chunks_mut(n_obs).enumerate().for_each(|(r, col)| {
+        let mut rng = Rng::new(seed.wrapping_add(r as u64));
+
+        // One u64 supplies 64 sign bits; drawing a full word per unit would
+        // cost 64x the RNG calls for the same one bit of entropy each.
+        let mut bits = 0u64;
+        let mut n_bits = 0u32;
+        for i in 0..n_obs {
+            if n_bits == 0 {
+                bits = rng.next_u64();
+                n_bits = 64;
+            }
+            let sign = if bits & 1 == 1 { 1.0 } else { -1.0 };
+            bits >>= 1;
+            n_bits -= 1;
+            col[i] = wgt[i] + sign * adj[i];
+        }
+    });
+
+    let result = Array2::from_shape_vec((n_obs, n_reps).f(), buf)
+        .map_err(|e| ReplicationError::InvalidInput(e.to_string()))?;
     Ok((result, (n_reps - 1) as f64))
 }
 

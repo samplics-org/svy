@@ -4,7 +4,6 @@ import pytest
 
 from numpy.testing import assert_allclose
 
-from svy import EstimationMethod
 from svy.core.sample import Design, Sample
 
 
@@ -13,7 +12,6 @@ from svy.core.sample import Design, Sample
 # ---------------------------------------------------------------------------
 
 RK_WGT = "rk_wgt"
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -139,9 +137,7 @@ def test_rake_replicate_weights_auto_prefix(sample_data_for_raking, mock_design)
         pl.Series("rw2", [1.0] * sample_data_for_raking.height),
     )
     sample = Sample(data=df, design=mock_design)
-    sample._design = sample.design.update_rep_weights(
-        method=EstimationMethod.BOOTSTRAP, prefix="rw", n_reps=2
-    )
+    sample._design = sample.design.update_rep_weights(method="Bootstrap", prefix="rw", n_reps=2)
     controls = {
         "age_group": {"18-34": 35.0, "35-54": 30.0, "55+": 15.0},
         "region": {"North": 50.0, "South": 30.0},
@@ -161,9 +157,7 @@ def test_rake_replicate_weights_custom_wgt_name(sample_data_for_raking, mock_des
         pl.Series("rw2", [1.0] * sample_data_for_raking.height),
     )
     sample = Sample(data=df, design=mock_design)
-    sample._design = sample.design.update_rep_weights(
-        method=EstimationMethod.BOOTSTRAP, prefix="rw", n_reps=2
-    )
+    sample._design = sample.design.update_rep_weights(method="Bootstrap", prefix="rw", n_reps=2)
     controls = {
         "age_group": {"18-34": 35.0, "35-54": 30.0, "55+": 15.0},
         "region": {"North": 50.0, "South": 30.0},

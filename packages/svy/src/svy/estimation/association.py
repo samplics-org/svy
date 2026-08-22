@@ -22,11 +22,12 @@ import numpy as np
 import polars as pl
 import svy_rs as rs
 
-from svy.core.enumerations import EstimationMethod, PopParam
+from svy.core.enumerations import PopParam
+from svy.core.repwgts import RepWgts
 from svy.errors import DimensionError, MethodError
 
 from .estimate import Estimate, ParamEst
-from .replication import _get_rep_params, get_rep_method_str
+from .replication import _get_rep_params
 
 
 if TYPE_CHECKING:
@@ -308,8 +309,8 @@ def taylor_assoc(
         alpha,
         prep.by_cols,
         as_factor=False,
-        method=EstimationMethod.TAYLOR,
-            deff_ref=deff_ref,
+        method=None,
+        deff_ref=deff_ref,
     )
 
 
@@ -318,7 +319,7 @@ def replicate_assoc(
     prep: PreparedData,
     pairs: list[tuple[str, str]],
     param: PopParam,
-    method: EstimationMethod,
+    method: RepWgts,
     *,
     fay_coef: float = 0.0,
     variance_center: str = "rep_mean",
@@ -326,7 +327,7 @@ def replicate_assoc(
     ci_method: str = "fisher",
 ) -> Estimate:
     """Replicate-weight correlation or covariance over ``pairs``."""
-    rep_weight_cols, df_val, final_fay, rscales = _get_rep_params(est, fay_coef)
+    rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
     data = est._ensure_float64(prep.df, [*rep_weight_cols, *sorted({c for p in pairs for c in p})])
     result_df = rs.replicate_assoc(
         data,
@@ -335,9 +336,7 @@ def replicate_assoc(
         _kind_arg(param),
         weight_col=prep.weight_col,
         rep_weight_cols=rep_weight_cols,
-        method=get_rep_method_str(method),
-        fay_coef=final_fay,
-        rscales=rscales,
+        rep_coefs=rep_coefs,
         center=variance_center,
         degrees_of_freedom=df_val,
         by_col=prep.by_col,

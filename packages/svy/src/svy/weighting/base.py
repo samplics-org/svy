@@ -106,6 +106,7 @@ class Weighting:
         self,
         n_reps: int = 500,
         *,
+        kind: Literal["rao-wu", "poisson"] = "rao-wu",
         rep_prefix: str | None = None,
         drop_nulls: bool = False,
         rstate: RandomState = None,
@@ -113,6 +114,7 @@ class Weighting:
         return _create_bs_wgts(
             self._sample,
             n_reps,
+            kind=kind,
             rep_prefix=rep_prefix,
             drop_nulls=drop_nulls,
             rstate=rstate,

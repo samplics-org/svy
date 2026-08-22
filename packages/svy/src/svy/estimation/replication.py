@@ -12,11 +12,13 @@ import re
 
 from typing import TYPE_CHECKING, Sequence, cast
 
+import msgspec
 import numpy as np
 import polars as pl
 import svy_rs as rs
 
-from svy.core.enumerations import EstimationMethod, PopParam, QuantileMethod
+from svy.core.enumerations import PopParam, QuantileMethod
+from svy.core.repwgts import BrrWgts, RepWgts, _RepWgtsBase
 from svy.errors import DimensionError
 from svy.estimation.estimate import Estimate
 
@@ -86,16 +88,6 @@ def get_rep_weight_cols(est: Estimation) -> list[str]:
     return cols
 
 
-def get_rep_method_str(method: EstimationMethod) -> str:
-    method_map = {
-        EstimationMethod.BRR: "BRR",
-        EstimationMethod.BOOTSTRAP: "Bootstrap",
-        EstimationMethod.JACKKNIFE: "Jackknife",
-        EstimationMethod.SDR: "SDR",
-    }
-    return method_map.get(method, "jackknife")
-
-
 def _get_rep_params(est: Estimation, fay_coef: float = 0.0):
     design = est._sample._design
     rw = design.rep_wgts
@@ -106,9 +98,6 @@ def _get_rep_params(est: Estimation, fay_coef: float = 0.0):
         raise ValueError("No replicate weight columns found.")
     n_reps = len(rep_weight_cols)
     df_val = int(rw.df) if rw.df and rw.df > 0 else max(1, n_reps - 1)
-    final_fay = float(fay_coef) if fay_coef != 0.0 else float(rw.fay_coef)
-    # Per-replicate variance coefficients (e.g. stratified-JKn rscales).
-    # None -> the kernel's per-method global default.
     rscales = list(rw.rscales) if rw.rscales is not None else None
     if rscales is not None and len(rscales) != n_reps:
         raise DimensionError(
@@ -121,7 +110,18 @@ def _get_rep_params(est: Estimation, fay_coef: float = 0.0):
             expected=n_reps,
             got=len(rscales),
         )
-    return rep_weight_cols, df_val, final_fay, rscales
+    # Per-replicate variance coefficients, computed by the variant rather than
+    # re-derived from a method label on the far side of the FFI boundary. The
+    # resolved column count wins over the recorded n_reps, and an
+    # estimation-time fay_coef overrides the one stored on the design.
+    changes: dict[str, object] = {}
+    if rw.n_reps != n_reps:
+        changes["n_reps"] = n_reps
+    if fay_coef != 0.0 and isinstance(rw, BrrWgts):
+        changes["fay_coef"] = float(fay_coef)
+    effective = msgspec.structs.replace(rw, **changes) if changes else rw
+
+    return rep_weight_cols, df_val, effective.coefficients()
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +132,7 @@ def _get_rep_params(est: Estimation, fay_coef: float = 0.0):
 def replicate_estimate(
     est: Estimation,
     prep: PreparedData,
-    method: EstimationMethod,
+    method: RepWgts,
     param: PopParam,
     y: str,
     *,
@@ -143,13 +143,14 @@ def replicate_estimate(
     alpha: float = 0.05,
     ci_method: str = "logit",
 ) -> Estimate:
-    if method not in (
-        EstimationMethod.BRR,
-        EstimationMethod.BOOTSTRAP,
-        EstimationMethod.JACKKNIFE,
-        EstimationMethod.SDR,
-    ):
-        raise ValueError(f"Method {method} is not a valid replication method.")
+    # The variant *is* the method: anything that is not one has no replicate
+    # weights and cannot be estimated by replication.
+    if not isinstance(method, _RepWgtsBase):
+        raise ValueError(
+            f"replicate_estimate requires replicate weights, got {method!r}. "
+            f"Create them with sample.weighting.create_*_wgts, or use "
+            f"method='taylor'."
+        )
     if param == PopParam.MEAN:
         return replicate_mean(
             est,
@@ -208,21 +209,19 @@ def replicate_mean(
     prep: PreparedData,
     y: str,
     *,
-    method: EstimationMethod,
+    method: RepWgts,
     fay_coef: float = 0.0,
     variance_center: str = "rep_mean",
     alpha: float = 0.05,
 ) -> Estimate:
-    rep_weight_cols, df_val, final_fay, rscales = _get_rep_params(est, fay_coef)
+    rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
     data = est._ensure_float64(prep.df, rep_weight_cols)
     result_df = rs.replicate_mean(
         data,
         value_col=y,
         weight_col=prep.weight_col,
         rep_weight_cols=rep_weight_cols,
-        method=get_rep_method_str(method),
-        fay_coef=final_fay,
-        rscales=rscales,
+        rep_coefs=rep_coefs,
         center=variance_center,
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
@@ -247,21 +246,19 @@ def replicate_total(
     prep: PreparedData,
     y: str,
     *,
-    method: EstimationMethod,
+    method: RepWgts,
     fay_coef: float = 0.0,
     variance_center: str = "rep_mean",
     alpha: float = 0.05,
 ) -> Estimate:
-    rep_weight_cols, df_val, final_fay, rscales = _get_rep_params(est, fay_coef)
+    rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
     data = est._ensure_float64(prep.df, rep_weight_cols)
     result_df = rs.replicate_total(
         data,
         value_col=y,
         weight_col=prep.weight_col,
         rep_weight_cols=rep_weight_cols,
-        method=get_rep_method_str(method),
-        fay_coef=final_fay,
-        rscales=rscales,
+        rep_coefs=rep_coefs,
         center=variance_center,
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
@@ -287,12 +284,12 @@ def replicate_ratio(
     y: str,
     x: str,
     *,
-    method: EstimationMethod,
+    method: RepWgts,
     fay_coef: float = 0.0,
     variance_center: str = "rep_mean",
     alpha: float = 0.05,
 ) -> Estimate:
-    rep_weight_cols, df_val, final_fay, rscales = _get_rep_params(est, fay_coef)
+    rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
     data = est._ensure_float64(prep.df, rep_weight_cols)
     result_df = rs.replicate_ratio(
         data,
@@ -300,9 +297,7 @@ def replicate_ratio(
         denominator_col=x,
         weight_col=prep.weight_col,
         rep_weight_cols=rep_weight_cols,
-        method=get_rep_method_str(method),
-        fay_coef=final_fay,
-        rscales=rscales,
+        rep_coefs=rep_coefs,
         center=variance_center,
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
@@ -334,13 +329,13 @@ def replicate_prop(
     prep: PreparedData,
     y: str,
     *,
-    method: EstimationMethod,
+    method: RepWgts,
     fay_coef: float = 0.0,
     variance_center: str = "rep_mean",
     alpha: float = 0.05,
     ci_method: str = "logit",
 ) -> Estimate:
-    rep_weight_cols, df_val, final_fay, rscales = _get_rep_params(est, fay_coef)
+    rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
     data = est._ensure_float64(prep.df, rep_weight_cols)
     data = est._coerce_y_for_prop(data, y)
     result_df = rs.replicate_prop(
@@ -348,9 +343,7 @@ def replicate_prop(
         value_col=y,
         weight_col=prep.weight_col,
         rep_weight_cols=rep_weight_cols,
-        method=get_rep_method_str(method),
-        fay_coef=final_fay,
-        rscales=rscales,
+        rep_coefs=rep_coefs,
         center=variance_center,
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
@@ -382,13 +375,13 @@ def replicate_median(
     prep: PreparedData,
     y: str,
     *,
-    method: EstimationMethod,
+    method: RepWgts,
     fay_coef: float = 0.0,
     q_method: QuantileMethod = QuantileMethod.HIGHER,
     variance_center: str = "rep_mean",
     alpha: float = 0.05,
 ) -> Estimate:
-    rep_weight_cols, df_val, final_fay, rscales = _get_rep_params(est, fay_coef)
+    rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
     data = est._ensure_float64(prep.df, rep_weight_cols)
     q_method_str = q_method.value if hasattr(q_method, "value") else str(q_method).lower()
     result_df = rs.replicate_median(
@@ -396,9 +389,7 @@ def replicate_median(
         value_col=y,
         weight_col=prep.weight_col,
         rep_weight_cols=rep_weight_cols,
-        method=get_rep_method_str(method),
-        fay_coef=final_fay,
-        rscales=rscales,
+        rep_coefs=rep_coefs,
         center=variance_center,
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
@@ -422,7 +413,7 @@ def replicate_quantile(
     y: str,
     probs: Sequence[float],
     *,
-    method: EstimationMethod,
+    method: RepWgts,
     fay_coef: float = 0.0,
     q_method: QuantileMethod = QuantileMethod.HIGHER,
     variance_center: str = "rep_mean",
@@ -433,7 +424,7 @@ def replicate_quantile(
     Every probability is estimated from the same pass over the replicate
     weights; the frame is then sliced by probability.
     """
-    rep_weight_cols, df_val, final_fay, rscales = _get_rep_params(est, fay_coef)
+    rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
     data = est._ensure_float64(prep.df, rep_weight_cols)
     q_method_str = q_method.value if hasattr(q_method, "value") else str(q_method).lower()
     result_df = rs.replicate_quantile(
@@ -441,10 +432,8 @@ def replicate_quantile(
         value_col=y,
         weight_col=prep.weight_col,
         rep_weight_cols=rep_weight_cols,
-        method=get_rep_method_str(method),
+        rep_coefs=rep_coefs,
         probs=list(probs),
-        fay_coef=final_fay,
-        rscales=rscales,
         center=variance_center,
         degrees_of_freedom=df_val,
         by_col=prep.by_col,

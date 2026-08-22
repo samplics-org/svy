@@ -5,7 +5,7 @@ import pytest
 
 from numpy.testing import assert_allclose
 
-from svy import Design, EstimationMethod, Sample
+from svy import Design, Sample
 
 
 # ---------------------------------------------------------------------------
@@ -14,7 +14,6 @@ from svy import Design, EstimationMethod, Sample
 
 # Default auto-generated weight name for post-stratification
 PS_WGT = "ps_wgt"
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -150,9 +149,7 @@ def test_poststratify_replicate_weights_auto_prefix(sample_data, mock_design):
         pl.Series("rw2", np.ones(sample_data.height)),
     )
     sample = Sample(data=df, design=mock_design)
-    sample._design = sample.design.update_rep_weights(
-        method=EstimationMethod.BRR, prefix="rw", n_reps=2
-    )
+    sample._design = sample.design.update_rep_weights(method="BRR", prefix="rw", n_reps=2)
     out = sample.weighting.poststratify(controls=300, update_design_wgts=True)
     assert f"{PS_WGT}1" in out.data.columns
     assert f"{PS_WGT}2" in out.data.columns
@@ -167,9 +164,7 @@ def test_poststratify_replicate_weights_custom_wgt_name(sample_data, mock_design
         pl.Series("rw2", np.ones(sample_data.height)),
     )
     sample = Sample(data=df, design=mock_design)
-    sample._design = sample.design.update_rep_weights(
-        method=EstimationMethod.BRR, prefix="rw", n_reps=2
-    )
+    sample._design = sample.design.update_rep_weights(method="BRR", prefix="rw", n_reps=2)
     out = sample.weighting.poststratify(controls=300, wgt_name="my_ps")
     assert "my_ps" in out.data.columns
     assert "my_ps1" in out.data.columns
@@ -183,9 +178,7 @@ def test_poststratify_replicate_weights_ignored_when_flag_set(sample_data, mock_
         pl.Series("rw2", np.ones(sample_data.height)),
     )
     sample = Sample(data=df, design=mock_design)
-    sample._design = sample.design.update_rep_weights(
-        method=EstimationMethod.BRR, prefix="rw", n_reps=2
-    )
+    sample._design = sample.design.update_rep_weights(method="BRR", prefix="rw", n_reps=2)
     out = sample.weighting.poststratify(controls=300, ignore_reps=True)
     assert f"{PS_WGT}1" not in out.data.columns
     assert out.design.rep_wgts.columns == ["rw1", "rw2"]

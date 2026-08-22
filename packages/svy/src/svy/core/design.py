@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import re
 
 from typing import (
     Any,
@@ -16,9 +15,13 @@ from typing import (
     overload,
 )
 
-import msgspec
-
-from svy.core.enumerations import EstimationMethod as _EstimationMethod
+from svy.core.repwgts import (
+    BrrWgts,
+    RepWeights,
+    RepWgts,
+    _RepWgtsBase,
+    resolve_rep_variant,
+)
 from svy.ui.printing import make_panel, render_rich_to_str, resolve_width
 
 
@@ -90,235 +93,6 @@ class PopSize(NamedTuple):
 # =============================================================================
 
 
-class RepWeights(msgspec.Struct, frozen=True):
-    """
-    Strict definition of Replicate Weights.
-    This object should ONLY be instantiated if a valid replicate design exists.
-    """
-
-    # Required Fields (No Defaults)
-    method: _EstimationMethod | str
-    prefix: str
-    n_reps: int
-
-    # Optional / defaulted fields
-    fay_coef: float = 0.0
-    # Design df for the t-quantile in CIs. None = n_reps - 1, a property of the
-    # weight set and therefore the same for every domain: a file shipping only
-    # replicate weights carries no strata/PSU from which a design df could be
-    # recovered. R instead uses qr(analysis weights)$rank - 1, recomputed on the
-    # subset rows, so it is smaller whenever the matrix is rank-deficient (any
-    # stratified JKn) and smaller again on a domain. Pass that value here to
-    # reproduce R. Estimates and SEs are unaffected either way.
-    df: int | None = None  # None = n_reps - 1, Int = user override
-    padding: int | None = None  # None = auto-detect, 0 = no padding, >0 = zero-pad width
-    # Per-replicate variance coefficients (R's scale*rscales combined), e.g.
-    # (n_h-1)/n_h per deleted-PSU replicate for stratified JKn. None = the
-    # method's global default — correct for BRR/bootstrap/SDR/JK1, but for
-    # user-supplied stratified-JKn weights pass the file's documented
-    # rscales, or the variance uses (R-1)/R uniformly. svy-generated
-    # jackknife weights (create_jk_wgts) fill this automatically.
-    rscales: tuple[float, ...] | None = None
-
-    def __post_init__(self):
-        """
-        Enforce strict statistical validity upon initialization.
-        """
-        # 0. Normalize string method to enum (accept user-facing strings).
-        #    Check enum first because EstimationMethod is a str enum.
-        if isinstance(self.method, _EstimationMethod):
-            pass  # already an enum, let step 1 validate it
-        elif isinstance(self.method, str):
-            msgspec.structs.force_setattr(self, "method", _normalize_rep_method(self.method))
-        else:
-            raise TypeError(
-                f"'method' must be a string or EstimationMethod, got {type(self.method).__name__}."
-            )
-
-        # 1. Method Validation: Taylor is not a replicate method.
-        valid_methods = (
-            _EstimationMethod.BRR,
-            _EstimationMethod.BOOTSTRAP,
-            _EstimationMethod.JACKKNIFE,
-            _EstimationMethod.SDR,
-        )
-        if self.method not in valid_methods:
-            raise ValueError(
-                f"Method '{self.method}' is not a valid replication method "
-                f"(expected one of: {[m.value for m in valid_methods]})."
-            )
-
-        # 2. Prefix Validation: Must be a non-empty string.
-        if not self.prefix or not self.prefix.strip():
-            raise ValueError("RepWeights 'prefix' cannot be empty or whitespace.")
-
-        # 3. Replicate Count Validation: Must be >= 2.
-        if self.n_reps < 2:
-            raise ValueError(f"n_reps must be >= 2. Got {self.n_reps}.")
-
-        # 4. Fay Coefficient Validation: Sanity check (usually [0, 1]).
-        if self.fay_coef < 0:
-            raise ValueError(f"fay_coef cannot be negative. Got {self.fay_coef}.")
-
-        # 5. Degrees of Freedom Validation: Must be positive if manually set.
-        if self.df is not None and self.df <= 0:
-            raise ValueError(f"df must be > 0. Got {self.df}.")
-
-        # 6. Padding Validation: Must be non-negative if set.
-        if self.padding is not None and self.padding < 0:
-            raise ValueError(f"padding must be >= 0. Got {self.padding}.")
-
-    def _detect_padding(self, data_columns: Sequence[str]) -> int:
-        """
-        Detect zero-padding width from existing column names in data.
-
-        Matches are case-insensitive on the prefix.
-        """
-        pattern = re.compile(rf"^{re.escape(self.prefix)}(\d+)$", re.IGNORECASE)
-        max_padding = 0
-        for col in data_columns:
-            match = pattern.match(col)
-            if match:
-                num_str = match.group(1)
-                if len(num_str) > 1 and num_str[0] == "0":
-                    max_padding = max(max_padding, len(num_str))
-        return max_padding
-
-    def _generate_columns(self, padding: int) -> list[str]:
-        """Generate canonical column names with specified padding (exact case)."""
-        if padding > 0:
-            return [f"{self.prefix}{i:0{padding}d}" for i in range(1, self.n_reps + 1)]
-        else:
-            return [f"{self.prefix}{i}" for i in range(1, self.n_reps + 1)]
-
-    def columns_from_data(self, data_columns: Sequence[str]) -> list[str]:
-        """
-        Generate column names, auto-detecting padding from actual data columns.
-
-        Prefix matching is case-insensitive for padding detection. The returned
-        names use the casing of the *first* matching column in ``data_columns``
-        if any match the prefix; otherwise the casing specified at construction.
-
-        Does NOT validate that all n_reps columns exist in data — this is a
-        pure name generator. Validation happens downstream in
-        ``Sample._validate_design``.
-        """
-        # Use explicit padding if provided
-        if self.padding is not None:
-            padding = self.padding
-        else:
-            padding = self._detect_padding(data_columns)
-
-        # Determine the canonical casing of the prefix from actual data, if
-        # any column starts with it (case-insensitive). This lets
-        # Sample._validate_design find the columns when the data is in a
-        # different case than the user-specified prefix.
-        pattern = re.compile(rf"^{re.escape(self.prefix)}\d+$", re.IGNORECASE)
-        resolved_prefix = self.prefix
-        for col in data_columns:
-            if pattern.match(col):
-                resolved_prefix = col[: len(self.prefix)]
-                break
-
-        if padding > 0:
-            return [f"{resolved_prefix}{i:0{padding}d}" for i in range(1, self.n_reps + 1)]
-        else:
-            return [f"{resolved_prefix}{i}" for i in range(1, self.n_reps + 1)]
-
-    @property
-    def columns(self) -> list[str]:
-        """
-        Dynamically generate the list of expected column names.
-
-        WARNING: This uses explicit padding if set, otherwise assumes no padding.
-        For validation against actual data, use columns_from_data() instead.
-
-        Returns
-        -------
-        list[str]
-            Column names with padding specified in initialization, or no padding
-        """
-        padding = self.padding if self.padding is not None else 0
-        return self._generate_columns(padding)
-
-    def __repr__(self) -> str:
-        parts = [f"method={self.method}", f"prefix='{self.prefix}'", f"n_reps={self.n_reps}"]
-
-        # Only show optional params if they deviate from defaults/standard
-        if self.df is not None:
-            parts.append(f"df={self.df}")
-
-        if self.fay_coef != 0.0 or self.method == _EstimationMethod.BRR:
-            parts.append(f"fay={self.fay_coef}")
-
-        if self.padding is not None:
-            parts.append(f"padding={self.padding}")
-
-        return f"RepWeights({', '.join(parts)})"
-
-    def __plain_str__(self) -> str:
-        """Multi-line plain-text summary for embedding in Design output."""
-        try:
-            method_name = self.method.value
-        except AttributeError:
-            method_name = str(self.method)
-        # First line is the method name (used as the header by consumers)
-        lines = [
-            method_name,
-            f"Method   : {method_name}",
-            f"Prefix   : {self.prefix}",
-            f"N reps   : {self.n_reps}",
-            f"DF       : {self.df if self.df is not None else 'auto'}",
-        ]
-        try:
-            is_brr = self.method == _EstimationMethod.BRR
-        except Exception:
-            is_brr = False
-        if self.fay_coef != 0.0 or is_brr:
-            lines.append(f"Fay coef : {self.fay_coef}")
-        return "\n".join(lines)
-
-
-# =============================================================================
-# Normalization helper + public factory for RepWeights
-# =============================================================================
-
-
-def _normalize_rep_method(
-    method: Literal["brr", "bootstrap", "jackknife", "sdr"],
-) -> _EstimationMethod:
-    """
-    Normalize user-facing method string to internal EstimationMethod enum.
-
-    Accepts (case-insensitive):
-      - "brr"        → EstimationMethod.BRR
-      - "bootstrap"  → EstimationMethod.BOOTSTRAP
-      - "jackknife", "jk" → EstimationMethod.JACKKNIFE
-      - "sdr"        → EstimationMethod.SDR
-    """
-    _MAP = {
-        "brr": _EstimationMethod.BRR,
-        "bootstrap": _EstimationMethod.BOOTSTRAP,
-        "bs": _EstimationMethod.BOOTSTRAP,
-        "jackknife": _EstimationMethod.JACKKNIFE,
-        "jk": _EstimationMethod.JACKKNIFE,
-        "jkn": _EstimationMethod.JACKKNIFE,
-        "sdr": _EstimationMethod.SDR,
-    }
-    if not isinstance(method, str):
-        raise TypeError(
-            f"'method' must be a string, got {type(method).__name__}. "
-            f"Use 'brr', 'bootstrap', 'jackknife', or 'sdr'."
-        )
-    result = _MAP.get(method.strip().lower())
-    if result is None:
-        raise ValueError(
-            f"Unknown replication method {method!r}. "
-            f"Use 'brr', 'bootstrap', 'jackknife', or 'sdr'."
-        )
-    return result
-
-
 def make_rep_weights(
     method: Literal["brr", "bootstrap", "jackknife", "sdr"],
     prefix: str,
@@ -327,7 +101,7 @@ def make_rep_weights(
     fay_coef: float = 0.0,
     df: int | None = None,
     padding: int | None = None,
-) -> RepWeights:
+) -> RepWgts:
     """
     Create a RepWeights object using a plain string method name.
 
@@ -357,7 +131,7 @@ def make_rep_weights(
     >>> rw = make_rep_weights("brr", prefix="brr_", n_reps=32, fay_coef=0.5)
     """
     return RepWeights(
-        method=_normalize_rep_method(method),
+        method=method,
         prefix=prefix,
         n_reps=n_reps,
         fay_coef=fay_coef,
@@ -376,9 +150,7 @@ T = TypeVar("T")
 @overload
 def _pick(current: str, new: str | _MissingType) -> str: ...
 @overload
-def _pick(
-    current: RepWeights | None, new: RepWeights | None | _MissingType
-) -> RepWeights | None: ...
+def _pick(current: RepWgts | None, new: RepWgts | None | _MissingType) -> RepWgts | None: ...
 @overload
 def _pick(current: bool, new: bool | _MissingType) -> bool: ...
 @overload
@@ -473,7 +245,7 @@ class Design:
     ssu: str | tuple[str, ...] | None
     pop_size: str | PopSize | None
     wr: bool
-    rep_wgts: RepWeights | None
+    rep_wgts: RepWgts | None
     _frozen: bool
 
     PRINT_WIDTH: int | None = None
@@ -492,7 +264,7 @@ class Design:
         ssu: str | Sequence[str] | None = None,
         pop_size: str | PopSize | None = None,
         wr: bool = False,
-        rep_wgts: RepWeights | None = None,
+        rep_wgts: RepWgts | None = None,
     ) -> None:
         object.__setattr__(self, "_frozen", False)
 
@@ -523,8 +295,9 @@ class Design:
 
         if not isinstance(self.wr, bool):
             raise TypeError(f"'wr' must be bool, got {type(self.wr).__name__}")
-        if rep_wgts is not None and not isinstance(rep_wgts, RepWeights):
-            raise TypeError("'rep_wgts' must be RepWeights | None")
+        # Every variant inherits the base, so this covers the whole union.
+        if rep_wgts is not None and not isinstance(rep_wgts, _RepWgtsBase):
+            raise TypeError("'rep_wgts' must be RepWgts | None")
 
         object.__setattr__(self, "_frozen", True)
 
@@ -545,10 +318,14 @@ class Design:
     # Properties
     # -----------------------------
     @property
-    def method(self) -> _EstimationMethod:
-        """Convenience accessor for the estimation method."""
+    def method(self) -> str:
+        """Convenience accessor for the estimation method, as a display label.
+
+        ``"Taylor"`` when the design carries no replicate weights, otherwise
+        the variant's own label. For display and reporting only.
+        """
         if self.rep_wgts is None:
-            return _EstimationMethod.TAYLOR
+            return "Taylor"
         return self.rep_wgts.method
 
     # -----------------------------
@@ -567,7 +344,7 @@ class Design:
         ssu: str | Sequence[str] | None | _MissingType = _MISSING,
         pop_size: str | PopSize | None | _MissingType = _MISSING,
         wr: bool | _MissingType = _MISSING,
-        rep_wgts: RepWeights | _MissingType | None = _MISSING,
+        rep_wgts: RepWgts | _MissingType | None = _MISSING,
     ) -> Self:
         return self._merge(
             only_if_none=False,
@@ -597,13 +374,13 @@ class Design:
         ssu: str | Sequence[str] | None | _MissingType = _MISSING,
         pop_size: str | PopSize | None | _MissingType = _MISSING,
         wr: bool | _MissingType = _MISSING,
-        rep_wgts: RepWeights | Sequence[str] | _MissingType | None = _MISSING,
+        rep_wgts: RepWgts | Sequence[str] | _MissingType | None = _MISSING,
     ) -> Self:
         # Sequence[str] is handled inside _merge (it becomes _MISSING); cast for ty.
-        rep_wgts_arg: RepWeights | _MissingType | None = (
+        rep_wgts_arg: RepWgts | _MissingType | None = (
             _MISSING
             if isinstance(rep_wgts, (list, tuple)) and not isinstance(rep_wgts, str)
-            else cast(RepWeights | _MissingType | None, rep_wgts)
+            else cast(RepWgts | _MissingType | None, rep_wgts)
         )
         return self._merge(
             only_if_none=True,
@@ -630,6 +407,8 @@ class Design:
         df: int | None | _MissingType = _MISSING,
         padding: int | None | _MissingType = _MISSING,
         rscales: tuple[float, ...] | None | _MissingType = _MISSING,
+        kind: str | None | _MissingType = _MISSING,
+        paired: bool | _MissingType = _MISSING,
     ) -> Self:
         """
         Return a new Design with selected RepWeights fields updated.
@@ -645,6 +424,8 @@ class Design:
             and isinstance(df, _MissingType)
             and isinstance(padding, _MissingType)
             and isinstance(rscales, _MissingType)
+            and isinstance(kind, _MissingType)
+            and isinstance(paired, _MissingType)
         ):
             return self
 
@@ -684,20 +465,27 @@ class Design:
         if isinstance(rscales, _MissingType):
             rscales = cur.rscales if cur else None
 
-        # 5. Create new RepWeights object
-        _resolved_method = (
-            _normalize_rep_method(resolved_method)
-            if isinstance(resolved_method, str)
-            else resolved_method
-        )
+        # 5. Create the new variant.
+        _variant = resolve_rep_variant(resolved_method)
+
+        # Variant-specific parameters carry over only within the same method:
+        # a bootstrap kind means nothing on a jackknife design.
+        _same = cur is not None and type(cur) is _variant
+        if isinstance(kind, _MissingType):
+            kind = getattr(cur, "kind", None) if _same else None
+        if isinstance(paired, _MissingType):
+            paired = getattr(cur, "paired", False) if _same else False
+
         updated_rep_wgts = RepWeights(
-            method=_resolved_method,
+            method=resolved_method,
             prefix=resolved_prefix,
             n_reps=resolved_n_reps,
-            fay_coef=fay_coef,
+            fay_coef=fay_coef if _variant is BrrWgts else 0.0,
             df=df,
             padding=padding,
             rscales=rscales,
+            kind=kind,
+            paired=paired,
         )
 
         return self.update(rep_wgts=updated_rep_wgts)
@@ -719,17 +507,17 @@ class Design:
         ssu: str | Sequence[str] | None | _MissingType = _MISSING,
         pop_size: str | PopSize | None | _MissingType = _MISSING,
         wr: bool | _MissingType = _MISSING,
-        rep_wgts: RepWeights | _MissingType | None = _MISSING,
+        rep_wgts: RepWgts | _MissingType | None = _MISSING,
     ) -> Self:
         """
         Internal: merge fields either by overwriting or only filling when current is None.
         """
         # Normalize rep_wgts arg
-        rep_arg: RepWeights | _MissingType | None
+        rep_arg: RepWgts | _MissingType | None
         if isinstance(rep_wgts, Sequence) and not isinstance(rep_wgts, (str, bytes)):
             rep_arg = _MISSING
         else:
-            rep_arg = cast(RepWeights | _MissingType | None, rep_wgts)
+            rep_arg = cast(RepWgts | _MissingType | None, rep_wgts)
 
         pick = _pick_if_none if only_if_none else _pick
 

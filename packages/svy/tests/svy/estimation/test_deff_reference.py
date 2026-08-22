@@ -214,9 +214,7 @@ def large_fraction_sample() -> Sample:
     return Sample(df, Design(row_index="id", stratum="st", wgt="w"))
 
 
-@pytest.mark.parametrize(
-    "ref,expected", [("wor", R_BIGF_WOR), ("wr", R_BIGF_WR)]
-)
+@pytest.mark.parametrize("ref,expected", [("wor", R_BIGF_WOR), ("wr", R_BIGF_WR)])
 def test_large_sampling_fraction_matches_r(large_fraction_sample, ref, expected):
     row = large_fraction_sample.estimation.mean("y", deff=ref).to_dicts()[0]
     assert row["se"] == pytest.approx(R_BIGF_SE, rel=1e-9)

@@ -5,7 +5,7 @@ Regression tests for RepWeights construction with string method names.
 Background
 ----------
 Prior to svy 0.17.2, ``RepWeights.__post_init__`` used ``object.__setattr__``
-to coerce a string ``method`` argument to the ``EstimationMethod`` enum.
+to coerce a string ``method`` argument to the right RepWeights variant.
 On Python 3.12 with msgspec >= 0.21, msgspec.Struct(frozen=True) intercepts
 even ``object.__setattr__`` and raises::
 
@@ -31,7 +31,6 @@ import pytest
 import svy
 
 from svy.core.design import RepWeights, make_rep_weights
-from svy.core.enumerations import EstimationMethod
 
 
 # -----------------------------------------------------------------------------
@@ -42,29 +41,32 @@ from svy.core.enumerations import EstimationMethod
 @pytest.mark.parametrize(
     "method_str, expected",
     [
-        ("bootstrap", EstimationMethod.BOOTSTRAP),
-        ("BOOTSTRAP", EstimationMethod.BOOTSTRAP),
-        ("Bootstrap", EstimationMethod.BOOTSTRAP),
-        ("  bootstrap  ", EstimationMethod.BOOTSTRAP),
-        ("bs", EstimationMethod.BOOTSTRAP),
-        ("brr", EstimationMethod.BRR),
-        ("BRR", EstimationMethod.BRR),
-        ("jackknife", EstimationMethod.JACKKNIFE),
-        ("jk", EstimationMethod.JACKKNIFE),
-        ("jkn", EstimationMethod.JACKKNIFE),
-        ("sdr", EstimationMethod.SDR),
+        ("bootstrap", "Bootstrap"),
+        ("BOOTSTRAP", "Bootstrap"),
+        ("Bootstrap", "Bootstrap"),
+        ("  bootstrap  ", "Bootstrap"),
+        ("bs", "Bootstrap"),
+        ("brr", "BRR"),
+        ("BRR", "BRR"),
+        ("jackknife", "Jackknife"),
+        ("jk", "Jackknife"),
+        ("jkn", "Jackknife"),
+        ("sdr", "SDR"),
     ],
 )
 def test_string_method_normalized_in_constructor(method_str, expected):
-    """RepWeights(method='<string>') must succeed and normalize to enum."""
+    """RepWeights(method='<string>') must succeed and normalize.
+
+    Compared by equality, not identity: the label is a plain string now, and
+    """
     rw = RepWeights(method=method_str, prefix="rw", n_reps=10)
-    assert rw.method is expected
+    assert rw.method == expected
 
 
 def test_enum_method_accepted_unchanged():
     """Passing the enum directly must also work."""
-    rw = RepWeights(method=EstimationMethod.BOOTSTRAP, prefix="rw", n_reps=10)
-    assert rw.method is EstimationMethod.BOOTSTRAP
+    rw = RepWeights(method="Bootstrap", prefix="rw", n_reps=10)
+    assert rw.method == "Bootstrap"
 
 
 # -----------------------------------------------------------------------------
@@ -75,20 +77,20 @@ def test_enum_method_accepted_unchanged():
 def test_paper_example_bootstrap():
     """Mirrors svy_vs_rsurvey_comparison.qmd verbatim."""
     rw = svy.RepWeights(method="bootstrap", prefix="bsrw", n_reps=1000)
-    assert rw.method is EstimationMethod.BOOTSTRAP
+    assert rw.method == "Bootstrap"
     assert rw.prefix == "bsrw"
     assert rw.n_reps == 1000
 
 
 def test_paper_example_jackknife():
     rw = svy.RepWeights(method="jackknife", prefix="jkw_", n_reps=62)
-    assert rw.method is EstimationMethod.JACKKNIFE
+    assert rw.method == "Jackknife"
     assert rw.n_reps == 62
 
 
 def test_paper_example_brr_with_fay():
     rw = svy.RepWeights(method="brr", prefix="brr_", n_reps=32, fay_coef=0.5)
-    assert rw.method is EstimationMethod.BRR
+    assert rw.method == "BRR"
     assert rw.fay_coef == 0.5
 
 
@@ -110,7 +112,7 @@ def test_non_string_non_enum_method_raises_type_error():
 def test_taylor_method_is_rejected_as_replication_method():
     """Taylor is not a valid replicate method."""
     with pytest.raises(ValueError, match="not a valid replication method"):
-        RepWeights(method=EstimationMethod.TAYLOR, prefix="rw", n_reps=10)
+        RepWeights(method="Taylor", prefix="rw", n_reps=10)
 
 
 def test_empty_prefix_rejected():
@@ -158,7 +160,7 @@ def test_repweights_remains_frozen_after_construction():
 def test_repweights_remains_frozen_for_method():
     rw = RepWeights(method="bootstrap", prefix="rw", n_reps=10)
     with pytest.raises((AttributeError, TypeError)):
-        rw.method = EstimationMethod.JACKKNIFE  # type: ignore[misc]
+        rw.method = "Jackknife"  # type: ignore[misc]
 
 
 # -----------------------------------------------------------------------------
@@ -169,12 +171,12 @@ def test_repweights_remains_frozen_for_method():
 
 def test_make_rep_weights_factory_with_string():
     rw = make_rep_weights("bootstrap", prefix="bsrw", n_reps=1000)
-    assert rw.method is EstimationMethod.BOOTSTRAP
+    assert rw.method == "Bootstrap"
 
 
 def test_make_rep_weights_factory_with_alias():
     rw = make_rep_weights("jk", prefix="jkw_", n_reps=62)
-    assert rw.method is EstimationMethod.JACKKNIFE
+    assert rw.method == "Jackknife"
 
 
 # -----------------------------------------------------------------------------

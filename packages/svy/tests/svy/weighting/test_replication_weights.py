@@ -90,7 +90,7 @@ class TestBRRWeights:
     def test_brr_basic(self, simple_stratified_sample):
         sample = simple_stratified_sample.weighting.create_brr_wgts()
         assert sample.design.rep_wgts is not None
-        assert sample.design.rep_wgts.method.value == "BRR"
+        assert sample.design.rep_wgts.method == "BRR"
         assert sample.design.rep_wgts.n_reps >= 3
         for col in sample.design.rep_wgts.columns:
             assert col in sample.data.columns
@@ -181,7 +181,7 @@ class TestBRRWeights:
 class TestJackknifeWeights:
     def test_jkn_basic(self, simple_stratified_sample):
         sample = simple_stratified_sample.weighting.create_jk_wgts(paired=False)
-        assert sample.design.rep_wgts.method.value == "Jackknife"
+        assert sample.design.rep_wgts.method == "Jackknife"
         assert sample.design.rep_wgts.n_reps == 6
 
     def test_jkn_default_prefix_uses_design_wgt(self, simple_stratified_sample):
@@ -206,7 +206,7 @@ class TestJackknifeWeights:
 
     def test_jk2_basic(self, simple_stratified_sample):
         sample = simple_stratified_sample.weighting.create_jk_wgts(paired=True)
-        assert sample.design.rep_wgts.method.value == "Jackknife"
+        assert sample.design.rep_wgts.method == "Jackknife"
         assert sample.design.rep_wgts.n_reps == 3
 
     def test_jk2_triplet(self, odd_psu_sample):
@@ -247,7 +247,7 @@ class TestJackknifeWeights:
 class TestBootstrapWeights:
     def test_bootstrap_basic(self, simple_stratified_sample):
         sample = simple_stratified_sample.weighting.create_bs_wgts(n_reps=100, rstate=42)
-        assert sample.design.rep_wgts.method.value == "Bootstrap"
+        assert sample.design.rep_wgts.method == "Bootstrap"
         assert sample.design.rep_wgts.n_reps == 100
 
     def test_bootstrap_default_prefix_uses_design_wgt(self, simple_stratified_sample):
@@ -340,7 +340,7 @@ class TestBootstrapAdjustment:
 class TestSDRWeights:
     def test_sdr_basic(self, simple_stratified_sample):
         sample = simple_stratified_sample.weighting.create_sdr_wgts(n_reps=4)
-        assert sample.design.rep_wgts.method.value == "SDR"
+        assert sample.design.rep_wgts.method == "SDR"
         assert sample.design.rep_wgts.n_reps == 4
 
     def test_sdr_default_prefix_uses_design_wgt(self, simple_stratified_sample):
@@ -444,13 +444,13 @@ class TestReplicationIntegration:
         sample = multi_psu_sample.weighting.create_variance_strata(
             method="brr"
         ).weighting.create_brr_wgts()
-        assert sample.design.rep_wgts.method.value == "BRR"
+        assert sample.design.rep_wgts.method == "BRR"
 
     def test_variance_strata_then_jk2(self, multi_psu_sample):
         sample = multi_psu_sample.weighting.create_variance_strata(
             method="jk2"
         ).weighting.create_jk_wgts(paired=True)
-        assert sample.design.rep_wgts.method.value == "Jackknife"
+        assert sample.design.rep_wgts.method == "Jackknife"
 
 
 class TestEdgeCases:
@@ -568,7 +568,7 @@ class TestTupleStrata:
         sample = tuple_stratum_sample.weighting.create_bs_wgts(n_reps=50, rstate=42)
         assert sample.design.rep_wgts is not None
         assert sample.design.rep_wgts.n_reps == 50
-        assert sample.design.rep_wgts.method.value == "Bootstrap"
+        assert sample.design.rep_wgts.method == "Bootstrap"
 
     def test_jkn_with_tuple_strata(self, tuple_stratum_sample):
         sample = tuple_stratum_sample.weighting.create_jk_wgts(paired=False)
@@ -779,3 +779,173 @@ class TestDeterminismStress:
             np.testing.assert_array_equal(
                 baseline_mat, mat, err_msg=f"JK2 drifted on trial {trial}"
             )
+
+
+# ===========================================================================
+# Poisson bootstrap (kind="poisson")
+# ===========================================================================
+#
+# Beaumont & Patak (2012) generalized bootstrap with independent per-unit
+# factors. Reference: Statistics Canada, Labour Force Survey PUMF User Guide
+# (2025), section 6 and appendices A-D.
+
+
+@pytest.fixture
+def pumf_like_sample():
+    """A weight-only file: no stratum, no psu, as a PUMF is published."""
+    rng = np.random.default_rng(20260821)
+    n = 4000
+    data = pl.DataFrame(
+        {
+            "wgt": rng.uniform(50.0, 500.0, n),
+            "prov": rng.integers(0, 4, n),
+            "sex": rng.integers(0, 2, n),
+            "y": rng.normal(100.0, 15.0, n),
+            "flag": rng.random(n) < 0.3,
+        }
+    )
+    return Sample(data=data, design=Design(wgt="wgt"))
+
+
+def _rep_matrix(sample, prefix, n_reps):
+    return np.column_stack([sample._data[f"{prefix}{i + 1}"].to_numpy() for i in range(n_reps)])
+
+
+@pytest.mark.parametrize(
+    "given",
+    ["poisson", "Poisson", "POISSON", "  PoIsSoN  "],
+)
+def test_poisson_kind_is_case_and_whitespace_insensitive(pumf_like_sample, given):
+    s = pumf_like_sample.weighting.create_bs_wgts(n_reps=8, kind=given, rep_prefix="r", rstate=1)
+    assert s._design.rep_wgts.n_reps == 8
+
+
+@pytest.mark.parametrize(
+    "given", ["rao-wu", "RAO-WU", "Rao_Wu", "raowu", "rw", "rao wu", "rao-wu-yue"]
+)
+def test_rao_wu_kind_aliases_normalize(multi_psu_sample, given):
+    s = multi_psu_sample.weighting.create_bs_wgts(n_reps=8, kind=given, rep_prefix="r", rstate=1)
+    assert s._design.rep_wgts.n_reps == 8
+
+
+def test_unknown_kind_raises_and_names_the_variants(pumf_like_sample):
+    with pytest.raises(MethodError) as exc:
+        pumf_like_sample.weighting.create_bs_wgts(n_reps=4, kind="rao–wu")  # en dash
+    rendered = str(exc.value)
+    assert "kind" in rendered
+    # the hint should say what each kind needs, not just list the names
+    assert "rao-wu" in rendered and "poisson" in rendered
+    assert "psu" in rendered
+
+
+def test_non_string_kind_raises_type_error(pumf_like_sample):
+    with pytest.raises(TypeError, match="'kind' must be a string"):
+        pumf_like_sample.weighting.create_bs_wgts(n_reps=4, kind=1)
+
+
+def test_poisson_does_not_require_psu(pumf_like_sample):
+    """The whole point of the method: it works where Rao-Wu cannot."""
+    assert pumf_like_sample._design.psu is None
+    s = pumf_like_sample.weighting.create_bs_wgts(
+        n_reps=16, kind="poisson", rep_prefix="r", rstate=3
+    )
+    assert _rep_matrix(s, "r", 16).shape == (4000, 16)
+
+
+def test_rao_wu_still_requires_psu(pumf_like_sample):
+    with pytest.raises(MethodError, match="psu"):
+        pumf_like_sample.weighting.create_bs_wgts(n_reps=8, kind="rao-wu")
+
+
+def test_poisson_df_is_n_reps_minus_one(pumf_like_sample):
+    s = pumf_like_sample.weighting.create_bs_wgts(
+        n_reps=32, kind="poisson", rep_prefix="r", rstate=5
+    )
+    assert s._design.rep_wgts.df == 31.0
+
+
+def test_poisson_weights_are_strictly_positive(pumf_like_sample):
+    """Non-negativity is what makes these weights publishable."""
+    s = pumf_like_sample.weighting.create_bs_wgts(
+        n_reps=64, kind="poisson", rep_prefix="r", rstate=7
+    )
+    assert (_rep_matrix(s, "r", 64) > 0).all()
+
+
+def test_poisson_is_deterministic_under_rstate(pumf_like_sample):
+    kw = dict(n_reps=16, kind="poisson", rep_prefix="r", rstate=11)
+    a = _rep_matrix(pumf_like_sample.weighting.create_bs_wgts(**kw), "r", 16)
+    b = _rep_matrix(pumf_like_sample.weighting.create_bs_wgts(**kw), "r", 16)
+    np.testing.assert_array_equal(a, b)
+
+
+def test_poisson_replicates_differ_from_each_other(pumf_like_sample):
+    s = pumf_like_sample.weighting.create_bs_wgts(
+        n_reps=8, kind="poisson", rep_prefix="r", rstate=13
+    )
+    m = _rep_matrix(s, "r", 8)
+    assert not np.allclose(m[:, 0], m[:, 1])
+
+
+def test_poisson_matches_published_worked_example():
+    """Appendix C.1 of the LFS PUMF user guide, worked by hand.
+
+    A unit weighted 500 has adjustment factor 1 +/- sqrt(499/500), giving
+    replicate weights of 999.500 and 0.50025. The square root is the step the
+    guide's prose loses to PDF extraction, so pin it against the published
+    arithmetic rather than against our own formula.
+    """
+    data = pl.DataFrame({"wgt": [500.0, 450.0, 150.0, 250.0]})
+    s = Sample(data=data, design=Design(wgt="wgt"))
+    s = s.weighting.create_bs_wgts(n_reps=200, kind="poisson", rep_prefix="r", rstate=17)
+    m = _rep_matrix(s, "r", 200)
+
+    expected = {
+        500.0: (500.0 * (1 + np.sqrt(499 / 500)), 500.0 * (1 - np.sqrt(499 / 500))),
+        450.0: (450.0 * (1 + np.sqrt(449 / 450)), 450.0 * (1 - np.sqrt(449 / 450))),
+    }
+    np.testing.assert_allclose(sorted(np.unique(m[0].round(9)))[::-1][:1], [expected[500.0][0]])
+    np.testing.assert_allclose(np.unique(m[0].round(9))[:1], [expected[500.0][1]])
+    # Published values, to the five decimals the guide prints.
+    assert round(expected[500.0][0], 3) == 999.500
+    assert round(expected[500.0][1], 5) == 0.50025
+
+
+def test_poisson_rejects_weights_below_one():
+    """sqrt((w - 1) / w) is not real below 1; a NaN here would be silent."""
+    data = pl.DataFrame({"wgt": [10.0, 0.5, 20.0]})
+    s = Sample(data=data, design=Design(wgt="wgt"))
+    with pytest.raises(ValueError, match="requires weights >= 1"):
+        s.weighting.create_bs_wgts(n_reps=4, kind="poisson")
+
+
+def test_poisson_accepts_weight_of_exactly_one():
+    """The boundary is admissible: adjustment is 0, so the replicate is w."""
+    data = pl.DataFrame({"wgt": [1.0, 10.0, 20.0]})
+    s = Sample(data=data, design=Design(wgt="wgt"))
+    s = s.weighting.create_bs_wgts(n_reps=8, kind="poisson", rep_prefix="r", rstate=19)
+    np.testing.assert_allclose(_rep_matrix(s, "r", 8)[0], 1.0)
+
+
+def test_poisson_leaves_the_point_estimate_untouched(pumf_like_sample):
+    """Replicate weights change the variance, never the estimate."""
+    s = pumf_like_sample.weighting.create_bs_wgts(
+        n_reps=64,
+        kind="poisson",
+        rep_prefix="r",
+        rstate=37,
+    )
+    taylor = pumf_like_sample.estimation.mean("y")
+    rep = s.estimation.mean("y", method="replication")
+    np.testing.assert_allclose(taylor.to_dicts()[0]["est"], rep.to_dicts()[0]["est"], rtol=1e-12)
+
+
+def test_bootstrap_kind_is_recorded_on_the_design(multi_psu_sample, pumf_like_sample):
+    """create_bs_wgts used to choose the algorithm and then forget it."""
+    rw = multi_psu_sample.weighting.create_bs_wgts(n_reps=8, rep_prefix="r", rstate=43)
+    assert rw._design.rep_wgts.kind == "rao-wu"
+
+    po = pumf_like_sample.weighting.create_bs_wgts(
+        n_reps=8, kind="poisson", rep_prefix="r", rstate=41
+    )
+    assert po._design.rep_wgts.kind == "poisson"

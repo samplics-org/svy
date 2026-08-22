@@ -13,7 +13,7 @@ use crate::estimation::association::{
     AssocKind, PairProducts, replicate_association,
 };
 use crate::estimation::replication::{
-    RepMethod, VarianceCenter,
+    VarianceCenter,
     extract_rep_weights_matrix,
     index_domains,
     matrix_mean_by_domain, matrix_mean_by_domain_cols, matrix_mean_estimates,
@@ -25,7 +25,6 @@ use crate::estimation::replication::{
     matrix_ratio_estimates_cols,
     matrix_total_by_domain, matrix_total_by_domain_cols, matrix_total_estimates,
     matrix_total_estimates_cols,
-    replicate_coefficients,
     variance_from_replicates,
 };
 
@@ -66,15 +65,6 @@ fn get_domain_mask(df: &DataFrame, mask_col: Option<&str>) -> PolarsResult<Optio
     }
 }
 
-fn parse_rep_method(method: &str) -> PyResult<RepMethod> {
-    RepMethod::from_str(method).ok_or_else(|| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "Unknown method: {}. Use 'BRR', 'Bootstrap', 'Jackknife', or 'SDR'",
-            method
-        ))
-    })
-}
-
 fn parse_variance_center(center: &str) -> PyResult<VarianceCenter> {
     VarianceCenter::from_str(center).ok_or_else(|| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
@@ -89,16 +79,14 @@ fn parse_variance_center(center: &str) -> PyResult<VarianceCenter> {
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, fay_coef=0.0, rscales=None, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
+#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
 pub fn replicate_mean(
     _py: Python,
     data: PyDataFrame,
     value_col: String,
     weight_col: String,
     rep_weight_cols: Vec<String>,
-    method: String,
-    fay_coef: f64,
-    rscales: Option<Vec<f64>>,
+    rep_coefs: Vec<f64>,
     center: &str,
     degrees_of_freedom: Option<u32>,
     by_col: Option<String>,
@@ -106,26 +94,25 @@ pub fn replicate_mean(
 ) -> PyResult<PyDataFrame> {
     let df: DataFrame = data.into();
     let n_reps = rep_weight_cols.len();
-    let rep_method       = parse_rep_method(&method)?;
     let variance_center  = parse_variance_center(center)?;
-    if let Some(r) = &rscales {
-        if r.len() != n_reps {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "rscales has {} entries but there are {} replicate weight columns",
-                r.len(),
-                n_reps
-            )));
-        }
+    // Coefficients are computed by the RepWeights variant on the Python side;
+    // the kernel no longer re-derives them from a method label.
+    if rep_coefs.len() != n_reps {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "rep_coefs has {} entries but there are {} replicate weight columns",
+            rep_coefs.len(),
+            n_reps
+        )));
     }
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 
     let result = _py.detach(|| {
         if by_col.is_none() {
             compute_replicate_mean_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
-                rep_method, fay_coef, rscales.as_deref(), variance_center, df_val, domain_mask_col.as_deref())
+                &rep_coefs, variance_center, df_val, domain_mask_col.as_deref())
         } else {
             compute_replicate_mean_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
-                rep_method, fay_coef, rscales.as_deref(), variance_center, df_val, by_col.as_ref().unwrap())
+                &rep_coefs, variance_center, df_val, by_col.as_ref().unwrap())
         }
     });
     result.map(PyDataFrame).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
@@ -134,7 +121,7 @@ pub fn replicate_mean(
 fn compute_replicate_mean_ungrouped(
     df: &DataFrame,
     value_col: &str, weight_col: &str, rep_weight_cols: &[String],
-    method: RepMethod, fay_coef: f64, rscales: Option<&[f64]>,
+    rep_coefs: &[f64],
     center: VarianceCenter, df_val: u32,
     domain_mask_col: Option<&str>,
 ) -> PolarsResult<DataFrame> {
@@ -156,9 +143,7 @@ fn compute_replicate_mean_ungrouped(
             matrix_mean_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps, mask)
         }
     };
-    let rep_coefs = rscales.map(<[f64]>::to_vec)
-        .unwrap_or_else(|| replicate_coefficients(method, n_reps, fay_coef));
-    let variance  = variance_from_replicates(method, theta_full, &theta_reps, &rep_coefs, center);
+    let variance  = variance_from_replicates(theta_full, &theta_reps, &rep_coefs, center);
     let se = variance.sqrt();
 
     df!["y" => vec![value_col], "est" => vec![theta_full], "se" => vec![se],
@@ -168,7 +153,7 @@ fn compute_replicate_mean_ungrouped(
 fn compute_replicate_mean_grouped(
     df: &DataFrame,
     value_col: &str, weight_col: &str, rep_weight_cols: &[String],
-    method: RepMethod, fay_coef: f64, rscales: Option<&[f64]>,
+    rep_coefs: &[f64],
     center: VarianceCenter, df_val: u32,
     by_col: &str,
 ) -> PolarsResult<DataFrame> {
@@ -190,8 +175,6 @@ fn compute_replicate_mean_grouped(
             matrix_mean_by_domain(&y_arr, &w_arr, &rep_w_matrix, &domain_ids, n_domains, n, n_reps)
         }
     };
-    let rep_coefs = rscales.map(<[f64]>::to_vec)
-        .unwrap_or_else(|| replicate_coefficients(method, n_reps, fay_coef));
 
     let mut by_vals: Vec<String> = Vec::with_capacity(n_domains);
     let mut estimates: Vec<f64> = Vec::with_capacity(n_domains);
@@ -201,7 +184,7 @@ fn compute_replicate_mean_grouped(
     let mut ns: Vec<u32> = Vec::with_capacity(n_domains);
 
     for (k, domain_name) in domain_names.iter().enumerate() {
-        let variance = variance_from_replicates(method, theta_full_vec[k], &theta_reps_vec[k], &rep_coefs, center);
+        let variance = variance_from_replicates(theta_full_vec[k], &theta_reps_vec[k], &rep_coefs, center);
         by_vals.push(domain_name.clone());
         estimates.push(theta_full_vec[k]);
         ses.push(variance.sqrt());
@@ -218,16 +201,14 @@ fn compute_replicate_mean_grouped(
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, fay_coef=0.0, rscales=None, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
+#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
 pub fn replicate_total(
     _py: Python,
     data: PyDataFrame,
     value_col: String,
     weight_col: String,
     rep_weight_cols: Vec<String>,
-    method: String,
-    fay_coef: f64,
-    rscales: Option<Vec<f64>>,
+    rep_coefs: Vec<f64>,
     center: &str,
     degrees_of_freedom: Option<u32>,
     by_col: Option<String>,
@@ -235,26 +216,25 @@ pub fn replicate_total(
 ) -> PyResult<PyDataFrame> {
     let df: DataFrame = data.into();
     let n_reps = rep_weight_cols.len();
-    let rep_method      = parse_rep_method(&method)?;
     let variance_center = parse_variance_center(center)?;
-    if let Some(r) = &rscales {
-        if r.len() != n_reps {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "rscales has {} entries but there are {} replicate weight columns",
-                r.len(),
-                n_reps
-            )));
-        }
+    // Coefficients are computed by the RepWeights variant on the Python side;
+    // the kernel no longer re-derives them from a method label.
+    if rep_coefs.len() != n_reps {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "rep_coefs has {} entries but there are {} replicate weight columns",
+            rep_coefs.len(),
+            n_reps
+        )));
     }
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 
     let result = _py.detach(|| {
         if by_col.is_none() {
             compute_replicate_total_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
-                rep_method, fay_coef, rscales.as_deref(), variance_center, df_val, domain_mask_col.as_deref())
+                &rep_coefs, variance_center, df_val, domain_mask_col.as_deref())
         } else {
             compute_replicate_total_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
-                rep_method, fay_coef, rscales.as_deref(), variance_center, df_val, by_col.as_ref().unwrap())
+                &rep_coefs, variance_center, df_val, by_col.as_ref().unwrap())
         }
     });
     result.map(PyDataFrame).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
@@ -263,7 +243,7 @@ pub fn replicate_total(
 fn compute_replicate_total_ungrouped(
     df: &DataFrame,
     value_col: &str, weight_col: &str, rep_weight_cols: &[String],
-    method: RepMethod, fay_coef: f64, rscales: Option<&[f64]>,
+    rep_coefs: &[f64],
     center: VarianceCenter, df_val: u32,
     domain_mask_col: Option<&str>,
 ) -> PolarsResult<DataFrame> {
@@ -283,9 +263,7 @@ fn compute_replicate_total_ungrouped(
             matrix_total_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps, mask)
         }
     };
-    let rep_coefs = rscales.map(<[f64]>::to_vec)
-        .unwrap_or_else(|| replicate_coefficients(method, n_reps, fay_coef));
-    let variance  = variance_from_replicates(method, theta_full, &theta_reps, &rep_coefs, center);
+    let variance  = variance_from_replicates(theta_full, &theta_reps, &rep_coefs, center);
     let se = variance.sqrt();
 
     df!["y" => vec![value_col], "est" => vec![theta_full], "se" => vec![se],
@@ -295,7 +273,7 @@ fn compute_replicate_total_ungrouped(
 fn compute_replicate_total_grouped(
     df: &DataFrame,
     value_col: &str, weight_col: &str, rep_weight_cols: &[String],
-    method: RepMethod, fay_coef: f64, rscales: Option<&[f64]>,
+    rep_coefs: &[f64],
     center: VarianceCenter, df_val: u32,
     by_col: &str,
 ) -> PolarsResult<DataFrame> {
@@ -317,8 +295,6 @@ fn compute_replicate_total_grouped(
             matrix_total_by_domain(&y_arr, &w_arr, &rep_w_matrix, &domain_ids, n_domains, n, n_reps)
         }
     };
-    let rep_coefs = rscales.map(<[f64]>::to_vec)
-        .unwrap_or_else(|| replicate_coefficients(method, n_reps, fay_coef));
 
     let mut by_vals: Vec<String> = Vec::with_capacity(n_domains);
     let mut estimates: Vec<f64> = Vec::with_capacity(n_domains);
@@ -328,7 +304,7 @@ fn compute_replicate_total_grouped(
     let mut ns: Vec<u32> = Vec::with_capacity(n_domains);
 
     for (k, domain_name) in domain_names.iter().enumerate() {
-        let variance = variance_from_replicates(method, theta_full_vec[k], &theta_reps_vec[k], &rep_coefs, center);
+        let variance = variance_from_replicates(theta_full_vec[k], &theta_reps_vec[k], &rep_coefs, center);
         by_vals.push(domain_name.clone());
         estimates.push(theta_full_vec[k]);
         ses.push(variance.sqrt());
@@ -353,7 +329,7 @@ fn compute_replicate_total_grouped(
 /// products once so each replicate costs six dot products rather than a full
 /// recomputation.
 #[pyfunction]
-#[pyo3(signature = (data, y_cols, x_cols, kind, weight_col, rep_weight_cols, method, fay_coef=0.0, rscales=None, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
+#[pyo3(signature = (data, y_cols, x_cols, kind, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn replicate_assoc(
     _py: Python,
@@ -363,9 +339,7 @@ pub fn replicate_assoc(
     kind: String,
     weight_col: String,
     rep_weight_cols: Vec<String>,
-    method: String,
-    fay_coef: f64,
-    rscales: Option<Vec<f64>>,
+    rep_coefs: Vec<f64>,
     center: &str,
     degrees_of_freedom: Option<u32>,
     by_col: Option<String>,
@@ -373,14 +347,13 @@ pub fn replicate_assoc(
 ) -> PyResult<PyDataFrame> {
     let df: DataFrame = data.into();
     let n_reps = rep_weight_cols.len();
-    let rep_method = parse_rep_method(&method)?;
     let variance_center = parse_variance_center(center)?;
-    if let Some(r) = &rscales
-        && r.len() != n_reps
-    {
+    // Coefficients are computed by the RepWeights variant on the Python side;
+    // the kernel no longer re-derives them from a method label.
+    if rep_coefs.len() != n_reps {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "rscales has {} entries but there are {} replicate weight columns",
-            r.len(),
+            "rep_coefs has {} entries but there are {} replicate weight columns",
+            rep_coefs.len(),
             n_reps
         )));
     }
@@ -402,9 +375,7 @@ pub fn replicate_assoc(
             assoc_kind,
             &weight_col,
             &rep_weight_cols,
-            rep_method,
-            fay_coef,
-            rscales.as_deref(),
+            &rep_coefs,
             variance_center,
             df_val,
             by_col.as_deref(),
@@ -424,9 +395,7 @@ fn compute_replicate_assoc(
     kind: AssocKind,
     weight_col: &str,
     rep_weight_cols: &[String],
-    method: RepMethod,
-    fay_coef: f64,
-    rscales: Option<&[f64]>,
+    rep_coefs: &[f64],
     center: VarianceCenter,
     df_val: u32,
     by_col: Option<&str>,
@@ -434,7 +403,6 @@ fn compute_replicate_assoc(
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
     let n = weights.len();
-    let n_reps = rep_weight_cols.len();
 
     let ys: Vec<&Float64Chunked> = y_cols
         .iter()
@@ -489,10 +457,6 @@ fn compute_replicate_assoc(
         })
         .collect();
 
-    let rep_coefs = rscales
-        .map(<[f64]>::to_vec)
-        .unwrap_or_else(|| replicate_coefficients(method, n_reps, fay_coef));
-
     let n_pairs = ys.len();
     let combos: Vec<(usize, usize)> = (0..group_names.len())
         .flat_map(|gi| (0..n_pairs).map(move |pi| (gi, pi)))
@@ -510,7 +474,7 @@ fn compute_replicate_assoc(
             let theta_full = products.estimate(&w_full, kind);
             let theta_reps = replicate_association(&products, &rep_cols, kind);
             let variance =
-                variance_from_replicates(method, theta_full, &theta_reps, &rep_coefs, center);
+                variance_from_replicates(theta_full, &theta_reps, &rep_coefs, center);
             let n_rows = match mask {
                 Some(m) => m.iter().filter(|v| **v != 0.0).count() as u32,
                 None => n as u32,
@@ -555,7 +519,7 @@ fn compute_replicate_assoc(
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, numerator_col, denominator_col, weight_col, rep_weight_cols, method, fay_coef=0.0, rscales=None, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
+#[pyo3(signature = (data, numerator_col, denominator_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
 pub fn replicate_ratio(
     _py: Python,
     data: PyDataFrame,
@@ -563,9 +527,7 @@ pub fn replicate_ratio(
     denominator_col: String,
     weight_col: String,
     rep_weight_cols: Vec<String>,
-    method: String,
-    fay_coef: f64,
-    rscales: Option<Vec<f64>>,
+    rep_coefs: Vec<f64>,
     center: &str,
     degrees_of_freedom: Option<u32>,
     by_col: Option<String>,
@@ -573,27 +535,26 @@ pub fn replicate_ratio(
 ) -> PyResult<PyDataFrame> {
     let df: DataFrame = data.into();
     let n_reps = rep_weight_cols.len();
-    let rep_method      = parse_rep_method(&method)?;
     let variance_center = parse_variance_center(center)?;
-    if let Some(r) = &rscales {
-        if r.len() != n_reps {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "rscales has {} entries but there are {} replicate weight columns",
-                r.len(),
-                n_reps
-            )));
-        }
+    // Coefficients are computed by the RepWeights variant on the Python side;
+    // the kernel no longer re-derives them from a method label.
+    if rep_coefs.len() != n_reps {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "rep_coefs has {} entries but there are {} replicate weight columns",
+            rep_coefs.len(),
+            n_reps
+        )));
     }
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 
     let result = _py.detach(|| {
         if by_col.is_none() {
             compute_replicate_ratio_ungrouped(&df, &numerator_col, &denominator_col, &weight_col,
-                &rep_weight_cols, rep_method, fay_coef, rscales.as_deref(), variance_center, df_val,
+                &rep_weight_cols, &rep_coefs, variance_center, df_val,
                 domain_mask_col.as_deref())
         } else {
             compute_replicate_ratio_grouped(&df, &numerator_col, &denominator_col, &weight_col,
-                &rep_weight_cols, rep_method, fay_coef, rscales.as_deref(), variance_center, df_val,
+                &rep_weight_cols, &rep_coefs, variance_center, df_val,
                 by_col.as_ref().unwrap())
         }
     });
@@ -604,7 +565,7 @@ fn compute_replicate_ratio_ungrouped(
     df: &DataFrame,
     numerator_col: &str, denominator_col: &str, weight_col: &str,
     rep_weight_cols: &[String],
-    method: RepMethod, fay_coef: f64, rscales: Option<&[f64]>,
+    rep_coefs: &[f64],
     center: VarianceCenter, df_val: u32,
     domain_mask_col: Option<&str>,
 ) -> PolarsResult<DataFrame> {
@@ -626,9 +587,7 @@ fn compute_replicate_ratio_ungrouped(
             matrix_ratio_estimates(&y_arr, &x_arr, &w_arr, &rep_w_matrix, n, n_reps, mask)
         }
     };
-    let rep_coefs = rscales.map(<[f64]>::to_vec)
-        .unwrap_or_else(|| replicate_coefficients(method, n_reps, fay_coef));
-    let variance  = variance_from_replicates(method, theta_full, &theta_reps, &rep_coefs, center);
+    let variance  = variance_from_replicates(theta_full, &theta_reps, &rep_coefs, center);
     let se = variance.sqrt();
 
     df!["y" => vec![numerator_col], "x" => vec![denominator_col], "est" => vec![theta_full],
@@ -639,7 +598,7 @@ fn compute_replicate_ratio_grouped(
     df: &DataFrame,
     numerator_col: &str, denominator_col: &str, weight_col: &str,
     rep_weight_cols: &[String],
-    method: RepMethod, fay_coef: f64, rscales: Option<&[f64]>,
+    rep_coefs: &[f64],
     center: VarianceCenter, df_val: u32,
     by_col: &str,
 ) -> PolarsResult<DataFrame> {
@@ -663,8 +622,6 @@ fn compute_replicate_ratio_grouped(
             matrix_ratio_by_domain(&y_arr, &x_arr, &w_arr, &rep_w_matrix, &domain_ids, n_domains, n, n_reps)
         }
     };
-    let rep_coefs = rscales.map(<[f64]>::to_vec)
-        .unwrap_or_else(|| replicate_coefficients(method, n_reps, fay_coef));
 
     let mut by_vals: Vec<String> = Vec::with_capacity(n_domains);
     let mut estimates: Vec<f64> = Vec::with_capacity(n_domains);
@@ -674,7 +631,7 @@ fn compute_replicate_ratio_grouped(
     let mut ns: Vec<u32> = Vec::with_capacity(n_domains);
 
     for (k, domain_name) in domain_names.iter().enumerate() {
-        let variance = variance_from_replicates(method, theta_full_vec[k], &theta_reps_vec[k], &rep_coefs, center);
+        let variance = variance_from_replicates(theta_full_vec[k], &theta_reps_vec[k], &rep_coefs, center);
         by_vals.push(domain_name.clone());
         estimates.push(theta_full_vec[k]);
         ses.push(variance.sqrt());
@@ -691,16 +648,14 @@ fn compute_replicate_ratio_grouped(
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, fay_coef=0.0, rscales=None, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
+#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
 pub fn replicate_prop(
     _py: Python,
     data: PyDataFrame,
     value_col: String,
     weight_col: String,
     rep_weight_cols: Vec<String>,
-    method: String,
-    fay_coef: f64,
-    rscales: Option<Vec<f64>>,
+    rep_coefs: Vec<f64>,
     center: &str,
     degrees_of_freedom: Option<u32>,
     by_col: Option<String>,
@@ -708,26 +663,25 @@ pub fn replicate_prop(
 ) -> PyResult<PyDataFrame> {
     let df: DataFrame = data.into();
     let n_reps = rep_weight_cols.len();
-    let rep_method      = parse_rep_method(&method)?;
     let variance_center = parse_variance_center(center)?;
-    if let Some(r) = &rscales {
-        if r.len() != n_reps {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "rscales has {} entries but there are {} replicate weight columns",
-                r.len(),
-                n_reps
-            )));
-        }
+    // Coefficients are computed by the RepWeights variant on the Python side;
+    // the kernel no longer re-derives them from a method label.
+    if rep_coefs.len() != n_reps {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "rep_coefs has {} entries but there are {} replicate weight columns",
+            rep_coefs.len(),
+            n_reps
+        )));
     }
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 
     let result = _py.detach(|| {
         if by_col.is_none() {
             compute_replicate_prop_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
-                rep_method, fay_coef, rscales.as_deref(), variance_center, df_val, domain_mask_col.as_deref())
+                &rep_coefs, variance_center, df_val, domain_mask_col.as_deref())
         } else {
             compute_replicate_prop_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
-                rep_method, fay_coef, rscales.as_deref(), variance_center, df_val, by_col.as_ref().unwrap())
+                &rep_coefs, variance_center, df_val, by_col.as_ref().unwrap())
         }
     });
     result.map(PyDataFrame).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
@@ -736,7 +690,7 @@ pub fn replicate_prop(
 fn compute_replicate_prop_ungrouped(
     df: &DataFrame,
     value_col: &str, weight_col: &str, rep_weight_cols: &[String],
-    method: RepMethod, fay_coef: f64, rscales: Option<&[f64]>,
+    rep_coefs: &[f64],
     center: VarianceCenter, df_val: u32,
     domain_mask_col: Option<&str>,
 ) -> PolarsResult<DataFrame> {
@@ -748,8 +702,6 @@ fn compute_replicate_prop_ungrouped(
     let cont_cols = get_cont_rep_cols(df, rep_weight_cols)?;
     let domain_mask = get_domain_mask(df, domain_mask_col)?;
     let mask = domain_mask.as_deref();
-    let rep_coefs = rscales.map(<[f64]>::to_vec)
-        .unwrap_or_else(|| replicate_coefficients(method, n_reps, fay_coef));
 
     // String/Categorical: use string-keyed level functions so level labels are
     // preserved as-is without any numeric cast.
@@ -769,7 +721,7 @@ fn compute_replicate_prop_ungrouped(
         };
         let n_l = levels.len();
         let vars: Vec<f64> = (0..n_l)
-            .map(|l| variance_from_replicates(method, theta_full[l], &theta_reps[l], &rep_coefs, center))
+            .map(|l| variance_from_replicates(theta_full[l], &theta_reps[l], &rep_coefs, center))
             .collect();
         (n_l, levels, theta_full, vars)
     } else {
@@ -798,7 +750,7 @@ fn compute_replicate_prop_ungrouped(
         };
         let n_l = levels.len();
         let vars: Vec<f64> = (0..n_l)
-            .map(|l| variance_from_replicates(method, theta_full[l], &theta_reps[l], &rep_coefs, center))
+            .map(|l| variance_from_replicates(theta_full[l], &theta_reps[l], &rep_coefs, center))
             .collect();
         let str_levels: Vec<String> = levels.iter().map(|l| l.to_string()).collect();
         (n_l, str_levels, theta_full, vars)
@@ -814,7 +766,7 @@ fn compute_replicate_prop_ungrouped(
 fn compute_replicate_prop_grouped(
     df: &DataFrame,
     value_col: &str, weight_col: &str, rep_weight_cols: &[String],
-    method: RepMethod, fay_coef: f64, rscales: Option<&[f64]>,
+    rep_coefs: &[f64],
     center: VarianceCenter, df_val: u32,
     by_col: &str,
 ) -> PolarsResult<DataFrame> {
@@ -827,8 +779,6 @@ fn compute_replicate_prop_grouped(
 
     let (domain_ids, domain_names, n_domains) = index_domains(by_str);
     let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
-    let rep_coefs = rscales.map(<[f64]>::to_vec)
-        .unwrap_or_else(|| replicate_coefficients(method, n_reps, fay_coef));
 
     let is_string = matches!(y_series.dtype(), DataType::String | DataType::Categorical(_, _));
 
@@ -874,7 +824,7 @@ fn compute_replicate_prop_grouped(
     for (d, domain_name) in domain_names.iter().enumerate() {
         for (l, level) in levels_str.iter().enumerate() {
             let theta_full = theta_full_mat[d][l];
-            let variance   = variance_from_replicates(method, theta_full, &theta_reps_mat[d][l], &rep_coefs, center);
+            let variance   = variance_from_replicates(theta_full, &theta_reps_mat[d][l], &rep_coefs, center);
             by_vals.push(domain_name.clone());
             level_strs.push(level.clone());
             estimates.push(theta_full);
@@ -897,7 +847,7 @@ fn compute_replicate_prop_grouped(
 /// Replicate-weight quantiles. One row per probability (and per domain when
 /// `by_col` is set), carrying the probability in a `prob` column.
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, probs, fay_coef=0.0, rscales=None, center="rep_mean", degrees_of_freedom=None, by_col=None, quantile_method=None))]
+#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, probs, center="rep_mean", degrees_of_freedom=None, by_col=None, quantile_method=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn replicate_quantile(
     _py: Python,
@@ -905,10 +855,8 @@ pub fn replicate_quantile(
     value_col: String,
     weight_col: String,
     rep_weight_cols: Vec<String>,
-    method: String,
+    rep_coefs: Vec<f64>,
     probs: Vec<f64>,
-    fay_coef: f64,
-    rscales: Option<Vec<f64>>,
     center: &str,
     degrees_of_freedom: Option<u32>,
     by_col: Option<String>,
@@ -916,16 +864,15 @@ pub fn replicate_quantile(
 ) -> PyResult<PyDataFrame> {
     let df: DataFrame = data.into();
     let n_reps = rep_weight_cols.len();
-    let rep_method      = parse_rep_method(&method)?;
     let variance_center = parse_variance_center(center)?;
-    if let Some(r) = &rscales {
-        if r.len() != n_reps {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "rscales has {} entries but there are {} replicate weight columns",
-                r.len(),
-                n_reps
-            )));
-        }
+    // Coefficients are computed by the RepWeights variant on the Python side;
+    // the kernel no longer re-derives them from a method label.
+    if rep_coefs.len() != n_reps {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "rep_coefs has {} entries but there are {} replicate weight columns",
+            rep_coefs.len(),
+            n_reps
+        )));
     }
     let q_method = quantile_method
         .as_deref()
@@ -936,16 +883,16 @@ pub fn replicate_quantile(
     let result = _py.detach(|| {
         match by_col.as_deref() {
             None => compute_replicate_quantile_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
-                rep_method, fay_coef, rscales.as_deref(), variance_center, df_val, &probs, q_method),
+                &rep_coefs, variance_center, df_val, &probs, q_method),
             Some(by) => compute_replicate_quantile_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
-                rep_method, fay_coef, rscales.as_deref(), variance_center, df_val, by, &probs, q_method),
+                &rep_coefs, variance_center, df_val, by, &probs, q_method),
         }
     });
     result.map(PyDataFrame).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
 }
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, method, fay_coef=0.0, rscales=None, center="rep_mean", degrees_of_freedom=None, by_col=None, quantile_method=None))]
+#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, quantile_method=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn replicate_median(
     _py: Python,
@@ -953,17 +900,15 @@ pub fn replicate_median(
     value_col: String,
     weight_col: String,
     rep_weight_cols: Vec<String>,
-    method: String,
-    fay_coef: f64,
-    rscales: Option<Vec<f64>>,
+    rep_coefs: Vec<f64>,
     center: &str,
     degrees_of_freedom: Option<u32>,
     by_col: Option<String>,
     quantile_method: Option<String>,
 ) -> PyResult<PyDataFrame> {
     let out = replicate_quantile(
-        _py, data, value_col, weight_col, rep_weight_cols, method, vec![0.5],
-        fay_coef, rscales, center, degrees_of_freedom, by_col, quantile_method,
+        _py, data, value_col, weight_col, rep_weight_cols, rep_coefs, vec![0.5],
+        center, degrees_of_freedom, by_col, quantile_method,
     )?;
     // Keep the legacy median schema: drop the probability column.
     let mut result = out.0;
@@ -976,7 +921,7 @@ pub fn replicate_median(
 fn compute_replicate_quantile_ungrouped(
     df: &DataFrame,
     value_col: &str, weight_col: &str, rep_weight_cols: &[String],
-    method: RepMethod, fay_coef: f64, rscales: Option<&[f64]>,
+    rep_coefs: &[f64],
     center: VarianceCenter, df_val: u32, probs: &[f64],
     q_method: SvyQuantileMethod,
 ) -> PolarsResult<DataFrame> {
@@ -990,11 +935,9 @@ fn compute_replicate_quantile_ungrouped(
     let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
     let (theta_full, theta_reps) =
         matrix_quantile_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps, probs, q_method);
-    let rep_coefs = rscales.map(<[f64]>::to_vec)
-        .unwrap_or_else(|| replicate_coefficients(method, n_reps, fay_coef));
 
     let variances: Vec<f64> = (0..probs.len())
-        .map(|j| variance_from_replicates(method, theta_full[j], &theta_reps[j], &rep_coefs, center))
+        .map(|j| variance_from_replicates(theta_full[j], &theta_reps[j], &rep_coefs, center))
         .collect();
     let ses: Vec<f64> = variances.iter().map(|v| v.sqrt()).collect();
     let k = probs.len();
@@ -1006,7 +949,7 @@ fn compute_replicate_quantile_ungrouped(
 fn compute_replicate_quantile_grouped(
     df: &DataFrame,
     value_col: &str, weight_col: &str, rep_weight_cols: &[String],
-    method: RepMethod, fay_coef: f64, rscales: Option<&[f64]>,
+    rep_coefs: &[f64],
     center: VarianceCenter, df_val: u32,
     by_col: &str, probs: &[f64], q_method: SvyQuantileMethod,
 ) -> PolarsResult<DataFrame> {
@@ -1022,8 +965,6 @@ fn compute_replicate_quantile_grouped(
     let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
     let (theta_full_vec, theta_reps_vec, counts) = matrix_quantile_by_domain(
         &y_arr, &w_arr, &rep_w_matrix, &domain_ids, n_domains, n, n_reps, probs, q_method);
-    let rep_coefs = rscales.map(<[f64]>::to_vec)
-        .unwrap_or_else(|| replicate_coefficients(method, n_reps, fay_coef));
 
     let k = probs.len();
     let n_rows = n_domains * k;
@@ -1036,7 +977,7 @@ fn compute_replicate_quantile_grouped(
     for (d, domain_name) in domain_names.iter().enumerate() {
         for j in 0..k {
             let variance = variance_from_replicates(
-                method, theta_full_vec[d][j], &theta_reps_vec[d][j], &rep_coefs, center);
+                theta_full_vec[d][j], &theta_reps_vec[d][j], rep_coefs, center);
             by_vals.push(domain_name.clone());
             estimates.push(theta_full_vec[d][j]);
             ses.push(variance.sqrt());

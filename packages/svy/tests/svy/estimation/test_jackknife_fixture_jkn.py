@@ -24,7 +24,7 @@ The no-rscales SEs are exactly sqrt(7/4) larger (scale 7/8 vs 1/2).
 import numpy as np
 import pytest
 
-from svy import EstimationMethod, RepWeights, Sample
+from svy import RepWeights, Sample
 from svy.core.sample import Design
 
 
@@ -32,7 +32,7 @@ from svy.core.sample import Design
 def jkn_sample(load_survey_data):
     data = load_survey_data("fake_survey_jackknife_25122025.csv")
     rep_weights = RepWeights(
-        method=EstimationMethod.JACKKNIFE,
+        method="Jackknife",
         prefix="jk_",
         n_reps=8,
         df=7,
@@ -70,12 +70,8 @@ def test_ratio_matches_r_jkn(jkn_sample):
 def test_jkn_se_is_sqrt_7_4_below_global_scale(load_survey_data, jkn_sample):
     """The documented no-rscales fallback is exactly sqrt(7/4) larger."""
     data = load_survey_data("fake_survey_jackknife_25122025.csv")
-    rw_global = RepWeights(
-        method=EstimationMethod.JACKKNIFE, prefix="jk_", n_reps=8, df=7
-    )
-    design = Design(
-        row_index="id", wgt="weight", stratum="stratum", psu="psu", rep_wgts=rw_global
-    )
+    rw_global = RepWeights(method="Jackknife", prefix="jk_", n_reps=8, df=7)
+    design = Design(row_index="id", wgt="weight", stratum="stratum", psu="psu", rep_wgts=rw_global)
     s_global = Sample(data, design)
     se_g = s_global.estimation.mean(y="income", method="replication", drop_nulls=True)
     se_j = jkn_sample.estimation.mean(y="income", method="replication", drop_nulls=True)
