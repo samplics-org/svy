@@ -73,42 +73,42 @@ test-verbose: ## Run Python tests with verbose output
 
 bench: ## Run all Python benchmarks
 	@echo "$(BLUE)Running Python benchmarks...$(NC)"
-	uv run pytest tests/benchmark_test.py --benchmark-only -v
+	uv run pytest benchmarks/benchmark_test.py --benchmark-only -v
 	@echo "$(GREEN)✓ Benchmarks complete$(NC)"
 
 bench-save: ## Run benchmarks and save as baseline
 	@echo "$(BLUE)Running benchmarks and saving baseline...$(NC)"
-	uv run pytest tests/benchmark_test.py --benchmark-only --benchmark-save=main
+	uv run pytest benchmarks/benchmark_test.py --benchmark-only --benchmark-save=main
 	@echo "$(GREEN)✓ Baseline 'main' saved$(NC)"
 
 bench-compare: ## Run benchmarks and compare to baseline
 	@echo "$(BLUE)Running benchmarks and comparing to baseline 'main'...$(NC)"
-	uv run pytest tests/benchmark_test.py --benchmark-only --benchmark-compare=main
+	uv run pytest benchmarks/benchmark_test.py --benchmark-only --benchmark-compare=main
 	@echo "$(GREEN)✓ Comparison complete$(NC)"
 
 bench-stata: ## Run only Stata parsing benchmarks
 	@echo "$(BLUE)Running Stata benchmarks...$(NC)"
-	uv run pytest tests/benchmark_test.py::test_bench_stata -k stata --benchmark-only
+	uv run pytest benchmarks/benchmark_test.py::test_bench_stata -k stata --benchmark-only
 	@echo "$(GREEN)✓ Stata benchmarks complete$(NC)"
 
 bench-spss: ## Run only SPSS parsing benchmarks
 	@echo "$(BLUE)Running SPSS benchmarks...$(NC)"
-	uv run pytest tests/benchmark_test.py::test_bench_spss -k spss --benchmark-only
+	uv run pytest benchmarks/benchmark_test.py::test_bench_spss -k spss --benchmark-only
 	@echo "$(GREEN)✓ SPSS benchmarks complete$(NC)"
 
 bench-sas: ## Run only SAS parsing benchmarks
 	@echo "$(BLUE)Running SAS benchmarks...$(NC)"
-	uv run pytest tests/benchmark_test.py::test_bench_sas -k sas --benchmark-only
+	uv run pytest benchmarks/benchmark_test.py::test_bench_sas -k sas --benchmark-only
 	@echo "$(GREEN)✓ SAS benchmarks complete$(NC)"
 
 bench-report: ## Show benchmark statistics
 	@echo "$(BLUE)Benchmark statistics:$(NC)"
-	uv run pytest tests/benchmark_test.py --benchmark-only --benchmark-columns=mean,stddev,median,iqr,outliers
+	uv run pytest benchmarks/benchmark_test.py --benchmark-only --benchmark-columns=mean,stddev,median,iqr,outliers
 	@echo "$(GREEN)✓ Statistics complete$(NC)"
 
 bench-hist: ## Generate benchmark histogram
 	@echo "$(BLUE)Generating benchmark histogram...$(NC)"
-	uv run pytest tests/benchmark_test.py --benchmark-only --benchmark-histogram=.benchmarks/histogram
+	uv run pytest benchmarks/benchmark_test.py --benchmark-only --benchmark-histogram=.benchmarks/histogram
 	@echo "$(GREEN)✓ Histogram saved to .benchmarks/histogram.svg$(NC)"
 	@echo "$(YELLOW)Open with: open .benchmarks/histogram.svg$(NC)"
 
@@ -118,28 +118,28 @@ format: ## Format Rust and Python code
 	@echo "$(BLUE)Formatting Rust code...$(NC)"
 	cd $(NATIVE_DIR) && cargo fmt
 	@echo "$(BLUE)Formatting Python code...$(NC)"
-	uv run ruff format python/ tests/
+	uv run ruff format python/ tests/ benchmarks/
 	@echo "$(GREEN)✓ Formatting complete$(NC)"
 
 format-check: ## Check code formatting without changes
 	@echo "$(BLUE)Checking Rust formatting...$(NC)"
 	cd $(NATIVE_DIR) && cargo fmt -- --check
 	@echo "$(BLUE)Checking Python formatting...$(NC)"
-	uv run ruff format --check python/ tests/
+	uv run ruff format --check python/ tests/ benchmarks/
 	@echo "$(GREEN)✓ Format check complete$(NC)"
 
 lint: ## Run linters (clippy for Rust, ruff for Python)
 	@echo "$(BLUE)Running Rust linter (clippy)...$(NC)"
 	cd $(NATIVE_DIR) && cargo clippy -- -D warnings
 	@echo "$(BLUE)Running Python linter (ruff)...$(NC)"
-	uv run ruff check python/ tests/
+	uv run ruff check python/ tests/ benchmarks/
 	@echo "$(GREEN)✓ Linting complete$(NC)"
 
 lint-fix: ## Fix linting issues automatically
 	@echo "$(BLUE)Fixing Rust linting issues...$(NC)"
 	cd $(NATIVE_DIR) && cargo clippy --fix --allow-dirty --allow-staged
 	@echo "$(BLUE)Fixing Python linting issues...$(NC)"
-	uv run ruff check --fix python/ tests/
+	uv run ruff check --fix python/ tests/ benchmarks/
 	@echo "$(GREEN)✓ Auto-fixes applied$(NC)"
 
 check: ## Run all checks (format, lint, test)

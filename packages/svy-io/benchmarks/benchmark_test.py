@@ -1,18 +1,35 @@
 """
 Performance benchmarks for svy-io parsing functions.
 
-Run with: uv run pytest tests/benchmark_test.py --benchmark-only
-Compare: uv run pytest tests/benchmark_test.py --benchmark-compare
+Run with: uv run pytest benchmarks/ --benchmark-only
+Compare: uv run pytest benchmarks/ --benchmark-compare
+
+These live outside `tests/` on purpose. They need a realistically sized file
+to say anything useful, and that file is too big to keep in the repository, so
+`benchmarks/data/` is gitignored and every benchmark skips when it is absent.
+`tests/` holds only the small fixtures that check correctness, so the suite
+that gates CI runs from a clean checkout.
 """
 
 from pathlib import Path
 
+import pytest
 import svy_io
 
 
+DATA = Path(__file__).parent / "data"
+
+
 def get_test_file(filename):
-    """Get path to test data file."""
-    return str(Path(__file__).parent / "data" / filename)
+    """Path to a benchmark data file, skipping the benchmark if it is absent."""
+    path = DATA / filename
+    if not path.exists():
+        pytest.skip(
+            f"benchmark data not present: {
+                path.relative_to(Path.cwd()) if path.is_relative_to(Path.cwd()) else path
+            }"
+        )
+    return str(path)
 
 
 # ============================================================================
