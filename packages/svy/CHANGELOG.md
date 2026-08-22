@@ -15,7 +15,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Changed
 
-- `import_labels_from_svyio_meta` takes an optional third argument, the frame the metadata describes. Without it the function only imports labels, exactly as before, so existing callers are unaffected.
+- **`import_labels_from_svyio_meta` now requires the frame** the metadata describes as its third argument. Resolving a measurement type depends on how well the value labels cover the observed values, which cannot be judged without the data. It is required rather than optional on purpose: an omitted frame would silently fall back to the very behavior this release fixes. The function is internal (`svy.engine.io`, not exported from the top-level `svy` namespace) and had a single production call site.
 
 ## [0.24.1] — 2026-08-11
 

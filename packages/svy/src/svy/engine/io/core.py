@@ -129,7 +129,7 @@ def _labels_cover_all_observed(series: pl.Series, codes: set[str]) -> bool:
 def _resolve_mtype(
     measure: str | None,
     value_labels: dict[Category, str],
-    series: pl.Series | None,
+    series: pl.Series,
 ) -> MeasurementType | None:
     """
     Decide the measurement type a file implies, or None to keep what the
@@ -144,7 +144,7 @@ def _resolve_mtype(
     if measure == "nominal":
         return MeasurementType.NOMINAL
 
-    if not value_labels or series is None:
+    if not value_labels:
         return None
 
     codes = {_canonical_code(c) for c in value_labels}
@@ -157,7 +157,7 @@ def _mtype_for(
     var: str,
     measure: str | None,
     values: dict[Category, str],
-    df: pl.DataFrame | None,
+    df: pl.DataFrame,
     store: MetadataStore,
 ) -> MeasurementType | None:
     """
@@ -166,7 +166,7 @@ def _mtype_for(
     A type the user set by hand outranks anything the file claims, so those are
     left untouched.
     """
-    if df is None or var not in df.columns:
+    if var not in df.columns:
         return None
     existing = store.get(var)
     if existing is not None and existing.source == MetadataSource.USER:
@@ -177,7 +177,7 @@ def _mtype_for(
 def import_labels_from_svyio_meta(
     store: MetadataStore,
     meta: Dict[str, Any],
-    df: pl.DataFrame | None = None,
+    df: pl.DataFrame,
 ) -> None:
     """
     Import variable and value labels from svy-io metadata into a MetadataStore.
@@ -195,10 +195,10 @@ def import_labels_from_svyio_meta(
         The metadata store to populate.
     meta : dict
         The metadata dict from svy-io.
-    df : pl.DataFrame, optional
-        The frame the metadata describes. When given, the measurement type is
-        revised to match what the file declares (or what its value labels
-        imply); without it only labels are imported, as before.
+    df : pl.DataFrame
+        The frame the metadata describes. Required: the measurement type is
+        resolved partly from how well the value labels cover the observed
+        values, which cannot be judged without the data.
     """
     # New/normalized form (A)
     variables = meta.get("variables")

@@ -91,10 +91,6 @@ def test_all_null_column_is_left_alone():
     assert _resolve_mtype(None, {"1": "Urban"}, series) is None
 
 
-def test_labels_without_a_frame_are_not_enough():
-    assert _resolve_mtype(None, {"1": "Urban"}, None) is None
-
-
 def test_no_labels_and_no_measure_leaves_mtype_alone():
     assert _resolve_mtype(None, {}, pl.Series("x", [1.0, 2.0])) is None
 
@@ -103,12 +99,17 @@ def test_no_labels_and_no_measure_leaves_mtype_alone():
 
 
 def test_declared_nominal_wins_without_needing_labels():
-    assert _resolve_mtype("nominal", {}, None) == MeasurementType.NOMINAL
+    """A declaration decides on its own; no labels need exist to corroborate."""
+    unlabelled = pl.Series("x", [1.0, 2.0, 3.0])
+
+    assert _resolve_mtype("nominal", {}, unlabelled) == MeasurementType.NOMINAL
 
 
 def test_declared_ordinal_is_honored():
     """Coverage cannot tell ordinal from nominal; only the file can."""
-    assert _resolve_mtype("ordinal", {}, None) == MeasurementType.ORDINAL
+    unlabelled = pl.Series("x", [1.0, 2.0, 3.0])
+
+    assert _resolve_mtype("ordinal", {}, unlabelled) == MeasurementType.ORDINAL
 
 
 def test_declared_scale_does_not_veto_the_coverage_rule():
@@ -136,18 +137,6 @@ def test_import_sets_categorical_for_a_fully_labelled_column():
     assert got.has_labels
     assert got.mtype == MeasurementType.NOMINAL
     assert got.is_categorical
-
-
-def test_import_without_a_frame_still_only_imports_labels():
-    """The df parameter is optional; older callers must behave as before."""
-    store = MetadataStore()
-    store.set("v106", VariableMeta(name="v106", mtype=MeasurementType.CONTINUOUS))
-
-    import_labels_from_svyio_meta(store, _meta(mapping={"0": "None"}))
-
-    got = store.get("v106")
-    assert got.has_labels
-    assert got.mtype == MeasurementType.CONTINUOUS
 
 
 def test_import_does_not_override_a_user_set_mtype():
