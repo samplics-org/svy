@@ -10,6 +10,11 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 - **Readers surface the declared measurement level ([#130](https://github.com/samplics-org/svy/issues/130)).** Each entry in `meta["vars"]` now carries `measure` — `"nominal"`, `"ordinal"`, or `"scale"` — read from ReadStat's `readstat_variable_get_measure`. A format that carries no such attribute (Stata) or a variable whose writer never set one reports `None` rather than `"scale"`, so a caller can tell "declared continuous" from "never declared". Worth knowing before relying on it: SPSS defaults numeric variables to `"scale"` whether or not anyone meant it, so only `"nominal"` and `"ordinal"` are positive declarations.
 
+### Fixed
+
+- **`write_dta` silently dropped value labels ([#129](https://github.com/samplics-org/svy/issues/129)).** The native writer accepted `value_labels_json` and never read it, so a `.dta` was written with its variable labels intact and its value labels gone — no error, and the loss only visible on read-back. The Stata writer now emits a label set per labelled column and points the variable at it, verified against `pandas.io.stata` for formats 113 through 119. The set is named after the column (Stata's own `label values v106 v106` convention) rather than the SAV writer's `{col}_labels`, because dta 113–117 allow only 33 bytes for the name and ReadStat truncates a longer one without complaint.
+- **`write_dta` value-label validation.** Codes are now rejected when they fall outside `[-2147483647, 2147483620]` (Stata stores a code as int32 and reserves the top of that range for `.` through `.z`, so a wider code was truncated silently), when they name a column absent from the frame, and when they target a string column (Stata has no string value labels, unlike SPSS). `bool` and whole-`float` codes are canonicalized to plain integers, so `{True: "yes"}` writes code `1` instead of failing at the JSON boundary.
+
 ## [0.2.0] — 2026-07-23
 
 ### Changed

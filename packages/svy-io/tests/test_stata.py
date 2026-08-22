@@ -324,7 +324,6 @@ def test_labels_are_preserved(tmp_path):
     assert actual_labels == var_labels
 
 
-@pytest.mark.xfail(reason="Value labels on write not implemented yet")
 def test_labelleds_are_round_tripped(tmp_path):
     """Value labels (integer -> string mappings) should survive roundtrip"""
     if not HAVE_READ_DTA or not HAVE_WRITE_DTA:
@@ -333,7 +332,6 @@ def test_labelleds_are_round_tripped(tmp_path):
     df = pl.DataFrame({"status": [1, 2, 3, 1, 2]})
     value_labels = {"status": {1: "Active", 2: "Inactive", 3: "Pending"}}
 
-    # This should work once value_labels_json is implemented in the writer
     df2, meta, _ = _roundtrip(tmp_path, df, version=118, value_labels=value_labels)
 
     # Check that value labels are in meta
@@ -344,6 +342,90 @@ def test_labelleds_are_round_tripped(tmp_path):
             break
 
     assert status_labels == {"1": "Active", "2": "Inactive", "3": "Pending"}
+    # The variable must point at the set, or Stata shows bare codes.
+    assert {v["name"]: v["label_set"] for v in meta["vars"]} == {"status": "status"}
+
+
+@pytest.mark.parametrize("version", [113, 114, 115, 117, 118, 119])
+def test_value_labels_round_trip_on_every_supported_format(tmp_path, version):
+    """The label-set name field is 33 bytes below format 118 and 129 at/above."""
+    if not HAVE_READ_DTA or not HAVE_WRITE_DTA:
+        pytest.xfail("stub pending")
+
+    df = pl.DataFrame({"v106": [0, 1, 2, 3], "sex": [1, 2, 1, 2]})
+    value_labels = {
+        "v106": {0: "None", 1: "Primary", 2: "Secondary", 3: "Higher"},
+        "sex": {1: "Male", 2: "Female"},
+    }
+    out = tmp_path / f"vl{version}.dta"
+    _write_dta(df, out, version=version, value_labels=value_labels)
+    _df2, meta = _read_dta(str(out))
+
+    assert {vl["set_name"]: vl["mapping"] for vl in meta["value_labels"]} == {
+        "v106": {"0": "None", "1": "Primary", "2": "Secondary", "3": "Higher"},
+        "sex": {"1": "Male", "2": "Female"},
+    }
+
+
+def test_value_labels_survive_alongside_var_labels(tmp_path):
+    """Regression for #129: var labels were written, value labels dropped."""
+    if not HAVE_READ_DTA or not HAVE_WRITE_DTA:
+        pytest.xfail("stub pending")
+
+    df = pl.DataFrame({"v106": [0, 1, 2, 3]})
+    df2, meta, _ = _roundtrip(
+        tmp_path,
+        df,
+        version=118,
+        var_labels={"v106": "Educ"},
+        value_labels={"v106": {0: "None", 1: "Primary"}},
+    )
+
+    assert meta["vars"][0]["label"] == "Educ"
+    assert meta["value_labels"] == [{"set_name": "v106", "mapping": {"0": "None", "1": "Primary"}}]
+
+
+@pytest.mark.parametrize(
+    "codes,expected",
+    [
+        # bool and whole-float codes canonicalize to plain integers
+        ({True: "yes", False: "no"}, {"0": "no", "1": "yes"}),
+        ({2.0: "two"}, {"2": "two"}),
+        ({-9: "missing", 0: "none"}, {"-9": "missing", "0": "none"}),
+        # the widest codes Stata's int32 storage leaves usable
+        ({2147483620: "max", -2147483647: "min"}, {"2147483620": "max", "-2147483647": "min"}),
+    ],
+)
+def test_value_label_codes_are_canonicalized(tmp_path, codes, expected):
+    if not HAVE_READ_DTA or not HAVE_WRITE_DTA:
+        pytest.xfail("stub pending")
+
+    df = pl.DataFrame({"v106": [0, 1, 2, 3]})
+    _df2, meta, _ = _roundtrip(tmp_path, df, version=118, value_labels={"v106": codes})
+
+    assert meta["value_labels"] == [{"set_name": "v106", "mapping": expected}]
+
+
+def test_cant_label_a_column_that_is_absent(tmp_path):
+    """A typo'd column key would otherwise drop its labels silently."""
+    df = pl.DataFrame({"v106": [0, 1, 2, 3]})
+    with pytest.raises(ValueError, match="not in the DataFrame"):
+        _write_dta(df, tmp_path / "x.dta", version=118, value_labels={"nope": {1: "a"}})
+
+
+def test_cant_label_a_string_column(tmp_path):
+    """Stata has no string value labels; SPSS does, so this must not be assumed."""
+    df = pl.DataFrame({"name": ["a", "b"]})
+    with pytest.raises(ValueError, match="only to numeric variables"):
+        _write_dta(df, tmp_path / "x.dta", version=118, value_labels={"name": {1: "a"}})
+
+
+@pytest.mark.parametrize("code", [2147483621, -2147483648])
+def test_cant_write_value_label_codes_outside_int32_span(tmp_path, code):
+    """Stata stores the code as int32 and reserves the top for missing values."""
+    df = pl.DataFrame({"v106": [0, 1, 2, 3]})
+    with pytest.raises(ValueError, match="must be within"):
+        _write_dta(df, tmp_path / "x.dta", version=118, value_labels={"v106": {code: "a"}})
 
 
 def test_can_write_labelled_with_null_labels(tmp_path):
