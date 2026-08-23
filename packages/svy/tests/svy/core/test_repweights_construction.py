@@ -30,7 +30,7 @@ import pytest
 
 import svy
 
-from svy.core.design import RepWeights, make_rep_weights
+from svy.core.design import RepWeights
 
 
 # -----------------------------------------------------------------------------
@@ -169,13 +169,13 @@ def test_repweights_remains_frozen_for_method():
 # -----------------------------------------------------------------------------
 
 
-def test_make_rep_weights_factory_with_string():
-    rw = make_rep_weights("bootstrap", prefix="bsrw", n_reps=1000)
+def test_factory_resolves_a_method_name():
+    rw = RepWeights("bootstrap", prefix="bsrw", n_reps=1000)
     assert rw.method == "Bootstrap"
 
 
-def test_make_rep_weights_factory_with_alias():
-    rw = make_rep_weights("jk", prefix="jkw_", n_reps=62)
+def test_factory_resolves_a_method_alias():
+    rw = RepWeights("jk", prefix="jkw_", n_reps=62)
     assert rw.method == "Jackknife"
 
 

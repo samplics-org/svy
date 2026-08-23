@@ -67,7 +67,13 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 - **Non-default variance coefficients are visible.** `scale` and `rep_coefs` did not appear in `repr` or `print(design)` at all. A non-standard coefficient is what a reviewer or replicator most needs to see and is set rarely, so rare-and-silent was the wrong combination. A uniform vector prints as the scalar it is.
 
+- **`Design.update_rep_weights` is a third the size, with the same behaviour.** It resolved nine sentinel parameters by hand and rebuilt the variant from a method name, because seven internal callers needed exactly that. They now use `msgspec.structs.replace`, so it keeps only the two jobs `replace` cannot do — changing the method, and creating weights where there are none. Unchanged for callers: the same signature, the same first-time error, and a variant-specific field still carries only within the same method.
+
 - **`import_labels_from_svyio_meta` now requires the frame** the metadata describes as its third argument. Resolving a measurement type depends on how well the value labels cover the observed values, which cannot be judged without the data. It is required rather than optional on purpose: an omitted frame would silently fall back to the very behavior this release fixes. The function is internal (`svy.engine.io`, not exported from the top-level `svy` namespace) and had a single production call site.
+
+### Removed
+
+- **`svy.core.design.make_rep_weights`.** A strictly weaker duplicate of `svy.RepWeights` — same job, but only four of the parameters, so it silently dropped `scale`, `rep_coefs` and `kind`. It was never exported from `svy` or `svy.core`, so it was reachable only as `from svy.core.design import make_rep_weights`, and had no callers in the package. Use `svy.RepWeights(method=..., prefix=..., n_reps=...)`, which takes the same three positionally.
 
 ## [0.24.1] — 2026-08-11
 

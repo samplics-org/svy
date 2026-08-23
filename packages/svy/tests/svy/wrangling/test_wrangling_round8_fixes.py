@@ -17,7 +17,7 @@ import pytest
 
 import svy
 
-from svy.core.design import make_rep_weights
+from svy.core.design import RepWeights
 from svy.core.sample import Design, Sample
 from svy.errors import MethodError
 
@@ -87,7 +87,7 @@ def rep_sample():
             "rw3": [1.0] * 4,
         }
     )
-    rw = make_rep_weights("jackknife", prefix="rw", n_reps=3)
+    rw = RepWeights("jackknife", prefix="rw", n_reps=3)
     return Sample(df, Design(stratum="strat", psu="psu", wgt="w", rep_wgts=rw))
 
 
@@ -99,9 +99,7 @@ def test_partial_replicate_rename_raises(rep_sample):
 
 
 def test_full_replicate_rename_still_works(rep_sample):
-    out = rep_sample.wrangling.rename_columns(
-        {"rw1": "boot1", "rw2": "boot2", "rw3": "boot3"}
-    )
+    out = rep_sample.wrangling.rename_columns({"rw1": "boot1", "rw2": "boot2", "rw3": "boot3"})
     assert out.design.rep_wgts.prefix == "boot"
     assert set(out.design.rep_wgts.columns) <= set(out._data.columns)
 
@@ -186,16 +184,12 @@ class TestFilterNullPredicates:
         s = Sample(pl.DataFrame({"x": [1.0, None, 3.0]}))
         out = s.wrangling.filter_records(svy.col("x") > 2, negate=True)
         assert out._data.height == 1
-        assert any(
-            w.code == "NULL_PREDICATE_ROWS_DROPPED" for w in out._warnings.list()
-        )
+        assert any(w.code == "NULL_PREDICATE_ROWS_DROPPED" for w in out._warnings.list())
 
     def test_no_warning_without_nulls(self):
         s = Sample(pl.DataFrame({"x": [1.0, 3.0]}))
         out = s.wrangling.filter_records(svy.col("x") > 2)
-        assert not any(
-            w.code == "NULL_PREDICATE_ROWS_DROPPED" for w in out._warnings.list()
-        )
+        assert not any(w.code == "NULL_PREDICATE_ROWS_DROPPED" for w in out._warnings.list())
 
 
 # ---------------------------------------------------------------------------

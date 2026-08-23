@@ -13,7 +13,7 @@ import pytest
 
 import svy
 
-from svy.core.design import make_rep_weights
+from svy.core.design import RepWeights
 from svy.errors import MethodError
 
 
@@ -37,7 +37,7 @@ def rep_sample():
             "rw4": [1.0] * 5,
         }
     )
-    rw = make_rep_weights("jackknife", prefix="rw", n_reps=4)
+    rw = RepWeights("jackknife", prefix="rw", n_reps=4)
     design = svy.Design(stratum="strat", psu="psu", wgt="w", rep_wgts=rw)
     return svy.Sample(df, design)
 
