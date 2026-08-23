@@ -15,10 +15,9 @@ from typing import (
     overload,
 )
 
+import msgspec
+
 from svy.core.repwgts import (
-    BootstrapWgts,
-    BrrWgts,
-    JackknifeWgts,
     RepWeights,
     RepWgts,
     _RepWgtsBase,
@@ -93,55 +92,6 @@ class PopSize(NamedTuple):
 # =============================================================================
 # Replicate Weights (Strict Configuration)
 # =============================================================================
-
-
-def make_rep_weights(
-    method: Literal["brr", "bootstrap", "jackknife", "sdr"],
-    prefix: str,
-    n_reps: int,
-    *,
-    fay_coef: float = 0.0,
-    df: int | None = None,
-    padding: int | None = None,
-) -> RepWgts:
-    """
-    Create a RepWeights object using a plain string method name.
-
-    Parameters
-    ----------
-    method : str
-        Replication method: ``'brr'``, ``'bootstrap'``, ``'jackknife'`` (or ``'jk'``),
-        or ``'sdr'``.
-    prefix : str
-        Column prefix for replicate weight columns (e.g. ``'btwt'`` for btwt1, btwt2, ...).
-    n_reps : int
-        Number of replicate weights (>= 2).
-    fay_coef : float, default 0.0
-        Fay coefficient for BRR with Fay's method.
-    df : int | None, default None
-        Degrees of freedom override. None = auto-calculate from data.
-    padding : int | None, default None
-        Zero-padding width for column names. None = auto-detect.
-
-    Returns
-    -------
-    RepWeights
-
-    Examples
-    --------
-    >>> rw = make_rep_weights("jackknife", prefix="jk_", n_reps=80)
-    >>> rw = make_rep_weights("brr", prefix="brr_", n_reps=32, fay_coef=0.5)
-    """
-    return RepWeights(
-        method=method,
-        prefix=prefix,
-        n_reps=n_reps,
-        df=df,
-        padding=padding,
-        # Only BRR has one; forwarding a 0.0 to any other method would be
-        # sending a Fay claim that is not being made.
-        **({"fay_coef": fay_coef} if fay_coef else {}),
-    )
 
 
 # =============================================================================
@@ -414,95 +364,62 @@ class Design:
         rep_coefs: tuple[float, ...] | None | _MissingType = _MISSING,
         kind: str | None | _MissingType = _MISSING,
     ) -> Self:
-        """
-        Return a new Design with selected RepWeights fields updated.
-        Ensures strict validity: if creating weights for the first time,
-        mandatory fields (method, prefix, n_reps) must be provided.
-        """
-        # 1. Quick exit if no arguments provided
-        if (
-            isinstance(prefix, _MissingType)
-            and isinstance(method, _MissingType)
-            and isinstance(n_reps, _MissingType)
-            and isinstance(fay_coef, _MissingType)
-            and isinstance(df, _MissingType)
-            and isinstance(padding, _MissingType)
-            and isinstance(scale, _MissingType)
-            and isinstance(rep_coefs, _MissingType)
-            and isinstance(kind, _MissingType)
-        ):
-            return self
+        """Return a new Design with selected RepWeights fields updated.
 
-        # 2. Explicitly handle method=None to clear weights
-        if method is None:
+        ``method=None`` clears the replicate weights. Creating them for the
+        first time requires ``method``, ``prefix`` and ``n_reps``; afterwards
+        each is taken from the current design unless named.
+
+        Internal code prefers
+        ``design.update(rep_wgts=msgspec.structs.replace(rw, ...))``, which is
+        the same operation without the string round-trip. This exists for
+        callers holding a method *name* rather than a variant.
+        """
+        supplied: dict[str, Any] = {
+            name: value
+            for name, value in (
+                ("method", method),
+                ("prefix", prefix),
+                ("n_reps", n_reps),
+                ("fay_coef", fay_coef),
+                ("df", df),
+                ("padding", padding),
+                ("scale", scale),
+                ("rep_coefs", rep_coefs),
+                ("kind", kind),
+            )
+            if not isinstance(value, _MissingType)
+        }
+        if not supplied:
+            return self
+        if "method" in supplied and supplied["method"] is None:
             return self.update(rep_wgts=None)
 
-        # 3. Get current state
         cur = self.rep_wgts
+        for name in ("method", "prefix", "n_reps"):
+            if name not in supplied:
+                if cur is None:
+                    raise ValueError(
+                        f"When initializing RepWeights for the first time, '{name}' is mandatory."
+                    )
+                supplied[name] = getattr(cur, name)
 
-        # 4. Resolve Values
+        method_name = supplied.pop("method")
 
-        def resolve_mandatory(arg_val: T | _MissingType, arg_name: str) -> T:
-            if not isinstance(arg_val, _MissingType):
-                return arg_val
-            if cur is not None:
-                return getattr(cur, arg_name)
-            raise ValueError(
-                f"When initializing RepWeights for the first time, '{arg_name}' is mandatory."
-            )
+        # Same method: `replace` preserves every field the caller did not name,
+        # including the variant's own, and re-runs the struct's validation.
+        if cur is not None and type(cur) is resolve_rep_variant(method_name):
+            return self.update(rep_wgts=msgspec.structs.replace(cur, **supplied))
 
-        # Resolve Mandatory Fields
-        resolved_method = resolve_mandatory(method, "method")
-        resolved_prefix = resolve_mandatory(prefix, "prefix")
-        resolved_n_reps = resolve_mandatory(n_reps, "n_reps")
-
-        # Resolve Optional Fields
-        if isinstance(fay_coef, _MissingType):
-            fay_coef = cur.fay_coef if cur else 0.0
-
-        if isinstance(df, _MissingType):
-            df = cur.df if cur else None
-
-        if isinstance(padding, _MissingType):
-            padding = cur.padding if cur else None
-
-        if isinstance(scale, _MissingType):
-            scale = cur.scale if cur else None
-
-        if isinstance(rep_coefs, _MissingType):
-            rep_coefs = cur.rep_coefs if cur else None
-
-        # 5. Create the new variant.
-        _variant = resolve_rep_variant(resolved_method)
-
-        # Variant-specific parameters carry over only within the same method:
-        # a bootstrap kind means nothing on a jackknife design.
-        _same = cur is not None and type(cur) is _variant
-        if isinstance(kind, _MissingType):
-            kind = getattr(cur, "kind", None) if _same else None
-
-        # Pass only what this variant carries. Sending a foreign parameter at
-        # its neutral value -- fay_coef=0.0 to a bootstrap -- would need the
-        # receiving end to treat that as "unset", which is the flat struct's
-        # habit, not something the union should have to accommodate.
-        variant_only: dict[str, object] = {}
-        if _variant is BrrWgts:
-            variant_only["fay_coef"] = fay_coef
-        if _variant in (BootstrapWgts, JackknifeWgts) and kind is not None:
-            variant_only["kind"] = kind
-
-        updated_rep_wgts = RepWeights(
-            method=resolved_method,
-            prefix=resolved_prefix,
-            n_reps=resolved_n_reps,
-            df=df,
-            padding=padding,
-            scale=scale,
-            rep_coefs=rep_coefs,
-            **variant_only,
-        )
-
-        return self.update(rep_wgts=updated_rep_wgts)
+        # A different method, or none yet. The shared fields carry over; the
+        # outgoing variant's own do not, because a bootstrap kind means nothing
+        # on a jackknife. Anything named explicitly still applies to the new
+        # variant, and a parameter the new variant does not carry is refused
+        # rather than dropped.
+        if cur is not None:
+            for name in ("df", "padding", "scale", "rep_coefs"):
+                supplied.setdefault(name, getattr(cur, name))
+        return self.update(rep_wgts=RepWeights(method=method_name, **supplied))
 
     # -----------------------------
     # Internal Merge Logic

@@ -1,7 +1,6 @@
 import polars as pl
 import pytest
 
-from svy.core.design import make_rep_weights
 from svy.core.sample import SVY_ROW_INDEX, Design, RepWeights, Sample
 
 
@@ -45,7 +44,7 @@ def design_ok() -> Design:
         ssu=None,
         pop_size=None,
         wr=False,
-        rep_wgts=make_rep_weights("brr", prefix="rep", n_reps=3),
+        rep_wgts=RepWeights("brr", prefix="rep", n_reps=3),
     )
 
 
@@ -106,17 +105,17 @@ def test_rep_weights_invalid_method():
 def test_rep_weights_n_reps_too_small():
     # n_reps must be >= 2
     with pytest.raises(ValueError, match="n_reps must be >= 2"):
-        make_rep_weights("brr", prefix="rep", n_reps=1)
+        RepWeights("brr", prefix="rep", n_reps=1)
 
 
 def test_rep_weights_invalid_fay_coef():
     with pytest.raises(ValueError, match="fay_coef cannot be negative"):
-        make_rep_weights("brr", prefix="rep", n_reps=10, fay_coef=-0.5)
+        RepWeights("brr", prefix="rep", n_reps=10, fay_coef=-0.5)
 
 
 def test_rep_weights_invalid_df():
     with pytest.raises(ValueError, match="df must be > 0"):
-        make_rep_weights("brr", prefix="rep", n_reps=10, df=0)
+        RepWeights("brr", prefix="rep", n_reps=10, df=0)
 
 
 def test_rep_weights_accepts_string_method():
@@ -143,7 +142,7 @@ def test_update_rep_weights_fresh_init_missing_args():
 
 def test_update_rep_weights_clearing():
     # Setting method=None should remove the weights
-    d = Design(rep_wgts=make_rep_weights("brr", prefix="r", n_reps=10))
+    d = Design(rep_wgts=RepWeights("brr", prefix="r", n_reps=10))
     d_cleared = d.update_rep_weights(method=None)
     assert d_cleared.rep_wgts is None
 
