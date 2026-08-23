@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 
-from typing import Literal, Sequence, Union
+from typing import Literal, Sequence, Union, cast, get_args
 
 import msgspec
 
@@ -39,7 +39,12 @@ from svy.errors import MethodError
 # they carry, so this is a field rather than a nested union. Calibrating the
 # replicates afterwards is a separate weighting step (see
 # ``Sample.weighting.poststratify``) and is not recorded here.
-BOOTSTRAP_KINDS = ("rao-wu", "poisson")
+#: The canonical values. Aliases normalize onto these, and the field stores
+#: only these, so the Literal describes what is actually held. Authored code
+#: should use a canonical name and gets checked for it; a name arriving as data
+#: goes through ``RepWeights``, where no static type applies anyway.
+BootstrapKind = Literal["rao-wu", "poisson"]
+BOOTSTRAP_KINDS: tuple[str, ...] = get_args(BootstrapKind)
 
 _BS_KIND_ALIASES: dict[str, str] = {
     "rao-wu": "rao-wu",
@@ -65,7 +70,8 @@ _BS_KIND_ALIASES: dict[str, str] = {
 # "jk1"  unstratified delete-one-PSU          (R-1)/R
 # "jkn"  stratified delete-one-PSU            (n_h-1)/n_h, per replicate
 # "jk2"  one paired replicate per stratum     1.0
-JACKKNIFE_KINDS = ("jk1", "jkn", "jk2")
+JackknifeKind = Literal["jk1", "jkn", "jk2"]
+JACKKNIFE_KINDS: tuple[str, ...] = get_args(JackknifeKind)
 
 _JK_KIND_ALIASES: dict[str, str] = {
     "jk1": "jk1",
@@ -84,7 +90,7 @@ _JK_KIND_ALIASES: dict[str, str] = {
 }
 
 
-def normalize_jackknife_kind(kind: str) -> str:
+def normalize_jackknife_kind(kind: str) -> JackknifeKind:
     """Normalize a jackknife ``kind``. Case- and separator-insensitive."""
     if not isinstance(kind, str):
         raise TypeError(f"'kind' must be a string, got {type(kind).__name__}.")
@@ -102,7 +108,7 @@ def normalize_jackknife_kind(kind: str) -> str:
                 "scheme. Leave it unset if you do not know which the weights are."
             ),
         )
-    return resolved
+    return cast(JackknifeKind, resolved)
 
 
 # =============================================================================
@@ -328,7 +334,7 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
 
 
 class BootstrapWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="Bootstrap", tag_field="method"):
-    kind: str = "rao-wu"
+    kind: BootstrapKind = "rao-wu"
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -355,7 +361,7 @@ class JackknifeWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="Jackknife", ta
     # None = unspecified: nobody has said which family these weights are. That
     # is a different statement from "jk1", even though the two produce the same
     # number -- svy only claims what it knows or what it was told.
-    kind: str | None = None
+    kind: JackknifeKind | None = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -477,7 +483,7 @@ def resolve_rep_variant(
     )
 
 
-def normalize_bootstrap_kind(kind: str) -> str:
+def normalize_bootstrap_kind(kind: str) -> BootstrapKind:
     """Normalize a bootstrap ``kind``.
 
     Case-insensitive and tolerant of hyphen, underscore or space separators,
@@ -491,7 +497,7 @@ def normalize_bootstrap_kind(kind: str) -> str:
             where="svy.RepWeights",
             param="kind",
             got=kind,
-            allowed=["rao-wu", "poisson"],
+            allowed=list(BOOTSTRAP_KINDS),
             docs_url=None,
             hint=(
                 "'rao-wu' is the stratified Rao-Wu-Yue rescaling bootstrap and needs "
@@ -499,7 +505,7 @@ def normalize_bootstrap_kind(kind: str) -> str:
                 "bootstrap and needs only a weight."
             ),
         )
-    return resolved
+    return cast(BootstrapKind, resolved)
 
 
 _MISSING_ARG: object = object()
@@ -548,7 +554,7 @@ def RepWeights(  # noqa: N802 - a factory that replaced a class of this name
 
     variant = resolve_rep_variant(method)
     try:
-        return variant(prefix=prefix, n_reps=n_reps, **kwargs)  # type: ignore[return-value]
+        return cast(RepWgts, variant(prefix=prefix, n_reps=n_reps, **kwargs))
     except TypeError as exc:
         name = _unexpected_param(exc)
         if name is None:

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 
 import numpy as np
 
+from svy.core.repwgts import BootstrapKind
 from svy.core.terms import Feature
 from svy.core.types import Category, ControlsType, DomainScalarMap, Number
 from svy.utils.random_state import RandomState
@@ -106,7 +107,7 @@ class Weighting:
         self,
         n_reps: int = 500,
         *,
-        kind: Literal["rao-wu", "poisson"] = "rao-wu",
+        kind: BootstrapKind = "rao-wu",
         rep_prefix: str | None = None,
         drop_nulls: bool = False,
         rstate: RandomState = None,

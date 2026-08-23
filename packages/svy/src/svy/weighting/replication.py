@@ -41,6 +41,7 @@ except ImportError:  # pragma: no cover
     rust_create_sdr_wgts = None
 
 from svy.core.repwgts import (
+    BootstrapKind,
     BootstrapWgts,
     BrrWgts,
     JackknifeWgts,
@@ -409,7 +410,7 @@ def create_bs_wgts(
     sample: Sample,
     n_reps: int = 500,
     *,
-    kind: Literal["rao-wu", "poisson"] = "rao-wu",
+    kind: BootstrapKind = "rao-wu",
     rep_prefix: str | None = None,
     drop_nulls: bool = False,
     rstate: RandomState = None,
