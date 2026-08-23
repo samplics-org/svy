@@ -47,7 +47,7 @@ def test_spss_carries_variable_and_value_labels(store, df, tmp):
     assert back["q"].to_list() == [1.0, 99.0, 1.0]
 
     recovered = MetadataStore()
-    import_labels_from_svyio_meta(recovered, meta)
+    import_labels_from_svyio_meta(recovered, meta, back)
     assert recovered.get("q").label == "Question"
     assert recovered.get("age").label == "Age"
     # 99 is a value like any other, and it travels with its label.
@@ -64,10 +64,10 @@ def test_a_label_read_back_from_spss_still_applies(store, df, tmp):
     """
     path = tmp / "t.sav"
     _write_spss(df, store, path)
-    _, meta, _ = _read_spss(path)
+    back, meta, _ = _read_spss(path)
 
     recovered = MetadataStore()
-    import_labels_from_svyio_meta(recovered, meta)
+    import_labels_from_svyio_meta(recovered, meta, back)
     resolved = recovered.resolve_labels("q")
 
     assert resolved.display(1.0) == "Yes"
@@ -82,7 +82,7 @@ def test_stata_carries_labels_too(store, df, tmp):
 
     assert back["q"].to_list() == [1.0, 99.0, 1.0]
     recovered = MetadataStore()
-    import_labels_from_svyio_meta(recovered, meta)
+    import_labels_from_svyio_meta(recovered, meta, back)
     assert recovered.get("q").label == "Question"
 
 

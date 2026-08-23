@@ -6,6 +6,10 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Added
+
+- **Readers surface the declared measurement level ([#130](https://github.com/samplics-org/svy/issues/130)).** Each entry in `meta["vars"]` now carries `measure` — `"nominal"`, `"ordinal"`, or `"scale"` — read from ReadStat's `readstat_variable_get_measure`. A format that carries no such attribute (Stata) or a variable whose writer never set one reports `None` rather than `"scale"`, so a caller can tell "declared continuous" from "never declared". Worth knowing before relying on it: SPSS defaults numeric variables to `"scale"` whether or not anyone meant it, so only `"nominal"` and `"ordinal"` are positive declarations.
+
 ### Fixed
 
 - **`ordered=True` did nothing.** The parameter is public on `read_dta`, `read_sas`, `as_factor`, `as_factor_expr` and `apply_value_labels`, and it had no effect on either path. The lazy one passed `ordering="physical"` to `pl.Categorical`, which polars deprecated in 1.32.0 and now ignores — and this package already requires polars ≥ 1.34, so it was inert for every supported version. The eager one never read the argument; it was marked "reserved". A `Categorical` sorts its categories alphabetically, so an education scale came back `Higher < None < Primary < Secondary`. `ordered=True` now builds a `pl.Enum`, which keeps the order it is given, and the scale sorts `None < Primary < Secondary < Higher`. Categories are ordered by the **numeric** value of the code: readers return value labels keyed by the code's string form, so the mapping iterates `"1", "10", "2"` and using that order directly would sequence an 11-category scale wrongly. Non-numeric codes keep their string order.
