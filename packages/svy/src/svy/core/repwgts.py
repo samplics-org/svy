@@ -2,7 +2,7 @@
 """Replicate-weight designs as a tagged union.
 
 One struct per variance-estimation method, each carrying exactly the parameters
-its algorithm has. See ``docs/design/rep-weights-tagged-union.md``.
+its algorithm has.
 
 The rule for adding a variant: **a type exists exactly when the data differs.**
 Behaviour differences are handled by a method on the variant, not a new type.
@@ -10,8 +10,15 @@ That is why Fay's BRR is a ``fay_coef`` value rather than a type —
 plain BRR *is* Fay's BRR at 0.0, so splitting it would make
 ``FayWgts(fay_coef=0.0)`` constructible and self-contradictory.
 
-The top level mirrors ``RepMethod`` in ``svy-rs/src/estimation/replication.rs``,
-which is what the variance kernel actually branches on.
+The names mirror ``RepMethod`` in ``svy-rs/src/estimation/replication.rs``, but
+the kernel no longer branches on them: Python resolves the per-replicate
+coefficients here and passes the resulting vector across the FFI. Nothing in
+``svy`` reads the ``method`` label to choose a code path — copies go through
+``msgspec.structs.replace``, which preserves the type, and variance goes through
+``coefficients()``.
+
+``RepWeights`` is a function, not a class. For annotations and ``isinstance``
+use ``RepWgts``, the union of the four variants.
 """
 
 from __future__ import annotations
@@ -29,15 +36,12 @@ from svy.errors import MethodError
 # Bootstrap kinds
 # =============================================================================
 #
-# A nested union rather than a plain string, because the kinds carry different
-# data. Behaviour that varies by kind (the replicate coefficient) lives here as
-# a method, so adding a kind whose scale differs -- svrep's generalized
-# bootstrap uses tau^2/B rather than 1/B -- needs no change anywhere else.
-
-
-# The two bootstrap kinds differ in how the replicates are drawn, not in what
-# they carry, so this is a field rather than a nested union. Calibrating the
-# replicates afterwards is a separate weighting step (see
+# The two kinds differ in how the replicates are drawn, not in what they carry
+# or how the variance is scaled -- both use 1/R -- so this is a field rather
+# than a nested union, and it is provenance rather than a coefficient input.
+# A kind whose scale *does* differ (svrep's generalized bootstrap, tau^2/B)
+# would branch in ``BootstrapWgts._default_coefficients`` and nowhere else.
+# Calibrating the replicates afterwards is a separate weighting step (see
 # ``Sample.weighting.poststratify``) and is not recorded here.
 #: The canonical values. Aliases normalize onto these, and the field stores
 #: only these, so the Literal describes what is actually held. Authored code

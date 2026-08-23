@@ -1,5 +1,5 @@
 # tests/svy/core/test_repwgts_union.py
-"""RepWeights as a tagged union — see docs/design/rep-weights-tagged-union.md."""
+"""RepWeights as a tagged union."""
 
 from __future__ import annotations
 
