@@ -1,0 +1,46 @@
+name: svy-io Tests
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/svy-io/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/svy-io-tests.yml"
+  # No path filter on PRs, matching svy-tests.yml: if this becomes a required
+  # status check on main, a path-filtered check would leave every non-matching
+  # PR stuck waiting for a run that never starts.
+  pull_request:
+    branches: [main]
+concurrency:
+  group: ci-${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test svy-io (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "latest"
+          python-version: ${{ matrix.python-version }}
+      # Builds the native extension too: svy-io uses the maturin backend, so
+      # syncing the workspace compiles svyreadstat_rs against vendored ReadStat.
+      - name: Install deps
+        run: uv sync --all-packages
+      - name: Run Python tests
+        run: make test-svy-io
+
+  # No Rust job yet. All three checks are red on main today and clearing that
+  # is its own piece of work: `cargo fmt --check` fails on four drifted files,
+  # `cargo clippy -- -D warnings` reports 28 errors across nine lint kinds, and
+  # a plain `cargo test` cannot link the pyo3 cdylib against libpython. Adding
+  # a job that always fails would train people to ignore it.
