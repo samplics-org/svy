@@ -8,6 +8,16 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 ### Added
 
+- **The public surface is now pinned by a test.** Every name in `__all__` must resolve, be callable, appear once, and match what `from svy_io import *` actually yields; each documented alias must be the *same object* as its target; and every module must be imported by something. This guards a failure that has already happened: `svy` called `svy_io.write_spss` and `svy_io.write_sas`, neither of which has ever existed, and both calls shipped with a `# type: ignore[attr-defined]` silencing the type checker. Nothing failed until someone ran the writer. Verified with probes — adding a phantom name to `__all__` fails three of these tests, and adding a module nothing imports fails another.
+- **`read_spss` dispatch and `get_user_missing_for_column` are tested.** Both were public and referenced by no test. `read_spss` is not a reader but a dispatcher that picks one by file extension, so the routing is the whole function: `.sav` now provably produces exactly what `read_sav` does, arguments are forwarded rather than dropped, the match is case-insensitive, and an unrecognized extension raises instead of guessing from content.
+
+### Removed
+
+- **BREAKING: `VarMeta`, `ValueLabels`, `MissingRule` and `SvyMetadata` are no longer exported.** These dataclasses were public and nothing in the package ever constructed one. They also disagreed with what the readers return — `SvyMetadata.value_labels` was declared `Dict[str, ValueLabels]` where a reader hands back a `list` of plain dicts, and `VarMeta` lacked fields the native layer emits. Anyone importing them to type code against `read_sav` was being misled by them. Nothing in `svy` or in this package referenced them.
+- **`utils.py`.** Six functions, 36 statements, 0% coverage — because `__init__` did not import it and nothing else in the package or the tests did either. Not undertested: unreachable.
+
+### Added
+
 - **Readers surface the declared measurement level ([#130](https://github.com/samplics-org/svy/issues/130)).** Each entry in `meta["vars"]` now carries `measure` — `"nominal"`, `"ordinal"`, or `"scale"` — read from ReadStat's `readstat_variable_get_measure`. A format that carries no such attribute (Stata) or a variable whose writer never set one reports `None` rather than `"scale"`, so a caller can tell "declared continuous" from "never declared". Worth knowing before relying on it: SPSS defaults numeric variables to `"scale"` whether or not anyone meant it, so only `"nominal"` and `"ordinal"` are positive declarations.
 
 ### Fixed

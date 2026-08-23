@@ -7,7 +7,6 @@ from .labelled import (
     labelled,
     labelled_spss,
 )
-from .metadata import MissingRule, SvyMetadata, ValueLabels, VarMeta
 from .sas import apply_value_labels, read_sas, read_sas_arrow, read_xpt, write_xpt
 from .spss import (
     get_column_labels,
@@ -44,7 +43,6 @@ __all__ = [
     "is_labelled",
     "is_labelled_spss",
     "is_tagged_na",
-    "MissingRule",
     "na_tag",
     "print_tagged_na",
     "read_por",
@@ -55,11 +53,8 @@ __all__ = [
     "read_stata",
     "read_dta",
     "read_xpt",
-    "SvyMetadata",
     "tagged_na",
     "TaggedNA",
-    "ValueLabels",
-    "VarMeta",
     "zap_empty",
     "zap_label",
     "zap_labels",
