@@ -49,6 +49,18 @@ testpaths = ["tests"]
 # still claiming features unsupported that this package has shipped for releases.
 xfail_strict = true
 
+# A deprecation is an API this package is scheduled to lose, so it should break a
+# test run rather than scroll past in a warnings summary: `ordering=` on
+# pl.Categorical printed here for releases while silently doing nothing.
+#
+# Do NOT narrow this to `error::DeprecationWarning:polars`. The module field is
+# matched against the frame the warning is attributed to, and polars sets
+# stacklevel to point at *our* code, so `:polars` never matches and the filter
+# silently does nothing. Verified with a probe against both forms.
+filterwarnings = [
+    "error::DeprecationWarning",
+]
+
 # Benchmark configuration
 [tool.pytest-benchmark]
 # Only run benchmarks when --benchmark-only is specified

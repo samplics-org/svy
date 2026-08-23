@@ -18,9 +18,9 @@ from polars.exceptions import ComputeError
 
 import svy_io.svyreadstat_rs as native
 
-from .factor import as_factor
-from .metadata import normalize_user_missing
+from .factor import as_factor, check_ordered_levels, ordered_categories
 from .helpers import _normalize_n_max
+from .metadata import normalize_user_missing
 from .tagged_na import TaggedNA
 
 
@@ -320,13 +320,19 @@ def as_factor_expr(
     if levels not in {"default", "labels", "values", "both"}:
         raise ValueError("levels must be one of {'default','labels','values','both'}")
 
+    if ordered:
+        check_ordered_levels(levels)
+
     col_expr = pl.col(col) if isinstance(col, str) else col
 
     if not value_labels:
+        if ordered:
+            raise ValueError(
+                "ordered=True needs value labels: the code order is what "
+                "defines the order of an ordered factor."
+            )
         # No labels: stringify first (numeric -> Categorical casts are invalid)
-        return col_expr.cast(pl.Utf8).cast(
-            pl.Categorical(ordering="physical" if ordered else "lexical")
-        )
+        return col_expr.cast(pl.Utf8).cast(pl.Categorical)
 
     # Build Utf8 mapping (works regardless of the column's real dtype)
     mapping_utf8 = pl.DataFrame(
@@ -363,13 +369,19 @@ def as_factor_expr(
             )
         else:
             disp = pl.when(label_expr.is_not_null()).then(label_expr).otherwise(key_expr)
-        return disp.cast(pl.Categorical(ordering="physical" if ordered else "lexical"))
+        return disp.cast(pl.Categorical)
 
     elif levels == "labels":
-        return label_expr.cast(pl.Categorical(ordering="physical" if ordered else "lexical"))
+        if ordered:
+            # Enum, not Categorical: Categorical sorts alphabetically, which
+            # puts "Higher" before "None" on an education scale.
+            return label_expr.cast(pl.Enum(ordered_categories(value_labels, levels="labels")))
+        return label_expr.cast(pl.Categorical)
 
     else:  # "values"
-        return key_expr.cast(pl.Categorical(ordering="physical" if ordered else "lexical"))
+        if ordered:
+            return key_expr.cast(pl.Enum(ordered_categories(value_labels, levels="values")))
+        return key_expr.cast(pl.Categorical)
 
 
 def as_factor_df(
@@ -670,7 +682,6 @@ def read_sas_arrow(
     Arrow field metadata (e.g., b'label', b'label_set', b'format') and schema
     metadata (e.g., b'file_label' when present).
     """
-    import pyarrow as pa
     import pyarrow.ipc as pa_ipc
 
     from pyarrow import ArrowInvalid
