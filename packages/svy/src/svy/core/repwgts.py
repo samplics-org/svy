@@ -506,14 +506,6 @@ _MISSING_ARG: object = object()
 
 # Parameters that only some variants carry, for turning msgspec's accurate but
 # terse "Unexpected keyword argument" into one that names the owner.
-# Value a foreign parameter can carry while still meaning "unset", because the
-# flat struct this replaced gave every method's parameters a shared default.
-_NEUTRAL: dict[str, tuple[object, ...]] = {
-    "fay_coef": (0.0, 0, None),
-    "kind": (None,),
-    "paired": (False, None),
-}
-
 _PARAM_OWNER = {
     "fay_coef": ("BrrWgts", "BRR"),
     # kind belongs to bootstrap and to jackknife, with different vocabularies;
@@ -555,22 +547,13 @@ def RepWeights(  # noqa: N802 - a factory that replaced a class of this name
             raise TypeError(f"Missing required argument {_name!r}")
 
     variant = resolve_rep_variant(method)
-    fields = dict(kwargs)
-    # The flat signature this replaced carried every method's parameters, so
-    # callers pass a foreign one at its neutral value to mean "unset" --
-    # fay_coef=0.0 on a bootstrap is not a Fay claim. Those are dropped; a
-    # foreign parameter carrying an actual value still earns an error.
-    for _ in range(len(fields) + 1):
-        try:
-            return variant(prefix=prefix, n_reps=n_reps, **fields)  # type: ignore[return-value]
-        except TypeError as exc:
-            name = _unexpected_param(exc)
-            if name is None:
-                raise
-            if fields.get(name) not in _NEUTRAL.get(name, (None,)):
-                raise _foreign_param_error(variant, name) from exc
-            fields.pop(name)
-    raise AssertionError("unreachable: one parameter is dropped per iteration")
+    try:
+        return variant(prefix=prefix, n_reps=n_reps, **kwargs)  # type: ignore[return-value]
+    except TypeError as exc:
+        name = _unexpected_param(exc)
+        if name is None:
+            raise
+        raise _foreign_param_error(variant, name, kwargs.get(name)) from exc
 
 
 def _unexpected_param(exc: TypeError) -> str | None:
@@ -579,7 +562,7 @@ def _unexpected_param(exc: TypeError) -> str | None:
     return match.group(1) if match else None
 
 
-def _foreign_param_error(variant: type, name: str) -> Exception:
+def _foreign_param_error(variant: type, name: str, value: object = None) -> Exception:
     """Name the variant that owns a parameter msgspec has just refused.
 
     msgspec already rejects a foreign keyword on every path, including direct
@@ -593,7 +576,7 @@ def _foreign_param_error(variant: type, name: str) -> Exception:
     return MethodError.invalid_choice(
         where="svy.RepWeights",
         param=name,
-        got=True,
+        got=value,
         allowed=[None],
         hint=(
             f"'{name}' is a {owner_method} parameter and is not stored on a "

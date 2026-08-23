@@ -16,7 +16,9 @@ from typing import (
 )
 
 from svy.core.repwgts import (
+    BootstrapWgts,
     BrrWgts,
+    JackknifeWgts,
     RepWeights,
     RepWgts,
     _RepWgtsBase,
@@ -134,9 +136,11 @@ def make_rep_weights(
         method=method,
         prefix=prefix,
         n_reps=n_reps,
-        fay_coef=fay_coef,
         df=df,
         padding=padding,
+        # Only BRR has one; forwarding a 0.0 to any other method would be
+        # sending a Fay claim that is not being made.
+        **({"fay_coef": fay_coef} if fay_coef else {}),
     )
 
 
@@ -477,16 +481,25 @@ class Design:
         if isinstance(kind, _MissingType):
             kind = getattr(cur, "kind", None) if _same else None
 
+        # Pass only what this variant carries. Sending a foreign parameter at
+        # its neutral value -- fay_coef=0.0 to a bootstrap -- would need the
+        # receiving end to treat that as "unset", which is the flat struct's
+        # habit, not something the union should have to accommodate.
+        variant_only: dict[str, object] = {}
+        if _variant is BrrWgts:
+            variant_only["fay_coef"] = fay_coef
+        if _variant in (BootstrapWgts, JackknifeWgts) and kind is not None:
+            variant_only["kind"] = kind
+
         updated_rep_wgts = RepWeights(
             method=resolved_method,
             prefix=resolved_prefix,
             n_reps=resolved_n_reps,
-            fay_coef=fay_coef if _variant is BrrWgts else 0.0,
             df=df,
             padding=padding,
             scale=scale,
             rep_coefs=rep_coefs,
-            kind=kind,
+            **variant_only,
         )
 
         return self.update(rep_wgts=updated_rep_wgts)

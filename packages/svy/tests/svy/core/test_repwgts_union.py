@@ -382,12 +382,11 @@ def test_factory_forwards_unknown_parameters_to_the_variant():
     assert (rw.fay_coef, rw.padding) == (0.5, 3)
 
 
-def test_a_neutral_foreign_parameter_means_unset_not_a_claim():
-    """The flat struct gave every method's parameters a shared default, so
-    fay_coef=0.0 on a bootstrap is how callers spell "not applicable"."""
-    assert isinstance(
-        RepWeights(method="bootstrap", prefix="b", n_reps=10, fay_coef=0.0), BootstrapWgts
-    )
+def test_a_foreign_parameter_is_refused_even_at_its_neutral_value():
+    """fay_coef=0.0 on a bootstrap is still a Fay parameter on a design that has
+    none. Callers that know the variant should not be sending it at all."""
+    with pytest.raises(MethodError):
+        RepWeights(method="bootstrap", prefix="b", n_reps=10, fay_coef=0.0)
 
 
 def test_a_foreign_parameter_carrying_a_value_still_names_its_owner():
