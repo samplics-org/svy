@@ -124,8 +124,8 @@ class TestReplicateGLM:
         from collections import Counter
 
         n_h = Counter(strata)
-        rscales = tuple((n_h[h] - 1.0) / n_h[h] for h in strata)
-        rw = RepWeights(method="jackknife", prefix="jw", n_reps=n, rscales=rscales)
+        coefs = tuple((n_h[h] - 1.0) / n_h[h] for h in strata)
+        rw = RepWeights(method="jackknife", prefix="jw", n_reps=n, scale=coefs)
         s = Sample(df, Design(stratum="stype", wgt="pw", rep_wgts=rw))
         m = s.glm.fit(y="api00", x=["ell", "meals"])
         got = [c.se for c in m.fitted.coefs]
@@ -141,8 +141,8 @@ class TestReplicateGLM:
         from collections import Counter
 
         n_h = Counter(strata)
-        rscales = tuple((n_h[h] - 1.0) / n_h[h] for h in strata)
-        rw = RepWeights(method="jackknife", prefix="jw", n_reps=n, rscales=rscales)
+        coefs = tuple((n_h[h] - 1.0) / n_h[h] for h in strata)
+        rw = RepWeights(method="jackknife", prefix="jw", n_reps=n, scale=coefs)
         s_rep = Sample(df, Design(stratum="stype", wgt="pw", rep_wgts=rw))
         s_tay = Sample(api_strat, Design(stratum="stype", wgt="pw"))
         se_rep = [c.se for c in s_rep.glm.fit(y="api00", x=["ell", "meals"]).fitted.coefs]

@@ -55,7 +55,7 @@ def _taylor_sample(data):
 
 
 def _rep_sample(data, df=None):
-    rep = RepWeights(method="jackknife", prefix="rw", n_reps=N_REPS, df=df, rscales=RSCALES)
+    rep = RepWeights(method="jackknife", prefix="rw", n_reps=N_REPS, df=df, scale=RSCALES)
     return Sample(data, Design(wgt="w", stratum="stratum", psu="psu_id", rep_wgts=rep))
 
 

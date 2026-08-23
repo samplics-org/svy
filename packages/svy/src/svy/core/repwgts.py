@@ -57,6 +57,27 @@ _BS_KIND_ALIASES: dict[str, str] = {
 # =============================================================================
 
 
+def _normalize_scale(value: float | Sequence[float], n_reps: int, param: str) -> tuple[float, ...]:
+    """Broadcast a scalar, or validate a sequence against ``n_reps``.
+
+    Stored normalized so that every reader downstream sees one shape and the
+    length is wrong at construction rather than at estimation.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return (float(value),) * n_reps
+    if isinstance(value, (str, bytes, bytearray)) or not isinstance(value, Sequence):
+        raise TypeError(
+            f"'{param}' must be a float or a sequence of floats, got {type(value).__name__}."
+        )
+    values = tuple(float(v) for v in value)
+    if len(values) != n_reps:
+        raise ValueError(
+            f"'{param}' has {len(values)} entries but n_reps is {n_reps}. "
+            f"Pass a scalar to use the same coefficient for every replicate."
+        )
+    return values
+
+
 class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     """Fields every replicate design has, whatever produced it.
 
@@ -70,11 +91,22 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     # weight set and therefore the same for every domain.
     df: int | None = None
     padding: int | None = None  # None = auto-detect, 0 = none, >0 = zero-pad width
-    # Per-replicate variance coefficients (R's scale*rscales combined). Kept
-    # common rather than on JackknifeWgts: R's svrepdesign takes scale/rscales
-    # for every type=, and the default is correct for BRR/bootstrap/SDR/JK1 --
-    # stratified JKn merely needs a non-default.
-    rscales: tuple[float, ...] | None = None
+    # Per-replicate variance coefficients, split by who supplied them -- the one
+    # axis that is verifiable. "Is this a tweak or the standard value?" is not:
+    # a user declaring stratified JKn supplies the *standard* coefficient,
+    # because svy cannot derive it from replicate weights alone.
+    #
+    # scale: the user said so. R's svrepdesign takes scale/rscales for every
+    # type=, and svy folds the pair into this one field (svy's scale is R's
+    # scale * rscales). A scalar is broadcast to every replicate. Replaces,
+    # rather than multiplies, the method default.
+    scale: float | Sequence[float] | None = None
+    # rep_coefs: svy computed these and cannot recompute them later. Exists for
+    # one case -- JKn's (n_h-1)/n_h is the only standard coefficient that is not
+    # closed-form in n_reps: it needs per-stratum PSU counts, coefficients() has
+    # no frame, and the stratum column may be gone by estimation time. Filled by
+    # create_jk_wgts; users want ``scale``.
+    rep_coefs: tuple[float, ...] | None = None
 
     def __post_init__(self) -> None:
         if not self.prefix or not self.prefix.strip():
@@ -85,6 +117,14 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError(f"df must be > 0. Got {self.df}.")
         if self.padding is not None and self.padding < 0:
             raise ValueError(f"padding must be >= 0. Got {self.padding}.")
+        if self.scale is not None:
+            msgspec.structs.force_setattr(
+                self, "scale", _normalize_scale(self.scale, self.n_reps, "scale")
+            )
+        if self.rep_coefs is not None:
+            msgspec.structs.force_setattr(
+                self, "rep_coefs", _normalize_scale(self.rep_coefs, self.n_reps, "rep_coefs")
+            )
 
     # ---- back-compat read surface ------------------------------------------
 
@@ -145,10 +185,26 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     # ---- variance ------------------------------------------------------------
 
     def coefficients(self) -> list[float]:
-        """Per-replicate variance coefficients.
+        """Per-replicate variance coefficients, in precedence order.
 
-        Lives on the variant rather than in a distant ``match`` so that adding a
-        method, or a bootstrap kind whose scale differs, stays a local change.
+        The override is resolved *here*, at the single point of use, and the
+        variants never see it -- they implement only their own default. Before
+        the tagged union this lived at one site in the kernel
+        (``rscales.unwrap_or_else(|| replicate_coefficients(...))``); scattering
+        it into per-variant methods gave every method its own chance to forget,
+        and three of four did. A new variant cannot regress it.
+        """
+        if self.scale is not None:
+            return list(self.scale)  # the user asserted these
+        if self.rep_coefs is not None:
+            return list(self.rep_coefs)  # svy computed them and cannot redo it
+        return self._default_coefficients()
+
+    def _default_coefficients(self) -> list[float]:
+        """The method's standard coefficients, closed-form in ``n_reps``.
+
+        The only thing a variant implements. Adding a method, or a bootstrap
+        kind whose scale differs, stays a local change.
         """
         raise NotImplementedError
 
@@ -195,7 +251,10 @@ class BootstrapWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="Bootstrap", ta
         super().__post_init__()
         msgspec.structs.force_setattr(self, "kind", normalize_bootstrap_kind(self.kind))
 
-    def coefficients(self) -> list[float]:
+    def _default_coefficients(self) -> list[float]:
+        # Both kinds: the kind decides how the replicates are drawn, not how the
+        # variance is scaled. A kind whose scale differs (svrep's generalized
+        # bootstrap, tau^2/B) branches here.
         return [1.0 / self.n_reps] * self.n_reps
 
     def _variant_parts(self) -> list[str]:
@@ -208,9 +267,10 @@ class BootstrapWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="Bootstrap", ta
 class JackknifeWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="Jackknife", tag_field="method"):
     paired: bool = False  # JK2 paired vs JK1/JKn
 
-    def coefficients(self) -> list[float]:
-        if self.rscales is not None:
-            return list(self.rscales)
+    def _default_coefficients(self) -> list[float]:
+        # JK1's global (R-1)/R. Stratified JKn's (n_h-1)/n_h is not closed-form
+        # in n_reps, so it arrives through rep_coefs (svy-generated) or scale
+        # (user-declared) and never reaches here.
         return [(self.n_reps - 1) / self.n_reps] * self.n_reps
 
     def _variant_parts(self) -> list[str]:
@@ -227,9 +287,9 @@ class BrrWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="BRR", tag_field="met
         if self.fay_coef < 0:
             raise ValueError(f"fay_coef cannot be negative. Got {self.fay_coef}.")
 
-    def coefficients(self) -> list[float]:
-        scale = 1.0 / (self.n_reps * (1.0 - self.fay_coef) ** 2)
-        return [scale] * self.n_reps
+    def _default_coefficients(self) -> list[float]:
+        coef = 1.0 / (self.n_reps * (1.0 - self.fay_coef) ** 2)
+        return [coef] * self.n_reps
 
     def _variant_parts(self) -> list[str]:
         return [f"fay={self.fay_coef}"]
@@ -239,7 +299,7 @@ class BrrWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="BRR", tag_field="met
 
 
 class SdrWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="SDR", tag_field="method"):
-    def coefficients(self) -> list[float]:
+    def _default_coefficients(self) -> list[float]:
         return [4.0 / self.n_reps] * self.n_reps
 
 
@@ -337,7 +397,8 @@ def RepWeights(  # noqa: N802 - a factory that replaced a class of this name
     fay_coef: float = 0.0,
     df: int | None = None,
     padding: int | None = None,
-    rscales: tuple[float, ...] | None = None,
+    scale: float | Sequence[float] | None = None,
+    rep_coefs: tuple[float, ...] | None = None,
     *,
     kind: str | None = None,
     paired: bool = False,
@@ -362,7 +423,9 @@ def RepWeights(  # noqa: N802 - a factory that replaced a class of this name
 
     variant = resolve_rep_variant(method)
 
-    common = dict(prefix=prefix, n_reps=n_reps, df=df, padding=padding, rscales=rscales)
+    common = dict(
+        prefix=prefix, n_reps=n_reps, df=df, padding=padding, scale=scale, rep_coefs=rep_coefs
+    )
 
     if variant is BootstrapWgts:
         _reject(variant, fay_coef=fay_coef, paired=paired)

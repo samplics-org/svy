@@ -406,7 +406,8 @@ class Design:
         fay_coef: float | _MissingType = _MISSING,
         df: int | None | _MissingType = _MISSING,
         padding: int | None | _MissingType = _MISSING,
-        rscales: tuple[float, ...] | None | _MissingType = _MISSING,
+        scale: float | Sequence[float] | None | _MissingType = _MISSING,
+        rep_coefs: tuple[float, ...] | None | _MissingType = _MISSING,
         kind: str | None | _MissingType = _MISSING,
         paired: bool | _MissingType = _MISSING,
     ) -> Self:
@@ -423,7 +424,8 @@ class Design:
             and isinstance(fay_coef, _MissingType)
             and isinstance(df, _MissingType)
             and isinstance(padding, _MissingType)
-            and isinstance(rscales, _MissingType)
+            and isinstance(scale, _MissingType)
+            and isinstance(rep_coefs, _MissingType)
             and isinstance(kind, _MissingType)
             and isinstance(paired, _MissingType)
         ):
@@ -462,8 +464,11 @@ class Design:
         if isinstance(padding, _MissingType):
             padding = cur.padding if cur else None
 
-        if isinstance(rscales, _MissingType):
-            rscales = cur.rscales if cur else None
+        if isinstance(scale, _MissingType):
+            scale = cur.scale if cur else None
+
+        if isinstance(rep_coefs, _MissingType):
+            rep_coefs = cur.rep_coefs if cur else None
 
         # 5. Create the new variant.
         _variant = resolve_rep_variant(resolved_method)
@@ -483,7 +488,8 @@ class Design:
             fay_coef=fay_coef if _variant is BrrWgts else 0.0,
             df=df,
             padding=padding,
-            rscales=rscales,
+            scale=scale,
+            rep_coefs=rep_coefs,
             kind=kind,
             paired=paired,
         )

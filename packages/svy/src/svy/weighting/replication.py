@@ -362,7 +362,7 @@ def create_jk_wgts(
     stratum_int = _to_int_array(data, design.stratum)
 
     assert rust_create_jk_wgts is not None  # noqa: S101
-    rep_mat, df_val, rscales = rust_create_jk_wgts(
+    rep_mat, df_val, rep_coefs = rust_create_jk_wgts(
         main_weights,
         psu_int,
         stratum_int,
@@ -386,8 +386,10 @@ def create_jk_wgts(
             df=df_val,
             paired=paired,
             # Per-replicate (n_h-1)/n_h coefficients: exact stratified-JKn
-            # variance instead of the global (R-1)/R approximation.
-            rscales=tuple(rscales),
+            # variance instead of the global (R-1)/R approximation. The computed
+            # channel, not `scale` -- svy derived these, the user did not assert
+            # them, and only svy can (it has the strata; coefficients() does not).
+            rep_coefs=tuple(rep_coefs),
         )
     )
 

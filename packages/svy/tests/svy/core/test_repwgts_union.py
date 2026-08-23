@@ -95,9 +95,9 @@ def test_coefficients_match_the_rust_kernel():
     assert JackknifeWgts(prefix="w", n_reps=n).coefficients() == pytest.approx([(n - 1) / n] * n)
 
 
-def test_jackknife_rscales_override_the_default():
+def test_user_scale_overrides_the_default():
     rs = tuple(0.5 for _ in range(10))
-    assert JackknifeWgts(prefix="w", n_reps=10, rscales=rs).coefficients() == list(rs)
+    assert BootstrapWgts(prefix="w", n_reps=10, scale=rs).coefficients() == list(rs)
 
 
 # ---------------------------------------------------------------------------

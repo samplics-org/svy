@@ -79,9 +79,9 @@ def test_variant_coefficients_match_the_kernel_formulas(variant, expected):
     assert variant.coefficients() == pytest.approx(expected, rel=1e-15)
 
 
-def test_user_rscales_take_precedence_over_the_method_default():
+def test_user_scale_takes_precedence_over_the_method_default():
     rs = tuple(np.linspace(0.5, 1.5, 10))
-    assert JackknifeWgts(prefix="w", n_reps=10, rscales=rs).coefficients() == pytest.approx(
+    assert BootstrapWgts(prefix="w", n_reps=10, scale=rs).coefficients() == pytest.approx(
         list(rs)
     )
 
