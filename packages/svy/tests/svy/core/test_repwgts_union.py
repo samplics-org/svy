@@ -44,11 +44,8 @@ def test_method_property_is_the_display_label(variant, expected_method):
     "ctor, kwargs",
     [
         (BootstrapWgts, {"fay_coef": 0.5}),
-        (BootstrapWgts, {"paired": True}),
-        (JackknifeWgts, {"kind": "poisson"}),
         (JackknifeWgts, {"fay_coef": 0.5}),
         (BrrWgts, {"kind": "poisson"}),
-        (BrrWgts, {"paired": True}),
         (SdrWgts, {"fay_coef": 0.5}),
     ],
 )
@@ -56,6 +53,39 @@ def test_foreign_parameters_are_unrepresentable(ctor, kwargs):
     """The flat struct accepted all of these and never read them."""
     with pytest.raises(TypeError):
         ctor(prefix="w", n_reps=10, **kwargs)
+
+
+def test_jackknife_rejects_a_bootstrap_kind():
+    """Both variants have a ``kind``; the vocabularies are not interchangeable."""
+    with pytest.raises(MethodError) as exc:
+        JackknifeWgts(prefix="w", n_reps=10, kind="poisson")
+    assert "jk1" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "given, expected",
+    [("jk1", "jk1"), ("JKN", "jkn"), ("jk_2", "jk2"), ("paired", "jk2")],
+)
+def test_jackknife_kind_aliases_normalize(given, expected):
+    assert JackknifeWgts(prefix="w", n_reps=10, kind=given).kind == expected
+
+
+def test_jackknife_kind_is_unspecified_by_default():
+    """None is not JK1: same number, different statement about who said so."""
+    rw = JackknifeWgts(prefix="w", n_reps=10)
+    assert rw.kind is None
+    assert rw.coefficients() == [0.9] * 10
+
+
+def test_declared_jkn_without_coefficients_refuses_to_guess():
+    """An unmet claim fails; an absent one falls back."""
+    with pytest.raises(MethodError) as exc:
+        JackknifeWgts(prefix="w", n_reps=10, kind="jkn").coefficients()
+    assert "scale" in str(exc.value)
+
+
+def test_declared_jk2_uses_one_not_the_global():
+    assert JackknifeWgts(prefix="w", n_reps=10, kind="jk2").coefficients() == [1.0] * 10
 
 
 def test_bootstrap_kind_is_a_value_not_a_type():
@@ -133,7 +163,6 @@ def test_bootstrap_kind_aliases_normalize(given):
     "kwargs, param",
     [
         ({"method": "bootstrap", "fay_coef": 0.5}, "fay_coef"),
-        ({"method": "bootstrap", "paired": True}, "paired"),
         ({"method": "brr", "kind": "poisson"}, "kind"),
         ({"method": "jackknife", "fay_coef": 0.5}, "fay_coef"),
         ({"method": "sdr", "kind": "poisson"}, "kind"),
@@ -246,11 +275,16 @@ def test_update_rep_weights_carries_kind_within_the_same_method():
 
 
 def test_update_rep_weights_drops_kind_when_the_method_changes():
-    """A bootstrap kind means nothing on a jackknife design."""
+    """A bootstrap kind means nothing on a jackknife design.
+
+    Both variants carry a ``kind`` now, with different vocabularies, so the
+    invariant is that the value does not survive the change of method -- not
+    that the field is absent.
+    """
     d = svy.Design(wgt="w", rep_wgts=BootstrapWgts(prefix="b", n_reps=10, kind="poisson"))
     updated = d.update_rep_weights(method="jackknife")
     assert isinstance(updated.rep_wgts, JackknifeWgts)
-    assert not hasattr(updated.rep_wgts, "kind")
+    assert updated.rep_wgts.kind is None
 
 
 def test_variants_are_publicly_exported():

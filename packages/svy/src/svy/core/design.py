@@ -409,7 +409,6 @@ class Design:
         scale: float | Sequence[float] | None | _MissingType = _MISSING,
         rep_coefs: tuple[float, ...] | None | _MissingType = _MISSING,
         kind: str | None | _MissingType = _MISSING,
-        paired: bool | _MissingType = _MISSING,
     ) -> Self:
         """
         Return a new Design with selected RepWeights fields updated.
@@ -427,7 +426,6 @@ class Design:
             and isinstance(scale, _MissingType)
             and isinstance(rep_coefs, _MissingType)
             and isinstance(kind, _MissingType)
-            and isinstance(paired, _MissingType)
         ):
             return self
 
@@ -478,8 +476,6 @@ class Design:
         _same = cur is not None and type(cur) is _variant
         if isinstance(kind, _MissingType):
             kind = getattr(cur, "kind", None) if _same else None
-        if isinstance(paired, _MissingType):
-            paired = getattr(cur, "paired", False) if _same else False
 
         updated_rep_wgts = RepWeights(
             method=resolved_method,
@@ -491,7 +487,6 @@ class Design:
             scale=scale,
             rep_coefs=rep_coefs,
             kind=kind,
-            paired=paired,
         )
 
         return self.update(rep_wgts=updated_rep_wgts)

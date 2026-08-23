@@ -53,6 +53,59 @@ _BS_KIND_ALIASES: dict[str, str] = {
 
 
 # =============================================================================
+# Jackknife kinds
+# =============================================================================
+#
+# Three families, and unlike the bootstrap kinds they carry different variance
+# coefficients -- which is why this replaced a ``paired: bool``. The boolean
+# folded JK1 and JKn together into False, but those two have different
+# coefficients, so it could not express the distinction the coefficient logic
+# depends on. The names are R's ``svrepdesign(type=)`` strings.
+#
+# "jk1"  unstratified delete-one-PSU          (R-1)/R
+# "jkn"  stratified delete-one-PSU            (n_h-1)/n_h, per replicate
+# "jk2"  one paired replicate per stratum     1.0
+JACKKNIFE_KINDS = ("jk1", "jkn", "jk2")
+
+_JK_KIND_ALIASES: dict[str, str] = {
+    "jk1": "jk1",
+    "jk-1": "jk1",
+    "jk_1": "jk1",
+    "jkn": "jkn",
+    "jk-n": "jkn",
+    "jk_n": "jkn",
+    "jk2": "jk2",
+    "jk-2": "jk2",
+    "jk_2": "jk2",
+    # "paired" describes the design (two PSUs per stratum), not the replication
+    # scheme -- a JKn on a paired design is still JKn. Accepted because people
+    # reach for it, normalized to the scheme's actual name.
+    "paired": "jk2",
+}
+
+
+def normalize_jackknife_kind(kind: str) -> str:
+    """Normalize a jackknife ``kind``. Case- and separator-insensitive."""
+    if not isinstance(kind, str):
+        raise TypeError(f"'kind' must be a string, got {type(kind).__name__}.")
+    resolved = _JK_KIND_ALIASES.get(kind.strip().lower())
+    if resolved is None:
+        raise MethodError.invalid_choice(
+            where="svy.RepWeights",
+            param="kind",
+            got=kind,
+            allowed=list(JACKKNIFE_KINDS),
+            docs_url=None,
+            hint=(
+                "'jk1' is the unstratified delete-one-PSU jackknife, 'jkn' its "
+                "stratified form, and 'jk2' the paired one-replicate-per-stratum "
+                "scheme. Leave it unset if you do not know which the weights are."
+            ),
+        )
+    return resolved
+
+
+# =============================================================================
 # Shared fields and behaviour
 # =============================================================================
 
@@ -265,16 +318,44 @@ class BootstrapWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="Bootstrap", ta
 
 
 class JackknifeWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="Jackknife", tag_field="method"):
-    paired: bool = False  # JK2 paired vs JK1/JKn
+    # None = unspecified: nobody has said which family these weights are. That
+    # is a different statement from "jk1", even though the two produce the same
+    # number -- svy only claims what it knows or what it was told.
+    kind: str | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.kind is not None:
+            msgspec.structs.force_setattr(self, "kind", normalize_jackknife_kind(self.kind))
 
     def _default_coefficients(self) -> list[float]:
-        # JK1's global (R-1)/R. Stratified JKn's (n_h-1)/n_h is not closed-form
-        # in n_reps, so it arrives through rep_coefs (svy-generated) or scale
-        # (user-declared) and never reaches here.
+        if self.kind == "jk2":
+            # One delete-one replicate per stratum. A global (R-1)/R would
+            # understate the variance by exactly that factor.
+            return [1.0] * self.n_reps
+        if self.kind == "jkn":
+            # (n_h-1)/n_h is the only standard coefficient that is not
+            # closed-form in n_reps, and nothing supplied it. An unmet claim
+            # fails; an absent one (kind=None) falls back to the JK1 global.
+            raise MethodError.not_applicable(
+                where="RepWeights.coefficients",
+                method="jackknife",
+                reason=(
+                    "kind='jkn' needs the per-stratum (n_h-1)/n_h coefficients, "
+                    "which cannot be derived from replicate weights alone. Pass "
+                    "'scale' with the coefficients your file documents. Falling "
+                    "back to the JK1 global (R-1)/R would overstate the standard "
+                    "errors"
+                ),
+            )
+        # kind=None (unspecified) and "jk1" alike: the unstratified global.
         return [(self.n_reps - 1) / self.n_reps] * self.n_reps
 
     def _variant_parts(self) -> list[str]:
-        return ["paired=True"] if self.paired else []
+        return [] if self.kind is None else [f"kind={self.kind}"]
+
+    def _plain_variant_lines(self) -> list[str]:
+        return [] if self.kind is None else [f"Kind     : {self.kind}"]
 
 
 class BrrWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="BRR", tag_field="method"):
@@ -401,7 +482,6 @@ def RepWeights(  # noqa: N802 - a factory that replaced a class of this name
     rep_coefs: tuple[float, ...] | None = None,
     *,
     kind: str | None = None,
-    paired: bool = False,
 ) -> RepWgts:
     """Build the replicate-weight variant for ``method``.
 
@@ -428,24 +508,25 @@ def RepWeights(  # noqa: N802 - a factory that replaced a class of this name
     )
 
     if variant is BootstrapWgts:
-        _reject(variant, fay_coef=fay_coef, paired=paired)
+        _reject(variant, fay_coef=fay_coef)
         return BootstrapWgts(
             **common, kind=normalize_bootstrap_kind(kind) if kind is not None else "rao-wu"
         )
     if variant is JackknifeWgts:
-        _reject(variant, fay_coef=fay_coef, kind=kind)
-        return JackknifeWgts(**common, paired=paired)
+        _reject(variant, fay_coef=fay_coef)
+        return JackknifeWgts(**common, kind=kind)
     if variant is BrrWgts:
-        _reject(variant, kind=kind, paired=paired)
+        _reject(variant, kind=kind)
         return BrrWgts(**common, fay_coef=fay_coef)
-    _reject(variant, fay_coef=fay_coef, kind=kind, paired=paired)
+    _reject(variant, fay_coef=fay_coef, kind=kind)
     return SdrWgts(**common)
 
 
 _PARAM_OWNER = {
     "fay_coef": ("BrrWgts", "BRR"),
-    "kind": ("BootstrapWgts", "bootstrap"),
-    "paired": ("JackknifeWgts", "jackknife"),
+    # kind belongs to bootstrap and to jackknife, with different vocabularies;
+    # only BRR and SDR have none.
+    "kind": ("BootstrapWgts or JackknifeWgts", "bootstrap or jackknife"),
 }
 
 
@@ -456,7 +537,7 @@ def _reject(variant: type, **supplied) -> None:
     they are turned away, so nothing downstream holds a value that is wrong.
     """
     for name, value in supplied.items():
-        empty = 0.0 if name == "fay_coef" else (False if name == "paired" else None)
+        empty = 0.0 if name == "fay_coef" else None
         if value == empty or value is empty:
             continue
         owner, owner_method = _PARAM_OWNER[name]

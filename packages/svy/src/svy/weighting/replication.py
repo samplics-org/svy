@@ -378,13 +378,24 @@ def create_jk_wgts(
         [pl.Series(name=col, values=vals) for col, vals in rep_dicts.items()]
     )
 
+    # svy generated these, so the family is a fact rather than an assumption.
+    # A single stratum is not merely "close to" JK1: JKn's (n_h-1)/n_h with one
+    # stratum of n PSUs gives R = n replicates each at (n-1)/n, which is exactly
+    # the JK1 global. The collapse is identical, not approximate.
+    if paired:
+        jk_kind = "jk2"
+    elif design.stratum is None or len(np.unique(stratum_int)) <= 1:
+        jk_kind = "jk1"
+    else:
+        jk_kind = "jkn"
+
     sample._design = sample._design.fill_missing(
         rep_wgts=RepWeights(
             method="jackknife",
             prefix=rep_prefix,
             n_reps=n_reps,
             df=df_val,
-            paired=paired,
+            kind=jk_kind,
             # Per-replicate (n_h-1)/n_h coefficients: exact stratified-JKn
             # variance instead of the global (R-1)/R approximation. The computed
             # channel, not `scale` -- svy derived these, the user did not assert
