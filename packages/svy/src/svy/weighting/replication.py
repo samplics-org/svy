@@ -40,8 +40,13 @@ except ImportError:  # pragma: no cover
     rust_create_jk_wgts = None
     rust_create_sdr_wgts = None
 
-from svy.core.design import RepWeights
-from svy.core.repwgts import normalize_bootstrap_kind
+from svy.core.repwgts import (
+    BootstrapWgts,
+    BrrWgts,
+    JackknifeWgts,
+    SdrWgts,
+    normalize_bootstrap_kind,
+)
 from svy.errors import DimensionError, MethodError
 from svy.utils.checks import drop_missing
 from svy.utils.random_state import RandomState, resolve_random_state
@@ -321,13 +326,7 @@ def create_brr_wgts(
     )
 
     sample._design = sample._design.fill_missing(
-        rep_wgts=RepWeights(
-            method="brr",
-            prefix=rep_prefix,
-            n_reps=n_reps_actual,
-            fay_coef=fay_coef,
-            df=df_val,
-        )
+        rep_wgts=BrrWgts(prefix=rep_prefix, n_reps=n_reps_actual, fay_coef=fay_coef, df=df_val)
     )
 
     return sample
@@ -390,8 +389,7 @@ def create_jk_wgts(
         jk_kind = "jkn"
 
     sample._design = sample._design.fill_missing(
-        rep_wgts=RepWeights(
-            method="jackknife",
+        rep_wgts=JackknifeWgts(
             prefix=rep_prefix,
             n_reps=n_reps,
             df=df_val,
@@ -515,12 +513,8 @@ def create_bs_wgts(
         [pl.Series(name=col, values=vals) for col, vals in rep_dicts.items()]
     )
 
-    sample._design = sample._design.update_rep_weights(
-        method="bootstrap",
-        prefix=rep_prefix,
-        n_reps=n_reps,
-        df=df_val,
-        kind=kind,
+    sample._design = sample._design.update(
+        rep_wgts=BootstrapWgts(prefix=rep_prefix, n_reps=n_reps, df=df_val, kind=kind)
     )
 
     return sample
@@ -576,11 +570,8 @@ def create_sdr_wgts(
         [pl.Series(name=col, values=vals) for col, vals in rep_dicts.items()]
     )
 
-    sample._design = sample._design.update_rep_weights(
-        method="sdr",
-        prefix=rep_prefix,
-        n_reps=n_reps,
-        df=df_val,
+    sample._design = sample._design.update(
+        rep_wgts=SdrWgts(prefix=rep_prefix, n_reps=n_reps, df=df_val)
     )
 
     return sample

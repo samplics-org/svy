@@ -110,6 +110,14 @@ def normalize_jackknife_kind(kind: str) -> str:
 # =============================================================================
 
 
+def _fmt_coefs(values: Sequence[float]) -> str:
+    """A uniform coefficient prints as the scalar it is."""
+    uniq = set(values)
+    if len(uniq) == 1:
+        return repr(next(iter(uniq)))
+    return f"({values[0]!r}, ... , {values[-1]!r}) x{len(values)}"
+
+
 def _normalize_scale(value: float | Sequence[float], n_reps: int, param: str) -> tuple[float, ...]:
     """Broadcast a scalar, or validate a sequence against ``n_reps``.
 
@@ -185,9 +193,13 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     def method(self) -> str:
         """The coarse method family, as a display label.
 
-        One of ``"Bootstrap"``, ``"Jackknife"``, ``"BRR"``, ``"SDR"``. A label
-        for display and reporting: the variant's own type is what decides
-        anything, so nothing reads this to choose a code path.
+        One of ``"Bootstrap"``, ``"Jackknife"``, ``"BRR"``, ``"SDR"``. For
+        display and reporting only -- nothing in ``svy`` reads this to choose a
+        code path. Internal code that needs to copy a design uses
+        ``msgspec.structs.replace``, which preserves the type; code that needs
+        the coefficients calls ``coefficients()``. Both used to go through this
+        label and back via the string factory, which is how a bootstrap and a
+        jackknife could end up scaled by different rules.
         """
         return self.__struct_config__.tag
 
@@ -267,11 +279,25 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
         """Variant-specific fragments for repr. Overridden where there are any."""
         return []
 
+    def _coef_parts(self) -> list[str]:
+        """Where the coefficients came from, when it is not the method default.
+
+        A non-standard variance coefficient is exactly what a reviewer or a
+        replicator needs to see, and it is set rarely enough that showing it
+        costs nothing.
+        """
+        if self.scale is not None:
+            return [f"scale={_fmt_coefs(self.scale)}"]
+        if self.rep_coefs is not None:
+            return [f"rep_coefs={_fmt_coefs(self.rep_coefs)} (derived)"]
+        return []
+
     def __repr__(self) -> str:
         parts = [f"method={self.method}", f"prefix='{self.prefix}'", f"n_reps={self.n_reps}"]
         if self.df is not None:
             parts.append(f"df={self.df}")
         parts.extend(self._variant_parts())
+        parts.extend(self._coef_parts())
         if self.padding is not None:
             parts.append(f"padding={self.padding}")
         return f"RepWeights({', '.join(parts)})"
@@ -286,6 +312,10 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
             f"DF       : {self.df if self.df is not None else 'auto'}",
         ]
         lines.extend(self._plain_variant_lines())
+        if self.scale is not None:
+            lines.append(f"Scale    : {_fmt_coefs(self.scale)}")
+        elif self.rep_coefs is not None:
+            lines.append(f"Coefs    : {_fmt_coefs(self.rep_coefs)} (derived)")
         return "\n".join(lines)
 
     def _plain_variant_lines(self) -> list[str]:
@@ -302,7 +332,11 @@ class BootstrapWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="Bootstrap", ta
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        msgspec.structs.force_setattr(self, "kind", normalize_bootstrap_kind(self.kind))
+        # An explicit None means the same as omitting it: this field's default
+        # is a value, not an absence, because both kinds share the 1/R
+        # coefficient and rao-wu is the dominant convention.
+        resolved = "rao-wu" if self.kind is None else normalize_bootstrap_kind(self.kind)
+        msgspec.structs.force_setattr(self, "kind", resolved)
 
     def _default_coefficients(self) -> list[float]:
         # Both kinds: the kind decides how the replicates are drawn, not how the
@@ -311,7 +345,7 @@ class BootstrapWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="Bootstrap", ta
         return [1.0 / self.n_reps] * self.n_reps
 
     def _variant_parts(self) -> list[str]:
-        return [] if self.kind == "rao-wu" else [f"kind={self.kind}"]
+        return [f"kind={self.kind}"]
 
     def _plain_variant_lines(self) -> list[str]:
         return [f"Kind     : {self.kind}"]
@@ -470,57 +504,15 @@ def normalize_bootstrap_kind(kind: str) -> str:
 
 _MISSING_ARG: object = object()
 
-
-def RepWeights(  # noqa: N802 - a factory that replaced a class of this name
-    method: str = _MISSING_ARG,  # type: ignore[assignment]
-    prefix: str = _MISSING_ARG,  # type: ignore[assignment]
-    n_reps: int = _MISSING_ARG,  # type: ignore[assignment]
-    fay_coef: float = 0.0,
-    df: int | None = None,
-    padding: int | None = None,
-    scale: float | Sequence[float] | None = None,
-    rep_coefs: tuple[float, ...] | None = None,
-    *,
-    kind: str | None = None,
-) -> RepWgts:
-    """Build the replicate-weight variant for ``method``.
-
-    Kept as a factory with the pre-union signature so existing call sites keep
-    working. New code can construct the variant directly:
-
-    >>> BootstrapWgts(prefix="bsw", n_reps=1000, kind="poisson")
-    >>> BrrWgts(prefix="brr_", n_reps=32, fay_coef=0.5)
-
-    Parameters that do not belong to ``method`` are rejected rather than stored:
-    the union is what makes ``fay_coef`` on a bootstrap unrepresentable, and the
-    factory is the boundary that enforces it for string callers.
-    """
-    # Sentinels rather than bare required parameters so the message matches the
-    # struct this factory replaced.
-    for _name, _val in (("method", method), ("prefix", prefix), ("n_reps", n_reps)):
-        if _val is _MISSING_ARG:
-            raise TypeError(f"Missing required argument {_name!r}")
-
-    variant = resolve_rep_variant(method)
-
-    common = dict(
-        prefix=prefix, n_reps=n_reps, df=df, padding=padding, scale=scale, rep_coefs=rep_coefs
-    )
-
-    if variant is BootstrapWgts:
-        _reject(variant, fay_coef=fay_coef)
-        return BootstrapWgts(
-            **common, kind=normalize_bootstrap_kind(kind) if kind is not None else "rao-wu"
-        )
-    if variant is JackknifeWgts:
-        _reject(variant, fay_coef=fay_coef)
-        return JackknifeWgts(**common, kind=kind)
-    if variant is BrrWgts:
-        _reject(variant, kind=kind)
-        return BrrWgts(**common, fay_coef=fay_coef)
-    _reject(variant, fay_coef=fay_coef, kind=kind)
-    return SdrWgts(**common)
-
+# Parameters that only some variants carry, for turning msgspec's accurate but
+# terse "Unexpected keyword argument" into one that names the owner.
+# Value a foreign parameter can carry while still meaning "unset", because the
+# flat struct this replaced gave every method's parameters a shared default.
+_NEUTRAL: dict[str, tuple[object, ...]] = {
+    "fay_coef": (0.0, 0, None),
+    "kind": (None,),
+    "paired": (False, None),
+}
 
 _PARAM_OWNER = {
     "fay_coef": ("BrrWgts", "BRR"),
@@ -530,25 +522,82 @@ _PARAM_OWNER = {
 }
 
 
-def _reject(variant: type, **supplied) -> None:
-    """Reject parameters that belong to a different method.
+def RepWeights(  # noqa: N802 - a factory that replaced a class of this name
+    method: str = _MISSING_ARG,  # type: ignore[assignment]
+    prefix: str = _MISSING_ARG,  # type: ignore[assignment]
+    n_reps: int = _MISSING_ARG,  # type: ignore[assignment]
+    **kwargs: object,
+) -> RepWgts:
+    """Build the replicate-weight variant for ``method``.
 
-    The flat signature can express combinations the union cannot; this is where
-    they are turned away, so nothing downstream holds a value that is wrong.
+    The door for a method name that arrives as a string -- from a codebook, a
+    config file, or a producer's documentation. New code that knows the method
+    at authoring time should construct the variant directly, which is typed and
+    autocompletes:
+
+    >>> BootstrapWgts(prefix="bsw", n_reps=1000, kind="poisson")
+    >>> BrrWgts(prefix="brr_", n_reps=32, fay_coef=0.5)
+
+    This is a function, not a class: ``isinstance(x, svy.RepWeights)`` and the
+    annotation ``x: svy.RepWeights`` do not work. Use ``svy.RepWgts``, the union
+    of the four variants, for both.
+
+    Parameters that do not belong to ``method`` are refused rather than stored --
+    by the variant itself, since a struct has no field to put them in. This
+    wrapper only improves the message.
     """
-    for name, value in supplied.items():
-        empty = 0.0 if name == "fay_coef" else None
-        if value == empty or value is empty:
-            continue
-        owner, owner_method = _PARAM_OWNER[name]
-        raise MethodError.invalid_choice(
-            where="svy.RepWeights",
-            param=name,
-            got=value,
-            allowed=[empty],
-            hint=(
-                f"'{name}' is a {owner_method} parameter and is not stored on a "
-                f"{variant.__name__} design. Each method carries only its own "
-                f"parameters: {owner} has '{name}'."
-            ),
-        )
+    # Sentinels rather than bare required parameters so the message matches the
+    # struct this factory replaced. Only these three need it: everything else
+    # forwards to msgspec, whose own message is already verbatim
+    # "Missing required argument 'prefix'".
+    for _name, _val in (("method", method), ("prefix", prefix), ("n_reps", n_reps)):
+        if _val is _MISSING_ARG:
+            raise TypeError(f"Missing required argument {_name!r}")
+
+    variant = resolve_rep_variant(method)
+    fields = dict(kwargs)
+    # The flat signature this replaced carried every method's parameters, so
+    # callers pass a foreign one at its neutral value to mean "unset" --
+    # fay_coef=0.0 on a bootstrap is not a Fay claim. Those are dropped; a
+    # foreign parameter carrying an actual value still earns an error.
+    for _ in range(len(fields) + 1):
+        try:
+            return variant(prefix=prefix, n_reps=n_reps, **fields)  # type: ignore[return-value]
+        except TypeError as exc:
+            name = _unexpected_param(exc)
+            if name is None:
+                raise
+            if fields.get(name) not in _NEUTRAL.get(name, (None,)):
+                raise _foreign_param_error(variant, name) from exc
+            fields.pop(name)
+    raise AssertionError("unreachable: one parameter is dropped per iteration")
+
+
+def _unexpected_param(exc: TypeError) -> str | None:
+    """The parameter name msgspec refused, or None if this is another TypeError."""
+    match = re.search(r"Unexpected keyword argument '([^']+)'", str(exc))
+    return match.group(1) if match else None
+
+
+def _foreign_param_error(variant: type, name: str) -> Exception:
+    """Name the variant that owns a parameter msgspec has just refused.
+
+    msgspec already rejects a foreign keyword on every path, including direct
+    construction -- which the hand-rolled guard this replaced never covered. All
+    that is added here is the hint.
+    """
+    owned = _PARAM_OWNER.get(name)
+    if owned is None:
+        return TypeError(f"Unexpected keyword argument {name!r}")
+    owner, owner_method = owned
+    return MethodError.invalid_choice(
+        where="svy.RepWeights",
+        param=name,
+        got=True,
+        allowed=[None],
+        hint=(
+            f"'{name}' is a {owner_method} parameter and is not stored on a "
+            f"{variant.__name__} design. Each method carries only its own "
+            f"parameters: {owner} has '{name}'."
+        ),
+    )

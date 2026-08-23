@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import msgspec
 import numpy as np
 import polars as pl
 
@@ -190,12 +191,8 @@ def adjust(
         df = sample._data
 
         if update_design_wgts:
-            sample._design = sample._design.update_rep_weights(
-                method=design.rep_wgts.method,
-                prefix=wgt_name,
-                n_reps=n_reps,
-                fay_coef=design.rep_wgts.fay_coef,
-                df=design.rep_wgts.df,
+            sample._design = sample._design.update(
+                rep_wgts=msgspec.structs.replace(design.rep_wgts, prefix=wgt_name, n_reps=n_reps)
             )
 
     sample._data = df
@@ -223,12 +220,12 @@ def adjust(
             original_design = sample._design
             tmp_design = original_design.update(wgt=wgt_name)
             if not ignore_reps and design.rep_wgts is not None:
-                tmp_design = tmp_design.update_rep_weights(
-                    method=design.rep_wgts.method,
-                    prefix=wgt_name,
-                    n_reps=len(design.rep_wgts.columns),
-                    fay_coef=design.rep_wgts.fay_coef,
-                    df=design.rep_wgts.df,
+                tmp_design = tmp_design.update(
+                    rep_wgts=msgspec.structs.replace(
+                        design.rep_wgts,
+                        prefix=wgt_name,
+                        n_reps=len(design.rep_wgts.columns),
+                    )
                 )
             sample._design = tmp_design
             sample = _apply_trim(

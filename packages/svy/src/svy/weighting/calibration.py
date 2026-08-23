@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal, Sequence
 
+import msgspec
 import numpy as np
 import polars as pl
 
@@ -482,9 +483,7 @@ def calibrate_matrix(
         # Resolve trim domains (honor TrimConfig.by / min_cell_size, matching
         # the contract adjust()/trim() already implement)
         if trimming.by is not None:
-            t_by_cols = (
-                [trimming.by] if isinstance(trimming.by, str) else list(trimming.by)
-            )
+            t_by_cols = [trimming.by] if isinstance(trimming.by, str) else list(trimming.by)
             missing_by = [c for c in t_by_cols if c not in df.columns]
             if missing_by:
                 raise MethodError.invalid_choice(
@@ -518,16 +517,8 @@ def calibrate_matrix(
                     level=Severity.WARNING,
                 )
                 continue
-            _up = (
-                resolve_threshold(trimming.upper, _w_pos)
-                if trimming.upper is not None
-                else None
-            )
-            _lo = (
-                resolve_threshold(trimming.lower, _w_pos)
-                if trimming.lower is not None
-                else None
-            )
+            _up = resolve_threshold(trimming.upper, _w_pos) if trimming.upper is not None else None
+            _lo = resolve_threshold(trimming.lower, _w_pos) if trimming.lower is not None else None
             trim_groups.append((_mask, _up, _lo))
 
         assert rust_trim_weights is not None  # noqa: S101
@@ -670,12 +661,10 @@ def calibrate_matrix(
             df = df.hstack(wgts_df)
 
             if update_design_wgts:
-                sample._design = sample._design.update_rep_weights(
-                    method=design.rep_wgts.method,
-                    prefix=wgt_name,
-                    n_reps=n_reps,
-                    fay_coef=design.rep_wgts.fay_coef,
-                    df=design.rep_wgts.df,
+                sample._design = sample._design.update(
+                    rep_wgts=msgspec.structs.replace(
+                        design.rep_wgts, prefix=wgt_name, n_reps=n_reps
+                    )
                 )
 
     sample._data = df

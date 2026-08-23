@@ -368,3 +368,42 @@ def test_a_kind_that_disagrees_with_the_design_warns():
     s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jk2")
     codes = {w.code for w in s.warnings.list()}
     assert WarnCode.JACKKNIFE_KIND_UNSPECIFIED in codes
+
+
+# =============================================================================
+# The factory as a parse door
+# =============================================================================
+
+
+def test_factory_forwards_unknown_parameters_to_the_variant():
+    """It resolves the name and forwards; msgspec owns the field checking."""
+    rw = RepWeights(method="brr", prefix="b", n_reps=32, fay_coef=0.5, padding=3)
+    assert isinstance(rw, BrrWgts)
+    assert (rw.fay_coef, rw.padding) == (0.5, 3)
+
+
+def test_a_neutral_foreign_parameter_means_unset_not_a_claim():
+    """The flat struct gave every method's parameters a shared default, so
+    fay_coef=0.0 on a bootstrap is how callers spell "not applicable"."""
+    assert isinstance(
+        RepWeights(method="bootstrap", prefix="b", n_reps=10, fay_coef=0.0), BootstrapWgts
+    )
+
+
+def test_a_foreign_parameter_carrying_a_value_still_names_its_owner():
+    with pytest.raises(MethodError) as exc:
+        RepWeights(method="bootstrap", prefix="b", n_reps=10, fay_coef=0.5)
+    assert "BrrWgts" in str(exc.value)
+
+
+def test_direct_construction_is_guarded_too():
+    """The hand-rolled guard this replaced only covered the factory."""
+    with pytest.raises(TypeError):
+        BootstrapWgts(prefix="b", n_reps=10, fay_coef=0.5)
+
+
+def test_scale_is_visible_in_the_repr():
+    """Rare and silent is the bad combination for a variance coefficient."""
+    assert "scale=0.5" in repr(BootstrapWgts(prefix="b", n_reps=4, scale=0.5))
+    assert "(derived)" in repr(JackknifeWgts(prefix="b", n_reps=4, rep_coefs=(0.5,) * 4))
+    assert "scale" not in repr(BootstrapWgts(prefix="b", n_reps=4))

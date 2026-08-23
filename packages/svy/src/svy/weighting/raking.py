@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Mapping, cast
 
+import msgspec
 import numpy as np
 import polars as pl
 
@@ -36,7 +37,6 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-
 def _rake_or_raise(*args, where: str = "Sample.weighting.rake"):
     """Call the Rust raking kernel, translating bounds violations into a
     typed svy error. Bounds violations are errors on every exit path,
@@ -50,8 +50,7 @@ def _rake_or_raise(*args, where: str = "Sample.weighting.rake"):
             raise MethodError.not_applicable(
                 where=where,
                 method="rake",
-                reason="Weight ratios exceeded the specified bounds "
-                "(ll_bound/up_bound).",
+                reason="Weight ratios exceeded the specified bounds (ll_bound/up_bound).",
                 param="ll_bound/up_bound",
                 hint="Widen the bounds, relax the margins, or increase max_iter.",
             ) from None
@@ -568,12 +567,10 @@ def rake(
             df = sample._data
 
             if update_design_wgts:
-                sample._design = sample._design.update_rep_weights(
-                    method=design.rep_wgts.method,
-                    prefix=wgt_name,
-                    n_reps=n_reps,
-                    fay_coef=design.rep_wgts.fay_coef,
-                    df=design.rep_wgts.df,
+                sample._design = sample._design.update(
+                    rep_wgts=msgspec.structs.replace(
+                        design.rep_wgts, prefix=wgt_name, n_reps=n_reps
+                    )
                 )
 
     sample._data = df
