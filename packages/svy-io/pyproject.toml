@@ -44,6 +44,11 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"
 testpaths = ["tests"]
+# An xfail that starts passing is a failure. Without this, XPASS is printed and
+# ignored, so a marker outlives the limitation it describes: three of them had,
+# still claiming features unsupported that this package has shipped for releases.
+xfail_strict = true
+
 # A deprecation is an API this package is scheduled to lose, so it should break a
 # test run rather than scroll past in a warnings summary: `ordering=` on
 # pl.Categorical printed here for releases while silently doing nothing.

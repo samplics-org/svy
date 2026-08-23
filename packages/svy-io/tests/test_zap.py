@@ -141,7 +141,6 @@ def test_zap_labels_spss_user_na_conversion_default_false():
     assert df2["x"].to_list() == [1, None, 3, None, 5]
 
 
-@pytest.mark.xfail(reason="SPSS user-defined missings persistence not wired yet")
 def test_zap_labels_spss_user_na_true_keeps_values():
     df = pl.DataFrame({"x": [1, 2, 3, 4, 5]})
     meta = {
