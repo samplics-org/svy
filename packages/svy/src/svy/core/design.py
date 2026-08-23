@@ -817,9 +817,11 @@ class Design:
 
         if self.rep_wgts:
             rw = self.rep_wgts
-            method_name = getattr(rw.method, "name", str(rw.method))
+            # `.method` is the variant's tag and always a str. The getattr(...,
+            # "name", ...) dance here was for the estimation-method enum, which
+            # #131 removed.
             parts.append(
-                f"rep_wgts={method_name}(n_reps={rw.n_reps}, prefix='{rw.prefix}', df={rw.df})"
+                f"rep_wgts={rw.method}(n_reps={rw.n_reps}, prefix='{rw.prefix}', df={rw.df})"
             )
         else:
             parts.append("rep_wgts=None")
