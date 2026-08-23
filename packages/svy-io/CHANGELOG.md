@@ -6,6 +6,10 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Removed
+
+- **The benchmark suite.** Three of its five tests were the same benchmark: `test_bench_stata_types_13`, `_14` and `_15` all read one file with no arguments, and reported 29.5 / 29.2 / 29.4 ms — one number, printed three times, under names promising three Stata formats. Half the file was commented out, so `make bench-spss` and `make bench-sas` selected zero tests and exited green. Nothing compared any number to a baseline. It cost ~6s on every test run and an 876 KB data file to say nothing actionable. `svy`'s harness (`bench_kernel.py`, `check_regression.py`, tracked `baselines/`) is the shape to copy if svy-io wants perf tracking later.
+
 ## [0.2.0] — 2026-07-23
 
 ### Changed

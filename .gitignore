@@ -150,10 +150,6 @@ specs/
 !packages/svy/benchmarks/bench_kernel.py
 !packages/svy/benchmarks/check_regression.py
 !packages/svy/benchmarks/baselines/
-# svy-io's benchmark harness, for the same reason. Its inputs stay ignored:
-# packages/svy-io/benchmarks/data holds a file far too large to track, and
-# every benchmark skips when that directory is absent.
-!packages/svy-io/benchmarks/benchmark_test.py
 examples/
 svy-old
 testwheels
