@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import msgspec
+import polars as pl
 import pytest
 
 import svy
@@ -17,6 +18,7 @@ from svy.core.repwgts import (
     SdrWgts,
     resolve_rep_variant,
 )
+from svy.core.warnings import WarnCode
 from svy.errors import MethodError
 
 
@@ -298,3 +300,71 @@ def test_variants_are_publicly_exported():
         "SdrWgts",
     ):
         assert hasattr(svy, name), name
+
+
+# =============================================================================
+# Jackknife kind resolved against the design (Sample-level)
+# =============================================================================
+#
+# The struct cannot do this: (n_h-1)/n_h needs per-stratum PSU counts and
+# coefficients() has no frame. So it happens once at Sample construction.
+
+
+def _jk_frame(strata, n_reps=4):
+    n = len(strata)
+    return pl.DataFrame(
+        {
+            "stratum": strata,
+            "psu": [i // 2 + 1 for i in range(n)],
+            "w": [5.0] * n,
+            "y": [float(i) for i in range(n)],
+            **{f"jw{r}": [5.0] * n for r in range(1, n_reps + 1)},
+        }
+    )
+
+
+def _jk_sample(strata, *, n_reps=4, **rw_kwargs):
+    df = _jk_frame(strata, n_reps)
+    rw = JackknifeWgts(prefix="jw", n_reps=n_reps, **rw_kwargs)
+    return svy.Sample(df, svy.Design(wgt="w", stratum="stratum", psu="psu", rep_wgts=rw))
+
+
+def test_declared_jkn_derives_its_coefficients_from_a_balanced_design():
+    s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jkn")
+    assert s._design.rep_wgts.rep_coefs == (0.5,) * 4  # (n_h-1)/n_h, n_h=2
+    assert s._design.rep_wgts.scale is None  # derived, not asserted
+
+
+def test_unbalanced_jkn_is_not_derived_and_still_refuses():
+    """The replicate->stratum mapping is the producer's, not svy's to infer."""
+    s = _jk_sample([1, 1, 1, 1, 2, 2], n_reps=3, kind="jkn")
+    assert s._design.rep_wgts.rep_coefs is None
+    with pytest.raises(MethodError):
+        s._design.rep_wgts.coefficients()
+
+
+def test_user_scale_is_never_overwritten_by_derivation():
+    s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jkn", scale=0.9)
+    assert s._design.rep_wgts.rep_coefs is None
+    assert s._design.rep_wgts.coefficients() == [0.9] * 4
+
+
+def test_unspecified_kind_on_a_stratified_design_warns_but_does_not_guess():
+    s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4)
+    assert s._design.rep_wgts.kind is None  # absence of a claim is not a claim
+    assert s._design.rep_wgts.coefficients() == [0.75] * 4  # JK1 global, unchanged
+    codes = {w.code for w in s.warnings.list()}
+    assert WarnCode.JACKKNIFE_KIND_UNSPECIFIED in codes
+
+
+def test_unspecified_kind_on_an_unstratified_design_is_silent():
+    s = _jk_sample([1, 1, 1, 1], n_reps=4)
+    codes = {w.code for w in s.warnings.list()}
+    assert WarnCode.JACKKNIFE_KIND_UNSPECIFIED not in codes
+
+
+def test_a_kind_that_disagrees_with_the_design_warns():
+    """jk2 implies one replicate per stratum; here there are 2 strata, not 4."""
+    s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jk2")
+    codes = {w.code for w in s.warnings.list()}
+    assert WarnCode.JACKKNIFE_KIND_UNSPECIFIED in codes

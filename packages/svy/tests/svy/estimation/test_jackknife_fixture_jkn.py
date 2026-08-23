@@ -5,7 +5,7 @@ Proper stratified-JKn validation of the jackknife golden fixture.
 The golden tests in test_replication.py run this fixture WITHOUT a scale
 (the documented global (R-1)/R fallback). Here the same delete-one-PSU
 weights are used with the JKn-correct per-replicate coefficients
-scale = (n_h-1)/n_h = 0.5 (4 strata x 2 PSUs), validated against
+(n_h-1)/n_h = 0.5 (4 strata x 2 PSUs), validated against
 R survey 4.5 (2026-07-23):
 
   api <- read.csv("fake_survey_jackknife_25122025.csv")
@@ -20,9 +20,9 @@ R survey 4.5 (2026-07-23):
 
 The no-scale SEs are exactly sqrt(7/4) larger (7/8 vs 1/2).
 
-The design here already carries stratum and psu, so once svy derives the
-per-stratum coefficients itself this becomes a test of that derivation and
-the explicit ``scale=0.5`` goes away. The R numbers below do not change.
+The design carries stratum and psu, so nothing is supplied by hand: svy
+derives (n_h-1)/n_h itself from the declared kind and the design. These are
+therefore tests of that derivation against R, not of a hand-fed coefficient.
 """
 
 import numpy as np
@@ -40,7 +40,7 @@ def jkn_sample(load_survey_data):
         prefix="jk_",
         n_reps=8,
         df=7,
-        scale=0.5,
+        kind="jkn",
     )
     design = Design(
         row_index="id", wgt="weight", stratum="stratum", psu="psu", rep_wgts=rep_weights
@@ -81,3 +81,10 @@ def test_jkn_se_is_sqrt_7_4_below_global_scale(load_survey_data, jkn_sample):
     se_j = jkn_sample.estimation.mean(y="income", method="replication", drop_nulls=True)
     ratio = se_g.estimates[0].se / se_j.estimates[0].se
     np.testing.assert_allclose(ratio, np.sqrt(7.0 / 4.0), rtol=1e-10)
+
+
+def test_coefficients_are_derived_from_the_design(jkn_sample):
+    """kind='jkn' plus stratum/psu is enough: nothing was supplied by hand."""
+    rw = jkn_sample._design.rep_wgts
+    assert rw.scale is None
+    assert rw.rep_coefs == (0.5,) * 8
