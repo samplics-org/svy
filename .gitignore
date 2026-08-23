@@ -125,6 +125,12 @@ dmypy.json
 #Extra
 issues/
 data/
+# ...except svy-io's test fixtures. The bare `data/` above is aimed at the
+# real survey datasets under packages/svy/data (gigabytes, not redistributable);
+# it also swallowed the small .sav/.dta/.sas7bdat files svy-io's suite needs,
+# which is why CI could never run that suite. Benchmark inputs stay ignored --
+# they live in packages/svy-io/benchmarks/data and the benchmarks skip without them.
+!packages/svy-io/tests/data/
 extra_data/
 reference_material/
 notebooks/*

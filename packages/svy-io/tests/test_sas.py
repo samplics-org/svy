@@ -159,7 +159,6 @@ def test_connections_are_read():
         assert df_conn.equals(df_path)
 
 
-@pytest.mark.xfail(reason="zip input not supported yet")
 def test_zip_files_are_read():
     """ZIP files should be transparently decompressed"""
     df_zip, _ = read_sas(tpath("hadley.zip"))
