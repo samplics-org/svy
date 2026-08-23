@@ -8,6 +8,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Fixed
+
+- **The polars deprecation filter never worked.** `filterwarnings = ["error::DeprecationWarning:polars"]` looked like a guard against calling deprecated polars APIs and was inert: the module field is compared against the frame the warning is attributed to, and polars sets `stacklevel` to point at the calling code, so `:polars` never matches. Verified with a probe — a deprecated call passed cleanly under it. The filter is now unqualified, and the suite passes under it.
+
 ## [0.24.1] — 2026-08-11
 
 ### Fixed
