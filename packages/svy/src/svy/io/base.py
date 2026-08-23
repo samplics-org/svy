@@ -257,7 +257,7 @@ def _create_sample_with_labels(
     sample = Sample(data=df)
 
     # Import labels from file into MetadataStore
-    import_labels_from_svyio_meta(sample.meta, raw_meta)
+    import_labels_from_svyio_meta(sample.meta, raw_meta, df)
 
     if name:
         setattr(sample, "name", name)

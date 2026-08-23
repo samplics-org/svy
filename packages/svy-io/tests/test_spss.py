@@ -67,6 +67,25 @@ def test_variable_label_stored_as_metadata(test_data_dir):
     assert labels.get("sex") == "Gender"
 
 
+def test_declared_measure_is_surfaced(test_data_dir):
+    """SPSS carries a nominal/ordinal/scale measurement level; expose it."""
+    _df, meta = read_sav(test_data_dir / "spss/variable-label.sav")
+    measures = {v["name"]: v.get("measure") for v in meta["vars"]}
+
+    assert measures == {"sex": "nominal"}
+
+
+def test_undeclared_measure_is_absent_rather_than_scale(test_data_dir):
+    """
+    A file that never set a measurement level must read back as None, not as
+    "scale". SPSS defaults numeric variables to scale, so a caller has to be
+    able to tell "declared continuous" from "never declared".
+    """
+    _df, meta = read_sav(test_data_dir / "spss/labelled-num.sav")
+
+    assert meta["vars"][0].get("measure") is None
+
+
 def test_value_labels_stored_in_metadata(test_data_dir):
     """Value labels should be preserved in metadata"""
     df_num, meta_num = read_sav(test_data_dir / "spss/labelled-num.sav")

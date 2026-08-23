@@ -23,13 +23,14 @@ use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::record_batch::RecordBatch;
 
 use readstat_sys::{
-    readstat_add_variable, readstat_begin_row, readstat_begin_writing_dta, readstat_end_row,
-    readstat_end_writing, readstat_insert_double_value, readstat_insert_missing_value,
-    readstat_insert_string_value, readstat_set_data_writer,
+    readstat_add_label_set, readstat_add_variable, readstat_begin_row, readstat_begin_writing_dta,
+    readstat_end_row, readstat_end_writing, readstat_insert_double_value,
+    readstat_insert_missing_value, readstat_insert_string_value, readstat_label_double_value,
+    readstat_label_set_t, readstat_set_data_writer,
     readstat_type_e_READSTAT_TYPE_DOUBLE as T_DOUBLE,
     readstat_type_e_READSTAT_TYPE_STRING as T_STRING, readstat_variable_set_label,
-    readstat_variable_t, readstat_writer_init, readstat_writer_set_file_format_version,
-    readstat_writer_set_file_label,
+    readstat_variable_set_label_set, readstat_variable_t, readstat_writer_init,
+    readstat_writer_set_file_format_version, readstat_writer_set_file_label,
 };
 
 use crate::core::WriterGuard;
@@ -191,6 +192,7 @@ fn write_stata_minimal(
     version_internal: i32,
     strl_threshold: i32,
     var_labels: Option<&HashMap<String, String>>,
+    value_labels: Option<&HashMap<String, HashMap<String, String>>>,
 ) -> Result<()> {
     if batches.is_empty() {
         let _ = File::create(out_path)?;
@@ -229,6 +231,7 @@ fn write_stata_minimal(
 
     let mut rvars: Vec<*const readstat_variable_t> = Vec::with_capacity(ncols);
     let mut _keep_names: Vec<CString> = Vec::with_capacity(ncols);
+    let mut _keep_label_sets: Vec<(*const readstat_label_set_t, Vec<CString>)> = Vec::new();
 
     // Define variables
     for (j, field) in schema.fields().iter().enumerate() {
@@ -286,6 +289,70 @@ fn write_stata_minimal(
             }
         }
 
+        // Value labels. Stata attaches a *named* label set to a variable, so
+        // the set is named after the column, matching Stata's own
+        // `label values v106 v106` convention. Do not decorate the name (the
+        // SAV writer uses "{col}_labels"): dta 113-117 give the name 33 bytes,
+        // and a longer one is truncated by ReadStat without an error.
+        if let Some(map) = value_labels
+            && let Some(labels) = map.get(field.name())
+            && !labels.is_empty()
+        {
+            if is_str_col[j] {
+                return Err(anyhow!(
+                    "column '{}' holds strings; Stata value labels apply only to \
+                     numeric variables",
+                    field.name()
+                ));
+            }
+
+            // Sorted so the emitted table is byte-stable across runs.
+            // ReadStat re-sorts by value for dta >= 117 but not below.
+            let mut entries: Vec<(f64, &str)> = Vec::with_capacity(labels.len());
+            for (value, label) in labels {
+                let code: f64 = value.parse().map_err(|_| {
+                    anyhow!(
+                        "value label code {:?} on column '{}' is not numeric",
+                        value,
+                        field.name()
+                    )
+                })?;
+                entries.push((code, label.as_str()));
+            }
+            entries.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+            let c_set_name = CString::new(field.name().as_str())?;
+            let label_set =
+                unsafe { readstat_add_label_set(writer, T_DOUBLE, c_set_name.as_ptr()) };
+            if label_set.is_null() {
+                return Err(anyhow!(
+                    "readstat_add_label_set failed for '{}'",
+                    field.name()
+                ));
+            }
+
+            let mut c_labels = Vec::with_capacity(entries.len());
+            for (code, label) in entries {
+                let c_label = CString::new(label).map_err(|_| {
+                    anyhow!(
+                        "value label {:?} on column '{}' contains an embedded NUL",
+                        label,
+                        field.name()
+                    )
+                })?;
+                unsafe {
+                    readstat_label_double_value(label_set, code, c_label.as_ptr());
+                }
+                c_labels.push(c_label);
+            }
+
+            unsafe {
+                readstat_variable_set_label_set(var, label_set);
+            }
+            c_labels.push(c_set_name);
+            _keep_label_sets.push((label_set, c_labels));
+        }
+
         _keep_names.push(cname);
         rvars.push(var);
     }
@@ -296,11 +363,8 @@ fn write_stata_minimal(
         .try_into()
         .map_err(|_| anyhow!("row count {total_rows} exceeds platform limit"))?;
     unsafe {
-        let rc = readstat_begin_writing_dta(
-            writer,
-            &mut outfile as *mut File as *mut c_void,
-            row_count,
-        );
+        let rc =
+            readstat_begin_writing_dta(writer, &mut outfile as *mut File as *mut c_void, row_count);
         if rc != 0 {
             return Err(anyhow!("readstat_begin_writing_dta failed with rc={}", rc));
         }
@@ -400,7 +464,7 @@ fn write_stata_minimal(
     version,
     file_label=None,
     var_labels_json=None,
-    _value_labels_json=None,
+    value_labels_json=None,
     strl_threshold=2045,
     _user_missing_json=None
 ))]
@@ -410,7 +474,7 @@ pub fn df_write_dta_file(
     version: i32,
     file_label: Option<&str>,
     var_labels_json: Option<&str>,
-    _value_labels_json: Option<&str>,
+    value_labels_json: Option<&str>,
     strl_threshold: i32,
     _user_missing_json: Option<&str>,
 ) -> PyResult<()> {
@@ -431,6 +495,19 @@ pub fn df_write_dta_file(
         None
     };
 
+    // JSON object keys are always strings, so integer codes arrive as e.g.
+    // {"v106": {"0": "None"}} and are parsed back to f64 by the writer.
+    let value_labels: Option<HashMap<String, HashMap<String, String>>> =
+        if let Some(js) = value_labels_json {
+            Some(serde_json::from_str(js).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "value_labels_json must be a JSON object of {{col: {{code: label}}}}: {e}"
+                ))
+            })?)
+        } else {
+            None
+        };
+
     write_stata_minimal(
         &batches,
         out_path,
@@ -438,6 +515,7 @@ pub fn df_write_dta_file(
         version,
         strl_threshold,
         var_labels.as_ref(),
+        value_labels.as_ref(),
     )
     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("df_write_dta_file: {}", e)))
 }
