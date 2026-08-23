@@ -8,13 +8,64 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Added
+
+- **Poisson bootstrap replicate weights ([#131](https://github.com/samplics-org/svy/pull/131)).** `sample.weighting.create_bs_wgts(kind="poisson")` generates Beaumont–Patak generalized bootstrap weights, which need only a weight column. The default `kind="rao-wu"` is the stratified Rao–Wu–Yue rescaling bootstrap and still requires `psu` on the design — the guard is deliberately not shared, since the Poisson bootstrap exists precisely for files that have no PSU. Both kinds use the same `1/R` per-replicate coefficient; they differ in how the replicates are drawn, not in how the variance is scaled.
+
+  Beaumont, J.-F. and Patak, Z. (2012). On the generalized bootstrap for sample surveys with special attention to Poisson sampling. *International Statistical Review*, 80(1), 127–148.
+
+- **`scale`: the coefficients a producer publishes ([#7](https://github.com/samplics-org/svy/issues/7)).** Replicate weights often ship with a documented per-replicate variance coefficient that is not the method's default. CETIC publishes the ICT Households microdata with `0.0065365334145709` at R = 200, which bakes in a finite-population correction. Declaring it is now a parameter rather than an arithmetic exercise:
+
+  ```python
+  svy.RepWeights(method="bootstrap", prefix="REP", n_reps=200, scale=0.0065365334145709)
+  ```
+
+  A scalar is broadcast to every replicate; a sequence must match `n_reps` and is checked at construction. It replaces, rather than multiplies, the method default: `V = Σ_r scale_r · (θ_r − θ̄)²`. svy's `scale` is R `svrepdesign`'s `scale × rscales` folded into one field, so `svrepdesign(type = "bootstrap", scale = c, rscales = rep(1, R))` is `scale=c` here, with no conversion factor. `examples/ict_households.py` drops the `sqrt(scale * R)` workaround it used to demonstrate.
+
+- **Jackknife designs say which family they are.** `JackknifeWgts.kind` takes R's `svrepdesign(type=)` names — `"jk1"` (unstratified delete-one-PSU, `(R−1)/R`), `"jkn"` (stratified, `(n_h−1)/n_h` per replicate), `"jk2"` (paired, one replicate per stratum, `1.0`). `"paired"` is accepted as an alias for `"jk2"`: it describes the design, not the replication scheme, since a JKn on a paired design is still JKn.
+
+  The default is `None` — unspecified. `None` and `"jk1"` produce the same number but are different statements, and svy claims only what it knows or was told. A producer withholding design variables is not evidence that the weights are unstratified.
+
+- **JKn coefficients are derived when the design allows it.** `(n_h−1)/n_h` is the only standard coefficient that is not closed-form in `n_reps`, so it used to have to be supplied by hand. Given `kind="jkn"` plus `stratum` and `psu`, svy now works it out at `Sample` construction. Limited to balanced designs — every stratum the same `n_h` — where the coefficient is uniform and the replicate-to-stratum mapping does not matter; that covers the paired-PSU designs that dominate real JKn files. Unbalanced still needs `scale`.
+
+  A declared kind is also checked rather than merely trusted: `jk1` and `jkn` imply one replicate per PSU, `jk2` one per stratum. Mismatches warn rather than raise, since a legitimately subset frame has fewer PSUs than the weight columns were built from. An unspecified kind on a stratified design warns too — svy has evidence the JK1 global is probably wrong, but no claim to act on.
+
 ### Fixed
+
+- **A user-supplied replicate coefficient was silently discarded for bootstrap, BRR and SDR ([#7](https://github.com/samplics-org/svy/issues/7)).** Before [#131](https://github.com/samplics-org/svy/pull/131) the override was applied at one site in the kernel — `rscales.unwrap_or_else(|| replicate_coefficients(method, n_reps, fay_coef))` — and was therefore method-agnostic by construction. #131 moved coefficient computation into Python and scattered it across four per-variant `coefficients()` methods, which gave every method its own chance to forget. Three of four forgot: the field was accepted, stored, length-checked, and then dropped, so a bootstrap declared with a producer's published scale silently returned the `1/R` answer.
+
+  `coefficients()` is now a template method on the shared base. The override is resolved there, at the single point of use, and the variants implement only their own default — they never see it, so a new variant cannot regress this again. **No published standard error changes:** #131 landed after `svy-v0.24.1` and was never released.
+
+- **Estimation and regression could scale the same design differently.** `GLM._rep_coefficients` re-derived the coefficients by substring-matching a stringified method tag (`if "boot" in m`), and honoured the user's override for every method while the estimation path did not. One `Design` therefore produced differently scaled standard errors from `sample.regression.glm(...)` and `sample.estimation.mean(...)`. It is gone; both call `rep_wgts.coefficients()`.
+
+- **A declared paired jackknife used the wrong coefficient.** JK2 has one delete-one replicate per stratum and a coefficient of `1.0`; the global `(R−1)/R` understates the variance by exactly that factor. Declaring `kind="jk2"` now gets `1.0`. Relatedly, `kind="jkn"` with nothing to compute the per-stratum coefficients from — no `scale`, no design variables — refuses rather than substituting the JK1 global, which on a 4-strata × 2-PSU design overstates standard errors by `sqrt(7/4)`, 32%. An unmet claim fails; an absent one (`kind=None`) still falls back to `(R−1)/R` exactly as before.
 
 - **Labelled variables were never `is_categorical` ([#130](https://github.com/samplics-org/svy/issues/130)).** `Sample(data=df)` infers `mtype` from the polars dtype, and `import_labels_from_svyio_meta` brought across labels while leaving that untouched — so every labelled variable in a survey recode stayed `Numerical Continuous` and `is_categorical` was `False`. Deriving a codebook from it classified an entire DHS-style file as continuous. The importer now revises `mtype` on import: it honours a measurement level the file declares, and otherwise asks whether the value labels cover every observed value. On a Stata census file this takes 16 labelled variables from 0 categorical to 16.
 - **Measurement type is inferred from label coverage, not label presence.** "Has labels" alone would misread a continuous variable that labels only a sentinel code — a "how many TVs?" count labelling just `0 = none` and `4 = 4 or more` is not a five-level factor. A variable becomes `NOMINAL` only when every observed non-null value carries a label; partial coverage, an all-null column, and a column absent from the frame all leave `mtype` alone, as does a type the user set by hand. `ORDINAL` is assigned only when the file says so, since coverage cannot distinguish it from `NOMINAL`.
 - **The polars deprecation filter never worked.** `filterwarnings = ["error::DeprecationWarning:polars"]` looked like a guard against calling deprecated polars APIs and was inert: the module field is compared against the frame the warning is attributed to, and polars sets `stacklevel` to point at the calling code, so `:polars` never matches. Verified with a probe — a deprecated call passed cleanly under it. The filter is now unqualified, and the suite passes under it.
 
 ### Changed
+
+- **Replicate-weight designs are a tagged union of four types, and `svy.RepWeights` is a function ([#131](https://github.com/samplics-org/svy/pull/131)).** They were a single struct carrying an estimation-method enum plus every method's parameters. They are now one type per method — `BootstrapWgts`, `JackknifeWgts`, `BrrWgts`, `SdrWgts` — each carrying exactly the parameters its algorithm has. A bootstrap cannot hold a Fay coefficient, because there is no field for one.
+
+  `svy.RepWeights(method=..., ...)` keeps working and returns the variant for the name, so call sites are unaffected. **But it is a factory function now, not a class**, which breaks two things it used to support:
+
+  ```python
+  isinstance(x, svy.RepWeights)   # TypeError: isinstance() arg 2 must be a type
+  x: svy.RepWeights               # no longer a valid annotation
+  ```
+
+  Use `svy.RepWgts`, the union of the four variants, for both. Code that knows the method at authoring time can construct the variant directly, which is the typed path: `BootstrapWgts(prefix="bsw", n_reps=1000, kind="poisson")`.
+
+- **`rscales` is now `scale` (user-supplied) or `rep_coefs` (svy-derived).** The single field held both, which made "the user asserted this" indistinguishable from "svy computed this". They split on who supplied the values — the one axis that is verifiable, since a user declaring stratified JKn supplies the *standard* coefficient rather than a custom one. `scale` is what you pass; `rep_coefs` is filled by `create_jk_wgts` and by the JKn derivation, and is shown as `(derived)` in the design output.
+
+  This renames a parameter on two released surfaces: `svy.RepWeights(rscales=...)` and `Design.update_rep_weights(rscales=...)`. Both now take `scale=` (or `rep_coefs=`), and `scale` additionally accepts a scalar.
+
+- **A parameter that belongs to another method is refused, even at its neutral value.** `RepWeights(method="bootstrap", fay_coef=0.0)` was accepted as a stored no-op when every method shared one flat signature. It now raises, naming the variant that owns the parameter. Callers that know the method should not be sending it; nothing in `svy` does any more.
+
+- **The `method` label is display-only, and now genuinely is.** Its docstring said nothing read it to choose a code path while eight sites did — seven in `weighting/` rebuilt a design by round-tripping the type through its own tag and hand-listing every field that had to survive, which is how `kind`, `scale` and `padding` could vanish across a poststratification. Copies now go through `msgspec.structs.replace`, which preserves the type and drops nothing.
+
+- **Non-default variance coefficients are visible.** `scale` and `rep_coefs` did not appear in `repr` or `print(design)` at all. A non-standard coefficient is what a reviewer or replicator most needs to see and is set rarely, so rare-and-silent was the wrong combination. A uniform vector prints as the scalar it is.
 
 - **`import_labels_from_svyio_meta` now requires the frame** the metadata describes as its third argument. Resolving a measurement type depends on how well the value labels cover the observed values, which cannot be judged without the data. It is required rather than optional on purpose: an omitted frame would silently fall back to the very behavior this release fixes. The function is internal (`svy.engine.io`, not exported from the top-level `svy` namespace) and had a single production call site.
 

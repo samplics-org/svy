@@ -2,7 +2,7 @@
 """Replicate-weight designs as a tagged union.
 
 One struct per variance-estimation method, each carrying exactly the parameters
-its algorithm has. See ``docs/design/rep-weights-tagged-union.md``.
+its algorithm has.
 
 The rule for adding a variant: **a type exists exactly when the data differs.**
 Behaviour differences are handled by a method on the variant, not a new type.
@@ -10,15 +10,22 @@ That is why Fay's BRR is a ``fay_coef`` value rather than a type —
 plain BRR *is* Fay's BRR at 0.0, so splitting it would make
 ``FayWgts(fay_coef=0.0)`` constructible and self-contradictory.
 
-The top level mirrors ``RepMethod`` in ``svy-rs/src/estimation/replication.rs``,
-which is what the variance kernel actually branches on.
+The names mirror ``RepMethod`` in ``svy-rs/src/estimation/replication.rs``, but
+the kernel no longer branches on them: Python resolves the per-replicate
+coefficients here and passes the resulting vector across the FFI. Nothing in
+``svy`` reads the ``method`` label to choose a code path — copies go through
+``msgspec.structs.replace``, which preserves the type, and variance goes through
+``coefficients()``.
+
+``RepWeights`` is a function, not a class. For annotations and ``isinstance``
+use ``RepWgts``, the union of the four variants.
 """
 
 from __future__ import annotations
 
 import re
 
-from typing import Literal, Sequence, Union
+from typing import Literal, Sequence, Union, cast, get_args
 
 import msgspec
 
@@ -29,17 +36,19 @@ from svy.errors import MethodError
 # Bootstrap kinds
 # =============================================================================
 #
-# A nested union rather than a plain string, because the kinds carry different
-# data. Behaviour that varies by kind (the replicate coefficient) lives here as
-# a method, so adding a kind whose scale differs -- svrep's generalized
-# bootstrap uses tau^2/B rather than 1/B -- needs no change anywhere else.
-
-
-# The two bootstrap kinds differ in how the replicates are drawn, not in what
-# they carry, so this is a field rather than a nested union. Calibrating the
-# replicates afterwards is a separate weighting step (see
+# The two kinds differ in how the replicates are drawn, not in what they carry
+# or how the variance is scaled -- both use 1/R -- so this is a field rather
+# than a nested union, and it is provenance rather than a coefficient input.
+# A kind whose scale *does* differ (svrep's generalized bootstrap, tau^2/B)
+# would branch in ``BootstrapWgts._default_coefficients`` and nowhere else.
+# Calibrating the replicates afterwards is a separate weighting step (see
 # ``Sample.weighting.poststratify``) and is not recorded here.
-BOOTSTRAP_KINDS = ("rao-wu", "poisson")
+#: The canonical values. Aliases normalize onto these, and the field stores
+#: only these, so the Literal describes what is actually held. Authored code
+#: should use a canonical name and gets checked for it; a name arriving as data
+#: goes through ``RepWeights``, where no static type applies anyway.
+BootstrapKind = Literal["rao-wu", "poisson"]
+BOOTSTRAP_KINDS: tuple[str, ...] = get_args(BootstrapKind)
 
 _BS_KIND_ALIASES: dict[str, str] = {
     "rao-wu": "rao-wu",
@@ -53,8 +62,91 @@ _BS_KIND_ALIASES: dict[str, str] = {
 
 
 # =============================================================================
+# Jackknife kinds
+# =============================================================================
+#
+# Three families, and unlike the bootstrap kinds they carry different variance
+# coefficients -- which is why this replaced a ``paired: bool``. The boolean
+# folded JK1 and JKn together into False, but those two have different
+# coefficients, so it could not express the distinction the coefficient logic
+# depends on. The names are R's ``svrepdesign(type=)`` strings.
+#
+# "jk1"  unstratified delete-one-PSU          (R-1)/R
+# "jkn"  stratified delete-one-PSU            (n_h-1)/n_h, per replicate
+# "jk2"  one paired replicate per stratum     1.0
+JackknifeKind = Literal["jk1", "jkn", "jk2"]
+JACKKNIFE_KINDS: tuple[str, ...] = get_args(JackknifeKind)
+
+_JK_KIND_ALIASES: dict[str, str] = {
+    "jk1": "jk1",
+    "jk-1": "jk1",
+    "jk_1": "jk1",
+    "jkn": "jkn",
+    "jk-n": "jkn",
+    "jk_n": "jkn",
+    "jk2": "jk2",
+    "jk-2": "jk2",
+    "jk_2": "jk2",
+    # "paired" describes the design (two PSUs per stratum), not the replication
+    # scheme -- a JKn on a paired design is still JKn. Accepted because people
+    # reach for it, normalized to the scheme's actual name.
+    "paired": "jk2",
+}
+
+
+def normalize_jackknife_kind(kind: str) -> JackknifeKind:
+    """Normalize a jackknife ``kind``. Case- and separator-insensitive."""
+    if not isinstance(kind, str):
+        raise TypeError(f"'kind' must be a string, got {type(kind).__name__}.")
+    resolved = _JK_KIND_ALIASES.get(kind.strip().lower())
+    if resolved is None:
+        raise MethodError.invalid_choice(
+            where="svy.RepWeights",
+            param="kind",
+            got=kind,
+            allowed=list(JACKKNIFE_KINDS),
+            docs_url=None,
+            hint=(
+                "'jk1' is the unstratified delete-one-PSU jackknife, 'jkn' its "
+                "stratified form, and 'jk2' the paired one-replicate-per-stratum "
+                "scheme. Leave it unset if you do not know which the weights are."
+            ),
+        )
+    return cast(JackknifeKind, resolved)
+
+
+# =============================================================================
 # Shared fields and behaviour
 # =============================================================================
+
+
+def _fmt_coefs(values: Sequence[float]) -> str:
+    """A uniform coefficient prints as the scalar it is."""
+    uniq = set(values)
+    if len(uniq) == 1:
+        return repr(next(iter(uniq)))
+    return f"({values[0]!r}, ... , {values[-1]!r}) x{len(values)}"
+
+
+def _normalize_scale(value: float | Sequence[float], n_reps: int, param: str) -> tuple[float, ...]:
+    """Broadcast a scalar, or validate a sequence against ``n_reps``.
+
+    Stored normalized so that every reader downstream sees one shape and the
+    length is wrong at construction rather than at estimation.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return (float(value),) * n_reps
+    if isinstance(value, (str, bytes, bytearray)) or not isinstance(value, Sequence):
+        raise TypeError(
+            f"'{param}' must be a float or a sequence of floats, got {type(value).__name__}."
+        )
+    values = tuple(float(v) for v in value)
+    if len(values) != n_reps:
+        raise ValueError(
+            f"'{param}' has {len(values)} entries but n_reps is {n_reps}. "
+            f"Pass a scalar to use the same coefficient for every replicate."
+        )
+    return values
 
 
 class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
@@ -70,11 +162,22 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     # weight set and therefore the same for every domain.
     df: int | None = None
     padding: int | None = None  # None = auto-detect, 0 = none, >0 = zero-pad width
-    # Per-replicate variance coefficients (R's scale*rscales combined). Kept
-    # common rather than on JackknifeWgts: R's svrepdesign takes scale/rscales
-    # for every type=, and the default is correct for BRR/bootstrap/SDR/JK1 --
-    # stratified JKn merely needs a non-default.
-    rscales: tuple[float, ...] | None = None
+    # Per-replicate variance coefficients, split by who supplied them -- the one
+    # axis that is verifiable. "Is this a tweak or the standard value?" is not:
+    # a user declaring stratified JKn supplies the *standard* coefficient,
+    # because svy cannot derive it from replicate weights alone.
+    #
+    # scale: the user said so. R's svrepdesign takes scale/rscales for every
+    # type=, and svy folds the pair into this one field (svy's scale is R's
+    # scale * rscales). A scalar is broadcast to every replicate. Replaces,
+    # rather than multiplies, the method default.
+    scale: float | Sequence[float] | None = None
+    # rep_coefs: svy computed these and cannot recompute them later. Exists for
+    # one case -- JKn's (n_h-1)/n_h is the only standard coefficient that is not
+    # closed-form in n_reps: it needs per-stratum PSU counts, coefficients() has
+    # no frame, and the stratum column may be gone by estimation time. Filled by
+    # create_jk_wgts; users want ``scale``.
+    rep_coefs: tuple[float, ...] | None = None
 
     def __post_init__(self) -> None:
         if not self.prefix or not self.prefix.strip():
@@ -85,6 +188,14 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError(f"df must be > 0. Got {self.df}.")
         if self.padding is not None and self.padding < 0:
             raise ValueError(f"padding must be >= 0. Got {self.padding}.")
+        if self.scale is not None:
+            msgspec.structs.force_setattr(
+                self, "scale", _normalize_scale(self.scale, self.n_reps, "scale")
+            )
+        if self.rep_coefs is not None:
+            msgspec.structs.force_setattr(
+                self, "rep_coefs", _normalize_scale(self.rep_coefs, self.n_reps, "rep_coefs")
+            )
 
     # ---- back-compat read surface ------------------------------------------
 
@@ -92,9 +203,13 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     def method(self) -> str:
         """The coarse method family, as a display label.
 
-        One of ``"Bootstrap"``, ``"Jackknife"``, ``"BRR"``, ``"SDR"``. A label
-        for display and reporting: the variant's own type is what decides
-        anything, so nothing reads this to choose a code path.
+        One of ``"Bootstrap"``, ``"Jackknife"``, ``"BRR"``, ``"SDR"``. For
+        display and reporting only -- nothing in ``svy`` reads this to choose a
+        code path. Internal code that needs to copy a design uses
+        ``msgspec.structs.replace``, which preserves the type; code that needs
+        the coefficients calls ``coefficients()``. Both used to go through this
+        label and back via the string factory, which is how a bootstrap and a
+        jackknife could end up scaled by different rules.
         """
         return self.__struct_config__.tag
 
@@ -145,10 +260,26 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     # ---- variance ------------------------------------------------------------
 
     def coefficients(self) -> list[float]:
-        """Per-replicate variance coefficients.
+        """Per-replicate variance coefficients, in precedence order.
 
-        Lives on the variant rather than in a distant ``match`` so that adding a
-        method, or a bootstrap kind whose scale differs, stays a local change.
+        The override is resolved *here*, at the single point of use, and the
+        variants never see it -- they implement only their own default. Before
+        the tagged union this lived at one site in the kernel
+        (``rscales.unwrap_or_else(|| replicate_coefficients(...))``); scattering
+        it into per-variant methods gave every method its own chance to forget,
+        and three of four did. A new variant cannot regress it.
+        """
+        if self.scale is not None:
+            return list(self.scale)  # the user asserted these
+        if self.rep_coefs is not None:
+            return list(self.rep_coefs)  # svy computed them and cannot redo it
+        return self._default_coefficients()
+
+    def _default_coefficients(self) -> list[float]:
+        """The method's standard coefficients, closed-form in ``n_reps``.
+
+        The only thing a variant implements. Adding a method, or a bootstrap
+        kind whose scale differs, stays a local change.
         """
         raise NotImplementedError
 
@@ -158,11 +289,25 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
         """Variant-specific fragments for repr. Overridden where there are any."""
         return []
 
+    def _coef_parts(self) -> list[str]:
+        """Where the coefficients came from, when it is not the method default.
+
+        A non-standard variance coefficient is exactly what a reviewer or a
+        replicator needs to see, and it is set rarely enough that showing it
+        costs nothing.
+        """
+        if self.scale is not None:
+            return [f"scale={_fmt_coefs(self.scale)}"]
+        if self.rep_coefs is not None:
+            return [f"rep_coefs={_fmt_coefs(self.rep_coefs)} (derived)"]
+        return []
+
     def __repr__(self) -> str:
         parts = [f"method={self.method}", f"prefix='{self.prefix}'", f"n_reps={self.n_reps}"]
         if self.df is not None:
             parts.append(f"df={self.df}")
         parts.extend(self._variant_parts())
+        parts.extend(self._coef_parts())
         if self.padding is not None:
             parts.append(f"padding={self.padding}")
         return f"RepWeights({', '.join(parts)})"
@@ -177,6 +322,10 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
             f"DF       : {self.df if self.df is not None else 'auto'}",
         ]
         lines.extend(self._plain_variant_lines())
+        if self.scale is not None:
+            lines.append(f"Scale    : {_fmt_coefs(self.scale)}")
+        elif self.rep_coefs is not None:
+            lines.append(f"Coefs    : {_fmt_coefs(self.rep_coefs)} (derived)")
         return "\n".join(lines)
 
     def _plain_variant_lines(self) -> list[str]:
@@ -189,32 +338,68 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
 
 
 class BootstrapWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="Bootstrap", tag_field="method"):
-    kind: str = "rao-wu"
+    kind: BootstrapKind = "rao-wu"
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        msgspec.structs.force_setattr(self, "kind", normalize_bootstrap_kind(self.kind))
+        # An explicit None means the same as omitting it: this field's default
+        # is a value, not an absence, because both kinds share the 1/R
+        # coefficient and rao-wu is the dominant convention.
+        resolved = "rao-wu" if self.kind is None else normalize_bootstrap_kind(self.kind)
+        msgspec.structs.force_setattr(self, "kind", resolved)
 
-    def coefficients(self) -> list[float]:
+    def _default_coefficients(self) -> list[float]:
+        # Both kinds: the kind decides how the replicates are drawn, not how the
+        # variance is scaled. A kind whose scale differs (svrep's generalized
+        # bootstrap, tau^2/B) branches here.
         return [1.0 / self.n_reps] * self.n_reps
 
     def _variant_parts(self) -> list[str]:
-        return [] if self.kind == "rao-wu" else [f"kind={self.kind}"]
+        return [f"kind={self.kind}"]
 
     def _plain_variant_lines(self) -> list[str]:
         return [f"Kind     : {self.kind}"]
 
 
 class JackknifeWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="Jackknife", tag_field="method"):
-    paired: bool = False  # JK2 paired vs JK1/JKn
+    # None = unspecified: nobody has said which family these weights are. That
+    # is a different statement from "jk1", even though the two produce the same
+    # number -- svy only claims what it knows or what it was told.
+    kind: JackknifeKind | None = None
 
-    def coefficients(self) -> list[float]:
-        if self.rscales is not None:
-            return list(self.rscales)
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.kind is not None:
+            msgspec.structs.force_setattr(self, "kind", normalize_jackknife_kind(self.kind))
+
+    def _default_coefficients(self) -> list[float]:
+        if self.kind == "jk2":
+            # One delete-one replicate per stratum. A global (R-1)/R would
+            # understate the variance by exactly that factor.
+            return [1.0] * self.n_reps
+        if self.kind == "jkn":
+            # (n_h-1)/n_h is the only standard coefficient that is not
+            # closed-form in n_reps, and nothing supplied it. An unmet claim
+            # fails; an absent one (kind=None) falls back to the JK1 global.
+            raise MethodError.not_applicable(
+                where="RepWeights.coefficients",
+                method="jackknife",
+                reason=(
+                    "kind='jkn' needs the per-stratum (n_h-1)/n_h coefficients, "
+                    "which cannot be derived from replicate weights alone. Pass "
+                    "'scale' with the coefficients your file documents. Falling "
+                    "back to the JK1 global (R-1)/R would overstate the standard "
+                    "errors"
+                ),
+            )
+        # kind=None (unspecified) and "jk1" alike: the unstratified global.
         return [(self.n_reps - 1) / self.n_reps] * self.n_reps
 
     def _variant_parts(self) -> list[str]:
-        return ["paired=True"] if self.paired else []
+        return [] if self.kind is None else [f"kind={self.kind}"]
+
+    def _plain_variant_lines(self) -> list[str]:
+        return [] if self.kind is None else [f"Kind     : {self.kind}"]
 
 
 class BrrWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="BRR", tag_field="method"):
@@ -227,9 +412,9 @@ class BrrWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="BRR", tag_field="met
         if self.fay_coef < 0:
             raise ValueError(f"fay_coef cannot be negative. Got {self.fay_coef}.")
 
-    def coefficients(self) -> list[float]:
-        scale = 1.0 / (self.n_reps * (1.0 - self.fay_coef) ** 2)
-        return [scale] * self.n_reps
+    def _default_coefficients(self) -> list[float]:
+        coef = 1.0 / (self.n_reps * (1.0 - self.fay_coef) ** 2)
+        return [coef] * self.n_reps
 
     def _variant_parts(self) -> list[str]:
         return [f"fay={self.fay_coef}"]
@@ -239,7 +424,7 @@ class BrrWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="BRR", tag_field="met
 
 
 class SdrWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="SDR", tag_field="method"):
-    def coefficients(self) -> list[float]:
+    def _default_coefficients(self) -> list[float]:
         return [4.0 / self.n_reps] * self.n_reps
 
 
@@ -302,7 +487,7 @@ def resolve_rep_variant(
     )
 
 
-def normalize_bootstrap_kind(kind: str) -> str:
+def normalize_bootstrap_kind(kind: str) -> BootstrapKind:
     """Normalize a bootstrap ``kind``.
 
     Case-insensitive and tolerant of hyphen, underscore or space separators,
@@ -316,7 +501,7 @@ def normalize_bootstrap_kind(kind: str) -> str:
             where="svy.RepWeights",
             param="kind",
             got=kind,
-            allowed=["rao-wu", "poisson"],
+            allowed=list(BOOTSTRAP_KINDS),
             docs_url=None,
             hint=(
                 "'rao-wu' is the stratified Rao-Wu-Yue rescaling bootstrap and needs "
@@ -324,87 +509,88 @@ def normalize_bootstrap_kind(kind: str) -> str:
                 "bootstrap and needs only a weight."
             ),
         )
-    return resolved
+    return cast(BootstrapKind, resolved)
 
 
 _MISSING_ARG: object = object()
+
+# Parameters that only some variants carry, for turning msgspec's accurate but
+# terse "Unexpected keyword argument" into one that names the owner.
+_PARAM_OWNER = {
+    "fay_coef": ("BrrWgts", "BRR"),
+    # kind belongs to bootstrap and to jackknife, with different vocabularies;
+    # only BRR and SDR have none.
+    "kind": ("BootstrapWgts or JackknifeWgts", "bootstrap or jackknife"),
+}
 
 
 def RepWeights(  # noqa: N802 - a factory that replaced a class of this name
     method: str = _MISSING_ARG,  # type: ignore[assignment]
     prefix: str = _MISSING_ARG,  # type: ignore[assignment]
     n_reps: int = _MISSING_ARG,  # type: ignore[assignment]
-    fay_coef: float = 0.0,
-    df: int | None = None,
-    padding: int | None = None,
-    rscales: tuple[float, ...] | None = None,
-    *,
-    kind: str | None = None,
-    paired: bool = False,
+    **kwargs: object,
 ) -> RepWgts:
     """Build the replicate-weight variant for ``method``.
 
-    Kept as a factory with the pre-union signature so existing call sites keep
-    working. New code can construct the variant directly:
+    The door for a method name that arrives as a string -- from a codebook, a
+    config file, or a producer's documentation. New code that knows the method
+    at authoring time should construct the variant directly, which is typed and
+    autocompletes:
 
     >>> BootstrapWgts(prefix="bsw", n_reps=1000, kind="poisson")
     >>> BrrWgts(prefix="brr_", n_reps=32, fay_coef=0.5)
 
-    Parameters that do not belong to ``method`` are rejected rather than stored:
-    the union is what makes ``fay_coef`` on a bootstrap unrepresentable, and the
-    factory is the boundary that enforces it for string callers.
+    This is a function, not a class: ``isinstance(x, svy.RepWeights)`` and the
+    annotation ``x: svy.RepWeights`` do not work. Use ``svy.RepWgts``, the union
+    of the four variants, for both.
+
+    Parameters that do not belong to ``method`` are refused rather than stored --
+    by the variant itself, since a struct has no field to put them in. This
+    wrapper only improves the message.
     """
     # Sentinels rather than bare required parameters so the message matches the
-    # struct this factory replaced.
+    # struct this factory replaced. Only these three need it: everything else
+    # forwards to msgspec, whose own message is already verbatim
+    # "Missing required argument 'prefix'".
     for _name, _val in (("method", method), ("prefix", prefix), ("n_reps", n_reps)):
         if _val is _MISSING_ARG:
             raise TypeError(f"Missing required argument {_name!r}")
 
     variant = resolve_rep_variant(method)
-
-    common = dict(prefix=prefix, n_reps=n_reps, df=df, padding=padding, rscales=rscales)
-
-    if variant is BootstrapWgts:
-        _reject(variant, fay_coef=fay_coef, paired=paired)
-        return BootstrapWgts(
-            **common, kind=normalize_bootstrap_kind(kind) if kind is not None else "rao-wu"
-        )
-    if variant is JackknifeWgts:
-        _reject(variant, fay_coef=fay_coef, kind=kind)
-        return JackknifeWgts(**common, paired=paired)
-    if variant is BrrWgts:
-        _reject(variant, kind=kind, paired=paired)
-        return BrrWgts(**common, fay_coef=fay_coef)
-    _reject(variant, fay_coef=fay_coef, kind=kind, paired=paired)
-    return SdrWgts(**common)
+    try:
+        return cast(RepWgts, variant(prefix=prefix, n_reps=n_reps, **kwargs))
+    except TypeError as exc:
+        name = _unexpected_param(exc)
+        if name is None:
+            raise
+        raise _foreign_param_error(variant, name, kwargs.get(name)) from exc
 
 
-_PARAM_OWNER = {
-    "fay_coef": ("BrrWgts", "BRR"),
-    "kind": ("BootstrapWgts", "bootstrap"),
-    "paired": ("JackknifeWgts", "jackknife"),
-}
+def _unexpected_param(exc: TypeError) -> str | None:
+    """The parameter name msgspec refused, or None if this is another TypeError."""
+    match = re.search(r"Unexpected keyword argument '([^']+)'", str(exc))
+    return match.group(1) if match else None
 
 
-def _reject(variant: type, **supplied) -> None:
-    """Reject parameters that belong to a different method.
+def _foreign_param_error(variant: type, name: str, value: object = None) -> Exception:
+    """Name the variant that owns a parameter msgspec has just refused.
 
-    The flat signature can express combinations the union cannot; this is where
-    they are turned away, so nothing downstream holds a value that is wrong.
+    msgspec already rejects a foreign keyword on every path, including direct
+    construction -- which the hand-rolled guard this replaced never covered. All
+    that is added here is the hint.
     """
-    for name, value in supplied.items():
-        empty = 0.0 if name == "fay_coef" else (False if name == "paired" else None)
-        if value == empty or value is empty:
-            continue
-        owner, owner_method = _PARAM_OWNER[name]
-        raise MethodError.invalid_choice(
-            where="svy.RepWeights",
-            param=name,
-            got=value,
-            allowed=[empty],
-            hint=(
-                f"'{name}' is a {owner_method} parameter and is not stored on a "
-                f"{variant.__name__} design. Each method carries only its own "
-                f"parameters: {owner} has '{name}'."
-            ),
-        )
+    owned = _PARAM_OWNER.get(name)
+    if owned is None:
+        return TypeError(f"Unexpected keyword argument {name!r}")
+    owner, owner_method = owned
+    return MethodError.invalid_choice(
+        where="svy.RepWeights",
+        param=name,
+        got=value,
+        allowed=[None],
+        hint=(
+            f"'{name}' is a {owner_method} parameter and is not stored on a "
+            f"{variant.__name__} design. Each method carries only its own "
+            f"parameters: {owner} has '{name}'."
+        ),
+    )

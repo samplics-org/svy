@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import msgspec
 import numpy as np
 import polars as pl
 
@@ -304,12 +305,10 @@ def _run_trim(
                     ]
                 )
                 if update_design_wgts:
-                    sample._design = sample._design.update_rep_weights(
-                        method=design.rep_wgts.method,
-                        prefix=target_wgt,
-                        n_reps=n_reps,
-                        fay_coef=design.rep_wgts.fay_coef,
-                        df=design.rep_wgts.df,
+                    sample._design = sample._design.update(
+                        rep_wgts=msgspec.structs.replace(
+                            design.rep_wgts, prefix=target_wgt, n_reps=n_reps
+                        )
                     )
 
     # ── Flush to sample ───────────────────────────────────────────────────

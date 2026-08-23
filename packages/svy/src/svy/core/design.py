@@ -16,7 +16,9 @@ from typing import (
 )
 
 from svy.core.repwgts import (
+    BootstrapWgts,
     BrrWgts,
+    JackknifeWgts,
     RepWeights,
     RepWgts,
     _RepWgtsBase,
@@ -134,9 +136,11 @@ def make_rep_weights(
         method=method,
         prefix=prefix,
         n_reps=n_reps,
-        fay_coef=fay_coef,
         df=df,
         padding=padding,
+        # Only BRR has one; forwarding a 0.0 to any other method would be
+        # sending a Fay claim that is not being made.
+        **({"fay_coef": fay_coef} if fay_coef else {}),
     )
 
 
@@ -406,9 +410,9 @@ class Design:
         fay_coef: float | _MissingType = _MISSING,
         df: int | None | _MissingType = _MISSING,
         padding: int | None | _MissingType = _MISSING,
-        rscales: tuple[float, ...] | None | _MissingType = _MISSING,
+        scale: float | Sequence[float] | None | _MissingType = _MISSING,
+        rep_coefs: tuple[float, ...] | None | _MissingType = _MISSING,
         kind: str | None | _MissingType = _MISSING,
-        paired: bool | _MissingType = _MISSING,
     ) -> Self:
         """
         Return a new Design with selected RepWeights fields updated.
@@ -423,9 +427,9 @@ class Design:
             and isinstance(fay_coef, _MissingType)
             and isinstance(df, _MissingType)
             and isinstance(padding, _MissingType)
-            and isinstance(rscales, _MissingType)
+            and isinstance(scale, _MissingType)
+            and isinstance(rep_coefs, _MissingType)
             and isinstance(kind, _MissingType)
-            and isinstance(paired, _MissingType)
         ):
             return self
 
@@ -462,8 +466,11 @@ class Design:
         if isinstance(padding, _MissingType):
             padding = cur.padding if cur else None
 
-        if isinstance(rscales, _MissingType):
-            rscales = cur.rscales if cur else None
+        if isinstance(scale, _MissingType):
+            scale = cur.scale if cur else None
+
+        if isinstance(rep_coefs, _MissingType):
+            rep_coefs = cur.rep_coefs if cur else None
 
         # 5. Create the new variant.
         _variant = resolve_rep_variant(resolved_method)
@@ -473,19 +480,26 @@ class Design:
         _same = cur is not None and type(cur) is _variant
         if isinstance(kind, _MissingType):
             kind = getattr(cur, "kind", None) if _same else None
-        if isinstance(paired, _MissingType):
-            paired = getattr(cur, "paired", False) if _same else False
+
+        # Pass only what this variant carries. Sending a foreign parameter at
+        # its neutral value -- fay_coef=0.0 to a bootstrap -- would need the
+        # receiving end to treat that as "unset", which is the flat struct's
+        # habit, not something the union should have to accommodate.
+        variant_only: dict[str, object] = {}
+        if _variant is BrrWgts:
+            variant_only["fay_coef"] = fay_coef
+        if _variant in (BootstrapWgts, JackknifeWgts) and kind is not None:
+            variant_only["kind"] = kind
 
         updated_rep_wgts = RepWeights(
             method=resolved_method,
             prefix=resolved_prefix,
             n_reps=resolved_n_reps,
-            fay_coef=fay_coef if _variant is BrrWgts else 0.0,
             df=df,
             padding=padding,
-            rscales=rscales,
-            kind=kind,
-            paired=paired,
+            scale=scale,
+            rep_coefs=rep_coefs,
+            **variant_only,
         )
 
         return self.update(rep_wgts=updated_rep_wgts)
@@ -816,9 +830,11 @@ class Design:
 
         if self.rep_wgts:
             rw = self.rep_wgts
-            method_name = getattr(rw.method, "name", str(rw.method))
+            # `.method` is the variant's tag and always a str. The getattr(...,
+            # "name", ...) dance here was for the estimation-method enum, which
+            # #131 removed.
             parts.append(
-                f"rep_wgts={method_name}(n_reps={rw.n_reps}, prefix='{rw.prefix}', df={rw.df})"
+                f"rep_wgts={rw.method}(n_reps={rw.n_reps}, prefix='{rw.prefix}', df={rw.df})"
             )
         else:
             parts.append("rep_wgts=None")

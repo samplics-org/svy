@@ -98,18 +98,22 @@ def _get_rep_params(est: Estimation, fay_coef: float = 0.0):
         raise ValueError("No replicate weight columns found.")
     n_reps = len(rep_weight_cols)
     df_val = int(rw.df) if rw.df and rw.df > 0 else max(1, n_reps - 1)
-    rscales = list(rw.rscales) if rw.rscales is not None else None
-    if rscales is not None and len(rscales) != n_reps:
-        raise DimensionError(
-            title="rscales length mismatch",
-            detail=f"RepWeights.rscales has {len(rscales)} entries but "
-            f"{n_reps} replicate weight columns were resolved.",
-            code="RSCALES_LENGTH_MISMATCH",
-            where="estimation.replication",
-            param="rep_wgts.rscales",
-            expected=n_reps,
-            got=len(rscales),
-        )
+    # Both coefficient channels are length-checked at construction against the
+    # recorded n_reps; this catches the case that check cannot see -- a recorded
+    # n_reps that disagrees with the columns actually resolved from the data.
+    for _param in ("scale", "rep_coefs"):
+        _supplied = getattr(rw, _param, None)
+        if _supplied is not None and len(_supplied) != n_reps:
+            raise DimensionError(
+                title=f"{_param} length mismatch",
+                detail=f"RepWeights.{_param} has {len(_supplied)} entries but "
+                f"{n_reps} replicate weight columns were resolved.",
+                code=f"{_param.upper()}_LENGTH_MISMATCH",
+                where="estimation.replication",
+                param=f"rep_wgts.{_param}",
+                expected=n_reps,
+                got=len(_supplied),
+            )
     # Per-replicate variance coefficients, computed by the variant rather than
     # re-derived from a method label on the far side of the FFI boundary. The
     # resolved column count wins over the recorded n_reps, and an

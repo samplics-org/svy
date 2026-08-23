@@ -46,13 +46,13 @@ def jk_sample() -> Sample:
 
 
 class TestGeneratedJknMatchesR:
-    def test_df_and_rscales(self, jk_sample):
+    def test_df_and_rep_coefs(self, jk_sample):
         rw = jk_sample.design.rep_wgts
         assert rw.n_reps == 8
         # Stratified jackknife df = #PSUs - #strata (R degf; was total PSUs)
         assert rw.df == 6
         # (n_h - 1)/n_h per deleted-PSU replicate; 4 clusters per stratum
-        assert rw.rscales == (0.75,) * 8
+        assert rw.rep_coefs == (0.75,) * 8
 
     def test_mean_matches_r(self, jk_sample):
         r = jk_sample.estimation.mean("income", method="replication", drop_nulls=True)
@@ -74,29 +74,3 @@ class TestGeneratedJknMatchesR:
         t = jk_sample.estimation.total("income", method="replication", drop_nulls=True)
         assert t.estimates[0].est == pytest.approx(114554002.6538, rel=1e-9)
         assert t.estimates[0].se == pytest.approx(18830996.1797964, rel=REL)
-
-    def test_user_rscales_override(self, jk_sample):
-        """User-supplied rscales flow through: doubling them scales the
-        variance by 2 (SE by sqrt 2)."""
-        import math
-
-        base = jk_sample.estimation.mean("income", method="replication", drop_nulls=True)
-        rw = jk_sample.design.rep_wgts
-        boosted = Sample(
-            jk_sample.data,
-            jk_sample.design.update_rep_weights(
-                method=rw.method,
-                prefix=rw.prefix,
-                n_reps=rw.n_reps,
-                df=rw.df,
-                rscales=tuple(2.0 * r for r in rw.rscales),
-            ),
-        )
-        r2 = boosted.estimation.mean("income", method="replication", drop_nulls=True)
-        assert r2.estimates[0].se == pytest.approx(
-            base.estimates[0].se * math.sqrt(2.0), rel=1e-12
-        )
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

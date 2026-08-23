@@ -1,9 +1,10 @@
 # tests/svy/core/test_repwgts_union.py
-"""RepWeights as a tagged union — see docs/design/rep-weights-tagged-union.md."""
+"""RepWeights as a tagged union."""
 
 from __future__ import annotations
 
 import msgspec
+import polars as pl
 import pytest
 
 import svy
@@ -17,6 +18,7 @@ from svy.core.repwgts import (
     SdrWgts,
     resolve_rep_variant,
 )
+from svy.core.warnings import WarnCode
 from svy.errors import MethodError
 
 
@@ -44,11 +46,8 @@ def test_method_property_is_the_display_label(variant, expected_method):
     "ctor, kwargs",
     [
         (BootstrapWgts, {"fay_coef": 0.5}),
-        (BootstrapWgts, {"paired": True}),
-        (JackknifeWgts, {"kind": "poisson"}),
         (JackknifeWgts, {"fay_coef": 0.5}),
         (BrrWgts, {"kind": "poisson"}),
-        (BrrWgts, {"paired": True}),
         (SdrWgts, {"fay_coef": 0.5}),
     ],
 )
@@ -56,6 +55,39 @@ def test_foreign_parameters_are_unrepresentable(ctor, kwargs):
     """The flat struct accepted all of these and never read them."""
     with pytest.raises(TypeError):
         ctor(prefix="w", n_reps=10, **kwargs)
+
+
+def test_jackknife_rejects_a_bootstrap_kind():
+    """Both variants have a ``kind``; the vocabularies are not interchangeable."""
+    with pytest.raises(MethodError) as exc:
+        JackknifeWgts(prefix="w", n_reps=10, kind="poisson")
+    assert "jk1" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "given, expected",
+    [("jk1", "jk1"), ("JKN", "jkn"), ("jk_2", "jk2"), ("paired", "jk2")],
+)
+def test_jackknife_kind_aliases_normalize(given, expected):
+    assert JackknifeWgts(prefix="w", n_reps=10, kind=given).kind == expected
+
+
+def test_jackknife_kind_is_unspecified_by_default():
+    """None is not JK1: same number, different statement about who said so."""
+    rw = JackknifeWgts(prefix="w", n_reps=10)
+    assert rw.kind is None
+    assert rw.coefficients() == [0.9] * 10
+
+
+def test_declared_jkn_without_coefficients_refuses_to_guess():
+    """An unmet claim fails; an absent one falls back."""
+    with pytest.raises(MethodError) as exc:
+        JackknifeWgts(prefix="w", n_reps=10, kind="jkn").coefficients()
+    assert "scale" in str(exc.value)
+
+
+def test_declared_jk2_uses_one_not_the_global():
+    assert JackknifeWgts(prefix="w", n_reps=10, kind="jk2").coefficients() == [1.0] * 10
 
 
 def test_bootstrap_kind_is_a_value_not_a_type():
@@ -95,9 +127,9 @@ def test_coefficients_match_the_rust_kernel():
     assert JackknifeWgts(prefix="w", n_reps=n).coefficients() == pytest.approx([(n - 1) / n] * n)
 
 
-def test_jackknife_rscales_override_the_default():
+def test_user_scale_overrides_the_default():
     rs = tuple(0.5 for _ in range(10))
-    assert JackknifeWgts(prefix="w", n_reps=10, rscales=rs).coefficients() == list(rs)
+    assert BootstrapWgts(prefix="w", n_reps=10, scale=rs).coefficients() == list(rs)
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +165,6 @@ def test_bootstrap_kind_aliases_normalize(given):
     "kwargs, param",
     [
         ({"method": "bootstrap", "fay_coef": 0.5}, "fay_coef"),
-        ({"method": "bootstrap", "paired": True}, "paired"),
         ({"method": "brr", "kind": "poisson"}, "kind"),
         ({"method": "jackknife", "fay_coef": 0.5}, "fay_coef"),
         ({"method": "sdr", "kind": "poisson"}, "kind"),
@@ -246,11 +277,16 @@ def test_update_rep_weights_carries_kind_within_the_same_method():
 
 
 def test_update_rep_weights_drops_kind_when_the_method_changes():
-    """A bootstrap kind means nothing on a jackknife design."""
+    """A bootstrap kind means nothing on a jackknife design.
+
+    Both variants carry a ``kind`` now, with different vocabularies, so the
+    invariant is that the value does not survive the change of method -- not
+    that the field is absent.
+    """
     d = svy.Design(wgt="w", rep_wgts=BootstrapWgts(prefix="b", n_reps=10, kind="poisson"))
     updated = d.update_rep_weights(method="jackknife")
     assert isinstance(updated.rep_wgts, JackknifeWgts)
-    assert not hasattr(updated.rep_wgts, "kind")
+    assert updated.rep_wgts.kind is None
 
 
 def test_variants_are_publicly_exported():
@@ -264,3 +300,109 @@ def test_variants_are_publicly_exported():
         "SdrWgts",
     ):
         assert hasattr(svy, name), name
+
+
+# =============================================================================
+# Jackknife kind resolved against the design (Sample-level)
+# =============================================================================
+#
+# The struct cannot do this: (n_h-1)/n_h needs per-stratum PSU counts and
+# coefficients() has no frame. So it happens once at Sample construction.
+
+
+def _jk_frame(strata, n_reps=4):
+    n = len(strata)
+    return pl.DataFrame(
+        {
+            "stratum": strata,
+            "psu": [i // 2 + 1 for i in range(n)],
+            "w": [5.0] * n,
+            "y": [float(i) for i in range(n)],
+            **{f"jw{r}": [5.0] * n for r in range(1, n_reps + 1)},
+        }
+    )
+
+
+def _jk_sample(strata, *, n_reps=4, **rw_kwargs):
+    df = _jk_frame(strata, n_reps)
+    rw = JackknifeWgts(prefix="jw", n_reps=n_reps, **rw_kwargs)
+    return svy.Sample(df, svy.Design(wgt="w", stratum="stratum", psu="psu", rep_wgts=rw))
+
+
+def test_declared_jkn_derives_its_coefficients_from_a_balanced_design():
+    s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jkn")
+    assert s._design.rep_wgts.rep_coefs == (0.5,) * 4  # (n_h-1)/n_h, n_h=2
+    assert s._design.rep_wgts.scale is None  # derived, not asserted
+
+
+def test_unbalanced_jkn_is_not_derived_and_still_refuses():
+    """The replicate->stratum mapping is the producer's, not svy's to infer."""
+    s = _jk_sample([1, 1, 1, 1, 2, 2], n_reps=3, kind="jkn")
+    assert s._design.rep_wgts.rep_coefs is None
+    with pytest.raises(MethodError):
+        s._design.rep_wgts.coefficients()
+
+
+def test_user_scale_is_never_overwritten_by_derivation():
+    s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jkn", scale=0.9)
+    assert s._design.rep_wgts.rep_coefs is None
+    assert s._design.rep_wgts.coefficients() == [0.9] * 4
+
+
+def test_unspecified_kind_on_a_stratified_design_warns_but_does_not_guess():
+    s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4)
+    assert s._design.rep_wgts.kind is None  # absence of a claim is not a claim
+    assert s._design.rep_wgts.coefficients() == [0.75] * 4  # JK1 global, unchanged
+    codes = {w.code for w in s.warnings.list()}
+    assert WarnCode.JACKKNIFE_KIND_UNSPECIFIED in codes
+
+
+def test_unspecified_kind_on_an_unstratified_design_is_silent():
+    s = _jk_sample([1, 1, 1, 1], n_reps=4)
+    codes = {w.code for w in s.warnings.list()}
+    assert WarnCode.JACKKNIFE_KIND_UNSPECIFIED not in codes
+
+
+def test_a_kind_that_disagrees_with_the_design_warns():
+    """jk2 implies one replicate per stratum; here there are 2 strata, not 4."""
+    s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jk2")
+    codes = {w.code for w in s.warnings.list()}
+    assert WarnCode.JACKKNIFE_KIND_UNSPECIFIED in codes
+
+
+# =============================================================================
+# The factory as a parse door
+# =============================================================================
+
+
+def test_factory_forwards_unknown_parameters_to_the_variant():
+    """It resolves the name and forwards; msgspec owns the field checking."""
+    rw = RepWeights(method="brr", prefix="b", n_reps=32, fay_coef=0.5, padding=3)
+    assert isinstance(rw, BrrWgts)
+    assert (rw.fay_coef, rw.padding) == (0.5, 3)
+
+
+def test_a_foreign_parameter_is_refused_even_at_its_neutral_value():
+    """fay_coef=0.0 on a bootstrap is still a Fay parameter on a design that has
+    none. Callers that know the variant should not be sending it at all."""
+    with pytest.raises(MethodError):
+        RepWeights(method="bootstrap", prefix="b", n_reps=10, fay_coef=0.0)
+
+
+def test_a_foreign_parameter_carrying_a_value_still_names_its_owner():
+    with pytest.raises(MethodError) as exc:
+        RepWeights(method="bootstrap", prefix="b", n_reps=10, fay_coef=0.5)
+    assert "BrrWgts" in str(exc.value)
+
+
+def test_direct_construction_is_guarded_too():
+    """The hand-rolled guard this replaced only covered the factory."""
+    with pytest.raises(TypeError):
+        BootstrapWgts(prefix="b", n_reps=10, fay_coef=0.5)
+
+
+def test_scale_is_visible_in_the_repr():
+    """Rare and silent is the bad combination for a variance coefficient."""
+    assert "scale=0.5" in repr(BootstrapWgts(prefix="b", n_reps=4, scale=0.5))
+    assert "(derived)" in repr(JackknifeWgts(prefix="b", n_reps=4, rep_coefs=(0.5,) * 4))
+    assert "scale" not in repr(BootstrapWgts(prefix="b", n_reps=4))

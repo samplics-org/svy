@@ -40,8 +40,14 @@ except ImportError:  # pragma: no cover
     rust_create_jk_wgts = None
     rust_create_sdr_wgts = None
 
-from svy.core.design import RepWeights
-from svy.core.repwgts import normalize_bootstrap_kind
+from svy.core.repwgts import (
+    BootstrapKind,
+    BootstrapWgts,
+    BrrWgts,
+    JackknifeWgts,
+    SdrWgts,
+    normalize_bootstrap_kind,
+)
 from svy.errors import DimensionError, MethodError
 from svy.utils.checks import drop_missing
 from svy.utils.random_state import RandomState, resolve_random_state
@@ -321,13 +327,7 @@ def create_brr_wgts(
     )
 
     sample._design = sample._design.fill_missing(
-        rep_wgts=RepWeights(
-            method="brr",
-            prefix=rep_prefix,
-            n_reps=n_reps_actual,
-            fay_coef=fay_coef,
-            df=df_val,
-        )
+        rep_wgts=BrrWgts(prefix=rep_prefix, n_reps=n_reps_actual, fay_coef=fay_coef, df=df_val)
     )
 
     return sample
@@ -362,7 +362,7 @@ def create_jk_wgts(
     stratum_int = _to_int_array(data, design.stratum)
 
     assert rust_create_jk_wgts is not None  # noqa: S101
-    rep_mat, df_val, rscales = rust_create_jk_wgts(
+    rep_mat, df_val, rep_coefs = rust_create_jk_wgts(
         main_weights,
         psu_int,
         stratum_int,
@@ -378,16 +378,28 @@ def create_jk_wgts(
         [pl.Series(name=col, values=vals) for col, vals in rep_dicts.items()]
     )
 
+    # svy generated these, so the family is a fact rather than an assumption.
+    # A single stratum is not merely "close to" JK1: JKn's (n_h-1)/n_h with one
+    # stratum of n PSUs gives R = n replicates each at (n-1)/n, which is exactly
+    # the JK1 global. The collapse is identical, not approximate.
+    if paired:
+        jk_kind = "jk2"
+    elif design.stratum is None or len(np.unique(stratum_int)) <= 1:
+        jk_kind = "jk1"
+    else:
+        jk_kind = "jkn"
+
     sample._design = sample._design.fill_missing(
-        rep_wgts=RepWeights(
-            method="jackknife",
+        rep_wgts=JackknifeWgts(
             prefix=rep_prefix,
             n_reps=n_reps,
             df=df_val,
-            paired=paired,
+            kind=jk_kind,
             # Per-replicate (n_h-1)/n_h coefficients: exact stratified-JKn
-            # variance instead of the global (R-1)/R approximation.
-            rscales=tuple(rscales),
+            # variance instead of the global (R-1)/R approximation. The computed
+            # channel, not `scale` -- svy derived these, the user did not assert
+            # them, and only svy can (it has the strata; coefficients() does not).
+            rep_coefs=tuple(rep_coefs),
         )
     )
 
@@ -398,7 +410,7 @@ def create_bs_wgts(
     sample: Sample,
     n_reps: int = 500,
     *,
-    kind: Literal["rao-wu", "poisson"] = "rao-wu",
+    kind: BootstrapKind = "rao-wu",
     rep_prefix: str | None = None,
     drop_nulls: bool = False,
     rstate: RandomState = None,
@@ -502,12 +514,8 @@ def create_bs_wgts(
         [pl.Series(name=col, values=vals) for col, vals in rep_dicts.items()]
     )
 
-    sample._design = sample._design.update_rep_weights(
-        method="bootstrap",
-        prefix=rep_prefix,
-        n_reps=n_reps,
-        df=df_val,
-        kind=kind,
+    sample._design = sample._design.update(
+        rep_wgts=BootstrapWgts(prefix=rep_prefix, n_reps=n_reps, df=df_val, kind=kind)
     )
 
     return sample
@@ -563,11 +571,8 @@ def create_sdr_wgts(
         [pl.Series(name=col, values=vals) for col, vals in rep_dicts.items()]
     )
 
-    sample._design = sample._design.update_rep_weights(
-        method="sdr",
-        prefix=rep_prefix,
-        n_reps=n_reps,
-        df=df_val,
+    sample._design = sample._design.update(
+        rep_wgts=SdrWgts(prefix=rep_prefix, n_reps=n_reps, df=df_val)
     )
 
     return sample

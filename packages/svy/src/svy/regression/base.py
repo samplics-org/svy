@@ -596,9 +596,14 @@ class GLM:
                     ) from e
                 rep_betas.append(np.asarray(r_chosen[1], dtype=float))
             B = np.vstack(rep_betas)
-            coefs_r = np.asarray(
-                self._rep_coefficients(rep_wgts, B.shape[0]), dtype=float
-            )
+            # The variant computes its own coefficients, the same call the
+            # estimation path makes. Re-deriving them here from a method label
+            # is what let regression and estimation disagree about a design.
+            # The count of replicates actually fitted wins over the recorded one.
+            _rw = rep_wgts
+            if getattr(_rw, "n_reps", B.shape[0]) != B.shape[0]:
+                _rw = msgspec.structs.replace(_rw, n_reps=B.shape[0])
+            coefs_r = np.asarray(_rw.coefficients(), dtype=float)
             Bc = B - B.mean(axis=0)
             cov_mat = (Bc * coefs_r[:, None]).T @ Bc
             rep_df = getattr(rep_wgts, "df", None)
@@ -894,29 +899,6 @@ class GLM:
             raise ModelError.domain_violation(
                 where="GLM.fit", family=family, violation="Negative values"
             )
-
-    @staticmethod
-    def _rep_coefficients(rep_wgts, n_reps: int) -> list[float]:
-        """Per-replicate variance coefficients c_r (R svrVar's scale*rscales)."""
-        rscales = getattr(rep_wgts, "rscales", None)
-        if rscales is not None:
-            return [float(r) for r in rscales]
-        m = str(getattr(rep_wgts, "method", "")).lower()
-        if "boot" in m:
-            return [1.0 / n_reps] * n_reps
-        if "brr" in m or "balanced" in m:
-            fay = float(getattr(rep_wgts, "fay_coef", 0.0) or 0.0)
-            return [1.0 / (n_reps * (1.0 - fay) ** 2)] * n_reps
-        if "jack" in m:
-            return [(n_reps - 1.0) / n_reps] * n_reps
-        if "sdr" in m:
-            return [4.0 / n_reps] * n_reps
-        raise ModelError(
-            title="Unknown replication method",
-            detail=f"Cannot derive replicate variance coefficients for method {m!r}.",
-            code="UNKNOWN_REP_METHOD",
-            where="GLM.fit",
-        )
 
     @staticmethod
     def _effective_parameters(

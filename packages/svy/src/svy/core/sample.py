@@ -7,6 +7,7 @@ import logging
 
 from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping, Self, Sequence, cast
 
+import msgspec
 import numpy as np
 import polars as pl
 
@@ -19,6 +20,7 @@ from svy.core.describe_runtime import run_describe
 from svy.core.design import Design, PopSize, RepWeights
 from svy.core.enumerations import MeasurementType
 from svy.core.expr import to_polars_expr
+from svy.core.repwgts import JackknifeWgts
 from svy.core.types import (
     _MISSING,
     DF,
@@ -165,6 +167,114 @@ class Sample:
 
         self._check_for_singletons()
         self._validate_design()
+        self._resolve_jackknife_kind()
+
+    def _resolve_jackknife_kind(self) -> None:
+        """Check a declared jackknife ``kind`` against the design, and derive the
+        JKn coefficients when the design makes them derivable.
+
+        Only jackknife needs this. Every other method's standard coefficient is
+        closed-form in ``n_reps`` -- bootstrap 1/R, BRR 1/(R(1-f)^2), SDR 4/R,
+        JK1 (R-1)/R, JK2 1.0 -- so nothing else can learn anything from strata
+        and PSUs. JKn's (n_h-1)/n_h is the sole exception, and it is why this
+        lives here, where the frame is, rather than on the struct.
+
+        Producers who withhold design variables and publish replicate weights
+        instead usually ship bootstrap, BRR or SDR; the large jackknife files
+        that arrive without strata (NAEP, TIMSS) are JK2, whose coefficient is
+        closed-form. The common paths do not depend on any of this.
+        """
+        design = cast("Design", self._design)
+        rw = design.rep_wgts
+        if not isinstance(rw, JackknifeWgts):
+            return
+
+        stratum_col = self._internal_design.get("stratum")
+        psu_col = self._internal_design.get("psu")
+        data = cast(pl.DataFrame, self._data)
+        if psu_col is None or psu_col not in data.columns:
+            return  # nothing to check against and nothing to derive from
+
+        if stratum_col is not None and stratum_col in data.columns:
+            counts = (
+                data.select([stratum_col, psu_col])
+                .unique()
+                .group_by(stratum_col)
+                .len()
+                .get_column("len")
+                .to_list()
+            )
+        else:
+            counts = [data.get_column(psu_col).n_unique()]
+        n_strata = len(counts)
+        n_psus = sum(counts)
+
+        # A declared kind is otherwise an assertion svy has to trust; with design
+        # variables present it becomes checkable arithmetic. A warning rather
+        # than an error, because a legitimately subset frame has fewer PSUs than
+        # the weight columns were built from and that is not a mislabelling.
+        expected = {"jk1": n_psus, "jkn": n_psus, "jk2": n_strata}.get(rw.kind or "")
+        if expected is not None and expected != rw.n_reps:
+            self.warn(
+                code=WarnCode.JACKKNIFE_KIND_UNSPECIFIED,
+                title=f"Jackknife kind {rw.kind!r} does not match the design",
+                detail=(
+                    f"kind={rw.kind!r} implies {expected} replicates "
+                    f"({'one per stratum' if rw.kind == 'jk2' else 'one per PSU'}), "
+                    f"but n_reps is {rw.n_reps}. The frame has {n_psus} PSUs "
+                    f"across {n_strata} strata."
+                ),
+                where="Sample",
+                param="rep_wgts.kind",
+                expected=expected,
+                got=rw.n_reps,
+                hint=(
+                    "Expected when the frame is a subset of what the replicate "
+                    "weights were built from. Otherwise the kind is probably wrong."
+                ),
+            )
+            return
+
+        if rw.kind is None:
+            # Positive evidence that the JK1 global is probably wrong, but no
+            # claim from the user to act on: too weak to raise, too strong to
+            # pass over. Deriving a kind here would turn "the producer withheld
+            # the design" into "these weights are unstratified".
+            if n_strata > 1 and rw.scale is None and rw.rep_coefs is None:
+                self.warn(
+                    code=WarnCode.JACKKNIFE_KIND_UNSPECIFIED,
+                    title="Stratified design with an unspecified jackknife kind",
+                    detail=(
+                        f"The design has {n_strata} strata, but the replicate "
+                        f"weights do not say which jackknife they are, so the "
+                        f"unstratified JK1 coefficient (R-1)/R is being used."
+                    ),
+                    where="Sample",
+                    param="rep_wgts.kind",
+                    hint=(
+                        "Set kind='jkn' for the stratified delete-one-PSU "
+                        "jackknife, 'jk2' for the paired one-replicate-per-stratum "
+                        "scheme, or 'jk1' if these really are unstratified."
+                    ),
+                )
+            return
+
+        if rw.kind != "jkn":
+            return  # jk1 and jk2 are closed-form; nothing to derive
+        if rw.scale is not None or rw.rep_coefs is not None:
+            return  # already answered, by the user or by whoever generated these
+
+        # (n_h-1)/n_h is indexed by *replicate*, so the general case needs to know
+        # which replicate deletes a PSU from which stratum -- an ordering only
+        # whoever built the file knows. When every stratum has the same n_h the
+        # coefficient is uniform and the mapping is irrelevant, which covers the
+        # paired-PSU designs that dominate real JKn files. Unbalanced falls
+        # through, and coefficients() refuses and names `scale`.
+        if len(set(counts)) != 1 or counts[0] < 2:
+            return
+        n_h = counts[0]
+        derived = (float(n_h - 1) / float(n_h),) * rw.n_reps
+        self._design = design.update(rep_wgts=msgspec.structs.replace(rw, rep_coefs=derived))
 
     def __setattr__(self, name: str, value: Any) -> None:
         # Any rebind of the data or design invalidates every version-keyed

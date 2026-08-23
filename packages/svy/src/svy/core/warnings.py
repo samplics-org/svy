@@ -36,6 +36,7 @@ class WarnCode(StrEnum):
     POSTSTRATA_EMPTY = "POSTSTRATA_EMPTY"
     CONTROL_MISMATCH = "CONTROL_MISMATCH"
     DESIGN_INCOMPLETE = "DESIGN_INCOMPLETE"
+    JACKKNIFE_KIND_UNSPECIFIED = "JACKKNIFE_KIND_UNSPECIFIED"
     # ── Weighting (generic — shared across trim, rake, calibrate, …) ──
     REPLICATE_SKIPPED = "REPLICATE_SKIPPED"  # rep weights present but not adjusted
     DOMAIN_SKIPPED = "DOMAIN_SKIPPED"  # domain skipped (e.g. below min_cell_size)
