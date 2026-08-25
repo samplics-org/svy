@@ -375,26 +375,122 @@ class Sample:
             )
             return
 
-        # (n_h-1)/n_h is indexed by *replicate*, so the general case needs to know
-        # which replicate deletes a PSU from which stratum -- an ordering only
-        # whoever built the file knows. When every stratum has the same n_h the
-        # coefficient is uniform and the mapping is irrelevant, which covers the
-        # paired-PSU designs that dominate real JKn files. Unbalanced falls
-        # through, and coefficients() refuses and names `scale`.
-        if len(set(counts)) != 1 or counts[0] < 2:
-            self._warn_jkn_not_derivable(
-                reason=(
-                    f"the strata are unbalanced (PSUs per stratum: "
-                    f"{sorted(set(counts))}), so (n_h-1)/n_h differs by replicate "
-                    f"and svy cannot tell which replicate deletes a PSU from which "
-                    f"stratum"
-                ),
-                can_use_psu=False,
+        # (n_h-1)/n_h is indexed by *replicate*, so it needs to know which
+        # replicate deletes a PSU from which stratum. Balanced strata make the
+        # question moot -- every replicate carries the same number, so any
+        # ordering gives the same vector -- which is the cheap path and the one
+        # the paired-PSU designs that dominate real JKn files take.
+        if len(set(counts)) == 1 and counts[0] >= 2:
+            n_h = counts[0]
+            derived = (float(n_h - 1) / float(n_h),) * rw.n_reps
+            self._design = design.update(
+                rep_wgts=msgspec.structs.replace(rw, rep_coefs=derived)
             )
             return
-        n_h = counts[0]
-        derived = (float(n_h - 1) / float(n_h),) * rw.n_reps
-        self._design = design.update(rep_wgts=msgspec.structs.replace(rw, rep_coefs=derived))
+
+        # Unbalanced is not a different method, it is the same JKn with a
+        # coefficient that varies by stratum -- so the only thing missing is the
+        # mapping, and a delete-one-PSU replicate says which PSU it dropped by
+        # zeroing it. Recovering the mapping from that is exact where it applies,
+        # and only replicate -> stratum is needed: the coefficient is constant
+        # within a stratum, so which PSU of the stratum was dropped never matters.
+        recovered = self._jkn_coefs_from_deleted_psus(rw, data, stratum_keys, psu_keys, counts)
+        if recovered is not None:
+            self._design = design.update(
+                rep_wgts=msgspec.structs.replace(rw, rep_coefs=recovered)
+            )
+            return
+
+        self._warn_jkn_not_derivable(
+            reason=(
+                f"the strata are unbalanced (PSUs per stratum: "
+                f"{sorted(set(counts))}), so (n_h-1)/n_h differs by replicate, and "
+                f"the replicate columns do not identify which PSU each one deletes "
+                f"(a delete-one-PSU replicate zeroes it) so the mapping cannot be "
+                f"recovered either"
+            ),
+            can_use_psu=False,
+        )
+        return
+
+    def _jkn_coefs_from_deleted_psus(
+        self,
+        rw: JackknifeWgts,
+        data: pl.DataFrame,
+        stratum_keys: list[str],
+        psu_keys: list[str],
+        counts: list[int],
+    ) -> tuple[float, ...] | None:
+        """Recover per-replicate (n_h-1)/n_h by reading which PSU each drops.
+
+        A delete-one-PSU replicate zeroes the PSU it deletes, so the mapping
+        svy is missing is written in the weights themselves. Only replicate ->
+        *stratum* is needed: the coefficient is constant within a stratum, so
+        which PSU of that stratum was dropped never matters.
+
+        Returns None unless the signature is unambiguous -- every replicate
+        column zeroing exactly one otherwise-nonzero PSU, and no PSU dropped
+        twice. That is what a delete-one jackknife looks like and what a
+        bootstrap, a BRR or a Fay-style variant does not, so a file that is not
+        what it claims falls back to refusing rather than being given a
+        confidently wrong vector.
+        """
+        design = cast("Design", self._design)
+        wgt_col = design.wgt
+        if not isinstance(wgt_col, str) or wgt_col not in data.columns:
+            return None
+        rep_cols = rw.columns_from_data(list(data.columns))
+        if len(rep_cols) != rw.n_reps or any(c not in data.columns for c in rep_cols):
+            return None
+
+        # One pass to PSU level: a PSU is deleted by a replicate when every one
+        # of its rows is zero there, which max(abs(.)) says directly. A PSU
+        # carrying no weight to begin with is zero everywhere and is not
+        # evidence of anything.
+        keys = list(dict.fromkeys(psu_keys + stratum_keys))
+        agg = data.group_by(keys).agg(
+            [pl.col(c).abs().max().alias(c) for c in rep_cols]
+            + [pl.col(wgt_col).abs().max().alias("__base__")]
+        )
+        agg = agg.filter(pl.col("__base__") > 0.0).drop("__base__")
+        if agg.height < 2:
+            return None
+
+        n_by_stratum = agg.group_by(stratum_keys).len().rename({"len": "__n_h__"})
+
+        # Long form, then keep only the zeros: one row per (replicate, deleted
+        # PSU). Vectorized rather than a pass per replicate, which matters at the
+        # replicate counts these files actually ship -- R is commonly 100-1000.
+        dropped = agg.unpivot(
+            index=keys, on=rep_cols, variable_name="__rep__", value_name="__v__"
+        ).filter(pl.col("__v__") == 0.0)
+
+        # The delete-one signature: every replicate drops exactly one PSU and no
+        # PSU is dropped twice. A bootstrap, a BRR or a Fay-style variant fails
+        # this, so a file that is not what it claims falls back to refusing
+        # rather than being handed a confidently wrong vector.
+        n_reps = len(rep_cols)
+        if dropped.height != n_reps:
+            return None
+        if dropped.get_column("__rep__").n_unique() != n_reps:
+            return None
+        if dropped.select(psu_keys).unique().height != n_reps:
+            return None
+
+        # Replicate order is positional, not lexical: "jk10" sorts before "jk2".
+        order = pl.DataFrame(
+            {"__rep__": rep_cols, "__i__": list(range(n_reps))},
+            schema={"__rep__": pl.String, "__i__": pl.Int64},
+        )
+        out = (
+            dropped.join(n_by_stratum, on=stratum_keys, how="left")
+            .join(order, on="__rep__", how="left")
+            .sort("__i__")
+        )
+        n_h = out.get_column("__n_h__")
+        if n_h.null_count() or n_h.min() < 2:
+            return None  # a singleton stratum has no jackknife variance
+        return tuple(((n_h - 1) / n_h).cast(pl.Float64).to_list())
 
     def _warn_jkn_not_derivable(self, *, reason: str, can_use_psu: bool = True) -> None:
         """Say at construction what ``coefficients()`` would only say later.

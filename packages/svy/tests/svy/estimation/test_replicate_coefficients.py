@@ -405,3 +405,104 @@ def test_every_member_of_a_tuple_unit_must_resolve():
 def test_malformed_units_are_rejected(bad):
     with pytest.raises((TypeError, ValueError)):
         JackknifeWgts(prefix="jk", n_reps=8, stratum=bad)
+
+
+# ==========================================================================
+# Unbalanced JKn: the mapping is recovered from the deleted PSUs
+# ==========================================================================
+#
+# Unbalanced is not a different method, it is JKn with a coefficient that
+# varies by stratum. The only thing missing is which replicate belongs to
+# which stratum, and a delete-one-PSU replicate says so by zeroing the PSU
+# it drops.
+
+
+def _unbalanced_built(rng):
+    df = pl.DataFrame(
+        {
+            "stratum": [1, 1, 1, 2, 2, 3, 3],
+            "psu": ["1a", "1b", "1c", "2a", "2b", "3a", "3b"],
+            "wgt": [1.0] * 7,
+            "y": [10.0, 11.0, 12.0, 20.0, 21.0, 30.0, 31.0],
+        }
+    )
+    s = svy.Sample(data=df, design=svy.Design(stratum="stratum", psu="psu", wgt="wgt"))
+    return s.weighting.create_jk_wgts(rep_prefix="jk")
+
+
+def _redeclare(built, prefix="jk", n_reps=7, **rw_kwargs):
+    raw = built._data.select(
+        ["stratum", "psu", "wgt", "y"] + [f"{prefix}{i}" for i in range(1, n_reps + 1)]
+    )
+    rw_kwargs.setdefault("stratum", "stratum")
+    rw_kwargs.setdefault("psu", "psu")
+    return svy.Sample(
+        data=raw,
+        design=svy.Design(
+            stratum="stratum",
+            psu="psu",
+            wgt="wgt",
+            rep_wgts=JackknifeWgts(prefix=prefix, n_reps=n_reps, **rw_kwargs),
+        ),
+    )
+
+
+def test_unbalanced_jkn_recovers_the_coefficients_svy_would_have_assigned():
+    built = _unbalanced_built(np.random.default_rng(61))
+    truth = built._design.rep_wgts.coefficients()
+    assert truth == pytest.approx([2 / 3] * 3 + [1 / 2] * 4)
+
+    declared = _redeclare(built)
+    assert declared._design.rep_wgts.coefficients() == truth
+    assert not declared.warnings.list(code="JACKKNIFE_COEFS_UNAVAILABLE")
+
+
+def test_recovered_coefficients_give_the_same_standard_error():
+    built = _unbalanced_built(np.random.default_rng(62))
+    declared = _redeclare(built)
+    a = built.estimation.mean("y", method="replication").to_polars()["se"][0]
+    b = declared.estimation.mean("y", method="replication").to_polars()["se"][0]
+    assert a == pytest.approx(b, rel=1e-12)
+
+
+def test_recovery_refuses_columns_without_the_delete_one_signature():
+    """A bootstrap, a BRR or a Fay-style variant zeroes nothing. Better to
+    refuse than to hand back a confidently wrong vector."""
+    rng = np.random.default_rng(63)
+    built = _unbalanced_built(rng)
+    noise = built._data.with_columns(
+        [pl.Series(f"b{i}", rng.uniform(0.5, 1.5, 7)) for i in range(1, 8)]
+    )
+    s = svy.Sample(
+        data=noise,
+        design=svy.Design(
+            stratum="stratum",
+            psu="psu",
+            wgt="wgt",
+            rep_wgts=JackknifeWgts(
+                prefix="b", n_reps=7, kind="jkn", stratum="stratum", psu="psu"
+            ),
+        ),
+    )
+    assert s._design.rep_wgts.rep_coefs is None
+    assert s.warnings.list(code="JACKKNIFE_COEFS_UNAVAILABLE")
+    with pytest.raises(svy.MethodError):
+        s._design.rep_wgts.coefficients()
+
+
+def test_balanced_strata_do_not_need_the_recovery():
+    """Every replicate carries the same coefficient, so any ordering gives the
+    same vector and the mapping never has to be found."""
+    df, n_reps = _jkn_frame([2, 2, 2, 2], np.random.default_rng(64))
+    s = svy.Sample(
+        data=df,
+        design=svy.Design(
+            stratum="stratum",
+            psu="psu",
+            wgt="wgt",
+            rep_wgts=JackknifeWgts(
+                prefix="rw", n_reps=n_reps, kind="jkn", stratum="stratum", psu="psu"
+            ),
+        ),
+    )
+    assert s._design.rep_wgts.coefficients() == pytest.approx([0.5] * n_reps)
