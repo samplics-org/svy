@@ -205,3 +205,77 @@ def test_df_keeps_a_fractional_value():
     rw = JackknifeWgts(prefix="rw", n_reps=8, kind="jk1", df=6.5)
     assert rw.df == 6.5
     assert isinstance(rw.df, float)
+
+
+# ==========================================================================
+# Recorded units are column references, and are tracked like any other
+# ==========================================================================
+
+
+def _units_sample(rng, *, rw_stratum="vstrat", rw_psu="psu"):
+    rows = [(h, f"{h}_{p}", f"v{h}") for h in range(1, 5) for p in (1, 2) for _ in range(25)]
+    df = pl.DataFrame(rows, schema=["stratum", "psu", "vstrat"], orient="row")
+    n = len(df)
+    df = df.with_columns(
+        wgt=pl.Series(rng.uniform(50, 500, n)), y=pl.Series(rng.normal(100, 15, n))
+    )
+    for r in range(1, 9):
+        df = df.with_columns(pl.Series(f"rw{r}", rng.uniform(50, 500, n)))
+    return svy.Sample(
+        data=df,
+        design=svy.Design(
+            stratum="stratum",
+            psu="psu",
+            wgt="wgt",
+            rep_wgts=JackknifeWgts(
+                prefix="rw", n_reps=8, kind="jk1", stratum=rw_stratum, psu=rw_psu
+            ),
+        ),
+    )
+
+
+def test_renaming_a_unit_column_follows_through_to_the_rep_weights():
+    """A rename that touches no replicate column still has to reach these:
+    the prefix branch returns early when nothing matched the replicates."""
+    s = _units_sample(np.random.default_rng(31))
+    r = s.wrangling.rename_columns({"vstrat": "VARSTRAT"})
+    assert r._design.rep_wgts.stratum == "VARSTRAT"
+    assert r._design.rep_wgts.psu == "psu"
+
+
+def test_renaming_both_design_and_rep_units_keeps_them_independent():
+    s = _units_sample(np.random.default_rng(32), rw_stratum="stratum")
+    r = s.wrangling.rename_columns({"stratum": "S2", "psu": "P2"})
+    assert (r._design.stratum, r._design.psu) == ("S2", "P2")
+    assert (r._design.rep_wgts.stratum, r._design.rep_wgts.psu) == ("S2", "P2")
+
+
+def test_a_unit_column_is_protected_from_a_casual_drop():
+    s = _units_sample(np.random.default_rng(33))
+    with pytest.raises(svy.MethodError):
+        s.wrangling.remove_columns(["vstrat"])
+
+
+def test_force_dropping_a_unit_column_clears_the_reference():
+    """Better a recorded None than a reference to a column that is gone."""
+    s = _units_sample(np.random.default_rng(34))
+    d = s.wrangling.remove_columns(["vstrat"], force=True)
+    assert d._design.rep_wgts.stratum is None
+    assert d._design.rep_wgts.psu == "psu"
+
+
+def test_declared_units_must_resolve_at_construction():
+    rng = np.random.default_rng(35)
+    df, n_reps = _jkn_frame([2, 2, 2, 2], rng)
+    with pytest.raises(ValueError, match="not found in data"):
+        svy.Sample(
+            data=df,
+            design=svy.Design(
+                stratum="stratum",
+                psu="psu",
+                wgt="wgt",
+                rep_wgts=JackknifeWgts(
+                    prefix="rw", n_reps=n_reps, kind="jkn", stratum="NOPE", psu="psu"
+                ),
+            ),
+        )
