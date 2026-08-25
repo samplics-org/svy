@@ -193,7 +193,18 @@ class Sample:
         psu_col = self._internal_design.get("psu")
         data = cast(pl.DataFrame, self._data)
         if psu_col is None or psu_col not in data.columns:
-            return  # nothing to check against and nothing to derive from
+            # Nothing to check against and nothing to derive from. Harmless for
+            # jk1/jk2, whose coefficients are closed-form -- but a declared JKn
+            # that still has no `scale` is now certain to fail at estimation, and
+            # staying silent defers that to a call site far from the cause.
+            if rw.kind == "jkn" and rw.scale is None and rw.rep_coefs is None:
+                self._warn_jkn_not_derivable(
+                    reason=(
+                        "the design has no psu, so svy cannot count the PSUs per "
+                        "stratum that (n_h-1)/n_h is built from"
+                    )
+                )
+            return
 
         if stratum_col is not None and stratum_col in data.columns:
             counts = (
@@ -271,10 +282,46 @@ class Sample:
         # paired-PSU designs that dominate real JKn files. Unbalanced falls
         # through, and coefficients() refuses and names `scale`.
         if len(set(counts)) != 1 or counts[0] < 2:
+            self._warn_jkn_not_derivable(
+                reason=(
+                    f"the strata are unbalanced (PSUs per stratum: "
+                    f"{sorted(set(counts))}), so (n_h-1)/n_h differs by replicate "
+                    f"and svy cannot tell which replicate deletes a PSU from which "
+                    f"stratum"
+                ),
+                can_use_psu=False,
+            )
             return
         n_h = counts[0]
         derived = (float(n_h - 1) / float(n_h),) * rw.n_reps
         self._design = design.update(rep_wgts=msgspec.structs.replace(rw, rep_coefs=derived))
+
+    def _warn_jkn_not_derivable(self, *, reason: str, can_use_psu: bool = True) -> None:
+        """Say at construction what ``coefficients()`` would only say later.
+
+        The failure itself stays lazy -- a Sample whose JKn coefficients are
+        unavailable is still perfectly usable for Taylor, for wrangling and for
+        ``where=``, so raising here would block work that never touches
+        replication. What was missing is the early signal, not the error.
+        """
+        fixes = ["pass scale= with the per-replicate coefficients your file documents"]
+        if can_use_psu:
+            fixes.insert(0, "declare psu (and stratum) on the design if the frame carries them")
+        self.warn(
+            code=WarnCode.JACKKNIFE_COEFS_UNAVAILABLE,
+            title="JKn coefficients cannot be derived",
+            detail=(
+                f"rep_wgts declares kind='jkn' but {reason}. Replication "
+                f"estimates will raise until the coefficients are supplied."
+            ),
+            where="Sample",
+            param="rep_wgts.scale",
+            hint=(
+                f"{fixes[0].capitalize()}."
+                if len(fixes) == 1
+                else "; ".join(f"{i}) {f}" for i, f in enumerate(fixes, start=1)) + "."
+            ),
+        )
 
     def __setattr__(self, name: str, value: Any) -> None:
         # Any rebind of the data or design invalidates every version-keyed

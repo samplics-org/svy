@@ -58,7 +58,9 @@ class MethodError(SvyError):
     ) -> "MethodError":
         return cls(
             title="Method not applicable",
-            detail=f"'{method}' cannot be used here: {reason}.",
+            # `reason` is authored prose and most call sites already end it with a
+            # period; appending unconditionally produced "…(got psu=None)..".
+            detail=f"'{method}' cannot be used here: {reason.rstrip('.')}.",
             code="METHOD_NOT_APPLICABLE",
             where=where,
             param=param,

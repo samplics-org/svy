@@ -32,6 +32,30 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **`method=None` no longer auto-selects replication, and Taylor on a replication-only design says so.** The default resolved to replication whenever the design carried replicate weights and had no `stratum`/`psu`, and to Taylor otherwise. That made the *estimator* depend on inputs the estimator never reads — replication consumes the replicate columns and `coefficients()`, nothing else — so declaring a single design column silently moved the standard error:
+
+  ```
+  mean("y"), identical replicate weights throughout
+    wgt only             -> Jackknife  se=1.252718
+    wgt + stratum        -> Taylor     se=1.171192
+    wgt + psu            -> Taylor     se=1.002973
+    wgt + stratum + psu  -> Taylor     se=1.063071
+  ```
+
+  It was worst for JKn, where `stratum` and `psu` are exactly what svy needs to derive `(n_h−1)/n_h`: the one action that makes JKn usable was the action that switched JKn off. `None` is now the unstated Taylor default the signature `Literal["taylor", "replication"] | None` always implied, not a third mode. **Replication is opt-in: pass `method="replication"`.**
+
+  Falling through to Taylor alone would have reinstated the worse half of the original bug, which is why the auto-detection existed. Without `stratum` or `psu` every row is its own PSU in one stratum, so linearization is SRS-like — on a 200-row file with 8 replicates, `df=199` against a true 7, silently. That case now emits `TAYLOR_WITHOUT_DESIGN` and proceeds, for the explicit `method="taylor"` spelling too: the hazard is in the number, not in who asked for it.
+
+- **A JKn design that cannot be derived warns at construction.** `kind="jkn"` with no `psu` to count from, or with unbalanced strata, built a `Sample` in silence and failed only when an estimate was requested — at a call site far from the cause. Both dead ends now emit `JACKKNIFE_COEFS_UNAVAILABLE` naming which one it hit. The `MethodError` from `coefficients()` stays lazy on purpose: such a `Sample` is still perfectly usable for Taylor, for wrangling and for `where=`, so raising at construction would block work that never touches replication. What was missing was the early signal, not the error.
+
+- **The JKn error names both remedies, not one.** It named only `scale=`, sending anyone whose file *does* carry `psu` off to hand-compute coefficients svy would have derived for them. It now offers declaring `stratum`/`psu` first, and `scale=` for the unbalanced case where that cannot help.
+
+- **`create_bs_wgts(kind="poisson")` fails cleanly against an older `svy-rs`.** `rust_create_poisson_bs_wgts` was missing from the `ImportError` fallback, so the name was never bound and the guard raised `NameError` instead of the intended message.
+
+- **`MethodError.not_applicable` no longer doubles the sentence-ending period.** The template appended `.` to a `reason` that ~24 call sites already ended with one, producing `…(got psu=None)..`.
+
+- **`RepWeights.df` is annotated `float`, matching what it has always stored.** It was declared `int | None` while the kernels hand back an f64, so a repr read `df=499.0` against an `int` annotation. Widened rather than coerced: `df` feeds a t-quantile, which is defined for fractional df, and Satterthwaite-style effective df is fractional by construction. An `int` is still accepted and stored unchanged.
+
 - **A user-supplied replicate coefficient was silently discarded for bootstrap, BRR and SDR ([#7](https://github.com/samplics-org/svy/issues/7)).** Before [#131](https://github.com/samplics-org/svy/pull/131) the override was applied at one site in the kernel — `rscales.unwrap_or_else(|| replicate_coefficients(method, n_reps, fay_coef))` — and was therefore method-agnostic by construction. #131 moved coefficient computation into Python and scattered it across four per-variant `coefficients()` methods, which gave every method its own chance to forget. Three of four forgot: the field was accepted, stored, length-checked, and then dropped, so a bootstrap declared with a producer's published scale silently returned the `1/R` answer.
 
   `coefficients()` is now a template method on the shared base. The override is resolved there, at the single point of use, and the variants implement only their own default — they never see it, so a new variant cannot regress this again. **No published standard error changes:** #131 landed after `svy-v0.24.1` and was never released.

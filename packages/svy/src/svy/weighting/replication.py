@@ -38,6 +38,7 @@ except ImportError:  # pragma: no cover
     rust_brr_hadamard_size = None
     rust_create_brr_wgts = None
     rust_create_jk_wgts = None
+    rust_create_poisson_bs_wgts = None
     rust_create_sdr_wgts = None
 
 from svy.core.repwgts import (

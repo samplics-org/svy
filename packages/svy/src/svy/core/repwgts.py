@@ -160,7 +160,13 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     n_reps: int
     # Design df for the t-quantile in CIs. None = n_reps - 1, a property of the
     # weight set and therefore the same for every domain.
-    df: int | None = None
+    #
+    # Deliberately float, not int: it feeds a t-quantile, which is defined for
+    # fractional df, and Satterthwaite-style effective df is fractional by
+    # construction. The kernels also hand it back as f64. An int is accepted and
+    # stored unchanged -- widening the annotation is what makes the stored value
+    # honest, rather than coercing a legitimate fraction away.
+    df: float | None = None
     padding: int | None = None  # None = auto-detect, 0 = none, >0 = zero-pad width
     # Per-replicate variance coefficients, split by who supplied them -- the one
     # axis that is verifiable. "Is this a tweak or the standard value?" is not:
@@ -386,10 +392,19 @@ class JackknifeWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="Jackknife", ta
                 method="jackknife",
                 reason=(
                     "kind='jkn' needs the per-stratum (n_h-1)/n_h coefficients, "
-                    "which cannot be derived from replicate weights alone. Pass "
-                    "'scale' with the coefficients your file documents. Falling "
+                    "which cannot be derived from replicate weights alone. Falling "
                     "back to the JK1 global (R-1)/R would overstate the standard "
                     "errors"
+                ),
+                # Two fixes, and `scale` used to be the only one named -- which
+                # sent anyone whose file *does* carry psu off to hand-compute
+                # coefficients svy would have worked out for them.
+                hint=(
+                    "Either declare stratum and psu on the design, and svy derives "
+                    "(n_h-1)/n_h at Sample construction when every stratum has the "
+                    "same number of PSUs; or pass scale= with the per-replicate "
+                    "coefficients your file documents, which is what unbalanced "
+                    "strata need."
                 ),
             )
         # kind=None (unspecified) and "jk1" alike: the unstratified global.

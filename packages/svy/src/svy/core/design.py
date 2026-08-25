@@ -358,7 +358,7 @@ class Design:
         prefix: str | _MissingType = _MISSING,
         n_reps: int | _MissingType = _MISSING,
         fay_coef: float | _MissingType = _MISSING,
-        df: int | None | _MissingType = _MISSING,
+        df: float | None | _MissingType = _MISSING,
         padding: int | None | _MissingType = _MISSING,
         scale: float | Sequence[float] | None | _MissingType = _MISSING,
         rep_coefs: tuple[float, ...] | None | _MissingType = _MISSING,

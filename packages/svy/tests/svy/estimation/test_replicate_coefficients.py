@@ -90,3 +90,107 @@ def test_coefficients_follow_the_resolved_replicate_count(brr_sample):
     """The column count wins over a stale n_reps recorded on the design."""
     rw = brr_sample._design.rep_wgts
     assert len(rw.coefficients()) == rw.n_reps
+
+
+# ==========================================================================
+# JKn dead ends announce themselves at construction
+# ==========================================================================
+#
+# The MethodError from coefficients() stays lazy on purpose -- such a Sample is
+# still usable for Taylor, wrangling and where=. What was missing was the early
+# signal, so the failure surfaced at a call site far from its cause.
+
+
+def _jkn_frame(counts, rng):
+    """One frame per PSUs-per-stratum layout, with R = total PSUs replicates."""
+    rows = []
+    for h, n_h in enumerate(counts, start=1):
+        for p in range(1, n_h + 1):
+            rows.extend([(h, f"{h}_{p}")] * 25)
+    df = pl.DataFrame(rows, schema=["stratum", "psu"], orient="row")
+    n, n_reps = len(df), sum(counts)
+    df = df.with_columns(
+        wgt=pl.Series(rng.uniform(50, 500, n)),
+        y=pl.Series(rng.normal(100, 15, n)),
+    )
+    for r in range(1, n_reps + 1):
+        df = df.with_columns(pl.Series(f"rw{r}", rng.uniform(50, 500, n)))
+    return df, n_reps
+
+
+@pytest.mark.parametrize(
+    "design_kwargs, expect_psu_in_hint",
+    [
+        ({"wgt": "wgt"}, True),
+        ({"stratum": "stratum", "wgt": "wgt"}, True),
+    ],
+)
+def test_jkn_without_psu_warns_at_construction(design_kwargs, expect_psu_in_hint):
+    df, n_reps = _jkn_frame([2, 2, 2, 2], np.random.default_rng(21))
+    s = svy.Sample(
+        data=df,
+        design=svy.Design(
+            rep_wgts=JackknifeWgts(prefix="rw", n_reps=n_reps, kind="jkn"), **design_kwargs
+        ),
+    )
+    warns = s.warnings.list(code="JACKKNIFE_COEFS_UNAVAILABLE")
+    assert warns, "a declared JKn that cannot be derived must warn at construction"
+    assert ("psu" in warns[0].hint) is expect_psu_in_hint
+
+
+def test_jkn_unbalanced_strata_warns_and_does_not_offer_psu():
+    """Adding psu cannot help here -- it is already there and still not enough."""
+    df, n_reps = _jkn_frame([3, 2, 2, 2], np.random.default_rng(22))
+    s = svy.Sample(
+        data=df,
+        design=svy.Design(
+            stratum="stratum",
+            psu="psu",
+            wgt="wgt",
+            rep_wgts=JackknifeWgts(prefix="rw", n_reps=n_reps, kind="jkn"),
+        ),
+    )
+    warns = s.warnings.list(code="JACKKNIFE_COEFS_UNAVAILABLE")
+    assert warns
+    assert "unbalanced" in warns[0].detail
+    assert "declare psu" not in warns[0].hint
+
+
+def test_derivable_jkn_does_not_warn():
+    df, n_reps = _jkn_frame([2, 2, 2, 2], np.random.default_rng(23))
+    s = svy.Sample(
+        data=df,
+        design=svy.Design(
+            stratum="stratum",
+            psu="psu",
+            wgt="wgt",
+            rep_wgts=JackknifeWgts(prefix="rw", n_reps=n_reps, kind="jkn"),
+        ),
+    )
+    assert not s.warnings.list(code="JACKKNIFE_COEFS_UNAVAILABLE")
+    assert s._design.rep_wgts.coefficients() == pytest.approx([0.5] * n_reps)
+
+
+def test_jkn_error_names_both_fixes():
+    """`scale` used to be the only remedy named, sending anyone whose file does
+    carry psu off to hand-compute what svy would have derived."""
+    df, n_reps = _jkn_frame([2, 2, 2, 2], np.random.default_rng(24))
+    s = svy.Sample(
+        data=df,
+        design=svy.Design(
+            wgt="wgt", rep_wgts=JackknifeWgts(prefix="rw", n_reps=n_reps, kind="jkn")
+        ),
+    )
+    with pytest.raises(svy.MethodError) as exc:
+        s.estimation.mean("y", method="replication")
+    text = str(exc.value)
+    assert "psu" in text and "scale=" in text
+    assert ".." not in text  # the template used to append a second period
+
+
+def test_df_keeps_a_fractional_value():
+    """df feeds a t-quantile and Satterthwaite-style df is fractional, so the
+    field stores what it is given rather than rounding it to an int."""
+    rw = JackknifeWgts(prefix="rw", n_reps=8, kind="jk1", df=6.5)
+    assert rw.df == 6.5
+    assert isinstance(rw.df, float)
