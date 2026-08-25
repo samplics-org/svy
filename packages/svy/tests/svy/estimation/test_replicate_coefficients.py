@@ -619,17 +619,17 @@ def test_a_fully_zero_weighted_psu_refuses_rather_than_guessing():
 # ==========================================================================
 
 
-def test_rep_coefficients_is_keyed_by_replicate_column():
+def test_rep_coefs_is_keyed_by_replicate_column():
     """The index alone is something a reader has to trust rather than check.
     For an unbalanced JKn the assignment is the whole answer."""
     built = _unbalanced_built(np.random.default_rng(81))
-    got = built.rep_coefficients
+    got = built.rep_coefs
     assert list(got) == [f"jk{i}" for i in range(1, 8)]
     assert list(got.values()) == pytest.approx([2 / 3] * 3 + [1 / 2] * 4)
     assert list(got.values()) == pytest.approx(built.rep_wgts.coefficients())
 
 
-def test_rep_coefficients_uses_the_real_column_names():
+def test_rep_coefs_uses_the_real_column_names():
     """A design declaring prefix="REP" against REP001..REP007 knows the count
     but not the padding, so the struct alone would key this on REP1."""
     df, _ = _jkn_frame([2, 2, 2, 2], np.random.default_rng(82))
@@ -645,14 +645,14 @@ def test_rep_coefficients_uses_the_real_column_names():
             ),
         ),
     )
-    assert list(s.rep_coefficients) == [f"REP{i:03d}" for i in range(1, 9)]
+    assert list(s.rep_coefs) == [f"REP{i:03d}" for i in range(1, 9)]
     assert s.rep_wgts.columns[0] == "REP1"  # what the struct alone would guess
 
 
-def test_rep_coefficients_is_empty_without_replicate_weights():
+def test_rep_coefs_is_empty_without_replicate_weights():
     df, _ = _jkn_frame([2, 2], np.random.default_rng(83))
     s = svy.Sample(data=df, design=svy.Design(wgt="wgt"))
-    assert s.rep_coefficients == {}
+    assert s.rep_coefs == {}
 
 
 def test_coef_source_says_where_they_came_from():

@@ -20,7 +20,7 @@ from svy.core.describe_runtime import run_describe
 from svy.core.design import Design, PopSize, RepWeights
 from svy.core.enumerations import MeasurementType
 from svy.core.expr import to_polars_expr
-from svy.core.repwgts import JackknifeWgts, unit_columns
+from svy.core.repwgts import JackknifeWgts, RepWgts, unit_columns
 from svy.core.types import (
     _MISSING,
     DF,
@@ -1247,11 +1247,21 @@ class Sample:
         return copy.deepcopy(self._design)
 
     @property
-    def rep_wgts(self) -> RepWeights | None:
-        """Return a defensive copy to avoid external mutation of internal rep weights."""
-        if self._design.rep_wgts is None:
-            return None
-        return copy.deepcopy(self._design.rep_wgts)
+    def rep_wgts(self) -> RepWgts | None:
+        """The replicate-weight specification, or None for a Taylor design.
+
+        The same object as ``sample.design.rep_wgts`` -- prefix, n_reps, kind,
+        units, coefficients -- not the weights themselves, which are columns in
+        the frame (``sample.data[sample.rep_columns]``).
+
+        Returned directly rather than deep-copied. The copy predated the
+        variants being frozen structs and was defending against a mutation the
+        type now refuses outright, at ~100us per access on a 1000-replicate
+        design -- while ``sample.design.rep_wgts`` handed out the original
+        uncopied anyway, so it guarded one of two routes to the same object and
+        made ``sample.rep_wgts is sample.design.rep_wgts`` surprisingly False.
+        """
+        return cast("Design", self._design).rep_wgts
 
     @property
     def fpc(self) -> dict[Category, Number] | Number:
@@ -1374,10 +1384,35 @@ class Sample:
     # ════════════════════════════════════════════════════════════════════════
 
     @property
-    def rep_coefficients(self) -> dict[str, float]:
+    def n_reps(self) -> int | None:
+        """Replicate count, or None for a Taylor design.
+
+        Sits alongside ``n_strata`` and ``n_psus``, which lift the same kind of
+        design fact onto the sample.
+        """
+        return cast("Design", self._design).n_reps
+
+    @property
+    def rep_columns(self) -> list[str]:
+        """The replicate weight columns, resolved against this frame.
+
+        ``rep_wgts.columns`` generates names from ``prefix`` and ``n_reps``
+        alone, so it answers ``REP1`` for a file holding ``REP001`` -- it cannot
+        see the zero-padding without the data. This resolves padding and casing
+        from the frame, and is the same key order as :attr:`rep_coefs`.
+
+        Empty when the design carries no replicate weights.
+        """
+        rw = cast("Design", self._design).rep_wgts
+        if rw is None:
+            return []
+        return rw.columns_from_data(list(cast(pl.DataFrame, self._data).columns))
+
+    @property
+    def rep_coefs(self) -> dict[str, float]:
         """The variance coefficient applied to each replicate, by column name.
 
-        >>> sample.rep_coefficients
+        >>> sample.rep_coefs
         {'jk1': 0.6667, 'jk2': 0.6667, 'jk3': 0.6667, 'jk4': 0.5, ...}
 
         Keyed by the actual column, not the replicate index, because the index

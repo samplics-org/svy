@@ -272,6 +272,15 @@ class Design:
     # Properties
     # -----------------------------
     @property
+    def n_reps(self) -> int | None:
+        """How many replicate weights this design carries, or None for Taylor.
+
+        Saves the ``if design.rep_wgts is not None`` that every caller of
+        ``design.rep_wgts.n_reps`` otherwise needs.
+        """
+        return None if self.rep_wgts is None else self.rep_wgts.n_reps
+
+    @property
     def method(self) -> str:
         """Convenience accessor for the estimation method, as a display label.
 

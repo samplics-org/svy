@@ -38,10 +38,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
   The default is `None` — unspecified. `None` and `"jk1"` produce the same number but are different statements, and svy claims only what it knows or was told. A producer withholding design variables is not evidence that the weights are unstratified.
 
-- **`Sample.rep_coefficients` shows which coefficient was applied to which replicate**, keyed by the actual column name:
+- **`Sample.rep_coefs` shows which coefficient was applied to which replicate**, keyed by the actual column name:
 
   ```python
-  >>> sample.rep_coefficients
+  >>> sample.rep_coefs
   {'jk1': 0.6667, 'jk2': 0.6667, 'jk3': 0.6667, 'jk4': 0.5, ...}
   ```
 
@@ -114,7 +114,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
   `coefficients()` is now a template method on the shared base. The override is resolved there, at the single point of use, and the variants implement only their own default — they never see it, so a new variant cannot regress this again. **No published standard error changes:** #131 landed after `svy-v0.24.1` and was never released.
 
-- **Estimation and regression could scale the same design differently.** `GLM._rep_coefficients` re-derived the coefficients by substring-matching a stringified method tag (`if "boot" in m`), and honoured the user's override for every method while the estimation path did not. One `Design` therefore produced differently scaled standard errors from `sample.regression.glm(...)` and `sample.estimation.mean(...)`. It is gone; both call `rep_wgts.coefficients()`.
+- **Estimation and regression could scale the same design differently.** `GLM._rep_coefs` re-derived the coefficients by substring-matching a stringified method tag (`if "boot" in m`), and honoured the user's override for every method while the estimation path did not. One `Design` therefore produced differently scaled standard errors from `sample.regression.glm(...)` and `sample.estimation.mean(...)`. It is gone; both call `rep_wgts.coefficients()`.
 
 - **A declared paired jackknife used the wrong coefficient.** JK2 has one delete-one replicate per stratum and a coefficient of `1.0`; the global `(R−1)/R` understates the variance by exactly that factor. Declaring `kind="jk2"` now gets `1.0`. Relatedly, `kind="jkn"` with nothing to compute the per-stratum coefficients from — no `scale`, no design variables — refuses rather than substituting the JK1 global, which on a 4-strata × 2-PSU design overstates standard errors by `sqrt(7/4)`, 32%. An unmet claim fails; an absent one (`kind=None`) still falls back to `(R−1)/R` exactly as before.
 
