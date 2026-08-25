@@ -280,6 +280,20 @@ class Sample:
         if rw.scale is not None or rw.rep_coefs is not None:
             return  # already answered, by the user or by whoever generated these
 
+        # No stratum named. `counts` above fell back to a single group holding
+        # every PSU, which is the right shape for the jk1/jk2 replicate-count
+        # check but not for this: deriving from it yields (R-1)/R -- the JK1
+        # global -- and hands it back under a JKn label. An unmet claim fails.
+        if stratum_col is None or stratum_col not in data.columns:
+            self._warn_jkn_not_derivable(
+                reason=(
+                    "the replicate weights name a psu but no stratum, and "
+                    "(n_h-1)/n_h is a per-stratum quantity -- counting every PSU "
+                    "as one stratum would silently reproduce the JK1 global"
+                )
+            )
+            return
+
         # (n_h-1)/n_h is indexed by *replicate*, so the general case needs to know
         # which replicate deletes a PSU from which stratum -- an ordering only
         # whoever built the file knows. When every stratum has the same n_h the

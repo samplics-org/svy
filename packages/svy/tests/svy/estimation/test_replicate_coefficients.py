@@ -279,3 +279,41 @@ def test_declared_units_must_resolve_at_construction():
                 ),
             ),
         )
+
+
+def test_jkn_with_a_psu_but_no_stratum_refuses_rather_than_reproducing_jk1():
+    """(n_h-1)/n_h is per-stratum. With no stratum named, counting every PSU as
+    one stratum yields (R-1)/R -- the JK1 global -- handed back under a JKn
+    label. On 4 strata x 2 PSUs that is 0.875 where 0.5 is correct."""
+    df, n_reps = _jkn_frame([2, 2, 2, 2], np.random.default_rng(41))
+    s = svy.Sample(
+        data=df,
+        design=svy.Design(
+            stratum="stratum",
+            psu="psu",
+            wgt="wgt",
+            rep_wgts=JackknifeWgts(prefix="rw", n_reps=n_reps, kind="jkn", psu="psu"),
+        ),
+    )
+    assert s._design.rep_wgts.rep_coefs is None
+    warns = s.warnings.list(code="JACKKNIFE_COEFS_UNAVAILABLE")
+    assert warns and "no stratum" in warns[0].detail
+    with pytest.raises(svy.MethodError):
+        s._design.rep_wgts.coefficients()
+
+
+def test_naming_the_stratum_derives_the_right_coefficient():
+    """The same weights, with the unit named, get (n_h-1)/n_h = 0.5."""
+    df, n_reps = _jkn_frame([2, 2, 2, 2], np.random.default_rng(41))
+    s = svy.Sample(
+        data=df,
+        design=svy.Design(
+            stratum="stratum",
+            psu="psu",
+            wgt="wgt",
+            rep_wgts=JackknifeWgts(
+                prefix="rw", n_reps=n_reps, kind="jkn", stratum="stratum", psu="psu"
+            ),
+        ),
+    )
+    assert s._design.rep_wgts.coefficients() == pytest.approx([0.5] * n_reps)

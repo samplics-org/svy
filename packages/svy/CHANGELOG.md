@@ -44,6 +44,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **A declared JKn with a psu but no stratum silently produced the JK1 coefficient.** `(n_h−1)/n_h` is a per-stratum quantity; with no stratum named, the PSU count fell back to a single group holding every PSU and the derivation returned `(R−1)/R` — the JK1 global — under a JKn label. On 4 strata × 2 PSUs that is 0.875 where 0.5 is correct, an 8% error in the standard error, with no warning. It now refuses, the same way an unmet `kind="jkn"` claim already did.
+
 - **Building BRR or JK2 weights no longer destroys the design strata.** `create_variance_strata` ended by overwriting `Design.stratum` with the collapsed variance strata — its only way of handing the result to the generator that ran next. Every later Taylor estimate then silently linearized over pseudo-strata: on a 6-strata × 4-PSU frame the SE moved from 0.858 to 0.641 and df from 18 to 12, with no warning and the original column still sitting in the frame. Pairing is now internal and its output is recorded on the replicate weights, so `Design.stratum` is Taylor's alone and is left exactly as declared.
 
 - **`create_jk_wgts(paired=True)` no longer undercounts replicates.** Called on strata with more than two PSUs — i.e. without the old pairing pre-step — it produced one replicate per *original* stratum instead of one per variance stratum, in silence: 6 where 12 were correct, understating the variance. It pairs first now. **This changes published standard errors** for anyone who called it without the pre-step.
