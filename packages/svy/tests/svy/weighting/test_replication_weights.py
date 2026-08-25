@@ -630,9 +630,11 @@ class TestTupleStrata:
         assert "svy_var_stratum" not in sample.data.columns
         assert sample.design.rep_wgts is not None
         assert isinstance(sample.design.stratum, tuple)
-        # A multi-column unit is recorded as None rather than as the internal
-        # concatenated name, which would not resolve against a rebuilt frame.
-        assert sample.design.rep_wgts.stratum is None
+        # A multi-column unit is recorded as the tuple of its source columns --
+        # never the internal concatenated name, which would not resolve against
+        # a frame rebuilt from source.
+        assert sample.design.rep_wgts.stratum == ("region", "urban")
+        assert sample.design.rep_wgts.psu == "psu"
 
 
 # ===========================================================================

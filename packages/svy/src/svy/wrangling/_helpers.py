@@ -327,12 +327,21 @@ def _auto_clean_design(target: "Sample") -> None:
             # for a declared JKn with no rep_coefs yet, the ability to derive --
             # which surfaces as the usual warning rather than silently reading a
             # column that is no longer there.
-            unit_updates = {
-                field: None
-                for field in ("stratum", "psu")
-                if (cur := getattr(current_design.rep_wgts, field)) is not None
-                and cur not in cols
-            }
+            unit_updates: dict[str, str | tuple[str, ...] | None] = {}
+            for field in ("stratum", "psu"):
+                cur = getattr(current_design.rep_wgts, field)
+                if cur is None:
+                    continue
+                if isinstance(cur, str):
+                    if cur not in cols:
+                        unit_updates[field] = None
+                else:
+                    # Keep whatever survives: a multi-column unit that loses one
+                    # member is a coarser unit, not a missing one. Only an empty
+                    # remainder clears the field.
+                    kept = tuple(c for c in cur if c in cols)
+                    if kept != cur:
+                        unit_updates[field] = kept or None
             if unit_updates:
                 updated_design = updated_design.update(
                     rep_wgts=_struct_replace(current_design.rep_wgts, **unit_updates)

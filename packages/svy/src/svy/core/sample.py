@@ -20,7 +20,7 @@ from svy.core.describe_runtime import run_describe
 from svy.core.design import Design, PopSize, RepWeights
 from svy.core.enumerations import MeasurementType
 from svy.core.expr import to_polars_expr
-from svy.core.repwgts import JackknifeWgts
+from svy.core.repwgts import JackknifeWgts, unit_columns
 from svy.core.types import (
     _MISSING,
     DF,
@@ -195,8 +195,10 @@ class Sample:
         # and returns a plausible wrong coefficient rather than an error.
         stratum_col = rw.stratum
         psu_col = rw.psu
+        stratum_keys = unit_columns(stratum_col)
+        psu_keys = unit_columns(psu_col)
         data = cast(pl.DataFrame, self._data)
-        if psu_col is None or psu_col not in data.columns:
+        if not psu_keys or any(c not in data.columns for c in psu_keys):
             # Nothing to check against and nothing to derive from. Harmless for
             # jk1/jk2, whose coefficients are closed-form -- but a declared JKn
             # that still has no `scale` is now certain to fail at estimation, and
@@ -211,17 +213,17 @@ class Sample:
                 )
             return
 
-        if stratum_col is not None and stratum_col in data.columns:
+        if stratum_keys and all(c in data.columns for c in stratum_keys):
             counts = (
-                data.select([stratum_col, psu_col])
+                data.select(list(dict.fromkeys(stratum_keys + psu_keys)))
                 .unique()
-                .group_by(stratum_col)
+                .group_by(stratum_keys)
                 .len()
                 .get_column("len")
                 .to_list()
             )
         else:
-            counts = [data.get_column(psu_col).n_unique()]
+            counts = [data.select(psu_keys).unique().height]
         n_strata = len(counts)
         n_psus = sum(counts)
 
@@ -284,7 +286,7 @@ class Sample:
         # every PSU, which is the right shape for the jk1/jk2 replicate-count
         # check but not for this: deriving from it yields (R-1)/R -- the JK1
         # global -- and hands it back under a JKn label. An unmet claim fails.
-        if stratum_col is None or stratum_col not in data.columns:
+        if not stratum_keys or any(c not in data.columns for c in stratum_keys):
             self._warn_jkn_not_derivable(
                 reason=(
                     "the replicate weights name a psu but no stratum, and "
@@ -830,9 +832,10 @@ class Sample:
         rw = design.rep_wgts
         if rw is not None:
             missing_units = [
-                f"rep_wgts.{name}={col!r}"
+                f"rep_wgts.{name}={c!r}"
                 for name, col in (("stratum", rw.stratum), ("psu", rw.psu))
-                if col is not None and col not in data.columns
+                for c in unit_columns(col)
+                if c not in data.columns
             ]
             if missing_units:
                 raise ValueError(

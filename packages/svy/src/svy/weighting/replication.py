@@ -71,20 +71,17 @@ def _recorded_units(design: "Design") -> tuple[str | None, str | None]:
     than leaving a later reader to assume it matches the Design -- which is the
     very assumption the ``stratum``/``psu`` fields exist to stop.
 
-    A tuple (multi-column) stratum or psu records ``None`` instead of the
-    internal concatenated name: that name is an implementation detail and would
-    not resolve against a frame rebuilt from source. Nothing is lost
-    functionally, because generated weights carry ``rep_coefs`` outright and the
-    derivation that reads these never runs for them. It is an audit gap for
-    multi-column designs only, and widening the fields to accept tuples is what
-    would close it.
+    Multi-column units are recorded as the tuple of their source columns, the
+    same shape ``Design`` holds -- never the internal concatenated name, which
+    is an implementation detail and would not resolve against a frame rebuilt
+    from source.
     """
     return _as_recorded(design.stratum), _as_recorded(design.psu)
 
 
-def _as_recorded(col: str | tuple[str, ...] | None) -> str | None:
-    """A single column name, or None for a multi-column unit. See above."""
-    return col if isinstance(col, str) else None
+def _as_recorded(col: str | tuple[str, ...] | None) -> str | tuple[str, ...] | None:
+    """The user-facing reference for a unit, str or tuple alike."""
+    return col if isinstance(col, (str, tuple)) else None
 
 
 def _pair_variance_strata(

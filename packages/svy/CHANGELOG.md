@@ -18,7 +18,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
   They appear in `repr` and `print(design)`, are validated as columns at `Sample` construction, and are rewritten by `wrangling.rename_columns` and protected by `remove_columns` exactly like design columns. Generators record whatever they used, so a generated design states its provenance rather than leaving a later reader to assume it matches the Design. The Poisson bootstrap records neither, drawing independent per-unit factors and having no units by construction.
 
-  `str` only, not `Design`'s `str | tuple`: a multi-column variance unit would need its own internal concatenation path, and producers ship a single collapsed identifier. A tuple-stratum design therefore records no provenance — an audit gap only, since generated weights carry `rep_coefs` outright.
+  They take the same shapes `Design`'s do — `str` for the single collapsed identifier producers usually ship, or a tuple when the unit is several columns together — and the same spellings mean the same thing on both objects, including `("region",)` staying a one-tuple rather than being unwrapped. Multi-column units are grouped on directly rather than through the internal concatenated column `Design` builds, so nothing implementation-specific reaches anything reading provenance back.
 
 - **`create_brr_wgts` and `create_jk_wgts(paired=True)` pair PSUs into variance strata themselves.** `stratum_name` names the created column (the house `wgt_name` convention), `order_by` pairs adjacent PSUs in that order — what a systematically-sampled frame wants — and `shuffle` pairs at random. `stratum`/`psu` on all four generators build from columns the Design does not name, without mutating it.
 

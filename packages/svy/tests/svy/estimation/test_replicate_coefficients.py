@@ -317,3 +317,91 @@ def test_naming_the_stratum_derives_the_right_coefficient():
         ),
     )
     assert s._design.rep_wgts.coefficients() == pytest.approx([0.5] * n_reps)
+
+
+# ==========================================================================
+# Units take the same shapes Design's do
+# ==========================================================================
+
+
+def _multi_unit_frame(rng):
+    rows = [
+        (r, u, f"{r}{u}_{p}")
+        for r in ("N", "S")
+        for u in ("urban", "rural")
+        for p in (1, 2)
+        for _ in range(25)
+    ]
+    df = pl.DataFrame(rows, schema=["region", "urban", "psu"], orient="row")
+    n = len(df)
+    df = df.with_columns(
+        wgt=pl.Series(rng.uniform(50, 500, n)), y=pl.Series(rng.normal(100, 15, n))
+    )
+    for r in range(1, 9):
+        df = df.with_columns(pl.Series(f"jk{r}", rng.uniform(50, 500, n)))
+    return df
+
+
+def _multi_unit_sample(rng, stratum=("region", "urban")):
+    df = _multi_unit_frame(rng)
+    return svy.Sample(
+        data=df,
+        design=svy.Design(
+            stratum=("region", "urban"),
+            psu="psu",
+            wgt="wgt",
+            rep_wgts=JackknifeWgts(prefix="jk", n_reps=8, kind="jkn", stratum=stratum, psu="psu"),
+        ),
+    )
+
+
+def test_a_tuple_unit_derives_the_jkn_coefficient():
+    """4 strata (region x urban) x 2 PSUs -> (n_h-1)/n_h = 0.5. Grouping happens
+    on the source columns directly, not through Design's internal concat."""
+    s = _multi_unit_sample(np.random.default_rng(51))
+    assert s._design.rep_wgts.stratum == ("region", "urban")
+    assert s._design.rep_wgts.coefficients() == pytest.approx([0.5] * 8)
+    assert not s.warnings.list(code="JACKKNIFE_COEFS_UNAVAILABLE")
+
+
+def test_a_one_element_sequence_stays_a_tuple():
+    """("region",) and "region" resolve to the same column; collapsing one into
+    the other would make a round trip lossy."""
+    rw = JackknifeWgts(prefix="jk", n_reps=8, stratum=["region"], psu="psu")
+    assert rw.stratum == ("region",)
+
+
+def test_renaming_remaps_every_member_of_a_tuple_unit():
+    s = _multi_unit_sample(np.random.default_rng(52))
+    r = s.wrangling.rename_columns({"urban": "URB"})
+    assert r._design.rep_wgts.stratum == ("region", "URB")
+    assert r._design.stratum == ("region", "URB")
+
+
+def test_force_dropping_one_member_coarsens_rather_than_clears():
+    """A multi-column unit that loses a member is a coarser unit, not a missing
+    one; only an empty remainder clears the field."""
+    s = _multi_unit_sample(np.random.default_rng(53))
+    d = s.wrangling.remove_columns(["urban"], force=True)
+    assert d._design.rep_wgts.stratum == ("region",)
+
+
+def test_every_member_of_a_tuple_unit_must_resolve():
+    rng = np.random.default_rng(54)
+    with pytest.raises(ValueError, match="not found in data"):
+        svy.Sample(
+            data=_multi_unit_frame(rng),
+            design=svy.Design(
+                psu="psu",
+                wgt="wgt",
+                rep_wgts=JackknifeWgts(
+                    prefix="jk", n_reps=8, kind="jkn", stratum=("region", "NOPE"), psu="psu"
+                ),
+            ),
+        )
+
+
+@pytest.mark.parametrize("bad", [5, [], ("region", 5), ("region", "")])
+def test_malformed_units_are_rejected(bad):
+    with pytest.raises((TypeError, ValueError)):
+        JackknifeWgts(prefix="jk", n_reps=8, stratum=bad)

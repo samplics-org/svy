@@ -78,11 +78,20 @@ def _rep_wgts_with_renames(rep_wgts: RepWeights, renames: dict[str, str]) -> Rep
     does not touch the replicate columns, and the prefix branch below returns
     early when no replicate column matched.
     """
-    unit_updates: dict[str, str] = {
-        field: renames[cur]
-        for field in ("stratum", "psu")
-        if (cur := getattr(rep_wgts, field)) is not None and cur in renames
-    }
+    unit_updates: dict[str, str | tuple[str, ...]] = {}
+    for field in ("stratum", "psu"):
+        cur = getattr(rep_wgts, field)
+        if cur is None:
+            continue
+        if isinstance(cur, str):
+            if cur in renames:
+                unit_updates[field] = renames[cur]
+        else:
+            # A multi-column unit is remapped element-wise; a rename touching
+            # only some of its columns still has to move those.
+            mapped = tuple(renames.get(c, c) for c in cur)
+            if mapped != cur:
+                unit_updates[field] = mapped
 
     pattern = re.compile(rf"^{re.escape(rep_wgts.prefix)}(\d+)$", re.IGNORECASE)
     new_prefixes: set[str] = set()

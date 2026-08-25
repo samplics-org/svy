@@ -149,6 +149,55 @@ def _normalize_scale(value: float | Sequence[float], n_reps: int, param: str) ->
     return values
 
 
+def _normalize_unit(
+    value: str | Sequence[str] | None, param: str
+) -> str | tuple[str, ...] | None:
+    """Validate a unit reference, storing a multi-column one as a tuple.
+
+    Mirrors ``Design``'s own normalization so that the same spellings mean the
+    same thing on both objects: a bare name stays a string, a sequence becomes a
+    tuple, and a single-element sequence stays a one-tuple rather than being
+    unwrapped -- ``("region",)`` and ``"region"`` resolve to the same column, and
+    collapsing one into the other would make a round trip lossy.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        if not value.strip():
+            raise ValueError(f"RepWeights {param!r} must not be an empty column name.")
+        return value
+    if isinstance(value, (bytes, bytearray)) or not isinstance(value, Sequence):
+        raise TypeError(
+            f"RepWeights {param!r} must be str | Sequence[str] | None, "
+            f"got {type(value).__name__}."
+        )
+    items = tuple(value)
+    if not items:
+        raise ValueError(f"RepWeights {param!r} sequence must not be empty.")
+    for i, item in enumerate(items):
+        if not isinstance(item, str):
+            raise TypeError(
+                f"RepWeights {param!r} items must be str; "
+                f"got {type(item).__name__} at index {i}."
+            )
+        if not item.strip():
+            raise ValueError(f"RepWeights {param!r} items must not be empty.")
+    return items
+
+
+def unit_columns(value: str | tuple[str, ...] | None) -> list[str]:
+    """The column names a unit reference resolves to; empty when unset.
+
+    Multi-column units are grouped on directly rather than through the internal
+    concatenated column ``Design`` builds: polars groups by several keys just as
+    well, and the concat name is an implementation detail that would leak into
+    anything reading provenance back.
+    """
+    if value is None:
+        return []
+    return [value] if isinstance(value, str) else list(value)
+
+
 class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     """Fields every replicate design has, whatever produced it.
 
@@ -197,11 +246,14 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     # plausible wrong coefficient, so a declared JKn must name these and there
     # is no fallback. Generated weights fill them in from whatever they used.
     #
-    # str only, not Design's str | tuple: a multi-column variance unit would
-    # need its own internal concatenation path, and producers ship a single
-    # collapsed identifier. Widen if that stops being true.
-    stratum: str | None = None
-    psu: str | None = None
+    # Same shape as Design's: ``str`` for the single collapsed identifier
+    # producers usually ship, or a tuple when the unit is several columns
+    # together. A str-only field could not express a tuple-stratum design at
+    # all -- it recorded None, so those weights could be generated but never
+    # re-declared by hand, and a JKn among them fell through to the branch that
+    # has no stratum to count.
+    stratum: str | tuple[str, ...] | None = None
+    psu: str | tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if not self.prefix or not self.prefix.strip():
@@ -209,12 +261,9 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
         if self.n_reps < 2:
             raise ValueError(f"n_reps must be >= 2. Got {self.n_reps}.")
         for _unit in ("stratum", "psu"):
-            _val = getattr(self, _unit)
-            if _val is not None and (not isinstance(_val, str) or not _val.strip()):
-                raise ValueError(
-                    f"RepWeights {_unit!r} must be a non-empty column name or None. "
-                    f"Got {_val!r}."
-                )
+            msgspec.structs.force_setattr(
+                self, _unit, _normalize_unit(getattr(self, _unit), _unit)
+            )
         if self.df is not None and self.df <= 0:
             raise ValueError(f"df must be > 0. Got {self.df}.")
         if self.padding is not None and self.padding < 0:
@@ -327,7 +376,9 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
         replicates is what a reviewer needs to tell a design-strata JKn from a
         collapsed-variance-strata one, and the two give different coefficients.
         """
-        return [f"{n}='{v}'" for n, v in (("stratum", self.stratum), ("psu", self.psu)) if v]
+        return [
+            f"{n}={v!r}" for n, v in (("stratum", self.stratum), ("psu", self.psu)) if v
+        ]
 
     def _coef_parts(self) -> list[str]:
         """Where the coefficients came from, when it is not the method default.
