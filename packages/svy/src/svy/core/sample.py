@@ -452,11 +452,20 @@ class Sample:
             [pl.col(c).abs().max().alias(c) for c in rep_cols]
             + [pl.col(wgt_col).abs().max().alias("__base__")]
         )
+        # n_h counts every PSU in the stratum, including any now carrying no
+        # weight: the replicate weights were built from all of them, so that is
+        # the n_h their coefficient was computed with. Taking it after the
+        # filter below would silently shrink it.
+        n_by_stratum = agg.group_by(stratum_keys).len().rename({"len": "__n_h__"})
+
+        # A PSU with no weight at all is zero in every replicate column and can
+        # never be identified as the one a given replicate deleted. Dropping it
+        # here means the column that deletes it finds nothing, which the
+        # delete-one signature check below catches -- a clean refusal rather
+        # than a vector built from six identified columns and one guess.
         agg = agg.filter(pl.col("__base__") > 0.0).drop("__base__")
         if agg.height < 2:
             return None
-
-        n_by_stratum = agg.group_by(stratum_keys).len().rename({"len": "__n_h__"})
 
         # Long form, then keep only the zeros: one row per (replicate, deleted
         # PSU). Vectorized rather than a pass per replicate, which matters at the

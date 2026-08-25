@@ -545,3 +545,70 @@ def test_recovery_follows_column_content_not_column_order():
     a = built.estimation.mean("y", method="replication").to_polars()["se"][0]
     b = s.estimation.mean("y", method="replication").to_polars()["se"][0]
     assert a == pytest.approx(b, rel=1e-12)
+
+
+# --- zero weights -----------------------------------------------------------
+
+
+def _zero_weight_sample(wgts):
+    df = pl.DataFrame(
+        {
+            "stratum": [1, 1, 1, 2, 2, 3, 3],
+            "psu": ["1a", "1b", "1c", "2a", "2b", "3a", "3b"],
+            "wgt": wgts,
+            "y": [10.0, 11.0, 12.0, 20.0, 21.0, 30.0, 31.0],
+        }
+    )
+    return svy.Sample(data=df, design=svy.Design(stratum="stratum", psu="psu", wgt="wgt"))
+
+
+def test_partial_zero_weights_inside_a_psu_do_not_break_recovery():
+    """A PSU counts as deleted only when *every* one of its rows is zero, so a
+    zero-weight unit sitting inside a live PSU is not evidence of deletion."""
+    df = pl.DataFrame(
+        {
+            "stratum": [1, 1, 1, 1, 2, 2, 3, 3],
+            "psu": ["1a", "1a", "1b", "1c", "2a", "2b", "3a", "3b"],
+            "wgt": [0.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            "y": [10.0, 10.0, 11.0, 12.0, 20.0, 21.0, 30.0, 31.0],
+        }
+    )
+    built = svy.Sample(
+        data=df, design=svy.Design(stratum="stratum", psu="psu", wgt="wgt")
+    ).weighting.create_jk_wgts(rep_prefix="jk")
+    raw = built._data.select(
+        ["stratum", "psu", "wgt", "y"] + [f"jk{i}" for i in range(1, 8)]
+    )
+    s = svy.Sample(
+        data=raw,
+        design=svy.Design(
+            stratum="stratum",
+            psu="psu",
+            wgt="wgt",
+            rep_wgts=JackknifeWgts(prefix="jk", n_reps=7, stratum="stratum", psu="psu"),
+        ),
+    )
+    assert s._design.rep_wgts.coefficients() == pytest.approx([2 / 3] * 3 + [1 / 2] * 4)
+
+
+def test_a_fully_zero_weighted_psu_refuses_rather_than_guessing():
+    """Such a PSU is zero in every replicate column, so it can never be
+    identified as the one a given replicate deleted. Better a refusal than a
+    vector built from the columns that could be read plus one guess."""
+    built = _zero_weight_sample(
+        [1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0]
+    ).weighting.create_jk_wgts(rep_prefix="jk")
+    raw = built._data.select(
+        ["stratum", "psu", "wgt", "y"] + [f"jk{i}" for i in range(1, 8)]
+    )
+    s = svy.Sample(
+        data=raw,
+        design=svy.Design(
+            stratum="stratum",
+            psu="psu",
+            wgt="wgt",
+            rep_wgts=JackknifeWgts(prefix="jk", n_reps=7, stratum="stratum", psu="psu"),
+        ),
+    )
+    assert s._design.rep_wgts.rep_coefs is None
+    assert s.warnings.list(code="JACKKNIFE_COEFS_UNAVAILABLE")
