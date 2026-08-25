@@ -506,3 +506,42 @@ def test_balanced_strata_do_not_need_the_recovery():
         ),
     )
     assert s._design.rep_wgts.coefficients() == pytest.approx([0.5] * n_reps)
+
+
+def test_recovery_follows_column_content_not_column_order():
+    """The load-bearing guarantee. Nothing about naming or the producer's
+    ordering enters the chain: column -> zeroed PSU -> that PSU's stratum ->
+    that stratum's n_h. Scrambling the columns must interleave the
+    coefficients to match, not keep them in blocks."""
+    built = _unbalanced_built(np.random.default_rng(71))
+    d = built._data
+
+    perm = [6, 3, 7, 1, 5, 2, 4]  # new position i <- old column perm[i]
+    ren = {f"jk{old}": f"tmp{new + 1}" for new, old in enumerate(perm)}
+    scr = d.rename(ren).rename({f"tmp{i}": f"jk{i}" for i in range(1, 8)})
+
+    n_h_of = {1: 3, 2: 2, 3: 2}
+    expected = []
+    for i in range(1, 8):
+        stratum = scr.filter(pl.col(f"jk{i}") == 0.0).select("stratum").rows()[0][0]
+        n_h = n_h_of[stratum]
+        expected.append((n_h - 1) / n_h)
+    assert expected != list(built._design.rep_wgts.coefficients())  # the scramble bit
+
+    s = svy.Sample(
+        data=scr.select(["stratum", "psu", "wgt", "y"] + [f"jk{i}" for i in range(1, 8)]),
+        design=svy.Design(
+            stratum="stratum",
+            psu="psu",
+            wgt="wgt",
+            rep_wgts=JackknifeWgts(prefix="jk", n_reps=7, stratum="stratum", psu="psu"),
+        ),
+    )
+    assert s._design.rep_wgts.coefficients() == pytest.approx(expected)
+
+    # Permuting (c_r, theta_r) together leaves sum c_r (theta_r - bar)^2 alone,
+    # so the standard error must not move. Permuting the coefficients *alone*
+    # does move it, which is exactly why the mapping has to be right.
+    a = built.estimation.mean("y", method="replication").to_polars()["se"][0]
+    b = s.estimation.mean("y", method="replication").to_polars()["se"][0]
+    assert a == pytest.approx(b, rel=1e-12)
