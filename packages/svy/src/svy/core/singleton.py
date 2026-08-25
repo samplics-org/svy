@@ -1019,7 +1019,9 @@ class Singleton:
         the variance estimation engine to compute singleton variance
         contribution using (stratum_total - grand_mean)².
 
-        This is equivalent to R's `lonely.psu = "adjust"` option.
+        This is equivalent to R's `lonely.psu = "adjust"` option and to
+        Stata's `singleunit(centered)` — the conventional lonely-PSU
+        handling for DHS analyses.
 
         Returns
         -------
