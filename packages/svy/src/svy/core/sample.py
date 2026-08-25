@@ -1374,6 +1374,34 @@ class Sample:
     # ════════════════════════════════════════════════════════════════════════
 
     @property
+    def rep_coefficients(self) -> dict[str, float]:
+        """The variance coefficient applied to each replicate, by column name.
+
+        >>> sample.rep_coefficients
+        {'jk1': 0.6667, 'jk2': 0.6667, 'jk3': 0.6667, 'jk4': 0.5, ...}
+
+        Keyed by the actual column, not the replicate index, because the index
+        alone is what a reader has to trust rather than check -- and for an
+        unbalanced JKn the assignment is the whole answer: the same coefficients
+        against a different order give a different standard error.
+
+        This lives on ``Sample`` rather than on ``rep_wgts`` because only the
+        frame resolves the column names. A design declaring ``prefix="REP"``
+        against a file shipping ``REP001..REP200`` knows the count but not the
+        padding, so the struct alone would key this on ``REP1`` and be
+        confidently wrong.
+
+        Empty when the design carries no replicate weights. Raises whatever
+        ``coefficients()`` raises -- a declared JKn with nothing to derive from
+        refuses here too, rather than reporting a number it does not have.
+        """
+        rw = cast("Design", self._design).rep_wgts
+        if rw is None:
+            return {}
+        cols = rw.columns_from_data(list(cast(pl.DataFrame, self._data).columns))
+        return dict(zip(cols, rw.coefficients()))
+
+    @property
     def meta(self) -> MetadataStore:
         """Access variable metadata registry."""
         return self._metadata

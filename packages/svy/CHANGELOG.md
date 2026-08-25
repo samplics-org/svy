@@ -38,6 +38,19 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
   The default is `None` — unspecified. `None` and `"jk1"` produce the same number but are different statements, and svy claims only what it knows or was told. A producer withholding design variables is not evidence that the weights are unstratified.
 
+- **`Sample.rep_coefficients` shows which coefficient was applied to which replicate**, keyed by the actual column name:
+
+  ```python
+  >>> sample.rep_coefficients
+  {'jk1': 0.6667, 'jk2': 0.6667, 'jk3': 0.6667, 'jk4': 0.5, ...}
+  ```
+
+  `coefficients()` on the variant remains the machine path — a list of `n_reps` floats in replicate order, the shape the kernel takes — but a bare list makes the assignment something a reader has to trust rather than check, and for an unbalanced JKn the assignment *is* the answer: the same coefficients against a different order give a different standard error.
+
+  It lives on `Sample` rather than on `rep_wgts` because only the frame resolves the column names: a design declaring `prefix="REP"` against a file shipping `REP001..REP200` knows the replicate count but not the padding, so the struct alone would key this on `REP1` and be confidently wrong. Empty when the design carries no replicate weights, and it raises whatever `coefficients()` raises rather than reporting a number it does not have.
+
+  `rep_wgts.coef_source` names the provenance alongside it — `"scale"` (the user asserted them), `"derived"` (svy computed them and cannot redo it) or `"default"` (the method's standard value). A varying vector also prints its distinct values with counts now, `0.667 x3, 0.5 x4`, rather than first-and-last — which two numbers land at the ends is an artefact of the producer's replicate order, while the counts are the design.
+
 - **`kind` is optional once the units are named.** `jk1`/`jkn`/`jk2` is expert vocabulary; naming the columns the replicates were built from is not, and requiring both asks for the same fact twice in the harder of the two languages. With `stratum` and `psu` declared, svy reads the scheme off the counts — one replicate per PSU across several strata is JKn, per PSU in a single stratum is JK1, one per stratum is JK2 — and records it, at INFO level so the inference is auditable:
 
   ```python

@@ -121,11 +121,28 @@ def normalize_jackknife_kind(kind: str) -> JackknifeKind:
 
 
 def _fmt_coefs(values: Sequence[float]) -> str:
-    """A uniform coefficient prints as the scalar it is."""
-    uniq = set(values)
-    if len(uniq) == 1:
-        return repr(next(iter(uniq)))
-    return f"({values[0]!r}, ... , {values[-1]!r}) x{len(values)}"
+    """A uniform coefficient prints as the scalar it is.
+
+    A varying one prints its distinct values with counts. Showing first and
+    last instead said nothing useful: which two numbers happened to land at the
+    ends is an artefact of the producer's replicate order, while "three
+    replicates at 2/3 and four at 1/2" is the design.
+    """
+    counts = _coef_counts(values)
+    if len(counts) == 1:
+        return repr(next(iter(counts)))
+    shown = ", ".join(f"{v!r} x{n}" for v, n in list(counts.items())[:4])
+    more = "" if len(counts) <= 4 else f", ... ({len(counts)} distinct)"
+    return f"{shown}{more}"
+
+
+def _coef_counts(values: Sequence[float]) -> dict[float, int]:
+    """Distinct coefficients and how many replicates carry each, in first-seen
+    order -- which for a jackknife is stratum order."""
+    counts: dict[float, int] = {}
+    for v in values:
+        counts[v] = counts.get(v, 0) + 1
+    return counts
 
 
 def _normalize_scale(value: float | Sequence[float], n_reps: int, param: str) -> tuple[float, ...]:
@@ -354,6 +371,17 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
         if self.rep_coefs is not None:
             return list(self.rep_coefs)  # svy computed them and cannot redo it
         return self._default_coefficients()
+
+    @property
+    def coef_source(self) -> str:
+        """Where the applied coefficients came from: ``"scale"`` (the user
+        asserted them), ``"derived"`` (svy computed them and cannot redo it) or
+        ``"default"`` (the method's standard value, closed-form in n_reps)."""
+        if self.scale is not None:
+            return "scale"
+        if self.rep_coefs is not None:
+            return "derived"
+        return "default"
 
     def _default_coefficients(self) -> list[float]:
         """The method's standard coefficients, closed-form in ``n_reps``.
