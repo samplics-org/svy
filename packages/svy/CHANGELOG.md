@@ -10,6 +10,18 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **Replicate weights carry the units they were built from.** `stratum` and `psu` on every variant name the columns the replicates were drawn over — a separate question from `Design.stratum`/`Design.psu`, which describe the analysis design and are what Taylor linearizes over. Producers collapse strata and suppress PSUs for disclosure, publishing a distinct pair (`VARSTRAT`/`VARUNIT` and its many spellings) alongside — or instead of — the design variables:
+
+  ```python
+  JackknifeWgts(prefix="rw", n_reps=8, kind="jkn", stratum="VARSTRAT", psu="VARUNIT")
+  ```
+
+  They appear in `repr` and `print(design)`, are validated as columns at `Sample` construction, and are rewritten by `wrangling.rename_columns` and protected by `remove_columns` exactly like design columns. Generators record whatever they used, so a generated design states its provenance rather than leaving a later reader to assume it matches the Design. The Poisson bootstrap records neither, drawing independent per-unit factors and having no units by construction.
+
+  `str` only, not `Design`'s `str | tuple`: a multi-column variance unit would need its own internal concatenation path, and producers ship a single collapsed identifier. A tuple-stratum design therefore records no provenance — an audit gap only, since generated weights carry `rep_coefs` outright.
+
+- **`create_brr_wgts` and `create_jk_wgts(paired=True)` pair PSUs into variance strata themselves.** `stratum_name` names the created column (the house `wgt_name` convention), `order_by` pairs adjacent PSUs in that order — what a systematically-sampled frame wants — and `shuffle` pairs at random. `stratum`/`psu` on all four generators build from columns the Design does not name, without mutating it.
+
 - **Poisson bootstrap replicate weights ([#131](https://github.com/samplics-org/svy/pull/131)).** `sample.weighting.create_bs_wgts(kind="poisson")` generates Beaumont–Patak generalized bootstrap weights, which need only a weight column. The default `kind="rao-wu"` is the stratified Rao–Wu–Yue rescaling bootstrap and still requires `psu` on the design — the guard is deliberately not shared, since the Poisson bootstrap exists precisely for files that have no PSU. Both kinds use the same `1/R` per-replicate coefficient; they differ in how the replicates are drawn, not in how the variance is scaled.
 
   Beaumont, J.-F. and Patak, Z. (2012). On the generalized bootstrap for sample surveys with special attention to Poisson sampling. *International Statistical Review*, 80(1), 127–148.
@@ -26,11 +38,21 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
   The default is `None` — unspecified. `None` and `"jk1"` produce the same number but are different statements, and svy claims only what it knows or was told. A producer withholding design variables is not evidence that the weights are unstratified.
 
-- **JKn coefficients are derived when the design allows it.** `(n_h−1)/n_h` is the only standard coefficient that is not closed-form in `n_reps`, so it used to have to be supplied by hand. Given `kind="jkn"` plus `stratum` and `psu`, svy now works it out at `Sample` construction. Limited to balanced designs — every stratum the same `n_h` — where the coefficient is uniform and the replicate-to-stratum mapping does not matter; that covers the paired-PSU designs that dominate real JKn files. Unbalanced still needs `scale`.
+- **JKn coefficients are derived when the declared units allow it.** `(n_h−1)/n_h` is the only standard coefficient that is not closed-form in `n_reps`, so it used to have to be supplied by hand. Given `kind="jkn"` plus the `stratum` and `psu` *the replicate weights name* (not the Design's — see above), svy now works it out at `Sample` construction. A `kind="jkn"` with no units named, or with nothing derivable from them, warns at construction and raises from `coefficients()`. Limited to balanced designs — every stratum the same `n_h` — where the coefficient is uniform and the replicate-to-stratum mapping does not matter; that covers the paired-PSU designs that dominate real JKn files. Unbalanced still needs `scale`.
 
   A declared kind is also checked rather than merely trusted: `jk1` and `jkn` imply one replicate per PSU, `jk2` one per stratum. Mismatches warn rather than raise, since a legitimately subset frame has fewer PSUs than the weight columns were built from. An unspecified kind on a stratified design warns too — svy has evidence the JK1 global is probably wrong, but no claim to act on.
 
 ### Fixed
+
+- **Building BRR or JK2 weights no longer destroys the design strata.** `create_variance_strata` ended by overwriting `Design.stratum` with the collapsed variance strata — its only way of handing the result to the generator that ran next. Every later Taylor estimate then silently linearized over pseudo-strata: on a 6-strata × 4-PSU frame the SE moved from 0.858 to 0.641 and df from 18 to 12, with no warning and the original column still sitting in the frame. Pairing is now internal and its output is recorded on the replicate weights, so `Design.stratum` is Taylor's alone and is left exactly as declared.
+
+- **`create_jk_wgts(paired=True)` no longer undercounts replicates.** Called on strata with more than two PSUs — i.e. without the old pairing pre-step — it produced one replicate per *original* stratum instead of one per variance stratum, in silence: 6 where 12 were correct, understating the variance. It pairs first now. **This changes published standard errors** for anyone who called it without the pre-step.
+
+- **`create_brr_wgts` no longer requires a stratum.** It raised `BRR requires 2 PSUs per stratum` on any unpaired design, and `stratum=None` was rejected outright with a hint to go and build variance strata by hand. Both cases now pair and build.
+
+- **A row-level `order_by` column paired PSUs more than once.** Uniquing on the whole row left the same PSU present several times, so it was assigned to several variance strata and some ended up holding a single PSU — which the BRR kernel then rejected. First occurrence in the frame now wins per PSU.
+
+- **Renaming or dropping a unit column follows through to the replicate weights.** `_rep_wgts_with_renames` only remapped `prefix` and returned early when no replicate column matched the rename — the common case, since renaming a variance-stratum column touches no replicate column. The units were also absent from the protected set, so dropping one was neither blocked nor cleaned. They are now rewritten on rename, need `force=` to drop, and are cleared rather than left dangling when force-dropped.
 
 - **`method=None` no longer auto-selects replication, and Taylor on a replication-only design says so.** The default resolved to replication whenever the design carried replicate weights and had no `stratum`/`psu`, and to Taylor otherwise. That made the *estimator* depend on inputs the estimator never reads — replication consumes the replicate columns and `coefficients()`, nothing else — so declaring a single design column silently moved the standard error:
 
@@ -96,6 +118,15 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **`import_labels_from_svyio_meta` now requires the frame** the metadata describes as its third argument. Resolving a measurement type depends on how well the value labels cover the observed values, which cannot be judged without the data. It is required rather than optional on purpose: an omitted frame would silently fall back to the very behavior this release fixes. The function is internal (`svy.engine.io`, not exported from the top-level `svy` namespace) and had a single production call site.
 
 ### Removed
+
+- **BREAKING: `Sample.weighting.create_variance_strata`.** Undocumented — no mention in any changelog, README or guide — never called by svy itself, and reachable in practice only through a hint inside `create_brr_wgts`'s error telling you to call it. It was a mandatory pre-step svy made you perform by hand and then punished by clobbering `Design.stratum`. The pairing algorithm survives as a private helper with its edge cases intact (odd PSU counts, tuple strata, ordering, reproducible shuffling); its `order_by`, `shuffle` and `into` controls moved onto `create_brr_wgts` and `create_jk_wgts`, where they are discoverable. `into=` is now `stratum_name=`.
+
+  ```python
+  # before                                    # after
+  s = s.weighting.create_variance_strata(     s = s.weighting.create_jk_wgts(
+      method="jk2")                               paired=True)
+  s = s.weighting.create_jk_wgts(paired=True)
+  ```
 
 - **`svy.core.design.make_rep_weights`.** A strictly weaker duplicate of `svy.RepWeights` — same job, but only four of the parameters, so it silently dropped `scale`, `rep_coefs` and `kind`. It was never exported from `svy` or `svy.core`, so it was reachable only as `from svy.core.design import make_rep_weights`, and had no callers in the package. Use `svy.RepWeights(method=..., prefix=..., n_reps=...)`, which takes the same three positionally.
 

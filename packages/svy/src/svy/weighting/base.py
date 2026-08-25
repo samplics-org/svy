@@ -34,7 +34,6 @@ from svy.weighting.replication import create_brr_wgts as _create_brr_wgts
 from svy.weighting.replication import create_bs_wgts as _create_bs_wgts
 from svy.weighting.replication import create_jk_wgts as _create_jk_wgts
 from svy.weighting.replication import create_sdr_wgts as _create_sdr_wgts
-from svy.weighting.replication import create_variance_strata as _create_variance_strata
 from svy.weighting.trimming import trim as _trim
 from svy.weighting.types import TrimConfig
 
@@ -51,28 +50,15 @@ class Weighting:
     # Variance strata / replicate weights
     # ------------------------------------------------------------------ #
 
-    def create_variance_strata(
-        self,
-        *,
-        method: Literal["brr", "jk2"],
-        order_by: str | Sequence[str] | None = None,
-        shuffle: bool = False,
-        into: str = "svy_var_stratum",
-        rstate: int | None = None,
-    ) -> Any:
-        return _create_variance_strata(
-            self._sample,
-            method=method,
-            order_by=order_by,
-            shuffle=shuffle,
-            into=into,
-            rstate=rstate,
-        )
-
     def create_brr_wgts(
         self,
         n_reps: int | None = None,
         *,
+        stratum: str | None = None,
+        psu: str | None = None,
+        stratum_name: str = "svy_var_stratum",
+        order_by: str | Sequence[str] | None = None,
+        shuffle: bool = False,
         rep_prefix: str | None = None,
         fay_coef: float = 0.0,
         rstate: int | None = None,
@@ -81,6 +67,11 @@ class Weighting:
         return _create_brr_wgts(
             self._sample,
             n_reps,
+            stratum=stratum,
+            psu=psu,
+            stratum_name=stratum_name,
+            order_by=order_by,
+            shuffle=shuffle,
             rep_prefix=rep_prefix,
             fay_coef=fay_coef,
             rstate=rstate,
@@ -91,6 +82,11 @@ class Weighting:
         self,
         *,
         paired: bool = False,
+        stratum: str | None = None,
+        psu: str | None = None,
+        stratum_name: str = "svy_var_stratum",
+        order_by: str | Sequence[str] | None = None,
+        shuffle: bool = False,
         rep_prefix: str | None = None,
         rstate: int | None = None,
         drop_nulls: bool = False,
@@ -98,6 +94,11 @@ class Weighting:
         return _create_jk_wgts(
             self._sample,
             paired=paired,
+            stratum=stratum,
+            psu=psu,
+            stratum_name=stratum_name,
+            order_by=order_by,
+            shuffle=shuffle,
             rep_prefix=rep_prefix,
             rstate=rstate,
             drop_nulls=drop_nulls,
@@ -108,6 +109,8 @@ class Weighting:
         n_reps: int = 500,
         *,
         kind: BootstrapKind = "rao-wu",
+        stratum: str | None = None,
+        psu: str | None = None,
         rep_prefix: str | None = None,
         drop_nulls: bool = False,
         rstate: RandomState = None,
@@ -116,6 +119,8 @@ class Weighting:
             self._sample,
             n_reps,
             kind=kind,
+            stratum=stratum,
+            psu=psu,
             rep_prefix=rep_prefix,
             drop_nulls=drop_nulls,
             rstate=rstate,
@@ -125,6 +130,7 @@ class Weighting:
         self,
         n_reps: int = 4,
         *,
+        psu: str | None = None,
         rep_prefix: str | None = None,
         order_col: str | None = None,
         drop_nulls: bool = False,
@@ -132,6 +138,7 @@ class Weighting:
         return _create_sdr_wgts(
             self._sample,
             n_reps,
+            psu=psu,
             rep_prefix=rep_prefix,
             order_col=order_col,
             drop_nulls=drop_nulls,
