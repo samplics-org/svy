@@ -189,8 +189,12 @@ class Sample:
         if not isinstance(rw, JackknifeWgts):
             return
 
-        stratum_col = self._internal_design.get("stratum")
-        psu_col = self._internal_design.get("psu")
+        # The units the *replicates* were built from, never the Design's. See
+        # the field comment on _RepWgtsBase: borrowing Design.stratum counts the
+        # wrong n_h whenever a producer collapsed strata for variance estimation,
+        # and returns a plausible wrong coefficient rather than an error.
+        stratum_col = rw.stratum
+        psu_col = rw.psu
         data = cast(pl.DataFrame, self._data)
         if psu_col is None or psu_col not in data.columns:
             # Nothing to check against and nothing to derive from. Harmless for
@@ -200,8 +204,9 @@ class Sample:
             if rw.kind == "jkn" and rw.scale is None and rw.rep_coefs is None:
                 self._warn_jkn_not_derivable(
                     reason=(
-                        "the design has no psu, so svy cannot count the PSUs per "
-                        "stratum that (n_h-1)/n_h is built from"
+                        "the replicate weights do not name the psu they were built "
+                        "from, so svy cannot count the PSUs per stratum that "
+                        "(n_h-1)/n_h is built from"
                     )
                 )
             return
@@ -306,7 +311,11 @@ class Sample:
         """
         fixes = ["pass scale= with the per-replicate coefficients your file documents"]
         if can_use_psu:
-            fixes.insert(0, "declare psu (and stratum) on the design if the frame carries them")
+            fixes.insert(
+                0,
+                "name the units the replicates were built from, e.g. "
+                "JackknifeWgts(..., stratum='VARSTRAT', psu='VARUNIT')",
+            )
         self.warn(
             code=WarnCode.JACKKNIFE_COEFS_UNAVAILABLE,
             title="JKn coefficients cannot be derived",
@@ -797,6 +806,27 @@ class Sample:
         missing = [c for c in needed_cols if c not in data.columns]
         if missing:
             raise ValueError(f"Design references columns not found in data: {missing}")
+
+        # 1a. The units the replicate weights were built from are columns too,
+        # and they are not part of `specified_fields` because they live on
+        # rep_wgts rather than on the Design. An unresolvable one is the same
+        # mistake as an unresolvable design column, and it fails the same way --
+        # otherwise it surfaces much later as "cannot derive", which points at
+        # the wrong problem.
+        rw = design.rep_wgts
+        if rw is not None:
+            missing_units = [
+                f"rep_wgts.{name}={col!r}"
+                for name, col in (("stratum", rw.stratum), ("psu", rw.psu))
+                if col is not None and col not in data.columns
+            ]
+            if missing_units:
+                raise ValueError(
+                    f"Replicate weights reference columns not found in data: "
+                    f"{missing_units}. These name the units the replicates were "
+                    f"built from, which is a separate question from the Design's "
+                    f"stratum/psu."
+                )
 
         # 1b. Validate pop_size columns are numeric
         if design.pop_size is not None:

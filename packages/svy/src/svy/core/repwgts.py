@@ -184,12 +184,37 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     # no frame, and the stratum column may be gone by estimation time. Filled by
     # create_jk_wgts; users want ``scale``.
     rep_coefs: tuple[float, ...] | None = None
+    # The units the replicates were built from -- provenance, and for JKn the
+    # only thing (n_h-1)/n_h can be counted from.
+    #
+    # Deliberately NOT the Design's stratum/psu. Those describe the analysis
+    # design and are what Taylor linearizes over; these describe how the
+    # replicates were drawn. They coincide often enough to hide the difference,
+    # and public files are exactly where they do not: producers collapse strata
+    # and suppress PSUs for disclosure, publishing a separate pair (VARSTRAT /
+    # VARUNIT and its many spellings) alongside -- or instead of -- the design
+    # variables. Borrowing the Design's would count the wrong n_h and return a
+    # plausible wrong coefficient, so a declared JKn must name these and there
+    # is no fallback. Generated weights fill them in from whatever they used.
+    #
+    # str only, not Design's str | tuple: a multi-column variance unit would
+    # need its own internal concatenation path, and producers ship a single
+    # collapsed identifier. Widen if that stops being true.
+    stratum: str | None = None
+    psu: str | None = None
 
     def __post_init__(self) -> None:
         if not self.prefix or not self.prefix.strip():
             raise ValueError("RepWeights 'prefix' cannot be empty or whitespace.")
         if self.n_reps < 2:
             raise ValueError(f"n_reps must be >= 2. Got {self.n_reps}.")
+        for _unit in ("stratum", "psu"):
+            _val = getattr(self, _unit)
+            if _val is not None and (not isinstance(_val, str) or not _val.strip()):
+                raise ValueError(
+                    f"RepWeights {_unit!r} must be a non-empty column name or None. "
+                    f"Got {_val!r}."
+                )
         if self.df is not None and self.df <= 0:
             raise ValueError(f"df must be > 0. Got {self.df}.")
         if self.padding is not None and self.padding < 0:
@@ -295,6 +320,15 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
         """Variant-specific fragments for repr. Overridden where there are any."""
         return []
 
+    def _unit_parts(self) -> list[str]:
+        """The units the replicates were built from, when they are recorded.
+
+        Shown for the same reason ``scale`` is: which columns produced a set of
+        replicates is what a reviewer needs to tell a design-strata JKn from a
+        collapsed-variance-strata one, and the two give different coefficients.
+        """
+        return [f"{n}='{v}'" for n, v in (("stratum", self.stratum), ("psu", self.psu)) if v]
+
     def _coef_parts(self) -> list[str]:
         """Where the coefficients came from, when it is not the method default.
 
@@ -313,6 +347,7 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
         if self.df is not None:
             parts.append(f"df={self.df}")
         parts.extend(self._variant_parts())
+        parts.extend(self._unit_parts())
         parts.extend(self._coef_parts())
         if self.padding is not None:
             parts.append(f"padding={self.padding}")
@@ -328,6 +363,10 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
             f"DF       : {self.df if self.df is not None else 'auto'}",
         ]
         lines.extend(self._plain_variant_lines())
+        if self.stratum is not None:
+            lines.append(f"Stratum  : {self.stratum}")
+        if self.psu is not None:
+            lines.append(f"PSU      : {self.psu}")
         if self.scale is not None:
             lines.append(f"Scale    : {_fmt_coefs(self.scale)}")
         elif self.rep_coefs is not None:
@@ -400,11 +439,13 @@ class JackknifeWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="Jackknife", ta
                 # sent anyone whose file *does* carry psu off to hand-compute
                 # coefficients svy would have worked out for them.
                 hint=(
-                    "Either declare stratum and psu on the design, and svy derives "
-                    "(n_h-1)/n_h at Sample construction when every stratum has the "
-                    "same number of PSUs; or pass scale= with the per-replicate "
-                    "coefficients your file documents, which is what unbalanced "
-                    "strata need."
+                    "Either name the units these replicates were built from -- "
+                    "JackknifeWgts(..., stratum='VARSTRAT', psu='VARUNIT') -- and svy "
+                    "derives (n_h-1)/n_h at Sample construction when every stratum has "
+                    "the same number of PSUs; or pass scale= with the per-replicate "
+                    "coefficients your file documents, which is what unbalanced strata "
+                    "need. The Design's stratum/psu are deliberately not used: they "
+                    "describe the analysis design, not how the replicates were drawn."
                 ),
             )
         # kind=None (unspecified) and "jk1" alike: the unstratified global.

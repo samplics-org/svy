@@ -324,9 +324,29 @@ def _jk_frame(strata, n_reps=4):
 
 
 def _jk_sample(strata, *, n_reps=4, **rw_kwargs):
+    """A jackknife sample whose replicate weights name their own units.
+
+    The Design carries the same columns, but the derivation deliberately does
+    not read them -- pass ``stratum=None, psu=None`` to exercise that.
+    """
     df = _jk_frame(strata, n_reps)
+    rw_kwargs.setdefault("stratum", "stratum")
+    rw_kwargs.setdefault("psu", "psu")
     rw = JackknifeWgts(prefix="jw", n_reps=n_reps, **rw_kwargs)
     return svy.Sample(df, svy.Design(wgt="w", stratum="stratum", psu="psu", rep_wgts=rw))
+
+
+def test_design_units_alone_do_not_drive_the_derivation():
+    """The Design's stratum/psu describe the analysis design, not how the
+    replicates were drawn. A producer who collapsed strata for variance
+    estimation would have them differ, so borrowing would count the wrong n_h
+    and return a plausible wrong coefficient."""
+    s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jkn", stratum=None, psu=None)
+    assert s._design.stratum == "stratum" and s._design.psu == "psu"
+    assert s._design.rep_wgts.rep_coefs is None  # not derived from the Design
+    assert WarnCode.JACKKNIFE_COEFS_UNAVAILABLE in {w.code for w in s.warnings.list()}
+    with pytest.raises(MethodError):
+        s._design.rep_wgts.coefficients()
 
 
 def test_declared_jkn_derives_its_coefficients_from_a_balanced_design():

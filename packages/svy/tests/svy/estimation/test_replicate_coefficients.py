@@ -123,9 +123,12 @@ def _jkn_frame(counts, rng):
     [
         ({"wgt": "wgt"}, True),
         ({"stratum": "stratum", "wgt": "wgt"}, True),
+        # Design carries both, and it still does not count: the units have to be
+        # declared on the replicate weights themselves.
+        ({"stratum": "stratum", "psu": "psu", "wgt": "wgt"}, True),
     ],
 )
-def test_jkn_without_psu_warns_at_construction(design_kwargs, expect_psu_in_hint):
+def test_jkn_without_declared_units_warns_at_construction(design_kwargs, expect_psu_in_hint):
     df, n_reps = _jkn_frame([2, 2, 2, 2], np.random.default_rng(21))
     s = svy.Sample(
         data=df,
@@ -147,13 +150,15 @@ def test_jkn_unbalanced_strata_warns_and_does_not_offer_psu():
             stratum="stratum",
             psu="psu",
             wgt="wgt",
-            rep_wgts=JackknifeWgts(prefix="rw", n_reps=n_reps, kind="jkn"),
+            rep_wgts=JackknifeWgts(
+                prefix="rw", n_reps=n_reps, kind="jkn", stratum="stratum", psu="psu"
+            ),
         ),
     )
     warns = s.warnings.list(code="JACKKNIFE_COEFS_UNAVAILABLE")
     assert warns
     assert "unbalanced" in warns[0].detail
-    assert "declare psu" not in warns[0].hint
+    assert "name the units" not in warns[0].hint  # already named, and still not enough
 
 
 def test_derivable_jkn_does_not_warn():
@@ -164,7 +169,9 @@ def test_derivable_jkn_does_not_warn():
             stratum="stratum",
             psu="psu",
             wgt="wgt",
-            rep_wgts=JackknifeWgts(prefix="rw", n_reps=n_reps, kind="jkn"),
+            rep_wgts=JackknifeWgts(
+                prefix="rw", n_reps=n_reps, kind="jkn", stratum="stratum", psu="psu"
+            ),
         ),
     )
     assert not s.warnings.list(code="JACKKNIFE_COEFS_UNAVAILABLE")
@@ -185,7 +192,11 @@ def test_jkn_error_names_both_fixes():
         s.estimation.mean("y", method="replication")
     text = str(exc.value)
     assert "psu" in text and "scale=" in text
-    assert ".." not in text  # the template used to append a second period
+    # The template used to append a second period to a reason that already had
+    # one. Checked on the detail line only -- "JackknifeWgts(...)" in the hint
+    # legitimately contains a run of dots.
+    detail = next(ln for ln in text.splitlines() if "cannot be used here" in ln)
+    assert not detail.rstrip().endswith("..")
 
 
 def test_df_keeps_a_fractional_value():

@@ -20,9 +20,15 @@ R survey 4.5 (2026-07-23):
 
 The no-scale SEs are exactly sqrt(7/4) larger (7/8 vs 1/2).
 
-The design carries stratum and psu, so nothing is supplied by hand: svy
-derives (n_h-1)/n_h itself from the declared kind and the design. These are
-therefore tests of that derivation against R, not of a hand-fed coefficient.
+The replicate weights name the units they were built from, so nothing is
+supplied by hand: svy derives (n_h-1)/n_h itself from the declared kind and
+those units. These are therefore tests of that derivation against R, not of a
+hand-fed coefficient.
+
+The units are declared on the RepWeights rather than borrowed from the Design.
+Here they happen to be the same columns, which is exactly why the distinction
+has to be made explicitly -- a producer who collapsed strata for variance
+estimation would have them differ, and borrowing would count the wrong n_h.
 """
 
 import numpy as np
@@ -41,6 +47,8 @@ def jkn_sample(load_survey_data):
         n_reps=8,
         df=7,
         kind="jkn",
+        stratum="stratum",
+        psu="psu",
     )
     design = Design(
         row_index="id", wgt="weight", stratum="stratum", psu="psu", rep_wgts=rep_weights

@@ -60,7 +60,28 @@ from svy.weighting._helpers import (
 
 
 if TYPE_CHECKING:
+    from svy.core.design import Design
     from svy.core.sample import Sample
+
+
+def _recorded_units(design: "Design") -> tuple[str | None, str | None]:
+    """The user-facing columns to record as the units these replicates used.
+
+    Provenance, so that a generated design says what it was built from rather
+    than leaving a later reader to assume it matches the Design -- which is the
+    very assumption the ``stratum``/``psu`` fields exist to stop.
+
+    A tuple (multi-column) stratum or psu records ``None`` instead of the
+    internal concatenated name: that name is an implementation detail and would
+    not resolve against a frame rebuilt from source. Nothing is lost
+    functionally, because generated weights carry ``rep_coefs`` outright and the
+    derivation that reads these never runs for them. It is an audit gap for
+    multi-column designs only, and widening the fields to accept tuples is what
+    would close it.
+    """
+    stratum = design.stratum if isinstance(design.stratum, str) else None
+    psu = design.psu if isinstance(design.psu, str) else None
+    return stratum, psu
 
 
 def create_variance_strata(
@@ -327,8 +348,16 @@ def create_brr_wgts(
         [pl.Series(name=col, values=vals) for col, vals in rep_dicts.items()]
     )
 
+    _rec_stratum, _rec_psu = _recorded_units(design)
     sample._design = sample._design.fill_missing(
-        rep_wgts=BrrWgts(prefix=rep_prefix, n_reps=n_reps_actual, fay_coef=fay_coef, df=df_val)
+        rep_wgts=BrrWgts(
+            prefix=rep_prefix,
+            n_reps=n_reps_actual,
+            fay_coef=fay_coef,
+            df=df_val,
+            stratum=_rec_stratum,
+            psu=_rec_psu,
+        )
     )
 
     return sample
@@ -390,12 +419,15 @@ def create_jk_wgts(
     else:
         jk_kind = "jkn"
 
+    _rec_stratum, _rec_psu = _recorded_units(design)
     sample._design = sample._design.fill_missing(
         rep_wgts=JackknifeWgts(
             prefix=rep_prefix,
             n_reps=n_reps,
             df=df_val,
             kind=jk_kind,
+            stratum=_rec_stratum,
+            psu=_rec_psu,
             # Per-replicate (n_h-1)/n_h coefficients: exact stratified-JKn
             # variance instead of the global (R-1)/R approximation. The computed
             # channel, not `scale` -- svy derived these, the user did not assert
@@ -515,8 +547,19 @@ def create_bs_wgts(
         [pl.Series(name=col, values=vals) for col, vals in rep_dicts.items()]
     )
 
+    _rec_stratum, _rec_psu = _recorded_units(design)
     sample._design = sample._design.update(
-        rep_wgts=BootstrapWgts(prefix=rep_prefix, n_reps=n_reps, df=df_val, kind=kind)
+        rep_wgts=BootstrapWgts(
+            prefix=rep_prefix,
+            n_reps=n_reps,
+            df=df_val,
+            kind=kind,
+            # The Poisson bootstrap draws independent per-unit factors, so it
+            # genuinely has no units to record -- that is why it works on files
+            # with no psu at all.
+            stratum=None if kind == "poisson" else _rec_stratum,
+            psu=None if kind == "poisson" else _rec_psu,
+        )
     )
 
     return sample
@@ -572,8 +615,11 @@ def create_sdr_wgts(
         [pl.Series(name=col, values=vals) for col, vals in rep_dicts.items()]
     )
 
+    _rec_stratum, _rec_psu = _recorded_units(design)
     sample._design = sample._design.update(
-        rep_wgts=SdrWgts(prefix=rep_prefix, n_reps=n_reps, df=df_val)
+        rep_wgts=SdrWgts(
+            prefix=rep_prefix, n_reps=n_reps, df=df_val, stratum=_rec_stratum, psu=_rec_psu
+        )
     )
 
     return sample
