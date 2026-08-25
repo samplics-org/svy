@@ -227,15 +227,39 @@ class Sample:
         n_strata = len(counts)
         n_psus = sum(counts)
 
-        # A declared kind is otherwise an assertion svy has to trust; with design
-        # variables present it becomes checkable arithmetic. A warning rather
-        # than an error, because a legitimately subset frame has fewer PSUs than
-        # the weight columns were built from and that is not a mislabelling.
-        expected = {"jk1": n_psus, "jkn": n_psus, "jk2": n_strata}.get(rw.kind or "")
+        # What each kind implies about the replicate count, given these units.
+        implied = {"jk1": n_psus, "jkn": n_psus, "jk2": n_strata}
+
+        # A declared kind is otherwise an assertion svy has to trust; with the
+        # units named it becomes checkable arithmetic.
+        expected = implied.get(rw.kind or "")
         if expected is not None and expected != rw.n_reps:
+            # Two very different mismatches. If n_reps lands exactly on another
+            # kind's count, the label is simply wrong and svy can say which it
+            # should be -- that is not something to warn about and carry on
+            # from, because the coefficient it selects is wrong by a known
+            # factor. If it matches nothing, the likeliest explanation is a
+            # frame subset to fewer PSUs than the weights were built from,
+            # which is not a mislabelling at all.
+            alternatives = [k for k, v in implied.items() if v == rw.n_reps]
+            if alternatives:
+                raise MethodError.invalid_choice(
+                    where="Sample",
+                    param="rep_wgts.kind",
+                    got=rw.kind,
+                    allowed=sorted(alternatives),
+                    hint=(
+                        f"kind={rw.kind!r} implies {expected} replicates "
+                        f"({'one per stratum' if rw.kind == 'jk2' else 'one per PSU'}), "
+                        f"but n_reps is {rw.n_reps} -- which is exactly "
+                        f"{' or '.join(sorted(alternatives))} for these units "
+                        f"({n_psus} PSUs across {n_strata} strata). Drop 'kind' to let "
+                        f"svy read it off the units, or correct it."
+                    ),
+                )
             self.warn(
                 code=WarnCode.JACKKNIFE_KIND_UNSPECIFIED,
-                title=f"Jackknife kind {rw.kind!r} does not match the design",
+                title=f"Jackknife kind {rw.kind!r} does not match the units",
                 detail=(
                     f"kind={rw.kind!r} implies {expected} replicates "
                     f"({'one per stratum' if rw.kind == 'jk2' else 'one per PSU'}), "
@@ -254,11 +278,40 @@ class Sample:
             return
 
         if rw.kind is None:
-            # Positive evidence that the JK1 global is probably wrong, but no
-            # claim from the user to act on: too weak to raise, too strong to
-            # pass over. Deriving a kind here would turn "the producer withheld
-            # the design" into "these weights are unstratified".
-            if n_strata > 1 and rw.scale is None and rw.rep_coefs is None:
+            # The units say which scheme these are, so there is nothing to guess
+            # at: one replicate per PSU across several strata is JKn, per PSU in
+            # one stratum is JK1, one per stratum is JK2. This used to refuse on
+            # the grounds that deriving a kind would turn "the producer withheld
+            # the design" into "these weights are unstratified" -- true when the
+            # counts came from Design.stratum, which says nothing about how the
+            # replicates were drawn. They now come from the units declared on the
+            # weights themselves, which is exactly that statement.
+            #
+            # jk1/jkn/jk2 is expert vocabulary; naming the columns the replicates
+            # were built from is not. Requiring the label when the columns are
+            # already there would be asking for the same fact twice, in the
+            # harder of the two languages.
+            inferred: str | None = None
+            if rw.n_reps == n_psus and rw.n_reps != n_strata:
+                inferred = "jkn" if n_strata > 1 else "jk1"
+            elif rw.n_reps == n_strata and rw.n_reps != n_psus:
+                inferred = "jk2"
+            if inferred is not None:
+                rw = msgspec.structs.replace(rw, kind=inferred)
+                self._design = design = design.update(rep_wgts=rw)
+                self.warn(
+                    code=WarnCode.JACKKNIFE_KIND_UNSPECIFIED,
+                    level=Severity.INFO,
+                    title=f"Jackknife kind read as {inferred!r} from the declared units",
+                    detail=(
+                        f"n_reps is {rw.n_reps} against {n_psus} PSUs across "
+                        f"{n_strata} strata, which is {inferred}. Set kind "
+                        f"explicitly to assert it yourself."
+                    ),
+                    where="Sample",
+                    param="rep_wgts.kind",
+                )
+            elif n_strata > 1 and rw.scale is None and rw.rep_coefs is None:
                 self.warn(
                     code=WarnCode.JACKKNIFE_KIND_UNSPECIFIED,
                     title="Stratified design with an unspecified jackknife kind",
@@ -275,7 +328,11 @@ class Sample:
                         "scheme, or 'jk1' if these really are unstratified."
                     ),
                 )
-            return
+            if rw.kind is None:
+                return  # nothing was inferable; the JK1 global still applies
+            # An inferred kind falls through: reading it off the units is the
+            # whole point, and a JKn that stopped here would never get its
+            # per-stratum coefficients derived.
 
         if rw.kind != "jkn":
             return  # jk1 and jk2 are closed-form; nothing to derive

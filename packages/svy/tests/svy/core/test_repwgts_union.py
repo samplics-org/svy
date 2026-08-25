@@ -369,10 +369,22 @@ def test_user_scale_is_never_overwritten_by_derivation():
     assert s._design.rep_wgts.coefficients() == [0.9] * 4
 
 
-def test_unspecified_kind_on_a_stratified_design_warns_but_does_not_guess():
+def test_unspecified_kind_is_read_off_the_declared_units():
+    """jk1/jkn/jk2 is expert vocabulary; naming the columns the replicates were
+    built from is not. With the units declared, one replicate per PSU across
+    several strata *is* JKn -- 2 strata x 2 PSUs gives (n_h-1)/n_h = 0.5, not
+    the JK1 global 0.75 this used to fall back to."""
     s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4)
-    assert s._design.rep_wgts.kind is None  # absence of a claim is not a claim
-    assert s._design.rep_wgts.coefficients() == [0.75] * 4  # JK1 global, unchanged
+    assert s._design.rep_wgts.kind == "jkn"
+    assert s._design.rep_wgts.coefficients() == [0.5] * 4
+
+
+def test_an_unspecifiable_kind_still_falls_back_and_warns():
+    """n_reps matching neither the PSU nor the stratum count says nothing about
+    which scheme these are, so there is nothing to read off."""
+    s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=3)
+    assert s._design.rep_wgts.kind is None
+    assert s._design.rep_wgts.coefficients() == pytest.approx([2 / 3] * 3)
     codes = {w.code for w in s.warnings.list()}
     assert WarnCode.JACKKNIFE_KIND_UNSPECIFIED in codes
 
@@ -383,9 +395,20 @@ def test_unspecified_kind_on_an_unstratified_design_is_silent():
     assert WarnCode.JACKKNIFE_KIND_UNSPECIFIED not in codes
 
 
-def test_a_kind_that_disagrees_with_the_design_warns():
-    """jk2 implies one replicate per stratum; here there are 2 strata, not 4."""
-    s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jk2")
+def test_a_kind_contradicted_by_the_units_is_an_error():
+    """jk2 implies one replicate per stratum -- 2 here, not 4. n_reps lands
+    exactly on the PSU count, so the label is simply wrong and svy can say which
+    it should be. Warning and carrying on would ship a coefficient wrong by a
+    known factor."""
+    with pytest.raises(MethodError) as exc:
+        _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jk2")
+    assert "jkn" in str(exc.value)
+
+
+def test_a_kind_that_matches_no_scheme_only_warns():
+    """A frame subset to fewer PSUs than the weights were built from is not a
+    mislabelling, and there is no alternative kind to point at."""
+    s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=3, kind="jkn")
     codes = {w.code for w in s.warnings.list()}
     assert WarnCode.JACKKNIFE_KIND_UNSPECIFIED in codes
 

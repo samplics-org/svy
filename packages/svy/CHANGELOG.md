@@ -38,6 +38,17 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
   The default is `None` — unspecified. `None` and `"jk1"` produce the same number but are different statements, and svy claims only what it knows or was told. A producer withholding design variables is not evidence that the weights are unstratified.
 
+- **`kind` is optional once the units are named.** `jk1`/`jkn`/`jk2` is expert vocabulary; naming the columns the replicates were built from is not, and requiring both asks for the same fact twice in the harder of the two languages. With `stratum` and `psu` declared, svy reads the scheme off the counts — one replicate per PSU across several strata is JKn, per PSU in a single stratum is JK1, one per stratum is JK2 — and records it, at INFO level so the inference is auditable:
+
+  ```python
+  JackknifeWgts(prefix="jk", n_reps=8, stratum=("region", "urban"), psu="psu")
+  # -> kind='jkn', rep_coefs=0.5 (derived)
+  ```
+
+  This used to refuse, on the grounds that deriving a kind would turn "the producer withheld the design" into "these weights are unstratified". That was right while the counts came from `Design.stratum`, which says nothing about how the replicates were drawn; the units declared on the weights are exactly that statement.
+
+  A `kind` that the units *contradict* is now an error rather than a warning, but only when `n_reps` lands exactly on another scheme's count — then the label is simply wrong and svy can say which it should be, and warning would ship a coefficient wrong by a known factor. Declaring `jk2` against 8 replicates and 8 PSUs raises and names `jk1`/`jkn`. A count matching no scheme still only warns: a frame subset to fewer PSUs than the weights were built from is not a mislabelling.
+
 - **JKn coefficients are derived when the declared units allow it.** `(n_h−1)/n_h` is the only standard coefficient that is not closed-form in `n_reps`, so it used to have to be supplied by hand. Given `kind="jkn"` plus the `stratum` and `psu` *the replicate weights name* (not the Design's — see above), svy now works it out at `Sample` construction. A `kind="jkn"` with no units named, or with nothing derivable from them, warns at construction and raises from `coefficients()`. Limited to balanced designs — every stratum the same `n_h` — where the coefficient is uniform and the replicate-to-stratum mapping does not matter; that covers the paired-PSU designs that dominate real JKn files. Unbalanced still needs `scale`.
 
   A declared kind is also checked rather than merely trusted: `jk1` and `jkn` imply one replicate per PSU, `jk2` one per stratum. Mismatches warn rather than raise, since a legitimately subset frame has fewer PSUs than the weight columns were built from. An unspecified kind on a stratified design warns too — svy has evidence the JK1 global is probably wrong, but no claim to act on.
