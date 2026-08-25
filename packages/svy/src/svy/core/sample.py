@@ -230,6 +230,28 @@ class Sample:
         # What each kind implies about the replicate count, given these units.
         implied = {"jk1": n_psus, "jkn": n_psus, "jk2": n_strata}
 
+        # jk1 and jkn imply the same replicate count -- one per PSU -- and differ
+        # only in stratification, which the count comparison below never looks
+        # at. So the one mismatch it structurally cannot catch is exactly the
+        # expensive one: jk1 on stratified units returns (R-1)/R where
+        # (n_h-1)/n_h is correct, overstating SEs by sqrt(R/n_h) -- 32% on a
+        # 4-strata x 2-PSU design -- in silence. Naming a stratum unit says the
+        # replicates were drawn within those strata; jk1 says they were not.
+        if rw.kind == "jk1" and n_strata > 1:
+            raise MethodError.invalid_choice(
+                where="Sample",
+                param="rep_wgts.kind",
+                got="jk1",
+                allowed=["jkn"],
+                hint=(
+                    f"kind='jk1' is the *unstratified* delete-one-PSU jackknife, but "
+                    f"the units declared on these weights have {n_strata} strata. Use "
+                    f"kind='jkn' (or drop 'kind' and let svy read it off the units); if "
+                    f"the replicates really were drawn without regard to strata, say so "
+                    f"by naming only psu on the weights and leaving stratum unset."
+                ),
+            )
+
         # A declared kind is otherwise an assertion svy has to trust; with the
         # units named it becomes checkable arithmetic.
         expected = implied.get(rw.kind or "")

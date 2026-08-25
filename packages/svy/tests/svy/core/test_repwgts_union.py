@@ -449,3 +449,37 @@ def test_scale_is_visible_in_the_repr():
     assert "scale=0.5" in repr(BootstrapWgts(prefix="b", n_reps=4, scale=0.5))
     assert "(derived)" in repr(JackknifeWgts(prefix="b", n_reps=4, rep_coefs=(0.5,) * 4))
     assert "scale" not in repr(BootstrapWgts(prefix="b", n_reps=4))
+
+
+def test_jk1_against_stratified_units_is_an_error():
+    """The one mismatch the replicate-count check structurally cannot catch:
+    jk1 and jkn both imply one replicate per PSU and differ only in
+    stratification. jk1 there returns (R-1)/R where (n_h-1)/n_h is correct --
+    0.875 against 0.5, SEs overstated by 32%, in silence."""
+    with pytest.raises(MethodError) as exc:
+        _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jk1")
+    assert "jkn" in str(exc.value)
+
+
+def test_jk1_is_fine_when_the_units_name_no_stratum():
+    """Replicates genuinely drawn without regard to strata are said by naming
+    only psu -- that is what makes jk1 a claim rather than a contradiction."""
+    df = _jk_frame([1, 1, 1, 1, 2, 2, 2, 2], 4)
+    s = svy.Sample(
+        df,
+        svy.Design(
+            wgt="w",
+            stratum="stratum",
+            psu="psu",
+            rep_wgts=JackknifeWgts(prefix="jw", n_reps=4, kind="jk1", psu="psu"),
+        ),
+    )
+    assert s._design.rep_wgts.coefficients() == [0.75] * 4
+
+
+def test_jk1_and_an_unspecified_kind_agree_when_nothing_is_declared():
+    """Without units, jk1 asserts what the default already does. It earns its
+    keep as a checkable claim once the units are there, not as a coefficient."""
+    plain = JackknifeWgts(prefix="jw", n_reps=8)
+    asserted = JackknifeWgts(prefix="jw", n_reps=8, kind="jk1")
+    assert plain.coefficients() == asserted.coefficients()

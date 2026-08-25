@@ -227,9 +227,9 @@ def _units_sample(rng, *, rw_stratum="vstrat", rw_psu="psu"):
             stratum="stratum",
             psu="psu",
             wgt="wgt",
-            rep_wgts=JackknifeWgts(
-                prefix="rw", n_reps=8, kind="jk1", stratum=rw_stratum, psu=rw_psu
-            ),
+            # kind left unset on purpose: these are about tracking column
+            # references, and the units say which scheme it is anyway.
+            rep_wgts=JackknifeWgts(prefix="rw", n_reps=8, stratum=rw_stratum, psu=rw_psu),
         ),
     )
 
