@@ -72,7 +72,27 @@ def _rep_wgts_with_renames(rep_wgts: RepWeights, renames: dict[str, str]) -> Rep
     Replicate weight columns are identified by ``prefix`` + replicate number,
     so a rename can only be represented when the trailing number is preserved
     and all renamed columns share one new prefix.  Otherwise raise.
+
+    The recorded units (``stratum``/``psu``) are plain column references and are
+    remapped independently of the prefix: renaming a variance-stratum column
+    does not touch the replicate columns, and the prefix branch below returns
+    early when no replicate column matched.
     """
+    unit_updates: dict[str, str | tuple[str, ...]] = {}
+    for field in ("stratum", "psu"):
+        cur = getattr(rep_wgts, field)
+        if cur is None:
+            continue
+        if isinstance(cur, str):
+            if cur in renames:
+                unit_updates[field] = renames[cur]
+        else:
+            # A multi-column unit is remapped element-wise; a rename touching
+            # only some of its columns still has to move those.
+            mapped = tuple(renames.get(c, c) for c in cur)
+            if mapped != cur:
+                unit_updates[field] = mapped
+
     pattern = re.compile(rf"^{re.escape(rep_wgts.prefix)}(\d+)$", re.IGNORECASE)
     new_prefixes: set[str] = set()
     matched_olds: set[str] = set()
@@ -89,7 +109,7 @@ def _rep_wgts_with_renames(rep_wgts: RepWeights, renames: dict[str, str]) -> Rep
         new_prefixes.add(new[: len(new) - len(digits)])
         matched_olds.add(old)
     if not new_prefixes:
-        return rep_wgts
+        return _struct_replace(rep_wgts, **unit_updates) if unit_updates else rep_wgts
     if len(new_prefixes) > 1:
         raise ValueError(
             "Replicate weight columns must all be renamed with the same prefix; "
@@ -106,7 +126,7 @@ def _rep_wgts_with_renames(rep_wgts: RepWeights, renames: dict[str, str]) -> Rep
             f"(e.g. {not_renamed[:3]}). Rename all replicate columns together "
             "with a common new prefix, keeping the numeric suffixes."
         )
-    return _struct_replace(rep_wgts, prefix=new_prefixes.pop())
+    return _struct_replace(rep_wgts, prefix=new_prefixes.pop(), **unit_updates)
 
 
 def _design_with_renamed_columns(design: Design, renames: dict[str, str]) -> Design:

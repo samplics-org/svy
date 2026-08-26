@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, cast
 
 import polars as pl
 
+from msgspec.structs import replace as _struct_replace
+
 from svy.core.constants import (
     _INTERNAL_CONCAT_SUFFIX,
     SVY_ROW_INDEX,
@@ -177,6 +179,12 @@ def _required_columns(sample: "Sample") -> set[str]:
         add(design.pop_size)
         if design.rep_wgts is not None:
             req.update(design.rep_wgts.columns_from_data(sample._data.columns))
+            # The units the replicates were built from are referenced columns
+            # like any other, so dropping one needs force= and then cleans the
+            # reference. Without this they were droppable in silence, leaving
+            # rep_wgts pointing at a column that no longer exists.
+            add(design.rep_wgts.stratum)
+            add(design.rep_wgts.psu)
 
     for k in ("stratum", "psu", "ssu"):
         cname = internal_design.get(k)
@@ -313,6 +321,31 @@ def _auto_clean_design(target: "Sample") -> None:
         expected = current_design.rep_wgts.columns_from_data(sorted(cols))
         if not all(c in cols for c in expected):
             updated_design = updated_design.update(rep_wgts=None)
+        else:
+            # The recorded units are ordinary column references and are dropped
+            # the same way the design's are. Losing them costs provenance and,
+            # for a declared JKn with no rep_coefs yet, the ability to derive --
+            # which surfaces as the usual warning rather than silently reading a
+            # column that is no longer there.
+            unit_updates: dict[str, str | tuple[str, ...] | None] = {}
+            for field in ("stratum", "psu"):
+                cur = getattr(current_design.rep_wgts, field)
+                if cur is None:
+                    continue
+                if isinstance(cur, str):
+                    if cur not in cols:
+                        unit_updates[field] = None
+                else:
+                    # Keep whatever survives: a multi-column unit that loses one
+                    # member is a coarser unit, not a missing one. Only an empty
+                    # remainder clears the field.
+                    kept = tuple(c for c in cur if c in cols)
+                    if kept != cur:
+                        unit_updates[field] = kept or None
+            if unit_updates:
+                updated_design = updated_design.update(
+                    rep_wgts=_struct_replace(current_design.rep_wgts, **unit_updates)
+                )
 
     internal_design = dict(getattr(target, "_internal_design", {}) or {})
     for k in ("stratum", "psu", "ssu"):

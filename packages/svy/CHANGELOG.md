@@ -10,6 +10,18 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **Replicate weights carry the units they were built from.** `stratum` and `psu` on every variant name the columns the replicates were drawn over — a separate question from `Design.stratum`/`Design.psu`, which describe the analysis design and are what Taylor linearizes over. Producers collapse strata and suppress PSUs for disclosure, publishing a distinct pair (`VARSTRAT`/`VARUNIT` and its many spellings) alongside — or instead of — the design variables:
+
+  ```python
+  JackknifeWgts(prefix="rw", n_reps=8, kind="jkn", stratum="VARSTRAT", psu="VARUNIT")
+  ```
+
+  They appear in `repr` and `print(design)`, are validated as columns at `Sample` construction, and are rewritten by `wrangling.rename_columns` and protected by `remove_columns` exactly like design columns. Generators record whatever they used, so a generated design states its provenance rather than leaving a later reader to assume it matches the Design. The Poisson bootstrap records neither, drawing independent per-unit factors and having no units by construction.
+
+  They take the same shapes `Design`'s do — `str` for the single collapsed identifier producers usually ship, or a tuple when the unit is several columns together — and the same spellings mean the same thing on both objects, including `("region",)` staying a one-tuple rather than being unwrapped. Multi-column units are grouped on directly rather than through the internal concatenated column `Design` builds, so nothing implementation-specific reaches anything reading provenance back.
+
+- **`create_brr_wgts` and `create_jk_wgts(paired=True)` pair PSUs into variance strata themselves.** `stratum_name` names the created column (the house `wgt_name` convention), `order_by` pairs adjacent PSUs in that order — what a systematically-sampled frame wants — and `shuffle` pairs at random. `stratum`/`psu` on all four generators build from columns the Design does not name, without mutating it.
+
 - **Poisson bootstrap replicate weights ([#131](https://github.com/samplics-org/svy/pull/131)).** `sample.weighting.create_bs_wgts(kind="poisson")` generates Beaumont–Patak generalized bootstrap weights, which need only a weight column. The default `kind="rao-wu"` is the stratified Rao–Wu–Yue rescaling bootstrap and still requires `psu` on the design — the guard is deliberately not shared, since the Poisson bootstrap exists precisely for files that have no PSU. Both kinds use the same `1/R` per-replicate coefficient; they differ in how the replicates are drawn, not in how the variance is scaled.
 
   Beaumont, J.-F. and Patak, Z. (2012). On the generalized bootstrap for sample surveys with special attention to Poisson sampling. *International Statistical Review*, 80(1), 127–148.
@@ -26,17 +38,83 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
   The default is `None` — unspecified. `None` and `"jk1"` produce the same number but are different statements, and svy claims only what it knows or was told. A producer withholding design variables is not evidence that the weights are unstratified.
 
-- **JKn coefficients are derived when the design allows it.** `(n_h−1)/n_h` is the only standard coefficient that is not closed-form in `n_reps`, so it used to have to be supplied by hand. Given `kind="jkn"` plus `stratum` and `psu`, svy now works it out at `Sample` construction. Limited to balanced designs — every stratum the same `n_h` — where the coefficient is uniform and the replicate-to-stratum mapping does not matter; that covers the paired-PSU designs that dominate real JKn files. Unbalanced still needs `scale`.
+- **`Sample.rep_coefs` shows which coefficient was applied to which replicate**, keyed by the actual column name:
+
+  ```python
+  >>> sample.rep_coefs
+  {'jk1': 0.6667, 'jk2': 0.6667, 'jk3': 0.6667, 'jk4': 0.5, ...}
+  ```
+
+  `coefficients()` on the variant remains the machine path — a list of `n_reps` floats in replicate order, the shape the kernel takes — but a bare list makes the assignment something a reader has to trust rather than check, and for an unbalanced JKn the assignment *is* the answer: the same coefficients against a different order give a different standard error.
+
+  It lives on `Sample` rather than on `rep_wgts` because only the frame resolves the column names: a design declaring `prefix="REP"` against a file shipping `REP001..REP200` knows the replicate count but not the padding, so the struct alone would key this on `REP1` and be confidently wrong. Empty when the design carries no replicate weights, and it raises whatever `coefficients()` raises rather than reporting a number it does not have.
+
+  `rep_wgts.coef_source` names the provenance alongside it — `"scale"` (the user asserted them), `"derived"` (svy computed them and cannot redo it) or `"default"` (the method's standard value). A varying vector also prints its distinct values with counts now, `0.667 x3, 0.5 x4`, rather than first-and-last — which two numbers land at the ends is an artefact of the producer's replicate order, while the counts are the design.
+
+- **`kind` is optional once the units are named.** `jk1`/`jkn`/`jk2` is expert vocabulary; naming the columns the replicates were built from is not, and requiring both asks for the same fact twice in the harder of the two languages. With `stratum` and `psu` declared, svy reads the scheme off the counts — one replicate per PSU across several strata is JKn, per PSU in a single stratum is JK1, one per stratum is JK2 — and records it, at INFO level so the inference is auditable:
+
+  ```python
+  JackknifeWgts(prefix="jk", n_reps=8, stratum=("region", "urban"), psu="psu")
+  # -> kind='jkn', rep_coefs=0.5 (derived)
+  ```
+
+  This used to refuse, on the grounds that deriving a kind would turn "the producer withheld the design" into "these weights are unstratified". That was right while the counts came from `Design.stratum`, which says nothing about how the replicates were drawn; the units declared on the weights are exactly that statement.
+
+  A `kind` that the units *contradict* is now an error rather than a warning, but only when `n_reps` lands exactly on another scheme's count — then the label is simply wrong and svy can say which it should be, and warning would ship a coefficient wrong by a known factor. Declaring `jk2` against 8 replicates and 8 PSUs raises and names `jk1`/`jkn`. A count matching no scheme still only warns: a frame subset to fewer PSUs than the weights were built from is not a mislabelling.
+
+- **JKn coefficients are derived when the declared units allow it.** `(n_h−1)/n_h` is the only standard coefficient that is not closed-form in `n_reps`, so it used to have to be supplied by hand. Given `kind="jkn"` plus the `stratum` and `psu` *the replicate weights name* (not the Design's — see above), svy now works it out at `Sample` construction. A `kind="jkn"` with no units named, or with nothing derivable from them, warns at construction and raises from `coefficients()`. Balanced designs — every stratum the same `n_h` — take a fast path where the coefficient is uniform and the replicate-to-stratum mapping never has to be found.
+
+  Unbalanced strata are not a different method, just JKn with a coefficient that varies by stratum, so the only thing missing is that mapping — and a delete-one-PSU replicate states it by zeroing the PSU it drops. svy now reads it back: one aggregation to PSU level, and the recovered vector is identical to what `create_jk_wgts` would have assigned, to the last bit. Only replicate → *stratum* is needed, since the coefficient is constant within a stratum.
+
+  It applies only where the delete-one signature holds — every replicate column zeroing exactly one otherwise-nonzero PSU, no PSU dropped twice. A bootstrap, a BRR or a Fay-style variant fails that and falls back to refusing, rather than being handed a confidently wrong vector. `scale` remains the answer for files that do not zero.
 
   A declared kind is also checked rather than merely trusted: `jk1` and `jkn` imply one replicate per PSU, `jk2` one per stratum. Mismatches warn rather than raise, since a legitimately subset frame has fewer PSUs than the weight columns were built from. An unspecified kind on a stratified design warns too — svy has evidence the JK1 global is probably wrong, but no claim to act on.
 
 ### Fixed
 
+- **`kind="jk1"` against stratified units silently returned the unstratified coefficient.** `jk1` and `jkn` imply the same replicate count — one per PSU — and differ only in stratification, which the replicate-count check never looks at. So the one mismatch it structurally could not catch was the expensive one: `jk1` on units declaring several strata used `(R−1)/R` where `(n_h−1)/n_h` is correct, overstating standard errors by `sqrt(R/n_h)` — 32% on a 4-strata × 2-PSU design — with no warning. Naming a `stratum` unit says the replicates were drawn within those strata and `jk1` says they were not, so it now raises and names `jkn`. Replicates genuinely drawn without regard to strata are declared by naming only `psu`.
+
+- **A declared JKn with a psu but no stratum silently produced the JK1 coefficient.** `(n_h−1)/n_h` is a per-stratum quantity; with no stratum named, the PSU count fell back to a single group holding every PSU and the derivation returned `(R−1)/R` — the JK1 global — under a JKn label. On 4 strata × 2 PSUs that is 0.875 where 0.5 is correct, an 8% error in the standard error, with no warning. It now refuses, the same way an unmet `kind="jkn"` claim already did.
+
+- **Building BRR or JK2 weights no longer destroys the design strata.** `create_variance_strata` ended by overwriting `Design.stratum` with the collapsed variance strata — its only way of handing the result to the generator that ran next. Every later Taylor estimate then silently linearized over pseudo-strata: on a 6-strata × 4-PSU frame the SE moved from 0.858 to 0.641 and df from 18 to 12, with no warning and the original column still sitting in the frame. Pairing is now internal and its output is recorded on the replicate weights, so `Design.stratum` is Taylor's alone and is left exactly as declared.
+
+- **`create_jk_wgts(paired=True)` no longer undercounts replicates.** Called on strata with more than two PSUs — i.e. without the old pairing pre-step — it produced one replicate per *original* stratum instead of one per variance stratum, in silence: 6 where 12 were correct, understating the variance. It pairs first now. **This changes published standard errors** for anyone who called it without the pre-step.
+
+- **`create_brr_wgts` no longer requires a stratum.** It raised `BRR requires 2 PSUs per stratum` on any unpaired design, and `stratum=None` was rejected outright with a hint to go and build variance strata by hand. Both cases now pair and build.
+
+- **A row-level `order_by` column paired PSUs more than once.** Uniquing on the whole row left the same PSU present several times, so it was assigned to several variance strata and some ended up holding a single PSU — which the BRR kernel then rejected. First occurrence in the frame now wins per PSU.
+
+- **Renaming or dropping a unit column follows through to the replicate weights.** `_rep_wgts_with_renames` only remapped `prefix` and returned early when no replicate column matched the rename — the common case, since renaming a variance-stratum column touches no replicate column. The units were also absent from the protected set, so dropping one was neither blocked nor cleaned. They are now rewritten on rename, need `force=` to drop, and are cleared rather than left dangling when force-dropped.
+
+- **`method=None` no longer auto-selects replication, and Taylor on a replication-only design says so.** The default resolved to replication whenever the design carried replicate weights and had no `stratum`/`psu`, and to Taylor otherwise. That made the *estimator* depend on inputs the estimator never reads — replication consumes the replicate columns and `coefficients()`, nothing else — so declaring a single design column silently moved the standard error:
+
+  ```
+  mean("y"), identical replicate weights throughout
+    wgt only             -> Jackknife  se=1.252718
+    wgt + stratum        -> Taylor     se=1.171192
+    wgt + psu            -> Taylor     se=1.002973
+    wgt + stratum + psu  -> Taylor     se=1.063071
+  ```
+
+  It was worst for JKn, where `stratum` and `psu` are exactly what svy needs to derive `(n_h−1)/n_h`: the one action that makes JKn usable was the action that switched JKn off. `None` is now the unstated Taylor default the signature `Literal["taylor", "replication"] | None` always implied, not a third mode. **Replication is opt-in: pass `method="replication"`.**
+
+  Falling through to Taylor alone would have reinstated the worse half of the original bug, which is why the auto-detection existed. Without `stratum` or `psu` every row is its own PSU in one stratum, so linearization is SRS-like — on a 200-row file with 8 replicates, `df=199` against a true 7, silently. That case now emits `TAYLOR_WITHOUT_DESIGN` and proceeds, for the explicit `method="taylor"` spelling too: the hazard is in the number, not in who asked for it.
+
+- **A JKn design that cannot be derived warns at construction.** `kind="jkn"` with no `psu` to count from, or with unbalanced strata, built a `Sample` in silence and failed only when an estimate was requested — at a call site far from the cause. Both dead ends now emit `JACKKNIFE_COEFS_UNAVAILABLE` naming which one it hit. The `MethodError` from `coefficients()` stays lazy on purpose: such a `Sample` is still perfectly usable for Taylor, for wrangling and for `where=`, so raising at construction would block work that never touches replication. What was missing was the early signal, not the error.
+
+- **The JKn error names both remedies, not one.** It named only `scale=`, sending anyone whose file *does* carry `psu` off to hand-compute coefficients svy would have derived for them. It now offers declaring `stratum`/`psu` first, and `scale=` for the unbalanced case where that cannot help.
+
+- **`create_bs_wgts(kind="poisson")` fails cleanly against an older `svy-rs`.** `rust_create_poisson_bs_wgts` was missing from the `ImportError` fallback, so the name was never bound and the guard raised `NameError` instead of the intended message.
+
+- **`MethodError.not_applicable` no longer doubles the sentence-ending period.** The template appended `.` to a `reason` that ~24 call sites already ended with one, producing `…(got psu=None)..`.
+
+- **`RepWeights.df` is annotated `float`, matching what it has always stored.** It was declared `int | None` while the kernels hand back an f64, so a repr read `df=499.0` against an `int` annotation. Widened rather than coerced: `df` feeds a t-quantile, which is defined for fractional df, and Satterthwaite-style effective df is fractional by construction. An `int` is still accepted and stored unchanged.
+
 - **A user-supplied replicate coefficient was silently discarded for bootstrap, BRR and SDR ([#7](https://github.com/samplics-org/svy/issues/7)).** Before [#131](https://github.com/samplics-org/svy/pull/131) the override was applied at one site in the kernel — `rscales.unwrap_or_else(|| replicate_coefficients(method, n_reps, fay_coef))` — and was therefore method-agnostic by construction. #131 moved coefficient computation into Python and scattered it across four per-variant `coefficients()` methods, which gave every method its own chance to forget. Three of four forgot: the field was accepted, stored, length-checked, and then dropped, so a bootstrap declared with a producer's published scale silently returned the `1/R` answer.
 
   `coefficients()` is now a template method on the shared base. The override is resolved there, at the single point of use, and the variants implement only their own default — they never see it, so a new variant cannot regress this again. **No published standard error changes:** #131 landed after `svy-v0.24.1` and was never released.
 
-- **Estimation and regression could scale the same design differently.** `GLM._rep_coefficients` re-derived the coefficients by substring-matching a stringified method tag (`if "boot" in m`), and honoured the user's override for every method while the estimation path did not. One `Design` therefore produced differently scaled standard errors from `sample.regression.glm(...)` and `sample.estimation.mean(...)`. It is gone; both call `rep_wgts.coefficients()`.
+- **Estimation and regression could scale the same design differently.** `GLM._rep_coefs` re-derived the coefficients by substring-matching a stringified method tag (`if "boot" in m`), and honoured the user's override for every method while the estimation path did not. One `Design` therefore produced differently scaled standard errors from `sample.regression.glm(...)` and `sample.estimation.mean(...)`. It is gone; both call `rep_wgts.coefficients()`.
 
 - **A declared paired jackknife used the wrong coefficient.** JK2 has one delete-one replicate per stratum and a coefficient of `1.0`; the global `(R−1)/R` understates the variance by exactly that factor. Declaring `kind="jk2"` now gets `1.0`. Relatedly, `kind="jkn"` with nothing to compute the per-stratum coefficients from — no `scale`, no design variables — refuses rather than substituting the JK1 global, which on a 4-strata × 2-PSU design overstates standard errors by `sqrt(7/4)`, 32%. An unmet claim fails; an absent one (`kind=None`) still falls back to `(R−1)/R` exactly as before.
 
@@ -72,6 +150,15 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **`import_labels_from_svyio_meta` now requires the frame** the metadata describes as its third argument. Resolving a measurement type depends on how well the value labels cover the observed values, which cannot be judged without the data. It is required rather than optional on purpose: an omitted frame would silently fall back to the very behavior this release fixes. The function is internal (`svy.engine.io`, not exported from the top-level `svy` namespace) and had a single production call site.
 
 ### Removed
+
+- **BREAKING: `Sample.weighting.create_variance_strata`.** Undocumented — no mention in any changelog, README or guide — never called by svy itself, and reachable in practice only through a hint inside `create_brr_wgts`'s error telling you to call it. It was a mandatory pre-step svy made you perform by hand and then punished by clobbering `Design.stratum`. The pairing algorithm survives as a private helper with its edge cases intact (odd PSU counts, tuple strata, ordering, reproducible shuffling); its `order_by`, `shuffle` and `into` controls moved onto `create_brr_wgts` and `create_jk_wgts`, where they are discoverable. `into=` is now `stratum_name=`.
+
+  ```python
+  # before                                    # after
+  s = s.weighting.create_variance_strata(     s = s.weighting.create_jk_wgts(
+      method="jk2")                               paired=True)
+  s = s.weighting.create_jk_wgts(paired=True)
+  ```
 
 - **`svy.core.design.make_rep_weights`.** A strictly weaker duplicate of `svy.RepWeights` — same job, but only four of the parameters, so it silently dropped `scale`, `rep_coefs` and `kind`. It was never exported from `svy` or `svy.core`, so it was reachable only as `from svy.core.design import make_rep_weights`, and had no callers in the package. Use `svy.RepWeights(method=..., prefix=..., n_reps=...)`, which takes the same three positionally.
 

@@ -121,11 +121,28 @@ def normalize_jackknife_kind(kind: str) -> JackknifeKind:
 
 
 def _fmt_coefs(values: Sequence[float]) -> str:
-    """A uniform coefficient prints as the scalar it is."""
-    uniq = set(values)
-    if len(uniq) == 1:
-        return repr(next(iter(uniq)))
-    return f"({values[0]!r}, ... , {values[-1]!r}) x{len(values)}"
+    """A uniform coefficient prints as the scalar it is.
+
+    A varying one prints its distinct values with counts. Showing first and
+    last instead said nothing useful: which two numbers happened to land at the
+    ends is an artefact of the producer's replicate order, while "three
+    replicates at 2/3 and four at 1/2" is the design.
+    """
+    counts = _coef_counts(values)
+    if len(counts) == 1:
+        return repr(next(iter(counts)))
+    shown = ", ".join(f"{v!r} x{n}" for v, n in list(counts.items())[:4])
+    more = "" if len(counts) <= 4 else f", ... ({len(counts)} distinct)"
+    return f"{shown}{more}"
+
+
+def _coef_counts(values: Sequence[float]) -> dict[float, int]:
+    """Distinct coefficients and how many replicates carry each, in first-seen
+    order -- which for a jackknife is stratum order."""
+    counts: dict[float, int] = {}
+    for v in values:
+        counts[v] = counts.get(v, 0) + 1
+    return counts
 
 
 def _normalize_scale(value: float | Sequence[float], n_reps: int, param: str) -> tuple[float, ...]:
@@ -149,6 +166,55 @@ def _normalize_scale(value: float | Sequence[float], n_reps: int, param: str) ->
     return values
 
 
+def _normalize_unit(
+    value: str | Sequence[str] | None, param: str
+) -> str | tuple[str, ...] | None:
+    """Validate a unit reference, storing a multi-column one as a tuple.
+
+    Mirrors ``Design``'s own normalization so that the same spellings mean the
+    same thing on both objects: a bare name stays a string, a sequence becomes a
+    tuple, and a single-element sequence stays a one-tuple rather than being
+    unwrapped -- ``("region",)`` and ``"region"`` resolve to the same column, and
+    collapsing one into the other would make a round trip lossy.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        if not value.strip():
+            raise ValueError(f"RepWeights {param!r} must not be an empty column name.")
+        return value
+    if isinstance(value, (bytes, bytearray)) or not isinstance(value, Sequence):
+        raise TypeError(
+            f"RepWeights {param!r} must be str | Sequence[str] | None, "
+            f"got {type(value).__name__}."
+        )
+    items = tuple(value)
+    if not items:
+        raise ValueError(f"RepWeights {param!r} sequence must not be empty.")
+    for i, item in enumerate(items):
+        if not isinstance(item, str):
+            raise TypeError(
+                f"RepWeights {param!r} items must be str; "
+                f"got {type(item).__name__} at index {i}."
+            )
+        if not item.strip():
+            raise ValueError(f"RepWeights {param!r} items must not be empty.")
+    return items
+
+
+def unit_columns(value: str | tuple[str, ...] | None) -> list[str]:
+    """The column names a unit reference resolves to; empty when unset.
+
+    Multi-column units are grouped on directly rather than through the internal
+    concatenated column ``Design`` builds: polars groups by several keys just as
+    well, and the concat name is an implementation detail that would leak into
+    anything reading provenance back.
+    """
+    if value is None:
+        return []
+    return [value] if isinstance(value, str) else list(value)
+
+
 class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     """Fields every replicate design has, whatever produced it.
 
@@ -160,7 +226,13 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     n_reps: int
     # Design df for the t-quantile in CIs. None = n_reps - 1, a property of the
     # weight set and therefore the same for every domain.
-    df: int | None = None
+    #
+    # Deliberately float, not int: it feeds a t-quantile, which is defined for
+    # fractional df, and Satterthwaite-style effective df is fractional by
+    # construction. The kernels also hand it back as f64. An int is accepted and
+    # stored unchanged -- widening the annotation is what makes the stored value
+    # honest, rather than coercing a legitimate fraction away.
+    df: float | None = None
     padding: int | None = None  # None = auto-detect, 0 = none, >0 = zero-pad width
     # Per-replicate variance coefficients, split by who supplied them -- the one
     # axis that is verifiable. "Is this a tweak or the standard value?" is not:
@@ -178,12 +250,37 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     # no frame, and the stratum column may be gone by estimation time. Filled by
     # create_jk_wgts; users want ``scale``.
     rep_coefs: tuple[float, ...] | None = None
+    # The units the replicates were built from -- provenance, and for JKn the
+    # only thing (n_h-1)/n_h can be counted from.
+    #
+    # Deliberately NOT the Design's stratum/psu. Those describe the analysis
+    # design and are what Taylor linearizes over; these describe how the
+    # replicates were drawn. They coincide often enough to hide the difference,
+    # and public files are exactly where they do not: producers collapse strata
+    # and suppress PSUs for disclosure, publishing a separate pair (VARSTRAT /
+    # VARUNIT and its many spellings) alongside -- or instead of -- the design
+    # variables. Borrowing the Design's would count the wrong n_h and return a
+    # plausible wrong coefficient, so a declared JKn must name these and there
+    # is no fallback. Generated weights fill them in from whatever they used.
+    #
+    # Same shape as Design's: ``str`` for the single collapsed identifier
+    # producers usually ship, or a tuple when the unit is several columns
+    # together. A str-only field could not express a tuple-stratum design at
+    # all -- it recorded None, so those weights could be generated but never
+    # re-declared by hand, and a JKn among them fell through to the branch that
+    # has no stratum to count.
+    stratum: str | tuple[str, ...] | None = None
+    psu: str | tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if not self.prefix or not self.prefix.strip():
             raise ValueError("RepWeights 'prefix' cannot be empty or whitespace.")
         if self.n_reps < 2:
             raise ValueError(f"n_reps must be >= 2. Got {self.n_reps}.")
+        for _unit in ("stratum", "psu"):
+            msgspec.structs.force_setattr(
+                self, _unit, _normalize_unit(getattr(self, _unit), _unit)
+            )
         if self.df is not None and self.df <= 0:
             raise ValueError(f"df must be > 0. Got {self.df}.")
         if self.padding is not None and self.padding < 0:
@@ -275,6 +372,17 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
             return list(self.rep_coefs)  # svy computed them and cannot redo it
         return self._default_coefficients()
 
+    @property
+    def coef_source(self) -> str:
+        """Where the applied coefficients came from: ``"scale"`` (the user
+        asserted them), ``"derived"`` (svy computed them and cannot redo it) or
+        ``"default"`` (the method's standard value, closed-form in n_reps)."""
+        if self.scale is not None:
+            return "scale"
+        if self.rep_coefs is not None:
+            return "derived"
+        return "default"
+
     def _default_coefficients(self) -> list[float]:
         """The method's standard coefficients, closed-form in ``n_reps``.
 
@@ -288,6 +396,17 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     def _variant_parts(self) -> list[str]:
         """Variant-specific fragments for repr. Overridden where there are any."""
         return []
+
+    def _unit_parts(self) -> list[str]:
+        """The units the replicates were built from, when they are recorded.
+
+        Shown for the same reason ``scale`` is: which columns produced a set of
+        replicates is what a reviewer needs to tell a design-strata JKn from a
+        collapsed-variance-strata one, and the two give different coefficients.
+        """
+        return [
+            f"{n}={v!r}" for n, v in (("stratum", self.stratum), ("psu", self.psu)) if v
+        ]
 
     def _coef_parts(self) -> list[str]:
         """Where the coefficients came from, when it is not the method default.
@@ -307,6 +426,7 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
         if self.df is not None:
             parts.append(f"df={self.df}")
         parts.extend(self._variant_parts())
+        parts.extend(self._unit_parts())
         parts.extend(self._coef_parts())
         if self.padding is not None:
             parts.append(f"padding={self.padding}")
@@ -322,6 +442,10 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
             f"DF       : {self.df if self.df is not None else 'auto'}",
         ]
         lines.extend(self._plain_variant_lines())
+        if self.stratum is not None:
+            lines.append(f"Stratum  : {self.stratum}")
+        if self.psu is not None:
+            lines.append(f"PSU      : {self.psu}")
         if self.scale is not None:
             lines.append(f"Scale    : {_fmt_coefs(self.scale)}")
         elif self.rep_coefs is not None:
@@ -386,10 +510,21 @@ class JackknifeWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="Jackknife", ta
                 method="jackknife",
                 reason=(
                     "kind='jkn' needs the per-stratum (n_h-1)/n_h coefficients, "
-                    "which cannot be derived from replicate weights alone. Pass "
-                    "'scale' with the coefficients your file documents. Falling "
+                    "which cannot be derived from replicate weights alone. Falling "
                     "back to the JK1 global (R-1)/R would overstate the standard "
                     "errors"
+                ),
+                # Two fixes, and `scale` used to be the only one named -- which
+                # sent anyone whose file *does* carry psu off to hand-compute
+                # coefficients svy would have worked out for them.
+                hint=(
+                    "Either name the units these replicates were built from -- "
+                    "JackknifeWgts(..., stratum='VARSTRAT', psu='VARUNIT') -- and svy "
+                    "derives (n_h-1)/n_h at Sample construction when every stratum has "
+                    "the same number of PSUs; or pass scale= with the per-replicate "
+                    "coefficients your file documents, which is what unbalanced strata "
+                    "need. The Design's stratum/psu are deliberately not used: they "
+                    "describe the analysis design, not how the replicates were drawn."
                 ),
             )
         # kind=None (unspecified) and "jk1" alike: the unstratified global.

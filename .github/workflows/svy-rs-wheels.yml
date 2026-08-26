@@ -211,8 +211,9 @@ jobs:
           sys.exit(1 if bad else 0)
           PY
 
-      - name: Upload to PyPI
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+      # `maturin upload` is deprecated upstream (PyO3/maturin#2334); this is the
+      # same trusted-publishing action svy-wheels.yml uses, pinned by SHA.
+      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
-          command: upload
-          args: --skip-existing dist/*
+          packages-dir: dist
+          skip-existing: true

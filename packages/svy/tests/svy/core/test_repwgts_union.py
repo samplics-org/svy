@@ -324,9 +324,29 @@ def _jk_frame(strata, n_reps=4):
 
 
 def _jk_sample(strata, *, n_reps=4, **rw_kwargs):
+    """A jackknife sample whose replicate weights name their own units.
+
+    The Design carries the same columns, but the derivation deliberately does
+    not read them -- pass ``stratum=None, psu=None`` to exercise that.
+    """
     df = _jk_frame(strata, n_reps)
+    rw_kwargs.setdefault("stratum", "stratum")
+    rw_kwargs.setdefault("psu", "psu")
     rw = JackknifeWgts(prefix="jw", n_reps=n_reps, **rw_kwargs)
     return svy.Sample(df, svy.Design(wgt="w", stratum="stratum", psu="psu", rep_wgts=rw))
+
+
+def test_design_units_alone_do_not_drive_the_derivation():
+    """The Design's stratum/psu describe the analysis design, not how the
+    replicates were drawn. A producer who collapsed strata for variance
+    estimation would have them differ, so borrowing would count the wrong n_h
+    and return a plausible wrong coefficient."""
+    s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jkn", stratum=None, psu=None)
+    assert s._design.stratum == "stratum" and s._design.psu == "psu"
+    assert s._design.rep_wgts.rep_coefs is None  # not derived from the Design
+    assert WarnCode.JACKKNIFE_COEFS_UNAVAILABLE in {w.code for w in s.warnings.list()}
+    with pytest.raises(MethodError):
+        s._design.rep_wgts.coefficients()
 
 
 def test_declared_jkn_derives_its_coefficients_from_a_balanced_design():
@@ -349,10 +369,22 @@ def test_user_scale_is_never_overwritten_by_derivation():
     assert s._design.rep_wgts.coefficients() == [0.9] * 4
 
 
-def test_unspecified_kind_on_a_stratified_design_warns_but_does_not_guess():
+def test_unspecified_kind_is_read_off_the_declared_units():
+    """jk1/jkn/jk2 is expert vocabulary; naming the columns the replicates were
+    built from is not. With the units declared, one replicate per PSU across
+    several strata *is* JKn -- 2 strata x 2 PSUs gives (n_h-1)/n_h = 0.5, not
+    the JK1 global 0.75 this used to fall back to."""
     s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4)
-    assert s._design.rep_wgts.kind is None  # absence of a claim is not a claim
-    assert s._design.rep_wgts.coefficients() == [0.75] * 4  # JK1 global, unchanged
+    assert s._design.rep_wgts.kind == "jkn"
+    assert s._design.rep_wgts.coefficients() == [0.5] * 4
+
+
+def test_an_unspecifiable_kind_still_falls_back_and_warns():
+    """n_reps matching neither the PSU nor the stratum count says nothing about
+    which scheme these are, so there is nothing to read off."""
+    s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=3)
+    assert s._design.rep_wgts.kind is None
+    assert s._design.rep_wgts.coefficients() == pytest.approx([2 / 3] * 3)
     codes = {w.code for w in s.warnings.list()}
     assert WarnCode.JACKKNIFE_KIND_UNSPECIFIED in codes
 
@@ -363,9 +395,20 @@ def test_unspecified_kind_on_an_unstratified_design_is_silent():
     assert WarnCode.JACKKNIFE_KIND_UNSPECIFIED not in codes
 
 
-def test_a_kind_that_disagrees_with_the_design_warns():
-    """jk2 implies one replicate per stratum; here there are 2 strata, not 4."""
-    s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jk2")
+def test_a_kind_contradicted_by_the_units_is_an_error():
+    """jk2 implies one replicate per stratum -- 2 here, not 4. n_reps lands
+    exactly on the PSU count, so the label is simply wrong and svy can say which
+    it should be. Warning and carrying on would ship a coefficient wrong by a
+    known factor."""
+    with pytest.raises(MethodError) as exc:
+        _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jk2")
+    assert "jkn" in str(exc.value)
+
+
+def test_a_kind_that_matches_no_scheme_only_warns():
+    """A frame subset to fewer PSUs than the weights were built from is not a
+    mislabelling, and there is no alternative kind to point at."""
+    s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=3, kind="jkn")
     codes = {w.code for w in s.warnings.list()}
     assert WarnCode.JACKKNIFE_KIND_UNSPECIFIED in codes
 
@@ -406,3 +449,37 @@ def test_scale_is_visible_in_the_repr():
     assert "scale=0.5" in repr(BootstrapWgts(prefix="b", n_reps=4, scale=0.5))
     assert "(derived)" in repr(JackknifeWgts(prefix="b", n_reps=4, rep_coefs=(0.5,) * 4))
     assert "scale" not in repr(BootstrapWgts(prefix="b", n_reps=4))
+
+
+def test_jk1_against_stratified_units_is_an_error():
+    """The one mismatch the replicate-count check structurally cannot catch:
+    jk1 and jkn both imply one replicate per PSU and differ only in
+    stratification. jk1 there returns (R-1)/R where (n_h-1)/n_h is correct --
+    0.875 against 0.5, SEs overstated by 32%, in silence."""
+    with pytest.raises(MethodError) as exc:
+        _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jk1")
+    assert "jkn" in str(exc.value)
+
+
+def test_jk1_is_fine_when_the_units_name_no_stratum():
+    """Replicates genuinely drawn without regard to strata are said by naming
+    only psu -- that is what makes jk1 a claim rather than a contradiction."""
+    df = _jk_frame([1, 1, 1, 1, 2, 2, 2, 2], 4)
+    s = svy.Sample(
+        df,
+        svy.Design(
+            wgt="w",
+            stratum="stratum",
+            psu="psu",
+            rep_wgts=JackknifeWgts(prefix="jw", n_reps=4, kind="jk1", psu="psu"),
+        ),
+    )
+    assert s._design.rep_wgts.coefficients() == [0.75] * 4
+
+
+def test_jk1_and_an_unspecified_kind_agree_when_nothing_is_declared():
+    """Without units, jk1 asserts what the default already does. It earns its
+    keep as a checkable claim once the units are there, not as a coefficient."""
+    plain = JackknifeWgts(prefix="jw", n_reps=8)
+    asserted = JackknifeWgts(prefix="jw", n_reps=8, kind="jk1")
+    assert plain.coefficients() == asserted.coefficients()

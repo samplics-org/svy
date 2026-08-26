@@ -6,6 +6,35 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+## [0.15.0] — 2026-08-26
+
+### Added
+
+- **`create_poisson_bootstrap_wgts`** ([#131](https://github.com/samplics-org/svy/pull/131)). The Beaumont–Patak generalized bootstrap kernel, backing `svy`'s `create_bs_wgts(kind="poisson")`. Takes a weight vector, `n_reps` and an optional `seed`, and returns the replicate matrix together with its per-replicate coefficient. It needs no stratum or PSU: the draws are independent per unit, which is the point — it exists for public-use files where those identifiers are suppressed.
+
+  The kernel builds one flat column-major buffer and calibrates through a `k x B` scratch table, so peak memory is the single output allocation rather than the three matrices the obvious NumPy or polars route holds. 113,603 x 1,000 runs in 0.066 s at 1.06 GiB peak, against 1.70 s and 2.88 GiB for the naive path.
+
+  Weights below 1 raise rather than producing `NaN` from `sqrt((w-1)/w)`.
+
+- **Unit tests for the coefficient rules** in `estimation/replication.rs`: that the variance is independent of the method label, that non-uniform coefficients are honoured, that bootstrap gives `1/B` and jackknife `(B-1)/B`, that BRR collapses to `1/B` at `fay_coef = 0`, and that the Fay coefficient affects nothing but BRR.
+
+### Changed
+
+- **BREAKING: the replication estimation entry points take `rep_coefs` instead of `method`, `fay_coef` and `rscales`** ([#131](https://github.com/samplics-org/svy/pull/131)). Every one of `replicate_mean`, `replicate_total`, `replicate_assoc`, `replicate_ratio`, `replicate_prop`, `replicate_quantile` and `replicate_median` changed signature:
+
+  ```
+  before  (..., rep_weight_cols, method, fay_coef=0.0, rscales=None, center="rep_mean", ...)
+  after   (..., rep_weight_cols, rep_coefs, center="rep_mean", ...)
+  ```
+
+  Three parameters collapse into one required vector. The kernel no longer derives coefficients from a method label — it consumes the coefficients it is given, so a scheme whose scale differs needs no change here. Deriving them is now the caller's job, which is where the design information lives. `RepMethod` and `replicate_coefficients` remain in the crate for the weighting side.
+
+  This is why `svy` must pin `svy-rs>=0.15.0`: a 0.14.0 extension does not have the new signatures, and the mismatch surfaces as a bare failure rather than an import error.
+
+### Removed
+
+- **`parse_rep_method`**, the method-label parser behind the old signatures, and the `domain` parameter on the Rust entry point together with the now-unused `_domain_codes` helper.
+
 ## [0.14.0] — 2026-08-10
 
 ### Added
@@ -127,7 +156,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 Baseline for this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.14.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.15.0...HEAD
+[0.15.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.15.0
 [0.14.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.14.0
 [0.13.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.13.0
 [0.12.1]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.12.1

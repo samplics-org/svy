@@ -795,8 +795,11 @@ def test_replicate_assoc_matches_r_jk1(assoc_df, kind, expected_est):
         for r in range(8)
     }
     df = assoc_df.with_columns([pl.Series(k, v) for k, v in reps.items()])
+    # The kernel takes coefficients, not a method label: JK1 is (R-1)/R per replicate.
+    n_reps = len(reps)
+    jk1_coefs = [(n_reps - 1) / n_reps] * n_reps
     result = ps.replicate_assoc(
-        df, ["y"], ["x"], kind, "w", list(reps), "Jackknife"
+        df, ["y"], ["x"], kind, "w", list(reps), jk1_coefs
     )
     assert result["est"][0] == pytest.approx(expected_est, rel=1e-10)
     if kind == "cov":

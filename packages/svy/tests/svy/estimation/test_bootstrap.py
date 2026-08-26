@@ -187,13 +187,36 @@ class TestBootstrapTotal:
 
 
 class TestBootstrapMethodResolution:
-    def test_default_autodetects_replication_only_design(self, boot_sample):
-        """boot_sample has weight + replicate weights but no strata/PSU:
-        the documented auto-detection resolves method=None to replication.
-        (Previously None always meant Taylor, silently giving a
-        replication-only design SRS-like variance.)"""
+    def test_default_is_taylor_on_replication_only_design(self, boot_sample):
+        """method=None means Taylor, never replication.
+
+        boot_sample has weight + replicate weights but no strata/PSU. This used
+        to auto-detect to replication, which made the estimator depend on
+        whether a design column happened to be declared -- one column flipped
+        the standard error. Replication is now opt-in only.
+        """
         result = boot_sample.estimation.mean(y="income")
-        assert result.method.upper() == "BOOTSTRAP"
+        assert result.method.upper() == "TAYLOR"
+
+    def test_replication_only_design_warns_that_taylor_is_srs_like(self, boot_sample):
+        """The silent half of the old bug: Taylor here has no design to use.
+
+        Without stratum or psu every row is its own PSU in one stratum, so the
+        variance is SRS-like and df is n-1 rather than n_reps-1. svy no longer
+        switches estimators on the caller's behalf, so it has to say so.
+        """
+        boot_sample.estimation.mean(y="income")
+        titles = [w.title for w in boot_sample.warnings.list(code="TAYLOR_WITHOUT_DESIGN")]
+        assert titles, "expected a TAYLOR_WITHOUT_DESIGN warning"
+
+    def test_no_warning_when_design_has_structure(self, boot_sample):
+        """A design Taylor can actually use must not warn."""
+        import polars as pl
+
+        df = boot_sample.data.with_columns((pl.col("id") % 5).alias("_psu_"))
+        s = Sample(data=df, design=boot_sample.design.update(psu="_psu_"))
+        s.estimation.mean(y="income")
+        assert not s.warnings.list(code="TAYLOR_WITHOUT_DESIGN")
 
     def test_default_is_taylor_when_design_has_structure(self, boot_sample):
         """With strata/PSU present, method=None still defaults to Taylor."""

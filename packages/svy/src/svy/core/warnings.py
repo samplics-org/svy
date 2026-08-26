@@ -37,6 +37,8 @@ class WarnCode(StrEnum):
     CONTROL_MISMATCH = "CONTROL_MISMATCH"
     DESIGN_INCOMPLETE = "DESIGN_INCOMPLETE"
     JACKKNIFE_KIND_UNSPECIFIED = "JACKKNIFE_KIND_UNSPECIFIED"
+    JACKKNIFE_COEFS_UNAVAILABLE = "JACKKNIFE_COEFS_UNAVAILABLE"
+    TAYLOR_WITHOUT_DESIGN = "TAYLOR_WITHOUT_DESIGN"
     # ── Weighting (generic — shared across trim, rake, calibrate, …) ──
     REPLICATE_SKIPPED = "REPLICATE_SKIPPED"  # rep weights present but not adjusted
     DOMAIN_SKIPPED = "DOMAIN_SKIPPED"  # domain skipped (e.g. below min_cell_size)

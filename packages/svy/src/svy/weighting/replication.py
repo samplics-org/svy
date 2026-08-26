@@ -38,6 +38,7 @@ except ImportError:  # pragma: no cover
     rust_brr_hadamard_size = None
     rust_create_brr_wgts = None
     rust_create_jk_wgts = None
+    rust_create_poisson_bs_wgts = None
     rust_create_sdr_wgts = None
 
 from svy.core.repwgts import (
@@ -59,28 +60,57 @@ from svy.weighting._helpers import (
 
 
 if TYPE_CHECKING:
+    from svy.core.design import Design
     from svy.core.sample import Sample
 
 
-def create_variance_strata(
+def _recorded_units(design: "Design") -> tuple[str | None, str | None]:
+    """The user-facing columns to record as the units these replicates used.
+
+    Provenance, so that a generated design says what it was built from rather
+    than leaving a later reader to assume it matches the Design -- which is the
+    very assumption the ``stratum``/``psu`` fields exist to stop.
+
+    Multi-column units are recorded as the tuple of their source columns, the
+    same shape ``Design`` holds -- never the internal concatenated name, which
+    is an implementation detail and would not resolve against a frame rebuilt
+    from source.
+    """
+    return _as_recorded(design.stratum), _as_recorded(design.psu)
+
+
+def _as_recorded(col: str | tuple[str, ...] | None) -> str | tuple[str, ...] | None:
+    """The user-facing reference for a unit, str or tuple alike."""
+    return col if isinstance(col, (str, tuple)) else None
+
+
+def _pair_variance_strata(
     sample: Sample,
     *,
     method: Literal["brr", "jk2"],
+    psu_col: str | tuple[str, ...],
+    stratum_col: str | tuple[str, ...] | None,
+    where: str,
     order_by: str | Sequence[str] | None = None,
     shuffle: bool = False,
     into: str = "svy_var_stratum",
     rstate: int | None = None,
-) -> Sample:
-    where = "Sample.weighting.create_variance_strata"
-    df = sample._data
-    design = sample._design
+) -> str:
+    """Pair PSUs within each stratum into variance strata; return the column.
 
-    if design.psu is None:
-        raise MethodError.not_applicable(
-            where=where,
-            method="create_variance_strata",
-            reason="Design must have PSU defined.",
-        )
+    Writes the paired identifier into ``sample._data`` and returns its name.
+    Deliberately does **not** touch ``Design.stratum``: variance strata are how
+    the replicates were drawn, the design stratum is what Taylor linearizes
+    over, and the public two-step this replaced conflated them -- it overwrote
+    the design, so every later Taylor estimate silently linearized over
+    collapsed pseudo-strata. The caller records the returned name on the
+    replicate weights instead.
+
+    Private because pairing is a step in building BRR/JK2 weights rather than a
+    thing to do on its own: its only output has nowhere to live until there are
+    replicate weights to attach it to.
+    """
+    df = sample._data
 
     _method = method.lower()
     if _method not in ("brr", "jk2"):
@@ -91,8 +121,7 @@ def create_variance_strata(
             allowed=["brr", "jk2"],
         )
 
-    psu_col = design.psu
-    orig_stratum_col = design.stratum
+    orig_stratum_col = stratum_col
 
     # When stratum is a tuple (multi-column), use the internal concatenated
     # column which already exists in the data as a single string column.
@@ -102,7 +131,7 @@ def create_variance_strata(
         if stratum_col_for_grouping is None or stratum_col_for_grouping not in df.columns:
             raise MethodError.not_applicable(
                 where=where,
-                method="create_variance_strata",
+                method="variance strata pairing",
                 reason=(
                     f"Multi-column stratum {orig_stratum_col} requires an internal "
                     f"concatenated column, but it was not found in the data."
@@ -144,7 +173,14 @@ def create_variance_strata(
         select_cols.append(stratum_col_for_grouping)
     select_cols.extend([c for c in order_cols if c not in select_cols])
 
-    psu_df = df.select(select_cols).unique(maintain_order=True)
+    # One row per PSU. `order_by` is a PSU-level attribute, but nothing stops a
+    # caller naming a row-level column; uniquing on the whole row then left the
+    # same PSU present several times, and it would be assigned to several
+    # variance strata, leaving some holding a single PSU. First occurrence in
+    # the frame wins, which is what "order by this column" means once the column
+    # varies within a PSU.
+    _psu_keys = [psu_col] if isinstance(psu_col, str) else list(psu_col)
+    psu_df = df.select(select_cols).unique(subset=_psu_keys, keep="first", maintain_order=True)
 
     sort_cols = []
     if stratum_col_for_grouping:
@@ -249,46 +285,145 @@ def create_variance_strata(
     )
 
     sample._data = df.with_columns(pl.Series(name=into, values=obs_var_strata))
-    sample._design = sample._design.update(stratum=into)
+    return into
 
-    return sample
+
+def _resolve_build_units(
+    sample: Sample,
+    *,
+    where: str,
+    pair_method: Literal["brr", "jk2"] | None,
+    stratum: str | None,
+    psu: str | None,
+    stratum_name: str = "svy_var_stratum",
+    order_by: str | Sequence[str] | None = None,
+    shuffle: bool = False,
+    rstate: int | None = None,
+) -> tuple[str | tuple[str, ...] | None, str | tuple[str, ...] | None]:
+    """Resolve which units to build replicates from, pairing them if required.
+
+    An explicit ``stratum``/``psu`` wins over the Design's. The Design describes
+    the analysis design; a producer's variance units need not be the same
+    columns, and the generator should be able to say so without the caller
+    having to mutate the design to get there.
+
+    ``pair_method`` asks for BRR/JK2 pairing, which is needed only when a
+    stratum carries more than two PSUs. Pairing used to be a separate public
+    step whose sole way of handing its result along was to overwrite
+    ``Design.stratum`` -- so the workflow that built the weights also destroyed
+    the design they were meant to be compared against.
+    """
+    design = sample._design
+    for name, col in (("stratum", stratum), ("psu", psu)):
+        if col is not None and col not in sample._data.columns:
+            raise MethodError.invalid_choice(
+                where=where,
+                param=name,
+                got=col,
+                allowed=list(sample._data.columns),
+                hint=(
+                    f"'{name}' names the column these replicates are built from. "
+                    f"Leave it unset to use the Design's."
+                ),
+            )
+    psu_col = psu if psu is not None else design.psu
+    stratum_col = stratum if stratum is not None else design.stratum
+    if pair_method is None or psu_col is None:
+        return stratum_col, psu_col
+
+    # Pair only when something needs pairing: a design already at two PSUs per
+    # stratum *is* its own variance-stratum scheme, and re-deriving one would
+    # rename the column for no gain. With no strata at all there is one implicit
+    # group holding every PSU, so there is always something to pair.
+    if stratum_col is not None:
+        group_cols = [stratum_col] if isinstance(stratum_col, str) else list(stratum_col)
+        psu_cols = [psu_col] if isinstance(psu_col, str) else list(psu_col)
+        per_stratum = (
+            sample._data.select(list(dict.fromkeys(group_cols + psu_cols)))
+            .unique()
+            .group_by(group_cols)
+            .len()
+            .get_column("len")
+        )
+        # min() matters as much as max(): a stratum with a single PSU is an
+        # error the pairing helper reports precisely, and returning early here
+        # would hand it to the kernel to fail on obscurely instead.
+        if per_stratum.max() <= 2 and per_stratum.min() >= 2:
+            return stratum_col, psu_col
+
+    paired = _pair_variance_strata(
+        sample,
+        method=pair_method,
+        psu_col=psu_col,
+        stratum_col=stratum_col,
+        where=where,
+        order_by=order_by,
+        shuffle=shuffle,
+        into=stratum_name,
+        rstate=rstate,
+    )
+    return paired, psu_col
 
 
 def create_brr_wgts(
     sample: Sample,
     n_reps: int | None = None,
     *,
+    stratum: str | None = None,
+    psu: str | None = None,
+    stratum_name: str = "svy_var_stratum",
+    order_by: str | Sequence[str] | None = None,
+    shuffle: bool = False,
     rep_prefix: str | None = None,
     fay_coef: float = 0.0,
     rstate: int | None = None,
     drop_nulls: bool = False,
 ) -> Sample:
-    df = sample._data
+    """Create balanced repeated replication weights.
+
+    BRR needs two PSUs per stratum. Strata carrying more are paired into
+    variance strata first -- previously a separate public call whose only way
+    of handing the result along was to overwrite ``Design.stratum``. The paired
+    column is written as ``stratum_name`` and recorded on the replicate
+    weights; the Design is left alone, so Taylor keeps the true strata.
+
+    ``stratum``/``psu`` name the units to build from when they are not the
+    Design's. ``order_by`` pairs adjacent PSUs in that order, which is what a
+    systematically-sampled frame wants; ``shuffle`` pairs at random instead.
+    """
+    where = "Sample.weighting.create_brr_wgts"
     design = sample._design
 
-    if design.stratum is None:
+    if (psu if psu is not None else design.psu) is None:
         raise MethodError.not_applicable(
-            where="Sample.weighting.create_brr_wgts",
+            where=where,
             method="create_brr_wgts",
-            reason="BRR requires stratum in Design (got stratum=None).",
-            hint="Call sample.weighting.create_variance_strata() first.",
-        )
-    if design.psu is None:
-        raise MethodError.not_applicable(
-            where="Sample.weighting.create_brr_wgts",
-            method="create_brr_wgts",
-            reason="BRR requires psu in Design (got psu=None).",
+            reason="BRR requires psu (got psu=None)",
+            hint="Pass psu=, or set it on the Design.",
         )
 
+    strat_col, psu_col = _resolve_build_units(
+        sample,
+        where=where,
+        pair_method="brr",
+        stratum=stratum,
+        psu=psu,
+        stratum_name=stratum_name,
+        order_by=order_by,
+        shuffle=shuffle,
+        rstate=rstate,
+    )
+    df = sample._data  # refreshed: pairing may have just added a column
+
     if drop_nulls:
-        needed = list({c for c in [design.wgt, design.stratum, design.psu] if isinstance(c, str)})
+        needed = list({c for c in [design.wgt, strat_col, psu_col] if isinstance(c, str)})
         data = drop_missing(df=df, cols=needed, treat_infinite_as_missing=True)
     else:
         data = df
 
     main_weights = _to_float_array(data, design.wgt, len(data))
-    stratum_int = _to_int_array(data, design.stratum)
-    psu_int = _to_int_array(data, design.psu)
+    stratum_int = _to_int_array(data, strat_col)
+    psu_int = _to_int_array(data, psu_col)
 
     # BRR replicate count is bounded by the Hadamard matrix size for the
     # design's strata: fewer requested reps are rounded UP to it (balance
@@ -326,8 +461,16 @@ def create_brr_wgts(
         [pl.Series(name=col, values=vals) for col, vals in rep_dicts.items()]
     )
 
+    _rec_stratum, _rec_psu = _as_recorded(strat_col), _as_recorded(psu_col)
     sample._design = sample._design.fill_missing(
-        rep_wgts=BrrWgts(prefix=rep_prefix, n_reps=n_reps_actual, fay_coef=fay_coef, df=df_val)
+        rep_wgts=BrrWgts(
+            prefix=rep_prefix,
+            n_reps=n_reps_actual,
+            fay_coef=fay_coef,
+            df=df_val,
+            stratum=_rec_stratum,
+            psu=_rec_psu,
+        )
     )
 
     return sample
@@ -337,29 +480,64 @@ def create_jk_wgts(
     sample: Sample,
     *,
     paired: bool = False,
+    stratum: str | None = None,
+    psu: str | None = None,
+    stratum_name: str = "svy_var_stratum",
+    order_by: str | Sequence[str] | None = None,
+    shuffle: bool = False,
     rep_prefix: str | None = None,
     rstate: int | None = None,
     drop_nulls: bool = False,
 ) -> Sample:
+    """Create delete-one-PSU jackknife replicate weights.
+
+    ``paired=True`` builds JK2: one replicate per stratum, each deleting a PSU
+    from a two-PSU variance stratum. Strata carrying more than two PSUs are
+    paired first -- which used to be a separate public call, and skipping it
+    produced one replicate per *original* stratum in silence rather than an
+    error. ``paired=False`` builds JK1/JKn and uses the strata exactly as given.
+
+    ``stratum``/``psu`` name the units to build from when they are not the
+    Design's. The units used are recorded on the resulting weights, so a later
+    reader does not have to assume they match the Design.
+    """
     df = sample._data
     design = sample._design
 
-    if design.psu is None:
+    where = "Sample.weighting.create_jk_wgts"
+
+    if (psu if psu is not None else design.psu) is None:
         raise MethodError.not_applicable(
-            where="Sample.weighting.create_jk_wgts",
+            where=where,
             method="create_jk_wgts",
-            reason="Jackknife requires psu in Design (got psu=None).",
+            reason="Jackknife requires psu (got psu=None)",
+            hint="Pass psu=, or set it on the Design.",
         )
 
+    # Only the paired scheme pairs. jk1 and jkn delete one PSU at a time and
+    # want the strata exactly as given.
+    strat_col, psu_col = _resolve_build_units(
+        sample,
+        where=where,
+        pair_method="jk2" if paired else None,
+        stratum=stratum,
+        psu=psu,
+        stratum_name=stratum_name,
+        order_by=order_by,
+        shuffle=shuffle,
+        rstate=rstate,
+    )
+    df = sample._data  # refreshed: pairing may have just added a column
+
     if drop_nulls:
-        needed = list({c for c in [design.wgt, design.stratum, design.psu] if isinstance(c, str)})
+        needed = list({c for c in [design.wgt, strat_col, psu_col] if isinstance(c, str)})
         data = drop_missing(df=df, cols=needed, treat_infinite_as_missing=True)
     else:
         data = df
 
     main_weights = _to_float_array(data, design.wgt, len(data))
-    psu_int = _to_int_array(data, design.psu)
-    stratum_int = _to_int_array(data, design.stratum)
+    psu_int = _to_int_array(data, psu_col)
+    stratum_int = _to_int_array(data, strat_col)
 
     assert rust_create_jk_wgts is not None  # noqa: S101
     rep_mat, df_val, rep_coefs = rust_create_jk_wgts(
@@ -384,17 +562,20 @@ def create_jk_wgts(
     # the JK1 global. The collapse is identical, not approximate.
     if paired:
         jk_kind = "jk2"
-    elif design.stratum is None or len(np.unique(stratum_int)) <= 1:
+    elif strat_col is None or len(np.unique(stratum_int)) <= 1:
         jk_kind = "jk1"
     else:
         jk_kind = "jkn"
 
+    _rec_stratum, _rec_psu = _as_recorded(strat_col), _as_recorded(psu_col)
     sample._design = sample._design.fill_missing(
         rep_wgts=JackknifeWgts(
             prefix=rep_prefix,
             n_reps=n_reps,
             df=df_val,
             kind=jk_kind,
+            stratum=_rec_stratum,
+            psu=_rec_psu,
             # Per-replicate (n_h-1)/n_h coefficients: exact stratified-JKn
             # variance instead of the global (R-1)/R approximation. The computed
             # channel, not `scale` -- svy derived these, the user did not assert
@@ -411,6 +592,8 @@ def create_bs_wgts(
     n_reps: int = 500,
     *,
     kind: BootstrapKind = "rao-wu",
+    stratum: str | None = None,
+    psu: str | None = None,
     rep_prefix: str | None = None,
     drop_nulls: bool = False,
     rstate: RandomState = None,
@@ -466,18 +649,26 @@ def create_bs_wgts(
     # The Rao-Wu guard is deliberately not shared: the Poisson bootstrap exists
     # precisely for files that have no psu, so requiring one would reject the
     # only case it serves.
-    if kind == "rao-wu" and design.psu is None:
+    if kind == "rao-wu" and (psu if psu is not None else design.psu) is None:
         raise MethodError.not_applicable(
             where="Sample.weighting.create_bs_wgts",
             method="create_bs_wgts",
             reason="Bootstrap requires psu in Design (got psu=None).",
         )
 
+    strat_col, psu_col = _resolve_build_units(
+        sample,
+        where="Sample.weighting.create_bs_wgts",
+        pair_method=None,  # resampling PSUs needs no pairing
+        stratum=stratum,
+        psu=psu,
+    )
+
     if drop_nulls:
         if kind == "poisson":
-            candidates = [design.wgt]
+            candidates: list[str | tuple[str, ...] | None] = [design.wgt]
         else:
-            candidates = [design.wgt, design.stratum, design.psu]
+            candidates = [design.wgt, strat_col, psu_col]
         needed = list({c for c in candidates if isinstance(c, str)})
         data = drop_missing(df=df, cols=needed, treat_infinite_as_missing=True)
     else:
@@ -496,8 +687,8 @@ def create_bs_wgts(
         assert rust_create_poisson_bs_wgts is not None  # noqa: S101
         rep_mat, df_val = rust_create_poisson_bs_wgts(main_weights, n_reps, seed)
     else:
-        psu_int = _to_int_array(data, design.psu)
-        stratum_int = _to_int_array(data, design.stratum)
+        psu_int = _to_int_array(data, psu_col)
+        stratum_int = _to_int_array(data, strat_col)
         assert rust_create_bootstrap_wgts is not None  # noqa: S101
         rep_mat, df_val = rust_create_bootstrap_wgts(
             main_weights,
@@ -514,8 +705,19 @@ def create_bs_wgts(
         [pl.Series(name=col, values=vals) for col, vals in rep_dicts.items()]
     )
 
+    _rec_stratum, _rec_psu = _as_recorded(strat_col), _as_recorded(psu_col)
     sample._design = sample._design.update(
-        rep_wgts=BootstrapWgts(prefix=rep_prefix, n_reps=n_reps, df=df_val, kind=kind)
+        rep_wgts=BootstrapWgts(
+            prefix=rep_prefix,
+            n_reps=n_reps,
+            df=df_val,
+            kind=kind,
+            # The Poisson bootstrap draws independent per-unit factors, so it
+            # genuinely has no units to record -- that is why it works on files
+            # with no psu at all.
+            stratum=None if kind == "poisson" else _rec_stratum,
+            psu=None if kind == "poisson" else _rec_psu,
+        )
     )
 
     return sample
@@ -525,6 +727,7 @@ def create_sdr_wgts(
     sample: Sample,
     n_reps: int = 4,
     *,
+    psu: str | None = None,
     rep_prefix: str | None = None,
     order_col: str | None = None,
     drop_nulls: bool = False,
@@ -571,8 +774,13 @@ def create_sdr_wgts(
         [pl.Series(name=col, values=vals) for col, vals in rep_dicts.items()]
     )
 
+    _rec_stratum, _rec_psu = _recorded_units(design)
+    if psu is not None:
+        _rec_psu = psu
     sample._design = sample._design.update(
-        rep_wgts=SdrWgts(prefix=rep_prefix, n_reps=n_reps, df=df_val)
+        rep_wgts=SdrWgts(
+            prefix=rep_prefix, n_reps=n_reps, df=df_val, stratum=_rec_stratum, psu=_rec_psu
+        )
     )
 
     return sample

@@ -145,9 +145,14 @@ class TestBRRWeights:
         rep_cols = [c for c in sample.data.columns if c.startswith("brr_rep")]
         assert len(rep_cols) == 4
 
-    def test_brr_requires_stratum(self, unstratified_sample):
-        with pytest.raises(Exception, match="BRR requires.*stratum|stratum.*None"):
-            unstratified_sample.weighting.create_brr_wgts()
+    def test_brr_no_longer_requires_a_stratum(self, unstratified_sample):
+        """Pairing derives variance strata from the PSUs, so an unstratified
+        design is buildable rather than an error telling you to go and make
+        strata by hand first."""
+        s = unstratified_sample.weighting.create_brr_wgts()
+        assert s.design.rep_wgts is not None
+        assert s.design.rep_wgts.stratum == "svy_var_stratum"
+        assert s.design.stratum is None  # the Design is left alone
 
     def test_brr_requires_psu(self, unstratified_sample):
         data = (
@@ -355,9 +360,18 @@ class TestSDRWeights:
         assert sample.design.rep_wgts.n_reps == 4
 
 
-class TestCreateVarianceStrata:
-    def test_variance_strata_brr_even(self, multi_psu_sample):
-        sample = multi_psu_sample.weighting.create_variance_strata(method="brr")
+class TestVarianceStrataPairing:
+    """Pairing is now a step inside the generators, not a public pre-step.
+
+    It used to be `sample.weighting.create_variance_strata(...)`, whose only way
+    of handing its result to the generator was to overwrite `Design.stratum` --
+    so building BRR/JK2 weights destroyed the design they would be compared
+    against. It is exercised through the generators here; `_pair_variance_strata`
+    is called directly only where the algorithm itself is the subject.
+    """
+
+    def test_brr_pairs_even_psu_strata(self, multi_psu_sample):
+        sample = multi_psu_sample.weighting.create_brr_wgts()
         assert "svy_var_stratum" in sample.data.columns
         assert sample.data["svy_var_stratum"].n_unique() == 6
         psu_counts = (
@@ -367,11 +381,17 @@ class TestCreateVarianceStrata:
             .agg(pl.n_unique("psu").alias("n_psu"))
         )
         assert (psu_counts["n_psu"] == 2).all()
-        sample = sample.weighting.create_brr_wgts()
         assert sample.design.rep_wgts is not None
 
-    def test_variance_strata_jk2_odd(self, odd_psu_sample):
-        sample = odd_psu_sample.weighting.create_variance_strata(method="jk2")
+    def test_the_design_stratum_survives_pairing(self, multi_psu_sample):
+        """The whole point: Taylor keeps the true strata."""
+        before = multi_psu_sample.design.stratum
+        sample = multi_psu_sample.weighting.create_brr_wgts()
+        assert sample.design.stratum == before == "stratum"
+        assert sample.design.rep_wgts.stratum == "svy_var_stratum"
+
+    def test_jk2_pairs_odd_psu_strata(self, odd_psu_sample):
+        sample = odd_psu_sample.weighting.create_jk_wgts(paired=True)
         assert sample.data["svy_var_stratum"].n_unique() == 3
         psu_counts = (
             sample.data.select(["svy_var_stratum", "psu"])
@@ -380,53 +400,72 @@ class TestCreateVarianceStrata:
             .agg(pl.n_unique("psu").alias("n_psu"))
         )
         assert ((psu_counts["n_psu"] >= 2) & (psu_counts["n_psu"] <= 3)).all()
-        sample = sample.weighting.create_jk_wgts(paired=True)
         assert sample.design.rep_wgts is not None
 
-    def test_variance_strata_brr_rejects_odd(self, odd_psu_sample):
+    def test_jk2_on_more_than_two_psus_no_longer_undercounts(self, multi_psu_sample):
+        """Skipping the old pre-step gave one replicate per *original* stratum,
+        in silence. Pairing makes it one per variance stratum."""
+        sample = multi_psu_sample.weighting.create_jk_wgts(paired=True)
+        assert sample.design.rep_wgts.n_reps == 6  # not 3
+
+    def test_already_paired_strata_are_left_alone(self, simple_stratified_sample):
+        """A design at two PSUs per stratum is its own variance-stratum scheme;
+        re-deriving one would rename the column for nothing."""
+        sample = simple_stratified_sample.weighting.create_jk_wgts(paired=True)
+        assert "svy_var_stratum" not in sample.data.columns
+        assert sample.design.rep_wgts.stratum == "stratum"
+
+    def test_brr_rejects_odd_psu_counts(self, odd_psu_sample):
         with pytest.raises(DimensionError):
-            odd_psu_sample.weighting.create_variance_strata(method="brr")
+            odd_psu_sample.weighting.create_brr_wgts()
 
-    def test_variance_strata_invalid_method(self, multi_psu_sample):
-        with pytest.raises(MethodError):
-            multi_psu_sample.weighting.create_variance_strata(method="invalid")
-
-    def test_variance_strata_order_by(self, multi_psu_sample):
+    def test_order_by_is_accepted_by_the_generator(self, multi_psu_sample):
         data = multi_psu_sample.data.with_columns(pl.col("y").alias("sort_var"))
         sample = Sample(data=data, design=multi_psu_sample.design)
-        sample = sample.weighting.create_variance_strata(method="brr", order_by="sort_var")
+        sample = sample.weighting.create_brr_wgts(order_by="sort_var")
         assert "svy_var_stratum" in sample.data.columns
 
-    def test_variance_strata_shuffle_reproducible(self, multi_psu_sample):
-        s1 = multi_psu_sample.weighting.create_variance_strata(
-            method="brr", shuffle=True, rstate=42
-        )
-        s2 = multi_psu_sample.weighting.create_variance_strata(
-            method="brr", shuffle=True, rstate=42
-        )
+    def test_shuffle_is_reproducible(self, multi_psu_sample):
+        s1 = multi_psu_sample.weighting.create_brr_wgts(shuffle=True, rstate=42)
+        s2 = multi_psu_sample.weighting.create_brr_wgts(shuffle=True, rstate=42)
         np.testing.assert_array_equal(
             s1.data["svy_var_stratum"].to_numpy(),
             s2.data["svy_var_stratum"].to_numpy(),
         )
 
-    def test_variance_strata_custom_name(self, multi_psu_sample):
-        sample = multi_psu_sample.weighting.create_variance_strata(
-            method="brr", into="my_var_stratum"
-        )
+    def test_stratum_name_names_the_created_column(self, multi_psu_sample):
+        """The house convention: the caller names what gets created."""
+        sample = multi_psu_sample.weighting.create_brr_wgts(stratum_name="my_var_stratum")
         assert "my_var_stratum" in sample.data.columns
-        assert sample.design.stratum == "my_var_stratum"
+        assert sample.design.rep_wgts.stratum == "my_var_stratum"
+        assert sample.design.stratum == "stratum"
 
-    def test_variance_strata_singleton_raises(self):
+    def test_singleton_stratum_raises(self):
         data = pl.DataFrame({"stratum": [1, 2, 2, 2, 2], "psu": [1, 2, 2, 3, 3], "wgt": [1.0] * 5})
         sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum", psu="psu"))
         with pytest.raises(DimensionError, match="at least 2 PSUs"):
-            sample.weighting.create_variance_strata(method="brr")
+            sample.weighting.create_brr_wgts()
 
-    def test_variance_strata_no_psu_raises(self):
+    def test_no_psu_raises(self):
         data = pl.DataFrame({"stratum": [1, 1, 2, 2], "wgt": [1.0] * 4})
         sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum"))
         with pytest.raises(MethodError):
-            sample.weighting.create_variance_strata(method="brr")
+            sample.weighting.create_brr_wgts()
+
+    def test_an_explicit_unit_column_must_exist(self, multi_psu_sample):
+        with pytest.raises(MethodError):
+            multi_psu_sample.weighting.create_brr_wgts(stratum="not_a_column")
+
+    def test_explicit_units_override_the_design(self, multi_psu_sample):
+        """Build from columns the Design does not name, without mutating it."""
+        data = multi_psu_sample.data.with_columns(pl.col("stratum").alias("vstrat"))
+        sample = Sample(data=data, design=multi_psu_sample.design)
+        out = sample.weighting.create_jk_wgts(stratum="vstrat")
+        assert out.design.rep_wgts.stratum == "vstrat"
+        assert out.design.stratum == "stratum"
+
+    def test_pairing_is_no_longer_public(self, multi_psu_sample):
+        assert not hasattr(multi_psu_sample.weighting, "create_variance_strata")
 
 
 class TestReplicationIntegration:
@@ -440,16 +479,12 @@ class TestReplicationIntegration:
         sample = odd_psu_sample.weighting.create_jk_wgts(paired=True, rstate=42)
         assert sample.design.rep_wgts.df == 3.0
 
-    def test_variance_strata_then_brr(self, multi_psu_sample):
-        sample = multi_psu_sample.weighting.create_variance_strata(
-            method="brr"
-        ).weighting.create_brr_wgts()
+    def test_brr_builds_in_one_step(self, multi_psu_sample):
+        sample = multi_psu_sample.weighting.create_brr_wgts()
         assert sample.design.rep_wgts.method == "BRR"
 
-    def test_variance_strata_then_jk2(self, multi_psu_sample):
-        sample = multi_psu_sample.weighting.create_variance_strata(
-            method="jk2"
-        ).weighting.create_jk_wgts(paired=True)
+    def test_jk2_builds_in_one_step(self, multi_psu_sample):
+        sample = multi_psu_sample.weighting.create_jk_wgts(paired=True)
         assert sample.design.rep_wgts.method == "Jackknife"
 
 
@@ -575,32 +610,31 @@ class TestTupleStrata:
         assert sample.design.rep_wgts is not None
         assert sample.design.rep_wgts.n_reps == 8  # 8 PSUs
 
-    def test_variance_strata_jk2_with_tuple_strata(self, tuple_stratum_odd_psu_sample):
-        """create_variance_strata should work with tuple strata (the bug fix)."""
-        sample = tuple_stratum_odd_psu_sample.weighting.create_variance_strata(
-            method="jk2",
-            into="var_stratum",
+    def test_jk2_pairing_with_tuple_strata(self, tuple_stratum_odd_psu_sample):
+        """Pairing resolves a multi-column stratum through the internal
+        concatenated column; the pairing itself is single-column by
+        construction, so the result is nameable as one."""
+        sample = tuple_stratum_odd_psu_sample.weighting.create_jk_wgts(
+            paired=True, stratum_name="var_stratum"
         )
         assert "var_stratum" in sample.data.columns
-        # Should be able to create JK2 replicates after
-        sample = sample.weighting.create_jk_wgts(paired=True)
         assert sample.design.rep_wgts is not None
+        assert sample.design.rep_wgts.stratum == "var_stratum"
+        # The tuple stratum on the Design is untouched.
+        assert isinstance(sample.design.stratum, tuple)
 
-    def test_variance_strata_brr_with_tuple_strata(self, tuple_stratum_sample):
-        """create_variance_strata(method='brr') with tuple strata."""
-        sample = tuple_stratum_sample.weighting.create_variance_strata(method="brr")
-        assert "svy_var_stratum" in sample.data.columns
-        # Each variance stratum should have exactly 2 PSUs
-        psu_counts = (
-            sample.data.select(["svy_var_stratum", "psu"])
-            .unique()
-            .group_by("svy_var_stratum")
-            .agg(pl.n_unique("psu").alias("n_psu"))
-        )
-        assert (psu_counts["n_psu"] == 2).all()
-        # BRR creation should work
-        sample = sample.weighting.create_brr_wgts()
+    def test_brr_on_already_paired_tuple_strata_does_not_pair(self, tuple_stratum_sample):
+        """This fixture is 4 strata x 2 PSUs -- already its own variance-stratum
+        scheme, so no column is created and none is recorded."""
+        sample = tuple_stratum_sample.weighting.create_brr_wgts()
+        assert "svy_var_stratum" not in sample.data.columns
         assert sample.design.rep_wgts is not None
+        assert isinstance(sample.design.stratum, tuple)
+        # A multi-column unit is recorded as the tuple of its source columns --
+        # never the internal concatenated name, which would not resolve against
+        # a frame rebuilt from source.
+        assert sample.design.rep_wgts.stratum == ("region", "urban")
+        assert sample.design.rep_wgts.psu == "psu"
 
 
 # ===========================================================================

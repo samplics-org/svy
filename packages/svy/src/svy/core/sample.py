@@ -20,7 +20,7 @@ from svy.core.describe_runtime import run_describe
 from svy.core.design import Design, PopSize, RepWeights
 from svy.core.enumerations import MeasurementType
 from svy.core.expr import to_polars_expr
-from svy.core.repwgts import JackknifeWgts
+from svy.core.repwgts import JackknifeWgts, RepWgts, unit_columns
 from svy.core.types import (
     _MISSING,
     DF,
@@ -189,35 +189,99 @@ class Sample:
         if not isinstance(rw, JackknifeWgts):
             return
 
-        stratum_col = self._internal_design.get("stratum")
-        psu_col = self._internal_design.get("psu")
+        # The units the *replicates* were built from, never the Design's. See
+        # the field comment on _RepWgtsBase: borrowing Design.stratum counts the
+        # wrong n_h whenever a producer collapsed strata for variance estimation,
+        # and returns a plausible wrong coefficient rather than an error.
+        stratum_col = rw.stratum
+        psu_col = rw.psu
+        stratum_keys = unit_columns(stratum_col)
+        psu_keys = unit_columns(psu_col)
         data = cast(pl.DataFrame, self._data)
-        if psu_col is None or psu_col not in data.columns:
-            return  # nothing to check against and nothing to derive from
+        if not psu_keys or any(c not in data.columns for c in psu_keys):
+            # Nothing to check against and nothing to derive from. Harmless for
+            # jk1/jk2, whose coefficients are closed-form -- but a declared JKn
+            # that still has no `scale` is now certain to fail at estimation, and
+            # staying silent defers that to a call site far from the cause.
+            if rw.kind == "jkn" and rw.scale is None and rw.rep_coefs is None:
+                self._warn_jkn_not_derivable(
+                    reason=(
+                        "the replicate weights do not name the psu they were built "
+                        "from, so svy cannot count the PSUs per stratum that "
+                        "(n_h-1)/n_h is built from"
+                    )
+                )
+            return
 
-        if stratum_col is not None and stratum_col in data.columns:
+        if stratum_keys and all(c in data.columns for c in stratum_keys):
             counts = (
-                data.select([stratum_col, psu_col])
+                data.select(list(dict.fromkeys(stratum_keys + psu_keys)))
                 .unique()
-                .group_by(stratum_col)
+                .group_by(stratum_keys)
                 .len()
                 .get_column("len")
                 .to_list()
             )
         else:
-            counts = [data.get_column(psu_col).n_unique()]
+            counts = [data.select(psu_keys).unique().height]
         n_strata = len(counts)
         n_psus = sum(counts)
 
-        # A declared kind is otherwise an assertion svy has to trust; with design
-        # variables present it becomes checkable arithmetic. A warning rather
-        # than an error, because a legitimately subset frame has fewer PSUs than
-        # the weight columns were built from and that is not a mislabelling.
-        expected = {"jk1": n_psus, "jkn": n_psus, "jk2": n_strata}.get(rw.kind or "")
+        # What each kind implies about the replicate count, given these units.
+        implied = {"jk1": n_psus, "jkn": n_psus, "jk2": n_strata}
+
+        # jk1 and jkn imply the same replicate count -- one per PSU -- and differ
+        # only in stratification, which the count comparison below never looks
+        # at. So the one mismatch it structurally cannot catch is exactly the
+        # expensive one: jk1 on stratified units returns (R-1)/R where
+        # (n_h-1)/n_h is correct, overstating SEs by sqrt(R/n_h) -- 32% on a
+        # 4-strata x 2-PSU design -- in silence. Naming a stratum unit says the
+        # replicates were drawn within those strata; jk1 says they were not.
+        if rw.kind == "jk1" and n_strata > 1:
+            raise MethodError.invalid_choice(
+                where="Sample",
+                param="rep_wgts.kind",
+                got="jk1",
+                allowed=["jkn"],
+                hint=(
+                    f"kind='jk1' is the *unstratified* delete-one-PSU jackknife, but "
+                    f"the units declared on these weights have {n_strata} strata. Use "
+                    f"kind='jkn' (or drop 'kind' and let svy read it off the units); if "
+                    f"the replicates really were drawn without regard to strata, say so "
+                    f"by naming only psu on the weights and leaving stratum unset."
+                ),
+            )
+
+        # A declared kind is otherwise an assertion svy has to trust; with the
+        # units named it becomes checkable arithmetic.
+        expected = implied.get(rw.kind or "")
         if expected is not None and expected != rw.n_reps:
+            # Two very different mismatches. If n_reps lands exactly on another
+            # kind's count, the label is simply wrong and svy can say which it
+            # should be -- that is not something to warn about and carry on
+            # from, because the coefficient it selects is wrong by a known
+            # factor. If it matches nothing, the likeliest explanation is a
+            # frame subset to fewer PSUs than the weights were built from,
+            # which is not a mislabelling at all.
+            alternatives = [k for k, v in implied.items() if v == rw.n_reps]
+            if alternatives:
+                raise MethodError.invalid_choice(
+                    where="Sample",
+                    param="rep_wgts.kind",
+                    got=rw.kind,
+                    allowed=sorted(alternatives),
+                    hint=(
+                        f"kind={rw.kind!r} implies {expected} replicates "
+                        f"({'one per stratum' if rw.kind == 'jk2' else 'one per PSU'}), "
+                        f"but n_reps is {rw.n_reps} -- which is exactly "
+                        f"{' or '.join(sorted(alternatives))} for these units "
+                        f"({n_psus} PSUs across {n_strata} strata). Drop 'kind' to let "
+                        f"svy read it off the units, or correct it."
+                    ),
+                )
             self.warn(
                 code=WarnCode.JACKKNIFE_KIND_UNSPECIFIED,
-                title=f"Jackknife kind {rw.kind!r} does not match the design",
+                title=f"Jackknife kind {rw.kind!r} does not match the units",
                 detail=(
                     f"kind={rw.kind!r} implies {expected} replicates "
                     f"({'one per stratum' if rw.kind == 'jk2' else 'one per PSU'}), "
@@ -236,11 +300,40 @@ class Sample:
             return
 
         if rw.kind is None:
-            # Positive evidence that the JK1 global is probably wrong, but no
-            # claim from the user to act on: too weak to raise, too strong to
-            # pass over. Deriving a kind here would turn "the producer withheld
-            # the design" into "these weights are unstratified".
-            if n_strata > 1 and rw.scale is None and rw.rep_coefs is None:
+            # The units say which scheme these are, so there is nothing to guess
+            # at: one replicate per PSU across several strata is JKn, per PSU in
+            # one stratum is JK1, one per stratum is JK2. This used to refuse on
+            # the grounds that deriving a kind would turn "the producer withheld
+            # the design" into "these weights are unstratified" -- true when the
+            # counts came from Design.stratum, which says nothing about how the
+            # replicates were drawn. They now come from the units declared on the
+            # weights themselves, which is exactly that statement.
+            #
+            # jk1/jkn/jk2 is expert vocabulary; naming the columns the replicates
+            # were built from is not. Requiring the label when the columns are
+            # already there would be asking for the same fact twice, in the
+            # harder of the two languages.
+            inferred: str | None = None
+            if rw.n_reps == n_psus and rw.n_reps != n_strata:
+                inferred = "jkn" if n_strata > 1 else "jk1"
+            elif rw.n_reps == n_strata and rw.n_reps != n_psus:
+                inferred = "jk2"
+            if inferred is not None:
+                rw = msgspec.structs.replace(rw, kind=inferred)
+                self._design = design = design.update(rep_wgts=rw)
+                self.warn(
+                    code=WarnCode.JACKKNIFE_KIND_UNSPECIFIED,
+                    level=Severity.INFO,
+                    title=f"Jackknife kind read as {inferred!r} from the declared units",
+                    detail=(
+                        f"n_reps is {rw.n_reps} against {n_psus} PSUs across "
+                        f"{n_strata} strata, which is {inferred}. Set kind "
+                        f"explicitly to assert it yourself."
+                    ),
+                    where="Sample",
+                    param="rep_wgts.kind",
+                )
+            elif n_strata > 1 and rw.scale is None and rw.rep_coefs is None:
                 self.warn(
                     code=WarnCode.JACKKNIFE_KIND_UNSPECIFIED,
                     title="Stratified design with an unspecified jackknife kind",
@@ -257,24 +350,187 @@ class Sample:
                         "scheme, or 'jk1' if these really are unstratified."
                     ),
                 )
-            return
+            if rw.kind is None:
+                return  # nothing was inferable; the JK1 global still applies
+            # An inferred kind falls through: reading it off the units is the
+            # whole point, and a JKn that stopped here would never get its
+            # per-stratum coefficients derived.
 
         if rw.kind != "jkn":
             return  # jk1 and jk2 are closed-form; nothing to derive
         if rw.scale is not None or rw.rep_coefs is not None:
             return  # already answered, by the user or by whoever generated these
 
-        # (n_h-1)/n_h is indexed by *replicate*, so the general case needs to know
-        # which replicate deletes a PSU from which stratum -- an ordering only
-        # whoever built the file knows. When every stratum has the same n_h the
-        # coefficient is uniform and the mapping is irrelevant, which covers the
-        # paired-PSU designs that dominate real JKn files. Unbalanced falls
-        # through, and coefficients() refuses and names `scale`.
-        if len(set(counts)) != 1 or counts[0] < 2:
+        # No stratum named. `counts` above fell back to a single group holding
+        # every PSU, which is the right shape for the jk1/jk2 replicate-count
+        # check but not for this: deriving from it yields (R-1)/R -- the JK1
+        # global -- and hands it back under a JKn label. An unmet claim fails.
+        if not stratum_keys or any(c not in data.columns for c in stratum_keys):
+            self._warn_jkn_not_derivable(
+                reason=(
+                    "the replicate weights name a psu but no stratum, and "
+                    "(n_h-1)/n_h is a per-stratum quantity -- counting every PSU "
+                    "as one stratum would silently reproduce the JK1 global"
+                )
+            )
             return
-        n_h = counts[0]
-        derived = (float(n_h - 1) / float(n_h),) * rw.n_reps
-        self._design = design.update(rep_wgts=msgspec.structs.replace(rw, rep_coefs=derived))
+
+        # (n_h-1)/n_h is indexed by *replicate*, so it needs to know which
+        # replicate deletes a PSU from which stratum. Balanced strata make the
+        # question moot -- every replicate carries the same number, so any
+        # ordering gives the same vector -- which is the cheap path and the one
+        # the paired-PSU designs that dominate real JKn files take.
+        if len(set(counts)) == 1 and counts[0] >= 2:
+            n_h = counts[0]
+            derived = (float(n_h - 1) / float(n_h),) * rw.n_reps
+            self._design = design.update(
+                rep_wgts=msgspec.structs.replace(rw, rep_coefs=derived)
+            )
+            return
+
+        # Unbalanced is not a different method, it is the same JKn with a
+        # coefficient that varies by stratum -- so the only thing missing is the
+        # mapping, and a delete-one-PSU replicate says which PSU it dropped by
+        # zeroing it. Recovering the mapping from that is exact where it applies,
+        # and only replicate -> stratum is needed: the coefficient is constant
+        # within a stratum, so which PSU of the stratum was dropped never matters.
+        recovered = self._jkn_coefs_from_deleted_psus(rw, data, stratum_keys, psu_keys, counts)
+        if recovered is not None:
+            self._design = design.update(
+                rep_wgts=msgspec.structs.replace(rw, rep_coefs=recovered)
+            )
+            return
+
+        self._warn_jkn_not_derivable(
+            reason=(
+                f"the strata are unbalanced (PSUs per stratum: "
+                f"{sorted(set(counts))}), so (n_h-1)/n_h differs by replicate, and "
+                f"the replicate columns do not identify which PSU each one deletes "
+                f"(a delete-one-PSU replicate zeroes it) so the mapping cannot be "
+                f"recovered either"
+            ),
+            can_use_psu=False,
+        )
+        return
+
+    def _jkn_coefs_from_deleted_psus(
+        self,
+        rw: JackknifeWgts,
+        data: pl.DataFrame,
+        stratum_keys: list[str],
+        psu_keys: list[str],
+        counts: list[int],
+    ) -> tuple[float, ...] | None:
+        """Recover per-replicate (n_h-1)/n_h by reading which PSU each drops.
+
+        A delete-one-PSU replicate zeroes the PSU it deletes, so the mapping
+        svy is missing is written in the weights themselves. Only replicate ->
+        *stratum* is needed: the coefficient is constant within a stratum, so
+        which PSU of that stratum was dropped never matters.
+
+        Returns None unless the signature is unambiguous -- every replicate
+        column zeroing exactly one otherwise-nonzero PSU, and no PSU dropped
+        twice. That is what a delete-one jackknife looks like and what a
+        bootstrap, a BRR or a Fay-style variant does not, so a file that is not
+        what it claims falls back to refusing rather than being given a
+        confidently wrong vector.
+        """
+        design = cast("Design", self._design)
+        wgt_col = design.wgt
+        if not isinstance(wgt_col, str) or wgt_col not in data.columns:
+            return None
+        rep_cols = rw.columns_from_data(list(data.columns))
+        if len(rep_cols) != rw.n_reps or any(c not in data.columns for c in rep_cols):
+            return None
+
+        # One pass to PSU level: a PSU is deleted by a replicate when every one
+        # of its rows is zero there, which max(abs(.)) says directly. A PSU
+        # carrying no weight to begin with is zero everywhere and is not
+        # evidence of anything.
+        keys = list(dict.fromkeys(psu_keys + stratum_keys))
+        agg = data.group_by(keys).agg(
+            [pl.col(c).abs().max().alias(c) for c in rep_cols]
+            + [pl.col(wgt_col).abs().max().alias("__base__")]
+        )
+        # n_h counts every PSU in the stratum, including any now carrying no
+        # weight: the replicate weights were built from all of them, so that is
+        # the n_h their coefficient was computed with. Taking it after the
+        # filter below would silently shrink it.
+        n_by_stratum = agg.group_by(stratum_keys).len().rename({"len": "__n_h__"})
+
+        # A PSU with no weight at all is zero in every replicate column and can
+        # never be identified as the one a given replicate deleted. Dropping it
+        # here means the column that deletes it finds nothing, which the
+        # delete-one signature check below catches -- a clean refusal rather
+        # than a vector built from six identified columns and one guess.
+        agg = agg.filter(pl.col("__base__") > 0.0).drop("__base__")
+        if agg.height < 2:
+            return None
+
+        # Long form, then keep only the zeros: one row per (replicate, deleted
+        # PSU). Vectorized rather than a pass per replicate, which matters at the
+        # replicate counts these files actually ship -- R is commonly 100-1000.
+        dropped = agg.unpivot(
+            index=keys, on=rep_cols, variable_name="__rep__", value_name="__v__"
+        ).filter(pl.col("__v__") == 0.0)
+
+        # The delete-one signature: every replicate drops exactly one PSU and no
+        # PSU is dropped twice. A bootstrap, a BRR or a Fay-style variant fails
+        # this, so a file that is not what it claims falls back to refusing
+        # rather than being handed a confidently wrong vector.
+        n_reps = len(rep_cols)
+        if dropped.height != n_reps:
+            return None
+        if dropped.get_column("__rep__").n_unique() != n_reps:
+            return None
+        if dropped.select(psu_keys).unique().height != n_reps:
+            return None
+
+        # Replicate order is positional, not lexical: "jk10" sorts before "jk2".
+        order = pl.DataFrame(
+            {"__rep__": rep_cols, "__i__": list(range(n_reps))},
+            schema={"__rep__": pl.String, "__i__": pl.Int64},
+        )
+        out = (
+            dropped.join(n_by_stratum, on=stratum_keys, how="left")
+            .join(order, on="__rep__", how="left")
+            .sort("__i__")
+        )
+        n_h = out.get_column("__n_h__")
+        if n_h.null_count() or n_h.min() < 2:
+            return None  # a singleton stratum has no jackknife variance
+        return tuple(((n_h - 1) / n_h).cast(pl.Float64).to_list())
+
+    def _warn_jkn_not_derivable(self, *, reason: str, can_use_psu: bool = True) -> None:
+        """Say at construction what ``coefficients()`` would only say later.
+
+        The failure itself stays lazy -- a Sample whose JKn coefficients are
+        unavailable is still perfectly usable for Taylor, for wrangling and for
+        ``where=``, so raising here would block work that never touches
+        replication. What was missing is the early signal, not the error.
+        """
+        fixes = ["pass scale= with the per-replicate coefficients your file documents"]
+        if can_use_psu:
+            fixes.insert(
+                0,
+                "name the units the replicates were built from, e.g. "
+                "JackknifeWgts(..., stratum='VARSTRAT', psu='VARUNIT')",
+            )
+        self.warn(
+            code=WarnCode.JACKKNIFE_COEFS_UNAVAILABLE,
+            title="JKn coefficients cannot be derived",
+            detail=(
+                f"rep_wgts declares kind='jkn' but {reason}. Replication "
+                f"estimates will raise until the coefficients are supplied."
+            ),
+            where="Sample",
+            param="rep_wgts.scale",
+            hint=(
+                f"{fixes[0].capitalize()}."
+                if len(fixes) == 1
+                else "; ".join(f"{i}) {f}" for i, f in enumerate(fixes, start=1)) + "."
+            ),
+        )
 
     def __setattr__(self, name: str, value: Any) -> None:
         # Any rebind of the data or design invalidates every version-keyed
@@ -751,6 +1007,28 @@ class Sample:
         if missing:
             raise ValueError(f"Design references columns not found in data: {missing}")
 
+        # 1a. The units the replicate weights were built from are columns too,
+        # and they are not part of `specified_fields` because they live on
+        # rep_wgts rather than on the Design. An unresolvable one is the same
+        # mistake as an unresolvable design column, and it fails the same way --
+        # otherwise it surfaces much later as "cannot derive", which points at
+        # the wrong problem.
+        rw = design.rep_wgts
+        if rw is not None:
+            missing_units = [
+                f"rep_wgts.{name}={c!r}"
+                for name, col in (("stratum", rw.stratum), ("psu", rw.psu))
+                for c in unit_columns(col)
+                if c not in data.columns
+            ]
+            if missing_units:
+                raise ValueError(
+                    f"Replicate weights reference columns not found in data: "
+                    f"{missing_units}. These name the units the replicates were "
+                    f"built from, which is a separate question from the Design's "
+                    f"stratum/psu."
+                )
+
         # 1b. Validate pop_size columns are numeric
         if design.pop_size is not None:
             if isinstance(design.pop_size, PopSize):
@@ -969,11 +1247,21 @@ class Sample:
         return copy.deepcopy(self._design)
 
     @property
-    def rep_wgts(self) -> RepWeights | None:
-        """Return a defensive copy to avoid external mutation of internal rep weights."""
-        if self._design.rep_wgts is None:
-            return None
-        return copy.deepcopy(self._design.rep_wgts)
+    def rep_wgts(self) -> RepWgts | None:
+        """The replicate-weight specification, or None for a Taylor design.
+
+        The same object as ``sample.design.rep_wgts`` -- prefix, n_reps, kind,
+        units, coefficients -- not the weights themselves, which are columns in
+        the frame (``sample.data[sample.rep_columns]``).
+
+        Returned directly rather than deep-copied. The copy predated the
+        variants being frozen structs and was defending against a mutation the
+        type now refuses outright, at ~100us per access on a 1000-replicate
+        design -- while ``sample.design.rep_wgts`` handed out the original
+        uncopied anyway, so it guarded one of two routes to the same object and
+        made ``sample.rep_wgts is sample.design.rep_wgts`` surprisingly False.
+        """
+        return cast("Design", self._design).rep_wgts
 
     @property
     def fpc(self) -> dict[Category, Number] | Number:
@@ -1094,6 +1382,59 @@ class Sample:
     # ════════════════════════════════════════════════════════════════════════
     # METADATA ACCESS (MetadataStore)
     # ════════════════════════════════════════════════════════════════════════
+
+    @property
+    def n_reps(self) -> int | None:
+        """Replicate count, or None for a Taylor design.
+
+        Sits alongside ``n_strata`` and ``n_psus``, which lift the same kind of
+        design fact onto the sample.
+        """
+        return cast("Design", self._design).n_reps
+
+    @property
+    def rep_columns(self) -> list[str]:
+        """The replicate weight columns, resolved against this frame.
+
+        ``rep_wgts.columns`` generates names from ``prefix`` and ``n_reps``
+        alone, so it answers ``REP1`` for a file holding ``REP001`` -- it cannot
+        see the zero-padding without the data. This resolves padding and casing
+        from the frame, and is the same key order as :attr:`rep_coefs`.
+
+        Empty when the design carries no replicate weights.
+        """
+        rw = cast("Design", self._design).rep_wgts
+        if rw is None:
+            return []
+        return rw.columns_from_data(list(cast(pl.DataFrame, self._data).columns))
+
+    @property
+    def rep_coefs(self) -> dict[str, float]:
+        """The variance coefficient applied to each replicate, by column name.
+
+        >>> sample.rep_coefs
+        {'jk1': 0.6667, 'jk2': 0.6667, 'jk3': 0.6667, 'jk4': 0.5, ...}
+
+        Keyed by the actual column, not the replicate index, because the index
+        alone is what a reader has to trust rather than check -- and for an
+        unbalanced JKn the assignment is the whole answer: the same coefficients
+        against a different order give a different standard error.
+
+        This lives on ``Sample`` rather than on ``rep_wgts`` because only the
+        frame resolves the column names. A design declaring ``prefix="REP"``
+        against a file shipping ``REP001..REP200`` knows the count but not the
+        padding, so the struct alone would key this on ``REP1`` and be
+        confidently wrong.
+
+        Empty when the design carries no replicate weights. Raises whatever
+        ``coefficients()`` raises -- a declared JKn with nothing to derive from
+        refuses here too, rather than reporting a number it does not have.
+        """
+        rw = cast("Design", self._design).rep_wgts
+        if rw is None:
+            return {}
+        cols = rw.columns_from_data(list(cast(pl.DataFrame, self._data).columns))
+        return dict(zip(cols, rw.coefficients()))
 
     @property
     def meta(self) -> MetadataStore:

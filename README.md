@@ -4,7 +4,8 @@
 
 [![PyPI](https://img.shields.io/pypi/v/svy?color=blue)](https://pypi.org/project/svy/)
 [![Python](https://img.shields.io/pypi/pyversions/svy)](https://pypi.org/project/svy/)
-[![Downloads](https://img.shields.io/pypi/dm/svy)](https://pypi.org/project/svy/)
+<!--[![Downloads](https://img.shields.io/pypi/dm/svy)](https://pypi.org/project/svy/)-->
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-svylab.com-0b7285)](https://svylab.com/docs/svy)
 
@@ -115,14 +116,14 @@ The [Quick Tour](https://svylab.com/docs/svy/tutorials/sample_quicktour.html) ru
 
 ## Capabilities across the survey lifecycle
 
-| Stage | What svy provides |
-| --- | --- |
-| **Plan** | Sample size for estimation and comparison objectives, with design effects and nonresponse |
-| **Select** | SRS, systematic, PPS methods; multi-stage designs with automatic probability chaining |
-| **Weight** | Nonresponse adjustment, poststratification, GREG calibration, raking, trimming, normalization |
+| Stage        | What svy provides                                                                                                       |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| **Plan**     | Sample size for estimation and comparison objectives, with design effects and nonresponse                               |
+| **Select**   | SRS, systematic, PPS methods; multi-stage designs with automatic probability chaining                                   |
+| **Weight**   | Nonresponse adjustment, poststratification, GREG calibration, raking, trimming, normalization                           |
 | **Estimate** | Means, totals, proportions, ratios, medians; Taylor linearization and replication (BRR, Fay, jackknife, bootstrap, SDR) |
-| **Test** | Tabulations, t-tests, rank tests, Rao-Scott chi-squared tests, all design-adjusted |
-| **Model** | GLMs (linear, logistic, Poisson, Gamma) with design-adjusted standard errors |
+| **Test**     | Tabulations, t-tests, rank tests, Rao-Scott chi-squared tests, all design-adjusted                                      |
+| **Model**    | GLMs (linear, logistic, Poisson, Gamma) with design-adjusted standard errors                                            |
 
 All methods are grounded in established survey methodology, with domain estimation (`by=`) and subpopulation analysis (`where=`) throughout.
 
@@ -132,12 +133,12 @@ svy is validated against R's `survey` package across design specification, Taylo
 
 ## Ecosystem
 
-| Package | Purpose | Install |
-| --- | --- | --- |
-| **svy** | Core survey design & estimation | `pip install svy` |
-| [svy-sae](https://svylab.com/docs/svy-sae/) | Small Area Estimation | `pip install svy-sae` |
-| [svy-io](https://svylab.com/docs/svy-io/) | SPSS / Stata / SAS I/O | `pip install svy-io` |
-| [svy-rs](https://pypi.org/project/svy-rs/) | Rust computational engine used by svy | installed automatically |
+| Package                                     | Purpose                               | Install                 |
+| ------------------------------------------- | ------------------------------------- | ----------------------- |
+| **svy**                                     | Core survey design & estimation       | `pip install svy`       |
+| [svy-sae](https://svylab.com/docs/svy-sae/) | Small Area Estimation                 | `pip install svy-sae`   |
+| [svy-io](https://svylab.com/docs/svy-io/)   | SPSS / Stata / SAS I/O                | `pip install svy-io`    |
+| [svy-rs](https://pypi.org/project/svy-rs/)  | Rust computational engine used by svy | installed automatically |
 
 This repository is a monorepo: the Python package lives in [`packages/svy`](packages/svy), the Rust engine in [`packages/svy-rs`](packages/svy-rs), and the I/O library in [`packages/svy-io`](packages/svy-io).
 
