@@ -65,7 +65,7 @@ def test_rake_successful_convergence_with_factors_empty_dict(sample_data_for_rak
         "age_group": {"18-34": 0.8, "35-54": 1.0, "55+": 1.3},
         "region": {"North": 1.25, "South": 0.75},
     }
-    sample.weighting.rake(controls={}, factors=factors)
+    sample = sample.weighting.rake(controls={}, factors=factors)
     col = RK_WGT
     raked = sample.data
 
@@ -82,7 +82,7 @@ def test_rake_successful_convergence_with_factors(sample_data_for_raking, mock_d
         "age_group": {"18-34": 0.8, "35-54": 1.0, "55+": 1.3},
         "region": {"North": 1.25, "South": 0.75},
     }
-    sample.weighting.rake(controls=None, factors=factors)
+    sample = sample.weighting.rake(controls=None, factors=factors)
     col = RK_WGT
     raked = sample.data
 
@@ -187,7 +187,7 @@ def test_rake_stops_at_max_iter_on_no_convergence(sample_data_for_raking, mock_d
     assert sample.design.wgt == original_wgt  # design not mutated
 
     # strict=False: stores partial weights, prints warning
-    sample.weighting.rake(controls=controls, max_iter=3, tol=1e-20, strict=False)
+    sample = sample.weighting.rake(controls=controls, max_iter=3, tol=1e-20, strict=False)
     captured = capsys.readouterr()
     assert "Warning: Raking did not converge after 3 iterations" in captured.out
 

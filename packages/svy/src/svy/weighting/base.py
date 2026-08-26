@@ -46,6 +46,18 @@ class Weighting:
     def __init__(self, sample: Any) -> None:
         self._sample = sample
 
+    def _target(self, inplace: bool) -> Any:
+        """The sample this operation works on: the caller's, or a private fork.
+
+        Every function in ``weighting/`` builds its result by rebinding
+        ``sample._data`` and ``sample._design`` as it goes, so the fork has to be
+        made here, before the work starts, rather than at the end the way
+        ``wrangling._helpers._resolve_target`` does it. Same contract either way:
+        ``inplace=False`` leaves the caller's sample untouched, ``inplace=True``
+        rewrites it, and both return a ``Sample`` so chaining is unaffected.
+        """
+        return self._sample if inplace else self._sample._fork()
+
     # ------------------------------------------------------------------ #
     # Variance strata / replicate weights
     # ------------------------------------------------------------------ #
@@ -63,9 +75,10 @@ class Weighting:
         fay_coef: float = 0.0,
         rstate: int | None = None,
         drop_nulls: bool = False,
+        inplace: bool = False,
     ) -> Any:
         return _create_brr_wgts(
-            self._sample,
+            self._target(inplace),
             n_reps,
             stratum=stratum,
             psu=psu,
@@ -90,9 +103,10 @@ class Weighting:
         rep_prefix: str | None = None,
         rstate: int | None = None,
         drop_nulls: bool = False,
+        inplace: bool = False,
     ) -> Any:
         return _create_jk_wgts(
-            self._sample,
+            self._target(inplace),
             paired=paired,
             stratum=stratum,
             psu=psu,
@@ -114,9 +128,10 @@ class Weighting:
         rep_prefix: str | None = None,
         drop_nulls: bool = False,
         rstate: RandomState = None,
+        inplace: bool = False,
     ) -> Any:
         return _create_bs_wgts(
-            self._sample,
+            self._target(inplace),
             n_reps,
             kind=kind,
             stratum=stratum,
@@ -134,9 +149,10 @@ class Weighting:
         rep_prefix: str | None = None,
         order_col: str | None = None,
         drop_nulls: bool = False,
+        inplace: bool = False,
     ) -> Any:
         return _create_sdr_wgts(
-            self._sample,
+            self._target(inplace),
             n_reps,
             psu=psu,
             rep_prefix=rep_prefix,
@@ -160,9 +176,10 @@ class Weighting:
         update_design_wgts: bool = True,
         respondents_only: bool = True,
         trimming: TrimConfig | None = None,
+        inplace: bool = False,
     ) -> Any:
         return _adjust(
-            self._sample,
+            self._target(inplace),
             resp_status,
             by,
             resp_mapping=resp_mapping,
@@ -186,9 +203,10 @@ class Weighting:
         wgt_name: str = "norm_wgt",
         ignore_reps: bool = False,
         update_design_wgts: bool = True,
+        inplace: bool = False,
     ) -> Any:
         return _normalize(
-            self._sample,
+            self._target(inplace),
             controls,
             by=by,
             wgt_name=wgt_name,
@@ -211,9 +229,10 @@ class Weighting:
         update_design_wgts: bool = True,
         strict: bool = True,
         trimming: TrimConfig | None = None,
+        inplace: bool = False,
     ) -> Any:
         return _poststratify(
-            self._sample,
+            self._target(inplace),
             controls,
             factors=factors,
             by=by,
@@ -257,9 +276,10 @@ class Weighting:
         update_design_wgts: bool = True,
         strict: bool = True,
         trimming: TrimConfig | None = None,
+        inplace: bool = False,
     ) -> Sample:
         return _rake(
-            self._sample,
+            self._target(inplace),
             controls=controls,
             factors=factors,
             wgt_name=wgt_name,
@@ -322,9 +342,10 @@ class Weighting:
         ignore_reps: bool = False,
         strict: bool = True,
         trimming: TrimConfig | None = None,
+        inplace: bool = False,
     ) -> Any:
         return _calibrate(
-            self._sample,
+            self._target(inplace),
             controls=controls,
             by=by,
             scale=scale,
@@ -351,9 +372,10 @@ class Weighting:
         ignore_reps: bool = False,
         strict: bool = True,
         trimming: TrimConfig | None = None,
+        inplace: bool = False,
     ) -> Any:
         return _calibrate_matrix(
-            self._sample,
+            self._target(inplace),
             aux_vars=aux_vars,
             control=control,
             by=by,
@@ -383,9 +405,11 @@ class Weighting:
         tol: float = 1e-6,
         wgt_name: str | None = "trim_wgt",
         update_design_wgts: bool = True,
+        *,
+        inplace: bool = False,
     ) -> "Sample":
         return _trim(
-            self._sample,
+            self._target(inplace),
             upper=upper,
             lower=lower,
             by=by,

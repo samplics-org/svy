@@ -86,7 +86,7 @@ def sample_data_single_class():
 
 def test_adjust_single_class_standard_codes(sample_data_single_class):
     sample = Sample(data=sample_data_single_class, design=Design(wgt="weight"))
-    sample.weighting.adjust(
+    sample = sample.weighting.adjust(
         by="single_class", resp_status="status", unknown_to_inelig=True, respondents_only=False
     )
     adjusted = sample.data[NR_WGT].to_numpy()
@@ -100,7 +100,7 @@ def test_adjust_single_class_standard_codes(sample_data_single_class):
 def test_adjust_stratified_custom_codes(sample_data_custom_codes):
     sample = Sample(data=sample_data_custom_codes, design=Design(wgt="weight"))
     mapping = {"rr": "R", "nr": "N", "in": "I", "uk": "U"}
-    sample.weighting.adjust(
+    sample = sample.weighting.adjust(
         by="adj_class_num",
         resp_status="status_code",
         resp_mapping=mapping,
@@ -114,7 +114,7 @@ def test_adjust_stratified_custom_codes(sample_data_custom_codes):
 
 def test_adjust_stratified_unknown_to_inelig_true(sample_data_basic):
     sample = Sample(data=sample_data_basic, design=Design(wgt="weight"))
-    sample.weighting.adjust(
+    sample = sample.weighting.adjust(
         by="adj_class", resp_status="status", unknown_to_inelig=True, respondents_only=False
     )
     adjusted = sample.data[NR_WGT].to_numpy()
@@ -137,7 +137,7 @@ def test_adjust_stratified_unknown_to_inelig_true(sample_data_basic):
 
 def test_adjust_stratified_unknown_to_inelig_false(sample_data_basic):
     sample = Sample(data=sample_data_basic, design=Design(wgt="weight"))
-    sample.weighting.adjust(
+    sample = sample.weighting.adjust(
         by="adj_class", resp_status="status", unknown_to_inelig=False, respondents_only=False
     )
     adjusted = sample.data[NR_WGT].to_numpy()
@@ -160,7 +160,7 @@ def test_adjust_stratified_unknown_to_inelig_false(sample_data_basic):
 
 def test_adjust_zero_respondents_in_class(sample_data_no_respondents):
     sample = Sample(data=sample_data_no_respondents, design=Design(wgt="weight"))
-    sample.weighting.adjust(
+    sample = sample.weighting.adjust(
         by="adj_class", resp_status="status", unknown_to_inelig=True, respondents_only=False
     )
     adjusted = sample.data[NR_WGT].to_numpy()
@@ -170,7 +170,7 @@ def test_adjust_zero_respondents_in_class(sample_data_no_respondents):
 
 def test_adjust_all_respondents(sample_data_all_respondents):
     sample = Sample(data=sample_data_all_respondents, design=Design(wgt="weight"))
-    sample.weighting.adjust(by="adj_class", resp_status="status", unknown_to_inelig=True)
+    sample = sample.weighting.adjust(by="adj_class", resp_status="status", unknown_to_inelig=True)
     adjusted = sample.data[NR_WGT].to_numpy()
     expected = np.array([10.0, 10.0, 10.0])
     np.testing.assert_allclose(adjusted, expected, atol=1e-9)
@@ -184,7 +184,7 @@ def test_adjust_all_respondents(sample_data_all_respondents):
 def test_adjust_auto_col_name_uses_nr_wgt(sample_data_basic):
     """Auto-generated adjusted weight column must be nr_wgt."""
     sample = Sample(data=sample_data_basic, design=Design(wgt="weight"))
-    sample.weighting.adjust(by="adj_class", resp_status="status")
+    sample = sample.weighting.adjust(by="adj_class", resp_status="status")
     assert NR_WGT in sample.data.columns
     assert "svy_adj_weight" not in sample.data.columns
 
@@ -192,7 +192,7 @@ def test_adjust_auto_col_name_uses_nr_wgt(sample_data_basic):
 def test_adjust_wgt_name_overrides_default(sample_data_basic):
     """Explicit wgt_name overrides auto-generated name."""
     sample = Sample(data=sample_data_basic, design=Design(wgt="weight"))
-    sample.weighting.adjust(by="adj_class", resp_status="status", wgt_name="my_adj_wgt")
+    sample = sample.weighting.adjust(by="adj_class", resp_status="status", wgt_name="my_adj_wgt")
     assert "my_adj_wgt" in sample.data.columns
     assert NR_WGT not in sample.data.columns
     assert sample.design.wgt == "my_adj_wgt"
@@ -231,7 +231,7 @@ def test_adjust_replicate_weights_auto_prefix(sample_data_basic):
         prefix="rw",
         n_reps=2,
     )
-    sample.weighting.adjust(
+    sample = sample.weighting.adjust(
         by="adj_class",
         resp_status="status",
         update_design_wgts=True,
@@ -256,7 +256,7 @@ def test_adjust_replicate_weights_custom_wgt_name(sample_data_basic):
         prefix="rw",
         n_reps=2,
     )
-    sample.weighting.adjust(
+    sample = sample.weighting.adjust(
         by="adj_class",
         resp_status="status",
         wgt_name="my_wgt",
@@ -279,7 +279,7 @@ def test_adjust_replicate_weights_ignored_when_flag_set(sample_data_basic):
         prefix="rw",
         n_reps=2,
     )
-    sample.weighting.adjust(
+    sample = sample.weighting.adjust(
         by="adj_class",
         resp_status="status",
         ignore_reps=True,
@@ -300,7 +300,7 @@ def test_adjust_no_design_update(sample_data_basic):
         prefix="rw",
         n_reps=2,
     )
-    sample.weighting.adjust(
+    sample = sample.weighting.adjust(
         by="adj_class",
         resp_status="status",
         update_design_wgts=False,
@@ -336,7 +336,7 @@ def test_adjust_by_tuple():
     """Tuple of strings crosses the columns into adjustment classes."""
     df, expected = _make_twoway_sample()
     sample = Sample(data=df, design=Design(wgt="weight"))
-    sample.weighting.adjust(
+    sample = sample.weighting.adjust(
         resp_status="status",
         by=("region", "sex"),
         unknown_to_inelig=True,
@@ -350,7 +350,7 @@ def test_adjust_by_list_accepted():
     """Lists of strings are now accepted (equivalent to tuple)."""
     df, expected = _make_twoway_sample()
     sample = Sample(data=df, design=Design(wgt="weight"))
-    sample.weighting.adjust(
+    sample = sample.weighting.adjust(
         resp_status="status",
         by=["region", "sex"],
         unknown_to_inelig=True,

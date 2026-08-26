@@ -8,6 +8,26 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Changed
+
+- **BREAKING: `Sample.weighting` no longer mutates the sample you call it on.** All eleven transforming methods — the four `create_*_wgts`, `adjust`, `normalize`, `poststratify`, `rake`, `calibrate`, `calibrate_matrix`, `trim` — now return a new `Sample` and take `inplace: bool = False` to ask for the old behaviour. Both branches return a `Sample`, so chaining is unchanged and `s = s.weighting.…()` keeps working exactly as before.
+
+  This is not a new convention: all 19 `wrangling` methods already take `inplace: bool = False` and default to copying, and `singleton`'s five transforms always return a new `Sample`. `weighting` was the only namespace that mutated unconditionally, and the only one with no way to ask for a copy — `grep -rn inplace src/svy/` hit nothing outside `wrangling/`.
+
+  The reassignment idiom hid it, so it surfaced only when two variants branched off one sample — which is what a method comparison, a sensitivity check, or a docs page does:
+
+  ```python
+  boot = base.weighting.create_bs_wgts(n_reps=10, rep_prefix="bs")
+  jack = base.weighting.create_jk_wgts(rep_prefix="jk")
+  # before: boot is jack is base. 33 jk* columns in the frame, and a design
+  #         still reading method=Bootstrap prefix='bs' -- so an estimate off
+  #         `jack` silently used the bootstrap columns and coefficients.
+  ```
+
+  **What breaks:** code that called a weighting method and then read the receiver without capturing the return. Add `inplace=True`, or capture the result. Code already written as `s = s.weighting.…()` needs no change.
+
+  The isolation covers diagnostics as well as data: an operation that raises under the default leaves the caller's warning store untouched, because "this call had no effect on my sample" is only true if it covers everything. The error is still raised and still emitted to the log; `inplace=True` is how you ask for the warning to land on your sample.
+
 ## [0.25.0] — 2026-08-26
 
 ### Added

@@ -42,7 +42,7 @@ def sample_data():
 def test_normalize_no_domain_or_control(sample_data, mock_design):
     """Weights normalized to sum to number of samples (n=6)."""
     sample = Sample(data=sample_data, design=mock_design)
-    sample.weighting.normalize()
+    sample = sample.weighting.normalize()
 
     expected = np.array([0.5, 0.5, 1.0, 1.0, 1.5, 1.5])
     result = sample.data.get_column(NORM_WGT).to_numpy()
@@ -56,7 +56,7 @@ def test_normalize_with_numeric_control(sample_data, mock_design):
     """With a scalar control total, weights sum to that total."""
     sample = Sample(data=sample_data, design=mock_design)
     control_total = 240
-    sample.weighting.normalize(controls=control_total)
+    sample = sample.weighting.normalize(controls=control_total)
 
     expected = np.array([20.0, 20.0, 40.0, 40.0, 60.0, 60.0])
     result = sample.data.get_column(NORM_WGT).to_numpy()
@@ -69,7 +69,7 @@ def test_normalize_with_domain_and_dict_control(sample_data, mock_design):
     """Normalization within domains using a dict of control totals."""
     sample = Sample(data=sample_data, design=mock_design)
     controls = {"A": 60, "B": 180}
-    sample.weighting.normalize(controls=controls, by="domain")
+    sample = sample.weighting.normalize(controls=controls, by="domain")
 
     expected = np.array([15.0, 15.0, 30.0, 45.0, 67.5, 67.5])
     result = sample.data.get_column(NORM_WGT).to_numpy()
@@ -84,7 +84,7 @@ def test_normalize_with_domain_and_dict_control(sample_data, mock_design):
 def test_normalize_with_domain_no_control(sample_data, mock_design):
     """Normalization within domains, each domain sums to its count."""
     sample = Sample(data=sample_data, design=mock_design)
-    sample.weighting.normalize(by="domain")
+    sample = sample.weighting.normalize(by="domain")
 
     expected = np.array([0.75, 0.75, 1.5, 0.75, 1.125, 1.125])
     result = sample.data.get_column(NORM_WGT).to_numpy()
@@ -104,7 +104,7 @@ def test_normalize_with_domain_no_control(sample_data, mock_design):
 def test_normalize_auto_col_name_uses_norm_wgt(sample_data, mock_design):
     """Auto-generated normalized weight column must be norm_wgt."""
     sample = Sample(data=sample_data, design=mock_design)
-    sample.weighting.normalize()
+    sample = sample.weighting.normalize()
     assert NORM_WGT in sample.data.columns
     assert "svy_norm_samp_weight" not in sample.data.columns
 
@@ -112,7 +112,7 @@ def test_normalize_auto_col_name_uses_norm_wgt(sample_data, mock_design):
 def test_normalize_wgt_name_overrides_default(sample_data, mock_design):
     """Explicit wgt_name overrides auto-generated name."""
     sample = Sample(data=sample_data, design=mock_design)
-    sample.weighting.normalize(wgt_name="my_norm_wgt")
+    sample = sample.weighting.normalize(wgt_name="my_norm_wgt")
     assert "my_norm_wgt" in sample.data.columns
     assert NORM_WGT not in sample.data.columns
     assert sample.design.wgt == "my_norm_wgt"
@@ -143,7 +143,7 @@ def test_normalize_replicate_weights_auto_prefix(sample_data, mock_design):
     )
     sample = Sample(data=df, design=mock_design)
     sample._design = sample.design.update_rep_weights(method="BRR", prefix="rw", n_reps=2)
-    sample.weighting.normalize(update_design_wgts=True)
+    sample = sample.weighting.normalize(update_design_wgts=True)
     assert f"{NORM_WGT}1" in sample.data.columns
     assert f"{NORM_WGT}2" in sample.data.columns
     assert sample.design.rep_wgts.columns == [f"{NORM_WGT}1", f"{NORM_WGT}2"]
@@ -158,7 +158,7 @@ def test_normalize_replicate_weights_custom_wgt_name(sample_data, mock_design):
     )
     sample = Sample(data=df, design=mock_design)
     sample._design = sample.design.update_rep_weights(method="BRR", prefix="rw", n_reps=2)
-    sample.weighting.normalize(wgt_name="my_norm")
+    sample = sample.weighting.normalize(wgt_name="my_norm")
     assert "my_norm" in sample.data.columns
     assert "my_norm1" in sample.data.columns
     assert "my_norm2" in sample.data.columns
@@ -172,7 +172,7 @@ def test_normalize_replicate_weights_ignored_when_flag_set(sample_data, mock_des
     )
     sample = Sample(data=df, design=mock_design)
     sample._design = sample.design.update_rep_weights(method="BRR", prefix="rw", n_reps=2)
-    sample.weighting.normalize(ignore_reps=True)
+    sample = sample.weighting.normalize(ignore_reps=True)
     assert f"{NORM_WGT}1" not in sample.data.columns
     assert sample.design.rep_wgts.columns == ["rw1", "rw2"]
 
@@ -184,7 +184,7 @@ def test_normalize_no_design_update(sample_data, mock_design):
     )
     sample = Sample(data=df, design=mock_design)
     sample._design = sample.design.update_rep_weights(method="BRR", prefix="rw", n_reps=2)
-    sample.weighting.normalize(update_design_wgts=False)
+    sample = sample.weighting.normalize(update_design_wgts=False)
     assert NORM_WGT in sample.data.columns
     assert f"{NORM_WGT}1" in sample.data.columns
     assert sample.design.wgt == "samp_weight"
