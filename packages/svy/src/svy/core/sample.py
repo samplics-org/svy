@@ -1126,6 +1126,21 @@ class Sample:
         new._warnings = copy.deepcopy(self._warnings)
         return new
 
+    def _fork(self) -> "Sample":
+        """Return an independent copy carrying the same data, for callers that
+        build their result by rebinding ``_data``/``_design`` as they go.
+
+        ``_replace_data`` covers the case where the new frame is already in
+        hand. The weighting operations are the other shape: each one rebinds
+        ``sample._data`` and ``sample._design`` several times over the course of
+        a single call, so the copy has to exist *before* the work starts for
+        those rebinds to land somewhere private. Sharing the frame object is
+        safe because nothing in ``weighting/`` mutates a frame in place -- every
+        step goes through ``with_columns``/``hstack``/``filter``, which return
+        new frames -- and the Design is frozen.
+        """
+        return self._replace_data(self._data)
+
     def _remove_invalid_weight(
         self, *, df: pl.DataFrame | None = None, wgt_col: str | None = None
     ) -> tuple[pl.DataFrame, dict[str, int]]:

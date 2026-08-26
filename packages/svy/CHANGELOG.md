@@ -8,6 +8,61 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Fixed
+
+- **BRR validated its strata in two passes, and sent one of them to the wrong subsystem.** `create_brr_wgts` checked `< 2` PSUs first, raising `INSUFFICIENT_PSU`, and only then checked for odd counts. A frame carrying both therefore reported the lone-PSU stratum, and revealed the odd ones on the next run — one class of problem per attempt, on a validation that could have been answered in full the first time.
+
+  The split also borrowed a question that is not BRR's. A stratum with one PSU is a **singleton**, which matters to Taylor linearization and has its own subsystem — `Sample.singleton`, with `collapse`, `combine`, `pool`, `certainty` — none of which the hint mentioned; it said "Combine small strata or check design specification." For BRR the count is not a singleton question at all: a stratum of 1 and a stratum of 3 fail for exactly the same reason, a PSU with no partner.
+
+  BRR now asks one question — is the PSU count a multiple of 2 — and reports every stratum that fails it in a single error, naming each with its count:
+
+  ```
+  ❌ BRR needs 2 PSUs per variance stratum [ODD_PSU_COUNT]
+  BRR pairs PSUs into variance strata of exactly 2. Found 3 strata whose PSU
+  count is not a multiple of 2, leaving a PSU with no partner.
+  - got: a=1, b=3, c=5
+  ```
+
+  "Multiple of 2" rather than "equal to 2" because `create_brr_wgts` pairs: a 4-PSU stratum becomes two variance strata of 2 and is valid. `INSUFFICIENT_PSU` is now the paired jackknife's alone, which is the one method that genuinely distinguishes the two — it absorbs an odd count into a triplet but still cannot pair a lone PSU.
+
+- **The odd-PSU BRR error pointed at an API that no longer exists.** Its hint read `Use method='jk2' which allows 2-3 PSUs per stratum`. `method='jk2'` was `create_variance_strata`'s parameter — a function removed in 0.25.0 — and `method` is not a parameter of `create_brr_wgts` either, so the one line telling you what to do instead named a parameter of a gone function on a function that never had it. "2-3 PSUs per stratum" was equally stale: `create_jk_wgts(paired=True)` pairs any count ≥ 2 and absorbs an odd one into a triplet.
+
+  The hint now names `create_jk_wgts(paired=True)`, says why BRR cannot do the same, and tells anyone who needs BRR specifically to fix *every* stratum listed rather than one. Its test asserted `pytest.raises(Exception)` and nothing more, which is how the text drifted unnoticed; it now pins the code, the `where`, and that the remedy names a real API.
+
+- **Regenerating replicate weights left the previous method's design in place.** `create_brr_wgts` and `create_jk_wgts` recorded their result with `Design.fill_missing(rep_wgts=…)`, which by definition only fills a field that is currently `None` — so once any replicate design existed, the record of what had just been built was silently dropped. `create_bs_wgts` and `create_sdr_wgts` used `Design.update` and were unaffected, which is the whole of the difference: it was an inconsistency inherited from the monorepo migration, never a decision.
+
+  Building a second set of replicates therefore wrote the new columns and kept the first method's metadata — and estimation reads the metadata, not the columns:
+
+  ```python
+  s = s.weighting.create_bs_wgts(n_reps=10, rep_prefix="bs")
+  s = s.weighting.create_jk_wgts(rep_prefix="jk")
+  # before: 33 jk* columns in the frame, design.rep_wgts reading
+  #         method=Bootstrap prefix='bs' n_reps=10.
+  #         mean(method="replication") -> Estimate: MEAN (BOOTSTRAP), off `bs*`.
+  ```
+
+  Unlike the mutation defect fixed alongside it, this one fired on the plain `s = s.weighting.…()` idiom, in both orders, and switching methods mid-analysis is exactly when someone does it — comparing a jackknife against a bootstrap, or moving to JK2 after seeing the replicate count. Both now use `update`: the design describes the columns that were just written, and a declaration that no longer matches them is replaced rather than preserved.
+
+### Changed
+
+- **BREAKING: `Sample.weighting` no longer mutates the sample you call it on.** All eleven transforming methods — the four `create_*_wgts`, `adjust`, `normalize`, `poststratify`, `rake`, `calibrate`, `calibrate_matrix`, `trim` — now return a new `Sample` and take `inplace: bool = False` to ask for the old behaviour. Both branches return a `Sample`, so chaining is unchanged and `s = s.weighting.…()` keeps working exactly as before.
+
+  This is not a new convention: all 19 `wrangling` methods already take `inplace: bool = False` and default to copying, and `singleton`'s five transforms always return a new `Sample`. `weighting` was the only namespace that mutated unconditionally, and the only one with no way to ask for a copy — `grep -rn inplace src/svy/` hit nothing outside `wrangling/`.
+
+  The reassignment idiom hid it, so it surfaced only when two variants branched off one sample — which is what a method comparison, a sensitivity check, or a docs page does:
+
+  ```python
+  boot = base.weighting.create_bs_wgts(n_reps=10, rep_prefix="bs")
+  jack = base.weighting.create_jk_wgts(rep_prefix="jk")
+  # before: boot is jack is base. 33 jk* columns in the frame, and a design
+  #         still reading method=Bootstrap prefix='bs' -- so an estimate off
+  #         `jack` silently used the bootstrap columns and coefficients.
+  ```
+
+  **What breaks:** code that called a weighting method and then read the receiver without capturing the return. Add `inplace=True`, or capture the result. Code already written as `s = s.weighting.…()` needs no change.
+
+  The isolation covers diagnostics as well as data: an operation that raises under the default leaves the caller's warning store untouched, because "this call had no effect on my sample" is only true if it covers everything. The error is still raised and still emitted to the log; `inplace=True` is how you ask for the warning to land on your sample.
+
 ## [0.25.0] — 2026-08-26
 
 ### Added

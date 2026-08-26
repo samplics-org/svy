@@ -165,8 +165,116 @@ class TestBRRWeights:
             sample.weighting.create_brr_wgts()
 
     def test_brr_rejects_odd_psu_count(self, odd_psu_sample):
-        with pytest.raises(Exception):
+        with pytest.raises(DimensionError) as exc:
             odd_psu_sample.weighting.create_brr_wgts()
+
+        err = exc.value
+        assert err.code == "ODD_PSU_COUNT"
+        assert err.where == "Sample.weighting.create_brr_wgts"
+
+        # The remedy has to name an API that exists. This hint used to read
+        # "Use method='jk2'", which was create_variance_strata's parameter --
+        # a function removed in 0.25.0, and `method` is not a parameter of
+        # create_brr_wgts either.
+        assert "create_jk_wgts(paired=True)" in err.hint
+        assert "method=" not in err.hint
+        assert "create_variance_strata" not in err.hint
+
+        # More than one stratum can be at fault, and each needs its own fix,
+        # so the remedy must not read as one PSU overall.
+        assert "every stratum" in err.hint
+
+    @pytest.mark.parametrize(
+        "n_odd_strata, expected_count_phrase",
+        [(1, "Found 1 stratum whose"), (3, "Found 3 strata whose")],
+    )
+    def test_odd_psu_message_agrees_in_number(self, n_odd_strata, expected_count_phrase):
+        """`stratum`/`strata` is irregular, so the package's `(s)` suffix fails here."""
+        strata, psus, psu_id = [], [], 1
+        for i in range(n_odd_strata):
+            for _ in range(3):  # 3 PSUs -> odd
+                strata += [f"s{i}"] * 2
+                psus += [psu_id, psu_id]
+                psu_id += 1
+        data = pl.DataFrame({"stratum": strata, "psu": psus, "wgt": [1.0] * len(psus)})
+        sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum", psu="psu"))
+
+        with pytest.raises(DimensionError) as exc:
+            sample.weighting.create_brr_wgts()
+        assert expected_count_phrase in exc.value.detail
+
+    def test_one_error_lists_every_stratum_that_is_not_a_multiple_of_2(self):
+        """1 and 3 are the same failure, so they arrive in one error, not two runs.
+
+        These used to be separate guards with the `< 2` one raising first, so a
+        frame carrying both reported only the lone-PSU stratum and revealed the
+        odd ones on the next run.
+        """
+        counts = {"a": 1, "b": 3, "c": 5, "d": 4}  # d pairs cleanly, must not appear
+        strata, psus, psu_id = [], [], 1
+        for name, n in counts.items():
+            for _ in range(n):
+                strata += [name] * 2
+                psus += [psu_id, psu_id]
+                psu_id += 1
+        data = pl.DataFrame({"stratum": strata, "psu": psus, "wgt": [1.0] * len(psus)})
+        sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum", psu="psu"))
+
+        with pytest.raises(DimensionError) as exc:
+            sample.weighting.create_brr_wgts()
+
+        err = exc.value
+        assert err.code == "ODD_PSU_COUNT"
+        assert "3 strata" in err.detail
+        for offender in ("a=1", "b=3", "c=5"):
+            assert offender in err.got
+        assert "d=" not in err.got, "a stratum that pairs cleanly must not be reported"
+
+    @pytest.mark.parametrize("n_psus", [2, 4, 6])
+    def test_any_multiple_of_two_is_accepted(self, n_psus):
+        """Pairing is why the test is 'multiple of 2', not 'equal to 2'."""
+        strata, psus, psu_id = [], [], 1
+        for name in ("a", "b", "c"):
+            for _ in range(n_psus):
+                strata += [name] * 2
+                psus += [psu_id, psu_id]
+                psu_id += 1
+        data = pl.DataFrame({"stratum": strata, "psu": psus, "wgt": [1.0] * len(psus)})
+        sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum", psu="psu"))
+
+        out = sample.weighting.create_brr_wgts(rep_prefix="r")
+        assert out._design.rep_wgts.method == "BRR"
+
+    def test_jk2_still_rejects_a_lone_psu(self):
+        """The `< 2` guard is now jk2's alone -- it can triple, but not pair one."""
+        data = pl.DataFrame({"stratum": [1, 2, 2, 2, 2], "psu": [1, 2, 2, 3, 3], "wgt": [1.0] * 5})
+        sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum", psu="psu"))
+        with pytest.raises(DimensionError) as exc:
+            sample.weighting.create_jk_wgts(paired=True)
+        assert exc.value.code == "INSUFFICIENT_PSU"
+
+    def test_odd_psu_got_says_how_many_it_withheld(self):
+        """Each offending stratum needs fixing, so a bare `...` hides the job."""
+        strata, psus, psu_id = [], [], 1
+        for i in range(7):
+            for _ in range(3):
+                strata += [f"s{i}"] * 2
+                psus += [psu_id, psu_id]
+                psu_id += 1
+        data = pl.DataFrame({"stratum": strata, "psu": psus, "wgt": [1.0] * len(psus)})
+        sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum", psu="psu"))
+
+        with pytest.raises(DimensionError) as exc:
+            sample.weighting.create_brr_wgts()
+        got = exc.value.got
+        assert "(+2 more)" in got  # 7 offenders, 5 shown
+        assert "..." not in got
+
+    def test_the_odd_psu_hint_actually_works(self, odd_psu_sample):
+        """Follow the hint and it succeeds on the frame that raised."""
+        out = odd_psu_sample.weighting.create_jk_wgts(paired=True, rep_prefix="jk")
+        assert out._design.rep_wgts.method == "Jackknife"
+        assert out._design.rep_wgts.kind == "jk2"
 
     def test_brr_string_psu_stratum(self):
         data = pl.DataFrame(
@@ -441,10 +549,18 @@ class TestVarianceStrataPairing:
         assert sample.design.stratum == "stratum"
 
     def test_singleton_stratum_raises(self):
+        """BRR rejects a lone PSU as "not a multiple of 2", not as a singleton.
+
+        A stratum of 1 and a stratum of 3 fail for the same reason -- a PSU with
+        no partner -- so BRR reports them the same way. Whether a lone PSU is a
+        *singleton* is a Taylor question, and `Sample.singleton` owns it.
+        """
         data = pl.DataFrame({"stratum": [1, 2, 2, 2, 2], "psu": [1, 2, 2, 3, 3], "wgt": [1.0] * 5})
         sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum", psu="psu"))
-        with pytest.raises(DimensionError, match="at least 2 PSUs"):
+        with pytest.raises(DimensionError) as exc:
             sample.weighting.create_brr_wgts()
+        assert exc.value.code == "ODD_PSU_COUNT"
+        assert "1=1" in exc.value.got
 
     def test_no_psu_raises(self):
         data = pl.DataFrame({"stratum": [1, 1, 2, 2], "wgt": [1.0] * 4})
@@ -983,3 +1099,81 @@ def test_bootstrap_kind_is_recorded_on_the_design(multi_psu_sample, pumf_like_sa
         n_reps=8, kind="poisson", rep_prefix="r", rstate=41
     )
     assert po._design.rep_wgts.kind == "poisson"
+
+
+# ===========================================================================
+# Regenerating replicate weights replaces the recorded design
+# ===========================================================================
+
+
+class TestRegeneratedDesignIsRecorded:
+    """A generator records the columns it just wrote.
+
+    ``create_brr_wgts`` and ``create_jk_wgts`` used ``Design.fill_missing``,
+    which is a no-op once ``rep_wgts`` is set, while ``create_bs_wgts`` and
+    ``create_sdr_wgts`` used ``Design.update``. So building a second set of
+    replicates wrote the new columns and kept the *first* method's metadata --
+    and estimation reads the metadata, not the columns.
+    """
+
+    def test_bootstrap_then_jackknife(self, simple_stratified_sample):
+        s = simple_stratified_sample.weighting.create_bs_wgts(n_reps=8, rep_prefix="bs", rstate=1)
+        s = s.weighting.create_jk_wgts(rep_prefix="jk")
+
+        rw = s._design.rep_wgts
+        assert rw.method == "Jackknife"
+        assert rw.prefix == "jk"
+        assert rw.n_reps == 6  # one per PSU
+        assert "jk1" in s._data.columns
+
+    def test_jackknife_then_bootstrap(self, simple_stratified_sample):
+        s = simple_stratified_sample.weighting.create_jk_wgts(rep_prefix="jk")
+        s = s.weighting.create_bs_wgts(n_reps=8, rep_prefix="bs", rstate=1)
+
+        rw = s._design.rep_wgts
+        assert rw.method == "Bootstrap"
+        assert rw.prefix == "bs"
+        assert rw.n_reps == 8
+
+    def test_jackknife_then_brr(self, simple_stratified_sample):
+        s = simple_stratified_sample.weighting.create_jk_wgts(rep_prefix="jk")
+        s = s.weighting.create_brr_wgts(rep_prefix="brr")
+
+        rw = s._design.rep_wgts
+        assert rw.method == "BRR"
+        assert rw.prefix == "brr"
+
+    def test_regenerating_the_same_method_updates_its_parameters(self, simple_stratified_sample):
+        s = simple_stratified_sample.weighting.create_jk_wgts(rep_prefix="jk")
+        s = s.weighting.create_jk_wgts(paired=True, rep_prefix="jk2")
+
+        rw = s._design.rep_wgts
+        assert rw.prefix == "jk2"
+        assert rw.kind == "jk2"
+        assert rw.n_reps == 3  # one per variance stratum, not per PSU
+
+    def test_estimation_uses_the_regenerated_design(self, simple_stratified_sample):
+        """The symptom: an estimate off the second design read the first's columns."""
+        s = simple_stratified_sample.weighting.create_bs_wgts(n_reps=8, rep_prefix="bs", rstate=1)
+        s = s.weighting.create_jk_wgts(rep_prefix="jk")
+
+        est = s.estimation.mean(y="y", method="replication")
+        assert "JACKKNIFE" in str(est)
+
+    def test_a_declared_design_is_replaced_by_what_was_generated(self, simple_stratified_sample):
+        """Generating weights overrides a declaration that no longer describes them."""
+        from svy.core.repwgts import BootstrapWgts
+
+        declared = simple_stratified_sample._design.update(
+            rep_wgts=BootstrapWgts(prefix="declared", n_reps=4)
+        )
+        s = Sample(
+            data=simple_stratified_sample._data.with_columns(
+                [pl.lit(1.0).alias(f"declared{i}") for i in range(1, 5)]
+            ),
+            design=declared,
+        )
+        s = s.weighting.create_jk_wgts(rep_prefix="jk")
+
+        assert s._design.rep_wgts.method == "Jackknife"
+        assert s._design.rep_wgts.prefix == "jk"

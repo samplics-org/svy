@@ -698,8 +698,13 @@ class TestTrimByDomain:
 class TestTrimWarnings:
     def test_negative_weight_raises_and_emits_error_warning(self):
         sample = _make_sample([-1.0, 10.0, 10.0])
+        # inplace=True on purpose: the assertion below is about the warning
+        # landing on *this* sample. Under the default (inplace=False) the
+        # operation works on a fork, so a raise leaves the caller's sample
+        # untouched -- warning store included, which is the point of the
+        # isolation. The error is still raised and still emitted to the log.
         with pytest.raises(Exception, match="negative weight|Negative weights"):
-            sample.weighting.trim(upper=50.0)
+            sample.weighting.trim(upper=50.0, inplace=True)
         warns = _warnings_of(sample, WarnCode.NEGATIVE_WEIGHT)
         assert len(warns) == 1
         assert warns[0].level == Severity.ERROR

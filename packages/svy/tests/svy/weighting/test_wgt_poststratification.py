@@ -104,7 +104,7 @@ def test_postratify_raises_value_error_for_mismatched_keys(sample_data, mock_des
 def test_poststratify_auto_col_name_uses_ps_wgt(sample_data, mock_design):
     """Auto-generated column must be ps_wgt."""
     sample = Sample(data=sample_data, design=mock_design)
-    sample.weighting.poststratify(controls=300)
+    sample = sample.weighting.poststratify(controls=300)
     assert PS_WGT in sample.data.columns
     assert "svy_ps_samp_weight" not in sample.data.columns
 
@@ -112,7 +112,7 @@ def test_poststratify_auto_col_name_uses_ps_wgt(sample_data, mock_design):
 def test_poststratify_wgt_name_overrides_default(sample_data, mock_design):
     """Explicit wgt_name overrides auto-generated name."""
     sample = Sample(data=sample_data, design=mock_design)
-    sample.weighting.poststratify(controls=300, wgt_name="my_ps_wgt")
+    sample = sample.weighting.poststratify(controls=300, wgt_name="my_ps_wgt")
     assert "my_ps_wgt" in sample.data.columns
     assert PS_WGT not in sample.data.columns
     assert sample.design.wgt == "my_ps_wgt"
