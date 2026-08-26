@@ -660,3 +660,58 @@ def test_coef_source_says_where_they_came_from():
     assert built.rep_wgts.coef_source == "derived"
     assert BootstrapWgts(prefix="w", n_reps=10).coef_source == "default"
     assert BootstrapWgts(prefix="w", n_reps=10, scale=0.5).coef_source == "scale"
+
+
+# ==========================================================================
+# The lifted accessors
+# ==========================================================================
+
+
+def test_n_reps_is_lifted_onto_sample_and_design():
+    """Saves the `if design.rep_wgts is not None` every caller otherwise needs,
+    and sits alongside n_strata/n_psus."""
+    built = _unbalanced_built(np.random.default_rng(91))
+    assert built.n_reps == 7
+    assert built.design.n_reps == 7
+    assert built.n_reps == built.rep_wgts.n_reps
+
+
+def test_n_reps_is_none_for_a_taylor_design():
+    df, _ = _jkn_frame([2, 2], np.random.default_rng(92))
+    s = svy.Sample(data=df, design=svy.Design(wgt="wgt"))
+    assert s.n_reps is None
+    assert s.design.n_reps is None
+
+
+def test_rep_columns_resolves_padding_the_struct_cannot_see():
+    """rep_wgts.columns builds names from prefix and n_reps alone, so it answers
+    REP1 for a file holding REP001."""
+    df, _ = _jkn_frame([2, 2, 2, 2], np.random.default_rng(93))
+    df = df.rename({f"rw{i}": f"REP{i:03d}" for i in range(1, 9)})
+    s = svy.Sample(
+        data=df,
+        design=svy.Design(
+            stratum="stratum",
+            psu="psu",
+            wgt="wgt",
+            rep_wgts=JackknifeWgts(prefix="REP", n_reps=8, stratum="stratum", psu="psu"),
+        ),
+    )
+    assert s.rep_columns == [f"REP{i:03d}" for i in range(1, 9)]
+    assert s.rep_wgts.columns[0] == "REP1"  # what the struct alone guesses
+    assert all(c in s.data.columns for c in s.rep_columns)
+
+
+def test_rep_columns_is_empty_without_replicate_weights():
+    df, _ = _jkn_frame([2, 2], np.random.default_rng(94))
+    assert svy.Sample(data=df, design=svy.Design(wgt="wgt")).rep_columns == []
+
+
+def test_rep_wgts_is_the_design_object_not_a_copy():
+    """It used to be deep-copied to prevent mutation the frozen struct already
+    refuses -- which cost ~100us per read on a 1000-replicate design and made
+    the two routes to one spec compare unequal."""
+    built = _unbalanced_built(np.random.default_rng(95))
+    assert built.rep_wgts is built._design.rep_wgts
+    with pytest.raises(AttributeError):
+        built.rep_wgts.n_reps = 5  # still immutable
