@@ -6,19 +6,23 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+## [0.3.0] — 2026-08-26
+
 ### Added
 
 - **The public surface is now pinned by a test.** Every name in `__all__` must resolve, be callable, appear once, and match what `from svy_io import *` actually yields; each documented alias must be the *same object* as its target; and every module must be imported by something. This guards a failure that has already happened: `svy` called `svy_io.write_spss` and `svy_io.write_sas`, neither of which has ever existed, and both calls shipped with a `# type: ignore[attr-defined]` silencing the type checker. Nothing failed until someone ran the writer. Verified with probes — adding a phantom name to `__all__` fails three of these tests, and adding a module nothing imports fails another.
 - **`read_spss` dispatch and `get_user_missing_for_column` are tested.** Both were public and referenced by no test. `read_spss` is not a reader but a dispatcher that picks one by file extension, so the routing is the whole function: `.sav` now provably produces exactly what `read_sav` does, arguments are forwarded rather than dropped, the match is case-insensitive, and an unrecognized extension raises instead of guessing from content.
+
+
+- **Readers surface the declared measurement level ([#130](https://github.com/samplics-org/svy/issues/130)).** Each entry in `meta["vars"]` now carries `measure` — `"nominal"`, `"ordinal"`, or `"scale"` — read from ReadStat's `readstat_variable_get_measure`. A format that carries no such attribute (Stata) or a variable whose writer never set one reports `None` rather than `"scale"`, so a caller can tell "declared continuous" from "never declared". Worth knowing before relying on it: SPSS defaults numeric variables to `"scale"` whether or not anyone meant it, so only `"nominal"` and `"ordinal"` are positive declarations.
 
 ### Removed
 
 - **BREAKING: `VarMeta`, `ValueLabels`, `MissingRule` and `SvyMetadata` are no longer exported.** These dataclasses were public and nothing in the package ever constructed one. They also disagreed with what the readers return — `SvyMetadata.value_labels` was declared `Dict[str, ValueLabels]` where a reader hands back a `list` of plain dicts, and `VarMeta` lacked fields the native layer emits. Anyone importing them to type code against `read_sav` was being misled by them. Nothing in `svy` or in this package referenced them.
 - **`utils.py`.** Six functions, 36 statements, 0% coverage — because `__init__` did not import it and nothing else in the package or the tests did either. Not undertested: unreachable.
 
-### Added
 
-- **Readers surface the declared measurement level ([#130](https://github.com/samplics-org/svy/issues/130)).** Each entry in `meta["vars"]` now carries `measure` — `"nominal"`, `"ordinal"`, or `"scale"` — read from ReadStat's `readstat_variable_get_measure`. A format that carries no such attribute (Stata) or a variable whose writer never set one reports `None` rather than `"scale"`, so a caller can tell "declared continuous" from "never declared". Worth knowing before relying on it: SPSS defaults numeric variables to `"scale"` whether or not anyone meant it, so only `"nominal"` and `"ordinal"` are positive declarations.
+- **The benchmark suite.** Three of its five tests were the same benchmark: `test_bench_stata_types_13`, `_14` and `_15` all read one file with no arguments, and reported 29.5 / 29.2 / 29.4 ms — one number, printed three times, under names promising three Stata formats. Half the file was commented out, so `make bench-spss` and `make bench-sas` selected zero tests and exited green. Nothing compared any number to a baseline. It cost ~6s on every test run and an 876 KB data file to say nothing actionable. `svy`'s harness (`bench_kernel.py`, `check_regression.py`, tracked `baselines/`) is the shape to copy if svy-io wants perf tracking later.
 
 ### Fixed
 
@@ -26,14 +30,9 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 - **`ordered=True` now refuses what it cannot order.** `levels="default"` and `levels="both"` fall back to the raw value for anything unlabelled, so their categories depend on data the label set cannot describe; combining them with `ordered=True` raises rather than silently dropping the unlabelled values. `ordered=True` without value labels raises for the same reason — the code order is what defines the order.
 - **Deprecation warnings fail the test run.** The suite carried a polars `DeprecationWarning` in its summary for releases while the deprecated argument silently did nothing. Note for anyone tempted to narrow the filter back to `error::DeprecationWarning:polars`: that form never matches. The module field is compared against the frame the warning is attributed to, and polars sets `stacklevel` to point at the calling code, so the qualified filter silently does nothing.
 
-### Fixed
 
 - **`write_dta` silently dropped value labels ([#129](https://github.com/samplics-org/svy/issues/129)).** The native writer accepted `value_labels_json` and never read it, so a `.dta` was written with its variable labels intact and its value labels gone — no error, and the loss only visible on read-back. The Stata writer now emits a label set per labelled column and points the variable at it, verified against `pandas.io.stata` for formats 113 through 119. The set is named after the column (Stata's own `label values v106 v106` convention) rather than the SAV writer's `{col}_labels`, because dta 113–117 allow only 33 bytes for the name and ReadStat truncates a longer one without complaint.
 - **`write_dta` value-label validation.** Codes are now rejected when they fall outside `[-2147483647, 2147483620]` (Stata stores a code as int32 and reserves the top of that range for `.` through `.z`, so a wider code was truncated silently), when they name a column absent from the frame, and when they target a string column (Stata has no string value labels, unlike SPSS). `bool` and whole-`float` codes are canonicalized to plain integers, so `{True: "yes"}` writes code `1` instead of failing at the JSON boundary.
-
-### Removed
-
-- **The benchmark suite.** Three of its five tests were the same benchmark: `test_bench_stata_types_13`, `_14` and `_15` all read one file with no arguments, and reported 29.5 / 29.2 / 29.4 ms — one number, printed three times, under names promising three Stata formats. Half the file was commented out, so `make bench-spss` and `make bench-sas` selected zero tests and exited green. Nothing compared any number to a baseline. It cost ~6s on every test run and an 876 KB data file to say nothing actionable. `svy`'s harness (`bench_kernel.py`, `check_regression.py`, tracked `baselines/`) is the shape to copy if svy-io wants perf tracking later.
 
 ## [0.2.0] — 2026-07-23
 
@@ -74,7 +73,8 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 First release tracked in this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-io-v0.2.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-io-v0.3.0...HEAD
+[0.3.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.3.0
 [0.2.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.2.0
 [0.1.1]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.1.1
 [0.1.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.1.0
