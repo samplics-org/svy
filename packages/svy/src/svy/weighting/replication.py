@@ -84,6 +84,26 @@ def _as_recorded(col: str | tuple[str, ...] | None) -> str | tuple[str, ...] | N
     return col if isinstance(col, (str, tuple)) else None
 
 
+def _n_strata(n: int) -> str:
+    """``n stratum`` / ``n strata``.
+
+    The package spells this ``singleton PSU(s)`` elsewhere, but ``stratum`` is
+    irregular so the ``(s)`` suffix does not apply.
+    """
+    return f"{n} stratum" if n == 1 else f"{n} strata"
+
+
+def _fmt_strata(items: list, limit: int = 5) -> str:
+    """The offending strata, saying how many were withheld rather than ``...``.
+
+    Every one of these has to be fixed individually, so a bare ellipsis hides
+    the part of the job the reader still has to go and find.
+    """
+    shown = ", ".join(f"{name}={count}" for name, count in items[:limit])
+    extra = len(items) - limit
+    return shown if extra <= 0 else f"{shown} (+{extra} more)"
+
+
 def _pair_variance_strata(
     sample: Sample,
     *,
@@ -202,37 +222,55 @@ def _pair_variance_strata(
     unique_orig, counts = np.unique(orig_strata, return_counts=True)
     stratum_counts = dict(zip(unique_orig.tolist(), counts.tolist()))
 
-    small_strata = [(s, c) for s, c in stratum_counts.items() if c < 2]
-    if small_strata:
-        raise DimensionError(
-            title="Insufficient PSUs per stratum",
-            detail=(
-                f"All strata must have at least 2 PSUs. "
-                f"Found {len(small_strata)} strata with fewer."
-            ),
-            code="INSUFFICIENT_PSU",
-            where=where,
-            param="stratum",
-            expected="≥2 PSUs per stratum",
-            got=f"{small_strata[:5]}{'...' if len(small_strata) > 5 else ''}",
-            hint="Combine small strata or check design specification.",
-        )
-
     if _method == "brr":
-        odd_strata = [(s, c) for s, c in stratum_counts.items() if c % 2 == 1]
-        if odd_strata:
+        # BRR's unit is the variance stratum, and it must hold exactly 2 PSUs --
+        # that is what a balanced half-sample selects from. So a stratum is
+        # usable iff its PSU count is a multiple of 2, and a stratum of 1 fails
+        # for the same reason a stratum of 3 does: a PSU with no partner.
+        #
+        # They used to be two guards, the `< 2` one raising first, so a frame
+        # with both reported only the singleton and revealed the odd strata on
+        # the next run. Treating 1 as a different kind of problem also borrowed
+        # a question that is not BRR's: a lone PSU in a stratum is a singleton,
+        # which matters to Taylor linearization and belongs to
+        # ``Sample.singleton``. Here it is simply not 2.
+        unpairable = [(s, c) for s, c in stratum_counts.items() if c % 2 != 0]
+        if unpairable:
             raise DimensionError(
-                title="Odd PSU counts for BRR",
+                title="BRR needs 2 PSUs per variance stratum",
                 detail=(
-                    f"BRR requires even number of PSUs per stratum. "
-                    f"Found {len(odd_strata)} strata with odd counts."
+                    f"BRR pairs PSUs into variance strata of exactly 2. "
+                    f"Found {_n_strata(len(unpairable))} whose PSU count is not "
+                    f"a multiple of 2, leaving a PSU with no partner."
                 ),
                 code="ODD_PSU_COUNT",
                 where=where,
                 param="stratum",
-                expected="Even PSU count per stratum",
-                got=f"{odd_strata[:5]}{'...' if len(odd_strata) > 5 else ''}",
-                hint="Use method='jk2' which allows 2-3 PSUs per stratum.",
+                expected="A multiple of 2 PSUs per stratum",
+                got=_fmt_strata(unpairable),
+                hint=(
+                    "create_jk_wgts(paired=True) pairs these strata itself and "
+                    "absorbs an odd count into a triplet. BRR cannot: its "
+                    "balanced half-samples need exactly 2 PSUs per variance "
+                    "stratum. If BRR is required, fix every stratum listed, not "
+                    "just one -- drop or combine a PSU so each count is even."
+                ),
+            )
+    else:  # jk2: absorbs an odd count into a triplet, but cannot pair a lone PSU
+        small_strata = [(s, c) for s, c in stratum_counts.items() if c < 2]
+        if small_strata:
+            raise DimensionError(
+                title="Insufficient PSUs per stratum",
+                detail=(
+                    f"All strata must have at least 2 PSUs. "
+                    f"Found {len(small_strata)} strata with fewer."
+                ),
+                code="INSUFFICIENT_PSU",
+                where=where,
+                param="stratum",
+                expected="≥2 PSUs per stratum",
+                got=f"{small_strata[:5]}{'...' if len(small_strata) > 5 else ''}",
+                hint="Combine small strata or check design specification.",
             )
 
     var_strata = np.empty(n_psus, dtype=np.int64)

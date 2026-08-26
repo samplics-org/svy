@@ -10,6 +10,25 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **BRR validated its strata in two passes, and sent one of them to the wrong subsystem.** `create_brr_wgts` checked `< 2` PSUs first, raising `INSUFFICIENT_PSU`, and only then checked for odd counts. A frame carrying both therefore reported the lone-PSU stratum, and revealed the odd ones on the next run — one class of problem per attempt, on a validation that could have been answered in full the first time.
+
+  The split also borrowed a question that is not BRR's. A stratum with one PSU is a **singleton**, which matters to Taylor linearization and has its own subsystem — `Sample.singleton`, with `collapse`, `combine`, `pool`, `certainty` — none of which the hint mentioned; it said "Combine small strata or check design specification." For BRR the count is not a singleton question at all: a stratum of 1 and a stratum of 3 fail for exactly the same reason, a PSU with no partner.
+
+  BRR now asks one question — is the PSU count a multiple of 2 — and reports every stratum that fails it in a single error, naming each with its count:
+
+  ```
+  ❌ BRR needs 2 PSUs per variance stratum [ODD_PSU_COUNT]
+  BRR pairs PSUs into variance strata of exactly 2. Found 3 strata whose PSU
+  count is not a multiple of 2, leaving a PSU with no partner.
+  - got: a=1, b=3, c=5
+  ```
+
+  "Multiple of 2" rather than "equal to 2" because `create_brr_wgts` pairs: a 4-PSU stratum becomes two variance strata of 2 and is valid. `INSUFFICIENT_PSU` is now the paired jackknife's alone, which is the one method that genuinely distinguishes the two — it absorbs an odd count into a triplet but still cannot pair a lone PSU.
+
+- **The odd-PSU BRR error pointed at an API that no longer exists.** Its hint read `Use method='jk2' which allows 2-3 PSUs per stratum`. `method='jk2'` was `create_variance_strata`'s parameter — a function removed in 0.25.0 — and `method` is not a parameter of `create_brr_wgts` either, so the one line telling you what to do instead named a parameter of a gone function on a function that never had it. "2-3 PSUs per stratum" was equally stale: `create_jk_wgts(paired=True)` pairs any count ≥ 2 and absorbs an odd one into a triplet.
+
+  The hint now names `create_jk_wgts(paired=True)`, says why BRR cannot do the same, and tells anyone who needs BRR specifically to fix *every* stratum listed rather than one. Its test asserted `pytest.raises(Exception)` and nothing more, which is how the text drifted unnoticed; it now pins the code, the `where`, and that the remedy names a real API.
+
 - **Regenerating replicate weights left the previous method's design in place.** `create_brr_wgts` and `create_jk_wgts` recorded their result with `Design.fill_missing(rep_wgts=…)`, which by definition only fills a field that is currently `None` — so once any replicate design existed, the record of what had just been built was silently dropped. `create_bs_wgts` and `create_sdr_wgts` used `Design.update` and were unaffected, which is the whole of the difference: it was an inconsistency inherited from the monorepo migration, never a decision.
 
   Building a second set of replicates therefore wrote the new columns and kept the first method's metadata — and estimation reads the metadata, not the columns:

@@ -165,8 +165,116 @@ class TestBRRWeights:
             sample.weighting.create_brr_wgts()
 
     def test_brr_rejects_odd_psu_count(self, odd_psu_sample):
-        with pytest.raises(Exception):
+        with pytest.raises(DimensionError) as exc:
             odd_psu_sample.weighting.create_brr_wgts()
+
+        err = exc.value
+        assert err.code == "ODD_PSU_COUNT"
+        assert err.where == "Sample.weighting.create_brr_wgts"
+
+        # The remedy has to name an API that exists. This hint used to read
+        # "Use method='jk2'", which was create_variance_strata's parameter --
+        # a function removed in 0.25.0, and `method` is not a parameter of
+        # create_brr_wgts either.
+        assert "create_jk_wgts(paired=True)" in err.hint
+        assert "method=" not in err.hint
+        assert "create_variance_strata" not in err.hint
+
+        # More than one stratum can be at fault, and each needs its own fix,
+        # so the remedy must not read as one PSU overall.
+        assert "every stratum" in err.hint
+
+    @pytest.mark.parametrize(
+        "n_odd_strata, expected_count_phrase",
+        [(1, "Found 1 stratum whose"), (3, "Found 3 strata whose")],
+    )
+    def test_odd_psu_message_agrees_in_number(self, n_odd_strata, expected_count_phrase):
+        """`stratum`/`strata` is irregular, so the package's `(s)` suffix fails here."""
+        strata, psus, psu_id = [], [], 1
+        for i in range(n_odd_strata):
+            for _ in range(3):  # 3 PSUs -> odd
+                strata += [f"s{i}"] * 2
+                psus += [psu_id, psu_id]
+                psu_id += 1
+        data = pl.DataFrame({"stratum": strata, "psu": psus, "wgt": [1.0] * len(psus)})
+        sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum", psu="psu"))
+
+        with pytest.raises(DimensionError) as exc:
+            sample.weighting.create_brr_wgts()
+        assert expected_count_phrase in exc.value.detail
+
+    def test_one_error_lists_every_stratum_that_is_not_a_multiple_of_2(self):
+        """1 and 3 are the same failure, so they arrive in one error, not two runs.
+
+        These used to be separate guards with the `< 2` one raising first, so a
+        frame carrying both reported only the lone-PSU stratum and revealed the
+        odd ones on the next run.
+        """
+        counts = {"a": 1, "b": 3, "c": 5, "d": 4}  # d pairs cleanly, must not appear
+        strata, psus, psu_id = [], [], 1
+        for name, n in counts.items():
+            for _ in range(n):
+                strata += [name] * 2
+                psus += [psu_id, psu_id]
+                psu_id += 1
+        data = pl.DataFrame({"stratum": strata, "psu": psus, "wgt": [1.0] * len(psus)})
+        sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum", psu="psu"))
+
+        with pytest.raises(DimensionError) as exc:
+            sample.weighting.create_brr_wgts()
+
+        err = exc.value
+        assert err.code == "ODD_PSU_COUNT"
+        assert "3 strata" in err.detail
+        for offender in ("a=1", "b=3", "c=5"):
+            assert offender in err.got
+        assert "d=" not in err.got, "a stratum that pairs cleanly must not be reported"
+
+    @pytest.mark.parametrize("n_psus", [2, 4, 6])
+    def test_any_multiple_of_two_is_accepted(self, n_psus):
+        """Pairing is why the test is 'multiple of 2', not 'equal to 2'."""
+        strata, psus, psu_id = [], [], 1
+        for name in ("a", "b", "c"):
+            for _ in range(n_psus):
+                strata += [name] * 2
+                psus += [psu_id, psu_id]
+                psu_id += 1
+        data = pl.DataFrame({"stratum": strata, "psu": psus, "wgt": [1.0] * len(psus)})
+        sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum", psu="psu"))
+
+        out = sample.weighting.create_brr_wgts(rep_prefix="r")
+        assert out._design.rep_wgts.method == "BRR"
+
+    def test_jk2_still_rejects_a_lone_psu(self):
+        """The `< 2` guard is now jk2's alone -- it can triple, but not pair one."""
+        data = pl.DataFrame({"stratum": [1, 2, 2, 2, 2], "psu": [1, 2, 2, 3, 3], "wgt": [1.0] * 5})
+        sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum", psu="psu"))
+        with pytest.raises(DimensionError) as exc:
+            sample.weighting.create_jk_wgts(paired=True)
+        assert exc.value.code == "INSUFFICIENT_PSU"
+
+    def test_odd_psu_got_says_how_many_it_withheld(self):
+        """Each offending stratum needs fixing, so a bare `...` hides the job."""
+        strata, psus, psu_id = [], [], 1
+        for i in range(7):
+            for _ in range(3):
+                strata += [f"s{i}"] * 2
+                psus += [psu_id, psu_id]
+                psu_id += 1
+        data = pl.DataFrame({"stratum": strata, "psu": psus, "wgt": [1.0] * len(psus)})
+        sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum", psu="psu"))
+
+        with pytest.raises(DimensionError) as exc:
+            sample.weighting.create_brr_wgts()
+        got = exc.value.got
+        assert "(+2 more)" in got  # 7 offenders, 5 shown
+        assert "..." not in got
+
+    def test_the_odd_psu_hint_actually_works(self, odd_psu_sample):
+        """Follow the hint and it succeeds on the frame that raised."""
+        out = odd_psu_sample.weighting.create_jk_wgts(paired=True, rep_prefix="jk")
+        assert out._design.rep_wgts.method == "Jackknife"
+        assert out._design.rep_wgts.kind == "jk2"
 
     def test_brr_string_psu_stratum(self):
         data = pl.DataFrame(
@@ -441,10 +549,18 @@ class TestVarianceStrataPairing:
         assert sample.design.stratum == "stratum"
 
     def test_singleton_stratum_raises(self):
+        """BRR rejects a lone PSU as "not a multiple of 2", not as a singleton.
+
+        A stratum of 1 and a stratum of 3 fail for the same reason -- a PSU with
+        no partner -- so BRR reports them the same way. Whether a lone PSU is a
+        *singleton* is a Taylor question, and `Sample.singleton` owns it.
+        """
         data = pl.DataFrame({"stratum": [1, 2, 2, 2, 2], "psu": [1, 2, 2, 3, 3], "wgt": [1.0] * 5})
         sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum", psu="psu"))
-        with pytest.raises(DimensionError, match="at least 2 PSUs"):
+        with pytest.raises(DimensionError) as exc:
             sample.weighting.create_brr_wgts()
+        assert exc.value.code == "ODD_PSU_COUNT"
+        assert "1=1" in exc.value.got
 
     def test_no_psu_raises(self):
         data = pl.DataFrame({"stratum": [1, 1, 2, 2], "wgt": [1.0] * 4})
