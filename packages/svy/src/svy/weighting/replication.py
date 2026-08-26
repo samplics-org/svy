@@ -462,7 +462,11 @@ def create_brr_wgts(
     )
 
     _rec_stratum, _rec_psu = _as_recorded(strat_col), _as_recorded(psu_col)
-    sample._design = sample._design.fill_missing(
+    # `update`, not `fill_missing`: these columns were just written, so the
+    # design has to describe *them*. fill_missing is a no-op once rep_wgts is
+    # set, which left a second generator's columns in the frame under the first
+    # one's metadata -- and estimation reads the metadata.
+    sample._design = sample._design.update(
         rep_wgts=BrrWgts(
             prefix=rep_prefix,
             n_reps=n_reps_actual,
@@ -568,7 +572,8 @@ def create_jk_wgts(
         jk_kind = "jkn"
 
     _rec_stratum, _rec_psu = _as_recorded(strat_col), _as_recorded(psu_col)
-    sample._design = sample._design.fill_missing(
+    # `update`, not `fill_missing` -- see the note in create_brr_wgts.
+    sample._design = sample._design.update(
         rep_wgts=JackknifeWgts(
             prefix=rep_prefix,
             n_reps=n_reps,

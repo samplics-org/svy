@@ -8,6 +8,22 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Fixed
+
+- **Regenerating replicate weights left the previous method's design in place.** `create_brr_wgts` and `create_jk_wgts` recorded their result with `Design.fill_missing(rep_wgts=…)`, which by definition only fills a field that is currently `None` — so once any replicate design existed, the record of what had just been built was silently dropped. `create_bs_wgts` and `create_sdr_wgts` used `Design.update` and were unaffected, which is the whole of the difference: it was an inconsistency inherited from the monorepo migration, never a decision.
+
+  Building a second set of replicates therefore wrote the new columns and kept the first method's metadata — and estimation reads the metadata, not the columns:
+
+  ```python
+  s = s.weighting.create_bs_wgts(n_reps=10, rep_prefix="bs")
+  s = s.weighting.create_jk_wgts(rep_prefix="jk")
+  # before: 33 jk* columns in the frame, design.rep_wgts reading
+  #         method=Bootstrap prefix='bs' n_reps=10.
+  #         mean(method="replication") -> Estimate: MEAN (BOOTSTRAP), off `bs*`.
+  ```
+
+  Unlike the mutation defect fixed alongside it, this one fired on the plain `s = s.weighting.…()` idiom, in both orders, and switching methods mid-analysis is exactly when someone does it — comparing a jackknife against a bootstrap, or moving to JK2 after seeing the replicate count. Both now use `update`: the design describes the columns that were just written, and a declaration that no longer matches them is replaced rather than preserved.
+
 ### Changed
 
 - **BREAKING: `Sample.weighting` no longer mutates the sample you call it on.** All eleven transforming methods — the four `create_*_wgts`, `adjust`, `normalize`, `poststratify`, `rake`, `calibrate`, `calibrate_matrix`, `trim` — now return a new `Sample` and take `inplace: bool = False` to ask for the old behaviour. Both branches return a `Sample`, so chaining is unchanged and `s = s.weighting.…()` keeps working exactly as before.

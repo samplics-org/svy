@@ -983,3 +983,81 @@ def test_bootstrap_kind_is_recorded_on_the_design(multi_psu_sample, pumf_like_sa
         n_reps=8, kind="poisson", rep_prefix="r", rstate=41
     )
     assert po._design.rep_wgts.kind == "poisson"
+
+
+# ===========================================================================
+# Regenerating replicate weights replaces the recorded design
+# ===========================================================================
+
+
+class TestRegeneratedDesignIsRecorded:
+    """A generator records the columns it just wrote.
+
+    ``create_brr_wgts`` and ``create_jk_wgts`` used ``Design.fill_missing``,
+    which is a no-op once ``rep_wgts`` is set, while ``create_bs_wgts`` and
+    ``create_sdr_wgts`` used ``Design.update``. So building a second set of
+    replicates wrote the new columns and kept the *first* method's metadata --
+    and estimation reads the metadata, not the columns.
+    """
+
+    def test_bootstrap_then_jackknife(self, simple_stratified_sample):
+        s = simple_stratified_sample.weighting.create_bs_wgts(n_reps=8, rep_prefix="bs", rstate=1)
+        s = s.weighting.create_jk_wgts(rep_prefix="jk")
+
+        rw = s._design.rep_wgts
+        assert rw.method == "Jackknife"
+        assert rw.prefix == "jk"
+        assert rw.n_reps == 6  # one per PSU
+        assert "jk1" in s._data.columns
+
+    def test_jackknife_then_bootstrap(self, simple_stratified_sample):
+        s = simple_stratified_sample.weighting.create_jk_wgts(rep_prefix="jk")
+        s = s.weighting.create_bs_wgts(n_reps=8, rep_prefix="bs", rstate=1)
+
+        rw = s._design.rep_wgts
+        assert rw.method == "Bootstrap"
+        assert rw.prefix == "bs"
+        assert rw.n_reps == 8
+
+    def test_jackknife_then_brr(self, simple_stratified_sample):
+        s = simple_stratified_sample.weighting.create_jk_wgts(rep_prefix="jk")
+        s = s.weighting.create_brr_wgts(rep_prefix="brr")
+
+        rw = s._design.rep_wgts
+        assert rw.method == "BRR"
+        assert rw.prefix == "brr"
+
+    def test_regenerating_the_same_method_updates_its_parameters(self, simple_stratified_sample):
+        s = simple_stratified_sample.weighting.create_jk_wgts(rep_prefix="jk")
+        s = s.weighting.create_jk_wgts(paired=True, rep_prefix="jk2")
+
+        rw = s._design.rep_wgts
+        assert rw.prefix == "jk2"
+        assert rw.kind == "jk2"
+        assert rw.n_reps == 3  # one per variance stratum, not per PSU
+
+    def test_estimation_uses_the_regenerated_design(self, simple_stratified_sample):
+        """The symptom: an estimate off the second design read the first's columns."""
+        s = simple_stratified_sample.weighting.create_bs_wgts(n_reps=8, rep_prefix="bs", rstate=1)
+        s = s.weighting.create_jk_wgts(rep_prefix="jk")
+
+        est = s.estimation.mean(y="y", method="replication")
+        assert "JACKKNIFE" in str(est)
+
+    def test_a_declared_design_is_replaced_by_what_was_generated(self, simple_stratified_sample):
+        """Generating weights overrides a declaration that no longer describes them."""
+        from svy.core.repwgts import BootstrapWgts
+
+        declared = simple_stratified_sample._design.update(
+            rep_wgts=BootstrapWgts(prefix="declared", n_reps=4)
+        )
+        s = Sample(
+            data=simple_stratified_sample._data.with_columns(
+                [pl.lit(1.0).alias(f"declared{i}") for i in range(1, 5)]
+            ),
+            design=declared,
+        )
+        s = s.weighting.create_jk_wgts(rep_prefix="jk")
+
+        assert s._design.rep_wgts.method == "Jackknife"
+        assert s._design.rep_wgts.prefix == "jk"
