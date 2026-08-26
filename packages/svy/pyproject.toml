@@ -1,6 +1,6 @@
 [project]
 name = "svy"
-version = "0.24.1"
+version = "0.25.0"
 description = "End-to-end surveys: design, sample, analyze, report."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -28,8 +28,8 @@ dependencies = [
   "msgspec>=0.21.0",
   "polars[pyarrow]>=1.33.1",
   "scipy>=1.13",
-  "svy-io>=0.2.0,<0.3.0",
-  "svy-rs>=0.14.0,<0.15.0",
+  "svy-io>=0.3.0,<0.4.0",
+  "svy-rs>=0.15.0,<0.16.0",
 ]
 
 [project.urls]

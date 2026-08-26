@@ -8,6 +8,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+## [0.25.0] — 2026-08-26
+
 ### Added
 
 - **Replicate weights carry the units they were built from.** `stratum` and `psu` on every variant name the columns the replicates were drawn over — a separate question from `Design.stratum`/`Design.psu`, which describe the analysis design and are what Taylor linearizes over. Producers collapse strata and suppress PSUs for disclosure, publishing a distinct pair (`VARSTRAT`/`VARUNIT` and its many spellings) alongside — or instead of — the design variables:
@@ -568,7 +570,8 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.24.1...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.25.0...HEAD
+[0.25.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.25.0
 [0.24.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.24.1
 [0.24.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.24.0
 [0.23.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.23.0
