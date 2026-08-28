@@ -49,6 +49,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - name: Verify tag matches the committed version and CHANGELOG
+        if: startsWith(github.ref, 'refs/tags/svy-io-v')
+        run: >
+          python .github/scripts/release_notes.py
+          --package svy-io
+          --tag "${{ github.ref_name }}"
+          --out /dev/null
         with:
           submodules: false
 

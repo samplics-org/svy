@@ -24,6 +24,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - name: Verify tag matches the committed version and CHANGELOG
+        if: startsWith(github.ref, 'refs/tags/svy-v')
+        run: >
+          python .github/scripts/release_notes.py
+          --package svy
+          --tag "${{ github.ref_name }}"
+          --out /dev/null
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
           version: "latest"

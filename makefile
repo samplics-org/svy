@@ -27,6 +27,11 @@ help:
 	@echo "  bench-check         - check for perf regressions vs the baseline (needs release build)"
 	@echo "  bench-record        - re-record the perf baseline (commit the result)"
 	@echo ""
+	@echo "Release Targets (PKG=svy|svy-io|svy-rs):"
+	@echo "  release-notes       - preview the notes CI will publish for the current version"
+	@echo "  release-check       - pre-flight a release BEFORE tagging (safe, read-only)"
+	@echo "  release-tag         - run release-check, then create and push the tag"
+	@echo ""
 	@echo "svy-io Targets (local dev only — published separately):"
 	@echo "  build-svy-io        - build svy-io native extension locally"
 	@echo "  test-svy-io         - run tests for svy-io"
@@ -186,3 +191,43 @@ clean:
 	rm -rf $(PKG_SVY)/dist
 	rm -rf $(PKG_SVY_IO)/dist
 	rm -rf $(PKG_SVY_RS)/target $(PKG_SVY_RS)/dist
+
+
+# ====== Release ======
+# Pushing a <pkg>-v* tag publishes to PyPI, and PyPI never lets a version number
+# be reused. CI checks the tag against the committed version, but it can only do
+# so once the tag exists — by which point the mistake is already made. These run
+# the same check locally, before the tag is created, which is the last point
+# where a wrong version costs nothing.
+.PHONY: release-notes release-check release-tag
+PKG     ?= svy
+VERSION  = $(shell sed -n 's/^version = "\(.*\)"/\1/p' packages/$(PKG)/pyproject.toml | head -1)
+TAG      = $(PKG)-v$(VERSION)
+
+release-notes:
+	@echo "▶ Notes CI would publish for $(PKG) $(VERSION):"
+	@$(PYTHON) .github/scripts/release_notes.py --package $(PKG) --tag $(TAG) --out /dev/stdout
+
+release-check:
+	@echo "▶ Pre-flight for $(TAG)"
+	@test -z "$$(git status --porcelain)" || { echo "  ✗ working tree is dirty"; exit 1; }
+	@echo "  ✓ working tree clean"
+	@test "$$(git rev-parse --abbrev-ref HEAD)" = "main" || { echo "  ✗ not on main"; exit 1; }
+	@echo "  ✓ on main"
+	@git fetch -q origin main && test -z "$$(git rev-list HEAD..origin/main)" || \
+		{ echo "  ✗ behind origin/main — pull first"; exit 1; }
+	@echo "  ✓ up to date with origin/main"
+	@git rev-parse -q --verify "refs/tags/$(TAG)" >/dev/null && \
+		{ echo "  ✗ tag $(TAG) already exists locally"; exit 1; } || true
+	@test -z "$$(git ls-remote --tags origin '$(TAG)')" || \
+		{ echo "  ✗ tag $(TAG) already exists on origin"; exit 1; }
+	@echo "  ✓ tag $(TAG) is free"
+	@$(PYTHON) .github/scripts/release_notes.py --package $(PKG) --tag $(TAG) --out /dev/null
+	@echo "  ✓ version and CHANGELOG agree"
+	@echo "▶ Ready. 'make release-tag PKG=$(PKG)' will publish $(PKG) $(VERSION) to PyPI."
+
+release-tag: release-check
+	@echo "▶ Tagging $(TAG) — this publishes to PyPI and cannot be undone."
+	git tag -a $(TAG) -m "$(PKG) $(VERSION)"
+	git push origin $(TAG)
+	@echo "▶ Pushed. Watch: gh run list --workflow=$(PKG)-wheels.yml --limit 1"
