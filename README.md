@@ -4,8 +4,6 @@
 
 [![PyPI](https://img.shields.io/pypi/v/svy?color=blue)](https://pypi.org/project/svy/)
 [![Python](https://img.shields.io/pypi/pyversions/svy)](https://pypi.org/project/svy/)
-<!--[![Downloads](https://img.shields.io/pypi/dm/svy)](https://pypi.org/project/svy/)-->
-
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-svylab.com-0b7285)](https://svylab.com/docs/svy)
 
