@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import logging
 
+from typing import TYPE_CHECKING
+
 from svy import (
-    datasets,  # noqa: F401
     serialize,  # noqa: F401
 )
 from svy.categorical import (
@@ -340,3 +341,25 @@ def _maybe_install_rich() -> None:
 
 
 _maybe_install_rich()
+
+
+if TYPE_CHECKING:
+    from svy import datasets  # noqa: F401
+
+
+# Subpackages exposed as attributes but imported only when first touched.
+# ``svy.datasets`` adds ~30 ms of catalog/bundled-data machinery on top of the
+# polars and numpy it shares with the rest of svy, and most callers never load a
+# dataset. Deferring it does not change the public API: ``svy.datasets.load(...)``,
+# ``from svy import datasets`` and ``import svy.datasets`` all still work.
+_LAZY_SUBMODULES = frozenset({"datasets"})
+
+
+def __getattr__(name: str):
+    if name in _LAZY_SUBMODULES:
+        from importlib import import_module
+
+        module = import_module(f"svy.{name}")
+        globals()[name] = module  # later lookups skip __getattr__
+        return module
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
