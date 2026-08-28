@@ -217,3 +217,30 @@ jobs:
         with:
           packages-dir: dist
           skip-existing: true
+
+  release:
+    name: GitHub Release
+    needs: [publish]
+    # Tag pushes only — a workflow_dispatch to TestPyPI is a rehearsal and should
+    # not leave a release page behind.
+    if: startsWith(github.ref, 'refs/tags/svy-rs-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - name: Extract release notes from CHANGELOG
+        run: >
+          python .github/scripts/release_notes.py
+          --package svy-rs
+          --tag "${{ github.ref_name }}"
+          --out release-notes.md
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: >
+          gh release create "$TAG"
+          --title "svy-rs ${TAG#svy-rs-v}"
+          --notes-file release-notes.md
+          --verify-tag
