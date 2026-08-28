@@ -13,8 +13,6 @@ import msgspec
 import numpy as np
 import polars as pl
 
-from scipy import stats
-
 from svy.regression.links import link_inverse, link_mu_eta, link_mu_eta2
 from svy.ui.printing import make_panel, render_plain_table, render_rich_to_str, resolve_width
 
@@ -405,6 +403,8 @@ def compute_predictive_margins(
     g = sum_i w_i mu'(eta_i) x_i / sum_i w_i  (Stata ``margins``
     convention; covariates treated as fixed).
     """
+    from scipy import stats
+
     fit = glm.fitted
     if fit is None:
         raise ValueError("Model not fitted")
@@ -487,6 +487,8 @@ def compute_average_marginal_effects(
     delta method over the design-based V(beta):
     g_j = mean_w(mu''(eta) X_j deta_dx + mu'(eta) D_j), se^2 = g' V g.
     """
+    from scipy import stats
+
     fit = glm.fitted
     if fit is None:
         raise ValueError("Model not fitted")

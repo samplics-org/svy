@@ -14,8 +14,6 @@ import msgspec
 import numpy as np
 import polars as pl
 
-from scipy import stats
-
 
 # Rust backend
 try:
@@ -265,6 +263,8 @@ class GLM:
         GLM
             Self, with fitted results in `.fitted`.
         """
+        from scipy import stats
+
         # Resolve family/link
         fam_str = _normalize_family(family)
         link_str = resolve_link(fam_str, _normalize_link(link))
@@ -347,9 +347,7 @@ class GLM:
         # validation all use exactly the rows the fit will use.
         _in_dom_expr = pl.col(w_col) > 0
         if by_col_name is not None:
-            _in_dom_expr = _in_dom_expr & (
-                pl.col(by_col_name).str.to_lowercase() == "true"
-            )
+            _in_dom_expr = _in_dom_expr & (pl.col(by_col_name).str.to_lowercase() == "true")
         level_df = df.filter(_in_dom_expr)
 
         # ── Build feature matrix ──────────────────────────────────────────
@@ -444,9 +442,7 @@ class GLM:
         if pop_cols and pop_cols[0] in df.columns:
             from svy.estimation._fpc import build_fpc_psu_column
 
-            df, fpc_name = build_fpc_psu_column(
-                df, pop_cols[0], s_col, p_col, "__svy_fpc_psu__"
-            )
+            df, fpc_name = build_fpc_psu_column(df, pop_cols[0], s_col, p_col, "__svy_fpc_psu__")
 
         # Build final selection — include the by_col when domain is set
         final_selects = (
@@ -706,6 +702,8 @@ class GLM:
         alpha: float = 0.05,
         y_col: str | None = None,
     ) -> GLMPred:
+        from scipy import stats
+
         fit = self._ensure_fitted()
 
         # Build design matrix
@@ -1012,6 +1010,8 @@ class GLM:
         provides no plain BIC for svyglm (its dBIC requires an explicit
         maximal model).
         """
+        from scipy import stats
+
         bic = None
 
         r2 = 1.0 - dev / null_dev if null_dev > 1e-12 else None
