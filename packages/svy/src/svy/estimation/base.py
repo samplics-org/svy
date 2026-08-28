@@ -10,8 +10,6 @@ import numpy as np
 import polars as pl
 import svy_rs as rs
 
-from scipy import stats
-
 from svy.core.constants import _BY_SEP, _INTERNAL_CONCAT_SUFFIX
 from svy.core.data_prep import prepare_data
 from svy.core.enumerations import PopParam
@@ -531,11 +529,15 @@ class Estimation:
         report NaN bounds, matching survey, instead of a zero-width CI that
         reads as a point estimate known with certainty (issue #96).
         """
+        from scipy import stats
+
         return float(stats.t.ppf(1 - alpha / 2, df)) if df > 0 else float("nan")
 
     @staticmethod
     def _t_crit_arr(alpha: float, df_arr: np.ndarray) -> np.ndarray:
         """Vectorised :meth:`_t_crit`; NaN wherever df <= 0."""
+        from scipy import stats
+
         pos = df_arr > 0
         return np.where(pos, stats.t.ppf(1 - alpha / 2, np.where(pos, df_arr, 1.0)), np.nan)
 
@@ -592,6 +594,8 @@ class Estimation:
         Data Presentation Standards for Proportions.
         *Vital Health Stat* 2(175).
         """
+        from scipy import stats
+
         method = self._normalize_ci_method(method)
 
         if method == "logit":

@@ -8,6 +8,18 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Changed
+
+- **`import svy` was paying for scipy before you asked it anything.** Importing the package cost ~0.80 s, and 383 ms of that was `scipy.stats`, pulled in along the chain `svy.serialize` → `svy.categorical` → `svy.estimation.base`. Nothing about that import was needed to *reach* svy — it was needed only by whichever call eventually wanted a quantile.
+
+  Six modules imported scipy at module scope: `estimation/base.py`, `regression/base.py`, `regression/margins.py`, `engine/size_and_power/size.py`, `engine/size_and_power/power.py`, and `utils/hadamard.py`. What made this stubborn is that fixing any one of them alone changes nothing — scipy loads once and the other five ride `sys.modules`, so the cost simply moves. All six had to go together.
+
+  The uses turned out to be narrow: estimation, regression and margins want the t and F quantiles, size and power the normal, hadamard a single `scipy.linalg` call. Each import now sits in the function that needs it, matching what `categorical/base.py` had already been doing in four places — this finishes a refactor that had stalled partway.
+
+  `import svy` now costs ~0.27 s and `scipy.stats` is off the import path entirely; it loads on the first call that actually needs a distribution. Nothing about the numerical results changes.
+
+- **`svy.datasets` now loads on first use rather than on import.** The root package imported it purely so it would be reachable as an attribute, which is what a module-level `__getattr__` handles. Worth ~30 ms — not the ~180 ms an import profiler credits to it, since most of that is polars and numpy, which `datasets` merely imported first and which the rest of svy needs anyway. `svy.datasets.load(...)`, `from svy import datasets` and `import svy.datasets` all behave exactly as before.
+
 ### Fixed
 
 - **BRR validated its strata in two passes, and sent one of them to the wrong subsystem.** `create_brr_wgts` checked `< 2` PSUs first, raising `INSUFFICIENT_PSU`, and only then checked for odd counts. A frame carrying both therefore reported the lone-PSU stratum, and revealed the odd ones on the next run — one class of problem per attempt, on a validation that could have been answered in full the first time.

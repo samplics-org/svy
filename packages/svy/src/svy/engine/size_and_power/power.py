@@ -6,8 +6,6 @@ from typing import Literal, cast, overload
 
 import numpy as np
 
-from scipy.stats import norm as normal
-
 from svy.core.types import Array, Category, DomainScalarMap, FloatArray, Number
 
 
@@ -20,6 +18,8 @@ _EPS = 1e-12  # numeric guard for sqrt/arcsin
 
 
 def _zcrit(alpha: float, two_sides: bool) -> float:
+    from scipy.stats import norm as normal
+
     if not (0.0 < alpha < 1.0):
         raise ValueError("alpha must be in (0,1)")
     return float(normal.isf(alpha / 2.0 if two_sides else alpha))
@@ -30,6 +30,8 @@ def _zcrit_from_type(
     testing_type: Literal["two-sided", "less", "greater"],
 ) -> float | FloatArray:
     """Return z critical value(s) as float (scalar alpha) or FloatArray (array alpha)."""
+    from scipy.stats import norm as normal
+
     two_sided = testing_type == "two-sided"
 
     if isinstance(alpha, (int, float)):
@@ -71,6 +73,8 @@ def _se_two_props_array(pa: Array, pb: Array, na: Array, nb: Array) -> FloatArra
 def _power_from_lam_array(
     lam: Array, zc: float | Array, testing_type: Literal["two-sided", "less", "greater"]
 ) -> FloatArray:
+    from scipy.stats import norm as normal
+
     lam = np.asarray(lam, dtype=np.float64)
     zc_arr = np.asarray(zc, dtype=np.float64)
     if testing_type == "two-sided":
@@ -94,6 +98,8 @@ def _scalar_power(
     ttype: Literal["two-sided", "less", "greater"],
 ) -> float:
     """Compute clipped scalar power from non-centrality parameter lam and critical value zc."""
+    from scipy.stats import norm as normal
+
     if ttype == "two-sided":
         val = float(normal.cdf(lam - zc) + normal.cdf(-lam - zc))
     elif ttype == "greater":
@@ -119,6 +125,8 @@ def calculate_power_array(
     Typed array variant with explicit float64 arrays and a cast on return to
     satisfy mypy/pyright (some numpy overloads are typed as Any).
     """
+    from scipy.stats import norm as normal
+
     zc = _zcrit(alpha, two_sides)
 
     d = np.asarray(delta, dtype=np.float64)
@@ -291,6 +299,8 @@ def power_for_one_proportion_array(
     testing_type: Literal["two-sided", "less", "greater"] = "two-sided",
     alpha: float | Array = 0.05,
 ) -> FloatArray:
+    from scipy.stats import norm as normal
+
     p0 = np.asarray(prop_0, dtype=np.float64)
     p1 = np.asarray(prop_1, dtype=np.float64)
     n = np.asarray(samp_size, dtype=np.float64)

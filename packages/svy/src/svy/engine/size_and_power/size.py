@@ -8,8 +8,6 @@ from typing import Literal, cast
 
 import numpy as np
 
-from scipy.stats import norm
-
 from svy.core.enumerations import MeanVarMode, PropVarMode
 from svy.core.types import (
     Array,
@@ -338,6 +336,8 @@ def _as_like(x: float | Array, ref: FloatArray) -> FloatArray:
 
 
 def _zcrit(alpha: float, two_sides: bool) -> float:
+    from scipy.stats import norm
+
     if not (0.0 < alpha < 1.0):
         raise ValueError("alpha must be in (0,1)")
     return float(norm.ppf(1 - alpha / 2.0 if two_sides else 1 - alpha))
@@ -346,6 +346,8 @@ def _zcrit(alpha: float, two_sides: bool) -> float:
 def _zcrit_from_type(
     alpha: float | Array, ttype: Literal["two-sided", "less", "greater"]
 ) -> float | FloatArray:
+    from scipy.stats import norm
+
     two_sides = ttype == "two-sided"
     if isinstance(alpha, (int, float)):
         return _zcrit(float(alpha), two_sides)
@@ -962,6 +964,8 @@ def _apply_fpc_srswor_pair(
 def _zcrit_pair(
     *, two_sides: bool, alpha: float, power: float, delta: float
 ) -> tuple[float, float]:
+    from scipy.stats import norm
+
     if two_sides and delta == 0.0:
         z_a = _zcrit(alpha, True)
         z_b = float(norm.ppf(power))

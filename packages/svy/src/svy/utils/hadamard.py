@@ -18,8 +18,6 @@ import logging
 
 import numpy as np
 
-from scipy.linalg import hadamard as hdd
-
 
 log = logging.getLogger(__name__)
 
@@ -191,6 +189,8 @@ _HADAMARD_FUNCS = {
 
 
 def hadamard(n: int) -> np.ndarray:
+    from scipy.linalg import hadamard as hdd
+
     # Power-of-2 check using integer arithmetic — avoids float precision issues
     if n > 0 and (n & (n - 1)) == 0:
         return np.asarray(hdd(n))
