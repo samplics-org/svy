@@ -47,6 +47,11 @@ R_PS_TOTAL_MEAN_SE = 23.542240693781  # identical to baseline: the no-op
 R_RAKE_MEAN_SE = 23.7458597039106
 R_STD_EST = [605.662913034119, 646.303126782460]
 R_STD_SE = [31.9154418732174, 24.9249948644004]
+R_GREG_MEAN_EST = 666.717736250273
+R_GREG_MEAN_SE = 3.29588091215716
+
+# calibrate(d, ~api99, c(`(Intercept)`=6194, api99=3914069))
+GREG_CONTROLS = {"one": 6194.0, "api99": 3914069.0}
 
 STYPE_POP = {"E": 4421.0, "H": 755.0, "M": 1018.0}
 SCHWIDE_POP = {"No": 1000.0, "Yes": 5194.0}
@@ -148,6 +153,13 @@ def test_standardize_matches_r_point_estimates(design):
     assert_allclose(got["est"].to_numpy(), R_STD_EST, rtol=1e-12)
 
 
+def test_greg_leaves_the_point_estimate_alone(design):
+    """A continuous auxiliary shifts the estimate a long way -- correctly."""
+    cal = design().weighting.calibrate(controls=GREG_CONTROLS)
+    got = cal.estimation.mean("api00").to_polars()["est"][0]
+    assert_allclose(got, R_GREG_MEAN_EST, rtol=1e-12)
+
+
 # ===========================================================================
 # The specification of the missing sweep
 # ===========================================================================
@@ -208,3 +220,26 @@ def test_shares_pin_composition_but_not_the_total(design):
     ps = design().weighting.poststratify(shares=STYPE_POP, cells="stype")
     assert _mean_se(ps, "is_E") == pytest.approx(0.0, abs=1e-9)
     assert _total_se(ps, "one") > 1.0
+
+
+@pytest.mark.xfail(strict=True, reason=PHASE3)
+def test_calibrated_auxiliary_total_has_no_sampling_error(design):
+    """GREG pins a continuous total as firmly as poststratification pins a cell.
+
+    The calibration hits the target exactly, so the total has no sampling
+    variability. Without the sweep svy reports ~880,533.
+    """
+    cal = design().weighting.calibrate(controls=GREG_CONTROLS)
+    assert _total_se(cal, "api99") == pytest.approx(0.0, abs=1e-3)
+
+
+@pytest.mark.xfail(strict=True, reason=PHASE3)
+def test_greg_mean_se_matches_r(design):
+    """The widest gap of any case: 21.86 against R's 3.30, a 6.6x overstatement.
+
+    This branch of R's sweep is a WLS residual (`qr.resid`), not a cell mean, so
+    it needs the recorded aux columns rather than cell codes -- the reason the
+    record carries `aux` at all.
+    """
+    cal = design().weighting.calibrate(controls=GREG_CONTROLS)
+    assert_allclose(_mean_se(cal), R_GREG_MEAN_SE, rtol=1e-6)
