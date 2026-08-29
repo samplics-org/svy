@@ -6,6 +6,8 @@ fixture built below; R's ``by=`` is svy's ``cells=`` (the composition axis) and
 R's ``over=`` is svy's ``by=`` (the domains).
 """
 
+from pathlib import Path
+
 import numpy as np
 import polars as pl
 import pytest
@@ -279,3 +281,86 @@ def test_standardize_rejects_shared_column(parity_sample):
 def test_standardize_refuses_to_overwrite(parity_sample):
     with pytest.raises(Exception, match="already exists"):
         parity_sample.weighting.standardize("age", shares=POP, by="grp", wgt_name="w")
+
+
+# ---------------------------------------------------------------------------
+# NHANES: the canonical age-standardization case
+#
+# Data: `nhanes` from R survey 4.5 -- an NHANES 2009-2010 extract published by
+# NCHS (US public domain), redistributed there as the svystandardize example.
+# The repo already ships the api* fixtures from the same package.
+# ---------------------------------------------------------------------------
+
+NHANES_PATH = Path(__file__).resolve().parents[2] / "test_data" / "nhanes.csv"
+
+# Standard population for the four age groups, from the R help example.
+POPAGE = {"(0,19]": 55901, "(19,39]": 77670, "(39,59]": 72816, "(59,Inf]": 45364}
+
+# svyby(~HI_CHOL, ~race+RIAGENDR, svymean,
+#       design=subset(stdes, agecat != "(0,19]"))
+# "matches http://www.cdc.gov/nchs/data/databriefs/db92_fig1.png"
+R_DB92 = {
+    (1, 1): 0.154378607135,
+    (2, 1): 0.114294593734,
+    (3, 1): 0.102077638149,
+    (4, 1): 0.135831229210,
+    (1, 2): 0.131643567446,
+    (2, 2): 0.154324740861,
+    (3, 2): 0.102541052423,
+    (4, 2): 0.119743388293,
+}
+
+
+@pytest.fixture
+def nhanes():
+    df = pl.read_csv(NHANES_PATH, null_values=["NA"])
+    return Sample(
+        df.with_columns(pl.lit("1").alias("all_adults")),
+        Design(wgt="WTMEC2YR", stratum="SDMVSTRA", psu="SDMVPSU"),
+    )
+
+
+def _standardized(nhanes, **kwargs):
+    return nhanes.weighting.standardize(
+        "agecat", shares=POPAGE, where=col("HI_CHOL").is_not_null(), **kwargs
+    )
+
+
+def test_standardize_matches_the_nchs_databrief(nhanes):
+    """Age-standardized high cholesterol by race and sex, NCHS databrief 92.
+
+    Note the order: the weights are standardized over all four age groups and
+    the estimate is then restricted to adults. That is what NCHS does, and it
+    is the analysis-specific-weights caveat in action -- the same standardized
+    sample would be wrong for a different breakdown.
+    """
+    std = _standardized(nhanes, by=["race", "RIAGENDR"])
+    got = (
+        std.estimation.mean(
+            "HI_CHOL",
+            by=["race", "RIAGENDR"],
+            where=col("agecat") != "(0,19]",
+            drop_nulls=True,
+        )
+        .to_polars()
+        .sort(["race", "RIAGENDR"])
+    )
+    for row in got.iter_rows(named=True):
+        key = (int(row["race"]), int(row["RIAGENDR"]))
+        assert_allclose(row["est"], R_DB92[key], rtol=1e-9)
+
+
+def test_standardize_by_none_equals_a_constant_domain(nhanes):
+    """R's `over = ~1` and `over = ~<constant>` are the same standardization."""
+    by_const = _standardized(nhanes, by="all_adults")
+    by_none = _standardized(nhanes)
+    assert_allclose(
+        by_const.data.get_column(STD_WGT).to_numpy(),
+        by_none.data.get_column(STD_WGT).to_numpy(),
+        rtol=0,
+        atol=0,
+    )
+    a = by_const.estimation.mean("HI_CHOL", drop_nulls=True).to_polars()["est"][0]
+    b = by_none.estimation.mean("HI_CHOL", drop_nulls=True).to_polars()["est"][0]
+    assert a == b
+    assert_allclose(a, 0.105873359319, rtol=1e-9)

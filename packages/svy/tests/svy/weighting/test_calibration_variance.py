@@ -243,3 +243,60 @@ def test_greg_mean_se_matches_r(design):
     """
     cal = design().weighting.calibrate(controls=GREG_CONTROLS)
     assert_allclose(_mean_se(cal), R_GREG_MEAN_SE, rtol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# NHANES age standardization -- the case the method exists for
+# ---------------------------------------------------------------------------
+
+POPAGE = {"(0,19]": 55901, "(19,39]": 77670, "(39,59]": 72816, "(59,Inf]": 45364}
+
+# svyby(~HI_CHOL, ~race+RIAGENDR, svymean,
+#       design=subset(stdes, agecat != "(0,19]"))   -- NCHS databrief 92 fig 1
+R_DB92_SE = {
+    (1, 1): 0.00831820386264,
+    (2, 1): 0.01018283847756,
+    (3, 1): 0.01354767807155,
+    (4, 1): 0.04227427142396,
+    (1, 2): 0.01341863662245,
+    (2, 2): 0.00893213403197,
+    (3, 2): 0.01895358562333,
+    (4, 2): 0.04009110600664,
+}
+
+
+@pytest.fixture
+def nhanes():
+    df = pl.read_csv(DATA_DIR / "nhanes.csv", null_values=["NA"])
+    return Sample(df, Design(wgt="WTMEC2YR", stratum="SDMVSTRA", psu="SDMVPSU"))
+
+
+@pytest.mark.xfail(strict=True, reason=PHASE3)
+def test_nhanes_standardized_se_matches_r(nhanes):
+    """The published case: age-standardized cholesterol by race and sex.
+
+    Point estimates already match R to 3.6e-13 (see the standardization tests);
+    these SEs are out by roughly -11% to +14% in both directions, which is the
+    signature of a missing sweep rather than a scale error.
+    """
+    from svy import col as _col
+
+    std = nhanes.weighting.standardize(
+        "agecat",
+        shares=POPAGE,
+        by=["race", "RIAGENDR"],
+        where=_col("HI_CHOL").is_not_null(),
+    )
+    got = (
+        std.estimation.mean(
+            "HI_CHOL",
+            by=["race", "RIAGENDR"],
+            where=_col("agecat") != "(0,19]",
+            drop_nulls=True,
+        )
+        .to_polars()
+        .sort(["race", "RIAGENDR"])
+    )
+    for row in got.iter_rows(named=True):
+        key = (int(row["race"]), int(row["RIAGENDR"]))
+        assert_allclose(row["se"], R_DB92_SE[key], rtol=1e-6)
