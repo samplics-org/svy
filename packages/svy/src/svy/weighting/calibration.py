@@ -52,6 +52,7 @@ from svy.core.types import Category, Number
 from svy.core.warnings import Severity, WarnCode
 from svy.errors import DimensionError, MethodError
 from svy.weighting._calibration_utils import _expand_term, _match_term_targets
+from svy.weighting._engine import _where_mask
 from svy.weighting._helpers import _build_by_array, _by_to_cols, _normalize_dict_keys
 from svy.weighting.raking import _trim_constraints_satisfied
 from svy.weighting.trimming import _build_domain_array
@@ -65,6 +66,7 @@ except ImportError:  # pragma: no cover
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample
+    from svy.core.types import WhereArg
 
 
 def control_aux_template(
@@ -175,11 +177,67 @@ def build_aux_matrix(
     return X, {k: inner_template.copy() for k in uniq_keys}
 
 
+def _calibrate_scoped(
+    sample: Sample,
+    scope: np.ndarray,
+    *,
+    wgt_name: str,
+    ignore_reps: bool,
+    update_design_wgts: bool,
+    **kwargs: Any,
+) -> Sample:
+    """Calibrate the in-scope rows, then merge the result back.
+
+    Calibration runs on a filtered copy rather than threading a mask through
+    the solver, the trim-calibrate cycle and the replicate pass. Every one of
+    those branches then runs exactly as it does unscoped, and the scope is
+    handled in one place: rows outside it keep their previous weight, so the
+    new column is complete and ``design.wgt`` can repoint to it.
+    """
+    from svy.core.sample import Sample as _Sample
+
+    df = sample._data
+    design = sample._design
+    prev_wgt = df.get_column(design.wgt).to_numpy().astype(np.float64)
+    prev_reps = (
+        df.select(design.rep_wgts.columns).to_numpy()
+        if (not ignore_reps and design.rep_wgts is not None and design.rep_wgts.columns)
+        else None
+    )
+
+    idx = np.flatnonzero(scope)
+    sub = _Sample(df.filter(pl.Series(scope)), design)
+    out = calibrate(
+        sub,
+        wgt_name=wgt_name,
+        ignore_reps=ignore_reps,
+        update_design_wgts=update_design_wgts,
+        **kwargs,
+    )
+
+    full = prev_wgt.copy()
+    full[idx] = out._data.get_column(wgt_name).to_numpy()
+    new_cols = [pl.Series(name=wgt_name, values=full)]
+
+    if prev_reps is not None:
+        rep_names = [f"{wgt_name}{i}" for i in range(1, prev_reps.shape[1] + 1)]
+        present = [c for c in rep_names if c in out._data.columns]
+        if present:
+            merged = prev_reps.copy()
+            merged[idx] = out._data.select(present).to_numpy()
+            new_cols += [pl.Series(name=n, values=merged[:, j]) for j, n in enumerate(rep_names)]
+
+    sample._data = df.with_columns(new_cols)
+    sample._design = out._design
+    return sample
+
+
 def calibrate(
     sample: Sample,
     *,
     controls: dict[Feature, Any],
     by: str | Sequence[str] | None = None,
+    where: WhereArg = None,
     scale: Number | list[Number] | np.ndarray = 1.0,
     bounded: bool = False,
     wgt_name: str = "calib_wgt",
@@ -188,11 +246,27 @@ def calibrate(
     strict: bool = True,
     trimming: TrimConfig | None = None,
 ) -> Sample:
-    where = "Sample.weighting.calibrate"
+    ctx = "Sample.weighting.calibrate"
+
+    scope = _where_mask(sample._data, where, where=ctx)
+    if scope is not None:
+        return _calibrate_scoped(
+            sample,
+            scope,
+            controls=controls,
+            by=by,
+            scale=scale,
+            bounded=bounded,
+            wgt_name=wgt_name,
+            update_design_wgts=update_design_wgts,
+            ignore_reps=ignore_reps,
+            strict=strict,
+            trimming=trimming,
+        )
 
     if not isinstance(controls, dict) or not controls:
         raise MethodError.not_applicable(
-            where=where,
+            where=ctx,
             method="calibrate",
             reason="`controls` must be a non-empty dictionary.",
             param="controls",
@@ -207,7 +281,7 @@ def calibrate(
         first_domain_val = next(iter(controls.values()))
         if not isinstance(first_domain_val, dict):
             raise MethodError.invalid_type(
-                where=where,
+                where=ctx,
                 param="controls",
                 got=first_domain_val,
                 expected="dict mapping domain -> targets when by= is used",
@@ -224,7 +298,7 @@ def calibrate(
     term_label_lists: list[tuple[Feature, list[Category]]] = []
     x_labels: list[Category] = []
     for term in terms:
-        _, term_labs = _expand_term(term, sample.data, where)
+        _, term_labs = _expand_term(term, sample.data, ctx)
         term_label_lists.append((term, term_labs))
         x_labels.extend(term_labs)
 
@@ -247,7 +321,7 @@ def calibrate(
         extra = provided_domains - expected_domains
         if missing or extra:
             raise MethodError.invalid_mapping_keys(
-                where=where,
+                where=ctx,
                 param="controls",
                 missing=list(missing),
                 extra=list(extra),
@@ -258,7 +332,7 @@ def calibrate(
             for term, term_labs in term_label_lists:
                 if term not in domain_specs:
                     raise MethodError.invalid_mapping_keys(
-                        where=where,
+                        where=ctx,
                         param=f"controls[{domain!r}]",
                         missing=[str(term)],
                     )

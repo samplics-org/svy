@@ -32,6 +32,7 @@ except ImportError:  # pragma: no cover
     rust_trim_weights = None
     rust_trim_weights_matrix = None
 
+from svy.weighting._engine import _where_mask
 from svy.weighting.types import (
     TrimConfig,
     TrimResult,
@@ -41,6 +42,7 @@ from svy.weighting.types import (
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample
+    from svy.core.types import WhereArg
 
 
 def trim(
@@ -48,6 +50,8 @@ def trim(
     upper=None,
     lower=None,
     by=None,
+    *,
+    where: WhereArg = None,
     redistribute: bool = True,
     min_cell_size: int = 10,
     max_iter: int = 10,
@@ -70,6 +74,11 @@ def trim(
     by : str | list[str] | None
         Trim within domains. Thresholds computed per domain;
         redistribution also within each domain.
+    where : WhereArg
+        Scope: only matching rows are trimmed, and thresholds and
+        redistribution are computed from them alone. Rows outside the scope
+        keep their weight. Contrast with estimation's ``where``, which
+        zero-weights for subpopulation variance.
     redistribute : bool
         Redistribute trimmed mass proportionally to non-trimmed units.
         Default True.
@@ -93,7 +102,8 @@ def trim(
     -------
     Sample
     """
-    where = "Sample.weighting.trim"
+    ctx = "Sample.weighting.trim"
+    scope = _where_mask(sample._data, where, where=ctx)
 
     config = TrimConfig(
         upper=upper,
@@ -112,7 +122,8 @@ def trim(
         wgt_name=wgt_name,
         replace=wgt_name is None,
         update_design_wgts=update_design_wgts,
-        where=where,
+        where=ctx,
+        scope=scope,
     )
 
 
@@ -124,6 +135,7 @@ def _run_trim(
     replace: bool = False,
     update_design_wgts: bool = True,
     where: str = "Sample.weighting.trim",
+    scope: np.ndarray | None = None,
 ) -> Sample:
     """
     Core Sample-aware trim logic. Accepts a pre-built TrimConfig so that
@@ -215,14 +227,30 @@ def _run_trim(
             )
 
     if by_cols is None:
-        result = _trim_domain(w_out, config, domain_label="(global)", sample=sample, where=where)
-        if result is not None:
-            w_out = result.weights
-            _emit_audit(sample, result, domain="(global)", where=where)
+        if scope is None:
+            result = _trim_domain(
+                w_out, config, domain_label="(global)", sample=sample, where=where
+            )
+            if result is not None:
+                w_out = result.weights
+                _emit_audit(sample, result, domain="(global)", where=where)
+        else:
+            # Out-of-scope rows take no part: they neither inform the threshold
+            # nor receive redistributed mass.
+            result = _trim_domain(
+                w_out[scope], config, domain_label="(global)", sample=sample, where=where
+            )
+            if result is not None:
+                w_out[scope] = result.weights
+                _emit_audit(sample, result, domain="(global)", where=where)
     else:
         domain_arr = _build_domain_array(df, by_cols)
         for domain in np.unique(domain_arr):
             mask = domain_arr == domain
+            if scope is not None:
+                mask = mask & scope
+                if not mask.any():
+                    continue
             w_domain = w_out[mask]
             result = _trim_domain(
                 w_domain, config, domain_label=str(domain), sample=sample, where=where

@@ -20,6 +20,7 @@ import numpy as np
 from svy.core.repwgts import BootstrapKind
 from svy.core.terms import Feature
 from svy.core.types import Category, ControlsType, DomainScalarMap, Number, WhereArg
+from svy.errors import MethodError
 from svy.utils.random_state import RandomState
 from svy.weighting.adjustment import adjust as _adjust
 from svy.weighting.calibration import build_aux_matrix as _build_aux_matrix
@@ -41,6 +42,42 @@ from svy.weighting.types import TrimConfig
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample
+
+
+# Renamed and removed parameters, kept only to make the break legible. These
+# are not aliases: the call still fails, but it names the replacement instead
+# of reporting an unknown keyword.
+_RENAMED: dict[str, dict[str, str]] = {
+    "adjust": {"by": "cells"},
+    "normalize": {"by": "cells"},
+    "poststratify": {"by": "cells", "factors": "shares"},
+    "rake": {"factors": "shares"},
+}
+
+
+def _reject_legacy_kwargs(method: str, kwargs: dict[str, Any]) -> None:
+    if not kwargs:
+        return
+    renames = _RENAMED.get(method, {})
+    for old, new in renames.items():
+        if old in kwargs:
+            raise MethodError.not_applicable(
+                where=f"Sample.weighting.{method}",
+                method=method,
+                reason=f"`{old}=` was renamed to `{new}=`",
+                param=old,
+                hint=(
+                    f"Replace {old}= with {new}=."
+                    + (
+                        " shares are normalized internally, so a vector that does not "
+                        "sum to 1 now pins composition instead of rescaling the total."
+                        if new == "shares"
+                        else ""
+                    )
+                ),
+            )
+    unknown = next(iter(kwargs))
+    raise TypeError(f"{method}() got an unexpected keyword argument {unknown!r}")
 
 
 class Weighting:
@@ -179,7 +216,9 @@ class Weighting:
         respondents_only: bool = True,
         trimming: TrimConfig | None = None,
         inplace: bool = False,
+        **_legacy: Any,
     ) -> Any:
+        _reject_legacy_kwargs("adjust", _legacy)
         return _adjust(
             self._target(inplace),
             resp_status,
@@ -209,7 +248,9 @@ class Weighting:
         ignore_reps: bool = False,
         update_design_wgts: bool = True,
         inplace: bool = False,
+        **_legacy: Any,
     ) -> Any:
+        _reject_legacy_kwargs("normalize", _legacy)
         return _normalize(
             self._target(inplace),
             controls,
@@ -238,7 +279,9 @@ class Weighting:
         strict: bool = True,
         trimming: TrimConfig | None = None,
         inplace: bool = False,
+        **_legacy: Any,
     ) -> Any:
+        _reject_legacy_kwargs("poststratify", _legacy)
         return _poststratify(
             self._target(inplace),
             controls,
@@ -316,7 +359,9 @@ class Weighting:
         strict: bool = True,
         trimming: TrimConfig | None = None,
         inplace: bool = False,
+        **_legacy: Any,
     ) -> Sample:
+        _reject_legacy_kwargs("rake", _legacy)
         return _rake(
             self._target(inplace),
             controls=controls,
@@ -375,6 +420,7 @@ class Weighting:
         *,
         controls: dict[Feature, Any],
         by: str | Sequence[str] | None = None,
+        where: WhereArg = None,
         scale: Number | list[Number] | np.ndarray = 1.0,
         bounded: bool = False,
         wgt_name: str = "calib_wgt",
@@ -388,6 +434,7 @@ class Weighting:
             self._target(inplace),
             controls=controls,
             by=by,
+            where=where,
             scale=scale,
             bounded=bounded,
             wgt_name=wgt_name,
@@ -446,6 +493,7 @@ class Weighting:
         wgt_name: str | None = "trim_wgt",
         update_design_wgts: bool = True,
         *,
+        where: WhereArg = None,
         inplace: bool = False,
     ) -> "Sample":
         return _trim(
@@ -453,6 +501,7 @@ class Weighting:
             upper=upper,
             lower=lower,
             by=by,
+            where=where,
             redistribute=redistribute,
             min_cell_size=min_cell_size,
             max_iter=max_iter,
