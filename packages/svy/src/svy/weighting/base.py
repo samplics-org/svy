@@ -34,6 +34,7 @@ from svy.weighting.replication import create_brr_wgts as _create_brr_wgts
 from svy.weighting.replication import create_bs_wgts as _create_bs_wgts
 from svy.weighting.replication import create_jk_wgts as _create_jk_wgts
 from svy.weighting.replication import create_sdr_wgts as _create_sdr_wgts
+from svy.weighting.standardization import standardize as _standardize
 from svy.weighting.trimming import trim as _trim
 from svy.weighting.types import TrimConfig
 
@@ -246,6 +247,35 @@ class Weighting:
             ignore_reps=ignore_reps,
             update_design_wgts=update_design_wgts,
             strict=strict,
+            trimming=trimming,
+        )
+
+    # ------------------------------------------------------------------ #
+    # Standardization
+    # ------------------------------------------------------------------ #
+
+    def standardize(
+        self,
+        cells: str | Sequence[str],
+        *,
+        shares: DomainScalarMap,
+        by: str | Sequence[str] | None = None,
+        where: WhereArg = None,
+        wgt_name: str = "std_wgt",
+        ignore_reps: bool = False,
+        update_design_wgts: bool = True,
+        trimming: TrimConfig | None = None,
+        inplace: bool = False,
+    ) -> Any:
+        return _standardize(
+            self._target(inplace),
+            cells,
+            shares=shares,
+            by=by,
+            where=where,
+            wgt_name=wgt_name,
+            ignore_reps=ignore_reps,
+            update_design_wgts=update_design_wgts,
             trimming=trimming,
         )
 
