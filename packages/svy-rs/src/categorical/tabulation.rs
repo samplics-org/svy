@@ -14,9 +14,8 @@ use faer::prelude::Reborrow;
 use polars::prelude::*;
 
 use crate::estimation::{
-    taylor::SrsRef,
     degrees_of_freedom, point_estimate_mean, point_estimate_total, scores_mean, scores_total,
-    srs_variance_mean, taylor_variance,
+    srs_variance_mean, taylor::SrsRef, taylor_variance,
 };
 
 // ============================================================================
@@ -265,7 +264,11 @@ pub fn estimate_proportions(
         let scores = scores_mean(&ind_ca, weights)?;
 
         let var_scalar = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, sm)?;
-        let srs_var = srs_variance_mean(&ind_ca, weights, SrsRef::WithoutReplacement { pop_total: None })?;
+        let srs_var = srs_variance_mean(
+            &ind_ca,
+            weights,
+            SrsRef::WithoutReplacement { pop_total: None },
+        )?;
         let deff = if srs_var > 0.0 {
             var_scalar / srs_var
         } else {
@@ -318,7 +321,11 @@ pub fn estimate_totals(
     let mut indicators: Vec<Vec<Option<f64>>> = vec![vec![Some(0.0); n_rows]; kk];
     for (i, opt_val) in y.iter().enumerate() {
         match opt_val {
-            None => { for j in 0..kk { indicators[j][i] = None; } }
+            None => {
+                for j in 0..kk {
+                    indicators[j][i] = None;
+                }
+            }
             Some(val) => {
                 if let Some(&j) = level_map.get(val) {
                     indicators[j][i] = Some(1.0);

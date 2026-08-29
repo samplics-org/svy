@@ -418,6 +418,18 @@ def prepare_data(
     # block can zero them out, leaving downstream Rust calls with full-sample
     # replicate weights and the wrong variance.
     needed.extend(rep_weight_cols)
+
+    # Carry the weight-adjustment record's columns through selection so the
+    # variance sweep can read them. They are deliberately NOT null-checked: a
+    # snapshotted cells column is null exactly where a row fell outside the
+    # adjustment, which is information, not missing data.
+    _rec = getattr(design, "wgt_adjustment", None)
+    calib_cols: list[str] = []
+    if _rec is not None and _rec.is_variance_consumed:
+        for _c in (_rec.prev_wgt, *(_rec.cells or ()), *(_rec.aux or ())):
+            if _c in local_data.columns:
+                calib_cols.append(_c)
+    needed.extend(calib_cols)
     # Carry the Phase C design-code columns through column selection.
     if _design_codes:
         needed.extend(s.name for s in _design_codes.values())
@@ -446,9 +458,9 @@ def prepare_data(
     # Columns referenced only by `where` are excluded from the drop: a null
     # predicate value makes the row out-of-domain via Kleene logic in the
     # domain block.
-    if rep_weight_cols:
-        rep_set = set(rep_weight_cols)
-        null_check_cols = [c for c in needed if c not in rep_set]
+    _no_null_check = set(rep_weight_cols) | set(calib_cols)
+    if _no_null_check:
+        null_check_cols = [c for c in needed if c not in _no_null_check]
     else:
         null_check_cols = needed
 

@@ -106,7 +106,9 @@ fn normalize_by_group(
     let group_targets: Vec<f64> = match control {
         None => {
             let mut counts = vec![0usize; n_groups];
-            for &g in &group_indices { counts[g] += 1; }
+            for &g in &group_indices {
+                counts[g] += 1;
+            }
             counts.iter().map(|&c| c as f64).collect()
         }
         Some(ctrl) => {

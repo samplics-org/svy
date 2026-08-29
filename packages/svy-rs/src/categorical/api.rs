@@ -73,15 +73,19 @@ fn prepare_two_sample_data(
     let y_ca = df.column(y_col)?.as_materialized_series().f64()?;
     let w_ca = df.column(w_col)?.as_materialized_series().f64()?;
     let g_series = df.column(g_col)?.as_materialized_series();
-    let g_str    = g_series.cast(&DataType::String)?;
-    let g_ca     = g_str.str()?;
+    let g_str = g_series.cast(&DataType::String)?;
+    let g_ca = g_str.str()?;
 
     let domain_mask: Option<Vec<bool>> = match (domain_col, domain_val) {
         (Some(d_col), Some(d_val)) => {
             let d_series = df.column(d_col)?.as_materialized_series();
-            let d_str    = d_series.cast(&DataType::String)?;
-            let d_ca     = d_str.str()?;
-            Some(d_ca.iter().map(|opt| opt.map_or(false, |v| v == d_val)).collect())
+            let d_str = d_series.cast(&DataType::String)?;
+            let d_ca = d_str.str()?;
+            Some(
+                d_ca.iter()
+                    .map(|opt| opt.map_or(false, |v| v == d_val))
+                    .collect(),
+            )
         }
         _ => None,
     };
@@ -92,7 +96,7 @@ fn prepare_two_sample_data(
         let mut seen = std::collections::HashSet::new();
         for i in 0..n {
             let in_domain = domain_mask.as_ref().map_or(true, |m| m[i]);
-            let w_val     = w_ca.get(i).unwrap_or(0.0);
+            let w_val = w_ca.get(i).unwrap_or(0.0);
             if in_domain && w_val > 0.0 {
                 if let Some(label) = g_ca.get(i) {
                     if seen.insert(label.to_string()) {
@@ -114,11 +118,11 @@ fn prepare_two_sample_data(
     let mut g_arr = Vec::with_capacity(n);
 
     for i in 0..n {
-        let yi        = y_ca.get(i).unwrap_or(f64::NAN);
-        let wi        = w_ca.get(i).unwrap_or(0.0);
+        let yi = y_ca.get(i).unwrap_or(f64::NAN);
+        let wi = w_ca.get(i).unwrap_or(0.0);
         let in_domain = domain_mask.as_ref().map_or(true, |m| m[i]);
-        let label     = g_ca.get(i).unwrap_or("__NULL__");
-        let gi        = label_to_idx.get(label).copied().unwrap_or(0);
+        let label = g_ca.get(i).unwrap_or("__NULL__");
+        let gi = label_to_idx.get(label).copied().unwrap_or(0);
 
         if yi.is_nan() {
             // NaN y: zero everything
@@ -155,8 +159,8 @@ where
     F: Fn(&DataFrame, Option<&str>, Option<&str>) -> PolarsResult<DataFrame>,
 {
     let by_series = df.column(by_col)?.as_materialized_series();
-    let by_str    = by_series.cast(&DataType::String)?;
-    let by_ca     = by_str.str()?;
+    let by_str = by_series.cast(&DataType::String)?;
+    let by_ca = by_str.str()?;
     let mut by_levels: Vec<String> = by_ca
         .unique()?
         .iter()
@@ -172,9 +176,9 @@ where
         let combined_mask: BooleanChunked =
             if let (Some(d_col), Some(d_val)) = (domain_col, domain_val) {
                 let d_series = df.column(d_col)?.as_materialized_series();
-                let d_str    = d_series.cast(&DataType::String)?;
-                let d_ca     = d_str.str()?;
-                let d_mask   = d_ca.equal(d_val);
+                let d_str = d_series.cast(&DataType::String)?;
+                let d_ca = d_str.str()?;
+                let d_mask = d_ca.equal(d_val);
                 (&by_mask) & (&d_mask)
             } else {
                 by_mask
@@ -194,7 +198,7 @@ where
         let temp_df = df.hstack(&[mask_col.into()])?;
 
         let mut single = run_single(&temp_df, Some("__svy_by_domain__"), Some("true"))?;
-        let with_by    = single
+        let with_by = single
             .with_column(Column::new(by_col.into(), vec![level.as_str()]))?
             .clone();
 
@@ -243,13 +247,18 @@ pub fn ttest_rs(
     let df: DataFrame = data.into();
     let result = compute_svyttest(
         &df,
-        &y_col, &weight_col,
+        &y_col,
+        &weight_col,
         group_col.as_deref(),
-        strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
-        fpc_col.as_deref(), fpc_ssu_col.as_deref(),
+        strata_col.as_deref(),
+        psu_col.as_deref(),
+        ssu_col.as_deref(),
+        fpc_col.as_deref(),
+        fpc_ssu_col.as_deref(),
         singleton_method.as_deref(),
         null_value,
-        domain_col.as_deref(), domain_val.as_deref(),
+        domain_col.as_deref(),
+        domain_val.as_deref(),
         by_col.as_deref(),
     )
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -258,24 +267,51 @@ pub fn ttest_rs(
 
 fn compute_svyttest(
     df: &DataFrame,
-    y_col: &str, weight_col: &str,
+    y_col: &str,
+    weight_col: &str,
     group_col: Option<&str>,
-    strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
-    fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
+    strata_col: Option<&str>,
+    psu_col: Option<&str>,
+    ssu_col: Option<&str>,
+    fpc_col: Option<&str>,
+    fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
     null_value: f64,
-    domain_col: Option<&str>, domain_val: Option<&str>,
+    domain_col: Option<&str>,
+    domain_val: Option<&str>,
     by_col: Option<&str>,
 ) -> PolarsResult<DataFrame> {
     match by_col {
         None => compute_svyttest_single(
-            df, y_col, weight_col, group_col, strata_col, psu_col, ssu_col,
-            fpc_col, fpc_ssu_col, singleton_method, null_value, domain_col, domain_val,
+            df,
+            y_col,
+            weight_col,
+            group_col,
+            strata_col,
+            psu_col,
+            ssu_col,
+            fpc_col,
+            fpc_ssu_col,
+            singleton_method,
+            null_value,
+            domain_col,
+            domain_val,
         ),
         Some(by) => compute_by_groups(df, by, domain_col, domain_val, |temp_df, d_col, d_val| {
             compute_svyttest_single(
-                temp_df, y_col, weight_col, group_col, strata_col, psu_col, ssu_col,
-                fpc_col, fpc_ssu_col, singleton_method, null_value, d_col, d_val,
+                temp_df,
+                y_col,
+                weight_col,
+                group_col,
+                strata_col,
+                psu_col,
+                ssu_col,
+                fpc_col,
+                fpc_ssu_col,
+                singleton_method,
+                null_value,
+                d_col,
+                d_val,
             )
         }),
     }
@@ -283,39 +319,59 @@ fn compute_svyttest(
 
 fn compute_svyttest_single(
     df: &DataFrame,
-    y_col: &str, weight_col: &str,
+    y_col: &str,
+    weight_col: &str,
     group_col: Option<&str>,
-    strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
-    fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
+    strata_col: Option<&str>,
+    psu_col: Option<&str>,
+    ssu_col: Option<&str>,
+    fpc_col: Option<&str>,
+    fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
     null_value: f64,
-    domain_col: Option<&str>, domain_val: Option<&str>,
+    domain_col: Option<&str>,
+    domain_val: Option<&str>,
 ) -> PolarsResult<DataFrame> {
-    let strata  = get_opt_col(df, strata_col)?;
-    let psu     = get_opt_col(df, psu_col)?;
-    let ssu     = get_opt_col(df, ssu_col)?;
-    let fpc     = get_opt_f64(df, fpc_col)?;
+    let strata = get_opt_col(df, strata_col)?;
+    let psu = get_opt_col(df, psu_col)?;
+    let ssu = get_opt_col(df, ssu_col)?;
+    let fpc = get_opt_f64(df, fpc_col)?;
     let fpc_ssu = get_opt_f64(df, fpc_ssu_col)?;
 
     match group_col {
         None => {
             // One-sample test
-            let y       = df.column(y_col)?.as_materialized_series().f64()?;
+            let y = df.column(y_col)?.as_materialized_series().f64()?;
             let weights = df.column(weight_col)?.as_materialized_series().f64()?;
 
             let res = if let (Some(d_col), Some(d_val)) = (domain_col, domain_val) {
                 let d_series = df.column(d_col)?.as_materialized_series();
-                let d_str    = d_series.cast(&DataType::String)?;
-                let d_ca     = d_str.str()?;
-                let mask     = d_ca.equal(d_val);
+                let d_str = d_series.cast(&DataType::String)?;
+                let d_ca = d_str.str()?;
+                let mask = d_ca.equal(d_val);
                 ttest_one_sample_domain(
-                    y, weights, &mask, strata, psu, ssu, fpc, fpc_ssu,
-                    singleton_method, null_value,
+                    y,
+                    weights,
+                    &mask,
+                    strata,
+                    psu,
+                    ssu,
+                    fpc,
+                    fpc_ssu,
+                    singleton_method,
+                    null_value,
                 )?
             } else {
                 ttest_one_sample(
-                    y, weights, strata, psu, ssu, fpc, fpc_ssu,
-                    singleton_method, null_value,
+                    y,
+                    weights,
+                    strata,
+                    psu,
+                    ssu,
+                    fpc,
+                    fpc_ssu,
+                    singleton_method,
+                    null_value,
                 )?
             };
 
@@ -348,8 +404,18 @@ fn compute_svyttest_single(
             }
 
             let res = ttest_two_sample(
-                &y_arr, &g_arr, &w_arr, n, strata, psu, ssu, fpc, fpc_ssu,
-                singleton_method, levels.clone(), null_value,
+                &y_arr,
+                &g_arr,
+                &w_arr,
+                n,
+                strata,
+                psu,
+                ssu,
+                fpc,
+                fpc_ssu,
+                singleton_method,
+                levels.clone(),
+                null_value,
             )?;
 
             df![
@@ -404,11 +470,18 @@ pub fn ranktest_rs(
     let df: DataFrame = data.into();
     let result = compute_svyranktest(
         &df,
-        &y_col, &group_col, &weight_col,
-        strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
-        fpc_col.as_deref(), fpc_ssu_col.as_deref(),
-        score_method.as_deref(), singleton_method.as_deref(),
-        domain_col.as_deref(), domain_val.as_deref(),
+        &y_col,
+        &group_col,
+        &weight_col,
+        strata_col.as_deref(),
+        psu_col.as_deref(),
+        ssu_col.as_deref(),
+        fpc_col.as_deref(),
+        fpc_ssu_col.as_deref(),
+        score_method.as_deref(),
+        singleton_method.as_deref(),
+        domain_col.as_deref(),
+        domain_val.as_deref(),
         by_col.as_deref(),
     )
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -417,22 +490,51 @@ pub fn ranktest_rs(
 
 fn compute_svyranktest(
     df: &DataFrame,
-    y_col: &str, group_col: &str, weight_col: &str,
-    strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
-    fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
-    score_method: Option<&str>, singleton_method: Option<&str>,
-    domain_col: Option<&str>, domain_val: Option<&str>,
+    y_col: &str,
+    group_col: &str,
+    weight_col: &str,
+    strata_col: Option<&str>,
+    psu_col: Option<&str>,
+    ssu_col: Option<&str>,
+    fpc_col: Option<&str>,
+    fpc_ssu_col: Option<&str>,
+    score_method: Option<&str>,
+    singleton_method: Option<&str>,
+    domain_col: Option<&str>,
+    domain_val: Option<&str>,
     by_col: Option<&str>,
 ) -> PolarsResult<DataFrame> {
     match by_col {
         None => compute_svyranktest_single(
-            df, y_col, group_col, weight_col, strata_col, psu_col, ssu_col,
-            fpc_col, fpc_ssu_col, score_method, singleton_method, domain_col, domain_val,
+            df,
+            y_col,
+            group_col,
+            weight_col,
+            strata_col,
+            psu_col,
+            ssu_col,
+            fpc_col,
+            fpc_ssu_col,
+            score_method,
+            singleton_method,
+            domain_col,
+            domain_val,
         ),
         Some(by) => compute_by_groups(df, by, domain_col, domain_val, |temp_df, d_col, d_val| {
             compute_svyranktest_single(
-                temp_df, y_col, group_col, weight_col, strata_col, psu_col, ssu_col,
-                fpc_col, fpc_ssu_col, score_method, singleton_method, d_col, d_val,
+                temp_df,
+                y_col,
+                group_col,
+                weight_col,
+                strata_col,
+                psu_col,
+                ssu_col,
+                fpc_col,
+                fpc_ssu_col,
+                score_method,
+                singleton_method,
+                d_col,
+                d_val,
             )
         }),
     }
@@ -440,11 +542,18 @@ fn compute_svyranktest(
 
 fn compute_svyranktest_single(
     df: &DataFrame,
-    y_col: &str, group_col: &str, weight_col: &str,
-    strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
-    fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
-    score_method: Option<&str>, singleton_method: Option<&str>,
-    domain_col: Option<&str>, domain_val: Option<&str>,
+    y_col: &str,
+    group_col: &str,
+    weight_col: &str,
+    strata_col: Option<&str>,
+    psu_col: Option<&str>,
+    ssu_col: Option<&str>,
+    fpc_col: Option<&str>,
+    fpc_ssu_col: Option<&str>,
+    score_method: Option<&str>,
+    singleton_method: Option<&str>,
+    domain_col: Option<&str>,
+    domain_val: Option<&str>,
 ) -> PolarsResult<DataFrame> {
     let method = score_method
         .and_then(RankScoreMethod::from_str)
@@ -456,10 +565,10 @@ fn compute_svyranktest_single(
         RankScoreMethod::Median => "median",
     };
 
-    let strata  = get_opt_col(df, strata_col)?;
-    let psu     = get_opt_col(df, psu_col)?;
-    let ssu     = get_opt_col(df, ssu_col)?;
-    let fpc     = get_opt_f64(df, fpc_col)?;
+    let strata = get_opt_col(df, strata_col)?;
+    let psu = get_opt_col(df, psu_col)?;
+    let ssu = get_opt_col(df, ssu_col)?;
+    let fpc = get_opt_f64(df, fpc_col)?;
     let fpc_ssu = get_opt_f64(df, fpc_ssu_col)?;
 
     let (y_arr, w_arr, g_arr, levels, n) = prepare_two_sample_data(
@@ -469,8 +578,18 @@ fn compute_svyranktest_single(
 
     if n_groups == 2 {
         let res = ranktest_two_sample(
-            &y_arr, &g_arr, &w_arr, n, strata, psu, ssu, fpc, fpc_ssu,
-            method, singleton_method, levels,
+            &y_arr,
+            &g_arr,
+            &w_arr,
+            n,
+            strata,
+            psu,
+            ssu,
+            fpc,
+            fpc_ssu,
+            method,
+            singleton_method,
+            levels,
         )?;
 
         df![
@@ -487,8 +606,19 @@ fn compute_svyranktest_single(
         ]
     } else {
         let res = ranktest_k_sample(
-            &y_arr, &g_arr, &w_arr, n, n_groups, strata, psu, ssu, fpc,
-            fpc_ssu, method, singleton_method, levels,
+            &y_arr,
+            &g_arr,
+            &w_arr,
+            n,
+            n_groups,
+            strata,
+            psu,
+            ssu,
+            fpc,
+            fpc_ssu,
+            method,
+            singleton_method,
+            levels,
         )?;
 
         df![
@@ -534,10 +664,14 @@ pub fn tabulate_rs(
     let df: DataFrame = data.into();
     let result = compute_tabulate(
         &df,
-        &rowvar_col, &weight_col,
+        &rowvar_col,
+        &weight_col,
         colvar_col.as_deref(),
-        strata_col.as_deref(), psu_col.as_deref(), ssu_col.as_deref(),
-        fpc_col.as_deref(), fpc_ssu_col.as_deref(),
+        strata_col.as_deref(),
+        psu_col.as_deref(),
+        ssu_col.as_deref(),
+        fpc_col.as_deref(),
+        fpc_ssu_col.as_deref(),
         singleton_method.as_deref(),
         compute_totals,
     )
@@ -547,40 +681,56 @@ pub fn tabulate_rs(
 
 fn compute_tabulate(
     df: &DataFrame,
-    rowvar_col: &str, weight_col: &str,
+    rowvar_col: &str,
+    weight_col: &str,
     colvar_col: Option<&str>,
-    strata_col: Option<&str>, psu_col: Option<&str>, ssu_col: Option<&str>,
-    fpc_col: Option<&str>, fpc_ssu_col: Option<&str>,
+    strata_col: Option<&str>,
+    psu_col: Option<&str>,
+    ssu_col: Option<&str>,
+    fpc_col: Option<&str>,
+    fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
     compute_totals: bool,
 ) -> PolarsResult<(DataFrame, DataFrame)> {
     let weights = df.column(weight_col)?.as_materialized_series().f64()?;
     // Design columns as owned Columns (cheap Arc clone); the variance/df kernels
     // dispatch on dtype. Tabulate always supplies String columns today.
-    let strata = strata_col.map(|c| df.column(c).map(|col| col.clone())).transpose()?;
-    let psu = psu_col.map(|c| df.column(c).map(|col| col.clone())).transpose()?;
-    let ssu = ssu_col.map(|c| df.column(c).map(|col| col.clone())).transpose()?;
+    let strata = strata_col
+        .map(|c| df.column(c).map(|col| col.clone()))
+        .transpose()?;
+    let psu = psu_col
+        .map(|c| df.column(c).map(|col| col.clone()))
+        .transpose()?;
+    let ssu = ssu_col
+        .map(|c| df.column(c).map(|col| col.clone()))
+        .transpose()?;
     let fpc = fpc_col
-        .map(|c| df.column(c).and_then(|s| Ok(s.as_materialized_series().f64()?.clone())))
+        .map(|c| {
+            df.column(c)
+                .and_then(|s| Ok(s.as_materialized_series().f64()?.clone()))
+        })
         .transpose()?;
     let fpc_ssu = fpc_ssu_col
-        .map(|c| df.column(c).and_then(|s| Ok(s.as_materialized_series().f64()?.clone())))
+        .map(|c| {
+            df.column(c)
+                .and_then(|s| Ok(s.as_materialized_series().f64()?.clone()))
+        })
         .transpose()?;
 
     let is_two_way = colvar_col.is_some();
     let n_obs = df.height();
 
     let rowvar_series = df.column(rowvar_col)?.as_materialized_series();
-    let rowvar_str    = rowvar_series.cast(&DataType::String)?;
-    let rowvar_ca     = rowvar_str.str()?;
+    let rowvar_str = rowvar_series.cast(&DataType::String)?;
+    let rowvar_ca = rowvar_str.str()?;
 
     let combined_key: StringChunked;
     let y_effective: &StringChunked;
 
     if let Some(cv_col) = colvar_col {
         let colvar_series = df.column(cv_col)?.as_materialized_series();
-        let colvar_str    = colvar_series.cast(&DataType::String)?;
-        let colvar_ca     = colvar_str.str()?;
+        let colvar_str = colvar_series.cast(&DataType::String)?;
+        let colvar_ca = colvar_str.str()?;
 
         let keys: Vec<Option<String>> = rowvar_ca
             .iter()
@@ -591,15 +741,20 @@ fn compute_tabulate(
             })
             .collect();
         combined_key = StringChunked::from_iter(keys.into_iter());
-        y_effective  = &combined_key;
+        y_effective = &combined_key;
     } else {
         combined_key = rowvar_ca.clone();
-        y_effective  = &combined_key;
+        y_effective = &combined_key;
     }
 
     let (levels, proportions, ses, cov_matrix, deff_vec, df_val) = estimate_proportions(
-        y_effective, weights,
-        strata.as_ref(), psu.as_ref(), ssu.as_ref(), fpc.as_ref(), fpc_ssu.as_ref(),
+        y_effective,
+        weights,
+        strata.as_ref(),
+        psu.as_ref(),
+        ssu.as_ref(),
+        fpc.as_ref(),
+        fpc_ssu.as_ref(),
         singleton_method,
     )?;
 
@@ -609,8 +764,14 @@ fn compute_tabulate(
     for lvl in &levels {
         if is_two_way {
             match lvl.split_once("__by__") {
-                Some((r, c)) => { rowvars.push(r.to_string()); colvars.push(c.to_string()); }
-                None         => { rowvars.push(lvl.clone());   colvars.push(String::new()); }
+                Some((r, c)) => {
+                    rowvars.push(r.to_string());
+                    colvars.push(c.to_string());
+                }
+                None => {
+                    rowvars.push(lvl.clone());
+                    colvars.push(String::new());
+                }
             }
         } else {
             rowvars.push(lvl.clone());
@@ -620,16 +781,30 @@ fn compute_tabulate(
 
     let (est_vals, se_vals) = if compute_totals {
         estimate_totals(
-            y_effective, weights,
-            strata.as_ref(), psu.as_ref(), ssu.as_ref(), fpc.as_ref(), fpc_ssu.as_ref(),
-            singleton_method, &levels,
+            y_effective,
+            weights,
+            strata.as_ref(),
+            psu.as_ref(),
+            ssu.as_ref(),
+            fpc.as_ref(),
+            fpc_ssu.as_ref(),
+            singleton_method,
+            &levels,
         )?
     } else {
         (proportions.clone(), ses.clone())
     };
 
-    let cv_vals: Vec<f64> = est_vals.iter().zip(se_vals.iter())
-        .map(|(&e, &s)| if e.abs() > 0.0 { (s / e).abs() } else { f64::NAN })
+    let cv_vals: Vec<f64> = est_vals
+        .iter()
+        .zip(se_vals.iter())
+        .map(|(&e, &s)| {
+            if e.abs() > 0.0 {
+                (s / e).abs()
+            } else {
+                f64::NAN
+            }
+        })
         .collect();
 
     let cells_df = df![
@@ -644,23 +819,29 @@ fn compute_tabulate(
     ]?;
 
     let stats_df = if is_two_way {
-        let cv_col        = colvar_col.unwrap();
+        let cv_col = colvar_col.unwrap();
         let colvar_series = df.column(cv_col)?.as_materialized_series();
-        let colvar_str2   = colvar_series.cast(&DataType::String)?;
-        let colvar_ca2    = colvar_str2.str()?;
+        let colvar_str2 = colvar_series.cast(&DataType::String)?;
+        let colvar_ca2 = colvar_str2.str()?;
 
-        let mut row_levels: Vec<String> = rowvar_ca.unique()?.iter()
-            .filter_map(|v| v.map(|s| s.to_string())).collect();
+        let mut row_levels: Vec<String> = rowvar_ca
+            .unique()?
+            .iter()
+            .filter_map(|v| v.map(|s| s.to_string()))
+            .collect();
         sort_levels(&mut row_levels);
-        let mut col_levels: Vec<String> = colvar_ca2.unique()?.iter()
-            .filter_map(|v| v.map(|s| s.to_string())).collect();
+        let mut col_levels: Vec<String> = colvar_ca2
+            .unique()?
+            .iter()
+            .filter_map(|v| v.map(|s| s.to_string()))
+            .collect();
         sort_levels(&mut col_levels);
 
         let nr = row_levels.len();
         let nc = col_levels.len();
 
         let mut prop_ordered = vec![0.0; nr * nc];
-        let mut cov_ordered  = vec![vec![0.0; nr * nc]; nr * nc];
+        let mut cov_ordered = vec![vec![0.0; nr * nc]; nr * nc];
 
         let mut level_to_ordered: HashMap<String, usize> = HashMap::new();
         for (ri, rl) in row_levels.iter().enumerate() {
@@ -680,12 +861,17 @@ fn compute_tabulate(
             }
         }
 
-        let (n_strata_count, n_psu_count) =
-            count_strata_psus(strata.as_ref(), psu.as_ref(), n_obs);
+        let (n_strata_count, n_psu_count) = count_strata_psus(strata.as_ref(), psu.as_ref(), n_obs);
 
-        let (
-            p_chisq, p_df, p_p, p_adj_f, p_adj_ndf, p_adj_ddf, p_adj_p,
-        ) = rao_scott(&prop_ordered, &cov_ordered, nr, nc, n_obs, n_strata_count, n_psu_count);
+        let (p_chisq, p_df, p_p, p_adj_f, p_adj_ndf, p_adj_ddf, p_adj_p) = rao_scott(
+            &prop_ordered,
+            &cov_ordered,
+            nr,
+            nc,
+            n_obs,
+            n_strata_count,
+            n_psu_count,
+        );
 
         df![
             "stat" => vec!["chisq", "f"],

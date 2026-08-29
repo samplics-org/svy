@@ -240,8 +240,17 @@ pub fn ttest_two_sample(
     let group_means = vec![wols.beta[0], wols.beta[0] + wols.beta[1]];
 
     // Per-group SEs — pass pre-built chunked arrays to avoid cloning
-    let group_ses =
-        compute_per_group_ses(&y_chunked, g, &weights_chunked, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+    let group_ses = compute_per_group_ses(
+        &y_chunked,
+        g,
+        &weights_chunked,
+        strata,
+        psu,
+        ssu,
+        fpc,
+        fpc_ssu,
+        singleton_method,
+    )?;
 
     Ok(TTestTwoResult {
         diff: wols.beta[1], // raw difference (before subtracting null)

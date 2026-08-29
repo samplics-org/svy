@@ -1,6 +1,8 @@
 // src/estimation/taylor.rs
 
 use polars::prelude::*;
+
+use crate::estimation::calib_sweep::CalibSweep;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 // ============================================================================
@@ -446,7 +448,9 @@ pub fn scores_mean(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult
             return Err(PolarsError::ComputeError("Sum of weights is zero".into()));
         }
         let est = sum_wy / sum_w;
-        let scores: Vec<f64> = (0..ys.len()).map(|i| (ws[i] / sum_w) * (ys[i] - est)).collect();
+        let scores: Vec<f64> = (0..ys.len())
+            .map(|i| (ws[i] / sum_w) * (ys[i] - est))
+            .collect();
         return Ok(Float64Chunked::from_slice("scores".into(), &scores));
     }
 
@@ -500,7 +504,9 @@ pub fn scores_mean_arr(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsRe
             return Err(PolarsError::ComputeError("Sum of weights is zero".into()));
         }
         let est = sum_wy / sum_w;
-        return Ok((0..ys.len()).map(|i| (ws[i] / sum_w) * (ys[i] - est)).collect());
+        return Ok((0..ys.len())
+            .map(|i| (ws[i] / sum_w) * (ys[i] - est))
+            .collect());
     }
     // Nulls or chunking: defer to the reference implementation and flatten,
     // which is exactly what `taylor_variance` did with its result.
@@ -534,7 +540,13 @@ pub fn scores_mean_domain(
         }
         let est = sum_wy / sum_w;
         let scores: Vec<f64> = (0..n)
-            .map(|i| if in_domain[i] { (ws[i] / sum_w) * (ys[i] - est) } else { 0.0 })
+            .map(|i| {
+                if in_domain[i] {
+                    (ws[i] / sum_w) * (ys[i] - est)
+                } else {
+                    0.0
+                }
+            })
             .collect();
         return Ok(Float64Chunked::from_slice("scores".into(), &scores));
     }
@@ -542,14 +554,14 @@ pub fn scores_mean_domain(
     // Fallback: single pass accumulating sums while collecting in-domain pairs.
     let n = y.len();
     let mut sum_wy = 0.0f64;
-    let mut sum_w  = 0.0f64;
+    let mut sum_w = 0.0f64;
     let mut triples: Vec<Option<(f64, f64)>> = Vec::with_capacity(n); // (yv,wv) only in-domain
 
     for ((yi, wi), mi) in y.iter().zip(weights.iter()).zip(domain_mask.iter()) {
         match (yi, wi, mi) {
             (Some(yv), Some(wv), Some(true)) => {
                 sum_wy += yv * wv;
-                sum_w  += wv;
+                sum_w += wv;
                 triples.push(Some((yv, wv)));
             }
             _ => triples.push(None),
@@ -564,10 +576,12 @@ pub fn scores_mean_domain(
 
     let scores: Vec<Option<f64>> = triples
         .iter()
-        .map(|p| Some(match p {
-            Some((yv, wv)) => (wv / sum_w) * (yv - est),
-            None => 0.0,
-        }))
+        .map(|p| {
+            Some(match p {
+                Some((yv, wv)) => (wv / sum_w) * (yv - est),
+                None => 0.0,
+            })
+        })
         .collect();
 
     Ok(Float64Chunked::from_slice_options("scores".into(), &scores))
@@ -689,7 +703,12 @@ pub fn scores_ratio_domain(
     let mut sum_wx = 0.0f64;
     let mut quads: Vec<Option<(f64, f64, f64)>> = Vec::with_capacity(n); // (yv,xv,wv)
 
-    for (((yi, xi), wi), mi) in y.iter().zip(x.iter()).zip(weights.iter()).zip(domain_mask.iter()) {
+    for (((yi, xi), wi), mi) in y
+        .iter()
+        .zip(x.iter())
+        .zip(weights.iter())
+        .zip(domain_mask.iter())
+    {
         match (yi, xi, wi, mi) {
             (Some(yv), Some(xv), Some(wv), Some(true)) => {
                 sum_wy += yv * wv;
@@ -708,10 +727,12 @@ pub fn scores_ratio_domain(
 
     let scores: Vec<Option<f64>> = quads
         .iter()
-        .map(|q| Some(match q {
-            Some((yv, xv, wv)) => (wv / sum_wx) * (yv - r_hat * xv),
-            None => 0.0,
-        }))
+        .map(|q| {
+            Some(match q {
+                Some((yv, xv, wv)) => (wv / sum_wx) * (yv - r_hat * xv),
+                None => 0.0,
+            })
+        })
         .collect();
     Ok(Float64Chunked::from_slice_options("scores".into(), &scores))
 }
@@ -1132,10 +1153,13 @@ fn variance_stratified_optimized(
 
                 let psu_indices_h = &psu_map[h];
                 // Compute mean directly from global psu_totals — no per-stratum Vec alloc
-                let psu_mean_h: f64 = psu_indices_h.iter()
+                let psu_mean_h: f64 = psu_indices_h
+                    .iter()
                     .map(|&p| psu_totals[p as usize])
-                    .sum::<f64>() / (n_psus_h as f64);
-                let sum_sq_diff: f64 = psu_indices_h.iter()
+                    .sum::<f64>()
+                    / (n_psus_h as f64);
+                let sum_sq_diff: f64 = psu_indices_h
+                    .iter()
                     .map(|&p| (psu_totals[p as usize] - psu_mean_h).powi(2))
                     .sum();
                 total_var += fpc_h * (n_psus_h as f64 / (n_psus_h as f64 - 1.0)) * sum_sq_diff;
@@ -1296,13 +1320,25 @@ pub struct TaylorDesign {
     n_psus: u32,                   // unstratified PSU count
     psu_per_stratum: Option<Vec<Vec<u32>>>,
     n_psus_per_stratum: Option<Vec<u32>>,
-    fpc_val: f64,                     // unstratified single FPC
+    fpc_val: f64,                      // unstratified single FPC
     fpc_per_stratum: Option<Vec<f64>>, // stratified per-stratum FPC (or [fpc_val] unstrat)
     // Stage 2
     has_stage2: bool,
     ssu_indices: Option<Vec<u32>>,
     fpc_ssu_arr: Option<Vec<f64>>,
     psu_to_stratum: Option<Vec<u32>>,
+    /// Score centring for a calibrating adjustment. Living on the design means
+    /// every caller of `taylor_variance_apply` picks it up unchanged.
+    calib: Option<CalibSweep>,
+}
+
+impl TaylorDesign {
+    /// Attach a calibration sweep. Chained by the estimators that carry a
+    /// variance-consumed adjustment record.
+    pub fn with_calib(mut self, calib: Option<CalibSweep>) -> Self {
+        self.calib = calib;
+        self
+    }
 }
 
 pub fn build_taylor_design(
@@ -1360,6 +1396,7 @@ pub fn build_taylor_design(
             ssu_indices,
             fpc_ssu_arr,
             psu_to_stratum: None,
+            calib: None,
         });
     }
 
@@ -1421,6 +1458,7 @@ pub fn build_taylor_design(
                 ssu_indices,
                 fpc_ssu_arr,
                 psu_to_stratum: Some(psu_to_stratum),
+                calib: None,
             })
         }
         None => Ok(TaylorDesign {
@@ -1437,6 +1475,7 @@ pub fn build_taylor_design(
             ssu_indices,
             fpc_ssu_arr,
             psu_to_stratum: None,
+            calib: None,
         }),
     }
 }
@@ -1444,6 +1483,20 @@ pub fn build_taylor_design(
 /// Apply a prebuilt [`TaylorDesign`] to a score vector. This is the only
 /// scores-dependent part; a by-group loop calls it once per group.
 pub fn taylor_variance_apply(scores_arr: &[f64], d: &TaylorDesign) -> f64 {
+    // Centre first when the design carries a calibration: the sweep replaces
+    // the scores the PSU-total formula then consumes, exactly as R applies
+    // postStrata at the top of svyrecvar.
+    let swept;
+    let scores_arr: &[f64] = match &d.calib {
+        Some(c) => {
+            let mut v = scores_arr.to_vec();
+            c.apply(&mut v);
+            swept = v;
+            &swept
+        }
+        None => scores_arr,
+    };
+
     // --- STAGE 1 ---
     let var_stage1 = if d.strata_indices.is_none() {
         d.fpc_val * variance_unstratified_optimized(scores_arr, d.psu_indices.as_deref(), d.n_psus)
@@ -1596,11 +1649,7 @@ fn active_mask(weights: &Float64Chunked, domain: Option<&BooleanChunked>) -> Vec
 }
 
 /// The df arithmetic itself, over resolved design codes.
-fn df_from_codes(
-    active: &[bool],
-    strata: Option<(&[u32], u32)>,
-    psu: Option<&[u32]>,
-) -> u32 {
+fn df_from_codes(active: &[bool], strata: Option<(&[u32], u32)>, psu: Option<&[u32]>) -> u32 {
     match (strata, psu) {
         (None, None) => {
             // No strata, no PSU: each obs is its own PSU, df = n_active - 1
@@ -1669,8 +1718,7 @@ pub fn quantiles_woodruff(
 ) -> PolarsResult<Vec<(f64, f64, f64)>> {
     let nan_rows = || vec![(f64::NAN, f64::NAN, f64::NAN); probs.len()];
 
-    let Some((y_sorted, cdf, sum_w)) =
-        sorted_weighted_cdf(quantile_pairs(y, weights, domain_mask))
+    let Some((y_sorted, cdf, sum_w)) = sorted_weighted_cdf(quantile_pairs(y, weights, domain_mask))
     else {
         return Ok(nan_rows());
     };
@@ -1919,11 +1967,7 @@ pub fn srs_variance_mean_domain(
     } else {
         let mut yv = Vec::new();
         let mut wv = Vec::new();
-        for ((yi, wi), mi) in y
-            .iter()
-            .zip(weights.iter())
-            .zip(domain_mask.iter())
-        {
+        for ((yi, wi), mi) in y.iter().zip(weights.iter()).zip(domain_mask.iter()) {
             if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi) {
                 if w_val > 0.0 {
                     yv.push(y_val);
@@ -1996,11 +2040,7 @@ pub fn srs_variance_total_domain(
     } else {
         let mut yv = Vec::new();
         let mut wv = Vec::new();
-        for ((yi, wi), mi) in y
-            .iter()
-            .zip(weights.iter())
-            .zip(domain_mask.iter())
-        {
+        for ((yi, wi), mi) in y.iter().zip(weights.iter()).zip(domain_mask.iter()) {
             if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi) {
                 if w_val > 0.0 {
                     yv.push(y_val);
@@ -2390,7 +2430,8 @@ mod tests {
     /// assign to the strings.
     #[test]
     fn test_integer_codes_match_string_path() {
-        let y = Float64Chunked::from_slice("y".into(), &[1.0, 2.0, 3.0, 4.0, 10.0, 12.0, 14.0, 16.0]);
+        let y =
+            Float64Chunked::from_slice("y".into(), &[1.0, 2.0, 3.0, 4.0, 10.0, 12.0, 14.0, 16.0]);
         let w = Float64Chunked::from_slice("w".into(), &[1.0; 8]);
         let scores = scores_mean(&y, &w).unwrap();
 
@@ -2404,11 +2445,31 @@ mod tests {
         let psu_i = icol("p".into(), &[20, 20, 55, 55, 71, 71, 88, 88]);
 
         // Stratified + clustered
-        let var_s =
-            taylor_variance(&scores, Some(&strata_s), Some(&psu_s), None, None, None, None).unwrap();
-        let var_i =
-            taylor_variance(&scores, Some(&strata_i), Some(&psu_i), None, None, None, None).unwrap();
-        assert_eq!(var_s.to_bits(), var_i.to_bits(), "strat+cluster: {var_s} vs {var_i}");
+        let var_s = taylor_variance(
+            &scores,
+            Some(&strata_s),
+            Some(&psu_s),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let var_i = taylor_variance(
+            &scores,
+            Some(&strata_i),
+            Some(&psu_i),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            var_s.to_bits(),
+            var_i.to_bits(),
+            "strat+cluster: {var_s} vs {var_i}"
+        );
 
         let df_s = degrees_of_freedom(&w, Some(&strata_s), Some(&psu_s)).unwrap();
         let df_i = degrees_of_freedom(&w, Some(&strata_i), Some(&psu_i)).unwrap();
@@ -2421,12 +2482,20 @@ mod tests {
             taylor_variance(&scores, None, Some(&psu_flat_s), None, None, None, None).unwrap();
         let uv_i =
             taylor_variance(&scores, None, Some(&psu_flat_i), None, None, None, None).unwrap();
-        assert_eq!(uv_s.to_bits(), uv_i.to_bits(), "unstratified: {uv_s} vs {uv_i}");
+        assert_eq!(
+            uv_s.to_bits(),
+            uv_i.to_bits(),
+            "unstratified: {uv_s} vs {uv_i}"
+        );
 
         // Stratified, no PSU
         let sv_s = taylor_variance(&scores, Some(&strata_s), None, None, None, None, None).unwrap();
         let sv_i = taylor_variance(&scores, Some(&strata_i), None, None, None, None, None).unwrap();
-        assert_eq!(sv_s.to_bits(), sv_i.to_bits(), "stratified-only: {sv_s} vs {sv_i}");
+        assert_eq!(
+            sv_s.to_bits(),
+            sv_i.to_bits(),
+            "stratified-only: {sv_s} vs {sv_i}"
+        );
     }
 
     #[test]
@@ -2484,13 +2553,28 @@ mod tests {
         let y = vec![1.0, 2.0, 3.0];
         let cdf = vec![0.8, 0.9, 1.0];
 
-        assert_eq!(weighted_quantile(&y, &cdf, 0.5, SvyQuantileMethod::Higher), 1.0);
-        assert_eq!(weighted_quantile(&y, &cdf, 0.5, SvyQuantileMethod::Lower), 1.0);
-        assert_eq!(weighted_quantile(&y, &cdf, 0.5, SvyQuantileMethod::Middle), 1.0);
-        assert_eq!(weighted_quantile(&y, &cdf, 0.5, SvyQuantileMethod::Nearest), 1.0);
+        assert_eq!(
+            weighted_quantile(&y, &cdf, 0.5, SvyQuantileMethod::Higher),
+            1.0
+        );
+        assert_eq!(
+            weighted_quantile(&y, &cdf, 0.5, SvyQuantileMethod::Lower),
+            1.0
+        );
+        assert_eq!(
+            weighted_quantile(&y, &cdf, 0.5, SvyQuantileMethod::Middle),
+            1.0
+        );
+        assert_eq!(
+            weighted_quantile(&y, &cdf, 0.5, SvyQuantileMethod::Nearest),
+            1.0
+        );
         let linear = weighted_quantile(&y, &cdf, 0.5, SvyQuantileMethod::Linear);
         assert_eq!(linear, 1.0);
-        assert!(linear >= 1.0 && linear <= 3.0, "Linear must stay in data range");
+        assert!(
+            linear >= 1.0 && linear <= 3.0,
+            "Linear must stay in data range"
+        );
 
         // Upper boundary: p >= cdf[n-1] must return the maximum.
         for m in [
@@ -2509,31 +2593,37 @@ mod tests {
         // Two strata with 2 PSUs each. PSU labels "1","2" are reused in both
         // strata (NHANES-style). The variance must match the same design with
         // globally unique PSU labels; hand-computed value is 1.25 (SE 1.118).
-        let y = Float64Chunked::from_slice(
-            "y".into(),
-            &[1.0, 2.0, 3.0, 4.0, 10.0, 12.0, 14.0, 16.0],
-        );
+        let y =
+            Float64Chunked::from_slice("y".into(), &[1.0, 2.0, 3.0, 4.0, 10.0, 12.0, 14.0, 16.0]);
         let w = Float64Chunked::from_slice("w".into(), &[1.0; 8]);
-        let strata = scol(
-            "s".into(),
-            &["A", "A", "A", "A", "B", "B", "B", "B"],
-        );
-        let psu_reused = scol(
-            "p".into(),
-            &["1", "1", "2", "2", "1", "1", "2", "2"],
-        );
+        let strata = scol("s".into(), &["A", "A", "A", "A", "B", "B", "B", "B"]);
+        let psu_reused = scol("p".into(), &["1", "1", "2", "2", "1", "1", "2", "2"]);
         let psu_unique = scol(
             "p".into(),
             &["A1", "A1", "A2", "A2", "B1", "B1", "B2", "B2"],
         );
 
         let scores = scores_mean(&y, &w).unwrap();
-        let var_reused =
-            taylor_variance(&scores, Some(&strata), Some(&psu_reused), None, None, None, None)
-                .unwrap();
-        let var_unique =
-            taylor_variance(&scores, Some(&strata), Some(&psu_unique), None, None, None, None)
-                .unwrap();
+        let var_reused = taylor_variance(
+            &scores,
+            Some(&strata),
+            Some(&psu_reused),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let var_unique = taylor_variance(
+            &scores,
+            Some(&strata),
+            Some(&psu_unique),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         assert!((var_reused - 1.25).abs() < 1e-12, "got {}", var_reused);
         assert!((var_unique - 1.25).abs() < 1e-12, "got {}", var_unique);
@@ -2548,7 +2638,11 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!((cov_reused[0][0] - 1.25).abs() < 1e-12, "got {}", cov_reused[0][0]);
+        assert!(
+            (cov_reused[0][0] - 1.25).abs() < 1e-12,
+            "got {}",
+            cov_reused[0][0]
+        );
     }
 
     #[test]
@@ -2559,16 +2653,22 @@ mod tests {
         // (stage 1 = 2.6667, stage 2 = 0.1333).
         let y = Float64Chunked::from_slice(
             "y".into(),
-            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+            &[
+                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+            ],
         );
         let w = Float64Chunked::from_slice("w".into(), &[1.0; 12]);
         let psu = scol(
             "p".into(),
-            &["p1", "p1", "p1", "p1", "p2", "p2", "p2", "p2", "p3", "p3", "p3", "p3"],
+            &[
+                "p1", "p1", "p1", "p1", "p2", "p2", "p2", "p2", "p3", "p3", "p3", "p3",
+            ],
         );
         let ssu = scol(
             "u".into(),
-            &["s1", "s1", "s2", "s2", "s1", "s1", "s2", "s2", "s1", "s1", "s2", "s2"],
+            &[
+                "s1", "s1", "s2", "s2", "s1", "s1", "s2", "s2", "s1", "s1", "s2", "s2",
+            ],
         );
         let fpc = Float64Chunked::from_slice("f".into(), &[0.5; 12]);
         let fpc_ssu = Float64Chunked::from_slice("f2".into(), &[0.8; 12]);
@@ -2576,11 +2676,23 @@ mod tests {
 
         let scores = scores_mean(&y, &w).unwrap();
         let var_nostrata = taylor_variance(
-            &scores, None, Some(&psu), Some(&ssu), Some(&fpc), Some(&fpc_ssu), None,
+            &scores,
+            None,
+            Some(&psu),
+            Some(&ssu),
+            Some(&fpc),
+            Some(&fpc_ssu),
+            None,
         )
         .unwrap();
         let var_conststrata = taylor_variance(
-            &scores, Some(&strata_const), Some(&psu), Some(&ssu), Some(&fpc), Some(&fpc_ssu), None,
+            &scores,
+            Some(&strata_const),
+            Some(&psu),
+            Some(&ssu),
+            Some(&fpc),
+            Some(&fpc_ssu),
+            None,
         )
         .unwrap();
 
@@ -2593,7 +2705,8 @@ mod tests {
         let y = Float64Chunked::from_slice("y".into(), &[1.0, 2.0, 3.0]);
         let x = Float64Chunked::from_slice("x".into(), &[1.0, 1.0, 1.0]);
         let w = Float64Chunked::from_slice("w".into(), &[0.0, 0.0, 0.0]);
-        let v = srs_variance_ratio(&y, &x, &w, SrsRef::WithoutReplacement { pop_total: None }).unwrap();
+        let v =
+            srs_variance_ratio(&y, &x, &w, SrsRef::WithoutReplacement { pop_total: None }).unwrap();
         assert!(v.is_nan());
     }
 
@@ -2629,8 +2742,12 @@ mod tests {
         let mut prev: Option<f64> = None;
         for scale in [1.0, 0.5, 1e-3, 400.0] {
             let w: Vec<f64> = vec![100.0 * scale; 6];
-            let v = srs_variance_mean(&y, &Float64Chunked::from_slice("w".into(), &w), SrsRef::WithReplacement)
-                .unwrap();
+            let v = srs_variance_mean(
+                &y,
+                &Float64Chunked::from_slice("w".into(), &w),
+                SrsRef::WithReplacement,
+            )
+            .unwrap();
             if let Some(p) = prev {
                 assert!((v - p).abs() < 1e-12, "scale {scale} changed the reference");
             }
@@ -2648,7 +2765,10 @@ mod tests {
         let halved = Float64Chunked::from_slice("w".into(), &[50.0; 6]);
         let half =
             srs_variance_mean(&y, &halved, SrsRef::WithoutReplacement { pop_total: None }).unwrap();
-        assert!((full - half).abs() > 1e-9, "expected the FPC to move: {full} vs {half}");
+        assert!(
+            (full - half).abs() > 1e-9,
+            "expected the FPC to move: {full} vs {half}"
+        );
     }
 
     /// A declared population size is used in place of the weight sum, so the
@@ -2659,9 +2779,14 @@ mod tests {
         // Weights normalized to sum to n: sum(w) is useless as a population
         // count, but the design still knows N = 600.
         let norm = Float64Chunked::from_slice("w".into(), &[1.0; 6]);
-        let with_pop =
-            srs_variance_mean(&y, &norm, SrsRef::WithoutReplacement { pop_total: Some(600.0) })
-                .unwrap();
+        let with_pop = srs_variance_mean(
+            &y,
+            &norm,
+            SrsRef::WithoutReplacement {
+                pop_total: Some(600.0),
+            },
+        )
+        .unwrap();
         let wr = srs_variance_mean(&y, &norm, SrsRef::WithReplacement).unwrap();
         assert!((with_pop / wr - (1.0 - 6.0 / 600.0)).abs() < 1e-12);
     }
@@ -2678,9 +2803,12 @@ mod tests {
         for delta in [-1e-11, -1e-13, 0.0, 1e-13, 1e-11] {
             let each = (6.0 + delta) / 6.0;
             let w = Float64Chunked::from_slice("w".into(), &[each; 6]);
-            let got = srs_variance_mean(&y, &w, SrsRef::WithoutReplacement { pop_total: None })
-                .unwrap();
-            assert!(got.is_nan(), "sum(w) = n{delta:+e} should be degenerate, got {got}");
+            let got =
+                srs_variance_mean(&y, &w, SrsRef::WithoutReplacement { pop_total: None }).unwrap();
+            assert!(
+                got.is_nan(),
+                "sum(w) = n{delta:+e} should be degenerate, got {got}"
+            );
         }
     }
 
@@ -2699,8 +2827,8 @@ mod tests {
         let (y, _) = srs_fixture();
         for w in [vec![1.0; 6], vec![1.0 / 6.0; 6]] {
             let wc = Float64Chunked::from_slice("w".into(), &w);
-            let v = srs_variance_mean(&y, &wc, SrsRef::WithoutReplacement { pop_total: None })
-                .unwrap();
+            let v =
+                srs_variance_mean(&y, &wc, SrsRef::WithoutReplacement { pop_total: None }).unwrap();
             assert!(v.is_nan(), "expected a degenerate reference, got {v}");
         }
         // The with-replacement reference is unaffected.
@@ -2752,8 +2880,7 @@ mod tests {
             ("no design", None, None),
         ] {
             for (wlabel, w) in [("all positive", &w_all), ("some zero", &w_some)] {
-                let design =
-                    build_taylor_design(strata, psu, None, None, None, None).unwrap();
+                let design = build_taylor_design(strata, psu, None, None, None, None).unwrap();
                 let from_design = degrees_of_freedom_from_design(w, &design, None);
                 let from_cols = degrees_of_freedom(w, strata, psu).unwrap();
                 assert_eq!(

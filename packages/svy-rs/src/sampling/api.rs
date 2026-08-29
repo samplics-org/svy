@@ -4,11 +4,11 @@
 // Arrays arrive as Vec<i64> / Vec<f64> from Python (via numpy).
 // Returned as tuples of Vec<T> which PyO3 converts to numpy arrays.
 
-use std::collections::HashMap;
 use pyo3::prelude::*;
+use std::collections::HashMap;
 
-use crate::sampling::srs::{SrsN, select_srs};
 use crate::sampling::pps::{PpsMethod, PpsN, select_pps};
+use crate::sampling::srs::{SrsN, select_srs};
 
 // ---------------------------------------------------------------------------
 // SRS
@@ -44,12 +44,12 @@ pub fn select_srs_rs(
         (Some(_), Some(_)) => {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "Provide either n_scalar or n_map, not both",
-            ))
+            ));
         }
         (None, None) => {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "Provide either n_scalar or n_map",
-            ))
+            ));
         }
     };
 
@@ -112,17 +112,25 @@ pub fn select_pps_rs(
         (Some(_), Some(_)) => {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "Provide either n_scalar or n_map, not both",
-            ))
+            ));
         }
         (None, None) => {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "Provide either n_scalar or n_map",
-            ))
+            ));
         }
     };
 
     let strat_ref = stratum.as_deref();
 
-    select_pps(&frame, n, &mos, strat_ref, pps_method, certainty_threshold, seed)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+    select_pps(
+        &frame,
+        n,
+        &mos,
+        strat_ref,
+        pps_method,
+        certainty_threshold,
+        seed,
+    )
+    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
 }

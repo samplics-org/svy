@@ -108,7 +108,11 @@ impl BivarMoments {
     #[inline]
     pub fn corr(&self) -> f64 {
         let denom = (self.m_yy * self.m_xx).sqrt();
-        if denom > 0.0 { self.m_yx / denom } else { f64::NAN }
+        if denom > 0.0 {
+            self.m_yx / denom
+        } else {
+            f64::NAN
+        }
     }
 }
 
@@ -334,9 +338,19 @@ pub fn scores_cov_domain(
 ) -> PolarsResult<Float64Chunked> {
     let m = bivar_moments(y, x, weights, Some(domain_mask))?;
     if m.sum_w == 0.0 {
-        return Ok(Float64Chunked::from_slice("scores".into(), &vec![0.0; y.len()]));
+        return Ok(Float64Chunked::from_slice(
+            "scores".into(),
+            &vec![0.0; y.len()],
+        ));
     }
-    Ok(assoc_score_values(y, x, weights, &m, Some(domain_mask), AssocKind::Cov))
+    Ok(assoc_score_values(
+        y,
+        x,
+        weights,
+        &m,
+        Some(domain_mask),
+        AssocKind::Cov,
+    ))
 }
 
 /// Per-unit linearized values for the Pearson correlation.
@@ -373,9 +387,19 @@ pub fn scores_corr_domain(
 ) -> PolarsResult<Float64Chunked> {
     let m = bivar_moments(y, x, weights, Some(domain_mask))?;
     if m.sum_w == 0.0 || !(m.m_yy > 0.0 && m.m_xx > 0.0) {
-        return Ok(Float64Chunked::from_slice("scores".into(), &vec![0.0; y.len()]));
+        return Ok(Float64Chunked::from_slice(
+            "scores".into(),
+            &vec![0.0; y.len()],
+        ));
     }
-    Ok(assoc_score_values(y, x, weights, &m, Some(domain_mask), AssocKind::Corr))
+    Ok(assoc_score_values(
+        y,
+        x,
+        weights,
+        &m,
+        Some(domain_mask),
+        AssocKind::Corr,
+    ))
 }
 
 /// Shared score writer: applies `f` to each contributing row, 0.0 elsewhere.
@@ -551,7 +575,14 @@ pub fn srs_variance_corr(
     x: &Float64Chunked,
     weights: &Float64Chunked,
 ) -> PolarsResult<f64> {
-    srs_variance_assoc(y, x, weights, None, AssocKind::Corr, SrsRef::WithoutReplacement { pop_total: None })
+    srs_variance_assoc(
+        y,
+        x,
+        weights,
+        None,
+        AssocKind::Corr,
+        SrsRef::WithoutReplacement { pop_total: None },
+    )
 }
 
 pub fn srs_variance_corr_domain(
@@ -560,7 +591,14 @@ pub fn srs_variance_corr_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<f64> {
-    srs_variance_assoc(y, x, weights, Some(domain_mask), AssocKind::Corr, SrsRef::WithoutReplacement { pop_total: None })
+    srs_variance_assoc(
+        y,
+        x,
+        weights,
+        Some(domain_mask),
+        AssocKind::Corr,
+        SrsRef::WithoutReplacement { pop_total: None },
+    )
 }
 
 pub fn srs_variance_cov(
@@ -568,7 +606,14 @@ pub fn srs_variance_cov(
     x: &Float64Chunked,
     weights: &Float64Chunked,
 ) -> PolarsResult<f64> {
-    srs_variance_assoc(y, x, weights, None, AssocKind::Cov, SrsRef::WithoutReplacement { pop_total: None })
+    srs_variance_assoc(
+        y,
+        x,
+        weights,
+        None,
+        AssocKind::Cov,
+        SrsRef::WithoutReplacement { pop_total: None },
+    )
 }
 
 pub fn srs_variance_cov_domain(
@@ -577,7 +622,14 @@ pub fn srs_variance_cov_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<f64> {
-    srs_variance_assoc(y, x, weights, Some(domain_mask), AssocKind::Cov, SrsRef::WithoutReplacement { pop_total: None })
+    srs_variance_assoc(
+        y,
+        x,
+        weights,
+        Some(domain_mask),
+        AssocKind::Cov,
+        SrsRef::WithoutReplacement { pop_total: None },
+    )
 }
 
 // ============================================================================
@@ -656,7 +708,11 @@ pub fn multi_moments(
     let len = weights.len();
     if let Some(bad) = cols.iter().find(|c| c.len() != len) {
         return Err(PolarsError::ComputeError(
-            format!("column length {} does not match weights length {len}", bad.len()).into(),
+            format!(
+                "column length {} does not match weights length {len}",
+                bad.len()
+            )
+            .into(),
         ));
     }
 
@@ -679,7 +735,11 @@ pub fn multi_moments(
                 }
             }
         }
-        if ok { weights.cont_slice().ok().map(|w| (out, w)) } else { None }
+        if ok {
+            weights.cont_slice().ok().map(|w| (out, w))
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -793,7 +853,13 @@ pub fn multi_moments(
         }
     }
 
-    Ok(MomentMatrix { sum_w, n, k, means, m })
+    Ok(MomentMatrix {
+        sum_w,
+        n,
+        k,
+        means,
+        m,
+    })
 }
 
 // ============================================================================
@@ -919,9 +985,7 @@ impl PairProducts {
         // `bivar_moments` already keeps zero-weight rows out of `n`.
         let masked: Option<Float64Chunked> = domain.map(|m| {
             let v: Vec<f64> = (0..y.len())
-                .map(|i| {
-                    weights.get(i).unwrap_or(0.0) * m.get(i).copied().unwrap_or(0.0)
-                })
+                .map(|i| weights.get(i).unwrap_or(0.0) * m.get(i).copied().unwrap_or(0.0))
                 .collect();
             Float64Chunked::from_slice("w".into(), &v)
         });
@@ -953,7 +1017,15 @@ impl PairProducts {
             ab.push(av * bv);
         }
 
-        Ok(PairProducts { a, b, aa, bb, ab, mask: domain.map(<[f64]>::to_vec), n: full.n })
+        Ok(PairProducts {
+            a,
+            b,
+            aa,
+            bb,
+            ab,
+            mask: domain.map(<[f64]>::to_vec),
+            n: full.n,
+        })
     }
 
     /// Recompute the association under one replicate weight column.
@@ -1022,7 +1094,10 @@ pub fn replicate_association(
     kind: AssocKind,
 ) -> Vec<f64> {
     use rayon::prelude::*;
-    rep_cols.par_iter().map(|col| products.estimate(col, kind)).collect()
+    rep_cols
+        .par_iter()
+        .map(|col| products.estimate(col, kind))
+        .collect()
 }
 
 // ============================================================================
@@ -1094,7 +1169,10 @@ mod tests {
         let c = point_estimate_cov(&y, &y, &w).unwrap();
         let m = bivar_moments(&y, &y, &w, None).unwrap();
         let expected = m.m_yy * (m.n as f64 / (m.n as f64 - 1.0));
-        assert!((c - expected).abs() < 1e-12, "cov(y,y) = {c}, var = {expected}");
+        assert!(
+            (c - expected).abs() < 1e-12,
+            "cov(y,y) = {c}, var = {expected}"
+        );
     }
 
     #[test]
@@ -1110,8 +1188,18 @@ mod tests {
         let (y, x, w) = fixture();
         let base = point_estimate_corr(&y, &x, &w).unwrap();
 
-        let ys: Vec<f64> = y.cont_slice().unwrap().iter().map(|v| v * 3.0 + 100.0).collect();
-        let xs: Vec<f64> = x.cont_slice().unwrap().iter().map(|v| v * 0.5 - 7.0).collect();
+        let ys: Vec<f64> = y
+            .cont_slice()
+            .unwrap()
+            .iter()
+            .map(|v| v * 3.0 + 100.0)
+            .collect();
+        let xs: Vec<f64> = x
+            .cont_slice()
+            .unwrap()
+            .iter()
+            .map(|v| v * 0.5 - 7.0)
+            .collect();
         let shifted = point_estimate_corr(&fc("y", &ys), &fc("x", &xs), &w).unwrap();
 
         assert!((base - shifted).abs() < 1e-12, "{base} vs {shifted}");
@@ -1129,7 +1217,10 @@ mod tests {
         let xs: Vec<f64> = x.cont_slice().unwrap().iter().map(|v| v + 1e9).collect();
         let offset = point_estimate_corr(&fc("y", &ys), &fc("x", &xs), &w).unwrap();
 
-        assert!((base - offset).abs() < 1e-9, "offset broke stability: {base} vs {offset}");
+        assert!(
+            (base - offset).abs() < 1e-9,
+            "offset broke stability: {base} vs {offset}"
+        );
     }
 
     /// A linearization for a scale-free statistic must have scores summing to
@@ -1164,8 +1255,7 @@ mod tests {
         ws.extend_from_slice(&[0.0, 0.0]);
 
         let base = bivar_moments(&y, &x, &w, None).unwrap();
-        let padded =
-            bivar_moments(&fc("y", &ys), &fc("x", &xs), &fc("w", &ws), None).unwrap();
+        let padded = bivar_moments(&fc("y", &ys), &fc("x", &xs), &fc("w", &ws), None).unwrap();
 
         assert_eq!(base.n, padded.n, "zero-weight rows must not count toward n");
         assert!((base.corr() - padded.corr()).abs() < 1e-12);
@@ -1177,10 +1267,7 @@ mod tests {
     #[test]
     fn test_domain_matches_subset() {
         let (y, x, w) = fixture();
-        let mask = BooleanChunked::from_slice(
-            "m".into(),
-            &[true, true, true, false, false, false],
-        );
+        let mask = BooleanChunked::from_slice("m".into(), &[true, true, true, false, false, false]);
         let dom = point_estimate_corr_domain(&y, &x, &w, &mask).unwrap();
 
         let sub = point_estimate_corr(
@@ -1198,13 +1285,13 @@ mod tests {
     #[test]
     fn test_domain_scores_zero_outside() {
         let (y, x, w) = fixture();
-        let mask = BooleanChunked::from_slice(
-            "m".into(),
-            &[true, true, true, false, false, false],
-        );
+        let mask = BooleanChunked::from_slice("m".into(), &[true, true, true, false, false, false]);
         let s = scores_corr_domain(&y, &x, &w, &mask).unwrap();
         let vals = s.cont_slice().unwrap();
-        assert!(vals[3..].iter().all(|v| *v == 0.0), "tail not zeroed: {vals:?}");
+        assert!(
+            vals[3..].iter().all(|v| *v == 0.0),
+            "tail not zeroed: {vals:?}"
+        );
         let total: f64 = vals.iter().sum();
         assert!(total.abs() < 1e-14, "in-domain scores summed to {total}");
     }
@@ -1254,7 +1341,9 @@ mod tests {
     }
 
     fn golden_strata() -> Column {
-        let v: Vec<i64> = (1..=2i64).flat_map(|s| std::iter::repeat_n(s, 12)).collect();
+        let v: Vec<i64> = (1..=2i64)
+            .flat_map(|s| std::iter::repeat_n(s, 12))
+            .collect();
         Column::from(Int64Chunked::from_slice("str".into(), &v).into_series())
     }
 
@@ -1293,7 +1382,10 @@ mod tests {
     fn test_golden_corr_matches_r_svycontrast() {
         let (y, x, w) = (fc("y", &G_Y), fc("x", &G_X), fc("w", &G_W));
         let est = point_estimate_corr(&y, &x, &w).unwrap();
-        assert!((est - 0.52860852253793722).abs() < 1e-12, "corr est = {est}");
+        assert!(
+            (est - 0.52860852253793722).abs() < 1e-12,
+            "corr est = {est}"
+        );
 
         let se = se_of(&scores_corr(&y, &x, &w).unwrap(), None, Some(&golden_psu()));
         assert!((se - 0.15921590459764234).abs() < 1e-11, "corr se = {se}");
@@ -1309,7 +1401,10 @@ mod tests {
             Some(&golden_strata()),
             Some(&golden_psu()),
         );
-        assert!((se - 23.178556453025269).abs() < 1e-9, "stratified cov se = {se}");
+        assert!(
+            (se - 23.178556453025269).abs() < 1e-9,
+            "stratified cov se = {se}"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -1336,7 +1431,10 @@ mod tests {
                 AssocKind::Cov => srs_variance_cov(&y, &x, &w).unwrap(),
             };
             let deff = design / srs;
-            assert!((deff - 1.0).abs() < 1e-4, "{kind:?}: deff under SRS = {deff}");
+            assert!(
+                (deff - 1.0).abs() < 1e-4,
+                "{kind:?}: deff under SRS = {deff}"
+            );
         }
     }
 
@@ -1387,7 +1485,9 @@ mod tests {
         let mut xs = Vec::with_capacity(n);
         let mut s = 987_654_321u64;
         let mut next = || {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((s >> 11) as f64) / ((1u64 << 53) as f64)
         };
         let rho_true = 0.6f64;
@@ -1395,7 +1495,10 @@ mod tests {
             // Box-Muller for a standard normal pair, then induce correlation.
             let (u1, u2) = (next().max(1e-12), next());
             let r = (-2.0 * u1.ln()).sqrt();
-            let (z1, z2) = (r * (2.0 * std::f64::consts::PI * u2).cos(), r * (2.0 * std::f64::consts::PI * u2).sin());
+            let (z1, z2) = (
+                r * (2.0 * std::f64::consts::PI * u2).cos(),
+                r * (2.0 * std::f64::consts::PI * u2).sin(),
+            );
             ys.push(z1);
             xs.push(rho_true * z1 + (1.0 - rho_true * rho_true).sqrt() * z2);
         }
@@ -1623,6 +1726,9 @@ mod tests {
         let w = fc("w", &[1.0, 1.0, 5.0, 1.0]);
         let m = bivar_moments(&y, &x, &w, None).unwrap();
         assert_eq!(m.n, 3, "null row must not count toward n");
-        assert!((m.sum_w - 3.0).abs() < 1e-12, "null row must not add weight");
+        assert!(
+            (m.sum_w - 3.0).abs() < 1e-12,
+            "null row must not add weight"
+        );
     }
 }

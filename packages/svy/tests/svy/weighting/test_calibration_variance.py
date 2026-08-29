@@ -44,7 +44,11 @@ R_BASELINE_MEAN_SE = 23.542240693781
 R_PS_CELLS_MEAN_EST = 642.310788211584
 R_PS_CELLS_MEAN_SE = 23.9204864450905
 R_PS_TOTAL_MEAN_SE = 23.542240693781  # identical to baseline: the no-op
-R_RAKE_MEAN_SE = 23.7458597039106
+# rake(..., control=list(epsilon=1e-12)): R's DEFAULT epsilon=1 is an absolute
+# margin tolerance of one unit in 6194, which stops early and yields
+# 23.7458597039106. Both implementations agree to 12 digits once actually
+# converged, so the test pins the converged value and matches tol.
+R_RAKE_MEAN_SE = 23.745841047537
 R_STD_EST = [605.662913034119, 646.303126782460]
 R_STD_SE = [31.9154418732174, 24.9249948644004]
 R_GREG_MEAN_EST = 666.717736250273
@@ -165,7 +169,6 @@ def test_greg_leaves_the_point_estimate_alone(design):
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=PHASE3)
 def test_poststratified_margin_total_has_no_sampling_error(design):
     """The decisive case: a pinned margin has no variability left.
 
@@ -177,13 +180,11 @@ def test_poststratified_margin_total_has_no_sampling_error(design):
         assert _total_se(ps, f"is_{lv}") == pytest.approx(0.0, abs=1e-6)
 
 
-@pytest.mark.xfail(strict=True, reason=PHASE3)
 def test_poststratify_mean_se_matches_r(design):
     ps = design().weighting.poststratify(STYPE_POP, cells="stype")
     assert_allclose(_mean_se(ps), R_PS_CELLS_MEAN_SE, rtol=1e-9)
 
 
-@pytest.mark.xfail(strict=True, reason=PHASE3)
 def test_known_population_size_has_no_sampling_error(design):
     """poststratify(controls=<scalar>) declares the population size known.
 
@@ -194,11 +195,12 @@ def test_known_population_size_has_no_sampling_error(design):
     assert _total_se(ps, "one") == pytest.approx(0.0, abs=1e-6)
 
 
-@pytest.mark.xfail(strict=True, reason=PHASE3)
 def test_rake_mean_se_matches_r(design):
     """Exercises the per-margin sweep: R alternates it over margins, 10 times."""
-    rk = design().weighting.rake(controls={"stype": STYPE_POP, "sch.wide": SCHWIDE_POP})
-    assert_allclose(_mean_se(rk), R_RAKE_MEAN_SE, rtol=1e-6)
+    rk = design().weighting.rake(
+        controls={"stype": STYPE_POP, "sch.wide": SCHWIDE_POP}, tol=1e-12, max_iter=200
+    )
+    assert_allclose(_mean_se(rk), R_RAKE_MEAN_SE, rtol=1e-9)
 
 
 @pytest.mark.xfail(strict=True, reason=PHASE3)
@@ -222,7 +224,6 @@ def test_shares_pin_composition_but_not_the_total(design):
     assert _total_se(ps, "one") > 1.0
 
 
-@pytest.mark.xfail(strict=True, reason=PHASE3)
 def test_calibrated_auxiliary_total_has_no_sampling_error(design):
     """GREG pins a continuous total as firmly as poststratification pins a cell.
 
@@ -233,7 +234,6 @@ def test_calibrated_auxiliary_total_has_no_sampling_error(design):
     assert _total_se(cal, "api99") == pytest.approx(0.0, abs=1e-3)
 
 
-@pytest.mark.xfail(strict=True, reason=PHASE3)
 def test_greg_mean_se_matches_r(design):
     """The widest gap of any case: 21.86 against R's 3.30, a 6.6x overstatement.
 

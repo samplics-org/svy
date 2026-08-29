@@ -23,6 +23,35 @@ if TYPE_CHECKING:
     from svy.estimation.base import Estimation
 
 
+def _calib_kwargs(est, df) -> dict:
+    """Weight-adjustment columns for the Rust score-centring sweep.
+
+    Returns nothing unless the design carries a variance-consumed record that
+    still describes the data in hand. The checks are the documented
+    invalidation rule: the record describes how the ACTIVE weight was made, so
+    a different active weight means it no longer applies, and a snapshotted
+    column that has since been dropped cannot be swept against. Either way
+    variance falls back to treating weights as fixed -- what it does today --
+    rather than centring against a structure that may no longer hold.
+    """
+    design = est._sample._design
+    rec = getattr(design, "wgt_adjustment", None)
+    if rec is None or not rec.is_variance_consumed:
+        return {}
+    if design.wgt != rec.new_wgt:
+        return {}
+    needed = [rec.prev_wgt, *(rec.cells or ()), *(rec.aux or ())]
+    if any(c not in df.columns for c in needed):
+        return {}
+    return {
+        "calib_kind": rec.kind,
+        "calib_cells": list(rec.cells) if rec.cells else None,
+        "calib_aux": list(rec.aux) if rec.aux else None,
+        "calib_prev_wgt": rec.prev_wgt,
+        "calib_pins_total": rec.pins_total,
+    }
+
+
 def taylor_mean(
     est: Estimation,
     prep: PreparedData,
@@ -55,6 +84,7 @@ def taylor_mean(
         by_col=prep.by_col,
         singleton_method=center_arg,
         deff_ref=deff_ref,
+        **(_calib_kwargs(est, df) if prep.by_col is None else {}),
     )
 
     if est._should_run_double_pass():
@@ -183,6 +213,7 @@ def taylor_total(
         by_col=prep.by_col,
         singleton_method=center_arg,
         deff_ref=deff_ref,
+        **(_calib_kwargs(est, df) if prep.by_col is None else {}),
     )
 
     if est._should_run_double_pass():

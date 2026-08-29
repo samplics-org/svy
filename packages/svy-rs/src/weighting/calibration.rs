@@ -458,7 +458,12 @@ mod tests {
 
         // scale shorter than n_obs
         let short_scale = array![1.0];
-        let res = calibrate_parallel(wgt.view(), x.view(), totals.view(), Some(short_scale.view()));
+        let res = calibrate_parallel(
+            wgt.view(),
+            x.view(),
+            totals.view(),
+            Some(short_scale.view()),
+        );
         assert!(res.is_err());
 
         // totals longer than n_aux
@@ -476,13 +481,25 @@ mod tests {
         controls.insert(0i64, Array1::from(vec![10.0]));
         controls.insert(1i64, Array1::from(vec![5.0]));
 
-        let res = calibrate_by_domain(wgt.view(), x_short.view(), domain.view(), &controls, None, false);
+        let res = calibrate_by_domain(
+            wgt.view(),
+            x_short.view(),
+            domain.view(),
+            &controls,
+            None,
+            false,
+        );
         assert!(res.is_err());
 
         let x = array![[1.0], [2.0], [3.0]];
         let short_scale = array![1.0];
         let res = calibrate_by_domain(
-            wgt.view(), x.view(), domain.view(), &controls, Some(short_scale.view()), false,
+            wgt.view(),
+            x.view(),
+            domain.view(),
+            &controls,
+            Some(short_scale.view()),
+            false,
         );
         assert!(res.is_err());
     }

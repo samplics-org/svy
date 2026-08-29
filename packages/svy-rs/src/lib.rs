@@ -20,27 +20,72 @@ mod weighting;
 fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Taylor linearization
     m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_mean, m)?)?;
-    m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_mean_multi, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        estimation::taylor_api::taylor_mean_multi,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_total, m)?)?;
-    m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_total_multi, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        estimation::taylor_api::taylor_total_multi,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_ratio, m)?)?;
-    m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_ratio_multi, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        estimation::taylor_api::taylor_ratio_multi,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_assoc, m)?)?;
     m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_prop, m)?)?;
-    m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_prop_multi, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        estimation::taylor_api::taylor_prop_multi,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_median, m)?)?;
-    m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_median_multi, m)?)?;
-    m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_quantile, m)?)?;
-    m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_quantile_multi, m)?)?;
-    m.add_function(wrap_pyfunction!(estimation::taylor_api::weighted_quantile_at, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        estimation::taylor_api::taylor_median_multi,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        estimation::taylor_api::taylor_quantile,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        estimation::taylor_api::taylor_quantile_multi,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        estimation::taylor_api::weighted_quantile_at,
+        m
+    )?)?;
     // Replication-based estimation
-    m.add_function(wrap_pyfunction!(estimation::replication_api::replicate_mean, m)?)?;
-    m.add_function(wrap_pyfunction!(estimation::replication_api::replicate_total, m)?)?;
-    m.add_function(wrap_pyfunction!(estimation::replication_api::replicate_ratio, m)?)?;
-    m.add_function(wrap_pyfunction!(estimation::replication_api::replicate_assoc, m)?)?;
-    m.add_function(wrap_pyfunction!(estimation::replication_api::replicate_prop, m)?)?;
-    m.add_function(wrap_pyfunction!(estimation::replication_api::replicate_median, m)?)?;
-    m.add_function(wrap_pyfunction!(estimation::replication_api::replicate_quantile, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        estimation::replication_api::replicate_mean,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        estimation::replication_api::replicate_total,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        estimation::replication_api::replicate_ratio,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        estimation::replication_api::replicate_assoc,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        estimation::replication_api::replicate_prop,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        estimation::replication_api::replicate_median,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        estimation::replication_api::replicate_quantile,
+        m
+    )?)?;
     // GLM regression
     m.add_function(wrap_pyfunction!(regression::api::fit_glm_rs, m)?)?;
     // Categorical tests
@@ -63,7 +108,10 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(weighting::api::create_brr_wgts, m)?)?;
     m.add_function(wrap_pyfunction!(weighting::api::create_jk_wgts, m)?)?;
     m.add_function(wrap_pyfunction!(weighting::api::create_bootstrap_wgts, m)?)?;
-    m.add_function(wrap_pyfunction!(weighting::api::create_poisson_bootstrap_wgts, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        weighting::api::create_poisson_bootstrap_wgts,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(weighting::api::create_sdr_wgts, m)?)?;
     // Sampling
     m.add_function(wrap_pyfunction!(sampling::api::select_srs_rs, m)?)?;

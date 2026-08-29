@@ -189,22 +189,32 @@ fn bench_all_pairs(c: &mut Criterion) {
             let w = make_w(n);
             g.throughput(Throughput::Elements((n * k) as u64));
 
-            g.bench_with_input(BenchmarkId::new("matrix", format!("{n}/k{k}")), &k, |b, _| {
-                b.iter(|| black_box(multi_moments(black_box(&cols), black_box(&w), None).unwrap()))
-            });
+            g.bench_with_input(
+                BenchmarkId::new("matrix", format!("{n}/k{k}")),
+                &k,
+                |b, _| {
+                    b.iter(|| {
+                        black_box(multi_moments(black_box(&cols), black_box(&w), None).unwrap())
+                    })
+                },
+            );
 
-            g.bench_with_input(BenchmarkId::new("pairwise", format!("{n}/k{k}")), &k, |b, _| {
-                b.iter(|| {
-                    let mut acc = 0.0f64;
-                    for j in 0..k {
-                        for l in j..k {
-                            let m = bivar_moments(cols[j], cols[l], &w, None).unwrap();
-                            acc += m.m_yx;
+            g.bench_with_input(
+                BenchmarkId::new("pairwise", format!("{n}/k{k}")),
+                &k,
+                |b, _| {
+                    b.iter(|| {
+                        let mut acc = 0.0f64;
+                        for j in 0..k {
+                            for l in j..k {
+                                let m = bivar_moments(cols[j], cols[l], &w, None).unwrap();
+                                acc += m.m_yx;
+                            }
                         }
-                    }
-                    black_box(acc)
-                })
-            });
+                        black_box(acc)
+                    })
+                },
+            );
         }
     }
     g.finish();
@@ -232,7 +242,11 @@ fn bench_replicate_association(c: &mut Criterion) {
                 (0..n)
                     .map(|i| {
                         let psu = i % PSU_PER_STRATUM;
-                        if psu == r % PSU_PER_STRATUM { 0.0 } else { 0.5 + (i % 7) as f64 * 0.25 }
+                        if psu == r % PSU_PER_STRATUM {
+                            0.0
+                        } else {
+                            0.5 + (i % 7) as f64 * 0.25
+                        }
                     })
                     .collect()
             })

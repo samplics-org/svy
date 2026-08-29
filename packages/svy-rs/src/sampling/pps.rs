@@ -1,24 +1,36 @@
 // src/sampling/pps.rs
 
-use std::collections::HashMap;
 use crate::rng::Rng;
-use crate::sampling::srs::SamplingError;
 pub use crate::sampling::srs::Result;
+use crate::sampling::srs::SamplingError;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PpsMethod { Sys, Wr, Brewer, Murphy, Rs }
+pub enum PpsMethod {
+    Sys,
+    Wr,
+    Brewer,
+    Murphy,
+    Rs,
+}
 
 impl PpsMethod {
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
-            s if s.eq_ignore_ascii_case("sys") || s.eq_ignore_ascii_case("systematic")
-                => Some(PpsMethod::Sys),
-            s if s.eq_ignore_ascii_case("wr") || s.eq_ignore_ascii_case("with_replacement")
-                => Some(PpsMethod::Wr),
-            s if s.eq_ignore_ascii_case("brewer")  => Some(PpsMethod::Brewer),
-            s if s.eq_ignore_ascii_case("murphy")  => Some(PpsMethod::Murphy),
-            s if s.eq_ignore_ascii_case("rs") || s.eq_ignore_ascii_case("rao_sampford")
-                || s.eq_ignore_ascii_case("sampford") => Some(PpsMethod::Rs),
+            s if s.eq_ignore_ascii_case("sys") || s.eq_ignore_ascii_case("systematic") => {
+                Some(PpsMethod::Sys)
+            }
+            s if s.eq_ignore_ascii_case("wr") || s.eq_ignore_ascii_case("with_replacement") => {
+                Some(PpsMethod::Wr)
+            }
+            s if s.eq_ignore_ascii_case("brewer") => Some(PpsMethod::Brewer),
+            s if s.eq_ignore_ascii_case("murphy") => Some(PpsMethod::Murphy),
+            s if s.eq_ignore_ascii_case("rs")
+                || s.eq_ignore_ascii_case("rao_sampford")
+                || s.eq_ignore_ascii_case("sampford") =>
+            {
+                Some(PpsMethod::Rs)
+            }
             _ => None,
         }
     }
@@ -67,14 +79,26 @@ pub fn select_pps(
         None => {
             let n_scalar = match n {
                 PpsN::Scalar(v) => v,
-                PpsN::PerStratum(_) => return Err(SamplingError::InvalidInput(
-                    "per-stratum n requires stratum array".into(),
-                )),
+                PpsN::PerStratum(_) => {
+                    return Err(SamplingError::InvalidInput(
+                        "per-stratum n requires stratum array".into(),
+                    ));
+                }
             };
             let positions: Vec<usize> = (0..frame.len()).collect();
-            pps_indexed(frame, &positions, mos, n_scalar, method, certainty_threshold, seed)
+            pps_indexed(
+                frame,
+                &positions,
+                mos,
+                n_scalar,
+                method,
+                certainty_threshold,
+                seed,
+            )
         }
-        Some(strat) => select_pps_stratified(frame, n, mos, strat, method, certainty_threshold, seed),
+        Some(strat) => {
+            select_pps_stratified(frame, n, mos, strat, method, certainty_threshold, seed)
+        }
     }
 }
 
@@ -117,7 +141,7 @@ fn extract_certainty(p0: &[f64], n: usize, threshold: f64) -> (Vec<bool>, usize)
             if remaining[i] && n_rem_f * p0[i] / total_rem_pass >= threshold_scaled {
                 cert_mask[i] = true;
                 remaining[i] = false;
-                total_rem -= p0[i];   // update running total for next pass only
+                total_rem -= p0[i]; // update running total for next pass only
                 n_rem -= 1;
                 found_any = true;
             }
@@ -136,7 +160,7 @@ fn extract_certainty(p0: &[f64], n: usize, threshold: f64) -> (Vec<bool>, usize)
 
 fn pps_indexed(
     frame: &[i64],
-    positions: &[usize],     // indices into frame and mos
+    positions: &[usize], // indices into frame and mos
     mos: &[f64],
     n: usize,
     method: PpsMethod,
@@ -161,15 +185,18 @@ fn pps_indexed(
     // below must not apply to it.
     if n >= cap && !matches!(method, PpsMethod::Wr) {
         // Select all (without-replacement methods)
-        let sel: Vec<i64>  = positions.iter().map(|&p| frame[p]).collect();
-        let hits            = vec![1i64; cap];
-        let probs           = vec![1.0f64; cap];
-        let cert            = vec![true; cap];
+        let sel: Vec<i64> = positions.iter().map(|&p| frame[p]).collect();
+        let hits = vec![1i64; cap];
+        let probs = vec![1.0f64; cap];
+        let cert = vec![true; cap];
         return Ok((sel, hits, probs, cert));
     }
 
     // Validate and compute normalised probabilities from positions
-    if positions.iter().any(|&p| !mos[p].is_finite() || mos[p] < 0.0) {
+    if positions
+        .iter()
+        .any(|&p| !mos[p].is_finite() || mos[p] < 0.0)
+    {
         return Err(SamplingError::InvalidInput(
             "All MOS values must be finite and non-negative".into(),
         ));
@@ -183,11 +210,11 @@ fn pps_indexed(
     let p0: Vec<f64> = positions.iter().map(|&p| mos[p] / total_mos).collect();
 
     match method {
-        PpsMethod::Sys    => pps_sys(frame, positions, &p0, n, certainty_threshold, seed),
-        PpsMethod::Wr     => pps_wr(frame, positions, &p0, n, seed),
+        PpsMethod::Sys => pps_sys(frame, positions, &p0, n, certainty_threshold, seed),
+        PpsMethod::Wr => pps_wr(frame, positions, &p0, n, seed),
         PpsMethod::Brewer => pps_brewer(frame, positions, &p0, n, certainty_threshold, seed),
         PpsMethod::Murphy => pps_murphy(frame, positions, &p0, seed),
-        PpsMethod::Rs     => pps_rs(frame, positions, &p0, n, certainty_threshold, seed),
+        PpsMethod::Rs => pps_rs(frame, positions, &p0, n, certainty_threshold, seed),
     }
 }
 
@@ -223,30 +250,53 @@ fn select_pps_stratified(
                 PpsN::Scalar(v) => *v,
                 PpsN::PerStratum(map) => *map.get(&s).unwrap_or(&0),
             };
-            if n_s == 0 { return None; }
-            let child_seed = base_seed
-                .wrapping_add((strat_idx as u64).wrapping_mul(0x9e3779b97f4a7c15));
+            if n_s == 0 {
+                return None;
+            }
+            let child_seed =
+                base_seed.wrapping_add((strat_idx as u64).wrapping_mul(0x9e3779b97f4a7c15));
             Some((positions, n_s, child_seed))
         })
         .collect();
 
     use rayon::prelude::*;
-    let results: Vec<Result<(Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>)>> =
-        if tasks.len() >= 4 {
-            tasks.par_iter().map(|(positions, n_s, child_seed)| {
-                pps_indexed(frame, positions, mos, *n_s, method, certainty_threshold, Some(*child_seed))
-            }).collect()
-        } else {
-            tasks.iter().map(|(positions, n_s, child_seed)| {
-                pps_indexed(frame, positions, mos, *n_s, method, certainty_threshold, Some(*child_seed))
-            }).collect()
-        };
+    let results: Vec<Result<(Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>)>> = if tasks.len() >= 4 {
+        tasks
+            .par_iter()
+            .map(|(positions, n_s, child_seed)| {
+                pps_indexed(
+                    frame,
+                    positions,
+                    mos,
+                    *n_s,
+                    method,
+                    certainty_threshold,
+                    Some(*child_seed),
+                )
+            })
+            .collect()
+    } else {
+        tasks
+            .iter()
+            .map(|(positions, n_s, child_seed)| {
+                pps_indexed(
+                    frame,
+                    positions,
+                    mos,
+                    *n_s,
+                    method,
+                    certainty_threshold,
+                    Some(*child_seed),
+                )
+            })
+            .collect()
+    };
 
     let total_n: usize = tasks.iter().map(|(_, n_s, _)| n_s).sum();
     let mut selected = Vec::with_capacity(total_n);
-    let mut out_hits  = Vec::with_capacity(total_n);
+    let mut out_hits = Vec::with_capacity(total_n);
     let mut out_probs = Vec::with_capacity(total_n);
-    let mut out_cert  = Vec::with_capacity(total_n);
+    let mut out_cert = Vec::with_capacity(total_n);
 
     for res in results {
         let (sel, hits, probs, cert) = res?;
@@ -277,7 +327,9 @@ fn pps_sys(
     let mut rng = Rng::new(seed.unwrap_or(0));
 
     for (i, &c) in cert_mask.iter().enumerate() {
-        if c { hits[i] = 1; }
+        if c {
+            hits[i] = 1;
+        }
     }
 
     if n_rem > 0 {
@@ -287,7 +339,9 @@ fn pps_sys(
         let mut cum = Vec::with_capacity(rem_count + 1);
         let mut rem_positions = Vec::with_capacity(rem_count); // local indices
 
-        let total_rem: f64 = cert_mask.iter().enumerate()
+        let total_rem: f64 = cert_mask
+            .iter()
+            .enumerate()
             .filter(|&(_, &c)| !c)
             .map(|(i, _)| p0[i])
             .sum();
@@ -344,10 +398,10 @@ fn pps_wr(
 
     // WR inclusion probability: 1 - (1 - p_i)^n
     let n_f = n as f64;
-    let mut sel   = Vec::with_capacity(n);
+    let mut sel = Vec::with_capacity(n);
     let mut ohits = Vec::with_capacity(n);
     let mut probs = Vec::with_capacity(n);
-    let mut cert  = Vec::with_capacity(n);
+    let mut cert = Vec::with_capacity(n);
 
     for (i, &h) in hits.iter().enumerate() {
         if h > 0 {
@@ -379,7 +433,10 @@ fn pps_brewer(
     let mut rng = Rng::new(seed.unwrap_or(0));
 
     for (i, &c) in cert_mask.iter().enumerate() {
-        if c { hits[i] = 1; available[i] = false; }
+        if c {
+            hits[i] = 1;
+            available[i] = false;
+        }
     }
 
     if n_rem > 0 {
@@ -404,7 +461,11 @@ fn pps_brewer(
             if available[i] {
                 let p = p0[i];
                 let denom = 1.0 - t * p;
-                let w = if denom > 1e-12 { p * (1.0 - p) / denom } else { p };
+                let w = if denom > 1e-12 {
+                    p * (1.0 - p) / denom
+                } else {
+                    p
+                };
                 w_buf[i] = w;
                 w_total += w;
             } else {
@@ -412,7 +473,9 @@ fn pps_brewer(
             }
         }
 
-        if w_total <= 0.0 { break; }
+        if w_total <= 0.0 {
+            break;
+        }
 
         // Weighted pick over w_buf — single pass, no allocation
         let mut u = rng.next_f64() * w_total;
@@ -421,7 +484,10 @@ fn pps_brewer(
             for i in 0..cap {
                 if available[i] {
                     u -= w_buf[i];
-                    if u <= 0.0 { chosen = i; break; }
+                    if u <= 0.0 {
+                        chosen = i;
+                        break;
+                    }
                 }
             }
             chosen
@@ -456,7 +522,9 @@ fn pps_murphy(
     let first = rng.weighted_choice(p0);
 
     // Second draw: skip first, renormalise in-place with a temp total
-    let rem_total: f64 = p0.iter().enumerate()
+    let rem_total: f64 = p0
+        .iter()
+        .enumerate()
         .filter(|&(i, _)| i != first)
         .map(|(_, &p)| p)
         .sum();
@@ -468,7 +536,10 @@ fn pps_murphy(
         for i in 0..cap {
             if i != first {
                 u -= p0[i];
-                if u <= 0.0 { chosen = i; break; }
+                if u <= 0.0 {
+                    chosen = i;
+                    break;
+                }
             }
         }
         chosen
@@ -507,7 +578,9 @@ fn pps_rs(
     let mut rng = Rng::new(seed.unwrap_or(0));
 
     for (i, &c) in cert_mask.iter().enumerate() {
-        if c { hits[i] = 1; }
+        if c {
+            hits[i] = 1;
+        }
     }
 
     if n_rem > 0 {
@@ -624,16 +697,18 @@ fn assemble_pps_output(
     // remaining MOS mass: pi_i = n_rem * p0_i / total_rem, not n * p0_i.
     // With no certainties (the common case) total_rem == 1 and this reduces
     // to n * p0_i as before.
-    let total_rem: f64 = p0.iter().zip(cert_mask.iter())
+    let total_rem: f64 = p0
+        .iter()
+        .zip(cert_mask.iter())
         .filter(|&(_, &c)| !c)
         .map(|(&p, _)| p)
         .sum();
 
     let n_sel = hits.iter().filter(|&&h| h > 0).count();
-    let mut sel   = Vec::with_capacity(n_sel);
+    let mut sel = Vec::with_capacity(n_sel);
     let mut ohits = Vec::with_capacity(n_sel);
     let mut probs = Vec::with_capacity(n_sel);
-    let mut cert  = Vec::with_capacity(n_sel);
+    let mut cert = Vec::with_capacity(n_sel);
 
     for (i, &h) in hits.iter().enumerate() {
         if h > 0 {
@@ -666,10 +741,8 @@ mod tests {
         for method in [PpsMethod::Sys, PpsMethod::Brewer, PpsMethod::Rs] {
             let frame = vec![10, 20, 30];
             let mos = vec![100.0, 1.0, 1.0];
-            let (sel, _hits, probs, cert) = select_pps(
-                &frame, PpsN::Scalar(2), &mos, None, method, 1.0, Some(7),
-            )
-            .unwrap();
+            let (sel, _hits, probs, cert) =
+                select_pps(&frame, PpsN::Scalar(2), &mos, None, method, 1.0, Some(7)).unwrap();
             assert_eq!(sel.len(), 2, "{method:?}: expected 2 selected units");
             for (i, &s) in sel.iter().enumerate() {
                 if s == 10 {
@@ -722,7 +795,15 @@ mod tests {
     fn test_mos_nan_rejected() {
         let frame = vec![1, 2, 3];
         let mos = vec![1.0, f64::NAN, 1.0];
-        let res = select_pps(&frame, PpsN::Scalar(2), &mos, None, PpsMethod::Sys, 1.0, None);
+        let res = select_pps(
+            &frame,
+            PpsN::Scalar(2),
+            &mos,
+            None,
+            PpsMethod::Sys,
+            1.0,
+            None,
+        );
         assert!(res.is_err());
     }
 
@@ -730,7 +811,15 @@ mod tests {
     fn test_mos_length_mismatch_rejected() {
         let frame = vec![1, 2, 3];
         let mos = vec![1.0];
-        let res = select_pps(&frame, PpsN::Scalar(2), &mos, None, PpsMethod::Sys, 1.0, None);
+        let res = select_pps(
+            &frame,
+            PpsN::Scalar(2),
+            &mos,
+            None,
+            PpsMethod::Sys,
+            1.0,
+            None,
+        );
         assert!(res.is_err());
     }
 
@@ -740,7 +829,13 @@ mod tests {
         let mos = vec![1.0, 1.0, 1.0];
         let stratum = vec![0, 0, 1, 1];
         let res = select_pps(
-            &frame, PpsN::Scalar(1), &mos, Some(&stratum), PpsMethod::Sys, 1.0, None,
+            &frame,
+            PpsN::Scalar(1),
+            &mos,
+            Some(&stratum),
+            PpsMethod::Sys,
+            1.0,
+            None,
         );
         assert!(res.is_err());
     }
@@ -754,12 +849,27 @@ mod sampford_tests {
     fn murphy_requires_n_2() {
         let frame = vec![1, 2, 3, 4];
         let mos = vec![1.0, 2.0, 3.0, 4.0];
-        let err = select_pps(&frame, PpsN::Scalar(3), &mos, None, PpsMethod::Murphy, 1.0, Some(1))
-            .unwrap_err();
+        let err = select_pps(
+            &frame,
+            PpsN::Scalar(3),
+            &mos,
+            None,
+            PpsMethod::Murphy,
+            1.0,
+            Some(1),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("exactly 2"), "got: {err}");
-        let (sel, ..) =
-            select_pps(&frame, PpsN::Scalar(2), &mos, None, PpsMethod::Murphy, 1.0, Some(1))
-                .unwrap();
+        let (sel, ..) = select_pps(
+            &frame,
+            PpsN::Scalar(2),
+            &mos,
+            None,
+            PpsMethod::Murphy,
+            1.0,
+            Some(1),
+        )
+        .unwrap();
         assert_eq!(sel.len(), 2);
     }
 
@@ -769,9 +879,21 @@ mod sampford_tests {
         // shortcut previously returned each unit once with pi = 1.
         let frame = vec![1, 2, 3];
         let mos = vec![1.0, 1.0, 2.0];
-        let (_sel, hits, _probs, _cert) =
-            select_pps(&frame, PpsN::Scalar(7), &mos, None, PpsMethod::Wr, 1.0, Some(3)).unwrap();
-        assert_eq!(hits.iter().sum::<i64>(), 7, "WR must perform exactly n draws");
+        let (_sel, hits, _probs, _cert) = select_pps(
+            &frame,
+            PpsN::Scalar(7),
+            &mos,
+            None,
+            PpsMethod::Wr,
+            1.0,
+            Some(3),
+        )
+        .unwrap();
+        assert_eq!(
+            hits.iter().sum::<i64>(),
+            7,
+            "WR must perform exactly n draws"
+        );
         assert!(hits.iter().any(|&h| h > 1), "n > N forces repeats");
     }
 
@@ -781,7 +903,15 @@ mod sampford_tests {
         // acceptance collapses; must error, not fall back to a shuffle.
         let frame = vec![1, 2, 3, 4];
         let mos = vec![0.499, 0.167, 0.167, 0.167];
-        let result = select_pps(&frame, PpsN::Scalar(2), &mos, None, PpsMethod::Rs, 1.0, Some(5));
+        let result = select_pps(
+            &frame,
+            PpsN::Scalar(2),
+            &mos,
+            None,
+            PpsMethod::Rs,
+            1.0,
+            Some(5),
+        );
         if let Err(e) = result {
             let msg = e.to_string();
             assert!(

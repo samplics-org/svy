@@ -1002,9 +1002,7 @@ mod tests {
             for r in 0..8 {
                 let f = rep[[i, r]] / 2.0;
                 assert!(
-                    (f - 1.0).abs() < 1e-12
-                        || (f - f_hi).abs() < 1e-12
-                        || (f - f_lo).abs() < 1e-12,
+                    (f - 1.0).abs() < 1e-12 || (f - f_hi).abs() < 1e-12 || (f - f_lo).abs() < 1e-12,
                     "factor {f} not a Fay-Train factor"
                 );
                 mean += f;
