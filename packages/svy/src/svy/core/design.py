@@ -171,6 +171,78 @@ def _norm_pop_size(
 
 
 # =============================================================================
+# Weight Adjustment Record
+# =============================================================================
+
+
+class WgtAdjustment(msgspec.Struct, frozen=True, kw_only=True):
+    """How the current weights were last produced.
+
+    One record, replaced by each weighting method: it describes the LAST
+    adjustment, and the variance estimator accounts for that step only. Full
+    lineage is not a weight log but the chain of Design snapshots on the Sample
+    (``Sample.design_history``) -- every adjustment produces a new Design, and
+    each carries its own record.
+
+    ``kind`` names the technique, not the producing method, matching the
+    ``RepWgts`` tags (``method="jackknife"`` from ``create_jk_wgts``). It is
+    read in ``describe()``/repr, where the noun is the form that reads.
+
+    Only what cannot be reconstituted is stored. Adjustment factors are
+    ``new_wgt/prev_wgt`` (both columns persist, since no weighting method will
+    overwrite an existing column) and achieved controls are ``sum(new_wgt)`` by
+    cell, so neither is a field.
+
+    Parameters
+    ----------
+    kind
+        The technique that produced the current weights.
+    prev_wgt, new_wgt
+        Weight columns before and after. Variance uses ``prev_wgt`` for the
+        cell means, matching R.
+    cells
+        Snapshotted class column(s), one per margin -- a tuple because raking
+        sweeps each margin separately. Null marks a row outside the
+        adjustment's scope: no centering, factor 1. Absent on provenance-only
+        kinds.
+    aux
+        Resolved auxiliary columns for calibration, whose GREG model has no
+        cell structure: its sweep is a WLS residual and needs the matrix.
+    pins_total
+        Whether the adjustment fixed the population total as well as the
+        composition. ``controls`` pin both (k constraints); ``shares`` pin only
+        composition (k-1), leaving the total's sampling variability intact.
+    """
+
+    kind: Literal[
+        "nonresponse",
+        "normalization",
+        "poststratification",
+        "raking",
+        "calibration",
+        "trimming",
+        "standardization",
+    ]
+    prev_wgt: str
+    new_wgt: str
+    cells: tuple[str, ...] | None = None
+    aux: tuple[str, ...] | None = None
+    pins_total: bool = True
+
+    #: Kinds the variance estimator can center for. The rest are provenance
+    #: only: normalization's targets are conveniences rather than population
+    #: facts, nonresponse has no variance record in R either, and trimming
+    #: breaks the constraints a calibration asserted.
+    VARIANCE_CONSUMED = frozenset(
+        {"poststratification", "raking", "calibration", "standardization"}
+    )
+
+    @property
+    def is_variance_consumed(self) -> bool:
+        return self.kind in self.VARIANCE_CONSUMED
+
+
+# =============================================================================
 # Design Definition
 # =============================================================================
 
@@ -200,11 +272,14 @@ class Design:
     pop_size: str | PopSize | None
     wr: bool
     rep_wgts: RepWgts | None
+    wgt_adjustment: WgtAdjustment | None
     _frozen: bool
 
     PRINT_WIDTH: int | None = None
 
-    __slots__ = (*_FIELDS, "rep_wgts", "_frozen")
+    # `rep_wgts` and `wgt_adjustment` are slots but not _FIELDS: _FIELDS holds
+    # the column-name design parameters, and neither of these is one.
+    __slots__ = (*_FIELDS, "rep_wgts", "wgt_adjustment", "_frozen")
 
     def __init__(
         self,
@@ -219,6 +294,7 @@ class Design:
         pop_size: str | PopSize | None = None,
         wr: bool = False,
         rep_wgts: RepWgts | None = None,
+        wgt_adjustment: WgtAdjustment | None = None,
     ) -> None:
         object.__setattr__(self, "_frozen", False)
 
@@ -238,6 +314,7 @@ class Design:
         object.__setattr__(self, "pop_size", norm_pop_size)
         object.__setattr__(self, "wr", wr)
         object.__setattr__(self, "rep_wgts", rep_wgts)
+        object.__setattr__(self, "wgt_adjustment", wgt_adjustment)
 
         # Validate simple string-or-None fields (pop_size excluded — handled by _norm_pop_size)
         for name in ("row_index", "wgt", "prob", "hit", "mos"):
@@ -252,6 +329,8 @@ class Design:
         # Every variant inherits the base, so this covers the whole union.
         if rep_wgts is not None and not isinstance(rep_wgts, _RepWgtsBase):
             raise TypeError("'rep_wgts' must be RepWgts | None")
+        if wgt_adjustment is not None and not isinstance(wgt_adjustment, WgtAdjustment):
+            raise TypeError("'wgt_adjustment' must be WgtAdjustment | None")
 
         object.__setattr__(self, "_frozen", True)
 
@@ -308,6 +387,7 @@ class Design:
         pop_size: str | PopSize | None | _MissingType = _MISSING,
         wr: bool | _MissingType = _MISSING,
         rep_wgts: RepWgts | _MissingType | None = _MISSING,
+        wgt_adjustment: WgtAdjustment | _MissingType | None = _MISSING,
     ) -> Self:
         return self._merge(
             only_if_none=False,
@@ -322,6 +402,7 @@ class Design:
             pop_size=pop_size,
             wr=wr,
             rep_wgts=rep_wgts,
+            wgt_adjustment=wgt_adjustment,
         )
 
     def fill_missing(
@@ -448,6 +529,7 @@ class Design:
         pop_size: str | PopSize | None | _MissingType = _MISSING,
         wr: bool | _MissingType = _MISSING,
         rep_wgts: RepWgts | _MissingType | None = _MISSING,
+        wgt_adjustment: WgtAdjustment | _MissingType | None = _MISSING,
     ) -> Self:
         """
         Internal: merge fields either by overwriting or only filling when current is None.
@@ -510,6 +592,7 @@ class Design:
             pop_size=pick(self.pop_size, pop_size_arg),
             wr=_pick(self.wr, wr),
             rep_wgts=pick(self.rep_wgts, rep_arg),
+            wgt_adjustment=pick(self.wgt_adjustment, wgt_adjustment),
         )
 
     # -----------------------------

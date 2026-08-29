@@ -89,6 +89,7 @@ class Sample:
     __slots__ = (
         "_data",
         "_data_version",
+        "_design_history",
         "_fpc",
         "_design",
         "_metadata",
@@ -155,6 +156,7 @@ class Sample:
                 "suffix": _INTERNAL_CONCAT_SUFFIX,
             }
 
+        self._design_history: tuple[Design, ...] = ()
         self._warnings: WarningStore = WarningStore()
         self._data = local_data
         self._data_version = _next_data_version()
@@ -383,9 +385,7 @@ class Sample:
         if len(set(counts)) == 1 and counts[0] >= 2:
             n_h = counts[0]
             derived = (float(n_h - 1) / float(n_h),) * rw.n_reps
-            self._design = design.update(
-                rep_wgts=msgspec.structs.replace(rw, rep_coefs=derived)
-            )
+            self._design = design.update(rep_wgts=msgspec.structs.replace(rw, rep_coefs=derived))
             return
 
         # Unbalanced is not a different method, it is the same JKn with a
@@ -396,9 +396,7 @@ class Sample:
         # within a stratum, so which PSU of the stratum was dropped never matters.
         recovered = self._jkn_coefs_from_deleted_psus(rw, data, stratum_keys, psu_keys, counts)
         if recovered is not None:
-            self._design = design.update(
-                rep_wgts=msgspec.structs.replace(rw, rep_coefs=recovered)
-            )
+            self._design = design.update(rep_wgts=msgspec.structs.replace(rw, rep_coefs=recovered))
             return
 
         self._warn_jkn_not_derivable(
@@ -1663,14 +1661,50 @@ class Sample:
         self._refresh_internal_state()
         return self
 
+    # ════════════════════════════════════════════════════════════════════════
+    # DESIGN HISTORY
+    # ════════════════════════════════════════════════════════════════════════
+    def _push_design(self, previous: Design | None = None) -> None:
+        """Record the design being replaced.
+
+        Called once per user-visible replacement -- a weighting method that
+        updates the design weights, ``set_design``, ``update_design``,
+        ``use_weight`` -- and deliberately NOT from ``__setattr__``, which sees
+        every internal rebind: a single ``poststratify()`` writes ``_design``
+        twice (weight, then replicate weights) on top of the internal-state
+        refreshes, so hooking there would record bookkeeping as lineage.
+
+        The tuple is immutable, so ``_replace_data``'s ``copy.copy`` propagates
+        it correctly without the deep copies the mutable stores need, and a
+        fork diverges from its parent on its own.
+        """
+        design = self._design if previous is None else previous
+        if design is not None:
+            # Tolerant read: history is descriptive and never computed from, so
+            # a Sample built by a path that bypasses __init__ should lose its
+            # lineage rather than break the operation.
+            self._design_history = (*getattr(self, "_design_history", ()), design)
+
+    @property
+    def design_history(self) -> tuple[Design, ...]:
+        """Every design this sample has had, oldest first, current last.
+
+        Each snapshot carries its own ``wgt_adjustment``, so the chain of
+        designs is the chain of adjustments -- which is what makes keeping a
+        single record on ``Design`` lossless rather than lossy.
+        """
+        return (*getattr(self, "_design_history", ()), self._design)
+
     def set_design(self, design: Design) -> Self:
         """Replace the entire Design."""
+        self._push_design()
         self._design = design
         self._refresh_internal_state()
         return self
 
     def update_design(self, **kwargs) -> Self:
         """Update selected Design fields in place."""
+        self._push_design()
         self._design = self._design.update(**kwargs)
         self._refresh_internal_state()
         return self
@@ -1717,6 +1751,7 @@ class Sample:
         # 3. Update the design in the new sample
         # We must deepcopy the design so we don't mutate the original sample's design
         if new_sample._design is not None:
+            new_sample._push_design()
             new_sample._design = new_sample._design.update(wgt=wgt)
         else:
             # If no design existed, create a minimal one with the weight
@@ -1777,6 +1812,8 @@ class Sample:
 
         s._check_rep_wgts_against_df(s._design.rep_wgts)
         s._fpc = copy.deepcopy(self._fpc)
+        # A clone is the same sample with a new frame, so its lineage carries.
+        s._design_history = self._design_history
         return s
 
     # ════════════════════════════════════════════════════════════════════════
@@ -2055,6 +2092,16 @@ class Sample:
         # Synthetic row index we add internally
         if SVY_ROW_INDEX in cast(pl.DataFrame, self._data).columns:
             hidden.add(SVY_ROW_INDEX)
+
+        # Snapshotted adjustment cells, kept so the variance sweep can
+        # reproduce the membership the adjustment actually used.
+        from svy.weighting._engine import AUX_PREFIX, CELLS_PREFIX
+
+        hidden.update(
+            c
+            for c in cast(pl.DataFrame, self._data).columns
+            if c.startswith((CELLS_PREFIX, AUX_PREFIX))
+        )
 
         # Concatenated design helpers (created in __init__)
         idict = getattr(self, "_internal_design", {}) or {}

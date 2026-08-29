@@ -169,6 +169,7 @@ def add_stage(
     combined = _Sample.__new__(_Sample)
     combined._data = result.data
     combined._design = combined_design
+    combined._design_history = ()
     combined._fpc = 1
     combined._metadata = copy.deepcopy(
         next_stage._metadata if isinstance(next_stage, _Sample) else s1._metadata

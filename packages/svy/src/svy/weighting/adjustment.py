@@ -17,6 +17,7 @@ try:
 except ImportError:  # pragma: no cover
     rust_adjust_nr = None
 
+from svy.core.design import WgtAdjustment
 from svy.core.types import DomainScalarMap
 from svy.errors import MethodError
 from svy.weighting._engine import CellSpec, build_cells
@@ -185,7 +186,14 @@ def adjust(
     df = df.with_columns(pl.Series(wgt_name, adj_wgt_arr))
 
     if update_design_wgts:
-        sample._design = sample._design.update(wgt=wgt_name)
+        sample._push_design()
+        # Provenance only: R carries no variance record for non-response
+        # either. Modelling the adjustment's own variance is a different
+        # estimator (SUDAAN's WTADJUST), not the calibration sweep.
+        sample._design = sample._design.update(
+            wgt=wgt_name,
+            wgt_adjustment=WgtAdjustment(kind="nonresponse", prev_wgt=wgt, new_wgt=wgt_name),
+        )
 
     if not ignore_reps and design.rep_wgts is not None:
         rep_cols = design.rep_wgts.columns

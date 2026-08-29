@@ -379,3 +379,27 @@ def scale_to_targets(wgts: np.ndarray, spec: CellSpec, targets: np.ndarray) -> n
         np.ascontiguousarray(out[idx], dtype=np.float64), spec.codes[idx], targets
     )
     return out
+
+
+#: Prefix for snapshotted cell columns. These are hidden from user-facing
+#: output and exist so the variance sweep can reproduce the exact membership
+#: the adjustment used -- a `where` expression is not reliably replayable, and
+#: a cells column may legitimately be recoded afterwards.
+CELLS_PREFIX = "__svy_cells_"
+
+#: Prefix for materialized calibration auxiliary columns.
+AUX_PREFIX = "__svy_aux_"
+
+
+def materialize_cells(
+    df: pl.DataFrame, spec: CellSpec, *, wgt_name: str, margin: int = 0
+) -> tuple[pl.DataFrame, str]:
+    """Snapshot a cell coding into a hidden column, null outside the scope.
+
+    One column per margin: raking sweeps each margin separately, so a single
+    concatenated A x B column would encode poststratification on the full
+    cross, which is a different and stronger calibration.
+    """
+    name = f"{CELLS_PREFIX}{wgt_name}" if margin == 0 else f"{CELLS_PREFIX}{wgt_name}_{margin}"
+    values = [None if c < 0 else int(c) for c in spec.codes]
+    return df.with_columns(pl.Series(name=name, values=values, dtype=pl.Int32)), name

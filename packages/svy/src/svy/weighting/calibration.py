@@ -47,12 +47,13 @@ except ImportError:  # pragma: no cover
     rust_calibrate_by_domain = None
     rust_calibrate_parallel = None
 
+from svy.core.design import WgtAdjustment
 from svy.core.terms import Feature
 from svy.core.types import Category, Number
 from svy.core.warnings import Severity, WarnCode
 from svy.errors import DimensionError, MethodError
 from svy.weighting._calibration_utils import _expand_term, _match_term_targets
-from svy.weighting._engine import _where_mask
+from svy.weighting._engine import AUX_PREFIX, _where_mask
 from svy.weighting._helpers import _build_by_array, _by_to_cols, _normalize_dict_keys
 from svy.weighting.raking import _trim_constraints_satisfied
 from svy.weighting.trimming import _build_domain_array
@@ -687,7 +688,23 @@ def calibrate_matrix(
     df = df.with_columns(pl.Series(name=wgt_name, values=new_w))
 
     if update_design_wgts:
-        sample._design = sample._design.update(wgt=wgt_name)
+        # The GREG sweep is a WLS residual against the auxiliary matrix, not a
+        # cell mean, so the record carries the matrix rather than cell codes.
+        # It is materialized rather than storing the recipe: Cat/Cross terms
+        # resolve to columns that are not stably replayable, and the sweep must
+        # use the exact matrix the calibration solved against.
+        aux_cols = [f"{AUX_PREFIX}{wgt_name}_{j}" for j in range(X.shape[1])]
+        df = df.with_columns([pl.Series(name=n, values=X[:, j]) for j, n in enumerate(aux_cols)])
+        sample._push_design()
+        sample._design = sample._design.update(
+            wgt=wgt_name,
+            wgt_adjustment=WgtAdjustment(
+                kind="calibration",
+                prev_wgt=wgt_col,
+                new_wgt=wgt_name,
+                aux=tuple(aux_cols),
+            ),
+        )
 
     if not ignore_reps and design.rep_wgts is not None:
         rep_cols = design.rep_wgts.columns

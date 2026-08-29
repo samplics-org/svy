@@ -32,6 +32,7 @@ except ImportError:  # pragma: no cover
     rust_trim_weights = None
     rust_trim_weights_matrix = None
 
+from svy.core.design import WgtAdjustment
 from svy.weighting._engine import _where_mask
 from svy.weighting.types import (
     TrimConfig,
@@ -292,7 +293,16 @@ def _run_trim(
         df = df.with_columns(pl.Series(name=target_wgt, values=w_out))
 
     if update_design_wgts:
-        sample._design = sample._design.update(wgt=target_wgt)
+        sample._push_design()
+        # Provenance only, and deliberately so: standalone trimming breaks the
+        # constraints a calibration asserted, so centering afterwards would
+        # claim a calibration that no longer holds. (R keeps centering here.)
+        # The supported route for calibrated-and-trimmed is the integrated
+        # trimming= cycle, which ends satisfying the controls.
+        sample._design = sample._design.update(
+            wgt=target_wgt,
+            wgt_adjustment=WgtAdjustment(kind="trimming", prev_wgt=wgt, new_wgt=target_wgt),
+        )
 
     # ── Adjust replicate weights ──────────────────────────────────────────
     # Replicates get the same proportional adjustment as the main weight.

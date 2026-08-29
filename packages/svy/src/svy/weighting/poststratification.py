@@ -21,9 +21,16 @@ import msgspec
 import numpy as np
 import polars as pl
 
+from svy.core.design import WgtAdjustment
 from svy.core.types import DomainScalarMap, Number
 from svy.errors import MethodError
-from svy.weighting._engine import CellSpec, build_cells, resolve_targets, scale_to_targets
+from svy.weighting._engine import (
+    CellSpec,
+    build_cells,
+    materialize_cells,
+    resolve_targets,
+    scale_to_targets,
+)
 from svy.weighting.raking import _trim_constraints_satisfied
 from svy.weighting.types import TrimConfig, resolve_threshold
 
@@ -136,7 +143,18 @@ def poststratify(
     df = df.with_columns(pl.Series(name=wgt_name, values=ps_arr))
 
     if update_design_wgts:
-        sample._design = sample._design.update(wgt=wgt_name)
+        df, cells_col = materialize_cells(df, spec, wgt_name=wgt_name)
+        sample._push_design()
+        sample._design = sample._design.update(
+            wgt=wgt_name,
+            wgt_adjustment=WgtAdjustment(
+                kind="poststratification",
+                prev_wgt=wgt,
+                new_wgt=wgt_name,
+                cells=(cells_col,),
+                pins_total=controls is not None,
+            ),
+        )
 
     if not ignore_reps and design.rep_wgts is not None:
         rep_cols = design.rep_wgts.columns

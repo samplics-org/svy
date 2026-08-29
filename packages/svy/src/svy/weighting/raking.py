@@ -22,9 +22,10 @@ except ImportError:  # pragma: no cover
     rust_rake = None
     rust_trim_weights = None
 
+from svy.core.design import WgtAdjustment
 from svy.core.types import Category, ControlsType
 from svy.errors import DimensionError, MethodError
-from svy.weighting._engine import _where_mask
+from svy.weighting._engine import CELLS_PREFIX, _where_mask
 from svy.weighting._helpers import _num_sort_key_label
 from svy.weighting.types import TrimConfig, resolve_threshold
 
@@ -602,7 +603,36 @@ def rake(
     df = df.with_columns(pl.Series(name=wgt_name, values=raked_w))
 
     if update_design_wgts:
-        sample._design = sample._design.update(wgt=wgt_name)
+        # One column per margin: raking's sweep iterates margins separately,
+        # so a single concatenated column would encode poststratification on
+        # the full cross -- a different, stronger calibration.
+        cells_cols: list[str] = []
+        for j, col in enumerate(rake_cols, start=1):
+            codes = np.full(len(raked_w), -1, dtype=np.int64)
+            if scope_idx is None:
+                codes[:] = margin_indices[j - 1]
+            else:
+                codes[scope_idx] = margin_indices[j - 1]
+            name = f"{CELLS_PREFIX}{wgt_name}_{j}"
+            df = df.with_columns(
+                pl.Series(
+                    name=name,
+                    values=[None if c < 0 else int(c) for c in codes],
+                    dtype=pl.Int32,
+                )
+            )
+            cells_cols.append(name)
+        sample._push_design()
+        sample._design = sample._design.update(
+            wgt=wgt_name,
+            wgt_adjustment=WgtAdjustment(
+                kind="raking",
+                prev_wgt=wgt,
+                new_wgt=wgt_name,
+                cells=tuple(cells_cols),
+                pins_total=controls_norm is not None,
+            ),
+        )
 
     if not ignore_reps and design.rep_wgts is not None:
         rep_cols = design.rep_wgts.columns
