@@ -58,7 +58,7 @@ class TestPostStratifyTrimming:
         sample = Sample(data=skewed_ps_sample, design=Design(wgt="weight"))
         out = sample.weighting.poststratify(
             controls={"A": 50.0, "B": 50.0},
-            by="strat",
+            cells="strat",
             trimming=TrimConfig(upper=20.0, redistribute=True, min_cell_size=1),
         )
         assert "ps_wgt" in out.data.columns
@@ -69,7 +69,7 @@ class TestPostStratifyTrimming:
         sample = Sample(data=skewed_ps_sample, design=Design(wgt="weight"))
         out = sample.weighting.poststratify(
             controls={"A": 50.0, "B": 50.0},
-            by="strat",
+            cells="strat",
             trimming=TrimConfig(upper=20.0, redistribute=True, min_cell_size=1),
         )
         a_sum = out.data.filter(pl.col("strat") == "A")["ps_wgt"].sum()
@@ -81,9 +81,9 @@ class TestPostStratifyTrimming:
         """trimming=None gives identical result to plain poststratify()."""
         s1 = Sample(data=skewed_ps_sample, design=Design(wgt="weight"))
         s2 = Sample(data=skewed_ps_sample, design=Design(wgt="weight"))
-        out1 = s1.weighting.poststratify(controls={"A": 50.0, "B": 50.0}, by="strat")
+        out1 = s1.weighting.poststratify(controls={"A": 50.0, "B": 50.0}, cells="strat")
         out2 = s2.weighting.poststratify(
-            controls={"A": 50.0, "B": 50.0}, by="strat", trimming=None
+            controls={"A": 50.0, "B": 50.0}, cells="strat", trimming=None
         )
         assert_allclose(
             out1.data["ps_wgt"].to_numpy(),
@@ -103,7 +103,7 @@ class TestPostStratifyTrimming:
         with pytest.raises(Exception, match="converge"):
             sample.weighting.poststratify(
                 controls={"A": 50.0, "B": 50.0},
-                by="strat",
+                cells="strat",
                 trimming=TrimConfig(
                     upper=2.0,
                     redistribute=True,
@@ -118,7 +118,7 @@ class TestPostStratifyTrimming:
         sample = Sample(data=skewed_ps_sample, design=Design(wgt="weight"))
         out = sample.weighting.poststratify(
             controls={"A": 50.0, "B": 50.0},
-            by="strat",
+            cells="strat",
             trimming=TrimConfig(
                 upper=2.0,
                 redistribute=True,
@@ -139,7 +139,7 @@ class TestPostStratifyTrimming:
         sample._design = sample.design.update_rep_weights(method="BRR", prefix="rw", n_reps=2)
         out = sample.weighting.poststratify(
             controls={"A": 50.0, "B": 50.0},
-            by="strat",
+            cells="strat",
             trimming=TrimConfig(upper=20.0, redistribute=True, min_cell_size=1),
         )
         assert "ps_wgt1" in out.data.columns

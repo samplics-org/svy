@@ -19,7 +19,7 @@ import numpy as np
 
 from svy.core.repwgts import BootstrapKind
 from svy.core.terms import Feature
-from svy.core.types import Category, ControlsType, DomainScalarMap, Number
+from svy.core.types import Category, ControlsType, DomainScalarMap, Number, WhereArg
 from svy.utils.random_state import RandomState
 from svy.weighting.adjustment import adjust as _adjust
 from svy.weighting.calibration import build_aux_matrix as _build_aux_matrix
@@ -199,7 +199,9 @@ class Weighting:
         self,
         controls: DomainScalarMap | Number | None = None,
         *,
-        by: str | Sequence[str] | None = None,
+        shares: DomainScalarMap | None = None,
+        cells: str | Sequence[str] | None = None,
+        where: WhereArg = None,
         wgt_name: str = "norm_wgt",
         ignore_reps: bool = False,
         update_design_wgts: bool = True,
@@ -208,7 +210,9 @@ class Weighting:
         return _normalize(
             self._target(inplace),
             controls,
-            by=by,
+            shares=shares,
+            cells=cells,
+            where=where,
             wgt_name=wgt_name,
             ignore_reps=ignore_reps,
             update_design_wgts=update_design_wgts,
@@ -222,8 +226,9 @@ class Weighting:
         self,
         controls: DomainScalarMap | Number | None = None,
         *,
-        factors: DomainScalarMap | Number | None = None,
-        by: str | Sequence[str] | None = None,
+        shares: DomainScalarMap | None = None,
+        cells: str | Sequence[str] | None = None,
+        where: WhereArg = None,
         wgt_name: str = "ps_wgt",
         ignore_reps: bool = False,
         update_design_wgts: bool = True,
@@ -234,8 +239,9 @@ class Weighting:
         return _poststratify(
             self._target(inplace),
             controls,
-            factors=factors,
-            by=by,
+            shares=shares,
+            cells=cells,
+            where=where,
             wgt_name=wgt_name,
             ignore_reps=ignore_reps,
             update_design_wgts=update_design_wgts,
