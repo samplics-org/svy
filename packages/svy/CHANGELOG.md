@@ -6,7 +6,50 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
-<!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
+### Added
+
+- **`Sample.weighting.standardize()` — direct standardization.** Reweights each domain to a common composition so rates are comparable across domains that differ in it. Age is the usual axis, but any composition variable works.
+
+  ```python
+  s.weighting.standardize(
+      cells="agecat",                          # composition axis
+      shares={"(0,19]": 55901, "(19,39]": 77670, ...},   # counts or proportions
+      by=["race", "riagendr"],                 # domains
+      where=svy.col("hi_chol").is_not_null(),  # scope
+  )
+  ```
+
+  `target(g, c) = share(c) × Ŵ_g`, so domain totals are preserved and only the within-domain composition is reshaped. `Ŵ_g` is computed under the same scope that built the cells, which removes the usual footgun — a domain total estimated over a different set of rows than the one being standardized. Domains missing a level are renormalized over the levels they have, with a warning.
+
+  It is a third name, not a third machinery: it runs on the same engine as `poststratify`. `standardize(by=None)` and `poststratify(shares=…)` are deliberately the same operation, each named for the community that uses it.
+
+  Verified against R `survey::svystandardize` 4.5 — weights to a relative tolerance of 1e-12, and the NHANES `HI_CHOL` by race × sex example to 4.8e-14 across all eight domains.
+
+  **Standardized weights are analysis-specific.** `where` bakes one variable's missingness into the weights and `by` bakes in the domain structure, so estimating a different variable or a different breakdown on the same standardized sample is silently wrong.
+
+- **`where=` on all seven weighting methods.** Scope, not domain: matching rows receive the adjustment, and the rest keep their previous weight, so the new column is complete and `design.wgt` can repoint to it. This is the same keyword and the same reading as estimation's `where=`, with a different consequence — estimation zero-weights for subpopulation variance.
+
+### Changed
+
+- **BREAKING: `by=` is now `cells=` on `adjust`, `normalize` and `poststratify`.** `cells` names the groups that each receive one derived adjustment factor; `by` continues to mean "repeat independently per group" everywhere it survives (`calibrate`, `trim`, and `standardize`). Keeping one word for both would have compromised a term of art.
+
+- **BREAKING: `factors=` is replaced by `shares=`.** In `poststratify` this is close to a rename — `factors` already computed `f × grand_total`, which is shares, unnormalized. What changes is that `shares` are normalized first, so a vector that does not sum to 1 now pins composition instead of silently rescaling the population. In `rake` it is a genuine removal: `factors` there multiplied each category by its *own* current weight sum, which has no share reading and which no workflow can supply in advance, since raking is iterative. `rake` gains `shares=` (marginal proportions) in its place.
+
+- **BREAKING: a scalar `controls` now requires `cells=None`.** The rule across every level/share method is that a scalar names one cell and a dict names many; `controls` sets the total and `shares` preserves it. Previously `poststratify(300, cells="region")` silently ignored `cells` and rescaled to the grand total — verified bit-identical to `normalize(300)` with no groups. `poststratify(331_000_000)` with no cells is unaffected and remains the way to pin a known population size.
+
+  Renamed and removed parameters raise an error naming the replacement rather than reporting an unknown keyword.
+
+- **Multi-column `cells` bind by tuple key**, and key-mismatch errors now echo the keys as written — `('R2', 'D1')` rather than the internal `'R2_&_D1'` encoding.
+
+- **`rake` now rejects margins that disagree on a population total.** Margins were validated only in isolation, so inconsistent totals — the classic reason IPF fails to converge — simply ran to `max_iter` and returned whatever they reached. With `shares=` the consistency is structural.
+
+### Fixed
+
+- **One target-resolution path.** `normalize` and `poststratify` derived their control arrays independently, with two different label-to-code conventions. Both now resolve every argument form to absolute per-cell targets in one place, which is also the single form crossing into Rust.
+
+
+> **Note on variance after a calibrating adjustment.** `poststratify`, `rake`, `calibrate` and `standardize` pin quantities in the population, which removes sampling variability. svy's *replication* path accounts for this today — each replicate column is independently re-adjusted — so `method="replication"` gives correct standard errors on a calibrated design. The *Taylor* path does not yet: it treats the adjusted weights as fixed, so its standard errors answer a slightly different question. Point estimates are unaffected. On the NHANES standardization example the Taylor SEs differ from R by roughly −11% to +14%; the replication SEs do not.
+
 
 ## [0.26.0] — 2026-08-28
 
