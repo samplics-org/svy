@@ -3,6 +3,9 @@ import numpy as np
 import polars as pl
 import pytest
 
+from numpy.testing import assert_allclose
+
+from svy import col
 from svy.core.sample import Design, Sample
 
 
@@ -87,7 +90,7 @@ def sample_data_single_class():
 def test_adjust_single_class_standard_codes(sample_data_single_class):
     sample = Sample(data=sample_data_single_class, design=Design(wgt="weight"))
     sample = sample.weighting.adjust(
-        by="single_class", resp_status="status", unknown_to_inelig=True, respondents_only=False
+        cells="single_class", resp_status="status", unknown_to_inelig=True, respondents_only=False
     )
     adjusted = sample.data[NR_WGT].to_numpy()
     expected = np.zeros(10)
@@ -101,7 +104,7 @@ def test_adjust_stratified_custom_codes(sample_data_custom_codes):
     sample = Sample(data=sample_data_custom_codes, design=Design(wgt="weight"))
     mapping = {"rr": "R", "nr": "N", "in": "I", "uk": "U"}
     sample = sample.weighting.adjust(
-        by="adj_class_num",
+        cells="adj_class_num",
         resp_status="status_code",
         resp_mapping=mapping,
         unknown_to_inelig=True,
@@ -115,7 +118,7 @@ def test_adjust_stratified_custom_codes(sample_data_custom_codes):
 def test_adjust_stratified_unknown_to_inelig_true(sample_data_basic):
     sample = Sample(data=sample_data_basic, design=Design(wgt="weight"))
     sample = sample.weighting.adjust(
-        by="adj_class", resp_status="status", unknown_to_inelig=True, respondents_only=False
+        cells="adj_class", resp_status="status", unknown_to_inelig=True, respondents_only=False
     )
     adjusted = sample.data[NR_WGT].to_numpy()
     expected = np.array(
@@ -138,7 +141,7 @@ def test_adjust_stratified_unknown_to_inelig_true(sample_data_basic):
 def test_adjust_stratified_unknown_to_inelig_false(sample_data_basic):
     sample = Sample(data=sample_data_basic, design=Design(wgt="weight"))
     sample = sample.weighting.adjust(
-        by="adj_class", resp_status="status", unknown_to_inelig=False, respondents_only=False
+        cells="adj_class", resp_status="status", unknown_to_inelig=False, respondents_only=False
     )
     adjusted = sample.data[NR_WGT].to_numpy()
     expected = np.array(
@@ -161,7 +164,7 @@ def test_adjust_stratified_unknown_to_inelig_false(sample_data_basic):
 def test_adjust_zero_respondents_in_class(sample_data_no_respondents):
     sample = Sample(data=sample_data_no_respondents, design=Design(wgt="weight"))
     sample = sample.weighting.adjust(
-        by="adj_class", resp_status="status", unknown_to_inelig=True, respondents_only=False
+        cells="adj_class", resp_status="status", unknown_to_inelig=True, respondents_only=False
     )
     adjusted = sample.data[NR_WGT].to_numpy()
     expected = np.array([0.0, 5.0, 0.0, 0.0])  # X: nr,in  Y: uk,nr
@@ -170,7 +173,9 @@ def test_adjust_zero_respondents_in_class(sample_data_no_respondents):
 
 def test_adjust_all_respondents(sample_data_all_respondents):
     sample = Sample(data=sample_data_all_respondents, design=Design(wgt="weight"))
-    sample = sample.weighting.adjust(by="adj_class", resp_status="status", unknown_to_inelig=True)
+    sample = sample.weighting.adjust(
+        cells="adj_class", resp_status="status", unknown_to_inelig=True
+    )
     adjusted = sample.data[NR_WGT].to_numpy()
     expected = np.array([10.0, 10.0, 10.0])
     np.testing.assert_allclose(adjusted, expected, atol=1e-9)
@@ -184,7 +189,7 @@ def test_adjust_all_respondents(sample_data_all_respondents):
 def test_adjust_auto_col_name_uses_nr_wgt(sample_data_basic):
     """Auto-generated adjusted weight column must be nr_wgt."""
     sample = Sample(data=sample_data_basic, design=Design(wgt="weight"))
-    sample = sample.weighting.adjust(by="adj_class", resp_status="status")
+    sample = sample.weighting.adjust(cells="adj_class", resp_status="status")
     assert NR_WGT in sample.data.columns
     assert "svy_adj_weight" not in sample.data.columns
 
@@ -192,7 +197,9 @@ def test_adjust_auto_col_name_uses_nr_wgt(sample_data_basic):
 def test_adjust_wgt_name_overrides_default(sample_data_basic):
     """Explicit wgt_name overrides auto-generated name."""
     sample = Sample(data=sample_data_basic, design=Design(wgt="weight"))
-    sample = sample.weighting.adjust(by="adj_class", resp_status="status", wgt_name="my_adj_wgt")
+    sample = sample.weighting.adjust(
+        cells="adj_class", resp_status="status", wgt_name="my_adj_wgt"
+    )
     assert "my_adj_wgt" in sample.data.columns
     assert NR_WGT not in sample.data.columns
     assert sample.design.wgt == "my_adj_wgt"
@@ -208,7 +215,7 @@ def test_adjust_wgt_name_collision_raises(sample_data_basic):
     sample = Sample(data=sample_data_basic, design=Design(wgt="weight"))
     with pytest.raises(Exception, match="already exists"):
         sample.weighting.adjust(
-            by="adj_class",
+            cells="adj_class",
             resp_status="status",
             wgt_name="weight",
         )
@@ -232,7 +239,7 @@ def test_adjust_replicate_weights_auto_prefix(sample_data_basic):
         n_reps=2,
     )
     sample = sample.weighting.adjust(
-        by="adj_class",
+        cells="adj_class",
         resp_status="status",
         update_design_wgts=True,
         respondents_only=False,
@@ -257,7 +264,7 @@ def test_adjust_replicate_weights_custom_wgt_name(sample_data_basic):
         n_reps=2,
     )
     sample = sample.weighting.adjust(
-        by="adj_class",
+        cells="adj_class",
         resp_status="status",
         wgt_name="my_wgt",
         respondents_only=False,
@@ -280,7 +287,7 @@ def test_adjust_replicate_weights_ignored_when_flag_set(sample_data_basic):
         n_reps=2,
     )
     sample = sample.weighting.adjust(
-        by="adj_class",
+        cells="adj_class",
         resp_status="status",
         ignore_reps=True,
         respondents_only=False,
@@ -301,7 +308,7 @@ def test_adjust_no_design_update(sample_data_basic):
         n_reps=2,
     )
     sample = sample.weighting.adjust(
-        by="adj_class",
+        cells="adj_class",
         resp_status="status",
         update_design_wgts=False,
         respondents_only=False,
@@ -314,7 +321,7 @@ def test_adjust_no_design_update(sample_data_basic):
 
 
 # ---------------------------------------------------------------------------
-# by= multi-column (tuple / list)
+# cells= multi-column (tuple / list)
 # ---------------------------------------------------------------------------
 
 
@@ -338,7 +345,7 @@ def test_adjust_by_tuple():
     sample = Sample(data=df, design=Design(wgt="weight"))
     sample = sample.weighting.adjust(
         resp_status="status",
-        by=("region", "sex"),
+        cells=("region", "sex"),
         unknown_to_inelig=True,
         respondents_only=False,
     )
@@ -352,7 +359,7 @@ def test_adjust_by_list_accepted():
     sample = Sample(data=df, design=Design(wgt="weight"))
     sample = sample.weighting.adjust(
         resp_status="status",
-        by=["region", "sex"],
+        cells=["region", "sex"],
         unknown_to_inelig=True,
         respondents_only=False,
     )
@@ -361,11 +368,11 @@ def test_adjust_by_list_accepted():
 
 
 def test_adjust_by_missing_column_raises():
-    """Missing column in by= raises an error."""
+    """Missing column in cells= raises an error."""
     df, _ = _make_twoway_sample()
     sample = Sample(data=df, design=Design(wgt="weight"))
-    with pytest.raises(Exception, match="All `by` columns must exist"):
-        sample.weighting.adjust(resp_status="status", by=("region", "not_here"))
+    with pytest.raises(Exception, match="All `cells` columns must exist"):
+        sample.weighting.adjust(resp_status="status", cells=("region", "not_here"))
 
 
 # ---------------------------------------------------------------------------
@@ -376,7 +383,7 @@ def test_adjust_by_missing_column_raises():
 def test_adjust_respondents_only_standard(sample_data_basic):
     sample = Sample(data=sample_data_basic, design=Design(wgt="weight"))
     out = sample.weighting.adjust(
-        by="adj_class",
+        cells="adj_class",
         resp_status="status",
         unknown_to_inelig=True,
         respondents_only=True,
@@ -388,7 +395,7 @@ def test_adjust_respondents_only_custom_mapping(sample_data_custom_codes):
     sample = Sample(data=sample_data_custom_codes, design=Design(wgt="weight"))
     mapping = {"rr": "R", "nr": "N", "in": "I", "uk": "U"}
     out = sample.weighting.adjust(
-        by="adj_class_num",
+        cells="adj_class_num",
         resp_status="status_code",
         resp_mapping=mapping,
         respondents_only=True,
@@ -405,16 +412,16 @@ def test_adjust_invalid_weight_column_raises():
     df = pl.DataFrame({"w": [1], "s": ["rr"], "c": ["A"]})
     sample = Sample(data=df)
     with pytest.raises(Exception, match="Sample weight is None"):
-        sample.weighting.adjust(by="c", resp_status="s")
+        sample.weighting.adjust(cells="c", resp_status="s")
 
 
 def test_adjust_non_existent_column_raises():
     df = pl.DataFrame({"w_col": [1], "s_col": ["rr"], "c_col": ["A"]})
     sample = Sample(data=df, design=Design(wgt="w_col"))
-    with pytest.raises(Exception, match="All `by` columns must exist"):
-        sample.weighting.adjust(resp_status="s_col", by="non_existent_c")
+    with pytest.raises(Exception, match="All `cells` columns must exist"):
+        sample.weighting.adjust(resp_status="s_col", cells="non_existent_c")
     with pytest.raises(Exception, match="resp_status"):
-        sample.weighting.adjust(by="c_col", resp_status="non_existent_s")
+        sample.weighting.adjust(cells="c_col", resp_status="non_existent_s")
 
 
 # ---------------------------------------------------------------------------
@@ -455,7 +462,7 @@ def test_adjust_trim_caps_extreme_weight():
 
     sample = Sample(data=_skewed_adj_sample(), design=Design(wgt="weight"))
     out = sample.weighting.adjust(
-        by="cls",
+        cells="cls",
         resp_status="status",
         respondents_only=False,
         trimming=TrimConfig(upper=3.0, redistribute=True, min_cell_size=1),
@@ -470,9 +477,9 @@ def test_adjust_trim_none_unchanged():
     s1 = Sample(data=_skewed_adj_sample(), design=Design(wgt="weight"))
     s2 = Sample(data=_skewed_adj_sample(), design=Design(wgt="weight"))
 
-    out1 = s1.weighting.adjust(by="cls", resp_status="status", respondents_only=False)
+    out1 = s1.weighting.adjust(cells="cls", resp_status="status", respondents_only=False)
     out2 = s2.weighting.adjust(
-        by="cls", resp_status="status", respondents_only=False, trimming=None
+        cells="cls", resp_status="status", respondents_only=False, trimming=None
     )
     np.testing.assert_allclose(
         out1.data[NR_WGT].to_numpy(),
@@ -487,7 +494,7 @@ def test_adjust_trim_no_iteration():
 
     sample = Sample(data=_skewed_adj_sample(), design=Design(wgt="weight"))
     out = sample.weighting.adjust(
-        by="cls",
+        cells="cls",
         resp_status="status",
         respondents_only=False,
         trimming=TrimConfig(upper=3.0, redistribute=True, max_iter=1),
@@ -502,9 +509,30 @@ def test_adjust_trim_design_updated():
 
     sample = Sample(data=_skewed_adj_sample(), design=Design(wgt="weight"))
     out = sample.weighting.adjust(
-        by="cls",
+        cells="cls",
         resp_status="status",
         respondents_only=False,
         trimming=TrimConfig(upper=3.0, redistribute=True),
     )
     assert out.design.wgt == NR_WGT
+
+
+def test_adjust_where_scopes_the_adjustment():
+    """Rows outside the scope keep their weight whatever their response status."""
+    df = pl.DataFrame(
+        {
+            "w": [10.0] * 8,
+            "status": ["rr", "rr", "nr", "nr"] * 2,
+            "cls": ["A"] * 4 + ["B"] * 4,
+            "frame": ["new"] * 4 + ["old"] * 4,
+        }
+    )
+    sample = Sample(data=df, design=Design(wgt="w"))
+    out = sample.weighting.adjust(
+        "status", "cls", where=col("frame") == "new", respondents_only=False
+    )
+    got = out.data.get_column("nr_wgt").to_numpy()
+    # in scope: non-respondent weight moves to respondents within the class
+    assert_allclose(got[:4], [20.0, 20.0, 0.0, 0.0])
+    # out of scope: untouched, including the non-respondents
+    assert_allclose(got[4:], [10.0, 10.0, 10.0, 10.0])

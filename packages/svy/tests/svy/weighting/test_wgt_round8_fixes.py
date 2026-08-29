@@ -69,7 +69,7 @@ def test_adjust_unmatched_status_raises():
     with pytest.raises(MethodError, match="noncontact"):
         s.weighting.adjust(
             resp_status="status",
-            by=None,
+            cells=None,
             resp_mapping={"rr": "resp", "nr": "refusal"},
         )
 
@@ -80,7 +80,7 @@ def test_adjust_null_status_raises():
         Design(wgt="wgt"),
     )
     with pytest.raises(MethodError):
-        s.weighting.adjust(resp_status="status", by=None)
+        s.weighting.adjust(resp_status="status", cells=None)
 
 
 def test_adjust_collection_valued_mapping():
@@ -96,7 +96,7 @@ def test_adjust_collection_valued_mapping():
     )
     out = s.weighting.adjust(
         resp_status="status",
-        by=None,
+        cells=None,
         resp_mapping={"rr": "resp", "nr": ["refusal", "noncontact"]},
     )
     # Both nonrespondents' weight moved to the two respondents: 4/2 = 2.0
@@ -115,7 +115,7 @@ def test_adjust_case_insensitive_statuses_keep_respondents():
         pl.DataFrame({"wgt": [1.0] * 4, "status": ["RR", "RR", "NR", "IN"]}),
         Design(wgt="wgt"),
     )
-    out = s.weighting.adjust(resp_status="status", by=None)
+    out = s.weighting.adjust(resp_status="status", cells=None)
     assert out.data.height == 2
     w = out.data.get_column("nr_wgt").to_numpy()
     # One NR's weight redistributed over two RRs (IN weight is not): 1.5 each
@@ -138,7 +138,7 @@ def test_adjust_trim_without_design_update_preserves_original_weights():
     )
     out = s.weighting.adjust(
         resp_status="status",
-        by=None,
+        cells=None,
         update_design_wgts=False,
         trimming=TrimConfig(upper=5.0, redistribute=False),
     )
@@ -257,9 +257,7 @@ def test_calibrate_trim_cycle_by_domain_thresholds():
     n = 40
     df = pl.DataFrame(
         {
-            "wgt": np.concatenate(
-                [rng.uniform(1.0, 2.0, n // 2), rng.uniform(5.0, 10.0, n // 2)]
-            ),
+            "wgt": np.concatenate([rng.uniform(1.0, 2.0, n // 2), rng.uniform(5.0, 10.0, n // 2)]),
             "grp": ["a"] * (n // 2) + ["b"] * (n // 2),
         }
     )

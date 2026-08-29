@@ -24,12 +24,14 @@ except ImportError:  # pragma: no cover
 
 from svy.core.types import Category, ControlsType
 from svy.errors import DimensionError, MethodError
+from svy.weighting._engine import _where_mask
 from svy.weighting._helpers import _num_sort_key_label
 from svy.weighting.types import TrimConfig, resolve_threshold
 
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample
+    from svy.core.types import WhereArg
 
 
 # ---------------------------------------------------------------------------
@@ -66,25 +68,63 @@ def _normalize_controls_like(x: ControlsType | None) -> ControlsType | None:
     return x
 
 
-def _calculate_controls_from_factors(
+def _shares_to_controls(
     wgts: np.ndarray,
-    margins: dict[str, np.ndarray],
-    factors: ControlsType,
+    shares: ControlsType,
 ) -> ControlsType:
-    """Convert per-category factors to absolute control totals.
+    """Convert per-margin shares to absolute control totals.
 
-    For each margin column and each category within it:
-        control[col][cat] = factor[col][cat] * sum(wgts where col == cat)
+    Shares are marginal proportions, normalized within each margin, so every
+    margin resolves against the same grand total:
+        control[col][cat] = share[col][cat] / sum(share[col]) * sum(wgts)
+
+    That makes cross-margin consistency structural rather than something the
+    caller has to get right -- margins that disagree on a grand total are the
+    usual reason IPF fails to converge.
     """
+    grand_total = float(wgts.sum())
     control: ControlsType = {}
-    for col, factor_dict in factors.items():
-        col_arr = margins[col]
-        control[col] = {}
-        for cat, factor in factor_dict.items():
-            mask = col_arr == cat
-            stratum_sum = float(wgts[mask].sum())
-            control[col][cat] = float(factor) * stratum_sum  # type: ignore[index]
+    for col, share_dict in shares.items():
+        total = float(sum(float(v) for v in share_dict.values()))
+        if total <= 0:
+            raise DimensionError(
+                title="Invalid shares",
+                detail=f"Shares for {col!r} must include at least one positive value.",
+                code="INVALID_SHARES",
+                where="Sample.weighting.rake",
+                param=f"shares[{col!r}]",
+            )
+        control[col] = {cat: float(v) / total * grand_total for cat, v in share_dict.items()}
     return control
+
+
+def _check_margins_agree(control: ControlsType, *, where: str) -> None:
+    """Every margin must describe the same population.
+
+    Raking cannot satisfy margins whose totals differ; without this it would
+    silently iterate to max_iter and return whatever it reached.
+    """
+    totals = {
+        col: float(sum(float(v) for v in cats.values()))  # type: ignore[union-attr]
+        for col, cats in control.items()
+    }
+    if len(totals) < 2:
+        return
+    lo, hi = min(totals.values()), max(totals.values())
+    if hi > 0 and (hi - lo) / hi > 1e-6:
+        raise MethodError.not_applicable(
+            where=where,
+            method="rake",
+            reason=(
+                "Margins disagree on the population total: "
+                + ", ".join(f"{c}={t:,.4g}" for c, t in sorted(totals.items()))
+            ),
+            param="controls",
+            hint=(
+                "Every margin must sum to the same total. Pass shares= to have "
+                "them normalized against one grand total automatically."
+            ),
+        )
 
 
 def _trim_constraints_satisfied(
@@ -235,7 +275,8 @@ def rake(
     sample: Sample,
     *,
     controls: ControlsType | None = None,
-    factors: ControlsType | None = None,
+    shares: ControlsType | None = None,
+    where: WhereArg = None,
     wgt_name: str = "rk_wgt",
     ignore_reps: bool = False,
     ll_bound: float | None = None,
@@ -247,20 +288,20 @@ def rake(
     strict: bool = True,
     trimming: TrimConfig | None = None,
 ) -> Sample:
-    where = "Sample.weighting.rake"
+    ctx = "Sample.weighting.rake"
     df = sample._data
     design = sample._design
 
     if design.wgt is None:
         raise MethodError.not_applicable(
-            where=where,
+            where=ctx,
             method="rake",
             reason="Sample weight is None. Set design.wgt before calling rake().",
         )
     wgt = design.wgt
     if wgt not in df.columns:
         raise MethodError.invalid_choice(
-            where=where,
+            where=ctx,
             param="design.wgt",
             got=wgt,
             allowed=list(df.columns),
@@ -270,43 +311,43 @@ def rake(
     existing_cols = set(df.columns)
     if wgt_name in existing_cols:
         raise MethodError.not_applicable(
-            where=where,
+            where=ctx,
             method="rake",
             reason=f"Column '{wgt_name}' already exists. Choose a different wgt_name.",
         )
 
     controls_norm: ControlsType | None = _normalize_controls_like(x=controls)
-    factors_norm: ControlsType | None = _normalize_controls_like(x=factors)
+    shares_norm: ControlsType | None = _normalize_controls_like(x=shares)
 
-    if controls_norm is None and factors_norm is None:
+    if controls_norm is None and shares_norm is None:
         raise MethodError.not_applicable(
-            where=where,
+            where=ctx,
             method="rake",
-            reason="Either controls= or factors= must be specified.",
+            reason="Either controls= or shares= must be specified.",
         )
-    if controls_norm is not None and factors_norm is not None:
+    if controls_norm is not None and shares_norm is not None:
         raise MethodError.not_applicable(
-            where=where,
+            where=ctx,
             method="rake",
-            reason="Provide exactly one of controls= or factors=, not both.",
+            reason="Provide exactly one of controls= or shares=, not both.",
         )
 
     if ll_bound is not None and up_bound is not None and ll_bound > up_bound:
         raise MethodError.invalid_range(
-            where=where,
+            where=ctx,
             param="ll_bound",
             got=ll_bound,
             hint="ll_bound must be less than or equal to up_bound.",
         )
 
     rake_cols = (
-        list(controls_norm.keys()) if controls_norm is not None else list(factors_norm.keys())  # type: ignore[union-attr]
+        list(controls_norm.keys()) if controls_norm is not None else list(shares_norm.keys())  # type: ignore[union-attr]
     )
     if not rake_cols:
         raise MethodError.not_applicable(
-            where=where,
+            where=ctx,
             method="rake",
-            reason="No raking columns provided in controls/factors keys.",
+            reason="No raking columns provided in controls/shares keys.",
         )
 
     processed: dict[str, np.ndarray] = {}
@@ -315,8 +356,8 @@ def rake(
     for col in rake_cols:
         if not isinstance(col, str) or col not in df.columns:
             raise MethodError.invalid_choice(
-                where=where,
-                param="controls/factors key",
+                where=ctx,
+                param="controls/shares key",
                 got=col,
                 allowed=list(df.columns),
                 hint="All raking column names must exist in the data.",
@@ -332,7 +373,7 @@ def rake(
                 title="Raking column length mismatch",
                 detail=f"Column {col!r} has different length than the weight array.",
                 code="LENGTH_MISMATCH",
-                where=where,
+                where=ctx,
                 param=col,
             )
         if n_null > 0:
@@ -340,7 +381,7 @@ def rake(
                 title="Null values in raking column",
                 detail=f"Column {col!r} contains null values. Raking requires complete data.",
                 code="NULL_VALUES",
-                where=where,
+                where=ctx,
                 param=col,
                 hint="Drop or impute missing values before raking.",
             )
@@ -349,17 +390,31 @@ def rake(
     for i, col in enumerate(rake_cols):
         processed[col] = margin_np[:, i]
 
-    control_final: ControlsType = controls_norm or _calculate_controls_from_factors(
+    # `where` scopes the adjustment: only in-scope rows are raked, and the rest
+    # keep their weight. The IPF then runs on the subset, so the margins the
+    # caller supplies describe the scoped population and nothing else.
+    scope = _where_mask(df, where, where=ctx)
+    scope_idx = None
+    if scope is not None:
+        scope_idx = np.flatnonzero(scope)
+        if scope_idx.size == 0:
+            raise MethodError.not_applicable(
+                where=ctx, method="rake", reason="No rows are in scope for this adjustment"
+            )
+        w_full = w0
+        w0 = w0[scope_idx]
+        processed = {c: a[scope_idx] for c, a in processed.items()}
+
+    control_final: ControlsType = controls_norm or _shares_to_controls(
         wgts=w0,
-        margins=processed,
-        factors=cast(ControlsType, factors_norm),
+        shares=cast(ControlsType, shares_norm),
     )
 
     missing = [m for m in processed if m not in control_final]
     extra = [m for m in control_final if m not in processed]
     if missing or extra:
         raise MethodError.invalid_mapping_keys(
-            where=where,
+            where=ctx,
             param="controls",
             missing=missing,
             extra=extra,
@@ -368,7 +423,7 @@ def rake(
     for col_name, totals in control_final.items():
         if not isinstance(totals, Mapping) or not totals:
             raise MethodError.invalid_type(
-                where=where,
+                where=ctx,
                 param=f"controls[{col_name!r}]",
                 got=totals,
                 expected="non-empty dict mapping category -> total",
@@ -379,7 +434,7 @@ def rake(
                 title="Invalid control totals",
                 detail=f"Control totals for {col_name!r} must be finite and non-negative.",
                 code="INVALID_CONTROL_TOTALS",
-                where=where,
+                where=ctx,
                 param=f"controls[{col_name!r}]",
             )
         if np.all(vals == 0):
@@ -387,9 +442,11 @@ def rake(
                 title="All-zero control totals",
                 detail=f"All control totals for {col_name!r} are zero, which is not allowed.",
                 code="ZERO_CONTROL_TOTALS",
-                where=where,
+                where=ctx,
                 param=f"controls[{col_name!r}]",
             )
+
+    _check_margins_agree(control_final, where=ctx)
 
     # Build margin arrays once — reused across all cycles
     margin_indices, margin_targets = _build_margin_arrays(rake_cols, control_final, processed)
@@ -528,7 +585,7 @@ def rake(
             else f"Raking did not converge after {max_iter} iterations. "
         )
         raise MethodError.not_applicable(
-            where=where,
+            where=ctx,
             method="rake",
             reason=(
                 reason + "The design has NOT been modified. "
@@ -536,6 +593,11 @@ def rake(
             ),
             hint="Try increasing max_iter or relaxing tol.",
         )
+
+    if scope_idx is not None:
+        full = w_full.copy()
+        full[scope_idx] = raked_w
+        raked_w = full
 
     df = df.with_columns(pl.Series(name=wgt_name, values=raked_w))
 
@@ -551,15 +613,21 @@ def rake(
 
             # Replicates: one rake pass with the final converged main weights
             # as starting point. Cycling replicates is not standard practice.
-            raked_reps = _rake_or_raise(
-                wgts_arr,
-                margin_indices,
-                margin_targets,
-                ll_bound,
-                up_bound,
-                tol,
-                max_iter,
-            )
+            if scope_idx is None:
+                raked_reps = _rake_or_raise(
+                    wgts_arr, margin_indices, margin_targets, ll_bound, up_bound, tol, max_iter
+                )
+            else:
+                raked_reps = wgts_arr.copy()
+                raked_reps[scope_idx] = _rake_or_raise(
+                    np.ascontiguousarray(wgts_arr[scope_idx]),
+                    margin_indices,
+                    margin_targets,
+                    ll_bound,
+                    up_bound,
+                    tol,
+                    max_iter,
+                )
 
             new_rep_names = [f"{wgt_name}{i}" for i in range(1, n_reps + 1)]
             wgts_df = pl.DataFrame(raked_reps, schema=new_rep_names)

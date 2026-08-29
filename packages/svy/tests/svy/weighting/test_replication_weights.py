@@ -412,7 +412,7 @@ class TestBootstrapAdjustment:
             sample = Sample(
                 data=bootstrap_adjustment_sample, design=Design(**design_kwargs)
             ).weighting.adjust(
-                by="resp_class", resp_status="status", wgt_name="nr_wgt", respondents_only=False
+                cells="resp_class", resp_status="status", wgt_name="nr_wgt", respondents_only=False
             )
             sums = sample.data.select(["base_wgt", "nr_wgt"]).sum()
             assert sums[0, 0] == sums[0, 1]
@@ -423,7 +423,7 @@ class TestBootstrapAdjustment:
                 Sample(data=bootstrap_adjustment_sample, design=Design(wgt="base_wgt", psu="psu"))
                 .weighting.create_bs_wgts(n_reps=5, rstate=np.random.default_rng(seed=19))
                 .weighting.adjust(
-                    by="resp_class",
+                    cells="resp_class",
                     resp_status="status",
                     wgt_name="nr_wgt",
                     respondents_only=False,
@@ -439,7 +439,7 @@ class TestBootstrapAdjustment:
             Sample(data=bootstrap_adjustment_sample, design=Design(wgt="base_wgt", psu="psu"))
             .weighting.create_bs_wgts(n_reps=5, rstate=np.random.default_rng(seed=19))
             .weighting.adjust(
-                by="resp_class",
+                cells="resp_class",
                 resp_status="status",
                 wgt_name="nr_wgt",
                 respondents_only=False,
@@ -773,7 +773,7 @@ class TestReplicatePropagation:
         """After adjust(wgt_name='nr_wgt'), replicates should be nr_wgt1..nr_wgt5."""
         sample = sample_with_replicates.weighting.adjust(
             resp_status="status",
-            by="resp_class",
+            cells="resp_class",
             wgt_name="nr_wgt",
             respondents_only=False,
         )
@@ -786,7 +786,7 @@ class TestReplicatePropagation:
         """adjust → normalize chain: replicates follow both steps."""
         sample = sample_with_replicates.weighting.adjust(
             resp_status="status",
-            by="resp_class",
+            cells="resp_class",
             wgt_name="nr_wgt",
             respondents_only=False,
         ).weighting.normalize(

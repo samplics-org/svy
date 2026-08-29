@@ -4,6 +4,7 @@ import pytest
 
 from numpy.testing import assert_allclose
 
+from svy import col
 from svy.core.sample import Design, Sample
 
 
@@ -59,38 +60,67 @@ def test_rake_successful_convergence_with_controls(sample_data_for_raking, mock_
     assert_allclose(region_sums[col].to_numpy(), [50.0, 30.0], rtol=1e-3)
 
 
-def test_rake_successful_convergence_with_factors_empty_dict(sample_data_for_raking, mock_design):
+SHARES = {
+    "age_group": {"18-34": 0.8, "35-54": 1.0, "55+": 1.3},
+    "region": {"North": 1.25, "South": 0.75},
+}
+# Shares are normalized per margin against the grand total (80), so both margins
+# describe the same population by construction.
+SHARES_AGE = [80 * 0.8 / 3.1, 80 * 1.0 / 3.1, 80 * 1.3 / 3.1]
+SHARES_REGION = [80 * 1.25 / 2.0, 80 * 0.75 / 2.0]
+
+
+def test_rake_with_shares_empty_controls_dict(sample_data_for_raking, mock_design):
     sample = Sample(data=sample_data_for_raking, design=mock_design)
-    factors = {
-        "age_group": {"18-34": 0.8, "35-54": 1.0, "55+": 1.3},
-        "region": {"North": 1.25, "South": 0.75},
-    }
-    sample = sample.weighting.rake(controls={}, factors=factors)
-    col = RK_WGT
+    sample = sample.weighting.rake(controls={}, shares=SHARES)
     raked = sample.data
 
-    age_sums = raked.group_by("age_group").agg(pl.col(col).sum()).sort("age_group")
-    region_sums = raked.group_by("region").agg(pl.col(col).sum()).sort("region")
+    age_sums = raked.group_by("age_group").agg(pl.col(RK_WGT).sum()).sort("age_group")
+    region_sums = raked.group_by("region").agg(pl.col(RK_WGT).sum()).sort("region")
 
-    assert_allclose(age_sums[col].to_numpy(), [24.0, 30.0, 26.0], rtol=1e-3)
-    assert_allclose(region_sums[col].to_numpy(), [50.0, 30.0], rtol=1e-3)
+    assert_allclose(age_sums[RK_WGT].to_numpy(), SHARES_AGE, rtol=1e-3)
+    assert_allclose(region_sums[RK_WGT].to_numpy(), SHARES_REGION, rtol=1e-3)
 
 
-def test_rake_successful_convergence_with_factors(sample_data_for_raking, mock_design):
+def test_rake_with_shares(sample_data_for_raking, mock_design):
     sample = Sample(data=sample_data_for_raking, design=mock_design)
-    factors = {
-        "age_group": {"18-34": 0.8, "35-54": 1.0, "55+": 1.3},
-        "region": {"North": 1.25, "South": 0.75},
-    }
-    sample = sample.weighting.rake(controls=None, factors=factors)
-    col = RK_WGT
+    sample = sample.weighting.rake(controls=None, shares=SHARES)
     raked = sample.data
 
-    age_sums = raked.group_by("age_group").agg(pl.col(col).sum()).sort("age_group")
-    region_sums = raked.group_by("region").agg(pl.col(col).sum()).sort("region")
+    age_sums = raked.group_by("age_group").agg(pl.col(RK_WGT).sum()).sort("age_group")
+    region_sums = raked.group_by("region").agg(pl.col(RK_WGT).sum()).sort("region")
 
-    assert_allclose(age_sums[col].to_numpy(), [24.0, 30.0, 26.0], rtol=1e-3)
-    assert_allclose(region_sums[col].to_numpy(), [50.0, 30.0], rtol=1e-3)
+    assert_allclose(age_sums[RK_WGT].to_numpy(), SHARES_AGE, rtol=1e-3)
+    assert_allclose(region_sums[RK_WGT].to_numpy(), SHARES_REGION, rtol=1e-3)
+    assert_allclose(raked[RK_WGT].sum(), 80.0, rtol=1e-9)
+
+
+def test_rake_shares_equal_equivalent_controls(sample_data_for_raking, mock_design):
+    """shares are just controls expressed as proportions of the grand total."""
+    by_shares = Sample(data=sample_data_for_raking, design=mock_design).weighting.rake(
+        shares=SHARES
+    )
+    by_controls = Sample(data=sample_data_for_raking, design=mock_design).weighting.rake(
+        controls={
+            "age_group": dict(zip(["18-34", "35-54", "55+"], SHARES_AGE)),
+            "region": dict(zip(["North", "South"], SHARES_REGION)),
+        }
+    )
+    assert_allclose(
+        by_shares.data[RK_WGT].to_numpy(), by_controls.data[RK_WGT].to_numpy(), rtol=1e-9
+    )
+
+
+def test_rake_rejects_margins_that_disagree(sample_data_for_raking, mock_design):
+    """Margins describing different populations cannot both be satisfied."""
+    sample = Sample(data=sample_data_for_raking, design=mock_design)
+    with pytest.raises(Exception, match="Margins disagree"):
+        sample.weighting.rake(
+            controls={
+                "age_group": {"18-34": 24.0, "35-54": 30.0, "55+": 26.0},
+                "region": {"North": 50.0, "South": 99.0},
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +239,7 @@ def test_rake_raises_error_unknown_control_column(sample_data_for_raking, mock_d
 
 def test_rake_raises_error_no_control_or_factor(sample_data_for_raking, mock_design):
     sample = Sample(data=sample_data_for_raking, design=mock_design)
-    with pytest.raises(Exception, match="Either.*control.*factor|controls.*factors"):
+    with pytest.raises(Exception, match="Either controls= or shares="):
         sample.weighting.rake(controls=None)
 
 
@@ -362,3 +392,30 @@ def test_trim_rake_strict_raises_on_non_convergence(mock_design):
 
     # Design must not have been mutated
     assert sample.design.wgt == original_wgt
+
+
+def test_rake_where_scopes_the_adjustment(mock_design):
+    """Out-of-scope rows keep their weight; the margins describe only the scope."""
+    df = pl.DataFrame(
+        {
+            "initial_weight": [10.0] * 12,
+            "age_group": ["18-34", "35-54"] * 6,
+            "region": ["North", "North", "South", "South"] * 3,
+            "frame": ["new"] * 8 + ["old"] * 4,
+        }
+    )
+    sample = Sample(data=df, design=mock_design)
+    out = sample.weighting.rake(
+        controls={
+            "age_group": {"18-34": 50.0, "35-54": 30.0},
+            "region": {"North": 40.0, "South": 40.0},
+        },
+        where=col("frame") == "new",
+    )
+    d = out.data
+    excluded = d.filter(pl.col("frame") == "old")
+    assert_allclose(excluded[RK_WGT].to_numpy(), excluded["initial_weight"].to_numpy())
+
+    included = d.filter(pl.col("frame") == "new")
+    age = included.group_by("age_group").agg(pl.col(RK_WGT).sum()).sort("age_group")
+    assert_allclose(age[RK_WGT].to_numpy(), [50.0, 30.0], rtol=1e-6)
