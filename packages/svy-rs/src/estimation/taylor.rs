@@ -1483,6 +1483,20 @@ pub fn build_taylor_design(
 /// Apply a prebuilt [`TaylorDesign`] to a score vector. This is the only
 /// scores-dependent part; a by-group loop calls it once per group.
 pub fn taylor_variance_apply(scores_arr: &[f64], d: &TaylorDesign) -> f64 {
+    taylor_variance_apply_in_domain(scores_arr, d, None)
+}
+
+/// `taylor_variance_apply` restricted to a domain.
+///
+/// The domain reaches the calibration sweep only. Grouped estimation already
+/// zeroes out-of-group scores, which the variance formula handles, but the
+/// sweep needs to know those rows are absent so they do not enter the cell
+/// means it subtracts.
+pub fn taylor_variance_apply_in_domain(
+    scores_arr: &[f64],
+    d: &TaylorDesign,
+    domain: Option<&[bool]>,
+) -> f64 {
     // Centre first when the design carries a calibration: the sweep replaces
     // the scores the PSU-total formula then consumes, exactly as R applies
     // postStrata at the top of svyrecvar.
@@ -1490,7 +1504,7 @@ pub fn taylor_variance_apply(scores_arr: &[f64], d: &TaylorDesign) -> f64 {
     let scores_arr: &[f64] = match &d.calib {
         Some(c) => {
             let mut v = scores_arr.to_vec();
-            c.apply(&mut v);
+            c.apply_in_domain(&mut v, domain);
             swept = v;
             &swept
         }

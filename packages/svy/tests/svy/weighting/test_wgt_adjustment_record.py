@@ -94,10 +94,15 @@ def test_controls_pin_the_total_but_shares_do_not(sample):
     assert by_shares.design.wgt_adjustment.pins_total is False
 
 
-def test_standardize_does_not_pin_domain_totals(sample):
-    """Domain totals are held at their current estimates, not asserted as known."""
+def test_standardize_pins_like_poststratification(sample):
+    """Matches R: svystandardize delegates to postStratify with absolute controls.
+
+    The targets come from estimated domain totals, so treating only the
+    composition as pinned is arguable -- but R removes both constraints, and
+    svy's R-parity SEs hold only under that reading.
+    """
     std = sample.weighting.standardize("g", shares={"a": 1, "b": 1, "c": 1})
-    assert std.design.wgt_adjustment.pins_total is False
+    assert std.design.wgt_adjustment.pins_total is True
 
 
 def test_rake_records_one_cells_column_per_margin(sample):

@@ -223,9 +223,13 @@ def standardize(
                 prev_wgt=wgt,
                 new_wgt=wgt_name,
                 cells=(cells_col,),
-                # Domain totals are held at their current estimates, so only
-                # the within-domain composition is pinned.
-                pins_total=False,
+                # Pins both, matching R. The targets are derived from estimated
+                # domain totals, so an argument exists for treating only the
+                # composition as pinned -- but R's svystandardize delegates to
+                # postStratify with absolute controls and so removes both, and
+                # the R-parity SEs (31.9154418732174 / 24.9249948644004 on
+                # apiclus1) hold only under that reading.
+                pins_total=True,
             ),
         )
 

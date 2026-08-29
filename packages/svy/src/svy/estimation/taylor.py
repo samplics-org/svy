@@ -84,7 +84,7 @@ def taylor_mean(
         by_col=prep.by_col,
         singleton_method=center_arg,
         deff_ref=deff_ref,
-        **(_calib_kwargs(est, df) if prep.by_col is None else {}),
+        **_calib_kwargs(est, df),
     )
 
     if est._should_run_double_pass():
@@ -213,7 +213,7 @@ def taylor_total(
         by_col=prep.by_col,
         singleton_method=center_arg,
         deff_ref=deff_ref,
-        **(_calib_kwargs(est, df) if prep.by_col is None else {}),
+        **_calib_kwargs(est, df),
     )
 
     if est._should_run_double_pass():
@@ -338,6 +338,7 @@ def taylor_ratio(
         by_col=prep.by_col,
         singleton_method=center_arg,
         deff_ref=deff_ref,
+        **_calib_kwargs(est, df),
     )
 
     if est._should_run_double_pass():
@@ -413,6 +414,7 @@ def taylor_prop(
         by_col=prep.by_col,
         singleton_method=center_arg,
         deff_ref=deff_ref,
+        **_calib_kwargs(est, df),
     )
 
     if est._should_run_double_pass():

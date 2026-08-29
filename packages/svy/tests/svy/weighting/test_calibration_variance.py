@@ -37,7 +37,6 @@ from svy import Design, Sample
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
 
-PHASE3 = "calibration-aware Taylor variance is not implemented"
 
 # --- survey 4.5 on apiclus1 ------------------------------------------------
 R_BASELINE_MEAN_SE = 23.542240693781
@@ -203,14 +202,12 @@ def test_rake_mean_se_matches_r(design):
     assert_allclose(_mean_se(rk), R_RAKE_MEAN_SE, rtol=1e-9)
 
 
-@pytest.mark.xfail(strict=True, reason=PHASE3)
 def test_standardize_se_matches_r(design):
     std = design().weighting.standardize("stype", shares=STYPE_POP, by="sch.wide")
     got = std.estimation.mean("api00", by="sch.wide").to_polars().sort("sch.wide")
     assert_allclose(got["se"].to_numpy(), R_STD_SE, rtol=1e-6)
 
 
-@pytest.mark.xfail(strict=True, reason=PHASE3)
 def test_shares_pin_composition_but_not_the_total(design):
     """shares and controls differ in WHAT they pin, so they differ in variance.
 
@@ -271,7 +268,6 @@ def nhanes():
     return Sample(df, Design(wgt="WTMEC2YR", stratum="SDMVSTRA", psu="SDMVPSU"))
 
 
-@pytest.mark.xfail(strict=True, reason=PHASE3)
 def test_nhanes_standardized_se_matches_r(nhanes):
     """The published case: age-standardized cholesterol by race and sex.
 

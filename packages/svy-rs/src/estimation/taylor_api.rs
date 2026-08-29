@@ -22,7 +22,7 @@ use crate::estimation::taylor::{
     scores_mean_arr, scores_mean_domain, scores_ratio, scores_ratio_domain, scores_total,
     scores_total_domain, srs_variance_mean, srs_variance_mean_domain, srs_variance_ratio,
     srs_variance_ratio_domain, srs_variance_total, srs_variance_total_domain,
-    taylor_variance_apply, weighted_quantile,
+    taylor_variance_apply, taylor_variance_apply_in_domain, weighted_quantile,
 };
 
 /// Convert the incoming Python DataFrame and ensure one chunk per column.
@@ -136,6 +136,7 @@ pub fn taylor_mean(
                 &by,
                 singleton_method.as_deref(),
                 srs,
+                calib,
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -410,6 +411,7 @@ fn compute_mean_grouped(
     by_col: &str,
     singleton_method: Option<&str>,
     srs: SrsRef,
+    calib: Option<CalibSweep>,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -427,7 +429,8 @@ fn compute_mean_grouped(
 
     // Index the design once — it is identical across by-groups; only the
     // domain-masked scores change per group.
-    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+    let design =
+        build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?.with_calib(calib);
 
     // Groups are independent; fan the per-group work out over the rayon pool
     // and collect in group order (deterministic, thread-count-independent).
@@ -447,7 +450,8 @@ fn compute_mean_grouped(
             let estimate = point_estimate_mean_domain(y, weights, &domain_mask)?;
             let scores = scores_mean_domain(y, weights, &domain_mask)?;
             let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-            let variance = taylor_variance_apply(&scores_arr, &design);
+            let domain: Vec<bool> = domain_mask.iter().map(|v| v.unwrap_or(false)).collect();
+            let variance = taylor_variance_apply_in_domain(&scores_arr, &design, Some(&domain));
             let se = variance.max(0.0).sqrt();
             let srs_var = srs_variance_mean_domain(y, weights, &domain_mask, srs)?;
             let deff = if srs_var > 0.0 {
@@ -549,6 +553,7 @@ pub fn taylor_total(
                 &by,
                 singleton_method.as_deref(),
                 srs,
+                calib,
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -736,6 +741,7 @@ fn compute_total_grouped(
     by_col: &str,
     singleton_method: Option<&str>,
     srs: SrsRef,
+    calib: Option<CalibSweep>,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -751,7 +757,8 @@ fn compute_total_grouped(
     let by_str = df.column(by_col)?.str()?;
     let unique_groups = by_str.unique()?;
 
-    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+    let design =
+        build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?.with_calib(calib);
 
     let groups: Vec<&str> = unique_groups.iter().flatten().collect();
     // A by-group is a domain, so its df must be counted on its own active
@@ -769,7 +776,8 @@ fn compute_total_grouped(
             let estimate = point_estimate_total_domain(y, weights, &domain_mask)?;
             let scores = scores_total_domain(y, weights, &domain_mask)?;
             let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-            let variance = taylor_variance_apply(&scores_arr, &design);
+            let domain: Vec<bool> = domain_mask.iter().map(|v| v.unwrap_or(false)).collect();
+            let variance = taylor_variance_apply_in_domain(&scores_arr, &design, Some(&domain));
             let se = variance.max(0.0).sqrt();
             let srs_var = srs_variance_total_domain(y, weights, &domain_mask, srs)?;
             let deff = if srs_var > 0.0 {
@@ -874,6 +882,7 @@ pub fn taylor_ratio(
                 &by,
                 singleton_method.as_deref(),
                 srs,
+                calib,
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -1085,6 +1094,7 @@ fn compute_ratio_grouped(
     by_col: &str,
     singleton_method: Option<&str>,
     srs: SrsRef,
+    calib: Option<CalibSweep>,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(numerator_col)?.f64()?;
     let x = df.column(denominator_col)?.f64()?;
@@ -1101,7 +1111,8 @@ fn compute_ratio_grouped(
     let by_str = df.column(by_col)?.str()?;
     let unique_groups = by_str.unique()?;
 
-    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+    let design =
+        build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?.with_calib(calib);
 
     let groups: Vec<&str> = unique_groups.iter().flatten().collect();
     // A by-group is a domain, so its df must be counted on its own active
@@ -1119,7 +1130,8 @@ fn compute_ratio_grouped(
             let estimate = point_estimate_ratio_domain(y, x, weights, &domain_mask)?;
             let scores = scores_ratio_domain(y, x, weights, &domain_mask)?;
             let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-            let variance = taylor_variance_apply(&scores_arr, &design);
+            let domain: Vec<bool> = domain_mask.iter().map(|v| v.unwrap_or(false)).collect();
+            let variance = taylor_variance_apply_in_domain(&scores_arr, &design, Some(&domain));
             let se = variance.max(0.0).sqrt();
             let srs_var = srs_variance_ratio_domain(y, x, weights, &domain_mask, srs)?;
             let deff = if srs_var > 0.0 {
@@ -1360,7 +1372,7 @@ fn compute_assoc(
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None))]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None))]
 pub fn taylor_prop(
     _py: Python,
     data: PyDataFrame,
@@ -1375,8 +1387,22 @@ pub fn taylor_prop(
     singleton_method: Option<String>,
     deff_ref: Option<String>,
     deff_pop_total: Option<f64>,
+    calib_kind: Option<String>,
+    calib_cells: Option<Vec<String>>,
+    calib_aux: Option<Vec<String>>,
+    calib_prev_wgt: Option<String>,
+    calib_pins_total: Option<bool>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
+    let calib = make_calib(
+        &df,
+        &weight_col,
+        calib_kind,
+        calib_cells,
+        calib_aux,
+        calib_prev_wgt,
+        calib_pins_total,
+    );
     let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
     if by_col.is_none() {
@@ -1391,6 +1417,7 @@ pub fn taylor_prop(
             fpc_ssu_col.as_deref(),
             singleton_method.as_deref(),
             srs,
+            calib,
         )
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         return Ok(PyDataFrame(result));
@@ -1410,6 +1437,7 @@ pub fn taylor_prop(
                 &by,
                 singleton_method.as_deref(),
                 srs,
+                calib,
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -1467,6 +1495,7 @@ fn compute_prop_ungrouped(
     fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
     srs: SrsRef,
+    calib: Option<CalibSweep>,
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -1499,7 +1528,8 @@ fn compute_prop_ungrouped(
     let n = weights.len() as u32;
     // Design is identical across levels; index it once — and take the df off its
     // codes rather than densifying the same columns a second time.
-    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+    let design =
+        build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?.with_calib(calib);
     let df_val = degrees_of_freedom_from_design(weights, &design, None);
 
     for lvl in &levels {
@@ -1672,6 +1702,7 @@ fn compute_prop_grouped(
     by_col: &str,
     singleton_method: Option<&str>,
     srs: SrsRef,
+    calib: Option<CalibSweep>,
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -1698,7 +1729,8 @@ fn compute_prop_grouped(
     let unique_groups = by_str.unique()?;
 
     // Design is identical across all (group, level) cells; index it once.
-    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+    let design =
+        build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?.with_calib(calib);
 
     // Fan out over groups; each group emits its level rows in `levels` order,
     // then flatten in group order for a deterministic layout.
@@ -1731,7 +1763,8 @@ fn compute_prop_grouped(
                 let estimate = point_estimate_mean_domain(&indicator_ca, weights, &domain_mask)?;
                 let scores = scores_mean_domain(&indicator_ca, weights, &domain_mask)?;
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-                let variance = taylor_variance_apply(&scores_arr, &design);
+                let domain: Vec<bool> = domain_mask.iter().map(|v| v.unwrap_or(false)).collect();
+                let variance = taylor_variance_apply_in_domain(&scores_arr, &design, Some(&domain));
                 let se = variance.max(0.0).sqrt();
                 let srs_var = srs_variance_mean_domain(&indicator_ca, weights, &domain_mask, srs)?;
                 let deff = if srs_var > 0.0 {

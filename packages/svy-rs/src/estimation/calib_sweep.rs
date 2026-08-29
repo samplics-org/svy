@@ -68,8 +68,17 @@ impl CalibSweep {
         mut new_w: Vec<f64>,
         pins_total: bool,
     ) -> Self {
+        // Estimation-time `where=` zeroes the ACTIVE weight but leaves the
+        // record's previous-weight column alone. Left as is, an excluded row
+        // would add nothing to a cell's numerator (its score is zero) but its
+        // full previous weight to the denominator, shrinking every cell mean.
+        // R never sees this because `subset()` zeroes both vectors; zeroing
+        // prev_w alongside new_w reproduces that, and then the 0/0 guard drops
+        // the row from the sweep entirely.
+        let mut prev_w = prev_w;
         for i in 0..new_w.len() {
-            if new_w[i] == 0.0 && prev_w[i] == 0.0 {
+            if new_w[i] == 0.0 {
+                prev_w[i] = 0.0;
                 new_w[i] = 1.0;
             }
         }
@@ -86,8 +95,26 @@ impl CalibSweep {
 
     /// Centre `x` in place.
     pub fn apply(&self, x: &mut [f64]) {
+        self.apply_in_domain(x, None)
+    }
+
+    /// Centre `x` in place, restricted to a domain.
+    ///
+    /// Grouped estimation domain-masks the scores rather than subsetting the
+    /// frame, so out-of-group rows arrive with score 0 but a live weight. Left
+    /// in, they would contribute nothing to each cell's numerator and their
+    /// full weight to its denominator, pulling every cell mean toward zero.
+    /// R sidesteps this because `subset()` zeroes both weight vectors; here the
+    /// domain is passed in and those rows are skipped outright, which is the
+    /// same thing.
+    pub fn apply_in_domain(&self, x: &mut [f64], domain: Option<&[bool]>) {
         if x.len() != self.new_w.len() {
             return;
+        }
+        if let Some(d) = domain {
+            if d.len() != x.len() {
+                return;
+            }
         }
         match self.kind {
             SweepKind::Cells => {
@@ -95,42 +122,30 @@ impl CalibSweep {
                     return;
                 }
                 if self.pins_total {
-                    self.sweep_cells(x, 0);
+                    self.sweep_cells(x, 0, domain);
                 } else {
-                    // `shares` pin k-1 contrasts, not k totals. Removing the
-                    // cell means also removes the grand total, which is still
-                    // estimated, so add that component back:
-                    //   x - (P_cells x - P_global x)
-                    // With sweep_* returning x - P x, that is
-                    //   sweep_cells(x) + P_global x.
-                    let orig = x.to_vec();
-                    let mut global = orig.clone();
-                    self.sweep_global(&mut global);
-                    self.sweep_cells(x, 0);
-                    for i in 0..x.len() {
-                        x[i] += orig[i] - global[i];
-                    }
+                    self.sweep_shares(x, domain);
                 }
             }
             SweepKind::Raking => {
                 for _ in 0..RAKE_ITERATIONS {
                     for m in 0..self.cells.len() {
-                        self.sweep_raking(x, m);
+                        self.sweep_raking(x, m, domain);
                     }
                 }
             }
-            SweepKind::Greg => self.sweep_greg(x),
+            SweepKind::Greg => self.sweep_greg(x, domain),
         }
     }
 
     /// Ordinary poststratification: subtract the previous-weight cell mean.
-    fn sweep_cells(&self, x: &mut [f64], margin: usize) {
+    fn sweep_cells(&self, x: &mut [f64], margin: usize, domain: Option<&[bool]>) {
         let codes = &self.cells[margin];
         let k = self.n_cells[margin];
         let (mut num, mut den) = (vec![0.0; k], vec![0.0; k]);
         for i in 0..x.len() {
             let c = codes[i];
-            if c == OUT_OF_SCOPE {
+            if c == OUT_OF_SCOPE || domain.is_some_and(|d| !d[i]) {
                 continue;
             }
             let c = c as usize;
@@ -139,7 +154,7 @@ impl CalibSweep {
         }
         for i in 0..x.len() {
             let c = codes[i];
-            if c == OUT_OF_SCOPE {
+            if c == OUT_OF_SCOPE || domain.is_some_and(|d| !d[i]) {
                 continue;
             }
             let c = c as usize;
@@ -149,36 +164,60 @@ impl CalibSweep {
         }
     }
 
-    /// The same sweep with every in-scope row in one cell.
-    fn sweep_global(&self, x: &mut [f64]) {
+    /// `shares` pin the composition but not the level.
+    ///
+    /// The constraints are `sum_{i in c} w*_i = s_c * sum_i w*_i`, so the pinned
+    /// directions are `u_c = delta_c - s_c`, which sum to zero and therefore
+    /// span k-1 dimensions rather than k. Projecting those out is exactly the
+    /// GREG residual against `u_1..u_{k-1}`, so this reuses that solver rather
+    /// than being a sweep of its own.
+    ///
+    /// `s_c` is not carried on the record because it does not need to be: the
+    /// achieved composition IS the shares, by construction.
+    fn sweep_shares(&self, x: &mut [f64], domain: Option<&[bool]>) {
         let codes = &self.cells[0];
-        let (mut num, mut den) = (0.0, 0.0);
-        for i in 0..x.len() {
-            if codes[i] == OUT_OF_SCOPE {
-                continue;
-            }
-            num += x[i] * self.prev_w[i] / self.new_w[i];
-            den += self.prev_w[i];
-        }
-        if den == 0.0 {
+        let k = self.n_cells[0];
+        if k < 2 {
             return;
         }
+        let mut cell_w = vec![0.0; k];
+        let mut total = 0.0;
         for i in 0..x.len() {
-            if codes[i] != OUT_OF_SCOPE {
-                x[i] -= (num / den) * self.new_w[i];
+            let c = codes[i];
+            if c == OUT_OF_SCOPE || domain.is_some_and(|d| !d[i]) {
+                continue;
+            }
+            cell_w[c as usize] += self.new_w[i];
+            total += self.new_w[i];
+        }
+        if total == 0.0 {
+            return;
+        }
+        let shares: Vec<f64> = cell_w.iter().map(|w| w / total).collect();
+
+        // One column per cell but the last: they are linearly dependent.
+        let mut aux = vec![vec![0.0; x.len()]; k - 1];
+        for i in 0..x.len() {
+            let c = codes[i];
+            if c == OUT_OF_SCOPE {
+                continue;
+            }
+            for (j, col) in aux.iter_mut().enumerate() {
+                col[i] = f64::from(c as usize == j) - shares[j];
             }
         }
+        self.wls_residual(x, &aux, domain);
     }
 
     /// R rakes with the UNWEIGHTED group mean of `x / w`, unlike the
     /// poststratification branch. Matched deliberately.
-    fn sweep_raking(&self, x: &mut [f64], margin: usize) {
+    fn sweep_raking(&self, x: &mut [f64], margin: usize, domain: Option<&[bool]>) {
         let codes = &self.cells[margin];
         let k = self.n_cells[margin];
         let (mut sum, mut cnt) = (vec![0.0; k], vec![0.0f64; k]);
         for i in 0..x.len() {
             let c = codes[i];
-            if c == OUT_OF_SCOPE {
+            if c == OUT_OF_SCOPE || domain.is_some_and(|d| !d[i]) {
                 continue;
             }
             let c = c as usize;
@@ -187,7 +226,7 @@ impl CalibSweep {
         }
         for i in 0..x.len() {
             let c = codes[i];
-            if c == OUT_OF_SCOPE {
+            if c == OUT_OF_SCOPE || domain.is_some_and(|d| !d[i]) {
                 continue;
             }
             let c = c as usize;
@@ -201,8 +240,13 @@ impl CalibSweep {
     /// PREVIOUS weights. R stores `qr(X * sqrt(oldw))` and `w = g * sqrt(oldw)`,
     /// which unwinds to exactly this; using the calibrated weights instead is
     /// close but wrong (3.2631 against 3.2959 on apiclus1).
-    fn sweep_greg(&self, x: &mut [f64]) {
-        let k = self.aux.len();
+    fn sweep_greg(&self, x: &mut [f64], domain: Option<&[bool]>) {
+        self.wls_residual(x, &self.aux, domain)
+    }
+
+    /// `w*(z - X b)` with `b` the WLS fit of `z` on `X` weighted by prev_w.
+    fn wls_residual(&self, x: &mut [f64], aux: &[Vec<f64>], domain: Option<&[bool]>) {
+        let k = aux.len();
         if k == 0 {
             return;
         }
@@ -210,15 +254,18 @@ impl CalibSweep {
         let (mut a, mut b) = (vec![0.0; k * k], vec![0.0; k]);
         for i in 0..n {
             let w = self.prev_w[i];
-            if w == 0.0 || !self.aux.iter().all(|col| col[i].is_finite()) {
+            if w == 0.0
+                || domain.is_some_and(|d| !d[i])
+                || !aux.iter().all(|col| col[i].is_finite())
+            {
                 continue;
             }
             let z = x[i] / self.new_w[i];
             for p in 0..k {
-                let xp = self.aux[p][i];
+                let xp = aux[p][i];
                 b[p] += w * xp * z;
                 for q in 0..k {
-                    a[p * k + q] += w * xp * self.aux[q][i];
+                    a[p * k + q] += w * xp * aux[q][i];
                 }
             }
         }
@@ -226,12 +273,12 @@ impl CalibSweep {
             return;
         };
         for i in 0..n {
-            if !self.aux.iter().all(|col| col[i].is_finite()) {
+            if !aux.iter().all(|col| col[i].is_finite()) {
                 continue;
             }
             let mut fit = 0.0;
             for p in 0..k {
-                fit += self.aux[p][i] * beta[p];
+                fit += aux[p][i] * beta[p];
             }
             x[i] -= fit * self.new_w[i];
         }
