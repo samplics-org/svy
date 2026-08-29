@@ -255,17 +255,95 @@ def test_standardize_where_scopes_the_adjustment(parity_sample):
 # ---------------------------------------------------------------------------
 
 
-def test_standardize_partial_domain_warns(parity_df):
-    """A domain missing a level is renormalized over what it has, with a warning."""
-    df = parity_df.with_columns(
-        pl.when((pl.col("grp") == "A") & (pl.col("age") == "o"))
-        .then(pl.lit("m"))
-        .otherwise(pl.col("age"))
-        .alias("age")
+# Simulated design where domain A never observes age level "o". Passed through
+# R survey 4.5 and svy identically; the point is agreement on one input, not
+# that the input is any particular real population.
+PARTIAL_DF = pl.DataFrame(
+    {
+        "strat": ["S1"] * 12 + ["S2"] * 12,
+        "psu": [f"P{i // 4 + 1}" for i in range(24)],
+        "grp": ["A"] * 12 + ["B"] * 12,
+        "age": ["y", "m", "y", "m"] * 3 + ["y", "m", "o", "y"] * 3,
+        "w": [round((3 + i) * 2.5, 3) for i in range(24)],
+    }
+)
+_PARTIAL_V = [
+    42.3045,
+    47.6598,
+    52.0703,
+    40.7829,
+    51.5663,
+    50.241,
+    50.6833,
+    58.9329,
+    40.2491,
+    60.1389,
+    44.0417,
+    40.9503,
+    44.2691,
+    52.0212,
+    51.2164,
+    47.5387,
+    42.3759,
+    44.8141,
+    59.7945,
+    51.5985,
+    45.3721,
+    42.4616,
+    48.3702,
+    36.6682,
+]
+PARTIAL_POP = {"m": 250, "o": 400, "y": 350}
+# svyby(~v, ~grp, svymean, design=svystandardize(des, by=~age, over=~grp, ...))
+R_PARTIAL_MEANS = {"A": 47.974773726852, "B": 48.155251165312}
+
+
+@pytest.fixture
+def partial_sample():
+    return Sample(
+        PARTIAL_DF.with_columns(pl.Series("v", _PARTIAL_V)),
+        Design(wgt="w", stratum="strat", psu="psu"),
     )
-    sample = Sample(df, Design(wgt="w", stratum="strat", psu="psu"))
+
+
+def test_standardize_partial_domain_warns(partial_sample):
     with pytest.warns(UserWarning, match="do not observe every level"):
-        sample.weighting.standardize("age", shares=POP, by="grp")
+        partial_sample.weighting.standardize("age", shares=PARTIAL_POP, by="grp")
+
+
+def test_standardize_partial_domain_matches_r_estimates(partial_sample):
+    """Composition within an incomplete domain agrees with R exactly."""
+    with pytest.warns(UserWarning):
+        std = partial_sample.weighting.standardize("age", shares=PARTIAL_POP, by="grp")
+    got = std.estimation.mean("v", by="grp").to_polars().sort("grp")
+    for row in got.iter_rows(named=True):
+        assert_allclose(row["est"], R_PARTIAL_MEANS[row["grp"]], rtol=1e-10)
+
+
+def test_standardize_partial_domain_preserves_the_domain_total(partial_sample):
+    """A DOCUMENTED divergence from R, and the reason to prefer svy's choice.
+
+    R drops the absent cell and leaves the rest at their unrenormalized shares,
+    so an incomplete domain's total silently falls -- here to (250+350)/1000 =
+    60% of its original 255. That breaks the invariant svystandardize is
+    defined by, namely that domain totals stay at their current estimates.
+    svy renormalizes over the levels present instead, so the total holds and
+    the warning names the real consequence: that domain is standardized to a
+    different population than the others.
+
+    Within-domain means are identical either way, so this shows up only in
+    totals or when pooling domains -- where R would understate A by 40%.
+    """
+    with pytest.warns(UserWarning):
+        std = partial_sample.weighting.standardize("age", shares=PARTIAL_POP, by="grp")
+    totals = (
+        std.data.group_by("grp")
+        .agg([pl.col("w").sum().alias("before"), pl.col(STD_WGT).sum().alias("after")])
+        .sort("grp")
+    )
+    assert_allclose(totals["after"].to_numpy(), totals["before"].to_numpy())
+    a = totals.filter(pl.col("grp") == "A")
+    assert_allclose(a["after"][0], 255.0)  # R gives 153.0
 
 
 def test_standardize_rejects_unknown_share_keys(parity_sample):
