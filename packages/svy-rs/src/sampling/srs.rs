@@ -1,7 +1,7 @@
 // src/sampling/srs.rs
 
-use crate::rng::Rng;
 use std::collections::HashMap;
+use crate::rng::Rng;
 
 #[derive(Debug, Clone)]
 pub enum SamplingError {
@@ -15,8 +15,7 @@ impl std::fmt::Display for SamplingError {
         match self {
             Self::EmptyFrame => write!(f, "Cannot sample from an empty frame"),
             Self::OversamplingWor { n, pop } => write!(
-                f,
-                "Cannot draw n={n} without replacement from population of {pop}"
+                f, "Cannot draw n={n} without replacement from population of {pop}"
             ),
             Self::InvalidInput(msg) => write!(f, "Invalid input: {msg}"),
         }
@@ -47,19 +46,11 @@ pub fn select_srs(
         None => {
             let n_scalar = match n {
                 SrsN::Scalar(v) => v,
-                SrsN::PerStratum(_) => {
-                    return Err(SamplingError::InvalidInput(
-                        "per-stratum n requires stratum array".into(),
-                    ));
-                }
+                SrsN::PerStratum(_) => return Err(SamplingError::InvalidInput(
+                    "per-stratum n requires stratum array".into(),
+                )),
             };
-            srs_unstratified_indexed(
-                frame,
-                &(0..frame.len()).collect::<Vec<_>>(),
-                n_scalar,
-                wr,
-                seed,
-            )
+            srs_unstratified_indexed(frame, &(0..frame.len()).collect::<Vec<_>>(), n_scalar, wr, seed)
         }
         Some(strat) => {
             if strat.len() != frame.len() {
@@ -176,8 +167,8 @@ fn select_srs_stratified(
             if n_s == 0 {
                 return None;
             }
-            let child_seed =
-                base_seed.wrapping_add((strat_idx as u64).wrapping_mul(0x9e3779b97f4a7c15));
+            let child_seed = base_seed
+                .wrapping_add((strat_idx as u64).wrapping_mul(0x9e3779b97f4a7c15));
             Some((s, positions, n_s, child_seed))
         })
         .collect();

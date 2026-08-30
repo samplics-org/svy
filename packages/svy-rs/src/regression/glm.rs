@@ -592,11 +592,7 @@ fn fit_glm_domain(
     }
     if w_ca.null_count() > 0 {
         return Err(PolarsError::ComputeError(
-            format!(
-                "GLM weight column '{}' contains null values",
-                weights.name()
-            )
-            .into(),
+            format!("GLM weight column '{}' contains null values", weights.name()).into(),
         ));
     }
     for s in &x_cast {
@@ -739,7 +735,8 @@ fn fit_glm_domain(
     for j in 0..k {
         if !beta[(j, 0)].is_finite() {
             return Err(PolarsError::ComputeError(
-                "GLM did not produce finite coefficients (degenerate or non-convergent fit)".into(),
+                "GLM did not produce finite coefficients (degenerate or non-convergent fit)"
+                    .into(),
             ));
         }
     }

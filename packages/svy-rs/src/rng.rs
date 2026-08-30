@@ -92,6 +92,7 @@ impl Rng {
         }
         weights.len() - 1
     }
+
 }
 
 #[cfg(test)]

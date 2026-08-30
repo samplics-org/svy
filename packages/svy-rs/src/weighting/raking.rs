@@ -13,11 +13,7 @@ impl MarginSpec {
     fn new(indices: Array1<i64>, targets: Array1<f64>) -> Self {
         let indices_usize: Vec<usize> = indices.iter().map(|&x| x as usize).collect();
         let n_groups = *indices_usize.iter().max().unwrap_or(&0) + 1;
-        Self {
-            indices: indices_usize,
-            targets,
-            n_groups,
-        }
+        Self { indices: indices_usize, targets, n_groups }
     }
 }
 
@@ -37,23 +33,17 @@ pub fn rake_impl(
     let (n_obs, n_reps) = wgt.dim();
 
     if margin_indices.is_empty() {
-        return Err(WeightingError::InvalidInput(
-            "No margins provided".to_string(),
-        ));
+        return Err(WeightingError::InvalidInput("No margins provided".to_string()));
     }
     if margin_indices.len() != margin_targets.len() {
         return Err(WeightingError::InvalidInput(format!(
             "Margin count mismatch: {} indices vs {} targets",
-            margin_indices.len(),
-            margin_targets.len()
+            margin_indices.len(), margin_targets.len()
         )));
     }
     for indices in margin_indices.iter() {
         if indices.len() != n_obs {
-            return Err(WeightingError::DimensionMismatch {
-                expected: n_obs,
-                got: indices.len(),
-            });
+            return Err(WeightingError::DimensionMismatch { expected: n_obs, got: indices.len() });
         }
         // Negative indices would wrap to huge usize values in MarginSpec::new
         // and abort on allocation — reject them with a clean error.
@@ -165,12 +155,8 @@ mod tests {
             wgt.view(),
             &[array![0, 0, 1, 1], array![0, 1, 0, 1]],
             &[array![10.0, 20.0], array![12.0, 18.0]],
-            None,
-            None,
-            1e-6,
-            100,
-        )
-        .unwrap();
+            None, None, 1e-6, 100,
+        ).unwrap();
         assert_relative_eq!(result.sum(), 30.0, epsilon = 1e-6);
     }
 
@@ -178,13 +164,8 @@ mod tests {
     fn test_non_convergence_returns_partial_result() {
         let wgt = array![[1.0], [1.0], [1.0], [1.0]];
         let result = rake_impl(
-            wgt.view(),
-            &[array![0, 0, 1, 1]],
-            &[array![6.0, 2.0]],
-            None,
-            None,
-            1e-20,
-            1,
+            wgt.view(), &[array![0, 0, 1, 1]], &[array![6.0, 2.0]],
+            None, None, 1e-20, 1,
         );
         assert!(result.is_ok());
     }
@@ -193,13 +174,8 @@ mod tests {
     fn test_negative_margin_index_is_error() {
         let wgt = array![[1.0], [1.0]];
         let result = rake_impl(
-            wgt.view(),
-            &[array![-1, 0]],
-            &[array![6.0]],
-            None,
-            None,
-            1e-6,
-            100,
+            wgt.view(), &[array![-1, 0]], &[array![6.0]],
+            None, None, 1e-6, 100,
         );
         assert!(result.is_err());
     }
@@ -208,13 +184,8 @@ mod tests {
     fn test_short_margin_targets_is_error() {
         let wgt = array![[1.0], [1.0], [1.0]];
         let result = rake_impl(
-            wgt.view(),
-            &[array![0, 1, 2]],
-            &[array![6.0]],
-            None,
-            None,
-            1e-6,
-            100,
+            wgt.view(), &[array![0, 1, 2]], &[array![6.0]],
+            None, None, 1e-6, 100,
         );
         assert!(result.is_err());
     }
@@ -223,13 +194,8 @@ mod tests {
     fn test_bounds_exceeded_is_error() {
         let wgt = array![[1.0], [1.0], [1.0], [1.0]];
         let result = rake_impl(
-            wgt.view(),
-            &[array![0, 0, 1, 1]],
-            &[array![6.0, 2.0]],
-            None,
-            Some(1.1),
-            1e-6,
-            100,
+            wgt.view(), &[array![0, 0, 1, 1]], &[array![6.0, 2.0]],
+            None, Some(1.1), 1e-6, 100,
         );
         assert!(result.is_err());
     }
