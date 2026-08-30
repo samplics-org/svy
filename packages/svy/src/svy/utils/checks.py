@@ -223,7 +223,7 @@ def assert_no_missing(*, df: pl.DataFrame, subset: Sequence[str]) -> None:
         detail = ", ".join(missing_errors)
         raise ValueError(
             "Missing or invalid values found in required columns; "
-            "set drop_missing=True to automatically drop them. "
+            "set drop_nulls=True to automatically drop them. "
             f"Affected: {detail}"
         )
 
