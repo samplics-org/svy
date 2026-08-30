@@ -33,6 +33,7 @@ import pytest
 from numpy.testing import assert_allclose
 
 from svy import Design, Sample, col
+from svy.weighting.types import TrimConfig
 
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
@@ -429,3 +430,93 @@ def test_the_warning_fires_once_per_rebind(design):
         _mean_se(stripped)
         _total_se(stripped, "api00")
     assert len(rec) == 1
+
+
+# ---------------------------------------------------------------------------
+# The rest of the spec's validation plan
+# ---------------------------------------------------------------------------
+
+# rake(epsilon=1e-12) then postStratify, svymean(~api00)
+R_STACKED_SE = 23.7630841260046
+
+
+def test_taylor_and_replication_both_account_for_the_calibration(design):
+    """The two paths used to answer different questions on a calibrated design.
+
+    Replication has always re-adjusted each replicate; Taylor treated the
+    weights as fixed. Both now respond, and Taylor matches R exactly. The two
+    are only asymptotically equivalent and apiclus1 has 15 PSUs, so they are
+    not expected to coincide -- R shows the same spread, which is what this
+    compares against rather than asserting they agree.
+    """
+    jk = design().weighting.create_jk_wgts()
+    ps = jk.weighting.poststratify(STYPE_POP, cells="stype")
+
+    taylor = _mean_se(ps)
+    replication = ps.estimation.mean("api00", method="replication").to_polars()["se"][0]
+    assert_allclose(taylor, R_PS_CELLS_MEAN_SE, rtol=1e-9)
+
+    # Both moved off their uncalibrated values, which is the whole point.
+    assert taylor != pytest.approx(_mean_se(jk), rel=1e-6)
+    assert replication != pytest.approx(
+        jk.estimation.mean("api00", method="replication").to_polars()["se"][0], rel=1e-6
+    )
+
+    # R: taylor 23.9204864450905, jackknife 26.9345353674275 -> 0.8881.
+    # svy's jackknife differs from R's by a documented convention (df fixed at
+    # n_reps - 1), so the ratio is compared, not the value.
+    assert taylor / replication == pytest.approx(0.8881, rel=0.02)
+
+
+def test_trim_poststratify_cycle_leaves_the_record_exact(design):
+    """The integrated cycle ends on a poststratify step, so the controls hold
+    and the record describes the weights exactly -- which is why this, and not
+    trimming afterwards, is the supported route to calibrated-and-trimmed."""
+    ps = design().weighting.poststratify(
+        STYPE_POP,
+        cells="stype",
+        trimming=TrimConfig(upper=0.995, redistribute=True, min_cell_size=1, max_iter=20),
+    )
+    got = ps.data.group_by("stype").agg(pl.col("ps_wgt").sum()).sort("stype")
+    assert_allclose(got["ps_wgt"].to_numpy(), [4421.0, 755.0, 1018.0], rtol=1e-9)
+    assert ps.design.wgt_adjustment.kind == "poststratification"
+
+    d = ps.data.with_columns(
+        [(pl.col("stype") == lv).cast(pl.Float64).alias(f"is_{lv}") for lv in ("E", "H", "M")]
+    )
+    trimmed = Sample(d, ps.design)
+    for lv in ("E", "H", "M"):
+        assert _total_se(trimmed, f"is_{lv}") == pytest.approx(0.0, abs=1e-9)
+
+
+def test_clone_carries_the_record_and_its_columns(design):
+    """History is descriptive, but the snapshotted columns are load-bearing: a
+    clone keeping the record and losing the columns would warn and fall back."""
+    ps = design().weighting.poststratify(STYPE_POP, cells="stype")
+    cloned = ps.clone()
+    rec = cloned.design.wgt_adjustment
+    assert rec is not None and rec.kind == "poststratification"
+    assert all(c in cloned.data.columns for c in rec.cells)
+    assert_allclose(_mean_se(cloned), _mean_se(ps), rtol=0, atol=0)
+
+
+def test_stacked_calibrations_centre_for_the_last_only(design):
+    """A DOCUMENTED divergence from R, measured rather than asserted away.
+
+    R replays every postStrata record in turn; svy keeps one record and
+    centres for the last calibration, the conditional linearization that
+    treats earlier-adjusted weights as base weights. On apiclus1 that is
+    23.8646 against R's 23.7631 -- 0.43% -- with point estimates identical.
+    """
+    st = (
+        design()
+        .weighting.rake(
+            controls={"stype": STYPE_POP, "sch.wide": SCHWIDE_POP}, tol=1e-12, max_iter=200
+        )
+        .weighting.poststratify(STYPE_POP, cells="stype")
+    )
+    assert st.design.wgt_adjustment.kind == "poststratification"
+    got = st.estimation.mean("api00").to_polars()
+    assert_allclose(got["est"][0], 641.594288477427, rtol=1e-9)
+    assert_allclose(got["se"][0], 23.864643020701, rtol=1e-9)
+    assert abs(got["se"][0] / R_STACKED_SE - 1.0) < 0.01
