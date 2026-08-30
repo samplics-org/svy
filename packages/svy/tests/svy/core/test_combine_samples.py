@@ -565,3 +565,35 @@ def test_nchs_multispan_recipe(two_cycles):
     c = svy.combine_samples([a, b], adjust="none")
     want = s1.data["w"].sum() * 4 / 6 + s2.data["w"].sum() * 2 / 6
     assert c.data["norm_wgt"].sum() == pytest.approx(want)
+
+
+# ── R parity ────────────────────────────────────────────────────────────────
+
+
+def test_nhanes_two_cycle_stack_matches_r_svydesign():
+    """nhanes.csv split into two cycle-distinct pseudo-cycles (lower/upper
+    strata halves), combined with the default WTMEC2YR/2. Reference from
+    R survey 4.5 on the manually stacked frame:
+
+        stacked$wtc <- stacked$WTMEC2YR / 2
+        d <- svydesign(ids=~SDMVPSU, strata=~interaction(cycle, SDMVSTRA),
+                       weights=~wtc, data=stacked, nest=TRUE)
+        svymean(~HI_CHOL, d, na.rm=TRUE); svytotal(~HI_CHOL, d, na.rm=TRUE)
+    """
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "test_data" / "nhanes.csv"
+    df = pl.read_csv(path, null_values=["NA"])
+    strata = sorted(df["SDMVSTRA"].unique().to_list())
+    half = strata[: len(strata) // 2]
+    design = svy.Design(stratum="SDMVSTRA", psu="SDMVPSU", wgt="WTMEC2YR")
+    s1 = svy.Sample(df.filter(pl.col("SDMVSTRA").is_in(half)), design)
+    s2 = svy.Sample(df.filter(~pl.col("SDMVSTRA").is_in(half)), design)
+    c = svy.combine_samples([s1, s2])
+
+    m = c.estimation.mean("HI_CHOL", drop_nulls=True).to_polars()
+    assert m["est"][0] == pytest.approx(0.112142956350, abs=1e-9)
+    assert m["se"][0] == pytest.approx(0.005445839699, abs=1e-9)
+    t = c.estimation.total("HI_CHOL", drop_nulls=True).to_polars()
+    assert t["est"][0] == pytest.approx(14317622.627336, abs=1e-3)
+    assert t["se"][0] == pytest.approx(1010355.371850, abs=1e-3)
