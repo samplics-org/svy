@@ -333,20 +333,136 @@ def test_poststratified_median_se_matches_r(design):
     assert_allclose(got, R_PS_MEDIAN_SE, rtol=1e-9)
 
 
-def test_regression_paths_are_not_yet_calibration_aware(design):
-    """Explicitly pins what is NOT done, so it cannot be mistaken for done.
+# ---------------------------------------------------------------------------
+# Regression paths
+#
+# glm and the two-sample t-test build variance from influence functions that
+# already carry the bread matrix, and an earlier reading of R took that to mean
+# the sweep could not be applied there. It can. `svy.varcoef` calls
+# `svyrecvar(estfun %*% Ainv, ..., postStrata=)` -- R centres AFTER the bread --
+# and every sweep branch is a left multiplication by an operator fixed by the
+# weights, cells and aux alone, applied identically to each column. It therefore
+# commutes with any right multiplication: S(E A) = (S E) A. glm centres its
+# estimating functions and sandwiches after; wols centres `influence * w`, which
+# IS R's matrix. Both routes were checked against survey 4.5 and agree to 1.6e-14.
+# ---------------------------------------------------------------------------
 
-    `glm` and the two-sample t-test build variance from influence functions
-    that already carry the bread matrix. R sweeps the estimating functions
-    before the bread; since the sweep is per-column and the bread mixes
-    columns, sweeping afterwards is not equivalent. Their SEs therefore still
-    treat the weights as fixed -- use method="replication", which is correct
-    for every adjustment today.
+# svyglm(api00 ~ ell + meals, design=<adjusted>) on apiclus1
+R_GLM_PS_COEF = [808.90531325861, -0.423451436759323, -3.13332460445148]
+R_GLM_PS_SE = [19.638215620182, 0.301676353781227, 0.332436938999844]
+R_GLM_RAKE_COEF = [808.229191981178, -0.397809108649268, -3.14123469449935]
+R_GLM_RAKE_SE = [19.136719810137, 0.296963780915734, 0.330481840079923]
+R_GLM_GREG_COEF = [825.071694299282, -0.527397095251339, -3.1925326169424]
+R_GLM_GREG_SE = [13.8069914557681, 0.345353806000647, 0.308690697513365]
+
+X_COLS = ["ell", "meals"]
+
+
+def _glm(sample):
+    t = sample.glm.fit(y="api00", x=X_COLS).to_polars()
+    return t["estimate"].to_numpy(), t["std_err"].to_numpy()
+
+
+def test_glm_poststratified_matches_r(design):
+    """The cells sweep, reaching variance through glm's sandwich meat."""
+    ps = design().weighting.poststratify(STYPE_POP, cells="stype")
+    coef, se = _glm(ps)
+    assert_allclose(coef, R_GLM_PS_COEF, rtol=1e-10)
+    assert_allclose(se, R_GLM_PS_SE, rtol=1e-9)
+
+
+def test_glm_raked_matches_r(design):
+    """Per-margin sweep, alternated ten times, under the bread."""
+    rk = design().weighting.rake(
+        controls={"stype": STYPE_POP, "sch.wide": SCHWIDE_POP}, tol=1e-12, max_iter=200
+    )
+    coef, se = _glm(rk)
+    assert_allclose(coef, R_GLM_RAKE_COEF, rtol=1e-10)
+    assert_allclose(se, R_GLM_RAKE_SE, rtol=1e-9)
+
+
+def test_glm_calibrated_matches_r(design):
+    """GREG: the WLS residual sweep, fitted with the PREVIOUS weights."""
+    cal = design().weighting.calibrate(controls=GREG_CONTROLS)
+    coef, se = _glm(cal)
+    assert_allclose(coef, R_GLM_GREG_COEF, rtol=1e-10)
+    assert_allclose(se, R_GLM_GREG_SE, rtol=1e-9)
+
+
+def test_glm_calibration_does_not_move_the_coefficients(design):
+    """Centring is a variance operation. It must not touch a point estimate."""
+    ps = design().weighting.poststratify(STYPE_POP, cells="stype")
+    swept, _ = _glm(ps)
+    unswept, _ = _glm(_refit(ps))
+    assert_allclose(swept, unswept, rtol=1e-12)
+
+
+def test_glm_sweep_tightens_the_se(design):
+    """Pinning cells in the population removes variability the uncentred
+    estimator still charges for, so the swept SE must be the smaller one."""
+    ps = design().weighting.poststratify(STYPE_POP, cells="stype")
+    _, swept = _glm(ps)
+    _, unswept = _glm(_refit(ps))
+    assert (swept < unswept).all()
+
+
+# --- t-tests -----------------------------------------------------------------
+#
+# On designs with NO population size, where svy and R agree exactly. svy's
+# t-test facade does not yet hand Rust an FPC column, so a `pop_size` design
+# still answers the fpc-free question; that gap is independent of calibration
+# and is pinned by `test_ttest_still_ignores_the_fpc` below.
+
+R_TT2_PS_NOFPC_T = 1.74431180795363
+R_TT2_PS_NOFPC_DIFF = 35.0985134660009
+R_TT1_PS_NOFPC_T = 1.7511974720176
+R_TT2_RAKE_NOFPC_T = 1.74923396543338
+
+
+@pytest.fixture
+def design_nofpc(apiclus1):
+    def build():
+        return Sample(apiclus1, Design(wgt="pw", psu="dnum"))
+
+    return build
+
+
+def test_two_sample_ttest_poststratified_matches_r(design_nofpc):
+    ps = design_nofpc().weighting.poststratify(STYPE_POP, cells="stype")
+    tt = ps.categorical.ttest("api00", group="sch.wide").to_polars()
+    assert_allclose(tt["diff"][0], R_TT2_PS_NOFPC_DIFF, rtol=1e-12)
+    assert_allclose(tt["t"][0], R_TT2_PS_NOFPC_T, rtol=1e-10)
+
+
+def test_two_sample_ttest_raked_matches_r(design_nofpc):
+    rk = design_nofpc().weighting.rake(
+        controls={"stype": STYPE_POP, "sch.wide": SCHWIDE_POP}, tol=1e-12, max_iter=200
+    )
+    tt = rk.categorical.ttest("api00", group="sch.wide").to_polars()
+    assert_allclose(tt["t"][0], R_TT2_RAKE_NOFPC_T, rtol=1e-10)
+
+
+def test_one_sample_ttest_poststratified_matches_r(design_nofpc):
+    ps = design_nofpc().weighting.poststratify(STYPE_POP, cells="stype")
+    tt = ps.categorical.ttest("api00", mean_h0=600).to_polars()
+    assert_allclose(tt["t"][0], R_TT1_PS_NOFPC_T, rtol=1e-10)
+
+
+def test_ttest_still_ignores_the_fpc(design, design_nofpc):
+    """Pins a gap that is NOT calibration's: the t-test facade passes Rust no
+    FPC column, so a design with `pop_size` answers the fpc-free question.
+
+    R's svyttest on the poststratified design with fpc gives 1.76185477505784;
+    without it, 1.74431180795363. svy returns the latter either way. Reading
+    that difference as a failure of the calibration sweep is what stalled this
+    work once already -- the ratio is exactly 1/sqrt(1 - 15/757), with or
+    without an adjustment.
     """
     ps = design().weighting.poststratify(STYPE_POP, cells="stype")
-    tt = ps.categorical.ttest("api00", group="sch.wide").to_polars()
-    # R's svyttest on the poststratified design gives t = 1.76185477505784.
-    assert tt["t"][0] != pytest.approx(1.76185477505784, rel=1e-6)
+    ps0 = design_nofpc().weighting.poststratify(STYPE_POP, cells="stype")
+    with_pop = ps.categorical.ttest("api00", group="sch.wide").to_polars()["t"][0]
+    without = ps0.categorical.ttest("api00", group="sch.wide").to_polars()["t"][0]
+    assert with_pop == pytest.approx(without, rel=1e-12)
 
 
 # ---------------------------------------------------------------------------
