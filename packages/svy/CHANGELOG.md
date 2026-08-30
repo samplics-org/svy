@@ -27,6 +27,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
   **Standardized weights are analysis-specific.** `where` bakes one variable's missingness into the weights and `by` bakes in the domain structure, so estimating a different variable or a different breakdown on the same standardized sample is silently wrong.
 
+- **Calibration-aware Taylor variance.** A weighting method that pins population quantities now records what it pinned, and the Taylor path centres the linearized scores against that structure — R `survey`'s `svyrecvar` `postStrata` loop. Covers `mean`, `total`, `ratio`, proportions, quantiles, tabulation, `glm`, and one- and two-sample t-tests, grouped and ungrouped, under poststratification, raking, GREG calibration and standardization.
+
+  Verified against survey 4.5 on apiclus1 to twelve significant figures or better, including the cases where the two implementations are easy to get subtly wrong: raking centres on the *unweighted* margin mean, GREG fits its residual with the *previous* weights, and cell means are always whole-sample — a subpopulation filter does not restrict them, because the adjustment was not performed inside the subpopulation.
+
 - **`where=` on all seven weighting methods.** Scope, not domain: matching rows receive the adjustment, and the rest keep their previous weight, so the new column is complete and `design.wgt` can repoint to it. This is the same keyword and the same reading as estimation's `where=`, with a different consequence — estimation zero-weights for subpopulation variance.
 
 ### Changed
@@ -45,10 +49,14 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **`categorical.ttest` ignored the finite population correction.** The t-test built its variance without ever asking for an FPC column, so on a design with `pop_size` it returned the answer for sampling with replacement — standard errors too wide, `t` too small. One- and two-sample tests were both affected; on apiclus1 the statistic was off by a factor of `1/sqrt(1 − 15/757)`. It now matches R `svyttest` to fourteen significant figures.
+
 - **One target-resolution path.** `normalize` and `poststratify` derived their control arrays independently, with two different label-to-code conventions. Both now resolve every argument form to absolute per-cell targets in one place, which is also the single form crossing into Rust.
 
 
-> **Note on variance after a calibrating adjustment.** `poststratify`, `rake`, `calibrate` and `standardize` pin quantities in the population, which removes sampling variability. svy's *replication* path accounts for this today — each replicate column is independently re-adjusted — so `method="replication"` gives correct standard errors on a calibrated design. The *Taylor* path does not yet: it treats the adjusted weights as fixed, so its standard errors answer a slightly different question. Point estimates are unaffected. On the NHANES standardization example the Taylor SEs differ from R by roughly −11% to +14%; the replication SEs do not.
+> **Note on variance after a calibrating adjustment.** `poststratify`, `rake`, `calibrate` and `standardize` pin quantities in the population, which removes sampling variability. Both variance paths now account for this: replication re-adjusts each replicate column, and Taylor centres the linearized scores within the pinned cells. Previously only replication did, so Taylor standard errors on a calibrated design answered a slightly different question — on the NHANES standardization example they differed from R by roughly −11% to +14%. Point estimates were never affected.
+>
+> The record is honoured only while it still describes the data. Estimating on a different weight, or dropping a column the adjustment referenced, falls back to treating weights as fixed — and says so, once per data/design rebind.
 
 
 ## [0.26.0] — 2026-08-28

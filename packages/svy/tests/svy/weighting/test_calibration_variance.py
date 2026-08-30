@@ -408,10 +408,8 @@ def test_glm_sweep_tightens_the_se(design):
 
 # --- t-tests -----------------------------------------------------------------
 #
-# On designs with NO population size, where svy and R agree exactly. svy's
-# t-test facade does not yet hand Rust an FPC column, so a `pop_size` design
-# still answers the fpc-free question; that gap is independent of calibration
-# and is pinned by `test_ttest_still_ignores_the_fpc` below.
+# First on designs with NO population size, isolating the sweep from the FPC;
+# the `pop_size` cases follow below.
 
 R_TT2_PS_NOFPC_T = 1.74431180795363
 R_TT2_PS_NOFPC_DIFF = 35.0985134660009
@@ -448,21 +446,44 @@ def test_one_sample_ttest_poststratified_matches_r(design_nofpc):
     assert_allclose(tt["t"][0], R_TT1_PS_NOFPC_T, rtol=1e-10)
 
 
-def test_ttest_still_ignores_the_fpc(design, design_nofpc):
-    """Pins a gap that is NOT calibration's: the t-test facade passes Rust no
-    FPC column, so a design with `pop_size` answers the fpc-free question.
+# On designs WITH a population size. The t-test facade builds the FPC column
+# itself, as the estimation and regression facades do; before it did, every
+# t-test on a `pop_size` design answered the fpc-free question, and the ratio
+# -- exactly 1/sqrt(1 - 15/757), present with or without an adjustment -- was
+# once misread as a failure of the calibration sweep.
 
-    R's svyttest on the poststratified design with fpc gives 1.76185477505784;
-    without it, 1.74431180795363. svy returns the latter either way. Reading
-    that difference as a failure of the calibration sweep is what stalled this
-    work once already -- the ratio is exactly 1/sqrt(1 - 15/757), with or
-    without an adjustment.
-    """
+R_TT2_BASE_T = 2.10898984779292
+R_TT1_BASE_T = 1.87617650680004
+R_TT2_PS_T = 1.76185477505784
+R_TT1_PS_T = 1.76880968991608
+
+
+def test_ttest_applies_the_fpc(design):
+    """No adjustment: the FPC alone, against R."""
+    d = design()
+    two = d.categorical.ttest("api00", group="sch.wide").to_polars()["t"][0]
+    one = d.categorical.ttest("api00", mean_h0=600).to_polars()["t"][0]
+    assert_allclose(two, R_TT2_BASE_T, rtol=1e-10)
+    assert_allclose(one, R_TT1_BASE_T, rtol=1e-10)
+
+
+def test_ttest_poststratified_with_fpc_matches_r(design):
+    """Both corrections at once -- the sweep and the FPC."""
+    ps = design().weighting.poststratify(STYPE_POP, cells="stype")
+    two = ps.categorical.ttest("api00", group="sch.wide").to_polars()["t"][0]
+    one = ps.categorical.ttest("api00", mean_h0=600).to_polars()["t"][0]
+    assert_allclose(two, R_TT2_PS_T, rtol=1e-10)
+    assert_allclose(one, R_TT1_PS_T, rtol=1e-10)
+
+
+def test_ttest_fpc_tightens_the_se(design, design_nofpc):
+    """Sampling a known share of a finite population removes variability, so
+    the corrected t must be the larger one."""
     ps = design().weighting.poststratify(STYPE_POP, cells="stype")
     ps0 = design_nofpc().weighting.poststratify(STYPE_POP, cells="stype")
     with_pop = ps.categorical.ttest("api00", group="sch.wide").to_polars()["t"][0]
     without = ps0.categorical.ttest("api00", group="sch.wide").to_polars()["t"][0]
-    assert with_pop == pytest.approx(without, rel=1e-12)
+    assert with_pop > without
 
 
 # ---------------------------------------------------------------------------

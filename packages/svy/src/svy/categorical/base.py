@@ -457,6 +457,18 @@ class Categorical:
             TTestOneGroup for one-sample tests, TTestTwoGroups for two-sample tests.
             When `by` is specified, returns a list of test results.
         """
+        # The population-size column has to survive prepare_data's projection
+        # for the FPC to be computable below.
+        pop_size = self._sample._design.pop_size
+        pop_cols: list[str] = []
+        if pop_size is not None:
+            _pop = pop_size if isinstance(pop_size, str) else pop_size.psu
+            if isinstance(_pop, str):
+                pop_cols.append(_pop)
+            _ssu = None if isinstance(pop_size, str) else pop_size.ssu
+            if isinstance(_ssu, str):
+                pop_cols.append(_ssu)
+
         prep = prepare_data(
             self._sample,
             y=y,
@@ -464,6 +476,7 @@ class Categorical:
             y_pair=y_pair,
             by=by,
             where=where,
+            extra_cols=pop_cols,
             drop_nulls=drop_nulls,
             cast_y_float=True,
             select_columns=True,
@@ -471,18 +484,33 @@ class Categorical:
         )
         y_name = f"svy_{y}_minus_{y_pair}" if y_pair else y
 
+        # FPC. prepare_data leaves this to each facade, and this one used to
+        # skip it, so every t-test on a design with pop_size silently answered
+        # the fpc-free question -- R's svyttest, which routes through svyglm on
+        # the full design, applies it.
+        ttest_df = prep.df
+        fpc_col = fpc_ssu_col = None
+        if pop_size is not None:
+            from svy.estimation._fpc import compute_fpc_columns
+
+            ttest_df, fpc_col, fpc_ssu_col = compute_fpc_columns(
+                ttest_df, pop_size, prep.strata_col, prep.psu_col, prep.ssu_col
+            )
+
         # Single Rust call — handles by-levels internally
         result_df: pl.DataFrame = rs.ttest_rs(
-            prep.df,
+            ttest_df,
             y_col=prep.y_col,
             weight_col=prep.weight_col,
             group_col=group,
             strata_col=prep.strata_col,
             psu_col=prep.psu_col,
             ssu_col=prep.ssu_col,
+            fpc_col=fpc_col,
+            fpc_ssu_col=fpc_ssu_col,
             singleton_method=prep.singleton_method,
             null_value=float(mean_h0),
-            **calib_kwargs(self._sample, prep.df),
+            **calib_kwargs(self._sample, ttest_df),
             domain_col=prep.domain_col,
             domain_val=prep.domain_val,
             by_col=prep.by_col,
