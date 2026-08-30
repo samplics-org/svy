@@ -303,10 +303,17 @@ pub struct CalibSpec {
 }
 
 fn codes_from(df: &DataFrame, name: &str) -> PolarsResult<(Vec<u32>, usize)> {
-    let s = df.column(name)?.cast(&DataType::Int64)?;
-    let ca = s.i64()?;
+    let col = df.column(name)?;
+    // Cells are written as Int32; casting to Int64 first would allocate a
+    // second full-length array before the collect below.
+    let s = if matches!(col.dtype(), DataType::Int32) {
+        col.clone()
+    } else {
+        col.cast(&DataType::Int32)?
+    };
+    let ca = s.i32()?;
     let mut out = Vec::with_capacity(ca.len());
-    let mut max = 0i64;
+    let mut max = 0i32;
     for v in ca.iter() {
         match v {
             // Null marks a row the adjustment never touched.
@@ -324,7 +331,19 @@ fn codes_from(df: &DataFrame, name: &str) -> PolarsResult<(Vec<u32>, usize)> {
 }
 
 fn floats_from(df: &DataFrame, name: &str) -> PolarsResult<Vec<f64>> {
-    let s = df.column(name)?.cast(&DataType::Float64)?;
+    let col = df.column(name)?;
+    // Weight columns are Float64 and complete in every path that reaches here,
+    // so take the memcpy rather than an option-yielding iterator collect: this
+    // runs over the full frame once per estimation call, per column.
+    if matches!(col.dtype(), DataType::Float64) {
+        let ca = col.f64()?;
+        if ca.null_count() == 0 {
+            if let Ok(sl) = ca.cont_slice() {
+                return Ok(sl.to_vec());
+            }
+        }
+    }
+    let s = col.cast(&DataType::Float64)?;
     Ok(s.f64()?.iter().map(|v| v.unwrap_or(f64::NAN)).collect())
 }
 
