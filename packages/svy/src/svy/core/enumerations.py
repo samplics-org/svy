@@ -237,7 +237,7 @@ class SingletonHandling(Enum):
     COLLAPSE = "collapse"  # Merge into existing strata
     POOL = "pool"  # Combine singletons into pseudo-stratum
     SCALE = "scale"  # Post-hoc variance inflation (R's "average")
-    CENTER = "center"  # Grand-mean centering (R's "adjust") - NotImplemented
+    CENTER = "center"  # Grand-mean centering (R's "adjust", Stata's singleunit(centered))
 
 
 # @unique
