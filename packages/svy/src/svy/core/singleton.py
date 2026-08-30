@@ -774,17 +774,13 @@ class Singleton:
         if not stratum_col:
             return self._sample
 
-        # Check if already applied (optimization)
-        singleton_keys = [s.stratum_key for s in singles]
-
-        counts = (
-            self._narrow_data()
-            .filter(pl.col(stratum_col).is_in(singleton_keys))
-            .select(pl.col(psu_col).n_unique().alias("n_psu"), pl.len().alias("n_rows"))
-            .row(0)
-        )
-
-        if counts[0] == counts[1]:
+        # Already handled: estimation gates on the recorded decision, not the
+        # data, so only an existing certainty result short-circuits. (A former
+        # ids-already-conform check was trivially true for no-PSU designs —
+        # each row is its own PSU — and returned the sample with no config,
+        # so the assertion was never recorded and estimation still failed.)
+        existing = getattr(self._sample, "_singleton_result", None)
+        if existing is not None and existing.method == _SingletonHandling.CERTAINTY:
             return self._sample
 
         data, design, result = self._apply_certainty(singles)

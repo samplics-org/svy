@@ -594,6 +594,27 @@ class TestCertainty:
         assert result.singleton.last_result is not None
         assert result.singleton.last_result.method == SingletonHandling.CERTAINTY
 
+    def test_certainty_records_handling_on_no_psu_design(self):
+        # Regression: with no PSU declared each row is its own PSU, which made
+        # a former ids-already-conform shortcut return the sample with NO
+        # config — estimation then failed exactly as if nothing was handled.
+        from svy.core import Design, Sample
+
+        df = pl.DataFrame(
+            {
+                "strat": [3, 3, 3, 4, 4, 4, 3, 4],
+                "region": [1, 1, 1, 1, 2, 2, 2, 2],
+                "wgt": [125.0, 108.0, 98.0, 140.0, 112.0, 88.0, 118.0, 102.0],
+                "y": [25.0, 28.1, 23.5, 31.0, 27.2, 24.4, 29.5, 26.1],
+            }
+        )
+        s = Sample(df, Design(stratum=("strat", "region"), wgt="wgt"))
+        fixed = s.singleton.certainty()
+        assert fixed.singleton.last_result is not None
+        est = fixed.estimation.mean("y").to_polars()
+        assert est["se"][0] > 0
+        assert fixed.singleton.certainty() is fixed  # second call short-circuits
+
     def test_certainty_config_has_variance_columns(self, sample):
         """The result config should specify the variance column names."""
         result = sample.singleton.certainty()

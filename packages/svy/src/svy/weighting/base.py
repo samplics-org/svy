@@ -284,6 +284,7 @@ class Weighting:
         self,
         controls: DomainScalarMap | Number | None = None,
         *,
+        factor: Number | None = None,
         shares: DomainScalarMap | None = None,
         cells: str | Sequence[str] | None = None,
         where: WhereArg = None,
@@ -305,6 +306,11 @@ class Weighting:
         controls : number | dict | None
             A number is the grand total and requires ``cells=None``; a dict is
             one target per cell. None normalizes to n, or to per-cell counts.
+        factor : number | None
+            Multiply every weight by this instead of hitting a target -- e.g.
+            ``factor=4/6`` for the NCHS multi-span combined-weight recipe
+            before ``combine_samples(..., adjust="none")``. Cannot be combined
+            with controls, shares, cells or where.
         shares : dict | None
             Composition per cell; the weight total carries through unchanged.
         cells : str | Sequence[str] | None
@@ -318,6 +324,7 @@ class Weighting:
         return _normalize(
             self._target(inplace),
             controls,
+            factor=factor,
             shares=shares,
             cells=cells,
             where=where,
