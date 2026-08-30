@@ -99,7 +99,7 @@ pub fn ttest_one_sample(
 
     // Estimate mean using existing infrastructure
     let estimate = point_estimate_mean(y, weights)?;
-    let scores = sweep_scores(&scores_mean(y, weights)?, calib, None);
+    let scores = sweep_scores(&scores_mean(y, weights)?, calib);
     let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let se = variance.max(0.0).sqrt();
 
@@ -140,12 +140,7 @@ pub fn ttest_one_sample_domain(
 ) -> PolarsResult<TTestOneResult> {
     // Domain-aware mean estimation
     let estimate = point_estimate_mean_domain(y, weights, domain_mask)?;
-    let domain: Vec<bool> = domain_mask.iter().map(|v| v.unwrap_or(false)).collect();
-    let scores = sweep_scores(
-        &scores_mean_domain(y, weights, domain_mask)?,
-        calib,
-        Some(&domain),
-    );
+    let scores = sweep_scores(&scores_mean_domain(y, weights, domain_mask)?, calib);
     let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let se = variance.max(0.0).sqrt();
 
@@ -294,12 +289,7 @@ fn compute_per_group_ses(
         let mask_vec: Vec<bool> = g.iter().map(|&gi| gi == group_val).collect();
         let mask = BooleanChunked::from_slice("mask".into(), &mask_vec);
 
-        let domain: Vec<bool> = mask.iter().map(|v| v.unwrap_or(false)).collect();
-        let scores = sweep_scores(
-            &scores_mean_domain(y_chunked, w_chunked, &mask)?,
-            calib,
-            Some(&domain),
-        );
+        let scores = sweep_scores(&scores_mean_domain(y_chunked, w_chunked, &mask)?, calib);
         let var = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
         ses.push(var.max(0.0).sqrt());
     }

@@ -68,17 +68,11 @@ impl CalibSweep {
         mut new_w: Vec<f64>,
         pins_total: bool,
     ) -> Self {
-        // Estimation-time `where=` zeroes the ACTIVE weight but leaves the
-        // record's previous-weight column alone. Left as is, an excluded row
-        // would add nothing to a cell's numerator (its score is zero) but its
-        // full previous weight to the denominator, shrinking every cell mean.
-        // R never sees this because `subset()` zeroes both vectors; zeroing
-        // prev_w alongside new_w reproduces that, and then the 0/0 guard drops
-        // the row from the sweep entirely.
-        let mut prev_w = prev_w;
+        // R's guard, and only R's guard: a row with no weight either side
+        // cannot divide. Rows excluded by a subpopulation filter are NOT
+        // dropped here -- see `apply`.
         for i in 0..new_w.len() {
-            if new_w[i] == 0.0 {
-                prev_w[i] = 0.0;
+            if new_w[i] == 0.0 && prev_w[i] == 0.0 {
                 new_w[i] = 1.0;
             }
         }
@@ -94,27 +88,21 @@ impl CalibSweep {
     }
 
     /// Centre `x` in place.
-    pub fn apply(&self, x: &mut [f64]) {
-        self.apply_in_domain(x, None)
-    }
-
-    /// Centre `x` in place, restricted to a domain.
     ///
-    /// Grouped estimation domain-masks the scores rather than subsetting the
-    /// frame, so out-of-group rows arrive with score 0 but a live weight. Left
-    /// in, they would contribute nothing to each cell's numerator and their
-    /// full weight to its denominator, pulling every cell mean toward zero.
-    /// R sidesteps this because `subset()` zeroes both weight vectors; here the
-    /// domain is passed in and those rows are skipped outright, which is the
-    /// same thing.
-    pub fn apply_in_domain(&self, x: &mut [f64], domain: Option<&[bool]>) {
+    /// Cell means are always taken over the FULL sample, never restricted to a
+    /// subpopulation or by-group. The adjustment was performed on the whole
+    /// sample, so the constraint being removed is a whole-sample constraint;
+    /// restricting the means would treat the calibration as though it had been
+    /// carried out inside the subpopulation, which it was not.
+    ///
+    /// Out-of-domain rows need no special handling: their scores arrive as
+    /// zero, so they add nothing to a cell's numerator while still carrying
+    /// their weight in its denominator -- which is exactly what R does, since
+    /// `subset()` zeroes the design weights and leaves `postStrata` alone.
+    /// Restricting instead was measured at 9% off R on apiclus1.
+    pub fn apply(&self, x: &mut [f64]) {
         if x.len() != self.new_w.len() {
             return;
-        }
-        if let Some(d) = domain {
-            if d.len() != x.len() {
-                return;
-            }
         }
         match self.kind {
             SweepKind::Cells => {
@@ -122,30 +110,30 @@ impl CalibSweep {
                     return;
                 }
                 if self.pins_total {
-                    self.sweep_cells(x, 0, domain);
+                    self.sweep_cells(x, 0);
                 } else {
-                    self.sweep_shares(x, domain);
+                    self.sweep_shares(x);
                 }
             }
             SweepKind::Raking => {
                 for _ in 0..RAKE_ITERATIONS {
                     for m in 0..self.cells.len() {
-                        self.sweep_raking(x, m, domain);
+                        self.sweep_raking(x, m);
                     }
                 }
             }
-            SweepKind::Greg => self.sweep_greg(x, domain),
+            SweepKind::Greg => self.sweep_greg(x),
         }
     }
 
     /// Ordinary poststratification: subtract the previous-weight cell mean.
-    fn sweep_cells(&self, x: &mut [f64], margin: usize, domain: Option<&[bool]>) {
+    fn sweep_cells(&self, x: &mut [f64], margin: usize) {
         let codes = &self.cells[margin];
         let k = self.n_cells[margin];
         let (mut num, mut den) = (vec![0.0; k], vec![0.0; k]);
         for i in 0..x.len() {
             let c = codes[i];
-            if c == OUT_OF_SCOPE || domain.is_some_and(|d| !d[i]) {
+            if c == OUT_OF_SCOPE {
                 continue;
             }
             let c = c as usize;
@@ -154,7 +142,7 @@ impl CalibSweep {
         }
         for i in 0..x.len() {
             let c = codes[i];
-            if c == OUT_OF_SCOPE || domain.is_some_and(|d| !d[i]) {
+            if c == OUT_OF_SCOPE {
                 continue;
             }
             let c = c as usize;
@@ -174,7 +162,7 @@ impl CalibSweep {
     ///
     /// `s_c` is not carried on the record because it does not need to be: the
     /// achieved composition IS the shares, by construction.
-    fn sweep_shares(&self, x: &mut [f64], domain: Option<&[bool]>) {
+    fn sweep_shares(&self, x: &mut [f64]) {
         let codes = &self.cells[0];
         let k = self.n_cells[0];
         if k < 2 {
@@ -184,7 +172,7 @@ impl CalibSweep {
         let mut total = 0.0;
         for i in 0..x.len() {
             let c = codes[i];
-            if c == OUT_OF_SCOPE || domain.is_some_and(|d| !d[i]) {
+            if c == OUT_OF_SCOPE {
                 continue;
             }
             cell_w[c as usize] += self.new_w[i];
@@ -206,18 +194,18 @@ impl CalibSweep {
                 col[i] = f64::from(c as usize == j) - shares[j];
             }
         }
-        self.wls_residual(x, &aux, domain);
+        self.wls_residual(x, &aux);
     }
 
     /// R rakes with the UNWEIGHTED group mean of `x / w`, unlike the
     /// poststratification branch. Matched deliberately.
-    fn sweep_raking(&self, x: &mut [f64], margin: usize, domain: Option<&[bool]>) {
+    fn sweep_raking(&self, x: &mut [f64], margin: usize) {
         let codes = &self.cells[margin];
         let k = self.n_cells[margin];
         let (mut sum, mut cnt) = (vec![0.0; k], vec![0.0f64; k]);
         for i in 0..x.len() {
             let c = codes[i];
-            if c == OUT_OF_SCOPE || domain.is_some_and(|d| !d[i]) {
+            if c == OUT_OF_SCOPE {
                 continue;
             }
             let c = c as usize;
@@ -226,7 +214,7 @@ impl CalibSweep {
         }
         for i in 0..x.len() {
             let c = codes[i];
-            if c == OUT_OF_SCOPE || domain.is_some_and(|d| !d[i]) {
+            if c == OUT_OF_SCOPE {
                 continue;
             }
             let c = c as usize;
@@ -240,12 +228,12 @@ impl CalibSweep {
     /// PREVIOUS weights. R stores `qr(X * sqrt(oldw))` and `w = g * sqrt(oldw)`,
     /// which unwinds to exactly this; using the calibrated weights instead is
     /// close but wrong (3.2631 against 3.2959 on apiclus1).
-    fn sweep_greg(&self, x: &mut [f64], domain: Option<&[bool]>) {
-        self.wls_residual(x, &self.aux, domain)
+    fn sweep_greg(&self, x: &mut [f64]) {
+        self.wls_residual(x, &self.aux)
     }
 
     /// `w*(z - X b)` with `b` the WLS fit of `z` on `X` weighted by prev_w.
-    fn wls_residual(&self, x: &mut [f64], aux: &[Vec<f64>], domain: Option<&[bool]>) {
+    fn wls_residual(&self, x: &mut [f64], aux: &[Vec<f64>]) {
         let k = aux.len();
         if k == 0 {
             return;
@@ -254,10 +242,7 @@ impl CalibSweep {
         let (mut a, mut b) = (vec![0.0; k * k], vec![0.0; k]);
         for i in 0..n {
             let w = self.prev_w[i];
-            if w == 0.0
-                || domain.is_some_and(|d| !d[i])
-                || !aux.iter().all(|col| col[i].is_finite())
-            {
+            if w == 0.0 || !aux.iter().all(|col| col[i].is_finite()) {
                 continue;
             }
             let z = x[i] / self.new_w[i];
@@ -399,16 +384,12 @@ pub fn build_calib_sweep(df: &DataFrame, spec: &CalibSpec) -> Option<CalibSweep>
 ///
 /// Sweeping at the call site means those variance functions stay exactly as
 /// they are: the scores they receive are already centred.
-pub fn sweep_scores(
-    scores: &Float64Chunked,
-    calib: Option<&CalibSweep>,
-    domain: Option<&[bool]>,
-) -> Float64Chunked {
+pub fn sweep_scores(scores: &Float64Chunked, calib: Option<&CalibSweep>) -> Float64Chunked {
     match calib {
         None => scores.clone(),
         Some(c) => {
             let mut v: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-            c.apply_in_domain(&mut v, domain);
+            c.apply(&mut v);
             Float64Chunked::from_slice(scores.name().clone(), &v)
         }
     }

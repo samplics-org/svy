@@ -22,7 +22,7 @@ use crate::estimation::taylor::{
     scores_mean_arr, scores_mean_domain, scores_ratio, scores_ratio_domain, scores_total,
     scores_total_domain, srs_variance_mean, srs_variance_mean_domain, srs_variance_ratio,
     srs_variance_ratio_domain, srs_variance_total, srs_variance_total_domain,
-    taylor_variance_apply, taylor_variance_apply_in_domain, weighted_quantile,
+    taylor_variance_apply, weighted_quantile,
 };
 
 /// Convert the incoming Python DataFrame and ensure one chunk per column.
@@ -62,7 +62,7 @@ fn parse_srs_ref(deff_ref: Option<&str>, deff_pop_total: Option<f64>) -> PolarsR
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None))]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 pub fn taylor_mean(
     _py: Python,
     data: PyDataFrame,
@@ -82,6 +82,7 @@ pub fn taylor_mean(
     calib_aux: Option<Vec<String>>,
     calib_prev_wgt: Option<String>,
     calib_pins_total: Option<bool>,
+    calib_new_wgt: Option<String>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
     let calib = make_calib(
@@ -92,6 +93,7 @@ pub fn taylor_mean(
         calib_aux,
         calib_prev_wgt,
         calib_pins_total,
+        calib_new_wgt,
     );
     let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
@@ -204,9 +206,11 @@ pub fn taylor_mean_multi(
 
 /// Build a score-centring sweep from the record columns Python passes.
 ///
-/// `new_wgt` is not a parameter: the record is only honoured when its
-/// `new_wgt` is the active weight, which Python validates before calling, so
-/// `weight_col` is that column by construction.
+/// `new_wgt` normally IS `weight_col`, since the record is only honoured when
+/// its new_wgt is the active weight. The exception is a subpopulation filter,
+/// which zeroes the weight column in place: the sweep still needs the
+/// full-sample calibrated weights, so Python snapshots them before zeroing and
+/// names the snapshot here.
 #[allow(clippy::too_many_arguments)]
 fn make_calib(
     df: &DataFrame,
@@ -216,13 +220,14 @@ fn make_calib(
     aux: Option<Vec<String>>,
     prev_wgt: Option<String>,
     pins_total: Option<bool>,
+    new_wgt: Option<String>,
 ) -> Option<CalibSweep> {
     let spec = CalibSpec {
         kind: kind?,
         cells_cols: cells.unwrap_or_default(),
         aux_cols: aux.unwrap_or_default(),
         prev_wgt_col: prev_wgt?,
-        new_wgt_col: weight_col.to_string(),
+        new_wgt_col: new_wgt.unwrap_or_else(|| weight_col.to_string()),
         pins_total: pins_total.unwrap_or(true),
     };
     build_calib_sweep(df, &spec)
@@ -450,8 +455,7 @@ fn compute_mean_grouped(
             let estimate = point_estimate_mean_domain(y, weights, &domain_mask)?;
             let scores = scores_mean_domain(y, weights, &domain_mask)?;
             let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-            let domain: Vec<bool> = domain_mask.iter().map(|v| v.unwrap_or(false)).collect();
-            let variance = taylor_variance_apply_in_domain(&scores_arr, &design, Some(&domain));
+            let variance = taylor_variance_apply(&scores_arr, &design);
             let se = variance.max(0.0).sqrt();
             let srs_var = srs_variance_mean_domain(y, weights, &domain_mask, srs)?;
             let deff = if srs_var > 0.0 {
@@ -488,7 +492,7 @@ fn compute_mean_grouped(
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None))]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 pub fn taylor_total(
     _py: Python,
     data: PyDataFrame,
@@ -508,6 +512,7 @@ pub fn taylor_total(
     calib_aux: Option<Vec<String>>,
     calib_prev_wgt: Option<String>,
     calib_pins_total: Option<bool>,
+    calib_new_wgt: Option<String>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
     let calib = make_calib(
@@ -518,6 +523,7 @@ pub fn taylor_total(
         calib_aux,
         calib_prev_wgt,
         calib_pins_total,
+        calib_new_wgt,
     );
     let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
@@ -776,8 +782,7 @@ fn compute_total_grouped(
             let estimate = point_estimate_total_domain(y, weights, &domain_mask)?;
             let scores = scores_total_domain(y, weights, &domain_mask)?;
             let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-            let domain: Vec<bool> = domain_mask.iter().map(|v| v.unwrap_or(false)).collect();
-            let variance = taylor_variance_apply_in_domain(&scores_arr, &design, Some(&domain));
+            let variance = taylor_variance_apply(&scores_arr, &design);
             let se = variance.max(0.0).sqrt();
             let srs_var = srs_variance_total_domain(y, weights, &domain_mask, srs)?;
             let deff = if srs_var > 0.0 {
@@ -814,7 +819,7 @@ fn compute_total_grouped(
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, numerator_col, denominator_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None))]
+#[pyo3(signature = (data, numerator_col, denominator_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 pub fn taylor_ratio(
     _py: Python,
     data: PyDataFrame,
@@ -835,6 +840,7 @@ pub fn taylor_ratio(
     calib_aux: Option<Vec<String>>,
     calib_prev_wgt: Option<String>,
     calib_pins_total: Option<bool>,
+    calib_new_wgt: Option<String>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
     let calib = make_calib(
@@ -845,6 +851,7 @@ pub fn taylor_ratio(
         calib_aux,
         calib_prev_wgt,
         calib_pins_total,
+        calib_new_wgt,
     );
     let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
@@ -1130,8 +1137,7 @@ fn compute_ratio_grouped(
             let estimate = point_estimate_ratio_domain(y, x, weights, &domain_mask)?;
             let scores = scores_ratio_domain(y, x, weights, &domain_mask)?;
             let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-            let domain: Vec<bool> = domain_mask.iter().map(|v| v.unwrap_or(false)).collect();
-            let variance = taylor_variance_apply_in_domain(&scores_arr, &design, Some(&domain));
+            let variance = taylor_variance_apply(&scores_arr, &design);
             let se = variance.max(0.0).sqrt();
             let srs_var = srs_variance_ratio_domain(y, x, weights, &domain_mask, srs)?;
             let deff = if srs_var > 0.0 {
@@ -1372,7 +1378,7 @@ fn compute_assoc(
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None))]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 pub fn taylor_prop(
     _py: Python,
     data: PyDataFrame,
@@ -1392,6 +1398,7 @@ pub fn taylor_prop(
     calib_aux: Option<Vec<String>>,
     calib_prev_wgt: Option<String>,
     calib_pins_total: Option<bool>,
+    calib_new_wgt: Option<String>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
     let calib = make_calib(
@@ -1402,6 +1409,7 @@ pub fn taylor_prop(
         calib_aux,
         calib_prev_wgt,
         calib_pins_total,
+        calib_new_wgt,
     );
     let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
@@ -1763,8 +1771,7 @@ fn compute_prop_grouped(
                 let estimate = point_estimate_mean_domain(&indicator_ca, weights, &domain_mask)?;
                 let scores = scores_mean_domain(&indicator_ca, weights, &domain_mask)?;
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-                let domain: Vec<bool> = domain_mask.iter().map(|v| v.unwrap_or(false)).collect();
-                let variance = taylor_variance_apply_in_domain(&scores_arr, &design, Some(&domain));
+                let variance = taylor_variance_apply(&scores_arr, &design);
                 let se = variance.max(0.0).sqrt();
                 let srs_var = srs_variance_mean_domain(&indicator_ca, weights, &domain_mask, srs)?;
                 let deff = if srs_var > 0.0 {
@@ -1821,7 +1828,7 @@ fn compute_prop_grouped(
 /// Woodruff quantiles for one variable. One row per probability (and per
 /// domain when `by_col` is set), carrying the probability in a `prob` column.
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, probs, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None))]
+#[pyo3(signature = (data, value_col, weight_col, probs, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn taylor_quantile(
     _py: Python,
@@ -1842,6 +1849,7 @@ pub fn taylor_quantile(
     calib_aux: Option<Vec<String>>,
     calib_prev_wgt: Option<String>,
     calib_pins_total: Option<bool>,
+    calib_new_wgt: Option<String>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
     let calib = make_calib(
@@ -1852,6 +1860,7 @@ pub fn taylor_quantile(
         calib_aux,
         calib_prev_wgt,
         calib_pins_total,
+        calib_new_wgt,
     );
     let q_method = quantile_method
         .as_deref()
@@ -1897,7 +1906,7 @@ pub fn taylor_quantile(
 /// `compute_quantile_multi`). Rows are ordered variable-major, then by
 /// probability, matching the input order of both.
 #[pyfunction]
-#[pyo3(signature = (data, value_cols, weight_col, probs, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None))]
+#[pyo3(signature = (data, value_cols, weight_col, probs, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn taylor_quantile_multi(
     _py: Python,
@@ -1917,6 +1926,7 @@ pub fn taylor_quantile_multi(
     calib_aux: Option<Vec<String>>,
     calib_prev_wgt: Option<String>,
     calib_pins_total: Option<bool>,
+    calib_new_wgt: Option<String>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
     let calib = make_calib(
@@ -1927,6 +1937,7 @@ pub fn taylor_quantile_multi(
         calib_aux,
         calib_prev_wgt,
         calib_pins_total,
+        calib_new_wgt,
     );
     let q_method = quantile_method
         .as_deref()
@@ -1996,7 +2007,7 @@ fn without_prob(mut df: DataFrame) -> PolarsResult<DataFrame> {
 }
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None))]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn taylor_median(
     _py: Python,
@@ -2016,6 +2027,7 @@ pub fn taylor_median(
     calib_aux: Option<Vec<String>>,
     calib_prev_wgt: Option<String>,
     calib_pins_total: Option<bool>,
+    calib_new_wgt: Option<String>,
 ) -> PyResult<PyDataFrame> {
     let out = taylor_quantile(
         _py,
@@ -2036,6 +2048,7 @@ pub fn taylor_median(
         calib_aux,
         calib_prev_wgt,
         calib_pins_total,
+        calib_new_wgt,
     )?;
     let result = without_prob(out.0)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -2045,7 +2058,7 @@ pub fn taylor_median(
 /// Batched ungrouped median over many variables. One row per variable, in
 /// input order.
 #[pyfunction]
-#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None))]
+#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn taylor_median_multi(
     _py: Python,
@@ -2064,6 +2077,7 @@ pub fn taylor_median_multi(
     calib_aux: Option<Vec<String>>,
     calib_prev_wgt: Option<String>,
     calib_pins_total: Option<bool>,
+    calib_new_wgt: Option<String>,
 ) -> PyResult<PyDataFrame> {
     let out = taylor_quantile_multi(
         _py,
@@ -2083,6 +2097,7 @@ pub fn taylor_median_multi(
         calib_aux,
         calib_prev_wgt,
         calib_pins_total,
+        calib_new_wgt,
     )?;
     let result = without_prob(out.0)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;

@@ -229,7 +229,7 @@ where
     fpc_col=None, fpc_ssu_col=None, singleton_method=None,
     null_value=0.0, domain_col=None, domain_val=None, by_col=None,
     calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None,
-    calib_pins_total=None))]
+    calib_pins_total=None, calib_new_wgt=None))]
 pub fn ttest_rs(
     _py: Python,
     data: PyDataFrame,
@@ -251,6 +251,7 @@ pub fn ttest_rs(
     calib_aux: Option<Vec<String>>,
     calib_prev_wgt: Option<String>,
     calib_pins_total: Option<bool>,
+    calib_new_wgt: Option<String>,
 ) -> PyResult<PyDataFrame> {
     let df: DataFrame = data.into();
     let calib = calib_kind.zip(calib_prev_wgt).and_then(|(kind, prev)| {
@@ -261,7 +262,7 @@ pub fn ttest_rs(
                 cells_cols: calib_cells.unwrap_or_default(),
                 aux_cols: calib_aux.unwrap_or_default(),
                 prev_wgt_col: prev,
-                new_wgt_col: weight_col.clone(),
+                new_wgt_col: calib_new_wgt.unwrap_or_else(|| weight_col.clone()),
                 pins_total: calib_pins_total.unwrap_or(true),
             },
         )
@@ -676,7 +677,7 @@ fn compute_svyranktest_single(
     fpc_col=None, fpc_ssu_col=None, singleton_method=None,
     compute_totals=false,
     calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None,
-    calib_pins_total=None,
+    calib_pins_total=None, calib_new_wgt=None,
 ))]
 pub fn tabulate_rs(
     _py: Python,
@@ -696,6 +697,7 @@ pub fn tabulate_rs(
     calib_aux: Option<Vec<String>>,
     calib_prev_wgt: Option<String>,
     calib_pins_total: Option<bool>,
+    calib_new_wgt: Option<String>,
 ) -> PyResult<(PyDataFrame, PyDataFrame)> {
     let df: DataFrame = data.into();
     let calib = calib_kind.zip(calib_prev_wgt).and_then(|(kind, prev)| {
@@ -706,7 +708,7 @@ pub fn tabulate_rs(
                 cells_cols: calib_cells.unwrap_or_default(),
                 aux_cols: calib_aux.unwrap_or_default(),
                 prev_wgt_col: prev,
-                new_wgt_col: weight_col.clone(),
+                new_wgt_col: calib_new_wgt.unwrap_or_else(|| weight_col.clone()),
                 pins_total: calib_pins_total.unwrap_or(true),
             },
         )

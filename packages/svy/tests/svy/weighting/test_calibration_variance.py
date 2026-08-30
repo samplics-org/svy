@@ -32,7 +32,7 @@ import pytest
 
 from numpy.testing import assert_allclose
 
-from svy import Design, Sample
+from svy import Design, Sample, col
 
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
@@ -346,3 +346,86 @@ def test_regression_paths_are_not_yet_calibration_aware(design):
     tt = ps.categorical.ttest("api00", group="sch.wide").to_polars()
     # R's svyttest on the poststratified design gives t = 1.76185477505784.
     assert tt["t"][0] != pytest.approx(1.76185477505784, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Subpopulations and by-groups on a calibrated design
+#
+# svy keeps every row and zeroes the weight outside the domain; R subsets,
+# which zeroes the design weights but leaves `postStrata` at its full-sample
+# values. Both keep the rows, and the cell means the sweep subtracts must come
+# from the FULL sample either way: the adjustment was performed on the whole
+# sample, so the constraint being removed is a whole-sample constraint.
+#
+# Restricting those means to the domain instead was measured at 9% off R.
+# ---------------------------------------------------------------------------
+
+R_BY_SCHWIDE_SE = [27.3731955191233, 24.3970669015281]
+R_SUBPOP_SE = 24.3970669015281
+R_SCOPED_ADJ_SE = 24.9249948644004
+
+
+def test_by_group_se_matches_r_when_cells_cross_cut(design):
+    """The by-groups here cut ACROSS the poststratification cells.
+
+    Nested cells hide this: if every cell sits inside one group, restricting
+    the cell means to that group changes nothing, which is why the NHANES case
+    passed while this one did not.
+    """
+    ps = design().weighting.poststratify(STYPE_POP, cells="stype")
+    got = ps.estimation.mean("api00", by="sch.wide").to_polars().sort("sch.wide")
+    assert_allclose(got["se"].to_numpy(), R_BY_SCHWIDE_SE, rtol=1e-9)
+
+
+def test_subpopulation_se_matches_r(design):
+    """Estimation-time `where=` on a calibrated design.
+
+    svy zeroes the active weight, which IS the record's new_wgt, so the
+    calibrated weights the sweep needs are snapshotted before zeroing --
+    svy's analogue of R leaving postStrata untouched under subset().
+    """
+    ps = design().weighting.poststratify(STYPE_POP, cells="stype")
+    got = ps.estimation.mean("api00", where=col("sch.wide") == "Yes").to_polars()
+    assert_allclose(got["se"][0], R_SUBPOP_SE, rtol=1e-9)
+
+
+def test_scoped_adjustment_se_matches_r(design):
+    """Weighting-time `where=`: the adjustment itself covers only those rows,
+    so R's equivalent is postStratify on an already-subsetted design."""
+    ps = design().weighting.poststratify(STYPE_POP, cells="stype", where=col("sch.wide") == "Yes")
+    got = ps.estimation.mean("api00", where=col("sch.wide") == "Yes").to_polars()
+    assert_allclose(got["se"][0], R_SCOPED_ADJ_SE, rtol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Invalidation: the record must not fail silently
+# ---------------------------------------------------------------------------
+
+
+def test_dropping_a_snapshotted_column_warns_and_falls_back(design):
+    """The worst available outcome is a silent fallback: the estimate is
+    unchanged and the SE quietly stops crediting the calibration."""
+    ps = design().weighting.poststratify(STYPE_POP, cells="stype")
+    cells_col = ps.design.wgt_adjustment.cells[0]
+    stripped = Sample(ps.data.drop(cells_col), ps.design)
+    with pytest.warns(UserWarning, match="do not account for the poststratification"):
+        se = _mean_se(stripped)
+    assert_allclose(se, 23.967322009317, rtol=1e-6)  # the weights-fixed value
+
+
+def test_use_weight_away_from_the_record_warns(design):
+    ps = design().weighting.poststratify(STYPE_POP, cells="stype")
+    with pytest.warns(UserWarning, match="active weight is 'pw'"):
+        _mean_se(ps.use_weight("pw"))
+
+
+def test_the_warning_fires_once_per_rebind(design):
+    """Guarded on the data/design version: a warning per estimate would be
+    noise, and noise gets muted."""
+    ps = design().weighting.poststratify(STYPE_POP, cells="stype")
+    stripped = Sample(ps.data.drop(ps.design.wgt_adjustment.cells[0]), ps.design)
+    with pytest.warns(UserWarning) as rec:
+        _mean_se(stripped)
+        _mean_se(stripped)
+        _total_se(stripped, "api00")
+    assert len(rec) == 1
