@@ -9,8 +9,9 @@ import pytest
 
 import svy
 
-from svy.core.enumerations import MeasurementType
+from svy.core.enumerations import MeasurementType, MetadataSource
 from svy.errors import MethodError
+from svy.metadata import LabellingCatalog
 
 
 def _cycle(strat, wgt_scale=1.0, extra=None, wgt_name="w"):
@@ -415,6 +416,75 @@ def test_value_label_conflict_drops_and_warns(two_cycles):
         c = svy.combine_samples([s1, s2])
     meta = c.meta.get("x")
     assert meta is None or not meta.labels
+
+
+def test_full_variable_meta_carried(two_cycles):
+    # mtype, unit, notes, categories survive the combine — not just labels
+    s1, s2 = two_cycles
+    s1.meta.set_type("x", MeasurementType.NOMINAL)
+    s1.meta.set(
+        "x", s1.meta.get("x").clone(unit="kg", notes="measured twice", source=MetadataSource.USER)
+    )
+    c = svy.combine_samples([s1, s2])
+    assert c.meta.get("x").mtype == MeasurementType.NOMINAL
+    assert c.meta.get("x").unit == "kg"
+    assert c.meta.get("x").notes == "measured twice"
+
+
+def test_mtype_conflict_warns_first_wins(two_cycles):
+    s1, s2 = two_cycles
+    s1.meta.set_type("x", MeasurementType.NOMINAL)
+    s2.meta.set_type("x", MeasurementType.ORDINAL)
+    with pytest.warns(UserWarning, match="Measurement types disagree"):
+        c = svy.combine_samples([s1, s2])
+    assert c.meta.get("x").mtype == MeasurementType.NOMINAL
+
+
+def test_shared_catalog_and_scheme_refs_carried(two_cycles):
+    s1, s2 = two_cycles
+    catalog = LabellingCatalog().add_scheme(concept="yn", mapping={1: "yes", 2: "no"})
+    s1.meta.catalog = catalog
+    s2.meta.catalog = catalog
+    s1.meta.set_scheme("x", "yn")
+    s2.meta.set_scheme("x", "yn")
+    c = svy.combine_samples([s1, s2])
+    assert c.meta.catalog is catalog
+    assert c.meta.resolve_labels("x").labels == {1: "yes", 2: "no"}
+    assert c.meta.get("x").scheme_ref is not None
+
+
+def test_differing_catalogs_materialize_labels(two_cycles):
+    s1, s2 = two_cycles
+    cat1 = LabellingCatalog().add_scheme(concept="yn", mapping={1: "yes", 2: "no"})
+    cat2 = LabellingCatalog().add_scheme(concept="yn", mapping={1: "yes", 2: "no"})
+    s1.meta.catalog = cat1
+    s2.meta.catalog = cat2
+    s1.meta.set_scheme("x", "yn")
+    s2.meta.set_scheme("x", "yn")
+    with pytest.warns(UserWarning, match="different labelling catalogs"):
+        c = svy.combine_samples([s1, s2])
+    assert c.meta.catalog is None
+    assert c.meta.get("x").scheme_ref is None
+    assert c.meta.get("x").labels == {1: "yes", 2: "no"}
+
+
+def test_scheme_vs_direct_label_conflict_dropped(two_cycles):
+    # scheme-resolved labels count in conflict detection, not just direct ones
+    s1, s2 = two_cycles
+    catalog = LabellingCatalog().add_scheme(concept="yn", mapping={1: "YES", 2: "NO"})
+    s1.meta.catalog = catalog
+    s1.meta.set_scheme("x", "yn")
+    s2.meta.set_value_labels("x", {1: "male", 2: "female"})
+    with pytest.warns(UserWarning, match="Value labels conflict"):
+        c = svy.combine_samples([s1, s2])
+    assert not c.meta.resolve_labels("x").labels
+
+
+def test_sample_names_propagate(two_cycles):
+    s1, s2 = two_cycles
+    s1.name = "nhanes-2017"
+    c = svy.combine_samples([s1, s2])
+    assert c.name == "nhanes-2017 + s2"
 
 
 def test_identical_value_labels_merge(two_cycles):

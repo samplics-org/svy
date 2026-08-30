@@ -13,14 +13,16 @@ import warnings
 
 from typing import Literal, Sequence
 
+import msgspec
 import polars as pl
 
 from svy.core.constants import SVY_ROW_INDEX
 from svy.core.design import Design, PopSize
-from svy.core.enumerations import MeasurementType
+from svy.core.enumerations import MeasurementType, MetadataSource
 from svy.core.sample import Sample
 from svy.core.types import Category
 from svy.errors import MethodError
+from svy.metadata.variable_meta import VariableMeta
 
 
 __all__ = ["combine_samples"]
@@ -219,30 +221,92 @@ def _resolve_wave_codes(
 
 
 def _merge_metadata(combined: Sample, samples: Sequence[Sample]) -> None:
-    """Value labels merged when identical, dropped with a warning on conflict;
-    variable labels first-wins. NHANES recodes categories between cycles, so a
-    value-label conflict is a semantic-drift detector, not a display nuisance."""
-    var_labels: dict[str, str] = {}
-    value_labels: dict[str, dict] = {}
-    conflicted: list[str] = []
+    """Carry the inputs' variable metadata onto the combined sample.
 
+    Field-wise merge with first-sample-wins: iterating the inputs in reverse
+    with ``overwrite=True`` lets every input override the combined store's
+    dtype-inferred defaults while earlier samples override later ones. Value
+    labels are compared RESOLVED (catalog scheme references included):
+    identical across inputs → kept; conflicting → dropped with a loud warning
+    — NHANES recodes categories between cycles, so a conflict is a
+    semantic-drift detector, not a display nuisance. Explicit measurement-type
+    disagreements warn, first wins. A single shared catalog travels; differing
+    catalogs cannot both travel, so scheme references are materialized into
+    the already-verified resolved labels instead.
+    """
+    resolved: dict[str, dict[Category, str]] = {}
+    conflicted: list[str] = []
+    explicit_mtypes: dict[str, MeasurementType] = {}
+    mtype_conflicts: list[str] = []
+
+    for s in samples:
+        for name in s.meta.variables:
+            labels = s.meta.resolve_labels(name).labels
+            if labels:
+                if name in resolved:
+                    if resolved[name] != labels and name not in conflicted:
+                        conflicted.append(name)
+                else:
+                    resolved[name] = labels
+            meta = s.meta.get(name)
+            if meta is not None and meta.source != MetadataSource.INFERRED:
+                prev = explicit_mtypes.get(name)
+                if prev is None:
+                    explicit_mtypes[name] = meta.mtype
+                elif prev != meta.mtype and name not in mtype_conflicts:
+                    mtype_conflicts.append(name)
+
+    # First sample wins per field; the label pair (value_labels, scheme_ref) is
+    # ONE logical field merged atomically — a VariableMeta cannot hold both.
+    fields = [f for f in msgspec.structs.fields(VariableMeta) if f.name != "name"]
+    patches: dict[str, dict] = {}
     for s in samples:
         for name in s.meta.variables:
             meta = s.meta.get(name)
             if meta is None:
                 continue
-            if meta.label and name not in var_labels:
-                var_labels[name] = meta.label
-            labels = meta.labels
-            if labels:
-                if name in value_labels:
-                    if value_labels[name] != labels and name not in conflicted:
-                        conflicted.append(name)
+            patch = patches.setdefault(name, {})
+            for field in fields:
+                default = None if field.default is msgspec.NODEFAULT else field.default
+                val = getattr(meta, field.name)
+                if val == default:
+                    continue
+                if field.name in ("value_labels", "scheme_ref"):
+                    if name in conflicted:
+                        continue
+                    if "value_labels" in patch or "scheme_ref" in patch:
+                        continue
+                    patch[field.name] = val
                 else:
-                    value_labels[name] = labels
+                    patch.setdefault(field.name, val)
+    for name, patch in patches.items():
+        existing = combined.meta.get(name)
+        if existing is not None and patch:
+            combined.meta.set(name, existing.clone(**patch))
 
-    for name in conflicted:
-        value_labels.pop(name, None)
+    catalogs: list = []
+    for s in samples:
+        cat = s.meta.catalog
+        if cat is not None and all(cat is not c for c in catalogs):
+            catalogs.append(cat)
+    if len(catalogs) == 1:
+        combined.meta.catalog = catalogs[0]
+    elif len(catalogs) > 1:
+        for name in combined.meta.variables:
+            meta = combined.meta.get(name)
+            if meta is not None and meta.scheme_ref is not None:
+                known = resolved.get(name)
+                if known and name not in conflicted:
+                    combined.meta.set(name, meta.with_value_labels(known))
+                else:
+                    combined.meta.set(name, meta.clone(scheme_ref=None))
+        warnings.warn(
+            "Inputs carry different labelling catalogs; scheme references were "
+            "resolved to direct value labels on the combined sample.",
+            UserWarning,
+            stacklevel=3,
+        )
+
     if conflicted:
         warnings.warn(
             f"Value labels conflict across inputs for {sorted(conflicted)}; the coding "
@@ -251,13 +315,13 @@ def _merge_metadata(combined: Sample, samples: Sequence[Sample]) -> None:
             UserWarning,
             stacklevel=3,
         )
-
-    for name, label in var_labels.items():
-        if name in combined._data.columns:
-            combined.meta.set_label(name, label)
-    for name, labels in value_labels.items():
-        if name in combined._data.columns:
-            combined.meta.set_value_labels(name, labels)
+    if mtype_conflicts:
+        warnings.warn(
+            f"Measurement types disagree across inputs for {sorted(mtype_conflicts)}; "
+            "the first sample's type was kept.",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 def combine_samples(
@@ -581,6 +645,11 @@ def combine_samples(
     )
 
     combined = Sample(data=stacked, design=design)
+    input_names = [getattr(s, "name", None) for s in samples]
+    if any(input_names):
+        combined.name = " + ".join(
+            str(n) if n else f"s{i}" for i, n in enumerate(input_names, start=1)
+        )
     _merge_metadata(combined, samples)
 
     combined.meta.set_type(wave_name, MeasurementType.ORDINAL)
