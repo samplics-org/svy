@@ -38,6 +38,7 @@ from svy_rs import _internal
 import svy
 
 from svy import Design, RepWeights, Sample
+from svy.core.terms import Cat
 
 
 N_STRATA = 20  # geo1 (10) x urbrur (2)
@@ -148,9 +149,7 @@ def run_end_to_end(n_rows: int, reps: int, n_reps: int) -> None:
             stratum=("geo1", "urbrur"),
             psu="ea",
             wgt="hhweight",
-            rep_wgts=RepWeights(
-                method="Bootstrap", prefix="rep_", n_reps=n_reps
-            ),
+            rep_wgts=RepWeights(method="Bootstrap", prefix="rep_", n_reps=n_reps),
         )
         rep_sample = Sample(data=df, design=rep_design)
         rep_est = rep_sample.estimation
@@ -159,6 +158,51 @@ def run_end_to_end(n_rows: int, reps: int, n_reps: int) -> None:
             n_rows,
             best_ms(lambda: rep_est.mean(y="tot_exp", method="replication"), reps),
         )
+
+    # Calibrated designs: the score-centring sweep is variance-path work that
+    # none of the cases above reach, because they all use an unadjusted design.
+    # One case per sweep kind, since the three are different formulas -- cells
+    # means, ten iterations over margins, and a WLS residual. The adjustment
+    # itself is built outside the timed region; what is timed is estimation on
+    # the adjusted design.
+    try:
+        w_tot = float(df["hhweight"].sum())
+        sex_lv = sorted(df["sex"].unique().to_list())
+        reg_lv = sorted(df["region"].unique().to_list())
+
+        ps_sample = sample.weighting.poststratify(
+            {v: w_tot / len(sex_lv) for v in sex_lv}, cells="sex"
+        )
+        rk_sample = sample.weighting.rake(
+            shares={
+                "sex": dict.fromkeys(sex_lv, 1.0),
+                "region": dict.fromkeys(reg_lv, 1.0),
+            }
+        )
+        cal_sample = sample.weighting.calibrate(
+            controls={Cat("sex"): {v: w_tot / len(sex_lv) for v in sex_lv}}
+        )
+    except (AttributeError, TypeError, NotImplementedError) as exc:
+        print(f"SKIP\tcalibrated/*\t{n_rows}\t{type(exc).__name__}: {exc}", file=sys.stderr)
+    else:
+        ps_est, rk_est, cal_est = (
+            ps_sample.estimation,
+            rk_sample.estimation,
+            cal_sample.estimation,
+        )
+        calibrated_cases = {
+            # cells sweep: one pass for the cell means, one to subtract them
+            "mean/poststratified": lambda: ps_est.mean(y="tot_exp"),
+            "total/poststratified": lambda: ps_est.total(y="tot_exp"),
+            # grouped: the sweep is redone per group, restricted to its rows
+            "mean/poststratified by=sex": lambda: ps_est.mean(y="tot_exp", by="sex"),
+            # raking sweeps every margin, ten times over -- the costliest kind
+            "mean/raked": lambda: rk_est.mean(y="tot_exp"),
+            # GREG solves a k x k weighted least squares per score vector
+            "mean/calibrated": lambda: cal_est.mean(y="tot_exp"),
+        }
+        for label, fn in calibrated_cases.items():
+            emit_case(label, n_rows, fn, reps)
 
     # One tabulate case (categorical path).
     emit(
