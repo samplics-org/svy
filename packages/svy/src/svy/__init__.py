@@ -79,7 +79,16 @@ from svy.errors import (
     SerializationError,
     SvyError,
 )
-from svy.estimation import Estimate, EstimateList, Estimation, ParamEst
+from svy.estimation import (
+    Contrast,
+    ContrastEst,
+    ContrastExpr,
+    Estimate,
+    EstimateList,
+    Estimation,
+    ParamEst,
+    estd,
+)
 from svy.extensions import register_sample_accessor
 from svy.io import (
     create_from_csv,
@@ -156,6 +165,10 @@ __all__ = [
     "Estimate",
     "EstimateList",
     "ParamEst",
+    "Contrast",
+    "ContrastEst",
+    "ContrastExpr",
+    "estd",
     "ChiSquare",
     "FDist",
     "DescribeResult",

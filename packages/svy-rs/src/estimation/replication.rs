@@ -121,6 +121,49 @@ pub fn variance_from_replicates(
         .sum()
 }
 
+/// Full k×k covariance between k estimates from their replicate-estimate rows.
+///
+/// The between-estimate analogue of `variance_from_replicates`, using the same
+/// per-replicate coefficients and centering rule applied cross-wise:
+/// `cov_ab = sum_r c_r (theta_r,a - center_a)(theta_r,b - center_b)`. The
+/// diagonal equals `variance_from_replicates` per estimate.
+pub fn covariance_from_replicates(
+    theta_fulls: &[f64],
+    theta_reps: &[Vec<f64>], // k estimates × n_reps
+    rep_coefs: &[f64],
+    center: VarianceCenter,
+) -> Vec<Vec<f64>> {
+    let k = theta_reps.len();
+    let mut cov = vec![vec![0.0; k]; k];
+    if k == 0 {
+        return cov;
+    }
+    let n_reps = theta_reps[0].len();
+    if n_reps == 0 {
+        return cov;
+    }
+
+    let centers: Vec<f64> = (0..k)
+        .map(|j| match center {
+            VarianceCenter::ReplicateMean => theta_reps[j].iter().sum::<f64>() / n_reps as f64,
+            VarianceCenter::FullSample => theta_fulls[j],
+        })
+        .collect();
+
+    for j in 0..k {
+        for l in j..k {
+            let v: f64 = (0..n_reps)
+                .map(|r| {
+                    rep_coefs[r] * (theta_reps[j][r] - centers[j]) * (theta_reps[l][r] - centers[l])
+                })
+                .sum();
+            cov[j][l] = v;
+            cov[l][j] = v;
+        }
+    }
+    cov
+}
+
 // ============================================================================
 // Matrix-based computation for efficiency
 // ============================================================================

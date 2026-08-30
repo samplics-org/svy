@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Mapping
 
 import msgspec
 import numpy as np
@@ -16,12 +16,14 @@ import polars as pl
 from msgspec import field
 
 from svy.core.containers import FDist, TDist
+from svy.errors import ModelError
 from svy.ui.printing import make_panel, render_plain_table, render_rich_to_str, resolve_width
 from svy.utils.formats import _fmt_fixed, _fmt_p, _fmt_smart
 
 
 if TYPE_CHECKING:
-    pass
+    from svy.core.terms import Cat
+    from svy.estimation.contrast import Contrast, ContrastExpr
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +98,101 @@ class GLMFit(msgspec.Struct, frozen=True):
         d.pop("cov_matrix", None)
         d.pop("term_info", None)
         return d
+
+    # --- Contrasts & term tests ---
+
+    def keys(self) -> list[str]:
+        """Contrast keys: the coefficient names, in covariance order."""
+        return [c.term for c in self.coefs]
+
+    def _design_df(self) -> float:
+        # Every coefficient's Wald t is referred to the same design df.
+        for c in self.coefs:
+            if c.wald is not None:
+                return float(c.wald.df)
+        raise ModelError(
+            title="No degrees of freedom on this fit",
+            detail="The fit carries no Wald statistics to take the design df from.",
+            code="GLM_NO_DF",
+            where="GLM.contrast",
+        )
+
+    def contrast(
+        self, contrasts: "Mapping[Any, Any] | ContrastExpr", *, alpha: float = 0.05
+    ) -> "Contrast":
+        """Estimate linear contrasts between coefficients.
+
+        ``contrasts`` is a contrast expression over coefficient names
+        (``estd("stype_H") - estd("stype_M")``), a sparse ``{name: coef}``
+        dict, or several named contrasts. Inference is t-based on the same
+        design df as the coefficient table.
+        """
+        from svy.estimation.contrast import linear_contrast
+
+        if self.cov_matrix is None:
+            raise ModelError(
+                title="No covariance on this fit",
+                detail="The fit carries no coefficient covariance matrix.",
+                code="GLM_NO_COVARIANCE",
+                where="GLM.contrast",
+            )
+        values = np.array([c.est for c in self.coefs], dtype=float)
+        return linear_contrast(
+            self.keys(),
+            values,
+            self.cov_matrix,
+            contrasts,
+            df=self._design_df(),
+            alpha=alpha,
+            method="GLM",
+        )
+
+    def term_test(self, term: "str | Cat") -> FDist:
+        """Joint Wald test that every coefficient of a model term is zero.
+
+        ``term`` is a feature as passed to ``fit`` — a continuous column
+        name, a categorical (by name or ``Cat``), or one exact coefficient
+        name. For a categorical this jointly tests all its non-reference
+        dummies: ``F = β̂ᵀ V⁻¹ β̂ / q`` on ``(q, design df)``, the
+        counterpart of R's ``regTermTest(method="Wald")`` (the working
+        likelihood-ratio variant is not implemented).
+        """
+        from scipy import stats as sp_stats
+
+        name = getattr(term, "name", term)
+        if not isinstance(name, str):
+            raise TypeError(f"term must be a str or Cat, got {type(term).__name__}")
+
+        info = (self.term_info or {}).get(name)
+        if info is not None and info.get("type") == "categorical":
+            cols = [f"{name}_{lvl}" for lvl in info["levels"][1:]]
+        else:
+            cols = [name]
+        names = self.keys()
+        missing = [c for c in cols if c not in names]
+        if missing or self.cov_matrix is None:
+            raise ModelError(
+                title="Unknown model term",
+                detail=(
+                    f"term {name!r} resolves to coefficients {cols!r}, but "
+                    f"{missing!r} are not in the fit (coefficients: {names!r})."
+                    if missing
+                    else "The fit carries no coefficient covariance matrix."
+                ),
+                code="GLM_UNKNOWN_TERM",
+                where="GLM.term_test",
+                param="term",
+                got=name,
+            )
+
+        idx = [names.index(c) for c in cols]
+        beta = np.array([self.coefs[i].est for i in idx], dtype=float)
+        v_sub = self.cov_matrix[np.ix_(idx, idx)]
+        q = len(idx)
+        f_val = float(beta @ np.linalg.solve(v_sub, beta)) / q
+        df_den = self._design_df()
+        p_val = float(sp_stats.f.sf(f_val, q, df_den))
+        return FDist(df_num=q, df_den=df_den, value=f_val, p_value=p_val)
 
     def to_polars(self) -> pl.DataFrame:
         """Convert coefficients to DataFrame."""

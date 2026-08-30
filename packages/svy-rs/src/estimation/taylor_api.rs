@@ -22,7 +22,7 @@ use crate::estimation::taylor::{
     scores_mean_arr, scores_mean_domain, scores_ratio, scores_ratio_domain, scores_total,
     scores_total_domain, srs_variance_mean, srs_variance_mean_domain, srs_variance_ratio,
     srs_variance_ratio_domain, srs_variance_total, srs_variance_total_domain,
-    taylor_variance_apply, weighted_quantile,
+    taylor_covariance_apply, taylor_variance_apply, weighted_quantile,
 };
 
 /// Convert the incoming Python DataFrame and ensure one chunk per column.
@@ -83,7 +83,7 @@ pub fn taylor_mean(
     calib_prev_wgt: Option<String>,
     calib_pins_total: Option<bool>,
     calib_new_wgt: Option<String>,
-) -> PyResult<PyDataFrame> {
+) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
     let df = into_contiguous(data);
     let calib = make_calib(
         &df,
@@ -120,11 +120,11 @@ pub fn taylor_mean(
                 )
             })
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-        return Ok(PyDataFrame(result));
+        return Ok((PyDataFrame(result), None));
     }
 
     let by = by_col.unwrap();
-    let result = _py
+    let (result, cov) = _py
         .detach(|| {
             compute_mean_grouped(
                 &df,
@@ -142,7 +142,7 @@ pub fn taylor_mean(
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-    Ok(PyDataFrame(result))
+    Ok((PyDataFrame(result), Some(cov)))
 }
 
 /// Batched ungrouped mean over many variables sharing one design (see
@@ -262,6 +262,11 @@ fn ungrouped_estimate<T: Send>(
 /// nulls to 0.0 exactly as `taylor_variance` did.
 fn scores_to_arr(scores: &Float64Chunked) -> Vec<f64> {
     scores.iter().map(|s| s.unwrap_or(0.0)).collect()
+}
+
+/// Row-major flat k×k covariance for the FFI boundary.
+fn flatten_cov(cov: Vec<Vec<f64>>) -> Vec<f64> {
+    cov.into_iter().flatten().collect()
 }
 
 fn compute_mean_ungrouped(
@@ -417,7 +422,7 @@ fn compute_mean_grouped(
     singleton_method: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
-) -> PolarsResult<DataFrame> {
+) -> PolarsResult<(DataFrame, Vec<f64>)> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -449,22 +454,24 @@ fn compute_mean_grouped(
         .collect::<PolarsResult<Vec<_>>>()?;
     let rows = groups
         .par_iter()
-        .map(|&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64)> {
-            let domain_mask = by_str.equal(group);
-            let n_domain = domain_mask.sum().unwrap_or(0) as u32;
-            let estimate = point_estimate_mean_domain(y, weights, &domain_mask)?;
-            let scores = scores_mean_domain(y, weights, &domain_mask)?;
-            let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-            let variance = taylor_variance_apply(&scores_arr, &design);
-            let se = variance.max(0.0).sqrt();
-            let srs_var = srs_variance_mean_domain(y, weights, &domain_mask, srs)?;
-            let deff = if srs_var > 0.0 {
-                variance / srs_var
-            } else {
-                f64::NAN
-            };
-            Ok((group, estimate, se, variance, n_domain, deff))
-        })
+        .map(
+            |&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
+                let domain_mask = by_str.equal(group);
+                let n_domain = domain_mask.sum().unwrap_or(0) as u32;
+                let estimate = point_estimate_mean_domain(y, weights, &domain_mask)?;
+                let scores = scores_mean_domain(y, weights, &domain_mask)?;
+                let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+                let variance = taylor_variance_apply(&scores_arr, &design);
+                let se = variance.max(0.0).sqrt();
+                let srs_var = srs_variance_mean_domain(y, weights, &domain_mask, srs)?;
+                let deff = if srs_var > 0.0 {
+                    variance / srs_var
+                } else {
+                    f64::NAN
+                };
+                Ok((group, estimate, se, variance, n_domain, deff, scores_arr))
+            },
+        )
         .collect::<PolarsResult<Vec<_>>>()?;
 
     let n_groups = rows.len();
@@ -474,17 +481,21 @@ fn compute_mean_grouped(
     let mut variances: Vec<f64> = Vec::with_capacity(n_groups);
     let mut ns: Vec<u32> = Vec::with_capacity(n_groups);
     let mut deffs: Vec<f64> = Vec::with_capacity(n_groups);
-    for (g, est, se, var, n, deff) in rows {
+    let mut score_cols: Vec<Vec<f64>> = Vec::with_capacity(n_groups);
+    for (g, est, se, var, n, deff, scores_arr) in rows {
         by_vals.push(g);
         estimates.push(est);
         ses.push(se);
         variances.push(var);
         ns.push(n);
         deffs.push(deff);
+        score_cols.push(scores_arr);
     }
+    let cov = flatten_cov(taylor_covariance_apply(&score_cols, &design));
     let dfs = group_dfs;
-    df![by_col => by_vals, "y" => vec![value_col; n_groups], "est" => estimates,
-        "se" => ses, "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs]
+    let out = df![by_col => by_vals, "y" => vec![value_col; n_groups], "est" => estimates,
+        "se" => ses, "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs]?;
+    Ok((out, cov))
 }
 
 // ============================================================================
@@ -513,7 +524,7 @@ pub fn taylor_total(
     calib_prev_wgt: Option<String>,
     calib_pins_total: Option<bool>,
     calib_new_wgt: Option<String>,
-) -> PyResult<PyDataFrame> {
+) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
     let df = into_contiguous(data);
     let calib = make_calib(
         &df,
@@ -542,10 +553,10 @@ pub fn taylor_total(
             calib,
         )
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-        return Ok(PyDataFrame(result));
+        return Ok((PyDataFrame(result), None));
     }
     let by = by_col.unwrap();
-    let result = _py
+    let (result, cov) = _py
         .detach(|| {
             compute_total_grouped(
                 &df,
@@ -563,7 +574,7 @@ pub fn taylor_total(
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-    Ok(PyDataFrame(result))
+    Ok((PyDataFrame(result), Some(cov)))
 }
 
 /// Batched ungrouped total over many variables sharing one design build.
@@ -748,7 +759,7 @@ fn compute_total_grouped(
     singleton_method: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
-) -> PolarsResult<DataFrame> {
+) -> PolarsResult<(DataFrame, Vec<f64>)> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -776,22 +787,24 @@ fn compute_total_grouped(
         .collect::<PolarsResult<Vec<_>>>()?;
     let rows = groups
         .par_iter()
-        .map(|&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64)> {
-            let domain_mask = by_str.equal(group);
-            let n_domain = domain_mask.sum().unwrap_or(0) as u32;
-            let estimate = point_estimate_total_domain(y, weights, &domain_mask)?;
-            let scores = scores_total_domain(y, weights, &domain_mask)?;
-            let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-            let variance = taylor_variance_apply(&scores_arr, &design);
-            let se = variance.max(0.0).sqrt();
-            let srs_var = srs_variance_total_domain(y, weights, &domain_mask, srs)?;
-            let deff = if srs_var > 0.0 {
-                variance / srs_var
-            } else {
-                f64::NAN
-            };
-            Ok((group, estimate, se, variance, n_domain, deff))
-        })
+        .map(
+            |&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
+                let domain_mask = by_str.equal(group);
+                let n_domain = domain_mask.sum().unwrap_or(0) as u32;
+                let estimate = point_estimate_total_domain(y, weights, &domain_mask)?;
+                let scores = scores_total_domain(y, weights, &domain_mask)?;
+                let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+                let variance = taylor_variance_apply(&scores_arr, &design);
+                let se = variance.max(0.0).sqrt();
+                let srs_var = srs_variance_total_domain(y, weights, &domain_mask, srs)?;
+                let deff = if srs_var > 0.0 {
+                    variance / srs_var
+                } else {
+                    f64::NAN
+                };
+                Ok((group, estimate, se, variance, n_domain, deff, scores_arr))
+            },
+        )
         .collect::<PolarsResult<Vec<_>>>()?;
 
     let n_groups = rows.len();
@@ -801,17 +814,21 @@ fn compute_total_grouped(
     let mut variances: Vec<f64> = Vec::with_capacity(n_groups);
     let mut ns: Vec<u32> = Vec::with_capacity(n_groups);
     let mut deffs: Vec<f64> = Vec::with_capacity(n_groups);
-    for (g, est, se, var, n, deff) in rows {
+    let mut score_cols: Vec<Vec<f64>> = Vec::with_capacity(n_groups);
+    for (g, est, se, var, n, deff, scores_arr) in rows {
         by_vals.push(g);
         estimates.push(est);
         ses.push(se);
         variances.push(var);
         ns.push(n);
         deffs.push(deff);
+        score_cols.push(scores_arr);
     }
+    let cov = flatten_cov(taylor_covariance_apply(&score_cols, &design));
     let dfs = group_dfs;
-    df![by_col => by_vals, "y" => vec![value_col; n_groups], "est" => estimates,
-        "se" => ses, "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs]
+    let out = df![by_col => by_vals, "y" => vec![value_col; n_groups], "est" => estimates,
+        "se" => ses, "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs]?;
+    Ok((out, cov))
 }
 
 // ============================================================================
@@ -841,7 +858,7 @@ pub fn taylor_ratio(
     calib_prev_wgt: Option<String>,
     calib_pins_total: Option<bool>,
     calib_new_wgt: Option<String>,
-) -> PyResult<PyDataFrame> {
+) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
     let df = into_contiguous(data);
     let calib = make_calib(
         &df,
@@ -871,10 +888,10 @@ pub fn taylor_ratio(
             calib,
         )
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-        return Ok(PyDataFrame(result));
+        return Ok((PyDataFrame(result), None));
     }
     let by = by_col.unwrap();
-    let result = _py
+    let (result, cov) = _py
         .detach(|| {
             compute_ratio_grouped(
                 &df,
@@ -893,7 +910,7 @@ pub fn taylor_ratio(
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-    Ok(PyDataFrame(result))
+    Ok((PyDataFrame(result), Some(cov)))
 }
 
 /// Batched ungrouped ratio over paired numerator/denominator columns sharing one
@@ -1102,7 +1119,7 @@ fn compute_ratio_grouped(
     singleton_method: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
-) -> PolarsResult<DataFrame> {
+) -> PolarsResult<(DataFrame, Vec<f64>)> {
     let y = df.column(numerator_col)?.f64()?;
     let x = df.column(denominator_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -1131,22 +1148,24 @@ fn compute_ratio_grouped(
         .collect::<PolarsResult<Vec<_>>>()?;
     let rows = groups
         .par_iter()
-        .map(|&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64)> {
-            let domain_mask = by_str.equal(group);
-            let n_domain = domain_mask.sum().unwrap_or(0) as u32;
-            let estimate = point_estimate_ratio_domain(y, x, weights, &domain_mask)?;
-            let scores = scores_ratio_domain(y, x, weights, &domain_mask)?;
-            let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-            let variance = taylor_variance_apply(&scores_arr, &design);
-            let se = variance.max(0.0).sqrt();
-            let srs_var = srs_variance_ratio_domain(y, x, weights, &domain_mask, srs)?;
-            let deff = if srs_var > 0.0 {
-                variance / srs_var
-            } else {
-                f64::NAN
-            };
-            Ok((group, estimate, se, variance, n_domain, deff))
-        })
+        .map(
+            |&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
+                let domain_mask = by_str.equal(group);
+                let n_domain = domain_mask.sum().unwrap_or(0) as u32;
+                let estimate = point_estimate_ratio_domain(y, x, weights, &domain_mask)?;
+                let scores = scores_ratio_domain(y, x, weights, &domain_mask)?;
+                let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+                let variance = taylor_variance_apply(&scores_arr, &design);
+                let se = variance.max(0.0).sqrt();
+                let srs_var = srs_variance_ratio_domain(y, x, weights, &domain_mask, srs)?;
+                let deff = if srs_var > 0.0 {
+                    variance / srs_var
+                } else {
+                    f64::NAN
+                };
+                Ok((group, estimate, se, variance, n_domain, deff, scores_arr))
+            },
+        )
         .collect::<PolarsResult<Vec<_>>>()?;
 
     let n_groups = rows.len();
@@ -1156,17 +1175,21 @@ fn compute_ratio_grouped(
     let mut variances: Vec<f64> = Vec::with_capacity(n_groups);
     let mut ns: Vec<u32> = Vec::with_capacity(n_groups);
     let mut deffs: Vec<f64> = Vec::with_capacity(n_groups);
-    for (g, est, se, var, n, deff) in rows {
+    let mut score_cols: Vec<Vec<f64>> = Vec::with_capacity(n_groups);
+    for (g, est, se, var, n, deff, scores_arr) in rows {
         by_vals.push(g);
         estimates.push(est);
         ses.push(se);
         variances.push(var);
         ns.push(n);
         deffs.push(deff);
+        score_cols.push(scores_arr);
     }
+    let cov = flatten_cov(taylor_covariance_apply(&score_cols, &design));
     let dfs = group_dfs;
-    df![by_col => by_vals, "y" => vec![numerator_col; n_groups], "x" => vec![denominator_col; n_groups],
-        "est" => estimates, "se" => ses, "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs]
+    let out = df![by_col => by_vals, "y" => vec![numerator_col; n_groups], "x" => vec![denominator_col; n_groups],
+        "est" => estimates, "se" => ses, "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs]?;
+    Ok((out, cov))
 }
 
 // ============================================================================
@@ -1399,7 +1422,7 @@ pub fn taylor_prop(
     calib_prev_wgt: Option<String>,
     calib_pins_total: Option<bool>,
     calib_new_wgt: Option<String>,
-) -> PyResult<PyDataFrame> {
+) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
     let df = into_contiguous(data);
     let calib = make_calib(
         &df,
@@ -1414,7 +1437,7 @@ pub fn taylor_prop(
     let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
     if by_col.is_none() {
-        let result = compute_prop_ungrouped(
+        let (result, cov) = compute_prop_ungrouped(
             &df,
             &value_col,
             &weight_col,
@@ -1428,10 +1451,10 @@ pub fn taylor_prop(
             calib,
         )
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-        return Ok(PyDataFrame(result));
+        return Ok((PyDataFrame(result), Some(cov)));
     }
     let by = by_col.unwrap();
-    let result = _py
+    let (result, cov) = _py
         .detach(|| {
             compute_prop_grouped(
                 &df,
@@ -1449,7 +1472,7 @@ pub fn taylor_prop(
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-    Ok(PyDataFrame(result))
+    Ok((PyDataFrame(result), Some(cov)))
 }
 
 /// Batched ungrouped proportions over many category columns sharing one design
@@ -1504,7 +1527,7 @@ fn compute_prop_ungrouped(
     singleton_method: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
-) -> PolarsResult<DataFrame> {
+) -> PolarsResult<(DataFrame, Vec<f64>)> {
     let weights = df.column(weight_col)?.f64()?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
     let psu = psu_col.map(|c| df.column(c)).transpose()?;
@@ -1533,6 +1556,7 @@ fn compute_prop_ungrouped(
     let mut dfs_vec: Vec<u32> = Vec::new();
     let mut ns: Vec<u32> = Vec::new();
     let mut deffs: Vec<f64> = Vec::new();
+    let mut score_cols: Vec<Vec<f64>> = Vec::new();
     let n = weights.len() as u32;
     // Design is identical across levels; index it once — and take the df off its
     // codes rather than densifying the same columns a second time.
@@ -1569,10 +1593,13 @@ fn compute_prop_ungrouped(
         dfs_vec.push(df_val);
         ns.push(n);
         deffs.push(deff);
+        score_cols.push(scores_arr);
     }
+    let cov = flatten_cov(taylor_covariance_apply(&score_cols, &design));
     let n_levels = level_vals.len();
-    df!["y" => vec![value_col; n_levels], "level" => level_vals, "est" => estimates,
-        "se" => ses, "var" => variances, "df" => dfs_vec, "n" => ns, "deff" => deffs]
+    let out = df!["y" => vec![value_col; n_levels], "level" => level_vals, "est" => estimates,
+        "se" => ses, "var" => variances, "df" => dfs_vec, "n" => ns, "deff" => deffs]?;
+    Ok((out, cov))
 }
 
 /// Batched ungrouped proportions: design built once, variables estimated in
@@ -1711,7 +1738,7 @@ fn compute_prop_grouped(
     singleton_method: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
-) -> PolarsResult<DataFrame> {
+) -> PolarsResult<(DataFrame, Vec<f64>)> {
     let weights = df.column(weight_col)?.f64()?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
     let psu = psu_col.map(|c| df.column(c)).transpose()?;
@@ -1742,7 +1769,7 @@ fn compute_prop_grouped(
 
     // Fan out over groups; each group emits its level rows in `levels` order,
     // then flatten in group order for a deterministic layout.
-    type PropRow = (String, String, f64, f64, f64, u32, f64);
+    type PropRow = (String, String, f64, f64, f64, u32, f64, Vec<f64>);
     let groups: Vec<&str> = unique_groups.iter().flatten().collect();
     // A by-group is a domain, so its df must be counted on its own active
     // PSUs/strata. Broadcasting one frame-level df here would hand every group
@@ -1787,6 +1814,7 @@ fn compute_prop_grouped(
                     variance,
                     n_domain,
                     deff,
+                    scores_arr,
                 ));
             }
             Ok(out)
@@ -1800,8 +1828,9 @@ fn compute_prop_grouped(
     let mut variances: Vec<f64> = Vec::new();
     let mut ns: Vec<u32> = Vec::new();
     let mut deffs: Vec<f64> = Vec::new();
+    let mut score_cols: Vec<Vec<f64>> = Vec::new();
     for group_rows in per_group {
-        for (g, lvl, est, se, var, n, deff) in group_rows {
+        for (g, lvl, est, se, var, n, deff, scores_arr) in group_rows {
             by_vals.push(g);
             level_vals.push(lvl);
             estimates.push(est);
@@ -1809,16 +1838,19 @@ fn compute_prop_grouped(
             variances.push(var);
             ns.push(n);
             deffs.push(deff);
+            score_cols.push(scores_arr);
         }
     }
+    let cov = flatten_cov(taylor_covariance_apply(&score_cols, &design));
     let n_rows = by_vals.len();
     let dfs_vec: Vec<u32> = group_dfs
         .iter()
         .flat_map(|d| std::iter::repeat(*d).take(levels.len()))
         .collect();
     debug_assert_eq!(dfs_vec.len(), n_rows);
-    df![by_col => by_vals, "y" => vec![value_col; n_rows], "level" => level_vals,
-        "est" => estimates, "se" => ses, "var" => variances, "df" => dfs_vec, "n" => ns, "deff" => deffs]
+    let out = df![by_col => by_vals, "y" => vec![value_col; n_rows], "level" => level_vals,
+        "est" => estimates, "se" => ses, "var" => variances, "df" => dfs_vec, "n" => ns, "deff" => deffs]?;
+    Ok((out, cov))
 }
 
 // ============================================================================

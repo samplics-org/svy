@@ -84,7 +84,8 @@ def test_scale_estimation_flow_integration(adjustment_sample, monkeypatch):
     sample = adjustment_sample.singleton.scale()
 
     def mock_taylor_mean(*args, **kwargs):
-        return pl.DataFrame(
+        # Mirrors the kernel contract: (result frame, optional flat covariance).
+        frame = pl.DataFrame(
             {
                 "y": ["income"],
                 "est": [1.0],
@@ -95,6 +96,7 @@ def test_scale_estimation_flow_integration(adjustment_sample, monkeypatch):
                 "deff": [1.0],
             }
         )
+        return frame, None
 
     monkeypatch.setattr(ps, "taylor_mean", mock_taylor_mean)
 
@@ -131,7 +133,7 @@ def test_center_arg_passing(adjustment_sample, monkeypatch):
 
     def mock_taylor_mean(*args, **kwargs):
         captured_kwargs.update(kwargs)
-        return pl.DataFrame(
+        frame = pl.DataFrame(
             {
                 "y": ["income"],
                 "est": [1.0],
@@ -142,6 +144,7 @@ def test_center_arg_passing(adjustment_sample, monkeypatch):
                 "deff": [1.0],
             }
         )
+        return frame, None
 
     monkeypatch.setattr(ps, "taylor_mean", mock_taylor_mean)
     sample.estimation.mean("income")
@@ -169,7 +172,7 @@ def test_center_idempotent_if_not_configured(monkeypatch):
 
     def mock_taylor_mean(*args, **kwargs):
         captured_kwargs.update(kwargs)
-        return pl.DataFrame(
+        frame = pl.DataFrame(
             {
                 "y": ["income"],
                 "est": [1.0],
@@ -180,6 +183,7 @@ def test_center_idempotent_if_not_configured(monkeypatch):
                 "deff": [1.0],
             }
         )
+        return frame, None
 
     monkeypatch.setattr(ps, "taylor_mean", mock_taylor_mean)
     sample.estimation.mean("income")

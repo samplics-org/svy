@@ -76,6 +76,7 @@ from .association import taylor_assoc as _taylor_assoc
 log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from svy.core.data_prep import PreparedData
     from svy.core.sample import Sample
 
 
@@ -434,6 +435,53 @@ class Estimation:
             (pl.col("var") * inflation_factor).alias("var"),
             (pl.col("se") * sqrt_factor).alias("se"),
         )
+
+    @staticmethod
+    def _cov_from_kernel(
+        result_df: pl.DataFrame,
+        cov_flat: list[float] | None,
+        pre_vars: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """Dense between-estimate covariance for the kernel's result rows.
+
+        ``cov_flat`` is the kernel's row-major k×k (``None`` for single-row
+        calls). The diagonal is overwritten with the frame's final ``var``
+        column so se² and the matrix can never disagree; when a double-pass
+        scale adjustment rescaled the variances, ``pre_vars`` (the column
+        before adjustment) rescales the off-diagonals by the same per-row
+        factors.
+        """
+        var = result_df["var"].to_numpy()
+        if cov_flat is None:
+            return np.diag(var)
+        k = len(var)
+        cov = np.asarray(cov_flat, dtype=float).reshape(k, k)
+        if pre_vars is not None:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                f = np.sqrt(np.where(pre_vars > 0, var / pre_vars, 1.0))
+            cov = cov * np.outer(f, f)
+        np.fill_diagonal(cov, var)
+        return cov
+
+    def _design_df_from_prep(self, prep: "PreparedData") -> int:
+        """Full design df (R ``degf``) over the analysis rows.
+
+        Counted on positive-weight rows only, matching the kernel's active
+        mask — ``where=`` filters and missing-value handling reach the
+        kernel as zero weights. Grouped kernels report per-row domain df;
+        contrasts span domains and are referred to this value instead.
+        """
+        active = prep.df.filter(pl.col(prep.weight_col) > 0)
+        s, p = prep.strata_col, prep.psu_col
+        if s and p:
+            per_stratum = active.group_by(s).agg(pl.col(p).n_unique().alias("m"))
+            return int((per_stratum["m"] - 1).clip(lower_bound=0).sum())
+        if s:
+            per_stratum = active.group_by(s).agg(pl.len().alias("m"))
+            return int((per_stratum["m"] - 1).clip(lower_bound=0).sum())
+        if p:
+            return max(0, active[p].n_unique() - 1)
+        return max(0, active.height - 1)
 
     @staticmethod
     def _normalize_deff(deff: object) -> str | None:
@@ -1102,12 +1150,16 @@ class Estimation:
         as_factor,
         method: RepWgts | None = None,
         deff_ref: str | None = None,
+        design_df: int | None = None,
+        cov_filled: bool = False,
     ) -> Estimate:
         metadata = getattr(self._sample, "_metadata", None)
         estimate = Estimate(param, alpha=alpha, metadata=metadata)
         estimate.method = method.method if method is not None else "Taylor"
         estimate.deff_ref = deff_ref
         estimate.covariance = est_cov
+        estimate.design_df = design_df
+        estimate._cov_filled = cov_filled or len(est_list) <= 1
         estimate.as_factor = as_factor
         if by_cols and len(by_cols) > 0:
             by_tuple = tuple(by_cols)
@@ -1137,6 +1189,15 @@ class Estimation:
             estimate.estimates = final_ests
         else:
             estimate.estimates = est_list
+        # The distinct domains, in row order — a single by variable yields its
+        # levels, several yield level tuples (matching contrast keys).
+        estimate.domains = list(
+            dict.fromkeys(
+                p.by_level[0] if len(p.by_level) == 1 else p.by_level
+                for p in estimate.estimates
+                if p.by_level
+            )
+        )
         d_cache = self._get_factorized_design()
         strata_labels = self._design_strata_labels(d_cache)
         if strata_labels is not None:

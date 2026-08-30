@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import math
 
-from typing import TYPE_CHECKING, ClassVar, Literal, Sequence, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Sequence, cast
 
 import msgspec
 import numpy as np
@@ -35,6 +35,7 @@ from svy.wrangling.rows import _compile_where_to_pl_expr
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample
+    from svy.estimation.contrast import Contrast
     from svy.regression.margins import GLMMargins
 
 log = logging.getLogger(__name__)
@@ -144,6 +145,18 @@ class GLM:
         if self.fitted is None:
             raise ModelError.not_fitted(where="GLM")
         return self.fitted
+
+    def keys(self) -> list[str]:
+        """Contrast keys of the fitted model: the coefficient names."""
+        return self._ensure_fitted().keys()
+
+    def contrast(self, contrasts: Any, *, alpha: float = 0.05) -> "Contrast":
+        """Linear contrasts between fitted coefficients; see GLMFit.contrast."""
+        return self._ensure_fitted().contrast(contrasts, alpha=alpha)
+
+    def term_test(self, term: "str | Cat") -> FDist:
+        """Joint Wald test on a model term; see GLMFit.term_test."""
+        return self._ensure_fitted().term_test(term)
 
     # --- Print Width Configuration ---
 

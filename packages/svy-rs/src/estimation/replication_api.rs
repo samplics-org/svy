@@ -25,8 +25,13 @@ use crate::estimation::replication::{
     matrix_ratio_estimates_cols,
     matrix_total_by_domain, matrix_total_by_domain_cols, matrix_total_estimates,
     matrix_total_estimates_cols,
-    variance_from_replicates,
+    covariance_from_replicates, variance_from_replicates,
 };
+
+/// Row-major flat k×k covariance for the FFI boundary.
+fn flatten_cov(cov: Vec<Vec<f64>>) -> Vec<f64> {
+    cov.into_iter().flatten().collect()
+}
 
 // ============================================================================
 // Shared helpers
@@ -91,7 +96,7 @@ pub fn replicate_mean(
     degrees_of_freedom: Option<u32>,
     by_col: Option<String>,
     domain_mask_col: Option<String>,
-) -> PyResult<PyDataFrame> {
+) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
     let df: DataFrame = data.into();
     let n_reps = rep_weight_cols.len();
     let variance_center  = parse_variance_center(center)?;
@@ -110,12 +115,15 @@ pub fn replicate_mean(
         if by_col.is_none() {
             compute_replicate_mean_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
                 &rep_coefs, variance_center, df_val, domain_mask_col.as_deref())
+                .map(|out| (out, None))
         } else {
             compute_replicate_mean_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
                 &rep_coefs, variance_center, df_val, by_col.as_ref().unwrap())
+                .map(|(out, cov)| (out, Some(cov)))
         }
     });
-    result.map(PyDataFrame).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    result.map(|(out, cov)| (PyDataFrame(out), cov))
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
 }
 
 fn compute_replicate_mean_ungrouped(
@@ -156,7 +164,7 @@ fn compute_replicate_mean_grouped(
     rep_coefs: &[f64],
     center: VarianceCenter, df_val: u32,
     by_col: &str,
-) -> PolarsResult<DataFrame> {
+) -> PolarsResult<(DataFrame, Vec<f64>)> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
     let by_str = df.column(by_col)?.str()?;
@@ -192,8 +200,12 @@ fn compute_replicate_mean_grouped(
         dfs.push(df_val);
         ns.push(counts[k]);
     }
-    df![by_col => by_vals, "y" => vec![value_col; n_domains], "est" => estimates,
-        "se" => ses, "var" => variances, "df" => dfs, "n" => ns]
+    let cov = flatten_cov(covariance_from_replicates(
+        &theta_full_vec, &theta_reps_vec, &rep_coefs, center,
+    ));
+    let out = df![by_col => by_vals, "y" => vec![value_col; n_domains], "est" => estimates,
+        "se" => ses, "var" => variances, "df" => dfs, "n" => ns]?;
+    Ok((out, cov))
 }
 
 // ============================================================================
@@ -213,7 +225,7 @@ pub fn replicate_total(
     degrees_of_freedom: Option<u32>,
     by_col: Option<String>,
     domain_mask_col: Option<String>,
-) -> PyResult<PyDataFrame> {
+) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
     let df: DataFrame = data.into();
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
@@ -232,12 +244,15 @@ pub fn replicate_total(
         if by_col.is_none() {
             compute_replicate_total_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
                 &rep_coefs, variance_center, df_val, domain_mask_col.as_deref())
+                .map(|out| (out, None))
         } else {
             compute_replicate_total_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
                 &rep_coefs, variance_center, df_val, by_col.as_ref().unwrap())
+                .map(|(out, cov)| (out, Some(cov)))
         }
     });
-    result.map(PyDataFrame).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    result.map(|(out, cov)| (PyDataFrame(out), cov))
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
 }
 
 fn compute_replicate_total_ungrouped(
@@ -276,7 +291,7 @@ fn compute_replicate_total_grouped(
     rep_coefs: &[f64],
     center: VarianceCenter, df_val: u32,
     by_col: &str,
-) -> PolarsResult<DataFrame> {
+) -> PolarsResult<(DataFrame, Vec<f64>)> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
     let by_str = df.column(by_col)?.str()?;
@@ -312,8 +327,12 @@ fn compute_replicate_total_grouped(
         dfs.push(df_val);
         ns.push(counts[k]);
     }
-    df![by_col => by_vals, "y" => vec![value_col; n_domains], "est" => estimates,
-        "se" => ses, "var" => variances, "df" => dfs, "n" => ns]
+    let cov = flatten_cov(covariance_from_replicates(
+        &theta_full_vec, &theta_reps_vec, &rep_coefs, center,
+    ));
+    let out = df![by_col => by_vals, "y" => vec![value_col; n_domains], "est" => estimates,
+        "se" => ses, "var" => variances, "df" => dfs, "n" => ns]?;
+    Ok((out, cov))
 }
 
 // ============================================================================
@@ -532,7 +551,7 @@ pub fn replicate_ratio(
     degrees_of_freedom: Option<u32>,
     by_col: Option<String>,
     domain_mask_col: Option<String>,
-) -> PyResult<PyDataFrame> {
+) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
     let df: DataFrame = data.into();
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
@@ -552,13 +571,16 @@ pub fn replicate_ratio(
             compute_replicate_ratio_ungrouped(&df, &numerator_col, &denominator_col, &weight_col,
                 &rep_weight_cols, &rep_coefs, variance_center, df_val,
                 domain_mask_col.as_deref())
+                .map(|out| (out, None))
         } else {
             compute_replicate_ratio_grouped(&df, &numerator_col, &denominator_col, &weight_col,
                 &rep_weight_cols, &rep_coefs, variance_center, df_val,
                 by_col.as_ref().unwrap())
+                .map(|(out, cov)| (out, Some(cov)))
         }
     });
-    result.map(PyDataFrame).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    result.map(|(out, cov)| (PyDataFrame(out), cov))
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
 }
 
 fn compute_replicate_ratio_ungrouped(
@@ -601,7 +623,7 @@ fn compute_replicate_ratio_grouped(
     rep_coefs: &[f64],
     center: VarianceCenter, df_val: u32,
     by_col: &str,
-) -> PolarsResult<DataFrame> {
+) -> PolarsResult<(DataFrame, Vec<f64>)> {
     let y = df.column(numerator_col)?.f64()?;
     let x = df.column(denominator_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -639,8 +661,12 @@ fn compute_replicate_ratio_grouped(
         dfs.push(df_val);
         ns.push(counts[k]);
     }
-    df![by_col => by_vals, "y" => vec![numerator_col; n_domains], "x" => vec![denominator_col; n_domains],
-        "est" => estimates, "se" => ses, "var" => variances, "df" => dfs, "n" => ns]
+    let cov = flatten_cov(covariance_from_replicates(
+        &theta_full_vec, &theta_reps_vec, &rep_coefs, center,
+    ));
+    let out = df![by_col => by_vals, "y" => vec![numerator_col; n_domains], "x" => vec![denominator_col; n_domains],
+        "est" => estimates, "se" => ses, "var" => variances, "df" => dfs, "n" => ns]?;
+    Ok((out, cov))
 }
 
 // ============================================================================
@@ -660,7 +686,7 @@ pub fn replicate_prop(
     degrees_of_freedom: Option<u32>,
     by_col: Option<String>,
     domain_mask_col: Option<String>,
-) -> PyResult<PyDataFrame> {
+) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
     let df: DataFrame = data.into();
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
@@ -684,7 +710,8 @@ pub fn replicate_prop(
                 &rep_coefs, variance_center, df_val, by_col.as_ref().unwrap())
         }
     });
-    result.map(PyDataFrame).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    result.map(|(out, cov)| (PyDataFrame(out), Some(cov)))
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
 }
 
 fn compute_replicate_prop_ungrouped(
@@ -693,7 +720,7 @@ fn compute_replicate_prop_ungrouped(
     rep_coefs: &[f64],
     center: VarianceCenter, df_val: u32,
     domain_mask_col: Option<&str>,
-) -> PolarsResult<DataFrame> {
+) -> PolarsResult<(DataFrame, Vec<f64>)> {
     let y_series = df.column(value_col)?;
     let weights  = df.column(weight_col)?.f64()?;
     let n = y_series.len();
@@ -707,7 +734,7 @@ fn compute_replicate_prop_ungrouped(
     // preserved as-is without any numeric cast.
     let is_string = matches!(y_series.dtype(), DataType::String | DataType::Categorical(_, _));
 
-    let (n_levels, level_strs, estimates, variances) = if is_string {
+    let (n_levels, level_strs, estimates, variances, theta_reps) = if is_string {
         let y_cast = y_series.cast(&DataType::String)?;
         let y_arr: Vec<String> = y_cast.str()?.iter()
             .map(|v| v.unwrap_or("").to_string())
@@ -723,7 +750,7 @@ fn compute_replicate_prop_ungrouped(
         let vars: Vec<f64> = (0..n_l)
             .map(|l| variance_from_replicates(theta_full[l], &theta_reps[l], &rep_coefs, center))
             .collect();
-        (n_l, levels, theta_full, vars)
+        (n_l, levels, theta_full, vars, theta_reps)
     } else {
         // Integer or boolean: convert to i64 category codes.
         let y_arr: Vec<i64> = if y_series.dtype().is_integer() {
@@ -753,14 +780,18 @@ fn compute_replicate_prop_ungrouped(
             .map(|l| variance_from_replicates(theta_full[l], &theta_reps[l], &rep_coefs, center))
             .collect();
         let str_levels: Vec<String> = levels.iter().map(|l| l.to_string()).collect();
-        (n_l, str_levels, theta_full, vars)
+        (n_l, str_levels, theta_full, vars, theta_reps)
     };
 
+    let cov = flatten_cov(covariance_from_replicates(
+        &estimates, &theta_reps, &rep_coefs, center,
+    ));
     let ses: Vec<f64> = variances.iter().map(|v| v.sqrt()).collect();
     let ns:  Vec<u32> = vec![n as u32; n_levels];
     let dfs: Vec<u32> = vec![df_val; n_levels];
-    df!["y" => vec![value_col; n_levels], "level" => level_strs, "est" => estimates,
-        "se" => ses, "var" => variances, "df" => dfs, "n" => ns]
+    let out = df!["y" => vec![value_col; n_levels], "level" => level_strs, "est" => estimates,
+        "se" => ses, "var" => variances, "df" => dfs, "n" => ns]?;
+    Ok((out, cov))
 }
 
 fn compute_replicate_prop_grouped(
@@ -769,7 +800,7 @@ fn compute_replicate_prop_grouped(
     rep_coefs: &[f64],
     center: VarianceCenter, df_val: u32,
     by_col: &str,
-) -> PolarsResult<DataFrame> {
+) -> PolarsResult<(DataFrame, Vec<f64>)> {
     let y_series = df.column(value_col)?;
     let weights  = df.column(weight_col)?.f64()?;
     let by_str   = df.column(by_col)?.str()?;
@@ -821,6 +852,9 @@ fn compute_replicate_prop_grouped(
     let mut dfs:        Vec<u32>    = Vec::new();
     let mut ns:         Vec<u32>    = Vec::new();
 
+    // Rows and covariance axes share one (domain, level) order: domain-major,
+    // levels within.
+    let mut theta_reps_flat: Vec<Vec<f64>> = Vec::new();
     for (d, domain_name) in domain_names.iter().enumerate() {
         for (l, level) in levels_str.iter().enumerate() {
             let theta_full = theta_full_mat[d][l];
@@ -832,12 +866,17 @@ fn compute_replicate_prop_grouped(
             variances.push(variance);
             dfs.push(df_val);
             ns.push(counts[d]);
+            theta_reps_flat.push(theta_reps_mat[d][l].clone());
         }
     }
+    let cov = flatten_cov(covariance_from_replicates(
+        &estimates, &theta_reps_flat, &rep_coefs, center,
+    ));
     let n_rows = by_vals.len();
     let _ = n_levels; // used implicitly via levels_str iteration above
-    df![by_col => by_vals, "y" => vec![value_col; n_rows], "level" => level_strs,
-        "est" => estimates, "se" => ses, "var" => variances, "df" => dfs, "n" => ns]
+    let out = df![by_col => by_vals, "y" => vec![value_col; n_rows], "level" => level_strs,
+        "est" => estimates, "se" => ses, "var" => variances, "df" => dfs, "n" => ns]?;
+    Ok((out, cov))
 }
 
 // ============================================================================
