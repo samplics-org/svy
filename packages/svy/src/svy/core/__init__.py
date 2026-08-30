@@ -34,6 +34,7 @@ from svy.core.expr import (
     sum_horizontal,
     when,
 )
+from svy.core.functions import combine_samples
 from svy.core.repwgts import (
     BootstrapWgts,
     BrrWgts,
@@ -86,6 +87,8 @@ __all__ = [
     "RepWgts",
     "SdrWgts",
     "Sample",
+    # Free functions
+    "combine_samples",
     "Singleton",
     "SingletonInfo",
     "SingletonResult",

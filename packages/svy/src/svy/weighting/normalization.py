@@ -35,6 +35,7 @@ def normalize(
     sample: Sample,
     controls: DomainScalarMap | Number | None = None,
     *,
+    factor: Number | None = None,
     shares: DomainScalarMap | None = None,
     cells: str | Sequence[str] | None = None,
     where: WhereArg = None,
@@ -43,6 +44,18 @@ def normalize(
     update_design_wgts: bool = True,
 ) -> Sample:
     ctx = "Sample.weighting.normalize"
+    if factor is not None:
+        if controls is not None or shares is not None or cells is not None or where is not None:
+            raise MethodError.not_applicable(
+                where=ctx,
+                method="normalize",
+                reason="factor multiplies every weight and cannot be combined with controls, shares, cells or where",
+                param="factor",
+            )
+        if not float(factor) > 0.0:
+            raise MethodError.invalid_range(
+                where=ctx, param="factor", got=factor, min_=0.0, max_=None
+            )
     df = sample._data
     design = sample._design
 
@@ -68,19 +81,30 @@ def normalize(
             reason=f"Column '{wgt_name}' already exists. Choose a different wgt_name.",
         )
 
-    spec = build_cells(df, cells, where, where=ctx)
     wgt_arr = df.get_column(wgt).to_numpy().astype(np.float64)
-    targets = resolve_targets(
-        controls=controls,
-        shares=shares,
-        spec=spec,
-        wgt_arr=wgt_arr,
-        method="normalize",
-        where=ctx,
-        counts_when_none=True,
-    )
+    if factor is not None:
+        f = float(factor)
+        norm_arr = wgt_arr * f
 
-    norm_arr = scale_to_targets(wgt_arr.reshape(-1, 1), spec, targets)[:, 0]
+        def adjust_reps(arr: np.ndarray) -> np.ndarray:
+            return arr * f
+    else:
+        spec = build_cells(df, cells, where, where=ctx)
+        targets = resolve_targets(
+            controls=controls,
+            shares=shares,
+            spec=spec,
+            wgt_arr=wgt_arr,
+            method="normalize",
+            where=ctx,
+            counts_when_none=True,
+        )
+        norm_arr = scale_to_targets(wgt_arr.reshape(-1, 1), spec, targets)[:, 0]
+        cell_spec, cell_targets = spec, targets
+
+        def adjust_reps(arr: np.ndarray) -> np.ndarray:
+            return scale_to_targets(arr, cell_spec, cell_targets)
+
     df = df.with_columns(pl.Series(name=wgt_name, values=norm_arr))
 
     if update_design_wgts:
@@ -96,7 +120,7 @@ def normalize(
     if not ignore_reps and design.rep_wgts is not None:
         rep_cols = design.rep_wgts.columns
         if rep_cols:
-            adj = scale_to_targets(df.select(rep_cols).to_numpy(), spec, targets)
+            adj = adjust_reps(df.select(rep_cols).to_numpy())
             n_reps = len(rep_cols)
             new_names = [f"{wgt_name}{i}" for i in range(1, n_reps + 1)]
             sample._data = df.hstack(pl.DataFrame(adj, schema=new_names))
