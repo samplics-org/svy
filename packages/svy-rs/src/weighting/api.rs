@@ -111,24 +111,6 @@ pub fn poststratify(
     Ok(result.into_pyarray(py).to_owned().into())
 }
 
-#[pyfunction]
-pub fn poststratify_factor(
-    py: Python<'_>,
-    wgt: PyReadonlyArray2<f64>,
-    by_arr: PyReadonlyArray1<i64>,
-    factor: PyReadonlyArray1<f64>,
-) -> PyResult<Py<PyArray2<f64>>> {
-    let fct = factor.as_array().to_owned();
-    let result = crate::weighting::poststratification::poststratify_factor(
-        wgt.as_array(),
-        by_arr.as_array(),
-        &fct,
-    )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-
-    Ok(result.into_pyarray(py).to_owned().into())
-}
-
 // ============================================================================
 // Calibration
 // ============================================================================

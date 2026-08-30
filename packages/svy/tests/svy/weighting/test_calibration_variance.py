@@ -296,3 +296,53 @@ def test_nhanes_standardized_se_matches_r(nhanes):
     for row in got.iter_rows(named=True):
         key = (int(row["race"]), int(row["RIAGENDR"]))
         assert_allclose(row["se"], R_DB92_SE[key], rtol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Estimators beyond mean/total that share the variance funnel
+# ---------------------------------------------------------------------------
+
+R_PS_MEDIAN_SE = 37.0666231974705
+
+
+def test_poststratified_proportions_have_no_sampling_error(design):
+    """A proportion is the mean of an indicator, so the pinned variable's own
+    proportions carry no variability. R gives 0 for all three levels."""
+    ps = design().weighting.poststratify(STYPE_POP, cells="stype")
+    got = ps.estimation.prop("stype").to_polars()
+    for se in got["se"].to_list():
+        assert se == pytest.approx(0.0, abs=1e-9)
+
+
+def test_poststratified_tabulate_has_no_sampling_error(design):
+    """Same claim through the categorical path, which reaches the variance
+    funnel via score columns rather than the estimation API."""
+    ps = design().weighting.poststratify(STYPE_POP, cells="stype")
+    tab = ps.categorical.tabulate("stype").to_polars()
+    col = next(c for c in tab.columns if c.lower() in ("se", "stderr"))
+    for se in tab[col].to_list():
+        assert se == pytest.approx(0.0, abs=1e-9)
+
+
+def test_poststratified_median_se_matches_r(design):
+    """Woodruff quantiles invert a proportion's CI, so they inherit the sweep
+    through `taylor_variance_apply` with no quantile-specific work."""
+    ps = design().weighting.poststratify(STYPE_POP, cells="stype")
+    got = ps.estimation.median("api00").to_polars()["se"][0]
+    assert_allclose(got, R_PS_MEDIAN_SE, rtol=1e-9)
+
+
+def test_regression_paths_are_not_yet_calibration_aware(design):
+    """Explicitly pins what is NOT done, so it cannot be mistaken for done.
+
+    `glm` and the two-sample t-test build variance from influence functions
+    that already carry the bread matrix. R sweeps the estimating functions
+    before the bread; since the sweep is per-column and the bread mixes
+    columns, sweeping afterwards is not equivalent. Their SEs therefore still
+    treat the weights as fixed -- use method="replication", which is correct
+    for every adjustment today.
+    """
+    ps = design().weighting.poststratify(STYPE_POP, cells="stype")
+    tt = ps.categorical.ttest("api00", group="sch.wide").to_polars()
+    # R's svyttest on the poststratified design gives t = 1.76185477505784.
+    assert tt["t"][0] != pytest.approx(1.76185477505784, rel=1e-6)

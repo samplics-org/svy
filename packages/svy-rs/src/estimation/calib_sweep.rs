@@ -373,3 +373,24 @@ pub fn build_calib_sweep(df: &DataFrame, spec: &CalibSpec) -> Option<CalibSweep>
         spec.pins_total,
     ))
 }
+
+/// Centre a score column, for callers that hold `Float64Chunked` rather than a
+/// slice (the categorical estimators, which hand score columns to
+/// `taylor_variance` / `taylor_variance_matrix`).
+///
+/// Sweeping at the call site means those variance functions stay exactly as
+/// they are: the scores they receive are already centred.
+pub fn sweep_scores(
+    scores: &Float64Chunked,
+    calib: Option<&CalibSweep>,
+    domain: Option<&[bool]>,
+) -> Float64Chunked {
+    match calib {
+        None => scores.clone(),
+        Some(c) => {
+            let mut v: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+            c.apply_in_domain(&mut v, domain);
+            Float64Chunked::from_slice(scores.name().clone(), &v)
+        }
+    }
+}

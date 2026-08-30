@@ -14,6 +14,7 @@ import numpy as np
 import polars as pl
 import svy_rs as rs
 
+from svy.core.data_prep import calib_kwargs
 from svy.core.enumerations import PopParam, QuantileMethod
 from svy.estimation.estimate import Estimate
 
@@ -21,35 +22,6 @@ from svy.estimation.estimate import Estimate
 if TYPE_CHECKING:
     from svy.core.data_prep import PreparedData
     from svy.estimation.base import Estimation
-
-
-def _calib_kwargs(est, df) -> dict:
-    """Weight-adjustment columns for the Rust score-centring sweep.
-
-    Returns nothing unless the design carries a variance-consumed record that
-    still describes the data in hand. The checks are the documented
-    invalidation rule: the record describes how the ACTIVE weight was made, so
-    a different active weight means it no longer applies, and a snapshotted
-    column that has since been dropped cannot be swept against. Either way
-    variance falls back to treating weights as fixed -- what it does today --
-    rather than centring against a structure that may no longer hold.
-    """
-    design = est._sample._design
-    rec = getattr(design, "wgt_adjustment", None)
-    if rec is None or not rec.is_variance_consumed:
-        return {}
-    if design.wgt != rec.new_wgt:
-        return {}
-    needed = [rec.prev_wgt, *(rec.cells or ()), *(rec.aux or ())]
-    if any(c not in df.columns for c in needed):
-        return {}
-    return {
-        "calib_kind": rec.kind,
-        "calib_cells": list(rec.cells) if rec.cells else None,
-        "calib_aux": list(rec.aux) if rec.aux else None,
-        "calib_prev_wgt": rec.prev_wgt,
-        "calib_pins_total": rec.pins_total,
-    }
 
 
 def taylor_mean(
@@ -84,7 +56,7 @@ def taylor_mean(
         by_col=prep.by_col,
         singleton_method=center_arg,
         deff_ref=deff_ref,
-        **_calib_kwargs(est, df),
+        **calib_kwargs(est._sample, df),
     )
 
     if est._should_run_double_pass():
@@ -213,7 +185,7 @@ def taylor_total(
         by_col=prep.by_col,
         singleton_method=center_arg,
         deff_ref=deff_ref,
-        **_calib_kwargs(est, df),
+        **calib_kwargs(est._sample, df),
     )
 
     if est._should_run_double_pass():
@@ -338,7 +310,7 @@ def taylor_ratio(
         by_col=prep.by_col,
         singleton_method=center_arg,
         deff_ref=deff_ref,
-        **_calib_kwargs(est, df),
+        **calib_kwargs(est._sample, df),
     )
 
     if est._should_run_double_pass():
@@ -414,7 +386,7 @@ def taylor_prop(
         by_col=prep.by_col,
         singleton_method=center_arg,
         deff_ref=deff_ref,
-        **_calib_kwargs(est, df),
+        **calib_kwargs(est._sample, df),
     )
 
     if est._should_run_double_pass():
@@ -489,6 +461,7 @@ def taylor_median(
         by_col=prep.by_col,
         singleton_method=center_arg,
         quantile_method=q_method_str,
+        **calib_kwargs(est._sample, df),
     )
 
     est_list = est._median_result_to_param_est(
@@ -660,6 +633,7 @@ def taylor_median_multi(
         fpc_ssu_col=fpc_ssu_col,
         singleton_method=center_arg,
         quantile_method=q_method_str,
+        **calib_kwargs(est._sample, df),
     )
 
     results: list[Estimate] = []
@@ -723,6 +697,7 @@ def taylor_quantile(
         by_col=prep.by_col,
         singleton_method=center_arg,
         quantile_method=q_method_str,
+        **calib_kwargs(est._sample, df),
     )
 
     results: list[Estimate] = []

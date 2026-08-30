@@ -12,6 +12,8 @@ use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 
+use crate::estimation::calib_sweep::{CalibSpec, CalibSweep, build_calib_sweep};
+
 use crate::categorical::ranktest::{RankScoreMethod, ranktest_k_sample, ranktest_two_sample};
 use crate::categorical::tabulation::{
     count_strata_psus, estimate_proportions, estimate_totals, rao_scott, sort_levels,
@@ -226,7 +228,8 @@ where
     strata_col=None, psu_col=None, ssu_col=None,
     fpc_col=None, fpc_ssu_col=None, singleton_method=None,
     null_value=0.0, domain_col=None, domain_val=None, by_col=None,
-))]
+    calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None,
+    calib_pins_total=None))]
 pub fn ttest_rs(
     _py: Python,
     data: PyDataFrame,
@@ -243,8 +246,26 @@ pub fn ttest_rs(
     domain_col: Option<String>,
     domain_val: Option<String>,
     by_col: Option<String>,
+    calib_kind: Option<String>,
+    calib_cells: Option<Vec<String>>,
+    calib_aux: Option<Vec<String>>,
+    calib_prev_wgt: Option<String>,
+    calib_pins_total: Option<bool>,
 ) -> PyResult<PyDataFrame> {
     let df: DataFrame = data.into();
+    let calib = calib_kind.zip(calib_prev_wgt).and_then(|(kind, prev)| {
+        build_calib_sweep(
+            &df,
+            &CalibSpec {
+                kind,
+                cells_cols: calib_cells.unwrap_or_default(),
+                aux_cols: calib_aux.unwrap_or_default(),
+                prev_wgt_col: prev,
+                new_wgt_col: weight_col.clone(),
+                pins_total: calib_pins_total.unwrap_or(true),
+            },
+        )
+    });
     let result = compute_svyttest(
         &df,
         &y_col,
@@ -260,6 +281,7 @@ pub fn ttest_rs(
         domain_col.as_deref(),
         domain_val.as_deref(),
         by_col.as_deref(),
+        calib.as_ref(),
     )
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok(PyDataFrame(result))
@@ -280,6 +302,7 @@ fn compute_svyttest(
     domain_col: Option<&str>,
     domain_val: Option<&str>,
     by_col: Option<&str>,
+    calib: Option<&CalibSweep>,
 ) -> PolarsResult<DataFrame> {
     match by_col {
         None => compute_svyttest_single(
@@ -296,6 +319,7 @@ fn compute_svyttest(
             null_value,
             domain_col,
             domain_val,
+            calib,
         ),
         Some(by) => compute_by_groups(df, by, domain_col, domain_val, |temp_df, d_col, d_val| {
             compute_svyttest_single(
@@ -312,6 +336,7 @@ fn compute_svyttest(
                 null_value,
                 d_col,
                 d_val,
+                calib,
             )
         }),
     }
@@ -331,6 +356,7 @@ fn compute_svyttest_single(
     null_value: f64,
     domain_col: Option<&str>,
     domain_val: Option<&str>,
+    calib: Option<&CalibSweep>,
 ) -> PolarsResult<DataFrame> {
     let strata = get_opt_col(df, strata_col)?;
     let psu = get_opt_col(df, psu_col)?;
@@ -359,6 +385,7 @@ fn compute_svyttest_single(
                     fpc,
                     fpc_ssu,
                     singleton_method,
+                    calib,
                     null_value,
                 )?
             } else {
@@ -371,6 +398,7 @@ fn compute_svyttest_single(
                     fpc,
                     fpc_ssu,
                     singleton_method,
+                    calib,
                     null_value,
                 )?
             };
@@ -414,6 +442,7 @@ fn compute_svyttest_single(
                 fpc,
                 fpc_ssu,
                 singleton_method,
+                calib,
                 levels.clone(),
                 null_value,
             )?;
@@ -646,6 +675,8 @@ fn compute_svyranktest_single(
     colvar_col=None, strata_col=None, psu_col=None, ssu_col=None,
     fpc_col=None, fpc_ssu_col=None, singleton_method=None,
     compute_totals=false,
+    calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None,
+    calib_pins_total=None,
 ))]
 pub fn tabulate_rs(
     _py: Python,
@@ -660,8 +691,26 @@ pub fn tabulate_rs(
     fpc_ssu_col: Option<String>,
     singleton_method: Option<String>,
     compute_totals: bool,
+    calib_kind: Option<String>,
+    calib_cells: Option<Vec<String>>,
+    calib_aux: Option<Vec<String>>,
+    calib_prev_wgt: Option<String>,
+    calib_pins_total: Option<bool>,
 ) -> PyResult<(PyDataFrame, PyDataFrame)> {
     let df: DataFrame = data.into();
+    let calib = calib_kind.zip(calib_prev_wgt).and_then(|(kind, prev)| {
+        build_calib_sweep(
+            &df,
+            &CalibSpec {
+                kind,
+                cells_cols: calib_cells.unwrap_or_default(),
+                aux_cols: calib_aux.unwrap_or_default(),
+                prev_wgt_col: prev,
+                new_wgt_col: weight_col.clone(),
+                pins_total: calib_pins_total.unwrap_or(true),
+            },
+        )
+    });
     let result = compute_tabulate(
         &df,
         &rowvar_col,
@@ -674,6 +723,7 @@ pub fn tabulate_rs(
         fpc_ssu_col.as_deref(),
         singleton_method.as_deref(),
         compute_totals,
+        calib.as_ref(),
     )
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok((PyDataFrame(result.0), PyDataFrame(result.1)))
@@ -691,6 +741,7 @@ fn compute_tabulate(
     fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
     compute_totals: bool,
+    calib: Option<&CalibSweep>,
 ) -> PolarsResult<(DataFrame, DataFrame)> {
     let weights = df.column(weight_col)?.as_materialized_series().f64()?;
     // Design columns as owned Columns (cheap Arc clone); the variance/df kernels
@@ -756,6 +807,7 @@ fn compute_tabulate(
         fpc.as_ref(),
         fpc_ssu.as_ref(),
         singleton_method,
+        calib,
     )?;
 
     let k = levels.len();
@@ -789,6 +841,7 @@ fn compute_tabulate(
             fpc.as_ref(),
             fpc_ssu.as_ref(),
             singleton_method,
+            calib,
             &levels,
         )?
     } else {

@@ -819,3 +819,45 @@ def prepare_data(
         by_cols=by_cols_list,
         singleton_method=singleton_method,
     )
+
+
+def calib_kwargs(sample, df) -> dict:
+    """Weight-adjustment columns for the Rust score-centring sweep.
+
+    Returns nothing unless the design carries a variance-consumed record that
+    still describes the data in hand. The checks are the documented
+    invalidation rule: the record describes how the ACTIVE weight was made, so
+    a different active weight means it no longer applies, and a snapshotted
+    column that has since been dropped cannot be swept against. Either way
+    variance falls back to treating weights as fixed -- what it does today --
+    rather than centring against a structure that may no longer hold.
+    """
+    design = sample._design
+    rec = getattr(design, "wgt_adjustment", None)
+    if rec is None or not rec.is_variance_consumed:
+        return {}
+    if design.wgt != rec.new_wgt:
+        return {}
+    needed = [rec.prev_wgt, *(rec.cells or ()), *(rec.aux or ())]
+    if any(c not in df.columns for c in needed):
+        return {}
+    return {
+        "calib_kind": rec.kind,
+        "calib_cells": list(rec.cells) if rec.cells else None,
+        "calib_aux": list(rec.aux) if rec.aux else None,
+        "calib_prev_wgt": rec.prev_wgt,
+        "calib_pins_total": rec.pins_total,
+    }
+
+
+def record_columns(design, df) -> list[str]:
+    """Columns a variance-consumed adjustment record needs, present in ``df``.
+
+    Callers that subset columns themselves must carry these through, and must
+    keep them out of null checks: a snapshotted cells column is null exactly
+    where a row fell outside the adjustment.
+    """
+    rec = getattr(design, "wgt_adjustment", None)
+    if rec is None or not rec.is_variance_consumed:
+        return []
+    return [c for c in (rec.prev_wgt, *(rec.cells or ()), *(rec.aux or ())) if c in df.columns]

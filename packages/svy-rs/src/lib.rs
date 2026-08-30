@@ -97,7 +97,6 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(weighting::api::adjust_nr, m)?)?;
     m.add_function(wrap_pyfunction!(weighting::api::normalize, m)?)?;
     m.add_function(wrap_pyfunction!(weighting::api::poststratify, m)?)?;
-    m.add_function(wrap_pyfunction!(weighting::api::poststratify_factor, m)?)?;
     m.add_function(wrap_pyfunction!(weighting::api::calibrate, m)?)?;
     m.add_function(wrap_pyfunction!(weighting::api::calibrate_by_domain, m)?)?;
     m.add_function(wrap_pyfunction!(weighting::api::calibrate_parallel, m)?)?;

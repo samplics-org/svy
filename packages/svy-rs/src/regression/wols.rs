@@ -296,6 +296,12 @@ pub fn influence_se(
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
+    // NOTE: no calibration sweep here. These influence functions already carry
+    // the bread matrix; R sweeps the estimating functions BEFORE the bread, and
+    // since the sweep is per-column while the bread mixes columns, sweeping
+    // afterwards is not equivalent -- it lands within about 1% of R, which is
+    // worse than not sweeping because it looks correct. Doing it properly means
+    // sweeping where the scores are built, the same change glm.rs needs.
 ) -> PolarsResult<Vec<f64>> {
     let mut ses = Vec::with_capacity(k);
 
@@ -328,6 +334,12 @@ pub fn influence_covariance(
     strata: Option<&Column>,
     psu: Option<&Column>,
     singleton_method: Option<&str>,
+    // NOTE: no calibration sweep here. These influence functions already carry
+    // the bread matrix; R sweeps the estimating functions BEFORE the bread, and
+    // since the sweep is per-column while the bread mixes columns, sweeping
+    // afterwards is not equivalent -- it lands within about 1% of R, which is
+    // worse than not sweeping because it looks correct. Doing it properly means
+    // sweeping where the scores are built, the same change glm.rs needs.
 ) -> PolarsResult<Vec<f64>> {
     // Index strata and PSUs. The GLM/WOLS prep always passes String design
     // columns (it does not use the Phase C integer-code cache), and this path

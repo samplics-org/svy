@@ -13,6 +13,7 @@ use faer::Mat;
 use faer::prelude::Reborrow;
 use polars::prelude::*;
 
+use crate::estimation::calib_sweep::{CalibSweep, sweep_scores};
 use crate::estimation::{
     degrees_of_freedom, point_estimate_mean, point_estimate_total, scores_mean, scores_total,
     srs_variance_mean, taylor::SrsRef, taylor_variance,
@@ -205,6 +206,7 @@ pub fn estimate_proportions(
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
+    calib: Option<&CalibSweep>,
 ) -> PolarsResult<(
     Vec<String>,
     Vec<f64>,
@@ -261,7 +263,7 @@ pub fn estimate_proportions(
         let ind_ca = Float64Chunked::from_slice_options("ind".into(), &indicators[j]);
 
         let est = point_estimate_mean(&ind_ca, weights)?;
-        let scores = scores_mean(&ind_ca, weights)?;
+        let scores = sweep_scores(&scores_mean(&ind_ca, weights)?, calib, None);
 
         let var_scalar = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, sm)?;
         let srs_var = srs_variance_mean(
@@ -305,6 +307,7 @@ pub fn estimate_totals(
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
+    calib: Option<&CalibSweep>,
     levels: &[String],
 ) -> PolarsResult<(Vec<f64>, Vec<f64>)> {
     let mut totals = Vec::with_capacity(levels.len());
@@ -337,7 +340,7 @@ pub fn estimate_totals(
     for j in 0..kk {
         let ind_ca = Float64Chunked::from_slice_options("ind".into(), &indicators[j]);
         let est = point_estimate_total(&ind_ca, weights)?;
-        let scores = scores_total(&ind_ca, weights)?;
+        let scores = sweep_scores(&scores_total(&ind_ca, weights)?, calib, None);
         let var = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
         totals.push(est);
         total_ses.push(var.max(0.0).sqrt());

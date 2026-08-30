@@ -1821,7 +1821,7 @@ fn compute_prop_grouped(
 /// Woodruff quantiles for one variable. One row per probability (and per
 /// domain when `by_col` is set), carrying the probability in a `prob` column.
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, probs, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, quantile_method=None))]
+#[pyo3(signature = (data, value_col, weight_col, probs, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn taylor_quantile(
     _py: Python,
@@ -1837,8 +1837,22 @@ pub fn taylor_quantile(
     by_col: Option<String>,
     singleton_method: Option<String>,
     quantile_method: Option<String>,
+    calib_kind: Option<String>,
+    calib_cells: Option<Vec<String>>,
+    calib_aux: Option<Vec<String>>,
+    calib_prev_wgt: Option<String>,
+    calib_pins_total: Option<bool>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
+    let calib = make_calib(
+        &df,
+        &weight_col,
+        calib_kind,
+        calib_cells,
+        calib_aux,
+        calib_prev_wgt,
+        calib_pins_total,
+    );
     let q_method = quantile_method
         .as_deref()
         .map(SvyQuantileMethod::from_str)
@@ -1855,6 +1869,7 @@ pub fn taylor_quantile(
             fpc_col.as_deref(),
             fpc_ssu_col.as_deref(),
             singleton_method.as_deref(),
+            calib,
             &probs,
             q_method,
         ),
@@ -1869,6 +1884,7 @@ pub fn taylor_quantile(
             fpc_ssu_col.as_deref(),
             by,
             singleton_method.as_deref(),
+            calib,
             &probs,
             q_method,
         ),
@@ -1881,7 +1897,7 @@ pub fn taylor_quantile(
 /// `compute_quantile_multi`). Rows are ordered variable-major, then by
 /// probability, matching the input order of both.
 #[pyfunction]
-#[pyo3(signature = (data, value_cols, weight_col, probs, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, quantile_method=None))]
+#[pyo3(signature = (data, value_cols, weight_col, probs, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn taylor_quantile_multi(
     _py: Python,
@@ -1896,8 +1912,22 @@ pub fn taylor_quantile_multi(
     fpc_ssu_col: Option<String>,
     singleton_method: Option<String>,
     quantile_method: Option<String>,
+    calib_kind: Option<String>,
+    calib_cells: Option<Vec<String>>,
+    calib_aux: Option<Vec<String>>,
+    calib_prev_wgt: Option<String>,
+    calib_pins_total: Option<bool>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
+    let calib = make_calib(
+        &df,
+        &weight_col,
+        calib_kind,
+        calib_cells,
+        calib_aux,
+        calib_prev_wgt,
+        calib_pins_total,
+    );
     let q_method = quantile_method
         .as_deref()
         .map(SvyQuantileMethod::from_str)
@@ -1914,6 +1944,7 @@ pub fn taylor_quantile_multi(
                 fpc_col.as_deref(),
                 fpc_ssu_col.as_deref(),
                 singleton_method.as_deref(),
+                calib,
                 &probs,
                 q_method,
             )
@@ -1965,7 +1996,7 @@ fn without_prob(mut df: DataFrame) -> PolarsResult<DataFrame> {
 }
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, quantile_method=None))]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn taylor_median(
     _py: Python,
@@ -1980,6 +2011,11 @@ pub fn taylor_median(
     by_col: Option<String>,
     singleton_method: Option<String>,
     quantile_method: Option<String>,
+    calib_kind: Option<String>,
+    calib_cells: Option<Vec<String>>,
+    calib_aux: Option<Vec<String>>,
+    calib_prev_wgt: Option<String>,
+    calib_pins_total: Option<bool>,
 ) -> PyResult<PyDataFrame> {
     let out = taylor_quantile(
         _py,
@@ -1995,6 +2031,11 @@ pub fn taylor_median(
         by_col,
         singleton_method,
         quantile_method,
+        calib_kind,
+        calib_cells,
+        calib_aux,
+        calib_prev_wgt,
+        calib_pins_total,
     )?;
     let result = without_prob(out.0)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -2004,7 +2045,7 @@ pub fn taylor_median(
 /// Batched ungrouped median over many variables. One row per variable, in
 /// input order.
 #[pyfunction]
-#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, quantile_method=None))]
+#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn taylor_median_multi(
     _py: Python,
@@ -2018,6 +2059,11 @@ pub fn taylor_median_multi(
     fpc_ssu_col: Option<String>,
     singleton_method: Option<String>,
     quantile_method: Option<String>,
+    calib_kind: Option<String>,
+    calib_cells: Option<Vec<String>>,
+    calib_aux: Option<Vec<String>>,
+    calib_prev_wgt: Option<String>,
+    calib_pins_total: Option<bool>,
 ) -> PyResult<PyDataFrame> {
     let out = taylor_quantile_multi(
         _py,
@@ -2032,6 +2078,11 @@ pub fn taylor_median_multi(
         fpc_ssu_col,
         singleton_method,
         quantile_method,
+        calib_kind,
+        calib_cells,
+        calib_aux,
+        calib_prev_wgt,
+        calib_pins_total,
     )?;
     let result = without_prob(out.0)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -2055,6 +2106,7 @@ fn resolve_quantile_cols<'a>(
     fpc_col: Option<&str>,
     fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    calib: Option<CalibSweep>,
 ) -> PolarsResult<QuantileCols<'a>> {
     let weights = df.column(weight_col)?.f64()?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -2069,7 +2121,8 @@ fn resolve_quantile_cols<'a>(
 
     // The design is independent of both the variable and the probability, so
     // indexing it once serves every (variable, prob) pair below.
-    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+    let design =
+        build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?.with_calib(calib);
     Ok(QuantileCols {
         weights,
         strata,
@@ -2088,6 +2141,7 @@ fn compute_quantile_ungrouped(
     fpc_col: Option<&str>,
     fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    calib: Option<CalibSweep>,
     probs: &[f64],
     q_method: SvyQuantileMethod,
 ) -> PolarsResult<DataFrame> {
@@ -2101,6 +2155,7 @@ fn compute_quantile_ungrouped(
         fpc_col,
         fpc_ssu_col,
         singleton_method,
+        calib,
     )?;
 
     let rows = quantiles_woodruff(y, cols.weights, None, &cols.design, probs, q_method)?;
@@ -2127,6 +2182,7 @@ fn compute_quantile_multi(
     fpc_col: Option<&str>,
     fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    calib: Option<CalibSweep>,
     probs: &[f64],
     q_method: SvyQuantileMethod,
 ) -> PolarsResult<DataFrame> {
@@ -2139,6 +2195,7 @@ fn compute_quantile_multi(
         fpc_col,
         fpc_ssu_col,
         singleton_method,
+        calib,
     )?;
 
     // df is design-only, identical across variables — compute once.
@@ -2185,6 +2242,7 @@ fn compute_quantile_grouped(
     fpc_ssu_col: Option<&str>,
     by_col: &str,
     singleton_method: Option<&str>,
+    calib: Option<CalibSweep>,
     probs: &[f64],
     q_method: SvyQuantileMethod,
 ) -> PolarsResult<DataFrame> {
@@ -2198,6 +2256,7 @@ fn compute_quantile_grouped(
         fpc_col,
         fpc_ssu_col,
         singleton_method,
+        calib,
     )?;
     let by_str = df.column(by_col)?.str()?;
     let unique_groups = by_str.unique()?;
