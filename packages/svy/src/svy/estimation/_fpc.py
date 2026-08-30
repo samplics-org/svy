@@ -2,7 +2,7 @@
 """
 Finite Population Correction (FPC) column construction.
 
-Module-level functions that take an Estimation instance as first argument.
+Module-level helpers shared by the estimation, regression and t-test facades.
 Used by taylor.py for FPC-corrected variance estimation.
 """
 
@@ -10,22 +10,16 @@ from __future__ import annotations
 
 import logging
 
-from typing import TYPE_CHECKING
-
 import polars as pl
 
 from svy.core.design import PopSize
 from svy.errors import DimensionError, MethodError
 
 
-if TYPE_CHECKING:
-    from svy.estimation.base import Estimation
-
 log = logging.getLogger(__name__)
 
 
 def compute_fpc_columns(
-    est: Estimation,
     data: pl.DataFrame,
     pop_size: str | PopSize,
     strata_col: str | None,

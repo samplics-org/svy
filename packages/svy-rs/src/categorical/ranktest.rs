@@ -282,6 +282,7 @@ pub fn ranktest_two_sample(
         fpc,
         fpc_ssu,
         singleton_method,
+        None,
     )?;
 
     // 6. Test statistic
@@ -378,7 +379,8 @@ pub fn ranktest_k_sample(
         fit_wols(&rankscore, &xmat, w, n, k).map_err(|e| PolarsError::ComputeError(e.into()))?;
 
     // 4. Design-based covariance of coefficients
-    let cov_flat = influence_covariance(&wols.influence, w, n, k, strata, psu, singleton_method)?;
+    let cov_flat =
+        influence_covariance(&wols.influence, w, n, k, strata, psu, singleton_method, None)?;
 
     // 5. Wald test on non-intercept coefficients
     // Extract beta[-1] and V[-1,-1]
@@ -421,6 +423,7 @@ pub fn ranktest_k_sample(
         fpc,
         fpc_ssu,
         singleton_method,
+        None,
     )?;
 
     let mut group_means = vec![wols.beta[0]]; // reference group mean

@@ -303,7 +303,7 @@ class Estimation:
     def _compute_fpc_columns(self, data, pop_size, strata_col, psu_col, ssu_col=None):
         from svy.estimation._fpc import compute_fpc_columns
 
-        return compute_fpc_columns(self, data, pop_size, strata_col, psu_col, ssu_col)
+        return compute_fpc_columns(data, pop_size, strata_col, psu_col, ssu_col)
 
     # ----------------------------------------------------------------
     # Internal Helpers

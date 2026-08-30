@@ -23,6 +23,8 @@ use faer::prelude::Solve;
 use faer::{Mat, MatRef, Side};
 
 use polars::prelude::*;
+
+use crate::estimation::calib_sweep::CalibSweep;
 use rayon::prelude::*;
 use std::collections::HashMap;
 
@@ -457,9 +459,10 @@ pub fn fit_glm(
     link_str: &str,
     tol: f64,
     max_iter: usize,
+    calib: Option<&CalibSweep>,
 ) -> PolarsResult<GlmResult> {
     fit_glm_domain(
-        y, x_cols, weights, strata, psu, fpc, None, family_str, link_str, tol, max_iter,
+        y, x_cols, weights, strata, psu, fpc, None, family_str, link_str, tol, max_iter, calib,
     )
 }
 
@@ -482,6 +485,7 @@ pub fn fit_glm_by(
     link_str: &str,
     tol: f64,
     max_iter: usize,
+    calib: Option<&CalibSweep>,
 ) -> PolarsResult<Vec<(String, GlmResult)>> {
     // Materialize by_col as strings, enumerate unique levels.
     let by_str_series = by_col.cast(&DataType::String)?;
@@ -516,6 +520,7 @@ pub fn fit_glm_by(
                 link_str,
                 tol,
                 max_iter,
+                calib,
             );
             (group_val.to_string(), res)
         })
@@ -561,6 +566,7 @@ fn fit_glm_domain(
     link_str: &str,
     tol: f64,
     max_iter: usize,
+    calib: Option<&CalibSweep>,
 ) -> PolarsResult<GlmResult> {
     let family = Family::from_str(family_str)?;
     let link = Link::from_str(link_str)?;
@@ -826,9 +832,55 @@ fn fit_glm_domain(
         None => None,
     };
 
+    // Score contribution (estimating function) for row i: w (y - mu) (dmu/deta) / V.
+    // Computed directly instead of w_irls * working_resid: the working-residual
+    // guard (d + eps) biased scores wherever dmu/deta is small (visible at ~1e-7
+    // in SEs), while for canonical links d/V cancels exactly.
+    //
+    // Domain-aware: w_irls[i] is 0 for out-of-domain rows, which therefore score 0.
+    let score_at = |i: usize| -> f64 {
+        let w_i = w_samp[i];
+        if w_i <= 0.0 || w_irls[i] <= 0.0 {
+            return 0.0;
+        }
+        let mu_i = mu[i];
+        let d = link.mu_eta(mu_i, eta[i]);
+        let v = family.variance(mu_i).max(1e-12);
+        w_i * (Y[(i, 0)] - mu_i) * d / v
+    };
+
+    // Calibration-aware variance. R centres the INFLUENCE functions --
+    // `svyrecvar(estfun %*% Ainv, ..., postStrata=)` in `svy.varcoef` -- but every
+    // sweep branch is a left multiplication by an operator fixed by the weights,
+    // cells and aux matrix alone, applied identically to each column. It therefore
+    // commutes with the bread: S(E A) = (S E) A, so centring the estimating
+    // functions here and sandwiching afterwards is the same estimator. Checked
+    // against survey 4.5 on apiclus1 (both routes agree to 1.6e-14).
+    //
+    // Two things the sweep needs that the uncentred path does not. Every row must
+    // be materialised, zero-score ones included: their weight carries the cell
+    // denominators. And every row must then be ACCUMULATED, because centring
+    // leaves a zero-score row nonzero -- it is charged its cell's mean. Skipping
+    // them is what makes a nearly-right SE.
+    //
+    // Column-major so each column hands `apply` a contiguous slice.
+    let ef: Option<Vec<f64>> = calib.map(|c| {
+        let mut m = vec![0.0; n * k];
+        for i in 0..n {
+            let s_i = score_at(i);
+            if s_i != 0.0 {
+                for j in 0..k {
+                    m[j * n + i] = s_i * X[(i, j)];
+                }
+            }
+        }
+        for j in 0..k {
+            c.apply(&mut m[j * n..(j + 1) * n]);
+        }
+        m
+    });
+
     // MEAT = sum_h Var_h( PSU totals ) with svytotal-style centering.
-    // Out-of-domain rows have w_irls[i] == 0 from build_irls_normal_eqs, so
-    // their score contributions are naturally 0.
     let mut meat_acc = vec![Kahan::new(); k * k];
 
     for h in 0..n_strata {
@@ -843,28 +895,21 @@ fn fit_glm_domain(
                 new_i
             });
 
-            let w_i = w_samp[i];
-            let w_irls_i = w_irls[i];
-
-            // Domain-aware: w_irls_i is 0 for out-of-domain rows.
-            if w_i <= 0.0 || w_irls_i <= 0.0 {
-                continue;
-            }
-
-            let y_i = Y[(i, 0)];
-            let mu_i = mu[i];
-            let d = link.mu_eta(mu_i, eta[i]);
-            let v = family.variance(mu_i).max(1e-12);
-
-            // Score contribution (estimating function): w (y - mu) (dmu/deta) / V.
-            // Computed directly instead of w_irls * working_resid: the
-            // working-residual guard (d + eps) biased scores wherever
-            // dmu/deta is small (visible at ~1e-7 in SEs), while for
-            // canonical links d/V cancels exactly.
-            let s_i = w_i * (y_i - mu_i) * d / v;
-
-            for j in 0..k {
-                totals[li][j].add(s_i * X[(i, j)]);
+            match &ef {
+                Some(m) => {
+                    for j in 0..k {
+                        totals[li][j].add(m[j * n + i]);
+                    }
+                }
+                None => {
+                    if w_samp[i] <= 0.0 || w_irls[i] <= 0.0 {
+                        continue;
+                    }
+                    let s_i = score_at(i);
+                    for j in 0..k {
+                        totals[li][j].add(s_i * X[(i, j)]);
+                    }
+                }
             }
         }
 

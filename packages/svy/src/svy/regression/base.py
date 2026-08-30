@@ -22,7 +22,7 @@ except ImportError:
     import svy_rs as rs
 
 from svy.core.containers import FDist, TDist
-from svy.core.data_prep import prepare_data
+from svy.core.data_prep import calib_kwargs, prepare_data
 from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import WhereArg
 from svy.errors.model_errors import ModelError
@@ -444,6 +444,22 @@ class GLM:
 
             df, fpc_name = build_fpc_psu_column(df, pop_cols[0], s_col, p_col, "__svy_fpc_psu__")
 
+        # The weight-adjustment record, if one still describes this data. Only
+        # the main-weight fit is swept: replicate columns were re-adjusted one by
+        # one when they were built, which is replication's own way of crediting
+        # the calibration.
+        calib_kw = calib_kwargs(self._sample, df)
+        calib_cols = [
+            c
+            for c in (
+                calib_kw.get("calib_prev_wgt"),
+                calib_kw.get("calib_new_wgt"),
+                *(calib_kw.get("calib_cells") or ()),
+                *(calib_kw.get("calib_aux") or ()),
+            )
+            if c
+        ]
+
         # Build final selection — include the by_col when domain is set
         final_selects = (
             [pl.col(y).cast(pl.Float64)] + feature_exprs + [pl.col(w_col).cast(pl.Float64)]
@@ -459,6 +475,13 @@ class GLM:
         for rc in rep_cols:
             if rc in df.columns:
                 final_selects.append(pl.col(rc).cast(pl.Float64))
+        _already = {y, w_col, s_col, p_col, by_col_name, fpc_name}
+        _already.update(feature_names)
+        _already.update(rep_cols)
+        for cc in calib_cols:
+            if cc in df.columns and cc not in _already:
+                _already.add(cc)
+                final_selects.append(pl.col(cc))
 
         try:
             eng_df: pl.DataFrame = df.select(final_selects)
@@ -493,6 +516,7 @@ class GLM:
                 tol=tol,
                 max_iter=max_iter,
                 data=eng_df,
+                **(calib_kw if weight_name == w_col else {}),
             )
             if not res:
                 raise RuntimeError("GLM engine returned no results.")

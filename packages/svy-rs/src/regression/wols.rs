@@ -16,6 +16,8 @@
 //   SE(tot.infn)  # design-based SE for each coefficient
 
 use polars::prelude::*;
+
+use crate::estimation::calib_sweep::CalibSweep;
 use std::collections::HashMap;
 
 use crate::estimation::taylor::taylor_variance;
@@ -296,19 +298,25 @@ pub fn influence_se(
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
-    // NOTE: no calibration sweep here. These influence functions already carry
-    // the bread matrix; R sweeps the estimating functions BEFORE the bread, and
-    // since the sweep is per-column while the bread mixes columns, sweeping
-    // afterwards is not equivalent -- it lands within about 1% of R, which is
-    // worse than not sweeping because it looks correct. Doing it properly means
-    // sweeping where the scores are built, the same change glm.rs needs.
+    // Swept here, on the weight-scaled influence functions, because that is
+    // literally R's matrix: `svy.varcoef` calls
+    // `svyrecvar(estfun %*% Ainv, ..., postStrata=)`, and `influence * w` IS
+    // `estfun %*% Ainv`. Sweeping after the bread is not the compromise an
+    // earlier note here claimed -- every sweep branch is a left multiplication
+    // by an operator fixed by the weights, cells and aux alone, applied
+    // identically to each column, so it commutes with any right multiplication:
+    // S(E A) = (S E) A. Confirmed against survey 4.5 on apiclus1.
+    calib: Option<&CalibSweep>,
 ) -> PolarsResult<Vec<f64>> {
     let mut ses = Vec::with_capacity(k);
 
     for j in 0..k {
         // Extract column j of influence matrix, scaled by weights:
         // score_i = infn_i * w_i  (matches R's svytotal internals)
-        let col_vals: Vec<f64> = (0..n).map(|i| influence[i * k + j] * w[i]).collect();
+        let mut col_vals: Vec<f64> = (0..n).map(|i| influence[i * k + j] * w[i]).collect();
+        if let Some(c) = calib {
+            c.apply(&mut col_vals);
+        }
         let scores = Float64Chunked::from_vec("infn".into(), col_vals);
 
         let var = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
@@ -334,12 +342,15 @@ pub fn influence_covariance(
     strata: Option<&Column>,
     psu: Option<&Column>,
     singleton_method: Option<&str>,
-    // NOTE: no calibration sweep here. These influence functions already carry
-    // the bread matrix; R sweeps the estimating functions BEFORE the bread, and
-    // since the sweep is per-column while the bread mixes columns, sweeping
-    // afterwards is not equivalent -- it lands within about 1% of R, which is
-    // worse than not sweeping because it looks correct. Doing it properly means
-    // sweeping where the scores are built, the same change glm.rs needs.
+    // Swept here, on the weight-scaled influence functions, because that is
+    // literally R's matrix: `svy.varcoef` calls
+    // `svyrecvar(estfun %*% Ainv, ..., postStrata=)`, and `influence * w` IS
+    // `estfun %*% Ainv`. Sweeping after the bread is not the compromise an
+    // earlier note here claimed -- every sweep branch is a left multiplication
+    // by an operator fixed by the weights, cells and aux alone, applied
+    // identically to each column, so it commutes with any right multiplication:
+    // S(E A) = (S E) A. Confirmed against survey 4.5 on apiclus1.
+    calib: Option<&CalibSweep>,
 ) -> PolarsResult<Vec<f64>> {
     // Index strata and PSUs. The GLM/WOLS prep always passes String design
     // columns (it does not use the Phase C integer-code cache), and this path
@@ -397,6 +408,22 @@ pub fn influence_covariance(
 
     let mut cov = vec![0.0; k * k];
 
+    // Weight-scaled influence, centred against the calibration when the design
+    // carries a record. Materialised column-major only in that case: `apply`
+    // wants a contiguous column, and the uncentred path has no reason to pay
+    // for the copy.
+    let swept: Option<Vec<f64>> = calib.map(|c| {
+        let mut m = vec![0.0; n * k];
+        for j in 0..k {
+            let col = &mut m[j * n..(j + 1) * n];
+            for (i, slot) in col.iter_mut().enumerate() {
+                *slot = influence[i * k + j] * w[i];
+            }
+            c.apply(col);
+        }
+        m
+    });
+
     // Pre-build strata → obs index to avoid O(n_strata × N) scan
     let mut strata_obs: Vec<Vec<usize>> = vec![Vec::new(); n_strata as usize];
     for i in 0..n {
@@ -416,9 +443,18 @@ pub fn influence_covariance(
                 psu_totals.push(vec![0.0; k]);
                 idx
             });
-            for j in 0..k {
-                // Weight-scaled influence: infn_i * w_i (matches R svytotal)
-                psu_totals[li][j] += influence[i * k + j] * w[i];
+            match &swept {
+                Some(m) => {
+                    for j in 0..k {
+                        psu_totals[li][j] += m[j * n + i];
+                    }
+                }
+                None => {
+                    for j in 0..k {
+                        // Weight-scaled influence: infn_i * w_i (matches R svytotal)
+                        psu_totals[li][j] += influence[i * k + j] * w[i];
+                    }
+                }
             }
         }
 

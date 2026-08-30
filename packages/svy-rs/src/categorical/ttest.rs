@@ -219,6 +219,7 @@ pub fn ttest_two_sample(
         fpc,
         fpc_ssu,
         singleton_method,
+        calib,
     )?;
 
     // coef[1] = difference in means, SE[1] = design-based SE

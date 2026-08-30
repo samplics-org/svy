@@ -744,7 +744,9 @@ pub fn scores_ratio_domain(
 /// R's survey package. The score is that residual **centered on its own
 /// weighted mean**, exactly as the linearization of a weighted mean does:
 ///
-///     score_i = (w_i / sum_w) * (u_i - u_bar),   u_bar = sum(w_i u_i) / sum_w
+/// ```text
+/// score_i = (w_i / sum_w) * (u_i - u_bar),   u_bar = sum(w_i u_i) / sum_w
+/// ```
 ///
 /// The centering is not cosmetic. `u_bar` is zero only if `F(q)` lands exactly
 /// on `p`, which discreteness prevents — on a 5000-row fixture it sits around
