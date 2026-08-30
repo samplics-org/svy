@@ -408,3 +408,22 @@ def test_calibrate_replicate_weights_ignored_when_flag_set(sample_num_df):
         ignore_reps=True,
     )
     assert s2.design.rep_wgts.columns == ["rw1", "rw2"]
+
+
+def test_calibrate_where_scopes_the_adjustment():
+    """In-scope rows hit the targets; the rest keep their weight."""
+    import numpy as _np
+    import polars as _pl
+
+    from svy import col as _col
+    from svy.core.terms import Cat as _Cat
+
+    df = _pl.DataFrame({"w": [10.0] * 12, "A": ["x", "y"] * 6, "frame": ["new"] * 8 + ["old"] * 4})
+    s = Sample(df, Design(wgt="w"))
+    out = s.weighting.calibrate(
+        controls={_Cat("A"): {"x": 50.0, "y": 30.0}}, where=_col("frame") == "new"
+    )
+    d = out.data
+    hit = d.filter(_pl.col("frame") == "new").group_by("A").agg(_pl.col("calib_wgt").sum())
+    assert_allclose(sorted(hit["calib_wgt"].to_list()), [30.0, 50.0], rtol=1e-9)
+    _np.testing.assert_allclose(d.filter(_pl.col("frame") == "old")["calib_wgt"].to_numpy(), 10.0)

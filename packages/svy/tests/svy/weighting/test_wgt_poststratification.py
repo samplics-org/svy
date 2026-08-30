@@ -43,7 +43,7 @@ def sample_data():
 def test_postratify_with_control_dict(sample_data, mock_design):
     sample = Sample(data=sample_data, design=mock_design)
     controls = {"A": 60, "B": 180}
-    sample = sample.weighting.poststratify(controls=controls, by="domain")
+    sample = sample.weighting.poststratify(controls=controls, cells="domain")
 
     expected = np.array([15.0, 15.0, 30.0, 45.0, 67.5, 67.5])
     got = sample.data.get_column(PS_WGT).to_numpy()
@@ -52,14 +52,21 @@ def test_postratify_with_control_dict(sample_data, mock_design):
     assert_allclose(got, expected)
 
 
-def test_postratify_with_factor_dict(sample_data, mock_design):
-    sample = Sample(data=sample_data, design=mock_design)
-    factor_dict = {"A": 0.5, "B": 1.5}
-    sample = sample.weighting.poststratify(factors=factor_dict, by="domain")
+def test_postratify_with_shares_dict(sample_data, mock_design):
+    """shares pin composition and preserve the grand total.
 
-    expected = np.array([15.0, 15.0, 30.0, 45.0, 67.5, 67.5])
+    The old ``factors=`` spelling multiplied each cell by the grand total without
+    normalizing, so a vector summing to 2.0 silently doubled the population.
+    ``shares`` normalizes first: A:B is still 1:3, and the total stays 120.
+    """
+    sample = Sample(data=sample_data, design=mock_design)
+    shares = {"A": 0.5, "B": 1.5}
+    sample = sample.weighting.poststratify(shares=shares, cells="domain")
+
+    expected = np.array([7.5, 7.5, 15.0, 22.5, 33.75, 33.75])
     got = sample.data.get_column(PS_WGT).to_numpy()
     assert_allclose(got, expected)
+    assert_allclose(got.sum(), 120.0)
 
 
 def test_postratify_with_numeric_control(sample_data, mock_design):
@@ -73,27 +80,33 @@ def test_postratify_with_numeric_control(sample_data, mock_design):
     assert_allclose(got.sum(), control_total)
 
 
-def test_postratify_with_numeric_factor(sample_data, mock_design):
+def test_postratify_scalar_shares_rejected(sample_data, mock_design):
+    """A scalar is one cell: it cannot describe a composition across cells."""
     sample = Sample(data=sample_data, design=mock_design)
-    factor = 2.5
-    sample = sample.weighting.poststratify(factors=factor)
+    with pytest.raises(Exception, match="shares.*must be a dict"):
+        sample.weighting.poststratify(shares=2.5, cells="domain")
 
-    expected = np.array([25.0, 25.0, 50.0, 50.0, 75.0, 75.0])
-    got = sample.data.get_column(PS_WGT).to_numpy()
-    assert_allclose(got, expected)
-    assert_allclose(got.sum(), 300)
+
+def test_postratify_scalar_controls_with_cells_rejected(sample_data, mock_design):
+    """Scalar controls name one total, so pairing them with cells is a mistake.
+
+    Previously this silently ignored ``cells`` and rescaled to the grand total.
+    """
+    sample = Sample(data=sample_data, design=mock_design)
+    with pytest.raises(Exception, match="single number but `cells`"):
+        sample.weighting.poststratify(controls=300, cells="domain")
 
 
 def test_postratify_raises_assertion_error(sample_data, mock_design):
     sample = Sample(data=sample_data, design=mock_design)
-    with pytest.raises(Exception, match="controls.*factors|Either controls|control or factor"):
+    with pytest.raises(Exception, match="controls.*shares|Either controls"):
         sample.weighting.poststratify()
 
 
 def test_postratify_raises_value_error_for_mismatched_keys(sample_data, mock_design):
     sample = Sample(data=sample_data, design=mock_design)
     with pytest.raises(Exception, match="mismatch|missing|Mapping keys"):
-        sample.weighting.poststratify(controls={"A": 60, "C": 180}, by="domain")
+        sample.weighting.poststratify(controls={"A": 60, "C": 180}, cells="domain")
 
 
 # ---------------------------------------------------------------------------
@@ -194,8 +207,8 @@ def test_poststratify_raises_for_invalid_weight_or_by(sample_data):
         Sample(data=sample_data, design=Design(wgt="not_a_column"))
 
     sample = Sample(data=sample_data, design=Design(wgt="samp_weight"))
-    with pytest.raises(Exception, match="All `by` columns must exist"):
-        sample.weighting.poststratify(controls=300, by="non_existent_domain")
+    with pytest.raises(Exception, match="All `cells` columns must exist"):
+        sample.weighting.poststratify(controls=300, cells="non_existent_domain")
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +235,7 @@ def test_poststratify_by_tuple_with_control_dict(mock_design):
         ("B", "M"): 50.0,
         ("B", "F"): 30.0,
     }
-    out = sample.weighting.poststratify(controls=controls, by=("region", "sex"))
+    out = sample.weighting.poststratify(controls=controls, cells=("region", "sex"))
 
     totals = (
         out.data.group_by(["region", "sex"])
@@ -245,7 +258,7 @@ def test_poststratify_by_tuple_with_factor_dict(mock_design):
         ("B", "M"): 0.5,
         ("B", "F"): 0.125,
     }
-    out = sample.weighting.poststratify(factors=factors, by=("region", "sex"))
+    out = sample.weighting.poststratify(shares=factors, cells=("region", "sex"))
 
     totals = (
         out.data.group_by(["region", "sex"])
@@ -267,8 +280,8 @@ def test_poststratify_by_tuple_with_factor_dict(mock_design):
 
 def test_poststratify_by_missing_column_raises(mock_design):
     sample = Sample(data=_two_way_sample(), design=mock_design)
-    with pytest.raises(Exception, match="All `by` columns must exist"):
-        sample.weighting.poststratify(controls=100.0, by=("region", "DOES_NOT_EXIST"))
+    with pytest.raises(Exception, match="All `cells` columns must exist"):
+        sample.weighting.poststratify(controls=100.0, cells=("region", "DOES_NOT_EXIST"))
 
 
 def test_poststratify_by_list_accepted(mock_design):
@@ -281,7 +294,7 @@ def test_poststratify_by_list_accepted(mock_design):
         ("B", "M"): 50.0,
         ("B", "F"): 30.0,
     }
-    out = sample.weighting.poststratify(controls=controls, by=["region", "sex"])
+    out = sample.weighting.poststratify(controls=controls, cells=["region", "sex"])
 
     totals = (
         out.data.group_by(["region", "sex"])
@@ -304,7 +317,7 @@ def test_poststratify_tuple_key_controls_mismatch_raises(mock_design):
         ("B", "X"): 30.0,  # 'X' not present
     }
     with pytest.raises(Exception, match="mismatch|missing|Mapping keys"):
-        sample.weighting.poststratify(controls=bad_controls, by=("region", "sex"))
+        sample.weighting.poststratify(controls=bad_controls, cells=("region", "sex"))
 
 
 def test_poststratify_tuple_key_factors_mismatch_raises(mock_design):
@@ -316,4 +329,4 @@ def test_poststratify_tuple_key_factors_mismatch_raises(mock_design):
         ("B", "X"): 1.0,  # 'X' not present
     }
     with pytest.raises(Exception, match="mismatch|missing|Mapping keys"):
-        sample.weighting.poststratify(factors=bad_factors, by=("region", "sex"))
+        sample.weighting.poststratify(shares=bad_factors, cells=("region", "sex"))

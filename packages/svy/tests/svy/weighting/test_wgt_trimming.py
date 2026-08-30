@@ -909,3 +909,17 @@ class TestTrimEdgeCases:
         elapsed = time.time() - start
         assert isinstance(out, Sample)
         assert elapsed < 10.0, f"trim() took {elapsed:.1f}s on 100k rows"
+
+
+def test_trim_where_scopes_the_adjustment():
+    """Out-of-scope rows neither inform the threshold nor receive redistribution."""
+    import polars as _pl
+
+    from svy import col as _col
+
+    df = _pl.DataFrame({"w": [1.0, 1.0, 1.0, 1.0, 50.0, 50.0], "frame": ["new"] * 3 + ["old"] * 3})
+    s = Sample(df, Design(wgt="w"))
+    out = s.weighting.trim(upper=10.0, min_cell_size=1, where=_col("frame") == "old")
+    got = out.data["trim_wgt"].to_numpy()
+    assert list(got[:3]) == [1.0, 1.0, 1.0]
+    assert got[4] == 10.0 and got[5] == 10.0

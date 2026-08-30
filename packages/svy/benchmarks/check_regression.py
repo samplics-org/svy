@@ -9,7 +9,12 @@ hot path.
 
 The payoff of absolute numbers is that the baseline doubles as a record across
 releases: it answers "did we get faster since 0.22.1?", which is the question
-the published performance notes exist to answer.
+the published performance notes exist to answer. Recording OVERWRITES the
+default baseline and re-stamps the version, so archive the old one first --
+``baselines/kernel-<version>.json`` -- and reach it later with ``--baseline``:
+
+    uv run python benchmarks/check_regression.py \
+        --baseline benchmarks/baselines/kernel-0.23.0.json
 
 Usage:
     # record (do this deliberately, on a quiet machine, from a release build)

@@ -101,7 +101,7 @@ def test_non_transform_has_no_inplace(name):
         pytest.param(lambda s: s.weighting.create_jk_wgts(paired=True), id="jackknife-paired"),
         pytest.param(lambda s: s.weighting.create_brr_wgts(), id="brr"),
         pytest.param(lambda s: s.weighting.create_sdr_wgts(n_reps=4), id="sdr"),
-        pytest.param(lambda s: s.weighting.adjust(resp_status="status", by="urb"), id="adjust"),
+        pytest.param(lambda s: s.weighting.adjust(resp_status="status", cells="urb"), id="adjust"),
         pytest.param(lambda s: s.weighting.normalize(controls=100.0), id="normalize"),
         pytest.param(
             lambda s: s.weighting.rake(controls={"urb": {"U": 90.0, "R": 90.0}}), id="rake"
@@ -164,13 +164,13 @@ def test_chaining_is_unaffected_by_the_mode(sample):
 
     forked = (
         sample.weighting.create_bs_wgts(n_reps=4, rep_prefix="bw", rstate=1)
-        .weighting.adjust(resp_status="status", by="urb", wgt_name="nr_wgt")
+        .weighting.adjust(resp_status="status", cells="urb", wgt_name="nr_wgt")
         .weighting.rake(controls=controls, wgt_name="final_wgt")
     )
     mutated = (
         Sample(data=sample._data, design=sample._design)
         .weighting.create_bs_wgts(n_reps=4, rep_prefix="bw", rstate=1, inplace=True)
-        .weighting.adjust(resp_status="status", by="urb", wgt_name="nr_wgt", inplace=True)
+        .weighting.adjust(resp_status="status", cells="urb", wgt_name="nr_wgt", inplace=True)
         .weighting.rake(controls=controls, wgt_name="final_wgt", inplace=True)
     )
 

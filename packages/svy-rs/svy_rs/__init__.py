@@ -17,7 +17,6 @@ from svy_rs._internal import (
     fit_glm_rs,
     normalize,
     poststratify,
-    poststratify_factor,
     # Weighting
     rake,
     ranktest_rs,

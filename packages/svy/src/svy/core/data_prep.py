@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import re
+import warnings
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Mapping, Sequence, cast
@@ -117,6 +118,20 @@ def _get_design_codes(sample: Sample, design) -> dict[str, pl.Series] | None:
 # processes creating many Samples don't pin Design objects forever.
 _design_fields_cache: dict[int, tuple] = {}
 _DESIGN_FIELDS_CACHE_MAX = 512
+
+# Records whether a weight-adjustment record still describes the data in hand,
+# keyed the same way as the design-fields cache. Its job is to make the
+# invalidation warning fire ONCE per data/design rebind rather than on every
+# estimate: without that it would be unusable noise, and a warning people mute
+# is the same as no warning at all.
+_calib_valid_cache: dict[int, tuple] = {}
+
+# Snapshot of the calibrated weight taken BEFORE `where` zeroing. R keeps the
+# full-sample weights on `postStrata` and zeroes only the design weights, so its
+# cell means are unaffected by a subpopulation filter. svy zeroes the weight
+# column itself, which would leave the sweep dividing by zero, so the
+# pre-zeroing values are carried alongside under this name.
+CALIB_NEW_WGT_COL = "__svy_calib_new_wgt__"
 
 # Internal column name for the materialized where-clause boolean mask.
 # Created and dropped within prepare_data; never exposed to the caller.
@@ -418,6 +433,18 @@ def prepare_data(
     # block can zero them out, leaving downstream Rust calls with full-sample
     # replicate weights and the wrong variance.
     needed.extend(rep_weight_cols)
+
+    # Carry the weight-adjustment record's columns through selection so the
+    # variance sweep can read them. They are deliberately NOT null-checked: a
+    # snapshotted cells column is null exactly where a row fell outside the
+    # adjustment, which is information, not missing data.
+    _rec = getattr(design, "wgt_adjustment", None)
+    calib_cols: list[str] = []
+    if _rec is not None and _rec.is_variance_consumed:
+        for _c in (_rec.prev_wgt, *(_rec.cells or ()), *(_rec.aux or ())):
+            if _c in local_data.columns:
+                calib_cols.append(_c)
+    needed.extend(calib_cols)
     # Carry the Phase C design-code columns through column selection.
     if _design_codes:
         needed.extend(s.name for s in _design_codes.values())
@@ -446,9 +473,9 @@ def prepare_data(
     # Columns referenced only by `where` are excluded from the drop: a null
     # predicate value makes the row out-of-domain via Kleene logic in the
     # domain block.
-    if rep_weight_cols:
-        rep_set = set(rep_weight_cols)
-        null_check_cols = [c for c in needed if c not in rep_set]
+    _no_null_check = set(rep_weight_cols) | set(calib_cols)
+    if _no_null_check:
+        null_check_cols = [c for c in needed if c not in _no_null_check]
     else:
         null_check_cols = needed
 
@@ -644,6 +671,13 @@ def prepare_data(
         # is what the Taylor path and the replicate full-sample estimate read,
         # so it is always zeroed (cheap).
         if design.wgt:
+            # Taken in the same with_columns, so it reads the pre-zeroing
+            # values: polars evaluates every expression against the original
+            # frame. Only emitted when a record will actually use it.
+            if calib_cols:
+                exprs.append(
+                    pl.col(weight_col).cast(pl.Float64).alias(CALIB_NEW_WGT_COL)
+                )
             exprs.append(
                 pl.when(mask)
                 .then(pl.col(weight_col).cast(pl.Float64))
@@ -807,3 +841,85 @@ def prepare_data(
         by_cols=by_cols_list,
         singleton_method=singleton_method,
     )
+
+
+def calib_kwargs(sample, df) -> dict:
+    """Weight-adjustment columns for the Rust score-centring sweep.
+
+    Returns nothing unless the design carries a variance-consumed record that
+    still describes the data in hand. Two checks, both from the invalidation
+    rule: the record says how the ACTIVE weight was made, so a different active
+    weight means it no longer applies; and a snapshotted column that has since
+    been dropped cannot be swept against.
+
+    Either way variance falls back to treating weights as fixed -- what it did
+    before any of this existed -- but it says so. A silent fallback is the worst
+    outcome available here: the estimate is unchanged and the standard error
+    quietly stops crediting the calibration, which looks like nothing happened.
+    """
+    design = sample._design
+    rec = getattr(design, "wgt_adjustment", None)
+    if rec is None or not rec.is_variance_consumed:
+        return {}
+
+    needed = [rec.prev_wgt, *(rec.cells or ()), *(rec.aux or ())]
+    missing = [c for c in needed if c not in df.columns]
+    wrong_weight = design.wgt != rec.new_wgt
+
+    if wrong_weight or missing:
+        _warn_invalid_record(sample, design, rec, missing=missing, wrong_weight=wrong_weight)
+        return {}
+
+    return {
+        "calib_kind": rec.kind,
+        "calib_cells": list(rec.cells) if rec.cells else None,
+        "calib_aux": list(rec.aux) if rec.aux else None,
+        "calib_prev_wgt": rec.prev_wgt,
+        "calib_pins_total": rec.pins_total,
+        # Present only when `where` zeroed the weight column out from under the
+        # record; otherwise the active weight still holds the right values.
+        "calib_new_wgt": (
+            CALIB_NEW_WGT_COL if CALIB_NEW_WGT_COL in df.columns else None
+        ),
+    }
+
+
+def _warn_invalid_record(sample, design, rec, *, missing: list[str], wrong_weight: bool) -> None:
+    """Warn once per data/design rebind that the calibration is not credited."""
+    key = id(design)
+    stamp = (design, getattr(sample, "_data_version", None))
+    if _calib_valid_cache.get(key) == stamp:
+        return
+    if len(_calib_valid_cache) >= _DESIGN_FIELDS_CACHE_MAX:
+        _calib_valid_cache.clear()
+    _calib_valid_cache[key] = stamp
+
+    if wrong_weight:
+        why = f"the active weight is {design.wgt!r} but the record describes {rec.new_wgt!r}"
+        fix = f"Estimate on {rec.new_wgt!r} to have the {rec.kind} accounted for."
+    else:
+        why = f"it refers to column(s) no longer in the data: {missing}"
+        fix = (
+            "Those columns are written by the weighting method and are needed to "
+            "reproduce the adjustment; re-run it, or keep them."
+        )
+    warnings.warn(
+        f"Standard errors do not account for the {rec.kind}: {why}. They treat the "
+        f"weights as fixed, which understates or overstates them depending on the "
+        f"estimand. {fix} Replication standard errors are unaffected.",
+        UserWarning,
+        stacklevel=4,
+    )
+
+
+def record_columns(design, df) -> list[str]:
+    """Columns a variance-consumed adjustment record needs, present in ``df``.
+
+    Callers that subset columns themselves must carry these through, and must
+    keep them out of null checks: a snapshotted cells column is null exactly
+    where a row fell outside the adjustment.
+    """
+    rec = getattr(design, "wgt_adjustment", None)
+    if rec is None or not rec.is_variance_consumed:
+        return []
+    return [c for c in (rec.prev_wgt, *(rec.cells or ()), *(rec.aux or ())) if c in df.columns]

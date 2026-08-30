@@ -1,3 +1,4 @@
+pub mod calib_sweep;
 // src/estimation/mod.rs
 //
 // # Parallelism & determinism policy
@@ -25,12 +26,6 @@ pub mod taylor_api;
 // All other callers (taylor_api, replication_api) import directly from
 // crate::estimation::taylor::* to avoid unused-import warnings here.
 pub use taylor::{
-    degrees_of_freedom,
-    point_estimate_mean,
-    point_estimate_total,
-    scores_mean,
-    scores_total,
-    srs_variance_mean,
-    taylor_variance,
-    taylor_variance_matrix,
+    degrees_of_freedom, point_estimate_mean, point_estimate_total, scores_mean, scores_total,
+    srs_variance_mean, taylor_variance, taylor_variance_matrix,
 };

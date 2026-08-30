@@ -69,7 +69,7 @@ def test_normalize_with_domain_and_dict_control(sample_data, mock_design):
     """Normalization within domains using a dict of control totals."""
     sample = Sample(data=sample_data, design=mock_design)
     controls = {"A": 60, "B": 180}
-    sample = sample.weighting.normalize(controls=controls, by="domain")
+    sample = sample.weighting.normalize(controls=controls, cells="domain")
 
     expected = np.array([15.0, 15.0, 30.0, 45.0, 67.5, 67.5])
     result = sample.data.get_column(NORM_WGT).to_numpy()
@@ -84,7 +84,7 @@ def test_normalize_with_domain_and_dict_control(sample_data, mock_design):
 def test_normalize_with_domain_no_control(sample_data, mock_design):
     """Normalization within domains, each domain sums to its count."""
     sample = Sample(data=sample_data, design=mock_design)
-    sample = sample.weighting.normalize(by="domain")
+    sample = sample.weighting.normalize(cells="domain")
 
     expected = np.array([0.75, 0.75, 1.5, 0.75, 1.125, 1.125])
     result = sample.data.get_column(NORM_WGT).to_numpy()
@@ -201,8 +201,8 @@ def test_normalize_raises_for_invalid_weight_or_by(sample_data):
         Sample(data=sample_data, design=Design(wgt="not_a_column"))
 
     sample = Sample(data=sample_data, design=Design(wgt="samp_weight"))
-    with pytest.raises(Exception, match="All `by` columns must exist"):
-        sample.weighting.normalize(by="non_existent_domain")
+    with pytest.raises(Exception, match="All `cells` columns must exist"):
+        sample.weighting.normalize(cells="non_existent_domain")
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +229,7 @@ def test_normalize_by_tuple_with_control_dict(mock_design):
         ("B", "M"): 50.0,
         ("B", "F"): 30.0,
     }
-    out = sample.weighting.normalize(controls=controls, by=("region", "sex"))
+    out = sample.weighting.normalize(controls=controls, cells=("region", "sex"))
     assert NORM_WGT in out.data.columns
     for (r, s), target in controls.items():
         got = (
@@ -250,7 +250,7 @@ def test_normalize_by_list_accepted(mock_design):
         ("B", "M"): 50.0,
         ("B", "F"): 30.0,
     }
-    out = sample.weighting.normalize(controls=controls, by=["region", "sex"])
+    out = sample.weighting.normalize(controls=controls, cells=["region", "sex"])
     assert NORM_WGT in out.data.columns
     for (r, s), target in controls.items():
         got = (
@@ -265,7 +265,7 @@ def test_normalize_by_tuple_without_control(mock_design):
     """Each cell should sum to its count (2)."""
     df = _two_way_sample_norm()
     sample = Sample(data=df, design=mock_design)
-    out = sample.weighting.normalize(by=("region", "sex"))
+    out = sample.weighting.normalize(cells=("region", "sex"))
     for r in ("A", "B"):
         for s in ("M", "F"):
             got = (
@@ -279,5 +279,5 @@ def test_normalize_by_tuple_without_control(mock_design):
 def test_normalize_by_missing_column_raises(mock_design):
     df = _two_way_sample_norm()
     sample = Sample(data=df, design=mock_design)
-    with pytest.raises(Exception, match="All `by` columns must exist"):
-        sample.weighting.normalize(by=("region", "age"))  # 'age' missing
+    with pytest.raises(Exception, match="All `cells` columns must exist"):
+        sample.weighting.normalize(cells=("region", "age"))  # 'age' missing

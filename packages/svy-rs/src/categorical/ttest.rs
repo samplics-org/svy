@@ -18,6 +18,7 @@
 
 use polars::prelude::*;
 
+use crate::estimation::calib_sweep::{CalibSweep, sweep_scores};
 use crate::estimation::taylor::{
     degrees_of_freedom, point_estimate_mean, point_estimate_mean_domain, scores_mean,
     scores_mean_domain, taylor_variance,
@@ -91,13 +92,14 @@ pub fn ttest_one_sample(
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
+    calib: Option<&CalibSweep>,
     null_value: f64,
 ) -> PolarsResult<TTestOneResult> {
     let n = y.len();
 
     // Estimate mean using existing infrastructure
     let estimate = point_estimate_mean(y, weights)?;
-    let scores = scores_mean(y, weights)?;
+    let scores = sweep_scores(&scores_mean(y, weights)?, calib);
     let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let se = variance.max(0.0).sqrt();
 
@@ -133,11 +135,12 @@ pub fn ttest_one_sample_domain(
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
+    calib: Option<&CalibSweep>,
     null_value: f64,
 ) -> PolarsResult<TTestOneResult> {
     // Domain-aware mean estimation
     let estimate = point_estimate_mean_domain(y, weights, domain_mask)?;
-    let scores = scores_mean_domain(y, weights, domain_mask)?;
+    let scores = sweep_scores(&scores_mean_domain(y, weights, domain_mask)?, calib);
     let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let se = variance.max(0.0).sqrt();
 
@@ -189,6 +192,7 @@ pub fn ttest_two_sample(
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
+    calib: Option<&CalibSweep>,
     levels: Vec<String>,
     null_value: f64,
 ) -> PolarsResult<TTestTwoResult> {
@@ -240,8 +244,18 @@ pub fn ttest_two_sample(
     let group_means = vec![wols.beta[0], wols.beta[0] + wols.beta[1]];
 
     // Per-group SEs — pass pre-built chunked arrays to avoid cloning
-    let group_ses =
-        compute_per_group_ses(&y_chunked, g, &weights_chunked, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+    let group_ses = compute_per_group_ses(
+        &y_chunked,
+        g,
+        &weights_chunked,
+        strata,
+        psu,
+        ssu,
+        fpc,
+        fpc_ssu,
+        singleton_method,
+        calib,
+    )?;
 
     Ok(TTestTwoResult {
         diff: wols.beta[1], // raw difference (before subtracting null)
@@ -268,13 +282,14 @@ fn compute_per_group_ses(
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
+    calib: Option<&CalibSweep>,
 ) -> PolarsResult<Vec<f64>> {
     let mut ses = Vec::with_capacity(2);
     for group_val in 0..2u32 {
         let mask_vec: Vec<bool> = g.iter().map(|&gi| gi == group_val).collect();
         let mask = BooleanChunked::from_slice("mask".into(), &mask_vec);
 
-        let scores = scores_mean_domain(y_chunked, w_chunked, &mask)?;
+        let scores = sweep_scores(&scores_mean_domain(y_chunked, w_chunked, &mask)?, calib);
         let var = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
         ses.push(var.max(0.0).sqrt());
     }

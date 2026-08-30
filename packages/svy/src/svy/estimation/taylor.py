@@ -14,6 +14,7 @@ import numpy as np
 import polars as pl
 import svy_rs as rs
 
+from svy.core.data_prep import calib_kwargs
 from svy.core.enumerations import PopParam, QuantileMethod
 from svy.estimation.estimate import Estimate
 
@@ -55,6 +56,7 @@ def taylor_mean(
         by_col=prep.by_col,
         singleton_method=center_arg,
         deff_ref=deff_ref,
+        **calib_kwargs(est._sample, df),
     )
 
     if est._should_run_double_pass():
@@ -183,6 +185,7 @@ def taylor_total(
         by_col=prep.by_col,
         singleton_method=center_arg,
         deff_ref=deff_ref,
+        **calib_kwargs(est._sample, df),
     )
 
     if est._should_run_double_pass():
@@ -307,6 +310,7 @@ def taylor_ratio(
         by_col=prep.by_col,
         singleton_method=center_arg,
         deff_ref=deff_ref,
+        **calib_kwargs(est._sample, df),
     )
 
     if est._should_run_double_pass():
@@ -382,6 +386,7 @@ def taylor_prop(
         by_col=prep.by_col,
         singleton_method=center_arg,
         deff_ref=deff_ref,
+        **calib_kwargs(est._sample, df),
     )
 
     if est._should_run_double_pass():
@@ -456,6 +461,7 @@ def taylor_median(
         by_col=prep.by_col,
         singleton_method=center_arg,
         quantile_method=q_method_str,
+        **calib_kwargs(est._sample, df),
     )
 
     est_list = est._median_result_to_param_est(
@@ -627,6 +633,7 @@ def taylor_median_multi(
         fpc_ssu_col=fpc_ssu_col,
         singleton_method=center_arg,
         quantile_method=q_method_str,
+        **calib_kwargs(est._sample, df),
     )
 
     results: list[Estimate] = []
@@ -690,6 +697,7 @@ def taylor_quantile(
         by_col=prep.by_col,
         singleton_method=center_arg,
         quantile_method=q_method_str,
+        **calib_kwargs(est._sample, df),
     )
 
     results: list[Estimate] = []

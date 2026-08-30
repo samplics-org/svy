@@ -24,7 +24,7 @@ from svy.core.constants import (
     _INTERNAL_CONCAT_SUFFIX,
 )
 from svy.core.containers import ChiSquare, FDist
-from svy.core.data_prep import prepare_data
+from svy.core.data_prep import calib_kwargs, prepare_data, record_columns
 from svy.core.enumerations import (
     RankScoreMethod as _RankScoreMethod,
 )
@@ -202,7 +202,11 @@ class Categorical:
         # required columns
         cols = [rowvar] + ([colvar] if colvar else []) + design.specified_fields()
         cols = self._sample._dedup_preserve_order(cols)
-        local_data = local_data.select(cols)
+        # Carried through selection but deliberately out of `cols`, so the
+        # null checks below never see them: a snapshotted cells column is null
+        # wherever a row fell outside the adjustment.
+        _rec_cols = [c for c in record_columns(design, local_data) if c not in cols]
+        local_data = local_data.select(cols + _rec_cols)
 
         if drop_nulls:
             valid_data = drop_missing(df=local_data, cols=cols, treat_infinite_as_missing=True)
@@ -265,9 +269,7 @@ class Categorical:
             _display_scale = 100.0
         else:
             # PROPORTION (0-1, centered) or bare COUNT (raw weights, totals).
-            wgt_arr = _scale_weights_for_units(
-                wgt_arr, units=_units, count_total=None
-            )
+            wgt_arr = _scale_weights_for_units(wgt_arr, units=_units, count_total=None)
             _display_scale = 1.0
         concat_data = concat_data.with_columns(
             pl.Series(name="__svy_scaled_wgt__", values=wgt_arr)
@@ -297,6 +299,7 @@ class Categorical:
             psu_col=psu_col,
             ssu_col=ssu_col,
             compute_totals=compute_totals,
+            **calib_kwargs(self._sample, concat_data),
         )
 
         # Unpack cells DataFrame into CellEst objects — vectorized CI computation
@@ -479,6 +482,7 @@ class Categorical:
             ssu_col=prep.ssu_col,
             singleton_method=prep.singleton_method,
             null_value=float(mean_h0),
+            **calib_kwargs(self._sample, prep.df),
             domain_col=prep.domain_col,
             domain_val=prep.domain_val,
             by_col=prep.by_col,

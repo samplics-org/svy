@@ -13,10 +13,10 @@ use faer::Mat;
 use faer::prelude::Reborrow;
 use polars::prelude::*;
 
+use crate::estimation::calib_sweep::{CalibSweep, sweep_scores};
 use crate::estimation::{
-    taylor::SrsRef,
     degrees_of_freedom, point_estimate_mean, point_estimate_total, scores_mean, scores_total,
-    srs_variance_mean, taylor_variance,
+    srs_variance_mean, taylor::SrsRef, taylor_variance,
 };
 
 // ============================================================================
@@ -206,6 +206,7 @@ pub fn estimate_proportions(
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
+    calib: Option<&CalibSweep>,
 ) -> PolarsResult<(
     Vec<String>,
     Vec<f64>,
@@ -262,10 +263,14 @@ pub fn estimate_proportions(
         let ind_ca = Float64Chunked::from_slice_options("ind".into(), &indicators[j]);
 
         let est = point_estimate_mean(&ind_ca, weights)?;
-        let scores = scores_mean(&ind_ca, weights)?;
+        let scores = sweep_scores(&scores_mean(&ind_ca, weights)?, calib);
 
         let var_scalar = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, sm)?;
-        let srs_var = srs_variance_mean(&ind_ca, weights, SrsRef::WithoutReplacement { pop_total: None })?;
+        let srs_var = srs_variance_mean(
+            &ind_ca,
+            weights,
+            SrsRef::WithoutReplacement { pop_total: None },
+        )?;
         let deff = if srs_var > 0.0 {
             var_scalar / srs_var
         } else {
@@ -302,6 +307,7 @@ pub fn estimate_totals(
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
+    calib: Option<&CalibSweep>,
     levels: &[String],
 ) -> PolarsResult<(Vec<f64>, Vec<f64>)> {
     let mut totals = Vec::with_capacity(levels.len());
@@ -318,7 +324,11 @@ pub fn estimate_totals(
     let mut indicators: Vec<Vec<Option<f64>>> = vec![vec![Some(0.0); n_rows]; kk];
     for (i, opt_val) in y.iter().enumerate() {
         match opt_val {
-            None => { for j in 0..kk { indicators[j][i] = None; } }
+            None => {
+                for j in 0..kk {
+                    indicators[j][i] = None;
+                }
+            }
             Some(val) => {
                 if let Some(&j) = level_map.get(val) {
                     indicators[j][i] = Some(1.0);
@@ -330,7 +340,7 @@ pub fn estimate_totals(
     for j in 0..kk {
         let ind_ca = Float64Chunked::from_slice_options("ind".into(), &indicators[j]);
         let est = point_estimate_total(&ind_ca, weights)?;
-        let scores = scores_total(&ind_ca, weights)?;
+        let scores = sweep_scores(&scores_total(&ind_ca, weights)?, calib);
         let var = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
         totals.push(est);
         total_ses.push(var.max(0.0).sqrt());
