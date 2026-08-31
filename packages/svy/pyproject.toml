@@ -29,7 +29,7 @@ dependencies = [
   "polars[pyarrow]>=1.33.1",
   "scipy>=1.13",
   "svy-io>=0.3.0,<0.4.0",
-  "svy-rs>=0.15.0,<0.16.0",
+  "svy-rs>=0.16.0,<0.17.0",
 ]
 
 [project.urls]

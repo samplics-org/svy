@@ -220,7 +220,7 @@ def replicate_mean(
 ) -> Estimate:
     rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
     data = est._ensure_float64(prep.df, rep_weight_cols)
-    result_df = rs.replicate_mean(
+    result_df, cov_flat = rs.replicate_mean(
         data,
         value_col=y,
         weight_col=prep.weight_col,
@@ -236,12 +236,14 @@ def replicate_mean(
     )
     return est._build_estimate_result_light(
         est_list,
-        np.diag(result_df["var"].to_numpy()),
+        est._cov_from_kernel(result_df, cov_flat),
         PopParam.MEAN,
         alpha,
         prep.by_cols,
         as_factor=False,
         method=method,
+        design_df=df_val,
+        cov_filled=cov_flat is not None,
     )
 
 
@@ -257,7 +259,7 @@ def replicate_total(
 ) -> Estimate:
     rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
     data = est._ensure_float64(prep.df, rep_weight_cols)
-    result_df = rs.replicate_total(
+    result_df, cov_flat = rs.replicate_total(
         data,
         value_col=y,
         weight_col=prep.weight_col,
@@ -273,12 +275,14 @@ def replicate_total(
     )
     return est._build_estimate_result_light(
         est_list,
-        np.diag(result_df["var"].to_numpy()),
+        est._cov_from_kernel(result_df, cov_flat),
         PopParam.TOTAL,
         alpha,
         prep.by_cols,
         as_factor=False,
         method=method,
+        design_df=df_val,
+        cov_filled=cov_flat is not None,
     )
 
 
@@ -295,7 +299,7 @@ def replicate_ratio(
 ) -> Estimate:
     rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
     data = est._ensure_float64(prep.df, rep_weight_cols)
-    result_df = rs.replicate_ratio(
+    result_df, cov_flat = rs.replicate_ratio(
         data,
         numerator_col=y,
         denominator_col=x,
@@ -319,12 +323,14 @@ def replicate_ratio(
     )
     return est._build_estimate_result_light(
         est_list,
-        np.diag(result_df["var"].to_numpy()),
+        est._cov_from_kernel(result_df, cov_flat),
         PopParam.RATIO,
         alpha,
         prep.by_cols,
         as_factor=False,
         method=method,
+        design_df=df_val,
+        cov_filled=cov_flat is not None,
     )
 
 
@@ -342,7 +348,7 @@ def replicate_prop(
     rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
     data = est._ensure_float64(prep.df, rep_weight_cols)
     data = est._coerce_y_for_prop(data, y)
-    result_df = rs.replicate_prop(
+    result_df, cov_flat = rs.replicate_prop(
         data,
         value_col=y,
         weight_col=prep.weight_col,
@@ -365,12 +371,14 @@ def replicate_prop(
     )
     return est._build_estimate_result_light(
         est_list,
-        np.diag(result_df["var"].to_numpy()),
+        est._cov_from_kernel(result_df, cov_flat),
         PopParam.PROP,
         alpha,
         prep.by_cols,
         as_factor=True,
         method=method,
+        design_df=df_val,
+        cov_filled=cov_flat is not None,
     )
 
 

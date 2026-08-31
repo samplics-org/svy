@@ -79,6 +79,35 @@ R_DOMAIN_PREDICTIVE = {
     "se": np.array([0.0067214884, 0.0402467347, 0.1307085096]),
 }
 
+# R: same design/model, non-canonical binomial links (epsilon = 1e-12).
+#   m <- svyglm(y_bin ~ ell + meals + mobility, design=d1,
+#               family=quasibinomial(link="probit"))  # or "cloglog"
+# These exercise the link's first and second derivatives: the AME uses
+# dmu/deta, its delta-method SE uses d2mu/deta2.
+R_PROBIT_AME = {
+    "ell": (-0.001260170641, 0.001558253503),
+    "meals": (-0.008007372338, 0.001004823263),
+    "mobility": (0.0009926536209, 0.001725995123),
+}
+
+R_PROBIT_PREDICTIVE = {
+    "values": np.array([20, 50, 80]),
+    "margin": np.array([0.9728963849, 0.7522631738, 0.2867277312]),
+    "se": np.array([0.01828649094, 0.03807626149, 0.0795071601]),
+}
+
+R_CLOGLOG_AME = {
+    "ell": (-0.002348564592, 0.001761978024),
+    "meals": (-0.007129572049, 0.001052475652),
+    "mobility": (0.001408561318, 0.001346053802),
+}
+
+R_CLOGLOG_PREDICTIVE = {
+    "values": np.array([20, 50, 80]),
+    "margin": np.array([0.9700332185, 0.6996096915, 0.3193105434]),
+    "se": np.array([0.03482035029, 0.04200925999, 0.07132661995]),
+}
+
 # R: Linear AME (just coefficients)
 R_LINEAR_AME = {
     "ell": -0.4805866,
@@ -198,6 +227,50 @@ class TestGLMMarginAME:
 
         assert len(margins) == 1
         assert margins[0].term == "meals"
+
+
+class TestGLMMarginNonCanonicalLinks:
+    """AME and predictive margins for the probit and cloglog links."""
+
+    @pytest.mark.parametrize(
+        ("link", "ame_r", "pred_r"),
+        [
+            ("probit", R_PROBIT_AME, R_PROBIT_PREDICTIVE),
+            ("cloglog", R_CLOGLOG_AME, R_CLOGLOG_PREDICTIVE),
+        ],
+    )
+    def test_ame_vs_r(self, api_binary, link, ame_r, pred_r):
+        model = self._fit(api_binary, link)
+        margins = {m.term: m for m in model.margins()}
+
+        for var, (est, se) in ame_r.items():
+            np.testing.assert_allclose(margins[var].margin[0], est, rtol=RTOL, atol=ATOL)
+            np.testing.assert_allclose(margins[var].se[0], se, rtol=RTOL_SE)
+
+    @pytest.mark.parametrize(
+        ("link", "ame_r", "pred_r"),
+        [
+            ("probit", R_PROBIT_AME, R_PROBIT_PREDICTIVE),
+            ("cloglog", R_CLOGLOG_AME, R_CLOGLOG_PREDICTIVE),
+        ],
+    )
+    def test_predictive_margins_vs_r(self, api_binary, link, ame_r, pred_r):
+        model = self._fit(api_binary, link)
+        margins = model.margins(at={"meals": [20, 50, 80]})
+
+        np.testing.assert_allclose(margins.margin, pred_r["margin"], rtol=RTOL_EST)
+        np.testing.assert_allclose(margins.se, pred_r["se"], rtol=RTOL_SE)
+
+    @staticmethod
+    def _fit(api_binary, link):
+        sample = Sample(api_binary, Design(wgt="pw"))
+        return sample.glm.fit(
+            y="y_bin",
+            x=["ell", "meals", "mobility"],
+            family=DistFamily.BINOMIAL,
+            link=link,
+            tol=1e-12,
+        )
 
 
 # =============================================================================

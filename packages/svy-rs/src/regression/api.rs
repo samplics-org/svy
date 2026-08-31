@@ -49,6 +49,7 @@ fn optional_column_to_series(df: &DataFrame, name: &Option<String>) -> PyResult<
     stratum_name=None,
     psu_name=None,
     fpc_name=None,
+    offset_name=None,
     by_col=None,
     family="gaussian".to_string(),
     link="identity".to_string(),
@@ -70,6 +71,7 @@ pub fn fit_glm_rs(
     stratum_name: Option<String>,
     psu_name: Option<String>,
     fpc_name: Option<String>,
+    offset_name: Option<String>,
     by_col: Option<String>,
     family: String,
     link: String,
@@ -98,6 +100,7 @@ pub fn fit_glm_rs(
     let stratum = optional_column_to_series(&df, &stratum_name)?;
     let psu = optional_column_to_series(&df, &psu_name)?;
     let fpc = optional_column_to_series(&df, &fpc_name)?;
+    let offset = optional_column_to_series(&df, &offset_name)?;
 
     // The weight-adjustment record, when Python judged it still valid. `new_wgt`
     // is normally the active weight; a subpopulation filter zeroes that column in
@@ -128,6 +131,7 @@ pub fn fit_glm_rs(
                     stratum.as_ref(),
                     psu.as_ref(),
                     fpc.as_ref(),
+                    offset.as_ref(),
                     &family,
                     &link,
                     tol,
@@ -164,6 +168,7 @@ pub fn fit_glm_rs(
                 stratum.as_ref(),
                 psu.as_ref(),
                 fpc.as_ref(),
+                offset.as_ref(),
                 &by_series,
                 &family,
                 &link,

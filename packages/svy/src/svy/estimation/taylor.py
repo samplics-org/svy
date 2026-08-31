@@ -44,7 +44,7 @@ def taylor_mean(
     center_arg = est._get_center_method()
     fn = rs.taylor_prop if as_factor else rs.taylor_mean
 
-    result_df = fn(
+    result_df, cov_flat = fn(
         df,
         value_col=y,
         weight_col=prep.weight_col,
@@ -59,12 +59,14 @@ def taylor_mean(
         **calib_kwargs(est._sample, df),
     )
 
+    pre_vars = None
     if est._should_run_double_pass():
+        pre_vars = result_df["var"].to_numpy()
         cache = est._get_polars_design_info()
         df_full = cache["data"]
         if y in df_full.columns and df_full[y].dtype != pl.Float64:
             df_full = df_full.with_columns(pl.col(y).cast(pl.Float64))
-        result_full = fn(
+        result_full, _ = fn(
             df_full,
             value_col=y,
             weight_col=cache["weight_col"],
@@ -81,7 +83,8 @@ def taylor_mean(
     est_list = est._polars_result_to_param_est(
         result_df, y, param, alpha, deff_ref is not None, prep.by_col, as_factor
     )
-    est_cov = np.diag(result_df["var"].to_numpy())
+    est_cov = est._cov_from_kernel(result_df, cov_flat, pre_vars)
+    design_df = int(result_df["df"][0]) if prep.by_col is None else est._design_df_from_prep(prep)
     return est._build_estimate_result_light(
         est_list,
         est_cov,
@@ -91,6 +94,8 @@ def taylor_mean(
         as_factor,
         method=None,
         deff_ref=deff_ref,
+        design_df=design_df,
+        cov_filled=cov_flat is not None,
     )
 
 
@@ -173,7 +178,7 @@ def taylor_total(
     )
     center_arg = est._get_center_method()
 
-    result_df = rs.taylor_total(
+    result_df, cov_flat = rs.taylor_total(
         df,
         value_col=y,
         weight_col=prep.weight_col,
@@ -188,12 +193,14 @@ def taylor_total(
         **calib_kwargs(est._sample, df),
     )
 
+    pre_vars = None
     if est._should_run_double_pass():
+        pre_vars = result_df["var"].to_numpy()
         cache = est._get_polars_design_info()
         df_full = cache["data"]
         if y in df_full.columns and df_full[y].dtype != pl.Float64:
             df_full = df_full.with_columns(pl.col(y).cast(pl.Float64))
-        result_full = rs.taylor_total(
+        result_full, _ = rs.taylor_total(
             df_full,
             value_col=y,
             weight_col=cache["weight_col"],
@@ -210,7 +217,8 @@ def taylor_total(
     est_list = est._polars_result_to_param_est(
         result_df, y, PopParam.TOTAL, alpha, deff_ref is not None, prep.by_col, as_factor=False
     )
-    est_cov = np.diag(result_df["var"].to_numpy())
+    est_cov = est._cov_from_kernel(result_df, cov_flat, pre_vars)
+    design_df = int(result_df["df"][0]) if prep.by_col is None else est._design_df_from_prep(prep)
     return est._build_estimate_result_light(
         est_list,
         est_cov,
@@ -220,6 +228,8 @@ def taylor_total(
         as_factor=False,
         method=None,
         deff_ref=deff_ref,
+        design_df=design_df,
+        cov_filled=cov_flat is not None,
     )
 
 
@@ -297,7 +307,7 @@ def taylor_ratio(
     )
     center_arg = est._get_center_method()
 
-    result_df = rs.taylor_ratio(
+    result_df, cov_flat = rs.taylor_ratio(
         df,
         numerator_col=y,
         denominator_col=x,
@@ -313,12 +323,14 @@ def taylor_ratio(
         **calib_kwargs(est._sample, df),
     )
 
+    pre_vars = None
     if est._should_run_double_pass():
+        pre_vars = result_df["var"].to_numpy()
         cache = est._get_polars_design_info()
         df_full = cache["data"]
         if y in df_full.columns and df_full[y].dtype != pl.Float64:
             df_full = df_full.with_columns(pl.col(y).cast(pl.Float64))
-        result_full = rs.taylor_ratio(
+        result_full, _ = rs.taylor_ratio(
             df_full,
             numerator_col=y,
             denominator_col=x,
@@ -343,7 +355,8 @@ def taylor_ratio(
         as_factor=False,
         x_name=x,
     )
-    est_cov = np.diag(result_df["var"].to_numpy())
+    est_cov = est._cov_from_kernel(result_df, cov_flat, pre_vars)
+    design_df = int(result_df["df"][0]) if prep.by_col is None else est._design_df_from_prep(prep)
     return est._build_estimate_result_light(
         est_list,
         est_cov,
@@ -353,6 +366,8 @@ def taylor_ratio(
         as_factor=False,
         method=None,
         deff_ref=deff_ref,
+        design_df=design_df,
+        cov_filled=cov_flat is not None,
     )
 
 
@@ -374,7 +389,7 @@ def taylor_prop(
     center_arg = est._get_center_method()
 
     df = est._coerce_y_for_prop(df, y)
-    result_df = rs.taylor_prop(
+    result_df, cov_flat = rs.taylor_prop(
         df,
         value_col=y,
         weight_col=prep.weight_col,
@@ -389,10 +404,12 @@ def taylor_prop(
         **calib_kwargs(est._sample, df),
     )
 
+    pre_vars = None
     if est._should_run_double_pass():
+        pre_vars = result_df["var"].to_numpy()
         cache = est._get_polars_design_info()
         df_full = cache["data"]
-        result_full = rs.taylor_prop(
+        result_full, _ = rs.taylor_prop(
             df_full,
             value_col=y,
             weight_col=cache["weight_col"],
@@ -416,7 +433,8 @@ def taylor_prop(
         as_factor=True,
         ci_method=ci_method,
     )
-    est_cov = np.diag(result_df["var"].to_numpy())
+    est_cov = est._cov_from_kernel(result_df, cov_flat, pre_vars)
+    design_df = int(result_df["df"][0]) if prep.by_col is None else est._design_df_from_prep(prep)
     return est._build_estimate_result_light(
         est_list,
         est_cov,
@@ -426,6 +444,8 @@ def taylor_prop(
         as_factor=True,
         method=None,
         deff_ref=deff_ref,
+        design_df=design_df,
+        cov_filled=cov_flat is not None,
     )
 
 

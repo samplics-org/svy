@@ -24,6 +24,7 @@ use faer::{Mat, MatRef, Side};
 
 use polars::prelude::*;
 
+use crate::categorical::ranktest::probit;
 use crate::estimation::calib_sweep::CalibSweep;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -105,13 +106,83 @@ impl Family {
     }
 }
 
+/// -qnorm(.Machine$double.eps): the eta bound R's probit linkinv applies.
+const PROBIT_ETA_MAX: f64 = 8.125_890_664_701_904;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Link {
     Identity,
     Logit,
+    Probit,
+    Cloglog,
     Log,
     Inverse,
     InverseSquared,
+}
+
+// Standard normal CDF/PDF backing the probit link.
+//
+// Phi(x) = erfc(-x/sqrt2)/2, always evaluated on the tail side so that a mu
+// near 0 or 1 keeps full relative precision — a cheap erf approximation is
+// visible directly in the fitted probit coefficients. erfc uses the
+// all-positive confluent series below 1 (no cancellation, ~19 terms) and a
+// modified-Lentz continued fraction above, where the series would cancel.
+// Agrees with R's pnorm to ~5e-15 relative across the range (see tests).
+
+const M_1_SQRT_2PI: f64 = 0.398_942_280_401_432_7;
+const SQRT_PI: f64 = 1.772_453_850_905_516;
+
+fn norm_pdf(x: f64) -> f64 {
+    M_1_SQRT_2PI * (-0.5 * x * x).exp()
+}
+
+fn erfc(z: f64) -> f64 {
+    if z < 0.0 {
+        return 2.0 - erfc(-z);
+    }
+
+    if z < 1.0 {
+        // erf(z) = (2z/sqrt(pi)) e^{-z^2} sum_n (2z^2)^n / (1*3*...*(2n+1))
+        let z2 = z * z;
+        let mut term = 2.0 * z / SQRT_PI * (-z2).exp();
+        let mut sum = term;
+        for n in 1..64 {
+            term *= 2.0 * z2 / (2 * n + 1) as f64;
+            sum += term;
+            if term <= sum * 1e-18 {
+                break;
+            }
+        }
+        return 1.0 - sum;
+    }
+
+    // erfc(z) = e^{-z^2}/sqrt(pi) * 1/(z + (1/2)/(z + 1/(z + (3/2)/(z + ...))))
+    const TINY: f64 = 1e-300;
+    let mut c = 1.0 / TINY;
+    let mut d = 1.0 / z;
+    let mut f = d;
+    for n in 1..400 {
+        let a = n as f64 / 2.0;
+        d = z + a * d;
+        if d.abs() < TINY {
+            d = TINY;
+        }
+        c = z + a / c;
+        if c.abs() < TINY {
+            c = TINY;
+        }
+        d = 1.0 / d;
+        let delta = c * d;
+        f *= delta;
+        if (delta - 1.0).abs() < 1e-17 {
+            break;
+        }
+    }
+    (-z * z).exp() / SQRT_PI * f
+}
+
+fn norm_cdf(x: f64) -> f64 {
+    0.5 * erfc(-x * std::f64::consts::FRAC_1_SQRT_2)
 }
 
 impl Link {
@@ -119,6 +190,8 @@ impl Link {
         match s.to_lowercase().as_str() {
             "identity" => Ok(Link::Identity),
             "logit" => Ok(Link::Logit),
+            "probit" => Ok(Link::Probit),
+            "cloglog" => Ok(Link::Cloglog),
             "log" => Ok(Link::Log),
             "inverse" => Ok(Link::Inverse),
             "inverse_squared" => Ok(Link::InverseSquared),
@@ -132,6 +205,8 @@ impl Link {
         match self {
             Link::Identity => mu,
             Link::Logit => (mu / (1.0 - mu)).ln(),
+            Link::Probit => probit(mu),
+            Link::Cloglog => (-((1.0 - mu).max(1e-10).ln())).max(1e-10).ln(),
             Link::Log => mu.max(1e-10).ln(),
             Link::Inverse => 1.0 / mu,
             Link::InverseSquared => 1.0 / (mu * mu),
@@ -150,17 +225,30 @@ impl Link {
                 }
             }
 
+            // Clamps mirror R's make.link("probit"/"cloglog"): eta is bounded at
+            // +/-qnorm(eps) and mu at [eps, 1-eps], so mu never reaches 0 or 1
+            // exactly and the binomial variance stays positive.
+            Link::Probit => norm_cdf(eta.clamp(-PROBIT_ETA_MAX, PROBIT_ETA_MAX)),
+            Link::Cloglog => {
+                let m = -(-(eta.min(700.0).exp())).exp_m1();
+                m.clamp(f64::EPSILON, 1.0 - f64::EPSILON)
+            }
             Link::Log => eta.clamp(-30.0, 30.0).exp(),
             Link::Inverse => 1.0 / eta,
             Link::InverseSquared => 1.0 / eta.sqrt(),
         }
     }
 
-    /// dμ/dη
-    fn mu_eta(&self, mu: f64, _eta: f64) -> f64 {
+    /// dμ/dη. Probit and cloglog are the arms that need eta rather than mu.
+    fn mu_eta(&self, mu: f64, eta: f64) -> f64 {
         match self {
             Link::Identity => 1.0,
             Link::Logit => mu * (1.0 - mu),
+            Link::Probit => norm_pdf(eta).max(f64::EPSILON),
+            Link::Cloglog => {
+                let e = eta.min(700.0).exp();
+                (e * (-e).exp()).max(f64::EPSILON)
+            }
             Link::Log => mu,
             Link::Inverse => -(mu * mu),
             Link::InverseSquared => -0.5 * mu.powi(3),
@@ -275,6 +363,7 @@ fn build_irls_normal_eqs(
     w_samp: &[f64],
     eta: &[f64],
     mu: &[f64],
+    offset: &[f64],
     domain_mask: Option<&[bool]>,
     Z: &mut Mat<f64>,
     w_irls: &mut [f64],
@@ -306,7 +395,10 @@ fn build_irls_normal_eqs(
         w_irls[i] = wi;
 
         let safe_d = if d.abs() < 1e-12 { 1e-12 } else { d };
-        let z_i = eta[i] + (y_i - mu_i) / safe_d;
+        // Working response on the X-only scale: the offset is a known part of
+        // eta with no parameter, so it comes out here and goes back in wherever
+        // eta is rebuilt (R's glm.fit: z <- (eta - offset) + (y - mu)/mu.eta).
+        let z_i = (eta[i] - offset[i]) + (y_i - mu_i) / safe_d;
         Z[(i, 0)] = z_i;
 
         if wi.abs() < 1e-18 {
@@ -444,6 +536,80 @@ pub struct GlmResult {
 // Core Algorithm
 // ============================================================================
 
+/// Null deviance under an offset: the deviance of the intercept-only model
+/// eta_i = b + offset_i, found by one-parameter IRLS. Mirrors R's glm(), which
+/// refits `y ~ 1` carrying the offset rather than using the weighted mean.
+#[allow(clippy::too_many_arguments)]
+fn null_deviance_with_offset(
+    family: Family,
+    link: Link,
+    n: usize,
+    Y: &Mat<f64>,
+    w_samp: &[f64],
+    offset: &[f64],
+    domain_mask: Option<&[bool]>,
+    tol: f64,
+    max_iter: usize,
+) -> f64 {
+    let contributes =
+        |i: usize| domain_mask.map_or(true, |m| m[i]) && w_samp[i] > 0.0;
+
+    let mut b = 0.0f64;
+    let mut deviance = f64::INFINITY;
+
+    for _ in 0..max_iter {
+        // One IRLS step for the single intercept: b_new = sum(w z) / sum(w).
+        let mut num = Kahan::new();
+        let mut den = Kahan::new();
+
+        for i in 0..n {
+            if !contributes(i) {
+                continue;
+            }
+            let eta_i = b + offset[i];
+            let mu_i = link.inverse(eta_i);
+            let d = link.mu_eta(mu_i, eta_i);
+            let v = family.variance(mu_i).max(1e-12);
+            let wi = w_samp[i] * (d * d) / v;
+            if wi.abs() < 1e-18 {
+                continue;
+            }
+            let safe_d = if d.abs() < 1e-12 { 1e-12 } else { d };
+            let z_i = (eta_i - offset[i]) + (Y[(i, 0)] - mu_i) / safe_d;
+            num.add(wi * z_i);
+            den.add(wi);
+        }
+
+        let den_v = den.value();
+        if den_v <= 0.0 {
+            break;
+        }
+        let b_new = num.value() / den_v;
+
+        let mut dev_new = 0.0;
+        for i in 0..n {
+            if !contributes(i) {
+                continue;
+            }
+            let mu_i = link.inverse(b_new + offset[i]);
+            dev_new += w_samp[i] * family.unit_deviance(Y[(i, 0)], mu_i);
+        }
+
+        let converged = deviance.is_finite()
+            && ((deviance - dev_new).abs() / (0.1 + dev_new.abs()) < tol
+                || (b_new - b).abs() < tol);
+
+        b = b_new;
+        deviance = dev_new;
+
+        if converged {
+            break;
+        }
+    }
+
+    if deviance.is_finite() { deviance } else { 0.0 }
+}
+
 /// Full-sample GLM fit (no domain restriction).
 ///
 /// Equivalent to `fit_glm_domain(..., domain_mask=None)`. Kept as a thin
@@ -455,6 +621,7 @@ pub fn fit_glm(
     strata: Option<&Series>,
     psu: Option<&Series>,
     fpc: Option<&Series>,
+    offset: Option<&Series>,
     family_str: &str,
     link_str: &str,
     tol: f64,
@@ -462,7 +629,8 @@ pub fn fit_glm(
     calib: Option<&CalibSweep>,
 ) -> PolarsResult<GlmResult> {
     fit_glm_domain(
-        y, x_cols, weights, strata, psu, fpc, None, family_str, link_str, tol, max_iter, calib,
+        y, x_cols, weights, strata, psu, fpc, offset, None, family_str, link_str, tol, max_iter,
+        calib,
     )
 }
 
@@ -480,6 +648,7 @@ pub fn fit_glm_by(
     strata: Option<&Series>,
     psu: Option<&Series>,
     fpc: Option<&Series>,
+    offset: Option<&Series>,
     by_col: &Series,
     family_str: &str,
     link_str: &str,
@@ -515,6 +684,7 @@ pub fn fit_glm_by(
                 strata,
                 psu,
                 fpc,
+                offset,
                 Some(&mask_vec),
                 family_str,
                 link_str,
@@ -561,6 +731,7 @@ fn fit_glm_domain(
     strata: Option<&Series>,
     psu: Option<&Series>,
     fpc: Option<&Series>,
+    offset: Option<&Series>,
     domain_mask: Option<&[bool]>,
     family_str: &str,
     link_str: &str,
@@ -612,6 +783,22 @@ fn fit_glm_domain(
     let Y = cols_to_mat(&[y_ca], n);
     let X = cols_to_mat(&x_ca_list, n);
 
+    // Known term on the link scale, coefficient fixed at 1. Absent -> all zero,
+    // which makes every offset expression below a no-op on the existing path.
+    let offset_vals: Vec<f64> = match offset {
+        Some(s) => {
+            let cast = s.cast(&DataType::Float64)?;
+            let ca = cast.f64()?;
+            if ca.null_count() > 0 {
+                return Err(PolarsError::ComputeError(
+                    format!("GLM offset column '{}' contains null values", s.name()).into(),
+                ));
+            }
+            ca.iter().map(|v| v.unwrap_or(0.0)).collect()
+        }
+        None => vec![0.0; n],
+    };
+
     // sampling weights
     let mut w_samp = vec![0.0; n];
     let mut w_sum = 0.0;
@@ -640,6 +827,8 @@ fn fit_glm_domain(
         let in_domain = domain_mask.map_or(true, |m| m[i]);
         let y_init = if in_domain { Y[(i, 0)] } else { 0.5 };
         mu[i] = family.initial_mu(y_init);
+        // R seeds eta at linkfun(mustart) without the offset; it enters through
+        // the working response, and every later eta adds it back explicitly.
         eta[i] = link.link(mu[i]);
     }
 
@@ -663,6 +852,7 @@ fn fit_glm_domain(
                 for j in 0..k {
                     s += X[(i, j)] * beta[(j, 0)];
                 }
+                s += offset_vals[i];
                 eta[i] = s;
                 mu[i] = link.inverse(s);
             }
@@ -679,6 +869,7 @@ fn fit_glm_domain(
             &w_samp,
             &eta,
             &mu,
+            &offset_vals,
             domain_mask,
             &mut Z,
             &mut w_irls,
@@ -697,6 +888,7 @@ fn fit_glm_domain(
                 for j in 0..k {
                     s += X[(i, j)] * beta_new[(j, 0)];
                 }
+                s += offset_vals[i];
                 let mu_i = link.inverse(s);
                 eta[i] = s;
                 mu[i] = mu_i;
@@ -757,6 +949,7 @@ fn fit_glm_domain(
         for j in 0..k {
             s += X[(i, j)] * beta[(j, 0)];
         }
+        s += offset_vals[i];
         eta[i] = s;
         mu[i] = link.inverse(s);
     }
@@ -772,6 +965,7 @@ fn fit_glm_domain(
         &w_samp,
         &eta,
         &mu,
+        &offset_vals,
         domain_mask,
         &mut Z,
         &mut w_irls,
@@ -1061,7 +1255,23 @@ fn fit_glm_domain(
     // GLM with only an intercept the MLE of mu is the weighted mean of y
     // regardless of link (the constant score sum_i w_i (y_i - mu) c = 0), so
     // this reproduces R's null.deviance on the same weight scale.
-    let null_deviance = {
+    //
+    // That shortcut dies with an offset: mu then varies by row and the null fit
+    // is a genuine one-parameter IRLS, which is why R's glm() refits the
+    // intercept-only model with the offset instead of taking a mean.
+    let null_deviance = if offset.is_some() {
+        null_deviance_with_offset(
+            family,
+            link,
+            n,
+            &Y,
+            &w_samp,
+            &offset_vals,
+            domain_mask,
+            tol,
+            max_iter,
+        )
+    } else {
         // domain-restricted weighted mean
         let mut sum_wy = 0.0;
         let mut sum_w = 0.0;
@@ -1116,4 +1326,77 @@ fn fit_glm_domain(
         iterations: iter_count as u32,
         n_obs,
     })
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R: pnorm(x) at 17 significant digits.
+    /// The erfc route agrees to ~1e-14 relative across the whole range.
+    #[test]
+    fn norm_cdf_matches_r_pnorm() {
+        let cases: [(f64, f64); 13] = [
+            (-8.5, 9.4795348222033192e-18),
+            (-5.0, 2.8665157187919391e-07),
+            (-2.5, 0.0062096653257761349),
+            (-1.0, 0.15865525393145705),
+            (-0.6, 0.27425311775007361),
+            (-0.3, 0.38208857781104733),
+            (0.0, 0.5),
+            (0.3, 0.61791142218895267),
+            (0.6, 0.72574688224992645),
+            (1.0, 0.84134474606854293),
+            (2.5, 0.99379033467422384),
+            (5.0, 0.99999971334842808),
+            (8.5, 1.0),
+        ];
+        for (x, expected) in cases {
+            let got = norm_cdf(x);
+            let tol = 1e-14 * expected.max(1e-300);
+            assert!(
+                (got - expected).abs() <= tol,
+                "pnorm({x}): got {got:e}, want {expected:e}"
+            );
+        }
+    }
+
+    /// The links must invert each other. Probit's forward link is Acklam's
+    /// qnorm (~1.15e-9), which only ever seeds IRLS, hence the looser bound.
+    #[test]
+    fn link_roundtrips() {
+        for (link, tol) in [
+            (Link::Logit, 1e-12),
+            (Link::Probit, 1e-9),
+            (Link::Cloglog, 1e-12),
+        ] {
+            for mu in [0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99] {
+                let back = link.inverse(link.link(mu));
+                assert!(
+                    (back - mu).abs() < tol,
+                    "{link:?} roundtrip at mu={mu}: got {back}"
+                );
+            }
+        }
+    }
+
+    /// dmu/deta against a central difference of the inverse link.
+    #[test]
+    fn mu_eta_matches_numeric_derivative() {
+        let h = 1e-6;
+        for link in [Link::Probit, Link::Cloglog] {
+            for eta in [-3.0, -1.0, -0.25, 0.0, 0.25, 1.0, 3.0] {
+                let numeric = (link.inverse(eta + h) - link.inverse(eta - h)) / (2.0 * h);
+                let analytic = link.mu_eta(link.inverse(eta), eta);
+                assert!(
+                    (analytic - numeric).abs() < 1e-7,
+                    "{link:?} mu_eta at eta={eta}: analytic {analytic}, numeric {numeric}"
+                );
+            }
+        }
+    }
 }

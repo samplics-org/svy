@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import math
 
-from typing import TYPE_CHECKING, ClassVar, Literal, Sequence, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Sequence, cast
 
 import msgspec
 import numpy as np
@@ -23,11 +23,12 @@ except ImportError:
 
 from svy.core.containers import FDist, TDist
 from svy.core.data_prep import calib_kwargs, prepare_data
+from svy.core.enumerations import DistFamily, LinkFunction
 from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import WhereArg
 from svy.errors.model_errors import ModelError
-from svy.regression.glm import GLMCoef, GLMFit, GLMStats
-from svy.regression.links import link_inverse, link_mu_eta, resolve_link
+from svy.regression.glm import GLMCoef, GLMFit, GLMStats, offset_values
+from svy.regression.links import FAMILY_LABELS, link_inverse, link_mu_eta, resolve_link
 from svy.regression.prediction import GLMPred
 from svy.ui.printing import format_where_clause
 from svy.wrangling.rows import _compile_where_to_pl_expr
@@ -35,14 +36,29 @@ from svy.wrangling.rows import _compile_where_to_pl_expr
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample
+    from svy.estimation.contrast import Contrast
     from svy.regression.margins import GLMMargins
 
 log = logging.getLogger(__name__)
 
 
-def _normalize_family(
-    family: Literal["gaussian", "binomial", "poisson", "gamma"],
-) -> str:
+# Both accept a plain string or the matching enum. DistFamily's values are
+# capitalized ("Binomial") and LinkFunction's are not, so neither enum is
+# spelled out in the Literal — the union is what keeps the two arguments
+# symmetric for a type checker.
+FamilyArg = (
+    Literal["gaussian", "binomial", "poisson", "gamma", "inversegaussian", "inverse_gaussian"]
+    | DistFamily
+)
+LinkArg = (
+    Literal["identity", "logit", "probit", "cloglog", "log", "inverse", "inverse_squared"]
+    | LinkFunction
+)
+
+_FAMILY_NAMES = "'gaussian', 'binomial', 'poisson', 'gamma', or 'inverse_gaussian'"
+
+
+def _normalize_family(family: FamilyArg) -> str:
     """
     Normalize user-facing family string to canonical lowercase form.
 
@@ -51,29 +67,27 @@ def _normalize_family(
       - "binomial"
       - "poisson"
       - "gamma"
+      - "inverse_gaussian" / "inversegaussian"
     """
     _MAP = {
         "gaussian": "gaussian",
         "binomial": "binomial",
         "poisson": "poisson",
         "gamma": "gamma",
+        "inversegaussian": "inversegaussian",
+        "inverse_gaussian": "inversegaussian",
     }
     if not isinstance(family, str):
         raise TypeError(
-            f"'family' must be a string, got {type(family).__name__}. "
-            f"Use 'gaussian', 'binomial', 'poisson', or 'gamma'."
+            f"'family' must be a string, got {type(family).__name__}. Use {_FAMILY_NAMES}."
         )
     result = _MAP.get(family.strip().lower())
     if result is None:
-        raise ValueError(
-            f"Unknown family {family!r}. Use 'gaussian', 'binomial', 'poisson', or 'gamma'."
-        )
+        raise ValueError(f"Unknown family {family!r}. Use {_FAMILY_NAMES}.")
     return result
 
 
-def _normalize_link(
-    link: Literal["identity", "logit", "log", "inverse", "inverse_squared"] | None,
-) -> str | None:
+def _normalize_link(link: LinkArg | None) -> str | None:
     """
     Normalize user-facing link string to canonical lowercase form.
 
@@ -81,6 +95,8 @@ def _normalize_link(
       - None                → auto (canonical link for family)
       - "identity"
       - "logit"
+      - "probit"
+      - "cloglog"
       - "log"
       - "inverse"
       - "inverse_squared"
@@ -88,6 +104,8 @@ def _normalize_link(
     _MAP = {
         "identity": "identity",
         "logit": "logit",
+        "probit": "probit",
+        "cloglog": "cloglog",
         "log": "log",
         "inverse": "inverse",
         "inverse_squared": "inverse_squared",
@@ -97,13 +115,15 @@ def _normalize_link(
     if not isinstance(link, str):
         raise TypeError(
             f"'link' must be a string or None, got {type(link).__name__}. "
-            f"Use 'identity', 'logit', 'log', 'inverse', or 'inverse_squared'."
+            f"Use 'identity', 'logit', 'probit', 'cloglog', 'log', 'inverse', "
+            f"or 'inverse_squared'."
         )
     result = _MAP.get(link.strip().lower())
     if result is None:
         raise ValueError(
             f"Unknown link {link!r}. "
-            f"Use 'identity', 'logit', 'log', 'inverse', or 'inverse_squared'."
+            f"Use 'identity', 'logit', 'probit', 'cloglog', 'log', 'inverse', "
+            f"or 'inverse_squared'."
         )
     return result
 
@@ -144,6 +164,18 @@ class GLM:
         if self.fitted is None:
             raise ModelError.not_fitted(where="GLM")
         return self.fitted
+
+    def keys(self) -> list[str]:
+        """Contrast keys of the fitted model: the coefficient names."""
+        return self._ensure_fitted().keys()
+
+    def contrast(self, contrasts: Any, *, alpha: float = 0.05) -> "Contrast":
+        """Linear contrasts between fitted coefficients; see GLMFit.contrast."""
+        return self._ensure_fitted().contrast(contrasts, alpha=alpha)
+
+    def term_test(self, term: "str | Cat") -> FDist:
+        """Joint Wald test on a model term; see GLMFit.term_test."""
+        return self._ensure_fitted().term_test(term)
 
     # --- Print Width Configuration ---
 
@@ -219,8 +251,9 @@ class GLM:
         *,
         x: Sequence[Feature] | None = None,
         intercept: bool = True,
-        family: Literal["gaussian", "binomial", "poisson", "gamma"] = "gaussian",
-        link: Literal["identity", "logit", "log", "inverse", "inverse_squared"] | None = None,
+        family: FamilyArg = "gaussian",
+        link: LinkArg | None = None,
+        offset: str | None = None,
         where: WhereArg = None,
         drop_nulls: bool = True,
         tol: float = 1e-8,
@@ -239,10 +272,20 @@ class GLM:
         intercept : bool
             Include intercept term.
         family : str
-            Distribution family: ``'gaussian'``, ``'binomial'``, ``'poisson'``, or ``'gamma'``.
+            Distribution family: ``'gaussian'``, ``'binomial'``, ``'poisson'``,
+            ``'gamma'``, or ``'inverse_gaussian'``.
         link : str, optional
-            Link function: ``'identity'``, ``'logit'``, ``'log'``, ``'inverse'``, or
-            ``'inverse_squared'``. If None, uses the canonical link for the family.
+            Link function: ``'identity'``, ``'logit'``, ``'probit'``, ``'cloglog'``,
+            ``'log'``, ``'inverse'``, or ``'inverse_squared'``. If None, uses the
+            canonical link for the family. Each family admits only the links R's
+            family objects do, so an unusable pairing raises rather than fitting
+            (see ``FAMILY_LINKS``).
+        offset : str, optional
+            Column holding a known term on the *link* scale, entered with its
+            coefficient fixed at 1. The usual use is a rate model: Poisson
+            counts with ``offset`` set to log-exposure make the fitted
+            coefficients log rate ratios. The same column must be present in
+            any ``newdata`` passed to ``predict()``.
         where : WhereArg, optional
             Domain restriction (e.g. ``svy.col("sex") == "F"``). Unlike pre-filtering
             with ``wrangling.filter_records``, this preserves the full design
@@ -282,6 +325,17 @@ class GLM:
             where_expr = _compile_where_to_pl_expr(where)
             where_cols = list(where_expr.meta.root_names())
 
+        # The offset column must survive prepare_data's projection too. It is
+        # data, not a feature: no coefficient is fitted for it, so it stays out
+        # of feature_names and out of the design matrix.
+        offset_cols: list[str] = []
+        if offset is not None:
+            if not isinstance(offset, str):
+                raise TypeError(f"'offset' must be a column name, got {type(offset).__name__}.")
+            if offset not in self._sample.data.columns:
+                raise ValueError(f"offset column {offset!r} not found in the data.")
+            offset_cols = [offset]
+
         # Replicate weight columns (replicate variance is computed when the
         # design carries them) and the FPC population column, both of which
         # must survive prepare_data's projection.
@@ -307,7 +361,7 @@ class GLM:
         prep = prepare_data(
             self._sample,
             y=y,
-            extra_cols=x_cols + where_cols + rep_cols + pop_cols,
+            extra_cols=x_cols + where_cols + rep_cols + pop_cols + offset_cols,
             null_zero_cols=x_cols + where_cols,
             drop_nulls=drop_nulls,
             cast_y_float=True,
@@ -472,6 +526,8 @@ class GLM:
             final_selects.append(pl.col(by_col_name))
         if fpc_name and fpc_name in df.columns:
             final_selects.append(pl.col(fpc_name))
+        if offset and offset in df.columns:
+            final_selects.append(pl.col(offset).cast(pl.Float64))
         for rc in rep_cols:
             if rc in df.columns:
                 final_selects.append(pl.col(rc).cast(pl.Float64))
@@ -510,6 +566,7 @@ class GLM:
                 stratum_name=s_col,
                 psu_name=p_col,
                 fpc_name=fpc,
+                offset_name=offset,
                 by_col=by_col_name,
                 family=fam_str,
                 link=link_str,
@@ -649,6 +706,7 @@ class GLM:
                 naive_cov=naive_cov,
                 cov=cov_mat,
                 intercept=intercept,
+                offset_col=offset,
             )
         else:
             aic_val = dev + 2.0 * eff_p if eff_p is not None else None
@@ -689,8 +747,9 @@ class GLM:
 
         fit_obj = GLMFit(
             y=y,
-            family=fam_str.capitalize(),
+            family=FAMILY_LABELS[fam_str],
             link=link_str,
+            offset=offset,
             stats=stats_struct,
             coefs=coef_list,
             cov_matrix=cov_mat,
@@ -740,8 +799,9 @@ class GLM:
         if cov is None:
             raise ValueError("Covariance matrix not available")
 
-        # Linear predictor
-        eta = X @ beta
+        # Linear predictor. The offset carries no coefficient, so it shifts eta
+        # without entering the variance.
+        eta = X @ beta + offset_values(fit, new_data)
         var_eta = np.sum((X @ cov) * X, axis=1)
         se_eta = np.sqrt(np.maximum(var_eta, 0))
 
@@ -955,6 +1015,7 @@ class GLM:
         naive_cov: np.ndarray,
         cov: np.ndarray,
         intercept: bool,
+        offset_col: str | None = None,
     ) -> float | None:
         """
         Design-adjusted AIC for gaussian/identity models — mirrors R
@@ -972,7 +1033,12 @@ class GLM:
 
         x_mat = eng_df.select(feature_names).to_numpy()
         y_arr = eng_df.get_column(y).to_numpy().astype(float)
-        r2_arr = (y_arr - x_mat @ params) ** 2
+        off = (
+            eng_df.get_column(offset_col).to_numpy().astype(float)
+            if offset_col is not None
+            else 0.0
+        )
+        r2_arr = (y_arr - (x_mat @ params + off)) ** 2
         sigma2 = float((w_norm * r2_arr).sum() / n_hat)
         if sigma2 <= 0:
             return None

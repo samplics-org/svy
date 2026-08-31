@@ -8,6 +8,37 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **Marginal effects for categorical predictors.** `margins()` now returns a discrete contrast per non-reference level — `mean_w[mu(x, var=k) - mu(x, var=ref)]` with a delta-method SE — instead of skipping the term. Matches R marginaleffects' factor contrasts; on apistrat the `stype` contrasts agree to 1e-9 and the SEs to 2e-10.
+
+  This fixes a wrong-shaped answer, not just a missing feature: `margins(variables=["stype"])` previously returned an empty list, and the default `margins()` dropped categorical terms with only a `log.warning`. A variable with no derivative w.r.t. any fitted coefficient now raises instead of being silently skipped.
+
+- **`exponentiate=` on `GLMFit.to_polars()` and `.show()`.** Reports exp(β) with exp of the link-scale interval — an odds ratio for `logit`, a rate ratio for `log`, a hazard ratio for `cloglog` — and names the column for the link. It refuses the links where exp(β) is not a ratio (`identity`, `probit`, `inverse`, `inverse_squared`) rather than printing a meaningless number.
+
+  The interval is the exponentiated link-scale interval, so it is not symmetric about the ratio, and `std_err`/statistic/p-value stay on the link scale where the Wald test is computed — a symmetric standard error around a ratio is the mistake this is meant to prevent. Matches `exp(coef(f))` and `exp(confint(f))` from R.
+
+- **`offset=` on `glm.fit()`.** A known term on the link scale, coefficient fixed at 1 — what makes a rate model possible:
+
+  ```python
+  s.glm.fit(y="events", x=["age", svy.Cat("region")],
+            family="poisson", offset="log_exposure")   # coefficients are log rate ratios
+  ```
+
+  Carried through the whole model: IRLS working response, deviance, the sandwich, `predict()` and `margins()`. Matches R `survey` 4.5 to 2.5e-15 on coefficients and 5e-10 on SEs. Null deviance is the intercept-only fit *carrying the offset*, found by a one-parameter IRLS the way R's `glm()` refits it — the weighted-mean shortcut is only valid without an offset — and reproduces R's `null.deviance` exactly.
+
+  **`predict()` includes the offset, where R's `predict.svyglm(newdata=)` drops it.** R's own two answers disagree: on the same rows `fitted(f)` returns `exp(Xb + offset)` and tracks the observed counts, while `predict(f, newdata=)` returns `exp(Xb)`. svy follows `fitted()`, which is also what Stata's `predict` after `glm, exposure()` does. Passing `newdata` without the offset column raises rather than silently predicting a rate.
+
+- **Inverse Gaussian family for `glm.fit()`.** `family="inverse_gaussian"` (canonical link `inverse_squared`, R's `1/mu^2`) completes the exponential-family set. The kernel already implemented it and `DistFamily.INVERSE_GAUSSIAN` already named it — only the Python family map withheld it. Matches R `survey` 4.5 to twelve significant figures on coefficients, SEs and deviance across weighted, clustered, stratified and stratified-clustered designs.
+
+- **`DistFamily` is exported.** `svy.DistFamily` and `svy.core.DistFamily` now resolve, matching `LinkFunction`, which was already exported. `family=` and `link=` both accept a plain string or their enum.
+
+- **Probit and cloglog links for `glm.fit()`.** `family="binomial"` now accepts `link="probit"` and `link="cloglog"` alongside `logit`, completing the binomial link set. Both are wired through the whole model: coefficients and sandwich SEs, `predict()` on the response scale, and `margins()` — average marginal effects and predictive margins, whose delta-method SEs need the link's second derivative.
+
+  ```python
+  s.glm.fit(y="insured", x=["age", svy.Cat("region")], family="binomial", link="probit")
+  ```
+
+  Verified against R `survey` 4.5 across weighted, clustered, stratified and stratified-clustered designs — coefficients and SEs to 1e-7 relative, deviance to 1e-14 — and against `marginaleffects` 0.32.0 for AME and predictive margins. `probit` and `cloglog` map onto (0, 1), so pairing either with a non-binomial family now raises instead of fitting something meaningless.
+
 - **`Sample.weighting.standardize()` — direct standardization.** Reweights each domain to a common composition so rates are comparable across domains that differ in it. Age is the usual axis, but any composition variable works.
 
   ```python
@@ -35,6 +66,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Changed
 
+- **BREAKING: a family now admits only the links it has a model for.** `glm.fit()` validates the `family`/`link` pairing against the `okLinks` set of R's family constructors, so pairings that were never a model are rejected up front instead of failing deep in the kernel — or, in the case of `binomial` + `inverse_squared`, converging on a meaningless fit and reporting it as a result. Newly rejected: `logit`/`probit`/`cloglog` outside `binomial`, `inverse`/`inverse_squared` outside the families whose canonical link they are. Every previously working *model* still works; what stops working is the combinations that only appeared to.
+
 - **BREAKING: `by=` is now `cells=` on `adjust`, `normalize` and `poststratify`.** `cells` names the groups that each receive one derived adjustment factor; `by` continues to mean "repeat independently per group" everywhere it survives (`calibrate`, `trim`, and `standardize`). Keeping one word for both would have compromised a term of art.
 
 - **BREAKING: `factors=` is replaced by `shares=`.** In `poststratify` this is close to a rename — `factors` already computed `f × grand_total`, which is shares, unnormalized. What changes is that `shares` are normalized first, so a vector that does not sum to 1 now pins composition instead of silently rescaling the population. In `rake` it is a genuine removal: `factors` there multiplied each category by its *own* current weight sum, which has no share reading and which no workflow can supply in advance, since raking is iterative. `rake` gains `shares=` (marginal proportions) in its place.
@@ -49,6 +82,12 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **`print()` on an `EstimateList` of proportions.** `prop()` over a sequence of variables built one level column *per variable*, so a diagonal concat unioned them into a staircase of mostly-empty columns — eight conditions gave eight sparse columns, a ~118-character box, and every number truncated to an ellipsis. The members now stack under one shared `level` column beside `y`, which for the eight-condition case brings the table to 71 characters at full precision.
+
+  Only the stacked case changes. A single `prop()` still heads its level column with the variable name, `mean()` over a list is untouched, `quantile()` keeps its `prob` column, and a `by=` column stays distinct from the level column — including when a variable is itself named `level`, where the shared column moves aside.
+
+
+
 - **`categorical.ttest` ignored the finite population correction.** The t-test built its variance without ever asking for an FPC column, so on a design with `pop_size` it returned the answer for sampling with replacement — standard errors too wide, `t` too small. One- and two-sample tests were both affected; on apiclus1 the statistic was off by a factor of `1/sqrt(1 − 15/757)`. It now matches R `svyttest` to fourteen significant figures.
 
 - **One target-resolution path.** `normalize` and `poststratify` derived their control arrays independently, with two different label-to-code conventions. Both now resolve every argument form to absolute per-cell targets in one place, which is also the single form crossing into Rust.
@@ -58,6 +97,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 >
 > The record is honoured only while it still describes the data. Estimating on a different weight, or dropping a column the adjustment referenced, falls back to treating weights as fixed — and says so, once per data/design rebind.
 
+
+### Removed
+
+- **BREAKING: `ModelType` and `FitMethod` are no longer exported.** Both arrived with the monorepo migration and were never wired up — no consumer in `svy`, its tests or its docs, and neither enum's values were matched anywhere. `ModelType` was also misleading: it named four family+link *combinations* where `glm.fit()` takes the two separately and now accepts eleven. Use `DistFamily` and `LinkFunction`. The definitions are commented out in `core/enumerations.py` rather than deleted, alongside the other parked enums there.
 
 ## [0.26.0] — 2026-08-28
 

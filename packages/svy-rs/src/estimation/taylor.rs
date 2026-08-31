@@ -1556,6 +1556,305 @@ pub fn taylor_variance(
     Ok(taylor_variance_apply(&scores_arr, &design))
 }
 
+/// Full k×k covariance between k estimates from their retained score columns.
+///
+/// The between-estimate analogue of `taylor_variance_apply`: every column gets
+/// the calibration sweep, is aggregated to PSU totals, and the stage-1
+/// cross-products accumulate per stratum with the same FPC, scaling, and
+/// singleton handling as the variance; stage 2 adds the SSU-level
+/// cross-products under the same stage-1-sampling-fraction guard. The diagonal
+/// equals `taylor_variance_apply` per column up to floating-point accumulation
+/// order — callers that need exact agreement keep the per-column variance and
+/// take only the off-diagonals from here.
+pub fn taylor_covariance_apply(score_cols: &[Vec<f64>], d: &TaylorDesign) -> Vec<Vec<f64>> {
+    let k = score_cols.len();
+    if k == 0 {
+        return vec![];
+    }
+    let n = score_cols[0].len();
+    let mut cov = vec![vec![0.0; k]; k];
+    if n == 0 {
+        return cov;
+    }
+
+    let swept: Vec<Vec<f64>>;
+    let cols: Vec<&[f64]> = match &d.calib {
+        Some(c) => {
+            swept = score_cols
+                .iter()
+                .map(|s| {
+                    let mut v = s.clone();
+                    c.apply(&mut v);
+                    v
+                })
+                .collect();
+            swept.iter().map(|v| v.as_slice()).collect()
+        }
+        None => score_cols.iter().map(|v| v.as_slice()).collect(),
+    };
+
+    // Accumulate a symmetric pair contribution into the matrix.
+    let add = |cov: &mut Vec<Vec<f64>>, j: usize, l: usize, v: f64| {
+        cov[j][l] += v;
+        if l != j {
+            cov[l][j] += v;
+        }
+    };
+
+    // --- STAGE 1 ---
+    if d.strata_indices.is_none() {
+        // Unstratified: PSU totals (or the units themselves when unclustered).
+        let (totals, m): (Vec<Vec<f64>>, usize) = match d.psu_indices.as_deref() {
+            Some(psu_idx) => {
+                if d.n_psus <= 1 {
+                    return cov;
+                }
+                let mut t = vec![vec![0.0; d.n_psus as usize]; k];
+                for j in 0..k {
+                    for (s, &p) in cols[j].iter().zip(psu_idx.iter()) {
+                        if p != u32::MAX {
+                            t[j][p as usize] += s;
+                        }
+                    }
+                }
+                (t, d.n_psus as usize)
+            }
+            None => {
+                if n <= 1 {
+                    return cov;
+                }
+                (cols.iter().map(|c| c.to_vec()).collect(), n)
+            }
+        };
+        let mf = m as f64;
+        let means: Vec<f64> = totals.iter().map(|t| t.iter().sum::<f64>() / mf).collect();
+        let scale = d.fpc_val * mf / (mf - 1.0);
+        for j in 0..k {
+            for l in j..k {
+                let s: f64 = (0..m)
+                    .map(|a| (totals[j][a] - means[j]) * (totals[l][a] - means[l]))
+                    .sum();
+                add(&mut cov, j, l, scale * s);
+            }
+        }
+    } else {
+        let strata_idx = d.strata_indices.as_deref().unwrap();
+        let n_strata = d.n_strata as usize;
+        match (
+            d.psu_indices.as_deref(),
+            d.psu_per_stratum.as_deref(),
+            d.n_psus_per_stratum.as_deref(),
+        ) {
+            (Some(psu_idx), Some(psu_map), Some(n_psus)) => {
+                let max_psu = psu_idx
+                    .iter()
+                    .filter(|&&p| p != u32::MAX)
+                    .max()
+                    .copied()
+                    .unwrap_or(0);
+                let mut psu_totals = vec![vec![0.0; (max_psu + 1) as usize]; k];
+                let mut psu_exists = vec![false; (max_psu + 1) as usize];
+                for j in 0..k {
+                    for (s, &p) in cols[j].iter().zip(psu_idx.iter()) {
+                        if p != u32::MAX {
+                            psu_totals[j][p as usize] += s;
+                            psu_exists[p as usize] = true;
+                        }
+                    }
+                }
+
+                let mut grand_mean = vec![0.0; k];
+                if d.sm_enum == SingletonMethod::Center {
+                    let total_count = psu_exists.iter().filter(|&&e| e).count();
+                    if total_count > 0 {
+                        for j in 0..k {
+                            grand_mean[j] =
+                                psu_totals[j].iter().sum::<f64>() / (total_count as f64);
+                        }
+                    }
+                }
+
+                for h in 0..n_strata {
+                    let m_h = n_psus[h];
+                    if m_h == 0 {
+                        continue;
+                    }
+                    let fpc_h = d.fpc_per_stratum.as_deref().map(|f| f[h]).unwrap_or(1.0);
+                    if m_h == 1 {
+                        if d.sm_enum == SingletonMethod::Center {
+                            if let Some(&p) = psu_map[h].first() {
+                                for j in 0..k {
+                                    let dj = psu_totals[j][p as usize] - grand_mean[j];
+                                    for l in j..k {
+                                        let dl = psu_totals[l][p as usize] - grand_mean[l];
+                                        add(&mut cov, j, l, fpc_h * dj * dl);
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    let mf = m_h as f64;
+                    let means_h: Vec<f64> = (0..k)
+                        .map(|j| {
+                            psu_map[h]
+                                .iter()
+                                .map(|&p| psu_totals[j][p as usize])
+                                .sum::<f64>()
+                                / mf
+                        })
+                        .collect();
+                    let scale = fpc_h * mf / (mf - 1.0);
+                    for &p in &psu_map[h] {
+                        for j in 0..k {
+                            let dj = psu_totals[j][p as usize] - means_h[j];
+                            for l in j..k {
+                                let dl = psu_totals[l][p as usize] - means_h[l];
+                                add(&mut cov, j, l, scale * dj * dl);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {
+                // Stratified element sampling: units are the PSUs, grouped by
+                // stratum. One pass accumulates per-stratum sums, counts, and
+                // the k×k cross-product sums.
+                let mut sums = vec![vec![0.0; n_strata]; k];
+                let mut counts = vec![0u32; n_strata];
+                let mut cross = vec![0.0; n_strata * k * k];
+                for (i, &st) in strata_idx.iter().enumerate() {
+                    if st == u32::MAX {
+                        continue;
+                    }
+                    let h = st as usize;
+                    counts[h] += 1;
+                    for j in 0..k {
+                        let sj = cols[j][i];
+                        sums[j][h] += sj;
+                        for l in j..k {
+                            cross[h * k * k + j * k + l] += sj * cols[l][i];
+                        }
+                    }
+                }
+
+                let mut grand_mean = vec![0.0; k];
+                if d.sm_enum == SingletonMethod::Center {
+                    let total_n: u32 = counts.iter().sum();
+                    if total_n > 0 {
+                        for j in 0..k {
+                            grand_mean[j] = sums[j].iter().sum::<f64>() / (total_n as f64);
+                        }
+                    }
+                }
+
+                for h in 0..n_strata {
+                    let n_h = counts[h];
+                    if n_h == 0 {
+                        continue;
+                    }
+                    let fpc_h = d.fpc_per_stratum.as_deref().map(|f| f[h]).unwrap_or(1.0);
+                    if n_h == 1 {
+                        if d.sm_enum == SingletonMethod::Center {
+                            for j in 0..k {
+                                let dj = sums[j][h] - grand_mean[j];
+                                for l in j..k {
+                                    let dl = sums[l][h] - grand_mean[l];
+                                    add(&mut cov, j, l, fpc_h * dj * dl);
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    let nf = n_h as f64;
+                    let scale = fpc_h * nf / (nf - 1.0);
+                    for j in 0..k {
+                        for l in j..k {
+                            let c_h = cross[h * k * k + j * k + l] - sums[j][h] * sums[l][h] / nf;
+                            add(&mut cov, j, l, scale * c_h);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- STAGE 2 ---
+    if !d.has_stage2 {
+        return cov;
+    }
+    let psu_idx = d.psu_indices.as_deref().unwrap();
+    let ssu_idx = d.ssu_indices.as_deref().unwrap();
+
+    let max_psu = psu_idx
+        .iter()
+        .filter(|&&p| p != u32::MAX)
+        .max()
+        .copied()
+        .unwrap_or(0);
+    let n_psus = (max_psu + 1) as usize;
+    let mut psu_obs: Vec<Vec<usize>> = vec![Vec::new(); n_psus];
+    for (i, &p) in psu_idx.iter().enumerate() {
+        if p != u32::MAX {
+            psu_obs[p as usize].push(i);
+        }
+    }
+
+    for psu in 0..n_psus {
+        let obs = &psu_obs[psu];
+        if obs.is_empty() {
+            continue;
+        }
+        let fpc_psu_val = match (d.psu_to_stratum.as_deref(), d.fpc_per_stratum.as_deref()) {
+            (Some(s_for_p), Some(fpc_s)) => {
+                let h = s_for_p[psu] as usize;
+                if h < fpc_s.len() { fpc_s[h] } else { 1.0 }
+            }
+            _ => d
+                .fpc_per_stratum
+                .as_deref()
+                .and_then(|f| f.first().copied())
+                .unwrap_or(1.0),
+        };
+        let stage1_sampling_fraction = 1.0 - fpc_psu_val;
+        if stage1_sampling_fraction <= 0.0 {
+            continue;
+        }
+        let fpc_ssu_val = d.fpc_ssu_arr.as_deref().map(|f| f[obs[0]]).unwrap_or(1.0);
+
+        let psu_ssu_raw: Vec<u32> = obs.iter().map(|&i| ssu_idx[i]).collect();
+        let (local_ssu, n_ssus) = reindex_within_subset(&psu_ssu_raw);
+        if n_ssus <= 1 {
+            continue;
+        }
+
+        let mut ssu_totals = vec![vec![0.0; n_ssus as usize]; k];
+        for j in 0..k {
+            for (&i, &s) in obs.iter().zip(local_ssu.iter()) {
+                if s != u32::MAX {
+                    ssu_totals[j][s as usize] += cols[j][i];
+                }
+            }
+        }
+        let nf = n_ssus as f64;
+        let means: Vec<f64> = ssu_totals
+            .iter()
+            .map(|t| t.iter().sum::<f64>() / nf)
+            .collect();
+        let scale = stage1_sampling_fraction * fpc_ssu_val * nf / (nf - 1.0);
+        for j in 0..k {
+            for l in j..k {
+                let s: f64 = (0..n_ssus as usize)
+                    .map(|a| (ssu_totals[j][a] - means[j]) * (ssu_totals[l][a] - means[l]))
+                    .sum();
+                add(&mut cov, j, l, scale * s);
+            }
+        }
+    }
+
+    cov
+}
+
 pub fn degrees_of_freedom(
     weights: &Float64Chunked,
     strata: Option<&Column>,
@@ -2498,6 +2797,71 @@ mod tests {
             sv_i.to_bits(),
             "stratified-only: {sv_s} vs {sv_i}"
         );
+    }
+
+    /// The covariance kernel must agree with the variance kernel on its
+    /// diagonal, and a linear combination's variance computed two ways —
+    /// c' V c from the matrix vs the variance of the combined score column —
+    /// must match. Exercised over every stage-1 design branch.
+    #[test]
+    fn test_taylor_covariance_matches_variance() {
+        let a = vec![1.0, -2.0, 3.0, -4.0, 10.0, -12.0, 14.0, -16.0];
+        let b = vec![0.5, 2.5, -1.5, 4.0, -3.0, 6.0, -7.0, 8.0];
+        let combined: Vec<f64> = a.iter().zip(b.iter()).map(|(x, y)| x - y).collect();
+
+        let strata = scol("s".into(), &["A", "A", "A", "A", "B", "B", "B", "B"]);
+        let psu = scol("p".into(), &["1", "1", "2", "2", "1", "1", "2", "2"]);
+
+        let designs = [
+            build_taylor_design(Some(&strata), Some(&psu), None, None, None, None).unwrap(),
+            build_taylor_design(Some(&strata), None, None, None, None, None).unwrap(),
+            build_taylor_design(None, Some(&psu), None, None, None, None).unwrap(),
+            build_taylor_design(None, None, None, None, None, None).unwrap(),
+        ];
+        for (i, d) in designs.iter().enumerate() {
+            let cov = taylor_covariance_apply(&[a.clone(), b.clone()], d);
+            let var_a = taylor_variance_apply(&a, d);
+            let var_b = taylor_variance_apply(&b, d);
+            let var_c = taylor_variance_apply(&combined, d);
+            assert!(
+                (cov[0][0] - var_a).abs() < 1e-10 * var_a.abs().max(1.0),
+                "diag a, design {i}"
+            );
+            assert!(
+                (cov[1][1] - var_b).abs() < 1e-10 * var_b.abs().max(1.0),
+                "diag b, design {i}"
+            );
+            assert_eq!(
+                cov[0][1].to_bits(),
+                cov[1][0].to_bits(),
+                "symmetry, design {i}"
+            );
+            let var_from_cov = cov[0][0] - 2.0 * cov[0][1] + cov[1][1];
+            assert!(
+                (var_from_cov - var_c).abs() < 1e-10 * var_c.abs().max(1.0),
+                "contrast variance, design {i}: {var_from_cov} vs {var_c}"
+            );
+        }
+    }
+
+    /// Singleton CENTER handling: the covariance diagonal must reproduce the
+    /// centered variance when a stratum has one PSU.
+    #[test]
+    fn test_taylor_covariance_singleton_center() {
+        let a = vec![1.0, -2.0, 3.0, -4.0, 5.0];
+        let b = vec![2.0, 1.0, -1.0, 0.5, -0.5];
+        let combined: Vec<f64> = a.iter().zip(b.iter()).map(|(x, y)| x + y).collect();
+        // Stratum B has a single PSU.
+        let strata = scol("s".into(), &["A", "A", "A", "A", "B"]);
+        let psu = scol("p".into(), &["1", "1", "2", "2", "1"]);
+        let d = build_taylor_design(Some(&strata), Some(&psu), None, None, None, Some("center"))
+            .unwrap();
+        let cov = taylor_covariance_apply(&[a.clone(), b.clone()], &d);
+        let var_a = taylor_variance_apply(&a, &d);
+        let var_c = taylor_variance_apply(&combined, &d);
+        assert!((cov[0][0] - var_a).abs() < 1e-10 * var_a.abs().max(1.0));
+        let var_from_cov = cov[0][0] + 2.0 * cov[0][1] + cov[1][1];
+        assert!((var_from_cov - var_c).abs() < 1e-10 * var_c.abs().max(1.0));
     }
 
     #[test]

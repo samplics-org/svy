@@ -53,4 +53,4 @@ from svy_rs._internal import (
     ttest_rs,
 )
 
-__version__ = "0.15.0"
+__version__ = "0.16.0"

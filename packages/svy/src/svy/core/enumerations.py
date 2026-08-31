@@ -35,13 +35,15 @@ class DistFamily(StrEnum):
 #     CLEANING_NAMES = "Cleaning Names"
 
 
-@unique
-class FitMethod(StrEnum):
-    # OLS = "OLS"
-    # WLS = "WLS"
-    # FH = "FH"
-    ML = "ML"
-    REML = "REML"
+# Never wired up: arrived with the monorepo migration and had no consumer in
+# svy, its tests or its docs. Unexported 2026-08-30.
+# @unique
+# class FitMethod(StrEnum):
+#     # OLS = "OLS"
+#     # WLS = "WLS"
+#     # FH = "FH"
+#     ML = "ML"
+#     REML = "REML"
 
 
 @unique
@@ -53,12 +55,15 @@ class MeanVarMode(StrEnum):
     """Allow σ1 ≠ σ2 (Welch-type); supports optimal allocation."""
 
 
-@unique
-class ModelType(StrEnum):
-    LINEAR = "Linear"  # Gaussian + Identity
-    LOGISTIC = "Logistic"  # Binomial + Logit
-    POISSON = "Poisson"  # Poisson + Log
-    GAMMA = "Gamma"  # Gamma + Log (or Inverse)
+# Never wired up, and misleading if it had been: glm.fit() takes family and
+# link separately, and these four pairings are a small subset of the eleven it
+# accepts. Use DistFamily and LinkFunction. Unexported 2026-08-30.
+# @unique
+# class ModelType(StrEnum):
+#     LINEAR = "Linear"  # Gaussian + Identity
+#     LOGISTIC = "Logistic"  # Binomial + Logit
+#     POISSON = "Poisson"  # Poisson + Log
+#     GAMMA = "Gamma"  # Gamma + Log (or Inverse)
 
 
 @unique
@@ -121,11 +126,11 @@ class LetterCase(str, Enum):
 class LinkFunction(StrEnum):
     IDENTITY = "identity"
     LOGIT = "logit"
+    PROBIT = "probit"
+    CLOGLOG = "cloglog"
     LOG = "log"
     INVERSE = "inverse"
     INVERSE_SQUARED = "inverse_squared"
-    # PROBIT = "probit"  # Requires CDF implementation
-    # CLOGLOG = "cloglog"
 
 
 @unique

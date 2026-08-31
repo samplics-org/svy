@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from typing import TYPE_CHECKING, Any, Literal, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 
 import msgspec
 import numpy as np
@@ -23,6 +23,7 @@ from svy.ui.printing import (
 
 
 if TYPE_CHECKING:
+    from svy.estimation.contrast import Contrast, ContrastExpr
     from svy.metadata import MetadataStore
 
 
@@ -90,6 +91,8 @@ class Estimate:
         "n_psus",
         "as_factor",
         "where_clause",
+        "design_df",
+        "_cov_filled",
         "_decimals",
         "_layout",
         "_print_width",
@@ -122,6 +125,14 @@ class Estimate:
         self.as_factor: bool = False
         self.q_method: QuantileMethod = QuantileMethod.LINEAR
         self.where_clause: str | None = None
+        #: Full design degrees of freedom (R's ``degf``), as opposed to the
+        #: per-row domain-aware df. Cross-domain contrasts are referred to
+        #: this value.
+        self.design_df: int | None = None
+        #: Whether the off-diagonals of ``covariance`` were actually computed.
+        #: Multi-variable convenience calls estimate each variable
+        #: independently and leave them zeroed; ``contrast()`` refuses those.
+        self._cov_filled: bool = False
 
         self._decimals = None
         self._layout = "auto"
@@ -355,6 +366,173 @@ class Estimate:
 
         return pl.from_dicts(rows)
 
+    def _y_level_column(self, *, use_labels: bool | None = None) -> str | None:
+        """Name of the column holding this estimate's category levels, if any.
+
+        Proportions (and ``as_factor`` means) put the level in a column named
+        after the variable itself, which reads well alone but collides when
+        several are stacked -- see ``EstimateList._combined``.
+        """
+        if not self.estimates:
+            return None
+        if not (self.param == PopParam.PROP or self.as_factor):
+            return None
+        resolve = use_labels if use_labels is not None else self._resolve_use_labels()
+        return self._get_var_label(self.estimates[0].y, use_labels=resolve)
+
+    # --- Contrasts & covariance ---
+
+    def _row_key(self, p: ParamEst) -> Any:
+        """The contrast key identifying one estimate row.
+
+        Domain estimates key on their by-level (a tuple when several ``by``
+        variables), categorical proportions on the y-level, and combined
+        cases on the (by-levels..., y-level) tuple. A single ungrouped row
+        keys on the variable name itself.
+        """
+        parts: list = []
+        if p.by_level:
+            parts.extend(p.by_level)
+        if (self.param == PopParam.PROP or self.as_factor) and p.y_level is not None:
+            parts.append(p.y_level)
+        if not parts:
+            return p.y
+        return parts[0] if len(parts) == 1 else tuple(parts)
+
+    def keys(self, *, labels: bool = False) -> list:
+        """Contrast keys, one per estimate row, in row (and covariance) order.
+
+        With ``labels=True``, each key component is replaced by its metadata
+        value label where one exists — the same rendering the printed table
+        uses. Both forms are accepted by :meth:`contrast`.
+        """
+        raw = [self._row_key(p) for p in self.estimates]
+        if not labels:
+            return raw
+        return [self._labeled_key(p, k) for p, k in zip(self.estimates, raw)]
+
+    def _labeled_key(self, p: ParamEst, key: Any) -> Any:
+        """The key with every component swapped for its value label."""
+        if self._metadata is None:
+            return key
+        labeled: list = []
+        if p.by_level:
+            for var, val in zip(p.by or (), p.by_level):
+                labeled.append(self._get_value_label(var, val, use_labels=True))
+        if (self.param == PopParam.PROP or self.as_factor) and p.y_level is not None:
+            labeled.append(self._get_value_label(p.y, p.y_level, use_labels=True))
+        if not labeled:
+            return key
+        return labeled[0] if len(labeled) == 1 else tuple(labeled)
+
+    def _label_aliases(self) -> dict:
+        """Label-form aliases for contrast keys (label → row index)."""
+        if self._metadata is None:
+            return {}
+        aliases: dict = {}
+        raw = [self._row_key(p) for p in self.estimates]
+        for i, (p, key) in enumerate(zip(self.estimates, raw)):
+            lk = self._labeled_key(p, key)
+            if lk != key:
+                aliases[lk] = i
+        return aliases
+
+    def contrast(
+        self,
+        contrasts: "Mapping[Any, Any] | ContrastExpr",
+        *,
+        alpha: float | None = None,
+    ) -> "Contrast":
+        """Estimate linear contrasts between this result's estimands.
+
+        ``contrasts`` is a contrast expression built from :func:`svy.estd`
+        references (``estd("E") - estd("H")``), a sparse ``{key: coef}``
+        dict, or several named contrasts ``{"name": expression-or-dict}``.
+        Keys are the row identities listed by :meth:`keys` — metadata value
+        labels are accepted wherever they are unambiguous. Unmentioned
+        estimands get coefficient 0; unknown keys raise.
+
+        Inference is t-based on the full design degrees of freedom
+        (:attr:`design_df`, R's ``degf`` convention), not the per-row
+        domain-aware df.
+        """
+        from svy.errors import MethodError
+        from svy.estimation.contrast import linear_contrast
+
+        if self.param in (PopParam.QUANTILE, PopParam.MEDIAN):
+            raise MethodError(
+                title="Contrasts are not defined for quantiles",
+                detail=(
+                    "Woodruff quantile intervals do not arise from a "
+                    "linearized score column, so no between-quantile "
+                    "covariance exists to combine them with."
+                ),
+                code="CONTRAST_UNSUPPORTED_PARAM",
+                where="Estimate.contrast",
+                param="param",
+                got=self.param.name,
+            )
+        if not self.estimates:
+            raise MethodError(
+                title="Nothing to contrast",
+                detail="This result carries no estimates.",
+                code="CONTRAST_EMPTY",
+                where="Estimate.contrast",
+            )
+        k = len(self.estimates)
+        if k > 1 and not self._cov_filled:
+            raise MethodError(
+                title="No between-estimate covariance on this result",
+                detail=(
+                    "Multi-variable convenience calls estimate each variable "
+                    "independently, so no covariance between their rows was "
+                    "computed. Re-run the single-variable form (e.g. "
+                    "prop('y') instead of prop(['y', ...])) and contrast "
+                    "that result."
+                ),
+                code="CONTRAST_NO_COVARIANCE",
+                where="Estimate.contrast",
+            )
+
+        df = self.design_df
+        if df is None:
+            row_dfs = [p.df for p in self.estimates if p.df is not None]
+            if not row_dfs:
+                raise MethodError(
+                    title="No degrees of freedom on this result",
+                    detail="Neither a design df nor per-row df is available.",
+                    code="CONTRAST_NO_DF",
+                    where="Estimate.contrast",
+                )
+            df = max(row_dfs)
+
+        values = np.array([p.est for p in self.estimates], dtype=float)
+        return linear_contrast(
+            self.keys(),
+            values,
+            self.covariance,
+            contrasts,
+            df=float(df),
+            alpha=alpha if alpha is not None else self.alpha,
+            method=self.method,
+            aliases=self._label_aliases(),
+        )
+
+    def covariance_to_polars(self) -> pl.DataFrame:
+        """Tidy lower-triangle view of the between-estimate covariance.
+
+        One row per (key_a, key_b) pair including the diagonal; the dense
+        matrix stays on :attr:`covariance` in :meth:`keys` order.
+        """
+        keys = [str(k) for k in self.keys()]
+        cov = np.asarray(self.covariance)
+        rows = [
+            {"key_a": keys[i], "key_b": keys[j], "cov": float(cov[i, j])}
+            for i in range(len(keys))
+            for j in range(i + 1)
+        ]
+        return pl.from_dicts(rows) if rows else pl.DataFrame()
+
     # --- Formatting ---
 
     def _get_precision(self, col: str) -> int:
@@ -526,6 +704,34 @@ class EstimateList(list):
     def _members(self) -> list["Estimate"]:
         return [e for e in self if isinstance(e, Estimate) and e.estimates]
 
+    def contrast(
+        self,
+        contrasts: "Mapping[Any, Any] | ContrastExpr",
+        *,
+        alpha: float | None = None,
+    ) -> "Contrast":
+        """Contrast the single member of this list; raise otherwise.
+
+        Covariance exists only within one estimation (batched variables are
+        computed independently), so a multi-member list has no joint
+        covariance to contrast over — index the member instead.
+        """
+        members = self._members()
+        if len(members) == 1:
+            return members[0].contrast(contrasts, alpha=alpha)
+        from svy.errors import MethodError
+
+        raise MethodError(
+            title="contrast() needs a single result",
+            detail=(
+                f"This list holds {len(members)} results, estimated "
+                "independently — there is no covariance between them. "
+                "Contrast one member, e.g. result[0].contrast(...)."
+            ),
+            code="CONTRAST_LIST_AMBIGUOUS",
+            where="EstimateList.contrast",
+        )
+
     def to_polars(self, *, use_labels: bool | None = None) -> pl.DataFrame:
         """Concatenate the members into one frame, one row per estimate."""
         frames = [e.to_polars_printable(use_labels=use_labels) for e in self._members()]
@@ -549,11 +755,32 @@ class EstimateList(list):
         ys = [m.estimates[0].y for m in members]
         show_y = len(set(ys)) > 1
 
+        # Each proportion names its level column after its own variable, so a
+        # diagonal concat of several would union them into one sparse column
+        # per variable -- a staircase of blanks that also squeezes the numbers
+        # into ellipses. Stacking needs them under one shared name instead.
+        level_cols = {}
+        if show_y:
+            for m in members:
+                col = m._y_level_column(use_labels=use_labels)
+                if col:
+                    level_cols[id(m)] = col
+        level_name = ""
+        if level_cols:
+            taken = {
+                c for m in members for c in m.to_polars_printable(use_labels=use_labels).columns
+            }
+            taken -= set(level_cols.values())
+            level_name = next(n for n in ("level", "y_level", "category") if n not in taken)
+
         frames = []
         for m, y in zip(members, ys):
             f = m.to_polars_printable(use_labels=use_labels)
             if f.is_empty():
                 continue
+            own = level_cols.get(id(m))
+            if own and own in f.columns:
+                f = f.rename({own: level_name})
             if show_y and "y" not in f.columns:
                 f = f.select(pl.lit(y).alias("y"), pl.all())
             frames.append(f)
