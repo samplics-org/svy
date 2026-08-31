@@ -6,11 +6,27 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+## [0.16.0] — 2026-08-30
+
 ### Added
 
 - `offset_name` on `fit_glm_rs`: a known term on the link scale, entered as `z <- (eta - offset) + (y - mu)/mu.eta` in the IRLS working response and added back wherever eta is rebuilt (R's `glm.fit`). Absent, it materialises as zeros, so the existing path is bit-identical. Carries a dedicated one-parameter IRLS for the null deviance, since the intercept-only MLE is no longer the weighted mean of y once mu varies by row.
 
+- **`estimation::calib_sweep`**, the calibration-aware variance operator. A weighting method that pins a population quantity records what it pinned, and the sweep centres the linearized scores against that structure — R `survey`'s `svyrecvar` `postStrata` loop. Applied by the Taylor, replication, GLM and t-test paths alike.
+
+- **Between-estimate covariance in `estimation::taylor`**, backing `svy`'s linear contrasts over coefficients of one estimation.
+
 - `Link::Probit` and `Link::Cloglog` in the GLM kernel, with the clamps R's `make.link` applies (eta bounded at `+/-qnorm(eps)`, mu at `[eps, 1-eps]`). Backed by a normal CDF written as `erfc(-x/sqrt2)/2` — confluent series below 1, modified-Lentz continued fraction above — which agrees with R's `pnorm` to ~1e-14 relative and keeps full precision in the tails, where a coarser erf shows up directly in the fitted coefficients.
+
+### Changed
+
+- **BREAKING: the Taylor and replication entry points return `(frame, cov)`** instead of a bare frame. The second element is the between-estimate covariance, `None` where the estimator does not produce one. Every caller must unpack.
+
+- **BREAKING: the Taylor, replication, GLM and t-test entry points take six `calib_*` keyword arguments** (`calib_kind`, `calib_cells`, `calib_aux`, `calib_prev_wgt`, `calib_pins_total`, `calib_new_wgt`), carrying the weight-adjustment record the sweep needs. All default to `None`, which is the uncalibrated path.
+
+### Removed
+
+- **BREAKING: `poststratify_factor`.** Poststratification is now one branch of the general calibration machinery; the standalone factor entry point has no caller.
 
 ## [0.15.0] — 2026-08-26
 
@@ -162,7 +178,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 Baseline for this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.15.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.16.0...HEAD
+[0.16.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.16.0
 [0.15.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.15.0
 [0.14.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.14.0
 [0.13.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.13.0
