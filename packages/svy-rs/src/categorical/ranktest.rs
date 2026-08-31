@@ -114,7 +114,10 @@ fn apply_score(rankhat: &[f64], n_hat: f64, method: RankScoreMethod) -> Vec<f64>
 /// High-precision inverse standard normal CDF (probit function).
 /// Uses Peter Acklam's rational approximation, accurate to ~1.15e-9.
 /// Reference: https://web.archive.org/web/20151030215612/http://home.online.no/~pjacklam/notes/invnorm/
-fn probit(p: f64) -> f64 {
+///
+/// Shared with the GLM probit link, which uses it only to seed IRLS from the
+/// initial mu — the ~1e-9 accuracy is well inside the starting-value budget.
+pub(crate) fn probit(p: f64) -> f64 {
     if p <= 0.0 {
         return f64::NEG_INFINITY;
     }

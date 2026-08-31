@@ -6,6 +6,12 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Added
+
+- `offset_name` on `fit_glm_rs`: a known term on the link scale, entered as `z <- (eta - offset) + (y - mu)/mu.eta` in the IRLS working response and added back wherever eta is rebuilt (R's `glm.fit`). Absent, it materialises as zeros, so the existing path is bit-identical. Carries a dedicated one-parameter IRLS for the null deviance, since the intercept-only MLE is no longer the weighted mean of y once mu varies by row.
+
+- `Link::Probit` and `Link::Cloglog` in the GLM kernel, with the clamps R's `make.link` applies (eta bounded at `+/-qnorm(eps)`, mu at `[eps, 1-eps]`). Backed by a normal CDF written as `erfc(-x/sqrt2)/2` — confluent series below 1, modified-Lentz continued fraction above — which agrees with R's `pnorm` to ~1e-14 relative and keeps full precision in the tails, where a coarser erf shows up directly in the fitted coefficients.
+
 ## [0.15.0] — 2026-08-26
 
 ### Added

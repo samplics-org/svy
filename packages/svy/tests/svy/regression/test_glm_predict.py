@@ -72,6 +72,22 @@ R_LOGISTIC_PRED = {
 }
 
 
+# R code (same design, non-canonical binomial links, epsilon = 1e-12):
+# fit <- svyglm(y_bin ~ ell + meals + mobility, design = des2,
+#               family = quasibinomial(link = "probit"))  # or "cloglog"
+# pred <- predict(fit, newdata = head(apistrat, 5), type = "response", se.fit = TRUE)
+
+R_PROBIT_PRED = {
+    "yhat": np.array([0.9123824072, 0.05091565088, 0.5397128891, 0.1630345137, 0.9645394077]),
+    "se": np.array([0.03225082314, 0.03824113188, 0.05625656256, 0.0704128839, 0.01856977903]),
+}
+
+R_CLOGLOG_PRED = {
+    "yhat": np.array([0.886434041, 0.09465733187, 0.5025696401, 0.1756971646, 0.9751285247]),
+    "se": np.array([0.05091443512, 0.04172526045, 0.0554172918, 0.05758596269, 0.0191556226]),
+}
+
+
 # =============================================================================
 # R Reference Values - Stratified Design
 # =============================================================================
@@ -376,6 +392,31 @@ class TestGLMPredictVsRClustered:
         pred = model.predict(api_binary.head(5))
 
         np.testing.assert_allclose(pred.se, R_LOGISTIC_PRED_CLUST["se"], rtol=RTOL, atol=ATOL)
+
+
+class TestGLMPredictNonCanonicalLinks:
+    """Response-scale predictions and delta-method SEs for probit and cloglog."""
+
+    @pytest.mark.parametrize(
+        ("link", "ref"),
+        [("probit", R_PROBIT_PRED), ("cloglog", R_CLOGLOG_PRED)],
+    )
+    def test_yhat_and_se_vs_r(self, api_strat, link, ref):
+        api_binary = api_strat.with_columns((pl.col("api00") > 600).cast(pl.Int32).alias("y_bin"))
+        sample = Sample(api_binary, Design(wgt="pw"))
+
+        model = sample.glm.fit(
+            y="y_bin",
+            x=["ell", "meals", "mobility"],
+            family=DistFamily.BINOMIAL,
+            link=link,
+            tol=1e-12,
+        )
+
+        pred = model.predict(api_binary.head(5))
+
+        np.testing.assert_allclose(pred.yhat, ref["yhat"], rtol=RTOL, atol=ATOL)
+        np.testing.assert_allclose(pred.se, ref["se"], rtol=RTOL, atol=ATOL)
 
 
 # =============================================================================

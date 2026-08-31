@@ -13,6 +13,7 @@ import msgspec
 import numpy as np
 import polars as pl
 
+from svy.regression.glm import offset_values
 from svy.regression.links import link_inverse, link_mu_eta, link_mu_eta2
 from svy.ui.printing import make_panel, render_plain_table, render_rich_to_str, resolve_width
 
@@ -126,10 +127,11 @@ class GLMMargins(msgspec.Struct, frozen=True):
         title = f"GLM Margins: {self.term} ({self.margin_type}, {conf_pct}% CI)"
         ci_header = f"{conf_pct}% CI"
         if self.values is not None:
-            headers = ["Value", "Margin", "SE", ci_header]
+            label = "Contrast" if self.margin_type == "ame" else "Value"
+            headers = [label, "Margin", "SE", ci_header]
             rows = [
                 [
-                    f"{v:.2f}",
+                    f"{v:.2f}" if isinstance(v, (int, float, np.number)) else str(v),
                     f"{m:.6f}",
                     f"{s:.6f}",
                     f"[{lo:.6f}, {hi:.6f}]",
@@ -170,7 +172,7 @@ class GLMMargins(msgspec.Struct, frozen=True):
             expand=False,
         )
         if self.values is not None:
-            table.add_column("Value", justify="right")
+            table.add_column("Contrast" if self.margin_type == "ame" else "Value", justify="right")
         table.add_column("Margin", justify="right")
         table.add_column("SE", justify="right")
         table.add_column(f"{conf_pct}% CI", justify="right")
@@ -183,7 +185,10 @@ class GLMMargins(msgspec.Struct, frozen=True):
         ):
             if self.values is not None:
                 v, m, s, lo, hi = row_data
-                row = [f"{v:.2f}", f"{m:.6f}", f"{s:.6f}", f"[{lo:.6f}, {hi:.6f}]"]
+                # `values` holds at-values (numeric) for predictive margins and
+                # contrast labels (strings) for a categorical AME.
+                v_str = f"{v:.2f}" if isinstance(v, (int, float, np.number)) else str(v)
+                row = [v_str, f"{m:.6f}", f"{s:.6f}", f"[{lo:.6f}, {hi:.6f}]"]
             else:
                 m, s, lo, hi = row_data
                 row = [f"{m:.6f}", f"{s:.6f}", f"[{lo:.6f}, {hi:.6f}]"]
@@ -299,12 +304,11 @@ def _validate_ame_variables(glm: GLM, variables: list[str]) -> list[str]:
                 f"Available variables: {sorted(term_info.keys())}"
             )
 
-        if term_info[var].get("type") != "continuous":
-            log.warning(
-                f"Variable '{var}' is categorical. "
-                "AME for categorical variables is not yet supported. Skipping."
+        kind = term_info[var].get("type")
+        if kind not in ("continuous", "categorical"):
+            raise ValueError(
+                f"Variable {var!r} has unsupported type {kind!r} for marginal effects."
             )
-            continue
 
         valid_vars.append(var)
 
@@ -387,6 +391,80 @@ def _term_derivative_matrix(
     return D
 
 
+def _categorical_contrast_ame(
+    glm: GLM,
+    fit: GLMFit,
+    data: pl.DataFrame,
+    var: str,
+    info: dict,
+    *,
+    beta_vec: np.ndarray,
+    cov: np.ndarray,
+    weights: np.ndarray,
+    w_sum: float,
+    df: float,
+    alpha: float,
+) -> GLMMargins:
+    """
+    Average marginal effect of a categorical predictor: a discrete contrast,
+    not a derivative.
+
+    For each non-reference level k, with every other covariate held at its
+    observed value,
+
+        AME_k = mean_w[ mu(x, var=k) - mu(x, var=ref) ]
+
+    and by the delta method, with mu'(.) = dmu/deta,
+
+        d(AME_k)/dbeta = mean_w[ mu'(eta_k) x_k - mu'(eta_ref) x_ref ]
+
+    Matches `avg_slopes()` in R marginaleffects, which reports the same
+    quantity for a factor under the label "k - ref".
+    """
+    from scipy import stats
+
+    levels = list(info.get("levels") or [])
+    ref = info.get("ref")
+    others = [lv for lv in levels if lv != ref]
+    if not others:
+        raise ValueError(f"Categorical {var!r} has no non-reference level to contrast.")
+
+    offset = offset_values(fit, data)
+
+    def _counterfactual(level: object) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        cf = data.with_columns(pl.lit(level).alias(var))
+        X = glm._build_prediction_matrix(cf, fit)
+        eta = X @ beta_vec + offset
+        return link_inverse(fit.link, eta), link_mu_eta(fit.link, eta), X
+
+    mu_ref, dmu_ref, X_ref = _counterfactual(ref)
+    base_grad = (weights * dmu_ref)[:, None] * X_ref
+
+    margins = np.zeros(len(others))
+    se = np.zeros(len(others))
+
+    for i, level in enumerate(others):
+        mu_k, dmu_k, X_k = _counterfactual(level)
+        margins[i] = float(np.sum(weights * (mu_k - mu_ref)) / w_sum)
+        grad = ((weights * dmu_k)[:, None] * X_k - base_grad).sum(axis=0) / w_sum
+        se[i] = float(np.sqrt(max(float(grad @ cov @ grad), 0.0)))
+
+    t_crit = stats.t.ppf(1 - alpha / 2, df)
+    return GLMMargins(
+        term=var,
+        # Contrast labels, one per row, the way `values` carries the at-values
+        # of a predictive margin: in both cases it names the rows of this term.
+        values=np.array([f"{lv} - {ref}" for lv in others], dtype=object),
+        margin=margins,
+        se=se,
+        lci=margins - t_crit * se,
+        uci=margins + t_crit * se,
+        df=df,
+        alpha=alpha,
+        margin_type="ame",
+    )
+
+
 def compute_predictive_margins(
     glm: GLM,
     variable: str,
@@ -446,7 +524,9 @@ def compute_predictive_margins(
             cf_data = data.with_columns(pl.lit(val).alias(variable))
             X_cf = glm._build_prediction_matrix(cf_data, fit)
 
-        eta = X_cf @ beta_vec
+        # Counterfactual rows are the fitted rows with one column overwritten,
+        # so the offset is unchanged across the loop.
+        eta = X_cf @ beta_vec + offset_values(fit, data)
         yhat = link_inverse(fit.link, eta)
         margins[i] = np.sum(weights * yhat) / w_sum
 
@@ -504,7 +584,7 @@ def compute_average_marginal_effects(
 
     # Predictions on the link scale over the fitted rows
     X = glm._build_prediction_matrix(data, fit)
-    eta = X @ beta_vec
+    eta = X @ beta_vec + offset_values(fit, data)
     dmu_deta = link_mu_eta(fit.link, eta)
     d2mu_deta2 = link_mu_eta2(fit.link, eta)
 
@@ -512,8 +592,13 @@ def compute_average_marginal_effects(
     term_info = fit.term_info or {}
 
     if variables is None:
-        # All continuous variables (exclude intercept and categoricals)
-        variables = [name for name, info in term_info.items() if info.get("type") == "continuous"]
+        # Every modelled predictor: continuous ones get a derivative, categorical
+        # ones a discrete contrast per non-reference level.
+        variables = [
+            name
+            for name, info in term_info.items()
+            if info.get("type") in ("continuous", "categorical")
+        ]
     else:
         # Validate user-provided variables
         variables = _validate_ame_variables(glm, variables)
@@ -522,10 +607,33 @@ def compute_average_marginal_effects(
     t_crit = stats.t.ppf(1 - alpha / 2, df)
 
     for var in variables:
+        info = term_info.get(var) or {}
+        if info.get("type") == "categorical":
+            results.append(
+                _categorical_contrast_ame(
+                    glm,
+                    fit,
+                    data,
+                    var,
+                    info,
+                    beta_vec=beta_vec,
+                    cov=cov,
+                    weights=weights,
+                    w_sum=w_sum,
+                    df=df,
+                    alpha=alpha,
+                )
+            )
+            continue
+
         D = _term_derivative_matrix(glm, fit, data, var)
         if not D.any():
-            log.warning(f"Variable '{var}' not found in model coefficients")
-            continue
+            # Previously a log.warning and a skip, which answered an explicit
+            # request with an empty list.
+            raise ValueError(
+                f"Variable {var!r} has no derivative with respect to any fitted "
+                f"coefficient; it cannot have a marginal effect in this model."
+            )
 
         # d(eta)/d(var) per observation, including interaction terms
         deta_dx = D @ beta_vec
