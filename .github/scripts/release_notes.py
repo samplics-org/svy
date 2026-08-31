@@ -13,9 +13,26 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
 import re
 import sys
+
+
+def is_null_device(path: str) -> bool:
+    """True when `path` names the platform's discard target.
+
+    The wheels workflows verify a tag by generating the notes and throwing
+    them away, passing `--out /dev/null`. That is not a path on Windows:
+    pathlib renders it `\\dev\\null` and the write raises FileNotFoundError.
+    Recognise the null device by name rather than trying to open it, so the
+    same invocation works on every runner.
+    """
+    return path.replace("\\", "/").lower() in {
+        "/dev/null",
+        "nul",
+        os.devnull.replace("\\", "/").lower(),
+    }
 
 
 def fail(message: str) -> None:
@@ -75,8 +92,13 @@ def main() -> int:
         f"Full changelog: [`packages/{args.package}/CHANGELOG.md`]({link})\n"
     )
 
+    lines = len(body.splitlines())
+    if is_null_device(args.out):
+        print(f"{lines} lines of notes for {args.package} {version} (verify only)")
+        return 0
+
     pathlib.Path(args.out).write_text(body, encoding="utf-8")
-    print(f"{len(body.splitlines())} lines of notes for {args.package} {version}")
+    print(f"{lines} lines of notes for {args.package} {version}")
     return 0
 
 
