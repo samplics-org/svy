@@ -40,7 +40,7 @@ def main() -> int:
     # release PR lands would publish a wheel whose version disagrees with its
     # tag — catchable here, and not on PyPI, where it cannot be undone.
     pyproject = root / "pyproject.toml"
-    declared = re.search(r'^version = "([^"]+)"', pyproject.read_text(), re.M)
+    declared = re.search(r'^version = "([^"]+)"', pyproject.read_text(encoding="utf-8"), re.M)
     if not declared:
         fail(f"no version found in {pyproject}")
     if declared.group(1) != version:
@@ -51,7 +51,7 @@ def main() -> int:
 
     # Headings look like: '## [0.26.0] — 2026-08-26' (em dash).
     changelog = root / "CHANGELOG.md"
-    text = changelog.read_text()
+    text = changelog.read_text(encoding="utf-8")
     heading = re.search(rf"^## \[{re.escape(version)}\][^\n]*$", text, re.M)
     if not heading:
         fail(
@@ -75,7 +75,7 @@ def main() -> int:
         f"Full changelog: [`packages/{args.package}/CHANGELOG.md`]({link})\n"
     )
 
-    pathlib.Path(args.out).write_text(body)
+    pathlib.Path(args.out).write_text(body, encoding="utf-8")
     print(f"{len(body.splitlines())} lines of notes for {args.package} {version}")
     return 0
 
