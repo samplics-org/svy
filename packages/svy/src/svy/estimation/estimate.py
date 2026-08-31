@@ -366,6 +366,20 @@ class Estimate:
 
         return pl.from_dicts(rows)
 
+    def _y_level_column(self, *, use_labels: bool | None = None) -> str | None:
+        """Name of the column holding this estimate's category levels, if any.
+
+        Proportions (and ``as_factor`` means) put the level in a column named
+        after the variable itself, which reads well alone but collides when
+        several are stacked -- see ``EstimateList._combined``.
+        """
+        if not self.estimates:
+            return None
+        if not (self.param == PopParam.PROP or self.as_factor):
+            return None
+        resolve = use_labels if use_labels is not None else self._resolve_use_labels()
+        return self._get_var_label(self.estimates[0].y, use_labels=resolve)
+
     # --- Contrasts & covariance ---
 
     def _row_key(self, p: ParamEst) -> Any:
@@ -741,11 +755,32 @@ class EstimateList(list):
         ys = [m.estimates[0].y for m in members]
         show_y = len(set(ys)) > 1
 
+        # Each proportion names its level column after its own variable, so a
+        # diagonal concat of several would union them into one sparse column
+        # per variable -- a staircase of blanks that also squeezes the numbers
+        # into ellipses. Stacking needs them under one shared name instead.
+        level_cols = {}
+        if show_y:
+            for m in members:
+                col = m._y_level_column(use_labels=use_labels)
+                if col:
+                    level_cols[id(m)] = col
+        level_name = ""
+        if level_cols:
+            taken = {
+                c for m in members for c in m.to_polars_printable(use_labels=use_labels).columns
+            }
+            taken -= set(level_cols.values())
+            level_name = next(n for n in ("level", "y_level", "category") if n not in taken)
+
         frames = []
         for m, y in zip(members, ys):
             f = m.to_polars_printable(use_labels=use_labels)
             if f.is_empty():
                 continue
+            own = level_cols.get(id(m))
+            if own and own in f.columns:
+                f = f.rename({own: level_name})
             if show_y and "y" not in f.columns:
                 f = f.select(pl.lit(y).alias("y"), pl.all())
             frames.append(f)

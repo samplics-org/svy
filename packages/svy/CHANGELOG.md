@@ -82,6 +82,12 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **`print()` on an `EstimateList` of proportions.** `prop()` over a sequence of variables built one level column *per variable*, so a diagonal concat unioned them into a staircase of mostly-empty columns — eight conditions gave eight sparse columns, a ~118-character box, and every number truncated to an ellipsis. The members now stack under one shared `level` column beside `y`, which for the eight-condition case brings the table to 71 characters at full precision.
+
+  Only the stacked case changes. A single `prop()` still heads its level column with the variable name, `mean()` over a list is untouched, `quantile()` keeps its `prob` column, and a `by=` column stays distinct from the level column — including when a variable is itself named `level`, where the shared column moves aside.
+
+
+
 - **`categorical.ttest` ignored the finite population correction.** The t-test built its variance without ever asking for an FPC column, so on a design with `pop_size` it returned the answer for sampling with replacement — standard errors too wide, `t` too small. One- and two-sample tests were both affected; on apiclus1 the statistic was off by a factor of `1/sqrt(1 − 15/757)`. It now matches R `svyttest` to fourteen significant figures.
 
 - **One target-resolution path.** `normalize` and `poststratify` derived their control arrays independently, with two different label-to-code conventions. Both now resolve every argument form to absolute per-cell targets in one place, which is also the single form crossing into Rust.
