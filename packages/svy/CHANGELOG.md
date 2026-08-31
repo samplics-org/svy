@@ -6,7 +6,29 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+## [0.27.0] — 2026-08-31
+
 ### Added
+
+- **`svy.combine_samples()` — repeated cross-sections and panel waves.** Stacks several samples and analyzes them as one stratified design: data pooling, not estimate pooling. Each independent wave contributes its own strata (wave → stratum → PSU), so Taylor variance treats waves as independent without being told to. Caller order is time order, and an existing wave column (NHANES `SDDSRVYR`, say) is reused and validated rather than replaced.
+
+  ```python
+  svy.combine_samples([w1, w2, w3], adjust="average")   # period-average population
+  ```
+
+  `adjust="average"` divides the weights by k, which matters only for totals — means, proportions and ratios are invariant to it. `units="shared"` is the panel case, where the same units recur across waves.
+
+- **Linear contrasts over estimates, via `svy.estd()`.** Any `Estimate` or `GLMFit` can be contrasted against its own estimands using the between-estimate covariance:
+
+  ```python
+  m = sample.estimation.mean("api00", by="stype")
+  m.contrast(svy.estd("E") - svy.estd("H"))
+  fit.contrast({"H vs E": svy.estd("stype_H") - svy.estd("stype_E")})
+  ```
+
+  Accepts a contrast expression, a sparse `{key: coefficient}` dict, or several named contrasts at once. Keys are the row identities `keys()` lists, and metadata value labels are accepted wherever unambiguous. Inference is t-based on the full design df (R's `degf` convention), not the per-row domain-aware df.
+
+  Quantiles and medians raise rather than returning a number: Woodruff intervals do not arise from a linearized score column, so no between-quantile covariance exists to combine.
 
 - **Marginal effects for categorical predictors.** `margins()` now returns a discrete contrast per non-reference level — `mean_w[mu(x, var=k) - mu(x, var=ref)]` with a delta-method SE — instead of skipping the term. Matches R marginaleffects' factor contrasts; on apistrat the `stype` contrasts agree to 1e-9 and the SEs to 2e-10.
 
@@ -66,6 +88,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Changed
 
+- **Requires `svy-rs >= 0.16.0`.** The GLM offset and the probit/cloglog links call into kernel entry points 0.15.0 does not have, so the pin moves to `>=0.16.0,<0.17.0`.
+
 - **BREAKING: a family now admits only the links it has a model for.** `glm.fit()` validates the `family`/`link` pairing against the `okLinks` set of R's family constructors, so pairings that were never a model are rejected up front instead of failing deep in the kernel — or, in the case of `binomial` + `inverse_squared`, converging on a meaningless fit and reporting it as a result. Newly rejected: `logit`/`probit`/`cloglog` outside `binomial`, `inverse`/`inverse_squared` outside the families whose canonical link they are. Every previously working *model* still works; what stops working is the combinations that only appeared to.
 
 - **BREAKING: `by=` is now `cells=` on `adjust`, `normalize` and `poststratify`.** `cells` names the groups that each receive one derived adjustment factor; `by` continues to mean "repeat independently per group" everywhere it survives (`calibrate`, `trim`, and `standardize`). Keeping one word for both would have compromised a term of art.
@@ -81,6 +105,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **`rake` now rejects margins that disagree on a population total.** Margins were validated only in isolation, so inconsistent totals — the classic reason IPF fails to converge — simply ran to `max_iter` and returned whatever they reached. With `shares=` the consistency is structural.
 
 ### Fixed
+
+- **The missing-values error named a parameter that does not exist.** `assert_no_missing` told users to set `drop_missing=True`, which is the internal helper's argument, not a public one — following the advice raised `TypeError`. All four call sites gate on `drop_nulls`, which is what the message now says.
 
 - **`print()` on an `EstimateList` of proportions.** `prop()` over a sequence of variables built one level column *per variable*, so a diagonal concat unioned them into a staircase of mostly-empty columns — eight conditions gave eight sparse columns, a ~118-character box, and every number truncated to an ellipsis. The members now stack under one shared `level` column beside `y`, which for the eight-condition case brings the table to 71 characters at full precision.
 
@@ -733,7 +759,8 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.26.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.27.0...HEAD
+[0.27.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.27.0
 [0.26.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.26.0
 [0.25.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.25.0
 [0.24.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.24.1
