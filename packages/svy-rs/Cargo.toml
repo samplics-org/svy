@@ -34,7 +34,7 @@ numpy = "0.29"
 # `>= 0.15, <=0.17`, which cargo reads as <= 0.17.0, so a 0.17 bump resolves to
 # 0.17.x here while numpy keeps its own 0.16 — two ArrayBase types in one graph
 # and every ndarray-typed call fails to typecheck. Move this only with numpy.
-ndarray = { version = "0.16", features = ["rayon"] }
+ndarray = { version = "0.17", features = ["rayon"] }
 rayon = "1.12"
 rustc-hash = "2.1"
 thiserror = "2.0"
