@@ -30,11 +30,10 @@ polars = { version = "0.55", default-features = false, features = ["dtype-catego
 faer = "0.24"
 ahash = "0.8"
 numpy = "0.29"
-# Pinned to whatever numpy accepts, NOT bumped independently: numpy requires
-# `>= 0.15, <=0.17`, which cargo reads as <= 0.17.0, so a 0.17 bump resolves to
-# 0.17.x here while numpy keeps its own 0.16 — two ArrayBase types in one graph
-# and every ndarray-typed call fails to typecheck. Move this only with numpy.
-ndarray = { version = "0.16", features = ["rayon"] }
+# Must stay within what numpy accepts (`>= 0.15, <=0.17`): a bump past that
+# range leaves two ArrayBase types in one graph and every ndarray-typed call
+# fails to typecheck. Verify a single ndarray entry in Cargo.lock after bumping.
+ndarray = { version = "0.17", features = ["rayon"] }
 rayon = "1.12"
 rustc-hash = "2.1"
 thiserror = "2.0"
