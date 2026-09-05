@@ -95,6 +95,7 @@ Lint/format/type-check settings (ruff, mypy, pytest) are configured once in the 
    Prefer tiny generated fixtures over large binary files; add round-trip tests when
    changing I/O behavior; cover edge cases (encodings, missing values, temporals).
 4. **Docs**: update README examples and docstrings if public behavior changes.
+   The outputs shown in the READMEs are generated: run `make readme-svy` after editing a snippet. The svy test suite fails when they drift.
 5. **PR**: explain the "why", link issues, note trade-offs, keep CI green.
 
 ### svy-io API guidance
