@@ -59,7 +59,7 @@ literacy_rate = (
     # 2. Adjust the weights for nonresponse, within urban/rural classes
     .weighting.adjust(
         resp_status="resp_status",
-        by="urbrur",
+        cells="urbrur",
         resp_mapping={"rr": "respondent", "nr": "non-respondent"},
         wgt_name="nr_wgt",
     )
@@ -89,8 +89,8 @@ print(sample.estimation.mean("age", by="urbrur"))
 │                                                          │
 │  urbrur       est       se       lci       uci   cv (%)  │
 │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
-│  Rural    27.4893   3.1681   20.9771   34.0015    11.53  │
-│  Urban    29.7557   2.5016   24.6135   34.8978     8.41  │
+│  Rural    27.4893   3.1681   20.5163   34.4624    11.53  │
+│  Urban    29.7557   2.5016   24.4236   35.0877     8.41  │
 │                                                          │
 ╰──────────────────────────────────────────────────────────╯
 ```

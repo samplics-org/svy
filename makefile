@@ -26,6 +26,7 @@ help:
 	@echo "  lint-svy            - lint svy"
 	@echo "  bench-check         - check for perf regressions vs the baseline (needs release build)"
 	@echo "  bench-record        - re-record the perf baseline (commit the result)"
+	@echo "  readme-svy          - re-run the README snippets and refresh their outputs"
 	@echo ""
 	@echo "Release Targets (PKG=svy|svy-io|svy-rs):"
 	@echo "  release-notes       - preview the notes CI will publish for the current version"
@@ -91,6 +92,10 @@ test-all: test-svy test-svy-io test-svy-rs
 test-svy:
 	@echo "▶ Testing svy..."
 	cd $(PKG_SVY) && uv run pytest
+
+readme-svy:
+	@echo "▶ Refreshing README outputs..."
+	cd $(PKG_SVY) && uv run python scripts/render_readme.py
 
 test-svy-io:
 	@echo "▶ Testing svy-io..."
