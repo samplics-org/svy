@@ -50,9 +50,7 @@ def jkn_sample(load_survey_data):
         stratum="stratum",
         psu="psu",
     )
-    design = Design(
-        row_index="id", wgt="weight", stratum="stratum", psu="psu", rep_wgts=rep_weights
-    )
+    design = Design(case_id="id", wgt="weight", stratum="stratum", psu="psu", rep_wgts=rep_weights)
     return Sample(data, design)
 
 
@@ -83,7 +81,7 @@ def test_jkn_se_is_sqrt_7_4_below_global_scale(load_survey_data, jkn_sample):
     """The documented no-scale fallback is exactly sqrt(7/4) larger."""
     data = load_survey_data("fake_survey_jackknife_25122025.csv")
     rw_global = RepWeights(method="Jackknife", prefix="jk_", n_reps=8, df=7)
-    design = Design(row_index="id", wgt="weight", stratum="stratum", psu="psu", rep_wgts=rw_global)
+    design = Design(case_id="id", wgt="weight", stratum="stratum", psu="psu", rep_wgts=rw_global)
     s_global = Sample(data, design)
     se_g = s_global.estimation.mean(y="income", method="replication", drop_nulls=True)
     se_j = jkn_sample.estimation.mean(y="income", method="replication", drop_nulls=True)

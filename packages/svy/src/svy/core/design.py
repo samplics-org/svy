@@ -247,7 +247,8 @@ class WgtAdjustment(msgspec.Struct, frozen=True, kw_only=True):
 # =============================================================================
 
 _FIELDS: tuple[str, ...] = (
-    "row_index",
+    "case_id",
+    "wave",
     "stratum",
     "wgt",
     "prob",
@@ -261,7 +262,8 @@ _FIELDS: tuple[str, ...] = (
 
 
 class Design:
-    row_index: str | None
+    case_id: str | None
+    wave: str | None
     stratum: str | tuple[str, ...] | None
     wgt: str | None
     prob: str | None
@@ -283,7 +285,8 @@ class Design:
 
     def __init__(
         self,
-        row_index: str | None = None,
+        case_id: str | None = None,
+        wave: str | None = None,
         stratum: str | Sequence[str] | None = None,
         wgt: str | None = None,
         prob: str | None = None,
@@ -303,7 +306,8 @@ class Design:
         norm_ssu = _norm_spec("ssu", ssu)
         norm_pop_size = _norm_pop_size(pop_size)
 
-        object.__setattr__(self, "row_index", row_index)
+        object.__setattr__(self, "case_id", case_id)
+        object.__setattr__(self, "wave", wave)
         object.__setattr__(self, "stratum", norm_stratum)
         object.__setattr__(self, "wgt", wgt)
         object.__setattr__(self, "prob", prob)
@@ -317,7 +321,7 @@ class Design:
         object.__setattr__(self, "wgt_adjustment", wgt_adjustment)
 
         # Validate simple string-or-None fields (pop_size excluded — handled by _norm_pop_size)
-        for name in ("row_index", "wgt", "prob", "hit", "mos"):
+        for name in ("case_id", "wave", "wgt", "prob", "hit", "mos"):
             val = getattr(self, name)
             if val is not None and not isinstance(val, str):
                 raise TypeError(f"{name!r} must be str | None, got {type(val).__name__}")
@@ -376,7 +380,8 @@ class Design:
     def update(
         self,
         *,
-        row_index: str | None | _MissingType = _MISSING,
+        case_id: str | None | _MissingType = _MISSING,
+        wave: str | None | _MissingType = _MISSING,
         stratum: str | Sequence[str] | None | _MissingType = _MISSING,
         wgt: str | None | _MissingType = _MISSING,
         prob: str | None | _MissingType = _MISSING,
@@ -391,7 +396,8 @@ class Design:
     ) -> Self:
         return self._merge(
             only_if_none=False,
-            row_index=row_index,
+            case_id=case_id,
+            wave=wave,
             stratum=stratum,
             wgt=wgt,
             prob=prob,
@@ -408,7 +414,8 @@ class Design:
     def fill_missing(
         self,
         *,
-        row_index: str | None | _MissingType = _MISSING,
+        case_id: str | None | _MissingType = _MISSING,
+        wave: str | None | _MissingType = _MISSING,
         stratum: str | Sequence[str] | None | _MissingType = _MISSING,
         wgt: str | None | _MissingType = _MISSING,
         prob: str | None | _MissingType = _MISSING,
@@ -428,7 +435,8 @@ class Design:
         )
         return self._merge(
             only_if_none=True,
-            row_index=row_index,
+            case_id=case_id,
+            wave=wave,
             stratum=stratum,
             wgt=wgt,
             prob=prob,
@@ -518,7 +526,8 @@ class Design:
         self,
         *,
         only_if_none: bool,
-        row_index: str | None | _MissingType = _MISSING,
+        case_id: str | None | _MissingType = _MISSING,
+        wave: str | None | _MissingType = _MISSING,
         stratum: str | Sequence[str] | None | _MissingType = _MISSING,
         wgt: str | None | _MissingType = _MISSING,
         prob: str | None | _MissingType = _MISSING,
@@ -581,7 +590,8 @@ class Design:
         pop_size_arg = _norm_pop_size_arg(pop_size)
 
         return type(self)(
-            row_index=pick(self.row_index, row_index),
+            case_id=pick(self.case_id, case_id),
+            wave=pick(self.wave, wave),
             stratum=pick(self.stratum, stratum_arg),
             wgt=pick(self.wgt, wgt),
             prob=pick(self.prob, prob),
@@ -598,6 +608,25 @@ class Design:
     # -----------------------------
     # Introspection
     # -----------------------------
+    @property
+    def variance_psu(self) -> str | tuple[str, ...] | None:
+        """PSU for variance: the declared one, else the case on a panel.
+
+        On a long panel with element sampling a case's rows are repeated
+        measures and must form one cluster, otherwise ``by=wave`` contrasts
+        treat them as independent and the change variance is wrong. The
+        fallback is restricted to panels (``wave`` set): on a cross-section
+        a case is one row, so the element path gives the same numbers.
+        """
+        if self.psu is not None:
+            return self.psu
+        return self.case_id if self.wave is not None else None
+
+    @property
+    def is_panel(self) -> bool:
+        """True when both ``case_id`` and ``wave`` are declared."""
+        return self.case_id is not None and self.wave is not None
+
     def specified_fields(
         self,
         *,
@@ -700,6 +729,11 @@ class Design:
             return f"({inner})"
         return str(x)
 
+    def _fmt_psu(self) -> str:
+        if self.psu is None and self.variance_psu is not None:
+            return f"None (variance: {self.variance_psu})"
+        return self._fmt_tuple_names(self.psu)
+
     @staticmethod
     def _fmt_pop_size(x) -> str:
         if x is None:
@@ -730,9 +764,10 @@ class Design:
         t.add_column("Value", justify="left", no_wrap=False, overflow="fold")
 
         rows: list[tuple[str, str]] = [
-            ("Row index", str(self.row_index)),
+            ("Case id", str(self.case_id)),
+            ("Wave", str(self.wave)),
             ("Stratum", self._fmt_tuple_names(self.stratum)),
-            ("PSU", self._fmt_tuple_names(self.psu)),
+            ("PSU", self._fmt_psu()),
             ("SSU", self._fmt_tuple_names(self.ssu)),
             ("Weight", str(self.wgt)),
             ("With replacement", str(bool(self.wr))),
@@ -759,9 +794,10 @@ class Design:
         """Plain-text fallback when rich is not installed."""
         lines: list[str] = [
             "Design",
-            f"  Row index        : {self.row_index}",
+            f"  Case id          : {self.case_id}",
+            f"  Wave             : {self.wave}",
             f"  Stratum          : {self._fmt_tuple_names(self.stratum)}",
-            f"  PSU              : {self._fmt_tuple_names(self.psu)}",
+            f"  PSU              : {self._fmt_psu()}",
             f"  SSU              : {self._fmt_tuple_names(self.ssu)}",
             f"  Weight           : {self.wgt}",
             f"  With replacement : {bool(self.wr)}",
@@ -816,8 +852,10 @@ class Design:
 
     def __repr__(self) -> str:
         parts: list[str] = []
-        if self.row_index is not None:
-            parts.append(f"row_index={self.row_index!r}")
+        if self.case_id is not None:
+            parts.append(f"case_id={self.case_id!r}")
+        if self.wave is not None:
+            parts.append(f"wave={self.wave!r}")
 
         def add_nonempty(name: str, value) -> None:
             if value is None:

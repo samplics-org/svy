@@ -46,12 +46,13 @@ class DesignStub:
     def __init__(
         self,
         *,
-        row_index: str = SVY_ROW_INDEX,
+        case_id: str = SVY_ROW_INDEX,
         stratum=None,
         psu=None,
         wgt=None,
     ):
-        self.row_index = row_index
+        self.case_id = case_id
+        self.wave = None
         self.stratum = stratum
         self.psu = psu
         self.wgt = wgt
@@ -63,7 +64,7 @@ class SampleStub:
 
     The singleton facet relies on:
       - _data (pl.DataFrame)
-      - _design (has .row_index, .stratum, .psu, .wgt)
+      - _design (has .case_id, .stratum, .psu, .wgt)
       - _internal_design dict with "stratum" and "psu"
       - clone(data=..., design=...) -> new Sample-like
     """
@@ -150,7 +151,7 @@ def base_df(names):
 def sample(base_df, names):
     """Standard sample fixture with singletons."""
     design = DesignStub(
-        row_index=SVY_ROW_INDEX,
+        case_id=SVY_ROW_INDEX,
         stratum=["region", "district"],
         psu="cluster",
         wgt=None,
@@ -165,7 +166,7 @@ def sample_with_weight(base_df, names):
     """Sample with weight column."""
     df = base_df.with_columns(pl.lit(1.0).alias("weight"))
     design = DesignStub(
-        row_index=SVY_ROW_INDEX,
+        case_id=SVY_ROW_INDEX,
         stratum=["region", "district"],
         psu="cluster",
         wgt="weight",
@@ -196,7 +197,7 @@ def sample_no_singletons(names):
         ),
         pl.col("cluster").cast(pl.Utf8).alias(names["psu"]),
     )
-    design = DesignStub(row_index=SVY_ROW_INDEX, stratum=["region", "district"], psu="cluster")
+    design = DesignStub(case_id=SVY_ROW_INDEX, stratum=["region", "district"], psu="cluster")
     return SampleStub(df, design, stratum_internal=names["stratum"], psu_internal=names["psu"])
 
 
@@ -639,7 +640,7 @@ class TestCertainty:
             pl.col("stratum").alias(names["stratum"]),
             pl.col("cluster").cast(pl.Utf8).alias(names["psu"]),
         )
-        design = DesignStub(row_index=SVY_ROW_INDEX, stratum="stratum", psu="cluster")
+        design = DesignStub(case_id=SVY_ROW_INDEX, stratum="stratum", psu="cluster")
         sample = SampleStub(
             df, design, stratum_internal=names["stratum"], psu_internal=names["psu"]
         )
@@ -914,7 +915,7 @@ class TestCollapseWithin:
             ),
             pl.col("cluster").cast(pl.Utf8).alias(names["psu"]),
         )
-        design = DesignStub(row_index=SVY_ROW_INDEX, stratum=["region", "district"], psu="cluster")
+        design = DesignStub(case_id=SVY_ROW_INDEX, stratum=["region", "district"], psu="cluster")
         sample = SampleStub(
             df, design, stratum_internal=names["stratum"], psu_internal=names["psu"]
         )
@@ -942,7 +943,7 @@ class TestCollapseRebalancing:
             pl.col("stratum").alias(names["stratum"]),
             pl.col("cluster").cast(pl.Utf8).alias(names["psu"]),
         )
-        design = DesignStub(row_index=SVY_ROW_INDEX, stratum="stratum", psu="cluster")
+        design = DesignStub(case_id=SVY_ROW_INDEX, stratum="stratum", psu="cluster")
         sample = SampleStub(
             df, design, stratum_internal=names["stratum"], psu_internal=names["psu"]
         )
@@ -1010,7 +1011,7 @@ class TestCollapseTieBreaking:
             pl.col("stratum").alias(names["stratum"]),
             pl.col("cluster").cast(pl.Utf8).alias(names["psu"]),
         )
-        design = DesignStub(row_index=SVY_ROW_INDEX, stratum="stratum", psu="cluster")
+        design = DesignStub(case_id=SVY_ROW_INDEX, stratum="stratum", psu="cluster")
         sample = SampleStub(
             df, design, stratum_internal=names["stratum"], psu_internal=names["psu"]
         )
@@ -1193,7 +1194,7 @@ class TestScale:
             pl.col("stratum").alias(names["stratum"]),
             pl.col("cluster").cast(pl.Utf8).alias(names["psu"]),
         )
-        design = DesignStub(row_index=SVY_ROW_INDEX, stratum="stratum", psu="cluster")
+        design = DesignStub(case_id=SVY_ROW_INDEX, stratum="stratum", psu="cluster")
         sample = SampleStub(
             df, design, stratum_internal=names["stratum"], psu_internal=names["psu"]
         )
@@ -1456,7 +1457,7 @@ def sample_tuple_psu(names):
         ),
     )
     design = DesignStub(
-        row_index=SVY_ROW_INDEX,
+        case_id=SVY_ROW_INDEX,
         stratum=("region", "district"),
         psu=("cluster", "cluster_b"),
     )
@@ -1504,7 +1505,7 @@ class TestEdgeCases:
             pl.col("stratum").alias(names["stratum"]),
             pl.col("cluster").cast(pl.Utf8).alias(names["psu"]),
         )
-        design = DesignStub(row_index=SVY_ROW_INDEX, stratum="stratum", psu="cluster")
+        design = DesignStub(case_id=SVY_ROW_INDEX, stratum="stratum", psu="cluster")
         sample = SampleStub(
             df, design, stratum_internal=names["stratum"], psu_internal=names["psu"]
         )
@@ -1529,7 +1530,7 @@ class TestEdgeCases:
             pl.col("stratum").alias(names["stratum"]),
             pl.col("cluster").cast(pl.Utf8).alias(names["psu"]),
         )
-        design = DesignStub(row_index=SVY_ROW_INDEX, stratum="stratum", psu="cluster")
+        design = DesignStub(case_id=SVY_ROW_INDEX, stratum="stratum", psu="cluster")
         sample = SampleStub(
             df, design, stratum_internal=names["stratum"], psu_internal=names["psu"]
         )
@@ -1542,7 +1543,7 @@ class TestEdgeCases:
         """Test behavior when no stratum is defined."""
         rows = [(0, "101"), (1, "102"), (2, "201")]
         df = pl.DataFrame(rows, schema=[SVY_ROW_INDEX, "cluster"], orient="row")
-        design = DesignStub(row_index=SVY_ROW_INDEX, stratum=None, psu="cluster")
+        design = DesignStub(case_id=SVY_ROW_INDEX, stratum=None, psu="cluster")
         sample = SampleStub(df, design, stratum_internal=None, psu_internal="cluster")
 
         assert not sample.singleton.exists

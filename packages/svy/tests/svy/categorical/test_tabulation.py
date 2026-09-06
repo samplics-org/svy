@@ -202,8 +202,7 @@ def test_percent_cell_se_uses_centered_ratio_variance(df_basic, mock_design):
         indicator = sample.wrangling.mutate(
             {
                 "__ind__": svy.when(
-                    (svy.col("row") == cell.rowvar)
-                    & (svy.col("col") == cell.colvar)
+                    (svy.col("row") == cell.rowvar) & (svy.col("col") == cell.colvar)
                 )
                 .then(1)
                 .otherwise(0)
@@ -279,8 +278,7 @@ def test_count_cell_se_unaffected_matches_total(df_basic, mock_design):
         indicator = sample.wrangling.mutate(
             {
                 "__ind__": svy.when(
-                    (svy.col("row") == cell.rowvar)
-                    & (svy.col("col") == cell.colvar)
+                    (svy.col("row") == cell.rowvar) & (svy.col("col") == cell.colvar)
                 )
                 .then(1)
                 .otherwise(0)

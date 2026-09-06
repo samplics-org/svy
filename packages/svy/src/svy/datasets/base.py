@@ -86,10 +86,14 @@ def _resolve_source(name: str, *, source: Source, force_download: bool) -> pl.La
     if source == "remote":
         return _scan_remote(name, force_download=force_download)
 
-    # auto: remote, then bundled fallback on network/catalog failure.
+    # auto: remote, then bundled fallback on network/catalog failure. A slug
+    # the catalog does not know but the wheel carries is bundled-only (the
+    # synthetic panel): the bundled file IS the dataset, no warning.
     try:
         return _scan_remote(name, force_download=force_download)
     except DatasetError as exc:
+        if exc.code == "DATASET_NOT_FOUND" and _bundled.has(name):
+            return _bundled.read_lazy(name)
         if exc.code in _FALLBACK_CODES and _bundled.has(name):
             b = _bundled.describe(name)
             warnings.warn(

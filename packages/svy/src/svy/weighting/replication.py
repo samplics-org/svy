@@ -76,7 +76,7 @@ def _recorded_units(design: "Design") -> tuple[str | None, str | None]:
     is an implementation detail and would not resolve against a frame rebuilt
     from source.
     """
-    return _as_recorded(design.stratum), _as_recorded(design.psu)
+    return _as_recorded(design.stratum), _as_recorded(design.variance_psu)
 
 
 def _as_recorded(col: str | tuple[str, ...] | None) -> str | tuple[str, ...] | None:
@@ -364,7 +364,7 @@ def _resolve_build_units(
                     f"Leave it unset to use the Design's."
                 ),
             )
-    psu_col = psu if psu is not None else design.psu
+    psu_col = psu if psu is not None else design.variance_psu
     stratum_col = stratum if stratum is not None else design.stratum
     if pair_method is None or psu_col is None:
         return stratum_col, psu_col
@@ -432,7 +432,7 @@ def create_brr_wgts(
     where = "Sample.weighting.create_brr_wgts"
     design = sample._design
 
-    if (psu if psu is not None else design.psu) is None:
+    if (psu if psu is not None else design.variance_psu) is None:
         raise MethodError.not_applicable(
             where=where,
             method="create_brr_wgts",
@@ -548,7 +548,7 @@ def create_jk_wgts(
 
     where = "Sample.weighting.create_jk_wgts"
 
-    if (psu if psu is not None else design.psu) is None:
+    if (psu if psu is not None else design.variance_psu) is None:
         raise MethodError.not_applicable(
             where=where,
             method="create_jk_wgts",
@@ -692,7 +692,7 @@ def create_bs_wgts(
     # The Rao-Wu guard is deliberately not shared: the Poisson bootstrap exists
     # precisely for files that have no psu, so requiring one would reject the
     # only case it serves.
-    if kind == "rao-wu" and (psu if psu is not None else design.psu) is None:
+    if kind == "rao-wu" and (psu if psu is not None else design.variance_psu) is None:
         raise MethodError.not_applicable(
             where="Sample.weighting.create_bs_wgts",
             method="create_bs_wgts",

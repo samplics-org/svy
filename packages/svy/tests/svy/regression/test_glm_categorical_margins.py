@@ -64,9 +64,7 @@ class TestCategoricalAME:
         cat = next(m for m in model.margins() if m.term == "stype")
 
         assert list(cat.values) == ["H - E", "M - E"]
-        np.testing.assert_allclose(
-            cat.margin, [R_AME["H - E"][1], R_AME["M - E"][1]], rtol=RTOL
-        )
+        np.testing.assert_allclose(cat.margin, [R_AME["H - E"][1], R_AME["M - E"][1]], rtol=RTOL)
         np.testing.assert_allclose(cat.se, [R_AME["H - E"][2], R_AME["M - E"][2]], rtol=1e-5)
 
     def test_continuous_term_is_unchanged(self, model):

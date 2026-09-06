@@ -249,9 +249,7 @@ def cast_columns(
         data = sample._data
         schema = data.collect_schema() if isinstance(data, pl.LazyFrame) else data.schema
         to_check = [
-            c
-            for c, dt in pairs
-            if _is_integer_dtype(dt) and c in schema and schema[c].is_float()
+            c for c, dt in pairs if _is_integer_dtype(dt) and c in schema and schema[c].is_float()
         ]
         if to_check:
             check_df = data.select(
@@ -308,9 +306,7 @@ def fill_null(
         int_cols: set[str] = set()
         if strategy == "mean":
             data = sample._data
-            schema = (
-                data.collect_schema() if isinstance(data, pl.LazyFrame) else data.schema
-            )
+            schema = data.collect_schema() if isinstance(data, pl.LazyFrame) else data.schema
             int_cols = {c for c in col_list if c in schema and schema[c].is_integer()}
             if int_cols:
                 sample.warn(

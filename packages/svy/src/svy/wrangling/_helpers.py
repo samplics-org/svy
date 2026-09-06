@@ -122,7 +122,7 @@ def _design_source_columns(sample: "Sample") -> set[str]:
             src.update(field)
 
     _add(design.stratum)
-    _add(design.psu)
+    _add(design.variance_psu)
     _add(design.ssu)
     return src
 
@@ -169,6 +169,8 @@ def _required_columns(sample: "Sample") -> set[str]:
             req.update(x)
 
     if design is not None:
+        add(design.case_id)
+        add(design.wave)
         add(design.stratum)
         add(design.psu)
         add(design.ssu)
@@ -296,7 +298,8 @@ def _auto_clean_design(target: "Sample") -> None:
         return kept or None
 
     updated_design = current_design.update(
-        row_index=keep_name(current_design.row_index),
+        case_id=keep_name(current_design.case_id),
+        wave=keep_name(current_design.wave),
         stratum=keep_tuple(current_design.stratum),
         psu=keep_tuple(current_design.psu),
         ssu=keep_tuple(current_design.ssu),

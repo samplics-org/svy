@@ -77,7 +77,7 @@ def _get_design_codes(sample: Sample, design) -> dict[str, pl.Series] | None:
     them before row filtering and let them filter along.
     """
     strat_cols = _colspec_to_list(design.stratum) if design.stratum else []
-    psu_cols = _colspec_to_list(design.psu) if design.psu else []
+    psu_cols = _colspec_to_list(design.variance_psu) if design.variance_psu else []
     ssu_cols = _colspec_to_list(design.ssu) if design.ssu else []
     if not strat_cols and not psu_cols:
         return None
@@ -572,7 +572,7 @@ def prepare_data(
         ssu_col = _SSU_CODE if "ssu" in _design_codes else None
     else:
         strata_col = f"stratum{suffix}" if design.stratum else None
-        psu_col = f"psu{suffix}" if design.psu else None
+        psu_col = f"psu{suffix}" if design.variance_psu else None
         ssu_col = f"ssu{suffix}" if design.ssu else None
 
     # ── By column resolution ─────────────────────────────────────────────
@@ -675,9 +675,7 @@ def prepare_data(
             # values: polars evaluates every expression against the original
             # frame. Only emitted when a record will actually use it.
             if calib_cols:
-                exprs.append(
-                    pl.col(weight_col).cast(pl.Float64).alias(CALIB_NEW_WGT_COL)
-                )
+                exprs.append(pl.col(weight_col).cast(pl.Float64).alias(CALIB_NEW_WGT_COL))
             exprs.append(
                 pl.when(mask)
                 .then(pl.col(weight_col).cast(pl.Float64))
@@ -878,9 +876,7 @@ def calib_kwargs(sample, df) -> dict:
         "calib_pins_total": rec.pins_total,
         # Present only when `where` zeroed the weight column out from under the
         # record; otherwise the active weight still holds the right values.
-        "calib_new_wgt": (
-            CALIB_NEW_WGT_COL if CALIB_NEW_WGT_COL in df.columns else None
-        ),
+        "calib_new_wgt": (CALIB_NEW_WGT_COL if CALIB_NEW_WGT_COL in df.columns else None),
     }
 
 

@@ -47,6 +47,7 @@ EXPECTED_SLUGS = {
     "hld_pop_wb_2023",
     "hld_sample_wb_2023",
     "ind_sample_wb_2023",
+    "panel_syn_2026",
 }
 
 

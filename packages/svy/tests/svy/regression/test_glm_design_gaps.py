@@ -129,9 +129,7 @@ class TestReplicateGLM:
         s = Sample(df, Design(stratum="stype", wgt="pw", rep_wgts=rw))
         m = s.glm.fit(y="api00", x=["ell", "meals"])
         got = [c.se for c in m.fitted.coefs]
-        np.testing.assert_allclose(
-            got, [9.01172834, 0.40647424, 0.28786459], rtol=1e-4
-        )
+        np.testing.assert_allclose(got, [9.01172834, 0.40647424, 0.28786459], rtol=1e-4)
 
     def test_replicate_variance_differs_from_taylor(self, api_strat):
         """Round 8 R7: a replicate design previously produced SEs identical

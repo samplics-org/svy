@@ -166,9 +166,7 @@ def _normalize_scale(value: float | Sequence[float], n_reps: int, param: str) ->
     return values
 
 
-def _normalize_unit(
-    value: str | Sequence[str] | None, param: str
-) -> str | tuple[str, ...] | None:
+def _normalize_unit(value: str | Sequence[str] | None, param: str) -> str | tuple[str, ...] | None:
     """Validate a unit reference, storing a multi-column one as a tuple.
 
     Mirrors ``Design``'s own normalization so that the same spellings mean the
@@ -185,8 +183,7 @@ def _normalize_unit(
         return value
     if isinstance(value, (bytes, bytearray)) or not isinstance(value, Sequence):
         raise TypeError(
-            f"RepWeights {param!r} must be str | Sequence[str] | None, "
-            f"got {type(value).__name__}."
+            f"RepWeights {param!r} must be str | Sequence[str] | None, got {type(value).__name__}."
         )
     items = tuple(value)
     if not items:
@@ -194,8 +191,7 @@ def _normalize_unit(
     for i, item in enumerate(items):
         if not isinstance(item, str):
             raise TypeError(
-                f"RepWeights {param!r} items must be str; "
-                f"got {type(item).__name__} at index {i}."
+                f"RepWeights {param!r} items must be str; got {type(item).__name__} at index {i}."
             )
         if not item.strip():
             raise ValueError(f"RepWeights {param!r} items must not be empty.")
@@ -404,9 +400,7 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
         replicates is what a reviewer needs to tell a design-strata JKn from a
         collapsed-variance-strata one, and the two give different coefficients.
         """
-        return [
-            f"{n}={v!r}" for n, v in (("stratum", self.stratum), ("psu", self.psu)) if v
-        ]
+        return [f"{n}={v!r}" for n, v in (("stratum", self.stratum), ("psu", self.psu)) if v]
 
     def _coef_parts(self) -> list[str]:
         """Where the coefficients came from, when it is not the method default.

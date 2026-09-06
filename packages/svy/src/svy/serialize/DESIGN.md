@@ -130,16 +130,16 @@ dict carries `mtype` (a StrEnum value) as an implicit discriminator.
 from svy.serialize import serialize, to_json, to_dict, from_json
 
 # Serialize a svy result object to a stable struct
-data = serialize(result)          # -> ResultData
+data = serialize(result)  # -> ResultData
 
 # Serialize to JSON bytes
-json_bytes = to_json(result)      # -> bytes
+json_bytes = to_json(result)  # -> bytes
 
 # Serialize to a JSON-safe dict
-d = to_dict(result)               # -> dict[str, Any]
+d = to_dict(result)  # -> dict[str, Any]
 
 # Decode JSON bytes back to a struct
-data = from_json(json_bytes)      # -> ResultData
+data = from_json(json_bytes)  # -> ResultData
 ```
 
 ## 5. Struct reference
@@ -432,9 +432,14 @@ Source: `svy.regression.glm.GLMStats`
 
 ```python
 ResultData = (
-    EstimateData | TTestOneGroupData | TTestTwoGroupsData
-    | ChiSquareData | TableData | GLMFitData
-    | GLMPredData | DescribeResultData
+    EstimateData
+    | TTestOneGroupData
+    | TTestTwoGroupsData
+    | ChiSquareData
+    | TableData
+    | GLMFitData
+    | GLMPredData
+    | DescribeResultData
 )
 ```
 

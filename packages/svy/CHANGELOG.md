@@ -6,6 +6,39 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Added
+
+- **Panel surveys, with no new type.** A panel is a long `Sample` whose `Design.case_id` identifies the followed case and whose `Design.wave` orders its rows. `svy.combine_samples(kind="panel", case_id=...)` stacks the waves and validates the pairing (unique id within each wave, consecutive-wave overlap, design columns constant within a case, later waves' units a subset of wave 1's); `Design(case_id=..., wave=...)` declares the same on a long file. When no PSU is declared the case is the variance PSU, so `mean(y, by="wave")` and its contrasts carry the between-wave covariance without being told to — the change SE equals the wide-frame individual-change SE, not the naive independent-waves one. Producer longitudinal weights stay ordinary columns selected with `use_weight()`; identical producer replicate weights are accepted across waves.
+
+  ```python
+  s = svy.combine_samples([w1, w2, w3], kind="panel", case_id="person_id")
+  s.estimation.mean("inc", by="wave").contrast(svy.estd(3) / svy.estd(1) - 1)   # percent change
+  ```
+
+- **`wrangling.lag(cols, n=1)`** — the one panel primitive: the value of a column at the case's wave `n` steps back (a lead if negative), null across a skipped wave as Stata's `L.y` (`gaps="skip"` takes the previous observed row). Transitions are `tabulate("y_lag1", "y", where=wave == t)` or `prop(y, by="y_lag1", where=wave == t, drop_nulls=True)`; paired change is the existing `ttest(y, y_pair="y_lag1", where=..., drop_nulls=True)`.
+
+- **`weighting.adjust()` on a panel** applies the nonresponse factor to the case: every row of the case gets its own weight times the case's factor (so a case-level base weight stays case-level), a nonrespondent case gets 0 on all its rows, and a case with earlier rows but none in scope is a nonrespondent — attriters need no row to be adjusted for. `respondents_only` drops nonrespondents at the scope waves only. Chain one call per wave with `where=col("wave") == t` to build longitudinal weights.
+
+- **`categorical.tabulate(where=)`** — a subpopulation table with R's `subset()` semantics: rows outside the domain keep their design columns and get weight 0, so the PSU structure and the design df are those of the full design (matching `svymean(~interaction(...), subset(d, ...))`, `svytotal` and `svychisq` to 1e-9). Cells are formed from the domain's categories only, and a null key outside the domain is not missing data.
+
+- **Delta-method contrasts.** `svy.estd()` expressions now accept `*`, `/`, constants, `.log()` and `.exp()`: ratios, percent change and log-ratios are estimated by the delta method on the same design df, matching R `svycontrast` to 1e-11. Linear expressions keep the exact `L V Lᵀ` path; the `{key: coef}` dict form stays linear.
+
+- **`panel_syn_2026`** — a bundled synthetic three-wave panel (1200 cases, ~15% attrition per wave, producer longitudinal weights, a binary and a continuous outcome) for the panel tutorial and tests.
+
+### Fixed
+
+- `categorical.tabulate()` ignored `Design.pop_size`: every table on a design with a finite-population correction reported the fpc-free standard errors (the `ttest` facade had the same gap). The fpc is now applied, matching R `svymean(~interaction(...))` and `svychisq` on an `fpc=` design.
+
+### Changed
+
+- `combine_samples`: `kind="cross_sectional" | "cs" | "panel"` replaces `units="independent" | "shared"`; default wave labels are `"wave 1".."wave k"` instead of `"s1".."sk"`; the combined weight column `wgt_name` is always created from each wave's own weight (divided by k under `adjust="average"`), so the waves may name their weights differently. A panel keeps the base-wave design and now accepts a later wave that lost PSUs (with a warning) instead of requiring identical design units.
+- `Design.describe()` shows `Case id` and `Wave` rows, and `PSU  None (variance: <case_id>)` when the case is the fallback PSU; on a panel the design summary lists the case overlap between consecutive waves.
+
+### Removed
+
+- `Design.row_index`. `Design.case_id` is the record identifier on cross-sections and panels alike (non-null, unique; unique within wave on a panel). `Design(row_index=...)` now raises `TypeError`. The hidden `svy_row_index` column is unchanged plumbing.
+- `combine_samples(units=...)`, replaced by `kind=` without a shim (pre-stable).
+
 ## [0.27.0] — 2026-08-31
 
 ### Added

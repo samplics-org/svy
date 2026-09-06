@@ -85,12 +85,12 @@ def _frame() -> pl.DataFrame:
 
 @pytest.fixture
 def sample() -> Sample:
-    return Sample(_frame(), Design(row_index="id", wgt="w", psu="psu"))
+    return Sample(_frame(), Design(case_id="id", wgt="w", psu="psu"))
 
 
 @pytest.fixture
 def strat_sample() -> Sample:
-    return Sample(_frame(), Design(row_index="id", wgt="w", psu="psu", stratum="stratum"))
+    return Sample(_frame(), Design(case_id="id", wgt="w", psu="psu", stratum="stratum"))
 
 
 @pytest.fixture
@@ -102,7 +102,7 @@ def rep_sample() -> Sample:
     }
     df = df.with_columns([pl.Series(k, v) for k, v in reps.items()])
     design = Design(
-        row_index="id",
+        case_id="id",
         wgt="w",
         psu="psu",
         rep_wgts=RepWeights(method="Jackknife", prefix="jk_", n_reps=8, df=7),

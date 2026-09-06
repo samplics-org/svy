@@ -8,7 +8,7 @@ from svy.core.design import Design, PopSize
 
 # ---------- field groups ----------
 # Fields that must be str | None
-STR_ONLY_FIELDS = ("row_index", "wgt", "prob", "hit", "mos")
+STR_ONLY_FIELDS = ("case_id", "wave", "wgt", "prob", "hit", "mos")
 
 # Fields that accept str | Sequence[str] | None (normalized to tuple[str, ...] | None)
 MULTI_COL_FIELDS = ("stratum", "psu", "ssu")
@@ -23,7 +23,8 @@ STR_FIELDS = STR_ONLY_FIELDS + MULTI_COL_FIELDS
 def test_init_defaults_and_repr_str():
     d = Design()
     # defaults
-    assert d.row_index is None
+    assert d.case_id is None
+    assert d.wave is None
     assert d.stratum is None
     assert d.wgt is None
     assert d.prob is None
@@ -93,7 +94,7 @@ def test_init_rejects_non_bool_wr():
 
 def test_init_accepts_valid_values():
     d = Design(
-        row_index="row_id",
+        case_id="row_id",
         stratum="strat",
         wgt="w",
         prob="p",
@@ -103,7 +104,7 @@ def test_init_accepts_valid_values():
         ssu="ssu_id",
         wr=True,
     )
-    assert d.row_index == "row_id"
+    assert d.case_id == "row_id"
     assert d.stratum == "strat"
     assert d.psu == "psu_id"
     assert d.ssu == "ssu_id"
@@ -208,9 +209,9 @@ def test_specified_fields_default_ignore_wr():
 
 
 def test_specified_fields_with_ignore_cols():
-    d = Design(row_index="r", stratum="s", wgt="w", psu="p")
-    names = d.specified_fields(ignore_cols=["row_index", "psu", "not_a_field"])
-    # "not_a_field" is ignored; result excludes row_index and psu
+    d = Design(case_id="r", stratum="s", wgt="w", psu="p")
+    names = d.specified_fields(ignore_cols=["case_id", "psu", "not_a_field"])
+    # "not_a_field" is ignored; result excludes case_id and psu
     assert names == ["s", "w"]
 
 

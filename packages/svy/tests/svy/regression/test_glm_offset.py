@@ -85,9 +85,7 @@ class TestOffsetAgainstRSurvey:
         np.testing.assert_allclose([coefs[t].se for t in TERMS], se_r, rtol=RTOL, atol=ATOL)
         np.testing.assert_allclose([coefs[t].lci for t in TERMS], lci_r, rtol=RTOL, atol=ATOL)
         np.testing.assert_allclose([coefs[t].uci for t in TERMS], uci_r, rtol=RTOL, atol=ATOL)
-        np.testing.assert_allclose(
-            [coefs[t].wald.value for t in TERMS], t_r, rtol=RTOL, atol=ATOL
-        )
+        np.testing.assert_allclose([coefs[t].wald.value for t in TERMS], t_r, rtol=RTOL, atol=ATOL)
         np.testing.assert_allclose(
             [coefs[t].wald.p_value for t in TERMS], p_r, rtol=RTOL, atol=ATOL
         )
@@ -172,9 +170,7 @@ class TestOffsetInvariants:
         df = api_rate.with_columns(pl.lit(0.0).alias("zero"))
         design = Design(wgt="pw")
 
-        plain = Sample(df, design).glm.fit(
-            y="api_stu", x=X_COLS, family="poisson", tol=TOL_TIGHT
-        )
+        plain = Sample(df, design).glm.fit(y="api_stu", x=X_COLS, family="poisson", tol=TOL_TIGHT)
         zeroed = Sample(df, design).glm.fit(
             y="api_stu", x=X_COLS, family="poisson", offset="zero", tol=TOL_TIGHT
         )
@@ -185,9 +181,7 @@ class TestOffsetInvariants:
         np.testing.assert_allclose(
             [c.se for c in zeroed.coefs], [c.se for c in plain.coefs], rtol=0, atol=1e-14
         )
-        np.testing.assert_allclose(
-            zeroed.stats.deviance, plain.stats.deviance, rtol=0, atol=1e-9
-        )
+        np.testing.assert_allclose(zeroed.stats.deviance, plain.stats.deviance, rtol=0, atol=1e-9)
 
     def test_offset_is_not_a_fitted_term(self, api_rate):
         res = _fit(api_rate, Design(wgt="pw"))

@@ -19,6 +19,7 @@ import polars as pl
 from svy.core.constants import SVY_ROW_INDEX
 from svy.core.design import Design, PopSize
 from svy.core.enumerations import MeasurementType, MetadataSource
+from svy.core.panel import design_varies_within_case, duplicate_case_ids, wave_overlap
 from svy.core.sample import Sample
 from svy.core.types import Category
 from svy.errors import MethodError
@@ -73,7 +74,7 @@ _MIXABLE_ROLES = {
 
 
 def _check_design_alignment(
-    samples: Sequence[Sample], units: str, allow_mixed: bool
+    samples: Sequence[Sample], kind: str, allow_mixed: bool
 ) -> tuple[dict[str, tuple[str, ...]], dict[str, list[bool]], list[str]]:
     """Require identical design columns, role by role; no implicit renaming.
 
@@ -81,7 +82,7 @@ def _check_design_alignment(
     to resolve — the hint spells out the one-line fix, which updates data,
     design and metadata together.
 
-    Opt-in exception, independent mode only: waves may declare structurally
+    Opt-in exception, cross-sectional mode only: waves may declare structurally
     DIFFERENT but individually complete designs (stratified vs not, clustered
     vs not) — each wave's variance structure is self-contained after wave
     qualification, so combining them is valid, and the translations are exact
@@ -96,7 +97,7 @@ def _check_design_alignment(
 
     mixed_flags: dict[str, list[bool]] = {}
     mixed_notes: list[str] = []
-    if units == "independent" and allow_mixed:
+    if kind == "cross_sectional" and allow_mixed:
         for role, translation in _MIXABLE_ROLES.items():
             declared = [i for i, rm in enumerate(role_maps) if rm[role]]
             if declared and len(declared) < len(samples):
@@ -114,13 +115,17 @@ def _check_design_alignment(
         for j, rm in enumerate(role_maps[1:], start=2):
             if rm[role] == cols:
                 continue
+            if role == "wgt" and cols and rm[role]:
+                # Each wave keeps its own weight column; the combined weight
+                # is CREATED under wgt_name, so the names need not match.
+                continue
             if not cols or not rm[role]:
                 with_role, without = (1, j) if cols else (j, 1)
                 mixed_hint = (
                     " If the designs genuinely differ (stratified vs not, clustered vs "
                     "not), pass on_mixed_design='warn' (or 'ignore') to combine them "
                     "as declared."
-                    if role in _MIXABLE_ROLES and units == "independent"
+                    if role in _MIXABLE_ROLES and kind == "cross_sectional"
                     else ""
                 )
                 raise MethodError.not_applicable(
@@ -324,25 +329,193 @@ def _merge_metadata(combined: Sample, samples: Sequence[Sample]) -> None:
         )
 
 
+def _resolve_case_id(samples: Sequence[Sample], kind: str, case_id: str | None) -> str | None:
+    """The case column: the explicit one, else the one every input declares."""
+    declared = {s._design.case_id for s in samples}
+    shared = next(iter(declared)) if len(declared) == 1 else None
+    if case_id is None:
+        case_id = shared
+    if kind == "panel" and case_id is None:
+        raise MethodError.not_applicable(
+            where=_CTX,
+            method="combine_samples",
+            reason="kind='panel' needs the column identifying the followed case",
+            param="case_id",
+            hint=(
+                "Pass case_id= or declare Design(case_id=...) on each wave. If the "
+                "waves name it differently, rename upfront with "
+                "sample.wrangling.rename_columns on one wave."
+            ),
+        )
+    if kind != "panel" and case_id != shared:
+        # A cross-sectional stack keeps an id only when every input carries
+        # that very column; an explicit name is not enough to make it one.
+        return None
+    return case_id
+
+
+def _resolve_rep_wgts(samples: Sequence[Sample], kind: str):
+    """Replicate weights carried by the inputs: rejected, except producer
+    longitudinal replicates identical on every wave of a panel."""
+    reps = [s._design.rep_wgts for s in samples]
+    if all(r is None for r in reps):
+        return None
+    if kind == "panel" and all(r is not None and r == reps[0] for r in reps):
+        return reps[0]
+    j = next(i for i, r in enumerate(reps, start=1) if r is not None)
+    reason = (
+        f"sample {j} carries replicate weights; combining replicate designs is not supported"
+        if kind != "panel"
+        else "the waves carry different replicate-weight designs"
+    )
+    raise MethodError.not_applicable(
+        where=_CTX,
+        method="combine_samples",
+        reason=reason,
+        hint=(
+            "Combine the Taylor designs, then create replicate weights on the result. "
+            "A panel accepts producer replicates only when every wave declares the "
+            "same RepWgts and the columns are constant within a case."
+        ),
+    )
+
+
+def _check_panel_ids(frames: Sequence[pl.DataFrame], case_id: str) -> None:
+    missing = [j for j, f in enumerate(frames, start=1) if case_id not in f.columns]
+    if missing:
+        raise MethodError.not_applicable(
+            where=_CTX,
+            method="combine_samples",
+            reason=f"case_id column '{case_id}' is missing from sample(s) {missing}",
+            param="case_id",
+            hint="Every wave must carry the case id under this one name.",
+        )
+    for j, f in enumerate(frames, start=1):
+        if f.get_column(case_id).null_count() > 0:
+            raise MethodError.not_applicable(
+                where=_CTX,
+                method="combine_samples",
+                reason=f"case_id column '{case_id}' has nulls in sample {j}",
+                param="case_id",
+            )
+        dups = duplicate_case_ids(f, case_id, None)
+        if dups:
+            raise MethodError.not_applicable(
+                where=_CTX,
+                method="combine_samples",
+                reason=f"case_id column '{case_id}' is not unique in sample {j}: {dups}",
+                param="case_id",
+                hint=(
+                    "A case is one row per wave. If these are household rows, the "
+                    "person-level file needs a person id."
+                ),
+            )
+
+
+def _check_panel_units(
+    frames: Sequence[pl.DataFrame], canonical: dict[str, tuple[str, ...]]
+) -> None:
+    """Later waves' (stratum, psu) set must be a subset of wave 1's; a PSU
+    entirely lost is a real panel event and warns."""
+    unit_cols = [*canonical["stratum"], *canonical["psu"]]
+    if not unit_cols:
+        return
+    first_set = set(frames[0].select(unit_cols).unique().iter_rows())
+    for j, f in enumerate(frames[1:], start=2):
+        units = set(f.select(unit_cols).unique().iter_rows())
+        extra = sorted(map(str, units - first_set))
+        if extra:
+            raise MethodError.not_applicable(
+                where=_CTX,
+                method="combine_samples",
+                reason=(
+                    f"sample {j} has design units {unit_cols} absent from sample 1: {extra[:10]}"
+                ),
+                hint=(
+                    "A panel keeps the base-wave design: every case carries its wave-1 "
+                    "stratum and PSU on later waves. Movers keep their base-wave PSU."
+                ),
+            )
+        lost = sorted(map(str, first_set - units))
+        if lost:
+            warnings.warn(
+                f"{len(lost)} design unit(s) {unit_cols} of sample 1 have no row in "
+                f"sample {j}: {lost[:10]}{'...' if len(lost) > 10 else ''}",
+                UserWarning,
+                stacklevel=3,
+            )
+
+
+def _check_constant_within_case(
+    stacked: pl.DataFrame, case_id: str, cols: Sequence[str], *, what: str = "design columns"
+) -> None:
+    varies = design_varies_within_case(stacked, case_id, cols)
+    if varies:
+        detail = "; ".join(f"{c}: {ids}" for c, ids in varies.items())
+        raise MethodError.not_applicable(
+            where=_CTX,
+            method="combine_samples",
+            reason=f"{what} vary within case_id '{case_id}' across waves: {detail}",
+            hint=(
+                "The case is nested in its PSU: movers keep their base-wave stratum "
+                "and PSU (and the base-wave replicate columns)."
+            ),
+        )
+
+
+def _report_overlap(stacked: pl.DataFrame, case_id: str, wave_name: str) -> None:
+    for ov in wave_overlap(stacked, case_id, wave_name):
+        log.info("panel overlap %s", ov)
+        if ov.common == 0:
+            raise MethodError.not_applicable(
+                where=_CTX,
+                method="combine_samples",
+                reason=(
+                    f"no case of wave {ov.prev!r} appears in wave {ov.wave!r} "
+                    f"({ov.lost} lost, {ov.new} new)"
+                ),
+                hint=(
+                    "These look like two unrelated cross-sections. Check that case_id "
+                    "names the same identifier on every wave, or stack with "
+                    "kind='cross_sectional'."
+                ),
+            )
+        n_prev = ov.common + ov.lost
+        if ov.common < 0.5 * n_prev:
+            warnings.warn(
+                f"Small panel overlap between wave {ov.prev!r} and wave {ov.wave!r}: "
+                f"{ov.common} of {n_prev} cases continue ({ov.lost} lost, {ov.new} new).",
+                UserWarning,
+                stacklevel=3,
+            )
+
+
 def combine_samples(
     samples: Sequence[Sample],
     *,
     adjust: Literal["average", "none"] | None = None,
     wave_name: str = "wave",
     wave_labels: Sequence[str] | None = None,
-    units: Literal["independent", "shared"] = "independent",
+    kind: Literal["cross_sectional", "cs", "panel"] = "cross_sectional",
+    case_id: str | None = None,
     on_mixed_design: Literal["error", "warn", "ignore"] = "error",
     wgt_name: str = "combined_wgt",
 ) -> Sample:
-    """Combine repeated cross-sections (or panel waves) into one Sample.
+    """Combine repeated cross-sections or panel waves into one long Sample.
 
-    Stacks the data files and analyzes them as ONE stratified design — this is
-    data pooling, not estimate pooling. Each independent wave contributes its
-    own strata (the design nests wave → stratum → PSU), so Taylor variance
-    treats waves as independent automatically. The estimand under
-    ``adjust="average"`` is the PERIOD-AVERAGE population: weights are divided
-    by k, which matters only for totals — means, proportions and ratios are
-    invariant to it.
+    Stacks the data files and analyzes them as ONE design — this is data
+    pooling, not estimate pooling. With ``kind="cross_sectional"`` each wave
+    contributes its own strata (the design nests wave → stratum → PSU), so
+    Taylor variance treats waves as independent automatically. The estimand
+    under ``adjust="average"`` is the PERIOD-AVERAGE population: weights are
+    divided by k, which matters only for totals — means, proportions and
+    ratios are invariant to it.
+
+    With ``kind="panel"`` the same cases are observed repeatedly: the stacked
+    sample keeps the base-wave strata and PSUs, ``Design.case_id`` identifies
+    the followed entity and ``Design.wave`` orders its rows. When no PSU is
+    declared the case is the variance PSU, so ``by=wave_name`` estimates and
+    their contrasts carry the between-wave covariance without being told to.
 
     Caller order of ``samples`` IS the time order; the wave column gets ordinal
     codes 1..k in that order (or reuses an existing wave column present in all
@@ -353,10 +526,8 @@ def combine_samples(
     ``sample.weighting.normalize(factor=...)`` and pass ``adjust="none"``.
 
     Never combine for trend questions — use ``by=wave_name`` on the combined
-    sample instead. Designs where the same physical PSUs appear in several
-    samples (rotating panels, ACS overlap) fit neither mode and are out of
-    scope. ``design_history`` of the inputs is not carried: the combined Sample
-    is a new object built from k parents.
+    sample instead. ``design_history`` of the inputs is not carried: the
+    combined Sample is a new object built from k parents.
 
     Parameters
     ----------
@@ -364,22 +535,32 @@ def combine_samples(
         Two or more samples, in time order.
     adjust : {"average", "none"} | None
         "average" multiplies every weight by 1/k into ``wgt_name``. None picks
-        the mode default: "average" for independent units, "none" for shared.
-        Explicit "average" with ``units="shared"`` errors — a person is not
+        the mode default: "average" for cross-sections, "none" for a panel.
+        Explicit "average" with ``kind="panel"`` errors — a person is not
         half a person for appearing in two waves.
     wave_name : str
-        Wave-id column name; reused if already present in all inputs.
+        Wave-id column name; reused if already present in all inputs. Fills
+        ``Design.wave`` on the result.
     wave_labels : Sequence[str] | None
         Value labels for the wave codes, in caller order. Defaults to
-        "s1".."sk" when the column is created.
-    units : {"independent", "shared"}
-        "independent" for repeated cross-sections; "shared" for panel waves
-        observing the same units, which requires identical design columns
-        across waves.
+        "wave 1".."wave k" when the column is created.
+    kind : {"cross_sectional", "cs", "panel"}
+        "cross_sectional" (alias "cs") for repeated cross-sections;
+        "panel" for waves observing the same cases, which requires
+        ``case_id`` and validates the pairing: the id is unique within each
+        wave, consecutive waves overlap (an empty overlap errors, a small one
+        warns), design columns are constant within a case, and a later
+        wave's (stratum, PSU) set is a subset of wave 1's.
+    case_id : str | None
+        Column identifying the followed case, present in every input under
+        this one name (rename upfront if the waves differ). Required for
+        ``kind="panel"`` unless every input declares the same
+        ``Design.case_id``. On a cross-sectional stack it is kept only when
+        every input declares it and it stays unique on the stacked frame.
     on_mixed_design : {"error", "warn", "ignore"}
         What to do when waves declare structurally different designs — some
-        stratified and some not, some clustered and some not (independent mode
-        only). A wave without strata or without a PSU is a complete design
+        stratified and some not, some clustered and some not (cross-sectional
+        mode only). A wave without strata or without a PSU is a complete design
         (one stratum; element sampling), and combining mixed designs is valid
         under independent stacking — but a missing declaration is usually an
         oversight that silently understates variance, so the default errors.
@@ -392,7 +573,10 @@ def combine_samples(
         mistaken for real codes. Emitted with a warning or quietly (a log
         line) respectively. Same vocabulary as ``on_singletons`` in wrangling.
     wgt_name : str
-        Name of the combined-weight column (``adjust="average"`` only).
+        Name of the combined weight column the function creates, holding each
+        wave's own weight (divided by k under ``adjust="average"``). The waves'
+        weight columns may be named differently; the other design roles must
+        share one name per role.
     """
     samples = list(samples)
     k = len(samples)
@@ -410,9 +594,15 @@ def combine_samples(
                 reason=f"item {j} is not a Sample (got {type(s).__name__})",
             )
 
-    if units not in ("independent", "shared"):
+    if kind not in ("cross_sectional", "cs", "panel"):
         raise MethodError.invalid_choice(
-            where=_CTX, param="units", got=units, allowed=["independent", "shared"]
+            where=_CTX, param="kind", got=kind, allowed=["cross_sectional", "cs", "panel"]
+        )
+    if kind == "cs":
+        kind = "cross_sectional"
+    if case_id is not None and (not isinstance(case_id, str) or not case_id):
+        raise MethodError.invalid_choice(
+            where=_CTX, param="case_id", got=case_id, allowed=["<column name>"]
         )
     if adjust not in (None, "average", "none"):
         raise MethodError.invalid_choice(
@@ -425,28 +615,22 @@ def combine_samples(
             got=on_mixed_design,
             allowed=["error", "warn", "ignore"],
         )
-    if units == "shared" and adjust == "average":
+    if kind == "panel" and adjust == "average":
         raise MethodError.not_applicable(
             where=_CTX,
             method="combine_samples",
             reason=(
-                "adjust='average' with units='shared' divides longitudinal weights by k, "
+                "adjust='average' with kind='panel' divides longitudinal weights by k, "
                 "but a person is not half a person for appearing in two waves"
             ),
-            hint="Use adjust='none' (the shared-mode default) with longitudinal weights.",
+            hint="Use adjust='none' (the panel default) with longitudinal weights.",
         )
     resolved_adjust = (
-        adjust if adjust is not None else ("average" if units == "independent" else "none")
+        adjust if adjust is not None else ("average" if kind == "cross_sectional" else "none")
     )
 
-    for j, s in enumerate(samples, start=1):
-        if s._design.rep_wgts is not None:
-            raise MethodError.not_applicable(
-                where=_CTX,
-                method="combine_samples",
-                reason=f"sample {j} carries replicate weights; combining replicate designs is not supported",
-                hint="Combine the Taylor designs, then create replicate weights on the result.",
-            )
+    case_id = _resolve_case_id(samples, kind, case_id)
+    rep_wgts = _resolve_rep_wgts(samples, kind)
 
     wr_values = {s._design.wr for s in samples}
     if len(wr_values) > 1:
@@ -457,7 +641,7 @@ def combine_samples(
         )
 
     canonical, mixed_flags, mixed_notes = _check_design_alignment(
-        samples, units, allow_mixed=on_mixed_design != "error"
+        samples, kind, allow_mixed=on_mixed_design != "error"
     )
 
     if resolved_adjust == "average" and not canonical["wgt"]:
@@ -561,7 +745,10 @@ def combine_samples(
 
     frames, codes, created = _resolve_wave_codes(frames, wave_name)
 
-    if resolved_adjust == "average":
+    # The combined weight is a new column, like every weighting method's:
+    # each wave's own weight (whatever it is called there), divided by k
+    # under adjust="average".
+    if canonical["wgt"]:
         for j, f in enumerate(frames, start=1):
             if wgt_name in f.columns:
                 raise MethodError.not_applicable(
@@ -571,8 +758,11 @@ def combine_samples(
                     param="wgt_name",
                     hint="Choose a different wgt_name.",
                 )
-        wgt_col = canonical["wgt"][0]
-        frames = [f.with_columns((pl.col(wgt_col) / k).alias(wgt_name)) for f in frames]
+        factor = 1.0 / k if resolved_adjust == "average" else 1.0
+        frames = [
+            f.with_columns((pl.col(s._design.wgt).cast(pl.Float64) * factor).alias(wgt_name))
+            for f, s in zip(frames, samples)
+        ]
 
     # Dtype conflicts on shared columns error before concat: silent upcasting of
     # coded variables is how category codes get corrupted.
@@ -603,45 +793,51 @@ def combine_samples(
             stacklevel=2,
         )
 
-    if units == "shared":
-        unit_cols = [*canonical["stratum"], *canonical["psu"]]
-        if unit_cols:
-            first_units = set(frames[0].select(unit_cols).unique().iter_rows())
-            for j, f in enumerate(frames[1:], start=2):
-                if set(f.select(unit_cols).unique().iter_rows()) != first_units:
-                    raise MethodError.not_applicable(
-                        where=_CTX,
-                        method="combine_samples",
-                        reason=(
-                            f"units='shared' requires identical design units across waves, "
-                            f"but sample {j} differs from sample 1 on {unit_cols}"
-                        ),
-                        hint=(
-                            "Shared mode is for the SAME units observed repeatedly. For "
-                            "independent samples use units='independent'."
-                        ),
-                    )
+    if kind == "panel":
+        assert case_id is not None  # noqa: S101 — _resolve_case_id guarantees it
+        _check_panel_ids(frames, case_id)
+        _check_panel_units(frames, canonical)
 
     stacked = pl.concat(frames, how="diagonal")
 
-    if units == "independent":
-        new_stratum: tuple[str, ...] | None = (wave_name, *canonical["stratum"])
+    if kind == "panel":
+        assert case_id is not None  # noqa: S101
+        design_cols = [
+            *canonical["stratum"],
+            *canonical["psu"],
+            *canonical["ssu"],
+            *canonical["pop_size"],
+        ]
+        _check_constant_within_case(stacked, case_id, design_cols)
+        if rep_wgts is not None:
+            _check_constant_within_case(
+                stacked, case_id, rep_wgts.columns, what="replicate weight columns"
+            )
+        _report_overlap(stacked, case_id, wave_name)
+        new_stratum: tuple[str, ...] | None = canonical["stratum"] or None
     else:
-        new_stratum = canonical["stratum"] or None
+        new_stratum = (wave_name, *canonical["stratum"])
+        if case_id is not None and duplicate_case_ids(stacked, case_id, None):
+            log.info(
+                "case_id %r is not unique on the stacked cross-sections; not kept on the design",
+                case_id,
+            )
+            case_id = None
 
     first = samples[0]._design
     design = Design(
+        case_id=case_id,
+        wave=wave_name,
         stratum=new_stratum,
         psu=canonical["psu"] or None,
         ssu=canonical["ssu"] or None,
-        wgt=wgt_name
-        if resolved_adjust == "average"
-        else (canonical["wgt"][0] if canonical["wgt"] else None),
+        wgt=wgt_name if canonical["wgt"] else None,
         prob=canonical["prob"][0] if canonical["prob"] else None,
         hit=canonical["hit"][0] if canonical["hit"] else None,
         mos=canonical["mos"][0] if canonical["mos"] else None,
         pop_size=first.pop_size,
         wr=first.wr,
+        rep_wgts=rep_wgts,
     )
 
     combined = Sample(data=stacked, design=design)
@@ -671,7 +867,7 @@ def combine_samples(
         _warn_if_numeric_labels_unordered(wave_labels)
     elif created:
         combined.meta.set_value_labels(
-            wave_name, {c: f"s{i}" for i, c in enumerate(codes, start=1)}
+            wave_name, {c: f"wave {i}" for i, c in enumerate(codes, start=1)}
         )
 
     return combined

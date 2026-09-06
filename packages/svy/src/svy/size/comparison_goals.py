@@ -180,7 +180,9 @@ def compare_props(
 
     # Pipeline: n0 (SRS) -> DEFF -> FPC -> nonresponse (see estimate_prop).
     n1_deff = _apply_deff_pair(n=n0, deff=deff)
-    n2_fpc = _apply_fpc_srswor_pair(n0=n1_deff, pop_size=pop_size) if _has_pop(pop_size) else n1_deff
+    n2_fpc = (
+        _apply_fpc_srswor_pair(n0=n1_deff, pop_size=pop_size) if _has_pop(pop_size) else n1_deff
+    )
     n_final = _apply_nonresponse_pair(n=n2_fpc, resp_rate=resp_rate)
     _build_sizes(
         ss,
@@ -357,7 +359,9 @@ def compare_means(
 
     # Pipeline: n0 (SRS) -> DEFF -> FPC -> nonresponse (see estimate_prop).
     n1_deff = _apply_deff_pair(n=n0, deff=deff)
-    n2_fpc = _apply_fpc_srswor_pair(n0=n1_deff, pop_size=pop_size) if _has_pop(pop_size) else n1_deff
+    n2_fpc = (
+        _apply_fpc_srswor_pair(n0=n1_deff, pop_size=pop_size) if _has_pop(pop_size) else n1_deff
+    )
     n_final = _apply_nonresponse_pair(n=n2_fpc, resp_rate=resp_rate)
     _build_sizes(
         ss,

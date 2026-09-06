@@ -139,7 +139,8 @@ def _design_with_renamed_columns(design: Design, renames: dict[str, str]) -> Des
         new_rep = _rep_wgts_with_renames(design.rep_wgts, renames)
 
     return design.update(
-        row_index=_map_name_in_design(design.row_index, renames),
+        case_id=_map_name_in_design(design.case_id, renames),
+        wave=_map_name_in_design(design.wave, renames),
         stratum=_map_tuple_in_design(design.stratum, renames),
         wgt=_map_name_in_design(design.wgt, renames),
         prob=_map_name_in_design(design.prob, renames),

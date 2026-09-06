@@ -104,9 +104,7 @@ def test_one_mean_power_size_negative_epsilon():
 class TestOneSidedPowerDirection:
     def test_scalar_matches_array(self):
         scalar = calculate_power(False, -1.0, 1.0, 25, 0.05)
-        arr = calculate_power(
-            False, np.array([-1.0]), np.array([1.0]), np.array([25.0]), 0.05
-        )
+        arr = calculate_power(False, np.array([-1.0]), np.array([1.0]), np.array([25.0]), 0.05)
         assert scalar == pytest.approx(float(arr[0]), rel=1e-12)
         # Phi(-zc + 5) = 0.99960 (the old hardcoded "greater" gave ~1.5e-11)
         assert scalar == pytest.approx(0.9996034, abs=1e-6)
@@ -208,9 +206,7 @@ def test_pooled_prop_unequal_allocation():
     """kappa = n2/n1 = 3: pooled p = (p1 + 3*p2)/4 = 0.525.
     var_factor = v + v/3 = 0.3325; n1 = 0.3325*((za2+zb)/0.1)^2 -> 261
     (the swapped weights gave 256)."""
-    ss = SampleSize().compare_props(
-        p1=0.6, p2=0.5, alloc_ratio=3.0, var_mode="pooled-prop"
-    )
+    ss = SampleSize().compare_props(p1=0.6, p2=0.5, alloc_ratio=3.0, var_mode="pooled-prop")
     assert ss.size.n0 == (261, 783)
 
 
@@ -228,9 +224,7 @@ class TestCrashGuards:
     def test_delta_equals_epsilon_raises(self):
         """delta == eps used to crash with OverflowError."""
         with pytest.raises(MethodError):
-            SampleSize().compare_props(
-                p1=0.6, p2=0.5, delta=-0.10, two_sides=False
-            )
+            SampleSize().compare_props(p1=0.6, p2=0.5, delta=-0.10, two_sides=False)
 
 
 # =============================================================================

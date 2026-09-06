@@ -153,7 +153,7 @@ def add_stage(
     )
 
     combined_design = _Design(
-        row_index=ns_design.row_index,
+        case_id=ns_design.case_id,
         stratum=s1_design.stratum,
         psu=s1_design.psu,
         ssu=ns_design.psu if ns_design.psu else None,

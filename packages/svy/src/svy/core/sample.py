@@ -20,6 +20,7 @@ from svy.core.describe_runtime import run_describe
 from svy.core.design import Design, PopSize, RepWeights
 from svy.core.enumerations import MeasurementType
 from svy.core.expr import to_polars_expr
+from svy.core.panel import design_varies_within_case, duplicate_case_ids, wave_overlap
 from svy.core.repwgts import JackknifeWgts, RepWgts, unit_columns
 from svy.core.types import (
     _MISSING,
@@ -113,20 +114,14 @@ class Sample:
         *,
         catalog: LabellingCatalog | None = None,
     ) -> None:
-        if design is None:
-            local_design = Design(row_index=SVY_ROW_INDEX)
-            self._fpc = 1
-        else:
-            local_design = copy.deepcopy(design)
-            if getattr(local_design, "row_index", None) is None:
-                local_design = local_design.update(row_index=SVY_ROW_INDEX)
-
-            # FPC is computed in the estimation layer from pop_size column(s).
-            # _fpc is kept for backward compatibility but is not used by the
-            # Rust-backed estimation path.
-            self._fpc = 1
-
+        local_design = Design() if design is None else copy.deepcopy(design)
+        # FPC is computed in the estimation layer from pop_size column(s).
+        # _fpc is kept for backward compatibility but is not used by the
+        # Rust-backed estimation path.
+        self._fpc = 1
         self._design = local_design
+        if local_design.psu is None and local_design.variance_psu is not None:
+            log.info("no PSU declared; using case_id %r as the variance PSU", local_design.case_id)
 
         local_data = data.clone().fill_nan(None)
         if SVY_ROW_INDEX not in local_data.columns:
@@ -595,9 +590,10 @@ class Sample:
         rw_lines = fn().splitlines() if callable(fn) else None
 
         rows = [
-            ("Row index", str(getattr(design, "row_index", None))),
+            ("Case id", str(getattr(design, "case_id", None))),
+            ("Wave", str(getattr(design, "wave", None))),
             ("Stratum", self._fmt_tuple_names(getattr(design, "stratum", None))),
-            ("PSU", self._fmt_tuple_names(getattr(design, "psu", None))),
+            ("PSU", design._fmt_psu()),
             ("SSU", self._fmt_tuple_names(getattr(design, "ssu", None))),
             ("Weight", str(wgt)),
             ("With replacement", str(bool(getattr(design, "wr", False)))),
@@ -612,6 +608,9 @@ class Sample:
                 rows.append((None, f"    {sub_line}"))
         else:
             rows.append(("Replicate weights", "None"))
+        if design.is_panel:
+            for ov in wave_overlap(cast(pl.DataFrame, self._data), design.case_id, design.wave):
+                rows.append(("Waves", str(ov)))
         return rows
 
     # ════════════════════════════════════════════════════════════════════════
@@ -910,7 +909,7 @@ class Sample:
         # which passes integer design *codes* to Rust instead of string concats.
         if include_design:
             stratum_cols = self._to_cols(design.stratum)
-            psu_cols = self._to_cols(design.psu)
+            psu_cols = self._to_cols(design.variance_psu)
             ssu_cols = self._to_cols(design.ssu)
         else:
             stratum_cols = []
@@ -960,7 +959,7 @@ class Sample:
             "stratum": (concat_data[f"stratum{suffix}"].to_numpy() if design.stratum else None),
             "psu": (
                 concat_data[f"psu{suffix}"].to_numpy()
-                if design.psu
+                if design.variance_psu
                 else np.arange(concat_data.height, dtype=int)
             ),
             "ssu": (concat_data[f"ssu{suffix}"].to_numpy() if design.ssu else None),
@@ -978,15 +977,6 @@ class Sample:
             else cast(pl.DataFrame, self._data.collect())
         )
         design = cast("Design", self._design)
-
-        if (
-            design.row_index is None
-            or not isinstance(design.row_index, str)
-            or not design.row_index
-        ):
-            raise ValueError("Design.row_index must be a non-empty string.")
-        if design.row_index not in data.columns:
-            raise ValueError(f"Design.row_index {design.row_index!r} not found in data columns.")
 
         schema: dict[str, pl.DataType] = data.schema
 
@@ -1086,11 +1076,63 @@ class Sample:
             if not _is_integer_dtype(schema[design.hit]):
                 raise TypeError(f"'hit' column {design.hit!r} must be an integer dtype.")
 
-        # 4. Check Row Index Integrity
-        if data.select(pl.col(design.row_index).is_null().any()).item():
-            raise ValueError("row_index contains nulls.")
-        if data.select(pl.col(design.row_index).n_unique() != pl.len()).item():
-            raise ValueError("row_index must be unique.")
+        # 4. Case id and wave: the record identifier, unique within wave on a
+        # panel and unique overall on a cross-section.
+        self._validate_case_id(data, design)
+
+    def _validate_case_id(self, data: pl.DataFrame, design: Design) -> None:
+        if design.wave is not None and design.wave not in data.columns:
+            raise ValueError(f"Design.wave {design.wave!r} not found in data columns.")
+        if design.case_id is None:
+            return
+        cid = design.case_id
+        if cid not in data.columns:
+            raise ValueError(f"Design.case_id {cid!r} not found in data columns.")
+        if data.get_column(cid).null_count() > 0:
+            raise ValueError(f"Design.case_id {cid!r} contains nulls.")
+        dups = duplicate_case_ids(data, cid, design.wave)
+        if dups:
+            scope = f"within wave {design.wave!r}" if design.wave else "across rows"
+            raise ValueError(
+                f"Design.case_id {cid!r} must be unique {scope}; duplicated: {dups}. "
+                "A case is one row per wave: if these are household rows, the "
+                "person-level file needs a person id."
+            )
+        if design.wave is None:
+            return
+        design_cols = (
+            _colspec_to_list(design.stratum)
+            + _colspec_to_list(design.psu)
+            + _colspec_to_list(design.ssu)
+            + self._pop_size_cols(design)
+        )
+        varies = design_varies_within_case(data, cid, design_cols)
+        if varies:
+            detail = "; ".join(f"{c}: {ids}" for c, ids in varies.items())
+            raise ValueError(
+                f"Design columns must be constant within case_id {cid!r} across waves "
+                f"(the case is nested in its PSU); violators: {detail}. "
+                "Movers keep their base-wave stratum and PSU."
+            )
+        # Stacked cross-sections may keep a unique case_id next to the wave
+        # column; only a frame where some case repeats is a panel to pair.
+        if data.get_column(cid).n_unique() == data.height:
+            return
+        for ov in wave_overlap(data, cid, design.wave):
+            if ov.common == 0:
+                raise ValueError(
+                    f"No case of wave {ov.prev!r} appears in wave {ov.wave!r}: these look "
+                    "like two unrelated cross-sections stacked as a panel. Check case_id."
+                )
+
+    @staticmethod
+    def _pop_size_cols(design: Design) -> list[str]:
+        ps = design.pop_size
+        if ps is None:
+            return []
+        if isinstance(ps, PopSize):
+            return [c for c in (ps.psu, ps.ssu) if c is not None]
+        return [ps]
 
     def _check_rep_wgts_against_df(self, rw: RepWeights | None) -> None:
         if rw is None:
@@ -1296,7 +1338,7 @@ class Sample:
 
     @property
     def n_psus(self) -> int:
-        if self._design.psu is None:
+        if self._design.variance_psu is None:
             return 0
         return len(self.psus)
 
@@ -1330,11 +1372,11 @@ class Sample:
 
     @property
     def psus(self):
-        if self._design.psu is None:
+        if self._design.variance_psu is None:
             return pl.DataFrame()
         else:
             strata = _colspec_to_list(self._design.stratum)
-            psus = _colspec_to_list(self._design.psu)
+            psus = _colspec_to_list(self._design.variance_psu)
             strata_psus = strata + psus
             return self._data.select(strata_psus).unique().sort(by=strata_psus)
 
@@ -1613,7 +1655,7 @@ class Sample:
         """
         local_data = cast(pl.DataFrame, self._data)
         if self._design is not None and any(
-            getattr(self._design, f, None) for f in ("stratum", "psu", "ssu")
+            getattr(self._design, f, None) for f in ("stratum", "variance_psu", "ssu")
         ):
             local_data, (_, stratum_cols, psu_cols, ssu_cols) = (
                 self._create_concatenated_cols_from_lists(
@@ -1643,7 +1685,7 @@ class Sample:
 
     def set_data(self, data: pl.DataFrame) -> Self:
         self._data = data
-        if "svy_row_index" not in self._data.columns:
+        if SVY_ROW_INDEX not in self._data.columns:
             self._data = self._data.with_row_index(name=SVY_ROW_INDEX)
         # Infer metadata for new columns (don't overwrite existing)
         self._metadata.infer_from_dataframe(self._data, overwrite=False)
@@ -1655,7 +1697,7 @@ class Sample:
 
     def update_data(self, data: pl.DataFrame) -> Self:
         self._data = data
-        if "svy_row_index" not in self._data.columns:
+        if SVY_ROW_INDEX not in self._data.columns:
             self._data = self._data.with_row_index(name=SVY_ROW_INDEX)
         self._metadata.align_to_dataframe(self._data)
         self._refresh_internal_state()
@@ -1755,7 +1797,7 @@ class Sample:
             new_sample._design = new_sample._design.update(wgt=wgt)
         else:
             # If no design existed, create a minimal one with the weight
-            new_sample._design = Design(row_index=SVY_ROW_INDEX, wgt=wgt)
+            new_sample._design = Design(wgt=wgt)
 
         # 4. Return the new instance
         return new_sample

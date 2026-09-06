@@ -34,7 +34,7 @@ def df_base() -> pl.DataFrame:
 @pytest.fixture()
 def design_ok() -> Design:
     return Design(
-        row_index="id",
+        case_id="id",
         stratum=("strataA", "strataB"),
         wgt="wgt",
         prob="prob",
@@ -80,8 +80,8 @@ def test_missing_referenced_column_in_design(df_base, design_ok):
 
 
 def test_row_index_missing_in_data(df_base, design_ok):
-    bad = design_ok.update(row_index="rid_not_in_df")
-    with pytest.raises(ValueError, match="row_index .* not found"):
+    bad = design_ok.update(case_id="rid_not_in_df")
+    with pytest.raises(ValueError, match="not found"):
         Sample(df_base, bad)
 
 
@@ -203,8 +203,8 @@ def test_hit_not_integer_dtype(df_base, design_ok):
 # ---------------------------
 
 
-def test_sample_adds_row_index_when_missing(df_base):
+def test_sample_adds_svy_row_index_when_missing(df_base):
     # Remove the id column; rely on Sample to add its own SVY_ROW_INDEX
     df = df_base.drop("id")
-    s = Sample(df, Design(row_index=None))
+    s = Sample(df, Design())
     assert SVY_ROW_INDEX in s._data.columns

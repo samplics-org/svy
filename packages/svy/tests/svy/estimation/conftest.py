@@ -50,7 +50,7 @@ def make_design():
     def _maker(method, rep_prefix, n_reps, df=None, psu_col="psu"):
         rep_weights = RepWeights(method=method, prefix=rep_prefix, n_reps=n_reps, df=df)
         return Design(
-            row_index="id", wgt="weight", stratum="stratum", psu=psu_col, rep_wgts=rep_weights
+            case_id="id", wgt="weight", stratum="stratum", psu=psu_col, rep_wgts=rep_weights
         )
 
     return _maker
