@@ -125,5 +125,40 @@
     },
     "sha256": "31f0be4f3083c6d853e8d469e3c04cf5e68b13117b1c7a5a92e12fe4857618f9",
     "size_bytes": 30121
+  },
+  "panel_syn_2026": {
+    "columns": [
+      "case_id",
+      "wave",
+      "stratum",
+      "psu",
+      "urban",
+      "age_grp",
+      "sex",
+      "w1",
+      "resp",
+      "lw_12",
+      "lw_123",
+      "emp",
+      "inc"
+    ],
+    "n_cols": 13,
+    "n_rows": 3155,
+    "numeric_sums": {
+      "age_grp": 7368.0,
+      "case_id": 1877272.0,
+      "emp": 1702.0,
+      "inc": 8829826.1,
+      "lw_12": 153381.0283,
+      "lw_123": 159000.0,
+      "psu": 1113309.0,
+      "sex": 4690.0,
+      "stratum": 10960.0,
+      "urban": 1705.0,
+      "w1": 138913.3333,
+      "wave": 5979.0
+    },
+    "sha256": "5b7968dc3b3df01efbe44bb2a18b219fa4680bc6c664ecb36e32c57d68e4c3d4",
+    "size_bytes": 28924
   }
 }

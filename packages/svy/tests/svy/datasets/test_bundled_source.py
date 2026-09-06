@@ -180,15 +180,19 @@ def test_catalog_get_unknown_raises_not_found():
 
 def test_catalog_to_polars():
     df = d.catalog(source="bundled").to_polars()
-    assert df.height == 4
+    assert df.height == 5
     assert {"slug", "title", "rows", "cols", "size_mb"}.issubset(df.columns)
 
 
 def test_bundled_datasets_carry_notes():
-    # Every bundled dataset documents that it was derived from the remote data.
+    # Every bundled slice of a remote dataset says so; the synthetic panel is
+    # generated locally and documents its own mechanism instead.
     for ds in d.catalog(source="bundled"):
         assert ds.notes
-        assert "remote" in ds.notes
+        if "wb" in ds.tags:
+            assert "remote" in ds.notes
+        else:
+            assert "synthetic" in ds.tags
 
 
 def test_catalog_and_dataset_str_render():

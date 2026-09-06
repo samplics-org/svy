@@ -109,6 +109,10 @@ def describe(slug: str, *, use_cache: bool = True, source: Source = "auto") -> D
     try:
         return api.describe(slug, use_cache=use_cache)
     except DatasetError as exc:
+        if exc.code == "DATASET_NOT_FOUND":
+            ds = _bundled.describe(slug)
+            if ds is not None:
+                return ds
         if exc.code in _CATALOG_UNREACHABLE:
             ds = _bundled.describe(slug)
             if ds is not None:

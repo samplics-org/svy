@@ -242,11 +242,20 @@ def main() -> None:
         "hld_sample_wb_2023": b_hld_s,
         "ind_sample_wb_2023": b_ind_s,
     }
+    # Datasets built by other generators (scripts/build_panel_dataset.py)
+    # live in the same directory and keep their files and registry entries.
+    reg_path = OUT / "registry.json"
+    others = (
+        [e for e in json.loads(reg_path.read_text()) if e["slug"] not in files]
+        if reg_path.exists()
+        else []
+    )
+    keep = set(files) | {e["slug"] for e in others}
     for stale in OUT.glob("*.parquet"):
-        if stale.stem not in files:
+        if stale.stem not in keep:
             stale.unlink()
 
-    registry = []
+    registry = list(others)
     total = 0
     for slug, df in files.items():
         path = OUT / f"{slug}.parquet"
