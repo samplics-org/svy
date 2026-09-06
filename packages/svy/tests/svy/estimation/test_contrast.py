@@ -140,15 +140,12 @@ class TestTaylorMeanContrast:
         means = [p.est for p in r.estimates]
         assert c.estimates[0].est == pytest.approx(np.mean(means), rel=1e-12)
 
-    def test_nonlinear_operations_raise(self, dclus1):
+    def test_nonlinear_operations_take_the_delta_method(self, dclus1):
+        # see test_contrast_nonlinear.py for the R oracle
         r = dclus1.estimation.mean("api00", by="stype")
-        with pytest.raises(MethodError, match="[Nn]onlinear"):
-            estd("E") * estd("H")
-        with pytest.raises(MethodError, match="[Nn]onlinear"):
-            estd("E") / estd("H")
-        with pytest.raises(MethodError, match="[Nn]onlinear"):
-            estd("E") + 1.0
-        del r
+        c = r.contrast(estd("H") / estd("E"))
+        assert not (estd("H") / estd("E")).is_linear()
+        assert c.estimates[0].est == pytest.approx(0.953308493576269, rel=1e-11)
 
 
 class TestTaylorMeanFpc:

@@ -1,12 +1,15 @@
 # src/svy/estimation/contrast.py
-"""Post-estimation linear contrasts.
+"""Post-estimation contrasts.
 
-One core: given named estimates with their covariance matrix, a set of sparse
-linear contrasts ``L`` yields ``L θ̂`` with variance ``L V Lᵀ`` and t-based
-inference on the design degrees of freedom. Both result families expose it —
-``Estimate.contrast()`` over domain/level estimates and ``GLMFit.contrast()``
-over model coefficients — mirroring R's ``svycontrast``, which operates on any
-(coef, vcov) pair without touching the design again.
+One core: given named estimates with their covariance matrix, a contrast
+``f(θ)`` yields ``f(θ̂)`` with variance ``gᵀ V g`` (``g`` the gradient at
+``θ̂``) and t-based inference on the design degrees of freedom. A linear
+contrast is the special case ``g = L``, giving ``L θ̂`` and ``L V Lᵀ``
+exactly; a nonlinear one (ratio, percent change, log-ratio) is the delta
+method. Both result families expose it — ``Estimate.contrast()`` over
+domain/level estimates and ``GLMFit.contrast()`` over model coefficients —
+mirroring R's ``svycontrast``, which operates on any (coef, vcov) pair
+without touching the design again.
 """
 
 from __future__ import annotations
@@ -38,61 +41,39 @@ log = logging.getLogger(__name__)
 # =============================================================================
 
 
-def _nonlinear(op: str) -> MethodError:
-    return MethodError(
-        title="Nonlinear contrast not supported",
-        detail=(
-            f"The operation {op!r} between estimands makes the contrast "
-            "nonlinear. Only linear combinations (+, -, and multiplication "
-            "by a number) are currently supported; nonlinear (delta-method) "
-            "contrasts are planned. The one common case has a linear recipe: "
-            "estimate a ratio on the log scale, then exponentiate the bounds."
-        ),
-        code="CONTRAST_NONLINEAR",
-        where="contrast",
-    )
-
-
 class ContrastExpr:
-    """A symbolic linear combination of estimands.
+    """A symbolic function of estimands.
 
-    Built from :func:`est` references with ``+``, ``-``, and multiplication
-    or division by a number. The tree is owned by svy (not delegated to any
-    engine), so richer operators — and their symbolic derivatives for
-    delta-method contrasts — can be added without changing this API.
+    Built from :func:`estd` references with ``+``, ``-``, ``*`` and ``/``
+    (between expressions or with numbers) and the :meth:`log` / :meth:`exp`
+    methods. Trees holding only sums and scalings are linear and take the
+    exact ``L V Lᵀ`` path; anything else is estimated by the delta method
+    from the analytic gradient. The tree is owned by svy (not delegated to
+    any engine), so further operators can be added without changing this
+    API.
     """
 
     __slots__ = ()
 
-    def __add__(self, other: "ContrastExpr") -> "ContrastExpr":
+    @staticmethod
+    def _wrap(other: Any, what: str) -> "ContrastExpr":
         if isinstance(other, ContrastExpr):
-            return _Add(self, other)
-        raise (
-            _nonlinear("+ constant")
-            if isinstance(other, Real)
-            else TypeError(f"cannot add {type(other).__name__} to a contrast expression")
-        )
+            return other
+        if isinstance(other, Real) and not isinstance(other, bool):
+            return _Const(float(other))
+        raise TypeError(f"cannot {what} a contrast expression and {type(other).__name__}")
+
+    def __add__(self, other: Any) -> "ContrastExpr":
+        return _Add(self, self._wrap(other, "add"))
 
     def __radd__(self, other: Any) -> "ContrastExpr":
-        return self.__add__(other)
+        return _Add(self._wrap(other, "add"), self)
 
-    def __sub__(self, other: "ContrastExpr") -> "ContrastExpr":
-        if isinstance(other, ContrastExpr):
-            return _Add(self, _Scale(-1.0, other))
-        raise (
-            _nonlinear("- constant")
-            if isinstance(other, Real)
-            else TypeError(f"cannot subtract {type(other).__name__} from a contrast expression")
-        )
+    def __sub__(self, other: Any) -> "ContrastExpr":
+        return _Add(self, _Scale(-1.0, self._wrap(other, "subtract")))
 
     def __rsub__(self, other: Any) -> "ContrastExpr":
-        if isinstance(other, ContrastExpr):
-            return _Add(other, _Scale(-1.0, self))
-        raise (
-            _nonlinear("constant -")
-            if isinstance(other, Real)
-            else TypeError(f"cannot subtract a contrast expression from {type(other).__name__}")
-        )
+        return _Add(self._wrap(other, "subtract"), _Scale(-1.0, self))
 
     def __neg__(self) -> "ContrastExpr":
         return _Scale(-1.0, self)
@@ -101,29 +82,49 @@ class ContrastExpr:
         return self
 
     def __mul__(self, other: Any) -> "ContrastExpr":
-        if isinstance(other, Real):
+        if isinstance(other, Real) and not isinstance(other, bool):
             return _Scale(float(other), self)
-        if isinstance(other, ContrastExpr):
-            raise _nonlinear("*")
-        raise TypeError(f"cannot multiply a contrast expression by {type(other).__name__}")
+        return _Mul(self, self._wrap(other, "multiply"))
 
     __rmul__ = __mul__
 
     def __truediv__(self, other: Any) -> "ContrastExpr":
-        if isinstance(other, Real):
+        if isinstance(other, Real) and not isinstance(other, bool):
             return _Scale(1.0 / float(other), self)
-        if isinstance(other, ContrastExpr):
-            raise _nonlinear("/")
-        raise TypeError(f"cannot divide a contrast expression by {type(other).__name__}")
+        return _Div(self, self._wrap(other, "divide"))
 
     def __rtruediv__(self, other: Any) -> "ContrastExpr":
-        raise _nonlinear("/")
+        return _Div(self._wrap(other, "divide"), self)
+
+    def log(self) -> "ContrastExpr":
+        """Natural log of the expression (a log-ratio is ``a.log() - b.log()``)."""
+        return _Log(self)
+
+    def exp(self) -> "ContrastExpr":
+        return _Exp(self)
+
+    def is_linear(self) -> bool:
+        """True when the tree holds only references, sums and scalings."""
+        return _is_linear(self)
 
     def coefs(self) -> dict[Any, float]:
-        """Compile to the sparse ``{key: coefficient}`` form."""
+        """Compile a linear tree to the sparse ``{key: coefficient}`` form."""
+        if not self.is_linear():
+            raise MethodError(
+                title="Not a linear contrast",
+                detail=f"{self!r} is nonlinear and has no coefficient form.",
+                code="CONTRAST_NONLINEAR",
+                where="contrast",
+            )
         out: dict[Any, float] = {}
         _accumulate(self, 1.0, out)
         return out
+
+    def keys(self) -> list[Any]:
+        """The estimand keys the expression references, in first-seen order."""
+        out: list[Any] = []
+        _collect_keys(self, out)
+        return list(dict.fromkeys(out))
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +137,14 @@ class EstRef(ContrastExpr):
         if isinstance(self.key, tuple):
             return f"estd{self.key!r}"
         return f"estd({self.key!r})"
+
+
+@dataclass(frozen=True, slots=True)
+class _Const(ContrastExpr):
+    value: float
+
+    def __repr__(self) -> str:
+        return f"{self.value:g}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +165,50 @@ class _Scale(ContrastExpr):
         return f"({self.coef:g} * {self.node!r})"
 
 
+@dataclass(frozen=True, slots=True)
+class _Mul(ContrastExpr):
+    left: ContrastExpr
+    right: ContrastExpr
+
+    def __repr__(self) -> str:
+        return f"({self.left!r} * {self.right!r})"
+
+
+@dataclass(frozen=True, slots=True)
+class _Div(ContrastExpr):
+    left: ContrastExpr
+    right: ContrastExpr
+
+    def __repr__(self) -> str:
+        return f"({self.left!r} / {self.right!r})"
+
+
+@dataclass(frozen=True, slots=True)
+class _Log(ContrastExpr):
+    node: ContrastExpr
+
+    def __repr__(self) -> str:
+        return f"log({self.node!r})"
+
+
+@dataclass(frozen=True, slots=True)
+class _Exp(ContrastExpr):
+    node: ContrastExpr
+
+    def __repr__(self) -> str:
+        return f"exp({self.node!r})"
+
+
+def _is_linear(node: ContrastExpr) -> bool:
+    if isinstance(node, EstRef):
+        return True
+    if isinstance(node, _Add):
+        return _is_linear(node.left) and _is_linear(node.right)
+    if isinstance(node, _Scale):
+        return _is_linear(node.node)
+    return False
+
+
 def _accumulate(node: ContrastExpr, weight: float, out: dict[Any, float]) -> None:
     if isinstance(node, EstRef):
         out[node.key] = out.get(node.key, 0.0) + weight
@@ -164,8 +217,69 @@ def _accumulate(node: ContrastExpr, weight: float, out: dict[Any, float]) -> Non
         _accumulate(node.right, weight, out)
     elif isinstance(node, _Scale):
         _accumulate(node.node, weight * node.coef, out)
-    else:  # pragma: no cover — unreachable through the public operators
-        raise TypeError(f"unknown contrast expression node: {type(node).__name__}")
+    else:  # pragma: no cover — guarded by is_linear()
+        raise TypeError(f"not a linear node: {type(node).__name__}")
+
+
+def _collect_keys(node: ContrastExpr, out: list[Any]) -> None:
+    if isinstance(node, EstRef):
+        out.append(node.key)
+    elif isinstance(node, (_Add, _Mul, _Div)):
+        _collect_keys(node.left, out)
+        _collect_keys(node.right, out)
+    elif isinstance(node, (_Scale, _Log, _Exp)):
+        _collect_keys(node.node, out)
+
+
+def _evaluate(
+    node: ContrastExpr, theta: np.ndarray, index: Mapping[Any, int]
+) -> tuple[float, np.ndarray]:
+    """Value and gradient of the tree at ``theta`` (product, quotient and
+    chain rules), the delta method's two ingredients."""
+    k = len(theta)
+    if isinstance(node, EstRef):
+        g = np.zeros(k)
+        g[index[node.key]] = 1.0
+        return float(theta[index[node.key]]), g
+    if isinstance(node, _Const):
+        return node.value, np.zeros(k)
+    if isinstance(node, _Add):
+        va, ga = _evaluate(node.left, theta, index)
+        vb, gb = _evaluate(node.right, theta, index)
+        return va + vb, ga + gb
+    if isinstance(node, _Scale):
+        v, g = _evaluate(node.node, theta, index)
+        return node.coef * v, node.coef * g
+    if isinstance(node, _Mul):
+        va, ga = _evaluate(node.left, theta, index)
+        vb, gb = _evaluate(node.right, theta, index)
+        return va * vb, va * gb + vb * ga
+    if isinstance(node, _Div):
+        va, ga = _evaluate(node.left, theta, index)
+        vb, gb = _evaluate(node.right, theta, index)
+        if vb == 0.0:
+            raise MethodError(
+                title="Division by a zero estimate",
+                detail=f"The denominator {node.right!r} evaluates to 0, so {node!r} is undefined.",
+                code="CONTRAST_DIV_ZERO",
+                where="contrast",
+            )
+        return va / vb, (ga * vb - va * gb) / (vb * vb)
+    if isinstance(node, _Log):
+        v, g = _evaluate(node.node, theta, index)
+        if v <= 0.0:
+            raise MethodError(
+                title="Log of a non-positive estimate",
+                detail=f"{node.node!r} evaluates to {v:g}, so {node!r} is undefined.",
+                code="CONTRAST_LOG_DOMAIN",
+                where="contrast",
+            )
+        return float(np.log(v)), g / v
+    if isinstance(node, _Exp):
+        v, g = _evaluate(node.node, theta, index)
+        e = float(np.exp(v))
+        return e, e * g
+    raise TypeError(f"unknown contrast expression node: {type(node).__name__}")
 
 
 def estd(*key: Any) -> EstRef:
@@ -178,12 +292,16 @@ def estd(*key: Any) -> EstRef:
     and an unknown key fails loudly listing the valid ones — see
     ``result.keys()``.
 
+    Linear combinations are exact; ratios, products, ``log()`` and ``exp()``
+    are estimated by the delta method on the same design df.
+
     Examples
     --------
     >>> r.contrast(estd("E") - estd("H"))
     >>> r.contrast(
     ...     {"trend": -estd(1) + estd(3), "mid vs rest": estd(2) - 0.5 * (estd(1) + estd(3))}
     ... )
+    >>> r.contrast({"ratio": estd(2) / estd(1), "pct change": estd(2) / estd(1) - 1})
     """
     if not key:
         raise TypeError("estd() requires a key identifying an estimand")
@@ -310,16 +428,16 @@ class Contrast:
 
 def _normalize_contrasts(
     contrasts: Mapping[Any, Any] | ContrastExpr,
-) -> dict[str, dict[Any, float]]:
-    """Resolve the accepted input forms to ``{name: {key: coef}}``.
+) -> dict[str, dict[Any, float] | ContrastExpr]:
+    """Resolve the accepted input forms to ``{name: spec}``.
 
-    One contrast is a :class:`ContrastExpr` or a ``{key: coef, ...}`` dict;
+    A spec is a :class:`ContrastExpr` or a linear ``{key: coef, ...}`` dict;
     several are ``{name: expr-or-dict, ...}``. The dict forms are told apart
     by the values: all-mapping/expression values mean the named form. Mixing
     coefficient values with named specs is an error.
     """
     if isinstance(contrasts, ContrastExpr):
-        return {"contrast": contrasts.coefs()}
+        return {"contrast": contrasts}
     if not isinstance(contrasts, Mapping) or not contrasts:
         raise MethodError(
             title="Invalid contrast specification",
@@ -336,7 +454,7 @@ def _normalize_contrasts(
     is_named = [isinstance(v, (Mapping, ContrastExpr)) for v in contrasts.values()]
     if all(is_named):
         return {
-            str(name): spec.coefs() if isinstance(spec, ContrastExpr) else dict(spec)
+            str(name): spec if isinstance(spec, ContrastExpr) else dict(spec)
             for name, spec in contrasts.items()
         }
     if any(is_named):
@@ -420,12 +538,14 @@ def linear_contrast(
     method: str,
     aliases: Mapping[Any, int] | None = None,
 ) -> Contrast:
-    """``L θ̂`` / ``L V Lᵀ`` over named estimates.
+    """``f(θ̂)`` with variance ``gᵀ V g`` over named estimates.
 
     Sparse specification: keys not mentioned in a contrast get coefficient 0;
     unknown keys fail loudly (R ``svycontrast`` parity — a typo must not
-    silently drop a term). A contrast placing nonzero weight on an NA estimate
-    yields an NA row; the other contrasts are unaffected.
+    silently drop a term). Linear contrasts use their coefficient row as the
+    gradient, so ``L θ̂`` / ``L V Lᵀ`` is reproduced exactly; nonlinear ones
+    are delta-method estimates. A contrast touching an NA estimate yields an
+    NA row; the other contrasts are unaffected.
     """
     from scipy import stats
 
@@ -442,16 +562,16 @@ def linear_contrast(
         )
 
     resolver = KeyResolver(keys, aliases)
-    m = len(named)
-    L = np.zeros((m, k))
-    for row, (name, spec) in enumerate(named.items()):
+
+    def resolve_all(name: str, spec_keys: Sequence[Any]) -> dict[Any, int]:
+        index: dict[Any, int] = {}
         unknown = []
-        for key, coef in spec.items():
+        for key in spec_keys:
             idx = resolver.resolve(key)
             if idx is None:
                 unknown.append(key)
             else:
-                L[row, idx] = float(coef)
+                index[key] = idx
         if unknown:
             raise MethodError(
                 title="Unknown contrast key",
@@ -465,19 +585,35 @@ def linear_contrast(
                 got=unknown,
                 expected=resolver.keys,
             )
+        return index
 
     # NA propagation: any touched NA estimate (or NA variance) poisons only
     # the contrasts touching it, mirroring R's contrast() NA handling. NAs
     # are zeroed before the products (0-coefficient rows must stay clean —
     # matmul would smear 0·NaN = NaN everywhere) and re-poisoned after.
     bad = ~np.isfinite(est_arr) | ~np.isfinite(np.diag(vcov))
-    touched_bad = (L[:, bad] != 0).any(axis=1) if bad.any() else np.zeros(m, dtype=bool)
-    if bad.any():
-        est_arr = np.where(bad, 0.0, est_arr)
-        vcov = np.where(np.isfinite(vcov), vcov, 0.0)
+    theta = np.where(bad, 0.0, est_arr)
+    vcov = np.where(np.isfinite(vcov), vcov, 0.0)
 
-    c_est = L @ est_arr
-    c_cov = L @ vcov @ L.T
+    m = len(named)
+    G = np.zeros((m, k))
+    c_est = np.zeros(m)
+    touched_bad = np.zeros(m, dtype=bool)
+    for row, (name, spec) in enumerate(named.items()):
+        if isinstance(spec, ContrastExpr):
+            index = resolve_all(name, spec.keys())
+            touched_bad[row] = any(bad[i] for i in index.values())
+            if touched_bad[row]:
+                continue
+            c_est[row], G[row] = _evaluate(spec, theta, index)
+        else:
+            index = resolve_all(name, list(spec))
+            for key, coef in spec.items():
+                G[row, index[key]] = float(coef)
+            touched_bad[row] = bool((G[row, bad] != 0).any()) if bad.any() else False
+            c_est[row] = G[row] @ theta
+
+    c_cov = G @ vcov @ G.T
     c_var = np.diag(c_cov).copy()
     c_est[touched_bad] = np.nan
     c_var[touched_bad] = np.nan
