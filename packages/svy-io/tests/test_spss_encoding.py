@@ -78,7 +78,9 @@ def test_sas_utf8_lossy_round_trips_clean_data():
     strict = read_sas(data, catalog_path=catalog)
     lossy = read_sas(data, catalog_path=catalog, encoding="utf8-lossy")
     assert lossy[0].equals(strict[0])
-    assert lossy[1]["value_labels"] == strict[1]["value_labels"]
+    # value_labels is emitted in hash order; compare as a mapping
+    by_set = lambda meta: {vl["set_name"]: vl["mapping"] for vl in meta["value_labels"]}  # noqa: E731
+    assert by_set(lossy[1]) == by_set(strict[1])
     assert lossy[1]["had_invalid_utf8"] is False
 
 
