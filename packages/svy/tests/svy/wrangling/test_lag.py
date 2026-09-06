@@ -117,10 +117,8 @@ def test_transition_table_and_paired_change_recipes():
     ).to_polars()
     cells = {(int(r["emp_lag1"]), int(r["emp"])): r["est"] for r in tr.iter_rows(named=True)}
     assert cells == pytest.approx({(0, 0): 0.5, (0, 1): 0.5, (1, 0): 0.5, (1, 1): 0.5})
-    # the joint table after subsetting rows to the target wave
-    tab = s.wrangling.filter_records(svy.col("wave") == 2).categorical.tabulate(
-        "emp_lag1", "emp", units="count"
-    )
+    # the joint table on the target wave (a domain, like R's subset())
+    tab = s.categorical.tabulate("emp_lag1", "emp", units="count", where=svy.col("wave") == 2)
     assert tab.to_polars()["est"].sum() == pytest.approx(4.0)
     tt = s.categorical.ttest("inc", y_pair="inc_lag1", where=svy.col("wave") == 2, drop_nulls=True)
     assert tt.estimates[0].est == pytest.approx((2 + 1 + 3 + 1) / 4)

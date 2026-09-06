@@ -207,6 +207,7 @@ pub fn estimate_proportions(
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
     calib: Option<&CalibSweep>,
+    domain: Option<&BooleanChunked>,
 ) -> PolarsResult<(
     Vec<String>,
     Vec<f64>,
@@ -215,12 +216,7 @@ pub fn estimate_proportions(
     Vec<f64>,
     u32,
 )> {
-    let mut levels: Vec<String> = y
-        .unique()?
-        .iter()
-        .filter_map(|v| v.map(|s| s.to_string()))
-        .collect();
-    sort_levels(&mut levels);
+    let levels = domain_levels(y, domain)?;
 
     let k = levels.len();
     let df_val = degrees_of_freedom(weights, strata, psu)?;
@@ -240,6 +236,12 @@ pub fn estimate_proportions(
     // indicators[j][i] = value for level j at row i (0.0, 1.0, or NaN-sentinel None)
     let mut indicators: Vec<Vec<Option<f64>>> = vec![vec![Some(0.0); n_rows]; k];
     for (i, opt_val) in y.iter().enumerate() {
+        // Out-of-domain rows keep every indicator at 0 (their weight is 0):
+        // they stay in the frame so the PSU structure is intact, and a null
+        // key there is not missing data.
+        if !in_domain(domain, i) {
+            continue;
+        }
         match opt_val {
             None => {
                 for j in 0..k {
@@ -293,6 +295,35 @@ pub fn estimate_proportions(
     Ok((levels, proportions, ses, cov, deff_vec, df_val))
 }
 
+/// Row `i` is in the tabulation domain (every row when there is no mask).
+#[inline]
+pub fn in_domain(domain: Option<&BooleanChunked>, i: usize) -> bool {
+    domain.map_or(true, |m| m.get(i).unwrap_or(false))
+}
+
+/// Sorted distinct keys among the in-domain rows: an out-of-domain row's
+/// category never forms a cell.
+pub fn domain_levels(
+    y: &StringChunked,
+    domain: Option<&BooleanChunked>,
+) -> PolarsResult<Vec<String>> {
+    let mut levels: Vec<String> = match domain {
+        None => y
+            .unique()?
+            .iter()
+            .filter_map(|v| v.map(|s| s.to_string()))
+            .collect(),
+        Some(m) => y
+            .filter(m)?
+            .unique()?
+            .iter()
+            .filter_map(|v| v.map(|s| s.to_string()))
+            .collect(),
+    };
+    sort_levels(&mut levels);
+    Ok(levels)
+}
+
 // ============================================================================
 // Total estimation
 // ============================================================================
@@ -309,6 +340,7 @@ pub fn estimate_totals(
     singleton_method: Option<&str>,
     calib: Option<&CalibSweep>,
     levels: &[String],
+    domain: Option<&BooleanChunked>,
 ) -> PolarsResult<(Vec<f64>, Vec<f64>)> {
     let mut totals = Vec::with_capacity(levels.len());
     let mut total_ses = Vec::with_capacity(levels.len());
@@ -323,6 +355,9 @@ pub fn estimate_totals(
     let kk = levels.len();
     let mut indicators: Vec<Vec<Option<f64>>> = vec![vec![Some(0.0); n_rows]; kk];
     for (i, opt_val) in y.iter().enumerate() {
+        if !in_domain(domain, i) {
+            continue;
+        }
         match opt_val {
             None => {
                 for j in 0..kk {
@@ -502,7 +537,26 @@ pub fn count_strata_psus(
     strata: Option<&Column>,
     psu: Option<&Column>,
     n: usize,
+    domain: Option<&BooleanChunked>,
 ) -> (usize, usize) {
+    // R's degf() on a subset design counts the units with an in-domain row.
+    let filtered: (Option<Column>, Option<Column>) = match domain {
+        Some(m) => (
+            strata.and_then(|c| c.filter(m).ok()),
+            psu.and_then(|c| c.filter(m).ok()),
+        ),
+        None => (None, None),
+    };
+    let strata = if domain.is_some() {
+        filtered.0.as_ref()
+    } else {
+        strata
+    };
+    let psu = if domain.is_some() {
+        filtered.1.as_ref()
+    } else {
+        psu
+    };
     match (strata, psu) {
         (Some(s), Some(p)) => {
             let n_strata = s.unique().map(|u| u.len()).unwrap_or(1);

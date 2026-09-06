@@ -4,7 +4,9 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ## [Unreleased]
 
-<!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
+### Added
+
+- `domain_col` on `tabulate_rs`: a Boolean column marking the rows of a subpopulation. Out-of-domain rows keep their design columns and get weight 0 (R's `subset()` on a design), so the PSU structure is intact and `degrees_of_freedom` counts the units with an in-domain row; cells are formed from in-domain keys only (a null key outside the domain is not missing), and the Rao-Scott `n`, strata and PSU counts are taken over in-domain rows. `estimate_proportions`, `estimate_totals` and `count_strata_psus` gain the matching `domain` parameter.
 
 ## [0.16.0] — 2026-08-30
 

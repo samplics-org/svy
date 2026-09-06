@@ -16,7 +16,7 @@ use crate::estimation::calib_sweep::{CalibSpec, CalibSweep, build_calib_sweep};
 
 use crate::categorical::ranktest::{RankScoreMethod, ranktest_k_sample, ranktest_two_sample};
 use crate::categorical::tabulation::{
-    count_strata_psus, estimate_proportions, estimate_totals, rao_scott, sort_levels,
+    count_strata_psus, domain_levels, estimate_proportions, estimate_totals, rao_scott,
 };
 use crate::categorical::ttest::{ttest_one_sample, ttest_one_sample_domain, ttest_two_sample};
 
@@ -677,7 +677,7 @@ fn compute_svyranktest_single(
     fpc_col=None, fpc_ssu_col=None, singleton_method=None,
     compute_totals=false,
     calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None,
-    calib_pins_total=None, calib_new_wgt=None,
+    calib_pins_total=None, calib_new_wgt=None, domain_col=None,
 ))]
 pub fn tabulate_rs(
     _py: Python,
@@ -698,6 +698,7 @@ pub fn tabulate_rs(
     calib_prev_wgt: Option<String>,
     calib_pins_total: Option<bool>,
     calib_new_wgt: Option<String>,
+    domain_col: Option<String>,
 ) -> PyResult<(PyDataFrame, PyDataFrame)> {
     let df: DataFrame = data.into();
     let calib = calib_kind.zip(calib_prev_wgt).and_then(|(kind, prev)| {
@@ -726,6 +727,7 @@ pub fn tabulate_rs(
         singleton_method.as_deref(),
         compute_totals,
         calib.as_ref(),
+        domain_col.as_deref(),
     )
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok((PyDataFrame(result.0), PyDataFrame(result.1)))
@@ -744,8 +746,42 @@ fn compute_tabulate(
     singleton_method: Option<&str>,
     compute_totals: bool,
     calib: Option<&CalibSweep>,
+    domain_col: Option<&str>,
 ) -> PolarsResult<(DataFrame, DataFrame)> {
-    let weights = df.column(weight_col)?.as_materialized_series().f64()?;
+    // Domain (`where=`): out-of-domain rows keep their design columns and
+    // get weight 0, exactly R's subset() on a survey design, so the PSU
+    // structure and the df are those of the full design restricted to the
+    // units with an in-domain row.
+    let domain: Option<BooleanChunked> = domain_col
+        .map(|c| {
+            df.column(c).and_then(|s| {
+                Ok(s.as_materialized_series()
+                    .cast(&DataType::Boolean)?
+                    .bool()?
+                    .clone())
+            })
+        })
+        .transpose()?;
+    let raw_weights = df.column(weight_col)?.as_materialized_series().f64()?;
+    let zeroed: Float64Chunked;
+    let weights: &Float64Chunked = match domain.as_ref() {
+        Some(m) => {
+            zeroed = raw_weights
+                .iter()
+                .enumerate()
+                .map(|(i, w)| {
+                    if m.get(i).unwrap_or(false) {
+                        w
+                    } else {
+                        Some(0.0)
+                    }
+                })
+                .collect::<Float64Chunked>()
+                .with_name(raw_weights.name().clone());
+            &zeroed
+        }
+        None => raw_weights,
+    };
     // Design columns as owned Columns (cheap Arc clone); the variance/df kernels
     // dispatch on dtype. Tabulate always supplies String columns today.
     let strata = strata_col
@@ -771,7 +807,10 @@ fn compute_tabulate(
         .transpose()?;
 
     let is_two_way = colvar_col.is_some();
-    let n_obs = df.height();
+    let n_obs = match domain.as_ref() {
+        Some(m) => m.iter().filter(|v| v.unwrap_or(false)).count(),
+        None => df.height(),
+    };
 
     let rowvar_series = df.column(rowvar_col)?.as_materialized_series();
     let rowvar_str = rowvar_series.cast(&DataType::String)?;
@@ -810,6 +849,7 @@ fn compute_tabulate(
         fpc_ssu.as_ref(),
         singleton_method,
         calib,
+        domain.as_ref(),
     )?;
 
     let k = levels.len();
@@ -845,6 +885,7 @@ fn compute_tabulate(
             singleton_method,
             calib,
             &levels,
+            domain.as_ref(),
         )?
     } else {
         (proportions.clone(), ses.clone())
@@ -879,18 +920,8 @@ fn compute_tabulate(
         let colvar_str2 = colvar_series.cast(&DataType::String)?;
         let colvar_ca2 = colvar_str2.str()?;
 
-        let mut row_levels: Vec<String> = rowvar_ca
-            .unique()?
-            .iter()
-            .filter_map(|v| v.map(|s| s.to_string()))
-            .collect();
-        sort_levels(&mut row_levels);
-        let mut col_levels: Vec<String> = colvar_ca2
-            .unique()?
-            .iter()
-            .filter_map(|v| v.map(|s| s.to_string()))
-            .collect();
-        sort_levels(&mut col_levels);
+        let row_levels = domain_levels(rowvar_ca, domain.as_ref())?;
+        let col_levels = domain_levels(colvar_ca2, domain.as_ref())?;
 
         let nr = row_levels.len();
         let nc = col_levels.len();
@@ -916,7 +947,8 @@ fn compute_tabulate(
             }
         }
 
-        let (n_strata_count, n_psu_count) = count_strata_psus(strata.as_ref(), psu.as_ref(), n_obs);
+        let (n_strata_count, n_psu_count) =
+            count_strata_psus(strata.as_ref(), psu.as_ref(), n_obs, domain.as_ref());
 
         let (p_chisq, p_df, p_p, p_adj_f, p_adj_ndf, p_adj_ddf, p_adj_p) = rao_scott(
             &prop_ordered,

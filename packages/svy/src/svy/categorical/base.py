@@ -38,11 +38,10 @@ from svy.core.types import (
     Number,
     WhereArg,
 )
+from svy.errors import MethodError
 from svy.ui.printing import format_where_clause
 from svy.utils.checks import assert_no_missing, drop_missing
-from svy.utils.helpers import (
-    _scale_weights_for_units,
-)
+from svy.utils.where import _compile_where
 
 
 # Rust backend
@@ -151,6 +150,7 @@ class Categorical:
         *,
         units: Literal["proportion", "percent", "count"] = "proportion",
         count_total: float | int | None = None,
+        where: WhereArg = None,
         alpha: float = 0.05,
         drop_nulls: bool = False,
         use_labels: bool | None = None,
@@ -164,6 +164,12 @@ class Categorical:
             Variable for table rows.
         colvar : str | None
             Variable for table columns (creates two-way table). Default None.
+        where : WhereArg
+            Subpopulation (domain) filter, R's ``subset()`` on a design: rows
+            outside it keep their design columns and get weight 0, so the PSU
+            structure is intact and the df is that of the units with a row in
+            the domain. Cells are formed from the domain's categories only,
+            and a null key outside the domain is not missing data.
         units : str
             Output units: ``'proportion'``, ``'percent'``, or ``'count'``. Default ``'proportion'``.
         count_total : float | int | None
@@ -200,19 +206,61 @@ class Categorical:
         design = self._sample._design
 
         # required columns
-        cols = [rowvar] + ([colvar] if colvar else []) + design.specified_fields()
+        key_cols = [rowvar] + ([colvar] if colvar else [])
+        cols = key_cols + design.specified_fields()
         cols = self._sample._dedup_preserve_order(cols)
         # Carried through selection but deliberately out of `cols`, so the
         # null checks below never see them: a snapshotted cells column is null
         # wherever a row fell outside the adjustment.
         _rec_cols = [c for c in record_columns(design, local_data) if c not in cols]
+
+        # Domain mask: materialized as a column so it filters along with any
+        # row drop below (design nulls), then handed to the kernel.
+        domain_col: str | None = None
+        where_expr = _compile_where(where)
+        if where_expr is not None:
+            domain_col = "__svy_domain__"
+            local_data = local_data.with_columns(
+                where_expr.fill_null(False).cast(pl.Boolean).alias(domain_col)
+            )
+            _rec_cols.append(domain_col)
         local_data = local_data.select(cols + _rec_cols)
 
-        if drop_nulls:
-            valid_data = drop_missing(df=local_data, cols=cols, treat_infinite_as_missing=True)
+        if domain_col is None:
+            if drop_nulls:
+                valid_data = drop_missing(df=local_data, cols=cols, treat_infinite_as_missing=True)
+            else:
+                assert_no_missing(df=local_data, subset=cols)
+                valid_data = local_data
         else:
-            assert_no_missing(df=local_data, subset=cols)
-            valid_data = local_data
+            # Design columns must be complete everywhere; the keys only
+            # inside the domain. With drop_nulls a null key leaves the domain
+            # (weight 0) rather than the frame.
+            design_only = [c for c in cols if c not in key_cols]
+            if drop_nulls:
+                valid_data = (
+                    drop_missing(df=local_data, cols=design_only, treat_infinite_as_missing=True)
+                    if design_only
+                    else local_data
+                )
+                valid_data = valid_data.with_columns(
+                    (
+                        pl.col(domain_col)
+                        & pl.all_horizontal(pl.col(c).is_not_null() for c in key_cols)
+                    ).alias(domain_col)
+                )
+            else:
+                if design_only:
+                    assert_no_missing(df=local_data, subset=design_only)
+                assert_no_missing(df=local_data.filter(pl.col(domain_col)), subset=key_cols)
+                valid_data = local_data
+            if not valid_data.get_column(domain_col).any():
+                raise MethodError.not_applicable(
+                    where="Sample.categorical.tabulate",
+                    method="tabulate",
+                    reason="No rows are in scope for `where`.",
+                    hint="Check `where` and for nulls in the table variables.",
+                )
 
         # Create concatenated design columns
         _cc, _ = self._sample._create_concatenated_cols_from_lists(
@@ -257,19 +305,21 @@ class Categorical:
         # SE by the dropped numerator/denominator covariance term.
         _units = _normalize_units(units)
         wgt_arr = concat_data[weight_col].to_numpy().copy()
+        # Normalization is over the domain: out-of-domain weights are zeroed
+        # in the kernel, so the "sum to 1" contract refers to in-domain rows.
+        in_dom = concat_data[domain_col].to_numpy() if domain_col else None
+        base = wgt_arr if in_dom is None else wgt_arr[in_dom]
         if count_total is not None:
-            wgt_arr = _scale_weights_for_units(
-                wgt_arr, units=_TableUnits.PROPORTION, count_total=None
-            )
+            wgt_arr = wgt_arr / float(base.sum())
             _display_scale = float(count_total)
         elif _units is _TableUnits.PERCENT:
-            wgt_arr = _scale_weights_for_units(
-                wgt_arr, units=_TableUnits.PROPORTION, count_total=None
-            )
+            wgt_arr = wgt_arr / float(base.sum())
             _display_scale = 100.0
+        elif _units is _TableUnits.PROPORTION:
+            wgt_arr = wgt_arr / float(base.sum())
+            _display_scale = 1.0
         else:
-            # PROPORTION (0-1, centered) or bare COUNT (raw weights, totals).
-            wgt_arr = _scale_weights_for_units(wgt_arr, units=_units, count_total=None)
+            # bare COUNT: raw weights, totals.
             _display_scale = 1.0
         concat_data = concat_data.with_columns(
             pl.Series(name="__svy_scaled_wgt__", values=wgt_arr)
@@ -287,7 +337,19 @@ class Categorical:
         concat_data = concat_data.with_columns([pl.col(c).cast(pl.String) for c in _cast_cols])
 
         # Determine whether to compute totals (weights not normalized)
-        compute_totals = abs(float(wgt_arr.sum()) - 1.0) > 1e-6
+        in_sum = float(wgt_arr.sum() if in_dom is None else wgt_arr[in_dom].sum())
+        compute_totals = abs(in_sum - 1.0) > 1e-6
+
+        # FPC, from the full frame: n_h counts every sampled unit of the
+        # stratum whether or not it has an in-domain row, as R's subset()
+        # keeps the fpc of the parent design.
+        fpc_col = fpc_ssu_col = None
+        if design.pop_size is not None:
+            from svy.estimation._fpc import compute_fpc_columns
+
+            concat_data, fpc_col, fpc_ssu_col = compute_fpc_columns(
+                concat_data, design.pop_size, strata_col, psu_col, ssu_col
+            )
 
         # Call Rust backend
         cells_df, stats_df = rs.tabulate_rs(
@@ -298,7 +360,10 @@ class Categorical:
             strata_col=strata_col,
             psu_col=psu_col,
             ssu_col=ssu_col,
+            fpc_col=fpc_col,
+            fpc_ssu_col=fpc_ssu_col,
             compute_totals=compute_totals,
+            domain_col=domain_col,
             **calib_kwargs(self._sample, concat_data),
         )
 
@@ -396,8 +461,9 @@ class Categorical:
             )
 
         # levels for display
-        rowvals = concat_data[rowvar].unique().sort().to_list()
-        colvals = concat_data[colvar].unique().sort().to_list() if colvar else None
+        _dom_data = concat_data.filter(pl.col(domain_col)) if domain_col else concat_data
+        rowvals = _dom_data[rowvar].unique().sort().to_list()
+        colvals = _dom_data[colvar].unique().sort().to_list() if colvar else None
 
         metadata = getattr(self._sample, "_metadata", None)
 

@@ -15,13 +15,19 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
   s.estimation.mean("inc", by="wave").contrast(svy.estd(3) / svy.estd(1) - 1)   # percent change
   ```
 
-- **`wrangling.lag(cols, n=1)`** — the one panel primitive: the value of a column at the case's wave `n` steps back (a lead if negative), null across a skipped wave as Stata's `L.y` (`gaps="skip"` takes the previous observed row). Transitions are `prop(y, by="y_lag1", where=wave == t, drop_nulls=True)`; paired change is the existing `ttest(y, y_pair="y_lag1", where=...)`.
+- **`wrangling.lag(cols, n=1)`** — the one panel primitive: the value of a column at the case's wave `n` steps back (a lead if negative), null across a skipped wave as Stata's `L.y` (`gaps="skip"` takes the previous observed row). Transitions are `tabulate("y_lag1", "y", where=wave == t)` or `prop(y, by="y_lag1", where=wave == t, drop_nulls=True)`; paired change is the existing `ttest(y, y_pair="y_lag1", where=..., drop_nulls=True)`.
 
-- **`weighting.adjust()` on a panel** applies the nonresponse factor to the case: the new weight is written to every row of the case, and a case with earlier rows but none in scope is a nonrespondent — attriters need no row to be adjusted for. `respondents_only` drops nonrespondents at the scope waves only. Chain one call per wave with `where=col("wave") == t` to build longitudinal weights.
+- **`weighting.adjust()` on a panel** applies the nonresponse factor to the case: every row of the case gets its own weight times the case's factor (so a case-level base weight stays case-level), a nonrespondent case gets 0 on all its rows, and a case with earlier rows but none in scope is a nonrespondent — attriters need no row to be adjusted for. `respondents_only` drops nonrespondents at the scope waves only. Chain one call per wave with `where=col("wave") == t` to build longitudinal weights.
+
+- **`categorical.tabulate(where=)`** — a subpopulation table with R's `subset()` semantics: rows outside the domain keep their design columns and get weight 0, so the PSU structure and the design df are those of the full design (matching `svymean(~interaction(...), subset(d, ...))`, `svytotal` and `svychisq` to 1e-9). Cells are formed from the domain's categories only, and a null key outside the domain is not missing data.
 
 - **Delta-method contrasts.** `svy.estd()` expressions now accept `*`, `/`, constants, `.log()` and `.exp()`: ratios, percent change and log-ratios are estimated by the delta method on the same design df, matching R `svycontrast` to 1e-11. Linear expressions keep the exact `L V Lᵀ` path; the `{key: coef}` dict form stays linear.
 
 - **`panel_syn_2026`** — a bundled synthetic three-wave panel (1200 cases, ~15% attrition per wave, producer longitudinal weights, a binary and a continuous outcome) for the panel tutorial and tests.
+
+### Fixed
+
+- `categorical.tabulate()` ignored `Design.pop_size`: every table on a design with a finite-population correction reported the fpc-free standard errors (the `ttest` facade had the same gap). The fpc is now applied, matching R `svymean(~interaction(...))` and `svychisq` on an `fpc=` design.
 
 ### Changed
 
