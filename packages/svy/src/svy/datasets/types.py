@@ -248,9 +248,7 @@ class DatasetCatalog(tuple):
         table.add_column("cols", justify="right", no_wrap=True)
         table.add_column("size", justify="right", no_wrap=True)
         for d in self:
-            table.add_row(
-                d.slug, d.title, f"{d.n_rows:,}", str(d.n_cols), _fmt_size(d.size_bytes)
-            )
+            table.add_row(d.slug, d.title, f"{d.n_rows:,}", str(d.n_cols), _fmt_size(d.size_bytes))
 
         yield make_panel([header, Text(""), table], title="Datasets", obj=self, kind="panel")
 

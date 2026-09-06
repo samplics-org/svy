@@ -447,10 +447,7 @@ class TestGLMMarginInvariants:
         """Margins average over the fitted rows, so covariate nulls
         (dropped at fit time) cannot produce NaN margins."""
         data = api_binary.with_columns(
-            pl.when(pl.int_range(pl.len()) < 5)
-            .then(None)
-            .otherwise(pl.col("ell"))
-            .alias("ell")
+            pl.when(pl.int_range(pl.len()) < 5).then(None).otherwise(pl.col("ell")).alias("ell")
         )
         sample = Sample(data, Design(wgt="pw"))
         model = sample.glm.fit(y="y_bin", x=["ell", "meals"], family=DistFamily.BINOMIAL)

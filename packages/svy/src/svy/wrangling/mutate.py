@@ -160,8 +160,7 @@ def mutate(
         ready = [
             name
             for name in pending
-            if compiled[name][1] <= current_cols
-            and not (compiled[name][1] & (pending - {name}))
+            if compiled[name][1] <= current_cols and not (compiled[name][1] & (pending - {name}))
         ]
         if not ready:
             break

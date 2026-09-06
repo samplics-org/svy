@@ -26,6 +26,7 @@ from svy.wrangling.columns import remove_columns as _remove_columns
 from svy.wrangling.columns import rename_columns as _rename_columns
 from svy.wrangling.labels import apply_labels as _apply_labels
 from svy.wrangling.mutate import mutate as _mutate
+from svy.wrangling.panel import lag as _lag
 from svy.wrangling.rows import distinct as _distinct
 from svy.wrangling.rows import filter_records as _filter_records
 from svy.wrangling.rows import order_by as _order_by
@@ -339,6 +340,29 @@ class Wrangling:
     ) -> "Sample":
         """Add a row index column."""
         return _with_row_index(self._sample, name=name, offset=offset, inplace=inplace)
+
+    # ------------------------------------------------------------------ #
+    # Panel
+    # ------------------------------------------------------------------ #
+
+    def lag(
+        self,
+        cols: str | Sequence[str],
+        n: int = 1,
+        *,
+        name: str | Sequence[str] | None = None,
+        gaps: Literal["null", "skip"] = "null",
+        inplace: bool = False,
+    ) -> "Sample":
+        """Value of ``cols`` at the case's wave ``n`` steps back (a lead if negative).
+
+        Needs a panel (``Design.case_id`` and ``Design.wave``). The default
+        name is ``<col>_lag<n>`` (``<col>_lead<n>`` for a lead); value labels
+        and type carry over. With ``gaps="null"`` (default) a case that
+        skipped the previous wave gets null, as Stata's ``L.y``; ``"skip"``
+        takes the previous observed row instead.
+        """
+        return _lag(self._sample, cols, n, name=name, gaps=gaps, inplace=inplace)
 
     # ------------------------------------------------------------------ #
     # Mutate

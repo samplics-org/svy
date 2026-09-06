@@ -5,6 +5,8 @@ Non-response weight adjustment.
 
 from __future__ import annotations
 
+import warnings
+
 from typing import TYPE_CHECKING
 
 import msgspec
@@ -20,7 +22,7 @@ except ImportError:  # pragma: no cover
 from svy.core.design import WgtAdjustment
 from svy.core.types import DomainScalarMap
 from svy.errors import MethodError
-from svy.weighting._engine import CellSpec, build_cells
+from svy.weighting._engine import CellSpec, _where_mask, build_cells
 from svy.weighting.trimming import _run_trim as _apply_trim
 from svy.weighting.types import TrimConfig
 
@@ -28,6 +30,7 @@ from svy.weighting.types import TrimConfig
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from svy.core.design import Design
     from svy.core.sample import Sample
     from svy.core.types import WhereArg
 
@@ -125,6 +128,93 @@ def _apply_nr(
     return out
 
 
+def _adjust_panel(
+    sample: Sample,
+    df: pl.DataFrame,
+    design: Design,
+    wgt_cols: list[str],
+    resp_status: str,
+    cells: str | Sequence[str] | None,
+    where: WhereArg,
+    resp_mapping: DomainScalarMap | None,
+    unknown_to_inelig: bool,
+    ctx: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Nonresponse factors on a panel: computed on the rows in scope, applied
+    to the case.
+
+    Two rules change against the cross-section: a case with a row at an
+    earlier wave but none in scope is a nonrespondent (attriters have no
+    row to filter on), and the factor is written to every row of the case so
+    the longitudinal weight is constant within it. Returns the new weights
+    (n x k), the encoded status of the real rows and the scope mask.
+    """
+    case_id, wave = design.case_id, design.wave
+    assert case_id is not None and wave is not None  # noqa: S101 — caller checked
+    n = df.height
+    mask = _where_mask(df, where, where=ctx)
+    scope = np.ones(n, dtype=bool) if mask is None else mask
+    resp_codes = _encode_resp_status(df.get_column(resp_status).to_numpy(), resp_mapping)
+
+    wave_vals = df.get_column(wave)
+    scope_waves = wave_vals.filter(pl.Series(scope)).unique()
+    if scope_waves.is_empty():
+        raise MethodError.not_applicable(
+            where=ctx,
+            method="adjust",
+            reason="No rows are in scope for this adjustment.",
+            hint="Check `where`.",
+        )
+    wave_subset = bool(np.array_equal(wave_vals.is_in(scope_waves.implode()).to_numpy(), scope))
+
+    virtual = df.head(0)
+    if wave_subset:
+        in_scope_cases = df.filter(pl.Series(scope)).select(case_id).unique()
+        virtual = (
+            df.filter(pl.col(wave) < scope_waves.min())
+            .join(in_scope_cases, on=case_id, how="anti")
+            .sort(wave)
+            .unique(subset=[case_id], keep="last", maintain_order=True)
+        )
+    else:
+        warnings.warn(
+            "adjust on a panel: `where` is not a set of waves, so cases with earlier "
+            "rows but none in scope are NOT added as nonrespondents (the "
+            "missing-in-scope rule was skipped). Scope one or more whole waves, e.g. "
+            f"where=col({wave!r}) == 2, to apply it.",
+            UserWarning,
+            stacklevel=4,
+        )
+
+    n_virtual = virtual.height
+    aug = pl.concat([df, virtual], how="vertical") if n_virtual else df
+    aug = aug.with_columns(
+        pl.Series("__svy_scope__", np.concatenate([scope, np.ones(n_virtual, dtype=bool)]))
+    )
+    spec = build_cells(aug, cells, pl.col("__svy_scope__"), where=ctx)
+    codes_aug = np.concatenate([resp_codes, np.ones(n_virtual, dtype=np.int64)])
+    old = aug.select(wgt_cols).to_numpy().astype(np.float64)
+    new = _apply_nr(old, spec, codes_aug, unknown_to_inelig)
+
+    factor = np.ones_like(old)
+    pos = old > 0
+    factor[pos] = new[pos] / old[pos]
+    assigned = np.ones(aug.height, dtype=bool) if spec.in_scope is None else spec.in_scope
+
+    fac_names = [f"__svy_f{i}" for i in range(len(wgt_cols))]
+    per_case = (
+        aug.select(case_id, wave)
+        .with_columns([pl.Series(nm, factor[:, i]) for i, nm in enumerate(fac_names)])
+        .filter(pl.Series(assigned))
+        .sort(wave)
+        .unique(subset=[case_id], keep="last", maintain_order=True)
+        .drop(wave)
+    )
+    joined = df.select(case_id).join(per_case, on=case_id, how="left", maintain_order="left")
+    case_factor = joined.select(fac_names).fill_null(1.0).to_numpy().astype(np.float64)
+    return old[:n] * case_factor, resp_codes, scope
+
+
 def adjust(
     sample: Sample,
     resp_status: str,
@@ -175,15 +265,38 @@ def adjust(
             reason=f"Column '{wgt_name}' already exists. Choose a different wgt_name.",
         )
 
-    spec = build_cells(df, cells, where, where=ctx)
+    rep_cols = list(design.rep_wgts.columns) if not ignore_reps and design.rep_wgts else []
+    wgt_cols = [wgt, *rep_cols]
 
-    wgt_arr = df.get_column(wgt).to_numpy().astype(np.float64)
-    resp_status_arr = df.get_column(resp_status).to_numpy()
-    resp_codes = _encode_resp_status(resp_status_arr, resp_mapping)
+    keep_mask: np.ndarray
+    if design.is_panel:
+        new_wgts, resp_codes, scope = _adjust_panel(
+            sample,
+            df,
+            design,
+            wgt_cols,
+            resp_status,
+            cells,
+            where,
+            resp_mapping,
+            unknown_to_inelig,
+            ctx,
+        )
+        # Nonrespondents leave at the scope waves only: their earlier rows
+        # stay, since they responded then.
+        keep_mask = ~scope | (resp_codes == 0)
+    else:
+        spec = build_cells(df, cells, where, where=ctx)
+        resp_codes = _encode_resp_status(df.get_column(resp_status).to_numpy(), resp_mapping)
+        old = df.select(wgt_cols).to_numpy().astype(np.float64)
+        new_wgts = _apply_nr(old, spec, resp_codes, unknown_to_inelig)
+        # Filter from the encoded codes (0 == respondent) — the single source
+        # of truth already used for the adjustment itself. Re-deriving the
+        # mask from raw strings was case-sensitive while the encoder is not,
+        # which could silently empty the sample.
+        keep_mask = resp_codes == 0
 
-    adj_wgt_arr = _apply_nr(wgt_arr.reshape(-1, 1), spec, resp_codes, unknown_to_inelig)[:, 0]
-
-    df = df.with_columns(pl.Series(wgt_name, adj_wgt_arr))
+    df = df.with_columns(pl.Series(wgt_name, new_wgts[:, 0]))
 
     if update_design_wgts:
         sample._push_design()
@@ -195,19 +308,10 @@ def adjust(
             wgt_adjustment=WgtAdjustment(kind="nonresponse", prev_wgt=wgt, new_wgt=wgt_name),
         )
 
-    if not ignore_reps and design.rep_wgts is not None:
-        rep_cols = design.rep_wgts.columns
-        wgts_arr = df.select(rep_cols).to_numpy()
-
-        adj_wgts_arr = _apply_nr(wgts_arr, spec, resp_codes, unknown_to_inelig)
-
+    if rep_cols:
         n_reps = len(rep_cols)
         new_rep_names = [f"{wgt_name}{i}" for i in range(1, n_reps + 1)]
-        wgts_df = pl.DataFrame(adj_wgts_arr, schema=new_rep_names)
-
-        sample._data = df.hstack(wgts_df)
-        df = sample._data
-
+        df = df.hstack(pl.DataFrame(new_wgts[:, 1:], schema=new_rep_names))
         if update_design_wgts:
             sample._design = sample._design.update(
                 rep_wgts=msgspec.structs.replace(design.rep_wgts, prefix=wgt_name, n_reps=n_reps)
@@ -216,11 +320,7 @@ def adjust(
     sample._data = df
 
     if respondents_only:
-        # Filter from the encoded codes (0 == respondent) — the single source
-        # of truth already used for the adjustment itself. Re-deriving the
-        # mask from raw strings was case-sensitive while the encoder is not,
-        # which could silently empty the sample.
-        sample._data = sample._data.filter(pl.Series("__resp_mask__", resp_codes == 0))
+        sample._data = sample._data.filter(pl.Series("__resp_mask__", keep_mask))
 
     if trimming is not None:
         if update_design_wgts:
@@ -237,12 +337,10 @@ def adjust(
             # point the design at the new columns for the trim, then restore.
             original_design = sample._design
             tmp_design = original_design.update(wgt=wgt_name)
-            if not ignore_reps and design.rep_wgts is not None:
+            if rep_cols:
                 tmp_design = tmp_design.update(
                     rep_wgts=msgspec.structs.replace(
-                        design.rep_wgts,
-                        prefix=wgt_name,
-                        n_reps=len(design.rep_wgts.columns),
+                        design.rep_wgts, prefix=wgt_name, n_reps=len(rep_cols)
                     )
                 )
             sample._design = tmp_design

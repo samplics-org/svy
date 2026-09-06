@@ -454,9 +454,7 @@ class TestTofuPinning:
         routes._routes.clear()
         routes.add_bytes("/data/toy.parquet", data2)
         with pytest.raises(DatasetError) as exc_info:
-            _cache.ensure_cached(
-                slug="toy", version="1.0", url=self._url(), sha256="", force=True
-            )
+            _cache.ensure_cached(slug="toy", version="1.0", url=self._url(), sha256="", force=True)
         assert exc_info.value.code == "DATASET_SHA_MISMATCH"
 
     def test_corrupted_cache_restored_from_pin(self, routes, make_parquet):

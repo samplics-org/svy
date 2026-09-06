@@ -74,7 +74,7 @@ def design_varies_within_case(
     base-wave stratum and PSU, because that is where the sampling variance
     comes from.
     """
-    cols = [c for c in cols if c in data.columns]
+    cols = [c for c in dict.fromkeys(cols) if c in data.columns and c != case_id]
     if not cols:
         return {}
     agg = data.group_by(case_id).agg([pl.col(c).n_unique().alias(c) for c in cols])

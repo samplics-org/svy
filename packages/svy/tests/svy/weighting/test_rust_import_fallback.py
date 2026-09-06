@@ -24,7 +24,8 @@ def test_every_rust_import_has_an_importerror_fallback():
         for alias in stmt.names
     }
     handler = next(
-        h for h in node.handlers
+        h
+        for h in node.handlers
         if h.type is not None and getattr(h.type, "id", None) == "ImportError"
     )
     assigned = {

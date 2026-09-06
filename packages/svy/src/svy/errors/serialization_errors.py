@@ -65,7 +65,9 @@ class SerializationError(SvyError):
         *,
         kind: str,
         known: Sequence[str],
-        hint: Optional[str] = "The payload may come from a newer svy; upgrade svy or re-serialize.",
+        hint: Optional[
+            str
+        ] = "The payload may come from a newer svy; upgrade svy or re-serialize.",
     ) -> "SerializationError":
         return cls(
             title="Unknown payload kind",

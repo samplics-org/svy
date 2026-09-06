@@ -81,9 +81,7 @@ def test_variant_coefficients_match_the_kernel_formulas(variant, expected):
 
 def test_user_scale_takes_precedence_over_the_method_default():
     rs = tuple(np.linspace(0.5, 1.5, 10))
-    assert BootstrapWgts(prefix="w", n_reps=10, scale=rs).coefficients() == pytest.approx(
-        list(rs)
-    )
+    assert BootstrapWgts(prefix="w", n_reps=10, scale=rs).coefficients() == pytest.approx(list(rs))
 
 
 def test_coefficients_follow_the_resolved_replicate_count(brr_sample):
@@ -479,9 +477,7 @@ def test_recovery_refuses_columns_without_the_delete_one_signature():
             stratum="stratum",
             psu="psu",
             wgt="wgt",
-            rep_wgts=JackknifeWgts(
-                prefix="b", n_reps=7, kind="jkn", stratum="stratum", psu="psu"
-            ),
+            rep_wgts=JackknifeWgts(prefix="b", n_reps=7, kind="jkn", stratum="stratum", psu="psu"),
         ),
     )
     assert s._design.rep_wgts.rep_coefs is None
@@ -576,9 +572,7 @@ def test_partial_zero_weights_inside_a_psu_do_not_break_recovery():
     built = svy.Sample(
         data=df, design=svy.Design(stratum="stratum", psu="psu", wgt="wgt")
     ).weighting.create_jk_wgts(rep_prefix="jk")
-    raw = built._data.select(
-        ["stratum", "psu", "wgt", "y"] + [f"jk{i}" for i in range(1, 8)]
-    )
+    raw = built._data.select(["stratum", "psu", "wgt", "y"] + [f"jk{i}" for i in range(1, 8)])
     s = svy.Sample(
         data=raw,
         design=svy.Design(
@@ -595,12 +589,10 @@ def test_a_fully_zero_weighted_psu_refuses_rather_than_guessing():
     """Such a PSU is zero in every replicate column, so it can never be
     identified as the one a given replicate deleted. Better a refusal than a
     vector built from the columns that could be read plus one guess."""
-    built = _zero_weight_sample(
-        [1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0]
-    ).weighting.create_jk_wgts(rep_prefix="jk")
-    raw = built._data.select(
-        ["stratum", "psu", "wgt", "y"] + [f"jk{i}" for i in range(1, 8)]
+    built = _zero_weight_sample([1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0]).weighting.create_jk_wgts(
+        rep_prefix="jk"
     )
+    raw = built._data.select(["stratum", "psu", "wgt", "y"] + [f"jk{i}" for i in range(1, 8)])
     s = svy.Sample(
         data=raw,
         design=svy.Design(
@@ -640,9 +632,7 @@ def test_rep_coefs_uses_the_real_column_names():
             stratum="stratum",
             psu="psu",
             wgt="wgt",
-            rep_wgts=JackknifeWgts(
-                prefix="REP", n_reps=8, stratum="stratum", psu="psu"
-            ),
+            rep_wgts=JackknifeWgts(prefix="REP", n_reps=8, stratum="stratum", psu="psu"),
         ),
     )
     assert list(s.rep_coefs) == [f"REP{i:03d}" for i in range(1, 9)]

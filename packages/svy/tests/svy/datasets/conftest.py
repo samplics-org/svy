@@ -232,9 +232,7 @@ def isolate_module_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, routes
         def __init__(self, *_args, **_kwargs):
             # Mirror the production client's redirect behavior so tests
             # exercise the post-redirect https check.
-            self._client = real_httpx_client(
-                transport=routes.transport(), follow_redirects=True
-            )
+            self._client = real_httpx_client(transport=routes.transport(), follow_redirects=True)
 
         def __enter__(self):
             return self._client

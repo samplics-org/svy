@@ -50,9 +50,7 @@ def jkn_sample(load_survey_data):
         stratum="stratum",
         psu="psu",
     )
-    design = Design(
-        case_id="id", wgt="weight", stratum="stratum", psu="psu", rep_wgts=rep_weights
-    )
+    design = Design(case_id="id", wgt="weight", stratum="stratum", psu="psu", rep_wgts=rep_weights)
     return Sample(data, design)
 
 

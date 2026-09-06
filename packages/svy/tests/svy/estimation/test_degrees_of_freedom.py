@@ -259,9 +259,7 @@ def jkn() -> pl.DataFrame:
 
 
 def _rep_sample(data: pl.DataFrame, df: int | None = None) -> Sample:
-    rep = RepWeights(
-        method="jackknife", prefix="rw", n_reps=N_REPS, df=df, scale=0.75
-    )
+    rep = RepWeights(method="jackknife", prefix="rw", n_reps=N_REPS, df=df, scale=0.75)
     return Sample(data, Design(wgt="w", stratum="stratum", psu="psu_id", rep_wgts=rep))
 
 
