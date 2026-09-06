@@ -72,7 +72,7 @@ def _to_frame(rows):
 def singleton_sample():
     """Stratified, clustered design containing two singleton strata (A, C)."""
     df = _to_frame(_rows_with_singletons())
-    design = svy.Design(row_index="id", stratum="stratum", psu="psu", wgt="weight")
+    design = svy.Design(case_id="id", stratum="stratum", psu="psu", wgt="weight")
     return svy.Sample(data=df, design=design)
 
 
@@ -81,7 +81,7 @@ def clean_sample():
     """Same shape but every stratum has >= 2 PSUs (no singletons)."""
     rows = [r for r in _rows_with_singletons() if r[1] in ("B", "D")]
     df = _to_frame(rows)
-    design = svy.Design(row_index="id", stratum="stratum", psu="psu", wgt="weight")
+    design = svy.Design(case_id="id", stratum="stratum", psu="psu", wgt="weight")
     return svy.Sample(data=df, design=design)
 
 

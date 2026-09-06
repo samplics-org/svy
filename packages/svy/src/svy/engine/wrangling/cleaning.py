@@ -49,7 +49,8 @@ def _design_with_renamed_columns(design: Any, renames: dict[str, str]) -> Any:
     new_hit = _map_name_in_design(d.hit, renames)
     new_mos = _map_name_in_design(d.mos, renames)
     new_pop_size = _map_name_in_design(d.pop_size, renames)
-    new_row_index = _map_name_in_design(d.row_index, renames)
+    new_case_id = _map_name_in_design(d.case_id, renames)
+    new_wave = _map_name_in_design(d.wave, renames)
 
     # Map Tuple-or-str fields
     new_stratum = _map_tuple_in_design(d.stratum, renames)
@@ -66,7 +67,8 @@ def _design_with_renamed_columns(design: Any, renames: dict[str, str]) -> Any:
         new_rep = _rep_wgts_with_renames(d.rep_wgts, renames)
 
     return d.update(
-        row_index=new_row_index,
+        case_id=new_case_id,
+        wave=new_wave,
         stratum=new_stratum,
         wgt=new_wgt,
         prob=new_prob,

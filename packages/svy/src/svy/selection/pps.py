@@ -329,7 +329,7 @@ def _pps(
         where="Sample.sampling.pps",
     )
 
-    cols = design.specified_fields()
+    cols = [SVY_ROW_INDEX, *design.specified_fields()]
     cols += _colspec_to_list(by)
     cols += _colspec_to_list(
         [
@@ -394,7 +394,7 @@ def _pps(
     mos_arr = data[design.mos].to_numpy()
     _warn_zero_mos(mos_arr, stratum_by_arr, drop_nulls=drop_nulls)
 
-    row_col = design.row_index or SVY_ROW_INDEX
+    row_col = SVY_ROW_INDEX
     frame = data[row_col].to_numpy()
 
     sel_idx, hits, probs, certainty = _select_pps(

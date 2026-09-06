@@ -147,16 +147,10 @@ def _check_output_col_names(
 
 
 def _ensure_row_index(sample) -> None:
-    """Add SVY_ROW_INDEX to the frame and design if missing."""
+    """Add the SVY_ROW_INDEX plumbing column to the frame if missing."""
     df = sample._data
     if SVY_ROW_INDEX not in df.columns:
-        try:
-            df = df.with_row_index(name=SVY_ROW_INDEX)
-        except Exception:
-            df = df.with_row_count(SVY_ROW_INDEX)
-        sample._data = df
-    if getattr(sample._design, "row_index", None) != SVY_ROW_INDEX:
-        sample._design = sample._design.fill_missing(row_index=SVY_ROW_INDEX)
+        sample._data = df.with_row_index(name=SVY_ROW_INDEX)
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +271,7 @@ def srs(
     )
 
     # -- Column slicing on eligible subset --------------------------------
-    cols: list[str] = design.specified_fields()
+    cols: list[str] = [SVY_ROW_INDEX, *design.specified_fields()]
     cols += _colspec_to_list(by)
     cols += _colspec_to_list(
         [
@@ -330,7 +324,7 @@ def srs(
     _warn_empty_strata(n_norm, pop_sizes)
     _warn_n_exceeds_population(n_norm, pop_sizes, wr=wr)
 
-    row_col = design.row_index or SVY_ROW_INDEX
+    row_col = SVY_ROW_INDEX
 
     # Guard: if where filtered out all rows, return src_df with null selection columns.
     if len(data) == 0:
@@ -435,7 +429,7 @@ def _srs_writeback(
         )
         # left join so non-eligible rows stay with null selection columns
         join_how = "left" if where_mask is not None else "inner"
-        df_new = src_df.join(other=temp, left_on=design.row_index, right_on=row_col, how=join_how)
+        df_new = src_df.join(other=temp, left_on=SVY_ROW_INDEX, right_on=row_col, how=join_how)
     else:
         prob_col = prob_name or design.prob or SVY_PROB
         if design.prob is not None:
@@ -456,7 +450,7 @@ def _srs_writeback(
         )
         # left join: non-eligible rows get null for prob/hit/weight
         join_how = "left" if where_mask is not None else "inner"
-        df_new = src_df.join(other=temp, left_on=design.row_index, right_on=row_col, how=join_how)
+        df_new = src_df.join(other=temp, left_on=SVY_ROW_INDEX, right_on=row_col, how=join_how)
         if join_how == "left":
             # weight is 1/prob only where prob is not null
             df_new = df_new.with_columns(

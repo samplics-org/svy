@@ -276,7 +276,7 @@ class Categorical:
         )
 
         strata_col = f"stratum{_INTERNAL_CONCAT_SUFFIX}" if design.stratum is not None else None
-        psu_col = f"psu{_INTERNAL_CONCAT_SUFFIX}" if design.psu is not None else None
+        psu_col = f"psu{_INTERNAL_CONCAT_SUFFIX}" if design.variance_psu is not None else None
         ssu_col = f"ssu{_INTERNAL_CONCAT_SUFFIX}" if design.ssu is not None else None
 
         # Cast all design columns to String in a single with_columns call

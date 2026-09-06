@@ -1169,7 +1169,7 @@ class Singleton:
         psu_col = idict.get("psu")
 
         if not psu_col:
-            psu_col = getattr(self._sample._design, "row_index", None) or SVY_ROW_INDEX
+            psu_col = SVY_ROW_INDEX
 
         return stratum_col, psu_col
 
@@ -1611,10 +1611,8 @@ class Singleton:
         # Get SSU column or fall back to row index
         idict = getattr(self._sample, "_internal_design", {}) or {}
         ssu_col = idict.get("ssu")
-        row_index_col = getattr(design, "row_index", None) or SVY_ROW_INDEX
-
         # The effective PSU for variance is SSU if available, else row index
-        effective_psu_source = ssu_col if ssu_col and ssu_col in data.columns else row_index_col
+        effective_psu_source = ssu_col if ssu_col and ssu_col in data.columns else SVY_ROW_INDEX
 
         singleton_keys = [s.stratum_key for s in singles]
         n_strata_before, n_psus_before = self._counts_before(data, stratum_col, psu_col)

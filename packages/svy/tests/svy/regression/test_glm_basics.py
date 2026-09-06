@@ -47,7 +47,7 @@ def survey_data():
 
 def test_glm_linear_gaussian(survey_data):
     """Test standard linear regression (Gaussian family) using the new unified API."""
-    design = Design(stratum="stratum", psu="psu", wgt="wgt", row_index="id")
+    design = Design(stratum="stratum", psu="psu", wgt="wgt", case_id="id")
     df = survey_data.with_row_index("id")
 
     sample = Sample(df, design)
@@ -89,7 +89,7 @@ def test_glm_linear_gaussian(survey_data):
 
 def test_glm_interaction(survey_data):
     """Test interaction terms using Cross()."""
-    design = Design(stratum="stratum", psu="psu", wgt="wgt", row_index="id")
+    design = Design(stratum="stratum", psu="psu", wgt="wgt", case_id="id")
     df = survey_data.with_row_index("id")
     sample = Sample(df, design)
 
@@ -122,7 +122,7 @@ def test_glm_interaction(survey_data):
 
 def test_glm_logistic_binomial(survey_data):
     """Test logistic regression (Binomial family)."""
-    design = Design(stratum="stratum", psu="psu", wgt="wgt", row_index="id")
+    design = Design(stratum="stratum", psu="psu", wgt="wgt", case_id="id")
     df = survey_data.with_row_index("id")
     sample = Sample(df, design)
 
@@ -156,7 +156,7 @@ def test_glm_design_handling(survey_data):
 
     df_aug = pl.concat([df, extra_row])
 
-    design = Design(stratum="stratum", psu="psu", wgt="wgt", row_index="id")
+    design = Design(stratum="stratum", psu="psu", wgt="wgt", case_id="id")
     sample = Sample(df_aug, design)
 
     # Fit simple model
@@ -181,7 +181,7 @@ def test_glm_missing_data_drop(survey_data):
         pl.when(pl.col("id") < 10).then(None).otherwise(pl.col("x")).alias("x_miss")
     )
 
-    design = Design(stratum="stratum", psu="psu", wgt="wgt", row_index="id")
+    design = Design(stratum="stratum", psu="psu", wgt="wgt", case_id="id")
     sample = Sample(df, design)
 
     # Fit with default drop_nulls=True

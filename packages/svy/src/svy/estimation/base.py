@@ -153,7 +153,7 @@ class Estimation:
             return (s.cast(pl.Categorical).to_physical().to_numpy(), s.unique().to_list())
 
         cache["stratum"] = _process_component(design.stratum, "stratum")
-        cache["psu"] = _process_component(design.psu, "psu")
+        cache["psu"] = _process_component(design.variance_psu, "psu")
 
         if design.ssu:
             ssu_cols = _colspec_to_list(design.ssu)
@@ -224,20 +224,18 @@ class Estimation:
                             )
                             data = data.with_columns(expr.alias(strata_col))
 
-            if design.psu:
-                if isinstance(design.psu, str):
-                    psu_col = design.psu
-                elif isinstance(design.psu, (list, tuple)):
-                    if len(design.psu) == 1:
-                        psu_col = design.psu[0]
+            var_psu = design.variance_psu
+            if var_psu:
+                if isinstance(var_psu, str):
+                    psu_col = var_psu
+                elif isinstance(var_psu, (list, tuple)):
+                    if len(var_psu) == 1:
+                        psu_col = var_psu[0]
                     else:
                         psu_col = f"_psu_{_INTERNAL_CONCAT_SUFFIX}"
                         if psu_col not in data.columns:
                             expr = pl.concat_str(
-                                [
-                                    pl.col(c).cast(pl.String).fill_null("__Null__")
-                                    for c in design.psu
-                                ],
+                                [pl.col(c).cast(pl.String).fill_null("__Null__") for c in var_psu],
                                 separator=_BY_SEP,
                             )
                             data = data.with_columns(expr.alias(psu_col))
@@ -1344,7 +1342,7 @@ class Estimation:
         # choosing one is the caller's to make, so this warns and proceeds
         # rather than switching. Warned for the explicit spelling too: the
         # hazard is in the number, not in who asked for it.
-        if design.rep_wgts is not None and design.stratum is None and design.psu is None:
+        if design.rep_wgts is not None and design.stratum is None and design.variance_psu is None:
             self._sample.warn(
                 code=WarnCode.TAYLOR_WITHOUT_DESIGN,
                 title="Taylor variance on a design with no stratum or psu",

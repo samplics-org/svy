@@ -17,6 +17,7 @@ from svy.metadata import LabellingCatalog
 def _cycle(strat, wgt_scale=1.0, extra=None, wgt_name="w"):
     df = pl.DataFrame(
         {
+            "id": [1, 2, 3, 4, 5, 6],
             "strat": strat,
             "psu": [1, 2, 1, 2, 3, 3],
             wgt_name: [x * wgt_scale for x in [10.0, 12.0, 8.0, 9.0, 11.0, 7.0]],
@@ -60,7 +61,7 @@ def test_wave_metadata(two_cycles):
 
 def test_default_wave_labels(two_cycles):
     c = svy.combine_samples(list(two_cycles))
-    assert c.meta.get("wave").labels == {1: "s1", 2: "s2"}
+    assert c.meta.get("wave").labels == {1: "wave 1", 2: "wave 2"}
 
 
 def test_adjust_none_keeps_weight(two_cycles):
@@ -220,14 +221,16 @@ def test_missing_psu_shared_mode_errors():
     df1, df2 = _cycle([1, 1, 2, 2, 1, 2]), _cycle([1, 1, 2, 2, 1, 2], 2.0)
     unclustered = svy.Sample(df2.drop("psu"), svy.Design(stratum="strat", wgt="w"))
     with pytest.raises(MethodError, match="role 'psu'"):
-        svy.combine_samples([_sample(df1), unclustered], units="shared")
+        svy.combine_samples([_sample(df1), unclustered], kind="panel", case_id="id")
 
 
 def test_knob_does_not_relax_shared_mode():
     df1, df2 = _cycle([1, 1, 2, 2, 1, 2]), _cycle([1, 1, 2, 2, 1, 2], 2.0)
     unclustered = svy.Sample(df2.drop("psu"), svy.Design(stratum="strat", wgt="w"))
     with pytest.raises(MethodError, match="role 'psu'"):
-        svy.combine_samples([_sample(df1), unclustered], units="shared", on_mixed_design="warn")
+        svy.combine_samples(
+            [_sample(df1), unclustered], kind="panel", case_id="id", on_mixed_design="warn"
+        )
 
 
 def test_srs_wave_missing_both_roles(two_cycles):
@@ -497,24 +500,151 @@ def test_identical_value_labels_merge(two_cycles):
     assert c.meta.get("x").label == "The X"
 
 
-# ── shared units (panel) mode ───────────────────────────────────────────────
+# ── panel mode ──────────────────────────────────────────────────────────────
 
 
-def test_shared_mode_identical_units():
+def test_panel_identical_units():
     df1, df2 = _cycle([1, 1, 2, 2, 1, 2]), _cycle([1, 1, 2, 2, 1, 2], 2.0)
-    c = svy.combine_samples([_sample(df1), _sample(df2)], units="shared")
+    c = svy.combine_samples([_sample(df1), _sample(df2)], kind="panel", case_id="id")
     assert c.design.stratum == ("strat",)  # NOT wave-qualified
     assert c.design.wgt == "w"  # adjust resolves to "none"
+    assert c.design.case_id == "id"
+    assert c.design.wave == "wave"
+    assert c.design.psu == ("psu",)
 
 
-def test_shared_mode_differing_units_errors(two_cycles):
-    with pytest.raises(MethodError, match="identical design units"):
-        svy.combine_samples(list(two_cycles), units="shared")
+def test_panel_units_absent_from_wave1_error(two_cycles):
+    with pytest.raises(MethodError, match="absent from sample 1"):
+        svy.combine_samples(list(two_cycles), kind="panel", case_id="id")
 
 
-def test_shared_mode_rejects_average(two_cycles):
+def test_panel_rejects_average(two_cycles):
     with pytest.raises(MethodError, match="half a person"):
-        svy.combine_samples(list(two_cycles), units="shared", adjust="average")
+        svy.combine_samples(list(two_cycles), kind="panel", adjust="average")
+
+
+def test_panel_requires_case_id():
+    df1, df2 = _cycle([1, 1, 2, 2, 1, 2]), _cycle([1, 1, 2, 2, 1, 2], 2.0)
+    with pytest.raises(MethodError, match="case_id"):
+        svy.combine_samples([_sample(df1), _sample(df2)], kind="panel")
+
+
+def test_panel_case_id_taken_from_designs():
+    df1, df2 = _cycle([1, 1, 2, 2, 1, 2]), _cycle([1, 1, 2, 2, 1, 2], 2.0)
+    d = svy.Design(stratum="strat", psu="psu", wgt="w", case_id="id")
+    c = svy.combine_samples([svy.Sample(df1, d), svy.Sample(df2, d)], kind="panel")
+    assert c.design.case_id == "id"
+
+
+def test_cs_alias_and_case_id_not_kept_on_cross_sections(two_cycles):
+    s1, s2 = two_cycles
+    c = svy.combine_samples([s1, s2], kind="cs", case_id="id")
+    assert c.design.case_id is None  # ids repeat across the stacked waves
+    assert c.design.wave == "wave"
+    assert c.design.stratum == ("wave", "strat")
+
+
+def test_cross_sections_keep_a_unique_declared_case_id():
+    df1 = _cycle([1, 1, 2, 2, 1, 2])
+    df2 = _cycle([3, 3, 4, 4, 3, 4]).with_columns(pl.col("id") + 10)
+    d = svy.Design(stratum="strat", psu="psu", wgt="w", case_id="id")
+    c = svy.combine_samples([svy.Sample(df1, d), svy.Sample(df2, d)])
+    assert c.design.case_id == "id"
+
+
+def test_units_keyword_removed(two_cycles):
+    with pytest.raises(TypeError):
+        svy.combine_samples(list(two_cycles), units="shared")  # type: ignore[call-arg]
+
+
+def test_invalid_kind(two_cycles):
+    with pytest.raises(MethodError, match="kind"):
+        svy.combine_samples(list(two_cycles), kind="shared")  # type: ignore[arg-type]
+
+
+def test_panel_case_id_missing_from_a_wave():
+    df1, df2 = _cycle([1, 1, 2, 2, 1, 2]), _cycle([1, 1, 2, 2, 1, 2], 2.0).drop("id")
+    with pytest.raises(MethodError, match="missing from sample"):
+        svy.combine_samples([_sample(df1), _sample(df2)], kind="panel", case_id="id")
+
+
+def test_panel_case_id_dtype_conflict():
+    df1 = _cycle([1, 1, 2, 2, 1, 2])
+    df2 = _cycle([1, 1, 2, 2, 1, 2], 2.0).with_columns(pl.col("id").cast(pl.String))
+    with pytest.raises(MethodError, match="conflicting dtypes"):
+        svy.combine_samples([_sample(df1), _sample(df2)], kind="panel", case_id="id")
+
+
+def test_panel_case_id_nulls():
+    df1 = _cycle([1, 1, 2, 2, 1, 2])
+    df2 = _cycle([1, 1, 2, 2, 1, 2], 2.0).with_columns(
+        pl.when(pl.col("id") == 3).then(None).otherwise(pl.col("id")).alias("id")
+    )
+    with pytest.raises(MethodError, match="nulls"):
+        svy.combine_samples([_sample(df1), _sample(df2)], kind="panel", case_id="id")
+
+
+def test_panel_case_id_duplicated_within_wave():
+    df1 = _cycle([1, 1, 2, 2, 1, 2])
+    df2 = _cycle([1, 1, 2, 2, 1, 2], 2.0).with_columns(pl.Series("id", [1, 1, 3, 4, 5, 6]))
+    with pytest.raises(MethodError, match="not unique in sample 2"):
+        svy.combine_samples([_sample(df1), _sample(df2)], kind="panel", case_id="id")
+
+
+def test_panel_empty_overlap_errors():
+    df1 = _cycle([1, 1, 2, 2, 1, 2])
+    df2 = _cycle([1, 1, 2, 2, 1, 2], 2.0).with_columns(pl.col("id") + 10)
+    with pytest.raises(MethodError, match="no case of wave"):
+        svy.combine_samples([_sample(df1), _sample(df2)], kind="panel", case_id="id")
+
+
+def test_panel_small_overlap_warns():
+    df1 = _cycle([1, 1, 2, 2, 1, 2])
+    # only ids 1 and 2 continue: 2 of 6 < 50%
+    df2 = _cycle([1, 1, 2, 2, 1, 2], 2.0).with_columns(pl.Series("id", [1, 2, 13, 14, 15, 16]))
+    with pytest.warns(UserWarning, match="Small panel overlap"):
+        c = svy.combine_samples([_sample(df1), _sample(df2)], kind="panel", case_id="id")
+    assert c.n_records == 12
+
+
+def test_panel_design_column_varies_within_case():
+    df1 = _cycle([1, 1, 2, 2, 1, 2])
+    df2 = _cycle([1, 1, 2, 2, 1, 2], 2.0).with_columns(pl.Series("psu", [2, 1, 1, 2, 3, 3]))
+    with pytest.raises(MethodError, match="vary within case_id"):
+        svy.combine_samples([_sample(df1), _sample(df2)], kind="panel", case_id="id")
+
+
+def test_panel_lost_psu_warns():
+    df1 = _cycle([1, 1, 2, 2, 1, 2])
+    df2 = _cycle([1, 1, 2, 2, 1, 2], 2.0).filter(pl.col("psu") != 3)
+    with pytest.warns(UserWarning, match="have no row in sample 2"):
+        c = svy.combine_samples([_sample(df1), _sample(df2)], kind="panel", case_id="id")
+    assert c.n_records == 10
+
+
+def test_panel_accepts_identical_replicate_designs():
+    df1, df2 = _cycle([1, 1, 2, 2, 1, 2]), _cycle([1, 1, 2, 2, 1, 2], 2.0)
+    s1 = _sample(df1).weighting.create_jk_wgts()
+    rep_cols = s1.design.rep_wgts.columns
+    reps = s1.data.select(["id", *rep_cols])
+    s2 = svy.Sample(df2.join(reps, on="id"), s1.design)
+    c = svy.combine_samples([s1, s2], kind="panel", case_id="id")
+    assert c.design.rep_wgts == s1.design.rep_wgts
+
+
+def test_panel_rejects_replicates_varying_within_case():
+    df1, df2 = _cycle([1, 1, 2, 2, 1, 2]), _cycle([1, 1, 2, 2, 1, 2], 2.0)
+    s1 = _sample(df1).weighting.create_jk_wgts()
+    s2 = _sample(df2).weighting.create_jk_wgts()
+    with pytest.raises(MethodError, match="replicate weight columns vary"):
+        svy.combine_samples([s1, s2], kind="panel", case_id="id")
+
+
+def test_panel_rejects_differing_replicate_designs(two_cycles):
+    df1, df2 = _cycle([1, 1, 2, 2, 1, 2]), _cycle([1, 1, 2, 2, 1, 2], 2.0)
+    s1 = _sample(df1).weighting.create_jk_wgts()
+    with pytest.raises(MethodError, match="different replicate-weight designs"):
+        svy.combine_samples([s1, _sample(df2)], kind="panel", case_id="id")
 
 
 # ── guards ──────────────────────────────────────────────────────────────────

@@ -242,7 +242,7 @@ class TestBrrCovariance:
             .with_columns(pl.col("income").cast(pl.Float64))
         )
         design = Design(
-            row_index="id",
+            case_id="id",
             wgt="weight",
             stratum="stratum",
             psu="psu",
@@ -277,7 +277,7 @@ class TestGlmContrast:
     def fit(self, apiclus1):
         s = Sample(
             apiclus1.with_row_index("row_id"),
-            Design(psu="dnum", wgt="pw", row_index="row_id"),
+            Design(psu="dnum", wgt="pw", case_id="row_id"),
         )
         return s.glm.fit(y="api00", x=["api99", Cat("stype")])
 

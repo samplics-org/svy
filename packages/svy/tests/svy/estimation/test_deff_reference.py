@@ -119,7 +119,7 @@ def _sample(weights) -> Sample:
                 "y": rng.normal(100.0, 20.0, n),
             }
         ),
-        Design(row_index="id", stratum="stratum", psu="psu", wgt="w"),
+        Design(case_id="id", stratum="stratum", psu="psu", wgt="w"),
     )
 
 
@@ -211,7 +211,7 @@ def large_fraction_sample() -> Sample:
     df = pl.read_csv(path, infer_schema_length=10000).with_columns(
         pl.col("y").cast(pl.Float64), pl.col("w").cast(pl.Float64), pl.col("st").cast(pl.String)
     )
-    return Sample(df, Design(row_index="id", stratum="st", wgt="w"))
+    return Sample(df, Design(case_id="id", stratum="st", wgt="w"))
 
 
 @pytest.mark.parametrize("ref,expected", [("wor", R_BIGF_WOR), ("wr", R_BIGF_WR)])
@@ -256,7 +256,7 @@ def _multi_sample() -> Sample:
                 "y2": rng.normal(50.0, 8.0, n),
             }
         ),
-        Design(row_index="id", stratum="stratum", psu="psu", wgt="w"),
+        Design(case_id="id", stratum="stratum", psu="psu", wgt="w"),
     )
 
 
