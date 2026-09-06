@@ -363,6 +363,25 @@ class TestContrastGuards:
         c1 = r.contrast(estd("Yes") - estd("No"))
         assert np.isfinite(c1.estimates[0].est)
 
+    def test_int_by_column_accepts_native_keys(self):
+        import polars as pl
+
+        df = pl.DataFrame(
+            {
+                "wave": pl.Series([1, 1, 1, 1, 2, 2, 2, 2], dtype=pl.Int64),
+                "y": [1.0, 2.0, 3.0, 4.0, 2.0, 3.0, 4.0, 6.0],
+                "w": [1.0] * 8,
+                "psu": [1, 2, 3, 4, 1, 2, 3, 4],
+            }
+        )
+        r = Sample(df, Design(psu="psu", wgt="w")).estimation.mean("y", by="wave")
+        by_str = r.contrast(estd("2") - estd("1")).estimates[0]
+        by_int = r.contrast(estd(2) - estd(1)).estimates[0]
+        assert by_int.est == by_str.est
+        assert by_int.se == by_str.se
+        with pytest.raises(MethodError, match="Valid keys"):
+            r.contrast(estd(3) - estd(1))
+
 
 class TestLabelResolution:
     """Contrast keys accept metadata value labels wherever unambiguous —

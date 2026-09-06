@@ -401,7 +401,12 @@ class KeyResolver:
             return self._exact[k]
         if k in self._fallback:
             return self._fallback[k]
-        return self._fallback.get(self._norm(k))
+        # by-levels arrive stringified from the kernel, so an int typed by
+        # the caller only meets its row through the normalized form.
+        nk = self._norm(k)
+        if nk in self._exact:
+            return self._exact[nk]
+        return self._fallback.get(nk)
 
 
 def linear_contrast(
