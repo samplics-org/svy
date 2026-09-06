@@ -120,9 +120,10 @@ def get_value_labels_for_column(meta: dict, col_name: str) -> dict[str, str] | N
 
 
 _BAD_STRING_HINT = (
-    "Stata 13 and older files are decoded as Windows-1252 unless told otherwise; "
-    "pass encoding='utf-8' if the file holds UTF-8 text, or encoding='utf8-lossy' "
-    "to replace undecodable bytes with U+FFFD (flagged in meta['had_invalid_utf8'])"
+    "Stata 13 and older files declare no encoding, so UTF-8 and then Windows-1252 "
+    "are tried; pass encoding= with the file's actual code page, or "
+    "encoding='utf8-lossy' to replace undecodable bytes with U+FFFD "
+    "(flagged in meta['had_invalid_utf8'])"
 )
 
 
@@ -159,11 +160,12 @@ def read_dta(
     Read a Stata .dta file into a Polars frame plus metadata.
 
     ``encoding`` is the file's character encoding (an iconv name such as
-    ``"utf-8"`` or ``"windows-1252"``). By default ReadStat assumes UTF-8 for
-    Stata 14+ (format 118+) and Windows-1252 for older files, and fails with
-    rc=17 on a byte sequence invalid in that encoding. ``"utf8-lossy"`` decodes
-    as UTF-8 and replaces undecodable bytes with U+FFFD, setting
-    ``meta["had_invalid_utf8"]``.
+    ``"utf-8"`` or ``"windows-1252"``) and skips detection. Stata 14+ files
+    (format 118+) are UTF-8 by specification. Older files declare no encoding:
+    by default they are validated as strict UTF-8 and, only if that fails,
+    read as Windows-1252. ``"utf8-lossy"`` decodes as UTF-8 and replaces
+    undecodable bytes with U+FFFD, setting ``meta["had_invalid_utf8"]``. The
+    encoding actually used is reported in ``meta["encoding"]``.
     """
     # Lazy imports only when needed
     if coerce_temporals:
