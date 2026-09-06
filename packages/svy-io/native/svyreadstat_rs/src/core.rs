@@ -129,6 +129,10 @@ pub struct MetaOut {
     /// (replaced with U+FFFD). Usually means the file uses a legacy code
     /// page: re-read with an explicit `encoding=` to decode it correctly.
     pub had_invalid_utf8: bool,
+    /// The encoding the strings were decoded from, where the reader knows it
+    /// (Stata: explicit, detected, or the format's fixed UTF-8).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -847,6 +851,7 @@ pub(crate) fn finalize_to_ipc(mut ctx: ParseCtx) -> Result<(Vec<u8>, MetaOut)> {
         tagged_missings: tagged_specs,
         notes: ctx.notes,
         had_invalid_utf8: ctx.had_invalid_utf8,
+        encoding: None,
     };
 
     Ok((buf, meta))

@@ -13,8 +13,31 @@ use std::os::raw::c_void;
 
 const RS_OK: readstat_error_t = readstat_error_e_READSTAT_OK;
 const RS_USER_ABORT: readstat_error_t = readstat_error_e_READSTAT_ERROR_USER_ABORT;
+const RS_BAD_STRING: readstat_error_t = readstat_error_e_READSTAT_ERROR_CONVERT_BAD_STRING;
 
-/// Parse a Stata .dta file into Arrow IPC format
+/// Stata format code from the file header; None when the header cannot be
+/// read, in which case readstat reports the real problem.
+fn dta_format(data_path: &str) -> Option<u32> {
+    use std::io::Read;
+    const TAG: &[u8] = b"<stata_dta><header><release>";
+    let mut buf = [0u8; 48];
+    let n = std::fs::File::open(data_path).ok()?.read(&mut buf).ok()?;
+    let head = &buf[..n];
+    if let Some(rest) = head.strip_prefix(TAG) {
+        let end = rest.iter().position(|b| *b == b'<')?;
+        std::str::from_utf8(&rest[..end]).ok()?.parse().ok()
+    } else {
+        head.first().map(|b| *b as u32)
+    }
+}
+
+/// Parse a Stata .dta file into Arrow IPC format.
+///
+/// Files of format 117 and older declare no encoding. Without an explicit
+/// `encoding`, they are validated as strict UTF-8 first (a legacy code page
+/// accepts nearly any byte, so it would turn UTF-8 into mojibake silently);
+/// only a file that fails that check is read as readstat's Windows-1252
+/// default. The resolved encoding is reported in the metadata.
 #[inline]
 fn parse_dta_impl(
     data_path: &str,
@@ -24,6 +47,47 @@ fn parse_dta_impl(
     encoding: Option<&str>,
     lossy_utf8: bool,
 ) -> Result<(Vec<u8>, crate::core::MetaOut)> {
+    let detect =
+        encoding.is_none() && !lossy_utf8 && dta_format(data_path).is_some_and(|f| f < 118);
+    let (attempt, resolved) = match encoding {
+        _ if detect => (Some("UTF-8"), "utf-8"),
+        Some(e) if !lossy_utf8 => (Some(e), e),
+        _ => (None, "utf-8"),
+    };
+
+    match run_parse(
+        data_path,
+        rows_skip,
+        n_max,
+        cols_skip.clone(),
+        attempt,
+        lossy_utf8,
+    ) {
+        Ok((ipc, mut meta)) => {
+            meta.encoding = Some(resolved.to_string());
+            Ok((ipc, meta))
+        }
+        Err((Some(rc), _)) if detect && rc == RS_BAD_STRING => {
+            let (ipc, mut meta) = run_parse(data_path, rows_skip, n_max, cols_skip, None, false)
+                .map_err(|(_, e)| e)?;
+            meta.encoding = Some("windows-1252".to_string());
+            Ok((ipc, meta))
+        }
+        Err((_, e)) => Err(e),
+    }
+}
+
+/// One readstat pass. A parse failure carries its readstat code so the
+/// caller can tell an encoding rejection from anything else.
+fn run_parse(
+    data_path: &str,
+    rows_skip: usize,
+    n_max: Option<usize>,
+    cols_skip: Option<Vec<String>>,
+    encoding: Option<&str>,
+    lossy_utf8: bool,
+) -> std::result::Result<(Vec<u8>, crate::core::MetaOut), (Option<readstat_error_t>, anyhow::Error)>
+{
     let mut ctx = ParseCtx {
         cols: Vec::with_capacity(64), // Pre-allocate for typical files
         name_to_idx: HashMap::with_capacity(64),
@@ -54,7 +118,7 @@ fn parse_dta_impl(
     unsafe {
         let p = readstat_parser_init();
         if p.is_null() {
-            return Err(anyhow!("readstat_parser_init() failed"));
+            return Err((None, anyhow!("readstat_parser_init() failed")));
         }
         readstat_set_error_handler(p, Some(on_error_cb));
         readstat_set_metadata_handler(p, Some(on_metadata_cb));
@@ -66,19 +130,25 @@ fn parse_dta_impl(
             Ok(k) => k,
             Err(msg) => {
                 readstat_parser_free(p);
-                return Err(pyo3::exceptions::PyValueError::new_err(msg).into());
+                return Err((None, pyo3::exceptions::PyValueError::new_err(msg).into()));
             }
         };
         readstat_set_value_label_handler(p, Some(on_value_label_cb));
         readstat_set_note_handler(p, Some(on_note_cb));
 
-        let c_path = CString::new(data_path)?;
+        let c_path = match CString::new(data_path) {
+            Ok(c) => c,
+            Err(e) => {
+                readstat_parser_free(p);
+                return Err((None, e.into()));
+            }
+        };
         let rc = readstat_parse_dta(p, c_path.as_ptr(), &mut ctx as *mut _ as *mut c_void);
         readstat_parser_free(p);
 
         // A panic caught inside a handler callback is an internal error.
         if let Some(msg) = ctx.panic_err.take() {
-            return Err(anyhow!("internal error in readstat callback: {msg}"));
+            return Err((None, anyhow!("internal error in readstat callback: {msg}")));
         }
 
         let early_ok = ctx
@@ -88,11 +158,11 @@ fn parse_dta_impl(
 
         if rc != RS_OK && !early_ok && rc != RS_USER_ABORT {
             let msg = crate::core::parse_failure(rc, ctx.last_err.take());
-            return Err(anyhow!("Failed to parse .dta: {msg}"));
+            return Err((Some(rc), anyhow!("Failed to parse .dta: {msg}")));
         }
     }
 
-    finalize_to_ipc(ctx)
+    finalize_to_ipc(ctx).map_err(|e| (None, e))
 }
 
 #[pyfunction]
