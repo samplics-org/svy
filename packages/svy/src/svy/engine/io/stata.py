@@ -41,13 +41,12 @@ def _read_stata(
         - Raw metadata dict (to be imported via import_labels_from_svyio_meta)
         - File info dict
     """
-    # 1. Warning for unsupported arguments
+    # 1. Forward the file encoding (iconv name, or "utf8-lossy")
     if encoding is not None:
-        log.warning("Stata engine does not support 'encoding'. It will be ignored.")
+        kwargs["encoding"] = encoding
 
     # 2. Call Engine
-    # CRITICAL: We pass ONLY kwargs.
-    # 'columns' and 'encoding' are captured by the signature above and NOT passed to sio.
+    # 'columns' is applied here, after the read, and NOT passed to sio.
     res = sio.read_stata(str(path), **kwargs)
 
     # 3. Normalize Result

@@ -19,7 +19,7 @@ from polars.exceptions import ComputeError
 import svy_io.svyreadstat_rs as native
 
 from .factor import as_factor, check_ordered_levels, ordered_categories
-from .helpers import _normalize_n_max
+from .helpers import _normalize_n_max, _split_encoding, _with_bad_string_hint
 from .metadata import normalize_user_missing
 from .tagged_na import TaggedNA
 
@@ -606,15 +606,13 @@ def read_sas(
         elif catalog_path is not None:
             catalog_path = _as_path_like(catalog_path, _tmp_stack)
 
-        ipc_bytes, meta_json = native.df_parse_sas_file(  # type: ignore[attr-defined]
-            data_path,
-            catalog_path,
-            encoding,
-            catalog_encoding,
-            cols_skip,
-            n_max,
-            rows_skip,
-        )
+        enc, lossy = _split_encoding(encoding)
+        try:
+            ipc_bytes, meta_json = native.df_parse_sas_file(  # type: ignore[attr-defined]
+                data_path, catalog_path, enc, catalog_encoding, cols_skip, n_max, rows_skip, lossy
+            )
+        except RuntimeError as e:
+            raise _with_bad_string_hint(e) from e
 
     # Robust loader: try FILE first; if footer is missing, use STREAM.
     bio = io.BytesIO(ipc_bytes)
@@ -694,9 +692,13 @@ def read_sas_arrow(
     if zero_rows:
         n_max = 1
 
-    ipc_bytes, meta_json = native.df_parse_sas_file(  # type: ignore[attr-defined]
-        data_path, catalog_path, encoding, catalog_encoding, cols_skip, n_max, rows_skip
-    )
+    enc, lossy = _split_encoding(encoding)
+    try:
+        ipc_bytes, meta_json = native.df_parse_sas_file(  # type: ignore[attr-defined]
+            data_path, catalog_path, enc, catalog_encoding, cols_skip, n_max, rows_skip, lossy
+        )
+    except RuntimeError as e:
+        raise _with_bad_string_hint(e) from e
 
     bio = io.BytesIO(ipc_bytes)
     # Use FileReader first (Rust likely wrote a file IPC); fallback to stream

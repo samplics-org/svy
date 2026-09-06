@@ -33,6 +33,7 @@ fn parse_xpt_impl(
         n_rows_emitted: 0,
         last_counted_row: None,
         had_invalid_utf8: false,
+        lossy_utf8: false,
         label_sets: HashMap::new(),
         file_label: None,
         last_err: None,
@@ -81,7 +82,7 @@ fn parse_xpt_impl(
             .map(|nm| ctx.n_rows_emitted >= nm)
             .unwrap_or(false);
         if rc != RS_OK && !early_ok && rc != RS_USER_ABORT {
-            let msg = ctx.last_err.take().unwrap_or_else(|| format!("rc={rc}"));
+            let msg = crate::core::parse_failure(rc, ctx.last_err.take());
             return Err(anyhow!("Failed to parse XPT: {msg}"));
         }
     }

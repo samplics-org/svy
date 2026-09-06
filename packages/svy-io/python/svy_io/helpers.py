@@ -6,6 +6,32 @@ import tempfile
 from typing import Any
 
 
+# ---------------- encoding ----------------
+
+_LOSSY_ENCODINGS = frozenset({"utf8-lossy", "utf-8-lossy"})
+
+# Appended to the parse error for READSTAT_ERROR_CONVERT_BAD_STRING (rc=17).
+BAD_STRING_HINT = (
+    "pass encoding='utf8-lossy' to replace undecodable bytes with U+FFFD "
+    "(flagged in meta['had_invalid_utf8']), or the file's actual encoding if "
+    "the one assumed is wrong"
+)
+
+
+def _split_encoding(encoding: str | None) -> tuple[str | None, bool]:
+    """Map the public ``encoding`` to (iconv name, lossy_utf8) for the native layer."""
+    if encoding is not None and encoding.lower() in _LOSSY_ENCODINGS:
+        return None, True
+    return encoding, False
+
+
+def _with_bad_string_hint(e: RuntimeError, hint: str = BAD_STRING_HINT) -> RuntimeError:
+    """Attach a ``Hint:`` naming the encoding option to an rc=17 parse error."""
+    if "(rc=17)" in str(e):
+        return RuntimeError(f"{e}. Hint: {hint}.")
+    return e
+
+
 # ---------------- n_max normalization ----------------
 
 

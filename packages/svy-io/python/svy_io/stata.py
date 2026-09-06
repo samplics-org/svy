@@ -17,8 +17,8 @@ from polars.exceptions import ComputeError
 
 import svy_io.svyreadstat_rs as native
 
+from .helpers import _as_path, _normalize_n_max, _split_encoding, _with_bad_string_hint
 from .metadata import normalize_user_missing
-from .helpers import _as_path, _normalize_n_max
 from .tagged_na import TaggedNA
 
 
@@ -119,9 +119,33 @@ def get_value_labels_for_column(meta: dict, col_name: str) -> dict[str, str] | N
     return labels
 
 
+_BAD_STRING_HINT = (
+    "Stata 13 and older files are decoded as Windows-1252 unless told otherwise; "
+    "pass encoding='utf-8' if the file holds UTF-8 text, or encoding='utf8-lossy' "
+    "to replace undecodable bytes with U+FFFD (flagged in meta['had_invalid_utf8'])"
+)
+
+
+def _parse_dta_native(
+    path: str,
+    cols_skip: list[str] | None,
+    n_max: int | None,
+    rows_skip: int,
+    encoding: str | None,
+) -> Tuple[bytes, str]:
+    enc, lossy = _split_encoding(encoding)
+    try:
+        return native.df_parse_dta_file(  # type: ignore[attr-defined]
+            path, cols_skip, n_max, rows_skip, enc, lossy
+        )
+    except RuntimeError as e:
+        raise _with_bad_string_hint(e, _BAD_STRING_HINT) from e
+
+
 def read_dta(
     data_path: str | os.PathLike | io.BufferedIOBase,
     *,
+    encoding: str | None = None,
     cols_skip: list[str] | None = None,
     n_max: int | None = None,
     rows_skip: int = 0,
@@ -131,6 +155,16 @@ def read_dta(
     levels: str = "default",
     ordered: bool = False,
 ) -> Tuple[pl.DataFrame, Dict[str, Any]]:
+    """
+    Read a Stata .dta file into a Polars frame plus metadata.
+
+    ``encoding`` is the file's character encoding (an iconv name such as
+    ``"utf-8"`` or ``"windows-1252"``). By default ReadStat assumes UTF-8 for
+    Stata 14+ (format 118+) and Windows-1252 for older files, and fails with
+    rc=17 on a byte sequence invalid in that encoding. ``"utf8-lossy"`` decodes
+    as UTF-8 and replaces undecodable bytes with U+FFFD, setting
+    ``meta["had_invalid_utf8"]``.
+    """
     # Lazy imports only when needed
     if coerce_temporals:
         from svy_io.temporals import coerce_stata_temporals  # type: ignore
@@ -149,12 +183,7 @@ def read_dta(
 
     # Rust does the heavy lifting here (with GIL released).
     with _as_path(data_path) as _path:
-        ipc_bytes, meta_json = native.df_parse_dta_file(  # type: ignore[attr-defined]
-            _path,
-            cols_skip,
-            n_max,
-            rows_skip,
-        )
+        ipc_bytes, meta_json = _parse_dta_native(_path, cols_skip, n_max, rows_skip, encoding)
 
     # Parse JSON once
     meta: Dict[str, Any] = json.loads(meta_json)
@@ -196,12 +225,12 @@ read_stata = read_dta
 def read_stata_arrow(
     data_path: str | os.PathLike | io.BufferedIOBase,
     *,
+    encoding: str | None = None,
     cols_skip: list[str] | None = None,
     n_max: int | None = None,
     rows_skip: int = 0,
 ):
     """Arrow-table variant."""
-    import pyarrow as pa
     import pyarrow.ipc as pa_ipc
 
     from pyarrow import ArrowInvalid
@@ -215,12 +244,7 @@ def read_stata_arrow(
         n_max = 1
 
     with _as_path(data_path) as _path:
-        ipc_bytes, meta_json = native.df_parse_dta_file(  # type: ignore[attr-defined]
-            _path,
-            cols_skip,
-            n_max,
-            rows_skip,
-        )
+        ipc_bytes, meta_json = _parse_dta_native(_path, cols_skip, n_max, rows_skip, encoding)
 
     bio = io.BytesIO(ipc_bytes)
     try:

@@ -20,7 +20,7 @@ use crate::core::{
 
 /// Parse SPSS .sav file
 #[pyfunction]
-#[pyo3(signature = (path, encoding=None, _user_na=false, cols_skip=None, n_max=None, rows_skip=0))]
+#[pyo3(signature = (path, encoding=None, _user_na=false, cols_skip=None, n_max=None, rows_skip=0, lossy_utf8=false))]
 pub fn df_parse_sav_file(
     py: Python<'_>,
     path: &str,
@@ -29,9 +29,11 @@ pub fn df_parse_sav_file(
     cols_skip: Option<Vec<String>>,
     n_max: Option<usize>,
     rows_skip: usize,
+    lossy_utf8: bool,
 ) -> PyResult<(Py<PyAny>, String)> {
     // Release GIL during parsing for better Python concurrency
-    let result = py.detach(|| parse_sav_impl(path, encoding, cols_skip, n_max, rows_skip));
+    let result =
+        py.detach(|| parse_sav_impl(path, encoding, cols_skip, n_max, rows_skip, lossy_utf8));
 
     let (ipc, meta) = result?;
     let meta_json = serde_json::to_string(&meta).map_err(|e| {
@@ -47,7 +49,7 @@ pub fn df_parse_sav_file(
 
 /// Parse SPSS portable (.por) file
 #[pyfunction]
-#[pyo3(signature = (path, encoding=None, _user_na=false, cols_skip=None, n_max=None, rows_skip=0))]
+#[pyo3(signature = (path, encoding=None, _user_na=false, cols_skip=None, n_max=None, rows_skip=0, lossy_utf8=false))]
 pub fn df_parse_por_file(
     py: Python<'_>,
     path: &str,
@@ -56,9 +58,11 @@ pub fn df_parse_por_file(
     cols_skip: Option<Vec<String>>,
     n_max: Option<usize>,
     rows_skip: usize,
+    lossy_utf8: bool,
 ) -> PyResult<(Py<PyAny>, String)> {
     // Release GIL during parsing for better Python concurrency
-    let result = py.detach(|| parse_por_impl(path, encoding, cols_skip, n_max, rows_skip));
+    let result =
+        py.detach(|| parse_por_impl(path, encoding, cols_skip, n_max, rows_skip, lossy_utf8));
 
     let (ipc, meta) = result?;
     let meta_json = serde_json::to_string(&meta).map_err(|e| {
@@ -80,6 +84,7 @@ fn parse_sav_impl(
     cols_skip: Option<Vec<String>>,
     n_max: Option<usize>,
     rows_skip: usize,
+    lossy_utf8: bool,
 ) -> PyResult<(Vec<u8>, crate::core::MetaOut)> {
     // Pre-calculate skip set for O(1) lookup
     let cols_skip_map = cols_skip.map(|v| {
@@ -100,6 +105,7 @@ fn parse_sav_impl(
         n_rows_emitted: 0,
         last_counted_row: None,
         had_invalid_utf8: false,
+        lossy_utf8,
         label_sets: HashMap::with_capacity(64), // Pre-allocate for value labels
         file_label: None,
         last_err: None,
@@ -124,7 +130,8 @@ fn parse_sav_impl(
         readstat_set_value_handler(p, Some(on_value_cb));
         readstat_set_value_label_handler(p, Some(on_value_label_cb));
 
-        let _keep_enc = match crate::core::configure_parser(p, encoding, rows_skip, n_max) {
+        let enc = crate::core::input_encoding(encoding, lossy_utf8);
+        let _keep_enc = match crate::core::configure_parser(p, enc, rows_skip, n_max) {
             Ok(k) => k,
             Err(msg) => {
                 readstat_parser_free(p);
@@ -149,7 +156,7 @@ fn parse_sav_impl(
             .map(|nm| ctx.n_rows_emitted >= nm)
             .unwrap_or(false);
         if rc != RS_OK && !early_ok && rc != RS_USER_ABORT {
-            let msg = ctx.last_err.take().unwrap_or_else(|| format!("rc={rc}"));
+            let msg = crate::core::parse_failure(rc, ctx.last_err.take());
             return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
                 "Failed to parse SAV: {msg}"
             )));
@@ -168,6 +175,7 @@ fn parse_por_impl(
     cols_skip: Option<Vec<String>>,
     n_max: Option<usize>,
     rows_skip: usize,
+    lossy_utf8: bool,
 ) -> PyResult<(Vec<u8>, crate::core::MetaOut)> {
     // Pre-calculate skip set for O(1) lookup
     let cols_skip_map = cols_skip.map(|v| {
@@ -188,6 +196,7 @@ fn parse_por_impl(
         n_rows_emitted: 0,
         last_counted_row: None,
         had_invalid_utf8: false,
+        lossy_utf8,
         label_sets: HashMap::with_capacity(64), // Pre-allocate for value labels
         file_label: None,
         last_err: None,
@@ -212,7 +221,8 @@ fn parse_por_impl(
         readstat_set_value_handler(p, Some(on_value_cb));
         readstat_set_value_label_handler(p, Some(on_value_label_cb));
 
-        let _keep_enc = match crate::core::configure_parser(p, encoding, rows_skip, n_max) {
+        let enc = crate::core::input_encoding(encoding, lossy_utf8);
+        let _keep_enc = match crate::core::configure_parser(p, enc, rows_skip, n_max) {
             Ok(k) => k,
             Err(msg) => {
                 readstat_parser_free(p);
@@ -237,7 +247,7 @@ fn parse_por_impl(
             .map(|nm| ctx.n_rows_emitted >= nm)
             .unwrap_or(false);
         if rc != RS_OK && !early_ok && rc != RS_USER_ABORT {
-            let msg = ctx.last_err.take().unwrap_or_else(|| format!("rc={rc}"));
+            let msg = crate::core::parse_failure(rc, ctx.last_err.take());
             return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
                 "Failed to parse POR: {msg}"
             )));

@@ -5,6 +5,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
 use serde::Serialize;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_void};
@@ -168,6 +169,10 @@ pub(crate) struct ParseCtx {
     pub(crate) last_counted_row: Option<usize>,
     /// Any string in the file failed strict UTF-8 decoding (lossy-replaced).
     pub(crate) had_invalid_utf8: bool,
+    /// Decode every string as UTF-8 with U+FFFD replacement. The parser must
+    /// then be configured with ISO-8859-1 input, which maps each source byte
+    /// to one char so `decode` can recover the raw bytes.
+    pub(crate) lossy_utf8: bool,
     pub(crate) label_sets: HashMap<String, BTreeMap<String, String>>,
     pub(crate) file_label: Option<String>,
     pub(crate) last_err: Option<String>,
@@ -180,6 +185,63 @@ pub(crate) struct ParseCtx {
     /// callbacks catch panics, record the message here, and abort the parse;
     /// callers must check this after `readstat_parse_*` returns.
     pub(crate) panic_err: Option<String>,
+}
+
+impl ParseCtx {
+    /// Decode a string handed back by readstat, flagging any lossy replacement.
+    pub(crate) fn decode<'a>(&mut self, cs: &'a CStr) -> Cow<'a, str> {
+        if self.lossy_utf8 {
+            let s = cs.to_string_lossy();
+            if s.is_ascii() {
+                return s;
+            }
+            let bytes: Vec<u8> = s.chars().map(|c| c as u32 as u8).collect();
+            return match String::from_utf8(bytes) {
+                Ok(v) => Cow::Owned(v),
+                Err(e) => {
+                    self.had_invalid_utf8 = true;
+                    Cow::Owned(String::from_utf8_lossy(e.as_bytes()).into_owned())
+                }
+            };
+        }
+        match cs.to_str() {
+            Ok(s) => Cow::Borrowed(s),
+            Err(_) => {
+                self.had_invalid_utf8 = true;
+                cs.to_string_lossy()
+            }
+        }
+    }
+}
+
+/// Input encoding to hand readstat. ISO-8859-1 is byte-transparent, so the
+/// lossy path receives the raw bytes and decodes them itself (see
+/// `ParseCtx::decode`).
+pub(crate) fn input_encoding(encoding: Option<&str>, lossy_utf8: bool) -> Option<&str> {
+    if lossy_utf8 {
+        Some("ISO-8859-1")
+    } else {
+        encoding
+    }
+}
+
+/// Describe a failed parse: readstat's text for the return code, plus the
+/// last message its error handler delivered, if any.
+pub(crate) fn parse_failure(
+    rc: readstat_sys::readstat_error_t,
+    last_err: Option<String>,
+) -> String {
+    let p = unsafe { readstat_sys::readstat_error_message(rc) };
+    let mut msg = if p.is_null() {
+        format!("rc={rc}")
+    } else {
+        let text = unsafe { CStr::from_ptr(p) }.to_string_lossy();
+        format!("{text} (rc={rc})")
+    };
+    if let Some(err) = last_err {
+        msg = format!("{msg}: {err}");
+    }
+    msg
 }
 
 #[inline(always)]
@@ -307,7 +369,7 @@ pub(crate) unsafe extern "C" fn on_metadata_cb(
 unsafe fn on_metadata_impl(metadata: *mut readstat_metadata_t, rctx: &mut ParseCtx) -> c_int {
     let label_ptr = readstat_get_file_label(metadata);
     if !label_ptr.is_null() {
-        let label = CStr::from_ptr(label_ptr).to_string_lossy().into_owned();
+        let label = rctx.decode(CStr::from_ptr(label_ptr)).into_owned();
         rctx.file_label = if label.trim().is_empty() {
             None
         } else {
@@ -348,7 +410,7 @@ unsafe fn on_variable_impl(
         if p.is_null() {
             format!("V{index}")
         } else {
-            CStr::from_ptr(p).to_string_lossy().trim().to_string()
+            rctx.decode(CStr::from_ptr(p)).trim().to_string()
         }
     };
 
@@ -381,7 +443,7 @@ unsafe fn on_variable_impl(
         if p.is_null() {
             None
         } else {
-            let s = CStr::from_ptr(p).to_string_lossy().to_string();
+            let s = rctx.decode(CStr::from_ptr(p)).into_owned();
             let st = s.trim();
             if st.is_empty() {
                 None
@@ -396,7 +458,7 @@ unsafe fn on_variable_impl(
         if p.is_null() {
             None
         } else {
-            let s = CStr::from_ptr(p).to_string_lossy().to_string();
+            let s = rctx.decode(CStr::from_ptr(p)).into_owned();
             let st = s.trim();
             if st.is_empty() {
                 None
@@ -425,7 +487,7 @@ unsafe fn on_variable_impl(
     let label_set = if label_set_name.is_null() {
         None
     } else {
-        let s = CStr::from_ptr(label_set_name).to_string_lossy().to_string();
+        let s = rctx.decode(CStr::from_ptr(label_set_name)).into_owned();
         let st = s.trim();
         if st.is_empty() {
             None
@@ -555,7 +617,7 @@ unsafe fn on_value_impl(
         if p.is_null() {
             return HANDLER_OK;
         }
-        CStr::from_ptr(p).to_string_lossy().trim().to_string()
+        rctx.decode(CStr::from_ptr(p)).trim().to_string()
     };
 
     if let Some(skip) = &rctx.cols_skip {
@@ -563,6 +625,23 @@ unsafe fn on_value_impl(
             return HANDLER_OK;
         }
     }
+
+    let is_tagged = rctx.detect_tagged && readstat_value_is_tagged_missing(value) != 0;
+    let is_missing = readstat_value_is_system_missing(value) != 0;
+    let vt = rs_value_type(value);
+    let is_str = vt == T_STRING || vt == T_STRING_REF;
+
+    // Decoded before borrowing the column builder (decode needs &mut ctx).
+    let str_val: Option<Cow<'_, str>> = if !is_tagged && !is_missing && is_str {
+        let sp = readstat_string_value(value);
+        if sp.is_null() {
+            None
+        } else {
+            Some(rctx.decode(CStr::from_ptr(sp)))
+        }
+    } else {
+        None
+    };
 
     let idx = match rctx.name_to_idx.get(&name) {
         Some(i) => *i,
@@ -573,7 +652,7 @@ unsafe fn on_value_impl(
         None => return HANDLER_OK,
     };
 
-    if rctx.detect_tagged && readstat_value_is_tagged_missing(value) != 0 {
+    if is_tagged {
         let tag_ch = readstat_value_tag(value) as u8 as char;
         let (rows, tags) = rctx
             .tagged
@@ -582,28 +661,16 @@ unsafe fn on_value_impl(
         rows.push(row as usize);
         tags.push(tag_ch.to_string());
         col.push_missing();
-    } else if readstat_value_is_system_missing(value) != 0 {
+    } else if is_missing {
         col.push_missing();
-    } else {
-        let vt = rs_value_type(value);
-        if vt == T_STRING || vt == T_STRING_REF {
-            let sp = readstat_string_value(value);
-            if sp.is_null() {
-                col.push_missing();
-            } else {
-                let cs = CStr::from_ptr(sp);
-                match cs.to_str() {
-                    Ok(s) => col.push_str(s),
-                    Err(_) => {
-                        rctx.had_invalid_utf8 = true;
-                        col.push_str(&cs.to_string_lossy());
-                    }
-                }
-            }
-        } else {
-            let d = readstat_double_value(value);
-            col.push_f64(d);
+    } else if is_str {
+        match str_val {
+            Some(s) => col.push_str(&s),
+            None => col.push_missing(),
         }
+    } else {
+        let d = readstat_double_value(value);
+        col.push_f64(d);
     }
 
     HANDLER_OK
@@ -618,7 +685,7 @@ pub(crate) unsafe extern "C" fn on_note_cb(
         return HANDLER_OK;
     }
     guard_cb(ctx, |rctx| {
-        let s = unsafe { CStr::from_ptr(note) }.to_string_lossy().into_owned();
+        let s = rctx.decode(unsafe { CStr::from_ptr(note) }).into_owned();
         rctx.notes.push(s);
         HANDLER_OK
     })
@@ -647,15 +714,12 @@ unsafe fn on_value_label_impl(
     let set = if set_name.is_null() {
         "__default__".to_string()
     } else {
-        CStr::from_ptr(set_name)
-            .to_string_lossy()
-            .trim()
-            .to_string()
+        rctx.decode(CStr::from_ptr(set_name)).trim().to_string()
     };
     let lab = if label.is_null() {
         String::new()
     } else {
-        CStr::from_ptr(label).to_string_lossy().into_owned()
+        rctx.decode(CStr::from_ptr(label)).into_owned()
     };
 
     let key = if readstat_value_is_system_missing(val) != 0 {
@@ -665,7 +729,7 @@ unsafe fn on_value_label_impl(
         if sp.is_null() {
             String::new()
         } else {
-            CStr::from_ptr(sp).to_string_lossy().into_owned()
+            rctx.decode(CStr::from_ptr(sp)).into_owned()
         }
     } else {
         format!("{}", readstat_double_value(val))
@@ -851,6 +915,7 @@ mod tests {
             n_rows_emitted: 0,
             last_counted_row: None,
             had_invalid_utf8: false,
+            lossy_utf8: false,
             label_sets: HashMap::new(),
             file_label: None,
             last_err: None,

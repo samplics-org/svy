@@ -8,6 +8,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **`read_stata(encoding=)` is forwarded to the reader** instead of being dropped with a warning. A Stata 13 file holding UTF-8 text (the Nigeria GHS-Panel Wave 5 free-text sections) now reads with `encoding="utf-8"`, or `encoding="utf8-lossy"` to replace undecodable bytes, an option `read_spss` and `read_sas` accept as well; the parse `IoError` for that failure carries the engine's hint naming the option.
+
 - **Panel surveys, with no new type.** A panel is a long `Sample` whose `Design.case_id` identifies the followed case and whose `Design.wave` orders its rows. `svy.combine_samples(kind="panel", case_id=...)` stacks the waves and validates the pairing (unique id within each wave, consecutive-wave overlap, design columns constant within a case, later waves' units a subset of wave 1's); `Design(case_id=..., wave=...)` declares the same on a long file. When no PSU is declared the case is the variance PSU, so `mean(y, by="wave")` and its contrasts carry the between-wave covariance without being told to — the change SE equals the wide-frame individual-change SE, not the naive independent-waves one. Producer longitudinal weights stay ordinary columns selected with `use_weight()`; identical producer replicate weights are accepted across waves.
 
   ```python

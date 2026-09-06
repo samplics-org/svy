@@ -14,7 +14,7 @@ from polars.exceptions import ComputeError
 
 import svy_io.svyreadstat_rs as native
 
-from .helpers import _as_path, _normalize_n_max
+from .helpers import _as_path, _normalize_n_max, _split_encoding, _with_bad_string_hint
 from .labelled import LabelledSPSS, labelled_spss
 from .metadata import normalize_user_missing
 
@@ -283,16 +283,15 @@ def read_sav(
 
     normalized_cols_skip = _normalize_cols_skip(cols_skip)
 
+    enc, lossy = _split_encoding(encoding)
     # Native parse (GIL released)
     with _as_path(data_path) as _path:
-        ipc_bytes, meta_json = native.df_parse_sav_file(
-            _path,
-            encoding or None,
-            user_na,
-            normalized_cols_skip,
-            n_max,
-            rows_skip,
-        )
+        try:
+            ipc_bytes, meta_json = native.df_parse_sav_file(
+                _path, enc, user_na, normalized_cols_skip, n_max, rows_skip, lossy
+            )
+        except RuntimeError as e:
+            raise _with_bad_string_hint(e) from e
 
     meta: Dict[str, Any] = json.loads(meta_json)
 
@@ -331,6 +330,7 @@ def read_sav(
 def read_por(
     data_path: str | os.PathLike | io.BufferedIOBase,
     *,
+    encoding: str | None = None,
     user_na: bool = False,
     cols_skip: list[str] | None = None,
     n_max: int | None = None,
@@ -351,15 +351,14 @@ def read_por(
 
     normalized_cols_skip = _normalize_cols_skip(cols_skip)
 
+    enc, lossy = _split_encoding(encoding)
     with _as_path(data_path) as _path:
-        ipc_bytes, meta_json = native.df_parse_por_file(
-            _path,
-            None,
-            user_na,
-            normalized_cols_skip,
-            n_max,
-            rows_skip,
-        )
+        try:
+            ipc_bytes, meta_json = native.df_parse_por_file(
+                _path, enc, user_na, normalized_cols_skip, n_max, rows_skip, lossy
+            )
+        except RuntimeError as e:
+            raise _with_bad_string_hint(e) from e
 
     meta: Dict[str, Any] = json.loads(meta_json)
 
@@ -427,6 +426,7 @@ def read_spss(
     elif ext == ".por":
         return read_por(
             data_path,
+            encoding=encoding,
             user_na=user_na,
             cols_skip=cols_skip,
             n_max=n_max,
