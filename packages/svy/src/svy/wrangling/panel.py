@@ -9,7 +9,8 @@ import polars as pl
 
 from svy.core.enumerations import MetadataSource
 from svy.errors import DimensionError, MethodError
-from svy.wrangling._helpers import _eager_df, _resolve_target
+from svy.wrangling._helpers import _eager_df
+from svy.wrangling.mutate import mutate as _mutate
 
 
 if TYPE_CHECKING:
@@ -93,8 +94,9 @@ def lag(
     case_id, wave = design.case_id, design.wave
     over = dict(partition_by=case_id, order_by=wave)
     if gaps == "skip":
-        exprs = [pl.col(c).shift(n).over(**over).alias(nm) for c, nm in zip(col_list, names)]
-        new_data = df.with_columns(exprs)
+        new_data = df.select(
+            pl.col(c).shift(n).over(**over).alias(nm) for c, nm in zip(col_list, names)
+        )
     else:
         # Rank the wave among the codes present so producer codes (2019,
         # 2021, ...) step by one, then self-join on (case, rank - n): a row
@@ -106,9 +108,12 @@ def lag(
             (pl.col(rank) + n).alias(rank),
             *[pl.col(c).alias(nm) for c, nm in zip(col_list, names)],
         )
-        new_data = tmp.join(src, on=[case_id, rank], how="left", maintain_order="left").drop(rank)
+        new_data = tmp.join(src, on=[case_id, rank], how="left", maintain_order="left").select(
+            names
+        )
 
-    target = _resolve_target(sample, new_data, inplace=inplace)
+    # The lag columns enter through mutate, the tracked path for new columns.
+    target = _mutate(sample, {nm: new_data.get_column(nm) for nm in names}, inplace=inplace)
     meta = target._metadata
     for c, nm in zip(col_list, names):
         src = meta.get(c)

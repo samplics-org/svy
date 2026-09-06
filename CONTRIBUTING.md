@@ -94,9 +94,16 @@ Lint/format/type-check settings (ruff, mypy, pytest) are configured once in the 
 3. **Tests**: add or adjust tests next to the code you change (`packages/<pkg>/tests/`).
    Prefer tiny generated fixtures over large binary files; add round-trip tests when
    changing I/O behavior; cover edge cases (encodings, missing values, temporals).
-4. **Docs**: update README examples and docstrings if public behavior changes.
+4. **Editing a `Sample`** (svy): a `Sample` tracks derived state — data version,
+   design history, internal design columns, singleton detection, metadata — and
+   each piece has one maintainer. Code that changes a sample never assigns
+   `sample._data` or `sample._design` directly; it goes through the wrangling
+   functions (`mutate` for columns, `filter_records` for rows, `rename_columns` /
+   `remove_columns` for the schema) and `sample.update_design(...)` (one call per
+   user-visible step). `weighting.adjust` and `wrangling.lag` show the shape.
+5. **Docs**: update README examples and docstrings if public behavior changes.
    The outputs shown in the READMEs are generated: run `make readme-svy` after editing a snippet. The svy test suite fails when they drift.
-5. **PR**: explain the "why", link issues, note trade-offs, keep CI green.
+6. **PR**: explain the "why", link issues, note trade-offs, keep CI green.
 
 ### svy-io API guidance
 

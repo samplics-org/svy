@@ -25,6 +25,8 @@ from svy.errors import MethodError
 from svy.weighting._engine import CellSpec, _where_mask, build_cells
 from svy.weighting.trimming import _run_trim as _apply_trim
 from svy.weighting.types import TrimConfig
+from svy.wrangling.mutate import mutate as _mutate
+from svy.wrangling.rows import filter_records as _filter_records
 
 
 if TYPE_CHECKING:
@@ -296,31 +298,38 @@ def adjust(
         # which could silently empty the sample.
         keep_mask = resp_codes == 0
 
-    df = df.with_columns(pl.Series(wgt_name, new_wgts[:, 0]))
+    # New columns, the design, and the row drop all go through the Sample's
+    # own tracking: mutate registers the columns, update_design records the
+    # previous design and refreshes the internal state (concat columns,
+    # singletons, validation), filter_records re-checks singletons.
+    new_cols: dict[str, pl.Series] = {wgt_name: pl.Series(wgt_name, new_wgts[:, 0])}
+    new_rep_names = [f"{wgt_name}{i}" for i in range(1, len(rep_cols) + 1)]
+    for i, name in enumerate(new_rep_names, start=1):
+        new_cols[name] = pl.Series(name, new_wgts[:, i])
+    _mutate(sample, new_cols, inplace=True)
 
     if update_design_wgts:
-        sample._push_design()
         # Provenance only: R carries no variance record for non-response
         # either. Modelling the adjustment's own variance is a different
         # estimator (SUDAAN's WTADJUST), not the calibration sweep.
-        sample._design = sample._design.update(
-            wgt=wgt_name,
-            wgt_adjustment=WgtAdjustment(kind="nonresponse", prev_wgt=wgt, new_wgt=wgt_name),
-        )
-
-    if rep_cols:
-        n_reps = len(rep_cols)
-        new_rep_names = [f"{wgt_name}{i}" for i in range(1, n_reps + 1)]
-        df = df.hstack(pl.DataFrame(new_wgts[:, 1:], schema=new_rep_names))
-        if update_design_wgts:
-            sample._design = sample._design.update(
-                rep_wgts=msgspec.structs.replace(design.rep_wgts, prefix=wgt_name, n_reps=n_reps)
+        updates: dict = {
+            "wgt": wgt_name,
+            "wgt_adjustment": WgtAdjustment(kind="nonresponse", prev_wgt=wgt, new_wgt=wgt_name),
+        }
+        if rep_cols:
+            updates["rep_wgts"] = msgspec.structs.replace(
+                design.rep_wgts, prefix=wgt_name, n_reps=len(rep_cols)
             )
-
-    sample._data = df
+        sample.update_design(**updates)
 
     if respondents_only:
-        sample._data = sample._data.filter(pl.Series("__resp_mask__", keep_mask))
+        _filter_records(
+            sample,
+            pl.lit(pl.Series(keep_mask)),
+            check_singletons=True,
+            on_singletons="warn",
+            inplace=True,
+        )
 
     if trimming is not None:
         if update_design_wgts:
