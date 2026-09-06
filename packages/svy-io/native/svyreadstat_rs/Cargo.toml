@@ -15,8 +15,11 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 anyhow = "1"
-# ABI-stable for CPython ≥3.11; still an extension module
-pyo3 = { version = "0.29", features = ["extension-module", "abi3-py311"] }
+# ABI-stable for CPython ≥3.11. `extension-module` is enabled only through
+# this crate's feature of the same name (passed by maturin via pyproject.toml),
+# so `cargo test` links a normal binary against libpython instead of failing
+# on undefined Python symbols.
+pyo3 = { version = "0.29", features = ["abi3-py311"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 arrow = "58"
@@ -28,6 +31,7 @@ rayon = { version = "1", optional = true }
 parallel = ["rayon"]
 # Forward a vendored build flag to readstat-sys (expects readstat-sys to define it)
 vendored = ["readstat-sys/vendored"]
+extension-module = ["pyo3/extension-module"]
 default = ["vendored"]
 
 [dev-dependencies]

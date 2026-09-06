@@ -6,6 +6,20 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
+### Added
+
+- **`read_dta(encoding=)`.** ReadStat decodes Stata 13 and older files (format ≤ 117) as Windows-1252 and Stata 14+ as UTF-8; a byte sequence invalid in that encoding failed the whole read with an opaque `rc=17`. This is what a Stata 13 export holding UTF-8 free text does — the Nigeria GHS-Panel Wave 5 "other, specify" columns carry emoji whose bytes are undefined in CP1252. The option takes an iconv name (`"utf-8"`, `"latin1"`, …) and is forwarded to `readstat_set_file_character_encoding`, as `read_sav` and `read_sas` already do. `read_stata_arrow` takes the same option, and `read_por` gains it too.
+- **`encoding="utf8-lossy"` on every reader.** The special value (polars' spelling) decodes as UTF-8 and replaces undecodable bytes with U+FFFD, reporting it in `meta["had_invalid_utf8"]`. It matters most for SPSS and SAS: those headers declare an encoding, so ReadStat always transcodes and one stray byte failed the whole read with no way through short of lying about the encoding.
+
+### Changed
+
+- **Parse errors carry ReadStat's message.** `Failed to parse SAV: rc=17` is now `… Unable to convert string to the requested encoding (invalid byte sequence) (rc=17)` across all readers, and that case appends a hint naming `encoding=`.
+- **`had_invalid_utf8` covers labels and names too.** Only data strings set it before; variable labels, value labels, notes and the file label were replaced silently.
+
+### Fixed
+
+- **`cargo test` in the native crate builds again.** pyo3's `extension-module` feature was on unconditionally, so the test binary linked without libpython and failed on undefined symbols; it is now a crate feature that maturin enables from `pyproject.toml`, the same arrangement `svy-rs` uses. The SAS reader's unit tests also still called `parse_sas_impl` with the argument list from before the encoding parameters were added.
+
 ## [0.3.0] — 2026-08-26
 
 ### Added

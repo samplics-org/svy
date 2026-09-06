@@ -31,7 +31,7 @@ include = [
   "ReadStat/LICENSE",
   "ReadStat/README.md",
 ]
-features = ["vendored"]
+features = ["vendored", "extension-module"]
 
 [dependency-groups]
 dev = [

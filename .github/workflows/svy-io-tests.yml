@@ -39,8 +39,8 @@ jobs:
       - name: Run Python tests
         run: make test-svy-io
 
-  # No Rust job yet. All three checks are red on main today and clearing that
-  # is its own piece of work: `cargo fmt --check` fails on four drifted files,
-  # `cargo clippy -- -D warnings` reports 28 errors across nine lint kinds, and
-  # a plain `cargo test` cannot link the pyo3 cdylib against libpython. Adding
-  # a job that always fails would train people to ignore it.
+  # No Rust job yet. `cargo test` links and passes now that `extension-module`
+  # is a crate feature maturin enables, but `cargo fmt --check` fails on four
+  # drifted files and `cargo clippy -- -D warnings` reports 28 errors across
+  # nine lint kinds. Adding a job that always fails would train people to
+  # ignore it.

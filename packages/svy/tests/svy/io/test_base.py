@@ -72,15 +72,10 @@ def test_read_other_formats(dummy_svyio, reader, ext, tmp_path):
     calls = [c for c in dummy_svyio.calls if c.fn.startswith("read_")]
     last_call = calls[-1]
 
-    if "dta" in ext:
-        # Stata Engine: explicit columns/encoding are removed to prevent crashes
-        assert "columns" not in last_call.kwargs
-        assert "cols_skip" not in last_call.kwargs
-        # We explicitly verify encoding is NOT passed
-        assert "encoding" not in last_call.kwargs
-    elif "sas" in ext:
-        # SAS Engine: encoding is supported and passed through
-        assert last_call.kwargs.get("encoding") == "latin1"
+    # Column selection happens in the wrapper; encoding is passed through
+    assert "columns" not in last_call.kwargs
+    assert "cols_skip" not in last_call.kwargs
+    assert last_call.kwargs.get("encoding") == "latin1"
 
 
 def test_create_from_stata_and_sas_return_sample(dummy_svyio, tmp_path):
@@ -183,3 +178,26 @@ def test_aliases_point_to_spss_variants():
     assert read_sav is read_spss
     assert write_sav is write_spss
     assert create_from_sav is create_from_spss
+
+
+def test_read_stata_parse_error_surfaces_engine_hint(dummy_svyio, tmp_path, monkeypatch):
+    from svy.errors.io_errors import IoError
+
+    p = tmp_path / "fake.dta"
+    p.touch()
+    msg = (
+        "Failed to parse .dta: Unable to convert string to the requested encoding "
+        "(invalid byte sequence) (rc=17). Hint: pass encoding='utf-8' or encoding='utf8-lossy'"
+    )
+
+    def boom(path, **kwargs):
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(dummy_svyio, "read_stata", boom)
+    with pytest.raises(IoError) as ei:
+        read_stata(p)
+    err = ei.value
+    assert err.code == "READSTAT_PARSE_FAILED"
+    assert err.detail.endswith("(rc=17)")
+    assert "encoding='utf-8'" in err.hint and "utf8-lossy" in err.hint
+    assert "encoding=" in str(err)

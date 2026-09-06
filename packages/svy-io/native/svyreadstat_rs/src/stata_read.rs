@@ -21,6 +21,8 @@ fn parse_dta_impl(
     rows_skip: usize,
     n_max: Option<usize>,
     cols_skip: Option<Vec<String>>,
+    encoding: Option<&str>,
+    lossy_utf8: bool,
 ) -> Result<(Vec<u8>, crate::core::MetaOut)> {
     let mut ctx = ParseCtx {
         cols: Vec::with_capacity(64), // Pre-allocate for typical files
@@ -38,6 +40,7 @@ fn parse_dta_impl(
         n_rows_emitted: 0,
         last_counted_row: None,
         had_invalid_utf8: false,
+        lossy_utf8,
         label_sets: HashMap::with_capacity(32), // Pre-allocate
         file_label: None,
         last_err: None,
@@ -58,9 +61,8 @@ fn parse_dta_impl(
         readstat_set_variable_handler(p, Some(on_variable_cb));
         readstat_set_value_handler(p, Some(on_value_cb));
 
-        // Defensive row limit for untrusted files (n_max already aborts in
-        // the value callback; this stops the C parser earlier too).
-        let _keep_enc = match crate::core::configure_parser(p, None, rows_skip, n_max) {
+        let enc = crate::core::input_encoding(encoding, lossy_utf8);
+        let _keep_enc = match crate::core::configure_parser(p, enc, rows_skip, n_max) {
             Ok(k) => k,
             Err(msg) => {
                 readstat_parser_free(p);
@@ -85,7 +87,7 @@ fn parse_dta_impl(
             .unwrap_or(false);
 
         if rc != RS_OK && !early_ok && rc != RS_USER_ABORT {
-            let msg = ctx.last_err.take().unwrap_or_else(|| format!("rc={rc}"));
+            let msg = crate::core::parse_failure(rc, ctx.last_err.take());
             return Err(anyhow!("Failed to parse .dta: {msg}"));
         }
     }
@@ -94,16 +96,19 @@ fn parse_dta_impl(
 }
 
 #[pyfunction]
-#[pyo3(signature = (data_path, cols_skip=None, n_max=None, rows_skip=0))]
+#[pyo3(signature = (data_path, cols_skip=None, n_max=None, rows_skip=0, encoding=None, lossy_utf8=false))]
 pub fn df_parse_dta_file<'py>(
     py: Python<'py>,
     data_path: &str,
     cols_skip: Option<Vec<String>>,
     n_max: Option<usize>,
     rows_skip: usize,
+    encoding: Option<&str>,
+    lossy_utf8: bool,
 ) -> PyResult<(Py<PyAny>, String)> {
     // Release GIL during parsing for better Python concurrency
-    let result = py.detach(|| parse_dta_impl(data_path, rows_skip, n_max, cols_skip));
+    let result =
+        py.detach(|| parse_dta_impl(data_path, rows_skip, n_max, cols_skip, encoding, lossy_utf8));
 
     let (ipc, meta) =
         result.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;

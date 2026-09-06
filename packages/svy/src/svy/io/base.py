@@ -109,7 +109,13 @@ def _wrap_io_op(op_name: str, fmt: str, path: str | Path, engine_fn: Callable, *
         raise map_os_error(e, where=where, path=path_obj) from e
     except RuntimeError as e:
         log.debug("%s parse failed: %s", where, e)
-        raise IoError.parse_failed(where=where, fmt=fmt, path=path_obj, engine_msg=str(e)) from e
+        # The engine appends ". Hint: ..." to errors it knows the fix for
+        # (e.g. a Stata 13 file holding UTF-8 text needs encoding="utf-8").
+        engine_msg, _, hint = str(e).partition(". Hint: ")
+        extra = {"hint": hint} if hint else {}
+        raise IoError.parse_failed(
+            where=where, fmt=fmt, path=path_obj, engine_msg=engine_msg, **extra
+        ) from e
     except Exception as e:
         log.debug("%s failed: %s", where, e, exc_info=True)
         # Check if it's a known Polars error we want to wrap, otherwise re-raise or wrap generic

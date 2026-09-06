@@ -36,6 +36,7 @@ fn parse_sas_impl(
     rows_skip: usize,
     n_max: Option<usize>,
     cols_skip: Option<Vec<String>>,
+    lossy_utf8: bool,
 ) -> Result<(Vec<u8>, crate::core::MetaOut)> {
     // Pre-calculate skip set for O(1) lookup
     let cols_skip_set = cols_skip.map(|v| {
@@ -56,6 +57,7 @@ fn parse_sas_impl(
         n_rows_emitted: 0,
         last_counted_row: None,
         had_invalid_utf8: false,
+        lossy_utf8,
         label_sets: HashMap::with_capacity(64), // Pre-allocate for value labels
         file_label: None,
         last_err: None,
@@ -77,8 +79,8 @@ fn parse_sas_impl(
             // Only need value label handler for catalog
             readstat_set_value_label_handler(parser, Some(on_value_label_cb));
 
-            let _keep_enc = match crate::core::configure_parser(parser, catalog_encoding, 0, None)
-            {
+            let cat_enc = crate::core::input_encoding(catalog_encoding, lossy_utf8);
+            let _keep_enc = match crate::core::configure_parser(parser, cat_enc, 0, None) {
                 Ok(k) => k,
                 Err(msg) => {
                     readstat_parser_free(parser);
@@ -122,7 +124,8 @@ fn parse_sas_impl(
         readstat_set_variable_handler(parser, Some(on_variable_cb));
         readstat_set_value_handler(parser, Some(on_value_cb));
 
-        let _keep_enc = match crate::core::configure_parser(parser, encoding, rows_skip, n_max) {
+        let enc = crate::core::input_encoding(encoding, lossy_utf8);
+        let _keep_enc = match crate::core::configure_parser(parser, enc, rows_skip, n_max) {
             Ok(k) => k,
             Err(msg) => {
                 readstat_parser_free(parser);
@@ -149,10 +152,7 @@ fn parse_sas_impl(
 
         // Handle errors
         if rc != RS_OK && !early_ok && rc != RS_USER_ABORT {
-            let msg = ctx
-                .last_err
-                .take()
-                .unwrap_or_else(|| format!("Data parse failed with code {rc}"));
+            let msg = crate::core::parse_failure(rc, ctx.last_err.take());
             return Err(anyhow!("Failed to parse SAS data file: {msg}"));
         }
     }
@@ -182,7 +182,8 @@ fn parse_sas_impl(
     catalog_encoding=None,
     cols_skip=None,
     n_max=None,
-    rows_skip=0
+    rows_skip=0,
+    lossy_utf8=false
 ))]
 pub fn df_parse_sas_file<'py>(
     py: Python<'py>,
@@ -193,6 +194,7 @@ pub fn df_parse_sas_file<'py>(
     cols_skip: Option<Vec<String>>,
     n_max: Option<usize>,
     rows_skip: usize,
+    lossy_utf8: bool,
 ) -> PyResult<(Py<PyAny>, String)> {
     // Release GIL during parsing for better Python concurrency
     let result =
@@ -205,6 +207,7 @@ pub fn df_parse_sas_file<'py>(
                 rows_skip,
                 n_max,
                 cols_skip,
+                lossy_utf8,
             )
         });
 
@@ -230,7 +233,7 @@ mod tests {
 
     #[test]
     fn test_parse_sas_validates_path() {
-        let result = parse_sas_impl("nonexistent.sas7bdat", None, None, None, 0, None, None);
+        let result = parse_sas_impl("nonexistent.sas7bdat", None, None, None, 0, None, None, false);
         assert!(result.is_err());
     }
 
@@ -238,14 +241,23 @@ mod tests {
     fn test_parse_sas_handles_skip_params() {
         // Test that skip parameters are properly configured
         let cols_skip = Some(vec!["var1".to_string(), "var2".to_string()]);
-        let result = parse_sas_impl("test.sas7bdat", None, 10, Some(50), cols_skip);
+        let result = parse_sas_impl("test.sas7bdat", None, None, None, 10, Some(50), cols_skip, false);
         // Will fail on nonexistent file, but tests parameter handling
         assert!(result.is_err());
     }
 
     #[test]
     fn test_parse_sas_with_catalog() {
-        let result = parse_sas_impl("test.sas7bdat", Some("test.sas7bcat"), 0, None, None);
+        let result = parse_sas_impl(
+            "test.sas7bdat",
+            Some("test.sas7bcat"),
+            None,
+            None,
+            0,
+            None,
+            None,
+            false,
+        );
         // Will fail on nonexistent files, but tests catalog parameter
         assert!(result.is_err());
     }
