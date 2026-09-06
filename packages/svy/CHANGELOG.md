@@ -31,7 +31,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Changed
 
-- `combine_samples`: `kind="cross_sectional" | "cs" | "panel"` replaces `units="independent" | "shared"`; default wave labels are `"wave 1".."wave k"` instead of `"s1".."sk"`. A panel keeps the base-wave design and now accepts a later wave that lost PSUs (with a warning) instead of requiring identical design units.
+- `combine_samples`: `kind="cross_sectional" | "cs" | "panel"` replaces `units="independent" | "shared"`; default wave labels are `"wave 1".."wave k"` instead of `"s1".."sk"`; the combined weight column `wgt_name` is always created from each wave's own weight (divided by k under `adjust="average"`), so the waves may name their weights differently. A panel keeps the base-wave design and now accepts a later wave that lost PSUs (with a warning) instead of requiring identical design units.
 - `Design.describe()` shows `Case id` and `Wave` rows, and `PSU  None (variance: <case_id>)` when the case is the fallback PSU; on a panel the design summary lists the case overlap between consecutive waves.
 
 ### Removed

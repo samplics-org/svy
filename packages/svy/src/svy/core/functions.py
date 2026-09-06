@@ -115,6 +115,10 @@ def _check_design_alignment(
         for j, rm in enumerate(role_maps[1:], start=2):
             if rm[role] == cols:
                 continue
+            if role == "wgt" and cols and rm[role]:
+                # Each wave keeps its own weight column; the combined weight
+                # is CREATED under wgt_name, so the names need not match.
+                continue
             if not cols or not rm[role]:
                 with_role, without = (1, j) if cols else (j, 1)
                 mixed_hint = (
@@ -569,7 +573,10 @@ def combine_samples(
         mistaken for real codes. Emitted with a warning or quietly (a log
         line) respectively. Same vocabulary as ``on_singletons`` in wrangling.
     wgt_name : str
-        Name of the combined-weight column (``adjust="average"`` only).
+        Name of the combined weight column the function creates, holding each
+        wave's own weight (divided by k under ``adjust="average"``). The waves'
+        weight columns may be named differently; the other design roles must
+        share one name per role.
     """
     samples = list(samples)
     k = len(samples)
@@ -738,7 +745,10 @@ def combine_samples(
 
     frames, codes, created = _resolve_wave_codes(frames, wave_name)
 
-    if resolved_adjust == "average":
+    # The combined weight is a new column, like every weighting method's:
+    # each wave's own weight (whatever it is called there), divided by k
+    # under adjust="average".
+    if canonical["wgt"]:
         for j, f in enumerate(frames, start=1):
             if wgt_name in f.columns:
                 raise MethodError.not_applicable(
@@ -748,8 +758,11 @@ def combine_samples(
                     param="wgt_name",
                     hint="Choose a different wgt_name.",
                 )
-        wgt_col = canonical["wgt"][0]
-        frames = [f.with_columns((pl.col(wgt_col) / k).alias(wgt_name)) for f in frames]
+        factor = 1.0 / k if resolved_adjust == "average" else 1.0
+        frames = [
+            f.with_columns((pl.col(s._design.wgt).cast(pl.Float64) * factor).alias(wgt_name))
+            for f, s in zip(frames, samples)
+        ]
 
     # Dtype conflicts on shared columns error before concat: silent upcasting of
     # coded variables is how category codes get corrupted.
@@ -818,9 +831,7 @@ def combine_samples(
         stratum=new_stratum,
         psu=canonical["psu"] or None,
         ssu=canonical["ssu"] or None,
-        wgt=wgt_name
-        if resolved_adjust == "average"
-        else (canonical["wgt"][0] if canonical["wgt"] else None),
+        wgt=wgt_name if canonical["wgt"] else None,
         prob=canonical["prob"][0] if canonical["prob"] else None,
         hit=canonical["hit"][0] if canonical["hit"] else None,
         mos=canonical["mos"][0] if canonical["mos"] else None,

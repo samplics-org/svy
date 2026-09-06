@@ -66,8 +66,27 @@ def test_default_wave_labels(two_cycles):
 
 def test_adjust_none_keeps_weight(two_cycles):
     c = svy.combine_samples(list(two_cycles), adjust="none")
-    assert c.design.wgt == "w"
-    assert "combined_wgt" not in c.data.columns
+    assert c.design.wgt == "combined_wgt"
+    assert c.data["combined_wgt"].to_list() == c.data["w"].to_list()
+
+
+def test_wgt_name_names_the_created_weight(two_cycles):
+    c = svy.combine_samples(list(two_cycles), wgt_name="pooled")
+    assert c.design.wgt == "pooled"
+    assert c.data["pooled"].to_list() == pytest.approx((c.data["w"] / 2).to_list())
+
+
+def test_waves_may_name_their_weights_differently():
+    df1 = _cycle([1, 1, 2, 2, 1, 2])
+    df2 = _cycle([1, 1, 2, 2, 1, 2], 2.0, wgt_name="w2")
+    c = svy.combine_samples(
+        [_sample(df1), _sample(df2, wgt_name="w2")], kind="panel", case_id="id", wgt_name="comb"
+    )
+    assert c.design.wgt == "comb"
+    got = c.data.select("wave", "comb", "w", "w2")
+    assert got.filter(pl.col("wave") == 1)["comb"].to_list() == df1["w"].to_list()
+    assert got.filter(pl.col("wave") == 2)["comb"].to_list() == df2["w2"].to_list()
+    assert got.filter(pl.col("wave") == 2)["w"].null_count() == 6  # null-filled, untouched
 
 
 def test_mean_invariant_to_adjust(two_cycles):
@@ -507,7 +526,7 @@ def test_panel_identical_units():
     df1, df2 = _cycle([1, 1, 2, 2, 1, 2]), _cycle([1, 1, 2, 2, 1, 2], 2.0)
     c = svy.combine_samples([_sample(df1), _sample(df2)], kind="panel", case_id="id")
     assert c.design.stratum == ("strat",)  # NOT wave-qualified
-    assert c.design.wgt == "w"  # adjust resolves to "none"
+    assert c.design.wgt == "combined_wgt"  # adjust resolves to "none": each wave's own w
     assert c.design.case_id == "id"
     assert c.design.wave == "wave"
     assert c.design.psu == ("psu",)
