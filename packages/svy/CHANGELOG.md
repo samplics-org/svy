@@ -29,6 +29,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **`glm.predict()` and `glm.margins()` were wrong on an int, float or bool-coded `Cat`.** Both rebuilt a dummy column by slicing the level out of the coefficient *name* and comparing it to the raw column as a string, which numpy answers all-False without raising: every row got the reference-level prediction (off by up to 0.26 in probability on the test model) and every categorical average marginal effect came back exactly 0.0 with SE 0.0. The fitted coefficients were correct throughout, which is what kept it quiet. The design matrix is now rebuilt from the level values in their fitted dtype, through the same polars expression the fit used — and, as a side effect, in one pass instead of a Python loop over object arrays (predict on 1e6 rows: 0.72 s → 0.12 s; a 10-level categorical AME: 5.9 s → 0.8 s).
+
+- **Prediction data is validated.** A missing predictor column raises `ModelError` naming it (was a raw polars `ColumnNotFoundError` or a bare `KeyError`), and a categorical value the fit never saw — including a null — raises instead of being silently coded as the reference level, in `predict()` and in `margins(at=)` alike.
+
 - `categorical.tabulate()` ignored `Design.pop_size`: every table on a design with a finite-population correction reported the fpc-free standard errors (the `ttest` facade had the same gap). The fpc is now applied, matching R `svymean(~interaction(...))` and `svychisq` on an `fpc=` design.
 
 ### Changed
