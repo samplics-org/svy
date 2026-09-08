@@ -366,10 +366,23 @@ def _term_derivative_matrix(
     at their observed values). Terms not involving `var` have zero
     derivative.
     """
-    term_info = fit.term_info or {}
     terms = fit.feature_names
     n = data.height
     D = np.zeros((n, len(terms)))
+
+    # Every factor that survives the product rule, evaluated once.
+    needed = sorted(
+        {
+            part
+            for term in terms
+            if term != "_intercept_"
+            for parts in [term.split(":")]
+            if var in parts
+            for part in parts
+        }
+    )
+    factors = glm._build_term_matrix(data, fit, needed) if needed else np.zeros((n, 0))
+    factor_idx = {name: i for i, name in enumerate(needed)}
 
     for j, term in enumerate(terms):
         if term == "_intercept_":
@@ -384,7 +397,7 @@ def _term_derivative_matrix(
             for i, part in enumerate(parts):
                 if i == occ:
                     continue
-                prod = prod * glm._resolve_pred_term(part, data, term_info)
+                prod = prod * factors[:, factor_idx[part]]
             dcol += prod
         D[:, j] = dcol
 
@@ -432,7 +445,9 @@ def _categorical_contrast_ame(
     offset = offset_values(fit, data)
 
     def _counterfactual(level: object) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        cf = data.with_columns(pl.lit(level).alias(var))
+        # The counterfactual column keeps the fitted dtype, so the rebuilt
+        # dummies compare like for like whatever the Cat column is coded as.
+        cf = data.with_columns(pl.lit(level, dtype=data.schema[var]).alias(var))
         X = glm._build_prediction_matrix(cf, fit)
         eta = X @ beta_vec + offset
         return link_inverse(fit.link, eta), link_mu_eta(fit.link, eta), X
@@ -521,7 +536,15 @@ def compute_predictive_margins(
             X_cf = X_base.copy()
             X_cf[:, col_idx] = float(val)
         else:
-            cf_data = data.with_columns(pl.lit(val).alias(variable))
+            # A categorical `at` level must keep the column's fitted dtype so
+            # the rebuilt dummies match; a continuous one must not, or an
+            # integer column would truncate a fractional value.
+            lit_dtype = (
+                data.schema.get(variable)
+                if (fit.term_info or {}).get(variable, {}).get("type") == "categorical"
+                else None
+            )
+            cf_data = data.with_columns(pl.lit(val, dtype=lit_dtype).alias(variable))
             X_cf = glm._build_prediction_matrix(cf_data, fit)
 
         # Counterfactual rows are the fitted rows with one column overwritten,

@@ -12,6 +12,7 @@ import pytest
 from svy.core.enumerations import DistFamily
 from svy.core.sample import Design, Sample
 from svy.core.terms import Cat
+from svy.errors.model_errors import ModelError
 
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
@@ -740,5 +741,5 @@ class TestGLMPredictEdgeCases:
 
         bad_data = api_strat.head(5).drop("meals")
 
-        with pytest.raises(KeyError):
+        with pytest.raises(ModelError, match="meals"):
             model.predict(bad_data)

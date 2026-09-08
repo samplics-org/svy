@@ -58,6 +58,17 @@ LinkArg = (
 _FAMILY_NAMES = "'gaussian', 'binomial', 'poisson', 'gamma', or 'inverse_gaussian'"
 
 
+def _dummy_expr(var: str, level: Any) -> pl.Expr:
+    """
+    The indicator expression for one level of a categorical column.
+
+    Used both when the fit engineers its dummies and when prediction rebuilds
+    them, so the two are consistent by construction whatever the column's
+    dtype.
+    """
+    return (pl.col(var) == pl.lit(level)).cast(pl.Float64)
+
+
 def _normalize_family(family: FamilyArg) -> str:
     """
     Normalize user-facing family string to canonical lowercase form.
@@ -451,17 +462,21 @@ class GLM:
                 ref_val = feat.ref if feat.ref is not None else levels[0]
                 levels = [ref_val] + [v for v in levels if v != ref_val]
 
+                # `dummies` pairs each engineered column with the level value
+                # in its native dtype, so prediction rebuilds the column with
+                # the same expression the fit used instead of parsing the
+                # level back out of the column name as a string.
+                dummies = [(f"{feat.name}_{level}", level) for level in levels[1:]]
                 term_info[feat.name] = {
                     "type": "categorical",
                     "levels": levels,
                     "ref": ref_val,
+                    "dummies": dummies,
                 }
 
                 exprs, names = [], []
-                for level in levels[1:]:
-                    name = f"{feat.name}_{level}"
-                    expr = (pl.col(feat.name) == level).cast(pl.Float64).alias(name)
-                    exprs.append(expr)
+                for name, level in dummies:
+                    exprs.append(_dummy_expr(feat.name, level).alias(name))
                     names.append(name)
                 return exprs, names
 
@@ -854,105 +869,142 @@ class GLM:
                 cols.extend(self._collect_feature_cols([feat.left, feat.right]))
         return cols
 
+    def _term_expr(
+        self,
+        name: str,
+        term_info: dict,
+        dummy_map: dict[str, tuple[str, Any]],
+        columns: set[str],
+        missing: set[str],
+    ) -> pl.Expr:
+        """The polars expression rebuilding one engineered feature column."""
+        if name == "_intercept_":
+            # pl.repeat, not pl.lit: an intercept-only model would otherwise
+            # select a single broadcast row instead of one per observation.
+            return pl.repeat(1.0, pl.len(), dtype=pl.Float64)
+
+        if ":" in name:
+            expr = None
+            for part in name.split(":"):
+                part_expr = self._term_expr(part, term_info, dummy_map, columns, missing)
+                expr = part_expr if expr is None else expr * part_expr
+            return cast(pl.Expr, expr)
+
+        dummy = dummy_map.get(name)
+        if dummy is not None:
+            var, level = dummy
+            if var not in columns:
+                missing.add(var)
+                return pl.repeat(0.0, pl.len(), dtype=pl.Float64)
+            return _dummy_expr(var, level)
+
+        if name not in columns:
+            missing.add(name)
+            return pl.repeat(0.0, pl.len(), dtype=pl.Float64)
+        return pl.col(name).cast(pl.Float64)
+
+    def _build_term_matrix(
+        self,
+        new_data: pl.DataFrame,
+        fit: GLMFit,
+        names: Sequence[str],
+    ) -> np.ndarray:
+        """
+        Build the n x len(names) matrix of engineered feature columns for
+        `new_data`, evaluating every term as one polars select.
+        """
+        term_info = fit.term_info or {}
+        dummy_map: dict[str, tuple[str, Any]] = {}
+        for var, info in term_info.items():
+            if info.get("type") != "categorical":
+                continue
+            for dummy_name, level in info.get("dummies") or []:
+                dummy_map[dummy_name] = (var, level)
+
+        columns = set(new_data.columns)
+        missing: set[str] = set()
+        exprs = [
+            self._term_expr(name, term_info, dummy_map, columns, missing).alias(f"__f{j}__")
+            for j, name in enumerate(names)
+        ]
+        if missing:
+            raise ModelError(
+                title="Column missing from prediction data",
+                detail=(
+                    "The model was fitted on columns that are absent from the "
+                    f"data given here: {sorted(missing)!r}."
+                ),
+                code="PRED_COLUMN_MISSING",
+                where="GLM.predict",
+                expected=sorted(missing),
+                got=sorted(columns),
+                hint="Provide every predictor the model was fitted on.",
+            )
+
+        self._validate_prediction_levels(new_data, term_info, dummy_map, names)
+
+        if not exprs:
+            return np.zeros((new_data.height, 0))
+        return new_data.select(exprs).to_numpy()
+
+    @staticmethod
+    def _validate_prediction_levels(
+        new_data: pl.DataFrame,
+        term_info: dict,
+        dummy_map: dict[str, tuple[str, Any]],
+        names: Sequence[str],
+    ) -> None:
+        """
+        Refuse levels the fit never saw (and nulls) in a categorical column.
+
+        Silently coding them as the reference level would change the meaning
+        of the prediction without saying so.
+        """
+        used: set[str] = set()
+        for name in names:
+            for part in name.split(":"):
+                dummy = dummy_map.get(part)
+                if dummy is not None:
+                    used.add(dummy[0])
+
+        for var in sorted(used):
+            levels = list((term_info.get(var) or {}).get("levels") or [])
+            col = new_data.get_column(var)
+            try:
+                wanted = pl.Series(var, levels, dtype=col.dtype)
+            except Exception:
+                # The column's dtype cannot even hold the fitted levels, so
+                # every value in it is unknown; report them rather than the
+                # polars construction error.
+                wanted = None
+            if wanted is not None:
+                unseen = pl.col(var).is_null() | ~pl.col(var).is_in(wanted.implode())
+                bad = new_data.filter(unseen).get_column(var).unique().sort().to_list()
+            else:
+                bad = [v for v in col.unique().to_list() if v not in levels]
+            if bad:
+                raise ModelError(
+                    title="Unknown level in prediction data",
+                    detail=(
+                        f"Column {var!r} holds {bad!r}, which the fit never saw. "
+                        "Coding them as the reference level would silently change "
+                        "the prediction."
+                    ),
+                    code="PRED_UNKNOWN_LEVEL",
+                    where="GLM.predict",
+                    param=var,
+                    got=bad,
+                    expected=levels,
+                    hint="Drop those rows, or refit with the level present.",
+                )
+
     def _build_prediction_matrix(
         self,
         new_data: pl.DataFrame,
         fit: GLMFit,
     ) -> np.ndarray:
         """Build design matrix for prediction."""
-        n = new_data.height
-        terms = [c.term for c in fit.coefs]
-        term_info = fit.term_info or {}
-        k = len(terms)
-
-        # Identify simple continuous columns that can be batch-extracted in one select
-        simple_cont = {
-            t
-            for t in terms
-            if t in new_data.columns
-            and ":" not in t
-            and t != "_intercept_"
-            and term_info.get(t, {}).get("type") == "continuous"
-        }
-
-        # Batch-extract continuous columns in a single Polars select
-        batch_mat: np.ndarray | None = None
-        batch_cols: list[str] = []
-        if simple_cont:
-            batch_cols = [t for t in terms if t in simple_cont]  # preserves order
-            batch_mat = new_data.select(
-                [pl.col(c).cast(pl.Float64) for c in batch_cols]
-            ).to_numpy()
-
-        batch_idx = {col: i for i, col in enumerate(batch_cols)}
-
-        X = np.zeros((n, k))
-        for j, term in enumerate(terms):
-            if term in batch_idx:
-                X[:, j] = batch_mat[:, batch_idx[term]]
-            else:
-                X[:, j] = self._resolve_pred_term(term, new_data, term_info)
-
-        return X
-
-    def _resolve_pred_term(
-        self,
-        term: str,
-        data: pl.DataFrame,
-        term_info: dict,
-    ) -> np.ndarray:
-        """Resolve a single term for prediction."""
-        n = data.height
-
-        if term == "_intercept_":
-            return np.ones(n)
-
-        if ":" in term:
-            parts = term.split(":")
-            result = np.ones(n)
-            for part in parts:
-                result = result * self._resolve_pred_term(part, data, term_info)
-            return result
-
-        for var_name, info in term_info.items():
-            if info.get("type") == "categorical":
-                prefix = f"{var_name}_"
-                if term.startswith(prefix):
-                    level = term[len(prefix) :]
-                    if level in info["levels"]:
-                        col = data.get_column(var_name)
-                        return self._compare_level(col, level)
-
-        if term in data.columns:
-            return data.get_column(term).cast(pl.Float64).to_numpy()
-
-        if "_" in term:
-            for i in range(len(term) - 1, 0, -1):
-                if term[i] == "_":
-                    var = term[:i]
-                    level = term[i + 1 :]
-                    if var in data.columns:
-                        col = data.get_column(var)
-                        return self._compare_level(col, level)
-
-        raise KeyError(f"Cannot resolve term '{term}'")
-
-    def _compare_level(self, col: pl.Series, level) -> np.ndarray:
-        """Compare column to level, handling type coercion."""
-        col_np = col.to_numpy()
-
-        try:
-            return (col_np == level).astype(np.float64)
-        except (TypeError, ValueError):
-            pass
-
-        try:
-            level_num = float(level) if "." in str(level) else int(level)
-            return (col_np == level_num).astype(np.float64)
-        except (TypeError, ValueError):
-            pass
-
-        return (col_np.astype(str) == str(level)).astype(np.float64)
+        return self._build_term_matrix(new_data, fit, [c.term for c in fit.coefs])
 
     def to_polars(self) -> pl.DataFrame:
         """Export fitted coefficients to a Polars DataFrame."""
