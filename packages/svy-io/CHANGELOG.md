@@ -4,6 +4,8 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-08
+
 <!-- ### Added, ### Changed, ### Fixed, ### Deprecated, ### Removed, ### Security -->
 
 ### Added
@@ -88,7 +90,8 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 First release tracked in this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-io-v0.3.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-io-v0.4.0...HEAD
+[0.4.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.4.0
 [0.3.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.3.0
 [0.2.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.2.0
 [0.1.1]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.1.1
