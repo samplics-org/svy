@@ -152,6 +152,8 @@ class TestExponentiatedCoefficients:
         [
             ("gaussian", "identity", "api00"),
             ("binomial", "probit", "y"),
+            ("binomial", "cauchit", "y"),
+            ("poisson", "sqrt", "enroll"),
             ("gamma", "inverse", "api00"),
         ],
     )

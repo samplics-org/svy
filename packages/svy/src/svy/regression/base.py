@@ -52,11 +52,25 @@ FamilyArg = (
     | DistFamily
 )
 LinkArg = (
-    Literal["identity", "logit", "probit", "cloglog", "log", "inverse", "inverse_squared"]
+    Literal[
+        "identity",
+        "logit",
+        "probit",
+        "cauchit",
+        "cloglog",
+        "log",
+        "sqrt",
+        "inverse",
+        "inverse_squared",
+    ]
     | LinkFunction
 )
 
 _FAMILY_NAMES = "'gaussian', 'binomial', 'poisson', 'gamma', or 'inverse_gaussian'"
+_LINK_NAMES = (
+    "'identity', 'logit', 'probit', 'cauchit', 'cloglog', 'log', 'sqrt', "
+    "'inverse', or 'inverse_squared'"
+)
 
 
 def _dummy_expr(var: str, level: Any) -> pl.Expr:
@@ -146,8 +160,10 @@ def _normalize_link(link: LinkArg | None) -> str | None:
       - "identity"
       - "logit"
       - "probit"
+      - "cauchit"
       - "cloglog"
       - "log"
+      - "sqrt"
       - "inverse"
       - "inverse_squared"
     """
@@ -155,8 +171,10 @@ def _normalize_link(link: LinkArg | None) -> str | None:
         "identity": "identity",
         "logit": "logit",
         "probit": "probit",
+        "cauchit": "cauchit",
         "cloglog": "cloglog",
         "log": "log",
+        "sqrt": "sqrt",
         "inverse": "inverse",
         "inverse_squared": "inverse_squared",
     }
@@ -164,17 +182,11 @@ def _normalize_link(link: LinkArg | None) -> str | None:
         return None
     if not isinstance(link, str):
         raise TypeError(
-            f"'link' must be a string or None, got {type(link).__name__}. "
-            f"Use 'identity', 'logit', 'probit', 'cloglog', 'log', 'inverse', "
-            f"or 'inverse_squared'."
+            f"'link' must be a string or None, got {type(link).__name__}. Use {_LINK_NAMES}."
         )
     result = _MAP.get(link.strip().lower())
     if result is None:
-        raise ValueError(
-            f"Unknown link {link!r}. "
-            f"Use 'identity', 'logit', 'probit', 'cloglog', 'log', 'inverse', "
-            f"or 'inverse_squared'."
-        )
+        raise ValueError(f"Unknown link {link!r}. Use {_LINK_NAMES}.")
     return result
 
 
@@ -325,11 +337,12 @@ class GLM:
             Distribution family: ``'gaussian'``, ``'binomial'``, ``'poisson'``,
             ``'gamma'``, or ``'inverse_gaussian'``.
         link : str, optional
-            Link function: ``'identity'``, ``'logit'``, ``'probit'``, ``'cloglog'``,
-            ``'log'``, ``'inverse'``, or ``'inverse_squared'``. If None, uses the
-            canonical link for the family. Each family admits only the links R's
-            family objects do, so an unusable pairing raises rather than fitting
-            (see ``FAMILY_LINKS``).
+            Link function: ``'identity'``, ``'logit'``, ``'probit'``,
+            ``'cauchit'``, ``'cloglog'``, ``'log'``, ``'sqrt'``, ``'inverse'``,
+            or ``'inverse_squared'``. If None, uses the canonical link for the
+            family. Each family admits exactly the links R's family objects do,
+            so an unusable pairing raises rather than fitting (see
+            ``FAMILY_LINKS``).
         offset : str, optional
             Column holding a known term on the *link* scale, entered with its
             coefficient fixed at 1. The usual use is a rate model: Poisson
@@ -734,6 +747,9 @@ class GLM:
         dev = dev * rho
         null_dev = null_dev * rho
         naive_cov = naive_cov / rho
+        # The Pearson dispersion is linear in the weight scale too, so it
+        # follows the deviance onto R's (fitted-rows-only) normalisation.
+        scale = scale * rho
 
         # Design DF — for GLM we follow the regression convention used by
         # R's svyglm: df_resid = degf(design) - (k - 1), where k - 1 is the

@@ -127,8 +127,10 @@ class LinkFunction(StrEnum):
     IDENTITY = "identity"
     LOGIT = "logit"
     PROBIT = "probit"
+    CAUCHIT = "cauchit"
     CLOGLOG = "cloglog"
     LOG = "log"
+    SQRT = "sqrt"
     INVERSE = "inverse"
     INVERSE_SQUARED = "inverse_squared"
 

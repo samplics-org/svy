@@ -6,11 +6,17 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ### Added
 
-- `converged` on `GlmResult`, and `where_col` on `fit_glm_rs`: a Boolean column marking a subpopulation, fitted as one domain. A `where=` clause used to be routed through `fit_glm_by` on a "true"/"false" string column, which fitted the complement as well and threw it away.
+- `Link::Cauchit` and `Link::Sqrt`, mirroring R's `make.link`: cauchit clamps eta at `-qcauchy(.Machine$double.eps)` and computes `pcauchy` from `atan(1/x)` outside [-1, 1] (the naive `atan(x)/pi + 0.5` loses three and a half digits at x = -1000); sqrt is `eta^2` with `mu_eta = 2*eta`, and needs no `valideta` since the kernel does no step-halving.
+
+- - `converged` on `GlmResult`, and `where_col` on `fit_glm_rs`: a Boolean column marking a subpopulation, fitted as one domain. A `where=` clause used to be routed through `fit_glm_by` on a "true"/"false" string column, which fitted the complement as well and threw it away.
 
 - `domain_col` on `tabulate_rs`: a Boolean column marking the rows of a subpopulation. Out-of-domain rows keep their design columns and get weight 0 (R's `subset()` on a design), so the PSU structure is intact and `degrees_of_freedom` counts the units with an in-domain row; cells are formed from in-domain keys only (a null key outside the domain is not missing), and the Rao-Scott `n`, strata and PSU counts are taken over in-domain rows. `estimate_proportions`, `estimate_totals` and `count_strata_psus` gain the matching `domain` parameter.
 
 ### Changed
+
+- **`Family::initial_mu` takes the row's prior weight** and returns R's `family$initialize` starting value: `(w y + 1/2)/(w + 1)` for binomial, `y + 0.1` for poisson, `y` elsewhere. The old binomial seed `(y + 1/2)/2` put IRLS on a different iterate path from R's, which on a flat deviance surface means stopping somewhere else — cloglog on apistrat ended 3e-5 from R's coefficients.
+
+- **`scale` is the Pearson dispersion for every family**, divided by `n_obs - k`. It was hard-coded to 1.0 for binomial and poisson and divided by the design `df_resid` for the rest.
 
 - **The IRLS normal equations are a blocked cross-product** (`build_irls_normal_eqs`). The row-outer Kahan loop became columns-outer over 256-row blocks of the column-major X, so the inner loop is a contiguous dot product that vectorizes, with `w * X_a` formed once per (block, column) instead of once per (block, column pair). Blocks are grouped into fixed 8192-row parallel chunks and summed in index order, so the result is independent of the core count and of how rayon schedules the work. Kahan compensation is gone — R's `crossprod` is plain summation, and blocked f64 is ~1e-14 relative at 1e6 rows.
 

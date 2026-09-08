@@ -29,8 +29,18 @@ DATA_DIR = Path(__file__).parent.parent.parent / "test_data"
 
 # Strict tolerance. Once df convention matches R, every reported quantity
 # should agree at this level.
-RTOL = 1e-3
-ATOL = 1e-5
+# Coefficients agree with R to ~1e-13. Everything downstream of them is set by
+# how flat the deviance surface is at the optimum: cauchit and cloglog stop a
+# few times 1e-7 from R's iterate — same iteration count, deviances agreeing to
+# 14 digits — and the standard errors, CI bounds and t statistics inherit that.
+# 1e-6 is the bar the published svy-vs-R comparison holds to.
+#
+# Every reference value in this file comes from survey 4.5 with
+# `glm.control(epsilon = 1e-12, maxit = 100)`, printed at 17 significant
+# digits. Regenerate with scripts/gen_r_reference.R.
+BETA_RTOL = 1e-9
+RTOL = 1e-6
+ATOL = 1e-6
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +91,7 @@ def _assert_matches(
 ):
     beta, se, lci, uci, t_stat, p_val = _arrays(result, order)
 
-    np.testing.assert_allclose(beta, beta_r, rtol=RTOL, atol=ATOL)
+    np.testing.assert_allclose(beta, beta_r, rtol=BETA_RTOL, atol=BETA_RTOL)
     np.testing.assert_allclose(se, se_r, rtol=RTOL, atol=ATOL)
     np.testing.assert_allclose(lci, lci_r, rtol=RTOL, atol=ATOL)
     np.testing.assert_allclose(uci, uci_r, rtol=RTOL, atol=ATOL)
@@ -166,138 +176,194 @@ class TestLogisticBinomial:
     FAMILY = DistFamily.BINOMIAL
     LINK = LinkFunction.LOGIT
 
+    BETA_R = np.array(
+        [
+            2.6657560181546054,
+            -0.037032497844835449,
+            -0.084687878058789037,
+            -0.0044285921211283386,
+        ]
+    )
+
+    def _fit(self, sample):
+        return sample.glm.fit(
+            y=self.Y, x=X_COLS, family=self.FAMILY, link=self.LINK, tol=TOL_TIGHT
+        )
+
     def test_weights_only(self):
         """
         R: svydesign(ids = ~1, weights = ~pw, data = apistrat)
         df.residual = degf(199) - 3 = 196.
         """
-        sample = make_sample(api_strat, weight=WEIGHT_COL)
-        res = sample.glm.fit(y=self.Y, x=X_COLS, family=self.FAMILY, link=self.LINK)
+        res = self._fit(make_sample(api_strat, weight=WEIGHT_COL))
 
-        beta_r = np.array(
-            [2.66575599278362, -0.03703249576700, -0.08468787757247, -0.00442859225861]
-        )
-        se_r = np.array([0.4718196688815, 0.0336366431167, 0.0146021693674, 0.0147882129185])
-        lci_r = np.array([1.735260974591, -0.103368706216, -0.113485417708, -0.033593036550])
-        uci_r = np.array([3.5962510109757, 0.0293037146817, -0.0558903374373, 0.0247358520327])
-        t_r = np.array([5.649946724568, -1.100956942658, -5.799677804144, -0.299467710062])
-        p_r = np.array(
+        se_r = np.array(
             [
-                5.59248119211e-08,
-                2.72265633197e-01,
-                2.62748928676e-08,
-                7.64900528326e-01,
+                0.47183062120583119,
+                0.033633929428454265,
+                0.014601859471081332,
+                0.014788488491689686,
             ]
         )
-        f_r = 17.90289
-        df_resid_r = 196
+        lci_r = np.array(
+            [1.7352394004321785, -0.10336335651716205, -0.1134848070346248, -0.033593579881664247]
+        )
+        uci_r = np.array(
+            [3.5962726358770323, 0.029298360827491154, -0.055890949082953278, 0.02473639563940757]
+        )
+        t_r = np.array(
+            [5.6498156294771231, -1.1010458330065354, -5.7998009244309987, -0.29946212039296394]
+        )
+        p_r = np.array(
+            [
+                5.596149015353141e-08,
+                0.27222704222193062,
+                2.6258437050433241e-08,
+                0.76490478630630276,
+            ]
+        )
 
-        _assert_matches(res, TERMS, beta_r, se_r, lci_r, uci_r, t_r, p_r, f_r, df_resid_r)
+        _assert_matches(
+            res, TERMS, self.BETA_R, se_r, lci_r, uci_r, t_r, p_r, 17.900911666612103, 196
+        )
 
     def test_psu_only(self):
         """
         R: svydesign(ids = ~dnum, weights = ~pw, data = apistrat)
         df.residual = degf(134) - 3 = 131.
         """
-        sample = make_sample(api_strat, weight=WEIGHT_COL, psu=PSU_COL)
-        res = sample.glm.fit(y=self.Y, x=X_COLS, family=self.FAMILY, link=self.LINK)
+        res = self._fit(make_sample(api_strat, weight=WEIGHT_COL, psu=PSU_COL))
 
-        beta_r = np.array(
-            [2.66575599278362, -0.03703249576700, -0.08468787757247, -0.00442859225861]
-        )
-        se_r = np.array([0.4949505366073, 0.0318263271683, 0.0143857416874, 0.0153725477059])
-        lci_r = np.array([1.6866257662542, -0.0999925627336, -0.1131463061938, -0.0348391585765])
-        uci_r = np.array([3.6448862193130, 0.0259275711996, -0.0562294489511, 0.0259819740593])
-        t_r = np.array([5.385903834060, -1.163580565584, -5.886931616945, -0.288084470014])
-        p_r = np.array(
+        se_r = np.array(
             [
-                3.23298314471e-07,
-                2.46709009862e-01,
-                3.11757045250e-08,
-                7.73737368990e-01,
+                0.49495814244678543,
+                0.031823505872227903,
+                0.014385404300707363,
+                0.0153727501171125,
             ]
         )
-        f_r = 18.2147
-        df_resid_r = 131
+        lci_r = np.array(
+            [
+                1.6866107454605002,
+                -0.099986983614700611,
+                -0.11314563924885862,
+                -0.034839558856758435,
+            ]
+        )
+        uci_r = np.array(
+            [3.6449012908487108, 0.025921987925029741, -0.05623011686871944, 0.025982374614501771]
+        )
+        t_r = np.array(
+            [5.3858211221188457, -1.1636837874972596, -5.8870697193143711, -0.28808066789549636]
+        )
+        p_r = np.array(
+            [
+                3.234200227019264e-07,
+                0.24666731012081464,
+                3.1155126189678249e-08,
+                0.77374027290400949,
+            ]
+        )
 
-        _assert_matches(res, TERMS, beta_r, se_r, lci_r, uci_r, t_r, p_r, f_r, df_resid_r)
+        _assert_matches(
+            res, TERMS, self.BETA_R, se_r, lci_r, uci_r, t_r, p_r, 18.212684811379344, 131
+        )
 
     def test_stratified(self):
         """
         R: svydesign(ids = ~1, strata = ~stype, weights = ~pw, data = apistrat)
         df.residual = degf(197) - 3 = 194.
         """
-        sample = make_sample(api_strat, weight=WEIGHT_COL, stratum=STRATUM_COL)
-        res = sample.glm.fit(y=self.Y, x=X_COLS, family=self.FAMILY, link=self.LINK)
+        res = self._fit(make_sample(api_strat, weight=WEIGHT_COL, stratum=STRATUM_COL))
 
-        beta_r = np.array(
-            [2.66575599278362, -0.03703249576700, -0.08468787757247, -0.00442859225861]
-        )
-        se_r = np.array([0.4394318774792, 0.0336398300623, 0.0143310610689, 0.0148363068282])
-        lci_r = np.array([1.7990787680499, -0.1033792404005, -0.1129525640262, -0.0336897585194])
-        uci_r = np.array([3.5324332175174, 0.0293142488665, -0.0564231911188, 0.0248325740021])
-        t_r = np.array([6.066369167562, -1.100852641003, -5.909393391399, -0.298496944684])
-        p_r = np.array(
+        se_r = np.array(
             [
-                6.72854969843e-09,
-                2.72324819493e-01,
-                1.51882026548e-08,
-                7.65643382623e-01,
+                0.43944331101866585,
+                0.033637099784074934,
+                0.014330750813864318,
+                0.014836586763893832,
             ]
         )
-        f_r = 18.75483
-        df_resid_r = 194
+        lci_r = np.array(
+            [1.7990562434220982, -0.10337385763919192, -0.11295195260649861, -0.03369031048989396]
+        )
+        uci_r = np.array(
+            [3.532455792887113, 0.029308861949521064, -0.056423803511079451, 0.0248331262476373]
+        )
+        t_r = np.array(
+            [6.0662113890757903, -1.1009420575066351, -5.9095213613551607, -0.29849130339774077]
+        )
+        p_r = np.array(
+            [
+                6.7341039860466378e-09,
+                0.27228599664699177,
+                1.5178210002519009e-08,
+                0.76564768111068038,
+            ]
+        )
 
-        _assert_matches(res, TERMS, beta_r, se_r, lci_r, uci_r, t_r, p_r, f_r, df_resid_r)
+        _assert_matches(
+            res, TERMS, self.BETA_R, se_r, lci_r, uci_r, t_r, p_r, 18.752710895510294, 194
+        )
 
     def test_psu_stratified(self):
         """
-        R: svydesign(ids = ~dnum, strata = ~stype, weights = ~pw, data = apistrat,
-                     nest = TRUE)
-        df.residual = degf(159) - 3 = 156. Headline test: full design.
+        R: svydesign(ids = ~dnum, strata = ~stype, weights = ~pw, nest = TRUE)
+        df.residual = degf(159) - 3 = 156.
         """
-        sample = make_sample(
-            api_strat,
-            weight=WEIGHT_COL,
-            stratum=STRATUM_COL,
-            psu=PSU_COL,
+        res = self._fit(
+            make_sample(api_strat, weight=WEIGHT_COL, stratum=STRATUM_COL, psu=PSU_COL)
         )
-        res = sample.glm.fit(y=self.Y, x=X_COLS, family=self.FAMILY, link=self.LINK)
 
-        beta_r = np.array(
-            [2.66575599278362, -0.03703249576700, -0.08468787757247, -0.00442859225861]
-        )
-        se_r = np.array([0.4723878944699, 0.0324219677485, 0.0142841040197, 0.0154627861042])
-        lci_r = np.array([1.7326540860469, -0.1010752036358, -0.1129030898012, -0.0349720404846])
-        uci_r = np.array([3.5988578995203, 0.0270102121018, -0.0564726653437, 0.0261148559674])
-        t_r = np.array([5.643150520983, -1.142203830880, -5.928819718477, -0.286403254159])
-        p_r = np.array(
+        se_r = np.array(
             [
-                7.67036694615e-08,
-                2.55119387199e-01,
-                1.89371130877e-08,
-                7.74949284984e-01,
+                0.47239535487602796,
+                0.032419092874371322,
+                0.01428377187915625,
+                0.015463001042914828,
             ]
         )
-        f_r = 18.21718
-        df_resid_r = 156
+        lci_r = np.array(
+            [1.732639374970852, -0.10106952701065887, -0.11290243421457213, -0.034972464912803328]
+        )
+        uci_r = np.array(
+            [3.5988726613383588, 0.027004531320987971, -0.056473321903005941, 0.026115280670546654]
+        )
+        t_r = np.array(
+            [5.6430614540106712, -1.1423051838107172, -5.9289576153460377, -0.28639926420735295]
+        )
+        p_r = np.array(
+            [
+                7.6736633045646221e-08,
+                0.25507739890980996,
+                1.8924144585539587e-08,
+                0.7749523349186721,
+            ]
+        )
 
-        _assert_matches(res, TERMS, beta_r, se_r, lci_r, uci_r, t_r, p_r, f_r, df_resid_r)
+        _assert_matches(
+            res, TERMS, self.BETA_R, se_r, lci_r, uci_r, t_r, p_r, 18.215200302700453, 156
+        )
+
+    def test_deviance_matches_r(self):
+        res = self._fit(make_sample(api_strat, weight=WEIGHT_COL))
+
+        np.testing.assert_allclose(res.stats.deviance, 126.40336814855682, rtol=1e-11)
+        assert res.stats.iterations == 7
 
 
 # ===========================================================================
-# Probit / cloglog binomial
+# Non-canonical binomial links
 # ===========================================================================
 #
-# References from R survey 4.5, same designs as the logit classes above:
+# References from R survey 4.5, same designs as above:
 #
 #   svyglm(y_bin ~ ell + meals + mobility, design = d,
-#          family = quasibinomial(link = "probit"),  # or "cloglog"
-#          epsilon = 1e-12, maxit = 100)
+#          family = quasibinomial(link = "probit"),  # or cloglog, cauchit
+#          control = glm.control(epsilon = 1e-12, maxit = 100))
 #
-# Both sides are run to epsilon/tol 1e-12 so the comparison measures the link
-# implementation rather than each side's default IRLS stopping rule (at the
-# defaults the two agree to ~2e-4, well inside RTOL but not informative).
+# Both sides run to epsilon/tol 1e-12, so the comparison measures the link
+# implementation rather than either side's default stopping rule.
 
 TOL_TIGHT = 1e-12
 
@@ -509,6 +575,268 @@ class TestCloglogBinomial:
 
 
 # ===========================================================================
+# Cauchit
+# ===========================================================================
+#
+# R: svyglm(y_bin ~ ell + meals + mobility, design = d,
+#           family = quasibinomial("cauchit"), epsilon = 1e-12, maxit = 100)
+# 13 iterations, deviance 130.32488578669, null deviance 240.92309138328.
+
+
+class TestCauchitBinomial:
+    """Binomial with the cauchit link — R's heavy-tailed alternative to probit."""
+
+    Y = "y_bin"
+    FAMILY = DistFamily.BINOMIAL
+    LINK = LinkFunction.CAUCHIT
+
+    BETA_R = np.array(
+        [4.0986612834687541, -0.1290296244579282, -0.1024835521161248, -0.0067223167239736]
+    )
+
+    def _fit(self, sample):
+        return sample.glm.fit(
+            y=self.Y, x=X_COLS, family=self.FAMILY, link=self.LINK, tol=TOL_TIGHT
+        )
+
+    def test_weights_only(self):
+        """R: svydesign(ids = ~1, weights = ~pw, data = apistrat)."""
+        res = self._fit(make_sample(api_strat, weight=WEIGHT_COL))
+
+        se_r = np.array(
+            [1.149926686793614, 0.057634171390035, 0.027203402064348, 0.018459976985043]
+        )
+        lci_r = np.array(
+            [1.83084346255382, -0.24269234963255, -0.15613250269667, -0.04312799828711]
+        )
+        uci_r = np.array(
+            [6.366479104383693, -0.015366899283305, -0.048834601535577, 0.029683364839163]
+        )
+        t_r = np.array([3.56428051504502, -2.23876948945323, -3.76730645210128, -0.36415628954576])
+        p_r = np.array(
+            [
+                0.00045829299761182,
+                0.02629532150536624,
+                0.00021818987826425,
+                0.71613384753536891,
+            ]
+        )
+
+        _assert_matches(
+            res, TERMS, self.BETA_R, se_r, lci_r, uci_r, t_r, p_r, 5.0175071693038, 196
+        )
+
+    def test_psu_only(self):
+        """R: svydesign(ids = ~dnum, weights = ~pw, data = apistrat)."""
+        res = self._fit(make_sample(api_strat, weight=WEIGHT_COL, psu=PSU_COL))
+
+        se_r = np.array([1.12989110172503, 0.05295680280924, 0.02657369341075, 0.01880490338948])
+        lci_r = np.array(
+            [1.863467160902833, -0.233790812689591, -0.155052656550963, -0.043922901335547]
+        )
+        uci_r = np.array(
+            [6.333855406034676, -0.024268436226266, -0.049914447681287, 0.030478267887600]
+        )
+        t_r = np.array([3.62748346031863, -2.43650707016274, -3.85657915638730, -0.35747680191403])
+        p_r = np.array(
+            [
+                0.00040879834908483,
+                0.01617318570069474,
+                0.00017947632534580,
+                0.72131016131269621,
+            ]
+        )
+
+        _assert_matches(
+            res, TERMS, self.BETA_R, se_r, lci_r, uci_r, t_r, p_r, 5.3557494777218, 131
+        )
+
+    def test_stratified(self):
+        """R: svydesign(ids = ~1, strata = ~stype, weights = ~pw, data = apistrat)."""
+        res = self._fit(make_sample(api_strat, weight=WEIGHT_COL, stratum=STRATUM_COL))
+
+        se_r = np.array(
+            [1.104923280176664, 0.057446493453922, 0.026442062562894, 0.018544421400382]
+        )
+        lci_r = np.array(
+            [1.919456971982167, -0.242329478357791, -0.154634373603426, -0.043296876962469]
+        )
+        uci_r = np.array(
+            [6.277865594955342, -0.015729770558065, -0.050332730628823, 0.029852243514522]
+        )
+        t_r = np.array([3.70945327789041, -2.24608355880630, -3.87577753711011, -0.36249805690001])
+        p_r = np.array(
+            [
+                0.00027113730896457,
+                0.02582616780665334,
+                0.00014535457741839,
+                0.71737447362485574,
+            ]
+        )
+
+        _assert_matches(
+            res, TERMS, self.BETA_R, se_r, lci_r, uci_r, t_r, p_r, 5.2839016429836, 194
+        )
+
+    def test_psu_stratified(self):
+        """R: svydesign(ids = ~dnum, strata = ~stype, weights = ~pw, nest = TRUE)."""
+        res = self._fit(
+            make_sample(api_strat, weight=WEIGHT_COL, stratum=STRATUM_COL, psu=PSU_COL)
+        )
+
+        se_r = np.array(
+            [1.099279637826522, 0.054629788271488, 0.026123037101528, 0.018992893876368]
+        )
+        lci_r = np.array(
+            [1.927267947397259, -0.236939162779082, -0.154084060966047, -0.044238742733101]
+        )
+        uci_r = np.array(
+            [6.270054619540249, -0.021120086136775, -0.050883043266202, 0.030794109285154]
+        )
+        t_r = np.array([3.72849741087951, -2.36189135159566, -3.92311015437516, -0.35393851867607])
+        p_r = np.array(
+            [
+                0.00026904465162163,
+                0.01941643610468799,
+                0.00013071253711495,
+                0.72386287495659829,
+            ]
+        )
+
+        _assert_matches(
+            res, TERMS, self.BETA_R, se_r, lci_r, uci_r, t_r, p_r, 5.4217289529571, 156
+        )
+
+    def test_deviance_matches_r(self):
+        res = self._fit(make_sample(api_strat, weight=WEIGHT_COL))
+
+        np.testing.assert_allclose(res.stats.deviance, 130.32488578669, rtol=1e-11)
+        assert res.stats.iterations == 13
+
+
+# ===========================================================================
+# Sqrt
+# ===========================================================================
+#
+# R: svyglm(enroll ~ ell + meals + mobility, design = d,
+#           family = quasipoisson("sqrt"), epsilon = 1e-12, maxit = 100)
+# 8 iterations, deviance 50489.067365581, null deviance 50666.492702401.
+
+
+class TestSqrtPoisson:
+    """Poisson with the sqrt link — the variance-stabilising one for counts."""
+
+    Y = "enroll"
+    FAMILY = DistFamily.POISSON
+    LINK = LinkFunction.SQRT
+
+    BETA_R = np.array(
+        [24.633765381999883, 0.024063655219453, -0.023658406618429, 0.020380101471874]
+    )
+
+    def _fit(self, sample):
+        return sample.glm.fit(
+            y=self.Y, x=X_COLS, family=self.FAMILY, link=self.LINK, tol=TOL_TIGHT
+        )
+
+    def test_weights_only(self):
+        """R: svydesign(ids = ~1, weights = ~pw, data = apistrat)."""
+        res = self._fit(make_sample(api_strat, weight=WEIGHT_COL))
+
+        se_r = np.array(
+            [1.236689607781965, 0.032086575906888, 0.028750601856357, 0.048163594015513]
+        )
+        lci_r = np.array(
+            [22.194838828092010, -0.039215603788509, -0.080358653686944, -0.074605307669513]
+        )
+        uci_r = np.array(
+            [27.072691935907756, 0.087342914227414, 0.033041840450086, 0.115365510613262]
+        )
+        t_r = np.array([19.91911731689990, 0.74996021044074, -0.82288387341003, 0.42314328671798])
+        p_r = np.array(
+            [5.4892348819664e-49, 4.5417793772518e-01, 4.1157406796085e-01, 6.7265463927800e-01]
+        )
+
+        _assert_matches(
+            res, TERMS, self.BETA_R, se_r, lci_r, uci_r, t_r, p_r, 0.24839384775138, 196
+        )
+
+    def test_psu_only(self):
+        """R: svydesign(ids = ~dnum, weights = ~pw, data = apistrat)."""
+        res = self._fit(make_sample(api_strat, weight=WEIGHT_COL, psu=PSU_COL))
+
+        se_r = np.array(
+            [1.216045441497588, 0.028021810146553, 0.028275715427435, 0.049413594353623]
+        )
+        lci_r = np.array(
+            [22.228137424173948, -0.031370169551456, -0.079594516601290, -0.077371775240359]
+        )
+        uci_r = np.array(
+            [27.039393339825821, 0.079497479990361, 0.032277703364433, 0.118131978184108]
+        )
+        t_r = np.array([20.25727373449370, 0.85874735049593, -0.83670408549501, 0.41243916251116])
+        p_r = np.array(
+            [3.4647882155652e-42, 3.9204851307296e-01, 4.0428263669157e-01, 6.8069174283339e-01]
+        )
+
+        _assert_matches(
+            res, TERMS, self.BETA_R, se_r, lci_r, uci_r, t_r, p_r, 0.31665336747922, 131
+        )
+
+    def test_stratified(self):
+        """R: svydesign(ids = ~1, strata = ~stype, weights = ~pw, data = apistrat)."""
+        res = self._fit(make_sample(api_strat, weight=WEIGHT_COL, stratum=STRATUM_COL))
+
+        se_r = np.array(
+            [1.078185177062029, 0.032119620704227, 0.028567499038934, 0.048347473664425]
+        )
+        lci_r = np.array(
+            [22.507295763169125, -0.039284829854348, -0.080001157459990, -0.074974051118842]
+        )
+        uci_r = np.array(
+            [26.760235000830640, 0.087412140293253, 0.032684344223132, 0.115734254062591]
+        )
+        t_r = np.array([22.84743465786183, 0.74918864830448, -0.82815813124506, 0.42153394846090])
+        p_r = np.array(
+            [6.5339392622763e-57, 4.5465095852664e-01, 4.0859859241661e-01, 6.7383191981276e-01]
+        )
+
+        _assert_matches(
+            res, TERMS, self.BETA_R, se_r, lci_r, uci_r, t_r, p_r, 0.24843524073268, 194
+        )
+
+    def test_psu_stratified(self):
+        """R: svydesign(ids = ~dnum, strata = ~stype, weights = ~pw, nest = TRUE)."""
+        res = self._fit(
+            make_sample(api_strat, weight=WEIGHT_COL, stratum=STRATUM_COL, psu=PSU_COL)
+        )
+
+        se_r = np.array(
+            [1.211447527844781, 0.034139544841238, 0.030061019618574, 0.048051807698955]
+        )
+        lci_r = np.array(
+            [22.240808214009867, -0.043371761224126, -0.083037563139826, -0.074536033998440]
+        )
+        uci_r = np.array(
+            [27.026722549989898, 0.091499071663031, 0.035720749902968, 0.115296236942189]
+        )
+        t_r = np.array([20.33415795220157, 0.70486162985939, -0.78701277995943, 0.42412767485369])
+        p_r = np.array(
+            [1.0225410049134e-45, 4.8194737818530e-01, 4.3246840041681e-01, 6.7205698689374e-01]
+        )
+
+        _assert_matches(
+            res, TERMS, self.BETA_R, se_r, lci_r, uci_r, t_r, p_r, 0.2234606553012, 156
+        )
+
+    def test_deviance_matches_r(self):
+        res = self._fit(make_sample(api_strat, weight=WEIGHT_COL))
+
+        np.testing.assert_allclose(res.stats.deviance, 50489.067365581, rtol=1e-11)
+        assert res.stats.iterations == 8
+
+
+# ===========================================================================
 # Inverse Gaussian
 # ===========================================================================
 #
@@ -671,17 +999,14 @@ class TestInverseGaussian:
 
 
 class TestFamilyLinkCompatibility:
-    """
-    Every family admits exactly the links R's family constructors do, minus the
-    two R has that svy does not implement (cauchit, sqrt).
-    """
+    """Every family admits exactly the links R's family constructors do."""
 
     # Read off `okLinks` in R: gaussian, binomial, poisson, Gamma and
     # inverse.gaussian, with R's "1/mu^2" spelled "inverse_squared".
     R_OK_LINKS = {
         "gaussian": {"inverse", "log", "identity"},
-        "binomial": {"logit", "probit", "cloglog", "log", "identity"},
-        "poisson": {"log", "identity"},
+        "binomial": {"logit", "probit", "cauchit", "cloglog", "log", "identity"},
+        "poisson": {"log", "identity", "sqrt"},
         "gamma": {"inverse", "log", "identity"},
         "inversegaussian": {"inverse", "log", "identity", "inverse_squared"},
     }
@@ -695,7 +1020,18 @@ class TestFamilyLinkCompatibility:
 
     @pytest.mark.parametrize("family", sorted(R_OK_LINKS))
     @pytest.mark.parametrize(
-        "link", ["identity", "logit", "probit", "cloglog", "log", "inverse", "inverse_squared"]
+        "link",
+        [
+            "identity",
+            "logit",
+            "probit",
+            "cauchit",
+            "cloglog",
+            "log",
+            "sqrt",
+            "inverse",
+            "inverse_squared",
+        ],
     )
     def test_resolve_link_follows_the_table(self, family, link):
         if link in self.R_OK_LINKS[family]:
