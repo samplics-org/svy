@@ -6,14 +6,6 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
-### Fixed
-
-- **`svy.col(...).explode()` will not change behaviour under polars 2.0.** polars 1.44 deprecates the default of its `empty_as_null`, and 2.0 flips it: an empty list would stop yielding a null row and yield no row at all. A row that disappears on a dependency upgrade is one fewer observation in whatever is estimated downstream, so svy passes the argument explicitly and keeps today's behaviour. `explode(empty_as_null=False)` selects the other one.
-
-  This raises the polars floor to **1.36.1**, where `empty_as_null` was added (1.35.1 does not have it). The alternative was a runtime version check, and svy has none anywhere else.
-
-  On polars ≥ 1.44 the deprecation warning is also gone; because the test suite escalates `DeprecationWarning` to an error, `test_explode` had been failing there and passing locally only on the lockfile's pinned 1.39.3.
-
 ## [0.28.0] — 2026-09-08
 
 ### Added
@@ -59,6 +51,12 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **`panel_syn_2026`** — a bundled synthetic three-wave panel (1200 cases, ~15% attrition per wave, producer longitudinal weights, a binary and a continuous outcome) for the panel tutorial and tests.
 
 ### Fixed
+
+- **`svy.col(...).explode()` will not change behaviour under polars 2.0.** polars 1.44 deprecates the default of its `empty_as_null`, and 2.0 flips it: an empty list would stop yielding a null row and yield no row at all. A row that disappears on a dependency upgrade is one fewer observation in whatever is estimated downstream, so svy passes the argument explicitly and keeps today's behaviour. `explode(empty_as_null=False)` selects the other one.
+
+  This raises the polars floor to **1.36.1**, where `empty_as_null` was added (1.35.1 does not have it). The alternative was a runtime version check, and svy has none anywhere else.
+
+  On polars ≥ 1.44 the deprecation warning is also gone; because the test suite escalates `DeprecationWarning` to an error, `test_explode` had been failing there and passing locally only on the lockfile's pinned 1.39.3.
 
 - **IRLS started from the wrong place for binomial and Poisson.** The starting mean is R's `family$initialize` — `(w·y + ½)/(w + 1)` for binomial and `y + 0.1` for Poisson — where svy used `(y + ½)/2` and `max(y, 1e-10)`, ignoring the weight. IRLS stops on a relative change in the deviance, so on a flat surface where it starts decides where it stops: cloglog on `apistrat` landed 3e-5 from R's coefficients, with the deviances agreeing to 14 digits. svy now follows R's iterate sequence, ending on the same iteration.
 
