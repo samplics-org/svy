@@ -2407,7 +2407,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "msgspec", specifier = ">=0.21.0" },
     { name = "numpy", specifier = ">=2.0" },
-    { name = "polars", extras = ["pyarrow"], specifier = ">=1.33.1" },
+    { name = "polars", extras = ["pyarrow"], specifier = ">=1.36.1" },
     { name = "rich", marker = "extra == 'all'", specifier = ">=14.1" },
     { name = "rich", marker = "extra == 'report'", specifier = ">=14.1" },
     { name = "scipy", specifier = ">=1.13" },

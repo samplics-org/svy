@@ -163,7 +163,18 @@ def test_describe_str_and_repr_dont_crash(sample: Sample):
     r = repr(res)
     # sanity checks
     assert "Describe" in s
+    assert "DescribeResult(" in r
+
+
+@pytest.mark.optional  # the per-type sections are the Rich rendering
+def test_describe_str_lists_each_column_type(sample: Sample):
+    """Without Rich, __str__ falls back to the header block and stops there."""
+    pytest.importorskip("rich", reason="the per-type sections need Rich")
+
+    res = sample.describe(columns=["income", "sex", "is_urban"], weighted=False, top_k=5)
+
+    s = str(res)
+
     assert "Numeric" in s
     assert "Categorical" in s
     assert "Boolean" in s
-    assert "DescribeResult(" in r

@@ -778,6 +778,27 @@ def test_explode():
     assert out["nums"].to_list() == [1, 2, 3, 4, 5]
 
 
+def test_explode_keeps_an_empty_list_as_a_null_row():
+    """
+    svy pins `empty_as_null=True`; polars 2.0 flips its own default to False.
+    A row that silently disappears on a dependency upgrade is one fewer
+    observation in whatever is estimated downstream.
+    """
+    df = pl.DataFrame({"nums": [[1, 2], [], [3]]})
+
+    out = df.select(col("nums").explode()._e)
+
+    assert out["nums"].to_list() == [1, 2, None, 3]
+
+
+def test_explode_can_drop_empty_lists_instead():
+    df = pl.DataFrame({"nums": [[1, 2], [], [3]]})
+
+    out = df.select(col("nums").explode(empty_as_null=False)._e)
+
+    assert out["nums"].to_list() == [1, 2, 3]
+
+
 # =============================================================================
 # Sorting
 # =============================================================================
