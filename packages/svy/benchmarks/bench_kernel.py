@@ -212,6 +212,51 @@ def run_end_to_end(n_rows: int, reps: int, n_reps: int) -> None:
     )
 
 
+# ── GLM (IRLS kernel + sandwich) ────────────────────────────────────────────
+
+
+def run_glm(n_rows: int, reps: int) -> None:
+    """The GLM path, which none of the estimation cases touch.
+
+    Binomial logit on 20 continuous covariates, under both design shapes: the
+    normal-equations build dominates a strata+PSU fit, while a weights-only
+    design makes every row its own PSU and shifts the cost into the sandwich
+    meat. A regression in either pass shows up in exactly one of the two.
+    """
+    n_cov = 20
+    rng = np.random.default_rng(11)
+    cols: dict[str, np.ndarray] = {
+        f"x{j}": rng.normal(size=n_rows) for j in range(n_cov)
+    }
+    cols["hhweight"] = rng.uniform(0.5, 2.0, n_rows)
+    cols["geo1"] = rng.integers(0, 10, n_rows).astype("U2")
+    cols["urbrur"] = rng.integers(0, 2, n_rows).astype("U1")
+    cols["ea"] = rng.integers(0, PSU_PER_STRATUM, n_rows).astype("U3")
+    eta = sum(cols[f"x{j}"] for j in range(n_cov)) / np.sqrt(n_cov)
+    cols["y_bin"] = (rng.random(n_rows) < 1.0 / (1.0 + np.exp(-eta))).astype("int8")
+    df = pl.DataFrame(cols)
+
+    x = [f"x{j}" for j in range(n_cov)]
+    clustered = Sample(
+        data=df, design=Design(stratum=("geo1", "urbrur"), psu="ea", wgt="hhweight")
+    )
+    weights_only = Sample(data=df, design=Design(wgt="hhweight"))
+
+    def fit(sample):
+        return lambda: sample.glm.fit(y="y_bin", x=x, family="binomial")
+
+    emit_case("glm/binomial strat+cluster", n_rows, fit(clustered), reps)
+    emit_case("glm/binomial weights-only", n_rows, fit(weights_only), reps)
+    emit_case(
+        "glm/binomial domain",
+        n_rows,
+        lambda: clustered.glm.fit(
+            y="y_bin", x=x, family="binomial", where=svy.col("urbrur") == "1"
+        ),
+        reps,
+    )
+
+
 # ── Direct-kernel probe (isolates Rust kernel + marshalling) ────────────────
 
 
@@ -266,6 +311,9 @@ def main() -> None:
         reps = args.reps_large if n_rows >= 1_000_000 else args.reps
         print(f"# ── {n_rows:,} rows (best of {reps}) ──")
         run_end_to_end(n_rows, reps, args.n_reps)
+        # A 1e6 x 20 binomial fit is seconds, not milliseconds; best-of-3 is
+        # enough to see a real change and keeps the harness usable.
+        run_glm(n_rows, min(reps, 3))
         run_direct_kernel(n_rows, reps)
         print()
 

@@ -3,17 +3,17 @@
 // PyO3-facing wrapper for the GLM regression function.
 // The actual fitting logic lives in regression/glm.rs.
 //
-// Return shape: Vec<(level, params, cov_params, scale, df_resid, deviance,
-//                    null_deviance, iterations, n_obs)>.
-// When by_col is None, a single-element vec with level="" is returned, so the
-// Python side can treat both cases uniformly.
+// Return shape: Vec<(level, params, cov_params, naive_cov, scale, df_resid,
+//                    deviance, null_deviance, iterations, n_obs, converged)>.
+// When neither by_col nor where_col is given, a single-element vec with
+// level="" is returned, so the Python side can treat every case uniformly.
 
 use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 
 use crate::estimation::calib_sweep::{CalibSpec, CalibSweep, build_calib_sweep};
-use crate::regression::glm::{fit_glm, fit_glm_by};
+use crate::regression::glm::{fit_glm, fit_glm_by, fit_glm_where};
 
 type GlmTuple = (
     String,
@@ -26,6 +26,7 @@ type GlmTuple = (
     f64,
     u32,
     usize,
+    bool,
 );
 
 fn column_to_series(df: &DataFrame, name: &str) -> PyResult<Series> {
@@ -51,6 +52,7 @@ fn optional_column_to_series(df: &DataFrame, name: &Option<String>) -> PyResult<
     fpc_name=None,
     offset_name=None,
     by_col=None,
+    where_col=None,
     family="gaussian".to_string(),
     link="identity".to_string(),
     tol=1e-8,
@@ -73,6 +75,7 @@ pub fn fit_glm_rs(
     fpc_name: Option<String>,
     offset_name: Option<String>,
     by_col: Option<String>,
+    where_col: Option<String>,
     family: String,
     link: String,
     tol: f64,
@@ -119,6 +122,46 @@ pub fn fit_glm_rs(
     });
     let calib = calib.as_ref();
 
+    // A `where=` domain is one fit. It used to be routed through `fit_glm_by`
+    // on a "true"/"false" string column, which fitted the complement as well
+    // and discarded it.
+    if let Some(name) = where_col {
+        let mask = column_to_series(&df, &name)?;
+        let result = _py
+            .detach(|| {
+                fit_glm_where(
+                    &y,
+                    x_cols,
+                    &weights,
+                    stratum.as_ref(),
+                    psu.as_ref(),
+                    fpc.as_ref(),
+                    offset.as_ref(),
+                    &mask,
+                    &family,
+                    &link,
+                    tol,
+                    max_iter,
+                    calib,
+                )
+            })
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+        return Ok(vec![(
+            String::new(),
+            result.params,
+            result.cov_params,
+            result.naive_cov,
+            result.scale,
+            result.df_resid,
+            result.deviance,
+            result.null_deviance,
+            result.iterations,
+            result.n_obs,
+            result.converged,
+        )]);
+    }
+
     // No by_col: single fit, wrap in one-element vec for API uniformity.
     if by_col.is_none() {
         // Release the GIL for the (iterative, CPU-bound) IRLS solve.
@@ -152,6 +195,7 @@ pub fn fit_glm_rs(
             result.null_deviance,
             result.iterations,
             result.n_obs,
+            result.converged,
         )]);
     }
 
@@ -193,6 +237,7 @@ pub fn fit_glm_rs(
                 r.null_deviance,
                 r.iterations,
                 r.n_obs,
+                r.converged,
             )
         })
         .collect())
