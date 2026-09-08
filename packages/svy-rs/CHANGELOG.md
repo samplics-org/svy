@@ -4,6 +4,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-09-08
+
 ### Added
 
 - **Negative binomial**, whole. `Family::NegativeBinomial(theta)` gives `Var(mu) = mu + mu^2/theta` with MASS's `initialize` (`y + (y == 0)/6`) and `dev.resids`; `regression::negbin` adds what a family arm cannot hold — `theta_ml` (Newton on the weighted profile likelihood, `MASS::theta.ml`), the `MASS::glm.nb` outer loop alternating it with IRLS, and the joint `(beta, theta)` design-based variance, which is R `survey::svymle`'s route. `fit_glm_rs` gains `theta` and returns `(theta, theta_se)`.
@@ -222,7 +224,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 Baseline for this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.16.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.17.0...HEAD
+[0.17.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.17.0
 [0.16.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.16.0
 [0.15.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.15.0
 [0.14.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.14.0

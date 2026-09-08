@@ -6,6 +6,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+## [0.28.0] — 2026-09-08
+
 ### Added
 
 - **Negative binomial**, for counts a Poisson cannot hold. `family="negative_binomial"` (or `"nb"`), with `Var(mu) = mu + mu^2/theta` and R's `okLinks` — `log`, `identity`, `sqrt`.
@@ -833,7 +835,8 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.27.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.28.0...HEAD
+[0.28.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.28.0
 [0.27.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.27.0
 [0.26.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.26.0
 [0.25.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.25.0
