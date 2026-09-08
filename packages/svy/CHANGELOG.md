@@ -8,6 +8,12 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **`cauchit` and `sqrt` links.** Binomial gains `cauchit` — the inverse Cauchy CDF, the heavy-tailed alternative to probit, so a few observations far out on the linear predictor cannot dominate the fit — and Poisson gains `sqrt`, the variance-stabilising link for counts. `FAMILY_LINKS` is now exactly R's `okLinks` for every family, with no links R has that svy does not. Both refuse `exponentiate=`: exp(β) is not a ratio on either.
+
+  ```python
+  sample.glm.fit(y="voted", x=["age", svy.Cat("region")], family="binomial", link="cauchit")
+  ```
+
 - **`read_stata(encoding=)` is forwarded to the reader** instead of being dropped with a warning. A Stata 13 file holding UTF-8 text (the Nigeria GHS-Panel Wave 5 free-text sections) now reads with `encoding="utf-8"`, or `encoding="utf8-lossy"` to replace undecodable bytes, an option `read_spss` and `read_sas` accept as well; the parse `IoError` for that failure carries the engine's hint naming the option.
 
 - **Panel surveys, with no new type.** A panel is a long `Sample` whose `Design.case_id` identifies the followed case and whose `Design.wave` orders its rows. `svy.combine_samples(kind="panel", case_id=...)` stacks the waves and validates the pairing (unique id within each wave, consecutive-wave overlap, design columns constant within a case, later waves' units a subset of wave 1's); `Design(case_id=..., wave=...)` declares the same on a long file. When no PSU is declared the case is the variance PSU, so `mean(y, by="wave")` and its contrasts carry the between-wave covariance without being told to — the change SE equals the wide-frame individual-change SE, not the naive independent-waves one. Producer longitudinal weights stay ordinary columns selected with `use_weight()`; identical producer replicate weights are accepted across waves.
@@ -29,6 +35,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **IRLS started from the wrong place for binomial and Poisson.** The starting mean is R's `family$initialize` — `(w·y + ½)/(w + 1)` for binomial and `y + 0.1` for Poisson — where svy used `(y + ½)/2` and `max(y, 1e-10)`, ignoring the weight. IRLS stops on a relative change in the deviance, so on a flat surface where it starts decides where it stops: cloglog on `apistrat` landed 3e-5 from R's coefficients, with the deviances agreeing to 14 digits. svy now follows R's iterate sequence, ending on the same iteration.
+
+- **`cauchit`'s inverse link is computed the way R's `pcauchy` is.** `arctan(η)/π + ½` cancels in the tails — three and a half digits gone at η = −1000 — so outside [−1, 1] the tail comes from `arctan(1/η)`. The forward link is `−1/tan(πμ)` rather than `tan(π(μ − ½))`, which is catastrophic as μ approaches 0 or 1.
+
 - **`glm.fit()` reported failures as results.** An empty `where=` domain, or an all-zero weight column, returned a fit of all-zero coefficients (or, for gamma and poisson, a `TypeError` from the response check); `x` and `2 * x` "fitted" with SE 0 and an F statistic around 1e30; more parameters than observations came back through a pseudoinverse. Each of these now raises `ModelError` naming what is wrong — the collinear term by name, in the model's own column order.
 
 - **A GLM that ran out of iterations was reported like a converged one.** `fit()` now warns, giving the iteration count and the tolerance, and so does dropping rows for an invalid weight, dropping a `Cat` with fewer than two levels among the fitted rows, and — as a `ModelError` rather than a polars "duplicate output name" — listing the same predictor twice.
@@ -42,6 +52,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - `categorical.tabulate()` ignored `Design.pop_size`: every table on a design with a finite-population correction reported the fpc-free standard errors (the `ttest` facade had the same gap). The fpc is now applied, matching R `svymean(~interaction(...))` and `svychisq` on an `fpc=` design.
 
 ### Changed
+
+- **`stats.scale` is the Pearson dispersion for every family**, `Σ wᵢ(yᵢ−μᵢ)²/V(μᵢ) / (n_obs − k)` on the fit's own weight scale — R `glm()`'s and Stata `glm`'s "(1/df) Pearson". Two deliberate departures. Binomial and Poisson used to report a hard-coded 1.0; the estimate is the overdispersion diagnostic a count model needs, and design-based SEs never use it, so nothing else moves. And R `summary.svyglm` reports `svyvar(resid(pearson))` instead, a design-weighted *variance* of the Pearson residuals — not the textbook estimator, and not what someone comparing against `glm()` or Stata expects — so that is not copied.
+
+- The dispersion's divisor is `n_obs − k`, not the design residual df: the dispersion is a moment estimate, while the design df belongs to the t reference distribution. The same model on the same rows used to report a different scale for every design.
 
 - `combine_samples`: `kind="cross_sectional" | "cs" | "panel"` replaces `units="independent" | "shared"`; default wave labels are `"wave 1".."wave k"` instead of `"s1".."sk"`; the combined weight column `wgt_name` is always created from each wave's own weight (divided by k under `adjust="average"`), so the waves may name their weights differently. A panel keeps the base-wave design and now accepts a later wave that lost PSUs (with a warning) instead of requiring identical design units.
 - `Design.describe()` shows `Case id` and `Wave` rows, and `PSU  None (variance: <case_id>)` when the case is the fallback PSU; on a panel the design summary lists the case overlap between consecutive waves.

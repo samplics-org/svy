@@ -10,6 +10,8 @@ import numpy as np
 
 # eta bound R's probit linkinv applies: -qnorm(.Machine$double.eps).
 _PROBIT_ETA_MAX = 8.1258906647019042
+# The same for cauchit: -qcauchy(.Machine$double.eps).
+_CAUCHIT_ETA_MAX = 1.4335402848056648e15
 _EPS = np.finfo(float).eps
 
 
@@ -44,11 +46,25 @@ def link_inverse(link: str, eta: np.ndarray) -> np.ndarray:
     elif name == "probit":
         return _norm_cdf(np.clip(eta, -_PROBIT_ETA_MAX, _PROBIT_ETA_MAX))
 
+    elif name == "cauchit":
+        # arctan(e)/pi + 0.5 cancels in the tails (three and a half digits at
+        # e = -1000); outside [-1, 1] the tail comes from arctan(1/e), which
+        # is what R's pcauchy does.
+        e = np.clip(eta, -_CAUCHIT_ETA_MAX, _CAUCHIT_ETA_MAX)
+        return np.where(
+            np.abs(e) > 1.0,
+            np.where(e > 0.0, 1.0 - np.arctan(1.0 / e) / np.pi, np.arctan(-1.0 / e) / np.pi),
+            0.5 + np.arctan(e) / np.pi,
+        )
+
     elif name == "cloglog":
         return np.clip(-np.expm1(-np.exp(np.minimum(eta, 700.0))), _EPS, 1.0 - _EPS)
 
     elif name == "log":
         return np.exp(np.clip(eta, -30, 30))
+
+    elif name == "sqrt":
+        return np.square(eta)
 
     elif name == "inverse":
         return 1.0 / np.where(np.abs(eta) > 1e-10, eta, 1e-10)
@@ -74,12 +90,18 @@ def link_mu_eta(link: str, eta: np.ndarray) -> np.ndarray:
     elif name == "probit":
         return np.maximum(_norm_pdf(eta), _EPS)
 
+    elif name == "cauchit":
+        return np.maximum(1.0 / (np.pi * (1.0 + np.square(eta))), _EPS)
+
     elif name == "cloglog":
         e = np.exp(np.minimum(eta, 700.0))
         return np.maximum(e * np.exp(-e), _EPS)
 
     elif name == "log":
         return link_inverse(link, eta)
+
+    elif name == "sqrt":
+        return 2.0 * eta
 
     elif name == "inverse":
         mu = link_inverse(link, eta)
@@ -107,12 +129,18 @@ def link_mu_eta2(link: str, eta: np.ndarray) -> np.ndarray:
     elif name == "probit":
         return -eta * _norm_pdf(eta)
 
+    elif name == "cauchit":
+        return -2.0 * eta / (np.pi * np.square(1.0 + np.square(eta)))
+
     elif name == "cloglog":
         e = np.exp(np.minimum(eta, 700.0))
         return e * np.exp(-e) * (1.0 - e)
 
     elif name == "log":
         return link_inverse(link, eta)
+
+    elif name == "sqrt":
+        return np.full_like(eta, 2.0)
 
     elif name == "inverse":
         mu = link_inverse(link, eta)
@@ -151,18 +179,17 @@ FAMILY_LABELS: dict[str, str] = {
 
 
 # Which links each family admits: the `okLinks` set of R's family constructors,
-# intersected with the links implemented here (R additionally offers "cauchit"
-# for binomial and "sqrt" for poisson). A pairing outside the table is not a
-# model, and silence about it is worse than an error: binomial + inverse squared
-# converges on a meaningless fit rather than failing, while gaussian + logit only
-# surfaces as "did not produce finite coefficients" from the kernel.
+# exactly. A pairing outside the table is not a model, and silence about it is
+# worse than an error: binomial + inverse squared converges on a meaningless fit
+# rather than failing, while gaussian + logit only surfaces as "did not produce
+# finite coefficients" from the kernel.
 #
 # Stricter than R in practice, which enforces okLinks only when the link is
-# passed as a symbol and lets any string through — including the ones above.
+# passed as a symbol and lets any string through.
 FAMILY_LINKS: dict[str, frozenset[str]] = {
     "gaussian": frozenset({"identity", "log", "inverse"}),
-    "binomial": frozenset({"logit", "probit", "cloglog", "log", "identity"}),
-    "poisson": frozenset({"log", "identity"}),
+    "binomial": frozenset({"logit", "probit", "cauchit", "cloglog", "log", "identity"}),
+    "poisson": frozenset({"log", "identity", "sqrt"}),
     "gamma": frozenset({"inverse", "identity", "log"}),
     "inversegaussian": frozenset({"inverse_squared", "inverse", "identity", "log"}),
 }

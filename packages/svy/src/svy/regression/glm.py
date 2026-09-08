@@ -52,9 +52,9 @@ def offset_values(fit: GLMFit, data: pl.DataFrame) -> np.ndarray | float:
 
 
 # exp(beta) is a ratio only where the linear predictor is the log of something:
-# log-odds, log-mean, log-cumulative-hazard. On identity, probit, inverse and
-# inverse_squared it is a number with no interpretation, so `exponentiate=`
-# refuses there instead of printing it.
+# log-odds, log-mean, log-cumulative-hazard. On identity, probit, cauchit,
+# sqrt, inverse and inverse_squared it is a number with no interpretation, so
+# `exponentiate=` refuses there instead of printing it.
 RATIO_LINKS: dict[str, tuple[str, str]] = {
     "logit": ("odds_ratio", "Odds ratio"),
     "log": ("rate_ratio", "Rate ratio"),

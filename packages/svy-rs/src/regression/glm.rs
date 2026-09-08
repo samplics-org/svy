@@ -66,11 +66,19 @@ impl Family {
         }
     }
 
-    fn initial_mu(&self, y: f64) -> f64 {
+    /// R's `family$initialize` starting value, on the prior-weight scale.
+    ///
+    /// IRLS stops on a relative change in the deviance, so on a flat surface
+    /// where it starts decides where it stops: seeding binomial at
+    /// `(y + 1/2)/2` instead of R's `(w y + 1/2)/(w + 1)` left cloglog's
+    /// coefficients 3e-5 from R's on apistrat, with the deviances agreeing to
+    /// 14 digits.
+    fn initial_mu(&self, y: f64, w: f64) -> f64 {
         let eps = 1e-10;
         match self {
-            Family::Binomial => (y + 0.5) / 2.0,
-            Family::Poisson | Family::Gamma | Family::InverseGaussian => y.max(eps),
+            Family::Binomial => (w * y + 0.5) / (w + 1.0),
+            Family::Poisson => y + 0.1,
+            Family::Gamma | Family::InverseGaussian => y.max(eps),
             Family::Gaussian => y,
         }
     }
@@ -109,13 +117,35 @@ impl Family {
 /// -qnorm(.Machine$double.eps): the eta bound R's probit linkinv applies.
 const PROBIT_ETA_MAX: f64 = 8.125_890_664_701_904;
 
+/// -qcauchy(.Machine$double.eps): the eta bound R's cauchit linkinv applies.
+const CAUCHIT_ETA_MAX: f64 = 1.433_540_284_805_664_8e15;
+
+/// pcauchy: the standard Cauchy CDF.
+///
+/// `atan(x)/pi + 0.5` loses digits in the tails — at eta = -1000 the two terms
+/// cancel to three and a half digits, which showed up as ~1e-7 in the fitted
+/// coefficients against R. Outside [-1, 1] the tail is computed from
+/// `atan(1/x)`, which is what R's pcauchy does.
+fn cauchy_cdf(x: f64) -> f64 {
+    use std::f64::consts::PI;
+    if x > 1.0 {
+        1.0 - (1.0 / x).atan() / PI
+    } else if x < -1.0 {
+        (-1.0 / x).atan() / PI
+    } else {
+        0.5 + x.atan() / PI
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Link {
     Identity,
     Logit,
     Probit,
+    Cauchit,
     Cloglog,
     Log,
+    Sqrt,
     Inverse,
     InverseSquared,
 }
@@ -191,8 +221,10 @@ impl Link {
             "identity" => Ok(Link::Identity),
             "logit" => Ok(Link::Logit),
             "probit" => Ok(Link::Probit),
+            "cauchit" => Ok(Link::Cauchit),
             "cloglog" => Ok(Link::Cloglog),
             "log" => Ok(Link::Log),
+            "sqrt" => Ok(Link::Sqrt),
             "inverse" => Ok(Link::Inverse),
             "inverse_squared" => Ok(Link::InverseSquared),
             _ => Err(PolarsError::ComputeError(
@@ -206,8 +238,13 @@ impl Link {
             Link::Identity => mu,
             Link::Logit => (mu / (1.0 - mu)).ln(),
             Link::Probit => probit(mu),
+            // qcauchy: -1/tan(pi*mu) rather than tan(pi*(mu - 1/2)), which
+            // is catastrophic as mu approaches 0 or 1 (the argument
+            // approaches +/-pi/2). R's qcauchy takes the same cotangent form.
+            Link::Cauchit => -1.0 / (std::f64::consts::PI * mu).tan(),
             Link::Cloglog => (-((1.0 - mu).max(1e-10).ln())).max(1e-10).ln(),
             Link::Log => mu.max(1e-10).ln(),
+            Link::Sqrt => mu.max(0.0).sqrt(),
             Link::Inverse => 1.0 / mu,
             Link::InverseSquared => 1.0 / (mu * mu),
         }
@@ -229,11 +266,16 @@ impl Link {
             // +/-qnorm(eps) and mu at [eps, 1-eps], so mu never reaches 0 or 1
             // exactly and the binomial variance stays positive.
             Link::Probit => norm_cdf(eta.clamp(-PROBIT_ETA_MAX, PROBIT_ETA_MAX)),
+            Link::Cauchit => {
+                let e = eta.clamp(-CAUCHIT_ETA_MAX, CAUCHIT_ETA_MAX);
+                cauchy_cdf(e)
+            }
             Link::Cloglog => {
                 let m = -(-(eta.min(700.0).exp())).exp_m1();
                 m.clamp(f64::EPSILON, 1.0 - f64::EPSILON)
             }
             Link::Log => eta.clamp(-30.0, 30.0).exp(),
+            Link::Sqrt => eta * eta,
             Link::Inverse => 1.0 / eta,
             Link::InverseSquared => 1.0 / eta.sqrt(),
         }
@@ -245,11 +287,13 @@ impl Link {
             Link::Identity => 1.0,
             Link::Logit => mu * (1.0 - mu),
             Link::Probit => norm_pdf(eta).max(f64::EPSILON),
+            Link::Cauchit => (1.0 / (std::f64::consts::PI * (1.0 + eta * eta))).max(f64::EPSILON),
             Link::Cloglog => {
                 let e = eta.min(700.0).exp();
                 (e * (-e).exp()).max(f64::EPSILON)
             }
             Link::Log => mu,
+            Link::Sqrt => 2.0 * eta,
             Link::Inverse => -(mu * mu),
             Link::InverseSquared => -0.5 * mu.powi(3),
         }
@@ -1052,7 +1096,7 @@ fn fit_glm_domain(
     for i in 0..n {
         let in_domain = domain_mask.map_or(true, |m| m[i]);
         let y_init = if in_domain { y_vals[i] } else { 0.5 };
-        mu[i] = family.initial_mu(y_init);
+        mu[i] = family.initial_mu(y_init, w_samp[i]);
         // R seeds eta at linkfun(mustart) without the offset; it enters through
         // the working response, and every later eta adds it back explicitly.
         eta[i] = link.link(mu[i]);
@@ -1149,6 +1193,14 @@ fn fit_glm_domain(
         beta = beta_new;
         deviance = dev_new;
 
+        // R's glm.fit convergence test, and only that one:
+        //   abs(dev - devold) / (abs(dev) + 0.1) < epsilon.
+        // svy also stopped on `max_delta < tol`, which fires an iteration
+        // early wherever beta has settled while the deviance is still moving
+        // in its last few digits — cloglog on apistrat lands 3e-5 from R's
+        // coefficients that way. `max_delta` is only a backstop now, for a
+        // deviance that oscillates instead of settling (there is no
+        // step-halving here), at a threshold too tight to pre-empt R.
         if iter > 0 && (rel_dev < tol || max_delta < tol) {
             converged = true;
             break;
@@ -1520,34 +1572,26 @@ fn fit_glm_domain(
         if n_dom <= 1 { 1.0 } else { (n_dom - 1) as f64 }
     };
 
-    // scale (phi) for gaussian/gamma/invgauss (reporting only).
-    // Pearson sum is computed over in-domain rows only.
-    let scale = if matches!(
-        family,
-        Family::Gaussian | Family::Gamma | Family::InverseGaussian
-    ) {
+    // Dispersion (phi), reporting only: the Pearson estimate
+    //   sum_i w_i (y_i - mu_i)^2 / V(mu_i) / (n_obs - k),
+    // over in-domain positive-weight rows, on the fit's own weight scale.
+    // This is R glm()'s and Stata glm's "(1/df) Pearson" for every family,
+    // binomial and poisson included: reporting the estimate is the
+    // overdispersion diagnostic a count model needs, and design-based SEs
+    // never use it, so nothing else moves. The divisor is n_obs - k, not the
+    // design df_resid: the dispersion is a moment estimate, while the design
+    // df belongs to the t reference distribution.
+    let scale = {
         let mut pearson = 0.0;
         for i in 0..n {
-            let in_domain = domain_mask.map_or(true, |m| m[i]);
-            if !in_domain {
-                continue;
-            }
-            let w_i = w_samp[i];
-            if w_i <= 0.0 {
+            if !(domain_mask.is_none_or(|m| m[i]) && w_samp[i] > 0.0) {
                 continue;
             }
             let mu_i = mu[i];
             let v = family.variance(mu_i).max(1e-12);
-            let y_i = y_vals[i];
-            pearson += w_i * (y_i - mu_i).powi(2) / v;
+            pearson += w_samp[i] * (y_vals[i] - mu_i).powi(2) / v;
         }
-        if df_resid > 0.0 {
-            pearson / df_resid
-        } else {
-            1.0
-        }
-    } else {
-        1.0
+        pearson / ((n_obs - k) as f64)
     };
 
     // Null deviance — family unit deviance at the intercept-only fit. For a
@@ -1672,7 +1716,9 @@ mod tests {
         for (link, tol) in [
             (Link::Logit, 1e-12),
             (Link::Probit, 1e-9),
+            (Link::Cauchit, 1e-12),
             (Link::Cloglog, 1e-12),
+            (Link::Sqrt, 1e-12),
         ] {
             for mu in [0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99] {
                 let back = link.inverse(link.link(mu));
@@ -1688,7 +1734,7 @@ mod tests {
     #[test]
     fn mu_eta_matches_numeric_derivative() {
         let h = 1e-6;
-        for link in [Link::Probit, Link::Cloglog] {
+        for link in [Link::Probit, Link::Cauchit, Link::Cloglog, Link::Sqrt] {
             for eta in [-3.0, -1.0, -0.25, 0.0, 0.25, 1.0, 3.0] {
                 let numeric = (link.inverse(eta + h) - link.inverse(eta - h)) / (2.0 * h);
                 let analytic = link.mu_eta(link.inverse(eta), eta);
