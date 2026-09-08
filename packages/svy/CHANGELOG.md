@@ -29,6 +29,12 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **`glm.fit()` reported failures as results.** An empty `where=` domain, or an all-zero weight column, returned a fit of all-zero coefficients (or, for gamma and poisson, a `TypeError` from the response check); `x` and `2 * x` "fitted" with SE 0 and an F statistic around 1e30; more parameters than observations came back through a pseudoinverse. Each of these now raises `ModelError` naming what is wrong — the collinear term by name, in the model's own column order.
+
+- **A GLM that ran out of iterations was reported like a converged one.** `fit()` now warns, giving the iteration count and the tolerance, and so does dropping rows for an invalid weight, dropping a `Cat` with fewer than two levels among the fitted rows, and — as a `ModelError` rather than a polars "duplicate output name" — listing the same predictor twice.
+
+- **`where=` fitted the complement domain too** and threw it away. The predicate now reaches the kernel as a Boolean mask instead of a `"true"`/`"false"` by-column, so only the requested domain is fitted (1e6 rows x 20 covariates: 1.22 s → 0.45 s). The estimates are unchanged.
+
 - **`glm.predict()` and `glm.margins()` were wrong on an int, float or bool-coded `Cat`.** Both rebuilt a dummy column by slicing the level out of the coefficient *name* and comparing it to the raw column as a string, which numpy answers all-False without raising: every row got the reference-level prediction (off by up to 0.26 in probability on the test model) and every categorical average marginal effect came back exactly 0.0 with SE 0.0. The fitted coefficients were correct throughout, which is what kept it quiet. The design matrix is now rebuilt from the level values in their fitted dtype, through the same polars expression the fit used — and, as a side effect, in one pass instead of a Python loop over object arrays (predict on 1e6 rows: 0.72 s → 0.12 s; a 10-level categorical AME: 5.9 s → 0.8 s).
 
 - **Prediction data is validated.** A missing predictor column raises `ModelError` naming it (was a raw polars `ColumnNotFoundError` or a bare `KeyError`), and a categorical value the fit never saw — including a null — raises instead of being silently coded as the reference level, in `predict()` and in `margins(at=)` alike.

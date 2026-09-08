@@ -6,7 +6,33 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ### Added
 
+- `converged` on `GlmResult`, and `where_col` on `fit_glm_rs`: a Boolean column marking a subpopulation, fitted as one domain. A `where=` clause used to be routed through `fit_glm_by` on a "true"/"false" string column, which fitted the complement as well and threw it away.
+
 - `domain_col` on `tabulate_rs`: a Boolean column marking the rows of a subpopulation. Out-of-domain rows keep their design columns and get weight 0 (R's `subset()` on a design), so the PSU structure is intact and `degrees_of_freedom` counts the units with an in-domain row; cells are formed from in-domain keys only (a null key outside the domain is not missing), and the Rao-Scott `n`, strata and PSU counts are taken over in-domain rows. `estimate_proportions`, `estimate_totals` and `count_strata_psus` gain the matching `domain` parameter.
+
+### Changed
+
+- **The IRLS normal equations are a blocked cross-product** (`build_irls_normal_eqs`). The row-outer Kahan loop became columns-outer over 256-row blocks of the column-major X, so the inner loop is a contiguous dot product that vectorizes, with `w * X_a` formed once per (block, column) instead of once per (block, column pair). Blocks are grouped into fixed 8192-row parallel chunks and summed in index order, so the result is independent of the core count and of how rayon schedules the work. Kahan compensation is gone — R's `crossprod` is plain summation, and blocked f64 is ~1e-14 relative at 1e6 rows.
+
+- **The sandwich meat no longer materialises PSU totals when there is no PSU.** Every row is then its own PSU, so `sum_i (t_i - tbar)(t_i - tbar)'` telescopes to one weighted cross-product over all rows plus a k-vector per stratum — in place of a million heap `Vec<Kahan>` behind a million-entry `HashMap`, walked k² times. With real PSUs the totals are one flat `m x k` buffer addressed through a dense slot table keyed on the PSU code, rather than a per-stratum hash map of per-PSU vectors.
+
+- **Strata and PSU codes reuse the estimation namespace's factorizers** (`design_col_codes` / `design_pair_codes`, now `pub(crate)`). The Python layer already hands the kernel dense integer code columns with the PSU code encoding the (stratum, psu) pair; the GLM kernel was casting them back to String and hashing a `(&str, &str)` per row, ~0.4 s at 1e6 rows.
+
+- The redundant eta/mu passes are gone: the loop's own recomputation at `beta_new` already leaves them at the committed beta, so neither the top of the next iteration nor the post-loop bread rebuild needs to redo them. That recomputation is now column-outer, one contiguous pass over X per term. `cols_to_vec` replaces `cols_to_mat` and copies each chunk's value slice wholesale instead of iterating `Option<f64>` per element.
+
+  GLM, 1e6 rows x 20 covariates, binomial logit, release build: strata+PSU 1.60 s → 0.52 s, weights-only 5.36 s → 0.43 s, `where=` domain 1.22 s → 0.45 s.
+
+### Fixed
+
+- **`fit_glm_rs` returned a zero fit as a success** when nothing could contribute — an empty `where` domain, or an all-zero weight column. The normal equations are then the zero matrix, whose SVD pseudoinverse is also zero, and `beta = 0` passed the finite check. The kernel now counts the contributing rows up front and errors when there are no more of them than parameters.
+
+- **An aliased design matrix "fitted"**: `x` and `2 * x` returned SE 0 or NaN and an F statistic around 1e30, and k >= n came back through a pseudoinverse. A pivot-free Cholesky of the first information matrix, in the model's own column order, now names the collinear column and errors. Same "the columns that came first are kept" rule as R, but raising rather than reporting NA coefficients.
+
+- **Non-finite inputs are rejected.** Nulls were, NaN/Inf were not, and Rust's `f64::max` returns the other operand for a NaN, so `.max(1e-12)` on the variance hid one all the way to a NaN beta. y, X and the offset are checked over the contributing rows, which leaves padded zero-weight rows alone.
+
+- `invert_matrix` reached `thin_svd().unwrap()` — a panic, not an error — on a non-finite information matrix. It returns a `PolarsResult` now, like the solver beside it.
+
+- `fit_glm_by` dropped a level that failed to fit, so a caller asking for every level got a short list with no way to tell which one was missing or why. It now names the failed levels and reports the first error.
 
 ## [0.16.0] — 2026-08-30
 

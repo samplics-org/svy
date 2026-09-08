@@ -974,7 +974,7 @@ fn densify_int_codes(col: &Column) -> PolarsResult<(Vec<u32>, u32)> {
 /// treated as pre-factorized codes and densified. This is the fallback-safe
 /// polymorphic entry — the String path keeps svy-rs's public API working for
 /// direct callers, the integer path is the Phase C fast path.
-fn design_col_codes(col: &Column) -> PolarsResult<(Vec<u32>, u32)> {
+pub(crate) fn design_col_codes(col: &Column) -> PolarsResult<(Vec<u32>, u32)> {
     let dt = col.dtype();
     if matches!(dt, DataType::String) {
         Ok(index_categorical(col.str()?))
@@ -994,7 +994,7 @@ fn design_col_codes(col: &Column) -> PolarsResult<(Vec<u32>, u32)> {
 /// columns the PSU code is assumed already pair-nested by the Python layer
 /// (`__svy_psu_code__` encodes the (stratum, psu) pair), so it is densified
 /// directly — matching the string pair's first-appearance order.
-fn design_pair_codes(strata: &Column, psu: &Column) -> PolarsResult<(Vec<u32>, u32)> {
+pub(crate) fn design_pair_codes(strata: &Column, psu: &Column) -> PolarsResult<(Vec<u32>, u32)> {
     let dt = psu.dtype();
     if matches!(dt, DataType::String) {
         Ok(index_categorical_pair(strata.str()?, psu.str()?))

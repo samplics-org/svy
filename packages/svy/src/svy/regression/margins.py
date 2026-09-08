@@ -339,7 +339,7 @@ def _fitted_frame(glm: GLM, fit: GLMFit) -> tuple[pl.DataFrame, np.ndarray]:
 
     d_col = glm._fit_domain_col
     if d_col is not None and d_col in frame.columns:
-        frame = frame.filter(pl.col(d_col).str.to_lowercase() == "true").drop(d_col)
+        frame = frame.filter(pl.col(d_col)).drop(d_col)
 
     weights = frame.get_column(w_col).to_numpy().astype(float)
     return frame, weights

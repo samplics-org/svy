@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import math
+import warnings
 
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Sequence, cast
 
@@ -67,6 +68,44 @@ def _dummy_expr(var: str, level: Any) -> pl.Expr:
     dtype.
     """
     return (pl.col(var) == pl.lit(level)).cast(pl.Float64)
+
+
+# Structural failures the kernel reports as a RuntimeError. They are the
+# user's problem to fix, not an internal error, so they are re-raised as
+# ModelError with the engine's own message — which already names the offending
+# column — plus the remedy.
+_ENGINE_ERRORS: tuple[tuple[str, str, str], ...] = (
+    (
+        "rank deficient",
+        "RANK_DEFICIENT",
+        "Drop the term named above, or the column it duplicates, and refit.",
+    ),
+    (
+        "needs more observations than parameters",
+        "INSUFFICIENT_OBSERVATIONS",
+        "Fit fewer terms, or widen the domain.",
+    ),
+    (
+        "non-finite value",
+        "NON_FINITE_INPUT",
+        "Replace the infinite or NaN entries, or drop those rows.",
+    ),
+)
+
+
+def _as_model_error(exc: Exception) -> ModelError | None:
+    """Recognise an engine failure that the caller can act on."""
+    msg = str(exc)
+    for needle, code, hint in _ENGINE_ERRORS:
+        if needle in msg:
+            return ModelError(
+                title="GLM cannot be fitted",
+                detail=msg,
+                code=code,
+                where="GLM.fit",
+                hint=hint,
+            )
+    return None
 
 
 def _normalize_family(family: FamilyArg) -> str:
@@ -385,35 +424,59 @@ class GLM:
         s_col = prep.strata_col
         p_col = prep.psu_col
 
-        # ── Materialise the where predicate as a boolean by-column ───────
+        # ── Materialise the where predicate as a boolean domain column ───
         # We don't pass `where` to prepare_data because the GLM engine needs
         # the full design rows in the dataframe (the Rust side does the
-        # domain restriction via by_col). Instead, compile the predicate to
-        # a polars expression and add it as a string column ("true"/"false").
-        # The Rust engine receives this as by_col and produces one fit per
-        # level; the Python side then picks the "true" level.
-        by_col_name: str | None = None
+        # domain restriction itself, so the strata/PSU structure and the df
+        # stay those of the full design). The predicate becomes a Boolean
+        # column the engine takes as its domain mask.
+        dom_col: str | None = None
         if where is not None:
-            by_col_name = "__where_domain__"
+            dom_col = "__where_domain__"
             bool_expr = _compile_where_to_pl_expr(where)
-            df = df.with_columns(cast(pl.Expr, bool_expr).cast(pl.Utf8).alias(by_col_name))
+            df = df.with_columns(
+                cast(pl.Expr, bool_expr).fill_null(False).cast(pl.Boolean).alias(dom_col)
+            )
 
         # Drop rows with INVALID weights (null / non-finite / negative) —
         # unconditionally: prepare_data always provides a weight column,
         # synthesizing ones for unweighted designs. Zero-weight rows are
         # KEPT: prepare_data zero-weights missing-value rows so they
         # preserve the design structure while contributing nothing.
-        df = df.filter(
-            pl.col(w_col).is_not_null() & pl.col(w_col).is_finite() & (pl.col(w_col) >= 0)
-        )
+        _valid_w = pl.col(w_col).is_not_null() & pl.col(w_col).is_finite() & (pl.col(w_col) >= 0)
+        _n_before = df.height
+        df = df.filter(_valid_w)
+        if df.height < _n_before:
+            warnings.warn(
+                f"{_n_before - df.height} row(s) dropped: weight column {w_col!r} is "
+                "null, non-finite or negative there.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # In-domain rows: where == true (when set) and positive weight.
         # Cat level enumeration, reference validation, and response
         # validation all use exactly the rows the fit will use.
         _in_dom_expr = pl.col(w_col) > 0
-        if by_col_name is not None:
-            _in_dom_expr = _in_dom_expr & (pl.col(by_col_name).str.to_lowercase() == "true")
+        if dom_col is not None:
+            _in_dom_expr = _in_dom_expr & pl.col(dom_col)
         level_df = df.filter(_in_dom_expr)
+
+        if level_df.height == 0:
+            raise ModelError(
+                title="No observations to fit",
+                detail=(
+                    "No row has a positive weight"
+                    + (" inside the where clause" if where is not None else "")
+                    + ". Nothing was fitted."
+                ),
+                code="GLM_NO_OBSERVATIONS",
+                where="GLM.fit",
+                hint=(
+                    "Check the where clause and the weight column; rows with a missing "
+                    "predictor are kept with weight zero and do not count here."
+                ),
+            )
 
         # ── Build feature matrix ──────────────────────────────────────────
         feature_exprs: list[pl.Expr] = []
@@ -440,7 +503,12 @@ class GLM:
                 )
 
                 if len(levels) < 2:
-                    log.warning(f"Categorical '{feat.name}' has < 2 levels. Dropped.")
+                    warnings.warn(
+                        f"Categorical {feat.name!r} has fewer than 2 levels among the "
+                        "rows being fitted and was dropped from the model.",
+                        UserWarning,
+                        stacklevel=3,
+                    )
                     return [], []
 
                 if feat.ref is not None and feat.ref not in levels:
@@ -503,6 +571,23 @@ class GLM:
             feature_exprs.extend(exprs)
             feature_names.extend(names)
 
+        # A duplicate engineered name would fail in the select below as a
+        # polars "duplicate output name", which says nothing about the model.
+        _dupes = sorted({nm for nm in feature_names if feature_names.count(nm) > 1})
+        if _dupes:
+            raise ModelError(
+                title="Duplicate model term",
+                detail=(
+                    f"The terms {_dupes!r} are each engineered twice. A repeated "
+                    "predictor, or a Cat level whose dummy name collides with "
+                    "another column, makes the design matrix singular."
+                ),
+                code="DUPLICATE_TERM",
+                where="GLM.fit",
+                got=_dupes,
+                hint="List each predictor once.",
+            )
+
         # ── FPC (single-stage) ───────────────────────────────────────────
         # Per-stratum (1 - f_h) factors matching R svyglm on a design with
         # fpc=. Only the PSU-level factor applies (the sandwich meat is
@@ -537,8 +622,8 @@ class GLM:
             final_selects.append(pl.col(s_col))
         if p_col and p_col in df.columns:
             final_selects.append(pl.col(p_col))
-        if by_col_name and by_col_name in df.columns:
-            final_selects.append(pl.col(by_col_name))
+        if dom_col and dom_col in df.columns:
+            final_selects.append(pl.col(dom_col))
         if fpc_name and fpc_name in df.columns:
             final_selects.append(pl.col(fpc_name))
         if offset and offset in df.columns:
@@ -546,7 +631,7 @@ class GLM:
         for rc in rep_cols:
             if rc in df.columns:
                 final_selects.append(pl.col(rc).cast(pl.Float64))
-        _already = {y, w_col, s_col, p_col, by_col_name, fpc_name}
+        _already = {y, w_col, s_col, p_col, dom_col, fpc_name}
         _already.update(feature_names)
         _already.update(rep_cols)
         for cc in calib_cols:
@@ -582,7 +667,7 @@ class GLM:
                 psu_name=p_col,
                 fpc_name=fpc,
                 offset_name=offset,
-                by_col=by_col_name,
+                where_col=dom_col,
                 family=fam_str,
                 link=link_str,
                 tol=tol,
@@ -592,20 +677,16 @@ class GLM:
             )
             if not res:
                 raise RuntimeError("GLM engine returned no results.")
-            if by_col_name is None:
-                return res[0]
-            true_res = [r for r in res if str(r[0]).lower() == "true"]
-            if not true_res:
-                raise RuntimeError(
-                    "where clause produced no in-domain observations; cannot fit GLM."
-                )
-            return true_res[0]
+            return res[0]
 
         try:
             chosen = _run_engine(w_col, fpc_name)
-        except RuntimeError:
-            raise
         except Exception as e:
+            mapped = _as_model_error(e)
+            if mapped is not None:
+                raise mapped from e
+            if isinstance(e, RuntimeError):
+                raise
             raise RuntimeError(f"Rust GLM engine failed: {e}") from e
 
         (
@@ -619,6 +700,7 @@ class GLM:
             null_dev,
             iters,
             n_obs,
+            converged,
         ) = chosen
 
         # ── Post-process ──────────────────────────────────────────────────
@@ -636,11 +718,8 @@ class GLM:
         # information are linear in that scale; rho converts to R's scale
         # (rho == 1 for full-sample fits with no zero-weight rows).
         w_all = eng_df.get_column(w_col).to_numpy().astype(float)
-        if by_col_name is not None:
-            _dom_arr = (
-                eng_df.get_column(by_col_name).cast(pl.Utf8).str.to_lowercase() == "true"
-            ).to_numpy()
-            in_dom_mask = _dom_arr & (w_all > 0)
+        if dom_col is not None:
+            in_dom_mask = eng_df.get_column(dom_col).to_numpy() & (w_all > 0)
         else:
             in_dom_mask = w_all > 0
         _n_in = int(in_dom_mask.sum())
@@ -726,6 +805,15 @@ class GLM:
         else:
             aic_val = dev + 2.0 * eff_p if eff_p is not None else None
 
+        if not converged:
+            warnings.warn(
+                f"GLM did not converge in {iters} iterations (tol={tol:g}); the "
+                "coefficients and standard errors below are the last iterate. "
+                "Raise max_iter, or check for separation in the response.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         # Statistics
         stats_struct = self._build_stats(
             n,
@@ -789,7 +877,7 @@ class GLM:
         # frame instead of recomputing from the raw sample data.
         self._fit_frame = df
         self._fit_weight_col = w_col
-        self._fit_domain_col = by_col_name
+        self._fit_domain_col = dom_col
 
         self.fitted = fit_obj
         return self

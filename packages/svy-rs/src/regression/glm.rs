@@ -26,8 +26,8 @@ use polars::prelude::*;
 
 use crate::categorical::ranktest::probit;
 use crate::estimation::calib_sweep::CalibSweep;
+use crate::estimation::taylor::{design_col_codes, design_pair_codes};
 use rayon::prelude::*;
-use std::collections::HashMap;
 
 // ============================================================================
 // Enums & Config
@@ -290,151 +290,205 @@ impl Kahan {
 // Helpers
 // ============================================================================
 
-fn cols_to_mat(cols: &[&Float64Chunked], nrows: usize) -> Mat<f64> {
-    let ncols = cols.len();
-    let mut mat = Mat::<f64>::zeros(nrows, ncols);
+/// Materialise columns into one column-major `nrows * ncols` buffer.
+///
+/// Nulls are rejected upstream in `fit_glm_domain`, so each chunk's value
+/// slice is dense and copies wholesale.
+fn cols_to_vec(cols: &[&Float64Chunked], nrows: usize) -> Vec<f64> {
+    let mut out = vec![0.0; nrows * cols.len()];
     for (j, col) in cols.iter().enumerate() {
-        // Null-aware iteration: `into_no_null_iter` would silently compact
-        // rows past a null, misaligning y/X/w. Nulls are rejected upstream in
-        // fit_glm_domain; any that slip through become 0.0 at the right row.
-        for (i, val) in col.iter().enumerate() {
-            mat[(i, j)] = val.unwrap_or(0.0);
+        let dst = &mut out[j * nrows..(j + 1) * nrows];
+        let mut off = 0usize;
+        for arr in col.downcast_iter() {
+            let vals = arr.values().as_slice();
+            let end = (off + vals.len()).min(nrows);
+            dst[off..end].copy_from_slice(&vals[..end - off]);
+            off = end;
         }
     }
-    mat
+    out
 }
 
-/// Robust group indexing for String/Categorical/Enum/anything-castable-to-string.
-fn index_groups(series: &Series) -> PolarsResult<(Vec<usize>, usize)> {
-    let mut map: HashMap<String, usize> = HashMap::new();
-    let mut indices = Vec::with_capacity(series.len());
-    let mut next_idx = 0;
-
-    match series.dtype() {
-        DataType::String => {
-            let ca = series.str()?;
-            for opt_s in ca.iter() {
-                let s = opt_s.unwrap_or("__NULL__");
-                let idx = *map.entry(s.to_string()).or_insert_with(|| {
-                    let i = next_idx;
-                    next_idx += 1;
-                    i
-                });
-                indices.push(idx);
-            }
+/// Dense 0-based design codes for `strata` (and, when given, PSUs nested
+/// within them), reusing the estimation namespace's factorizers: the Python
+/// layer already hands the kernel integer code columns, and hashing those is
+/// ~10x cheaper than casting to String and hashing `(&str, &str)` per row.
+///
+/// Nulls arrive as `u32::MAX`; they are collected into one extra level so the
+/// code can index a `Vec` directly.
+fn design_codes(
+    strata: Option<&Series>,
+    psu: Option<&Series>,
+    n: usize,
+) -> PolarsResult<(Vec<usize>, usize)> {
+    let (raw, n_levels) = match (strata, psu) {
+        (Some(s), Some(p)) => {
+            design_pair_codes(&s.clone().into_column(), &p.clone().into_column())?
         }
-        DataType::Categorical(_, _) | DataType::Enum(_, _) => {
-            let physical = series.to_physical_repr();
-            let ca = physical.u32()?;
-            let mut phys_map: HashMap<u32, usize> = HashMap::new();
+        (None, Some(p)) => design_col_codes(&p.clone().into_column())?,
+        (Some(s), None) => design_col_codes(&s.clone().into_column())?,
+        (None, None) => return Ok(((0..n).collect(), n)),
+    };
 
-            for opt_v in ca.iter() {
-                let v = opt_v.unwrap_or(u32::MAX);
-                let idx = *phys_map.entry(v).or_insert_with(|| {
-                    let i = next_idx;
-                    next_idx += 1;
-                    i
-                });
-                indices.push(idx);
-            }
-        }
-        _ => {
-            let s_str = series.cast(&DataType::String)?;
-            return index_groups(&s_str);
+    let mut total = n_levels as usize;
+    let mut null_slot: Option<usize> = None;
+    let mut out = Vec::with_capacity(raw.len());
+    for &c in &raw {
+        if c == u32::MAX {
+            let slot = *null_slot.get_or_insert_with(|| {
+                let t = total;
+                total += 1;
+                t
+            });
+            out.push(slot);
+        } else {
+            out.push(c as usize);
         }
     }
-
-    Ok((indices, next_idx))
+    Ok((out, total))
 }
 
-/// Build XtWX and XtWz deterministically from current eta/mu (IRLS step),
-/// mirroring fisherinf: t(D) %*% (w * D / V), D = X * d, d = dmu/deta
+/// Rows per cache block in the cross-product accumulations. The X block of a
+/// 256-row window is k*2 KB, which stays in L1/L2 for every realistic k.
+const XP_BLOCK: usize = 256;
+
+/// Rows per parallel chunk. Fixed rather than derived from the thread count,
+/// so the summation order — and therefore the result — is identical on every
+/// machine and at every core count.
+const XP_CHUNK: usize = 8192;
+
+/// `out[a*k + b] += sum_i w[i] * cols[a*n + i] * cols[b*n + i]`, upper
+/// triangle only, over the rows `[0, n)` of a column-major `cols`.
+///
+/// Columns-outer with the row block innermost: the inner loop is a contiguous
+/// dot product the compiler can vectorize, and `w * cols[a]` is formed once
+/// per (block, a) instead of once per (block, a, b). Blocks are summed in
+/// index order within a chunk and chunks in index order, so the result does
+/// not depend on how rayon schedules them.
+fn accumulate_weighted_crossprod(cols: &[f64], w: &[f64], n: usize, k: usize, out: &mut [f64]) {
+    let chunk_of = |lo: usize, hi: usize| -> Vec<f64> {
+        let mut acc = vec![0.0f64; k * k];
+        let mut wx = [0.0f64; XP_BLOCK];
+        let mut b = lo;
+        while b < hi {
+            let e = (b + XP_BLOCK).min(hi);
+            let len = e - b;
+            let wb = &w[b..e];
+            for a in 0..k {
+                let xa = &cols[a * n + b..a * n + e];
+                let wxa = &mut wx[..len];
+                for t in 0..len {
+                    wxa[t] = wb[t] * xa[t];
+                }
+                for c in a..k {
+                    let xc = &cols[c * n + b..c * n + e];
+                    let mut s = 0.0f64;
+                    for t in 0..len {
+                        s += wxa[t] * xc[t];
+                    }
+                    acc[a * k + c] += s;
+                }
+            }
+            b = e;
+        }
+        acc
+    };
+
+    if n <= XP_CHUNK {
+        let acc = chunk_of(0, n);
+        for t in 0..k * k {
+            out[t] += acc[t];
+        }
+        return;
+    }
+
+    let n_chunks = n.div_ceil(XP_CHUNK);
+    let partials: Vec<Vec<f64>> = (0..n_chunks)
+        .into_par_iter()
+        .map(|c| chunk_of(c * XP_CHUNK, ((c + 1) * XP_CHUNK).min(n)))
+        .collect();
+    for acc in &partials {
+        for t in 0..k * k {
+            out[t] += acc[t];
+        }
+    }
+}
+
+/// Build XtWX and XtWz from the current eta/mu (one IRLS step), mirroring
+/// fisherinf: t(D) %*% (w * D / V), D = X * d, d = dmu/deta.
 ///
 /// When `domain_mask` is `Some`, rows where mask[i] is false contribute 0 to
-/// both XtWX and XtWz (and have w_irls[i] set to 0). When `None`, every row
-/// contributes (original behavior).
+/// both XtWX and XtWz (and have `w_irls[i]` set to 0). When `None`, every row
+/// contributes.
+///
+/// Summation is plain blocked f64, as R's `crossprod` is; Kahan compensation
+/// bought ~1e-16 on a quantity the sandwich is insensitive to and cost the
+/// vectorization of the whole accumulation.
 fn build_irls_normal_eqs(
     family: Family,
     link: Link,
     n: usize,
     k: usize,
-    Y: &Mat<f64>,
-    X: &Mat<f64>,
+    y_vals: &[f64],
+    x: &[f64],
     w_samp: &[f64],
     eta: &[f64],
     mu: &[f64],
     offset: &[f64],
     domain_mask: Option<&[bool]>,
-    Z: &mut Mat<f64>,
+    z: &mut [f64],
     w_irls: &mut [f64],
     XtWX: &mut Mat<f64>,
     XtWz: &mut Mat<f64>,
 ) {
-    // Kahan accumulators
-    let mut acc_wz = vec![Kahan::new(); k];
-    let mut acc_wx = vec![Kahan::new(); k * k];
-
+    // Pass 1 — per-row IRLS weight and working response. O(n), no k factor.
     for i in 0..n {
-        let in_domain = domain_mask.map_or(true, |m| m[i]);
+        let in_domain = domain_mask.is_none_or(|m| m[i]);
         let w_i = w_samp[i];
-
         if !in_domain || w_i <= 0.0 {
             w_irls[i] = 0.0;
-            Z[(i, 0)] = 0.0;
+            z[i] = 0.0;
             continue;
         }
 
-        let y_i = Y[(i, 0)];
         let mu_i = mu[i];
-
         let v = family.variance(mu_i).max(1e-12);
         let d = link.mu_eta(mu_i, eta[i]); // dμ/dη
-
-        // IRLS weight: w * (d^2 / V)
         let wi = w_i * (d * d) / v;
-        w_irls[i] = wi;
 
         let safe_d = if d.abs() < 1e-12 { 1e-12 } else { d };
         // Working response on the X-only scale: the offset is a known part of
         // eta with no parameter, so it comes out here and goes back in wherever
         // eta is rebuilt (R's glm.fit: z <- (eta - offset) + (y - mu)/mu.eta).
-        let z_i = (eta[i] - offset[i]) + (y_i - mu_i) / safe_d;
-        Z[(i, 0)] = z_i;
-
-        if wi.abs() < 1e-18 {
-            continue;
-        }
-
-        for r in 0..k {
-            let x_ir = X[(i, r)];
-            acc_wz[r].add(wi * x_ir * z_i);
-
-            for c in r..k {
-                let x_ic = X[(i, c)];
-                acc_wx[r * k + c].add(wi * x_ir * x_ic);
-            }
-        }
+        z[i] = (eta[i] - offset[i]) + (y_vals[i] - mu_i) / safe_d;
+        w_irls[i] = if wi < 1e-18 { 0.0 } else { wi };
     }
 
-    // XtWz
+    // Pass 2 — XtWX (blocked, columns-outer) and XtWz.
+    let mut acc_wx = vec![0.0f64; k * k];
+    accumulate_weighted_crossprod(x, w_irls, n, k, &mut acc_wx);
+
     for r in 0..k {
-        XtWz[(r, 0)] = acc_wz[r].value();
+        let xr = &x[r * n..(r + 1) * n];
+        let mut total = 0.0f64;
+        let mut b = 0usize;
+        while b < n {
+            let e = (b + XP_BLOCK).min(n);
+            let mut s = 0.0f64;
+            for t in b..e {
+                s += w_irls[t] * xr[t] * z[t];
+            }
+            total += s;
+            b = e;
+        }
+        XtWz[(r, 0)] = total;
     }
 
-    // XtWX symmetric
     for r in 0..k {
         for c in r..k {
-            let v = acc_wx[r * k + c].value();
+            let v = acc_wx[r * k + c];
             XtWX[(r, c)] = v;
             XtWX[(c, r)] = v;
-        }
-    }
-
-    // force symmetry (numerical)
-    for r in 0..k {
-        for c in 0..k {
-            let v = 0.5 * (XtWX[(r, c)] + XtWX[(c, r)]);
-            XtWX[(r, c)] = v;
         }
     }
 }
@@ -477,12 +531,73 @@ fn solve_linear_system(A: MatRef<'_, f64>, b: MatRef<'_, f64>) -> Mat<f64> {
     x2
 }
 
+/// Refuse an aliased design matrix.
+///
+/// A pivot-free Cholesky of XtWX in the model's own column order: column j is
+/// aliased when the variance it still has after projecting out the columns
+/// before it is a vanishing fraction of its own. That is R's "first columns
+/// win" rule, but raising instead of reporting NA coefficients — consistent
+/// with the rest of svy, and better than today's alternative, a fit that
+/// "succeeds" with SE 0 or NaN and an F statistic around 1e30.
+fn check_rank(XtWX: &Mat<f64>, k: usize, cols: &[Series]) -> PolarsResult<()> {
+    // An exactly aliased column leaves ~1e-16 of its own norm; a genuinely
+    // collinear-but-distinct one (R^2 = 0.999999) leaves 1e-6. This separates
+    // them by five orders of magnitude either way.
+    const ALIAS_TOL: f64 = 1e-11;
+
+    let mut l = vec![0.0f64; k * k]; // column-major lower factor
+    let mut aliased: Vec<usize> = Vec::new();
+
+    for j in 0..k {
+        let mut d = XtWX[(j, j)];
+        for p in 0..j {
+            d -= l[p * k + j] * l[p * k + j];
+        }
+        // Negated so a NaN diagonal is aliased rather than accepted.
+        if !(d > ALIAS_TOL * XtWX[(j, j)]) {
+            // Its factor column stays zero, so the columns after it are
+            // measured against the ones that were actually kept.
+            aliased.push(j);
+            continue;
+        }
+        let ljj = d.sqrt();
+        l[j * k + j] = ljj;
+        for i in (j + 1)..k {
+            let mut v = XtWX[(i, j)];
+            for p in 0..j {
+                v -= l[p * k + i] * l[p * k + j];
+            }
+            l[j * k + i] = v / ljj;
+        }
+    }
+
+    if aliased.is_empty() {
+        return Ok(());
+    }
+
+    let listed: Vec<String> = aliased
+        .iter()
+        .map(|&j| format!("'{}'", cols[j].name()))
+        .collect();
+    Err(PolarsError::ComputeError(
+        format!(
+            "GLM design matrix is rank deficient: {} is collinear with the columns \
+             before it. Drop it, or one of the columns it duplicates.",
+            listed.join(", ")
+        )
+        .into(),
+    ))
+}
+
 /// Compute A^{-1} via solving A X = I with same solve strategy.
-fn invert_matrix(A: MatRef<'_, f64>, k: usize) -> Mat<f64> {
+///
+/// Returns an error rather than panicking when even the SVD fails: a single
+/// non-finite entry in the information matrix used to reach `thin_svd().unwrap()`.
+fn invert_matrix(A: MatRef<'_, f64>, k: usize) -> PolarsResult<Mat<f64>> {
     if let Ok(chol) = A.llt(Side::Lower) {
         let mut inv = Mat::<f64>::identity(k, k);
         chol.solve_in_place(inv.as_mut());
-        return inv;
+        return Ok(inv);
     }
 
     let lblt = A.lblt(Side::Lower);
@@ -500,16 +615,23 @@ fn invert_matrix(A: MatRef<'_, f64>, k: usize) -> Mat<f64> {
                 for rr in 0..k {
                     for cc in 0..k {
                         if !inv2[(rr, cc)].is_finite() {
-                            return A.thin_svd().unwrap().pseudoinverse();
+                            return match A.thin_svd() {
+                                Ok(svd) => Ok(svd.pseudoinverse()),
+                                Err(_) => Err(PolarsError::ComputeError(
+                                    "GLM information matrix could not be inverted \
+                                     (degenerate or non-finite fit)"
+                                        .into(),
+                                )),
+                            };
                         }
                     }
                 }
-                return inv2;
+                return Ok(inv2);
             }
         }
     }
 
-    inv
+    Ok(inv)
 }
 
 // ============================================================================
@@ -530,6 +652,8 @@ pub struct GlmResult {
     pub null_deviance: f64,
     pub iterations: u32,
     pub n_obs: usize,
+    /// Whether IRLS met the tolerance rather than exhausting `max_iter`.
+    pub converged: bool,
 }
 
 // ============================================================================
@@ -544,7 +668,7 @@ fn null_deviance_with_offset(
     family: Family,
     link: Link,
     n: usize,
-    Y: &Mat<f64>,
+    y_vals: &[f64],
     w_samp: &[f64],
     offset: &[f64],
     domain_mask: Option<&[bool]>,
@@ -575,7 +699,7 @@ fn null_deviance_with_offset(
                 continue;
             }
             let safe_d = if d.abs() < 1e-12 { 1e-12 } else { d };
-            let z_i = (eta_i - offset[i]) + (Y[(i, 0)] - mu_i) / safe_d;
+            let z_i = (eta_i - offset[i]) + (y_vals[i] - mu_i) / safe_d;
             num.add(wi * z_i);
             den.add(wi);
         }
@@ -592,7 +716,7 @@ fn null_deviance_with_offset(
                 continue;
             }
             let mu_i = link.inverse(b_new + offset[i]);
-            dev_new += w_samp[i] * family.unit_deviance(Y[(i, 0)], mu_i);
+            dev_new += w_samp[i] * family.unit_deviance(y_vals[i], mu_i);
         }
 
         let converged = deviance.is_finite()
@@ -630,6 +754,49 @@ pub fn fit_glm(
 ) -> PolarsResult<GlmResult> {
     fit_glm_domain(
         y, x_cols, weights, strata, psu, fpc, offset, None, family_str, link_str, tol, max_iter,
+        calib,
+    )
+}
+
+/// Single fit restricted to the rows where `mask` is true.
+///
+/// A `where=` clause is one domain, not a by-variable: routing it through
+/// `fit_glm_by` fitted the complement as well and threw it away, doubling the
+/// CPU (rayon only hid it) and turning a degenerate complement into a
+/// swallowed error.
+#[allow(clippy::too_many_arguments)]
+pub fn fit_glm_where(
+    y: &Series,
+    x_cols: Vec<Series>,
+    weights: &Series,
+    strata: Option<&Series>,
+    psu: Option<&Series>,
+    fpc: Option<&Series>,
+    offset: Option<&Series>,
+    mask: &Series,
+    family_str: &str,
+    link_str: &str,
+    tol: f64,
+    max_iter: usize,
+    calib: Option<&CalibSweep>,
+) -> PolarsResult<GlmResult> {
+    let cast = mask.cast(&DataType::Boolean)?;
+    let ca = cast.bool()?;
+    let mask_vec: Vec<bool> = ca.iter().map(|v| v.unwrap_or(false)).collect();
+
+    fit_glm_domain(
+        y,
+        x_cols,
+        weights,
+        strata,
+        psu,
+        fpc,
+        offset,
+        Some(&mask_vec),
+        family_str,
+        link_str,
+        tol,
+        max_iter,
         calib,
     )
 }
@@ -696,11 +863,11 @@ pub fn fit_glm_by(
         })
         .collect();
 
-    // A level that fails to fit (e.g. a complement domain with a constant
-    // binomial response) is dropped rather than failing the whole call —
-    // the caller typically needs only one level. If every level fails,
-    // propagate the first error.
+    // A level that fails to fit used to be dropped silently, so a caller
+    // asking for every level got a short list with no way to tell which one
+    // was missing or why.
     let mut results = Vec::with_capacity(attempts.len());
+    let mut failed: Vec<String> = Vec::new();
     let mut first_err: Option<PolarsError> = None;
     for (level, res) in attempts {
         match res {
@@ -709,13 +876,24 @@ pub fn fit_glm_by(
                 if first_err.is_none() {
                     first_err = Some(e);
                 }
+                failed.push(level);
             }
         }
     }
-    if results.is_empty() {
-        if let Some(e) = first_err {
-            return Err(e);
-        }
+    if !failed.is_empty() {
+        let detail = first_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown error".to_string());
+        return Err(PolarsError::ComputeError(
+            format!(
+                "GLM failed on {} of {} levels of '{}' ({}): {detail}",
+                failed.len(),
+                failed.len() + results.len(),
+                by_col.name(),
+                failed.join(", ")
+            )
+            .into(),
+        ));
     }
     Ok(results)
 }
@@ -780,8 +958,8 @@ fn fit_glm_domain(
         }
     }
 
-    let Y = cols_to_mat(&[y_ca], n);
-    let X = cols_to_mat(&x_ca_list, n);
+    let y_vals = cols_to_vec(&[y_ca], n);
+    let x = cols_to_vec(&x_ca_list, n);
 
     // Known term on the link scale, coefficient fixed at 1. Absent -> all zero,
     // which makes every offset expression below a no-op on the existing path.
@@ -817,6 +995,54 @@ fn fit_glm_domain(
         w_sum = n as f64;
     }
 
+    // Rows that will actually carry the fit. An empty `where` domain or an
+    // all-zero weight column used to return a zero fit as `Ok`: the normal
+    // equations are then the zero matrix, whose SVD pseudoinverse is also
+    // zero, and beta = 0 passes the finite check below.
+    let n_obs = (0..n)
+        .filter(|&i| domain_mask.is_none_or(|m| m[i]) && w_samp[i] > 0.0)
+        .count();
+    if n_obs <= k {
+        return Err(PolarsError::ComputeError(
+            format!("GLM needs more observations than parameters: n_obs={n_obs}, k={k}").into(),
+        ));
+    }
+
+    // Nulls are rejected above; NaN/Inf are not, and Rust's `f64::max` returns
+    // the other operand for a NaN, so `.max(1e-12)` on the variance would hide
+    // one all the way to a NaN beta. Only contributing rows matter: a padded
+    // zero-weight row never enters an accumulation.
+    for i in 0..n {
+        if !(domain_mask.is_none_or(|m| m[i]) && w_samp[i] > 0.0) {
+            continue;
+        }
+        if !y_vals[i].is_finite() {
+            return Err(PolarsError::ComputeError(
+                format!(
+                    "GLM response column '{}' contains a non-finite value at row {i}",
+                    y.name()
+                )
+                .into(),
+            ));
+        }
+        if !offset_vals[i].is_finite() {
+            return Err(PolarsError::ComputeError(
+                format!("GLM offset contains a non-finite value at row {i}").into(),
+            ));
+        }
+        for j in 0..k {
+            if !x[j * n + i].is_finite() {
+                return Err(PolarsError::ComputeError(
+                    format!(
+                        "GLM predictor column '{}' contains a non-finite value at row {i}",
+                        x_cast[j].name()
+                    )
+                    .into(),
+                ));
+            }
+        }
+    }
+
     // 2) IRLS init — only meaningful for in-domain rows; out-of-domain rows
     //    get a neutral placeholder since they won't contribute.
     let mut beta = Mat::<f64>::zeros(k, 1);
@@ -825,7 +1051,7 @@ fn fit_glm_domain(
 
     for i in 0..n {
         let in_domain = domain_mask.map_or(true, |m| m[i]);
-        let y_init = if in_domain { Y[(i, 0)] } else { 0.5 };
+        let y_init = if in_domain { y_vals[i] } else { 0.5 };
         mu[i] = family.initial_mu(y_init);
         // R seeds eta at linkfun(mustart) without the offset; it enters through
         // the working response, and every later eta adds it back explicitly.
@@ -833,74 +1059,74 @@ fn fit_glm_domain(
     }
 
     // work arrays
-    let mut Z = Mat::<f64>::zeros(n, 1);
+    let mut z_work = vec![0.0f64; n];
     let mut w_irls = vec![0.0; n];
     let mut XtWX = Mat::<f64>::zeros(k, k);
     let mut XtWz = Mat::<f64>::zeros(k, 1);
 
     // 3) IRLS loop
+    //
+    // eta/mu enter each pass already evaluated at the current beta — step 4
+    // leaves them there and step 6 commits that beta — so there is no leading
+    // recomputation.
     let mut iter_count = 0;
     let mut deviance = 0.0;
+    let mut converged = false;
 
     for iter in 0..max_iter {
         iter_count += 1;
 
-        // 1) eta/mu from current beta
-        if iter > 0 {
-            for i in 0..n {
-                let mut s = 0.0f64;
-                for j in 0..k {
-                    s += X[(i, j)] * beta[(j, 0)];
-                }
-                s += offset_vals[i];
-                eta[i] = s;
-                mu[i] = link.inverse(s);
-            }
-        }
-
-        // 2) build normal equations at current beta
+        // 1) build normal equations at current beta
         build_irls_normal_eqs(
             family,
             link,
             n,
             k,
-            &Y,
-            &X,
+            &y_vals,
+            &x,
             &w_samp,
             &eta,
             &mu,
             &offset_vals,
             domain_mask,
-            &mut Z,
+            &mut z_work,
             &mut w_irls,
             &mut XtWX,
             &mut XtWz,
         );
 
+        // 2) an aliased column makes every SE that follows meaningless, so
+        //    say so once, at the first information matrix, instead of
+        //    returning a fit built on a pseudoinverse.
+        if iter == 0 {
+            check_rank(&XtWX, k, &x_cast)?;
+        }
+
         // 3) solve for beta_new
         let beta_new = solve_linear_system(XtWX.as_ref(), XtWz.as_ref());
 
-        // 4) recompute eta/mu at beta_new — direct loop, no N×1 Mat alloc
-        let mut dev_new = 0.0;
-        {
+        // 4) eta/mu at beta_new, column-outer: each term is one contiguous
+        //    pass over x, where a row-outer loop strides by n per term.
+        for i in 0..n {
+            eta[i] = offset_vals[i];
+        }
+        for j in 0..k {
+            let bj = beta_new[(j, 0)];
+            if bj == 0.0 {
+                continue;
+            }
+            let xj = &x[j * n..(j + 1) * n];
             for i in 0..n {
-                let mut s = 0.0f64;
-                for j in 0..k {
-                    s += X[(i, j)] * beta_new[(j, 0)];
-                }
-                s += offset_vals[i];
-                let mu_i = link.inverse(s);
-                eta[i] = s;
-                mu[i] = mu_i;
-                let in_domain = domain_mask.map_or(true, |m| m[i]);
-                if !in_domain {
-                    continue;
-                }
-                let w_i = w_samp[i];
-                if w_i > 0.0 {
-                    let y_i = Y[(i, 0)];
-                    dev_new += w_i * family.unit_deviance(y_i, mu_i);
-                }
+                eta[i] += xj[i] * bj;
+            }
+        }
+
+        let mut dev_new = 0.0;
+        for i in 0..n {
+            let mu_i = link.inverse(eta[i]);
+            mu[i] = mu_i;
+            if domain_mask.is_none_or(|m| m[i]) && w_samp[i] > 0.0 {
+                dev_new += w_samp[i] * family.unit_deviance(y_vals[i], mu_i);
             }
         }
 
@@ -924,6 +1150,7 @@ fn fit_glm_domain(
         deviance = dev_new;
 
         if iter > 0 && (rel_dev < tol || max_delta < tol) {
+            converged = true;
             break;
         }
     }
@@ -943,69 +1170,40 @@ fn fit_glm_domain(
     // 4) Sandwich variance (R-alignment: rebuild XtWX at FINAL beta)
     // =========================================================================
 
-    // final eta/mu at converged beta — direct loop
-    for i in 0..n {
-        let mut s = 0.0f64;
-        for j in 0..k {
-            s += X[(i, j)] * beta[(j, 0)];
-        }
-        s += offset_vals[i];
-        eta[i] = s;
-        mu[i] = link.inverse(s);
-    }
-
+    // eta/mu are already at the converged beta (step 4 of the last pass).
     // rebuild XtWX at final beta (bread must match fisherinf)
     build_irls_normal_eqs(
         family,
         link,
         n,
         k,
-        &Y,
-        &X,
+        &y_vals,
+        &x,
         &w_samp,
         &eta,
         &mu,
         &offset_vals,
         domain_mask,
-        &mut Z,
+        &mut z_work,
         &mut w_irls,
         &mut XtWX,
         &mut XtWz,
     );
 
-    // strata/psu indices — FULL design (not affected by domain)
+    // strata/psu indices — FULL design (not affected by domain).
+    //
+    // The Python layer already hands the kernel dense integer code columns
+    // (the PSU code encodes the (stratum, psu) pair), so this reuses the
+    // estimation namespace's factorizers instead of casting to String and
+    // hashing a (&str, &str) per row.
     let (strata_idx, n_strata) = match strata {
-        Some(s) => index_groups(s)?,
+        Some(_) => design_codes(strata, None, n)?,
         None => (vec![0usize; n], 1usize),
     };
 
-    let (psu_idx, _n_psu_levels) = match (strata, psu) {
-        (Some(s), Some(p)) => {
-            // nest PSU within strata: id = (stratum, psu)
-            let s_str = s.cast(&DataType::String)?;
-            let p_str = p.cast(&DataType::String)?;
-            let s_ca = s_str.str()?;
-            let p_ca = p_str.str()?;
-            let s_vals: Vec<&str> = s_ca.iter().map(|v| v.unwrap_or("__NULL__")).collect();
-            let p_vals: Vec<&str> = p_ca.iter().map(|v| v.unwrap_or("__NULL__")).collect();
-
-            let mut map: HashMap<(&str, &str), usize> = HashMap::new();
-            let mut idx = Vec::with_capacity(n);
-            let mut next = 0usize;
-
-            for i in 0..n {
-                let key = (s_vals[i], p_vals[i]);
-                let v = *map.entry(key).or_insert_with(|| {
-                    let t = next;
-                    next += 1;
-                    t
-                });
-                idx.push(v);
-            }
-            (idx, next)
-        }
-        (_, Some(p)) => index_groups(p)?,
-        _ => ((0..n).collect::<Vec<_>>(), n),
+    let (psu_idx, n_psu_levels) = match psu {
+        Some(_) => design_codes(strata, psu, n)?,
+        None => ((0..n).collect::<Vec<_>>(), n),
     };
 
     // Pre-build strata → obs index
@@ -1040,7 +1238,7 @@ fn fit_glm_domain(
         let mu_i = mu[i];
         let d = link.mu_eta(mu_i, eta[i]);
         let v = family.variance(mu_i).max(1e-12);
-        w_i * (Y[(i, 0)] - mu_i) * d / v
+        w_i * (y_vals[i] - mu_i) * d / v
     };
 
     // Calibration-aware variance. R centres the INFLUENCE functions --
@@ -1064,7 +1262,7 @@ fn fit_glm_domain(
             let s_i = score_at(i);
             if s_i != 0.0 {
                 for j in 0..k {
-                    m[j * n + i] = s_i * X[(i, j)];
+                    m[j * n + i] = s_i * x[j * n + i];
                 }
             }
         }
@@ -1075,91 +1273,200 @@ fn fit_glm_domain(
     });
 
     // MEAT = sum_h Var_h( PSU totals ) with svytotal-style centering.
-    let mut meat_acc = vec![Kahan::new(); k * k];
+    let mut meat_flat = vec![0.0f64; k * k]; // upper triangle
 
-    for h in 0..n_strata {
-        let mut local_map: HashMap<usize, usize> = HashMap::new();
-        let mut totals: Vec<Vec<Kahan>> = Vec::new();
+    // Per-stratum with-replacement factor m/(m-1), times the stratum FPC
+    // (1 - f_h). Zero for a stratum that cannot contribute (a single PSU),
+    // which is how those rows are kept out of the accumulation below.
+    let mut scale_h = vec![0.0f64; n_strata];
+    let mut psus_h = vec![0usize; n_strata];
 
-        for &i in &strata_obs[h] {
-            let psu_id = psu_idx[i];
-            let li = *local_map.entry(psu_id).or_insert_with(|| {
-                let new_i = totals.len();
-                totals.push(vec![Kahan::new(); k]);
-                new_i
-            });
-
-            match &ef {
-                Some(m) => {
-                    for j in 0..k {
-                        totals[li][j].add(m[j * n + i]);
-                    }
-                }
-                None => {
-                    if w_samp[i] <= 0.0 || w_irls[i] <= 0.0 {
-                        continue;
-                    }
-                    let s_i = score_at(i);
-                    for j in 0..k {
-                        totals[li][j].add(s_i * X[(i, j)]);
-                    }
+    if psu.is_none() {
+        for h in 0..n_strata {
+            psus_h[h] = strata_obs[h].len();
+        }
+    } else {
+        let mut seen = vec![false; n_psu_levels];
+        for h in 0..n_strata {
+            let mut m = 0usize;
+            for &i in &strata_obs[h] {
+                if !seen[psu_idx[i]] {
+                    seen[psu_idx[i]] = true;
+                    m += 1;
                 }
             }
+            for &i in &strata_obs[h] {
+                seen[psu_idx[i]] = false;
+            }
+            psus_h[h] = m;
         }
-
-        let m = totals.len();
+    }
+    for h in 0..n_strata {
+        let m = psus_h[h];
         if m <= 1 {
             continue;
         }
-
-        // mean-center PSU totals in stratum
-        let mut mean = vec![0.0; k];
-        for t in &totals {
-            for j in 0..k {
-                mean[j] += t[j].value();
-            }
-        }
-        for j in 0..k {
-            mean[j] /= m as f64;
-        }
-
-        // with-replacement factor m/(m-1), times the stratum FPC (1 - f_h)
-        let fpc_h = match &fpc_rows {
+        let f = match &fpc_rows {
             Some(f) => strata_obs[h].first().map(|&i| f[i]).unwrap_or(1.0),
             None => 1.0,
         };
-        let scale_h = fpc_h * (m as f64) / ((m - 1) as f64);
+        scale_h[h] = f * (m as f64) / ((m - 1) as f64);
+    }
 
-        for a in 0..k {
-            for b in 0..k {
-                let mut s = Kahan::new();
-                for t in &totals {
-                    let da = t[a].value() - mean[a];
-                    let db = t[b].value() - mean[b];
-                    s.add(da * db);
+    if psu.is_none() {
+        // Every row is its own PSU, so a PSU total IS that row's score
+        // contribution and the stratum sums telescope:
+        //   sum_i (t_i - tbar)(t_i - tbar)' = sum_i t_i t_i' - m tbar tbar'.
+        // The quadratic half is then one weighted cross-product over all rows
+        // (row weight = the row's stratum scale), and the correction needs
+        // only a k-vector per stratum. Materialising m x k PSU totals -- at
+        // 1e6 rows, a million heap vectors behind a million-entry hash map,
+        // walked k^2 times -- was the entire cost of a weights-only design.
+        //
+        // No cancellation to worry about: the score equations make the total
+        // sum_i s_i x_ij zero at the MLE, and a stratum's share of it is
+        // O(sqrt(m)), so the correction is ~1/m of the quadratic term.
+        let mut row_w = vec![0.0f64; n];
+        let mut sums = vec![0.0f64; n_strata * k];
+
+        match &ef {
+            Some(e) => {
+                for i in 0..n {
+                    row_w[i] = scale_h[strata_idx[i]];
                 }
-                meat_acc[a * k + b].add(scale_h * s.value());
+                for j in 0..k {
+                    let col = &e[j * n..(j + 1) * n];
+                    for i in 0..n {
+                        sums[strata_idx[i] * k + j] += col[i];
+                    }
+                }
+                accumulate_weighted_crossprod(e, &row_w, n, k, &mut meat_flat);
+            }
+            None => {
+                let mut scores = vec![0.0f64; n];
+                for i in 0..n {
+                    scores[i] = score_at(i);
+                }
+                for i in 0..n {
+                    row_w[i] = scale_h[strata_idx[i]] * scores[i] * scores[i];
+                }
+                for j in 0..k {
+                    let col = &x[j * n..(j + 1) * n];
+                    for i in 0..n {
+                        sums[strata_idx[i] * k + j] += scores[i] * col[i];
+                    }
+                }
+                accumulate_weighted_crossprod(&x, &row_w, n, k, &mut meat_flat);
+            }
+        }
+
+        for h in 0..n_strata {
+            let m = psus_h[h];
+            if m <= 1 {
+                continue;
+            }
+            let c = scale_h[h] / (m as f64);
+            for a in 0..k {
+                let sa = sums[h * k + a];
+                for b in a..k {
+                    meat_flat[a * k + b] -= c * sa * sums[h * k + b];
+                }
+            }
+        }
+    } else {
+        // Real PSUs: one flat m x k totals buffer per stratum, addressed
+        // through a dense slot table indexed by the (already 0-based) PSU
+        // code, in place of a per-stratum HashMap and m heap vectors.
+        let mut slot = vec![usize::MAX; n_psu_levels];
+        let mut totals: Vec<f64> = Vec::new();
+        let mut used: Vec<usize> = Vec::new();
+        let mut mean = vec![0.0f64; k];
+        let mut local = vec![0.0f64; k * k];
+
+        for h in 0..n_strata {
+            totals.clear();
+            used.clear();
+
+            for &i in &strata_obs[h] {
+                let pid = psu_idx[i];
+                let li = if slot[pid] == usize::MAX {
+                    let t = used.len();
+                    slot[pid] = t;
+                    used.push(pid);
+                    totals.resize(totals.len() + k, 0.0);
+                    t
+                } else {
+                    slot[pid]
+                };
+
+                let base = li * k;
+                match &ef {
+                    Some(e) => {
+                        for j in 0..k {
+                            totals[base + j] += e[j * n + i];
+                        }
+                    }
+                    None => {
+                        let s_i = score_at(i);
+                        if s_i != 0.0 {
+                            for j in 0..k {
+                                totals[base + j] += s_i * x[j * n + i];
+                            }
+                        }
+                    }
+                }
+            }
+
+            let m = used.len();
+            for &pid in &used {
+                slot[pid] = usize::MAX;
+            }
+            if m <= 1 {
+                continue;
+            }
+
+            // mean-center PSU totals in stratum
+            mean.iter_mut().for_each(|v| *v = 0.0);
+            for li in 0..m {
+                for j in 0..k {
+                    mean[j] += totals[li * k + j];
+                }
+            }
+            for j in 0..k {
+                mean[j] /= m as f64;
+            }
+
+            local.iter_mut().for_each(|v| *v = 0.0);
+            for li in 0..m {
+                let base = li * k;
+                for a in 0..k {
+                    let da = totals[base + a] - mean[a];
+                    for b in a..k {
+                        local[a * k + b] += da * (totals[base + b] - mean[b]);
+                    }
+                }
+            }
+            for a in 0..k {
+                for b in a..k {
+                    meat_flat[a * k + b] += scale_h[h] * local[a * k + b];
+                }
             }
         }
     }
 
-    // materialize meat
+    // materialize meat (symmetric by construction: only the upper triangle
+    // was accumulated)
     let mut meat = Mat::<f64>::zeros(k, k);
     for a in 0..k {
-        for b in 0..k {
-            meat[(a, b)] = meat_acc[a * k + b].value();
-        }
-    }
-    // symmetrize
-    for a in 0..k {
-        for b in 0..k {
-            let v = 0.5 * (meat[(a, b)] + meat[(b, a)]);
+        for b in a..k {
+            let v = meat_flat[a * k + b];
             meat[(a, b)] = v;
+            meat[(b, a)] = v;
         }
     }
 
     // BREAD = (XtWX)^-1 at final beta
-    let bread = invert_matrix(XtWX.as_ref(), k);
+    let bread = invert_matrix(XtWX.as_ref(), k)?;
 
     // Cov = bread * meat * bread
     let tmp = &bread * &meat;
@@ -1213,14 +1520,6 @@ fn fit_glm_domain(
         if n_dom <= 1 { 1.0 } else { (n_dom - 1) as f64 }
     };
 
-    // n_obs: rows actually contributing to the fit — in-domain with
-    // positive weight. Zero-weight rows (e.g. missing-value rows kept for
-    // the design structure) are excluded in both branches.
-    let n_obs = match domain_mask {
-        Some(m) => (0..n).filter(|&i| m[i] && w_samp[i] > 0.0).count(),
-        None => (0..n).filter(|&i| w_samp[i] > 0.0).count(),
-    };
-
     // scale (phi) for gaussian/gamma/invgauss (reporting only).
     // Pearson sum is computed over in-domain rows only.
     let scale = if matches!(
@@ -1239,7 +1538,7 @@ fn fit_glm_domain(
             }
             let mu_i = mu[i];
             let v = family.variance(mu_i).max(1e-12);
-            let y_i = Y[(i, 0)];
+            let y_i = y_vals[i];
             pearson += w_i * (y_i - mu_i).powi(2) / v;
         }
         if df_resid > 0.0 {
@@ -1264,7 +1563,7 @@ fn fit_glm_domain(
             family,
             link,
             n,
-            &Y,
+            &y_vals,
             &w_samp,
             &offset_vals,
             domain_mask,
@@ -1280,7 +1579,7 @@ fn fit_glm_domain(
             if !in_domain || w_samp[i] <= 0.0 {
                 continue;
             }
-            sum_wy += Y[(i, 0)] * w_samp[i];
+            sum_wy += y_vals[i] * w_samp[i];
             sum_w += w_samp[i];
         }
         let y_mean = if sum_w > 0.0 { sum_wy / sum_w } else { 0.0 };
@@ -1295,7 +1594,7 @@ fn fit_glm_domain(
             if w_i <= 0.0 {
                 continue;
             }
-            let y_i = Y[(i, 0)];
+            let y_i = y_vals[i];
             dev0 += w_i * family.unit_deviance(y_i, y_mean);
         }
         dev0
@@ -1325,6 +1624,7 @@ fn fit_glm_domain(
         null_deviance,
         iterations: iter_count as u32,
         n_obs,
+        converged,
     })
 }
 
