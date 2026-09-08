@@ -852,9 +852,19 @@ class Expr:
         """Reverse list."""
         return _typing.cast(T, Expr(self._e.list.reverse()))
 
-    def explode(self: T) -> T:
-        """Explode list into rows."""
-        return _typing.cast(T, Expr(self._e.explode()))
+    def explode(self: T, empty_as_null: bool = True) -> T:
+        """
+        Explode a list into rows.
+
+        `empty_as_null` decides what an empty list becomes: `True` (the
+        default) yields one null row, `False` yields no row at all.
+
+        It is passed explicitly rather than left to polars because polars 2.0
+        flips its own default to `False`. A survey estimate should not move
+        because a dependency was upgraded, and a dropped row is one fewer
+        observation — so svy pins the behaviour and lets the caller choose.
+        """
+        return _typing.cast(T, Expr(self._e.explode(empty_as_null=empty_as_null)))
 
     # -------------------------------------------------------------------------
     # Sorting

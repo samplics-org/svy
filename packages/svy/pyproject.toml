@@ -26,7 +26,9 @@ dependencies = [
   # Below it, every clone silently skipped the normalization that keeps
   # value labels as ValueLabel pairs (see CHANGELOG, value-label clone fix).
   "msgspec>=0.21.0",
-  "polars[pyarrow]>=1.33.1",
+  # 1.36.1 is where Expr.explode gained empty_as_null, which svy passes
+  # explicitly so polars 2.0 cannot flip it underneath a survey estimate.
+  "polars[pyarrow]>=1.36.1",
   "scipy>=1.13",
   "svy-io>=0.4.0,<0.5.0",
   "svy-rs>=0.17.0,<0.18.0",
