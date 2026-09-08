@@ -6,6 +6,14 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ### Added
 
+- **Negative binomial**, whole. `Family::NegativeBinomial(theta)` gives `Var(mu) = mu + mu^2/theta` with MASS's `initialize` (`y + (y == 0)/6`) and `dev.resids`; `regression::negbin` adds what a family arm cannot hold — `theta_ml` (Newton on the weighted profile likelihood, `MASS::theta.ml`), the `MASS::glm.nb` outer loop alternating it with IRLS, and the joint `(beta, theta)` design-based variance, which is R `survey::svymle`'s route. `fit_glm_rs` gains `theta` and returns `(theta, theta_se)`.
+
+- `regression::special` — `lgamma`, `digamma` and `trigamma`, written out because the crate carries no math dependency, the same reason `norm_cdf` is. Each recurs to `x >= 20` and then sums the asymptotic series; all three agree with R to 1e-14 relative over `[0.1, 1000]`, and the tests also check the recurrences across the switchover and trigamma against a numeric derivative of digamma.
+
+- `Link::mu_eta2` — the second derivative of the inverse link, which the negative binomial's joint bread needs. Arms for all nine links.
+
+- `design_vcov_rs` — the design-based variance-covariance of the totals of several already-weighted columns, R survey's `svyrecvar`. The GLM sandwich's meat and the negative binomial's joint variance both run through it.
+
 - `Link::Cauchit` and `Link::Sqrt`, mirroring R's `make.link`: cauchit clamps eta at `-qcauchy(.Machine$double.eps)` and computes `pcauchy` from `atan(1/x)` outside [-1, 1] (the naive `atan(x)/pi + 0.5` loses three and a half digits at x = -1000); sqrt is `eta^2` with `mu_eta = 2*eta`, and needs no `valideta` since the kernel does no step-halving.
 
 - - `converged` on `GlmResult`, and `where_col` on `fit_glm_rs`: a Boolean column marking a subpopulation, fitted as one domain. A `where=` clause used to be routed through `fit_glm_by` on a "true"/"false" string column, which fitted the complement as well and threw it away.
@@ -13,6 +21,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 - `domain_col` on `tabulate_rs`: a Boolean column marking the rows of a subpopulation. Out-of-domain rows keep their design columns and get weight 0 (R's `subset()` on a design), so the PSU structure is intact and `degrees_of_freedom` counts the units with an in-domain row; cells are formed from in-domain keys only (a null key outside the domain is not missing), and the Rao-Scott `n`, strata and PSU counts are taken over in-domain rows. `estimate_proportions`, `estimate_totals` and `count_strata_psus` gain the matching `domain` parameter.
 
 ### Changed
+
+- **`fit_glm_domain` takes `want_variance`.** The negative binomial's theta loop refits beta several times and needs nothing but the coefficients; the sandwich is the most expensive part of a fit. `fit_one` is the new single dispatch point over families.
 
 - **`Family::initial_mu` takes the row's prior weight** and returns R's `family$initialize` starting value: `(w y + 1/2)/(w + 1)` for binomial, `y + 0.1` for poisson, `y` elsewhere. The old binomial seed `(y + 1/2)/2` put IRLS on a different iterate path from R's, which on a flat deviance surface means stopping somewhere else — cloglog on apistrat ended 3e-5 from R's coefficients.
 

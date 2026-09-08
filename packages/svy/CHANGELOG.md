@@ -8,6 +8,21 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **Negative binomial**, for counts a Poisson cannot hold. `family="negative_binomial"` (or `"nb"`), with `Var(mu) = mu + mu^2/theta` and R's `okLinks` — `log`, `identity`, `sqrt`.
+
+  ```python
+  m = sample.glm.fit(y="visits", x=["age", svy.Cat("region")], family="nb")
+  m.fitted.stats.theta, m.fitted.stats.theta_se
+  ```
+
+  Left to itself, theta is estimated by maximum likelihood alongside the coefficients and the standard errors come from the **joint `(coefficients, theta)` design-based sandwich** — `survey::svymle` over the negative binomial likelihood, the method in Lumley's *Complex Surveys* (Appendix E) and what `sjstats::svyglm.nb` implements. `stats.theta_se` is the design-based standard error of the dispersion itself.
+
+  Pass `theta=` and it is treated as known: no row for it, and the variance conditions on it, matching `svyglm(family = MASS::negative.binomial(theta))`. These are different numbers, not two routes to one — on `apistrat` the joint standard errors run from 25% under to 13% over the conditional ones, and on Lumley's own NHANES example 2% under to 12% over. The orthogonality that makes them agree asymptotically is a property of the model, and a design-based sandwich is the thing that declines to assume it.
+
+  On a replicate-weight design an estimated theta raises: the spread of the refits would only mean something if every replicate re-estimated it. Pass `theta=` there.
+
+  All of it is in the kernel, like every other family — the dispersion loop and the joint variance included. That needed digamma, trigamma and lgamma written out in `svy-rs`, for the same reason `norm_cdf` already was.
+
 - **`cauchit` and `sqrt` links.** Binomial gains `cauchit` — the inverse Cauchy CDF, the heavy-tailed alternative to probit, so a few observations far out on the linear predictor cannot dominate the fit — and Poisson gains `sqrt`, the variance-stabilising link for counts. `FAMILY_LINKS` is now exactly R's `okLinks` for every family, with no links R has that svy does not. Both refuse `exponentiate=`: exp(β) is not a ratio on either.
 
   ```python

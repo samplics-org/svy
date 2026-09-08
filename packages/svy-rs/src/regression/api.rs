@@ -4,7 +4,8 @@
 // The actual fitting logic lives in regression/glm.rs.
 //
 // Return shape: Vec<(level, params, cov_params, naive_cov, scale, df_resid,
-//                    deviance, null_deviance, iterations, n_obs, converged)>.
+//                    deviance, null_deviance, iterations, n_obs, converged,
+//                    (theta, theta_se) | None)>.
 // When neither by_col nor where_col is given, a single-element vec with
 // level="" is returned, so the Python side can treat every case uniformly.
 
@@ -13,7 +14,9 @@ use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 
 use crate::estimation::calib_sweep::{CalibSpec, CalibSweep, build_calib_sweep};
-use crate::regression::glm::{fit_glm, fit_glm_by, fit_glm_where};
+use crate::regression::glm::{
+    design_codes, design_vcov_of_totals, fit_glm, fit_glm_by, fit_glm_where,
+};
 
 type GlmTuple = (
     String,
@@ -27,6 +30,10 @@ type GlmTuple = (
     u32,
     usize,
     bool,
+    // (theta, theta_se) when the family has a dispersion parameter; theta_se
+    // is None when theta was supplied rather than estimated. One element
+    // rather than two because pyo3 only converts tuples up to twelve long.
+    Option<(f64, Option<f64>)>,
 );
 
 fn column_to_series(df: &DataFrame, name: &str) -> PyResult<Series> {
@@ -55,6 +62,7 @@ fn optional_column_to_series(df: &DataFrame, name: &Option<String>) -> PyResult<
     where_col=None,
     family="gaussian".to_string(),
     link="identity".to_string(),
+    theta=None,
     tol=1e-8,
     max_iter=100,
     data=None,
@@ -78,6 +86,7 @@ pub fn fit_glm_rs(
     where_col: Option<String>,
     family: String,
     link: String,
+    theta: Option<f64>,
     tol: f64,
     max_iter: usize,
     data: Option<PyDataFrame>,
@@ -140,6 +149,7 @@ pub fn fit_glm_rs(
                     &mask,
                     &family,
                     &link,
+                    theta,
                     tol,
                     max_iter,
                     calib,
@@ -159,6 +169,7 @@ pub fn fit_glm_rs(
             result.iterations,
             result.n_obs,
             result.converged,
+            result.theta.map(|t| (t, result.theta_se)),
         )]);
     }
 
@@ -177,6 +188,7 @@ pub fn fit_glm_rs(
                     offset.as_ref(),
                     &family,
                     &link,
+                    theta,
                     tol,
                     max_iter,
                     calib,
@@ -196,6 +208,7 @@ pub fn fit_glm_rs(
             result.iterations,
             result.n_obs,
             result.converged,
+            result.theta.map(|t| (t, result.theta_se)),
         )]);
     }
 
@@ -216,6 +229,7 @@ pub fn fit_glm_rs(
                 &by_series,
                 &family,
                 &link,
+                theta,
                 tol,
                 max_iter,
                 calib,
@@ -238,7 +252,99 @@ pub fn fit_glm_rs(
                 r.iterations,
                 r.n_obs,
                 r.converged,
+                r.theta.map(|t| (t, r.theta_se)),
             )
         })
         .collect())
+}
+
+/// Design-based variance-covariance of the totals of several already-weighted
+/// columns — R survey's `svyrecvar`.
+///
+/// Returns the full symmetric `p x p` matrix, row-major. The columns are
+/// influence functions, so the weights are already folded into them; this
+/// computes only the design part (PSU totals centred within stratum, the
+/// with-replacement factor, the stratum FPC).
+///
+/// The GLM sandwich uses the same code internally. It is exposed because the
+/// negative binomial's joint (theta, beta) variance is assembled on the Python
+/// side, where digamma and trigamma live — svy-rs carries no math dependency —
+/// and only this part belongs in the kernel.
+#[pyfunction]
+#[pyo3(signature = (data, value_cols, strata_col=None, psu_col=None, fpc_col=None))]
+pub fn design_vcov_rs(
+    _py: Python,
+    data: PyDataFrame,
+    value_cols: Vec<String>,
+    strata_col: Option<String>,
+    psu_col: Option<String>,
+    fpc_col: Option<String>,
+) -> PyResult<Vec<f64>> {
+    let df: DataFrame = data.into();
+    let n = df.height();
+    let p = value_cols.len();
+    if p == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut cols = vec![0.0f64; n * p];
+    for (j, name) in value_cols.iter().enumerate() {
+        let s = column_to_series(&df, name)?;
+        let cast = s
+            .cast(&DataType::Float64)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+        let ca = cast
+            .f64()
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+        for (i, v) in ca.iter().enumerate() {
+            cols[j * n + i] = v.unwrap_or(0.0);
+        }
+    }
+
+    let strata = optional_column_to_series(&df, &strata_col)?;
+    let psu = optional_column_to_series(&df, &psu_col)?;
+    let fpc = optional_column_to_series(&df, &fpc_col)?;
+
+    _py.detach(|| {
+        let (strata_idx, n_strata) = match strata {
+            Some(ref s) => design_codes(Some(s), None, n)?,
+            None => (vec![0usize; n], 1usize),
+        };
+        let (psu_idx, n_psu_levels) = match psu {
+            Some(ref pcol) => design_codes(strata.as_ref(), Some(pcol), n)?,
+            None => ((0..n).collect::<Vec<_>>(), n),
+        };
+
+        let mut strata_obs: Vec<Vec<usize>> = vec![Vec::new(); n_strata];
+        for i in 0..n {
+            strata_obs[strata_idx[i]].push(i);
+        }
+
+        let fpc_rows: Option<Vec<f64>> = match fpc {
+            Some(ref s) => {
+                let cast = s.cast(&DataType::Float64)?;
+                let ca = cast.f64()?;
+                Some(ca.iter().map(|v| v.unwrap_or(1.0)).collect())
+            }
+            None => None,
+        };
+
+        let psu_opt = if psu.is_some() {
+            Some(psu_idx.as_slice())
+        } else {
+            None
+        };
+
+        Ok(design_vcov_of_totals(
+            &cols,
+            n,
+            p,
+            &strata_idx,
+            &strata_obs,
+            psu_opt,
+            n_psu_levels,
+            fpc_rows.as_deref(),
+        ))
+    })
+    .map_err(|e: PolarsError| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
 }
