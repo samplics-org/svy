@@ -22,8 +22,8 @@ use _internal::estimation::association::{
     replicate_association,
 };
 use _internal::estimation::taylor::{
-    index_categorical, index_categorical_pair, point_estimate_mean, scores_mean, srs_variance_mean,
-    taylor_variance,
+    SrsRef, index_categorical, index_categorical_pair, point_estimate_mean, scores_mean,
+    srs_variance_mean, taylor_variance,
 };
 
 const N_STRATA: usize = 20;
@@ -123,7 +123,16 @@ fn bench_point_estimates(c: &mut Criterion) {
             b.iter(|| black_box(scores_mean(black_box(&y), black_box(&w)).unwrap()));
         });
         g.bench_function(BenchmarkId::new("srs_variance", n), |b| {
-            b.iter(|| black_box(srs_variance_mean(black_box(&y), black_box(&w)).unwrap()));
+            b.iter(|| {
+                black_box(
+                    srs_variance_mean(
+                        black_box(&y),
+                        black_box(&w),
+                        SrsRef::WithoutReplacement { pop_total: None },
+                    )
+                    .unwrap(),
+                )
+            });
         });
     }
     g.finish();
