@@ -40,29 +40,51 @@ pub enum Family {
     Poisson,
     Gamma,
     InverseGaussian,
+    /// Negative binomial with a KNOWN dispersion: Var(mu) = mu + mu^2/theta.
+    ///
+    /// Estimating theta is the Python side's outer loop. It needs digamma and
+    /// trigamma, and this crate carries no math dependency; scipy is already a
+    /// dependency of `svy`, so the profile likelihood lives there and the
+    /// kernel only ever sees a fixed theta.
+    NegativeBinomial(f64),
 }
 
 impl Family {
-    pub fn from_str(s: &str) -> PolarsResult<Self> {
+    pub fn from_str(s: &str, theta: Option<f64>) -> PolarsResult<Self> {
         match s.to_lowercase().as_str() {
             "gaussian" => Ok(Family::Gaussian),
             "binomial" => Ok(Family::Binomial),
             "poisson" => Ok(Family::Poisson),
             "gamma" => Ok(Family::Gamma),
             "inversegaussian" | "inverse_gaussian" => Ok(Family::InverseGaussian),
+            "negativebinomial" | "negative_binomial" => {
+                let th = theta.ok_or_else(|| {
+                    PolarsError::ComputeError(
+                        "negative binomial needs its dispersion: pass theta".into(),
+                    )
+                })?;
+                if !(th.is_finite() && th > 0.0) {
+                    return Err(PolarsError::ComputeError(
+                        format!("negative binomial theta must be finite and positive, got {th}")
+                            .into(),
+                    ));
+                }
+                Ok(Family::NegativeBinomial(th))
+            }
             _ => Err(PolarsError::ComputeError(
                 format!("Unsupported family: {}", s).into(),
             )),
         }
     }
 
-    fn variance(&self, mu: f64) -> f64 {
+    pub(crate) fn variance(&self, mu: f64) -> f64 {
         match self {
             Family::Gaussian => 1.0,
             Family::Binomial => mu * (1.0 - mu),
             Family::Poisson => mu,
             Family::Gamma => mu * mu,
             Family::InverseGaussian => mu * mu * mu,
+            Family::NegativeBinomial(theta) => mu + mu * mu / theta,
         }
     }
 
@@ -80,6 +102,14 @@ impl Family {
             Family::Poisson => y + 0.1,
             Family::Gamma | Family::InverseGaussian => y.max(eps),
             Family::Gaussian => y,
+            // MASS::negative.binomial's initialize: y + (y == 0)/6.
+            Family::NegativeBinomial(_) => {
+                if y == 0.0 {
+                    1.0 / 6.0
+                } else {
+                    y
+                }
+            }
         }
     }
 
@@ -110,6 +140,12 @@ impl Family {
                 2.0 * (-(y_c / mu_c).ln() + (y - mu_c) / mu_c)
             }
             Family::InverseGaussian => (y - mu).powi(2) / (y.max(1e-10) * mu * mu),
+            // MASS::negative.binomial's dev.resids.
+            Family::NegativeBinomial(theta) => {
+                let mu_c = mu.max(1e-10);
+                2.0 * (y * (y.max(1.0) / mu_c).ln()
+                    - (y + theta) * ((y + theta) / (mu_c + theta)).ln())
+            }
         }
     }
 }
@@ -233,7 +269,7 @@ impl Link {
         }
     }
 
-    fn link(&self, mu: f64) -> f64 {
+    pub(crate) fn link(&self, mu: f64) -> f64 {
         match self {
             Link::Identity => mu,
             Link::Logit => (mu / (1.0 - mu)).ln(),
@@ -250,7 +286,7 @@ impl Link {
         }
     }
 
-    fn inverse(&self, eta: f64) -> f64 {
+    pub(crate) fn inverse(&self, eta: f64) -> f64 {
         match self {
             Link::Identity => eta,
             Link::Logit => {
@@ -281,8 +317,30 @@ impl Link {
         }
     }
 
+    /// d2μ/dη2 — only the negative binomial's joint (beta, theta) bread needs
+    /// it, and only for the links that family admits.
+    pub(crate) fn mu_eta2(&self, mu: f64, eta: f64) -> f64 {
+        match self {
+            Link::Identity => 0.0,
+            Link::Logit => mu * (1.0 - mu) * (1.0 - 2.0 * mu),
+            Link::Probit => -eta * norm_pdf(eta),
+            Link::Cauchit => {
+                let d = 1.0 + eta * eta;
+                -2.0 * eta / (std::f64::consts::PI * d * d)
+            }
+            Link::Cloglog => {
+                let e = eta.min(700.0).exp();
+                e * (-e).exp() * (1.0 - e)
+            }
+            Link::Log => mu,
+            Link::Sqrt => 2.0,
+            Link::Inverse => 2.0 * mu * mu * mu,
+            Link::InverseSquared => 0.75 * mu.powi(5),
+        }
+    }
+
     /// dμ/dη. Probit and cloglog are the arms that need eta rather than mu.
-    fn mu_eta(&self, mu: f64, eta: f64) -> f64 {
+    pub(crate) fn mu_eta(&self, mu: f64, eta: f64) -> f64 {
         match self {
             Link::Identity => 1.0,
             Link::Logit => mu * (1.0 - mu),
@@ -338,7 +396,7 @@ impl Kahan {
 ///
 /// Nulls are rejected upstream in `fit_glm_domain`, so each chunk's value
 /// slice is dense and copies wholesale.
-fn cols_to_vec(cols: &[&Float64Chunked], nrows: usize) -> Vec<f64> {
+pub(crate) fn cols_to_vec(cols: &[&Float64Chunked], nrows: usize) -> Vec<f64> {
     let mut out = vec![0.0; nrows * cols.len()];
     for (j, col) in cols.iter().enumerate() {
         let dst = &mut out[j * nrows..(j + 1) * nrows];
@@ -360,7 +418,7 @@ fn cols_to_vec(cols: &[&Float64Chunked], nrows: usize) -> Vec<f64> {
 ///
 /// Nulls arrive as `u32::MAX`; they are collected into one extra level so the
 /// code can index a `Vec` directly.
-fn design_codes(
+pub(crate) fn design_codes(
     strata: Option<&Series>,
     psu: Option<&Series>,
     n: usize,
@@ -575,6 +633,190 @@ fn solve_linear_system(A: MatRef<'_, f64>, b: MatRef<'_, f64>) -> Mat<f64> {
     x2
 }
 
+/// Per-stratum `(1 - f_h) * m/(m-1)`, zero where the stratum cannot contribute
+/// (a single PSU), which is how those rows are kept out of the accumulation.
+///
+/// Returns `(scale_h, psus_h)`.
+pub(crate) fn stratum_scales(
+    strata_obs: &[Vec<usize>],
+    psu_idx: Option<&[usize]>,
+    n_psu_levels: usize,
+    fpc_rows: Option<&[f64]>,
+) -> (Vec<f64>, Vec<usize>) {
+    let n_strata = strata_obs.len();
+    let mut psus_h = vec![0usize; n_strata];
+
+    match psu_idx {
+        // No PSU: every row is its own.
+        None => {
+            for h in 0..n_strata {
+                psus_h[h] = strata_obs[h].len();
+            }
+        }
+        Some(psu) => {
+            let mut seen = vec![false; n_psu_levels];
+            for h in 0..n_strata {
+                let mut m = 0usize;
+                for &i in &strata_obs[h] {
+                    if !seen[psu[i]] {
+                        seen[psu[i]] = true;
+                        m += 1;
+                    }
+                }
+                for &i in &strata_obs[h] {
+                    seen[psu[i]] = false;
+                }
+                psus_h[h] = m;
+            }
+        }
+    }
+
+    let mut scale_h = vec![0.0f64; n_strata];
+    for h in 0..n_strata {
+        let m = psus_h[h];
+        if m <= 1 {
+            continue;
+        }
+        let f = match fpc_rows {
+            Some(f) => strata_obs[h].first().map(|&i| f[i]).unwrap_or(1.0),
+            None => 1.0,
+        };
+        scale_h[h] = f * (m as f64) / ((m - 1) as f64);
+    }
+    (scale_h, psus_h)
+}
+
+/// Design-based variance-covariance of the totals of `p` already-weighted
+/// columns — R survey's `svyrecvar`.
+///
+/// `cols` is column-major, `n * p`. PSU totals are centred within stratum and
+/// scaled by `stratum_scales`. Returns the full symmetric `p * p` matrix,
+/// row-major.
+///
+/// The caller passes influence functions, not raw variables: the weights are
+/// already folded into the columns.
+pub(crate) fn design_vcov_of_totals(
+    cols: &[f64],
+    n: usize,
+    p: usize,
+    strata_idx: &[usize],
+    strata_obs: &[Vec<usize>],
+    psu_idx: Option<&[usize]>,
+    n_psu_levels: usize,
+    fpc_rows: Option<&[f64]>,
+) -> Vec<f64> {
+    let n_strata = strata_obs.len();
+    let (scale_h, psus_h) = stratum_scales(strata_obs, psu_idx, n_psu_levels, fpc_rows);
+    let mut upper = vec![0.0f64; p * p];
+
+    match psu_idx {
+        None => {
+            // Every row is its own PSU, so the stratum sums telescope:
+            //   sum_i (t_i - tbar)(t_i - tbar)' = sum_i t_i t_i' - m tbar tbar'.
+            let mut row_w = vec![0.0f64; n];
+            for i in 0..n {
+                row_w[i] = scale_h[strata_idx[i]];
+            }
+            let mut sums = vec![0.0f64; n_strata * p];
+            for j in 0..p {
+                let col = &cols[j * n..(j + 1) * n];
+                for i in 0..n {
+                    sums[strata_idx[i] * p + j] += col[i];
+                }
+            }
+            accumulate_weighted_crossprod(cols, &row_w, n, p, &mut upper);
+
+            for h in 0..n_strata {
+                let m = psus_h[h];
+                if m <= 1 {
+                    continue;
+                }
+                let c = scale_h[h] / (m as f64);
+                for a in 0..p {
+                    let sa = sums[h * p + a];
+                    for b in a..p {
+                        upper[a * p + b] -= c * sa * sums[h * p + b];
+                    }
+                }
+            }
+        }
+        Some(psu) => {
+            let mut slot = vec![usize::MAX; n_psu_levels];
+            let mut totals: Vec<f64> = Vec::new();
+            let mut used: Vec<usize> = Vec::new();
+            let mut mean = vec![0.0f64; p];
+            let mut local = vec![0.0f64; p * p];
+
+            for h in 0..n_strata {
+                totals.clear();
+                used.clear();
+
+                for &i in &strata_obs[h] {
+                    let pid = psu[i];
+                    let li = if slot[pid] == usize::MAX {
+                        let t = used.len();
+                        slot[pid] = t;
+                        used.push(pid);
+                        totals.resize(totals.len() + p, 0.0);
+                        t
+                    } else {
+                        slot[pid]
+                    };
+                    let base = li * p;
+                    for j in 0..p {
+                        totals[base + j] += cols[j * n + i];
+                    }
+                }
+
+                let m = used.len();
+                for &pid in &used {
+                    slot[pid] = usize::MAX;
+                }
+                if m <= 1 {
+                    continue;
+                }
+
+                mean.iter_mut().for_each(|v| *v = 0.0);
+                for li in 0..m {
+                    for j in 0..p {
+                        mean[j] += totals[li * p + j];
+                    }
+                }
+                for j in 0..p {
+                    mean[j] /= m as f64;
+                }
+
+                local.iter_mut().for_each(|v| *v = 0.0);
+                for li in 0..m {
+                    let base = li * p;
+                    for a in 0..p {
+                        let da = totals[base + a] - mean[a];
+                        for b in a..p {
+                            local[a * p + b] += da * (totals[base + b] - mean[b]);
+                        }
+                    }
+                }
+                for a in 0..p {
+                    for b in a..p {
+                        upper[a * p + b] += scale_h[h] * local[a * p + b];
+                    }
+                }
+            }
+        }
+    }
+
+    // Mirror the upper triangle: symmetric by construction.
+    let mut out = vec![0.0f64; p * p];
+    for a in 0..p {
+        for b in a..p {
+            let v = upper[a * p + b];
+            out[a * p + b] = v;
+            out[b * p + a] = v;
+        }
+    }
+    out
+}
+
 /// Refuse an aliased design matrix.
 ///
 /// A pivot-free Cholesky of XtWX in the model's own column order: column j is
@@ -637,7 +879,7 @@ fn check_rank(XtWX: &Mat<f64>, k: usize, cols: &[Series]) -> PolarsResult<()> {
 ///
 /// Returns an error rather than panicking when even the SVD fails: a single
 /// non-finite entry in the information matrix used to reach `thin_svd().unwrap()`.
-fn invert_matrix(A: MatRef<'_, f64>, k: usize) -> PolarsResult<Mat<f64>> {
+pub(crate) fn invert_matrix(A: MatRef<'_, f64>, k: usize) -> PolarsResult<Mat<f64>> {
     if let Ok(chol) = A.llt(Side::Lower) {
         let mut inv = Mat::<f64>::identity(k, k);
         chol.solve_in_place(inv.as_mut());
@@ -698,6 +940,10 @@ pub struct GlmResult {
     pub n_obs: usize,
     /// Whether IRLS met the tolerance rather than exhausting `max_iter`.
     pub converged: bool,
+    /// Negative binomial dispersion, and its design-based standard error when
+    /// it was estimated rather than supplied. `None` for every other family.
+    pub theta: Option<f64>,
+    pub theta_se: Option<f64>,
 }
 
 // ============================================================================
@@ -719,8 +965,7 @@ fn null_deviance_with_offset(
     tol: f64,
     max_iter: usize,
 ) -> f64 {
-    let contributes =
-        |i: usize| domain_mask.map_or(true, |m| m[i]) && w_samp[i] > 0.0;
+    let contributes = |i: usize| domain_mask.map_or(true, |m| m[i]) && w_samp[i] > 0.0;
 
     let mut b = 0.0f64;
     let mut deviance = f64::INFINITY;
@@ -778,6 +1023,68 @@ fn null_deviance_with_offset(
     if deviance.is_finite() { deviance } else { 0.0 }
 }
 
+/// One fit, dispatching on the family.
+///
+/// Only the negative binomial has anything to do before IRLS: unless its
+/// dispersion was supplied it has to be estimated, and the variance then spans
+/// (beta, theta) rather than beta alone. Everything else goes straight to the
+/// IRLS solve.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fit_one(
+    y: &Series,
+    x_cols: Vec<Series>,
+    weights: &Series,
+    strata: Option<&Series>,
+    psu: Option<&Series>,
+    fpc: Option<&Series>,
+    offset: Option<&Series>,
+    domain_mask: Option<&[bool]>,
+    family_str: &str,
+    link_str: &str,
+    theta: Option<f64>,
+    tol: f64,
+    max_iter: usize,
+    calib: Option<&CalibSweep>,
+) -> PolarsResult<GlmResult> {
+    if matches!(
+        family_str.to_lowercase().as_str(),
+        "negativebinomial" | "negative_binomial"
+    ) {
+        return crate::regression::negbin::fit_negbin(
+            y,
+            x_cols,
+            weights,
+            strata,
+            psu,
+            fpc,
+            offset,
+            domain_mask,
+            link_str,
+            theta,
+            tol,
+            max_iter,
+            calib,
+        );
+    }
+    fit_glm_domain(
+        y,
+        x_cols,
+        weights,
+        strata,
+        psu,
+        fpc,
+        offset,
+        domain_mask,
+        family_str,
+        link_str,
+        theta,
+        tol,
+        max_iter,
+        calib,
+        true,
+    )
+}
+
 /// Full-sample GLM fit (no domain restriction).
 ///
 /// Equivalent to `fit_glm_domain(..., domain_mask=None)`. Kept as a thin
@@ -792,13 +1099,14 @@ pub fn fit_glm(
     offset: Option<&Series>,
     family_str: &str,
     link_str: &str,
+    theta: Option<f64>,
     tol: f64,
     max_iter: usize,
     calib: Option<&CalibSweep>,
 ) -> PolarsResult<GlmResult> {
-    fit_glm_domain(
-        y, x_cols, weights, strata, psu, fpc, offset, None, family_str, link_str, tol, max_iter,
-        calib,
+    fit_one(
+        y, x_cols, weights, strata, psu, fpc, offset, None, family_str, link_str, theta, tol,
+        max_iter, calib,
     )
 }
 
@@ -820,6 +1128,7 @@ pub fn fit_glm_where(
     mask: &Series,
     family_str: &str,
     link_str: &str,
+    theta: Option<f64>,
     tol: f64,
     max_iter: usize,
     calib: Option<&CalibSweep>,
@@ -828,7 +1137,7 @@ pub fn fit_glm_where(
     let ca = cast.bool()?;
     let mask_vec: Vec<bool> = ca.iter().map(|v| v.unwrap_or(false)).collect();
 
-    fit_glm_domain(
+    fit_one(
         y,
         x_cols,
         weights,
@@ -839,6 +1148,7 @@ pub fn fit_glm_where(
         Some(&mask_vec),
         family_str,
         link_str,
+        theta,
         tol,
         max_iter,
         calib,
@@ -863,6 +1173,7 @@ pub fn fit_glm_by(
     by_col: &Series,
     family_str: &str,
     link_str: &str,
+    theta: Option<f64>,
     tol: f64,
     max_iter: usize,
     calib: Option<&CalibSweep>,
@@ -888,7 +1199,7 @@ pub fn fit_glm_by(
             // are cheap reference-counted handles in polars; the clone copies
             // only the Vec, not the underlying data.
             let xs = x_cols.iter().cloned().collect();
-            let res = fit_glm_domain(
+            let res = fit_one(
                 y,
                 xs,
                 weights,
@@ -899,6 +1210,7 @@ pub fn fit_glm_by(
                 Some(&mask_vec),
                 family_str,
                 link_str,
+                theta,
                 tol,
                 max_iter,
                 calib,
@@ -946,7 +1258,7 @@ pub fn fit_glm_by(
 /// the original `fit_glm`. When `Some`, out-of-domain rows contribute 0 to
 /// both the IRLS loop and the sandwich meat, while the strata/PSU
 /// enumeration remains based on the full design.
-fn fit_glm_domain(
+pub(crate) fn fit_glm_domain(
     y: &Series,
     x_cols: Vec<Series>,
     weights: &Series,
@@ -957,11 +1269,13 @@ fn fit_glm_domain(
     domain_mask: Option<&[bool]>,
     family_str: &str,
     link_str: &str,
+    theta: Option<f64>,
     tol: f64,
     max_iter: usize,
     calib: Option<&CalibSweep>,
+    want_variance: bool,
 ) -> PolarsResult<GlmResult> {
-    let family = Family::from_str(family_str)?;
+    let family = Family::from_str(family_str, theta)?;
     let link = Link::from_str(link_str)?;
 
     // 1) Data prep
@@ -991,7 +1305,11 @@ fn fit_glm_domain(
     }
     if w_ca.null_count() > 0 {
         return Err(PolarsError::ComputeError(
-            format!("GLM weight column '{}' contains null values", weights.name()).into(),
+            format!(
+                "GLM weight column '{}' contains null values",
+                weights.name()
+            )
+            .into(),
         ));
     }
     for s in &x_cast {
@@ -1212,10 +1530,28 @@ fn fit_glm_domain(
     for j in 0..k {
         if !beta[(j, 0)].is_finite() {
             return Err(PolarsError::ComputeError(
-                "GLM did not produce finite coefficients (degenerate or non-convergent fit)"
-                    .into(),
+                "GLM did not produce finite coefficients (degenerate or non-convergent fit)".into(),
             ));
         }
+    }
+
+    // The negative binomial's theta loop refits beta several times and needs
+    // nothing else; the sandwich below is the most expensive part of a fit.
+    if !want_variance {
+        return Ok(GlmResult {
+            params: (0..k).map(|i| beta[(i, 0)]).collect(),
+            cov_params: Vec::new(),
+            naive_cov: Vec::new(),
+            scale: 1.0,
+            df_resid: 1.0,
+            deviance,
+            null_deviance: 0.0,
+            iterations: iter_count as u32,
+            n_obs,
+            converged,
+            theta: None,
+            theta_se: None,
+        });
     }
 
     // =========================================================================
@@ -1325,195 +1661,151 @@ fn fit_glm_domain(
     });
 
     // MEAT = sum_h Var_h( PSU totals ) with svytotal-style centering.
-    let mut meat_flat = vec![0.0f64; k * k]; // upper triangle
-
-    // Per-stratum with-replacement factor m/(m-1), times the stratum FPC
-    // (1 - f_h). Zero for a stratum that cannot contribute (a single PSU),
-    // which is how those rows are kept out of the accumulation below.
-    let mut scale_h = vec![0.0f64; n_strata];
-    let mut psus_h = vec![0usize; n_strata];
-
-    if psu.is_none() {
-        for h in 0..n_strata {
-            psus_h[h] = strata_obs[h].len();
-        }
+    //
+    // The calibrated path already has the influence functions materialised, so
+    // it hands them straight to the shared svyrecvar. The uncalibrated path
+    // does not materialise them: at 1e6 x 20 an n x k score matrix is 160 MB,
+    // and the PSU total of row i is just score_at(i) times its X row, so the
+    // same accumulation runs off X with the score folded into the row weight.
+    let psu_opt = if psu.is_some() {
+        Some(psu_idx.as_slice())
     } else {
-        let mut seen = vec![false; n_psu_levels];
-        for h in 0..n_strata {
-            let mut m = 0usize;
-            for &i in &strata_obs[h] {
-                if !seen[psu_idx[i]] {
-                    seen[psu_idx[i]] = true;
-                    m += 1;
-                }
-            }
-            for &i in &strata_obs[h] {
-                seen[psu_idx[i]] = false;
-            }
-            psus_h[h] = m;
-        }
-    }
-    for h in 0..n_strata {
-        let m = psus_h[h];
-        if m <= 1 {
-            continue;
-        }
-        let f = match &fpc_rows {
-            Some(f) => strata_obs[h].first().map(|&i| f[i]).unwrap_or(1.0),
-            None => 1.0,
-        };
-        scale_h[h] = f * (m as f64) / ((m - 1) as f64);
-    }
+        None
+    };
 
-    if psu.is_none() {
-        // Every row is its own PSU, so a PSU total IS that row's score
-        // contribution and the stratum sums telescope:
-        //   sum_i (t_i - tbar)(t_i - tbar)' = sum_i t_i t_i' - m tbar tbar'.
-        // The quadratic half is then one weighted cross-product over all rows
-        // (row weight = the row's stratum scale), and the correction needs
-        // only a k-vector per stratum. Materialising m x k PSU totals -- at
-        // 1e6 rows, a million heap vectors behind a million-entry hash map,
-        // walked k^2 times -- was the entire cost of a weights-only design.
-        //
-        // No cancellation to worry about: the score equations make the total
-        // sum_i s_i x_ij zero at the MLE, and a stratum's share of it is
-        // O(sqrt(m)), so the correction is ~1/m of the quadratic term.
-        let mut row_w = vec![0.0f64; n];
-        let mut sums = vec![0.0f64; n_strata * k];
-
-        match &ef {
-            Some(e) => {
-                for i in 0..n {
-                    row_w[i] = scale_h[strata_idx[i]];
-                }
-                for j in 0..k {
-                    let col = &e[j * n..(j + 1) * n];
-                    for i in 0..n {
-                        sums[strata_idx[i] * k + j] += col[i];
-                    }
-                }
-                accumulate_weighted_crossprod(e, &row_w, n, k, &mut meat_flat);
+    let meat_flat = match &ef {
+        Some(e) => design_vcov_of_totals(
+            e,
+            n,
+            k,
+            &strata_idx,
+            &strata_obs,
+            psu_opt,
+            n_psu_levels,
+            fpc_rows.as_deref(),
+        ),
+        None => {
+            let mut scores = vec![0.0f64; n];
+            for i in 0..n {
+                scores[i] = score_at(i);
             }
-            None => {
-                let mut scores = vec![0.0f64; n];
-                for i in 0..n {
-                    scores[i] = score_at(i);
-                }
+            let (scale_h, psus_h) =
+                stratum_scales(&strata_obs, psu_opt, n_psu_levels, fpc_rows.as_deref());
+            let mut upper = vec![0.0f64; k * k];
+
+            if psu.is_none() {
+                // Every row is its own PSU: the centred cross-product
+                // telescopes into one weighted pass over all rows plus a
+                // k-vector per stratum.
+                let mut row_w = vec![0.0f64; n];
                 for i in 0..n {
                     row_w[i] = scale_h[strata_idx[i]] * scores[i] * scores[i];
                 }
+                let mut sums = vec![0.0f64; n_strata * k];
                 for j in 0..k {
                     let col = &x[j * n..(j + 1) * n];
                     for i in 0..n {
                         sums[strata_idx[i] * k + j] += scores[i] * col[i];
                     }
                 }
-                accumulate_weighted_crossprod(&x, &row_w, n, k, &mut meat_flat);
-            }
-        }
+                accumulate_weighted_crossprod(&x, &row_w, n, k, &mut upper);
 
-        for h in 0..n_strata {
-            let m = psus_h[h];
-            if m <= 1 {
-                continue;
-            }
-            let c = scale_h[h] / (m as f64);
-            for a in 0..k {
-                let sa = sums[h * k + a];
-                for b in a..k {
-                    meat_flat[a * k + b] -= c * sa * sums[h * k + b];
-                }
-            }
-        }
-    } else {
-        // Real PSUs: one flat m x k totals buffer per stratum, addressed
-        // through a dense slot table indexed by the (already 0-based) PSU
-        // code, in place of a per-stratum HashMap and m heap vectors.
-        let mut slot = vec![usize::MAX; n_psu_levels];
-        let mut totals: Vec<f64> = Vec::new();
-        let mut used: Vec<usize> = Vec::new();
-        let mut mean = vec![0.0f64; k];
-        let mut local = vec![0.0f64; k * k];
-
-        for h in 0..n_strata {
-            totals.clear();
-            used.clear();
-
-            for &i in &strata_obs[h] {
-                let pid = psu_idx[i];
-                let li = if slot[pid] == usize::MAX {
-                    let t = used.len();
-                    slot[pid] = t;
-                    used.push(pid);
-                    totals.resize(totals.len() + k, 0.0);
-                    t
-                } else {
-                    slot[pid]
-                };
-
-                let base = li * k;
-                match &ef {
-                    Some(e) => {
-                        for j in 0..k {
-                            totals[base + j] += e[j * n + i];
+                for h in 0..n_strata {
+                    let m = psus_h[h];
+                    if m <= 1 {
+                        continue;
+                    }
+                    let c = scale_h[h] / (m as f64);
+                    for a in 0..k {
+                        let sa = sums[h * k + a];
+                        for b in a..k {
+                            upper[a * k + b] -= c * sa * sums[h * k + b];
                         }
                     }
-                    None => {
-                        let s_i = score_at(i);
+                }
+            } else {
+                let mut slot = vec![usize::MAX; n_psu_levels];
+                let mut totals: Vec<f64> = Vec::new();
+                let mut used: Vec<usize> = Vec::new();
+                let mut mean = vec![0.0f64; k];
+                let mut local = vec![0.0f64; k * k];
+
+                for h in 0..n_strata {
+                    totals.clear();
+                    used.clear();
+
+                    for &i in &strata_obs[h] {
+                        let pid = psu_idx[i];
+                        let li = if slot[pid] == usize::MAX {
+                            let t = used.len();
+                            slot[pid] = t;
+                            used.push(pid);
+                            totals.resize(totals.len() + k, 0.0);
+                            t
+                        } else {
+                            slot[pid]
+                        };
+                        let s_i = scores[i];
                         if s_i != 0.0 {
+                            let base = li * k;
                             for j in 0..k {
                                 totals[base + j] += s_i * x[j * n + i];
                             }
                         }
                     }
-                }
-            }
 
-            let m = used.len();
-            for &pid in &used {
-                slot[pid] = usize::MAX;
-            }
-            if m <= 1 {
-                continue;
-            }
+                    let m = used.len();
+                    for &pid in &used {
+                        slot[pid] = usize::MAX;
+                    }
+                    if m <= 1 {
+                        continue;
+                    }
 
-            // mean-center PSU totals in stratum
-            mean.iter_mut().for_each(|v| *v = 0.0);
-            for li in 0..m {
-                for j in 0..k {
-                    mean[j] += totals[li * k + j];
-                }
-            }
-            for j in 0..k {
-                mean[j] /= m as f64;
-            }
+                    mean.iter_mut().for_each(|v| *v = 0.0);
+                    for li in 0..m {
+                        for j in 0..k {
+                            mean[j] += totals[li * k + j];
+                        }
+                    }
+                    for j in 0..k {
+                        mean[j] /= m as f64;
+                    }
 
-            local.iter_mut().for_each(|v| *v = 0.0);
-            for li in 0..m {
-                let base = li * k;
-                for a in 0..k {
-                    let da = totals[base + a] - mean[a];
-                    for b in a..k {
-                        local[a * k + b] += da * (totals[base + b] - mean[b]);
+                    local.iter_mut().for_each(|v| *v = 0.0);
+                    for li in 0..m {
+                        let base = li * k;
+                        for a in 0..k {
+                            let da = totals[base + a] - mean[a];
+                            for b in a..k {
+                                local[a * k + b] += da * (totals[base + b] - mean[b]);
+                            }
+                        }
+                    }
+                    for a in 0..k {
+                        for b in a..k {
+                            upper[a * k + b] += scale_h[h] * local[a * k + b];
+                        }
                     }
                 }
             }
+
+            let mut out = vec![0.0f64; k * k];
             for a in 0..k {
                 for b in a..k {
-                    meat_flat[a * k + b] += scale_h[h] * local[a * k + b];
+                    let v = upper[a * k + b];
+                    out[a * k + b] = v;
+                    out[b * k + a] = v;
                 }
             }
+            out
         }
-    }
+    };
 
-    // materialize meat (symmetric by construction: only the upper triangle
-    // was accumulated)
     let mut meat = Mat::<f64>::zeros(k, k);
     for a in 0..k {
-        for b in a..k {
-            let v = meat_flat[a * k + b];
-            meat[(a, b)] = v;
-            meat[(b, a)] = v;
+        for b in 0..k {
+            meat[(a, b)] = meat_flat[a * k + b];
         }
     }
 
@@ -1669,6 +1961,8 @@ fn fit_glm_domain(
         iterations: iter_count as u32,
         n_obs,
         converged,
+        theta: None,
+        theta_se: None,
     })
 }
 

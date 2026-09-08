@@ -164,6 +164,7 @@ DEFAULT_LINKS: dict[str, str] = {
     "poisson": "log",
     "gamma": "inverse",
     "inversegaussian": "inverse_squared",
+    "negativebinomial": "log",
 }
 
 
@@ -175,6 +176,7 @@ FAMILY_LABELS: dict[str, str] = {
     "poisson": "Poisson",
     "gamma": "Gamma",
     "inversegaussian": "InverseGaussian",
+    "negativebinomial": "NegativeBinomial",
 }
 
 
@@ -192,6 +194,8 @@ FAMILY_LINKS: dict[str, frozenset[str]] = {
     "poisson": frozenset({"log", "identity", "sqrt"}),
     "gamma": frozenset({"inverse", "identity", "log"}),
     "inversegaussian": frozenset({"inverse_squared", "inverse", "identity", "log"}),
+    # MASS::negative.binomial's okLinks.
+    "negativebinomial": frozenset({"log", "identity", "sqrt"}),
 }
 
 

@@ -88,6 +88,7 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     // GLM regression
     m.add_function(wrap_pyfunction!(regression::api::fit_glm_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(regression::api::design_vcov_rs, m)?)?;
     // Categorical tests
     m.add_function(wrap_pyfunction!(categorical::api::ttest_rs, m)?)?;
     m.add_function(wrap_pyfunction!(categorical::api::ranktest_rs, m)?)?;

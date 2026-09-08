@@ -101,6 +101,10 @@ class GLMStats(msgspec.Struct, frozen=True):
     r_squared: float | None = None
     r_squared_adj: float | None = None
     iterations: int | None = None
+    #: Negative binomial dispersion: Var(mu) = mu + mu^2/theta. `theta_se` is
+    #: design-based, from the joint (coefficients, theta) sandwich.
+    theta: float | None = None
+    theta_se: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return msgspec.to_builtins(self)
@@ -300,6 +304,10 @@ class GLMFit(msgspec.Struct, frozen=True):
             ("DF Residuals", str(df_resid), "BIC", _fmt_smart(st.bic)),
             ("Deviance", _fmt_smart(st.deviance), "Scale", _fmt_smart(st.scale)),
         ]
+        if st.theta is not None:
+            stats_rows.append(
+                ("Theta", _fmt_smart(st.theta), "SE(theta)", _fmt_smart(st.theta_se))
+            )
         if st.r_squared is not None:
             stats_rows.append(
                 (
@@ -413,6 +421,8 @@ class GLMFit(msgspec.Struct, frozen=True):
             _row("Deviance", _fmt_smart(st.deviance), "Scale", _fmt_smart(st.scale)),
             _row("AIC", _fmt_smart(st.aic), "BIC", _fmt_smart(st.bic)),
         ]
+        if st.theta is not None:
+            lines.append(_row("Theta", _fmt_smart(st.theta), "SE(theta)", _fmt_smart(st.theta_se)))
         if st.r_squared is not None:
             lines.append(
                 _row(

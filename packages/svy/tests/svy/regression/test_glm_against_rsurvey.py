@@ -1009,6 +1009,8 @@ class TestFamilyLinkCompatibility:
         "poisson": {"log", "identity", "sqrt"},
         "gamma": {"inverse", "log", "identity"},
         "inversegaussian": {"inverse", "log", "identity", "inverse_squared"},
+        # MASS::negative.binomial's okLinks.
+        "negativebinomial": {"log", "identity", "sqrt"},
     }
 
     def test_table_matches_r(self):

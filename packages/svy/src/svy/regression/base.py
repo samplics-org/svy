@@ -48,7 +48,16 @@ log = logging.getLogger(__name__)
 # spelled out in the Literal — the union is what keeps the two arguments
 # symmetric for a type checker.
 FamilyArg = (
-    Literal["gaussian", "binomial", "poisson", "gamma", "inversegaussian", "inverse_gaussian"]
+    Literal[
+        "gaussian",
+        "binomial",
+        "poisson",
+        "gamma",
+        "inversegaussian",
+        "inverse_gaussian",
+        "negativebinomial",
+        "negative_binomial",
+    ]
     | DistFamily
 )
 LinkArg = (
@@ -66,7 +75,9 @@ LinkArg = (
     | LinkFunction
 )
 
-_FAMILY_NAMES = "'gaussian', 'binomial', 'poisson', 'gamma', or 'inverse_gaussian'"
+_FAMILY_NAMES = (
+    "'gaussian', 'binomial', 'poisson', 'gamma', 'inverse_gaussian', or 'negative_binomial'"
+)
 _LINK_NAMES = (
     "'identity', 'logit', 'probit', 'cauchit', 'cloglog', 'log', 'sqrt', "
     "'inverse', or 'inverse_squared'"
@@ -104,6 +115,21 @@ _ENGINE_ERRORS: tuple[tuple[str, str, str], ...] = (
         "NON_FINITE_INPUT",
         "Replace the infinite or NaN entries, or drop those rows.",
     ),
+    (
+        "theta must be finite and positive",
+        "NB_THETA_INVALID",
+        "Omit theta= to estimate the dispersion from the data.",
+    ),
+    (
+        "Pearson statistic is zero",
+        "NB_THETA_UNDEFINED",
+        "Check the response, or pass theta= to fit at a known value.",
+    ),
+    (
+        "profile likelihood in theta",
+        "NB_THETA_DIVERGED",
+        "Fit family='poisson', or pass theta= to fit at a known value.",
+    ),
 )
 
 
@@ -132,6 +158,7 @@ def _normalize_family(family: FamilyArg) -> str:
       - "poisson"
       - "gamma"
       - "inverse_gaussian" / "inversegaussian"
+      - "negative_binomial" / "negativebinomial" / "nb"
     """
     _MAP = {
         "gaussian": "gaussian",
@@ -140,6 +167,9 @@ def _normalize_family(family: FamilyArg) -> str:
         "gamma": "gamma",
         "inversegaussian": "inversegaussian",
         "inverse_gaussian": "inversegaussian",
+        "negativebinomial": "negativebinomial",
+        "negative_binomial": "negativebinomial",
+        "nb": "negativebinomial",
     }
     if not isinstance(family, str):
         raise TypeError(
@@ -315,6 +345,7 @@ class GLM:
         intercept: bool = True,
         family: FamilyArg = "gaussian",
         link: LinkArg | None = None,
+        theta: float | None = None,
         offset: str | None = None,
         where: WhereArg = None,
         drop_nulls: bool = True,
@@ -335,7 +366,7 @@ class GLM:
             Include intercept term.
         family : str
             Distribution family: ``'gaussian'``, ``'binomial'``, ``'poisson'``,
-            ``'gamma'``, or ``'inverse_gaussian'``.
+            ``'gamma'``, ``'inverse_gaussian'``, or ``'negative_binomial'``.
         link : str, optional
             Link function: ``'identity'``, ``'logit'``, ``'probit'``,
             ``'cauchit'``, ``'cloglog'``, ``'log'``, ``'sqrt'``, ``'inverse'``,
@@ -343,6 +374,22 @@ class GLM:
             family. Each family admits exactly the links R's family objects do,
             so an unusable pairing raises rather than fitting (see
             ``FAMILY_LINKS``).
+        theta : float, optional
+            Negative binomial dispersion, ``Var(mu) = mu + mu^2/theta``. Only
+            meaningful for ``family='negative_binomial'``.
+
+            Left out, theta is estimated by maximum likelihood alongside the
+            coefficients, and the reported standard errors come from the joint
+            ``(coefficients, theta)`` design-based sandwich — R
+            ``survey::svymle`` over the negative binomial likelihood, the
+            method in Lumley's *Complex Surveys* (Appendix E). ``stats.theta``
+            and ``stats.theta_se`` carry the estimate.
+
+            Supplied, theta is treated as known: there is no row for it, the
+            variance conditions on it (matching
+            ``svyglm(family = MASS::negative.binomial(theta))``), and
+            ``stats.theta_se`` is None. The two are materially different
+            numbers, not two routes to the same one.
         offset : str, optional
             Column holding a known term on the *link* scale, entered with its
             coefficient fixed at 1. The usual use is a rate model: Poisson
@@ -671,7 +718,13 @@ class GLM:
         # ── Call Rust ─────────────────────────────────────────────────────
         # Always returns Vec<(level, ...)> with one entry per by-level, or a
         # single entry with level="" when by_col is None.
-        def _run_engine(weight_name: str, fpc: str | None):
+        def _run_engine(
+            weight_name: str,
+            fpc: str | None,
+            *,
+            family_name: str | None = None,
+            theta_val: float | None = None,
+        ):
             res = rs.fit_glm_rs(
                 y_name=y,
                 x_names=feature_names,
@@ -681,8 +734,9 @@ class GLM:
                 fpc_name=fpc,
                 offset_name=offset,
                 where_col=dom_col,
-                family=fam_str,
+                family=family_name or fam_str,
                 link=link_str,
+                theta=theta_val if theta_val is not None else theta,
                 tol=tol,
                 max_iter=max_iter,
                 data=eng_df,
@@ -698,7 +752,10 @@ class GLM:
             mapped = _as_model_error(e)
             if mapped is not None:
                 raise mapped from e
-            if isinstance(e, RuntimeError):
+            # A ModelError from the negative binomial path is already the
+            # message the caller needs; only an unrecognised failure gets
+            # wrapped.
+            if isinstance(e, (RuntimeError, ModelError)):
                 raise
             raise RuntimeError(f"Rust GLM engine failed: {e}") from e
 
@@ -714,6 +771,7 @@ class GLM:
             iters,
             n_obs,
             converged,
+            dispersion,
         ) = chosen
 
         # ── Post-process ──────────────────────────────────────────────────
@@ -769,6 +827,19 @@ class GLM:
         # with the method's coefficients (previously the replicate design
         # silently fell back to Taylor SEs).
         rep_wgts = design0.rep_wgts
+        if rep_wgts is not None and rep_cols and dispersion is not None and theta is None:
+            raise ModelError(
+                title="Replicate variance needs a known dispersion",
+                detail=(
+                    "On a replicate-weight design the negative binomial's theta "
+                    "would have to be re-estimated inside every replicate for the "
+                    "spread of the refits to mean anything, and it is not. Pass "
+                    "theta= to fit every replicate at a known dispersion."
+                ),
+                code="NB_REPLICATE_THETA",
+                where="GLM.fit",
+                hint="Estimate theta once on the full sample, then pass it.",
+            )
         if rep_wgts is not None and rep_cols:
             rep_betas = []
             for rc in rep_cols:
@@ -844,6 +915,11 @@ class GLM:
             cov_mat,
             aic_val,
         )
+        if dispersion is not None:
+            theta_hat, theta_se = dispersion
+            stats_struct = msgspec.structs.replace(
+                stats_struct, theta=theta_hat, theta_se=theta_se
+            )
 
         # Coefficients
         t_crit = stats.t.ppf(1 - alpha / 2, df_design)
@@ -1133,7 +1209,7 @@ class GLM:
             raise ModelError.domain_violation(
                 where="GLM.fit", family=family, violation="Non-positive values"
             )
-        elif family == "poisson" and y_data.min() < 0:  # type: ignore[operator]
+        elif family in ("poisson", "negativebinomial") and y_data.min() < 0:  # type: ignore[operator]
             raise ModelError.domain_violation(
                 where="GLM.fit", family=family, violation="Negative values"
             )

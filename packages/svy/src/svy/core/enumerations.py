@@ -19,8 +19,8 @@ class DistFamily(StrEnum):
     POISSON = "Poisson"
     GAMMA = "Gamma"
     INVERSE_GAUSSIAN = "InverseGaussian"
+    NEGATIVE_BINOMIAL = "NegativeBinomial"
     # Phase 2:
-    # NEG_BINOMIAL = "Negative Binomial"
     # BETA = "Beta"
 
 
