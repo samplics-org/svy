@@ -4,6 +4,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ## [Unreleased]
 
+## [0.17.1] — 2026-09-13
+
 ### Fixed
 
 - The `n` column of every Taylor and replicate estimator (mean, total, ratio, proportion, quantile, association; ungrouped, grouped and batched) is the number of rows with a nonzero weight, within the by-group when there is one — `taylor::active_count`. It used to be the frame length or the by-group size, which under `where=` (out-of-domain rows arrive with weight 0) included every out-of-domain row. `svy` reads it as the domain sample size of its proportion CIs.
@@ -232,7 +234,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 Baseline for this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.17.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.17.1...HEAD
+[0.17.1]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.17.1
 [0.17.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.17.0
 [0.16.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.16.0
 [0.15.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.15.0
