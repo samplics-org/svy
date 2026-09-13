@@ -19,11 +19,14 @@ ratio, median) so the policy is uniform across the API surface.
 
 from __future__ import annotations
 
+import math
+
 import polars as pl
 import pytest
 
 import svy
 
+from svy.core.enumerations import PopParam
 from svy.errors.singleton_errors import SingletonError
 
 
@@ -109,10 +112,16 @@ def estimate(sample, method):
 
 
 def assert_valid_estimate(result):
-    """A produced estimate must have a finite, non-negative standard error."""
+    """A produced estimate must have a non-negative standard error.
+
+    A median's SE is NaN when a Woodruff limit leaves [0, 1], which these
+    tiny designs (df of 2 or 3) can trigger; R returns NaN there too.
+    """
     pe = result.estimates[0]
     assert pe.est is not None
     assert pe.se is not None
+    if result.param == PopParam.MEDIAN and math.isnan(pe.se):
+        return
     assert pe.se >= 0.0
 
 
