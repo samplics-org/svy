@@ -983,7 +983,9 @@ class Estimation:
 
         The Rust side returns the estimate and the standard error *on the
         probability scale*; the interval comes from inverting the weighted CDF
-        at ``p ± t·se_p``, and the reported SE is the back-solved half-width.
+        at ``F(q̂) ± t·se_p``, and the reported SE is the back-solved half-width.
+        This is R's ``svyquantile`` (``interval.type="mean"``); a limit whose
+        probability falls outside [0, 1] is NaN, and so is the SE.
         The per-domain CDF is built once and reused across probabilities.
 
         ``set_prob=False`` leaves ``ParamEst.prob`` unset, which is what the
@@ -1043,18 +1045,27 @@ class Estimation:
                 # arguments would otherwise be silently clamped into [0, 1].
                 lci = uci = float("nan")
             else:
-                p_lower = max(0.0, p - t_crit * se_p)
-                p_upper = min(1.0, p + t_crit * se_p)
                 y_sorted, cdf = cached
-                # Invert with the same rule that located the point estimate.
-                # R's oldsvyquantile hands one method/f pair to both its point
-                # approxfun and its endpoint approx; inverting linearly here
-                # while estimating with, say, "higher" shrinks the interval —
-                # badly so in sparse tails, where consecutive order statistics
-                # are far apart.
+                # Center at the CDF evaluated at the estimate, not at p: on a
+                # step CDF the two differ. se_p is the SE of this proportion.
+                at_est = int(np.searchsorted(y_sorted, est, side="right")) - 1
+                p_hat = float(cdf[at_est]) if at_est >= 0 else 0.0
+                p_lower = p_hat - t_crit * se_p
+                p_upper = p_hat + t_crit * se_p
+                # Invert with the same rule that located the point estimate;
+                # inverting linearly while estimating with, say, "higher"
+                # shrinks the interval, badly so in sparse tails.
                 lci, uci = rs.weighted_quantile_at(
-                    y_sorted, cdf, [p_lower, p_upper], quantile_method=q_method_str
+                    y_sorted,
+                    cdf,
+                    [min(max(p_lower, 0.0), 1.0), min(max(p_upper, 0.0), 1.0)],
+                    quantile_method=q_method_str,
                 )
+                # A limit whose probability leaves [0, 1] is undefined, as in R.
+                if not p_lower >= 0.0:
+                    lci = float("nan")
+                if not p_upper <= 1.0:
+                    uci = float("nan")
 
             se_q = (uci - lci) / (2.0 * t_crit) if t_crit > 0 else se_p
             cv = se_q / est if est != 0 else float("inf")
@@ -2232,8 +2243,10 @@ class Estimation:
         Standard errors follow Woodruff (1952): the design-based variance of
         the estimated proportion ``P(Y <= q)`` is computed on the probability
         scale, and the interval comes from inverting the weighted CDF at
-        ``p ± t·se_p`` — the construction behind R's ``svyquantile``. The
-        reported ``se`` is the back-solved half-width ``(uci - lci) / (2t)``.
+        ``F(q̂) ± t·se_p``, where ``F(q̂)`` is the estimated CDF at the quantile —
+        the construction behind R's ``svyquantile``. The reported ``se`` is the
+        back-solved half-width ``(uci - lci) / (2t)``. A limit whose probability
+        falls outside [0, 1] is NaN, and so is ``se``.
 
         Parameters
         ----------

@@ -2067,7 +2067,7 @@ pub fn quantiles_woodruff(
 /// 1. Computing the variance of the proportion P(Y <= q) using Taylor linearization
 /// 2. Converting this to variance on the quantile scale using the inverse CDF
 ///
-/// This matches R's svyquantile with interval.type="Wald" (default).
+/// The interval is centered at the CDF evaluated at q, as in R's svyquantile.
 ///
 /// Returns: (variance, se_proportion) where se_proportion is needed for CI calculation
 pub fn median_variance_woodruff(

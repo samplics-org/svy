@@ -53,6 +53,8 @@ svyquantile(~income, subset(design, stratum == "A"), quantiles = 0.5, ci = TRUE)
 ```
 """
 
+import math
+
 import polars as pl
 import pytest
 
@@ -171,6 +173,10 @@ class TestMedianBasic:
         Test simple median estimation without grouping.
 
         R: svyquantile(~income, design, quantiles = 0.5, ci = TRUE)
+           -> 52000, se NaN, CI (NaN, NaN)
+
+        With df = 2, t = 4.30 pushes both Woodruff probabilities outside
+        [0, 1], so R leaves both limits and the SE undefined.
         """
         result = sample.estimation.median("income")
 
@@ -180,15 +186,11 @@ class TestMedianBasic:
         est = result.estimates[0]
 
         assert est.y == "income"
-        assert est.est is not None
-        assert est.se is not None
-        assert est.se >= 0
-        assert est.lci is not None
-        assert est.uci is not None
-        assert est.lci <= est.est <= est.uci
-
-        # Weighted median should be around 48000-52000 for this dataset
-        assert 40000 <= est.est <= 60000, f"Median {est.est} outside expected range"
+        assert est.est == 52000
+        assert est.df == 2
+        assert math.isnan(est.se)
+        assert math.isnan(est.lci)
+        assert math.isnan(est.uci)
 
     def test_median_quantile_methods(self, sample):
         """
@@ -216,19 +218,22 @@ class TestMedianBasic:
         Test median estimation with a single grouping variable.
 
         R: svyby(~income, ~region, design, svyquantile, quantiles = 0.5, ci = TRUE)
+           -> North 48000, South 52000; se and CI NaN in both (df = 2)
         """
         result = sample.estimation.median("income", by="region")
 
         assert len(result.estimates) == 2
 
-        regions = {est.by_level[0] for est in result.estimates}
-        assert regions == {"North", "South"}
+        got = {est.by_level[0]: est for est in result.estimates}
+        assert set(got) == {"North", "South"}
+        assert got["North"].est == 48000
+        assert got["South"].est == 52000
 
         for est in result.estimates:
             assert est.y == "income"
-            assert est.est is not None
-            assert est.se is not None
-            assert est.se >= 0
+            assert math.isnan(est.se)
+            assert math.isnan(est.lci)
+            assert math.isnan(est.uci)
 
     def test_median_by_age_group(self, sample):
         """
