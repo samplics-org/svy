@@ -75,6 +75,13 @@ from .association import taylor_assoc as _taylor_assoc
 
 log = logging.getLogger(__name__)
 
+_PROP_CI_METHODS = ("logit", "beta", "korn-graubard", "wilson")
+
+# Absolute tolerance for an estimated proportion at 0 or 1 and for a zero SE.
+# Weighted sums land a few ulps off (an SE of 1e-17, a p-hat of 1 - 1e-16), and
+# exact comparisons would read those as an interior estimate with an interval.
+_PROP_CI_TOL = 1e-12
+
 if TYPE_CHECKING:
     from svy.core.data_prep import PreparedData
     from svy.core.sample import Sample
@@ -609,9 +616,9 @@ class Estimation:
         df : int
             Degrees of freedom (PSUs - strata).
         n : int
-            Nominal sample size (denominator).
+            Domain respondent count: rows in the domain with a nonzero weight.
         method : str
-            One of ``"logit"``, ``"beta"``, ``"korn-graubard"``.
+            One of ``"logit"``, ``"beta"``, ``"korn-graubard"``, ``"wilson"``.
 
             ``"logit"``
                 Wald-type interval on the logit scale, back-transformed.
@@ -630,6 +637,23 @@ class Estimation:
                 the NCHS Data Presentation Standards for Proportions
                 (Parker et al. 2017).
 
+            ``"wilson"``
+                Wilson score interval with the df-adjusted effective sample
+                size.
+
+        Degenerate cases, checked in this order:
+
+        - ``df <= 0``: no residual degrees of freedom, so ``t(df)`` is
+          undefined and every method returns NaN bounds (as R does).
+        - ``p`` at 0 or 1: the zero SE is forced by the estimate, not measured
+          by the design. ``logit``, ``beta`` and ``wilson`` return NaN bounds;
+          ``korn-graubard`` returns its one-sided interval with the effective
+          sample size set to ``n`` (design effect 1).
+        - ``se`` at 0 with ``0 < p < 1``: the design-based variance is zero and
+          every method returns ``(p, p)``.
+
+        ``p`` and ``se`` are compared within ``_PROP_CI_TOL``.
+
         References
         ----------
         Korn E.L., Graubard B.I. (1998).  Confidence Intervals For
@@ -643,12 +667,24 @@ class Estimation:
         from scipy import stats
 
         method = self._normalize_ci_method(method)
+        if method not in _PROP_CI_METHODS:
+            raise ValueError(f"Unknown CI method: {method!r}")
+
+        nan = float("nan")
+        if df <= 0:
+            return (nan, nan)
+
+        if p <= _PROP_CI_TOL or p >= 1.0 - _PROP_CI_TOL:
+            if method != "korn-graubard":
+                return (nan, nan)
+            return self._kg_boundary_ci(0.0 if p <= _PROP_CI_TOL else 1.0, alpha, df, n)
+
+        if se <= _PROP_CI_TOL:
+            return (p, p)
 
         if method == "logit":
-            if p <= 0 or p >= 1:
-                return (p, p)
             t_crit = self._t_crit(alpha, df)
-            scale = se / (p * (1.0 - p)) if se > 0 else 0
+            scale = se / (p * (1.0 - p))
             logit_p = math.log(p / (1 - p))
             lci = 1.0 / (1.0 + math.exp(-(logit_p - t_crit * scale)))
             uci = 1.0 / (1.0 + math.exp(-(logit_p + t_crit * scale)))
@@ -660,14 +696,11 @@ class Estimation:
             # Reference: Korn & Graubard (1998), eqs 2.1, 2.2, 1.2.
             from scipy.stats import beta as beta_dist
 
-            if p <= 0 or p >= 1 or se <= 0:
-                return (p, p)
-
             # Eq 2.1: effective sample size
             n_eff = (p * (1 - p)) / (se**2)
 
             # Eq 2.2: df-adjustment (no truncation, matching R)
-            if df > 0 and n > 1:
+            if n > 1:
                 t_n = stats.t.ppf(alpha / 2, n - 1)
                 t_df = stats.t.ppf(alpha / 2, df)
                 n_eff = n_eff * (t_n / t_df) ** 2
@@ -680,58 +713,15 @@ class Estimation:
 
         elif method == "korn-graubard":
             # ── NCHS SAS macro-compatible Korn-Graubard CI ──
-            # Matches KG_macro.sas from CDC/NCHS.
-            # Adds: truncation of n_eff at n, p=0/p=1 handling.
+            # Matches KG_macro.sas from CDC/NCHS: truncation of n_eff at n.
             # Reference: Korn & Graubard (1998); Parker et al. (2017).
             from scipy.stats import f as f_dist
-
-            if p <= 0 or p >= 1:
-                # Special handling: fall back to nominal sample size,
-                # then apply df-adjustment (matching NCHS SAS macro).
-                n_eff = float(n)
-                if df > 0 and n > 1:
-                    t_n = stats.t.ppf(1 - alpha / 2, n - 1)
-                    t_df = stats.t.ppf(1 - alpha / 2, df)
-                    t_adj = (t_n / t_df) ** 2
-                    n_eff_df = min(n, n_eff * t_adj)
-                else:
-                    n_eff_df = n_eff
-                x = p * n_eff_df
-                if p == 0:
-                    lci = 0.0
-                    if n_eff_df > 0:
-                        v3 = 2 * (x + 1)
-                        v4 = 2 * (n_eff_df - x)
-                        if v3 > 0 and v4 > 0:
-                            f_upper = f_dist.ppf(1 - alpha / 2, v3, v4)
-                            uci = (v3 * f_upper) / (v4 + v3 * f_upper)
-                        else:
-                            uci = 1.0
-                    else:
-                        uci = 1.0
-                    return (lci, uci)
-                else:  # p == 1
-                    uci = 1.0
-                    if n_eff_df > 0:
-                        v1 = 2 * x
-                        v2 = 2 * (n_eff_df - x + 1)
-                        if v1 > 0 and v2 > 0:
-                            f_lower = f_dist.ppf(alpha / 2, v1, v2)
-                            lci = (v1 * f_lower) / (v2 + v1 * f_lower)
-                        else:
-                            lci = 0.0
-                    else:
-                        lci = 0.0
-                    return (lci, uci)
-
-            if se <= 0:
-                return (p, p)
 
             # Eq 2.1: effective sample size
             n_eff = (p * (1 - p)) / (se**2)
 
             # Eq 2.2: df-adjustment with NCHS truncation
-            if df > 0 and n > 1:
+            if n > 1:
                 t_n = stats.t.ppf(1 - alpha / 2, n - 1)
                 t_df = stats.t.ppf(1 - alpha / 2, df)
                 t_adj = (t_n / t_df) ** 2
@@ -760,27 +750,17 @@ class Estimation:
 
             return (lci, uci)
 
-        elif method == "wilson":
+        else:  # wilson
             # ── Wilson score interval ──
             # Uses the score-test inversion with effective sample size.
             # Replaces n with n_eff = p(1-p)/se² and uses t-quantile for df.
             # Reference: Wilson (1927); Franco et al. (2019, JSSAM).
-            if p <= 0 or p >= 1:
-                return (p, p)
-            # No residual df: width undefined (issue #96). Checked before the
-            # se <= 0 short-circuit, because a lone-PSU cell has se == 0 as the
-            # same artifact and must go NaN, not to a point — matching the logit
-            # branch. The max/min clamps below would otherwise swallow the NaN.
-            if df <= 0:
-                return (float("nan"), float("nan"))
-            if se <= 0:
-                return (p, p)
 
             # Effective sample size
             n_eff = (p * (1 - p)) / (se**2)
 
             # df-adjustment (same as beta method)
-            if df > 0 and n > 1:
+            if n > 1:
                 t_n = stats.t.ppf(1 - alpha / 2, n - 1)
                 t_df = stats.t.ppf(1 - alpha / 2, df)
                 n_eff = n_eff * (t_n / t_df) ** 2
@@ -795,8 +775,33 @@ class Estimation:
             uci = min(1.0, center + half_width)
             return (lci, uci)
 
+    @staticmethod
+    def _kg_boundary_ci(p: float, alpha: float, df: float, n: int) -> tuple[float, float]:
+        """Korn-Graubard interval at an estimated proportion of exactly 0 or 1.
+
+        The estimate carries no variance information, so the effective sample
+        size is the domain respondent count ``n`` (design effect 1), then
+        df-adjusted and truncated at ``n`` as in the NCHS SAS macro. Requires
+        ``df > 0``.
+        """
+        from scipy import stats
+        from scipy.stats import f as f_dist
+
+        if n > 1:
+            t_adj = (stats.t.ppf(1 - alpha / 2, n - 1) / stats.t.ppf(1 - alpha / 2, df)) ** 2
+            n_eff_df = min(n, n * t_adj)
         else:
-            raise ValueError(f"Unknown CI method: {method!r}")
+            n_eff_df = float(n)
+        if n_eff_df <= 0:
+            return (0.0, 1.0)
+
+        if p == 0.0:
+            v3, v4 = 2.0, 2.0 * n_eff_df
+            f_upper = f_dist.ppf(1 - alpha / 2, v3, v4)
+            return (0.0, (v3 * f_upper) / (v4 + v3 * f_upper))
+        v1, v2 = 2.0 * n_eff_df, 2.0
+        f_lower = f_dist.ppf(alpha / 2, v1, v2)
+        return ((v1 * f_lower) / (v2 + v1 * f_lower), 1.0)
 
     def _polars_result_to_param_est(
         self,
@@ -899,65 +904,105 @@ class Estimation:
             ]
 
         ci_method_norm = self._normalize_ci_method(ci_method)
+        df_ok = df_arr > 0
+        boundary = (est_arr <= _PROP_CI_TOL) | (est_arr >= 1.0 - _PROP_CI_TOL)
 
         if ci_method_norm == "logit":
-            p_arr = est_arr
-            valid = (p_arr > 0) & (p_arr < 1)
-            lci_arr = p_arr.copy()
-            uci_arr = p_arr.copy()
+            # Same rules as _compute_prop_ci, vectorised.
+            lci_arr = np.full(n_rows, np.nan)
+            uci_arr = np.full(n_rows, np.nan)
+            interior = df_ok & ~boundary
+            point = interior & (se_arr <= _PROP_CI_TOL)
+            lci_arr[point] = est_arr[point]
+            uci_arr[point] = est_arr[point]
+            valid = interior & ~point
             if valid.any():
-                pv, sev, tv = p_arr[valid], se_arr[valid], t_crits[valid]
-                with np.errstate(divide="ignore", invalid="ignore"):
-                    scale = np.where(sev > 0, sev / (pv * (1.0 - pv)), 0.0)
+                pv, sev, tv = est_arr[valid], se_arr[valid], t_crits[valid]
+                scale = sev / (pv * (1.0 - pv))
                 logit_p = np.log(pv / (1.0 - pv))
                 lci_arr[valid] = 1.0 / (1.0 + np.exp(-(logit_p - tv * scale)))
                 uci_arr[valid] = 1.0 / (1.0 + np.exp(-(logit_p + tv * scale)))
-            return [
-                ParamEst(
-                    y=y_name,
-                    est=float(est_arr[i]),
+        else:
+            # beta / korn-graubard / wilson — per-row scalar
+            lci_arr = np.empty(n_rows)
+            uci_arr = np.empty(n_rows)
+            for i in range(n_rows):
+                lci_arr[i], uci_arr[i] = self._compute_prop_ci(
+                    p=float(est_arr[i]),
                     se=float(se_arr[i]),
-                    cv=float(cv_arr[i]),
-                    lci=float(lci_arr[i]),
-                    uci=float(uci_arr[i]),
-                    deff=float(deff_arr[i]) if deff_arr is not None else None,
+                    alpha=alpha,
                     df=int(df_arr[i]),
-                    by=by_tuple,
-                    by_level=by_levels[i],
-                    y_level=y_levels[i],
-                    x=x_name,
+                    n=int(n_arr[i]),
+                    method=ci_method_norm,
                 )
-                for i in range(n_rows)
-            ]
 
-        # beta / korn-graubard / wilson — per-row scalar fallback
-        est_list = []
-        for i in range(n_rows):
-            lci, uci = self._compute_prop_ci(
-                p=float(est_arr[i]),
-                se=float(se_arr[i]),
-                alpha=alpha,
-                df=int(df_arr[i]),
-                n=int(n_arr[i]),
-                method=ci_method_norm,
-            )
-            est_list.append(
-                ParamEst(
-                    y=y_name,
-                    est=float(est_arr[i]),
-                    se=float(se_arr[i]),
-                    cv=float(cv_arr[i]),
-                    lci=lci,
-                    uci=uci,
-                    deff=float(deff_arr[i]) if deff_arr is not None else None,
-                    df=int(df_arr[i]),
-                    by=by_tuple,
-                    by_level=by_levels[i],
-                    y_level=y_levels[i],
-                    x=x_name,
+        if ci_method_norm != "korn-graubard":
+            undefined = np.flatnonzero(df_ok & boundary)
+            if undefined.size:
+                self._warn_prop_ci_boundary(
+                    ci_method_norm,
+                    y_name,
+                    by_col,
+                    [by_levels[i] for i in undefined],
+                    [y_levels[i] for i in undefined],
+                    [float(est_arr[i]) for i in undefined],
                 )
+
+        return [
+            ParamEst(
+                y=y_name,
+                est=float(est_arr[i]),
+                se=float(se_arr[i]),
+                cv=float(cv_arr[i]),
+                lci=float(lci_arr[i]),
+                uci=float(uci_arr[i]),
+                deff=float(deff_arr[i]) if deff_arr is not None else None,
+                df=int(df_arr[i]),
+                by=by_tuple,
+                by_level=by_levels[i],
+                y_level=y_levels[i],
+                x=x_name,
             )
-        return est_list
+            for i in range(n_rows)
+        ]
+
+    def _warn_prop_ci_boundary(
+        self,
+        method: str,
+        y_name: str,
+        by_col: str | None,
+        by_levels: list,
+        y_levels: list,
+        estimates: list[float],
+    ) -> None:
+        """One warning per call listing the cells whose interval is NaN because p is 0 or 1."""
+        max_listed = 10
+        cells = []
+        for by_level, y_level, p in zip(by_levels, y_levels, estimates):
+            cell = f"{y_name}={y_level}" if y_level is not None else y_name
+            if by_col and by_level is not None:
+                cell += f" in {by_col}={by_level[0]}"
+            cells.append(f"{cell} (p={round(p)})")
+        listed = ", ".join(cells[:max_listed])
+        if len(cells) > max_listed:
+            listed += f", and {len(cells) - max_listed} more"
+        self._sample.warn(
+            code=WarnCode.PROP_CI_BOUNDARY,
+            title="Confidence interval undefined at a proportion of 0 or 1",
+            detail=(
+                f"ci_method='{method}' has no interval when the estimated proportion "
+                "is 0 or 1: the zero standard error comes from the estimate itself, "
+                f"not from the design. lci and uci are NaN for: {listed}."
+            ),
+            where="estimation.prop",
+            param="ci_method",
+            got=method,
+            hint=(
+                "Use ci_method='korn-graubard', which gives a one-sided interval at "
+                "0 and 1 (Korn & Graubard 1998; NCHS data presentation standards)."
+            ),
+            var=y_name,
+        )
 
     def _quantile_result_to_param_est(
         self,

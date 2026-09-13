@@ -6,6 +6,16 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Fixed
+
+- **Proportion CIs under `where=` used the whole-sample `n`.** `beta`, `korn-graubard` and `wilson` read the domain sample size in the t-adjustment `(t(n−1)/t(df))²`, in Korn–Graubard's cap `min(n, n_eff*)`, and as the effective sample size at p = 0 or 1. Under `where=` (and `where=` with `by=`) that count included every out-of-domain row, so a `where=` domain got a narrower interval than the same domain through `by=`: a few decimals for `beta`, but a Korn–Graubard bound at p = 0 hundreds of times too narrow on a small domain of a large survey. `n` is now the number of rows in the domain with a nonzero weight, for every design and for Taylor and replication alike. Zero-weight rows represent no population units and are not counted, which differs from R's `nrow()` when a file carries them; R's `svyciprop(method="beta")` also uses the whole sample for calibrated and PPS designs, where svy does not.
+
+### Changed
+
+- **`logit`, `beta` and `wilson` return NaN bounds at an estimated proportion of 0 or 1**, instead of a zero-width `[p, p]` that read as an interval known with certainty. A `PROP_CI_BOUNDARY` warning names the affected cells and points to `ci_method="korn-graubard"`, which keeps its one-sided interval there. With no residual degrees of freedom every method, `korn-graubard` included, now returns NaN (as R does); `beta` and `korn-graubard` used to skip the t-adjustment and return an interval. A zero SE at 0 < p < 1 still gives `[p, p]`. The comparisons use a 1e-12 tolerance, so floating-point noise in an SE or a p-hat no longer decides which case applies.
+
+- Degrees of freedom count PSUs with a nonzero weight, not a positive one, so a PSU carrying only negative calibrated weights is counted (R's `degf`).
+
 ## [0.28.0] — 2026-09-08
 
 ### Added

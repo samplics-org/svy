@@ -1,4 +1,4 @@
-# tests/test_prop_ci.py
+# tests/svy/estimation/test_proportions.py
 """
 Tests for proportion confidence interval methods in svy.
 
@@ -24,130 +24,26 @@ from __future__ import annotations
 
 import math
 
+import polars as pl
 import pytest
 
 from scipy import stats
-from scipy.stats import beta as beta_dist
-from scipy.stats import f as f_dist
+
+from svy import Design, Sample
 
 
 # =========================================================================
-# Standalone CI function — mirrors Estimation._compute_prop_ci in base.py
+# The library's CI function, called with reference (p, se, df, n) inputs
 # =========================================================================
 
 
-def _normalize_ci_method(method: str) -> str:
-    m = method.lower().replace("_", "-")
-    aliases = {
-        "clopper-pearson": "korn-graubard",
-        "kg": "korn-graubard",
-        "score": "wilson",
-    }
-    return aliases.get(m, m)
+_EST = Sample(pl.DataFrame({"y": [0, 1], "w": [1.0, 1.0]}), Design(wgt="w")).estimation
 
 
 def compute_prop_ci(
     p: float, se: float, alpha: float, df: int, n: int, method: str
 ) -> tuple[float, float]:
-    """Standalone version of Estimation._compute_prop_ci for unit testing."""
-    method = _normalize_ci_method(method)
-
-    if method == "logit":
-        if p <= 0 or p >= 1:
-            return (p, p)
-        t_crit = stats.t.ppf(1 - alpha / 2, df) if df > 0 else 1.96
-        scale = se / (p * (1.0 - p)) if se > 0 else 0
-        logit_p = math.log(p / (1 - p))
-        lci = 1.0 / (1.0 + math.exp(-(logit_p - t_crit * scale)))
-        uci = 1.0 / (1.0 + math.exp(-(logit_p + t_crit * scale)))
-        return (lci, uci)
-
-    elif method == "beta":
-        if p <= 0 or p >= 1 or se <= 0:
-            return (p, p)
-        n_eff = (p * (1 - p)) / (se**2)
-        if df > 0 and n > 1:
-            t_n = stats.t.ppf(alpha / 2, n - 1)
-            t_df = stats.t.ppf(alpha / 2, df)
-            n_eff = n_eff * (t_n / t_df) ** 2
-        x = n_eff * p
-        lci = beta_dist.ppf(alpha / 2, x, n_eff - x + 1)
-        uci = beta_dist.ppf(1 - alpha / 2, x + 1, n_eff - x)
-        return (lci, uci)
-
-    elif method == "korn-graubard":
-        if p <= 0 or p >= 1:
-            n_eff = float(n)
-            if df > 0 and n > 1:
-                t_n = stats.t.ppf(1 - alpha / 2, n - 1)
-                t_df = stats.t.ppf(1 - alpha / 2, df)
-                t_adj = (t_n / t_df) ** 2
-                n_eff_df = min(n, n_eff * t_adj)
-            else:
-                n_eff_df = n_eff
-            x = p * n_eff_df
-            if p == 0:
-                lci = 0.0
-                v3, v4 = 2 * (x + 1), 2 * (n_eff_df - x)
-                if n_eff_df > 0 and v3 > 0 and v4 > 0:
-                    f_upper = f_dist.ppf(1 - alpha / 2, v3, v4)
-                    uci = (v3 * f_upper) / (v4 + v3 * f_upper)
-                else:
-                    uci = 1.0
-                return (lci, uci)
-            else:  # p == 1
-                uci = 1.0
-                v1, v2 = 2 * x, 2 * (n_eff_df - x + 1)
-                if n_eff_df > 0 and v1 > 0 and v2 > 0:
-                    f_lower = f_dist.ppf(alpha / 2, v1, v2)
-                    lci = (v1 * f_lower) / (v2 + v1 * f_lower)
-                else:
-                    lci = 0.0
-                return (lci, uci)
-        if se <= 0:
-            return (p, p)
-        n_eff = (p * (1 - p)) / (se**2)
-        if df > 0 and n > 1:
-            t_n = stats.t.ppf(1 - alpha / 2, n - 1)
-            t_df = stats.t.ppf(1 - alpha / 2, df)
-            t_adj = (t_n / t_df) ** 2
-            n_eff_df = min(n, n_eff * t_adj)
-        else:
-            n_eff_df = min(n, n_eff)
-        x = n_eff_df * p
-        v1, v2 = 2 * x, 2 * (n_eff_df - x + 1)
-        v3, v4 = 2 * (x + 1), 2 * (n_eff_df - x)
-        if v1 > 0 and v2 > 0:
-            f_lower = f_dist.ppf(alpha / 2, v1, v2)
-            lci = (v1 * f_lower) / (v2 + v1 * f_lower)
-        else:
-            lci = 0.0
-        if v3 > 0 and v4 > 0:
-            f_upper = f_dist.ppf(1 - alpha / 2, v3, v4)
-            uci = (v3 * f_upper) / (v4 + v3 * f_upper)
-        else:
-            uci = 1.0
-        return (lci, uci)
-
-    elif method == "wilson":
-        if p <= 0 or p >= 1 or se <= 0:
-            return (p, p)
-        n_eff = (p * (1 - p)) / (se**2)
-        if df > 0 and n > 1:
-            t_n = stats.t.ppf(1 - alpha / 2, n - 1)
-            t_df = stats.t.ppf(1 - alpha / 2, df)
-            n_eff = n_eff * (t_n / t_df) ** 2
-        z = stats.t.ppf(1 - alpha / 2, df) if df > 0 else 1.96
-        z2 = z * z
-        denom = 1 + z2 / n_eff
-        center = (p + z2 / (2 * n_eff)) / denom
-        half_width = (z / denom) * math.sqrt(p * (1 - p) / n_eff + z2 / (4 * n_eff * n_eff))
-        lci = max(0.0, center - half_width)
-        uci = min(1.0, center + half_width)
-        return (lci, uci)
-
-    else:
-        raise ValueError(f"Unknown CI method: {method!r}")
+    return _EST._compute_prop_ci(p, se, alpha, df, n, method)
 
 
 ALPHA = 0.05
@@ -344,7 +240,7 @@ class TestKornGraubardSRS:
 
 
 class TestKornGraubardPZero:
-    """p=0: korn-graubard gives proper CI; beta returns degenerate (0,0)."""
+    """p=0/1: korn-graubard gives a one-sided CI; beta has none and returns NaN."""
 
     n, df = 100, 5
 
@@ -360,17 +256,15 @@ class TestKornGraubardPZero:
         # Stata: lower CI for p=1 ≈ 0.94
         assert lci == pytest.approx(0.94, abs=0.005)
 
-    def test_beta_p_zero_degenerate(self):
-        """R beta returns (p, p) when p=0 — no interval."""
+    def test_beta_p_zero_nan(self):
+        """R beta returns NaN when p=0: n_eff = p(1-p)/var is 0/0."""
         lci, uci = compute_prop_ci(0.0, 0.0, ALPHA, self.df, self.n, "beta")
-        assert lci == 0.0
-        assert uci == 0.0
+        assert math.isnan(lci) and math.isnan(uci)
 
-    def test_beta_p_one_degenerate(self):
-        """R beta returns (p, p) when p=1 — no interval."""
+    def test_beta_p_one_nan(self):
+        """R beta returns NaN when p=1."""
         lci, uci = compute_prop_ci(1.0, 0.0, ALPHA, self.df, self.n, "beta")
-        assert lci == 1.0
-        assert uci == 1.0
+        assert math.isnan(lci) and math.isnan(uci)
 
 
 class TestKornGraubardPZeroEffectiveSampleSize:
@@ -379,21 +273,17 @@ class TestKornGraubardPZeroEffectiveSampleSize:
     def test_n_eff_equals_n(self):
         """Stata shows n*=59.58 for n=100, df=5 dummy data.
 
-        This is n * (t_{n-1}/t_{df})^2 = 100 * (t_99/t_5)^2.
-        Since p=0 → n_eff=n, then n_eff_df = min(n, n * t_adj).
-        With df=5 < n-1=99, t_adj < 1, so n_eff_df = n * t_adj ≈ 59.58.
-        But in korn-graubard for p=0, we use n directly (no df-adjustment
-        to n_eff, because n_eff IS n). The CI uses the F distribution
-        with x=0, n_eff_df=n=100.
+        At p=0, n_eff = n (design effect 1), then the df-adjustment applies:
+        n* = min(n, n * (t_{n-1}/t_{df})^2) = 100 * (t_99/t_5)^2 = 59.58.
+        The upper bound is the Clopper-Pearson bound for 0 successes in n*
+        trials, 1 - (alpha/2)^(1/n*).
         """
-        # Stata's n*=59.58 comes from its own internal calculation
-        # that applies df-adjustment even for p=0.
-        # Our implementation uses n directly for p=0 (matching NCHS SAS macro).
-        # The CI values still match Stata's output.
+        t_adj = (stats.t.ppf(1 - ALPHA / 2, 99) / stats.t.ppf(1 - ALPHA / 2, 5)) ** 2
+        n_star = min(100, 100 * t_adj)
+        assert n_star == pytest.approx(59.58, abs=0.01)
         lci, uci = compute_prop_ci(0.0, 0.0, ALPHA, 5, 100, "korn-graubard")
         assert lci == 0.0
-        assert uci > 0.0
-        assert uci < 0.10  # reasonable upper bound
+        assert uci == pytest.approx(1 - (ALPHA / 2) ** (1 / n_star), abs=1e-12)
 
 
 # =========================================================================
@@ -481,16 +371,14 @@ class TestEdgeCases:
         assert uci == pytest.approx(0.5, abs=1e-10)
 
     def test_logit_p_zero(self):
-        """Logit returns degenerate (0, 0) for p=0."""
+        """Logit is undefined at p=0: NaN, not a zero-width interval."""
         lci, uci = compute_prop_ci(0.0, 0.01, ALPHA, 100, 1000, "logit")
-        assert lci == 0.0
-        assert uci == 0.0
+        assert math.isnan(lci) and math.isnan(uci)
 
     def test_logit_p_one(self):
-        """Logit returns degenerate (1, 1) for p=1."""
+        """Logit is undefined at p=1: NaN, not a zero-width interval."""
         lci, uci = compute_prop_ci(1.0, 0.01, ALPHA, 100, 1000, "logit")
-        assert lci == 1.0
-        assert uci == 1.0
+        assert math.isnan(lci) and math.isnan(uci)
 
 
 # =========================================================================
@@ -637,15 +525,13 @@ class TestWilsonSubsetPostgraduate:
 class TestWilsonEdgeCases:
     """Wilson edge cases: p=0, p=1, se=0."""
 
-    def test_p_zero_degenerate(self):
+    def test_p_zero_nan(self):
         lci, uci = compute_prop_ci(0.0, 0.01, ALPHA, 100, 1000, "wilson")
-        assert lci == 0.0
-        assert uci == 0.0
+        assert math.isnan(lci) and math.isnan(uci)
 
-    def test_p_one_degenerate(self):
+    def test_p_one_nan(self):
         lci, uci = compute_prop_ci(1.0, 0.01, ALPHA, 100, 1000, "wilson")
-        assert lci == 1.0
-        assert uci == 1.0
+        assert math.isnan(lci) and math.isnan(uci)
 
     def test_se_zero_degenerate(self):
         lci, uci = compute_prop_ci(0.5, 0.0, ALPHA, 100, 1000, "wilson")

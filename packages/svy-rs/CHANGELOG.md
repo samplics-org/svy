@@ -4,6 +4,14 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ## [Unreleased]
 
+### Fixed
+
+- The `n` column of every Taylor and replicate estimator (mean, total, ratio, proportion, quantile, association; ungrouped, grouped and batched) is the number of rows with a nonzero weight, within the by-group when there is one — `taylor::active_count`. It used to be the frame length or the by-group size, which under `where=` (out-of-domain rows arrive with weight 0) included every out-of-domain row. `svy` reads it as the domain sample size of its proportion CIs.
+
+### Changed
+
+- `degrees_of_freedom*` treat a row as active when its weight is nonzero rather than positive, matching R's `degf`.
+
 ## [0.17.0] — 2026-09-08
 
 ### Added
