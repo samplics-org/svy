@@ -188,3 +188,60 @@ def test_clean_design_needs_no_handling(clean_sample, method):
 def test_explicit_raise_error(singleton_sample):
     with pytest.raises(SingletonError):
         singleton_sample.singleton.raise_error()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SCENARIO 6: scale's full-sample pass
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# scale runs the kernel twice: variance on the singleton-excluded rows, point
+# estimate on the full sample. The second pass must be prepared like the first.
+
+SCALE_METHODS = ["mean", "total", "prop", "ratio"]
+
+
+def _scale_sample(df):
+    design = svy.Design(case_id="id", stratum="stratum", psu="psu", wgt="weight")
+    return svy.Sample(data=df, design=design).singleton.scale()
+
+
+@pytest.mark.parametrize("method", SCALE_METHODS)
+@pytest.mark.parametrize("dtype", [pl.Int8, pl.Int16, pl.UInt8, pl.UInt16])
+def test_scale_ignores_unrelated_small_int_columns(method, dtype):
+    """An unused small-integer column must not reach the kernel or move results."""
+    df = _to_frame(_rows_with_singletons()).with_columns(
+        pl.lit(1).cast(dtype).alias("flag"),
+        (pl.col("id") % 3).cast(dtype).alias("code"),
+    )
+    got = estimate(_scale_sample(df), method).estimates
+    ref = estimate(
+        _scale_sample(df.with_columns(pl.col("flag", "code").cast(pl.Int64))), method
+    ).estimates
+
+    assert len(got) == len(ref)
+    for g, r in zip(got, ref):
+        assert g.est == pytest.approx(r.est, rel=1e-12)
+        assert g.se == pytest.approx(r.se, rel=1e-12)
+
+
+@pytest.mark.parametrize("method", ["mean", "total"])
+def test_scale_point_estimate_respects_by_and_where(method):
+    """The full-sample estimate honours by= and where= (center keeps every row)."""
+    df = _to_frame(_rows_with_singletons()).with_columns(
+        (pl.col("id") % 2).alias("grp"),
+    )
+    design = svy.Design(case_id="id", stratum="stratum", psu="psu", wgt="weight")
+    sample = svy.Sample(data=df, design=design)
+    scaled = sample.singleton.scale().estimation
+    centered = sample.singleton.center().estimation
+
+    by_scaled = getattr(scaled, method)("income", by="grp").estimates
+    by_centered = getattr(centered, method)("income", by="grp").estimates
+    assert sorted(p.est for p in by_scaled) == pytest.approx(
+        sorted(p.est for p in by_centered), rel=1e-12
+    )
+
+    where = pl.col("grp") == 1
+    w_scaled = getattr(scaled, method)("income", where=where).estimates[0]
+    w_centered = getattr(centered, method)("income", where=where).estimates[0]
+    assert w_scaled.est == pytest.approx(w_centered.est, rel=1e-12)

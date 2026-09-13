@@ -62,20 +62,15 @@ def taylor_mean(
     pre_vars = None
     if est._should_run_double_pass():
         pre_vars = result_df["var"].to_numpy()
-        cache = est._get_polars_design_info()
-        df_full = cache["data"]
-        if y in df_full.columns and df_full[y].dtype != pl.Float64:
-            df_full = df_full.with_columns(pl.col(y).cast(pl.Float64))
+        full = prep.unfiltered()
         result_full, _ = fn(
-            df_full,
+            full.df,
             value_col=y,
-            weight_col=cache["weight_col"],
-            strata_col=cache["strata_col"],
-            psu_col=cache["psu_col"],
-            ssu_col=cache.get("ssu_col"),
-            fpc_col=cache.get("fpc_col"),
-            fpc_ssu_col=cache.get("fpc_ssu_col"),
-            by_col=prep.by_col,
+            weight_col=full.weight_col,
+            strata_col=full.strata_col,
+            psu_col=full.psu_col,
+            ssu_col=full.ssu_col,
+            by_col=full.by_col,
             singleton_method=center_arg,
         )
         result_df = est._apply_scale_adjustment(result_full, result_df, param=param)
@@ -196,20 +191,15 @@ def taylor_total(
     pre_vars = None
     if est._should_run_double_pass():
         pre_vars = result_df["var"].to_numpy()
-        cache = est._get_polars_design_info()
-        df_full = cache["data"]
-        if y in df_full.columns and df_full[y].dtype != pl.Float64:
-            df_full = df_full.with_columns(pl.col(y).cast(pl.Float64))
+        full = prep.unfiltered()
         result_full, _ = rs.taylor_total(
-            df_full,
+            full.df,
             value_col=y,
-            weight_col=cache["weight_col"],
-            strata_col=cache["strata_col"],
-            psu_col=cache["psu_col"],
-            ssu_col=cache.get("ssu_col"),
-            fpc_col=cache.get("fpc_col"),
-            fpc_ssu_col=cache.get("fpc_ssu_col"),
-            by_col=prep.by_col,
+            weight_col=full.weight_col,
+            strata_col=full.strata_col,
+            psu_col=full.psu_col,
+            ssu_col=full.ssu_col,
+            by_col=full.by_col,
             singleton_method=center_arg,
         )
         result_df = est._apply_scale_adjustment(result_full, result_df, param=PopParam.TOTAL)
@@ -326,21 +316,16 @@ def taylor_ratio(
     pre_vars = None
     if est._should_run_double_pass():
         pre_vars = result_df["var"].to_numpy()
-        cache = est._get_polars_design_info()
-        df_full = cache["data"]
-        if y in df_full.columns and df_full[y].dtype != pl.Float64:
-            df_full = df_full.with_columns(pl.col(y).cast(pl.Float64))
+        full = prep.unfiltered()
         result_full, _ = rs.taylor_ratio(
-            df_full,
+            full.df,
             numerator_col=y,
             denominator_col=x,
-            weight_col=cache["weight_col"],
-            strata_col=cache["strata_col"],
-            psu_col=cache["psu_col"],
-            ssu_col=cache.get("ssu_col"),
-            fpc_col=cache.get("fpc_col"),
-            fpc_ssu_col=cache.get("fpc_ssu_col"),
-            by_col=prep.by_col,
+            weight_col=full.weight_col,
+            strata_col=full.strata_col,
+            psu_col=full.psu_col,
+            ssu_col=full.ssu_col,
+            by_col=full.by_col,
             singleton_method=center_arg,
         )
         result_df = est._apply_scale_adjustment(result_full, result_df, param=PopParam.RATIO)
@@ -407,18 +392,15 @@ def taylor_prop(
     pre_vars = None
     if est._should_run_double_pass():
         pre_vars = result_df["var"].to_numpy()
-        cache = est._get_polars_design_info()
-        df_full = cache["data"]
+        full = prep.unfiltered()
         result_full, _ = rs.taylor_prop(
-            df_full,
+            est._coerce_y_for_prop(full.df, y),
             value_col=y,
-            weight_col=cache["weight_col"],
-            strata_col=cache["strata_col"],
-            psu_col=cache["psu_col"],
-            ssu_col=cache.get("ssu_col"),
-            fpc_col=cache.get("fpc_col"),
-            fpc_ssu_col=cache.get("fpc_ssu_col"),
-            by_col=prep.by_col,
+            weight_col=full.weight_col,
+            strata_col=full.strata_col,
+            psu_col=full.psu_col,
+            ssu_col=full.ssu_col,
+            by_col=full.by_col,
             singleton_method=center_arg,
         )
         result_df = est._apply_scale_adjustment(result_full, result_df, param=PopParam.PROP)

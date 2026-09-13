@@ -23,12 +23,13 @@ call :func:`prepare_data` rather than maintaining their own prep logic.
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 import warnings
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Mapping, Sequence, cast
+from typing import TYPE_CHECKING, Callable, Mapping, Sequence, cast
 
 import polars as pl
 
@@ -167,6 +168,19 @@ class PreparedData:
     by_col: str | None = None
     by_cols: list[str] = field(default_factory=list)
     singleton_method: str | None = None
+    _rebuild_unfiltered: Callable[[], PreparedData] | None = field(
+        default=None, repr=False, compare=False
+    )
+
+    def unfiltered(self) -> PreparedData:
+        """The same preparation with singleton strata kept in.
+
+        Singleton ``scale`` takes its point estimate from the full sample. That
+        pass must see the same column selection, casts, ``by`` labels, ``where``
+        zeroing and missing handling as the variance pass, so it is rebuilt
+        here rather than read off the raw frame.
+        """
+        return self._rebuild_unfiltered() if self._rebuild_unfiltered is not None else self
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -527,11 +541,29 @@ def prepare_data(
         local_data = local_data.select(needed)
 
     # ── Singleton filter ─────────────────────────────────────────────────
+    rebuild_unfiltered = None
     if apply_singleton_filter:
         from svy.core.singleton import _VAR_EXCLUDE_COL
 
         if _VAR_EXCLUDE_COL in local_data.columns:
             local_data = local_data.filter(~pl.col(_VAR_EXCLUDE_COL))
+            rebuild_unfiltered = functools.partial(
+                prepare_data,
+                sample,
+                y=y,
+                x=x,
+                group=group,
+                y_pair=y_pair,
+                by=by,
+                where=where,
+                extra_cols=extra_cols,
+                null_zero_cols=null_zero_cols,
+                drop_nulls=drop_nulls,
+                cast_y_float=cast_y_float,
+                select_columns=select_columns,
+                apply_singleton_filter=False,
+                domain_mask_for_replication=domain_mask_for_replication,
+            )
 
     # ── Concatenated design columns ──────────────────────────────────────
     # When Phase C codes are active, skip the stratum/psu/ssu string concats
@@ -838,6 +870,7 @@ def prepare_data(
         by_col=by_col,
         by_cols=by_cols_list,
         singleton_method=singleton_method,
+        _rebuild_unfiltered=rebuild_unfiltered,
     )
 
 
