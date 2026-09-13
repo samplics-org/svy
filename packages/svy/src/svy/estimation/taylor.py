@@ -59,26 +59,12 @@ def taylor_mean(
         **calib_kwargs(est._sample, df),
     )
 
-    pre_vars = None
-    if est._should_run_double_pass():
-        pre_vars = result_df["var"].to_numpy()
-        full = prep.unfiltered()
-        result_full, _ = fn(
-            full.df,
-            value_col=y,
-            weight_col=full.weight_col,
-            strata_col=full.strata_col,
-            psu_col=full.psu_col,
-            ssu_col=full.ssu_col,
-            by_col=full.by_col,
-            singleton_method=center_arg,
-        )
-        result_df = est._apply_scale_adjustment(result_full, result_df, param=param)
+    result_df, cov_flat = est._apply_scale_adjustment(result_df, cov_flat)
 
     est_list = est._polars_result_to_param_est(
         result_df, y, param, alpha, deff_ref is not None, prep.by_col, as_factor
     )
-    est_cov = est._cov_from_kernel(result_df, cov_flat, pre_vars)
+    est_cov = est._cov_from_kernel(result_df, cov_flat)
     design_df = int(result_df["df"][0]) if prep.by_col is None else est._design_df_from_prep(prep)
     return est._build_estimate_result_light(
         est_list,
@@ -188,26 +174,12 @@ def taylor_total(
         **calib_kwargs(est._sample, df),
     )
 
-    pre_vars = None
-    if est._should_run_double_pass():
-        pre_vars = result_df["var"].to_numpy()
-        full = prep.unfiltered()
-        result_full, _ = rs.taylor_total(
-            full.df,
-            value_col=y,
-            weight_col=full.weight_col,
-            strata_col=full.strata_col,
-            psu_col=full.psu_col,
-            ssu_col=full.ssu_col,
-            by_col=full.by_col,
-            singleton_method=center_arg,
-        )
-        result_df = est._apply_scale_adjustment(result_full, result_df, param=PopParam.TOTAL)
+    result_df, cov_flat = est._apply_scale_adjustment(result_df, cov_flat)
 
     est_list = est._polars_result_to_param_est(
         result_df, y, PopParam.TOTAL, alpha, deff_ref is not None, prep.by_col, as_factor=False
     )
-    est_cov = est._cov_from_kernel(result_df, cov_flat, pre_vars)
+    est_cov = est._cov_from_kernel(result_df, cov_flat)
     design_df = int(result_df["df"][0]) if prep.by_col is None else est._design_df_from_prep(prep)
     return est._build_estimate_result_light(
         est_list,
@@ -313,22 +285,7 @@ def taylor_ratio(
         **calib_kwargs(est._sample, df),
     )
 
-    pre_vars = None
-    if est._should_run_double_pass():
-        pre_vars = result_df["var"].to_numpy()
-        full = prep.unfiltered()
-        result_full, _ = rs.taylor_ratio(
-            full.df,
-            numerator_col=y,
-            denominator_col=x,
-            weight_col=full.weight_col,
-            strata_col=full.strata_col,
-            psu_col=full.psu_col,
-            ssu_col=full.ssu_col,
-            by_col=full.by_col,
-            singleton_method=center_arg,
-        )
-        result_df = est._apply_scale_adjustment(result_full, result_df, param=PopParam.RATIO)
+    result_df, cov_flat = est._apply_scale_adjustment(result_df, cov_flat)
 
     est_list = est._polars_result_to_param_est(
         result_df,
@@ -340,7 +297,7 @@ def taylor_ratio(
         as_factor=False,
         x_name=x,
     )
-    est_cov = est._cov_from_kernel(result_df, cov_flat, pre_vars)
+    est_cov = est._cov_from_kernel(result_df, cov_flat)
     design_df = int(result_df["df"][0]) if prep.by_col is None else est._design_df_from_prep(prep)
     return est._build_estimate_result_light(
         est_list,
@@ -389,21 +346,7 @@ def taylor_prop(
         **calib_kwargs(est._sample, df),
     )
 
-    pre_vars = None
-    if est._should_run_double_pass():
-        pre_vars = result_df["var"].to_numpy()
-        full = prep.unfiltered()
-        result_full, _ = rs.taylor_prop(
-            est._coerce_y_for_prop(full.df, y),
-            value_col=y,
-            weight_col=full.weight_col,
-            strata_col=full.strata_col,
-            psu_col=full.psu_col,
-            ssu_col=full.ssu_col,
-            by_col=full.by_col,
-            singleton_method=center_arg,
-        )
-        result_df = est._apply_scale_adjustment(result_full, result_df, param=PopParam.PROP)
+    result_df, cov_flat = est._apply_scale_adjustment(result_df, cov_flat)
 
     est_list = est._polars_result_to_param_est(
         result_df,
@@ -415,7 +358,7 @@ def taylor_prop(
         as_factor=True,
         ci_method=ci_method,
     )
-    est_cov = est._cov_from_kernel(result_df, cov_flat, pre_vars)
+    est_cov = est._cov_from_kernel(result_df, cov_flat)
     design_df = int(result_df["df"][0]) if prep.by_col is None else est._design_df_from_prep(prep)
     return est._build_estimate_result_light(
         est_list,
@@ -465,6 +408,7 @@ def taylor_median(
         quantile_method=q_method_str,
         **calib_kwargs(est._sample, df),
     )
+    result_df, _ = est._apply_scale_adjustment(result_df)
 
     est_list = est._median_result_to_param_est(
         result_df, y, alpha, prep.by_col, df, prep.weight_col, q_method
@@ -637,6 +581,7 @@ def taylor_median_multi(
         quantile_method=q_method_str,
         **calib_kwargs(est._sample, df),
     )
+    result_df, _ = est._apply_scale_adjustment(result_df)
 
     results: list[Estimate] = []
     for i, y in enumerate(ys):
@@ -701,6 +646,7 @@ def taylor_quantile(
         quantile_method=q_method_str,
         **calib_kwargs(est._sample, df),
     )
+    result_df, _ = est._apply_scale_adjustment(result_df)
 
     results: list[Estimate] = []
     for p in probs:
