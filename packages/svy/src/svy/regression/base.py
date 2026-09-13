@@ -475,7 +475,6 @@ class GLM:
             null_zero_cols=x_cols + where_cols,
             drop_nulls=drop_nulls,
             cast_y_float=True,
-            apply_singleton_filter=True,
             select_columns=True,
         )
 

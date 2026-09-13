@@ -259,7 +259,6 @@ class TestInternalDesignConsistency:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
 
         # Phase C: design columns resolve to the integer code column, built
@@ -281,7 +280,6 @@ class TestInternalDesignConsistency:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
 
         n_codes = prep.df[prep.strata_col].n_unique()
@@ -299,7 +297,6 @@ class TestInternalDesignConsistency:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
 
         # 4 regions → 4 distinct codes (the codes are the integer factorization).
@@ -313,7 +310,6 @@ class TestInternalDesignConsistency:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         assert prep.strata_col is None
         assert prep.psu_col is None
@@ -326,7 +322,6 @@ class TestInternalDesignConsistency:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         assert prep.df[prep.strata_col].dtype == pl.UInt32
 

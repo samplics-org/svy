@@ -103,7 +103,6 @@ class TestDropNullsScope:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=False,
-            apply_singleton_filter=False,
         )
         # All 100 rows should survive — nulls are only in irrelevant columns
         assert prep.df.height == 100
@@ -131,7 +130,6 @@ class TestDropNullsScope:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=False,
-            apply_singleton_filter=False,
         )
         # All rows survive; the null-y rows are out-of-domain with weight 0
         assert prep.df.height == 100
@@ -157,7 +155,6 @@ class TestDropNullsScope:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=False,
-            apply_singleton_filter=False,
         )
         assert prep.df.height == 100 - n_nulls
 
@@ -179,7 +176,6 @@ class TestDropNullsScope:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=False,
-            apply_singleton_filter=False,
         )
         # All rows survive; null-by rows are out-of-domain with weight 0
         assert prep.df.height == 100
@@ -199,7 +195,6 @@ class TestDropNullsScope:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=False,
-            apply_singleton_filter=False,
         )
         assert prep.df.height == 97
 
@@ -218,7 +213,6 @@ class TestSelectColumnsInvariance:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         prep_false = prepare_data(
             sample_with_nulls,
@@ -226,7 +220,6 @@ class TestSelectColumnsInvariance:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=False,
-            apply_singleton_filter=False,
         )
         assert prep_true.df.height == prep_false.df.height
 
@@ -238,7 +231,6 @@ class TestSelectColumnsInvariance:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         prep_false = prepare_data(
             sample_with_nulls,
@@ -246,7 +238,6 @@ class TestSelectColumnsInvariance:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=False,
-            apply_singleton_filter=False,
         )
         assert prep_true.df["y_var"].to_list() == prep_false.df["y_var"].to_list()
 
@@ -258,7 +249,6 @@ class TestSelectColumnsInvariance:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         prep_false = prepare_data(
             sample_with_nulls,
@@ -266,7 +256,6 @@ class TestSelectColumnsInvariance:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=False,
-            apply_singleton_filter=False,
         )
         assert prep_true.df[prep_true.weight_col].to_list() == pytest.approx(
             prep_false.df[prep_false.weight_col].to_list()
@@ -280,7 +269,6 @@ class TestSelectColumnsInvariance:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         prep_false = prepare_data(
             sample_with_nulls,
@@ -288,7 +276,6 @@ class TestSelectColumnsInvariance:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=False,
-            apply_singleton_filter=False,
         )
         assert prep_true.strata_col == prep_false.strata_col
         assert prep_true.psu_col == prep_false.psu_col
@@ -301,7 +288,6 @@ class TestSelectColumnsInvariance:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         prep_false = prepare_data(
             sample_with_nulls,
@@ -309,7 +295,6 @@ class TestSelectColumnsInvariance:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=False,
-            apply_singleton_filter=False,
         )
         assert len(prep_true.df.columns) < len(prep_false.df.columns)
 
@@ -322,7 +307,6 @@ class TestSelectColumnsInvariance:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         prep_false = prepare_data(
             sample_with_nulls,
@@ -331,7 +315,6 @@ class TestSelectColumnsInvariance:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=False,
-            apply_singleton_filter=False,
         )
         assert "x_var" in prep_true.df.columns
         assert "group_var" in prep_true.df.columns
@@ -352,7 +335,6 @@ class TestDesignColumnResolution:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         assert prep.strata_col == _STRATUM_CODE
         assert prep.psu_col == _PSU_CODE
@@ -365,7 +347,6 @@ class TestDesignColumnResolution:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         assert prep.strata_col is None
         assert prep.psu_col is None
@@ -378,7 +359,6 @@ class TestDesignColumnResolution:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         assert prep.df[prep.strata_col].dtype == pl.UInt32
 
@@ -390,7 +370,6 @@ class TestDesignColumnResolution:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         assert prep.df[prep.psu_col].dtype == pl.UInt32
 
@@ -407,7 +386,6 @@ class TestWeightHandling:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         assert prep.weight_col == "weight"
 
@@ -419,7 +397,6 @@ class TestWeightHandling:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         assert prep.weight_col == "__svy_ones__"
         assert prep.df[prep.weight_col].to_list() == [1.0] * 30
@@ -439,7 +416,6 @@ class TestWeightHandling:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         assert prep.df[prep.weight_col].dtype == pl.Float64
 
@@ -456,7 +432,6 @@ class TestYColumnHandling:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         assert prep.df["income"].dtype == pl.Float64
 
@@ -475,7 +450,6 @@ class TestYColumnHandling:
             drop_nulls=False,
             cast_y_float=False,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         assert prep.df["category"].dtype == pl.String
 
@@ -493,7 +467,6 @@ class TestByColumnResolution:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         assert prep.by_col == f"by{_INTERNAL_CONCAT_SUFFIX}"
         assert prep.by_cols == ["region"]
@@ -506,7 +479,6 @@ class TestByColumnResolution:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         assert prep.by_col is None
         assert prep.by_cols == []
@@ -529,7 +501,6 @@ class TestByColumnResolution:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         assert prep.by_col == f"by{_INTERNAL_CONCAT_SUFFIX}"
         assert prep.by_cols == ["g1", "g2"]
@@ -550,7 +521,6 @@ class TestWhereClause:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=False,
-            apply_singleton_filter=False,
         )
         assert prep.domain_col == "__svy_domain__"
         assert prep.domain_val == "true"
@@ -566,7 +536,6 @@ class TestWhereClause:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=False,
-            apply_singleton_filter=False,
         )
         # South observations should have zero weight
         weights = prep.df[prep.weight_col].to_numpy()
@@ -588,7 +557,6 @@ class TestWhereClause:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=False,
-            apply_singleton_filter=False,
         )
         assert prep.df.height == 50  # all rows preserved
 
@@ -600,7 +568,6 @@ class TestWhereClause:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         assert prep.domain_col is None
         assert prep.domain_val is None
@@ -650,7 +617,6 @@ class TestPairedDifference:
             drop_nulls=False,
             cast_y_float=True,
             select_columns=False,
-            apply_singleton_filter=False,
         )
         assert prep.y_col.startswith("__svy_before_minus_after")
         expected_diff = [-2.0, 2.0, -5.0]
@@ -690,7 +656,6 @@ class TestGLMScenario:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=False,
-            apply_singleton_filter=False,
         )
         assert prep.df.height == n  # no rows dropped
 
@@ -717,7 +682,6 @@ class TestGLMScenario:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         prep_false = prepare_data(
             sample,
@@ -726,6 +690,5 @@ class TestGLMScenario:
             drop_nulls=True,
             cast_y_float=True,
             select_columns=False,
-            apply_singleton_filter=False,
         )
         assert prep_true.df.height == prep_false.df.height == n

@@ -546,7 +546,6 @@ class Categorical:
             drop_nulls=drop_nulls,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         y_name = f"svy_{y}_minus_{y_pair}" if y_pair else y
 
@@ -816,7 +815,6 @@ class Categorical:
             drop_nulls=drop_nulls,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
 
         # Single Rust call — handles by-levels internally
@@ -1069,7 +1067,6 @@ class Categorical:
             drop_nulls=drop_nulls,
             cast_y_float=True,
             select_columns=True,
-            apply_singleton_filter=False,
         )
         y_arr = prep.df[prep.y_col].to_numpy().astype(np.float64)
         w_arr = prep.df[prep.weight_col].to_numpy().astype(np.float64)

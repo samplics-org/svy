@@ -788,17 +788,20 @@ class Singleton:
 
     def skip(self) -> Sample:
         """
-        Remove all rows belonging to singleton strata.
+        Let singleton strata contribute nothing to the variance.
+
+        All rows stay in the estimator; only the variance contribution of each
+        one-PSU stratum is dropped. This is R's ``lonely.psu = "remove"``.
 
         Returns
         -------
         Sample
-            New sample with singleton rows removed.
+            New sample carrying the skip recipe.
 
         Warnings
         --------
-        This reduces sample size and may introduce bias. Consider using
-        `collapse()` or `pool()` instead.
+        The variance is understated by the singletons' share. Consider
+        `scale()`, `collapse()` or `pool()` instead.
         """
         singles = self.detected()
         if not singles:
