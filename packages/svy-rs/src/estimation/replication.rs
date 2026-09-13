@@ -546,7 +546,7 @@ pub fn matrix_mean_by_domain(
 
         sum_wy[d] += yi * wi;
         sum_w[d] += wi;
-        counts[d] += 1;
+        counts[d] += u32::from(full_weights[i] != 0.0);
 
         let base_idx = i * n_reps;
         for r in 0..n_reps {
@@ -599,7 +599,7 @@ pub fn matrix_mean_by_domain_cols(
         }
         sum_wy[d] += y[i] * full_weights[i];
         sum_w[d] += full_weights[i];
-        counts[d] += 1;
+        counts[d] += u32::from(full_weights[i] != 0.0);
     }
     let theta_full: Vec<f64> = sum_wy
         .iter()
@@ -654,7 +654,7 @@ pub fn matrix_total_by_domain_cols(
             continue;
         }
         sum_wy[d] += y[i] * full_weights[i];
-        counts[d] += 1;
+        counts[d] += u32::from(full_weights[i] != 0.0);
     }
 
     use rayon::prelude::*;
@@ -702,7 +702,7 @@ pub fn matrix_ratio_by_domain_cols(
         let w = full_weights[i];
         sum_wy[d] += y[i] * w;
         sum_wx[d] += x[i] * w;
-        counts[d] += 1;
+        counts[d] += u32::from(full_weights[i] != 0.0);
     }
     let theta_full: Vec<f64> = (0..n_domains)
         .map(|d| if sum_wx[d] > 0.0 { sum_wy[d] / sum_wx[d] } else { f64::NAN })
@@ -760,7 +760,7 @@ pub fn matrix_total_by_domain(
         let wi = full_weights[i];
 
         sum_wy[d] += yi * wi;
-        counts[d] += 1;
+        counts[d] += u32::from(full_weights[i] != 0.0);
 
         let base_idx = i * n_reps;
         for r in 0..n_reps {
@@ -802,7 +802,7 @@ pub fn matrix_ratio_by_domain(
 
         sum_wy[d] += yi * wi;
         sum_wx[d] += xi * wi;
-        counts[d] += 1;
+        counts[d] += u32::from(full_weights[i] != 0.0);
 
         let base_idx = i * n_reps;
         for r in 0..n_reps {
@@ -1112,7 +1112,7 @@ pub fn matrix_prop_by_domain(
 
         sum_w_level[d][lev_idx] += wi;
         sum_w_total[d] += wi;
-        counts[d] += 1;
+        counts[d] += u32::from(full_weights[i] != 0.0);
 
         let base_idx = i * n_reps;
         for r in 0..n_reps {
@@ -1278,7 +1278,7 @@ pub fn matrix_prop_by_domain_str(
 
         sum_w_level[d][lev_idx] += wi;
         sum_w_total[d] += wi;
-        counts[d] += 1;
+        counts[d] += u32::from(full_weights[i] != 0.0);
 
         let base_idx = i * n_reps;
         for r in 0..n_reps {
@@ -1440,7 +1440,7 @@ pub fn matrix_quantile_by_domain(
             continue;
         }
         domain_data[d].push((y[i], full_weights[i], i));
-        counts[d] += 1;
+        counts[d] += u32::from(full_weights[i] != 0.0);
     }
 
     // The domain's y values never change across replicates — hoist them out of

@@ -15,7 +15,7 @@ use crate::estimation::association::{
 };
 use crate::estimation::calib_sweep::{CalibSpec, CalibSweep, build_calib_sweep};
 use crate::estimation::taylor::{
-    SrsRef, SvyQuantileMethod, TaylorDesign, build_taylor_design, degrees_of_freedom,
+    SrsRef, SvyQuantileMethod, TaylorDesign, active_count, build_taylor_design, degrees_of_freedom,
     degrees_of_freedom_from_design, degrees_of_freedom_in_domain, point_estimate_mean,
     point_estimate_mean_domain, point_estimate_ratio, point_estimate_ratio_domain,
     point_estimate_total, point_estimate_total_domain, quantiles_woodruff, scores_mean,
@@ -312,7 +312,7 @@ fn compute_mean_ungrouped(
     )?;
 
     let se = variance.max(0.0).sqrt();
-    let n = y.len() as u32;
+    let n = active_count(weights, None);
     let deff = if srs_var > 0.0 {
         variance / srs_var
     } else {
@@ -378,7 +378,7 @@ fn compute_mean_multi(
             let scores_arr = scores_mean_arr(y, weights)?;
             let variance = taylor_variance_apply(&scores_arr, &design);
             let se = variance.max(0.0).sqrt();
-            let n = y.len() as u32;
+            let n = active_count(weights, None);
             let srs_var = srs_variance_mean(y, weights, srs)?;
             let deff = if srs_var > 0.0 {
                 variance / srs_var
@@ -457,7 +457,7 @@ fn compute_mean_grouped(
         .map(
             |&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
                 let domain_mask = by_str.equal(group);
-                let n_domain = domain_mask.sum().unwrap_or(0) as u32;
+                let n_domain = active_count(weights, Some(&domain_mask));
                 let estimate = point_estimate_mean_domain(y, weights, &domain_mask)?;
                 let scores = scores_mean_domain(y, weights, &domain_mask)?;
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
@@ -659,7 +659,7 @@ fn compute_total_ungrouped(
     )?;
 
     let se = variance.max(0.0).sqrt();
-    let n = y.len() as u32;
+    let n = active_count(weights, None);
     let deff = if srs_var > 0.0 {
         variance / srs_var
     } else {
@@ -715,7 +715,7 @@ fn compute_total_multi(
             let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
             let variance = taylor_variance_apply(&scores_arr, &design);
             let se = variance.max(0.0).sqrt();
-            let n = y.len() as u32;
+            let n = active_count(weights, None);
             let srs_var = srs_variance_total(y, weights, srs)?;
             let deff = if srs_var > 0.0 {
                 variance / srs_var
@@ -790,7 +790,7 @@ fn compute_total_grouped(
         .map(
             |&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
                 let domain_mask = by_str.equal(group);
-                let n_domain = domain_mask.sum().unwrap_or(0) as u32;
+                let n_domain = active_count(weights, Some(&domain_mask));
                 let estimate = point_estimate_total_domain(y, weights, &domain_mask)?;
                 let scores = scores_total_domain(y, weights, &domain_mask)?;
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
@@ -1000,7 +1000,7 @@ fn compute_ratio_ungrouped(
     )?;
 
     let se = variance.max(0.0).sqrt();
-    let n = y.len() as u32;
+    let n = active_count(weights, None);
     let deff = if srs_var > 0.0 {
         variance / srs_var
     } else {
@@ -1063,7 +1063,7 @@ fn compute_ratio_multi(
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
                 let variance = taylor_variance_apply(&scores_arr, &design);
                 let se = variance.max(0.0).sqrt();
-                let n = y.len() as u32;
+                let n = active_count(weights, None);
                 let srs_var = srs_variance_ratio(y, x, weights, srs)?;
                 let deff = if srs_var > 0.0 {
                     variance / srs_var
@@ -1151,7 +1151,7 @@ fn compute_ratio_grouped(
         .map(
             |&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
                 let domain_mask = by_str.equal(group);
-                let n_domain = domain_mask.sum().unwrap_or(0) as u32;
+                let n_domain = active_count(weights, Some(&domain_mask));
                 let estimate = point_estimate_ratio_domain(y, x, weights, &domain_mask)?;
                 let scores = scores_ratio_domain(y, x, weights, &domain_mask)?;
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
@@ -1352,10 +1352,7 @@ fn compute_assoc(
                 } else {
                     f64::NAN
                 };
-                let n = match mask.as_ref() {
-                    Some(m) => m.sum().unwrap_or(0),
-                    None => y.len() as u32,
-                };
+                let n = active_count(weights, mask.as_ref());
                 Ok((gi, pi, estimate, se, variance, n, deff))
             },
         )
@@ -1557,7 +1554,7 @@ fn compute_prop_ungrouped(
     let mut ns: Vec<u32> = Vec::new();
     let mut deffs: Vec<f64> = Vec::new();
     let mut score_cols: Vec<Vec<f64>> = Vec::new();
-    let n = weights.len() as u32;
+    let n = active_count(weights, None);
     // Design is identical across levels; index it once — and take the df off its
     // codes rather than densifying the same columns a second time.
     let design =
@@ -1629,7 +1626,7 @@ fn compute_prop_multi(
         .map(|c| df.column(c).and_then(|s| s.f64()))
         .transpose()?;
 
-    let n = weights.len() as u32;
+    let n = active_count(weights, None);
     // Design indexed once; df taken off its codes (see `compute_mean_multi`).
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let df_val = degrees_of_freedom_from_design(weights, &design, None);
@@ -1782,7 +1779,7 @@ fn compute_prop_grouped(
         .par_iter()
         .map(|&group| -> PolarsResult<Vec<PropRow>> {
             let domain_mask = by_str.equal(group);
-            let n_domain = domain_mask.sum().unwrap_or(0) as u32;
+            let n_domain = active_count(weights, Some(&domain_mask));
             let mut out: Vec<PropRow> = Vec::with_capacity(levels.len());
             for lvl in &levels {
                 let indicator: Vec<Option<f64>> = value_str
@@ -2207,7 +2204,7 @@ fn compute_quantile_ungrouped(
 
     let rows = quantiles_woodruff(y, cols.weights, None, &cols.design, probs, q_method)?;
     let df_val = degrees_of_freedom(cols.weights, cols.strata, cols.psu)?;
-    let n = y.len() as u32;
+    let n = active_count(cols.weights, None);
     let k = rows.len();
 
     let (estimates, ses, variances) = unzip_woodruff(rows);
@@ -2265,7 +2262,7 @@ fn compute_quantile_multi(
     let mut flat: Vec<(f64, f64, f64)> = Vec::with_capacity(n_rows);
     for (i, rows) in per_var.into_iter().enumerate() {
         ys.extend(std::iter::repeat_n(value_cols[i].clone(), k));
-        ns.extend(std::iter::repeat_n(y_cols[i].len() as u32, k));
+        ns.extend(std::iter::repeat_n(active_count(cols.weights, None), k));
         flat.extend(rows);
     }
 
@@ -2317,7 +2314,7 @@ fn compute_quantile_grouped(
     for group_val in unique_groups.iter() {
         if let Some(group) = group_val {
             let domain_mask = by_str.equal(group);
-            let n_domain = domain_mask.sum().unwrap_or(0) as u32;
+            let n_domain = active_count(cols.weights, Some(&domain_mask));
             let rows = quantiles_woodruff(
                 y,
                 cols.weights,

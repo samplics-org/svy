@@ -39,6 +39,8 @@ class WarnCode(StrEnum):
     JACKKNIFE_KIND_UNSPECIFIED = "JACKKNIFE_KIND_UNSPECIFIED"
     JACKKNIFE_COEFS_UNAVAILABLE = "JACKKNIFE_COEFS_UNAVAILABLE"
     TAYLOR_WITHOUT_DESIGN = "TAYLOR_WITHOUT_DESIGN"
+    # ── Estimation ─────────────────────────────────────────────────────
+    PROP_CI_BOUNDARY = "PROP_CI_BOUNDARY"  # CI undefined at an estimated proportion of 0 or 1
     # ── Weighting (generic — shared across trim, rake, calibrate, …) ──
     REPLICATE_SKIPPED = "REPLICATE_SKIPPED"  # rep weights present but not adjusted
     DOMAIN_SKIPPED = "DOMAIN_SKIPPED"  # domain skipped (e.g. below min_cell_size)

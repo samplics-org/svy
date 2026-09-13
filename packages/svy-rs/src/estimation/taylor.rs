@@ -1865,7 +1865,7 @@ pub fn degrees_of_freedom(
 
 /// Design df restricted to a domain.
 ///
-/// `domain` is an optional per-row membership mask, ANDed into the positive-weight
+/// `domain` is an optional per-row membership mask, ANDed into the nonzero-weight
 /// mask. `where=` filters reach this function as zero weights and so need no mask,
 /// but a by-group is only known as a mask — without it every group would report the
 /// df of the surrounding analysis mask instead of its own.
@@ -1880,7 +1880,7 @@ pub fn degrees_of_freedom_in_domain(
         return Ok(0);
     }
 
-    // Build mask of active (positive weight, in-domain) observations.
+    // Build mask of active (nonzero weight, in-domain) observations.
     // This ensures domain estimation (where non-domain obs have w=0, or are
     // excluded by `domain`) gives the correct df, matching R's degf() on
     // subsetted designs.
@@ -1933,19 +1933,39 @@ pub fn degrees_of_freedom_from_design(
     )
 }
 
-/// Mask of active (positive weight, in-domain) observations. Shared so the
+/// A row carries population weight when its weight is nonzero. Zero-weight rows
+/// (out-of-domain rows under `where=`, nonrespondents left on file) represent no
+/// population units; negative calibrated weights do.
+#[inline]
+fn is_active(w: Option<f64>) -> bool {
+    w.is_some_and(|v| v != 0.0 && !v.is_nan())
+}
+
+/// Mask of active (nonzero weight, in-domain) observations. Shared so the
 /// column-driven and design-driven df entry points cannot drift apart.
 fn active_mask(weights: &Float64Chunked, domain: Option<&BooleanChunked>) -> Vec<bool> {
     match domain {
-        None => weights
-            .iter()
-            .map(|w| w.map_or(false, |v| v > 0.0))
-            .collect(),
+        None => weights.iter().map(is_active).collect(),
         Some(mask) => weights
             .iter()
             .zip(mask.iter())
-            .map(|(w, d)| w.map_or(false, |v| v > 0.0) && d.unwrap_or(false))
+            .map(|(w, d)| is_active(w) && d.unwrap_or(false))
             .collect(),
+    }
+}
+
+/// Domain respondent count: rows with a nonzero weight, within `domain` when
+/// given. This is the `n` the proportion CIs read (Korn–Graubard's sample size).
+/// `where=` reaches the kernels as zeroed weights, so a row count would include
+/// every out-of-domain row.
+pub fn active_count(weights: &Float64Chunked, domain: Option<&BooleanChunked>) -> u32 {
+    match domain {
+        None => weights.iter().filter(|w| is_active(*w)).count() as u32,
+        Some(mask) => weights
+            .iter()
+            .zip(mask.iter())
+            .filter(|(w, d)| is_active(*w) && d.unwrap_or(false))
+            .count() as u32,
     }
 }
 
@@ -2722,6 +2742,38 @@ mod tests {
     /// Build an integer design code column (Phase C fast path).
     fn icol(name: PlSmallStr, vals: &[i64]) -> Column {
         Column::from(Int64Chunked::from_slice(name, vals).into_series())
+    }
+
+    #[test]
+    fn test_active_count_is_nonzero_weight_rows() {
+        let w = Float64Chunked::from_slice_options(
+            "w".into(),
+            &[
+                Some(1.0),
+                Some(0.0),
+                Some(-2.0),
+                None,
+                Some(f64::NAN),
+                Some(3.0),
+            ],
+        );
+        assert_eq!(active_count(&w, None), 3);
+        let dom = BooleanChunked::from_slice("d".into(), &[true, true, true, true, true, false]);
+        assert_eq!(active_count(&w, Some(&dom)), 2);
+    }
+
+    #[test]
+    fn test_df_counts_psus_with_negative_weights() {
+        // PSU "2" in stratum A has only a negative weight; it still represents
+        // population units, so it counts toward df. PSU "2" in B is all zero.
+        let strata = scol("s".into(), &["A", "A", "B", "B", "B"]);
+        let psu = scol("p".into(), &["1", "2", "1", "2", "3"]);
+        let w = Float64Chunked::from_slice("w".into(), &[1.0, -0.5, 2.0, 0.0, 1.0]);
+        // Active PSUs: A{1,2}, B{1,3} = 4; strata 2; df = 2.
+        assert_eq!(
+            degrees_of_freedom(&w, Some(&strata), Some(&psu)).unwrap(),
+            2
+        );
     }
 
     /// Phase C: integer design codes must produce bit-identical variance and df

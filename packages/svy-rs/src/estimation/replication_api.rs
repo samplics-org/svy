@@ -8,7 +8,7 @@ use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 
-use crate::estimation::taylor::SvyQuantileMethod;
+use crate::estimation::taylor::{SvyQuantileMethod, active_count};
 use crate::estimation::association::{
     AssocKind, PairProducts, replicate_association,
 };
@@ -155,7 +155,7 @@ fn compute_replicate_mean_ungrouped(
     let se = variance.sqrt();
 
     df!["y" => vec![value_col], "est" => vec![theta_full], "se" => vec![se],
-        "var" => vec![variance], "df" => vec![df_val], "n" => vec![n as u32]]
+        "var" => vec![variance], "df" => vec![df_val], "n" => vec![active_count(weights, None)]]
 }
 
 fn compute_replicate_mean_grouped(
@@ -282,7 +282,7 @@ fn compute_replicate_total_ungrouped(
     let se = variance.sqrt();
 
     df!["y" => vec![value_col], "est" => vec![theta_full], "se" => vec![se],
-        "var" => vec![variance], "df" => vec![df_val], "n" => vec![n as u32]]
+        "var" => vec![variance], "df" => vec![df_val], "n" => vec![active_count(weights, None)]]
 }
 
 fn compute_replicate_total_grouped(
@@ -421,7 +421,6 @@ fn compute_replicate_assoc(
     domain_mask_col: Option<&str>,
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
-    let n = weights.len();
 
     let ys: Vec<&Float64Chunked> = y_cols
         .iter()
@@ -495,8 +494,8 @@ fn compute_replicate_assoc(
             let variance =
                 variance_from_replicates(theta_full, &theta_reps, &rep_coefs, center);
             let n_rows = match mask {
-                Some(m) => m.iter().filter(|v| **v != 0.0).count() as u32,
-                None => n as u32,
+                Some(m) => m.iter().zip(&w_full).filter(|(d, w)| **d != 0.0 && **w != 0.0).count() as u32,
+                None => active_count(weights, None),
             };
             Ok((gi, pi, theta_full, variance.sqrt(), variance, n_rows))
         })
@@ -613,7 +612,7 @@ fn compute_replicate_ratio_ungrouped(
     let se = variance.sqrt();
 
     df!["y" => vec![numerator_col], "x" => vec![denominator_col], "est" => vec![theta_full],
-        "se" => vec![se], "var" => vec![variance], "df" => vec![df_val], "n" => vec![n as u32]]
+        "se" => vec![se], "var" => vec![variance], "df" => vec![df_val], "n" => vec![active_count(weights, None)]]
 }
 
 fn compute_replicate_ratio_grouped(
@@ -787,7 +786,7 @@ fn compute_replicate_prop_ungrouped(
         &estimates, &theta_reps, &rep_coefs, center,
     ));
     let ses: Vec<f64> = variances.iter().map(|v| v.sqrt()).collect();
-    let ns:  Vec<u32> = vec![n as u32; n_levels];
+    let ns:  Vec<u32> = vec![active_count(weights, None); n_levels];
     let dfs: Vec<u32> = vec![df_val; n_levels];
     let out = df!["y" => vec![value_col; n_levels], "level" => level_strs, "est" => estimates,
         "se" => ses, "var" => variances, "df" => dfs, "n" => ns]?;
@@ -982,7 +981,7 @@ fn compute_replicate_quantile_ungrouped(
     let k = probs.len();
 
     df!["y" => vec![value_col; k], "prob" => probs.to_vec(), "est" => theta_full,
-        "se" => ses, "var" => variances, "df" => vec![df_val; k], "n" => vec![n as u32; k]]
+        "se" => ses, "var" => variances, "df" => vec![df_val; k], "n" => vec![active_count(weights, None); k]]
 }
 
 fn compute_replicate_quantile_grouped(
