@@ -11,7 +11,7 @@ import polars as pl
 import svy_rs as rs
 
 from svy.core.constants import _BY_SEP, _INTERNAL_CONCAT_SUFFIX
-from svy.core.data_prep import prepare_data
+from svy.core.data_prep import PreparedData, prepare_data
 from svy.core.enumerations import PopParam
 from svy.core.enumerations import QuantileMethod as _QuantileMethod
 from svy.core.repwgts import RepWgts
@@ -380,37 +380,85 @@ class Estimation:
                 return "center"
         return None
 
-    def _singleton_scale_factor(self) -> float | None:
-        """Variance inflation ``1/(1-f)`` under ``singleton.scale()``, else ``None``.
-
-        R's ``lonely.psu="average"`` drops the singleton strata's contributions
-        and multiplies the summed variance matrix by ``nstrat/nokstrat``. The
-        factor applies to the influence-function variance of every statistic,
-        so it is the same for totals, means, ratios, proportions and the
-        probability-scale variance behind Woodruff quantiles.
-        """
+    def _scale_singletons_active(self) -> bool:
+        """``True`` when the sample was marked with ``singleton.scale()``."""
         config = self._get_polars_design_info().get("singleton_config")
-        if not config or self._get_enum_value(config, "method").lower() != "scale":
-            return None
-        f = config.singleton_fraction
-        if f is None or f <= 0.0 or f >= 1.0:
-            return None
-        return 1.0 / (1.0 - f)
+        return bool(config) and self._get_enum_value(config, "method").lower() == "scale"
+
+    def _singleton_scale_factors(
+        self, result_df: pl.DataFrame, prep: PreparedData | None
+    ) -> np.ndarray:
+        """Per-row variance inflation ``nstrat/nokstrat`` under ``singleton.scale()``.
+
+        R's ``lonely.psu="average"`` (``survey:::onestage``) drops the singleton
+        strata's contributions and multiplies the summed variance matrix by
+        ``nstrat/nokstrat``, both counted over the strata present in the rows
+        being estimated. ``subset()`` and ``svyby()`` drop rows, so a domain that
+        misses whole strata gets its own fraction: the singleton strata it holds
+        over the strata it holds. Here a stratum is present when one of its rows
+        carries a nonzero weight, which is how ``where=`` and missing values
+        reach the kernel; ``by=`` levels are matched through the result frame's
+        by column. A domain resting only on singleton strata has no reference
+        variance and gets ``NaN``, as in R. The factor applies to the
+        influence-function variance of every statistic, so it is the same for
+        totals, means, ratios, proportions and the probability-scale variance
+        behind Woodruff quantiles.
+        """
+        config = self._get_polars_design_info()["singleton_config"]
+        k = result_df.height
+        excl = config.var_exclude_col
+
+        def factor(nstrat: int, nlonely: int) -> float:
+            return nstrat / (nstrat - nlonely) if nstrat > nlonely else float("nan")
+
+        if prep is None or prep.strata_col is None or excl not in prep.df.columns:
+            f = config.singleton_fraction or 0.0
+            return np.full(k, 1.0 / (1.0 - f) if f < 1.0 else float("nan"))
+
+        strata = pl.col(prep.strata_col)
+        dom = prep.df.filter(pl.col(prep.weight_col) > 0)
+        n_expr = strata.n_unique().alias("nstrat")
+        k_expr = strata.filter(pl.col(excl)).n_unique().alias("nlonely")
+
+        by_col = prep.by_col
+        if by_col is None or by_col not in result_df.columns:
+            return np.full(k, factor(*dom.select(n_expr, k_expr).row(0)))
+
+        counts = dom.group_by(pl.col(by_col).cast(pl.Utf8)).agg(n_expr, k_expr)
+        lookup = {lvl: factor(n, m) for lvl, n, m in counts.iter_rows()}
+        levels = result_df[by_col].cast(pl.Utf8).to_list()
+        return np.array([lookup.get(lvl, float("nan")) for lvl in levels], dtype=float)
 
     def _apply_scale_adjustment(
-        self, result_df: pl.DataFrame, cov_flat: list[float] | None = None
+        self,
+        result_df: pl.DataFrame,
+        cov_flat: list[float] | None = None,
+        *,
+        prep: PreparedData | None = None,
     ) -> tuple[pl.DataFrame, list[float] | None]:
-        factor = self._singleton_scale_factor()
-        if factor is None:
+        """Inflate ``var``/``se``/``deff`` and ``cov_flat`` under ``singleton.scale()``.
+
+        Each result row gets the factor of the domain it describes; the
+        covariance between rows ``i`` and ``j`` is scaled by ``sqrt(f_i f_j)``
+        so the matrix stays consistent with the inflated diagonal.
+        """
+        if not self._scale_singletons_active():
             return result_df, cov_flat
+        f = self._singleton_scale_factors(result_df, prep)
+        root = np.sqrt(f)
         cols = [
-            (pl.col("var") * factor).alias("var"),
-            (pl.col("se") * math.sqrt(factor)).alias("se"),
+            pl.Series("var", result_df["var"].to_numpy() * f),
+            pl.Series("se", result_df["se"].to_numpy() * root),
         ]
         if "deff" in result_df.columns:
-            cols.append((pl.col("deff") * factor).alias("deff"))
+            cols.append(pl.Series("deff", result_df["deff"].to_numpy() * f))
         if cov_flat is not None:
-            cov_flat = [c * factor for c in cov_flat]
+            if np.all(f == f[0]) or np.all(np.isnan(f)):
+                cov_flat = [c * f[0] for c in cov_flat]
+            elif len(cov_flat) == len(f) ** 2:
+                cov_flat = [c * s for c, s in zip(cov_flat, np.outer(root, root).ravel())]
+            else:
+                raise ValueError("cov_flat is not a k×k matrix over the result rows")
         return result_df.with_columns(cols), cov_flat
 
     @staticmethod
@@ -1438,7 +1486,7 @@ class Estimation:
             and by is None
             and not as_factor
             and not drop_nulls
-            and self._singleton_scale_factor() is None
+            and not self._scale_singletons_active()
         )
         if not batched:
             return EstimateList(single_call(it) for it in items)

@@ -75,7 +75,8 @@ class SingletonHandlingConfig(msgspec.Struct, frozen=True):
     # For SCALE/CENTER: None (post-hoc adjustment)
     stratum_mapping: dict[str, str] | None = None
 
-    # For SCALE: the singleton fraction for variance inflation
+    # For SCALE: design-level singleton fraction (reporting only; the estimator
+    # recounts it over the strata present in each estimate)
     singleton_fraction: float | None = None
 
     # For CENTER: grand mean values (computed at estimation time)
@@ -983,10 +984,16 @@ class Singleton:
         -----
         Point estimates use the full sample. Variances are computed with the
         singleton strata's contributions dropped, then multiplied by
-        ``1 / (1 - f)`` where ``f = n_singletons / n_strata`` — e.g. with 20%
-        singleton strata the variance is multiplied by ``1/0.8 = 1.25``. The
-        factor is the same for every Taylor estimator (totals, means, ratios,
-        proportions, quantiles, correlations) and applies to the whole
+        ``n_strata / n_ok_strata``, i.e. ``1 / (1 - f)`` with
+        ``f = n_singletons / n_strata`` — e.g. with 20% singleton strata the
+        variance is multiplied by ``1/0.8 = 1.25``. Both counts are taken over
+        the strata that hold the rows being estimated, as R does after
+        ``subset()`` and inside ``svyby()``: a ``by=`` level or ``where=``
+        domain that leaves whole strata out gets its own fraction, a domain
+        with no singleton stratum is not inflated, and a domain lying entirely
+        in singleton strata has no reference variance and reports ``NaN``.
+        The factor is the same for every Taylor estimator (totals, means,
+        ratios, proportions, quantiles, correlations) and applies to the whole
         covariance matrix and to the design effect, as in R.
 
         This assumes singleton strata would have contributed "average"
@@ -1706,8 +1713,10 @@ class Singleton:
         """
         Apply scale handling.
 
-        Uses the same exclusion logic as skip(), but stores singleton_fraction
-        for the estimation engine to scale the final variance by 1/(1 - f).
+        Uses the same exclusion logic as skip(), and marks the sample so the
+        estimation engine scales each variance by nstrat/nokstrat, counted over
+        the strata present in that estimate. ``singleton_fraction`` records the
+        design-level fraction for reporting.
 
         This creates internal columns for variance calculation without
         modifying the original data or design columns.

@@ -1,4 +1,6 @@
 # tests/svy/core/test_singleton_adjustments.py
+import math
+
 from pathlib import Path
 
 import polars as pl
@@ -264,6 +266,67 @@ def test_verify_scale_unequal_weights():
     cov = est.cov(("y", "x")).estimates[0]
     assert cov.est == pytest.approx(0.100632804, abs=1e-9)
     assert cov.se == pytest.approx(0.2965718978, abs=1e-9)
+
+
+def test_verify_scale_domain_fraction():
+    """R lonely.psu="average" counts nstrat/nokstrat over the strata in the estimate.
+
+    Strata A-E hold 3, 2, 1, 1, 2 PSUs. ``g == 1`` lives in A-C (3 strata, 1
+    lonely: 3/2), ``g == 2`` in D-E (2 strata, 1 lonely: 2/1), ``h == 1`` only
+    in D, and ``b`` touches every PSU (the design fraction 5/3).
+
+    options(survey.lonely.psu = "average")
+    d <- svydesign(ids = ~psu, strata = ~stratum, weights = ~wgt, nest = TRUE, data = df)
+    svymean(~y, d, deff = TRUE); svymean(~y, subset(d, g == 1), deff = TRUE)
+    svyby(~y, ~g, d, svymean); svyby(~y, ~g, d, svytotal); svyby(~y, ~b, d, svymean)
+    svyratio(~y, ~x, subset(d, g == 2)); svymean(~factor(b), subset(d, g == 1))
+    svyvar(~y + x, subset(d, g == 1)); svymean(~y, subset(d, h == 1))
+    """
+    data = pl.read_csv(DATA_DIR / "singleton_scale_domain_13092026.csv")
+    sample = svy.Sample(data, svy.Design(stratum="stratum", psu="psu", wgt="wgt"))
+    est = sample.singleton.scale().estimation
+    g1 = svy.col("g") == 1
+
+    full = est.mean("y", deff="wor").estimates[0]
+    assert full.se == pytest.approx(0.448784342569, abs=1e-9)
+    assert full.deff == pytest.approx(2.74589125265, abs=1e-8)
+
+    where = est.mean("y", where=g1, deff="wor").estimates[0]
+    assert where.est == pytest.approx(10.2818260901, abs=1e-9)
+    assert where.se == pytest.approx(0.517058811743, abs=1e-9)
+    assert where.deff == pytest.approx(3.09651284751, abs=1e-8)
+
+    by_g = {e.by_level: e.se for e in est.mean("y", by="g").estimates}
+    assert [by_g[("1",)], by_g[("2",)]] == pytest.approx(
+        [0.517058811743, 0.947944278639], abs=1e-9
+    )
+    tot_g = {e.by_level: e.se for e in est.total("y", by="g").estimates}
+    assert [tot_g[("1",)], tot_g[("2",)]] == pytest.approx(
+        [30.7462372913, 9.47066169944], abs=1e-8
+    )
+    by_b = {e.by_level: e.se for e in est.mean("y", by="b").estimates}
+    assert [by_b[("0",)], by_b[("1",)]] == pytest.approx(
+        [0.431358491831, 0.524469647606], abs=1e-9
+    )
+
+    ratio = est.ratio("y", "x", where=svy.col("g") == 2).estimates[0]
+    assert ratio.se == pytest.approx(0.667460675129, abs=1e-9)
+
+    prop = est.prop("b", where=g1)
+    assert [e.se for e in prop.estimates] == pytest.approx([0.0276313547124] * 2, abs=1e-9)
+    assert prop.covariance[0, 1] == pytest.approx(-0.00076349176324, abs=1e-9)
+
+    cov = est.cov(("y", "x"), where=g1).estimates[0]
+    assert cov.est == pytest.approx(-0.711043927838, abs=1e-9)
+    assert cov.se == pytest.approx(0.0663444415875, abs=1e-9)
+
+    # Every stratum in the domain is lonely: no reference variance, NaN as in R.
+    assert math.isnan(est.mean("y", where=svy.col("h") == 1).estimates[0].se)
+
+    # The per-domain factor reaches the Woodruff quantile variance too:
+    # svyquantile(~y, subset(d, g == 1), 0.5, qrule = "math", ci = TRUE)
+    med = {e.by_level: e.se for e in est.median("y", by="g").estimates}
+    assert [med[("1",)], med[("2",)]] == pytest.approx([0.830995952896, 0.304437877424], abs=1e-9)
 
 
 def test_verify_skip_unequal_weights():
