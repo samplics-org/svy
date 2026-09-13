@@ -322,7 +322,6 @@ def prepare_data(
     drop_nulls: bool,
     cast_y_float: bool,
     select_columns: bool,
-    apply_singleton_filter: bool,
     domain_mask_for_replication: bool = False,
 ) -> PreparedData:
     """
@@ -352,8 +351,6 @@ def prepare_data(
         If True, cast y to Float64. Set False for categorical y (tabulate). Required — must be explicit.
     select_columns : bool
         If True, select only needed columns for efficiency. Required — must be explicit.
-    apply_singleton_filter : bool
-        If True, apply singleton stratum exclusion filter. Required — must be explicit.
 
     Returns
     -------
@@ -525,17 +522,6 @@ def prepare_data(
     # ── Column selection (optional optimization) ─────────────────────────
     if select_columns:
         local_data = local_data.select(needed)
-
-    # ── Singleton filter ─────────────────────────────────────────────────
-    # scale() keeps the rows: R's "average" keeps the full-sample estimator and
-    # only drops the singleton strata's variance contributions, which the
-    # kernel already does for a one-PSU stratum.
-    _is_scale = _sc_pre is not None and getattr(_sc_pre.method, "value", None) == "scale"
-    if apply_singleton_filter and not _is_scale:
-        from svy.core.singleton import _VAR_EXCLUDE_COL
-
-        if _VAR_EXCLUDE_COL in local_data.columns:
-            local_data = local_data.filter(~pl.col(_VAR_EXCLUDE_COL))
 
     # ── Concatenated design columns ──────────────────────────────────────
     # When Phase C codes are active, skip the stratum/psu/ssu string concats

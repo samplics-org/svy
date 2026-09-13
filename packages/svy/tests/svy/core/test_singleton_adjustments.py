@@ -264,3 +264,53 @@ def test_verify_scale_unequal_weights():
     cov = est.cov(("y", "x")).estimates[0]
     assert cov.est == pytest.approx(0.100632804, abs=1e-9)
     assert cov.se == pytest.approx(0.2965718978, abs=1e-9)
+
+
+def test_verify_skip_unequal_weights():
+    """R lonely.psu="remove" golden values on the same design as the scale test.
+
+    options(survey.lonely.psu = "remove")
+    d <- svydesign(ids = ~psu, strata = ~stratum, weights = ~wgt, nest = TRUE, data = df)
+    svymean(~y, d, deff = TRUE); svytotal(~y, d, deff = TRUE); svyratio(~y, ~x, d)
+    svymean(~factor(b), d); svyby(~y, ~g, d, svymean); svyby(~y, ~g, d, svytotal)
+    svymean(~y, subset(d, g == 1)); svyvar(~y + x, d)
+    """
+    data = pl.read_csv(DATA_DIR / "singleton_scale_13092026.csv")
+    sample = svy.Sample(data, svy.Design(stratum="stratum", psu="psu", wgt="wgt"))
+    est = sample.singleton.skip().estimation
+
+    # Every row stays in the estimator: the point estimates are the full-sample ones.
+    mean = est.mean("y", deff="wor").estimates[0]
+    assert mean.est == pytest.approx(10.277203998815, abs=1e-9)
+    assert mean.se == pytest.approx(0.252522969382, abs=1e-9)
+    assert mean.deff == pytest.approx(2.107514676615, abs=1e-8)
+    assert mean.df == 6
+
+    total = est.total("y", deff="wor").estimates[0]
+    assert total.est == pytest.approx(1027.27617896321, abs=1e-8)
+    assert total.se == pytest.approx(27.6594687312, abs=1e-7)
+    assert total.deff == pytest.approx(2.53064962591, abs=1e-8)
+
+    ratio = est.ratio("y", "x").estimates[0]
+    assert ratio.est == pytest.approx(4.66767035847, abs=1e-9)
+    assert ratio.se == pytest.approx(0.287926440246, abs=1e-9)
+
+    prop = est.prop("b")
+    assert [e.se for e in prop.estimates] == pytest.approx([0.0666614755669] * 2, abs=1e-9)
+    assert prop.covariance[0, 1] == pytest.approx(-0.00444375232475, abs=1e-9)
+
+    by_g = {e.by_level: e.se for e in est.mean("y", by="g").estimates}
+    assert [by_g[("1",)], by_g[("2",)]] == pytest.approx(
+        [0.360364071215, 0.368320920686], abs=1e-9
+    )
+    tot_g = {e.by_level: e.se for e in est.total("y", by="g").estimates}
+    assert [tot_g[("1",)], tot_g[("2",)]] == pytest.approx(
+        [42.3436857741, 36.8552241148], abs=1e-7
+    )
+
+    where = est.mean("y", where=svy.col("g") == 1).estimates[0]
+    assert where.se == pytest.approx(0.360364071215, abs=1e-9)
+
+    cov = est.cov(("y", "x")).estimates[0]
+    assert cov.est == pytest.approx(0.100632803999, abs=1e-9)
+    assert cov.se == pytest.approx(0.256838797506, abs=1e-9)
