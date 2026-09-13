@@ -966,8 +966,8 @@ class Singleton:
         """
         Mark for variance scaling by singleton fraction.
 
-        This method excludes singleton strata from variance calculation (like skip),
-        then the estimation engine inflates the computed variance by 1/(1 - singleton_frac).
+        Singleton strata contribute nothing to the variance, and the variance is
+        inflated by 1/(1 - singleton_frac). All rows stay in the estimator.
 
         This is equivalent to R's `lonely.psu = "average"` option.
 
@@ -978,20 +978,15 @@ class Singleton:
 
         Notes
         -----
-        Singleton strata are excluded from the base variance calculation,
-        then the estimator-specific scaling matching R's
-        ``lonely.psu = "average"`` is applied (R-validated):
+        Point estimates use the full sample. Variances are computed with the
+        singleton strata's contributions dropped, then multiplied by
+        ``1 / (1 - f)`` where ``f = n_singletons / n_strata`` — e.g. with 20%
+        singleton strata the variance is multiplied by ``1/0.8 = 1.25``. The
+        factor is the same for every Taylor estimator (totals, means, ratios,
+        proportions, quantiles, correlations) and applies to the whole
+        covariance matrix and to the design effect, as in R.
 
-        - TOTAL: the variance is multiplied by ``1 / (1 - f)`` where
-          ``f = n_singletons / n_strata`` — e.g. with 20% singleton strata,
-          base variance on the other 80% is multiplied by ``1/0.8 = 1.25``.
-        - MEAN / PROP / RATIO: these are ratios of totals, whose linearized
-          variance already reflects the reduced stratum set; the adjustment
-          enters through the ``(1 - f)`` factor in the combined
-          linearization rather than a plain multiplication of the final
-          variance.
-
-        Both paths assume singleton strata would have contributed "average"
+        This assumes singleton strata would have contributed "average"
         variance had they held multiple PSUs.
 
         Examples

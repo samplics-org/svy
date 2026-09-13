@@ -8,7 +8,7 @@ import svy_rs as ps
 import svy
 
 from svy.core.constants import SVY_ROW_INDEX
-from svy.core.enumerations import PopParam, SingletonHandling
+from svy.core.enumerations import SingletonHandling
 from svy.core.singleton import _VAR_EXCLUDE_COL
 
 
@@ -59,22 +59,17 @@ def test_scale_excludes_singletons_from_data(adjustment_sample):
     assert not df.filter(pl.col("stratum") == "B").get_column(_VAR_EXCLUDE_COL).any()
 
 
-def test_scale_inflation_logic_explicit_params(adjustment_sample):
-    """Test both Total (inflation) and Mean (deflation) logic."""
-    sample = adjustment_sample.singleton.scale()
-    est = sample.estimation
-    # Ensure cache is populated
-    _ = est._get_polars_design_info()
+def test_scale_inflation_is_uniform(adjustment_sample):
+    """R's "average" multiplies the whole variance matrix by 1/(1-f), whatever the statistic."""
+    est = adjustment_sample.singleton.scale().estimation
 
-    mock_result = pl.DataFrame({"est": [50.0], "var": [100.0], "se": [10.0]})
+    mock_result = pl.DataFrame({"est": [50.0], "var": [100.0], "se": [10.0], "deff": [1.5]})
+    res, cov = est._apply_scale_adjustment(mock_result, [100.0, -40.0, -40.0, 100.0])
 
-    # 1. TOTAL: Expect Inflation (Factor = 1/(1-0.5) = 2.0)
-    res_total = est._adjust_variance_for_singletons(mock_result, param=PopParam.TOTAL)
-    assert res_total["var"][0] == pytest.approx(200.0)  # 100 * 2.0
-
-    # 2. MEAN: Expect Deflation (Factor = 1-0.5 = 0.5)
-    res_mean = est._adjust_variance_for_singletons(mock_result, param=PopParam.MEAN)
-    assert res_mean["var"][0] == pytest.approx(50.0)  # 100 * 0.5
+    assert res["var"][0] == pytest.approx(200.0)
+    assert res["se"][0] == pytest.approx(200.0**0.5)
+    assert res["deff"][0] == pytest.approx(3.0)
+    assert cov == pytest.approx([200.0, -80.0, -80.0, 200.0])
 
 
 def test_scale_estimation_flow_integration(adjustment_sample, monkeypatch):
@@ -102,11 +97,9 @@ def test_scale_estimation_flow_integration(adjustment_sample, monkeypatch):
 
     result = sample.estimation.mean("income")
 
-    # Logic for Mean: Factor = (1 - 0.5) = 0.5
-    # Original Mock Variance = 1.0
-    # Expected Adjusted Variance = 0.5
+    # f = 0.5, so the kernel variance of 1.0 is inflated by 1/(1-f) = 2.
     est_var = result.estimates[0].se ** 2
-    assert est_var == pytest.approx(0.5)
+    assert est_var == pytest.approx(2.0)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -228,3 +221,46 @@ def test_verify_singleton_methods():
     assert est_center.est == pytest.approx(R_EXPECTED["MEAN"], abs=1e-6)
     assert est_center.se == pytest.approx(R_EXPECTED["CENTER_SE"], abs=1e-6)
     assert est_center.df == pytest.approx(R_EXPECTED["DF"], abs=1e-6)
+
+
+def test_verify_scale_unequal_weights():
+    """R lonely.psu="average" golden values where the singleton weight share differs from f.
+
+    options(survey.lonely.psu = "average")
+    d <- svydesign(ids = ~psu, strata = ~stratum, weights = ~wgt, nest = TRUE, data = df)
+    svymean(~y, d, deff = TRUE); svytotal(~y, d, deff = TRUE); svyratio(~y, ~x, d)
+    svymean(~factor(b), d); svyby(~y, ~g, d, svymean); svyby(~y, ~g, d, svytotal)
+    svymean(~y, subset(d, g == 1)); svyvar(~y + x, d)
+    """
+    # Strata A-D hold 3, 2, 1, 4 PSUs (f = 1/4); x stays integer on purpose.
+    data = pl.read_csv(DATA_DIR / "singleton_scale_13092026.csv")
+    sample = svy.Sample(data, svy.Design(stratum="stratum", psu="psu", wgt="wgt"))
+    est = sample.singleton.scale().estimation
+
+    mean = est.mean("y", deff="wor").estimates[0]
+    assert mean.est == pytest.approx(10.277204, abs=1e-6)
+    assert mean.se == pytest.approx(0.2915884087, abs=1e-9)
+    assert mean.deff == pytest.approx(2.810019569, abs=1e-8)
+    assert mean.df == 6
+
+    total = est.total("y", deff="wor").estimates[0]
+    assert total.se == pytest.approx(31.93840344, abs=1e-7)
+    assert total.deff == pytest.approx(3.374199501, abs=1e-8)
+
+    assert est.ratio("y", "x").estimates[0].se == pytest.approx(0.3324688156, abs=1e-9)
+
+    prop = est.prop("b")
+    assert [e.se for e in prop.estimates] == pytest.approx([0.07697404173] * 2, abs=1e-9)
+    assert prop.covariance[0, 1] == pytest.approx(-0.0059250031, abs=1e-9)
+
+    by_g = {e.by_level: e.se for e in est.mean("y", by="g").estimates}
+    assert [by_g[("1",)], by_g[("2",)]] == pytest.approx([0.416112587, 0.4253003654], abs=1e-9)
+    tot_g = {e.by_level: e.se for e in est.total("y", by="g").estimates}
+    assert [tot_g[("1",)], tot_g[("2",)]] == pytest.approx([48.89427676, 42.55674713], abs=1e-7)
+
+    where = est.mean("y", where=svy.col("g") == 1).estimates[0]
+    assert where.se == pytest.approx(0.416112587, abs=1e-9)
+
+    cov = est.cov(("y", "x")).estimates[0]
+    assert cov.est == pytest.approx(0.100632804, abs=1e-9)
+    assert cov.se == pytest.approx(0.2965718978, abs=1e-9)

@@ -371,11 +371,6 @@ class Estimation:
         val = getattr(config, attr)
         return str(val.value) if hasattr(val, "value") else str(val)
 
-    def _adjust_variance_for_singletons(
-        self, result_df: pl.DataFrame, param: PopParam = PopParam.TOTAL
-    ) -> pl.DataFrame:
-        return self._apply_scale_adjustment(result_df, result_df, param=param)
-
     def _get_center_method(self) -> str | None:
         cache = self._get_polars_design_info()
         config = cache.get("singleton_config")
@@ -385,86 +380,55 @@ class Estimation:
                 return "center"
         return None
 
-    def _should_run_double_pass(self) -> bool:
-        cache = self._get_polars_design_info()
-        config = cache.get("singleton_config")
-        if config:
-            return self._get_enum_value(config, "method").lower() == "scale"
-        return False
+    def _singleton_scale_factor(self) -> float | None:
+        """Variance inflation ``1/(1-f)`` under ``singleton.scale()``, else ``None``.
+
+        R's ``lonely.psu="average"`` drops the singleton strata's contributions
+        and multiplies the summed variance matrix by ``nstrat/nokstrat``. The
+        factor applies to the influence-function variance of every statistic,
+        so it is the same for totals, means, ratios, proportions and the
+        probability-scale variance behind Woodruff quantiles.
+        """
+        config = self._get_polars_design_info().get("singleton_config")
+        if not config or self._get_enum_value(config, "method").lower() != "scale":
+            return None
+        f = config.singleton_fraction
+        if f is None or f <= 0.0 or f >= 1.0:
+            return None
+        return 1.0 / (1.0 - f)
 
     def _apply_scale_adjustment(
-        self, full_df: pl.DataFrame, filtered_df: pl.DataFrame, param: PopParam = PopParam.TOTAL
-    ) -> pl.DataFrame:
-        cache = self._get_polars_design_info()
-        config = cache.get("singleton_config")
-
-        if not config:
-            return filtered_df
-
-        method_str = self._get_enum_value(config, "method").lower()
-        if method_str != "scale":
-            return filtered_df
-
-        f = config.singleton_fraction
-        if f is None or f >= 1.0:
-            return filtered_df
-
-        if param == PopParam.TOTAL:
-            inflation_factor = 1.0 / (1.0 - f)
-        else:
-            inflation_factor = 1.0 - f
-
-        sqrt_factor = math.sqrt(inflation_factor)
-
-        if full_df is filtered_df:
-            merged = filtered_df
-        else:
-            std_cols = {"y", "est", "se", "var", "df", "n", "deff", "level"}
-            extra_cols = [c for c in filtered_df.columns if c not in std_cols]
-            by_col_name = extra_cols[0] if extra_cols else None
-
-            join_on = ["y"]
-            if by_col_name:
-                join_on.append(by_col_name)
-            if "level" in filtered_df.columns:
-                join_on.append("level")
-
-            full_subset = full_df.select(join_on + ["est"])
-
-            if "est" in filtered_df.columns:
-                merged = filtered_df.drop("est").join(full_subset, on=join_on, how="left")
-            else:
-                merged = filtered_df.join(full_subset, on=join_on, how="left")
-
-        return merged.with_columns(
-            (pl.col("var") * inflation_factor).alias("var"),
-            (pl.col("se") * sqrt_factor).alias("se"),
-        )
+        self, result_df: pl.DataFrame, cov_flat: list[float] | None = None
+    ) -> tuple[pl.DataFrame, list[float] | None]:
+        factor = self._singleton_scale_factor()
+        if factor is None:
+            return result_df, cov_flat
+        cols = [
+            (pl.col("var") * factor).alias("var"),
+            (pl.col("se") * math.sqrt(factor)).alias("se"),
+        ]
+        if "deff" in result_df.columns:
+            cols.append((pl.col("deff") * factor).alias("deff"))
+        if cov_flat is not None:
+            cov_flat = [c * factor for c in cov_flat]
+        return result_df.with_columns(cols), cov_flat
 
     @staticmethod
     def _cov_from_kernel(
         result_df: pl.DataFrame,
         cov_flat: list[float] | None,
-        pre_vars: np.ndarray | None = None,
     ) -> np.ndarray:
         """Dense between-estimate covariance for the kernel's result rows.
 
         ``cov_flat`` is the kernel's row-major k×k (``None`` for single-row
         calls). The diagonal is overwritten with the frame's final ``var``
-        column so se² and the matrix can never disagree; when a double-pass
-        scale adjustment rescaled the variances, ``pre_vars`` (the column
-        before adjustment) rescales the off-diagonals by the same per-row
-        factors.
+        column so se² and the matrix can never disagree.
         """
         var = result_df["var"].to_numpy()
         if cov_flat is None:
             return np.diag(var)
         k = len(var)
         cov = np.asarray(cov_flat, dtype=float).reshape(k, k)
-        if pre_vars is not None:
-            with np.errstate(divide="ignore", invalid="ignore"):
-                f = np.sqrt(np.where(pre_vars > 0, var / pre_vars, 1.0))
-            cov = cov * np.outer(f, f)
         np.fill_diagonal(cov, var)
         return cov
 
@@ -1463,7 +1427,7 @@ class Estimation:
             and by is None
             and not as_factor
             and not drop_nulls
-            and not self._should_run_double_pass()
+            and self._singleton_scale_factor() is None
         )
         if not batched:
             return EstimateList(single_call(it) for it in items)

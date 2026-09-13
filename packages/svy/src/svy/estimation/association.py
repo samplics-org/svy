@@ -297,6 +297,7 @@ def taylor_assoc(
         singleton_method=est._get_center_method(),
         deff_ref=deff_ref,
     )
+    result_df, _ = est._apply_scale_adjustment(result_df)
 
     est_list = result_to_param_est(
         est, result_df, param, alpha, deff_ref is not None, prep.by_col, ci_method
