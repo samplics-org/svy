@@ -6,6 +6,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+## [0.29.0] — 2026-09-13
+
 ### Fixed
 
 - **Taylor quantile and median intervals were centered at `p`.** The Woodruff interval inverted the weighted CDF at `p ± t·se_p`, as R's `oldsvyquantile(interval.type="Wald")` does. It is now centered at the estimated CDF at the quantile, `F(q̂) ± t·se_p`, as in R's `svyquantile`. On a step CDF the two differ, so limits and SEs changed wherever `F(q̂) ≠ p`, most on small or tied data. `q_method="higher"` matches `qrule="math"` and `"linear"` matches `qrule="hf4"`. A limit whose probability falls outside [0, 1] is now NaN, and so is the SE, instead of being clamped to the sample minimum or maximum. Replicate-weight quantiles are unchanged.
@@ -859,7 +861,8 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.28.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.29.0...HEAD
+[0.29.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.29.0
 [0.28.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.28.0
 [0.27.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.27.0
 [0.26.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.26.0
