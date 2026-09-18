@@ -22,9 +22,10 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://gitlab.com/samplics/svy"
-Homepage = "https://gitlab.com/samplics/svy"
-Issues = "https://gitlab.com/samplics/svy/-/issues"
+Homepage = "https://svylab.com/docs/svy"
+Source = "https://github.com/samplics-org/svy"
+Repository = "https://github.com/samplics-org/svy"
+Issues = "https://github.com/samplics-org/svy/issues"
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]

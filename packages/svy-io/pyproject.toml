@@ -12,7 +12,10 @@ requires-python = ">=3.11"
 dependencies = ["polars[pyarrow]>=1.34.0"]
 
 [project.urls]
-homepage = "https://svylab.com/docs/svy-io"
+Homepage = "https://svylab.com/docs/svy-io"
+Source = "https://github.com/samplics-org/svy"
+Repository = "https://github.com/samplics-org/svy"
+Issues = "https://github.com/samplics-org/svy/issues"
 
 [build-system]
 requires = ["maturin>=1.5,<2.0"]
