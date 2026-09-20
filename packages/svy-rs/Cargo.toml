@@ -6,8 +6,8 @@ edition = "2024"
 # declares no rust-version of its own, so without this the failure on an older
 # toolchain is a raw E0658 inside polars-core rather than an MSRV error.
 rust-version = "1.91"
-repository = "https://gitlab.com/samplics/svy"
-homepage = "https://gitlab.com/samplics/svy"
+repository = "https://github.com/samplics-org/svy"
+homepage = "https://svylab.com/docs/svy"
 
 
 [lib]
