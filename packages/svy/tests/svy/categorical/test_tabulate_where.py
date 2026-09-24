@@ -24,6 +24,8 @@ with zero weight (the SEs are those of the full 15-PSU design) but drops it
 from degf. A physical row subset gets both wrong.
 """
 
+from pathlib import Path
+
 import polars as pl
 import pytest
 
@@ -32,18 +34,21 @@ import svy
 from svy import Design, Sample, col
 
 
+DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
+
+
 TOL = 1e-9
 
 
 @pytest.fixture(scope="module")
 def dclus1():
-    api = svy.io.read_csv("tests/test_data/apiclus1.csv")
+    api = svy.io.read_csv(DATA_DIR / "apiclus1.csv")
     return Sample(api, Design(psu="dnum", wgt="pw"))
 
 
 @pytest.fixture(scope="module")
 def dstrat():
-    api = svy.io.read_csv("tests/test_data/apistrat.csv")
+    api = svy.io.read_csv(DATA_DIR / "apistrat.csv")
     return Sample(api, Design(stratum="stype", wgt="pw", pop_size="fpc"))
 
 
