@@ -8,7 +8,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
-- **`svy.serialize.from_json` failed on any result holding a NaN.** JSON has no NaN, so `to_json` writes it as `null`, and decoding then refused `null` in a `float` field. A singleton domain's interval, a zero-variance CV or a NaN quantile limit made the saved result unreadable. `null` now reads back as NaN wherever the struct declares a plain `float`, nested and list fields included; optional fields keep `None`.
+- **Saved results lost NaN and infinity, and `from_json` failed on them.** JSON has neither, so `to_json` wrote each as `null`, which then refused to decode into a `float` field: a singleton domain's interval, a CV of an estimate at 0 or a NaN quantile limit made the saved result unreadable, and a NaN `deff` came back as not requested. `to_json` still writes `null`, and now records the exact value under a top-level `"nonfinite"` field keyed by JSON Pointer (`{"/estimates/3/cv": "inf"}`); `from_json` restores it. Consumers that ignore the field see `null` as before. A payload written without the field reads a `null` plain float as NaN. Schema `svy-result/0.4`.
 
 ## [0.30.0] — 2026-09-25
 

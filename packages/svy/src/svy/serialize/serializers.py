@@ -12,7 +12,7 @@ from __future__ import annotations
 import math
 
 from enum import Enum
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import msgspec
 import msgspec.inspect as mi
@@ -429,9 +429,48 @@ def serialize(result: Any) -> ResultData:
     return serializer(result)
 
 
+#: JSON field mapping a JSON Pointer to the non-finite value written as ``null`` there.
+NONFINITE_FIELD = "nonfinite"
+
+
 def to_json(result: Any) -> bytes:
-    """Serialize a svy result object to JSON bytes."""
-    return msgspec.json.encode(serialize(result))
+    """Serialize a svy result object to JSON bytes.
+
+    JSON has no NaN or infinity, so each one is written as ``null`` and its
+    value recorded under ``"nonfinite"``, keyed by JSON Pointer (RFC 6901),
+    e.g. ``{"/estimates/3/cv": "inf"}``. Consumers that ignore the field see
+    ``null``; ``from_json`` restores the exact value.
+    """
+    found: dict[str, str] = {}
+    raw = _pull_nonfinite(msgspec.to_builtins(serialize(result)), "", found)
+    if found:
+        raw[NONFINITE_FIELD] = found
+    return msgspec.json.encode(raw)
+
+
+def _pull_nonfinite(obj: Any, path: str, found: dict[str, str]) -> Any:
+    if isinstance(obj, float) and not math.isfinite(obj):
+        found[path] = "nan" if math.isnan(obj) else ("inf" if obj > 0 else "-inf")
+        return None
+    if isinstance(obj, dict):
+        return {k: _pull_nonfinite(v, f"{path}/{_escape(k)}", found) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_pull_nonfinite(v, f"{path}/{i}", found) for i, v in enumerate(obj)]
+    return obj
+
+
+def _escape(key: str) -> str:
+    return str(key).replace("~", "~0").replace("/", "~1")
+
+
+def _put_nonfinite(raw: Any, found: dict[str, str]) -> None:
+    for pointer, value in found.items():
+        parts = [p.replace("~1", "/").replace("~0", "~") for p in pointer.split("/")[1:]]
+        node = raw
+        for p in parts[:-1]:
+            node = node[int(p)] if isinstance(node, list) else node[p]
+        last = parts[-1]
+        node[int(last) if isinstance(node, list) else last] = float(value)
 
 
 def to_dict(result: Any) -> dict[str, Any]:
@@ -460,15 +499,16 @@ def from_json(data: bytes) -> ResultData:
     cls = _KIND_TO_STRUCT.get(kind)
     if cls is None:
         raise SerializationError.unknown_kind(kind=kind, known=sorted(_KIND_TO_STRUCT))
-    return msgspec.convert(_null_to_nan(raw, mi.type_info(cls)), type=cls)
+    _put_nonfinite(raw, raw.pop(NONFINITE_FIELD, None) or {})
+    return cast(ResultData, msgspec.convert(_null_to_nan(raw, mi.type_info(cls)), type=cls))
 
 
 def _null_to_nan(obj: Any, t: mi.Type) -> Any:
-    """Restore the NaNs that ``to_json`` wrote as ``null``.
+    """Read a ``null`` in a plain ``float`` field as NaN.
 
-    JSON has no NaN, so msgspec encodes one as ``null``, which then fails to
-    decode into a ``float`` field. A ``null`` is read back as NaN only where
-    the struct declares a plain ``float``; optional fields keep ``None``.
+    For payloads written before ``"nonfinite"`` existed, whose NaNs and
+    infinities are bare ``null``s that would otherwise not decode. Optional
+    fields keep ``None``.
     """
     if obj is None:
         return math.nan if isinstance(t, mi.FloatType) else None

@@ -1,5 +1,6 @@
 {
   "alpha": 0.05,
+  "deff_ref": null,
   "estimates": [
     {
       "by": [
@@ -28,7 +29,6 @@
   "n_strata": 10,
   "param": "Mean",
   "q_method": "Linear",
-  "schema_version": "svy-result/0.3",
-  "where_clause": null,
-  "deff_ref": null
+  "schema_version": "svy-result/0.4",
+  "where_clause": null
 }
