@@ -109,6 +109,15 @@ def natural_sort_key(value: Any) -> tuple:
     return tuple(parts)
 
 
+def row_sort_key(value: Any) -> tuple:
+    """:func:`natural_sort_key`, ties broken by the exact text.
+
+    The natural key ignores case, so ``"B"`` and ``"b"`` would otherwise keep
+    whatever order they arrived in.
+    """
+    return (natural_sort_key(value), str(value))
+
+
 # -----------------------------------------------------------------------------
 # Table-aware sort helpers
 # -----------------------------------------------------------------------------
@@ -269,7 +278,7 @@ def sort_display_rows(
     display_cols = [c for c in rows[0] if c not in numeric_keys]
     if not display_cols:
         return rows
-    rows.sort(key=lambda r: tuple(natural_sort_key(r.get(c)) for c in display_cols))
+    rows.sort(key=lambda r: tuple(row_sort_key(r.get(c)) for c in display_cols))
     return rows
 
 
