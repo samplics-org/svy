@@ -693,7 +693,8 @@ class Weighting:
         Parameters
         ----------
         upper, lower : float | Threshold | callable | None
-            Bounds. A float above 1 is an absolute cap, in (0, 1] a quantile;
+            Bounds. A number is an absolute bound (``upper=40``, ``upper=0.9``);
+            ``Threshold.quantile(0.99)`` is a quantile of the weights and
             ``Threshold("median", 6.0)`` is k x a statistic.
         by : str | Sequence[str] | None
             Trim within domains: thresholds and redistribution are computed per

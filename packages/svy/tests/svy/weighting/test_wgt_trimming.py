@@ -231,15 +231,18 @@ class TestResolveThreshold:
         w = np.array([10.0, 20.0, 30.0])
         assert resolve_threshold(50.0, w) == 50.0
 
-    def test_float_eq_1_is_quantile(self):
+    def test_float_eq_1_is_absolute(self):
         w = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
-        # 1.0 = 100th percentile = max
-        assert resolve_threshold(1.0, w) == 50.0
+        assert resolve_threshold(1.0, w) == 1.0
 
-    def test_float_in_0_1_is_quantile(self):
+    def test_float_in_0_1_is_absolute(self):
         w = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
-        result = resolve_threshold(0.8, w)
-        assert_allclose(result, np.quantile(w, 0.8))
+        assert resolve_threshold(0.8, w) == 0.8
+
+    def test_quantile_is_explicit(self):
+        w = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+        assert resolve_threshold(Threshold.quantile(1.0), w) == 50.0
+        assert_allclose(resolve_threshold(Threshold.quantile(0.8), w), np.quantile(w, 0.8))
 
     def test_threshold_object_delegates_to_compute(self):
         w = np.array([10.0, 10.0, 100.0])
@@ -355,7 +358,7 @@ class TestRunTrim:
 
     def test_quantile_upper(self):
         w = np.array([10.0] * 8 + [100.0, 100.0])
-        config = TrimConfig(upper=0.8, redistribute=False)
+        config = TrimConfig(upper=Threshold.quantile(0.8), redistribute=False)
         result = run_trim(w, config)
         # 80th percentile of w is 10.0 so everything at or below
         # Nothing trimmed since max <= p80 after small sample — just check result is valid
@@ -508,7 +511,7 @@ class TestTrimThresholdTypes:
         assert np.all(w[w > 0] <= 50.0)
 
     def test_quantile_upper(self, skewed_sample):
-        out = skewed_sample.weighting.trim(upper=0.8, redistribute=False)
+        out = skewed_sample.weighting.trim(upper=Threshold.quantile(0.8), redistribute=False)
         w_orig = skewed_sample.data["weight"].to_numpy()
         cap = np.quantile(w_orig, 0.8)
         w = out.data[TRIM_WGT].to_numpy()

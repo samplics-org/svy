@@ -67,10 +67,10 @@ def trim(
     ----------
     upper : float | Threshold | callable | None
         Upper bound spec.
-        float > 1       -> absolute cap
-        float in (0, 1] -> quantile of the weight distribution
-        Threshold       -> k * stat(w), e.g. Threshold("median", 6.0)
-        callable        -> f(w: np.ndarray) -> float
+        number                -> absolute bound, e.g. 40 or 0.9
+        Threshold.quantile(p) -> p quantile of the weights, e.g. Threshold.quantile(0.99)
+        Threshold(stat, k)    -> k * stat(w), e.g. Threshold("median", 6.0)
+        callable              -> f(w: np.ndarray) -> float
     lower : same type options as upper
     by : str | list[str] | None
         Trim within domains. Thresholds computed per domain;
