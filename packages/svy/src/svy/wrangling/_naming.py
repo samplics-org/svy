@@ -12,9 +12,11 @@ import math
 
 from typing import TYPE_CHECKING, Literal, Sequence
 
-from msgspec.structs import replace as _struct_replace
+from svy.core import design_parts as _dp
+from svy.core.design import Design, PopSize
 
-from svy.core.design import Design, PopSize, RepWeights, WgtAdjustment
+# Kept importable for svy.engine.wrangling.cleaning.
+from svy.core.design_parts import _rep_wgts_with_renames as _rep_wgts_with_renames  # noqa: F401
 from svy.core.enumerations import (
     CaseStyle as _CaseStyle,
 )
@@ -65,72 +67,6 @@ def _map_tuple_in_design(
     return tuple(renames.get(s, s) for s in design_field)
 
 
-def _rep_wgts_with_renames(
-    rep_wgts: RepWeights,
-    renames: dict[str, str],
-    data_columns: Sequence[str] | None = None,
-) -> RepWeights:
-    """Return RepWeights updated for column renames.
-
-    The replicate columns are the spec's own list, resolved against
-    ``data_columns`` (the frame before the rename), so only those exact names
-    count: a column that merely looks like one (``w2023``, ``W1``, ``w01`` next
-    to unpadded ``w1``) is an ordinary column. A rename of the replicates can
-    only be represented when every one is renamed to a common new prefix,
-    keeping its number and padding. Otherwise raise.
-
-    The recorded units (``stratum``/``psu``) are plain column references and are
-    remapped independently of the prefix.
-    """
-    unit_updates: dict[str, str | tuple[str, ...]] = {}
-    for field in ("stratum", "psu"):
-        cur = getattr(rep_wgts, field)
-        if cur is None:
-            continue
-        if isinstance(cur, str):
-            if cur in renames:
-                unit_updates[field] = renames[cur]
-        else:
-            # A multi-column unit is remapped element-wise; a rename touching
-            # only some of its columns still has to move those.
-            mapped = tuple(renames.get(c, c) for c in cur)
-            if mapped != cur:
-                unit_updates[field] = mapped
-
-    rep_cols = (
-        rep_wgts.columns_from_data(data_columns) if data_columns is not None else rep_wgts.columns
-    )
-    matched = [c for c in rep_cols if c in renames]
-    if not matched:
-        return _struct_replace(rep_wgts, **unit_updates) if unit_updates else rep_wgts
-    new_prefixes: set[str] = set()
-    for old in matched:
-        new = renames[old]
-        suffix = old[len(rep_wgts.prefix) :]
-        if not new.endswith(suffix) or len(new) == len(suffix):
-            raise ValueError(
-                f"Cannot rename replicate weight column {old!r} to {new!r}: "
-                f"the replicate number suffix {suffix!r} must be preserved."
-            )
-        new_prefixes.add(new[: len(new) - len(suffix)])
-    if len(new_prefixes) > 1:
-        raise ValueError(
-            "Replicate weight columns must all be renamed with the same prefix; "
-            f"got prefixes {sorted(new_prefixes)}."
-        )
-    # A partial rename cannot be represented: the spec names its columns as
-    # prefix + number, so the new prefix would claim columns never renamed.
-    not_renamed = [c for c in rep_cols if c not in renames]
-    if not_renamed:
-        raise ValueError(
-            f"Partial replicate-weight rename: {len(not_renamed)} of "
-            f"{len(rep_cols)} replicate columns were not renamed "
-            f"(e.g. {not_renamed[:3]}). Rename all replicate columns together "
-            "with a common new prefix, keeping the numeric suffixes."
-        )
-    return _struct_replace(rep_wgts, prefix=new_prefixes.pop(), **unit_updates)
-
-
 def _pop_size_with_renames(pop_size, renames: dict[str, str]):
     if isinstance(pop_size, PopSize):
         return PopSize(
@@ -140,24 +76,6 @@ def _pop_size_with_renames(pop_size, renames: dict[str, str]):
     return _map_name_in_design(pop_size, renames)
 
 
-def _record_with_renames(
-    rec: WgtAdjustment | None, renames: dict[str, str]
-) -> WgtAdjustment | None:
-    if rec is None:
-        return None
-
-    def names(x: tuple[str, ...] | None) -> tuple[str, ...] | None:
-        return None if x is None else tuple(renames.get(c, c) for c in x)
-
-    return _struct_replace(
-        rec,
-        prev_wgt=renames.get(rec.prev_wgt, rec.prev_wgt),
-        new_wgt=renames.get(rec.new_wgt, rec.new_wgt),
-        cells=names(rec.cells),
-        aux=names(rec.aux),
-    )
-
-
 def _design_with_renamed_columns(
     design: Design,
     renames: dict[str, str],
@@ -165,16 +83,19 @@ def _design_with_renamed_columns(
 ) -> Design:
     """Return a new Design with all column references updated by *renames*.
 
-    Covers the design fields, the replicate columns and units, the weight the
-    replicates go with, and the weight-adjustment record.
+    Covers the design fields and every design part (``DesignPart.renamed``):
+    the replicate columns and units, the weight the replicates go with, the
+    weight-adjustment record. Parts are passed explicitly, so they are carried
+    rather than re-decided by the update rules.
     """
     if not renames:
         return design
 
-    new_rep = design.rep_wgts
-    if design.rep_wgts is not None:
-        new_rep = _rep_wgts_with_renames(design.rep_wgts, renames, data_columns)
-
+    parts = {
+        part.name: None if value is None else part.renamed(value, renames, data_columns)
+        for part in _dp.registered()
+        for value in (design._parts.get(part.name),)
+    }
     return design.update(
         case_id=_map_name_in_design(design.case_id, renames),
         wave=_map_name_in_design(design.wave, renames),
@@ -186,8 +107,7 @@ def _design_with_renamed_columns(
         psu=_map_tuple_in_design(design.psu, renames),
         ssu=_map_tuple_in_design(design.ssu, renames),
         pop_size=_pop_size_with_renames(design.pop_size, renames),
-        rep_wgts=new_rep,
-        wgt_adjustment=_record_with_renames(design.wgt_adjustment, renames),
+        **parts,
     )
 
 

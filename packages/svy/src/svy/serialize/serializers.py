@@ -21,10 +21,10 @@ import numpy as np
 
 from svy.categorical.table import Table
 from svy.categorical.ttest import TTestOneGroup, TTestTwoGroups
+from svy.core import design_parts as _design_parts
 from svy.core.containers import ChiSquare
 from svy.core.describe import DescribeResult
-from svy.core.design import Design, PopSize, WgtAdjustment
-from svy.core.repwgts import BootstrapWgts, BrrWgts, JackknifeWgts, SdrWgts
+from svy.core.design import Design, PopSize
 from svy.errors.model_errors import ModelError
 from svy.errors.serialization_errors import SerializationError
 from svy.estimation.estimate import Estimate, EstimateList
@@ -32,8 +32,6 @@ from svy.regression.glm import GLMFit
 from svy.regression.prediction import GLMPred
 from svy.serialize.structs import (
     _KIND_TO_STRUCT,
-    BootstrapWgtsData,
-    BrrWgtsData,
     CellEstData,
     ChiSquareData,
     DescribeResultData,
@@ -47,13 +45,10 @@ from svy.serialize.structs import (
     GLMPredData,
     GLMStatsData,
     GroupLevelsData,
-    JackknifeWgtsData,
     LevelLabelData,
     ParamEstData,
     PopSizeData,
-    RepWgtsData,
     ResultData,
-    SdrWgtsData,
     TableData,
     TableStatsData,
     TDistData,
@@ -62,7 +57,6 @@ from svy.serialize.structs import (
     TTestStatsData,
     TTestTwoGroupsData,
     VarLabelsData,
-    WgtAdjustmentData,
 )
 
 
@@ -476,13 +470,6 @@ _TEMPORAL: dict[str, type] = {
 # ---------------------------------------------------------------------------
 
 # Not in _SERIALIZERS: a design is an input, not a result, and has no table.
-_REP_TO_DATA: dict[type, type] = {
-    BootstrapWgts: BootstrapWgtsData,
-    JackknifeWgts: JackknifeWgtsData,
-    BrrWgts: BrrWgtsData,
-    SdrWgts: SdrWgtsData,
-}
-_DATA_TO_REP: dict[type, type] = {v: k for k, v in _REP_TO_DATA.items()}
 
 
 def _as_list(v: Any) -> Any:
@@ -493,21 +480,21 @@ def _as_tuple(v: Any) -> Any:
     return tuple(v) if isinstance(v, list) else v
 
 
-def _rep_wgts_to_data(rep: Any) -> RepWgtsData:
-    cls = _REP_TO_DATA[type(rep)]
-    fields = {f: _as_list(getattr(rep, f)) for f in cls.__struct_fields__}
-    for f in ("scale", "rep_coefs"):
-        if fields[f] is not None:
-            fields[f] = [float(x) for x in fields[f]]
-    if fields["df"] is not None:
-        fields["df"] = float(fields["df"])
-    return cls(**fields)
-
-
 def _serialize_design(design: Design) -> DesignData:
-    """Serialize ``svy.core.design.Design``: every field, lossless."""
+    """Serialize ``svy.core.design.Design``: every field, lossless.
+
+    Each design part saves itself (``DesignPart.to_data``) into its own field,
+    or into ``parts`` when ``DesignData`` has none for it.
+    """
     pop = design.pop_size
-    rec = design.wgt_adjustment
+    saved: dict[str, Any] = {}
+    others: dict[str, Any] = {}
+    for part, value in design._part_items():
+        data = part.to_data(value)
+        if part.name in DesignData.__struct_fields__:
+            saved[part.name] = data
+        else:
+            others[part.name] = msgspec.to_builtins(data)
     return DesignData(
         case_id=design.case_id,
         wave=design.wave,
@@ -520,17 +507,8 @@ def _serialize_design(design: Design) -> DesignData:
         ssu=_as_list(design.ssu),
         pop_size=PopSizeData(psu=pop.psu, ssu=pop.ssu) if isinstance(pop, PopSize) else pop,
         wr=bool(design.wr),
-        rep_wgts=None if design.rep_wgts is None else _rep_wgts_to_data(design.rep_wgts),
-        wgt_adjustment=None
-        if rec is None
-        else WgtAdjustmentData(
-            kind=rec.kind,
-            prev_wgt=rec.prev_wgt,
-            new_wgt=rec.new_wgt,
-            cells=_as_list(rec.cells),
-            aux=_as_list(rec.aux),
-            pins_total=rec.pins_total,
-        ),
+        parts=others or None,
+        **saved,
     )
 
 
@@ -549,9 +527,17 @@ def to_design(data: DesignData) -> Design:
     """
     if not isinstance(data, DesignData):
         raise SerializationError.not_a_design(got_type=type(data).__name__)
-    rep = data.rep_wgts
-    rec = data.wgt_adjustment
     pop = data.pop_size
+    others = data.parts or {}
+    parts: dict[str, Any] = {}
+    for part in _design_parts.registered():
+        if part.name in DesignData.__struct_fields__:
+            raw = getattr(data, part.name)
+        else:
+            raw = others.get(part.name)
+            if raw is not None and part.data_type is not None:
+                raw = msgspec.convert(raw, type=part.data_type)
+        parts[part.name] = None if raw is None else part.from_data(raw)
     return Design(
         case_id=data.case_id,
         wave=data.wave,
@@ -564,21 +550,7 @@ def to_design(data: DesignData) -> Design:
         ssu=_as_tuple(data.ssu),
         pop_size=PopSize(psu=pop.psu, ssu=pop.ssu) if isinstance(pop, PopSizeData) else pop,
         wr=data.wr,
-        rep_wgts=None
-        if rep is None
-        else _DATA_TO_REP[type(rep)](
-            **{f: _as_tuple(getattr(rep, f)) for f in type(rep).__struct_fields__}
-        ),
-        wgt_adjustment=None
-        if rec is None
-        else WgtAdjustment(
-            kind=rec.kind,  # type: ignore[arg-type]
-            prev_wgt=rec.prev_wgt,
-            new_wgt=rec.new_wgt,
-            cells=_as_tuple(rec.cells),
-            aux=_as_tuple(rec.aux),
-            pins_total=rec.pins_total,
-        ),
+        **parts,
     )
 
 
