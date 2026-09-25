@@ -303,6 +303,69 @@ def test_roundtrip_json(factory):
     assert json.loads(js) == json.loads(js2)
 
 
+def test_roundtrip_json_nonfinite():
+    """NaN and ±inf are written as null, recorded under "nonfinite", and read back exactly."""
+    nan, inf = float("nan"), float("inf")
+    est = _make_estimate()
+    est.estimates = [
+        ParamEst(y="income", est=0.0, se=1.0, cv=inf, lci=nan, uci=-inf, deff=nan),
+        ParamEst(y="income", est=5.0, se=1.0, cv=0.2, lci=3.0, uci=7.0),
+    ]
+    js = to_json(est)
+    raw = json.loads(js)
+    assert raw["estimates"][0]["cv"] is None
+    assert raw["nonfinite"] == {
+        "/estimates/0/cv": "inf",
+        "/estimates/0/lci": "nan",
+        "/estimates/0/uci": "-inf",
+        "/estimates/0/deff": "nan",
+    }
+    row, other = from_json(js).estimates
+    assert row.cv == inf and row.uci == -inf and np.isnan(row.lci) and np.isnan(row.deff)
+    assert other.deff is None
+
+    fit = _make_glm_fit()
+    coef = msgspec.structs.replace(fit.coefs[0], wald=TDist(df=496, value=nan, p_value=nan))
+    fit = msgspec.structs.replace(fit, coefs=[coef])
+    coef = from_json(to_json(fit)).coefs[0]
+    assert np.isnan(coef.wald.value) and np.isnan(coef.wald.p_value)
+
+    pred = _make_glm_pred()
+    pred.se[1] = inf
+    se = from_json(to_json(pred)).se
+    assert se[0] == 1000.0 and se[1] == inf
+
+
+def test_roundtrip_json_finite_has_no_nonfinite_field():
+    assert "nonfinite" not in json.loads(to_json(_make_estimate()))
+
+
+def test_nonfinite_pointer_escapes_keys():
+    """Dict keys holding "/" or "~" (describe items) are escaped per RFC 6901."""
+    desc = _make_describe_result()
+    data = serialize(desc)
+    item = dict(data.items[0]) | {"a/b~c": float("nan")}
+    data = msgspec.structs.replace(data, items=[item])
+    js = msgspec.json.encode(data)
+    from svy.serialize import serializers as s
+
+    found: dict[str, str] = {}
+    raw = s._pull_nonfinite(msgspec.to_builtins(data), "", found)
+    assert found == {"/items/0/a~1b~0c": "nan"}
+    s._put_nonfinite(raw, found)
+    assert np.isnan(raw["items"][0]["a/b~c"])
+    assert js  # encodes
+
+
+def test_from_json_payload_without_nonfinite_field():
+    """Payloads written before "nonfinite" existed: a null plain float reads as NaN."""
+    raw = json.loads(to_json(_make_estimate()))
+    raw["estimates"][0]["lci"] = None
+    data = from_json(json.dumps(raw).encode())
+    assert np.isnan(data.estimates[0].lci)
+    assert data.estimates[0].prob is None
+
+
 def test_estimate_fields():
     """Estimate serialization captures the right fields with correct conversions."""
     result = _make_estimate()

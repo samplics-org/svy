@@ -52,7 +52,7 @@ consumers can switch on the result type without introspection.
 ### 2.5 `schema_version` on top-level structs
 
 Every top-level struct carries `schema_version: str = SCHEMA_VERSION` where
-`SCHEMA_VERSION = "svy-result/0.2"`. Consumers can check the version to know
+`SCHEMA_VERSION = "svy-result/0.4"`. Consumers can check the version to know
 what fields to expect.
 
 **Versioning policy:** bump the minor version (0.1 → 0.2) when fields are added
@@ -72,6 +72,8 @@ ignore unknown fields.
   `n_psus - n_strata`, which stays at design level even under a `where=` domain.
   Strictly this removal warrants a major bump under the policy above; 0.2 was
   chosen deliberately because no known consumer binds to the removed field.
+- `0.3` — `EstimateData.deff_ref` added.
+- `0.4` — the JSON may carry `"nonfinite"` (§2.11).
 
 ### 2.6 Sub-structs are untagged
 
@@ -109,6 +111,20 @@ The `DescribeItem` union has 7 variants (`DescribeContinuous`,
 `DescribeDiscrete`, `DescribeDatetime`, `DescribeNominal`, `DescribeOrdinal`,
 `DescribeBoolean`, `DescribeString`). Full typed sub-structs are deferred. Each
 dict carries `mtype` (a StrEnum value) as an implicit discriminator.
+
+### 2.11 Non-finite floats: `"nonfinite"`
+
+JSON has no NaN or infinity. `to_json` writes each as `null` and records its
+value in a top-level `"nonfinite"` object keyed by JSON Pointer (RFC 6901):
+`{"/estimates/3/cv": "inf", "/estimates/0/deff": "nan"}`. `from_json` puts
+the values back before decoding, so the round trip is exact for every field,
+optional ones included (a NaN `deff` stays distinct from a `deff` never
+requested). JSON consumers that ignore the field see `null`. The field is
+absent when every float is finite, and it is not part of the structs: it
+exists only in the JSON. Strings (`"NaN"`) in numeric fields were rejected
+because they make every numeric field number-or-string for JSON consumers.
+Payloads written before 0.4 have bare `null`s; `from_json` reads a `null` in
+a plain `float` field as NaN.
 
 ## 3. Type conversion rules
 
