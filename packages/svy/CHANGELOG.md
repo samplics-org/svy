@@ -8,6 +8,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **`design.columns(data_columns=None)`** lists every column a design needs from the data, de-duplicated and in order: design fields, `pop_size`, replicate weights, the units the replicates were built from, then the weight-adjustment record's `new_wgt`, `prev_wgt`, `cells` and `aux`. `data_columns` resolves auto-detected replicate padding. `specified_fields` is unchanged.
+
+- **`RepWgts.wgt`**, the full-sample weight the replicates go with. `Design` fills it from its own `wgt`; `create_*_wgts` and weighting with replicates pair them with the weight they produced.
+
 - **`svy.serialize.to_polars(data, *, row_index=None, **options)`** gives a serialized result's table, the same frame its live result's `to_polars()` returns, from the payload alone (for example after `from_json`). It covers every result kind that serializes (estimates, estimate lists, t-tests, tables, chi-square tests, GLM fits, GLM predictions and describe results), with the same options (`tidy`, `use_labels`, `component`, `exponentiate`). A serialized estimate stores the labels of the variables and levels it holds, so its label columns come back without the sample's metadata. `row_index="row"` adds a first column holding each table row's position in the payload's rows; estimate tables are sorted for display, so this is how a table row is matched back to its payload row. The live and payload tables are built by the same function per result kind.
 
 - **`ChiSquare.to_polars()` and `DescribeResult.to_polars()`.** A one-row frame of `df`, `value` and `p_value`, and one row per described column with its scalar fields (nested frequency tables and percentile lists are left out).
@@ -19,6 +23,16 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **`Estimate.to_polars()` and `EstimateList.to_polars()` are a data view, no longer the printed table.** Levels keep their codes under the variable's name, and each variable with value labels gets a `<var>_label` column next to it (`by_label` and `y_level_label` with `tidy=False`). Rows sort by code. `EstimateList.to_polars()` leads with a `y` column when its members' variables differ, and an `x` column when their denominators do. Labels are on by default for both (`use_labels=False` drops the label columns); before, `Estimate.to_polars()` gave codes only and `EstimateList.to_polars()` put labels in place of the codes and variable labels in place of the names. A category level now keeps the type the estimator gives it, so a proportion's level column is an integer for an integer variable. Printing is unchanged (`to_polars_printable()`). A label column whose name is already a variable raises `LABEL_COLUMN_CLASH`.
 
 - **Serialization schema `svy-result/0.4`.** `EstimateData` gains `as_factor`, which decides whether the table has a level column, and `labels`. `TDistData.df` is now `int | float`, so a GLM coefficient's design df stays an integer. All additive: `0.3` payloads still decode.
+
+- **Breaking: `update(wgt=X)` keeps the design consistent with X.** `sample.update_design(wgt=X)` keeps the record and replicate weights when X is the current weight; on a weight an earlier design in `design_history` produced, and whose columns are all still in the data, restores that design's record and replicates (switching back to the raked weight after a trim restores the raking record); on any other column drops the record silently and drops the replicate weights with a warning, unless `rep_wgts=` is passed, which pairs them with X. `use_weight` follows the same rule. A bare `design.update(wgt=X)` keeps the record only if X is its `new_wgt` and the replicates only if X is their `wgt`. An explicit `wgt_adjustment=` or `rep_wgts=` always wins. Edits to other fields keep both.
+
+- **Breaking: a `Design` whose `rep_wgts.wgt` or `wgt_adjustment.new_wgt` is not its `wgt` raises.**
+
+- **Breaking: `Sample(data, design)`, `set_design` and `update_design` raise when the data lacks any `design.columns()` entry**, record columns included. A frame without them is not the frame the design describes; estimation used to fall back to fixed-weight standard errors with a warning.
+
+- **Breaking: `ignore_reps=True` leaves the new weight without replicate weights** in `adjust`, `normalize`, `poststratify`, `standardize`, `rake`, `calibrate` and `calibrate_matrix`. The unadjusted replicates used to stay on the design next to a weight they do not go with. Their columns stay in the data and the previous design keeps them, so `update_design(wgt=<previous weight>)` brings them back.
+
+- **`combine_samples(kind="panel")`** compares the waves' replicate designs without their paired weight and pairs them with the combined weight.
 
 ### Fixed
 
@@ -33,6 +47,12 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **A t-test or rank test group coded `False` or `0` printed an empty Level cell.** The cell was built with `group_level or ""`.
 
 - **Saved results lost NaN and infinity, and `from_json` failed on them.** JSON has neither, so `to_json` wrote each as `null`, which then refused to decode into a `float` field: a singleton domain's interval, a CV of an estimate at 0 or a NaN quantile limit made the saved result unreadable, and a NaN `deff` came back as not requested. `to_json` still writes `null`, and now records the exact value under a top-level `"nonfinite"` field keyed by JSON Pointer (`{"/estimates/3/cv": "inf"}`); `from_json` restores it. Consumers that ignore the field see `null` as before. A payload written without the field reads a `null` plain float as NaN. Schema `svy-result/0.4`.
+
+- **`Design.__eq__` and `__hash__` ignored `wgt_adjustment`**, so a raked design equalled the same design without its record.
+
+- **Wrangling did not know the weight-adjustment record.** `remove_columns`, `keep_columns` and `select` now refuse to drop record columns (including `__svy_cells_*` and `__svy_aux_*` snapshots) without `force=True`. `force=True` also cleans what depended on the column: the record, the design's `wgt` and the replicate weights that went with it (their columns stay), `PopSize` columns, and stale internal stratum/PSU columns; one warning lists what was removed. `rename_columns` and `clean_names` carry renames into the record, `PopSize`, `rep_wgts.wgt` and earlier designs in `design_history`, and an inplace rename that cannot be applied leaves the sample untouched.
+
+- **A failed `set_design` or `update_design` left the sample half-updated**, with the rejected design installed and recorded in `design_history`. The sample is now left as it was.
 
 ## [0.30.0] — 2026-09-25
 
@@ -91,7 +111,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
   ```python
   s = svy.combine_samples([w1, w2, w3], kind="panel", case_id="person_id")
-  s.estimation.mean("inc", by="wave").contrast(svy.estd(3) / svy.estd(1) - 1)   # percent change
+  s.estimation.mean("inc", by="wave").contrast(svy.estd(3) / svy.estd(1) - 1)  # percent change
   ```
 
 - **`wrangling.lag(cols, n=1)`** — the one panel primitive: the value of a column at the case's wave `n` steps back (a lead if negative), null across a skipped wave as Stata's `L.y` (`gaps="skip"` takes the previous observed row). Transitions are `tabulate("y_lag1", "y", where=wave == t)` or `prop(y, by="y_lag1", where=wave == t, drop_nulls=True)`; paired change is the existing `ttest(y, y_pair="y_lag1", where=..., drop_nulls=True)`.
@@ -149,7 +169,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **`svy.combine_samples()` — repeated cross-sections and panel waves.** Stacks several samples and analyzes them as one stratified design: data pooling, not estimate pooling. Each independent wave contributes its own strata (wave → stratum → PSU), so Taylor variance treats waves as independent without being told to. Caller order is time order, and an existing wave column (NHANES `SDDSRVYR`, say) is reused and validated rather than replaced.
 
   ```python
-  svy.combine_samples([w1, w2, w3], adjust="average")   # period-average population
+  svy.combine_samples([w1, w2, w3], adjust="average")  # period-average population
   ```
 
   `adjust="average"` divides the weights by k, which matters only for totals — means, proportions and ratios are invariant to it. `units="shared"` is the panel case, where the same units recur across waves.
@@ -177,8 +197,9 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **`offset=` on `glm.fit()`.** A known term on the link scale, coefficient fixed at 1 — what makes a rate model possible:
 
   ```python
-  s.glm.fit(y="events", x=["age", svy.Cat("region")],
-            family="poisson", offset="log_exposure")   # coefficients are log rate ratios
+  s.glm.fit(
+      y="events", x=["age", svy.Cat("region")], family="poisson", offset="log_exposure"
+  )  # coefficients are log rate ratios
   ```
 
   Carried through the whole model: IRLS working response, deviance, the sandwich, `predict()` and `margins()`. Matches R `survey` 4.5 to 2.5e-15 on coefficients and 5e-10 on SEs. Null deviance is the intercept-only fit *carrying the offset*, found by a one-parameter IRLS the way R's `glm()` refits it — the weighted-mean shortcut is only valid without an offset — and reproduces R's `null.deviance` exactly.
@@ -456,8 +477,8 @@ A breaking change to the weighting API, and a substantial cut to import time.
   `svy.RepWeights(method=..., ...)` keeps working and returns the variant for the name, so call sites are unaffected. **But it is a factory function now, not a class**, which breaks two things it used to support:
 
   ```python
-  isinstance(x, svy.RepWeights)   # TypeError: isinstance() arg 2 must be a type
-  x: svy.RepWeights               # no longer a valid annotation
+  isinstance(x, svy.RepWeights)  # TypeError: isinstance() arg 2 must be a type
+  x: svy.RepWeights  # no longer a valid annotation
   ```
 
   Use `svy.RepWgts`, the union of the four variants, for both. Code that knows the method at authoring time can construct the variant directly, which is the typed path: `BootstrapWgts(prefix="bsw", n_reps=1000, kind="poisson")`.
@@ -520,8 +541,8 @@ A breaking change to the weighting API, and a substantial cut to import time.
   Neither statistic has a direction, so neither takes `y`/`x`. A call names a set of columns through one symmetric `cols` argument, and every requested pair is returned as its own row:
 
   ```python
-  sample.estimation.corr(("income", "age"))                        # one pair
-  sample.estimation.corr(["income", "age", "educ"])                # every unique pair
+  sample.estimation.corr(("income", "age"))  # one pair
+  sample.estimation.corr(["income", "age", "educ"])  # every unique pair
   sample.estimation.corr([("income", "age"), ("income", "educ")])  # exactly these
   ```
 
@@ -572,8 +593,8 @@ A breaking change to the weighting API, and a substantial cut to import time.
 - **`sample.estimation.quantile()` — design-based quantiles with standard errors** ([#112](https://github.com/samplics-org/svy/issues/112)). Previously only the median carried a standard error; every other quantile was available as a point estimate through `describe(percentiles=)`, with no variance. `quantile()` estimates any set of probabilities under Taylor linearization or replicate weights, with `by=` domains and `where=` filters:
 
   ```python
-  sample.estimation.quantile("income")                       # quartiles, the default
-  sample.estimation.quantile("income", p=0.9)                # a single Estimate
+  sample.estimation.quantile("income")  # quartiles, the default
+  sample.estimation.quantile("income", p=0.9)  # a single Estimate
   sample.estimation.quantile("income", p=(0.1, 0.5, 0.9), by="region")
   ```
 
@@ -657,8 +678,8 @@ nothing you do changes. If you used missing-value definitions, see **Removed**.
   `update` merges per field, which means a source can only ever *add* what it knows and can never clear what it has no opinion about. `overwrite=False` (the default) fills only gaps, keeping labels you have already chosen; `overwrite=True` lets `other` win where both are set — for a spec whose question wording should be definitive. A field `other` has not set is left alone in either mode, which is the property that makes the merge safe.
 
   ```python
-  store.update(other)                    # fill gaps only
-  store.update(other, overwrite=True)    # `other` wins on conflicts
+  store.update(other)  # fill gaps only
+  store.update(other, overwrite=True)  # `other` wins on conflicts
   ```
 
 ### Changed

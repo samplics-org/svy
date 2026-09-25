@@ -316,10 +316,13 @@ def adjust(
             "wgt": wgt_name,
             "wgt_adjustment": WgtAdjustment(kind="nonresponse", prev_wgt=wgt, new_wgt=wgt_name),
         }
-        if rep_cols:
-            updates["rep_wgts"] = msgspec.structs.replace(
-                design.rep_wgts, prefix=wgt_name, n_reps=len(rep_cols)
-            )
+        # Unadjusted replicates do not go with the new weight, so ignore_reps
+        # leaves it without any; the previous design in the history keeps them.
+        updates["rep_wgts"] = (
+            msgspec.structs.replace(design.rep_wgts, prefix=wgt_name, n_reps=len(rep_cols))
+            if rep_cols
+            else None
+        )
         sample.update_design(**updates)
 
     if respondents_only:
@@ -345,14 +348,14 @@ def adjust(
             # its replicate columns), not the caller's original design weight:
             # point the design at the new columns for the trim, then restore.
             original_design = sample._design
-            tmp_design = original_design.update(wgt=wgt_name)
-            if rep_cols:
-                tmp_design = tmp_design.update(
-                    rep_wgts=msgspec.structs.replace(
-                        design.rep_wgts, prefix=wgt_name, n_reps=len(rep_cols)
-                    )
-                )
-            sample._design = tmp_design
+            sample._design = original_design.update(
+                wgt=wgt_name,
+                rep_wgts=(
+                    msgspec.structs.replace(design.rep_wgts, prefix=wgt_name, n_reps=len(rep_cols))
+                    if rep_cols
+                    else None
+                ),
+            )
             sample = _apply_trim(
                 sample,
                 trimming,

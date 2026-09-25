@@ -174,7 +174,9 @@ def test_normalize_replicate_weights_ignored_when_flag_set(sample_data, mock_des
     sample._design = sample.design.update_rep_weights(method="BRR", prefix="rw", n_reps=2)
     sample = sample.weighting.normalize(ignore_reps=True)
     assert f"{NORM_WGT}1" not in sample.data.columns
-    assert sample.design.rep_wgts.columns == ["rw1", "rw2"]
+    # The new weight has no replicates; the unadjusted ones stay in the data.
+    assert sample.design.rep_wgts is None
+    assert {"rw1", "rw2"} <= set(sample.data.columns)
 
 
 def test_normalize_no_design_update(sample_data, mock_design):

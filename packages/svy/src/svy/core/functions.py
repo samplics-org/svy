@@ -357,7 +357,14 @@ def _resolve_case_id(samples: Sequence[Sample], kind: str, case_id: str | None) 
 def _resolve_rep_wgts(samples: Sequence[Sample], kind: str):
     """Replicate weights carried by the inputs: rejected, except producer
     longitudinal replicates identical on every wave of a panel."""
-    reps = [s._design.rep_wgts for s in samples]
+    # Unpaired: the replicates go with the combined weight, whatever each wave
+    # called its own.
+    reps = [
+        None
+        if s._design.rep_wgts is None
+        else msgspec.structs.replace(s._design.rep_wgts, wgt=None)
+        for s in samples
+    ]
     if all(r is None for r in reps):
         return None
     if kind == "panel" and all(r is not None and r == reps[0] for r in reps):

@@ -940,9 +940,13 @@ def calib_kwargs(sample, df) -> dict:
 def _warn_invalid_record(sample, design, rec, *, missing: list[str], wrong_weight: bool) -> None:
     """Warn once per data/design rebind that the calibration is not credited."""
     key = id(design)
-    stamp = (design, getattr(sample, "_data_version", None))
-    if _calib_valid_cache.get(key) == stamp:
+    version = getattr(sample, "_data_version", None)
+    # Identity, not equality: the entry holds the design, so its id cannot be
+    # reused while cached, and an equal-but-distinct design is a new rebind.
+    cached = _calib_valid_cache.get(key)
+    if cached is not None and cached[0] is design and cached[1] == version:
         return
+    stamp = (design, version)
     if len(_calib_valid_cache) >= _DESIGN_FIELDS_CACHE_MAX:
         _calib_valid_cache.clear()
     _calib_valid_cache[key] = stamp

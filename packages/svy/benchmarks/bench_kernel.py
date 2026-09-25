@@ -225,9 +225,7 @@ def run_glm(n_rows: int, reps: int) -> None:
     """
     n_cov = 20
     rng = np.random.default_rng(11)
-    cols: dict[str, np.ndarray] = {
-        f"x{j}": rng.normal(size=n_rows) for j in range(n_cov)
-    }
+    cols: dict[str, np.ndarray] = {f"x{j}": rng.normal(size=n_rows) for j in range(n_cov)}
     cols["hhweight"] = rng.uniform(0.5, 2.0, n_rows)
     cols["geo1"] = rng.integers(0, 10, n_rows).astype("U2")
     cols["urbrur"] = rng.integers(0, 2, n_rows).astype("U1")

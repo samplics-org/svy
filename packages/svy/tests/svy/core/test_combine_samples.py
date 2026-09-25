@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import warnings
 
+import msgspec
 import polars as pl
 import pytest
 
@@ -648,7 +649,8 @@ def test_panel_accepts_identical_replicate_designs():
     reps = s1.data.select(["id", *rep_cols])
     s2 = svy.Sample(df2.join(reps, on="id"), s1.design)
     c = svy.combine_samples([s1, s2], kind="panel", case_id="id")
-    assert c.design.rep_wgts == s1.design.rep_wgts
+    # Same replicates, now paired with the combined weight.
+    assert c.design.rep_wgts == msgspec.structs.replace(s1.design.rep_wgts, wgt=c.design.wgt)
 
 
 def test_panel_rejects_replicates_varying_within_case():

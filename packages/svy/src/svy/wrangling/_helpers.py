@@ -13,6 +13,8 @@ module (columns, values, rows, mutate, labels).
 
 from __future__ import annotations
 
+import warnings
+
 from typing import TYPE_CHECKING, cast
 
 import polars as pl
@@ -23,7 +25,7 @@ from svy.core.constants import (
     _INTERNAL_CONCAT_SUFFIX,
     SVY_ROW_INDEX,
 )
-from svy.core.design import Design
+from svy.core.design import Design, PopSize, _user_stacklevel
 
 
 if TYPE_CHECKING:
@@ -153,40 +155,18 @@ def _required_columns(sample: "Sample") -> set[str]:
     """
     Return set of user-specified design column names.
 
-    This excludes internal svy columns (like svy_row_index) which are
-    handled transparently and auto-preserved.
+    Everything ``design.columns()`` names -- design fields, replicate weights
+    and their units, and the weight-adjustment record's columns (including its
+    ``__svy_cells_*``/``__svy_aux_*`` snapshots) -- plus the concatenated
+    design columns. Internal svy columns (like svy_row_index) are handled
+    transparently and auto-preserved, so they are excluded.
     """
     req: set[str] = set()
     design: Design | None = getattr(sample, "_design", None)
     internal_design = getattr(sample, "_internal_design", {}) or {}
 
-    def add(x: str | tuple[str, ...] | None):
-        if x is None:
-            return
-        if isinstance(x, str):
-            req.add(x)
-        elif isinstance(x, tuple):
-            req.update(x)
-
     if design is not None:
-        add(design.case_id)
-        add(design.wave)
-        add(design.stratum)
-        add(design.psu)
-        add(design.ssu)
-        add(design.wgt)
-        add(design.prob)
-        add(design.hit)
-        add(design.mos)
-        add(design.pop_size)
-        if design.rep_wgts is not None:
-            req.update(design.rep_wgts.columns_from_data(sample._data.columns))
-            # The units the replicates were built from are referenced columns
-            # like any other, so dropping one needs force= and then cleans the
-            # reference. Without this they were droppable in silence, leaving
-            # rep_wgts pointing at a column that no longer exists.
-            add(design.rep_wgts.stratum)
-            add(design.rep_wgts.psu)
+        req.update(design.columns(data_columns=sample._data.columns))
 
     for k in ("stratum", "psu", "ssu"):
         cname = internal_design.get(k)
@@ -277,78 +257,118 @@ def _rebuild_concat_if_touched(
 
 
 def _auto_clean_design(target: "Sample") -> None:
-    """Remove references to columns that no longer exist in the data."""
+    """Remove references to columns that no longer exist in the data.
+
+    Everything that depended on a removed column goes with it: a design field
+    is unset, a replicate set missing any column is dropped, a record missing
+    any column is dropped, and replicates whose weight was removed lose that
+    pairing. One warning lists what was removed from the design.
+    """
     current_design: Design | None = getattr(target, "_design", None)
     if current_design is None:
         return
 
     cols = set(target._data.columns)
+    removed: list[str] = []
 
-    def keep_name(x: str | None) -> str | None:
-        return x if (x is None or x in cols) else None
+    def keep_name(field: str, x: str | None) -> str | None:
+        if x is None or x in cols:
+            return x
+        removed.append(f"{field}={x!r}")
+        return None
 
     def keep_tuple(
+        field: str,
         x: str | tuple[str, ...] | None,
     ) -> str | tuple[str, ...] | None:
         if x is None:
             return None
         if isinstance(x, str):
-            return x if x in cols else None
+            return keep_name(field, x)
         kept = tuple(c for c in x if c in cols)
+        if kept != x:
+            removed.append(f"{field}={tuple(c for c in x if c not in cols)!r}")
         return kept or None
 
-    updated_design = current_design.update(
-        case_id=keep_name(current_design.case_id),
-        wave=keep_name(current_design.wave),
-        stratum=keep_tuple(current_design.stratum),
-        psu=keep_tuple(current_design.psu),
-        ssu=keep_tuple(current_design.ssu),
-        wgt=keep_name(current_design.wgt),
-        prob=keep_name(current_design.prob),
-        hit=keep_name(current_design.hit),
-        mos=keep_name(current_design.mos),
-        # pop_size may be a column name (clean like the others) or a
-        # PopSize object (no column reference — keep as is)
-        pop_size=(
-            keep_name(current_design.pop_size)
-            if isinstance(current_design.pop_size, str)
-            else current_design.pop_size
-        ),
-    )
+    pop_size = current_design.pop_size
+    if isinstance(pop_size, PopSize):
+        if pop_size.psu not in cols:
+            removed.append(f"pop_size={pop_size!r}")
+            pop_size = None
+        elif pop_size.ssu is not None and pop_size.ssu not in cols:
+            removed.append(f"pop_size.ssu={pop_size.ssu!r}")
+            pop_size = PopSize(psu=pop_size.psu, ssu=None)
+    else:
+        pop_size = keep_name("pop_size", pop_size)
 
-    if current_design.rep_wgts is not None:
+    new_wgt = keep_name("wgt", current_design.wgt)
+
+    rep = current_design.rep_wgts
+    if rep is not None:
         # RepWeights identifies its columns by prefix + n_reps.  If any of
         # the expected replicate columns was removed, the replicate design
         # is no longer valid and must be dropped as a whole (a partial set
         # of replicates cannot be represented and would give wrong variances).
-        expected = current_design.rep_wgts.columns_from_data(sorted(cols))
+        expected = rep.columns_from_data(sorted(cols))
         if not all(c in cols for c in expected):
-            updated_design = updated_design.update(rep_wgts=None)
+            removed.append(f"rep_wgts ('{rep.prefix}', {rep.n_reps} replicates)")
+            rep = None
         else:
             # The recorded units are ordinary column references and are dropped
             # the same way the design's are. Losing them costs provenance and,
             # for a declared JKn with no rep_coefs yet, the ability to derive --
             # which surfaces as the usual warning rather than silently reading a
             # column that is no longer there.
-            unit_updates: dict[str, str | tuple[str, ...] | None] = {}
+            rep_updates: dict[str, str | tuple[str, ...] | None] = {}
             for field in ("stratum", "psu"):
-                cur = getattr(current_design.rep_wgts, field)
+                cur = getattr(rep, field)
                 if cur is None:
                     continue
                 if isinstance(cur, str):
                     if cur not in cols:
-                        unit_updates[field] = None
+                        rep_updates[field] = None
+                        removed.append(f"rep_wgts.{field}={cur!r}")
                 else:
                     # Keep whatever survives: a multi-column unit that loses one
                     # member is a coarser unit, not a missing one. Only an empty
                     # remainder clears the field.
                     kept = tuple(c for c in cur if c in cols)
                     if kept != cur:
-                        unit_updates[field] = kept or None
-            if unit_updates:
-                updated_design = updated_design.update(
-                    rep_wgts=_struct_replace(current_design.rep_wgts, **unit_updates)
-                )
+                        rep_updates[field] = kept or None
+                        removed.append(
+                            f"rep_wgts.{field}={tuple(c for c in cur if c not in cols)!r}"
+                        )
+            if rep_updates:
+                rep = _struct_replace(rep, **rep_updates)
+            # Replicates go with their full-sample weight: removing it removes
+            # them from the design (their columns stay). Left unpaired they
+            # would attach silently to whatever weight is set next.
+            if rep.wgt is not None and rep.wgt not in cols:
+                removed.append(f"rep_wgts ('{rep.prefix}', {rep.n_reps} replicates)")
+                rep = None
+
+    rec = current_design.wgt_adjustment
+    if rec is not None:
+        rec_cols = (rec.new_wgt, rec.prev_wgt, *(rec.cells or ()), *(rec.aux or ()))
+        if any(c not in cols for c in rec_cols):
+            removed.append(f"wgt_adjustment ({rec.kind})")
+            rec = None
+
+    updated_design = Design(
+        case_id=keep_name("case_id", current_design.case_id),
+        wave=keep_name("wave", current_design.wave),
+        stratum=keep_tuple("stratum", current_design.stratum),
+        wgt=new_wgt,
+        prob=keep_name("prob", current_design.prob),
+        hit=keep_name("hit", current_design.hit),
+        mos=keep_name("mos", current_design.mos),
+        psu=keep_tuple("psu", current_design.psu),
+        ssu=keep_tuple("ssu", current_design.ssu),
+        pop_size=pop_size,
+        wr=current_design.wr,
+        rep_wgts=rep,
+        wgt_adjustment=rec,
+    )
 
     internal_design = dict(getattr(target, "_internal_design", {}) or {})
     for k in ("stratum", "psu", "ssu"):
@@ -358,3 +378,18 @@ def _auto_clean_design(target: "Sample") -> None:
 
     target._design = updated_design
     target._internal_design = internal_design
+    if any(
+        getattr(updated_design, f) != getattr(current_design, f)
+        for f in ("stratum", "variance_psu", "ssu")
+    ):
+        # Stale concatenated columns and singleton flags would otherwise keep
+        # describing the removed strata/PSUs.
+        _rebuild_concat_columns(target)
+        target._check_for_singletons()
+
+    if removed:
+        warnings.warn(
+            "Removed from the design with the dropped columns: " + ", ".join(removed) + ".",
+            UserWarning,
+            stacklevel=_user_stacklevel(),
+        )

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Literal
 
 from msgspec.structs import replace as _struct_replace
 
-from svy.core.design import Design, RepWeights
+from svy.core.design import Design, PopSize, RepWeights, WgtAdjustment
 from svy.core.enumerations import (
     CaseStyle as _CaseStyle,
 )
@@ -129,8 +129,39 @@ def _rep_wgts_with_renames(rep_wgts: RepWeights, renames: dict[str, str]) -> Rep
     return _struct_replace(rep_wgts, prefix=new_prefixes.pop(), **unit_updates)
 
 
+def _pop_size_with_renames(pop_size, renames: dict[str, str]):
+    if isinstance(pop_size, PopSize):
+        return PopSize(
+            psu=renames.get(pop_size.psu, pop_size.psu),
+            ssu=None if pop_size.ssu is None else renames.get(pop_size.ssu, pop_size.ssu),
+        )
+    return _map_name_in_design(pop_size, renames)
+
+
+def _record_with_renames(
+    rec: WgtAdjustment | None, renames: dict[str, str]
+) -> WgtAdjustment | None:
+    if rec is None:
+        return None
+
+    def names(x: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        return None if x is None else tuple(renames.get(c, c) for c in x)
+
+    return _struct_replace(
+        rec,
+        prev_wgt=renames.get(rec.prev_wgt, rec.prev_wgt),
+        new_wgt=renames.get(rec.new_wgt, rec.new_wgt),
+        cells=names(rec.cells),
+        aux=names(rec.aux),
+    )
+
+
 def _design_with_renamed_columns(design: Design, renames: dict[str, str]) -> Design:
-    """Return a new Design with all column references updated by *renames*."""
+    """Return a new Design with all column references updated by *renames*.
+
+    Covers the design fields, the replicate columns and units, the weight the
+    replicates go with, and the weight-adjustment record.
+    """
     if not renames:
         return design
 
@@ -148,9 +179,31 @@ def _design_with_renamed_columns(design: Design, renames: dict[str, str]) -> Des
         mos=_map_name_in_design(design.mos, renames),
         psu=_map_tuple_in_design(design.psu, renames),
         ssu=_map_tuple_in_design(design.ssu, renames),
-        pop_size=_map_name_in_design(design.pop_size, renames),
+        pop_size=_pop_size_with_renames(design.pop_size, renames),
         rep_wgts=new_rep,
+        wgt_adjustment=_record_with_renames(design.wgt_adjustment, renames),
     )
+
+
+def _history_with_renamed_columns(sample: "Sample", renames: dict[str, str]) -> None:
+    """Carry a rename into the sample's earlier designs.
+
+    A rename relabels a column without changing it, so an earlier design that
+    read the column still describes it under the new name, and restoring it
+    from history (``update_design(wgt=...)``) keeps working. An entry the
+    rename cannot be applied to (a partial rename of its replicate columns) is
+    kept as it was; its old names then no longer resolve and it is not restored.
+    """
+    history = getattr(sample, "_design_history", ())
+    if not history or not renames:
+        return
+    renamed: list[Design] = []
+    for d in history:
+        try:
+            renamed.append(_design_with_renamed_columns(d, renames))
+        except ValueError:
+            renamed.append(d)
+    sample._design_history = tuple(renamed)
 
 
 # -------------------------------------------------------------------

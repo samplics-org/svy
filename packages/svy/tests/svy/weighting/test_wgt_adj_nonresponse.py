@@ -293,7 +293,9 @@ def test_adjust_replicate_weights_ignored_when_flag_set(sample_data_basic):
         respondents_only=False,
     )
     assert f"{NR_WGT}1" not in sample.data.columns
-    assert sample.design.rep_wgts.columns == ["rw1", "rw2"]
+    # The new weight has no replicates; the unadjusted ones stay in the data.
+    assert sample.design.rep_wgts is None
+    assert {"rw1", "rw2"} <= set(sample.data.columns)
 
 
 def test_adjust_no_design_update(sample_data_basic):

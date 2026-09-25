@@ -257,6 +257,11 @@ class Weighting:
             response statuses within it. None adjusts the sample as one class.
         where : WhereArg
             Scope. Rows outside it keep their weight whatever their status.
+        ignore_reps : bool
+            Leave the replicate weights unadjusted. The new weight then has no
+            replicate weights (variance is Taylor); the replicate columns stay
+            in the data and ``update_design(wgt=<previous weight>)`` restores
+            them.
 
         Recorded as ``kind="nonresponse"`` and provenance only: variance treats
         the adjusted weights as fixed, matching R.
@@ -317,6 +322,11 @@ class Weighting:
             Groups that each receive one factor.
         where : WhereArg
             Scope.
+        ignore_reps : bool
+            Leave the replicate weights unadjusted. The new weight then has no
+            replicate weights (variance is Taylor); the replicate columns stay
+            in the data and ``update_design(wgt=<previous weight>)`` restores
+            them.
 
         Recorded as ``kind="normalization"`` and provenance only.
         """
@@ -377,6 +387,11 @@ class Weighting:
             Alternate trimming and re-poststratification until both hold. This
             is the supported route to calibrated-and-trimmed weights, since
             trimming afterwards would break the controls.
+        ignore_reps : bool
+            Leave the replicate weights unadjusted. The new weight then has no
+            replicate weights (variance is Taylor); the replicate columns stay
+            in the data and ``update_design(wgt=<previous weight>)`` restores
+            them.
         """
         _reject_legacy_kwargs("poststratify", _legacy)
         return _poststratify(
@@ -432,6 +447,11 @@ class Weighting:
             sample as one domain.
         where : WhereArg
             Scope (R's ``excluding.missing``).
+        ignore_reps : bool
+            Leave the replicate weights unadjusted. The new weight then has no
+            replicate weights (variance is Taylor); the replicate columns stay
+            in the data and ``update_design(wgt=<previous weight>)`` restores
+            them.
 
         Standardized weights are analysis-specific: ``where`` bakes in one
         variable's missingness and ``by`` the domain structure, so estimating a
@@ -506,6 +526,11 @@ class Weighting:
             grand total, which makes cross-margin consistency structural.
         where : WhereArg
             Scope.
+        ignore_reps : bool
+            Leave the replicate weights unadjusted. The new weight then has no
+            replicate weights (variance is Taylor); the replicate columns stay
+            in the data and ``update_design(wgt=<previous weight>)`` restores
+            them.
         """
         _reject_legacy_kwargs("rake", _legacy)
         return _rake(
@@ -591,6 +616,11 @@ class Weighting:
         where : WhereArg
             Scope. Rows outside it keep their weight and take no part in the
             fit.
+        ignore_reps : bool
+            Leave the replicate weights unadjusted. The new weight then has no
+            replicate weights (variance is Taylor); the replicate columns stay
+            in the data and ``update_design(wgt=<previous weight>)`` restores
+            them.
         """
         return _calibrate(
             self._target(inplace),

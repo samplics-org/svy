@@ -986,36 +986,38 @@ class Sample:
         def _is_numeric_dtype(dt: pl.DataType) -> bool:
             return dt in INTEGER_DTYPES or dt in FLOAT_DTYPES
 
-        # 1. Validate explicit design fields (stratum, psu, wgt, etc.)
-        needed_cols = design.specified_fields(
-            ignore_cols=("wr",),
-            data_columns=data.columns,
-        )
-        missing = [c for c in needed_cols if c not in data.columns]
+        # 1. Every column the design needs: design fields, replicate weights and
+        # the units they were built from, and the weight-adjustment record's
+        # columns. A frame missing any of them is not the frame this design
+        # describes (a stale version, a column subset), so it fails here rather
+        # than as a silent fallback at estimation.
+        present = set(data.columns)
+        missing = [c for c in design.columns(data_columns=data.columns) if c not in present]
         if missing:
-            raise ValueError(f"Design references columns not found in data: {missing}")
-
-        # 1a. The units the replicate weights were built from are columns too,
-        # and they are not part of `specified_fields` because they live on
-        # rep_wgts rather than on the Design. An unresolvable one is the same
-        # mistake as an unresolvable design column, and it fails the same way --
-        # otherwise it surfaces much later as "cannot derive", which points at
-        # the wrong problem.
-        rw = design.rep_wgts
-        if rw is not None:
-            missing_units = [
-                f"rep_wgts.{name}={c!r}"
-                for name, col in (("stratum", rw.stratum), ("psu", rw.psu))
-                for c in unit_columns(col)
-                if c not in data.columns
-            ]
-            if missing_units:
-                raise ValueError(
-                    f"Replicate weights reference columns not found in data: "
-                    f"{missing_units}. These name the units the replicates were "
-                    f"built from, which is a separate question from the Design's "
-                    f"stratum/psu."
+            shown = missing[:10]
+            more = "..." if len(missing) > 10 else ""
+            notes: list[str] = []
+            rw = design.rep_wgts
+            if rw is not None and any(
+                c in missing for c in (*unit_columns(rw.stratum), *unit_columns(rw.psu))
+            ):
+                notes.append(
+                    "rep_wgts.stratum/psu name the units the replicates were built "
+                    "from, which is a separate question from the Design's stratum/psu."
                 )
+            rec = design.wgt_adjustment
+            if rec is not None and any(
+                c in missing
+                for c in (rec.new_wgt, rec.prev_wgt, *(rec.cells or ()), *(rec.aux or ()))
+            ):
+                notes.append(
+                    f"wgt_adjustment ({rec.kind}) reads its columns from the data; "
+                    "they are written by the weighting method and must travel with it."
+                )
+            raise ValueError(
+                f"Design references columns not found in data: {shown}{more}"
+                + ("" if not notes else " " + " ".join(notes))
+            )
 
         # 1b. Validate pop_size columns are numeric
         if design.pop_size is not None:
@@ -1739,17 +1741,77 @@ class Sample:
 
     def set_design(self, design: Design) -> Self:
         """Replace the entire Design."""
-        self._push_design()
-        self._design = design
-        self._refresh_internal_state()
+        self._replace_design(design)
         return self
 
-    def update_design(self, **kwargs) -> Self:
-        """Update selected Design fields in place."""
+    def _replace_design(self, design: Design) -> None:
+        """Install ``design`` and rebuild internal state, or leave the sample
+        exactly as it was when the new design does not fit the data."""
+        saved = (
+            self._design,
+            self._data,
+            self._internal_design,
+            getattr(self, "_design_history", ()),
+            getattr(self, "_singletons", None),
+        )
         self._push_design()
-        self._design = self._design.update(**kwargs)
-        self._refresh_internal_state()
+        self._design = design
+        try:
+            self._refresh_internal_state()
+        except Exception:
+            (
+                self._design,
+                self._data,
+                self._internal_design,
+                self._design_history,
+                self._singletons,
+            ) = saved
+            raise
+
+    def update_design(self, **kwargs) -> Self:
+        """Update selected Design fields in place.
+
+        ``wgt=X`` points the design at X and keeps what depends on the weight
+        consistent with it, for whatever is not passed explicitly: on the
+        current weight the record and replicate weights are kept; on a weight an
+        earlier design produced (still in the data) that design's record and
+        replicates come back; on any other column there is no record, and the
+        replicate weights are dropped with a warning unless ``rep_wgts=`` is
+        passed.
+        """
+        # A weight the data does not have fails before anything, the
+        # replicate-reset warning included, is acted on.
+        wgt = kwargs.get("wgt")
+        if isinstance(wgt, str) and wgt not in cast(pl.DataFrame, self._data).columns:
+            raise ValueError(f"Design references columns not found in data: [{wgt!r}]")
+        self._replace_design(self._design.update(**self._with_restored_record(kwargs)))
         return self
+
+    def _with_restored_record(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Fill the record and replicates of an earlier design on ``kwargs["wgt"]``.
+
+        Weighting never overwrites a column, so a weight this sample produced
+        earlier is still described by the record and replicates it was made
+        with, provided their columns are all still in the data. The most recent
+        such design wins. Explicit arguments are never overridden.
+        """
+        if "wgt" not in kwargs or kwargs["wgt"] == self._design.wgt:
+            return kwargs
+        if "wgt_adjustment" in kwargs and "rep_wgts" in kwargs:
+            return kwargs
+        wgt = kwargs["wgt"]
+        data_columns = cast(pl.DataFrame, self._data).columns
+        present = set(data_columns)
+        for prior in reversed(getattr(self, "_design_history", ())):
+            if prior.wgt != wgt:
+                continue
+            if all(c in present for c in prior.columns(data_columns=data_columns)):
+                return {
+                    "wgt_adjustment": prior.wgt_adjustment,
+                    "rep_wgts": prior.rep_wgts,
+                    **kwargs,
+                }
+        return kwargs
 
     # ════════════════════════════════════════════════════════════════════════
     # USE (public) to facilitate experimentation
@@ -1794,7 +1856,9 @@ class Sample:
         # We must deepcopy the design so we don't mutate the original sample's design
         if new_sample._design is not None:
             new_sample._push_design()
-            new_sample._design = new_sample._design.update(wgt=wgt)
+            new_sample._design = new_sample._design.update(
+                **new_sample._with_restored_record({"wgt": wgt})
+            )
         else:
             # If no design existed, create a minimal one with the weight
             new_sample._design = Design(wgt=wgt)

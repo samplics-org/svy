@@ -267,10 +267,16 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     # has no stratum to count.
     stratum: str | tuple[str, ...] | None = None
     psu: str | tuple[str, ...] | None = None
+    # The full-sample weight column these replicates go with. Filled by Design
+    # from its own ``wgt`` when unset, so a stored design says which weight its
+    # replicates belong to and svy can tell when the design moves off it.
+    wgt: str | None = None
 
     def __post_init__(self) -> None:
         if not self.prefix or not self.prefix.strip():
             raise ValueError("RepWeights 'prefix' cannot be empty or whitespace.")
+        if self.wgt is not None and (not isinstance(self.wgt, str) or not self.wgt.strip()):
+            raise ValueError("RepWeights 'wgt' must be a non-empty column name or None.")
         if self.n_reps < 2:
             raise ValueError(f"n_reps must be >= 2. Got {self.n_reps}.")
         for _unit in ("stratum", "psu"):
@@ -420,6 +426,8 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
         if self.df is not None:
             parts.append(f"df={self.df}")
         parts.extend(self._variant_parts())
+        if self.wgt is not None:
+            parts.append(f"wgt={self.wgt!r}")
         parts.extend(self._unit_parts())
         parts.extend(self._coef_parts())
         if self.padding is not None:
@@ -436,6 +444,8 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
             f"DF       : {self.df if self.df is not None else 'auto'}",
         ]
         lines.extend(self._plain_variant_lines())
+        if self.wgt is not None:
+            lines.append(f"Weight   : {self.wgt}")
         if self.stratum is not None:
             lines.append(f"Stratum  : {self.stratum}")
         if self.psu is not None:

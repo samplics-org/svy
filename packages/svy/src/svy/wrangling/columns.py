@@ -23,6 +23,7 @@ from svy.wrangling._helpers import (
 )
 from svy.wrangling._naming import (
     _design_with_renamed_columns,
+    _history_with_renamed_columns,
     _normalize_case_style,
     _normalize_letter_case,
     _update_metadata_keys,
@@ -62,6 +63,7 @@ def clean_names(
         _update_metadata_keys(target, renames)
         if getattr(target, "_design", None) is not None:
             target._design = _design_with_renamed_columns(target._design, renames)
+            _history_with_renamed_columns(target, renames)
         _rebuild_concat_columns(target)
     return target
 
@@ -103,13 +105,20 @@ def rename_columns(
             where="wrangling.rename_columns",
         ) from ex
 
+    # The design is renamed before anything is rebound, so a rename it cannot
+    # represent (a partial replicate rename) leaves an inplace sample untouched.
+    design = getattr(sample, "_design", None)
+    new_design = None if design is None else _design_with_renamed_columns(design, renames)
+    touches_sources = bool(set(renames.keys()) & _design_source_columns(sample))
+
     target = _resolve_target(sample, renamed_data, inplace=inplace)
     _update_metadata_keys(target, renames)
 
-    if getattr(target, "_design", None) is not None:
-        target._design = _design_with_renamed_columns(target._design, renames)
+    if new_design is not None:
+        target._design = new_design
+        _history_with_renamed_columns(target, renames)
 
-    if set(renames.keys()) & _design_source_columns(sample):
+    if touches_sources:
         _rebuild_concat_columns(target)
 
     return target

@@ -808,8 +808,8 @@ class TestReplicatePropagation:
             ignore_reps=True,
         )
         assert sample.design.wgt == "norm_wgt"
-        # Replicate prefix should NOT be updated
-        assert sample.design.rep_wgts.prefix == "base_wgt"
+        # Unadjusted replicates do not go with the new weight
+        assert sample.design.rep_wgts is None
         # Original replicate columns should still exist
         for i in range(1, 6):
             assert f"base_wgt{i}" in sample.data.columns
