@@ -1,5 +1,6 @@
 {
   "alpha": 0.05,
+  "as_factor": false,
   "deff_ref": null,
   "estimates": [
     {
@@ -24,6 +25,7 @@
     }
   ],
   "kind": "estimate",
+  "labels": null,
   "method": "Taylor",
   "n_psus": 20,
   "n_strata": 10,

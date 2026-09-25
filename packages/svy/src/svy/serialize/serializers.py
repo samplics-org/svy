@@ -41,6 +41,7 @@ from svy.serialize.structs import (
     GLMPredData,
     GLMStatsData,
     GroupLevelsData,
+    LevelLabelData,
     ParamEstData,
     ResultData,
     TableData,
@@ -50,6 +51,7 @@ from svy.serialize.structs import (
     TTestOneGroupData,
     TTestStatsData,
     TTestTwoGroupsData,
+    VarLabelsData,
 )
 
 
@@ -204,7 +206,7 @@ def _fdist_to_data(f: Any) -> FDistData:
 
 def _tdist_to_data(t: Any) -> TDistData:
     return TDistData(
-        df=_f(t.df),
+        df=int(t.df) if isinstance(t.df, (int, np.integer)) else _f(t.df),
         value=_f(t.value),
         p_value=_f(t.p_value),
     )
@@ -279,6 +281,17 @@ def _serialize_estimate(result: Estimate) -> EstimateData:
         where_clause=result.where_clause,
         q_method=_enum(result.q_method),
         deff_ref=result.deff_ref,
+        as_factor=bool(result.as_factor),
+        labels=[
+            VarLabelsData(
+                var=var,
+                var_label=lab.var_label,
+                values=[LevelLabelData(code=c, label=v) for c, v in lab.values.items()],
+            )
+            for var, lab in result._labels().items()
+            if lab.var_label or lab.values
+        ]
+        or None,
     )
 
 
@@ -503,6 +516,16 @@ def from_json(data: bytes) -> ResultData:
     return cast(ResultData, msgspec.convert(_null_to_nan(raw, mi.type_info(cls)), type=cls))
 
 
+def _is_float(t: mi.Type) -> bool:
+    """A plain ``float``, or a union with one that does not admit ``None``."""
+    if isinstance(t, mi.UnionType):
+        members = t.types
+        return any(isinstance(u, mi.FloatType) for u in members) and not any(
+            isinstance(u, mi.NoneType) for u in members
+        )
+    return isinstance(t, mi.FloatType)
+
+
 def _null_to_nan(obj: Any, t: mi.Type) -> Any:
     """Read a ``null`` in a plain ``float`` field as NaN.
 
@@ -511,7 +534,7 @@ def _null_to_nan(obj: Any, t: mi.Type) -> Any:
     fields keep ``None``.
     """
     if obj is None:
-        return math.nan if isinstance(t, mi.FloatType) else None
+        return math.nan if _is_float(t) else None
     if isinstance(t, mi.UnionType):
         match = [u for u in t.types if isinstance(u, (mi.StructType, mi.ListType))]
         return _null_to_nan(obj, match[0]) if len(match) == 1 else obj

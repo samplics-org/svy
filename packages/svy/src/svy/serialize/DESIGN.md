@@ -39,6 +39,13 @@ The serialize subpackage is a **pure external consumer**. It reads public
 attributes from result objects without adding methods, decorators, or fields to
 them. The only existing file touched is `svy/__init__.py` (one-line import).
 
+**Amended 2026-09-25 for the table view (§2.12).** Each result class's
+`to_polars()` body moved into a module-level function next to it
+(`estimate_frame`, `table_frame`, `ttest_one_group_frame`, …) that reads only
+fields the payload shares by name. The live method calls it; so does
+`svy.serialize.to_polars`. The result classes gained no fields or methods, and
+one builder per kind means the live and payload tables cannot drift.
+
 ### 2.3 msgspec.Struct for all structs
 
 Consistent with svy's existing patterns. Gives us `msgspec.json.encode/decode`
@@ -73,7 +80,10 @@ ignore unknown fields.
   Strictly this removal warrants a major bump under the policy above; 0.2 was
   chosen deliberately because no known consumer binds to the removed field.
 - `0.3` — `EstimateData.deff_ref` added.
-- `0.4` — the JSON may carry `"nonfinite"` (§2.11).
+- `0.4` — the JSON may carry `"nonfinite"` (§2.11). `EstimateData.as_factor`
+  added: it decides whether the table has a level column, so the table view
+  needs it (no longer excluded). `TDistData.df` widened to `int | float` so a
+  GLM's integer design df keeps its dtype in the table.
 
 ### 2.6 Sub-structs are untagged
 
@@ -126,6 +136,25 @@ because they make every numeric field number-or-string for JSON consumers.
 Payloads written before 0.4 have bare `null`s; `from_json` reads a `null` in
 a plain `float` field as NaN.
 
+### 2.12 Table view: `to_polars(data)`
+
+`to_polars(data, *, row_index=None, **options)` returns the frame the live
+result's `to_polars(**options)` returns, from the payload alone, for every
+registered kind (anything else raises `PAYLOAD_NO_TABLE`). Options are those that need nothing beyond the
+payload: `tidy`, `use_labels`, `component`, `exponentiate`. An estimate stores
+`labels` (each variable's label and the labels of the levels present, as
+`(code, label)` pairs since JSON keys are strings), so its `<var>_label`
+columns come back without the sample's metadata.
+
+`row_index` names a first `UInt32` column holding each row's position in the
+payload's rows (`estimates`, `diff`, `coefs`, or the prediction arrays; an
+estimate list counts through its members in order). Estimate tables are
+sorted for display, so a consumer that acts on a payload row (a release rule
+withholding a cell) and on the table must join on this column, never on
+position. The payload keeps its own order: it is the order of contrast keys
+and of the covariance matrix.
+
+
 ## 3. Type conversion rules
 
 | Source type                    | Target type           | How                          |
@@ -143,7 +172,7 @@ a plain `float` field as NaN.
 ## 4. Public API
 
 ```python
-from svy.serialize import serialize, to_json, to_dict, from_json
+from svy.serialize import serialize, to_json, to_dict, from_json, to_polars
 
 # Serialize a svy result object to a stable struct
 data = serialize(result)  # -> ResultData
@@ -156,6 +185,9 @@ d = to_dict(result)  # -> dict[str, Any]
 
 # Decode JSON bytes back to a struct
 data = from_json(json_bytes)  # -> ResultData
+
+# The table the live result's to_polars() returns
+df = to_polars(data, row_index="row")  # -> pl.DataFrame
 ```
 
 ## 5. Struct reference
@@ -180,8 +212,10 @@ Source: `svy.estimation.estimate.Estimate` (not msgspec; `__slots__`)
 | `n_psus`          | `int`                   | `n_psus`               |
 | `where_clause`    | `str \| None`           | `where_clause`         |
 | `q_method`        | `str`                   | `q_method` (QuantMethod)|
+| `deff_ref`        | `str \| None`           | `deff_ref`             |
+| `as_factor`       | `bool`                  | `as_factor`            |
 
-Excluded: `covariance`, `strata`, `singletons`, `domains`, `as_factor`.
+Excluded: `covariance`, `strata`, `singletons`, `domains`.
 
 #### TTestOneGroupData (`kind = "ttest_one_group"`)
 
@@ -407,11 +441,11 @@ Source: `svy.core.containers.FDist`
 
 Source: `svy.core.containers.TDist`
 
-| Field     | Type    |
-| --------- | ------- |
-| `df`      | `float` |
-| `value`   | `float` |
-| `p_value` | `float` |
+| Field     | Type            |
+| --------- | --------------- |
+| `df`      | `int \| float`  |
+| `value`   | `float`         |
+| `p_value` | `float`         |
 
 #### GLMCoefData
 

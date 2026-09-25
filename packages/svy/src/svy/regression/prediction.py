@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import msgspec
 import numpy as np
@@ -52,15 +52,7 @@ class GLMPred(msgspec.Struct, frozen=True):
 
     def to_polars(self) -> pl.DataFrame:
         """Convert predictions to DataFrame."""
-        data = {
-            "yhat": self.yhat,
-            "se": self.se,
-            "lci": self.lci,
-            "uci": self.uci,
-        }
-        if self.residuals is not None:
-            data["residuals"] = self.residuals
-        return pl.DataFrame(data)
+        return glm_pred_frame(self)
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -161,3 +153,11 @@ class GLMPred(msgspec.Struct, frozen=True):
             ).print(self)
             return
         print(self.__plain_str__())
+
+
+def glm_pred_frame(r: Any) -> pl.DataFrame:
+    """The table of a ``GLMPred``, shared with its serialized form (same field names)."""
+    data = {"yhat": r.yhat, "se": r.se, "lci": r.lci, "uci": r.uci}
+    if r.residuals is not None:
+        data["residuals"] = r.residuals
+    return pl.DataFrame(data)

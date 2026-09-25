@@ -4,11 +4,15 @@ from __future__ import annotations
 import datetime as dt
 import logging
 
-from typing import Any, TypeAlias
+from typing import TYPE_CHECKING, Any, Mapping, Sequence, TypeAlias
 
 import msgspec
 
 from .enumerations import MeasurementType
+
+
+if TYPE_CHECKING:
+    import polars as pl
 
 
 log = logging.getLogger(__name__)
@@ -219,6 +223,17 @@ class DescribeResult(msgspec.Struct, frozen=True):
 
     # honor class-level width override like Table
     PRINT_WIDTH: int | None = None
+
+    def to_polars(self) -> pl.DataFrame:
+        """One row per described column, keyed by ``name``.
+
+        Carries the scalar fields of each item; nested ones (frequency tables,
+        percentile lists) are left out. Built from the serialized items, so it
+        is the same frame ``svy.serialize.to_polars`` gives for this result.
+        """
+        from svy.serialize import serialize
+
+        return _describe_frame(serialize(self).items)
 
     # ---------- repr ----------
     def __repr__(self) -> str:
@@ -531,6 +546,34 @@ class DescribeResult(msgspec.Struct, frozen=True):
 
 
 # ------------- formatting helpers -------------
+
+
+def _describe_frame(items: Sequence[Mapping[str, Any]]) -> pl.DataFrame:
+    """Scalar fields of each serialized item, one row per item.
+
+    A column is Boolean, Int64 or Float64 when every value fits, else String:
+    items of different kinds share names like ``min`` with different types.
+    """
+    import polars as pl
+
+    nested = {k for it in items for k, v in it.items() if isinstance(v, (list, tuple, dict))}
+    names = [k for k in dict.fromkeys(k for it in items for k in it) if k not in nested]
+
+    def column(name: str) -> pl.Series:
+        vals = [it.get(name) for it in items]
+        present = [v for v in vals if v is not None]
+        if not present:
+            return pl.Series(name, vals, dtype=pl.Null)
+        if all(isinstance(v, bool) for v in present):
+            return pl.Series(name, vals, dtype=pl.Boolean)
+        if not any(isinstance(v, bool) for v in present):
+            if all(isinstance(v, int) for v in present):
+                return pl.Series(name, vals, dtype=pl.Int64)
+            if all(isinstance(v, (int, float)) for v in present):
+                return pl.Series(name, vals, dtype=pl.Float64)
+        return pl.Series(name, [None if v is None else str(v) for v in vals], dtype=pl.String)
+
+    return pl.DataFrame([column(n) for n in names])
 
 
 def _f(x: float | None) -> str:

@@ -64,7 +64,8 @@ class FDistData(msgspec.Struct, kw_only=True, frozen=True):
 class TDistData(msgspec.Struct, kw_only=True, frozen=True):
     """T-distribution test result (mirrors ``svy.core.containers.TDist``)."""
 
-    df: float
+    #: An int when the source holds one (a GLM's design df), so tables keep its dtype.
+    df: int | float
     value: float
     p_value: float
 
@@ -109,6 +110,21 @@ class ParamEstData(msgspec.Struct, kw_only=True, frozen=True):
     deff: float | None = None
     df: int | None = None
     prob: float | None = None
+
+
+class LevelLabelData(msgspec.Struct, kw_only=True, frozen=True):
+    """A level's code and its value label. A pair, not a dict key: JSON keys are strings."""
+
+    code: CatValue
+    label: str
+
+
+class VarLabelsData(msgspec.Struct, kw_only=True, frozen=True):
+    """A variable's label and the labels of its levels present in the result."""
+
+    var: str
+    var_label: str = ""
+    values: list[LevelLabelData] = []
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +241,7 @@ class EstimateData(msgspec.Struct, kw_only=True, frozen=True):
     """
     Serialization struct for ``svy.estimation.estimate.Estimate``.
 
-    Excludes: covariance, strata, singletons, domains, as_factor.
+    Excludes: covariance, strata, singletons, domains.
     """
 
     kind: Literal["estimate"] = "estimate"
@@ -243,6 +259,12 @@ class EstimateData(msgspec.Struct, kw_only=True, frozen=True):
     #: decode; a deff is ambiguous without it, since the two references differ
     #: by 1 - n/N.
     deff_ref: str | None = None
+    #: A mean or total over a categorical variable's levels, which puts each
+    #: row's level in its own column, as a proportion does.
+    as_factor: bool = False
+    #: Labels of the variables whose levels the rows carry, from the sample's
+    #: metadata, so a table can show them without it.
+    labels: list[VarLabelsData] | None = None
 
 
 @_kinded("estimate_list")

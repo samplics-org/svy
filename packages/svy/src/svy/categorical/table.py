@@ -63,6 +63,9 @@ class TableStats(msgspec.Struct):
     f: FDist | None
 
 
+_CELL_FIELDS = ("rowvar", "colvar", "est", "se", "cv", "lci", "uci")
+
+
 class CellEst(msgspec.Struct):
     rowvar: str
     colvar: str
@@ -96,15 +99,7 @@ class CellEst(msgspec.Struct):
         )
 
     def to_dict(self) -> dict[str, Category | None]:
-        return {
-            "rowvar": self.rowvar,
-            "colvar": self.colvar,
-            "est": self.est,
-            "se": self.se,
-            "cv": self.cv,
-            "lci": self.lci,
-            "uci": self.uci,
-        }
+        return {f: getattr(self, f) for f in _CELL_FIELDS}
 
 
 # =============================================================================
@@ -674,18 +669,7 @@ class Table:
         return rows
 
     def to_polars(self, *, tidy: bool = True) -> Any:
-        df = pl.DataFrame(self.to_records(include_meta=True))
-        drop_cols = [c for c in ("cv", "deff") if c in df.columns]
-        if drop_cols:
-            df = df.drop(drop_cols)
-        if not tidy:
-            return df
-        rename = {"rowvar": self.rowvar}
-        if self.colvar is not None and "colvar" in df.columns:
-            rename["colvar"] = self.colvar
-        elif "colvar" in df.columns:
-            df = df.drop("colvar")
-        return df.rename(rename)
+        return table_frame(self, tidy=tidy)
 
     def to_dict(self) -> dict[str, object]:
         stats_payload: dict[str, object] | None
@@ -1086,3 +1070,20 @@ def _ensure_numeric(df: pl.DataFrame, col: str) -> pl.DataFrame:
     if dtype in (pl.Utf8, pl.Categorical):
         return df.with_columns(pl.col(col).cast(pl.Float64))
     return df
+
+
+def table_frame(r: Any, *, tidy: bool = True) -> pl.DataFrame:
+    """The table of a ``Table``, shared with its serialized form (same field names)."""
+    meta = {"table_type": _enum_label(r.type), "alpha": r.alpha}
+    df = pl.DataFrame([{f: getattr(c, f) for f in _CELL_FIELDS} | meta for c in r.estimates or []])
+    drop_cols = [c for c in ("cv", "deff") if c in df.columns]
+    if drop_cols:
+        df = df.drop(drop_cols)
+    if not tidy:
+        return df
+    rename = {"rowvar": r.rowvar}
+    if r.colvar is not None and "colvar" in df.columns:
+        rename["colvar"] = r.colvar
+    elif "colvar" in df.columns:
+        df = df.drop("colvar")
+    return df.rename(rename)

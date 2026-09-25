@@ -252,35 +252,7 @@ class GLMFit(msgspec.Struct, frozen=True):
         test is computed; a symmetric standard error around a ratio is the
         mistake this is meant to prevent.
         """
-        est_col = "estimate"
-        if exponentiate:
-            est_col, _ = _ratio_labels(self.link)
-
-        data = []
-        for c in self.coefs:
-            row: dict[str, Any] = {
-                "term": c.term,
-                est_col: math.exp(c.est) if exponentiate else c.est,
-                "std_err": c.se,
-                "conf_low": math.exp(c.lci) if exponentiate else c.lci,
-                "conf_high": math.exp(c.uci) if exponentiate else c.uci,
-            }
-            if c.wald:
-                row.update(
-                    {
-                        "statistic": c.wald.value,
-                        "p_value": c.wald.p_value,
-                        "df": c.wald.df,
-                    }
-                )
-            else:
-                row.update({"statistic": None, "p_value": None, "df": None})
-            if c.wald_adj:
-                row["adj_statistic"] = c.wald_adj.value
-                row["adj_p_value"] = c.wald_adj.p_value
-                row["adj_df"] = c.wald_adj.df
-            data.append(row)
-        return pl.DataFrame(data)
+        return glm_frame(self, exponentiate=exponentiate)
 
     def __rich_console__(self, console, options):
         yield from self._render_panel(exponentiate=False)
@@ -509,3 +481,36 @@ class GLMFit(msgspec.Struct, frozen=True):
             ).print(_View() if exponentiate else self)
             return
         print(self.__plain_str__(exponentiate=exponentiate))
+
+
+def glm_frame(r: Any, *, exponentiate: bool = False) -> pl.DataFrame:
+    """The table of a ``GLMFit``, shared with its serialized form (same field names)."""
+    est_col = "estimate"
+    if exponentiate:
+        est_col, _ = _ratio_labels(r.link)
+
+    data = []
+    for c in r.coefs:
+        row: dict[str, Any] = {
+            "term": c.term,
+            est_col: math.exp(c.est) if exponentiate else c.est,
+            "std_err": c.se,
+            "conf_low": math.exp(c.lci) if exponentiate else c.lci,
+            "conf_high": math.exp(c.uci) if exponentiate else c.uci,
+        }
+        if c.wald:
+            row.update(
+                {
+                    "statistic": c.wald.value,
+                    "p_value": c.wald.p_value,
+                    "df": c.wald.df,
+                }
+            )
+        else:
+            row.update({"statistic": None, "p_value": None, "df": None})
+        if c.wald_adj:
+            row["adj_statistic"] = c.wald_adj.value
+            row["adj_p_value"] = c.wald_adj.p_value
+            row["adj_df"] = c.wald_adj.df
+        data.append(row)
+    return pl.DataFrame(data)

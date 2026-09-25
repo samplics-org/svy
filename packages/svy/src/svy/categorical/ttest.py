@@ -210,92 +210,7 @@ class TTestOneGroup(msgspec.Struct, tag="one", tag_field="kind", kw_only=True, f
         *,
         tidy: bool = True,
     ) -> pl.DataFrame:
-        import polars as pl
-
-        if component == "test":
-            if not self.diff:
-                return pl.DataFrame(
-                    schema={
-                        "y": pl.Utf8,
-                        "diff": pl.Float64,
-                        "se": pl.Float64,
-                        "lci": pl.Float64,
-                        "uci": pl.Float64,
-                        "t": pl.Float64,
-                        "df": pl.Float64,
-                        "p_value": pl.Float64,
-                    }
-                )
-
-            rows: list[dict[str, Any]] = []
-            for d in self.diff:
-                row: dict[str, Any] = {"y": d.y}
-                if d.by is not None:
-                    if tidy:
-                        row[d.by] = d.by_level
-                    else:
-                        row["by"] = d.by
-                        row["by_level"] = d.by_level
-                row.update({"diff": d.diff, "se": d.se, "lci": d.lci, "uci": d.uci})
-                if self.stats is not None:
-                    row["t"] = self.stats.t
-                    row["df"] = float(self.stats.df)
-                    row["p_value"] = self.stats.p_value
-                rows.append(row)
-
-            df = pl.DataFrame(rows)
-            if not tidy and "by" in df.columns and df["by"].is_null().all():
-                df = df.drop("by", "by_level")
-            return df
-
-        elif component == "estimates":
-            if not self.estimates:
-                return pl.DataFrame(
-                    schema={
-                        "y": pl.Utf8,
-                        "est": pl.Float64,
-                        "se": pl.Float64,
-                        "cv": pl.Float64,
-                        "lci": pl.Float64,
-                        "uci": pl.Float64,
-                    }
-                )
-
-            if not tidy:
-                df = pl.DataFrame(msgspec.to_builtins(self.estimates))
-                for col_pair in [("by", "by_level"), ("group", "group_level")]:
-                    if col_pair[0] in df.columns and df[col_pair[0]].is_null().all():
-                        df = df.drop(*col_pair)
-                if "y_level" in df.columns and df["y_level"].is_null().all():
-                    df = df.drop("y_level")
-                return df
-
-            # tidy=True: promote group/by/y to named columns
-            rows = []
-            for e in self.estimates:
-                row: dict[str, Any] = {}
-                if e.by is not None:
-                    row[e.by] = e.by_level
-                if e.group is not None:
-                    row[e.group] = e.group_level
-                if e.y_level is not None:
-                    row[e.y] = e.y_level
-                row.update(
-                    {
-                        "est": e.est,
-                        "se": e.se,
-                        "cv": e.cv,
-                        "lci": e.lci,
-                        "uci": e.uci,
-                    }
-                )
-                rows.append(row)
-            return pl.DataFrame(rows)
-
-        else:
-            raise ValueError(
-                f"Invalid component '{component}'. Expected one of ['test', 'estimates']."
-            )
+        return ttest_one_group_frame(self, component, tidy=tidy)
 
     # ---------------- Presentation ----------------
 
@@ -500,105 +415,7 @@ class TTestTwoGroups(msgspec.Struct, tag="two", tag_field="kind", kw_only=True, 
         *,
         tidy: bool = True,
     ) -> pl.DataFrame:
-        import polars as pl
-
-        if component == "test":
-            if not self.diff:
-                return pl.DataFrame(
-                    schema={
-                        "y": pl.Utf8,
-                        "group_var": pl.Utf8,
-                        "paired": pl.Boolean,
-                        "diff": pl.Float64,
-                        "se": pl.Float64,
-                        "lci": pl.Float64,
-                        "uci": pl.Float64,
-                        "t": pl.Float64,
-                        "df": pl.Float64,
-                        "p_value": pl.Float64,
-                    }
-                )
-
-            rows: list[dict[str, Any]] = []
-            for d in self.diff:
-                row: dict[str, Any] = {"y": d.y}
-                if d.by is not None:
-                    if tidy:
-                        row[d.by] = d.by_level
-                    else:
-                        row["by"] = d.by
-                        row["by_level"] = d.by_level
-                row.update(
-                    {
-                        "group_var": self.groups.var,
-                        "paired": self.paired,
-                        "diff": d.diff,
-                        "se": d.se,
-                        "lci": d.lci,
-                        "uci": d.uci,
-                    }
-                )
-                if self.stats is not None:
-                    row["t"] = self.stats.t
-                    row["df"] = float(self.stats.df)
-                    row["p_value"] = self.stats.p_value
-                rows.append(row)
-
-            df = pl.DataFrame(rows)
-            if not tidy and "by" in df.columns and df["by"].is_null().all():
-                df = df.drop("by", "by_level")
-            return df
-
-        elif component == "estimates":
-            if not self.estimates:
-                return pl.DataFrame(
-                    schema={
-                        "y": pl.Utf8,
-                        "group": pl.Utf8,
-                        "group_level": pl.Utf8,
-                        "est": pl.Float64,
-                        "se": pl.Float64,
-                        "cv": pl.Float64,
-                        "lci": pl.Float64,
-                        "uci": pl.Float64,
-                    }
-                )
-
-            if not tidy:
-                df = pl.DataFrame(msgspec.to_builtins(self.estimates))
-                if "by" in df.columns and df["by"].is_null().all():
-                    df = df.drop("by", "by_level")
-                if "y_level" in df.columns and df["y_level"].is_null().all():
-                    df = df.drop("y_level")
-                return df
-
-            # tidy=True: promote group/by/y to named columns
-            rows = []
-            for e in self.estimates:
-                row: dict[str, Any] = {}
-                if e.by is not None:
-                    row[e.by] = e.by_level
-                # group is always present for two-sample
-                if e.group is not None:
-                    row[e.group] = e.group_level
-                if e.y_level is not None:
-                    row[e.y] = e.y_level
-                row.update(
-                    {
-                        "est": e.est,
-                        "se": e.se,
-                        "cv": e.cv,
-                        "lci": e.lci,
-                        "uci": e.uci,
-                    }
-                )
-                rows.append(row)
-            return pl.DataFrame(rows)
-
-        else:
-            raise ValueError(
-                f"Invalid component '{component}'. Expected one of ['test', 'estimates']."
-            )
+        return ttest_two_groups_frame(self, component, tidy=tidy)
 
     # ---------------- Presentation ----------------
 
@@ -751,6 +568,209 @@ class TTestTwoGroups(msgspec.Struct, tag="two", tag_field="kind", kw_only=True, 
             ).print(self)
             return
         print(self.__plain_str__())
+
+
+def ttest_one_group_frame(
+    r: Any,
+    component: Literal["test", "estimates"] = "test",
+    *,
+    tidy: bool = True,
+) -> pl.DataFrame:
+    """The table of a ``TTestOneGroup``, shared with its serialized form (same field names)."""
+    import polars as pl
+
+    if component == "test":
+        if not r.diff:
+            return pl.DataFrame(
+                schema={
+                    "y": pl.Utf8,
+                    "diff": pl.Float64,
+                    "se": pl.Float64,
+                    "lci": pl.Float64,
+                    "uci": pl.Float64,
+                    "t": pl.Float64,
+                    "df": pl.Float64,
+                    "p_value": pl.Float64,
+                }
+            )
+
+        rows: list[dict[str, Any]] = []
+        for d in r.diff:
+            row: dict[str, Any] = {"y": d.y}
+            if d.by is not None:
+                if tidy:
+                    row[d.by] = d.by_level
+                else:
+                    row["by"] = d.by
+                    row["by_level"] = d.by_level
+            row.update({"diff": d.diff, "se": d.se, "lci": d.lci, "uci": d.uci})
+            if r.stats is not None:
+                row["t"] = r.stats.t
+                row["df"] = float(r.stats.df)
+                row["p_value"] = r.stats.p_value
+            rows.append(row)
+
+        df = pl.DataFrame(rows)
+        if not tidy and "by" in df.columns and df["by"].is_null().all():
+            df = df.drop("by", "by_level")
+        return df
+
+    elif component == "estimates":
+        if not r.estimates:
+            return pl.DataFrame(
+                schema={
+                    "y": pl.Utf8,
+                    "est": pl.Float64,
+                    "se": pl.Float64,
+                    "cv": pl.Float64,
+                    "lci": pl.Float64,
+                    "uci": pl.Float64,
+                }
+            )
+
+        if not tidy:
+            df = pl.DataFrame(msgspec.to_builtins(r.estimates))
+            for col_pair in [("by", "by_level"), ("group", "group_level")]:
+                if col_pair[0] in df.columns and df[col_pair[0]].is_null().all():
+                    df = df.drop(*col_pair)
+            if "y_level" in df.columns and df["y_level"].is_null().all():
+                df = df.drop("y_level")
+            return df
+
+        # tidy=True: promote group/by/y to named columns
+        rows = []
+        for e in r.estimates:
+            row: dict[str, Any] = {}
+            if e.by is not None:
+                row[e.by] = e.by_level
+            if e.group is not None:
+                row[e.group] = e.group_level
+            if e.y_level is not None:
+                row[e.y] = e.y_level
+            row.update(
+                {
+                    "est": e.est,
+                    "se": e.se,
+                    "cv": e.cv,
+                    "lci": e.lci,
+                    "uci": e.uci,
+                }
+            )
+            rows.append(row)
+        return pl.DataFrame(rows)
+
+    else:
+        raise ValueError(
+            f"Invalid component '{component}'. Expected one of ['test', 'estimates']."
+        )
+
+
+def ttest_two_groups_frame(
+    r: Any,
+    component: Literal["test", "estimates"] = "test",
+    *,
+    tidy: bool = True,
+) -> pl.DataFrame:
+    """The table of a ``TTestTwoGroups``, shared with its serialized form (same field names)."""
+    import polars as pl
+
+    if component == "test":
+        if not r.diff:
+            return pl.DataFrame(
+                schema={
+                    "y": pl.Utf8,
+                    "group_var": pl.Utf8,
+                    "paired": pl.Boolean,
+                    "diff": pl.Float64,
+                    "se": pl.Float64,
+                    "lci": pl.Float64,
+                    "uci": pl.Float64,
+                    "t": pl.Float64,
+                    "df": pl.Float64,
+                    "p_value": pl.Float64,
+                }
+            )
+
+        rows: list[dict[str, Any]] = []
+        for d in r.diff:
+            row: dict[str, Any] = {"y": d.y}
+            if d.by is not None:
+                if tidy:
+                    row[d.by] = d.by_level
+                else:
+                    row["by"] = d.by
+                    row["by_level"] = d.by_level
+            row.update(
+                {
+                    "group_var": r.groups.var,
+                    "paired": r.paired,
+                    "diff": d.diff,
+                    "se": d.se,
+                    "lci": d.lci,
+                    "uci": d.uci,
+                }
+            )
+            if r.stats is not None:
+                row["t"] = r.stats.t
+                row["df"] = float(r.stats.df)
+                row["p_value"] = r.stats.p_value
+            rows.append(row)
+
+        df = pl.DataFrame(rows)
+        if not tidy and "by" in df.columns and df["by"].is_null().all():
+            df = df.drop("by", "by_level")
+        return df
+
+    elif component == "estimates":
+        if not r.estimates:
+            return pl.DataFrame(
+                schema={
+                    "y": pl.Utf8,
+                    "group": pl.Utf8,
+                    "group_level": pl.Utf8,
+                    "est": pl.Float64,
+                    "se": pl.Float64,
+                    "cv": pl.Float64,
+                    "lci": pl.Float64,
+                    "uci": pl.Float64,
+                }
+            )
+
+        if not tidy:
+            df = pl.DataFrame(msgspec.to_builtins(r.estimates))
+            if "by" in df.columns and df["by"].is_null().all():
+                df = df.drop("by", "by_level")
+            if "y_level" in df.columns and df["y_level"].is_null().all():
+                df = df.drop("y_level")
+            return df
+
+        # tidy=True: promote group/by/y to named columns
+        rows = []
+        for e in r.estimates:
+            row: dict[str, Any] = {}
+            if e.by is not None:
+                row[e.by] = e.by_level
+            # group is always present for two-sample
+            if e.group is not None:
+                row[e.group] = e.group_level
+            if e.y_level is not None:
+                row[e.y] = e.y_level
+            row.update(
+                {
+                    "est": e.est,
+                    "se": e.se,
+                    "cv": e.cv,
+                    "lci": e.lci,
+                    "uci": e.uci,
+                }
+            )
+            rows.append(row)
+        return pl.DataFrame(rows)
+
+    else:
+        raise ValueError(
+            f"Invalid component '{component}'. Expected one of ['test', 'estimates']."
+        )
 
 
 def _where_arg_to_str(where) -> str | None:
