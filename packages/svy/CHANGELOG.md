@@ -6,6 +6,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+## [0.30.0] — 2026-09-25
+
 ### Added
 
 - **`wrangling.join(other, on, cols=None, into=None, suffix=None)`** brings variables from another Sample or frame onto this sample's records: the household weight onto the person file, frame variables onto the sample, response status onto the selected units. A left join that keeps every record in order and leaves the design alone; `other`'s weight arrives as an ordinary column. `on` maps key names when they differ (`{"hh": "hh_id"}`). `cols` picks what comes in (default: every non-key column), `into` names any of it here as `recode(into=)` does (`into={"wgt": "hh_wgt"}`), and `suffix` is appended to the remaining names that already exist. Nothing on this sample is renamed or overwritten: a name that still clashes is refused, design variables included, as are a key that repeats on `other` (`validate="1:1"` checks this side too), key types that do not match (integer widths, text with categorical, and a decimal identifier with an integer one when every value is whole, as SPSS and Stata store IDs, are joined), names svy reserves, and names that would read as this sample's replicate weights. Variable and value labels carry over from a Sample. Unmatched records get nulls and a `JOIN_UNMATCHED` warning with the count (`on_unmatched="ignore"|"warn"|"error"`, as `on_singletons`); `indicator=` adds a column marking the matched records. Inner, semi and anti joins are `indicator=` followed by `filter_records`, which checks singletons. `selection.add_stage` stays the join for chaining a second stage, which rebuilds the design.
