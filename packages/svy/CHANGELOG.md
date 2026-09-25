@@ -8,6 +8,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **A design can be saved and restored.** `svy.serialize.serialize(design)` / `to_json(design)` give a `DesignData` (schema `svy-design/0.1`) holding every field: strata, PSUs, weights, `PopSize`, replicate weights with all their settings and the weight they go with, and the weight-adjustment record. `svy.serialize.to_design(data)` returns the live `Design`, equal to the original. Estimates on `Sample(data, to_design(...))` equal those on the live sample, SEs included, after poststratification, raking, calibration, standardization and trimming, Taylor and replication alike. The design history is not part of it.
+
 - **`design.columns(data_columns=None)`** lists every column a design needs from the data, de-duplicated and in order: design fields, `pop_size`, replicate weights, the units the replicates were built from, then the weight-adjustment record's `new_wgt`, `prev_wgt`, `cells` and `aux`. `data_columns` resolves auto-detected replicate padding. `specified_fields` is unchanged.
 
 - **`wrangling.rename_rep_wgts({"w": "final_w", "ps_wgt": "ps_final"})`** renames replicate-weight sets by prefix: the design's and those of earlier designs in `design_history`. Each column keeps its number and zero-padding (`w01` → `final_w01`), only the set's own columns are renamed, and every design using the set, current or earlier, follows through the `rename_columns` path. An unknown prefix (the error lists the sets the sample carries), an empty new prefix, a new name that is already a column, and two sets renamed onto the same names are refused before anything changes; a prefix mapped to itself is a no-op.

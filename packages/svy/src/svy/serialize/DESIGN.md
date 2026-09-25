@@ -115,6 +115,18 @@ and delegates to `GLMFit` via the `.fitted` attribute.
 The struct IS the stable representation. Consumers do not reconstruct svy
 objects from structs. svyLab renders from structs; svy-agents carries them.
 
+**Exception: the design (2026-09-25).** A design is an input, not a result:
+svyLab stores it between requests and rebuilds a `Sample` from it. So
+`serialize(design)` gives a `DesignData` and `to_design(data)` gives the live
+`Design` back, with `to_design(from_json(to_json(d))) == d`. Its own schema id,
+`svy-design/0.1`, since the two-way contract differs from the results'. The
+saved structs mirror the live ones (`PopSizeData`, `WgtAdjustmentData`, a
+`RepWgtsData` union tagged by `method`), as results do, and a test holds their
+fields equal to the live classes'. What is saved is one design: the history is
+not part of it, and a design is valid only with a frame holding
+`design.columns()` (`Sample(...)` checks). Designs are not in the result
+registry and have no table.
+
 ### 2.10 DescribeResult.items stays as list[dict]
 
 The `DescribeItem` union has 7 variants (`DescribeContinuous`,
@@ -179,7 +191,7 @@ and of the covariance matrix.
 ## 4. Public API
 
 ```python
-from svy.serialize import serialize, to_json, to_dict, from_json, to_polars
+from svy.serialize import serialize, to_json, to_dict, from_json, to_design, to_polars
 
 # Serialize a svy result object to a stable struct
 data = serialize(result)  # -> ResultData

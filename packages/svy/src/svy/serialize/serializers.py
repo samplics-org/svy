@@ -23,6 +23,8 @@ from svy.categorical.table import Table
 from svy.categorical.ttest import TTestOneGroup, TTestTwoGroups
 from svy.core.containers import ChiSquare
 from svy.core.describe import DescribeResult
+from svy.core.design import Design, PopSize, WgtAdjustment
+from svy.core.repwgts import BootstrapWgts, BrrWgts, JackknifeWgts, SdrWgts
 from svy.errors.model_errors import ModelError
 from svy.errors.serialization_errors import SerializationError
 from svy.estimation.estimate import Estimate, EstimateList
@@ -30,9 +32,12 @@ from svy.regression.glm import GLMFit
 from svy.regression.prediction import GLMPred
 from svy.serialize.structs import (
     _KIND_TO_STRUCT,
+    BootstrapWgtsData,
+    BrrWgtsData,
     CellEstData,
     ChiSquareData,
     DescribeResultData,
+    DesignData,
     DiffEstData,
     EstimateData,
     EstimateListData,
@@ -42,9 +47,13 @@ from svy.serialize.structs import (
     GLMPredData,
     GLMStatsData,
     GroupLevelsData,
+    JackknifeWgtsData,
     LevelLabelData,
     ParamEstData,
+    PopSizeData,
+    RepWgtsData,
     ResultData,
+    SdrWgtsData,
     TableData,
     TableStatsData,
     TDistData,
@@ -53,6 +62,7 @@ from svy.serialize.structs import (
     TTestStatsData,
     TTestTwoGroupsData,
     VarLabelsData,
+    WgtAdjustmentData,
 )
 
 
@@ -399,14 +409,15 @@ def _serialize_describe_result(result: DescribeResult) -> DescribeResultData:
 # ---------------------------------------------------------------------------
 
 
-def serialize(result: Any) -> ResultData:
+def serialize(result: Any) -> ResultData | DesignData:
     """
-    Serialize a svy result object to a stable ``Data`` struct.
+    Serialize a svy result object, or a ``Design``, to a stable ``Data`` struct.
 
     Parameters
     ----------
     result
-        A svy result object: ``Estimate``, ``TTestOneGroup``,
+        A ``Design`` (gives a ``DesignData``; see ``to_design``), or a svy
+        result object: ``Estimate``, ``TTestOneGroup``,
         ``TTestTwoGroups``, ``ChiSquare``, ``Table``, ``GLMFit``,
         ``GLMPred``, ``DescribeResult``, or a fitted ``GLM`` wrapper.
 
@@ -423,6 +434,9 @@ def serialize(result: Any) -> ResultData:
     ModelError
         If ``result`` is an unfitted ``GLM`` (code ``MODEL_NOT_FITTED``).
     """
+    if isinstance(result, Design):
+        return _serialize_design(result)
+
     # Handle the GLM wrapper — GLM.fit() returns GLM, not GLMFit.
     from svy.regression.base import GLM
 
@@ -455,6 +469,117 @@ _TEMPORAL: dict[str, type] = {
     "time": dt.time,
     "duration": dt.timedelta,
 }
+
+
+# ---------------------------------------------------------------------------
+# Design: both ways
+# ---------------------------------------------------------------------------
+
+# Not in _SERIALIZERS: a design is an input, not a result, and has no table.
+_REP_TO_DATA: dict[type, type] = {
+    BootstrapWgts: BootstrapWgtsData,
+    JackknifeWgts: JackknifeWgtsData,
+    BrrWgts: BrrWgtsData,
+    SdrWgts: SdrWgtsData,
+}
+_DATA_TO_REP: dict[type, type] = {v: k for k, v in _REP_TO_DATA.items()}
+
+
+def _as_list(v: Any) -> Any:
+    return list(v) if isinstance(v, tuple) else v
+
+
+def _as_tuple(v: Any) -> Any:
+    return tuple(v) if isinstance(v, list) else v
+
+
+def _rep_wgts_to_data(rep: Any) -> RepWgtsData:
+    cls = _REP_TO_DATA[type(rep)]
+    fields = {f: _as_list(getattr(rep, f)) for f in cls.__struct_fields__}
+    for f in ("scale", "rep_coefs"):
+        if fields[f] is not None:
+            fields[f] = [float(x) for x in fields[f]]
+    if fields["df"] is not None:
+        fields["df"] = float(fields["df"])
+    return cls(**fields)
+
+
+def _serialize_design(design: Design) -> DesignData:
+    """Serialize ``svy.core.design.Design``: every field, lossless."""
+    pop = design.pop_size
+    rec = design.wgt_adjustment
+    return DesignData(
+        case_id=design.case_id,
+        wave=design.wave,
+        stratum=_as_list(design.stratum),
+        wgt=design.wgt,
+        prob=design.prob,
+        hit=design.hit,
+        mos=design.mos,
+        psu=_as_list(design.psu),
+        ssu=_as_list(design.ssu),
+        pop_size=PopSizeData(psu=pop.psu, ssu=pop.ssu) if isinstance(pop, PopSize) else pop,
+        wr=bool(design.wr),
+        rep_wgts=None if design.rep_wgts is None else _rep_wgts_to_data(design.rep_wgts),
+        wgt_adjustment=None
+        if rec is None
+        else WgtAdjustmentData(
+            kind=rec.kind,
+            prev_wgt=rec.prev_wgt,
+            new_wgt=rec.new_wgt,
+            cells=_as_list(rec.cells),
+            aux=_as_list(rec.aux),
+            pins_total=rec.pins_total,
+        ),
+    )
+
+
+def to_design(data: DesignData) -> Design:
+    """
+    Rebuild the live ``Design`` a ``DesignData`` was serialized from.
+
+    ``to_design(from_json(to_json(design))) == design``. Pair it with the data
+    version it was saved with: ``Sample(data, design)`` checks that the frame
+    holds ``design.columns()``.
+
+    Raises
+    ------
+    SerializationError
+        If ``data`` is not a ``DesignData`` (code ``PAYLOAD_NOT_A_DESIGN``).
+    """
+    if not isinstance(data, DesignData):
+        raise SerializationError.not_a_design(got_type=type(data).__name__)
+    rep = data.rep_wgts
+    rec = data.wgt_adjustment
+    pop = data.pop_size
+    return Design(
+        case_id=data.case_id,
+        wave=data.wave,
+        stratum=_as_tuple(data.stratum),
+        wgt=data.wgt,
+        prob=data.prob,
+        hit=data.hit,
+        mos=data.mos,
+        psu=_as_tuple(data.psu),
+        ssu=_as_tuple(data.ssu),
+        pop_size=PopSize(psu=pop.psu, ssu=pop.ssu) if isinstance(pop, PopSizeData) else pop,
+        wr=data.wr,
+        rep_wgts=None
+        if rep is None
+        else _DATA_TO_REP[type(rep)](
+            **{f: _as_tuple(getattr(rep, f)) for f in type(rep).__struct_fields__}
+        ),
+        wgt_adjustment=None
+        if rec is None
+        else WgtAdjustment(
+            kind=rec.kind,  # type: ignore[arg-type]
+            prev_wgt=rec.prev_wgt,
+            new_wgt=rec.new_wgt,
+            cells=_as_tuple(rec.cells),
+            aux=_as_tuple(rec.aux),
+            pins_total=rec.pins_total,
+        ),
+    )
 
 
 def to_json(result: Any) -> bytes:
@@ -530,7 +655,7 @@ def to_dict(result: Any) -> dict[str, Any]:
     return msgspec.to_builtins(serialize(result))
 
 
-def from_json(data: bytes) -> ResultData:
+def from_json(data: bytes) -> ResultData | DesignData:
     """
     Decode JSON bytes produced by ``to_json`` back into a ``Data`` struct.
 
@@ -558,7 +683,7 @@ def from_json(data: bytes) -> ResultData:
     # msgspec allows no date beside str in a union, so the ISO strings decode
     # as str and are converted here.
     _put_special(data, temporal, lambda tag, s: msgspec.convert(s, type=_TEMPORAL[tag]))
-    return cast(ResultData, data)
+    return cast(ResultData | DesignData, data)
 
 
 def _is_float(t: mi.Type) -> bool:

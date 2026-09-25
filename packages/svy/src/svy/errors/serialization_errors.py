@@ -42,6 +42,24 @@ class SerializationError(SvyError):
             docs_url=_DOCS_URL,
         )
 
+    @classmethod
+    def not_a_design(
+        cls,
+        *,
+        got_type: str,
+        hint: Optional[str] = "Pass the DesignData from serialize(design) or from_json().",
+    ) -> "SerializationError":
+        return cls(
+            title="Not a design payload",
+            detail=f"to_design() needs a DesignData, got '{got_type}'.",
+            code="PAYLOAD_NOT_A_DESIGN",
+            where="to_design",
+            expected=["DesignData"],
+            got=got_type,
+            hint=hint,
+            docs_url=_DOCS_URL,
+        )
+
     # ---- Table view (payload -> DataFrame) ----------------------------------
 
     @classmethod

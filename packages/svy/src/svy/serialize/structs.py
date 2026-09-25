@@ -23,6 +23,9 @@ import msgspec
 
 SCHEMA_VERSION = "svy-result/0.4"
 
+#: A design is an input, read back into a live ``Design``: its own schema.
+DESIGN_SCHEMA_VERSION = "svy-design/0.1"
+
 # JSON-safe alias for svy's Category type (str | int | float | bool).
 CatValue = str | int | float | bool
 
@@ -381,6 +384,97 @@ class DescribeResultData(msgspec.Struct, kw_only=True, frozen=True):
     generated_at: str
     notes: str | None = None
     items: list[dict[str, Any]] = []
+
+
+# ---------------------------------------------------------------------------
+# Design structs
+# ---------------------------------------------------------------------------
+
+
+class PopSizeData(msgspec.Struct, kw_only=True, frozen=True):
+    """Two-stage population sizes (mirrors ``svy.core.design.PopSize``)."""
+
+    psu: str
+    ssu: str
+
+
+class WgtAdjustmentData(msgspec.Struct, kw_only=True, frozen=True):
+    """How the design's weight was made (mirrors ``svy.core.design.WgtAdjustment``)."""
+
+    kind: str
+    prev_wgt: str
+    new_wgt: str
+    cells: list[str] | None = None
+    aux: list[str] | None = None
+    pins_total: bool = True
+
+
+class _RepWgtsDataBase(msgspec.Struct, kw_only=True, frozen=True):
+    prefix: str
+    n_reps: int
+    df: float | None = None
+    padding: int | None = None
+    scale: list[float] | None = None
+    rep_coefs: list[float] | None = None
+    stratum: str | list[str] | None = None
+    psu: str | list[str] | None = None
+    wgt: str | None = None
+
+
+class BootstrapWgtsData(
+    _RepWgtsDataBase, kw_only=True, frozen=True, tag="Bootstrap", tag_field="method"
+):
+    """Mirrors ``svy.core.repwgts.BootstrapWgts``."""
+
+    kind: str = "rao-wu"
+
+
+class JackknifeWgtsData(
+    _RepWgtsDataBase, kw_only=True, frozen=True, tag="Jackknife", tag_field="method"
+):
+    """Mirrors ``svy.core.repwgts.JackknifeWgts``."""
+
+    kind: str | None = None
+
+
+class BrrWgtsData(_RepWgtsDataBase, kw_only=True, frozen=True, tag="BRR", tag_field="method"):
+    """Mirrors ``svy.core.repwgts.BrrWgts``."""
+
+    fay_coef: float = 0.0
+
+
+class SdrWgtsData(_RepWgtsDataBase, kw_only=True, frozen=True, tag="SDR", tag_field="method"):
+    """Mirrors ``svy.core.repwgts.SdrWgts``."""
+
+
+RepWgtsData = BootstrapWgtsData | JackknifeWgtsData | BrrWgtsData | SdrWgtsData
+
+
+@_kinded("design")
+class DesignData(msgspec.Struct, kw_only=True, frozen=True):
+    """
+    Serialization struct for ``svy.core.design.Design``.
+
+    Unlike the result structs it is read back into a live object
+    (``svy.serialize.to_design``), and it is only valid with a frame holding
+    ``Design.columns()``.
+    """
+
+    kind: Literal["design"] = "design"
+    schema_version: str = DESIGN_SCHEMA_VERSION
+    case_id: str | None = None
+    wave: str | None = None
+    stratum: str | list[str] | None = None
+    wgt: str | None = None
+    prob: str | None = None
+    hit: str | None = None
+    mos: str | None = None
+    psu: str | list[str] | None = None
+    ssu: str | list[str] | None = None
+    pop_size: str | PopSizeData | None = None
+    wr: bool = False
+    rep_wgts: RepWgtsData | None = None
+    wgt_adjustment: WgtAdjustmentData | None = None
 
 
 # ---------------------------------------------------------------------------
