@@ -13,7 +13,12 @@ import polars as pl
 from svy.categorical.table import table_frame
 from svy.categorical.ttest import ttest_one_group_frame, ttest_two_groups_frame
 from svy.errors.serialization_errors import SerializationError
-from svy.estimation.estimate import concat_estimate_frames, estimate_frame
+from svy.estimation.estimate import (
+    Estimate,
+    VarLabels,
+    concat_estimate_frames,
+    estimate_frame,
+)
 from svy.regression.glm import glm_frame
 from svy.regression.prediction import glm_pred_frame
 from svy.serialize.structs import (
@@ -32,16 +37,37 @@ def _indexed(df: pl.DataFrame, row_index: str | None) -> pl.DataFrame:
     return df.with_row_index(row_index) if row_index else df
 
 
-def _estimate(d: EstimateData, *, row_index: str | None = None, tidy: bool = True) -> pl.DataFrame:
+def _labels(d: EstimateData) -> dict[str, VarLabels]:
+    return {
+        v.var: VarLabels(v.var_label, {lv.code: lv.label for lv in v.values})
+        for v in d.labels or []
+    }
+
+
+def _estimate(
+    d: EstimateData,
+    *,
+    row_index: str | None = None,
+    tidy: bool = True,
+    use_labels: bool | None = None,
+) -> pl.DataFrame:
+    resolve = use_labels if use_labels is not None else Estimate.USE_LABELS
     return estimate_frame(
-        d.estimates, param=d.param, as_factor=d.as_factor, tidy=tidy, row_index=row_index
+        d.estimates,
+        param=d.param,
+        as_factor=d.as_factor,
+        tidy=tidy,
+        labels=_labels(d) if resolve else None,
+        row_index=row_index,
     )
 
 
-def _estimate_list(d: EstimateListData, *, row_index: str | None = None) -> pl.DataFrame:
+def _estimate_list(
+    d: EstimateListData, *, row_index: str | None = None, use_labels: bool | None = None
+) -> pl.DataFrame:
     frames, offset = [], 0
     for m in d.estimates:
-        f = _estimate(m, row_index=row_index)
+        f = _estimate(m, row_index=row_index, use_labels=use_labels)
         if row_index and not f.is_empty():
             f = f.with_columns(pl.col(row_index) + offset)
         frames.append(f)
@@ -111,11 +137,11 @@ def to_polars(data: ResultData, *, row_index: str | None = None, **options: Any)
         the members' estimates in order. Estimate tables are sorted for
         display, so this column is the way back to a payload row.
     **options
-        The live ``to_polars()`` options that need nothing beyond the payload:
-        ``tidy`` (estimate, table, t-tests), ``component`` (t-tests) and
-        ``exponentiate`` (GLM fit). Payloads carry no metadata, so levels
-        and column names are the raw codes and variable names, as a live
-        result gives with ``use_labels=False``.
+        The live ``to_polars()`` options: ``tidy`` (estimate, table,
+        t-tests), ``use_labels`` (estimate, estimate list), ``component``
+        (t-tests) and ``exponentiate`` (GLM fit). An estimate stores the
+        labels of the levels it holds, so its ``<var>_label`` columns come
+        back as the live result gives them.
 
     Raises
     ------

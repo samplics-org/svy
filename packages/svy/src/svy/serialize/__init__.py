@@ -31,6 +31,7 @@ from svy.serialize.structs import (
     GLMPredData,
     GLMStatsData,
     GroupLevelsData,
+    LevelLabelData,
     ParamEstData,
     ResultData,
     TableData,
@@ -40,6 +41,7 @@ from svy.serialize.structs import (
     TTestOneGroupData,
     TTestStatsData,
     TTestTwoGroupsData,
+    VarLabelsData,
 )
 from svy.serialize.tables import to_polars
 
@@ -76,4 +78,6 @@ __all__ = [
     "TDistData",
     "GLMCoefData",
     "GLMStatsData",
+    "VarLabelsData",
+    "LevelLabelData",
 ]

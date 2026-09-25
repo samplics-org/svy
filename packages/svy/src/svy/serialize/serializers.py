@@ -41,6 +41,7 @@ from svy.serialize.structs import (
     GLMPredData,
     GLMStatsData,
     GroupLevelsData,
+    LevelLabelData,
     ParamEstData,
     ResultData,
     TableData,
@@ -50,6 +51,7 @@ from svy.serialize.structs import (
     TTestOneGroupData,
     TTestStatsData,
     TTestTwoGroupsData,
+    VarLabelsData,
 )
 
 
@@ -280,6 +282,16 @@ def _serialize_estimate(result: Estimate) -> EstimateData:
         q_method=_enum(result.q_method),
         deff_ref=result.deff_ref,
         as_factor=bool(result.as_factor),
+        labels=[
+            VarLabelsData(
+                var=var,
+                var_label=lab.var_label,
+                values=[LevelLabelData(code=c, label=v) for c, v in lab.values.items()],
+            )
+            for var, lab in result._labels().items()
+            if lab.var_label or lab.values
+        ]
+        or None,
     )
 
 

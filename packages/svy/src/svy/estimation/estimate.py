@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Mapping, NamedTuple, Sequence
 
 import msgspec
 import numpy as np
@@ -44,54 +44,107 @@ def _display_columns(df: pl.DataFrame) -> list[str]:
 _ROW_POS = "__svy_row_pos"
 
 
+class VarLabels(NamedTuple):
+    """A variable's label and the value label of each of its levels in a result."""
+
+    var_label: str
+    values: dict[Any, str]
+
+
+def label_vars(estimates: Sequence[Any], *, param: str, as_factor: bool = False) -> list[str]:
+    """Variables whose levels an estimate's rows carry: ``by``, then ``y`` when categorical."""
+    first = estimates[0]
+    names = list(first.by) if first.by else []
+    if param == PopParam.PROP or as_factor:
+        names.append(first.y)
+    return names
+
+
+def _row_levels(est: Any, names: Sequence[str], n_by: int) -> list[tuple[str, Any]]:
+    levels = est.by_level or (None,) * n_by
+    out = [(col, levels[i] if i < len(levels) else None) for i, col in enumerate(names[:n_by])]
+    if len(names) > n_by:
+        out.append((names[n_by], est.y_level))
+    return out
+
+
+def _label_of(lab: VarLabels | None, raw: Any) -> str | None:
+    if raw is None:
+        return None
+    return lab.values.get(raw, str(raw)) if lab is not None else str(raw)
+
+
 def estimate_frame(
     estimates: Sequence[Any] | None,
     *,
     param: str,
     as_factor: bool = False,
     tidy: bool = True,
-    value_label: Callable[[str, Any], str] | None = None,
-    var_label: Callable[[str], str] | None = None,
+    labels: Mapping[str, VarLabels] | None = None,
+    display: bool = False,
     row_index: str | None = None,
 ) -> pl.DataFrame:
     """The table of an estimate's rows, shared by ``Estimate`` and its serialized form.
 
     ``estimates`` are ``ParamEst`` or ``ParamEstData`` rows, which share their
-    field names. ``row_index`` adds a first column holding each row's position
-    in ``estimates``; tidy rows are sorted, so it is the only way back.
+    field names. The data view (``display=False``) keeps the codes under the
+    variable names and adds a ``<var>_label`` column for each variable with
+    value labels in ``labels``; rows sort by code. The display view, which
+    printing uses, puts the labels in place of the codes and the variable
+    labels in place of the names, and sorts on what is shown. ``row_index``
+    adds a first column holding each row's position in ``estimates``.
     """
     if not estimates:
         return pl.DataFrame()
+    labels = labels or {}
+    first = estimates[0]
+    n_by = len(first.by) if first.by else 0
+    names = label_vars(estimates, param=param, as_factor=as_factor)
+    labelled = {v for v in names if v in labels and labels[v].values}
+
     if not tidy:
-        df = pl.from_dicts([{f: getattr(p, f) for f in p.__struct_fields__} for p in estimates])
+        recs = []
+        for p in estimates:
+            rec: dict[str, Any] = {}
+            for f in p.__struct_fields__:
+                rec[f] = getattr(p, f)
+                if f == "by_level" and labelled & set(names[:n_by]):
+                    rec["by_label"] = [
+                        _label_of(labels.get(c), raw)
+                        for c, raw in _row_levels(p, names, n_by)[:n_by]
+                    ]
+                elif f == "y_level" and len(names) > n_by and names[n_by] in labelled:
+                    rec["y_level_label"] = _label_of(labels[names[n_by]], p.y_level)
+            recs.append(rec)
+        df = pl.from_dicts(recs)
         return df.with_row_index(row_index) if row_index else df
 
-    first = estimates[0]
-    by_cols = list(first.by) if first.by else []
-    y_col = first.y
-    show_y_level = param == PopParam.PROP or as_factor
     show_prob = param == PopParam.QUANTILE
-    var_name = var_label or (lambda col: col)
-
-    def display(col: str, raw: Any) -> str | None:
-        if raw is None:
-            return None
-        return value_label(col, raw) if value_label is not None else str(raw)
-
-    # Sort on the display values, after label resolution: raw codes ("Rural",
-    # "Urban") and their labels ("2. Rural", "1. Urban") order differently.
     rows = []
     for pos, est in enumerate(estimates):
         r: dict[str, Any] = {_ROW_POS: pos}
         if show_prob and est.prob is not None:
             # Leading column, so quantiles read p → estimate left to right.
             r["prob"] = est.prob
-        if by_cols:
-            levels = est.by_level or (None,) * len(by_cols)
-            for i, col in enumerate(by_cols):
-                r[var_name(col)] = display(col, levels[i] if i < len(levels) else None)
-        if show_y_level:
-            r[var_name(y_col)] = display(y_col, est.y_level)
+        for col, raw in _row_levels(est, names, n_by):
+            lab = labels.get(col)
+            if display:
+                r[(lab.var_label if lab else "") or col] = _label_of(lab, raw)
+                continue
+            r[col] = raw
+            if col in labelled:
+                name = f"{col}_label"
+                if name in r or name in names:
+                    from svy.errors import MethodError
+
+                    raise MethodError(
+                        title="Label column clashes with a variable",
+                        detail=f"The labels of '{col}' would go in '{name}', which is also a variable here.",
+                        code="LABEL_COLUMN_CLASH",
+                        where="Estimate.to_polars",
+                        hint="Rename the variable, or pass use_labels=False.",
+                    )
+                r[name] = _label_of(lab, raw)
         for key in _DECIMAL_KEYS:
             val = getattr(est, key, None)
             if val is not None:
@@ -100,7 +153,13 @@ def estimate_frame(
             r["df"] = est.df
         rows.append(r)
 
-    sort_display_rows(rows, numeric_keys={*_DECIMAL_KEYS, _ROW_POS})
+    # Display rows sort on what is shown, after label resolution: raw codes
+    # ("Rural", "Urban") and their labels ("2. Rural", "1. Urban") order
+    # differently. Data rows sort on the codes.
+    skip = {*_DECIMAL_KEYS, _ROW_POS}
+    if not display:
+        skip |= {"df"} | {f"{c}_label" for c in labelled}
+    sort_display_rows(rows, numeric_keys=skip)
     order = [r.pop(_ROW_POS) for r in rows]
     df = pl.from_dicts(rows)
     if row_index:
@@ -359,9 +418,31 @@ class Estimate:
         return [p.to_dict() for p in self.estimates] if self.estimates else []
 
     def to_polars(self, *, tidy: bool = True, use_labels: bool | None = None) -> pl.DataFrame:
-        if not tidy:
-            return estimate_frame(self.estimates, param=self.param, tidy=False)
-        return self.to_polars_printable(use_labels=use_labels if use_labels is not None else False)
+        """
+        The estimates as a DataFrame, one row per estimate.
+
+        Levels keep their codes under the variable's name. With labels on,
+        each variable that has value labels gets a ``<var>_label`` column
+        next to it (``by_label`` and ``y_level_label`` with ``tidy=False``).
+        Rows sort by code. Printing uses the labelled view instead, see
+        ``to_polars_printable()``.
+
+        Parameters
+        ----------
+        tidy : bool
+            One column per variable (default), or the raw rows with ``by``
+            and ``by_level`` as list columns.
+        use_labels : bool | None
+            Add the label columns. None uses the instance/class default.
+        """
+        resolve = use_labels if use_labels is not None else self._resolve_use_labels()
+        return estimate_frame(
+            self.estimates,
+            param=self.param,
+            as_factor=self.as_factor,
+            tidy=tidy,
+            labels=self._labels() if resolve else None,
+        )
 
     def to_polars_printable(self, *, use_labels: bool | None = None) -> pl.DataFrame:
         """
@@ -379,19 +460,35 @@ class Estimate:
             DataFrame formatted for display.
         """
         resolve = use_labels if use_labels is not None else self._resolve_use_labels()
-        value_label = None
-        if resolve and self._metadata is not None:
-
-            def value_label(col: str, value: Category) -> str:
-                return self._get_value_label(col, value, use_labels=resolve)
-
         return estimate_frame(
             self.estimates,
             param=self.param,
             as_factor=self.as_factor,
-            value_label=value_label,
-            var_label=lambda col: self._get_var_label(col, use_labels=resolve),
+            labels=self._labels() if resolve else None,
+            display=True,
         )
+
+    def _labels(self) -> dict[str, VarLabels]:
+        """The label of each variable whose levels the rows carry, and of each level present.
+
+        Empty without metadata. Only levels that appear in the result are
+        included, so this is what a serialized estimate stores.
+        """
+        if self._metadata is None or not self.estimates:
+            return {}
+        names = label_vars(self.estimates, param=self.param, as_factor=self.as_factor)
+        n_by = len(self.estimates[0].by or ())
+        out: dict[str, VarLabels] = {}
+        for col in names:
+            resolved = self._metadata.resolve_labels(col)
+            values: dict[Any, str] = {}
+            if resolved.has_value_labels:
+                for p in self.estimates:
+                    raw = dict(_row_levels(p, names, n_by))[col]
+                    if raw is not None and raw not in values:
+                        values[raw] = self._get_value_label(col, raw, use_labels=True)
+            out[col] = VarLabels(resolved.var_label if resolved.has_var_label else "", values)
+        return out
 
     def _y_level_column(self, *, use_labels: bool | None = None) -> str | None:
         """Name of the column holding this estimate's category levels, if any.
@@ -762,7 +859,7 @@ class EstimateList(list):
     def to_polars(self, *, use_labels: bool | None = None) -> pl.DataFrame:
         """Concatenate the members into one frame, one row per estimate."""
         return concat_estimate_frames(
-            [e.to_polars_printable(use_labels=use_labels) for e in self._members()]
+            [e.to_polars(use_labels=use_labels) for e in self._members()]
         )
 
     def _combined(self, *, use_labels: bool | None = None) -> pl.DataFrame:

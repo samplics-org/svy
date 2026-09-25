@@ -112,6 +112,21 @@ class ParamEstData(msgspec.Struct, kw_only=True, frozen=True):
     prob: float | None = None
 
 
+class LevelLabelData(msgspec.Struct, kw_only=True, frozen=True):
+    """A level's code and its value label. A pair, not a dict key: JSON keys are strings."""
+
+    code: CatValue
+    label: str
+
+
+class VarLabelsData(msgspec.Struct, kw_only=True, frozen=True):
+    """A variable's label and the labels of its levels present in the result."""
+
+    var: str
+    var_label: str = ""
+    values: list[LevelLabelData] = []
+
+
 # ---------------------------------------------------------------------------
 # T-test sub-structs
 # ---------------------------------------------------------------------------
@@ -247,6 +262,9 @@ class EstimateData(msgspec.Struct, kw_only=True, frozen=True):
     #: A mean or total over a categorical variable's levels, which puts each
     #: row's level in its own column, as a proportion does.
     as_factor: bool = False
+    #: Labels of the variables whose levels the rows carry, from the sample's
+    #: metadata, so a table can show them without it.
+    labels: list[VarLabelsData] | None = None
 
 
 @_kinded("estimate_list")

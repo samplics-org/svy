@@ -142,8 +142,10 @@ a plain `float` field as NaN.
 result's `to_polars(**options)` returns, from the payload alone, for every kind
 whose live result has one (`ChiSquareData` and `DescribeResultData` do not, and
 raise `PAYLOAD_NO_TABLE`). Options are those that need nothing beyond the
-payload: `tidy`, `component`, `exponentiate`. Payloads carry no metadata, so
-levels are raw codes, as a live result gives with `use_labels=False`.
+payload: `tidy`, `use_labels`, `component`, `exponentiate`. An estimate stores
+`labels` (each variable's label and the labels of the levels present, as
+`(code, label)` pairs since JSON keys are strings), so its `<var>_label`
+columns come back without the sample's metadata.
 
 `row_index` names a first `UInt32` column holding each row's position in the
 payload's rows (`estimates`, `diff`, `coefs`, or the prediction arrays; an

@@ -43,6 +43,15 @@ def sample() -> svy.Sample:
     return svy.Sample(df, svy.Design(stratum="stratum", psu="psu", wgt="w"))
 
 
+@pytest.fixture(scope="module")
+def labelled(sample) -> svy.Sample:
+    s = svy.Sample(sample.data, sample.design)
+    s.meta.set_label("zone", "Zone of residence")
+    s.meta.set_value_labels("zone", {1: "Urban", 2: "Rural", 3: "Peri-urban"})
+    s.meta.set_value_labels("sex", {"f": "Female", "m": "Male"})
+    return s
+
+
 # Each case: (id, result builder, to_polars options)
 CASES = [
     ("mean", lambda s: s.estimation.mean("y"), {}),
@@ -161,3 +170,83 @@ def test_payload_without_table_raises(sample):
     with pytest.raises(SerializationError) as exc:
         to_polars(data)
     assert exc.value.code == "PAYLOAD_NO_TABLE"
+
+
+LABELLED_CASES = [
+    ("mean_by", lambda s: s.estimation.mean("y", by=["zone", "sex"]), {}),
+    ("mean_by_raw", lambda s: s.estimation.mean("y", by=["zone", "sex"]), {"tidy": False}),
+    ("mean_by_off", lambda s: s.estimation.mean("y", by="zone"), {"use_labels": False}),
+    ("prop", lambda s: s.estimation.prop("zone", by="sex"), {}),
+    ("mean_as_factor", lambda s: s.estimation.mean("zone", as_factor=True), {}),
+    ("unlabelled_by", lambda s: s.estimation.mean("y", by="region"), {}),
+    ("mean_list", lambda s: s.estimation.mean(["y", "z"], by="zone"), {}),
+]
+
+
+@pytest.mark.parametrize(
+    "build,opts", [c[1:] for c in LABELLED_CASES], ids=[c[0] for c in LABELLED_CASES]
+)
+def test_labels_match_live_table(labelled, build, opts):
+    result = build(labelled)
+    assert_frame_equal(to_polars(_payload(result), **opts), result.to_polars(**opts))
+
+
+def test_label_columns_follow_codes(labelled):
+    table = labelled.estimation.mean("y", by=["zone", "sex"]).to_polars()
+    assert table.columns[:4] == ["zone", "zone_label", "sex", "sex_label"]
+    pairs = dict(zip(table["zone"], table["zone_label"]))
+    assert pairs == {"1": "Urban", "2": "Rural", "3": "Peri-urban"}
+    assert table["zone"].to_list() == sorted(table["zone"].to_list())
+
+
+def test_no_label_column_without_value_labels(labelled):
+    table = labelled.estimation.mean("y", by="region").to_polars()
+    assert "region_label" not in table.columns
+
+
+def test_labels_off_gives_codes_only(labelled):
+    table = labelled.estimation.mean("y", by="zone").to_polars(use_labels=False)
+    assert table.columns[0] == "zone" and "zone_label" not in table.columns
+
+
+def test_raw_rows_carry_label_lists(labelled):
+    table = labelled.estimation.mean("y", by=["zone", "sex"]).to_polars(tidy=False)
+    by_label = table["by_label"].to_list()
+    assert all(len(v) == 2 for v in by_label)
+    assert {v[1] for v in by_label} == {"Female", "Male"}
+
+
+def test_printing_still_shows_labels_in_place(labelled):
+    printable = labelled.estimation.mean("y", by="zone").to_polars_printable()
+    assert printable.columns[0] == "Zone of residence"
+    assert set(printable[printable.columns[0]]) == {"Urban", "Rural", "Peri-urban"}
+
+
+def test_payload_stores_only_present_levels(labelled):
+    data = serialize(labelled.estimation.mean("y", by="zone", where={"zone": [1, 2]}))
+    (zone,) = [v for v in data.labels if v.var == "zone"]
+    assert zone.var_label == "Zone of residence"
+    assert {lv.label for lv in zone.values} == {"Urban", "Rural"}
+
+
+def test_label_column_clash_raises(sample):
+    from svy.errors import MethodError
+
+    s = svy.Sample(sample.data.with_columns(zone_label=pl.col("sex")), sample.design)
+    s.meta.set_value_labels("zone", {1: "Urban", 2: "Rural", 3: "Peri-urban"})
+    with pytest.raises(MethodError) as exc:
+        s.estimation.mean("y", by=["zone", "zone_label"]).to_polars()
+    assert exc.value.code == "LABEL_COLUMN_CLASH"
+
+
+def test_nan_deff_survives(sample):
+    """A requested deff that is NaN comes back NaN; an unrequested one stays absent."""
+    s = svy.Sample(
+        sample.data.with_columns(c=(pl.col("stratum") > "s2").cast(pl.Float64)), sample.design
+    )
+    result = s.estimation.mean("c", by="stratum", deff="wr")
+    assert any(np.isnan(p.deff) for p in result.estimates)
+    data = _payload(result)
+    assert all(p.deff is not None for p in data.estimates)
+    assert_frame_equal(to_polars(data), result.to_polars())
+    assert all(p.deff is None for p in _payload(s.estimation.mean("c", by="stratum")).estimates)

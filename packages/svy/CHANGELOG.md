@@ -8,11 +8,13 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
-- **`svy.serialize.to_polars(data, *, row_index=None, **options)`** gives a serialized result's table, the same frame its live result's `to_polars()` returns, from the payload alone (for example after `from_json`). It covers estimates, estimate lists, t-tests, tables, GLM fits and GLM predictions, with the options that need nothing beyond the payload (`tidy`, `component`, `exponentiate`). `row_index="row"` adds a first column holding each table row's position in the payload's rows; estimate tables are sorted for display, so this is how a table row is matched back to its payload row. The live and payload tables are built by the same function per result kind.
+- **`svy.serialize.to_polars(data, *, row_index=None, **options)`** gives a serialized result's table, the same frame its live result's `to_polars()` returns, from the payload alone (for example after `from_json`). It covers estimates, estimate lists, t-tests, tables, GLM fits and GLM predictions, with the same options (`tidy`, `use_labels`, `component`, `exponentiate`). A serialized estimate stores the labels of the variables and levels it holds, so its label columns come back without the sample's metadata. `row_index="row"` adds a first column holding each table row's position in the payload's rows; estimate tables are sorted for display, so this is how a table row is matched back to its payload row. The live and payload tables are built by the same function per result kind.
 
 ### Changed
 
-- **Serialization schema `svy-result/0.4`.** `EstimateData` gains `as_factor`, which decides whether the table has a level column. `TDistData.df` is now `int | float`, so a GLM coefficient's design df stays an integer. Both are additive: `0.3` payloads still decode.
+- **`Estimate.to_polars()` and `EstimateList.to_polars()` are a data view, no longer the printed table.** Levels keep their codes under the variable's name, and each variable with value labels gets a `<var>_label` column next to it (`by_label` and `y_level_label` with `tidy=False`). Rows sort by code. Labels are on by default for both (`use_labels=False` drops the label columns); before, `Estimate.to_polars()` gave codes only and `EstimateList.to_polars()` put labels in place of the codes and variable labels in place of the names. A category level now keeps the type the estimator gives it, so a proportion's level column is an integer for an integer variable. Printing is unchanged (`to_polars_printable()`). A label column whose name is already a variable raises `LABEL_COLUMN_CLASH`.
+
+- **Serialization schema `svy-result/0.4`.** `EstimateData` gains `as_factor`, which decides whether the table has a level column, and `labels`. `TDistData.df` is now `int | float`, so a GLM coefficient's design df stays an integer. All additive: `0.3` payloads still decode.
 
 ### Fixed
 

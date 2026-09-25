@@ -25,6 +25,7 @@
     }
   ],
   "kind": "estimate",
+  "labels": null,
   "method": "Taylor",
   "n_psus": 20,
   "n_strata": 10,
