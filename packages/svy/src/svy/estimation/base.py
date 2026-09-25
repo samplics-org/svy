@@ -1892,6 +1892,7 @@ class Estimation:
             where=where,
             drop_nulls=drop_nulls,
             cast_y_float=False,
+            factor_y=True,
             select_columns=True,
             # Ungrouped replication only: the mask path covers the ungrouped
             # kernels. Grouped (by=) replication keeps the zeroing path.

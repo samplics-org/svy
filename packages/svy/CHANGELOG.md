@@ -28,6 +28,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 - **`as_factor=True` failed on a string or categorical column** (y was cast to float), and with `drop_nulls=True` a missing value became a level of its own (`0.0`, estimate 0). A missing value now takes the row out of the domain, matching R's `na.rm = TRUE`.
 
+- **`prop(y, drop_nulls=True)` dropped the rows with a missing y**, so a PSU with no observed y left the design and the Taylor SE, covariance and intervals were wrong. A missing y (null, NaN or infinity) now takes the row out of the domain, matching R's `svymean(~factor(y), na.rm = TRUE)`. Replication estimates were already right.
+
 - **A two-sample t-test or rank test on a numeric group ordered the groups as text**, so groups 2 and 10 came out as `(10, 2)` and the difference was reported with its sign flipped relative to R. Numeric groups are now ordered by value.
 
 - **A t-test or rank test group coded `False` or `0` printed an empty Level cell.** The cell was built with `group_level or ""`.
