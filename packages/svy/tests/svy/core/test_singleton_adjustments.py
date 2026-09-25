@@ -256,9 +256,9 @@ def test_verify_scale_unequal_weights():
     assert prop.covariance[0, 1] == pytest.approx(-0.0059250031, abs=1e-9)
 
     by_g = {e.by_level: e.se for e in est.mean("y", by="g").estimates}
-    assert [by_g[("1",)], by_g[("2",)]] == pytest.approx([0.416112587, 0.4253003654], abs=1e-9)
+    assert [by_g[(1,)], by_g[(2,)]] == pytest.approx([0.416112587, 0.4253003654], abs=1e-9)
     tot_g = {e.by_level: e.se for e in est.total("y", by="g").estimates}
-    assert [tot_g[("1",)], tot_g[("2",)]] == pytest.approx([48.89427676, 42.55674713], abs=1e-7)
+    assert [tot_g[(1,)], tot_g[(2,)]] == pytest.approx([48.89427676, 42.55674713], abs=1e-7)
 
     where = est.mean("y", where=svy.col("g") == 1).estimates[0]
     assert where.se == pytest.approx(0.416112587, abs=1e-9)
@@ -297,17 +297,11 @@ def test_verify_scale_domain_fraction():
     assert where.deff == pytest.approx(3.09651284751, abs=1e-8)
 
     by_g = {e.by_level: e.se for e in est.mean("y", by="g").estimates}
-    assert [by_g[("1",)], by_g[("2",)]] == pytest.approx(
-        [0.517058811743, 0.947944278639], abs=1e-9
-    )
+    assert [by_g[(1,)], by_g[(2,)]] == pytest.approx([0.517058811743, 0.947944278639], abs=1e-9)
     tot_g = {e.by_level: e.se for e in est.total("y", by="g").estimates}
-    assert [tot_g[("1",)], tot_g[("2",)]] == pytest.approx(
-        [30.7462372913, 9.47066169944], abs=1e-8
-    )
+    assert [tot_g[(1,)], tot_g[(2,)]] == pytest.approx([30.7462372913, 9.47066169944], abs=1e-8)
     by_b = {e.by_level: e.se for e in est.mean("y", by="b").estimates}
-    assert [by_b[("0",)], by_b[("1",)]] == pytest.approx(
-        [0.431358491831, 0.524469647606], abs=1e-9
-    )
+    assert [by_b[(0,)], by_b[(1,)]] == pytest.approx([0.431358491831, 0.524469647606], abs=1e-9)
 
     ratio = est.ratio("y", "x", where=svy.col("g") == 2).estimates[0]
     assert ratio.se == pytest.approx(0.667460675129, abs=1e-9)
@@ -326,7 +320,7 @@ def test_verify_scale_domain_fraction():
     # The per-domain factor reaches the Woodruff quantile variance too:
     # svyquantile(~y, subset(d, g == 1), 0.5, qrule = "math", ci = TRUE)
     med = {e.by_level: e.se for e in est.median("y", by="g").estimates}
-    assert [med[("1",)], med[("2",)]] == pytest.approx([0.830995952896, 0.304437877424], abs=1e-9)
+    assert [med[(1,)], med[(2,)]] == pytest.approx([0.830995952896, 0.304437877424], abs=1e-9)
 
 
 def test_verify_skip_unequal_weights():
@@ -363,13 +357,9 @@ def test_verify_skip_unequal_weights():
     assert prop.covariance[0, 1] == pytest.approx(-0.00444375232475, abs=1e-9)
 
     by_g = {e.by_level: e.se for e in est.mean("y", by="g").estimates}
-    assert [by_g[("1",)], by_g[("2",)]] == pytest.approx(
-        [0.360364071215, 0.368320920686], abs=1e-9
-    )
+    assert [by_g[(1,)], by_g[(2,)]] == pytest.approx([0.360364071215, 0.368320920686], abs=1e-9)
     tot_g = {e.by_level: e.se for e in est.total("y", by="g").estimates}
-    assert [tot_g[("1",)], tot_g[("2",)]] == pytest.approx(
-        [42.3436857741, 36.8552241148], abs=1e-7
-    )
+    assert [tot_g[(1,)], tot_g[(2,)]] == pytest.approx([42.3436857741, 36.8552241148], abs=1e-7)
 
     where = est.mean("y", where=svy.col("g") == 1).estimates[0]
     assert where.se == pytest.approx(0.360364071215, abs=1e-9)

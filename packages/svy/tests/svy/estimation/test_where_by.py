@@ -351,8 +351,8 @@ class TestWhereAndByOnSameVariable:
         )
 
         by_levels = {est.by_level[0] for est in result.estimates}
-        assert "99" not in by_levels
-        assert by_levels == {"1", "2"}
+        assert 99 not in by_levels
+        assert by_levels == {1, 2}
 
         # Nothing NaN slips through.
         for est in result.estimates:
@@ -441,7 +441,7 @@ class TestWhereAndByOnSameVariable:
 
         sex_levels = {est.by_level[0] for est in result.estimates}
         region_levels = {est.by_level[1] for est in result.estimates}
-        assert sex_levels == {"1", "2"}  # 99 fully dropped
+        assert sex_levels == {1, 2}  # 99 fully dropped
         assert region_levels == {"North", "South"}  # region untouched
         # Full cross of the surviving sex levels x regions.
         assert len(result.estimates) == 2 * 2
@@ -887,8 +887,8 @@ class TestToPolars:
         # Same estimate values
         assert set(tidy_df["est"].to_list()) == set(raw_df["est"].to_list())
 
-        # by_level contains lists in raw format — unwrap for comparison
-        raw_levels = {v[0] if isinstance(v, list) else v for v in raw_df["by_level"].to_list()}
+        # by_level is a struct keyed by variable in raw format
+        raw_levels = {v["gender"] for v in raw_df["by_level"].to_list()}
         tidy_levels = set(tidy_df["gender"].to_list())
         assert tidy_levels == raw_levels
 
