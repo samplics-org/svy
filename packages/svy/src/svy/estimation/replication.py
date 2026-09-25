@@ -404,7 +404,9 @@ def replicate_prop(
 ) -> Estimate:
     rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
     data = est._ensure_float64(prep.df, rep_weight_cols)
-    data = est._coerce_y_for_prop(data, y)
+    # A null y is out of the domain with zero weight; the kernel has no null
+    # level, so those rows go.
+    data = est._coerce_y_for_prop(data.filter(pl.col(y).is_not_null()), y)
     result_df, cov_flat = rs.replicate_prop(
         data,
         value_col=y,
