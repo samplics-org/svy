@@ -30,6 +30,12 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Changed
 
+- **Breaking: the templates are consistent.** `controls_margins_template` and `control_aux_template` return the columns' own values as keys (an Int column gave `{'1': nan}`) and take one missing-value option, `na="error" | "level" | "drop"` (default `"error"`) with `na_label`; `cat_na=` and `by_na=` (also on `build_aux_matrix`) are refused with a pointer to `na=`. `controls_margins_template` no longer includes nulls as a level by default.
+
+- **Breaking: weighting errors are data.** Each input failure has a specific code (`CONTROLS_KEYS_MISMATCH`, `MARGINS_DISAGREE`, `RESP_STATUS_UNKNOWN`, and others under `svy.errors.WeightingError`, a `MethodError`), `expected`/`got` hold structured values (the cells present, `{"missing": [...], "extra": [...]}`, `{margin: total}`, `{status: count}`) instead of text, and hints use the caller's names and values. `SvyError.to_dict()` keeps them structured and JSON-safe. Rake's `INVALID_CONTROL_TOTALS`, `ZERO_CONTROL_TOTALS` and `INVALID_SHARES` become `CONTROLS_*` codes.
+
+- **Breaking: weighting targets match the column's values, with a text fallback.** Every keyed input (`poststratify`/`normalize` controls and shares, each `rake` margin, `standardize` shares, `calibrate` controls and domains, `adjust` `resp_mapping`) matches a key to the column's own value first, then to its text form (`"1"` for 1, `"true"`/`"True"` for booleans, `"1.0"`/`"1"` for 1.0, ISO strings for dates), so controls stored as JSON work unchanged. Tuple keys match part by part. A key that could mean two levels, or two keys naming one level, is refused. One rule for extra keys everywhere: a key naming no level in scope is an error unless its target is 0 (calibrate used to drop them silently; rake failed in the kernel). A value listed under two `resp_mapping` codes is refused instead of the last one winning.
+
 - **Breaking: domain and category levels keep the column's type.** `ParamEst.by_level` and `y_level` held the kernel's text: `by="zone"` gave `("3",)`, a boolean `by` gave `("false",)`, and `mean("zone", as_factor=True)` gave `"1.0"`. They now hold the column's own values (`(3,)`, `(False,)`, `1`) for every estimator, with `where=`, with several `by` variables (a tuple of values), and under Taylor and replication alike; so do `Estimate.domains`, `keys()`, the t-test's `by_level` and `group_level`, the rank tests' `by_level` and `group_levels`, and JSON payloads. A proportion of an integer-valued float column now reports `1.0`, not `1`, and string codes such as `"01"` are no longer read as integers. Test headers print numbers unquoted (`[1 vs 2]`). `contrast()` still accepts the old string keys (`{"3": 1, "1": -1}`, `"false"`, `"1.0"`). A level of a date, datetime, time or duration column goes into JSON as its ISO string with its type recorded under a top-level `"temporal"` field, and `from_json` gives the value back. Printed tables are unchanged, except that `as_factor` levels print as the column's values (`1`, not `1.0`).
 
 - **Breaking: a bare number is always an absolute trimming bound.** `trim(upper=0.9)`, `TrimConfig(upper=0.9)` and `trimming=` read a number in (0, 1] as a quantile and a larger one as a cap, so an absolute cap of 0.9 (common after normalizing) silently became the 90th percentile. A number now always caps at that value; write `Threshold.quantile(0.9)` for the 90th percentile.
@@ -55,6 +61,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **`combine_samples(kind="panel")`** compares the waves' replicate designs without their paired weight and pairs them with the combined weight.
 
 ### Fixed
+
+- **`calibrate_matrix(by=)` with nulls in `by` crashed** with a `TypeError`; it raises `BY_NA`. `poststratify` whose `where=` matched nothing raised a kernel `ValueError`; it raises `NO_ROWS_IN_SCOPE`.
+
+- **String keys failed on non-string columns.** `poststratify({"1": ...})` on an Int column raised a keys mismatch, and `rake` on a Boolean column failed with a bare `np.False_`.
 
 - **`total(y, as_factor=True)` ignored `as_factor`** and returned the total of the numeric column. It now gives one row per level with that level's estimated count, its SE, a Wald interval, the design effect when asked and the covariance across levels and by-groups, so levels can be contrasted (R `svytotal(~factor(y))`, `svyby(..., svytotal)`). Taylor and replication.
 

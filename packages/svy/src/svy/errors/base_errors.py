@@ -18,9 +18,55 @@ Design goals:
 
 from __future__ import annotations
 
+import datetime as _dt
+
 from dataclasses import dataclass
 from textwrap import indent as _indent
 from typing import Any, Mapping, Optional
+
+
+# svy's text form of a key over several columns (e.g. weighting cells), used
+# when such a key has to become a JSON object key.
+_KEY_SEP = "_&_"
+
+
+def _json_key(k: Any) -> Any:
+    if k is None or isinstance(k, (str, int, float, bool)):
+        return k
+    if isinstance(k, tuple):
+        return _KEY_SEP.join(str(_jsonable(p)) for p in k)
+    j = _jsonable(k)
+    return j if isinstance(j, (str, int, float, bool)) else str(j)
+
+
+def _jsonable(x: Any) -> Any:
+    """``x`` with every value in a form ``json.dumps`` accepts, structure kept."""
+    if x is None or isinstance(x, (str, bool, int, float)):
+        return x
+    if isinstance(x, Mapping):
+        return {_json_key(k): _jsonable(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple, set, frozenset)):
+        items = list(x)
+        if isinstance(x, (set, frozenset)):
+            try:
+                items = sorted(items)
+            except TypeError:
+                pass
+        return [_jsonable(v) for v in items]
+    if isinstance(x, (_dt.date, _dt.time)):
+        return x.isoformat()
+    item = getattr(x, "item", None)  # numpy scalars
+    if callable(item):
+        try:
+            v = item()
+        except (TypeError, ValueError):
+            v = None
+        if v is not None and v is not x:
+            return _jsonable(v)
+    tolist = getattr(x, "tolist", None)  # numpy arrays
+    if callable(tolist):
+        return _jsonable(tolist())
+    return str(x)
 
 
 @dataclass(eq=False)
@@ -219,11 +265,11 @@ class SvyError(Exception):
                 "detail": self.detail,
                 "where": self.where,
                 "param": self.param,
-                "expected": self.expected,
-                "got": None if self.got is None else self._short(self.got),
+                "expected": self._payload(self.expected),
+                "got": self._payload(self.got),
                 "hint": self.hint,
                 "docs_url": self.docs_url,
-                "extra": dict(self.extra) if self.extra else None,
+                "extra": _jsonable(dict(self.extra)) if self.extra else None,
             }
         }
 
@@ -293,6 +339,15 @@ class SvyError(Exception):
             yield self.text()
 
     # ---- helpers ----
+    @classmethod
+    def _payload(cls, x: Any) -> Any:
+        # Structured values stay structured; only prose is shortened.
+        if x is None:
+            return None
+        if isinstance(x, str):
+            return cls._short(x)
+        return _jsonable(x)
+
     @staticmethod
     def _short(x: Any, limit: int = 120) -> Any:
         s = str(x)

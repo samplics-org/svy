@@ -37,16 +37,16 @@ import polars as pl
 
 from svy.core.design import WgtAdjustment
 from svy.core.types import DomainScalarMap
-from svy.errors import MethodError
+from svy.errors import WeightingError
 from svy.weighting._engine import (
     CellSpec,
-    _as_float_vector,
     _cells_to_cols,
     _is_mapping,
     build_cells,
     materialize_cells,
     scale_to_targets,
 )
+from svy.weighting._keys import LevelIndex, match_keys, sort_levels, target_vector
 from svy.weighting.types import TrimConfig
 
 
@@ -81,36 +81,20 @@ def _standardize_targets(
 ) -> np.ndarray:
     """Derive target(g, c) = share(c) x W_g for every observed (domain, cell)."""
     split = [_split_label(lab, n_by) for lab in spec.labels]
-    comp_keys = {c for _, c in split}
+    comp_levels = list(dict.fromkeys(c for _, c in split))
 
     if not _is_mapping(shares):
-        raise MethodError.invalid_type(
-            where=_CTX, param="shares", got=shares, expected="dict[cell, number]"
+        raise WeightingError.targets_type(
+            where=_CTX, param="shares", got=shares, expected="a dict[cell, number]"
         )
-    extra = set(shares.keys()) - comp_keys
-    missing = comp_keys - set(shares.keys())
-    if extra or missing:
-        raise MethodError.invalid_mapping_keys(
-            where=_CTX,
-            param="shares",
-            missing=sorted(missing, key=str),
-            extra=sorted(extra, key=str),
-            hint=(
-                "`shares` needs one entry per level of the composition axis named "
-                "by cells=, using the level values themselves as keys."
-            ),
-        )
-
-    ordered = sorted(comp_keys, key=str)
-    share_vec = _as_float_vector(shares, ordered, param="shares", method="standardize", where=_CTX)
+    comp_cols = (spec.cols or [])[n_by:]
+    index = LevelIndex(comp_levels, width=len(comp_cols))
+    matched = match_keys(shares, index, where=_CTX, param="shares", cols=comp_cols)
+    ordered = sort_levels(index.levels)
+    share_vec = np.asarray(target_vector(matched, ordered, where=_CTX, param="shares"))
     share_of = dict(zip(ordered, share_vec))
     if float(share_vec.sum()) <= 0:
-        raise MethodError.not_applicable(
-            where=_CTX,
-            method="standardize",
-            reason="`shares` must include at least one positive value",
-            param="shares",
-        )
+        raise WeightingError.all_zero(where=_CTX, param="shares")
 
     # Domain totals under the same scope, so the `where` used to build the cells
     # is necessarily the one used for W_g -- the mismatch that makes hand-rolled
@@ -165,46 +149,33 @@ def standardize(
     design = sample._design
 
     if design.wgt is None:
-        raise MethodError.not_applicable(
-            where=_CTX,
-            method="standardize",
-            reason="Sample weight is None. Set design.wgt before calling standardize().",
-        )
+        raise WeightingError.no_weight(where=_CTX, method="standardize")
     wgt = design.wgt
     if wgt not in df.columns:
-        raise MethodError.invalid_choice(
+        raise WeightingError.missing_columns(
             where=_CTX,
             param="design.wgt",
-            got=wgt,
-            allowed=list(df.columns),
+            missing=[wgt],
+            available=list(df.columns),
             hint="Check that the weight column exists in the data.",
         )
     if wgt_name in set(df.columns):
-        raise MethodError.not_applicable(
-            where=_CTX,
-            method="standardize",
-            reason=f"Column '{wgt_name}' already exists. Choose a different wgt_name.",
+        raise WeightingError.wgt_name_exists(
+            where=_CTX, method="standardize", wgt_name=wgt_name, existing=df.columns
         )
     if cells is None:
-        raise MethodError.not_applicable(
+        raise WeightingError.cells_required(
             where=_CTX,
-            method="standardize",
-            reason="`cells` names the composition axis and is required",
+            param="cells",
+            reason="`cells` names the composition axis and is required.",
             hint="e.g. cells='agecat' with shares keyed by age group.",
         )
 
-    by_cols = _cells_to_cols(by, where=_CTX) or []
+    by_cols = _cells_to_cols(by, where=_CTX, param="by") or []
     cells_cols = _cells_to_cols(cells, where=_CTX) or []
     overlap = set(by_cols) & set(cells_cols)
     if overlap:
-        raise MethodError.not_applicable(
-            where=_CTX,
-            method="standardize",
-            reason=(
-                f"{sorted(overlap)} appears in both by= and cells=. Domains and the "
-                "composition axis must be different variables"
-            ),
-        )
+        raise WeightingError.cells_by_overlap(where=_CTX, overlap=sorted(overlap))
 
     spec = build_cells(df, [*by_cols, *cells_cols], where, where=_CTX)
     wgt_arr = df.get_column(wgt).to_numpy().astype(np.float64)

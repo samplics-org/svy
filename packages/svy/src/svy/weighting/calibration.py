@@ -27,7 +27,7 @@ to Python callers.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 
 import msgspec
 import numpy as np
@@ -51,10 +51,16 @@ from svy.core.design import WgtAdjustment
 from svy.core.terms import Feature
 from svy.core.types import Category, Number
 from svy.core.warnings import Severity, WarnCode
-from svy.errors import DimensionError, MethodError
+from svy.errors import DimensionError, WeightingError
 from svy.weighting._calibration_utils import _expand_term, _match_term_targets
-from svy.weighting._engine import AUX_PREFIX, _where_mask
-from svy.weighting._helpers import _build_by_array, _by_to_cols, _normalize_dict_keys
+from svy.weighting._engine import AUX_PREFIX, _cells_to_cols, _where_mask, build_cells
+from svy.weighting._keys import (
+    LevelIndex,
+    check_na_option,
+    match_keys,
+    target_vector,
+    template_levels,
+)
 from svy.weighting.raking import _trim_constraints_satisfied
 from svy.weighting.trimming import _build_domain_array
 from svy.weighting.types import TrimConfig, resolve_threshold
@@ -75,10 +81,10 @@ def control_aux_template(
     *,
     x: Sequence[Feature],
     by: str | Sequence[str] | None = None,
-    by_na: Literal["error", "level", "drop"] = "error",
+    na: Literal["error", "level", "drop"] = "error",
     na_label: str = "__NA__",
 ) -> dict[Category, Number] | dict[Category, dict[Category, Number]]:
-    _, shape = build_aux_matrix(sample, x=x, by=by, by_na=by_na, na_label=na_label)
+    _, shape = build_aux_matrix(sample, x=x, by=by, na=na, na_label=na_label)
     return shape
 
 
@@ -87,95 +93,69 @@ def build_aux_matrix(
     *,
     x: Sequence[Feature],
     by: str | Sequence[str] | None = None,
-    by_na: Literal["error", "level", "drop"] = "error",
+    na: Literal["error", "level", "drop"] = "error",
     na_label: str = "__NA__",
 ) -> tuple[np.ndarray, dict[Category, Number] | dict[Category, dict[Category, Number]]]:
     df: pl.DataFrame = sample.data
     where = "Sample.weighting.build_aux_matrix"
 
-    by_n = _by_to_cols(by)
-
-    # Validate by columns exist
+    check_na_option(na, where=where)
+    by_n = _cells_to_cols(by, where=where, param="by")
     if by_n is not None:
         missing_by = [c for c in by_n if c not in df.columns]
         if missing_by:
-            raise MethodError.invalid_choice(
+            raise WeightingError.missing_columns(
                 where=where,
                 param="by",
-                got=missing_by,
-                allowed=list(df.columns),
+                missing=missing_by,
+                available=list(df.columns),
                 hint="All `by` columns must exist in the data.",
             )
 
     if not x:
-        raise MethodError.not_applicable(
-            where=where, method="aux builder", reason="No terms specified."
-        )
+        raise WeightingError.no_terms(where=where)
 
     all_exprs = []
     all_labels = []
-
     for term in x:
         t_exprs, t_labs = _expand_term(term, df, where)
         all_exprs.extend(t_exprs)
         all_labels.extend(t_labs)
 
     if not all_exprs:
-        raise MethodError.not_applicable(
-            where=where, method="aux builder", reason="Terms produced no columns."
-        )
+        raise WeightingError.no_terms(where=where)
 
     final_exprs = [e.alias(f"__aux_col_{i}") for i, e in enumerate(all_exprs)]
 
     if by_n is None:
-        X_df = df.select(final_exprs)
-        X = X_df.to_numpy()
+        X = df.select(final_exprs).to_numpy()
         return X, {lab: np.nan for lab in all_labels}
 
-    if by_na == "error":
-        if (
-            df.select([pl.col(c).is_null().any() for c in by_n])
-            .select(pl.any_horizontal(pl.all()))
-            .item()
-        ):
-            raise DimensionError(
-                title="Missing values in `by` columns",
-                detail=f"Nulls found in {by_n}.",
-                code="BY_NA",
-                where=where,
-                param="by",
-                hint="Use by_na='level' or 'drop', or fix data.",
-            )
-        by_exprs = [pl.col(c) for c in by_n]
-    elif by_na == "level":
-        by_exprs = [pl.col(c).fill_null(na_label) for c in by_n]
-    elif by_na == "drop":
-        filter_expr = pl.all_horizontal([pl.col(c).is_not_null() for c in by_n])
-        df = df.filter(filter_expr)
-        by_exprs = [pl.col(c) for c in by_n]
-    else:
-        raise MethodError.invalid_choice(
-            where=where,
-            param="by_na",
-            got=by_na,
-            allowed=["error", "level", "drop"],
-        )
-
-    combined_df = df.select(final_exprs + by_exprs)
-    n_x_cols = len(final_exprs)
-    X = combined_df[:, :n_x_cols].to_numpy()
-    by_arr = combined_df[:, n_x_cols:].to_numpy()
-
-    _keys_raw = [row[0] if by_arr.shape[1] == 1 else tuple(row.tolist()) for row in by_arr]
-    keys: list[Category] = _keys_raw  # type: ignore[assignment]
-
-    try:
-        uniq_keys = sorted(list(set(keys)))
-    except TypeError:
-        uniq_keys = list(set(keys))
+    domains = template_levels(df, by_n, na=na, na_label=na_label, where=where, code="BY_NA")
+    if na == "drop":
+        df = df.filter(pl.all_horizontal([pl.col(c).is_not_null() for c in by_n]))
+    X = df.select(final_exprs).to_numpy()
 
     inner_template = {lab: np.nan for lab in all_labels}
-    return X, {k: inner_template.copy() for k in uniq_keys}
+    return X, {k: inner_template.copy() for k in domains}
+
+
+def _refuse_by_nulls(df: pl.DataFrame, by_cols: list[str], *, where: str) -> None:
+    if not by_cols:
+        return
+    nulls = {c: int(n) for c, n in zip(by_cols, df.select(by_cols).null_count().row(0)) if n}
+    if nulls:
+        listed = ", ".join(f"{c!r} ({n} null{'' if n == 1 else 's'})" for c, n in nulls.items())
+        raise DimensionError(
+            title="Missing values in `by` columns",
+            detail=f"Nulls found in {listed}; calibration needs a domain for every row.",
+            code="BY_NA",
+            where=where,
+            param="by",
+            expected=0,
+            got=nulls,
+            hint="Fill or drop the nulls first, or leave those rows out with where=.",
+        )
 
 
 def _calibrate_scoped(
@@ -265,13 +245,16 @@ def calibrate(
             trimming=trimming,
         )
 
-    if not isinstance(controls, dict) or not controls:
-        raise MethodError.not_applicable(
+    if not isinstance(controls, Mapping):
+        raise WeightingError.targets_type(
             where=ctx,
-            method="calibrate",
-            reason="`controls` must be a non-empty dictionary.",
             param="controls",
+            got=controls,
+            expected="a non-empty dict {term: targets}",
+            hint="e.g. controls={Cat('region'): {'North': ..., 'South': ...}, 'income': ...}.",
         )
+    if not controls:
+        raise WeightingError.targets_missing(where=ctx, method="calibrate")
 
     terms: list[Feature]
     is_global = by is None
@@ -279,17 +262,21 @@ def calibrate(
     if is_global:
         terms = list(controls.keys())
     else:
-        first_domain_val = next(iter(controls.values()))
-        if not isinstance(first_domain_val, dict):
-            raise MethodError.invalid_type(
+        first_domain, first_domain_val = next(iter(controls.items()))
+        if not isinstance(first_domain_val, Mapping):
+            raise WeightingError.targets_type(
                 where=ctx,
-                param="controls",
+                param=f"controls[{first_domain!r}]",
                 got=first_domain_val,
-                expected="dict mapping domain -> targets when by= is used",
+                expected="a dict {term: targets} per domain when by= is used",
                 hint="When by= is set, controls values must be dicts keyed by domain.",
             )
         terms = list(first_domain_val.keys())
 
+    if not is_global:
+        by_cols_ = _cells_to_cols(by, where=ctx, param="by") or []
+        present = [c for c in by_cols_ if c in sample.data.columns]
+        _refuse_by_nulls(sample.data, present, where=ctx)
     X, shape_template = build_aux_matrix(sample, x=terms, by=by)
 
     # Ordered per-term label lists. Targets are matched per term and kept as
@@ -311,34 +298,51 @@ def calibrate(
     if is_global:
         flat_targets = []
         for term, term_labs in term_label_lists:
-            vals = _match_term_targets(term_labs, controls[term], str(term))
-            flat_targets.extend(vals)
+            flat_targets.extend(
+                _match_term_targets(term_labs, controls[term], term, sample.data, where=ctx)
+            )
         final_control_arg = np.array(flat_targets, dtype=float)
     else:
+        by_cols = _cells_to_cols(by, where=ctx, param="by") or []
+        domains = list(shape_template.keys())
+        by_domain = match_keys(
+            controls,
+            LevelIndex(domains, width=len(by_cols)),
+            where=ctx,
+            param="controls",
+            cols=by_cols,
+            zero_extra_ok=False,
+        )
         final_control_arg = {}
-        expected_domains = set(shape_template.keys())
-        provided_domains = set(controls.keys())
-        missing = expected_domains - provided_domains
-        extra = provided_domains - expected_domains
-        if missing or extra:
-            raise MethodError.invalid_mapping_keys(
-                where=ctx,
-                param="controls",
-                missing=list(missing),
-                extra=list(extra),
-            )
-
-        for domain, domain_specs in controls.items():
+        for domain in domains:
+            domain_specs = by_domain[domain]
+            if not isinstance(domain_specs, Mapping):
+                raise WeightingError.targets_type(
+                    where=ctx,
+                    param=f"controls[{domain!r}]",
+                    got=domain_specs,
+                    expected="a dict {term: targets}",
+                )
+            missing_terms = [t for t, _ in term_label_lists if t not in domain_specs]
+            if missing_terms:
+                raise WeightingError.keys_mismatch(
+                    where=ctx,
+                    param=f"controls[{domain!r}]",
+                    levels=[str(t) for t, _ in term_label_lists],
+                    missing=[str(t) for t in missing_terms],
+                )
             flat_targets = []
             for term, term_labs in term_label_lists:
-                if term not in domain_specs:
-                    raise MethodError.invalid_mapping_keys(
+                flat_targets.extend(
+                    _match_term_targets(
+                        term_labs,
+                        domain_specs[term],
+                        term,
+                        sample.data,
                         where=ctx,
-                        param=f"controls[{domain!r}]",
-                        missing=[str(term)],
+                        param=f"controls[{domain!r}][{term!r}]",
                     )
-                vals = _match_term_targets(term_labs, domain_specs[term], str(term))
-                flat_targets.extend(vals)
+                )
             # Ordered list (not a label-keyed dict): aligned with X columns
             final_control_arg[domain] = flat_targets
 
@@ -404,12 +408,14 @@ def calibrate_matrix(
     design = sample._design
 
     wgt_col = getattr(sample.design, "wgt")
+    if wgt_col is None:
+        raise WeightingError.no_weight(where=where, method="calibrate")
     if not isinstance(wgt_col, str) or wgt_col not in df.columns:
-        raise MethodError.invalid_choice(
+        raise WeightingError.missing_columns(
             where=where,
             param="design.wgt",
-            got=wgt_col,
-            allowed=df.columns,
+            missing=[wgt_col],
+            available=list(df.columns),
             hint="Design must reference an existing weight column.",
         )
     w = df.get_column(wgt_col).to_numpy()
@@ -424,83 +430,92 @@ def calibrate_matrix(
             code="SHAPE_MISMATCH",
             where=where,
             param="aux_vars",
-            expected=f"(n,{X.shape[1]}) with n={df.height}",
-            got=f"(n={X.shape[0]},{X.shape[1]})",
+            expected={"rows": df.height, "cols": X.shape[1]},
+            got={"rows": X.shape[0], "cols": X.shape[1]},
+            hint="Build aux_vars from this sample's data, one row per record.",
         )
 
-    domain_vec = _build_by_array(df, by, where=where)
-
-    if domain_vec is None and isinstance(control, dict) and labels is not None:
-        missing_labels = [lbl for lbl in labels if lbl not in control]
-        extra_keys = [k for k in control.keys() if k not in labels]
-        if missing_labels or extra_keys:
-            raise MethodError.invalid_mapping_keys(
+    def _totals(spec: Any, param: str) -> list[float]:
+        """One domain's (or the sample's) totals, aligned to the columns of X."""
+        if isinstance(spec, Mapping):
+            if labels is None:
+                totals = list(spec.values())
+            else:
+                idx = LevelIndex(list(labels))
+                matched = match_keys(spec, idx, where=where, param=param, zero_extra_ok=False)
+                totals = [matched[lv] for lv in idx.levels]
+        else:
+            totals = list(np.atleast_1d(np.asarray(spec, dtype=object)))
+        vec = target_vector(
+            dict(enumerate(totals)),
+            list(range(len(totals))),
+            where=where,
+            param=param,
+            nonneg=False,
+        )
+        if len(vec) != X.shape[1]:
+            raise DimensionError(
+                title="Controls do not match aux_vars",
+                detail=f"`{param}` has {len(vec)} totals; aux_vars has {X.shape[1]} columns.",
+                code="SHAPE_MISMATCH",
                 where=where,
-                param="control",
-                missing=missing_labels,
-                extra=extra_keys,
+                param=param,
+                expected={"totals": X.shape[1]},
+                got={"totals": len(vec)},
+                hint="Give one total per column of aux_vars, in column order (or key them by labels=).",
             )
-        control = np.array([float(control[lbl]) for lbl in labels])
+        return vec
+
+    by_cols = _cells_to_cols(by, where=where, param="by")
 
     if isinstance(scale, (int, float)):
         scale_arr = np.full(len(w), float(scale), dtype=np.float64)
     else:
         scale_arr = np.asarray(scale, dtype=np.float64)
 
-    # When by= is used, control must be a dict keyed by domain
-    if domain_vec is not None and not isinstance(control, dict):
-        raise MethodError.invalid_type(
-            where=where,
-            param="control",
-            got=control,
-            expected="dict mapping domain values to control totals when by= is used",
-            hint="When by= is specified, control must be a dict keyed by domain values.",
-        )
-    if domain_vec is not None and isinstance(control, dict):
-        control = _normalize_dict_keys(control)
-
-    # ── Initialise variables referenced by both main calibration and the
-    #    trim-calibrate cycle below.  Must be set before the if/else branch
-    #    so the cycle can safely reference them regardless of which path ran.
     totals_arr: np.ndarray = np.empty(0, dtype=np.float64)
     controls_dict_main: dict[int, list[float]] = {}
     domain_indices: np.ndarray = np.empty(0, dtype=np.int64)
-    unique_domains: np.ndarray = np.empty(0)
-    domain_to_idx: dict[Any, int] = {}
+    domains: list[Any] = []
 
-    # Main weight: reshape to (n, 1), call Rust, extract column 0
-    if domain_vec is None:
-        if isinstance(control, dict):
-            totals_arr = (
-                np.array([float(control[lbl]) for lbl in labels], dtype=np.float64)
-                if labels is not None
-                else np.array(list(control.values()), dtype=np.float64)
-            )
-        else:
-            totals_arr = np.asarray(control, dtype=np.float64)
+    if by_cols is None:
+        totals_arr = np.asarray(_totals(control, "control"), dtype=np.float64)
         assert rust_calibrate is not None  # noqa: S101
         # Always pass additive=False — the Rust flag returns g-factors rather
         # than calibrated weights and must not be exposed to callers.
         new_w = rust_calibrate(w.reshape(-1, 1), X, totals_arr, scale_arr, False)[:, 0]
     else:
-        unique_domains, domain_indices_inv = np.unique(domain_vec, return_inverse=True)
-        domain_indices = domain_indices_inv.astype(np.int64)
-        domain_to_idx = {d: idx for idx, d in enumerate(unique_domains)}
-        for domain in unique_domains:
-            domain_idx = domain_to_idx[domain]
-            if isinstance(control, dict):
-                domain_control = control[domain]
-                if isinstance(domain_control, dict):
-                    totals = (
-                        [float(domain_control[lbl]) for lbl in labels]
-                        if labels is not None
-                        else list(domain_control.values())
-                    )
-                else:
-                    totals = list(np.asarray(domain_control, dtype=float))
-            else:
-                totals = list(np.asarray(control, dtype=float))
-            controls_dict_main[domain_idx] = totals
+        missing_by = [c for c in by_cols if c not in df.columns]
+        if missing_by:
+            raise WeightingError.missing_columns(
+                where=where,
+                param="by",
+                missing=missing_by,
+                available=list(df.columns),
+                hint="All `by` columns must exist in the data.",
+            )
+        _refuse_by_nulls(df, by_cols, where=where)
+        if not isinstance(control, Mapping):
+            raise WeightingError.targets_type(
+                where=where,
+                param="control",
+                got=control,
+                expected="a dict keyed by domain when by= is used",
+                hint="When by= is specified, control must be a dict keyed by domain values.",
+            )
+        spec = build_cells(df, by_cols, None, where=where)
+        domains = spec.labels
+        domain_indices = spec.codes
+        by_domain = match_keys(
+            control,
+            LevelIndex(domains, width=len(by_cols)),
+            where=where,
+            param="control",
+            cols=by_cols,
+            zero_extra_ok=False,
+        )
+        for d_idx, domain in enumerate(domains):
+            controls_dict_main[d_idx] = _totals(by_domain[domain], f"control[{domain!r}]")
         assert rust_calibrate_by_domain is not None  # noqa: S101
         # Always pass additive=False — see note above.
         new_w = rust_calibrate_by_domain(
@@ -510,45 +525,24 @@ def calibrate_matrix(
     if weights_only:
         # No cycling for weights_only mode — just check fit and return
         if strict:
-            if domain_vec is None:
+            if by_cols is None:
                 if not _check_calibration_fit(new_w, X, totals_arr):
-                    raise MethodError.not_applicable(
-                        where=where,
-                        method="calibrate",
-                        reason=(
-                            "Calibration did not satisfy control totals within tolerance. "
-                            "The design matrix may be singular or ill-conditioned. "
-                            "Pass strict=False to store the approximate solution."
-                        ),
-                        hint="Check for multicollinearity in aux_vars or reduce the number of calibration variables.",
-                    )
+                    raise WeightingError.calibration_not_met(where=where)
             else:
-                # FIX: validate fit per domain, not skipped entirely
-                for domain in unique_domains:
-                    mask = domain_vec == domain
-                    d_idx = domain_to_idx[domain]
+                for d_idx, domain in enumerate(domains):
+                    mask = domain_indices == d_idx
                     d_totals = np.array(controls_dict_main[d_idx], dtype=np.float64)
                     if not _check_calibration_fit(new_w[mask], X[mask], d_totals):
-                        raise MethodError.not_applicable(
-                            where=where,
-                            method="calibrate",
-                            reason=(
-                                f"Calibration did not satisfy control totals for domain "
-                                f"{domain!r} within tolerance. "
-                                "The design matrix may be singular or ill-conditioned. "
-                                "Pass strict=False to store the approximate solution."
-                            ),
-                            hint="Check for multicollinearity in aux_vars or reduce the number of calibration variables.",
+                        raise WeightingError.calibration_not_met(
+                            where=where, domain=domain, has_domain=True
                         )
         return new_w
 
     existing_cols = set(df.columns)
 
     if wgt_name in existing_cols:
-        raise MethodError.not_applicable(
-            where=where,
-            method="calibrate_matrix",
-            reason=f"Column '{wgt_name}' already exists. Choose a different wgt_name.",
+        raise WeightingError.wgt_name_exists(
+            where=where, method="calibrate", wgt_name=wgt_name, existing=existing_cols
         )
 
     # ── Trim-calibrate cycle ──────────────────────────────────────────────
@@ -561,11 +555,11 @@ def calibrate_matrix(
             t_by_cols = [trimming.by] if isinstance(trimming.by, str) else list(trimming.by)
             missing_by = [c for c in t_by_cols if c not in df.columns]
             if missing_by:
-                raise MethodError.invalid_choice(
+                raise WeightingError.missing_columns(
                     where=where,
                     param="trimming.by",
-                    got=missing_by,
-                    allowed=list(df.columns),
+                    missing=missing_by,
+                    available=list(df.columns),
                     hint="All trimming by= columns must exist in the data.",
                 )
             _trim_dom_arr = _build_domain_array(df, t_by_cols)
@@ -608,7 +602,7 @@ def calibrate_matrix(
         )
 
         def _cycle_calibrate(w_in: np.ndarray) -> np.ndarray:
-            if domain_vec is None:
+            if by_cols is None:
                 return rust_calibrate(
                     w_in.reshape(-1, 1),
                     X,
@@ -626,15 +620,15 @@ def calibrate_matrix(
             )[:, 0]
 
         def _cycle_fit_ok(w_in: np.ndarray) -> bool:
-            if domain_vec is None:
+            if by_cols is None:
                 return _check_calibration_fit(w_in, X, totals_arr)
             return all(
                 _check_calibration_fit(
-                    w_in[domain_vec == d],
-                    X[domain_vec == d],
-                    np.array(controls_dict_main[domain_to_idx[d]], dtype=np.float64),
+                    w_in[domain_indices == i],
+                    X[domain_indices == i],
+                    np.array(controls_dict_main[i], dtype=np.float64),
                 )
-                for d in unique_domains
+                for i in range(len(domains))
             )
 
         def _cycle_trim_ok(w_in: np.ndarray) -> bool:
@@ -671,15 +665,17 @@ def calibrate_matrix(
                     break
 
         if strict and not (_calib_converged and _trim_ok):
-            raise MethodError.not_applicable(
+            raise WeightingError.not_converged(
                 where=where,
                 method="calibrate",
-                reason=(
-                    f"Trim-calibrate cycle did not converge after {trimming.max_iter} cycles. "
-                    "The design has NOT been modified. "
-                    "Pass strict=False to store partial results."
-                ),
-                hint="Increase max_iter, relax tol, or use a less restrictive TrimConfig.",
+                what="Trim-calibrate cycle",
+                max_iter=trimming.max_iter,
+                got={
+                    "cycles": trimming.max_iter,
+                    "controls_met": _calib_converged,
+                    "trim_bounds_met": _trim_ok,
+                },
+                hint="Increase TrimConfig.max_iter or use a less restrictive trim threshold.",
             )
 
         new_w = _current_w
@@ -721,18 +717,7 @@ def calibrate_matrix(
             else:
                 scale_arr = np.asarray(scale, dtype=np.float64)
 
-            if domain_vec is None:
-                if isinstance(control, dict):
-                    if labels is not None:
-                        totals_arr = np.array(
-                            [float(control[lbl]) for lbl in labels],  # type: ignore[index]
-                            dtype=np.float64,
-                        )
-                    else:
-                        totals_arr = np.array(list(control.values()), dtype=np.float64)
-                else:
-                    totals_arr = np.asarray(control, dtype=np.float64)
-
+            if by_cols is None:
                 n_reps = len(rep_cols)
                 if n_reps >= 10:
                     assert rust_calibrate_parallel is not None  # noqa: S101
@@ -742,7 +727,6 @@ def calibrate_matrix(
                     # Always pass additive=False — see module docstring.
                     calib_reps = rust_calibrate(wgts_arr, X, totals_arr, scale_arr, False)
             else:
-                # domain_indices and controls_dict_main are already populated above
                 assert rust_calibrate_by_domain is not None  # noqa: S101
                 # Always pass additive=False — see module docstring.
                 calib_reps = rust_calibrate_by_domain(

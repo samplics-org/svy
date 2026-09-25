@@ -23,7 +23,7 @@ import polars as pl
 
 from svy.core.design import WgtAdjustment
 from svy.core.types import DomainScalarMap, Number
-from svy.errors import MethodError
+from svy.errors import WeightingError
 from svy.weighting._engine import (
     CellSpec,
     build_cells,
@@ -107,25 +107,19 @@ def poststratify(
     design = sample._design
 
     if design.wgt is None:
-        raise MethodError.not_applicable(
-            where=ctx,
-            method="poststratify",
-            reason="Sample weight is None. Set design.wgt before calling poststratify().",
-        )
+        raise WeightingError.no_weight(where=ctx, method="poststratify")
     wgt = design.wgt
     if wgt not in df.columns:
-        raise MethodError.invalid_choice(
+        raise WeightingError.missing_columns(
             where=ctx,
             param="design.wgt",
-            got=wgt,
-            allowed=list(df.columns),
+            missing=[wgt],
+            available=list(df.columns),
             hint="Check that the weight column exists in the data.",
         )
     if wgt_name in set(df.columns):
-        raise MethodError.not_applicable(
-            where=ctx,
-            method="poststratify",
-            reason=f"Column '{wgt_name}' already exists. Choose a different wgt_name.",
+        raise WeightingError.wgt_name_exists(
+            where=ctx, method="poststratify", wgt_name=wgt_name, existing=df.columns
         )
 
     spec = build_cells(df, cells, where, where=ctx)
@@ -180,14 +174,12 @@ def poststratify(
     if trimming is not None:
         cycled, ok = _trim_cycle(ps_arr, spec, targets, trimming)
         if strict and not ok:
-            raise MethodError.not_applicable(
+            raise WeightingError.not_converged(
                 where=ctx,
                 method="poststratify",
-                reason=(
-                    f"Trim-poststratify cycle did not converge after {trimming.max_iter} "
-                    "cycles. The design has NOT been modified. "
-                    "Pass strict=False to store partial results."
-                ),
+                what="Trim-poststratify cycle",
+                max_iter=trimming.max_iter,
+                got={"cycles": trimming.max_iter},
                 hint="Increase TrimConfig.max_iter or use a less restrictive trim threshold.",
             )
         sample._data = df.with_columns(pl.Series(name=wgt_name, values=cycled))

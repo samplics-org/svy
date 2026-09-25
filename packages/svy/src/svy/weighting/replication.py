@@ -49,7 +49,7 @@ from svy.core.repwgts import (
     SdrWgts,
     normalize_bootstrap_kind,
 )
-from svy.errors import DimensionError, MethodError
+from svy.errors import DimensionError, MethodError, WeightingError
 from svy.utils.checks import drop_missing
 from svy.utils.random_state import RandomState, resolve_random_state
 from svy.weighting._helpers import (
@@ -176,11 +176,11 @@ def _pair_variance_strata(
 
     missing_cols = [col for col in order_cols if col not in df.columns]
     if missing_cols:
-        raise MethodError.invalid_choice(
+        raise WeightingError.missing_columns(
             where=where,
             param="order_by",
-            got=missing_cols,
-            allowed=df.columns,
+            missing=missing_cols,
+            available=list(df.columns),
             hint="Check column names.",
         )
 
@@ -241,13 +241,14 @@ def _pair_variance_strata(
                 detail=(
                     f"BRR pairs PSUs into variance strata of exactly 2. "
                     f"Found {_n_strata(len(unpairable))} whose PSU count is not "
-                    f"a multiple of 2, leaving a PSU with no partner."
+                    f"a multiple of 2, leaving a PSU with no partner: "
+                    f"{_fmt_strata(unpairable)}."
                 ),
                 code="ODD_PSU_COUNT",
                 where=where,
                 param="stratum",
                 expected="A multiple of 2 PSUs per stratum",
-                got=_fmt_strata(unpairable),
+                got=dict(unpairable),
                 hint=(
                     "create_jk_wgts(paired=True) pairs these strata itself and "
                     "absorbs an odd count into a triplet. BRR cannot: its "
@@ -263,13 +264,14 @@ def _pair_variance_strata(
                 title="Insufficient PSUs per stratum",
                 detail=(
                     f"All strata must have at least 2 PSUs. "
-                    f"Found {len(small_strata)} strata with fewer."
+                    f"Found {_n_strata(len(small_strata))} with fewer: "
+                    f"{_fmt_strata(small_strata)}."
                 ),
                 code="INSUFFICIENT_PSU",
                 where=where,
                 param="stratum",
                 expected="≥2 PSUs per stratum",
-                got=f"{small_strata[:5]}{'...' if len(small_strata) > 5 else ''}",
+                got=dict(small_strata),
                 hint="Combine small strata or check design specification.",
             )
 
@@ -354,11 +356,11 @@ def _resolve_build_units(
     design = sample._design
     for name, col in (("stratum", stratum), ("psu", psu)):
         if col is not None and col not in sample._data.columns:
-            raise MethodError.invalid_choice(
+            raise WeightingError.missing_columns(
                 where=where,
                 param=name,
-                got=col,
-                allowed=list(sample._data.columns),
+                missing=[col],
+                available=list(sample._data.columns),
                 hint=(
                     f"'{name}' names the column these replicates are built from. "
                     f"Leave it unset to use the Design's."
@@ -433,12 +435,7 @@ def create_brr_wgts(
     design = sample._design
 
     if (psu if psu is not None else design.variance_psu) is None:
-        raise MethodError.not_applicable(
-            where=where,
-            method="create_brr_wgts",
-            reason="BRR requires psu (got psu=None)",
-            hint="Pass psu=, or set it on the Design.",
-        )
+        raise WeightingError.psu_required(where=where, method="create_brr_wgts")
 
     strat_col, psu_col = _resolve_build_units(
         sample,
@@ -549,12 +546,7 @@ def create_jk_wgts(
     where = "Sample.weighting.create_jk_wgts"
 
     if (psu if psu is not None else design.variance_psu) is None:
-        raise MethodError.not_applicable(
-            where=where,
-            method="create_jk_wgts",
-            reason="Jackknife requires psu (got psu=None)",
-            hint="Pass psu=, or set it on the Design.",
-        )
+        raise WeightingError.psu_required(where=where, method="create_jk_wgts")
 
     # Only the paired scheme pairs. jk1 and jkn delete one PSU at a time and
     # want the strata exactly as given.
@@ -684,19 +676,21 @@ def create_bs_wgts(
     kind = normalize_bootstrap_kind(kind)
 
     if n_reps is None:
-        raise MethodError.not_applicable(
+        raise MethodError.invalid_range(
             where="Sample.weighting.create_bs_wgts",
-            method="create_bs_wgts",
-            reason="n_reps must be specified for Bootstrap.",
+            param="n_reps",
+            got=None,
+            min_=1,
+            hint="n_reps must be specified for Bootstrap, e.g. n_reps=500.",
         )
     # The Rao-Wu guard is deliberately not shared: the Poisson bootstrap exists
     # precisely for files that have no psu, so requiring one would reject the
     # only case it serves.
     if kind == "rao-wu" and (psu if psu is not None else design.variance_psu) is None:
-        raise MethodError.not_applicable(
+        raise WeightingError.psu_required(
             where="Sample.weighting.create_bs_wgts",
             method="create_bs_wgts",
-            reason="Bootstrap requires psu in Design (got psu=None).",
+            note="kind='poisson' needs no psu.",
         )
 
     strat_col, psu_col = _resolve_build_units(

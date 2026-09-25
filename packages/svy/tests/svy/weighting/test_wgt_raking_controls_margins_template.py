@@ -25,7 +25,7 @@ def sample(base_df):
 
 def test_controls_margins_template_basic(sample):
     margins = {"age": "age_group", "region": "region"}
-    tmpl = sample.weighting.controls_margins_template(margins=margins, cat_na="level")
+    tmpl = sample.weighting.controls_margins_template(margins=margins, na="level")
     assert set(tmpl.keys()) == {"age", "region"}
     assert isinstance(tmpl["age"], dict)
     assert isinstance(tmpl["region"], dict)
@@ -40,7 +40,7 @@ def test_controls_margins_template_includes_na_with_level_policy(sample):
     )
     sample2 = Sample(data=df2, design=Design(wgt="initial_weight"))
     margins = {"region": "region"}
-    tmpl = sample2.weighting.controls_margins_template(margins=margins, cat_na="level")
+    tmpl = sample2.weighting.controls_margins_template(margins=margins, na="level")
     assert "__NA__" in tmpl["region"]
     assert all(np.isnan(v) for v in tmpl["region"].values())
 
@@ -54,7 +54,7 @@ def test_controls_margins_template_cat_na_error_raises_on_nulls(sample):
     )
     sample2 = Sample(data=df2, design=Design(wgt="initial_weight"))
     with pytest.raises(DimensionError) as ei:
-        sample2.weighting.controls_margins_template(margins={"age": "age_group"}, cat_na="error")
+        sample2.weighting.controls_margins_template(margins={"age": "age_group"}, na="error")
     msg = str(ei.value)
     assert "Missing values in margin column" in msg or "MARGIN_NA" in msg
 
@@ -79,6 +79,6 @@ def test_controls_margins_template_natural_sort_for_numeric_like_strings():
         }
     )
     s = Sample(data=df, design=Design(wgt="initial_weight"))
-    tmpl = s.weighting.controls_margins_template(margins={"hhsize": "hhsize_cat"}, cat_na="level")
+    tmpl = s.weighting.controls_margins_template(margins={"hhsize": "hhsize_cat"}, na="level")
     assert list(tmpl["hhsize"].keys()) == ["1", "2", "3", "9", "10+"]
     assert all(np.isnan(v) for v in tmpl["hhsize"].values())

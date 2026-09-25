@@ -25,8 +25,9 @@ from typing import TYPE_CHECKING, Any, Mapping, Sequence
 import numpy as np
 import polars as pl
 
-from svy.errors import MethodError
+from svy.errors import MethodError, WeightingError
 from svy.utils.where import _compile_where
+from svy.weighting._keys import LevelIndex, match_keys, target_vector
 
 
 try:
@@ -73,7 +74,9 @@ class CellSpec:
         return self.cols is not None
 
 
-def _cells_to_cols(cells: str | Sequence[str] | None, *, where: str) -> list[str] | None:
+def _cells_to_cols(
+    cells: str | Sequence[str] | None, *, where: str, param: str = "cells"
+) -> list[str] | None:
     if cells is None:
         return None
     if isinstance(cells, str):
@@ -81,17 +84,15 @@ def _cells_to_cols(cells: str | Sequence[str] | None, *, where: str) -> list[str
     if isinstance(cells, Sequence) and not isinstance(cells, (bytes, bytearray)):
         cols = list(cells)
         if not cols:
-            raise MethodError.not_applicable(
-                where=where, method="weighting", reason="`cells` sequence must not be empty."
-            )
+            raise WeightingError.columns_empty(where=where, param=param)
         for c in cols:
             if not isinstance(c, str):
                 raise MethodError.invalid_type(
-                    where=where, param="cells", got=c, expected="str | Sequence[str] | None"
+                    where=where, param=param, got=c, expected="str | Sequence[str] | None"
                 )
         return cols
     raise MethodError.invalid_type(
-        where=where, param="cells", got=cells, expected="str | Sequence[str] | None"
+        where=where, param=param, got=cells, expected="str | Sequence[str] | None"
     )
 
 
@@ -102,12 +103,7 @@ def _where_mask(df: pl.DataFrame, where_arg: WhereArg, *, where: str) -> np.ndar
     try:
         mask = df.select(expr.alias("__svy_scope__")).get_column("__svy_scope__")
     except Exception as e:
-        raise MethodError.not_applicable(
-            where=where,
-            method="weighting",
-            reason=f"`where` could not be evaluated against the data: {e}",
-            hint="Check that every column referenced by `where` exists.",
-        ) from e
+        raise WeightingError.where_invalid(where=where, reason=str(e)) from e
     return mask.fill_null(False).to_numpy().astype(bool, copy=False)
 
 
@@ -132,16 +128,20 @@ def build_cells(
     if cols is None:
         codes = np.zeros(n, dtype=np.int64)
         if scope is not None:
+            if not scope.any():
+                raise WeightingError.no_rows_in_scope(
+                    where=where, method=where.rsplit(".", 1)[-1], hint="Check `where`."
+                )
             codes = np.where(scope, 0, -1).astype(np.int64)
         return CellSpec(codes, [None], scope, None)
 
     missing = [c for c in cols if c not in df.columns]
     if missing:
-        raise MethodError.invalid_choice(
+        raise WeightingError.missing_columns(
             where=where,
             param="cells",
-            got=missing,
-            allowed=list(df.columns),
+            missing=missing,
+            available=list(df.columns),
             hint="All `cells` columns must exist in the data.",
         )
 
@@ -169,12 +169,7 @@ def build_cells(
         codes[i] = code
 
     if not labels:
-        raise MethodError.not_applicable(
-            where=where,
-            method="weighting",
-            reason="No rows are in scope for this adjustment.",
-            hint="Check `where` and for nulls in the `cells` columns.",
-        )
+        raise WeightingError.no_rows_in_scope(where=where, method=where.rsplit(".", 1)[-1])
 
     in_scope = codes >= 0
     return CellSpec(codes, labels, in_scope if in_scope.sum() < n else None, cols)
@@ -188,68 +183,13 @@ def _is_scalar(x: Any) -> bool:
     return isinstance(x, (int, float, np.integer, np.floating)) and not isinstance(x, bool)
 
 
-def _scalar_with_cells_error(param: str, *, method: str, where: str) -> MethodError:
-    return MethodError.not_applicable(
-        where=where,
-        method=method,
-        reason=(
-            f"`{param}` is a single number but `cells` names one or more columns. "
-            "A scalar sets one cell's total, so it cannot describe several cells"
-        ),
-        param=param,
-        hint=(
-            f"Pass a dict with one entry per cell (e.g. {param}={{'a': 100, 'b': 250}}), "
-            "or use shares= to pin composition, or drop cells= to set the grand total."
-        ),
-    )
-
-
-def _validate_keys(
-    supplied: Mapping[Any, Any], labels: list[Any], *, param: str, method: str, where: str
-) -> None:
-    data_keys = set(labels)
-    given = set(supplied.keys())
-    missing = data_keys - given
-    extra = given - data_keys
-    if missing or extra:
-        raise MethodError.invalid_mapping_keys(
-            where=where,
-            param=param,
-            missing=sorted(missing, key=str),
-            extra=sorted(extra, key=str),
-            hint=(
-                "Keys must match the cell values exactly, one per cell. For several "
-                "`cells` columns use a tuple key in cells order, e.g. ('R1', 'D1')."
-            ),
-        )
-
-
-def _as_float_vector(
-    supplied: Mapping[Any, Any], labels: list[Any], *, param: str, method: str, where: str
+def cell_targets(
+    supplied: Mapping[Any, Any], spec: CellSpec, *, param: str, where: str
 ) -> np.ndarray:
-    out = np.empty(len(labels), dtype=np.float64)
-    for i, lab in enumerate(labels):
-        try:
-            out[i] = float(supplied[lab])
-        except (TypeError, ValueError) as e:
-            raise MethodError.invalid_type(
-                where=where, param=f"{param}[{lab!r}]", got=supplied[lab], expected="a number"
-            ) from e
-    if not np.all(np.isfinite(out)):
-        raise MethodError.not_applicable(
-            where=where,
-            method=method,
-            reason=f"`{param}` values must all be finite",
-            param=param,
-        )
-    if np.any(out < 0):
-        raise MethodError.not_applicable(
-            where=where,
-            method=method,
-            reason=f"`{param}` values must be non-negative",
-            param=param,
-        )
-    return out
+    """Per-cell targets from a mapping keyed by cell value, aligned to ``spec.labels``."""
+    index = LevelIndex(spec.labels, width=len(spec.cols or [None]))
+    matched = match_keys(supplied, index, where=where, param=param, cols=spec.cols)
+    return np.asarray(target_vector(matched, index.levels, where=where, param=param))
 
 
 def in_scope_sum(wgt_arr: np.ndarray, spec: CellSpec) -> float:
@@ -275,20 +215,11 @@ def resolve_targets(
     methods accept.
     """
     if controls is not None and shares is not None:
-        raise MethodError.not_applicable(
-            where=where,
-            method=method,
-            reason="Provide exactly one of controls= or shares=, not both",
-            hint="controls= sets the total; shares= preserves it.",
-        )
+        raise WeightingError.targets_conflict(where=where, method=method)
 
     if controls is None and shares is None:
         if not counts_when_none:
-            raise MethodError.not_applicable(
-                where=where,
-                method=method,
-                reason="Either controls= or shares= must be specified",
-            )
+            raise WeightingError.targets_missing(where=where, method=method)
         counts = np.bincount(spec.codes[spec.codes >= 0], minlength=spec.n_cells).astype(
             np.float64
         )
@@ -296,69 +227,59 @@ def resolve_targets(
 
     if shares is not None:
         if _is_scalar(shares):
-            raise MethodError.not_applicable(
+            raise WeightingError.targets_type(
                 where=where,
-                method=method,
-                reason="`shares` must be a dict with one entry per cell",
                 param="shares",
+                got=shares,
+                expected="a dict with one entry per cell",
                 hint=(
-                    "For an equal composition build the dict explicitly, e.g. "
-                    "dict.fromkeys(levels, 1)."
+                    "`shares` must be a dict; for an equal composition build it "
+                    "explicitly, e.g. dict.fromkeys(levels, 1)."
                 ),
             )
         if not _is_mapping(shares):
-            raise MethodError.invalid_type(
-                where=where, param="shares", got=shares, expected="dict[cell, number]"
+            raise WeightingError.targets_type(
+                where=where, param="shares", got=shares, expected="a dict[cell, number]"
             )
         if not spec.has_cells:
-            raise MethodError.not_applicable(
+            raise WeightingError.cells_required(
                 where=where,
-                method=method,
-                reason="`shares` describes a composition across cells, so cells= is required",
                 param="shares",
+                reason="`shares` describes a composition across cells, so cells= is required.",
                 hint="Name the composition axis with cells=, or use controls= for a grand total.",
             )
-        _validate_keys(shares, spec.labels, param="shares", method=method, where=where)
-        vec = _as_float_vector(shares, spec.labels, param="shares", method=method, where=where)
+        vec = cell_targets(shares, spec, param="shares", where=where)
         total_share = float(vec.sum())
         if total_share <= 0:
-            raise MethodError.not_applicable(
-                where=where,
-                method=method,
-                reason="`shares` must include at least one positive value",
-                param="shares",
-            )
+            raise WeightingError.all_zero(where=where, param="shares")
         # Normalized internally: only composition matters, and the in-scope
         # weight total is carried through unchanged.
         return (vec / total_share) * in_scope_sum(wgt_arr, spec)
 
     if _is_scalar(controls):
         if spec.has_cells:
-            raise _scalar_with_cells_error("controls", method=method, where=where)
+            raise WeightingError.scalar_for_cells(
+                where=where, param="controls", got=controls, levels=spec.labels
+            )
         val = float(controls)
         if not np.isfinite(val) or val < 0:
-            raise MethodError.not_applicable(
-                where=where,
-                method=method,
-                reason="`controls` must be a finite, non-negative number",
-                param="controls",
+            raise WeightingError.value_invalid(
+                where=where, param="controls", bad={"controls": controls}
             )
         return np.array([val], dtype=np.float64)
 
     if not _is_mapping(controls):
-        raise MethodError.invalid_type(
-            where=where, param="controls", got=controls, expected="number | dict[cell, number]"
+        raise WeightingError.targets_type(
+            where=where, param="controls", got=controls, expected="a number or dict[cell, number]"
         )
     if not spec.has_cells:
-        raise MethodError.not_applicable(
+        raise WeightingError.cells_required(
             where=where,
-            method=method,
-            reason="`controls` is a dict but no cells were named",
             param="controls",
+            reason="`controls` is a dict but no cells were named.",
             hint="Name the cells with cells=, or pass a single number for the grand total.",
         )
-    _validate_keys(controls, spec.labels, param="controls", method=method, where=where)
-    return _as_float_vector(controls, spec.labels, param="controls", method=method, where=where)
+    return cell_targets(controls, spec, param="controls", where=where)
 
 
 def scale_to_targets(wgts: np.ndarray, spec: CellSpec, targets: np.ndarray) -> np.ndarray:
