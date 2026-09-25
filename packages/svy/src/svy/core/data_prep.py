@@ -11,7 +11,7 @@ categorical) needs before calling Rust:
   4. Concatenated design columns (stratum, psu, ssu, by)
   5. Paired difference (y - y_pair)
   6. Weight column creation (if no design weight)
-  7. Type casting (y→Float64, group/strata/psu→String)
+  7. Type casting (y→Float64, strata/psu→String)
   8. Singleton filtering
   9. FPC column computation
   10. Where clause → domain column + zero weights (main AND replicate)
@@ -837,7 +837,7 @@ def prepare_data(
         if no_where_exprs:
             df = df.with_columns(no_where_exprs)
 
-    # ── Type casting (y, x, group, strata, psu, ssu, by) ─────────────────
+    # ── Type casting (y, x, strata, psu, ssu, by) ────────────────────────
     # Fused into a single with_columns call. Each cast checks the current
     # dtype and is skipped when already correct (Polars treats same-type
     # cast as a no-op anyway, but the explicit guard keeps the expression
@@ -848,8 +848,6 @@ def prepare_data(
             casts.append(pl.col(y_col).cast(pl.Float64))
     if x and df[x].dtype != pl.Float64:
         casts.append(pl.col(x).cast(pl.Float64))
-    if group and df[group].dtype != pl.String:
-        casts.append(pl.col(group).cast(pl.String))
     # Design columns → String, EXCEPT the Phase C integer code columns, which
     # must stay UInt32 so the Rust kernel takes its integer fast path.
     _code_cols = {_STRATUM_CODE, _PSU_CODE, _SSU_CODE}

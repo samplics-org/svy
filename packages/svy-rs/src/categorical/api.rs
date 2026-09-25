@@ -51,6 +51,17 @@ pub(crate) fn get_opt_f64<'a>(
 // Two-sample / k-sample data preparation helper
 // ============================================================================
 
+/// Order labels by value when the source column is numeric, so 2 sorts before
+/// 10; lexically otherwise.
+fn sort_labels(labels: &mut [String], dtype: &DataType) {
+    if dtype.is_primitive_numeric() {
+        let key = |s: &String| s.parse::<f64>().unwrap_or(f64::NAN);
+        labels.sort_by(|a, b| key(a).total_cmp(&key(b)));
+    } else {
+        labels.sort();
+    }
+}
+
 /// Prepare data arrays for two-sample / k-sample tests.
 ///
 /// For domain estimation: zeros weights for non-domain obs but keeps all rows
@@ -108,7 +119,7 @@ fn prepare_two_sample_data(
             }
         }
     }
-    level_set.sort();
+    sort_labels(&mut level_set, g_series.dtype());
 
     let mut label_to_idx: HashMap<String, u32> = HashMap::new();
     for (i, label) in level_set.iter().enumerate() {
@@ -168,7 +179,7 @@ where
         .iter()
         .filter_map(|v| v.map(|s| s.to_string()))
         .collect();
-    by_levels.sort();
+    sort_labels(&mut by_levels, by_series.dtype());
 
     let mut result_dfs: Vec<DataFrame> = Vec::new();
 
@@ -978,4 +989,24 @@ fn compute_tabulate(
     };
 
     Ok((cells_df, stats_df))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sort_labels_orders_numbers_by_value() {
+        let mut ints = vec!["10".to_string(), "2".to_string(), "1".to_string()];
+        sort_labels(&mut ints, &DataType::Int64);
+        assert_eq!(ints, ["1", "2", "10"]);
+
+        let mut floats = vec!["10.5".to_string(), "-1.0".to_string(), "2.0".to_string()];
+        sort_labels(&mut floats, &DataType::Float64);
+        assert_eq!(floats, ["-1.0", "2.0", "10.5"]);
+
+        let mut text = vec!["b".to_string(), "10".to_string(), "2".to_string()];
+        sort_labels(&mut text, &DataType::String);
+        assert_eq!(text, ["10", "2", "b"]);
+    }
 }

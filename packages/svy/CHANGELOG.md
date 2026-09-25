@@ -28,6 +28,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 - **`as_factor=True` failed on a string or categorical column** (y was cast to float), and with `drop_nulls=True` a missing value became a level of its own (`0.0`, estimate 0). A missing value now takes the row out of the domain, matching R's `na.rm = TRUE`.
 
+- **A two-sample t-test or rank test on a numeric group ordered the groups as text**, so groups 2 and 10 came out as `(10, 2)` and the difference was reported with its sign flipped relative to R. Numeric groups are now ordered by value.
+
 - **A t-test or rank test group coded `False` or `0` printed an empty Level cell.** The cell was built with `group_level or ""`.
 
 - **Saved results lost NaN and infinity, and `from_json` failed on them.** JSON has neither, so `to_json` wrote each as `null`, which then refused to decode into a `float` field: a singleton domain's interval, a CV of an estimate at 0 or a NaN quantile limit made the saved result unreadable, and a NaN `deff` came back as not requested. `to_json` still writes `null`, and now records the exact value under a top-level `"nonfinite"` field keyed by JSON Pointer (`{"/estimates/3/cv": "inf"}`); `from_json` restores it. Consumers that ignore the field see `null` as before. A payload written without the field reads a `null` plain float as NaN. Schema `svy-result/0.4`.

@@ -8,6 +8,10 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 - `taylor_factor_total` and `replicate_factor_total`: the estimated count of each level of a categorical column, with the joint covariance across levels and by-groups. Same arguments and output as `taylor_prop` / `replicate_prop`, which share their code (the replicate `matrix_prop_*` helpers take `normalize`).
 
+### Fixed
+
+- `ttest_rs` and `ranktest_rs` order the levels of a numeric group (and `by`) column by value rather than as text, so `level_0`/`level_1` and the difference follow R's `factor()` order.
+
 ## [0.17.1] — 2026-09-13
 
 ### Fixed
