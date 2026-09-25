@@ -901,7 +901,8 @@ class Estimation:
         if as_factor and "level" in result_df.columns:
             y_levels = result_df["level"].to_list()
 
-        is_prop = (param == PopParam.PROP) or as_factor
+        # Factor totals are counts, not shares: they take the Wald interval.
+        is_prop = param == PopParam.PROP or (as_factor and param == PopParam.MEAN)
 
         if not is_prop:
             lci_arr = est_arr - t_crits * se_arr
@@ -1627,7 +1628,8 @@ class Estimation:
             by=by,
             where=where,
             drop_nulls=drop_nulls,
-            cast_y_float=True,
+            cast_y_float=not as_factor,
+            factor_y=as_factor,
             select_columns=True,
             # Ungrouped replication only: the mask path covers the ungrouped
             # kernels. Grouped (by=) replication keeps the zeroing path.
@@ -1758,7 +1760,8 @@ class Estimation:
             by=by,
             where=where,
             drop_nulls=drop_nulls,
-            cast_y_float=True,
+            cast_y_float=not as_factor,
+            factor_y=as_factor,
             select_columns=True,
             # Ungrouped replication only: the mask path covers the ungrouped
             # kernels. Grouped (by=) replication keeps the zeroing path.

@@ -686,6 +686,68 @@ pub fn replicate_prop(
     by_col: Option<String>,
     domain_mask_col: Option<String>,
 ) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
+    replicate_levels(
+        _py,
+        data,
+        value_col,
+        weight_col,
+        rep_weight_cols,
+        rep_coefs,
+        center,
+        degrees_of_freedom,
+        by_col,
+        domain_mask_col,
+        true,
+    )
+}
+
+/// Estimated count of each level (`svytotal(~factor(y))` on a replicate
+/// design), with the joint covariance across levels (and by-groups).
+#[pyfunction]
+#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
+pub fn replicate_factor_total(
+    _py: Python,
+    data: PyDataFrame,
+    value_col: String,
+    weight_col: String,
+    rep_weight_cols: Vec<String>,
+    rep_coefs: Vec<f64>,
+    center: &str,
+    degrees_of_freedom: Option<u32>,
+    by_col: Option<String>,
+    domain_mask_col: Option<String>,
+) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
+    replicate_levels(
+        _py,
+        data,
+        value_col,
+        weight_col,
+        rep_weight_cols,
+        rep_coefs,
+        center,
+        degrees_of_freedom,
+        by_col,
+        domain_mask_col,
+        false,
+    )
+}
+
+/// `normalize` reports each level as a share of the (domain) weight; without
+/// it, as the level's weighted count.
+#[allow(clippy::too_many_arguments)]
+fn replicate_levels(
+    _py: Python,
+    data: PyDataFrame,
+    value_col: String,
+    weight_col: String,
+    rep_weight_cols: Vec<String>,
+    rep_coefs: Vec<f64>,
+    center: &str,
+    degrees_of_freedom: Option<u32>,
+    by_col: Option<String>,
+    domain_mask_col: Option<String>,
+    normalize: bool,
+) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
     let df: DataFrame = data.into();
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
@@ -703,10 +765,10 @@ pub fn replicate_prop(
     let result = _py.detach(|| {
         if by_col.is_none() {
             compute_replicate_prop_ungrouped(&df, &value_col, &weight_col, &rep_weight_cols,
-                &rep_coefs, variance_center, df_val, domain_mask_col.as_deref())
+                &rep_coefs, variance_center, df_val, domain_mask_col.as_deref(), normalize)
         } else {
             compute_replicate_prop_grouped(&df, &value_col, &weight_col, &rep_weight_cols,
-                &rep_coefs, variance_center, df_val, by_col.as_ref().unwrap())
+                &rep_coefs, variance_center, df_val, by_col.as_ref().unwrap(), normalize)
         }
     });
     result.map(|(out, cov)| (PyDataFrame(out), Some(cov)))
@@ -719,6 +781,7 @@ fn compute_replicate_prop_ungrouped(
     rep_coefs: &[f64],
     center: VarianceCenter, df_val: u32,
     domain_mask_col: Option<&str>,
+    normalize: bool,
 ) -> PolarsResult<(DataFrame, Vec<f64>)> {
     let y_series = df.column(value_col)?;
     let weights  = df.column(weight_col)?.f64()?;
@@ -739,10 +802,10 @@ fn compute_replicate_prop_ungrouped(
             .map(|v| v.unwrap_or("").to_string())
             .collect();
         let (levels, theta_full, theta_reps) = match &cont_cols {
-            Some(cols) => matrix_prop_estimates_str_cols(&y_arr, &w_arr, cols, n, mask),
+            Some(cols) => matrix_prop_estimates_str_cols(&y_arr, &w_arr, cols, n, mask, normalize),
             None => {
                 let (m, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
-                matrix_prop_estimates_str(&y_arr, &w_arr, &m, n, n_reps, mask)
+                matrix_prop_estimates_str(&y_arr, &w_arr, &m, n, n_reps, mask, normalize)
             }
         };
         let n_l = levels.len();
@@ -761,17 +824,17 @@ fn compute_replicate_prop_ungrouped(
         } else {
             return Err(PolarsError::InvalidOperation(
                 format!(
-                    "prop() does not support dtype {:?} for column '{}'. \
+                    "categorical estimates do not support dtype {:?} for column '{}'. \
                      Use a String, Categorical, Boolean, or integer column.",
                     y_series.dtype(), value_col
                 ).into()
             ));
         };
         let (levels, theta_full, theta_reps) = match &cont_cols {
-            Some(cols) => matrix_prop_estimates_cols(&y_arr, &w_arr, cols, n, mask),
+            Some(cols) => matrix_prop_estimates_cols(&y_arr, &w_arr, cols, n, mask, normalize),
             None => {
                 let (m, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
-                matrix_prop_estimates(&y_arr, &w_arr, &m, n, n_reps, mask)
+                matrix_prop_estimates(&y_arr, &w_arr, &m, n, n_reps, mask, normalize)
             }
         };
         let n_l = levels.len();
@@ -799,6 +862,7 @@ fn compute_replicate_prop_grouped(
     rep_coefs: &[f64],
     center: VarianceCenter, df_val: u32,
     by_col: &str,
+    normalize: bool,
 ) -> PolarsResult<(DataFrame, Vec<f64>)> {
     let y_series = df.column(value_col)?;
     let weights  = df.column(weight_col)?.f64()?;
@@ -818,7 +882,7 @@ fn compute_replicate_prop_grouped(
             .map(|v| v.unwrap_or("").to_string())
             .collect();
         let (levels, tf, tr, counts) =
-            matrix_prop_by_domain_str(&y_arr, &w_arr, &rep_w_matrix, &domain_ids, n_domains, n, n_reps);
+            matrix_prop_by_domain_str(&y_arr, &w_arr, &rep_w_matrix, &domain_ids, n_domains, n, n_reps, normalize);
         (levels, tf, tr, counts)
     } else {
         let y_arr: Vec<i64> = if y_series.dtype().is_integer() {
@@ -830,14 +894,14 @@ fn compute_replicate_prop_grouped(
         } else {
             return Err(PolarsError::InvalidOperation(
                 format!(
-                    "prop() does not support dtype {:?} for column '{}'. \
+                    "categorical estimates do not support dtype {:?} for column '{}'. \
                      Use a String, Categorical, Boolean, or integer column.",
                     y_series.dtype(), value_col
                 ).into()
             ));
         };
         let (levels, tf, tr, counts) =
-            matrix_prop_by_domain(&y_arr, &w_arr, &rep_w_matrix, &domain_ids, n_domains, n, n_reps);
+            matrix_prop_by_domain(&y_arr, &w_arr, &rep_w_matrix, &domain_ids, n_domains, n, n_reps, normalize);
         let str_levels: Vec<String> = levels.iter().map(|l| l.to_string()).collect();
         (str_levels, tf, tr, counts)
     };

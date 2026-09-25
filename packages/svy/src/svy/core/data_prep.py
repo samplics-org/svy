@@ -382,6 +382,7 @@ def prepare_data(
     cast_y_float: bool,
     select_columns: bool,
     domain_mask_for_replication: bool = False,
+    factor_y: bool = False,
 ) -> PreparedData:
     """
     Unified data preparation for all Rust backend calls.
@@ -410,6 +411,10 @@ def prepare_data(
         If True, cast y to Float64. Set False for categorical y (tabulate). Required — must be explicit.
     select_columns : bool
         If True, select only needed columns for efficiency. Required — must be explicit.
+    factor_y : bool
+        Categorical y (``as_factor``): with ``drop_nulls``, a missing y makes the
+        row out-of-domain like a numeric y does, and stays null (NaN/inf become
+        null) so it is not read as a level.
 
     Returns
     -------
@@ -543,6 +548,8 @@ def prepare_data(
             _structural.update(s.name for s in _design_codes.values())
 
         _domain_roles: list[str] = []
+        if factor_y:
+            _domain_roles.append(y)
         if cast_y_float:
             _domain_roles.append(y)
             if x:
@@ -769,6 +776,9 @@ def prepare_data(
                     for c in null_zero_cols
                     if c in df.columns and df.schema[c].is_numeric() and c not in _fill_targets
                 )
+            if factor_y and df.schema[y_col] in (pl.Float32, pl.Float64):
+                _bad = pl.col(y_col).is_nan() | pl.col(y_col).is_infinite()
+                exprs.append(pl.when(_bad).then(None).otherwise(pl.col(y_col)).alias(y_col))
             for c in _fill_targets:
                 if c not in df.columns:
                     continue
