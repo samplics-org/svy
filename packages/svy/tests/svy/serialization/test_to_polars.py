@@ -7,6 +7,9 @@ row to exactly one payload row.
 
 from __future__ import annotations
 
+import datetime as dt
+import json
+
 import numpy as np
 import polars as pl
 import pytest
@@ -237,7 +240,7 @@ def test_label_columns_follow_codes(labelled):
     table = labelled.estimation.mean("y", by=["zone", "sex"]).to_polars()
     assert table.columns[:4] == ["zone", "zone_label", "sex", "sex_label"]
     pairs = dict(zip(table["zone"], table["zone_label"]))
-    assert pairs == {"1": "Urban", "2": "Rural", "3": "Peri-urban"}
+    assert pairs == {1: "Urban", 2: "Rural", 3: "Peri-urban"}
     assert table["zone"].to_list() == sorted(table["zone"].to_list())
 
 
@@ -253,9 +256,10 @@ def test_labels_off_gives_codes_only(labelled):
 
 def test_raw_rows_carry_label_lists(labelled):
     table = labelled.estimation.mean("y", by=["zone", "sex"]).to_polars(tidy=False)
+    assert table.schema["by_level"] == pl.Struct({"zone": pl.Int64, "sex": pl.String})
     by_label = table["by_label"].to_list()
-    assert all(len(v) == 2 for v in by_label)
-    assert {v[1] for v in by_label} == {"Female", "Male"}
+    assert {v["sex"] for v in by_label} == {"Female", "Male"}
+    assert {v["zone"] for v in by_label} == {"Urban", "Rural", "Peri-urban"}
 
 
 def test_printing_still_shows_labels_in_place(labelled):
@@ -292,3 +296,58 @@ def test_nan_deff_survives(sample):
     assert all(p.deff is not None for p in data.estimates)
     assert_frame_equal(to_polars(data), result.to_polars())
     assert all(p.deff is None for p in _payload(s.estimation.mean("c", by="stratum")).estimates)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        [dt.date(2020, 1, 1), dt.date(2021, 6, 30)],
+        [dt.datetime(2020, 1, 1, 8), dt.datetime(2020, 1, 1, 17, 30)],
+        [
+            dt.datetime(2020, 1, 1, 8, tzinfo=dt.timezone.utc),
+            dt.datetime(2021, 1, 1, tzinfo=dt.timezone.utc),
+        ],
+        [dt.time(8, 0), dt.time(17, 30, 15)],
+    ],
+    ids=["date", "datetime", "datetime_tz", "time"],
+)
+def test_temporal_levels_round_trip(sample, values):
+    n = sample.data.height
+    s = svy.Sample(
+        sample.data.with_columns(t=pl.Series([values[i % 2] for i in range(n)])), sample.design
+    )
+    result = s.estimation.mean("y", by="t")
+    js = to_json(result)
+    assert set(json.loads(js)["temporal"].values()) == {type(values[0]).__name__}
+    data = from_json(js)
+    assert [p.by_level for p in data.estimates] == [list(p.by_level) for p in result.estimates]
+    assert_frame_equal(to_polars(data), result.to_polars())
+
+
+def test_temporal_level_in_labels_and_prop(sample):
+    days = [dt.date(2020, 1, 1), dt.date(2020, 1, 2)]
+    s = svy.Sample(
+        sample.data.with_columns(t=pl.Series([days[i % 2] for i in range(sample.data.height)])),
+        sample.design,
+    )
+    s.meta.set_value_labels("t", {days[0]: "New year", days[1]: "Day after"})
+    result = s.estimation.prop("t")
+    data = from_json(to_json(result))
+    assert {p.y_level for p in data.estimates} == set(days)
+    assert {lv.code for v in data.labels for lv in v.values} == set(days)
+    assert_frame_equal(to_polars(data), result.to_polars())
+
+
+def test_duration_level_round_trip():
+    """Durations cannot be a by variable yet; the payload still carries one exactly."""
+    from svy import Estimate, ParamEst, PopParam
+
+    est = Estimate(PopParam.MEAN, alpha=0.05)
+    est.method, est.n_strata, est.n_psus = "Taylor", 1, 2
+    span = dt.timedelta(hours=36, microseconds=5)
+    est.estimates = [
+        ParamEst(y="y", est=1.0, se=0.1, cv=0.1, lci=0.8, uci=1.2, by=("d",), by_level=(span,))
+    ]
+    js = to_json(est)
+    assert json.loads(js)["temporal"] == {"/estimates/0/by_level/0": "duration"}
+    assert from_json(js).estimates[0].by_level == [span]

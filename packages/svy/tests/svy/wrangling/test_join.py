@@ -372,7 +372,7 @@ def test_unmatched_records_fall_out_of_a_domain_not_out_of_the_sample():
     by = out.estimation.mean("age", by="region", drop_nulls=True)
     # region 10: ages 35, 8 (w 1) and 40 (w 2); region 20: 60, 58, 20 (w 3).
     # Household 4 found no match and sits in neither domain.
-    assert sorted((e.by_level, e.est) for e in by.estimates) == [(("10",), 30.75), (("20",), 46.0)]
+    assert sorted((e.by_level, e.est) for e in by.estimates) == [((10,), 30.75), ((20,), 46.0)]
     _same_estimate(_persons().estimation.mean("age"), out.estimation.mean("age"))
 
 

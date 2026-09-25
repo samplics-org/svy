@@ -23,7 +23,13 @@ import msgspec
 
 from msgspec import field
 
-from svy.categorical.ttest import DiffEst, GroupLevels, TtestEst
+from svy.categorical.ttest import (
+    DiffEst,
+    GroupLevels,
+    TtestEst,
+    _level_repr,
+    _level_text,
+)
 from svy.core.containers import FDist, TDist
 from svy.core.types import Category
 from svy.ui.printing import make_panel, natural_sort_key, render_rich_to_str, resolve_width
@@ -257,13 +263,13 @@ class RankTestTwoSample(
             overflow = "ellipsis" if is_text else "fold"
             est_tbl.add_column(h, justify=justify, no_wrap=no_wrap, overflow=overflow)
 
-        sorted_ests = sorted(ests, key=lambda e: natural_sort_key(str(e.group_level or "")))
+        sorted_ests = sorted(ests, key=lambda e: natural_sort_key(_level_text(e.group_level)))
         for e in sorted_ests:
             row = []
             if show_group:
                 row.append(str(e.group or ""))
             if show_level:
-                row.append(str(e.group_level or ""))
+                row.append(_level_text(e.group_level))
             row += [
                 _fmt_fixed(e.est, dec=4),
                 _fmt_fixed(e.se, dec=4),
@@ -316,7 +322,7 @@ class RankTestTwoSample(
 
         header_lines = [
             Text(f"Y = {self.y!r}"),
-            Text(f"Groups: {gvar} = [{g1!r} vs {g2!r}]"),
+            Text(f"Groups: {gvar} = [{_level_repr(g1)} vs {_level_repr(g2)}]"),
             Text(""),
         ]
 
@@ -515,13 +521,13 @@ class RankTestKSample(msgspec.Struct, tag="rank_k", tag_field="kind", kw_only=Tr
             overflow = "ellipsis" if is_text else "fold"
             est_tbl.add_column(h, justify=justify, no_wrap=no_wrap, overflow=overflow)
 
-        sorted_ests = sorted(ests, key=lambda e: natural_sort_key(str(e.group_level or "")))
+        sorted_ests = sorted(ests, key=lambda e: natural_sort_key(_level_text(e.group_level)))
         for e in sorted_ests:
             row = []
             if show_group:
                 row.append(str(e.group or ""))
             if show_level:
-                row.append(str(e.group_level or ""))
+                row.append(_level_text(e.group_level))
             row += [
                 _fmt_fixed(e.est, dec=4),
                 _fmt_fixed(e.se, dec=4),
@@ -686,7 +692,7 @@ class RankTestByResult:
     def _format_level(self, by_level) -> str:
         """Format a by-level value for display, handling multi-by."""
         _BY_SEP = "__by__"
-        level_str = str(by_level)
+        level_str = _level_text(by_level)
         parts = level_str.split(_BY_SEP)
         if len(parts) == len(self._by_list) and len(parts) > 1:
             return ", ".join(f"{var} = {val}" for var, val in zip(self._by_list, parts))
@@ -720,7 +726,9 @@ class RankTestByResult:
         header_lines: list = [Text(f"Y = {self.y!r}")]
         if is_two_sample:
             g1, g2 = self.groups.levels
-            header_lines.append(Text(f"Groups: {self.groups.var} = [{g1!r} vs {g2!r}]"))
+            header_lines.append(
+                Text(f"Groups: {self.groups.var} = [{_level_repr(g1)} vs {_level_repr(g2)}]")
+            )
         else:
             header_lines.append(Text(f"Groups: {self.group_var}"))
         header_lines.append(Text(f"By: {', '.join(self._by_list)}"))
@@ -768,7 +776,7 @@ class RankTestByResult:
             lines = [
                 f"Rank Test: Two-sample ({self.method_name}, {pair_txt})",
                 f"  Y = {self.y!r}",
-                f"  Groups: {self.groups.var} = [{g1!r} vs {g2!r}]",
+                f"  Groups: {self.groups.var} = [{_level_repr(g1)} vs {_level_repr(g2)}]",
                 f"  By: {by_display}",
             ]
         else:
@@ -846,7 +854,7 @@ def _plain_two_sample(rt: RankTestTwoSample) -> str:
     body_lines = [
         f"Rank Test: Two-sample ({rt.method_name})",
         f"  Y = {rt.y!r}",
-        f"  Groups: {rt.groups.var} = [{g1!r} vs {g2!r}]",
+        f"  Groups: {rt.groups.var} = [{_level_repr(g1)} vs {_level_repr(g2)}]",
         "",
     ]
     body = _plain_two_sample_body(rt)

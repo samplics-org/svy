@@ -6,12 +6,13 @@ import math
 
 from typing import TYPE_CHECKING, Any, Literal, Sequence, cast
 
+import msgspec
 import numpy as np
 import polars as pl
 import svy_rs as rs
 
 from svy.core.constants import _BY_SEP, _INTERNAL_CONCAT_SUFFIX
-from svy.core.data_prep import PreparedData, prepare_data
+from svy.core.data_prep import BY_KEY_SEP, PreparedData, level_lookup, prepare_data
 from svy.core.enumerations import PopParam
 from svy.core.enumerations import QuantileMethod as _QuantileMethod
 from svy.core.repwgts import RepWgts
@@ -92,6 +93,17 @@ class Estimation:
         self._sample = sample
         self._design_cache: dict[str, Any] | None = None
         self._polars_cache: dict[str, Any] | None = None
+        self._level_cache: dict[Any, Any] = {}
+
+    def _level_lookup(self, cols: Sequence[str]) -> dict[str, Any]:
+        """Memoised :func:`level_lookup` over the sample data, per data version."""
+        version = self._sample._data_version
+        if self._level_cache.get("_version") != version:
+            self._level_cache = {"_version": version}
+        key = tuple(cols)
+        if key not in self._level_cache:
+            self._level_cache[key] = level_lookup(self._sample._data, key)
+        return self._level_cache[key]
 
     def _get_factorized_design(self) -> dict[str, Any]:
         if self._design_cache is not None:
@@ -884,13 +896,10 @@ class Estimation:
         if by_col and by_col in result_df.columns:
             by_levels = [(v,) for v in result_df[by_col].to_list()]
 
+        # Kernel strings; _build_estimate_result_light restores the column's type.
         y_levels: list = [None] * n_rows
         if as_factor and "level" in result_df.columns:
-            for i, lv in enumerate(result_df["level"].to_list()):
-                try:
-                    y_levels[i] = int(lv)
-                except (ValueError, TypeError):
-                    y_levels[i] = lv
+            y_levels = result_df["level"].to_list()
 
         is_prop = (param == PopParam.PROP) or as_factor
 
@@ -1206,6 +1215,49 @@ class Estimation:
             result_df, y_name, alpha, by_col, set_prob=False
         )
 
+    def _native_levels(
+        self, est_list: list[ParamEst], by_cols: Sequence[str] | None, as_factor: bool
+    ) -> list[ParamEst]:
+        """Put each row's by- and y-levels back in their source columns' types.
+
+        The kernel hands levels back as strings, several ``by`` columns as one
+        joined key. A level with no match in the data keeps that string (split
+        into parts for several ``by`` columns).
+        """
+        by_tuple = tuple(by_cols) if by_cols else None
+        by_lookup = self._level_lookup(by_tuple) if by_tuple else {}
+        y_lookups: dict[str, dict[str, Any]] = {}
+        out = []
+        for p in est_list:
+            by_level = p.by_level
+            if by_tuple and by_level and len(by_level) == 1:
+                raw = by_level[0]
+                if raw in by_lookup:
+                    native = by_lookup[raw]
+                    by_level = native if len(by_tuple) > 1 else (native,)
+                elif len(by_tuple) > 1:
+                    parts = str(raw).split(BY_KEY_SEP, maxsplit=len(by_tuple) - 1)
+                    if len(parts) == len(by_tuple):
+                        by_level = tuple(parts)
+
+            y_level = p.y_level
+            if as_factor and y_level is not None:
+                if p.y not in y_lookups:
+                    y_lookups[p.y] = self._level_lookup((p.y,))
+                key = y_level if isinstance(y_level, str) else str(y_level)
+                if key in y_lookups[p.y]:
+                    y_level = y_lookups[p.y][key]
+                elif isinstance(y_level, str):
+                    try:
+                        y_level = int(y_level)
+                    except ValueError:
+                        pass
+
+            out.append(
+                msgspec.structs.replace(p, by=by_tuple or p.by, by_level=by_level, y_level=y_level)
+            )
+        return out
+
     def _build_estimate_result_light(
         self,
         est_list,
@@ -1227,34 +1279,7 @@ class Estimation:
         estimate.design_df = design_df
         estimate._cov_filled = cov_filled or len(est_list) <= 1
         estimate.as_factor = as_factor
-        if by_cols and len(by_cols) > 0:
-            by_tuple = tuple(by_cols)
-            final_ests = []
-            for p in est_list:
-                by_level = p.by_level
-                if by_level and len(by_cols) > 1 and len(by_level) == 1:
-                    parts = str(by_level[0]).split("__by__", maxsplit=len(by_cols) - 1)
-                    by_level = tuple(parts) if len(parts) == len(by_cols) else by_level
-                new_p = ParamEst(
-                    y=p.y,
-                    est=p.est,
-                    se=p.se,
-                    cv=p.cv,
-                    lci=p.lci,
-                    uci=p.uci,
-                    deff=p.deff,
-                    df=p.df,
-                    by=by_tuple,
-                    by_level=by_level,
-                    y_level=p.y_level,
-                    x=p.x,
-                    x_level=p.x_level,
-                    prob=p.prob,
-                )
-                final_ests.append(new_p)
-            estimate.estimates = final_ests
-        else:
-            estimate.estimates = est_list
+        estimate.estimates = self._native_levels(est_list, by_cols, as_factor)
         # The distinct domains, in row order — a single by variable yields its
         # levels, several yield level tuples (matching contrast keys).
         estimate.domains = list(

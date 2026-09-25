@@ -80,7 +80,7 @@ ignore unknown fields.
   Strictly this removal warrants a major bump under the policy above; 0.2 was
   chosen deliberately because no known consumer binds to the removed field.
 - `0.3` — `EstimateData.deff_ref` added.
-- `0.4` — the JSON may carry `"nonfinite"` (§2.11). `EstimateData.as_factor`
+- `0.4` — the JSON may carry `"nonfinite"` and `"temporal"` (§2.11). `EstimateData.as_factor`
   added: it decides whether the table has a level column, so the table view
   needs it (no longer excluded). `TDistData.df` widened to `int | float` so a
   GLM's integer design df keeps its dtype in the table.
@@ -135,6 +135,13 @@ exists only in the JSON. Strings (`"NaN"`) in numeric fields were rejected
 because they make every numeric field number-or-string for JSON consumers.
 Payloads written before 0.4 have bare `null`s; `from_json` reads a `null` in
 a plain `float` field as NaN.
+
+Temporal values get the same treatment under `"temporal"`. A level of a date,
+datetime, time or duration column is written as its ISO 8601 string and its
+type recorded by pointer: `{"/estimates/0/by_level/0": "date"}`. `from_json`
+converts it back after decoding. The level fields stay typed
+`str | int | float | bool`, because msgspec allows no date beside `str` in a
+union, so a decoded level may hold a temporal value outside its annotation.
 
 ### 2.12 Table view: `to_polars(data)`
 

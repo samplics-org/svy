@@ -71,7 +71,7 @@ def _row_levels(est: Any, names: Sequence[str], n_by: int) -> list[tuple[str, An
 def _label_of(lab: VarLabels | None, raw: Any) -> str | None:
     if raw is None:
         return None
-    return lab.values.get(raw, str(raw)) if lab is not None else str(raw)
+    return lab.values.get(raw, _display_level(raw)) if lab is not None else _display_level(raw)
 
 
 def estimate_frame(
@@ -108,11 +108,15 @@ def estimate_frame(
             rec: dict[str, Any] = {}
             for f in p.__struct_fields__:
                 rec[f] = getattr(p, f)
-                if f == "by_level" and labelled & set(names[:n_by]):
-                    rec["by_label"] = [
-                        _label_of(labels.get(c), raw)
-                        for c, raw in _row_levels(p, names, n_by)[:n_by]
-                    ]
+                if f == "by_level":
+                    # A struct keyed by variable, since levels of several
+                    # variables differ in type and a list holds one type.
+                    by_levels = _row_levels(p, names, n_by)[:n_by]
+                    rec[f] = dict(by_levels) if p.by else None
+                    if labelled & set(names[:n_by]):
+                        rec["by_label"] = {
+                            c: _label_of(labels.get(c), raw) for c, raw in by_levels
+                        }
                 elif f == "y_level" and len(names) > n_by and names[n_by] in labelled:
                     rec["y_level_label"] = _label_of(labels[names[n_by]], p.y_level)
             recs.append(rec)
@@ -187,6 +191,27 @@ def stack_estimate_frames(members: Sequence[tuple[str, str | None, pl.DataFrame]
             lead.append(pl.lit(x, dtype=pl.String).alias("x"))
         out.append(f.select(*lead, pl.all()) if lead else f)
     return pl.concat(out, how="diagonal_relaxed")
+
+
+def _display_level(value: Any) -> str:
+    """A level as printed: bools lowercase, as polars prints them."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _kernel_level_str(value: Any, *, as_float: bool = False) -> str:
+    """``value`` spelled the way polars casts it to text (``True`` → ``"true"``)."""
+    if value is None:
+        return "__Null__"
+    if isinstance(value, str):
+        return value
+    if as_float and isinstance(value, (bool, int, float)):
+        value = float(value)
+    try:
+        return pl.Series([value]).cast(pl.Utf8).item()
+    except Exception:
+        return str(value)
 
 
 # -----------------------------------------------------------------------------
@@ -310,7 +335,7 @@ class Estimate:
         """Get value label or fall back to string representation."""
         resolve = use_labels if use_labels is not None else self._resolve_use_labels()
         if not resolve or self._metadata is None:
-            return str(value)
+            return _display_level(value)
         resolved = self._metadata.resolve_labels(var)
         # Try the value as-is first
         label = resolved.display(value)
@@ -321,7 +346,7 @@ class Estimate:
                 label = resolved.display(int_value)
             except (ValueError, TypeError):
                 pass
-        return label
+        return _display_level(value) if label == str(value) else label
 
     # =========================================================================
     # Label configuration
@@ -437,7 +462,8 @@ class Estimate:
 
         Levels keep their codes under the variable's name. With labels on,
         each variable that has value labels gets a ``<var>_label`` column
-        next to it (``by_label`` and ``y_level_label`` with ``tidy=False``).
+        next to it. With ``tidy=False``, ``by_level`` (and ``by_label``) is a
+        struct keyed by variable, and ``y_level_label`` follows ``y_level``.
         Rows sort by code. Printing uses the labelled view instead, see
         ``to_polars_printable()``.
 
@@ -575,6 +601,24 @@ class Estimate:
                 aliases[lk] = i
         return aliases
 
+    def _string_level_aliases(self) -> list[tuple[Any, int]]:
+        """Keys as they were spelled when levels came back as strings.
+
+        Levels used to be the kernel's text (``"false"``, and ``"1.0"`` for an
+        ``as_factor`` mean), so contrasts written against those keys still
+        resolve. Pairs rather than a dict, so a spelling shared by two rows
+        is dropped as ambiguous instead of silently picking one.
+        """
+        float_y = self.as_factor and self.param != PopParam.PROP
+        pairs: list[tuple[Any, int]] = []
+        for i, p in enumerate(self.estimates):
+            parts = [_kernel_level_str(v) for v in (p.by_level or ())]
+            if (self.param == PopParam.PROP or self.as_factor) and p.y_level is not None:
+                parts.append(_kernel_level_str(p.y_level, as_float=float_y))
+            if parts:
+                pairs.append((parts[0] if len(parts) == 1 else tuple(parts), i))
+        return pairs
+
     def contrast(
         self,
         contrasts: "Mapping[Any, Any] | ContrastExpr",
@@ -653,7 +697,7 @@ class Estimate:
             df=float(df),
             alpha=alpha if alpha is not None else self.alpha,
             method=self.method,
-            aliases=self._label_aliases(),
+            aliases=[*self._string_level_aliases(), *self._label_aliases().items()],
         )
 
     def covariance_to_polars(self) -> pl.DataFrame:
