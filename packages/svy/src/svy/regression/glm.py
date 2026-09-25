@@ -19,7 +19,7 @@ from msgspec import field
 from svy.core.containers import FDist, TDist
 from svy.errors import ModelError
 from svy.ui.printing import make_panel, render_plain_table, render_rich_to_str, resolve_width
-from svy.utils.formats import _fmt_fixed, _fmt_p, _fmt_smart
+from svy.utils.formats import _fmt_fixed, _fmt_level, _fmt_p, _fmt_smart
 
 
 if TYPE_CHECKING:
@@ -124,6 +124,8 @@ class GLMFit(msgspec.Struct, frozen=True):
     term_info: dict | None = None
     feature_names: list[str] = field(default_factory=list)
     offset: str | None = None
+    #: Significance level of the coefficient intervals.
+    alpha: float = 0.05
 
     @classmethod
     def set_default_print_width(cls, width: int | None) -> None:
@@ -143,6 +145,9 @@ class GLMFit(msgspec.Struct, frozen=True):
         d.pop("cov_matrix", None)
         d.pop("term_info", None)
         return d
+
+    def _ci_headers(self) -> tuple[str, str]:
+        return f"[{_fmt_level(self.alpha / 2)}", f"{_fmt_level(1 - self.alpha / 2)}]"
 
     # --- Contrasts & term tests ---
 
@@ -322,6 +327,7 @@ class GLMFit(msgspec.Struct, frozen=True):
         coef_header = "Coef."
         if exponentiate:
             _, coef_header = _ratio_labels(self.link)
+        lci_header, uci_header = self._ci_headers()
 
         for name, justify in [
             ("Term", "left"),
@@ -329,15 +335,15 @@ class GLMFit(msgspec.Struct, frozen=True):
             ("Std.Err.", "right"),
             ("t", "right"),
             ("P>|t|", "right"),
-            ("[0.025", "right"),
-            ("0.975]", "right"),
+            (lci_header, "right"),
+            (uci_header, "right"),
         ]:
             coef_tbl.add_column(name, justify=justify)  # type: ignore[arg-type]
 
         for row in self.coefs:
             t_val = row.wald.value if row.wald else 0.0
             p_val = row.wald.p_value if row.wald else 1.0
-            p_style = "bold red" if p_val < 0.05 else ""
+            p_style = "bold red" if p_val < self.alpha else ""
             est, lci, uci = row.est, row.lci, row.uci
             if exponentiate:
                 est, lci, uci = math.exp(est), math.exp(lci), math.exp(uci)
@@ -417,7 +423,7 @@ class GLMFit(msgspec.Struct, frozen=True):
         coef_header = "Coef."
         if exponentiate:
             _, coef_header = _ratio_labels(self.link)
-        headers = ["Term", coef_header, "Std.Err.", "t", "P>|t|", "[0.025", "0.975]"]
+        headers = ["Term", coef_header, "Std.Err.", "t", "P>|t|", *self._ci_headers()]
         rows = []
         for c in self.coefs:
             t_val = c.wald.value if c.wald else 0.0

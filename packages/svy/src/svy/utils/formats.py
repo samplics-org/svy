@@ -110,3 +110,13 @@ def _fmt_smart(x: float | None) -> str:
         return f"{x:.4e}"
 
     return f"{x:.4f}"
+
+
+def _fmt_level(x: float) -> str:
+    """A probability or percentage without float noise or trailing zeros: 0.975, 95, 99.9."""
+    return format(Decimal(repr(round(float(x), 10))).normalize(), "f")
+
+
+def _fmt_conf_pct(alpha: float) -> str:
+    """Confidence level as a percentage: alpha=0.05 -> "95", alpha=0.001 -> "99.9"."""
+    return _fmt_level((1.0 - alpha) * 100)

@@ -366,6 +366,7 @@ def _serialize_glm_fit(result: GLMFit) -> GLMFitData:
         stats=_glm_stats_to_data(result.stats),
         coefs=[_glm_coef_to_data(c) for c in result.coefs],
         feature_names=list(result.feature_names),
+        alpha=_f(result.alpha),
     )
 
 

@@ -32,6 +32,8 @@ log = logging.getLogger(__name__)
 
 _DECIMAL_KEYS = ("est", "se", "lci", "uci", "cv", "deff")
 
+_QUANTILE_PARAMS = (PopParam.QUANTILE, PopParam.MEDIAN)
+
 # Carried by to_polars() but kept out of the printed table: df is a per-row
 # value that is constant for most results, so a column would repeat one number
 # down the page and widen every table. Reach for it via to_polars().
@@ -392,15 +394,18 @@ class Estimate:
         self._use_labels = value
 
     def _context(self) -> str:
-        """Variance method, plus the design-effect reference when one applies.
+        """Variance method, plus the quantile rule and design-effect reference when they apply.
 
         The reference belongs in the header rather than the frame: a deff is
         ambiguous without it, since the two references differ by 1 - n/N, but
         `to_polars` deliberately carries no provenance at all.
         """
+        parts = [self.method.upper()]
+        if self.param in _QUANTILE_PARAMS:
+            parts.append(f"q_method={self.q_method.value.lower()}")
         if self.deff_ref:
-            return f"{self.method.upper()}, deff={self.deff_ref}"
-        return self.method.upper()
+            parts.append(f"deff={self.deff_ref}")
+        return ", ".join(parts)
 
     @classmethod
     def set_default_use_labels(cls, use: bool) -> None:
@@ -1013,6 +1018,9 @@ class EstimateList(list):
         methods = {m.method.upper() for m in members}
         param = params.pop() if len(params) == 1 else "MIXED"
         method = methods.pop() if len(methods) == 1 else "MIXED"
+        q_methods = {m.q_method.value.lower() for m in members if m.param in _QUANTILE_PARAMS}
+        if q_methods:
+            method += f", q_method={q_methods.pop() if len(q_methods) == 1 else 'mixed'}"
         ys = {m.estimates[0].y for m in members}
         suffix = f": {next(iter(ys))}" if len(ys) == 1 else ""
         return f"Estimate: [bold]{param}[/bold] ({method}){suffix}"

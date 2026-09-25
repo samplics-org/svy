@@ -309,6 +309,7 @@ Source: `svy.regression.glm.GLMFit` (msgspec.Struct)
 | `stats`         | `GLMStatsData`        | `stats`            |
 | `coefs`         | `list[GLMCoefData]`   | `coefs`            |
 | `feature_names` | `list[str]`           | `feature_names`    |
+| `alpha`         | `float` (default 0.05) | `alpha`           |
 
 Excluded: `cov_matrix`, `term_info`.
 

@@ -949,6 +949,7 @@ class GLM:
             cov_matrix=cov_mat,
             term_info=term_info,
             feature_names=feature_names,
+            alpha=alpha,
         )
 
         # Stamp the where clause for display (mirrors the estimation namespace).

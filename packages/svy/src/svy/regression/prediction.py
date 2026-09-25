@@ -14,6 +14,7 @@ import numpy as np
 import polars as pl
 
 from svy.ui.printing import make_panel, render_rich_to_str, resolve_width
+from svy.utils.formats import _fmt_conf_pct
 
 
 log = logging.getLogger(__name__)
@@ -76,7 +77,7 @@ class GLMPred(msgspec.Struct, frozen=True):
 
     def __plain_str__(self) -> str:
         """Plain-text fallback when rich is not installed. Never calls str(self)."""
-        conf_pct = int(self.conf_level * 100)
+        conf_pct = _fmt_conf_pct(self.alpha)
 
         _L, _V, _R = 10, 10, 10
 
@@ -104,7 +105,7 @@ class GLMPred(msgspec.Struct, frozen=True):
         return "\n".join(lines)
 
     def __repr__(self) -> str:
-        conf_pct = int(self.conf_level * 100)
+        conf_pct = _fmt_conf_pct(self.alpha)
         res_str = ", with residuals" if self.residuals is not None else ""
         return f"GLMPred(n={len(self)}, {conf_pct}% CI, df={self.df:.1f}{res_str})"
 
@@ -112,7 +113,7 @@ class GLMPred(msgspec.Struct, frozen=True):
         from rich.table import Table as RTable
         from rich.text import Text
 
-        conf_pct = int(self.conf_level * 100)
+        conf_pct = _fmt_conf_pct(self.alpha)
 
         grid = RTable.grid(padding=(0, 2))
         grid.add_column(style="bold")

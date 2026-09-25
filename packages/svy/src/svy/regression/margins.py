@@ -16,6 +16,7 @@ import polars as pl
 from svy.regression.glm import offset_values
 from svy.regression.links import link_inverse, link_mu_eta, link_mu_eta2
 from svy.ui.printing import make_panel, render_plain_table, render_rich_to_str, resolve_width
+from svy.utils.formats import _fmt_conf_pct
 
 
 if TYPE_CHECKING:
@@ -123,7 +124,7 @@ class GLMMargins(msgspec.Struct, frozen=True):
 
     def __plain_str__(self) -> str:
         """Plain-text fallback when rich is not installed. Never calls str(self)."""
-        conf_pct = int(self.conf_level * 100)
+        conf_pct = _fmt_conf_pct(self.alpha)
         title = f"GLM Margins: {self.term} ({self.margin_type}, {conf_pct}% CI)"
         ci_header = f"{conf_pct}% CI"
         if self.values is not None:
@@ -151,7 +152,7 @@ class GLMMargins(msgspec.Struct, frozen=True):
         return f"{title}\n\n{render_plain_table(headers, rows)}"
 
     def __repr__(self) -> str:
-        conf_pct = int(self.conf_level * 100)
+        conf_pct = _fmt_conf_pct(self.alpha)
         if self.values is not None:
             return f"GLMMargins(term='{self.term}', n={len(self)}, {conf_pct}% CI, type={self.margin_type})"
         return f"GLMMargins(term='{self.term}', {conf_pct}% CI, type={self.margin_type})"
@@ -160,7 +161,7 @@ class GLMMargins(msgspec.Struct, frozen=True):
         from rich import box
         from rich.table import Table as RTable
 
-        conf_pct = int(self.conf_level * 100)
+        conf_pct = _fmt_conf_pct(self.alpha)
 
         table = RTable(
             show_header=True,

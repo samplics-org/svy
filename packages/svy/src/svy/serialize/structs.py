@@ -347,6 +347,9 @@ class GLMFitData(msgspec.Struct, kw_only=True, frozen=True):
     stats: GLMStatsData
     coefs: list[GLMCoefData] = []
     feature_names: list[str] = []
+    #: Significance level of the coefficient intervals. Optional so payloads
+    #: written before it existed still decode, as the 0.05 they were fitted at.
+    alpha: float = 0.05
 
 
 @_kinded("glm_pred")
