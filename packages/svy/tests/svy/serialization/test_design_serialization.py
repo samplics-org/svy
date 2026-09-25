@@ -174,7 +174,7 @@ def test_design_fields_are_all_saved():
     from svy.core.design import _FIELDS
 
     saved = set(DesignData.__struct_fields__) - {"kind", "schema_version"}
-    assert saved == {*_FIELDS, "rep_wgts", "wgt_adjustment"}
+    assert saved == {*_FIELDS, "rep_wgts", "wgt_adjustment", "singleton", "parts"}
 
 
 def test_unknown_fields_are_ignored():

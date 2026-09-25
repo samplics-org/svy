@@ -11,6 +11,7 @@ import msgspec
 import numpy as np
 import polars as pl
 
+from svy.core import design_parts as _dp
 from svy.core.constants import (
     _INTERNAL_CONCAT_SUFFIX,
     SVY_ROW_INDEX,
@@ -128,6 +129,7 @@ class Sample:
             local_data = local_data.with_row_index(name=SVY_ROW_INDEX)
 
         if design is not None:
+            local_data = self._drop_internal_concat(local_data)
             local_data, (_, stratum_cols, psu_cols, ssu_cols) = (
                 self._create_concatenated_cols_from_lists(
                     data=local_data,
@@ -153,6 +155,7 @@ class Sample:
 
         self._design_history: tuple[Design, ...] = ()
         self._warnings: WarningStore = WarningStore()
+        self._singleton_result = None
         self._data = local_data
         self._data_version = _next_data_version()
 
@@ -165,6 +168,36 @@ class Sample:
         self._check_for_singletons()
         self._validate_design()
         self._resolve_jackknife_kind()
+        self._sync_parts(force=True)
+
+    def _sync_parts(self, *, force: bool = False) -> None:
+        """Rebuild the state this sample derives from its design parts.
+
+        Once per data/design version: every rebind of ``_data`` or ``_design``
+        (wrangling, weighting, set_data, a fork) bumps ``_data_version``, and
+        whatever reads derived state (estimation, ``sample.singleton``,
+        ``sample.design``) calls this first. A part's ``derive`` may rebind the
+        data or design itself; the stamp is taken after it.
+        """
+        state = self.__dict__
+        if state.get("_parts_syncing"):
+            return
+        stamp = state.get("_parts_stamp")
+        if (
+            not force
+            and stamp is not None
+            and stamp[0] == self._data_version
+            and stamp[1] is self._design
+        ):
+            return
+        state["_parts_syncing"] = True
+        try:
+            if self._design is not None:
+                for part in _dp.registered():
+                    part.derive(self)
+        finally:
+            state["_parts_syncing"] = False
+        state["_parts_stamp"] = (self._data_version, self._design)
 
     def _resolve_jackknife_kind(self) -> None:
         """Check a declared jackknife ``kind`` against the design, and derive the
@@ -602,6 +635,8 @@ class Sample:
             ("MOS", str(getattr(design, "mos", None))),
             ("Population size", str(getattr(design, "pop_size", None))),
         ]
+        if design.singleton is not None:
+            rows.append(("Singleton", repr(design.singleton)))
         if rw_lines:
             rows.append(("Replicate weights", ""))
             for sub_line in rw_lines[1:]:
@@ -930,6 +965,36 @@ class Sample:
         concat_data = cast(pl.DataFrame, out.collect() if isinstance(out, pl.LazyFrame) else out)
         return concat_data, (by_cols, stratum_cols, psu_cols, ssu_cols)
 
+    def _ensure_internal_concat(self) -> None:
+        """Rebuild the internal key columns ``_internal_design`` names when a
+        rebind of the data dropped them (weighting builds frames from
+        ``sample.data``, which leaves them out)."""
+        idict = self._internal_design or {}
+        names = set(cast(pl.DataFrame, self._data).columns)
+        if all(idict.get(k) in (None, *names) for k in ("stratum", "psu", "ssu")):
+            return
+        data, (_, stratum_cols, psu_cols, ssu_cols) = self._create_concatenated_cols_from_lists(
+            data=cast(pl.DataFrame, self._data),
+            design=self._design,
+            by=None,
+            null_token="__Null__",
+            suffix=_INTERNAL_CONCAT_SUFFIX,
+        )
+        self._internal_design = {
+            "stratum": f"stratum{_INTERNAL_CONCAT_SUFFIX}" if stratum_cols else None,
+            "psu": f"psu{_INTERNAL_CONCAT_SUFFIX}" if psu_cols else None,
+            "ssu": f"ssu{_INTERNAL_CONCAT_SUFFIX}" if ssu_cols else None,
+            "suffix": _INTERNAL_CONCAT_SUFFIX,
+        }
+        self._data = data
+
+    @staticmethod
+    def _drop_internal_concat(data: pl.DataFrame) -> pl.DataFrame:
+        """``data`` without the internal stratum/PSU/SSU concat columns."""
+        names = [f"{k}{_INTERNAL_CONCAT_SUFFIX}" for k in ("stratum", "psu", "ssu")]
+        stale = [c for c in names if c in data.columns]
+        return data.drop(stale) if stale else data
+
     @staticmethod
     def _dedup_preserve_order(cols: list[str]) -> list[str]:
         return list(dict.fromkeys(cols))
@@ -1005,37 +1070,10 @@ class Sample:
                 if design.pop_size in schema and not _is_numeric_dtype(schema[design.pop_size]):
                     raise TypeError(f"Population size column {design.pop_size!r} must be numeric.")
 
-        # 2. Validate Replicate Weights
-        if design.rep_wgts is not None:
-            rw = design.rep_wgts
-
-            # Use auto-detection from actual data columns
-            expected_rep_cols = rw.columns_from_data(
-                data.columns
-            )  # ← KEY FIX: Use columns_from_data
-
-            # Check that all expected columns exist
-            missing_rep = [c for c in expected_rep_cols if c not in data.columns]
-            if missing_rep:
-                raise ValueError(
-                    f"Expected replicate weight columns not found in data: {missing_rep[:10]}"
-                    + ("..." if len(missing_rep) > 10 else "")
-                )
-
-            # Check Count Consistency
-            if rw.n_reps > 0 and rw.n_reps != len(expected_rep_cols):
-                raise ValueError(
-                    f"RepWeights.n_reps ({rw.n_reps}) does not match number of columns found ({len(expected_rep_cols)})."
-                )
-
-            # Check Numeric Type
-            non_numeric_rep = [c for c in expected_rep_cols if not _is_numeric_dtype(schema[c])]
-            if non_numeric_rep:
-                sample_bad = non_numeric_rep[:3]
-                suffix = "..." if len(non_numeric_rep) > 3 else ""
-                raise TypeError(
-                    f"Replicate weight columns must be numeric; got non-numeric types for: {sample_bad}{suffix}"
-                )
+        # 2. What each design part checks against the frame (replicate weights:
+        # present, as many as declared, numeric).
+        for part, value in design._part_items():
+            part.check_data(value, data)
 
         # 3. Validate types for standard design variables
         if design.wgt is not None:
@@ -1111,23 +1149,12 @@ class Sample:
             return None
         shown = missing[:10]
         more = "..." if len(missing) > 10 else ""
-        notes: list[str] = []
-        rw = design.rep_wgts
-        if rw is not None and any(
-            c in missing for c in (*unit_columns(rw.stratum), *unit_columns(rw.psu))
-        ):
-            notes.append(
-                "rep_wgts.stratum/psu name the units the replicates were built "
-                "from, which is a separate question from the Design's stratum/psu."
-            )
-        rec = design.wgt_adjustment
-        if rec is not None and any(
-            c in missing for c in (rec.new_wgt, rec.prev_wgt, *(rec.cells or ()), *(rec.aux or ()))
-        ):
-            notes.append(
-                f"wgt_adjustment ({rec.kind}) reads its columns from the data; "
-                "they are written by the weighting method and must travel with it."
-            )
+        missing_set = set(missing)
+        notes = [
+            note
+            for part, value in design._part_items()
+            if (note := part.missing_note(value, missing_set)) is not None
+        ]
         return ValueError(
             f"Design references columns not found in data: {shown}{more}"
             + ("" if not notes else " " + " ".join(notes))
@@ -1150,7 +1177,7 @@ class Sample:
         if data.height != old.height:
             if history or (
                 design is not None
-                and (design.wgt_adjustment is not None or design.rep_wgts is not None)
+                and any(part.has_lineage(value) for part, value in design._part_items())
             ):
                 raise MethodError.data_rows_changed(
                     where=where, n_old=old.height, n_new=data.height
@@ -1177,8 +1204,10 @@ class Sample:
                 raise err
         saved = (
             self._data,
+            self._design,
             self._internal_design,
             getattr(self, "_singletons", None),
+            getattr(self, "_singleton_result", None),
             copy.deepcopy(self._metadata),
             copy.deepcopy(self._warnings),
         )
@@ -1195,8 +1224,10 @@ class Sample:
         except Exception:
             (
                 self._data,
+                self._design,
                 self._internal_design,
                 self._singletons,
+                self._singleton_result,
                 self._metadata,
                 self._warnings,
             ) = saved
@@ -1376,6 +1407,7 @@ class Sample:
     @property
     def design(self) -> Design:
         """Return a defensive copy to avoid external mutation of internal design."""
+        self._sync_parts()
         return copy.deepcopy(self._design)
 
     @property
@@ -1730,7 +1762,11 @@ class Sample:
         stale (or missing) ``*_svy_internal_cols_concatenated`` columns and
         skipped singleton/validity checks entirely.
         """
-        local_data = cast(pl.DataFrame, self._data)
+        # Built afresh: _concatenate_cols keeps a concat column that already
+        # exists, which after a design edit would describe the old strata.
+        local_data = self._drop_internal_concat(cast(pl.DataFrame, self._data))
+        if local_data is not self._data:
+            self._data = local_data
         if self._design is not None and any(
             getattr(self._design, f, None) for f in ("stratum", "variance_psu", "ssu")
         ):
@@ -1759,6 +1795,7 @@ class Sample:
             }
         self._check_for_singletons()
         self._validate_design()
+        self._sync_parts(force=True)
 
     def set_data(self, data: pl.DataFrame) -> Self:
         """Replace the data, keeping existing metadata and inferring new columns'.
@@ -1807,6 +1844,7 @@ class Sample:
         designs is the chain of adjustments -- which is what makes keeping a
         single record on ``Design`` lossless rather than lossy.
         """
+        self._sync_parts()
         return (*getattr(self, "_design_history", ()), self._design)
 
     def set_design(self, design: Design) -> Self:
@@ -1823,6 +1861,7 @@ class Sample:
             self._internal_design,
             getattr(self, "_design_history", ()),
             getattr(self, "_singletons", None),
+            getattr(self, "_singleton_result", None),
         )
         self._push_design()
         self._design = design
@@ -1835,6 +1874,7 @@ class Sample:
                 self._internal_design,
                 self._design_history,
                 self._singletons,
+                self._singleton_result,
             ) = saved
             raise
 
@@ -1847,18 +1887,27 @@ class Sample:
         earlier design produced (still in the data) that design's record and
         replicates come back; on any other column there is no record, and the
         replicate weights are dropped with a warning unless ``rep_wgts=`` is
-        passed.
+        passed. Changing the stratum, PSU or SSU columns clears the singleton
+        handling, with a warning naming the singletons of the new design.
         """
         # A weight the data does not have fails before anything, the
         # replicate-reset warning included, is acted on.
         wgt = kwargs.get("wgt")
         if isinstance(wgt, str) and wgt not in cast(pl.DataFrame, self._data).columns:
             raise ValueError(f"Design references columns not found in data: [{wgt!r}]")
-        self._replace_design(self._design.update(**self._with_restored_record(kwargs)))
+        with _dp.deferred_clear_warnings() as cleared:
+            new = self._design.update(**self._with_restored_record(kwargs))
+        self._replace_design(new)
+        if cleared:
+            from svy.core.singleton import _current_singleton_values
+
+            now = _current_singleton_values(self)
+            for spec, reason in cleared:
+                _dp.warn_singleton_cleared(spec, reason, now)
         return self
 
     def _with_restored_record(self, kwargs: dict[str, Any]) -> dict[str, Any]:
-        """Fill the record and replicates of an earlier design on ``kwargs["wgt"]``.
+        """Fill the parts that go with a weight from an earlier design on ``kwargs["wgt"]``.
 
         Weighting never overwrites a column, so a weight this sample produced
         earlier is still described by the record and replicates it was made
@@ -1867,7 +1916,8 @@ class Sample:
         """
         if "wgt" not in kwargs or kwargs["wgt"] == self._design.wgt:
             return kwargs
-        if "wgt_adjustment" in kwargs and "rep_wgts" in kwargs:
+        follows = [p.name for p in _dp.registered() if p.follows_weight]
+        if all(name in kwargs for name in follows):
             return kwargs
         wgt = kwargs["wgt"]
         data_columns = cast(pl.DataFrame, self._data).columns
@@ -1876,11 +1926,7 @@ class Sample:
             if prior.wgt != wgt:
                 continue
             if all(c in present for c in prior.columns(data_columns=data_columns)):
-                return {
-                    "wgt_adjustment": prior.wgt_adjustment,
-                    "rep_wgts": prior.rep_wgts,
-                    **kwargs,
-                }
+                return {**{name: prior._parts.get(name) for name in follows}, **kwargs}
         return kwargs
 
     # ════════════════════════════════════════════════════════════════════════

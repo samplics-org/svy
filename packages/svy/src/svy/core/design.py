@@ -9,6 +9,7 @@ import warnings
 from typing import (
     Any,
     Literal,
+    Mapping,
     NamedTuple,
     Self,
     Sequence,
@@ -20,10 +21,10 @@ from typing import (
 
 import msgspec
 
+from svy.core import design_parts as _dp
 from svy.core.repwgts import (
     RepWeights,
     RepWgts,
-    _RepWgtsBase,
     resolve_rep_variant,
 )
 from svy.ui.printing import make_panel, render_rich_to_str, resolve_width
@@ -271,6 +272,192 @@ class WgtAdjustment(msgspec.Struct, frozen=True, kw_only=True):
     def is_variance_consumed(self) -> bool:
         return self.kind in self.VARIANCE_CONSUMED
 
+    def _to_code(self) -> str:
+        return _struct_code(self, "svy.core.design.WgtAdjustment")
+
+
+# =============================================================================
+# Singleton handling
+# =============================================================================
+
+_SINGLETON_METHODS = ("certainty", "skip", "scale", "center", "collapse", "pool")
+_POOLED = "__pooled__"
+
+
+def _stratum_value(value: Any) -> Any:
+    """A stratum as stored: its column's value, or a tuple of them for tuple strata."""
+    if isinstance(value, list):
+        value = tuple(value)
+    for v in value if isinstance(value, tuple) else (value,):
+        if isinstance(v, (list, tuple, dict, set)):
+            raise TypeError(
+                f"a stratum value must be a scalar or a tuple of scalars; got {value!r}"
+            )
+        hash(v)
+    return value
+
+
+def _typed(value: Any) -> Any:
+    """A hashable identity that keeps 1, 1.0 and True apart."""
+    if isinstance(value, tuple):
+        return tuple(_typed(v) for v in value)
+    return (type(value), value)
+
+
+def _strata_arg(strata: Any) -> tuple[Any, ...]:
+    if isinstance(strata, (str, bytes)) or not isinstance(strata, (Sequence, set, frozenset)):
+        strata = [strata]
+    return tuple(strata)
+
+
+class SingletonSpec(msgspec.Struct, frozen=True, kw_only=True):
+    """How the design's singleton strata are handled for variance estimation.
+
+    A resolved decision, made with ``sample.singleton.certainty/skip/scale/
+    center/collapse/pool`` or built with the constructor of each method.
+    Strata are the stratum columns' own values, a tuple per stratum when the
+    design has several stratum columns.
+
+    The sample keeps it only while it describes the data: the singleton strata
+    found in the data must be exactly the ones it handles (and a collapse
+    target must still exist). Otherwise it is cleared with a warning.
+
+    Parameters
+    ----------
+    method
+        ``"certainty"``, ``"skip"``, ``"scale"``, ``"center"``, ``"collapse"``
+        or ``"pool"``.
+    strata
+        The singleton strata handled (every method but ``collapse``).
+    mapping
+        ``collapse``: (singleton stratum, target stratum) pairs.
+    name
+        ``pool``: the pooled pseudo-stratum's name.
+    """
+
+    method: Literal["certainty", "skip", "scale", "center", "collapse", "pool"]
+    strata: tuple[Any, ...] = ()
+    mapping: tuple[tuple[Any, Any], ...] = ()
+    name: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.method not in _SINGLETON_METHODS:
+            raise ValueError(
+                f"Unknown singleton method {self.method!r}; use one of {_SINGLETON_METHODS}."
+            )
+        unique: dict[Any, Any] = {}
+        for v in self.strata:
+            v = _stratum_value(v)
+            unique.setdefault(_typed(v), v)
+        strata = tuple(unique.values())
+        mapping = tuple((_stratum_value(a), _stratum_value(b)) for a, b in self.mapping)
+        if self.method == "collapse":
+            if not mapping or strata:
+                raise ValueError("collapse takes a non-empty mapping and no strata.")
+            sources = {_typed(a) for a, _ in mapping}
+            if len(sources) != len(mapping):
+                raise ValueError("collapse maps each singleton stratum once.")
+            bad = [b for _, b in mapping if _typed(b) in sources]
+            if bad:
+                raise ValueError(f"collapse targets must not be singletons themselves: {bad!r}")
+        elif not strata or mapping:
+            raise ValueError(f"{self.method} takes a non-empty strata and no mapping.")
+        name = self.name
+        if self.method == "pool":
+            name = _POOLED if name is None else name
+            if not isinstance(name, str) or not name:
+                raise ValueError("pool's name must be a non-empty string.")
+        elif name is not None:
+            raise ValueError(f"name applies to pool only, not {self.method}.")
+        msgspec.structs.force_setattr(self, "strata", strata)
+        msgspec.structs.force_setattr(self, "mapping", mapping)
+        msgspec.structs.force_setattr(self, "name", name)
+
+    @classmethod
+    def certainty(cls, strata: Any) -> SingletonSpec:
+        """Each singleton's PSU becomes a stratum, its SSUs (or rows) the PSUs."""
+        return cls(method="certainty", strata=_strata_arg(strata))
+
+    @classmethod
+    def skip(cls, strata: Any) -> SingletonSpec:
+        """The singleton strata contribute nothing to the variance."""
+        return cls(method="skip", strata=_strata_arg(strata))
+
+    @classmethod
+    def scale(cls, strata: Any) -> SingletonSpec:
+        """As ``skip``, with the variance scaled up by the singleton fraction."""
+        return cls(method="scale", strata=_strata_arg(strata))
+
+    @classmethod
+    def center(cls, strata: Any) -> SingletonSpec:
+        """The singletons' variance is taken around the grand mean."""
+        return cls(method="center", strata=_strata_arg(strata))
+
+    @classmethod
+    def collapse(cls, mapping: Mapping[Any, Any]) -> SingletonSpec:
+        """Each singleton stratum is merged into its target stratum."""
+        return cls(method="collapse", mapping=tuple(dict(mapping).items()))
+
+    @classmethod
+    def pool(cls, strata: Any, name: str = _POOLED) -> SingletonSpec:
+        """The singleton strata are pooled into one pseudo-stratum."""
+        return cls(method="pool", strata=_strata_arg(strata), name=name)
+
+    @property
+    def handled(self) -> tuple[Any, ...]:
+        """The singleton strata this spec was made for."""
+        return tuple(a for a, _ in self.mapping) if self.method == "collapse" else self.strata
+
+    @property
+    def targets(self) -> tuple[Any, ...]:
+        """The strata the singletons are collapsed into (collapse only)."""
+        seen: dict[Any, Any] = {}
+        for _, b in self.mapping:
+            seen.setdefault(_typed(b), b)
+        return tuple(seen.values())
+
+    def __repr__(self) -> str:
+        return self._code("", repr)
+
+    def _to_code(self) -> str:
+        return self._code("svy.", _value_code)
+
+    def _code(self, prefix: str, fmt: Any) -> str:
+        """The constructor call that rebuilds this spec."""
+        if self.method == "collapse":
+            items = ", ".join(f"{fmt(a)}: {fmt(b)}" for a, b in self.mapping)
+            return f"{prefix}SingletonSpec.collapse({{{items}}})"
+        strata = "[" + ", ".join(fmt(v) for v in self.strata) + "]"
+        name = "" if self.method != "pool" or self.name == _POOLED else f", name={self.name!r}"
+        return f"{prefix}SingletonSpec.{self.method}({strata}{name})"
+
+
+def _value_code(value: Any) -> str:
+    if isinstance(value, tuple):
+        inner = ", ".join(_value_code(v) for v in value)
+        return f"({inner},)" if len(value) == 1 else f"({inner})"
+    if isinstance(value, float) and value != value:
+        return "float('nan')"
+    if isinstance(value, float) and value in (float("inf"), float("-inf")):
+        return f"float({str(value)!r})"
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return repr(value)
+    # Dates and other non-literal values: their ISO/str form, which the stratum
+    # matching reads back against the column's type.
+    iso = getattr(value, "isoformat", None)
+    return repr(iso() if callable(iso) else str(value))
+
+
+def _struct_code(obj: msgspec.Struct, qualname: str) -> str:
+    """``qualname(field=value, ...)`` with the fields that differ from their defaults."""
+    args = []
+    for f in msgspec.structs.fields(obj):
+        value = getattr(obj, f.name)
+        if f.default is not msgspec.NODEFAULT and value == f.default:
+            continue
+        args.append(f"{f.name}={_value_code(value)}")
+    return f"{qualname}({', '.join(args)})"
+
 
 # =============================================================================
 # Design Definition
@@ -303,15 +490,17 @@ class Design:
     ssu: str | tuple[str, ...] | None
     pop_size: str | PopSize | None
     wr: bool
-    rep_wgts: RepWgts | None
-    wgt_adjustment: WgtAdjustment | None
+    _parts: dict[str, Any]
     _frozen: bool
 
     PRINT_WIDTH: int | None = None
 
-    # `rep_wgts` and `wgt_adjustment` are slots but not _FIELDS: _FIELDS holds
-    # the column-name design parameters, and neither of these is one.
-    __slots__ = (*_FIELDS, "rep_wgts", "wgt_adjustment", "_frozen")
+    # _FIELDS holds the column-name design parameters. Everything else a design
+    # carries (replicate weights, the weight-adjustment record, singleton
+    # handling) is a design part, one value per registered part in `_parts`;
+    # see svy.core.design_parts. `_frozen` stays last: copy/pickle restore the
+    # slots in order and the guard must be the last one set.
+    __slots__ = (*_FIELDS, "_parts", "_frozen")
 
     def __init__(
         self,
@@ -328,6 +517,8 @@ class Design:
         wr: bool = False,
         rep_wgts: RepWgts | None = None,
         wgt_adjustment: WgtAdjustment | None = None,
+        singleton: SingletonSpec | None = None,
+        **parts: Any,
     ) -> None:
         object.__setattr__(self, "_frozen", False)
 
@@ -347,8 +538,6 @@ class Design:
         object.__setattr__(self, "ssu", norm_ssu)
         object.__setattr__(self, "pop_size", norm_pop_size)
         object.__setattr__(self, "wr", wr)
-        object.__setattr__(self, "rep_wgts", rep_wgts)
-        object.__setattr__(self, "wgt_adjustment", wgt_adjustment)
 
         # Validate simple string-or-None fields (pop_size excluded — handled by _norm_pop_size)
         for name in ("case_id", "wave", "wgt", "prob", "hit", "mos"):
@@ -360,33 +549,58 @@ class Design:
 
         if not isinstance(self.wr, bool):
             raise TypeError(f"'wr' must be bool, got {type(self.wr).__name__}")
-        # Every variant inherits the base, so this covers the whole union.
-        if rep_wgts is not None and not isinstance(rep_wgts, _RepWgtsBase):
-            raise TypeError("'rep_wgts' must be RepWgts | None")
-        if wgt_adjustment is not None and not isinstance(wgt_adjustment, WgtAdjustment):
-            raise TypeError("'wgt_adjustment' must be WgtAdjustment | None")
 
-        # Replicates and the record both describe one weight column; a design
-        # pointing elsewhere would estimate with one and vary with the other.
-        if rep_wgts is not None:
-            if rep_wgts.wgt is None:
-                if wgt is not None:
-                    object.__setattr__(
-                        self, "rep_wgts", msgspec.structs.replace(rep_wgts, wgt=wgt)
-                    )
-            elif rep_wgts.wgt != wgt:
-                raise ValueError(
-                    f"rep_wgts go with weight {rep_wgts.wgt!r} but the design's weight is "
-                    f"{wgt!r}. Pass replicate weights built from {wgt!r}, or leave "
-                    "rep_wgts.wgt unset to pair them with the design's weight."
-                )
-        if wgt_adjustment is not None and wgt_adjustment.new_wgt != wgt:
-            raise ValueError(
-                f"wgt_adjustment describes weight {wgt_adjustment.new_wgt!r} but the "
-                f"design's weight is {wgt!r}."
-            )
+        given = {
+            "rep_wgts": rep_wgts,
+            "wgt_adjustment": wgt_adjustment,
+            "singleton": singleton,
+            **parts,
+        }
+        _dp.check_part_names(given, where="Design()")
+        fields = self._fields()
+        object.__setattr__(
+            self,
+            "_parts",
+            {p.name: p.check(given.get(p.name), fields) for p in _dp.registered()},
+        )
 
         object.__setattr__(self, "_frozen", True)
+
+    def _fields(self) -> dict[str, Any]:
+        return {f: getattr(self, f) for f in _FIELDS}
+
+    # -----------------------------
+    # Design parts
+    # -----------------------------
+    @property
+    def rep_wgts(self) -> RepWgts | None:
+        """Replicate weights, or None for a Taylor design."""
+        return self._parts.get("rep_wgts")
+
+    @property
+    def wgt_adjustment(self) -> WgtAdjustment | None:
+        """How the design's weight was last produced, or None."""
+        return self._parts.get("wgt_adjustment")
+
+    @property
+    def singleton(self) -> SingletonSpec | None:
+        """How the singleton strata are handled for variance, or None."""
+        return self._parts.get("singleton")
+
+    def __getattr__(self, name: str) -> Any:
+        # Only reached for names that are not slots or class attributes: a part
+        # registered after the class was defined has no property of its own.
+        try:
+            parts = object.__getattribute__(self, "_parts")
+        except AttributeError:
+            raise AttributeError(name) from None
+        if name in parts:
+            return parts[name]
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+
+    def _with_part(self, name: str, value: Any) -> Self:
+        """This design with one part replaced, bypassing the update rules."""
+        return type(self)(**self._fields(), **{**self._parts, name: value})
 
     # -----------------------------
     # Immutability Guards
@@ -443,7 +657,16 @@ class Design:
         wr: bool | _MissingType = _MISSING,
         rep_wgts: RepWgts | _MissingType | None = _MISSING,
         wgt_adjustment: WgtAdjustment | _MissingType | None = _MISSING,
+        singleton: SingletonSpec | _MissingType | None = _MISSING,
+        **parts: Any,
     ) -> Self:
+        """A copy with the named fields replaced.
+
+        What is not passed follows its part's rule: replicate weights and the
+        weight-adjustment record stay while they describe the new weight, and
+        singleton handling stays unless the stratum, PSU or SSU columns change
+        (then it is cleared with a warning).
+        """
         return self._merge(
             only_if_none=False,
             case_id=case_id,
@@ -459,6 +682,8 @@ class Design:
             wr=wr,
             rep_wgts=rep_wgts,
             wgt_adjustment=wgt_adjustment,
+            singleton=singleton,
+            **parts,
         )
 
     def fill_missing(
@@ -476,13 +701,9 @@ class Design:
         pop_size: str | PopSize | None | _MissingType = _MISSING,
         wr: bool | _MissingType = _MISSING,
         rep_wgts: RepWgts | Sequence[str] | _MissingType | None = _MISSING,
+        **parts: Any,
     ) -> Self:
-        # Sequence[str] is handled inside _merge (it becomes _MISSING); cast for ty.
-        rep_wgts_arg: RepWgts | _MissingType | None = (
-            _MISSING
-            if isinstance(rep_wgts, (list, tuple)) and not isinstance(rep_wgts, str)
-            else cast(RepWgts | _MissingType | None, rep_wgts)
-        )
+        # Sequence[str] is handled by the rep_wgts part (it counts as not passed).
         return self._merge(
             only_if_none=True,
             case_id=case_id,
@@ -496,7 +717,8 @@ class Design:
             ssu=ssu,
             pop_size=pop_size,
             wr=wr,
-            rep_wgts=rep_wgts_arg,
+            rep_wgts=rep_wgts,
+            **parts,
         )
 
     def update_rep_weights(
@@ -587,19 +809,11 @@ class Design:
         ssu: str | Sequence[str] | None | _MissingType = _MISSING,
         pop_size: str | PopSize | None | _MissingType = _MISSING,
         wr: bool | _MissingType = _MISSING,
-        rep_wgts: RepWgts | _MissingType | None = _MISSING,
-        wgt_adjustment: WgtAdjustment | _MissingType | None = _MISSING,
+        **parts: Any,
     ) -> Self:
         """
         Internal: merge fields either by overwriting or only filling when current is None.
         """
-        # Normalize rep_wgts arg
-        rep_arg: RepWgts | _MissingType | None
-        if isinstance(rep_wgts, Sequence) and not isinstance(rep_wgts, (str, bytes)):
-            rep_arg = _MISSING
-        else:
-            rep_arg = cast(RepWgts | _MissingType | None, rep_wgts)
-
         pick = _pick_if_none if only_if_none else _pick
 
         def is_missing(x: object, /) -> TypeGuard[_MissingType]:
@@ -639,44 +853,32 @@ class Design:
         ssu_arg = _norm_multi_arg("ssu", ssu)
         pop_size_arg = _norm_pop_size_arg(pop_size)
 
-        new_wgt = pick(self.wgt, wgt)
+        fields: dict[str, Any] = {
+            "case_id": pick(self.case_id, case_id),
+            "wave": pick(self.wave, wave),
+            "stratum": pick(self.stratum, stratum_arg),
+            "wgt": pick(self.wgt, wgt),
+            "prob": pick(self.prob, prob),
+            "hit": pick(self.hit, hit),
+            "mos": pick(self.mos, mos),
+            "psu": pick(self.psu, psu_arg),
+            "ssu": pick(self.ssu, ssu_arg),
+            "pop_size": pick(self.pop_size, pop_size_arg),
+            "wr": _pick(self.wr, wr),
+        }
 
-        # What was not passed follows the weight: kept while it still describes
-        # new_wgt, dropped otherwise. Passed replicates are paired with new_wgt
-        # (the caller asserts they match); a passed record is validated by
-        # __init__.
-        if is_missing(rep_arg) or (only_if_none and self.rep_wgts is not None):
-            new_rep = self.rep_wgts
-            if new_rep is not None and new_rep.wgt is not None and new_rep.wgt != new_wgt:
-                _warn_rep_wgts_reset(new_rep, new_wgt)
-                new_rep = None
-        elif rep_arg is not None and rep_arg.wgt != new_wgt:
-            new_rep = msgspec.structs.replace(rep_arg, wgt=new_wgt)
-        else:
-            new_rep = rep_arg
+        # Each part decides what it becomes: a passed value is taken (the part
+        # may pair it with the new fields), one not passed follows its rule.
+        _dp.check_part_names(parts, where="Design.update()")
+        new_parts: dict[str, Any] = {}
+        for part in _dp.registered():
+            arg = parts.get(part.name, _MISSING)
+            passed = not is_missing(arg) and not (
+                only_if_none and self._parts.get(part.name) is not None
+            )
+            new_parts[part.name] = part.after_update(self, arg if passed else None, passed, fields)
 
-        if is_missing(wgt_adjustment) or (only_if_none and self.wgt_adjustment is not None):
-            new_rec = self.wgt_adjustment
-            if new_rec is not None and new_rec.new_wgt != new_wgt:
-                new_rec = None
-        else:
-            new_rec = wgt_adjustment
-
-        return type(self)(
-            case_id=pick(self.case_id, case_id),
-            wave=pick(self.wave, wave),
-            stratum=pick(self.stratum, stratum_arg),
-            wgt=new_wgt,
-            prob=pick(self.prob, prob),
-            hit=pick(self.hit, hit),
-            mos=pick(self.mos, mos),
-            psu=pick(self.psu, psu_arg),
-            ssu=pick(self.ssu, ssu_arg),
-            pop_size=pick(self.pop_size, pop_size_arg),
-            wr=_pick(self.wr, wr),
-            rep_wgts=new_rep,
-            wgt_adjustment=new_rec,
-        )
+        return type(self)(**fields, **new_parts)
 
     # -----------------------------
     # Introspection
@@ -781,10 +983,10 @@ class Design:
     def columns(self, data_columns: Sequence[str] | None = None) -> list[str]:
         """Every column this design needs from the data, de-duplicated, in order.
 
-        Design fields, ``pop_size``, replicate weights, the units the replicates
-        were built from, then the weight-adjustment record's ``new_wgt``,
-        ``prev_wgt``, ``cells`` and ``aux``. A frame missing any of them does
-        not belong to this design.
+        Design fields, ``pop_size``, then each design part's columns:
+        replicate weights and the units they were built from, then the
+        weight-adjustment record's ``new_wgt``, ``prev_wgt``, ``cells`` and
+        ``aux``. A frame missing any of them does not belong to this design.
 
         Parameters
         ----------
@@ -801,16 +1003,14 @@ class Design:
                     out.append(c)
                     seen.add(c)
 
-        if self.rep_wgts is not None:
-            add(self.rep_wgts.stratum)
-            add(self.rep_wgts.psu)
-        rec = self.wgt_adjustment
-        if rec is not None:
-            add(rec.new_wgt)
-            add(rec.prev_wgt)
-            add(rec.cells)
-            add(rec.aux)
+        for part, value in self._part_items():
+            for c in part.columns(value, self, data_columns):
+                add(c)
         return out
+
+    def _part_items(self) -> list[tuple[_dp.DesignPart, Any]]:
+        """(part, value) for every registered part this design carries."""
+        return [(p, v) for p in _dp.registered() if (v := self._parts.get(p.name)) is not None]
 
     # -----------------------------
     # Printing & Rendering
@@ -883,6 +1083,8 @@ class Design:
             ("MOS", str(self.mos)),
             ("Population size", self._fmt_pop_size(self.pop_size)),
         ]
+        if self.singleton is not None:
+            rows.append(("Singleton", repr(self.singleton)))
         for k, v in rows:
             t.add_row(k, v)
 
@@ -913,6 +1115,8 @@ class Design:
             f"  MOS              : {self.mos}",
             f"  Population size  : {self._fmt_pop_size(self.pop_size)}",
         ]
+        if self.singleton is not None:
+            lines.append(f"  Singleton        : {self.singleton!r}")
         if self.rep_wgts is not None:
             sub_lines = self._repweights_summary().splitlines()
             lines.append("  Replicate weights")
@@ -982,27 +1186,42 @@ class Design:
         if self.wr:
             parts.append("wr=True")
 
-        if self.rep_wgts:
-            rw = self.rep_wgts
-            # `.method` is the variant's tag and always a str. The getattr(...,
-            # "name", ...) dance here was for the estimation-method enum, which
-            # #131 removed.
-            parts.append(
-                f"rep_wgts={rw.method}(n_reps={rw.n_reps}, prefix='{rw.prefix}', df={rw.df})"
-            )
-        else:
-            parts.append("rep_wgts=None")
+        for part in _dp.registered():
+            shown = part.repr(self._parts.get(part.name))
+            if shown:
+                parts.append(shown)
 
         return f"Design({', '.join(parts)})"
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Design):
             return False
-        return (
-            all(getattr(self, f) == getattr(other, f) for f in _FIELDS)
-            and self.rep_wgts == other.rep_wgts
-            and self.wgt_adjustment == other.wgt_adjustment
+        names = [p.name for p in _dp.registered()]
+        return all(getattr(self, f) == getattr(other, f) for f in _FIELDS) and all(
+            self._parts.get(n) == other._parts.get(n) for n in names
         )
 
     def __hash__(self) -> int:
-        return hash((tuple(getattr(self, f) for f in _FIELDS), self.rep_wgts, self.wgt_adjustment))
+        return hash(
+            (
+                tuple(getattr(self, f) for f in _FIELDS),
+                tuple(self._parts.get(p.name) for p in _dp.registered()),
+            )
+        )
+
+    def _to_code(self) -> str:
+        """Source that rebuilds this design: ``svy.Design(...)``, runnable with
+        only ``import svy``."""
+        args = []
+        for f in _FIELDS:
+            value = getattr(self, f)
+            if value is None or (f == "wr" and value is False):
+                continue
+            if isinstance(value, PopSize):
+                code = f"svy.PopSize(psu={value.psu!r}, ssu={value.ssu!r})"
+            else:
+                code = _value_code(value)
+            args.append(f"{f}={code}")
+        for part, value in self._part_items():
+            args.append(f"{part.name}={part.to_code(value)}")
+        return f"svy.Design({', '.join(args)})"

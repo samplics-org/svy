@@ -404,6 +404,11 @@ def prepare_data(
         Dataclass with all prepared data and column names.
     """
     # ── Materialize ──────────────────────────────────────────────────────
+    # Derived design state (singleton variance columns) first: it may rebind
+    # the data or design.
+    _sync = getattr(sample, "_sync_parts", None)
+    if _sync is not None:
+        _sync()
     _raw = sample._data
     local_data: pl.DataFrame = (
         cast(pl.DataFrame, _raw)

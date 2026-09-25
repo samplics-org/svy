@@ -191,6 +191,9 @@ class Estimation:
         return cache
 
     def _get_polars_design_info(self) -> dict[str, Any]:
+        # Derived design state first: it may rebind the data or design, which
+        # the version check below then sees.
+        self._sample._sync_parts()
         if self._polars_cache is not None:
             if self._polars_cache["_data_version"] == self._sample._data_version:
                 return self._polars_cache

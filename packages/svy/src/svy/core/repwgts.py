@@ -335,6 +335,12 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
             return [f"{self.prefix}{i:0{padding}d}" for i in range(1, self.n_reps + 1)]
         return [f"{self.prefix}{i}" for i in range(1, self.n_reps + 1)]
 
+    def _to_code(self) -> str:
+        """``svy.<Variant>(...)`` with the fields that differ from their defaults."""
+        from svy.core.design import _struct_code
+
+        return _struct_code(self, f"svy.{type(self).__name__}")
+
     def columns_from_data(self, data_columns: Sequence[str]) -> list[str]:
         """Generate column names, auto-detecting padding and casing from data.
 

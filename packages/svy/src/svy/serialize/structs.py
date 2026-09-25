@@ -449,6 +449,22 @@ class SdrWgtsData(_RepWgtsDataBase, kw_only=True, frozen=True, tag="SDR", tag_fi
 
 RepWgtsData = BootstrapWgtsData | JackknifeWgtsData | BrrWgtsData | SdrWgtsData
 
+#: A stratum as saved: its column's value, a list of them for tuple strata.
+StratumValue = CatValue | None | list[CatValue | None]
+
+
+class SingletonSpecData(msgspec.Struct, kw_only=True, frozen=True):
+    """How singleton strata are handled (mirrors ``svy.core.design.SingletonSpec``).
+
+    Strata are the stratum columns' values (dates as ISO strings); ``mapping``
+    holds collapse's (singleton, target) pairs.
+    """
+
+    method: str
+    strata: list[StratumValue] = []
+    mapping: list[tuple[StratumValue, StratumValue]] = []
+    name: str | None = None
+
 
 @_kinded("design")
 class DesignData(msgspec.Struct, kw_only=True, frozen=True):
@@ -475,6 +491,9 @@ class DesignData(msgspec.Struct, kw_only=True, frozen=True):
     wr: bool = False
     rep_wgts: RepWgtsData | None = None
     wgt_adjustment: WgtAdjustmentData | None = None
+    singleton: SingletonSpecData | None = None
+    #: Saved forms of design parts with no field of their own, by part name.
+    parts: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------

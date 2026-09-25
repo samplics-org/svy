@@ -120,9 +120,11 @@ svyLab stores it between requests and rebuilds a `Sample` from it. So
 `serialize(design)` gives a `DesignData` and `to_design(data)` gives the live
 `Design` back, with `to_design(from_json(to_json(d))) == d`. Its own schema id,
 `svy-design/0.1`, since the two-way contract differs from the results'. The
-saved structs mirror the live ones (`PopSizeData`, `WgtAdjustmentData`, a
-`RepWgtsData` union tagged by `method`), as results do, and a test holds their
-fields equal to the live classes'. What is saved is one design: the history is
+saved structs mirror the live ones (`PopSizeData`, `WgtAdjustmentData`,
+`SingletonSpecData`, a `RepWgtsData` union tagged by `method`), as results do,
+and a test holds their fields equal to the live classes'. Each design part
+(`svy.core.design_parts`) saves itself into its own field, or into `parts` when
+`DesignData` has none for it. What is saved is one design: the history is
 not part of it, and a design is valid only with a frame holding
 `design.columns()` (`Sample(...)` checks). Designs are not in the result
 registry and have no table.
