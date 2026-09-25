@@ -64,7 +64,8 @@ class FDistData(msgspec.Struct, kw_only=True, frozen=True):
 class TDistData(msgspec.Struct, kw_only=True, frozen=True):
     """T-distribution test result (mirrors ``svy.core.containers.TDist``)."""
 
-    df: float
+    #: An int when the source holds one (a GLM's design df), so tables keep its dtype.
+    df: int | float
     value: float
     p_value: float
 
@@ -225,7 +226,7 @@ class EstimateData(msgspec.Struct, kw_only=True, frozen=True):
     """
     Serialization struct for ``svy.estimation.estimate.Estimate``.
 
-    Excludes: covariance, strata, singletons, domains, as_factor.
+    Excludes: covariance, strata, singletons, domains.
     """
 
     kind: Literal["estimate"] = "estimate"
@@ -243,6 +244,9 @@ class EstimateData(msgspec.Struct, kw_only=True, frozen=True):
     #: decode; a deff is ambiguous without it, since the two references differ
     #: by 1 - n/N.
     deff_ref: str | None = None
+    #: A mean or total over a categorical variable's levels, which puts each
+    #: row's level in its own column, as a proportion does.
+    as_factor: bool = False
 
 
 @_kinded("estimate_list")

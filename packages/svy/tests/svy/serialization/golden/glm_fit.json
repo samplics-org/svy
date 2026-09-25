@@ -7,12 +7,12 @@
       "term": "intercept",
       "uci": 36000.0,
       "wald": {
-        "df": 496.0,
+        "df": 496,
         "p_value": 0.0001,
         "value": 16.0
       },
       "wald_adj": {
-        "df": 450.0,
+        "df": 450,
         "p_value": 0.0001,
         "value": 15.5
       }

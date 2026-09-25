@@ -42,6 +42,27 @@ class SerializationError(SvyError):
             docs_url=_DOCS_URL,
         )
 
+    # ---- Table view (payload -> DataFrame) ----------------------------------
+
+    @classmethod
+    def no_table(
+        cls,
+        *,
+        got_type: str,
+        supported: Sequence[str],
+        hint: Optional[str] = "Read its fields directly; this result kind has no table.",
+    ) -> "SerializationError":
+        return cls(
+            title="No table for this payload",
+            detail=f"'{got_type}' has no table view.",
+            code="PAYLOAD_NO_TABLE",
+            where="to_polars",
+            expected=list(supported),
+            got=got_type,
+            hint=hint,
+            docs_url=_DOCS_URL,
+        )
+
     # ---- Decoding (JSON payload -> struct) ----------------------------------
 
     @classmethod

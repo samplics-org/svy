@@ -4,12 +4,13 @@ svy.serialize — stable, versioned serialization for svy result objects.
 
 Public API::
 
-    from svy.serialize import serialize, to_json, to_dict, from_json
+    from svy.serialize import serialize, to_json, to_dict, from_json, to_polars
 
     data = serialize(result)       # -> ResultData (kind-tagged struct)
     js   = to_json(result)         # -> bytes
     d    = to_dict(result)         # -> dict[str, Any]
     data = from_json(js)           # -> ResultData
+    df   = to_polars(data)         # -> pl.DataFrame, as result.to_polars()
 
 See ``DESIGN.md`` in this directory for the full design rationale and
 struct reference.
@@ -40,6 +41,7 @@ from svy.serialize.structs import (
     TTestStatsData,
     TTestTwoGroupsData,
 )
+from svy.serialize.tables import to_polars
 
 
 __all__ = [
@@ -48,6 +50,7 @@ __all__ = [
     "to_json",
     "to_dict",
     "from_json",
+    "to_polars",
     # Constants
     "SCHEMA_VERSION",
     # Top-level structs (kind-tagged)

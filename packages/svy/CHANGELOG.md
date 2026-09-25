@@ -6,6 +6,14 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Added
+
+- **`svy.serialize.to_polars(data, *, row_index=None, **options)`** gives a serialized result's table, the same frame its live result's `to_polars()` returns, from the payload alone (for example after `from_json`). It covers estimates, estimate lists, t-tests, tables, GLM fits and GLM predictions, with the options that need nothing beyond the payload (`tidy`, `component`, `exponentiate`). `row_index="row"` adds a first column holding each table row's position in the payload's rows; estimate tables are sorted for display, so this is how a table row is matched back to its payload row. The live and payload tables are built by the same function per result kind.
+
+### Changed
+
+- **Serialization schema `svy-result/0.4`.** `EstimateData` gains `as_factor`, which decides whether the table has a level column. `TDistData.df` is now `int | float`, so a GLM coefficient's design df stays an integer. Both are additive: `0.3` payloads still decode.
+
 ### Fixed
 
 - **Saved results lost NaN and infinity, and `from_json` failed on them.** JSON has neither, so `to_json` wrote each as `null`, which then refused to decode into a `float` field: a singleton domain's interval, a CV of an estimate at 0 or a NaN quantile limit made the saved result unreadable, and a NaN `deff` came back as not requested. `to_json` still writes `null`, and now records the exact value under a top-level `"nonfinite"` field keyed by JSON Pointer (`{"/estimates/3/cv": "inf"}`); `from_json` restores it. Consumers that ignore the field see `null` as before. A payload written without the field reads a `null` plain float as NaN. Schema `svy-result/0.4`.
