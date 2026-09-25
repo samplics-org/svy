@@ -24,6 +24,7 @@ from svy.wrangling.columns import clean_names as _clean_names
 from svy.wrangling.columns import keep_columns as _keep_columns
 from svy.wrangling.columns import remove_columns as _remove_columns
 from svy.wrangling.columns import rename_columns as _rename_columns
+from svy.wrangling.columns import rename_rep_wgts as _rename_rep_wgts
 from svy.wrangling.join import join as _join
 from svy.wrangling.labels import apply_labels as _apply_labels
 from svy.wrangling.mutate import mutate as _mutate
@@ -96,6 +97,48 @@ class Wrangling:
     ) -> "Sample":
         """Rename columns directly."""
         return _rename_columns(self._sample, renames, inplace=inplace)
+
+    def rename_rep_wgts(
+        self,
+        prefixes: Mapping[str, str],
+        *,
+        inplace: bool = False,
+    ) -> "Sample":
+        """Rename replicate-weight sets, keyed by their current prefix.
+
+        A sample can carry several sets: the design's and those of earlier
+        designs in ``design_history`` (``w1..w20`` with ``w``, ``ps_wgt1..`` with
+        ``ps_wgt``). Each column keeps its replicate number and zero-padding
+        (``w1`` -> ``final_w1``, ``w01`` -> ``final_w01``), and only the set's own
+        columns are renamed, never a look-alike such as ``w2023``. Every design
+        using a set, current or earlier, follows, as for ``rename_columns``.
+
+        Parameters
+        ----------
+        prefixes : Mapping[str, str]
+            Current prefix to new prefix. A prefix mapped to itself is a no-op.
+        inplace : bool
+            Rename on this sample instead of returning a new one.
+
+        Raises
+        ------
+        MethodError
+            ``REP_WGTS_MISSING`` when the sample has no replicate weights,
+            ``REP_WGTS_UNKNOWN_PREFIX`` for a prefix it does not carry,
+            ``REP_WGTS_PREFIX_INVALID`` for an empty new prefix, and
+            ``REP_WGTS_RENAME_COLLISION`` when a new name is already a column or
+            two sets would get the same names. Nothing is changed.
+
+        Examples
+        --------
+        >>> s = sample.weighting.poststratify(controls, cells="region", wgt_name="ps_wgt")
+        >>> s.design.rep_wgts.prefix
+        'ps_wgt'
+        >>> s = s.wrangling.rename_rep_wgts({"ps_wgt": "ps_final", "w": "base_w"})
+        >>> s.design.rep_wgts.prefix, s.design_history[0].rep_wgts.prefix
+        ('ps_final', 'base_w')
+        """
+        return _rename_rep_wgts(self._sample, prefixes, inplace=inplace)
 
     def remove_columns(
         self,

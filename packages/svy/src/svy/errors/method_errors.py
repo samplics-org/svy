@@ -69,6 +69,127 @@ class MethodError(SvyError):
         )
 
     @classmethod
+    def weight_overwrite(
+        cls,
+        *,
+        where: Optional[str],
+        columns: dict[str, str],
+    ) -> "MethodError":
+        """A wrangling step would write new values into a weight column.
+
+        ``columns`` maps each column to what depends on it, as a phrase that
+        completes "'<column>' is ...".
+        """
+        roles = "; ".join(f"{c!r} is {why}" for c, why in columns.items())
+        col = next(iter(columns))
+        return cls(
+            title="Weight columns cannot be overwritten",
+            detail=(
+                f"{roles}. New values under the same name would be a different "
+                "variable that the design, its weight-adjustment record, replicate "
+                "weights or history still read as the old one."
+            ),
+            code="WEIGHT_OVERWRITE",
+            where=where,
+            param=col,
+            got=list(columns),
+            hint=(
+                f"Write the new values under a new name, e.g. "
+                f"sample.wrangling.mutate({{{col + '_new'!r}: ...}}), or rename first, "
+                f"sample.wrangling.rename_columns({{{col!r}: {col + '_v1'!r}}}), which "
+                f"carries the rename through the design and its history, then write {col!r}."
+            ),
+        )
+
+    @classmethod
+    def data_rows_changed(cls, *, where: Optional[str], n_old: int, n_new: int) -> "MethodError":
+        return cls(
+            title="Rows changed outside svy",
+            detail=(
+                f"The new frame has {n_new} rows; the sample has {n_old}. Rows added "
+                "or removed outside svy cannot be checked against the design's "
+                "weights, replicate weights and history."
+            ),
+            code="DATA_ROWS_CHANGED",
+            where=where,
+            expected=n_old,
+            got=n_new,
+            hint=(
+                "Change rows through svy: sample.wrangling.filter_records to drop "
+                "records, sample.wrangling.join to bring variables in, "
+                "svy.combine_samples to stack samples. For an unrelated frame, build "
+                "a new Sample(data, design)."
+            ),
+        )
+
+    @classmethod
+    def no_rep_wgts(cls, *, where: Optional[str]) -> "MethodError":
+        return cls(
+            title="No replicate weights to rename",
+            detail="The design carries no replicate weights.",
+            code="REP_WGTS_MISSING",
+            where=where,
+            hint=(
+                "Declare them with Design(rep_wgts=...) or create them with "
+                "sample.weighting.create_bs_wgts/create_jk_wgts/create_brr_wgts/"
+                "create_sdr_wgts; other columns are renamed with rename_columns."
+            ),
+        )
+
+    @classmethod
+    def invalid_rep_prefix(cls, *, where: Optional[str], got: Any) -> "MethodError":
+        return cls(
+            title="Invalid replicate-weight prefix",
+            detail=f"The new prefix must be a non-empty string; got {got!r}.",
+            code="REP_WGTS_PREFIX_INVALID",
+            where=where,
+            param="prefix",
+            got=got,
+            hint="Map each prefix to the name its replicate numbers should follow, "
+            "e.g. {'w': 'final_w'}.",
+        )
+
+    @classmethod
+    def unknown_rep_prefix(
+        cls, *, where: Optional[str], got: Any, known: dict[str, tuple[Any, int]]
+    ) -> "MethodError":
+        listed = ", ".join(f"{p!r} ({n} replicates of {w!r})" for p, (w, n) in known.items())
+        return cls(
+            title="Unknown replicate-weight set",
+            detail=f"No replicate weights with prefix {got!r}. This sample carries: {listed}.",
+            code="REP_WGTS_UNKNOWN_PREFIX",
+            where=where,
+            param="prefixes",
+            got=got,
+            expected=list(known),
+            hint="Key the mapping by one of those prefixes, e.g. {"
+            + f"{next(iter(known))!r}: 'new_prefix'"
+            + "}.",
+        )
+
+    @classmethod
+    def rep_rename_collision(
+        cls, *, where: Optional[str], prefix: str, existing: list[str]
+    ) -> "MethodError":
+        shown = existing[:10]
+        more = "" if len(existing) <= 10 else f" and {len(existing) - 10} more"
+        return cls(
+            title="Replicate-weight names already taken",
+            detail=(
+                f"Renaming to {prefix!r} would give names that are already columns, "
+                f"or that two replicate sets would share: {shown}{more}."
+            ),
+            code="REP_WGTS_RENAME_COLLISION",
+            where=where,
+            param="prefix",
+            got=prefix,
+            hint=(
+                "Pick another prefix, or rename or remove those columns first "
+                "(sample.wrangling.rename_columns / remove_columns)."
+            ),
+        )
+
+    @classmethod
     def mutate_cycle(cls, cycle_list: str, *, where: str | None = None) -> "MethodError":
         return cls(
             title="Column transformation failed",

@@ -24,7 +24,6 @@ call :func:`prepare_data` rather than maintaining their own prep logic.
 from __future__ import annotations
 
 import logging
-import re
 import warnings
 
 from dataclasses import dataclass, field
@@ -284,11 +283,6 @@ def extract_where_cols(where: WhereArg) -> list[str]:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _natural_keys(text: str) -> list:
-    """Natural sort key for replicate weight column names like 'repwtp1', 'repwtp2', ..."""
-    return [int(c) if c.isdigit() else c for c in re.split(r"(\d+)", text)]
-
-
 def _resolve_rep_weight_cols(data: pl.DataFrame, design) -> list[str]:
     """Resolve replicate weight column names from the design.
 
@@ -310,27 +304,15 @@ def _resolve_rep_weight_cols(data: pl.DataFrame, design) -> list[str]:
     data_cols = data.columns
 
     if rw.prefix:
-        # Strict `^prefix\d+$` matching (the same rule as
-        # RepWeights.columns_from_data). A loose startswith() absorbed any
-        # column sharing the prefix (e.g. 'repwt_flag' for prefix 'repwt')
-        # into the replicate set, corrupting the variance.
-        pattern = re.compile(rf"^{re.escape(rw.prefix)}\d+$", re.IGNORECASE)
-        cols = sorted(
-            [c for c in data_cols if pattern.match(c)],
-            key=lambda c: _natural_keys(c.lower()),
-        )
-        if cols and len(cols) != rw.n_reps:
-            raise DimensionError(
-                title="Replicate weight column count mismatch",
-                detail=f"Found {len(cols)} columns matching '{rw.prefix}<number>' "
-                f"but RepWeights declares n_reps={rw.n_reps}.",
-                code="REP_WEIGHT_COUNT_MISMATCH",
-                where="core.data_prep",
-                param="rep_wgts",
-                expected=rw.n_reps,
-                got=len(cols),
-                hint="Check the replicate weight prefix and n_reps, or drop "
-                "stray columns that match the prefix-number pattern.",
+        # The spec's own columns (prefix + 1..n_reps, padding and casing
+        # resolved against the data), never whatever matches a pattern: a
+        # regex absorbed look-alikes such as 'w2023' or 'W1' into the set.
+        cols = rw.columns_from_data(data_cols)
+        present = set(data_cols)
+        missing = [c for c in cols if c not in present]
+        if missing:
+            raise DimensionError.missing_columns(
+                where="core.data_prep", param="rep_wgts", missing=missing, available=data_cols
             )
     elif hasattr(rw, "wgts") and rw.wgts:
         # First-occurrence wins on case-insensitive collision.

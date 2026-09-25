@@ -1149,7 +1149,8 @@ def test_force_removal_warning_points_at_the_callers_line(api):
 
 
 def test_replicates_do_not_attach_to_a_new_weight_after_their_weight_is_removed(api_bs):
-    rk = _rake(api_bs()).wrangling.remove_columns("rk", force=True)
+    with pytest.warns(UserWarning, match="rep_wgts"):
+        rk = _rake(api_bs()).wrangling.remove_columns("rk", force=True)
     rk.wrangling.mutate({"w_new": pl.col("pw") * 2}, inplace=True)
     with no_warnings():
         rk.update_design(wgt="w_new")

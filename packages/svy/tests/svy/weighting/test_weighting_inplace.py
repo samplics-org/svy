@@ -188,7 +188,7 @@ def test_fork_isolates_the_warning_store(sample):
     effect on my Sample" is only true if the warning store is untouched as
     well. The error is still raised, and still emitted to the log.
     """
-    negative = sample.wrangling.mutate({"wgt": pl.lit(-1.0)})
+    negative = sample.wrangling.mutate({"wgt_neg": pl.lit(-1.0)}).update_design(wgt="wgt_neg")
     before = len(negative._warnings.list(code=WarnCode.NEGATIVE_WEIGHT))
 
     with pytest.raises(Exception, match="negative weight|Negative weights"):

@@ -9,9 +9,8 @@ and metadata-key updates.  Nothing here imports from Sample directly.
 from __future__ import annotations
 
 import math
-import re
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Sequence
 
 from msgspec.structs import replace as _struct_replace
 
@@ -66,17 +65,22 @@ def _map_tuple_in_design(
     return tuple(renames.get(s, s) for s in design_field)
 
 
-def _rep_wgts_with_renames(rep_wgts: RepWeights, renames: dict[str, str]) -> RepWeights:
+def _rep_wgts_with_renames(
+    rep_wgts: RepWeights,
+    renames: dict[str, str],
+    data_columns: Sequence[str] | None = None,
+) -> RepWeights:
     """Return RepWeights updated for column renames.
 
-    Replicate weight columns are identified by ``prefix`` + replicate number,
-    so a rename can only be represented when the trailing number is preserved
-    and all renamed columns share one new prefix.  Otherwise raise.
+    The replicate columns are the spec's own list, resolved against
+    ``data_columns`` (the frame before the rename), so only those exact names
+    count: a column that merely looks like one (``w2023``, ``W1``, ``w01`` next
+    to unpadded ``w1``) is an ordinary column. A rename of the replicates can
+    only be represented when every one is renamed to a common new prefix,
+    keeping its number and padding. Otherwise raise.
 
     The recorded units (``stratum``/``psu``) are plain column references and are
-    remapped independently of the prefix: renaming a variance-stratum column
-    does not touch the replicate columns, and the prefix branch below returns
-    early when no replicate column matched.
+    remapped independently of the prefix.
     """
     unit_updates: dict[str, str | tuple[str, ...]] = {}
     for field in ("stratum", "psu"):
@@ -93,36 +97,34 @@ def _rep_wgts_with_renames(rep_wgts: RepWeights, renames: dict[str, str]) -> Rep
             if mapped != cur:
                 unit_updates[field] = mapped
 
-    pattern = re.compile(rf"^{re.escape(rep_wgts.prefix)}(\d+)$", re.IGNORECASE)
+    rep_cols = (
+        rep_wgts.columns_from_data(data_columns) if data_columns is not None else rep_wgts.columns
+    )
+    matched = [c for c in rep_cols if c in renames]
+    if not matched:
+        return _struct_replace(rep_wgts, **unit_updates) if unit_updates else rep_wgts
     new_prefixes: set[str] = set()
-    matched_olds: set[str] = set()
-    for old, new in renames.items():
-        m = pattern.match(old)
-        if m is None:
-            continue
-        digits = m.group(1)
-        if not new.endswith(digits):
+    for old in matched:
+        new = renames[old]
+        suffix = old[len(rep_wgts.prefix) :]
+        if not new.endswith(suffix) or len(new) == len(suffix):
             raise ValueError(
                 f"Cannot rename replicate weight column {old!r} to {new!r}: "
-                f"the replicate number suffix {digits!r} must be preserved."
+                f"the replicate number suffix {suffix!r} must be preserved."
             )
-        new_prefixes.add(new[: len(new) - len(digits)])
-        matched_olds.add(old)
-    if not new_prefixes:
-        return _struct_replace(rep_wgts, **unit_updates) if unit_updates else rep_wgts
+        new_prefixes.add(new[: len(new) - len(suffix)])
     if len(new_prefixes) > 1:
         raise ValueError(
             "Replicate weight columns must all be renamed with the same prefix; "
             f"got prefixes {sorted(new_prefixes)}."
         )
-    # Replicate columns are identified as prefix + number, so a partial
-    # rename cannot be represented: the new prefix would claim columns that
-    # were never renamed, corrupting the replicate metadata.
-    not_renamed = [c for c in rep_wgts.columns if c not in matched_olds]
+    # A partial rename cannot be represented: the spec names its columns as
+    # prefix + number, so the new prefix would claim columns never renamed.
+    not_renamed = [c for c in rep_cols if c not in renames]
     if not_renamed:
         raise ValueError(
             f"Partial replicate-weight rename: {len(not_renamed)} of "
-            f"{len(rep_wgts.columns)} replicate columns were not renamed "
+            f"{len(rep_cols)} replicate columns were not renamed "
             f"(e.g. {not_renamed[:3]}). Rename all replicate columns together "
             "with a common new prefix, keeping the numeric suffixes."
         )
@@ -156,7 +158,11 @@ def _record_with_renames(
     )
 
 
-def _design_with_renamed_columns(design: Design, renames: dict[str, str]) -> Design:
+def _design_with_renamed_columns(
+    design: Design,
+    renames: dict[str, str],
+    data_columns: Sequence[str] | None = None,
+) -> Design:
     """Return a new Design with all column references updated by *renames*.
 
     Covers the design fields, the replicate columns and units, the weight the
@@ -167,7 +173,7 @@ def _design_with_renamed_columns(design: Design, renames: dict[str, str]) -> Des
 
     new_rep = design.rep_wgts
     if design.rep_wgts is not None:
-        new_rep = _rep_wgts_with_renames(design.rep_wgts, renames)
+        new_rep = _rep_wgts_with_renames(design.rep_wgts, renames, data_columns)
 
     return design.update(
         case_id=_map_name_in_design(design.case_id, renames),
@@ -185,7 +191,11 @@ def _design_with_renamed_columns(design: Design, renames: dict[str, str]) -> Des
     )
 
 
-def _history_with_renamed_columns(sample: "Sample", renames: dict[str, str]) -> None:
+def _history_with_renamed_columns(
+    sample: "Sample",
+    renames: dict[str, str],
+    data_columns: Sequence[str] | None = None,
+) -> None:
     """Carry a rename into the sample's earlier designs.
 
     A rename relabels a column without changing it, so an earlier design that
@@ -200,7 +210,7 @@ def _history_with_renamed_columns(sample: "Sample", renames: dict[str, str]) -> 
     renamed: list[Design] = []
     for d in history:
         try:
-            renamed.append(_design_with_renamed_columns(d, renames))
+            renamed.append(_design_with_renamed_columns(d, renames, data_columns))
         except ValueError:
             renamed.append(d)
     sample._design_history = tuple(renamed)

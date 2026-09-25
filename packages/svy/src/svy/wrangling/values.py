@@ -20,6 +20,7 @@ from svy.engine.wrangling.cleaning import (
 from svy.errors import DimensionError, MethodError
 from svy.wrangling._helpers import (
     _eager_df,
+    _guard_weight_writes,
     _rebuild_concat_if_touched,
     _resolve_target,
 )
@@ -40,6 +41,9 @@ def top_code(
     """Cap values at upper bounds (top coding)."""
     _df = _eager_df(sample)
     new_data = _top_code(_df, top_codes=top_codes, replace=replace, into=into)
+    _guard_weight_writes(
+        sample, new_data, where="wrangling.top_code", targets=top_codes if replace else ()
+    )
     target = _resolve_target(sample, new_data, inplace=inplace)
     if replace:
         _rebuild_concat_if_touched(sample, target, set(top_codes.keys()))
@@ -57,6 +61,9 @@ def bottom_code(
     """Cap values at lower bounds (bottom coding)."""
     _df = _eager_df(sample)
     new_data = _bottom_code(_df, bottom_codes=bottom_codes, replace=replace, into=into)
+    _guard_weight_writes(
+        sample, new_data, where="wrangling.bottom_code", targets=bottom_codes if replace else ()
+    )
     target = _resolve_target(sample, new_data, inplace=inplace)
     if replace:
         _rebuild_concat_if_touched(sample, target, set(bottom_codes.keys()))
@@ -79,6 +86,12 @@ def bottom_and_top_code(
         replace=replace,
         into=into,
     )
+    _guard_weight_writes(
+        sample,
+        new_data,
+        where="wrangling.bottom_and_top_code",
+        targets=bottom_and_top_codes if replace else (),
+    )
     target = _resolve_target(sample, new_data, inplace=inplace)
     if replace:
         _rebuild_concat_if_touched(sample, target, set(bottom_and_top_codes.keys()))
@@ -97,6 +110,12 @@ def recode(
     """Map old values to new labels."""
     _df = _eager_df(sample)
     new_data = _recode(_df, cols=cols, recodes=recodes, replace=replace, into=into)
+    _guard_weight_writes(
+        sample,
+        new_data,
+        where="wrangling.recode",
+        targets=([cols] if isinstance(cols, str) else cols) if replace else (),
+    )
     target = _resolve_target(sample, new_data, inplace=inplace)
     if replace:
         touched = {cols} if isinstance(cols, str) else set(cols)
@@ -192,6 +211,9 @@ def categorize(
         replace=replace,
         into=into,
     )
+    _guard_weight_writes(
+        sample, new_data, where="wrangling.categorize", targets=[col] if replace else ()
+    )
     target = _resolve_target(sample, new_data, inplace=inplace)
     if replace:
         _rebuild_concat_if_touched(sample, target, {col})
@@ -281,6 +303,9 @@ def cast_columns(
                 )
 
     new_data = sample._data.with_columns(exprs)
+    _guard_weight_writes(
+        sample, new_data, where="wrangling.cast", targets=col_names, widening_only=True
+    )
     target = _resolve_target(sample, new_data, inplace=inplace)
     _rebuild_concat_if_touched(sample, target, col_names)
     return target
@@ -329,6 +354,7 @@ def fill_null(
         exprs = [pl.col(c).fill_null(value).alias(c) for c in col_list]
 
     new_data = sample._data.with_columns(exprs)
+    _guard_weight_writes(sample, new_data, where="wrangling.fill_null", targets=col_list)
     target = _resolve_target(sample, new_data, inplace=inplace)
     _rebuild_concat_if_touched(sample, target, set(col_list))
     return target

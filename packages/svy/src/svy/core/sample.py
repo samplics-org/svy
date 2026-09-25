@@ -991,33 +991,9 @@ class Sample:
         # columns. A frame missing any of them is not the frame this design
         # describes (a stale version, a column subset), so it fails here rather
         # than as a silent fallback at estimation.
-        present = set(data.columns)
-        missing = [c for c in design.columns(data_columns=data.columns) if c not in present]
-        if missing:
-            shown = missing[:10]
-            more = "..." if len(missing) > 10 else ""
-            notes: list[str] = []
-            rw = design.rep_wgts
-            if rw is not None and any(
-                c in missing for c in (*unit_columns(rw.stratum), *unit_columns(rw.psu))
-            ):
-                notes.append(
-                    "rep_wgts.stratum/psu name the units the replicates were built "
-                    "from, which is a separate question from the Design's stratum/psu."
-                )
-            rec = design.wgt_adjustment
-            if rec is not None and any(
-                c in missing
-                for c in (rec.new_wgt, rec.prev_wgt, *(rec.cells or ()), *(rec.aux or ()))
-            ):
-                notes.append(
-                    f"wgt_adjustment ({rec.kind}) reads its columns from the data; "
-                    "they are written by the weighting method and must travel with it."
-                )
-            raise ValueError(
-                f"Design references columns not found in data: {shown}{more}"
-                + ("" if not notes else " " + " ".join(notes))
-            )
+        err = self._missing_columns_error(design, data.columns)
+        if err is not None:
+            raise err
 
         # 1b. Validate pop_size columns are numeric
         if design.pop_size is not None:
@@ -1126,6 +1102,105 @@ class Sample:
                     f"No case of wave {ov.prev!r} appears in wave {ov.wave!r}: these look "
                     "like two unrelated cross-sections stacked as a panel. Check case_id."
                 )
+
+    @staticmethod
+    def _missing_columns_error(design: Design, data_columns: Sequence[str]) -> ValueError | None:
+        present = set(data_columns)
+        missing = [c for c in design.columns(data_columns=data_columns) if c not in present]
+        if not missing:
+            return None
+        shown = missing[:10]
+        more = "..." if len(missing) > 10 else ""
+        notes: list[str] = []
+        rw = design.rep_wgts
+        if rw is not None and any(
+            c in missing for c in (*unit_columns(rw.stratum), *unit_columns(rw.psu))
+        ):
+            notes.append(
+                "rep_wgts.stratum/psu name the units the replicates were built "
+                "from, which is a separate question from the Design's stratum/psu."
+            )
+        rec = design.wgt_adjustment
+        if rec is not None and any(
+            c in missing for c in (rec.new_wgt, rec.prev_wgt, *(rec.cells or ()), *(rec.aux or ()))
+        ):
+            notes.append(
+                f"wgt_adjustment ({rec.kind}) reads its columns from the data; "
+                "they are written by the weighting method and must travel with it."
+            )
+        return ValueError(
+            f"Design references columns not found in data: {shown}{more}"
+            + ("" if not notes else " " + " ".join(notes))
+        )
+
+    def _check_data_lineage(self, data: pl.DataFrame, *, where: str) -> None:
+        """Refuse a frame that rewrites the weights the design or its history read.
+
+        Same rows: every protected column (the weights, replicate weights and
+        record columns of the current and earlier designs) must keep its values,
+        compared positionally; an exact widening cast is fine. Different rows:
+        refused when the sample has lineage (a record, replicates or history),
+        since the weights can no longer be checked against it.
+        """
+        from svy.wrangling._helpers import _unchanged, _weight_lineage_columns
+
+        old = self._data if isinstance(self._data, pl.DataFrame) else self._data.collect()
+        design = self._design
+        history = getattr(self, "_design_history", ())
+        if data.height != old.height:
+            if history or (
+                design is not None
+                and (design.wgt_adjustment is not None or design.rep_wgts is not None)
+            ):
+                raise MethodError.data_rows_changed(
+                    where=where, n_old=old.height, n_new=data.height
+                )
+            return
+        roles = _weight_lineage_columns(self)
+        bad = {
+            c: why
+            for c, why in roles.items()
+            if c in data.columns and not _unchanged(old.get_column(c), data.get_column(c))
+        }
+        if bad:
+            raise MethodError.weight_overwrite(where=where, columns=bad)
+
+    def _install_data(self, data: pl.DataFrame, *, where: str, align: bool) -> None:
+        """Checks run before anything is rebound; a later failure restores the
+        sample, so a refused frame leaves it untouched."""
+        if SVY_ROW_INDEX not in data.columns:
+            data = data.with_row_index(name=SVY_ROW_INDEX)
+        self._check_data_lineage(data, where=where)
+        if self._design is not None:
+            err = self._missing_columns_error(self._design, data.columns)
+            if err is not None:
+                raise err
+        saved = (
+            self._data,
+            self._internal_design,
+            getattr(self, "_singletons", None),
+            copy.deepcopy(self._metadata),
+            copy.deepcopy(self._warnings),
+        )
+        try:
+            self._data = data
+            if align:
+                self._metadata.align_to_dataframe(self._data)
+            else:
+                # Infer metadata for new columns (don't overwrite existing)
+                self._metadata.infer_from_dataframe(self._data, overwrite=False)
+            # New data can change the design's validity and singleton
+            # structure; rebuild internal state exactly as __init__ does.
+            self._refresh_internal_state()
+        except Exception:
+            (
+                self._data,
+                self._internal_design,
+                self._singletons,
+                self._metadata,
+                self._warnings,
+            ) = saved
+            raise
 
     @staticmethod
     def _pop_size_cols(design: Design) -> list[str]:
@@ -1686,23 +1761,18 @@ class Sample:
         self._validate_design()
 
     def set_data(self, data: pl.DataFrame) -> Self:
-        self._data = data
-        if SVY_ROW_INDEX not in self._data.columns:
-            self._data = self._data.with_row_index(name=SVY_ROW_INDEX)
-        # Infer metadata for new columns (don't overwrite existing)
-        self._metadata.infer_from_dataframe(self._data, overwrite=False)
-        # New data can change the design's validity and singleton structure;
-        # rebuild internal state exactly as __init__ does (version-keyed
-        # caches are already invalidated by the __setattr__ hook).
-        self._refresh_internal_state()
+        """Replace the data, keeping existing metadata and inferring new columns'.
+
+        The weights, replicate weights and record columns of the design and
+        its history must keep their values (``WEIGHT_OVERWRITE``), and the rows
+        must stay the same when the sample has lineage (``DATA_ROWS_CHANGED``).
+        """
+        self._install_data(data, where="set_data", align=False)
         return self
 
     def update_data(self, data: pl.DataFrame) -> Self:
-        self._data = data
-        if SVY_ROW_INDEX not in self._data.columns:
-            self._data = self._data.with_row_index(name=SVY_ROW_INDEX)
-        self._metadata.align_to_dataframe(self._data)
-        self._refresh_internal_state()
+        """Replace the data and align metadata to it; checked as ``set_data``."""
+        self._install_data(data, where="update_data", align=True)
         return self
 
     # ════════════════════════════════════════════════════════════════════════
@@ -1904,6 +1974,15 @@ class Sample:
         )
         new_data: pl.DataFrame = (src_data if src_data is not None else _fallback).clone()
         new_design: Design | None = copy.deepcopy(src_design) if src_design is not None else None
+        if src_data is not None and data is not _MISSING:
+            # The clone carries this sample's history, so a new frame is held
+            # to the same weight lineage as set_data.
+            self._check_data_lineage(
+                new_data
+                if SVY_ROW_INDEX in new_data.columns
+                else new_data.with_row_index(name=SVY_ROW_INDEX),
+                where="clone",
+            )
 
         s = Sample(new_data, new_design, catalog=src_catalog)
 

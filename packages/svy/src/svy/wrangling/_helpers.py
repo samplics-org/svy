@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import warnings
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Iterable, cast
 
 import polars as pl
 
@@ -26,6 +26,7 @@ from svy.core.constants import (
     SVY_ROW_INDEX,
 )
 from svy.core.design import Design, PopSize, _user_stacklevel
+from svy.errors import MethodError
 
 
 if TYPE_CHECKING:
@@ -93,6 +94,119 @@ def _resolve_target(sample: "Sample", new_data: pl.DataFrame, *, inplace: bool) 
         sample._data = new_data
         return sample
     return _fork(sample, new_data)
+
+
+# -------------------------------------------------------------------
+# Weight lineage: columns wrangling must not write into
+# -------------------------------------------------------------------
+
+
+def _weight_lineage_columns(sample: "Sample") -> dict[str, str]:
+    """Weight columns the design or its history reads, with what reads them.
+
+    The current and every earlier design's weight, replicate weights, and the
+    weight-adjustment record's columns. Each value completes "'<col>' is ...";
+    the current design's roles are listed first.
+    """
+    data_columns = sample._data.collect_schema().names()
+    present = set(data_columns)
+    roles: dict[str, str] = {}
+
+    def put(col: str | None, why: str) -> None:
+        if col is not None and col in present:
+            roles.setdefault(col, why)
+
+    history = getattr(sample, "_design_history", ())
+    designs = [sample._design, *reversed(history)] if sample._design is not None else []
+    for i, d in enumerate(designs):
+        put(d.wgt, "the design's weight" if i == 0 else "the weight of an earlier design")
+        rec = d.wgt_adjustment
+        if rec is not None:
+            put(rec.prev_wgt, f"the weight {rec.new_wgt!r} was adjusted from")
+            for c in rec.cells or ():
+                put(c, f"a cell snapshot the {rec.kind} of {rec.new_wgt!r} reads")
+            for c in rec.aux or ():
+                put(c, f"an auxiliary column the {rec.kind} of {rec.new_wgt!r} reads")
+        rw = d.rep_wgts
+        if rw is not None:
+            why = "a replicate weight" + ("" if rw.wgt is None else f" of {rw.wgt!r}")
+            for c in rw.columns_from_data(data_columns):
+                put(c, why)
+    return roles
+
+
+_SIGNED = (pl.Int8, pl.Int16, pl.Int32, pl.Int64)
+_UNSIGNED = (pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64)
+# Integers a float holds exactly: 24-bit mantissa for Float32, 53 for Float64.
+_EXACT_IN_FLOAT = {
+    pl.Float32: (pl.Int8, pl.Int16, pl.UInt8, pl.UInt16),
+    pl.Float64: (pl.Int8, pl.Int16, pl.Int32, pl.UInt8, pl.UInt16, pl.UInt32),
+}
+
+
+def _is_exact_widening(old: pl.DataType, new: pl.DataType) -> bool:
+    """Whether every value of ``old`` is representable unchanged in ``new``."""
+    if old == new:
+        return True
+    if old == pl.Float32 and new == pl.Float64:
+        return True
+    if new in _EXACT_IN_FLOAT:
+        return any(old == t for t in _EXACT_IN_FLOAT[new])
+    for family in (_SIGNED, _UNSIGNED):
+        if old in family and new in family:
+            return family.index(new) > family.index(old)
+    if old in _UNSIGNED and new in _SIGNED:
+        return _SIGNED.index(new) > _UNSIGNED.index(old)
+    return False
+
+
+def _unchanged(old: pl.Series, new: pl.Series) -> bool:
+    if old.dtype == new.dtype and old.null_count() == new.null_count():
+        try:
+            # A column a step did not touch keeps its buffer.
+            if old._get_buffer_info() == new._get_buffer_info():
+                return True
+        except Exception:
+            pass
+    if not _is_exact_widening(old.dtype, new.dtype):
+        return False
+    return old.cast(new.dtype).equals(new, check_names=False, null_equal=True)
+
+
+def _guard_weight_writes(
+    sample: "Sample",
+    new_data: pl.DataFrame,
+    *,
+    where: str,
+    targets: Iterable[str] = (),
+    widening_only: bool = False,
+) -> None:
+    """Refuse a step that writes into a weight-lineage column.
+
+    A weight overwritten under its own name is a new variable that the design,
+    a later weight's record or the replicates would still read as the old one.
+    ``targets`` are the existing columns the step writes by name: refused
+    outright, except that a cast (``widening_only``) may widen exactly. Any
+    other lineage column is refused if its values or type changed. Runs before
+    any data is rebound, so a refused step leaves the sample untouched.
+    """
+    roles = _weight_lineage_columns(sample)
+    if not roles:
+        return
+    old = _eager_df(sample)
+    new = new_data if isinstance(new_data, pl.DataFrame) else new_data.collect()
+    written = set(targets)
+
+    def allowed(c: str) -> bool:
+        if c not in new.columns:
+            return True
+        if c in written:
+            return widening_only and _is_exact_widening(old.schema[c], new.schema[c])
+        return _unchanged(old.get_column(c), new.get_column(c))
+
+    bad = {c: why for c, why in roles.items() if not allowed(c)}
+    if bad:
+        raise MethodError.weight_overwrite(where=where, columns=bad)
 
 
 # -------------------------------------------------------------------

@@ -336,7 +336,33 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
         return [f"{self.prefix}{i}" for i in range(1, self.n_reps + 1)]
 
     def columns_from_data(self, data_columns: Sequence[str]) -> list[str]:
-        """Generate column names, auto-detecting padding and casing from data."""
+        """Generate column names, auto-detecting padding and casing from data.
+
+        A spelling (prefix casing, zero-padding) under which every replicate
+        is present wins, the declared prefix first, so a look-alike column
+        (``w01`` next to unpadded ``w1..w20``, or ``W1``) cannot redirect the
+        replicates. When no spelling is complete, the detection below is kept
+        so the missing columns are reported under the expected names.
+        """
+        present = set(data_columns)
+        pattern = re.compile(rf"^({re.escape(self.prefix)})(\d+)$", re.IGNORECASE)
+        prefixes = [self.prefix]
+        widths: set[int] = {0}
+        for col in data_columns:
+            m = pattern.match(col)
+            if m is None:
+                continue
+            if m.group(1) not in prefixes:
+                prefixes.append(m.group(1))
+            if len(m.group(2)) > 1 and m.group(2)[0] == "0":
+                widths.add(len(m.group(2)))
+        paddings = [self.padding] if self.padding is not None else sorted(widths, reverse=True)
+        for p in prefixes:
+            for w in paddings:
+                cols = [f"{p}{i:0{w}d}" if w else f"{p}{i}" for i in range(1, self.n_reps + 1)]
+                if all(c in present for c in cols):
+                    return cols
+
         padding = self.padding if self.padding is not None else self._detect_padding(data_columns)
         pattern = re.compile(rf"^{re.escape(self.prefix)}\d+$", re.IGNORECASE)
         resolved_prefix = self.prefix
