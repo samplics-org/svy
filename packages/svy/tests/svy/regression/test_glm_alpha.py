@@ -19,6 +19,7 @@ from scipy import stats
 import svy
 
 from svy.core.containers import FDist
+from svy.errors import MethodError
 from svy.regression.glm import GLMFit, GLMStats
 from svy.serialize import from_json, to_json, to_polars
 from svy.serialize.structs import GLMFitData
@@ -255,3 +256,42 @@ class TestPredAndMargins:
         for mm in members:
             for text in (repr(mm), str(mm), mm.__plain_str__()):
                 assert label in text
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+
+class TestValidation:
+    @pytest.mark.parametrize("alpha", [0, 0.0, 1, 1.0, -0.05, 1.5, float("nan"), float("inf")])
+    def test_out_of_range(self, sample, alpha):
+        with pytest.raises(MethodError) as exc:
+            sample.glm.fit("y_num", x=["x"], alpha=alpha)
+        assert exc.value.code == "INVALID_RANGE"
+        assert exc.value.param == "alpha"
+        assert exc.value.where == "GLM.fit"
+        assert "0.05 gives 95%" in str(exc.value)
+
+    @pytest.mark.parametrize("alpha", ["0.05", True, False, None, [0.05]])
+    def test_wrong_type(self, sample, alpha):
+        with pytest.raises(MethodError) as exc:
+            sample.glm.fit("y_num", x=["x"], alpha=alpha)
+        assert exc.value.code == "INVALID_TYPE"
+        assert exc.value.param == "alpha"
+
+    def test_replication_fit_validates_too(self, jk_sample):
+        with pytest.raises(MethodError, match="INVALID_RANGE"):
+            jk_sample.glm.fit("y_num", x=["x"], alpha=1.0)
+
+    def test_refused_before_fitting(self, data):
+        glm = svy.Sample(data, svy.Design(stratum="stratum", psu="psu", wgt="wgt")).glm
+        with pytest.raises(MethodError):
+            glm.fit("y_num", x=["x"], alpha=0)
+        assert glm.fitted is None
+
+    @pytest.mark.parametrize("alpha", [np.float64(0.1), np.float32(0.25), 1e-12, 1 - 1e-12])
+    def test_accepted_edges(self, sample, alpha):
+        fit = sample.glm.fit("y_num", x=["x"], alpha=alpha).fitted
+        assert type(fit.alpha) is float
+        assert fit.alpha == float(alpha)

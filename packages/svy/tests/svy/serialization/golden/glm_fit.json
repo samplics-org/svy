@@ -49,5 +49,6 @@
       "value": 42.1
     }
   },
+  "where_clause": null,
   "y": "income"
 }

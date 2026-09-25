@@ -46,6 +46,19 @@ def offset_values(fit: GLMFit, data: pl.DataFrame) -> np.ndarray | float:
     return data.get_column(fit.offset).to_numpy().astype(float)
 
 
+def _numpy_to_builtin(obj: Any) -> Any:
+    # A fit's numbers come out of numpy; msgspec encodes only Python scalars.
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    raise NotImplementedError(f"cannot convert {type(obj).__name__}")
+
+
+def _to_builtins(obj: Any) -> Any:
+    return msgspec.to_builtins(obj, enc_hook=_numpy_to_builtin)
+
+
 # =============================================================================
 # Result Structs
 # =============================================================================
@@ -85,7 +98,7 @@ class GLMCoef(msgspec.Struct, frozen=True):
     wald_adj: TDist | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return msgspec.to_builtins(self)
+        return _to_builtins(self)
 
 
 class GLMStats(msgspec.Struct, frozen=True):
@@ -107,7 +120,7 @@ class GLMStats(msgspec.Struct, frozen=True):
     theta_se: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return msgspec.to_builtins(self)
+        return _to_builtins(self)
 
 
 class GLMFit(msgspec.Struct, frozen=True):
@@ -126,6 +139,8 @@ class GLMFit(msgspec.Struct, frozen=True):
     offset: str | None = None
     #: Significance level of the coefficient intervals.
     alpha: float = 0.05
+    #: The fit's ``where=`` domain, formatted for display; None without one.
+    where_clause: str | None = None
 
     @classmethod
     def set_default_print_width(cls, width: int | None) -> None:
@@ -141,7 +156,7 @@ class GLMFit(msgspec.Struct, frozen=True):
         cls.PRINT_WIDTH = w
 
     def to_dict(self) -> dict[str, Any]:
-        d = msgspec.to_builtins(self)
+        d = _to_builtins(msgspec.structs.replace(self, cov_matrix=None, term_info=None))
         d.pop("cov_matrix", None)
         d.pop("term_info", None)
         return d
@@ -357,8 +372,13 @@ class GLMFit(msgspec.Struct, frozen=True):
                 _fmt_fixed(uci),
             )
 
-        parts = [
-            Text(f"Modeling: {self.y}", style="dim"),
+        parts = [Text(f"Modeling: {self.y}", style="dim")]
+        if self.where_clause:
+            where_text = Text()
+            where_text.append("where: ", style="dim")
+            where_text.append(self.where_clause)
+            parts.append(where_text)
+        parts += [
             Text(""),
             stats_grid,
             Text(""),
@@ -392,9 +412,10 @@ class GLMFit(msgspec.Struct, frozen=True):
             right = f"  {rbl:<{_R}}: {rval}" if rbl else ""
             return f"  {left}{right}".rstrip()
 
-        lines = [
-            f"GLM: {self.family} ({self.link})",
-            f"  Modeling : {self.y}",
+        lines = [f"GLM: {self.family} ({self.link})", f"  Modeling : {self.y}"]
+        if self.where_clause:
+            lines.append(f"  where    : {self.where_clause}")
+        lines += [
             _row("n", st.n, "DF Residuals", df_resid),
             _row("Deviance", _fmt_smart(st.deviance), "Scale", _fmt_smart(st.scale)),
             _row("AIC", _fmt_smart(st.aic), "BIC", _fmt_smart(st.bic)),

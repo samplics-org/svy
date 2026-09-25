@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import math
+import numbers
 import warnings
 
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Sequence, cast
@@ -27,6 +28,7 @@ from svy.core.data_prep import calib_kwargs, prepare_data
 from svy.core.enumerations import DistFamily, LinkFunction
 from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import WhereArg
+from svy.errors.method_errors import MethodError
 from svy.errors.model_errors import ModelError
 from svy.regression.glm import GLMCoef, GLMFit, GLMStats, offset_values
 from svy.regression.links import FAMILY_LABELS, link_inverse, link_mu_eta, resolve_link
@@ -146,6 +148,22 @@ def _as_model_error(exc: Exception) -> ModelError | None:
                 hint=hint,
             )
     return None
+
+
+def _validate_alpha(alpha: Any) -> float:
+    """``alpha`` as a float strictly inside (0, 1); NaN, bools and strings are refused."""
+    hint = (
+        "alpha is the significance level of the coefficient intervals: 0.05 gives 95% intervals."
+    )
+    if isinstance(alpha, bool) or not isinstance(alpha, numbers.Real):
+        raise MethodError.invalid_type(
+            where="GLM.fit", param="alpha", got=alpha, expected="a float in (0, 1)", hint=hint
+        )
+    if not 0.0 < float(alpha) < 1.0:
+        raise MethodError.invalid_range(
+            where="GLM.fit", param="alpha", got=alpha, min_=0.0, max_=1.0, hint=hint
+        )
+    return float(alpha)
 
 
 def _normalize_family(family: FamilyArg) -> str:
@@ -417,6 +435,8 @@ class GLM:
             Self, with fitted results in `.fitted`.
         """
         from scipy import stats
+
+        alpha = _validate_alpha(alpha)
 
         # Resolve family/link
         fam_str = _normalize_family(family)
@@ -950,19 +970,8 @@ class GLM:
             term_info=term_info,
             feature_names=feature_names,
             alpha=alpha,
+            where_clause=format_where_clause(where),
         )
-
-        # Stamp the where clause for display (mirrors the estimation namespace).
-        # Only attempt if GLMFit declares a where_clause field; otherwise skip
-        # silently — display will still work without it.
-        if where is not None and hasattr(fit_obj, "where_clause"):
-            try:
-                fit_obj = msgspec.structs.replace(
-                    fit_obj,
-                    where_clause=format_where_clause(where),
-                )
-            except Exception:
-                pass
 
         # Persist the exact rows the fit used (post null-drop, post weight
         # filter, with the domain column) so margins() reproduces the fitted

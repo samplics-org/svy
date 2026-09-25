@@ -316,3 +316,82 @@ class TestPrintingAndSerialization:
             )
         )
         assert [e.q_method for e in many.estimates] == [expected] * 4
+
+
+# ---------------------------------------------------------------------------
+# Non-quantile results carry no rule
+# ---------------------------------------------------------------------------
+
+NON_QUANTILE = {
+    "mean": lambda s, **kw: s.estimation.mean("y", **kw),
+    "mean_as_factor": lambda s, **kw: s.estimation.mean("g", as_factor=True, **kw),
+    "total": lambda s, **kw: s.estimation.total("y", **kw),
+    "total_as_factor": lambda s, **kw: s.estimation.total("g", as_factor=True, **kw),
+    "prop": lambda s, **kw: s.estimation.prop("g", **kw),
+    "ratio": lambda s, **kw: s.estimation.ratio("y", "z", **kw),
+    "corr": lambda s, **kw: s.estimation.corr(("y", "z"), **kw),
+    "cov": lambda s, **kw: s.estimation.cov(("y", "z"), **kw),
+    "mean_several_y": lambda s, **kw: s.estimation.mean(["y", "z"], **kw),
+}
+
+
+def _assert_no_rule(res) -> None:
+    for m in _members(res):
+        assert m.q_method is None
+        assert json.loads(to_json(m))["q_method"] is None
+        assert from_json(to_json(m)).q_method is None
+        assert "q_method" not in m.__plain_str__()
+
+
+class TestNonQuantileHasNoRule:
+    @pytest.mark.parametrize("estimator", sorted(NON_QUANTILE))
+    @pytest.mark.parametrize("shape", sorted(SHAPES))
+    def test_taylor(self, sample, estimator, shape):
+        _assert_no_rule(NON_QUANTILE[estimator](sample, **SHAPES[shape]))
+
+    @pytest.mark.parametrize("estimator", ["mean", "total", "prop", "ratio", "mean_several_y"])
+    def test_replication(self, jk_sample, estimator):
+        _assert_no_rule(NON_QUANTILE[estimator](jk_sample, method="replication"))
+
+    @pytest.mark.parametrize("estimator", ["mean", "total", "ratio"])
+    def test_with_deff_and_where(self, sample, estimator):
+        res = NON_QUANTILE[estimator](sample, deff="wr", where=svy.col("z") > 8)
+        _assert_no_rule(res)
+        assert "deff=wr" in res.__plain_str__().splitlines()[0]
+
+    def test_median_with_where_keeps_rule(self, sample):
+        res = sample.estimation.median("y", q_method="lower", where=svy.col("z") > 8)
+        _assert_reported(res, QuantileMethod.LOWER)
+        assert res.where_clause is not None
+
+    def test_list_mixing_median_and_mean(self, sample):
+        mixed = EstimateList(
+            [
+                sample.estimation.mean("y"),
+                sample.estimation.median("y", q_method="nearest"),
+                sample.estimation.total("y"),
+            ]
+        )
+        assert [m.q_method for m in mixed] == [None, QuantileMethod.NEAREST, None]
+        payload = json.loads(to_json(mixed))
+        assert [e["q_method"] for e in payload["estimates"]] == [None, "Nearest", None]
+        back = from_json(to_json(mixed))
+        assert [e.q_method for e in back.estimates] == [None, "Nearest", None]
+        assert "q_method=nearest" in mixed.__plain_str__().splitlines()[0]
+
+    def test_old_payload_with_linear_still_decodes(self, sample):
+        payload = json.loads(to_json(sample.estimation.mean("y")))
+        payload["q_method"] = "Linear"
+        assert from_json(json.dumps(payload).encode()).q_method == "Linear"
+
+    def test_payload_without_the_field_decodes_to_none(self, sample):
+        payload = json.loads(to_json(sample.estimation.mean("y")))
+        del payload["q_method"]
+        assert from_json(json.dumps(payload).encode()).q_method is None
+
+    def test_default_on_a_new_estimate(self):
+        from svy.core.enumerations import PopParam
+        from svy.estimation.estimate import Estimate
+
+        assert Estimate(PopParam.MEAN).q_method is None
+        assert Estimate(PopParam.MEDIAN).q_method is None

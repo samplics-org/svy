@@ -30,6 +30,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 - **`GLMFit.alpha`**, the level of the coefficient intervals, from `glm.fit(alpha=)`. The printed interval headers follow it (`[0.05  0.95]` at `alpha=0.1`; they always read `[0.025  0.975]`), as does the p-value highlight. `GLMFitData` carries it; a payload without it decodes as 0.05.
 
+- **`GLMFit.where_clause`**, the `where=` domain of the fit, formatted as `Estimate.where_clause` is and printed under the modeled variable. `GLMFitData` carries it (default `None`).
+
 ### Changed
 
 - **Breaking: domain and category levels keep the column's type.** `ParamEst.by_level` and `y_level` held the kernel's text: `by="zone"` gave `("3",)`, a boolean `by` gave `("false",)`, and `mean("zone", as_factor=True)` gave `"1.0"`. They now hold the column's own values (`(3,)`, `(False,)`, `1`) for every estimator, with `where=`, with several `by` variables (a tuple of values), and under Taylor and replication alike; so do `Estimate.domains`, `keys()`, the t-test's `by_level` and `group_level`, the rank tests' `by_level` and `group_levels`, and JSON payloads. A proportion of an integer-valued float column now reports `1.0`, not `1`, and string codes such as `"01"` are no longer read as integers. Test headers print numbers unquoted (`[1 vs 2]`). `contrast()` still accepts the old string keys (`{"3": 1, "1": -1}`, `"false"`, `"1.0"`). A level of a date, datetime, time or duration column goes into JSON as its ISO string with its type recorded under a top-level `"temporal"` field, and `from_json` gives the value back. Printed tables are unchanged, except that `as_factor` levels print as the column's values (`1`, not `1.0`).
@@ -55,6 +57,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
   `set_data`, `update_data` and `clone(data=)` apply the same rule to a new frame, compared positionally: a protected column whose values change is refused with `WEIGHT_OVERWRITE`, and a frame with a different number of rows is refused with `DATA_ROWS_CHANGED` when the sample has a weight-adjustment record, replicate weights or design history (rows changed outside svy cannot be checked against them; the hint points to `filter_records`, `join` and `combine_samples`). A plain design still accepts a new row count. The checks run before anything is rebound, and a later validation failure restores the sample.
 
 - **`combine_samples(kind="panel")`** compares the waves' replicate designs without their paired weight and pairs them with the combined weight.
+
+- **`Estimate.q_method` is `None` except on medians and quantiles**, and so is `EstimateData.q_method` (now `str | None`); every other result carried `Linear`. Payloads that say `Linear` still decode.
+
+- **`glm.fit()` refuses an `alpha` outside (0, 1)**, NaN included, with `INVALID_RANGE`, and a non-number (a string, a bool, `None`) with `INVALID_TYPE`, as `Table` and the t-tests do. `alpha=0` used to give infinite intervals.
 
 ### Fixed
 
@@ -93,6 +99,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **`median()` and `quantile()` always reported `q_method` as `Linear`.** The values used the requested rule, but `Estimate.q_method` and the serialized `q_method` field did not. They now give the rule used, Taylor and replication, and the printed header shows it (`MEDIAN (TAYLOR, q_method=higher)`).
 
 - **GLM predictions and margins truncated their confidence level**: `alpha=0.001` printed `99% CI`. It now prints `99.9% CI`.
+
+- **`GLMFit.to_dict()` raised `TypeError` on every fitted model**: the coefficients and statistics are numpy scalars, which msgspec does not encode. It now returns plain Python values, as do `GLMCoef.to_dict()` and `GLMStats.to_dict()`.
 
 ## [0.30.0] — 2026-09-25
 
