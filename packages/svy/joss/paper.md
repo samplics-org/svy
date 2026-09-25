@@ -80,16 +80,21 @@ sample = svy.Sample(data, svy.Design(**info.design))
 literacy_rate = (
     sample
     # 1. Wrangle: a 1/0 literacy indicator, plus a response status
-    .wrangling.mutate({
-        "literate": svy.when(svy.col("literacy") == "Yes").then(1)
-                       .when(svy.col("literacy") == "No").then(0)
-                       .otherwise(None),
-        # simulated for illustration; the example data has 100% response
-        "resp_status": rng.choice(
-            ["respondent", "non-respondent"], p=[0.85, 0.15],
-            size=sample.n_records,
-        ),
-    })
+    .wrangling.mutate(
+        {
+            "literate": svy.when(svy.col("literacy") == "Yes")
+            .then(1)
+            .when(svy.col("literacy") == "No")
+            .then(0)
+            .otherwise(None),
+            # simulated for illustration; the example data has 100% response
+            "resp_status": rng.choice(
+                ["respondent", "non-respondent"],
+                p=[0.85, 0.15],
+                size=sample.n_records,
+            ),
+        }
+    )
     # 2. Adjust the weights for nonresponse, within urban/rural classes
     .weighting.adjust(
         resp_status="resp_status",

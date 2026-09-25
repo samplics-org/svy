@@ -261,7 +261,10 @@ def test_design_accepts_every_variant():
         BrrWgts(prefix="w", n_reps=10),
         SdrWgts(prefix="w", n_reps=10),
     ):
-        assert svy.Design(wgt="wgt", rep_wgts=variant).rep_wgts is variant
+        # Stored as a copy paired with the design's weight.
+        stored = svy.Design(wgt="wgt", rep_wgts=variant).rep_wgts
+        assert type(stored) is type(variant)
+        assert stored == msgspec.structs.replace(variant, wgt="wgt")
 
 
 def test_design_rejects_a_non_variant():

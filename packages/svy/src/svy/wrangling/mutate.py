@@ -14,6 +14,7 @@ from svy.core.expr import Expr, to_polars_expr
 from svy.core.types import MutateValue
 from svy.errors import DimensionError, MethodError
 from svy.wrangling._helpers import (
+    _guard_weight_writes,
     _rebuild_concat_if_touched,
     _resolve_target,
 )
@@ -221,6 +222,7 @@ def mutate(
             hint=("Split into multiple mutate() calls or break the circular reference."),
         )
 
+    _guard_weight_writes(sample, local_data, where="wrangling.mutate", targets=specs)
     target = _resolve_target(sample, local_data, inplace=inplace)
 
     # Detect which existing design-source columns were overwritten

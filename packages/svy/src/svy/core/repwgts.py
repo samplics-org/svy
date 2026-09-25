@@ -267,10 +267,16 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     # has no stratum to count.
     stratum: str | tuple[str, ...] | None = None
     psu: str | tuple[str, ...] | None = None
+    # The full-sample weight column these replicates go with. Filled by Design
+    # from its own ``wgt`` when unset, so a stored design says which weight its
+    # replicates belong to and svy can tell when the design moves off it.
+    wgt: str | None = None
 
     def __post_init__(self) -> None:
         if not self.prefix or not self.prefix.strip():
             raise ValueError("RepWeights 'prefix' cannot be empty or whitespace.")
+        if self.wgt is not None and (not isinstance(self.wgt, str) or not self.wgt.strip()):
+            raise ValueError("RepWeights 'wgt' must be a non-empty column name or None.")
         if self.n_reps < 2:
             raise ValueError(f"n_reps must be >= 2. Got {self.n_reps}.")
         for _unit in ("stratum", "psu"):
@@ -330,7 +336,33 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
         return [f"{self.prefix}{i}" for i in range(1, self.n_reps + 1)]
 
     def columns_from_data(self, data_columns: Sequence[str]) -> list[str]:
-        """Generate column names, auto-detecting padding and casing from data."""
+        """Generate column names, auto-detecting padding and casing from data.
+
+        A spelling (prefix casing, zero-padding) under which every replicate
+        is present wins, the declared prefix first, so a look-alike column
+        (``w01`` next to unpadded ``w1..w20``, or ``W1``) cannot redirect the
+        replicates. When no spelling is complete, the detection below is kept
+        so the missing columns are reported under the expected names.
+        """
+        present = set(data_columns)
+        pattern = re.compile(rf"^({re.escape(self.prefix)})(\d+)$", re.IGNORECASE)
+        prefixes = [self.prefix]
+        widths: set[int] = {0}
+        for col in data_columns:
+            m = pattern.match(col)
+            if m is None:
+                continue
+            if m.group(1) not in prefixes:
+                prefixes.append(m.group(1))
+            if len(m.group(2)) > 1 and m.group(2)[0] == "0":
+                widths.add(len(m.group(2)))
+        paddings = [self.padding] if self.padding is not None else sorted(widths, reverse=True)
+        for p in prefixes:
+            for w in paddings:
+                cols = [f"{p}{i:0{w}d}" if w else f"{p}{i}" for i in range(1, self.n_reps + 1)]
+                if all(c in present for c in cols):
+                    return cols
+
         padding = self.padding if self.padding is not None else self._detect_padding(data_columns)
         pattern = re.compile(rf"^{re.escape(self.prefix)}\d+$", re.IGNORECASE)
         resolved_prefix = self.prefix
@@ -420,6 +452,8 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
         if self.df is not None:
             parts.append(f"df={self.df}")
         parts.extend(self._variant_parts())
+        if self.wgt is not None:
+            parts.append(f"wgt={self.wgt!r}")
         parts.extend(self._unit_parts())
         parts.extend(self._coef_parts())
         if self.padding is not None:
@@ -436,6 +470,8 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
             f"DF       : {self.df if self.df is not None else 'auto'}",
         ]
         lines.extend(self._plain_variant_lines())
+        if self.wgt is not None:
+            lines.append(f"Weight   : {self.wgt}")
         if self.stratum is not None:
             lines.append(f"Stratum  : {self.stratum}")
         if self.psu is not None:

@@ -5,11 +5,12 @@ Column operations: clean, rename, remove, keep.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal, Sequence, cast
+from typing import TYPE_CHECKING, Literal, Mapping, Sequence, cast
 
 import polars as pl
 
 from svy.core.constants import SVY_HIT, SVY_PROB, SVY_ROW_INDEX, SVY_WEIGHT
+from svy.core.repwgts import RepWgts
 from svy.engine.wrangling.cleaning import _clean_names, _rename
 from svy.errors import MethodError
 from svy.utils.helpers import _normalize_columns_arg
@@ -23,6 +24,7 @@ from svy.wrangling._helpers import (
 )
 from svy.wrangling._naming import (
     _design_with_renamed_columns,
+    _history_with_renamed_columns,
     _normalize_case_style,
     _normalize_letter_case,
     _update_metadata_keys,
@@ -57,11 +59,18 @@ def clean_names(
         letter_case=_normalize_letter_case(letter_case),
     )
 
+    design = getattr(sample, "_design", None)
+    new_design = (
+        None
+        if design is None or not renames
+        else _design_with_renamed_columns(design, renames, _df_data.columns)
+    )
     target = _resolve_target(sample, cleaned_data, inplace=inplace)
     if renames:
         _update_metadata_keys(target, renames)
-        if getattr(target, "_design", None) is not None:
-            target._design = _design_with_renamed_columns(target._design, renames)
+        if new_design is not None:
+            target._design = new_design
+            _history_with_renamed_columns(target, renames, _df_data.columns)
         _rebuild_concat_columns(target)
     return target
 
@@ -103,16 +112,97 @@ def rename_columns(
             where="wrangling.rename_columns",
         ) from ex
 
+    # The design is renamed before anything is rebound, so a rename it cannot
+    # represent (a partial replicate rename) leaves an inplace sample untouched.
+    design = getattr(sample, "_design", None)
+    new_design = (
+        None if design is None else _design_with_renamed_columns(design, renames, _df2.columns)
+    )
+    touches_sources = bool(set(renames.keys()) & _design_source_columns(sample))
+
     target = _resolve_target(sample, renamed_data, inplace=inplace)
     _update_metadata_keys(target, renames)
 
-    if getattr(target, "_design", None) is not None:
-        target._design = _design_with_renamed_columns(target._design, renames)
+    if new_design is not None:
+        target._design = new_design
+        _history_with_renamed_columns(target, renames, _df2.columns)
 
-    if set(renames.keys()) & _design_source_columns(sample):
+    if touches_sources:
         _rebuild_concat_columns(target)
 
     return target
+
+
+def _rep_sets(sample: "Sample", data_columns: list[str]) -> dict[str, tuple[RepWgts, list[str]]]:
+    """Replicate sets the sample carries, by prefix: the design's, then those
+    of earlier designs whose columns are all still in the data."""
+    present = set(data_columns)
+    history = getattr(sample, "_design_history", ())
+    sets: dict[str, tuple[RepWgts, list[str]]] = {}
+    for d in (sample._design, *reversed(history)):
+        rw = None if d is None else d.rep_wgts
+        if rw is None or rw.prefix in sets:
+            continue
+        cols = rw.columns_from_data(data_columns)
+        if all(c in present for c in cols):
+            sets[rw.prefix] = (rw, cols)
+    return sets
+
+
+def rename_rep_wgts(
+    sample: "Sample",
+    prefixes: Mapping[str, str],
+    *,
+    inplace: bool = False,
+) -> "Sample":
+    """Rename replicate-weight sets to new prefixes.
+
+    Each set's columns come from its own spec, never from pattern matching, and
+    the combined mapping goes through ``rename_columns``, so every design using
+    a set, current or earlier, follows. A prefix mapped to itself is a no-op.
+    """
+    where = "wrangling.rename_rep_wgts"
+    if not isinstance(prefixes, Mapping):
+        raise MethodError.invalid_rep_prefix(where=where, got=prefixes)
+    data_columns = sample._data.collect_schema().names()
+    sets = _rep_sets(sample, data_columns)
+    if not sets:
+        raise MethodError.no_rep_wgts(where=where)
+
+    for old, new in prefixes.items():
+        if not isinstance(new, str) or not new.strip():
+            raise MethodError.invalid_rep_prefix(where=where, got=new)
+        if old not in sets:
+            known = {p: (rw.wgt, rw.n_reps) for p, (rw, _) in sets.items()}
+            raise MethodError.unknown_rep_prefix(where=where, got=old, known=known)
+
+    renames: dict[str, str] = {}
+    targets: dict[str, str] = {}
+    overlap: set[str] = set()
+    for old, new in prefixes.items():
+        if new == old:
+            continue
+        rw, cols = sets[old]
+        for c in cols:
+            # What follows the prefix -- the number and its padding -- is kept.
+            name = f"{new}{c[len(rw.prefix) :]}"
+            if name in targets and targets[name] != old:
+                overlap.add(name)
+            targets[name] = old
+            renames[c] = name
+    if overlap:
+        raise MethodError.rep_rename_collision(
+            where=where, prefix=", ".join(sorted(set(prefixes.values()))), existing=sorted(overlap)
+        )
+    renames = {c: n for c, n in renames.items() if c != n}
+    if not renames:
+        return sample
+    taken = sorted(set(renames.values()) & (set(data_columns) - set(renames)))
+    if taken:
+        raise MethodError.rep_rename_collision(
+            where=where, prefix=", ".join(sorted(set(prefixes.values()))), existing=taken
+        )
+    return rename_columns(sample, renames, inplace=inplace)
 
 
 def remove_columns(

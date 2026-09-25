@@ -194,7 +194,9 @@ def test_poststratify_replicate_weights_ignored_when_flag_set(sample_data, mock_
     sample._design = sample.design.update_rep_weights(method="BRR", prefix="rw", n_reps=2)
     out = sample.weighting.poststratify(controls=300, ignore_reps=True)
     assert f"{PS_WGT}1" not in out.data.columns
-    assert out.design.rep_wgts.columns == ["rw1", "rw2"]
+    # The new weight has no replicates; the unadjusted ones stay in the data.
+    assert out.design.rep_wgts is None
+    assert {"rw1", "rw2"} <= set(out.data.columns)
 
 
 # ---------------------------------------------------------------------------

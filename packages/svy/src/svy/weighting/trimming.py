@@ -301,6 +301,8 @@ def _run_trim(
         # trimming= cycle, which ends satisfying the controls.
         sample._design = sample._design.update(
             wgt=target_wgt,
+            # Kept unless replaced below by the adjusted replicates.
+            rep_wgts=sample._design.rep_wgts,
             wgt_adjustment=WgtAdjustment(kind="trimming", prev_wgt=wgt, new_wgt=target_wgt),
         )
 

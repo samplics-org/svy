@@ -13,7 +13,7 @@ import polars as pl
 
 from svy.core import constants as K
 from svy.errors import DimensionError, MethodError
-from svy.wrangling._helpers import _eager_df, _resolve_target
+from svy.wrangling._helpers import _eager_df, _guard_weight_writes, _resolve_target
 
 
 if TYPE_CHECKING:
@@ -340,6 +340,7 @@ def join(
             hint='Pass on_unmatched="warn" to keep them with nulls.',
         )
 
+    _guard_weight_writes(sample, new_data, where="wrangling.join")
     target = _resolve_target(sample, new_data, inplace=inplace)
 
     if other_meta is not None:

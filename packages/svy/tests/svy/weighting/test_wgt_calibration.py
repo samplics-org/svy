@@ -407,7 +407,9 @@ def test_calibrate_replicate_weights_ignored_when_flag_set(sample_num_df):
         wgt_name="_calib_wgt",
         ignore_reps=True,
     )
-    assert s2.design.rep_wgts.columns == ["rw1", "rw2"]
+    # The new weight has no replicates; the unadjusted ones stay in the data.
+    assert s2.design.rep_wgts is None
+    assert {"rw1", "rw2"} <= set(s2.data.columns)
 
 
 def test_calibrate_where_scopes_the_adjustment():

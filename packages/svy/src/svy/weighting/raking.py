@@ -625,6 +625,10 @@ def rake(
         sample._push_design()
         sample._design = sample._design.update(
             wgt=wgt_name,
+            # Replaced below by the adjusted replicates. Unadjusted ones do not
+            # go with the new weight, so ignore_reps leaves it without any; the
+            # previous design in the history keeps them.
+            rep_wgts=None if ignore_reps else sample._design.rep_wgts,
             wgt_adjustment=WgtAdjustment(
                 kind="raking",
                 prev_wgt=wgt,

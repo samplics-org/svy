@@ -25,6 +25,8 @@ R-parity values: survey 4.5, ``data(api)``, apiclus1 with
 ``svydesign(id=~dnum, weights=~pw, fpc=~fpc)``.
 """
 
+import warnings
+
 from pathlib import Path
 
 import polars as pl
@@ -540,28 +542,47 @@ def test_scoped_adjustment_se_matches_r(design):
 # ---------------------------------------------------------------------------
 
 
-def test_dropping_a_snapshotted_column_warns_and_falls_back(design):
+def test_dropping_a_snapshotted_column_raises(design):
     """The worst available outcome is a silent fallback: the estimate is
-    unchanged and the SE quietly stops crediting the calibration."""
+    unchanged and the SE quietly stops crediting the calibration. A frame
+    without the record's columns does not go with the design."""
     ps = design().weighting.poststratify(STYPE_POP, cells="stype")
     cells_col = ps.design.wgt_adjustment.cells[0]
-    stripped = Sample(ps.data.drop(cells_col), ps.design)
+    with pytest.raises(ValueError, match="Design references columns not found in data"):
+        Sample(ps.data.drop(cells_col), ps.design)
+
+
+def test_use_weight_back_to_the_base_restores_its_design(design):
+    """Switching back to the weight the record started from restores the
+    design that weight had: no record, its own SE, nothing to warn about."""
+    base = design()
+    ps = base.weighting.poststratify(STYPE_POP, cells="stype")
+    back = ps.use_weight("pw")
+    assert back.design == base.design
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        se = _mean_se(back)
+    assert_allclose(se, _mean_se(base), rtol=1e-12)
+
+
+def _drop_behind_svys_back(sample: Sample, column: str) -> Sample:
+    """What svy's own paths can no longer produce: data without a record column."""
+    return sample._replace_data(sample.data.drop(column))
+
+
+def test_the_safety_net_warns_and_falls_back(design):
+    ps = design().weighting.poststratify(STYPE_POP, cells="stype")
+    stripped = _drop_behind_svys_back(ps, ps.design.wgt_adjustment.cells[0])
     with pytest.warns(UserWarning, match="do not account for the poststratification"):
         se = _mean_se(stripped)
-    assert_allclose(se, 23.967322009317, rtol=1e-6)  # the weights-fixed value
-
-
-def test_use_weight_away_from_the_record_warns(design):
-    ps = design().weighting.poststratify(STYPE_POP, cells="stype")
-    with pytest.warns(UserWarning, match="active weight is 'pw'"):
-        _mean_se(ps.use_weight("pw"))
+    assert_allclose(se, 23.967322009317, rtol=1e-6)
 
 
 def test_the_warning_fires_once_per_rebind(design):
     """Guarded on the data/design version: a warning per estimate would be
     noise, and noise gets muted."""
     ps = design().weighting.poststratify(STYPE_POP, cells="stype")
-    stripped = Sample(ps.data.drop(ps.design.wgt_adjustment.cells[0]), ps.design)
+    stripped = _drop_behind_svys_back(ps, ps.design.wgt_adjustment.cells[0])
     with pytest.warns(UserWarning) as rec:
         _mean_se(stripped)
         _mean_se(stripped)

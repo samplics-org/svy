@@ -8,8 +8,6 @@ Helper methods are called on the Estimation instance (est._*).
 
 from __future__ import annotations
 
-import re
-
 from typing import TYPE_CHECKING, Sequence, cast
 
 import msgspec
@@ -47,16 +45,18 @@ def get_rep_weight_cols(est: Estimation) -> list[str]:
         else cast(pl.DataFrame, _lraw)
     )
 
-    def natural_keys(text: str):
-        return [int(c) if c.isdigit() else c for c in re.split(r"(\d+)", text)]
-
     if rw.prefix:
-        # Strict ^prefix\d+$ matching — see core.data_prep._resolve_rep_weight_cols.
-        pattern = re.compile(rf"^{re.escape(rw.prefix)}\d+$", re.IGNORECASE)
-        cols = sorted(
-            [c for c in local_data.columns if pattern.match(c)],
-            key=lambda c: natural_keys(c.lower()),
-        )
+        # The spec's own columns; see core.data_prep._resolve_rep_weight_cols.
+        cols = rw.columns_from_data(local_data.columns)
+        present = set(local_data.columns)
+        missing = [c for c in cols if c not in present]
+        if missing:
+            raise DimensionError.missing_columns(
+                where="estimation.replication",
+                param="rep_wgts",
+                missing=missing,
+                available=local_data.columns,
+            )
     elif hasattr(rw, "wgts") and rw.wgts:
         # Resolve explicit column names case-insensitively against actual columns.
         lower_index: dict[str, str] = {}

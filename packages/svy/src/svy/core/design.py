@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import logging
+import os
+import sys
+import warnings
 
 from typing import (
     Any,
@@ -124,6 +127,33 @@ def _pick_if_none(current: T | None, new: T | _MissingType) -> T | None:
     if _is_MissingType(new):
         return None
     return cast(T, new)
+
+
+_SVY_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + os.sep
+
+
+def _user_stacklevel() -> int:
+    """Stack level of the first frame outside svy, relative to the caller.
+
+    The same warning is reached from ``design.update`` and through
+    ``sample.update_design``/``use_weight``, at different depths.
+    """
+    frame = sys._getframe(1)
+    level = 1
+    while frame is not None and frame.f_code.co_filename.startswith(_SVY_DIR):
+        frame = frame.f_back
+        level += 1
+    return level
+
+
+def _warn_rep_wgts_reset(rep: RepWgts, new_wgt: str | None) -> None:
+    warnings.warn(
+        f"Replicate weights '{rep.prefix}' go with weight {rep.wgt!r}, not {new_wgt!r}, "
+        "so they were removed from the design and variance falls back to Taylor "
+        f"linearization. Pass rep_wgts= with the update to keep them with {new_wgt!r}.",
+        UserWarning,
+        stacklevel=_user_stacklevel(),
+    )
 
 
 def _norm_spec(
@@ -335,6 +365,26 @@ class Design:
             raise TypeError("'rep_wgts' must be RepWgts | None")
         if wgt_adjustment is not None and not isinstance(wgt_adjustment, WgtAdjustment):
             raise TypeError("'wgt_adjustment' must be WgtAdjustment | None")
+
+        # Replicates and the record both describe one weight column; a design
+        # pointing elsewhere would estimate with one and vary with the other.
+        if rep_wgts is not None:
+            if rep_wgts.wgt is None:
+                if wgt is not None:
+                    object.__setattr__(
+                        self, "rep_wgts", msgspec.structs.replace(rep_wgts, wgt=wgt)
+                    )
+            elif rep_wgts.wgt != wgt:
+                raise ValueError(
+                    f"rep_wgts go with weight {rep_wgts.wgt!r} but the design's weight is "
+                    f"{wgt!r}. Pass replicate weights built from {wgt!r}, or leave "
+                    "rep_wgts.wgt unset to pair them with the design's weight."
+                )
+        if wgt_adjustment is not None and wgt_adjustment.new_wgt != wgt:
+            raise ValueError(
+                f"wgt_adjustment describes weight {wgt_adjustment.new_wgt!r} but the "
+                f"design's weight is {wgt!r}."
+            )
 
         object.__setattr__(self, "_frozen", True)
 
@@ -589,11 +639,34 @@ class Design:
         ssu_arg = _norm_multi_arg("ssu", ssu)
         pop_size_arg = _norm_pop_size_arg(pop_size)
 
+        new_wgt = pick(self.wgt, wgt)
+
+        # What was not passed follows the weight: kept while it still describes
+        # new_wgt, dropped otherwise. Passed replicates are paired with new_wgt
+        # (the caller asserts they match); a passed record is validated by
+        # __init__.
+        if is_missing(rep_arg) or (only_if_none and self.rep_wgts is not None):
+            new_rep = self.rep_wgts
+            if new_rep is not None and new_rep.wgt is not None and new_rep.wgt != new_wgt:
+                _warn_rep_wgts_reset(new_rep, new_wgt)
+                new_rep = None
+        elif rep_arg is not None and rep_arg.wgt != new_wgt:
+            new_rep = msgspec.structs.replace(rep_arg, wgt=new_wgt)
+        else:
+            new_rep = rep_arg
+
+        if is_missing(wgt_adjustment) or (only_if_none and self.wgt_adjustment is not None):
+            new_rec = self.wgt_adjustment
+            if new_rec is not None and new_rec.new_wgt != new_wgt:
+                new_rec = None
+        else:
+            new_rec = wgt_adjustment
+
         return type(self)(
             case_id=pick(self.case_id, case_id),
             wave=pick(self.wave, wave),
             stratum=pick(self.stratum, stratum_arg),
-            wgt=pick(self.wgt, wgt),
+            wgt=new_wgt,
             prob=pick(self.prob, prob),
             hit=pick(self.hit, hit),
             mos=pick(self.mos, mos),
@@ -601,8 +674,8 @@ class Design:
             ssu=pick(self.ssu, ssu_arg),
             pop_size=pick(self.pop_size, pop_size_arg),
             wr=_pick(self.wr, wr),
-            rep_wgts=pick(self.rep_wgts, rep_arg),
-            wgt_adjustment=pick(self.wgt_adjustment, wgt_adjustment),
+            rep_wgts=new_rep,
+            wgt_adjustment=new_rec,
         )
 
     # -----------------------------
@@ -703,6 +776,40 @@ class Design:
             for col in rep_cols:
                 add(col)
 
+        return out
+
+    def columns(self, data_columns: Sequence[str] | None = None) -> list[str]:
+        """Every column this design needs from the data, de-duplicated, in order.
+
+        Design fields, ``pop_size``, replicate weights, the units the replicates
+        were built from, then the weight-adjustment record's ``new_wgt``,
+        ``prev_wgt``, ``cells`` and ``aux``. A frame missing any of them does
+        not belong to this design.
+
+        Parameters
+        ----------
+        data_columns : Sequence[str], optional
+            The data's column names, used to resolve auto-detected replicate
+            padding. Without them replicate names use the explicit padding.
+        """
+        out = self.specified_fields(data_columns=data_columns)
+        seen = set(out)
+
+        def add(name: str | tuple[str, ...] | None) -> None:
+            for c in (name,) if isinstance(name, str) else (name or ()):
+                if c not in seen:
+                    out.append(c)
+                    seen.add(c)
+
+        if self.rep_wgts is not None:
+            add(self.rep_wgts.stratum)
+            add(self.rep_wgts.psu)
+        rec = self.wgt_adjustment
+        if rec is not None:
+            add(rec.new_wgt)
+            add(rec.prev_wgt)
+            add(rec.cells)
+            add(rec.aux)
         return out
 
     # -----------------------------
@@ -891,9 +998,11 @@ class Design:
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Design):
             return False
-        return all(getattr(self, f) == getattr(other, f) for f in _FIELDS) and (
-            self.rep_wgts == other.rep_wgts
+        return (
+            all(getattr(self, f) == getattr(other, f) for f in _FIELDS)
+            and self.rep_wgts == other.rep_wgts
+            and self.wgt_adjustment == other.wgt_adjustment
         )
 
     def __hash__(self) -> int:
-        return hash((tuple(getattr(self, f) for f in _FIELDS), self.rep_wgts))
+        return hash((tuple(getattr(self, f) for f in _FIELDS), self.rep_wgts, self.wgt_adjustment))
