@@ -590,7 +590,7 @@ def _pull_special(obj: Any, path: str, nonfinite: dict[str, str], temporal: dict
             k: _pull_special(v, f"{path}/{_escape(k)}", nonfinite, temporal)
             for k, v in obj.items()
         }
-    if isinstance(obj, list):
+    if isinstance(obj, (list, tuple)):
         return [_pull_special(v, f"{path}/{i}", nonfinite, temporal) for i, v in enumerate(obj)]
     return obj
 
@@ -600,26 +600,32 @@ def _escape(key: str) -> str:
 
 
 def _put_special(root: Any, found: dict[str, str], restore: Callable[[str, Any], Any]) -> None:
-    """Replace the value at each pointer in ``found`` (dicts, lists or structs) by ``restore``."""
+    """Replace the value at each pointer in ``found`` by ``restore`` (in place)."""
     for pointer, tag in found.items():
         parts = [p.replace("~1", "/").replace("~0", "~") for p in pointer.split("/")[1:]]
-        node = root
-        for p in parts[:-1]:
-            node = _child(node, p)
-        last = parts[-1]
-        value = restore(tag, _child(node, last))
-        if isinstance(node, list):
-            node[int(last)] = value
-        elif isinstance(node, dict):
-            node[last] = value
-        else:
-            msgspec.structs.force_setattr(node, last, value)
+        _set_at(root, parts, lambda old, tag=tag: restore(tag, old))
 
 
-def _child(node: Any, key: str) -> Any:
-    if isinstance(node, list):
-        return node[int(key)]
-    return node[key] if isinstance(node, dict) else getattr(node, key)
+def _set_at(node: Any, parts: list[str], fn: Callable[[Any], Any]) -> Any:
+    """``node`` with the value at ``parts`` replaced by ``fn(value)``.
+
+    Lists, dicts and structs are updated in place; a tuple on the path (a
+    decoded pair) is rebuilt, so the caller stores what this returns.
+    """
+    if not parts:
+        return fn(node)
+    key, rest = parts[0], parts[1:]
+    if isinstance(node, (list, tuple)):
+        i = int(key)
+        new = _set_at(node[i], rest, fn)
+        if isinstance(node, tuple):
+            return node[:i] + (new,) + node[i + 1 :]
+        node[i] = new
+    elif isinstance(node, dict):
+        node[key] = _set_at(node[key], rest, fn)
+    else:
+        msgspec.structs.force_setattr(node, key, _set_at(getattr(node, key), rest, fn))
+    return node
 
 
 def to_dict(result: Any) -> dict[str, Any]:

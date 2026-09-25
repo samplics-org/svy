@@ -456,7 +456,7 @@ StratumValue = CatValue | None | list[CatValue | None]
 class SingletonSpecData(msgspec.Struct, kw_only=True, frozen=True):
     """How singleton strata are handled (mirrors ``svy.core.design.SingletonSpec``).
 
-    Strata are the stratum columns' values (dates as ISO strings); ``mapping``
+    Strata are the stratum columns' values (dates restored through "temporal"); ``mapping``
     holds collapse's (singleton, target) pairs.
     """
 

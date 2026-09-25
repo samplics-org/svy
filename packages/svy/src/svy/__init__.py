@@ -57,6 +57,7 @@ from svy.core import (
     StratumInfo,
     TableType,
     TableUnits,
+    WgtAdjustment,
     all_horizontal,
     any_horizontal,
     coalesce,
@@ -238,6 +239,7 @@ __all__ = [
     "TableType",
     "TableUnits",
     "Threshold",
+    "WgtAdjustment",
     "TrimConfig",
     "TrimResult",
     # --- Errors ---

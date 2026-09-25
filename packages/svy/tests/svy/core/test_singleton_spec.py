@@ -184,7 +184,7 @@ def test_repr_shows_the_spec_only_when_set():
 )
 def test_repr_is_the_constructor_call(spec, shown):
     assert repr(spec) == shown
-    assert spec._to_code() == "svy." + shown.replace("datetime.date(2020, 1, 4)", "'2020-01-04'")
+    assert spec._to_code() == "svy." + shown
 
 
 def test_printed_design_shows_the_rule():
@@ -369,7 +369,7 @@ def test_code_form_round_trip(spec):
     assert eval(d._to_code(), {"svy": svy}) == d
 
 
-def test_dates_are_saved_and_rendered_as_iso_strings():
+def test_dates_are_saved_as_iso_strings_and_restored_as_dates():
     spec = SingletonSpec.skip([dt.date(2020, 1, 4)])
     raw = json.loads(to_json(Design(stratum="day", singleton=spec)))
     assert raw["singleton"] == {
@@ -378,7 +378,9 @@ def test_dates_are_saved_and_rendered_as_iso_strings():
         "mapping": [],
         "name": None,
     }
-    assert eval(spec._to_code(), {"svy": svy}) == SingletonSpec.skip(["2020-01-04"])
+    assert raw["temporal"] == {"/singleton/strata/0": "date"}
+    assert to_design(from_json(to_json(Design(stratum="day", singleton=spec)))).singleton == spec
+    assert eval(spec._to_code(), {"svy": svy, "datetime": dt}) == spec
 
 
 def test_payload_shape():
