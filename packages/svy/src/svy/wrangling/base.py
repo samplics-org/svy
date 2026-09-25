@@ -24,6 +24,7 @@ from svy.wrangling.columns import clean_names as _clean_names
 from svy.wrangling.columns import keep_columns as _keep_columns
 from svy.wrangling.columns import remove_columns as _remove_columns
 from svy.wrangling.columns import rename_columns as _rename_columns
+from svy.wrangling.join import join as _join
 from svy.wrangling.labels import apply_labels as _apply_labels
 from svy.wrangling.mutate import mutate as _mutate
 from svy.wrangling.panel import lag as _lag
@@ -363,6 +364,53 @@ class Wrangling:
         takes the previous observed row instead.
         """
         return _lag(self._sample, cols, n, name=name, gaps=gaps, inplace=inplace)
+
+    # ------------------------------------------------------------------ #
+    # Join
+    # ------------------------------------------------------------------ #
+
+    def join(
+        self,
+        other: "Sample | pl.DataFrame | pl.LazyFrame",
+        on: str | Sequence[str] | Mapping[str, str],
+        *,
+        cols: str | Sequence[str] | None = None,
+        into: str | Mapping[str, str] | None = None,
+        suffix: str | None = None,
+        validate: Literal["m:1", "1:1"] = "m:1",
+        on_unmatched: Literal["ignore", "warn", "error"] = "warn",
+        indicator: str | None = None,
+        inplace: bool = False,
+    ) -> "Sample":
+        """Bring columns of ``other`` onto this sample's records.
+
+        A left join that keeps every record, in order, and never touches
+        the design: ``other``'s weight or stratum arrives as an ordinary
+        column. ``on`` names the key, or maps this sample's key names to
+        ``other``'s (``{"hhid": "hh_id"}``). ``cols`` picks what to bring
+        (default: every non-key column); ``into`` maps any of them, by
+        their name on ``other``, to their name here; ``suffix`` is appended
+        to the remaining names that already exist here. Nothing on this
+        sample is renamed. Nothing is ever overwritten: a name that still
+        clashes is refused, as is a key that repeats on ``other`` (and on
+        this sample with ``validate="1:1"``) or key types that differ.
+        Value labels and variable labels of a Sample carry over. Records
+        with no match get nulls; ``unmatched`` warns (default), stays
+        quiet or raises (``on_unmatched``), and ``indicator`` names a Boolean column marking
+        the matched records.
+        """
+        return _join(
+            self._sample,
+            other,
+            on,
+            cols=cols,
+            into=into,
+            suffix=suffix,
+            validate=validate,
+            on_unmatched=on_unmatched,
+            indicator=indicator,
+            inplace=inplace,
+        )
 
     # ------------------------------------------------------------------ #
     # Mutate

@@ -16,6 +16,8 @@ degf(d)                                      # 14
 ```
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -25,12 +27,15 @@ from svy import Design, Sample, estd
 from svy.errors import MethodError
 
 
+DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
+
+
 TOL = 1e-11
 
 
 @pytest.fixture(scope="module")
 def by_stype():
-    api = svy.io.read_csv("tests/test_data/apiclus1.csv")
+    api = svy.io.read_csv(DATA_DIR / "apiclus1.csv")
     return Sample(api, Design(psu="dnum", wgt="pw")).estimation.mean("api00", by="stype")
 
 
@@ -136,7 +141,7 @@ def test_type_errors():
 
 
 def test_glm_coefficient_ratio():
-    api = svy.io.read_csv("tests/test_data/apiclus1.csv")
+    api = svy.io.read_csv(DATA_DIR / "apiclus1.csv")
     fit = Sample(api, Design(psu="dnum", wgt="pw")).glm.fit("api00", x=["api99", "ell"])
     c = fit.contrast(estd("api99") / estd("ell"))
     coefs = {k: v for k, v in zip(fit.keys(), [x.est for x in fit.coefs])}
