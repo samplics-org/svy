@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import itertools
 import logging
+import os
 
 from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping, Self, Sequence, cast
 
@@ -53,6 +54,9 @@ if TYPE_CHECKING:
     from svy.wrangling import Wrangling
 
 log = logging.getLogger(__name__)
+
+# Width at which sample.to_code() puts one design argument per line.
+_CODE_WIDTH = 88
 
 INTEGER_DTYPES = {pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64}
 FLOAT_DTYPES = {pl.Float32, pl.Float64}
@@ -1985,6 +1989,53 @@ class Sample:
     # ════════════════════════════════════════════════════════════════════════
     # CLONE (public)
     # ════════════════════════════════════════════════════════════════════════
+
+    def to_code(self, data: str | os.PathLike[str] | None = None) -> str:
+        """
+        Python source that rebuilds this sample: its design, with every setting
+        that changes the estimates (replicate weights, the weight-adjustment
+        record, singleton handling).
+
+        The data is the caller's: ``data`` only points to it. A ``.parquet`` path
+        adds ``data = svy.read_parquet(path)``, the pair of
+        ``svy.write_parquet(sample, path)``; without it the script expects a
+        ``data`` frame. Metadata (labels) is not included.
+
+        Examples
+        --------
+        >>> svy.write_parquet(sample, "survey.parquet")
+        >>> print(sample.to_code(data="survey.parquet"))
+        import svy
+        <BLANKLINE>
+        data = svy.read_parquet('survey.parquet')
+        sample = svy.Sample(data, svy.Design(stratum='region', psu='ea', wgt='w'))
+        """
+        lines = ["import svy", ""]
+        if data is not None:
+            path = os.fspath(data)
+            if not path.lower().endswith(".parquet"):
+                raise MethodError(
+                    title="to_code reads parquet only",
+                    detail=f"data= points to {path!r}, which is not a .parquet file.",
+                    code="TO_CODE_DATA_NOT_PARQUET",
+                    where="Sample.to_code",
+                    param="data",
+                    got=path,
+                    hint="Save the data with svy.write_parquet(sample, 'survey.parquet') "
+                    "and pass that path, or pass nothing and define `data` yourself.",
+                )
+            lines.append(f"data = svy.read_parquet({path!r})")
+        args = self.design._code_args()
+        if any("datetime." in a for a in args):
+            lines.insert(0, "import datetime")
+        one_line = f"sample = svy.Sample(data, svy.Design({', '.join(args)}))"
+        if len(one_line) <= _CODE_WIDTH:
+            lines.append(one_line)
+        else:
+            lines += ["sample = svy.Sample(", "    data,", "    svy.Design("]
+            lines += [f"        {a}," for a in args]
+            lines += ["    ),", ")"]
+        return "\n".join(lines) + "\n"
 
     def clone(
         self: Self,

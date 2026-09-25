@@ -1,6 +1,7 @@
 # src/svy/core/design.py
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import os
 import sys
@@ -20,6 +21,7 @@ from typing import (
 )
 
 import msgspec
+import numpy as np
 
 from svy.core import design_parts as _dp
 from svy.core.repwgts import (
@@ -273,7 +275,7 @@ class WgtAdjustment(msgspec.Struct, frozen=True, kw_only=True):
         return self.kind in self.VARIANCE_CONSUMED
 
     def _to_code(self) -> str:
-        return _struct_code(self, "svy.core.design.WgtAdjustment")
+        return _struct_code(self, "svy.WgtAdjustment")
 
 
 # =============================================================================
@@ -433,6 +435,9 @@ class SingletonSpec(msgspec.Struct, frozen=True, kw_only=True):
 
 
 def _value_code(value: Any) -> str:
+    if isinstance(value, tuple) and len(value) > 3 and len(set(map(_typed, value))) == 1:
+        # Per-replicate coefficients are usually one value repeated.
+        return f"({_value_code(value[0])},) * {len(value)}"
     if isinstance(value, tuple):
         inner = ", ".join(_value_code(v) for v in value)
         return f"({inner},)" if len(value) == 1 else f"({inner})"
@@ -440,12 +445,14 @@ def _value_code(value: Any) -> str:
         return "float('nan')"
     if isinstance(value, float) and value in (float("inf"), float("-inf")):
         return f"float({str(value)!r})"
+    if isinstance(value, np.generic):
+        return _value_code(value.item())
     if isinstance(value, (str, int, float, bool)) or value is None:
         return repr(value)
-    # Dates and other non-literal values: their ISO/str form, which the stratum
-    # matching reads back against the column's type.
-    iso = getattr(value, "isoformat", None)
-    return repr(iso() if callable(iso) else str(value))
+    if isinstance(value, (dt.date, dt.time, dt.timedelta)):
+        # repr is datetime.date(...) etc.: the script imports datetime.
+        return repr(value)
+    raise TypeError(f"cannot write {type(value).__name__} value {value!r} as code")
 
 
 def _struct_code(obj: msgspec.Struct, qualname: str) -> str:
@@ -1212,6 +1219,10 @@ class Design:
     def _to_code(self) -> str:
         """Source that rebuilds this design: ``svy.Design(...)``, runnable with
         only ``import svy``."""
+        return f"svy.Design({', '.join(self._code_args())})"
+
+    def _code_args(self) -> list[str]:
+        """The ``name=value`` arguments of ``_to_code``, one per set field or part."""
         args = []
         for f in _FIELDS:
             value = getattr(self, f)
@@ -1224,4 +1235,4 @@ class Design:
             args.append(f"{f}={code}")
         for part, value in self._part_items():
             args.append(f"{part.name}={part.to_code(value)}")
-        return f"svy.Design({', '.join(args)})"
+        return args

@@ -172,7 +172,7 @@ def _saved(s: svy.Sample) -> svy.Design:
 
 
 def _coded(s: svy.Sample) -> svy.Design:
-    return eval(s.design._to_code(), {"svy": svy})
+    return eval(s.design._to_code(), {"svy": svy, "datetime": dt})
 
 
 # ---------------------------------------------------------------------------

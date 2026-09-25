@@ -3,7 +3,7 @@
 
 from svy.core.containers import ChiSquare, FDist
 from svy.core.describe import DescribeResult
-from svy.core.design import Design, PopSize, RepWeights, SingletonSpec
+from svy.core.design import Design, PopSize, RepWeights, SingletonSpec, WgtAdjustment
 from svy.core.enumerations import (
     CaseStyle,
     DistFamily,
@@ -78,6 +78,7 @@ __all__ = [
     "FDist",
     "Number",
     "PopSize",
+    "WgtAdjustment",
     "SingletonSpec",
     "BootstrapWgts",
     "BrrWgts",

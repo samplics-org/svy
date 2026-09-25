@@ -55,6 +55,7 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Iterable, Iterator, Mapping
 
 import msgspec
+import numpy as np
 
 
 if TYPE_CHECKING:
@@ -641,13 +642,13 @@ class SingletonPart(DesignPart):
 
 
 def _saved_value(value: Any) -> Any:
-    """A stratum value in JSON-native form (dates as ISO strings)."""
+    """A stratum value for the saved struct: tuples as lists; dates kept, since
+    ``to_json`` records their type under "temporal" and restores it."""
     if isinstance(value, tuple):
         return [_saved_value(v) for v in value]
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    iso = getattr(value, "isoformat", None)
-    return iso() if callable(iso) else str(value)
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
 
 
 # The built-in parts, registered directly: Design is not defined yet when this
