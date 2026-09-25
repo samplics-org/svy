@@ -1,4 +1,5 @@
 {
+  "alpha": 0.05,
   "coefs": [
     {
       "est": 32000.0,
@@ -48,5 +49,6 @@
       "value": 42.1
     }
   },
+  "where_clause": null,
   "y": "income"
 }

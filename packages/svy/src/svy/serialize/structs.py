@@ -256,7 +256,9 @@ class EstimateData(msgspec.Struct, kw_only=True, frozen=True):
     n_strata: int
     n_psus: int
     where_clause: str | None = None
-    q_method: str = "Linear"
+    #: Quantile rule of a median or quantile; None for every other parameter.
+    #: Payloads written before this carry "Linear" there, and still decode.
+    q_method: str | None = None
     #: Which SRS reference the design effect was measured against, or None when
     #: none was requested. Optional so payloads written before it existed still
     #: decode; a deff is ambiguous without it, since the two references differ
@@ -347,6 +349,11 @@ class GLMFitData(msgspec.Struct, kw_only=True, frozen=True):
     stats: GLMStatsData
     coefs: list[GLMCoefData] = []
     feature_names: list[str] = []
+    #: Significance level of the coefficient intervals. Optional so payloads
+    #: written before it existed still decode, as the 0.05 they were fitted at.
+    alpha: float = 0.05
+    #: The fit's ``where=`` domain, formatted for display; None without one.
+    where_clause: str | None = None
 
 
 @_kinded("glm_pred")

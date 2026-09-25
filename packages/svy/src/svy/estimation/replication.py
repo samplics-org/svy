@@ -475,6 +475,7 @@ def replicate_median(
         prep.by_cols,
         as_factor=False,
         method=method,
+        q_method=q_method,
     )
 
 
@@ -524,6 +525,7 @@ def replicate_quantile(
                 prep.by_cols,
                 as_factor=False,
                 method=method,
+                q_method=q_method,
             )
         )
     return results

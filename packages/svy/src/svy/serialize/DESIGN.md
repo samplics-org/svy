@@ -232,7 +232,7 @@ Source: `svy.estimation.estimate.Estimate` (not msgspec; `__slots__`)
 | `n_strata`        | `int`                   | `n_strata`             |
 | `n_psus`          | `int`                   | `n_psus`               |
 | `where_clause`    | `str \| None`           | `where_clause`         |
-| `q_method`        | `str`                   | `q_method` (QuantMethod)|
+| `q_method`        | `str \| None`           | `q_method` (QuantMethod)|
 | `deff_ref`        | `str \| None`           | `deff_ref`             |
 | `as_factor`       | `bool`                  | `as_factor`            |
 
@@ -309,6 +309,8 @@ Source: `svy.regression.glm.GLMFit` (msgspec.Struct)
 | `stats`         | `GLMStatsData`        | `stats`            |
 | `coefs`         | `list[GLMCoefData]`   | `coefs`            |
 | `feature_names` | `list[str]`           | `feature_names`    |
+| `alpha`         | `float` (default 0.05) | `alpha`           |
+| `where_clause`  | `str \| None`         | `where_clause`     |
 
 Excluded: `cov_matrix`, `term_info`.
 

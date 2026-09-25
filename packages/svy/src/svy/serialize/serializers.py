@@ -284,7 +284,7 @@ def _serialize_estimate(result: Estimate) -> EstimateData:
         n_strata=_i(result.n_strata),
         n_psus=_i(result.n_psus),
         where_clause=result.where_clause,
-        q_method=_enum(result.q_method),
+        q_method=_enum(result.q_method) if result.q_method is not None else None,
         deff_ref=result.deff_ref,
         as_factor=bool(result.as_factor),
         labels=[
@@ -366,6 +366,8 @@ def _serialize_glm_fit(result: GLMFit) -> GLMFitData:
         stats=_glm_stats_to_data(result.stats),
         coefs=[_glm_coef_to_data(c) for c in result.coefs],
         feature_names=list(result.feature_names),
+        alpha=_f(result.alpha),
+        where_clause=result.where_clause,
     )
 
 

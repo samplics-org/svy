@@ -423,6 +423,7 @@ def taylor_median(
         prep.by_cols,
         as_factor=False,
         method=None,
+        q_method=q_method,
     )
 
 
@@ -600,6 +601,7 @@ def taylor_median_multi(
                 [],
                 as_factor=False,
                 method=None,
+                q_method=q_method,
             )
         )
     return results
@@ -664,6 +666,7 @@ def taylor_quantile(
                 prep.by_cols,
                 as_factor=False,
                 method=None,
+                q_method=q_method,
             )
         )
     return results

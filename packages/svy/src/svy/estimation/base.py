@@ -1274,10 +1274,13 @@ class Estimation:
         deff_ref: str | None = None,
         design_df: int | None = None,
         cov_filled: bool = False,
+        q_method: _QuantileMethod | None = None,
     ) -> Estimate:
         metadata = getattr(self._sample, "_metadata", None)
         estimate = Estimate(param, alpha=alpha, metadata=metadata)
         estimate.method = method.method if method is not None else "Taylor"
+        if q_method is not None:
+            estimate.q_method = q_method
         estimate.deff_ref = deff_ref
         estimate.design_df = design_df
         estimate._cov_filled = cov_filled or len(est_list) <= 1
@@ -1480,12 +1483,19 @@ class Estimation:
     # ----------------------------------------------------------------
 
     def _empty_estimate(
-        self, param: PopParam, alpha: float, by_cols: list[str], method: RepWgts | None
+        self,
+        param: PopParam,
+        alpha: float,
+        by_cols: list[str],
+        method: RepWgts | None,
+        q_method: _QuantileMethod | None = None,
     ) -> Estimate:
         """Return an empty Estimate for cases like zero-weight domains."""
         metadata = getattr(self._sample, "_metadata", None)
         est = Estimate(param, alpha=alpha, metadata=metadata)
         est.method = method.method if method is not None else "Taylor"
+        if q_method is not None:
+            est.q_method = q_method
         est.estimates = []
         est.covariance = np.array([])
         return est
@@ -2417,7 +2427,11 @@ class Estimation:
             if "weights is zero" in str(e).lower() or "sum of weights" in str(e).lower():
                 results = [
                     self._empty_estimate(
-                        PopParam.QUANTILE, alpha, _colspec_to_list(by), target_method
+                        PopParam.QUANTILE,
+                        alpha,
+                        _colspec_to_list(by),
+                        target_method,
+                        q_method=resolved_q_method,
                     )
                     for _ in probs
                 ]
@@ -2523,7 +2537,11 @@ class Estimation:
         except RuntimeError as e:
             if "weights is zero" in str(e).lower() or "sum of weights" in str(e).lower():
                 result = self._empty_estimate(
-                    PopParam.MEDIAN, alpha, _colspec_to_list(by), target_method
+                    PopParam.MEDIAN,
+                    alpha,
+                    _colspec_to_list(by),
+                    target_method,
+                    q_method=resolved_q_method,
                 )
             else:
                 raise
