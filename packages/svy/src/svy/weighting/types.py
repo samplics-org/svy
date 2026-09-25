@@ -5,15 +5,14 @@ Weighting-namespace type definitions.
 Types live here — not in the engine — so that:
   - svy/engine/weighting/adj_trimming.py can import them without a cycle
   - svy/weighting/trim.py imports from the same place as the public API
-  - Users can do: from svy.weighting import Threshold, TrimConfig, Cap
+  - Users can do: from svy.weighting import Threshold, TrimConfig
 
 Relationship to svy/core/types.py and svy/core/containers.py
 -------------------------------------------------------------
 svy/core/types.py    — generic primitives and type aliases (Number, Category, …)
 svy/core/containers.py — generic statistical output containers (ChiSquare, FDist, …)
-svy/core/terms.py    — declarative term specs (Cat, Cross, RE, Cap)
+svy/core/terms.py    — declarative term specs (Cat, Cross, RE, Threshold)
 svy/weighting/types.py — weighting-specific domain objects (TrimConfig, TrimResult, …)
-                         and backward-compatible Threshold alias
 """
 
 from __future__ import annotations
@@ -26,21 +25,13 @@ import numpy as np
 
 from numpy.typing import NDArray
 
-from svy.core.terms import Cap, _ComposedCap
+from svy.core.terms import Threshold, _ComposedCap
 
 
 FloatArr = NDArray[np.float64]
 
-# ---------------------------------------------------------------------------
-# Threshold — backward-compatible alias for Cap
-# ---------------------------------------------------------------------------
-
-Threshold = Cap
-"""Backward-compatible alias for :class:`svy.core.terms.Cap`."""
-
-
-# Three ways to specify one bound
-ThresholdSpec = float | Cap | _ComposedCap | Callable[[FloatArr], float]
+# Ways to specify one bound; a bare number is absolute
+ThresholdSpec = float | Threshold | _ComposedCap | Callable[[FloatArr], float]
 
 
 # ---------------------------------------------------------------------------
@@ -61,11 +52,11 @@ class TrimConfig:
     ----------
     upper : ThresholdSpec | None
         Upper bound spec.
-        float > 1       → absolute cap
-        float in (0, 1] → quantile of weight distribution
-        Cap             → k * stat(w), e.g. Cap("median", 6.0)
-        Cap + Cap       → composed, e.g. Cap("median") + 6 * Cap("iqr")
-        callable        → f(w: FloatArr) -> float
+        number                   → absolute bound, e.g. 40 or 0.9
+        Threshold.quantile(p)    → p quantile of the positive weights
+        Threshold(stat, k)       → k * stat(w), e.g. Threshold("median", 6.0)
+        Threshold + Threshold    → composed, e.g. Threshold("median") + 6 * Threshold("iqr")
+        callable                 → f(w: FloatArr) -> float
     lower : ThresholdSpec | None
         Lower bound spec, same type rules as upper.
     by : str | list[str] | None
@@ -159,43 +150,42 @@ def resolve_threshold(spec: ThresholdSpec, weights: FloatArr) -> float:
 
     Rules
     -----
-    Cap             → k * stat(positive weights)
-    _ComposedCap    → sum of Cap.compute() results (from Cap + Cap)
-    float > 1       → absolute cap (returned as-is)
-    float in (0, 1] → quantile of positive weights
+    number          → absolute bound (returned as-is); must be > 0
+    Threshold       → Threshold.compute(weights): absolute, quantile or k * stat
+    _ComposedCap    → sum of its parts (from Threshold + Threshold)
     callable        → f(positive weights) -> float
+
+    A number is never read as a quantile: use ``Threshold.quantile(p)``.
 
     Raises
     ------
     ValueError
-        If the resolved threshold is not positive (e.g., from a
-        composition like Cap("mean") - 10 * Cap("sd") that yields
-        a negative value for the given weight distribution).
+        If the resolved threshold is not positive (e.g., from a composition
+        like Threshold("mean") - 10 * Threshold("sd") that yields a negative
+        value for the given weight distribution).
     """
-    if isinstance(spec, Cap):
+    if isinstance(spec, (Threshold, _ComposedCap)):
         result = spec.compute(weights)
-    elif isinstance(spec, _ComposedCap):
-        result = spec.compute(weights)
+    elif isinstance(spec, bool):
+        raise TypeError("A threshold cannot be a bool.")
+    elif isinstance(spec, (int, float, np.integer, np.floating)):
+        v = float(spec)
+        if not v > 0:
+            raise ValueError(
+                f"Threshold value must be > 0, got {v}. A number is an absolute bound; "
+                "for a quantile use svy.Threshold.quantile(p)."
+            )
+        return v
     elif callable(spec):
         w_pos = weights[weights > 0]
         result = float(spec(w_pos))
-    elif isinstance(spec, (int, float)):
-        v = float(spec)
-        if v <= 0:
-            raise ValueError(f"Threshold value must be > 0, got {v}")
-        if v <= 1.0:
-            w_pos = weights[weights > 0]
-            if w_pos.size == 0:
-                return 0.0
-            return float(np.quantile(w_pos, v))
-        return v
     else:
         raise TypeError(f"Unsupported ThresholdSpec type: {type(spec)}")
 
     if result < 0:
         raise ValueError(
             f"Resolved threshold must be >= 0, got {result:.4f}. "
-            f"Check your Cap specification — the composed threshold "
+            f"Check your Threshold specification — the composed threshold "
             f"evaluated to a negative value for this weight distribution."
         )
     return result

@@ -49,7 +49,7 @@ from svy.core.singleton import (
     SingletonSummary,
     StratumInfo,
 )
-from svy.core.terms import RE, Cap, Cat, Cross, Feature
+from svy.core.terms import RE, Cap, Cat, Cross, Feature, Threshold
 from svy.core.types import DF, DT, Category, Number
 
 
@@ -107,6 +107,7 @@ __all__ = [
     "max_horizontal",
     # Terms
     "Cap",
+    "Threshold",
     "Cat",
     "Cross",
     "Feature",

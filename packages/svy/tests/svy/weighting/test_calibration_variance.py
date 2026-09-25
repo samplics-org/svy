@@ -34,7 +34,7 @@ import pytest
 
 from numpy.testing import assert_allclose
 
-from svy import Design, Sample, col
+from svy import Design, Sample, Threshold, col
 from svy.weighting.types import TrimConfig
 
 
@@ -633,7 +633,9 @@ def test_trim_poststratify_cycle_leaves_the_record_exact(design):
     ps = design().weighting.poststratify(
         STYPE_POP,
         cells="stype",
-        trimming=TrimConfig(upper=0.995, redistribute=True, min_cell_size=1, max_iter=20),
+        trimming=TrimConfig(
+            upper=Threshold.quantile(0.995), redistribute=True, min_cell_size=1, max_iter=20
+        ),
     )
     got = ps.data.group_by("stype").agg(pl.col("ps_wgt").sum()).sort("stype")
     assert_allclose(got["ps_wgt"].to_numpy(), [4421.0, 755.0, 1018.0], rtol=1e-9)

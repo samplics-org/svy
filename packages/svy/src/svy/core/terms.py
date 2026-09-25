@@ -4,7 +4,7 @@ Declarative term specifications for svy methods.
 
 Terms are lightweight, frozen objects that users pass to svy methods
 to declare intent. Some reference columns (Cat, Cross, RE), others
-describe computation rules (Cap). The method receiving the term
+describe computation rules (Threshold). The method receiving the term
 decides what to apply it to.
 
 All terms inherit from Term for isinstance checks and documentation.
@@ -12,7 +12,7 @@ All terms inherit from Term for isinstance checks and documentation.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Union
 
 import numpy as np
@@ -25,7 +25,7 @@ Feature = Union[str, "Term"]
 
 FloatArr = NDArray[np.float64]
 
-_SUPPORTED_STATS = frozenset({"median", "mean", "sd", "iqr"})
+_SUPPORTED_STATS = frozenset({"median", "mean", "sd", "iqr", "quantile", "absolute"})
 
 
 class Term:
@@ -85,42 +85,34 @@ class RE(Term):
 
 
 @dataclass(frozen=True)
-class Cap(Term):
+class Threshold(Term):
     """
-    Statistical threshold for capping values.
+    A bound computed from the values it is applied to (the weights, in trimming).
 
-    Describes how to compute a data-driven bound from an array of values.
-    Used in weight trimming, and anywhere a stat-based cap is needed
-    (e.g., top_code, bottom_code).
+    Context-free: the method that receives it supplies the values. A bare
+    number passed where a threshold is expected is an absolute bound.
 
-    The column or weight array that Cap operates on is determined by
-    the method that receives it — Cap itself is context-free.
+    Kinds
+    -----
+    ``Threshold.absolute(v)``   the value ``v`` itself
+    ``Threshold.quantile(p)``   the ``p`` quantile of the positive values, ``p`` in (0, 1]
+    ``Threshold(stat, k)``      ``k`` × ``stat`` of the positive values, ``stat`` one of
+                                ``"median"``, ``"mean"``, ``"sd"``, ``"iqr"``
 
-    Supports composition via ``+``, ``-``, and ``*`` operators.
-
-    Parameters
-    ----------
-    stat : {"median", "mean", "sd", "iqr"}
-        Statistic to compute from the (positive) values.
-    k : float
-        Multiplier. Default 1.0.
+    Thresholds compose with ``+``, ``-`` and scalar ``*``.
 
     Examples
     --------
-    Simple thresholds:
-
-    >>> Cap("median", 3.5)                     # 3.5 × median
-    >>> Cap("mean", 5.0)                       # 5.0 × mean
-
-    Composed thresholds:
-
-    >>> Cap("median") + 6 * Cap("iqr")         # median + 6 × IQR
-    >>> Cap("mean") + 3 * Cap("sd")            # mean + 3 × SD
-    >>> Cap("mean") - 2 * Cap("sd")            # mean − 2 × SD (lower bound)
+    >>> Threshold.quantile(0.99)                     # 99th percentile
+    >>> Threshold.absolute(0.9)                      # a cap at 0.9
+    >>> Threshold("median", 3.5)                     # 3.5 × median
+    >>> Threshold("median") + 6 * Threshold("iqr")   # median + 6 × IQR
+    >>> Threshold("mean") - 2 * Threshold("sd")      # mean − 2 × SD (lower bound)
     """
 
     stat: str
     k: float = 1.0
+    p: float | None = None
 
     def __post_init__(self) -> None:
         if self.stat not in _SUPPORTED_STATS:
@@ -129,12 +121,40 @@ class Cap(Term):
             )
         if self.k == 0:
             raise ValueError(f"k must be nonzero, got {self.k}")
+        if self.stat == "quantile":
+            if self.p is None:
+                raise ValueError("A quantile threshold needs p: use Threshold.quantile(p).")
+            if not (0 < self.p <= 1):
+                hint = (
+                    f" For the {self.p:g}th percentile use {self.p / 100:g}."
+                    if 1 < self.p <= 100
+                    else ""
+                )
+                raise ValueError(f"Quantile p must be in (0, 1], got {self.p}.{hint}")
+        elif self.p is not None:
+            raise ValueError(f"p applies only to a quantile threshold, not {self.stat!r}.")
+
+    @classmethod
+    def quantile(cls, p: float) -> "Threshold":
+        """The ``p`` quantile of the positive values, ``p`` in (0, 1]."""
+        return cls("quantile", p=float(p))
+
+    @classmethod
+    def absolute(cls, value: float) -> "Threshold":
+        """The value itself, whatever the data. Same as passing the bare number."""
+        if not value > 0:
+            raise ValueError(f"An absolute threshold must be > 0, got {value}.")
+        return cls("absolute", float(value))
 
     def compute(self, values: FloatArr) -> float:
         """Compute the threshold scalar from an array of values."""
+        if self.stat == "absolute":
+            return self.k
         v = values[values > 0]
         if v.size == 0:
             return 0.0
+        if self.stat == "quantile":
+            return self.k * float(np.quantile(v, self.p))
         if self.stat == "median":
             return self.k * float(np.median(v))
         if self.stat == "mean":
@@ -148,34 +168,42 @@ class Cap(Term):
 
     # -- Composition operators ------------------------------------------------
 
-    def __rmul__(self, k: float) -> "Cap":
-        """Scalar * Cap: returns a new Cap with scaled k."""
-        return Cap(self.stat, float(k) * self.k)
+    def __rmul__(self, k: float) -> "Threshold":
+        """Scalar * Threshold: returns a new Threshold with scaled k."""
+        return replace(self, k=float(k) * self.k)
 
-    def __mul__(self, k: float) -> "Cap":
-        """Cap * scalar: returns a new Cap with scaled k."""
-        return Cap(self.stat, self.k * float(k))
+    def __mul__(self, k: float) -> "Threshold":
+        """Threshold * scalar: returns a new Threshold with scaled k."""
+        return replace(self, k=self.k * float(k))
 
-    def __add__(self, other: "Cap") -> "_ComposedCap":
-        """Cap + Cap: returns a composed threshold (sum)."""
-        if not isinstance(other, (Cap, _ComposedCap)):
+    def __add__(self, other: "Threshold") -> "_ComposedCap":
+        """Threshold + Threshold: returns a composed threshold (sum)."""
+        if not isinstance(other, (Threshold, _ComposedCap)):
             return NotImplemented
-        left = _ComposedCap([self]) if isinstance(self, Cap) else self
-        if isinstance(other, Cap):
+        left = _ComposedCap([self])
+        if isinstance(other, Threshold):
             return _ComposedCap(left._parts + [other])
         return _ComposedCap(left._parts + other._parts)
 
-    def __sub__(self, other: "Cap") -> "_ComposedCap":
-        """Cap - Cap: returns a composed threshold (difference)."""
-        if not isinstance(other, Cap):
+    def __sub__(self, other: "Threshold") -> "_ComposedCap":
+        """Threshold - Threshold: returns a composed threshold (difference)."""
+        if not isinstance(other, Threshold):
             return NotImplemented
-        negated = Cap(other.stat, -other.k)
-        return self.__add__(negated)
+        return self.__add__(replace(other, k=-other.k))
 
     def __repr__(self) -> str:
+        if self.stat == "absolute":
+            return f"Threshold.absolute({self.k})"
+        if self.stat == "quantile":
+            base = f"Threshold.quantile({self.p})"
+            return base if self.k == 1.0 else f"{self.k} * {base}"
         if self.k == 1.0:
-            return f"Cap('{self.stat}')"
-        return f"Cap('{self.stat}', {self.k})"
+            return f"Threshold('{self.stat}')"
+        return f"Threshold('{self.stat}', {self.k})"
+
+
+#: The earlier name, kept so existing code runs unchanged.
+Cap = Threshold
 
 
 class _ComposedCap:
@@ -183,12 +211,12 @@ class _ComposedCap:
     Internal: result of composing multiple Caps via + and -.
 
     Acts as a callable, so it satisfies ThresholdSpec directly.
-    Users never instantiate this — they get it from Cap(...) + Cap(...).
+    Users never instantiate this — they get it from Threshold(...) + Threshold(...).
     """
 
     __slots__ = ("_parts",)
 
-    def __init__(self, parts: list[Cap]) -> None:
+    def __init__(self, parts: list[Threshold]) -> None:
         self._parts = parts
 
     def compute(self, values: FloatArr) -> float:
@@ -198,18 +226,17 @@ class _ComposedCap:
         """Makes _ComposedCap a valid ThresholdSpec (callable)."""
         return self.compute(values)
 
-    def __add__(self, other: "Cap | _ComposedCap") -> "_ComposedCap":
-        if isinstance(other, Cap):
+    def __add__(self, other: "Threshold | _ComposedCap") -> "_ComposedCap":
+        if isinstance(other, Threshold):
             return _ComposedCap(self._parts + [other])
         if isinstance(other, _ComposedCap):
             return _ComposedCap(self._parts + other._parts)
         return NotImplemented
 
-    def __sub__(self, other: Cap) -> "_ComposedCap":
-        if not isinstance(other, Cap):
+    def __sub__(self, other: Threshold) -> "_ComposedCap":
+        if not isinstance(other, Threshold):
             return NotImplemented
-        negated = Cap(other.stat, -other.k)
-        return _ComposedCap(self._parts + [negated])
+        return _ComposedCap(self._parts + [replace(other, k=-other.k)])
 
     def __repr__(self) -> str:
         parts = []
@@ -217,8 +244,7 @@ class _ComposedCap:
             if i == 0:
                 parts.append(repr(cap))
             elif cap.k < 0:
-                pos = Cap(cap.stat, -cap.k)
-                parts.append(f"- {repr(pos)}")
+                parts.append(f"- {repr(replace(cap, k=-cap.k))}")
             else:
                 parts.append(f"+ {repr(cap)}")
         return " ".join(parts)
