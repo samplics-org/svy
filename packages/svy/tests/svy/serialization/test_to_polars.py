@@ -66,6 +66,9 @@ CASES = [
     ("median_by", lambda s: s.estimation.median("y", by="region"), {}),
     ("quantiles", lambda s: s.estimation.quantile("y", p=(0.25, 0.75), by="sex"), {}),
     ("mean_list", lambda s: s.estimation.mean(["y", "z"], by="sex"), {}),
+    ("prop_list", lambda s: s.estimation.prop(["sex", "region"]), {}),
+    ("ratio_by", lambda s: s.estimation.ratio("y", "w", by="sex"), {}),
+    ("ratios_x", lambda s: s.estimation.ratio("y", ["w", "psu"]), {}),
     ("ttest_one", lambda s: s.categorical.ttest("y", mean_h0=50), {}),
     (
         "ttest_one_est",
@@ -83,9 +86,22 @@ CASES = [
         lambda s: s.categorical.ttest("y", group="sex"),
         {"component": "estimates", "tidy": False},
     ),
+    (
+        "ttest_two_where",
+        lambda s: s.categorical.ttest("y", group="sex", where={"region": "North"}),
+        {},
+    ),
+    ("ttest_two_by", lambda s: s.categorical.ttest("y", group="sex", by="zone")[1], {}),
     ("table_one", lambda s: s.categorical.tabulate("region"), {}),
     ("table_two", lambda s: s.categorical.tabulate("region", "sex"), {}),
     ("table_two_raw", lambda s: s.categorical.tabulate("region", "sex"), {"tidy": False}),
+    (
+        "table_two_where",
+        lambda s: s.categorical.tabulate("region", "sex", where={"zone": [1, 2]}),
+        {},
+    ),
+    ("chi_square", lambda s: s.categorical.tabulate("region", "sex").stats.chisq, {}),
+    ("describe", lambda s: s.describe(["y", "region", "zone", "d"]), {}),
     ("glm", lambda s: s.glm.fit("y", x=["z", svy.Cat("region")]), {}),
     (
         "glm_logit_exp",
@@ -124,6 +140,10 @@ def _payload_rows(data, opts) -> list:
         return data.coefs
     if kind == "glm_pred":
         return list(range(len(data.yhat)))
+    if kind == "chi_square":
+        return [data]
+    if kind == "describe":
+        return data.items
     return data.estimates
 
 
@@ -165,11 +185,33 @@ def test_nan_interval_survives(sample):
     assert_frame_equal(table, result.to_polars())
 
 
-def test_payload_without_table_raises(sample):
-    data = serialize(sample.categorical.tabulate("region", "sex").stats.chisq)
+def test_every_serializable_kind_has_a_table(sample):
+    from svy.serialize.serializers import _SERIALIZERS
+    from svy.serialize.tables import _TABLES
+
+    covered = {type(serialize(_live(c[1](sample)))) for c in CASES}
+    assert covered == set(_TABLES)
+    assert len(_TABLES) == len(_SERIALIZERS)
+
+
+def test_stacked_list_names_each_member(sample):
+    """Several variables (or denominators) lead with y (or x)."""
+    assert sample.estimation.mean(["y", "z"], by="sex").to_polars().columns[0] == "y"
+    assert sample.estimation.ratio("y", ["w", "psu"]).to_polars().columns[0] == "x"
+    assert "y" not in sample.estimation.quantile("y", p=(0.25, 0.75)).to_polars().columns
+
+
+def test_empty_estimate():
+    from svy import Estimate, PopParam
+
+    assert to_polars(serialize(Estimate(PopParam.MEAN))).is_empty()
+
+
+def test_unknown_payload_raises():
     with pytest.raises(SerializationError) as exc:
-        to_polars(data)
+        to_polars("not a payload")  # type: ignore[arg-type]
     assert exc.value.code == "PAYLOAD_NO_TABLE"
+    assert "EstimateData" in (exc.value.expected or [])
 
 
 LABELLED_CASES = [

@@ -167,12 +167,26 @@ def estimate_frame(
     return df
 
 
-def concat_estimate_frames(frames: Sequence[pl.DataFrame]) -> pl.DataFrame:
-    """One frame from an estimate list's member tables, one row per estimate."""
-    frames = [f for f in frames if not f.is_empty()]
+def stack_estimate_frames(members: Sequence[tuple[str, str | None, pl.DataFrame]]) -> pl.DataFrame:
+    """Stack an estimate list's ``(y, x, frame)`` members, one row per estimate.
+
+    A leading ``y`` column is added when the members' variables differ, and an
+    ``x`` column when their denominators do, so every row stays identifiable.
+    """
+    frames = [(y, x, f) for y, x, f in members if not f.is_empty()]
     if not frames:
         return pl.DataFrame()
-    return pl.concat(frames, how="diagonal_relaxed")
+    show_y = len({y for y, _, _ in frames}) > 1
+    show_x = len({x for _, x, _ in frames}) > 1
+    out = []
+    for y, x, f in frames:
+        lead = []
+        if show_y and "y" not in f.columns:
+            lead.append(pl.lit(y, dtype=pl.String).alias("y"))
+        if show_x and "x" not in f.columns:
+            lead.append(pl.lit(x, dtype=pl.String).alias("x"))
+        out.append(f.select(*lead, pl.all()) if lead else f)
+    return pl.concat(out, how="diagonal_relaxed")
 
 
 # -----------------------------------------------------------------------------
@@ -857,9 +871,16 @@ class EstimateList(list):
         )
 
     def to_polars(self, *, use_labels: bool | None = None) -> pl.DataFrame:
-        """Concatenate the members into one frame, one row per estimate."""
-        return concat_estimate_frames(
-            [e.to_polars(use_labels=use_labels) for e in self._members()]
+        """Concatenate the members into one frame, one row per estimate.
+
+        Leads with ``y`` when the members' variables differ and ``x`` when
+        their denominators do, so each row names the estimate it came from.
+        """
+        return stack_estimate_frames(
+            [
+                (m.estimates[0].y, m.estimates[0].x, m.to_polars(use_labels=use_labels))
+                for m in self._members()
+            ]
         )
 
     def _combined(self, *, use_labels: bool | None = None) -> pl.DataFrame:

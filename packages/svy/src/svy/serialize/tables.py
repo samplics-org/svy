@@ -12,16 +12,20 @@ import polars as pl
 
 from svy.categorical.table import table_frame
 from svy.categorical.ttest import ttest_one_group_frame, ttest_two_groups_frame
+from svy.core.containers import _chisq_frame
+from svy.core.describe import _describe_frame
 from svy.errors.serialization_errors import SerializationError
 from svy.estimation.estimate import (
     Estimate,
     VarLabels,
-    concat_estimate_frames,
     estimate_frame,
+    stack_estimate_frames,
 )
 from svy.regression.glm import glm_frame
 from svy.regression.prediction import glm_pred_frame
 from svy.serialize.structs import (
+    ChiSquareData,
+    DescribeResultData,
     EstimateData,
     EstimateListData,
     GLMFitData,
@@ -65,14 +69,16 @@ def _estimate(
 def _estimate_list(
     d: EstimateListData, *, row_index: str | None = None, use_labels: bool | None = None
 ) -> pl.DataFrame:
-    frames, offset = [], 0
+    members, offset = [], 0
     for m in d.estimates:
         f = _estimate(m, row_index=row_index, use_labels=use_labels)
         if row_index and not f.is_empty():
             f = f.with_columns(pl.col(row_index) + offset)
-        frames.append(f)
+        if m.estimates:
+            members.append((m.estimates[0].y, m.estimates[0].x, f))
         offset += len(m.estimates)
-    return concat_estimate_frames(frames)
+    df = stack_estimate_frames(members)
+    return df.select(row_index, pl.exclude(row_index)) if row_index and not df.is_empty() else df
 
 
 def _ttest_one_group(
@@ -109,6 +115,14 @@ def _glm_pred(d: GLMPredData, *, row_index: str | None = None) -> pl.DataFrame:
     return _indexed(glm_pred_frame(d), row_index)
 
 
+def _chi_square(d: ChiSquareData, *, row_index: str | None = None) -> pl.DataFrame:
+    return _indexed(_chisq_frame(d), row_index)
+
+
+def _describe(d: DescribeResultData, *, row_index: str | None = None) -> pl.DataFrame:
+    return _indexed(_describe_frame(d.items), row_index)
+
+
 _TABLES: dict[type, Callable[..., pl.DataFrame]] = {
     EstimateData: _estimate,
     EstimateListData: _estimate_list,
@@ -117,6 +131,8 @@ _TABLES: dict[type, Callable[..., pl.DataFrame]] = {
     TableData: _table,
     GLMFitData: _glm_fit,
     GLMPredData: _glm_pred,
+    ChiSquareData: _chi_square,
+    DescribeResultData: _describe,
 }
 
 
@@ -132,8 +148,8 @@ def to_polars(data: ResultData, *, row_index: str | None = None, **options: Any)
         Name of a first column (``UInt32``) holding each table row's position
         in the payload's rows: ``estimates`` for an estimate, a table and a
         t-test's ``component="estimates"``, ``diff`` for a t-test's
-        ``component="test"``, ``coefs`` for a GLM fit, and the prediction
-        arrays for a GLM prediction. For an estimate list it counts through
+        ``component="test"``, ``coefs`` for a GLM fit, the prediction arrays
+        for a GLM prediction, and ``items`` for a describe result. For an estimate list it counts through
         the members' estimates in order. Estimate tables are sorted for
         display, so this column is the way back to a payload row.
     **options
@@ -146,7 +162,7 @@ def to_polars(data: ResultData, *, row_index: str | None = None, **options: Any)
     Raises
     ------
     SerializationError
-        If the payload's kind has no table (code ``PAYLOAD_NO_TABLE``).
+        If ``data`` is not a result payload (code ``PAYLOAD_NO_TABLE``).
     """
     builder = _TABLES.get(type(data))
     if builder is None:
