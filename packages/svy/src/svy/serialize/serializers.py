@@ -9,10 +9,13 @@ attributes and convert types (numpy → list, StrEnum → str, etc.).
 
 from __future__ import annotations
 
+import math
+
 from enum import Enum
 from typing import Any, Callable
 
 import msgspec
+import msgspec.inspect as mi
 import numpy as np
 
 from svy.categorical.table import Table
@@ -457,4 +460,25 @@ def from_json(data: bytes) -> ResultData:
     cls = _KIND_TO_STRUCT.get(kind)
     if cls is None:
         raise SerializationError.unknown_kind(kind=kind, known=sorted(_KIND_TO_STRUCT))
-    return msgspec.json.decode(data, type=cls)
+    return msgspec.convert(_null_to_nan(raw, mi.type_info(cls)), type=cls)
+
+
+def _null_to_nan(obj: Any, t: mi.Type) -> Any:
+    """Restore the NaNs that ``to_json`` wrote as ``null``.
+
+    JSON has no NaN, so msgspec encodes one as ``null``, which then fails to
+    decode into a ``float`` field. A ``null`` is read back as NaN only where
+    the struct declares a plain ``float``; optional fields keep ``None``.
+    """
+    if obj is None:
+        return math.nan if isinstance(t, mi.FloatType) else None
+    if isinstance(t, mi.UnionType):
+        match = [u for u in t.types if isinstance(u, (mi.StructType, mi.ListType))]
+        return _null_to_nan(obj, match[0]) if len(match) == 1 else obj
+    if isinstance(t, mi.StructType) and isinstance(obj, dict):
+        for f in t.fields:
+            if f.encode_name in obj:
+                obj[f.encode_name] = _null_to_nan(obj[f.encode_name], f.type)
+    elif isinstance(t, mi.ListType) and isinstance(obj, list):
+        return [_null_to_nan(v, t.item_type) for v in obj]
+    return obj

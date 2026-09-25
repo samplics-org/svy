@@ -6,6 +6,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Fixed
+
+- **`svy.serialize.from_json` failed on any result holding a NaN.** JSON has no NaN, so `to_json` writes it as `null`, and decoding then refused `null` in a `float` field. A singleton domain's interval, a zero-variance CV or a NaN quantile limit made the saved result unreadable. `null` now reads back as NaN wherever the struct declares a plain `float`, nested and list fields included; optional fields keep `None`.
+
 ## [0.30.0] — 2026-09-25
 
 ### Added

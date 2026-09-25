@@ -303,6 +303,33 @@ def test_roundtrip_json(factory):
     assert json.loads(js) == json.loads(js2)
 
 
+def test_roundtrip_json_nan():
+    """NaN is written as null and read back as NaN, including in nested and list fields."""
+    nan = float("nan")
+    est = _make_estimate()
+    est.estimates = [ParamEst(y="income", est=50000.0, se=1000.0, cv=0.02, lci=nan, uci=nan)]
+    data = from_json(to_json(est))
+    assert np.isnan(data.estimates[0].lci) and np.isnan(data.estimates[0].uci)
+    assert data.estimates[0].se == 1000.0
+
+    fit = _make_glm_fit()
+    coef = msgspec.structs.replace(fit.coefs[0], wald=TDist(df=496, value=nan, p_value=nan))
+    fit = msgspec.structs.replace(fit, coefs=[coef])
+    coef = from_json(to_json(fit)).coefs[0]
+    assert np.isnan(coef.wald.value) and np.isnan(coef.wald.p_value)
+
+    pred = _make_glm_pred()
+    pred.se[1] = nan
+    se = from_json(to_json(pred)).se
+    assert se[0] == 1000.0 and np.isnan(se[1])
+
+
+def test_roundtrip_json_null_optional_stays_none():
+    """An optional float that was None stays None, not NaN."""
+    data = from_json(to_json(_make_estimate()))
+    assert data.estimates[0].prob is None
+
+
 def test_estimate_fields():
     """Estimate serialization captures the right fields with correct conversions."""
     result = _make_estimate()
