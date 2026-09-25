@@ -14,7 +14,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Changed
 
+- **Breaking: domain and category levels keep the column's type.** `ParamEst.by_level` and `y_level` held the kernel's text: `by="zone"` gave `("3",)`, a boolean `by` gave `("false",)`, and `mean("zone", as_factor=True)` gave `"1.0"`. They now hold the column's own values (`(3,)`, `(False,)`, `1`) for every estimator, with `where=`, with several `by` variables (a tuple of values), and under Taylor and replication alike; so do `Estimate.domains`, `keys()`, the t-test's `by_level` and `group_level`, and JSON payloads. A proportion of an integer-valued float column now reports `1.0`, not `1`, and string codes such as `"01"` are no longer read as integers. `contrast()` still accepts the old string keys (`{"3": 1, "1": -1}`, `"false"`, `"1.0"`). Printed tables are unchanged, except that `as_factor` levels print as the column's values (`1`, not `1.0`).
+
 - **`Estimate.to_polars()` and `EstimateList.to_polars()` are a data view, no longer the printed table.** Levels keep their codes under the variable's name, and each variable with value labels gets a `<var>_label` column next to it (`by_label` and `y_level_label` with `tidy=False`). Rows sort by code. `EstimateList.to_polars()` leads with a `y` column when its members' variables differ, and an `x` column when their denominators do. Labels are on by default for both (`use_labels=False` drops the label columns); before, `Estimate.to_polars()` gave codes only and `EstimateList.to_polars()` put labels in place of the codes and variable labels in place of the names. A category level now keeps the type the estimator gives it, so a proportion's level column is an integer for an integer variable. Printing is unchanged (`to_polars_printable()`). A label column whose name is already a variable raises `LABEL_COLUMN_CLASH`.
+
 
 - **Serialization schema `svy-result/0.4`.** `EstimateData` gains `as_factor`, which decides whether the table has a level column, and `labels`. `TDistData.df` is now `int | float`, so a GLM coefficient's design df stays an integer. All additive: `0.3` payloads still decode.
 

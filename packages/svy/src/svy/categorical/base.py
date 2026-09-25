@@ -24,7 +24,7 @@ from svy.core.constants import (
     _INTERNAL_CONCAT_SUFFIX,
 )
 from svy.core.containers import ChiSquare, FDist
-from svy.core.data_prep import calib_kwargs, prepare_data, record_columns
+from svy.core.data_prep import calib_kwargs, level_lookup, prepare_data, record_columns
 from svy.core.enumerations import (
     RankScoreMethod as _RankScoreMethod,
 )
@@ -581,11 +581,17 @@ class Categorical:
             by_col=prep.by_col,
         )
 
+        # The kernel returns by and group levels as strings; restore the
+        # source columns' types.
+        by_lookup = level_lookup(self._sample._data, [by]) if by is not None else {}
+        group_lookup = level_lookup(self._sample._data, [group]) if group is not None else {}
+
         # Unpack result rows into Python containers
         if by is not None:
             results = []
             for i in range(result_df.height):
                 by_level = result_df[prep.by_col][i]
+                by_level = by_lookup.get(by_level, by_level)
                 res = self._unpack_ttest_row(
                     result_df=result_df,
                     row_idx=i,
@@ -596,6 +602,7 @@ class Categorical:
                     alternative=alternative,
                     by=by,
                     by_level=by_level,
+                    group_lookup=group_lookup,
                 )
                 results.append(res)
             # Determine shared metadata for TTestByResult header
@@ -623,6 +630,7 @@ class Categorical:
                 alternative=alternative,
                 by=None,
                 by_level=None,
+                group_lookup=group_lookup,
             )
 
     def _unpack_ttest_row(
@@ -637,6 +645,7 @@ class Categorical:
         alternative: str,
         by: str | None,
         by_level: object,
+        group_lookup: dict[str, object] | None = None,
     ) -> TTestOneGroup | TTestTwoGroups:
         """Unpack a single row from the ttest result DataFrame into a Python container."""
         from scipy.stats import t as t_dist
@@ -701,8 +710,9 @@ class Categorical:
             # Two-sample
             diff_value = row["diff"]
             se = row["se"]
-            level_0 = row["level_0"]
-            level_1 = row["level_1"]
+            group_lookup = group_lookup or {}
+            level_0 = group_lookup.get(row["level_0"], row["level_0"])
+            level_1 = group_lookup.get(row["level_1"], row["level_1"])
             mean_0 = row["mean_0"]
             mean_1 = row["mean_1"]
             se_0 = row["se_0"]

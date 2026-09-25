@@ -18,7 +18,7 @@ import logging
 
 from dataclasses import dataclass
 from numbers import Real
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 import msgspec
 import numpy as np
@@ -476,14 +476,19 @@ def _normalize_contrasts(
 class KeyResolver:
     """Lookup from a user-typed key to a row index.
 
-    Resolution order: exact key, string-normalized key (``1`` finds ``"1"``),
-    then any aliases the caller supplies (metadata value labels). A candidate
-    that matches two different rows is dropped rather than guessed at.
+    Resolution order: exact key, string-normalized key (``1`` finds ``"1"``
+    and ``"1"`` finds ``1``), then any aliases the caller supplies (metadata
+    value labels, older string spellings of a level). A candidate that
+    matches two different rows is dropped rather than guessed at.
     """
 
     __slots__ = ("keys", "_exact", "_fallback")
 
-    def __init__(self, keys: Sequence[Any], aliases: Mapping[Any, int] | None = None):
+    def __init__(
+        self,
+        keys: Sequence[Any],
+        aliases: Mapping[Any, int] | Iterable[tuple[Any, int]] | None = None,
+    ):
         self.keys = list(keys)
         self._exact: dict[Any, int] = {}
         for i, k in enumerate(self.keys):
@@ -503,7 +508,8 @@ class KeyResolver:
 
         for i, k in enumerate(self.keys):
             offer(self._norm(k), i)
-        for alias, i in (aliases or {}).items():
+        pairs = aliases.items() if isinstance(aliases, Mapping) else (aliases or ())
+        for alias, i in pairs:
             offer(alias, i)
             offer(self._norm(alias), i)
         self._fallback = fallback
@@ -519,8 +525,8 @@ class KeyResolver:
             return self._exact[k]
         if k in self._fallback:
             return self._fallback[k]
-        # by-levels arrive stringified from the kernel, so an int typed by
-        # the caller only meets its row through the normalized form.
+        # A key typed in the other form (1 for a "1" level, or "1" for a 1
+        # level) only meets its row through the normalized form.
         nk = self._norm(k)
         if nk in self._exact:
             return self._exact[nk]
@@ -536,7 +542,7 @@ def linear_contrast(
     df: float,
     alpha: float,
     method: str,
-    aliases: Mapping[Any, int] | None = None,
+    aliases: Mapping[Any, int] | Iterable[tuple[Any, int]] | None = None,
 ) -> Contrast:
     """``f(θ̂)`` with variance ``gᵀ V g`` over named estimates.
 

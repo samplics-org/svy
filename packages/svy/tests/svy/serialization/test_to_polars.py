@@ -237,7 +237,7 @@ def test_label_columns_follow_codes(labelled):
     table = labelled.estimation.mean("y", by=["zone", "sex"]).to_polars()
     assert table.columns[:4] == ["zone", "zone_label", "sex", "sex_label"]
     pairs = dict(zip(table["zone"], table["zone_label"]))
-    assert pairs == {"1": "Urban", "2": "Rural", "3": "Peri-urban"}
+    assert pairs == {1: "Urban", 2: "Rural", 3: "Peri-urban"}
     assert table["zone"].to_list() == sorted(table["zone"].to_list())
 
 
@@ -253,9 +253,10 @@ def test_labels_off_gives_codes_only(labelled):
 
 def test_raw_rows_carry_label_lists(labelled):
     table = labelled.estimation.mean("y", by=["zone", "sex"]).to_polars(tidy=False)
+    assert table.schema["by_level"] == pl.Struct({"zone": pl.Int64, "sex": pl.String})
     by_label = table["by_label"].to_list()
-    assert all(len(v) == 2 for v in by_label)
-    assert {v[1] for v in by_label} == {"Female", "Male"}
+    assert {v["sex"] for v in by_label} == {"Female", "Male"}
+    assert {v["zone"] for v in by_label} == {"Urban", "Rural", "Peri-urban"}
 
 
 def test_printing_still_shows_labels_in_place(labelled):

@@ -170,6 +170,65 @@ class PreparedData:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Kernel level strings → source values
+# ═══════════════════════════════════════════════════════════════════════
+
+# How a null grouping value, and the join between several ``by`` columns, are
+# spelled in the string key the kernel groups on (Sample._concatenate_cols).
+NULL_LEVEL = "__Null__"
+BY_KEY_SEP = "__by__"
+
+
+def level_lookup(data: pl.DataFrame | pl.LazyFrame, cols: Sequence[str]) -> dict[str, object]:
+    """Map the level strings the kernel returns back to the source values.
+
+    The kernel groups on strings, so levels come back as text. Matching each
+    string against the column's own unique values (rather than parsing it)
+    restores ints, floats, bools, dates and categories exactly. Several
+    ``cols`` map their joined key to a tuple; a null maps to ``None``.
+
+    A response column may also be cast before the kernel sees it -- to
+    Float64 for ``as_factor`` means, to Int64 for proportions of
+    integer-valued floats -- so those spellings are mapped too. The plain
+    spelling wins wherever two would collide.
+
+    Returns an empty dict when a column is missing from ``data``.
+    """
+    cols = list(cols)
+    if not cols or any(c not in data.collect_schema().names() for c in cols):
+        return {}
+    uniq = data.select(cols).unique()
+    if isinstance(uniq, pl.LazyFrame):
+        uniq = uniq.collect()
+
+    if len(cols) > 1:
+        keys = uniq.select(
+            pl.concat_str(
+                [pl.col(c).cast(pl.Utf8).fill_null(NULL_LEVEL) for c in cols],
+                separator=BY_KEY_SEP,
+            )
+        ).to_series()
+        return dict(zip(keys.to_list(), uniq.rows()))
+
+    col = pl.col(cols[0])
+    dtype = uniq.schema[cols[0]]
+    forms = [col.cast(pl.Utf8).fill_null(NULL_LEVEL)]
+    if dtype.is_numeric() or dtype == pl.Boolean:
+        forms.append(col.cast(pl.Float64).cast(pl.Utf8))
+    if dtype.is_float():
+        forms.append(
+            pl.when(col == col.floor()).then(col.cast(pl.Int64, strict=False)).cast(pl.Utf8)
+        )
+    values = uniq.get_column(cols[0]).to_list()
+    lookup: dict[str, object] = {}
+    for keys in uniq.select([f.alias(f"k{i}") for i, f in enumerate(forms)]).iter_columns():
+        for k, v in zip(keys.to_list(), values):
+            if k is not None:
+                lookup.setdefault(k, v)
+    return lookup
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Where-clause column extraction
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -531,7 +590,7 @@ def prepare_data(
         data=local_data,
         design=design,
         by=by,
-        null_token="__Null__",
+        null_token=NULL_LEVEL,
         suffix=_INTERNAL_CONCAT_SUFFIX,
         categorical=True,
         drop_original=False,
