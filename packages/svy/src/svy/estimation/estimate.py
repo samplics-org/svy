@@ -18,6 +18,7 @@ from svy.ui.printing import (
     render_plain_table,
     render_rich_to_str,
     resolve_width,
+    row_sort_key,
     sort_display_rows,
 )
 
@@ -66,6 +67,29 @@ def _row_levels(est: Any, names: Sequence[str], n_by: int) -> list[tuple[str, An
     if len(names) > n_by:
         out.append((names[n_by], est.y_level))
     return out
+
+
+def row_order(estimates: Sequence[Any], *, param: str, as_factor: bool = False) -> list[int]:
+    """Positions of ``estimates`` in the order ``to_polars()`` lists them.
+
+    By domain, then by category, each compared with :func:`row_sort_key`.
+    The sort is stable, so rows sharing their levels (correlation pairs) keep
+    their order.
+    """
+    if len(estimates) < 2:
+        return list(range(len(estimates)))
+    first = estimates[0]
+    n_by = len(first.by) if first.by else 0
+    names = label_vars(estimates, param=param, as_factor=as_factor)
+    levels = [[raw for _, raw in _row_levels(p, names, n_by)] for p in estimates]
+    try:
+        keys = [tuple(row_sort_key(v) for v in lv) for lv in levels]
+        return sorted(range(len(estimates)), key=keys.__getitem__)
+    except TypeError:
+        # A level the data lookup could not restore stays a string beside
+        # native values; compare everything as text rather than fail.
+        keys = [tuple(row_sort_key(str(v)) for v in lv) for lv in levels]
+        return sorted(range(len(estimates)), key=keys.__getitem__)
 
 
 def _label_of(lab: VarLabels | None, raw: Any) -> str | None:
@@ -243,6 +267,11 @@ class ParamEst(msgspec.Struct, frozen=True):
 class Estimate:
     """
     Container for estimation results.
+
+    ``estimates`` are sorted by domain level, then by category level, in the
+    order ``to_polars()`` lists them: numbers numerically, strings naturally
+    (``"a2"`` before ``"a10"``). ``keys()``, ``domains`` and the rows and
+    columns of ``covariance`` follow the same order.
     """
 
     DECIMALS: int | dict[str, int] | None = None
