@@ -12,6 +12,7 @@ from msgspec import field
 from svy.core.types import Category, Number
 from svy.errors import DimensionError, MethodError
 from svy.estimation import ParamEst
+from svy.estimation.estimate import _display_level
 
 # Import central UI helpers (consistent with estimate.py)
 from svy.ui.printing import (
@@ -32,6 +33,16 @@ log = logging.getLogger(__name__)
 
 # Keys used by the central UI for styling
 _UI_KEY_RESULTS = "ttest.results"
+
+
+def _level_text(value: Any) -> str:
+    """A level in a table cell or title: empty when absent, bools lowercase."""
+    return "" if value is None else _display_level(value)
+
+
+def _level_repr(value: Any) -> str:
+    """A level in a ``Groups: [a vs b]`` header: text quoted, bools lowercase."""
+    return repr(value) if isinstance(value, str) else _level_text(value)
 
 
 # =============================================================================
@@ -259,9 +270,9 @@ class TTestOneGroup(msgspec.Struct, tag="one", tag_field="kind", kw_only=True, f
             if show_group:
                 row.append(str(e.group or ""))
             if show_level:
-                row.append(str(e.group_level or ""))
+                row.append(_level_text(e.group_level))
             if show_ylev:
-                row.append(str(e.y_level or ""))
+                row.append(_level_text(e.y_level))
             row += [
                 _fmt_fixed(e.est, dec=4),
                 _fmt_fixed(e.se, dec=4),
@@ -465,9 +476,9 @@ class TTestTwoGroups(msgspec.Struct, tag="two", tag_field="kind", kw_only=True, 
             if show_group:
                 row.append(str(e.group or ""))
             if show_level:
-                row.append(str(e.group_level or ""))
+                row.append(_level_text(e.group_level))
             if show_ylev:
-                row.append(str(e.y_level or ""))
+                row.append(_level_text(e.y_level))
             row += [
                 _fmt_fixed(e.est, dec=4),
                 _fmt_fixed(e.se, dec=4),
@@ -523,7 +534,7 @@ class TTestTwoGroups(msgspec.Struct, tag="two", tag_field="kind", kw_only=True, 
         # Build header info
         header_lines = [
             Text(f"Y = {self.y!r}"),
-            Text(f"Groups: {gvar} = [{g1!r} vs {g2!r}]"),
+            Text(f"Groups: {gvar} = [{_level_repr(g1)} vs {_level_repr(g2)}]"),
             Text(""),
         ]
 
@@ -837,7 +848,7 @@ class TTestByResult:
         Splits on '__by__' and zips with by variable names.
         """
         _BY_SEP = "__by__"
-        level_str = str(by_level)
+        level_str = _level_text(by_level)
         parts = level_str.split(_BY_SEP)
         if len(parts) == len(self._by_list) and len(parts) > 1:
             return ", ".join(f"{var} = {val}" for var, val in zip(self._by_list, parts))
@@ -890,7 +901,9 @@ class TTestByResult:
         else:
             if self.groups:
                 g1, g2 = self.groups.levels
-                header_lines.append(Text(f"Groups: {self.groups.var} = [{g1!r} vs {g2!r}]"))
+                header_lines.append(
+                    Text(f"Groups: {self.groups.var} = [{_level_repr(g1)} vs {_level_repr(g2)}]")
+                )
         header_lines.append(Text(f"By: {', '.join(self._by_list)}"))
         if self.where_clause:
             where_text = Text()
@@ -950,7 +963,7 @@ class TTestByResult:
                 lines = [
                     f"T-Test: Two-sample ({pair_txt})",
                     f"  Y = {self.y!r}",
-                    f"  Groups: {self.groups.var} = [{g1!r} vs {g2!r}]",
+                    f"  Groups: {self.groups.var} = [{_level_repr(g1)} vs {_level_repr(g2)}]",
                     f"  By: {by_display}",
                 ]
             else:
@@ -1051,8 +1064,8 @@ def _rows_for_plain(tt: TTestOneGroup | TTestTwoGroups, *, dec: int = 4) -> Iter
     def fmt_e(e: TtestEst) -> list[str]:
         return [
             str(e.group or ""),
-            str(e.group_level or ""),
-            str(e.y_level or ""),
+            _level_text(e.group_level),
+            _level_text(e.y_level),
             _fmt_fixed(e.est, dec=dec),
             _fmt_fixed(e.se, dec=dec),
             _fmt_fixed(e.cv, dec=dec),
@@ -1084,7 +1097,7 @@ def _plain_estimates_table(tt: TTestOneGroup | TTestTwoGroups) -> str:
     for e in estimates:
         row: list[str] = []
         if is_two:
-            row.append(str(e.group_level) if e.group_level is not None else "")
+            row.append(_level_text(e.group_level))
         row += [
             _fmt_fixed(e.est, dec=4),
             _fmt_fixed(e.se, dec=4),
@@ -1133,7 +1146,7 @@ def _plain_two_sample(tt: TTestTwoGroups) -> str:
     lines = [
         f"T-Test: Two-sample ({pair_txt})",
         f"  Y = {tt.y!r}",
-        f"  Groups: {tt.groups.var} = [{g1!r} vs {g2!r}]",
+        f"  Groups: {tt.groups.var} = [{_level_repr(g1)} vs {_level_repr(g2)}]",
         "",
     ]
     lines.append(_plain_estimates_table(tt))

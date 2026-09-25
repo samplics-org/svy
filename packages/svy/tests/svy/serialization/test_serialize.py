@@ -350,9 +350,9 @@ def test_nonfinite_pointer_escapes_keys():
     from svy.serialize import serializers as s
 
     found: dict[str, str] = {}
-    raw = s._pull_nonfinite(msgspec.to_builtins(data), "", found)
+    raw = s._pull_special(msgspec.to_builtins(data), "", found, {})
     assert found == {"/items/0/a~1b~0c": "nan"}
-    s._put_nonfinite(raw, found)
+    s._put_special(raw, found, lambda tag, _: float(tag))
     assert np.isnan(raw["items"][0]["a/b~c"])
     assert js  # encodes
 

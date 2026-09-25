@@ -9,6 +9,7 @@ attributes and convert types (numpy → list, StrEnum → str, etc.).
 
 from __future__ import annotations
 
+import datetime as dt
 import math
 
 from enum import Enum
@@ -444,6 +445,16 @@ def serialize(result: Any) -> ResultData:
 
 #: JSON field mapping a JSON Pointer to the non-finite value written as ``null`` there.
 NONFINITE_FIELD = "nonfinite"
+#: JSON field mapping a JSON Pointer to the temporal type of the ISO string there.
+TEMPORAL_FIELD = "temporal"
+
+# datetime before date: a datetime is also a date.
+_TEMPORAL: dict[str, type] = {
+    "datetime": dt.datetime,
+    "date": dt.date,
+    "time": dt.time,
+    "duration": dt.timedelta,
+}
 
 
 def to_json(result: Any) -> bytes:
@@ -453,22 +464,37 @@ def to_json(result: Any) -> bytes:
     value recorded under ``"nonfinite"``, keyed by JSON Pointer (RFC 6901),
     e.g. ``{"/estimates/3/cv": "inf"}``. Consumers that ignore the field see
     ``null``; ``from_json`` restores the exact value.
+
+    A date, datetime, time or duration (a level of a temporal column) is
+    written as its ISO 8601 string and its type recorded under
+    ``"temporal"``, e.g. ``{"/estimates/0/by_level/0": "date"}``.
     """
-    found: dict[str, str] = {}
-    raw = _pull_nonfinite(msgspec.to_builtins(serialize(result)), "", found)
-    if found:
-        raw[NONFINITE_FIELD] = found
+    nonfinite: dict[str, str] = {}
+    temporal: dict[str, str] = {}
+    builtins = msgspec.to_builtins(serialize(result), builtin_types=tuple(_TEMPORAL.values()))
+    raw = _pull_special(builtins, "", nonfinite, temporal)
+    if nonfinite:
+        raw[NONFINITE_FIELD] = nonfinite
+    if temporal:
+        raw[TEMPORAL_FIELD] = temporal
     return msgspec.json.encode(raw)
 
 
-def _pull_nonfinite(obj: Any, path: str, found: dict[str, str]) -> Any:
+def _pull_special(obj: Any, path: str, nonfinite: dict[str, str], temporal: dict[str, str]) -> Any:
     if isinstance(obj, float) and not math.isfinite(obj):
-        found[path] = "nan" if math.isnan(obj) else ("inf" if obj > 0 else "-inf")
+        nonfinite[path] = "nan" if math.isnan(obj) else ("inf" if obj > 0 else "-inf")
         return None
+    for kind, cls in _TEMPORAL.items():
+        if isinstance(obj, cls):
+            temporal[path] = kind
+            return msgspec.to_builtins(obj)
     if isinstance(obj, dict):
-        return {k: _pull_nonfinite(v, f"{path}/{_escape(k)}", found) for k, v in obj.items()}
+        return {
+            k: _pull_special(v, f"{path}/{_escape(k)}", nonfinite, temporal)
+            for k, v in obj.items()
+        }
     if isinstance(obj, list):
-        return [_pull_nonfinite(v, f"{path}/{i}", found) for i, v in enumerate(obj)]
+        return [_pull_special(v, f"{path}/{i}", nonfinite, temporal) for i, v in enumerate(obj)]
     return obj
 
 
@@ -476,14 +502,27 @@ def _escape(key: str) -> str:
     return str(key).replace("~", "~0").replace("/", "~1")
 
 
-def _put_nonfinite(raw: Any, found: dict[str, str]) -> None:
-    for pointer, value in found.items():
+def _put_special(root: Any, found: dict[str, str], restore: Callable[[str, Any], Any]) -> None:
+    """Replace the value at each pointer in ``found`` (dicts, lists or structs) by ``restore``."""
+    for pointer, tag in found.items():
         parts = [p.replace("~1", "/").replace("~0", "~") for p in pointer.split("/")[1:]]
-        node = raw
+        node = root
         for p in parts[:-1]:
-            node = node[int(p)] if isinstance(node, list) else node[p]
+            node = _child(node, p)
         last = parts[-1]
-        node[int(last) if isinstance(node, list) else last] = float(value)
+        value = restore(tag, _child(node, last))
+        if isinstance(node, list):
+            node[int(last)] = value
+        elif isinstance(node, dict):
+            node[last] = value
+        else:
+            msgspec.structs.force_setattr(node, last, value)
+
+
+def _child(node: Any, key: str) -> Any:
+    if isinstance(node, list):
+        return node[int(key)]
+    return node[key] if isinstance(node, dict) else getattr(node, key)
 
 
 def to_dict(result: Any) -> dict[str, Any]:
@@ -512,8 +551,14 @@ def from_json(data: bytes) -> ResultData:
     cls = _KIND_TO_STRUCT.get(kind)
     if cls is None:
         raise SerializationError.unknown_kind(kind=kind, known=sorted(_KIND_TO_STRUCT))
-    _put_nonfinite(raw, raw.pop(NONFINITE_FIELD, None) or {})
-    return cast(ResultData, msgspec.convert(_null_to_nan(raw, mi.type_info(cls)), type=cls))
+    _put_special(raw, raw.pop(NONFINITE_FIELD, None) or {}, lambda tag, _: float(tag))
+    temporal = raw.pop(TEMPORAL_FIELD, None) or {}
+    data = msgspec.convert(_null_to_nan(raw, mi.type_info(cls)), type=cls)
+    # After decoding: level fields are typed str | int | float | bool, and
+    # msgspec allows no date beside str in a union, so the ISO strings decode
+    # as str and are converted here.
+    _put_special(data, temporal, lambda tag, s: msgspec.convert(s, type=_TEMPORAL[tag]))
+    return cast(ResultData, data)
 
 
 def _is_float(t: mi.Type) -> bool:

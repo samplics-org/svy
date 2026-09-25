@@ -35,6 +35,7 @@ from svy.core.enumerations import (
     TableUnits as _TableUnits,
 )
 from svy.core.types import (
+    Category,
     Number,
     WhereArg,
 )
@@ -843,12 +844,17 @@ class Categorical:
             by_col=prep.by_col,
         )
 
+        by_lookup = level_lookup(self._sample._data, [by]) if by is not None else {}
+        group_lookup = level_lookup(self._sample._data, [group])
+
         # Group levels actually used by the Rust kernel: rows in-domain with
         # positive weight (mirrors prepare_two_sample_data in svy-rs
         # categorical/api.rs). Under `where=` out-of-domain rows survive with
         # zeroed weights, so deriving labels from all rows would report
-        # excluded levels and mislabel the two-sample delta.
-        def _active_group_levels(by_level: object = None) -> list[str]:
+        # excluded levels and mislabel the two-sample delta. The kernel orders
+        # the levels as sorted strings, so they are sorted as strings before
+        # being mapped back to the column's values.
+        def _active_group_levels(by_level: object = None) -> list[Category]:
             if group not in prep.df.columns:
                 return []
             mask = pl.col(prep.weight_col).cast(pl.Float64) > 0
@@ -864,7 +870,7 @@ class Categorical:
                 .unique()
                 .to_list()
             )
-            return sorted(vals)
+            return [group_lookup.get(v, v) for v in sorted(vals)]
 
         _group_levels = _active_group_levels()
 
@@ -872,17 +878,17 @@ class Categorical:
         if by is not None:
             results = []
             for i in range(result_df.height):
-                by_level = result_df[prep.by_col][i]
+                raw_level = result_df[prep.by_col][i]
                 res = self._unpack_ranktest_row(
                     result_df=result_df,
                     row_idx=i,
                     y_name=y,
                     group=group,
-                    group_levels=_active_group_levels(by_level),
+                    group_levels=_active_group_levels(raw_level),
                     alpha=alpha,
                     alternative=alternative,
                     by=by,
-                    by_level=by_level,
+                    by_level=by_lookup.get(raw_level, raw_level),
                 )
                 results.append(res)
             from svy.categorical.ranktest import RankTestByResult
@@ -890,7 +896,7 @@ class Categorical:
             first = results[0] if results else None
             _groups = first.groups if first and isinstance(first, RankTestTwoSample) else None
             _method = first.method_name if first else ""
-            _by_levels = [result_df[prep.by_col][i] for i in range(result_df.height)]
+            _by_levels = [by_lookup.get(v, v) for v in result_df[prep.by_col].to_list()]
             return RankTestByResult(
                 results,
                 by=by,
@@ -922,7 +928,7 @@ class Categorical:
         row_idx: int,
         y_name: str,
         group: str,
-        group_levels: list[str],
+        group_levels: list[Category],
         alpha: float,
         alternative: str,
         by: str | None,
@@ -1121,6 +1127,9 @@ class Categorical:
             by_col=prep.by_col,
         )
 
+        by_lookup = level_lookup(self._sample._data, [by]) if by is not None else {}
+        group_lookup = level_lookup(self._sample._data, [group])
+
         def _unpack_row(row_idx: int, by_level: object) -> RankTestTwoSample:
             row = result_df.row(row_idx, named=True)
             if row["type"] != "two-sample":
@@ -1156,9 +1165,13 @@ class Categorical:
                 by_level=by_level if by else None,
             )
 
+            levels = (
+                group_lookup.get(row["level_0"], row["level_0"]),
+                group_lookup.get(row["level_1"], row["level_1"]),
+            )
             return RankTestTwoSample(
                 y=y,
-                groups=GroupLevels(var=group, levels=(row["level_0"], row["level_1"])),
+                groups=GroupLevels(var=group, levels=levels),
                 method_name=method_name,
                 alternative=alternative,
                 diff=[diff_est],
@@ -1170,7 +1183,7 @@ class Categorical:
         if by is not None:
             from svy.categorical.ranktest import RankTestByResult
 
-            _by_levels = [result_df[prep.by_col][i] for i in range(result_df.height)]
+            _by_levels = [by_lookup.get(v, v) for v in result_df[prep.by_col].to_list()]
             results = [_unpack_row(i, lvl) for i, lvl in enumerate(_by_levels)]
             first = results[0] if results else None
             return RankTestByResult(
