@@ -852,8 +852,7 @@ class Categorical:
         # categorical/api.rs). Under `where=` out-of-domain rows survive with
         # zeroed weights, so deriving labels from all rows would report
         # excluded levels and mislabel the two-sample delta. The kernel orders
-        # the levels as sorted strings, so they are sorted as strings before
-        # being mapped back to the column's values.
+        # numeric levels by value and all others as sorted strings.
         def _active_group_levels(by_level: object = None) -> list[Category]:
             if group not in prep.df.columns:
                 return []
@@ -870,7 +869,9 @@ class Categorical:
                 .unique()
                 .to_list()
             )
-            return [group_lookup.get(v, v) for v in sorted(vals)]
+            dtype = prep.df.schema[group]
+            key = float if (dtype.is_integer() or dtype.is_float()) else None
+            return [group_lookup.get(v, v) for v in sorted(vals, key=key)]
 
         _group_levels = _active_group_levels()
 

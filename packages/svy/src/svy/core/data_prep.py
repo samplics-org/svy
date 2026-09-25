@@ -11,7 +11,7 @@ categorical) needs before calling Rust:
   4. Concatenated design columns (stratum, psu, ssu, by)
   5. Paired difference (y - y_pair)
   6. Weight column creation (if no design weight)
-  7. Type casting (y→Float64, group/strata/psu→String)
+  7. Type casting (y→Float64, strata/psu→String)
   8. Singleton filtering
   9. FPC column computation
   10. Where clause → domain column + zero weights (main AND replicate)
@@ -382,6 +382,7 @@ def prepare_data(
     cast_y_float: bool,
     select_columns: bool,
     domain_mask_for_replication: bool = False,
+    factor_y: bool = False,
 ) -> PreparedData:
     """
     Unified data preparation for all Rust backend calls.
@@ -410,6 +411,10 @@ def prepare_data(
         If True, cast y to Float64. Set False for categorical y (tabulate). Required — must be explicit.
     select_columns : bool
         If True, select only needed columns for efficiency. Required — must be explicit.
+    factor_y : bool
+        Categorical y (``as_factor``): with ``drop_nulls``, a missing y makes the
+        row out-of-domain like a numeric y does, and stays null (NaN/inf become
+        null) so it is not read as a level.
 
     Returns
     -------
@@ -543,6 +548,8 @@ def prepare_data(
             _structural.update(s.name for s in _design_codes.values())
 
         _domain_roles: list[str] = []
+        if factor_y:
+            _domain_roles.append(y)
         if cast_y_float:
             _domain_roles.append(y)
             if x:
@@ -769,6 +776,9 @@ def prepare_data(
                     for c in null_zero_cols
                     if c in df.columns and df.schema[c].is_numeric() and c not in _fill_targets
                 )
+            if factor_y and df.schema[y_col] in (pl.Float32, pl.Float64):
+                _bad = pl.col(y_col).is_nan() | pl.col(y_col).is_infinite()
+                exprs.append(pl.when(_bad).then(None).otherwise(pl.col(y_col)).alias(y_col))
             for c in _fill_targets:
                 if c not in df.columns:
                     continue
@@ -827,7 +837,7 @@ def prepare_data(
         if no_where_exprs:
             df = df.with_columns(no_where_exprs)
 
-    # ── Type casting (y, x, group, strata, psu, ssu, by) ─────────────────
+    # ── Type casting (y, x, strata, psu, ssu, by) ────────────────────────
     # Fused into a single with_columns call. Each cast checks the current
     # dtype and is skipped when already correct (Polars treats same-type
     # cast as a no-op anyway, but the explicit guard keeps the expression
@@ -838,8 +848,6 @@ def prepare_data(
             casts.append(pl.col(y_col).cast(pl.Float64))
     if x and df[x].dtype != pl.Float64:
         casts.append(pl.col(x).cast(pl.Float64))
-    if group and df[group].dtype != pl.String:
-        casts.append(pl.col(group).cast(pl.String))
     # Design columns → String, EXCEPT the Phase C integer code columns, which
     # must stay UInt32 so the Rust kernel takes its integer fast path.
     _code_cols = {_STRATUM_CODE, _PSU_CODE, _SSU_CODE}

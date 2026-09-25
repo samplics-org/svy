@@ -155,6 +155,17 @@ def replicate_estimate(
             f"Create them with sample.weighting.create_*_wgts, or use "
             f"method='taylor'."
         )
+    if as_factor and param in (PopParam.MEAN, PopParam.TOTAL):
+        return replicate_factor(
+            est,
+            prep,
+            y,
+            param,
+            method=method,
+            fay_coef=fay_coef,
+            variance_center=variance_center,
+            alpha=alpha,
+        )
     if param == PopParam.MEAN:
         return replicate_mean(
             est,
@@ -280,6 +291,52 @@ def replicate_total(
         alpha,
         prep.by_cols,
         as_factor=False,
+        method=method,
+        design_df=df_val,
+        cov_filled=cov_flat is not None,
+    )
+
+
+def replicate_factor(
+    est: Estimation,
+    prep: PreparedData,
+    y: str,
+    param: PopParam,
+    *,
+    method: RepWgts,
+    fay_coef: float = 0.0,
+    variance_center: str = "rep_mean",
+    alpha: float = 0.05,
+) -> Estimate:
+    """Per-level shares (``mean``) or counts (``total``) of ``y`` as a factor."""
+    rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
+    data = est._ensure_float64(prep.df, rep_weight_cols)
+    # Levels are the values' text, as in the Taylor kernel, so any dtype works.
+    # A null y is out of the domain with zero weight; the kernel has no null
+    # level, so those rows go.
+    data = data.filter(pl.col(y).is_not_null()).with_columns(pl.col(y).cast(pl.String))
+    fn = rs.replicate_prop if param == PopParam.MEAN else rs.replicate_factor_total
+    result_df, cov_flat = fn(
+        data,
+        value_col=y,
+        weight_col=prep.weight_col,
+        rep_weight_cols=rep_weight_cols,
+        rep_coefs=rep_coefs,
+        center=variance_center,
+        degrees_of_freedom=df_val,
+        by_col=prep.by_col,
+        domain_mask_col=prep.domain_mask_col,
+    )
+    est_list = est._polars_result_to_param_est(
+        result_df, y, param, alpha, deff=False, by_col=prep.by_col, as_factor=True
+    )
+    return est._build_estimate_result_light(
+        est_list,
+        est._cov_from_kernel(result_df, cov_flat),
+        param,
+        alpha,
+        prep.by_cols,
+        as_factor=True,
         method=method,
         design_df=df_val,
         cov_filled=cov_flat is not None,

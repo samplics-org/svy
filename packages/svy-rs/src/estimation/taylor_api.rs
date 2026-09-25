@@ -1397,6 +1397,14 @@ fn compute_assoc(
 // Proportion
 // ============================================================================
 
+/// What a categorical estimate reports per level: its share of the (domain)
+/// weight, or its estimated count.
+#[derive(Clone, Copy)]
+enum LevelScale {
+    Share,
+    Count,
+}
+
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 pub fn taylor_prop(
@@ -1420,6 +1428,102 @@ pub fn taylor_prop(
     calib_pins_total: Option<bool>,
     calib_new_wgt: Option<String>,
 ) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
+    taylor_levels(
+        _py,
+        data,
+        value_col,
+        weight_col,
+        strata_col,
+        psu_col,
+        ssu_col,
+        fpc_col,
+        fpc_ssu_col,
+        by_col,
+        singleton_method,
+        deff_ref,
+        deff_pop_total,
+        calib_kind,
+        calib_cells,
+        calib_aux,
+        calib_prev_wgt,
+        calib_pins_total,
+        calib_new_wgt,
+        LevelScale::Share,
+    )
+}
+
+/// Estimated count of each level (`svytotal(~factor(y))`), with the joint
+/// covariance across levels (and by-groups).
+#[pyfunction]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
+pub fn taylor_factor_total(
+    _py: Python,
+    data: PyDataFrame,
+    value_col: String,
+    weight_col: String,
+    strata_col: Option<String>,
+    psu_col: Option<String>,
+    ssu_col: Option<String>,
+    fpc_col: Option<String>,
+    fpc_ssu_col: Option<String>,
+    by_col: Option<String>,
+    singleton_method: Option<String>,
+    deff_ref: Option<String>,
+    deff_pop_total: Option<f64>,
+    calib_kind: Option<String>,
+    calib_cells: Option<Vec<String>>,
+    calib_aux: Option<Vec<String>>,
+    calib_prev_wgt: Option<String>,
+    calib_pins_total: Option<bool>,
+    calib_new_wgt: Option<String>,
+) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
+    taylor_levels(
+        _py,
+        data,
+        value_col,
+        weight_col,
+        strata_col,
+        psu_col,
+        ssu_col,
+        fpc_col,
+        fpc_ssu_col,
+        by_col,
+        singleton_method,
+        deff_ref,
+        deff_pop_total,
+        calib_kind,
+        calib_cells,
+        calib_aux,
+        calib_prev_wgt,
+        calib_pins_total,
+        calib_new_wgt,
+        LevelScale::Count,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn taylor_levels(
+    _py: Python,
+    data: PyDataFrame,
+    value_col: String,
+    weight_col: String,
+    strata_col: Option<String>,
+    psu_col: Option<String>,
+    ssu_col: Option<String>,
+    fpc_col: Option<String>,
+    fpc_ssu_col: Option<String>,
+    by_col: Option<String>,
+    singleton_method: Option<String>,
+    deff_ref: Option<String>,
+    deff_pop_total: Option<f64>,
+    calib_kind: Option<String>,
+    calib_cells: Option<Vec<String>>,
+    calib_aux: Option<Vec<String>>,
+    calib_prev_wgt: Option<String>,
+    calib_pins_total: Option<bool>,
+    calib_new_wgt: Option<String>,
+    scale: LevelScale,
+) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
     let df = into_contiguous(data);
     let calib = make_calib(
         &df,
@@ -1434,7 +1538,7 @@ pub fn taylor_prop(
     let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
     if by_col.is_none() {
-        let (result, cov) = compute_prop_ungrouped(
+        let (result, cov) = compute_levels_ungrouped(
             &df,
             &value_col,
             &weight_col,
@@ -1446,6 +1550,7 @@ pub fn taylor_prop(
             singleton_method.as_deref(),
             srs,
             calib,
+            scale,
         )
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         return Ok((PyDataFrame(result), Some(cov)));
@@ -1453,7 +1558,7 @@ pub fn taylor_prop(
     let by = by_col.unwrap();
     let (result, cov) = _py
         .detach(|| {
-            compute_prop_grouped(
+            compute_levels_grouped(
                 &df,
                 &value_col,
                 &weight_col,
@@ -1466,6 +1571,7 @@ pub fn taylor_prop(
                 singleton_method.as_deref(),
                 srs,
                 calib,
+                scale,
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -1512,7 +1618,7 @@ pub fn taylor_prop_multi(
     Ok(PyDataFrame(result))
 }
 
-fn compute_prop_ungrouped(
+fn compute_levels_ungrouped(
     df: &DataFrame,
     value_col: &str,
     weight_col: &str,
@@ -1524,6 +1630,7 @@ fn compute_prop_ungrouped(
     singleton_method: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
+    scale: LevelScale,
 ) -> PolarsResult<(DataFrame, Vec<f64>)> {
     let weights = df.column(weight_col)?.f64()?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -1571,12 +1678,21 @@ fn compute_prop_ungrouped(
             })
             .collect();
         let indicator_ca = Float64Chunked::from_slice_options("indicator".into(), &indicator);
-        let estimate = point_estimate_mean(&indicator_ca, weights)?;
-        let scores = scores_mean(&indicator_ca, weights)?;
+        let (estimate, scores, srs_var) = match scale {
+            LevelScale::Share => (
+                point_estimate_mean(&indicator_ca, weights)?,
+                scores_mean(&indicator_ca, weights)?,
+                srs_variance_mean(&indicator_ca, weights, srs)?,
+            ),
+            LevelScale::Count => (
+                point_estimate_total(&indicator_ca, weights)?,
+                scores_total(&indicator_ca, weights)?,
+                srs_variance_total(&indicator_ca, weights, srs)?,
+            ),
+        };
         let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
         let variance = taylor_variance_apply(&scores_arr, &design);
         let se = variance.max(0.0).sqrt();
-        let srs_var = srs_variance_mean(&indicator_ca, weights, srs)?;
         let deff = if srs_var > 0.0 {
             variance / srs_var
         } else {
@@ -1602,7 +1718,7 @@ fn compute_prop_ungrouped(
 /// Batched ungrouped proportions: design built once, variables estimated in
 /// parallel (each variable loops its own category levels). See
 /// `compute_mean_multi`. Rows are (variable, level), grouped by variable in
-/// input order, levels sorted — identical to per-variable `compute_prop_ungrouped`.
+/// input order, levels sorted — identical to per-variable `compute_levels_ungrouped`.
 fn compute_prop_multi(
     df: &DataFrame,
     value_cols: &[String],
@@ -1722,7 +1838,7 @@ fn compute_prop_multi(
         "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs]
 }
 
-fn compute_prop_grouped(
+fn compute_levels_grouped(
     df: &DataFrame,
     value_col: &str,
     weight_col: &str,
@@ -1735,6 +1851,7 @@ fn compute_prop_grouped(
     singleton_method: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
+    scale: LevelScale,
 ) -> PolarsResult<(DataFrame, Vec<f64>)> {
     let weights = df.column(weight_col)?.f64()?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -1792,12 +1909,21 @@ fn compute_prop_grouped(
                     .collect();
                 let indicator_ca =
                     Float64Chunked::from_slice_options("indicator".into(), &indicator);
-                let estimate = point_estimate_mean_domain(&indicator_ca, weights, &domain_mask)?;
-                let scores = scores_mean_domain(&indicator_ca, weights, &domain_mask)?;
+                let (estimate, scores, srs_var) = match scale {
+                    LevelScale::Share => (
+                        point_estimate_mean_domain(&indicator_ca, weights, &domain_mask)?,
+                        scores_mean_domain(&indicator_ca, weights, &domain_mask)?,
+                        srs_variance_mean_domain(&indicator_ca, weights, &domain_mask, srs)?,
+                    ),
+                    LevelScale::Count => (
+                        point_estimate_total_domain(&indicator_ca, weights, &domain_mask)?,
+                        scores_total_domain(&indicator_ca, weights, &domain_mask)?,
+                        srs_variance_total_domain(&indicator_ca, weights, &domain_mask, srs)?,
+                    ),
+                };
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
                 let variance = taylor_variance_apply(&scores_arr, &design);
                 let se = variance.max(0.0).sqrt();
-                let srs_var = srs_variance_mean_domain(&indicator_ca, weights, &domain_mask, srs)?;
                 let deff = if srs_var > 0.0 {
                     variance / srs_var
                 } else {

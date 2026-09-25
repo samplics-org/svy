@@ -837,6 +837,17 @@ pub fn matrix_ratio_by_domain(
 // Proportion estimation (multi-category)
 // ============================================================================
 
+/// A level's weight as a share of the total (proportions) or as-is (counts).
+fn level_value(w_level: f64, w_total: f64, normalize: bool) -> f64 {
+    if !normalize {
+        w_level
+    } else if w_total > 0.0 {
+        w_level / w_total
+    } else {
+        f64::NAN
+    }
+}
+
 /// Compute proportion estimates by level for all replicates.
 /// Category values are integers (Boolean or numeric columns).
 /// Returns (levels, full_estimates[L], replicate_estimates[L][R])
@@ -847,6 +858,7 @@ pub fn matrix_prop_estimates(
     n: usize,
     n_reps: usize,
     domain_mask: Option<&[f64]>,
+    normalize: bool,
 ) -> (Vec<i64>, Vec<f64>, Vec<Vec<f64>>) {
     // Find unique levels
     let mut level_map: HashMap<i64, usize> = HashMap::new();
@@ -892,13 +904,7 @@ pub fn matrix_prop_estimates(
     // Compute proportions
     let theta_full: Vec<f64> = sum_w_level
         .iter()
-        .map(|&w_l| {
-            if sum_w_total > 0.0 {
-                w_l / sum_w_total
-            } else {
-                f64::NAN
-            }
-        })
+        .map(|&w_l| level_value(w_l, sum_w_total, normalize))
         .collect();
 
     let theta_reps: Vec<Vec<f64>> = rep_sum_w_level
@@ -907,7 +913,7 @@ pub fn matrix_prop_estimates(
             w_l_vec
                 .iter()
                 .zip(rep_sum_w_total.iter())
-                .map(|(&w_l, &w_t)| if w_t > 0.0 { w_l / w_t } else { f64::NAN })
+                .map(|(&w_l, &w_t)| level_value(w_l, w_t, normalize))
                 .collect()
         })
         .collect();
@@ -942,6 +948,7 @@ pub fn matrix_prop_estimates_cols(
     rep_cols: &[&[f64]],
     n: usize,
     domain_mask: Option<&[f64]>,
+    normalize: bool,
 ) -> (Vec<i64>, Vec<f64>, Vec<Vec<f64>>) {
     let (levels, lev_idx) = prop_level_index(y);
     let n_levels = levels.len();
@@ -954,7 +961,7 @@ pub fn matrix_prop_estimates_cols(
     }
     let theta_full: Vec<f64> = sum_w_level
         .iter()
-        .map(|&w_l| if sum_w_total > 0.0 { w_l / sum_w_total } else { f64::NAN })
+        .map(|&w_l| level_value(w_l, sum_w_total, normalize))
         .collect();
 
     use rayon::prelude::*;
@@ -980,7 +987,7 @@ pub fn matrix_prop_estimates_cols(
                 }
             }
             (0..n_levels)
-                .map(|l| if swt > 0.0 { swl[l] / swt } else { f64::NAN })
+                .map(|l| level_value(swl[l], swt, normalize))
                 .collect()
         })
         .collect();
@@ -1001,6 +1008,7 @@ pub fn matrix_prop_estimates_str_cols(
     rep_cols: &[&[f64]],
     n: usize,
     domain_mask: Option<&[f64]>,
+    normalize: bool,
 ) -> (Vec<String>, Vec<f64>, Vec<Vec<f64>>) {
     let mut level_map: HashMap<&str, usize> = HashMap::new();
     let mut levels: Vec<String> = Vec::new();
@@ -1025,7 +1033,7 @@ pub fn matrix_prop_estimates_str_cols(
     }
     let theta_full: Vec<f64> = sum_w_level
         .iter()
-        .map(|&w_l| if sum_w_total > 0.0 { w_l / sum_w_total } else { f64::NAN })
+        .map(|&w_l| level_value(w_l, sum_w_total, normalize))
         .collect();
 
     use rayon::prelude::*;
@@ -1051,7 +1059,7 @@ pub fn matrix_prop_estimates_str_cols(
                 }
             }
             (0..n_levels)
-                .map(|l| if swt > 0.0 { swl[l] / swt } else { f64::NAN })
+                .map(|l| level_value(swl[l], swt, normalize))
                 .collect()
         })
         .collect();
@@ -1074,6 +1082,7 @@ pub fn matrix_prop_by_domain(
     n_domains: usize,
     n: usize,
     n_reps: usize,
+    normalize: bool,
 ) -> (Vec<i64>, Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>) {
     // Find unique levels
     let mut level_map: HashMap<i64, usize> = HashMap::new();
@@ -1129,7 +1138,7 @@ pub fn matrix_prop_by_domain(
         .map(|(w_l_vec, &w_t)| {
             w_l_vec
                 .iter()
-                .map(|&w_l| if w_t > 0.0 { w_l / w_t } else { f64::NAN })
+                .map(|&w_l| level_value(w_l, w_t, normalize))
                 .collect()
         })
         .collect();
@@ -1145,7 +1154,7 @@ pub fn matrix_prop_by_domain(
                     w_l_reps
                         .iter()
                         .zip(dom_totals.iter())
-                        .map(|(&w_l, &w_t)| if w_t > 0.0 { w_l / w_t } else { f64::NAN })
+                        .map(|(&w_l, &w_t)| level_value(w_l, w_t, normalize))
                         .collect()
                 })
                 .collect()
@@ -1166,6 +1175,7 @@ pub fn matrix_prop_estimates_str(
     n: usize,
     n_reps: usize,
     domain_mask: Option<&[f64]>,
+    normalize: bool,
 ) -> (Vec<String>, Vec<f64>, Vec<Vec<f64>>) {
     // Find unique levels
     let mut level_map: HashMap<&str, usize> = HashMap::new();
@@ -1211,7 +1221,7 @@ pub fn matrix_prop_estimates_str(
     // Compute proportions
     let theta_full: Vec<f64> = sum_w_level
         .iter()
-        .map(|&w_l| if sum_w_total > 0.0 { w_l / sum_w_total } else { f64::NAN })
+        .map(|&w_l| level_value(w_l, sum_w_total, normalize))
         .collect();
 
     let theta_reps: Vec<Vec<f64>> = rep_sum_w_level
@@ -1220,7 +1230,7 @@ pub fn matrix_prop_estimates_str(
             w_l_vec
                 .iter()
                 .zip(rep_sum_w_total.iter())
-                .map(|(&w_l, &w_t)| if w_t > 0.0 { w_l / w_t } else { f64::NAN })
+                .map(|(&w_l, &w_t)| level_value(w_l, w_t, normalize))
                 .collect()
         })
         .collect();
@@ -1239,6 +1249,7 @@ pub fn matrix_prop_by_domain_str(
     n_domains: usize,
     n: usize,
     n_reps: usize,
+    normalize: bool,
 ) -> (Vec<String>, Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>) {
     // Find unique levels
     let mut level_map: HashMap<&str, usize> = HashMap::new();
@@ -1295,7 +1306,7 @@ pub fn matrix_prop_by_domain_str(
         .map(|(w_l_vec, &w_t)| {
             w_l_vec
                 .iter()
-                .map(|&w_l| if w_t > 0.0 { w_l / w_t } else { f64::NAN })
+                .map(|&w_l| level_value(w_l, w_t, normalize))
                 .collect()
         })
         .collect();
@@ -1311,7 +1322,7 @@ pub fn matrix_prop_by_domain_str(
                     w_l_reps
                         .iter()
                         .zip(dom_totals.iter())
-                        .map(|(&w_l, &w_t)| if w_t > 0.0 { w_l / w_t } else { f64::NAN })
+                        .map(|(&w_l, &w_t)| level_value(w_l, w_t, normalize))
                         .collect()
                 })
                 .collect()
@@ -1752,7 +1763,7 @@ mod tests {
         let rep_w = vec![1.0f64; 6 * 2];
 
         let (levels, theta_full, theta_reps) =
-            matrix_prop_estimates_str(&y, &w, &rep_w, 6, 2, None);
+            matrix_prop_estimates_str(&y, &w, &rep_w, 6, 2, None, true);
 
         assert_eq!(levels, vec!["no".to_string(), "yes".to_string()]);
         let no_idx = 0;
@@ -1762,6 +1773,24 @@ mod tests {
         assert!((theta_full[no_idx] + theta_full[yes_idx] - 1.0).abs() < 1e-10);
         assert_eq!(theta_reps[no_idx].len(), 2);
         assert_eq!(theta_reps[yes_idx].len(), 2);
+    }
+
+    #[test]
+    fn test_matrix_prop_estimates_counts() {
+        // normalize = false: each level's weighted count, per replicate too
+        let y = vec![1i64, 2, 1, 10];
+        let w = vec![2.0, 3.0, 4.0, 5.0];
+        let rep_w = vec![1.0, 2.0, 1.0, 2.0, 1.0, 2.0, 1.0, 2.0]; // 2 reps
+        let rep_cols: Vec<&[f64]> = vec![&[1.0, 1.0, 1.0, 1.0], &[2.0, 2.0, 2.0, 2.0]];
+
+        let (levels, full, reps) = matrix_prop_estimates(&y, &w, &rep_w, 4, 2, None, false);
+        assert_eq!(levels, vec![1, 2, 10]);
+        assert_eq!(full, vec![6.0, 3.0, 5.0]);
+        assert_eq!(reps, vec![vec![2.0, 4.0], vec![1.0, 2.0], vec![1.0, 2.0]]);
+
+        let (_, full_c, reps_c) = matrix_prop_estimates_cols(&y, &w, &rep_cols, 4, None, false);
+        assert_eq!(full_c, full);
+        assert_eq!(reps_c, reps);
     }
 
     #[test]
@@ -1777,7 +1806,7 @@ mod tests {
         let domain_ids = vec![0u32, 0, 1, 1];
 
         let (levels, theta_full, _theta_reps, counts) =
-            matrix_prop_by_domain_str(&y, &w, &rep_w, &domain_ids, 2, 4, 2);
+            matrix_prop_by_domain_str(&y, &w, &rep_w, &domain_ids, 2, 4, 2, true);
 
         assert_eq!(levels, vec!["no".to_string(), "yes".to_string()]);
         // Domain A: no=0.5, yes=0.5

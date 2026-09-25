@@ -159,7 +159,8 @@ def taylor_total(
     )
     center_arg = est._get_center_method()
 
-    result_df, cov_flat = rs.taylor_total(
+    fn = rs.taylor_factor_total if as_factor else rs.taylor_total
+    result_df, cov_flat = fn(
         df,
         value_col=y,
         weight_col=prep.weight_col,
@@ -177,7 +178,7 @@ def taylor_total(
     result_df, cov_flat = est._apply_scale_adjustment(result_df, cov_flat, prep=prep)
 
     est_list = est._polars_result_to_param_est(
-        result_df, y, PopParam.TOTAL, alpha, deff_ref is not None, prep.by_col, as_factor=False
+        result_df, y, PopParam.TOTAL, alpha, deff_ref is not None, prep.by_col, as_factor
     )
     est_cov = est._cov_from_kernel(result_df, cov_flat)
     design_df = int(result_df["df"][0]) if prep.by_col is None else est._design_df_from_prep(prep)
@@ -187,7 +188,7 @@ def taylor_total(
         PopParam.TOTAL,
         alpha,
         prep.by_cols,
-        as_factor=False,
+        as_factor=as_factor,
         method=None,
         deff_ref=deff_ref,
         design_df=design_df,

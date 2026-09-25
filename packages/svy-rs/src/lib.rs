@@ -37,6 +37,10 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_assoc, m)?)?;
     m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_prop, m)?)?;
     m.add_function(wrap_pyfunction!(
+        estimation::taylor_api::taylor_factor_total,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
         estimation::taylor_api::taylor_prop_multi,
         m
     )?)?;
@@ -64,6 +68,10 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(
         estimation::replication_api::replicate_total,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        estimation::replication_api::replicate_factor_total,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
