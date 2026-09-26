@@ -208,12 +208,12 @@ class TestAddStageUnselectedSample:
         result = ea.sampling.add_stage(_hh_sample_obj())
         assert result.data.height == 9
 
-    def test_design_ssu_set_from_stage2_psu(self):
+    def test_design_ssu_not_set_from_stage2_psu(self):
         ea = _selected_ea_sample()
         hh = _hh_sample_obj()
         result = ea.sampling.add_stage(hh)
-        # stage-2 psu="ea" becomes ssu in combined design
-        assert result.design.ssu == hh.design.psu
+        # stage-2 psu="ea" is the link to stage 1, not a stage-2 unit
+        assert result.design.ssu is None
 
     def test_already_selected_false(self):
         ea = _selected_ea_sample()

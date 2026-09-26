@@ -547,10 +547,13 @@ def _clean_names(
     """
     Clean column names and return (new_df, renames).
     """
-    old_cols = list(data.columns)
-    RESERVED = {"svy_row_index", "svy_weight", "svy_prob", "svy_hit"}
+    from svy.core.constants import _INTERNAL_CONCAT_SUFFIX, SELECTION_COLUMNS, SVY_ROW_INDEX
 
-    from svy.core.constants import _INTERNAL_CONCAT_SUFFIX
+    old_cols = list(data.columns)
+    RESERVED = SELECTION_COLUMNS | {SVY_ROW_INDEX}
+
+    def _protected(name: str) -> bool:
+        return name in RESERVED or _INTERNAL_CONCAT_SUFFIX in name
 
     def _remove_non_alnum(name: str, pat: str) -> str:
         # remove per-character only if it matches `pat` AND is not alphanumeric/underscore
@@ -562,7 +565,7 @@ def _clean_names(
         # preserve reserved/internal columns exactly — renaming the internal
         # concat columns would orphan them (a fresh lowercase copy gets
         # rebuilt, leaving the renamed one behind as junk)
-        if name in RESERVED or _INTERNAL_CONCAT_SUFFIX in name:
+        if _protected(name):
             return name, False
 
         orig = name
@@ -596,12 +599,16 @@ def _clean_names(
         normalized.append(new)
         changed_flags.append(changed)
 
-    # second pass: fill empties + ensure uniqueness
-    seen: set[str] = set()
+    # second pass: fill empties + ensure uniqueness. Protected names are
+    # claimed first so a user column cleaned into one of them is the one suffixed.
+    seen: set[str] = {c for c in old_cols if _protected(c)}
     final: list[str] = []
     blank_counter = 0
 
-    for base in normalized:
+    for old, base in zip(old_cols, normalized):
+        if _protected(old):
+            final.append(old)
+            continue
         candidate = base
         if candidate == "":
             candidate = f"col_{blank_counter}"

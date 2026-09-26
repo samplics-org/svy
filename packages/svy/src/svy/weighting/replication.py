@@ -184,7 +184,8 @@ def _pair_variance_strata(
             hint="Check column names.",
         )
 
-    select_cols = [psu_col]
+    psu_keys = [psu_col] if isinstance(psu_col, str) else list(psu_col)
+    select_cols = list(psu_keys)
     # Include stratum source columns AND the concat column (if different)
     for c in stratum_source_cols:
         if c not in select_cols:
@@ -199,20 +200,16 @@ def _pair_variance_strata(
     # variance strata, leaving some holding a single PSU. First occurrence in
     # the frame wins, which is what "order by this column" means once the column
     # varies within a PSU.
-    _psu_keys = [psu_col] if isinstance(psu_col, str) else list(psu_col)
-    psu_df = df.select(select_cols).unique(subset=_psu_keys, keep="first", maintain_order=True)
+    psu_df = df.select(select_cols).unique(subset=psu_keys, keep="first", maintain_order=True)
 
     sort_cols = []
     if stratum_col_for_grouping:
         sort_cols.append(stratum_col_for_grouping)
     sort_cols.extend(order_cols)
-    if psu_col not in sort_cols:
-        sort_cols.append(psu_col)
+    sort_cols.extend(c for c in psu_keys if c not in sort_cols)
 
     psu_df = psu_df.sort(sort_cols)
-
-    psu_list = psu_df[psu_col].to_list()
-    n_psus = len(psu_list)
+    n_psus = psu_df.height
 
     if stratum_col_for_grouping:
         orig_strata = psu_df[stratum_col_for_grouping].to_numpy()
@@ -309,16 +306,12 @@ def _pair_variance_strata(
                     var_strata[indices[i + 1]] = var_stratum_counter
                     var_stratum_counter += 1
 
-    # psu_list/var_strata are PSU-level (one per PSU, in sort order).
-    # Build the mapping then expand to observation level via a left join.
-    # unique() on psu_col guards against psu_list having duplicate entries
-    # when order_by columns cause psu_df to contain repeated PSU rows.
-    mapping_df = pl.DataFrame({psu_col: psu_list, "__vs__": var_strata.tolist()}).unique(
-        subset=[psu_col], keep="first"
-    )
+    # var_strata is PSU-level (one per psu_df row, in sort order); expand it to
+    # observation level via a left join on the PSU columns.
+    mapping_df = psu_df.select(psu_keys).with_columns(pl.Series("__vs__", var_strata))
     obs_var_strata = (
-        df.select(psu_col)
-        .join(mapping_df, on=psu_col, how="left")
+        df.select(psu_keys)
+        .join(mapping_df, on=psu_keys, how="left", maintain_order="left")
         .get_column("__vs__")
         .to_numpy()
         .astype(np.int64)
