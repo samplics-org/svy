@@ -35,7 +35,7 @@ import pytest
 
 from scipy import stats
 
-from svy import Design, Sample, col
+from svy import Design, Sample, SvyUserWarning, col
 from svy.core.warnings import WarnCode
 
 
@@ -120,6 +120,10 @@ def _beta_ci(p: float, se: float, n_d: int, df: int) -> tuple[float, float]:
         stats.beta.ppf(ALPHA / 2, n_eff * p, n_eff * (1 - p) + 1),
         stats.beta.ppf(1 - ALPHA / 2, n_eff * p + 1, n_eff * (1 - p)),
     )
+
+
+# y_zero sits at p = 0/1 in a domain: a side effect for tests about other things.
+BOUNDARY_EXPECTED = pytest.mark.filterwarnings(r"ignore:\[PROP_CI_BOUNDARY\]:svy.SvyUserWarning")
 
 
 def _boundary_warnings(sample: Sample) -> list:
@@ -222,6 +226,7 @@ class TestKornGraubardClosedForm:
 @pytest.mark.parametrize("design", list(DESIGNS))
 @pytest.mark.parametrize("method", CI_METHODS)
 class TestDomainSpellingInvariance:
+    @BOUNDARY_EXPECTED
     @pytest.mark.parametrize("y", ["y_mid", "y_zero", "y_flat"])
     def test_where_equals_by(self, design, method, y):
         s = _sample(design=design)
@@ -255,6 +260,7 @@ class TestDomainSpellingInvariance:
     ids=["where", "by", "where_by"],
 )
 @pytest.mark.parametrize("y", ["y_mid", "y_zero", "y_flat"])
+@BOUNDARY_EXPECTED
 def test_zero_weight_rows_change_nothing(method, kwargs, y):
     base = _frame()
     extra = base.filter(pl.col("female") == 1).with_columns(
@@ -270,6 +276,7 @@ def test_zero_weight_rows_change_nothing(method, kwargs, y):
 
 
 @pytest.mark.parametrize("method", CI_METHODS)
+@BOUNDARY_EXPECTED
 def test_poststratified_equals_plain(method):
     # Controls equal the sample's own stratum totals: weights, estimates and
     # SEs are unchanged, so no interval may move. (R's subset of a calibrated
@@ -284,6 +291,7 @@ def test_poststratified_equals_plain(method):
 
 
 @pytest.mark.parametrize("method", CI_METHODS)
+@BOUNDARY_EXPECTED
 def test_multi_variable_path_matches_single(method):
     s = _sample()
     ys = ["y_mid", "y_zero", "y_flat"]
@@ -351,6 +359,7 @@ class TestReplication:
         n_d = int(REP_N_D[kind] * n_d_scale)
         assert e.uci == pytest.approx(_kg_boundary_bound(n_d, e.df), abs=1e-12)
 
+    @BOUNDARY_EXPECTED
     @pytest.mark.parametrize("method", CI_METHODS)
     def test_where_equals_by(self, kind, method):
         s = _rep_sample(kind)
@@ -366,9 +375,10 @@ class TestReplication:
 
     def test_boundary_nan_and_warning(self, kind):
         s = _rep_sample(kind)
-        r = s.estimation.prop(
-            "y_zero", where=col("female") == 1, ci_method="beta", method="replication"
-        )
+        with pytest.warns(SvyUserWarning, match=r"\[PROP_CI_BOUNDARY\]"):
+            r = s.estimation.prop(
+                "y_zero", where=col("female") == 1, ci_method="beta", method="replication"
+            )
         for e in r.estimates:
             assert math.isnan(e.lci) and math.isnan(e.uci)
         assert _boundary_warnings(s)
@@ -440,7 +450,8 @@ class TestBoundary:
     )
     def test_nan_and_warning(self, method, kwargs, by_level):
         s = _sample()
-        cells = _cells(s.estimation.prop("y_zero", ci_method=method, **kwargs))
+        with pytest.warns(SvyUserWarning, match=r"\[PROP_CI_BOUNDARY\]"):
+            cells = _cells(s.estimation.prop("y_zero", ci_method=method, **kwargs))
         for lv, p in (("1", 0.0), ("0", 1.0)):
             e = cells[(by_level, lv)]
             assert e.est == p
@@ -449,6 +460,7 @@ class TestBoundary:
         assert "korn-graubard" in w.hint
         assert w.got == method
 
+    @BOUNDARY_EXPECTED
     def test_non_boundary_cells_keep_their_interval(self):
         # Men's y_zero varies across PSUs here, so their cell has se > 0.
         f = (

@@ -4,6 +4,7 @@
 import polars as pl
 import pytest
 
+from svy import SvyUserWarning
 from svy.core.design import Design
 from svy.core.expr import col
 from svy.core.sample import Sample
@@ -163,7 +164,8 @@ def test_filter_negate_list_membership(sample_basic: Sample):
 
 
 def test_filter_keeps_nulls_with_gt(sample_with_nulls: Sample):
-    out = sample_with_nulls.wrangling.filter_records(col("value") > 20)
+    with pytest.warns(SvyUserWarning, match=r"\[NULL_PREDICATE_ROWS_DROPPED\]"):
+        out = sample_with_nulls.wrangling.filter_records(col("value") > 20)
     assert out._data["value"].to_list() == [30, 50]
 
 

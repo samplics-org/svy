@@ -64,7 +64,8 @@ def test_remove_columns_cleans_pop_size():
         pl.DataFrame({"y": [1.0, 2.0], "w": [1.0, 1.0], "N": [100.0, 100.0]}),
         Design(wgt="w", pop_size="N"),
     )
-    out = s.wrangling.remove_columns("N", force=True)
+    with pytest.warns(svy.SvyUserWarning, match=r"\[DESIGN_FIELDS_REMOVED\]"):
+        out = s.wrangling.remove_columns("N", force=True)
     assert "N" not in out._data.columns
     # Previously stayed "N", crashing later estimation with a bare KeyError
     assert out.design.pop_size is None
@@ -175,14 +176,16 @@ def test_clean_names_upper_no_orphan_concat_columns():
 class TestFilterNullPredicates:
     def test_filter_warns_on_null_predicate_rows(self):
         s = Sample(pl.DataFrame({"x": [1.0, None, 3.0, None]}))
-        out = s.wrangling.filter_records(svy.col("x") > 2)
+        with pytest.warns(svy.SvyUserWarning, match=r"\[NULL_PREDICATE_ROWS_DROPPED\]"):
+            out = s.wrangling.filter_records(svy.col("x") > 2)
         assert out._data.height == 1
         warns = [w for w in out._warnings.list() if w.code == "NULL_PREDICATE_ROWS_DROPPED"]
         assert warns and "2 row(s)" in warns[0].detail
 
     def test_negated_filter_also_warns(self):
         s = Sample(pl.DataFrame({"x": [1.0, None, 3.0]}))
-        out = s.wrangling.filter_records(svy.col("x") > 2, negate=True)
+        with pytest.warns(svy.SvyUserWarning, match=r"\[NULL_PREDICATE_ROWS_DROPPED\]"):
+            out = s.wrangling.filter_records(svy.col("x") > 2, negate=True)
         assert out._data.height == 1
         assert any(w.code == "NULL_PREDICATE_ROWS_DROPPED" for w in out._warnings.list())
 
@@ -200,13 +203,15 @@ class TestFilterNullPredicates:
 class TestMeanFillIntegers:
     def test_mean_fill_int_casts_to_float(self):
         s = Sample(pl.DataFrame({"x": [1, None, 2]}, schema={"x": pl.Int64}))
-        out = s.wrangling.fill_null("x", strategy="mean")
+        with pytest.warns(svy.SvyUserWarning, match=r"\[MEAN_FILL_INT_CAST\]"):
+            out = s.wrangling.fill_null("x", strategy="mean")
         assert out._data["x"].dtype == pl.Float64
         assert out._data["x"].to_list() == [1.0, 1.5, 2.0]
 
     def test_mean_fill_int_warns(self):
         s = Sample(pl.DataFrame({"x": [1, None, 2]}, schema={"x": pl.Int64}))
-        out = s.wrangling.fill_null("x", strategy="mean")
+        with pytest.warns(svy.SvyUserWarning, match=r"\[MEAN_FILL_INT_CAST\]"):
+            out = s.wrangling.fill_null("x", strategy="mean")
         assert any(w.code == "MEAN_FILL_INT_CAST" for w in out._warnings.list())
 
     def test_mean_fill_float_unchanged(self):

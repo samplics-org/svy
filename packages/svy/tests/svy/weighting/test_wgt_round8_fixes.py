@@ -15,6 +15,7 @@ import numpy as np
 import polars as pl
 import pytest
 
+from svy import SvyUserWarning
 from svy.core.sample import Design, Sample
 from svy.core.terms import Cat
 from svy.errors import MethodError
@@ -239,12 +240,13 @@ def test_calibrate_trim_cycle_min_cell_size_skips_with_warning():
     plain_w = plain.data.get_column("cw_plain").to_numpy()
 
     s2 = _calib_sample()
-    out = s2.weighting.calibrate(
-        controls={Cat("grp"): {"a": 40.0, "b": 40.0}},
-        wgt_name="cw",
-        update_design_wgts=False,
-        trimming=TrimConfig(upper=1.01, min_cell_size=999),
-    )
+    with pytest.warns(SvyUserWarning, match=r"\[DOMAIN_SKIPPED\]"):
+        out = s2.weighting.calibrate(
+            controls={Cat("grp"): {"a": 40.0, "b": 40.0}},
+            wgt_name="cw",
+            update_design_wgts=False,
+            trimming=TrimConfig(upper=1.01, min_cell_size=999),
+        )
     from svy.core.warnings import WarnCode
 
     w = out.data.get_column("cw").to_numpy()
@@ -252,6 +254,8 @@ def test_calibrate_trim_cycle_min_cell_size_skips_with_warning():
     assert out._warnings.list(code=WarnCode.DOMAIN_SKIPPED)
 
 
+# The cycle may stop before converging (on_nonconvergence="warn"); the caps are checked.
+@pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyUserWarning")
 def test_calibrate_trim_cycle_by_domain_thresholds():
     """Per-domain trim: each group's weights end at or below its own cap."""
     rng = np.random.default_rng(3)

@@ -4,6 +4,7 @@
 import polars as pl
 import pytest
 
+from svy import SvyUserWarning
 from svy.core.design import Design
 from svy.core.expr import col
 from svy.core.sample import Sample
@@ -47,6 +48,8 @@ def sample_with_design():
 # ==================== Method Chaining ====================
 
 
+# age_years has a null; dropping it is a side effect here.
+@pytest.mark.filterwarnings(r"ignore:\[NULL_PREDICATE_ROWS_DROPPED\]:svy.SvyUserWarning")
 def test_chain_clean_names_then_filter(sample_complex: Sample):
     out = sample_complex.wrangling.clean_names().wrangling.filter_records(col("age_years") > 30)
 
@@ -153,7 +156,8 @@ def test_design_updated_on_rename(sample_with_design: Sample):
 
 
 def test_design_cleaned_on_column_removal(sample_with_design: Sample):
-    out = sample_with_design.wrangling.remove_columns(["stratum", "psu"], force=True)
+    with pytest.warns(SvyUserWarning, match=r"\[DESIGN_FIELDS_REMOVED\]"):
+        out = sample_with_design.wrangling.remove_columns(["stratum", "psu"], force=True)
 
     assert out._design.stratum is None
     assert out._design.psu is None
@@ -198,6 +202,8 @@ def test_labels_updated_on_rename():
 # ==================== Complex Workflows ====================
 
 
+# age_years is an integer column; the mean fill casts it, a side effect here.
+@pytest.mark.filterwarnings(r"ignore:\[MEAN_FILL_INT_CAST\]:svy.SvyUserWarning")
 def test_full_data_cleaning_workflow(sample_complex: Sample):
     """Simulate a realistic data cleaning pipeline."""
     out = (

@@ -344,6 +344,8 @@ def _assert_no_rule(res) -> None:
 
 
 class TestNonQuantileHasNoRule:
+    # The single-row "solo" domain puts a factor level at p = 0/1.
+    @pytest.mark.filterwarnings(r"ignore:\[PROP_CI_BOUNDARY\]:svy.SvyUserWarning")
     @pytest.mark.parametrize("estimator", sorted(NON_QUANTILE))
     @pytest.mark.parametrize("shape", sorted(SHAPES))
     def test_taylor(self, sample, estimator, shape):

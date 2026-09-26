@@ -54,6 +54,8 @@ def test_factor_written_to_every_row_of_the_case():
     assert out.design.wgt_adjustment.kind == "nonresponse"
 
 
+# Dropping the wave-2 nonrespondents leaves singletons: a side effect here.
+@pytest.mark.filterwarnings(r"ignore:\[SINGLETONS_DETECTED\]:svy.SvyUserWarning")
 def test_attriters_are_nonrespondents_and_keep_their_earlier_rows():
     out = _long().weighting.adjust("resp", cells="g", where=col("wave") == 2)
     # respondents_only drops the in-scope nonrespondent row only (case 3, wave 2)
@@ -84,6 +86,8 @@ def test_replicate_columns_propagate_per_case():
     assert out.data.filter(pl.col("id") == 3).select(rep_cols).to_numpy().sum() == 0.0
 
 
+# Dropping the wave-2 nonrespondents leaves singletons: a side effect here.
+@pytest.mark.filterwarnings(r"ignore:\[SINGLETONS_DETECTED\]:svy.SvyUserWarning")
 def test_chained_waves():
     w3 = pl.DataFrame(
         {

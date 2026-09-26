@@ -86,7 +86,8 @@ CALLS = {
 @pytest.mark.parametrize("name", list(CALLS))
 def test_null_cells_recorded_and_left_unadjusted(s, name):
     call, wgt = CALLS[name]
-    out = call(s)
+    with pytest.warns(SvyUserWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
+        out = call(s)
     w = _one(out, NULL)
     assert w.got == {"a": 2}
     assert w.param == "cells"
@@ -101,7 +102,8 @@ def test_null_cells_recorded_and_left_unadjusted(s, name):
 @pytest.mark.parametrize("name", list(CALLS))
 def test_null_cells_recorded_inplace(s, name):
     call, _ = CALLS[name]
-    out = call(s, inplace=True)
+    with pytest.warns(SvyUserWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
+        out = call(s, inplace=True)
     assert out is s
     assert _one(s, NULL).got == {"a": 2}
 
@@ -111,12 +113,16 @@ def test_standardize_null_in_by(s):
         pl.Series("g", ["g1", None, "g1", "g1", "g2", "g2", "g2", None]),
         pl.Series("a", ["x", "y"] * 4),
     )
-    out = Sample(df, Design(wgt="w")).weighting.standardize("a", shares={"x": 1, "y": 1}, by="g")
+    with pytest.warns(SvyUserWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
+        out = Sample(df, Design(wgt="w")).weighting.standardize(
+            "a", shares={"x": 1, "y": 1}, by="g"
+        )
     assert _one(out, NULL).got == {"g": 2}
 
 
 def test_several_null_columns_at_once(s):
-    out = s.weighting.poststratify({("x", 1): 1, ("y", 2): 2, ("x", 2): 0}, cells=["a", "b"])
+    with pytest.warns(SvyUserWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
+        out = s.weighting.poststratify({("x", 1): 1, ("y", 2): 2, ("x", 2): 0}, cells=["a", "b"])
     w = _one(out, NULL)
     assert w.got == {"a": 2, "b": 2}
     assert w.extra["n_rows"] == 4
@@ -126,9 +132,10 @@ def test_several_null_columns_at_once(s):
 
 def test_null_in_both_columns_counts_the_row_once():
     df = pl.DataFrame({"a": ["x", None, "y"], "b": [1, None, 2], "w": [1.0, 2.0, 3.0]})
-    out = Sample(df, Design(wgt="w")).weighting.poststratify(
-        {("x", 1): 5, ("y", 2): 5}, cells=["a", "b"]
-    )
+    with pytest.warns(SvyUserWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
+        out = Sample(df, Design(wgt="w")).weighting.poststratify(
+            {("x", 1): 5, ("y", 2): 5}, cells=["a", "b"]
+        )
     w = _one(out, NULL)
     assert w.got == {"a": 1, "b": 1}
     assert w.extra["n_rows"] == 1
@@ -146,7 +153,8 @@ def test_all_rows_null_is_an_error():
 def test_nulls_only_outside_where_are_not_a_finding(s):
     out = s.weighting.poststratify({"x": 10, "y": 20}, cells="a", where=col("a").is_not_null())
     assert not _codes(out, NULL)
-    out = s.weighting.poststratify({"x": 10, "y": 20}, cells="a", where=col("g") == "g1")
+    with pytest.warns(SvyUserWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
+        out = s.weighting.poststratify({"x": 10, "y": 20}, cells="a", where=col("g") == "g1")
     assert _one(out, NULL).got == {"a": 1}
 
 
@@ -163,22 +171,26 @@ def test_no_findings_when_nothing_is_wrong(s, capsys):
 
 
 def test_repeated_calls_and_forks_do_not_duplicate(s):
-    a = s.weighting.poststratify({"x": 10, "y": 20}, cells="a")
-    b = s.weighting.poststratify({"x": 10, "y": 20}, cells="a")
+    with pytest.warns(SvyUserWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
+        a = s.weighting.poststratify({"x": 10, "y": 20}, cells="a")
+        b = s.weighting.poststratify({"x": 10, "y": 20}, cells="a")
     assert len(_codes(a, NULL)) == 1 and len(_codes(b, NULL)) == 1
-    chained = a.weighting.normalize(cells="a", wgt_name="n2")
+    with pytest.warns(SvyUserWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
+        chained = a.weighting.normalize(cells="a", wgt_name="n2")
     found = _codes(chained, NULL)
     assert [w.extra["wgt_name"] for w in found] == ["ps_wgt", "n2"]
     assert len(_codes(a, NULL)) == 1
-    s.weighting.poststratify({"x": 10, "y": 20}, cells="a", inplace=True)
-    s.weighting.poststratify({"x": 10, "y": 20}, cells="a", wgt_name="ps2", inplace=True)
+    with pytest.warns(SvyUserWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
+        s.weighting.poststratify({"x": 10, "y": 20}, cells="a", inplace=True)
+        s.weighting.poststratify({"x": 10, "y": 20}, cells="a", wgt_name="ps2", inplace=True)
     assert [w.extra["wgt_name"] for w in _codes(s, NULL)] == ["ps_wgt", "ps2"]
 
 
 def test_trim_by_null_domain():
     df = pl.DataFrame({"g": ["a"] * 12 + [None] * 3, "w": [1.0] * 11 + [50.0, 60.0, 1.0, 1.0]})
     s = Sample(df, Design(wgt="w"))
-    out = s.weighting.trim(upper=5.0, by="g", min_cell_size=1)
+    with pytest.warns(SvyUserWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
+        out = s.weighting.trim(upper=5.0, by="g", min_cell_size=1)
     w = _one(out, NULL)
     assert w.got == {"g": 3} and w.param == "by"
     assert out.data["trim_wgt"].to_list()[-3:] == [60.0, 1.0, 1.0]
@@ -187,7 +199,8 @@ def test_trim_by_null_domain():
 
 def test_trim_by_numeric_null_domain_no_longer_silent():
     df = pl.DataFrame({"g": [1] * 12 + [None] * 2, "w": [1.0] * 11 + [50.0, 70.0, 1.0]})
-    out = Sample(df, Design(wgt="w")).weighting.trim(upper=5.0, by="g", min_cell_size=1)
+    with pytest.warns(SvyUserWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
+        out = Sample(df, Design(wgt="w")).weighting.trim(upper=5.0, by="g", min_cell_size=1)
     assert _one(out, NULL).got == {"g": 2}
 
 
@@ -196,9 +209,10 @@ def test_calibrate_trimming_by_null():
         {"c": ["a", "b"] * 10, "t": ["u"] * 18 + [None] * 2, "w": [1.0] * 19 + [5.0]}
     )
     cfg = TrimConfig(upper=Cap_q(), by="t", min_cell_size=1)
-    out = Sample(df, Design(wgt="w")).weighting.calibrate(
-        controls={Cat("c"): {"a": 12, "b": 12}}, trimming=cfg, on_nonconvergence="warn"
-    )
+    with pytest.warns(SvyUserWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
+        out = Sample(df, Design(wgt="w")).weighting.calibrate(
+            controls={Cat("c"): {"a": 12, "b": 12}}, trimming=cfg, on_nonconvergence="warn"
+        )
     w = _one(out, NULL)
     assert w.got == {"t": 2} and w.param == "trimming.by"
 
@@ -256,7 +270,8 @@ def test_panel_adjust_null_cells_count_real_rows_only():
         {"id": [1, 3], "g": ["A", "B"], "w": [1.0, 3.0], "resp": ["rr", "rr"], "wave": [2] * 2}
     )
     s = Sample(pl.concat([w1, w2]), Design(case_id="id", wave="wave", wgt="w"))
-    out = s.weighting.adjust("resp", cells="g", respondents_only=False)
+    with pytest.warns(SvyUserWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
+        out = s.weighting.adjust("resp", cells="g", respondents_only=False)
     assert _one(out, NULL).got == {"g": 1}
 
 
@@ -326,17 +341,19 @@ def test_rake_strict_raises_and_leaves_sample_untouched(rk, capsys):
 
 
 def test_rake_display_iter_still_prints(rk, capsys):
-    rk.weighting.rake(
-        controls=RK, max_iter=3, tol=1e-20, on_nonconvergence="warn", display_iter=True
-    )
+    with pytest.warns(SvyUserWarning, match=r"\[MAX_ITER_REACHED\]"):
+        rk.weighting.rake(
+            controls=RK, max_iter=3, tol=1e-20, on_nonconvergence="warn", display_iter=True
+        )
     out = capsys.readouterr().out
     assert "Raking: max margin error =" in out and "[not converged]" in out
-    rk.weighting.rake(
-        controls=RK,
-        trimming=TrimConfig(upper=12.0, max_iter=2),
-        on_nonconvergence="warn",
-        display_iter=True,
-    )
+    with pytest.warns(SvyUserWarning, match=r"\[MAX_ITER_REACHED\]"):
+        rk.weighting.rake(
+            controls=RK,
+            trimming=TrimConfig(upper=12.0, max_iter=2),
+            on_nonconvergence="warn",
+            display_iter=True,
+        )
     assert "Cycle   1 |" in capsys.readouterr().out
 
 
@@ -411,12 +428,13 @@ def test_calibrate_where_keeps_scoped_findings():
             "w": [1.0] * 10 + [30.0, 1.0, 1.0],
         }
     )
-    out = Sample(df, Design(wgt="w")).weighting.calibrate(
-        controls={Cat("c"): {"a": 10, "b": 30}},
-        where=col("k") == 1,
-        trimming=CFG,
-        on_nonconvergence="warn",
-    )
+    with pytest.warns(SvyUserWarning, match=r"\[MAX_ITER_REACHED\]"):
+        out = Sample(df, Design(wgt="w")).weighting.calibrate(
+            controls={Cat("c"): {"a": 10, "b": 30}},
+            where=col("k") == 1,
+            trimming=CFG,
+            on_nonconvergence="warn",
+        )
     assert "Trim-calibrate" in _one(out, MAXIT).title
 
 
@@ -603,6 +621,8 @@ def test_adjust_no_nulls_no_scope_drops_all_nonrespondents():
     assert out.data["nr_wgt"].sum() == pytest.approx(s.data["w"].sum())
 
 
+# Dropping the wave-2 nonrespondent leaves a singleton: a side effect here.
+@pytest.mark.filterwarnings(r"ignore:\[SINGLETONS_DETECTED\]:svy.SvyUserWarning")
 def test_adjust_panel_parity_null_cell_row_stays():
     w1 = pl.DataFrame(
         {

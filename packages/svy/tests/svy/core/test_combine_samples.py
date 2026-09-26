@@ -80,9 +80,13 @@ def test_wgt_name_names_the_created_weight(two_cycles):
 def test_waves_may_name_their_weights_differently():
     df1 = _cycle([1, 1, 2, 2, 1, 2])
     df2 = _cycle([1, 1, 2, 2, 1, 2], 2.0, wgt_name="w2")
-    c = svy.combine_samples(
-        [_sample(df1), _sample(df2, wgt_name="w2")], kind="panel", case_id="id", wgt_name="comb"
-    )
+    with pytest.warns(svy.SvyUserWarning, match=r"\[COMBINE_COLUMNS_NULL_FILLED\]"):
+        c = svy.combine_samples(
+            [_sample(df1), _sample(df2, wgt_name="w2")],
+            kind="panel",
+            case_id="id",
+            wgt_name="comb",
+        )
     assert c.design.wgt == "comb"
     got = c.data.select("wave", "comb", "w", "w2")
     assert got.filter(pl.col("wave") == 1)["comb"].to_list() == df1["w"].to_list()
@@ -161,6 +165,13 @@ def test_mixed_clustering_errors_by_default(two_cycles):
         svy.combine_samples([s1, unclustered])
 
 
+# The lacking wave has no column for the missing role, so it is null-filled.
+NULL_FILLED_EXPECTED = pytest.mark.filterwarnings(
+    r"ignore:\[COMBINE_COLUMNS_NULL_FILLED\]:svy.SvyUserWarning"
+)
+
+
+@NULL_FILLED_EXPECTED
 def test_mixed_clustering_opt_in(two_cycles):
     # a wave with no PSU is a complete design (element sampling); independent
     # stacking keeps each wave's variance structure self-contained
@@ -184,6 +195,7 @@ def test_mixed_clustering_opt_in(two_cycles):
     assert quiet.estimation.mean("x").to_polars()["se"][0] == pytest.approx(want["se"][0])
 
 
+@NULL_FILLED_EXPECTED
 def test_mixed_stratification_opt_in(two_cycles):
     # stratified vs not: an unstratified wave is one stratum, materialized as a
     # constant column (design columns cannot hold nulls)
@@ -253,6 +265,7 @@ def test_knob_does_not_relax_shared_mode():
         )
 
 
+@NULL_FILLED_EXPECTED
 def test_srs_wave_missing_both_roles(two_cycles):
     # one wave is a plain SRS: no strata, no PSU — both translations at once
     s1, _ = two_cycles
@@ -274,6 +287,7 @@ def test_srs_wave_missing_both_roles(two_cycles):
     assert got["se"][0] == pytest.approx(want["se"][0])
 
 
+@NULL_FILLED_EXPECTED
 def test_first_sample_is_the_lacking_wave():
     # canonical names and the donor frame come from a LATER sample
     df1, df2 = _cycle([1, 1, 2, 2, 1, 2]), _cycle([3, 3, 4, 4, 3, 4], 2.0)
@@ -291,6 +305,7 @@ def test_first_sample_is_the_lacking_wave():
     )
 
 
+@NULL_FILLED_EXPECTED
 def test_three_waves_lacking_different_roles(two_cycles):
     s1, _ = two_cycles
     unclustered = svy.Sample(
@@ -305,6 +320,7 @@ def test_three_waves_lacking_different_roles(two_cycles):
     assert c.estimation.mean("x").to_polars()["se"][0] > 0
 
 
+@NULL_FILLED_EXPECTED
 def test_string_psu_codes_get_string_element_ids(two_cycles):
     df1 = _cycle([1, 1, 2, 2, 1, 2]).with_columns(pl.col("psu").cast(pl.String))
     df2 = _cycle([3, 3, 4, 4, 3, 4], 2.0)
@@ -336,6 +352,7 @@ def test_name_mismatch_among_declaring_waves_still_errors(two_cycles):
         svy.combine_samples([s1, unclustered, renamed], on_mixed_design="warn")
 
 
+@NULL_FILLED_EXPECTED
 def test_multicolumn_stratum_with_lacking_wave():
     df1 = _cycle([1, 1, 2, 2, 1, 2]).with_columns(pl.lit(1, dtype=pl.Int64).alias("region"))
     s1 = svy.Sample(df1, svy.Design(stratum=["region", "strat"], psu="psu", wgt="w"))

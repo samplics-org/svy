@@ -42,7 +42,9 @@ def _households():
 
 def test_brings_columns_onto_every_record_in_order():
     p = _persons()
-    out = p.wrangling.join(_households(), on={"hh": "hh_id"}, cols=["region", "rooms"])
+    out = p.wrangling.join(
+        _households(), on={"hh": "hh_id"}, cols=["region", "rooms"], on_unmatched="ignore"
+    )
     assert out.data.height == p.data.height
     assert out.data["hh"].to_list() == p.data["hh"].to_list()
     assert out.data["region"].to_list() == [10, 10, 10, 20, 20, 20, None]
@@ -52,7 +54,13 @@ def test_brings_columns_onto_every_record_in_order():
 
 def test_design_is_untouched_and_the_other_weight_is_a_plain_column():
     p = _persons()
-    out = p.wrangling.join(_households(), on={"hh": "hh_id"}, cols=["wgt"], into={"wgt": "hh_wgt"})
+    out = p.wrangling.join(
+        _households(),
+        on={"hh": "hh_id"},
+        cols=["wgt"],
+        into={"wgt": "hh_wgt"},
+        on_unmatched="ignore",
+    )
     assert out.design == p.design
     assert out.design.wgt == "wgt"
     assert out.data["wgt"].to_list() == p.data["wgt"].to_list()
@@ -61,7 +69,9 @@ def test_design_is_untouched_and_the_other_weight_is_a_plain_column():
 
 def test_estimates_on_existing_columns_do_not_move():
     p = _persons()
-    out = p.wrangling.join(_households(), on={"hh": "hh_id"}, cols=["rooms"])
+    out = p.wrangling.join(
+        _households(), on={"hh": "hh_id"}, cols=["rooms"], on_unmatched="ignore"
+    )
     before = p.estimation.mean("age")
     after = out.estimation.mean("age")
     assert after.estimates[0].est == pytest.approx(before.estimates[0].est)
@@ -106,7 +116,9 @@ def test_one_to_one_checks_this_side_too():
         p.wrangling.join(_households(), on={"hh": "hh_id"}, cols=["rooms"], validate="1:1")
     assert exc.value.code == "JOIN_KEY_NOT_UNIQUE"
     heads = p.wrangling.filter_records(svy.col("line") == 1)
-    out = heads.wrangling.join(_households(), on={"hh": "hh_id"}, cols=["rooms"], validate="1:1")
+    out = heads.wrangling.join(
+        _households(), on={"hh": "hh_id"}, cols=["rooms"], validate="1:1", on_unmatched="ignore"
+    )
     assert out.data["rooms"].to_list() == [3, 2, 5, None]
 
 
@@ -117,7 +129,8 @@ def test_multi_column_key():
 
 
 def test_unmatched_warns_by_default_with_the_count():
-    out = _persons().wrangling.join(_households(), on={"hh": "hh_id"}, cols=["rooms"])
+    with pytest.warns(svy.SvyUserWarning, match=r"\[JOIN_UNMATCHED\]"):
+        out = _persons().wrangling.join(_households(), on={"hh": "hh_id"}, cols=["rooms"])
     warns = [w for w in out.warnings if w.code == "JOIN_UNMATCHED"]
     assert len(warns) == 1
     assert warns[0].extra == {"n_unmatched": 1, "n_records": 7}
@@ -294,7 +307,9 @@ def test_singleton_handling_survives_a_join():
     df = _persons().data.with_columns(pl.Series("psu", [1, 1, 1, 2, 2, 6, 3]))
     s = svy.Sample(df, svy.Design(stratum="stratum", psu="psu", wgt="wgt"))
     handled = s.singleton.certainty()
-    out = handled.wrangling.join(_households(), on={"hh": "hh_id"}, cols=["rooms"])
+    out = handled.wrangling.join(
+        _households(), on={"hh": "hh_id"}, cols=["rooms"], on_unmatched="ignore"
+    )
     assert out.design == handled.design
     assert out._singletons == handled._singletons
     _same_estimate(handled.estimation.mean("age"), out.estimation.mean("age"))
@@ -308,7 +323,9 @@ def test_replicate_design_and_its_estimates_are_unchanged():
         df,
         svy.Design(wgt="wgt", rep_wgts=svy.RepWeights(method="bootstrap", prefix="bs", n_reps=4)),
     )
-    out = s.wrangling.join(_households(), on={"hh": "hh_id"}, cols=["rooms"])
+    out = s.wrangling.join(
+        _households(), on={"hh": "hh_id"}, cols=["rooms"], on_unmatched="ignore"
+    )
     assert out.design == s.design
     _same_estimate(
         s.estimation.mean("age", method="replication"),
@@ -321,7 +338,9 @@ def test_selection_variables_on_this_sample_are_kept():
         pl.Series("svy_prob_selection", [0.5] * 7), pl.Series("svy_sample_weight", [2.0] * 7)
     )
     s = svy.Sample(df, svy.Design(stratum="stratum", psu="psu", wgt="svy_sample_weight"))
-    out = s.wrangling.join(_households(), on={"hh": "hh_id"}, cols=["rooms"])
+    out = s.wrangling.join(
+        _households(), on={"hh": "hh_id"}, cols=["rooms"], on_unmatched="ignore"
+    )
     assert out.data["svy_sample_weight"].to_list() == [2.0] * 7
     assert out.design.wgt == "svy_sample_weight"
 
@@ -347,7 +366,8 @@ def test_order_follows_this_sample_whatever_the_other_order():
 
 def test_nothing_matches():
     hh = pl.DataFrame({"hh": [90, 91], "rooms": [1, 2]})
-    out = _persons().wrangling.join(hh, on="hh", indicator="m")
+    with pytest.warns(svy.SvyUserWarning, match=r"\[JOIN_UNMATCHED\]"):
+        out = _persons().wrangling.join(hh, on="hh", indicator="m")
     assert out.data["rooms"].null_count() == 7
     assert not any(out.data["m"].to_list())
     warns = [w for w in out.warnings if w.code == "JOIN_UNMATCHED"]
@@ -374,7 +394,8 @@ def test_blanks_brought_in_are_told_apart_from_no_match_by_the_indicator():
 
 
 def test_unmatched_records_fall_out_of_a_domain_not_out_of_the_sample():
-    out = _persons().wrangling.join(_households(), on={"hh": "hh_id"}, cols=["region"])
+    with pytest.warns(svy.SvyUserWarning, match=r"\[JOIN_UNMATCHED\]"):
+        out = _persons().wrangling.join(_households(), on={"hh": "hh_id"}, cols=["region"])
     by = out.estimation.mean("age", by="region", drop_nulls=True)
     # region 10: ages 35, 8 (w 1) and 40 (w 2); region 20: 60, 58, 20 (w 3).
     # Household 4 found no match and sits in neither domain.
@@ -399,7 +420,8 @@ def test_a_refused_join_leaves_the_sample_untouched_even_inplace():
 def test_the_warning_and_labels_stay_on_the_result():
     p = _persons()
     p.meta.set_label("age", "Age in years")
-    out = p.wrangling.join(_households(), on={"hh": "hh_id"}, cols=["region"])
+    with pytest.warns(svy.SvyUserWarning, match=r"\[JOIN_UNMATCHED\]"):
+        out = p.wrangling.join(_households(), on={"hh": "hh_id"}, cols=["region"])
     assert not [w for w in p.warnings if w.code == "JOIN_UNMATCHED"]
     assert "region" not in p.meta
     assert out.meta.get("age").label == "Age in years"
@@ -437,6 +459,7 @@ def test_exactly_the_requested_columns_come_in_and_nothing_else():
         cols=["rooms"],
         into={"rooms": "hh_rooms"},
         indicator="m",
+        on_unmatched="ignore",
     )
     assert out._data.columns == [*p._data.columns, "hh_rooms", "m"]
     assert out.meta.get("region") is None
@@ -451,7 +474,9 @@ def test_exactly_the_requested_columns_come_in_and_nothing_else():
 
 def test_bring_everything_and_resolve_only_the_clash():
     p = _persons()
-    out = p.wrangling.join(_households(), on={"hh": "hh_id"}, into={"wgt": "hh_wgt"})
+    out = p.wrangling.join(
+        _households(), on={"hh": "hh_id"}, into={"wgt": "hh_wgt"}, on_unmatched="ignore"
+    )
     assert out._data.columns == [*p._data.columns, "region", "rooms", "hh_wgt"]
 
 
@@ -461,6 +486,7 @@ def test_selected_columns_with_some_renamed_for_intent():
         on={"hh": "hh_id"},
         cols=["region", "rooms"],
         into={"rooms": "hh_rooms"},
+        on_unmatched="ignore",
     )
     assert "region" in out.data.columns and "hh_rooms" in out.data.columns
     assert "rooms" not in out.data.columns and "hh_wgt" not in out.data.columns
@@ -468,14 +494,18 @@ def test_selected_columns_with_some_renamed_for_intent():
 
 def test_suffix_settles_only_the_clashes():
     p = _persons()
-    out = p.wrangling.join(_households(), on={"hh": "hh_id"}, suffix="_hh")
+    out = p.wrangling.join(_households(), on={"hh": "hh_id"}, suffix="_hh", on_unmatched="ignore")
     assert out._data.columns == [*p._data.columns, "region", "rooms", "wgt_hh"]
     assert out.design.wgt == "wgt"
 
 
 def test_an_explicit_name_wins_over_the_suffix_and_is_still_checked():
     out = _persons().wrangling.join(
-        _households(), on={"hh": "hh_id"}, into={"wgt": "base_wgt"}, suffix="_hh"
+        _households(),
+        on={"hh": "hh_id"},
+        into={"wgt": "base_wgt"},
+        suffix="_hh",
+        on_unmatched="ignore",
     )
     assert "base_wgt" in out.data.columns and "wgt_hh" not in out.data.columns
     with pytest.raises(MethodError) as exc:
@@ -514,7 +544,9 @@ def test_into_as_one_name_needs_one_column():
 
 def test_into_never_renames_this_sample():
     p = _persons()
-    out = p.wrangling.join(_households(), on={"hh": "hh_id"}, into={"wgt": "hh_wgt"})
+    out = p.wrangling.join(
+        _households(), on={"hh": "hh_id"}, into={"wgt": "hh_wgt"}, on_unmatched="ignore"
+    )
     assert out.data["wgt"].to_list() == p.data["wgt"].to_list()
     assert out.design.wgt == "wgt"
     with pytest.raises(MethodError) as exc:

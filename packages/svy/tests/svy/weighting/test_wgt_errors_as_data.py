@@ -300,6 +300,8 @@ def test_missing_column_hint_suggests_the_close_name(s):
     assert "Did you mean 'zones' -> 'zone'?" in err.hint
 
 
+# trim() trims before it checks wgt_name, so the refused call still reports the skip.
+@pytest.mark.filterwarnings(r"ignore:\[DOMAIN_SKIPPED\]:svy.SvyUserWarning")
 def test_wgt_name_exists(s):
     err = raises(lambda: s.weighting.poststratify(10.0, wgt_name="x"), "WGT_NAME_EXISTS")
     assert err.got == "x" and "wgt_name='x_2'" in err.hint

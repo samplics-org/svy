@@ -489,6 +489,8 @@ def test_adjust_trim_none_unchanged():
     )
 
 
+# max_iter=1 leaves the redistribution unconverged; the single pass is what is checked.
+@pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyUserWarning")
 def test_adjust_trim_no_iteration():
     """Adjustment trimming is one-shot — TrimConfig.max_iter controls
     only the internal trim redistribution, not an outer cycle."""
@@ -499,7 +501,8 @@ def test_adjust_trim_no_iteration():
         cells="cls",
         resp_status="status",
         respondents_only=False,
-        trimming=TrimConfig(upper=3.0, redistribute=True, max_iter=1),
+        trimming=TrimConfig(upper=3.0, redistribute=True, max_iter=1, min_cell_size=1),
+        on_nonconvergence="warn",
     )
     assert NR_WGT in out.data.columns
     assert len(out.data[NR_WGT].to_numpy()) == 10
@@ -514,7 +517,7 @@ def test_adjust_trim_design_updated():
         cells="cls",
         resp_status="status",
         respondents_only=False,
-        trimming=TrimConfig(upper=3.0, redistribute=True),
+        trimming=TrimConfig(upper=3.0, redistribute=True, min_cell_size=1),
     )
     assert out.design.wgt == NR_WGT
 

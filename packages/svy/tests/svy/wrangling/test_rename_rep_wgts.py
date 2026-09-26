@@ -89,6 +89,8 @@ def test_look_alikes_do_not_change_the_replicate_columns(padded):
 
 @pytest.mark.parametrize("inplace", [False, True], ids=["fork", "inplace"])
 @pytest.mark.parametrize("padded", [False, True], ids=["unpadded", "padded"])
+# The SEs are Taylor on a BRR-only design, deliberately; the baselines report it.
+@pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyUserWarning")
 def test_rename_rep_wgts_touches_only_the_replicates(padded, inplace):
     s = _received(padded)
     look = PADDED_LOOK_ALIKES if padded else UNPADDED_LOOK_ALIKES
@@ -110,6 +112,8 @@ def test_rename_rep_wgts_touches_only_the_replicates(padded, inplace):
 
 
 @pytest.mark.parametrize("padded", [False, True], ids=["unpadded", "padded"])
+# The SEs are Taylor on a BRR-only design, deliberately; the baselines report it.
+@pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyUserWarning")
 def test_renaming_a_look_alike_leaves_the_replicate_spec_alone(padded):
     s = _received(padded)
     se = _se(s)
@@ -122,6 +126,8 @@ def test_renaming_a_look_alike_leaves_the_replicate_spec_alone(padded):
         assert out.data.get_column(f"{name}_x").equals(s.data.get_column(name), check_names=False)
 
 
+# The SEs are Taylor on a BRR-only design, deliberately; the baselines report it.
+@pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyUserWarning")
 def test_renaming_the_weight_does_not_move_its_replicates():
     s = _received(False)
     with no_warnings():

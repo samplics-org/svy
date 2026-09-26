@@ -184,6 +184,8 @@ def test_combine_mixed_ignore_records_info():
     assert len(found) == 1 and found[0].level == Severity.INFO
 
 
+# The mixed waves lack a design column, so it is null-filled: a side effect here.
+@pytest.mark.filterwarnings(r"ignore:\[COMBINE_COLUMNS_NULL_FILLED\]:svy.SvyUserWarning")
 def test_combine_mixed_warn_records_and_raises_once():
     with pytest.warns(SvyUserWarning, match=r"\[COMBINE_MIXED_DESIGN\]") as rec:
         c = combine_samples(_mixed(), on_mixed_design="warn")
@@ -192,6 +194,8 @@ def test_combine_mixed_warn_records_and_raises_once():
     assert len(found) == 1 and found[0].level == Severity.WARNING
 
 
+# The mixed waves lack a design column, so it is null-filled: a side effect here.
+@pytest.mark.filterwarnings(r"ignore:\[COMBINE_COLUMNS_NULL_FILLED\]:svy.SvyUserWarning")
 def test_combine_mixed_ignore_and_warn_agree():
     with pytest.warns(SvyUserWarning):
         warned = combine_samples(_mixed(), on_mixed_design="warn")

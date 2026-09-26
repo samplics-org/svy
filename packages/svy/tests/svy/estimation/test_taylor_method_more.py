@@ -263,7 +263,7 @@ class TestReplicateWeightCasting:
         sample = svy.Sample(data=data_with_int_rep_weights, design=design)
 
         # Should not raise an error
-        result = sample.estimation.mean("y")
+        result = sample.estimation.mean("y", method="replication")
 
         assert result is not None
         assert len(result.estimates) == 1
@@ -280,7 +280,7 @@ class TestReplicateWeightCasting:
         design = svy.Design(wgt="wgt", rep_wgts=rep_wgts)
         sample = svy.Sample(data=data_with_int_rep_weights, design=design)
 
-        result = sample.estimation.total("y")
+        result = sample.estimation.total("y", method="replication")
 
         assert result is not None
         assert len(result.estimates) == 1
