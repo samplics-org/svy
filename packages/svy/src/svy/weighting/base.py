@@ -658,6 +658,8 @@ class Weighting:
             at most ``trimming.max_iter`` cycles. This is the supported route
             to calibrated-and-trimmed weights, since trimming afterwards would
             break the controls.
+            A control no weights within the bounds can meet fails as ``TRIM_INFEASIBLE``,
+            not as non-convergence.
         inplace : bool
             Adopt the result on this Sample instead of returning a new one.
         """
@@ -733,6 +735,8 @@ class Weighting:
         trimming : TrimConfig | None
             Alternate trimming and re-standardization until both hold, for at
             most ``trimming.max_iter`` cycles.
+            A control no weights within the bounds can meet fails as ``TRIM_INFEASIBLE``,
+            not as non-convergence.
         on_nonconvergence : {"error", "warn", "ignore"}
             What to do when the trim-standardize cycle (``trimming=``) runs out
             of cycles (``MAX_ITER_REACHED``); with "warn" or "ignore" the last
@@ -878,6 +882,8 @@ class Weighting:
             Alternate trimming and re-raking until both hold, for at most
             ``trimming.max_iter`` cycles. Replicates are raked once from the
             final main-weight cycle.
+            With fixed bounds, a margin no weights within them can meet fails as
+            ``TRIM_INFEASIBLE``, not as non-convergence.
         inplace : bool
             Adopt the result on this Sample instead of returning a new one.
         """
@@ -1052,6 +1058,8 @@ class Weighting:
         trimming : TrimConfig | None
             Alternate trimming and re-calibration until both hold, for at most
             ``trimming.max_iter`` cycles.
+            A control no weights within the bounds can meet fails as ``TRIM_INFEASIBLE``,
+            not as non-convergence.
         inplace : bool
             Adopt the result on this Sample instead of returning a new one.
         """
@@ -1143,6 +1151,8 @@ class Weighting:
         trimming : TrimConfig | None
             Alternate trimming and re-calibration until both hold, for at most
             ``trimming.max_iter`` cycles. Ignored with ``weights_only=True``.
+            A control no weights within the bounds can meet fails as ``TRIM_INFEASIBLE``,
+            not as non-convergence.
         inplace : bool
             Adopt the result on this Sample instead of returning a new one.
         """

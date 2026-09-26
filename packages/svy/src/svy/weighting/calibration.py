@@ -48,19 +48,22 @@ except ImportError:  # pragma: no cover
     rust_calibrate_parallel = None
 
 from svy.core.design import WgtAdjustment
-from svy.core.terms import Feature
+from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import Category, Number
 from svy.core.warnings import Severity, WarnCode, check_on_finding, finding_level
 from svy.errors import DimensionError, WeightingError
+from svy.errors.weighting_errors import show
 from svy.weighting._calibration_utils import _expand_term, _match_term_targets
 from svy.weighting._engine import (
     AUX_PREFIX,
     _cells_to_cols,
     _where_mask,
     build_cells,
+    control_name,
     record_null_rows,
     record_trim_cycle,
     resolve_bounds,
+    unreachable_controls,
 )
 from svy.weighting._keys import (
     LevelIndex,
@@ -301,6 +304,7 @@ def calibrate(
         _, term_labs = _expand_term(term, sample.data, ctx)
         term_label_lists.append((term, term_labs))
         x_labels.extend(term_labs)
+    x_names = [_control_display(term, lab) for term, labs in term_label_lists for lab in labs]
 
     if X.shape[1] != len(x_labels):
         raise RuntimeError("Internal error: Design matrix label alignment mismatch.")
@@ -371,7 +375,18 @@ def calibrate(
         ignore_reps=ignore_reps,
         on_nonconvergence=on_nonconvergence,
         trimming=trimming,
+        _names=x_names,
     )
+
+
+def _control_display(term: Feature, label: Category) -> str:
+    """One column of the auxiliary matrix, named as the caller wrote its term."""
+    if isinstance(term, Cat):
+        return control_name([term.name], label)
+    if isinstance(term, Cross):
+        sides = [t.name if isinstance(t, Cat) else str(t) for t in (term.left, term.right)]
+        return control_name(sides, label)
+    return str(term)
 
 
 def _refuse_bounds(bounds: Any, *, where: str) -> None:
@@ -449,6 +464,56 @@ def _controls_missed(
     return {"expected": expected, "got": got, "max_rel_error": worst, "domains": list(got)}
 
 
+def _cycle_infeasible(
+    w: np.ndarray,
+    X: np.ndarray,
+    trim_groups: list[tuple[np.ndarray, float | None, float | None]],
+    *,
+    where: str,
+    names: Sequence[str],
+    totals: np.ndarray,
+    domains: list[Any],
+    domain_indices: np.ndarray,
+    controls_by_domain: dict[int, list[float]],
+    global_bounds: bool,
+) -> WeightingError | None:
+    """TRIM_INFEASIBLE when a control is out of reach of the trimming bounds.
+
+    Units in no trim group (a skipped or null trimming domain) are calibrated
+    but never bounded, so their weight can take any value.
+    """
+    pos = w > 0
+    lo = np.where(pos, -np.inf, 0.0)
+    hi = np.where(pos, np.inf, 0.0)
+    for mask, up, low in trim_groups:
+        m = mask & pos
+        lo[m] = 0.0 if low is None else low
+        hi[m] = np.inf if up is None else up
+    if not domains:
+        unreachable = unreachable_controls(X, totals, lo, hi, names)
+    else:
+        unreachable = []
+        for i, domain in enumerate(domains):
+            m = domain_indices == i
+            unreachable += unreachable_controls(
+                X[m],
+                np.asarray(controls_by_domain[i], dtype=np.float64),
+                lo[m],
+                hi[m],
+                names,
+                domain=domain,
+            )
+    if not unreachable:
+        return None
+    bounds = None
+    if global_bounds and trim_groups:
+        _, up, low = trim_groups[0]
+        bounds = {"lower": low, "upper": up}
+    return WeightingError.trim_cycle_infeasible(
+        where=where, what="Trim-calibrate cycle", controls=unreachable, bounds=bounds
+    )
+
+
 def calibrate_matrix(
     sample: Sample,
     *,
@@ -464,6 +529,7 @@ def calibrate_matrix(
     ignore_reps: bool = False,
     on_nonconvergence: str = "error",
     trimming: TrimConfig | None = None,
+    _names: Sequence[str] | None = None,
 ) -> Any:
     where = "Sample.weighting.calibrate_matrix"
     check_on_finding(on_nonconvergence, param="on_nonconvergence", where=where)
@@ -621,6 +687,7 @@ def calibrate_matrix(
         return new_w
 
     cycle_ok = True
+    infeasible = None
     null_trim_by: dict[str, np.ndarray] = {}
     # ── Trim-calibrate cycle ──────────────────────────────────────────────
     # Runs on arrays BEFORE anything is written to the sample, so raising on
@@ -713,12 +780,15 @@ def calibrate_matrix(
             )
 
         if trim_groups:
-            _trim_ok = False
+            # The bounds are checked on the calibrated weights: right after a
+            # trim they hold by construction, so checking there would end every
+            # cycle at once.
+            _current_w = _cycle_calibrate(_current_w)
+            _calib_converged = _cycle_fit_ok(_current_w)
+            _trim_ok = _cycle_trim_ok(_current_w)
             for _cycle in range(trimming.max_iter):
-                # Calibrate step — restore control totals
-                _current_w = _cycle_calibrate(_current_w)
-                _calib_converged = _cycle_fit_ok(_current_w)
-
+                if _trim_ok:
+                    break
                 # Trim step — per domain with its own thresholds
                 for _mask, _up, _lo in trim_groups:
                     (_trimmed_w, *_) = rust_trim_weights(
@@ -730,18 +800,33 @@ def calibrate_matrix(
                         trimming.tol,
                     )
                     _current_w[_mask] = _trimmed_w
+                # Calibrate step — restore control totals
+                _current_w = _cycle_calibrate(_current_w)
+                _calib_converged = _cycle_fit_ok(_current_w)
                 _trim_ok = _cycle_trim_ok(_current_w)
 
-                if _trim_ok:
-                    # Final calibrate to restore totals after last trim
-                    _current_w = _cycle_calibrate(_current_w)
-                    # Re-check trim and fit after final calibrate
-                    _trim_ok = _cycle_trim_ok(_current_w)
-                    _calib_converged = _cycle_fit_ok(_current_w)
-                    break
-
         cycle_ok = _calib_converged and _trim_ok
+        if not cycle_ok:
+            infeasible = _cycle_infeasible(
+                w,
+                X,
+                trim_groups,
+                where=where,
+                names=_names
+                or (
+                    [show(lab) for lab in labels]
+                    if labels is not None
+                    else [f"aux column {j}" for j in range(X.shape[1])]
+                ),
+                totals=totals_arr,
+                domains=domains,
+                domain_indices=domain_indices,
+                controls_by_domain=controls_dict_main,
+                global_bounds=len(_group_masks) == 1 and trimming.by is None,
+            )
         if on_nonconvergence == "error" and not cycle_ok:
+            if infeasible is not None:
+                raise infeasible
             raise WeightingError.not_converged(
                 where=where,
                 method="calibrate",
@@ -841,6 +926,8 @@ def calibrate_matrix(
             what="Trim-calibrate cycle",
             trimming=trimming,
             level=finding_level(on_nonconvergence),
+            infeasible=infeasible,
+            wgt_name=wgt_name,
         )
     if missed is not None:
         err = WeightingError.calibration_not_met(where=where, **missed)

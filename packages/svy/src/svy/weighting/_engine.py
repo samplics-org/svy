@@ -420,9 +420,37 @@ def materialize_cells(
 
 
 def record_trim_cycle(
-    sample: Any, *, where: str, what: str, trimming: Any, level: Severity = Severity.WARNING
+    sample: Any,
+    *,
+    where: str,
+    what: str,
+    trimming: Any,
+    level: Severity = Severity.WARNING,
+    infeasible: WeightingError | None = None,
+    wgt_name: str | None = None,
 ) -> None:
-    """A trim-and-readjust cycle that ran out of cycles and was kept."""
+    """A trim-and-readjust cycle that ran out of cycles and was kept.
+
+    ``infeasible`` is the TRIM_INFEASIBLE diagnosis, when the controls were out
+    of reach of the bounds; it is recorded in place of MAX_ITER_REACHED.
+    """
+    if infeasible is not None:
+        sample.warn(
+            code=infeasible.code,
+            title=infeasible.title,
+            detail=infeasible.detail.replace(
+                " The sample has NOT been modified.",
+                f" {wgt_name!r} holds the last cycle's weights, which miss the trimming "
+                "bounds or the controls.",
+            ),
+            where=infeasible.where,
+            level=level,
+            param=infeasible.param,
+            expected=infeasible.expected,
+            got=infeasible.got,
+            hint=infeasible.hint,
+        )
+        return
     sample.warn(
         code=WarnCode.MAX_ITER_REACHED,
         title=f"{what} did not converge",
@@ -436,6 +464,104 @@ def record_trim_cycle(
         got={"cycles": trimming.max_iter},
         hint="Increase TrimConfig.max_iter or use a less restrictive trim threshold.",
     )
+
+
+def unit_bounds(
+    w: np.ndarray, lower: float | None, upper: float | None
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-unit range trimming holds a weight to: zero weights stay zero."""
+    pos = w > 0
+    lo = np.where(pos, 0.0 if lower is None else lower, 0.0)
+    hi = np.where(pos, np.inf if upper is None else upper, 0.0)
+    return lo, hi
+
+
+def unreachable_controls(
+    X: np.ndarray,
+    totals: np.ndarray,
+    lo: np.ndarray,
+    hi: np.ndarray,
+    names: Sequence[str],
+    *,
+    domain: Any = None,
+) -> list[dict[str, Any]]:
+    """Controls that no weights within [lo, hi] can meet.
+
+    With each weight in its range, ``X[:, j]'w`` can only reach an interval; a
+    control outside it cannot be met however many trim cycles run. The check is
+    per control, so it is necessary but not sufficient: rake margins or
+    calibration columns can be unreachable together while each is reachable
+    alone. Callers use it only to diagnose a cycle that already failed.
+    """
+    lo2, hi2 = lo[:, None], hi[:, None]
+    with np.errstate(invalid="ignore"):
+        low = np.where(X > 0, X * lo2, np.where(X < 0, X * hi2, 0.0)).sum(axis=0)
+        high = np.where(X > 0, X * hi2, np.where(X < 0, X * lo2, 0.0)).sum(axis=0)
+    units = ~((lo == 0) & (hi == 0))[:, None] & (X != 0)
+    n = units.sum(axis=0)
+    indicator = np.all((X == 1) | ~units, axis=0)
+    return _out_of_reach(low, high, totals, n, indicator, names, domain)
+
+
+def unreachable_cells(
+    codes: np.ndarray,
+    totals: np.ndarray,
+    lo: np.ndarray,
+    hi: np.ndarray,
+    names: Sequence[str],
+) -> list[dict[str, Any]]:
+    """``unreachable_controls`` for cell indicators (a code of -1 is in no cell)."""
+    k = len(totals)
+    inside = codes >= 0
+    c = codes[inside]
+    low = np.bincount(c, weights=lo[inside], minlength=k)
+    high = np.bincount(c, weights=hi[inside], minlength=k)
+    active = ~((lo == 0) & (hi == 0))[inside]
+    n = np.bincount(c, weights=active.astype(np.float64), minlength=k).astype(np.int64)
+    return _out_of_reach(low, high, totals, n, np.ones(k, dtype=bool), names, None)
+
+
+def _out_of_reach(
+    low: np.ndarray,
+    high: np.ndarray,
+    totals: np.ndarray,
+    n: np.ndarray,
+    indicator: np.ndarray,
+    names: Sequence[str],
+    domain: Any,
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for j, total in enumerate(np.asarray(totals, dtype=np.float64)):
+        slack = 1e-6 * max(abs(total), 1e-12)
+        if low[j] - slack <= total <= high[j] + slack:
+            continue
+        nj = int(n[j])
+        entry: dict[str, Any] = {
+            "control": names[j],
+            "total": float(total),
+            "reachable": [
+                None if np.isinf(low[j]) else float(low[j]),
+                None if np.isinf(high[j]) else float(high[j]),
+            ],
+            "n": nj,
+            # For a cell or level indicator, the bound its units need on average.
+            "mean_needed": float(total / nj) if nj and indicator[j] else None,
+        }
+        if domain is not None:
+            entry["domain"] = domain
+        out.append(entry)
+    return out
+
+
+def control_name(cols: Sequence[str] | None, label: Any) -> str:
+    """A cell or level as the caller would write it: ``c='b'`` or ``(c, d)=('b', 1)``."""
+    from svy.errors.weighting_errors import show
+
+    if not cols:
+        return show(label)
+    if len(cols) == 1:
+        return f"{cols[0]}={show(label)}"
+    return f"({', '.join(cols)})={show(label)}"
 
 
 def resolve_bounds(bounds: Any, *, where: str) -> tuple[float | None, float | None]:

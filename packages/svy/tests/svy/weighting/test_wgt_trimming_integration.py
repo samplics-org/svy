@@ -117,7 +117,7 @@ class TestPostStratifyTrimming:
     def test_trim_ps_strict_false_stores_partial(self, skewed_ps_sample):
         """strict=False stores partial result even without convergence."""
         sample = Sample(data=skewed_ps_sample, design=Design(wgt="weight"))
-        with pytest.warns(SvyUserWarning, match=r"\[MAX_ITER_REACHED\]"):
+        with pytest.warns(SvyUserWarning, match=r"\[TRIM_INFEASIBLE\]"):
             out = sample.weighting.poststratify(
                 controls={"A": 50.0, "B": 50.0},
                 cells="strat",

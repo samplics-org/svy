@@ -389,13 +389,13 @@ def test_convergence_failed(s):
 def test_trim_cycles_not_converged():
     df = pl.DataFrame({"c": ["a"] * 10 + ["b"] * 2, "w": [1.0] * 10 + [30.0, 1.0]})
     t = Sample(df, Design(wgt="w"))
-    cfg = TrimConfig(upper=2.0, max_iter=2)
+    cfg = TrimConfig(upper=4.0, max_iter=2)
     raises(
-        lambda: t.weighting.poststratify({"a": 10, "b": 30}, cells="c", trimming=cfg),
+        lambda: t.weighting.poststratify({"a": 10, "b": 6}, cells="c", trimming=cfg),
         "CONVERGENCE_FAILED",
     )
     raises(
-        lambda: t.weighting.calibrate(controls={Cat("c"): {"a": 10, "b": 30}}, trimming=cfg),
+        lambda: t.weighting.calibrate(controls={Cat("c"): {"a": 10, "b": 6}}, trimming=cfg),
         "CONVERGENCE_FAILED",
     )
 
