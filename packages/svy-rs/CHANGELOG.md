@@ -8,6 +8,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 - `ttest_rs` two-sample output has `n_0` and `n_1`, the records in each group.
 
+- `fit_glm_rs` reports quasi-complete separation: the last tuple element is now `((theta, theta_se) | None, (boundary_rows, gram) | None)`. For binomial, Poisson and negative binomial fits, `boundary_rows` counts the contributing rows at the boundary of y whose deviance contribution is below `10 * tol * (deviance + 0.1)`, and `gram` is `sum w x x'` over the other contributing rows (row-major); a coefficient outside its row space is not identified. `None` when no row is at the boundary.
+
 - `taylor_factor_total` and `replicate_factor_total`: the estimated count of each level of a categorical column, with the joint covariance across levels and by-groups. Same arguments and output as `taylor_prop` / `replicate_prop`, which share their code (the replicate `matrix_prop_*` helpers take `normalize`).
 
 ### Fixed

@@ -46,6 +46,30 @@ def offset_values(fit: GLMFit, data: pl.DataFrame) -> np.ndarray | float:
     return data.get_column(fit.offset).to_numpy().astype(float)
 
 
+# A coefficient the fit does not identify has a NaN row and column in the
+# covariance. A quantity whose gradient on it is below this does not depend on
+# it: the gradient comes from rows the fit drove to the boundary, where
+# d mu / d eta has collapsed with mu to the scale of the convergence tolerance
+# (and it is exactly 0 on a row whose column is 0).
+_UNIDENTIFIED_GRAD_TOL = 1e-6
+
+
+def delta_var(grad: np.ndarray, cov: np.ndarray) -> np.ndarray:
+    """
+    Delta-method variances ``g' V g``, one per row of ``grad`` (or one for a
+    single gradient), NaN where the quantity depends on an unidentified
+    coefficient.
+    """
+    g = np.atleast_2d(np.asarray(grad, dtype=float))
+    unid = np.isnan(np.diag(cov))
+    if unid.any():
+        cov = np.where(unid[:, None] | unid[None, :], 0.0, cov)
+    var = np.sum((g @ cov) * g, axis=1)
+    if unid.any():
+        var[np.abs(g[:, unid]).max(axis=1) > _UNIDENTIFIED_GRAD_TOL] = np.nan
+    return var[0] if np.ndim(grad) == 1 else var
+
+
 def _numpy_to_builtin(obj: Any) -> Any:
     # A fit's numbers come out of numpy; msgspec encodes only Python scalars.
     if isinstance(obj, np.generic):

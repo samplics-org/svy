@@ -5,7 +5,7 @@
 //
 // Return shape: Vec<(level, params, cov_params, naive_cov, scale, df_resid,
 //                    deviance, null_deviance, iterations, n_obs, converged,
-//                    (theta, theta_se) | None)>.
+//                    ((theta, theta_se) | None, (boundary_rows, gram) | None))>.
 // When neither by_col nor where_col is given, a single-element vec with
 // level="" is returned, so the Python side can treat every case uniformly.
 
@@ -15,7 +15,7 @@ use pyo3_polars::PyDataFrame;
 
 use crate::estimation::calib_sweep::{CalibSpec, CalibSweep, build_calib_sweep};
 use crate::regression::glm::{
-    design_codes, design_vcov_of_totals, fit_glm, fit_glm_by, fit_glm_where,
+    GlmResult, design_codes, design_vcov_of_totals, fit_glm, fit_glm_by, fit_glm_where,
 };
 
 type GlmTuple = (
@@ -31,10 +31,31 @@ type GlmTuple = (
     usize,
     bool,
     // (theta, theta_se) when the family has a dispersion parameter; theta_se
-    // is None when theta was supplied rather than estimated. One element
-    // rather than two because pyo3 only converts tuples up to twelve long.
-    Option<(f64, Option<f64>)>,
+    // is None when theta was supplied rather than estimated. Then the
+    // separation record, if any. Nested because pyo3 only converts tuples up
+    // to twelve long.
+    (Option<(f64, Option<f64>)>, Option<(usize, Vec<f64>)>),
 );
+
+fn to_tuple(level: String, r: GlmResult) -> GlmTuple {
+    (
+        level,
+        r.params,
+        r.cov_params,
+        r.naive_cov,
+        r.scale,
+        r.df_resid,
+        r.deviance,
+        r.null_deviance,
+        r.iterations,
+        r.n_obs,
+        r.converged,
+        (
+            r.theta.map(|t| (t, r.theta_se)),
+            r.separation.map(|s| (s.boundary_rows, s.gram)),
+        ),
+    )
+}
 
 fn column_to_series(df: &DataFrame, name: &str) -> PyResult<Series> {
     df.column(name)
@@ -157,20 +178,7 @@ pub fn fit_glm_rs(
             })
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
-        return Ok(vec![(
-            String::new(),
-            result.params,
-            result.cov_params,
-            result.naive_cov,
-            result.scale,
-            result.df_resid,
-            result.deviance,
-            result.null_deviance,
-            result.iterations,
-            result.n_obs,
-            result.converged,
-            result.theta.map(|t| (t, result.theta_se)),
-        )]);
+        return Ok(vec![to_tuple(String::new(), result)]);
     }
 
     // No by_col: single fit, wrap in one-element vec for API uniformity.
@@ -196,20 +204,7 @@ pub fn fit_glm_rs(
             })
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
-        return Ok(vec![(
-            String::new(),
-            result.params,
-            result.cov_params,
-            result.naive_cov,
-            result.scale,
-            result.df_resid,
-            result.deviance,
-            result.null_deviance,
-            result.iterations,
-            result.n_obs,
-            result.converged,
-            result.theta.map(|t| (t, result.theta_se)),
-        )]);
+        return Ok(vec![to_tuple(String::new(), result)]);
     }
 
     // by_col supplied: one fit per domain level (fanned out in parallel, GIL
@@ -239,22 +234,7 @@ pub fn fit_glm_rs(
 
     Ok(results
         .into_iter()
-        .map(|(level, r)| {
-            (
-                level,
-                r.params,
-                r.cov_params,
-                r.naive_cov,
-                r.scale,
-                r.df_resid,
-                r.deviance,
-                r.null_deviance,
-                r.iterations,
-                r.n_obs,
-                r.converged,
-                r.theta.map(|t| (t, r.theta_se)),
-            )
-        })
+        .map(|(level, r)| to_tuple(level, r))
         .collect())
 }
 

@@ -28,7 +28,7 @@ from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import WhereArg
 from svy.core.warnings import WarnCode
 from svy.errors.model_errors import ModelError
-from svy.regression.glm import GLMCoef, GLMFit, GLMStats, offset_values
+from svy.regression.glm import GLMCoef, GLMFit, GLMStats, delta_var, offset_values
 from svy.regression.links import FAMILY_LABELS, link_inverse, link_mu_eta, resolve_link
 from svy.regression.prediction import GLMPred
 from svy.ui.printing import format_where_clause
@@ -132,6 +132,65 @@ _ENGINE_ERRORS: tuple[tuple[str, str, str], ...] = (
         "Fit family='poisson', or pass theta= to fit at a known value.",
     ),
 )
+
+
+# Separation leaves directions the retained rows cannot see at all (a column
+# that is zero on them, or one that duplicates another): on the diagonally
+# normalized Gram matrix their eigenvalues are rounding, ~1e-16. A genuinely
+# collinear design has already passed the kernel's rank check at 1e-11.
+_NULL_EIG_TOL = 1e-10
+_NULL_COMPONENT_TOL = 1e-6
+
+
+def _not_identified(
+    separation: tuple[int, list[float]] | None,
+    k: int,
+    *,
+    params: Sequence[float] | None = None,
+) -> tuple[list[int], list[tuple[dict[int, float], float]]]:
+    """
+    The coefficients a separated fit does not identify, from the kernel's Gram
+    matrix of the rows the fit did not push to the boundary.
+
+    Coefficient j is identified exactly when e_j is in that matrix's row space,
+    i.e. when no direction of its null space moves it. With ``params``, also
+    returns the combinations of unidentified coefficients that the retained
+    rows do pin down, as ({index: +/-1}, value) -- e.g. the intercept plus the
+    one level of a categorical that still varies. Only reported when there is
+    exactly one such combination with unit coefficients, the form it takes for
+    a categorical; anything else would not read as a sentence.
+    """
+    if separation is None:
+        return [], []
+    g = np.asarray(separation[1], dtype=float).reshape(k, k)
+    d = np.diag(g)
+    # An absent column has a zero row and column, so it lands in the null
+    # space with its own unit vector; scaling it by 1 keeps that exact.
+    t = np.where(d > 0, 1.0 / np.sqrt(np.where(d > 0, d, 1.0)), 1.0)
+    ev, vec = np.linalg.eigh(g * t[:, None] * t[None, :])
+    null = vec[:, ev < _NULL_EIG_TOL]
+    if null.shape[1] == 0:
+        return [], []
+    flagged = [j for j in range(k) if float(np.sum(null[j] ** 2)) > _NULL_COMPONENT_TOL]
+    if params is None or not flagged:
+        return flagged, []
+
+    # c'beta is identified when c is orthogonal to the null space of G, which
+    # in the original coordinates is t * null.
+    sub = (t[:, None] * null)[flagged]
+    _, sv, vt = np.linalg.svd(sub.T)
+    rank = int(np.sum(sv > _NULL_COMPONENT_TOL * max(1.0, float(sv.max(initial=0.0)))))
+    free = vt[rank:]
+    if free.shape[0] != 1:
+        return flagged, []
+    c = free[0] / np.max(np.abs(free[0]))
+    if not np.allclose(np.abs(c), np.round(np.abs(c)), atol=1e-6):
+        return flagged, []
+    coef = {flagged[i]: float(np.round(v)) for i, v in enumerate(c) if round(abs(v)) == 1}
+    if coef[min(coef)] < 0:
+        coef = {j: -v for j, v in coef.items()}
+    value = float(sum(v * params[j] for j, v in coef.items()))
+    return flagged, [(coef, value)]
 
 
 def _as_model_error(exc: Exception) -> ModelError | None:
@@ -783,11 +842,12 @@ class GLM:
             iters,
             n_obs,
             converged,
-            dispersion,
+            (dispersion, separation),
         ) = chosen
 
         # ── Post-process ──────────────────────────────────────────────────
         k = len(feature_names)
+        not_identified, combos = _not_identified(separation, k, params=beta)
         # n counts the rows that actually contributed: in-domain, positive
         # weight (zero-weight missing-value rows are structural only).
         n = n_obs
@@ -852,6 +912,8 @@ class GLM:
                 where="GLM.fit",
                 hint="Estimate theta once on the full sample, then pass it.",
             )
+        # Coefficient index -> number of replicate refits it separates in.
+        rep_separated: dict[int, int] = {}
         if rep_wgts is not None and rep_cols:
             rep_betas = []
             for rc in rep_cols:
@@ -865,6 +927,8 @@ class GLM:
                         where="GLM.fit",
                     ) from e
                 rep_betas.append(np.asarray(r_chosen[1], dtype=float))
+                for j in _not_identified(r_chosen[11][1], k)[0]:
+                    rep_separated[j] = rep_separated.get(j, 0) + 1
             B = np.vstack(rep_betas)
             # The variant computes its own coefficients, the same call the
             # estimation path makes. Re-deriving them here from a method label
@@ -880,7 +944,18 @@ class GLM:
             if rep_df:
                 df_design = max(1, int(rep_df) - (k - 1))
 
-        se_arr = np.sqrt(np.diag(cov_mat))
+        # A coefficient that is not identified in the fit, or in any replicate
+        # refit, has no variance to report: its row and column are the
+        # rounding of a near-singular bread, or the spread of refits that
+        # stopped at arbitrary points.
+        unidentified = sorted(set(not_identified) | set(rep_separated))
+        if unidentified:
+            cov_mat = cov_mat.copy()
+            cov_mat[unidentified, :] = np.nan
+            cov_mat[:, unidentified] = np.nan
+
+        _var = np.diag(cov_mat)
+        se_arr = np.sqrt(np.where(_var >= 0, _var, np.nan))
 
         # ── Design-adjusted AIC (R survey's dAIC, Lumley & Scott 2015) ───
         # Generic families: deviance + 2*eff.p with eff.p the trace of the
@@ -903,6 +978,8 @@ class GLM:
             )
         else:
             aic_val = dev + 2.0 * eff_p if eff_p is not None else None
+        if unidentified:
+            aic_val = float("nan")
 
         if not converged:
             self._sample.warn(
@@ -917,6 +994,21 @@ class GLM:
                 param="max_iter",
                 got={"iterations": iters},
                 expected={"tol": tol},
+            )
+
+        if unidentified:
+            self._warn_separation(
+                y=y,
+                fam_str=fam_str,
+                level_df=level_df,
+                term_info=term_info,
+                feature_names=feature_names,
+                not_identified=not_identified,
+                combos=combos,
+                rep_separated=rep_separated,
+                n_reps=len(rep_cols),
+                boundary_rows=separation[0] if separation is not None else 0,
+                n=n,
             )
 
         # Statistics
@@ -944,8 +1036,11 @@ class GLM:
         coef_list = []
         for i, name in enumerate(feature_names):
             est, se = params_arr[i], se_arr[i]
-            t_val = est / se if se > 0 else 0.0
-            p_val = 2 * stats.t.sf(abs(t_val), df_design)
+            if not np.isfinite(se):
+                t_val = p_val = float("nan")
+            else:
+                t_val = est / se if se > 0 else 0.0
+                p_val = 2 * stats.t.sf(abs(t_val), df_design)
 
             coef_list.append(
                 GLMCoef(
@@ -982,6 +1077,132 @@ class GLM:
         self.fitted = fit_obj
         return self
 
+    def _warn_separation(
+        self,
+        *,
+        y: str,
+        fam_str: str,
+        level_df: pl.DataFrame,
+        term_info: dict[str, Any],
+        feature_names: list[str],
+        not_identified: list[int],
+        combos: list[tuple[dict[int, float], float]],
+        rep_separated: dict[int, int],
+        n_reps: int,
+        boundary_rows: int,
+        n: int,
+    ) -> None:
+        """
+        Record the GLM_SEPARATION finding, naming the terms and levels.
+
+        The model Wald test is always among the NaN results: with an intercept
+        in the model it can never be the only unidentified coefficient, since
+        every retained row carries it.
+        """
+
+        def _listed(idx: Sequence[int]) -> str:
+            return ", ".join(repr(feature_names[j]) for j in idx)
+
+        unidentified = sorted(set(not_identified) | set(rep_separated))
+        rep_only = [j for j in sorted(rep_separated) if j not in set(not_identified)]
+
+        parts = []
+        if not_identified:
+            parts.append(
+                f"{y!r} is predicted perfectly on {boundary_rows} of {n} rows (quasi-complete "
+                f"separation), so the estimates of {_listed(not_identified)} have no finite "
+                "value: they drift toward +/-infinity and the values shown are where the "
+                "iterations stopped."
+            )
+        if rep_only:
+            counts = ", ".join(f"{feature_names[j]!r} in {rep_separated[j]}" for j in rep_only)
+            parts.append(
+                f"In some replicate refits {y!r} is predicted perfectly (quasi-complete "
+                f"separation): {counts} of {n_reps}. Those refits stopped at arbitrary "
+                "values, so the spread of the refits measures nothing for these "
+                "coefficients."
+            )
+        parts.append(
+            "Their standard errors, tests and intervals are NaN, as are the AIC and the "
+            "model Wald test; the other coefficients are identified."
+        )
+        for coef, value in combos:
+            expr = " ".join(
+                ("+ " if v > 0 else "- ") + feature_names[j] for j, v in sorted(coef.items())
+            ).removeprefix("+ ")
+            parts.append(f"The combination {expr} is identified: {value:.6g}.")
+
+        # The terms behind the columns, and for a categorical, the levels on
+        # which the response never varies.
+        dummy_owner = {
+            name: var
+            for var, info in term_info.items()
+            if info.get("type") == "categorical"
+            for name, _ in info["dummies"]
+        }
+        terms: list[str] = []
+        for j in unidentified:
+            name = feature_names[j]
+            if name == "_intercept_":
+                continue
+            term = dummy_owner.get(name, name)
+            if term not in terms:
+                terms.append(term)
+
+        def _in(var: str, levels: list[Any]) -> str:
+            return f"{var} == {levels[0]!r}" if len(levels) == 1 else f"{var} in {levels!r}"
+
+        hints = []
+        for term in terms:
+            info = term_info.get(term)
+            if info is None or info.get("type") != "categorical":
+                continue
+            by_level = (
+                level_df.group_by(term)
+                .agg(pl.col(y).min().alias("lo"), pl.col(y).max().alias("hi"))
+                .drop_nulls(term)
+                .sort(term)
+            )
+            zero = by_level.filter((pl.col("lo") == 0) & (pl.col("hi") == 0))[term].to_list()
+            one = (
+                by_level.filter((pl.col("lo") == 1) & (pl.col("hi") == 1))[term].to_list()
+                if fam_str == "binomial"
+                else []
+            )
+            said = [
+                f"{v} in every row with {_in(term, lv)}"
+                for v, lv in (("0", zero), ("1", one))
+                if lv
+            ]
+            if said:
+                hints.append(
+                    f"{y!r} is {' and '.join(said)}. Collapse those levels of {term!r} "
+                    "or drop it from x."
+                )
+        if not hints:
+            named = ", ".join(repr(t) for t in terms) or "the model's terms"
+            hints.append(
+                f"Find the rows on which {y!r} is constant given {named}, then drop or "
+                "recode the term that singles them out."
+            )
+
+        got: dict[str, Any] = {
+            "not_identified": [feature_names[j] for j in unidentified],
+            "boundary_rows": boundary_rows,
+        }
+        if rep_separated:
+            got["replicate_refits"] = {feature_names[j]: c for j, c in rep_separated.items()}
+        self._sample.warn(
+            code=WarnCode.GLM_SEPARATION,
+            title="Outcome separated: some coefficients are not identified",
+            detail=" ".join(parts),
+            where="GLM.fit",
+            param="x",
+            var=terms[0] if terms else None,
+            got=got,
+            hint=" ".join(hints),
+        )
+
     def predict(
         self,
         new_data: pl.DataFrame,
@@ -1006,7 +1227,7 @@ class GLM:
         # Linear predictor. The offset carries no coefficient, so it shifts eta
         # without entering the variance.
         eta = X @ beta + offset_values(fit, new_data)
-        var_eta = np.sum((X @ cov) * X, axis=1)
+        var_eta = delta_var(X, cov)
         se_eta = np.sqrt(np.maximum(var_eta, 0))
 
         t_crit = stats.t.ppf(1 - alpha / 2, df)
@@ -1373,7 +1594,11 @@ class GLM:
                 cov_test = cov_mat
 
             p_terms = len(beta_test)
-            if p_terms > 0:
+            if p_terms > 0 and not np.isfinite(cov_test).all():
+                # A tested coefficient is not identified.
+                df_num = float(p_terms)
+                f_val = f_adj_val = p_wald = p_adj = float("nan")
+            elif p_terms > 0:
                 df_num = float(p_terms)
                 try:
                     cov_inv = np.linalg.solve(cov_test, beta_test)
