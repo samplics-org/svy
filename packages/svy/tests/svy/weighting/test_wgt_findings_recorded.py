@@ -190,17 +190,17 @@ def test_trim_by_null_domain():
     df = pl.DataFrame({"g": ["a"] * 12 + [None] * 3, "w": [1.0] * 11 + [50.0, 60.0, 1.0, 1.0]})
     s = Sample(df, Design(wgt="w"))
     with pytest.warns(SvyUserWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
-        out = s.weighting.trim(upper=5.0, by="g", min_cell_size=1)
+        out = s.weighting.trim(upper=6.0, by="g", min_cell_size=1)
     w = _one(out, NULL)
     assert w.got == {"g": 3} and w.param == "by"
     assert out.data["trim_wgt"].to_list()[-3:] == [60.0, 1.0, 1.0]
-    assert max(out.data["trim_wgt"].to_list()[:12]) <= 5.0 + 1e-9
+    assert max(out.data["trim_wgt"].to_list()[:12]) <= 6.0 + 1e-9
 
 
 def test_trim_by_numeric_null_domain_no_longer_silent():
     df = pl.DataFrame({"g": [1] * 12 + [None] * 2, "w": [1.0] * 11 + [50.0, 70.0, 1.0]})
     with pytest.warns(SvyUserWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
-        out = Sample(df, Design(wgt="w")).weighting.trim(upper=5.0, by="g", min_cell_size=1)
+        out = Sample(df, Design(wgt="w")).weighting.trim(upper=6.0, by="g", min_cell_size=1)
     assert _one(out, NULL).got == {"g": 2}
 
 

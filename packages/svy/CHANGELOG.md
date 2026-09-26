@@ -86,6 +86,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **`trim` lost or gained weight total silently when redistribution was impossible.** With `redistribute=True`, a bound on the wrong side of a domain's mean positive weight (`upper` below it, `lower` above it) ended with every weight at the bound, the total changed and only the INFO audit recorded (`converged=True`, so `on_nonconvergence` never applied). It now raises `TRIM_INFEASIBLE` before anything is written, whatever `on_nonconvergence`, naming each failing domain with its bound, weight range, mean, `n` and total in `got`; the hint suggests a bound relative to the weights (`Threshold.quantile(0.99)`, `Threshold("median", 3.5)`) or `redistribute=False`. Also applies to `trim`'s `by=`/`where=` domains and `adjust(trimming=)`.
+
 - **`create_brr_wgts` and `create_jk_wgts(paired=True)` crashed with a multi-column PSU** when strata had to be paired. The replicates now equal those built from a single column holding the same composite key.
 
 - **`wrangling.distinct()` without `cols` never removed duplicates**: svy's row index took part in the check. Only the user's columns are compared now.
