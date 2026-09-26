@@ -109,7 +109,9 @@ def test_rake_records_one_cells_column_per_margin(sample):
     """A single concatenated column would encode a stronger calibration."""
     df = sample.data.with_columns(pl.Series("h", ["x", "y"] * 3))
     s = Sample(df, Design(wgt="w"))
-    out = s.weighting.rake(controls={"g": CONTROLS, "h": {"x": 30.0, "y": 30.0}}, strict=False)
+    out = s.weighting.rake(
+        controls={"g": CONTROLS, "h": {"x": 30.0, "y": 30.0}}, on_nonconvergence="warn"
+    )
     assert len(out.design.wgt_adjustment.cells) == 2
 
 

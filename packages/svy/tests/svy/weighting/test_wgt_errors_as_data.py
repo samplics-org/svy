@@ -209,7 +209,9 @@ def test_controls_value_invalid_rake_and_calibrate(s):
         lambda: s.weighting.calibrate(controls={"x": float("inf")}), "CONTROLS_VALUE_INVALID"
     )
     # Calibration totals may be negative (a continuous auxiliary).
-    s.weighting.calibrate(controls={"x": -1.0, Cat("sex"): {"M": 5, "F": 5}}, strict=False)
+    s.weighting.calibrate(
+        controls={"x": -1.0, Cat("sex"): {"M": 5, "F": 5}}, on_nonconvergence="warn"
+    )
     assert err.param == "controls['x']"
 
 
@@ -245,7 +247,7 @@ def test_controls_type_invalid(s):
     raises(lambda: s.weighting.calibrate(controls={"a": 1}, by="sex"), "CONTROLS_TYPE_INVALID")
     X = np.ones((8, 1))
     raises(
-        lambda: s.weighting.calibrate_matrix(aux_vars=X, control=[8.0], by="sex"),
+        lambda: s.weighting.calibrate_matrix(aux_vars=X, controls=[8.0], by="sex"),
         "CONTROLS_TYPE_INVALID",
     )
 
@@ -275,7 +277,7 @@ def test_cells_required(s):
         (lambda s: s.weighting.calibrate(controls={Cat("nope"): {"a": 1}}), "controls"),
         (
             lambda s: s.weighting.calibrate_matrix(
-                aux_vars=np.ones((8, 1)), control={"a": [1]}, by="nope"
+                aux_vars=np.ones((8, 1)), controls={"a": [1]}, by="nope"
             ),
             "by",
         ),
@@ -377,16 +379,17 @@ def test_trim_cycles_not_converged():
 
 def test_bounds_exceeded(s):
     err = raises(
-        lambda: s.weighting.rake(controls={"sex": {"M": 50.0, "F": 30.0}}, up_bound=1.2),
+        lambda: s.weighting.rake(controls={"sex": {"M": 50.0, "F": 30.0}}, bounds=(None, 1.2)),
         "BOUNDS_EXCEEDED",
     )
-    assert err.expected == {"ll_bound": None, "up_bound": 1.2}
+    assert err.param == "bounds"
+    assert err.expected == {"bounds": [None, 1.2]}
 
 
 def test_calibration_not_met(s):
     X = np.column_stack([np.ones(8), np.ones(8)])
     raises(
-        lambda: s.weighting.calibrate_matrix(aux_vars=X, control=[10.0, 20.0], weights_only=True),
+        lambda: s.weighting.calibrate_matrix(aux_vars=X, controls=[10.0, 20.0], weights_only=True),
         "CALIBRATION_NOT_MET",
     )
 
@@ -443,7 +446,7 @@ def test_data_nulls_are_structured():
     assert err.got == {"sex": 4}
     raises(
         lambda: t.weighting.calibrate_matrix(
-            aux_vars=np.ones((8, 1)), control={"M": [1]}, by="sex"
+            aux_vars=np.ones((8, 1)), controls={"M": [1]}, by="sex"
         ),
         "BY_NA",
         DimensionError,
@@ -452,13 +455,13 @@ def test_data_nulls_are_structured():
 
 def test_shape_mismatch(s):
     err = raises(
-        lambda: s.weighting.calibrate_matrix(aux_vars=np.ones((5, 1)), control=[1.0]),
+        lambda: s.weighting.calibrate_matrix(aux_vars=np.ones((5, 1)), controls=[1.0]),
         "SHAPE_MISMATCH",
         DimensionError,
     )
     assert err.expected == {"rows": 8, "cols": 1} and err.got == {"rows": 5, "cols": 1}
     err = raises(
-        lambda: s.weighting.calibrate_matrix(aux_vars=np.ones((8, 1)), control=[1.0, 2]),
+        lambda: s.weighting.calibrate_matrix(aux_vars=np.ones((8, 1)), controls=[1.0, 2]),
         "SHAPE_MISMATCH",
         DimensionError,
     )

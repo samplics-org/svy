@@ -248,7 +248,7 @@ def test_aux_template_by_round_trip_to_calibrate_matrix(col, via_json):
         for lab in inner:
             inner[lab] = (rows["w"] * rows["h"]).sum() if lab == "h" else wsum.get(lab, 0.0)
     ctl = _through_json(json.loads(json.dumps(_through_json(tmpl)))) if via_json else tmpl
-    out = s.weighting.calibrate_matrix(aux_vars=X, control=ctl, labels=labels, by=col)
+    out = s.weighting.calibrate_matrix(aux_vars=X, controls=ctl, labels=labels, by=col)
     np.testing.assert_allclose(out.data["calib_wgt"].to_numpy(), s.data["w"].to_numpy())
 
 
@@ -262,7 +262,7 @@ def test_aux_template_two_by_columns_round_trip(via_json):
     ctl = _through_json(json.loads(json.dumps(_through_json(tmpl)))) if via_json else tmpl
     if via_json:
         assert all("_&_" in k for k in ctl)
-    out = s.weighting.calibrate_matrix(aux_vars=X, control=ctl, labels=["h"], by=["g", "bool"])
+    out = s.weighting.calibrate_matrix(aux_vars=X, controls=ctl, labels=["h"], by=["g", "bool"])
     np.testing.assert_allclose(out.data["calib_wgt"].to_numpy(), s.data["w"].to_numpy())
 
 

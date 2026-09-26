@@ -23,6 +23,7 @@ import polars as pl
 
 from svy.core.design import WgtAdjustment
 from svy.core.types import DomainScalarMap, Number
+from svy.core.warnings import check_on_finding, finding_level
 from svy.errors import WeightingError
 from svy.weighting._engine import (
     CellSpec,
@@ -101,12 +102,13 @@ def poststratify(
     wgt_name: str = "ps_wgt",
     ignore_reps: bool = False,
     update_design_wgts: bool = True,
-    strict: bool = True,
+    on_nonconvergence: str = "error",
     trimming: TrimConfig | None = None,
 ) -> Sample:
     ctx = "Sample.weighting.poststratify"
     df = sample._data
     design = sample._design
+    check_on_finding(on_nonconvergence, param="on_nonconvergence", where=ctx)
 
     if design.wgt is None:
         raise WeightingError.no_weight(where=ctx, method="poststratify")
@@ -137,12 +139,12 @@ def poststratify(
 
     ps_arr = scale_to_targets(wgt_arr.reshape(-1, 1), spec, targets)[:, 0]
 
-    # The trim cycle runs before anything is written, so a strict failure
-    # leaves the sample as it was.
+    # The trim cycle runs before anything is written, so raising on
+    # non-convergence leaves the sample as it was.
     cycle_ok = True
     if trimming is not None:
         ps_arr, cycle_ok = _trim_cycle(ps_arr, spec, targets, trimming)
-        if strict and not cycle_ok:
+        if on_nonconvergence == "error" and not cycle_ok:
             raise WeightingError.not_converged(
                 where=ctx,
                 method="poststratify",
@@ -191,5 +193,11 @@ def poststratify(
 
     record_null_cells(sample, spec, where=ctx, prev_wgt=wgt, wgt_name=wgt_name)
     if not cycle_ok:
-        record_trim_cycle(sample, where=ctx, what="Trim-poststratify cycle", trimming=trimming)
+        record_trim_cycle(
+            sample,
+            where=ctx,
+            what="Trim-poststratify cycle",
+            trimming=trimming,
+            level=finding_level(on_nonconvergence),
+        )
     return sample

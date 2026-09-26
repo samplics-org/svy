@@ -675,6 +675,10 @@ class Estimate:
         """
         from svy.errors import MethodError
         from svy.estimation.contrast import linear_contrast
+        from svy.utils.checks import validate_alpha
+
+        if alpha is not None:
+            alpha = validate_alpha(alpha, where="Estimate.contrast")
 
         if self.param in (PopParam.QUANTILE, PopParam.MEDIAN):
             raise MethodError(
@@ -933,6 +937,10 @@ class EstimateList(list):
         computed independently), so a multi-member list has no joint
         covariance to contrast over — index the member instead.
         """
+        from svy.utils.checks import validate_alpha
+
+        if alpha is not None:
+            alpha = validate_alpha(alpha, where="EstimateList.contrast")
         members = self._members()
         if len(members) == 1:
             return members[0].contrast(contrasts, alpha=alpha)

@@ -33,7 +33,12 @@ from svy.size._normalize import (
     _normalize_prop_var_mode,
     _normalize_two_props_method,
 )
-from svy.size.estimation_goals import _broadcast_scalars, _build_sizes, _has_pop
+from svy.size.estimation_goals import (
+    _broadcast_scalars,
+    _build_sizes,
+    _checked_alpha,
+    _has_pop,
+)
 from svy.utils.helpers import _get_keys_from_maps
 
 
@@ -96,6 +101,7 @@ def compare_props(
     SampleSize
         The updated SampleSize instance (chainable).
     """
+    alpha = _checked_alpha(alpha, where="SampleSize.compare_props")
     ss._param = PopParam.PROP
 
     stratified = any(
@@ -253,6 +259,7 @@ def compare_means(
     SampleSize
         The updated SampleSize instance (chainable).
     """
+    alpha = _checked_alpha(alpha, where="SampleSize.compare_means")
     from svy.errors.method_errors import MethodError
 
     ss._param = PopParam.MEAN

@@ -42,11 +42,12 @@ def _calib_sample(n=40, seed=7):
 
 def test_bounded_calibration_raises():
     s = _calib_sample()
-    with pytest.raises(NotImplementedError, match="bounded"):
+    with pytest.raises(NotImplementedError, match="not supported") as ei:
         s.weighting.calibrate(
             controls={Cat("grp"): {"a": 40.0, "b": 40.0}},
-            bounded=True,
+            bounds=(0.5, 2),
         )
+    assert ei.value.code == "NOT_SUPPORTED" and ei.value.param == "bounds"
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +203,7 @@ def test_strict_trim_calibrate_failure_mutates_nothing():
         s.weighting.calibrate(
             controls={Cat("grp"): {"a": 500.0, "b": 500.0}},
             wgt_name="cw",
-            strict=True,
+            on_nonconvergence="error",
             trimming=TrimConfig(upper=1.5, min_cell_size=1, max_iter=2),
         )
 
@@ -267,7 +268,7 @@ def test_calibrate_trim_cycle_by_domain_thresholds():
     out = s.weighting.calibrate(
         controls={Cat("grp"): {"a": total_a, "b": total_b}},
         wgt_name="cw",
-        strict=False,
+        on_nonconvergence="warn",
         trimming=TrimConfig(upper=3.0, by="grp", min_cell_size=1, max_iter=5),
     )
     w = out.data.get_column("cw").to_numpy()

@@ -331,7 +331,26 @@ class Wrangling:
         on_singletons: Literal["ignore", "warn", "error"] = "ignore",
         inplace: bool = False,
     ) -> "Sample":
-        """Filter rows based on conditions."""
+        """Keep the rows matching ``where``.
+
+        Parameters
+        ----------
+        where : WhereArg | None
+            Rows to keep. A row whose predicate is null is dropped (and
+            recorded as ``NULL_PREDICATE_ROWS_DROPPED``). None keeps every row.
+        negate : bool
+            Keep the rows NOT matching ``where`` instead.
+        check_singletons : bool
+            Look for strata left with a single PSU after filtering.
+        on_singletons : {"ignore", "warn", "error"}
+            What to do when ``check_singletons`` finds some; the finding is
+            ``SINGLETONS_DETECTED``. "error" raises and leaves the sample as it
+            was; "warn" records the finding in ``sample.warnings`` and raises
+            it once as a ``SvyUserWarning``; "ignore" records it at INFO level
+            without raising.
+        inplace : bool
+            Filter this Sample instead of returning a new one.
+        """
         return _filter_records(
             self._sample,
             where,
@@ -438,9 +457,14 @@ class Wrangling:
         clashes is refused, as is a key that repeats on ``other`` (and on
         this sample with ``validate="1:1"``) or key types that differ.
         Value labels and variable labels of a Sample carry over. Records
-        with no match get nulls; ``unmatched`` warns (default), stays
-        quiet or raises (``on_unmatched``), and ``indicator`` names a Boolean column marking
-        the matched records.
+        with no match get nulls, and ``indicator`` names a Boolean column
+        marking the matched records.
+
+        ``on_unmatched`` says what to do when some records find no match; the
+        finding is ``JOIN_UNMATCHED``. "error" raises and leaves the sample as
+        it was; "warn" records the finding in ``sample.warnings`` and raises it
+        once as a ``SvyUserWarning``; "ignore" records it at INFO level without
+        raising.
         """
         return _join(
             self._sample,

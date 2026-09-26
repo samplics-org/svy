@@ -193,6 +193,9 @@ class GLMFit(msgspec.Struct, frozen=True):
         design df as the coefficient table.
         """
         from svy.estimation.contrast import linear_contrast
+        from svy.utils.checks import validate_alpha
+
+        alpha = validate_alpha(alpha, where="GLM.contrast")
 
         if self.cov_matrix is None:
             raise ModelError(

@@ -35,7 +35,7 @@ import polars as pl
 
 from svy.core.design import WgtAdjustment
 from svy.core.types import DomainScalarMap
-from svy.core.warnings import Severity, WarnCode
+from svy.core.warnings import Severity, WarnCode, check_on_finding, finding_level
 from svy.errors import WeightingError
 from svy.errors.weighting_errors import show
 from svy.weighting._engine import (
@@ -162,9 +162,11 @@ def standardize(
     ignore_reps: bool = False,
     update_design_wgts: bool = True,
     trimming: TrimConfig | None = None,
+    on_nonconvergence: str = "error",
 ) -> Sample:
     df = sample._data
     design = sample._design
+    check_on_finding(on_nonconvergence, param="on_nonconvergence", where=_CTX)
 
     if design.wgt is None:
         raise WeightingError.no_weight(where=_CTX, method="standardize")
@@ -205,6 +207,15 @@ def standardize(
         from svy.weighting.poststratification import _trim_cycle
 
         std_arr, cycle_ok = _trim_cycle(std_arr, spec, targets, trimming)
+        if on_nonconvergence == "error" and not cycle_ok:
+            raise WeightingError.not_converged(
+                where=_CTX,
+                method="standardize",
+                what="Trim-standardize cycle",
+                max_iter=trimming.max_iter,
+                got={"cycles": trimming.max_iter},
+                hint="Increase TrimConfig.max_iter or use a less restrictive trim threshold.",
+            )
     df = df.with_columns(pl.Series(name=wgt_name, values=std_arr))
 
     if update_design_wgts:
@@ -251,5 +262,11 @@ def standardize(
     record_null_cells(sample, spec, where=_CTX, prev_wgt=wgt, wgt_name=wgt_name)
     _record_partial(sample, partial, by_cols, cells_cols)
     if not cycle_ok:
-        record_trim_cycle(sample, where=_CTX, what="Trim-standardize cycle", trimming=trimming)
+        record_trim_cycle(
+            sample,
+            where=_CTX,
+            what="Trim-standardize cycle",
+            trimming=trimming,
+            level=finding_level(on_nonconvergence),
+        )
     return sample

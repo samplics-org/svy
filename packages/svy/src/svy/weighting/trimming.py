@@ -19,7 +19,7 @@ import msgspec
 import numpy as np
 import polars as pl
 
-from svy.core.warnings import Severity, WarnCode
+from svy.core.warnings import Severity, WarnCode, check_on_finding, finding_level
 from svy.errors import DimensionError, MethodError, WeightingError
 
 
@@ -59,6 +59,7 @@ def trim(
     tol: float = 1e-6,
     wgt_name: str | None = "trim_wgt",
     update_design_wgts: bool = True,
+    on_nonconvergence: str = "error",
 ) -> Sample:
     """
     Trim survey weights and return a new Sample (chainable).
@@ -98,12 +99,15 @@ def trim(
     update_design_wgts : bool
         Update design.wgt to point to the trimmed weight column.
         Has no effect when wgt_name=None (in-place mode).
+    on_nonconvergence : {"error", "warn", "ignore"}
+        What to do when a domain does not converge within max_iter.
 
     Returns
     -------
     Sample
     """
     ctx = "Sample.weighting.trim"
+    check_on_finding(on_nonconvergence, param="on_nonconvergence", where=ctx)
     scope = _where_mask(sample._data, where, where=ctx)
 
     config = TrimConfig(
@@ -125,6 +129,7 @@ def trim(
         update_design_wgts=update_design_wgts,
         where=ctx,
         scope=scope,
+        on_nonconvergence=on_nonconvergence,
     )
 
 
@@ -137,11 +142,17 @@ def _run_trim(
     update_design_wgts: bool = True,
     where: str = "Sample.weighting.trim",
     scope: np.ndarray | None = None,
+    on_nonconvergence: str = "error",
+    param: str = "max_iter",
 ) -> Sample:
     """
     Core Sample-aware trim logic. Accepts a pre-built TrimConfig so that
-    other weighting methods (rake, calibrate) can call this directly via
-    their trimming= parameter.
+    other weighting methods (adjust) can call this directly via their
+    trimming= parameter.
+
+    Non-convergence is judged over every domain before anything is written,
+    so raising on it leaves the sample as it was. ``param`` names the
+    iteration cap in findings (``trimming.max_iter`` for a caller's config).
     """
     df: pl.DataFrame = sample._data
     design = sample._design
@@ -209,6 +220,7 @@ def _run_trim(
 
     # ── Domain splitting or global ────────────────────────────────────────
     w_out = w_orig.copy()
+    results: list[tuple[str, TrimResult]] = []
     by_cols: list[str] | None = None
     null_by: dict[str, np.ndarray] = {}
 
@@ -231,7 +243,7 @@ def _run_trim(
             )
             if result is not None:
                 w_out = result.weights
-                _emit_audit(sample, result, domain="(global)", where=where)
+                results.append(("(global)", result))
         else:
             # Out-of-scope rows take no part: they neither inform the threshold
             # nor receive redistributed mass.
@@ -240,7 +252,7 @@ def _run_trim(
             )
             if result is not None:
                 w_out[scope] = result.weights
-                _emit_audit(sample, result, domain="(global)", where=where)
+                results.append(("(global)", result))
     else:
         domains, null_by = _domain_masks(df, by_cols)
         if scope is not None:
@@ -256,7 +268,37 @@ def _run_trim(
             )
             if result is not None:
                 w_out[mask] = result.weights
-                _emit_audit(sample, result, domain=str(domain), where=where)
+                results.append((str(domain), result))
+
+    unconverged = [(label, r) for label, r in results if not r.converged]
+    if unconverged and on_nonconvergence == "error":
+        raise WeightingError.not_converged(
+            where=where,
+            method="trim",
+            what="Trimming",
+            max_iter=config.max_iter,
+            got={"domains": [label for label, _ in unconverged], "max_iter": config.max_iter},
+            expected={"tol": config.tol},
+            hint=f"Increase {param} (now {config.max_iter}) or relax tol (now {config.tol:g}).",
+        )
+    for label, r in results:
+        _emit_audit(sample, r, domain=label, where=where)
+        if not r.converged:
+            sample.warn(
+                code=WarnCode.MAX_ITER_REACHED,
+                title="Trimming did not converge",
+                detail=(
+                    f"Domain {label!r}: max_iter={config.max_iter} reached "
+                    f"without convergence (tol={config.tol}). "
+                    f"Iterations run: {r.iterations}."
+                ),
+                where=where,
+                level=finding_level(on_nonconvergence),
+                param=param,
+                expected={"tol": config.tol},
+                got={"domain": label, "iterations": r.iterations},
+                hint=f"Increase {param} or relax tol.",
+            )
 
     # ── Warn if weight sum changed without redistribution ─────────────────
     if not config.redistribute:
@@ -449,20 +491,6 @@ def _trim_domain(
         config.max_iter,
         config.tol,
     )
-
-    if not converged:
-        sample.warn(
-            code=WarnCode.MAX_ITER_REACHED,
-            title="Trimming did not converge",
-            detail=(
-                f"Domain {domain_label!r}: max_iter={config.max_iter} reached "
-                f"without convergence (tol={config.tol}). "
-                f"Iterations run: {iterations}."
-            ),
-            where=where,
-            level=Severity.WARNING,
-            hint="Increase max_iter or relax tol.",
-        )
 
     # Pack into TrimResult for audit and return
     return TrimResult(

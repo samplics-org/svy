@@ -1,10 +1,13 @@
 """wrangling.join — bring variables from another sample onto this one's records."""
 
+import warnings
+
 import polars as pl
 import pytest
 
 import svy
 
+from svy.core.warnings import Severity
 from svy.errors import DimensionError, MethodError
 
 
@@ -122,10 +125,13 @@ def test_unmatched_warns_by_default_with_the_count():
 
 def test_unmatched_keep_error_and_indicator():
     p, hh = _persons(), _households()
-    out = p.wrangling.join(
-        hh, on={"hh": "hh_id"}, cols=["rooms"], on_unmatched="ignore", indicator="in_hh"
-    )
-    assert not [w for w in out.warnings if w.code == "JOIN_UNMATCHED"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", svy.SvyUserWarning)
+        out = p.wrangling.join(
+            hh, on={"hh": "hh_id"}, cols=["rooms"], on_unmatched="ignore", indicator="in_hh"
+        )
+    found = [w for w in out.warnings if w.code == "JOIN_UNMATCHED"]
+    assert len(found) == 1 and found[0].level == Severity.INFO
     assert out.data["in_hh"].to_list() == [True] * 6 + [False]
     with pytest.raises(MethodError) as exc:
         p.wrangling.join(hh, on={"hh": "hh_id"}, cols=["rooms"], on_unmatched="error")

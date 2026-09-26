@@ -21,6 +21,7 @@ from svy.core.enumerations import MeasurementType, MetadataSource
 from svy.core.panel import design_varies_within_case, duplicate_case_ids, wave_overlap
 from svy.core.sample import Sample
 from svy.core.types import Category
+from svy.core.warnings import check_on_finding, finding_level
 from svy.errors import MethodError
 from svy.metadata.variable_meta import VariableMeta
 
@@ -601,8 +602,10 @@ def combine_samples(
         the declared codes as strings, ``"__single__"`` for an unstratified
         wave's one stratum and ``"__element_<i>"`` pseudo-PSUs for an
         unclustered wave's rows — self-describing values that cannot be
-        mistaken for real codes. Emitted with a warning or quietly (a log
-        line) respectively. Same vocabulary as ``on_singletons`` in wrangling.
+        mistaken for real codes, and the finding is ``COMBINE_MIXED_DESIGN``.
+        "error" raises and leaves the sample as it was; "warn" records the
+        finding in ``sample.warnings`` and raises it once as a
+        ``SvyUserWarning``; "ignore" records it at INFO level without raising.
     wgt_name : str
         Name of the combined weight column the function creates, holding each
         wave's own weight (divided by k under ``adjust="average"``). The waves'
@@ -641,13 +644,7 @@ def combine_samples(
         raise MethodError.invalid_choice(
             where=_CTX, param="adjust", got=adjust, allowed=["average", "none", None]
         )
-    if on_mixed_design not in ("error", "warn", "ignore"):
-        raise MethodError.invalid_choice(
-            where=_CTX,
-            param="on_mixed_design",
-            got=on_mixed_design,
-            allowed=["error", "warn", "ignore"],
-        )
+    check_on_finding(on_mixed_design, param="on_mixed_design", where=_CTX)
     if kind == "panel" and adjust == "average":
         raise MethodError.not_applicable(
             where=_CTX,
@@ -763,16 +760,14 @@ def combine_samples(
             + f". The combined design uses new column(s) {new_design_cols}; "
             "the original columns are untouched."
         )
-        if on_mixed_design == "warn":
-            found.append(
-                dict(
-                    code="COMBINE_MIXED_DESIGN",
-                    title="Waves declare different designs",
-                    detail=message,
-                )
+        found.append(
+            dict(
+                code="COMBINE_MIXED_DESIGN",
+                title="Waves declare different designs",
+                detail=message,
+                level=finding_level(on_mixed_design),
             )
-        else:
-            log.info(message)
+        )
 
     if wave_labels is not None and len(wave_labels) != k:
         raise MethodError.not_applicable(

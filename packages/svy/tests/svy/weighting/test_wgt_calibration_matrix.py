@@ -104,7 +104,7 @@ def test_global_categorical_with_labels(sample_cat_df):
         ("A4", "B3"): 125,
     }
 
-    w = s.weighting.calibrate_matrix(aux_vars=X, control=ctrl, labels=labels, weights_only=True)
+    w = s.weighting.calibrate_matrix(aux_vars=X, controls=ctrl, labels=labels, weights_only=True)
     df = s.data.with_columns(pl.Series("_calib_wgt", w)).with_columns(
         (pl.col("_calib_wgt") / pl.col("wgt")).alias("_adj")
     )
@@ -134,7 +134,7 @@ def test_global_numeric_vector_control(sample_num_df):
     X = s.data.select(["A", "B"]).to_numpy()
     ctrl = np.array([3945.0, 3355.0], dtype=float)
 
-    w = s.weighting.calibrate_matrix(aux_vars=X, control=ctrl, weights_only=True)
+    w = s.weighting.calibrate_matrix(aux_vars=X, controls=ctrl, weights_only=True)
     df = s.data.with_columns(pl.Series("_w", w))
 
     assert np.isclose(float((df["A"] * df["_w"]).sum()), ctrl[0], rtol=1e-9, atol=1e-8)
@@ -169,7 +169,7 @@ def test_by_single_column_categorical(sample_cat_df):
     ctrld = {"D1": targets, "D2": targets}
 
     w = s.weighting.calibrate_matrix(
-        aux_vars=X, control=ctrld, by="Domain", labels=labels, weights_only=True
+        aux_vars=X, controls=ctrld, by="Domain", labels=labels, weights_only=True
     )
     df = s.data.with_columns(pl.Series("_w", w))
 
@@ -196,7 +196,7 @@ def test_by_multiple_columns_numeric(sample_num_df):
     }
 
     w = s.weighting.calibrate_matrix(
-        aux_vars=X, control=ctrl, by=("Region", "Sex"), labels=labels, weights_only=True
+        aux_vars=X, controls=ctrl, by=("Region", "Sex"), labels=labels, weights_only=True
     )
     df = s.data.with_columns(pl.Series("_w", w))
 
@@ -210,14 +210,14 @@ def test_scalar_control_rejected_for_multi_column_X(sample_num_df):
     s = Sample(data=sample_num_df, design=Design(wgt="wgt"))
     X = s.data.select(["A", "B"]).to_numpy()
     with pytest.raises(Exception):
-        s.weighting.calibrate_matrix(aux_vars=X, control=100.0, weights_only=True)
+        s.weighting.calibrate_matrix(aux_vars=X, controls=100.0, weights_only=True)
 
 
 def test_wrong_control_length_raises(sample_num_df):
     s = Sample(data=sample_num_df, design=Design(wgt="wgt"))
     X = s.data.select(["A", "B"]).to_numpy()
     with pytest.raises(Exception):
-        s.weighting.calibrate_matrix(aux_vars=X, control=[1.0], weights_only=True)
+        s.weighting.calibrate_matrix(aux_vars=X, controls=[1.0], weights_only=True)
 
 
 def test_control_dict_keys_must_match_labels(sample_num_df):
@@ -225,7 +225,7 @@ def test_control_dict_keys_must_match_labels(sample_num_df):
     X = s.data.select(["A", "B"]).to_numpy()
     with pytest.raises(Exception):
         s.weighting.calibrate_matrix(
-            aux_vars=X, control={"A": 1.0, "C": 2.0}, labels=["A", "B"], weights_only=True
+            aux_vars=X, controls={"A": 1.0, "C": 2.0}, labels=["A", "B"], weights_only=True
         )
 
 
@@ -233,14 +233,14 @@ def test_by_requires_mapping_control(sample_cat_df):
     s = Sample(data=sample_cat_df, design=Design(wgt="wgt"))
     X = s.data.select(pl.when(pl.col("A") == "A1").then(1.0).otherwise(0.0).alias("A1")).to_numpy()
     with pytest.raises(Exception):
-        s.weighting.calibrate_matrix(aux_vars=X, control=[1.0], by="Domain", weights_only=True)
+        s.weighting.calibrate_matrix(aux_vars=X, controls=[1.0], by="Domain", weights_only=True)
 
 
 def test_shape_mismatch_X_rows_vs_data_rows(sample_num_df):
     s = Sample(data=sample_num_df, design=Design(wgt="wgt"))
     X = s.data.select(["A", "B"]).to_numpy()
     with pytest.raises(Exception):
-        s.weighting.calibrate_matrix(aux_vars=X[:-1, :], control=[1.0, 2.0], weights_only=True)
+        s.weighting.calibrate_matrix(aux_vars=X[:-1, :], controls=[1.0, 2.0], weights_only=True)
 
 
 def test_weights_only_vs_attach_column(sample_num_df):
@@ -250,18 +250,22 @@ def test_weights_only_vs_attach_column(sample_num_df):
 
     # weights_only=True returns array without attaching
     w = s.weighting.calibrate_matrix(
-        aux_vars=X, control=ctrl, labels=["A", "B"], weights_only=True
+        aux_vars=X, controls=ctrl, labels=["A", "B"], weights_only=True
     )
     assert isinstance(w, np.ndarray)
     assert "_cal" not in s.data.columns
 
     # explicit wgt_name attaches column
-    s2 = s.weighting.calibrate_matrix(aux_vars=X, control=ctrl, labels=["A", "B"], wgt_name="_cal")
+    s2 = s.weighting.calibrate_matrix(
+        aux_vars=X, controls=ctrl, labels=["A", "B"], wgt_name="_cal"
+    )
     assert "_cal" in s2.data.columns
 
     # attempting to attach same name again raises
     with pytest.raises(Exception):
-        s2.weighting.calibrate_matrix(aux_vars=X, control=ctrl, labels=["A", "B"], wgt_name="_cal")
+        s2.weighting.calibrate_matrix(
+            aux_vars=X, controls=ctrl, labels=["A", "B"], wgt_name="_cal"
+        )
 
 
 def test_calibrate_matrix_auto_col_name_uses_calib_wgt(sample_num_df):
@@ -269,7 +273,7 @@ def test_calibrate_matrix_auto_col_name_uses_calib_wgt(sample_num_df):
     s = Sample(data=sample_num_df, design=Design(wgt="wgt"))
     X = s.data.select(["A", "B"]).to_numpy()
     ctrl = {"A": 3945.0, "B": 3355.0}
-    s2 = s.weighting.calibrate_matrix(aux_vars=X, control=ctrl, labels=["A", "B"])
+    s2 = s.weighting.calibrate_matrix(aux_vars=X, controls=ctrl, labels=["A", "B"])
     assert CALIB_WGT in s2.data.columns
     assert "svy_calib_wgt" not in s2.data.columns
 
@@ -327,7 +331,7 @@ def test_global_categorical_numeric_level_labels(sample_cat_num_levels_df):
         (4, 3): 125,
     }
 
-    w = s.weighting.calibrate_matrix(aux_vars=X, control=ctrl, labels=labels, weights_only=True)
+    w = s.weighting.calibrate_matrix(aux_vars=X, controls=ctrl, labels=labels, weights_only=True)
     df = s.data.with_columns(pl.Series("_w", w)).with_columns(
         (pl.col("_w") / pl.col("wgt")).alias("_adj")
     )
@@ -390,7 +394,7 @@ def test_by_numeric_multi_columns_categorical(sample_cat_num_levels_df):
 
     w = s.weighting.calibrate_matrix(
         aux_vars=X,
-        control=ctrld,
+        controls=ctrld,
         by=("RegionInt", "SexInt"),
         labels=labels,
         weights_only=True,

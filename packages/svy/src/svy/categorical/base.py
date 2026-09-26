@@ -41,7 +41,7 @@ from svy.core.types import (
 )
 from svy.errors import MethodError
 from svy.ui.printing import format_where_clause
-from svy.utils.checks import assert_no_missing, drop_missing
+from svy.utils.checks import assert_no_missing, drop_missing, validate_alpha
 from svy.utils.where import _compile_where
 
 
@@ -196,6 +196,7 @@ class Categorical:
         ``svytotal`` uses the normal critical value instead; to reproduce
         svy's count CIs in R, pass ``df = degf(design)`` to ``confint()``.
         """
+        alpha = validate_alpha(alpha, where="Sample.categorical.tabulate")
         from scipy.stats import t as t_dist
 
         _raw = self._sample._data
@@ -524,6 +525,7 @@ class Categorical:
             TTestOneGroup for one-sample tests, TTestTwoGroups for two-sample tests.
             When `by` is specified, returns a list of test results.
         """
+        alpha = validate_alpha(alpha, where="Sample.categorical.ttest")
         # The population-size column has to survive prepare_data's projection
         # for the FPC to be computable below.
         pop_size = self._sample._design.pop_size
@@ -778,6 +780,7 @@ class Categorical:
         Automatically selects two-sample (Wilcoxon) or k-sample (Kruskal-Wallis)
         form based on the number of unique levels in ``group``.
         """
+        alpha = validate_alpha(alpha, where="Sample.categorical.ranktest")
         from svy.errors import MethodError
 
         # --- Validate method / score_fn ---

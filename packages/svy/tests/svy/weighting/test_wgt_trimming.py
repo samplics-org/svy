@@ -770,7 +770,9 @@ class TestTrimWarnings:
         assert len(warns) == 0
 
     def test_max_iter_reached_warning(self, skewed_sample):
-        out = skewed_sample.weighting.trim(upper=50.0, redistribute=True, max_iter=1, tol=1e-20)
+        out = skewed_sample.weighting.trim(
+            upper=50.0, redistribute=True, max_iter=1, tol=1e-20, on_nonconvergence="warn"
+        )
         warns = _warnings_of(out, WarnCode.MAX_ITER_REACHED)
         assert len(warns) >= 1
         assert warns[0].level == Severity.WARNING
@@ -824,7 +826,7 @@ class TestTrimConvergence:
         assert audits[0].extra["converged"] is True
 
     def test_max_iter_1_records_one_iteration(self, skewed_sample):
-        out = skewed_sample.weighting.trim(upper=50.0, max_iter=1)
+        out = skewed_sample.weighting.trim(upper=50.0, max_iter=1, on_nonconvergence="warn")
         audits = _warnings_of(out, WarnCode.WEIGHT_ADJ_AUDIT)
         assert audits[0].extra["iterations"] == 1
 

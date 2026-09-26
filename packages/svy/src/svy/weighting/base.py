@@ -50,12 +50,53 @@ if TYPE_CHECKING:
 _RENAMED: dict[str, dict[str, str]] = {
     "adjust": {"by": "cells"},
     "normalize": {"by": "cells"},
-    "poststratify": {"by": "cells", "factors": "shares"},
-    "rake": {"factors": "shares"},
+    "poststratify": {"by": "cells", "factors": "shares", "strict": "on_nonconvergence"},
+    "rake": {
+        "factors": "shares",
+        "ll_bound": "bounds",
+        "up_bound": "bounds",
+        "strict": "on_nonconvergence",
+    },
+    "calibrate": {"bounded": "bounds", "strict": "on_nonconvergence"},
+    "calibrate_matrix": {
+        "control": "controls",
+        "bounded": "bounds",
+        "strict": "on_nonconvergence",
+    },
     "controls_margins_template": {"cat_na": "na"},
     "control_aux_template": {"by_na": "na"},
     "build_aux_matrix": {"by_na": "na"},
 }
+
+
+def _rename_note(old: str, new: str, kwargs: dict[str, Any]) -> str:
+    if new == "shares":
+        return (
+            "shares are normalized internally, so a vector that does not "
+            "sum to 1 now pins composition instead of rescaling the total."
+        )
+    if new == "na":
+        return f"na={kwargs[old]!r} keeps the same meaning." + (
+            " The default is now 'error'." if old == "cat_na" else ""
+        )
+    if new == "on_nonconvergence":
+        mode = "error" if kwargs[old] else "warn"
+        return (
+            f'strict={kwargs[old]!r} is on_nonconvergence="{mode}"; True maps to "error" '
+            '(the default) and False to "warn".'
+        )
+    if new == "bounds" and old == "bounded":
+        return (
+            "bounds=(lo, hi) bounds the factor g = new/old weight. Bounded calibration "
+            "is not supported yet, so leave it unset."
+        )
+    if new == "bounds":
+        lo, hi = kwargs.get("ll_bound"), kwargs.get("up_bound")
+        return (
+            f"ll_bound= and up_bound= are one parameter now: bounds=({lo!r}, {hi!r}). "
+            "None on a side leaves it open."
+        )
+    return ""
 
 
 def _reject_legacy_kwargs(method: str, kwargs: dict[str, Any]) -> None:
@@ -64,18 +105,12 @@ def _reject_legacy_kwargs(method: str, kwargs: dict[str, Any]) -> None:
     renames = _RENAMED.get(method, {})
     for old, new in renames.items():
         if old in kwargs:
-            note = ""
-            if new == "shares":
-                note = (
-                    "shares are normalized internally, so a vector that does not "
-                    "sum to 1 now pins composition instead of rescaling the total."
-                )
-            elif new == "na":
-                note = f"na={kwargs[old]!r} keeps the same meaning." + (
-                    " The default is now 'error'." if old == "cat_na" else ""
-                )
             raise WeightingError.param_renamed(
-                where=f"Sample.weighting.{method}", method=method, old=old, new=new, note=note
+                where=f"Sample.weighting.{method}",
+                method=method,
+                old=old,
+                new=new,
+                note=_rename_note(old, new, kwargs),
             )
     unknown = next(iter(kwargs))
     raise TypeError(f"{method}() got an unexpected keyword argument {unknown!r}")
@@ -104,10 +139,10 @@ class Weighting:
     Three relation parameters run through these methods, each with one meaning:
 
     ``cells=``
-        Groups that each receive ONE derived adjustment factor. The adjustment
-        is computed per cell, so the cells are what the adjustment pins.
+        The classes the adjustment is computed over: each receives ONE derived
+        adjustment factor, so the cells are what the adjustment pins.
     ``by=``
-        Repeat the whole adjustment independently per group. Present only where
+        Run the whole method separately within each domain. Present only where
         it is not a second spelling of ``cells``: for ``adjust``, ``normalize``
         and ``poststratify``, ``by=g`` would be exactly ``cells=[g, *cells]``.
         This is the same ``by=`` as in estimation.
@@ -124,6 +159,15 @@ class Weighting:
     A dict is keyed by the column's values, or by their text form as JSON gives
     it (``"1"`` for ``1``, ``"true"`` for ``True``, an ISO date); several
     columns take a tuple in column order or its parts joined by ``"_&_"``.
+
+    Iterative methods share ``tol=`` (the convergence tolerance; each
+    docstring says what it measures), ``max_iter=`` (iteration cap) and
+    ``on_nonconvergence=``; a ``trimming=`` cycle is capped by
+    ``trimming.max_iter``. Every ``on_*``
+    parameter in svy means the same: "error" raises and leaves the sample as
+    it was; "warn" records the finding in ``sample.warnings`` and raises it
+    once as a ``SvyUserWarning``; "ignore" records it at INFO level without
+    raising.
 
     Failures raise ``WeightingError`` (a ``MethodError``) with a stable
     ``code`` and ``expected``/``got`` in the data's own values, so
@@ -177,6 +221,42 @@ class Weighting:
         drop_nulls: bool = False,
         inplace: bool = False,
     ) -> Any:
+        """Create balanced repeated replication (BRR) weights.
+
+        BRR needs two PSUs per stratum. Strata carrying more are paired into
+        variance strata first; the paired column is written as
+        ``stratum_name`` and recorded on the replicate weights, while the
+        Design keeps the true strata for Taylor variance.
+
+        Parameters
+        ----------
+        n_reps : int | None
+            Number of replicates. None uses the Hadamard order for the number
+            of strata; fewer are rounded up to it, and more than it is an error.
+        stratum : str | None
+            Column of the strata to build from. None uses the Design's.
+        psu : str | None
+            Column of the PSUs to build from. None uses the Design's.
+        stratum_name : str
+            Name of the paired variance-stratum column, written only when some
+            stratum has more than two PSUs.
+        order_by : str | Sequence[str] | None
+            Pair adjacent PSUs in this order (systematic frames). None pairs in
+            data order.
+        shuffle : bool
+            Pair PSUs at random within each stratum instead.
+        rep_prefix : str | None
+            Prefix of the replicate columns (``<prefix>1..R``). None uses the
+            weight column's name.
+        fay_coef : float
+            Fay coefficient in [0, 1). 0 is classic BRR.
+        rstate : int | None
+            Seed for ``shuffle``.
+        drop_nulls : bool
+            Drop rows with a null or non-finite weight, stratum or PSU first.
+        inplace : bool
+            Adopt the result on this Sample instead of returning a new one.
+        """
         return self._run(
             inplace,
             _create_brr_wgts,
@@ -206,6 +286,34 @@ class Weighting:
         drop_nulls: bool = False,
         inplace: bool = False,
     ) -> Any:
+        """Create delete-one-PSU jackknife replicate weights.
+
+        Parameters
+        ----------
+        paired : bool
+            True builds JK2: one replicate per two-PSU variance stratum, pairing
+            strata that carry more than two PSUs first. False builds JK1/JKn on
+            the strata exactly as given.
+        stratum : str | None
+            Column of the strata to build from. None uses the Design's.
+        psu : str | None
+            Column of the PSUs to build from. None uses the Design's.
+        stratum_name : str
+            Name of the paired variance-stratum column (``paired=True`` only).
+        order_by : str | Sequence[str] | None
+            Pair adjacent PSUs in this order (``paired=True`` only).
+        shuffle : bool
+            Pair PSUs at random within each stratum (``paired=True`` only).
+        rep_prefix : str | None
+            Prefix of the replicate columns (``<prefix>1..R``). None uses the
+            weight column's name.
+        rstate : int | None
+            Seed for ``shuffle``.
+        drop_nulls : bool
+            Drop rows with a null or non-finite weight, stratum or PSU first.
+        inplace : bool
+            Adopt the result on this Sample instead of returning a new one.
+        """
         return self._run(
             inplace,
             _create_jk_wgts,
@@ -232,6 +340,37 @@ class Weighting:
         rstate: RandomState = None,
         inplace: bool = False,
     ) -> Any:
+        """Create bootstrap replicate weights.
+
+        Parameters
+        ----------
+        n_reps : int
+            Number of replicates.
+        kind : {"rao-wu", "poisson"}
+            ``"rao-wu"`` resamples PSUs within strata (Rao-Wu-Yue rescaling)
+            and requires a PSU. ``"poisson"`` (Beaumont-Patak) draws
+            independent per-unit factors and needs only a weight, for files
+            whose design identifiers are suppressed; it cannot recover
+            clustering.
+        stratum : str | None
+            Column of the strata to resample within. None uses the Design's.
+        psu : str | None
+            Column of the PSUs to resample. None uses the Design's.
+        rep_prefix : str | None
+            Prefix of the replicate columns (``<prefix>1..R``). None uses the
+            weight column's name.
+        drop_nulls : bool
+            Drop rows with a null or non-finite weight (and stratum and PSU for
+            ``"rao-wu"``) first.
+        rstate : RandomState
+            Seed or generator for the draws.
+        inplace : bool
+            Adopt the result on this Sample instead of returning a new one.
+
+        Calibrating the replicates is a separate step: ``poststratify``,
+        ``rake`` and ``calibrate`` adjust the replicate columns alongside the
+        main weight unless ``ignore_reps=True``.
+        """
         return self._run(
             inplace,
             _create_bs_wgts,
@@ -254,6 +393,28 @@ class Weighting:
         drop_nulls: bool = False,
         inplace: bool = False,
     ) -> Any:
+        """Create successive difference replication (SDR) weights.
+
+        Parameters
+        ----------
+        n_reps : int
+            Number of replicates, at least 2.
+        psu : str | None
+            PSU column recorded on the replicate weights as the units they
+            describe. It does not change the replicates. None records the
+            Design's.
+        rep_prefix : str | None
+            Prefix of the replicate columns (``<prefix>1..R``). None uses the
+            weight column's name.
+        order_col : str | None
+            Column giving the sort order the successive differences follow
+            (the frame order of a systematic sample). None uses data order.
+        drop_nulls : bool
+            Drop rows with a null or non-finite weight, stratum or
+            ``order_col`` first.
+        inplace : bool
+            Adopt the result on this Sample instead of returning a new one.
+        """
         return self._run(
             inplace,
             _create_sdr_wgts,
@@ -281,6 +442,7 @@ class Weighting:
         update_design_wgts: bool = True,
         respondents_only: bool = True,
         trimming: TrimConfig | None = None,
+        on_nonconvergence: Literal["error", "warn", "ignore"] = "error",
         inplace: bool = False,
         **_legacy: Any,
     ) -> Any:
@@ -297,17 +459,46 @@ class Weighting:
         cells : str | Sequence[str] | None
             Adjustment classes: each receives one factor, derived from the
             response statuses within it. None adjusts the sample as one class.
+            ``cells=`` are the classes the adjustment is computed over;
+            ``by=`` runs the whole method separately within each domain.
         where : WhereArg
             Scope. Rows outside it keep their weight whatever their status.
-        respondents_only : bool
-            Drop the nonrespondents and ineligibles whose weight the adjustment
-            handled. Rows in no adjustment class (outside ``where``, or with a
-            null cell) keep their weight and stay, whatever their status.
+        resp_mapping : dict | None
+            Maps the canonical statuses ``"rr"`` (respondent), ``"nr"``
+            (non-respondent), ``"in"`` (ineligible) and ``"uk"`` (unknown
+            eligibility) to the column's own values, a value or a list of
+            them each, e.g. ``{"rr": 1, "nr": [2, 3], "uk": 9}``. None reads
+            the canonical codes from the column.
+        wgt_name : str
+            Name of the new weight column; replicate columns become
+            ``<wgt_name>1..R``. It must not exist yet.
         ignore_reps : bool
             Leave the replicate weights unadjusted. The new weight then has no
             replicate weights (variance is Taylor); the replicate columns stay
             in the data and ``update_design(wgt=<previous weight>)`` restores
             them.
+        unknown_to_inelig : bool
+            True spreads the weight of unknown-eligibility units over every
+            unit of known eligibility (rr, nr and in), so part of it goes to
+            the ineligibles. False adds it to the non-respondents' weight,
+            which goes to respondents only.
+        update_design_wgts : bool
+            Point ``design.wgt`` and the replicate weights at the new columns
+            and record the adjustment. False only adds the columns.
+        respondents_only : bool
+            Drop the nonrespondents and ineligibles whose weight the adjustment
+            handled. Rows in no adjustment class (outside ``where``, or with a
+            null cell) keep their weight and stay, whatever their status.
+        trimming : TrimConfig | None
+            Trim the adjusted weights afterwards (one pass, no re-adjustment).
+        on_nonconvergence : {"error", "warn", "ignore"}
+            What to do when trimming (``trimming=``) does not converge within
+            ``trimming.max_iter`` iterations; with "warn" or "ignore" the last
+            iterate is kept. "error" raises and leaves the sample as it was; "warn" records the finding in
+            ``sample.warnings`` and raises it once as a ``SvyUserWarning``; "ignore"
+            records it at INFO level without raising.
+        inplace : bool
+            Adopt the result on this Sample instead of returning a new one.
 
         Recorded as ``kind="nonresponse"`` and provenance only: variance treats
         the adjusted weights as fixed, matching R.
@@ -326,6 +517,7 @@ class Weighting:
             update_design_wgts=update_design_wgts,
             respondents_only=respondents_only,
             trimming=trimming,
+            on_nonconvergence=on_nonconvergence,
         )
 
     # ------------------------------------------------------------------ #
@@ -366,14 +558,24 @@ class Weighting:
         shares : dict | None
             Composition per cell; the weight total carries through unchanged.
         cells : str | Sequence[str] | None
-            Groups that each receive one factor.
+            Groups that each receive one factor. ``cells=`` are the classes
+            the adjustment is computed over; ``by=`` runs the whole method
+            separately within each domain.
         where : WhereArg
             Scope.
+        wgt_name : str
+            Name of the new weight column; replicate columns become
+            ``<wgt_name>1..R``. It must not exist yet.
         ignore_reps : bool
             Leave the replicate weights unadjusted. The new weight then has no
             replicate weights (variance is Taylor); the replicate columns stay
             in the data and ``update_design(wgt=<previous weight>)`` restores
             them.
+        update_design_wgts : bool
+            Point ``design.wgt`` and the replicate weights at the new columns
+            and record the adjustment. False only adds the columns.
+        inplace : bool
+            Adopt the result on this Sample instead of returning a new one.
 
         Recorded as ``kind="normalization"`` and provenance only.
         """
@@ -405,7 +607,7 @@ class Weighting:
         wgt_name: str = "ps_wgt",
         ignore_reps: bool = False,
         update_design_wgts: bool = True,
-        strict: bool = True,
+        on_nonconvergence: Literal["error", "warn", "ignore"] = "error",
         trimming: TrimConfig | None = None,
         inplace: bool = False,
         **_legacy: Any,
@@ -428,18 +630,36 @@ class Weighting:
             population count is not. Normalized internally, so counts or
             proportions both work, and the weight total carries through.
         cells : str | Sequence[str] | None
-            The post-strata: each receives one factor.
+            The post-strata: each receives one factor. ``cells=`` are the
+            classes the adjustment is computed over; ``by=`` runs the whole
+            method separately within each domain.
         where : WhereArg
             Scope.
-        trimming : TrimConfig | None
-            Alternate trimming and re-poststratification until both hold. This
-            is the supported route to calibrated-and-trimmed weights, since
-            trimming afterwards would break the controls.
+        wgt_name : str
+            Name of the new weight column; replicate columns become
+            ``<wgt_name>1..R``. It must not exist yet.
         ignore_reps : bool
             Leave the replicate weights unadjusted. The new weight then has no
             replicate weights (variance is Taylor); the replicate columns stay
             in the data and ``update_design(wgt=<previous weight>)`` restores
             them.
+        update_design_wgts : bool
+            Point ``design.wgt`` and the replicate weights at the new columns
+            and record the adjustment. False only adds the columns.
+        on_nonconvergence : {"error", "warn", "ignore"}
+            What to do when the trim-poststratify cycle (``trimming=``) runs
+            out of cycles; with "warn" or "ignore" the last cycle's weights are
+            kept. "error" raises and leaves the sample as it was; "warn"
+            records the finding in ``sample.warnings`` and raises it once as a
+            ``SvyUserWarning``; "ignore" records it at INFO level without
+            raising.
+        trimming : TrimConfig | None
+            Alternate trimming and re-poststratification until both hold, for
+            at most ``trimming.max_iter`` cycles. This is the supported route
+            to calibrated-and-trimmed weights, since trimming afterwards would
+            break the controls.
+        inplace : bool
+            Adopt the result on this Sample instead of returning a new one.
         """
         _reject_legacy_kwargs("poststratify", _legacy)
         return self._run(
@@ -452,7 +672,7 @@ class Weighting:
             wgt_name=wgt_name,
             ignore_reps=ignore_reps,
             update_design_wgts=update_design_wgts,
-            strict=strict,
+            on_nonconvergence=on_nonconvergence,
             trimming=trimming,
         )
 
@@ -471,6 +691,7 @@ class Weighting:
         ignore_reps: bool = False,
         update_design_wgts: bool = True,
         trimming: TrimConfig | None = None,
+        on_nonconvergence: Literal["error", "warn", "ignore"] = "error",
         inplace: bool = False,
     ) -> Any:
         """Standardize weights to a common composition.
@@ -487,7 +708,9 @@ class Weighting:
         Parameters
         ----------
         cells : str | Sequence[str]
-            The composition axis (R's ``by``).
+            The composition axis (R's ``by``). ``cells=`` are the classes the
+            adjustment is computed over; ``by=`` runs the whole method
+            separately within each domain.
         shares : dict
             Standard population over the ``cells`` levels. Counts or
             proportions; normalized internally.
@@ -496,11 +719,28 @@ class Weighting:
             sample as one domain.
         where : WhereArg
             Scope (R's ``excluding.missing``).
+        wgt_name : str
+            Name of the new weight column; replicate columns become
+            ``<wgt_name>1..R``. It must not exist yet.
         ignore_reps : bool
             Leave the replicate weights unadjusted. The new weight then has no
             replicate weights (variance is Taylor); the replicate columns stay
             in the data and ``update_design(wgt=<previous weight>)`` restores
             them.
+        update_design_wgts : bool
+            Point ``design.wgt`` and the replicate weights at the new columns
+            and record the adjustment. False only adds the columns.
+        trimming : TrimConfig | None
+            Alternate trimming and re-standardization until both hold, for at
+            most ``trimming.max_iter`` cycles.
+        on_nonconvergence : {"error", "warn", "ignore"}
+            What to do when the trim-standardize cycle (``trimming=``) runs out
+            of cycles (``MAX_ITER_REACHED``); with "warn" or "ignore" the last
+            cycle's weights are kept. "error" raises and leaves the sample as it was; "warn" records the finding in
+            ``sample.warnings`` and raises it once as a ``SvyUserWarning``; "ignore"
+            records it at INFO level without raising.
+        inplace : bool
+            Adopt the result on this Sample instead of returning a new one.
 
         Standardized weights are analysis-specific: ``where`` bakes in one
         variable's missingness and ``by`` the domain structure, so estimating a
@@ -521,6 +761,7 @@ class Weighting:
             ignore_reps=ignore_reps,
             update_design_wgts=update_design_wgts,
             trimming=trimming,
+            on_nonconvergence=on_nonconvergence,
         )
 
     # ------------------------------------------------------------------ #
@@ -538,9 +779,19 @@ class Weighting:
         """A ``controls`` skeleton for ``rake``: ``{margin: {level: nan}}``.
 
         Levels are the columns' own values, so the filled template goes
-        straight back to ``rake``. ``na`` says what to do with nulls: ``"error"``
-        refuses them, ``"level"`` lists them under ``na_label``, ``"drop"``
-        leaves them out.
+        straight back to ``rake``.
+
+        Parameters
+        ----------
+        margins : dict[str, str]
+            ``{margin name: column}``. Use the column's name as the margin name
+            to pass the filled template to ``rake`` as is.
+        na : {"error", "level", "drop"}
+            What to do with nulls in a margin column: ``"error"`` refuses
+            them, ``"level"`` lists them under ``na_label``, ``"drop"`` leaves
+            them out.
+        na_label : str
+            Key for the null level under ``na="level"``.
         """
         _reject_legacy_kwargs("controls_margins_template", _legacy)
         return _controls_margins_template(
@@ -558,13 +809,12 @@ class Weighting:
         where: WhereArg = None,
         wgt_name: str = "rk_wgt",
         ignore_reps: bool = False,
-        ll_bound: float | None = None,
-        up_bound: float | None = None,
+        bounds: tuple[float | None, float | None] | None = None,
         tol: float = 1e-4,
         max_iter: int = 100,
         display_iter: bool = False,
         update_design_wgts: bool = True,
-        strict: bool = True,
+        on_nonconvergence: Literal["error", "warn", "ignore"] = "error",
         trimming: TrimConfig | None = None,
         inplace: bool = False,
         **_legacy: Any,
@@ -586,11 +836,50 @@ class Weighting:
             grand total, which makes cross-margin consistency structural.
         where : WhereArg
             Scope.
+        wgt_name : str
+            Name of the new weight column; replicate columns become
+            ``<wgt_name>1..R``. It must not exist yet.
         ignore_reps : bool
             Leave the replicate weights unadjusted. The new weight then has no
             replicate weights (variance is Taylor); the replicate columns stay
             in the data and ``update_design(wgt=<previous weight>)`` restores
             them.
+        bounds : tuple[float | None, float | None] | None
+            Bounds ``(lo, hi)`` on the adjustment factor g = new weight / old
+            weight. None on a side leaves it open; None sets no bounds. The
+            bounds are CHECKED after raking, not enforced: raking runs
+            unconstrained, and if any row's g falls outside them (main weight
+            or replicates) the call raises ``BOUNDS_EXCEEDED`` and the sample
+            is left as it was. With ``trimming=`` each raking pass is checked
+            against the weights it started from. To limit the weights
+            themselves, use ``trimming=``.
+        tol : float
+            Convergence tolerance: the largest relative misfit
+            ``|achieved - target| / target`` accepted over every margin level.
+            With ``trimming=`` it is also the relative slack allowed on the
+            trimming bounds.
+        max_iter : int
+            Iteration cap on the IPF sweeps of each raking pass. With
+            ``trimming=`` the trim-rake cycles are capped by
+            ``trimming.max_iter``, as in ``poststratify`` and ``calibrate``.
+        display_iter : bool
+            Print the final margin error (and each trim-rake cycle) to stdout.
+        update_design_wgts : bool
+            Point ``design.wgt`` and the replicate weights at the new columns
+            and record the adjustment. False only adds the columns.
+        on_nonconvergence : {"error", "warn", "ignore"}
+            What to do when raking does not converge within ``max_iter`` (or
+            the trim-rake cycle within ``trimming.max_iter``); with "warn" or
+            "ignore" the last iterate is kept. "error" raises and leaves the sample as it was; "warn"
+            records the finding in ``sample.warnings`` and raises it once as a
+            ``SvyUserWarning``; "ignore" records it at INFO level without
+            raising.
+        trimming : TrimConfig | None
+            Alternate trimming and re-raking until both hold, for at most
+            ``trimming.max_iter`` cycles. Replicates are raked once from the
+            final main-weight cycle.
+        inplace : bool
+            Adopt the result on this Sample instead of returning a new one.
         """
         _reject_legacy_kwargs("rake", _legacy)
         return self._run(
@@ -601,13 +890,12 @@ class Weighting:
             where=where,
             wgt_name=wgt_name,
             ignore_reps=ignore_reps,
-            ll_bound=ll_bound,
-            up_bound=up_bound,
+            bounds=bounds,
             tol=tol,
             max_iter=max_iter,
             display_iter=display_iter,
             update_design_wgts=update_design_wgts,
-            strict=strict,
+            on_nonconvergence=on_nonconvergence,
             trimming=trimming,
         )
 
@@ -627,9 +915,23 @@ class Weighting:
         """A ``controls`` skeleton for ``calibrate``: ``{level: nan}`` per term, or
         ``{domain: {...}}`` with ``by``.
 
-        Keys are the columns' own values. ``na`` applies to the ``by`` columns:
-        ``"error"`` refuses nulls, ``"level"`` keys them by ``na_label``,
-        ``"drop"`` leaves them out.
+        Keys are the columns' own values.
+
+        Parameters
+        ----------
+        x : Sequence[Feature]
+            Calibration terms: a column name for a continuous auxiliary,
+            ``Cat``/``Cross`` for categorical ones.
+        by : str | Sequence[str] | None
+            Domains, one skeleton each, for ``calibrate(by=)``. ``cells=`` are
+            the classes the adjustment is computed over; ``by=`` runs the whole
+            method separately within each domain.
+        na : {"error", "level", "drop"}
+            What to do with nulls in the ``by`` columns: ``"error"`` refuses
+            them, ``"level"`` keys them by ``na_label``, ``"drop"`` leaves them
+            out.
+        na_label : str
+            Key for the null domain under ``na="level"``.
         """
         _reject_legacy_kwargs("control_aux_template", _legacy)
         return _control_aux_template(
@@ -649,6 +951,30 @@ class Weighting:
         na_label: str = "__NA__",
         **_legacy: Any,
     ) -> tuple[np.ndarray, dict[Category, Number] | dict[Category, dict[Category, Number]]]:
+        """The auxiliary matrix ``calibrate`` would solve against, with its
+        ``controls`` skeleton.
+
+        Returns ``(X, template)``: one row per record and one column per level
+        of each term, in term order, and the skeleton of
+        ``control_aux_template``. ``X`` and filled totals go to
+        ``calibrate_matrix``.
+
+        Parameters
+        ----------
+        x : Sequence[Feature]
+            Calibration terms: a column name for a continuous auxiliary,
+            ``Cat``/``Cross`` for categorical ones.
+        by : str | Sequence[str] | None
+            Domains, one skeleton each, for ``calibrate_matrix(by=)``.
+            ``cells=`` are the classes the adjustment is computed over; ``by=``
+            runs the whole method separately within each domain.
+        na : {"error", "level", "drop"}
+            What to do with nulls in the ``by`` columns: ``"error"`` refuses
+            them, ``"level"`` keys them by ``na_label``, ``"drop"`` leaves out
+            the domain and its rows.
+        na_label : str
+            Key for the null domain under ``na="level"``.
+        """
         _reject_legacy_kwargs("build_aux_matrix", _legacy)
         return _build_aux_matrix(
             self._sample,
@@ -665,35 +991,71 @@ class Weighting:
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
         scale: Number | list[Number] | np.ndarray = 1.0,
-        bounded: bool = False,
+        bounds: tuple[float | None, float | None] | None = None,
         wgt_name: str = "calib_wgt",
         update_design_wgts: bool = True,
         ignore_reps: bool = False,
-        strict: bool = True,
+        on_nonconvergence: Literal["error", "warn", "ignore"] = "error",
         trimming: TrimConfig | None = None,
         inplace: bool = False,
+        **_legacy: Any,
     ) -> Any:
         """Calibrate weights to auxiliary control totals (GREG).
 
         Takes no ``cells``: the model is the ``controls`` keys, which may be
-        continuous auxiliaries as well as categorical terms.
+        continuous auxiliaries as well as categorical terms. The linear
+        solution is closed form, so there is no ``tol`` or ``max_iter``; the
+        fit is checked afterwards against the controls at a relative
+        tolerance of 1e-4.
 
         Parameters
         ----------
         controls : dict[Feature, Any]
             Target totals keyed by term. A bare string names a continuous
-            auxiliary; ``Cat``/``Cross`` name categorical ones.
+            auxiliary; ``Cat``/``Cross`` name categorical ones. With ``by``,
+            one such dict per domain, keyed by domain.
         by : str | Sequence[str] | None
             Calibrate separately within each group, each with its own controls.
+            ``cells=`` are the classes the adjustment is computed over; ``by=``
+            runs the whole method separately within each domain.
         where : WhereArg
             Scope. Rows outside it keep their weight and take no part in the
             fit.
+        scale : number | Sequence[number] | np.ndarray
+            Per-row variance scale of the linear distance (R's
+            ``variance=``); a number applies to every row.
+        bounds : tuple[float | None, float | None] | None
+            Bounds ``(lo, hi)`` on the adjustment factor g = new weight / old
+            weight. Not supported yet: setting a side raises
+            ``NOT_SUPPORTED``. Use ``trimming=`` to constrain calibrated
+            weights.
+        wgt_name : str
+            Name of the new weight column; replicate columns become
+            ``<wgt_name>1..R``. It must not exist yet.
+        update_design_wgts : bool
+            Point ``design.wgt`` and the replicate weights at the new columns
+            and record the adjustment. False only adds the columns.
         ignore_reps : bool
             Leave the replicate weights unadjusted. The new weight then has no
             replicate weights (variance is Taylor); the replicate columns stay
             in the data and ``update_design(wgt=<previous weight>)`` restores
             them.
+        on_nonconvergence : {"error", "warn", "ignore"}
+            What to do when the weights miss the controls
+            (``CALIBRATION_NOT_MET``: a singular system or inconsistent
+            controls) or the trim-calibrate cycle runs out of cycles; with
+            "warn" or "ignore" the approximate solution is kept. "error"
+            raises and leaves the sample as it was; "warn" records the finding
+            in ``sample.warnings`` and raises it once as a
+            ``SvyUserWarning``; "ignore" records it at INFO level without
+            raising.
+        trimming : TrimConfig | None
+            Alternate trimming and re-calibration until both hold, for at most
+            ``trimming.max_iter`` cycles.
+        inplace : bool
+            Adopt the result on this Sample instead of returning a new one.
         """
+        _reject_legacy_kwargs("calibrate", _legacy)
         return self._run(
             inplace,
             _calibrate,
@@ -701,11 +1063,11 @@ class Weighting:
             by=by,
             where=where,
             scale=scale,
-            bounded=bounded,
+            bounds=bounds,
             wgt_name=wgt_name,
             update_design_wgts=update_design_wgts,
             ignore_reps=ignore_reps,
-            strict=strict,
+            on_nonconvergence=on_nonconvergence,
             trimming=trimming,
         )
 
@@ -713,33 +1075,92 @@ class Weighting:
         self,
         *,
         aux_vars: np.ndarray,
-        control: Any,
+        controls: Any = None,
         by: str | Sequence[str] | None = None,
         scale: Number | Sequence[Number] | np.ndarray = 1.0,
         wgt_name: str = "calib_wgt",
         update_design_wgts: bool = True,
         labels: Sequence[Category] | None = None,
         weights_only: bool = False,
-        bounded: bool = False,
+        bounds: tuple[float | None, float | None] | None = None,
         ignore_reps: bool = False,
-        strict: bool = True,
+        on_nonconvergence: Literal["error", "warn", "ignore"] = "error",
         trimming: TrimConfig | None = None,
         inplace: bool = False,
+        **_legacy: Any,
     ) -> Any:
+        """Calibrate weights against an auxiliary matrix you built (GREG).
+
+        ``calibrate`` without the term layer: ``aux_vars`` is used as given,
+        e.g. from ``build_aux_matrix``. Closed form like ``calibrate``, with
+        the fit checked at a relative tolerance of 1e-4.
+
+        Parameters
+        ----------
+        aux_vars : np.ndarray
+            Auxiliary matrix, one row per record of this sample and one column
+            per control.
+        controls : sequence | dict
+            One total per column of ``aux_vars``, in column order, or a dict
+            keyed by ``labels``. With ``by``, a dict of those keyed by domain.
+        by : str | Sequence[str] | None
+            Calibrate separately within each group, each with its own controls.
+            ``cells=`` are the classes the adjustment is computed over; ``by=``
+            runs the whole method separately within each domain.
+        scale : number | Sequence[number] | np.ndarray
+            Per-row variance scale of the linear distance (R's
+            ``variance=``); a number applies to every row.
+        wgt_name : str
+            Name of the new weight column; replicate columns become
+            ``<wgt_name>1..R``. It must not exist yet.
+        update_design_wgts : bool
+            Point ``design.wgt`` and the replicate weights at the new columns
+            and record the adjustment. False only adds the columns.
+        labels : Sequence[Category] | None
+            Names of the ``aux_vars`` columns, so ``controls`` can be a dict
+            keyed by them.
+        weights_only : bool
+            Return the calibrated main weights as an array and leave the sample
+            alone (``inplace`` is then ignored).
+        bounds : tuple[float | None, float | None] | None
+            Bounds ``(lo, hi)`` on the adjustment factor g = new weight / old
+            weight. Not supported yet: setting a side raises
+            ``NOT_SUPPORTED``. Use ``trimming=`` to constrain calibrated
+            weights.
+        ignore_reps : bool
+            Leave the replicate weights unadjusted. The new weight then has no
+            replicate weights (variance is Taylor); the replicate columns stay
+            in the data and ``update_design(wgt=<previous weight>)`` restores
+            them.
+        on_nonconvergence : {"error", "warn", "ignore"}
+            What to do when the weights miss the controls
+            (``CALIBRATION_NOT_MET``) or the trim-calibrate cycle runs out of
+            cycles; with "warn" or "ignore" the approximate solution is kept.
+            "error" raises and leaves the sample as it was; "warn" records the
+            finding in ``sample.warnings`` and raises it once as a
+            ``SvyUserWarning``; "ignore" records it at INFO level without
+            raising.
+        trimming : TrimConfig | None
+            Alternate trimming and re-calibration until both hold, for at most
+            ``trimming.max_iter`` cycles. Ignored with ``weights_only=True``.
+        inplace : bool
+            Adopt the result on this Sample instead of returning a new one.
+        """
+        _reject_legacy_kwargs("calibrate_matrix", _legacy)
         return self._run(
             inplace,
             _calibrate_matrix,
             aux_vars=aux_vars,
-            control=control,
+            controls=controls,
             by=by,
             scale=scale,
             wgt_name=wgt_name,
             update_design_wgts=update_design_wgts,
             labels=labels,
             weights_only=weights_only,
-            bounded=bounded,
+            bounds=bounds,
             ignore_reps=ignore_reps,
-            strict=strict,
+            on_nonconvergence=on_nonconvergence,
             trimming=trimming,
         )
 
@@ -760,6 +1181,7 @@ class Weighting:
         update_design_wgts: bool = True,
         *,
         where: WhereArg = None,
+        on_nonconvergence: Literal["error", "warn", "ignore"] = "error",
         inplace: bool = False,
     ) -> "Sample":
         """Cap extreme weights.
@@ -767,15 +1189,45 @@ class Weighting:
         Parameters
         ----------
         upper, lower : float | Threshold | callable | None
-            Bounds. A number is an absolute bound (``upper=40``, ``upper=0.9``);
+            Bounds on the weights themselves (not on an adjustment factor). A
+            number is an absolute bound (``upper=40``, ``upper=0.9``);
             ``Threshold.quantile(0.99)`` is a quantile of the weights and
-            ``Threshold("median", 6.0)`` is k x a statistic.
+            ``Threshold("median", 6.0)`` is k x a statistic. At least one is
+            required.
         by : str | Sequence[str] | None
             Trim within domains: thresholds and redistribution are computed per
-            domain.
+            domain. ``cells=`` are the classes the adjustment is computed over;
+            ``by=`` runs the whole method separately within each domain.
+        redistribute : bool
+            Spread the weight removed (or added) by trimming over the untrimmed
+            units, so the total is kept. False lets the total change.
+        min_cell_size : int
+            Domains with fewer positive weights are skipped, and recorded as
+            ``DOMAIN_SKIPPED``.
+        max_iter : int
+            Iteration cap on trimming and redistributing, which can push other
+            weights over the bound.
+        tol : float
+            Convergence tolerance, which here is the fraction of weights that
+            still changed in the last iteration -- not a relative misfit as in
+            ``rake``.
+        wgt_name : str | None
+            Name of the new weight column. None trims the current weight (and
+            its replicates) in place, without a new column.
+        update_design_wgts : bool
+            Point ``design.wgt`` at the trimmed column. No effect with
+            ``wgt_name=None``.
         where : WhereArg
             Scope. Rows outside it neither inform the threshold nor receive
             redistributed weight.
+        on_nonconvergence : {"error", "warn", "ignore"}
+            What to do when a domain does not converge within ``max_iter``
+            (``MAX_ITER_REACHED``); with "warn" or "ignore" the last iterate is
+            kept. "error" raises and leaves the sample as it was; "warn" records the finding in
+            ``sample.warnings`` and raises it once as a ``SvyUserWarning``; "ignore"
+            records it at INFO level without raising.
+        inplace : bool
+            Adopt the result on this Sample instead of returning a new one.
 
         Recorded as ``kind="trimming"`` and provenance only, deliberately:
         trimming breaks the constraints a calibration asserted, so centring
@@ -795,4 +1247,5 @@ class Weighting:
             tol=tol,
             wgt_name=wgt_name,
             update_design_wgts=update_design_wgts,
+            on_nonconvergence=on_nonconvergence,
         )

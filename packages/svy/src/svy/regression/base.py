@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 import math
-import numbers
 
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Sequence, cast
 
@@ -28,12 +27,12 @@ from svy.core.enumerations import DistFamily, LinkFunction
 from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import WhereArg
 from svy.core.warnings import WarnCode
-from svy.errors.method_errors import MethodError
 from svy.errors.model_errors import ModelError
 from svy.regression.glm import GLMCoef, GLMFit, GLMStats, offset_values
 from svy.regression.links import FAMILY_LABELS, link_inverse, link_mu_eta, resolve_link
 from svy.regression.prediction import GLMPred
 from svy.ui.printing import format_where_clause
+from svy.utils.checks import validate_alpha
 from svy.wrangling.rows import _compile_where_to_pl_expr
 
 
@@ -148,22 +147,6 @@ def _as_model_error(exc: Exception) -> ModelError | None:
                 hint=hint,
             )
     return None
-
-
-def _validate_alpha(alpha: Any) -> float:
-    """``alpha`` as a float strictly inside (0, 1); NaN, bools and strings are refused."""
-    hint = (
-        "alpha is the significance level of the coefficient intervals: 0.05 gives 95% intervals."
-    )
-    if isinstance(alpha, bool) or not isinstance(alpha, numbers.Real):
-        raise MethodError.invalid_type(
-            where="GLM.fit", param="alpha", got=alpha, expected="a float in (0, 1)", hint=hint
-        )
-    if not 0.0 < float(alpha) < 1.0:
-        raise MethodError.invalid_range(
-            where="GLM.fit", param="alpha", got=alpha, min_=0.0, max_=1.0, hint=hint
-        )
-    return float(alpha)
 
 
 def _normalize_family(family: FamilyArg) -> str:
@@ -436,7 +419,7 @@ class GLM:
         """
         from scipy import stats
 
-        alpha = _validate_alpha(alpha)
+        alpha = validate_alpha(alpha, where="GLM.fit")
 
         # Resolve family/link
         fam_str = _normalize_family(family)
@@ -1007,6 +990,7 @@ class GLM:
     ) -> GLMPred:
         from scipy import stats
 
+        alpha = validate_alpha(alpha, where="GLM.predict")
         fit = self._ensure_fitted()
 
         # Build design matrix
@@ -1060,6 +1044,7 @@ class GLM:
     ) -> "GLMMargins | list[GLMMargins]":
         from svy.regression.margins import margins as compute_margins
 
+        alpha = validate_alpha(alpha, where="GLM.margins")
         return compute_margins(self, at=at, variables=variables, alpha=alpha)
 
     def _collect_feature_cols(self, feature_specs: list[Feature]) -> list[str]:

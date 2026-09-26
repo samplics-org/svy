@@ -110,7 +110,7 @@ class TestPostStratifyTrimming:
                     max_iter=1,
                     min_cell_size=1,
                 ),
-                strict=True,
+                on_nonconvergence="error",
             )
 
     def test_trim_ps_strict_false_stores_partial(self, skewed_ps_sample):
@@ -125,7 +125,7 @@ class TestPostStratifyTrimming:
                 max_iter=1,
                 min_cell_size=1,
             ),
-            strict=False,
+            on_nonconvergence="warn",
         )
         assert "ps_wgt" in out.data.columns
 
@@ -160,7 +160,7 @@ class TestCalibrateTrimming:
         out = sample.weighting.calibrate(
             controls={"x": target},
             trimming=TrimConfig(upper=50.0, redistribute=True, min_cell_size=1),
-            strict=False,
+            on_nonconvergence="warn",
         )
         assert "calib_wgt" in out.data.columns
         assert out.design.wgt == "calib_wgt"
@@ -185,7 +185,7 @@ class TestCalibrateTrimming:
         out = sample.weighting.calibrate(
             controls={"x": target},
             trimming=TrimConfig(upper=50.0, redistribute=True, min_cell_size=1),
-            strict=False,
+            on_nonconvergence="warn",
         )
         assert out.design.wgt == "calib_wgt"
 
@@ -201,7 +201,7 @@ class TestCalibrateTrimming:
         out = sample.weighting.calibrate(
             controls={"x": target},
             trimming=TrimConfig(upper=50.0, redistribute=True, min_cell_size=1),
-            strict=False,
+            on_nonconvergence="warn",
         )
         assert "calib_wgt1" in out.data.columns
         assert "calib_wgt2" in out.data.columns

@@ -24,9 +24,9 @@ except ImportError:  # pragma: no cover
 
 from svy.core.design import WgtAdjustment
 from svy.core.types import Category, ControlsType
-from svy.core.warnings import Severity, WarnCode
+from svy.core.warnings import WarnCode, check_on_finding, finding_level
 from svy.errors import DimensionError, MethodError, WeightingError
-from svy.weighting._engine import CELLS_PREFIX, _where_mask
+from svy.weighting._engine import CELLS_PREFIX, _where_mask, resolve_bounds
 from svy.weighting._keys import (
     LevelIndex,
     check_na_option,
@@ -58,9 +58,7 @@ def _rake_or_raise(*args, where: str = "Sample.weighting.rake"):
     except ValueError as e:
         msg = str(e)
         if "exceeded weight bounds" in msg or "Raking exceeded" in msg:
-            raise WeightingError.bounds_exceeded(
-                where=where, ll_bound=args[3], up_bound=args[4]
-            ) from None
+            raise WeightingError.bounds_exceeded(where=where, bounds=(args[3], args[4])) from None
         raise
 
 
@@ -188,18 +186,20 @@ def rake(
     where: WhereArg = None,
     wgt_name: str = "rk_wgt",
     ignore_reps: bool = False,
-    ll_bound: float | None = None,
-    up_bound: float | None = None,
+    bounds: tuple[float | None, float | None] | None = None,
     tol: float = 1e-4,
     max_iter: int = 100,
     display_iter: bool = False,
     update_design_wgts: bool = True,
-    strict: bool = True,
+    on_nonconvergence: str = "error",
     trimming: TrimConfig | None = None,
 ) -> Sample:
     ctx = "Sample.weighting.rake"
     df = sample._data
     design = sample._design
+
+    check_on_finding(on_nonconvergence, param="on_nonconvergence", where=ctx)
+    ll_bound, up_bound = resolve_bounds(bounds, where=ctx)
 
     if design.wgt is None:
         raise WeightingError.no_weight(where=ctx, method="rake")
@@ -235,14 +235,6 @@ def rake(
         raise WeightingError.targets_missing(where=ctx, method="rake")
     if controls_norm is not None and shares_norm is not None:
         raise WeightingError.targets_conflict(where=ctx, method="rake")
-
-    if ll_bound is not None and up_bound is not None and ll_bound > up_bound:
-        raise MethodError.invalid_range(
-            where=ctx,
-            param="ll_bound",
-            got=ll_bound,
-            hint="ll_bound must be less than or equal to up_bound.",
-        )
 
     supplied = cast(ControlsType, controls_norm if controls_norm is not None else shares_norm)
     param = "controls" if controls_norm is not None else "shares"
@@ -330,15 +322,15 @@ def rake(
     assert rust_rake is not None  # noqa: S101
 
     # ── Trim-rake cycle ───────────────────────────────────────────────────
-    # When trimming=None: single rake pass (max_iter=1 cycle, no trim step).
-    # When trimming is set: iterate up to max_iter cycles:
+    # When trimming=None: single rake pass, no trim step.
+    # When trimming is set: iterate up to trimming.max_iter cycles:
     #   1. Rake current weights to convergence (up to max_iter IPF steps each)
     #   2. Trim — if no weights changed (within TrimConfig.tol), both
     #      constraints are satisfied and we stop early.
     # Final step is always rake so margins are satisfied.
     # Replicates are raked once with the final main-weight cycle result.
 
-    n_cycles = max_iter if trimming is not None else 1
+    n_cycles = trimming.max_iter if trimming is not None else 1
     current_w = w0.copy()
     rake_converged = False
     trim_unchanged = trimming is None  # trivially true when no trimming
@@ -450,21 +442,27 @@ def rake(
     # ── Convergence guard ─────────────────────────────────────────────────
     converged = rake_converged and (trimming is None or trim_unchanged)
     what = "Trim-rake cycle" if trimming is not None else "Raking"
+    cap, cap_param = (
+        (trimming.max_iter, "trimming.max_iter")
+        if trimming is not None
+        else (max_iter, "max_iter")
+    )
     miss = {
-        "max_iter": max_iter,
+        "max_iter": cap,
         "max_margin_error": _max_margin_error(raked_w, margin_indices, margin_targets),
     }
     if trimming is not None:
         miss["trim_bounds_met"] = bool(trim_unchanged)
-    if not converged and strict:
+    hint = f"Increase {cap_param} (now {cap}) or relax tol (now {tol:g})."
+    if not converged and on_nonconvergence == "error":
         raise WeightingError.not_converged(
             where=ctx,
             method="rake",
             what=what,
-            max_iter=max_iter,
+            max_iter=cap,
             got=miss,
             expected={"tol": tol},
-            hint=f"Increase max_iter (now {max_iter}) or relax tol (now {tol:g}).",
+            hint=hint,
         )
 
     if scope_idx is not None:
@@ -553,15 +551,16 @@ def rake(
             code=WarnCode.MAX_ITER_REACHED,
             title=f"{what} did not converge",
             detail=(
-                f"{what} did not converge after {max_iter} iterations (max margin error "
+                f"{what} did not converge after {cap} "
+                f"{'cycles' if trimming is not None else 'iterations'} (max margin error "
                 f"{miss['max_margin_error']:.3g}, tol {tol:g}); {wgt_name!r} holds the "
                 "last iterate."
             ),
             where=ctx,
-            level=Severity.WARNING,
-            param="max_iter",
+            level=finding_level(on_nonconvergence),
+            param=cap_param,
             expected={"tol": tol},
             got=miss,
-            hint=f"Increase max_iter (now {max_iter}) or relax tol (now {tol:g}).",
+            hint=hint,
         )
     return sample
