@@ -75,7 +75,7 @@ def two_domains() -> Sample:
     return Sample(df, Design(wgt="w"))
 
 
-ONE_PASS = TrimConfig(upper=2.0, max_iter=1, tol=1e-20, min_cell_size=1)
+ONE_PASS = TrimConfig(upper=5.0, max_iter=1, tol=1e-20, min_cell_size=1)
 
 
 @pytest.fixture
@@ -444,7 +444,7 @@ NONCONV = {
     ),
     "trim": (
         "tight",
-        lambda s, **k: s.weighting.trim(upper=2.0, max_iter=1, tol=1e-20, min_cell_size=1, **k),
+        lambda s, **k: s.weighting.trim(upper=5.0, max_iter=1, tol=1e-20, min_cell_size=1, **k),
         "CONVERGENCE_FAILED",
         MAXIT,
         "trim_wgt",
@@ -452,7 +452,7 @@ NONCONV = {
     "trim_where": (
         "tight",
         lambda s, **k: s.weighting.trim(
-            upper=2.0, max_iter=1, tol=1e-20, min_cell_size=1, where=col("w") > 0, **k
+            upper=5.0, max_iter=1, tol=1e-20, min_cell_size=1, where=col("w") > 0, **k
         ),
         "CONVERGENCE_FAILED",
         MAXIT,
@@ -461,7 +461,7 @@ NONCONV = {
     "trim_by": (
         "two_domains",
         lambda s, **k: s.weighting.trim(
-            upper=2.0, by="dom", max_iter=1, tol=1e-20, min_cell_size=1, **k
+            upper=5.0, by="dom", max_iter=1, tol=1e-20, min_cell_size=1, **k
         ),
         "CONVERGENCE_FAILED",
         MAXIT,
@@ -690,7 +690,7 @@ def test_rake_bounds_docstring_says_checked_not_enforced():
 
 def test_trim_error_names_only_the_failing_domain(two_domains):
     with pytest.raises(WeightingError) as ei:
-        two_domains.weighting.trim(upper=2.0, by="dom", max_iter=1, tol=1e-20, min_cell_size=1)
+        two_domains.weighting.trim(upper=5.0, by="dom", max_iter=1, tol=1e-20, min_cell_size=1)
     err = ei.value
     assert err.got["domains"] == ["A"] and err.got["max_iter"] == 1
     assert err.expected == {"tol": 1e-20}
@@ -701,7 +701,7 @@ def test_trim_error_names_only_the_failing_domain(two_domains):
 def test_trim_warn_records_one_finding_per_failing_domain(two_domains):
     with pytest.warns(SvyUserWarning, match=r"\[MAX_ITER_REACHED\]"):
         out = two_domains.weighting.trim(
-            upper=2.0, by="dom", max_iter=1, tol=1e-20, min_cell_size=1, on_nonconvergence="warn"
+            upper=5.0, by="dom", max_iter=1, tol=1e-20, min_cell_size=1, on_nonconvergence="warn"
         )
     found = _found(out, MAXIT)
     assert [w.got["domain"] for w in found] == ["A"]
@@ -713,7 +713,7 @@ def test_trim_warn_records_one_finding_per_failing_domain(two_domains):
 def test_trim_converged_records_nothing_in_any_mode(tight):
     for mode in ("error", "warn", "ignore"):
         out = tight.weighting.trim(
-            upper=2.0, max_iter=100, min_cell_size=1, on_nonconvergence=mode
+            upper=5.0, max_iter=100, min_cell_size=1, on_nonconvergence=mode
         )
         assert not _found(out, MAXIT)
 
@@ -722,7 +722,7 @@ def test_trim_in_place_column_error_leaves_weight(tight):
     before = tight.data["w"].to_numpy().copy()
     with pytest.raises(WeightingError):
         tight.weighting.trim(
-            upper=2.0, max_iter=1, tol=1e-20, min_cell_size=1, wgt_name=None, inplace=True
+            upper=5.0, max_iter=1, tol=1e-20, min_cell_size=1, wgt_name=None, inplace=True
         )
     np.testing.assert_array_equal(tight.data["w"].to_numpy(), before)
 

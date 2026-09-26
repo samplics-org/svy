@@ -63,8 +63,8 @@ literacy_rate = (
         resp_mapping={"rr": "respondent", "nr": "non-respondent"},
         wgt_name="nr_wgt",
     )
-    # 3. Trim extreme weights to reduce variance
-    .weighting.trim(upper=3.0)
+    # 3. Trim weights above 1.2 x the median; the excess goes to the others
+    .weighting.trim(upper=svy.Threshold("median", 1.2))
     # 4. Estimate the population literacy rate, with a design-based SE
     .estimation.mean("literate", drop_nulls=True)
 )

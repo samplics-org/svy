@@ -679,6 +679,48 @@ class WeightingError(MethodError):
         )
 
     @classmethod
+    def trim_infeasible(
+        cls, *, where: Optional[str], domains: Sequence[Mapping[str, Any]]
+    ) -> "WeightingError":
+        """``domains``: one mapping per failing domain with ``domain``, ``bound``
+        ("upper" or "lower"), ``value``, ``n``, ``total``, ``mean``, ``min``, ``max``."""
+        d = domains[0]
+        side = d["bound"]
+        scope = "" if d["domain"] == "(global)" else f" in domain {show(d['domain'])}"
+        detail = (
+            f"{side}={d['value']:.6g} is {'below' if side == 'upper' else 'above'} the "
+            f"mean positive weight {d['mean']:.6g}{scope} (weights {d['min']:.6g} to "
+            f"{d['max']:.6g}, n={d['n']}), so redistribute=True cannot keep the total "
+            f"{d['total']:.6g}: every weight would end at the bound."
+        )
+        if len(domains) > 1:
+            detail += f" {len(domains) - 1} other domain(s) fail too; see got."
+        sides = {x["bound"] for x in domains}
+        here = f" (here {d['mean']:.6g})" if len(domains) == 1 else ""
+        fixes = []
+        if "upper" in sides:
+            fixes.append(
+                f"an upper bound at or above the mean weight{here}, e.g. one relative to "
+                "the weights such as upper=svy.Threshold.quantile(0.99) or "
+                "upper=svy.Threshold('median', 3.5), resolved per domain"
+            )
+        if "lower" in sides:
+            fixes.append(
+                f"a lower bound at or below the mean weight{here}, e.g. "
+                "lower=svy.Threshold('median', 0.3)"
+            )
+        return cls(
+            title="Trimming bounds cannot keep the total",
+            detail=detail + " The sample has NOT been modified.",
+            code="TRIM_INFEASIBLE",
+            where=where,
+            param=side if len(sides) == 1 else "upper/lower",
+            expected="lower <= mean positive weight <= upper, in every domain",
+            got={"domains": [dict(x) for x in domains]},
+            hint=f"Use {' and '.join(fixes)}; or pass redistribute=False to let the total change.",
+        )
+
+    @classmethod
     def psu_required(
         cls, *, where: Optional[str], method: str, note: str = ""
     ) -> "WeightingError":

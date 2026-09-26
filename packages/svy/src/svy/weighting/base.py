@@ -1200,7 +1200,10 @@ class Weighting:
             ``by=`` runs the whole method separately within each domain.
         redistribute : bool
             Spread the weight removed (or added) by trimming over the untrimmed
-            units, so the total is kept. False lets the total change.
+            units, so the total is kept. False lets the total change. With True,
+            a domain whose mean positive weight is above ``upper`` (or below
+            ``lower``) raises ``TRIM_INFEASIBLE``: every weight would end at the
+            bound and the total could not be kept.
         min_cell_size : int
             Domains with fewer positive weights are skipped, and recorded as
             ``DOMAIN_SKIPPED``.

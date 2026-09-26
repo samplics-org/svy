@@ -83,7 +83,8 @@ def trim(
         zero-weights for subpopulation variance.
     redistribute : bool
         Redistribute trimmed mass proportionally to non-trimmed units.
-        Default True.
+        Default True. Raises TRIM_INFEASIBLE when a domain's mean positive
+        weight is outside [lower, upper], since the total cannot be kept.
     min_cell_size : int
         Skip and warn for domains with fewer positive-weight units.
         Default 10.
@@ -241,39 +242,34 @@ def _run_trim(
                 hint="Check that all by= columns exist in the data.",
             )
 
+    # Out-of-scope rows take no part: they neither inform the threshold nor
+    # receive redistributed mass.
+    parts: list[tuple[str, np.ndarray | None]]
     if by_cols is None:
-        if scope is None:
-            result = _trim_domain(
-                w_out, config, domain_label="(global)", sample=sample, where=where
-            )
-            if result is not None:
-                w_out = result.weights
-                results.append(("(global)", result))
-        else:
-            # Out-of-scope rows take no part: they neither inform the threshold
-            # nor receive redistributed mass.
-            result = _trim_domain(
-                w_out[scope], config, domain_label="(global)", sample=sample, where=where
-            )
-            if result is not None:
-                w_out[scope] = result.weights
-                results.append(("(global)", result))
+        parts = [("(global)", scope)]
     else:
         domains, null_by = _domain_masks(df, by_cols)
         if scope is not None:
             null_by = {c: m & scope for c, m in null_by.items()}
-        for domain, mask in domains:
-            if scope is not None:
-                mask = mask & scope
-                if not mask.any():
-                    continue
-            w_domain = w_out[mask]
-            result = _trim_domain(
-                w_domain, config, domain_label=str(domain), sample=sample, where=where
-            )
-            if result is not None:
-                w_out[mask] = result.weights
-                results.append((str(domain), result))
+            domains = [(d, m & scope) for d, m in domains]
+        parts = [(d, m) for d, m in domains if m.any()]
+
+    infeasible: list[dict] = []
+    for label, mask in parts:
+        w_in = w_out if mask is None else w_out[mask]
+        result = _trim_domain(w_in, config, domain_label=label, sample=sample, where=where)
+        if result is None:
+            continue
+        if config.redistribute and (bad := _infeasible_bound(w_in, result, label)):
+            infeasible.append(bad)
+        if mask is None:
+            w_out = result.weights
+        else:
+            w_out[mask] = result.weights
+        results.append((label, result))
+
+    if infeasible:
+        raise WeightingError.trim_infeasible(where=where, domains=infeasible)
 
     unconverged = [(label, r) for label, r in results if not r.converged]
     if unconverged and on_nonconvergence == "error":
@@ -502,6 +498,35 @@ def _trim_domain(
         iterations=iterations,
         converged=converged,
     )
+
+
+def _infeasible_bound(w: np.ndarray, r: TrimResult, domain: str) -> dict | None:
+    """The bound redistribution cannot honour in this domain, or None.
+
+    The total of the positive weights fits within [lower, upper] only if their
+    mean does. Otherwise the engine ends with every weight at the bound and the
+    excess (or deficit) is lost, while still reporting convergence.
+    """
+    pos = w[w > 0]
+    if pos.size == 0:
+        return None
+    mean = float(pos.mean())
+    if r.upper_threshold is not None and mean > r.upper_threshold * (1 + 1e-9):
+        bound, value = "upper", r.upper_threshold
+    elif r.lower_threshold is not None and mean < r.lower_threshold * (1 - 1e-9):
+        bound, value = "lower", r.lower_threshold
+    else:
+        return None
+    return {
+        "domain": domain,
+        "bound": bound,
+        "value": value,
+        "n": int(pos.size),
+        "total": float(pos.sum()),
+        "mean": mean,
+        "min": float(pos.min()),
+        "max": float(pos.max()),
+    }
 
 
 def _emit_audit(
