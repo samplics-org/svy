@@ -2,13 +2,34 @@
 from __future__ import annotations
 
 import math
+import numbers
 
-from typing import Sequence, cast, overload
+from typing import Any, Sequence, cast, overload
 
 import numpy as np
 import polars as pl
 
 from svy.core.types import Category, RandomState
+from svy.errors.method_errors import MethodError
+
+
+# ------------------------------------------------------------------ #
+# Parameter Checks
+# ------------------------------------------------------------------ #
+
+
+def validate_alpha(alpha: Any, *, where: str) -> float:
+    """``alpha`` as a float strictly inside (0, 1); NaN, bools and strings are refused."""
+    hint = "alpha is the significance level: 0.05 gives 95% confidence intervals."
+    if isinstance(alpha, bool) or not isinstance(alpha, numbers.Real):
+        raise MethodError.invalid_type(
+            where=where, param="alpha", got=alpha, expected="a float in (0, 1)", hint=hint
+        )
+    if not 0.0 < float(alpha) < 1.0:
+        raise MethodError.invalid_range(
+            where=where, param="alpha", got=alpha, min_=0.0, max_=1.0, hint=hint
+        )
+    return float(alpha)
 
 
 # ------------------------------------------------------------------ #

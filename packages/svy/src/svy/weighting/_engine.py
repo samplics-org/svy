@@ -20,6 +20,9 @@ dict is many.
 
 from __future__ import annotations
 
+import math
+import numbers
+
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 import numpy as np
@@ -416,8 +419,10 @@ def materialize_cells(
     return df.with_columns(pl.Series(name=name, values=values, dtype=pl.Int32)), name
 
 
-def record_trim_cycle(sample: Any, *, where: str, what: str, trimming: Any) -> None:
-    """A trim-and-readjust cycle that ran out of cycles under ``strict=False``."""
+def record_trim_cycle(
+    sample: Any, *, where: str, what: str, trimming: Any, level: Severity = Severity.WARNING
+) -> None:
+    """A trim-and-readjust cycle that ran out of cycles and was kept."""
     sample.warn(
         code=WarnCode.MAX_ITER_REACHED,
         title=f"{what} did not converge",
@@ -426,8 +431,54 @@ def record_trim_cycle(sample: Any, *, where: str, what: str, trimming: Any) -> N
             "are the last cycle's, which may miss the targets or the trimming bounds."
         ),
         where=where,
-        level=Severity.WARNING,
+        level=level,
         param="trimming.max_iter",
         got={"cycles": trimming.max_iter},
         hint="Increase TrimConfig.max_iter or use a less restrictive trim threshold.",
     )
+
+
+def resolve_bounds(bounds: Any, *, where: str) -> tuple[float | None, float | None]:
+    """``bounds=(lo, hi)`` on the factor g = new/old weight, validated.
+
+    None, or None on a side, leaves that side open.
+    """
+    if bounds is None:
+        return (None, None)
+    if not isinstance(bounds, (tuple, list)):
+        raise WeightingError.bounds_invalid(
+            where=where, got=bounds, reason="must be None or a 2-tuple (lo, hi)", as_type=True
+        )
+    if len(bounds) != 2:
+        raise WeightingError.bounds_invalid(
+            where=where,
+            got=bounds,
+            reason=f"has {len(bounds)} {'entry' if len(bounds) == 1 else 'entries'}; "
+            "it takes exactly two, (lo, hi)",
+            as_type=True,
+        )
+    sides: list[float | None] = []
+    for name, v in zip(("lo", "hi"), bounds):
+        if v is None:
+            sides.append(None)
+            continue
+        if isinstance(v, bool) or not isinstance(v, numbers.Real):
+            raise WeightingError.bounds_invalid(
+                where=where,
+                got=bounds,
+                reason=f"{name} is {type(v).__name__}; each side is a number or None",
+                as_type=True,
+            )
+        if not math.isfinite(float(v)):
+            raise WeightingError.bounds_invalid(
+                where=where,
+                got=bounds,
+                reason=f"{name} is {float(v)}; use None for an open side",
+            )
+        sides.append(float(v))
+    lo, hi = sides
+    if lo is not None and hi is not None and lo > hi:
+        raise WeightingError.bounds_invalid(
+            where=where, got=bounds, reason=f"has lo={lo:g} above hi={hi:g}"
+        )
+    return (lo, hi)

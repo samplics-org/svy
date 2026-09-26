@@ -223,7 +223,9 @@ def test_rake_stops_at_max_iter_on_no_convergence(sample_data_for_raking, mock_d
     with pytest.warns(
         SvyUserWarning, match=r"\[MAX_ITER_REACHED\] Raking did not converge"
     ) as rec:
-        sample = sample.weighting.rake(controls=controls, max_iter=3, tol=1e-20, strict=False)
+        sample = sample.weighting.rake(
+            controls=controls, max_iter=3, tol=1e-20, on_nonconvergence="warn"
+        )
     assert len(rec) == 1 and rec[0].filename == __file__
     found = sample.warnings.list(code=WarnCode.MAX_ITER_REACHED)
     assert len(found) == 1 and found[0].got["max_iter"] == 3
@@ -235,8 +237,9 @@ def test_rake_stops_when_bounds_exceeded(sample_data_for_raking, mock_design):
 
     sample = Sample(data=sample_data_for_raking, design=mock_design)
     controls = {"region": {"North": 50.0, "South": 30.0}}
-    with pytest.raises(MethodError, match="exceeded the specified bounds"):
-        sample.weighting.rake(controls=controls, up_bound=1.2)
+    with pytest.raises(MethodError, match="outside bounds=") as ei:
+        sample.weighting.rake(controls=controls, bounds=(None, 1.2))
+    assert ei.value.code == "BOUNDS_EXCEEDED"
 
 
 def test_rake_raises_error_unknown_control_column(sample_data_for_raking, mock_design):
@@ -349,7 +352,7 @@ def test_trim_rake_single_cycle_max_iter_1(mock_design):
         controls=controls,
         trimming=TrimConfig(upper=30.0, redistribute=True),
         max_iter=1,
-        strict=False,
+        on_nonconvergence="warn",
     )
     col = RK_WGT
     assert col in out.data.columns
@@ -395,7 +398,7 @@ def test_trim_rake_strict_raises_on_non_convergence(mock_design):
             trimming=TrimConfig(upper=30.0, redistribute=True),
             max_iter=1,
             tol=1e-20,  # effectively impossible to satisfy
-            strict=True,
+            on_nonconvergence="error",
         )
 
     # Design must not have been mutated

@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover
 
 from svy.core.design import WgtAdjustment
 from svy.core.types import DomainScalarMap
-from svy.core.warnings import Severity, WarnCode
+from svy.core.warnings import Severity, WarnCode, check_on_finding
 from svy.errors import WeightingError
 from svy.weighting._engine import CellSpec, _where_mask, build_cells, record_null_cells
 from svy.weighting._keys import native, text_forms
@@ -253,10 +253,12 @@ def adjust(
     update_design_wgts: bool = True,
     respondents_only: bool = True,
     trimming: TrimConfig | None = None,
+    on_nonconvergence: str = "error",
 ) -> Sample:
     ctx = "Sample.weighting.adjust"
     df = sample._data
     design = sample._design
+    check_on_finding(on_nonconvergence, param="on_nonconvergence", where=ctx)
 
     if design.wgt is None:
         raise WeightingError.no_weight(where=ctx, method="adjust")
@@ -374,6 +376,8 @@ def adjust(
                 replace=True,
                 update_design_wgts=True,
                 where="Sample.weighting.adjust",
+                on_nonconvergence=on_nonconvergence,
+                param="trimming.max_iter",
             )
         else:
             # The trim must target the freshly created adjusted weight (and
@@ -394,6 +398,8 @@ def adjust(
                 replace=True,
                 update_design_wgts=False,
                 where="Sample.weighting.adjust",
+                on_nonconvergence=on_nonconvergence,
+                param="trimming.max_iter",
             )
             sample._design = original_design
 

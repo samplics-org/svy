@@ -344,3 +344,31 @@ def warn_no_sample(message: str) -> None:
     from svy.core.design import _user_stacklevel
 
     _pywarnings.warn(message, SvyUserWarning, stacklevel=_user_stacklevel())
+
+
+# ---------- on_* parameters ----------
+#: Every ``on_*`` parameter takes these, with one meaning: "error" raises and
+#: leaves the sample as it was; "warn" records the finding and raises it once;
+#: "ignore" records it at INFO, which is kept but not raised.
+ON_FINDING: tuple[str, ...] = ("error", "warn", "ignore")
+
+
+def check_on_finding(value: Any, *, param: str, where: str) -> None:
+    if not isinstance(value, str) or value not in ON_FINDING:
+        from svy.errors.method_errors import MethodError
+
+        raise MethodError.invalid_choice(
+            where=where,
+            param=param,
+            got=value,
+            allowed=ON_FINDING,
+            hint=(
+                f'{param}="error" raises, "warn" records the finding and raises it once, '
+                '"ignore" records it without raising.'
+            ),
+        )
+
+
+def finding_level(on: str) -> Severity:
+    """The level a finding is recorded at under an ``on_*`` choice."""
+    return Severity.WARNING if on == "warn" else Severity.INFO

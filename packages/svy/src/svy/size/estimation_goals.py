@@ -14,7 +14,7 @@ Adding a new estimation goal:
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from svy.core.enumerations import OnePropSizeMethod as _OnePropSizeMethod
 from svy.core.enumerations import PopParam
@@ -29,6 +29,7 @@ from svy.engine.size_and_power.size import (
 )
 from svy.size._normalize import _normalize_one_prop_method
 from svy.size.types import Size
+from svy.utils.checks import validate_alpha
 from svy.utils.helpers import _get_keys_from_maps
 
 
@@ -39,6 +40,13 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+
+def _checked_alpha(alpha: Any, *, where: str) -> Any:
+    """``alpha`` validated as a float in (0, 1), per stratum for a mapping."""
+    if isinstance(alpha, Mapping):
+        return {k: validate_alpha(v, where=where) for k, v in alpha.items()}
+    return validate_alpha(alpha, where=where)
 
 
 def _broadcast_scalars(strata: list, params: dict) -> None:
@@ -115,6 +123,7 @@ def estimate_prop(
     SampleSize
         The updated SampleSize instance (chainable).
     """
+    alpha = _checked_alpha(alpha, where="SampleSize.estimate_prop")
     ss._param = PopParam.PROP
 
     stratified = any(isinstance(v, Mapping) for v in [p, moe, pop_size, alpha, deff, resp_rate])
@@ -218,6 +227,7 @@ def estimate_mean(
     SampleSize
         The updated SampleSize instance (chainable).
     """
+    alpha = _checked_alpha(alpha, where="SampleSize.estimate_mean")
     ss._param = PopParam.MEAN
 
     stratified = any(

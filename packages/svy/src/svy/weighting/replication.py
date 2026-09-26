@@ -661,7 +661,7 @@ def create_bs_wgts(
     the other weighting adjustments:
 
     >>> s = sample.weighting.create_bs_wgts(n_reps=1000, kind="poisson")
-    >>> s = s.weighting.poststratify(controls=totals, by=["prov", "sex", "age"])
+    >>> s = s.weighting.poststratify(controls=totals, cells=["prov", "sex", "age"])
 
     :meth:`Sample.weighting.poststratify`, :meth:`~rake` and :meth:`~calibrate`
     all adjust the replicate columns alongside the main weight unless

@@ -50,7 +50,7 @@ except ImportError:  # pragma: no cover
 from svy.core.design import WgtAdjustment
 from svy.core.terms import Feature
 from svy.core.types import Category, Number
-from svy.core.warnings import Severity, WarnCode
+from svy.core.warnings import Severity, WarnCode, check_on_finding, finding_level
 from svy.errors import DimensionError, WeightingError
 from svy.weighting._calibration_utils import _expand_term, _match_term_targets
 from svy.weighting._engine import (
@@ -60,6 +60,7 @@ from svy.weighting._engine import (
     build_cells,
     record_null_rows,
     record_trim_cycle,
+    resolve_bounds,
 )
 from svy.weighting._keys import (
     LevelIndex,
@@ -230,14 +231,16 @@ def calibrate(
     by: str | Sequence[str] | None = None,
     where: WhereArg = None,
     scale: Number | list[Number] | np.ndarray = 1.0,
-    bounded: bool = False,
+    bounds: tuple[float | None, float | None] | None = None,
     wgt_name: str = "calib_wgt",
     update_design_wgts: bool = True,
     ignore_reps: bool = False,
-    strict: bool = True,
+    on_nonconvergence: str = "error",
     trimming: TrimConfig | None = None,
 ) -> Sample:
     ctx = "Sample.weighting.calibrate"
+    check_on_finding(on_nonconvergence, param="on_nonconvergence", where=ctx)
+    _refuse_bounds(bounds, where=ctx)
 
     scope = _where_mask(sample._data, where, where=ctx)
     if scope is not None:
@@ -247,11 +250,10 @@ def calibrate(
             controls=controls,
             by=by,
             scale=scale,
-            bounded=bounded,
             wgt_name=wgt_name,
             update_design_wgts=update_design_wgts,
             ignore_reps=ignore_reps,
-            strict=strict,
+            on_nonconvergence=on_nonconvergence,
             trimming=trimming,
         )
 
@@ -359,17 +361,33 @@ def calibrate(
     return calibrate_matrix(
         sample,
         aux_vars=X,
-        control=final_control_arg,
+        controls=final_control_arg,
         by=by,
         scale=scale,
-        bounded=bounded,
         wgt_name=wgt_name,
         update_design_wgts=update_design_wgts,
         labels=None,
         weights_only=False,
         ignore_reps=ignore_reps,
-        strict=strict,
+        on_nonconvergence=on_nonconvergence,
         trimming=trimming,
+    )
+
+
+def _refuse_bounds(bounds: Any, *, where: str) -> None:
+    """Validate ``bounds`` and refuse any side that is set: bounded calibration
+    is not implemented, and accepting the option would ignore it."""
+    lo, hi = resolve_bounds(bounds, where=where)
+    if lo is None and hi is None:
+        return
+    raise WeightingError.not_supported_yet(
+        where=where,
+        param="bounds",
+        got=f"bounds=({lo!r}, {hi!r})",
+        hint=(
+            "Bounded calibration (R survey's calibrate(bounds=)) is not supported yet. "
+            "Leave bounds unset, or use trimming= to constrain calibrated weights."
+        ),
     )
 
 
@@ -435,27 +453,29 @@ def calibrate_matrix(
     sample: Sample,
     *,
     aux_vars: np.ndarray,
-    control: Any,
+    controls: Any = None,
     by: str | Sequence[str] | None = None,
     scale: Number | Sequence[Number] | np.ndarray = 1.0,
     wgt_name: str = "calib_wgt",
     update_design_wgts: bool = True,
     labels: Sequence[Category] | None = None,
     weights_only: bool = False,
-    bounded: bool = False,
+    bounds: tuple[float | None, float | None] | None = None,
     ignore_reps: bool = False,
-    strict: bool = True,
+    on_nonconvergence: str = "error",
     trimming: TrimConfig | None = None,
 ) -> Any:
     where = "Sample.weighting.calibrate_matrix"
-
-    if bounded:
-        # Accepting-and-ignoring this flag previously produced bit-identical
-        # results to bounded=False.
-        raise NotImplementedError(
-            "bounded calibration (distance-bounded g-weights, as in R survey's "
-            "calibrate(bounds=)) is not implemented yet. Use trimming= to "
-            "constrain calibrated weights, or leave bounded=False."
+    check_on_finding(on_nonconvergence, param="on_nonconvergence", where=where)
+    _refuse_bounds(bounds, where=where)
+    if controls is None:
+        raise WeightingError(
+            title="No targets",
+            detail="calibrate_matrix() needs controls=: one total per column of aux_vars.",
+            code="CONTROLS_MISSING",
+            where=where,
+            param="controls",
+            hint="e.g. controls=[N, total_x], in aux_vars column order, or keyed by labels=.",
         )
 
     df: pl.DataFrame = sample.data
@@ -533,7 +553,7 @@ def calibrate_matrix(
     domains: list[Any] = []
 
     if by_cols is None:
-        totals_arr = np.asarray(_totals(control, "control"), dtype=np.float64)
+        totals_arr = np.asarray(_totals(controls, "controls"), dtype=np.float64)
         assert rust_calibrate is not None  # noqa: S101
         # Always pass additive=False — the Rust flag returns g-factors rather
         # than calibrated weights and must not be exposed to callers.
@@ -549,27 +569,27 @@ def calibrate_matrix(
                 hint="All `by` columns must exist in the data.",
             )
         _refuse_by_nulls(df, by_cols, where=where)
-        if not isinstance(control, Mapping):
+        if not isinstance(controls, Mapping):
             raise WeightingError.targets_type(
                 where=where,
-                param="control",
-                got=control,
+                param="controls",
+                got=controls,
                 expected="a dict keyed by domain when by= is used",
-                hint="When by= is specified, control must be a dict keyed by domain values.",
+                hint="When by= is specified, controls must be a dict keyed by domain values.",
             )
         spec = build_cells(df, by_cols, None, where=where)
         domains = spec.labels
         domain_indices = spec.codes
         by_domain = match_keys(
-            control,
+            controls,
             LevelIndex(domains, width=len(by_cols)),
             where=where,
-            param="control",
+            param="controls",
             cols=by_cols,
             zero_extra_ok=False,
         )
         for d_idx, domain in enumerate(domains):
-            controls_dict_main[d_idx] = _totals(by_domain[domain], f"control[{domain!r}]")
+            controls_dict_main[d_idx] = _totals(by_domain[domain], f"controls[{domain!r}]")
         assert rust_calibrate_by_domain is not None  # noqa: S101
         # Always pass additive=False — see note above.
         new_w = rust_calibrate_by_domain(
@@ -579,7 +599,7 @@ def calibrate_matrix(
     # The solve can return weights that miss the controls (a singular or
     # ill-conditioned system, or inconsistent controls). A trimming cycle
     # checks the fit itself; otherwise it is checked here, before anything is
-    # written, so strict=True leaves the sample untouched.
+    # written, so raising leaves the sample untouched.
     missed = None
     if trimming is None or weights_only:
         missed = _controls_missed(
@@ -590,7 +610,7 @@ def calibrate_matrix(
             domain_indices=domain_indices,
             controls_by_domain=controls_dict_main,
         )
-        if missed is not None and strict:
+        if missed is not None and on_nonconvergence == "error":
             raise WeightingError.calibration_not_met(where=where, **missed)
 
     if weights_only:
@@ -606,8 +626,8 @@ def calibrate_matrix(
     cycle_ok = True
     null_trim_by: dict[str, np.ndarray] = {}
     # ── Trim-calibrate cycle ──────────────────────────────────────────────
-    # Runs on arrays BEFORE anything is written to the sample, so a strict
-    # failure genuinely leaves the data and design untouched.
+    # Runs on arrays BEFORE anything is written to the sample, so raising on
+    # non-convergence genuinely leaves the data and design untouched.
     if trimming is not None:
         # Resolve trim domains (honor TrimConfig.by / min_cell_size, matching
         # the contract adjust()/trim() already implement)
@@ -652,7 +672,7 @@ def calibrate_matrix(
         assert rust_trim_weights is not None  # noqa: S101
 
         _current_w = new_w.copy()
-        _calib_converged = True  # already checked above if strict
+        _calib_converged = True
         _trim_ok = True  # nothing to trim when every domain was skipped
         _scale_arr_cycle = (
             np.full(len(w), float(scale), dtype=np.float64)
@@ -724,7 +744,7 @@ def calibrate_matrix(
                     break
 
         cycle_ok = _calib_converged and _trim_ok
-        if strict and not cycle_ok:
+        if on_nonconvergence == "error" and not cycle_ok:
             raise WeightingError.not_converged(
                 where=where,
                 method="calibrate",
@@ -740,7 +760,7 @@ def calibrate_matrix(
 
         new_w = _current_w
 
-    # ── Write results (only after the strict guard above) ────────────────
+    # ── Write results (only after the non-convergence guard above) ───────
     df = df.with_columns(pl.Series(name=wgt_name, values=new_w))
 
     if update_design_wgts:
@@ -818,15 +838,22 @@ def calibrate_matrix(
         outcome="they are calibrated but not trimmed",
     )
     if not cycle_ok:
-        record_trim_cycle(sample, where=where, what="Trim-calibrate cycle", trimming=trimming)
+        record_trim_cycle(
+            sample,
+            where=where,
+            what="Trim-calibrate cycle",
+            trimming=trimming,
+            level=finding_level(on_nonconvergence),
+        )
     if missed is not None:
         err = WeightingError.calibration_not_met(where=where, **missed)
         sample.warn(
             code=err.code,
             title=err.title,
-            detail=err.detail.replace(" Pass strict=False to store the approximate solution.", "")
+            detail=err.detail.split(" Pass on_nonconvergence=")[0]
             + f" {wgt_name!r} holds the approximate solution.",
             where=where,
+            level=finding_level(on_nonconvergence),
             param=err.param,
             expected=err.expected,
             got=err.got,

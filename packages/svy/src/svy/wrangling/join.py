@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Literal, Mapping, Sequence
 import polars as pl
 
 from svy.core import constants as K
+from svy.core.warnings import check_on_finding, finding_level
 from svy.errors import DimensionError, MethodError
 from svy.wrangling._helpers import _eager_df, _guard_weight_writes, _resolve_target
 
@@ -148,13 +149,7 @@ def join(
         raise MethodError.invalid_choice(
             where=_WHERE, param="validate", got=validate, allowed=["m:1", "1:1"]
         )
-    if on_unmatched not in ("ignore", "warn", "error"):
-        raise MethodError.invalid_choice(
-            where=_WHERE,
-            param="on_unmatched",
-            got=on_unmatched,
-            allowed=["ignore", "warn", "error"],
-        )
+    check_on_finding(on_unmatched, param="on_unmatched", where=_WHERE)
 
     pairs = _key_pairs(on)
     if not pairs:
@@ -349,7 +344,7 @@ def join(
             if meta is not None:
                 target._metadata.set(dst, meta.clone(name=dst))
 
-    if n_unmatched and on_unmatched == "warn":
+    if n_unmatched:
         target.warn(
             code="JOIN_UNMATCHED",
             title="Records without a match",
@@ -358,6 +353,7 @@ def join(
                 f"their {', '.join(brought.values())} are null."
             ),
             where=_WHERE,
+            level=finding_level(on_unmatched),
             hint="Pass indicator= to mark matched records, and tell these nulls from blanks.",
             extra={"n_unmatched": n_unmatched, "n_records": df.height},
         )

@@ -197,7 +197,7 @@ def test_calibrate_trimming_by_null():
     )
     cfg = TrimConfig(upper=Cap_q(), by="t", min_cell_size=1)
     out = Sample(df, Design(wgt="w")).weighting.calibrate(
-        controls={Cat("c"): {"a": 12, "b": 12}}, trimming=cfg, strict=False
+        controls={Cat("c"): {"a": 12, "b": 12}}, trimming=cfg, on_nonconvergence="warn"
     )
     w = _one(out, NULL)
     assert w.got == {"t": 2} and w.param == "trimming.by"
@@ -304,7 +304,7 @@ RK = {
 
 def test_rake_strict_false_records_max_iter(rk, capsys):
     with pytest.warns(SvyUserWarning, match=r"\[MAX_ITER_REACHED\]") as rec:
-        out = rk.weighting.rake(controls=RK, max_iter=3, tol=1e-20, strict=False)
+        out = rk.weighting.rake(controls=RK, max_iter=3, tol=1e-20, on_nonconvergence="warn")
     assert _svy(rec) and all(r.filename == __file__ for r in _svy(rec))
     assert capsys.readouterr().out == ""
     w = _one(out, MAXIT)
@@ -326,11 +326,16 @@ def test_rake_strict_raises_and_leaves_sample_untouched(rk, capsys):
 
 
 def test_rake_display_iter_still_prints(rk, capsys):
-    rk.weighting.rake(controls=RK, max_iter=3, tol=1e-20, strict=False, display_iter=True)
+    rk.weighting.rake(
+        controls=RK, max_iter=3, tol=1e-20, on_nonconvergence="warn", display_iter=True
+    )
     out = capsys.readouterr().out
     assert "Raking: max margin error =" in out and "[not converged]" in out
     rk.weighting.rake(
-        controls=RK, trimming=TrimConfig(upper=12.0, max_iter=2), strict=False, display_iter=True
+        controls=RK,
+        trimming=TrimConfig(upper=12.0, max_iter=2),
+        on_nonconvergence="warn",
+        display_iter=True,
     )
     assert "Cycle   1 |" in capsys.readouterr().out
 
@@ -356,7 +361,7 @@ CYCLES = {
 @pytest.mark.parametrize("name", list(CYCLES))
 def test_trim_cycle_strict_false_records(tight, name, capsys):
     with pytest.warns(SvyUserWarning, match=r"\[MAX_ITER_REACHED\]") as rec:
-        out = CYCLES[name](tight, strict=False)
+        out = CYCLES[name](tight, on_nonconvergence="warn")
     assert _svy(rec) and all(r.filename == __file__ for r in _svy(rec))
     w = _one(out, MAXIT)
     assert "did not converge" in w.title
@@ -383,7 +388,7 @@ def test_standardize_trim_cycle_recorded():
     )
     with pytest.warns(SvyUserWarning, match=r"\[MAX_ITER_REACHED\]") as rec:
         out = Sample(df, Design(wgt="w")).weighting.standardize(
-            "c", shares={"a": 1, "b": 3}, by="g", trimming=CFG
+            "c", shares={"a": 1, "b": 3}, by="g", trimming=CFG, on_nonconvergence="warn"
         )
     assert _svy(rec) and all(r.filename == __file__ for r in _svy(rec))
     assert "Trim-standardize" in _one(out, MAXIT).title
@@ -407,7 +412,10 @@ def test_calibrate_where_keeps_scoped_findings():
         }
     )
     out = Sample(df, Design(wgt="w")).weighting.calibrate(
-        controls={Cat("c"): {"a": 10, "b": 30}}, where=col("k") == 1, trimming=CFG, strict=False
+        controls={Cat("c"): {"a": 10, "b": 30}},
+        where=col("k") == 1,
+        trimming=CFG,
+        on_nonconvergence="warn",
     )
     assert "Trim-calibrate" in _one(out, MAXIT).title
 
@@ -464,7 +472,7 @@ def test_calibrate_inconsistent_controls_strict(cal):
 def test_calibrate_inconsistent_controls_not_strict(cal):
     with pytest.warns(SvyUserWarning, match=r"\[CALIBRATION_NOT_MET\]") as rec:
         out = cal.weighting.calibrate(
-            controls={Cat("c"): {"a": 20, "b": 30}, "one": 60}, strict=False
+            controls={Cat("c"): {"a": 20, "b": 30}, "one": 60}, on_nonconvergence="warn"
         )
     assert len(_svy(rec)) == 1 and rec[0].filename == __file__
     w = _one(out, NOTMET)
@@ -476,24 +484,26 @@ def test_calibrate_matrix_not_met_names_the_domain(cal):
     X = np.column_stack([np.ones(12), np.ones(12)])
     ctl = {"d1": [10.0, 10.0], "d2": [10.0, 20.0]}
     with pytest.raises(WeightingError) as ei:
-        cal.weighting.calibrate_matrix(aux_vars=X, control=ctl, by="d")
+        cal.weighting.calibrate_matrix(aux_vars=X, controls=ctl, by="d")
     err = ei.value
     assert err.code == NOTMET
     assert list(err.expected) == ["d2"] and err.expected["d2"] == [10.0, 20.0]
     assert list(err.got) == ["d2"]
     assert err.extra["domains"] == ["d2"]
     with pytest.warns(SvyUserWarning, match=r"\[CALIBRATION_NOT_MET\]"):
-        out = cal.weighting.calibrate_matrix(aux_vars=X, control=ctl, by="d", strict=False)
+        out = cal.weighting.calibrate_matrix(
+            aux_vars=X, controls=ctl, by="d", on_nonconvergence="warn"
+        )
     assert list(_one(out, NOTMET).got) == ["d2"]
 
 
 def test_calibrate_matrix_weights_only_keeps_its_check(cal):
     X = np.column_stack([np.ones(12), np.ones(12)])
     with pytest.raises(WeightingError) as ei:
-        cal.weighting.calibrate_matrix(aux_vars=X, control=[10.0, 20.0], weights_only=True)
+        cal.weighting.calibrate_matrix(aux_vars=X, controls=[10.0, 20.0], weights_only=True)
     assert ei.value.code == NOTMET and ei.value.expected == [10.0, 20.0]
     w = cal.weighting.calibrate_matrix(
-        aux_vars=X, control=[10.0, 20.0], weights_only=True, strict=False
+        aux_vars=X, controls=[10.0, 20.0], weights_only=True, on_nonconvergence="warn"
     )
     assert isinstance(w, np.ndarray)
 
@@ -503,14 +513,14 @@ def test_calibrate_where_carries_the_finding(cal):
         out = cal.weighting.calibrate(
             controls={Cat("c"): {"a": 10, "b": 15}, "one": 40},
             where=col("d") == "d1",
-            strict=False,
+            on_nonconvergence="warn",
         )
     assert _one(out, NOTMET)
 
 
 def test_calibrate_bounded_still_refused(cal):
     with pytest.raises(NotImplementedError):
-        cal.weighting.calibrate(controls={"x": 40}, bounded=True)
+        cal.weighting.calibrate(controls={"x": 40}, bounds=(0.5, 2))
 
 
 def test_calibrate_trimming_cycle_owns_the_fit_check(cal):
@@ -520,7 +530,9 @@ def test_calibrate_trimming_cycle_owns_the_fit_check(cal):
     assert ei.value.code == "CONVERGENCE_FAILED"
     with pytest.warns(SvyUserWarning, match=r"\[MAX_ITER_REACHED\]"):
         out = cal.weighting.calibrate(
-            controls={Cat("c"): {"a": 20, "b": 30}, "one": 60}, trimming=cfg, strict=False
+            controls={Cat("c"): {"a": 20, "b": 30}, "one": 60},
+            trimming=cfg,
+            on_nonconvergence="warn",
         )
     assert not _codes(out, NOTMET)
 

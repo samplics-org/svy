@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Literal, Sequence
 import polars as pl
 
 from svy.core.types import WhereArg
+from svy.core.warnings import check_on_finding, finding_level
 from svy.errors import MethodError, SvyError
 from svy.utils.where import _compile_where as _compile_where_to_pl_expr
 from svy.wrangling._helpers import _resolve_target
@@ -34,6 +35,7 @@ def filter_records(
     inplace: bool = False,
 ) -> "Sample":
     """Filter rows based on conditions."""
+    check_on_finding(on_singletons, param="on_singletons", where="wrangling.filter_records")
     if where is None:
         return sample
 
@@ -53,7 +55,26 @@ def filter_records(
         n_null_pred = int(_null_df.item())
 
         filtered_data = sample._data.filter(pred)
-        target = _resolve_target(sample, filtered_data, inplace=inplace)
+        # Singletons are checked on a copy first, so raising on them leaves an
+        # inplace caller's sample as it was.
+        n_single = 0
+        if check_singletons:
+            probe = _resolve_target(sample, filtered_data, inplace=False)
+            probe._check_for_singletons()
+            n_single = len(probe._singletons or [])
+            if n_single and on_singletons == "error":
+                raise MethodError(
+                    title="Singletons detected after filtering",
+                    detail=f"Found {n_single} singleton group(s).",
+                    code="SINGLETONS_AFTER_FILTER",
+                    where="wrangling.filter_records",
+                    hint="Collapse strata, adjust PSUs, or handle via the singleton utilities.",
+                )
+        target = (
+            probe
+            if check_singletons and not inplace
+            else _resolve_target(sample, filtered_data, inplace=inplace)
+        )
 
         if n_null_pred > 0:
             target.warn(
@@ -70,25 +91,16 @@ def filter_records(
             )
 
         if check_singletons:
-            target._check_for_singletons()
+            if target is not probe:
+                target._check_for_singletons()
             if getattr(target, "_singletons", None):
-                if on_singletons == "warn":
-                    target.warn(
-                        code="SINGLETONS_DETECTED",
-                        title="Singleton PSUs/strata detected after filtering",
-                        detail=(f"Found {len(target._singletons or [])} singleton group(s)."),
-                        where="wrangling.filter_records",
-                    )
-                elif on_singletons == "error":
-                    raise MethodError(
-                        title="Singletons detected after filtering",
-                        detail=(f"Found {len(target._singletons or [])} singleton group(s)."),
-                        code="SINGLETONS_AFTER_FILTER",
-                        where="wrangling.filter_records",
-                        hint=(
-                            "Collapse strata, adjust PSUs, or handle via the singleton utilities."
-                        ),
-                    )
+                target.warn(
+                    code="SINGLETONS_DETECTED",
+                    title="Singleton PSUs/strata detected after filtering",
+                    detail=f"Found {len(target._singletons or [])} singleton group(s).",
+                    where="wrangling.filter_records",
+                    level=finding_level(on_singletons),
+                )
 
         return target
 

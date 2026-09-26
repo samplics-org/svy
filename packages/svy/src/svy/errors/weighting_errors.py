@@ -501,8 +501,8 @@ class WeightingError(MethodError):
         return cls(
             title="Did not converge",
             detail=(
-                f"{what} did not converge after {max_iter} iterations. The design has "
-                "NOT been modified. Pass strict=False to store partial results."
+                f"{what} did not converge after {max_iter} iterations. The sample has "
+                'NOT been modified. Pass on_nonconvergence="warn" to keep the last iterate.'
             ),
             code="CONVERGENCE_FAILED",
             where=where,
@@ -514,16 +514,54 @@ class WeightingError(MethodError):
 
     @classmethod
     def bounds_exceeded(
-        cls, *, where: Optional[str], ll_bound: float | None, up_bound: float | None
+        cls, *, where: Optional[str], bounds: tuple[float | None, float | None]
     ) -> "WeightingError":
         return cls(
-            title="Weight bounds exceeded",
-            detail="Weight ratios exceeded the specified bounds (ll_bound/up_bound).",
+            title="Adjustment factor out of bounds",
+            detail=(
+                f"The raked weights leave the factor g = new/old weight outside "
+                f"bounds={show(tuple(bounds))}. Bounds are checked after raking, "
+                "not enforced during it."
+            ),
             code="BOUNDS_EXCEEDED",
             where=where,
-            param="ll_bound/up_bound",
-            expected={"ll_bound": ll_bound, "up_bound": up_bound},
-            hint="Widen the bounds, relax the margins, or increase max_iter.",
+            param="bounds",
+            expected={"bounds": list(bounds)},
+            hint="Widen the bounds, relax the margins, or collapse sparse levels.",
+        )
+
+    @classmethod
+    def bounds_invalid(
+        cls, *, where: Optional[str], got: Any, reason: str, as_type: bool = False
+    ) -> "WeightingError":
+        kind = _TypeWeightingError if as_type else _ValueWeightingError
+        return kind(
+            title="Invalid bounds",
+            detail=f"`bounds` {reason}.",
+            code="INVALID_TYPE" if as_type else "INVALID_RANGE",
+            where=where,
+            param="bounds",
+            expected="None or a 2-tuple (lo, hi) of numbers or None, with lo <= hi",
+            got=got if isinstance(got, (int, float, str, type(None))) else show(got),
+            hint=(
+                "bounds=(lo, hi) bounds the factor g = new/old weight; None on a side "
+                "leaves it open, e.g. bounds=(0.5, None) or bounds=(0.5, 2.0)."
+            ),
+        )
+
+    @classmethod
+    def not_supported_yet(
+        cls, *, where: Optional[str], param: str, got: Any, hint: str
+    ) -> "WeightingError":
+        return _NotImplementedWeightingError(
+            title="Not supported yet",
+            detail=f"`{param}` is not supported by this method yet.",
+            code="NOT_SUPPORTED",
+            where=where,
+            param=param,
+            expected=None,
+            got=got if isinstance(got, (int, float, str, type(None))) else show(got),
+            hint=hint,
         )
 
     @classmethod
@@ -544,7 +582,8 @@ class WeightingError(MethodError):
             detail=(
                 f"The calibrated weights do not reproduce the control totals{scope} within "
                 f"tolerance{miss}. The system may be singular or ill-conditioned, or the "
-                "controls inconsistent. Pass strict=False to store the approximate solution."
+                'controls inconsistent. Pass on_nonconvergence="warn" to keep the approximate '
+                "solution."
             ),
             code="CALIBRATION_NOT_MET",
             where=where,
@@ -692,3 +731,8 @@ class _ValueWeightingError(WeightingError, ValueError):
 @dataclass(eq=False)
 class _TypeWeightingError(WeightingError, TypeError):
     """For inputs that raised TypeError before they had a code."""
+
+
+@dataclass(eq=False)
+class _NotImplementedWeightingError(WeightingError, NotImplementedError):
+    """For options that raised NotImplementedError before they had a code."""

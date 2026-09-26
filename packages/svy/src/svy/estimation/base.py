@@ -64,6 +64,7 @@ from svy.estimation.taylor import (
     taylor_total_multi as _taylor_total_multi,
 )
 from svy.ui.printing import format_where_clause
+from svy.utils.checks import validate_alpha
 from svy.utils.helpers import _colspec_to_list
 from svy.wrangling.rows import _compile_where_to_pl_expr
 
@@ -1609,6 +1610,7 @@ class Estimation:
             If None, auto-detected from the design (Taylor when strata/PSU
             are available, replication otherwise).
         """
+        alpha = validate_alpha(alpha, where="Sample.estimation.mean")
         deff_ref = self._normalize_deff(deff)
 
         if not isinstance(y, str):
@@ -1743,6 +1745,7 @@ class Estimation:
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
         """
+        alpha = validate_alpha(alpha, where="Sample.estimation.total")
         deff_ref = self._normalize_deff(deff)
 
         if not isinstance(y, str):
@@ -1874,6 +1877,7 @@ class Estimation:
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
         """
+        alpha = validate_alpha(alpha, where="Sample.estimation.prop")
         deff_ref = self._normalize_deff(deff)
 
         if not isinstance(y, str):
@@ -2007,6 +2011,7 @@ class Estimation:
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
         """
+        alpha = validate_alpha(alpha, where="Sample.estimation.ratio")
         deff_ref = self._normalize_deff(deff)
 
         if not (isinstance(y, str) and isinstance(x, str)):
@@ -2236,6 +2241,7 @@ class Estimation:
         >>> sample.est.corr(["income", "age", "educ"])            # 3 pairs
         >>> sample.est.corr([("income", "age"), ("income", "educ")])
         """
+        alpha = validate_alpha(alpha, where="Sample.estimation.corr")
         _guard_pandas_method(method)
         _normalize_assoc_kind(kind)
         deff_ref = self._normalize_deff(deff)
@@ -2281,6 +2287,7 @@ class Estimation:
         Estimate
             One row per pair, or per (group, pair) when ``by`` is set.
         """
+        alpha = validate_alpha(alpha, where="Sample.estimation.cov")
         deff_ref = self._normalize_deff(deff)
         return self._assoc(
             PopParam.COV,
@@ -2367,6 +2374,7 @@ class Estimation:
         --------
         median : The p = 0.5 case, reported as ``PopParam.MEDIAN``.
         """
+        alpha = validate_alpha(alpha, where="Sample.estimation.quantile")
         probs, p_is_scalar = self._normalize_probs(p)
 
         if not isinstance(y, str):
@@ -2475,6 +2483,7 @@ class Estimation:
         quantile : Any probability. ``median(y)`` equals ``quantile(y, p=0.5)``
             numerically; only the reported ``param`` differs.
         """
+        alpha = validate_alpha(alpha, where="Sample.estimation.median")
         if not isinstance(y, str):
             ys = list(y)
             resolved_q = self._normalize_q_method(q_method)

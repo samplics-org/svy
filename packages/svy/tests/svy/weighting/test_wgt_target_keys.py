@@ -148,10 +148,10 @@ class TestEveryMethodEveryDtype:
         nat = list(_native_controls(col))
         keys = list(_forms(col)[form])
         ref = sample.weighting.calibrate_matrix(
-            aux_vars=X, control={k: [12.0, 30.0 + i] for i, k in enumerate(nat)}, by=col
+            aux_vars=X, controls={k: [12.0, 30.0 + i] for i, k in enumerate(nat)}, by=col
         )
         out = sample.weighting.calibrate_matrix(
-            aux_vars=X, control={k: [12.0, 30.0 + i] for i, k in enumerate(keys)}, by=col
+            aux_vars=X, controls={k: [12.0, 30.0 + i] for i, k in enumerate(keys)}, by=col
         )
         np.testing.assert_allclose(_w(out, "calib_wgt"), _w(ref, "calib_wgt"))
 
@@ -271,11 +271,11 @@ def test_calibrate_cross_term_text_keys(two_way):
 def test_calibrate_by_two_columns_joined_and_tuple(two_way):
     X = np.ones((two_way.data.height, 1))
     ref = two_way.weighting.calibrate_matrix(
-        aux_vars=X, control={k: [v] for k, v in TWO_WAY_NATIVE.items()}, by=["r", "s"]
+        aux_vars=X, controls={k: [v] for k, v in TWO_WAY_NATIVE.items()}, by=["r", "s"]
     )
     out = two_way.weighting.calibrate_matrix(
         aux_vars=X,
-        control={"_&_".join(map(str, k)): [v] for k, v in TWO_WAY_NATIVE.items()},
+        controls={"_&_".join(map(str, k)): [v] for k, v in TWO_WAY_NATIVE.items()},
         by=["r", "s"],
     )
     np.testing.assert_allclose(_w(out, "calib_wgt"), _w(ref, "calib_wgt"))
@@ -283,9 +283,9 @@ def test_calibrate_by_two_columns_joined_and_tuple(two_way):
 
 def test_calibrate_matrix_labels_keyed(sample):
     X = sample.data.select(pl.lit(1.0), "x").to_numpy()
-    ref = sample.weighting.calibrate_matrix(aux_vars=X, control=np.array([30.0, 80.0]))
+    ref = sample.weighting.calibrate_matrix(aux_vars=X, controls=np.array([30.0, 80.0]))
     out = sample.weighting.calibrate_matrix(
-        aux_vars=X, control={"x": 80.0, "1": 30.0}, labels=[1, "x"]
+        aux_vars=X, controls={"x": 80.0, "1": 30.0}, labels=[1, "x"]
     )
     np.testing.assert_allclose(_w(out, "calib_wgt"), _w(ref, "calib_wgt"))
 
@@ -293,11 +293,11 @@ def test_calibrate_matrix_labels_keyed(sample):
 def test_calibrate_matrix_labels_keyed_by_domain(sample):
     X = sample.data.select(pl.lit(1.0), "x").to_numpy()
     ref = sample.weighting.calibrate_matrix(
-        aux_vars=X, control={"d1": [10.0, 30.0], "d2": [6, 20]}, by="dom"
+        aux_vars=X, controls={"d1": [10.0, 30.0], "d2": [6, 20]}, by="dom"
     )
     out = sample.weighting.calibrate_matrix(
         aux_vars=X,
-        control={
+        controls={
             "d1": {"x": 30.0, "one": 10.0},
             "d2": {"one": 6, "x": 20},
         },
