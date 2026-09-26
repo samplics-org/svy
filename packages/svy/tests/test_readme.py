@@ -26,6 +26,8 @@ def _load_renderer():
     "rich" not in sys.modules and importlib.util.find_spec("rich") is None,
     reason="rich not installed",
 )
+# Offline (as in CI) the examples fall back to the bundled data and say so.
+@pytest.mark.filterwarnings("ignore:Could not reach the dataset catalog:svy.SvyUserWarning")
 def test_readme_snippets_run_and_outputs_are_current():
     renderer = _load_renderer()
     readmes = [p for p in renderer.README_FILES if p.exists()]
