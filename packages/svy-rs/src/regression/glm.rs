@@ -944,7 +944,26 @@ pub struct GlmResult {
     /// it was estimated rather than supplied. `None` for every other family.
     pub theta: Option<f64>,
     pub theta_se: Option<f64>,
+    /// Set when the fit pushed some rows to the edge of the response's range;
+    /// see `separation_check`.
+    pub separation: Option<Separation>,
 }
+
+/// Rows the fit drove to the boundary, and what is left to identify beta.
+pub struct Separation {
+    /// Contributing rows whose fitted value the fit cannot tell from y.
+    pub boundary_rows: usize,
+    /// `sum_i w_i x_i x_i'` over the other contributing rows, row-major k*k.
+    /// A coefficient outside the row space of this matrix is not identified.
+    pub gram: Vec<f64>,
+}
+
+/// A row's share of the deviance below this many convergence tolerances is
+/// one the fit resolves as sitting on the boundary. IRLS stops once the
+/// separated rows' total share falls to about 1.6 * tol (logit and log; about
+/// 3 * tol for cauchit), while rows of an ordinary fit sit orders of
+/// magnitude above: 10 leaves margin on both sides.
+const SEPARATION_RESOLUTION: f64 = 10.0;
 
 // ============================================================================
 // Core Algorithm
@@ -1551,6 +1570,7 @@ pub(crate) fn fit_glm_domain(
             converged,
             theta: None,
             theta_se: None,
+            separation: None,
         });
     }
 
@@ -1939,6 +1959,19 @@ pub(crate) fn fit_glm_domain(
     // Suppress unused-var warning when no domain restriction is active.
     let _ = w_sum;
 
+    let separation = separation_check(
+        family,
+        n,
+        k,
+        &y_vals,
+        &x,
+        &w_samp,
+        &mu,
+        domain_mask,
+        deviance,
+        tol,
+    );
+
     // flatten
     let params: Vec<f64> = (0..k).map(|i| beta[(i, 0)]).collect();
     let mut cov_flat = Vec::with_capacity(k * k);
@@ -1963,6 +1996,83 @@ pub(crate) fn fit_glm_domain(
         converged,
         theta: None,
         theta_se: None,
+        separation,
+    })
+}
+
+/// Quasi-complete separation, read off the converged fit.
+///
+/// When the response is perfectly predicted on some rows, the likelihood keeps
+/// rising as beta moves off to infinity along a direction that pushes those
+/// rows to 0 or 1 (0 for counts) and leaves every other row alone. IRLS stops
+/// anyway, once the deviance stops moving, so the coefficients along that
+/// direction are wherever it stopped and their variance is a near-singular
+/// bread's rounding.
+///
+/// The rows the fit has pushed there are those at the boundary of y whose
+/// deviance contribution is below what the convergence test can resolve.
+/// Directions of recession change only those rows, so they are exactly the
+/// directions the remaining rows cannot see: the null space of their Gram
+/// matrix, which is returned for the caller to read. Nothing is returned when
+/// no row is at the boundary, which is the case for every ordinary fit.
+#[allow(clippy::too_many_arguments)]
+fn separation_check(
+    family: Family,
+    n: usize,
+    k: usize,
+    y_vals: &[f64],
+    x: &[f64],
+    w_samp: &[f64],
+    mu: &[f64],
+    domain_mask: Option<&[bool]>,
+    deviance: f64,
+    tol: f64,
+) -> Option<Separation> {
+    // unit_deviance's clamps: past them the deviance no longer moves at all.
+    const MU_FLOOR: f64 = 1e-10;
+    let binomial = match family {
+        Family::Binomial => true,
+        Family::Poisson | Family::NegativeBinomial(_) => false,
+        _ => return None,
+    };
+    let resolution = SEPARATION_RESOLUTION * tol * (deviance + 0.1);
+
+    let mut retained = vec![0.0f64; n];
+    let mut boundary_rows = 0usize;
+    for i in 0..n {
+        let w_i = w_samp[i];
+        if !(domain_mask.is_none_or(|m| m[i]) && w_i > 0.0) {
+            continue;
+        }
+        let (y_i, mu_i) = (y_vals[i], mu[i]);
+        let at_floor = if binomial {
+            (y_i == 0.0 && mu_i <= MU_FLOOR) || (y_i == 1.0 && mu_i >= 1.0 - MU_FLOOR)
+        } else {
+            y_i == 0.0 && mu_i <= MU_FLOOR
+        };
+        let at_edge = y_i == 0.0 || (binomial && y_i == 1.0);
+        if at_edge && (at_floor || w_i * family.unit_deviance(y_i, mu_i) < resolution) {
+            boundary_rows += 1;
+        } else {
+            retained[i] = w_i;
+        }
+    }
+    if boundary_rows == 0 {
+        return None;
+    }
+
+    let mut upper = vec![0.0f64; k * k];
+    accumulate_weighted_crossprod(x, &retained, n, k, &mut upper);
+    let mut gram = vec![0.0f64; k * k];
+    for a in 0..k {
+        for b in a..k {
+            gram[a * k + b] = upper[a * k + b];
+            gram[b * k + a] = upper[a * k + b];
+        }
+    }
+    Some(Separation {
+        boundary_rows,
+        gram,
     })
 }
 
@@ -2038,5 +2148,64 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Level-coded data: 'c' (every third row) never has an event, so its
+    /// dummy drifts to -infinity; the other rows keep the rest identified.
+    fn separated_fit(y_c: f64) -> GlmResult {
+        let n = 90;
+        let ones = vec![1.0; n];
+        let x: Vec<f64> = (0..n).map(|i| ((i as f64) * 1.7).sin()).collect();
+        let c: Vec<f64> = (0..n).map(|i| if i % 3 == 2 { 1.0 } else { 0.0 }).collect();
+        let y: Vec<f64> = (0..n)
+            .map(|i| {
+                if i % 3 == 2 {
+                    if i == 2 { y_c } else { 0.0 }
+                } else if (x[i] + ((i as f64) * 2.3).cos()) > 0.2 {
+                    1.0
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        fit_glm(
+            &Series::new("y".into(), y),
+            vec![
+                Series::new("one".into(), ones.clone()),
+                Series::new("x".into(), x),
+                Series::new("c".into(), c),
+            ],
+            &Series::new("w".into(), ones),
+            None,
+            None,
+            None,
+            None,
+            "binomial",
+            "logit",
+            None,
+            1e-8,
+            100,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn separation_reports_boundary_rows_and_retained_gram() {
+        let r = separated_fit(0.0);
+        let sep = r.separation.expect("separated fit");
+        assert_eq!(sep.boundary_rows, 30);
+        // The separated dummy is zero on every retained row.
+        for j in 0..3 {
+            assert_eq!(sep.gram[2 * 3 + j], 0.0);
+            assert_eq!(sep.gram[j * 3 + 2], 0.0);
+        }
+        assert_eq!(sep.gram[0], 60.0);
+    }
+
+    #[test]
+    fn no_separation_record_on_an_identified_fit() {
+        // One event in level 'c' makes the MLE finite.
+        assert!(separated_fit(1.0).separation.is_none());
     }
 }

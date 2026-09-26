@@ -13,7 +13,7 @@ import msgspec
 import numpy as np
 import polars as pl
 
-from svy.regression.glm import offset_values
+from svy.regression.glm import delta_var, offset_values
 from svy.regression.links import link_inverse, link_mu_eta, link_mu_eta2
 from svy.ui.printing import make_panel, render_plain_table, render_rich_to_str, resolve_width
 from svy.utils.formats import _fmt_conf_pct
@@ -463,7 +463,7 @@ def _categorical_contrast_ame(
         mu_k, dmu_k, X_k = _counterfactual(level)
         margins[i] = float(np.sum(weights * (mu_k - mu_ref)) / w_sum)
         grad = ((weights * dmu_k)[:, None] * X_k - base_grad).sum(axis=0) / w_sum
-        se[i] = float(np.sqrt(max(float(grad @ cov @ grad), 0.0)))
+        se[i] = float(np.sqrt(max(float(delta_var(grad, cov)), 0.0)))
 
     t_crit = stats.t.ppf(1 - alpha / 2, df)
     return GLMMargins(
@@ -557,7 +557,7 @@ def compute_predictive_margins(
         # Delta method: gradient of the weighted mean prediction w.r.t. beta
         dmu_deta = link_mu_eta(fit.link, eta)
         grad = (weights * dmu_deta) @ X_cf / w_sum
-        se[i] = np.sqrt(max(float(grad @ cov @ grad), 0.0))
+        se[i] = np.sqrt(max(float(delta_var(grad, cov)), 0.0))
 
     # Confidence intervals
     t_crit = stats.t.ppf(1 - alpha / 2, df)
@@ -667,7 +667,7 @@ def compute_average_marginal_effects(
         grad_rows = (weights * d2mu_deta2 * deta_dx)[:, None] * X
         grad_rows += (weights * dmu_deta)[:, None] * D
         grad = grad_rows.sum(axis=0) / w_sum
-        se_val = np.sqrt(max(float(grad @ cov @ grad), 0.0))
+        se_val = np.sqrt(max(float(delta_var(grad, cov)), 0.0))
 
         lci = ame - t_crit * se_val
         uci = ame + t_crit * se_val
