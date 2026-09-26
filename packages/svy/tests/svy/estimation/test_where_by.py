@@ -12,7 +12,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from svy import col
+from svy import PopParam, col
 from svy.core.design import Design
 from svy.core.sample import Sample
 from svy.estimation.estimate import Estimate
@@ -494,15 +494,17 @@ class TestDomainEstimationCorrectness:
         assert domain_result.estimates[0].se > 0
         assert filtered_result.estimates[0].se > 0
 
-    def test_domain_with_no_matches_returns_empty(self, simple_sample: Sample):
-        """Test behavior when where condition matches no records."""
+    def test_domain_with_no_matches_returns_nan_row(self, simple_sample: Sample):
+        """A where condition matching no records gives one undefined row."""
         result = simple_sample.estimation.mean(
             "income",
             where=col("age") > 200,  # Impossible condition
         )
 
-        # Should return empty estimates
-        assert len(result.estimates) == 0
+        # R's svymean(subset()) on an empty domain is NaN, not an error
+        assert len(result.estimates) == 1
+        assert np.isnan(result.estimates[0].est)
+        assert np.isnan(result.estimates[0].se)
 
     def test_domain_estimation_by_group_independence(self, simple_sample: Sample):
         """Test that domain estimation by group produces independent estimates."""
@@ -934,10 +936,7 @@ class TestToPolars:
 
     def test_to_polars_empty_returns_empty(self, simple_sample: Sample):
         """Empty estimates should return empty DataFrame."""
-        result = simple_sample.estimation.mean(
-            "income",
-            where=col("age") > 200,
-        )
+        result = Estimate(PopParam.MEAN)
         df = result.to_polars()
         assert df.is_empty()
 

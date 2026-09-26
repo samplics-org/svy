@@ -1658,36 +1658,28 @@ class Estimation:
             domain_mask_for_replication=(target_method is not None and by is None),
         )
 
-        try:
-            if target_method is None:
-                result = _taylor_mean(
-                    self,
-                    prep=prep,
-                    y=y,
-                    deff_ref=deff_ref,
-                    alpha=alpha,
-                    as_factor=as_factor,
-                    param=PopParam.MEAN,
-                )
-            else:
-                result = _replicate_estimate(
-                    self,
-                    prep=prep,
-                    method=target_method,
-                    param=PopParam.MEAN,
-                    y=y,
-                    fay_coef=fay_coef,
-                    as_factor=as_factor,
-                    variance_center=variance_center,
-                    alpha=alpha,
-                )
-        except RuntimeError as e:
-            if "weights is zero" in str(e).lower() or "sum of weights" in str(e).lower():
-                result = self._empty_estimate(
-                    PopParam.MEAN, alpha, _colspec_to_list(by), target_method
-                )
-            else:
-                raise
+        if target_method is None:
+            result = _taylor_mean(
+                self,
+                prep=prep,
+                y=y,
+                deff_ref=deff_ref,
+                alpha=alpha,
+                as_factor=as_factor,
+                param=PopParam.MEAN,
+            )
+        else:
+            result = _replicate_estimate(
+                self,
+                prep=prep,
+                method=target_method,
+                param=PopParam.MEAN,
+                y=y,
+                fay_coef=fay_coef,
+                as_factor=as_factor,
+                variance_center=variance_center,
+                alpha=alpha,
+            )
 
         if where is not None:
             result.where_clause = format_where_clause(where)
@@ -1791,35 +1783,27 @@ class Estimation:
             domain_mask_for_replication=(target_method is not None and by is None),
         )
 
-        try:
-            if target_method is None:
-                result = _taylor_total(
-                    self,
-                    prep=prep,
-                    y=y,
-                    deff_ref=deff_ref,
-                    alpha=alpha,
-                    as_factor=as_factor,
-                )
-            else:
-                result = _replicate_estimate(
-                    self,
-                    prep=prep,
-                    method=target_method,
-                    param=PopParam.TOTAL,
-                    y=y,
-                    fay_coef=fay_coef,
-                    as_factor=as_factor,
-                    variance_center=variance_center,
-                    alpha=alpha,
-                )
-        except RuntimeError as e:
-            if "weights is zero" in str(e).lower() or "sum of weights" in str(e).lower():
-                result = self._empty_estimate(
-                    PopParam.TOTAL, alpha, _colspec_to_list(by), target_method
-                )
-            else:
-                raise
+        if target_method is None:
+            result = _taylor_total(
+                self,
+                prep=prep,
+                y=y,
+                deff_ref=deff_ref,
+                alpha=alpha,
+                as_factor=as_factor,
+            )
+        else:
+            result = _replicate_estimate(
+                self,
+                prep=prep,
+                method=target_method,
+                param=PopParam.TOTAL,
+                y=y,
+                fay_coef=fay_coef,
+                as_factor=as_factor,
+                variance_center=variance_center,
+                alpha=alpha,
+            )
 
         if where is not None:
             result.where_clause = format_where_clause(where)
@@ -1923,36 +1907,28 @@ class Estimation:
             domain_mask_for_replication=(target_method is not None and by is None),
         )
 
-        try:
-            if target_method is None:
-                result = _taylor_prop(
-                    self,
-                    prep=prep,
-                    y=y,
-                    deff_ref=deff_ref,
-                    alpha=alpha,
-                    ci_method=ci_method,
-                )
-            else:
-                result = _replicate_estimate(
-                    self,
-                    prep=prep,
-                    method=target_method,
-                    param=PopParam.PROP,
-                    y=y,
-                    fay_coef=fay_coef,
-                    as_factor=True,
-                    variance_center=variance_center,
-                    alpha=alpha,
-                    ci_method=ci_method,
-                )
-        except RuntimeError as e:
-            if "weights is zero" in str(e).lower() or "sum of weights" in str(e).lower():
-                result = self._empty_estimate(
-                    PopParam.PROP, alpha, _colspec_to_list(by), target_method
-                )
-            else:
-                raise
+        if target_method is None:
+            result = _taylor_prop(
+                self,
+                prep=prep,
+                y=y,
+                deff_ref=deff_ref,
+                alpha=alpha,
+                ci_method=ci_method,
+            )
+        else:
+            result = _replicate_estimate(
+                self,
+                prep=prep,
+                method=target_method,
+                param=PopParam.PROP,
+                y=y,
+                fay_coef=fay_coef,
+                as_factor=True,
+                variance_center=variance_center,
+                alpha=alpha,
+                ci_method=ci_method,
+            )
 
         if where is not None:
             result.where_clause = format_where_clause(where)
@@ -2082,35 +2058,27 @@ class Estimation:
             domain_mask_for_replication=(target_method is not None and by is None),
         )
 
-        try:
-            if target_method is None:
-                result = _taylor_ratio(
-                    self,
-                    prep=prep,
-                    y=y,
-                    x=x,
-                    deff_ref=deff_ref,
-                    alpha=alpha,
-                )
-            else:
-                result = _replicate_estimate(
-                    self,
-                    prep=prep,
-                    method=target_method,
-                    param=PopParam.RATIO,
-                    y=y,
-                    x=x,
-                    fay_coef=fay_coef,
-                    variance_center=variance_center,
-                    alpha=alpha,
-                )
-        except RuntimeError as e:
-            if "weights is zero" in str(e).lower() or "sum of weights" in str(e).lower():
-                result = self._empty_estimate(
-                    PopParam.RATIO, alpha, _colspec_to_list(by), target_method
-                )
-            else:
-                raise
+        if target_method is None:
+            result = _taylor_ratio(
+                self,
+                prep=prep,
+                y=y,
+                x=x,
+                deff_ref=deff_ref,
+                alpha=alpha,
+            )
+        else:
+            result = _replicate_estimate(
+                self,
+                prep=prep,
+                method=target_method,
+                param=PopParam.RATIO,
+                y=y,
+                x=x,
+                fay_coef=fay_coef,
+                variance_center=variance_center,
+                alpha=alpha,
+            )
 
         if where is not None:
             result.where_clause = format_where_clause(where)
