@@ -70,6 +70,7 @@ def _make_estimate() -> Estimate:
             by=("region",),
             by_level=("North",),
             deff=1.5,
+            n=120,
         ),
     ]
     return est
@@ -97,6 +98,7 @@ def _make_ttest_one_group() -> TTestOneGroup:
                 cv=0.02,
                 lci=48000.0,
                 uci=52000.0,
+                n=40,
             ),
         ],
         stats=TTestStats(t=5.0, df=9.0, p_value=0.001),
@@ -126,6 +128,7 @@ def _make_ttest_two_groups() -> TTestTwoGroups:
                 cv=0.01875,
                 lci=46200.0,
                 uci=49800.0,
+                n=17,
             ),
         ],
         stats=TTestStats(t=3.75, df=18.0, p_value=0.0015),
@@ -151,6 +154,7 @@ def _make_table() -> Table:
                 cv=0.057,
                 lci=0.31,
                 uci=0.39,
+                n=300,
             ),
         ],
         stats=None,

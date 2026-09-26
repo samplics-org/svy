@@ -195,6 +195,7 @@ class CellEstData(msgspec.Struct, kw_only=True, frozen=True):
     cv: float
     lci: float
     uci: float
+    n: int | None = None
 
 
 class TableStatsData(msgspec.Struct, kw_only=True, frozen=True):

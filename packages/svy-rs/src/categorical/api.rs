@@ -13,6 +13,7 @@ use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 
 use crate::estimation::calib_sweep::{CalibSpec, CalibSweep, build_calib_sweep};
+use crate::estimation::taylor::active_count;
 
 use crate::categorical::ranktest::{RankScoreMethod, ranktest_k_sample, ranktest_two_sample};
 use crate::categorical::tabulation::{
@@ -924,7 +925,7 @@ fn compute_tabulate(
         "cv" => &cv_vals,
         "deff" => &deff_vec,
         "df" => vec![df_val; k],
-        "n" => vec![n_obs as u32; k],
+        "n" => vec![active_count(weights, None); k],
     ]?;
 
     let stats_df = if is_two_way {

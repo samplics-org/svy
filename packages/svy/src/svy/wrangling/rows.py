@@ -13,7 +13,7 @@ from svy.core.types import WhereArg
 from svy.core.warnings import check_on_finding, finding_level
 from svy.errors import MethodError, SvyError
 from svy.utils.where import _compile_where as _compile_where_to_pl_expr
-from svy.wrangling._helpers import _resolve_target
+from svy.wrangling._helpers import _internal_columns, _resolve_target
 
 
 if TYPE_CHECKING:
@@ -137,7 +137,13 @@ def distinct(
     inplace: bool = False,
 ) -> "Sample":
     """Remove duplicate rows."""
-    subset = [cols] if isinstance(cols, str) else cols
+    if cols is None:
+        # svy's bookkeeping is not user data, and the row index differs on
+        # every row, so it must not take part in the check.
+        internal = _internal_columns(sample)
+        subset = [c for c in sample._data.collect_schema().names() if c not in internal]
+    else:
+        subset = [cols] if isinstance(cols, str) else list(cols)
     new_data = sample._data.unique(
         subset=subset,
         keep=keep,

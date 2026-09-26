@@ -63,7 +63,7 @@ class TableStats(msgspec.Struct):
     f: FDist | None
 
 
-_CELL_FIELDS = ("rowvar", "colvar", "est", "se", "cv", "lci", "uci")
+_CELL_FIELDS = ("rowvar", "colvar", "est", "se", "cv", "lci", "uci", "n")
 
 
 class CellEst(msgspec.Struct):
@@ -74,6 +74,8 @@ class CellEst(msgspec.Struct):
     cv: Number
     lci: Number
     uci: Number
+    #: Records in the table's domain with a nonzero weight and both variables present.
+    n: int | None = None
 
     @classmethod
     def from_param(cls, param_est: ParamEst) -> Self:
@@ -96,6 +98,7 @@ class CellEst(msgspec.Struct):
             cv=param_est.cv,
             lci=param_est.lci,
             uci=param_est.uci,
+            n=param_est.n,
         )
 
     def to_dict(self) -> dict[str, Category | None]:
@@ -1077,6 +1080,8 @@ def table_frame(r: Any, *, tidy: bool = True) -> pl.DataFrame:
     meta = {"table_type": _enum_label(r.type), "alpha": r.alpha}
     df = pl.DataFrame([{f: getattr(c, f) for f in _CELL_FIELDS} | meta for c in r.estimates or []])
     drop_cols = [c for c in ("cv", "deff") if c in df.columns]
+    if "n" in df.columns and df["n"].null_count() == df.height:
+        drop_cols.append("n")
     if drop_cols:
         df = df.drop(drop_cols)
     if not tidy:

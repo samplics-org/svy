@@ -14,6 +14,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 - Taylor mean, ratio and proportion kernels (ungrouped, grouped and batched) no longer fail on a domain with a zero denominator (no weight, or a ratio's weighted x summing to zero): that row is NaN (est, se, var, deff) and its covariance row and column are NaN, as on the replicate path.
 
+- `tabulate_rs`'s `n` counts the rows in the domain with a nonzero weight (`active_count`). It used to include zero-weight rows. The Rao–Scott statistics are unchanged.
+
 - `ttest_rs`'s `n` counts the rows in the domain with a nonzero weight and a non-missing `y`, like the estimators' `n`. It used to be the frame length (one-sample) or the domain size including zero-weight rows.
 
 - `ttest_rs` and `ranktest_rs` order the levels of a numeric group (and `by`) column by value rather than as text, so `level_0`/`level_1` and the difference follow R's `factor()` order.

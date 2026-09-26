@@ -8,7 +8,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
-- **`n` on every estimate row.** `ParamEst.n` and `TtestEst.n` give the records behind the row: those in its domain (`where=`, `by=` level, or t-test group) with a nonzero weight and the estimate's variables present. It is the count proportion CIs already use, for Taylor and replication alike; a proportion's category rows carry the domain's count, and each group of a two-group t-test its own. `to_polars()` has an `n` column (the printed table does not). Saved results carry it: schema `svy-result/0.5` adds `ParamEstData.n` and `TtestEstData.n`, `None` when read from an older payload. With `deff="wr"`, `n / deff` is the effective sample size.
+- **`n` on every estimate row.** `ParamEst.n`, `TtestEst.n` and a table's `CellEst.n` give the records behind the row: those in its domain (`where=`, `by=` level, t-test group, or the table) with a nonzero weight and the estimate's variables present. It is the count proportion CIs already use, for Taylor and replication alike; a proportion's category rows carry the domain's count, each group of a two-group t-test its own, and every cell of a table the table's count. A GLM fit's `stats.n` already followed the same rule. `to_polars()` has an `n` column (the printed table does not). Saved results carry it: schema `svy-result/0.5` adds `ParamEstData.n`, `TtestEstData.n` and `CellEstData.n`, `None` when read from an older payload. With `deff="wr"`, `n / deff` is the effective sample size.
 
 - **`sample.to_code(data=None)`** writes the Python that rebuilds the sample: `import svy`, `data = svy.read_parquet(path)` when `data` points to a `.parquet` file (the pair of `svy.write_parquet(sample, path)`), and `sample = svy.Sample(data, svy.Design(...))` with every setting that changes the estimates: replicate weights, the weight-adjustment record and singleton handling. Running it on the same data gives the same design and estimates. The data is the caller's; metadata (labels) is not included. `svy.WgtAdjustment` is exported so the script can name it.
 
@@ -87,6 +87,14 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 ### Fixed
 
 - **`trim` lost or gained weight total silently when redistribution was impossible.** With `redistribute=True`, a bound on the wrong side of a domain's mean positive weight (`upper` below it, `lower` above it) ended with every weight at the bound, the total changed and only the INFO audit recorded (`converged=True`, so `on_nonconvergence` never applied). It now raises `TRIM_INFEASIBLE` before anything is written, whatever `on_nonconvergence`, naming each failing domain with its bound, weight range, mean, `n` and total in `got`; the hint suggests a bound relative to the weights (`Threshold.quantile(0.99)`, `Threshold("median", 3.5)`) or `redistribute=False`. Also applies to `trim`'s `by=`/`where=` domains and `adjust(trimming=)`.
+
+- **`create_brr_wgts` and `create_jk_wgts(paired=True)` crashed with a multi-column PSU** when strata had to be paired. The replicates now equal those built from a single column holding the same composite key.
+
+- **`wrangling.distinct()` without `cols` never removed duplicates**: svy's row index took part in the check. Only the user's columns are compared now.
+
+- **`add_stage` with a next-stage `Sample` whose `psu` is the stage-1 PSU made `ssu` equal to `psu`**, and estimation then crashed. The next stage's `psu` only links rows to their stage-1 PSU; the combined design's `ssu` is now `None`.
+
+- **`clean_names` renamed the selection outputs** (`svy_sample_weight`, `svy_prob_selection`, `svy_number_of_hits`, `svy_certainty` and their `_stage1`/`_stage2` forms) under camel, pascal, kebab, upper or title case; it reserved names svy never writes. They are kept now, and a user column cleaned into one of them gets the `_1` suffix instead of the selection output.
 
 - **`trim` and `calibrate` checked `wgt_name` only after doing the work.** A refused `trim(wgt_name=<existing column>)` still raised the findings of the trim it then discarded, and `calibrate` with a taken name and unmet controls raised `CALIBRATION_NOT_MET` instead of `WGT_NAME_EXISTS`. Both now check the name first.
 

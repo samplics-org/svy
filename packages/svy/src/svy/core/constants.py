@@ -23,6 +23,22 @@ SVY_WGT_STAGE2: str = "svy_sample_weight_stage2"
 SVY_CERT_STAGE1: str = "svy_certainty_stage1"
 SVY_HITS_STAGE1: str = "svy_number_of_hits_stage1"
 
+# Columns the selection methods write under their default names.
+SELECTION_COLUMNS: Final[frozenset[str]] = frozenset(
+    {
+        SVY_PROB,
+        SVY_WEIGHT,
+        SVY_HIT,
+        SVY_CERTAINTY,
+        SVY_PROB_STAGE1,
+        SVY_PROB_STAGE2,
+        SVY_WGT_STAGE1,
+        SVY_WGT_STAGE2,
+        SVY_CERT_STAGE1,
+        SVY_HITS_STAGE1,
+    }
+)
+
 _INTERNAL_PREFIX: Final[str] = "__svy__"
 _INTERNAL_CONCAT_SUFFIX: Final[str] = "_svy_internal_cols_concatenated"
 _BY_SEP = "\x00\x1f\x00"  # null + unit separator + null
