@@ -69,6 +69,14 @@ def _jsonable(x: Any) -> Any:
     return str(x)
 
 
+class SvyUserWarning(UserWarning):
+    """A finding svy reports about the data or a sample.
+
+    A finding about a sample is also recorded in ``sample.warnings``. Filter
+    them all at once with ``warnings.filterwarnings("ignore", category=svy.SvyUserWarning)``.
+    """
+
+
 @dataclass(eq=False)
 class SvyError(Exception):
     """

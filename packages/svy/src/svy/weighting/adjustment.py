@@ -5,8 +5,6 @@ Non-response weight adjustment.
 
 from __future__ import annotations
 
-import warnings
-
 from typing import TYPE_CHECKING, Any, Mapping
 
 import msgspec
@@ -21,8 +19,9 @@ except ImportError:  # pragma: no cover
 
 from svy.core.design import WgtAdjustment
 from svy.core.types import DomainScalarMap
+from svy.core.warnings import Severity, WarnCode
 from svy.errors import WeightingError
-from svy.weighting._engine import CellSpec, _where_mask, build_cells
+from svy.weighting._engine import CellSpec, _where_mask, build_cells, record_null_cells
 from svy.weighting._keys import native, text_forms
 from svy.weighting.trimming import _run_trim as _apply_trim
 from svy.weighting.types import TrimConfig
@@ -176,7 +175,7 @@ def _adjust_panel(
     resp_mapping: DomainScalarMap | None,
     unknown_to_inelig: bool,
     ctx: str,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, CellSpec, bool]:
     """Nonresponse factors on a panel: computed on the rows in scope, applied
     to the case.
 
@@ -184,7 +183,8 @@ def _adjust_panel(
     earlier wave but none in scope is a nonrespondent (attriters have no
     row to filter on), and the factor is written to every row of the case so
     the longitudinal weight is constant within it. Returns the new weights
-    (n x k), the encoded status of the real rows and the scope mask.
+    (n x k), the encoded status of the real rows, the scope mask, the cells and
+    whether the missing-in-scope rule applied.
     """
     case_id, wave = design.case_id, design.wave
     assert case_id is not None and wave is not None  # noqa: S101 — caller checked
@@ -209,15 +209,6 @@ def _adjust_panel(
             .join(in_scope_cases, on=case_id, how="anti")
             .sort(wave)
             .unique(subset=[case_id], keep="last", maintain_order=True)
-        )
-    else:
-        warnings.warn(
-            "adjust on a panel: `where` is not a set of waves, so cases with earlier "
-            "rows but none in scope are NOT added as nonrespondents (the "
-            "missing-in-scope rule was skipped). Scope one or more whole waves, e.g. "
-            f"where=col({wave!r}) == 2, to apply it.",
-            UserWarning,
-            stacklevel=4,
         )
 
     n_virtual = virtual.height
@@ -246,7 +237,7 @@ def _adjust_panel(
     )
     joined = df.select(case_id).join(per_case, on=case_id, how="left", maintain_order="left")
     case_factor = joined.select(fac_names).fill_null(1.0).to_numpy().astype(np.float64)
-    return old[:n] * case_factor, resp_codes, scope
+    return old[:n] * case_factor, resp_codes, scope, spec, wave_subset
 
 
 def adjust(
@@ -297,8 +288,9 @@ def adjust(
     wgt_cols = [wgt, *rep_cols]
 
     keep_mask: np.ndarray
+    rule_applied = True
     if design.is_panel:
-        new_wgts, resp_codes, scope = _adjust_panel(
+        new_wgts, resp_codes, scope, spec, rule_applied = _adjust_panel(
             sample,
             df,
             design,
@@ -325,6 +317,18 @@ def adjust(
         # mask from raw strings was case-sensitive while the encoder is not,
         # which could silently empty the sample.
         keep_mask = resp_codes == 0
+
+    # Only rows in an adjustment class leave: a row in none (a null cell, or
+    # outside `where`) was not adjusted, so it keeps its weight and stays,
+    # whatever its status -- dropping it would drop its weight with it.
+    in_class = (
+        np.ones(df.height, dtype=bool) if spec.in_scope is None else spec.in_scope[: df.height]
+    )
+    keep_mask = keep_mask | ~in_class
+    null_rows = np.zeros(df.height, dtype=bool)
+    for m in spec.nulls.values():
+        null_rows |= m[: df.height]
+    n_nonresp_kept = int((null_rows & (resp_codes != 0)).sum())
 
     # New columns, the design, and the row drop all go through the Sample's
     # own tracking: mutate registers the columns, update_design records the
@@ -393,4 +397,32 @@ def adjust(
             )
             sample._design = original_design
 
+    record_null_cells(
+        sample,
+        spec,
+        where=ctx,
+        prev_wgt=wgt,
+        wgt_name=wgt_name,
+        n_rows=df.height,
+        outcome=(
+            f"{wgt_name!r} keeps their {wgt!r} value and they stay in the sample whatever "
+            f"their response status ({n_nonresp_kept} of them not respondents)"
+        ),
+        extra={"nonrespondents_kept": n_nonresp_kept},
+    )
+    if not rule_applied:
+        wave = design.wave
+        sample.warn(
+            code=WarnCode.PANEL_SCOPE_NOT_WAVES,
+            title="Missing-in-scope rule skipped",
+            detail=(
+                "adjust on a panel: `where` is not a set of waves, so cases with earlier "
+                "rows but none in scope are NOT added as nonrespondents (the "
+                "missing-in-scope rule was skipped)."
+            ),
+            where=ctx,
+            level=Severity.WARNING,
+            param="where",
+            hint=f"Scope one or more whole waves, e.g. where=col({wave!r}) == 2, to apply it.",
+        )
     return sample

@@ -2389,7 +2389,9 @@ def _rederive(sample: Sample) -> None:
         sample._singleton_result = None
         from svy.core.design_parts import warn_singleton_cleared
 
-        warn_singleton_cleared(spec, reason, facet._key_values(now, index) if now else [])
+        warn_singleton_cleared(
+            spec, reason, facet._key_values(now, index) if now else [], sample=sample
+        )
         return
 
     keys = set(handled)

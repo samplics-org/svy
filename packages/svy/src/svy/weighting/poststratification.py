@@ -28,6 +28,8 @@ from svy.weighting._engine import (
     CellSpec,
     build_cells,
     materialize_cells,
+    record_null_cells,
+    record_trim_cycle,
     resolve_targets,
     scale_to_targets,
 )
@@ -134,6 +136,22 @@ def poststratify(
     )
 
     ps_arr = scale_to_targets(wgt_arr.reshape(-1, 1), spec, targets)[:, 0]
+
+    # The trim cycle runs before anything is written, so a strict failure
+    # leaves the sample as it was.
+    cycle_ok = True
+    if trimming is not None:
+        ps_arr, cycle_ok = _trim_cycle(ps_arr, spec, targets, trimming)
+        if strict and not cycle_ok:
+            raise WeightingError.not_converged(
+                where=ctx,
+                method="poststratify",
+                what="Trim-poststratify cycle",
+                max_iter=trimming.max_iter,
+                got={"cycles": trimming.max_iter},
+                hint="Increase TrimConfig.max_iter or use a less restrictive trim threshold.",
+            )
+
     df = df.with_columns(pl.Series(name=wgt_name, values=ps_arr))
 
     if update_design_wgts:
@@ -171,17 +189,7 @@ def poststratify(
 
     sample._data = df
 
-    if trimming is not None:
-        cycled, ok = _trim_cycle(ps_arr, spec, targets, trimming)
-        if strict and not ok:
-            raise WeightingError.not_converged(
-                where=ctx,
-                method="poststratify",
-                what="Trim-poststratify cycle",
-                max_iter=trimming.max_iter,
-                got={"cycles": trimming.max_iter},
-                hint="Increase TrimConfig.max_iter or use a less restrictive trim threshold.",
-            )
-        sample._data = df.with_columns(pl.Series(name=wgt_name, values=cycled))
-
+    record_null_cells(sample, spec, where=ctx, prev_wgt=wgt, wgt_name=wgt_name)
+    if not cycle_ok:
+        record_trim_cycle(sample, where=ctx, what="Trim-poststratify cycle", trimming=trimming)
     return sample

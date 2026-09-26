@@ -19,7 +19,7 @@ import pytest
 
 from numpy.testing import assert_allclose
 
-from svy import Design, Sample
+from svy import Design, Sample, SvyUserWarning
 from svy.core.design import PopSize, WgtAdjustment
 from svy.core.repwgts import BootstrapWgts, BrrWgts, JackknifeWgts, SdrWgts
 from svy.errors import MethodError
@@ -34,9 +34,12 @@ GREG_CONTROLS = {"one": 6194.0, "api99": 3914069.0}
 
 
 @contextmanager
-def no_warnings():
+def no_warnings(allow: str | None = None):
+    """Every warning is an error, except svy's finding ``allow`` (by code)."""
     with warnings.catch_warnings():
         warnings.simplefilter("error")
+        if allow is not None:
+            warnings.filterwarnings("ignore", message=rf"\[{allow}\]", category=SvyUserWarning)
         yield
 
 
@@ -706,9 +709,14 @@ def test_unknown_weight_resets_replicates_with_one_warning(small):
 def test_unknown_weight_with_replicates_passed_keeps_them(small):
     rw = BrrWgts(prefix="r", n_reps=4)
     s = Sample(small, Design(wgt="w", rep_wgts=rw))
-    with no_warnings():
+    # No replicate-reset warning; the Taylor-on-replicates finding is recorded
+    # and raised once.
+    with pytest.warns(SvyUserWarning) as rec:
         s.update_design(wgt="other_w", rep_wgts=rw)
         _se(s, "y")
+    assert [str(r.message).split("]")[0] for r in rec] == ["[TAYLOR_WITHOUT_DESIGN"]
+    assert rec[0].filename == __file__
+    assert len(s.warnings.list(code="TAYLOR_WITHOUT_DESIGN")) == 1
     assert s.design.rep_wgts.wgt == "other_w"
     assert s.design.rep_wgts.prefix == "r"
 
@@ -927,12 +935,14 @@ def test_replicate_se_after_restore(small):
     se_w = _se(s, "y")
     s2 = s.weighting.poststratify({"a": 30.0, "b": 20.0}, cells="g", wgt_name="ps")
     se_ps = _se(s2, "y")
-    with no_warnings():
+    # Each update is a new state, so the Taylor-on-replicates finding is new too.
+    with no_warnings(allow="TAYLOR_WITHOUT_DESIGN"):
         s2.update_design(wgt="w")
         assert_allclose(_se(s2, "y"), se_w)
         s2.update_design(wgt="ps")
         assert_allclose(_se(s2, "y"), se_ps)
     assert s2.design.rep_wgts.prefix == "ps"
+    assert s2.warnings.list(code="TAYLOR_WITHOUT_DESIGN")
 
 
 def test_combine_panel_replicates_pair_with_the_combined_weight():
@@ -1099,7 +1109,7 @@ def test_replicates_only_design_unknown_weight(small):
         s.update_design(wgt="other_w")
     assert len(caught) == 1
     assert s.design.rep_wgts is None
-    with no_warnings():
+    with no_warnings(allow="TAYLOR_WITHOUT_DESIGN"):
         se_other = _se(s, "y")
         s.update_design(wgt="w")
         assert s.design.rep_wgts.wgt == "w"

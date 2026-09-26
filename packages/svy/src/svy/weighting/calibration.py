@@ -53,7 +53,14 @@ from svy.core.types import Category, Number
 from svy.core.warnings import Severity, WarnCode
 from svy.errors import DimensionError, WeightingError
 from svy.weighting._calibration_utils import _expand_term, _match_term_targets
-from svy.weighting._engine import AUX_PREFIX, _cells_to_cols, _where_mask, build_cells
+from svy.weighting._engine import (
+    AUX_PREFIX,
+    _cells_to_cols,
+    _where_mask,
+    build_cells,
+    record_null_rows,
+    record_trim_cycle,
+)
 from svy.weighting._keys import (
     LevelIndex,
     check_na_option,
@@ -62,7 +69,7 @@ from svy.weighting._keys import (
     template_levels,
 )
 from svy.weighting.raking import _trim_constraints_satisfied
-from svy.weighting.trimming import _build_domain_array
+from svy.weighting.trimming import _domain_masks
 from svy.weighting.types import TrimConfig, resolve_threshold
 
 
@@ -210,6 +217,9 @@ def _calibrate_scoped(
 
     sample._data = df.with_columns(new_cols)
     sample._design = out._design
+    sample._warnings.extend(
+        w for w in out._warnings if (w.where or "").startswith("Sample.weighting.calibrate")
+    )
     return sample
 
 
@@ -363,18 +373,62 @@ def calibrate(
     )
 
 
+#: Relative tolerance on X'w against the controls (absolute when a control is 0).
+FIT_TOL = 1e-4
+
+
+def _fit_error(new_w: np.ndarray, X: np.ndarray, totals: np.ndarray) -> tuple[float, np.ndarray]:
+    """Largest relative miss of X'w against ``totals``, and X'w itself."""
+    achieved = X.T @ new_w
+    denom = np.abs(totals)
+    denom = np.where(denom > 1e-10, denom, 1.0)
+    return float(np.max(np.abs(achieved - totals) / denom)), achieved
+
+
 def _check_calibration_fit(
     new_w: np.ndarray,
     X: np.ndarray,
     totals: np.ndarray,
-    tol: float = 1e-4,
+    tol: float = FIT_TOL,
 ) -> bool:
     """Return True if calibrated weights satisfy X'w ≈ totals within tol."""
-    achieved = X.T @ new_w
-    denom = np.abs(totals)
-    denom = np.where(denom > 1e-10, denom, 1.0)
-    max_rel_err = float(np.max(np.abs(achieved - totals) / denom))
-    return max_rel_err <= tol
+    return _fit_error(new_w, X, totals)[0] <= tol
+
+
+def _controls_missed(
+    new_w: np.ndarray,
+    X: np.ndarray,
+    *,
+    totals: np.ndarray,
+    domains: list[Any],
+    domain_indices: np.ndarray,
+    controls_by_domain: dict[int, list[float]],
+) -> dict[str, Any] | None:
+    """Targets and achieved totals wherever calibration missed, or None."""
+    if not domains:
+        err, achieved = _fit_error(new_w, X, totals)
+        if err <= FIT_TOL:
+            return None
+        return {
+            "expected": [float(t) for t in totals],
+            "got": [float(a) for a in achieved],
+            "max_rel_error": err,
+            "domains": [],
+        }
+    expected: dict[Any, list[float]] = {}
+    got: dict[Any, list[float]] = {}
+    worst = 0.0
+    for d_idx, domain in enumerate(domains):
+        mask = domain_indices == d_idx
+        d_totals = np.array(controls_by_domain[d_idx], dtype=np.float64)
+        err, achieved = _fit_error(new_w[mask], X[mask], d_totals)
+        if err > FIT_TOL:
+            expected[domain] = [float(t) for t in d_totals]
+            got[domain] = [float(a) for a in achieved]
+            worst = max(worst, err)
+    if not got:
+        return None
+    return {"expected": expected, "got": got, "max_rel_error": worst, "domains": list(got)}
 
 
 def calibrate_matrix(
@@ -522,20 +576,24 @@ def calibrate_matrix(
             w.reshape(-1, 1), X, domain_indices, controls_dict_main, scale_arr, False
         )[:, 0]
 
+    # The solve can return weights that miss the controls (a singular or
+    # ill-conditioned system, or inconsistent controls). A trimming cycle
+    # checks the fit itself; otherwise it is checked here, before anything is
+    # written, so strict=True leaves the sample untouched.
+    missed = None
+    if trimming is None or weights_only:
+        missed = _controls_missed(
+            new_w,
+            X,
+            totals=totals_arr,
+            domains=domains,
+            domain_indices=domain_indices,
+            controls_by_domain=controls_dict_main,
+        )
+        if missed is not None and strict:
+            raise WeightingError.calibration_not_met(where=where, **missed)
+
     if weights_only:
-        # No cycling for weights_only mode — just check fit and return
-        if strict:
-            if by_cols is None:
-                if not _check_calibration_fit(new_w, X, totals_arr):
-                    raise WeightingError.calibration_not_met(where=where)
-            else:
-                for d_idx, domain in enumerate(domains):
-                    mask = domain_indices == d_idx
-                    d_totals = np.array(controls_dict_main[d_idx], dtype=np.float64)
-                    if not _check_calibration_fit(new_w[mask], X[mask], d_totals):
-                        raise WeightingError.calibration_not_met(
-                            where=where, domain=domain, has_domain=True
-                        )
         return new_w
 
     existing_cols = set(df.columns)
@@ -545,6 +603,8 @@ def calibrate_matrix(
             where=where, method="calibrate", wgt_name=wgt_name, existing=existing_cols
         )
 
+    cycle_ok = True
+    null_trim_by: dict[str, np.ndarray] = {}
     # ── Trim-calibrate cycle ──────────────────────────────────────────────
     # Runs on arrays BEFORE anything is written to the sample, so a strict
     # failure genuinely leaves the data and design untouched.
@@ -562,8 +622,7 @@ def calibrate_matrix(
                     available=list(df.columns),
                     hint="All trimming by= columns must exist in the data.",
                 )
-            _trim_dom_arr = _build_domain_array(df, t_by_cols)
-            _group_masks = [(str(d), _trim_dom_arr == d) for d in np.unique(_trim_dom_arr)]
+            _group_masks, null_trim_by = _domain_masks(df, t_by_cols)
         else:
             _group_masks = [("(global)", np.ones(len(new_w), dtype=bool))]
 
@@ -664,7 +723,8 @@ def calibrate_matrix(
                     _calib_converged = _cycle_fit_ok(_current_w)
                     break
 
-        if strict and not (_calib_converged and _trim_ok):
+        cycle_ok = _calib_converged and _trim_ok
+        if strict and not cycle_ok:
             raise WeightingError.not_converged(
                 where=where,
                 method="calibrate",
@@ -747,4 +807,30 @@ def calibrate_matrix(
                 )
 
     sample._data = df
+    record_null_rows(
+        sample,
+        null_trim_by,
+        where=where,
+        param="trimming.by",
+        prev_wgt=wgt_name,
+        wgt_name=wgt_name,
+        action="are in no trimming domain",
+        outcome="they are calibrated but not trimmed",
+    )
+    if not cycle_ok:
+        record_trim_cycle(sample, where=where, what="Trim-calibrate cycle", trimming=trimming)
+    if missed is not None:
+        err = WeightingError.calibration_not_met(where=where, **missed)
+        sample.warn(
+            code=err.code,
+            title=err.title,
+            detail=err.detail.replace(" Pass strict=False to store the approximate solution.", "")
+            + f" {wgt_name!r} holds the approximate solution.",
+            where=where,
+            param=err.param,
+            expected=err.expected,
+            got=err.got,
+            hint=err.hint,
+            extra=err.extra,
+        )
     return sample

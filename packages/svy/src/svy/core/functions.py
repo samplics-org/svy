@@ -9,9 +9,8 @@ for the method-vs-function test and the per-subpackage functions.py convention.
 from __future__ import annotations
 
 import logging
-import warnings
 
-from typing import Literal, Sequence
+from typing import Any, Literal, Sequence
 
 import msgspec
 import polars as pl
@@ -305,27 +304,38 @@ def _merge_metadata(combined: Sample, samples: Sequence[Sample]) -> None:
                     combined.meta.set(name, meta.with_value_labels(known))
                 else:
                     combined.meta.set(name, meta.clone(scheme_ref=None))
-        warnings.warn(
-            "Inputs carry different labelling catalogs; scheme references were "
-            "resolved to direct value labels on the combined sample.",
-            UserWarning,
-            stacklevel=3,
+        combined.warn(
+            code="COMBINE_CATALOGS_RESOLVED",
+            title="Labelling catalogs resolved",
+            detail=(
+                "Inputs carry different labelling catalogs; scheme references were "
+                "resolved to direct value labels on the combined sample."
+            ),
+            where=_CTX,
         )
 
     if conflicted:
-        warnings.warn(
-            f"Value labels conflict across inputs for {sorted(conflicted)}; the coding "
-            "changed between waves. Labels for these variables were DROPPED — recode "
-            "before combining.",
-            UserWarning,
-            stacklevel=3,
+        combined.warn(
+            code="COMBINE_LABELS_CONFLICT",
+            title="Value labels dropped",
+            detail=(
+                f"Value labels conflict across inputs for {sorted(conflicted)}; the coding "
+                "changed between waves. Labels for these variables were DROPPED — recode "
+                "before combining."
+            ),
+            where=_CTX,
+            got=sorted(conflicted),
         )
     if mtype_conflicts:
-        warnings.warn(
-            f"Measurement types disagree across inputs for {sorted(mtype_conflicts)}; "
-            "the first sample's type was kept.",
-            UserWarning,
-            stacklevel=3,
+        combined.warn(
+            code="COMBINE_MTYPE_CONFLICT",
+            title="Measurement types disagree",
+            detail=(
+                f"Measurement types disagree across inputs for {sorted(mtype_conflicts)}; "
+                "the first sample's type was kept."
+            ),
+            where=_CTX,
+            got=sorted(mtype_conflicts),
         )
 
 
@@ -420,7 +430,9 @@ def _check_panel_ids(frames: Sequence[pl.DataFrame], case_id: str) -> None:
 
 
 def _check_panel_units(
-    frames: Sequence[pl.DataFrame], canonical: dict[str, tuple[str, ...]]
+    frames: Sequence[pl.DataFrame],
+    canonical: dict[str, tuple[str, ...]],
+    found: list[dict[str, Any]],
 ) -> None:
     """Later waves' (stratum, psu) set must be a subset of wave 1's; a PSU
     entirely lost is a real panel event and warns."""
@@ -445,11 +457,16 @@ def _check_panel_units(
             )
         lost = sorted(map(str, first_set - units))
         if lost:
-            warnings.warn(
-                f"{len(lost)} design unit(s) {unit_cols} of sample 1 have no row in "
-                f"sample {j}: {lost[:10]}{'...' if len(lost) > 10 else ''}",
-                UserWarning,
-                stacklevel=3,
+            found.append(
+                dict(
+                    code="PANEL_UNITS_LOST",
+                    title="Design units lost between waves",
+                    detail=(
+                        f"{len(lost)} design unit(s) {unit_cols} of sample 1 have no row in "
+                        f"sample {j}: {lost[:10]}{'...' if len(lost) > 10 else ''}"
+                    ),
+                    got={"sample": j, "n_units": len(lost)},
+                )
             )
 
 
@@ -470,7 +487,9 @@ def _check_constant_within_case(
         )
 
 
-def _report_overlap(stacked: pl.DataFrame, case_id: str, wave_name: str) -> None:
+def _report_overlap(
+    stacked: pl.DataFrame, case_id: str, wave_name: str, found: list[dict[str, Any]]
+) -> None:
     for ov in wave_overlap(stacked, case_id, wave_name):
         log.info("panel overlap %s", ov)
         if ov.common == 0:
@@ -489,11 +508,16 @@ def _report_overlap(stacked: pl.DataFrame, case_id: str, wave_name: str) -> None
             )
         n_prev = ov.common + ov.lost
         if ov.common < 0.5 * n_prev:
-            warnings.warn(
-                f"Small panel overlap between wave {ov.prev!r} and wave {ov.wave!r}: "
-                f"{ov.common} of {n_prev} cases continue ({ov.lost} lost, {ov.new} new).",
-                UserWarning,
-                stacklevel=3,
+            found.append(
+                dict(
+                    code="PANEL_SMALL_OVERLAP",
+                    title="Small panel overlap",
+                    detail=(
+                        f"Small panel overlap between wave {ov.prev!r} and wave {ov.wave!r}: "
+                        f"{ov.common} of {n_prev} cases continue ({ov.lost} lost, {ov.new} new)."
+                    ),
+                    got={"common": ov.common, "lost": ov.lost, "new": ov.new},
+                )
             )
 
 
@@ -585,6 +609,8 @@ def combine_samples(
         weight columns may be named differently; the other design roles must
         share one name per role.
     """
+    # Findings wait for the combined sample, so they are recorded on it.
+    found: list[dict[str, Any]] = []
     samples = list(samples)
     k = len(samples)
     if k < 2:
@@ -738,7 +764,13 @@ def combine_samples(
             "the original columns are untouched."
         )
         if on_mixed_design == "warn":
-            warnings.warn(message, UserWarning, stacklevel=2)
+            found.append(
+                dict(
+                    code="COMBINE_MIXED_DESIGN",
+                    title="Waves declare different designs",
+                    detail=message,
+                )
+            )
         else:
             log.info(message)
 
@@ -793,17 +825,22 @@ def combine_samples(
     all_cols = list(dtypes)
     partial = sorted(c for c in all_cols if any(c not in f.columns for f in frames))
     if partial:
-        warnings.warn(
-            f"{len(partial)} column(s) are missing from some inputs and were "
-            f"null-filled: {partial[:10]}{'...' if len(partial) > 10 else ''}",
-            UserWarning,
-            stacklevel=2,
+        found.append(
+            dict(
+                code="COMBINE_COLUMNS_NULL_FILLED",
+                title="Columns null-filled",
+                detail=(
+                    f"{len(partial)} column(s) are missing from some inputs and were "
+                    f"null-filled: {partial[:10]}{'...' if len(partial) > 10 else ''}"
+                ),
+                got=partial,
+            )
         )
 
     if kind == "panel":
         assert case_id is not None  # noqa: S101 — _resolve_case_id guarantees it
         _check_panel_ids(frames, case_id)
-        _check_panel_units(frames, canonical)
+        _check_panel_units(frames, canonical, found)
 
     stacked = pl.concat(frames, how="diagonal")
 
@@ -820,7 +857,7 @@ def combine_samples(
             _check_constant_within_case(
                 stacked, case_id, rep_wgts.columns, what="replicate weight columns"
             )
-        _report_overlap(stacked, case_id, wave_name)
+        _report_overlap(stacked, case_id, wave_name, found)
         new_stratum: tuple[str, ...] | None = canonical["stratum"] or None
     else:
         new_stratum = (wave_name, *canonical["stratum"])
@@ -854,6 +891,8 @@ def combine_samples(
             str(n) if n else f"s{i}" for i, n in enumerate(input_names, start=1)
         )
     _merge_metadata(combined, samples)
+    for f in found:
+        combined.warn(where=_CTX, **f)
 
     combined.meta.set_type(wave_name, MeasurementType.ORDINAL)
     existing_wave_labels = combined.meta.get(wave_name)
@@ -871,7 +910,7 @@ def combine_samples(
                 hint="Drop wave_labels to keep the existing labels, or relabel before combining.",
             )
         combined.meta.set_value_labels(wave_name, label_map)
-        _warn_if_numeric_labels_unordered(wave_labels)
+        _warn_if_numeric_labels_unordered(wave_labels, combined)
     elif created:
         combined.meta.set_value_labels(
             wave_name, {c: f"wave {i}" for i, c in enumerate(codes, start=1)}
@@ -880,15 +919,20 @@ def combine_samples(
     return combined
 
 
-def _warn_if_numeric_labels_unordered(wave_labels: Sequence[str]) -> None:
+def _warn_if_numeric_labels_unordered(wave_labels: Sequence[str], combined: Sample) -> None:
     try:
         nums = [float(x) for x in wave_labels]
     except (TypeError, ValueError):
         return
     if any(nums[i] >= nums[i + 1] for i in range(len(nums) - 1)):
-        warnings.warn(
-            f"wave_labels look numeric but are not increasing: {list(wave_labels)}. "
-            "Caller order of `samples` is the time order — check the order of your inputs.",
-            UserWarning,
-            stacklevel=3,
+        combined.warn(
+            code="WAVE_LABELS_UNORDERED",
+            title="Wave labels out of order",
+            detail=(
+                f"wave_labels look numeric but are not increasing: {list(wave_labels)}. "
+                "Caller order of `samples` is the time order — check the order of your inputs."
+            ),
+            where=_CTX,
+            param="wave_labels",
+            got=list(wave_labels),
         )

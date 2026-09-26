@@ -451,7 +451,10 @@ def test_changes_to_the_singletons_clear_the_rule_at_the_next_use(trigger, inpla
         design = r.design
     assert len(rec) == 1
     msg = str(rec[0].message)
-    assert msg.startswith("singleton handling (collapse) cleared: ")
+    assert msg.startswith(
+        "[SINGLETON_RULE_CLEARED] Singleton handling cleared: "
+        "singleton handling (collapse) cleared: "
+    )
     assert reason in msg
     assert f"singletons now: {now}." in msg
     assert rec[0].filename == __file__

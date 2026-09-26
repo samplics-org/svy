@@ -19,7 +19,8 @@ sum(result.values()) == n_total exactly for proportional / neyman.
 from __future__ import annotations
 
 import math
-import warnings
+
+from svy.core.warnings import warn_no_sample
 
 
 # ---------------------------------------------------------------------------
@@ -51,10 +52,9 @@ def _apply_population_caps(
             out[g] = group_sizes[g]
         receivers = [g for g in out if out[g] < group_sizes[g]]
         if not receivers:
-            warnings.warn(
+            warn_no_sample(
                 f"{label}: total allocation reduced by {surplus} because every "
-                "group is capped at its frame size.",
-                stacklevel=4,
+                "group is capped at its frame size."
             )
             return out
         m = np.array([max(measure.get(g, 0.0), 0.0) for g in receivers], dtype=np.float64)
@@ -96,10 +96,9 @@ def _proportional_allocation(
     if n_total <= 0:
         raise ValueError(f"proportional_allocation: n_total must be > 0, got {n_total}.")
     if n_total > total_pop:
-        warnings.warn(
+        warn_no_sample(
             f"proportional_allocation: n_total={n_total} exceeds the total frame "
-            f"size of {total_pop}. Capping at frame size.",
-            stacklevel=3,
+            f"size of {total_pop}. Capping at frame size."
         )
         n_total = total_pop
 
@@ -115,10 +114,9 @@ def _proportional_allocation(
     remainder = n_total - int(floored.sum())
     if remainder < 0:
         # min_n forced over-allocation -- scale back
-        warnings.warn(
+        warn_no_sample(
             f"proportional_allocation: min_n={min_n} floors exceed n_total="
-            f"{n_total}; min_n is not honored and allocation is rescaled.",
-            stacklevel=3,
+            f"{n_total}; min_n is not honored and allocation is rescaled."
         )
         floored = np.floor(raw * (n_total / raw.sum()))
         remainder = n_total - int(floored.sum())
@@ -173,10 +171,9 @@ def _neyman_allocation(
         raise ValueError(f"neyman_allocation: n_total must be > 0, got {n_total}.")
     total_pop = sum(group_sizes.values())
     if cap_at_population and n_total > total_pop:
-        warnings.warn(
+        warn_no_sample(
             f"neyman_allocation: n_total={n_total} exceeds the total frame "
-            f"size of {total_pop}. Capping at frame size.",
-            stacklevel=3,
+            f"size of {total_pop}. Capping at frame size."
         )
         n_total = total_pop
 
@@ -197,10 +194,9 @@ def _neyman_allocation(
     remainder = n_total - int(floored.sum())
     if remainder < 0:
         # min_n forced over-allocation -- scale back (mirror proportional)
-        warnings.warn(
+        warn_no_sample(
             f"neyman_allocation: min_n={min_n} floors exceed n_total="
-            f"{n_total}; min_n is not honored and allocation is rescaled.",
-            stacklevel=3,
+            f"{n_total}; min_n is not honored and allocation is rescaled."
         )
         floored = np.floor(raw * (n_total / raw.sum()))
         remainder = n_total - int(floored.sum())

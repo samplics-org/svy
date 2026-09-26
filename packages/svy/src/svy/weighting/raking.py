@@ -24,6 +24,7 @@ except ImportError:  # pragma: no cover
 
 from svy.core.design import WgtAdjustment
 from svy.core.types import Category, ControlsType
+from svy.core.warnings import Severity, WarnCode
 from svy.errors import DimensionError, MethodError, WeightingError
 from svy.weighting._engine import CELLS_PREFIX, _where_mask
 from svy.weighting._keys import (
@@ -169,20 +170,14 @@ def _max_margin_error(
     return max_err
 
 
-def _check_and_warn_convergence(
+def _converged(
     w: np.ndarray,
     margin_indices: list[np.ndarray],
     margin_targets: list[np.ndarray],
     tol: float,
-    max_iter: int,
 ) -> bool:
-    """Return True if converged, False if any margin is unsatisfied.
-    Prints a warning on non-convergence.
-    """
-    if _max_margin_error(w, margin_indices, margin_targets) <= tol:
-        return True
-    print(f"Warning: Raking did not converge after {max_iter} iterations")
-    return False
+    """True when every margin is met within ``tol``."""
+    return _max_margin_error(w, margin_indices, margin_targets) <= tol
 
 
 def rake(
@@ -361,9 +356,7 @@ def rake(
         )
 
         raked_w = raked_result[:, 0]
-        rake_converged = _check_and_warn_convergence(
-            raked_w, margin_indices, margin_targets, tol, max_iter
-        )
+        rake_converged = _converged(raked_w, margin_indices, margin_targets, tol)
 
         if trimming is None:
             if display_iter:
@@ -425,9 +418,7 @@ def rake(
                 max_iter,
             )
             current_w = final_result[:, 0]
-            rake_converged = _check_and_warn_convergence(
-                current_w, margin_indices, margin_targets, tol, max_iter
-            )
+            rake_converged = _converged(current_w, margin_indices, margin_targets, tol)
             # Re-check trim after final rake — rake could push weights back above threshold
             trim_unchanged = _trim_constraints_satisfied(current_w, upper_val, lower_val, tol)
             if display_iter:
@@ -452,23 +443,26 @@ def rake(
                 max_iter,
             )
             current_w = final_result[:, 0]
-            rake_converged = _check_and_warn_convergence(
-                current_w, margin_indices, margin_targets, tol, max_iter
-            )
+            rake_converged = _converged(current_w, margin_indices, margin_targets, tol)
 
     raked_w = current_w
 
     # ── Convergence guard ─────────────────────────────────────────────────
-    if (not rake_converged or (trimming is not None and not trim_unchanged)) and strict:
+    converged = rake_converged and (trimming is None or trim_unchanged)
+    what = "Trim-rake cycle" if trimming is not None else "Raking"
+    miss = {
+        "max_iter": max_iter,
+        "max_margin_error": _max_margin_error(raked_w, margin_indices, margin_targets),
+    }
+    if trimming is not None:
+        miss["trim_bounds_met"] = bool(trim_unchanged)
+    if not converged and strict:
         raise WeightingError.not_converged(
             where=ctx,
             method="rake",
-            what="Trim-rake cycle" if trimming is not None else "Raking",
+            what=what,
             max_iter=max_iter,
-            got={
-                "max_iter": max_iter,
-                "max_margin_error": _max_margin_error(raked_w, margin_indices, margin_targets),
-            },
+            got=miss,
             expected={"tol": tol},
             hint=f"Increase max_iter (now {max_iter}) or relax tol (now {tol:g}).",
         )
@@ -554,4 +548,20 @@ def rake(
                 )
 
     sample._data = df
+    if not converged:
+        sample.warn(
+            code=WarnCode.MAX_ITER_REACHED,
+            title=f"{what} did not converge",
+            detail=(
+                f"{what} did not converge after {max_iter} iterations (max margin error "
+                f"{miss['max_margin_error']:.3g}, tol {tol:g}); {wgt_name!r} holds the "
+                "last iterate."
+            ),
+            where=ctx,
+            level=Severity.WARNING,
+            param="max_iter",
+            expected={"tol": tol},
+            got=miss,
+            hint=f"Increase max_iter (now {max_iter}) or relax tol (now {tol:g}).",
+        )
     return sample

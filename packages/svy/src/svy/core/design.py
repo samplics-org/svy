@@ -5,7 +5,6 @@ import datetime as dt
 import logging
 import os
 import sys
-import warnings
 
 from typing import (
     Any,
@@ -150,12 +149,18 @@ def _user_stacklevel() -> int:
 
 
 def _warn_rep_wgts_reset(rep: RepWgts, new_wgt: str | None) -> None:
-    warnings.warn(
-        f"Replicate weights '{rep.prefix}' go with weight {rep.wgt!r}, not {new_wgt!r}, "
-        "so they were removed from the design and variance falls back to Taylor "
-        f"linearization. Pass rep_wgts= with the update to keep them with {new_wgt!r}.",
-        UserWarning,
-        stacklevel=_user_stacklevel(),
+    from svy.core.warnings import emit_finding
+
+    emit_finding(
+        code="REP_WGTS_RESET",
+        title="Replicate weights removed",
+        detail=(
+            f"Replicate weights '{rep.prefix}' go with weight {rep.wgt!r}, not {new_wgt!r}, "
+            "so they were removed from the design and variance falls back to Taylor "
+            f"linearization. Pass rep_wgts= with the update to keep them with {new_wgt!r}."
+        ),
+        where="Design.update",
+        param="rep_wgts",
     )
 
 

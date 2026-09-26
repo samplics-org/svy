@@ -47,10 +47,8 @@ restores them from the design in the history that produced X.
 
 from __future__ import annotations
 
-import warnings
-
 from collections.abc import Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Iterable, Iterator, Mapping
 
@@ -551,12 +549,19 @@ def singleton_cleared_message(spec: SingletonSpec, reason: str, now: Sequence[An
     return msg + ". Apply a singleton rule again (sample.singleton.*) if needed."
 
 
-def warn_singleton_cleared(spec: SingletonSpec, reason: str, now: Sequence[Any] | None) -> None:
-    from svy.core.design import _user_stacklevel
+def warn_singleton_cleared(
+    spec: SingletonSpec, reason: str, now: Sequence[Any] | None, *, sample: Any = None
+) -> None:
+    from svy.core.warnings import emit_finding, findings_to
 
-    warnings.warn(
-        singleton_cleared_message(spec, reason, now), UserWarning, stacklevel=_user_stacklevel()
-    )
+    with findings_to(sample) if sample is not None else nullcontext():
+        emit_finding(
+            code="SINGLETON_RULE_CLEARED",
+            title="Singleton handling cleared",
+            detail=singleton_cleared_message(spec, reason, now),
+            where="Sample.singleton",
+            param="singleton",
+        )
 
 
 class SingletonPart(DesignPart):

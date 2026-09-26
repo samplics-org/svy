@@ -27,8 +27,6 @@ sample is silently wrong.
 
 from __future__ import annotations
 
-import warnings
-
 from typing import TYPE_CHECKING, Any
 
 import msgspec
@@ -37,13 +35,17 @@ import polars as pl
 
 from svy.core.design import WgtAdjustment
 from svy.core.types import DomainScalarMap
+from svy.core.warnings import Severity, WarnCode
 from svy.errors import WeightingError
+from svy.errors.weighting_errors import show
 from svy.weighting._engine import (
     CellSpec,
     _cells_to_cols,
     _is_mapping,
     build_cells,
     materialize_cells,
+    record_null_cells,
+    record_trim_cycle,
     scale_to_targets,
 )
 from svy.weighting._keys import LevelIndex, match_keys, sort_levels, target_vector
@@ -110,27 +112,43 @@ def _standardize_targets(
         dom_total[dom] = dom_total.get(dom, 0.0) + float(cell_sums[code])
         dom_share[dom] = dom_share.get(dom, 0.0) + float(share_of[comp])
 
-    partial = sorted(
-        {dom for dom in dom_total if dom_share[dom] < float(share_vec.sum()) - 1e-12}, key=str
+    # R's postStratify(partial=TRUE): a domain missing a level is renormalized
+    # over the levels it has rather than refusing the whole adjustment.
+    partial = sort_levels(
+        dom[0] if len(dom) == 1 else dom
+        for dom in dom_total
+        if dom_share[dom] < float(share_vec.sum()) - 1e-12
     )
-    if partial:
-        # R's postStratify(partial=TRUE): renormalize over the levels a domain
-        # actually has rather than refusing the whole adjustment.
-        warnings.warn(
-            f"{len(partial)} domain(s) do not observe every level of "
-            f"{'/'.join(spec.cols or [])}: {partial[:5]}"
-            f"{'...' if len(partial) > 5 else ''}. Shares were renormalized over "
-            "the levels present, so these domains are standardized to a different "
-            "population than the others.",
-            UserWarning,
-            stacklevel=3,
-        )
 
     targets = np.empty(spec.n_cells, dtype=np.float64)
     for code, (dom, comp) in enumerate(split):
         denom = dom_share[dom]
         targets[code] = 0.0 if denom <= 0 else (share_of[comp] / denom) * dom_total[dom]
-    return targets
+    return targets, partial
+
+
+def _record_partial(
+    sample: Sample, partial: list[Any], by_cols: list[str], cells_cols: list[str]
+) -> None:
+    if not partial:
+        return
+    shown = ", ".join(show(d) for d in partial[:5]) + (", ..." if len(partial) > 5 else "")
+    sample.warn(
+        code=WarnCode.DOMAIN_LEVELS_PARTIAL,
+        title="Domains missing some levels",
+        detail=(
+            f"{len(partial)} domain(s) of {'/'.join(by_cols)} do not observe every level "
+            f"of {'/'.join(cells_cols)}: {shown}. Shares were renormalized over "
+            "the levels present, so these domains are standardized to a different "
+            "population than the others."
+        ),
+        where=_CTX,
+        level=Severity.WARNING,
+        param="by",
+        got=list(partial),
+        hint="Collapse sparse levels of the composition axis, or accept that these "
+        "domains follow a different standard.",
+    )
 
 
 def standardize(
@@ -179,9 +197,14 @@ def standardize(
 
     spec = build_cells(df, [*by_cols, *cells_cols], where, where=_CTX)
     wgt_arr = df.get_column(wgt).to_numpy().astype(np.float64)
-    targets = _standardize_targets(spec, wgt_arr, shares, len(by_cols))
+    targets, partial = _standardize_targets(spec, wgt_arr, shares, len(by_cols))
 
     std_arr = scale_to_targets(wgt_arr.reshape(-1, 1), spec, targets)[:, 0]
+    cycle_ok = True
+    if trimming is not None:
+        from svy.weighting.poststratification import _trim_cycle
+
+        std_arr, cycle_ok = _trim_cycle(std_arr, spec, targets, trimming)
     df = df.with_columns(pl.Series(name=wgt_name, values=std_arr))
 
     if update_design_wgts:
@@ -225,17 +248,8 @@ def standardize(
 
     sample._data = df
 
-    if trimming is not None:
-        from svy.weighting.poststratification import _trim_cycle
-
-        cycled, ok = _trim_cycle(std_arr, spec, targets, trimming)
-        if not ok:
-            warnings.warn(
-                f"Trim-standardize cycle did not converge after {trimming.max_iter} cycles; "
-                "storing the partial result.",
-                UserWarning,
-                stacklevel=2,
-            )
-        sample._data = df.with_columns(pl.Series(name=wgt_name, values=cycled))
-
+    record_null_cells(sample, spec, where=_CTX, prev_wgt=wgt, wgt_name=wgt_name)
+    _record_partial(sample, partial, by_cols, cells_cols)
+    if not cycle_ok:
+        record_trim_cycle(sample, where=_CTX, what="Trim-standardize cycle", trimming=trimming)
     return sample

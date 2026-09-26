@@ -45,8 +45,7 @@ of the error taxonomy and inherits from ``SvyError``.
 
 from __future__ import annotations
 
-import warnings
-
+from svy.core.warnings import warn_no_sample
 from svy.datasets import _bundled, api
 from svy.datasets._cache import clear as _clear_cache
 from svy.datasets.base import Source, _offline_env, load
@@ -79,10 +78,7 @@ def catalog(*, use_cache: bool = True, source: Source = "auto") -> DatasetCatalo
         return api.catalog(use_cache=use_cache)
     except DatasetError as exc:
         if exc.code in _CATALOG_UNREACHABLE and _bundled.slugs():
-            warnings.warn(
-                "Dataset catalog unreachable; listing bundled subsets only.",
-                stacklevel=2,
-            )
+            warn_no_sample("Dataset catalog unreachable; listing bundled subsets only.")
             return _bundled.catalog()
         raise
 
@@ -116,9 +112,8 @@ def describe(slug: str, *, use_cache: bool = True, source: Source = "auto") -> D
         if exc.code in _CATALOG_UNREACHABLE:
             ds = _bundled.describe(slug)
             if ds is not None:
-                warnings.warn(
-                    f"Dataset catalog unreachable; using bundled metadata for {slug!r}.",
-                    stacklevel=2,
+                warn_no_sample(
+                    f"Dataset catalog unreachable; using bundled metadata for {slug!r}."
                 )
                 return ds
         raise

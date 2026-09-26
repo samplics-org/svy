@@ -3,15 +3,21 @@ from __future__ import annotations
 
 import builtins
 import logging
+import warnings as _pywarnings
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import IntEnum, StrEnum
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Iterator, Sequence
 
 import msgspec
 
-from svy.errors.base_errors import SvyError
+from svy.errors.base_errors import SvyError, SvyUserWarning
+
+
+__all__ = ["SvyUserWarning"]
 
 
 log = logging.getLogger(__name__)
@@ -47,6 +53,11 @@ class WarnCode(StrEnum):
     MAX_ITER_REACHED = "MAX_ITER_REACHED"  # iterative method hit max_iter without converging
     WEIGHT_SUM_CHANGED = "WEIGHT_SUM_CHANGED"  # total weight sum changed unexpectedly
     WEIGHT_ADJ_AUDIT = "WEIGHT_ADJ_AUDIT"  # info-level audit record for any weight adjustment
+    CELLS_NULL_UNADJUSTED = (
+        "CELLS_NULL_UNADJUSTED"  # in-scope rows with a null cell kept their weight
+    )
+    DOMAIN_LEVELS_PARTIAL = "DOMAIN_LEVELS_PARTIAL"  # standardize: a domain lacks some levels
+    PANEL_SCOPE_NOT_WAVES = "PANEL_SCOPE_NOT_WAVES"  # panel adjust: `where` is not a set of waves
 
     LABEL_KEY_NOT_IN_DATA = "LABEL_KEY_NOT_IN_DATA"
     DATA_VALUE_NOT_LABELED = "DATA_VALUE_NOT_LABELED"
@@ -76,6 +87,10 @@ class SvyWarning(msgspec.Struct, frozen=True):
     # Survey-flavored context (purely additive)
     var: str | None = None
     rows: tuple[int, ...] | None = None
+
+    # The sample state (its data version) the finding describes: the same
+    # finding on a new state is a new event.
+    state: int | None = None
 
     ts: datetime = msgspec.field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -129,7 +144,7 @@ class SvyWarning(msgspec.Struct, frozen=True):
 
     # De-dupe key (tunable)
     def key(self) -> tuple[Any, ...]:
-        return (str(self.code), self.where, self.param, self.var, self.detail)
+        return (str(self.code), self.where, self.param, self.var, self.detail, self.state)
 
 
 # ---------- Aggregation / escalation ----------
@@ -191,11 +206,12 @@ class WarningStore:
         self._max_per_code = max_per_code
 
     # --- mutation ---
-    def add(self, w: SvyWarning) -> None:
+    def add(self, w: SvyWarning) -> bool:
+        """Store ``w``; False when it repeats a stored one or its code is capped."""
         if self._dedupe:
             k = w.key()
             if k in self._seen:
-                return
+                return False
             self._seen.add(k)
 
         if self._max_per_code is not None:
@@ -204,7 +220,8 @@ class WarningStore:
             if n >= self._max_per_code:
                 if n == self._max_per_code:
                     log.info(f"Supressing further warnings for code: {w.code}")
-                return
+                    self._per_code[key] = n + 1
+                return False
             self._per_code[key] = n + 1
 
         self._items.append(w)
@@ -217,6 +234,7 @@ class WarningStore:
             log.warning(log_msg, extra=w.to_dict()["warning"])
         else:
             log.info(log_msg, extra=w.to_dict()["warning"])
+        return True
 
     def extend(self, warnings: Iterable[SvyWarning]) -> None:
         for w in warnings:
@@ -283,3 +301,46 @@ class WarningStore:
 
     def __iter__(self):
         return iter(self._items)
+
+
+# ---------- One rule for findings ----------
+#: The sample a finding raised deep inside a design operation belongs to, set
+#: by the Sample methods that run such operations (``update_design``,
+#: ``use_weight``). Without one, the finding is only raised as a warning.
+_FINDINGS_SAMPLE: ContextVar[Any] = ContextVar("svy_findings_sample", default=None)
+
+
+@contextmanager
+def findings_to(sample: Any) -> Iterator[None]:
+    token = _FINDINGS_SAMPLE.set(sample)
+    try:
+        yield
+    finally:
+        _FINDINGS_SAMPLE.reset(token)
+
+
+def warning_message(code: Any, title: str, detail: str) -> str:
+    return f"[{code}] {title}: {detail}"
+
+
+def emit_finding(
+    *, code: WarnCode | str, title: str, detail: str, where: str, **fields: Any
+) -> None:
+    """Record ``code`` on the sample at hand (which also raises it), or, with
+    no sample, raise it as a ``SvyUserWarning`` at the caller's line."""
+    sample = _FINDINGS_SAMPLE.get()
+    if sample is not None:
+        sample.warn(code=code, title=title, detail=detail, where=where, **fields)
+        return
+    from svy.core.design import _user_stacklevel
+
+    _pywarnings.warn(
+        warning_message(code, title, detail), SvyUserWarning, stacklevel=_user_stacklevel()
+    )
+
+
+def warn_no_sample(message: str) -> None:
+    """A svy warning where there is no sample to record it on."""
+    from svy.core.design import _user_stacklevel
+
+    _pywarnings.warn(message, SvyUserWarning, stacklevel=_user_stacklevel())

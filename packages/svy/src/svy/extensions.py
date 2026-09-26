@@ -1,5 +1,6 @@
 # src/svy/extensions.py
-import warnings
+
+from svy.core.warnings import warn_no_sample
 
 from .core import Sample
 
@@ -20,7 +21,7 @@ def register_sample_accessor(name):
 
     def decorator(accessor_class):
         if hasattr(Sample, name):
-            warnings.warn(f"Accessor '{name}' is already defined on Sample. Overwriting.")
+            warn_no_sample(f"Accessor '{name}' is already defined on Sample. Overwriting.")
 
         _sample_accessors[name] = accessor_class
 

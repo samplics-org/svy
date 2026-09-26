@@ -81,6 +81,23 @@ def _reject_legacy_kwargs(method: str, kwargs: dict[str, Any]) -> None:
     raise TypeError(f"{method}() got an unexpected keyword argument {unknown!r}")
 
 
+# The Sample state a weighting call may change; `_data` and `_design` go last
+# so the adopted sample gets a fresh data version.
+_STATE = (
+    "_metadata",
+    "_schema",
+    "_singletons",
+    "_singleton_result",
+    "_internal_design",
+    "_warnings",
+    "_fpc",
+    "_print_width",
+    "_design_history",
+    "_design",
+    "_data",
+)
+
+
 class Weighting:
     """Weight adjustments.
 
@@ -116,17 +133,30 @@ class Weighting:
     def __init__(self, sample: Any) -> None:
         self._sample = sample
 
-    def _target(self, inplace: bool) -> Any:
-        """The sample this operation works on: the caller's, or a private fork.
+    def _run(self, inplace: bool, fn: Any, *args: Any, **kwargs: Any) -> Any:
+        """Run ``fn`` on a private fork; with ``inplace=True`` adopt the result.
 
         Every function in ``weighting/`` builds its result by rebinding
-        ``sample._data`` and ``sample._design`` as it goes, so the fork has to be
-        made here, before the work starts, rather than at the end the way
-        ``wrangling._helpers._resolve_target`` does it. Same contract either way:
-        ``inplace=False`` leaves the caller's sample untouched, ``inplace=True``
-        rewrites it, and both return a ``Sample`` so chaining is unaffected.
+        ``sample._data`` and ``sample._design`` as it goes, so the work always
+        happens on a fork. A call that fails therefore leaves the caller's data,
+        design and metadata as they were, inplace or not; with ``inplace=True``
+        the diagnostics recorded before the failure are still kept, since that
+        is how a caller asks for them on their own Sample.
         """
-        return self._sample if inplace else self._sample._fork()
+        work = self._sample._fork()
+        try:
+            out = fn(work, *args, **kwargs)
+        except Exception:
+            if inplace:
+                self._sample._warnings = work._warnings
+            raise
+        if not inplace or not hasattr(out, "_data"):
+            return out
+        target = self._sample
+        for name in _STATE:
+            if hasattr(out, name):
+                setattr(target, name, getattr(out, name))
+        return target
 
     # ------------------------------------------------------------------ #
     # Variance strata / replicate weights
@@ -147,8 +177,9 @@ class Weighting:
         drop_nulls: bool = False,
         inplace: bool = False,
     ) -> Any:
-        return _create_brr_wgts(
-            self._target(inplace),
+        return self._run(
+            inplace,
+            _create_brr_wgts,
             n_reps,
             stratum=stratum,
             psu=psu,
@@ -175,8 +206,9 @@ class Weighting:
         drop_nulls: bool = False,
         inplace: bool = False,
     ) -> Any:
-        return _create_jk_wgts(
-            self._target(inplace),
+        return self._run(
+            inplace,
+            _create_jk_wgts,
             paired=paired,
             stratum=stratum,
             psu=psu,
@@ -200,8 +232,9 @@ class Weighting:
         rstate: RandomState = None,
         inplace: bool = False,
     ) -> Any:
-        return _create_bs_wgts(
-            self._target(inplace),
+        return self._run(
+            inplace,
+            _create_bs_wgts,
             n_reps,
             kind=kind,
             stratum=stratum,
@@ -221,8 +254,9 @@ class Weighting:
         drop_nulls: bool = False,
         inplace: bool = False,
     ) -> Any:
-        return _create_sdr_wgts(
-            self._target(inplace),
+        return self._run(
+            inplace,
+            _create_sdr_wgts,
             n_reps,
             psu=psu,
             rep_prefix=rep_prefix,
@@ -265,6 +299,10 @@ class Weighting:
             response statuses within it. None adjusts the sample as one class.
         where : WhereArg
             Scope. Rows outside it keep their weight whatever their status.
+        respondents_only : bool
+            Drop the nonrespondents and ineligibles whose weight the adjustment
+            handled. Rows in no adjustment class (outside ``where``, or with a
+            null cell) keep their weight and stay, whatever their status.
         ignore_reps : bool
             Leave the replicate weights unadjusted. The new weight then has no
             replicate weights (variance is Taylor); the replicate columns stay
@@ -275,8 +313,9 @@ class Weighting:
         the adjusted weights as fixed, matching R.
         """
         _reject_legacy_kwargs("adjust", _legacy)
-        return _adjust(
-            self._target(inplace),
+        return self._run(
+            inplace,
+            _adjust,
             resp_status,
             cells,
             where=where,
@@ -339,8 +378,9 @@ class Weighting:
         Recorded as ``kind="normalization"`` and provenance only.
         """
         _reject_legacy_kwargs("normalize", _legacy)
-        return _normalize(
-            self._target(inplace),
+        return self._run(
+            inplace,
+            _normalize,
             controls,
             factor=factor,
             shares=shares,
@@ -402,8 +442,9 @@ class Weighting:
             them.
         """
         _reject_legacy_kwargs("poststratify", _legacy)
-        return _poststratify(
-            self._target(inplace),
+        return self._run(
+            inplace,
+            _poststratify,
             controls,
             shares=shares,
             cells=cells,
@@ -465,11 +506,13 @@ class Weighting:
         variable's missingness and ``by`` the domain structure, so estimating a
         different variable or breakdown on the same sample is silently wrong.
 
-        A domain missing a level is renormalized over the levels it has, with a
-        warning -- R instead lets that domain's total fall.
+        A domain missing a level is renormalized over the levels it has, recorded
+        as ``DOMAIN_LEVELS_PARTIAL`` in ``sample.warnings`` -- R instead lets that
+        domain's total fall.
         """
-        return _standardize(
-            self._target(inplace),
+        return self._run(
+            inplace,
+            _standardize,
             cells,
             shares=shares,
             by=by,
@@ -550,8 +593,9 @@ class Weighting:
             them.
         """
         _reject_legacy_kwargs("rake", _legacy)
-        return _rake(
-            self._target(inplace),
+        return self._run(
+            inplace,
+            _rake,
             controls=controls,
             shares=shares,
             where=where,
@@ -650,8 +694,9 @@ class Weighting:
             in the data and ``update_design(wgt=<previous weight>)`` restores
             them.
         """
-        return _calibrate(
-            self._target(inplace),
+        return self._run(
+            inplace,
+            _calibrate,
             controls=controls,
             by=by,
             where=where,
@@ -681,8 +726,9 @@ class Weighting:
         trimming: TrimConfig | None = None,
         inplace: bool = False,
     ) -> Any:
-        return _calibrate_matrix(
-            self._target(inplace),
+        return self._run(
+            inplace,
+            _calibrate_matrix,
             aux_vars=aux_vars,
             control=control,
             by=by,
@@ -736,8 +782,9 @@ class Weighting:
         afterwards would claim a calibration that no longer holds. For
         calibrated-and-trimmed weights use ``poststratify(trimming=...)``.
         """
-        return _trim(
-            self._target(inplace),
+        return self._run(
+            inplace,
+            _trim,
             upper=upper,
             lower=lower,
             by=by,

@@ -136,6 +136,7 @@ def add_stage(
         if isinstance(val, str):
             exclude.add(val)
 
+    found: list[dict] = []
     result: CombineResult = _combine_stages(
         stage1_df=s1_df,
         stage1_prob_col=s1_design.prob,
@@ -150,6 +151,7 @@ def add_stage(
         already_selected=already_selected,
         out_prob_col=prob_name or SVY_PROB,
         out_wgt_col=wgt_name or SVY_WEIGHT,
+        found=found,
     )
 
     combined_design = _Design(
@@ -186,4 +188,6 @@ def add_stage(
     combined._stage_out_prob = result.out_prob_col
     combined._stage_out_wgt = result.out_wgt_col
 
+    for f in found:
+        combined.warn(where="Sample.sampling.add_stage", **f)
     return combined

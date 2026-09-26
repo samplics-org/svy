@@ -9,12 +9,13 @@ srs.py, pps.py, multistage.py, and base.py.
 from __future__ import annotations
 
 import logging
-import warnings
 
-from typing import Literal, Sequence
+from typing import Any, Literal, Sequence
 
 import numpy as np
 import polars as pl
+
+from svy.core.warnings import Severity
 
 
 log = logging.getLogger(__name__)
@@ -59,12 +60,27 @@ def _apply_order(
     return data
 
 
+def _finding(sample: Any, *, code: str, title: str, detail: str, **fields: Any) -> None:
+    """Record on the sample being selected from, or warn when there is none.
+
+    An INFO finding confirms what the caller asked for: recorded when there is
+    a sample, dropped when there is none.
+    """
+    if sample is not None:
+        sample.warn(code=code, title=title, detail=detail, where="Sample.sampling", **fields)
+    elif fields.get("level") != Severity.INFO:
+        from svy.core.warnings import warn_no_sample
+
+        warn_no_sample(detail)
+
+
 def _warn_n_exceeds_population(
     n_map: int | dict[str, int],
     pop_sizes: dict[str, int],
     *,
     wr: bool,
     pps: bool = False,
+    sample: Any = None,
 ) -> None:
     """
     Warn or raise when requested n meets or exceeds the stratum population.
@@ -83,10 +99,15 @@ def _warn_n_exceeds_population(
             continue
         pop = pop_sizes.get(group, 0)
         if pop == 0:
-            warnings.warn(
-                f"Selection: group {group!r} has 0 units in the frame -- "
-                "no records will be drawn.",
-                stacklevel=4,
+            _finding(
+                sample,
+                code="SELECTION_GROUP_EMPTY",
+                title="Group with no frame units",
+                detail=(
+                    f"Selection: group {group!r} has 0 units in the frame -- "
+                    "no records will be drawn."
+                ),
+                got={"group": group, "n": n_req},
             )
         elif n_req > pop and not wr and not pps:
             raise ValueError(
@@ -95,11 +116,18 @@ def _warn_n_exceeds_population(
                 "Use wr=True for with-replacement sampling, or reduce n."
             )
         elif n_req > pop and wr:
-            warnings.warn(
-                f"Selection: requested n={n_req} exceeds the population "
-                f"({pop} units) in group {group!r}. "
-                "Sampling with replacement -- some units will appear multiple times.",
-                stacklevel=4,
+            _finding(
+                sample,
+                code="SELECTION_N_EXCEEDS_GROUP",
+                title="Sample size exceeds the group",
+                detail=(
+                    f"Selection: requested n={n_req} exceeds the population "
+                    f"({pop} units) in group {group!r}. "
+                    "Sampling with replacement -- some units will appear multiple times."
+                ),
+                got={"group": group, "n": n_req, "units": pop},
+                # What wr=True means, so recorded, not raised.
+                level=Severity.INFO,
             )
         # PPS + n > pop: valid — certainty extraction handles this silently.
 
@@ -109,6 +137,7 @@ def _warn_zero_mos(
     group_labels: np.ndarray | None,
     *,
     drop_nulls: bool,
+    sample: Any = None,
 ) -> None:
     """
     Warn when any MOS values are zero or negative before PPS selection.
@@ -126,17 +155,23 @@ def _warn_zero_mos(
         else ""
     )
     action = "dropped before selection" if drop_nulls else "present in frame"
-    warnings.warn(
-        f"PPS selection: {n_bad} unit(s) with MOS <= 0 are {action}{group_info}. "
-        "These units have zero selection probability and will never be drawn. "
-        "Consider removing or imputing them before selecting.",
-        stacklevel=4,
+    _finding(
+        sample,
+        code="SELECTION_MOS_NONPOSITIVE",
+        title="Units with MOS <= 0",
+        detail=(
+            f"PPS selection: {n_bad} unit(s) with MOS <= 0 are {action}{group_info}. "
+            "These units have zero selection probability and will never be drawn. "
+            "Consider removing or imputing them before selecting."
+        ),
+        got=n_bad,
     )
 
 
 def _warn_empty_strata(
     n_map: int | dict[str, int],
     pop_sizes: dict[str, int],
+    sample: Any = None,
 ) -> None:
     """
     Warn when a stratum with n > 0 in the allocation has no frame units.
@@ -152,8 +187,13 @@ def _warn_empty_strata(
     )
     for group in groups_with_n:
         if pop_sizes.get(group, 0) == 0:
-            warnings.warn(
-                f"Selection: stratum {group!r} has n > 0 in the allocation "
-                "but 0 units in the frame. No records will be drawn for it.",
-                stacklevel=4,
+            _finding(
+                sample,
+                code="SELECTION_STRATUM_EMPTY",
+                title="Stratum with no frame units",
+                detail=(
+                    f"Selection: stratum {group!r} has n > 0 in the allocation "
+                    "but 0 units in the frame. No records will be drawn for it."
+                ),
+                got={"stratum": group},
             )

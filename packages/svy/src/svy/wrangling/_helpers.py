@@ -13,8 +13,6 @@ module (columns, values, rows, mutate, labels).
 
 from __future__ import annotations
 
-import warnings
-
 from typing import TYPE_CHECKING, Iterable, cast
 
 import polars as pl
@@ -23,7 +21,7 @@ from svy.core.constants import (
     _INTERNAL_CONCAT_SUFFIX,
     SVY_ROW_INDEX,
 )
-from svy.core.design import Design, PopSize, _user_stacklevel
+from svy.core.design import Design, PopSize
 from svy.errors import MethodError
 
 
@@ -451,8 +449,10 @@ def _auto_clean_design(target: "Sample") -> None:
         target._check_for_singletons()
 
     if removed:
-        warnings.warn(
-            "Removed from the design with the dropped columns: " + ", ".join(removed) + ".",
-            UserWarning,
-            stacklevel=_user_stacklevel(),
+        target.warn(
+            code="DESIGN_FIELDS_REMOVED",
+            title="Design fields removed",
+            detail="Removed from the design with the dropped columns: " + ", ".join(removed) + ".",
+            where="wrangling",
+            got=list(removed),
         )
