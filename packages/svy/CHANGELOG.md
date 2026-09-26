@@ -86,6 +86,14 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **`create_brr_wgts` and `create_jk_wgts(paired=True)` crashed with a multi-column PSU** when strata had to be paired. The replicates now equal those built from a single column holding the same composite key.
+
+- **`wrangling.distinct()` without `cols` never removed duplicates**: svy's row index took part in the check. Only the user's columns are compared now.
+
+- **`add_stage` with a next-stage `Sample` whose `psu` is the stage-1 PSU made `ssu` equal to `psu`**, and estimation then crashed. The next stage's `psu` only links rows to their stage-1 PSU; the combined design's `ssu` is now `None`.
+
+- **`clean_names` renamed the selection outputs** (`svy_sample_weight`, `svy_prob_selection`, `svy_number_of_hits`, `svy_certainty` and their `_stage1`/`_stage2` forms) under camel, pascal, kebab, upper or title case; it reserved names svy never writes. They are kept now, and a user column cleaned into one of them gets the `_1` suffix instead of the selection output.
+
 - **`trim` and `calibrate` checked `wgt_name` only after doing the work.** A refused `trim(wgt_name=<existing column>)` still raised the findings of the trim it then discarded, and `calibrate` with a taken name and unmet controls raised `CALIBRATION_NOT_MET` instead of `WGT_NAME_EXISTS`. Both now check the name first.
 
 - **Taylor `mean`, `prop` and `ratio` returned no rows when one domain had only zero weights**, for every `by=` level and silently; a `where=` to such a domain returned nothing too. The domain now keeps its row with NaN estimate, SE and CI (df 0), as R's `svymean(subset())` and as svy's replication path already did; the other domains are unaffected. A ratio domain whose weighted denominator is zero is NaN the same way. `total` is unchanged (0, SE 0). Kernel errors in `mean`/`total`/`prop`/`ratio` are no longer turned into an empty result.
