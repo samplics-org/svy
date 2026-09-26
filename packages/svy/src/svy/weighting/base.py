@@ -20,7 +20,7 @@ import numpy as np
 from svy.core.repwgts import BootstrapKind
 from svy.core.terms import Feature
 from svy.core.types import Category, ControlsType, DomainScalarMap, Number, WhereArg
-from svy.errors import MethodError
+from svy.errors import WeightingError
 from svy.utils.random_state import RandomState
 from svy.weighting.adjustment import adjust as _adjust
 from svy.weighting.calibration import build_aux_matrix as _build_aux_matrix
@@ -52,6 +52,9 @@ _RENAMED: dict[str, dict[str, str]] = {
     "normalize": {"by": "cells"},
     "poststratify": {"by": "cells", "factors": "shares"},
     "rake": {"factors": "shares"},
+    "controls_margins_template": {"cat_na": "na"},
+    "control_aux_template": {"by_na": "na"},
+    "build_aux_matrix": {"by_na": "na"},
 }
 
 
@@ -61,20 +64,18 @@ def _reject_legacy_kwargs(method: str, kwargs: dict[str, Any]) -> None:
     renames = _RENAMED.get(method, {})
     for old, new in renames.items():
         if old in kwargs:
-            raise MethodError.not_applicable(
-                where=f"Sample.weighting.{method}",
-                method=method,
-                reason=f"`{old}=` was renamed to `{new}=`",
-                param=old,
-                hint=(
-                    f"Replace {old}= with {new}=."
-                    + (
-                        " shares are normalized internally, so a vector that does not "
-                        "sum to 1 now pins composition instead of rescaling the total."
-                        if new == "shares"
-                        else ""
-                    )
-                ),
+            note = ""
+            if new == "shares":
+                note = (
+                    "shares are normalized internally, so a vector that does not "
+                    "sum to 1 now pins composition instead of rescaling the total."
+                )
+            elif new == "na":
+                note = f"na={kwargs[old]!r} keeps the same meaning." + (
+                    " The default is now 'error'." if old == "cat_na" else ""
+                )
+            raise WeightingError.param_renamed(
+                where=f"Sample.weighting.{method}", method=method, old=old, new=new, note=note
             )
     unknown = next(iter(kwargs))
     raise TypeError(f"{method}() got an unexpected keyword argument {unknown!r}")
@@ -103,6 +104,13 @@ class Weighting:
 
     Targets, where a method takes them, follow one rule: a scalar is one cell
     and a dict is many; ``controls`` sets the total and ``shares`` preserves it.
+    A dict is keyed by the column's values, or by their text form as JSON gives
+    it (``"1"`` for ``1``, ``"true"`` for ``True``, an ISO date); several
+    columns take a tuple in column order or its parts joined by ``"_&_"``.
+
+    Failures raise ``WeightingError`` (a ``MethodError``) with a stable
+    ``code`` and ``expected``/``got`` in the data's own values, so
+    ``err.to_dict()`` is enough to act on.
     """
 
     def __init__(self, sample: Any) -> None:
@@ -480,13 +488,22 @@ class Weighting:
         self,
         *,
         margins: Mapping[str, str],
-        cat_na: str = "level",
+        na: Literal["error", "level", "drop"] = "error",
         na_label: str = "__NA__",
+        **_legacy: Any,
     ) -> dict[str, dict[Category, float]]:
+        """A ``controls`` skeleton for ``rake``: ``{margin: {level: nan}}``.
+
+        Levels are the columns' own values, so the filled template goes
+        straight back to ``rake``. ``na`` says what to do with nulls: ``"error"``
+        refuses them, ``"level"`` lists them under ``na_label``, ``"drop"``
+        leaves them out.
+        """
+        _reject_legacy_kwargs("controls_margins_template", _legacy)
         return _controls_margins_template(
             self._sample,
             margins=margins,
-            cat_na=cat_na,
+            na=na,
             na_label=na_label,
         )
 
@@ -559,14 +576,23 @@ class Weighting:
         *,
         x: Sequence[Feature],
         by: str | Sequence[str] | None = None,
-        by_na: Literal["error", "level", "drop"] = "error",
+        na: Literal["error", "level", "drop"] = "error",
         na_label: str = "__NA__",
+        **_legacy: Any,
     ) -> dict[Category, Number] | dict[Category, dict[Category, Number]]:
+        """A ``controls`` skeleton for ``calibrate``: ``{level: nan}`` per term, or
+        ``{domain: {...}}`` with ``by``.
+
+        Keys are the columns' own values. ``na`` applies to the ``by`` columns:
+        ``"error"`` refuses nulls, ``"level"`` keys them by ``na_label``,
+        ``"drop"`` leaves them out.
+        """
+        _reject_legacy_kwargs("control_aux_template", _legacy)
         return _control_aux_template(
             self._sample,
             x=x,
             by=by,
-            by_na=by_na,
+            na=na,
             na_label=na_label,
         )
 
@@ -575,14 +601,16 @@ class Weighting:
         *,
         x: Sequence[Feature],
         by: str | Sequence[str] | None = None,
-        by_na: Literal["error", "level", "drop"] = "error",
+        na: Literal["error", "level", "drop"] = "error",
         na_label: str = "__NA__",
+        **_legacy: Any,
     ) -> tuple[np.ndarray, dict[Category, Number] | dict[Category, dict[Category, Number]]]:
+        _reject_legacy_kwargs("build_aux_matrix", _legacy)
         return _build_aux_matrix(
             self._sample,
             x=x,
             by=by,
-            by_na=by_na,
+            na=na,
             na_label=na_label,
         )
 

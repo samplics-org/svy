@@ -7,6 +7,7 @@ from .label_errors import LabelError
 from .method_errors import MethodError
 from .model_errors import ModelError
 from .serialization_errors import SerializationError
+from .weighting_errors import WeightingError
 
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "SerializationError",
     "SvyError",
     "DatasetError",
+    "WeightingError",
 ]

@@ -20,7 +20,7 @@ import polars as pl
 
 from svy.core.design import WgtAdjustment
 from svy.core.types import DomainScalarMap, Number
-from svy.errors import MethodError
+from svy.errors import MethodError, WeightingError
 from svy.weighting._engine import build_cells, resolve_targets, scale_to_targets
 
 
@@ -45,13 +45,13 @@ def normalize(
 ) -> Sample:
     ctx = "Sample.weighting.normalize"
     if factor is not None:
-        if controls is not None or shares is not None or cells is not None or where is not None:
-            raise MethodError.not_applicable(
-                where=ctx,
-                method="normalize",
-                reason="factor multiplies every weight and cannot be combined with controls, shares, cells or where",
-                param="factor",
-            )
+        given = [
+            name
+            for name, v in (("controls", controls), ("shares", shares), ("cells", cells))
+            if v is not None
+        ] + (["where"] if where is not None else [])
+        if given:
+            raise WeightingError.factor_conflict(where=ctx, given=given)
         if not float(factor) > 0.0:
             raise MethodError.invalid_range(
                 where=ctx, param="factor", got=factor, min_=0.0, max_=None
@@ -60,25 +60,19 @@ def normalize(
     design = sample._design
 
     if design.wgt is None:
-        raise MethodError.not_applicable(
-            where=ctx,
-            method="normalize",
-            reason="Sample weight is None. Set design.wgt before calling normalize().",
-        )
+        raise WeightingError.no_weight(where=ctx, method="normalize")
     wgt = design.wgt
     if wgt not in df.columns:
-        raise MethodError.invalid_choice(
+        raise WeightingError.missing_columns(
             where=ctx,
             param="design.wgt",
-            got=wgt,
-            allowed=list(df.columns),
+            missing=[wgt],
+            available=list(df.columns),
             hint="Check that the weight column exists in the data.",
         )
     if wgt_name in set(df.columns):
-        raise MethodError.not_applicable(
-            where=ctx,
-            method="normalize",
-            reason=f"Column '{wgt_name}' already exists. Choose a different wgt_name.",
+        raise WeightingError.wgt_name_exists(
+            where=ctx, method="normalize", wgt_name=wgt_name, existing=df.columns
         )
 
     wgt_arr = df.get_column(wgt).to_numpy().astype(np.float64)

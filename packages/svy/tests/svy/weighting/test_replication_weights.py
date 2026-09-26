@@ -226,9 +226,11 @@ class TestBRRWeights:
         err = exc.value
         assert err.code == "ODD_PSU_COUNT"
         assert "3 strata" in err.detail
+        assert err.got == {"a": 1, "b": 3, "c": 5}, (
+            "a stratum that pairs cleanly must not be reported"
+        )
         for offender in ("a=1", "b=3", "c=5"):
-            assert offender in err.got
-        assert "d=" not in err.got, "a stratum that pairs cleanly must not be reported"
+            assert offender in err.detail
 
     @pytest.mark.parametrize("n_psus", [2, 4, 6])
     def test_any_multiple_of_two_is_accepted(self, n_psus):
@@ -266,9 +268,10 @@ class TestBRRWeights:
 
         with pytest.raises(DimensionError) as exc:
             sample.weighting.create_brr_wgts()
-        got = exc.value.got
-        assert "(+2 more)" in got  # 7 offenders, 5 shown
-        assert "..." not in got
+        err = exc.value
+        assert len(err.got) == 7  # every offender, as data
+        assert "(+2 more)" in err.detail  # 7 offenders, 5 shown in the message
+        assert "..." not in err.detail
 
     def test_the_odd_psu_hint_actually_works(self, odd_psu_sample):
         """Follow the hint and it succeeds on the frame that raised."""
@@ -560,7 +563,7 @@ class TestVarianceStrataPairing:
         with pytest.raises(DimensionError) as exc:
             sample.weighting.create_brr_wgts()
         assert exc.value.code == "ODD_PSU_COUNT"
-        assert "1=1" in exc.value.got
+        assert exc.value.got == {1: 1}
 
     def test_no_psu_raises(self):
         data = pl.DataFrame({"stratum": [1, 1, 2, 2], "wgt": [1.0] * 4})

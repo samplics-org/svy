@@ -8,7 +8,7 @@ rake() and controls_margins_template() take a Sample and return a Sample
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Mapping, cast
+from typing import TYPE_CHECKING, Literal, Mapping, cast
 
 import msgspec
 import numpy as np
@@ -24,9 +24,16 @@ except ImportError:  # pragma: no cover
 
 from svy.core.design import WgtAdjustment
 from svy.core.types import Category, ControlsType
-from svy.errors import DimensionError, MethodError
+from svy.errors import DimensionError, MethodError, WeightingError
 from svy.weighting._engine import CELLS_PREFIX, _where_mask
-from svy.weighting._helpers import _num_sort_key_label
+from svy.weighting._keys import (
+    LevelIndex,
+    check_na_option,
+    match_keys,
+    sort_levels,
+    target_vector,
+    template_levels,
+)
 from svy.weighting.types import TrimConfig, resolve_threshold
 
 
@@ -50,12 +57,8 @@ def _rake_or_raise(*args, where: str = "Sample.weighting.rake"):
     except ValueError as e:
         msg = str(e)
         if "exceeded weight bounds" in msg or "Raking exceeded" in msg:
-            raise MethodError.not_applicable(
-                where=where,
-                method="rake",
-                reason="Weight ratios exceeded the specified bounds (ll_bound/up_bound).",
-                param="ll_bound/up_bound",
-                hint="Widen the bounds, relax the margins, or increase max_iter.",
+            raise WeightingError.bounds_exceeded(
+                where=where, ll_bound=args[3], up_bound=args[4]
             ) from None
         raise
 
@@ -69,63 +72,17 @@ def _normalize_controls_like(x: ControlsType | None) -> ControlsType | None:
     return x
 
 
-def _shares_to_controls(
-    wgts: np.ndarray,
-    shares: ControlsType,
-) -> ControlsType:
-    """Convert per-margin shares to absolute control totals.
-
-    Shares are marginal proportions, normalized within each margin, so every
-    margin resolves against the same grand total:
-        control[col][cat] = share[col][cat] / sum(share[col]) * sum(wgts)
-
-    That makes cross-margin consistency structural rather than something the
-    caller has to get right -- margins that disagree on a grand total are the
-    usual reason IPF fails to converge.
-    """
-    grand_total = float(wgts.sum())
-    control: ControlsType = {}
-    for col, share_dict in shares.items():
-        total = float(sum(float(v) for v in share_dict.values()))
-        if total <= 0:
-            raise DimensionError(
-                title="Invalid shares",
-                detail=f"Shares for {col!r} must include at least one positive value.",
-                code="INVALID_SHARES",
-                where="Sample.weighting.rake",
-                param=f"shares[{col!r}]",
-            )
-        control[col] = {cat: float(v) / total * grand_total for cat, v in share_dict.items()}
-    return control
-
-
-def _check_margins_agree(control: ControlsType, *, where: str) -> None:
+def _check_margins_agree(totals: dict[str, float], *, where: str) -> None:
     """Every margin must describe the same population.
 
     Raking cannot satisfy margins whose totals differ; without this it would
     silently iterate to max_iter and return whatever it reached.
     """
-    totals = {
-        col: float(sum(float(v) for v in cats.values()))  # type: ignore[union-attr]
-        for col, cats in control.items()
-    }
     if len(totals) < 2:
         return
     lo, hi = min(totals.values()), max(totals.values())
     if hi > 0 and (hi - lo) / hi > 1e-6:
-        raise MethodError.not_applicable(
-            where=where,
-            method="rake",
-            reason=(
-                "Margins disagree on the population total: "
-                + ", ".join(f"{c}={t:,.4g}" for c, t in sorted(totals.items()))
-            ),
-            param="controls",
-            hint=(
-                "Every margin must sum to the same total. Pass shares= to have "
-                "them normalized against one grand total automatically."
-            ),
-        )
+        raise WeightingError.margins_disagree(where=where, totals=totals)
 
 
 def _trim_constraints_satisfied(
@@ -148,27 +105,6 @@ def _trim_constraints_satisfied(
     return True
 
 
-def _build_margin_arrays(
-    rake_cols: list[str],
-    control_final: ControlsType,
-    processed: dict[str, np.ndarray],
-) -> tuple[list[np.ndarray], list[np.ndarray]]:
-    """Build margin_indices and margin_targets arrays for Rust rake."""
-    margin_indices = []
-    margin_targets = []
-    for col in rake_cols:
-        cats_sorted = sorted(control_final[col].keys(), key=_num_sort_key_label)  # type: ignore[union-attr]
-        cat_to_idx = {cat: idx for idx, cat in enumerate(cats_sorted)}
-        indices = np.array([cat_to_idx[val] for val in processed[col]], dtype=np.int64)
-        targets = np.array(
-            [float(control_final[col][cat]) for cat in cats_sorted],  # type: ignore[index]
-            dtype=np.float64,
-        )
-        margin_indices.append(indices)
-        margin_targets.append(targets)
-    return margin_indices, margin_targets
-
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -178,12 +114,13 @@ def controls_margins_template(
     sample: Sample,
     *,
     margins: Mapping[str, str],
-    cat_na: str = "level",
+    na: Literal["error", "level", "drop"] = "error",
     na_label: str = "__NA__",
 ) -> dict[str, dict[Category, float]]:
     df: pl.DataFrame = sample.data
     where = "Sample.weighting.controls_margins_template"
 
+    check_na_option(na, where=where)
     for mname, col in margins.items():
         if not isinstance(mname, str) or not isinstance(col, str):
             raise MethodError.invalid_type(
@@ -193,46 +130,22 @@ def controls_margins_template(
                 expected="dict[str, str]",
                 hint="Both margin keys and values must be strings.",
             )
-        if col not in df.columns:
-            raise MethodError.invalid_choice(
-                where=where,
-                param=f"margins[{mname!r}]",
-                got=col,
-                allowed=list(df.columns),
-                hint="Check that the margin column exists in the data.",
-            )
+    missing = [col for col in margins.values() if col not in df.columns]
+    if missing:
+        raise WeightingError.missing_columns(
+            where=where,
+            param="margins",
+            missing=missing,
+            available=list(df.columns),
+            hint="Check that the margin column exists in the data.",
+        )
 
     result: dict[str, dict[Category, float]] = {}
-
     for mname, col in margins.items():
-        s = df.get_column(col)
-
-        if cat_na not in ("error", "level"):
-            raise MethodError.invalid_choice(
-                where=where,
-                param="cat_na",
-                got=cat_na,
-                allowed=["error", "level"],
-            )
-
-        if cat_na == "error":
-            if s.is_null().any():
-                raise DimensionError(
-                    title="Missing values in margin column",
-                    detail=f"Nulls found in {col!r}. Choose cat_na='level' or fix data.",
-                    code="MARGIN_NA",
-                    where=where,
-                    param=col,
-                    hint="Use cat_na='level' to include a missing category.",
-                )
-            s_norm = s.cast(pl.Utf8)
-        else:
-            s_norm = s.cast(pl.Utf8).fill_null(na_label)
-
-        cats = pl.Series("__cats__", s_norm.unique().to_list(), dtype=pl.Utf8).to_list()
-        cats_sorted = sorted(cats, key=_num_sort_key_label)
-        result[mname] = {lab: np.nan for lab in cats_sorted}
-
+        levels = template_levels(
+            df, [col], na=na, na_label=na_label, where=where, code="MARGIN_NA"
+        )
+        result[mname] = {lab: np.nan for lab in levels}
     return result
 
 
@@ -294,44 +207,39 @@ def rake(
     design = sample._design
 
     if design.wgt is None:
-        raise MethodError.not_applicable(
-            where=ctx,
-            method="rake",
-            reason="Sample weight is None. Set design.wgt before calling rake().",
-        )
+        raise WeightingError.no_weight(where=ctx, method="rake")
     wgt = design.wgt
     if wgt not in df.columns:
-        raise MethodError.invalid_choice(
+        raise WeightingError.missing_columns(
             where=ctx,
             param="design.wgt",
-            got=wgt,
-            allowed=list(df.columns),
+            missing=[wgt],
+            available=list(df.columns),
             hint="Check that the weight column exists in the data.",
         )
 
     existing_cols = set(df.columns)
     if wgt_name in existing_cols:
-        raise MethodError.not_applicable(
-            where=ctx,
-            method="rake",
-            reason=f"Column '{wgt_name}' already exists. Choose a different wgt_name.",
+        raise WeightingError.wgt_name_exists(
+            where=ctx, method="rake", wgt_name=wgt_name, existing=df.columns
         )
 
+    for name, arg in (("controls", controls), ("shares", shares)):
+        if arg is not None and not isinstance(arg, Mapping):
+            raise WeightingError.targets_type(
+                where=ctx,
+                param=name,
+                got=arg,
+                expected="a dict {column: {level: number}}",
+                hint=f"e.g. {name}={{'region': {{'North': ..., 'South': ...}}}}.",
+            )
     controls_norm: ControlsType | None = _normalize_controls_like(x=controls)
     shares_norm: ControlsType | None = _normalize_controls_like(x=shares)
 
     if controls_norm is None and shares_norm is None:
-        raise MethodError.not_applicable(
-            where=ctx,
-            method="rake",
-            reason="Either controls= or shares= must be specified.",
-        )
+        raise WeightingError.targets_missing(where=ctx, method="rake")
     if controls_norm is not None and shares_norm is not None:
-        raise MethodError.not_applicable(
-            where=ctx,
-            method="rake",
-            reason="Provide exactly one of controls= or shares=, not both.",
-        )
+        raise WeightingError.targets_conflict(where=ctx, method="rake")
 
     if ll_bound is not None and up_bound is not None and ll_bound > up_bound:
         raise MethodError.invalid_range(
@@ -341,116 +249,88 @@ def rake(
             hint="ll_bound must be less than or equal to up_bound.",
         )
 
-    rake_cols = (
-        list(controls_norm.keys()) if controls_norm is not None else list(shares_norm.keys())  # type: ignore[union-attr]
-    )
-    if not rake_cols:
-        raise MethodError.not_applicable(
+    supplied = cast(ControlsType, controls_norm if controls_norm is not None else shares_norm)
+    param = "controls" if controls_norm is not None else "shares"
+    rake_cols = list(supplied.keys())
+
+    unknown = [c for c in rake_cols if not isinstance(c, str) or c not in df.columns]
+    if unknown:
+        raise WeightingError.missing_columns(
             where=ctx,
-            method="rake",
-            reason="No raking columns provided in controls/shares keys.",
+            param=f"{param} keys",
+            missing=unknown,
+            available=list(df.columns),
+            hint=f"Key {param} by the names of the margin columns.",
         )
 
-    processed: dict[str, np.ndarray] = {}
     w0 = df.get_column(wgt).to_numpy().astype(np.float64)
 
-    for col in rake_cols:
-        if not isinstance(col, str) or col not in df.columns:
-            raise MethodError.invalid_choice(
-                where=ctx,
-                param="controls/shares key",
-                got=col,
-                allowed=list(df.columns),
-                hint="All raking column names must exist in the data.",
-            )
-
-    margin_df = df.select(rake_cols)
-
-    null_counts = margin_df.null_count().row(0)
-    for col, n_null in zip(rake_cols, null_counts):
-        s = df.get_column(col)
-        if s.len() != w0.size:
-            raise DimensionError(
-                title="Raking column length mismatch",
-                detail=f"Column {col!r} has different length than the weight array.",
-                code="LENGTH_MISMATCH",
-                where=ctx,
-                param=col,
-            )
-        if n_null > 0:
-            raise DimensionError(
-                title="Null values in raking column",
-                detail=f"Column {col!r} contains null values. Raking requires complete data.",
-                code="NULL_VALUES",
-                where=ctx,
-                param=col,
-                hint="Drop or impute missing values before raking.",
-            )
-
-    margin_np = margin_df.to_numpy()
-    for i, col in enumerate(rake_cols):
-        processed[col] = margin_np[:, i]
+    null_counts = dict(zip(rake_cols, df.select(rake_cols).null_count().row(0)))
+    with_nulls = {c: int(n) for c, n in null_counts.items() if n > 0}
+    if with_nulls:
+        raise DimensionError(
+            title="Null values in raking column",
+            detail=(
+                f"{', '.join(f'{c!r} has {n} null value(s)' for c, n in with_nulls.items())}. "
+                "Raking requires complete data."
+            ),
+            code="MARGIN_NA",
+            where=ctx,
+            param=next(iter(with_nulls)),
+            expected=0,
+            got=with_nulls,
+            hint="Drop or impute missing values before raking, or leave those rows "
+            "out with where=.",
+        )
 
     # `where` scopes the adjustment: only in-scope rows are raked, and the rest
     # keep their weight. The IPF then runs on the subset, so the margins the
     # caller supplies describe the scoped population and nothing else.
     scope = _where_mask(df, where, where=ctx)
     scope_idx = None
+    margin_df = df.select(rake_cols)
     if scope is not None:
         scope_idx = np.flatnonzero(scope)
         if scope_idx.size == 0:
-            raise MethodError.not_applicable(
-                where=ctx, method="rake", reason="No rows are in scope for this adjustment"
-            )
+            raise WeightingError.no_rows_in_scope(where=ctx, method="rake", hint="Check `where`.")
         w_full = w0
         w0 = w0[scope_idx]
-        processed = {c: a[scope_idx] for c, a in processed.items()}
+        margin_df = margin_df.filter(pl.Series(scope))
 
-    control_final: ControlsType = controls_norm or _shares_to_controls(
-        wgts=w0,
-        shares=cast(ControlsType, shares_norm),
-    )
-
-    missing = [m for m in processed if m not in control_final]
-    extra = [m for m in control_final if m not in processed]
-    if missing or extra:
-        raise MethodError.invalid_mapping_keys(
-            where=ctx,
-            param="controls",
-            missing=missing,
-            extra=extra,
-        )
-
-    for col_name, totals in control_final.items():
+    margin_indices: list[np.ndarray] = []
+    raw_targets: list[np.ndarray] = []
+    for col in rake_cols:
+        sub = f"{param}[{col!r}]"
+        totals = supplied[col]
         if not isinstance(totals, Mapping) or not totals:
-            raise MethodError.invalid_type(
+            raise WeightingError.targets_type(
                 where=ctx,
-                param=f"controls[{col_name!r}]",
+                param=sub,
                 got=totals,
-                expected="non-empty dict mapping category -> total",
+                expected="a non-empty dict {level: number}",
             )
-        vals = np.array(list(totals.values()), dtype=float)
-        if not np.all(np.isfinite(vals)) or np.any(vals < 0):
-            raise DimensionError(
-                title="Invalid control totals",
-                detail=f"Control totals for {col_name!r} must be finite and non-negative.",
-                code="INVALID_CONTROL_TOTALS",
-                where=ctx,
-                param=f"controls[{col_name!r}]",
-            )
-        if np.all(vals == 0):
-            raise DimensionError(
-                title="All-zero control totals",
-                detail=f"All control totals for {col_name!r} are zero, which is not allowed.",
-                code="ZERO_CONTROL_TOTALS",
-                where=ctx,
-                param=f"controls[{col_name!r}]",
-            )
+        values = margin_df.get_column(col).to_list()
+        levels = sort_levels(dict.fromkeys(values))
+        index = LevelIndex(levels)
+        matched = match_keys(totals, index, where=ctx, param=sub, cols=[col])
+        vec = np.asarray(target_vector(matched, index.levels, where=ctx, param=sub))
+        if not np.any(vec > 0):
+            raise WeightingError.all_zero(where=ctx, param=sub)
+        code_of = {lv: i for i, lv in enumerate(index.levels)}
+        margin_indices.append(np.fromiter((code_of[v] for v in values), np.int64, len(values)))
+        raw_targets.append(vec)
 
-    _check_margins_agree(control_final, where=ctx)
-
-    # Build margin arrays once — reused across all cycles
-    margin_indices, margin_targets = _build_margin_arrays(rake_cols, control_final, processed)
+    if controls_norm is None:
+        # Shares are marginal proportions, normalized within each margin
+        # against one grand total, so cross-margin consistency is structural
+        # rather than something the caller has to get right.
+        grand_total = float(w0.sum())
+        margin_targets = [v / v.sum() * grand_total for v in raw_targets]
+    else:
+        margin_targets = raw_targets
+        _check_margins_agree(
+            {c: float(v.sum()) for c, v in zip(rake_cols, margin_targets)}, where=ctx
+        )
 
     assert rust_rake is not None  # noqa: S101
 
@@ -580,19 +460,17 @@ def rake(
 
     # ── Convergence guard ─────────────────────────────────────────────────
     if (not rake_converged or (trimming is not None and not trim_unchanged)) and strict:
-        reason = (
-            f"Trim-rake cycle did not converge after {max_iter} cycles. "
-            if trimming is not None
-            else f"Raking did not converge after {max_iter} iterations. "
-        )
-        raise MethodError.not_applicable(
+        raise WeightingError.not_converged(
             where=ctx,
             method="rake",
-            reason=(
-                reason + "The design has NOT been modified. "
-                "Increase max_iter, relax tol, or pass strict=False to store partial weights."
-            ),
-            hint="Try increasing max_iter or relaxing tol.",
+            what="Trim-rake cycle" if trimming is not None else "Raking",
+            max_iter=max_iter,
+            got={
+                "max_iter": max_iter,
+                "max_margin_error": _max_margin_error(raked_w, margin_indices, margin_targets),
+            },
+            expected={"tol": tol},
+            hint=f"Increase max_iter (now {max_iter}) or relax tol (now {tol:g}).",
         )
 
     if scope_idx is not None:

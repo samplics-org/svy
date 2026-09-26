@@ -20,7 +20,7 @@ import numpy as np
 import polars as pl
 
 from svy.core.warnings import Severity, WarnCode
-from svy.errors import DimensionError, MethodError
+from svy.errors import DimensionError, MethodError, WeightingError
 
 
 try:
@@ -148,18 +148,14 @@ def _run_trim(
 
     # ── Validate ─────────────────────────────────────────────────────────
     if design.wgt is None:
-        raise MethodError.not_applicable(
-            where=where,
-            method="trim",
-            reason="Sample weight is None. Set design.wgt before calling trim().",
-        )
+        raise WeightingError.no_weight(where=where, method="trim")
     wgt = design.wgt
     if wgt not in df.columns:
-        raise MethodError.invalid_choice(
+        raise WeightingError.missing_columns(
             where=where,
             param="design.wgt",
-            got=wgt,
-            allowed=list(df.columns),
+            missing=[wgt],
+            available=list(df.columns),
             hint="Check that the weight column exists in the data.",
         )
     if replace and wgt_name is not None:
@@ -219,11 +215,11 @@ def _run_trim(
         by_cols = [config.by] if isinstance(config.by, str) else list(config.by)
         missing = [c for c in by_cols if c not in df.columns]
         if missing:
-            raise MethodError.invalid_choice(
+            raise WeightingError.missing_columns(
                 where=where,
                 param="by",
-                got=missing,
-                allowed=list(df.columns),
+                missing=missing,
+                available=list(df.columns),
                 hint="Check that all by= columns exist in the data.",
             )
 
@@ -285,10 +281,8 @@ def _run_trim(
     else:
         target_wgt = wgt_name if wgt_name is not None else "trim_wgt"
         if target_wgt in df.columns:
-            raise MethodError.not_applicable(
-                where=where,
-                method="trim",
-                reason=f"Column '{target_wgt}' already exists. Choose a different wgt_name.",
+            raise WeightingError.wgt_name_exists(
+                where=where, method="trim", wgt_name=target_wgt, existing=df.columns
             )
         df = df.with_columns(pl.Series(name=target_wgt, values=w_out))
 

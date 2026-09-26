@@ -9,7 +9,7 @@ should import from Sample or touch survey design directly.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 import polars as pl
@@ -170,115 +170,7 @@ def _normalize_by_term(
 
 
 # ---------------------------------------------------------------------------
-# Simplified by-variable helpers (str | Sequence[str] | None)
-# ---------------------------------------------------------------------------
-
-_BY_SEP = "_&_"
-
-
-def _build_by_array(
-    df: pl.DataFrame,
-    by: str | Sequence[str] | None,
-    *,
-    where: str,
-) -> np.ndarray | None:
-    """Build a by-group array from one or more column names.
-
-    Parameters
-    ----------
-    df : pl.DataFrame
-        Source data.
-    by : str | Sequence[str] | None
-        Single column name, sequence of column names, or None.
-    where : str
-        Calling context for error messages.
-
-    Returns
-    -------
-    np.ndarray | None
-        Array of group labels (strings), or None if by is None.
-        Multi-column by produces ``_&_``-joined keys.
-    """
-    from svy.errors import MethodError
-
-    if by is None:
-        return None
-
-    if isinstance(by, str):
-        cols = [by]
-    elif isinstance(by, Sequence) and not isinstance(by, (bytes, bytearray)):
-        cols = list(by)
-        if not cols:
-            raise MethodError.not_applicable(
-                where=where,
-                method="weighting",
-                reason="`by` sequence must not be empty.",
-            )
-        for c in cols:
-            if not isinstance(c, str):
-                raise TypeError(f"`by` items must be strings, got {type(c).__name__}.")
-    else:
-        raise TypeError(f"`by` must be str, Sequence[str], or None; got {type(by).__name__}.")
-
-    missing = [c for c in cols if c not in df.columns]
-    if missing:
-        raise MethodError.invalid_choice(
-            where=where,
-            param="by",
-            got=missing,
-            allowed=list(df.columns),
-            hint="All `by` columns must exist in the data.",
-        )
-
-    if len(cols) == 1:
-        return df.get_column(cols[0]).to_numpy()
-    else:
-        combined = (
-            df.select(
-                pl.concat_str(
-                    [pl.col(c).cast(pl.Utf8) for c in cols],
-                    separator=_BY_SEP,
-                ).alias("__by__")
-            )
-            .get_column("__by__")
-            .to_numpy()
-        )
-        return combined
-
-
-def _normalize_dict_keys(d: dict) -> dict:
-    """Normalize dict keys: tuple keys become _&_-joined strings.
-
-    This ensures user-supplied dicts with tuple keys like ``("A", "M")``
-    match the internal ``_&_``-joined encoding produced by ``_build_by_array``.
-    Non-tuple keys are passed through unchanged.
-    """
-    out = {}
-    for k, v in d.items():
-        if isinstance(k, tuple):
-            out[_BY_SEP.join(str(x) for x in k)] = v
-        else:
-            out[k] = v
-    return out
-
-
-def _by_to_cols(by: str | Sequence[str] | None) -> list[str] | None:
-    """Convert a by argument to a list of column names, or None."""
-    if by is None:
-        return None
-    if isinstance(by, str):
-        return [by]
-    if isinstance(by, Sequence) and not isinstance(by, (bytes, bytearray)):
-        cols = list(by)
-        for c in cols:
-            if not isinstance(c, str):
-                raise TypeError(f"`by` items must be strings, got {type(c).__name__}.")
-        return cols
-    raise TypeError(f"`by` must be str, Sequence[str], or None; got {type(by).__name__}.")
-
-
-# ---------------------------------------------------------------------------
-# Sort key helpers (used by raking and calibration)
+# Sort key helpers
 # ---------------------------------------------------------------------------
 
 
@@ -287,9 +179,3 @@ def _num_sort_key_token(tok: str) -> tuple[int, float | str]:
         return (0, float(tok))
     except Exception:
         return (1, tok)
-
-
-def _num_sort_key_label(lbl: Any) -> Any:
-    if isinstance(lbl, tuple):
-        return tuple(_num_sort_key_token(t) for t in lbl)
-    return _num_sort_key_token(lbl)

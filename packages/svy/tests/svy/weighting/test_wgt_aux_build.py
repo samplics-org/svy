@@ -101,7 +101,7 @@ def test_build_aux_matrix_with_by_single_and_multi_keys():
     s = _make_sample()
 
     # 1. by="g" (Single column)
-    X1, shape1 = s.weighting.build_aux_matrix(x=[Cat("cat1")], by="g", by_na="level")
+    X1, shape1 = s.weighting.build_aux_matrix(x=[Cat("cat1")], by="g", na="level")
     by_keys1 = set(shape1.keys())
     assert by_keys1 == {"u", "v"}
     for _, inner in shape1.items():
@@ -113,7 +113,7 @@ def test_build_aux_matrix_with_by_single_and_multi_keys():
     X2, shape2 = s.weighting.build_aux_matrix(
         x=[Cat("cat1")],
         by=("g", "h"),
-        by_na="level",
+        na="level",
     )
     by_keys2 = set(shape2.keys())
 

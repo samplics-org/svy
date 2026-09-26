@@ -9,14 +9,17 @@ construction — they are not general-purpose weighting utilities.
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+import dataclasses
+
+from typing import Any, Mapping
 
 import numpy as np
 import polars as pl
 
 from svy.core.terms import Cat, Cross, Feature
-from svy.core.types import Category, Number
-from svy.errors import DimensionError
+from svy.core.types import Category
+from svy.errors import DimensionError, WeightingError
+from svy.weighting._keys import _NOT_FOUND, LevelIndex, _Ambiguous, match_keys, target_vector
 
 
 def _expand_term(
@@ -24,7 +27,9 @@ def _expand_term(
 ) -> tuple[list[pl.Expr], list[Category]]:
     if isinstance(term, str):
         if term not in df.columns:
-            raise KeyError(f"{where}: Continuous term '{term}' not found in data.")
+            raise WeightingError.missing_columns(
+                where=where, param="controls", missing=[term], available=list(df.columns)
+            )
         n_null = int(df.get_column(term).is_null().sum())
         if n_null > 0:
             # Silently filling with 0 would bias the calibration totals; the
@@ -44,16 +49,25 @@ def _expand_term(
     if isinstance(term, Cat):
         col_name = term.name
         if col_name not in df.columns:
-            raise KeyError(f"{where}: Cat variable '{col_name}' not found.")
+            raise WeightingError.missing_columns(
+                where=where, param="controls", missing=[col_name], available=list(df.columns)
+            )
 
         levels = df.get_column(col_name).unique().sort().to_list()
 
         if term.ref is not None:
-            if term.ref not in levels:
-                raise ValueError(
-                    f"{where}: Reference level '{term.ref}' not found in '{col_name}'."
+            try:
+                ref = LevelIndex(levels).resolve(term.ref)
+            except _Ambiguous:
+                ref = _NOT_FOUND
+            if ref is _NOT_FOUND:
+                raise WeightingError.ref_level_unknown(
+                    where=where,
+                    column=col_name,
+                    ref=term.ref,
+                    levels=[v for v in levels if v is not None],
                 )
-            levels = [lbl for lbl in levels if lbl != term.ref]
+            levels = [lbl for lbl in levels if lbl != ref]
 
         exprs = []
         labels = []
@@ -90,35 +104,72 @@ def _expand_term(
 
         return out_exprs, out_labs
 
-    raise TypeError(f"Unsupported term type: {type(term)}")
+    raise WeightingError.term_invalid(where=where, term=term)
+
+
+def _without_refs(term: Feature) -> Feature:
+    if isinstance(term, Cat) and term.ref is not None:
+        return dataclasses.replace(term, ref=None)
+    if isinstance(term, Cross):
+        return Cross(_without_refs(term.left), _without_refs(term.right))
+    return term
 
 
 def _match_term_targets(
     labels: list[Category],
-    target_spec: Number | dict[Category, Number] | Sequence[Number],
-    term_name: str,
+    target_spec: Any,
+    term: Feature,
+    df: pl.DataFrame,
+    *,
+    where: str,
+    param: str | None = None,
 ) -> list[float]:
-    if isinstance(target_spec, (int, float, np.integer, np.floating)):
+    """Targets for one term, aligned to its expanded ``labels``.
+
+    Keys resolve against every level of the term's columns, so a target for a
+    ``Cat(ref=...)`` reference level is accepted and ignored.
+    """
+    param = param or f"controls[{term!r}]"
+    if isinstance(target_spec, (int, float, np.integer, np.floating)) and not isinstance(
+        target_spec, bool
+    ):
         if len(labels) != 1:
-            raise ValueError(
-                f"Scalar target provided for term '{term_name}' which expanded "
-                f"to {len(labels)} columns. Use a dict mapping labels to values."
+            raise WeightingError.scalar_for_cells(
+                where=where, param=param, got=target_spec, levels=labels
             )
-        return [float(target_spec)]
+        return target_vector(
+            {labels[0]: target_spec}, labels, where=where, param=param, nonneg=False
+        )
 
-    if isinstance(target_spec, dict):
-        targets = []
-        missing = [lbl for lbl in labels if lbl not in target_spec]
-        if missing:
-            raise ValueError(f"Missing targets for term '{term_name}': {missing}")
+    if isinstance(target_spec, Mapping):
+        known = labels
+        if _without_refs(term) != term:
+            _, known = _expand_term(_without_refs(term), df, where)
+        width = len(labels[0]) if labels and isinstance(labels[0], tuple) else 1
+        cols = _term_cols(term)
+        matched = match_keys(
+            target_spec,
+            LevelIndex(known, width=width),
+            where=where,
+            param=param,
+            required=labels,
+            cols=cols,
+        )
+        return target_vector(matched, labels, where=where, param=param, nonneg=False)
 
-        for lbl in labels:
-            val = target_spec[lbl]  # type: ignore[index]
-            if not isinstance(val, (int, float, np.integer, np.floating)):
-                raise TypeError(f"Target for '{term_name}':{lbl} must be numeric.")
-            targets.append(float(val))
-        return targets
-
-    raise TypeError(
-        f"Unsupported target specification type for '{term_name}': {type(target_spec)}"
+    raise WeightingError.targets_type(
+        where=where,
+        param=param,
+        got=target_spec,
+        expected="a number (one column) or a dict {level: number}",
     )
+
+
+def _term_cols(term: Feature) -> list[str]:
+    if isinstance(term, str):
+        return [term]
+    if isinstance(term, Cat):
+        return [term.name]
+    if isinstance(term, Cross):
+        return _term_cols(term.left) + _term_cols(term.right)
+    return []
