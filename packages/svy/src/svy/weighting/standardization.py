@@ -203,11 +203,16 @@ def standardize(
 
     std_arr = scale_to_targets(wgt_arr.reshape(-1, 1), spec, targets)[:, 0]
     cycle_ok = True
+    infeasible = None
     if trimming is not None:
         from svy.weighting.poststratification import _trim_cycle
 
-        std_arr, cycle_ok = _trim_cycle(std_arr, spec, targets, trimming)
+        std_arr, cycle_ok, infeasible = _trim_cycle(
+            std_arr, spec, targets, trimming, where=_CTX, what="Trim-standardize cycle"
+        )
         if on_nonconvergence == "error" and not cycle_ok:
+            if infeasible is not None:
+                raise infeasible
             raise WeightingError.not_converged(
                 where=_CTX,
                 method="standardize",
@@ -268,5 +273,7 @@ def standardize(
             what="Trim-standardize cycle",
             trimming=trimming,
             level=finding_level(on_nonconvergence),
+            infeasible=infeasible,
+            wgt_name=wgt_name,
         )
     return sample

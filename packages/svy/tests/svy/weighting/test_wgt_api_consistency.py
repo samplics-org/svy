@@ -343,7 +343,7 @@ def test_rename_refused_leaves_sample(tight):
 # on_nonconvergence: error / warn / ignore on every method
 # ---------------------------------------------------------------------------
 
-CFG = TrimConfig(upper=2.0, max_iter=2)
+CFG = TrimConfig(upper=4.0, max_iter=2)
 X2 = np.column_stack([np.ones(12), np.ones(12)])
 
 # name -> (fixture, call, error code, finding code, weight column)
@@ -357,14 +357,14 @@ NONCONV = {
     ),
     "rake_trim_cycle": (
         "tight",
-        lambda s, **k: s.weighting.rake(controls={"c": {"a": 10, "b": 30}}, trimming=CFG, **k),
+        lambda s, **k: s.weighting.rake(controls={"c": {"a": 10, "b": 6}}, trimming=CFG, **k),
         "CONVERGENCE_FAILED",
         MAXIT,
         "rk_wgt",
     ),
     "poststratify_trim_cycle": (
         "tight",
-        lambda s, **k: s.weighting.poststratify({"a": 10, "b": 30}, cells="c", trimming=CFG, **k),
+        lambda s, **k: s.weighting.poststratify({"a": 10, "b": 6}, cells="c", trimming=CFG, **k),
         "CONVERGENCE_FAILED",
         MAXIT,
         "ps_wgt",
@@ -372,7 +372,7 @@ NONCONV = {
     "calibrate_trim_cycle": (
         "tight",
         lambda s, **k: s.weighting.calibrate(
-            controls={Cat("c"): {"a": 10, "b": 30}}, trimming=CFG, **k
+            controls={Cat("c"): {"a": 10, "b": 6}}, trimming=CFG, **k
         ),
         "CONVERGENCE_FAILED",
         MAXIT,
@@ -381,7 +381,7 @@ NONCONV = {
     "calibrate_where_trim_cycle": (
         "tight",
         lambda s, **k: s.weighting.calibrate(
-            controls={Cat("c"): {"a": 10, "b": 30}}, where=col("w") > 0, trimming=CFG, **k
+            controls={Cat("c"): {"a": 10, "b": 6}}, where=col("w") > 0, trimming=CFG, **k
         ),
         "CONVERGENCE_FAILED",
         MAXIT,
@@ -393,7 +393,7 @@ NONCONV = {
             aux_vars=np.column_stack(
                 [(s.data["c"] == "a").to_numpy(), (s.data["c"] == "b").to_numpy()]
             ).astype(float),
-            controls=[10.0, 30.0],
+            controls=[10.0, 6.0],
             trimming=CFG,
             **k,
         ),
@@ -430,7 +430,7 @@ NONCONV = {
     ),
     "standardize_trim_cycle": (
         "tight",
-        lambda s, **k: s.weighting.standardize("c", shares={"a": 1, "b": 3}, trimming=CFG, **k),
+        lambda s, **k: s.weighting.standardize("c", shares={"a": 5, "b": 1}, trimming=CFG, **k),
         "CONVERGENCE_FAILED",
         MAXIT,
         "std_wgt",
@@ -763,7 +763,7 @@ def test_new_on_nonconvergence_refuses_bad_value(tight_rr, name):
 # rake: trim-rake cycles are capped by trimming.max_iter
 # ---------------------------------------------------------------------------
 
-RAKE_TIGHT = {"c": {"a": 10, "b": 30}}
+RAKE_TIGHT = {"c": {"a": 10, "b": 6}}
 
 
 @pytest.mark.parametrize("cycles", [1, 2, 5])
@@ -786,7 +786,7 @@ def test_rake_cycles_follow_trimming_max_iter(rk, capsys, cycles, max_iter):
 def test_rake_trim_cycle_error_reports_trimming_cap(tight):
     with pytest.raises(WeightingError) as ei:
         tight.weighting.rake(
-            controls=RAKE_TIGHT, max_iter=50, trimming=TrimConfig(upper=2.0, max_iter=3)
+            controls=RAKE_TIGHT, max_iter=50, trimming=TrimConfig(upper=4.0, max_iter=3)
         )
     err = ei.value
     assert err.code == "CONVERGENCE_FAILED"
@@ -800,7 +800,7 @@ def test_rake_trim_cycle_finding_names_trimming_cap(tight):
         out = tight.weighting.rake(
             controls=RAKE_TIGHT,
             max_iter=50,
-            trimming=TrimConfig(upper=2.0, max_iter=3),
+            trimming=TrimConfig(upper=4.0, max_iter=3),
             on_nonconvergence="warn",
         )
     w = _found(out, MAXIT)[0]

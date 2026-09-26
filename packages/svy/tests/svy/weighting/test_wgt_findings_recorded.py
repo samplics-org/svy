@@ -350,7 +350,7 @@ def test_rake_display_iter_still_prints(rk, capsys):
     with pytest.warns(SvyUserWarning, match=r"\[MAX_ITER_REACHED\]"):
         rk.weighting.rake(
             controls=RK,
-            trimming=TrimConfig(upper=12.0, max_iter=2),
+            trimming=TrimConfig(upper=13.0, max_iter=2),
             on_nonconvergence="warn",
             display_iter=True,
         )
@@ -363,15 +363,15 @@ def tight() -> Sample:
     return Sample(df, Design(wgt="w"))
 
 
-CFG = TrimConfig(upper=2.0, max_iter=2)
+CFG = TrimConfig(upper=4.0, max_iter=2)
 CYCLES = {
     "poststratify": lambda s, **k: s.weighting.poststratify(
-        {"a": 10, "b": 30}, cells="c", trimming=CFG, **k
+        {"a": 10, "b": 6}, cells="c", trimming=CFG, **k
     ),
     "calibrate": lambda s, **k: s.weighting.calibrate(
-        controls={Cat("c"): {"a": 10, "b": 30}}, trimming=CFG, **k
+        controls={Cat("c"): {"a": 10, "b": 6}}, trimming=CFG, **k
     ),
-    "rake": lambda s, **k: s.weighting.rake(controls={"c": {"a": 10, "b": 30}}, trimming=CFG, **k),
+    "rake": lambda s, **k: s.weighting.rake(controls={"c": {"a": 10, "b": 6}}, trimming=CFG, **k),
 }
 
 
@@ -405,7 +405,7 @@ def test_standardize_trim_cycle_recorded():
     )
     with pytest.warns(SvyUserWarning, match=r"\[MAX_ITER_REACHED\]") as rec:
         out = Sample(df, Design(wgt="w")).weighting.standardize(
-            "c", shares={"a": 1, "b": 3}, by="g", trimming=CFG, on_nonconvergence="warn"
+            "c", shares={"a": 5, "b": 1}, by="g", trimming=CFG, on_nonconvergence="warn"
         )
     assert _svy(rec) and all(r.filename == __file__ for r in _svy(rec))
     assert "Trim-standardize" in _one(out, MAXIT).title
@@ -430,7 +430,7 @@ def test_calibrate_where_keeps_scoped_findings():
     )
     with pytest.warns(SvyUserWarning, match=r"\[MAX_ITER_REACHED\]"):
         out = Sample(df, Design(wgt="w")).weighting.calibrate(
-            controls={Cat("c"): {"a": 10, "b": 30}},
+            controls={Cat("c"): {"a": 10, "b": 6}},
             where=col("k") == 1,
             trimming=CFG,
             on_nonconvergence="warn",
@@ -542,7 +542,7 @@ def test_calibrate_bounded_still_refused(cal):
 
 
 def test_calibrate_trimming_cycle_owns_the_fit_check(cal):
-    cfg = TrimConfig(upper=2.5, max_iter=3)
+    cfg = TrimConfig(upper=6.0, max_iter=3)
     with pytest.raises(WeightingError) as ei:
         cal.weighting.calibrate(controls={Cat("c"): {"a": 20, "b": 30}, "one": 60}, trimming=cfg)
     assert ei.value.code == "CONVERGENCE_FAILED"

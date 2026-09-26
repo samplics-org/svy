@@ -28,11 +28,14 @@ from svy.errors import WeightingError
 from svy.weighting._engine import (
     CellSpec,
     build_cells,
+    control_name,
     materialize_cells,
     record_null_cells,
     record_trim_cycle,
     resolve_targets,
     scale_to_targets,
+    unit_bounds,
+    unreachable_cells,
 )
 from svy.weighting.raking import _trim_constraints_satisfied
 from svy.weighting.types import TrimConfig, resolve_threshold
@@ -55,11 +58,16 @@ def _trim_cycle(
     spec: CellSpec,
     targets: np.ndarray,
     trimming: TrimConfig,
-) -> tuple[np.ndarray, bool]:
+    *,
+    where: str,
+    what: str,
+) -> tuple[np.ndarray, bool, WeightingError | None]:
     """Alternate trimming and re-poststratification until both hold.
 
     Only in-scope rows take part: rows the adjustment never touched keep their
     weight, so trimming them here would be a second, unrequested adjustment.
+    A cycle that fails is diagnosed: when a cell's target is out of reach of
+    the bounds, the third value is the TRIM_INFEASIBLE error to raise or record.
     """
     idx = np.flatnonzero(spec.in_scope) if spec.in_scope is not None else None
     work = wgt_arr if idx is None else wgt_arr[idx]
@@ -72,24 +80,37 @@ def _trim_cycle(
     assert rust_trim_weights is not None  # noqa: S101
     sub = CellSpec(codes, spec.labels, None, spec.cols)
 
-    current = work.copy()
-    ok = False
+    # The bounds are checked on the rescaled weights: right after a trim they
+    # hold by construction, so checking there would end every cycle at once.
+    current = scale_to_targets(work.reshape(-1, 1), sub, targets)[:, 0]
+    ok = _trim_constraints_satisfied(current, upper, lower, 1e-4)
     for _ in range(trimming.max_iter):
-        current = scale_to_targets(current.reshape(-1, 1), sub, targets)[:, 0]
+        if ok:
+            break
         (current, *_) = rust_trim_weights(
             current, upper, lower, trimming.redistribute, trimming.max_iter, trimming.tol
         )
+        current = scale_to_targets(current.reshape(-1, 1), sub, targets)[:, 0]
         ok = _trim_constraints_satisfied(current, upper, lower, 1e-4)
-        if ok:
-            current = scale_to_targets(current.reshape(-1, 1), sub, targets)[:, 0]
-            ok = _trim_constraints_satisfied(current, upper, lower, 1e-4)
-            break
+
+    infeasible = None
+    if not ok:
+        lo, hi = unit_bounds(work, lower, upper)
+        names = [control_name(spec.cols, lab) for lab in spec.labels]
+        unreachable = unreachable_cells(codes, targets, lo, hi, names)
+        if unreachable:
+            infeasible = WeightingError.trim_cycle_infeasible(
+                where=where,
+                what=what,
+                controls=unreachable,
+                bounds={"lower": lower, "upper": upper},
+            )
 
     if idx is None:
-        return current, ok
+        return current, ok, infeasible
     out = wgt_arr.copy()
     out[idx] = current
-    return out, ok
+    return out, ok, infeasible
 
 
 def poststratify(
@@ -142,9 +163,14 @@ def poststratify(
     # The trim cycle runs before anything is written, so raising on
     # non-convergence leaves the sample as it was.
     cycle_ok = True
+    infeasible = None
     if trimming is not None:
-        ps_arr, cycle_ok = _trim_cycle(ps_arr, spec, targets, trimming)
+        ps_arr, cycle_ok, infeasible = _trim_cycle(
+            ps_arr, spec, targets, trimming, where=ctx, what="Trim-poststratify cycle"
+        )
         if on_nonconvergence == "error" and not cycle_ok:
+            if infeasible is not None:
+                raise infeasible
             raise WeightingError.not_converged(
                 where=ctx,
                 method="poststratify",
@@ -199,5 +225,7 @@ def poststratify(
             what="Trim-poststratify cycle",
             trimming=trimming,
             level=finding_level(on_nonconvergence),
+            infeasible=infeasible,
+            wgt_name=wgt_name,
         )
     return sample

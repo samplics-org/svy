@@ -200,7 +200,7 @@ def test_strict_trim_calibrate_failure_mutates_nothing():
 
     # Absolute cap (floats > 1) far below what the totals require: the final
     # calibrate always pushes weights back above the cap -> cannot converge
-    with pytest.raises(MethodError, match="did not converge"):
+    with pytest.raises(MethodError, match="cannot converge"):
         s.weighting.calibrate(
             controls={Cat("grp"): {"a": 500.0, "b": 500.0}},
             wgt_name="cw",
@@ -254,8 +254,9 @@ def test_calibrate_trim_cycle_min_cell_size_skips_with_warning():
     assert out._warnings.list(code=WarnCode.DOMAIN_SKIPPED)
 
 
-# The cycle may stop before converging (on_nonconvergence="warn"); the caps are checked.
-@pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyUserWarning")
+# Group b's total is out of reach of its cap (on_nonconvergence="warn" keeps the
+# last cycle); the caps are checked.
+@pytest.mark.filterwarnings(r"ignore:\[TRIM_INFEASIBLE\]:svy.SvyUserWarning")
 def test_calibrate_trim_cycle_by_domain_thresholds():
     """Per-domain trim: each group's weights end at or below its own cap."""
     rng = np.random.default_rng(3)

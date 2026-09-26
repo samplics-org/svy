@@ -26,7 +26,15 @@ from svy.core.design import WgtAdjustment
 from svy.core.types import Category, ControlsType
 from svy.core.warnings import WarnCode, check_on_finding, finding_level
 from svy.errors import DimensionError, MethodError, WeightingError
-from svy.weighting._engine import CELLS_PREFIX, _where_mask, resolve_bounds
+from svy.weighting._engine import (
+    CELLS_PREFIX,
+    _where_mask,
+    control_name,
+    record_trim_cycle,
+    resolve_bounds,
+    unit_bounds,
+    unreachable_cells,
+)
 from svy.weighting._keys import (
     LevelIndex,
     check_na_option,
@@ -35,7 +43,7 @@ from svy.weighting._keys import (
     target_vector,
     template_levels,
 )
-from svy.weighting.types import TrimConfig, resolve_threshold
+from svy.weighting.types import Threshold, TrimConfig, resolve_threshold
 
 
 if TYPE_CHECKING:
@@ -102,6 +110,13 @@ def _trim_constraints_satisfied(
     if lower_val is not None and np.any(w[w > 0] < lower_val * (1.0 - tol)):
         return False
     return True
+
+
+def _fixed_threshold(spec: object) -> bool:
+    """True when a trimming bound does not depend on the weights."""
+    if spec is None or isinstance(spec, (int, float)):
+        return True
+    return isinstance(spec, Threshold) and spec.stat == "absolute"
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +300,7 @@ def rake(
         margin_df = margin_df.filter(pl.Series(scope))
 
     margin_indices: list[np.ndarray] = []
+    margin_levels: list[list] = []
     raw_targets: list[np.ndarray] = []
     for col in rake_cols:
         sub = f"{param}[{col!r}]"
@@ -305,6 +321,7 @@ def rake(
             raise WeightingError.all_zero(where=ctx, param=sub)
         code_of = {lv: i for i, lv in enumerate(index.levels)}
         margin_indices.append(np.fromiter((code_of[v] for v in values), np.int64, len(values)))
+        margin_levels.append(list(index.levels))
         raw_targets.append(vec)
 
     if controls_norm is None:
@@ -323,119 +340,72 @@ def rake(
 
     # ── Trim-rake cycle ───────────────────────────────────────────────────
     # When trimming=None: single rake pass, no trim step.
-    # When trimming is set: iterate up to trimming.max_iter cycles:
-    #   1. Rake current weights to convergence (up to max_iter IPF steps each)
-    #   2. Trim — if no weights changed (within TrimConfig.tol), both
-    #      constraints are satisfied and we stop early.
-    # Final step is always rake so margins are satisfied.
-    # Replicates are raked once with the final main-weight cycle result.
+    # When trimming is set, up to trimming.max_iter cycles: check the raked
+    # weights against the bounds (right after a trim they hold by
+    # construction, so that is not where to check); stop when they hold and
+    # raking converged, otherwise trim and rake again. The last step is always
+    # a rake, so the margins are met. Replicates are raked once, with the final
+    # main-weight result.
 
-    n_cycles = trimming.max_iter if trimming is not None else 1
-    current_w = w0.copy()
-    rake_converged = False
-    trim_unchanged = trimming is None  # trivially true when no trimming
-
-    for cycle in range(n_cycles):
-        # ── Rake step ────────────────────────────────────────────────────
-        raked_result = _rake_or_raise(
-            current_w.reshape(-1, 1),
+    def _rake(w_in: np.ndarray) -> np.ndarray:
+        return _rake_or_raise(
+            w_in.reshape(-1, 1),
             margin_indices,
             margin_targets,
             ll_bound,
             up_bound,
             tol,
             max_iter,
-        )
+        )[:, 0]
 
-        raked_w = raked_result[:, 0]
-        rake_converged = _converged(raked_w, margin_indices, margin_targets, tol)
+    def _bounds(w_in: np.ndarray) -> tuple[float | None, float | None]:
+        # Resolved on each cycle's raked weights, so a relative bound follows them.
+        assert trimming is not None  # noqa: S101
+        w_pos = w_in[w_in > 0].astype(np.float64)
+        up = resolve_threshold(trimming.upper, w_pos) if trimming.upper is not None else None
+        lo = resolve_threshold(trimming.lower, w_pos) if trimming.lower is not None else None
+        return up, lo
 
-        if trimming is None:
-            if display_iter:
-                margin_err = _max_margin_error(raked_w, margin_indices, margin_targets)
-                status = "converged" if rake_converged else "not converged"
-                print(f"  Raking: max margin error = {margin_err:.2e}  [{status}]")
-            current_w = raked_w
-            break
+    upper_val: float | None = None
+    lower_val: float | None = None
+    current_w = _rake(w0)
+    rake_converged = _converged(current_w, margin_indices, margin_targets, tol)
+    trim_unchanged = True  # trivially true when no trimming
 
+    if trimming is None:
         if display_iter:
-            margin_err = _max_margin_error(raked_w, margin_indices, margin_targets)
-            rake_status = "✓" if rake_converged else "✗"
-
-        # ── Trim step ────────────────────────────────────────────────────
-        w_pos = raked_w[raked_w > 0].astype(np.float64)
-        upper_val = (
-            resolve_threshold(trimming.upper, w_pos) if trimming.upper is not None else None
-        )
-        lower_val = (
-            resolve_threshold(trimming.lower, w_pos) if trimming.lower is not None else None
-        )
-
-        (trimmed_w, *_) = rust_trim_weights(
-            raked_w,
-            upper_val,
-            lower_val,
-            trimming.redistribute,
-            trimming.max_iter,
-            trimming.tol,
-        )
-
-        # Check if trim constraints satisfied: no weight violates threshold beyond tol
-        # Uses absolute threshold comparison — more meaningful than relative weight change
-        trim_unchanged = _trim_constraints_satisfied(trimmed_w, upper_val, lower_val, tol)
-
-        current_w = trimmed_w
-        last_trimmed_w = trimmed_w  # saved for post-final-rake trim check
-
-        if display_iter:
-            max_w = float(np.max(np.abs(raked_w))) if raked_w.size > 0 else 1.0
-            max_w = max_w if max_w > 1e-10 else 1.0
-            trim_err = float(np.max(np.abs(trimmed_w - raked_w))) / max_w
-            trim_status = "✓" if trim_unchanged else "✗"
-            print(
-                f"Cycle {cycle + 1:3d} | "
-                f"rake margin err = {margin_err:.2e} {rake_status} | "
-                f"trim weight change = {trim_err:.2e} {trim_status}"
-            )
-
-        if rake_converged and trim_unchanged:
-            # Final rake to restore margins after last trim
-            final_result = _rake_or_raise(
-                current_w.reshape(-1, 1),
-                margin_indices,
-                margin_targets,
-                ll_bound,
-                up_bound,
-                tol,
-                max_iter,
-            )
-            current_w = final_result[:, 0]
-            rake_converged = _converged(current_w, margin_indices, margin_targets, tol)
-            # Re-check trim after final rake — rake could push weights back above threshold
+            margin_err = _max_margin_error(current_w, margin_indices, margin_targets)
+            status = "converged" if rake_converged else "not converged"
+            print(f"  Raking: max margin error = {margin_err:.2e}  [{status}]")
+    else:
+        for cycle in range(trimming.max_iter):
+            upper_val, lower_val = _bounds(current_w)
             trim_unchanged = _trim_constraints_satisfied(current_w, upper_val, lower_val, tol)
             if display_iter:
-                final_margin_err = _max_margin_error(current_w, margin_indices, margin_targets)
-                both_ok = rake_converged and trim_unchanged
+                margin_err = _max_margin_error(current_w, margin_indices, margin_targets)
                 print(
-                    f"  {'Converged' if both_ok else 'Warning: final rake shifted weights'}: "
-                    f"margin err = {final_margin_err:.2e}, "
-                    f"trim change = {float(np.max(np.abs(current_w - last_trimmed_w))) / max_w:.2e}"
+                    f"Cycle {cycle + 1:3d} | "
+                    f"rake margin err = {margin_err:.2e} {'✓' if rake_converged else '✗'} | "
+                    f"trim bounds {'✓' if trim_unchanged else '✗'}"
                 )
-            break
-    else:
-        # Loop exhausted without clean convergence — do a final rake
-        if trimming is not None:
-            final_result = _rake_or_raise(
-                current_w.reshape(-1, 1),
-                margin_indices,
-                margin_targets,
-                ll_bound,
-                up_bound,
-                tol,
-                max_iter,
+            if rake_converged and trim_unchanged:
+                break
+            (trimmed_w, *_) = rust_trim_weights(
+                current_w,
+                upper_val,
+                lower_val,
+                trimming.redistribute,
+                trimming.max_iter,
+                trimming.tol,
             )
-            current_w = final_result[:, 0]
+            current_w = _rake(trimmed_w)
             rake_converged = _converged(current_w, margin_indices, margin_targets, tol)
+        else:
+            upper_val, lower_val = _bounds(current_w)
+            trim_unchanged = _trim_constraints_satisfied(current_w, upper_val, lower_val, tol)
+        if display_iter:
+            both_ok = rake_converged and trim_unchanged
+            print(f"  {'Converged' if both_ok else 'Not converged'}")
 
     raked_w = current_w
 
@@ -454,7 +424,38 @@ def rake(
     if trimming is not None:
         miss["trim_bounds_met"] = bool(trim_unchanged)
     hint = f"Increase {cap_param} (now {cap}) or relax tol (now {tol:g})."
+
+    # A failed cycle whose margins are out of reach of the bounds is reported
+    # as such: more cycles would not help. Only for fixed bounds, since a bound
+    # relative to the weights is resolved again on each cycle's raked weights.
+    infeasible = None
+    if (
+        not converged
+        and trimming is not None
+        and _fixed_threshold(trimming.upper)
+        and _fixed_threshold(trimming.lower)
+    ):
+        lo, hi = unit_bounds(w0, lower_val, upper_val)
+        unreachable = [
+            entry
+            for col, codes, targets, levels in zip(
+                rake_cols, margin_indices, margin_targets, margin_levels
+            )
+            for entry in unreachable_cells(
+                codes, targets, lo, hi, [control_name([col], lv) for lv in levels]
+            )
+        ]
+        if unreachable:
+            infeasible = WeightingError.trim_cycle_infeasible(
+                where=ctx,
+                what=what,
+                controls=unreachable,
+                bounds={"lower": lower_val, "upper": upper_val},
+            )
+
     if not converged and on_nonconvergence == "error":
+        if infeasible is not None:
+            raise infeasible
         raise WeightingError.not_converged(
             where=ctx,
             method="rake",
@@ -546,7 +547,17 @@ def rake(
                 )
 
     sample._data = df
-    if not converged:
+    if infeasible is not None:
+        record_trim_cycle(
+            sample,
+            where=ctx,
+            what=what,
+            trimming=trimming,
+            level=finding_level(on_nonconvergence),
+            infeasible=infeasible,
+            wgt_name=wgt_name,
+        )
+    elif not converged:
         sample.warn(
             code=WarnCode.MAX_ITER_REACHED,
             title=f"{what} did not converge",

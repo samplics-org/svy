@@ -721,6 +721,56 @@ class WeightingError(MethodError):
         )
 
     @classmethod
+    def trim_cycle_infeasible(
+        cls,
+        *,
+        where: Optional[str],
+        what: str,
+        controls: Sequence[Mapping[str, Any]],
+        bounds: Mapping[str, float | None] | None = None,
+    ) -> "WeightingError":
+        """``controls``: one mapping per unreachable control with ``control``,
+        ``total``, ``reachable`` ([low, high], None for unbounded), ``n``,
+        ``mean_needed`` and optionally ``domain``. ``bounds`` is shown when the
+        cycle used one (lower, upper) pair for every unit."""
+        c = controls[0]
+        dom = f" in domain {show(c['domain'])}" if c.get("domain") is not None else ""
+        low, high = c["reachable"]
+        above = high is not None and c["total"] > high
+        reach = f"at most {high:.6g}" if above else f"at least {low:.6g}"
+        shown = ""
+        if bounds:
+            sides = [f"{k}={v:.6g}" for k, v in bounds.items() if v is not None]
+            shown = f" ({', '.join(sides)})"
+        detail = (
+            f"{what} cannot converge: the control for {c['control']}{dom} is "
+            f"{c['total']:.6g}, but its {c['n']} unit(s) reach {reach} within the "
+            f"trimming bounds{shown}. More cycles cannot help."
+        )
+        if len(controls) > 1:
+            detail += f" {len(controls) - 1} other control(s) cannot be met either; see got."
+        need = c.get("mean_needed")
+        if need is not None:
+            fix = (
+                f"an upper bound of at least {need:.6g}"
+                if above
+                else f"a lower bound of at most {need:.6g}"
+            )
+            hint = f"Widen the trimming bounds ({c['control']}{dom} needs {fix}) or check the controls."
+        else:
+            hint = "Widen the trimming bounds so each control's units can carry its total, or check the controls."
+        return cls(
+            title="Trimming bounds cannot meet the controls",
+            detail=detail + " The sample has NOT been modified.",
+            code="TRIM_INFEASIBLE",
+            where=where,
+            param="trimming",
+            expected="every control reachable by weights within the trimming bounds",
+            got={"controls": [dict(x) for x in controls]},
+            hint=hint,
+        )
+
+    @classmethod
     def psu_required(
         cls, *, where: Optional[str], method: str, note: str = ""
     ) -> "WeightingError":
