@@ -26,7 +26,7 @@ from svy.core.enumerations import PopParam
 from svy.core.repwgts import RepWgts
 from svy.errors import DimensionError, MethodError
 
-from .estimate import Estimate, ParamEst
+from .estimate import Estimate, ParamEst, row_counts
 from .replication import _get_rep_params
 
 
@@ -240,6 +240,7 @@ def result_to_param_est(
     by_levels: list = [None] * n_rows
     if by_col and by_col in result_df.columns:
         by_levels = [(v,) for v in result_df[by_col].to_list()]
+    n_list = row_counts(result_df)
 
     return [
         ParamEst(
@@ -254,6 +255,7 @@ def result_to_param_est(
             df=int(df_arr[i]),
             by=by_tuple,
             by_level=by_levels[i],
+            n=n_list[i],
         )
         for i in range(n_rows)
     ]

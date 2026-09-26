@@ -134,6 +134,7 @@ def _param_est_to_data(p: Any) -> ParamEstData:
         deff=_f(p.deff) if p.deff is not None else None,
         df=int(p.df) if p.df is not None else None,
         prob=_f(p.prob) if getattr(p, "prob", None) is not None else None,
+        n=p.n,
     )
 
 
@@ -162,6 +163,7 @@ def _ttest_est_to_data(e: Any) -> TtestEstData:
         cv=_f(e.cv),
         lci=_f(e.lci),
         uci=_f(e.uci),
+        n=e.n,
     )
 
 

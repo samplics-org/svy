@@ -21,6 +21,7 @@
       "group": "urban",
       "group_level": "Rural",
       "lci": 46200.0,
+      "n": null,
       "se": 900.0,
       "uci": 49800.0,
       "y": "income",
@@ -36,7 +37,7 @@
   },
   "kind": "ttest_two_groups",
   "paired": false,
-  "schema_version": "svy-result/0.4",
+  "schema_version": "svy-result/0.5",
   "stats": {
     "df": 18.0,
     "p_value": 0.0015,

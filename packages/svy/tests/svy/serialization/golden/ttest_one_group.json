@@ -21,6 +21,7 @@
       "group": null,
       "group_level": null,
       "lci": 48000.0,
+      "n": null,
       "se": 1000.0,
       "uci": 52000.0,
       "y": "income",
@@ -29,7 +30,7 @@
   ],
   "kind": "ttest_one_group",
   "mean_h0": 45000.0,
-  "schema_version": "svy-result/0.4",
+  "schema_version": "svy-result/0.5",
   "stats": {
     "df": 9.0,
     "p_value": 0.001,

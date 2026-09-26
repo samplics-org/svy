@@ -59,7 +59,7 @@ consumers can switch on the result type without introspection.
 ### 2.5 `schema_version` on top-level structs
 
 Every top-level struct carries `schema_version: str = SCHEMA_VERSION` where
-`SCHEMA_VERSION = "svy-result/0.4"`. Consumers can check the version to know
+`SCHEMA_VERSION = "svy-result/0.5"`. Consumers can check the version to know
 what fields to expect.
 
 **Versioning policy:** bump the minor version (0.1 → 0.2) when fields are added
@@ -84,6 +84,9 @@ ignore unknown fields.
   added: it decides whether the table has a level column, so the table view
   needs it (no longer excluded). `TDistData.df` widened to `int | float` so a
   GLM's integer design df keeps its dtype in the table.
+- `0.5` — `ParamEstData.n` and `TtestEstData.n` added: the records behind the
+  row (in its domain or group, nonzero weight, variables present). `None` when
+  decoded from an older payload.
 
 ### 2.6 Sub-structs are untagged
 

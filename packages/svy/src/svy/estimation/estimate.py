@@ -37,7 +37,7 @@ _QUANTILE_PARAMS = (PopParam.QUANTILE, PopParam.MEDIAN)
 # Carried by to_polars() but kept out of the printed table: df is a per-row
 # value that is constant for most results, so a column would repeat one number
 # down the page and widen every table. Reach for it via to_polars().
-_HIDDEN_DISPLAY_COLS = ("df",)
+_HIDDEN_DISPLAY_COLS = ("df", "n")
 
 
 def _display_columns(df: pl.DataFrame) -> list[str]:
@@ -69,6 +69,13 @@ def _row_levels(est: Any, names: Sequence[str], n_by: int) -> list[tuple[str, An
     if len(names) > n_by:
         out.append((names[n_by], est.y_level))
     return out
+
+
+def row_counts(result_df: pl.DataFrame) -> list[int | None]:
+    """Per-row record counts from a kernel result frame (its ``n`` column)."""
+    if "n" not in result_df.columns:
+        return [None] * result_df.height
+    return [None if v is None else int(v) for v in result_df["n"].to_list()]
 
 
 def row_order(estimates: Sequence[Any], *, param: str, as_factor: bool = False) -> list[int]:
@@ -181,12 +188,14 @@ def estimate_frame(
                 r[key] = val
         if est.df is not None:
             r["df"] = est.df
+        if est.n is not None:
+            r["n"] = est.n
         rows.append(r)
 
     # Display rows sort on what is shown, after label resolution: raw codes
     # ("Rural", "Urban") and their labels ("2. Rural", "1. Urban") order
     # differently. Data rows sort on the codes.
-    skip = {*_DECIMAL_KEYS, _ROW_POS}
+    skip = {*_DECIMAL_KEYS, _ROW_POS, "n"}
     if not display:
         skip |= {"df"} | {f"{c}_label" for c in labelled}
     sort_display_rows(rows, numeric_keys=skip)
@@ -261,6 +270,9 @@ class ParamEst(msgspec.Struct, frozen=True):
     df: int | None = None
     #: Target probability, set only for quantile estimates (0.5 for the median).
     prob: Number | None = None
+    #: Records behind this row: in its domain, with a nonzero weight and the
+    #: variables present (after ``where=`` and null handling).
+    n: int | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {f: getattr(self, f) for f in self.__struct_fields__}

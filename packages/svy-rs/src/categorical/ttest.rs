@@ -46,7 +46,7 @@ pub struct TTestOneResult {
     pub df: f64,
     /// p-value
     pub p_value: f64,
-    /// Number of observations
+    /// Records in the domain with a nonzero weight and a non-missing y
     pub n_obs: usize,
 }
 
@@ -69,8 +69,26 @@ pub struct TTestTwoResult {
     pub group_means: Vec<f64>,
     /// Per-group SEs [se0, se1]
     pub group_ses: Vec<f64>,
-    /// Number of observations
+    /// Per-group record counts [n0, n1]
+    pub group_ns: Vec<usize>,
+    /// Records in either group
     pub n_obs: usize,
+}
+
+/// Records with a nonzero weight and a non-missing y, within the domain if given.
+fn count_active(y: &Float64Chunked, w: &Float64Chunked, domain: Option<&BooleanChunked>) -> usize {
+    let active = |(yi, wi): (Option<f64>, Option<f64>)| {
+        yi.is_some_and(|v| !v.is_nan()) && wi.is_some_and(|v| v != 0.0 && !v.is_nan())
+    };
+    match domain {
+        None => y.iter().zip(w.iter()).filter(|p| active(*p)).count(),
+        Some(mask) => y
+            .iter()
+            .zip(w.iter())
+            .zip(mask.iter())
+            .filter(|(p, d)| d.unwrap_or(false) && active(*p))
+            .count(),
+    }
 }
 
 // ============================================================================
@@ -95,7 +113,7 @@ pub fn ttest_one_sample(
     calib: Option<&CalibSweep>,
     null_value: f64,
 ) -> PolarsResult<TTestOneResult> {
-    let n = y.len();
+    let n = count_active(y, weights, None);
 
     // Estimate mean using existing infrastructure
     let estimate = point_estimate_mean(y, weights)?;
@@ -152,8 +170,7 @@ pub fn ttest_one_sample_domain(
     let t_stat = if se > 0.0 { diff / se } else { f64::NAN };
     let p_value = crate::categorical::ranktest::two_sided_t_pvalue(t_stat, df);
 
-    // Count domain observations
-    let n_domain = domain_mask.iter().filter(|m| m.unwrap_or(false)).count();
+    let n_domain = count_active(y, weights, Some(domain_mask));
 
     Ok(TTestOneResult {
         estimate,
@@ -258,6 +275,14 @@ pub fn ttest_two_sample(
         calib,
     )?;
 
+    // w is already zero outside the domain and where y is missing.
+    let mut group_ns = vec![0usize; 2];
+    for (gi, wi) in g.iter().zip(w) {
+        if *wi != 0.0 && !wi.is_nan() {
+            group_ns[*gi as usize] += 1;
+        }
+    }
+
     Ok(TTestTwoResult {
         diff: wols.beta[1], // raw difference (before subtracting null)
         se_diff,
@@ -267,7 +292,8 @@ pub fn ttest_two_sample(
         levels,
         group_means,
         group_ses,
-        n_obs: n,
+        n_obs: group_ns.iter().sum(),
+        group_ns,
     })
 }
 

@@ -15,6 +15,7 @@
       "df": null,
       "est": 50000.0,
       "lci": 48000.0,
+      "n": null,
       "prob": null,
       "se": 1000.0,
       "uci": 52000.0,
@@ -31,6 +32,6 @@
   "n_strata": 10,
   "param": "Mean",
   "q_method": "Linear",
-  "schema_version": "svy-result/0.4",
+  "schema_version": "svy-result/0.5",
   "where_clause": null
 }
