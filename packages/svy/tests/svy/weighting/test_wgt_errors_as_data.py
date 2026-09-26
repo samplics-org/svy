@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import warnings
 
 import numpy as np
 import polars as pl
@@ -300,8 +301,6 @@ def test_missing_column_hint_suggests_the_close_name(s):
     assert "Did you mean 'zones' -> 'zone'?" in err.hint
 
 
-# trim() trims before it checks wgt_name, so the refused call still reports the skip.
-@pytest.mark.filterwarnings(r"ignore:\[DOMAIN_SKIPPED\]:svy.SvyUserWarning")
 def test_wgt_name_exists(s):
     err = raises(lambda: s.weighting.poststratify(10.0, wgt_name="x"), "WGT_NAME_EXISTS")
     assert err.got == "x" and "wgt_name='x_2'" in err.hint
@@ -311,6 +310,28 @@ def test_wgt_name_exists(s):
     )
     raises(lambda: s.weighting.trim(upper=5.0, wgt_name="x"), "WGT_NAME_EXISTS")
     raises(lambda: s.weighting.calibrate(controls={"x": 30.0}, wgt_name="x"), "WGT_NAME_EXISTS")
+
+
+def test_refused_trim_leaves_no_finding(s):
+    # 8 units, below the default min_cell_size: trimming would report the skip.
+    data, design, n = s.data, s.design, len(s.warnings)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        for kw in ({"wgt_name": "x"}, {"wgt_name": "x", "by": "zone", "min_cell_size": 1}):
+            raises(lambda: s.weighting.trim(upper=5.0, **kw), "WGT_NAME_EXISTS")
+        raises(lambda: s.weighting.trim(upper=5.0, wgt_name="x", inplace=True), "WGT_NAME_EXISTS")
+    assert s.data.equals(data) and s.design == design and len(s.warnings) == n
+
+
+def test_calibrate_checks_wgt_name_before_solving():
+    # These controls cannot be met; the taken name is refused first.
+    df = pl.DataFrame(
+        {"c": ["a", "b"] * 6, "one": [1.0] * 12, "w": [1.0 + (i % 3) for i in range(12)]}
+    )
+    s = Sample(df, Design(wgt="w"))
+    controls = {Cat("c"): {"a": 20, "b": 30}, "one": 60}
+    raises(lambda: s.weighting.calibrate(controls=controls, wgt_name="one"), "WGT_NAME_EXISTS")
+    raises(lambda: s.weighting.calibrate(controls=controls), "CALIBRATION_NOT_MET")
 
 
 def test_no_weight():

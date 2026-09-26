@@ -84,6 +84,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **`trim` and `calibrate` checked `wgt_name` only after doing the work.** A refused `trim(wgt_name=<existing column>)` still raised the findings of the trim it then discarded, and `calibrate` with a taken name and unmet controls raised `CALIBRATION_NOT_MET` instead of `WGT_NAME_EXISTS`. Both now check the name first.
+
 - **Taylor `mean`, `prop` and `ratio` returned no rows when one domain had only zero weights**, for every `by=` level and silently; a `where=` to such a domain returned nothing too. The domain now keeps its row with NaN estimate, SE and CI (df 0), as R's `svymean(subset())` and as svy's replication path already did; the other domains are unaffected. A ratio domain whose weighted denominator is zero is NaN the same way. `total` is unchanged (0, SE 0). Kernel errors in `mean`/`total`/`prop`/`ratio` are no longer turned into an empty result.
 
 - **`calibrate` and `calibrate_matrix` never checked that the controls were met**, except with `weights_only=True`: a singular system or inconsistent controls stored weights that missed them. Every path now checks `X'w` against the controls (relative tolerance 1e-4, absolute for a zero control; well-posed calibrations in the test suite miss by at most 7.5e-9). `on_nonconvergence="error"` (the default) raises `CALIBRATION_NOT_MET` before anything is written, with the targets in `expected`, the achieved totals in `got` (per domain, only the domains that miss, with `by=`) and the largest relative miss in `extra`; `"warn"` and `"ignore"` keep the weights and record the finding. A trimming cycle keeps its own check (`CONVERGENCE_FAILED` / `MAX_ITER_REACHED`).
