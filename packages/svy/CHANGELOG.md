@@ -86,6 +86,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **`trim` lost or gained weight total silently when redistribution was impossible.** With `redistribute=True`, a bound on the wrong side of a domain's mean positive weight (`upper` below it, `lower` above it) ended with every weight at the bound, the total changed and only the INFO audit recorded (`converged=True`, so `on_nonconvergence` never applied). It now raises `TRIM_INFEASIBLE` before anything is written, whatever `on_nonconvergence`, naming each failing domain with its bound, weight range, mean, `n` and total in `got`; the hint suggests a bound relative to the weights (`Threshold.quantile(0.99)`, `Threshold("median", 3.5)`) or `redistribute=False`. Also applies to `trim`'s `by=`/`where=` domains and `adjust(trimming=)`.
+
 - **`trim` and `calibrate` checked `wgt_name` only after doing the work.** A refused `trim(wgt_name=<existing column>)` still raised the findings of the trim it then discarded, and `calibrate` with a taken name and unmet controls raised `CALIBRATION_NOT_MET` instead of `WGT_NAME_EXISTS`. Both now check the name first.
 
 - **Taylor `mean`, `prop` and `ratio` returned no rows when one domain had only zero weights**, for every `by=` level and silently; a `where=` to such a domain returned nothing too. The domain now keeps its row with NaN estimate, SE and CI (df 0), as R's `svymean(subset())` and as svy's replication path already did; the other domains are unaffected. A ratio domain whose weighted denominator is zero is NaN the same way. `total` is unchanged (0, SE 0). Kernel errors in `mean`/`total`/`prop`/`ratio` are no longer turned into an empty result.

@@ -17,11 +17,14 @@ Coverage:
   - Warning codes: NEGATIVE_WEIGHT, ZERO_WEIGHT, REPLICATE_SKIPPED,
                    DOMAIN_SKIPPED, MAX_ITER_REACHED, WEIGHT_SUM_CHANGED,
                    WEIGHT_ADJ_AUDIT
+  - TRIM_INFEASIBLE: bounds redistribution cannot honour (mean outside them)
   - Edge cases: all-equal weights, single unit, zero-weight units,
                 negative weights, both bounds, lower > upper
 """
 
 from __future__ import annotations
+
+import json
 
 import numpy as np
 import polars as pl
@@ -30,9 +33,10 @@ import pytest
 from numpy.testing import assert_allclose
 from svy_rs._internal import trim_weights as _rust_trim_weights  # type: ignore[import-untyped]
 
-from svy import SvyUserWarning
+from svy import BootstrapWgts, SvyUserWarning
 from svy.core.sample import Design, Sample
 from svy.core.warnings import Severity, WarnCode
+from svy.errors import WeightingError
 from svy.weighting.types import (
     Threshold,
     TrimConfig,
@@ -929,9 +933,191 @@ def test_trim_where_scopes_the_adjustment():
 
     from svy import col as _col
 
-    df = _pl.DataFrame({"w": [1.0, 1.0, 1.0, 1.0, 50.0, 50.0], "frame": ["new"] * 3 + ["old"] * 3})
+    df = _pl.DataFrame({"w": [1.0] * 13 + [50.0, 50.0], "frame": ["new"] * 3 + ["old"] * 12})
     s = Sample(df, Design(wgt="w"))
     out = s.weighting.trim(upper=10.0, min_cell_size=1, where=_col("frame") == "old")
     got = out.data["trim_wgt"].to_numpy()
     assert list(got[:3]) == [1.0, 1.0, 1.0]
-    assert got[4] == 10.0 and got[5] == 10.0
+    assert got[-2] == 10.0 and got[-1] == 10.0
+    assert got[3:].sum() == pytest.approx(110.0)
+
+
+# ===========================================================================
+# TRIM_INFEASIBLE — the total cannot be kept within the bounds
+# ===========================================================================
+
+
+def _infeasible(call) -> WeightingError:
+    with pytest.raises(WeightingError) as ei:
+        call()
+    assert ei.value.code == "TRIM_INFEASIBLE"
+    return ei.value
+
+
+class TestTrimInfeasible:
+    def test_all_weights_above_upper(self):
+        s = _make_sample([5.0, 6.0, 7.0, 8.0])
+        err = _infeasible(lambda: s.weighting.trim(upper=3.0, min_cell_size=1))
+        assert err.param == "upper"
+        assert err.got == {
+            "domains": [
+                {
+                    "domain": "(global)",
+                    "bound": "upper",
+                    "value": 3.0,
+                    "n": 4,
+                    "total": 26.0,
+                    "mean": 6.5,
+                    "min": 5.0,
+                    "max": 8.0,
+                }
+            ]
+        }
+        assert "upper=3 is below the mean positive weight 6.5 (weights 5 to 8, n=4)" in err.detail
+        assert "in domain" not in err.detail
+        assert "NOT been modified" in err.detail
+        assert "(here 6.5)" in err.hint
+        assert "Threshold.quantile(0.99)" in err.hint and "redistribute=False" in err.hint
+        json.dumps(err.to_dict())
+
+    def test_mean_above_upper_with_some_weights_below(self):
+        # Two weights are below the cap, but they cannot absorb the excess.
+        s = _make_sample([1.0, 1.0, 20.0, 20.0])
+        err = _infeasible(lambda: s.weighting.trim(upper=3.0, min_cell_size=1, max_iter=100))
+        assert err.got["domains"][0]["mean"] == 10.5
+
+    def test_mean_equal_to_upper_is_feasible(self):
+        s = _make_sample([2.0, 2.0, 4.0, 4.0])
+        out = s.weighting.trim(upper=3.0, min_cell_size=1, max_iter=100)
+        assert_allclose(out.data[TRIM_WGT].to_numpy(), [3.0] * 4)
+
+    def test_relative_cap_at_the_mean_is_feasible(self):
+        w = [1.0, 2.0, 3.0, 10.0, 0.7, 0.3]
+        out = _make_sample(w).weighting.trim(
+            upper=Threshold("mean", 1.0), min_cell_size=1, max_iter=200
+        )
+        assert out.data[TRIM_WGT].sum() == pytest.approx(sum(w))
+
+    def test_relative_cap_below_the_mean_raises(self):
+        # Right-skewed: the median is below the mean.
+        s = _make_sample([1.0] * 6 + [50.0] * 4)
+        err = _infeasible(lambda: s.weighting.trim(upper=Threshold.quantile(0.5)))
+        assert err.got["domains"][0]["value"] == 1.0
+
+    def test_zero_weights_do_not_count_toward_the_mean(self):
+        # With the zeros the mean (2.4) is below the cap; without them it is 6.
+        s = _make_sample([0.0] * 6 + [6.0] * 4)
+        err = _infeasible(lambda: s.weighting.trim(upper=3.0, min_cell_size=1))
+        assert err.got["domains"][0]["n"] == 4 and err.got["domains"][0]["mean"] == 6.0
+
+    def test_all_weights_below_lower(self):
+        s = _make_sample([0.1, 0.2, 0.3, 0.4])
+        err = _infeasible(lambda: s.weighting.trim(lower=1.0, min_cell_size=1))
+        assert err.param == "lower"
+        assert "lower=1 is above the mean positive weight 0.25" in err.detail
+        assert "lower bound at or below the mean weight (here 0.25)" in err.hint
+        assert "upper bound" not in err.hint
+
+    def test_mean_below_lower_with_some_weights_above(self):
+        s = _make_sample([0.5] * 9 + [2.0])
+        _infeasible(lambda: s.weighting.trim(lower=1.0, min_cell_size=1))
+
+    def test_both_bounds_feasible(self):
+        w = [0.1] * 5 + [2.0] * 40 + [10.0] * 5
+        out = _make_sample(w).weighting.trim(lower=0.5, upper=5.0)
+        tw = out.data[TRIM_WGT].to_numpy()
+        assert tw.sum() == pytest.approx(sum(w))
+        assert tw.min() >= 0.5 - 1e-9 and tw.max() <= 5.0 + 1e-9
+
+    def test_upper_in_one_domain_lower_in_another(self):
+        s = _make_sample([5.0] * 4 + [0.5] * 4, ["A"] * 4 + ["B"] * 4)
+        err = _infeasible(
+            lambda: s.weighting.trim(upper=3.0, lower=1.0, by="domain", min_cell_size=1)
+        )
+        assert [(d["domain"], d["bound"]) for d in err.got["domains"]] == [
+            ("A", "upper"),
+            ("B", "lower"),
+        ]
+        assert err.param == "upper/lower"
+        assert "upper bound" in err.hint and "lower bound" in err.hint
+        assert "(here" not in err.hint
+        assert "1 other domain(s) fail too" in err.detail
+
+    def test_by_names_only_the_failing_domain(self):
+        # A is feasible (mean 2.2); B is entirely above the cap.
+        w = [1.0] * 9 + [12.0] + [5.0] * 10
+        s = _make_sample(w, ["A"] * 10 + ["B"] * 10)
+        err = _infeasible(lambda: s.weighting.trim(upper=3.0, by="domain"))
+        assert [d["domain"] for d in err.got["domains"]] == ["B"]
+        assert "in domain 'B'" in err.detail
+
+    def test_by_all_feasible_keeps_each_domain_total(self):
+        w = [1.0] * 9 + [12.0] + [1.0] * 9 + [20.0]
+        s = _make_sample(w, ["A"] * 10 + ["B"] * 10)
+        out = s.weighting.trim(upper=5.0, by="domain")
+        sums = out.data.group_by("domain").agg(pl.col(TRIM_WGT).sum()).sort("domain")
+        assert_allclose(sums[TRIM_WGT].to_numpy(), [21.0, 29.0])
+
+    def test_where_judges_the_scope_alone(self):
+        from svy import col
+
+        # Globally the mean (2.5) is below the cap; within the scope it is 6.
+        s = _make_sample([1.0] * 8 + [6.0, 6.0], ["new"] * 8 + ["old"] * 2)
+        err = _infeasible(
+            lambda: s.weighting.trim(upper=3.0, min_cell_size=1, where=col("domain") == "old")
+        )
+        assert err.got["domains"][0]["n"] == 2
+
+    def test_where_scope_feasible_although_the_whole_sample_is_not(self):
+        from svy import col
+
+        s = _make_sample([1.0, 1.0, 1.0, 10.0] + [50.0] * 4, ["old"] * 4 + ["new"] * 4)
+        out = s.weighting.trim(upper=5.0, min_cell_size=1, where=col("domain") == "old")
+        tw = out.data[TRIM_WGT].to_numpy()
+        assert tw[:4].sum() == pytest.approx(13.0) and tw[:4].max() <= 5.0 + 1e-9
+        assert list(tw[4:]) == [50.0] * 4
+
+    def test_skipped_domain_is_not_judged(self):
+        # B has too few units to be trimmed at all, so its bound is not checked.
+        s = _make_sample([1.0] * 9 + [12.0] + [5.0] * 2, ["A"] * 10 + ["B"] * 2)
+        with pytest.warns(SvyUserWarning, match=r"\[DOMAIN_SKIPPED\]"):
+            out = s.weighting.trim(upper=3.0, by="domain", min_cell_size=5)
+        assert list(out.data[TRIM_WGT].to_numpy()[-2:]) == [5.0, 5.0]
+
+    @pytest.mark.parametrize("mode", ["error", "warn", "ignore"])
+    def test_raised_whatever_on_nonconvergence(self, mode):
+        s = _make_sample([5.0] * 10)
+        _infeasible(lambda: s.weighting.trim(upper=3.0, on_nonconvergence=mode, max_iter=1))
+
+    def test_redistribute_false_lets_the_total_change(self):
+        s = _make_sample([5.0] * 10)
+        out = s.weighting.trim(upper=3.0, redistribute=False)
+        assert out.data[TRIM_WGT].sum() == pytest.approx(30.0)
+        changed = _warnings_of(out, WarnCode.WEIGHT_SUM_CHANGED)
+        assert len(changed) == 1 and changed[0].level == Severity.INFO
+
+    @pytest.mark.parametrize("wgt_name", ["trim_wgt", None])
+    @pytest.mark.parametrize("inplace", [True, False])
+    def test_sample_left_unmodified(self, wgt_name, inplace):
+        s = _make_sample([5.0] * 10)
+        data, design, history = s.data, s.design, s.design_history
+        _infeasible(lambda: s.weighting.trim(upper=3.0, wgt_name=wgt_name, inplace=inplace))
+        assert s.data.equals(data) and s.design == design
+        assert s.design_history == history
+
+    def test_replicate_weights_left_unmodified(self):
+        df = pl.DataFrame(
+            {"weight": [5.0] * 10, **{f"rw{i}": [5.0 + i] * 10 for i in range(1, 4)}}
+        )
+        s = Sample(df, Design(wgt="weight", rep_wgts=BootstrapWgts(prefix="rw", n_reps=3)))
+        data = s.data
+        _infeasible(lambda: s.weighting.trim(upper=3.0, wgt_name=None))
+        assert s.data.equals(data)
+
+    def test_adjust_trimming_raises_and_leaves_the_sample(self):
+        df = pl.DataFrame({"weight": [5.0] * 10, "st": ["rr"] * 10})
+        s = Sample(df, Design(wgt="weight"))
+        data, design = s.data, s.design
+        err = _infeasible(lambda: s.weighting.adjust("st", trimming=TrimConfig(upper=3.0)))
+        assert err.where == "Sample.weighting.adjust"
+        assert s.data.equals(data) and s.design == design
