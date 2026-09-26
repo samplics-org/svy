@@ -67,7 +67,8 @@ def add_stage(
     Returned Design fields:
         stratum  — from stage-1 design
         psu      — from stage-1 design
-        ssu      — from next_stage.design.psu (if Sample), else None
+        ssu      — None; next_stage.design.psu is only the key linking rows
+                   to their stage-1 PSU
         prob     — svy_prob_selection_stage1  (chaining trigger)
         wgt      — None; recomputed after stage-2 selection
         hit, mos, pop_size, rep_wgts — None
@@ -158,7 +159,9 @@ def add_stage(
         case_id=ns_design.case_id,
         stratum=s1_design.stratum,
         psu=s1_design.psu,
-        ssu=ns_design.psu if ns_design.psu else None,
+        # next_stage's psu is the join key to the stage-1 PSUs, not a stage-2
+        # unit: as the ssu it would duplicate the psu.
+        ssu=None,
         wgt=result.out_wgt_col if result.already_selected else None,
         prob=result.chaining_prob_col,
         hit=ns_design.hit if already_selected else None,
