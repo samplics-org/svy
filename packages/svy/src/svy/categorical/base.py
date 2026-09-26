@@ -699,6 +699,7 @@ class Categorical:
                 cv=abs(se / estimate) if estimate != 0 else float("nan"),
                 lci=estimate - t_crit * se,
                 uci=estimate + t_crit * se,
+                n=row.get("n"),
             )
             return TTestOneGroup(
                 y=y_name,
@@ -731,7 +732,7 @@ class Categorical:
                 by_level=by_level if by else None,
             )
 
-            def _make_est(grp_level, est_val, se_val):
+            def _make_est(grp_level, est_val, se_val, n_val):
                 return TtestEst(
                     by=by,
                     by_level=by_level if by else None,
@@ -744,6 +745,7 @@ class Categorical:
                     cv=abs(se_val / est_val) if est_val != 0 else float("nan"),
                     lci=est_val - t_crit * se_val,
                     uci=est_val + t_crit * se_val,
+                    n=n_val,
                 )
 
             return TTestTwoGroups(
@@ -751,7 +753,10 @@ class Categorical:
                 groups=GroupLevels(var=group, levels=(level_0, level_1)),
                 alternative=alternative,
                 diff=[diff_est],
-                estimates=[_make_est(level_0, mean_0, se_0), _make_est(level_1, mean_1, se_1)],
+                estimates=[
+                    _make_est(level_0, mean_0, se_0, row.get("n_0")),
+                    _make_est(level_1, mean_1, se_1, row.get("n_1")),
+                ],
                 stats=TTestStats(df=df_val, t=t_stat, p_value=p_value),
                 alpha=alpha,
             )

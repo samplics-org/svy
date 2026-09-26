@@ -64,6 +64,7 @@ class TtestEst(msgspec.Struct):
     cv: Number
     lci: Number
     uci: Number
+    n: int | None = None
 
     @classmethod
     def from_param(cls, param_est: ParamEst) -> Self:
@@ -81,6 +82,7 @@ class TtestEst(msgspec.Struct):
             cv=param_est.cv,
             lci=param_est.lci,
             uci=param_est.uci,
+            n=param_est.n,
         )
 
 
@@ -667,6 +669,8 @@ def ttest_one_group_frame(
                     "uci": e.uci,
                 }
             )
+            if e.n is not None:
+                row["n"] = e.n
             rows.append(row)
         return pl.DataFrame(rows)
 
@@ -775,6 +779,8 @@ def ttest_two_groups_frame(
                     "uci": e.uci,
                 }
             )
+            if e.n is not None:
+                row["n"] = e.n
             rows.append(row)
         return pl.DataFrame(rows)
 
@@ -1025,6 +1031,7 @@ def ttest_to_records(
             "cv": e.cv,
             "lci": e.lci,
             "uci": e.uci,
+            "n": e.n,
         }
         if include_meta:
             kind = "one" if isinstance(tt, TTestOneGroup) else "two"

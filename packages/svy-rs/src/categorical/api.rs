@@ -475,6 +475,8 @@ fn compute_svyttest_single(
                 "se_0" => vec![res.group_ses[0]],
                 "se_1" => vec![res.group_ses[1]],
                 "n" => vec![res.n_obs as u32],
+                "n_0" => vec![res.group_ns[0] as u32],
+                "n_1" => vec![res.group_ns[1] as u32],
             ]
         }
     }

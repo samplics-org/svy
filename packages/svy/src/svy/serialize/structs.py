@@ -21,7 +21,7 @@ import msgspec
 # Constants
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = "svy-result/0.4"
+SCHEMA_VERSION = "svy-result/0.5"
 
 #: A design is an input, read back into a live ``Design``: its own schema.
 DESIGN_SCHEMA_VERSION = "svy-design/0.1"
@@ -113,6 +113,7 @@ class ParamEstData(msgspec.Struct, kw_only=True, frozen=True):
     deff: float | None = None
     df: int | None = None
     prob: float | None = None
+    n: int | None = None
 
 
 class LevelLabelData(msgspec.Struct, kw_only=True, frozen=True):
@@ -161,6 +162,7 @@ class TtestEstData(msgspec.Struct, kw_only=True, frozen=True):
     cv: float
     lci: float
     uci: float
+    n: int | None = None
 
 
 class TTestStatsData(msgspec.Struct, kw_only=True, frozen=True):

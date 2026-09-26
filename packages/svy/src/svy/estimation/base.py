@@ -20,7 +20,7 @@ from svy.core.types import WhereArg
 from svy.core.warnings import WarnCode
 from svy.errors import DimensionError, MethodError
 from svy.errors.singleton_errors import SingletonError
-from svy.estimation.estimate import Estimate, EstimateList, ParamEst, row_order
+from svy.estimation.estimate import Estimate, EstimateList, ParamEst, row_counts, row_order
 from svy.estimation.replication import (
     replicate_estimate as _replicate_estimate,
 )
@@ -855,6 +855,7 @@ class Estimation:
             if "n" in result_df.columns
             else np.zeros(n_rows, dtype=np.int64)
         )
+        n_list = row_counts(result_df)
         deff_arr = result_df["deff"].to_numpy() if (deff and "deff" in result_df.columns) else None
 
         if deff_arr is not None and n_rows and bool(np.all(np.isnan(deff_arr))):
@@ -925,6 +926,7 @@ class Estimation:
                     by_level=by_levels[i],
                     y_level=y_levels[i],
                     x=x_name,
+                    n=n_list[i],
                 )
                 for i in range(n_rows)
             ]
@@ -988,6 +990,7 @@ class Estimation:
                 by_level=by_levels[i],
                 y_level=y_levels[i],
                 x=x_name,
+                n=n_list[i],
             )
             for i in range(n_rows)
         ]
@@ -1089,6 +1092,7 @@ class Estimation:
         est_vals = result_df["est"].to_list()
         se_vals = result_df["se"].to_list()
         df_vals = result_df["df"].to_list()
+        n_list = row_counts(result_df)
         by_tuple = (by_col,) if by_col else None
         est_list = []
 
@@ -1146,6 +1150,7 @@ class Estimation:
                     y_level=None,
                     x=None,
                     prob=p if set_prob else None,
+                    n=n_list[i],
                 )
             )
         return est_list
@@ -1189,6 +1194,7 @@ class Estimation:
         uci_arr = est_arr + t_crits * se_arr
         with np.errstate(divide="ignore", invalid="ignore"):
             cv_arr = np.where(est_arr != 0, se_arr / est_arr, np.inf)
+        n_list = row_counts(result_df)
 
         by_tuple = (by_col,) if by_col else None
         by_levels: list = [None] * n_rows
@@ -1210,6 +1216,7 @@ class Estimation:
                 y_level=None,
                 x=None,
                 prob=float(probs[i]) if set_prob else None,
+                n=n_list[i],
             )
             for i in range(n_rows)
         ]
