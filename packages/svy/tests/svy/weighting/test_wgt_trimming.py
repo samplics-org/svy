@@ -30,6 +30,7 @@ import pytest
 from numpy.testing import assert_allclose
 from svy_rs._internal import trim_weights as _rust_trim_weights  # type: ignore[import-untyped]
 
+from svy import SvyUserWarning
 from svy.core.sample import Design, Sample
 from svy.core.warnings import Severity, WarnCode
 from svy.weighting.types import (
@@ -676,7 +677,8 @@ class TestTrimByDomain:
             data=pl.DataFrame({"weight": weights, "domain": domains}),
             design=Design(wgt="weight"),
         )
-        out = sample.weighting.trim(upper=50.0, by="domain", min_cell_size=10)
+        with pytest.warns(SvyUserWarning, match=r"\[DOMAIN_SKIPPED\]"):
+            out = sample.weighting.trim(upper=50.0, by="domain", min_cell_size=10)
         warns = _warnings_of(out, WarnCode.DOMAIN_SKIPPED)
         assert len(warns) == 1
         assert "B" in warns[0].detail
@@ -715,14 +717,14 @@ class TestTrimWarnings:
 
     def test_zero_weight_emits_info_warning(self):
         sample = _make_sample([0.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0])
-        out = sample.weighting.trim(upper=50.0)
+        out = sample.weighting.trim(upper=50.0, min_cell_size=1)
         warns = _warnings_of(out, WarnCode.ZERO_WEIGHT)
         assert len(warns) == 1
         assert warns[0].level == Severity.INFO
 
     def test_zero_weight_unit_preserved_in_output(self):
         sample = _make_sample([0.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 100.0])
-        out = sample.weighting.trim(upper=50.0)
+        out = sample.weighting.trim(upper=50.0, min_cell_size=1)
         w = out.data[TRIM_WGT].to_numpy()
         assert w[0] == 0.0
 
@@ -770,9 +772,10 @@ class TestTrimWarnings:
         assert len(warns) == 0
 
     def test_max_iter_reached_warning(self, skewed_sample):
-        out = skewed_sample.weighting.trim(
-            upper=50.0, redistribute=True, max_iter=1, tol=1e-20, on_nonconvergence="warn"
-        )
+        with pytest.warns(SvyUserWarning, match=r"\[MAX_ITER_REACHED\]"):
+            out = skewed_sample.weighting.trim(
+                upper=50.0, redistribute=True, max_iter=1, tol=1e-20, on_nonconvergence="warn"
+            )
         warns = _warnings_of(out, WarnCode.MAX_ITER_REACHED)
         assert len(warns) >= 1
         assert warns[0].level == Severity.WARNING
@@ -825,6 +828,8 @@ class TestTrimConvergence:
         audits = _warnings_of(out, WarnCode.WEIGHT_ADJ_AUDIT)
         assert audits[0].extra["converged"] is True
 
+    # One iteration is not enough here; the count is what is checked.
+    @pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyUserWarning")
     def test_max_iter_1_records_one_iteration(self, skewed_sample):
         out = skewed_sample.weighting.trim(upper=50.0, max_iter=1, on_nonconvergence="warn")
         audits = _warnings_of(out, WarnCode.WEIGHT_ADJ_AUDIT)
@@ -878,7 +883,8 @@ class TestTrimEdgeCases:
     def test_all_weights_zero_no_crash(self):
         sample = _make_sample([0.0, 0.0, 0.0])
         # All zero → no positive units → domain skipped at min_cell_size=1
-        out = sample.weighting.trim(upper=50.0, min_cell_size=1)
+        with pytest.warns(SvyUserWarning, match=r"\[DOMAIN_SKIPPED\]"):
+            out = sample.weighting.trim(upper=50.0, min_cell_size=1)
         # No crash, weights unchanged
         w = out.data[TRIM_WGT].to_numpy()
         assert_allclose(w, [0.0, 0.0, 0.0])

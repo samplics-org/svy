@@ -128,12 +128,13 @@ def _jkn_frame(counts, rng):
 )
 def test_jkn_without_declared_units_warns_at_construction(design_kwargs, expect_psu_in_hint):
     df, n_reps = _jkn_frame([2, 2, 2, 2], np.random.default_rng(21))
-    s = svy.Sample(
-        data=df,
-        design=svy.Design(
-            rep_wgts=JackknifeWgts(prefix="rw", n_reps=n_reps, kind="jkn"), **design_kwargs
-        ),
-    )
+    with pytest.warns(svy.SvyUserWarning, match=r"\[JACKKNIFE_COEFS_UNAVAILABLE\]"):
+        s = svy.Sample(
+            data=df,
+            design=svy.Design(
+                rep_wgts=JackknifeWgts(prefix="rw", n_reps=n_reps, kind="jkn"), **design_kwargs
+            ),
+        )
     warns = s.warnings.list(code="JACKKNIFE_COEFS_UNAVAILABLE")
     assert warns, "a declared JKn that cannot be derived must warn at construction"
     assert ("psu" in warns[0].hint) is expect_psu_in_hint
@@ -142,17 +143,18 @@ def test_jkn_without_declared_units_warns_at_construction(design_kwargs, expect_
 def test_jkn_unbalanced_strata_warns_and_does_not_offer_psu():
     """Adding psu cannot help here -- it is already there and still not enough."""
     df, n_reps = _jkn_frame([3, 2, 2, 2], np.random.default_rng(22))
-    s = svy.Sample(
-        data=df,
-        design=svy.Design(
-            stratum="stratum",
-            psu="psu",
-            wgt="wgt",
-            rep_wgts=JackknifeWgts(
-                prefix="rw", n_reps=n_reps, kind="jkn", stratum="stratum", psu="psu"
+    with pytest.warns(svy.SvyUserWarning, match=r"\[JACKKNIFE_COEFS_UNAVAILABLE\]"):
+        s = svy.Sample(
+            data=df,
+            design=svy.Design(
+                stratum="stratum",
+                psu="psu",
+                wgt="wgt",
+                rep_wgts=JackknifeWgts(
+                    prefix="rw", n_reps=n_reps, kind="jkn", stratum="stratum", psu="psu"
+                ),
             ),
-        ),
-    )
+        )
     warns = s.warnings.list(code="JACKKNIFE_COEFS_UNAVAILABLE")
     assert warns
     assert "unbalanced" in warns[0].detail
@@ -180,12 +182,13 @@ def test_jkn_error_names_both_fixes():
     """`scale` used to be the only remedy named, sending anyone whose file does
     carry psu off to hand-compute what svy would have derived."""
     df, n_reps = _jkn_frame([2, 2, 2, 2], np.random.default_rng(24))
-    s = svy.Sample(
-        data=df,
-        design=svy.Design(
-            wgt="wgt", rep_wgts=JackknifeWgts(prefix="rw", n_reps=n_reps, kind="jkn")
-        ),
-    )
+    with pytest.warns(svy.SvyUserWarning, match=r"\[JACKKNIFE_COEFS_UNAVAILABLE\]"):
+        s = svy.Sample(
+            data=df,
+            design=svy.Design(
+                wgt="wgt", rep_wgts=JackknifeWgts(prefix="rw", n_reps=n_reps, kind="jkn")
+            ),
+        )
     with pytest.raises(svy.MethodError) as exc:
         s.estimation.mean("y", method="replication")
     text = str(exc.value)
@@ -257,7 +260,8 @@ def test_a_unit_column_is_protected_from_a_casual_drop():
 def test_force_dropping_a_unit_column_clears_the_reference():
     """Better a recorded None than a reference to a column that is gone."""
     s = _units_sample(np.random.default_rng(34))
-    d = s.wrangling.remove_columns(["vstrat"], force=True)
+    with pytest.warns(svy.SvyUserWarning, match=r"\[DESIGN_FIELDS_REMOVED\]"):
+        d = s.wrangling.remove_columns(["vstrat"], force=True)
     assert d._design.rep_wgts.stratum is None
     assert d._design.rep_wgts.psu == "psu"
 
@@ -284,15 +288,16 @@ def test_jkn_with_a_psu_but_no_stratum_refuses_rather_than_reproducing_jk1():
     one stratum yields (R-1)/R -- the JK1 global -- handed back under a JKn
     label. On 4 strata x 2 PSUs that is 0.875 where 0.5 is correct."""
     df, n_reps = _jkn_frame([2, 2, 2, 2], np.random.default_rng(41))
-    s = svy.Sample(
-        data=df,
-        design=svy.Design(
-            stratum="stratum",
-            psu="psu",
-            wgt="wgt",
-            rep_wgts=JackknifeWgts(prefix="rw", n_reps=n_reps, kind="jkn", psu="psu"),
-        ),
-    )
+    with pytest.warns(svy.SvyUserWarning, match=r"\[JACKKNIFE_COEFS_UNAVAILABLE\]"):
+        s = svy.Sample(
+            data=df,
+            design=svy.Design(
+                stratum="stratum",
+                psu="psu",
+                wgt="wgt",
+                rep_wgts=JackknifeWgts(prefix="rw", n_reps=n_reps, kind="jkn", psu="psu"),
+            ),
+        )
     assert s._design.rep_wgts.rep_coefs is None
     warns = s.warnings.list(code="JACKKNIFE_COEFS_UNAVAILABLE")
     assert warns and "no stratum" in warns[0].detail
@@ -380,7 +385,8 @@ def test_force_dropping_one_member_coarsens_rather_than_clears():
     """A multi-column unit that loses a member is a coarser unit, not a missing
     one; only an empty remainder clears the field."""
     s = _multi_unit_sample(np.random.default_rng(53))
-    d = s.wrangling.remove_columns(["urban"], force=True)
+    with pytest.warns(svy.SvyUserWarning, match=r"\[DESIGN_FIELDS_REMOVED\]"):
+        d = s.wrangling.remove_columns(["urban"], force=True)
     assert d._design.rep_wgts.stratum == ("region",)
 
 
@@ -471,15 +477,18 @@ def test_recovery_refuses_columns_without_the_delete_one_signature():
     noise = built._data.with_columns(
         [pl.Series(f"b{i}", rng.uniform(0.5, 1.5, 7)) for i in range(1, 8)]
     )
-    s = svy.Sample(
-        data=noise,
-        design=svy.Design(
-            stratum="stratum",
-            psu="psu",
-            wgt="wgt",
-            rep_wgts=JackknifeWgts(prefix="b", n_reps=7, kind="jkn", stratum="stratum", psu="psu"),
-        ),
-    )
+    with pytest.warns(svy.SvyUserWarning, match=r"\[JACKKNIFE_COEFS_UNAVAILABLE\]"):
+        s = svy.Sample(
+            data=noise,
+            design=svy.Design(
+                stratum="stratum",
+                psu="psu",
+                wgt="wgt",
+                rep_wgts=JackknifeWgts(
+                    prefix="b", n_reps=7, kind="jkn", stratum="stratum", psu="psu"
+                ),
+            ),
+        )
     assert s._design.rep_wgts.rep_coefs is None
     assert s.warnings.list(code="JACKKNIFE_COEFS_UNAVAILABLE")
     with pytest.raises(svy.MethodError):
@@ -593,15 +602,16 @@ def test_a_fully_zero_weighted_psu_refuses_rather_than_guessing():
         rep_prefix="jk"
     )
     raw = built._data.select(["stratum", "psu", "wgt", "y"] + [f"jk{i}" for i in range(1, 8)])
-    s = svy.Sample(
-        data=raw,
-        design=svy.Design(
-            stratum="stratum",
-            psu="psu",
-            wgt="wgt",
-            rep_wgts=JackknifeWgts(prefix="jk", n_reps=7, stratum="stratum", psu="psu"),
-        ),
-    )
+    with pytest.warns(svy.SvyUserWarning, match=r"\[JACKKNIFE_COEFS_UNAVAILABLE\]"):
+        s = svy.Sample(
+            data=raw,
+            design=svy.Design(
+                stratum="stratum",
+                psu="psu",
+                wgt="wgt",
+                rep_wgts=JackknifeWgts(prefix="jk", n_reps=7, stratum="stratum", psu="psu"),
+            ),
+        )
     assert s._design.rep_wgts.rep_coefs is None
     assert s.warnings.list(code="JACKKNIFE_COEFS_UNAVAILABLE")
 

@@ -337,6 +337,8 @@ def test_trim_rake_caps_extreme_weight(mock_design):
     assert weights.max() <= 30.0 * 1.01
 
 
+# One cycle is allowed not to converge (on_nonconvergence="warn").
+@pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyUserWarning")
 def test_trim_rake_single_cycle_max_iter_1(mock_design):
     """max_iter=1 means one rake + one trim + one final rake — three total Rust calls."""
     from svy.weighting.types import TrimConfig

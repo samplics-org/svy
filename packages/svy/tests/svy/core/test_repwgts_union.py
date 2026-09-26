@@ -344,7 +344,8 @@ def test_design_units_alone_do_not_drive_the_derivation():
     replicates were drawn. A producer who collapsed strata for variance
     estimation would have them differ, so borrowing would count the wrong n_h
     and return a plausible wrong coefficient."""
-    s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jkn", stratum=None, psu=None)
+    with pytest.warns(svy.SvyUserWarning, match=r"\[JACKKNIFE_COEFS_UNAVAILABLE\]"):
+        s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jkn", stratum=None, psu=None)
     assert s._design.stratum == "stratum" and s._design.psu == "psu"
     assert s._design.rep_wgts.rep_coefs is None  # not derived from the Design
     assert WarnCode.JACKKNIFE_COEFS_UNAVAILABLE in {w.code for w in s.warnings.list()}
@@ -360,7 +361,8 @@ def test_declared_jkn_derives_its_coefficients_from_a_balanced_design():
 
 def test_unbalanced_jkn_is_not_derived_and_still_refuses():
     """The replicate->stratum mapping is the producer's, not svy's to infer."""
-    s = _jk_sample([1, 1, 1, 1, 2, 2], n_reps=3, kind="jkn")
+    with pytest.warns(svy.SvyUserWarning, match=r"\[JACKKNIFE_COEFS_UNAVAILABLE\]"):
+        s = _jk_sample([1, 1, 1, 1, 2, 2], n_reps=3, kind="jkn")
     assert s._design.rep_wgts.rep_coefs is None
     with pytest.raises(MethodError):
         s._design.rep_wgts.coefficients()
@@ -385,7 +387,8 @@ def test_unspecified_kind_is_read_off_the_declared_units():
 def test_an_unspecifiable_kind_still_falls_back_and_warns():
     """n_reps matching neither the PSU nor the stratum count says nothing about
     which scheme these are, so there is nothing to read off."""
-    s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=3)
+    with pytest.warns(svy.SvyUserWarning, match=r"\[JACKKNIFE_KIND_UNSPECIFIED\]"):
+        s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=3)
     assert s._design.rep_wgts.kind is None
     assert s._design.rep_wgts.coefficients() == pytest.approx([2 / 3] * 3)
     codes = {w.code for w in s.warnings.list()}
@@ -411,7 +414,8 @@ def test_a_kind_contradicted_by_the_units_is_an_error():
 def test_a_kind_that_matches_no_scheme_only_warns():
     """A frame subset to fewer PSUs than the weights were built from is not a
     mislabelling, and there is no alternative kind to point at."""
-    s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=3, kind="jkn")
+    with pytest.warns(svy.SvyUserWarning, match=r"\[JACKKNIFE_KIND_UNSPECIFIED\]"):
+        s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=3, kind="jkn")
     codes = {w.code for w in s.warnings.list()}
     assert WarnCode.JACKKNIFE_KIND_UNSPECIFIED in codes
 

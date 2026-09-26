@@ -492,6 +492,10 @@ def calibrate_matrix(
             available=list(df.columns),
             hint="Design must reference an existing weight column.",
         )
+    if not weights_only and wgt_name in df.columns:
+        raise WeightingError.wgt_name_exists(
+            where=where, method="calibrate", wgt_name=wgt_name, existing=df.columns
+        )
     w = df.get_column(wgt_col).to_numpy()
 
     X = np.asarray(aux_vars, dtype=float)
@@ -615,13 +619,6 @@ def calibrate_matrix(
 
     if weights_only:
         return new_w
-
-    existing_cols = set(df.columns)
-
-    if wgt_name in existing_cols:
-        raise WeightingError.wgt_name_exists(
-            where=where, method="calibrate", wgt_name=wgt_name, existing=existing_cols
-        )
 
     cycle_ok = True
     null_trim_by: dict[str, np.ndarray] = {}

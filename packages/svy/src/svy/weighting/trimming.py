@@ -175,6 +175,11 @@ def _run_trim(
             method="trim",
             reason="Pass either replace=True or wgt_name=..., not both.",
         )
+    target_wgt = wgt if replace else (wgt_name if wgt_name is not None else "trim_wgt")
+    if not replace and target_wgt in df.columns:
+        raise WeightingError.wgt_name_exists(
+            where=where, method="trim", wgt_name=target_wgt, existing=df.columns
+        )
 
     # ── Extract weights ───────────────────────────────────────────────────
     w_orig = df.get_column(wgt).to_numpy().astype(np.float64, copy=False)
@@ -320,16 +325,7 @@ def _run_trim(
             )
 
     # ── Write back main weight ────────────────────────────────────────────
-    if replace:
-        target_wgt = wgt
-        df = df.with_columns(pl.Series(name=target_wgt, values=w_out))
-    else:
-        target_wgt = wgt_name if wgt_name is not None else "trim_wgt"
-        if target_wgt in df.columns:
-            raise WeightingError.wgt_name_exists(
-                where=where, method="trim", wgt_name=target_wgt, existing=df.columns
-            )
-        df = df.with_columns(pl.Series(name=target_wgt, values=w_out))
+    df = df.with_columns(pl.Series(name=target_wgt, values=w_out))
 
     if update_design_wgts:
         sample._push_design()

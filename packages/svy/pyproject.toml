@@ -79,8 +79,13 @@ markers = [
 # matched against the frame the warning is attributed to, and polars sets
 # stacklevel to point at *our* code, so `:polars` never matches and the filter
 # silently does nothing. Verified with a probe against both forms.
+#
+# A svy finding is an error unless the test expects it: `pytest.warns(...)`
+# when the finding is what the test checks, otherwise
+# `@pytest.mark.filterwarnings(r"ignore:\[CODE\]:svy.SvyUserWarning")`.
 filterwarnings = [
     "error::DeprecationWarning",
+    "error::svy.SvyUserWarning",
 ]
 
 # testpaths = ["tests"]

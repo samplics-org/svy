@@ -44,7 +44,7 @@ class TestSDRMean:
 
     def test_mean_income(self, sdr_sample):
         """Mean income estimation."""
-        result = sdr_sample.estimation.mean("income")
+        result = sdr_sample.estimation.mean("income", method="replication")
 
         assert result is not None
         assert len(result.estimates) == 1
@@ -56,7 +56,7 @@ class TestSDRMean:
 
     def test_mean_age(self, sdr_sample):
         """Mean age estimation."""
-        result = sdr_sample.estimation.mean("age")
+        result = sdr_sample.estimation.mean("age", method="replication")
 
         est = result.estimates[0]
         assert 30 < est.est < 60  # Reasonable age range
@@ -68,7 +68,7 @@ class TestSDRTotal:
 
     def test_total_income(self, sdr_sample):
         """Total income estimation."""
-        result = sdr_sample.estimation.total("income")
+        result = sdr_sample.estimation.total("income", method="replication")
 
         est = result.estimates[0]
         assert est.est > 0
@@ -80,7 +80,7 @@ class TestSDRProportion:
 
     def test_prop_employed(self, sdr_sample):
         """Proportion employed estimation."""
-        result = sdr_sample.estimation.prop("employed")
+        result = sdr_sample.estimation.prop("employed", method="replication")
 
         # Should have 2 categories (0 and 1)
         assert len(result.estimates) == 2
@@ -95,7 +95,7 @@ class TestSDRRatio:
 
     def test_ratio_health_to_income(self, sdr_sample):
         """Ratio of health expenditure to income."""
-        result = sdr_sample.estimation.ratio(y="health_exp", x="income")
+        result = sdr_sample.estimation.ratio(y="health_exp", x="income", method="replication")
 
         est = result.estimates[0]
         assert 0 < est.est < 1  # Health exp should be fraction of income
@@ -107,7 +107,7 @@ class TestSDRDomain:
 
     def test_mean_income_by_region(self, sdr_sample):
         """Mean income by region."""
-        result = sdr_sample.estimation.mean("income", by="region")
+        result = sdr_sample.estimation.mean("income", by="region", method="replication")
 
         # Should have 4 regions
         assert len(result.estimates) == 4

@@ -269,6 +269,35 @@ fn flatten_cov(cov: Vec<Vec<f64>>) -> Vec<f64> {
     cov.into_iter().flatten().collect()
 }
 
+// The point estimate of a mean or ratio fails only on a zero denominator: a
+// domain carrying no weight, or a ratio whose weighted x sums to zero. That
+// domain keeps its row, NaN as in R's svymean(subset()) and on the replication
+// path, instead of failing the call and taking every other domain with it. Its
+// scores are zero, so the variance and covariance are masked explicitly.
+
+/// Variance and SE of an estimate, both NaN when the estimate is undefined.
+fn var_se(estimate: f64, variance: f64) -> (f64, f64) {
+    if estimate.is_nan() {
+        (f64::NAN, f64::NAN)
+    } else {
+        (variance, variance.max(0.0).sqrt())
+    }
+}
+
+/// Flat covariance with NaN in the rows and columns of undefined estimates.
+fn flat_cov(score_cols: &[Vec<f64>], design: &TaylorDesign, estimates: &[f64]) -> Vec<f64> {
+    let mut cov = taylor_covariance_apply(score_cols, design);
+    for (i, est) in estimates.iter().enumerate() {
+        if est.is_nan() {
+            for j in 0..cov.len() {
+                cov[i][j] = f64::NAN;
+                cov[j][i] = f64::NAN;
+            }
+        }
+    }
+    flatten_cov(cov)
+}
+
 fn compute_mean_ungrouped(
     df: &DataFrame,
     value_col: &str,
@@ -304,14 +333,16 @@ fn compute_mean_ungrouped(
         singleton_method,
         calib,
         || {
-            let estimate = point_estimate_mean(y, weights)?;
+            let Ok(estimate) = point_estimate_mean(y, weights) else {
+                return Ok((vec![0.0; y.len()], (f64::NAN, f64::NAN)));
+            };
             let scores = scores_mean_arr(y, weights)?;
             let srs_var = srs_variance_mean(y, weights, srs)?;
             Ok((scores, (estimate, srs_var)))
         },
     )?;
 
-    let se = variance.max(0.0).sqrt();
+    let (variance, se) = var_se(estimate, variance);
     let n = active_count(weights, None);
     let deff = if srs_var > 0.0 {
         variance / srs_var
@@ -374,11 +405,14 @@ fn compute_mean_multi(
         .into_par_iter()
         .map(|i| -> PolarsResult<(String, f64, f64, f64, u32, f64)> {
             let y = y_cols[i];
-            let estimate = point_estimate_mean(y, weights)?;
+            let n = active_count(weights, None);
+            let Ok(estimate) = point_estimate_mean(y, weights) else {
+                let nan = f64::NAN;
+                return Ok((value_cols[i].clone(), nan, nan, nan, n, nan));
+            };
             let scores_arr = scores_mean_arr(y, weights)?;
             let variance = taylor_variance_apply(&scores_arr, &design);
             let se = variance.max(0.0).sqrt();
-            let n = active_count(weights, None);
             let srs_var = srs_variance_mean(y, weights, srs)?;
             let deff = if srs_var > 0.0 {
                 variance / srs_var
@@ -458,7 +492,10 @@ fn compute_mean_grouped(
             |&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
                 let domain_mask = by_str.equal(group);
                 let n_domain = active_count(weights, Some(&domain_mask));
-                let estimate = point_estimate_mean_domain(y, weights, &domain_mask)?;
+                let Ok(estimate) = point_estimate_mean_domain(y, weights, &domain_mask) else {
+                    let nan = f64::NAN;
+                    return Ok((group, nan, nan, nan, n_domain, nan, vec![0.0; y.len()]));
+                };
                 let scores = scores_mean_domain(y, weights, &domain_mask)?;
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
                 let variance = taylor_variance_apply(&scores_arr, &design);
@@ -491,7 +528,7 @@ fn compute_mean_grouped(
         deffs.push(deff);
         score_cols.push(scores_arr);
     }
-    let cov = flatten_cov(taylor_covariance_apply(&score_cols, &design));
+    let cov = flat_cov(&score_cols, &design, &estimates);
     let dfs = group_dfs;
     let out = df![by_col => by_vals, "y" => vec![value_col; n_groups], "est" => estimates,
         "se" => ses, "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs]?;
@@ -992,14 +1029,16 @@ fn compute_ratio_ungrouped(
         singleton_method,
         calib,
         || {
-            let estimate = point_estimate_ratio(y, x, weights)?;
+            let Ok(estimate) = point_estimate_ratio(y, x, weights) else {
+                return Ok((vec![0.0; y.len()], (f64::NAN, f64::NAN)));
+            };
             let scores = scores_to_arr(&scores_ratio(y, x, weights)?);
             let srs_var = srs_variance_ratio(y, x, weights, srs)?;
             Ok((scores, (estimate, srs_var)))
         },
     )?;
 
-    let se = variance.max(0.0).sqrt();
+    let (variance, se) = var_se(estimate, variance);
     let n = active_count(weights, None);
     let deff = if srs_var > 0.0 {
         variance / srs_var
@@ -1058,12 +1097,23 @@ fn compute_ratio_multi(
             |i| -> PolarsResult<(String, String, f64, f64, f64, u32, f64)> {
                 let y = y_cols[i];
                 let x = x_cols[i];
-                let estimate = point_estimate_ratio(y, x, weights)?;
+                let n = active_count(weights, None);
+                let Ok(estimate) = point_estimate_ratio(y, x, weights) else {
+                    let nan = f64::NAN;
+                    return Ok((
+                        numerator_cols[i].clone(),
+                        denominator_cols[i].clone(),
+                        nan,
+                        nan,
+                        nan,
+                        n,
+                        nan,
+                    ));
+                };
                 let scores = scores_ratio(y, x, weights)?;
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
                 let variance = taylor_variance_apply(&scores_arr, &design);
                 let se = variance.max(0.0).sqrt();
-                let n = active_count(weights, None);
                 let srs_var = srs_variance_ratio(y, x, weights, srs)?;
                 let deff = if srs_var > 0.0 {
                     variance / srs_var
@@ -1152,7 +1202,10 @@ fn compute_ratio_grouped(
             |&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
                 let domain_mask = by_str.equal(group);
                 let n_domain = active_count(weights, Some(&domain_mask));
-                let estimate = point_estimate_ratio_domain(y, x, weights, &domain_mask)?;
+                let Ok(estimate) = point_estimate_ratio_domain(y, x, weights, &domain_mask) else {
+                    let nan = f64::NAN;
+                    return Ok((group, nan, nan, nan, n_domain, nan, vec![0.0; y.len()]));
+                };
                 let scores = scores_ratio_domain(y, x, weights, &domain_mask)?;
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
                 let variance = taylor_variance_apply(&scores_arr, &design);
@@ -1185,7 +1238,7 @@ fn compute_ratio_grouped(
         deffs.push(deff);
         score_cols.push(scores_arr);
     }
-    let cov = flatten_cov(taylor_covariance_apply(&score_cols, &design));
+    let cov = flat_cov(&score_cols, &design, &estimates);
     let dfs = group_dfs;
     let out = df![by_col => by_vals, "y" => vec![numerator_col; n_groups], "x" => vec![denominator_col; n_groups],
         "est" => estimates, "se" => ses, "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs]?;
@@ -1679,11 +1732,18 @@ fn compute_levels_ungrouped(
             .collect();
         let indicator_ca = Float64Chunked::from_slice_options("indicator".into(), &indicator);
         let (estimate, scores, srs_var) = match scale {
-            LevelScale::Share => (
-                point_estimate_mean(&indicator_ca, weights)?,
-                scores_mean(&indicator_ca, weights)?,
-                srs_variance_mean(&indicator_ca, weights, srs)?,
-            ),
+            LevelScale::Share => match point_estimate_mean(&indicator_ca, weights) {
+                Ok(estimate) => (
+                    estimate,
+                    scores_mean(&indicator_ca, weights)?,
+                    srs_variance_mean(&indicator_ca, weights, srs)?,
+                ),
+                Err(_) => (
+                    f64::NAN,
+                    Float64Chunked::full("scores".into(), 0.0, indicator_ca.len()),
+                    f64::NAN,
+                ),
+            },
             LevelScale::Count => (
                 point_estimate_total(&indicator_ca, weights)?,
                 scores_total(&indicator_ca, weights)?,
@@ -1691,8 +1751,7 @@ fn compute_levels_ungrouped(
             ),
         };
         let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-        let variance = taylor_variance_apply(&scores_arr, &design);
-        let se = variance.max(0.0).sqrt();
+        let (variance, se) = var_se(estimate, taylor_variance_apply(&scores_arr, &design));
         let deff = if srs_var > 0.0 {
             variance / srs_var
         } else {
@@ -1708,7 +1767,7 @@ fn compute_levels_ungrouped(
         deffs.push(deff);
         score_cols.push(scores_arr);
     }
-    let cov = flatten_cov(taylor_covariance_apply(&score_cols, &design));
+    let cov = flat_cov(&score_cols, &design, &estimates);
     let n_levels = level_vals.len();
     let out = df!["y" => vec![value_col; n_levels], "level" => level_vals, "est" => estimates,
         "se" => ses, "var" => variances, "df" => dfs_vec, "n" => ns, "deff" => deffs]?;
@@ -1789,7 +1848,11 @@ fn compute_prop_multi(
                     .collect();
                 let indicator_ca =
                     Float64Chunked::from_slice_options("indicator".into(), &indicator);
-                let estimate = point_estimate_mean(&indicator_ca, weights)?;
+                let Ok(estimate) = point_estimate_mean(&indicator_ca, weights) else {
+                    let nan = f64::NAN;
+                    out.push((value_cols[i].clone(), lvl.clone(), nan, nan, nan, n, nan));
+                    continue;
+                };
                 let scores = scores_mean(&indicator_ca, weights)?;
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
                 let variance = taylor_variance_apply(&scores_arr, &design);
@@ -1910,11 +1973,25 @@ fn compute_levels_grouped(
                 let indicator_ca =
                     Float64Chunked::from_slice_options("indicator".into(), &indicator);
                 let (estimate, scores, srs_var) = match scale {
-                    LevelScale::Share => (
-                        point_estimate_mean_domain(&indicator_ca, weights, &domain_mask)?,
-                        scores_mean_domain(&indicator_ca, weights, &domain_mask)?,
-                        srs_variance_mean_domain(&indicator_ca, weights, &domain_mask, srs)?,
-                    ),
+                    LevelScale::Share => {
+                        match point_estimate_mean_domain(&indicator_ca, weights, &domain_mask) {
+                            Ok(estimate) => (
+                                estimate,
+                                scores_mean_domain(&indicator_ca, weights, &domain_mask)?,
+                                srs_variance_mean_domain(
+                                    &indicator_ca,
+                                    weights,
+                                    &domain_mask,
+                                    srs,
+                                )?,
+                            ),
+                            Err(_) => (
+                                f64::NAN,
+                                Float64Chunked::full("scores".into(), 0.0, indicator_ca.len()),
+                                f64::NAN,
+                            ),
+                        }
+                    }
                     LevelScale::Count => (
                         point_estimate_total_domain(&indicator_ca, weights, &domain_mask)?,
                         scores_total_domain(&indicator_ca, weights, &domain_mask)?,
@@ -1922,8 +1999,7 @@ fn compute_levels_grouped(
                     ),
                 };
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-                let variance = taylor_variance_apply(&scores_arr, &design);
-                let se = variance.max(0.0).sqrt();
+                let (variance, se) = var_se(estimate, taylor_variance_apply(&scores_arr, &design));
                 let deff = if srs_var > 0.0 {
                     variance / srs_var
                 } else {
@@ -1964,7 +2040,7 @@ fn compute_levels_grouped(
             score_cols.push(scores_arr);
         }
     }
-    let cov = flatten_cov(taylor_covariance_apply(&score_cols, &design));
+    let cov = flat_cov(&score_cols, &design, &estimates);
     let n_rows = by_vals.len();
     let dfs_vec: Vec<u32> = group_dfs
         .iter()

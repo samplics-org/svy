@@ -929,6 +929,8 @@ def test_record_reset_is_seen_by_the_next_estimate(api):
     assert_allclose(_se(rk), se_rk)
 
 
+# BRR replicates with no stratum or psu: Taylor on them is the finding, expected here.
+@pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyUserWarning")
 def test_replicate_se_after_restore(small):
     rw = BrrWgts(prefix="r", n_reps=4)
     s = Sample(small, Design(wgt="w", rep_wgts=rw))
@@ -1101,6 +1103,8 @@ def test_provenance_only_records(api, kind):
     assert forced.design.wgt_adjustment is None and forced.design.wgt == "nw"
 
 
+# BRR replicates with no stratum or psu: Taylor on them is the finding, expected here.
+@pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyUserWarning")
 def test_replicates_only_design_unknown_weight(small):
     rw = BrrWgts(prefix="r", n_reps=4)
     s = Sample(small, Design(wgt="w", rep_wgts=rw))
