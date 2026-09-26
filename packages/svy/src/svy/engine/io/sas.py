@@ -1,13 +1,12 @@
 # svy/engine/io/sas.py
 from __future__ import annotations
 
-import warnings
-
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
 
 import polars as pl
 
+from svy.core.warnings import warn_no_sample
 from svy.metadata import MetadataStore
 
 from .core import (
@@ -108,24 +107,18 @@ def _write_sas(
     or ``write_stata`` when the labels have to travel with the data.
     """
     if format is not None:
-        warnings.warn(
-            f"format={format!r} is ignored: ReadStat writes SAS Transport (XPT) only.",
-            UserWarning,
-            stacklevel=2,
-        )
+        warn_no_sample(f"format={format!r} is ignored: ReadStat writes SAS Transport (XPT) only.")
     if encoding is not None:
-        warnings.warn("encoding is ignored by the XPT writer.", UserWarning, stacklevel=2)
+        warn_no_sample("encoding is ignored by the XPT writer.")
 
     labelled = [
         v for v in df.columns if (m := store.get(v)) is not None and (m.label or m.value_labels)
     ]
     if labelled:
-        warnings.warn(
+        warn_no_sample(
             f"SAS Transport carries no variable or value labels, so metadata for "
             f"{', '.join(sorted(labelled))} is not written. Use write_spss or "
-            f"write_stata to keep labels with the data.",
-            UserWarning,
-            stacklevel=2,
+            f"write_stata to keep labels with the data."
         )
 
     table = to_writer_table(df)

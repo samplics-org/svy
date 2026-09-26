@@ -24,7 +24,6 @@ call :func:`prepare_data` rather than maintaining their own prep logic.
 from __future__ import annotations
 
 import logging
-import warnings
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Mapping, Sequence, cast
@@ -947,13 +946,23 @@ def _warn_invalid_record(sample, design, rec, *, missing: list[str], wrong_weigh
             "Those columns are written by the weighting method and are needed to "
             "reproduce the adjustment; re-run it, or keep them."
         )
-    warnings.warn(
+    detail = (
         f"Standard errors do not account for the {rec.kind}: {why}. They treat the "
         f"weights as fixed, which understates or overstates them depending on the "
-        f"estimand. {fix} Replication standard errors are unaffected.",
-        UserWarning,
-        stacklevel=4,
+        f"estimand. {fix} Replication standard errors are unaffected."
     )
+    if hasattr(sample, "warn"):
+        sample.warn(
+            code="ADJUSTMENT_NOT_CREDITED",
+            title="Weight adjustment not credited",
+            detail=detail,
+            where="estimation",
+            param="wgt_adjustment",
+        )
+    else:
+        from svy.core.warnings import warn_no_sample
+
+        warn_no_sample(detail)
 
 
 def record_columns(design, df) -> list[str]:

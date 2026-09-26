@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 import os
-import warnings
 
 from typing import Literal, Mapping, Sequence, overload
 
@@ -24,6 +23,7 @@ import numpy as np
 import polars as pl
 
 from svy.core.types import Category, RandomState, WhereArg
+from svy.core.warnings import warn_no_sample
 from svy.datasets import _bundled, _cache, api
 from svy.errors.dataset_errors import DatasetError
 from svy.utils.where import _compile_where
@@ -96,12 +96,11 @@ def _resolve_source(name: str, *, source: Source, force_download: bool) -> pl.La
             return _bundled.read_lazy(name)
         if exc.code in _FALLBACK_CODES and _bundled.has(name):
             b = _bundled.describe(name)
-            warnings.warn(
+            warn_no_sample(
                 f"Could not reach the dataset catalog; using the bundled subset of "
                 f"{name!r} ({b.n_rows:,} rows). This is a reduced dataset — results "
                 f"will differ from the full online data. Use source='remote' once "
-                f"online, or set source='bundled' to silence this.",
-                stacklevel=3,
+                f"online, or set source='bundled' to silence this."
             )
             return _bundled.read_lazy(name)
         raise

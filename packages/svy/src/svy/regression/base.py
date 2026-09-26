@@ -8,7 +8,6 @@ from __future__ import annotations
 import logging
 import math
 import numbers
-import warnings
 
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Sequence, cast
 
@@ -28,6 +27,7 @@ from svy.core.data_prep import calib_kwargs, prepare_data
 from svy.core.enumerations import DistFamily, LinkFunction
 from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import WhereArg
+from svy.core.warnings import WarnCode
 from svy.errors.method_errors import MethodError
 from svy.errors.model_errors import ModelError
 from svy.regression.glm import GLMCoef, GLMFit, GLMStats, offset_values
@@ -526,11 +526,16 @@ class GLM:
         _n_before = df.height
         df = df.filter(_valid_w)
         if df.height < _n_before:
-            warnings.warn(
-                f"{_n_before - df.height} row(s) dropped: weight column {w_col!r} is "
-                "null, non-finite or negative there.",
-                UserWarning,
-                stacklevel=2,
+            self._sample.warn(
+                code="GLM_ROWS_DROPPED",
+                title="Rows with invalid weights dropped",
+                detail=(
+                    f"{_n_before - df.height} row(s) dropped: weight column {w_col!r} is "
+                    "null, non-finite or negative there."
+                ),
+                where="GLM.fit",
+                param=w_col,
+                got=_n_before - df.height,
             )
 
         # In-domain rows: where == true (when set) and positive weight.
@@ -582,11 +587,16 @@ class GLM:
                 )
 
                 if len(levels) < 2:
-                    warnings.warn(
-                        f"Categorical {feat.name!r} has fewer than 2 levels among the "
-                        "rows being fitted and was dropped from the model.",
-                        UserWarning,
-                        stacklevel=3,
+                    self._sample.warn(
+                        code="GLM_TERM_DROPPED",
+                        title="Categorical term dropped",
+                        detail=(
+                            f"Categorical {feat.name!r} has fewer than 2 levels among the "
+                            "rows being fitted and was dropped from the model."
+                        ),
+                        where="GLM.fit",
+                        param=feat.name,
+                        var=feat.name,
                     )
                     return [], []
 
@@ -912,12 +922,18 @@ class GLM:
             aic_val = dev + 2.0 * eff_p if eff_p is not None else None
 
         if not converged:
-            warnings.warn(
-                f"GLM did not converge in {iters} iterations (tol={tol:g}); the "
-                "coefficients and standard errors below are the last iterate. "
-                "Raise max_iter, or check for separation in the response.",
-                UserWarning,
-                stacklevel=2,
+            self._sample.warn(
+                code=WarnCode.MAX_ITER_REACHED,
+                title="GLM did not converge",
+                detail=(
+                    f"GLM did not converge in {iters} iterations (tol={tol:g}); the "
+                    "coefficients and standard errors below are the last iterate. "
+                    "Raise max_iter, or check for separation in the response."
+                ),
+                where="GLM.fit",
+                param="max_iter",
+                got={"iterations": iters},
+                expected={"tol": tol},
             )
 
         # Statistics

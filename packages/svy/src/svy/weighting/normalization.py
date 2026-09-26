@@ -21,7 +21,12 @@ import polars as pl
 from svy.core.design import WgtAdjustment
 from svy.core.types import DomainScalarMap, Number
 from svy.errors import MethodError, WeightingError
-from svy.weighting._engine import build_cells, resolve_targets, scale_to_targets
+from svy.weighting._engine import (
+    build_cells,
+    record_null_cells,
+    resolve_targets,
+    scale_to_targets,
+)
 
 
 if TYPE_CHECKING:
@@ -76,6 +81,7 @@ def normalize(
         )
 
     wgt_arr = df.get_column(wgt).to_numpy().astype(np.float64)
+    spec = None
     if factor is not None:
         f = float(factor)
         norm_arr = wgt_arr * f
@@ -131,4 +137,6 @@ def normalize(
                 )
 
     sample._data = df
+    if spec is not None:
+        record_null_cells(sample, spec, where=ctx, prev_wgt=wgt, wgt_name=wgt_name)
     return sample

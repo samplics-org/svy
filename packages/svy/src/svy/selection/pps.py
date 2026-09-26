@@ -381,8 +381,8 @@ def _pps(
     n_norm = _normalize_n_for_groups(n, G=G, B=B, S=S)
 
     pop_sizes = _compute_pop_sizes(data, stratum_by_col, G)
-    _warn_empty_strata(n_norm, pop_sizes)
-    _warn_n_exceeds_population(n_norm, pop_sizes, wr=wr, pps=True)
+    _warn_empty_strata(n_norm, pop_sizes, sample)
+    _warn_n_exceeds_population(n_norm, pop_sizes, wr=wr, pps=True, sample=sample)
 
     if design.mos is None:
         raise MethodError.not_applicable(
@@ -392,7 +392,7 @@ def _pps(
             hint="Set mos= on the Design before calling any pps_* method.",
         )
     mos_arr = data[design.mos].to_numpy()
-    _warn_zero_mos(mos_arr, stratum_by_arr, drop_nulls=drop_nulls)
+    _warn_zero_mos(mos_arr, stratum_by_arr, drop_nulls=drop_nulls, sample=sample)
 
     row_col = SVY_ROW_INDEX
     frame = data[row_col].to_numpy()

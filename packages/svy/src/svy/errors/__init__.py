@@ -1,4 +1,4 @@
-from .base_errors import SvyError
+from .base_errors import SvyError, SvyUserWarning
 
 # from .other_errors import CertaintyError, ProbError, SinglePSUError
 from .dataset_errors import DatasetError
@@ -20,6 +20,7 @@ __all__ = [
     # "SinglePSUError",
     "SerializationError",
     "SvyError",
+    "SvyUserWarning",
     "DatasetError",
     "WeightingError",
 ]

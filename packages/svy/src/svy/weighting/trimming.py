@@ -33,7 +33,7 @@ except ImportError:  # pragma: no cover
     rust_trim_weights_matrix = None
 
 from svy.core.design import WgtAdjustment
-from svy.weighting._engine import _where_mask
+from svy.weighting._engine import _where_mask, record_null_rows
 from svy.weighting.types import (
     TrimConfig,
     TrimResult,
@@ -210,6 +210,7 @@ def _run_trim(
     # ── Domain splitting or global ────────────────────────────────────────
     w_out = w_orig.copy()
     by_cols: list[str] | None = None
+    null_by: dict[str, np.ndarray] = {}
 
     if config.by is not None:
         by_cols = [config.by] if isinstance(config.by, str) else list(config.by)
@@ -241,9 +242,10 @@ def _run_trim(
                 w_out[scope] = result.weights
                 _emit_audit(sample, result, domain="(global)", where=where)
     else:
-        domain_arr = _build_domain_array(df, by_cols)
-        for domain in np.unique(domain_arr):
-            mask = domain_arr == domain
+        domains, null_by = _domain_masks(df, by_cols)
+        if scope is not None:
+            null_by = {c: m & scope for c, m in null_by.items()}
+        for domain, mask in domains:
             if scope is not None:
                 mask = mask & scope
                 if not mask.any():
@@ -270,7 +272,8 @@ def _run_trim(
                     "Set redistribute=True to preserve the total weight sum."
                 ),
                 where=where,
-                level=Severity.WARNING,
+                # Recorded, not raised: redistribute=False asked for exactly this.
+                level=Severity.INFO,
                 hint="Use redistribute=True to avoid changing the weighted sample size.",
             )
 
@@ -347,6 +350,16 @@ def _run_trim(
 
     # ── Flush to sample ───────────────────────────────────────────────────
     sample._data = df
+    record_null_rows(
+        sample,
+        null_by,
+        where=where,
+        param="by",
+        prev_wgt=wgt,
+        wgt_name=wgt,
+        action="are in no trimming domain",
+        outcome="they are not trimmed",
+    )
     return sample
 
 
@@ -355,18 +368,29 @@ def _run_trim(
 # ---------------------------------------------------------------------------
 
 
-def _build_domain_array(df: pl.DataFrame, by_cols: list[str]) -> np.ndarray:
-    if len(by_cols) == 1:
-        return df.get_column(by_cols[0]).to_numpy()
-    return (
-        df.select(
-            pl.concat_str([pl.col(c).cast(pl.Utf8) for c in by_cols], separator="__").alias(
-                "__d__"
-            )
-        )
-        .get_column("__d__")
-        .to_numpy()
+def _domain_masks(
+    df: pl.DataFrame, by_cols: list[str]
+) -> tuple[list[tuple[str, np.ndarray]], dict[str, np.ndarray]]:
+    """Row masks per trimming domain, in sorted order, and per ``by`` column the
+    rows a null leaves in no domain."""
+    n = df.height
+    groups = (
+        df.select(by_cols)
+        .with_row_index("__svy_i")
+        .group_by(by_cols)
+        .agg(pl.col("__svy_i"))
+        .sort(by_cols, nulls_last=True)
     )
+    domains: list[tuple[str, np.ndarray]] = []
+    for *vals, idx in groups.iter_rows():
+        if any(v is None for v in vals):
+            continue
+        mask = np.zeros(n, dtype=bool)
+        mask[np.asarray(idx, dtype=np.int64)] = True
+        label = str(vals[0]) if len(vals) == 1 else "__".join(str(v) for v in vals)
+        domains.append((label, mask))
+    nulls = {c: df.get_column(c).is_null().to_numpy() for c in by_cols}
+    return domains, {c: m for c, m in nulls.items() if m.any()}
 
 
 def _trim_domain(

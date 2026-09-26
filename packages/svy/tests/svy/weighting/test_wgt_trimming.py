@@ -586,7 +586,8 @@ class TestTrimRedistribute:
         out = skewed_sample.weighting.trim(upper=50.0, redistribute=False)
         warns = _warnings_of(out, WarnCode.WEIGHT_SUM_CHANGED)
         assert len(warns) == 1
-        assert warns[0].level == Severity.WARNING
+        # redistribute=False asked for this: recorded, not raised
+        assert warns[0].level == Severity.INFO
 
     def test_redistribute_true_no_weight_sum_warning(self, skewed_sample):
         out = skewed_sample.weighting.trim(upper=50.0, redistribute=True)

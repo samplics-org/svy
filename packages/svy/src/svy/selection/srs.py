@@ -321,8 +321,8 @@ def srs(
     n_norm = _normalize_n_for_groups(n, G=G, B=B, S=S)
 
     pop_sizes = _compute_pop_sizes(data, stratum_by_col, G)
-    _warn_empty_strata(n_norm, pop_sizes)
-    _warn_n_exceeds_population(n_norm, pop_sizes, wr=wr)
+    _warn_empty_strata(n_norm, pop_sizes, sample)
+    _warn_n_exceeds_population(n_norm, pop_sizes, wr=wr, sample=sample)
 
     row_col = SVY_ROW_INDEX
 

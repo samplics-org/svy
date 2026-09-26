@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Sequence
 import numpy as np
 import polars as pl
 
+from svy.core.warnings import Severity, WarnCode
 from svy.errors import MethodError, WeightingError
 from svy.utils.where import _compile_where
 from svy.weighting._keys import LevelIndex, match_keys, target_vector
@@ -53,7 +54,7 @@ class CellSpec:
     arrive permuted relative to the cells it describes.
     """
 
-    __slots__ = ("codes", "labels", "n_cells", "in_scope", "cols")
+    __slots__ = ("codes", "labels", "n_cells", "in_scope", "cols", "nulls")
 
     def __init__(
         self,
@@ -61,12 +62,15 @@ class CellSpec:
         labels: list[Any],
         in_scope: np.ndarray | None,
         cols: list[str] | None,
+        nulls: dict[str, np.ndarray] | None = None,
     ) -> None:
         self.codes = codes
         self.labels = labels
         self.n_cells = len(labels)
         self.in_scope = in_scope
         self.cols = cols
+        # Per cells column: the rows within `where` left out for a null there.
+        self.nulls = nulls or {}
 
     @property
     def has_cells(self) -> bool:
@@ -145,6 +149,14 @@ def build_cells(
             hint="All `cells` columns must exist in the data.",
         )
 
+    nulls: dict[str, np.ndarray] = {}
+    for c in cols:
+        is_null = df.get_column(c).is_null().to_numpy()
+        if scope is not None:
+            is_null = is_null & scope
+        if is_null.any():
+            nulls[c] = is_null
+
     if len(cols) == 1:
         raw: list[Any] = df.get_column(cols[0]).to_list()
     else:
@@ -169,10 +181,88 @@ def build_cells(
         codes[i] = code
 
     if not labels:
-        raise WeightingError.no_rows_in_scope(where=where, method=where.rsplit(".", 1)[-1])
+        raise WeightingError.no_rows_in_scope(
+            where=where,
+            method=where.rsplit(".", 1)[-1],
+            nulls={c: int(m.sum()) for c, m in nulls.items()},
+        )
 
     in_scope = codes >= 0
-    return CellSpec(codes, labels, in_scope if in_scope.sum() < n else None, cols)
+    return CellSpec(codes, labels, in_scope if in_scope.sum() < n else None, cols, nulls)
+
+
+def record_null_cells(
+    sample: Any,
+    spec: CellSpec,
+    *,
+    where: str,
+    prev_wgt: str,
+    wgt_name: str,
+    n_rows: int | None = None,
+    outcome: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Record the rows a null cell left out of the adjustment.
+
+    ``n_rows`` limits the count to the first rows (panel adjust appends rows).
+    """
+    masks = {c: (m if n_rows is None else m[:n_rows]) for c, m in spec.nulls.items()}
+    record_null_rows(
+        sample,
+        masks,
+        where=where,
+        param="cells",
+        prev_wgt=prev_wgt,
+        wgt_name=wgt_name,
+        outcome=outcome,
+        extra=extra,
+    )
+
+
+def record_null_rows(
+    sample: Any,
+    masks: dict[str, np.ndarray],
+    *,
+    where: str,
+    param: str,
+    prev_wgt: str,
+    wgt_name: str,
+    action: str = "belong to no cell",
+    outcome: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Record, once per call, in-scope rows that a null left unadjusted.
+
+    They keep their previous weight, as rows outside ``where`` do, but nobody
+    asked for it, so it goes into ``sample.warnings`` with the count per column.
+    """
+    counts = {c: int(m.sum()) for c, m in masks.items() if m.any()}
+    if not counts:
+        return
+    n = int(np.logical_or.reduce([masks[c] for c in counts]).sum())
+    listed = ", ".join(f"{c!r} {k}" for c, k in counts.items())
+    kept = outcome or (
+        f"their {prev_wgt!r} value is unchanged"
+        if wgt_name == prev_wgt
+        else f"{wgt_name!r} keeps their {prev_wgt!r} value"
+    )
+    sample.warn(
+        code=WarnCode.CELLS_NULL_UNADJUSTED,
+        title="Rows with a null left unadjusted",
+        detail=(
+            f"{n} row(s) in scope have a null in `{param}` ({listed}) and {action}, so {kept}."
+        ),
+        where=where,
+        level=Severity.WARNING,
+        param=param,
+        expected=0,
+        got=counts,
+        hint=(
+            "Fill the nulls (wrangling.fill_null) or recode them to a level to adjust "
+            "these rows, or leave them out with where= to make the choice explicit."
+        ),
+        extra={"n_rows": n, "wgt_name": wgt_name, **(extra or {})},
+    )
 
 
 def _is_mapping(x: Any) -> bool:
@@ -324,3 +414,20 @@ def materialize_cells(
     name = f"{CELLS_PREFIX}{wgt_name}" if margin == 0 else f"{CELLS_PREFIX}{wgt_name}_{margin}"
     values = [None if c < 0 else int(c) for c in spec.codes]
     return df.with_columns(pl.Series(name=name, values=values, dtype=pl.Int32)), name
+
+
+def record_trim_cycle(sample: Any, *, where: str, what: str, trimming: Any) -> None:
+    """A trim-and-readjust cycle that ran out of cycles under ``strict=False``."""
+    sample.warn(
+        code=WarnCode.MAX_ITER_REACHED,
+        title=f"{what} did not converge",
+        detail=(
+            f"{what} did not converge after {trimming.max_iter} cycles; the weights "
+            "are the last cycle's, which may miss the targets or the trimming bounds."
+        ),
+        where=where,
+        level=Severity.WARNING,
+        param="trimming.max_iter",
+        got={"cycles": trimming.max_iter},
+        hint="Increase TrimConfig.max_iter or use a less restrictive trim threshold.",
+    )

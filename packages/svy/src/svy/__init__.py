@@ -79,6 +79,7 @@ from svy.errors import (
     ModelError,
     SerializationError,
     SvyError,
+    SvyUserWarning,
 )
 from svy.estimation import (
     Contrast,
@@ -244,6 +245,7 @@ __all__ = [
     "TrimResult",
     # --- Errors ---
     "SvyError",
+    "SvyUserWarning",
     "DatasetError",
     "DimensionError",
     "LabelError",

@@ -205,6 +205,9 @@ def test_rake_replicate_weights_custom_wgt_name(sample_data_for_raking, mock_des
 
 
 def test_rake_stops_at_max_iter_on_no_convergence(sample_data_for_raking, mock_design, capsys):
+    from svy import SvyUserWarning
+    from svy.core.warnings import WarnCode
+
     sample = Sample(data=sample_data_for_raking, design=mock_design)
     controls = {
         "age_group": {"18-34": 35.0, "35-54": 30.0, "55+": 15.0},
@@ -216,10 +219,15 @@ def test_rake_stops_at_max_iter_on_no_convergence(sample_data_for_raking, mock_d
         sample.weighting.rake(controls=controls, max_iter=3, tol=1e-20)
     assert sample.design.wgt == original_wgt  # design not mutated
 
-    # strict=False: stores partial weights, prints warning
-    sample = sample.weighting.rake(controls=controls, max_iter=3, tol=1e-20, strict=False)
-    captured = capsys.readouterr()
-    assert "Warning: Raking did not converge after 3 iterations" in captured.out
+    # strict=False: stores partial weights, records the finding and warns once
+    with pytest.warns(
+        SvyUserWarning, match=r"\[MAX_ITER_REACHED\] Raking did not converge"
+    ) as rec:
+        sample = sample.weighting.rake(controls=controls, max_iter=3, tol=1e-20, strict=False)
+    assert len(rec) == 1 and rec[0].filename == __file__
+    found = sample.warnings.list(code=WarnCode.MAX_ITER_REACHED)
+    assert len(found) == 1 and found[0].got["max_iter"] == 3
+    assert capsys.readouterr().out == ""
 
 
 def test_rake_stops_when_bounds_exceeded(sample_data_for_raking, mock_design):

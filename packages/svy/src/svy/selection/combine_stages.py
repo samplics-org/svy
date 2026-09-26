@@ -1,9 +1,8 @@
 # src/svy/selection/combine_stages.py
 from __future__ import annotations
 
-import warnings
-
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import polars as pl
@@ -74,6 +73,7 @@ def _combine_stages(
     already_selected: bool,
     out_prob_col: str,
     out_wgt_col: str,
+    found: list[dict[str, Any]] | None = None,
 ) -> CombineResult:
     """
     Core engine for combining two sampling stages.
@@ -187,13 +187,24 @@ def _combine_stages(
 
     not_in_ns = s1_vals - ns_vals
     if not_in_ns:
-        warnings.warn(
+        detail = (
             f"{len(not_in_ns)} PSU(s) from stage-1 have no matching "
             f"records in next_stage and will not appear in the combined "
-            f"sample.",
-            UserWarning,
-            stacklevel=5,
+            f"sample."
         )
+        if found is None:
+            from svy.core.warnings import warn_no_sample
+
+            warn_no_sample(detail)
+        else:
+            found.append(
+                dict(
+                    code="STAGE_PSUS_UNMATCHED",
+                    title="Stage-1 PSUs without next-stage records",
+                    detail=detail,
+                    got=len(not_in_ns),
+                )
+            )
 
     # ------------------------------------------------------------------
     # 3. Always-rename map for stage-1 design columns

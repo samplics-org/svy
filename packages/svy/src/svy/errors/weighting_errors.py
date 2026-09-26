@@ -412,8 +412,28 @@ class WeightingError(MethodError):
 
     @classmethod
     def no_rows_in_scope(
-        cls, *, where: Optional[str], method: str, hint: str | None = None
+        cls,
+        *,
+        where: Optional[str],
+        method: str,
+        hint: str | None = None,
+        nulls: Mapping[str, int] | None = None,
     ) -> "WeightingError":
+        if nulls:
+            listed = ", ".join(f"{c!r} {n}" for c, n in nulls.items())
+            return cls(
+                title="Nothing to adjust",
+                detail=(
+                    f"No rows are in scope for this adjustment ({method}): every row "
+                    f"within `where` has a null cell ({listed})."
+                ),
+                code="NO_ROWS_IN_SCOPE",
+                where=where,
+                param="cells",
+                expected="at least one row with every cell present",
+                got=dict(nulls),
+                hint="Fill the nulls (wrangling.fill_null) or choose other cells.",
+            )
         return cls(
             title="Nothing to adjust",
             detail=f"No rows are in scope for this adjustment ({method}).",
@@ -508,21 +528,34 @@ class WeightingError(MethodError):
 
     @classmethod
     def calibration_not_met(
-        cls, *, where: Optional[str], domain: Any = None, has_domain: bool = False
+        cls,
+        *,
+        where: Optional[str],
+        expected: Any = None,
+        got: Any = None,
+        max_rel_error: float | None = None,
+        domains: Sequence[Any] = (),
     ) -> "WeightingError":
-        scope = f" for domain {show(domain)}" if has_domain else ""
+        doms = list(domains)
+        scope = f" in domain(s) {show_list(doms)}" if doms else ""
+        miss = f" (largest relative miss {max_rel_error:.3g})" if max_rel_error is not None else ""
         return cls(
             title="Controls not met",
             detail=(
-                f"Calibration did not satisfy control totals{scope} within tolerance. "
-                "The design matrix may be singular or ill-conditioned. "
-                "Pass strict=False to store the approximate solution."
+                f"The calibrated weights do not reproduce the control totals{scope} within "
+                f"tolerance{miss}. The system may be singular or ill-conditioned, or the "
+                "controls inconsistent. Pass strict=False to store the approximate solution."
             ),
             code="CALIBRATION_NOT_MET",
             where=where,
             param="controls",
-            got={"domain": domain} if has_domain else None,
-            hint="Check for multicollinearity in the auxiliaries or reduce their number.",
+            expected=expected,
+            got=got,
+            hint=(
+                "Check for collinear auxiliaries (one implied by others), controls that "
+                "contradict each other, or a domain too small for its auxiliaries."
+            ),
+            extra={"max_rel_error": max_rel_error, "tol": 1e-4, "domains": doms},
         )
 
     @classmethod

@@ -17,7 +17,7 @@ import pytest
 
 from numpy.testing import assert_allclose
 
-from svy import Design, Sample
+from svy import Design, Sample, SvyUserWarning
 from svy.core.repwgts import BrrWgts
 from svy.errors import MethodError
 
@@ -28,9 +28,12 @@ N_REPS = 20
 
 
 @contextmanager
-def no_warnings():
+def no_warnings(allow: str | None = None):
+    """Every warning is an error, except svy's finding ``allow`` (by code)."""
     with warnings.catch_warnings():
         warnings.simplefilter("error")
+        if allow is not None:
+            warnings.filterwarnings("ignore", message=rf"\[{allow}\]", category=SvyUserWarning)
         yield
 
 
@@ -91,11 +94,12 @@ def test_rename_rep_wgts_touches_only_the_replicates(padded, inplace):
     look = PADDED_LOOK_ALIKES if padded else UNPADDED_LOOK_ALIKES
     before = s.data.select(look)
     se, est = _se(s), _est(s)
-    with no_warnings():
+    with no_warnings(allow="TAYLOR_WITHOUT_DESIGN"):
         out = s.wrangling.rename_rep_wgts({"w": "final_w"}, inplace=inplace)
         assert_allclose(_se(out), se)
         assert_allclose(_est(out), est)
     assert (out is s) is inplace
+    assert out.warnings.list(code="TAYLOR_WITHOUT_DESIGN")
     assert out.data.select(look).equals(before)
     new = _rep_names("final_w", padded)
     assert all(c in out.data.columns for c in new)
@@ -111,7 +115,7 @@ def test_renaming_a_look_alike_leaves_the_replicate_spec_alone(padded):
     se = _se(s)
     look = PADDED_LOOK_ALIKES if padded else UNPADDED_LOOK_ALIKES
     for name in look:
-        with no_warnings():
+        with no_warnings(allow="TAYLOR_WITHOUT_DESIGN"):
             out = s.wrangling.rename_columns({name: f"{name}_x"})
             assert_allclose(_se(out), se)
         assert out.design.rep_wgts == s.design.rep_wgts
@@ -320,6 +324,11 @@ def test_a_prefix_mapped_to_itself_is_a_no_op(two_sets):
 def test_estimation_reads_only_the_replicates_next_to_look_alikes(padded):
     with_look = _received(padded)
     without = _received(padded, look_alikes=[])
-    with no_warnings():
+    # Taylor on replicates with no stratum/psu is a finding: recorded on each
+    # sample and raised once per sample, however many estimates follow.
+    with pytest.warns(SvyUserWarning, match=r"\[TAYLOR_WITHOUT_DESIGN\]") as rec:
         assert_allclose(_se(with_look), _se(without))
         assert_allclose(_est(with_look), _est(without))
+    assert len(rec) == 2 and all(r.filename == __file__ for r in rec)
+    for s in (with_look, without):
+        assert len(s.warnings.list(code="TAYLOR_WITHOUT_DESIGN")) == 1

@@ -5,6 +5,7 @@ import copy
 import itertools
 import logging
 import os
+import warnings
 
 from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping, Self, Sequence, cast
 
@@ -35,7 +36,15 @@ from svy.core.types import (
     WhereArg,
     _MissingType,
 )
-from svy.core.warnings import Severity, SvyWarning, WarnCode, WarningStore
+from svy.core.warnings import (
+    Severity,
+    SvyUserWarning,
+    SvyWarning,
+    WarnCode,
+    WarningStore,
+    findings_to,
+    warning_message,
+)
 from svy.errors import DimensionError, MethodError, SvyError
 from svy.metadata import MetadataStore
 from svy.utils.helpers import _colspec_to_list, _normalize_columns_arg
@@ -1899,7 +1908,7 @@ class Sample:
         wgt = kwargs.get("wgt")
         if isinstance(wgt, str) and wgt not in cast(pl.DataFrame, self._data).columns:
             raise ValueError(f"Design references columns not found in data: [{wgt!r}]")
-        with _dp.deferred_clear_warnings() as cleared:
+        with _dp.deferred_clear_warnings() as cleared, findings_to(self):
             new = self._design.update(**self._with_restored_record(kwargs))
         self._replace_design(new)
         if cleared:
@@ -1907,7 +1916,7 @@ class Sample:
 
             now = _current_singleton_values(self)
             for spec, reason in cleared:
-                _dp.warn_singleton_cleared(spec, reason, now)
+                _dp.warn_singleton_cleared(spec, reason, now, sample=self)
         return self
 
     def _with_restored_record(self, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -1976,9 +1985,10 @@ class Sample:
         # We must deepcopy the design so we don't mutate the original sample's design
         if new_sample._design is not None:
             new_sample._push_design()
-            new_sample._design = new_sample._design.update(
-                **new_sample._with_restored_record({"wgt": wgt})
-            )
+            with findings_to(new_sample):
+                new_sample._design = new_sample._design.update(
+                    **new_sample._with_restored_record({"wgt": wgt})
+                )
         else:
             # If no design existed, create a minimal one with the weight
             new_sample._design = Design(wgt=wgt)
@@ -2492,6 +2502,17 @@ class Sample:
             extra=extra,
             var=var,
             rows=None if rows is None else tuple(rows),
+            state=getattr(self, "_data_version", None),
         )
-        self._warnings.add(w)
+        # One rule for findings: recorded, and raised once at the user's line.
+        # A repeat the store suppresses is not raised again, and INFO entries
+        # (audit records) are recorded only.
+        if self._warnings.add(w) and level >= Severity.WARNING:
+            from svy.core.design import _user_stacklevel
+
+            warnings.warn(
+                warning_message(code, title, detail),
+                SvyUserWarning,
+                stacklevel=_user_stacklevel(),
+            )
         return w
