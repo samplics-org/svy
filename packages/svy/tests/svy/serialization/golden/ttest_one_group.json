@@ -21,7 +21,7 @@
       "group": null,
       "group_level": null,
       "lci": 48000.0,
-      "n": null,
+      "n": 40,
       "se": 1000.0,
       "uci": 52000.0,
       "y": "income",

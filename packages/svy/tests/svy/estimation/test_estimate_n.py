@@ -287,3 +287,48 @@ def test_payload_saved_without_n_still_loads():
     old = from_json(json.dumps(payload))
     assert all(e.n is None for e in old.estimates)
     assert "n" not in to_polars(old).columns
+
+
+# ---------------------------------------------------------------------------
+# Tables and GLM fits
+# ---------------------------------------------------------------------------
+
+TABLES = {
+    "one_way": ({"rowvar": "c"}, ["c"], None),
+    "two_way": ({"rowvar": "c", "colvar": "r"}, ["c", "r"], None),
+    "one_way_where": ({"rowvar": "c", "where": IN_M}, ["c"], IN_M),
+    "two_way_where": ({"rowvar": "c", "colvar": "r", "where": IN_M}, ["c", "r"], IN_M),
+}
+
+
+@pytest.mark.parametrize("kind", ["taylor", "bootstrap", "jackknife"])
+@pytest.mark.parametrize("shape", sorted(TABLES))
+def test_table_cells_carry_the_table_count(kind, shape):
+    kwargs, variables, where = TABLES[shape]
+    table = _sample(kind).categorical.tabulate(drop_nulls=True, **kwargs)
+    expected = _expected(variables, where=where)[None]
+    assert {c.n for c in table.estimates} == {expected}
+    assert set(table.to_polars()["n"]) == {expected}
+
+
+def test_table_n_survives_a_json_round_trip():
+    table = _sample("taylor").categorical.tabulate(rowvar="c", colvar="r", drop_nulls=True)
+    back = from_json(to_json(table))
+    assert [c.n for c in back.estimates] == [c.n for c in table.estimates]
+    assert_frame_equal(to_polars(back), table.to_polars())
+
+
+def test_table_saved_without_n_still_loads():
+    table = _sample("taylor").categorical.tabulate(rowvar="c", drop_nulls=True)
+    payload = json.loads(to_json(table))
+    for cell in payload["estimates"]:
+        del cell["n"]
+    old = from_json(json.dumps(payload))
+    assert all(c.n is None for c in old.estimates)
+    assert "n" not in to_polars(old).columns
+
+
+@pytest.mark.parametrize("where", [None, IN_M])
+def test_glm_n_follows_the_same_rule(where):
+    fit = _sample("taylor").glm.fit(y="y", x=["x"], where=where, drop_nulls=True)
+    assert fit.stats.n == _expected(["y", "x"], where=where)[None]

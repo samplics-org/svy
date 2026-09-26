@@ -84,7 +84,7 @@ ignore unknown fields.
   added: it decides whether the table has a level column, so the table view
   needs it (no longer excluded). `TDistData.df` widened to `int | float` so a
   GLM's integer design df keeps its dtype in the table.
-- `0.5` — `ParamEstData.n` and `TtestEstData.n` added: the records behind the
+- `0.5` — `ParamEstData.n`, `TtestEstData.n` and `CellEstData.n` added: the records behind the
   row (in its domain or group, nonzero weight, variables present). `None` when
   decoded from an older payload.
 

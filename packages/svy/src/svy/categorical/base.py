@@ -40,6 +40,7 @@ from svy.core.types import (
     WhereArg,
 )
 from svy.errors import MethodError
+from svy.estimation.estimate import row_counts
 from svy.ui.printing import format_where_clause
 from svy.utils.checks import assert_no_missing, drop_missing, validate_alpha
 from svy.utils.where import _compile_where
@@ -429,6 +430,7 @@ class Categorical:
             lci_arr = lci_arr * _display_scale
             uci_arr = uci_arr * _display_scale
 
+        n_list = row_counts(cells_df)
         cell_rows = [
             CellEst(
                 rowvar=_norm_label(rowvar_arr[i]),
@@ -438,6 +440,7 @@ class Categorical:
                 cv=float(cv_arr[i]),
                 lci=float(lci_arr[i]),
                 uci=float(uci_arr[i]),
+                n=n_list[i],
             )
             for i in range(len(est_arr))
         ]
