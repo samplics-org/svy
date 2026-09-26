@@ -102,6 +102,29 @@ class MethodError(SvyError):
         )
 
     @classmethod
+    def reserved_columns(cls, *, where: Optional[str], columns: list[str]) -> "MethodError":
+        """User columns named like svy's bookkeeping, which svy rebuilds."""
+        col = columns[0]
+        return cls(
+            title="Column names reserved by svy",
+            detail=(
+                f"{', '.join(map(repr, columns))}: svy builds columns of these names from "
+                "the data and design and would overwrite them. Names starting with "
+                "'__svy_' are svy's."
+            ),
+            code="RESERVED_COLUMN",
+            where=where,
+            param=col,
+            got=columns,
+            hint=(
+                f"Use another name, e.g. {col.removeprefix('__svy_').strip('_')!r}. "
+                "If the frame came from svy "
+                "(sample._data, or a file an earlier version saved), drop them, svy "
+                f"rebuilds them: data.drop({columns!r})."
+            ),
+        )
+
+    @classmethod
     def data_rows_changed(cls, *, where: Optional[str], n_old: int, n_new: int) -> "MethodError":
         return cls(
             title="Rows changed outside svy",

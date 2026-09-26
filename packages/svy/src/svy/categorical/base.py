@@ -20,9 +20,7 @@ import polars as pl
 from svy.categorical.ranktest import RankTestKSample, RankTestTwoSample
 from svy.categorical.table import CellEst, Table, TableStats
 from svy.categorical.ttest import TTestByResult, TTestOneGroup, TTestTwoGroups
-from svy.core.constants import (
-    _INTERNAL_CONCAT_SUFFIX,
-)
+from svy.core.constants import key_col
 from svy.core.containers import ChiSquare, FDist
 from svy.core.data_prep import calib_kwargs, level_lookup, prepare_data, record_columns
 from svy.core.enumerations import (
@@ -271,7 +269,6 @@ class Categorical:
             design=design,
             by=None,
             null_token="__Null__",
-            suffix=_INTERNAL_CONCAT_SUFFIX,
             categorical=True,
             drop_original=False,
         )
@@ -328,9 +325,9 @@ class Categorical:
             pl.Series(name="__svy_scaled_wgt__", values=wgt_arr)
         )
 
-        strata_col = f"stratum{_INTERNAL_CONCAT_SUFFIX}" if design.stratum is not None else None
-        psu_col = f"psu{_INTERNAL_CONCAT_SUFFIX}" if design.variance_psu is not None else None
-        ssu_col = f"ssu{_INTERNAL_CONCAT_SUFFIX}" if design.ssu is not None else None
+        strata_col = key_col("stratum") if design.stratum is not None else None
+        psu_col = key_col("psu") if design.variance_psu is not None else None
+        ssu_col = key_col("ssu") if design.ssu is not None else None
 
         # Cast all design columns to String in a single with_columns call
         _cast_cols = [rowvar] + ([colvar] if colvar else [])

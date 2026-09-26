@@ -4,14 +4,14 @@ from __future__ import annotations
 import logging
 import math
 
-from typing import TYPE_CHECKING, Any, Literal, Sequence, cast
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence, cast
 
 import msgspec
 import numpy as np
 import polars as pl
 import svy_rs as rs
 
-from svy.core.constants import _BY_SEP, _INTERNAL_CONCAT_SUFFIX
+from svy.core.constants import _BY_SEP, key_col
 from svy.core.data_prep import BY_KEY_SEP, PreparedData, level_lookup, prepare_data
 from svy.core.enumerations import PopParam
 from svy.core.enumerations import QuantileMethod as _QuantileMethod
@@ -63,7 +63,7 @@ from svy.estimation.taylor import (
 from svy.estimation.taylor import (
     taylor_total_multi as _taylor_total_multi,
 )
-from svy.ui.printing import format_where_clause
+from svy.ui.printing import format_where_clause, row_sort_key
 from svy.utils.checks import validate_alpha
 from svy.utils.helpers import _colspec_to_list
 from svy.wrangling.rows import _compile_where_to_pl_expr
@@ -137,7 +137,7 @@ class Estimation:
                 target_col = spec[0]
             else:
                 cols = list(spec)
-                target_col = f"{name}{_INTERNAL_CONCAT_SUFFIX}"
+                target_col = key_col(name)
                 if target_col not in local_data.columns:
                     expr = pl.concat_str(
                         [pl.col(c).cast(pl.Utf8).fill_null("__Null__") for c in cols],
@@ -236,7 +236,7 @@ class Estimation:
                     if len(design.stratum) == 1:
                         strata_col = design.stratum[0]
                     else:
-                        strata_col = f"_strata_{_INTERNAL_CONCAT_SUFFIX}"
+                        strata_col = key_col("strata")
                         if strata_col not in data.columns:
                             expr = pl.concat_str(
                                 [
@@ -255,7 +255,7 @@ class Estimation:
                     if len(var_psu) == 1:
                         psu_col = var_psu[0]
                     else:
-                        psu_col = f"_psu_{_INTERNAL_CONCAT_SUFFIX}"
+                        psu_col = key_col("variance_psu")
                         if psu_col not in data.columns:
                             expr = pl.concat_str(
                                 [pl.col(c).cast(pl.String).fill_null("__Null__") for c in var_psu],
@@ -842,6 +842,7 @@ class Estimation:
         as_factor: bool,
         x_name: str | None = None,
         ci_method: str = "logit",
+        by_cols: Sequence[str] | None = None,
     ) -> list[ParamEst]:
         n_rows = result_df.height
         if n_rows == 0:
@@ -970,7 +971,7 @@ class Estimation:
                 self._warn_prop_ci_boundary(
                     ci_method_norm,
                     y_name,
-                    by_col,
+                    by_cols if by_col else None,
                     [by_levels[i] for i in undefined],
                     [y_levels[i] for i in undefined],
                     [float(est_arr[i]) for i in undefined],
@@ -999,22 +1000,34 @@ class Estimation:
         self,
         method: str,
         y_name: str,
-        by_col: str | None,
+        by_cols: Sequence[str] | None,
         by_levels: list,
         y_levels: list,
         estimates: list[float],
     ) -> None:
-        """One warning per call listing the cells whose interval is NaN because p is 0 or 1."""
+        """One warning per call listing the cells whose interval is NaN because p
+        is 0 or 1, by the user's column names, in domain order."""
         max_listed = 10
-        cells = []
+        by_tuple = tuple(by_cols) if by_cols else None
+        by_lookup = self._level_lookup(by_tuple) if by_tuple else {}
+        found = []
         for by_level, y_level, p in zip(by_levels, y_levels, estimates):
+            domain = (
+                self._native_by_level(by_level, by_tuple, by_lookup)
+                if by_tuple and by_level is not None
+                else ()
+            )
+            found.append((domain, y_level, p))
+        found.sort(key=lambda t: tuple(row_sort_key(str(v)) for v in (*t[0], t[1])))
+        cells = []
+        for domain, y_level, p in found:
             cell = f"{y_name}={y_level}" if y_level is not None else y_name
-            if by_col and by_level is not None:
-                cell += f" in {by_col}={by_level[0]}"
+            if domain:
+                cell += " in " + ", ".join(f"{c}={v}" for c, v in zip(by_tuple or (), domain))
             cells.append(f"{cell} (p={round(p)})")
-        listed = ", ".join(cells[:max_listed])
+        listed = "; ".join(cells[:max_listed])
         if len(cells) > max_listed:
-            listed += f", and {len(cells) - max_listed} more"
+            listed += f"; and {len(cells) - max_listed} more"
         self._sample.warn(
             code=WarnCode.PROP_CI_BOUNDARY,
             title="Confidence interval undefined at a proportion of 0 or 1",
@@ -1227,6 +1240,23 @@ class Estimation:
             result_df, y_name, alpha, by_col, set_prob=False
         )
 
+    @staticmethod
+    def _native_by_level(
+        by_level: tuple, by_tuple: tuple[str, ...], by_lookup: Mapping[str, Any]
+    ) -> tuple:
+        """A kernel by-level (one joined key string) as the by columns' values."""
+        if len(by_level) != 1:
+            return by_level
+        raw = by_level[0]
+        if raw in by_lookup:
+            native = by_lookup[raw]
+            return native if len(by_tuple) > 1 else (native,)
+        if len(by_tuple) > 1:
+            parts = str(raw).split(BY_KEY_SEP, maxsplit=len(by_tuple) - 1)
+            if len(parts) == len(by_tuple):
+                return tuple(parts)
+        return by_level
+
     def _native_levels(
         self, est_list: list[ParamEst], by_cols: Sequence[str] | None, as_factor: bool
     ) -> list[ParamEst]:
@@ -1242,15 +1272,8 @@ class Estimation:
         out = []
         for p in est_list:
             by_level = p.by_level
-            if by_tuple and by_level and len(by_level) == 1:
-                raw = by_level[0]
-                if raw in by_lookup:
-                    native = by_lookup[raw]
-                    by_level = native if len(by_tuple) > 1 else (native,)
-                elif len(by_tuple) > 1:
-                    parts = str(raw).split(BY_KEY_SEP, maxsplit=len(by_tuple) - 1)
-                    if len(parts) == len(by_tuple):
-                        by_level = tuple(parts)
+            if by_tuple and by_level:
+                by_level = self._native_by_level(by_level, by_tuple, by_lookup)
 
             y_level = p.y_level
             if as_factor and y_level is not None:

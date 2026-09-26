@@ -278,13 +278,11 @@ class Selection:
 
         stratum_col = self._sample._internal_design.get("stratum")
         by_cols = self._sample._to_cols(by) if by is not None else []
-        suffix = self._sample._internal_design.get("suffix", "_svy_internal_cols_concatenated")
 
         stratum_by_col, _, G, _, _, data = _build_group_keys(
             data,
             stratum_col=stratum_col,
             by_cols=by_cols,
-            suffix=suffix,
             sample_ref=self._sample,
         )
         return _compute_pop_sizes(data, stratum_by_col, G)

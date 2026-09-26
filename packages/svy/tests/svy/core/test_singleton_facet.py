@@ -20,7 +20,7 @@ import copy
 import polars as pl
 import pytest
 
-from svy.core.constants import _INTERNAL_CONCAT_SUFFIX, SVY_ROW_INDEX
+from svy.core.constants import SVY_ROW_INDEX, key_col
 from svy.core.enumerations import SingletonHandling
 from svy.core.singleton import (
     _VAR_EXCLUDE_COL,
@@ -85,7 +85,6 @@ class SampleStub:
             "stratum": stratum_internal,
             "psu": psu_internal,
             "ssu": None,
-            "suffix": _INTERNAL_CONCAT_SUFFIX,
         }
         self._singleton_result = None
 
@@ -106,8 +105,8 @@ class SampleStub:
 @pytest.fixture
 def names():
     """Column name fixtures."""
-    stratum_col = f"stratum{_INTERNAL_CONCAT_SUFFIX}"
-    psu_col = f"psu{_INTERNAL_CONCAT_SUFFIX}"
+    stratum_col = key_col("stratum")
+    psu_col = key_col("psu")
     return {"stratum": stratum_col, "psu": psu_col}
 
 

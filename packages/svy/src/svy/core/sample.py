@@ -14,10 +14,7 @@ import numpy as np
 import polars as pl
 
 from svy.core import design_parts as _dp
-from svy.core.constants import (
-    _INTERNAL_CONCAT_SUFFIX,
-    SVY_ROW_INDEX,
-)
+from svy.core.constants import BOOKKEEPING_COLUMNS, SVY_ROW_INDEX, key_col
 from svy.core.describe import DescribeResult
 from svy.core.describe_runtime import run_describe
 from svy.core.design import Design, PopSize, RepWeights
@@ -137,34 +134,21 @@ class Sample:
         if local_design.psu is None and local_design.variance_psu is not None:
             log.info("no PSU declared; using case_id %r as the variance PSU", local_design.case_id)
 
-        local_data = data.clone().fill_nan(None)
-        if SVY_ROW_INDEX not in local_data.columns:
-            local_data = local_data.with_row_index(name=SVY_ROW_INDEX)
+        self._refuse_bookkeeping(data.columns, where="Sample")
+        local_data = data.clone().fill_nan(None).with_row_index(name=SVY_ROW_INDEX)
 
         if design is not None:
-            local_data = self._drop_internal_concat(local_data)
             local_data, (_, stratum_cols, psu_cols, ssu_cols) = (
                 self._create_concatenated_cols_from_lists(
                     data=local_data,
                     design=design,
                     by=None,
                     null_token="__Null__",
-                    suffix=_INTERNAL_CONCAT_SUFFIX,
                 )
             )
-            self._internal_design = {
-                "stratum": f"stratum{_INTERNAL_CONCAT_SUFFIX}" if stratum_cols else None,
-                "psu": f"psu{_INTERNAL_CONCAT_SUFFIX}" if psu_cols else None,
-                "ssu": f"ssu{_INTERNAL_CONCAT_SUFFIX}" if ssu_cols else None,
-                "suffix": _INTERNAL_CONCAT_SUFFIX,
-            }
+            self._internal_design = self._key_names(stratum_cols, psu_cols, ssu_cols)
         else:
-            self._internal_design = {
-                "stratum": None,
-                "psu": None,
-                "ssu": None,
-                "suffix": _INTERNAL_CONCAT_SUFFIX,
-            }
+            self._internal_design = self._key_names()
 
         self._design_history: tuple[Design, ...] = ()
         self._warnings: WarningStore = WarningStore()
@@ -174,7 +158,7 @@ class Sample:
 
         # Initialize MetadataStore (replaces _labels)
         self._metadata = MetadataStore(catalog=catalog)
-        self._metadata.infer_from_dataframe(cast(pl.DataFrame, self._data))
+        self._metadata.infer_from_dataframe(self._without_bookkeeping(self._data))
 
         self._print_width = None
 
@@ -674,7 +658,7 @@ class Sample:
 
         try:
             n_rows = int(self._data.height)
-            n_cols = int(self._data.width)
+            n_cols = self.n_columns
         except Exception:
             n_rows, n_cols = 0, 0
 
@@ -727,7 +711,7 @@ class Sample:
         """Plain-text fallback when rich is not installed."""
         try:
             n_rows = int(self._data.height)
-            n_cols = int(self._data.width)
+            n_cols = self.n_columns
         except Exception:
             n_rows, n_cols = 0, 0
 
@@ -881,7 +865,6 @@ class Sample:
         null_token: str = "∅",
         categorical: bool = True,
         drop_original: bool = False,
-        rename_suffix: str = "_key",
         **groups: Sequence[str],
     ) -> DF:
         if not groups:
@@ -894,7 +877,7 @@ class Sample:
         for group_name, cols in groups.items():
             if not cols:
                 continue
-            out_col = f"{group_name}{rename_suffix}"
+            out_col = key_col(group_name)
             # Skip if the concatenated column already exists (e.g. stratum/psu/ssu
             # built at Sample.__init__ and still present in the data).
             if out_col in names:
@@ -946,7 +929,6 @@ class Sample:
         *,
         by: str | tuple[str, ...] | None = None,
         null_token: str = "__Null__",
-        suffix: str = _INTERNAL_CONCAT_SUFFIX,
         categorical: bool = True,
         drop_original: bool = False,
         include_design: bool = True,
@@ -969,7 +951,6 @@ class Sample:
             null_token=null_token,
             categorical=categorical,
             drop_original=drop_original,
-            rename_suffix=_INTERNAL_CONCAT_SUFFIX,
             by=by_cols,
             stratum=stratum_cols,
             psu=psu_cols,
@@ -978,33 +959,57 @@ class Sample:
         concat_data = cast(pl.DataFrame, out.collect() if isinstance(out, pl.LazyFrame) else out)
         return concat_data, (by_cols, stratum_cols, psu_cols, ssu_cols)
 
+    @staticmethod
+    def _key_names(
+        stratum_cols: Sequence[str] = (),
+        psu_cols: Sequence[str] = (),
+        ssu_cols: Sequence[str] = (),
+    ) -> dict[str, str | None]:
+        """``_internal_design``: the key column of each design group present."""
+        return {
+            "stratum": key_col("stratum") if stratum_cols else None,
+            "psu": key_col("psu") if psu_cols else None,
+            "ssu": key_col("ssu") if ssu_cols else None,
+        }
+
+    @staticmethod
+    def _refuse_bookkeeping(columns: Iterable[str], *, where: str) -> None:
+        """Refuse user columns named like svy's bookkeeping, which svy would overwrite."""
+        taken = [c for c in columns if c in BOOKKEEPING_COLUMNS]
+        if taken:
+            raise MethodError.reserved_columns(where=where, columns=taken)
+
+    @staticmethod
+    def _without_bookkeeping(data: pl.DataFrame) -> pl.DataFrame:
+        """``data`` without svy's bookkeeping columns: what ``sample.data`` shows."""
+        derived = [c for c in data.columns if c in BOOKKEEPING_COLUMNS]
+        return data.drop(derived) if derived else data
+
     def _ensure_internal_concat(self) -> None:
-        """Rebuild the internal key columns ``_internal_design`` names when a
-        rebind of the data dropped them (weighting builds frames from
+        """Rebuild the row index and the internal key columns ``_internal_design``
+        names when a rebind of the data dropped them (a frame built from
         ``sample.data``, which leaves them out)."""
         idict = self._internal_design or {}
-        names = set(cast(pl.DataFrame, self._data).columns)
+        data = cast(pl.DataFrame, self._data)
+        if SVY_ROW_INDEX not in data.columns:
+            data = data.with_row_index(name=SVY_ROW_INDEX)
+            self._data = data
+        names = set(data.columns)
         if all(idict.get(k) in (None, *names) for k in ("stratum", "psu", "ssu")):
             return
         data, (_, stratum_cols, psu_cols, ssu_cols) = self._create_concatenated_cols_from_lists(
-            data=cast(pl.DataFrame, self._data),
+            data=data,
             design=self._design,
             by=None,
             null_token="__Null__",
-            suffix=_INTERNAL_CONCAT_SUFFIX,
         )
-        self._internal_design = {
-            "stratum": f"stratum{_INTERNAL_CONCAT_SUFFIX}" if stratum_cols else None,
-            "psu": f"psu{_INTERNAL_CONCAT_SUFFIX}" if psu_cols else None,
-            "ssu": f"ssu{_INTERNAL_CONCAT_SUFFIX}" if ssu_cols else None,
-            "suffix": _INTERNAL_CONCAT_SUFFIX,
-        }
+        self._internal_design = self._key_names(stratum_cols, psu_cols, ssu_cols)
         self._data = data
 
     @staticmethod
     def _drop_internal_concat(data: pl.DataFrame) -> pl.DataFrame:
         """``data`` without the internal stratum/PSU/SSU concat columns."""
-        names = [f"{k}{_INTERNAL_CONCAT_SUFFIX}" for k in ("stratum", "psu", "ssu")]
+        names = [key_col(k) for k in ("stratum", "psu", "ssu")]
         stale = [c for c in names if c in data.columns]
         return data.drop(stale) if stale else data
 
@@ -1019,7 +1024,6 @@ class Sample:
         design: Design,
         by: str | tuple[str, ...] | None = None,
         null_token: str = "__Null__",
-        suffix: str = _INTERNAL_CONCAT_SUFFIX,
     ) -> tuple[pl.DataFrame, dict[str, np.ndarray | None]]:
         _raw_concat, (_by_cols, _stratum_cols, _psu_cols, _ssu_cols) = (
             self._create_concatenated_cols_from_lists(
@@ -1027,21 +1031,20 @@ class Sample:
                 design=design,
                 by=by,
                 null_token=null_token,
-                suffix=suffix,
                 categorical=True,
                 drop_original=False,
             )
         )
         concat_data = cast(pl.DataFrame, _raw_concat)
         arrays: dict[str, np.ndarray | None] = {
-            "stratum": (concat_data[f"stratum{suffix}"].to_numpy() if design.stratum else None),
+            "stratum": (concat_data[key_col("stratum")].to_numpy() if design.stratum else None),
             "psu": (
-                concat_data[f"psu{suffix}"].to_numpy()
+                concat_data[key_col("psu")].to_numpy()
                 if design.variance_psu
                 else np.arange(concat_data.height, dtype=int)
             ),
-            "ssu": (concat_data[f"ssu{suffix}"].to_numpy() if design.ssu else None),
-            "by": (concat_data[f"by{suffix}"].to_numpy() if by is not None else None),
+            "ssu": (concat_data[key_col("ssu")].to_numpy() if design.ssu else None),
+            "by": (concat_data[key_col("by")].to_numpy() if by is not None else None),
         }
         return concat_data, arrays
 
@@ -1208,8 +1211,8 @@ class Sample:
     def _install_data(self, data: pl.DataFrame, *, where: str, align: bool) -> None:
         """Checks run before anything is rebound; a later failure restores the
         sample, so a refused frame leaves it untouched."""
-        if SVY_ROW_INDEX not in data.columns:
-            data = data.with_row_index(name=SVY_ROW_INDEX)
+        self._refuse_bookkeeping(data.columns, where=where)
+        data = data.with_row_index(name=SVY_ROW_INDEX)
         self._check_data_lineage(data, where=where)
         if self._design is not None:
             err = self._missing_columns_error(self._design, data.columns)
@@ -1227,10 +1230,12 @@ class Sample:
         try:
             self._data = data
             if align:
-                self._metadata.align_to_dataframe(self._data)
+                self._metadata.align_to_dataframe(self._without_bookkeeping(data))
             else:
                 # Infer metadata for new columns (don't overwrite existing)
-                self._metadata.infer_from_dataframe(self._data, overwrite=False)
+                self._metadata.infer_from_dataframe(
+                    self._without_bookkeeping(data), overwrite=False
+                )
             # New data can change the design's validity and singleton
             # structure; rebuild internal state exactly as __init__ does.
             self._refresh_internal_state()
@@ -1407,15 +1412,12 @@ class Sample:
     # ════════════════════════════════════════════════════════════════════════
     @property
     def data(self) -> DF:
-        """Return a defensive copy to prevent external mutation."""
-        local_data = self._data.clone()
-        stratum = [self._internal_design["stratum"]] if self._internal_design["stratum"] else []
-        psu = [self._internal_design["psu"]] if self._internal_design["psu"] else []
-        ssu = [self._internal_design["ssu"]] if self._internal_design["ssu"] else []
-        cols_to_drop = [c for c in stratum + psu + ssu if c in local_data.columns]
-        if len(cols_to_drop) > 0:
-            local_data = local_data.drop(cols_to_drop)
-        return local_data
+        """The user's columns and the design's (``design.columns()``), as a copy.
+
+        svy's derived bookkeeping (the row index, the design keys and the
+        singleton variance columns) is rebuilt from these and is not shown.
+        """
+        return self._without_bookkeeping(self._data.clone())
 
     @property
     def design(self) -> Design:
@@ -1450,7 +1452,8 @@ class Sample:
 
     @property
     def n_columns(self) -> int:
-        return cast(pl.DataFrame, self._data).shape[1]
+        names = cast(pl.DataFrame, self._data).columns
+        return sum(c not in BOOKKEEPING_COLUMNS for c in names)
 
     @property
     def n_strata(self) -> int | None:
@@ -1535,6 +1538,8 @@ class Sample:
 
         type_map = {}
         for col, dtype in self._data.schema.items():
+            if col in BOOKKEEPING_COLUMNS:
+                continue
             base = dtype.base_type()
             if base.is_integer():
                 type_map[col] = "int"
@@ -1772,8 +1777,8 @@ class Sample:
         design validation after the data or design is replaced.
 
         Mirrors the tail of ``__init__``: without this, mutators left the
-        stale (or missing) ``*_svy_internal_cols_concatenated`` columns and
-        skipped singleton/validity checks entirely.
+        stale (or missing) design key columns and skipped singleton/validity
+        checks entirely.
         """
         # Built afresh: _concatenate_cols keeps a concat column that already
         # exists, which after a design edit would describe the old strata.
@@ -1789,23 +1794,12 @@ class Sample:
                     design=self._design,
                     by=None,
                     null_token="__Null__",
-                    suffix=_INTERNAL_CONCAT_SUFFIX,
                 )
             )
-            self._internal_design = {
-                "stratum": f"stratum{_INTERNAL_CONCAT_SUFFIX}" if stratum_cols else None,
-                "psu": f"psu{_INTERNAL_CONCAT_SUFFIX}" if psu_cols else None,
-                "ssu": f"ssu{_INTERNAL_CONCAT_SUFFIX}" if ssu_cols else None,
-                "suffix": _INTERNAL_CONCAT_SUFFIX,
-            }
+            self._internal_design = self._key_names(stratum_cols, psu_cols, ssu_cols)
             self._data = local_data
         else:
-            self._internal_design = {
-                "stratum": None,
-                "psu": None,
-                "ssu": None,
-                "suffix": _INTERNAL_CONCAT_SUFFIX,
-            }
+            self._internal_design = self._key_names()
         self._check_for_singletons()
         self._validate_design()
         self._sync_parts(force=True)
@@ -2079,17 +2073,17 @@ class Sample:
             if not isinstance(self._data, pl.LazyFrame)
             else cast(pl.DataFrame, self._data.collect())
         )
-        new_data: pl.DataFrame = (src_data if src_data is not None else _fallback).clone()
+        if src_data is None:
+            src_data = self._without_bookkeeping(_fallback)
+        elif data is _MISSING:
+            src_data = self._without_bookkeeping(src_data)
+        new_data: pl.DataFrame = src_data.clone()
         new_design: Design | None = copy.deepcopy(src_design) if src_design is not None else None
-        if src_data is not None and data is not _MISSING:
+        if data is not _MISSING and data is not None:
             # The clone carries this sample's history, so a new frame is held
             # to the same weight lineage as set_data.
-            self._check_data_lineage(
-                new_data
-                if SVY_ROW_INDEX in new_data.columns
-                else new_data.with_row_index(name=SVY_ROW_INDEX),
-                where="clone",
-            )
+            self._refuse_bookkeeping(new_data.columns, where="clone")
+            self._check_data_lineage(new_data, where="clone")
 
         s = Sample(new_data, new_design, catalog=src_catalog)
 
@@ -2379,37 +2373,15 @@ class Sample:
     # ════════════════════════════════════════════════════════════════════════
     def _hidden_columns_for_ui(self) -> set[str]:
         """Columns that should never appear in user-facing prints (describe, etc.)."""
-        hidden: set[str] = set()
-
-        # Synthetic row index we add internally
-        if SVY_ROW_INDEX in cast(pl.DataFrame, self._data).columns:
-            hidden.add(SVY_ROW_INDEX)
-
-        # Snapshotted adjustment cells, kept so the variance sweep can
-        # reproduce the membership the adjustment actually used.
+        # Bookkeeping, and the record's snapshotted adjustment cells, kept so
+        # the variance sweep can reproduce the membership the adjustment used.
         from svy.weighting._engine import AUX_PREFIX, CELLS_PREFIX
 
-        hidden.update(
+        return {
             c
             for c in cast(pl.DataFrame, self._data).columns
-            if c.startswith((CELLS_PREFIX, AUX_PREFIX))
-        )
-
-        # Concatenated design helpers (created in __init__)
-        idict = getattr(self, "_internal_design", {}) or {}
-        for key in ("stratum", "psu", "ssu"):
-            col = idict.get(key)
-            if isinstance(col, str) and col and col in self._data.columns:
-                hidden.add(col)
-
-        # (Optional) if you ever add more auto-concatenated design bits:
-        suf = idict.get("suffix")
-        if suf:
-            for c in self._data.columns:
-                if c.endswith(suf) and c.startswith(("stratum", "psu", "ssu", "by")):
-                    hidden.add(c)
-
-        return hidden
+            if c in BOOKKEEPING_COLUMNS or c.startswith((CELLS_PREFIX, AUX_PREFIX))
+        }
 
     # ════════════════════════════════════════════════════════════════════════
     # DESCRIPTIVE STATISTICS (schema-aware)

@@ -33,11 +33,7 @@ _RESERVED = {
 
 
 def _is_internal(name: str) -> bool:
-    return (
-        name in _RESERVED
-        or name.startswith(K.SVY_PRIV_PREFIX)
-        or K._INTERNAL_CONCAT_SUFFIX in name
-    )
+    return name in _RESERVED or name.startswith(K.SVY_PRIV_PREFIX) or name in K.BOOKKEEPING_COLUMNS
 
 
 def _replicate_like(sample: "Sample", names: list[str]) -> list[str]:

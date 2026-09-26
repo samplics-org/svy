@@ -77,11 +77,10 @@ def test_sample_select_srswor_n():
     assert samp2.data["svy_prob_selection"].max() == 2 / 15
     assert samp2.data.shape[0] <= 2
     assert samp2.data.shape[0] >= 1
-    assert samp2.data.shape[1] == 9
+    assert samp2.data.shape[1] == 8
     assert samp2.data["svy_number_of_hits"].min() == 1
     assert samp2.data["svy_number_of_hits"].max() == 1
     assert samp2.data.columns == [
-        "svy_row_index",
         "id",
         "name",
         "age",
@@ -117,10 +116,9 @@ def test_sample_select_srswr_n_stratified():
     )
     assert samp2.data.shape[0] <= 4
     assert samp2.data.shape[0] >= 2
-    assert samp2.data.shape[1] == 9
+    assert samp2.data.shape[1] == 8
     assert samp2.data["education"].unique().shape[0] == 2
     assert samp2.data.columns == [
-        "svy_row_index",
         "id",
         "name",
         "age",

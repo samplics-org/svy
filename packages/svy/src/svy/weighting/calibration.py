@@ -198,7 +198,7 @@ def _calibrate_scoped(
     )
 
     idx = np.flatnonzero(scope)
-    sub = _Sample(df.filter(pl.Series(scope)), design)
+    sub = _Sample(_Sample._without_bookkeeping(df.filter(pl.Series(scope))), design)
     out = calibrate(
         sub,
         wgt_name=wgt_name,
@@ -544,7 +544,7 @@ def calibrate_matrix(
             hint="e.g. controls=[N, total_x], in aux_vars column order, or keyed by labels=.",
         )
 
-    df: pl.DataFrame = sample.data
+    df: pl.DataFrame = sample._data
     design = sample._design
 
     wgt_col = getattr(sample.design, "wgt")

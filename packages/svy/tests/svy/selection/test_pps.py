@@ -4,6 +4,7 @@ import polars as pl
 import pytest
 
 from svy import Design, Sample
+from svy.core.constants import SVY_ROW_INDEX
 
 
 # --- Tiny fixture data -------------------------------------------------------
@@ -90,8 +91,8 @@ class TestPPSSysProbs:
 
         incomes = DF["income"].to_numpy()
         total = incomes.sum()
-        for row in samp2.data.iter_rows(named=True):
-            idx = row["svy_row_index"]
+        for row in samp2._data.iter_rows(named=True):
+            idx = row[SVY_ROW_INDEX]
             expected = n * incomes[idx] / total
             assert np.isclose(row["svy_prob_selection"], expected, atol=1e-8)
 
@@ -108,10 +109,10 @@ class TestPPSSysProbs:
         for grp in strata:
             orig = DF.filter(pl.col("education") == grp)
             total_mos = orig["income"].sum()
-            sel = samp2.data.filter(pl.col("education") == grp)
+            sel = samp2._data.filter(pl.col("education") == grp)
             assert int(sel["svy_number_of_hits"].sum()) == n
             for row in sel.iter_rows(named=True):
-                idx = row["svy_row_index"]
+                idx = row[SVY_ROW_INDEX]
                 income_i = DF[idx, "income"]
                 expected = n * income_i / total_mos
                 assert np.isclose(row["svy_prob_selection"], expected, atol=1e-8)
@@ -127,7 +128,7 @@ class TestPPSSysProbs:
 
         total_income = DF2["income"].sum()
         inferred_pps = (samp2.data["svy_prob_selection"] / 0.5).to_numpy()
-        for idx, p in zip(samp2.data["svy_row_index"].to_list(), inferred_pps):
+        for idx, p in zip(samp2._data[SVY_ROW_INDEX].to_list(), inferred_pps):
             expected = 2 * DF2[idx, "income"] / total_income
             assert np.isclose(p, expected, atol=1e-8)
 
@@ -213,8 +214,8 @@ class TestPPSSysOrdering:
             drop_nulls=True,
             rstate=np.random.default_rng(42),
         )
-        assert sorted(s1.data["svy_row_index"].to_list()) == sorted(
-            s2.data["svy_row_index"].to_list()
+        assert sorted(s1._data[SVY_ROW_INDEX].to_list()) == sorted(
+            s2._data[SVY_ROW_INDEX].to_list()
         )
 
     def test_order_type_random_can_differ_from_natural(self):
@@ -227,7 +228,7 @@ class TestPPSSysOrdering:
                 drop_nulls=True,
                 rstate=np.random.default_rng(0),
             )
-            .data["svy_row_index"]
+            ._data[SVY_ROW_INDEX]
             .to_list()
         )
 
@@ -240,7 +241,7 @@ class TestPPSSysOrdering:
                     drop_nulls=True,
                     rstate=np.random.default_rng(seed),
                 )
-                .data["svy_row_index"]
+                ._data[SVY_ROW_INDEX]
                 .to_list()
             )
             for seed in range(20)
@@ -337,20 +338,20 @@ def test_sample_select_pps_sys_sublevel_mapping_broadcasts_by_component():
     # so they can be recovered from the output.
     cert_n: dict = {}
     cert_mos: dict = {}
-    for row in samp2.data.iter_rows(named=True):
+    for row in samp2._data.iter_rows(named=True):
         if row["svy_certainty"]:
             key = (row["region"], row["education"])
             cert_n[key] = cert_n.get(key, 0) + 1
-            cert_mos[key] = cert_mos.get(key, 0.0) + DF2[row["svy_row_index"], "income"]
+            cert_mos[key] = cert_mos.get(key, 0.0) + DF2[row[SVY_ROW_INDEX], "income"]
 
-    for row in samp2.data.iter_rows(named=True):
+    for row in samp2._data.iter_rows(named=True):
         if row["svy_certainty"]:
             assert row["svy_prob_selection"] == 1.0
         else:
             reg = row["region"]
             ed = row["education"]
             n_g = n_map[ed]
-            idx = row["svy_row_index"]
+            idx = row[SVY_ROW_INDEX]
             income_i = DF2[idx, "income"]
             cell = DF2.filter((pl.col("region") == reg) & (pl.col("education") == ed))
             total_mos = cell["income"].sum()

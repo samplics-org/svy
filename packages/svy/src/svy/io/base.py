@@ -145,7 +145,7 @@ def scan_csv(path: str | Path, **kwargs) -> pl.LazyFrame:
 
 
 def write_csv(sample: Sample | pl.DataFrame, path: str | Path, **kwargs) -> None:
-    _raw = sample._data if isinstance(sample, Sample) else sample
+    _raw = sample.data if isinstance(sample, Sample) else sample
     df: pl.DataFrame = (
         cast(pl.DataFrame, _raw)
         if not isinstance(_raw, pl.LazyFrame)
@@ -163,7 +163,7 @@ def scan_parquet(path: str | Path, **kwargs) -> pl.LazyFrame:
 
 
 def write_parquet(sample: Sample | pl.DataFrame, path: str | Path, **kwargs) -> None:
-    _raw = sample._data if isinstance(sample, Sample) else sample
+    _raw = sample.data if isinstance(sample, Sample) else sample
     df: pl.DataFrame = (
         cast(pl.DataFrame, _raw)
         if not isinstance(_raw, pl.LazyFrame)
@@ -192,7 +192,7 @@ def write_spss(sample: Sample, path: str | Path, **kwargs) -> None:
         "spss",
         path,
         _write_spss,
-        df=sample._data,
+        df=sample.data,
         store=sample.meta,
         **kwargs,
     )
@@ -215,7 +215,7 @@ def write_stata(sample: Sample, path: str | Path, **kwargs) -> None:
         "stata",
         path,
         _write_stata,
-        df=sample._data,
+        df=sample.data,
         store=sample.meta,
         **kwargs,
     )
@@ -238,7 +238,7 @@ def write_sas(sample: Sample, path: str | Path, **kwargs) -> None:
         "sas",
         path,
         _write_sas,
-        df=sample._data,
+        df=sample.data,
         store=sample.meta,
         **kwargs,
     )

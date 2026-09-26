@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Mapping, Sequence, cast
 
 import polars as pl
 
-from svy.core.constants import _BY_SEP, _INTERNAL_CONCAT_SUFFIX
+from svy.core.constants import _BY_SEP, key_col
 from svy.core.types import WhereArg
 from svy.errors import DimensionError
 from svy.utils.checks import assert_no_missing, drop_missing
@@ -584,7 +584,6 @@ def prepare_data(
         design=design,
         by=by,
         null_token=NULL_LEVEL,
-        suffix=_INTERNAL_CONCAT_SUFFIX,
         categorical=True,
         drop_original=False,
         include_design=_design_codes is None,
@@ -600,12 +599,10 @@ def prepare_data(
     _singleton_result = getattr(sample, "_singleton_result", None)
     _singleton_config = _singleton_result.config if _singleton_result else None
 
-    suffix = _INTERNAL_CONCAT_SUFFIX
-
     if _singleton_config and _singleton_config.var_stratum_col:
         strata_col = _singleton_config.var_stratum_col
         psu_col = _singleton_config.var_psu_col
-        ssu_col = f"ssu{suffix}" if design.ssu else None
+        ssu_col = key_col("ssu") if design.ssu else None
     elif _design_codes:
         # Phase C: point the kernel at the integer code columns (dtype-dispatch
         # picks the fast path). PSU codes are already stratum-nested.
@@ -613,17 +610,17 @@ def prepare_data(
         psu_col = _PSU_CODE if "psu" in _design_codes else None
         ssu_col = _SSU_CODE if "ssu" in _design_codes else None
     else:
-        strata_col = f"stratum{suffix}" if design.stratum else None
-        psu_col = f"psu{suffix}" if design.variance_psu else None
-        ssu_col = f"ssu{suffix}" if design.ssu else None
+        strata_col = key_col("stratum") if design.stratum else None
+        psu_col = key_col("psu") if design.variance_psu else None
+        ssu_col = key_col("ssu") if design.ssu else None
 
     # ── By column resolution ─────────────────────────────────────────────
     if isinstance(by, str):
         by_cols_list = [by]
-        by_col = f"by{_INTERNAL_CONCAT_SUFFIX}"
+        by_col = key_col("by")
     elif isinstance(by, (list, tuple)) and len(by) > 0:
         by_cols_list = list(by)
-        by_col = f"by{_INTERNAL_CONCAT_SUFFIX}"
+        by_col = key_col("by")
     else:
         by_cols_list = []
         by_col = None

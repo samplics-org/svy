@@ -39,7 +39,7 @@ class TestShowDataBasic:
         out = sample_small.show_data(n=3)
         assert isinstance(out, pl.DataFrame)
         assert out.height == 3
-        assert out.columns[:3] == ["svy_row_index", "id", "age"]
+        assert out.columns[:3] == ["id", "age", "height"]
 
     def test_n_none_returns_all_rows(self, sample_small):
         out = sample_small.show_data(n=None)

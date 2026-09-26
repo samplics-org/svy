@@ -15,7 +15,6 @@ from typing import Any, Literal, Sequence
 import msgspec
 import polars as pl
 
-from svy.core.constants import SVY_ROW_INDEX
 from svy.core.design import Design, PopSize
 from svy.core.enumerations import MeasurementType, MetadataSource
 from svy.core.panel import design_varies_within_case, duplicate_case_ids, wave_overlap
@@ -682,12 +681,7 @@ def combine_samples(
             param="adjust",
         )
 
-    frames: list[pl.DataFrame] = []
-    for s in samples:
-        f = s.data
-        if SVY_ROW_INDEX in f.columns:
-            f = f.drop(SVY_ROW_INDEX)
-        frames.append(f)
+    frames: list[pl.DataFrame] = [s.data for s in samples]
 
     # A column name must play ONE design role across the waves: mixing roles
     # per wave (e.g. 'psu' as the PSU in one wave and a stratum component in

@@ -160,5 +160,6 @@ def with_row_index(
     inplace: bool = False,
 ) -> "Sample":
     """Add a row index column."""
+    sample._refuse_bookkeeping([name], where="wrangling.with_row_index")
     new_data = sample._data.with_row_index(name=name, offset=offset)
     return _resolve_target(sample, new_data, inplace=inplace)

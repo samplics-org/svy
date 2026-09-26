@@ -19,7 +19,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from svy.core.constants import _INTERNAL_CONCAT_SUFFIX
+from svy.core.constants import key_col
 from svy.core.data_prep import _PSU_CODE, _STRATUM_CODE, extract_where_cols, prepare_data
 from svy.core.design import Design
 from svy.core.sample import Sample
@@ -468,7 +468,7 @@ class TestByColumnResolution:
             cast_y_float=True,
             select_columns=True,
         )
-        assert prep.by_col == f"by{_INTERNAL_CONCAT_SUFFIX}"
+        assert prep.by_col == key_col("by")
         assert prep.by_cols == ["region"]
 
     def test_no_by(self, sample_clean):
@@ -502,7 +502,7 @@ class TestByColumnResolution:
             cast_y_float=True,
             select_columns=True,
         )
-        assert prep.by_col == f"by{_INTERNAL_CONCAT_SUFFIX}"
+        assert prep.by_col == key_col("by")
         assert prep.by_cols == ["g1", "g2"]
 
 

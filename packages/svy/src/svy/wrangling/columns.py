@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Literal, Mapping, Sequence, cast
 
 import polars as pl
 
-from svy.core.constants import SVY_HIT, SVY_PROB, SVY_ROW_INDEX, SVY_WEIGHT
+from svy.core.constants import BOOKKEEPING_COLUMNS, SVY_HIT, SVY_PROB, SVY_WEIGHT
 from svy.core.repwgts import RepWgts
 from svy.engine.wrangling.cleaning import _clean_names, _rename
 from svy.errors import MethodError
@@ -85,13 +85,16 @@ def rename_columns(
     if not renames:
         return sample
 
-    forbidden = {SVY_ROW_INDEX, SVY_WEIGHT, SVY_PROB, SVY_HIT}
-    if any(k in forbidden or v in forbidden for k, v in renames.items()):
+    forbidden = BOOKKEEPING_COLUMNS | {SVY_WEIGHT, SVY_PROB, SVY_HIT}
+    hit = sorted({c for pair in renames.items() for c in pair if c in forbidden})
+    if hit:
         raise MethodError(
             title="Reserved column names cannot be renamed",
-            detail=f"Forbidden: {sorted(forbidden)}",
+            detail=f"Forbidden: {hit}",
             code="RENAME_FORBIDDEN",
             where="wrangling.rename_columns",
+            got=hit,
+            hint="These names are svy's own; rename to or from another name.",
         )
 
     try:
