@@ -191,6 +191,7 @@ def _cell_est_to_data(c: Any) -> CellEstData:
         cv=_f(c.cv),
         lci=_f(c.lci),
         uci=_f(c.uci),
+        n=c.n,
     )
 
 

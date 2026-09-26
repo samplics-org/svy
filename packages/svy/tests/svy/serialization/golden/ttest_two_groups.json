@@ -21,7 +21,7 @@
       "group": "urban",
       "group_level": "Rural",
       "lci": 46200.0,
-      "n": null,
+      "n": 17,
       "se": 900.0,
       "uci": 49800.0,
       "y": "income",
