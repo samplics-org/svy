@@ -143,7 +143,9 @@ class TestMutateOrdering:
 
 
 def test_clean_names_upper_no_orphan_concat_columns():
-    from svy.core.constants import _INTERNAL_CONCAT_SUFFIX
+    from svy.core.constants import key_col
+
+    keys = {key_col(g) for g in ("stratum", "psu", "ssu")}
 
     df = pl.DataFrame(
         {
@@ -156,15 +158,15 @@ def test_clean_names_upper_no_orphan_concat_columns():
     )
     # Multi-column stratum/psu force internal concat columns to exist
     s = Sample(df, Design(stratum=("s1", "s2"), psu=("p1", "p2"), wgt="w"))
-    concat_before = [c for c in s._data.columns if _INTERNAL_CONCAT_SUFFIX in c]
+    concat_before = [c for c in s._data.columns if c in keys]
     assert concat_before  # sanity: the fixture exercises the concat path
 
     out = s.wrangling.clean_names(letter_case="upper")
-    concat_after = [c for c in out._data.columns if _INTERNAL_CONCAT_SUFFIX.upper() in c]
+    concat_after = [c for c in out._data.columns if "KEY" in c]
     # No uppercased orphans left behind
     assert concat_after == []
     # Exactly one copy of each concat column (no junk duplicates)
-    concat_now = [c for c in out._data.columns if _INTERNAL_CONCAT_SUFFIX in c]
+    concat_now = [c for c in out._data.columns if c in keys]
     assert sorted(concat_now) == sorted(concat_before)
 
 

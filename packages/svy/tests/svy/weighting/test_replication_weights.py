@@ -1171,7 +1171,7 @@ class TestRegeneratedDesignIsRecorded:
             rep_wgts=BootstrapWgts(prefix="declared", n_reps=4)
         )
         s = Sample(
-            data=simple_stratified_sample._data.with_columns(
+            data=simple_stratified_sample.data.with_columns(
                 [pl.lit(1.0).alias(f"declared{i}") for i in range(1, 5)]
             ),
             design=declared,

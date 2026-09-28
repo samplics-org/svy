@@ -397,7 +397,7 @@ class TestColNameGuard:
     def test_pps_guard_fires(self):
         """Guard works on pps_sys too."""
         samp = _make_sample(20, mos=True)
-        data_with_col = samp._data.with_columns(pl.lit(0.5).alias("taken"))
+        data_with_col = samp.data.with_columns(pl.lit(0.5).alias("taken"))
         samp2 = Sample(data=data_with_col, design=samp._design)
         with pytest.raises(MethodError):
             samp2.sampling.pps_sys(n=3, prob_name="taken", rstate=RNG)

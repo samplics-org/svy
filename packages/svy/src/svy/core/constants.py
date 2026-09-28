@@ -8,7 +8,6 @@ SVY_DEFAULT_PRINT_WIDTH: Final[int] = 120
 SVY_PREFIX = "svy_"
 SVY_PRIV_PREFIX = "__svy__"
 
-SVY_ROW_INDEX = f"{SVY_PREFIX}row_index"
 SVY_HIT = f"{SVY_PREFIX}number_of_hits"
 SVY_PROB = f"{SVY_PREFIX}prob_selection"
 SVY_WEIGHT = f"{SVY_PREFIX}sample_weight"
@@ -40,8 +39,38 @@ SELECTION_COLUMNS: Final[frozenset[str]] = frozenset(
 )
 
 _INTERNAL_PREFIX: Final[str] = "__svy__"
-_INTERNAL_CONCAT_SUFFIX: Final[str] = "_svy_internal_cols_concatenated"
 _BY_SEP = "\x00\x1f\x00"  # null + unit separator + null
+
+# `svy_*` columns are made for the user (the selection outputs); `__svy_*` are svy's.
+SVY_OWN_PREFIX: Final[str] = "__svy_"
+SVY_ROW_INDEX: Final[str] = "__svy_row_index__"
+
+
+def key_col(group: str) -> str:
+    """The column holding a design group's columns (stratum, psu, ssu, by) as one key."""
+    return f"{SVY_OWN_PREFIX}{group}_key__"
+
+
+SVY_VAR_STRATUM: Final[str] = "__svy_var_stratum__"
+SVY_VAR_PSU: Final[str] = "__svy_var_psu__"
+SVY_VAR_EXCLUDE: Final[str] = "__svy_var_exclude__"
+SVY_VAR_IS_SINGLETON: Final[str] = "__svy_var_is_singleton__"
+
+# Derived from the data and design and rebuilt on every change, so kept in
+# ``sample._data`` only: never shown by ``sample.data``, never saved, and
+# refused as the name of a user column.
+BOOKKEEPING_COLUMNS: Final[frozenset[str]] = frozenset(
+    {
+        SVY_ROW_INDEX,
+        key_col("stratum"),
+        key_col("psu"),
+        key_col("ssu"),
+        SVY_VAR_STRATUM,
+        SVY_VAR_PSU,
+        SVY_VAR_EXCLUDE,
+        SVY_VAR_IS_SINGLETON,
+    }
+)
 
 
 def rep_col(i: int) -> str:

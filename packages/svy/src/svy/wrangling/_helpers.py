@@ -17,10 +17,7 @@ from typing import TYPE_CHECKING, Iterable, cast
 
 import polars as pl
 
-from svy.core.constants import (
-    _INTERNAL_CONCAT_SUFFIX,
-    SVY_ROW_INDEX,
-)
+from svy.core.constants import BOOKKEEPING_COLUMNS
 from svy.core.design import Design, PopSize
 from svy.errors import MethodError
 
@@ -176,13 +173,28 @@ def _guard_weight_writes(
     outright, except that a cast (``widening_only``) may widen exactly. Any
     other lineage column is refused if its values or type changed. Runs before
     any data is rebound, so a refused step leaves the sample untouched.
+
+    svy's bookkeeping columns are refused the same way, whatever the design.
     """
-    roles = _weight_lineage_columns(sample)
-    if not roles:
-        return
     old = _eager_df(sample)
     new = new_data if isinstance(new_data, pl.DataFrame) else new_data.collect()
     written = set(targets)
+    same_rows = old.height == new.height
+    reserved = [
+        c
+        for c in new.columns
+        if c in BOOKKEEPING_COLUMNS
+        and (
+            c in written
+            or c not in old.columns
+            or (same_rows and not _unchanged(old.get_column(c), new.get_column(c)))
+        )
+    ]
+    if reserved:
+        raise MethodError.reserved_columns(where=where, columns=reserved)
+    roles = _weight_lineage_columns(sample)
+    if not roles:
+        return
 
     def allowed(c: str) -> bool:
         if c not in new.columns:
@@ -207,7 +219,7 @@ def _design_source_columns(sample: "Sample") -> set[str]:
     concatenated design columns (stratum/psu/ssu) are derived from.
 
     These are the columns whose *values* feed into the concatenated
-    ``_svy_internal_`` columns.  If any of these values change, the
+    ``__svy_*_key__`` columns.  If any of these values change, the
     concatenated columns must be rebuilt.
     """
     design: Design | None = getattr(sample, "_design", None)
@@ -239,17 +251,7 @@ def _internal_columns(sample: "Sample") -> set[str]:
     need to think about them when using keep_columns/select or
     remove_columns/drop.
     """
-    internal: set[str] = set()
-    cols = set(sample._data.columns)
-
-    if SVY_ROW_INDEX in cols:
-        internal.add(SVY_ROW_INDEX)
-
-    for c in cols:
-        if "_svy_internal_" in c:
-            internal.add(c)
-
-    return internal
+    return {c for c in sample._data.columns if c in BOOKKEEPING_COLUMNS}
 
 
 def _required_columns(sample: "Sample") -> set[str]:
@@ -259,7 +261,7 @@ def _required_columns(sample: "Sample") -> set[str]:
     Everything ``design.columns()`` names -- design fields, replicate weights
     and their units, and the weight-adjustment record's columns (including its
     ``__svy_cells_*``/``__svy_aux_*`` snapshots) -- plus the concatenated
-    design columns. Internal svy columns (like svy_row_index) are handled
+    design columns. svy's bookkeeping columns (``BOOKKEEPING_COLUMNS``) are handled
     transparently and auto-preserved, so they are excluded.
     """
     req: set[str] = set()
@@ -317,15 +319,9 @@ def _rebuild_concat_columns(target: "Sample") -> None:
         design=design,
         by=None,
         null_token="__Null__",
-        suffix=_INTERNAL_CONCAT_SUFFIX,
     )
     target._data = new_data
-    target._internal_design = {
-        "stratum": f"stratum{_INTERNAL_CONCAT_SUFFIX}" if stratum_cols else None,
-        "psu": f"psu{_INTERNAL_CONCAT_SUFFIX}" if psu_cols else None,
-        "ssu": f"ssu{_INTERNAL_CONCAT_SUFFIX}" if ssu_cols else None,
-        "suffix": _INTERNAL_CONCAT_SUFFIX,
-    }
+    target._internal_design = target._key_names(stratum_cols, psu_cols, ssu_cols)
     # The two ``target._data = ...`` rebinds above each trip Sample.__setattr__,
     # which bumps the data version — no explicit invalidation needed here.
 

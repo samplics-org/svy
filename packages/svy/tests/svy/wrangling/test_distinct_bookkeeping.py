@@ -11,7 +11,7 @@ import polars as pl
 import pytest
 
 from svy import Design, Sample
-from svy.core.constants import _INTERNAL_CONCAT_SUFFIX, SVY_ROW_INDEX
+from svy.core.constants import SVY_ROW_INDEX, key_col
 
 
 def _dups() -> pl.DataFrame:
@@ -89,7 +89,7 @@ def test_row_index_kept_from_surviving_rows():
 def test_concat_design_columns_do_not_block():
     df = _dups().with_columns(pl.lit("s").alias("s1"), pl.col("a").alias("p1"))
     s = Sample(df, Design(stratum=("s1", "b"), psu=("p1", "b")))
-    assert any(_INTERNAL_CONCAT_SUFFIX in c for c in s._data.columns)
+    assert key_col("stratum") in s._data.columns
     out = s.wrangling.distinct()
     assert _user(out) == [(1, "x"), (2, "y"), (3, "z")]
 

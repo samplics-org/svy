@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, cast
 
 import polars as pl
 
-from svy.core.constants import SVY_PROB, SVY_ROW_INDEX, SVY_WEIGHT
+from svy.core.constants import BOOKKEEPING_COLUMNS, SVY_PROB, SVY_ROW_INDEX, SVY_WEIGHT
 from svy.errors import MethodError
 from svy.selection._helpers import _psu_list
 from svy.selection.combine_stages import CombineResult, _combine_stages
@@ -110,7 +110,10 @@ def add_stage(
         ns_df = next_stage._data
         if isinstance(ns_df, pl.LazyFrame):
             ns_df = ns_df.collect()
-        ns_df = cast(pl.DataFrame, ns_df)
+        # Its keys and variance columns describe its own design, not the combined one.
+        ns_df = cast(pl.DataFrame, ns_df).drop(
+            [c for c in ns_df.columns if c in BOOKKEEPING_COLUMNS and c != SVY_ROW_INDEX]
+        )
         ns_design = next_stage._design
         already_selected = ns_design.prob is not None
     else:
@@ -130,12 +133,7 @@ def add_stage(
     s1_psu = _psu_list(s1_design.psu)
     ns_psu = _psu_list(ns_design.psu) if ns_design.psu else s1_psu
 
-    exclude: set[str] = {SVY_ROW_INDEX}
-    internal = s1._internal_design or {}
-    for key in ("stratum", "psu", "ssu"):
-        val = internal.get(key)
-        if isinstance(val, str):
-            exclude.add(val)
+    exclude: set[str] = set(BOOKKEEPING_COLUMNS)
 
     found: list[dict] = []
     result: CombineResult = _combine_stages(
@@ -179,12 +177,7 @@ def add_stage(
     combined._metadata = copy.deepcopy(
         next_stage._metadata if isinstance(next_stage, _Sample) else s1._metadata
     )
-    combined._internal_design = {
-        "stratum": None,
-        "psu": None,
-        "ssu": None,
-        "suffix": s1._internal_design.get("suffix", "_svy_internal_cols_concatenated"),
-    }
+    combined._internal_design = _Sample._key_names()
     combined._warnings = next_stage._warnings if isinstance(next_stage, _Sample) else s1._warnings
     combined._print_width = None
     combined._singleton_result = None

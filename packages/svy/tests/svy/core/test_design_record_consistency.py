@@ -20,6 +20,7 @@ import pytest
 from numpy.testing import assert_allclose
 
 from svy import Design, Sample, SvyUserWarning
+from svy.core.constants import key_col
 from svy.core.design import PopSize, WgtAdjustment
 from svy.core.repwgts import BootstrapWgts, BrrWgts, JackknifeWgts, SdrWgts
 from svy.errors import MethodError
@@ -549,7 +550,7 @@ def test_force_removing_stratum_rebuilds_internal_state(small):
         out = s.wrangling.remove_columns("s", force=True)
     assert out.design.stratum is None
     assert out._internal_design["stratum"] is None
-    assert not any(c.startswith("stratum_svy_internal") for c in out._data.columns)
+    assert key_col("stratum") not in out._data.columns
     ref = Sample(small.drop("s"), Design(wgt="w", psu="p"))
     assert_allclose(_se(out, "y"), _se(ref, "y"))
 

@@ -119,7 +119,7 @@ class TestCovarianceFollowsRows:
 
         def capture(result_df, cov_flat):
             cov = original(result_df, cov_flat)
-            by_col = next(c for c in result_df.columns if c.startswith("by"))
+            by_col = next(c for c in result_df.columns if c.startswith("__svy_by"))
             seen["pos"] = {v: i for i, v in enumerate(result_df[by_col].to_list())}
             seen["cov"] = cov
             return cov

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from typing import TYPE_CHECKING, Literal, Mapping, Sequence, cast
+from typing import TYPE_CHECKING, Literal, Mapping, Sequence
 
 import numpy as np
 import numpy.typing as npt
@@ -311,12 +311,11 @@ def srs(
     seed = seed_from_random_state(rstate)
     data = _apply_order(data, order_by=order_by, order_type=order_type, seed=seed)
 
-    suffix: str = cast(str, sample._internal_design["suffix"])
     stratum_col: str | None = sample._internal_design["stratum"]
     by_cols: list[str] = sample._to_cols(by) if by is not None else []
 
     stratum_by_col, stratum_by_arr, G, B, S, data = _build_group_keys(
-        data, stratum_col=stratum_col, by_cols=by_cols, suffix=suffix, sample_ref=sample
+        data, stratum_col=stratum_col, by_cols=by_cols, sample_ref=sample
     )
     n_norm = _normalize_n_for_groups(n, G=G, B=B, S=S)
 

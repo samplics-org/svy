@@ -56,7 +56,7 @@ def test_fay_coef_zero_means_no_override_not_fay_zero(brr_sample):
 
 def test_fay_override_is_ignored_for_methods_without_one(brr_sample):
     """A bootstrap has no Fay coefficient; passing one must not change anything."""
-    data = brr_sample._data
+    data = brr_sample.data
     boot = svy.Sample(
         data=data,
         design=svy.Design(wgt="wgt", stratum="stratum", psu="psu"),
@@ -474,7 +474,7 @@ def test_recovery_refuses_columns_without_the_delete_one_signature():
     refuse than to hand back a confidently wrong vector."""
     rng = np.random.default_rng(63)
     built = _unbalanced_built(rng)
-    noise = built._data.with_columns(
+    noise = built.data.with_columns(
         [pl.Series(f"b{i}", rng.uniform(0.5, 1.5, 7)) for i in range(1, 8)]
     )
     with pytest.warns(svy.SvyUserWarning, match=r"\[JACKKNIFE_COEFS_UNAVAILABLE\]"):

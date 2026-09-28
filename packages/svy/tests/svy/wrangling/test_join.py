@@ -7,6 +7,7 @@ import pytest
 
 import svy
 
+from svy.core.constants import SVY_ROW_INDEX
 from svy.core.warnings import Severity
 from svy.errors import DimensionError, MethodError
 
@@ -360,7 +361,7 @@ def test_order_follows_this_sample_whatever_the_other_order():
     hh = pl.DataFrame({"hh": [4, 3, 2, 1], "rooms": [1, 3, 5, 2]})
     out = p.wrangling.join(hh, on="hh")
     assert out.data["hh"].to_list() == p.data["hh"].to_list()
-    assert out.data["svy_row_index"].to_list() == p.data["svy_row_index"].to_list()
+    assert out._data[SVY_ROW_INDEX].to_list() == p._data[SVY_ROW_INDEX].to_list()
     assert out.data["rooms"].to_list() == [3, 2, 2, 5, 5, 5, 1]
 
 

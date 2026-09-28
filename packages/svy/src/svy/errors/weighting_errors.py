@@ -22,15 +22,7 @@ _SHOWN = 8
 
 def _user_columns(cols: Iterable[str]) -> list[str]:
     """Data columns without svy's own bookkeeping columns."""
-    return [
-        c
-        for c in cols
-        if not (
-            c.startswith("__svy")
-            or c == "svy_row_index"
-            or c.endswith("_svy_internal_cols_concatenated")
-        )
-    ]
+    return [c for c in cols if not c.startswith("__svy")]
 
 
 def show(v: Any) -> str:

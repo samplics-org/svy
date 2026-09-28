@@ -98,7 +98,7 @@ def test_chained_waves():
             "wave": [3, 3],
         }
     )
-    s = svy.Sample(pl.concat([_long().data.drop("svy_row_index"), w3]), _long().design)
+    s = svy.Sample(pl.concat([_long().data, w3]), _long().design)
     s = s.weighting.adjust("resp", cells="g", where=col("wave") == 2, wgt_name="lw_12")
     s = s.weighting.adjust("resp", cells="g", where=col("wave") == 3, wgt_name="lw_123")
     lw = dict(s.data.filter(pl.col("wave") == 1).select("id", "lw_123").iter_rows())
@@ -117,7 +117,7 @@ def test_scope_not_a_wave_set_warns_and_skips_missing_rule():
 
 
 def test_cross_section_behaviour_unchanged():
-    df = _long().data.filter(pl.col("wave") == 2).drop("svy_row_index")
+    df = _long().data.filter(pl.col("wave") == 2)
     s = svy.Sample(df, svy.Design(wgt="w"))
     out = s.weighting.adjust("resp", cells="g", respondents_only=False)
     assert out.data["nr_wgt"].to_list() == pytest.approx([2.0, 4.0, 0.0, 4.0])

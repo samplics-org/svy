@@ -8,7 +8,13 @@ from typing import TYPE_CHECKING, Any, Callable, Literal, Sequence, cast
 import msgspec
 import polars as pl
 
-from svy.core.constants import SVY_ROW_INDEX
+from svy.core.constants import (
+    SVY_ROW_INDEX,
+    SVY_VAR_EXCLUDE,
+    SVY_VAR_IS_SINGLETON,
+    SVY_VAR_PSU,
+    SVY_VAR_STRATUM,
+)
 from svy.core.enumerations import SingletonHandling as _SingletonHandling
 from svy.errors.singleton_errors import SingletonError
 from svy.utils.random_state import RandomState, resolve_random_state
@@ -27,10 +33,10 @@ log = logging.getLogger(__name__)
 
 # These columns are used internally for variance estimation when singleton
 # handling is applied. The original design columns are NEVER modified.
-_VAR_STRATUM_COL = "__svy_var_stratum__"
-_VAR_PSU_COL = "__svy_var_psu__"
-_VAR_EXCLUDE_COL = "__svy_var_exclude__"
-_VAR_IS_SINGLETON_COL = "__svy_var_is_singleton__"  # For CENTER method
+_VAR_STRATUM_COL = SVY_VAR_STRATUM
+_VAR_PSU_COL = SVY_VAR_PSU
+_VAR_EXCLUDE_COL = SVY_VAR_EXCLUDE
+_VAR_IS_SINGLETON_COL = SVY_VAR_IS_SINGLETON  # For CENTER method
 _VAR_COLS = (_VAR_STRATUM_COL, _VAR_PSU_COL, _VAR_EXCLUDE_COL, _VAR_IS_SINGLETON_COL)
 
 # Must match Sample._concatenate_cols, which builds the internal stratum key.
@@ -1266,6 +1272,9 @@ class Singleton:
         """Clone sample and attach singleton result."""
         from svy.core.sample import Sample as _Sample
 
+        if isinstance(self._sample, _Sample):
+            # The clone rebuilds svy's bookkeeping; a frame carrying it is refused.
+            data = _Sample._without_bookkeeping(data)
         new_sample = cast(_Sample, self._sample.clone(data=data, design=design))
         object.__setattr__(new_sample, "_singleton_result", result)
         return new_sample

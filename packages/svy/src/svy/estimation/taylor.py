@@ -358,6 +358,7 @@ def taylor_prop(
         prep.by_col,
         as_factor=True,
         ci_method=ci_method,
+        by_cols=prep.by_cols,
     )
     est_cov = est._cov_from_kernel(result_df, cov_flat)
     design_df = int(result_df["df"][0]) if prep.by_col is None else est._design_df_from_prep(prep)

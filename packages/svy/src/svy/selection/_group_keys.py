@@ -17,6 +17,7 @@ import numpy as np
 import numpy.typing as npt
 import polars as pl
 
+from svy.core.constants import key_col
 from svy.core.types import DF, Category, Number
 from svy.errors import MethodError
 
@@ -58,7 +59,6 @@ def _build_group_keys(
     *,
     stratum_col: str | None,
     by_cols: list[str],
-    suffix: str,
     sample_ref,
 ) -> tuple[
     str | None,
@@ -76,7 +76,6 @@ def _build_group_keys(
     data        : working DataFrame (already column-sliced)
     stratum_col : design stratum column name, or None
     by_cols     : additional grouping columns
-    suffix      : internal suffix used by Sample._concatenate_cols
     sample_ref  : Sample instance (only used for _concatenate_cols)
 
     Returns
@@ -108,11 +107,10 @@ def _build_group_keys(
                 null_token="__Null__",
                 categorical=True,
                 drop_original=False,
-                rename_suffix=suffix,
                 stratum_by=group_parts,
             ),
         )
-        stratum_by_col = f"stratum_by{suffix}"
+        stratum_by_col = key_col("stratum_by")
         stratum_by_arr = data[stratum_by_col].to_numpy()
 
     G = _unique_as_str(data[stratum_by_col].unique().to_list()) if stratum_by_col else []
@@ -126,11 +124,10 @@ def _build_group_keys(
                 null_token="__Null__",
                 categorical=True,
                 drop_original=False,
-                rename_suffix=suffix,
                 only_by=by_cols,
             ),
         )
-        by_only_col = f"only_by{suffix}"
+        by_only_col = key_col("only_by")
         B = _unique_as_str(data[by_only_col].unique().to_list())
     else:
         B = []
