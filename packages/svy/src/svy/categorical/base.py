@@ -332,6 +332,12 @@ class Categorical:
         psu_col = f"psu{_INTERNAL_CONCAT_SUFFIX}" if design.variance_psu is not None else None
         ssu_col = f"ssu{_INTERNAL_CONCAT_SUFFIX}" if design.ssu is not None else None
 
+        # Levels are ordered on the columns' own values (an Enum's categories in
+        # its order, numbers numerically), which the cast below loses.
+        _level_data = concat_data.select(
+            [rowvar] + ([colvar] if colvar else []) + ([domain_col] if domain_col else [])
+        )
+
         # Cast all design columns to String in a single with_columns call
         _cast_cols = [rowvar] + ([colvar] if colvar else [])
         for _c in [strata_col, psu_col, ssu_col]:
@@ -466,9 +472,23 @@ class Categorical:
             )
 
         # levels for display
-        _dom_data = concat_data.filter(pl.col(domain_col)) if domain_col else concat_data
-        rowvals = _dom_data[rowvar].unique().sort().to_list()
-        colvals = _dom_data[colvar].unique().sort().to_list() if colvar else None
+        _dom_data = _level_data.filter(pl.col(domain_col)) if domain_col else _level_data
+
+        def _levels(col: str) -> list:
+            return _dom_data[col].unique().sort().cast(pl.String).to_list()
+
+        rowvals = _levels(rowvar)
+        colvals = _levels(colvar) if colvar else None
+
+        # Cells come back in the kernel's order; list them by row, then column level.
+        row_pos = {_norm_label(str(v)): i for i, v in enumerate(rowvals)}
+        col_pos = {_norm_label(str(v)): i for i, v in enumerate(colvals or [])}
+        cell_rows.sort(
+            key=lambda c: (
+                row_pos.get(c.rowvar, len(row_pos)),
+                col_pos.get(c.colvar, len(col_pos)),
+            )
+        )
 
         metadata = getattr(self._sample, "_metadata", None)
 
