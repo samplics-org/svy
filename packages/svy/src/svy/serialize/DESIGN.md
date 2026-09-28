@@ -59,7 +59,7 @@ consumers can switch on the result type without introspection.
 ### 2.5 `schema_version` on top-level structs
 
 Every top-level struct carries `schema_version: str = SCHEMA_VERSION` where
-`SCHEMA_VERSION = "svy-result/0.5"`. Consumers can check the version to know
+`SCHEMA_VERSION = "svy-result/0.6"`. Consumers can check the version to know
 what fields to expect.
 
 **Versioning policy:** bump the minor version (0.1 → 0.2) when fields are added
@@ -87,6 +87,9 @@ ignore unknown fields.
 - `0.5` — `ParamEstData.n`, `TtestEstData.n` and `CellEstData.n` added: the records behind the
   row (in its domain or group, nonzero weight, variables present). `None` when
   decoded from an older payload.
+- `0.6` — `EstimateData.level_orders` added: the categories of each Enum variable
+  whose levels the rows carry, in the Enum's order, so the table lists them in
+  that order. `None` when no such variable, or decoded from an older payload.
 
 ### 2.6 Sub-structs are untagged
 
@@ -238,6 +241,7 @@ Source: `svy.estimation.estimate.Estimate` (not msgspec; `__slots__`)
 | `q_method`        | `str \| None`           | `q_method` (QuantMethod)|
 | `deff_ref`        | `str \| None`           | `deff_ref`             |
 | `as_factor`       | `bool`                  | `as_factor`            |
+| `level_orders`    | `dict[str, list[str]] \| None` | `level_orders` |
 
 Excluded: `covariance`, `strata`, `singletons`, `domains`.
 

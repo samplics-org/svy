@@ -30,7 +30,7 @@
   ],
   "kind": "ttest_one_group",
   "mean_h0": 45000.0,
-  "schema_version": "svy-result/0.5",
+  "schema_version": "svy-result/0.6",
   "stats": {
     "df": 9.0,
     "p_value": 0.001,

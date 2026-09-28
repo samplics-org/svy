@@ -300,6 +300,7 @@ def _serialize_estimate(result: Estimate) -> EstimateData:
             if lab.var_label or lab.values
         ]
         or None,
+        level_orders=dict(result.level_orders) or None,
     )
 
 

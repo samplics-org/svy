@@ -63,6 +63,7 @@ def _estimate(
         tidy=tidy,
         labels=_labels(d) if resolve else None,
         row_index=row_index,
+        orders=d.level_orders,
     )
 
 

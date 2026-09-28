@@ -118,6 +118,17 @@ def row_sort_key(value: Any) -> tuple:
     return (natural_sort_key(value), str(value))
 
 
+def ranked_sort_key(value: Any, rank: Mapping[Any, int] | None = None) -> tuple:
+    """:func:`row_sort_key`, or ``value``'s position in ``rank`` when listed there.
+
+    ``rank`` maps an Enum column's categories to their position, so its levels
+    keep the Enum's order rather than sorting as text.
+    """
+    if rank is not None and value in rank:
+        return (0, rank[value])
+    return (1, row_sort_key(value))
+
+
 # -----------------------------------------------------------------------------
 # Table-aware sort helpers
 # -----------------------------------------------------------------------------
@@ -245,6 +256,7 @@ def sort_display_rows(
     rows: list[dict],
     *,
     numeric_keys: set[str],
+    ranks: Mapping[str, Mapping[Any, int]] | None = None,
 ) -> list[dict]:
     """
     Sort a list of display-ready row dicts by their non-numeric columns.
@@ -267,6 +279,9 @@ def sort_display_rows(
         Set of column names that contain numeric estimates and should be
         excluded from the sort key (e.g. ``{"est", "se", "lci", "uci", "cv",
         "deff"}``).
+    ranks:
+        Per column, the position of each value that sorts by position rather
+        than as text (an Enum's categories), see :func:`ranked_sort_key`.
 
     Returns
     -------
@@ -278,7 +293,8 @@ def sort_display_rows(
     display_cols = [c for c in rows[0] if c not in numeric_keys]
     if not display_cols:
         return rows
-    rows.sort(key=lambda r: tuple(row_sort_key(r.get(c)) for c in display_cols))
+    ranks = ranks or {}
+    rows.sort(key=lambda r: tuple(ranked_sort_key(r.get(c), ranks.get(c)) for c in display_cols))
     return rows
 
 

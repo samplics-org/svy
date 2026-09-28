@@ -20,7 +20,14 @@ from svy.core.types import WhereArg
 from svy.core.warnings import WarnCode
 from svy.errors import DimensionError, MethodError
 from svy.errors.singleton_errors import SingletonError
-from svy.estimation.estimate import Estimate, EstimateList, ParamEst, row_counts, row_order
+from svy.estimation.estimate import (
+    Estimate,
+    EstimateList,
+    ParamEst,
+    label_vars,
+    row_counts,
+    row_order,
+)
 from svy.estimation.replication import (
     replicate_estimate as _replicate_estimate,
 )
@@ -1270,6 +1277,15 @@ class Estimation:
             )
         return out
 
+    def _enum_orders(self, cols: Sequence[str]) -> dict[str, list[str]]:
+        """The categories of each Enum column among ``cols``, in the Enum's order."""
+        schema = self._sample._data.collect_schema()
+        return {
+            c: list(dtype.categories)
+            for c in dict.fromkeys(cols)
+            if isinstance(dtype := schema.get(c), pl.Enum)
+        }
+
     def _build_estimate_result_light(
         self,
         est_list,
@@ -1296,7 +1312,11 @@ class Estimation:
         # The kernel returns domains in hash order, which changes from run to
         # run; sort the rows, and the covariance with them.
         rows = self._native_levels(est_list, by_cols, as_factor)
-        order = row_order(rows, param=param, as_factor=as_factor)
+        if rows:
+            estimate.level_orders = self._enum_orders(
+                label_vars(rows, param=param, as_factor=as_factor)
+            )
+        order = row_order(rows, param=param, as_factor=as_factor, orders=estimate.level_orders)
         if order != list(range(len(rows))):
             rows = [rows[i] for i in order]
             est_cov = np.asarray(est_cov)[np.ix_(order, order)]
