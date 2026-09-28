@@ -21,7 +21,7 @@ import msgspec
 # Constants
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = "svy-result/0.5"
+SCHEMA_VERSION = "svy-result/0.6"
 
 #: A design is an input, read back into a live ``Design``: its own schema.
 DESIGN_SCHEMA_VERSION = "svy-design/0.1"
@@ -273,6 +273,9 @@ class EstimateData(msgspec.Struct, kw_only=True, frozen=True):
     #: Labels of the variables whose levels the rows carry, from the sample's
     #: metadata, so a table can show them without it.
     labels: list[VarLabelsData] | None = None
+    #: The categories of each Enum variable whose levels the rows carry, in the
+    #: Enum's order, which is the order the table lists those levels in.
+    level_orders: dict[str, list[str]] | None = None
 
 
 @_kinded("estimate_list")

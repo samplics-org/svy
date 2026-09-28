@@ -15,10 +15,10 @@ from svy.core.types import Category, Number, RandomState
 # Import central UI helpers
 from svy.ui.printing import (
     make_panel,
+    ranked_sort_key,
     render_plain_table,
     render_rich_to_str,
     resolve_width,
-    row_sort_key,
     sort_display_rows,
 )
 
@@ -78,26 +78,39 @@ def row_counts(result_df: pl.DataFrame) -> list[int | None]:
     return [None if v is None else int(v) for v in result_df["n"].to_list()]
 
 
-def row_order(estimates: Sequence[Any], *, param: str, as_factor: bool = False) -> list[int]:
+def level_ranks(orders: Mapping[str, Sequence[Any]] | None) -> dict[str, dict[Any, int]]:
+    """Each variable's levels mapped to their position in ``orders``."""
+    return {var: {v: i for i, v in enumerate(cats)} for var, cats in (orders or {}).items()}
+
+
+def row_order(
+    estimates: Sequence[Any],
+    *,
+    param: str,
+    as_factor: bool = False,
+    orders: Mapping[str, Sequence[Any]] | None = None,
+) -> list[int]:
     """Positions of ``estimates`` in the order ``to_polars()`` lists them.
 
-    By domain, then by category, each compared with :func:`row_sort_key`.
-    The sort is stable, so rows sharing their levels (correlation pairs) keep
-    their order.
+    By domain, then by category, each compared with :func:`ranked_sort_key`:
+    a variable in ``orders`` (an Enum's categories) by position, any other
+    by :func:`row_sort_key`. The sort is stable, so rows sharing their levels
+    (correlation pairs) keep their order.
     """
     if len(estimates) < 2:
         return list(range(len(estimates)))
     first = estimates[0]
     n_by = len(first.by) if first.by else 0
     names = label_vars(estimates, param=param, as_factor=as_factor)
-    levels = [[raw for _, raw in _row_levels(p, names, n_by)] for p in estimates]
+    ranks = level_ranks(orders)
+    levels = [_row_levels(p, names, n_by) for p in estimates]
     try:
-        keys = [tuple(row_sort_key(v) for v in lv) for lv in levels]
+        keys = [tuple(ranked_sort_key(v, ranks.get(c)) for c, v in lv) for lv in levels]
         return sorted(range(len(estimates)), key=keys.__getitem__)
     except TypeError:
         # A level the data lookup could not restore stays a string beside
         # native values; compare everything as text rather than fail.
-        keys = [tuple(row_sort_key(str(v)) for v in lv) for lv in levels]
+        keys = [tuple(ranked_sort_key(str(v), ranks.get(c)) for c, v in lv) for lv in levels]
         return sorted(range(len(estimates)), key=keys.__getitem__)
 
 
@@ -116,6 +129,7 @@ def estimate_frame(
     labels: Mapping[str, VarLabels] | None = None,
     display: bool = False,
     row_index: str | None = None,
+    orders: Mapping[str, Sequence[Any]] | None = None,
 ) -> pl.DataFrame:
     """The table of an estimate's rows, shared by ``Estimate`` and its serialized form.
 
@@ -124,8 +138,10 @@ def estimate_frame(
     variable names and adds a ``<var>_label`` column for each variable with
     value labels in ``labels``; rows sort by code. The display view, which
     printing uses, puts the labels in place of the codes and the variable
-    labels in place of the names, and sorts on what is shown. ``row_index``
-    adds a first column holding each row's position in ``estimates``.
+    labels in place of the names, and sorts on what is shown. Either view
+    lists the levels of a variable in ``orders`` (an Enum's categories) in
+    that order. ``row_index`` adds a first column holding each row's position
+    in ``estimates``.
     """
     if not estimates:
         return pl.DataFrame()
@@ -198,7 +214,20 @@ def estimate_frame(
     skip = {*_DECIMAL_KEYS, _ROW_POS, "n"}
     if not display:
         skip |= {"df"} | {f"{c}_label" for c in labelled}
-    sort_display_rows(rows, numeric_keys=skip)
+    # A column's name and values differ between the views; rank what is shown.
+    ranks: dict[str, dict[Any, int]] = {}
+    for var, rank in level_ranks(orders).items():
+        if var not in names:
+            continue
+        lab = labels.get(var)
+        if not display:
+            ranks[var] = rank
+            continue
+        shown: dict[Any, int] = {}
+        for raw, i in rank.items():
+            shown.setdefault(_label_of(lab, raw), i)
+        ranks[(lab.var_label if lab else "") or var] = shown
+    sort_display_rows(rows, numeric_keys=skip, ranks=ranks)
     order = [r.pop(_ROW_POS) for r in rows]
     df = pl.from_dicts(rows)
     if row_index:
@@ -284,8 +313,9 @@ class Estimate:
 
     ``estimates`` are sorted by domain level, then by category level, in the
     order ``to_polars()`` lists them: numbers numerically, strings naturally
-    (``"a2"`` before ``"a10"``). ``keys()``, ``domains`` and the rows and
-    columns of ``covariance`` follow the same order.
+    (``"a2"`` before ``"a10"``), and the levels of an Enum column in the
+    Enum's order (recorded in ``level_orders``). ``keys()``, ``domains`` and
+    the rows and columns of ``covariance`` follow the same order.
     """
 
     DECIMALS: int | dict[str, int] | None = None
@@ -306,6 +336,7 @@ class Estimate:
         "n_strata",
         "n_psus",
         "as_factor",
+        "level_orders",
         "where_clause",
         "design_df",
         "_cov_filled",
@@ -339,6 +370,9 @@ class Estimate:
         self.n_strata: int = 0
         self.n_psus: int = 0
         self.as_factor: bool = False
+        #: The categories of each Enum variable whose levels the rows carry,
+        #: in the Enum's order; the rows list those levels in this order.
+        self.level_orders: dict[str, list[str]] = {}
         #: Quantile rule of a median or quantile; None for every other parameter.
         self.q_method: QuantileMethod | None = None
         self.where_clause: str | None = None
@@ -529,6 +563,7 @@ class Estimate:
             as_factor=self.as_factor,
             tidy=tidy,
             labels=self._labels() if resolve else None,
+            orders=self.level_orders,
         )
 
     def to_polars_printable(self, *, use_labels: bool | None = None) -> pl.DataFrame:
@@ -553,6 +588,7 @@ class Estimate:
             as_factor=self.as_factor,
             labels=self._labels() if resolve else None,
             display=True,
+            orders=self.level_orders,
         )
 
     def _labels(self) -> dict[str, VarLabels]:
