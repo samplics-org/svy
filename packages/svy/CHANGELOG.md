@@ -86,6 +86,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **Table levels came back in the kernel's order and sorted as text.** `tabulate` cells, `to_polars()`, `rowvals`/`colvals`, `crosstab()` and printed tables listed `10` before `2`, and an Enum's levels alphabetically. Levels are now ordered on the column's values: an Enum's in the Enum's order, numbers numerically. Cells are listed by row level, then column level.
+
 - **`trimming=` cycles stopped after one pass.** `poststratify`, `standardize`, `rake`, `calibrate` and `calibrate_matrix` checked the trimming bounds right after trimming, where they always hold, so every cycle ended after its first pass and `trimming.max_iter` had no effect: a cap that needed more than one trim-and-readjust pass failed however many cycles were allowed. The bounds are now checked on the readjusted weights. Calls that converged before give the same weights.
 
 - **An unreachable control in a `trimming=` cycle is `TRIM_INFEASIBLE`**, not `CONVERGENCE_FAILED` / `MAX_ITER_REACHED` with a hint to raise `max_iter`. When a cycle fails and a control is outside the totals its units can reach within the bounds (a cell, margin level or calibration column; per `by=` domain), the error names it with its total, reachable range, unit count and, for a cell or level, the bound its units need on average. It follows `on_nonconvergence`: `"warn"` and `"ignore"` keep the last cycle's weights and record `TRIM_INFEASIBLE`. For `rake` only fixed bounds (a number or `Threshold.absolute`) are diagnosed, since a relative bound is resolved again each cycle.
