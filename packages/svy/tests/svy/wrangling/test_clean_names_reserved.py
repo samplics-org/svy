@@ -104,7 +104,7 @@ def test_estimation_after_clean():
 def test_user_column_cleaned_into_reserved_name_is_suffixed(first):
     s = _selected()
     clash = pl.Series("SVY Sample Weight", [9.0] * s._data.height)
-    data = s._data
+    data = s.data
     data = data.insert_column(0, clash) if first else data.with_columns(clash)
     s = Sample(data, s.design)
     out = s.wrangling.clean_names()

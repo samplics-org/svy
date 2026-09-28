@@ -108,7 +108,7 @@ def test_replicate_estimates_are_unchanged_by_column_lookup_shape():
     ref = sample.estimation.mean("y", method="replication").estimates[0]
 
     # Same data, but replicate weights stored as Float32 so the cast path runs.
-    df = sample._data
+    df = sample.data
     if isinstance(df, pl.LazyFrame):
         df = df.collect()
     cast_df = df.with_columns([pl.col(f"bsrw{r + 1}").cast(pl.Float32) for r in range(SMALL_REPS)])

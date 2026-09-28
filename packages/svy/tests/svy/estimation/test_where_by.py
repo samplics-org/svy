@@ -392,7 +392,7 @@ class TestWhereAndByOnSameVariable:
             where=col("sex") != 99,
         )
 
-        filtered_data = dk_sample._data.filter(pl.col("sex") != 99)
+        filtered_data = dk_sample.data.filter(pl.col("sex") != 99)
         filtered = Sample(filtered_data, dk_sample._design).estimation.mean("income", by="sex")
 
         filtered_by_level = {e.by_level[0]: e for e in filtered.estimates}
@@ -428,7 +428,7 @@ class TestWhereAndByOnSameVariable:
         level — must drop out, leaving the full cross of surviving levels.
         """
         # Add a second grouping variable with no missing code.
-        data = dk_sample._data.with_columns(
+        data = dk_sample.data.with_columns(
             pl.Series("region", ["North", "South"] * (dk_sample._data.height // 2))
         )
         sample = Sample(data, dk_sample._design)
@@ -477,7 +477,7 @@ class TestDomainEstimationCorrectness:
         )
 
         # Simple filtering (wrong approach)
-        filtered_data = simple_sample._data.filter(pl.col("age") >= 65)
+        filtered_data = simple_sample.data.filter(pl.col("age") >= 65)
         filtered_sample = Sample(
             filtered_data,
             simple_sample._design,

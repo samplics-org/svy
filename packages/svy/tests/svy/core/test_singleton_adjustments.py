@@ -9,7 +9,6 @@ import svy_rs as ps
 
 import svy
 
-from svy.core.constants import SVY_ROW_INDEX
 from svy.core.enumerations import SingletonHandling
 from svy.core.singleton import _VAR_EXCLUDE_COL
 
@@ -34,7 +33,7 @@ def adjustment_sample():
     ]
     df = pl.DataFrame(
         rows,
-        schema=[SVY_ROW_INDEX, "stratum", "cluster", "income", "weight"],
+        schema=["id", "stratum", "cluster", "income", "weight"],
         orient="row",
     )
     design = svy.Design(stratum="stratum", psu="cluster", wgt="weight")
@@ -158,7 +157,7 @@ def test_center_idempotent_if_not_configured(monkeypatch):
     ]
     df = pl.DataFrame(
         rows,
-        schema=[SVY_ROW_INDEX, "stratum", "cluster", "income", "weight"],
+        schema=["id", "stratum", "cluster", "income", "weight"],
         orient="row",
     )
     design = svy.Design(stratum="stratum", psu="cluster", wgt="weight")

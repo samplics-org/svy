@@ -168,7 +168,7 @@ def test_chaining_is_unaffected_by_the_mode(sample):
         .weighting.rake(controls=controls, wgt_name="final_wgt")
     )
     mutated = (
-        Sample(data=sample._data, design=sample._design)
+        Sample(data=sample.data, design=sample._design)
         .weighting.create_bs_wgts(n_reps=4, rep_prefix="bw", rstate=1, inplace=True)
         .weighting.adjust(resp_status="status", cells="urb", wgt_name="nr_wgt", inplace=True)
         .weighting.rake(controls=controls, wgt_name="final_wgt", inplace=True)
