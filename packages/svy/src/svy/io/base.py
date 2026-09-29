@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 _EXPECTED_EXTS = {
     "spss": (".sav", ".zsav"),
     "stata": (".dta",),
-    "sas": (".sas7bdat", ".xpt"),
+    "sas": (".sas7bdat", ".xpt", ".xport", ".ssp", ".zip"),
     "csv": (".csv", ".tsv", ".txt"),
     "parquet": (".parquet", ".pqt"),
 }
@@ -319,3 +319,9 @@ create_from_dta = create_from_stata
 read_dta = read_stata
 read_dta_with_labels = read_stata_with_labels
 write_dta = write_stata
+
+# read_sas recognises SAS Transport by content; write_sas writes it.
+create_from_xpt = create_from_sas
+read_xpt = read_sas
+read_xpt_with_labels = read_sas_with_labels
+write_xpt = write_sas

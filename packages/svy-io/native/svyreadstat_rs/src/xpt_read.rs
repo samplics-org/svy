@@ -22,6 +22,8 @@ fn parse_xpt_impl(
     rows_skip: usize,
     n_max: Option<usize>,
     cols_skip: Option<Vec<String>>,
+    encoding: Option<&str>,
+    lossy_utf8: bool,
 ) -> Result<(Vec<u8>, crate::core::MetaOut)> {
     let mut ctx = ParseCtx {
         cols: Vec::new(),
@@ -33,7 +35,7 @@ fn parse_xpt_impl(
         n_rows_emitted: 0,
         last_counted_row: None,
         had_invalid_utf8: false,
-        lossy_utf8: false,
+        lossy_utf8,
         label_sets: HashMap::new(),
         file_label: None,
         last_err: None,
@@ -56,7 +58,8 @@ fn parse_xpt_impl(
 
         // Defensive row limit for untrusted files (n_max already aborts in
         // the value callback; this stops the C parser earlier too).
-        let _keep_enc = match crate::core::configure_parser(p, None, rows_skip, n_max) {
+        let enc = crate::core::input_encoding(encoding, lossy_utf8);
+        let _keep_enc = match crate::core::configure_parser(p, enc, rows_skip, n_max) {
             Ok(k) => k,
             Err(msg) => {
                 readstat_parser_free(p);
@@ -91,15 +94,17 @@ fn parse_xpt_impl(
 }
 
 #[pyfunction]
-#[pyo3(signature = (data_path, n_max=None, rows_skip=0, cols_skip=None))]
+#[pyo3(signature = (data_path, n_max=None, rows_skip=0, cols_skip=None, encoding=None, lossy_utf8=false))]
 pub fn df_parse_xpt_file<'py>(
     py: Python<'py>,
     data_path: &str,
     n_max: Option<usize>,
     rows_skip: usize,
     cols_skip: Option<Vec<String>>,
+    encoding: Option<&str>,
+    lossy_utf8: bool,
 ) -> PyResult<(Py<PyAny>, String)> {
-    let (ipc, meta) = parse_xpt_impl(data_path, rows_skip, n_max, cols_skip)
+    let (ipc, meta) = parse_xpt_impl(data_path, rows_skip, n_max, cols_skip, encoding, lossy_utf8)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
     let meta_json = serde_json::to_string(&meta).unwrap();
     let pybytes = PyBytes::new(py, &ipc)

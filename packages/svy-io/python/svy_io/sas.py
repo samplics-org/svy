@@ -4,9 +4,7 @@ from __future__ import annotations
 import io
 import json
 import os
-import shutil
 import tempfile
-import zipfile
 
 from contextlib import ExitStack
 from pathlib import Path
@@ -19,7 +17,12 @@ from polars.exceptions import ComputeError
 import svy_io.svyreadstat_rs as native
 
 from .factor import as_factor, check_ordered_levels, ordered_categories
-from .helpers import _normalize_n_max, _split_encoding, _with_bad_string_hint
+from .helpers import (
+    _extract_from_zip,
+    _normalize_n_max,
+    _split_encoding,
+    _with_bad_string_hint,
+)
 from .metadata import normalize_user_missing
 from .tagged_na import TaggedNA
 
@@ -154,64 +157,41 @@ def _as_path_like(obj, stack: ExitStack) -> str:
     raise TypeError("data_path must be a path or a file-like object")
 
 
-def _maybe_from_zip(path: str, stack: ExitStack) -> tuple[str, str | None]:
+# SAS Transport (XPORT) v5 opens with a LIBRARY header record, v8 with LIBV8.
+_XPORT_MAGIC = b"HEADER RECORD*******LIB"
+_CPORT_MAGIC = b"**COMPRESSED**"
+_SAS_ZIP_EXTS = (".sas7bdat", ".xpt", ".xport", ".ssp")
+
+CPORT_HINT = (
+    "convert it in SAS with PROC CIMPORT and save it as .sas7bdat or XPORT, or "
+    "use another format of the file (.sas7bdat, .dta, .xpt) if one is offered"
+)
+
+
+def _sniff_sas_format(path: str) -> str | None:
+    """Identify a SAS file by its first bytes: ``"xport"``, ``"cport"`` or None.
+
+    Transport files are often named by convention (``.ssp``, ``.dat``) rather
+    than ``.xpt``, so the extension cannot decide the reader.
     """
-    Extract SAS files from a zip archive.
-    Returns (sas_path, catalog_path_or_None).
+    try:
+        with open(path, "rb") as f:
+            head = f.read(len(_XPORT_MAGIC))
+    except OSError:
+        return None  # let the native reader report it
+    if head.startswith(_XPORT_MAGIC):
+        return "xport"
+    if head.startswith(_CPORT_MAGIC):
+        return "cport"
+    return None
 
-    Extraction goes into a fresh private directory (not the shared system
-    temp dir, whose predictable member-derived paths invited cross-run
-    collisions and symlink planting on multi-user machines).  The
-    directory is removed when ``stack`` closes, right after the native
-    parse — the caller never needs the extracted files afterwards.
-    """
-    if not str(path).lower().endswith(".zip"):
-        return path, None
 
-    if not zipfile.is_zipfile(path):
-        raise ValueError(f"File {path} is not a valid zip archive")
-
-    with zipfile.ZipFile(path) as z:
-        # Find SAS data and catalog files
-        sas_files = [n for n in z.namelist() if n.lower().endswith(".sas7bdat")]
-        cat_files = [n for n in z.namelist() if n.lower().endswith(".sas7bcat")]
-
-        if not sas_files:
-            raise FileNotFoundError(
-                f"Zip file {path} contains no .sas7bdat files. "
-                f"Available files: {', '.join(z.namelist())}"
-            )
-
-        if len(sas_files) > 1:
-            import warnings
-
-            warnings.warn(
-                f"Zip file contains {len(sas_files)} .sas7bdat files. "
-                f"Using the first one: {sas_files[0]}",
-                UserWarning,
-            )
-
-        # Private per-call extraction dir, cleaned up with the stack.
-        temp_base = tempfile.mkdtemp(prefix="svy_io_zip_")
-        stack.callback(shutil.rmtree, temp_base, ignore_errors=True)
-
-        # Extract data file
-        sas_path = z.extract(sas_files[0], path=temp_base)
-
-        # Extract catalog file if present
-        cat_path = None
-        if cat_files:
-            if len(cat_files) > 1:
-                import warnings
-
-                warnings.warn(
-                    f"Zip file contains {len(cat_files)} .sas7bcat files. "
-                    f"Using the first one: {cat_files[0]}",
-                    UserWarning,
-                )
-            cat_path = z.extract(cat_files[0], path=temp_base)
-
-    return sas_path, cat_path
+def _cport_error(shown: str) -> RuntimeError:
+    return RuntimeError(
+        f"{shown} is a SAS CPORT file (written by PROC CPORT), which cannot be "
+        f"read: CPORT is a SAS-proprietary format, not SAS Transport (XPORT). "
+        f"Hint: {CPORT_HINT}."
+    )
 
 
 # ---------------- Metadata convenience ----------------
@@ -476,6 +456,9 @@ def read_xpt(
     data_path: str | os.PathLike,
     *,
     n_max: int | None = None,
+    rows_skip: int = 0,
+    cols_skip: list[str] | None = None,
+    encoding: str | None = None,
     # mirror read_sas post-processing knobs for consistency
     coerce_temporals: bool = True,  # XPT usually needs this
     infer_temporal_formats: bool = False,
@@ -487,9 +470,15 @@ def read_xpt(
     """
     Read a SAS Transport (XPT) file natively via svyreadstat_rs, returning
     (polars.DataFrame, metadata_dict). No pandas/pyreadstat.
+
+    The file is recognised by content, so any extension works (``.xpt``,
+    ``.ssp``, ...). SAS CPORT files are refused with a hint on converting them.
     """
     data_path = os.fspath(data_path)
     n_max = _normalize_n_max(n_max)
+
+    if _sniff_sas_format(data_path) == "cport":
+        raise _cport_error(data_path)
 
     if not hasattr(native, "df_parse_xpt_file"):  # type: ignore[attr-defined]
         raise RuntimeError(
@@ -498,9 +487,13 @@ def read_xpt(
         )
 
     # Native returns Arrow IPC bytes + JSON metadata
-    ipc_bytes, meta_json = native.df_parse_xpt_file(  # type: ignore[attr-defined]
-        data_path, n_max
-    )
+    enc, lossy = _split_encoding(encoding)
+    try:
+        ipc_bytes, meta_json = native.df_parse_xpt_file(  # type: ignore[attr-defined]
+            data_path, n_max, rows_skip, cols_skip, enc, lossy
+        )
+    except RuntimeError as e:
+        raise _with_bad_string_hint(e) from e
 
     bio = io.BytesIO(ipc_bytes)
     try:
@@ -563,33 +556,18 @@ def read_sas(
 ) -> Tuple[pl.DataFrame, Dict[str, Any]]:
     """
     Read a SAS7BDAT dataset (optionally with a SAS7BCAT catalog for value labels).
-    Supports reading from zip archives containing .sas7bdat files.
+    Supports reading from zip archives containing .sas7bdat or XPT files.
+
+    SAS Transport (XPT) files are recognised by content, whatever their
+    extension (``.xpt``, ``.ssp``, ...), and read with :func:`read_xpt`.
+    SAS CPORT files are refused with a hint on converting them.
 
     Returns (polars.DataFrame, metadata_dict)
     """
-    # Auto-dispatch if an XPT/XPORT path was passed here by mistake
-    if str(data_path).lower().endswith((".xpt", ".xport")):
-        return read_xpt(
-            data_path,
-            n_max=n_max,
-            coerce_temporals=coerce_temporals,
-            infer_temporal_formats=infer_temporal_formats,
-            zap_empty_str=zap_empty_str,
-            factorize=factorize,
-            levels=levels,
-            ordered=ordered,
-        )
-
     # Validate/normalize n_max first
     n_max = _normalize_n_max(n_max)
-
-    # Fast-path: explicitly requesting zero rows
-    # n_max=0: still open and validate the file, returning the full schema
-    # and metadata with zero rows (haven behavior). The native layer treats
-    # n_max=0 as 1, so fetch one row and truncate after parsing.
-    zero_rows = n_max == 0
-    if zero_rows:
-        n_max = 1
+    user_catalog = catalog_path is not None
+    shown = os.fspath(data_path) if isinstance(data_path, (str, os.PathLike)) else "The input"
 
     # Temp artifacts (spooled file-like inputs, zip extraction dir) live
     # only for the duration of the native parse.
@@ -598,13 +576,48 @@ def read_sas(
 
         # Handle zip files
         if str(data_path).lower().endswith(".zip"):
-            extracted_path, extracted_catalog = _maybe_from_zip(data_path, _tmp_stack)
+            extracted_path, extracted_catalog = _extract_from_zip(
+                data_path,
+                _tmp_stack,
+                data_exts=_SAS_ZIP_EXTS,
+                companion_exts=(".sas7bcat",),
+            )
             data_path = extracted_path
             # Use extracted catalog if no explicit catalog_path was provided
             if catalog_path is None and extracted_catalog:
                 catalog_path = extracted_catalog
         elif catalog_path is not None:
             catalog_path = _as_path_like(catalog_path, _tmp_stack)
+
+        kind = _sniff_sas_format(data_path)
+        if kind == "cport":
+            raise _cport_error(shown)
+        if kind == "xport" or (kind is None and shown.lower().endswith((".xpt", ".xport"))):
+            if user_catalog:
+                raise ValueError(
+                    f"{shown} is a SAS Transport (XPT) file; catalog_path applies "
+                    f"value labels to .sas7bdat files only."
+                )
+            return read_xpt(
+                data_path,
+                n_max=n_max,
+                rows_skip=rows_skip,
+                cols_skip=cols_skip,
+                encoding=encoding,
+                coerce_temporals=coerce_temporals,
+                infer_temporal_formats=infer_temporal_formats,
+                zap_empty_str=zap_empty_str,
+                factorize=factorize,
+                levels=levels,
+                ordered=ordered,
+            )
+
+        # n_max=0: still open and validate the file, returning the full schema
+        # and metadata with zero rows (haven behavior). The native layer treats
+        # n_max=0 as 1, so fetch one row and truncate after parsing.
+        zero_rows = n_max == 0
+        if zero_rows:
+            n_max = 1
 
         enc, lossy = _split_encoding(encoding)
         try:
