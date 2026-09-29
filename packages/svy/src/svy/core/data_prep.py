@@ -364,6 +364,7 @@ def prepare_data(
     select_columns: bool,
     domain_mask_for_replication: bool = False,
     factor_y: bool = False,
+    apply_where: bool = True,
 ) -> PreparedData:
     """
     Unified data preparation for all Rust backend calls.
@@ -396,6 +397,9 @@ def prepare_data(
         Categorical y (``as_factor``): with ``drop_nulls``, a missing y makes the
         row out-of-domain like a numeric y does, and stays null (NaN/inf become
         null) so it is not read as a level.
+    apply_where : bool
+        False when the caller builds its own domain from ``where`` (GLM):
+        ``where`` then only scopes the null check and keeps its columns.
 
     Returns
     -------
@@ -526,13 +530,18 @@ def prepare_data(
     else:
         null_check_cols = needed
 
+    # Without drop_nulls, a `where` domain scopes the check (R's subset()):
+    # design columns must be complete everywhere, analysis columns only
+    # inside the domain, and where-only columns not at all. Out-of-domain
+    # missing values then take the out-of-domain path described above, so
+    # results equal the drop_nulls=True ones.
     _domain_missing_cols: list[str] = []
+    _fill_extra_cols: list[str] = []
+    _structural = set(fields)
+    _structural.update(_singleton_check_cols)
+    if _design_codes:
+        _structural.update(s.name for s in _design_codes.values())
     if drop_nulls:
-        _structural = set(fields)
-        _structural.update(_singleton_check_cols)
-        if _design_codes:
-            _structural.update(s.name for s in _design_codes.values())
-
         _domain_roles: list[str] = []
         if factor_y:
             _domain_roles.append(y)
@@ -568,8 +577,36 @@ def prepare_data(
                 cols=drop_cols,
                 treat_infinite_as_missing=True,
             )
-    else:
+    elif where is None:
         assert_no_missing(df=local_data, subset=null_check_cols)
+    else:
+        by_cols_in = [by] if isinstance(by, str) else list(by or ())
+        _analysis = {
+            y,
+            x,
+            y_pair,
+            group,
+            *by_cols_in,
+            *(extra_cols or ()),
+            *(null_zero_cols or ()),
+        }
+        _where_only = (set(where_cols) - _structural) - _analysis
+        _design_check = [c for c in null_check_cols if c in _structural]
+        _scoped = [c for c in null_check_cols if c not in _structural and c not in _where_only]
+        assert_no_missing(df=local_data, subset=_design_check)
+        if _scoped:
+            _in_domain = sample.estimation._compile_where_expr(where).fill_null(False)
+            assert_no_missing(
+                df=cast(
+                    pl.DataFrame, local_data.lazy().filter(_in_domain).select(_scoped).collect()
+                ),
+                subset=_scoped,
+                scope="inside the `where` domain",
+            )
+            _domain_missing_cols = _scoped
+            _fill_extra_cols = [
+                c for c in (extra_cols or ()) if c in _scoped and local_data.schema[c].is_numeric()
+            ]
 
     # ── Column selection (optional optimization) ─────────────────────────
     if select_columns:
@@ -689,13 +726,16 @@ def prepare_data(
         if not df.select(pl.any_horizontal(_miss_checks).any()).item():
             _miss_checks = []
 
-    if where is not None or _miss_checks:
+    _zero_where = where is not None and apply_where
+    if _zero_where or _miss_checks:
         _keep_exprs: list[pl.Expr] = []
-        if where is not None:
+        if _zero_where:
             _keep_exprs.append(sample.estimation._compile_where_expr(where))
         if _miss_checks:
             _keep_exprs.append(~pl.any_horizontal(_miss_checks))
         where_expr = pl.all_horizontal(_keep_exprs) if len(_keep_exprs) > 1 else _keep_exprs[0]
+        # A null predicate is out of the domain (R's subset(): NA -> FALSE).
+        where_expr = where_expr.fill_null(False)
 
         # Step 1: materialize the boolean mask once.
         df = df.with_columns(where_expr.alias(_MASK_COL))
@@ -759,6 +799,7 @@ def prepare_data(
                     for c in null_zero_cols
                     if c in df.columns and df.schema[c].is_numeric() and c not in _fill_targets
                 )
+            _fill_targets.extend(c for c in _fill_extra_cols if c not in _fill_targets)
             if factor_y and df.schema[y_col] in (pl.Float32, pl.Float64):
                 _bad = pl.col(y_col).is_nan() | pl.col(y_col).is_infinite()
                 exprs.append(pl.when(_bad).then(None).otherwise(pl.col(y_col)).alias(y_col))

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import logging
 
+from pathlib import Path
+
 import polars as pl
 import pytest
 import svy_io
@@ -17,6 +19,7 @@ import svy
 from svy.errors.io_errors import IoError
 
 
+SAS_DATA = Path(__file__).resolve().parents[4] / "svy-io/tests/data/sas"
 CPORT_HEAD = b"**COMPRESSED** " * 4 + b"**COMPRESSED********LIB CONTROL X64_10PR"
 
 
@@ -63,9 +66,14 @@ def test_cport_raises_a_guiding_error(tmp_path):
     assert "PROC CIMPORT" in err.hint
 
 
-def test_catalog_with_xpt_is_refused(ssp):
-    with pytest.raises(IoError, match="catalog_path applies value labels to .sas7bdat"):
-        svy.read_sas(ssp, catalog_path="formats.sas7bcat")
+@pytest.mark.skipif(not SAS_DATA.is_dir(), reason="svy-io test data not available")
+def test_catalog_labels_an_xpt():
+    sample = svy.create_from_xpt(
+        SAS_DATA / "hadley.xpt", catalog_path=SAS_DATA / "formats.sas7bcat"
+    )
+
+    labels = {vl.code: vl.label for vl in sample.meta.get("workshop").value_labels}
+    assert labels == {"1": "R", "2": "SAS"}
 
 
 @pytest.mark.parametrize(

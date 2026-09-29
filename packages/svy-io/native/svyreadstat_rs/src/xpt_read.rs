@@ -16,6 +16,7 @@ use crate::core::{
     ParseCtx, finalize_to_ipc, on_error_cb, on_metadata_cb, on_value_cb, on_value_label_cb,
     on_variable_cb,
 };
+use crate::sas_read::{parse_catalog, resolve_format_label_sets};
 
 fn parse_xpt_impl(
     data_path: &str,
@@ -23,6 +24,8 @@ fn parse_xpt_impl(
     n_max: Option<usize>,
     cols_skip: Option<Vec<String>>,
     encoding: Option<&str>,
+    catalog_path: Option<&str>,
+    catalog_encoding: Option<&str>,
     lossy_utf8: bool,
 ) -> Result<(Vec<u8>, crate::core::MetaOut)> {
     let mut ctx = ParseCtx {
@@ -45,6 +48,10 @@ fn parse_xpt_impl(
         row_capacity: None,   // set via on_metadata_cb
         panic_err: None,
     };
+
+    if let Some(cat_path) = catalog_path {
+        parse_catalog(&mut ctx, cat_path, catalog_encoding, lossy_utf8)?;
+    }
 
     unsafe {
         let p = readstat_parser_init();
@@ -90,11 +97,21 @@ fn parse_xpt_impl(
         }
     }
 
+    resolve_format_label_sets(&mut ctx);
     finalize_to_ipc(ctx)
 }
 
 #[pyfunction]
-#[pyo3(signature = (data_path, n_max=None, rows_skip=0, cols_skip=None, encoding=None, lossy_utf8=false))]
+#[pyo3(signature = (
+    data_path,
+    n_max=None,
+    rows_skip=0,
+    cols_skip=None,
+    encoding=None,
+    lossy_utf8=false,
+    catalog_path=None,
+    catalog_encoding=None
+))]
 pub fn df_parse_xpt_file<'py>(
     py: Python<'py>,
     data_path: &str,
@@ -103,9 +120,20 @@ pub fn df_parse_xpt_file<'py>(
     cols_skip: Option<Vec<String>>,
     encoding: Option<&str>,
     lossy_utf8: bool,
+    catalog_path: Option<&str>,
+    catalog_encoding: Option<&str>,
 ) -> PyResult<(Py<PyAny>, String)> {
-    let (ipc, meta) = parse_xpt_impl(data_path, rows_skip, n_max, cols_skip, encoding, lossy_utf8)
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    let (ipc, meta) = parse_xpt_impl(
+        data_path,
+        rows_skip,
+        n_max,
+        cols_skip,
+        encoding,
+        catalog_path,
+        catalog_encoding,
+        lossy_utf8,
+    )
+    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
     let meta_json = serde_json::to_string(&meta).unwrap();
     let pybytes = PyBytes::new(py, &ipc)
         .into_pyobject(py)

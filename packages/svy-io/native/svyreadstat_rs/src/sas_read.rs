@@ -70,45 +70,7 @@ fn parse_sas_impl(
 
     // Step 1: Parse catalog file if provided (for value labels)
     if let Some(cat_path) = catalog_path {
-        unsafe {
-            let parser = readstat_parser_init();
-            if parser.is_null() {
-                return Err(anyhow!("readstat_parser_init() failed for catalog"));
-            }
-
-            // Only need value label handler for catalog
-            readstat_set_value_label_handler(parser, Some(on_value_label_cb));
-
-            let cat_enc = crate::core::input_encoding(catalog_encoding, lossy_utf8);
-            let _keep_enc = match crate::core::configure_parser(parser, cat_enc, 0, None) {
-                Ok(k) => k,
-                Err(msg) => {
-                    readstat_parser_free(parser);
-                    return Err(anyhow!(msg));
-                }
-            };
-
-            let c_path = CString::new(cat_path)?;
-            let rc =
-                readstat_parse_sas7bcat(parser, c_path.as_ptr(), &mut ctx as *mut _ as *mut c_void);
-
-            readstat_parser_free(parser);
-
-            // A panic caught inside a handler callback is an internal error.
-            if let Some(msg) = ctx.panic_err.take() {
-                return Err(anyhow!("internal error in readstat callback: {msg}"));
-            }
-
-            // Catalog parse errors are not fatal, but we should report them
-            if rc != RS_OK && rc != RS_USER_ABORT {
-                let msg = ctx
-                    .last_err
-                    .take()
-                    .unwrap_or_else(|| format!("Catalog parse failed with code {rc}"));
-                eprintln!("Warning: Failed to parse catalog: {msg}");
-                // Continue with data parsing even if catalog fails
-            }
-        }
+        parse_catalog(&mut ctx, cat_path, catalog_encoding, lossy_utf8)?;
     }
 
     // Step 2: Parse data file
@@ -157,8 +119,93 @@ fn parse_sas_impl(
         }
     }
 
+    resolve_format_label_sets(&mut ctx);
+
     // Convert to Arrow IPC format
     finalize_to_ipc(ctx)
+}
+
+/// Load a .sas7bcat catalog's value labels into `ctx.label_sets`.
+///
+/// Shared by the sas7bdat and XPT readers: both name a variable's label set
+/// after its format. A catalog that fails to parse only warns, so the data
+/// still reads without labels.
+pub(crate) fn parse_catalog(
+    ctx: &mut ParseCtx,
+    cat_path: &str,
+    catalog_encoding: Option<&str>,
+    lossy_utf8: bool,
+) -> Result<()> {
+    unsafe {
+        let parser = readstat_parser_init();
+        if parser.is_null() {
+            return Err(anyhow!("readstat_parser_init() failed for catalog"));
+        }
+
+        // Only need value label handler for catalog
+        readstat_set_value_label_handler(parser, Some(on_value_label_cb));
+
+        let cat_enc = crate::core::input_encoding(catalog_encoding, lossy_utf8);
+        let _keep_enc = match crate::core::configure_parser(parser, cat_enc, 0, None) {
+            Ok(k) => k,
+            Err(msg) => {
+                readstat_parser_free(parser);
+                return Err(anyhow!(msg));
+            }
+        };
+
+        let c_path = CString::new(cat_path)?;
+        let rc = readstat_parse_sas7bcat(parser, c_path.as_ptr(), ctx as *mut _ as *mut c_void);
+
+        readstat_parser_free(parser);
+
+        // A panic caught inside a handler callback is an internal error.
+        if let Some(msg) = ctx.panic_err.take() {
+            return Err(anyhow!("internal error in readstat callback: {msg}"));
+        }
+
+        if rc != RS_OK && rc != RS_USER_ABORT {
+            let msg = ctx
+                .last_err
+                .take()
+                .unwrap_or_else(|| format!("Catalog parse failed with code {rc}"));
+            eprintln!("Warning: Failed to parse catalog: {msg}");
+        }
+    }
+    Ok(())
+}
+
+/// Strip the display width and decimals ReadStat appends to a format name:
+/// `WORKSHOP5` -> `WORKSHOP`, `DOLLAR10.2` -> `DOLLAR`.
+fn format_base_name(fmt: &str) -> &str {
+    let s = match fmt.rfind('.') {
+        Some(i) if fmt[i + 1..].bytes().all(|b| b.is_ascii_digit()) => &fmt[..i],
+        _ => fmt,
+    };
+    s.trim_end_matches(|c: char| c.is_ascii_digit())
+}
+
+/// Point each column at its catalog label set when only the width differs.
+///
+/// A column formatted `WORKSHOP5.` arrives with label set `WORKSHOP5`, while
+/// the catalog defines `WORKSHOP`. SAS format names cannot end in a digit, so
+/// the trailing digits are always the width.
+pub(crate) fn resolve_format_label_sets(ctx: &mut ParseCtx) {
+    if ctx.label_sets.is_empty() {
+        return;
+    }
+    for col in ctx.cols.iter_mut() {
+        let Some(set) = col.label_set.as_deref() else {
+            continue;
+        };
+        if ctx.label_sets.contains_key(set) {
+            continue;
+        }
+        let base = format_base_name(set);
+        if base.len() < set.len() && ctx.label_sets.contains_key(base) {
+            col.label_set = Some(base.to_string());
+        }
+    }
 }
 
 /// Python interface for parsing SAS files
@@ -230,6 +277,76 @@ pub fn df_parse_sas_file<'py>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_format_base_name() {
+        assert_eq!(format_base_name("WORKSHOP5"), "WORKSHOP");
+        assert_eq!(format_base_name("DOLLAR10.2"), "DOLLAR");
+        assert_eq!(format_base_name("$GENDER10"), "$GENDER");
+        assert_eq!(format_base_name("$GENDER"), "$GENDER");
+        assert_eq!(format_base_name("F8."), "F");
+    }
+
+    fn ctx_with(label_sets: &[&str], col_sets: &[Option<&str>]) -> ParseCtx {
+        let cols = col_sets
+            .iter()
+            .enumerate()
+            .map(|(i, set)| crate::core::ColBuilders {
+                kind: crate::core::ColKind::F64,
+                name: format!("v{i}"),
+                label: None,
+                label_set: set.map(str::to_string),
+                fmt: set.map(str::to_string),
+                measure: None,
+                user_missing: None,
+                sb: None,
+                fb: None,
+            })
+            .collect();
+        ParseCtx {
+            cols,
+            name_to_idx: HashMap::new(),
+            cols_skip: None,
+            rows_skip: 0,
+            n_max: None,
+            n_rows_seen: 0,
+            n_rows_emitted: 0,
+            last_counted_row: None,
+            had_invalid_utf8: false,
+            lossy_utf8: false,
+            label_sets: label_sets
+                .iter()
+                .map(|s| (s.to_string(), Default::default()))
+                .collect(),
+            file_label: None,
+            last_err: None,
+            tagged: HashMap::new(),
+            notes: Vec::new(),
+            detect_tagged: false,
+            row_capacity: None,
+            panic_err: None,
+        }
+    }
+
+    #[test]
+    fn test_resolve_format_label_sets_strips_width() {
+        let mut ctx = ctx_with(
+            &["WORKSHOP", "$GENDER"],
+            &[Some("WORKSHOP5"), Some("$GENDER10"), Some("BEST12"), None],
+        );
+        resolve_format_label_sets(&mut ctx);
+        let sets: Vec<_> = ctx.cols.iter().map(|c| c.label_set.as_deref()).collect();
+        assert_eq!(sets, [Some("WORKSHOP"), Some("$GENDER"), Some("BEST12"), None]);
+        // the format keeps its width
+        assert_eq!(ctx.cols[0].fmt.as_deref(), Some("WORKSHOP5"));
+    }
+
+    #[test]
+    fn test_resolve_format_label_sets_keeps_exact_match() {
+        let mut ctx = ctx_with(&["WORKSHOP"], &[Some("WORKSHOP")]);
+        resolve_format_label_sets(&mut ctx);
+        assert_eq!(ctx.cols[0].label_set.as_deref(), Some("WORKSHOP"));
+    }
 
     #[test]
     fn test_parse_sas_validates_path() {

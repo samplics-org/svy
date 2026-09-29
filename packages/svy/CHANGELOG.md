@@ -8,7 +8,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
-- **`read_xpt`, `read_xpt_with_labels`, `create_from_xpt` and `write_xpt`**, aliases of the SAS functions: `read_sas` reads SAS Transport, and `write_sas` writes it. With svy-io's content-based dispatch, `read_sas` reads transport files under any name (e.g. `.ssp`) and refuses SAS CPORT files with a hint on converting them.
+- **`read_xpt`, `read_xpt_with_labels`, `create_from_xpt` and `write_xpt`**, aliases of the SAS functions: `read_sas` reads SAS Transport, and `write_sas` writes it. With svy-io's content-based dispatch, `read_sas` reads transport files under any name (e.g. `.ssp`) and refuses SAS CPORT files with a hint on converting them. `catalog_path=` labels transport files too.
 
 - **`n` on every estimate row.** `ParamEst.n`, `TtestEst.n` and a table's `CellEst.n` give the records behind the row: those in its domain (`where=`, `by=` level, t-test group, or the table) with a nonzero weight and the estimate's variables present. It is the count proportion CIs already use, for Taylor and replication alike; a proportion's category rows carry the domain's count, each group of a two-group t-test its own, and every cell of a table the table's count. A GLM fit's `stats.n` already followed the same rule. `to_polars()` has an `n` column (the printed table does not). Saved results carry it: schema `svy-result/0.5` adds `ParamEstData.n`, `TtestEstData.n` and `CellEstData.n`, `None` when read from an older payload. With `deff="wr"`, `n / deff` is the effective sample size.
 
@@ -93,6 +93,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 ### Fixed
 
 - **`ranktest(method=svy.RankScoreMethod.VANDER_WAERDEN)` raised `Unknown rank method`.** `RankScoreMethod` members are now accepted as they are, and `"vanderWaerden"` is accepted as a string.
+
+- **Nulls outside the `where=` domain raised.** Without `drop_nulls`, estimation required every analysis column to be complete on every row, so a null `y`, `by` label or domain flag on rows outside the domain (people without events after a full join, skip patterns) forced `drop_nulls=True`. As in R's `subset()`, a null in a column read only by `where=` now makes the row out-of-domain, and nulls in analysis columns on out-of-domain rows are ignored. Nulls inside the domain still raise, now saying so, and design columns must still be complete on every row. Out-of-domain rows keep contributing to the design, so estimates, SEs and df match R's `subset()`. Covers `mean`, `total`, `prop`, `ratio`, `quantile`, `median`, `corr`, `cov`, `ttest`, `ranktest` and `glm.fit(drop_nulls=False)`, Taylor and replication; `tabulate` already worked this way.
+
+- **`cov`/`corr` with `drop_nulls=True` understated Taylor SEs.** A missing value in the second or later column dropped the row from the design, deleting whole PSUs when all their values were missing. It now zeroes the row's weight, as for `y` and R's `na.rm=TRUE`.
 
 - **Int8, Int16, UInt8 and UInt16 columns crashed the estimators.** A stratum, PSU, `pop_size`, `by`, `where` or t-test `group` column of one of these dtypes (a Stata byte read with svy-io, or a `.cast(pl.Int8)` indicator) made every estimator fail with `cannot create series from Int8`, Taylor and replication alike. The response was not affected. Needs svy-rs with small-integer dtype support (see its changelog).
 
