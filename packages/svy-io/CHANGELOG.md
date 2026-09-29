@@ -6,6 +6,7 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 ### Added
 
+- **SPSS and Stata readers accept zip archives.** `read_sav` reads the first `.sav` (else `.zsav`) member, `read_por` the first `.por`, `read_spss` the first `.sav`, `.zsav` or `.por` and dispatches on it, and `read_dta`/`read_stata`/`read_stata_arrow` the first `.dta`. As with `read_sas`, an archive with no matching member raises `FileNotFoundError` listing its files, several matches warn and use the first, and the extracted file is removed after the parse.
 - **`read_sas` recognises SAS Transport (XPT) by content.** It dispatched to `read_xpt` only for `.xpt`/`.xport` names, so transport files published as `.ssp` or `.dat` failed with `rc=5` from the sas7bdat parser. The first bytes now decide, for paths, file objects and zip members alike; a zip may hold `.xpt`, `.xport` or `.ssp` members (a `.sas7bdat` is still preferred).
 - **SAS CPORT files are refused with a hint.** `read_sas` and `read_xpt` name the format and point to PROC CIMPORT instead of a generic parse failure.
 - **`read_xpt(rows_skip=, cols_skip=, encoding=)`.** The native reader already supported row and column selection; `encoding` (including `"utf8-lossy"`) is now passed to ReadStat as for the other readers.

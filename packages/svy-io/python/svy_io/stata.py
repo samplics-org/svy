@@ -17,7 +17,7 @@ from polars.exceptions import ComputeError
 
 import svy_io.svyreadstat_rs as native
 
-from .helpers import _as_path, _normalize_n_max, _split_encoding, _with_bad_string_hint
+from .helpers import _as_data_path, _normalize_n_max, _split_encoding, _with_bad_string_hint
 from .metadata import normalize_user_missing
 from .tagged_na import TaggedNA
 
@@ -166,6 +166,8 @@ def read_dta(
     read as Windows-1252. ``"utf8-lossy"`` decodes as UTF-8 and replaces
     undecodable bytes with U+FFFD, setting ``meta["had_invalid_utf8"]``. The
     encoding actually used is reported in ``meta["encoding"]``.
+
+    A ``.zip`` path is read from its first ``.dta`` member.
     """
     # Lazy imports only when needed
     if coerce_temporals:
@@ -184,7 +186,7 @@ def read_dta(
         n_max = 1
 
     # Rust does the heavy lifting here (with GIL released).
-    with _as_path(data_path) as _path:
+    with _as_data_path(data_path, (".dta",)) as _path:
         ipc_bytes, meta_json = _parse_dta_native(_path, cols_skip, n_max, rows_skip, encoding)
 
     # Parse JSON once
@@ -245,7 +247,7 @@ def read_stata_arrow(
     if zero_rows:
         n_max = 1
 
-    with _as_path(data_path) as _path:
+    with _as_data_path(data_path, (".dta",)) as _path:
         ipc_bytes, meta_json = _parse_dta_native(_path, cols_skip, n_max, rows_skip, encoding)
 
     bio = io.BytesIO(ipc_bytes)

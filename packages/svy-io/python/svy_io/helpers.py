@@ -162,3 +162,15 @@ def _extract_from_zip(
         companion_path = z.extract(companion, path=temp_base) if companion else None
 
     return data_path, companion_path
+
+
+@contextlib.contextmanager
+def _as_data_path(obj, data_exts: tuple[str, ...]):
+    """Like ``_as_path``, but a ``.zip`` path yields its extracted data member."""
+    if isinstance(obj, (str, os.PathLike)) and os.fspath(obj).lower().endswith(".zip"):
+        with ExitStack() as stack:
+            data_path, _ = _extract_from_zip(os.fspath(obj), stack, data_exts=data_exts)
+            yield data_path
+        return
+    with _as_path(obj) as path:
+        yield path
