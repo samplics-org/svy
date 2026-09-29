@@ -41,6 +41,8 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+from svy import RankScoreMethod
+from svy.categorical.base import _normalize_rank_method
 from svy.core.design import Design
 from svy.core.sample import Sample
 
@@ -459,6 +461,55 @@ class TestWhereWithBy:
         )
         assert r1.stats.value == pytest.approx(r2.stats.value, rel=1e-10)
         assert r1.stats.p_value == pytest.approx(r2.stats.p_value, rel=1e-10)
+
+
+# =============================================================================
+# RankScoreMethod enum members are accepted and match their string aliases
+# =============================================================================
+
+
+_ENUM_TO_ALIAS = {
+    RankScoreMethod.KRUSKAL_WALLIS: "kruskal-wallis",
+    RankScoreMethod.VANDER_WAERDEN: "vander-waerden",
+    RankScoreMethod.MEDIAN: "median",
+}
+
+
+class TestRankScoreMethodEnum:
+    def test_every_member_is_covered(self):
+        assert set(_ENUM_TO_ALIAS) == set(RankScoreMethod)
+
+    @pytest.mark.parametrize("member", list(RankScoreMethod), ids=lambda m: m.name)
+    def test_member_normalizes_to_itself(self, member):
+        assert _normalize_rank_method(member) is member
+
+    @pytest.mark.parametrize("member", list(RankScoreMethod), ids=lambda m: m.name)
+    def test_member_value_string_is_accepted(self, member):
+        assert _normalize_rank_method(member.value) is member
+
+    @pytest.mark.parametrize("group", ["sex", "region"])
+    @pytest.mark.parametrize("member", list(RankScoreMethod), ids=lambda m: m.name)
+    def test_member_matches_string_alias(self, sample_strat_clust, member, group):
+        kwargs = dict(y="income", group=group, drop_nulls=True, where=pl.col("income") > 50000)
+        r_enum = sample_strat_clust.categorical.ranktest(method=member, **kwargs)
+        r_str = sample_strat_clust.categorical.ranktest(method=_ENUM_TO_ALIAS[member], **kwargs)
+        assert r_enum.stats.value == pytest.approx(r_str.stats.value, rel=1e-12)
+        assert r_enum.stats.p_value == pytest.approx(r_str.stats.p_value, rel=1e-12)
+
+    def test_vdw_enum_matches_r(self, sample_strat_clust):
+        r = sample_strat_clust.categorical.ranktest(
+            y="income",
+            group="sex",
+            method=RankScoreMethod.VANDER_WAERDEN,
+            drop_nulls=True,
+            where=pl.col("income") > 50000,
+        )
+        assert r.stats.value == pytest.approx(0.0250406685671114, rel=REL)
+        assert r.diff[0].diff == pytest.approx(0.00304630135277791, rel=REL)
+
+    def test_invalid_type_raises(self):
+        with pytest.raises(TypeError, match="RankScoreMethod"):
+            _normalize_rank_method(1)
 
 
 if __name__ == "__main__":

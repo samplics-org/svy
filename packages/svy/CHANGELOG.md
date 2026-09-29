@@ -92,6 +92,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **`ranktest(method=svy.RankScoreMethod.VANDER_WAERDEN)` raised `Unknown rank method`.** `RankScoreMethod` members are now accepted as they are, and `"vanderWaerden"` is accepted as a string.
+
 - **Int8, Int16, UInt8 and UInt16 columns crashed the estimators.** A stratum, PSU, `pop_size`, `by`, `where` or t-test `group` column of one of these dtypes (a Stata byte read with svy-io, or a `.cast(pl.Int8)` indicator) made every estimator fail with `cannot create series from Int8`, Taylor and replication alike. The response was not affected. Needs svy-rs with small-integer dtype support (see its changelog).
 
 - **Table levels came back in the kernel's order and sorted as text.** `tabulate` cells, `to_polars()`, `rowvals`/`colvals`, `crosstab()` and printed tables listed `10` before `2`, and an Enum's levels alphabetically. Levels are now ordered on the column's values: an Enum's in the Enum's order, numbers numerically. Cells are listed by row level, then column level.
