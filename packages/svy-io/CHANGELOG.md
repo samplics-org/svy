@@ -9,10 +9,12 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 - **`read_sas` recognises SAS Transport (XPT) by content.** It dispatched to `read_xpt` only for `.xpt`/`.xport` names, so transport files published as `.ssp` or `.dat` failed with `rc=5` from the sas7bdat parser. The first bytes now decide, for paths, file objects and zip members alike; a zip may hold `.xpt`, `.xport` or `.ssp` members (a `.sas7bdat` is still preferred).
 - **SAS CPORT files are refused with a hint.** `read_sas` and `read_xpt` name the format and point to PROC CIMPORT instead of a generic parse failure.
 - **`read_xpt(rows_skip=, cols_skip=, encoding=)`.** The native reader already supported row and column selection; `encoding` (including `"utf8-lossy"`) is now passed to ReadStat as for the other readers.
+- **`read_xpt(catalog_path=, catalog_encoding=)`.** A `.sas7bcat` format catalog labels XPT variables by format name, as it does `.sas7bdat` ones. `read_sas` forwards the catalog when it hands a file to `read_xpt`, including a catalog found in a zip.
 
 ### Fixed
 
-- **`read_sas` no longer drops `rows_skip` and `cols_skip` when it hands a file to `read_xpt`.** Passing `catalog_path` with an XPT file raises instead of silently returning no value labels.
+- **`read_sas` no longer drops `rows_skip` and `cols_skip` when it hands a file to `read_xpt`.**
+- **Catalog labels reach variables whose format has a width.** ReadStat names the label set after the format with its width (`WORKSHOP5`), so a variable formatted `WORKSHOP5.` never matched the catalog's `WORKSHOP` and silently lost its labels, in `.sas7bdat` and XPT alike. The width is now ignored when matching; `fmt` keeps it.
 
 ## [0.4.0] — 2026-09-08
 

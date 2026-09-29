@@ -146,9 +146,13 @@ def test_dispatch_forwards_post_processing(xpt):
     assert df.equals(read_xpt(xpt, zap_empty_str=True, coerce_temporals=True)[0])
 
 
-def test_catalog_with_xpt_is_refused(xpt):
-    with pytest.raises(ValueError, match="catalog_path applies value labels to .sas7bdat"):
-        read_sas(str(_renamed(xpt, "data.ssp")), catalog_path="formats.sas7bcat")
+def test_dispatch_forwards_the_catalog(tmp_path):
+    ssp = tmp_path / "hadley.ssp"
+    shutil.copy(HERE / "data/sas/hadley.xpt", ssp)
+
+    _, meta = read_sas(str(ssp), catalog_path=str(HERE / "data/sas/formats.sas7bcat"))
+
+    assert {vl["set_name"] for vl in meta["value_labels"]} == {"WORKSHOP", "$GENDER"}
 
 
 def test_unrecognised_content_named_xpt_still_goes_to_the_xpt_reader(tmp_path):

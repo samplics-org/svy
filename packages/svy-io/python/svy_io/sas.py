@@ -459,6 +459,8 @@ def read_xpt(
     rows_skip: int = 0,
     cols_skip: list[str] | None = None,
     encoding: str | None = None,
+    catalog_path: str | os.PathLike | None = None,
+    catalog_encoding: str | None = None,
     # mirror read_sas post-processing knobs for consistency
     coerce_temporals: bool = True,  # XPT usually needs this
     infer_temporal_formats: bool = False,
@@ -473,6 +475,9 @@ def read_xpt(
 
     The file is recognised by content, so any extension works (``.xpt``,
     ``.ssp``, ...). SAS CPORT files are refused with a hint on converting them.
+
+    ``catalog_path`` names a ``.sas7bcat`` format catalog; its value labels are
+    attached to variables by format name, as for ``.sas7bdat`` files.
     """
     data_path = os.fspath(data_path)
     n_max = _normalize_n_max(n_max)
@@ -488,12 +493,22 @@ def read_xpt(
 
     # Native returns Arrow IPC bytes + JSON metadata
     enc, lossy = _split_encoding(encoding)
-    try:
-        ipc_bytes, meta_json = native.df_parse_xpt_file(  # type: ignore[attr-defined]
-            data_path, n_max, rows_skip, cols_skip, enc, lossy
-        )
-    except RuntimeError as e:
-        raise _with_bad_string_hint(e) from e
+    with ExitStack() as _tmp_stack:
+        if catalog_path is not None:
+            catalog_path = _as_path_like(catalog_path, _tmp_stack)
+        try:
+            ipc_bytes, meta_json = native.df_parse_xpt_file(  # type: ignore[attr-defined]
+                data_path,
+                n_max,
+                rows_skip,
+                cols_skip,
+                enc,
+                lossy,
+                catalog_path,
+                catalog_encoding,
+            )
+        except RuntimeError as e:
+            raise _with_bad_string_hint(e) from e
 
     bio = io.BytesIO(ipc_bytes)
     try:
@@ -555,8 +570,9 @@ def read_sas(
     ordered: bool = False,
 ) -> Tuple[pl.DataFrame, Dict[str, Any]]:
     """
-    Read a SAS7BDAT dataset (optionally with a SAS7BCAT catalog for value labels).
-    Supports reading from zip archives containing .sas7bdat or XPT files.
+    Read a SAS7BDAT or XPT dataset (optionally with a SAS7BCAT catalog for
+    value labels). Supports reading from zip archives containing .sas7bdat or
+    XPT files; a .sas7bcat in the archive is used when no catalog_path is given.
 
     SAS Transport (XPT) files are recognised by content, whatever their
     extension (``.xpt``, ``.ssp``, ...), and read with :func:`read_xpt`.
@@ -566,7 +582,6 @@ def read_sas(
     """
     # Validate/normalize n_max first
     n_max = _normalize_n_max(n_max)
-    user_catalog = catalog_path is not None
     shown = os.fspath(data_path) if isinstance(data_path, (str, os.PathLike)) else "The input"
 
     # Temp artifacts (spooled file-like inputs, zip extraction dir) live
@@ -593,17 +608,14 @@ def read_sas(
         if kind == "cport":
             raise _cport_error(shown)
         if kind == "xport" or (kind is None and shown.lower().endswith((".xpt", ".xport"))):
-            if user_catalog:
-                raise ValueError(
-                    f"{shown} is a SAS Transport (XPT) file; catalog_path applies "
-                    f"value labels to .sas7bdat files only."
-                )
             return read_xpt(
                 data_path,
                 n_max=n_max,
                 rows_skip=rows_skip,
                 cols_skip=cols_skip,
                 encoding=encoding,
+                catalog_path=catalog_path,
+                catalog_encoding=catalog_encoding,
                 coerce_temporals=coerce_temporals,
                 infer_temporal_formats=infer_temporal_formats,
                 zap_empty_str=zap_empty_str,

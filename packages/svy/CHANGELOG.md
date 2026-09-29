@@ -8,7 +8,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
-- **`read_xpt`, `read_xpt_with_labels`, `create_from_xpt` and `write_xpt`**, aliases of the SAS functions: `read_sas` reads SAS Transport, and `write_sas` writes it. With svy-io's content-based dispatch, `read_sas` reads transport files under any name (e.g. `.ssp`) and refuses SAS CPORT files with a hint on converting them.
+- **`read_xpt`, `read_xpt_with_labels`, `create_from_xpt` and `write_xpt`**, aliases of the SAS functions: `read_sas` reads SAS Transport, and `write_sas` writes it. With svy-io's content-based dispatch, `read_sas` reads transport files under any name (e.g. `.ssp`) and refuses SAS CPORT files with a hint on converting them. `catalog_path=` labels transport files too.
 
 - **`n` on every estimate row.** `ParamEst.n`, `TtestEst.n` and a table's `CellEst.n` give the records behind the row: those in its domain (`where=`, `by=` level, t-test group, or the table) with a nonzero weight and the estimate's variables present. It is the count proportion CIs already use, for Taylor and replication alike; a proportion's category rows carry the domain's count, each group of a two-group t-test its own, and every cell of a table the table's count. A GLM fit's `stats.n` already followed the same rule. `to_polars()` has an `n` column (the printed table does not). Saved results carry it: schema `svy-result/0.5` adds `ParamEstData.n`, `TtestEstData.n` and `CellEstData.n`, `None` when read from an older payload. With `deff="wr"`, `n / deff` is the effective sample size.
 
