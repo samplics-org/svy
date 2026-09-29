@@ -691,7 +691,7 @@ def read_sas(
 
 
 def read_sas_arrow(
-    data_path: str,
+    data_path: str | os.PathLike,
     *,
     catalog_path: str | None = None,
     encoding: str | None = None,
@@ -704,10 +704,19 @@ def read_sas_arrow(
     Same as read_sas, but returns (pyarrow.Table, meta_dict) and preserves
     Arrow field metadata (e.g., b'label', b'label_set', b'format') and schema
     metadata (e.g., b'file_label' when present).
+
+    SAS Transport (XPT) files are recognised by content, as in read_sas, and
+    returned without read_xpt's post-processing (temporals stay numeric).
     """
     import pyarrow.ipc as pa_ipc
 
     from pyarrow import ArrowInvalid
+
+    data_path = os.fspath(data_path)
+    kind = _sniff_sas_format(data_path)
+    if kind == "cport":
+        raise _cport_error(data_path)
+    is_xpt = kind == "xport" or (kind is None and data_path.lower().endswith((".xpt", ".xport")))
 
     n_max = _normalize_n_max(n_max)
     # n_max=0: still open and validate the file, returning the full schema
@@ -719,9 +728,21 @@ def read_sas_arrow(
 
     enc, lossy = _split_encoding(encoding)
     try:
-        ipc_bytes, meta_json = native.df_parse_sas_file(  # type: ignore[attr-defined]
-            data_path, catalog_path, enc, catalog_encoding, cols_skip, n_max, rows_skip, lossy
-        )
+        if is_xpt:
+            ipc_bytes, meta_json = native.df_parse_xpt_file(  # type: ignore[attr-defined]
+                data_path,
+                n_max,
+                rows_skip,
+                cols_skip,
+                enc,
+                lossy,
+                catalog_path,
+                catalog_encoding,
+            )
+        else:
+            ipc_bytes, meta_json = native.df_parse_sas_file(  # type: ignore[attr-defined]
+                data_path, catalog_path, enc, catalog_encoding, cols_skip, n_max, rows_skip, lossy
+            )
     except RuntimeError as e:
         raise _with_bad_string_hint(e) from e
 

@@ -8,6 +8,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **`read_spss` and `read_stata` read zip archives**, like `read_sas`: the first `.sav`, `.zsav` or `.por` member, or the first `.dta` member, is read, labels included. Needs svy-io with zip support for SPSS and Stata (see its changelog).
+
 - **`read_xpt`, `read_xpt_with_labels`, `create_from_xpt` and `write_xpt`**, aliases of the SAS functions: `read_sas` reads SAS Transport, and `write_sas` writes it. With svy-io's content-based dispatch, `read_sas` reads transport files under any name (e.g. `.ssp`) and refuses SAS CPORT files with a hint on converting them. `catalog_path=` labels transport files too.
 
 - **`n` on every estimate row.** `ParamEst.n`, `TtestEst.n` and a table's `CellEst.n` give the records behind the row: those in its domain (`where=`, `by=` level, t-test group, or the table) with a nonzero weight and the estimate's variables present. It is the count proportion CIs already use, for Taylor and replication alike; a proportion's category rows carry the domain's count, each group of a two-group t-test its own, and every cell of a table the table's count. A GLM fit's `stats.n` already followed the same rule. `to_polars()` has an `n` column (the printed table does not). Saved results carry it: schema `svy-result/0.5` adds `ParamEstData.n`, `TtestEstData.n` and `CellEstData.n`, `None` when read from an older payload. With `deff="wr"`, `n / deff` is the effective sample size.
@@ -90,7 +92,15 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 - **Every estimator refuses an `alpha` outside (0, 1)**, NaN included, with `INVALID_RANGE`, and a non-number (a string, a bool, `None`) with `INVALID_TYPE`: `glm.fit`, `predict`, `margins` and `contrast`, `estimation.mean`, `total`, `prop`, `ratio`, `median`, `quantile`, `corr` and `cov`, `categorical.tabulate`, `ttest` and `ranktest`, `Estimate.contrast`/`EstimateList.contrast`, and `SampleSize.estimate_prop`, `estimate_mean`, `compare_props` and `compare_means` (each value of a per-stratum mapping). The check runs before any work. `alpha=0` used to give infinite intervals, and a string or `None` failed deep inside.
 
+- **Printed estimates name the estimated variable.** Means, totals, medians and quantiles print a `y: <var>` line above `where:`, and ratios print `y / x: <y> / <x>`. With labels on, the variable label replaces the name. Proportions and `as_factor` means are unchanged, since their level column is already headed by the variable. An `EstimateList` puts what its members share in the same lines, replacing the `: <var>` title suffix, and a `y` or `x` column for what varies; those columns follow `use_labels` too. The plain-text printer of an `EstimateList` now shows `where:`, as the rich one did.
+
 ### Fixed
+
+- **A zip holding no readable file was reported as missing.** `read_sas` on a `.zip` with no `.sas7bdat`, `.xpt`, `.xport` or `.ssp` member raised `FILE_NOT_FOUND` ("No file at x.zip") for an archive that exists. `read_sas`, `read_spss` and `read_stata` (and their `create_from_*`) now raise `ARCHIVE_MEMBER_NOT_FOUND`, whose detail lists the archive's files. Any other file a reader could not find while the data file exists is now named in the error instead of the data file.
+
+- **`ranktest(method=svy.RankScoreMethod.VANDER_WAERDEN)` raised `Unknown rank method`.** `RankScoreMethod` members are now accepted as they are, and `"vanderWaerden"` is accepted as a string.
+
+- **A printed ratio list with several denominators did not say which row was which.** `ratio("a", ["b", "c"])` printed rows with no `x` column; it has one now, as `to_polars()` already did.
 
 - **`corr`/`cov` rows did not say which pair they were.** `to_polars()`, `to_polars_printable()` and the printed tables now have `y` and `x` columns after any `by` columns, in the order the pairs were requested; with labels on, the display shows variable labels and the data view adds `y_label`/`x_label` when a pair variable has one. `svy.serialize.to_polars` matches. `keys()` end with the pair (`("api00", "api99")`, `("E", "api00", "api99")`) instead of repeating `"api00"` or the domain, and a contrast key may name the pair either way round. A `by` variable named `y` or `x` raises `PAIR_COLUMN_CLASH` from `to_polars()`. Contrasting a multi-row `corr`/`cov` result now says that these results carry no between-row covariance, rather than pointing at `prop()`.
 

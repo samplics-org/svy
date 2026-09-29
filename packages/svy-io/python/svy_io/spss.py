@@ -5,6 +5,7 @@ import io
 import json
 import os
 
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -14,7 +15,13 @@ from polars.exceptions import ComputeError
 
 import svy_io.svyreadstat_rs as native
 
-from .helpers import _as_path, _normalize_n_max, _split_encoding, _with_bad_string_hint
+from .helpers import (
+    _as_data_path,
+    _extract_from_zip,
+    _normalize_n_max,
+    _split_encoding,
+    _with_bad_string_hint,
+)
 from .labelled import LabelledSPSS, labelled_spss
 from .metadata import normalize_user_missing
 
@@ -259,6 +266,10 @@ def _normalize_cols_skip(cols_skip: list[str] | None) -> list[str] | None:
     return list(skip_set)
 
 
+_SAV_ZIP_EXTS = (".sav", ".zsav")
+_POR_ZIP_EXTS = (".por",)
+
+
 def read_sav(
     data_path: str | os.PathLike | io.BufferedIOBase,
     *,
@@ -271,7 +282,10 @@ def read_sav(
     infer_temporal_formats: bool = False,
     zap_empty_str: bool = False,
 ) -> Tuple[pl.DataFrame, Dict[str, Any]]:
-    """Fast, file-like–safe SPSS .sav reader (ReadStat backend)."""
+    """Fast, file-like–safe SPSS .sav reader (ReadStat backend).
+
+    A ``.zip`` path is read from its first ``.sav`` (else ``.zsav``) member.
+    """
     n_max = _normalize_n_max(n_max)
 
     # n_max=0: still open and validate the file, returning the full schema
@@ -285,7 +299,7 @@ def read_sav(
 
     enc, lossy = _split_encoding(encoding)
     # Native parse (GIL released)
-    with _as_path(data_path) as _path:
+    with _as_data_path(data_path, _SAV_ZIP_EXTS) as _path:
         try:
             ipc_bytes, meta_json = native.df_parse_sav_file(
                 _path, enc, user_na, normalized_cols_skip, n_max, rows_skip, lossy
@@ -339,7 +353,10 @@ def read_por(
     infer_temporal_formats: bool = False,
     zap_empty_str: bool = False,
 ) -> Tuple[pl.DataFrame, Dict[str, Any]]:
-    """Fast, file-like–safe SPSS .por reader (ReadStat backend)."""
+    """Fast, file-like–safe SPSS .por reader (ReadStat backend).
+
+    A ``.zip`` path is read from its first ``.por`` member.
+    """
     n_max = _normalize_n_max(n_max)
 
     # n_max=0: still open and validate the file, returning the full schema
@@ -352,7 +369,7 @@ def read_por(
     normalized_cols_skip = _normalize_cols_skip(cols_skip)
 
     enc, lossy = _split_encoding(encoding)
-    with _as_path(data_path) as _path:
+    with _as_data_path(data_path, _POR_ZIP_EXTS) as _path:
         try:
             ipc_bytes, meta_json = native.df_parse_por_file(
                 _path, enc, user_na, normalized_cols_skip, n_max, rows_skip, lossy
@@ -408,8 +425,28 @@ def read_spss(
     """
     Auto-dispatch based on extension. Requires a real filesystem path since we
     must inspect the suffix. For file-like inputs, call read_sav/read_por directly.
+
+    A ``.zip`` path is read from its first ``.sav``, ``.zsav`` or ``.por``
+    member, tried in that order.
     """
     ext = Path(os.fspath(data_path)).suffix.lower()
+
+    if ext == ".zip":
+        with ExitStack() as stack:
+            member, _ = _extract_from_zip(
+                os.fspath(data_path), stack, data_exts=_SAV_ZIP_EXTS + _POR_ZIP_EXTS
+            )
+            return read_spss(
+                member,
+                encoding=encoding,
+                user_na=user_na,
+                cols_skip=cols_skip,
+                n_max=n_max,
+                rows_skip=rows_skip,
+                coerce_temporals=coerce_temporals,
+                infer_temporal_formats=infer_temporal_formats,
+                zap_empty_str=zap_empty_str,
+            )
 
     if ext in (".sav", ".zsav"):
         return read_sav(
