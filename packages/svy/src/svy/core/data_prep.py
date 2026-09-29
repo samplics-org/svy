@@ -923,6 +923,17 @@ def prepare_data(
     )
 
 
+def calib_applies(sample, df) -> bool:
+    """Whether the kernels will sweep the design's calibration record into the
+    scores (what :func:`calib_kwargs` passes), without its warnings."""
+    design = sample._design
+    rec = getattr(design, "wgt_adjustment", None)
+    if rec is None or not rec.is_variance_consumed or design.wgt != rec.new_wgt:
+        return False
+    needed = [rec.prev_wgt, *(rec.cells or ()), *(rec.aux or ())]
+    return all(c in df.columns for c in needed)
+
+
 def calib_kwargs(sample, df) -> dict:
     """Weight-adjustment columns for the Rust score-centring sweep.
 

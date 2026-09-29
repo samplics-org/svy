@@ -619,3 +619,25 @@ def test_unhandled_singletons_raise_in_every_taylor_analysis(center_domain, anal
     data, design = center_domain
     with pytest.raises(SingletonError, match="singleton"):
         analysis(svy.Sample(data, design))
+
+
+def test_verify_scale_calibrated_counts_every_stratum(center_domain):
+    """R keeps a calibrated design's out-of-domain rows, so nstrat/nokstrat is
+    counted over every stratum (6/4 here), not the domain's.
+
+    options(survey.lonely.psu = "average")
+    ps <- postStratify(d, ~ps, data.frame(ps = c("u", "v"), Freq = c(700, 400)))
+    svyby(~y, ~dom, ps, svytotal); svyby(~y, ~dom, ps, svymean)
+    m <- svymean(~I(y - 4), subset(ps, dom == "g3")); coef(m) / SE(m)
+    """
+    data, design = center_domain
+    sample = svy.Sample(data, design).singleton.scale()
+    ps = sample.weighting.poststratify(controls={"u": 700.0, "v": 400.0}, cells="ps")
+    g = [("g1",), ("g2",), ("g3",)]
+    tot = _by_se(ps.estimation.total("y", by="dom"))
+    assert [tot[k] for k in g] == pytest.approx([664.6618508206, 524.4551412330, 257.9743863549])
+    mean = _by_se(ps.estimation.mean("y", by="dom"))
+    assert [mean[k] for k in g] == pytest.approx([0.6800421585, 1.2859366357, 0.6648057037])
+    g3 = svy.col("dom") == "g3"
+    assert ps.estimation.total("y", where=g3).estimates[0].se == pytest.approx(257.9743863549)
+    assert ps.categorical.ttest("y", mean_h0=4, where=g3).stats.t == pytest.approx(0.0225441528)

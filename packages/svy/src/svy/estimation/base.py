@@ -12,7 +12,13 @@ import polars as pl
 import svy_rs as rs
 
 from svy.core.constants import _BY_SEP, key_col
-from svy.core.data_prep import BY_KEY_SEP, PreparedData, level_lookup, prepare_data
+from svy.core.data_prep import (
+    BY_KEY_SEP,
+    PreparedData,
+    calib_applies,
+    level_lookup,
+    prepare_data,
+)
 from svy.core.enumerations import PopParam
 from svy.core.enumerations import QuantileMethod as _QuantileMethod
 from svy.core.repwgts import RepWgts
@@ -412,8 +418,10 @@ class Estimation:
         over the strata it holds. Here a stratum is present when one of its rows
         carries a nonzero weight, which is how ``where=`` and missing values
         reach the kernel; ``by=`` levels are matched through the result frame's
-        by column. A domain resting only on singleton strata has no reference
-        variance and gets ``NaN``, as in R. The factor applies to the
+        by column. A calibrated design keeps every stratum: its scores are
+        nonzero outside the domain, and R keeps those rows. A domain resting
+        only on singleton strata has no reference variance and gets ``NaN``,
+        as in R. The factor applies to the
         influence-function variance of every statistic, so it is the same for
         totals, means, ratios, proportions and the probability-scale variance
         behind Woodruff quantiles.
@@ -425,7 +433,12 @@ class Estimation:
         def factor(nstrat: int, nlonely: int) -> float:
             return nstrat / (nstrat - nlonely) if nstrat > nlonely else float("nan")
 
-        if prep is None or prep.strata_col is None or excl not in prep.df.columns:
+        if (
+            prep is None
+            or prep.strata_col is None
+            or excl not in prep.df.columns
+            or calib_applies(self._sample, prep.df)
+        ):
             f = config.singleton_fraction or 0.0
             return np.full(k, 1.0 / (1.0 - f) if f < 1.0 else float("nan"))
 
