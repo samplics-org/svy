@@ -97,29 +97,32 @@ def _normalize_units(
 
 
 def _normalize_rank_method(
-    method: Literal["kruskal-wallis", "vander-waerden", "median"] | None,
+    method: _RankScoreMethod | Literal["kruskal-wallis", "vander-waerden", "median"] | None,
 ) -> _RankScoreMethod | None:
     """
-    Normalize user-facing rank method string to internal RankScoreMethod enum.
+    Normalize a RankScoreMethod member or user-facing string to RankScoreMethod.
 
-    Accepts (case-insensitive):
-      - "kruskal-wallis", "kruskal", "kw"  -> RankScoreMethod.KRUSKAL_WALLIS
-      - "vander-waerden", "vdw"            -> RankScoreMethod.VANDER_WAERDEN
-      - "median"                           -> RankScoreMethod.MEDIAN
+    Strings accepted (case-insensitive):
+      - "kruskal-wallis", "kruskal", "kw"                 -> RankScoreMethod.KRUSKAL_WALLIS
+      - "vander-waerden", "vanderwaerden", "vdw"          -> RankScoreMethod.VANDER_WAERDEN
+      - "median"                                          -> RankScoreMethod.MEDIAN
     """
     _MAP = {
         "kruskal-wallis": _RankScoreMethod.KRUSKAL_WALLIS,
         "kruskal": _RankScoreMethod.KRUSKAL_WALLIS,
         "kw": _RankScoreMethod.KRUSKAL_WALLIS,
         "vander-waerden": _RankScoreMethod.VANDER_WAERDEN,
+        "vanderwaerden": _RankScoreMethod.VANDER_WAERDEN,
         "vdw": _RankScoreMethod.VANDER_WAERDEN,
         "median": _RankScoreMethod.MEDIAN,
     }
     if method is None:
         return None
+    if isinstance(method, _RankScoreMethod):
+        return method
     if not isinstance(method, str):
         raise TypeError(
-            f"'method' must be a string or None, got {type(method).__name__}. "
+            f"'method' must be a RankScoreMethod, a string, or None, got {type(method).__name__}. "
             f"Use 'kruskal-wallis', 'vander-waerden', or 'median'."
         )
     result = _MAP.get(method.strip().lower())
@@ -790,7 +793,9 @@ class Categorical:
         y: str,
         *,
         group: str,
-        method: Literal["kruskal-wallis", "vander-waerden", "median"] | None = None,
+        method: _RankScoreMethod
+        | Literal["kruskal-wallis", "vander-waerden", "median"]
+        | None = None,
         score_fn: Callable[[np.ndarray, float], np.ndarray] | None = None,
         by: str | None = None,
         where: WhereArg = None,

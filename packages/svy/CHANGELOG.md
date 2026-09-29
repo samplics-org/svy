@@ -92,6 +92,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **`ranktest(method=svy.RankScoreMethod.VANDER_WAERDEN)` raised `Unknown rank method`.** `RankScoreMethod` members are now accepted as they are, and `"vanderWaerden"` is accepted as a string.
+
 - **Nulls outside the `where=` domain raised.** Without `drop_nulls`, estimation required every analysis column to be complete on every row, so a null `y`, `by` label or domain flag on rows outside the domain (people without events after a full join, skip patterns) forced `drop_nulls=True`. As in R's `subset()`, a null in a column read only by `where=` now makes the row out-of-domain, and nulls in analysis columns on out-of-domain rows are ignored. Nulls inside the domain still raise, now saying so, and design columns must still be complete on every row. Out-of-domain rows keep contributing to the design, so estimates, SEs and df match R's `subset()`. Covers `mean`, `total`, `prop`, `ratio`, `quantile`, `median`, `corr`, `cov`, `ttest`, `ranktest` and `glm.fit(drop_nulls=False)`, Taylor and replication; `tabulate` already worked this way.
 
 - **`cov`/`corr` with `drop_nulls=True` understated Taylor SEs.** A missing value in the second or later column dropped the row from the design, deleting whole PSUs when all their values were missing. It now zeroes the row's weight, as for `y` and R's `na.rm=TRUE`.
