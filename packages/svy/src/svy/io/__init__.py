@@ -6,6 +6,7 @@ from .base import (
     create_from_sav,
     create_from_spss,
     create_from_stata,
+    create_from_xpt,
     read_csv,
     read_dta,
     read_dta_with_labels,
@@ -18,6 +19,8 @@ from .base import (
     read_spss_with_labels,
     read_stata,
     read_stata_with_labels,
+    read_xpt,
+    read_xpt_with_labels,
     scan_csv,
     scan_parquet,
     write_csv,
@@ -27,6 +30,7 @@ from .base import (
     write_sav,
     write_spss,
     write_stata,
+    write_xpt,
 )
 
 
@@ -36,6 +40,10 @@ __all__ = [
     "read_sas",
     "read_sas_with_labels",
     "write_sas",
+    "create_from_xpt",
+    "read_xpt",
+    "read_xpt_with_labels",
+    "write_xpt",
     "create_from_sav",
     ## SPSS
     "create_from_spss",
