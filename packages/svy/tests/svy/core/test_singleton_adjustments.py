@@ -11,6 +11,7 @@ import svy
 
 from svy.core.enumerations import SingletonHandling
 from svy.core.singleton import _VAR_EXCLUDE_COL
+from svy.errors.singleton_errors import SingletonError
 
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
@@ -496,3 +497,125 @@ def test_verify_center_domain_calibrated_keeps_whole_frame(center_domain):
     assert [tot[k] for k in [("g1",), ("g2",), ("g3",)]] == pytest.approx(
         [595.400339346, 464.250541171, 277.209927545]
     )
+
+
+# R: options(survey.lonely.psu = "adjust") and "average" on the center_domain
+# design, with b = as.integer(y > 4):
+#   svyttest(I(y - 4) ~ 0, d); svyttest(I(y - 4) ~ 0, subset(d, dom == "g1"))
+#   svyttest(y ~ factor(reg), d); svyttest(y ~ factor(reg), subset(d, dom == "g2"))
+#   svymean(~factor(cat), d); svymean(~factor(cat), subset(d, dom == "g1"))
+#   svymean(~interaction(cat, b), d); svychisq(~cat + b, d, statistic = "F")
+#   svychisq(~cat + b, subset(d, dom == "g3"), statistic = "F")
+#   svyglm(y ~ x + factor(cat), d); svyglm(y ~ x, subset(d, dom == "g2"))
+#   svyglm(b ~ x, d, family = quasibinomial()); svyranktest(y ~ factor(reg), d)
+R_ANALYSES = {
+    "center": {
+        "ttest1": 1.53745252067,
+        "ttest1_g1": 0.643261763547,
+        "ttest2": 0.0814893662899,
+        "ttest2_g2": -2.93185822993,
+        "tab1": [0.0524243454611, 0.0738848042858, 0.0826685293244],
+        "tab1_g1": [0.0916353153642, 0.144508295716, 0.126554752422],
+        # cells (cat, b): (p,0) (p,1) (q,0) (q,1) (r,0) (r,1)
+        "tab2": [
+            0.0302774643284,
+            0.053948651639,
+            0.0622148508883,
+            0.0426679753701,
+            0.0735030584894,
+            0.0872823037327,
+        ],
+        "chisq_f": (0.753732823118, 1.99705074253, 11.9823044552),
+        "chisq_f_g3": 10.9464852213,
+        "glm": [0.539219093393, 0.0369297318375, 0.578771720032, 0.3283547864],
+        "glm_g2": [0.612034013818, 0.0627265876046],
+        "logit": [1.95132489725, 0.290028822486],
+        "rank": 0.297034636741,
+    },
+    "scale": {
+        "ttest1": 1.35172351073,
+        "ttest1_g1": 0.586668934101,
+        "ttest2": 0.0706173660424,
+        "ttest2_g2": -2.65844847869,
+        "tab1": [0.0616336456361, 0.0839065744083, 0.0900551703984],
+        "tab1_g1": [0.104436497965, 0.151555787673, 0.136254857437],
+        "tab2": [
+            0.0235809448849,
+            0.0632869044554,
+            0.0735931972578,
+            0.0503097244452,
+            0.038121219484,
+            0.0992846292473,
+        ],
+        "chisq_f": (0.735919080177, 1.84573437661, 11.0744062597),
+        "chisq_f_g3": 54.4095322734,
+        "glm": [0.644720215198, 0.0441446294343, 0.704272525278, 0.386870437075],
+        "glm_g2": [0.682152906695, 0.0701164511351],
+        "logit": [2.11684898698, 0.29746914234],
+        "rank": 0.253717952447,
+    },
+}
+
+
+@pytest.mark.parametrize("method", ["center", "scale"])
+def test_verify_singleton_rule_in_every_analysis(center_domain, method):
+    """t-tests, tables, the Rao-Scott F, GLMs and rank tests apply the rule
+    as estimation does (they used to leave singleton strata out, R's "remove")."""
+    data, design = center_domain
+    data = data.with_columns(b=(pl.col("y") > 4).cast(pl.Int64))
+    sample = getattr(svy.Sample(data, design).singleton, method)()
+    cat, r = sample.categorical, R_ANALYSES[method]
+    g1, g2, g3 = (svy.col("dom") == g for g in ("g1", "g2", "g3"))
+
+    assert cat.ttest("y", mean_h0=4).stats.t == pytest.approx(r["ttest1"])
+    assert cat.ttest("y", mean_h0=4, where=g1).stats.t == pytest.approx(r["ttest1_g1"])
+    assert cat.ttest("y", group="reg").stats.t == pytest.approx(r["ttest2"])
+    assert cat.ttest("y", group="reg", where=g2).stats.t == pytest.approx(r["ttest2_g2"])
+
+    assert [e.se for e in cat.tabulate("cat").estimates] == pytest.approx(r["tab1"])
+    assert [e.se for e in cat.tabulate("cat", where=g1).estimates] == pytest.approx(r["tab1_g1"])
+    two_way = cat.tabulate("cat", "b")
+    assert [e.se for e in two_way.estimates] == pytest.approx(r["tab2"])
+    f = two_way.stats.f
+    assert (f.value, f.df_num, f.df_den) == pytest.approx(r["chisq_f"])
+    assert cat.tabulate("cat", "b", where=g3).stats.f.value == pytest.approx(r["chisq_f_g3"])
+
+    glm = sample.glm.fit("y", x=["x", svy.Cat("cat")])
+    assert [c.se for c in glm.coefs] == pytest.approx(r["glm"])
+    glm = sample.glm.fit("y", x=["x"], where=g2)
+    assert [c.se for c in glm.coefs] == pytest.approx(r["glm_g2"])
+    # The skip baseline already sits ~5e-7 from R on this logit.
+    logit = sample.glm.fit("b", x=["x"], family="binomial")
+    assert [c.se for c in logit.coefs] == pytest.approx(r["logit"], rel=2e-6)
+
+    rank = cat.ranktest("y", group="reg", method="kruskal-wallis")
+    assert rank.stats.value == pytest.approx(r["rank"])
+
+
+@pytest.mark.parametrize("method", ["certainty", "skip", "collapse", "pool", "center", "scale"])
+def test_tabulate_uses_the_singleton_rule_like_estimation(center_domain, method):
+    """A one-way table's SEs are the proportions' SEs under every rule,
+    including those that recode the strata and PSUs."""
+    data, design = center_domain
+    sample = getattr(svy.Sample(data, design).singleton, method)()
+    table = sample.categorical.tabulate("cat")
+    prop = sample.estimation.prop("cat")
+    assert [e.se for e in table.estimates] == pytest.approx([e.se for e in prop.estimates])
+
+
+@pytest.mark.parametrize(
+    "analysis",
+    [
+        lambda s: s.categorical.ttest("y", mean_h0=4),
+        lambda s: s.categorical.ttest("y", group="reg"),
+        lambda s: s.categorical.ranktest("y", group="reg", method="kruskal-wallis"),
+        lambda s: s.categorical.ranktest("y", group="reg", score_fn=lambda r, n: r / n),
+        lambda s: s.categorical.tabulate("cat"),
+        lambda s: s.glm.fit("y", x=["x"]),
+    ],
+    ids=["ttest", "ttest2", "ranktest", "ranktest_custom", "tabulate", "glm"],
+)
+def test_unhandled_singletons_raise_in_every_taylor_analysis(center_domain, analysis):
+    data, design = center_domain
+    with pytest.raises(SingletonError, match="singleton"):
+        analysis(svy.Sample(data, design))

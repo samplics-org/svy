@@ -18,9 +18,10 @@
 use polars::prelude::*;
 
 use crate::estimation::calib_sweep::CalibSweep;
-use std::collections::HashMap;
 
-use crate::estimation::taylor::taylor_variance;
+use crate::estimation::taylor::{
+    build_taylor_design, taylor_covariance_apply_in, taylor_variance_in,
+};
 
 // ============================================================================
 // Core WLS Result
@@ -307,6 +308,7 @@ pub fn influence_se(
     // identically to each column, so it commutes with any right multiplication:
     // S(E A) = (S E) A. Confirmed against survey 4.5 on apiclus1.
     calib: Option<&CalibSweep>,
+    active: Option<&[bool]>,
 ) -> PolarsResult<Vec<f64>> {
     let mut ses = Vec::with_capacity(k);
 
@@ -319,7 +321,16 @@ pub fn influence_se(
         }
         let scores = Float64Chunked::from_vec("infn".into(), col_vals);
 
-        let var = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+        let var = taylor_variance_in(
+            &scores,
+            strata,
+            psu,
+            ssu,
+            fpc,
+            fpc_ssu,
+            singleton_method,
+            active,
+        )?;
 
         ses.push(var.max(0.0).sqrt());
     }
@@ -351,145 +362,41 @@ pub fn influence_covariance(
     // identically to each column, so it commutes with any right multiplication:
     // S(E A) = (S E) A. Confirmed against survey 4.5 on apiclus1.
     calib: Option<&CalibSweep>,
+    active: Option<&[bool]>,
 ) -> PolarsResult<Vec<f64>> {
-    // Index strata and PSUs. The GLM/WOLS prep always passes String design
-    // columns (it does not use the Phase C integer-code cache), and this path
-    // keeps its own null-as-a-group convention, so it indexes the strings
-    // directly rather than via design_col_codes.
-    let (strata_idx, n_strata) = match strata {
-        Some(s) => {
-            // Cast to String first so this accepts either string labels or the
-            // Phase C integer code columns (a no-op for strings). Correct either
-            // way — codes become "0"/"1"/… which partition identically.
-            let s = s.cast(&DataType::String)?;
-            let s = s.str()?;
-            let mut map: HashMap<&str, u32> = HashMap::new();
-            let mut next = 0u32;
-            let indices: Vec<u32> = s
-                .iter()
-                .map(|opt| {
-                    let key = opt.unwrap_or("__NULL__");
-                    *map.entry(key).or_insert_with(|| {
-                        let i = next;
-                        next += 1;
-                        i
-                    })
-                })
-                .collect();
-            (indices, next)
-        }
-        None => (vec![0u32; n], 1u32),
+    // Weight-scaled influence: infn_i * w_i (matches R svytotal).
+    let cols: Vec<Vec<f64>> = (0..k)
+        .map(|j| {
+            let mut col: Vec<f64> = (0..n).map(|i| influence[i * k + j] * w[i]).collect();
+            if let Some(c) = calib {
+                c.apply(&mut col);
+            }
+            col
+        })
+        .collect();
+
+    // A missing stratum or PSU label is a group of its own here.
+    let labels = |c: &Column| -> PolarsResult<Column> {
+        let s = c.cast(&DataType::String)?;
+        let filled: StringChunked = s
+            .str()?
+            .iter()
+            .map(|v| Some(v.unwrap_or("__NULL__")))
+            .collect();
+        Ok(filled.with_name(c.name().clone()).into_column())
     };
-
-    let psu_idx: Vec<u32> = match psu {
-        Some(p) => {
-            let p = p.cast(&DataType::String)?;
-            let p = p.str()?;
-            let mut map: HashMap<&str, u32> = HashMap::new();
-            let mut next = 0u32;
-            p.iter()
-                .map(|opt| {
-                    let key = opt.unwrap_or("__NULL__");
-                    *map.entry(key).or_insert_with(|| {
-                        let i = next;
-                        next += 1;
-                        i
-                    })
-                })
-                .collect()
-        }
-        None => (0..n as u32).collect(),
-    };
-
-    let sm = match singleton_method {
-        Some(s) if s.eq_ignore_ascii_case("center") || s.eq_ignore_ascii_case("adjust") => true,
-        _ => false,
-    };
-
-    let mut cov = vec![0.0; k * k];
-
-    // Weight-scaled influence, centred against the calibration when the design
-    // carries a record. Materialised column-major only in that case: `apply`
-    // wants a contiguous column, and the uncentred path has no reason to pay
-    // for the copy.
-    let swept: Option<Vec<f64>> = calib.map(|c| {
-        let mut m = vec![0.0; n * k];
-        for j in 0..k {
-            let col = &mut m[j * n..(j + 1) * n];
-            for (i, slot) in col.iter_mut().enumerate() {
-                *slot = influence[i * k + j] * w[i];
-            }
-            c.apply(col);
-        }
-        m
-    });
-
-    // Pre-build strata → obs index to avoid O(n_strata × N) scan
-    let mut strata_obs: Vec<Vec<usize>> = vec![Vec::new(); n_strata as usize];
-    for i in 0..n {
-        if strata_idx[i] != u32::MAX {
-            strata_obs[strata_idx[i] as usize].push(i);
-        }
-    }
-
-    for h in 0..n_strata {
-        let mut psu_map: HashMap<u32, usize> = HashMap::new();
-        let mut psu_totals: Vec<Vec<f64>> = Vec::new();
-
-        for &i in &strata_obs[h as usize] {
-            let pid = psu_idx[i];
-            let li = *psu_map.entry(pid).or_insert_with(|| {
-                let idx = psu_totals.len();
-                psu_totals.push(vec![0.0; k]);
-                idx
-            });
-            match &swept {
-                Some(m) => {
-                    for j in 0..k {
-                        psu_totals[li][j] += m[j * n + i];
-                    }
-                }
-                None => {
-                    for j in 0..k {
-                        // Weight-scaled influence: infn_i * w_i (matches R svytotal)
-                        psu_totals[li][j] += influence[i * k + j] * w[i];
-                    }
-                }
-            }
-        }
-
-        let m = psu_totals.len();
-        if m <= 1 {
-            if m == 1 && sm {
-                // Singleton stratum with centering: would need grand mean
-                // For now, skip (matches R's default lonely.psu="fail" -> 0 contrib)
-            }
-            continue;
-        }
-
-        // Compute mean of PSU totals
-        let mut mean = vec![0.0; k];
-        for t in &psu_totals {
-            for j in 0..k {
-                mean[j] += t[j];
-            }
-        }
-        for j in 0..k {
-            mean[j] /= m as f64;
-        }
-
-        // Accumulate variance: m/(m-1) * sum((t_h - tbar_h)(t_h - tbar_h)')
-        let scale = m as f64 / (m as f64 - 1.0);
-        for a in 0..k {
-            for b in 0..k {
-                let mut ss = 0.0;
-                for t in &psu_totals {
-                    ss += (t[a] - mean[a]) * (t[b] - mean[b]);
-                }
-                cov[a * k + b] += scale * ss;
-            }
-        }
-    }
-
-    Ok(cov)
+    let strata = strata.map(labels).transpose()?;
+    let psu = psu.map(labels).transpose()?;
+    let design = build_taylor_design(
+        strata.as_ref(),
+        psu.as_ref(),
+        None,
+        None,
+        None,
+        singleton_method,
+    )?;
+    Ok(taylor_covariance_apply_in(&cols, &design, active)
+        .into_iter()
+        .flatten()
+        .collect())
 }

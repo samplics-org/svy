@@ -14,8 +14,9 @@ use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 
 use crate::estimation::calib_sweep::{CalibSpec, CalibSweep, build_calib_sweep};
+use crate::estimation::taylor::SingletonMethod;
 use crate::regression::glm::{
-    GlmResult, design_codes, design_vcov_of_totals, fit_glm, fit_glm_by, fit_glm_where,
+    GlmResult, design_codes, design_vcov_of_totals, fit_glm_by, fit_glm_where, fit_one,
 };
 
 type GlmTuple = (
@@ -93,6 +94,7 @@ fn optional_column_to_series(df: &DataFrame, name: &Option<String>) -> PyResult<
     calib_prev_wgt=None,
     calib_pins_total=None,
     calib_new_wgt=None,
+    singleton_method=None,
 ))]
 pub fn fit_glm_rs(
     _py: Python,
@@ -117,7 +119,9 @@ pub fn fit_glm_rs(
     calib_prev_wgt: Option<String>,
     calib_pins_total: Option<bool>,
     calib_new_wgt: Option<String>,
+    singleton_method: Option<String>,
 ) -> PyResult<Vec<GlmTuple>> {
+    let singleton = SingletonMethod::parse(singleton_method.as_deref());
     let df: DataFrame = data
         .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("`data` is required"))?
         .into();
@@ -174,6 +178,7 @@ pub fn fit_glm_rs(
                     tol,
                     max_iter,
                     calib,
+                    singleton,
                 )
             })
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -186,7 +191,7 @@ pub fn fit_glm_rs(
         // Release the GIL for the (iterative, CPU-bound) IRLS solve.
         let result = _py
             .detach(|| {
-                fit_glm(
+                fit_one(
                     &y,
                     x_cols,
                     &weights,
@@ -194,12 +199,14 @@ pub fn fit_glm_rs(
                     psu.as_ref(),
                     fpc.as_ref(),
                     offset.as_ref(),
+                    None,
                     &family,
                     &link,
                     theta,
                     tol,
                     max_iter,
                     calib,
+                    singleton,
                 )
             })
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -228,6 +235,7 @@ pub fn fit_glm_rs(
                 tol,
                 max_iter,
                 calib,
+                singleton,
             )
         })
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -324,6 +332,8 @@ pub fn design_vcov_rs(
             psu_opt,
             n_psu_levels,
             fpc_rows.as_deref(),
+            SingletonMethod::None,
+            None,
         ))
     })
     .map_err(|e: PolarsError| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))

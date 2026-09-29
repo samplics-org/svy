@@ -24,6 +24,7 @@ except ImportError:
 from svy.core.containers import FDist, TDist
 from svy.core.data_prep import calib_kwargs, prepare_data
 from svy.core.enumerations import DistFamily, LinkFunction
+from svy.core.singleton import require_singleton_rule
 from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import WhereArg
 from svy.core.warnings import WarnCode
@@ -506,6 +507,8 @@ class GLM:
         rep_cols: list[str] = (
             list(design0.rep_wgts.columns) if design0.rep_wgts is not None else []
         )
+        if not rep_cols:
+            require_singleton_rule(self._sample, where="GLM.fit")
         pop_size = design0.pop_size
         pop_cols: list[str] = []
         if pop_size is not None:
@@ -806,6 +809,7 @@ class GLM:
                 tol=tol,
                 max_iter=max_iter,
                 data=eng_df,
+                singleton_method=prep.singleton_method if weight_name == w_col else None,
                 **(calib_kw if weight_name == w_col else {}),
             )
             if not res:

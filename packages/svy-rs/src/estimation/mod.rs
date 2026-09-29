@@ -27,5 +27,6 @@ pub mod taylor_api;
 // crate::estimation::taylor::* to avoid unused-import warnings here.
 pub use taylor::{
     degrees_of_freedom, point_estimate_mean, point_estimate_total, scores_mean, scores_total,
-    srs_variance_mean, taylor_variance, taylor_variance_matrix,
+    singleton_domain_rows, srs_variance_mean, taylor_variance, taylor_variance_in,
+    taylor_variance_matrix, taylor_variance_matrix_in,
 };

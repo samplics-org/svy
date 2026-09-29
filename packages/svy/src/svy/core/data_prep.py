@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Mapping, Sequence, cast
 import polars as pl
 
 from svy.core.constants import _BY_SEP, key_col
+from svy.core.singleton import taylor_singleton_method
 from svy.core.types import WhereArg
 from svy.errors import DimensionError
 from svy.utils.checks import assert_no_missing, drop_missing
@@ -902,7 +903,7 @@ def prepare_data(
         df = df.with_columns(casts)
 
     # ── Singleton method ─────────────────────────────────────────────────
-    singleton_method = getattr(design, "singleton_method", None)
+    singleton_method = taylor_singleton_method(sample)
 
     return PreparedData(
         df=df,

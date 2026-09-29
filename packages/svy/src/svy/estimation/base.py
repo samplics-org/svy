@@ -16,10 +16,10 @@ from svy.core.data_prep import BY_KEY_SEP, PreparedData, level_lookup, prepare_d
 from svy.core.enumerations import PopParam
 from svy.core.enumerations import QuantileMethod as _QuantileMethod
 from svy.core.repwgts import RepWgts
+from svy.core.singleton import require_singleton_rule, singleton_config
 from svy.core.types import WhereArg
 from svy.core.warnings import WarnCode
 from svy.errors import DimensionError, MethodError
-from svy.errors.singleton_errors import SingletonError
 from svy.estimation.estimate import (
     Estimate,
     EstimateList,
@@ -215,18 +215,9 @@ class Estimation:
             else cast(pl.DataFrame, _data_raw)
         )
 
-        singleton_result = getattr(self._sample, "_singleton_result", None)
-        config = singleton_result.config if singleton_result else None
-
         # Fail-fast on unhandled singletons (Taylor variance path).
-        # Singletons are chosen/handled at the sample level; a handled sample
-        # carries a config. If no strategy was chosen and the design still has
-        # singleton strata, refuse to under-report the variance silently
-        # (mirrors R's options(survey.lonely.psu = "fail")).
-        if config is None and getattr(self._sample, "_singletons", None):
-            singles = self._sample.singleton.detected()
-            if singles:
-                raise SingletonError.from_singletons(singles, where="estimation")
+        require_singleton_rule(self._sample, where="estimation")
+        config = singleton_config(self._sample)
 
         strata_col = None
         psu_col = None

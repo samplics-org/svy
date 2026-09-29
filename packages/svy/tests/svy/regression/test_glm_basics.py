@@ -157,7 +157,7 @@ def test_glm_design_handling(survey_data):
     df_aug = pl.concat([df, extra_row])
 
     design = Design(stratum="stratum", psu="psu", wgt="wgt", case_id="id")
-    sample = Sample(df_aug, design)
+    sample = Sample(df_aug, design).singleton.skip()
 
     # Fit simple model
     model = sample.glm.fit(y="y", x=["x"], family="gaussian")

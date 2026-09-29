@@ -15,7 +15,7 @@
 
 use polars::prelude::*;
 
-use crate::estimation::taylor::degrees_of_freedom;
+use crate::estimation::taylor::{degrees_of_freedom, singleton_weight_rows};
 use crate::regression::wols::{fit_wols, influence_covariance, influence_se};
 
 // ============================================================================
@@ -274,6 +274,7 @@ pub fn ranktest_two_sample(
         fit_wols(&rankscore, &xmat, w, n, k).map_err(|e| PolarsError::ComputeError(e.into()))?;
 
     // 4 & 5. Design-based SE via influence functions + taylor_variance
+    let active = singleton_weight_rows(singleton_method, false, strata.is_some(), w);
     let ses = influence_se(
         &wols.influence,
         w,
@@ -286,6 +287,7 @@ pub fn ranktest_two_sample(
         fpc_ssu,
         singleton_method,
         None,
+        active.as_deref(),
     )?;
 
     // 6. Test statistic
@@ -382,8 +384,18 @@ pub fn ranktest_k_sample(
         fit_wols(&rankscore, &xmat, w, n, k).map_err(|e| PolarsError::ComputeError(e.into()))?;
 
     // 4. Design-based covariance of coefficients
-    let cov_flat =
-        influence_covariance(&wols.influence, w, n, k, strata, psu, singleton_method, None)?;
+    let active = singleton_weight_rows(singleton_method, false, strata.is_some(), w);
+    let cov_flat = influence_covariance(
+        &wols.influence,
+        w,
+        n,
+        k,
+        strata,
+        psu,
+        singleton_method,
+        None,
+        active.as_deref(),
+    )?;
 
     // 5. Wald test on non-intercept coefficients
     // Extract beta[-1] and V[-1,-1]
@@ -427,6 +439,7 @@ pub fn ranktest_k_sample(
         fpc_ssu,
         singleton_method,
         None,
+        active.as_deref(),
     )?;
 
     let mut group_means = vec![wols.beta[0]]; // reference group mean

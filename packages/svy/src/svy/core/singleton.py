@@ -2259,6 +2259,33 @@ class _StrataIndex:
         return None
 
 
+def singleton_config(sample: Sample) -> SingletonHandlingConfig | None:
+    """The variance settings of the sample's singleton rule, if it has one."""
+    result = getattr(sample, "_singleton_result", None)
+    return result.config if result else None
+
+
+def taylor_singleton_method(sample: Sample) -> str | None:
+    """What the Taylor kernels do with singleton strata: ``"center"``,
+    ``"scale"``, or ``None`` (they contribute nothing; the other rules recode
+    the strata and PSUs instead)."""
+    config = singleton_config(sample)
+    if config is None:
+        return None
+    method = str(getattr(config.method, "value", config.method)).lower()
+    return method if method in ("center", "scale") else None
+
+
+def require_singleton_rule(sample: Sample, *, where: str) -> None:
+    """Raise when the design has singleton strata and no rule for them: a
+    Taylor variance would silently leave them out (R's
+    ``options(survey.lonely.psu = "fail")``)."""
+    if singleton_config(sample) is None and getattr(sample, "_singletons", None):
+        singles = sample.singleton.detected()
+        if singles:
+            raise SingletonError.from_singletons(singles, where=where)
+
+
 def _key_part(value: Any) -> str:
     if value is None:
         return _KEY_NULL

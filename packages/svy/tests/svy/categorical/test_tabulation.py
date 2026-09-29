@@ -314,7 +314,7 @@ def test_tabulate_two_way_with_multikey_stratum_psu(df_multikey):
     specified as *multiple columns* (2-D labels).
     """
     design = Design(wgt="weight", stratum=("s1", "s2"), psu=("p1", "p2"))
-    sample = Sample(data=df_multikey, design=design)
+    sample = Sample(data=df_multikey, design=design).singleton.skip()
 
     tbl = sample.categorical.tabulate(rowvar="row", colvar="col", drop_nulls=True)
     assert tbl.estimates is not None
@@ -345,7 +345,7 @@ def test_tabulate_two_way_with_multikey_stratum_singlekey_psu(df_multikey):
     is correct when only one of (S, P) is 2-D.
     """
     design = Design(wgt="weight", stratum=("s1", "s2"), psu="p1")
-    sample = Sample(data=df_multikey, design=design)
+    sample = Sample(data=df_multikey, design=design).singleton.skip()
 
     tbl = sample.categorical.tabulate(rowvar="row", colvar="col", drop_nulls=True)
     assert tbl.estimates is not None

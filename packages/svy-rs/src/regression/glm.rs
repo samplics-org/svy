@@ -26,7 +26,7 @@ use polars::prelude::*;
 
 use crate::categorical::ranktest::probit;
 use crate::estimation::calib_sweep::CalibSweep;
-use crate::estimation::taylor::{design_col_codes, design_pair_codes};
+use crate::estimation::taylor::{SingletonMethod, design_col_codes, design_pair_codes};
 use rayon::prelude::*;
 
 // ============================================================================
@@ -686,6 +686,78 @@ pub(crate) fn stratum_scales(
     (scale_h, psus_h)
 }
 
+/// Singleton handling on a finished `p * p` meat, R's `lonely.psu = "adjust"`
+/// and `"average"`: each singleton stratum the domain reaches adds its PSU
+/// total centred at the grand mean (scaled by its FPC factor alone), or the
+/// meat is scaled by `nstrat/nokstrat`. As in `taylor::center_scope`, only the
+/// strata holding `active` rows count (all of them when `active` is `None`).
+///
+/// `col_at(i, j)` is row `i`'s already-weighted value in column `j`.
+pub(crate) fn singleton_meat(
+    meat: &mut [f64],
+    p: usize,
+    col_at: impl Fn(usize, usize) -> f64,
+    strata_obs: &[Vec<usize>],
+    psus_h: &[usize],
+    fpc_rows: Option<&[f64]>,
+    method: SingletonMethod,
+    active: Option<&[bool]>,
+) {
+    if method == SingletonMethod::None {
+        return;
+    }
+    let present: Vec<bool> = strata_obs
+        .iter()
+        .zip(psus_h)
+        .map(|(obs, &m)| m > 0 && active.is_none_or(|a| obs.iter().any(|&i| a[i])))
+        .collect();
+    let (mut n_units, mut n_strata, mut n_singletons) = (0usize, 0usize, 0usize);
+    for (h, &m) in psus_h.iter().enumerate() {
+        if present[h] {
+            n_units += m;
+            n_strata += 1;
+            n_singletons += usize::from(m == 1);
+        }
+    }
+    match method {
+        SingletonMethod::Scale => {
+            let f = if n_strata > n_singletons {
+                n_strata as f64 / (n_strata - n_singletons) as f64
+            } else {
+                f64::NAN
+            };
+            meat.iter_mut().for_each(|v| *v *= f);
+        }
+        SingletonMethod::Center if n_units > 0 && n_singletons > 0 => {
+            let mut grand_mean = vec![0.0f64; p];
+            for obs in strata_obs {
+                for &i in obs {
+                    for (j, g) in grand_mean.iter_mut().enumerate() {
+                        *g += col_at(i, j);
+                    }
+                }
+            }
+            grand_mean.iter_mut().for_each(|g| *g /= n_units as f64);
+            let mut dev = vec![0.0f64; p];
+            for (h, obs) in strata_obs.iter().enumerate() {
+                if !present[h] || psus_h[h] != 1 {
+                    continue;
+                }
+                for (j, d) in dev.iter_mut().enumerate() {
+                    *d = obs.iter().map(|&i| col_at(i, j)).sum::<f64>() - grand_mean[j];
+                }
+                let f = fpc_rows.map_or(1.0, |f| f[obs[0]]);
+                for a in 0..p {
+                    for b in 0..p {
+                        meat[a * p + b] += f * dev[a] * dev[b];
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Design-based variance-covariance of the totals of `p` already-weighted
 /// columns — R survey's `svyrecvar`.
 ///
@@ -704,6 +776,8 @@ pub(crate) fn design_vcov_of_totals(
     psu_idx: Option<&[usize]>,
     n_psu_levels: usize,
     fpc_rows: Option<&[f64]>,
+    singleton: SingletonMethod,
+    active: Option<&[bool]>,
 ) -> Vec<f64> {
     let n_strata = strata_obs.len();
     let (scale_h, psus_h) = stratum_scales(strata_obs, psu_idx, n_psu_levels, fpc_rows);
@@ -814,6 +888,16 @@ pub(crate) fn design_vcov_of_totals(
             out[b * p + a] = v;
         }
     }
+    singleton_meat(
+        &mut out,
+        p,
+        |i, j| cols[j * n + i],
+        strata_obs,
+        &psus_h,
+        fpc_rows,
+        singleton,
+        active,
+    );
     out
 }
 
@@ -1064,6 +1148,7 @@ pub(crate) fn fit_one(
     tol: f64,
     max_iter: usize,
     calib: Option<&CalibSweep>,
+    singleton: SingletonMethod,
 ) -> PolarsResult<GlmResult> {
     if matches!(
         family_str.to_lowercase().as_str(),
@@ -1083,6 +1168,7 @@ pub(crate) fn fit_one(
             tol,
             max_iter,
             calib,
+            singleton,
         );
     }
     fit_glm_domain(
@@ -1100,14 +1186,16 @@ pub(crate) fn fit_one(
         tol,
         max_iter,
         calib,
+        singleton,
         true,
     )
 }
 
 /// Full-sample GLM fit (no domain restriction).
 ///
-/// Equivalent to `fit_glm_domain(..., domain_mask=None)`. Kept as a thin
-/// wrapper to preserve the existing public API and call sites.
+/// Equivalent to `fit_glm_domain(..., domain_mask=None)` with no singleton
+/// handling; the unit tests' entry point.
+#[cfg(test)]
 pub fn fit_glm(
     y: &Series,
     x_cols: Vec<Series>,
@@ -1124,8 +1212,21 @@ pub fn fit_glm(
     calib: Option<&CalibSweep>,
 ) -> PolarsResult<GlmResult> {
     fit_one(
-        y, x_cols, weights, strata, psu, fpc, offset, None, family_str, link_str, theta, tol,
-        max_iter, calib,
+        y,
+        x_cols,
+        weights,
+        strata,
+        psu,
+        fpc,
+        offset,
+        None,
+        family_str,
+        link_str,
+        theta,
+        tol,
+        max_iter,
+        calib,
+        SingletonMethod::None,
     )
 }
 
@@ -1151,6 +1252,7 @@ pub fn fit_glm_where(
     tol: f64,
     max_iter: usize,
     calib: Option<&CalibSweep>,
+    singleton: SingletonMethod,
 ) -> PolarsResult<GlmResult> {
     let cast = mask.cast(&DataType::Boolean)?;
     let ca = cast.bool()?;
@@ -1171,6 +1273,7 @@ pub fn fit_glm_where(
         tol,
         max_iter,
         calib,
+        singleton,
     )
 }
 
@@ -1196,6 +1299,7 @@ pub fn fit_glm_by(
     tol: f64,
     max_iter: usize,
     calib: Option<&CalibSweep>,
+    singleton: SingletonMethod,
 ) -> PolarsResult<Vec<(String, GlmResult)>> {
     // Materialize by_col as strings, enumerate unique levels.
     let by_str_series = by_col.cast(&DataType::String)?;
@@ -1233,6 +1337,7 @@ pub fn fit_glm_by(
                 tol,
                 max_iter,
                 calib,
+                singleton,
             );
             (group_val.to_string(), res)
         })
@@ -1292,6 +1397,7 @@ pub(crate) fn fit_glm_domain(
     tol: f64,
     max_iter: usize,
     calib: Option<&CalibSweep>,
+    singleton: SingletonMethod,
     want_variance: bool,
 ) -> PolarsResult<GlmResult> {
     let family = Family::from_str(family_str, theta)?;
@@ -1703,6 +1809,9 @@ pub(crate) fn fit_glm_domain(
             psu_opt,
             n_psu_levels,
             fpc_rows.as_deref(),
+            singleton,
+            // Calibrated scores are nonzero outside the domain: whole frame.
+            None,
         ),
         None => {
             let mut scores = vec![0.0f64; n];
@@ -1818,6 +1927,21 @@ pub(crate) fn fit_glm_domain(
                     out[b * k + a] = v;
                 }
             }
+            let active = (singleton != SingletonMethod::None).then(|| {
+                (0..n)
+                    .map(|i| domain_mask.is_none_or(|m| m[i]) && w_samp[i] > 0.0)
+                    .collect::<Vec<_>>()
+            });
+            singleton_meat(
+                &mut out,
+                k,
+                |i, j| scores[i] * x[j * n + i],
+                &strata_obs,
+                &psus_h,
+                fpc_rows.as_deref(),
+                singleton,
+                active.as_deref(),
+            );
             out
         }
     };
