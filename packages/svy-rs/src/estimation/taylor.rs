@@ -1093,6 +1093,45 @@ fn variance_unstratified_optimized(
     }
 }
 
+/// The strata a singleton's grand mean is taken over, and how many units
+/// (PSUs, or rows without PSUs) they hold.
+///
+/// R estimates a domain on the subsetted design, so under
+/// `lonely.psu="adjust"` the grand mean averages the PSU totals of the strata
+/// holding domain rows (`survey:::onestage`, `n_PSUs_from_all_strata`), and a
+/// singleton stratum without domain rows drops out. `active` marks the domain's
+/// rows; `None` takes every stratum with units.
+struct CenterScope {
+    present: Vec<bool>,
+    n_units: usize,
+}
+
+fn center_scope(
+    strata_indices: &[u32],
+    units_per_stratum: &[u32],
+    active: Option<&[bool]>,
+) -> CenterScope {
+    let present: Vec<bool> = match active {
+        None => units_per_stratum.iter().map(|&m| m > 0).collect(),
+        Some(a) => {
+            let mut p = vec![false; units_per_stratum.len()];
+            for (&act, &h) in a.iter().zip(strata_indices.iter()) {
+                if act && h != u32::MAX {
+                    p[h as usize] = true;
+                }
+            }
+            p
+        }
+    };
+    let n_units = present
+        .iter()
+        .zip(units_per_stratum.iter())
+        .filter(|(p, _)| **p)
+        .map(|(_, &m)| m as usize)
+        .sum();
+    CenterScope { present, n_units }
+}
+
 fn variance_stratified_optimized(
     scores: &[f64],
     strata_indices: &[u32],
@@ -1102,6 +1141,7 @@ fn variance_stratified_optimized(
     n_psus_per_stratum: Option<&[u32]>,
     fpc_per_stratum: Option<&[f64]>,
     singleton_method: SingletonMethod,
+    active: Option<&[bool]>,
 ) -> f64 {
     let n = scores.len();
     if n == 0 || n_strata == 0 {
@@ -1117,21 +1157,20 @@ fn variance_stratified_optimized(
                 .copied()
                 .unwrap_or(0);
             let mut psu_totals = vec![0.0; (max_psu + 1) as usize];
-            let mut psu_exists = vec![false; (max_psu + 1) as usize];
 
             for (score, &psu) in scores.iter().zip(psu_idx.iter()) {
                 if psu != u32::MAX {
                     psu_totals[psu as usize] += score;
-                    psu_exists[psu as usize] = true;
                 }
             }
 
+            let center = singleton_method == SingletonMethod::Center;
+            let scope = center.then(|| center_scope(strata_indices, n_psus, active));
             let mut grand_mean = 0.0;
-            if singleton_method == SingletonMethod::Center {
+            if let Some(s) = &scope {
                 let total_score: f64 = psu_totals.iter().sum();
-                let total_count = psu_exists.iter().filter(|&&e| e).count();
-                if total_count > 0 {
-                    grand_mean = total_score / (total_count as f64);
+                if s.n_units > 0 {
+                    grand_mean = total_score / (s.n_units as f64);
                 }
             }
 
@@ -1145,7 +1184,7 @@ fn variance_stratified_optimized(
                 let fpc_h = fpc_per_stratum.map(|f| f[h]).unwrap_or(1.0);
 
                 if n_psus_h == 1 {
-                    if singleton_method == SingletonMethod::Center {
+                    if scope.as_ref().is_some_and(|s| s.present[h]) {
                         if let Some(&p) = psu_map[h].first() {
                             total_var += fpc_h * (psu_totals[p as usize] - grand_mean).powi(2);
                         }
@@ -1174,7 +1213,6 @@ fn variance_stratified_optimized(
             let mut stratum_sum_sq = vec![0.0; n_strata as usize];
             let mut stratum_counts = vec![0u32; n_strata as usize];
             let mut grand_total = 0.0;
-            let mut total_n = 0;
 
             for (&score, &stratum) in scores.iter().zip(strata_indices.iter()) {
                 if stratum != u32::MAX {
@@ -1182,16 +1220,15 @@ fn variance_stratified_optimized(
                     stratum_sums[h] += score;
                     stratum_sum_sq[h] += score * score;
                     stratum_counts[h] += 1;
-                    if singleton_method == SingletonMethod::Center {
-                        grand_total += score;
-                        total_n += 1;
-                    }
+                    grand_total += score;
                 }
             }
 
+            let center = singleton_method == SingletonMethod::Center;
+            let scope = center.then(|| center_scope(strata_indices, &stratum_counts, active));
             let mut grand_mean = 0.0;
-            if singleton_method == SingletonMethod::Center && total_n > 0 {
-                grand_mean = grand_total / (total_n as f64);
+            if let Some(s) = scope.as_ref().filter(|s| s.n_units > 0) {
+                grand_mean = grand_total / (s.n_units as f64);
             }
 
             let mut total_var = 0.0;
@@ -1204,7 +1241,7 @@ fn variance_stratified_optimized(
                 let fpc_h = fpc_per_stratum.map(|f| f[h]).unwrap_or(1.0);
 
                 if n_h == 1 {
-                    if singleton_method == SingletonMethod::Center {
+                    if scope.as_ref().is_some_and(|s| s.present[h]) {
                         total_var += fpc_h * (stratum_sums[h] - grand_mean).powi(2);
                     }
                     continue;
@@ -1340,6 +1377,22 @@ impl TaylorDesign {
     pub fn with_calib(mut self, calib: Option<CalibSweep>) -> Self {
         self.calib = calib;
         self
+    }
+
+    /// The domain's rows (nonzero weight, inside `domain`), when the variance
+    /// depends on which strata the domain reaches: singleton centering in a
+    /// stratified design. `None` otherwise, and for a calibrated design, whose
+    /// scores are nonzero outside the domain (R keeps those rows too, so the
+    /// whole frame counts).
+    pub fn domain_rows(
+        &self,
+        weights: &Float64Chunked,
+        domain: Option<&BooleanChunked>,
+    ) -> Option<Vec<bool>> {
+        let needed = self.sm_enum == SingletonMethod::Center
+            && self.strata_indices.is_some()
+            && self.calib.is_none();
+        needed.then(|| active_mask(weights, domain))
     }
 }
 
@@ -1485,6 +1538,16 @@ pub fn build_taylor_design(
 /// Apply a prebuilt [`TaylorDesign`] to a score vector. This is the only
 /// scores-dependent part; a by-group loop calls it once per group.
 pub fn taylor_variance_apply(scores_arr: &[f64], d: &TaylorDesign) -> f64 {
+    taylor_variance_apply_in(scores_arr, d, None)
+}
+
+/// [`taylor_variance_apply`] for a domain: `active` is
+/// [`TaylorDesign::domain_rows`].
+pub fn taylor_variance_apply_in(
+    scores_arr: &[f64],
+    d: &TaylorDesign,
+    active: Option<&[bool]>,
+) -> f64 {
     // Centre first when the design carries a calibration: the sweep replaces
     // the scores the PSU-total formula then consumes, exactly as R applies
     // postStrata at the top of svyrecvar.
@@ -1512,6 +1575,7 @@ pub fn taylor_variance_apply(scores_arr: &[f64], d: &TaylorDesign) -> f64 {
             d.n_psus_per_stratum.as_deref(),
             d.fpc_per_stratum.as_deref(),
             d.sm_enum,
+            active,
         )
     };
 
@@ -1567,6 +1631,17 @@ pub fn taylor_variance(
 /// order — callers that need exact agreement keep the per-column variance and
 /// take only the off-diagonals from here.
 pub fn taylor_covariance_apply(score_cols: &[Vec<f64>], d: &TaylorDesign) -> Vec<Vec<f64>> {
+    taylor_covariance_apply_in(score_cols, d, None)
+}
+
+/// [`taylor_covariance_apply`] for estimates of one domain. Estimates of
+/// different domains keep the whole frame, as R's `svyby(covmat=TRUE)` takes
+/// their covariance from influence functions on the full design.
+pub fn taylor_covariance_apply_in(
+    score_cols: &[Vec<f64>],
+    d: &TaylorDesign,
+    active: Option<&[bool]>,
+) -> Vec<Vec<f64>> {
     let k = score_cols.len();
     if k == 0 {
         return vec![];
@@ -1653,24 +1728,20 @@ pub fn taylor_covariance_apply(score_cols: &[Vec<f64>], d: &TaylorDesign) -> Vec
                     .copied()
                     .unwrap_or(0);
                 let mut psu_totals = vec![vec![0.0; (max_psu + 1) as usize]; k];
-                let mut psu_exists = vec![false; (max_psu + 1) as usize];
                 for j in 0..k {
                     for (s, &p) in cols[j].iter().zip(psu_idx.iter()) {
                         if p != u32::MAX {
                             psu_totals[j][p as usize] += s;
-                            psu_exists[p as usize] = true;
                         }
                     }
                 }
 
+                let scope = (d.sm_enum == SingletonMethod::Center)
+                    .then(|| center_scope(strata_idx, n_psus, active));
                 let mut grand_mean = vec![0.0; k];
-                if d.sm_enum == SingletonMethod::Center {
-                    let total_count = psu_exists.iter().filter(|&&e| e).count();
-                    if total_count > 0 {
-                        for j in 0..k {
-                            grand_mean[j] =
-                                psu_totals[j].iter().sum::<f64>() / (total_count as f64);
-                        }
+                if let Some(s) = scope.as_ref().filter(|s| s.n_units > 0) {
+                    for j in 0..k {
+                        grand_mean[j] = psu_totals[j].iter().sum::<f64>() / (s.n_units as f64);
                     }
                 }
 
@@ -1681,7 +1752,7 @@ pub fn taylor_covariance_apply(score_cols: &[Vec<f64>], d: &TaylorDesign) -> Vec
                     }
                     let fpc_h = d.fpc_per_stratum.as_deref().map(|f| f[h]).unwrap_or(1.0);
                     if m_h == 1 {
-                        if d.sm_enum == SingletonMethod::Center {
+                        if scope.as_ref().is_some_and(|s| s.present[h]) {
                             if let Some(&p) = psu_map[h].first() {
                                 for j in 0..k {
                                     let dj = psu_totals[j][p as usize] - grand_mean[j];
@@ -1738,13 +1809,12 @@ pub fn taylor_covariance_apply(score_cols: &[Vec<f64>], d: &TaylorDesign) -> Vec
                     }
                 }
 
+                let scope = (d.sm_enum == SingletonMethod::Center)
+                    .then(|| center_scope(strata_idx, &counts, active));
                 let mut grand_mean = vec![0.0; k];
-                if d.sm_enum == SingletonMethod::Center {
-                    let total_n: u32 = counts.iter().sum();
-                    if total_n > 0 {
-                        for j in 0..k {
-                            grand_mean[j] = sums[j].iter().sum::<f64>() / (total_n as f64);
-                        }
+                if let Some(s) = scope.as_ref().filter(|s| s.n_units > 0) {
+                    for j in 0..k {
+                        grand_mean[j] = sums[j].iter().sum::<f64>() / (s.n_units as f64);
                     }
                 }
 
@@ -1755,7 +1825,7 @@ pub fn taylor_covariance_apply(score_cols: &[Vec<f64>], d: &TaylorDesign) -> Vec
                     }
                     let fpc_h = d.fpc_per_stratum.as_deref().map(|f| f[h]).unwrap_or(1.0);
                     if n_h == 1 {
-                        if d.sm_enum == SingletonMethod::Center {
+                        if scope.as_ref().is_some_and(|s| s.present[h]) {
                             for j in 0..k {
                                 let dj = sums[j][h] - grand_mean[j];
                                 for l in j..k {
@@ -2043,6 +2113,7 @@ pub fn quantiles_woodruff(
     else {
         return Ok(nan_rows());
     };
+    let active = design.domain_rows(weights, domain_mask);
 
     Ok(probs
         .iter()
@@ -2055,7 +2126,7 @@ pub fn quantiles_woodruff(
             // probability scale; the caller inverts the CDF to get the
             // interval on the quantile scale.
             let scores = scores_quantile_arr(y, weights, domain_mask, q, p, sum_w);
-            let var_p = taylor_variance_apply(&scores, design);
+            let var_p = taylor_variance_apply_in(&scores, design, active.as_deref());
             (q, var_p, var_p.max(0.0).sqrt())
         })
         .collect())

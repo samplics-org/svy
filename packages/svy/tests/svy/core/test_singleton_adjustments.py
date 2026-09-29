@@ -366,3 +366,133 @@ def test_verify_skip_unequal_weights():
     cov = est.cov(("y", "x")).estimates[0]
     assert cov.est == pytest.approx(0.100632803999, abs=1e-9)
     assert cov.se == pytest.approx(0.256838797506, abs=1e-9)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CENTER IN DOMAINS (Regression against R)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _by_se(result):
+    return {e.by_level: e.se for e in result.estimates}
+
+
+@pytest.fixture
+def center_domain():
+    """Strata 1-6 hold 3, 2, 2, 3, 1, 1 PSUs; 5 and 6 are singletons.
+
+    ``g1`` misses strata 3 and 6 and reaches one PSU of stratum 2 (whose first
+    row has y = 0); ``g2`` misses stratum 5; ``g3`` lies in strata 3 and 6.
+    ``y2`` is missing on g2's rows of stratum 3, so na.rm drops that stratum.
+
+    options(survey.lonely.psu = "adjust")
+    d <- svydesign(ids = ~psu, strata = ~stratum, weights = ~wgt, nest = TRUE, data = df)
+    """
+    data = pl.read_csv(DATA_DIR / "singleton_center_domain_29092026.csv")
+    return data, svy.Design(stratum="stratum", psu="psu", wgt="wgt")
+
+
+def test_verify_center_domain_grand_mean(center_domain):
+    """R centers a singleton at the grand mean of the PSU totals of the strata
+    holding domain rows; a singleton stratum outside the domain drops out.
+
+    svyby(~y, ~dom, d, svytotal); svyby(~y, ~dom, d, svymean)
+    svytotal(~y, subset(d, reg == 1)); svyby(~y, ~dom, subset(d, reg == 1), svytotal)
+    svytotal(~y + x, subset(d, reg == 1)); svymean(~y + x, subset(d, dom == "g2"))
+    svyby(~y, ~dom, d, svyratio, denominator = ~x)
+    svymean(~factor(cat), subset(d, dom == "g1")); svyby(~factor(cat), ~dom, d, svytotal)
+    svyby(~y2, ~dom, d, svytotal, na.rm = TRUE); svytotal(~y, d)
+    """
+    data, design = center_domain
+    est = svy.Sample(data, design).singleton.center().estimation
+    reg1 = svy.col("reg") == 1
+    g = [("g1",), ("g2",), ("g3",)]
+
+    tot = _by_se(est.total("y", by="dom"))
+    assert [tot[k] for k in g] == pytest.approx([392.461141804, 272.59136151, 174.583129602])
+    mean = _by_se(est.mean("y", by="dom"))
+    assert [mean[k] for k in g] == pytest.approx([0.570647427826, 1.02587655816, 0.974555800635])
+    assert est.total("y", where=reg1).estimates[0].se == pytest.approx(663.086248419)
+    tot_reg = _by_se(est.total("y", by="dom", where=reg1))
+    assert [tot_reg[k] for k in g] == pytest.approx([409.960368006, 365.953170579, 116.135682259])
+    multi = [r.estimates[0].se for r in est.total(["y", "x"], where=reg1)]
+    assert multi == pytest.approx([663.086248419, 1062.71114004])
+    multi = [r.estimates[0].se for r in est.mean(["y", "x"], where=svy.col("dom") == "g2")]
+    assert multi == pytest.approx([1.02587655816, 0.974877022729])
+
+    ratio = _by_se(est.ratio("y", "x", by="dom"))
+    assert [ratio[k] for k in g] == pytest.approx(
+        [0.0308233456977, 0.0494154470714, 0.0626878079167]
+    )
+    prop = est.prop("cat", where=svy.col("dom") == "g1")
+    assert [e.se for e in prop.estimates] == pytest.approx(
+        [0.0916353153642, 0.144508295716, 0.126554752422]
+    )
+    assert prop.covariance[0, 1] == pytest.approx(-0.00663178659604)
+    cat_tot = {
+        (e.by_level, e.y_level): e.se for e in est.total("cat", by="dom", as_factor=True).estimates
+    }
+    assert [cat_tot[(k, "p")] for k in g] == pytest.approx(
+        [46.8597671545, 47.7378291356, 2.55168789453]
+    )
+    assert [cat_tot[(k, "r")] for k in g] == pytest.approx(
+        [46.026479228, 44.8034735224, 30.5179364382]
+    )
+
+    narm = _by_se(est.total("y2", by="dom", drop_nulls=True))
+    assert [narm[k] for k in g] == pytest.approx([392.461141804, 239.045584028, 174.583129602])
+    assert est.total("y").estimates[0].se == pytest.approx(417.192026665)
+
+
+def test_verify_center_domain_quantile(center_domain):
+    """svyquantile(~y, subset(d, dom == "g1"), quantiles = 0.5, ci = TRUE, qrule = "math")
+    and the same for g2; R's g1 upper bound is NaN (above the CDF's range)."""
+    data, design = center_domain
+    est = svy.Sample(data, design).singleton.center().estimation
+    g1 = est.median("y", where=svy.col("dom") == "g1").estimates[0]
+    assert (g1.est, g1.lci) == pytest.approx((4.11, 1.77))
+    assert math.isnan(g1.uci)
+    g2 = est.median("y", where=svy.col("dom") == "g2").estimates[0]
+    assert (g2.est, g2.lci, g2.uci) == pytest.approx((5.2, 1.62, 13.29))
+
+
+def test_verify_center_domain_element_and_fpc(center_domain):
+    """Without PSUs each row is a unit; with an FPC the stratum scale carries it.
+
+    d_el <- svydesign(ids = ~1, strata = ~stratum, weights = ~wgt, data = df_el)
+    svyby(~y, ~dom, d_el, svytotal)  # df_el keeps one row of stratum 5
+    d_fpc <- svydesign(ids = ~psu, strata = ~stratum, weights = ~wgt, fpc = ~fpc,
+                       nest = TRUE, data = df)
+    svyby(~y, ~dom, d_fpc, svytotal)
+    """
+    data, design = center_domain
+    first_row = pl.int_range(pl.len()).over("stratum", "psu") == 0
+    element = data.filter((pl.col("stratum") != 5) | first_row)
+    est = svy.Sample(element, svy.Design(stratum="stratum", wgt="wgt")).singleton.center()
+    tot = _by_se(est.estimation.total("y", by="dom"))
+    assert [tot[k] for k in [("g1",), ("g2",), ("g3",)]] == pytest.approx(
+        [320.087828212, 360.206440533, 163.303263685]
+    )
+
+    fpc = svy.Design(stratum="stratum", psu="psu", wgt="wgt", pop_size="fpc")
+    est = svy.Sample(data, fpc).singleton.center()
+    tot = _by_se(est.estimation.total("y", by="dom"))
+    assert [tot[k] for k in [("g1",), ("g2",), ("g3",)]] == pytest.approx(
+        [322.676166692, 228.476644453, 151.084704618]
+    )
+
+
+def test_verify_center_domain_calibrated_keeps_whole_frame(center_domain):
+    """A calibrated design's scores are nonzero outside the domain; R keeps
+    those rows, so the grand mean runs over every stratum.
+
+    ps <- postStratify(d, ~ps, data.frame(ps = c("u", "v"), Freq = c(700, 400)))
+    svyby(~y, ~dom, ps, svytotal)
+    """
+    data, design = center_domain
+    sample = svy.Sample(data, design).singleton.center()
+    ps = sample.weighting.poststratify(controls={"u": 700.0, "v": 400.0}, cells="ps")
+    tot = _by_se(ps.estimation.total("y", by="dom"))
+    assert [tot[k] for k in [("g1",), ("g2",), ("g3",)]] == pytest.approx(
+        [595.400339346, 464.250541171, 277.209927545]
+    )
