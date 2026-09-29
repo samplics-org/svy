@@ -16,7 +16,8 @@ use polars::prelude::*;
 use crate::estimation::calib_sweep::{CalibSweep, sweep_scores};
 use crate::estimation::{
     degrees_of_freedom, point_estimate_mean, point_estimate_total, scores_mean, scores_total,
-    srs_variance_mean, taylor::SrsRef, taylor_variance,
+    singleton_domain_rows, srs_variance_mean, taylor::SrsRef, taylor_variance_in,
+    taylor_variance_matrix_in,
 };
 
 // ============================================================================
@@ -222,6 +223,7 @@ pub fn estimate_proportions(
     let df_val = degrees_of_freedom(weights, strata, psu)?;
 
     let sm = singleton_method;
+    let active = singleton_domain_rows(sm, calib.is_some(), strata.is_some(), weights, domain);
 
     // Build all k indicator columns in a SINGLE pass over y.
     // Previously: k separate passes (one per level). Now: one pass, O(N) regardless of k.
@@ -267,7 +269,16 @@ pub fn estimate_proportions(
         let est = point_estimate_mean(&ind_ca, weights)?;
         let scores = sweep_scores(&scores_mean(&ind_ca, weights)?, calib);
 
-        let var_scalar = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, sm)?;
+        let var_scalar = taylor_variance_in(
+            &scores,
+            strata,
+            psu,
+            ssu,
+            fpc,
+            fpc_ssu,
+            sm,
+            active.as_deref(),
+        )?;
         let srs_var = srs_variance_mean(
             &ind_ca,
             weights,
@@ -284,10 +295,9 @@ pub fn estimate_proportions(
         deff_vec.push(deff);
     }
 
-    // Compute full k×k covariance matrix using taylor_variance_matrix
-    // This uses the SAME PSU indexing and variance formula as taylor_variance
-    use crate::estimation::taylor_variance_matrix;
-    let cov = taylor_variance_matrix(&score_columns, strata, psu, fpc, sm)?;
+    // Full k×k covariance, with the same PSU indexing and variance formula as
+    // taylor_variance.
+    let cov = taylor_variance_matrix_in(&score_columns, strata, psu, fpc, sm, active.as_deref())?;
 
     // Extract SEs from diagonal
     let ses: Vec<f64> = (0..k).map(|j| cov[j][j].max(0.0).sqrt()).collect();
@@ -344,6 +354,13 @@ pub fn estimate_totals(
 ) -> PolarsResult<(Vec<f64>, Vec<f64>)> {
     let mut totals = Vec::with_capacity(levels.len());
     let mut total_ses = Vec::with_capacity(levels.len());
+    let active = singleton_domain_rows(
+        singleton_method,
+        calib.is_some(),
+        strata.is_some(),
+        weights,
+        domain,
+    );
 
     // Single pass over y to build all indicator columns at once
     let n_rows = y.len();
@@ -376,7 +393,16 @@ pub fn estimate_totals(
         let ind_ca = Float64Chunked::from_slice_options("ind".into(), &indicators[j]);
         let est = point_estimate_total(&ind_ca, weights)?;
         let scores = sweep_scores(&scores_total(&ind_ca, weights)?, calib);
-        let var = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+        let var = taylor_variance_in(
+            &scores,
+            strata,
+            psu,
+            ssu,
+            fpc,
+            fpc_ssu,
+            singleton_method,
+            active.as_deref(),
+        )?;
         totals.push(est);
         total_ses.push(var.max(0.0).sqrt());
     }

@@ -32,6 +32,11 @@ from svy.core.enumerations import (
 from svy.core.enumerations import (
     TableUnits as _TableUnits,
 )
+from svy.core.singleton import (
+    require_singleton_rule,
+    singleton_config,
+    taylor_singleton_method,
+)
 from svy.core.types import (
     Category,
     Number,
@@ -199,6 +204,7 @@ class Categorical:
         svy's count CIs in R, pass ``df = degf(design)`` to ``confint()``.
         """
         alpha = validate_alpha(alpha, where="Sample.categorical.tabulate")
+        require_singleton_rule(self._sample, where="Sample.categorical.tabulate")
         from scipy.stats import t as t_dist
 
         _raw = self._sample._data
@@ -217,6 +223,17 @@ class Categorical:
         # null checks below never see them: a snapshotted cells column is null
         # wherever a row fell outside the adjustment.
         _rec_cols = [c for c in record_columns(design, local_data) if c not in cols]
+        # The singleton rule's variance strata and PSUs (recoded by certainty,
+        # collapse and pool), as estimation uses them.
+        _sconfig = singleton_config(self._sample)
+        _var_cols = (
+            [_sconfig.var_stratum_col, _sconfig.var_psu_col]
+            if _sconfig is not None
+            and _sconfig.var_stratum_col in local_data.columns
+            and _sconfig.var_psu_col in local_data.columns
+            else []
+        )
+        _rec_cols += [c for c in _var_cols if c not in cols]
 
         # Domain mask: materialized as a column so it filters along with any
         # row drop below (design nulls), then handed to the kernel.
@@ -328,8 +345,11 @@ class Categorical:
             pl.Series(name="__svy_scaled_wgt__", values=wgt_arr)
         )
 
-        strata_col = key_col("stratum") if design.stratum is not None else None
-        psu_col = key_col("psu") if design.variance_psu is not None else None
+        if _var_cols:
+            strata_col, psu_col = _var_cols
+        else:
+            strata_col = key_col("stratum") if design.stratum is not None else None
+            psu_col = key_col("psu") if design.variance_psu is not None else None
         ssu_col = key_col("ssu") if design.ssu is not None else None
 
         # Levels are ordered on the columns' own values (an Enum's categories in
@@ -371,6 +391,7 @@ class Categorical:
             ssu_col=ssu_col,
             fpc_col=fpc_col,
             fpc_ssu_col=fpc_ssu_col,
+            singleton_method=taylor_singleton_method(self._sample),
             compute_totals=compute_totals,
             domain_col=domain_col,
             **calib_kwargs(self._sample, concat_data),
@@ -549,6 +570,7 @@ class Categorical:
             When `by` is specified, returns a list of test results.
         """
         alpha = validate_alpha(alpha, where="Sample.categorical.ttest")
+        require_singleton_rule(self._sample, where="Sample.categorical.ttest")
         # The population-size column has to survive prepare_data's projection
         # for the FPC to be computable below.
         pop_size = self._sample._design.pop_size
@@ -830,6 +852,7 @@ class Categorical:
                 param="method / score_fn",
                 hint="Use one or the other.",
             )
+        require_singleton_rule(self._sample, where="Sample.categorical.ranktest")
         if score_fn is not None:
             return self._ranktest_custom_score(
                 y=y,

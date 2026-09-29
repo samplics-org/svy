@@ -12,14 +12,20 @@ import polars as pl
 import svy_rs as rs
 
 from svy.core.constants import _BY_SEP, key_col
-from svy.core.data_prep import BY_KEY_SEP, PreparedData, level_lookup, prepare_data
+from svy.core.data_prep import (
+    BY_KEY_SEP,
+    PreparedData,
+    calib_applies,
+    level_lookup,
+    prepare_data,
+)
 from svy.core.enumerations import PopParam
 from svy.core.enumerations import QuantileMethod as _QuantileMethod
 from svy.core.repwgts import RepWgts
+from svy.core.singleton import require_singleton_rule, singleton_config
 from svy.core.types import WhereArg
 from svy.core.warnings import WarnCode
 from svy.errors import DimensionError, MethodError
-from svy.errors.singleton_errors import SingletonError
 from svy.estimation.estimate import (
     Estimate,
     EstimateList,
@@ -215,18 +221,9 @@ class Estimation:
             else cast(pl.DataFrame, _data_raw)
         )
 
-        singleton_result = getattr(self._sample, "_singleton_result", None)
-        config = singleton_result.config if singleton_result else None
-
         # Fail-fast on unhandled singletons (Taylor variance path).
-        # Singletons are chosen/handled at the sample level; a handled sample
-        # carries a config. If no strategy was chosen and the design still has
-        # singleton strata, refuse to under-report the variance silently
-        # (mirrors R's options(survey.lonely.psu = "fail")).
-        if config is None and getattr(self._sample, "_singletons", None):
-            singles = self._sample.singleton.detected()
-            if singles:
-                raise SingletonError.from_singletons(singles, where="estimation")
+        require_singleton_rule(self._sample, where="estimation")
+        config = singleton_config(self._sample)
 
         strata_col = None
         psu_col = None
@@ -421,8 +418,10 @@ class Estimation:
         over the strata it holds. Here a stratum is present when one of its rows
         carries a nonzero weight, which is how ``where=`` and missing values
         reach the kernel; ``by=`` levels are matched through the result frame's
-        by column. A domain resting only on singleton strata has no reference
-        variance and gets ``NaN``, as in R. The factor applies to the
+        by column. A calibrated design keeps every stratum: its scores are
+        nonzero outside the domain, and R keeps those rows. A domain resting
+        only on singleton strata has no reference variance and gets ``NaN``,
+        as in R. The factor applies to the
         influence-function variance of every statistic, so it is the same for
         totals, means, ratios, proportions and the probability-scale variance
         behind Woodruff quantiles.
@@ -434,7 +433,12 @@ class Estimation:
         def factor(nstrat: int, nlonely: int) -> float:
             return nstrat / (nstrat - nlonely) if nstrat > nlonely else float("nan")
 
-        if prep is None or prep.strata_col is None or excl not in prep.df.columns:
+        if (
+            prep is None
+            or prep.strata_col is None
+            or excl not in prep.df.columns
+            or calib_applies(self._sample, prep.df)
+        ):
             f = config.singleton_fraction or 0.0
             return np.full(k, 1.0 / (1.0 - f) if f < 1.0 else float("nan"))
 

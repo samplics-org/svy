@@ -16,6 +16,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 - polars is built with `dtype-i8`, `dtype-i16`, `dtype-u8` and `dtype-u16`. Without them pyo3-polars rejected any frame holding an Int8/Int16/UInt8/UInt16 column (`cannot create series from Int8`), even one the kernel does not read.
 
+- `singleton_method="scale"` (or `"average"`) in the Taylor kernels: singleton strata contribute nothing and the stage-1 variance is scaled by `nstrat/nokstrat` over the strata the domain reaches. `ttest_rs`, `ranktest_rs` and `tabulate_rs` apply `"center"` and `"scale"` within their domain (`taylor_variance_in`, `singleton_domain_rows`); `influence_covariance` and `taylor_variance_matrix` delegate to `taylor_covariance_apply_in`, so they center singletons too. `fit_glm_rs` takes `singleton_method`: `singleton_meat` adds each reached singleton stratum's PSU total centred at the grand mean, or scales the meat, for every family including the negative binomial.
+
 - Singleton centering (`singleton_method="center"`) in a domain: the grand mean averages the PSU totals of the strata holding domain rows (nonzero weight, inside the `by` level), and a singleton stratum without domain rows contributes nothing, as in R's `survey:::onestage` on a subsetted design. `TaylorDesign::domain_rows` gives the rows; `taylor_variance_apply_in` and `taylor_covariance_apply_in` take them. Calibrated designs and cross-domain covariances keep the whole frame.
 
 - Taylor mean, ratio and proportion kernels (ungrouped, grouped and batched) no longer fail on a domain with a zero denominator (no weight, or a ratio's weighted x summing to zero): that row is NaN (est, se, var, deff) and its covariance row and column are NaN, as on the replicate path.

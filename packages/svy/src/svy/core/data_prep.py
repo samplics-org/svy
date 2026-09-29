@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Mapping, Sequence, cast
 import polars as pl
 
 from svy.core.constants import _BY_SEP, key_col
+from svy.core.singleton import taylor_singleton_method
 from svy.core.types import WhereArg
 from svy.errors import DimensionError
 from svy.utils.checks import assert_no_missing, drop_missing
@@ -902,7 +903,7 @@ def prepare_data(
         df = df.with_columns(casts)
 
     # ── Singleton method ─────────────────────────────────────────────────
-    singleton_method = getattr(design, "singleton_method", None)
+    singleton_method = taylor_singleton_method(sample)
 
     return PreparedData(
         df=df,
@@ -920,6 +921,17 @@ def prepare_data(
         by_cols=by_cols_list,
         singleton_method=singleton_method,
     )
+
+
+def calib_applies(sample, df) -> bool:
+    """Whether the kernels will sweep the design's calibration record into the
+    scores (what :func:`calib_kwargs` passes), without its warnings."""
+    design = sample._design
+    rec = getattr(design, "wgt_adjustment", None)
+    if rec is None or not rec.is_variance_consumed or design.wgt != rec.new_wgt:
+        return False
+    needed = [rec.prev_wgt, *(rec.cells or ()), *(rec.aux or ())]
+    return all(c in df.columns for c in needed)
 
 
 def calib_kwargs(sample, df) -> dict:

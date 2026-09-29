@@ -21,7 +21,7 @@ use polars::prelude::*;
 use crate::estimation::calib_sweep::{CalibSweep, sweep_scores};
 use crate::estimation::taylor::{
     degrees_of_freedom, point_estimate_mean, point_estimate_mean_domain, scores_mean,
-    scores_mean_domain, taylor_variance,
+    scores_mean_domain, singleton_domain_rows, singleton_weight_rows, taylor_variance_in,
 };
 use crate::regression::wols::{fit_wols, influence_se};
 
@@ -118,7 +118,23 @@ pub fn ttest_one_sample(
     // Estimate mean using existing infrastructure
     let estimate = point_estimate_mean(y, weights)?;
     let scores = sweep_scores(&scores_mean(y, weights)?, calib);
-    let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+    let active = singleton_domain_rows(
+        singleton_method,
+        calib.is_some(),
+        strata.is_some(),
+        weights,
+        None,
+    );
+    let variance = taylor_variance_in(
+        &scores,
+        strata,
+        psu,
+        ssu,
+        fpc,
+        fpc_ssu,
+        singleton_method,
+        active.as_deref(),
+    )?;
     let se = variance.max(0.0).sqrt();
 
     // df = degf(design) - 1
@@ -159,7 +175,23 @@ pub fn ttest_one_sample_domain(
     // Domain-aware mean estimation
     let estimate = point_estimate_mean_domain(y, weights, domain_mask)?;
     let scores = sweep_scores(&scores_mean_domain(y, weights, domain_mask)?, calib);
-    let variance = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+    let active = singleton_domain_rows(
+        singleton_method,
+        calib.is_some(),
+        strata.is_some(),
+        weights,
+        Some(domain_mask),
+    );
+    let variance = taylor_variance_in(
+        &scores,
+        strata,
+        psu,
+        ssu,
+        fpc,
+        fpc_ssu,
+        singleton_method,
+        active.as_deref(),
+    )?;
     let se = variance.max(0.0).sqrt();
 
     // df from FULL design (not domain subset)
@@ -225,6 +257,7 @@ pub fn ttest_two_sample(
     let wols = fit_wols(y, &xmat, w, n, k).map_err(|e| PolarsError::ComputeError(e.into()))?;
 
     // Design-based SE via influence functions
+    let active = singleton_weight_rows(singleton_method, calib.is_some(), strata.is_some(), w);
     let ses = influence_se(
         &wols.influence,
         w,
@@ -237,6 +270,7 @@ pub fn ttest_two_sample(
         fpc_ssu,
         singleton_method,
         calib,
+        active.as_deref(),
     )?;
 
     // coef[1] = difference in means, SE[1] = design-based SE
@@ -317,7 +351,23 @@ fn compute_per_group_ses(
         let mask = BooleanChunked::from_slice("mask".into(), &mask_vec);
 
         let scores = sweep_scores(&scores_mean_domain(y_chunked, w_chunked, &mask)?, calib);
-        let var = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+        let active = singleton_domain_rows(
+            singleton_method,
+            calib.is_some(),
+            strata.is_some(),
+            w_chunked,
+            Some(&mask),
+        );
+        let var = taylor_variance_in(
+            &scores,
+            strata,
+            psu,
+            ssu,
+            fpc,
+            fpc_ssu,
+            singleton_method,
+            active.as_deref(),
+        )?;
         ses.push(var.max(0.0).sqrt());
     }
 
