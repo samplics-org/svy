@@ -34,6 +34,10 @@ _DECIMAL_KEYS = ("est", "se", "lci", "uci", "cv", "deff")
 
 _QUANTILE_PARAMS = (PopParam.QUANTILE, PopParam.MEDIAN)
 
+# Correlation and covariance rows are identified by their (y, x) pair.
+_ASSOC_PARAMS = (PopParam.CORR, PopParam.COV)
+_PAIR_COLS = ("y", "x")
+
 # Carried by to_polars() but kept out of the printed table: df is a per-row
 # value that is constant for most results, so a column would repeat one number
 # down the page and widen every table. Reach for it via to_polars().
@@ -140,8 +144,9 @@ def estimate_frame(
     printing uses, puts the labels in place of the codes and the variable
     labels in place of the names, and sorts on what is shown. Either view
     lists the levels of a variable in ``orders`` (an Enum's categories) in
-    that order. ``row_index`` adds a first column holding each row's position
-    in ``estimates``.
+    that order. Correlation and covariance rows also carry their pair in
+    ``y`` and ``x`` columns, after the domains. ``row_index`` adds a first
+    column holding each row's position in ``estimates``.
     """
     if not estimates:
         return pl.DataFrame()
@@ -150,6 +155,7 @@ def estimate_frame(
     n_by = len(first.by) if first.by else 0
     names = label_vars(estimates, param=param, as_factor=as_factor)
     labelled = {v for v in names if v in labels and labels[v].values}
+    pair = param in _ASSOC_PARAMS
 
     if not tidy:
         recs = []
@@ -171,6 +177,30 @@ def estimate_frame(
             recs.append(rec)
         df = pl.from_dicts(recs)
         return df.with_row_index(row_index) if row_index else df
+
+    pair_labelled = pair and any(
+        labels.get(v) and labels[v].var_label for e in estimates for v in (e.y, e.x)
+    )
+    if pair:
+        shown = (
+            [((labels[c].var_label if c in labels else "") or c) for c in names]
+            if display
+            else names
+        )
+        clash = sorted(set(_PAIR_COLS) & set(shown))
+        if clash:
+            from svy.errors import MethodError
+
+            raise MethodError(
+                title="Domain variable clashes with the pair columns",
+                detail=(
+                    f"Each row names its pair in 'y' and 'x', but '{clash[0]}' is "
+                    "also a domain column here."
+                ),
+                code="PAIR_COLUMN_CLASH",
+                where="Estimate.to_polars",
+                hint="Rename the domain variable before estimating.",
+            )
 
     show_prob = param == PopParam.QUANTILE
     rows = []
@@ -198,6 +228,16 @@ def estimate_frame(
                         hint="Rename the variable, or pass use_labels=False.",
                     )
                 r[name] = _label_of(lab, raw)
+        if pair:
+            for col in _PAIR_COLS:
+                var = getattr(est, col)
+                var_label = labels[var].var_label if var in labels else ""
+                if display:
+                    r[col] = var_label or var
+                    continue
+                r[col] = var
+                if pair_labelled:
+                    r[f"{col}_label"] = var_label or var
         for key in _DECIMAL_KEYS:
             val = getattr(est, key, None)
             if val is not None:
@@ -212,6 +252,9 @@ def estimate_frame(
     # ("Rural", "Urban") and their labels ("2. Rural", "1. Urban") order
     # differently. Data rows sort on the codes.
     skip = {*_DECIMAL_KEYS, _ROW_POS, "n"}
+    if pair:
+        # Pairs keep the order they were requested in within each domain.
+        skip |= {*_PAIR_COLS, *(f"{c}_label" for c in _PAIR_COLS)}
     if not display:
         skip |= {"df"} | {f"{c}_label" for c in labelled}
     # A column's name and values differ between the views; rank what is shown.
@@ -631,6 +674,12 @@ class Estimate:
                     if raw is not None and raw not in values:
                         values[raw] = self._get_value_label(col, raw, use_labels=True)
             out[col] = VarLabels(resolved.var_label if resolved.has_var_label else "", values)
+        if self.param in _ASSOC_PARAMS:
+            for var in dict.fromkeys(v for p in self.estimates for v in (p.y, p.x)):
+                if var is None or var in out:
+                    continue
+                resolved = self._metadata.resolve_labels(var)
+                out[var] = VarLabels(resolved.var_label if resolved.has_var_label else "", {})
         return out
 
     def _y_level_column(self, *, use_labels: bool | None = None) -> str | None:
@@ -679,7 +728,8 @@ class Estimate:
 
         Domain estimates key on their by-level (a tuple when several ``by``
         variables), categorical proportions on the y-level, and combined
-        cases on the (by-levels..., y-level) tuple. A single ungrouped row
+        cases on the (by-levels..., y-level) tuple. Correlation and
+        covariance rows end with their (y, x) pair. A single ungrouped row
         keys on the variable name itself.
         """
         parts: list = []
@@ -687,6 +737,8 @@ class Estimate:
             parts.extend(p.by_level)
         if (self.param == PopParam.PROP or self.as_factor) and p.y_level is not None:
             parts.append(p.y_level)
+        if self.param in _ASSOC_PARAMS:
+            parts.extend((p.y, p.x))
         if not parts:
             return p.y
         return parts[0] if len(parts) == 1 else tuple(parts)
@@ -713,6 +765,8 @@ class Estimate:
                 labeled.append(self._get_value_label(var, val, use_labels=True))
         if (self.param == PopParam.PROP or self.as_factor) and p.y_level is not None:
             labeled.append(self._get_value_label(p.y, p.y_level, use_labels=True))
+        if self.param in _ASSOC_PARAMS:
+            labeled.extend((p.y, p.x))
         if not labeled:
             return key
         return labeled[0] if len(labeled) == 1 else tuple(labeled)
@@ -743,9 +797,21 @@ class Estimate:
             parts = [_kernel_level_str(v) for v in (p.by_level or ())]
             if (self.param == PopParam.PROP or self.as_factor) and p.y_level is not None:
                 parts.append(_kernel_level_str(p.y_level, as_float=float_y))
+            if parts and self.param in _ASSOC_PARAMS:
+                parts.extend((p.y, p.x))
             if parts:
                 pairs.append((parts[0] if len(parts) == 1 else tuple(parts), i))
         return pairs
+
+    def _reversed_pair_aliases(self) -> list[tuple[Any, int]]:
+        """Correlation and covariance are symmetric, so ``(x, y)`` names the ``(y, x)`` row too."""
+        if self.param not in _ASSOC_PARAMS:
+            return []
+        return [
+            ((*(p.by_level or ()), p.x, p.y), i)
+            for i, p in enumerate(self.estimates)
+            if p.x != p.y
+        ]
 
     def contrast(
         self,
@@ -794,6 +860,17 @@ class Estimate:
                 where="Estimate.contrast",
             )
         k = len(self.estimates)
+        if k > 1 and not self._cov_filled and self.param in _ASSOC_PARAMS:
+            raise MethodError(
+                title="No between-estimate covariance on this result",
+                detail=(
+                    "Correlation and covariance results carry no covariance "
+                    "between their rows, so only a single-row result can be "
+                    "contrasted."
+                ),
+                code="CONTRAST_NO_COVARIANCE",
+                where="Estimate.contrast",
+            )
         if k > 1 and not self._cov_filled:
             raise MethodError(
                 title="No between-estimate covariance on this result",
@@ -829,7 +906,11 @@ class Estimate:
             df=float(df),
             alpha=alpha if alpha is not None else self.alpha,
             method=self.method,
-            aliases=[*self._string_level_aliases(), *self._label_aliases().items()],
+            aliases=[
+                *self._string_level_aliases(),
+                *self._label_aliases().items(),
+                *self._reversed_pair_aliases(),
+            ],
         )
 
     def covariance_to_polars(self) -> pl.DataFrame:
