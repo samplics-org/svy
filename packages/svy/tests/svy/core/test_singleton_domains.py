@@ -191,43 +191,56 @@ def _found(df, **kw):
 
 class TestDetection:
     def test_by_levels(self, data):
-        assert _found(data, psu_col="psu", weight_col="wgt", by_col="dom", by_cols=["dom"]) == [
+        assert _found(data, psu_col="psu", by_col="dom", by_cols=["dom"]) == [
             "dom=g1: stratum=2",
             "dom=g2: stratum=2",
         ]
 
     def test_a_zero_value_row_still_places_its_psu(self, data):
         # g1's only row with y = 0 is in stratum 2's PSU 1: still one PSU.
-        g1 = data.with_columns(w=pl.when(pl.col("dom") == "g1").then("wgt").otherwise(0.0))
-        assert _found(g1, psu_col="psu", weight_col="w") == ["stratum=2"]
+        assert _found(data, psu_col="psu", mask=pl.col("dom") == "g1") == ["stratum=2"]
 
-    def test_mask_and_zero_weights(self, data):
+    def test_a_zero_weight_row_still_places_its_psu(self, data):
+        # R's subset() keeps zero-weight rows: a PSU whose only domain row has
+        # weight 0 is present, so stratum 2 has two PSUs in the domain.
+        g2_in_psu1 = (pl.col("stratum") == 2) & (pl.col("psu") == 1) & (pl.col("dom") == "g1")
+        d = data.with_columns(
+            dom=pl.when(g2_in_psu1 & (pl.int_range(pl.len()).over("stratum", "psu") == 0))
+            .then(pl.lit("g2"))
+            .otherwise("dom"),
+        ).with_columns(
+            wgt=pl.when(g2_in_psu1 & (pl.col("dom") == "g2")).then(0.0).otherwise("wgt")
+        )
+        assert _found(d, psu_col="psu", mask=pl.col("dom") == "g2") == []
+        sample = svy.Sample(d, svy.Design(stratum="stratum", psu="psu", wgt="wgt"))
+        r = sample.singleton.center().estimation.mean("y", where=dom("g2"))
+        assert r.findings == []
+
+    def test_where_mask(self, data):
         # reg == 1 keeps PSU 1 of every stratum: all multi-PSU strata.
-        assert _found(data, psu_col="psu", weight_col="wgt", mask=pl.col("reg") == 1) == [
+        assert _found(data, psu_col="psu", mask=pl.col("reg") == 1) == [
             f"stratum={h}" for h in (1, 2, 3, 4)
         ]
-        w = data.with_columns(w=pl.when(pl.col("reg") == 1).then("wgt").otherwise(0.0))
-        assert _found(w, psu_col="psu", weight_col="w") == [f"stratum={h}" for h in (1, 2, 3, 4)]
 
-    def test_null_and_nan_weights_are_not_domain_rows(self, data):
-        w = data.with_columns(
-            w=pl.when(pl.col("reg") == 1).then("wgt").otherwise(None),
-            v=pl.when(pl.col("reg") == 1).then("wgt").otherwise(float("nan")),
-        )
-        assert len(_found(w, psu_col="psu", weight_col="w")) == 4
-        assert len(_found(w, psu_col="psu", weight_col="v")) == 4
+    def test_missing_values_leave_the_domain(self, data, design):
+        # g2 has one row in each PSU of stratum 3, and y2 is missing on both:
+        # in PSU 1, g2 reaches strata 1 and 4 (lonely) but not 3.
+        sample = svy.Sample(data, design).singleton.center()
+        where = dom("g2") & (svy.col("psu") == 1)
+        r = sample.estimation.total("y2", where=where, drop_nulls=True)
+        assert r.findings[0].extra["pairs"] == ["stratum=1", "stratum=4"]
+        r = sample.estimation.total("y", where=where)
+        assert r.findings[0].extra["pairs"] == ["stratum=1", "stratum=3", "stratum=4"]
 
     def test_element_design_counts_rows(self, data):
         # Without PSUs a stratum with one domain row among several is lonely.
-        one = data.with_columns(
-            w=pl.when(pl.int_range(pl.len()).over("stratum") == 0).then("wgt").otherwise(0.0)
-        )
-        assert _found(one, psu_col=None, weight_col="w") == [
+        first = pl.int_range(pl.len()).over("stratum") == 0
+        assert _found(data, psu_col=None, mask=first) == [
             f"stratum={h}" for h in (1, 2, 3, 4, 5, 6)
         ]
 
-    def test_full_sample_singletons_are_not_domain_singletons(self, data):
-        assert _found(data, psu_col="psu", weight_col="wgt") == []
+    def test_whole_sample_has_none(self, data):
+        assert _found(data, psu_col="psu") == []
 
     def test_by_column_that_is_the_stratum(self, data, design):
         # by="stratum" names the same column twice.
@@ -244,7 +257,6 @@ class TestDetection:
             d,
             strata_col="stratum",
             psu_col="psu",
-            weight_col="wgt",
             stratum_cols=["stratum", "s2"],
             by_col="dom",
             by_cols=["dom"],

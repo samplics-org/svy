@@ -244,6 +244,7 @@ pub(crate) fn fit_negbin(
         psu,
         fpc,
         singleton,
+        domain_mask,
     )?;
 
     // The kernel's own sandwich conditions on theta; this one does not.
@@ -321,6 +322,7 @@ fn joint_vcov(
     psu: Option<&Series>,
     fpc: Option<&Series>,
     singleton: SingletonRule,
+    domain_mask: Option<&[bool]>,
 ) -> PolarsResult<(Vec<f64>, f64)> {
     let p = k + 1;
     let dg_theta = digamma(theta);
@@ -436,9 +438,12 @@ fn joint_vcov(
         None
     };
 
-    // w is zero outside the domain.
-    let active =
-        (singleton != SingletonRule::NONE).then(|| w.iter().map(|&v| v > 0.0).collect::<Vec<_>>());
+    // The domain's rows whatever their weight, as in `fit_glm_domain`.
+    let active = (singleton != SingletonRule::NONE).then(|| {
+        (0..n)
+            .map(|i| domain_mask.is_none_or(|m| m[i]))
+            .collect::<Vec<_>>()
+    });
     let vcov = design_vcov_of_totals(
         &influence,
         n,

@@ -15,7 +15,7 @@
 
 use polars::prelude::*;
 
-use crate::estimation::taylor::{degrees_of_freedom, singleton_weight_rows};
+use crate::estimation::taylor::{degrees_of_freedom, singleton_rows};
 use crate::regression::wols::{fit_wols, influence_covariance, influence_se};
 
 // ============================================================================
@@ -255,6 +255,8 @@ pub fn ranktest_two_sample(
     score_method: RankScoreMethod,
     singleton_method: Option<&str>,
     levels: Vec<String>,
+    // The domain's rows for the singleton rules, whatever their weight.
+    rows: &[bool],
 ) -> PolarsResult<RankTestTwoResult> {
     // 1 & 2. Compute rank scores
     let n_hat: f64 = w.iter().sum();
@@ -274,7 +276,7 @@ pub fn ranktest_two_sample(
         fit_wols(&rankscore, &xmat, w, n, k).map_err(|e| PolarsError::ComputeError(e.into()))?;
 
     // 4 & 5. Design-based SE via influence functions + taylor_variance
-    let active = singleton_weight_rows(singleton_method, false, strata.is_some(), w);
+    let active = singleton_rows(singleton_method, false, strata.is_some(), rows);
     let ses = influence_se(
         &wols.influence,
         w,
@@ -350,6 +352,8 @@ pub fn ranktest_k_sample(
     score_method: RankScoreMethod,
     singleton_method: Option<&str>,
     levels: Vec<String>,
+    // The domain's rows for the singleton rules, whatever their weight.
+    rows: &[bool],
 ) -> PolarsResult<RankTestKResult> {
     if n_groups < 2 {
         return Err(PolarsError::ComputeError(
@@ -384,7 +388,7 @@ pub fn ranktest_k_sample(
         fit_wols(&rankscore, &xmat, w, n, k).map_err(|e| PolarsError::ComputeError(e.into()))?;
 
     // 4. Design-based covariance of coefficients
-    let active = singleton_weight_rows(singleton_method, false, strata.is_some(), w);
+    let active = singleton_rows(singleton_method, false, strata.is_some(), rows);
     let cov_flat = influence_covariance(
         &wols.influence,
         w,

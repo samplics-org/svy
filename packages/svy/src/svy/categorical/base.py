@@ -387,7 +387,6 @@ class Categorical:
             concat_data,
             strata_col=strata_col,
             psu_col=psu_col,
-            weight_col=weight_col,
             mask=pl.col(domain_col) if domain_col else None,
             where="Sample.categorical.tabulate",
         )
@@ -561,7 +560,6 @@ class Categorical:
             df,
             strata_col=prep.strata_col,
             psu_col=prep.psu_col,
-            weight_col=prep.weight_col,
             by_col=prep.by_col,
             by_cols=prep.by_cols,
             mask=mask,

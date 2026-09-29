@@ -1534,20 +1534,20 @@ impl TaylorDesign {
         self
     }
 
-    /// The domain's rows (nonzero weight, inside `domain`), when the variance
-    /// depends on which strata the domain reaches: singleton centering in a
-    /// stratified design. `None` otherwise, and for a calibrated design, whose
-    /// scores are nonzero outside the domain (R keeps those rows too, so the
-    /// whole frame counts).
+    /// The domain's rows ([`row_mask`]), when the variance depends on which
+    /// strata the domain reaches: a singleton rule in a stratified design.
+    /// `None` otherwise, and for a calibrated design, whose scores are nonzero
+    /// outside the domain (R keeps those rows too, so the whole frame counts).
     pub fn domain_rows(
         &self,
-        weights: &Float64Chunked,
+        n: usize,
+        rows: Option<&BooleanChunked>,
         domain: Option<&BooleanChunked>,
     ) -> Option<Vec<bool>> {
         let needed = (self.sm_enum != SingletonMethod::None || self.domain_rule)
             && self.strata_indices.is_some()
             && self.calib.is_none();
-        needed.then(|| active_mask(weights, domain))
+        needed.then(|| row_mask(n, rows, domain))
     }
 }
 
@@ -1796,31 +1796,64 @@ pub fn taylor_variance_in(
     Ok(taylor_variance_apply_in(&scores_arr, &design, active))
 }
 
+/// The rows of a domain as the singleton rules see them: in `rows` (the
+/// analysis's domain rows, `where=` with its variables present) and in
+/// `domain` (a `by` level); every row when both are `None`. Unlike the df and
+/// `n`, the weight plays no part: R's `subset()` keeps zero-weight rows, and a
+/// PSU holding only those still counts as present.
+pub fn row_mask(
+    n: usize,
+    rows: Option<&BooleanChunked>,
+    domain: Option<&BooleanChunked>,
+) -> Vec<bool> {
+    let get = |m: Option<&BooleanChunked>, i: usize| m.is_none_or(|m| m.get(i).unwrap_or(false));
+    (0..n).map(|i| get(rows, i) && get(domain, i)).collect()
+}
+
+fn singleton_rows_needed(
+    singleton_method: Option<&str>,
+    calibrated: bool,
+    stratified: bool,
+) -> bool {
+    let (method, domain_rule) = SingletonMethod::parse_rule(singleton_method);
+    (method != SingletonMethod::None || domain_rule) && stratified && !calibrated
+}
+
 /// [`TaylorDesign::domain_rows`] for kernels that sweep a calibration into the
-/// scores themselves and call [`taylor_variance_in`].
+/// scores themselves and call [`taylor_variance_in`]; `domain` marks the
+/// domain's rows (all rows when `None`).
 pub fn singleton_domain_rows(
     singleton_method: Option<&str>,
     calibrated: bool,
     stratified: bool,
-    weights: &Float64Chunked,
+    n: usize,
     domain: Option<&BooleanChunked>,
 ) -> Option<Vec<bool>> {
-    let (method, domain_rule) = SingletonMethod::parse_rule(singleton_method);
-    let needed = (method != SingletonMethod::None || domain_rule) && stratified && !calibrated;
-    needed.then(|| active_mask(weights, domain))
+    singleton_rows_needed(singleton_method, calibrated, stratified)
+        .then(|| row_mask(n, None, domain))
 }
 
-/// [`singleton_domain_rows`] when the weights are already zero outside the
-/// domain.
-pub fn singleton_weight_rows(
+/// [`singleton_domain_rows`] with the domain's rows already resolved.
+pub fn singleton_rows(
     singleton_method: Option<&str>,
     calibrated: bool,
     stratified: bool,
-    w: &[f64],
+    rows: &[bool],
 ) -> Option<Vec<bool>> {
-    let (method, domain_rule) = SingletonMethod::parse_rule(singleton_method);
-    let needed = (method != SingletonMethod::None || domain_rule) && stratified && !calibrated;
-    needed.then(|| w.iter().map(|&v| is_active(Some(v))).collect())
+    singleton_rows_needed(singleton_method, calibrated, stratified).then(|| rows.to_vec())
+}
+
+/// The boolean domain-row column `col` of `df` ([`row_mask`]'s `rows`).
+pub fn rows_column(df: &DataFrame, col: Option<&str>) -> PolarsResult<Option<BooleanChunked>> {
+    col.map(|c| {
+        let s = df.column(c)?.as_materialized_series();
+        let b = match s.dtype() {
+            DataType::Boolean => s.bool()?.clone(),
+            _ => s.cast(&DataType::String)?.str()?.equal("true"),
+        };
+        Ok(b)
+    })
+    .transpose()
 }
 
 /// Full k×k covariance between k estimates from their retained score columns.
@@ -2331,6 +2364,7 @@ pub fn quantiles_woodruff(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: Option<&BooleanChunked>,
+    rows: Option<&BooleanChunked>,
     design: &TaylorDesign,
     probs: &[f64],
     quantile_method: SvyQuantileMethod,
@@ -2341,7 +2375,7 @@ pub fn quantiles_woodruff(
     else {
         return Ok(nan_rows());
     };
-    let active = design.domain_rows(weights, domain_mask);
+    let active = design.domain_rows(y.len(), rows, domain_mask);
 
     Ok(probs
         .iter()

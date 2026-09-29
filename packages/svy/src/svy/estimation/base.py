@@ -416,7 +416,7 @@ class Estimation:
             prep.df,
             strata_col=prep.strata_col,
             psu_col=prep.psu_col,
-            weight_col=prep.weight_col,
+            mask=self._domain_rows_expr(prep),
             by_col=prep.by_col,
             by_cols=prep.by_cols,
             where="estimation",
@@ -448,9 +448,9 @@ class Estimation:
         being estimated. ``subset()`` and ``svyby()`` drop rows, so a domain that
         misses whole strata gets its own fraction: the singleton strata it holds
         over the strata it holds. Here a stratum is present when one of its rows
-        carries a nonzero weight, which is how ``where=`` and missing values
-        reach the kernel; ``by=`` levels are matched through the result frame's
-        by column. A calibrated design keeps every stratum: its scores are
+        is in the domain (``where=`` with the variables present), whatever its
+        weight, as R's ``subset()`` keeps zero-weight rows; ``by=`` levels are
+        matched through the result frame's by column. A calibrated design keeps every stratum: its scores are
         nonzero outside the domain, and R keeps those rows. A domain resting
         only on singleton strata has no reference variance and gets ``NaN``,
         as in R. The factor applies to the
@@ -475,7 +475,8 @@ class Estimation:
             return np.full(k, 1.0 / (1.0 - f) if f < 1.0 else float("nan"))
 
         strata = pl.col(prep.strata_col)
-        dom = prep.df.filter(pl.col(prep.weight_col) > 0)
+        rows = self._domain_rows_expr(prep)
+        dom = prep.df if rows is None else prep.df.filter(rows)
         n_expr = strata.n_unique().alias("nstrat")
         k_expr = strata.filter(pl.col(excl)).n_unique().alias("nlonely")
 
@@ -490,6 +491,15 @@ class Estimation:
         levels = result_df[by_col].cast(pl.Utf8).to_list()
         return np.array([lookup.get(lvl, float("nan")) for lvl in levels], dtype=float)
 
+    @staticmethod
+    def _domain_rows_expr(prep: PreparedData) -> pl.Expr | None:
+        """The rows of the analysis's domain for the singleton rules: in
+        ``where=`` with the variables present (``None``: every row), whatever
+        their weight."""
+        if prep.domain_col is None or prep.domain_col not in prep.df.columns:
+            return None
+        return pl.col(prep.domain_col).cast(pl.Utf8) == str(prep.domain_val)
+
     def _domain_lonely_counts(self, prep: PreparedData) -> dict[str | None, int]:
         """Strata with one PSU in each domain (keyed by ``by`` level, ``None``
         without ``by``), counted with the singletons under
@@ -501,8 +511,8 @@ class Estimation:
             prep.df,
             strata_col=prep.strata_col,
             psu_col=prep.psu_col,
-            weight_col=prep.weight_col,
             by_col=by_col,
+            mask=self._domain_rows_expr(prep),
         )
         if by_col is None:
             return {None: found.height}

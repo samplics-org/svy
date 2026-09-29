@@ -55,6 +55,7 @@ def taylor_mean(
         fpc_ssu_col=fpc_ssu_col,
         by_col=prep.by_col,
         singleton_method=center_arg,
+        domain_rows_col=prep.domain_col,
         deff_ref=deff_ref,
         **calib_kwargs(est._sample, df),
     )
@@ -118,6 +119,7 @@ def taylor_mean_multi(
         fpc_col=fpc_col,
         fpc_ssu_col=fpc_ssu_col,
         singleton_method=center_arg,
+        domain_rows_col=prep.domain_col,
         deff_ref=deff_ref,
     )
 
@@ -173,6 +175,7 @@ def taylor_total(
         fpc_ssu_col=fpc_ssu_col,
         by_col=prep.by_col,
         singleton_method=center_arg,
+        domain_rows_col=prep.domain_col,
         deff_ref=deff_ref,
         **calib_kwargs(est._sample, df),
     )
@@ -231,6 +234,7 @@ def taylor_total_multi(
         fpc_col=fpc_col,
         fpc_ssu_col=fpc_ssu_col,
         singleton_method=center_arg,
+        domain_rows_col=prep.domain_col,
         deff_ref=deff_ref,
     )
 
@@ -286,6 +290,7 @@ def taylor_ratio(
         fpc_ssu_col=fpc_ssu_col,
         by_col=prep.by_col,
         singleton_method=center_arg,
+        domain_rows_col=prep.domain_col,
         deff_ref=deff_ref,
         **calib_kwargs(est._sample, df),
     )
@@ -348,6 +353,7 @@ def taylor_prop(
         fpc_ssu_col=fpc_ssu_col,
         by_col=prep.by_col,
         singleton_method=center_arg,
+        domain_rows_col=prep.domain_col,
         deff_ref=deff_ref,
         **calib_kwargs(est._sample, df),
     )
@@ -413,6 +419,7 @@ def taylor_median(
         fpc_ssu_col=fpc_ssu_col,
         by_col=prep.by_col,
         singleton_method=center_arg,
+        domain_rows_col=prep.domain_col,
         quantile_method=q_method_str,
         **calib_kwargs(est._sample, df),
     )
@@ -466,6 +473,7 @@ def taylor_ratio_multi(
         fpc_col=fpc_col,
         fpc_ssu_col=fpc_ssu_col,
         singleton_method=center_arg,
+        domain_rows_col=prep.domain_col,
         deff_ref=deff_ref,
     )
 
@@ -523,6 +531,7 @@ def taylor_prop_multi(
         fpc_col=fpc_col,
         fpc_ssu_col=fpc_ssu_col,
         singleton_method=center_arg,
+        domain_rows_col=prep.domain_col,
         deff_ref=deff_ref,
     )
 
@@ -590,6 +599,7 @@ def taylor_median_multi(
         fpc_col=fpc_col,
         fpc_ssu_col=fpc_ssu_col,
         singleton_method=center_arg,
+        domain_rows_col=prep.domain_col,
         quantile_method=q_method_str,
         **calib_kwargs(est._sample, df),
     )
@@ -657,6 +667,7 @@ def taylor_quantile(
         fpc_ssu_col=fpc_ssu_col,
         by_col=prep.by_col,
         singleton_method=center_arg,
+        domain_rows_col=prep.domain_col,
         quantile_method=q_method_str,
         **calib_kwargs(est._sample, df),
     )

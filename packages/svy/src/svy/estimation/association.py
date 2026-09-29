@@ -298,6 +298,7 @@ def taylor_assoc(
         fpc_ssu_col=fpc_ssu_col,
         by_col=prep.by_col,
         singleton_method=singleton_method,
+        domain_rows_col=prep.domain_col,
         deff_ref=deff_ref,
     )
     result_df, _ = est._apply_scale_adjustment(result_df, prep=prep)

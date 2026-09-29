@@ -21,7 +21,7 @@ use polars::prelude::*;
 use crate::estimation::calib_sweep::{CalibSweep, sweep_scores};
 use crate::estimation::taylor::{
     degrees_of_freedom, point_estimate_mean, point_estimate_mean_domain, scores_mean,
-    scores_mean_domain, singleton_domain_rows, singleton_weight_rows, taylor_variance_in,
+    scores_mean_domain, singleton_domain_rows, singleton_rows, taylor_variance_in,
 };
 use crate::regression::wols::{fit_wols, influence_se};
 
@@ -122,7 +122,7 @@ pub fn ttest_one_sample(
         singleton_method,
         calib.is_some(),
         strata.is_some(),
-        weights,
+        y.len(),
         None,
     );
     let variance = taylor_variance_in(
@@ -179,7 +179,7 @@ pub fn ttest_one_sample_domain(
         singleton_method,
         calib.is_some(),
         strata.is_some(),
-        weights,
+        y.len(),
         Some(domain_mask),
     );
     let variance = taylor_variance_in(
@@ -244,6 +244,8 @@ pub fn ttest_two_sample(
     calib: Option<&CalibSweep>,
     levels: Vec<String>,
     null_value: f64,
+    // The domain's rows for the singleton rules, whatever their weight.
+    rows: &[bool],
 ) -> PolarsResult<TTestTwoResult> {
     // Build design matrix: [intercept, group_indicator]
     let k = 2;
@@ -257,7 +259,7 @@ pub fn ttest_two_sample(
     let wols = fit_wols(y, &xmat, w, n, k).map_err(|e| PolarsError::ComputeError(e.into()))?;
 
     // Design-based SE via influence functions
-    let active = singleton_weight_rows(singleton_method, calib.is_some(), strata.is_some(), w);
+    let active = singleton_rows(singleton_method, calib.is_some(), strata.is_some(), rows);
     let ses = influence_se(
         &wols.influence,
         w,
@@ -307,6 +309,7 @@ pub fn ttest_two_sample(
         fpc_ssu,
         singleton_method,
         calib,
+        rows,
     )?;
 
     // w is already zero outside the domain and where y is missing.
@@ -344,19 +347,21 @@ fn compute_per_group_ses(
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
     calib: Option<&CalibSweep>,
+    rows: &[bool],
 ) -> PolarsResult<Vec<f64>> {
     let mut ses = Vec::with_capacity(2);
     for group_val in 0..2u32 {
         let mask_vec: Vec<bool> = g.iter().map(|&gi| gi == group_val).collect();
         let mask = BooleanChunked::from_slice("mask".into(), &mask_vec);
+        let in_group: Vec<bool> = mask_vec.iter().zip(rows).map(|(&g, &r)| g && r).collect();
 
         let scores = sweep_scores(&scores_mean_domain(y_chunked, w_chunked, &mask)?, calib);
         let active = singleton_domain_rows(
             singleton_method,
             calib.is_some(),
             strata.is_some(),
-            w_chunked,
-            Some(&mask),
+            in_group.len(),
+            Some(&BooleanChunked::from_slice("rows".into(), &in_group)),
         );
         let var = taylor_variance_in(
             &scores,

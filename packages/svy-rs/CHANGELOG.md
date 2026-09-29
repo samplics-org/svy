@@ -6,7 +6,7 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ### Added
 
-- The Taylor kernels read a `":domains"` suffix on `singleton_method` (`"center:domains"`, `"scale:domains"`, and `"none:domains"` for estimation's Python-side `scale` factor): a stratum with several PSUs but one holding domain rows is centred at the grand mean, or left out and counted with the singletons, as R does with `survey.adjust.domain.lonely = TRUE`. `SingletonMethod::parse_rule` and `SingletonRule` parse it; `fit_glm_rs`'s `singleton_meat` applies it too.
+- The Taylor kernels read a `":domains"` suffix on `singleton_method` (`"center:domains"`, `"scale:domains"`, and `"none:domains"` for estimation's Python-side `scale` factor): a stratum with several PSUs but one holding domain rows is centred at the grand mean, or left out and counted with the singletons, as R does with `survey.adjust.domain.lonely = TRUE`. `SingletonMethod::parse_rule` and `SingletonRule` parse it; `fit_glm_rs`'s `singleton_meat` applies it too. The Taylor estimators take `domain_rows_col`, the analysis's domain rows (`where=` with its variables present): the singleton rules count a domain's rows by it whatever their weight, as R's `subset()` keeps zero-weight rows, while the df and `n` still count nonzero weights. The t-test, rank-test, table and GLM kernels count their domain the same way.
 
 - `ttest_rs` two-sample output has `n_0` and `n_1`, the records in each group.
 
@@ -20,7 +20,7 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 - `singleton_method="scale"` (or `"average"`) in the Taylor kernels: singleton strata contribute nothing and the stage-1 variance is scaled by `nstrat/nokstrat` over the strata the domain reaches. `ttest_rs`, `ranktest_rs` and `tabulate_rs` apply `"center"` and `"scale"` within their domain (`taylor_variance_in`, `singleton_domain_rows`); `influence_covariance` and `taylor_variance_matrix` delegate to `taylor_covariance_apply_in`, so they center singletons too. `fit_glm_rs` takes `singleton_method`: `singleton_meat` adds each reached singleton stratum's PSU total centred at the grand mean, or scales the meat, for every family including the negative binomial.
 
-- Singleton centering (`singleton_method="center"`) in a domain: the grand mean averages the PSU totals of the strata holding domain rows (nonzero weight, inside the `by` level), and a singleton stratum without domain rows contributes nothing, as in R's `survey:::onestage` on a subsetted design. `TaylorDesign::domain_rows` gives the rows; `taylor_variance_apply_in` and `taylor_covariance_apply_in` take them. Calibrated designs and cross-domain covariances keep the whole frame.
+- Singleton centering (`singleton_method="center"`) in a domain: the grand mean averages the PSU totals of the strata holding domain rows (inside `domain_rows_col` and the `by` level, whatever their weight), and a singleton stratum without domain rows contributes nothing, as in R's `survey:::onestage` on a subsetted design. `TaylorDesign::domain_rows` gives the rows; `taylor_variance_apply_in` and `taylor_covariance_apply_in` take them. Calibrated designs and cross-domain covariances keep the whole frame.
 
 - Taylor mean, ratio and proportion kernels (ungrouped, grouped and batched) no longer fail on a domain with a zero denominator (no weight, or a ratio's weighted x summing to zero): that row is NaN (est, se, var, deff) and its covariance row and column are NaN, as on the replicate path.
 

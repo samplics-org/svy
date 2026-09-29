@@ -2384,20 +2384,16 @@ def domain_singleton_frame(
     *,
     strata_col: str,
     psu_col: str | None,
-    weight_col: str,
     by_col: str | None = None,
     mask: pl.Expr | None = None,
     name_cols: Sequence[str] = (),
 ) -> pl.DataFrame:
     """One row per (``by_col`` level, stratum) whose domain rows sit in one of
     the stratum's several units; see :func:`find_domain_singletons`."""
-    w = pl.col(weight_col)
-    active = w.is_not_null() & w.is_not_nan() & (w != 0)
-    if mask is not None:
-        active = active & mask
-    elif by_col is None and df.select(active.all()).item():
+    if mask is None and by_col is None:
         # Every row is in the domain: every stratum keeps all its units.
         return df.clear().select(strata_col)
+    active = pl.lit(True) if mask is None else mask
     units = pl.col(psu_col).n_unique() if psu_col else pl.len()
     full = df.group_by(strata_col).agg(units.alias("__svy_n_full__"))
     keys = [by_col, strata_col] if by_col else [strata_col]
@@ -2416,7 +2412,6 @@ def find_domain_singletons(
     *,
     strata_col: str,
     psu_col: str | None,
-    weight_col: str,
     stratum_cols: Sequence[str] = (),
     by_col: str | None = None,
     by_cols: Sequence[str] = (),
@@ -2425,20 +2420,14 @@ def find_domain_singletons(
     """Strata with several PSUs (rows, without PSUs) of which one holds rows of
     a domain: R's ``nsubset == 1 && nPSU > 1`` after ``subset()``.
 
-    A domain row has a nonzero weight (``where=`` and missing values reach
-    here as zero weights), falls in ``mask`` when given, and in one level of
-    ``by_col`` when given. Strata are named by ``stratum_cols`` and domains by
-    ``by_cols``, from the rows themselves.
+    A domain row is in ``mask`` (``where=`` with the analysis variables
+    present; every row when ``None``) and in one level of ``by_col`` when
+    given, whatever its weight: R's ``subset()`` keeps zero-weight rows. Strata
+    are named by ``stratum_cols`` and domains by ``by_cols``, from the rows.
     """
     names = list(dict.fromkeys(c for c in (*by_cols, *stratum_cols) if c in df.columns))
     found = domain_singleton_frame(
-        df,
-        strata_col=strata_col,
-        psu_col=psu_col,
-        weight_col=weight_col,
-        by_col=by_col,
-        mask=mask,
-        name_cols=names,
+        df, strata_col=strata_col, psu_col=psu_col, by_col=by_col, mask=mask, name_cols=names
     )
     if found.is_empty():
         return []
@@ -2494,7 +2483,6 @@ def domain_singleton_findings(
     *,
     strata_col: str | None,
     psu_col: str | None,
-    weight_col: str,
     by_col: str | None = None,
     by_cols: Sequence[str] = (),
     mask: pl.Expr | None = None,
@@ -2523,7 +2511,6 @@ def domain_singleton_findings(
         df,
         strata_col=strata_col,
         psu_col=psu_col,
-        weight_col=weight_col,
         stratum_cols=stratum_cols,
         by_col=by_col,
         by_cols=by_cols,

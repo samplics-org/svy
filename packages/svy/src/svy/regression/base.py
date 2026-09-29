@@ -556,6 +556,15 @@ class GLM:
             df = df.with_columns(
                 cast(pl.Expr, bool_expr).fill_null(False).cast(pl.Boolean).alias(dom_col)
             )
+        # Rows with a missing covariate or response are out of the domain too
+        # (they already carry a zero weight): the singleton rules count a
+        # domain's rows whatever their weight, as R's subset() does.
+        if prep.domain_col is not None and prep.domain_col in df.columns:
+            present = pl.col(prep.domain_col).cast(pl.Utf8) == str(prep.domain_val)
+            if dom_col is not None:
+                present = present & pl.col(dom_col)
+            dom_col = "__where_domain__"
+            df = df.with_columns(present.alias(dom_col))
 
         # Drop rows with INVALID weights (null / non-finite / negative) —
         # unconditionally: prepare_data always provides a weight column,
@@ -781,7 +790,6 @@ class GLM:
                 df,
                 strata_col=s_col,
                 psu_col=p_col,
-                weight_col=w_col,
                 mask=pl.col(dom_col) if dom_col else None,
                 where="GLM.fit",
             )

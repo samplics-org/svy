@@ -82,6 +82,7 @@ fn prepare_two_sample_data(
     Vec<u32>,    // g (0-based group indices)
     Vec<String>, // sorted unique group labels
     usize,       // n
+    Vec<bool>,   // the domain's rows (in the domain, y present), whatever the weight
 )> {
     let n = df.height();
     let y_ca = df.column(y_col)?.as_materialized_series().f64()?;
@@ -130,6 +131,7 @@ fn prepare_two_sample_data(
     let mut y_arr = Vec::with_capacity(n);
     let mut w_arr = Vec::with_capacity(n);
     let mut g_arr = Vec::with_capacity(n);
+    let mut rows = Vec::with_capacity(n);
 
     for i in 0..n {
         let yi = y_ca.get(i).unwrap_or(f64::NAN);
@@ -138,6 +140,7 @@ fn prepare_two_sample_data(
         let label = g_ca.get(i).unwrap_or("__NULL__");
         let gi = label_to_idx.get(label).copied().unwrap_or(0);
 
+        rows.push(in_domain && !yi.is_nan());
         if yi.is_nan() {
             // NaN y: zero everything
             y_arr.push(0.0);
@@ -152,7 +155,7 @@ fn prepare_two_sample_data(
         }
     }
 
-    Ok((y_arr, w_arr, g_arr, level_set, n))
+    Ok((y_arr, w_arr, g_arr, level_set, n, rows))
 }
 
 // ============================================================================
@@ -430,7 +433,7 @@ fn compute_svyttest_single(
         }
         Some(g_col) => {
             // Two-sample test
-            let (y_arr, w_arr, g_arr, levels, n) = prepare_two_sample_data(
+            let (y_arr, w_arr, g_arr, levels, n, rows) = prepare_two_sample_data(
                 df, y_col, weight_col, g_col, strata_col, psu_col, domain_col, domain_val,
             )?;
 
@@ -458,6 +461,7 @@ fn compute_svyttest_single(
                 calib,
                 levels.clone(),
                 null_value,
+                &rows,
             )?;
 
             df![
@@ -615,7 +619,7 @@ fn compute_svyranktest_single(
     let fpc = get_opt_f64(df, fpc_col)?;
     let fpc_ssu = get_opt_f64(df, fpc_ssu_col)?;
 
-    let (y_arr, w_arr, g_arr, levels, n) = prepare_two_sample_data(
+    let (y_arr, w_arr, g_arr, levels, n, rows) = prepare_two_sample_data(
         df, y_col, weight_col, group_col, strata_col, psu_col, domain_col, domain_val,
     )?;
     let n_groups = levels.len();
@@ -634,6 +638,7 @@ fn compute_svyranktest_single(
             method,
             singleton_method,
             levels,
+            &rows,
         )?;
 
         df![
@@ -663,6 +668,7 @@ fn compute_svyranktest_single(
             method,
             singleton_method,
             levels,
+            &rows,
         )?;
 
         df![

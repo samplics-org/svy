@@ -1996,9 +1996,11 @@ pub(crate) fn fit_glm_domain(
                     out[b * k + a] = v;
                 }
             }
+            // The domain's rows whatever their weight (R's subset() keeps
+            // zero-weight rows); missing values are out of `domain_mask`.
             let active = (singleton != SingletonRule::NONE).then(|| {
                 (0..n)
-                    .map(|i| domain_mask.is_none_or(|m| m[i]) && w_samp[i] > 0.0)
+                    .map(|i| domain_mask.is_none_or(|m| m[i]))
                     .collect::<Vec<_>>()
             });
             singleton_meat(
