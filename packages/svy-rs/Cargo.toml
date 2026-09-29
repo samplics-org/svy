@@ -26,7 +26,15 @@ crate-type = ["cdylib", "rlib"]
 # undefined libpython symbols. See the [features] section below.
 pyo3 = { version = "0.29", features = ["abi3-py311", "generate-import-lib"] }
 pyo3-polars = { version = "0.28", features = ["derive"] }
-polars = { version = "0.55", default-features = false, features = ["dtype-categorical"] }
+# Without the small-int dtypes, pyo3-polars cannot import a frame holding an
+# Int8/Int16/UInt8/UInt16 column (e.g. a Stata byte), whatever its role.
+polars = { version = "0.55", default-features = false, features = [
+    "dtype-categorical",
+    "dtype-i8",
+    "dtype-i16",
+    "dtype-u8",
+    "dtype-u16",
+] }
 faer = "0.24"
 ahash = "0.8"
 numpy = "0.29"
