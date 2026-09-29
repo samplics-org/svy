@@ -1,8 +1,12 @@
 # python/svy_io/helpers.py
 import contextlib
 import os
+import shutil
 import tempfile
+import warnings
+import zipfile
 
+from contextlib import ExitStack
 from typing import Any
 
 
@@ -100,3 +104,61 @@ def _as_path(obj):
         return
 
     raise TypeError("data_path must be a path or a file-like object")
+
+
+# ---------------- zip archives ----------------
+
+
+def _pick_zip_member(names: list[str], exts: tuple[str, ...]) -> str | None:
+    """First member matching ``exts``, tried in order; warns when several match."""
+    for ext in exts:
+        matches = [n for n in names if n.lower().endswith(ext)]
+        if matches:
+            if len(matches) > 1:
+                warnings.warn(
+                    f"Zip file contains {len(matches)} {ext} files. "
+                    f"Using the first one: {matches[0]}",
+                    UserWarning,
+                    stacklevel=4,
+                )
+            return matches[0]
+    return None
+
+
+def _extract_from_zip(
+    path: str,
+    stack: ExitStack,
+    *,
+    data_exts: tuple[str, ...],
+    companion_exts: tuple[str, ...] = (),
+) -> tuple[str, str | None]:
+    """Extract a reader's data file, and an optional companion, from a zip.
+
+    Returns ``(data_path, companion_path_or_None)``. ``data_exts`` is in
+    preference order: the first extension with a matching member wins.
+
+    Extraction goes into a fresh private directory (not the shared system
+    temp dir, whose predictable member-derived paths invited cross-run
+    collisions and symlink planting on multi-user machines). The directory
+    is removed when ``stack`` closes, right after the native parse.
+    """
+    if not zipfile.is_zipfile(path):
+        raise ValueError(f"File {path} is not a valid zip archive")
+
+    with zipfile.ZipFile(path) as z:
+        names = [n for n in z.namelist() if not n.endswith("/")]
+        data = _pick_zip_member(names, data_exts)
+        if data is None:
+            raise FileNotFoundError(
+                f"Zip file {path} contains no {'/'.join(data_exts)} files. "
+                f"Available files: {', '.join(z.namelist())}"
+            )
+        companion = _pick_zip_member(names, companion_exts)
+
+        temp_base = tempfile.mkdtemp(prefix="svy_io_zip_")
+        stack.callback(shutil.rmtree, temp_base, ignore_errors=True)
+
+        data_path = z.extract(data, path=temp_base)
+        companion_path = z.extract(companion, path=temp_base) if companion else None
+
+    return data_path, companion_path

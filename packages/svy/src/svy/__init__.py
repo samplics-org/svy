@@ -100,6 +100,7 @@ from svy.io import (
     create_from_sav,
     create_from_spss,
     create_from_stata,
+    create_from_xpt,
     read_csv,
     read_dta,
     read_parquet,
@@ -107,6 +108,7 @@ from svy.io import (
     read_sav,
     read_spss,
     read_stata,
+    read_xpt,
     scan_csv,
     scan_parquet,
     write_csv,
@@ -116,6 +118,7 @@ from svy.io import (
     write_sav,
     write_spss,
     write_stata,
+    write_xpt,
 )
 from svy.regression import GLM as GLM
 from svy.regression import GLMFit as GLMFit
@@ -187,6 +190,9 @@ __all__ = [
     "create_from_sas",
     "read_sas",
     "write_sas",
+    "create_from_xpt",
+    "read_xpt",
+    "write_xpt",
     "create_from_spss",
     "read_spss",
     "write_spss",
