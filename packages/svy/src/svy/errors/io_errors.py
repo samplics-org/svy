@@ -27,6 +27,19 @@ class IoError(SvyError):
         )
 
     @classmethod
+    def archive_member_not_found(
+        cls, *, where: Optional[str], path: str | Path, engine_msg: str
+    ) -> "IoError":
+        return cls(
+            title="No readable file in archive",
+            detail=engine_msg,
+            code="ARCHIVE_MEMBER_NOT_FOUND",
+            where=where,
+            hint="Check the archive's contents, or extract the data file and read it directly.",
+            extra={"path": str(path), "engine_msg": engine_msg},
+        )
+
+    @classmethod
     def not_a_file(cls, *, where: Optional[str], path: str | Path) -> "IoError":
         return cls(
             title="Not a file",
@@ -121,7 +134,16 @@ class IoError(SvyError):
 # Small mapper you can use in core/io.py
 def map_os_error(e: BaseException, *, where: str, path: str | Path) -> IoError:
     if isinstance(e, FileNotFoundError):
-        return IoError.not_found(where=where, path=path)
+        p = Path(path)
+        if not p.exists():
+            return IoError.not_found(where=where, path=path)
+        # The path exists, so something else is missing: a member of a zip
+        # archive, or a companion file such as a SAS catalog.
+        if p.suffix.lower() == ".zip":
+            return IoError.archive_member_not_found(where=where, path=path, engine_msg=str(e))
+        if e.filename:
+            return IoError.not_found(where=where, path=e.filename)
+        return IoError.read_failed(where=where, path=path, reason=str(e))
     if isinstance(e, IsADirectoryError):
         return IoError.not_a_file(where=where, path=path)
     if isinstance(e, PermissionError):
