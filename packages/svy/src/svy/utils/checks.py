@@ -197,10 +197,13 @@ def drop_missing(
     return cast(pl.DataFrame, lf.collect())
 
 
-def assert_no_missing(*, df: pl.DataFrame, subset: Sequence[str]) -> None:
+def assert_no_missing(
+    *, df: pl.DataFrame, subset: Sequence[str], scope: str | None = None
+) -> None:
     """
     Raise with a helpful message if any column in subset has NULL/NaN/±∞.
     Optimized to perform a SINGLE scan of the data rather than multiple.
+    `scope` names the rows checked when they are not the whole frame.
     """
     if not subset or df.is_empty():
         return
@@ -243,7 +246,9 @@ def assert_no_missing(*, df: pl.DataFrame, subset: Sequence[str]) -> None:
     if missing_errors:
         detail = ", ".join(missing_errors)
         raise ValueError(
-            "Missing or invalid values found in required columns; "
+            "Missing or invalid values found in required columns"
+            + (f" {scope}" if scope else "")
+            + "; "
             "set drop_nulls=True to automatically drop them. "
             f"Affected: {detail}"
         )

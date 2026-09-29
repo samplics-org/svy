@@ -488,15 +488,6 @@ class GLM:
         feature_specs = list(x) if x else []
         x_cols = self._collect_feature_cols(feature_specs)
 
-        # If a where predicate was passed, harvest the column names it
-        # references and add them to extra_cols. Otherwise prepare_data's
-        # projection (select_columns=True) drops them before line 296 can
-        # evaluate the predicate, raising ColumnNotFoundError.
-        where_cols: list[str] = []
-        if where is not None:
-            where_expr = _compile_where_to_pl_expr(where)
-            where_cols = list(where_expr.meta.root_names())
-
         # The offset column must survive prepare_data's projection too. It is
         # data, not a feature: no coefficient is fitted for it, so it stays out
         # of feature_names and out of the design matrix.
@@ -526,15 +517,19 @@ class GLM:
         # prepare_data handles: materialise, column selection, missing values,
         # weight casting, singleton filter, and correct strata/psu resolution
         # (including singleton variance columns when present).
-        # Covariate and where-clause columns go through null_zero_cols: rows
-        # with missing values are KEPT with zeroed weights (main + replicate)
-        # so the design structure (PSUs in stratum centering, df) is
-        # preserved — matching R svyglm — instead of physically dropped.
+        # Covariates go through null_zero_cols: rows with missing values are
+        # KEPT with zeroed weights (main + replicate) so the design structure
+        # (PSUs in stratum centering, df) is preserved — matching R svyglm —
+        # instead of physically dropped. `where` is passed only to keep its
+        # columns and scope the null check to the domain (apply_where=False):
+        # the domain itself is built below.
         prep = prepare_data(
             self._sample,
             y=y,
-            extra_cols=x_cols + where_cols + rep_cols + pop_cols + offset_cols,
-            null_zero_cols=x_cols + where_cols,
+            extra_cols=x_cols + rep_cols + pop_cols + offset_cols,
+            null_zero_cols=x_cols,
+            where=where,
+            apply_where=False,
             drop_nulls=drop_nulls,
             cast_y_float=True,
             select_columns=True,

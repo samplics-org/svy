@@ -90,6 +90,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **Nulls outside the `where=` domain raised.** Without `drop_nulls`, estimation required every analysis column to be complete on every row, so a null `y`, `by` label or domain flag on rows outside the domain (people without events after a full join, skip patterns) forced `drop_nulls=True`. As in R's `subset()`, a null in a column read only by `where=` now makes the row out-of-domain, and nulls in analysis columns on out-of-domain rows are ignored. Nulls inside the domain still raise, now saying so, and design columns must still be complete on every row. Out-of-domain rows keep contributing to the design, so estimates, SEs and df match R's `subset()`. Covers `mean`, `total`, `prop`, `ratio`, `quantile`, `median`, `corr`, `cov`, `ttest`, `ranktest` and `glm.fit(drop_nulls=False)`, Taylor and replication; `tabulate` already worked this way.
+
+- **`cov`/`corr` with `drop_nulls=True` understated Taylor SEs.** A missing value in the second or later column dropped the row from the design, deleting whole PSUs when all their values were missing. It now zeroes the row's weight, as for `y` and R's `na.rm=TRUE`.
+
 - **Table levels came back in the kernel's order and sorted as text.** `tabulate` cells, `to_polars()`, `rowvals`/`colvals`, `crosstab()` and printed tables listed `10` before `2`, and an Enum's levels alphabetically. Levels are now ordered on the column's values: an Enum's in the Enum's order, numbers numerically. Cells are listed by row level, then column level.
 
 - **`trimming=` cycles stopped after one pass.** `poststratify`, `standardize`, `rake`, `calibrate` and `calibrate_matrix` checked the trimming bounds right after trimming, where they always hold, so every cycle ended after its first pass and `trimming.max_iter` had no effect: a cap that needed more than one trim-and-readjust pass failed however many cycles were allowed. The bounds are now checked on the readjusted weights. Calls that converged before give the same weights.
