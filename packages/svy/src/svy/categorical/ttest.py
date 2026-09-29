@@ -10,12 +10,14 @@ import msgspec
 from msgspec import field
 
 from svy.core.types import Category, Number
+from svy.core.warnings import SvyWarning
 from svy.errors import DimensionError, MethodError
 from svy.estimation import ParamEst
 from svy.estimation.estimate import _display_level
 
 # Import central UI helpers (consistent with estimate.py)
 from svy.ui.printing import (
+    finding_notes,
     format_where_clause,
     make_panel,
     natural_sort_key,
@@ -180,6 +182,8 @@ class TTestOneGroup(msgspec.Struct, tag="one", tag_field="kind", kw_only=True, f
     estimates: list[TtestEst] = field(default_factory=list)
     stats: TTestStats | None = None
     alpha: float = 0.05
+    #: What the call found that bears on the result (e.g. DOMAIN_SINGLETON_PSU).
+    findings: tuple[SvyWarning, ...] = ()
 
     # ---------------- Width Configuration ----------------
 
@@ -342,11 +346,12 @@ class TTestOneGroup(msgspec.Struct, tag="one", tag_field="kind", kw_only=True, f
         title = "T-Test: [bold]One-sample[/bold]"
 
         # Use make_panel from central UI for consistent styling with box
+        children.extend(Text(n, style="dim") for n in finding_notes(self.findings))
         yield make_panel(children, title=title, obj=self, kind="ttest")
 
     def __plain_str__(self) -> str:
         """Plain-text fallback when rich is not installed. Never calls str(self)."""
-        return _plain_one_sample(self)
+        return "\n".join([_plain_one_sample(self), *finding_notes(self.findings)])
 
     def __str__(self) -> str:
         _validate_one_sample(self)
@@ -385,6 +390,8 @@ class TTestTwoGroups(msgspec.Struct, tag="two", tag_field="kind", kw_only=True, 
     estimates: list[TtestEst] = field(default_factory=list)
     stats: TTestStats | None = None
     alpha: float = 0.05
+    #: What the call found that bears on the result (e.g. DOMAIN_SINGLETON_PSU).
+    findings: tuple[SvyWarning, ...] = ()
 
     # ---------------- Width Configuration ----------------
 
@@ -553,11 +560,12 @@ class TTestTwoGroups(msgspec.Struct, tag="two", tag_field="kind", kw_only=True, 
         title = f"T-Test: [bold]Two-sample ({pair_txt})[/bold]"
 
         # Use make_panel from central UI for consistent styling with box
+        children.extend(Text(n, style="dim") for n in finding_notes(self.findings))
         yield make_panel(children, title=title, obj=self, kind="ttest")
 
     def __plain_str__(self) -> str:
         """Plain-text fallback when rich is not installed. Never calls str(self)."""
-        return _plain_two_sample(self)
+        return "\n".join([_plain_two_sample(self), *finding_notes(self.findings)])
 
     def __str__(self) -> str:
         _validate_two_sample(self)
@@ -823,6 +831,7 @@ class TTestByResult:
         groups: GroupLevels | None = None,
         alpha: float = 0.05,
         where_clause: str | None = None,
+        findings: Sequence[SvyWarning] = (),
     ) -> None:
         self.results = results
         self.by = by
@@ -831,6 +840,7 @@ class TTestByResult:
         self.groups = groups
         self.alpha = alpha
         self.where_clause = where_clause
+        self.findings = tuple(findings)
         # Normalised list of by variable names for multi-by display
         self._by_list: list[str] = list(by) if isinstance(by, (list, tuple)) else [by]
 
@@ -946,6 +956,7 @@ class TTestByResult:
             )
             title = f"T-Test: [bold]Two-sample ({pair_txt})[/bold]"
 
+        children.extend(Text(n, style="dim") for n in finding_notes(self.findings))
         yield make_panel(children, title=title, obj=self, kind="ttest")
 
     def __plain_str__(self) -> str:
@@ -982,7 +993,7 @@ class TTestByResult:
             lines.append(f"── {self._format_level(by_level)} " + "─" * 40)
             lines.append(_plain_body_only(r))
             lines.append("")
-        return "\n".join(lines)
+        return "\n".join([*lines, *finding_notes(self.findings)])
 
     def __str__(self) -> str:
         return render_rich_to_str(self, width=resolve_width(self))

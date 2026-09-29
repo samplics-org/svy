@@ -41,7 +41,7 @@ def taylor_mean(
         else (prep.df, None, None)
     )
 
-    center_arg = est._get_center_method()
+    center_arg, findings = est._singleton_variance(prep)
     fn = rs.taylor_prop if as_factor else rs.taylor_mean
 
     result_df, cov_flat = fn(
@@ -77,6 +77,7 @@ def taylor_mean(
         deff_ref=deff_ref,
         design_df=design_df,
         cov_filled=cov_flat is not None,
+        findings=findings,
     )
 
 
@@ -105,7 +106,7 @@ def taylor_mean_multi(
     # Every response column must be Float64 for the Rust kernel; prepare_data
     # only casts the primary y, so cast the rest here.
     df = est._ensure_float64(df, ys)
-    center_arg = est._get_center_method()
+    center_arg, findings = est._singleton_variance(prep)
 
     result_df = rs.taylor_mean_multi(
         df,
@@ -137,6 +138,7 @@ def taylor_mean_multi(
                 as_factor=False,
                 method=None,
                 deff_ref=deff_ref,
+                findings=findings,
             )
         )
     return results
@@ -157,7 +159,7 @@ def taylor_total(
         if pop_size is not None
         else (prep.df, None, None)
     )
-    center_arg = est._get_center_method()
+    center_arg, findings = est._singleton_variance(prep)
 
     fn = rs.taylor_factor_total if as_factor else rs.taylor_total
     result_df, cov_flat = fn(
@@ -193,6 +195,7 @@ def taylor_total(
         deff_ref=deff_ref,
         design_df=design_df,
         cov_filled=cov_flat is not None,
+        findings=findings,
     )
 
 
@@ -216,7 +219,7 @@ def taylor_total_multi(
         else (prep.df, None, None)
     )
     df = est._ensure_float64(df, ys)
-    center_arg = est._get_center_method()
+    center_arg, findings = est._singleton_variance(prep)
 
     result_df = rs.taylor_total_multi(
         df,
@@ -248,6 +251,7 @@ def taylor_total_multi(
                 as_factor=False,
                 method=None,
                 deff_ref=deff_ref,
+                findings=findings,
             )
         )
     return results
@@ -268,7 +272,7 @@ def taylor_ratio(
         if pop_size is not None
         else (prep.df, None, None)
     )
-    center_arg = est._get_center_method()
+    center_arg, findings = est._singleton_variance(prep)
 
     result_df, cov_flat = rs.taylor_ratio(
         df,
@@ -311,6 +315,7 @@ def taylor_ratio(
         deff_ref=deff_ref,
         design_df=design_df,
         cov_filled=cov_flat is not None,
+        findings=findings,
     )
 
 
@@ -329,7 +334,7 @@ def taylor_prop(
         if pop_size is not None
         else (prep.df, None, None)
     )
-    center_arg = est._get_center_method()
+    center_arg, findings = est._singleton_variance(prep)
 
     df = est._coerce_y_for_prop(df, y)
     result_df, cov_flat = rs.taylor_prop(
@@ -373,6 +378,7 @@ def taylor_prop(
         deff_ref=deff_ref,
         design_df=design_df,
         cov_filled=cov_flat is not None,
+        findings=findings,
     )
 
 
@@ -393,7 +399,7 @@ def taylor_median(
         if pop_size is not None
         else (prep.df, None, None)
     )
-    center_arg = est._get_center_method()
+    center_arg, findings = est._singleton_variance(prep)
     q_method_str = q_method.value if hasattr(q_method, "value") else str(q_method).lower()
 
     result_df = rs.taylor_median(
@@ -425,6 +431,7 @@ def taylor_median(
         as_factor=False,
         method=None,
         q_method=q_method,
+        findings=findings,
     )
 
 
@@ -446,7 +453,7 @@ def taylor_ratio_multi(
         else (prep.df, None, None)
     )
     df = est._ensure_float64(df, list(dict.fromkeys([*ys, *xs])))
-    center_arg = est._get_center_method()
+    center_arg, findings = est._singleton_variance(prep)
 
     result_df = rs.taylor_ratio_multi(
         df,
@@ -479,6 +486,7 @@ def taylor_ratio_multi(
                 as_factor=False,
                 method=None,
                 deff_ref=deff_ref,
+                findings=findings,
             )
         )
     return results
@@ -503,7 +511,7 @@ def taylor_prop_multi(
     )
     for y in ys:
         df = est._coerce_y_for_prop(df, y)
-    center_arg = est._get_center_method()
+    center_arg, findings = est._singleton_variance(prep)
 
     result_df = rs.taylor_prop_multi(
         df,
@@ -542,6 +550,7 @@ def taylor_prop_multi(
                 as_factor=True,
                 method=None,
                 deff_ref=deff_ref,
+                findings=findings,
             )
         )
     return results
@@ -568,7 +577,7 @@ def taylor_median_multi(
         else (prep.df, None, None)
     )
     df = est._ensure_float64(df, ys)
-    center_arg = est._get_center_method()
+    center_arg, findings = est._singleton_variance(prep)
     q_method_str = q_method.value if hasattr(q_method, "value") else str(q_method).lower()
 
     result_df = rs.taylor_median_multi(
@@ -603,6 +612,7 @@ def taylor_median_multi(
                 as_factor=False,
                 method=None,
                 q_method=q_method,
+                findings=findings,
             )
         )
     return results
@@ -632,7 +642,7 @@ def taylor_quantile(
         if pop_size is not None
         else (prep.df, None, None)
     )
-    center_arg = est._get_center_method()
+    center_arg, findings = est._singleton_variance(prep)
     q_method_str = q_method.value if hasattr(q_method, "value") else str(q_method).lower()
 
     result_df = rs.taylor_quantile(
@@ -668,6 +678,7 @@ def taylor_quantile(
                 as_factor=False,
                 method=None,
                 q_method=q_method,
+                findings=findings,
             )
         )
     return results

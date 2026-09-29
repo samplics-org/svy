@@ -28,7 +28,7 @@ use faer::Mat;
 use polars::prelude::*;
 
 use crate::estimation::calib_sweep::CalibSweep;
-use crate::estimation::taylor::SingletonMethod;
+use crate::estimation::taylor::SingletonRule;
 use crate::regression::glm::{
     GlmResult, Link, design_codes, design_vcov_of_totals, fit_glm_domain, invert_matrix,
 };
@@ -149,7 +149,7 @@ pub(crate) fn fit_negbin(
     tol: f64,
     max_iter: usize,
     calib: Option<&CalibSweep>,
-    singleton: SingletonMethod,
+    singleton: SingletonRule,
 ) -> PolarsResult<GlmResult> {
     let fit_at = |family: &str, th: Option<f64>, want_variance: bool| {
         fit_glm_domain(
@@ -320,7 +320,7 @@ fn joint_vcov(
     strata: Option<&Series>,
     psu: Option<&Series>,
     fpc: Option<&Series>,
-    singleton: SingletonMethod,
+    singleton: SingletonRule,
 ) -> PolarsResult<(Vec<f64>, f64)> {
     let p = k + 1;
     let dg_theta = digamma(theta);
@@ -437,8 +437,8 @@ fn joint_vcov(
     };
 
     // w is zero outside the domain.
-    let active = (singleton != SingletonMethod::None)
-        .then(|| w.iter().map(|&v| v > 0.0).collect::<Vec<_>>());
+    let active =
+        (singleton != SingletonRule::NONE).then(|| w.iter().map(|&v| v > 0.0).collect::<Vec<_>>());
     let vcov = design_vcov_of_totals(
         &influence,
         n,

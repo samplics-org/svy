@@ -47,6 +47,8 @@ class WarnCode(StrEnum):
     TAYLOR_WITHOUT_DESIGN = "TAYLOR_WITHOUT_DESIGN"
     # ── Estimation ─────────────────────────────────────────────────────
     PROP_CI_BOUNDARY = "PROP_CI_BOUNDARY"  # CI undefined at an estimated proportion of 0 or 1
+    # a stratum with several PSUs has one inside an estimation domain
+    DOMAIN_SINGLETON_PSU = "DOMAIN_SINGLETON_PSU"
     # ── Regression ─────────────────────────────────────────────────────
     GLM_SEPARATION = "GLM_SEPARATION"  # response perfectly predicted; some coefficients infinite
     # ── Weighting (generic — shared across trim, rake, calibrate, …) ──

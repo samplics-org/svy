@@ -30,6 +30,7 @@ from svy.estimation import ParamEst
 
 # Import central UI helpers (consistent with estimate.py and ttest.py)
 from svy.ui.printing import (
+    finding_notes,
     level_index_key,
     level_sort_key,
     make_panel,
@@ -41,6 +42,7 @@ from svy.utils.formats import _fmt_fixed
 
 
 if TYPE_CHECKING:
+    from svy.core.warnings import SvyWarning
     from svy.metadata import MetadataStore
 
 
@@ -164,6 +166,7 @@ _TBL_SLOTS: tuple[str, ...] = (
     "alpha",
     "rowvals",
     "colvals",
+    "findings",
     "_frozen",
     # presentation-only fields (mutable through properties)
     "_decimals",
@@ -210,6 +213,7 @@ class Table:
         colvals: Sequence[Category] | None = None,
         alpha: float = 0.05,
         metadata: "MetadataStore | None" = None,
+        findings: Sequence[SvyWarning] = (),
     ) -> None:
         if not (0.0 < float(alpha) < 1.0):
             raise MethodError.invalid_range(
@@ -246,6 +250,8 @@ class Table:
         object.__setattr__(self, "alpha", float(alpha))
         object.__setattr__(self, "rowvals", list(rowvals) if rowvals is not None else None)
         object.__setattr__(self, "colvals", list(colvals) if colvals is not None else None)
+        # What the call found that bears on the table (e.g. DOMAIN_SINGLETON_PSU).
+        object.__setattr__(self, "findings", tuple(findings))
         # presentation defaults (mutable through properties even when frozen)
         object.__setattr__(self, "_decimals", None)
         object.__setattr__(self, "_print_width", None)
@@ -523,7 +529,10 @@ class Table:
         else:
             title = f"Table: [bold]{row_label}[/bold]"
 
-        yield make_panel([t], title=title, obj=self, kind="estimate")
+        from rich.text import Text
+
+        notes = [Text(n, style="dim") for n in finding_notes(self.findings)]
+        yield make_panel([t, *notes], title=title, obj=self, kind="estimate")
 
     def __plain_str__(self) -> str:
         headers = _headers_for_display(self)
@@ -535,7 +544,7 @@ class Table:
         else:
             title = f"Table: {row_label}"
         body = render_plain_table(headers, rows)
-        return f"{title}\n\n{body}"
+        return "\n".join([f"{title}\n\n{body}", *finding_notes(self.findings)])
 
     def __str__(self) -> str:
         return render_rich_to_str(self, width=resolve_width(self))
@@ -620,6 +629,7 @@ class Table:
             colvals=pick(self.colvals, colvals_arg),
             alpha=_pick(self.alpha, alpha),
             metadata=pick(self._metadata, metadata),
+            findings=self.findings,
         )
 
     def update(self, **kw) -> Self:

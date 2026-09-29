@@ -22,9 +22,15 @@ from svy.core.data_prep import (
 from svy.core.enumerations import PopParam
 from svy.core.enumerations import QuantileMethod as _QuantileMethod
 from svy.core.repwgts import RepWgts
-from svy.core.singleton import require_singleton_rule, singleton_config
+from svy.core.singleton import (
+    domain_singleton_findings,
+    domain_singleton_frame,
+    domains_applied,
+    require_singleton_rule,
+    singleton_config,
+)
 from svy.core.types import WhereArg
-from svy.core.warnings import WarnCode
+from svy.core.warnings import SvyWarning, WarnCode
 from svy.errors import DimensionError, MethodError
 from svy.estimation.estimate import (
     Estimate,
@@ -391,6 +397,32 @@ class Estimation:
         val = getattr(config, attr)
         return str(val.value) if hasattr(val, "value") else str(val)
 
+    def _singleton_variance(self, prep: PreparedData) -> tuple[str | None, list[SvyWarning]]:
+        """The kernels' ``singleton_method`` and the domain-singleton findings
+        of this call (raising under ``domains="error"``).
+
+        Under ``domains="apply"`` the kernels treat a stratum with one PSU in
+        the domain as a singleton: centred with ``center``; with ``scale`` left
+        out (``"none:domains"``), the factor being applied here.
+        """
+        arg = self._get_center_method()
+        if domains_applied(self._sample):
+            if arg == "center":
+                arg = "center:domains"
+            elif self._scale_singletons_active():
+                arg = "none:domains"
+        findings = domain_singleton_findings(
+            self._sample,
+            prep.df,
+            strata_col=prep.strata_col,
+            psu_col=prep.psu_col,
+            weight_col=prep.weight_col,
+            by_col=prep.by_col,
+            by_cols=prep.by_cols,
+            where="estimation",
+        )
+        return arg, findings
+
     def _get_center_method(self) -> str | None:
         cache = self._get_polars_design_info()
         config = cache.get("singleton_config")
@@ -449,12 +481,33 @@ class Estimation:
 
         by_col = prep.by_col
         if by_col is None or by_col not in result_df.columns:
-            return np.full(k, factor(*dom.select(n_expr, k_expr).row(0)))
+            n, m = dom.select(n_expr, k_expr).row(0)
+            return np.full(k, factor(n, m + self._domain_lonely_counts(prep).get(None, 0)))
 
         counts = dom.group_by(pl.col(by_col).cast(pl.Utf8)).agg(n_expr, k_expr)
-        lookup = {lvl: factor(n, m) for lvl, n, m in counts.iter_rows()}
+        extra = self._domain_lonely_counts(prep)
+        lookup = {lvl: factor(n, m + extra.get(lvl, 0)) for lvl, n, m in counts.iter_rows()}
         levels = result_df[by_col].cast(pl.Utf8).to_list()
         return np.array([lookup.get(lvl, float("nan")) for lvl in levels], dtype=float)
+
+    def _domain_lonely_counts(self, prep: PreparedData) -> dict[str | None, int]:
+        """Strata with one PSU in each domain (keyed by ``by`` level, ``None``
+        without ``by``), counted with the singletons under
+        ``scale(domains="apply")``."""
+        if not domains_applied(self._sample) or prep.strata_col is None:
+            return {}
+        by_col = prep.by_col if prep.by_col in prep.df.columns else None
+        found = domain_singleton_frame(
+            prep.df,
+            strata_col=prep.strata_col,
+            psu_col=prep.psu_col,
+            weight_col=prep.weight_col,
+            by_col=by_col,
+        )
+        if by_col is None:
+            return {None: found.height}
+        keys = found.get_column(by_col).cast(pl.Utf8)
+        return dict(keys.value_counts().iter_rows())
 
     def _apply_scale_adjustment(
         self,
@@ -1326,6 +1379,7 @@ class Estimation:
         design_df: int | None = None,
         cov_filled: bool = False,
         q_method: _QuantileMethod | None = None,
+        findings: Sequence[SvyWarning] = (),
     ) -> Estimate:
         metadata = getattr(self._sample, "_metadata", None)
         estimate = Estimate(param, alpha=alpha, metadata=metadata)
@@ -1368,6 +1422,7 @@ class Estimation:
         n_psus = self._design_n_psus(d_cache)
         if n_psus is not None:
             estimate.n_psus = n_psus
+        estimate.findings = list(findings)
         return estimate
 
     # The two helpers below exist only to populate reporting metadata, but they

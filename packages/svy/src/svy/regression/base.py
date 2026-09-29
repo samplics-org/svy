@@ -24,7 +24,7 @@ except ImportError:
 from svy.core.containers import FDist, TDist
 from svy.core.data_prep import calib_kwargs, prepare_data
 from svy.core.enumerations import DistFamily, LinkFunction
-from svy.core.singleton import require_singleton_rule
+from svy.core.singleton import domain_singleton_findings, require_singleton_rule
 from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import WhereArg
 from svy.core.warnings import WarnCode
@@ -773,6 +773,20 @@ class GLM:
         except Exception as e:
             raise ValueError(f"Failed to prepare data: {e}")
 
+        findings = (
+            []
+            if rep_cols
+            else domain_singleton_findings(
+                self._sample,
+                df,
+                strata_col=s_col,
+                psu_col=p_col,
+                weight_col=w_col,
+                mask=pl.col(dom_col) if dom_col else None,
+                where="GLM.fit",
+            )
+        )
+
         # Zero-weight rows (kept for design structure) may carry nulls in
         # engineered features (e.g. Cat dummies of a null value); the Rust
         # engine requires dense y/X and these rows contribute nothing.
@@ -1064,6 +1078,7 @@ class GLM:
             feature_names=feature_names,
             alpha=alpha,
             where_clause=format_where_clause(where),
+            findings=tuple(findings),
         )
 
         # Persist the exact rows the fit used (post null-drop, post weight

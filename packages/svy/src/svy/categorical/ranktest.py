@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Sequence
 
 import msgspec
 
@@ -32,7 +32,14 @@ from svy.categorical.ttest import (
 )
 from svy.core.containers import FDist, TDist
 from svy.core.types import Category
-from svy.ui.printing import make_panel, natural_sort_key, render_rich_to_str, resolve_width
+from svy.core.warnings import SvyWarning
+from svy.ui.printing import (
+    finding_notes,
+    make_panel,
+    natural_sort_key,
+    render_rich_to_str,
+    resolve_width,
+)
 from svy.utils.formats import _fmt_fixed
 
 
@@ -103,6 +110,8 @@ class RankTestTwoSample(
     estimates: list[TtestEst] = field(default_factory=list)
     stats: TDist | None = None
     alpha: float = 0.05
+    #: What the call found that bears on the result (e.g. DOMAIN_SINGLETON_PSU).
+    findings: tuple[SvyWarning, ...] = ()
 
     # ---------------- Width Configuration ----------------
 
@@ -334,10 +343,11 @@ class RankTestTwoSample(
             children.extend([Text(""), Text("Test statistic", style="bold"), stats_tbl])
 
         title = f"Rank Test: [bold]Two-sample ({self.method_name})[/bold]"
+        children.extend(Text(n, style="dim") for n in finding_notes(self.findings))
         yield make_panel(children, title=title, obj=self, kind="ranktest")
 
     def __plain_str__(self) -> str:
-        return _plain_two_sample(self)
+        return "\n".join([_plain_two_sample(self), *finding_notes(self.findings)])
 
     def __str__(self) -> str:
         _validate_two_sample(self)
@@ -379,6 +389,8 @@ class RankTestKSample(msgspec.Struct, tag="rank_k", tag_field="kind", kw_only=Tr
     estimates: list[TtestEst] = field(default_factory=list)
     stats: FDist | None = None
     alpha: float = 0.05
+    #: What the call found that bears on the result (e.g. DOMAIN_SINGLETON_PSU).
+    findings: tuple[SvyWarning, ...] = ()
 
     # ---------------- Width Configuration ----------------
 
@@ -590,10 +602,11 @@ class RankTestKSample(msgspec.Struct, tag="rank_k", tag_field="kind", kw_only=Tr
             children.extend([Text(""), Text("Test statistic", style="bold"), stats_tbl])
 
         title = f"Rank Test: [bold]K-sample ({self.method_name})[/bold]"
+        children.extend(Text(n, style="dim") for n in finding_notes(self.findings))
         yield make_panel(children, title=title, obj=self, kind="ranktest")
 
     def __plain_str__(self) -> str:
-        return _plain_k_sample(self)
+        return "\n".join([_plain_k_sample(self), *finding_notes(self.findings)])
 
     def __str__(self) -> str:
         _validate_k_sample(self)
@@ -648,6 +661,7 @@ class RankTestByResult:
         groups: GroupLevels | None = None,  # two-sample only
         alpha: float = 0.05,
         where_clause: str | None = None,
+        findings: Sequence[SvyWarning] = (),
         by_levels: list | None = None,
     ) -> None:
         self.results = results
@@ -658,6 +672,7 @@ class RankTestByResult:
         self.groups = groups
         self.alpha = alpha
         self.where_clause = where_clause
+        self.findings = tuple(findings)
         self.by_levels: list = by_levels or []
         self._by_list: list[str] = list(by) if isinstance(by, (list, tuple)) else [by]
 
@@ -761,6 +776,7 @@ class RankTestByResult:
             children.append(Text(""))
 
         title = f"Rank Test: [bold]{self.method_name}[/bold]"
+        children.extend(Text(n, style="dim") for n in finding_notes(self.findings))
         yield make_panel(children, title=title, obj=self, kind="ranktest")
 
     def __plain_str__(self) -> str:
@@ -805,7 +821,7 @@ class RankTestByResult:
             if body:
                 lines += ["  Test statistic", body]
             lines.append("")
-        return "\n".join(lines)
+        return "\n".join([*lines, *finding_notes(self.findings)])
 
     def __str__(self) -> str:
         return render_rich_to_str(self, width=resolve_width(self))

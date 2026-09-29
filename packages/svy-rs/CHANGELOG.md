@@ -6,6 +6,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ### Added
 
+- The Taylor kernels read a `":domains"` suffix on `singleton_method` (`"center:domains"`, `"scale:domains"`, and `"none:domains"` for estimation's Python-side `scale` factor): a stratum with several PSUs but one holding domain rows is centred at the grand mean, or left out and counted with the singletons, as R does with `survey.adjust.domain.lonely = TRUE`. `SingletonMethod::parse_rule` and `SingletonRule` parse it; `fit_glm_rs`'s `singleton_meat` applies it too.
+
 - `ttest_rs` two-sample output has `n_0` and `n_1`, the records in each group.
 
 - `fit_glm_rs` reports quasi-complete separation: the last tuple element is now `((theta, theta_se) | None, (boundary_rows, gram) | None)`. For binomial, Poisson and negative binomial fits, `boundary_rows` counts the contributing rows at the boundary of y whose deviance contribution is below `10 * tol * (deviance + 0.1)`, and `gram` is `sum w x x'` over the other contributing rows (row-major); a coefficient outside its row space is not identified. `None` when no row is at the boundary.

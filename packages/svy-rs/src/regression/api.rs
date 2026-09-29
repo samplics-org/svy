@@ -14,7 +14,7 @@ use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 
 use crate::estimation::calib_sweep::{CalibSpec, CalibSweep, build_calib_sweep};
-use crate::estimation::taylor::SingletonMethod;
+use crate::estimation::taylor::SingletonRule;
 use crate::regression::glm::{
     GlmResult, design_codes, design_vcov_of_totals, fit_glm_by, fit_glm_where, fit_one,
 };
@@ -121,7 +121,7 @@ pub fn fit_glm_rs(
     calib_new_wgt: Option<String>,
     singleton_method: Option<String>,
 ) -> PyResult<Vec<GlmTuple>> {
-    let singleton = SingletonMethod::parse(singleton_method.as_deref());
+    let singleton = SingletonRule::parse(singleton_method.as_deref());
     let df: DataFrame = data
         .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("`data` is required"))?
         .into();
@@ -332,7 +332,7 @@ pub fn design_vcov_rs(
             psu_opt,
             n_psu_levels,
             fpc_rows.as_deref(),
-            SingletonMethod::None,
+            SingletonRule::NONE,
             None,
         ))
     })

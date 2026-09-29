@@ -79,3 +79,41 @@ class SingletonError(SvyError):
             where=where,
             extra={"singletons": payload},
         )
+
+    @classmethod
+    def from_domain_singletons(
+        cls,
+        pairs: Sequence[str],
+        *,
+        n_strata: int,
+        n_domains: int,
+        method: str | None,
+        where: str = "estimation",
+    ) -> "SingletonError":
+        """Strata with several PSUs but one inside an estimation domain, under
+        ``domains="error"``. ``pairs`` are "domain: stratum" labels."""
+        strata = "1 stratum has" if n_strata == 1 else f"{n_strata} strata have"
+        domains = "1 estimation domain" if n_domains == 1 else f"{n_domains} estimation domains"
+        lines = [f"{strata} a single PSU within {domains}:"]
+        lines += [f"  {i}. {p}" for i, p in enumerate(pairs[:5], 1)]
+        if len(pairs) > 5:
+            lines.append(f"  ... and {len(pairs) - 5} more")
+        rule = method if method in ("center", "scale") else "center"
+        lines += [
+            "",
+            'The singleton rule was set with domains="error". Pick how to handle them:',
+            "",
+            f'  • sample.singleton.{rule}(domains="apply")  — treat them as singletons '
+            "(R survey.adjust.domain.lonely = TRUE)",
+            f'  • sample.singleton.{method or "center"}(domains="warn")   — standard domain '
+            "variance, with a note",
+            f'  • sample.singleton.{method or "center"}(domains="ignore") — standard domain '
+            "variance (R default)",
+        ]
+        return cls(
+            title="Strata with a single PSU in a domain",
+            detail="\n".join(lines),
+            code="DOMAIN_SINGLETON",
+            where=where,
+            extra={"pairs": list(pairs)},
+        )

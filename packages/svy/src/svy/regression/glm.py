@@ -17,8 +17,15 @@ import polars as pl
 from msgspec import field
 
 from svy.core.containers import FDist, TDist
+from svy.core.warnings import SvyWarning
 from svy.errors import ModelError
-from svy.ui.printing import make_panel, render_plain_table, render_rich_to_str, resolve_width
+from svy.ui.printing import (
+    finding_notes,
+    make_panel,
+    render_plain_table,
+    render_rich_to_str,
+    resolve_width,
+)
 from svy.utils.formats import _fmt_fixed, _fmt_level, _fmt_p, _fmt_smart
 
 
@@ -165,6 +172,8 @@ class GLMFit(msgspec.Struct, frozen=True):
     alpha: float = 0.05
     #: The fit's ``where=`` domain, formatted for display; None without one.
     where_clause: str | None = None
+    #: What the call found that bears on the result (e.g. DOMAIN_SINGLETON_PSU).
+    findings: tuple[SvyWarning, ...] = ()
 
     @classmethod
     def set_default_print_width(cls, width: int | None) -> None:
@@ -180,9 +189,12 @@ class GLMFit(msgspec.Struct, frozen=True):
         cls.PRINT_WIDTH = w
 
     def to_dict(self) -> dict[str, Any]:
-        d = _to_builtins(msgspec.structs.replace(self, cov_matrix=None, term_info=None))
+        d = _to_builtins(
+            msgspec.structs.replace(self, cov_matrix=None, term_info=None, findings=())
+        )
         d.pop("cov_matrix", None)
         d.pop("term_info", None)
+        d["findings"] = [w.to_dict()["warning"] for w in self.findings]
         return d
 
     def _ci_headers(self) -> tuple[str, str]:
@@ -419,6 +431,7 @@ class GLMFit(msgspec.Struct, frozen=True):
                     style="dim",
                 )
             )
+        parts.extend(Text(n, style="dim") for n in finding_notes(self.findings))
         content = Group(*parts)
         yield make_panel(
             [content], title=f"GLM: {self.family} ({self.link})", obj=self, kind="estimate"
@@ -496,6 +509,7 @@ class GLMFit(msgspec.Struct, frozen=True):
                 "Std.Err., t and P>|t| are on the link scale; "
                 "the interval is exp() of the link-scale bounds."
             )
+        lines.extend(finding_notes(self.findings))
         return "\n".join(lines)
 
     def __str__(self) -> str:
