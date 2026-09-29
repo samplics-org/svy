@@ -262,7 +262,10 @@ def _header_plain(lines: Sequence[tuple[str, str]]) -> list[str]:
 
 
 def _header_rich(lines: Sequence[tuple[str, str]]) -> list[Any]:
-    """The header lines as dim-keyed rich Text, then a spacer; nothing when empty."""
+    """The header lines as dim-keyed rich Text.
+
+    No spacer after them: the table's top edge already renders as a blank line.
+    """
     from rich.text import Text
 
     out: list[Any] = []
@@ -271,8 +274,6 @@ def _header_rich(lines: Sequence[tuple[str, str]]) -> list[Any]:
         text.append(f"{key}: ", style="dim")
         text.append(value)
         out.append(text)
-    if out:
-        out.append(Text(""))
     return out
 
 
