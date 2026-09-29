@@ -22,7 +22,8 @@ use crate::estimation::taylor::{
     scores_mean_arr, scores_mean_domain, scores_ratio, scores_ratio_domain, scores_total,
     scores_total_domain, srs_variance_mean, srs_variance_mean_domain, srs_variance_ratio,
     srs_variance_ratio_domain, srs_variance_total, srs_variance_total_domain,
-    taylor_covariance_apply, taylor_variance_apply, weighted_quantile,
+    taylor_covariance_apply, taylor_covariance_apply_in, taylor_variance_apply_in,
+    weighted_quantile,
 };
 
 /// Convert the incoming Python DataFrame and ensure one chunk per column.
@@ -251,8 +252,9 @@ fn ungrouped_estimate<T: Send>(
     let design = design_res?.with_calib(calib);
     let (scores, extra) = value_res?;
 
+    let active = design.domain_rows(weights, None);
     let (variance, df_val) = rayon::join(
-        || taylor_variance_apply(&scores, &design),
+        || taylor_variance_apply_in(&scores, &design, active.as_deref()),
         || degrees_of_freedom_from_design(weights, &design, None),
     );
     Ok((variance, df_val, extra))
@@ -286,7 +288,17 @@ fn var_se(estimate: f64, variance: f64) -> (f64, f64) {
 
 /// Flat covariance with NaN in the rows and columns of undefined estimates.
 fn flat_cov(score_cols: &[Vec<f64>], design: &TaylorDesign, estimates: &[f64]) -> Vec<f64> {
-    let mut cov = taylor_covariance_apply(score_cols, design);
+    flat_cov_in(score_cols, design, estimates, None)
+}
+
+/// [`flat_cov`] for estimates of one domain (`active`).
+fn flat_cov_in(
+    score_cols: &[Vec<f64>],
+    design: &TaylorDesign,
+    estimates: &[f64],
+    active: Option<&[bool]>,
+) -> Vec<f64> {
+    let mut cov = taylor_covariance_apply_in(score_cols, design, active);
     for (i, est) in estimates.iter().enumerate() {
         if est.is_nan() {
             for j in 0..cov.len() {
@@ -391,6 +403,7 @@ fn compute_mean_multi(
     // the term Amdahl's law was multiplying.
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let df_val = degrees_of_freedom_from_design(weights, &design, None);
+    let active = design.domain_rows(weights, None);
 
     // Resolve every response column to its typed slice BEFORE fanning out.
     // `df.column()` mutates the frame's internal schema cache, so calling it
@@ -411,7 +424,7 @@ fn compute_mean_multi(
                 return Ok((value_cols[i].clone(), nan, nan, nan, n, nan));
             };
             let scores_arr = scores_mean_arr(y, weights)?;
-            let variance = taylor_variance_apply(&scores_arr, &design);
+            let variance = taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
             let se = variance.max(0.0).sqrt();
             let srs_var = srs_variance_mean(y, weights, srs)?;
             let deff = if srs_var > 0.0 {
@@ -491,6 +504,7 @@ fn compute_mean_grouped(
         .map(
             |&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
                 let domain_mask = by_str.equal(group);
+                let active = design.domain_rows(weights, Some(&domain_mask));
                 let n_domain = active_count(weights, Some(&domain_mask));
                 let Ok(estimate) = point_estimate_mean_domain(y, weights, &domain_mask) else {
                     let nan = f64::NAN;
@@ -498,7 +512,7 @@ fn compute_mean_grouped(
                 };
                 let scores = scores_mean_domain(y, weights, &domain_mask)?;
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-                let variance = taylor_variance_apply(&scores_arr, &design);
+                let variance = taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
                 let se = variance.max(0.0).sqrt();
                 let srs_var = srs_variance_mean_domain(y, weights, &domain_mask, srs)?;
                 let deff = if srs_var > 0.0 {
@@ -736,6 +750,7 @@ fn compute_total_multi(
     // same strata/PSU columns a second time (see `compute_mean_multi`).
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let df_val = degrees_of_freedom_from_design(weights, &design, None);
+    let active = design.domain_rows(weights, None);
 
     // Hoist column resolution out of the parallel region (see compute_mean_multi).
     let y_cols: Vec<&Float64Chunked> = value_cols
@@ -750,7 +765,7 @@ fn compute_total_multi(
             let estimate = point_estimate_total(y, weights)?;
             let scores = scores_total(y, weights)?;
             let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-            let variance = taylor_variance_apply(&scores_arr, &design);
+            let variance = taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
             let se = variance.max(0.0).sqrt();
             let n = active_count(weights, None);
             let srs_var = srs_variance_total(y, weights, srs)?;
@@ -827,11 +842,12 @@ fn compute_total_grouped(
         .map(
             |&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
                 let domain_mask = by_str.equal(group);
+                let active = design.domain_rows(weights, Some(&domain_mask));
                 let n_domain = active_count(weights, Some(&domain_mask));
                 let estimate = point_estimate_total_domain(y, weights, &domain_mask)?;
                 let scores = scores_total_domain(y, weights, &domain_mask)?;
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-                let variance = taylor_variance_apply(&scores_arr, &design);
+                let variance = taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
                 let se = variance.max(0.0).sqrt();
                 let srs_var = srs_variance_total_domain(y, weights, &domain_mask, srs)?;
                 let deff = if srs_var > 0.0 {
@@ -1080,6 +1096,7 @@ fn compute_ratio_multi(
     // same strata/PSU columns a second time (see `compute_mean_multi`).
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let df_val = degrees_of_freedom_from_design(weights, &design, None);
+    let active = design.domain_rows(weights, None);
 
     // Hoist column resolution out of the parallel region (see compute_mean_multi).
     let y_cols: Vec<&Float64Chunked> = numerator_cols
@@ -1112,7 +1129,7 @@ fn compute_ratio_multi(
                 };
                 let scores = scores_ratio(y, x, weights)?;
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-                let variance = taylor_variance_apply(&scores_arr, &design);
+                let variance = taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
                 let se = variance.max(0.0).sqrt();
                 let srs_var = srs_variance_ratio(y, x, weights, srs)?;
                 let deff = if srs_var > 0.0 {
@@ -1201,6 +1218,7 @@ fn compute_ratio_grouped(
         .map(
             |&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
                 let domain_mask = by_str.equal(group);
+                let active = design.domain_rows(weights, Some(&domain_mask));
                 let n_domain = active_count(weights, Some(&domain_mask));
                 let Ok(estimate) = point_estimate_ratio_domain(y, x, weights, &domain_mask) else {
                     let nan = f64::NAN;
@@ -1208,7 +1226,7 @@ fn compute_ratio_grouped(
                 };
                 let scores = scores_ratio_domain(y, x, weights, &domain_mask)?;
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-                let variance = taylor_variance_apply(&scores_arr, &design);
+                let variance = taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
                 let se = variance.max(0.0).sqrt();
                 let srs_var = srs_variance_ratio_domain(y, x, weights, &domain_mask, srs)?;
                 let deff = if srs_var > 0.0 {
@@ -1394,10 +1412,11 @@ fn compute_assoc(
                     _ => None,
                 };
                 let (y, x) = (ys[pi], xs[pi]);
+                let active = design.domain_rows(weights, mask.as_ref());
                 let estimate = point_estimate_assoc(kind, y, x, weights, mask.as_ref())?;
                 let scores = scores_assoc(kind, y, x, weights, mask.as_ref())?;
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-                let variance = taylor_variance_apply(&scores_arr, &design);
+                let variance = taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
                 let se = variance.max(0.0).sqrt();
                 let srs_var = srs_variance_assoc_of(kind, y, x, weights, mask.as_ref(), srs)?;
                 let deff = if srs_var > 0.0 {
@@ -1720,6 +1739,7 @@ fn compute_levels_ungrouped(
     let design =
         build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?.with_calib(calib);
     let df_val = degrees_of_freedom_from_design(weights, &design, None);
+    let active = design.domain_rows(weights, None);
 
     for lvl in &levels {
         let indicator: Vec<Option<f64>> = value_str
@@ -1751,7 +1771,10 @@ fn compute_levels_ungrouped(
             ),
         };
         let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-        let (variance, se) = var_se(estimate, taylor_variance_apply(&scores_arr, &design));
+        let (variance, se) = var_se(
+            estimate,
+            taylor_variance_apply_in(&scores_arr, &design, active.as_deref()),
+        );
         let deff = if srs_var > 0.0 {
             variance / srs_var
         } else {
@@ -1767,7 +1790,7 @@ fn compute_levels_ungrouped(
         deffs.push(deff);
         score_cols.push(scores_arr);
     }
-    let cov = flat_cov(&score_cols, &design, &estimates);
+    let cov = flat_cov_in(&score_cols, &design, &estimates, active.as_deref());
     let n_levels = level_vals.len();
     let out = df!["y" => vec![value_col; n_levels], "level" => level_vals, "est" => estimates,
         "se" => ses, "var" => variances, "df" => dfs_vec, "n" => ns, "deff" => deffs]?;
@@ -1805,6 +1828,7 @@ fn compute_prop_multi(
     // Design indexed once; df taken off its codes (see `compute_mean_multi`).
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let df_val = degrees_of_freedom_from_design(weights, &design, None);
+    let active = design.domain_rows(weights, None);
 
     // Hoist String-cast + level enumeration out of the parallel region: keep the
     // owned casted columns alive, borrow their StringChunked, and precompute each
@@ -1855,7 +1879,7 @@ fn compute_prop_multi(
                 };
                 let scores = scores_mean(&indicator_ca, weights)?;
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-                let variance = taylor_variance_apply(&scores_arr, &design);
+                let variance = taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
                 let se = variance.max(0.0).sqrt();
                 let srs_var = srs_variance_mean(&indicator_ca, weights, srs)?;
                 let deff = if srs_var > 0.0 {
@@ -1959,6 +1983,7 @@ fn compute_levels_grouped(
         .par_iter()
         .map(|&group| -> PolarsResult<Vec<PropRow>> {
             let domain_mask = by_str.equal(group);
+            let active = design.domain_rows(weights, Some(&domain_mask));
             let n_domain = active_count(weights, Some(&domain_mask));
             let mut out: Vec<PropRow> = Vec::with_capacity(levels.len());
             for lvl in &levels {
@@ -1999,7 +2024,10 @@ fn compute_levels_grouped(
                     ),
                 };
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-                let (variance, se) = var_se(estimate, taylor_variance_apply(&scores_arr, &design));
+                let (variance, se) = var_se(
+                    estimate,
+                    taylor_variance_apply_in(&scores_arr, &design, active.as_deref()),
+                );
                 let deff = if srs_var > 0.0 {
                     variance / srs_var
                 } else {
