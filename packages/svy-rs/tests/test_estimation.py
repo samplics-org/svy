@@ -4,7 +4,7 @@ Tests for svy-rs survey estimation functions, exercised through the current
 ``taylor_mean`` / ``taylor_total`` / ``taylor_ratio`` / ``taylor_prop``.
 
 Expected values from the R survey package / the svy library. These are golden
-tests on an independent synthetic dataset (packages/svy-rs/data/), complementing
+tests on the monorepo's shared test data (packages/svy/tests/test_data/), complementing
 the svy-package suite which drives the same kernels through the Python layer.
 
 Note: the ``_internal`` functions do NOT auto-cast — the svy Python layer owns
@@ -22,12 +22,14 @@ import svy_rs as ps
 
 TOL = 1e-7  # For overall estimates
 
+# Shared with the svy package; data/ directories are gitignored repo-wide.
+DATA_DIR = Path(__file__).parents[2] / "svy" / "tests" / "test_data"
+
 
 @pytest.fixture
 def synthetic_sample_df():
     """Load and prepare the synthetic sample dataset."""
-    BASE_DIR = Path(__file__).parent.parent
-    df = pl.read_csv(BASE_DIR / "data/svy_synthetic_sample_07082025.csv")
+    df = pl.read_csv(DATA_DIR / "svy_synthetic_sample_07082025.csv")
 
     # Convert NaN to null in float columns (so is_not_null() filtering works)
     float_cols = [
@@ -121,7 +123,7 @@ def test_mean_estimation_variants(synthetic_sample_df, design_kwargs, expected):
     )
     df = _cast_for_kernel(df, design_kwargs)
 
-    result = ps.taylor_mean(
+    result, _ = ps.taylor_mean(
         df,
         value_col="income",
         weight_col=design_kwargs["weight"],
@@ -178,7 +180,7 @@ def test_mean_domain_estimates(synthetic_sample_df, design_kwargs, expected):
     )
     df = _cast_for_kernel(df, design_kwargs, by_col="educ")
 
-    result = ps.taylor_mean(
+    result, _ = ps.taylor_mean(
         df,
         value_col="income",
         weight_col=design_kwargs["weight"],
@@ -249,7 +251,7 @@ def test_total_estimation_variants(synthetic_sample_df, design_kwargs, expected)
     )
     df = _cast_for_kernel(df, design_kwargs)
 
-    result = ps.taylor_total(
+    result, _ = ps.taylor_total(
         df,
         value_col="resp2_new",
         weight_col=design_kwargs["weight"],
@@ -306,7 +308,7 @@ def test_total_domain_estimates(synthetic_sample_df, design_kwargs, expected):
     )
     df = _cast_for_kernel(df, design_kwargs, by_col="educ")
 
-    result = ps.taylor_total(
+    result, _ = ps.taylor_total(
         df,
         value_col="resp2_new",
         weight_col=design_kwargs["weight"],
@@ -380,7 +382,7 @@ def test_ratio_estimation_variants(synthetic_sample_df, design_kwargs, expected)
     # fam_size is Int64 in the CSV; the kernel needs Float64.
     df = _cast_for_kernel(df, design_kwargs, float_cols=("fam_size",))
 
-    result = ps.taylor_ratio(
+    result, _ = ps.taylor_ratio(
         df,
         numerator_col="income",
         denominator_col="fam_size",
@@ -439,7 +441,7 @@ def test_ratio_domain_estimates(synthetic_sample_df, design_kwargs, expected):
     )
     df = _cast_for_kernel(df, design_kwargs, by_col="educ", float_cols=("fam_size",))
 
-    result = ps.taylor_ratio(
+    result, _ = ps.taylor_ratio(
         df,
         numerator_col="income",
         denominator_col="fam_size",
@@ -473,7 +475,7 @@ def test_simple_mean():
         }
     )
 
-    result = ps.taylor_mean(df, value_col="value", weight_col="weight")
+    result, _ = ps.taylor_mean(df, value_col="value", weight_col="weight")
 
     assert result["est"][0] == pytest.approx(3.0, rel=1e-10)
     assert result["n"][0] == 5
@@ -488,7 +490,7 @@ def test_weighted_mean():
         }
     )
 
-    result = ps.taylor_mean(df, value_col="value", weight_col="weight")
+    result, _ = ps.taylor_mean(df, value_col="value", weight_col="weight")
 
     # Weighted mean: (1*1 + 2*3) / (1+3) = 7/4 = 1.75
     assert result["est"][0] == pytest.approx(1.75, rel=1e-10)
@@ -504,7 +506,7 @@ def test_group_by():
         }
     )
 
-    result = ps.taylor_mean(df, value_col="value", weight_col="weight", by_col="group")
+    result, _ = ps.taylor_mean(df, value_col="value", weight_col="weight", by_col="group")
 
     result_dict = {row["group"]: row["est"] for row in result.iter_rows(named=True)}
 
@@ -521,7 +523,7 @@ def test_total():
         }
     )
 
-    result = ps.taylor_total(df, value_col="value", weight_col="weight")
+    result, _ = ps.taylor_total(df, value_col="value", weight_col="weight")
 
     # Total: 10*2 + 20*2 + 30*2 = 120
     assert result["est"][0] == pytest.approx(120.0, rel=1e-10)
@@ -537,7 +539,7 @@ def test_ratio():
         }
     )
 
-    result = ps.taylor_ratio(df, numerator_col="num", denominator_col="denom", weight_col="weight")
+    result, _ = ps.taylor_ratio(df, numerator_col="num", denominator_col="denom", weight_col="weight")
 
     # Ratio: (100+200+300) / (10+20+30) = 600/60 = 10
     assert result["est"][0] == pytest.approx(10.0, rel=1e-10)
@@ -597,7 +599,7 @@ def test_prop_estimation_variants(synthetic_sample_df, design_kwargs, expected):
     # Cast columns
     df = _cast_for_kernel(df, design_kwargs)
 
-    result = ps.taylor_prop(
+    result, _ = ps.taylor_prop(
         df,
         value_col="resp2_new",
         weight_col=design_kwargs["weight"],
@@ -662,7 +664,7 @@ def test_prop_domain_estimates(synthetic_sample_df, design_kwargs, expected):
     # Cast columns
     df = _cast_for_kernel(df, design_kwargs, by_col="educ")
 
-    result = ps.taylor_prop(
+    result, _ = ps.taylor_prop(
         df,
         value_col="resp2_new",
         weight_col=design_kwargs["weight"],
@@ -854,10 +856,10 @@ def _call(fn, df, **kw):
 
 
 _ESTIMATORS = [
-    ("mean", lambda df, **kw: _call(ps.taylor_mean, df, value_col="y", **kw)),
-    ("total", lambda df, **kw: _call(ps.taylor_total, df, value_col="y", **kw)),
-    ("ratio", lambda df, **kw: _call(ps.taylor_ratio, df, numerator_col="y", denominator_col="x", **kw)),
-    ("prop", lambda df, **kw: _call(ps.taylor_prop, df, value_col="flag", **kw)),
+    ("mean", lambda df, **kw: _call(ps.taylor_mean, df, value_col="y", **kw)[0]),
+    ("total", lambda df, **kw: _call(ps.taylor_total, df, value_col="y", **kw)[0]),
+    ("ratio", lambda df, **kw: _call(ps.taylor_ratio, df, numerator_col="y", denominator_col="x", **kw)[0]),
+    ("prop", lambda df, **kw: _call(ps.taylor_prop, df, value_col="flag", **kw)[0]),
     ("assoc", lambda df, **kw: ps.taylor_assoc(df, ["y"], ["x"], "corr", "w", strata_col="stratum", psu_col="psu", **kw)),
     # Batched entry points are a separate plumbing route from the single-variable
     # ones -- they build the design once and fan out over columns -- so the
@@ -970,9 +972,9 @@ _R_DEFF_MATRIX = {
 
 # shape -> (csv, psu column, stratum column)
 _DEFF_SHAPES = {
-    "stratSRS": ("apistrat_deff.csv", None, "stype"),
-    "cluster": ("apiclus1_deff.csv", "dnum", None),
-    "strat+cluster": ("apiclus1_deff.csv", "dnum", "stype"),
+    "stratSRS": ("apistrat.csv", None, "stype"),
+    "cluster": ("apiclus1.csv", "dnum", None),
+    "strat+cluster": ("apiclus1.csv", "dnum", "stype"),
 }
 
 
@@ -983,9 +985,7 @@ def _deff_frame(csv: str, psu: str | None, stratum: str | None) -> pl.DataFrame:
     stratum population that R's ``fpc=`` accepts. ``n_h`` counts PSUs, so for a
     design without clusters every row is its own PSU.
     """
-    df = pl.read_csv(
-        Path(__file__).parent.parent / "data" / csv, infer_schema_length=10000
-    ).with_columns(
+    df = pl.read_csv(DATA_DIR / csv, infer_schema_length=10000).with_columns(
         pl.col("pw").cast(pl.Float64),
         pl.col("api00").cast(pl.Float64),
         pl.col("fpc").cast(pl.Float64),
@@ -1008,7 +1008,7 @@ def test_deff_matches_r_across_designs(key, ref):
     se, deff_wor, deff_wr = _R_DEFF_MATRIX[key]
     csv, psu, stratum = _DEFF_SHAPES[shape]
 
-    out = ps.taylor_mean(
+    out, _ = ps.taylor_mean(
         _deff_frame(csv, psu, stratum),
         value_col="api00",
         weight_col="pw",
@@ -1038,7 +1038,7 @@ def test_the_two_corrections_stay_independent(key):
 
     got = {}
     for ref in ("wor", "wr"):
-        out = ps.taylor_mean(
+        out, _ = ps.taylor_mean(
             df,
             value_col="api00",
             weight_col="pw",
