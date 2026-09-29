@@ -92,11 +92,15 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 - **Every estimator refuses an `alpha` outside (0, 1)**, NaN included, with `INVALID_RANGE`, and a non-number (a string, a bool, `None`) with `INVALID_TYPE`: `glm.fit`, `predict`, `margins` and `contrast`, `estimation.mean`, `total`, `prop`, `ratio`, `median`, `quantile`, `corr` and `cov`, `categorical.tabulate`, `ttest` and `ranktest`, `Estimate.contrast`/`EstimateList.contrast`, and `SampleSize.estimate_prop`, `estimate_mean`, `compare_props` and `compare_means` (each value of a per-stratum mapping). The check runs before any work. `alpha=0` used to give infinite intervals, and a string or `None` failed deep inside.
 
+- **Printed estimates name the estimated variable.** Means, totals, medians and quantiles print a `y: <var>` line above `where:`, and ratios print `y / x: <y> / <x>`. With labels on, the variable label replaces the name. Proportions and `as_factor` means are unchanged, since their level column is already headed by the variable. An `EstimateList` puts what its members share in the same lines, replacing the `: <var>` title suffix, and a `y` or `x` column for what varies; those columns follow `use_labels` too. The plain-text printer of an `EstimateList` now shows `where:`, as the rich one did.
+
 ### Fixed
 
 - **A zip holding no readable file was reported as missing.** `read_sas` on a `.zip` with no `.sas7bdat`, `.xpt`, `.xport` or `.ssp` member raised `FILE_NOT_FOUND` ("No file at x.zip") for an archive that exists. `read_sas`, `read_spss` and `read_stata` (and their `create_from_*`) now raise `ARCHIVE_MEMBER_NOT_FOUND`, whose detail lists the archive's files. Any other file a reader could not find while the data file exists is now named in the error instead of the data file.
 
 - **`ranktest(method=svy.RankScoreMethod.VANDER_WAERDEN)` raised `Unknown rank method`.** `RankScoreMethod` members are now accepted as they are, and `"vanderWaerden"` is accepted as a string.
+
+- **A printed ratio list with several denominators did not say which row was which.** `ratio("a", ["b", "c"])` printed rows with no `x` column; it has one now, as `to_polars()` already did.
 
 - **Nulls outside the `where=` domain raised.** Without `drop_nulls`, estimation required every analysis column to be complete on every row, so a null `y`, `by` label or domain flag on rows outside the domain (people without events after a full join, skip patterns) forced `drop_nulls=True`. As in R's `subset()`, a null in a column read only by `where=` now makes the row out-of-domain, and nulls in analysis columns on out-of-domain rows are ignored. Nulls inside the domain still raise, now saying so, and design columns must still be complete on every row. Out-of-domain rows keep contributing to the design, so estimates, SEs and df match R's `subset()`. Covers `mean`, `total`, `prop`, `ratio`, `quantile`, `median`, `corr`, `cov`, `ttest`, `ranktest` and `glm.fit(drop_nulls=False)`, Taylor and replication; `tabulate` already worked this way.
 

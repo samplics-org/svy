@@ -86,6 +86,7 @@ print(sample.estimation.mean("age", by="urbrur"))
 
 ```
 ╭──────────────── Estimate: MEAN (TAYLOR) ─────────────────╮
+│ y: age                                                   │
 │                                                          │
 │  urbrur       est       se       lci       uci   cv (%)  │
 │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
