@@ -2161,10 +2161,14 @@ class Estimation:
         # Every named column must survive preparation, so the first drives
         # `y` and the rest ride along as extras.
         named = list(dict.fromkeys([c for pair in pairs for c in pair]))
+        # The extras go through null_zero_cols so that, like y, a missing
+        # value zeroes the row's weight instead of dropping the row (and
+        # possibly its PSU) from the design.
         prep = prepare_data(
             self._sample,
             y=named[0],
             extra_cols=named[1:],
+            null_zero_cols=named[1:],
             by=by,
             where=where,
             drop_nulls=drop_nulls,
