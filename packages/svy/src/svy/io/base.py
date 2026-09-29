@@ -29,8 +29,8 @@ log = logging.getLogger(__name__)
 # ---------------- internal helpers: error wrapping ---------------- #
 
 _EXPECTED_EXTS = {
-    "spss": (".sav", ".zsav"),
-    "stata": (".dta",),
+    "spss": (".sav", ".zsav", ".por", ".zip"),
+    "stata": (".dta", ".zip"),
     "sas": (".sas7bdat", ".xpt", ".xport", ".ssp", ".zip"),
     "csv": (".csv", ".tsv", ".txt"),
     "parquet": (".parquet", ".pqt"),

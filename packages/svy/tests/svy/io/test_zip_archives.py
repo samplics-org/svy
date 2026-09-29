@@ -1,11 +1,11 @@
 """Reading from zip archives, and the errors when no member matches.
 
-Uses the real svy-io reader. Only read_sas extracts from a zip; read_spss and
-read_stata take the archive as their own format and fail to parse it.
+Uses the real svy-io readers, which extract the data file from a zip.
 """
 
 from __future__ import annotations
 
+import logging
 import zipfile
 
 import polars as pl
@@ -26,16 +26,24 @@ def zip_without_data(tmp_path):
     return path
 
 
-def test_read_sas_zip_without_member_names_the_members(zip_without_data):
+@pytest.mark.parametrize(
+    "reader, where, exts",
+    [
+        (svy.read_sas, "io.read_sas", ".sas7bdat"),
+        (svy.read_spss, "io.read_spss", ".sav/.zsav/.por"),
+        (svy.read_stata, "io.read_stata", ".dta"),
+    ],
+)
+def test_zip_without_member_names_the_members(reader, where, exts, zip_without_data):
     with pytest.raises(IoError) as exc:
-        svy.read_sas(zip_without_data)
+        reader(zip_without_data)
 
     err = exc.value
     assert err.code == "ARCHIVE_MEMBER_NOT_FOUND"
-    assert err.where == "io.read_sas"
+    assert err.where == where
     assert "readme.txt" in err.detail
     assert "codes.csv" in err.detail
-    assert ".sas7bdat" in err.detail
+    assert exts in err.detail
     assert err.extra["path"] == str(zip_without_data)
     assert err.hint
     assert isinstance(err.__cause__, FileNotFoundError)
@@ -61,12 +69,47 @@ def test_read_sas_zip_with_xpt_member_reads(tmp_path):
     assert df["perwt"].to_list() == [100.5, 200.0]
 
 
-@pytest.mark.parametrize("reader", [svy.read_spss, svy.read_stata])
-def test_spss_stata_zip_is_not_reported_missing(reader, zip_without_data):
-    with pytest.raises(IoError) as exc:
-        reader(zip_without_data)
+@pytest.fixture
+def frame():
+    return pl.DataFrame({"id": [1.0, 2.0, 3.0], "wgt": [0.5, 1.5, 1.0]})
 
-    assert exc.value.code not in {"FILE_NOT_FOUND", "ARCHIVE_MEMBER_NOT_FOUND"}
+
+def _zip_with(tmp_path, member):
+    path = tmp_path / f"{member.stem}.zip"
+    with zipfile.ZipFile(path, "w") as z:
+        z.write(member, member.name)
+        z.writestr("readme.txt", "notes")
+    return path
+
+
+def test_read_spss_zip_with_sav_member_reads(tmp_path, frame, caplog):
+    sav = tmp_path / "survey.sav"
+    svy_io.write_sav(frame, sav, var_labels={"wgt": "Final weight"})
+    path = _zip_with(tmp_path, sav)
+
+    with caplog.at_level(logging.WARNING, logger="svy.io.base"):
+        df = svy.read_spss(path, columns=["wgt"])
+    sample = svy.create_from_spss(path)
+
+    assert df.columns == ["wgt"]
+    assert df["wgt"].to_list() == [0.5, 1.5, 1.0]
+    assert sample.data["id"].to_list() == [1.0, 2.0, 3.0]
+    assert sample.meta.get("wgt").label == "Final weight"
+    assert "may not match format" not in caplog.text
+
+
+def test_read_stata_zip_with_dta_member_reads(tmp_path, frame, caplog):
+    dta = tmp_path / "survey.dta"
+    svy_io.write_dta(frame, dta, var_labels={"wgt": "Final weight"})
+    path = _zip_with(tmp_path, dta)
+
+    with caplog.at_level(logging.WARNING, logger="svy.io.base"):
+        df = svy.read_stata(path)
+    sample = svy.create_from_stata(path)
+
+    assert df["wgt"].to_list() == [0.5, 1.5, 1.0]
+    assert sample.meta.get("wgt").label == "Final weight"
+    assert "may not match format" not in caplog.text
 
 
 @pytest.mark.parametrize("reader", [svy.read_sas, svy.read_spss, svy.read_stata])

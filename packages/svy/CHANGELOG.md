@@ -8,6 +8,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **`read_spss` and `read_stata` read zip archives**, like `read_sas`: the first `.sav`, `.zsav` or `.por` member, or the first `.dta` member, is read, labels included. Needs svy-io with zip support for SPSS and Stata (see its changelog).
+
 - **`read_xpt`, `read_xpt_with_labels`, `create_from_xpt` and `write_xpt`**, aliases of the SAS functions: `read_sas` reads SAS Transport, and `write_sas` writes it. With svy-io's content-based dispatch, `read_sas` reads transport files under any name (e.g. `.ssp`) and refuses SAS CPORT files with a hint on converting them.
 
 - **`n` on every estimate row.** `ParamEst.n`, `TtestEst.n` and a table's `CellEst.n` give the records behind the row: those in its domain (`where=`, `by=` level, t-test group, or the table) with a nonzero weight and the estimate's variables present. It is the count proportion CIs already use, for Taylor and replication alike; a proportion's category rows carry the domain's count, each group of a two-group t-test its own, and every cell of a table the table's count. A GLM fit's `stats.n` already followed the same rule. `to_polars()` has an `n` column (the printed table does not). Saved results carry it: schema `svy-result/0.5` adds `ParamEstData.n`, `TtestEstData.n` and `CellEstData.n`, `None` when read from an older payload. With `deff="wr"`, `n / deff` is the effective sample size.
@@ -92,7 +94,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
-- **A zip holding no readable file was reported as missing.** `read_sas` and `create_from_sas` on a `.zip` with no `.sas7bdat`, `.xpt`, `.xport` or `.ssp` member raised `FILE_NOT_FOUND` ("No file at x.zip") for an archive that exists. They now raise `ARCHIVE_MEMBER_NOT_FOUND`, whose detail lists the archive's files. Any other file a reader could not find while the data file exists is now named in the error instead of the data file.
+- **A zip holding no readable file was reported as missing.** `read_sas` on a `.zip` with no `.sas7bdat`, `.xpt`, `.xport` or `.ssp` member raised `FILE_NOT_FOUND` ("No file at x.zip") for an archive that exists. `read_sas`, `read_spss` and `read_stata` (and their `create_from_*`) now raise `ARCHIVE_MEMBER_NOT_FOUND`, whose detail lists the archive's files. Any other file a reader could not find while the data file exists is now named in the error instead of the data file.
 
 - **Int8, Int16, UInt8 and UInt16 columns crashed the estimators.** A stratum, PSU, `pop_size`, `by`, `where` or t-test `group` column of one of these dtypes (a Stata byte read with svy-io, or a `.cast(pl.Int8)` indicator) made every estimator fail with `cannot create series from Int8`, Taylor and replication alike. The response was not affected. Needs svy-rs with small-integer dtype support (see its changelog).
 
