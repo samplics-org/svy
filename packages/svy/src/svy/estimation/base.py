@@ -2267,7 +2267,6 @@ class Estimation:
         _guard_pandas_method(method)
         _normalize_assoc_kind(kind)
         deff_ref = self._normalize_deff(deff)
-        deff_ref = self._normalize_deff(deff)
         return self._assoc(
             PopParam.CORR,
             cols,
