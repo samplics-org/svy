@@ -14,6 +14,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ### Fixed
 
+- polars is built with `dtype-i8`, `dtype-i16`, `dtype-u8` and `dtype-u16`. Without them pyo3-polars rejected any frame holding an Int8/Int16/UInt8/UInt16 column (`cannot create series from Int8`), even one the kernel does not read.
+
 - Taylor mean, ratio and proportion kernels (ungrouped, grouped and batched) no longer fail on a domain with a zero denominator (no weight, or a ratio's weighted x summing to zero): that row is NaN (est, se, var, deff) and its covariance row and column are NaN, as on the replicate path.
 
 - `tabulate_rs`'s `n` counts the rows in the domain with a nonzero weight (`active_count`). It used to include zero-weight rows. The Rao–Scott statistics are unchanged.
