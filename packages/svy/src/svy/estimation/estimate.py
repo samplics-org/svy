@@ -257,6 +257,25 @@ def stack_estimate_frames(members: Sequence[tuple[str, str | None, pl.DataFrame]
     return pl.concat(out, how="diagonal_relaxed")
 
 
+def _header_plain(lines: Sequence[tuple[str, str]]) -> list[str]:
+    return [f"  {key}: {value}" for key, value in lines]
+
+
+def _header_rich(lines: Sequence[tuple[str, str]]) -> list[Any]:
+    """The header lines as dim-keyed rich Text, then a spacer; nothing when empty."""
+    from rich.text import Text
+
+    out: list[Any] = []
+    for key, value in lines:
+        text = Text()
+        text.append(f"{key}: ", style="dim")
+        text.append(value)
+        out.append(text)
+    if out:
+        out.append(Text(""))
+    return out
+
+
 def _display_level(value: Any) -> str:
     """A level as printed: bools lowercase, as polars prints them."""
     if isinstance(value, bool):
@@ -627,6 +646,31 @@ class Estimate:
         resolve = use_labels if use_labels is not None else self._resolve_use_labels()
         return self._get_var_label(self.estimates[0].y, use_labels=resolve)
 
+    def _estimand_line(self, *, use_labels: bool | None = None) -> tuple[str, str] | None:
+        """The header line naming the estimated variable, or None when the table does.
+
+        Proportions (and ``as_factor`` means) head their level column with the
+        variable. Correlations and covariances vary their pair by row.
+        """
+        if not self.estimates or self.as_factor:
+            return None
+        if self.param in (PopParam.PROP, PopParam.CORR, PopParam.COV):
+            return None
+        p = self.estimates[0]
+        y = self._get_var_label(p.y, use_labels=use_labels)
+        if self.param == PopParam.RATIO and p.x is not None:
+            return "y / x", f"{y} / {self._get_var_label(p.x, use_labels=use_labels)}"
+        return "y", y
+
+    def _header_lines(self) -> list[tuple[str, str]]:
+        lines = []
+        estimand = self._estimand_line()
+        if estimand is not None:
+            lines.append(estimand)
+        if self.where_clause:
+            lines.append(("where", self.where_clause))
+        return lines
+
     # --- Contrasts & covariance ---
 
     def _row_key(self, p: ParamEst) -> Any:
@@ -840,8 +884,7 @@ class Estimate:
             return f"Estimate: {self.param.name} ({self._context()}) — <no estimates>"
 
         lines = [f"Estimate: {self.param.name} ({self._context()})"]
-        if self.where_clause:
-            lines.append(f"  where: {self.where_clause}")
+        lines.extend(_header_plain(self._header_lines()))
         lines.append("")
 
         shown = _display_columns(df)
@@ -876,16 +919,7 @@ class Estimate:
             yield Text("<no estimates>", style="italic dim")
             return
 
-        # Build content list for the panel
-        content = []
-
-        # Add where clause as first item if present
-        if self.where_clause:
-            where_text = Text()
-            where_text.append("where: ", style="dim")
-            where_text.append(self.where_clause)
-            content.append(where_text)
-            content.append(Text(""))  # Empty line for spacing
+        content = _header_rich(self._header_lines())
 
         # TABLE CONFIGURATION
         table = Table(
@@ -1019,19 +1053,21 @@ class EstimateList(list):
         )
 
     def _combined(self, *, use_labels: bool | None = None) -> pl.DataFrame:
-        """The printable frame, with a ``y`` column added when variables differ.
+        """The printable frame, with ``y`` and ``x`` columns added when they differ.
 
         ``prob`` already arrives as a column on quantile members, so only the
-        variable needs re-attaching: a single-variable result keeps ``y`` out of
-        the table (it is in the title), while a multi-variable one needs it to
-        stay readable.
+        variables need re-attaching: one shared by every member stays out of
+        the table (it is in the header), while one that varies needs a column
+        to keep the rows readable.
         """
         members = self._members()
         if not members:
             return pl.DataFrame()
 
         ys = [m.estimates[0].y for m in members]
+        xs = [m.estimates[0].x for m in members]
         show_y = len(set(ys)) > 1
+        show_x = len(set(xs)) > 1
 
         # Each proportion names its level column after its own variable, so a
         # diagonal concat of several would union them into one sparse column
@@ -1052,15 +1088,21 @@ class EstimateList(list):
             level_name = next(n for n in ("level", "y_level", "category") if n not in taken)
 
         frames = []
-        for m, y in zip(members, ys):
+        for m, y, x in zip(members, ys, xs):
             f = m.to_polars_printable(use_labels=use_labels)
             if f.is_empty():
                 continue
             own = level_cols.get(id(m))
             if own and own in f.columns:
                 f = f.rename({own: level_name})
+            lead = []
             if show_y and "y" not in f.columns:
-                f = f.select(pl.lit(y).alias("y"), pl.all())
+                lead.append(pl.lit(m._get_var_label(y, use_labels=use_labels)).alias("y"))
+            if show_x and "x" not in f.columns:
+                x_shown = None if x is None else m._get_var_label(x, use_labels=use_labels)
+                lead.append(pl.lit(x_shown, dtype=pl.String).alias("x"))
+            if lead:
+                f = f.select(*lead, pl.all())
             frames.append(f)
 
         if not frames:
@@ -1082,9 +1124,30 @@ class EstimateList(list):
         }
         if q_methods:
             method += f", q_method={q_methods.pop() if len(q_methods) == 1 else 'mixed'}"
+        return f"Estimate: [bold]{param}[/bold] ({method})"
+
+    def _header_lines(self) -> list[tuple[str, str]]:
+        """What every member shares, which ``_combined`` keeps out of the table."""
+        members = self._members()
+        if not members:
+            return []
+        first = members[0]
         ys = {m.estimates[0].y for m in members}
-        suffix = f": {next(iter(ys))}" if len(ys) == 1 else ""
-        return f"Estimate: [bold]{param}[/bold] ({method}){suffix}"
+        xs = {m.estimates[0].x for m in members}
+        estimand = None
+        if len(ys) == 1 and len(xs) == 1:
+            own = {m._estimand_line() for m in members}
+            estimand = own.pop() if len(own) == 1 else ("y", first._get_var_label(ys.pop()))
+        elif len(ys) == 1:
+            estimand = ("y", first._get_var_label(ys.pop()))
+        elif len(xs) == 1 and None not in xs:
+            estimand = ("x", first._get_var_label(xs.pop()))
+
+        lines = [estimand] if estimand is not None else []
+        wheres = {m.where_clause for m in members if m.where_clause}
+        if len(wheres) == 1:
+            lines.append(("where", wheres.pop()))
+        return lines
 
     def __plain_str__(self) -> str:
         """Plain-text fallback used when rich is not installed."""
@@ -1098,7 +1161,7 @@ class EstimateList(list):
 
         # Strip the rich markup the panel title carries.
         title = self._title().replace("[bold]", "").replace("[/bold]", "")
-        lines = [title, ""]
+        lines = [title, *_header_plain(self._header_lines()), ""]
         shown = _display_columns(df)
         headers = [f"{c} (%)" if c == "cv" else c for c in shown]
         fmt = members[0]._format_val
@@ -1148,14 +1211,7 @@ class EstimateList(list):
         for row in df.iter_rows(named=True):
             table.add_row(*[fmt(col, row[col]) for col in shown])
 
-        content: list = []
-        wheres = {m.where_clause for m in members if m.where_clause}
-        if len(wheres) == 1:
-            where_text = Text()
-            where_text.append("where: ", style="dim")
-            where_text.append(wheres.pop())
-            content.append(where_text)
-            content.append(Text(""))
+        content = _header_rich(self._header_lines())
         content.append(table)
 
         yield make_panel(content, title=self._title(), obj=self, kind="estimate")
