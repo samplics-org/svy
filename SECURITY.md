@@ -24,16 +24,16 @@ svy runs entirely on your machine. Your survey data is never sent anywhere.
 - **Builds.** Wheels are built from tagged commits by the GitHub Actions workflows in [`.github/workflows`](.github/workflows), with every action pinned to a commit hash.
 - **Publishing.** Releases are uploaded to PyPI through trusted publishing (OIDC), with no stored API tokens. `svy` and `svy-rs` releases carry PyPI [attestations](https://docs.pypi.org/attestations/) linking each file to the workflow run that built it.
 - **Updates.** Dependabot watches the Python, Rust and GitHub Actions dependencies and opens pull requests for security updates as they are published.
-- **Integrity of example datasets.** Downloads must use https, including after redirects, and are checked against a SHA-256 hash before use.
+- **Integrity of example datasets.** Downloads must use https, including after redirects. Each file is checked against the SHA-256 hash the catalog publishes; where it publishes none, the hash of the first download is pinned in the cache and every later download and cached read must match it.
 
 ## Platforms
 
 Prebuilt wheels, so no compiler or Rust toolchain is needed:
 
-| Platform | Architectures      | Minimum                                             |
-| -------- | ------------------ | --------------------------------------------------- |
-| Linux    | x86_64, aarch64    | glibc 2.28 (RHEL/Rocky/Alma 8, Debian 10, Ubuntu 20.04) |
-| macOS    | arm64, x86_64      | macOS 11 (arm64), 10.12 (x86_64)                    |
-| Windows  | x86_64             |                                                     |
+| Platform | Architectures   | Minimum                                                 |
+| -------- | --------------- | ------------------------------------------------------- |
+| Linux    | x86_64, aarch64 | glibc 2.28 (RHEL/Rocky/Alma 8, Debian 10, Ubuntu 20.04) |
+| macOS    | arm64, x86_64   | macOS 11 (arm64), 10.12 (x86_64)                        |
+| Windows  | x86_64          |                                                         |
 
 Python 3.11 or later; one wheel per platform covers every supported Python version. On other platforms (for example older Linux such as RHEL 7, or musl-based Alpine), pip builds from source, which needs Rust 1.91 or later and a C compiler. The test suite runs on Linux for Python 3.11 to 3.14.
