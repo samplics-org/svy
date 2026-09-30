@@ -321,6 +321,73 @@ def _pair_variance_strata(
     return into
 
 
+def _rule_units(
+    sample: Sample,
+    *,
+    where: str,
+    stratum: str | None,
+    psu: str | None,
+    paired: bool = False,
+) -> tuple[str, str] | None:
+    """The units the design's singleton rule gives replicates, or None to build
+    from the design's strata and PSUs.
+
+    Replicates cannot be built on a stratum with one PSU. ``collapse``,
+    ``pool`` and ``self_representing`` recode the strata/PSUs for the Taylor
+    variance, and the replicates are built from those same units. ``skip`` is
+    what the jackknife and the bootstrap do with such a stratum (it contributes
+    nothing), recorded as a finding. ``center`` and ``scale`` have no replicate
+    analogue, and a design without a rule has not said what to do: both raise,
+    except for the paired schemes (BRR, JK2), whose pairing already refuses a
+    lone PSU. Explicit ``stratum``/``psu`` are the caller's units, used as given.
+    """
+    from svy.core.constants import SVY_VAR_PSU, SVY_VAR_STRATUM
+    from svy.core.enumerations import SingletonMethod
+    from svy.core.warnings import Severity
+    from svy.errors.singleton_errors import SingletonError
+
+    design = sample._design
+    if stratum is not None or psu is not None or design.stratum is None:
+        return None
+    sample._sync_parts()
+    if not getattr(sample, "_singletons", None):
+        return None
+    rule = design.singleton
+    if rule is None or rule.method in (SingletonMethod.CENTER, SingletonMethod.SCALE):
+        if paired:
+            return None
+        from svy.core.singleton import _Engine
+
+        raise SingletonError.for_replicates(
+            _Engine(sample, _sync=False).detected(),
+            method=None if rule is None else rule.method.value,
+            where=where,
+        )
+    problem = sample.__dict__.get("_singleton_problem")
+    if problem is not None:
+        raise problem
+    if rule.method is SingletonMethod.SKIP:
+        if paired:
+            return None
+        sample.warn(
+            level=Severity.INFO,
+            code="SINGLETON_SKIPPED_IN_REPLICATES",
+            title="Singleton strata contribute nothing to the replicates",
+            detail=f"{len(sample._singletons or [])} singleton strata contribute nothing to "
+            "the replicate variance, as the design's rule Singleton('skip') declares.",
+            where=where,
+            param="singleton",
+        )
+        return None
+    return SVY_VAR_STRATUM, SVY_VAR_PSU
+
+
+def _recorded(col: str | tuple[str, ...] | None, from_rule: bool) -> str | tuple[str, ...] | None:
+    """A unit column recorded on the replicates: none for the rule's variance
+    units, which are svy's and not in the saved data."""
+    return None if from_rule else _as_recorded(col)
+
+
 def _resolve_build_units(
     sample: Sample,
     *,
@@ -429,6 +496,9 @@ def create_brr_wgts(
 
     if (psu if psu is not None else design.variance_psu) is None:
         raise WeightingError.psu_required(where=where, method="create_brr_wgts")
+    units = _rule_units(sample, where=where, stratum=stratum, psu=psu, paired=True)
+    if units is not None:
+        stratum, psu = units
 
     strat_col, psu_col = _resolve_build_units(
         sample,
@@ -489,7 +559,8 @@ def create_brr_wgts(
         [pl.Series(name=col, values=vals) for col, vals in rep_dicts.items()]
     )
 
-    _rec_stratum, _rec_psu = _as_recorded(strat_col), _as_recorded(psu_col)
+    _rec_stratum = _recorded(strat_col, units is not None and strat_col == units[0])
+    _rec_psu = _recorded(psu_col, units is not None)
     # `update`, not `fill_missing`: these columns were just written, so the
     # design has to describe *them*. fill_missing is a no-op once rep_wgts is
     # set, which left a second generator's columns in the frame under the first
@@ -540,6 +611,9 @@ def create_jk_wgts(
 
     if (psu if psu is not None else design.variance_psu) is None:
         raise WeightingError.psu_required(where=where, method="create_jk_wgts")
+    units = _rule_units(sample, where=where, stratum=stratum, psu=psu, paired=paired)
+    if units is not None:
+        stratum, psu = units
 
     # Only the paired scheme pairs. jk1 and jkn delete one PSU at a time and
     # want the strata exactly as given.
@@ -594,7 +668,8 @@ def create_jk_wgts(
     else:
         jk_kind = "jkn"
 
-    _rec_stratum, _rec_psu = _as_recorded(strat_col), _as_recorded(psu_col)
+    _rec_stratum = _recorded(strat_col, units is not None and strat_col == units[0])
+    _rec_psu = _recorded(psu_col, units is not None)
     # `update`, not `fill_missing` -- see the note in create_brr_wgts.
     sample._design = sample._design.update(
         rep_wgts=JackknifeWgts(
@@ -686,6 +761,13 @@ def create_bs_wgts(
             note="kind='poisson' needs no psu.",
         )
 
+    units = (
+        _rule_units(sample, where="Sample.weighting.create_bs_wgts", stratum=stratum, psu=psu)
+        if kind == "rao-wu"
+        else None
+    )
+    if units is not None:
+        stratum, psu = units
     strat_col, psu_col = _resolve_build_units(
         sample,
         where="Sample.weighting.create_bs_wgts",
@@ -693,6 +775,7 @@ def create_bs_wgts(
         stratum=stratum,
         psu=psu,
     )
+    df = sample._data  # refreshed: the rule's variance units are derived columns
 
     if drop_nulls:
         if kind == "poisson":
@@ -735,7 +818,8 @@ def create_bs_wgts(
         [pl.Series(name=col, values=vals) for col, vals in rep_dicts.items()]
     )
 
-    _rec_stratum, _rec_psu = _as_recorded(strat_col), _as_recorded(psu_col)
+    _rec_stratum = _recorded(strat_col, units is not None)
+    _rec_psu = _recorded(psu_col, units is not None)
     sample._design = sample._design.update(
         rep_wgts=BootstrapWgts(
             prefix=rep_prefix,

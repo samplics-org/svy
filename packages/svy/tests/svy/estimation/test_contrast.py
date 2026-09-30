@@ -27,6 +27,15 @@ from svy.core.repwgts import RepWeights
 from svy.errors import MethodError
 
 
+def _declare(sample, method, **kw):
+    """A fork of ``sample`` with the singleton rule declared on its design."""
+    from svy.core.design import Singleton as _Rule
+
+    new = sample._fork()
+    new.update_design(singleton=_Rule(method, **kw))
+    return new
+
+
 BASE_DIR = Path(__file__).parents[2]
 
 # Reference values were captured from R at full double precision
@@ -427,7 +436,7 @@ class TestSingletonInterplay:
             .alias("strat")
         )
         s = Sample(data, Design(stratum="strat", psu="dnum", wgt="pw"))
-        s = s.singleton.center()
+        s = _declare(s, "center")
         r = s.estimation.mean("api00", by="stype")
         # Sum-to-total identity: Var(sum of parts) from the covariance equals
         # itself — the matrix must at least be symmetric PSD-ish here.

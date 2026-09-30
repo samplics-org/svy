@@ -61,8 +61,8 @@ def test_from_singletons_ctor():
     d = err.detail
     assert "region=West (PSU=psu_7, n=1)" in d
     assert "region=East (PSU=psu_2, n=3)" in d
-    assert "sample.singleton.summary()" in d
-    assert "sample.singleton.collapse()" in d
+    assert "sample.singletons" in d
+    assert 'svy.Singleton("collapse")' in d
 
     # renderers
     s = err.text()

@@ -28,6 +28,11 @@ else:
     _SingletonSeq = Sequence[_SingletonInfoLike]  # structural at runtime
 
 
+def _value(v: Any) -> str:
+    """A stratum value as the column shows it: ``2002``, not ``2002.0``."""
+    return str(int(v)) if isinstance(v, float) and v.is_integer() else str(v)
+
+
 @dataclass(eq=False)
 class SingletonError(SvyError):
     def __post_init__(self) -> None:
@@ -47,7 +52,7 @@ class SingletonError(SvyError):
         for i, s in enumerate(singletons[:5], 1):
             if getattr(s, "stratum_values", None):
                 sv = s.stratum_values
-                stratum_desc = ", ".join(f"{k}={v}" for k, v in sv.items())
+                stratum_desc = ", ".join(f"{k}={_value(v)}" for k, v in sv.items())
             else:
                 stratum_desc = getattr(s, "stratum_key", "<unknown>")
             psu_key = getattr(s, "psu_key", "<unknown>")
@@ -59,15 +64,14 @@ class SingletonError(SvyError):
 
         lines.append("")
         lines.append("Variance cannot be estimated with unhandled singleton PSUs.")
-        lines.append("Inspect them with sample.singleton.summary(), then pick a strategy:")
+        lines.append("Inspect them with sample.singletons, then declare a rule:")
         lines.append("")
-        lines.append("  • sample.singleton.certainty()  — treat as self-representing units")
-        lines.append("  • sample.singleton.skip()       — drop from variance (R 'remove')")
-        lines.append("  • sample.singleton.center()     — grand-mean centering (R 'adjust')")
-        lines.append("  • sample.singleton.scale()      — variance inflation (R 'average')")
-        lines.append("  • sample.singleton.collapse()   — merge into nearby strata")
-        lines.append("  • sample.singleton.pool()       — pool singletons into one stratum")
-        lines.append("  • sample.singleton.combine(map) — manual stratum/PSU remapping")
+        lines.append('  • svy.Singleton("center")     — grand-mean centering (R "adjust")')
+        lines.append('  • svy.Singleton("scale")      — variance scaled up (R "average")')
+        lines.append('  • svy.Singleton("skip")       — contribute nothing (R "remove")')
+        lines.append('  • svy.Singleton("collapse")   — merge into another stratum')
+        lines.append('  • svy.Singleton("pool")       — pool the singletons into one stratum')
+        lines.append('  • svy.Singleton("self_representing") — the PSU becomes a stratum')
 
         # Convert to plain Python types; works for msgspec.Struct, dataclasses, dicts, etc.
         payload = [msgspec.to_builtins(s) for s in singletons]
@@ -77,43 +81,111 @@ class SingletonError(SvyError):
             detail="\n".join(lines),
             code="SINGLETON_ERROR",
             where=where,
+            hint='sample.update_design(singleton=svy.Singleton("center")), or '
+            'svy.Design(..., singleton="center") when building the sample.',
             extra={"singletons": payload},
         )
+
+    @classmethod
+    def for_replicates(
+        cls,
+        singletons: _SingletonSeq,
+        *,
+        method: str | None,
+        where: str,
+    ) -> "SingletonError":
+        """Replicates asked of a design with singleton strata and no rule that
+        says how to build them."""
+        err = cls.from_singletons(singletons, where=where)
+        n = len(singletons)
+        why = (
+            "the design declares no singleton rule"
+            if method is None
+            else f"Singleton({method!r}) adjusts the Taylor variance and has no replicate analogue"
+        )
+        err.title = f"Replicates cannot be built on {n} singleton stratum(s)"
+        err.detail = (
+            f"{n} strata have one PSU and {why}. Declare how the replicates see them:\n\n"
+            '  • svy.Singleton("collapse")  — merged into another stratum (Taylor too)\n'
+            '  • svy.Singleton("pool")      — pooled into one stratum\n'
+            '  • svy.Singleton("self_representing") — the PSU becomes a stratum\n'
+            '  • svy.Singleton("skip")      — contribute nothing (R "remove")'
+        )
+        err.code = "SINGLETON_REPLICATES"
+        err.hint = 'sample.update_design(singleton=svy.Singleton("collapse")), then create the replicates.'
+        return err
 
     @classmethod
     def from_domain_singletons(
         cls,
         pairs: Sequence[str],
         *,
-        n_strata: int,
-        n_domains: int,
+        by_domains: bool,
         method: str | None,
+        applied: bool,
         where: str = "estimation",
     ) -> "SingletonError":
         """Strata with several PSUs but one inside an estimation domain, under
-        ``domains="error"``. ``pairs`` are "domain: stratum" labels."""
-        strata = "1 stratum has" if n_strata == 1 else f"{n_strata} strata have"
-        domains = "1 estimation domain" if n_domains == 1 else f"{n_domains} estimation domains"
-        lines = [f"{strata} a single PSU within {domains}:"]
+        ``on_domain_singletons="error"``. ``pairs`` are "stratum in domain" labels."""
+        n = len(pairs)
+        if by_domains:
+            what = f"{n} domain × stratum {'pair has' if n == 1 else 'pairs have'}"
+        else:
+            what = f"{n} {'stratum has' if n == 1 else 'strata have'}"
+        lines = [f"{what} one PSU in the domain:"]
         lines += [f"  {i}. {p}" for i, p in enumerate(pairs[:5], 1)]
-        if len(pairs) > 5:
-            lines.append(f"  ... and {len(pairs) - 5} more")
-        rule = method if method in ("center", "scale") else "center"
+        if n > 5:
+            lines.append(f"  ... and {n - 5} more")
+        m = getattr(method, "value", method)
+        rule = m if m in ("center", "scale") else "center"
+        how = 'domains="apply"' if applied else 'domains="standard"'
         lines += [
             "",
-            'The singleton rule was set with domains="error". Pick how to handle them:',
+            f'The singleton rule was declared with {how} and on_domain_singletons="error".',
+            "Declare how to report them instead:",
             "",
-            f'  • sample.singleton.{rule}(domains="apply")  — treat them as singletons '
+            f'  • svy.Singleton("{rule}", domains="apply")  — treat them as singletons '
             "(R survey.adjust.domain.lonely = TRUE)",
-            f'  • sample.singleton.{method or "center"}(domains="warn")   — standard domain '
-            "variance, with a note",
-            f'  • sample.singleton.{method or "center"}(domains="ignore") — standard domain '
-            "variance (R default)",
+            f'  • svy.Singleton("{m or "center"}", on_domain_singletons="warn")   — note '
+            "under the result",
+            f'  • svy.Singleton("{m or "center"}")   — recorded only (R default)',
         ]
         return cls(
             title="Strata with a single PSU in a domain",
             detail="\n".join(lines),
             code="DOMAIN_SINGLETON",
             where=where,
+            param="on_domain_singletons",
+            hint="sample.domain_singletons(by=..., where=...) lists them.",
             extra={"pairs": list(pairs)},
+        )
+
+
+@dataclass(eq=False)
+class SingletonAPIRemoved(SingletonError, AttributeError):
+    """``sample.singleton`` was removed: the rule is declared on the design.
+
+    Also an ``AttributeError``, so ``hasattr(sample, "singleton")`` is False.
+    """
+
+    @classmethod
+    def accessor(cls) -> "SingletonAPIRemoved":
+        return cls(
+            title="sample.singleton was removed",
+            detail=(
+                "Singleton handling is part of the design. Declare the rule there:\n"
+                '  svy.Design(..., singleton="center")  # or "scale", "skip", '
+                '"self_representing", "collapse", "pool"\n'
+                '  sample.update_design(singleton=svy.Singleton("collapse", '
+                "using={singleton: target}))\n"
+                "\n"
+                "Inspect the singletons with sample.singletons, sample.n_singletons and\n"
+                "sample.domain_singletons(by=..., where=...); read the rule with\n"
+                "sample.design.singleton. To merge PSUs themselves, recode the PSU column:\n"
+                "  sample.wrangling.recode(psu_column, {new: [old, ...]}, replace=True)"
+            ),
+            code="SINGLETON_API_REMOVED",
+            where="Sample.singleton",
+            hint='sample.singleton.center() is now svy.Design(..., singleton="center"); '
+            'certainty() is "self_representing".',
         )

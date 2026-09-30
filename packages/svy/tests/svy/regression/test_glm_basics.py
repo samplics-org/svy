@@ -9,6 +9,15 @@ from svy.core.terms import Cat, Cross  # New import
 from svy.regression.glm import GLMFit
 
 
+def _declare(sample, method, **kw):
+    """A fork of ``sample`` with the singleton rule declared on its design."""
+    from svy.core.design import Singleton as _Rule
+
+    new = sample._fork()
+    new.update_design(singleton=_Rule(method, **kw))
+    return new
+
+
 @pytest.fixture
 def survey_data():
     """
@@ -157,7 +166,7 @@ def test_glm_design_handling(survey_data):
     df_aug = pl.concat([df, extra_row])
 
     design = Design(stratum="stratum", psu="psu", wgt="wgt", case_id="id")
-    sample = Sample(df_aug, design).singleton.skip()
+    sample = _declare(Sample(df_aug, design), "skip")
 
     # Fit simple model
     model = sample.glm.fit(y="y", x=["x"], family="gaussian")

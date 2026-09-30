@@ -17,6 +17,21 @@ from svy.core.design import RepWeights
 from svy.errors import MethodError
 
 
+def _result(sample):
+    """What the design's singleton rule did to the current data (internal)."""
+    sample._sync_parts()
+    return sample._singleton_result
+
+
+def _declare(sample, method, **kw):
+    """A fork of ``sample`` with the singleton rule declared on its design."""
+    from svy.core.design import Singleton as _Rule
+
+    new = sample._fork()
+    new.update_design(singleton=_Rule(method, **kw))
+    return new
+
+
 @pytest.fixture
 def rep_sample():
     """
@@ -111,7 +126,7 @@ def test_keep_columns_force_drops_rep_design(rep_sample):
 
 
 def test_singleton_handling_with_rep_weights(rep_sample):
-    assert rep_sample.singleton.exists
-    pooled = rep_sample.singleton.pool()
+    assert rep_sample.n_singletons > 0
+    pooled = _declare(rep_sample, "pool")
     assert pooled.design.rep_wgts is not None
-    assert pooled.singleton.last_result is not None
+    assert _result(pooled) is not None

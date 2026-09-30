@@ -3,7 +3,7 @@
 
 from svy.core.containers import ChiSquare, FDist
 from svy.core.describe import DescribeResult
-from svy.core.design import Design, PopSize, RepWeights, SingletonSpec, WgtAdjustment
+from svy.core.design import Design, PopSize, RepWeights, Singleton, WgtAdjustment
 from svy.core.enumerations import (
     CaseStyle,
     DistFamily,
@@ -15,7 +15,7 @@ from svy.core.enumerations import (
     PPSMethod,
     QuantileMethod,
     RankScoreMethod,
-    SingletonHandling,
+    SingletonMethod,
     TableType,
     TableUnits,
 )
@@ -43,10 +43,7 @@ from svy.core.repwgts import (
 )
 from svy.core.sample import Sample
 from svy.core.singleton import (
-    Singleton,
     SingletonInfo,
-    SingletonResult,
-    SingletonSummary,
     StratumInfo,
 )
 from svy.core.terms import RE, Cap, Cat, Cross, Feature, Threshold
@@ -64,7 +61,7 @@ __all__ = [
     "PopParam",
     "PPSMethod",
     "QuantileMethod",
-    "SingletonHandling",
+    "SingletonMethod",
     "RankScoreMethod",
     "TableType",
     "TableUnits",
@@ -79,7 +76,6 @@ __all__ = [
     "Number",
     "PopSize",
     "WgtAdjustment",
-    "SingletonSpec",
     "BootstrapWgts",
     "BrrWgts",
     "JackknifeWgts",
@@ -91,8 +87,6 @@ __all__ = [
     "combine_samples",
     "Singleton",
     "SingletonInfo",
-    "SingletonResult",
-    "SingletonSummary",
     "StratumInfo",
     # Expressions
     "Expr",

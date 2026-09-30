@@ -13,6 +13,19 @@ from svy.core.design import Design
 from svy.core.sample import Sample
 
 
+def _detected(sample):
+    """The singleton strata of the current data (internal)."""
+    from svy.core.singleton import _Engine
+
+    sample._sync_parts()
+    return _Engine(sample, _sync=False).detected()
+
+
+def _keys(sample):
+    """svy's keys of the singleton strata of the current data (internal)."""
+    return [s.stratum_key for s in _detected(sample)]
+
+
 class TestSingletonDetectionBasic:
     """Basic singleton detection tests."""
 
@@ -28,8 +41,8 @@ class TestSingletonDetectionBasic:
         design = Design(stratum="stratum", psu="psu")
         sample = Sample(data=data, design=design)
 
-        assert not sample.singleton.exists
-        assert sample.singleton.count == 0
+        assert not (sample.n_singletons > 0)
+        assert sample.n_singletons == 0
 
     def test_singleton_psu_in_one_stratum(self):
         """Test detection of singleton PSU in one stratum."""
@@ -43,9 +56,9 @@ class TestSingletonDetectionBasic:
         design = Design(stratum="stratum", psu="psu")
         sample = Sample(data=data, design=design)
 
-        assert sample.singleton.exists
-        assert sample.singleton.count == 1
-        assert "B" in str(sample.singleton.keys())
+        assert sample.n_singletons > 0
+        assert sample.n_singletons == 1
+        assert "B" in str(_keys(sample))
 
     def test_multiple_singleton_strata(self):
         """Test detection of multiple strata with singleton PSUs."""
@@ -59,8 +72,8 @@ class TestSingletonDetectionBasic:
         design = Design(stratum="stratum", psu="psu")
         sample = Sample(data=data, design=design)
 
-        assert sample.singleton.exists
-        assert sample.singleton.count == 3
+        assert sample.n_singletons > 0
+        assert sample.n_singletons == 3
 
     def test_mixed_singleton_and_non_singleton_strata(self):
         """Test realistic scenario with mix of singleton and non-singleton strata."""
@@ -74,8 +87,8 @@ class TestSingletonDetectionBasic:
         design = Design(stratum="stratum", psu="psu")
         sample = Sample(data=data, design=design)
 
-        assert sample.singleton.exists
-        assert sample.singleton.count == 1
+        assert sample.n_singletons > 0
+        assert sample.n_singletons == 1
 
 
 class TestSingletonDetectionColumnSpecs:
@@ -93,7 +106,7 @@ class TestSingletonDetectionColumnSpecs:
         design = Design(stratum="strat_col", psu="psu_col")
         sample = Sample(data=data, design=design)
 
-        assert not sample.singleton.exists
+        assert not (sample.n_singletons > 0)
 
     def test_list_stratum_and_psu(self):
         """Test that list column names work correctly."""
@@ -108,7 +121,7 @@ class TestSingletonDetectionColumnSpecs:
         design = Design(stratum=["strat1", "strat2"], psu=["psu"])
         sample = Sample(data=data, design=design)
 
-        assert not sample.singleton.exists
+        assert not (sample.n_singletons > 0)
 
     def test_list_stratum_with_singleton(self):
         """Test list column names with actual singleton detection."""
@@ -123,8 +136,8 @@ class TestSingletonDetectionColumnSpecs:
         design = Design(stratum=["region", "district"], psu=["psu"])
         sample = Sample(data=data, design=design)
 
-        assert sample.singleton.exists
-        assert sample.singleton.count == 3
+        assert sample.n_singletons > 0
+        assert sample.n_singletons == 3
 
     def test_tuple_stratum_and_psu(self):
         """Test that tuple column names are handled correctly."""
@@ -140,7 +153,7 @@ class TestSingletonDetectionColumnSpecs:
         sample = Sample(data=data, design=design)
 
         assert sample is not None
-        assert sample.singleton.count == 2  # Both strata are singletons
+        assert sample.n_singletons == 2  # Both strata are singletons
 
 
 class TestSingletonDetectionPartialDesign:
@@ -179,8 +192,8 @@ class TestSingletonDetectionPartialDesign:
         data = pl.DataFrame({"value": [10, 20, 30, 40]})
         sample = Sample(data=data, design=None)
 
-        assert not sample.singleton.exists
-        assert sample.singleton.count == 0
+        assert not (sample.n_singletons > 0)
+        assert sample.n_singletons == 0
 
 
 class TestSingletonDetectionEdgeCases:
@@ -193,7 +206,7 @@ class TestSingletonDetectionEdgeCases:
         sample = Sample(data=data, design=design)
 
         assert sample is not None
-        assert not sample.singleton.exists
+        assert not (sample.n_singletons > 0)
 
     def test_null_values_in_stratum_or_psu(self):
         """Test handling of null values in stratum or PSU columns."""
@@ -221,8 +234,8 @@ class TestSingletonDetectionEdgeCases:
         design = Design(stratum="stratum", psu="psu")
         sample = Sample(data=data, design=design)
 
-        assert sample.singleton.exists
-        assert sample.singleton.count == 3
+        assert sample.n_singletons > 0
+        assert sample.n_singletons == 3
 
 
 class TestSingletonConcept:
@@ -243,7 +256,7 @@ class TestSingletonConcept:
         design = Design(stratum="stratum", psu="psu")
         sample = Sample(data=data, design=design)
 
-        assert not sample.singleton.exists
+        assert not (sample.n_singletons > 0)
 
     def test_singleton_is_stratum_with_one_psu(self):
         """A singleton is when a stratum has only one PSU."""
@@ -257,7 +270,7 @@ class TestSingletonConcept:
         )
         design1 = Design(stratum="stratum", psu="psu")
         sample1 = Sample(data=data_not_singleton, design=design1)
-        assert not sample1.singleton.exists
+        assert not (sample1.n_singletons > 0)
 
         # IS a singleton (stratum has only one PSU)
         data_singleton = pl.DataFrame(
@@ -269,8 +282,8 @@ class TestSingletonConcept:
         )
         design2 = Design(stratum="stratum", psu="psu")
         sample2 = Sample(data=data_singleton, design=design2)
-        assert sample2.singleton.exists
-        assert sample2.singleton.count == 1
+        assert sample2.n_singletons > 0
+        assert sample2.n_singletons == 1
 
 
 class TestSingletonDetectionPerformance:
@@ -297,7 +310,7 @@ class TestSingletonDetectionPerformance:
         design = Design(stratum="stratum", psu="psu")
         sample = Sample(data=data, design=design)
 
-        assert not sample.singleton.exists
+        assert not (sample.n_singletons > 0)
 
 
 class TestSingletonDetectionRegressions:
@@ -319,7 +332,7 @@ class TestSingletonDetectionRegressions:
         sample = Sample(data=data, design=design)
 
         assert sample is not None
-        assert not sample.singleton.exists
+        assert not (sample.n_singletons > 0)
 
     def test_string_concat_bug_would_have_failed(self):
         """Test the exact scenario where the old buggy code would have failed."""

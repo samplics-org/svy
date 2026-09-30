@@ -1,38 +1,62 @@
-# tests/test_singleton_facet.py
+# tests/svy/core/test_singleton_engine.py
+"""The engine that applies the declared singleton rule (``svy.Singleton``).
+
+Detection of singleton strata, and what each method does to the variance
+columns: self_representing, skip, scale, center, collapse (every strategy,
+within, ties, rebalancing) and pool. The original stratum and PSU columns are
+never modified; the rule writes svy's internal variance columns.
 """
-Comprehensive tests for the Singleton facet API.
-
-Covers:
-- Quick checks: exists, count
-- Inspection: detected(), show(), keys(), summary()
-- Diagnostic helpers: strata_profile(), candidates_for(), compare(), rank_strata(), suggest_mapping()
-- Handling methods: raise_error(), certainty(), skip(), combine(), collapse(), pool()
-- Result access: last_result
-
-Note: The singleton handling methods (certainty, skip, collapse, pool) create internal
-variance columns for variance estimation WITHOUT modifying the original stratum/PSU columns.
-This means `singleton.exists` will still return True after handling - the tests verify
-that the internal columns are correctly configured instead.
-"""
-
-import copy
 
 import polars as pl
 import pytest
 
 from svy.core.constants import SVY_ROW_INDEX, key_col
-from svy.core.enumerations import SingletonHandling
+from svy.core.enumerations import SingletonMethod
 from svy.core.singleton import (
     _VAR_EXCLUDE_COL,
     _VAR_IS_SINGLETON_COL,
     _VAR_PSU_COL,
     _VAR_STRATUM_COL,
-    Singleton,
     SingletonInfo,
     SingletonResult,
-    SingletonSummary,
 )
 from svy.errors.singleton_errors import SingletonError
+
+
+def _result(sample):
+    """What the design's singleton rule did to the current data (internal)."""
+    sample._sync_parts()
+    return sample._singleton_result
+
+
+def _detected(sample):
+    """The singleton strata of the current data (internal)."""
+    from svy.core.singleton import _Engine
+
+    sample._sync_parts()
+    return _Engine(sample, _sync=False).detected()
+
+
+def _keys(sample):
+    """svy's keys of the singleton strata of the current data (internal)."""
+    return [s.stratum_key for s in _detected(sample)]
+
+
+def _declare(sample, method, **kw):
+    """A fork of ``sample`` with the singleton rule declared on its design."""
+    from svy.core.design import Singleton as _Rule
+
+    new = sample._fork()
+    new.update_design(singleton=_Rule(method, **kw))
+    return new
+
+
+def _resolve(sample):
+    """What every Taylor analysis runs first: raises when the declared rule
+    cannot be applied to the data."""
+    from svy.core.singleton import require_singleton_rule
+
+    require_singleton_rule(sample, where="test")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -58,48 +82,21 @@ class DesignStub:
         self.wgt = wgt
 
 
-class SampleStub:
-    """
-    Minimal sample stub for testing the Singleton facet.
+def SampleStub(  # noqa: N802 (the name of the stub this replaced)
+    df: pl.DataFrame,
+    design: DesignStub,
+    *,
+    stratum_internal: str | None = None,
+    psu_internal: str | None = None,
+):
+    """A real Sample on the frame and design (svy's own key columns dropped):
+    the rule lives on a design, which a stub does not have."""
+    import svy
 
-    The singleton facet relies on:
-      - _data (pl.DataFrame)
-      - _design (has .case_id, .stratum, .psu, .wgt)
-      - _internal_design dict with "stratum" and "psu"
-      - clone(data=..., design=...) -> new Sample-like
-    """
-
-    __slots__ = ("_data", "_design", "_internal_design", "_singleton_result")
-
-    def __init__(
-        self,
-        df: pl.DataFrame,
-        design: DesignStub,
-        *,
-        stratum_internal: str | None,
-        psu_internal: str,
-    ):
-        self._data = df
-        self._design = design
-        self._internal_design = {
-            "stratum": stratum_internal,
-            "psu": psu_internal,
-            "ssu": None,
-        }
-        self._singleton_result = None
-
-    def clone(self, *, data: pl.DataFrame | None = None, design: DesignStub | None = None):
-        new = SampleStub(
-            df=data if data is not None else self._data.clone(),
-            design=copy.deepcopy(design if design is not None else self._design),
-            stratum_internal=self._internal_design["stratum"],
-            psu_internal=self._internal_design["psu"],
-        )
-        return new
-
-    @property
-    def singleton(self):
-        return Singleton(self)
+    keys = [c for c in (SVY_ROW_INDEX, key_col("stratum"), key_col("psu")) if c in df.columns]
+    return svy.Sample(
+        df.drop(keys), svy.Design(stratum=design.stratum, psu=design.psu, wgt=design.wgt)
+    )
 
 
 @pytest.fixture
@@ -219,7 +216,7 @@ def get_effective_singletons(sample) -> int:
     for variance estimation purposes.
     """
     if not has_variance_columns(sample):
-        return sample.singleton.count
+        return sample.n_singletons
 
     df = sample._data
 
@@ -255,16 +252,16 @@ class TestQuickChecks:
     """Tests for exists and count properties."""
 
     def test_exists_true_when_singletons_present(self, sample):
-        assert sample.singleton.exists is True
+        assert (sample.n_singletons > 0) is True
 
     def test_exists_false_when_no_singletons(self, sample_no_singletons):
-        assert sample_no_singletons.singleton.exists is False
+        assert (sample_no_singletons.n_singletons > 0) is False
 
     def test_count_returns_correct_number(self, sample):
-        assert sample.singleton.count == 2
+        assert sample.n_singletons == 2
 
     def test_count_zero_when_no_singletons(self, sample_no_singletons):
-        assert sample_no_singletons.singleton.count == 0
+        assert sample_no_singletons.n_singletons == 0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -276,18 +273,13 @@ class TestInspection:
     """Tests for inspection methods."""
 
     def test_detected_returns_singleton_info_list(self, sample):
-        singles = sample.singleton.detected()
+        singles = _detected(sample)
         assert isinstance(singles, list)
         assert len(singles) == 2
         assert all(isinstance(s, SingletonInfo) for s in singles)
 
-    def test_detected_contains_correct_keys(self, sample):
-        singles = sample.singleton.detected()
-        keys = sorted(s.stratum_key for s in singles)
-        assert keys == sorted(["North__by__A", "South__by__X"])
-
     def test_detected_info_has_correct_attributes(self, sample):
-        singles = sample.singleton.detected()
+        singles = _detected(sample)
         info = {s.stratum_key: s for s in singles}["North__by__A"]
 
         assert info.psu_key == "101"
@@ -295,57 +287,8 @@ class TestInspection:
         assert info.stratum_values == {"region": "North", "district": "A"}
 
     def test_detected_empty_when_no_singletons(self, sample_no_singletons):
-        singles = sample_no_singletons.singleton.detected()
+        singles = _detected(sample_no_singletons)
         assert singles == []
-
-    def test_show_returns_dataframe(self, sample):
-        df = sample.singleton.show()
-        assert isinstance(df, pl.DataFrame)
-        assert {"singleton_key", "n_obs", "psu"}.issubset(set(df.columns))
-        assert df.height == 2
-
-    def test_show_includes_stratum_values(self, sample):
-        df = sample.singleton.show()
-        assert "region" in df.columns
-        assert "district" in df.columns
-
-    def test_show_empty_dataframe_when_no_singletons(self, sample_no_singletons):
-        df = sample_no_singletons.singleton.show()
-        assert df.height == 0
-        assert "singleton_key" in df.columns
-
-    def test_keys_returns_stratum_keys(self, sample):
-        keys = sample.singleton.keys()
-        assert set(keys) == {"North__by__A", "South__by__X"}
-
-    def test_keys_empty_when_no_singletons(self, sample_no_singletons):
-        keys = sample_no_singletons.singleton.keys()
-        assert keys == []
-
-    def test_summary_returns_singleton_summary(self, sample):
-        summary = sample.singleton.summary()
-        assert isinstance(summary, SingletonSummary)
-
-    def test_summary_has_correct_counts(self, sample):
-        summary = sample.singleton.summary()
-        assert summary.n_singletons == 2
-        assert summary.n_strata == 4
-        assert summary.affected_rows == 4  # 2 in North__by__A, 2 in South__by__X
-
-    def test_summary_has_percentages(self, sample):
-        summary = sample.singleton.summary()
-        assert summary.pct_singletons == pytest.approx(50.0)  # 2 of 4 strata
-        assert summary.pct_rows_affected == pytest.approx(44.44, rel=0.01)  # 4 of 9 rows
-
-    def test_summary_has_recommendation(self, sample):
-        summary = sample.singleton.summary()
-        assert summary.recommendation is not None
-        assert summary.recommendation_reason is not None
-
-    def test_summary_when_no_singletons(self, sample_no_singletons):
-        summary = sample_no_singletons.singleton.summary()
-        assert summary.n_singletons == 0
-        assert summary.recommendation is None or summary.recommendation_reason is not None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -353,162 +296,9 @@ class TestInspection:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-class TestStrataProfile:
-    """Tests for strata_profile() method."""
-
-    def test_strata_profile_returns_dataframe(self, sample):
-        profile = sample.singleton.strata_profile()
-        assert isinstance(profile, pl.DataFrame)
-        assert profile.height == 4  # 4 strata
-
-    def test_strata_profile_has_required_columns(self, sample):
-        profile = sample.singleton.strata_profile()
-        assert "stratum_key" in profile.columns
-        assert "n_psus" in profile.columns
-        assert "n_obs" in profile.columns
-        assert "is_singleton" in profile.columns
-
-    def test_strata_profile_identifies_singletons(self, sample):
-        profile = sample.singleton.strata_profile()
-        singletons = profile.filter(pl.col("is_singleton"))
-        assert singletons.height == 2
-
-    def test_strata_profile_with_variables(self, sample):
-        profile = sample.singleton.strata_profile(variables=["income", "age"])
-        assert "mean_income" in profile.columns
-        assert "mean_age" in profile.columns
-
-    def test_strata_profile_weighted_column_names(self, sample_with_weight):
-        # Regression: .alias() used to bind to the denominator only, leaving
-        # the weighted mean column named after the variable itself.
-        profile = sample_with_weight.singleton.strata_profile(variables=["income"], weighted=True)
-        assert "mean_income" in profile.columns
-        assert "income" not in profile.columns
-
-    def test_rank_strata_weighted_sorts_by_mean(self, sample_with_weight):
-        ranked = sample_with_weight.singleton.rank_strata(by="income", weighted=True)
-        assert "mean_income" in ranked.columns
-        means = ranked.get_column("mean_income").to_list()
-        assert means == sorted(means)
-
-
-class TestCandidatesFor:
-    """Tests for candidates_for() method."""
-
-    def test_candidates_for_returns_dataframe(self, sample):
-        candidates = sample.singleton.candidates_for("North__by__A")
-        assert isinstance(candidates, pl.DataFrame)
-
-    def test_candidates_for_excludes_singletons(self, sample):
-        candidates = sample.singleton.candidates_for("North__by__A")
-        # Should only include non-singleton strata
-        keys = candidates.get_column("stratum_key").to_list()
-        assert "North__by__A" not in keys
-        assert "South__by__X" not in keys
-
-    def test_candidates_for_respects_top_k(self, sample):
-        candidates = sample.singleton.candidates_for("North__by__A", top_k=1)
-        assert candidates.height == 1
-
-    def test_candidates_for_invalid_singleton_raises(self, sample):
-        with pytest.raises(ValueError, match="not found"):
-            sample.singleton.candidates_for("Invalid__Key")
-
-    def test_candidates_for_by_size(self, sample):
-        candidates = sample.singleton.candidates_for("North__by__A", by="size")
-        # Should be sorted by n_psus ascending
-        n_psus = candidates.get_column("n_psus").to_list()
-        assert n_psus == sorted(n_psus)
-
-    def test_candidates_for_with_within_constraint(self, sample):
-        candidates = sample.singleton.candidates_for("North__by__A", within="region")
-        # Should only include North strata
-        keys = candidates.get_column("stratum_key").to_list()
-        for key in keys:
-            assert "North" in key
-
-
-class TestCompare:
-    """Tests for compare() method."""
-
-    def test_compare_returns_dataframe(self, sample):
-        df = sample.singleton.compare("North__by__A", "North__by__B")
-        assert isinstance(df, pl.DataFrame)
-
-    def test_compare_has_required_columns(self, sample):
-        df = sample.singleton.compare("North__by__A", "North__by__B")
-        assert set(df.columns) == {"variable", "stratum_1", "stratum_2", "difference"}
-
-    def test_compare_with_specific_variables(self, sample):
-        df = sample.singleton.compare("North__by__A", "North__by__B", variables=["income"])
-        assert df.height == 1
-        assert df.get_column("variable").to_list() == ["income"]
-
-
-class TestRankStrata:
-    """Tests for rank_strata() method."""
-
-    def test_rank_strata_returns_dataframe(self, sample):
-        ranked = sample.singleton.rank_strata(by="income")
-        assert isinstance(ranked, pl.DataFrame)
-
-    def test_rank_strata_has_rank_column(self, sample):
-        ranked = sample.singleton.rank_strata(by="income")
-        assert "rank" in ranked.columns
-
-    def test_rank_strata_ascending_by_default(self, sample):
-        ranked = sample.singleton.rank_strata(by="income")
-        ranks = ranked.get_column("rank").to_list()
-        assert ranks == list(range(1, len(ranks) + 1))
-
-    def test_rank_strata_descending(self, sample):
-        ranked = sample.singleton.rank_strata(by="income", descending=True)
-        values = ranked.get_column("mean_income").to_list()
-        assert values == sorted(values, reverse=True)
-
-
-class TestSuggestMapping:
-    """Tests for suggest_mapping() method."""
-
-    def test_suggest_mapping_returns_dict(self, sample):
-        mapping = sample.singleton.suggest_mapping(variables=["income"])
-        assert isinstance(mapping, dict)
-
-    def test_suggest_mapping_covers_all_singletons(self, sample):
-        mapping = sample.singleton.suggest_mapping(variables=["income"])
-        assert set(mapping.keys()) == {"North__by__A", "South__by__X"}
-
-    def test_suggest_mapping_targets_are_non_singletons(self, sample):
-        mapping = sample.singleton.suggest_mapping(variables=["income"])
-        singleton_keys = sample.singleton.keys()
-        for target in mapping.values():
-            assert target not in singleton_keys
-
-    def test_suggest_mapping_respects_within(self, sample):
-        mapping = sample.singleton.suggest_mapping(variables=["income"], within="region")
-        # North singleton should map to North non-singleton
-        assert "North" in mapping["North__by__A"]
-        # South singleton should map to South non-singleton
-        assert "South" in mapping["South__by__X"]
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # HANDLING: raise_error()
 # ══════════════════════════════════════════════════════════════════════════════
-
-
-class TestRaiseError:
-    """Tests for raise_error() method."""
-
-    def test_raise_error_raises_when_singletons_exist(self, sample):
-        with pytest.raises(SingletonError) as exc_info:
-            sample.singleton.raise_error()
-        assert "singleton" in str(exc_info.value).lower()
-
-    def test_raise_error_silent_when_no_singletons(self, sample_no_singletons):
-        # Should not raise
-        result = sample_no_singletons.singleton.raise_error()
-        assert result is None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -520,7 +310,7 @@ class TestCertainty:
     """Tests for certainty() method."""
 
     def test_certainty_returns_new_sample(self, sample):
-        result = sample.singleton.certainty()
+        result = _declare(sample, "self_representing")
         assert result is not sample
 
     def test_certainty_creates_variance_columns(self, sample):
@@ -528,7 +318,7 @@ class TestCertainty:
         certainty() creates internal variance columns for variance estimation.
         The original stratum/PSU columns are NOT modified.
         """
-        result = sample.singleton.certainty()
+        result = _declare(sample, "self_representing")
         assert has_variance_columns(result)
 
     def test_certainty_resolves_singletons_for_variance(self, sample):
@@ -536,19 +326,19 @@ class TestCertainty:
         certainty() resolves singletons in the variance structure by treating
         the PSU as a stratum and observations as PSUs.
         """
-        result = sample.singleton.certainty()
+        result = _declare(sample, "self_representing")
         assert singletons_resolved_for_variance(result)
 
     def test_certainty_preserves_original_stratum_column(self, sample, names):
         """The original stratum column should be unchanged."""
-        result = sample.singleton.certainty()
+        result = _declare(sample, "self_representing")
         original_strata = set(sample._data.get_column(names["stratum"]).unique().to_list())
         result_strata = set(result._data.get_column(names["stratum"]).unique().to_list())
         assert original_strata == result_strata
 
     def test_certainty_variance_stratum_uses_psu(self, sample, names):
         """For singletons, the variance stratum should be the original PSU."""
-        result = sample.singleton.certainty()
+        result = _declare(sample, "self_representing")
         df = result._data
 
         # For singleton North__by__A (PSU=101), variance stratum should be "101"
@@ -558,7 +348,7 @@ class TestCertainty:
 
     def test_certainty_variance_psu_uses_row_index(self, sample):
         """For singletons, the variance PSU should be the row index."""
-        result = sample.singleton.certainty()
+        result = _declare(sample, "self_representing")
         df = result._data
 
         # Check that variance PSUs are unique per row for singletons
@@ -569,7 +359,7 @@ class TestCertainty:
 
     def test_certainty_preserves_non_singleton_structure(self, sample, names):
         """Non-singleton strata should keep their original structure in variance columns."""
-        result = sample.singleton.certainty()
+        result = _declare(sample, "self_representing")
         df = result._data
 
         # For non-singleton North__by__B, variance stratum should be "North__by__B"
@@ -578,21 +368,22 @@ class TestCertainty:
         assert var_strata == ["North__by__B"]
 
     def test_certainty_idempotent_when_no_singletons(self, sample_no_singletons):
-        """Should return same object when no singletons exist."""
-        result = sample_no_singletons.singleton.certainty()
-        assert result is sample_no_singletons
+        """Without singletons the declared rule is idle."""
+        result = _declare(sample_no_singletons, "self_representing")
+        assert result.design.singleton.method == "self_representing"
+        assert _result(result) is None
 
     def test_certainty_preserves_categorical_dtype(self, sample, names):
-        df_cat = sample._data.with_columns(pl.col(names["psu"]).cast(pl.Categorical))
+        df_cat = sample.data.with_columns(pl.col("cluster").cast(pl.Categorical))
         sample_cat = sample.clone(data=df_cat, design=sample._design)
-        result = sample_cat.singleton.certainty()
-        # Original column dtype preserved
-        assert result._data.schema[names["psu"]] == pl.Categorical
+        result = _declare(sample_cat, "self_representing")
+        # The PSU column keeps its dtype
+        assert result.data.schema["cluster"] == pl.Categorical
 
     def test_certainty_sets_last_result(self, sample):
-        result = sample.singleton.certainty()
-        assert result.singleton.last_result is not None
-        assert result.singleton.last_result.method == SingletonHandling.CERTAINTY
+        result = _declare(sample, "self_representing")
+        assert _result(result) is not None
+        assert _result(result).method == SingletonMethod.SELF_REPRESENTING
 
     def test_certainty_records_handling_on_no_psu_design(self):
         # Regression: with no PSU declared each row is its own PSU, which made
@@ -609,16 +400,17 @@ class TestCertainty:
             }
         )
         s = Sample(df, Design(stratum=("strat", "region"), wgt="wgt"))
-        fixed = s.singleton.certainty()
-        assert fixed.singleton.last_result is not None
+        fixed = _declare(s, "self_representing")
+        assert _result(fixed) is not None
         est = fixed.estimation.mean("y").to_polars()
         assert est["se"][0] > 0
-        assert fixed.singleton.certainty() is fixed  # second call short-circuits
+        again = _declare(fixed, "self_representing")
+        assert _result(again) == _result(fixed)
 
     def test_certainty_config_has_variance_columns(self, sample):
         """The result config should specify the variance column names."""
-        result = sample.singleton.certainty()
-        config = result.singleton.last_result.config
+        result = _declare(sample, "self_representing")
+        config = _result(result).config
         assert config is not None
         assert config.var_stratum_col == _VAR_STRATUM_COL
         assert config.var_psu_col == _VAR_PSU_COL
@@ -644,9 +436,9 @@ class TestCertainty:
             df, design, stratum_internal=names["stratum"], psu_internal=names["psu"]
         )
 
-        assert sample.singleton.count == 1
+        assert sample.n_singletons == 1
 
-        result = sample.singleton.certainty()
+        result = _declare(sample, "self_representing")
         # Still has 1 singleton in variance structure because the stratum had only 1 observation
         assert get_effective_singletons(result) == 1
 
@@ -660,17 +452,17 @@ class TestSkip:
     """Tests for skip() method."""
 
     def test_skip_returns_new_sample(self, sample):
-        result = sample.singleton.skip()
+        result = _declare(sample, "skip")
         assert result is not sample
 
     def test_skip_creates_variance_columns(self, sample):
         """skip() creates internal variance columns with exclusion flags."""
-        result = sample.singleton.skip()
+        result = _declare(sample, "skip")
         assert has_variance_columns(result)
 
     def test_skip_marks_singleton_rows_as_excluded(self, sample, names):
         """Singleton rows should be marked as excluded in the variance structure."""
-        result = sample.singleton.skip()
+        result = _declare(sample, "skip")
         df = result._data
 
         # Singleton rows should have exclude=True
@@ -682,7 +474,7 @@ class TestSkip:
 
     def test_skip_preserves_non_singleton_rows(self, sample, names):
         """Non-singleton rows should NOT be marked as excluded."""
-        result = sample.singleton.skip()
+        result = _declare(sample, "skip")
         df = result._data
 
         # Non-singleton rows should have exclude=False
@@ -691,68 +483,28 @@ class TestSkip:
 
     def test_skip_preserves_all_rows_in_data(self, sample):
         """skip() does NOT remove rows - it marks them as excluded."""
-        result = sample.singleton.skip()
+        result = _declare(sample, "skip")
         assert result._data.height == sample._data.height
 
     def test_skip_resolves_singletons_for_variance(self, sample):
         """After exclusion, no singletons should remain in the variance structure."""
-        result = sample.singleton.skip()
+        result = _declare(sample, "skip")
         assert singletons_resolved_for_variance(result)
 
     def test_skip_noop_when_no_singletons(self, sample_no_singletons):
-        result = sample_no_singletons.singleton.skip()
-        # Should return same sample when no singletons
-        assert result is sample_no_singletons
+        result = _declare(sample_no_singletons, "skip")
+        # Without singletons the declared rule is idle
+        assert _result(result) is None
 
     def test_skip_sets_last_result(self, sample):
-        result = sample.singleton.skip()
-        assert result.singleton.last_result is not None
-        assert result.singleton.last_result.method == SingletonHandling.SKIP
+        result = _declare(sample, "skip")
+        assert _result(result) is not None
+        assert _result(result).method == SingletonMethod.SKIP
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HANDLING: combine()
 # ══════════════════════════════════════════════════════════════════════════════
-
-
-class TestCombine:
-    """Tests for combine() method."""
-
-    def test_combine_happy_path(self, sample, names):
-        mapping = {"district": {"A": "B", "X": "Y"}}
-        result = sample.singleton.combine(mapping)
-
-        # combine() actually modifies the original columns
-        assert not result.singleton.exists
-        strata = set(result._data.get_column(names["stratum"]).unique().to_list())
-        assert strata == {"North__by__B", "South__by__Y"}
-
-    def test_combine_invalid_column_raises(self, sample):
-        mapping = {"invalid_col": {"A": "B"}}
-        with pytest.raises(ValueError, match="not in design"):
-            sample.singleton.combine(mapping)
-
-    def test_combine_empty_mapping_raises(self, sample):
-        with pytest.raises(ValueError):
-            sample.singleton.combine({})
-
-    def test_combine_flat_mapping_raises(self, sample):
-        # Flat mapping should raise TypeError
-        mapping = {"North__by__A": "North__by__B"}
-        with pytest.raises(TypeError):
-            sample.singleton.combine(mapping)
-
-    def test_combine_incomplete_mapping_raises(self, sample):
-        # Mapping that doesn't resolve all singletons
-        mapping = {"cluster": {"301": "401"}}  # Only changes PSU, not stratum
-        with pytest.raises(SingletonError):
-            sample.singleton.combine(mapping)
-
-    def test_combine_sets_last_result(self, sample):
-        mapping = {"district": {"A": "B", "X": "Y"}}
-        result = sample.singleton.combine(mapping)
-        assert result.singleton.last_result is not None
-        assert result.singleton.last_result.method == SingletonHandling.COMBINE
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -764,29 +516,29 @@ class TestCollapseSmallest:
     """Tests for collapse(using='smallest')."""
 
     def test_collapse_smallest_returns_new_sample(self, sample):
-        result = sample.singleton.collapse(using="smallest")
+        result = _declare(sample, "collapse", using="smallest")
         assert result is not sample
 
     def test_collapse_smallest_creates_variance_columns(self, sample):
         """collapse() creates internal variance columns with remapped strata."""
-        result = sample.singleton.collapse(using="smallest")
+        result = _declare(sample, "collapse", using="smallest")
         assert has_variance_columns(result)
 
     def test_collapse_smallest_resolves_singletons_for_variance(self, sample):
         """Singletons should be resolved in the variance structure."""
-        result = sample.singleton.collapse(using="smallest")
+        result = _declare(sample, "collapse", using="smallest")
         assert singletons_resolved_for_variance(result)
 
     def test_collapse_smallest_preserves_original_stratum_column(self, sample, names):
         """The original stratum column should be unchanged."""
-        result = sample.singleton.collapse(using="smallest")
+        result = _declare(sample, "collapse", using="smallest")
         original_strata = set(sample._data.get_column(names["stratum"]).unique().to_list())
         result_strata = set(result._data.get_column(names["stratum"]).unique().to_list())
         assert original_strata == result_strata
 
     def test_collapse_smallest_remaps_variance_stratum(self, sample):
         """The variance stratum column should have remapped singleton keys."""
-        result = sample.singleton.collapse(using="smallest")
+        result = _declare(sample, "collapse", using="smallest")
         df = result._data
 
         # Variance strata should have fewer unique values than original
@@ -796,21 +548,21 @@ class TestCollapseSmallest:
         assert "South__by__X" not in var_strata
 
     def test_collapse_smallest_preserves_row_count(self, sample):
-        result = sample.singleton.collapse(using="smallest")
+        result = _declare(sample, "collapse", using="smallest")
         assert result._data.height == sample._data.height
 
     def test_collapse_smallest_sets_last_result(self, sample):
-        result = sample.singleton.collapse(using="smallest")
-        assert result.singleton.last_result is not None
-        assert result.singleton.last_result.method == SingletonHandling.COLLAPSE
-        assert isinstance(result.singleton.last_result.applied, dict)
+        result = _declare(sample, "collapse", using="smallest")
+        assert _result(result) is not None
+        assert _result(result).method == SingletonMethod.COLLAPSE
+        assert isinstance(_result(result).applied, dict)
 
 
 class TestCollapseLargest:
     """Tests for collapse(using='largest')."""
 
     def test_collapse_largest_resolves_singletons_for_variance(self, sample):
-        result = sample.singleton.collapse(using="largest")
+        result = _declare(sample, "collapse", using="largest")
         assert singletons_resolved_for_variance(result)
 
 
@@ -818,11 +570,11 @@ class TestCollapseNext:
     """Tests for collapse(using='next')."""
 
     def test_collapse_next_resolves_singletons_for_variance(self, sample):
-        result = sample.singleton.collapse(using="next")
+        result = _declare(sample, "collapse", using="next")
         assert singletons_resolved_for_variance(result)
 
     def test_collapse_next_with_order_by(self, sample):
-        result = sample.singleton.collapse(using="next", order_by="income")
+        result = _declare(sample, "collapse", using="next", order_by="income")
         assert singletons_resolved_for_variance(result)
 
 
@@ -830,7 +582,7 @@ class TestCollapsePrevious:
     """Tests for collapse(using='previous')."""
 
     def test_collapse_previous_resolves_singletons_for_variance(self, sample):
-        result = sample.singleton.collapse(using="previous")
+        result = _declare(sample, "collapse", using="previous")
         assert singletons_resolved_for_variance(result)
 
 
@@ -842,7 +594,7 @@ class TestCollapseWithMapping:
             "North__by__A": "North__by__B",
             "South__by__X": "South__by__Y",
         }
-        result = sample.singleton.collapse(using=mapping)
+        result = _declare(sample, "collapse", using=mapping)
 
         assert singletons_resolved_for_variance(result)
 
@@ -853,16 +605,18 @@ class TestCollapseWithMapping:
 
     def test_collapse_with_incomplete_mapping_raises(self, sample):
         mapping = {"North__by__A": "North__by__B"}  # Missing South__by__X
-        with pytest.raises(ValueError, match="does not contain key"):
-            sample.singleton.collapse(using=mapping)
+        h = _declare(sample, "collapse", using=mapping)
+        with pytest.raises(SingletonError, match="not in the collapse mapping"):
+            _resolve(h)
 
     def test_collapse_with_invalid_target_raises(self, sample):
         mapping = {
             "North__by__A": "Invalid__Target",
             "South__by__X": "South__by__Y",
         }
-        with pytest.raises(ValueError, match="not found"):
-            sample.singleton.collapse(using=mapping)
+        h = _declare(sample, "collapse", using=mapping)
+        with pytest.raises(SingletonError, match="no longer has"):
+            _resolve(h)
 
 
 class TestCollapseWithCallable:
@@ -872,26 +626,27 @@ class TestCollapseWithCallable:
         def always_pick_first(singleton, candidates):
             return candidates[0].stratum_key
 
-        result = sample.singleton.collapse(using=always_pick_first)
+        result = _declare(sample, "collapse", using=always_pick_first)
         assert singletons_resolved_for_variance(result)
 
     def test_collapse_with_callable_invalid_return_raises(self, sample):
         def bad_picker(singleton, candidates):
             return "Invalid__Key"
 
-        with pytest.raises(ValueError, match="not a valid candidate"):
-            sample.singleton.collapse(using=bad_picker)
+        h = _declare(sample, "collapse", using=bad_picker)
+        with pytest.raises(SingletonError, match="not a valid candidate"):
+            _resolve(h)
 
 
 class TestCollapseWithin:
     """Tests for collapse with within constraint."""
 
     def test_collapse_within_region(self, sample):
-        result = sample.singleton.collapse(using="smallest", within="region")
+        result = _declare(sample, "collapse", using="smallest", within="region")
         assert singletons_resolved_for_variance(result)
 
         # Verify mapping respected region constraint
-        last_result = result.singleton.last_result
+        last_result = _result(result)
         mapping = last_result.applied
         assert "North" in mapping["North__by__A"]
         assert "South" in mapping["South__by__X"]
@@ -920,8 +675,9 @@ class TestCollapseWithin:
         )
 
         # North singleton has no non-singleton in North region
+        h = _declare(sample, "collapse", using="smallest", within="region")
         with pytest.raises(SingletonError, match="No valid merge targets"):
-            sample.singleton.collapse(using="smallest", within="region")
+            _resolve(h)
 
 
 class TestCollapseRebalancing:
@@ -947,12 +703,12 @@ class TestCollapseRebalancing:
             df, design, stratum_internal=names["stratum"], psu_internal=names["psu"]
         )
 
-        result = sample.singleton.collapse(using="smallest")
+        result = _declare(sample, "collapse", using="smallest")
         assert singletons_resolved_for_variance(result)
 
         # Due to rebalancing, singletons should be distributed
         # (not all going to the same stratum)
-        mapping = result.singleton.last_result.applied
+        mapping = _result(result).applied
         targets = set(mapping.values())
         # With rebalancing, we might get different targets
         assert len(targets) >= 1  # At minimum 1, likely 2 with rebalancing
@@ -974,11 +730,11 @@ class TestCollapseTieBreaking:
         6. South__by__Y (2 PSUs) < North__by__B (3 PSUs)
         7. South__by__X → South__by__Y
         """
-        result1 = sample.singleton.collapse(using="smallest")
-        result2 = sample.singleton.collapse(using="smallest")
+        result1 = _declare(sample, "collapse", using="smallest")
+        result2 = _declare(sample, "collapse", using="smallest")
 
-        mapping1 = result1.singleton.last_result.applied
-        mapping2 = result2.singleton.last_result.applied
+        mapping1 = _result(result1).applied
+        mapping2 = _result(result2).applied
         assert mapping1 == mapping2
 
         # Verify expected mapping
@@ -989,11 +745,11 @@ class TestCollapseTieBreaking:
         assert mapping1 == expected
 
     def test_collapse_with_rstate_reproducible(self, sample):
-        result1 = sample.singleton.collapse(using="smallest", rstate=42)
-        result2 = sample.singleton.collapse(using="smallest", rstate=42)
+        result1 = _declare(sample, "collapse", using="smallest", rstate=42)
+        result2 = _declare(sample, "collapse", using="smallest", rstate=42)
 
-        mapping1 = result1.singleton.last_result.applied
-        mapping2 = result2.singleton.last_result.applied
+        mapping1 = _result(result1).applied
+        mapping2 = _result(result2).applied
         assert mapping1 == mapping2
 
     def test_collapse_different_rstate_may_differ(self, names):
@@ -1019,8 +775,8 @@ class TestCollapseTieBreaking:
         # Run multiple times to see if we get variation (probabilistic test)
         results = set()
         for seed in range(10):
-            result = sample.singleton.collapse(using="smallest", rstate=seed)
-            mapping = result.singleton.last_result.applied
+            result = _declare(sample, "collapse", using="smallest", rstate=seed)
+            mapping = _result(result).applied
             results.add(mapping["A"])
 
         # With deterministic default, would always pick same
@@ -1038,59 +794,59 @@ class TestPool:
     """Tests for pool() method."""
 
     def test_pool_returns_new_sample(self, sample):
-        result = sample.singleton.pool()
+        result = _declare(sample, "pool")
         assert result is not sample
 
     def test_pool_creates_variance_columns(self, sample):
         """pool() creates internal variance columns with pooled stratum."""
-        result = sample.singleton.pool()
+        result = _declare(sample, "pool")
         assert has_variance_columns(result)
 
     def test_pool_resolves_singletons_for_variance(self, sample):
         """Singletons should be resolved in the variance structure."""
-        result = sample.singleton.pool()
+        result = _declare(sample, "pool")
         assert singletons_resolved_for_variance(result)
 
     def test_pool_creates_pooled_stratum_in_variance_column(self, sample):
         """The pooled stratum should appear in the variance column."""
-        result = sample.singleton.pool()
+        result = _declare(sample, "pool")
         var_strata = result._data.get_column(_VAR_STRATUM_COL).unique().to_list()
         assert "__pooled__" in var_strata
 
     def test_pool_custom_name_in_variance_column(self, sample):
         """Custom pool name should appear in the variance column."""
-        result = sample.singleton.pool(name="misc_strata")
+        result = _declare(sample, "pool", name="misc_strata")
         var_strata = result._data.get_column(_VAR_STRATUM_COL).unique().to_list()
         assert "misc_strata" in var_strata
 
     def test_pool_preserves_original_stratum_column(self, sample, names):
         """The original stratum column should be unchanged."""
-        result = sample.singleton.pool()
+        result = _declare(sample, "pool")
         original_strata = set(sample._data.get_column(names["stratum"]).unique().to_list())
         result_strata = set(result._data.get_column(names["stratum"]).unique().to_list())
         assert original_strata == result_strata
 
     def test_pool_preserves_row_count(self, sample):
-        result = sample.singleton.pool()
+        result = _declare(sample, "pool")
         assert result._data.height == sample._data.height  # 9 rows
 
     def test_pool_combines_singleton_psus_in_variance_column(self, sample):
         """The pooled stratum should have multiple PSUs in the variance structure."""
-        result = sample.singleton.pool()
+        result = _declare(sample, "pool")
         pooled = result._data.filter(pl.col(_VAR_STRATUM_COL) == "__pooled__")
         n_psus = pooled.get_column(_VAR_PSU_COL).n_unique()
         # Should have 2 PSUs (one from each original singleton)
         assert n_psus == 2
 
     def test_pool_sets_last_result(self, sample):
-        result = sample.singleton.pool()
-        assert result.singleton.last_result is not None
-        assert result.singleton.last_result.method == SingletonHandling.POOL
+        result = _declare(sample, "pool")
+        assert _result(result) is not None
+        assert _result(result).method == SingletonMethod.POOL
 
     def test_pool_noop_when_no_singletons(self, sample_no_singletons):
-        result = sample_no_singletons.singleton.pool()
-        # Should return same sample when no singletons
-        assert result is sample_no_singletons
+        result = _declare(sample_no_singletons, "pool")
+        # Without singletons the declared rule is idle
+        assert _result(result) is None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1102,17 +858,17 @@ class TestScale:
     """Tests for scale() method."""
 
     def test_scale_returns_new_sample(self, sample):
-        result = sample.singleton.scale()
+        result = _declare(sample, "scale")
         assert result is not sample
 
     def test_scale_creates_variance_columns(self, sample):
         """scale() creates internal variance columns like skip()."""
-        result = sample.singleton.scale()
+        result = _declare(sample, "scale")
         assert has_variance_columns(result)
 
     def test_scale_marks_singletons_as_excluded(self, sample, names):
         """Singleton rows should be marked as excluded in the variance structure."""
-        result = sample.singleton.scale()
+        result = _declare(sample, "scale")
         df = result._data
 
         # Singleton rows should have exclude=True
@@ -1124,7 +880,7 @@ class TestScale:
 
     def test_scale_preserves_non_singleton_rows(self, sample, names):
         """Non-singleton rows should NOT be marked as excluded."""
-        result = sample.singleton.scale()
+        result = _declare(sample, "scale")
         df = result._data
 
         north_b = df.filter(pl.col(names["stratum"]) == "North__by__B")
@@ -1132,30 +888,30 @@ class TestScale:
 
     def test_scale_resolves_singletons_for_variance(self, sample):
         """After exclusion, no singletons should remain in the variance structure."""
-        result = sample.singleton.scale()
+        result = _declare(sample, "scale")
         assert singletons_resolved_for_variance(result)
 
     def test_scale_preserves_all_rows(self, sample):
         """scale() does NOT remove rows - it marks them as excluded."""
-        result = sample.singleton.scale()
+        result = _declare(sample, "scale")
         assert result._data.height == sample._data.height
 
     def test_scale_preserves_original_stratum_column(self, sample, names):
         """The original stratum column should be unchanged."""
-        result = sample.singleton.scale()
+        result = _declare(sample, "scale")
         original_strata = set(sample._data.get_column(names["stratum"]).unique().to_list())
         result_strata = set(result._data.get_column(names["stratum"]).unique().to_list())
         assert original_strata == result_strata
 
     def test_scale_sets_last_result(self, sample):
-        result = sample.singleton.scale()
-        assert result.singleton.last_result is not None
-        assert result.singleton.last_result.method == SingletonHandling.SCALE
+        result = _declare(sample, "scale")
+        assert _result(result) is not None
+        assert _result(result).method == SingletonMethod.SCALE
 
     def test_scale_config_has_singleton_fraction(self, sample):
         """The result config should include the singleton fraction."""
-        result = sample.singleton.scale()
-        config = result.singleton.last_result.config
+        result = _declare(sample, "scale")
+        config = _result(result).config
         assert config is not None
         assert config.singleton_fraction is not None
         # 2 singletons out of 4 strata = 0.5
@@ -1163,16 +919,16 @@ class TestScale:
 
     def test_scale_config_has_variance_columns(self, sample):
         """The result config should specify the variance column names."""
-        result = sample.singleton.scale()
-        config = result.singleton.last_result.config
+        result = _declare(sample, "scale")
+        config = _result(result).config
         assert config.var_stratum_col == _VAR_STRATUM_COL
         assert config.var_psu_col == _VAR_PSU_COL
         assert config.var_exclude_col == _VAR_EXCLUDE_COL
 
     def test_scale_noop_when_no_singletons(self, sample_no_singletons):
-        result = sample_no_singletons.singleton.scale()
-        # Should return same sample when no singletons
-        assert result is sample_no_singletons
+        result = _declare(sample_no_singletons, "scale")
+        # Without singletons the declared rule is idle
+        assert _result(result) is None
 
     def test_scale_singleton_fraction_calculation(self, names):
         """Test singleton fraction calculation with different proportions."""
@@ -1198,16 +954,16 @@ class TestScale:
             df, design, stratum_internal=names["stratum"], psu_internal=names["psu"]
         )
 
-        result = sample.singleton.scale()
-        config = result.singleton.last_result.config
+        result = _declare(sample, "scale")
+        config = _result(result).config
 
         # 1 singleton out of 5 strata = 0.2
         assert config.singleton_fraction == pytest.approx(0.2)
 
     def test_scale_inflation_factor(self, sample):
         """Test that the expected inflation factor can be calculated from singleton_fraction."""
-        result = sample.singleton.scale()
-        config = result.singleton.last_result.config
+        result = _declare(sample, "scale")
+        config = _result(result).config
 
         singleton_frac = config.singleton_fraction
         # Expected inflation factor: 1 / (1 - singleton_frac)
@@ -1226,17 +982,17 @@ class TestCenter:
     """Tests for center() method."""
 
     def test_center_returns_new_sample(self, sample):
-        result = sample.singleton.center()
+        result = _declare(sample, "center")
         assert result is not sample
 
     def test_center_creates_variance_columns(self, sample):
         """center() creates internal variance columns."""
-        result = sample.singleton.center()
+        result = _declare(sample, "center")
         assert has_variance_columns(result)
 
     def test_center_does_not_exclude_singletons(self, sample, names):
         """Singleton rows should NOT be marked as excluded for CENTER."""
-        result = sample.singleton.center()
+        result = _declare(sample, "center")
         df = result._data
 
         # No rows should be excluded
@@ -1244,7 +1000,7 @@ class TestCenter:
 
     def test_center_marks_singleton_rows(self, sample, names):
         """Singleton rows should be marked with is_singleton flag."""
-        result = sample.singleton.center()
+        result = _declare(sample, "center")
         df = result._data
 
         # Singleton rows should have is_singleton=True
@@ -1257,52 +1013,52 @@ class TestCenter:
 
     def test_center_preserves_all_rows(self, sample):
         """center() preserves all rows including singletons."""
-        result = sample.singleton.center()
+        result = _declare(sample, "center")
         assert result._data.height == sample._data.height
 
     def test_center_preserves_original_stratum_column(self, sample, names):
         """The original stratum column should be unchanged."""
-        result = sample.singleton.center()
+        result = _declare(sample, "center")
         original_strata = set(sample._data.get_column(names["stratum"]).unique().to_list())
         result_strata = set(result._data.get_column(names["stratum"]).unique().to_list())
         assert original_strata == result_strata
 
     def test_center_sets_last_result(self, sample):
-        result = sample.singleton.center()
-        assert result.singleton.last_result is not None
-        assert result.singleton.last_result.method == SingletonHandling.CENTER
+        result = _declare(sample, "center")
+        assert _result(result) is not None
+        assert _result(result).method == SingletonMethod.CENTER
 
     def test_center_config_has_no_singleton_fraction(self, sample):
         """CENTER method should not use singleton_fraction (that's for SCALE)."""
-        result = sample.singleton.center()
-        config = result.singleton.last_result.config
+        result = _declare(sample, "center")
+        config = _result(result).config
         assert config is not None
         assert config.singleton_fraction is None
 
     def test_center_config_has_singleton_keys(self, sample):
         """The config should include the singleton keys."""
-        result = sample.singleton.center()
-        config = result.singleton.last_result.config
+        result = _declare(sample, "center")
+        config = _result(result).config
         assert config.singleton_keys is not None
         assert set(config.singleton_keys) == {"North__by__A", "South__by__X"}
 
     def test_center_config_has_variance_columns(self, sample):
         """The result config should specify the variance column names."""
-        result = sample.singleton.center()
-        config = result.singleton.last_result.config
+        result = _declare(sample, "center")
+        config = _result(result).config
         assert config.var_stratum_col == _VAR_STRATUM_COL
         assert config.var_psu_col == _VAR_PSU_COL
         assert config.var_exclude_col == _VAR_EXCLUDE_COL
 
     def test_center_noop_when_no_singletons(self, sample_no_singletons):
-        result = sample_no_singletons.singleton.center()
-        # Should return same sample when no singletons
-        assert result is sample_no_singletons
+        result = _declare(sample_no_singletons, "center")
+        # Without singletons the declared rule is idle
+        assert _result(result) is None
 
     def test_center_strata_counts_unchanged(self, sample):
         """CENTER should not change the stratum/PSU counts (unlike SKIP/SCALE)."""
-        result = sample.singleton.center()
-        lr = result.singleton.last_result
+        result = _declare(sample, "center")
+        lr = _result(result)
 
         # No strata/PSUs should be "removed" for variance calculation
         assert lr.n_strata_before == lr.n_strata_after
@@ -1314,58 +1070,6 @@ class TestCenter:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-class TestHandle:
-    """Tests for handle() dispatcher method."""
-
-    def test_handle_certainty(self, sample):
-        result = sample.singleton.handle("certainty")
-        assert singletons_resolved_for_variance(result)
-        assert result.singleton.last_result.method == SingletonHandling.CERTAINTY
-
-    def test_handle_skip(self, sample):
-        result = sample.singleton.handle("skip")
-        assert singletons_resolved_for_variance(result)
-        assert result.singleton.last_result.method == SingletonHandling.SKIP
-
-    def test_handle_collapse(self, sample):
-        result = sample.singleton.handle("collapse", using="smallest")
-        assert singletons_resolved_for_variance(result)
-        assert result.singleton.last_result.method == SingletonHandling.COLLAPSE
-
-    def test_handle_pool(self, sample):
-        result = sample.singleton.handle("pool")
-        assert singletons_resolved_for_variance(result)
-        assert result.singleton.last_result.method == SingletonHandling.POOL
-
-    def test_handle_scale(self, sample):
-        result = sample.singleton.handle("scale")
-        assert singletons_resolved_for_variance(result)
-        assert result.singleton.last_result.method == SingletonHandling.SCALE
-        assert result.singleton.last_result.config.singleton_fraction is not None
-
-    def test_handle_center(self, sample):
-        result = sample.singleton.handle("center")
-        # CENTER doesn't exclude singletons, so check variance columns exist
-        assert has_variance_columns(result)
-        assert result.singleton.last_result.method == SingletonHandling.CENTER
-        # CENTER should not have singleton_fraction
-        assert result.singleton.last_result.config.singleton_fraction is None
-
-    def test_handle_combine(self, sample):
-        mapping = {"district": {"A": "B", "X": "Y"}}
-        result = sample.singleton.handle("combine", mapping=mapping)
-        # combine() actually resolves singletons in the original column
-        assert not result.singleton.exists
-
-    def test_handle_invalid_method_raises(self, sample):
-        with pytest.raises(ValueError, match="Unknown method"):
-            sample.singleton.handle("invalid_method")
-
-    def test_handle_case_insensitive(self, sample):
-        result = sample.singleton.handle("CERTAINTY")
-        assert singletons_resolved_for_variance(result)
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # RESULT ACCESS: last_result
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1375,50 +1079,50 @@ class TestLastResult:
     """Tests for last_result property."""
 
     def test_last_result_none_on_original_sample(self, sample):
-        assert sample.singleton.last_result is None
+        assert _result(sample) is None
 
     def test_last_result_set_after_handling(self, sample):
-        result = sample.singleton.certainty()
-        assert result.singleton.last_result is not None
+        result = _declare(sample, "self_representing")
+        assert _result(result) is not None
 
     def test_last_result_is_singleton_result(self, sample):
-        result = sample.singleton.certainty()
-        assert isinstance(result.singleton.last_result, SingletonResult)
+        result = _declare(sample, "self_representing")
+        assert isinstance(_result(result), SingletonResult)
 
     def test_last_result_has_method(self, sample):
-        result = sample.singleton.certainty()
-        assert result.singleton.last_result.method == SingletonHandling.CERTAINTY
+        result = _declare(sample, "self_representing")
+        assert _result(result).method == SingletonMethod.SELF_REPRESENTING
 
     def test_last_result_has_detected(self, sample):
-        result = sample.singleton.certainty()
-        assert len(result.singleton.last_result.detected) == 2
+        result = _declare(sample, "self_representing")
+        assert len(_result(result).detected) == 2
 
     def test_last_result_has_counts(self, sample):
-        result = sample.singleton.certainty()
-        lr = result.singleton.last_result
+        result = _declare(sample, "self_representing")
+        lr = _result(result)
         assert lr.n_singletons_detected == 2
         assert lr.n_strata_before > 0
         assert lr.n_psus_before > 0
 
     def test_last_result_applied_for_collapse(self, sample):
-        result = sample.singleton.collapse(using="smallest")
-        lr = result.singleton.last_result
+        result = _declare(sample, "collapse", using="smallest")
+        lr = _result(result)
         assert isinstance(lr.applied, dict)
         assert len(lr.applied) == 2  # Two singletons mapped
 
     def test_last_result_applied_for_pool(self, sample):
-        result = sample.singleton.pool()
-        lr = result.singleton.last_result
+        result = _declare(sample, "pool")
+        lr = _result(result)
         assert isinstance(lr.applied, dict)
         # All singletons mapped to pooled name
         assert all(v == "__pooled__" for v in lr.applied.values())
 
     def test_last_result_has_config(self, sample):
         """The result should include a config for variance estimation."""
-        result = sample.singleton.certainty()
-        lr = result.singleton.last_result
+        result = _declare(sample, "self_representing")
+        lr = _result(result)
         assert lr.config is not None
-        assert lr.config.method == SingletonHandling.CERTAINTY
+        assert lr.config.method == SingletonMethod.SELF_REPRESENTING
         assert lr.config.var_stratum_col == _VAR_STRATUM_COL
 
 
@@ -1467,20 +1171,20 @@ class TestTuplePsu:
     """Tests for tuple PSU handling."""
 
     def test_detect_with_tuple_psu(self, sample_tuple_psu):
-        singles = sample_tuple_psu.singleton.detected()
+        singles = _detected(sample_tuple_psu)
         keys = sorted(s.stratum_key for s in singles)
         assert keys == sorted(["North__by__A", "South__by__X"])
 
     def test_certainty_with_tuple_psu(self, sample_tuple_psu):
-        result = sample_tuple_psu.singleton.certainty()
+        result = _declare(sample_tuple_psu, "self_representing")
         assert singletons_resolved_for_variance(result)
 
     def test_collapse_with_tuple_psu(self, sample_tuple_psu):
-        result = sample_tuple_psu.singleton.collapse(using="smallest")
+        result = _declare(sample_tuple_psu, "collapse", using="smallest")
         assert singletons_resolved_for_variance(result)
 
     def test_pool_with_tuple_psu(self, sample_tuple_psu):
-        result = sample_tuple_psu.singleton.pool()
+        result = _declare(sample_tuple_psu, "pool")
         assert singletons_resolved_for_variance(result)
 
 
@@ -1510,12 +1214,13 @@ class TestEdgeCases:
         )
 
         # Pool should work - combines all into one stratum with 3 PSUs
-        result = sample.singleton.pool()
+        result = _declare(sample, "pool")
         assert singletons_resolved_for_variance(result)
 
         # Collapse should fail - no non-singleton targets
+        h = _declare(sample, "collapse", using="smallest")
         with pytest.raises(SingletonError, match="No valid merge targets"):
-            sample.singleton.collapse(using="smallest")
+            _resolve(h)
 
     def test_single_row_singleton(self, names):
         """Test singleton with only one observation."""
@@ -1534,7 +1239,7 @@ class TestEdgeCases:
             df, design, stratum_internal=names["stratum"], psu_internal=names["psu"]
         )
 
-        singles = sample.singleton.detected()
+        singles = _detected(sample)
         assert len(singles) == 1
         assert singles[0].n_observations == 1
 
@@ -1545,5 +1250,5 @@ class TestEdgeCases:
         design = DesignStub(case_id=SVY_ROW_INDEX, stratum=None, psu="cluster")
         sample = SampleStub(df, design, stratum_internal=None, psu_internal="cluster")
 
-        assert not sample.singleton.exists
-        assert sample.singleton.detected() == []
+        assert not (sample.n_singletons > 0)
+        assert _detected(sample) == []

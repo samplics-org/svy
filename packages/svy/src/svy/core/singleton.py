@@ -15,16 +15,15 @@ from svy.core.constants import (
     SVY_VAR_PSU,
     SVY_VAR_STRATUM,
 )
-from svy.core.enumerations import SingletonHandling as _SingletonHandling
+from svy.core.enumerations import SingletonDomains, SingletonMethod
+from svy.core.types import WhereArg
 from svy.errors.singleton_errors import SingletonError
 from svy.utils.random_state import RandomState, resolve_random_state
 
 
-_DOMAINS = ("warn", "ignore", "error")
-_DOMAINS_APPLY = (*_DOMAINS, "apply")
-
 if TYPE_CHECKING:
-    from svy.core.design import Design, SingletonDomains, SingletonSpec
+    from svy.core.design import Design
+    from svy.core.design import Singleton as SingletonRule
     from svy.core.sample import Sample
     from svy.core.warnings import SvyWarning
 
@@ -81,7 +80,7 @@ class SingletonHandlingConfig(msgspec.Struct, frozen=True):
     engine how to adjust its calculations.
     """
 
-    method: _SingletonHandling
+    method: SingletonMethod
     singleton_keys: tuple[str, ...]
 
     # For CERTAINTY: maps singleton stratum -> (original_psu becomes stratum, records become PSUs)
@@ -106,7 +105,7 @@ class SingletonHandlingConfig(msgspec.Struct, frozen=True):
 class SingletonResult(msgspec.Struct, frozen=True):
     """Result of applying a singleton handling method."""
 
-    method: _SingletonHandling
+    method: SingletonMethod
     detected: tuple[SingletonInfo, ...]
     applied: dict[str, str] | tuple[str, ...] | None = None
     n_singletons_detected: int = 0
@@ -117,31 +116,6 @@ class SingletonResult(msgspec.Struct, frozen=True):
 
     # The config to be attached to the sample for variance estimation
     config: SingletonHandlingConfig | None = None
-
-
-class SingletonSummary(msgspec.Struct, frozen=True):
-    """Summary of singleton situation with recommendation."""
-
-    n_singletons: int
-    n_strata: int
-    n_psus: int
-    pct_singletons: float
-    affected_rows: int
-    pct_rows_affected: float
-    singletons: tuple[SingletonInfo, ...]
-    recommendation: _SingletonHandling | None
-    recommendation_reason: str | None
-
-
-class StratumVarianceInfo(msgspec.Struct, frozen=True):
-    """Variance contribution from a stratum."""
-
-    stratum_key: str
-    n_psus: int
-    is_singleton: bool
-    variance_contribution: float | None  # None for singletons
-    n_observations: int
-    psu_totals: tuple[float, ...] | None = None  # Weighted totals per PSU
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -155,31 +129,17 @@ CollapseUsing = (
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SINGLETON FACET
+# THE ENGINE THAT APPLIES THE RULE
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class Singleton:
-    """
-    Facet for detecting and handling singleton PSUs.
+class _Engine:
+    """Detects a sample's singleton strata and applies the design's rule to them.
 
-    A singleton is a stratum that contains only one PSU. This is problematic
-    for variance estimation in complex survey designs because we need at least
-    two PSUs per stratum to estimate within-stratum variance.
-
-    Access via: sample.singleton
-
-    Examples
-    --------
-    >>> # Check for singletons
-    >>> if sample.singleton.exists:
-    ...     print(f"Found {sample.singleton.count} singletons")
-    ...     print(sample.singleton.show())
-
-    >>> # Handle singletons
-    >>> new_sample = sample.singleton.collapse(using="smallest")
-    >>> new_sample = sample.singleton.pool()
-    >>> new_sample = sample.singleton.certainty()
+    Internal: the rule is declared on the design (``svy.Singleton``) and read
+    through ``sample.singletons``; this is what ``_rederive`` runs whenever the
+    data or design changed. The ``_apply_*`` builders write the variance columns
+    the estimators read.
     """
 
     __slots__ = ("_sample",)
@@ -192,1070 +152,9 @@ class Singleton:
         if sync is not None:
             sync()
 
-    # ══════════════════════════════════════════════════════════════════════
-    # QUICK CHECKS (cached-style properties)
-    # ══════════════════════════════════════════════════════════════════════
-
-    @property
-    def exists(self) -> bool:
-        """True if any singleton strata exist."""
-        return len(self.detected()) > 0
-
-    @property
-    def count(self) -> int:
-        """Number of singleton strata."""
-        return len(self.detected())
-
-    # ══════════════════════════════════════════════════════════════════════
-    # INSPECTION
-    # ══════════════════════════════════════════════════════════════════════
-
     def detected(self) -> list[SingletonInfo]:
-        """
-        Detect singleton strata from the sample's current data/design.
-
-        Returns
-        -------
-        list[SingletonInfo]
-            Information about each singleton stratum.
-        """
+        """The singleton strata of the sample's current data and design."""
         return self._detect_on_df(self._narrow_data(), self._narrow_design())
-
-    def show(self) -> pl.DataFrame:
-        """
-        Tabular view of detected singletons.
-
-        Returns
-        -------
-        pl.DataFrame
-            DataFrame with columns: singleton_key, n_obs, psu, plus
-            original stratum column values.
-        """
-        singles = self.detected()
-        if not singles:
-            return pl.DataFrame(
-                schema={"singleton_key": pl.Utf8, "n_obs": pl.Int64, "psu": pl.Utf8}
-            )
-
-        data = [
-            (s.stratum_key, s.n_observations, s.psu_key, *(s.stratum_values.values()))
-            for s in singles
-        ]
-
-        extra_headers = list(singles[0].stratum_values.keys()) if singles else []
-        headers = ["singleton_key", "n_obs", "psu"] + extra_headers
-
-        return pl.DataFrame(data, schema=headers, orient="row")
-
-    def keys(self) -> list[str]:
-        """
-        List of singleton stratum keys.
-
-        Returns
-        -------
-        list[str]
-            Internal stratum keys for all singletons.
-        """
-        return [s.stratum_key for s in self.detected()]
-
-    def summary(self) -> SingletonSummary:
-        """
-        Rich summary of singleton situation with recommendation.
-
-        Returns
-        -------
-        SingletonSummary
-            Summary including counts, percentages, and a recommended
-            handling strategy.
-        """
-        singles = self.detected()
-        stratum_col, psu_col = self._internal_cols()
-
-        if not stratum_col:
-            return SingletonSummary(
-                n_singletons=0,
-                n_strata=0,
-                n_psus=0,
-                pct_singletons=0.0,
-                affected_rows=0,
-                pct_rows_affected=0.0,
-                singletons=(),
-                recommendation=None,
-                recommendation_reason="No stratification defined",
-            )
-
-        _data = self._narrow_data()
-        n_strata, n_psus = self._counts_before(_data, stratum_col, psu_col)
-        total_rows = _data.height
-
-        affected_rows = sum(s.n_observations for s in singles)
-        pct_singletons = (len(singles) / n_strata * 100) if n_strata > 0 else 0.0
-        pct_rows_affected = (affected_rows / total_rows * 100) if total_rows > 0 else 0.0
-
-        # Determine recommendation
-        recommendation, reason = self._recommend_strategy(
-            singles, n_strata, affected_rows, total_rows
-        )
-
-        return SingletonSummary(
-            n_singletons=len(singles),
-            n_strata=n_strata,
-            n_psus=n_psus,
-            pct_singletons=pct_singletons,
-            affected_rows=affected_rows,
-            pct_rows_affected=pct_rows_affected,
-            singletons=tuple(singles),
-            recommendation=recommendation,
-            recommendation_reason=reason,
-        )
-
-    # ══════════════════════════════════════════════════════════════════════
-    # DIAGNOSTIC HELPERS
-    # ══════════════════════════════════════════════════════════════════════
-
-    def strata_profile(
-        self,
-        variables: str | Sequence[str] | None = None,
-        *,
-        weighted: bool = True,
-    ) -> pl.DataFrame:
-        """
-        Profile all strata with summary statistics.
-
-        Parameters
-        ----------
-        variables : str or sequence of str, optional
-            Variables to summarize (mean). If None, only structural info.
-        weighted : bool, default True
-            Use survey weights for means.
-
-        Returns
-        -------
-        pl.DataFrame
-            Columns: stratum_key, n_psus, n_obs, is_singleton, plus
-            mean of each variable.
-        """
-        stratum_col, psu_col = self._internal_cols()
-        if not stratum_col:
-            return pl.DataFrame()
-
-        data = self._narrow_data()
-        design = self._narrow_design()
-        wgt_col = getattr(design, "wgt", None) if weighted else None
-
-        # Base aggregations
-        agg_exprs = [
-            pl.col(psu_col).n_unique().alias("n_psus"),
-            pl.len().alias("n_obs"),
-        ]
-
-        # Variable means
-        var_list = self._to_cols(variables)
-        for var in var_list:
-            if var not in data.columns:
-                log.warning(f"Variable {var!r} not in data, skipping")
-                continue
-            if wgt_col and wgt_col in data.columns:
-                # Weighted mean (alias the whole ratio, not just the denominator)
-                agg_exprs.append(
-                    ((pl.col(var) * pl.col(wgt_col)).sum() / pl.col(wgt_col).sum()).alias(
-                        f"mean_{var}"
-                    )
-                )
-            else:
-                agg_exprs.append(pl.col(var).mean().alias(f"mean_{var}"))
-
-        result = (
-            data.lazy()
-            .group_by(stratum_col)
-            .agg(agg_exprs)
-            .with_columns((pl.col("n_psus") == 1).alias("is_singleton"))
-            .sort(stratum_col)
-            .collect()
-        )
-
-        return cast(pl.DataFrame, result).rename({stratum_col: "stratum_key"})
-
-    def candidates_for(
-        self,
-        singleton_key: str,
-        *,
-        by: Literal["size", "similarity"] = "size",
-        variables: Sequence[str] | None = None,
-        within: str | Sequence[str] | None = None,
-        top_k: int = 5,
-        weighted: bool = True,
-    ) -> pl.DataFrame:
-        """
-        Find candidate merge targets for a specific singleton.
-
-        Parameters
-        ----------
-        singleton_key : str
-            The stratum key of the singleton to find candidates for.
-        by : {"size", "similarity"}, default "size"
-            Ranking criterion:
-            - "size": rank by number of PSUs (ascending)
-            - "similarity": rank by similarity in `variables` (requires variables)
-        variables : sequence of str, optional
-            Variables to compute similarity. Required if by="similarity".
-        within : str or sequence of str, optional
-            Constrain candidates to same value(s) in these columns.
-        top_k : int, default 5
-            Number of top candidates to return.
-        weighted : bool, default True
-            Use survey weights for similarity calculation.
-
-        Returns
-        -------
-        pl.DataFrame
-            Top candidates with stratum_key, n_psus, n_obs, and ranking metric.
-        """
-        stratum_col, psu_col = self._internal_cols()
-        if not stratum_col:
-            return pl.DataFrame()
-
-        singleton_key = self._resolve(singleton_key)
-        singles = self.detected()
-        singleton = next((s for s in singles if s.stratum_key == singleton_key), None)
-        if singleton is None:
-            raise ValueError(f"Singleton {singleton_key!r} not found")
-
-        # Get all non-singleton strata
-        candidates = self._get_non_singleton_strata(within=within, singleton=singleton)
-
-        if not candidates:
-            return pl.DataFrame(
-                schema={"stratum_key": pl.Utf8, "n_psus": pl.Int64, "n_obs": pl.Int64}
-            )
-
-        if by == "similarity":
-            if not variables:
-                raise ValueError("variables required when by='similarity'")
-            candidates = self._rank_by_similarity(
-                singleton, candidates, variables, weighted=weighted
-            )
-        else:
-            # Sort by size (smallest first)
-            candidates.sort(key=lambda c: (c.n_psus, c.stratum_key))
-
-        # Convert to DataFrame
-        top = candidates[:top_k]
-        return pl.DataFrame(
-            {
-                "stratum_key": [c.stratum_key for c in top],
-                "n_psus": [c.n_psus for c in top],
-                "n_obs": [c.n_observations for c in top],
-            }
-        )
-
-    def compare(
-        self,
-        key1: str,
-        key2: str,
-        variables: Sequence[str] | None = None,
-        *,
-        weighted: bool = True,
-    ) -> pl.DataFrame:
-        """
-        Compare two strata side-by-side.
-
-        Parameters
-        ----------
-        key1, key2 : str
-            Stratum keys to compare.
-        variables : sequence of str, optional
-            Variables to compare. If None, compares all numeric columns.
-        weighted : bool, default True
-            Use survey weights for statistics.
-
-        Returns
-        -------
-        pl.DataFrame
-            Columns: variable, stratum_1, stratum_2, difference.
-        """
-        stratum_col, _ = self._internal_cols()
-        if not stratum_col:
-            return pl.DataFrame()
-        index = self._strata_index()
-        key1, key2 = self._resolve(key1, index), self._resolve(key2, index)
-
-        data = self._narrow_data()
-        design = self._narrow_design()
-        wgt_col = getattr(design, "wgt", None) if weighted else None
-
-        # Determine variables to compare
-        if variables is None:
-            numeric_dtypes = {
-                pl.Int8,
-                pl.Int16,
-                pl.Int32,
-                pl.Int64,
-                pl.UInt8,
-                pl.UInt16,
-                pl.UInt32,
-                pl.UInt64,
-                pl.Float32,
-                pl.Float64,
-            }
-            var_list = [
-                c
-                for c in data.columns
-                if data.schema[c] in numeric_dtypes
-                and c not in {stratum_col, wgt_col, SVY_ROW_INDEX}
-            ]
-        else:
-            var_list = list(variables)
-
-        if not var_list:
-            return pl.DataFrame(
-                schema={
-                    "variable": pl.Utf8,
-                    "stratum_1": pl.Float64,
-                    "stratum_2": pl.Float64,
-                    "difference": pl.Float64,
-                }
-            )
-
-        # Compute means for both strata in a single Polars pass
-        both_keys = [key1, key2]
-        subset2 = data.filter(pl.col(stratum_col).is_in(both_keys))
-
-        if wgt_col and wgt_col in data.columns:
-            mean_exprs = [
-                ((pl.col(v) * pl.col(wgt_col)).sum() / pl.col(wgt_col).sum()).alias(v)
-                for v in var_list
-                if v in data.columns
-            ]
-        else:
-            mean_exprs = [pl.col(v).mean().alias(v) for v in var_list if v in data.columns]
-
-        means_df = subset2.lazy().group_by(stratum_col).agg(mean_exprs).collect()
-
-        def _row_as_means(key: str) -> dict[str, float]:
-            rows = means_df.filter(pl.col(stratum_col) == key)
-            if rows.is_empty():
-                return {v: float("nan") for v in var_list}
-            d = rows.row(0, named=True)
-            d.pop(stratum_col, None)
-            return {v: d.get(v, float("nan")) for v in var_list}
-
-        means1 = _row_as_means(key1)
-        means2 = _row_as_means(key2)
-
-        return pl.DataFrame(
-            {
-                "variable": var_list,
-                "stratum_1": [means1.get(v, float("nan")) for v in var_list],
-                "stratum_2": [means2.get(v, float("nan")) for v in var_list],
-                "difference": [
-                    means1.get(v, float("nan")) - means2.get(v, float("nan")) for v in var_list
-                ],
-            }
-        )
-
-    def rank_strata(
-        self,
-        by: str | Sequence[str],
-        *,
-        weighted: bool = True,
-        descending: bool = False,
-    ) -> pl.DataFrame:
-        """
-        Rank all strata by variable(s).
-
-        Parameters
-        ----------
-        by : str or sequence of str
-            Variable(s) to rank by.
-        weighted : bool, default True
-            Use survey weights for aggregation.
-        descending : bool, default False
-            Sort descending (largest first).
-
-        Returns
-        -------
-        pl.DataFrame
-            Columns: rank, stratum_key, n_psus, is_singleton, plus mean of `by` vars.
-        """
-        by_cols = self._to_cols(by) if isinstance(by, str) else list(by)
-        profile = self.strata_profile(variables=by_cols, weighted=weighted)
-
-        if profile.is_empty():
-            return pl.DataFrame()
-
-        # Sort by the first variable
-        sort_col = f"mean_{by_cols[0]}" if by_cols else "n_psus"
-        if sort_col not in profile.columns:
-            sort_col = "n_psus"
-
-        result = profile.sort(sort_col, descending=descending).with_row_index("rank", offset=1)
-
-        return result
-
-    def suggest_mapping(
-        self,
-        *,
-        variables: Sequence[str],
-        within: str | Sequence[str] | None = None,
-        weighted: bool = True,
-    ) -> dict[str, str]:
-        """
-        Suggest merge mapping based on similarity.
-
-        Parameters
-        ----------
-        variables : sequence of str
-            Variables to compute similarity.
-        within : str or sequence of str, optional
-            Constrain candidates to same value(s) in these columns.
-        weighted : bool, default True
-            Use survey weights.
-
-        Returns
-        -------
-        dict[str, str]
-            Mapping {singleton_key: suggested_target_key}.
-        """
-        singles = self.detected()
-        if not singles:
-            return {}
-
-        mapping = {}
-        for singleton in singles:
-            candidates = self._get_non_singleton_strata(within=within, singleton=singleton)
-            if not candidates:
-                log.warning(
-                    f"No valid candidates for singleton {singleton.stratum_key!r} "
-                    f"with within={within}"
-                )
-                continue
-
-            ranked = self._rank_by_similarity(singleton, candidates, variables, weighted=weighted)
-            if ranked:
-                mapping[singleton.stratum_key] = ranked[0].stratum_key
-
-        return mapping
-
-    # ══════════════════════════════════════════════════════════════════════
-    # VARIANCE COMPUTATION (for estimation with singletons)
-    # ══════════════════════════════════════════════════════════════════════
-
-    def variance_contributions(
-        self,
-        variable: str,
-        *,
-        weighted: bool = True,
-    ) -> list[StratumVarianceInfo]:
-        """
-        Compute variance contribution from each stratum for a variable.
-
-        This computes the Taylor series variance contribution from each stratum.
-        Singleton strata will have variance_contribution=None since we cannot
-        compute within-stratum variance from a single PSU.
-
-        Parameters
-        ----------
-        variable : str
-            The variable to compute variance for.
-        weighted : bool, default True
-            Use survey weights.
-
-        Returns
-        -------
-        list[StratumVarianceInfo]
-            Variance info for each stratum, sorted by stratum key.
-
-        Notes
-        -----
-        For Taylor series linearization, the variance contribution from
-        stratum h is:
-
-            V_h = (n_h / (n_h - 1)) * Σᵢ(y_hi - ȳ_h)²
-
-        where n_h is the number of PSUs, y_hi is the weighted total for
-        PSU i, and ȳ_h is the mean of PSU totals.
-        """
-        stratum_col, psu_col = self._internal_cols()
-        if not stratum_col:
-            return []
-
-        data = self._narrow_data()
-        design = self._narrow_design()
-        wgt_col = getattr(design, "wgt", None) if weighted else None
-
-        if variable not in data.columns:
-            raise ValueError(f"Variable {variable!r} not found in data")
-
-        # Compute weighted totals per PSU within each stratum
-        if wgt_col and wgt_col in data.columns:
-            psu_totals = (
-                data.lazy()
-                .group_by([stratum_col, psu_col])
-                .agg(
-                    (pl.col(variable) * pl.col(wgt_col)).sum().alias("psu_total"),
-                    pl.len().alias("n_obs"),
-                )
-                .collect()
-            )
-        else:
-            psu_totals = (
-                data.lazy()
-                .group_by([stratum_col, psu_col])
-                .agg(
-                    pl.col(variable).sum().alias("psu_total"),
-                    pl.len().alias("n_obs"),
-                )
-                .collect()
-            )
-        psu_totals = cast(pl.DataFrame, psu_totals)
-
-        # Compute per-stratum variance in Polars: V_h = (n_h/(n_h-1)) * sum((y_hi - ȳ_h)²)
-        stratum_stats = (
-            psu_totals.lazy()
-            .group_by(stratum_col)
-            .agg(
-                pl.col("psu_total").count().alias("n_psus"),
-                pl.col("n_obs").sum().alias("n_obs_total"),
-                pl.col("psu_total").mean().alias("mean_total"),
-                pl.col("psu_total").var(ddof=0).alias("var_pop"),  # population variance
-            )
-            .with_columns(
-                # V_h = (n/(n-1)) * n * pop_var  = n²/(n-1) * pop_var
-                # But pop_var = sum_sq_dev/n, so V_h = n/(n-1) * sum_sq_dev
-                # Use: V_h = n/(n-1) * n * var_pop  when n > 1, else null
-                pl.when(pl.col("n_psus") > 1)
-                .then(
-                    (pl.col("n_psus").cast(pl.Float64) / (pl.col("n_psus") - 1))
-                    * pl.col("n_psus").cast(pl.Float64)
-                    * pl.col("var_pop")
-                )
-                .otherwise(pl.lit(None))
-                .alias("variance")
-            )
-            .sort(stratum_col)
-            .collect()
-        )
-        stratum_stats = cast(pl.DataFrame, stratum_stats)
-
-        # Keep per-PSU totals for StratumVarianceInfo.psu_totals
-        totals_by_stratum: dict[Any, list[float]] = {}
-        for row in psu_totals.to_dicts():
-            k = row[stratum_col]
-            totals_by_stratum.setdefault(k, []).append(float(row["psu_total"]))
-
-        result = []
-        for row in stratum_stats.to_dicts():
-            key = row[stratum_col]
-            totals = totals_by_stratum.get(key, [])
-            result.append(
-                StratumVarianceInfo(
-                    stratum_key=str(key),
-                    n_psus=row["n_psus"],
-                    is_singleton=row["n_psus"] == 1,
-                    variance_contribution=row["variance"],
-                    n_observations=int(row["n_obs_total"] or 0),
-                    psu_totals=tuple(totals),
-                )
-            )
-
-        return result
-
-    # ══════════════════════════════════════════════════════════════════════
-    # HANDLING METHODS (all return new Sample)
-    # ══════════════════════════════════════════════════════════════════════
-
-    def raise_error(self) -> None:
-        """
-        Raise an error if any singleton PSUs are detected.
-
-        Raises
-        ------
-        SingletonError
-            If any singletons exist.
-        """
-        singles = self.detected()
-        if singles:
-            raise SingletonError.from_singletons(singles)
-
-    def certainty(self, *, domains: SingletonDomains = "warn") -> Sample:
-        """
-        Treat singleton PSUs as 'certainty units'.
-
-        Each observation within a singleton stratum gets its own unique PSU ID,
-        effectively treating each unit as self-representing.
-
-        Parameters
-        ----------
-        domains : {"warn", "ignore", "error"}, default "warn"
-            Strata with several PSUs but one inside an estimation domain
-            (``where=`` crossed with a ``by=`` level). ``"warn"`` uses the
-            standard domain variance and notes it under the result;
-            ``"ignore"`` does so silently (R's default); ``"error"`` raises.
-            Set on a sample without singletons, the rule is recorded for its
-            domains alone.
-
-        Returns
-        -------
-        Sample
-            New sample with singleton observations as individual PSUs.
-        """
-        _check_domains("certainty", domains)
-        singles = self.detected()
-        if not singles:
-            return self._domains_only("certainty", domains)
-
-        stratum_col, psu_col = self._internal_cols()
-        if not stratum_col:
-            return self._sample
-
-        # Already handled: estimation gates on the recorded decision, not the
-        # data, so only an existing certainty result short-circuits. (A former
-        # ids-already-conform check was trivially true for no-PSU designs —
-        # each row is its own PSU — and returned the sample with no config,
-        # so the assertion was never recorded and estimation still failed.)
-        existing = getattr(self._sample, "_singleton_result", None)
-        spec = getattr(self._sample._design, "singleton", None)
-        if (
-            existing is not None
-            and existing.method == _SingletonHandling.CERTAINTY
-            and (spec is None or spec.domains == domains)
-        ):
-            return self._sample
-
-        data, design, result = self._apply_certainty(singles)
-        return self._install(
-            data, design, result, lambda: _spec("certainty", self, result, domains=domains)
-        )
-
-    def skip(self, *, domains: SingletonDomains = "warn") -> Sample:
-        """
-        Let singleton strata contribute nothing to the variance.
-
-        All rows stay in the estimator; only the variance contribution of each
-        one-PSU stratum is dropped. This is R's ``lonely.psu = "remove"``.
-
-        Parameters
-        ----------
-        domains : {"warn", "ignore", "error"}, default "warn"
-            Strata with several PSUs but one inside an estimation domain
-            (``where=`` crossed with a ``by=`` level). ``"warn"`` uses the
-            standard domain variance and notes it under the result;
-            ``"ignore"`` does so silently (R's default); ``"error"`` raises.
-            Set on a sample without singletons, the rule is recorded for its
-            domains alone.
-
-        Returns
-        -------
-        Sample
-            New sample carrying the skip recipe.
-
-        Warnings
-        --------
-        The variance is understated by the singletons' share. Consider
-        `scale()`, `collapse()` or `pool()` instead.
-        """
-        _check_domains("skip", domains)
-        singles = self.detected()
-        if not singles:
-            return self._domains_only("skip", domains)
-
-        data, design, result = self._apply_skip(singles)
-        return self._install(
-            data, design, result, lambda: _spec("skip", self, result, domains=domains)
-        )
-
-    def combine(self, mapping: dict[str, dict[str, str]]) -> Sample:
-        """
-        Remap values in stratum/PSU columns per explicit mapping.
-
-        This is a low-level method that directly modifies column values.
-        For most use cases, prefer `collapse()` which handles the mapping
-        automatically.
-
-        Parameters
-        ----------
-        mapping : dict[str, dict[str, str]]
-            Mapping of {column_name: {old_value: new_value}}.
-            Columns must be in design.stratum or design.psu.
-
-        Returns
-        -------
-        Sample
-            New sample with remapped values.
-
-        Raises
-        ------
-        SingletonError
-            If the mapping doesn't resolve all singletons.
-        ValueError
-            If mapping refers to invalid columns.
-        """
-        singles = self.detected()
-        if not singles:
-            return self._sample
-
-        data, design, result = self._apply_combine(mapping, singles)
-        # A recode of the data, not a spec: a spec from an earlier rule no
-        # longer describes the recoded strata and goes with it, silently.
-        if getattr(design, "singleton", None) is not None:
-            design = design._with_part("singleton", None)
-        return self._clone_with_result(data, design, result)
-
-    def collapse(
-        self,
-        *,
-        using: CollapseUsing = "smallest",
-        within: str | Sequence[str] | None = None,
-        order_by: str | Sequence[str] | None = None,
-        descending: bool = False,
-        rstate: RandomState = None,
-        domains: SingletonDomains = "warn",
-    ) -> Sample:
-        """
-        Merge each singleton into an existing non-singleton stratum.
-
-        Parameters
-        ----------
-        using : str, dict, or callable, default "smallest"
-            Strategy for selecting target stratum:
-            - "smallest": smallest non-singleton (by PSU count)
-            - "largest": largest non-singleton
-            - "next": next stratum by `order_by` (or stratum key)
-            - "previous": previous stratum by `order_by`
-            - dict[str, str]: explicit {singleton_key: target_key}
-            - callable(SingletonInfo, list[StratumInfo]) -> str
-
-        within : str or sequence of str, optional
-            Constrain candidates to matching values in these columns.
-            E.g., within="region" only considers strata in the same region.
-
-        order_by : str or sequence of str, optional
-            Column(s) for ordering strata when using "next"/"previous",
-            and for deterministic tie-breaking.
-
-        descending : bool, default False
-            Sort order for `order_by`.
-
-        rstate : RandomState, optional
-            If provided, ties are broken randomly (reproducible with int seed).
-            If None (default), ties are broken deterministically by `order_by`
-            then stratum key.
-
-        Returns
-        -------
-        Sample
-            New sample with singletons merged into existing strata.
-
-        Notes
-        -----
-        When multiple strata tie as candidates (e.g., same size), tie-breaking:
-        - rstate=None: deterministic (by order_by, then stratum key)
-        - rstate=42: random but reproducible
-        - rstate=np.random.default_rng(): random
-
-        Singletons are processed with rebalancing: after each merge, candidate
-        sizes are recalculated, distributing singletons more evenly.
-
-        Examples
-        --------
-        >>> # Merge into smallest stratum
-        >>> new_sample = sample.singleton.collapse(using="smallest")
-
-        >>> # Merge within same region
-        >>> new_sample = sample.singleton.collapse(using="smallest", within="region")
-
-        >>> # Use explicit mapping
-        >>> mapping = {"singleton_A": "target_B", "singleton_C": "target_D"}
-        >>> new_sample = sample.singleton.collapse(using=mapping)
-
-        >>> # Custom strategy with proximity matrix
-        >>> def find_nearest(singleton, candidates):
-        ...     return max(candidates, key=lambda c: proximity[singleton.stratum_key, c.stratum_key]).stratum_key
-        >>> new_sample = sample.singleton.collapse(using=find_nearest)
-        """
-        _check_domains("collapse", domains)
-        singles = self.detected()
-        if not singles:
-            return self._domains_only("collapse", domains)
-
-        if isinstance(using, dict):
-            # Strata by their columns' values (tuples for tuple strata), or by
-            # svy's key strings as before.
-            index = self._strata_index()
-            using = {self._resolve(k, index): self._resolve(v, index) for k, v in using.items()}
-        data, design, result = self._apply_collapse(
-            singles,
-            using=using,
-            within=within,
-            order_by=order_by,
-            descending=descending,
-            rstate=rstate,
-        )
-        return self._install(
-            data, design, result, lambda: _spec("collapse", self, result, domains=domains)
-        )
-
-    def pool(self, *, name: str = "__pooled__", domains: SingletonDomains = "warn") -> Sample:
-        """
-        Combine all singletons into a single new pseudo-stratum.
-
-        Unlike `collapse()`, which merges singletons into existing strata,
-        `pool()` creates a new stratum containing only the former singleton PSUs.
-
-        Parameters
-        ----------
-        name : str, default "__pooled__"
-            Name for the new pseudo-stratum.
-        domains : {"warn", "ignore", "error"}, default "warn"
-            Strata with several PSUs but one inside an estimation domain
-            (``where=`` crossed with a ``by=`` level). ``"warn"`` uses the
-            standard domain variance and notes it under the result;
-            ``"ignore"`` does so silently (R's default); ``"error"`` raises.
-            Set on a sample without singletons, the rule is recorded for its
-            domains alone.
-
-        Returns
-        -------
-        Sample
-            New sample with all singletons in a single pseudo-stratum.
-
-        Notes
-        -----
-        The pooled stratum will have multiple PSUs (one per former singleton),
-        allowing variance estimation. This is appropriate when:
-        - Singletons don't naturally belong to any existing stratum
-        - You want to preserve the original structure of non-singleton strata
-        - Singletons represent "miscellaneous" or "other" units
-
-        Examples
-        --------
-        Before: Strata A(1 PSU), B(1 PSU), C(2 PSUs), D(2 PSUs)
-        After:  Strata __pooled__(2 PSUs), C(2 PSUs), D(2 PSUs)
-        """
-        _check_domains("pool", domains)
-        singles = self.detected()
-        if not singles:
-            return self._domains_only("pool", domains, name=name)
-
-        data, design, result = self._apply_pool(singles, name=name)
-        return self._install(
-            data, design, result, lambda: _spec("pool", self, result, name=name, domains=domains)
-        )
-
-    def scale(self, *, domains: SingletonDomains = "warn") -> Sample:
-        """
-        Mark for variance scaling by singleton fraction.
-
-        Singleton strata contribute nothing to the variance, and the variance is
-        inflated by 1/(1 - singleton_frac). All rows stay in the estimator.
-
-        This is equivalent to R's `lonely.psu = "average"` option.
-
-        Parameters
-        ----------
-        domains : {"warn", "ignore", "error", "apply"}, default "warn"
-            Strata with several PSUs but one inside an estimation domain
-            (``where=`` crossed with a ``by=`` level). ``"warn"`` uses the
-            standard domain variance and notes it under the result;
-            ``"ignore"`` does so silently (R's default); ``"error"`` raises.
-            ``"apply"`` handles them as singletons too, R's
-            ``options(survey.adjust.domain.lonely = TRUE)``.
-            Set on a sample without singletons, the rule is recorded for its
-            domains alone.
-
-            Under ``"apply"`` those strata are left out and counted with the
-            singletons in ``nstrat/nokstrat``.
-
-        Returns
-        -------
-        Sample
-            New sample marked for variance scaling.
-
-        Notes
-        -----
-        Point estimates use the full sample. Variances are computed with the
-        singleton strata's contributions dropped, then multiplied by
-        ``n_strata / n_ok_strata``, i.e. ``1 / (1 - f)`` with
-        ``f = n_singletons / n_strata`` — e.g. with 20% singleton strata the
-        variance is multiplied by ``1/0.8 = 1.25``. Both counts are taken over
-        the strata that hold the rows being estimated, as R does after
-        ``subset()`` and inside ``svyby()``: a ``by=`` level or ``where=``
-        domain that leaves whole strata out gets its own fraction, a domain
-        with no singleton stratum is not inflated, and a domain lying entirely
-        in singleton strata has no reference variance and reports ``NaN``.
-        The factor is the same for every Taylor estimator (totals, means,
-        ratios, proportions, quantiles, correlations) and applies to the whole
-        covariance matrix and to the design effect, as in R.
-
-        This assumes singleton strata would have contributed "average"
-        variance had they held multiple PSUs.
-
-        Examples
-        --------
-        >>> sample_scaled = sample.singleton.scale()
-        >>> result = sample_scaled.estimation.mean("income")  # Variance auto-scaled
-        """
-
-        _check_domains("scale", domains)
-        singles = self.detected()
-        if not singles:
-            return self._domains_only("scale", domains)
-
-        data, design, result = self._apply_scale(singles)
-        return self._install(
-            data, design, result, lambda: _spec("scale", self, result, domains=domains)
-        )
-
-    def center(self, *, domains: SingletonDomains = "warn") -> Sample:
-        """
-        Mark for grand-mean centering of singleton variance.
-
-        This method does NOT exclude singleton strata. Instead, it tells
-        the variance estimation engine to compute singleton variance
-        contribution using (stratum_total - grand_mean)².
-
-        This is equivalent to R's `lonely.psu = "adjust"` option and to
-        Stata's `singleunit(centered)` — the conventional lonely-PSU
-        handling for DHS analyses.
-
-        Parameters
-        ----------
-        domains : {"warn", "ignore", "error", "apply"}, default "warn"
-            Strata with several PSUs but one inside an estimation domain
-            (``where=`` crossed with a ``by=`` level). ``"warn"`` uses the
-            standard domain variance and notes it under the result;
-            ``"ignore"`` does so silently (R's default); ``"error"`` raises.
-            ``"apply"`` handles them as singletons too, R's
-            ``options(survey.adjust.domain.lonely = TRUE)``.
-            Set on a sample without singletons, the rule is recorded for its
-            domains alone.
-
-            Under ``"apply"`` all PSU totals of such a stratum (the one with
-            domain rows and the zero totals of the others) are centred at the
-            grand mean.
-
-        Returns
-        -------
-        Sample
-            New sample marked for grand-mean centering.
-
-        Notes
-        -----
-        For singleton strata, instead of the undefined within-stratum
-        variance, the contribution is based on how different the
-        singleton's total is from the grand mean of PSU totals:
-
-            V_singleton = (y_h - ȳ)²
-
-        where y_h is the singleton's PSU total and ȳ is the mean of
-        all PSU totals across all strata.
-
-        This preserves the full sample for point estimation while
-        providing a variance estimate that reflects the singleton's
-        deviation from the overall pattern.
-
-        Examples
-        --------
-        >>> sample_centered = sample.singleton.center()
-        >>> result = sample_centered.estimation.mean("income")  # Uses centered variance
-        """
-        _check_domains("center", domains)
-        singles = self.detected()
-        if not singles:
-            return self._domains_only("center", domains)
-
-        data, design, result = self._apply_center(singles)
-        return self._install(
-            data, design, result, lambda: _spec("center", self, result, domains=domains)
-        )
-
-    def handle(
-        self,
-        method: Literal[
-            "error", "certainty", "skip", "combine", "collapse", "pool", "scale", "center"
-        ],
-        **kwargs: Any,
-    ) -> Sample:
-        """
-        Unified dispatcher for singleton handling methods.
-
-        Parameters
-        ----------
-        method : str
-            The handling method to apply:
-            - ``'error'``: raise error if singletons exist
-            - ``'certainty'``: treat as certainty units
-            - ``'skip'``: remove singleton rows
-            - ``'combine'``: manual remapping
-            - ``'collapse'``: merge into existing strata
-            - ``'pool'``: combine into pseudo-stratum
-            - ``'scale'``: post-hoc variance inflation
-            - ``'center'``: grand-mean centering
-
-        **kwargs
-            Arguments passed to the specific method.
-
-        Returns
-        -------
-        Sample
-            New sample with singletons handled.
-
-        Examples
-        --------
-        >>> method = config.get("singleton_handling", "certainty")
-        >>> new_sample = sample.singleton.handle(method)
-
-        >>> new_sample = sample.singleton.handle("collapse", using="smallest", within="region")
-        """
-        if isinstance(method, str):
-            method = method.lower()
-
-        dispatch = {
-            _SingletonHandling.ERROR: lambda: (self.raise_error(), self._sample)[1],
-            _SingletonHandling.CERTAINTY: self.certainty,
-            _SingletonHandling.SKIP: self.skip,
-            _SingletonHandling.COMBINE: self.combine,
-            _SingletonHandling.COLLAPSE: self.collapse,
-            _SingletonHandling.POOL: self.pool,
-            _SingletonHandling.SCALE: self.scale,
-            _SingletonHandling.CENTER: self.center,
-            "error": lambda: (self.raise_error(), self._sample)[1],
-            "certainty": self.certainty,
-            "skip": self.skip,
-            "combine": self.combine,
-            "collapse": self.collapse,
-            "pool": self.pool,
-            "scale": self.scale,
-            "center": self.center,
-        }
-
-        # Accept both the enum and its string value ('.strip()' on a plain
-        # Enum raised AttributeError, so handle(SingletonHandling.POOL)
-        # crashed while handle("pool") worked).
-        key = method.strip().lower() if isinstance(method, str) else method
-        handler = dispatch.get(key)
-        if handler is None:
-            raise ValueError(f"Unknown method {method!r}. Use one of: {tuple(dispatch)}.")
-
-        return handler(**kwargs)
-
-    # ══════════════════════════════════════════════════════════════════════
-    # RESULT ACCESS
-    # ══════════════════════════════════════════════════════════════════════
-
-    @property
-    def last_result(self) -> SingletonResult | None:
-        """
-        Result from the most recent singleton handling operation.
-
-        Returns
-        -------
-        SingletonResult or None
-            The result if this sample was produced by a singleton handling
-            operation, otherwise None.
-        """
-        return getattr(self._sample, "_singleton_result", None)
 
     # ══════════════════════════════════════════════════════════════════════
     # INTERNAL HELPERS
@@ -1299,37 +198,6 @@ class Singleton:
         counts = df.group_by(stratum_col).agg(pl.col(psu_col).n_unique().alias("p"))
         return counts.height, int(counts.get_column("p").sum())
 
-    def _install(
-        self,
-        data: pl.DataFrame,
-        design: Design,
-        result: SingletonResult,
-        spec: Callable[[], SingletonSpec],
-    ) -> Sample:
-        """A new sample whose design carries the resolved rule.
-
-        The rule goes in with ``update_design``, so it is in ``design_history``,
-        and the variance columns are derived from it (and rebuilt whenever the
-        data or design changes). A host without a design history gets the
-        derived columns directly.
-        """
-        if not hasattr(self._sample, "update_design"):
-            return self._clone_with_result(data, design, result)
-        new = self._sample._fork()
-        new.update_design(singleton=spec())
-        return new
-
-    def _domains_only(self, method: str, domains: str, **kw: Any) -> Sample:
-        """A sample without singletons: the rule is recorded for its domains
-        setting alone, or the sample is returned as is under the default."""
-        if domains == "warn" or not hasattr(self._sample, "update_design"):
-            return self._sample
-        from svy.core.design import SingletonSpec
-
-        new = self._sample._fork()
-        new.update_design(singleton=SingletonSpec(method=method, domains=domains, **kw))  # type: ignore[arg-type]
-        return new
-
     def _strata_index(self) -> _StrataIndex | None:
         stratum_col, _ = self._internal_cols()
         data = self._narrow_data()
@@ -1359,59 +227,6 @@ class Singleton:
         index = index or self._strata_index()
         key = None if index is None else index.key(stratum)
         return stratum if key is None else key
-
-    def _clone_with_result(
-        self,
-        data: pl.DataFrame,
-        design: Design,
-        result: SingletonResult,
-    ) -> Sample:
-        """Clone sample and attach singleton result."""
-        from svy.core.sample import Sample as _Sample
-
-        if isinstance(self._sample, _Sample):
-            # The clone rebuilds svy's bookkeeping; a frame carrying it is refused.
-            data = _Sample._without_bookkeeping(data)
-        new_sample = cast(_Sample, self._sample.clone(data=data, design=design))
-        object.__setattr__(new_sample, "_singleton_result", result)
-        return new_sample
-
-    def _recommend_strategy(
-        self,
-        singles: list[SingletonInfo],
-        n_strata: int,
-        affected_rows: int,
-        total_rows: int,
-    ) -> tuple[_SingletonHandling | None, str | None]:
-        """Determine recommended handling strategy."""
-        if not singles:
-            return None, "No singletons detected"
-
-        pct_singletons = (len(singles) / n_strata * 100) if n_strata > 0 else 0
-        pct_rows = (affected_rows / total_rows * 100) if total_rows > 0 else 0
-
-        # Heuristic recommendations
-        if pct_rows < 1:
-            return _SingletonHandling.SKIP, (
-                f"Singletons affect <1% of rows ({pct_rows:.1f}%); "
-                "removing them has minimal impact"
-            )
-
-        if pct_singletons < 10:
-            return _SingletonHandling.COLLAPSE, (
-                f"Few singletons ({pct_singletons:.1f}% of strata); "
-                "merging into similar strata preserves design"
-            )
-
-        if len(singles) >= 2:
-            return _SingletonHandling.POOL, (
-                f"Multiple singletons ({len(singles)}); "
-                "pooling creates a valid pseudo-stratum for variance estimation"
-            )
-
-        return _SingletonHandling.CERTAINTY, (
-            "Single singleton stratum; treating as certainty unit allows variance estimation"
-        )
 
     def _detect_on_df(self, df: pl.DataFrame, design: Design) -> list[SingletonInfo]:
         """
@@ -1544,98 +359,71 @@ class Singleton:
         stratum_col_override: str | None = None,
     ) -> list[StratumInfo]:
         """Get all non-singleton strata, optionally filtered by `within` constraint."""
+        if df is None:
+            df = self._narrow_data()
         all_strata = self._get_all_strata_info(
             df, order_by=order_by, stratum_col_override=stratum_col_override
         )
         non_singletons = [s for s in all_strata if s.n_psus > 1]
 
-        if within is None or singleton is None:
-            return non_singletons
-
-        # Filter by within constraint
         within_cols = self._to_cols(within)
-        if not within_cols:
+        if not within_cols or singleton is None:
             return non_singletons
+        stratum_col = stratum_col_override or self._internal_cols()[0]
+        values = self._within_values(df, cast(str, stratum_col), within_cols)
+        own = values.get(singleton.stratum_key)
+        return [s for s in non_singletons if values.get(s.stratum_key) == own]
 
-        # Get singleton's values for within columns
-        singleton_within_values = {col: singleton.stratum_values.get(col) for col in within_cols}
-
-        # Filter candidates
-        return [
-            s
-            for s in non_singletons
-            if all(
-                s.stratum_values.get(col) == singleton_within_values.get(col)
-                for col in within_cols
+    def _within_values(
+        self, df: pl.DataFrame, stratum_col: str, within_cols: list[str]
+    ) -> dict[str, tuple[Any, ...]]:
+        """Each stratum's values of the ``within`` columns, which must be
+        constant within a stratum."""
+        missing = [c for c in within_cols if c not in df.columns]
+        if missing:
+            raise SingletonError(
+                title="within names columns not in the data",
+                detail=f"collapse within={within_cols}: {missing} not in the data.",
+                code="SINGLETON_WITHIN_INVALID",
+                where="svy.Singleton",
+                param="within",
+                got=missing,
+                hint="within names columns constant within each stratum, e.g. a region.",
             )
+        # A missing value says nothing about where a stratum lies.
+        grouped = df.group_by(stratum_col).agg(
+            *[
+                pl.col(c).drop_nulls().n_unique().alias(f"__n_{i}__")
+                for i, c in enumerate(within_cols)
+            ],
+            *[pl.col(c).drop_nulls().first().alias(c) for c in within_cols],
+        )
+        varying = [
+            (c, grouped.filter(pl.col(f"__n_{i}__") > 1).get_column(stratum_col).to_list())
+            for i, c in enumerate(within_cols)
         ]
-
-    def _rank_by_similarity(
-        self,
-        singleton: SingletonInfo,
-        candidates: list[StratumInfo],
-        variables: Sequence[str],
-        *,
-        weighted: bool = True,
-    ) -> list[StratumInfo]:
-        """Rank candidates by similarity to singleton."""
-        stratum_col, _ = self._internal_cols()
-        if not stratum_col:
-            return candidates
-
-        data = self._narrow_data()
-        design = self._narrow_design()
-        wgt_col = getattr(design, "wgt", None) if weighted else None
-        var_list = list(variables)
-
-        def compute_means(stratum_key: str) -> dict[str, float]:
-            subset = data.filter(pl.col(stratum_col) == stratum_key)
-            if subset.height == 0:
-                return {}
-
-            means = {}
-            for var in var_list:
-                if var not in subset.columns:
-                    continue
-                if wgt_col and wgt_col in subset.columns:
-                    total = (subset[var] * subset[wgt_col]).sum()
-                    wgt_sum = subset[wgt_col].sum()
-                    means[var] = total / wgt_sum if wgt_sum > 0 else float("nan")
-                else:
-                    means[var] = subset[var].mean()
-            return means
-
-        # Compute singleton means
-        singleton_means = compute_means(singleton.stratum_key)
-
-        # Compute distances
-        distances: list[tuple[StratumInfo, float]] = []
-        for cand in candidates:
-            cand_means = compute_means(cand.stratum_key)
-            # Euclidean distance on standardized variables (simple approach)
-            dist = 0.0
-            n_vars = 0
-            for var in var_list:
-                if var in singleton_means and var in cand_means:
-                    s_val = singleton_means[var]
-                    c_val = cand_means[var]
-                    if not (
-                        s_val is None
-                        or c_val is None
-                        or (isinstance(s_val, float) and (s_val != s_val))
-                        or (isinstance(c_val, float) and (c_val != c_val))
-                    ):
-                        dist += (s_val - c_val) ** 2
-                        n_vars += 1
-            if n_vars > 0:
-                dist = (dist / n_vars) ** 0.5
-            else:
-                dist = float("inf")
-            distances.append((cand, dist))
-
-        # Sort by distance (ascending)
-        distances.sort(key=lambda x: (x[1], x[0].stratum_key))
-        return [d[0] for d in distances]
+        varying = [(c, keys) for c, keys in varying if keys]
+        if varying:
+            col, keys = varying[0]
+            shown = self._key_values(sorted(map(str, keys))[:3])
+            raise SingletonError(
+                title="within column varies within a stratum",
+                detail=(
+                    f"collapse within={col!r}: {col!r} takes several values in "
+                    f"{len(keys)} strata (e.g. {_shown(shown)}), so it does "
+                    "not say which strata a singleton may join."
+                ),
+                code="SINGLETON_WITHIN_INVALID",
+                where="svy.Singleton",
+                param="within",
+                got=col,
+                hint="Use a column constant within each stratum, e.g. the region the "
+                "stratum lies in.",
+            )
+        return {
+            str(row[0]): tuple(row[1:])
+            for row in grouped.select(stratum_col, *within_cols).iter_rows()
+        }
 
     def _select_target(
         self,
@@ -1827,7 +615,7 @@ class Singleton:
         n_strata_after, n_psus_after = self._counts_before(data, _VAR_STRATUM_COL, _VAR_PSU_COL)
 
         config = SingletonHandlingConfig(
-            method=_SingletonHandling.CERTAINTY,
+            method=SingletonMethod.SELF_REPRESENTING,
             singleton_keys=tuple(singleton_keys),
             stratum_mapping=None,  # No mapping, just level shift
             var_stratum_col=_VAR_STRATUM_COL,
@@ -1836,7 +624,7 @@ class Singleton:
         )
 
         result = SingletonResult(
-            method=_SingletonHandling.CERTAINTY,
+            method=SingletonMethod.SELF_REPRESENTING,
             detected=tuple(singles),
             applied=tuple(singleton_keys),
             n_singletons_detected=len(singles),
@@ -1867,7 +655,7 @@ class Singleton:
         singleton_keys = [s.stratum_key for s in singles]
 
         config = SingletonHandlingConfig(
-            method=_SingletonHandling.SKIP,
+            method=SingletonMethod.SKIP,
             singleton_keys=tuple(singleton_keys),
             stratum_mapping=None,
             var_stratum_col=_VAR_STRATUM_COL,
@@ -1876,7 +664,7 @@ class Singleton:
         )
 
         result = SingletonResult(
-            method=_SingletonHandling.SKIP,
+            method=SingletonMethod.SKIP,
             detected=tuple(singles),
             applied=tuple(singleton_keys),
             n_singletons_detected=len(singles),
@@ -1909,7 +697,7 @@ class Singleton:
         singleton_frac = len(singles) / n_strata_before if n_strata_before > 0 else 0.0
 
         config = SingletonHandlingConfig(
-            method=_SingletonHandling.SCALE,
+            method=SingletonMethod.SCALE,
             singleton_keys=tuple(singleton_keys),
             stratum_mapping=None,
             singleton_fraction=singleton_frac,
@@ -1919,7 +707,7 @@ class Singleton:
         )
 
         result = SingletonResult(
-            method=_SingletonHandling.SCALE,
+            method=SingletonMethod.SCALE,
             detected=tuple(singles),
             applied=None,
             n_singletons_detected=len(singles),
@@ -2002,7 +790,7 @@ class Singleton:
         )
 
         config = SingletonHandlingConfig(
-            method=_SingletonHandling.CENTER,
+            method=SingletonMethod.CENTER,
             singleton_keys=tuple(singleton_keys),
             stratum_mapping=None,
             singleton_fraction=None,
@@ -2012,7 +800,7 @@ class Singleton:
         )
 
         result = SingletonResult(
-            method=_SingletonHandling.CENTER,
+            method=SingletonMethod.CENTER,
             detected=tuple(singles),
             applied=None,
             n_singletons_detected=len(singles),
@@ -2021,75 +809,6 @@ class Singleton:
             n_psus_before=n_psus_before,
             n_psus_after=n_psus_before,  # No change
             config=config,
-        )
-        return data, design, result
-
-    def _apply_combine(
-        self,
-        mapping: dict[str, dict[str, str]],
-        singles: list[SingletonInfo],
-    ) -> tuple[pl.DataFrame, Design, SingletonResult]:
-        """Apply combine handling."""
-        data = cast(pl.DataFrame, self._sample._data.clone())
-        design = cast("Design", copy.deepcopy(self._sample._design))
-
-        stratum_col, psu_col = self._internal_cols()
-        assert stratum_col is not None
-
-        per_col_map = self._require_per_column_mapping(mapping)
-
-        stratum_cols = self._to_cols(getattr(design, "stratum", None))
-        psu_cols = self._to_cols(getattr(design, "psu", None))
-        allowed = set(stratum_cols) | set(psu_cols)
-
-        bad = [c for c in per_col_map.keys() if c not in allowed]
-        if bad:
-            raise ValueError(
-                f"Combine mapping refers to columns not in design.stratum/psu: {bad}. "
-                f"Allowed: {sorted(allowed)}"
-            )
-
-        n_strata_before, n_psus_before = self._counts_before(data, stratum_col, psu_col)
-
-        exprs = []
-        for col, map_dict in per_col_map.items():
-            if col not in data.columns:
-                raise ValueError(f"Column {col!r} not found in data.")
-            exprs.append(pl.col(col).replace(map_dict).alias(col))
-
-        data = data.with_columns(exprs)
-
-        # Recompute internals
-        sep = "__by__"
-        null_token = "__Null__"
-
-        if any(c in per_col_map for c in stratum_cols):
-            parts = [pl.col(c).cast(pl.Utf8).fill_null(null_token) for c in stratum_cols]
-            data = data.with_columns(
-                pl.concat_str(parts, separator=sep).cast(pl.Categorical).alias(stratum_col)
-            )
-
-        if any(c in per_col_map for c in psu_cols):
-            parts = [pl.col(c).cast(pl.Utf8).fill_null(null_token) for c in psu_cols]
-            data = data.with_columns(
-                pl.concat_str(parts, separator=sep).cast(pl.Utf8).alias(psu_col)
-            )
-
-        residual = self._detect_on_df(data, design)
-        if residual:
-            raise SingletonError.from_singletons(residual, where="singleton.combine")
-
-        n_strata_after, n_psus_after = self._counts_before(data, stratum_col, psu_col)
-
-        result = SingletonResult(
-            method=_SingletonHandling.COMBINE,
-            detected=tuple(singles),
-            applied=tuple(sorted(per_col_map.keys())),
-            n_singletons_detected=len(singles),
-            n_strata_before=n_strata_before,
-            n_strata_after=n_strata_after,
-            n_psus_before=n_psus_before,
-            n_psus_after=n_psus_after,
         )
         return data, design, result
 
@@ -2190,7 +909,7 @@ class Singleton:
         n_strata_after, n_psus_after = self._counts_before(data, _VAR_STRATUM_COL, _VAR_PSU_COL)
 
         config = SingletonHandlingConfig(
-            method=_SingletonHandling.COLLAPSE,
+            method=SingletonMethod.COLLAPSE,
             singleton_keys=tuple(applied_mapping.keys()),
             stratum_mapping=applied_mapping,
             var_stratum_col=_VAR_STRATUM_COL,
@@ -2199,7 +918,7 @@ class Singleton:
         )
 
         result = SingletonResult(
-            method=_SingletonHandling.COLLAPSE,
+            method=SingletonMethod.COLLAPSE,
             detected=tuple(singles),
             applied=applied_mapping,
             n_singletons_detected=len(singles),
@@ -2254,7 +973,7 @@ class Singleton:
         stratum_mapping = {s.stratum_key: name for s in singles}
 
         config = SingletonHandlingConfig(
-            method=_SingletonHandling.POOL,
+            method=SingletonMethod.POOL,
             singleton_keys=tuple(singleton_keys),
             stratum_mapping=stratum_mapping,
             var_stratum_col=_VAR_STRATUM_COL,
@@ -2263,7 +982,7 @@ class Singleton:
         )
 
         result = SingletonResult(
-            method=_SingletonHandling.POOL,
+            method=SingletonMethod.POOL,
             detected=tuple(singles),
             applied=stratum_mapping,
             n_singletons_detected=len(singles),
@@ -2274,22 +993,6 @@ class Singleton:
             config=config,
         )
         return data, design, result
-
-    def _require_per_column_mapping(self, mapping: dict[str, Any]) -> dict[str, dict[str, str]]:
-        """Validate and normalize per-column mapping."""
-        if not mapping:
-            raise ValueError("mapping cannot be empty")
-
-        normalized = {}
-        for col, m in mapping.items():
-            if not isinstance(m, dict):
-                raise TypeError(
-                    "combine() expects {column: {old: new}}. "
-                    f"Value for '{col}' was {type(m).__name__}, expected dict."
-                )
-            normalized[col] = m
-
-        return normalized
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2366,17 +1069,25 @@ class DomainSingleton(msgspec.Struct, frozen=True):
 
     @property
     def domain_label(self) -> str:
-        return ", ".join(f"{c}={v}" for c, v in self.domain)
+        return ", ".join(f"{c}={_fmt_value(v)}" for c, v in self.domain)
 
     @property
     def stratum_label(self) -> str:
-        return ", ".join(f"{c}={v}" for c, v in self.stratum)
+        return ", ".join(f"{c}={_fmt_value(v)}" for c, v in self.stratum)
 
     @property
     def label(self) -> str:
         if not self.domain:
             return self.stratum_label
-        return f"{self.domain_label}: {self.stratum_label}"
+        return f"{self.stratum_label} in {self.domain_label}"
+
+
+def _fmt_value(value: Any) -> str:
+    """A value as the column shows it: ``2002``, not ``2002.0``, for an
+    integer-valued float."""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
 
 
 def domain_singleton_frame(
@@ -2445,35 +1156,38 @@ def find_domain_singletons(
 
 def _domain_text(
     pairs: Sequence[str],
-    n_strata: int,
-    n_domains: int,
+    by_domains: bool,
     method: str | None,
     applied: bool,
     listed: int = 3,
 ) -> str:
-    """The sentence a domain-singleton finding reports and prints."""
+    """The sentence a domain-singleton finding reports and prints: one count,
+    of domain × stratum pairs (of strata for a ``where=`` domain alone)."""
+    n = len(pairs)
     shown = "; ".join(pairs[:listed])
-    if len(pairs) > listed:
-        shown += f"; and {len(pairs) - listed} more"
-    domains = "domain" if n_domains == 1 else "domains"
+    if n > listed:
+        shown += f"; {n - listed} more"
+    if by_domains:
+        what = f"{n} domain × stratum {'pair' if n == 1 else 'pairs'}"
+    else:
+        what = f"{n} {'stratum' if n == 1 else 'strata'}"
     if applied:
         how = (
             "centered at the grand mean"
-            if method == "center"
+            if method == SingletonMethod.CENTER
             else "left out and counted with the singletons"
         )
-        strata = "stratum" if n_strata == 1 else "strata"
-        return (
-            f"{n_strata} {strata} with a single PSU within {n_domains} {domains} "
-            f'{"was" if n_strata == 1 else "were"} {how} (domains="apply"): {shown}'
-        )
-    rule = method if method in ("center", "scale") else "center"
-    todo = "center them" if rule == "center" else "treat them as singletons"
-    strata = "stratum has" if n_strata == 1 else "strata have"
+        return f'{what} with one PSU in the domain {how} (domains="apply"): {shown}'
+    return f"{what} with one PSU in the domain ({shown}); standard domain variance used"
+
+
+def _domain_hint(method: str | None, applied: bool) -> str:
+    if applied:
+        return 'Singleton(..., domains="standard") uses the standard domain variance.'
+    rule = method if method in (SingletonMethod.CENTER, SingletonMethod.SCALE) else "center"
     return (
-        f"{n_strata} {strata} a single PSU within {n_domains} {domains} ({shown}); "
-        f'standard domain variance used (sample.singleton.{rule}(domains="apply") to '
-        f'{todo}, or domains="ignore")'
+        f'svy.Singleton("{rule}", domains="apply") handles them as singletons; '
+        "sample.domain_singletons(by=..., where=...) lists them."
     )
 
 
@@ -2488,18 +1202,18 @@ def domain_singleton_findings(
     mask: pl.Expr | None = None,
     where: str,
 ) -> list[SvyWarning]:
-    """Detect the strata with one PSU in the analysis's domains and act on the
-    rule's ``domains`` setting: nothing under ``"ignore"``, a finding under
-    ``"warn"`` (WARNING) and ``"apply"`` (INFO), ``SingletonError`` under
-    ``"error"``. The finding is also kept on the sample, at INFO, so it is
-    never raised as a Python warning.
+    """Detect the strata with one PSU in the analysis's domains and report
+    them as the rule's ``on_domain_singletons`` says (``"ignore"`` without a
+    rule): the finding is recorded on the sample at INFO (never raised as a
+    Python warning) and returned for the result, at WARNING under ``"warn"``
+    so it prints as a note; ``"error"`` raises ``DOMAIN_SINGLETON``.
 
     A calibrated design has none: its scores are nonzero outside the domain,
     and R keeps those rows.
     """
-    spec = getattr(sample._design, "singleton", None)
-    domains = spec.domains if spec is not None else "warn"
-    if domains == "ignore" or strata_col is None or strata_col not in df.columns:
+    rule = getattr(sample._design, "singleton", None)
+    on = rule.on_domain_singletons if rule is not None else "ignore"
+    if strata_col is None or strata_col not in df.columns:
         return []
     from svy.core.data_prep import calib_applies
 
@@ -2518,71 +1232,58 @@ def domain_singleton_findings(
     )
     if not found:
         return []
-    method = spec.method if spec is not None else None
+    method = rule.method if rule is not None else None
+    applied = domains_applied(sample)
     pairs = [f.label for f in found]
+    by_domains = any(f.domain for f in found)
     strata = list(dict.fromkeys(f.stratum_label for f in found))
     doms = list(dict.fromkeys(f.domain_label for f in found))
-    if domains == "error":
+    if on == "error":
         raise SingletonError.from_domain_singletons(
-            pairs, n_strata=len(strata), n_domains=len(doms), method=method, where=where
+            pairs, by_domains=by_domains, method=method, applied=applied, where=where
         )
     from svy.core.warnings import Severity, SvyWarning, WarnCode
 
-    applied = domains == "apply"
     fields: dict[str, Any] = dict(
         code=WarnCode.DOMAIN_SINGLETON_PSU,
         title="Strata with a single PSU in a domain",
-        detail=_domain_text(pairs, len(strata), len(doms), method, applied),
+        detail=_domain_text(pairs, by_domains, method, applied),
         where=where,
-        param="domains",
+        param="on_domain_singletons",
+        hint=_domain_hint(method, applied),
         extra={
             "pairs": pairs,
             "strata": strata,
             "domains": doms,
-            "method": method,
+            "by_domains": by_domains,
+            "method": None if method is None else method.value,
             "applied": applied,
         },
     )
     warn = getattr(sample, "warn", None)
     kept = warn(level=Severity.INFO, **fields) if warn is not None else SvyWarning(**fields)
-    level = Severity.INFO if applied else Severity.WARNING
+    level = Severity.WARNING if on == "warn" else Severity.INFO
     return [msgspec.structs.replace(kept, level=level)]
 
 
 def domain_singleton_note(findings: Sequence[Any]) -> str | None:
-    """One note for every domain-singleton finding of a call: the pairs of
-    several results (variables with different missing values) merged."""
-    found = [f for f in findings if f.code == "DOMAIN_SINGLETON_PSU" and f.extra]
+    """One note for every domain-singleton finding of a call that asked for
+    one (``on_domain_singletons="warn"``): the pairs of several results
+    (variables with different missing values) merged."""
+    from svy.core.warnings import Severity
+
+    found = [
+        f
+        for f in findings
+        if f.code == "DOMAIN_SINGLETON_PSU" and f.extra and f.level >= Severity.WARNING
+    ]
     if not found:
         return None
     first = found[0].extra
     pairs = list(dict.fromkeys(p for f in found for p in f.extra["pairs"]))
-    strata = dict.fromkeys(x for f in found for x in f.extra["strata"])
-    doms = dict.fromkeys(x for f in found for x in f.extra["domains"])
-    text = _domain_text(pairs, len(strata), len(doms), first["method"], first["applied"])
+    by_domains = any(f.extra.get("by_domains", True) for f in found)
+    text = _domain_text(pairs, by_domains, first["method"], first["applied"])
     return f"note: {text}"
-
-
-def _check_domains(method: str, domains: Any) -> None:
-    allowed = _DOMAINS_APPLY if method in ("center", "scale") else _DOMAINS
-    if domains not in allowed:
-        from svy.errors.method_errors import MethodError
-
-        hint = (
-            'domains="apply" handles the strata with one PSU in a domain as '
-            "singletons, which center() and scale() define: use "
-            'sample.singleton.center(domains="apply"), or keep '
-            f"{method}() with 'ignore', 'warn' or 'error'."
-            if domains == "apply"
-            else '"warn" notes such strata under the result, "ignore" does not, "error" raises.'
-        )
-        raise MethodError.invalid_choice(
-            where=f"Sample.singleton.{method}",
-            param="domains",
-            got=domains,
-            allowed=allowed,
-            hint=hint,
-        )
 
 
 def singleton_config(sample: Sample) -> SingletonHandlingConfig | None:
@@ -2607,19 +1308,148 @@ def taylor_singleton_method(sample: Sample) -> str | None:
 
 
 def domains_applied(sample: Sample) -> bool:
-    """The rule was set with ``domains="apply"``."""
-    spec = getattr(sample._design, "singleton", None)
-    return spec is not None and spec.domains == "apply"
+    """The rule handles a domain's one-PSU strata as singletons (``domains="apply"``)."""
+    rule = getattr(sample._design, "singleton", None)
+    return rule is not None and rule.domains == SingletonDomains.APPLY
 
 
 def require_singleton_rule(sample: Sample, *, where: str) -> None:
-    """Raise when the design has singleton strata and no rule for them: a
-    Taylor variance would silently leave them out (R's
-    ``options(survey.lonely.psu = "fail")``)."""
+    """Before a Taylor variance: raise when the design has singleton strata and
+    no rule for them (R's ``options(survey.lonely.psu = "fail")``), or when its
+    rule cannot be applied to the current data."""
+    sync = getattr(sample, "_sync_parts", None)
+    if sync is not None:
+        sync()
+    problem = sample.__dict__.get("_singleton_problem") if hasattr(sample, "__dict__") else None
+    if problem is not None:
+        raise msgspec_replace_error(problem, where=where)
     if singleton_config(sample) is None and getattr(sample, "_singletons", None):
-        singles = sample.singleton.detected()
+        singles = _Engine(sample, _sync=False).detected()
         if singles:
             raise SingletonError.from_singletons(singles, where=where)
+
+
+def singletons_frame(sample: Sample) -> pl.DataFrame:
+    """``sample.singletons``: one row per singleton stratum of the current data,
+    with its stratum and PSU columns' values, its rows, and how the rule
+    handled it (null without a rule, or when the rule cannot handle it)."""
+    sample._sync_parts()
+    engine = _Engine(sample, _sync=False)
+    design = sample._design
+    data = engine._narrow_data()
+    stratum_cols = _Engine._to_cols(design.stratum)
+    psu_cols = _Engine._to_cols(design.variance_psu)
+    cols = [c for c in dict.fromkeys([*stratum_cols, *psu_cols]) if c in data.columns]
+    schema: dict[str, Any] = {c: data.schema[c] for c in cols}
+    schema.update({"n": pl.UInt32, "handled": pl.Utf8})
+    singles = engine.detected()
+    if not singles:
+        return pl.DataFrame(schema=schema)
+    stratum_col, _ = engine._internal_cols()
+    keys = [s.stratum_key for s in singles]
+    handled = _handled(sample, engine, keys)
+    key = pl.col(cast(str, stratum_col)).cast(pl.Utf8)
+    rows = (
+        data.filter(key.is_in(keys))
+        .group_by(key.alias("__svy_key__"), maintain_order=True)
+        .agg(*[pl.col(c).first() for c in cols], pl.len().cast(pl.UInt32).alias("n"))
+    )
+    order = {k: i for i, k in enumerate(keys)}
+    return (
+        rows.with_columns(
+            pl.col("__svy_key__")
+            .replace_strict(handled, default=None, return_dtype=pl.Utf8)
+            .alias("handled"),
+            pl.col("__svy_key__").replace_strict(order, return_dtype=pl.UInt32).alias("__o__"),
+        )
+        .sort("__o__")
+        .select(*cols, "n", "handled")
+    )
+
+
+def _handled(sample: Sample, engine: _Engine, keys: list[str]) -> dict[str, str | None]:
+    """How the rule handled each singleton stratum, by svy's key."""
+    result = getattr(sample, "_singleton_result", None)
+    rule = sample._design.singleton
+    if result is None or rule is None:
+        return {k: None for k in keys}
+    method = SingletonMethod(result.method)
+    if method is SingletonMethod.COLLAPSE:
+        applied = cast(dict[str, str], result.applied)
+        targets = dict(zip(applied, engine._key_values(list(applied.values()))))
+        return {k: f"collapse -> {_label(targets[k])}" if k in targets else None for k in keys}
+    done = {s.stratum_key for s in result.detected}
+    text = f"pool -> {rule.name}" if method is SingletonMethod.POOL else method.value
+    return {k: text if k in done else None for k in keys}
+
+
+def _label(value: Any) -> str:
+    """A stratum as a reader writes it: ``Center``, ``2002``, ``N, 4``."""
+    if isinstance(value, tuple):
+        return ", ".join(_fmt_value(v) for v in value)
+    return _fmt_value(value)
+
+
+def domain_singletons_frame(
+    sample: Sample, by: str | Sequence[str] | None = None, where: WhereArg = None
+) -> pl.DataFrame:
+    """``sample.domain_singletons(...)``: strata with several PSUs of which one
+    holds the rows of a domain (``by`` level within ``where``)."""
+    from svy.utils.where import _compile_where
+
+    sample._sync_parts()
+    engine = _Engine(sample, _sync=False)
+    stratum_col, psu_col = engine._internal_cols()
+    design = sample._design
+    data = engine._narrow_data()
+    stratum_cols = _Engine._to_cols(design.stratum)
+    psu_cols = _Engine._to_cols(design.variance_psu)
+    by_cols = _Engine._to_cols(by)
+    missing = [c for c in by_cols if c not in data.columns]
+    if missing:
+        from svy.errors.method_errors import MethodError
+
+        raise MethodError.not_applicable(
+            where="Sample.domain_singletons",
+            method="domain_singletons",
+            param="by",
+            reason=f"columns not in the data: {missing}",
+        )
+    cols = [c for c in dict.fromkeys([*by_cols, *stratum_cols, *psu_cols]) if c in data.columns]
+    schema: dict[str, Any] = {c: data.schema[c] for c in cols}
+    schema.update({"n": pl.UInt32, "n_psus": pl.UInt32})
+    empty = pl.DataFrame(schema=schema)
+    if not stratum_col or stratum_col not in data.columns:
+        return empty
+    mask = _compile_where(where)
+    if mask is None and not by_cols:
+        return empty
+    dom = "__svy_domain__"
+    frame = data.with_columns(
+        pl.struct(by_cols).alias(dom) if by_cols else pl.lit(None).alias(dom)
+    )
+    active = frame if mask is None else frame.filter(mask)
+    full = frame.group_by(stratum_col).agg(pl.col(psu_col).n_unique().alias("n_psus"))
+    found = (
+        active.group_by(dom, stratum_col)
+        .agg(
+            pl.col(psu_col).n_unique().alias("__n_dom__"),
+            pl.len().cast(pl.UInt32).alias("n"),
+            *[pl.col(c).first() for c in cols],
+        )
+        .join(full, on=stratum_col)
+        .filter((pl.col("__n_dom__") == 1) & (pl.col("n_psus") > 1))
+    )
+    out = found.select(*cols, "n", pl.col("n_psus").cast(pl.UInt32))
+    order = [c for c in dict.fromkeys([*by_cols, *stratum_cols]) if c in data.columns]
+    return out.sort(order, nulls_last=True) if order else out
+
+
+def msgspec_replace_error(err: SingletonError, *, where: str) -> SingletonError:
+    """The stored resolution error, raised afresh at the analysis that needs it."""
+    import dataclasses
+
+    return dataclasses.replace(err, where=where)
 
 
 def _key_part(value: Any) -> str:
@@ -2628,44 +1458,22 @@ def _key_part(value: Any) -> str:
     return cast(str, pl.Series([value]).cast(pl.Utf8)[0])
 
 
-def _spec(method: str, facet: Singleton, result: SingletonResult, **kw: Any) -> SingletonSpec:
-    """The resolved decision of a handling result, in the strata's own values."""
-    from svy.core.design import SingletonSpec
-
-    if method == "collapse":
-        mapping = cast(dict[str, str], result.applied)
-        sources = facet._key_values(list(mapping))
-        targets = facet._key_values(list(mapping.values()))
-        return SingletonSpec.collapse(dict(zip(sources, targets)), **kw)
-    strata = facet._key_values([s.stratum_key for s in result.detected])
-    return getattr(SingletonSpec, method)(strata, **kw)
-
-
-def _current_singleton_values(sample: Sample) -> list[Any]:
-    """The singleton strata of the sample now, as stratum values, from the
-    detection run at construction (``Sample._check_for_singletons``)."""
-    facet = Singleton(sample, _sync=False)
-    stratum_col, _ = facet._internal_cols()
-    if not stratum_col or stratum_col not in facet._narrow_data().columns:
-        return []
-    sample._check_for_singletons()
-    keys = sorted(str(d[stratum_col]) for d in (sample._singletons or []))
-    return facet._key_values(keys)
-
-
 def _basis(sample: Sample) -> tuple[tuple[Any, ...], list[str]]:
     """What singleton detection and the variance columns are computed from:
     the rows, the stratum/PSU/SSU columns (and svy's keys of them), the
-    variance columns themselves, and the design's rule."""
+    columns the rule reads, the variance columns themselves, and the rule."""
     design = sample._design
-    key = (design.stratum, design.variance_psu, design.ssu, design.singleton)
+    rule = design.singleton
+    key = (design.stratum, design.variance_psu, design.ssu, rule)
     idict = getattr(sample, "_internal_design", None) or {}
     cols = [
         SVY_ROW_INDEX,
-        *Singleton._to_cols(design.stratum),
-        *Singleton._to_cols(design.variance_psu),
-        *Singleton._to_cols(design.ssu),
+        *_Engine._to_cols(design.stratum),
+        *_Engine._to_cols(design.variance_psu),
+        *_Engine._to_cols(design.ssu),
         *(idict.get(k) for k in ("stratum", "psu", "ssu")),
+        *((rule.within or ()) if rule is not None else ()),
+        *((rule.order_by or ()) if rule is not None else ()),
         *_VAR_COLS,
     ]
     names = set(sample._data.collect_schema().names())
@@ -2685,10 +1493,11 @@ def _same(a: pl.Series, b: pl.Series) -> bool:
 
 
 def _derive_singleton_state(sample: Sample) -> None:
-    """Detect the singletons again and rebuild the rule's variance columns.
+    """Detect the singletons again and apply the rule to them.
 
-    Skipped when the rows, the strata/PSU/SSU columns and the rule are those of
-    the last run: a change elsewhere (a new column, a weight) cannot move them.
+    Skipped when the rows, the strata/PSU/SSU columns, the columns the rule
+    reads and the rule are those of the last run: a change elsewhere (a new
+    column, a weight) cannot move them.
     """
     key, cols = _basis(sample)
     prev = sample.__dict__.get("_singleton_basis")
@@ -2707,13 +1516,13 @@ def _derive_singleton_state(sample: Sample) -> None:
 
 
 def _rederive(sample: Sample) -> None:
-    """Detect the singletons as at construction, and rebuild the variance
-    columns and the handling report from the rule.
+    """Detect the singletons as at construction and apply the declared rule to
+    them: the variance columns and ``last_result`` are rebuilt from the rule
+    and the data. The rule itself never changes.
 
-    The rule is kept only while it describes the data: the singleton strata
-    detected now are exactly the ones it handles, and a collapse target still
-    exists. Otherwise it is cleared from the design with one warning; the design
-    it replaces goes into ``design_history``.
+    A rule that cannot be applied to this data (an explicit collapse mapping
+    missing a singleton, a target gone, no stratum to merge into) is kept, and
+    the analyses needing a Taylor variance raise its error.
     """
     ensure = getattr(sample, "_ensure_internal_concat", None)
     if ensure is not None:
@@ -2723,74 +1532,242 @@ def _rederive(sample: Sample) -> None:
     stale = [c for c in _VAR_COLS if c in data.collect_schema().names()]
     if stale:
         sample._data = data.drop(stale)
-    design = sample._design
-    spec = design.singleton
-    if spec is None:
-        # A combine() report has no spec behind it and stays; a report derived
-        # from a spec that is gone does not.
-        prev = getattr(sample, "_singleton_result", None)
+    state = sample.__dict__
+    state["_singleton_problem"] = None
+    prev = getattr(sample, "_singleton_result", None)
+    rule = sample._design.singleton
+    if rule is None:
+        # A combine() recode has no rule behind it and its report stays.
         if prev is not None and prev.config is not None:
             sample._singleton_result = None
         return
+    sample._singleton_result = None
 
-    facet = Singleton(sample, _sync=False)
+    facet = _Engine(sample, _sync=False)
     stratum_col, _ = facet._internal_cols()
-    reason: str | None = None
-    now: list[str] = []
-    index: _StrataIndex | None = None
     if not stratum_col or stratum_col not in facet._narrow_data().columns:
-        reason = "the design has no stratum"
-    else:
-        now = sorted(str(d[stratum_col]) for d in (sample._singletons or []))
-        index = facet._strata_index()
-        handled = facet._value_keys(spec.handled, index)
-        if None in handled:
-            gone = [v for v, k in zip(spec.handled, handled) if k is None]
-            reason = f"handled strata no longer in the data: {', '.join(map(repr, gone))}"
-        elif set(handled) != set(now):
-            reason = "the singleton strata changed"
-        elif spec.method == "collapse":
-            targets = facet._value_keys(spec.targets, index)
-            gone = [v for v, k in zip(spec.targets, targets) if k is None]
-            if gone:
-                reason = f"collapse targets no longer in the data: {', '.join(map(repr, gone))}"
-
-    if reason is not None:
-        sample._push_design()
-        sample._design = design._with_part("singleton", None)
-        sample._singleton_result = None
-        from svy.core.design_parts import warn_singleton_cleared
-
-        warn_singleton_cleared(
-            spec, reason, facet._key_values(now, index) if now else [], sample=sample
+        return
+    singles = facet.detected()
+    method = rule.method
+    domains_only = method in (SingletonMethod.CENTER, SingletonMethod.SCALE) and (
+        rule.domains == SingletonDomains.APPLY
+    )
+    if not singles and not domains_only:
+        return
+    try:
+        if method is SingletonMethod.SELF_REPRESENTING:
+            new_data, _, result = facet._apply_certainty(singles)
+        elif method is SingletonMethod.SKIP:
+            new_data, _, result = facet._apply_skip(singles)
+        elif method is SingletonMethod.SCALE:
+            new_data, _, result = facet._apply_scale(singles)
+        elif method is SingletonMethod.CENTER:
+            new_data, _, result = facet._apply_center(singles)
+        elif method is SingletonMethod.POOL:
+            new_data, _, result = facet._apply_pool(singles, name=cast(str, rule.name))
+        else:
+            new_data, result = _resolve_collapse(sample, facet, rule, singles, prev)
+    except SingletonError as err:
+        state["_singleton_problem"] = err
+        return
+    except ValueError as err:
+        state["_singleton_problem"] = SingletonError(
+            title="The singleton rule cannot be applied",
+            detail=str(err),
+            code="SINGLETON_RULE_UNRESOLVED",
+            where="svy.Singleton",
+            param="singleton",
+            hint="Change the rule with sample.update_design(singleton=...).",
         )
         return
-
-    if not handled and spec.method not in ("center", "scale"):
-        # A rule set for its domains alone: no strata to derive columns for.
-        sample._singleton_result = None
-        return
-    keys = set(handled)
-    singles = [s for s in facet.detected() if s.stratum_key in keys]
-    if spec.method == "certainty":
-        new_data, _, result = facet._apply_certainty(singles)
-    elif spec.method == "skip":
-        new_data, _, result = facet._apply_skip(singles)
-    elif spec.method == "scale":
-        new_data, _, result = facet._apply_scale(singles)
-    elif spec.method == "center":
-        new_data, _, result = facet._apply_center(singles)
-    elif spec.method == "pool":
-        new_data, _, result = facet._apply_pool(singles, name=cast(str, spec.name))
-    else:
-        mapping = dict(zip(handled, facet._value_keys([b for _, b in spec.mapping], index)))
-        new_data, _, result = facet._apply_collapse(
-            singles,
-            using=cast(dict[str, str], mapping),
-            within=None,
-            order_by=None,
-            descending=False,
-            rstate=None,
-        )
     sample._data = new_data
     sample._singleton_result = result
+
+
+def _resolve_collapse(
+    sample: Sample,
+    facet: _Engine,
+    rule: SingletonRule,
+    singles: list[SingletonInfo],
+    prev: SingletonResult | None,
+) -> tuple[pl.DataFrame, SingletonResult]:
+    """Apply a collapse rule: an explicit mapping checked against the data, or
+    a strategy re-run (an INFO finding when its mapping changed)."""
+    from svy.core.warnings import Severity
+
+    using: Any = rule.using
+    if isinstance(using, tuple):
+        using = _checked_mapping(sample, facet, using, singles, within=rule.within)
+    new_data, _, result = facet._apply_collapse(
+        singles,
+        using=using,
+        within=list(rule.within) if rule.within else None,
+        order_by=list(rule.order_by) if rule.order_by else None,
+        descending=rule.descending,
+        rstate=rule.rstate,
+    )
+    if (
+        not isinstance(rule.using, tuple)
+        and prev is not None
+        and prev.method == SingletonMethod.COLLAPSE
+        and isinstance(prev.applied, dict)
+        and prev.applied != result.applied
+    ):
+        pairs = cast(dict[str, str], result.applied)
+        shown = _mapping_text(facet, pairs)
+        sample.warn(
+            level=Severity.INFO,
+            code="SINGLETON_COLLAPSE_CHANGED",
+            title="Singleton collapse changed",
+            detail=f"the singletons now collapse as {shown} (using={rule.using!r}).",
+            where="svy.Singleton",
+            param="singleton",
+            extra={"mapping": {str(k): str(v) for k, v in pairs.items()}},
+        )
+    return new_data, result
+
+
+def _mapping_text(facet: _Engine, pairs: dict[str, str], listed: int = 5) -> str:
+    keys = list(pairs)
+    sources = facet._key_values(keys)
+    targets = facet._key_values([pairs[k] for k in keys])
+    items = [f"{_shown([a])} -> {_shown([b])}" for a, b in zip(sources, targets)]
+    text = ", ".join(items[:listed])
+    return text + (f", and {len(items) - listed} more" if len(items) > listed else "")
+
+
+def _checked_mapping(
+    sample: Sample,
+    facet: _Engine,
+    mapping: tuple[tuple[Any, Any], ...],
+    singles: list[SingletonInfo],
+    *,
+    within: tuple[str, ...] | None = None,
+) -> dict[str, str]:
+    """An explicit collapse mapping as svy's keys, for the singletons now.
+
+    Entries for strata that are no longer singletons are ignored (INFO);
+    a singleton it does not map, or a target that is gone, is itself a
+    singleton or lies outside the singleton's ``within`` values, raises.
+    """
+    from svy.core.warnings import Severity
+
+    index = facet._strata_index()
+    now = {s.stratum_key for s in singles}
+    keyed: dict[str, str] = {}
+    unused: list[Any] = []
+    gone: list[Any] = []
+    lonely: list[Any] = []
+    for source, target in mapping:
+        s_key = facet._value_keys([source], index)[0]
+        if s_key is None:
+            s_key = _loose_key(facet, source, index)
+        if s_key is None or s_key not in now:
+            unused.append(source)
+            continue
+        t_key = facet._value_keys([target], index)[0]
+        if t_key is None:
+            t_key = _loose_key(facet, target, index)
+        if t_key is None:
+            gone.append(target)
+        elif t_key in now:
+            lonely.append(target)
+        else:
+            keyed[s_key] = t_key
+    unmapped = [k for k in sorted(now) if k not in keyed]
+    if unused:
+        sample.warn(
+            level=Severity.INFO,
+            code="SINGLETON_MAPPING_UNUSED",
+            title="Collapse mapping entries not used",
+            detail=f"not singleton strata in this data, so not collapsed: {_shown(unused)}.",
+            where="svy.Singleton",
+            param="using",
+            extra={"strata": [str(v) for v in unused]},
+        )
+    if gone:
+        raise SingletonError(
+            title="Collapse target not in the data",
+            detail=f"the collapse mapping merges into strata the data no longer has: "
+            f"{_shown(gone)}.",
+            code="SINGLETON_TARGET_MISSING",
+            where="svy.Singleton",
+            param="using",
+            got=gone,
+            hint="Update the mapping: sample.update_design(singleton=svy.Singleton("
+            '"collapse", using={...})).',
+        )
+    if lonely:
+        raise SingletonError(
+            title="Collapse target is a singleton",
+            detail=f"the collapse mapping merges into strata that now have one PSU: "
+            f"{_shown(lonely)}.",
+            code="SINGLETON_TARGET_SINGLETON",
+            where="svy.Singleton",
+            param="using",
+            got=lonely,
+            hint="Map each singleton stratum to a stratum with two or more PSUs.",
+        )
+    if within and keyed:
+        cols = list(within)
+        stratum_col = cast(str, facet._internal_cols()[0])
+        where_ = facet._within_values(facet._narrow_data(), stratum_col, cols)
+        outside = [(a, b) for a, b in keyed.items() if where_.get(a) != where_.get(b)]
+        if outside:
+            pairs = [
+                f"{_shown([x])} -> {_shown([y])}"
+                for x, y in zip(
+                    facet._key_values([a for a, _ in outside], index),
+                    facet._key_values([b for _, b in outside], index),
+                )
+            ]
+            raise SingletonError(
+                title="Collapse target outside within",
+                detail=f"the collapse mapping merges strata with different {', '.join(cols)}: "
+                f"{', '.join(pairs)}.",
+                code="SINGLETON_TARGET_OUTSIDE_WITHIN",
+                where="svy.Singleton",
+                param="using",
+                got=pairs,
+                hint=f"Map each singleton to a stratum with the same {', '.join(cols)}, or "
+                "leave within out of the rule.",
+            )
+    if unmapped:
+        values = facet._key_values(unmapped, index)
+        raise SingletonError(
+            title="Singletons missing from the collapse mapping",
+            detail=f"{len(values)} singleton {'stratum is' if len(values) == 1 else 'strata are'} "
+            f"not in the collapse mapping: {_shown(values[:10])}"
+            + (" ..." if len(values) > 10 else "")
+            + ".",
+            code="SINGLETON_UNMAPPED",
+            where="svy.Singleton",
+            param="using",
+            got=values,
+            hint="Add them to the mapping (sample.singletons lists the singletons), or "
+            'collapse with a strategy: svy.Singleton("collapse", using="smallest").',
+        )
+    return keyed
+
+
+def _shown(values: Sequence[Any]) -> str:
+    """Stratum values as the data shows them: strings quoted, ``2002`` for an
+    integer-valued float, tuples element-wise."""
+
+    def one(v: Any) -> str:
+        if isinstance(v, tuple):
+            return "(" + ", ".join(one(x) for x in v) + ")"
+        return repr(v) if isinstance(v, str) else _fmt_value(v)
+
+    return ", ".join(one(v) for v in values)
+
+
+def _loose_key(facet: _Engine, stratum: Any, index: _StrataIndex | None) -> str | None:
+    """svy's key for a stratum named loosely (its key string, or its values'
+    str form), None when it names none."""
+    if index is None:
+        return None
+    try:
+        return index.key(stratum)
+    except ValueError:
+        return None

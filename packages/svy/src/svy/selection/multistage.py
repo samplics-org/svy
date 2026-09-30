@@ -167,6 +167,9 @@ def add_stage(
         pop_size=None,
         wr=False,
         rep_wgts=None,
+        # The rule is intent (R's and Stata's global option), so it applies to
+        # the combined stages' strata as it did to stage 1's.
+        singleton=s1_design.singleton if s1_design.stratum is not None else None,
     )
 
     combined = _Sample.__new__(_Sample)
@@ -183,6 +186,10 @@ def add_stage(
     combined._singleton_result = None
     combined._stage_out_prob = result.out_prob_col
     combined._stage_out_wgt = result.out_wgt_col
+    # Built without __init__: derive the design keys and singleton state as
+    # a constructed sample does, or its singletons go undetected.
+    combined._ensure_internal_concat()
+    combined._refresh_internal_state()
 
     for f in found:
         combined.warn(where="Sample.sampling.add_stage", **f)

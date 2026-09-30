@@ -51,7 +51,6 @@ from svy.utils.trace import log_step
 
 if TYPE_CHECKING:
     from svy.categorical import Categorical
-    from svy.core.singleton import Singleton
     from svy.estimation import Estimation
     from svy.metadata import LabellingCatalog
     from svy.regression import GLM
@@ -172,7 +171,7 @@ class Sample:
 
         Once per data/design version: every rebind of ``_data`` or ``_design``
         (wrangling, weighting, set_data, a fork) bumps ``_data_version``, and
-        whatever reads derived state (estimation, ``sample.singleton``,
+        whatever reads derived state (estimation, ``sample.singletons``,
         ``sample.design``) calls this first. A part's ``derive`` may rebind the
         data or design itself; the stamp is taken after it.
         """
@@ -1367,12 +1366,6 @@ class Sample:
         return Selection(self)
 
     @property
-    def singleton(self) -> Singleton:
-        from svy.core.singleton import Singleton
-
-        return Singleton(self)
-
-    @property
     def estimation(self) -> Estimation:
         from svy.estimation import Estimation
 
@@ -1468,6 +1461,53 @@ class Sample:
         return len(self.psus)
 
     @property
+    def singletons(self) -> pl.DataFrame:
+        """The strata with a single PSU in the current data, one row each.
+
+        Columns: the stratum and PSU columns' values, ``n`` (the stratum's
+        rows) and ``handled``, how the design's rule (``svy.Singleton``)
+        handles it (``center``, ``collapse -> Center``, ``pool -> __pooled__``,
+        ...), null without a rule or when the rule cannot handle it (the next
+        Taylor analysis then raises, naming the fix). Empty when there are none.
+        """
+        from svy.core.singleton import singletons_frame
+
+        return singletons_frame(self)
+
+    @property
+    def n_singletons(self) -> int:
+        """How many strata have a single PSU in the current data."""
+        return self.singletons.height
+
+    def domain_singletons(
+        self, by: str | Sequence[str] | None = None, *, where: WhereArg = None
+    ) -> pl.DataFrame:
+        """Strata with several PSUs of which one holds the rows of a domain.
+
+        A domain is a ``by`` level (the ``by`` columns' combination) within
+        ``where``. These are the strata an estimate over those domains reports in
+        its ``DOMAIN_SINGLETON_PSU`` finding: the rule's ``domains="standard"``
+        gives them the usual domain variance, ``domains="apply"`` handles them
+        as singletons. A row counts whatever its weight, as R's ``subset()``
+        keeps zero-weight rows.
+
+        Returns one row per (domain, stratum): the ``by``, stratum and PSU
+        columns (the PSU holding the domain's rows), ``n`` (the domain's rows in
+        the stratum) and ``n_psus`` (the stratum's PSUs in the sample).
+        """
+        from svy.core.singleton import domain_singletons_frame
+
+        return domain_singletons_frame(self, by, where)
+
+    def __getattr__(self, name: str) -> Any:
+        # Reached only for names that are not attributes.
+        if name == "singleton":
+            from svy.errors.singleton_errors import SingletonAPIRemoved
+
+            raise SingletonAPIRemoved.accessor()
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+
+    @property
     def deff_w(self) -> DomainScalarMap | Number:
         def deff_due_to_weighting(w: np.ndarray) -> Number:
             if w is None:
@@ -1559,6 +1599,9 @@ class Sample:
 
     @property
     def warnings(self) -> WarningStore:
+        # Findings of derived state (the singleton rule applied to the data)
+        # are recorded when it is derived.
+        self._sync_parts()
         return self._warnings
 
     # ════════════════════════════════════════════════════════════════════════
@@ -1894,23 +1937,17 @@ class Sample:
         earlier design produced (still in the data) that design's record and
         replicates come back; on any other column there is no record, and the
         replicate weights are dropped with a warning unless ``rep_wgts=`` is
-        passed. Changing the stratum, PSU or SSU columns clears the singleton
-        handling, with a warning naming the singletons of the new design.
+        passed. The singleton rule stays and applies to the new strata;
+        ``singleton=`` declares or replaces it.
         """
         # A weight the data does not have fails before anything, the
         # replicate-reset warning included, is acted on.
         wgt = kwargs.get("wgt")
         if isinstance(wgt, str) and wgt not in cast(pl.DataFrame, self._data).columns:
             raise ValueError(f"Design references columns not found in data: [{wgt!r}]")
-        with _dp.deferred_clear_warnings() as cleared, findings_to(self):
+        with findings_to(self):
             new = self._design.update(**self._with_restored_record(kwargs))
         self._replace_design(new)
-        if cleared:
-            from svy.core.singleton import _current_singleton_values
-
-            now = _current_singleton_values(self)
-            for spec, reason in cleared:
-                _dp.warn_singleton_cleared(spec, reason, now, sample=self)
         return self
 
     def _with_restored_record(self, kwargs: dict[str, Any]) -> dict[str, Any]:

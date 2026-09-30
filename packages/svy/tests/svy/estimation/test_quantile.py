@@ -91,6 +91,15 @@ from svy.core.enumerations import PopParam
 from svy.estimation import EstimateList
 
 
+def _declare(sample, method, **kw):
+    """A fork of ``sample`` with the singleton rule declared on its design."""
+    from svy.core.design import Singleton as _Rule
+
+    new = sample._fork()
+    new.update_design(singleton=_Rule(method, **kw))
+    return new
+
+
 # Point estimates and confidence limits match R exactly; SEs carry only the
 # scipy-vs-R t-quantile difference (~1e-15).
 REL = 1e-12
@@ -379,7 +388,7 @@ class TestSingletonScale:
     @pytest.fixture
     def scaled(self) -> Sample:
         data = pl.read_csv(DATA_DIR / "singleton_scale_13092026.csv")
-        return Sample(data, Design(stratum="stratum", psu="psu", wgt="wgt")).singleton.scale()
+        return _declare(Sample(data, Design(stratum="stratum", psu="psu", wgt="wgt")), "scale")
 
     @pytest.mark.parametrize("prob, est, se, lci, uci", R_AVERAGE)
     def test_quantile_matches_r(self, scaled, prob, est, se, lci, uci):

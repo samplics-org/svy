@@ -3,7 +3,7 @@
 
 A part is a decision stored on the design that svy cannot recompute from the
 data: the replicate weights, the weight-adjustment record, the singleton
-handling. Each part is one object implementing the hooks below, registered in
+rule. Each part is one object implementing the hooks below, registered in
 order; ``Design``, ``Sample``, wrangling and ``svy.serialize`` loop over the
 registry and never name a part, so a new part is one class and one
 ``register`` call.
@@ -48,9 +48,8 @@ restores them from the design in the history that produced X.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from contextlib import contextmanager, nullcontext
-from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, Iterable, Iterator, Mapping
+from contextlib import nullcontext
+from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
 import msgspec
 import numpy as np
@@ -59,7 +58,7 @@ import numpy as np
 if TYPE_CHECKING:
     import polars as pl
 
-    from svy.core.design import Design, SingletonSpec
+    from svy.core.design import Design, Singleton
     from svy.core.sample import Sample
 
 
@@ -521,45 +520,23 @@ class WgtAdjustmentPart(DesignPart):
 # Singleton handling
 # ---------------------------------------------------------------------------
 
-#: Warnings from clearing a spec inside ``Sample.update_design`` wait here until
-#: the new design is installed, so they can name the singletons of the data.
-_PENDING: ContextVar[list[tuple[Any, str]] | None] = ContextVar("svy_pending_parts", default=None)
+
+def singleton_dropped_message(rule: Singleton, reason: str) -> str:
+    return (
+        f"singleton rule ({rule.method.value}) removed from the design: {reason}. "
+        "Declare it again with sample.update_design(singleton=...) if needed."
+    )
 
 
-@contextmanager
-def deferred_clear_warnings() -> Iterator[list[tuple[Any, str]]]:
-    pending: list[tuple[Any, str]] = []
-    token = _PENDING.set(pending)
-    try:
-        yield pending
-    finally:
-        _PENDING.reset(token)
-
-
-def _variance_psu(fields: Mapping[str, Any]) -> Any:
-    if fields.get("psu") is not None:
-        return fields["psu"]
-    return fields.get("case_id") if fields.get("wave") is not None else None
-
-
-def singleton_cleared_message(spec: SingletonSpec, reason: str, now: Sequence[Any] | None) -> str:
-    msg = f"singleton handling ({spec.method}) cleared: {reason}"
-    if now is not None:
-        msg += "; singletons now: " + (", ".join(repr(v) for v in now) if now else "none")
-    return msg + ". Apply a singleton rule again (sample.singleton.*) if needed."
-
-
-def warn_singleton_cleared(
-    spec: SingletonSpec, reason: str, now: Sequence[Any] | None, *, sample: Any = None
-) -> None:
+def warn_singleton_dropped(rule: Singleton, reason: str, *, sample: Any = None) -> None:
     from svy.core.warnings import emit_finding, findings_to
 
     with findings_to(sample) if sample is not None else nullcontext():
         emit_finding(
             code="SINGLETON_RULE_CLEARED",
-            title="Singleton handling cleared",
-            detail=singleton_cleared_message(spec, reason, now),
-            where="Sample.singleton",
+            title="Singleton rule removed",
+            detail=singleton_dropped_message(rule, reason),
+            where="Sample.update_design",
             param="singleton",
         )
 
@@ -568,12 +545,22 @@ class SingletonPart(DesignPart):
     name = "singleton"
 
     def check(self, value: Any, fields: Mapping[str, Any]) -> Any:
-        from svy.core.design import SingletonSpec
+        from svy.core.design import Singleton
 
         if value is None:
             return None
-        if not isinstance(value, SingletonSpec):
-            raise TypeError("'singleton' must be SingletonSpec | None")
+        if isinstance(value, str):
+            value = Singleton(value)  # type: ignore[arg-type]
+        if not isinstance(value, Singleton):
+            from svy.errors.method_errors import MethodError
+
+            raise MethodError.invalid_type(
+                where="Design",
+                param="singleton",
+                got=value,
+                expected="svy.Singleton | str | None",
+                hint='e.g. singleton="center" or singleton=svy.Singleton("collapse", within="region").',
+            )
         if fields["stratum"] is None:
             raise ValueError("singleton handling applies to strata; the design has no stratum.")
         return value
@@ -583,23 +570,13 @@ class SingletonPart(DesignPart):
     ) -> Any:
         if passed:
             return value
-        spec = old.singleton
-        if spec is None:
+        # Declared intent: it applies to whatever strata the design has, so it
+        # stays through stratum/PSU edits, unless there are no strata left.
+        rule = old.singleton
+        if rule is not None and fields["stratum"] is None:
+            warn_singleton_dropped(rule, "the design has no stratum")
             return None
-        # Its strata no longer mean anything once the columns holding the
-        # strata or PSUs change.
-        before = {f: getattr(old, f) for f in ("stratum", "psu", "ssu")}
-        if any(fields[f] != v for f, v in before.items()) or _variance_psu(fields) != (
-            old.variance_psu
-        ):
-            reason = "the stratum/psu/ssu columns changed"
-            pending = _PENDING.get()
-            if pending is not None:
-                pending.append((spec, reason))
-            else:
-                warn_singleton_cleared(spec, reason, None)
-            return None
-        return spec
+        return rule
 
     def columns(
         self, value: Any, design: Design, data_columns: Sequence[str] | None
@@ -608,17 +585,35 @@ class SingletonPart(DesignPart):
             *_unit_columns(design.stratum),
             *_unit_columns(design.variance_psu),
             *_unit_columns(design.ssu),
+            *(value.within or ()),
+            *(value.order_by or ()),
         )
+
+    def renamed(
+        self, value: Any, renames: Mapping[str, str], data_columns: Sequence[str] | None
+    ) -> Any:
+        changes = {}
+        for f in ("within", "order_by"):
+            cols = getattr(value, f)
+            if cols is not None and any(c in renames for c in cols):
+                changes[f] = tuple(renames.get(c, c) for c in cols)
+        return msgspec.structs.replace(value, **changes) if changes else value
 
     def removed(
         self, value: Any, old: Design, fields: Mapping[str, Any], present: set[str]
     ) -> tuple[Any, list[str]]:
-        if (
-            any(fields[f] != getattr(old, f) for f in ("stratum", "psu", "ssu"))
-            or fields["stratum"] is None
-        ):
-            return None, [f"singleton handling ({value.method})"]
+        if fields["stratum"] is None:
+            return None, [f"singleton rule ({value.method.value})"]
+        gone = [c for c in (*(value.within or ()), *(value.order_by or ())) if c not in present]
+        if gone:
+            return None, [f"singleton rule ({value.method.value}; reads {', '.join(gone)})"]
         return value, []
+
+    def missing_note(self, value: Any, missing: set[str]) -> str | None:
+        cols = [c for c in (*(value.within or ()), *(value.order_by or ())) if c in missing]
+        if cols:
+            return f"the singleton rule's within/order_by read {', '.join(cols)}."
+        return None
 
     def derive(self, sample: Sample) -> None:
         from svy.core.singleton import _derive_singleton_state
@@ -626,26 +621,81 @@ class SingletonPart(DesignPart):
         _derive_singleton_state(sample)
 
     def to_data(self, value: Any) -> Any:
-        from svy.serialize.structs import SingletonSpecData
+        from svy.serialize.structs import SingletonData
 
-        return SingletonSpecData(
-            method=value.method,
-            strata=[_saved_value(v) for v in value.strata],
-            mapping=[(_saved_value(a), _saved_value(b)) for a, b in value.mapping],
-            name=value.name,
-            domains=msgspec.UNSET if value.domains == "warn" else value.domains,
+        if value.rstate is not None and not isinstance(value.rstate, int):
+            from svy.errors import SerializationError
+
+            raise SerializationError(
+                title="Cannot save the singleton rule",
+                detail="a collapse rule with a Generator rstate cannot be saved.",
+                code="SINGLETON_RULE_NOT_SAVABLE",
+                param="rstate",
+                hint="Use an int seed, e.g. svy.Singleton('collapse', rstate=42).",
+            )
+        using: Any = msgspec.UNSET
+        if isinstance(value.using, tuple):
+            using = [(_saved_value(a), _saved_value(b)) for a, b in value.using]
+        elif isinstance(value.using, str):
+            using = msgspec.UNSET if value.using == "smallest" else value.using
+        elif value.using is not None:
+            from svy.errors import SerializationError
+
+            raise SerializationError(
+                title="Cannot save the singleton rule",
+                detail="a collapse rule chosen by a callable cannot be saved.",
+                code="SINGLETON_RULE_NOT_SAVABLE",
+                param="using",
+                hint="Save the mapping it produced, which the handled column of "
+                "sample.singletons shows: svy.Singleton('collapse', using={singleton: target}).",
+            )
+
+        def unset(v: Any, default: Any) -> Any:
+            return msgspec.UNSET if v == default else v
+
+        return SingletonData(
+            method=value.method.value,
+            domains=unset(value.domains.value, "standard"),
+            on_domain_singletons=unset(value.on_domain_singletons, "ignore"),
+            using=using,
+            within=msgspec.UNSET if value.within is None else list(value.within),
+            order_by=msgspec.UNSET if value.order_by is None else list(value.order_by),
+            descending=unset(value.descending, False),
+            rstate=msgspec.UNSET if value.rstate is None else value.rstate,
+            name=msgspec.UNSET if value.name in (None, "__pooled__") else value.name,
         )
 
     def from_data(self, data: Any) -> Any:
-        from svy.core.design import SingletonSpec
+        from svy.core.design import Singleton
 
-        return SingletonSpec(
-            method=data.method,
-            strata=tuple(data.strata),
-            mapping=tuple((a, b) for a, b in data.mapping),
-            name=data.name,
-            domains="warn" if data.domains is msgspec.UNSET else data.domains,
-        )
+        kw: dict[str, Any] = {}
+        for f in (
+            "domains",
+            "on_domain_singletons",
+            "within",
+            "order_by",
+            "descending",
+            "rstate",
+            "name",
+        ):
+            v = getattr(data, f)
+            if v is not msgspec.UNSET:
+                kw[f] = v
+        if data.using is not msgspec.UNSET:
+            using = data.using
+            kw["using"] = (
+                using
+                if isinstance(using, str)
+                else {_as_stratum(a): _as_stratum(b) for a, b in using}
+            )
+        return Singleton(data.method, **kw)
+
+    def repr(self, value: Any) -> str | None:
+        return None if value is None else f"singleton={value!r}"
+
+
+def _as_stratum(value: Any) -> Any:
+    return tuple(value) if isinstance(value, list) else value
 
 
 def _saved_value(value: Any) -> Any:

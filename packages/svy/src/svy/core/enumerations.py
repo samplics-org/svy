@@ -236,15 +236,23 @@ class SelectMethod(StrEnum):
 
 
 @unique
-class SingletonHandling(Enum):
-    ERROR = "error"  # Raise error if singletons exist
-    CERTAINTY = "certainty"  # PSU→stratum, SSU/records→PSUs
-    SKIP = "skip"  # Exclude from variance (data stays)
-    COMBINE = "combine"  # Manual column value remapping
-    COLLAPSE = "collapse"  # Merge into existing strata
-    POOL = "pool"  # Combine singletons into pseudo-stratum
-    SCALE = "scale"  # Post-hoc variance inflation (R's "average")
-    CENTER = "center"  # Grand-mean centering (R's "adjust", Stata's singleunit(centered))
+class SingletonMethod(StrEnum):
+    """What ``svy.Singleton(method=...)`` does with strata holding one PSU."""
+
+    CENTER = "center"  # grand-mean centering (R "adjust", Stata singleunit(centered))
+    SCALE = "scale"  # contribute 0, variance scaled up (R "average", Stata scaled)
+    SKIP = "skip"  # contribute 0 (R "remove")
+    SELF_REPRESENTING = "self_representing"  # PSU -> stratum, SSUs/rows -> PSUs
+    COLLAPSE = "collapse"  # merged into another stratum
+    POOL = "pool"  # all singletons in one pseudo-stratum
+
+
+@unique
+class SingletonDomains(StrEnum):
+    """The variance formula for a stratum with one PSU inside a domain."""
+
+    STANDARD = "standard"  # zeros for PSUs without domain rows (R's default)
+    APPLY = "apply"  # handled as singletons (R adjust.domain.lonely = TRUE)
 
 
 # @unique

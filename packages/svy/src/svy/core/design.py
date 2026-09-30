@@ -23,6 +23,7 @@ import msgspec
 import numpy as np
 
 from svy.core import design_parts as _dp
+from svy.core.enumerations import SingletonMethod
 from svy.core.repwgts import (
     RepWeights,
     RepWgts,
@@ -287,10 +288,13 @@ class WgtAdjustment(msgspec.Struct, frozen=True, kw_only=True):
 # Singleton handling
 # =============================================================================
 
-_SINGLETON_METHODS = ("certainty", "skip", "scale", "center", "collapse", "pool")
-_SINGLETON_DOMAINS = ("ignore", "warn", "error", "apply")
-SingletonDomains = Literal["ignore", "warn", "error", "apply"]
+SingletonMethodName = Literal["center", "scale", "skip", "self_representing", "collapse", "pool"]
+CollapseStrategy = Literal["next", "previous", "smallest", "largest"]
+OnDomainSingletons = Literal["error", "warn", "ignore"]
+
+_COLLAPSE_STRATEGIES = ("smallest", "largest", "next", "previous")
 _POOLED = "__pooled__"
+_RULE_WHERE = "svy.Singleton"
 
 
 def _stratum_value(value: Any) -> Any:
@@ -313,156 +317,325 @@ def _typed(value: Any) -> Any:
     return (type(value), value)
 
 
-def _strata_arg(strata: Any) -> tuple[Any, ...]:
-    if isinstance(strata, (str, bytes)) or not isinstance(strata, (Sequence, set, frozenset)):
-        strata = [strata]
-    return tuple(strata)
+def _rule_error(param: str, detail: str, *, got: Any = None, hint: str | None = None) -> Exception:
+    from svy.errors.method_errors import MethodError
+
+    return MethodError(
+        title="Invalid singleton rule",
+        detail=detail,
+        code="INVALID_SINGLETON_RULE",
+        where=_RULE_WHERE,
+        param=param,
+        got=got,
+        hint=hint,
+    )
 
 
-class SingletonSpec(msgspec.Struct, frozen=True, kw_only=True):
-    """How the design's singleton strata are handled for variance estimation.
+def _rule_columns(param: str, value: Any) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    cols = (value,) if isinstance(value, str) else value
+    if (
+        not isinstance(cols, Sequence)
+        or not cols
+        or not all(isinstance(c, str) and c for c in cols)
+    ):
+        raise _rule_error(
+            param,
+            f"{param} names one column or a list of columns.",
+            got=value,
+            hint=f'e.g. {param}="region" or {param}=["region", "urban"].',
+        )
+    return tuple(dict.fromkeys(cols))
 
-    A resolved decision, made with ``sample.singleton.certainty/skip/scale/
-    center/collapse/pool`` or built with the constructor of each method.
-    Strata are the stratum columns' own values, a tuple per stratum when the
-    design has several stratum columns.
 
-    The sample keeps it only while it describes the data: the singleton strata
-    found in the data must be exactly the ones it handles (and a collapse
-    target must still exist). Otherwise it is cleared with a warning. A rule
-    with no strata (``domains`` set on a sample without singletons) is kept
-    while the sample has none.
+class _SingletonMethodField(msgspec.Struct, frozen=True):
+    # A base of its own so `method` is positional and every other field
+    # keyword-only (msgspec applies kw_only per class).
+    method: SingletonMethod
+
+
+class Singleton(_SingletonMethodField, frozen=True, kw_only=True):
+    """How the design's strata with a single PSU are handled for variance.
+
+    Declared on the design, ``svy.Design(..., singleton=svy.Singleton("center"))``
+    or ``sample.update_design(singleton=...)``; ``singleton="center"`` is
+    shorthand for ``svy.Singleton("center")``. The rule is intent: svy applies
+    it to whatever singletons the data has, now and after every filter, recode
+    or design edit, as R's ``survey.lonely.psu`` and Stata's ``singleunit()``
+    do. With no singletons it is idle. ``sample.singletons`` lists the
+    singletons of the current data and how the rule handled each.
 
     Parameters
     ----------
     method
-        ``"certainty"``, ``"skip"``, ``"scale"``, ``"center"``, ``"collapse"``
-        or ``"pool"``.
-    strata
-        The singleton strata handled (every method but ``collapse``).
-    mapping
-        ``collapse``: (singleton stratum, target stratum) pairs.
-    name
-        ``pool``: the pooled pseudo-stratum's name.
+        ``"center"``: a singleton's variance is taken around the grand mean
+        (R ``lonely.psu = "adjust"``, Stata ``singleunit(centered)``).
+        ``"scale"``: singletons contribute nothing and the variance is scaled
+        up by the singleton fraction (R ``"average"``, Stata ``scaled``).
+        ``"skip"``: singletons contribute nothing (R ``"remove"``; also what R
+        and Stata call ``"certainty"``).
+        ``"self_representing"``: the singleton's PSU becomes a stratum and its
+        SSUs (or rows) the PSUs.
+        ``"collapse"``: each singleton stratum is merged into another stratum.
+        ``"pool"``: the singleton strata are pooled into one pseudo-stratum.
     domains
-        Strata with several PSUs but one inside an estimation domain
-        (``where=`` crossed with a ``by=`` level): ``"warn"`` (default) uses
-        the standard domain variance and notes it under the result,
-        ``"ignore"`` does so silently (R's default), ``"error"`` raises, and
-        ``"apply"`` (``center`` and ``scale`` only) handles them as
-        singletons, R's ``options(survey.adjust.domain.lonely = TRUE)``.
+        A stratum with several PSUs but one holding rows of an estimation
+        domain (``where=`` crossed with a ``by=`` level). ``"standard"``
+        (default) uses the usual domain variance, as R does by default.
+        ``"apply"`` (``center`` and ``scale`` only) handles it as a singleton,
+        R's ``options(survey.adjust.domain.lonely = TRUE)``.
+    on_domain_singletons
+        What svy tells you about those strata: ``"ignore"`` (default) records
+        the finding on the result and in ``sample.warnings``; ``"warn"`` also
+        prints a note under the result; ``"error"`` raises before estimating.
+        ``sample.domain_singletons(by=..., where=...)`` lists them.
+
+    Other Parameters
+    ----------------
+    using
+        ``collapse``: how a target stratum is chosen. ``"smallest"``
+        (default) or ``"largest"`` by PSU count, ``"next"`` or ``"previous"``
+        by ``order_by`` (or the strata's order); a mapping
+        ``{singleton stratum: target stratum}`` in the stratum columns' values
+        (a tuple per stratum for several stratum columns); or a callable
+        ``(SingletonInfo, list[StratumInfo]) -> target``.
+    within
+        ``collapse``: column(s) constant within each stratum (e.g. a region);
+        a singleton is merged only into a stratum with the same values.
+    order_by, descending
+        ``collapse``: the order of the strata for ``"next"``/``"previous"`` and
+        for breaking ties.
+    rstate
+        ``collapse``: breaks ties at random, reproducibly with an int seed;
+        ties go to the first stratum in order when ``None``.
+    name
+        ``pool``: the pooled pseudo-stratum's name (default ``"__pooled__"``).
+
+    Examples
+    --------
+    >>> svy.Design(stratum="VARSTR", psu="VARPSU", wgt="PERWT18F", singleton="center")
+    >>> sample.update_design(singleton=svy.Singleton("collapse", within="region", rstate=42))
+    >>> svy.Singleton("center", domains="apply", on_domain_singletons="warn")
     """
 
-    method: Literal["certainty", "skip", "scale", "center", "collapse", "pool"]
-    strata: tuple[Any, ...] = ()
-    mapping: tuple[tuple[Any, Any], ...] = ()
+    domains: Literal["standard", "apply"] = "standard"
+    on_domain_singletons: OnDomainSingletons = "ignore"
+    using: Any = None
+    within: tuple[str, ...] | None = None
+    order_by: tuple[str, ...] | None = None
+    descending: bool = False
+    rstate: Any = None
     name: str | None = None
-    domains: SingletonDomains = "warn"
 
     def __post_init__(self) -> None:
-        if self.method not in _SINGLETON_METHODS:
-            raise ValueError(
-                f"Unknown singleton method {self.method!r}; use one of {_SINGLETON_METHODS}."
-            )
-        unique: dict[Any, Any] = {}
-        for v in self.strata:
-            v = _stratum_value(v)
-            unique.setdefault(_typed(v), v)
-        strata = tuple(unique.values())
-        mapping = tuple((_stratum_value(a), _stratum_value(b)) for a, b in self.mapping)
-        if self.domains not in _SINGLETON_DOMAINS:
-            raise ValueError(f"Unknown domains {self.domains!r}; use one of {_SINGLETON_DOMAINS}.")
-        if self.domains == "apply" and self.method not in ("center", "scale"):
-            raise ValueError(
-                f"domains='apply' handles a domain's one-PSU strata as singletons, which "
-                f"center and scale define; {self.method} takes 'ignore', 'warn' or 'error'."
-            )
-        # A rule set only for its domains holds no strata.
-        empty_ok = self.domains != "warn"
-        if self.method == "collapse":
-            if (not mapping and not empty_ok) or strata:
-                raise ValueError("collapse takes a non-empty mapping and no strata.")
-            sources = {_typed(a) for a, _ in mapping}
-            if len(sources) != len(mapping):
-                raise ValueError("collapse maps each singleton stratum once.")
-            bad = [b for _, b in mapping if _typed(b) in sources]
-            if bad:
-                raise ValueError(f"collapse targets must not be singletons themselves: {bad!r}")
-        elif (not strata and not empty_ok) or mapping:
-            raise ValueError(f"{self.method} takes a non-empty strata and no mapping.")
+        method = self._method(self.method)
+        domains = self._domains(method, self.domains)
+        self._on_domain_singletons(self.on_domain_singletons)
+        collapse_only = {
+            "using": self.using is not None,
+            "within": self.within is not None,
+            "order_by": self.order_by is not None,
+            "descending": self.descending is not False,
+            "rstate": self.rstate is not None,
+        }
+        using: Any = self.using
+        if method is SingletonMethod.COLLAPSE:
+            using = self._using("smallest" if using is None else using)
+            if not isinstance(self.descending, bool):
+                raise _rule_error(
+                    "descending", "descending is True or False.", got=self.descending
+                )
+            if isinstance(self.rstate, bool):
+                raise _rule_error(
+                    "rstate", "rstate is an int seed, a numpy Generator or None.", got=self.rstate
+                )
+        else:
+            given = [k for k, v in collapse_only.items() if v]
+            if given:
+                raise _rule_error(
+                    given[0],
+                    f"{given[0]} applies to method='collapse' only, not {method.value!r}.",
+                    hint=f'svy.Singleton("collapse", {given[0]}=...) merges each singleton '
+                    "stratum into another stratum.",
+                )
         name = self.name
-        if self.method == "pool":
+        if method is SingletonMethod.POOL:
             name = _POOLED if name is None else name
             if not isinstance(name, str) or not name:
-                raise ValueError("pool's name must be a non-empty string.")
+                raise _rule_error("name", "pool's name is a non-empty string.", got=name)
         elif name is not None:
-            raise ValueError(f"name applies to pool only, not {self.method}.")
-        msgspec.structs.force_setattr(self, "strata", strata)
-        msgspec.structs.force_setattr(self, "mapping", mapping)
-        msgspec.structs.force_setattr(self, "name", name)
+            raise _rule_error("name", f"name applies to method='pool' only, not {method.value!r}.")
+        set_ = msgspec.structs.force_setattr
+        set_(self, "method", method)
+        set_(self, "domains", domains)
+        set_(self, "using", using)
+        set_(self, "within", _rule_columns("within", self.within))
+        set_(self, "order_by", _rule_columns("order_by", self.order_by))
+        set_(self, "name", name)
 
-    @classmethod
-    def certainty(cls, strata: Any = (), *, domains: SingletonDomains = "warn") -> SingletonSpec:
-        """Each singleton's PSU becomes a stratum, its SSUs (or rows) the PSUs."""
-        return cls(method="certainty", strata=_strata_arg(strata), domains=domains)
+    @staticmethod
+    def _method(value: Any) -> SingletonMethod:
+        if isinstance(value, SingletonMethod):
+            return value
+        if isinstance(value, str):
+            key = value.strip().lower()
+            if key in SingletonMethod._value2member_map_:
+                return SingletonMethod(key)
+            if key == "certainty":
+                raise _rule_error(
+                    "method",
+                    "svy's former certainty() is method='self_representing'.",
+                    got=value,
+                    hint="R's lonely.psu='certainty' and Stata's singleunit(certainty) make "
+                    "a singleton contribute nothing: that is method='skip'.",
+                )
+        from svy.errors.method_errors import MethodError
 
-    @classmethod
-    def skip(cls, strata: Any = (), *, domains: SingletonDomains = "warn") -> SingletonSpec:
-        """The singleton strata contribute nothing to the variance."""
-        return cls(method="skip", strata=_strata_arg(strata), domains=domains)
+        raise MethodError.invalid_choice(
+            where=_RULE_WHERE,
+            param="method",
+            got=value,
+            allowed=[m.value for m in SingletonMethod],
+            hint='e.g. svy.Singleton("center"), R\'s lonely.psu = "adjust".',
+        )
 
-    @classmethod
-    def scale(cls, strata: Any = (), *, domains: SingletonDomains = "warn") -> SingletonSpec:
-        """As ``skip``, with the variance scaled up by the singleton fraction."""
-        return cls(method="scale", strata=_strata_arg(strata), domains=domains)
+    @staticmethod
+    def _domains(method: SingletonMethod, value: Any) -> Any:
+        from svy.core.enumerations import SingletonDomains
 
-    @classmethod
-    def center(cls, strata: Any = (), *, domains: SingletonDomains = "warn") -> SingletonSpec:
-        """The singletons' variance is taken around the grand mean."""
-        return cls(method="center", strata=_strata_arg(strata), domains=domains)
+        if value in ("warn", "ignore", "error"):
+            raise _rule_error(
+                "domains",
+                f"domains={value!r} is on_domain_singletons={value!r} now; domains picks "
+                "the variance formula, 'standard' or 'apply'.",
+                got=value,
+                hint=f'svy.Singleton("{method.value}", on_domain_singletons="{value}")',
+            )
+        if value not in SingletonDomains._value2member_map_:
+            from svy.errors.method_errors import MethodError
 
-    @classmethod
-    def collapse(
-        cls, mapping: Mapping[Any, Any] | None = None, *, domains: SingletonDomains = "warn"
-    ) -> SingletonSpec:
-        """Each singleton stratum is merged into its target stratum."""
-        return cls(method="collapse", mapping=tuple(dict(mapping or {}).items()), domains=domains)
+            raise MethodError.invalid_choice(
+                where=_RULE_WHERE,
+                param="domains",
+                got=value,
+                allowed=[d.value for d in SingletonDomains],
+                hint='"standard" uses the usual domain variance; "apply" handles a stratum '
+                "with one PSU in the domain as a singleton.",
+            )
+        domains = SingletonDomains(value)
+        if domains is SingletonDomains.APPLY and method not in (
+            SingletonMethod.CENTER,
+            SingletonMethod.SCALE,
+        ):
+            raise _rule_error(
+                "domains",
+                f"domains='apply' handles a domain's one-PSU strata as singletons, which "
+                f"center and scale define; {method.value!r} takes domains='standard'.",
+                got=value,
+                hint='svy.Singleton("center", domains="apply")',
+            )
+        return domains
 
-    @classmethod
-    def pool(
-        cls, strata: Any = (), name: str = _POOLED, *, domains: SingletonDomains = "warn"
-    ) -> SingletonSpec:
-        """The singleton strata are pooled into one pseudo-stratum."""
-        return cls(method="pool", strata=_strata_arg(strata), name=name, domains=domains)
+    @staticmethod
+    def _on_domain_singletons(value: Any) -> None:
+        from svy.core.warnings import check_on_finding
 
+        check_on_finding(value, param="on_domain_singletons", where=_RULE_WHERE)
+
+    @staticmethod
+    def _using(value: Any) -> Any:
+        if isinstance(value, str):
+            if value not in _COLLAPSE_STRATEGIES:
+                from svy.errors.method_errors import MethodError
+
+                raise MethodError.invalid_choice(
+                    where=_RULE_WHERE,
+                    param="using",
+                    got=value,
+                    allowed=[*_COLLAPSE_STRATEGIES, "a mapping", "a callable"],
+                    hint="A mapping {singleton stratum: target stratum} names the targets.",
+                )
+            return value
+        if callable(value):
+            return value
+        pairs = value.items() if isinstance(value, Mapping) else value
+        try:
+            mapping = tuple((_stratum_value(a), _stratum_value(b)) for a, b in pairs)
+        except (TypeError, ValueError):
+            raise _rule_error(
+                "using",
+                "using is a strategy name, a mapping {singleton stratum: target stratum} "
+                "or a callable.",
+                got=value,
+            ) from None
+        if not mapping:
+            raise _rule_error("using", "the collapse mapping is empty.", got=value)
+        sources = [_typed(a) for a, _ in mapping]
+        if len(set(sources)) != len(sources):
+            raise _rule_error("using", "the collapse mapping names a singleton stratum twice.")
+        bad = [b for _, b in mapping if _typed(b) in set(sources)]
+        if bad:
+            raise _rule_error(
+                "using",
+                f"collapse targets must not be singleton strata themselves: {bad!r}.",
+                hint="Map each singleton stratum to a stratum with two or more PSUs.",
+            )
+        return mapping
+
+    # ------------------------------------------------------------------
     @property
-    def handled(self) -> tuple[Any, ...]:
-        """The singleton strata this spec was made for."""
-        return tuple(a for a, _ in self.mapping) if self.method == "collapse" else self.strata
-
-    @property
-    def targets(self) -> tuple[Any, ...]:
-        """The strata the singletons are collapsed into (collapse only)."""
-        seen: dict[Any, Any] = {}
-        for _, b in self.mapping:
-            seen.setdefault(_typed(b), b)
-        return tuple(seen.values())
+    def mapping(self) -> dict[Any, Any] | None:
+        """``collapse`` with an explicit mapping: ``{singleton: target}``."""
+        if isinstance(self.using, tuple):
+            return dict(self.using)
+        return None
 
     def __repr__(self) -> str:
         return self._code("", repr)
 
     def _to_code(self) -> str:
+        if self.rstate is not None and not isinstance(self.rstate, int):
+            raise _rule_error(
+                "rstate",
+                "a collapse rule with a Generator rstate cannot be written as code.",
+                hint="Use an int seed, e.g. rstate=42.",
+            )
+        if callable(self.using) and not isinstance(self.using, (str, tuple)):
+            raise _rule_error(
+                "using",
+                "a collapse rule chosen by a callable cannot be written as code.",
+                hint="Pass the mapping it produced, which the handled column of "
+                'sample.singletons shows: svy.Singleton("collapse", using={singleton: target}).',
+            )
         return self._code("svy.", _value_code)
 
     def _code(self, prefix: str, fmt: Any) -> str:
-        """The constructor call that rebuilds this spec."""
-        domains = "" if self.domains == "warn" else f", domains={self.domains!r}"
-        if self.method == "collapse":
-            items = ", ".join(f"{fmt(a)}: {fmt(b)}" for a, b in self.mapping)
-            return f"{prefix}SingletonSpec.collapse({{{items}}}{domains})"
-        strata = "[" + ", ".join(fmt(v) for v in self.strata) + "]"
-        name = "" if self.method != "pool" or self.name == _POOLED else f", name={self.name!r}"
-        return f"{prefix}SingletonSpec.{self.method}({strata}{name}{domains})"
+        args = [repr(self.method.value)]
+        if self.domains != "standard":
+            args.append(f"domains={self.domains.value!r}")
+        if self.on_domain_singletons != "ignore":
+            args.append(f"on_domain_singletons={self.on_domain_singletons!r}")
+        if self.method is SingletonMethod.COLLAPSE:
+            if isinstance(self.using, tuple):
+                items = ", ".join(f"{fmt(a)}: {fmt(b)}" for a, b in self.using)
+                args.append(f"using={{{items}}}")
+            elif isinstance(self.using, str):
+                if self.using != "smallest":
+                    args.append(f"using={self.using!r}")
+            else:
+                args.append(f"using={getattr(self.using, '__name__', repr(self.using))}")
+            for f in ("within", "order_by"):
+                cols = getattr(self, f)
+                if cols is not None:
+                    args.append(f"{f}={cols[0]!r}" if len(cols) == 1 else f"{f}={list(cols)!r}")
+            if self.descending:
+                args.append("descending=True")
+            if self.rstate is not None:
+                args.append(f"rstate={self.rstate!r}")
+        if self.method is SingletonMethod.POOL and self.name != _POOLED:
+            args.append(f"name={self.name!r}")
+        return f"{prefix}Singleton({', '.join(args)})"
 
 
 def _value_code(value: Any) -> str:
@@ -555,7 +728,7 @@ class Design:
         wr: bool = False,
         rep_wgts: RepWgts | None = None,
         wgt_adjustment: WgtAdjustment | None = None,
-        singleton: SingletonSpec | None = None,
+        singleton: Singleton | SingletonMethodName | None = None,
         **parts: Any,
     ) -> None:
         object.__setattr__(self, "_frozen", False)
@@ -621,8 +794,8 @@ class Design:
         return self._parts.get("wgt_adjustment")
 
     @property
-    def singleton(self) -> SingletonSpec | None:
-        """How the singleton strata are handled for variance, or None."""
+    def singleton(self) -> Singleton | None:
+        """The declared rule for strata with a single PSU, or None."""
         return self._parts.get("singleton")
 
     def __getattr__(self, name: str) -> Any:
@@ -695,15 +868,14 @@ class Design:
         wr: bool | _MissingType = _MISSING,
         rep_wgts: RepWgts | _MissingType | None = _MISSING,
         wgt_adjustment: WgtAdjustment | _MissingType | None = _MISSING,
-        singleton: SingletonSpec | _MissingType | None = _MISSING,
+        singleton: Singleton | SingletonMethodName | _MissingType | None = _MISSING,
         **parts: Any,
     ) -> Self:
         """A copy with the named fields replaced.
 
         What is not passed follows its part's rule: replicate weights and the
         weight-adjustment record stay while they describe the new weight, and
-        singleton handling stays unless the stratum, PSU or SSU columns change
-        (then it is cleared with a warning).
+        the singleton rule stays (it applies to whatever strata the design has).
         """
         return self._merge(
             only_if_none=False,
