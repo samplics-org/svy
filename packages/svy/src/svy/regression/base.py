@@ -27,6 +27,7 @@ from svy.core.enumerations import DistFamily, LinkFunction
 from svy.core.singleton import domain_singleton_findings, require_singleton_rule
 from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import WhereArg
+from svy.core.variance_method import resolve_variance_method
 from svy.core.warnings import WarnCode
 from svy.errors.model_errors import ModelError
 from svy.regression.glm import GLMCoef, GLMFit, GLMStats, delta_var, offset_values
@@ -409,6 +410,7 @@ class GLM:
         theta: float | None = None,
         offset: str | None = None,
         where: WhereArg = None,
+        method: Literal["taylor", "replication"] | None = None,
         drop_nulls: bool = True,
         tol: float = 1e-8,
         max_iter: int = 100,
@@ -463,6 +465,12 @@ class GLM:
             structure for the variance computation, producing correct domain-
             estimation standard errors that match R's
             ``svyglm(..., design = subset(d, ...))``.
+        method : {"taylor", "replication"} | None
+            Variance method. None (the default) is Taylor linearization;
+            ``"replication"`` refits the model with each replicate weight and
+            takes the spread of the coefficients (R's ``svyglm`` on a
+            ``svrepdesign``), with df the replicate df less the extra
+            coefficients.
         drop_nulls : bool
             Drop rows with missing values.
         tol : float
@@ -500,15 +508,18 @@ class GLM:
                 raise ValueError(f"offset column {offset!r} not found in the data.")
             offset_cols = [offset]
 
-        # Replicate weight columns (replicate variance is computed when the
-        # design carries them) and the FPC population column, both of which
-        # must survive prepare_data's projection.
+        # Replicate weight columns (method="replication") and the FPC
+        # population column, both of which must survive prepare_data's
+        # projection.
         design0 = self._sample._design
-        rep_cols: list[str] = (
-            list(design0.rep_wgts.columns) if design0.rep_wgts is not None else []
-        )
+        _rep = resolve_variance_method(self._sample, method, where="GLM.fit")
+        rep_cols: list[str] = list(_rep.columns) if _rep is not None else []
         if not rep_cols:
-            require_singleton_rule(self._sample, where="GLM.fit")
+            require_singleton_rule(
+                self._sample,
+                where="GLM.fit",
+                use_replicates="Pass method='replication' to use the replicates.",
+            )
         pop_size = design0.pop_size
         pop_cols: list[str] = []
         if pop_size is not None:
@@ -919,7 +930,7 @@ class GLM:
         # spread of per-replicate refits: V = sum_r c_r (b_r - mean)(...)^T
         # with the method's coefficients (previously the replicate design
         # silently fell back to Taylor SEs).
-        rep_wgts = design0.rep_wgts
+        rep_wgts = design0.rep_wgts if rep_cols else None
         if rep_wgts is not None and rep_cols and dispersion is not None and theta is None:
             raise ModelError(
                 title="Replicate variance needs a known dispersion",

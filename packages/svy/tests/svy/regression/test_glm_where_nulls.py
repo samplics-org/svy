@@ -76,7 +76,10 @@ def samples(data) -> dict[str, Sample]:
     ids=["gauss", "logit"],
 )
 def test_matches_r(samples, design, k, y, family, ref):
-    fit = samples[design].glm.fit(y=y, x=["z"], family=family, where=W, drop_nulls=False)
+    method = "replication" if design == "jkn" else None
+    fit = samples[design].glm.fit(
+        y=y, x=["z"], family=family, where=W, drop_nulls=False, method=method
+    )
     for c, r in zip(fit.fitted.coefs, ref):
         assert c.est == pytest.approx(r[0], rel=REL)
         assert c.se == pytest.approx(r[k], rel=REL)
@@ -84,8 +87,13 @@ def test_matches_r(samples, design, k, y, family, ref):
 
 @pytest.mark.parametrize("design", ["taylor", "jkn"])
 def test_equals_drop_nulls_path(samples, design):
-    a = samples[design].glm.fit(y="y", x=["z", Cat("cat")], where=W, drop_nulls=False)
-    b = samples[design].glm.fit(y="y", x=["z", Cat("cat")], where=W, drop_nulls=True)
+    method = "replication" if design == "jkn" else None
+    a = samples[design].glm.fit(
+        y="y", x=["z", Cat("cat")], where=W, drop_nulls=False, method=method
+    )
+    b = samples[design].glm.fit(
+        y="y", x=["z", Cat("cat")], where=W, drop_nulls=True, method=method
+    )
     assert [(c.est, c.se) for c in a.fitted.coefs] == pytest.approx(
         [(c.est, c.se) for c in b.fitted.coefs], rel=1e-12
     )
