@@ -127,7 +127,7 @@ class TestReplicateGLM:
         coefs = tuple((n_h[h] - 1.0) / n_h[h] for h in strata)
         rw = RepWeights(method="jackknife", prefix="jw", n_reps=n, scale=coefs)
         s = Sample(df, Design(stratum="stype", wgt="pw", rep_wgts=rw))
-        m = s.glm.fit(y="api00", x=["ell", "meals"])
+        m = s.glm.fit(y="api00", x=["ell", "meals"], method="replication")
         got = [c.se for c in m.fitted.coefs]
         np.testing.assert_allclose(got, [9.01172834, 0.40647424, 0.28786459], rtol=1e-4)
 
@@ -143,7 +143,12 @@ class TestReplicateGLM:
         rw = RepWeights(method="jackknife", prefix="jw", n_reps=n, scale=coefs)
         s_rep = Sample(df, Design(stratum="stype", wgt="pw", rep_wgts=rw))
         s_tay = Sample(api_strat, Design(stratum="stype", wgt="pw"))
-        se_rep = [c.se for c in s_rep.glm.fit(y="api00", x=["ell", "meals"]).fitted.coefs]
+        se_rep = [
+            c.se
+            for c in s_rep.glm.fit(
+                y="api00", x=["ell", "meals"], method="replication"
+            ).fitted.coefs
+        ]
         se_tay = [c.se for c in s_tay.glm.fit(y="api00", x=["ell", "meals"]).fitted.coefs]
         assert not np.allclose(se_rep, se_tay, rtol=1e-6)
 
@@ -165,7 +170,7 @@ class TestReplicateGLM:
         dfr = df.with_columns([pl.Series(k, v) for k, v in reps.items()])
         rw = RepWeights(method="bootstrap", prefix="bw", n_reps=4)
         s = Sample(dfr, Design(wgt="w", rep_wgts=rw))
-        fit = s.glm.fit(y="y", x=["x"])
+        fit = s.glm.fit(y="y", x=["x"], method="replication")
 
         # Rebuild the expected covariance from per-replicate refits
         betas = []

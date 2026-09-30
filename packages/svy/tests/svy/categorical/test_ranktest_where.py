@@ -85,7 +85,7 @@ class TestD0Baseline:
         r = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
         )
         assert r.stats.value == pytest.approx(0.784492299264955, rel=REL)
@@ -104,7 +104,7 @@ class TestD1StratClustWhereIncome:
         r = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("income") > 50000,
         )
@@ -114,7 +114,7 @@ class TestD1StratClustWhereIncome:
         r = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("income") > 50000,
         )
@@ -124,7 +124,7 @@ class TestD1StratClustWhereIncome:
         r = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("income") > 50000,
         )
@@ -134,7 +134,7 @@ class TestD1StratClustWhereIncome:
         r = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("income") > 50000,
         )
@@ -144,13 +144,13 @@ class TestD1StratClustWhereIncome:
         r_full = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
         )
         r_where = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("income") > 50000,
         )
@@ -168,7 +168,7 @@ class TestD3WgtOnlyWhereIncome:
         r = sample_wgt.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("income") > 50000,
         )
@@ -178,7 +178,7 @@ class TestD3WgtOnlyWhereIncome:
         r = sample_wgt.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("income") > 50000,
         )
@@ -188,7 +188,7 @@ class TestD3WgtOnlyWhereIncome:
         r = sample_wgt.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("income") > 50000,
         )
@@ -206,7 +206,7 @@ class TestD4WgtOnlyKSampleWhereIncome:
         r = sample_wgt.categorical.ranktest(
             y="income",
             group="region",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("income") > 50000,
         )
@@ -216,7 +216,7 @@ class TestD4WgtOnlyKSampleWhereIncome:
         r = sample_wgt.categorical.ranktest(
             y="income",
             group="region",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("income") > 50000,
         )
@@ -227,7 +227,7 @@ class TestD4WgtOnlyKSampleWhereIncome:
         r = sample_wgt.categorical.ranktest(
             y="income",
             group="region",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("income") > 50000,
         )
@@ -245,7 +245,7 @@ class TestD5ClustKSampleWhereIncome:
         r = sample_clust.categorical.ranktest(
             y="income",
             group="region",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("income") > 50000,
         )
@@ -255,7 +255,7 @@ class TestD5ClustKSampleWhereIncome:
         r = sample_clust.categorical.ranktest(
             y="income",
             group="region",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("income") > 50000,
         )
@@ -266,7 +266,7 @@ class TestD5ClustKSampleWhereIncome:
         r = sample_clust.categorical.ranktest(
             y="income",
             group="region",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("income") > 50000,
         )
@@ -284,7 +284,7 @@ class TestD6StratClustVdWWhereIncome:
         r = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method="vander-waerden",
+            score="vander-waerden",
             drop_nulls=True,
             where=pl.col("income") > 50000,
         )
@@ -294,7 +294,7 @@ class TestD6StratClustVdWWhereIncome:
         r = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method="vander-waerden",
+            score="vander-waerden",
             drop_nulls=True,
             where=pl.col("income") > 50000,
         )
@@ -304,7 +304,7 @@ class TestD6StratClustVdWWhereIncome:
         r = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method="vander-waerden",
+            score="vander-waerden",
             drop_nulls=True,
             where=pl.col("income") > 50000,
         )
@@ -323,7 +323,7 @@ class TestD7StratClustWhereEduc:
         r = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("educ") == "Postgraduate",
         )
@@ -333,7 +333,7 @@ class TestD7StratClustWhereEduc:
         r = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("educ") == "Postgraduate",
         )
@@ -343,7 +343,7 @@ class TestD7StratClustWhereEduc:
         r = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("educ") == "Postgraduate",
         )
@@ -361,7 +361,7 @@ class TestWhereWithBy:
         results = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("income") > 50000,
             by="region",
@@ -390,7 +390,7 @@ class TestWhereWithBy:
         results = sample_wgt.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("income") > 50000,
             by="region",
@@ -420,7 +420,7 @@ class TestWhereWithBy:
         results = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("educ") == "Postgraduate",
             by="region",
@@ -448,13 +448,13 @@ class TestWhereWithBy:
         r1 = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
         )
         r2 = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=None,
         )
@@ -494,7 +494,7 @@ class TestD9GroupLabelsUnderWhere:
         r = sample.categorical.ranktest(
             y="y",
             group="grp",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("keep") == 1,
         )
@@ -508,7 +508,7 @@ class TestD9GroupLabelsUnderWhere:
         r_where = s_where.categorical.ranktest(
             y="y",
             group="grp",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             where=pl.col("keep") == 1,
         )
@@ -516,7 +516,7 @@ class TestD9GroupLabelsUnderWhere:
         r_filtered = Sample(filtered, Design(wgt="wgt")).categorical.ranktest(
             y="y",
             group="grp",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
         )
         assert r_where.groups.levels == r_filtered.groups.levels
@@ -537,7 +537,7 @@ class TestD9GroupLabelsUnderWhere:
         results = sample.categorical.ranktest(
             y="y",
             group="grp",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
             by="site",
         )
@@ -572,7 +572,7 @@ class TestD10CustomScoreFnBy:
         r_builtin = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             drop_nulls=True,
         )
         assert r_custom.groups.levels == r_builtin.groups.levels
@@ -594,7 +594,7 @@ class TestD10CustomScoreFnBy:
         r_builtin = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             by="region",
             drop_nulls=True,
         )
@@ -623,7 +623,7 @@ class TestD10CustomScoreFnBy:
         r_builtin = sample_strat_clust.categorical.ranktest(
             y="income",
             group="sex",
-            method=RankScoreMethod.KRUSKAL_WALLIS,
+            score=RankScoreMethod.KRUSKAL_WALLIS,
             by="region",
             where=pl.col("income") > 50000,
             drop_nulls=True,

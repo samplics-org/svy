@@ -416,7 +416,7 @@ def test_every_analysis_reports_the_domain(data, design, domains, on):
         sample.estimation.corr(("y", "x"), where=dom("g1")),
         c.ttest("y", mean_h0=4, where=dom("g1")),
         c.ttest("y", group="reg", by="dom"),
-        c.ranktest("y", group="reg", method="kruskal-wallis", where=dom("g1")),
+        c.ranktest("y", group="reg", score="kruskal-wallis", where=dom("g1")),
         c.ranktest("y", group="reg", score_fn=lambda r, n: r / n, where=dom("g1")),
         c.tabulate("cat", where=dom("g1")),
         c.tabulate("cat", "b", where=dom("g2")),
@@ -520,7 +520,7 @@ def test_verify_apply_against_r(data, design, method):
     assert [x.se for x in tab.estimates] == _approx(r["prop_g1"])
     glm = sample.glm.fit("y", x=["x"], where=dom("g1")).fitted
     assert [k.se for k in glm.coefs] == _approx(r["glm_g1"])
-    rank = c.ranktest("y", group="reg", method="kruskal-wallis", where=dom("g2"))
+    rank = c.ranktest("y", group="reg", score="kruskal-wallis", where=dom("g2"))
     assert rank.stats.value == _approx(r["rank_g2"])
 
 

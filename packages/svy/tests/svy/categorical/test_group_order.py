@@ -36,16 +36,16 @@ def sample() -> Sample:
 
 
 def test_ranktest_two_sample(sample):
-    r = sample.categorical.ranktest("y", group="g", method="kruskal-wallis")
-    ref = sample.categorical.ranktest("y", group="gs", method="kruskal-wallis")
+    r = sample.categorical.ranktest("y", group="g", score="kruskal-wallis")
+    ref = sample.categorical.ranktest("y", group="gs", score="kruskal-wallis")
     assert r.groups.levels == (2, 10)
     assert r.diff[0].diff == pytest.approx(ref.diff[0].diff, rel=1e-12)
     assert r.diff[0].diff > 0
 
 
 def test_ranktest_by(sample):
-    r = sample.categorical.ranktest("y", group="g", by="stratum", method="kruskal-wallis")
-    ref = sample.categorical.ranktest("y", group="gs", by="stratum", method="kruskal-wallis")
+    r = sample.categorical.ranktest("y", group="g", by="stratum", score="kruskal-wallis")
+    ref = sample.categorical.ranktest("y", group="gs", by="stratum", score="kruskal-wallis")
     for a, b in zip(r, ref):
         assert a.groups.levels == (2, 10)
         assert a.diff[0].diff == pytest.approx(b.diff[0].diff, rel=1e-12)

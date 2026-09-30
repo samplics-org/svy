@@ -21,7 +21,7 @@ print("=" * 70)
 r = sample.categorical.ranktest(
     y="income",
     group="sex",
-    method=RankScoreMethod.KRUSKAL_WALLIS,
+    score=RankScoreMethod.KRUSKAL_WALLIS,
     drop_nulls=True,
 )
 print(r)
@@ -33,7 +33,7 @@ print("=" * 70)
 r = sample.categorical.ranktest(
     y="income",
     group="sex",
-    method=RankScoreMethod.KRUSKAL_WALLIS,
+    score=RankScoreMethod.KRUSKAL_WALLIS,
     drop_nulls=True,
     where=svy.col("income") > 50000,
 )
@@ -48,7 +48,7 @@ sample_wgt = svy.Sample(data=data, design=design_wgt)
 r = sample_wgt.categorical.ranktest(
     y="income",
     group="sex",
-    method=RankScoreMethod.KRUSKAL_WALLIS,
+    score=RankScoreMethod.KRUSKAL_WALLIS,
     drop_nulls=True,
     where=svy.col("income") > 50000,
 )
@@ -61,7 +61,7 @@ print("=" * 70)
 r = sample_wgt.categorical.ranktest(
     y="income",
     group="region",
-    method=RankScoreMethod.KRUSKAL_WALLIS,
+    score=RankScoreMethod.KRUSKAL_WALLIS,
     drop_nulls=True,
     where=svy.col("income") > 50000,
 )
@@ -76,7 +76,7 @@ sample_clust = svy.Sample(data=data, design=design_clust)
 r = sample_clust.categorical.ranktest(
     y="income",
     group="region",
-    method=RankScoreMethod.KRUSKAL_WALLIS,
+    score=RankScoreMethod.KRUSKAL_WALLIS,
     drop_nulls=True,
     where=svy.col("income") > 50000,
 )
@@ -89,7 +89,7 @@ print("=" * 70)
 r = sample.categorical.ranktest(
     y="income",
     group="sex",
-    method=RankScoreMethod.VANDER_WAERDEN,
+    score=RankScoreMethod.VANDER_WAERDEN,
     drop_nulls=True,
     where=svy.col("income") > 50000,
 )
@@ -102,7 +102,7 @@ print("=" * 70)
 r = sample.categorical.ranktest(
     y="income",
     group="sex",
-    method=RankScoreMethod.KRUSKAL_WALLIS,
+    score=RankScoreMethod.KRUSKAL_WALLIS,
     drop_nulls=True,
     where=svy.col("educ") == "Postgraduate",
 )
@@ -117,7 +117,7 @@ print("\nD8a: strat+clust, income ~ sex, KW, where income>50000, by=region")
 r = sample.categorical.ranktest(
     y="income",
     group="sex",
-    method=RankScoreMethod.KRUSKAL_WALLIS,
+    score=RankScoreMethod.KRUSKAL_WALLIS,
     drop_nulls=True,
     where=svy.col("income") > 50000,
     by="region",
@@ -128,7 +128,7 @@ print("\nD8b: wgt only, income ~ sex, KW, where income>50000, by=region")
 r = sample_wgt.categorical.ranktest(
     y="income",
     group="sex",
-    method=RankScoreMethod.KRUSKAL_WALLIS,
+    score=RankScoreMethod.KRUSKAL_WALLIS,
     drop_nulls=True,
     where=svy.col("income") > 50000,
     by="region",
@@ -139,7 +139,7 @@ print("\nD8c: strat+clust, income ~ sex, KW, where sex==2, by=educ")
 r = sample.categorical.ranktest(
     y="income",
     group="sex",
-    method=RankScoreMethod.KRUSKAL_WALLIS,
+    score=RankScoreMethod.KRUSKAL_WALLIS,
     drop_nulls=True,
     where=svy.col("sex") == 2,
     by="educ",
@@ -150,7 +150,7 @@ print("\nD8d: strat+clust, income ~ sex, KW, where educ==Postgraduate, by=region
 r = sample.categorical.ranktest(
     y="income",
     group="sex",
-    method=RankScoreMethod.KRUSKAL_WALLIS,
+    score=RankScoreMethod.KRUSKAL_WALLIS,
     drop_nulls=True,
     where=svy.col("educ") == "Postgraduate",
     by="region",

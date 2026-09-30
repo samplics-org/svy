@@ -423,8 +423,8 @@ pub fn rao_scott(
     nr: usize,
     nc: usize,
     n_obs: usize,
-    n_strata: usize,
-    n_psus: usize,
+    // Design df: #PSUs - #strata for Taylor, the replicate df for replication.
+    nu: f64,
 ) -> (f64, f64, f64, f64, f64, f64, f64) {
     let k = nr * nc;
     let n_f = n_obs as f64;
@@ -542,7 +542,7 @@ pub fn rao_scott(
     let (f_p, ndf, ddf) = if trace_d > 1e-9 {
         let fp = chisq_p / trace_d;
         let nd = trace_d.powi(2) / trace_d2;
-        let dd_val = (n_psus - n_strata) as f64 * nd;
+        let dd_val = nu * nd;
         (fp, nd, dd_val)
     } else {
         (0.0, 0.0, 0.0)

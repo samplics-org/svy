@@ -330,7 +330,7 @@ def test_replicate_refit_separated_only():
         .alias("y1")
     )
     s = _sample(df).weighting.create_jk_wgts()
-    fit, raised = _fit(s, y="y1", x=["x", svy.Cat("g")], family="binomial")
+    fit, raised = _fit(s, y="y1", x=["x", svy.Cat("g")], family="binomial", method="replication")
     assert len(raised) == 1
     assert [c.term for c in fit.coefs if np.isnan(c.se)] == ["g_c"]
     (w,) = _findings(s)

@@ -330,7 +330,7 @@ def rep_no_rule() -> svy.Sample:
 class TestReplicateDesigns:
     def test_replication_needs_no_rule(self, rep_no_rule):
         assert rep_no_rule.estimation.mean("y", method="replication").estimates[0].se > 0
-        assert rep_no_rule.glm.fit("y", x=["x"]).fitted.coefs[0].se > 0
+        assert rep_no_rule.glm.fit("y", x=["x"], method="replication").fitted.coefs[0].se > 0
 
     @pytest.mark.parametrize(
         "analysis",
@@ -338,7 +338,7 @@ class TestReplicateDesigns:
             lambda s: s.estimation.mean("y"),
             lambda s: s.categorical.tabulate("x"),
             lambda s: s.categorical.ttest("y", mean_h0=3),
-            lambda s: s.categorical.ranktest("y", group="g", method="kruskal-wallis"),
+            lambda s: s.categorical.ranktest("y", group="g", score="kruskal-wallis"),
         ],
         ids=["mean", "tabulate", "ttest", "ranktest"],
     )
@@ -359,7 +359,7 @@ ANALYSES = {
     "crosstab": lambda s: s.categorical.tabulate("x", "g"),
     "ttest": lambda s: s.categorical.ttest("y", mean_h0=3),
     "ttest2": lambda s: s.categorical.ttest("y", group="g"),
-    "ranktest": lambda s: s.categorical.ranktest("y", group="g", method="kruskal-wallis"),
+    "ranktest": lambda s: s.categorical.ranktest("y", group="g", score="kruskal-wallis"),
     "glm": lambda s: s.glm.fit("y", x=["x"]),
 }
 
