@@ -87,6 +87,26 @@ class SingletonError(SvyError):
         )
 
     @classmethod
+    def for_taylor_on_replicates(
+        cls,
+        singletons: _SingletonSeq,
+        *,
+        rep_wgts: Any,
+        use_replicates: str,
+        where: str,
+    ) -> "SingletonError":
+        """A Taylor variance asked of a replicate design with singleton strata
+        and no rule: the replicates are not used, the strata and PSUs are."""
+        err = cls.from_singletons(singletons, where=where)
+        err.detail += (
+            f"\n\nThe design carries replicate weights ({rep_wgts.method}, "
+            f"n_reps={rep_wgts.n_reps}), but this variance is Taylor linearization, "
+            "computed from the stratum and PSU columns."
+        )
+        err.hint = f"{use_replicates} Or keep Taylor and declare a rule: {err.hint}"
+        return err
+
+    @classmethod
     def for_replicates(
         cls,
         singletons: _SingletonSeq,

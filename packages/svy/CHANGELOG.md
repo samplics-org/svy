@@ -102,6 +102,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **The singleton error on a replicate design did not say that the replicates were not used.** `tabulate`, `ttest` and `ranktest` compute a Taylor variance from the stratum and PSU columns even when the design has replicate weights. Estimation does the same unless `method="replication"` is passed. Without a singleton rule they raise `SINGLETON_ERROR`. On a replicate design the error now says that this variance is Taylor linearization and that the replicate weights are not used. Its hint points to where the replicates are used: `method="replication"` for estimation, and `estimation.prop` or `estimation.mean` for `tabulate` and `ttest`. `ranktest` has no replication variance yet. GLM already uses the replicates and is unaffected.
+
 - **`add_stage` results did not detect singletons.** The combined sample was built without its design keys, so a stratum left with one PSU (after a filter, say) went unnoticed and Taylor estimates left it out silently. It is now checked like a constructed sample, and applies a singleton rule carried from stage 1.
 
 - **A zip holding no readable file was reported as missing.** `read_sas` on a `.zip` with no `.sas7bdat`, `.xpt`, `.xport` or `.ssp` member raised `FILE_NOT_FOUND` ("No file at x.zip") for an archive that exists. `read_sas`, `read_spss` and `read_stata` (and their `create_from_*`) now raise `ARCHIVE_MEMBER_NOT_FOUND`, whose detail lists the archive's files. Any other file a reader could not find while the data file exists is now named in the error instead of the data file.
