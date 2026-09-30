@@ -284,6 +284,7 @@ def taylor_assoc(
     )
 
     df = est._ensure_float64(df, sorted({c for p in pairs for c in p}))
+    singleton_method, findings = est._singleton_variance(prep)
     result_df = rs.taylor_assoc(
         df,
         [p[0] for p in pairs],
@@ -296,7 +297,8 @@ def taylor_assoc(
         fpc_col=fpc_col,
         fpc_ssu_col=fpc_ssu_col,
         by_col=prep.by_col,
-        singleton_method=est._get_center_method(),
+        singleton_method=singleton_method,
+        domain_rows_col=prep.domain_col,
         deff_ref=deff_ref,
     )
     result_df, _ = est._apply_scale_adjustment(result_df, prep=prep)
@@ -314,6 +316,7 @@ def taylor_assoc(
         as_factor=False,
         method=None,
         deff_ref=deff_ref,
+        findings=findings,
     )
 
 

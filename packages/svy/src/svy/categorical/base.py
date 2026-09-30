@@ -14,6 +14,7 @@ import logging
 
 from typing import TYPE_CHECKING, Callable, Literal, cast
 
+import msgspec
 import numpy as np
 import polars as pl
 
@@ -33,6 +34,7 @@ from svy.core.enumerations import (
     TableUnits as _TableUnits,
 )
 from svy.core.singleton import (
+    domain_singleton_findings,
     require_singleton_rule,
     singleton_config,
     taylor_singleton_method,
@@ -380,6 +382,15 @@ class Categorical:
                 concat_data, design.pop_size, strata_col, psu_col, ssu_col
             )
 
+        findings = domain_singleton_findings(
+            self._sample,
+            concat_data,
+            strata_col=strata_col,
+            psu_col=psu_col,
+            mask=pl.col(domain_col) if domain_col else None,
+            where="Sample.categorical.tabulate",
+        )
+
         # Call Rust backend
         cells_df, stats_df = rs.tabulate_rs(
             concat_data,
@@ -523,6 +534,7 @@ class Categorical:
             colvals=colvals,
             alpha=alpha,
             metadata=metadata,
+            findings=findings,
         )
 
         if use_labels is not None:
@@ -533,6 +545,26 @@ class Categorical:
     # ════════════════════════════════════════════════════════════════════════
     # T-TEST: Main entry point (Rust backend)
     # ════════════════════════════════════════════════════════════════════════
+
+    def _domain_findings(self, prep, df: pl.DataFrame, *, where: str) -> list:
+        """The domain-singleton findings of a t-test or rank test: its domain
+        is ``where=`` crossed with the ``by=`` level (the groups compared are
+        not domains, as in R's ``svyttest`` on a subset)."""
+        mask = (
+            pl.col(prep.domain_col).cast(pl.Utf8) == str(prep.domain_val)
+            if prep.domain_col
+            else None
+        )
+        return domain_singleton_findings(
+            self._sample,
+            df,
+            strata_col=prep.strata_col,
+            psu_col=prep.psu_col,
+            by_col=prep.by_col,
+            by_cols=prep.by_cols,
+            mask=mask,
+            where=where,
+        )
 
     def ttest(
         self,
@@ -610,6 +642,8 @@ class Categorical:
                 ttest_df, pop_size, prep.strata_col, prep.psu_col, prep.ssu_col
             )
 
+        findings = self._domain_findings(prep, ttest_df, where="Sample.categorical.ttest")
+
         # Single Rust call — handles by-levels internally
         result_df: pl.DataFrame = rs.ttest_rs(
             ttest_df,
@@ -666,9 +700,10 @@ class Categorical:
                 groups=_groups,
                 alpha=alpha,
                 where_clause=format_where_clause(where),
+                findings=findings,
             )
         else:
-            return self._unpack_ttest_row(
+            one = self._unpack_ttest_row(
                 result_df=result_df,
                 row_idx=0,
                 y_name=y_name,
@@ -680,6 +715,7 @@ class Categorical:
                 by_level=None,
                 group_lookup=group_lookup,
             )
+            return msgspec.structs.replace(one, findings=tuple(findings))
 
     def _unpack_ttest_row(
         self,
@@ -884,6 +920,8 @@ class Categorical:
             select_columns=True,
         )
 
+        findings = self._domain_findings(prep, prep.df, where="Sample.categorical.ranktest")
+
         # Single Rust call — handles by-levels internally
         result_df: pl.DataFrame = rs.ranktest_rs(
             prep.df,
@@ -964,9 +1002,10 @@ class Categorical:
                 alpha=alpha,
                 where_clause=format_where_clause(where),
                 by_levels=_by_levels,
+                findings=findings,
             )
         else:
-            return self._unpack_ranktest_row(
+            one = self._unpack_ranktest_row(
                 result_df=result_df,
                 row_idx=0,
                 y_name=y,
@@ -977,6 +1016,7 @@ class Categorical:
                 by=None,
                 by_level=None,
             )
+            return msgspec.structs.replace(one, findings=tuple(findings))
 
     def _unpack_ranktest_row(
         self,
@@ -1168,6 +1208,7 @@ class Categorical:
         df = prep.df.with_columns(pl.Series(name=score_col_name, values=scores_full))
 
         method_name = getattr(score_fn, "__name__", "custom")
+        findings = self._domain_findings(prep, df, where="Sample.categorical.ranktest")
 
         result_df: pl.DataFrame = rs.ttest_rs(
             df,
@@ -1253,6 +1294,7 @@ class Categorical:
                 alpha=alpha,
                 where_clause=format_where_clause(where),
                 by_levels=_by_levels,
+                findings=findings,
             )
 
-        return _unpack_row(0, None)
+        return msgspec.structs.replace(_unpack_row(0, None), findings=tuple(findings))

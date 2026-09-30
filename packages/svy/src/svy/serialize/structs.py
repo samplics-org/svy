@@ -470,13 +470,16 @@ class SingletonSpecData(msgspec.Struct, kw_only=True, frozen=True):
     """How singleton strata are handled (mirrors ``svy.core.design.SingletonSpec``).
 
     Strata are the stratum columns' values (dates restored through "temporal"); ``mapping``
-    holds collapse's (singleton, target) pairs.
+    holds collapse's (singleton, target) pairs; ``domains`` is how strata with one PSU in a
+    domain are handled ("warn" when read from an older payload).
     """
 
     method: str
     strata: list[StratumValue] = []
     mapping: list[tuple[StratumValue, StratumValue]] = []
     name: str | None = None
+    #: Left out unless set, so a default rule saves as before.
+    domains: str | msgspec.UnsetType = msgspec.UNSET
 
 
 @_kinded("design")

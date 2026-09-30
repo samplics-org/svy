@@ -633,6 +633,7 @@ class SingletonPart(DesignPart):
             strata=[_saved_value(v) for v in value.strata],
             mapping=[(_saved_value(a), _saved_value(b)) for a, b in value.mapping],
             name=value.name,
+            domains=msgspec.UNSET if value.domains == "warn" else value.domains,
         )
 
     def from_data(self, data: Any) -> Any:
@@ -643,6 +644,7 @@ class SingletonPart(DesignPart):
             strata=tuple(data.strata),
             mapping=tuple((a, b) for a, b in data.mapping),
             name=data.name,
+            domains="warn" if data.domains is msgspec.UNSET else data.domains,
         )
 
 

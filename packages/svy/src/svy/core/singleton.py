@@ -20,9 +20,13 @@ from svy.errors.singleton_errors import SingletonError
 from svy.utils.random_state import RandomState, resolve_random_state
 
 
+_DOMAINS = ("warn", "ignore", "error")
+_DOMAINS_APPLY = (*_DOMAINS, "apply")
+
 if TYPE_CHECKING:
-    from svy.core.design import Design, SingletonSpec
+    from svy.core.design import Design, SingletonDomains, SingletonSpec
     from svy.core.sample import Sample
+    from svy.core.warnings import SvyWarning
 
 log = logging.getLogger(__name__)
 
@@ -774,21 +778,32 @@ class Singleton:
         if singles:
             raise SingletonError.from_singletons(singles)
 
-    def certainty(self) -> Sample:
+    def certainty(self, *, domains: SingletonDomains = "warn") -> Sample:
         """
         Treat singleton PSUs as 'certainty units'.
 
         Each observation within a singleton stratum gets its own unique PSU ID,
         effectively treating each unit as self-representing.
 
+        Parameters
+        ----------
+        domains : {"warn", "ignore", "error"}, default "warn"
+            Strata with several PSUs but one inside an estimation domain
+            (``where=`` crossed with a ``by=`` level). ``"warn"`` uses the
+            standard domain variance and notes it under the result;
+            ``"ignore"`` does so silently (R's default); ``"error"`` raises.
+            Set on a sample without singletons, the rule is recorded for its
+            domains alone.
+
         Returns
         -------
         Sample
             New sample with singleton observations as individual PSUs.
         """
+        _check_domains("certainty", domains)
         singles = self.detected()
         if not singles:
-            return self._sample
+            return self._domains_only("certainty", domains)
 
         stratum_col, psu_col = self._internal_cols()
         if not stratum_col:
@@ -800,18 +815,35 @@ class Singleton:
         # each row is its own PSU — and returned the sample with no config,
         # so the assertion was never recorded and estimation still failed.)
         existing = getattr(self._sample, "_singleton_result", None)
-        if existing is not None and existing.method == _SingletonHandling.CERTAINTY:
+        spec = getattr(self._sample._design, "singleton", None)
+        if (
+            existing is not None
+            and existing.method == _SingletonHandling.CERTAINTY
+            and (spec is None or spec.domains == domains)
+        ):
             return self._sample
 
         data, design, result = self._apply_certainty(singles)
-        return self._install(data, design, result, lambda: _spec("certainty", self, result))
+        return self._install(
+            data, design, result, lambda: _spec("certainty", self, result, domains=domains)
+        )
 
-    def skip(self) -> Sample:
+    def skip(self, *, domains: SingletonDomains = "warn") -> Sample:
         """
         Let singleton strata contribute nothing to the variance.
 
         All rows stay in the estimator; only the variance contribution of each
         one-PSU stratum is dropped. This is R's ``lonely.psu = "remove"``.
+
+        Parameters
+        ----------
+        domains : {"warn", "ignore", "error"}, default "warn"
+            Strata with several PSUs but one inside an estimation domain
+            (``where=`` crossed with a ``by=`` level). ``"warn"`` uses the
+            standard domain variance and notes it under the result;
+            ``"ignore"`` does so silently (R's default); ``"error"`` raises.
+            Set on a sample without singletons, the rule is recorded for its
+            domains alone.
 
         Returns
         -------
@@ -823,12 +855,15 @@ class Singleton:
         The variance is understated by the singletons' share. Consider
         `scale()`, `collapse()` or `pool()` instead.
         """
+        _check_domains("skip", domains)
         singles = self.detected()
         if not singles:
-            return self._sample
+            return self._domains_only("skip", domains)
 
         data, design, result = self._apply_skip(singles)
-        return self._install(data, design, result, lambda: _spec("skip", self, result))
+        return self._install(
+            data, design, result, lambda: _spec("skip", self, result, domains=domains)
+        )
 
     def combine(self, mapping: dict[str, dict[str, str]]) -> Sample:
         """
@@ -875,6 +910,7 @@ class Singleton:
         order_by: str | Sequence[str] | None = None,
         descending: bool = False,
         rstate: RandomState = None,
+        domains: SingletonDomains = "warn",
     ) -> Sample:
         """
         Merge each singleton into an existing non-singleton stratum.
@@ -938,9 +974,10 @@ class Singleton:
         ...     return max(candidates, key=lambda c: proximity[singleton.stratum_key, c.stratum_key]).stratum_key
         >>> new_sample = sample.singleton.collapse(using=find_nearest)
         """
+        _check_domains("collapse", domains)
         singles = self.detected()
         if not singles:
-            return self._sample
+            return self._domains_only("collapse", domains)
 
         if isinstance(using, dict):
             # Strata by their columns' values (tuples for tuple strata), or by
@@ -955,9 +992,11 @@ class Singleton:
             descending=descending,
             rstate=rstate,
         )
-        return self._install(data, design, result, lambda: _spec("collapse", self, result))
+        return self._install(
+            data, design, result, lambda: _spec("collapse", self, result, domains=domains)
+        )
 
-    def pool(self, *, name: str = "__pooled__") -> Sample:
+    def pool(self, *, name: str = "__pooled__", domains: SingletonDomains = "warn") -> Sample:
         """
         Combine all singletons into a single new pseudo-stratum.
 
@@ -968,6 +1007,13 @@ class Singleton:
         ----------
         name : str, default "__pooled__"
             Name for the new pseudo-stratum.
+        domains : {"warn", "ignore", "error"}, default "warn"
+            Strata with several PSUs but one inside an estimation domain
+            (``where=`` crossed with a ``by=`` level). ``"warn"`` uses the
+            standard domain variance and notes it under the result;
+            ``"ignore"`` does so silently (R's default); ``"error"`` raises.
+            Set on a sample without singletons, the rule is recorded for its
+            domains alone.
 
         Returns
         -------
@@ -987,14 +1033,17 @@ class Singleton:
         Before: Strata A(1 PSU), B(1 PSU), C(2 PSUs), D(2 PSUs)
         After:  Strata __pooled__(2 PSUs), C(2 PSUs), D(2 PSUs)
         """
+        _check_domains("pool", domains)
         singles = self.detected()
         if not singles:
-            return self._sample
+            return self._domains_only("pool", domains, name=name)
 
         data, design, result = self._apply_pool(singles, name=name)
-        return self._install(data, design, result, lambda: _spec("pool", self, result, name=name))
+        return self._install(
+            data, design, result, lambda: _spec("pool", self, result, name=name, domains=domains)
+        )
 
-    def scale(self) -> Sample:
+    def scale(self, *, domains: SingletonDomains = "warn") -> Sample:
         """
         Mark for variance scaling by singleton fraction.
 
@@ -1002,6 +1051,21 @@ class Singleton:
         inflated by 1/(1 - singleton_frac). All rows stay in the estimator.
 
         This is equivalent to R's `lonely.psu = "average"` option.
+
+        Parameters
+        ----------
+        domains : {"warn", "ignore", "error", "apply"}, default "warn"
+            Strata with several PSUs but one inside an estimation domain
+            (``where=`` crossed with a ``by=`` level). ``"warn"`` uses the
+            standard domain variance and notes it under the result;
+            ``"ignore"`` does so silently (R's default); ``"error"`` raises.
+            ``"apply"`` handles them as singletons too, R's
+            ``options(survey.adjust.domain.lonely = TRUE)``.
+            Set on a sample without singletons, the rule is recorded for its
+            domains alone.
+
+            Under ``"apply"`` those strata are left out and counted with the
+            singletons in ``nstrat/nokstrat``.
 
         Returns
         -------
@@ -1033,14 +1097,17 @@ class Singleton:
         >>> result = sample_scaled.estimation.mean("income")  # Variance auto-scaled
         """
 
+        _check_domains("scale", domains)
         singles = self.detected()
         if not singles:
-            return self._sample
+            return self._domains_only("scale", domains)
 
         data, design, result = self._apply_scale(singles)
-        return self._install(data, design, result, lambda: _spec("scale", self, result))
+        return self._install(
+            data, design, result, lambda: _spec("scale", self, result, domains=domains)
+        )
 
-    def center(self) -> Sample:
+    def center(self, *, domains: SingletonDomains = "warn") -> Sample:
         """
         Mark for grand-mean centering of singleton variance.
 
@@ -1051,6 +1118,22 @@ class Singleton:
         This is equivalent to R's `lonely.psu = "adjust"` option and to
         Stata's `singleunit(centered)` — the conventional lonely-PSU
         handling for DHS analyses.
+
+        Parameters
+        ----------
+        domains : {"warn", "ignore", "error", "apply"}, default "warn"
+            Strata with several PSUs but one inside an estimation domain
+            (``where=`` crossed with a ``by=`` level). ``"warn"`` uses the
+            standard domain variance and notes it under the result;
+            ``"ignore"`` does so silently (R's default); ``"error"`` raises.
+            ``"apply"`` handles them as singletons too, R's
+            ``options(survey.adjust.domain.lonely = TRUE)``.
+            Set on a sample without singletons, the rule is recorded for its
+            domains alone.
+
+            Under ``"apply"`` all PSU totals of such a stratum (the one with
+            domain rows and the zero totals of the others) are centred at the
+            grand mean.
 
         Returns
         -------
@@ -1077,12 +1160,15 @@ class Singleton:
         >>> sample_centered = sample.singleton.center()
         >>> result = sample_centered.estimation.mean("income")  # Uses centered variance
         """
+        _check_domains("center", domains)
         singles = self.detected()
         if not singles:
-            return self._sample
+            return self._domains_only("center", domains)
 
         data, design, result = self._apply_center(singles)
-        return self._install(data, design, result, lambda: _spec("center", self, result))
+        return self._install(
+            data, design, result, lambda: _spec("center", self, result, domains=domains)
+        )
 
     def handle(
         self,
@@ -1231,6 +1317,17 @@ class Singleton:
             return self._clone_with_result(data, design, result)
         new = self._sample._fork()
         new.update_design(singleton=spec())
+        return new
+
+    def _domains_only(self, method: str, domains: str, **kw: Any) -> Sample:
+        """A sample without singletons: the rule is recorded for its domains
+        setting alone, or the sample is returned as is under the default."""
+        if domains == "warn" or not hasattr(self._sample, "update_design"):
+            return self._sample
+        from svy.core.design import SingletonSpec
+
+        new = self._sample._fork()
+        new.update_design(singleton=SingletonSpec(method=method, domains=domains, **kw))  # type: ignore[arg-type]
         return new
 
     def _strata_index(self) -> _StrataIndex | None:
@@ -2259,6 +2356,235 @@ class _StrataIndex:
         return None
 
 
+class DomainSingleton(msgspec.Struct, frozen=True):
+    """A stratum with several PSUs whose rows in a domain sit in one of them."""
+
+    #: The ``by`` columns' values; empty for a ``where=`` domain alone.
+    domain: tuple[tuple[str, Any], ...]
+    #: The stratum columns' values.
+    stratum: tuple[tuple[str, Any], ...]
+
+    @property
+    def domain_label(self) -> str:
+        return ", ".join(f"{c}={v}" for c, v in self.domain)
+
+    @property
+    def stratum_label(self) -> str:
+        return ", ".join(f"{c}={v}" for c, v in self.stratum)
+
+    @property
+    def label(self) -> str:
+        if not self.domain:
+            return self.stratum_label
+        return f"{self.domain_label}: {self.stratum_label}"
+
+
+def domain_singleton_frame(
+    df: pl.DataFrame,
+    *,
+    strata_col: str,
+    psu_col: str | None,
+    by_col: str | None = None,
+    mask: pl.Expr | None = None,
+    name_cols: Sequence[str] = (),
+) -> pl.DataFrame:
+    """One row per (``by_col`` level, stratum) whose domain rows sit in one of
+    the stratum's several units; see :func:`find_domain_singletons`."""
+    if mask is None and by_col is None:
+        # Every row is in the domain: every stratum keeps all its units.
+        return df.clear().select(strata_col)
+    active = pl.lit(True) if mask is None else mask
+    units = pl.col(psu_col).n_unique() if psu_col else pl.len()
+    full = df.group_by(strata_col).agg(units.alias("__svy_n_full__"))
+    keys = [by_col, strata_col] if by_col else [strata_col]
+    firsts = [pl.col(c).first() for c in dict.fromkeys(name_cols) if c not in keys]
+    return (
+        df.filter(active)
+        .group_by(keys)
+        .agg(units.alias("__svy_n_dom__"), *firsts)
+        .join(full, on=strata_col)
+        .filter((pl.col("__svy_n_dom__") == 1) & (pl.col("__svy_n_full__") > 1))
+    )
+
+
+def find_domain_singletons(
+    df: pl.DataFrame,
+    *,
+    strata_col: str,
+    psu_col: str | None,
+    stratum_cols: Sequence[str] = (),
+    by_col: str | None = None,
+    by_cols: Sequence[str] = (),
+    mask: pl.Expr | None = None,
+) -> list[DomainSingleton]:
+    """Strata with several PSUs (rows, without PSUs) of which one holds rows of
+    a domain: R's ``nsubset == 1 && nPSU > 1`` after ``subset()``.
+
+    A domain row is in ``mask`` (``where=`` with the analysis variables
+    present; every row when ``None``) and in one level of ``by_col`` when
+    given, whatever its weight: R's ``subset()`` keeps zero-weight rows. Strata
+    are named by ``stratum_cols`` and domains by ``by_cols``, from the rows.
+    """
+    names = list(dict.fromkeys(c for c in (*by_cols, *stratum_cols) if c in df.columns))
+    found = domain_singleton_frame(
+        df, strata_col=strata_col, psu_col=psu_col, by_col=by_col, mask=mask, name_cols=names
+    )
+    if found.is_empty():
+        return []
+    shown_by = [c for c in by_cols if c in found.columns]
+    shown_strata = [c for c in stratum_cols if c in found.columns] or [strata_col]
+    found = found.sort(list(dict.fromkeys([*shown_by, *shown_strata])), nulls_last=True)
+    return [
+        DomainSingleton(
+            domain=tuple((c, row[c]) for c in shown_by),
+            stratum=tuple(("stratum" if c == strata_col else c, row[c]) for c in shown_strata),
+        )
+        for row in found.iter_rows(named=True)
+    ]
+
+
+def _domain_text(
+    pairs: Sequence[str],
+    n_strata: int,
+    n_domains: int,
+    method: str | None,
+    applied: bool,
+    listed: int = 3,
+) -> str:
+    """The sentence a domain-singleton finding reports and prints."""
+    shown = "; ".join(pairs[:listed])
+    if len(pairs) > listed:
+        shown += f"; and {len(pairs) - listed} more"
+    domains = "domain" if n_domains == 1 else "domains"
+    if applied:
+        how = (
+            "centered at the grand mean"
+            if method == "center"
+            else "left out and counted with the singletons"
+        )
+        strata = "stratum" if n_strata == 1 else "strata"
+        return (
+            f"{n_strata} {strata} with a single PSU within {n_domains} {domains} "
+            f'{"was" if n_strata == 1 else "were"} {how} (domains="apply"): {shown}'
+        )
+    rule = method if method in ("center", "scale") else "center"
+    todo = "center them" if rule == "center" else "treat them as singletons"
+    strata = "stratum has" if n_strata == 1 else "strata have"
+    return (
+        f"{n_strata} {strata} a single PSU within {n_domains} {domains} ({shown}); "
+        f'standard domain variance used (sample.singleton.{rule}(domains="apply") to '
+        f'{todo}, or domains="ignore")'
+    )
+
+
+def domain_singleton_findings(
+    sample: Sample,
+    df: pl.DataFrame,
+    *,
+    strata_col: str | None,
+    psu_col: str | None,
+    by_col: str | None = None,
+    by_cols: Sequence[str] = (),
+    mask: pl.Expr | None = None,
+    where: str,
+) -> list[SvyWarning]:
+    """Detect the strata with one PSU in the analysis's domains and act on the
+    rule's ``domains`` setting: nothing under ``"ignore"``, a finding under
+    ``"warn"`` (WARNING) and ``"apply"`` (INFO), ``SingletonError`` under
+    ``"error"``. The finding is also kept on the sample, at INFO, so it is
+    never raised as a Python warning.
+
+    A calibrated design has none: its scores are nonzero outside the domain,
+    and R keeps those rows.
+    """
+    spec = getattr(sample._design, "singleton", None)
+    domains = spec.domains if spec is not None else "warn"
+    if domains == "ignore" or strata_col is None or strata_col not in df.columns:
+        return []
+    from svy.core.data_prep import calib_applies
+
+    if calib_applies(sample, df):
+        return []
+    stratum = sample._design.stratum
+    stratum_cols = [stratum] if isinstance(stratum, str) else list(stratum or ())
+    found = find_domain_singletons(
+        df,
+        strata_col=strata_col,
+        psu_col=psu_col,
+        stratum_cols=stratum_cols,
+        by_col=by_col,
+        by_cols=by_cols,
+        mask=mask,
+    )
+    if not found:
+        return []
+    method = spec.method if spec is not None else None
+    pairs = [f.label for f in found]
+    strata = list(dict.fromkeys(f.stratum_label for f in found))
+    doms = list(dict.fromkeys(f.domain_label for f in found))
+    if domains == "error":
+        raise SingletonError.from_domain_singletons(
+            pairs, n_strata=len(strata), n_domains=len(doms), method=method, where=where
+        )
+    from svy.core.warnings import Severity, SvyWarning, WarnCode
+
+    applied = domains == "apply"
+    fields: dict[str, Any] = dict(
+        code=WarnCode.DOMAIN_SINGLETON_PSU,
+        title="Strata with a single PSU in a domain",
+        detail=_domain_text(pairs, len(strata), len(doms), method, applied),
+        where=where,
+        param="domains",
+        extra={
+            "pairs": pairs,
+            "strata": strata,
+            "domains": doms,
+            "method": method,
+            "applied": applied,
+        },
+    )
+    warn = getattr(sample, "warn", None)
+    kept = warn(level=Severity.INFO, **fields) if warn is not None else SvyWarning(**fields)
+    level = Severity.INFO if applied else Severity.WARNING
+    return [msgspec.structs.replace(kept, level=level)]
+
+
+def domain_singleton_note(findings: Sequence[Any]) -> str | None:
+    """One note for every domain-singleton finding of a call: the pairs of
+    several results (variables with different missing values) merged."""
+    found = [f for f in findings if f.code == "DOMAIN_SINGLETON_PSU" and f.extra]
+    if not found:
+        return None
+    first = found[0].extra
+    pairs = list(dict.fromkeys(p for f in found for p in f.extra["pairs"]))
+    strata = dict.fromkeys(x for f in found for x in f.extra["strata"])
+    doms = dict.fromkeys(x for f in found for x in f.extra["domains"])
+    text = _domain_text(pairs, len(strata), len(doms), first["method"], first["applied"])
+    return f"note: {text}"
+
+
+def _check_domains(method: str, domains: Any) -> None:
+    allowed = _DOMAINS_APPLY if method in ("center", "scale") else _DOMAINS
+    if domains not in allowed:
+        from svy.errors.method_errors import MethodError
+
+        hint = (
+            'domains="apply" handles the strata with one PSU in a domain as '
+            "singletons, which center() and scale() define: use "
+            'sample.singleton.center(domains="apply"), or keep '
+            f"{method}() with 'ignore', 'warn' or 'error'."
+            if domains == "apply"
+            else '"warn" notes such strata under the result, "ignore" does not, "error" raises.'
+        )
+        raise MethodError.invalid_choice(
+            where=f"Sample.singleton.{method}",
+            param="domains",
+            got=domains,
+            allowed=allowed,
+            hint=hint,
+        )
+
+
 def singleton_config(sample: Sample) -> SingletonHandlingConfig | None:
     """The variance settings of the sample's singleton rule, if it has one."""
     result = getattr(sample, "_singleton_result", None)
@@ -2268,12 +2594,22 @@ def singleton_config(sample: Sample) -> SingletonHandlingConfig | None:
 def taylor_singleton_method(sample: Sample) -> str | None:
     """What the Taylor kernels do with singleton strata: ``"center"``,
     ``"scale"``, or ``None`` (they contribute nothing; the other rules recode
-    the strata and PSUs instead)."""
+    the strata and PSUs instead). ``":domains"`` is appended under
+    ``domains="apply"``: the kernels then treat a stratum with one PSU in the
+    domain as a singleton too."""
     config = singleton_config(sample)
     if config is None:
         return None
     method = str(getattr(config.method, "value", config.method)).lower()
-    return method if method in ("center", "scale") else None
+    if method not in ("center", "scale"):
+        return None
+    return f"{method}:domains" if domains_applied(sample) else method
+
+
+def domains_applied(sample: Sample) -> bool:
+    """The rule was set with ``domains="apply"``."""
+    spec = getattr(sample._design, "singleton", None)
+    return spec is not None and spec.domains == "apply"
 
 
 def require_singleton_rule(sample: Sample, *, where: str) -> None:
@@ -2300,7 +2636,7 @@ def _spec(method: str, facet: Singleton, result: SingletonResult, **kw: Any) -> 
         mapping = cast(dict[str, str], result.applied)
         sources = facet._key_values(list(mapping))
         targets = facet._key_values(list(mapping.values()))
-        return SingletonSpec.collapse(dict(zip(sources, targets)))
+        return SingletonSpec.collapse(dict(zip(sources, targets)), **kw)
     strata = facet._key_values([s.stratum_key for s in result.detected])
     return getattr(SingletonSpec, method)(strata, **kw)
 
@@ -2430,6 +2766,10 @@ def _rederive(sample: Sample) -> None:
         )
         return
 
+    if not handled and spec.method not in ("center", "scale"):
+        # A rule set for its domains alone: no strata to derive columns for.
+        sample._singleton_result = None
+        return
     keys = set(handled)
     singles = [s for s in facet.detected() if s.stratum_key in keys]
     if spec.method == "certainty":

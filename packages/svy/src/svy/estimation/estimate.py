@@ -14,6 +14,7 @@ from svy.core.types import Category, Number, RandomState
 
 # Import central UI helpers
 from svy.ui.printing import (
+    finding_notes,
     make_panel,
     ranked_sort_key,
     render_plain_table,
@@ -24,6 +25,7 @@ from svy.ui.printing import (
 
 
 if TYPE_CHECKING:
+    from svy.core.warnings import SvyWarning
     from svy.estimation.contrast import Contrast, ContrastExpr
     from svy.metadata import MetadataStore
 
@@ -402,6 +404,7 @@ class Estimate:
         "level_orders",
         "where_clause",
         "design_df",
+        "findings",
         "_cov_filled",
         "_decimals",
         "_layout",
@@ -443,6 +446,10 @@ class Estimate:
         #: per-row domain-aware df. Cross-domain contrasts are referred to
         #: this value.
         self.design_df: int | None = None
+        #: What the call found about the design that affects these estimates,
+        #: e.g. strata with a single PSU in a domain (``DOMAIN_SINGLETON_PSU``);
+        #: printed as notes under the table.
+        self.findings: list[SvyWarning] = []
         #: Whether the off-diagonals of ``covariance`` were actually computed.
         #: Multi-variable convenience calls estimate each variable
         #: independently and leave them zeroed; ``contrast()`` refuses those.
@@ -973,6 +980,7 @@ class Estimate:
         headers = [f"{c} (%)" if c == "cv" else c for c in shown]
         rows = [[self._format_val(c, row[c]) for c in shown] for row in df.iter_rows(named=True)]
         lines.append(render_plain_table(headers, rows))
+        lines.extend(finding_notes(self.findings))
 
         return "\n".join(lines)
 
@@ -1026,6 +1034,7 @@ class Estimate:
             table.add_row(*vals)
 
         content.append(table)
+        content.extend(Text(n, style="dim") for n in finding_notes(self.findings))
 
         title = f"Estimate: [bold]{self.param.name}[/bold] ({self._context()})"
 
@@ -1249,6 +1258,7 @@ class EstimateList(list):
         fmt = members[0]._format_val
         rows = [[fmt(c, row[c]) for c in shown] for row in df.iter_rows(named=True)]
         lines.append(render_plain_table(headers, rows))
+        lines.extend(finding_notes(f for m in members for f in m.findings))
         return "\n".join(lines)
 
     def __str__(self) -> str:
@@ -1295,5 +1305,7 @@ class EstimateList(list):
 
         content = _header_rich(self._header_lines())
         content.append(table)
+        notes = finding_notes(f for m in members for f in m.findings)
+        content.extend(Text(n, style="dim") for n in notes)
 
         yield make_panel(content, title=self._title(), obj=self, kind="estimate")

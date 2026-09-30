@@ -18,9 +18,22 @@ pub enum SingletonMethod {
 
 impl SingletonMethod {
     /// `"center"`/`"adjust"` and `"scale"`/`"average"` (R's names); anything
-    /// else leaves singleton strata out of the variance.
+    /// else leaves singleton strata out of the variance. A `":domains"` suffix
+    /// is read by [`SingletonMethod::parse_rule`].
     pub fn parse(s: Option<&str>) -> Self {
-        match s {
+        Self::parse_rule(s).0
+    }
+
+    /// The method and whether it also applies to strata with one PSU inside
+    /// the domain (R's `options(survey.adjust.domain.lonely = TRUE)`), written
+    /// `"center:domains"`. `"none:domains"` drops those strata without scaling:
+    /// estimation applies `scale()`'s factor itself.
+    pub fn parse_rule(s: Option<&str>) -> (Self, bool) {
+        let (name, domains) = match s.and_then(|s| s.split_once(':')) {
+            Some((name, flag)) => (Some(name), flag.eq_ignore_ascii_case("domains")),
+            None => (s, false),
+        };
+        let method = match name {
             Some(s) if s.eq_ignore_ascii_case("center") || s.eq_ignore_ascii_case("adjust") => {
                 SingletonMethod::Center
             }
@@ -28,7 +41,28 @@ impl SingletonMethod {
                 SingletonMethod::Scale
             }
             _ => SingletonMethod::None,
-        }
+        };
+        (method, domains)
+    }
+}
+
+/// A singleton method and whether it also applies to strata with one PSU in
+/// the domain; parsed from `"center"` or `"center:domains"`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SingletonRule {
+    pub method: SingletonMethod,
+    pub domains: bool,
+}
+
+impl SingletonRule {
+    pub const NONE: Self = Self {
+        method: SingletonMethod::None,
+        domains: false,
+    };
+
+    pub fn parse(s: Option<&str>) -> Self {
+        let (method, domains) = SingletonMethod::parse_rule(s);
+        Self { method, domains }
     }
 }
 
@@ -1120,8 +1154,13 @@ fn variance_unstratified_optimized(
 /// out; under `"average"` the variance is scaled by `nstrat/nokstrat` over
 /// them. `active` marks the domain's rows; `None` takes every stratum with
 /// units.
+///
+/// With the domain rule, a stratum with several units but one holding domain
+/// rows is `lonely` (R's `nsubset == 1 && nPSU > 1`): centred at the grand
+/// mean under `center`, left out and counted with the singletons otherwise.
 struct CenterScope {
     present: Vec<bool>,
+    lonely: Vec<bool>,
     n_units: usize,
     n_strata: usize,
     n_singletons: usize,
@@ -1138,23 +1177,58 @@ impl CenterScope {
     }
 }
 
+/// Units of each stratum holding an `active` row; `unit_of_row` is the PSU
+/// codes, or `None` when every row is a unit.
+fn active_units(
+    strata_indices: &[u32],
+    n_strata: usize,
+    unit_of_row: Option<&[u32]>,
+    active: &[bool],
+) -> Vec<u32> {
+    let mut counts = vec![0u32; n_strata];
+    match unit_of_row {
+        Some(units) => {
+            let n_codes = units
+                .iter()
+                .filter(|&&u| u != u32::MAX)
+                .max()
+                .map_or(0, |&u| u + 1);
+            let mut seen = vec![false; n_codes as usize];
+            for ((&act, &h), &u) in active.iter().zip(strata_indices).zip(units) {
+                if act && h != u32::MAX && u != u32::MAX && !seen[u as usize] {
+                    seen[u as usize] = true;
+                    counts[h as usize] += 1;
+                }
+            }
+        }
+        None => {
+            for (&act, &h) in active.iter().zip(strata_indices) {
+                if act && h != u32::MAX {
+                    counts[h as usize] += 1;
+                }
+            }
+        }
+    }
+    counts
+}
+
 fn center_scope(
     strata_indices: &[u32],
     units_per_stratum: &[u32],
+    unit_of_row: Option<&[u32]>,
     active: Option<&[bool]>,
+    domain_rule: bool,
 ) -> CenterScope {
-    let present: Vec<bool> = match active {
-        None => units_per_stratum.iter().map(|&m| m > 0).collect(),
-        Some(a) => {
-            let mut p = vec![false; units_per_stratum.len()];
-            for (&act, &h) in a.iter().zip(strata_indices.iter()) {
-                if act && h != u32::MAX {
-                    p[h as usize] = true;
-                }
-            }
-            p
-        }
+    let reached: Vec<u32> = match active {
+        None => units_per_stratum.to_vec(),
+        Some(a) => active_units(strata_indices, units_per_stratum.len(), unit_of_row, a),
     };
+    let present: Vec<bool> = reached.iter().map(|&m| m > 0).collect();
+    let lonely: Vec<bool> = reached
+        .iter()
+        .zip(units_per_stratum)
+        .map(|(&r, &m)| domain_rule && r == 1 && m > 1)
+        .collect();
     let n_units = present
         .iter()
         .zip(units_per_stratum.iter())
@@ -1162,14 +1236,15 @@ fn center_scope(
         .map(|(_, &m)| m as usize)
         .sum();
     let (mut n_strata, mut n_singletons) = (0, 0);
-    for (&p, &m) in present.iter().zip(units_per_stratum.iter()) {
+    for ((&p, &m), &l) in present.iter().zip(units_per_stratum.iter()).zip(&lonely) {
         if p && m > 0 {
             n_strata += 1;
-            n_singletons += usize::from(m == 1);
+            n_singletons += usize::from(m == 1 || l);
         }
     }
     CenterScope {
         present,
+        lonely,
         n_units,
         n_strata,
         n_singletons,
@@ -1193,12 +1268,14 @@ fn variance_stratified_optimized(
     n_psus_per_stratum: Option<&[u32]>,
     fpc_per_stratum: Option<&[f64]>,
     singleton_method: SingletonMethod,
+    domain_rule: bool,
     active: Option<&[bool]>,
 ) -> f64 {
     let n = scores.len();
     if n == 0 || n_strata == 0 {
         return 0.0;
     }
+    let scoped = singleton_method != SingletonMethod::None || domain_rule;
 
     match (psu_indices, psu_per_stratum, n_psus_per_stratum) {
         (Some(psu_idx), Some(psu_map), Some(n_psus)) => {
@@ -1217,8 +1294,8 @@ fn variance_stratified_optimized(
             }
 
             let center = singleton_method == SingletonMethod::Center;
-            let scope = (singleton_method != SingletonMethod::None)
-                .then(|| center_scope(strata_indices, n_psus, active));
+            let scope = scoped
+                .then(|| center_scope(strata_indices, n_psus, Some(psu_idx), active, domain_rule));
             let mut grand_mean = 0.0;
             if let Some(s) = scope.as_ref().filter(|_| center) {
                 let total_score: f64 = psu_totals.iter().sum();
@@ -1245,13 +1322,21 @@ fn variance_stratified_optimized(
                     continue;
                 }
 
+                let lonely = scope.as_ref().is_some_and(|s| s.lonely[h]);
+                if lonely && !center {
+                    continue;
+                }
                 let psu_indices_h = &psu_map[h];
                 // Compute mean directly from global psu_totals — no per-stratum Vec alloc
-                let psu_mean_h: f64 = psu_indices_h
-                    .iter()
-                    .map(|&p| psu_totals[p as usize])
-                    .sum::<f64>()
-                    / (n_psus_h as f64);
+                let psu_mean_h: f64 = if lonely {
+                    grand_mean
+                } else {
+                    psu_indices_h
+                        .iter()
+                        .map(|&p| psu_totals[p as usize])
+                        .sum::<f64>()
+                        / (n_psus_h as f64)
+                };
                 let sum_sq_diff: f64 = psu_indices_h
                     .iter()
                     .map(|&p| (psu_totals[p as usize] - psu_mean_h).powi(2))
@@ -1281,8 +1366,8 @@ fn variance_stratified_optimized(
             }
 
             let center = singleton_method == SingletonMethod::Center;
-            let scope = (singleton_method != SingletonMethod::None)
-                .then(|| center_scope(strata_indices, &stratum_counts, active));
+            let scope = scoped
+                .then(|| center_scope(strata_indices, &stratum_counts, None, active, domain_rule));
             let mut grand_mean = 0.0;
             if let Some(s) = scope.as_ref().filter(|s| center && s.n_units > 0) {
                 grand_mean = grand_total / (s.n_units as f64);
@@ -1303,10 +1388,18 @@ fn variance_stratified_optimized(
                     }
                     continue;
                 }
-                let var_h = (stratum_sum_sq[h] - stratum_sums[h].powi(2) / (n_h as f64))
-                    / (n_h as f64 - 1.0)
-                    * (n_h as f64);
-                total_var += fpc_h * var_h;
+                let nf = n_h as f64;
+                let ss_h = if scope.as_ref().is_some_and(|s| s.lonely[h]) {
+                    if !center {
+                        continue;
+                    }
+                    // Centred at the grand mean: sum (s - c)^2 = ss - 2c sum + n c^2.
+                    stratum_sum_sq[h] - 2.0 * grand_mean * stratum_sums[h]
+                        + nf * grand_mean * grand_mean
+                } else {
+                    stratum_sum_sq[h] - stratum_sums[h].powi(2) / nf
+                };
+                total_var += fpc_h * ss_h / (nf - 1.0) * nf;
             }
             match scope.filter(|_| singleton_method == SingletonMethod::Scale) {
                 Some(s) => total_var * s.scale_factor(),
@@ -1412,6 +1505,8 @@ fn compute_stage2_variance(
 /// semantics; splitting it here keeps a single source of truth.
 pub struct TaylorDesign {
     sm_enum: SingletonMethod,
+    /// The method also applies to strata with one PSU in the domain.
+    domain_rule: bool,
     // Stage 1 — one of {unstratified, stratified}
     strata_indices: Option<Vec<u32>>, // None ⇒ unstratified
     n_strata: u32,
@@ -1439,20 +1534,20 @@ impl TaylorDesign {
         self
     }
 
-    /// The domain's rows (nonzero weight, inside `domain`), when the variance
-    /// depends on which strata the domain reaches: singleton centering in a
-    /// stratified design. `None` otherwise, and for a calibrated design, whose
-    /// scores are nonzero outside the domain (R keeps those rows too, so the
-    /// whole frame counts).
+    /// The domain's rows ([`row_mask`]), when the variance depends on which
+    /// strata the domain reaches: a singleton rule in a stratified design.
+    /// `None` otherwise, and for a calibrated design, whose scores are nonzero
+    /// outside the domain (R keeps those rows too, so the whole frame counts).
     pub fn domain_rows(
         &self,
-        weights: &Float64Chunked,
+        n: usize,
+        rows: Option<&BooleanChunked>,
         domain: Option<&BooleanChunked>,
     ) -> Option<Vec<bool>> {
-        let needed = self.sm_enum != SingletonMethod::None
+        let needed = (self.sm_enum != SingletonMethod::None || self.domain_rule)
             && self.strata_indices.is_some()
             && self.calib.is_none();
-        needed.then(|| active_mask(weights, domain))
+        needed.then(|| row_mask(n, rows, domain))
     }
 }
 
@@ -1464,7 +1559,7 @@ pub fn build_taylor_design(
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
 ) -> PolarsResult<TaylorDesign> {
-    let sm_enum = SingletonMethod::parse(singleton_method);
+    let (sm_enum, domain_rule) = SingletonMethod::parse_rule(singleton_method);
 
     let fpc_arr: Option<Vec<f64>> = fpc.map(|f| f.iter().map(|v| v.unwrap_or(1.0)).collect());
     let fpc_ssu_arr: Option<Vec<f64>> =
@@ -1492,6 +1587,7 @@ pub fn build_taylor_design(
         };
         return Ok(TaylorDesign {
             sm_enum,
+            domain_rule,
             strata_indices: None,
             n_strata: 0,
             psu_indices,
@@ -1556,6 +1652,7 @@ pub fn build_taylor_design(
 
             Ok(TaylorDesign {
                 sm_enum,
+                domain_rule,
                 strata_indices: Some(strata_indices),
                 n_strata,
                 psu_indices: Some(psu_indices),
@@ -1573,6 +1670,7 @@ pub fn build_taylor_design(
         }
         None => Ok(TaylorDesign {
             sm_enum,
+            domain_rule,
             strata_indices: Some(strata_indices),
             n_strata,
             psu_indices: None,
@@ -1630,6 +1728,7 @@ pub fn taylor_variance_apply_in(
             d.n_psus_per_stratum.as_deref(),
             d.fpc_per_stratum.as_deref(),
             d.sm_enum,
+            d.domain_rule,
             active,
         )
     };
@@ -1697,33 +1796,64 @@ pub fn taylor_variance_in(
     Ok(taylor_variance_apply_in(&scores_arr, &design, active))
 }
 
+/// The rows of a domain as the singleton rules see them: in `rows` (the
+/// analysis's domain rows, `where=` with its variables present) and in
+/// `domain` (a `by` level); every row when both are `None`. Unlike the df and
+/// `n`, the weight plays no part: R's `subset()` keeps zero-weight rows, and a
+/// PSU holding only those still counts as present.
+pub fn row_mask(
+    n: usize,
+    rows: Option<&BooleanChunked>,
+    domain: Option<&BooleanChunked>,
+) -> Vec<bool> {
+    let get = |m: Option<&BooleanChunked>, i: usize| m.is_none_or(|m| m.get(i).unwrap_or(false));
+    (0..n).map(|i| get(rows, i) && get(domain, i)).collect()
+}
+
+fn singleton_rows_needed(
+    singleton_method: Option<&str>,
+    calibrated: bool,
+    stratified: bool,
+) -> bool {
+    let (method, domain_rule) = SingletonMethod::parse_rule(singleton_method);
+    (method != SingletonMethod::None || domain_rule) && stratified && !calibrated
+}
+
 /// [`TaylorDesign::domain_rows`] for kernels that sweep a calibration into the
-/// scores themselves and call [`taylor_variance_in`].
+/// scores themselves and call [`taylor_variance_in`]; `domain` marks the
+/// domain's rows (all rows when `None`).
 pub fn singleton_domain_rows(
     singleton_method: Option<&str>,
     calibrated: bool,
     stratified: bool,
-    weights: &Float64Chunked,
+    n: usize,
     domain: Option<&BooleanChunked>,
 ) -> Option<Vec<bool>> {
-    let needed = SingletonMethod::parse(singleton_method) != SingletonMethod::None
-        && stratified
-        && !calibrated;
-    needed.then(|| active_mask(weights, domain))
+    singleton_rows_needed(singleton_method, calibrated, stratified)
+        .then(|| row_mask(n, None, domain))
 }
 
-/// [`singleton_domain_rows`] when the weights are already zero outside the
-/// domain.
-pub fn singleton_weight_rows(
+/// [`singleton_domain_rows`] with the domain's rows already resolved.
+pub fn singleton_rows(
     singleton_method: Option<&str>,
     calibrated: bool,
     stratified: bool,
-    w: &[f64],
+    rows: &[bool],
 ) -> Option<Vec<bool>> {
-    let needed = SingletonMethod::parse(singleton_method) != SingletonMethod::None
-        && stratified
-        && !calibrated;
-    needed.then(|| w.iter().map(|&v| is_active(Some(v))).collect())
+    singleton_rows_needed(singleton_method, calibrated, stratified).then(|| rows.to_vec())
+}
+
+/// The boolean domain-row column `col` of `df` ([`row_mask`]'s `rows`).
+pub fn rows_column(df: &DataFrame, col: Option<&str>) -> PolarsResult<Option<BooleanChunked>> {
+    col.map(|c| {
+        let s = df.column(c)?.as_materialized_series();
+        let b = match s.dtype() {
+            DataType::Boolean => s.bool()?.clone(),
+            _ => s.cast(&DataType::String)?.str()?.equal("true"),
+        };
+        Ok(b)
+    })
+    .transpose()
 }
 
 /// Full k×k covariance between k estimates from their retained score columns.
@@ -1843,8 +1973,9 @@ pub fn taylor_covariance_apply_in(
                 }
 
                 let center = d.sm_enum == SingletonMethod::Center;
-                let scope = (d.sm_enum != SingletonMethod::None)
-                    .then(|| center_scope(strata_idx, n_psus, active));
+                let scope = (d.sm_enum != SingletonMethod::None || d.domain_rule).then(|| {
+                    center_scope(strata_idx, n_psus, Some(psu_idx), active, d.domain_rule)
+                });
                 let mut grand_mean = vec![0.0; k];
                 if let Some(s) = scope.as_ref().filter(|s| center && s.n_units > 0) {
                     for j in 0..k {
@@ -1872,16 +2003,24 @@ pub fn taylor_covariance_apply_in(
                         }
                         continue;
                     }
+                    let lonely = scope.as_ref().is_some_and(|s| s.lonely[h]);
+                    if lonely && !center {
+                        continue;
+                    }
                     let mf = m_h as f64;
-                    let means_h: Vec<f64> = (0..k)
-                        .map(|j| {
-                            psu_map[h]
-                                .iter()
-                                .map(|&p| psu_totals[j][p as usize])
-                                .sum::<f64>()
-                                / mf
-                        })
-                        .collect();
+                    let means_h: Vec<f64> = if lonely {
+                        grand_mean.clone()
+                    } else {
+                        (0..k)
+                            .map(|j| {
+                                psu_map[h]
+                                    .iter()
+                                    .map(|&p| psu_totals[j][p as usize])
+                                    .sum::<f64>()
+                                    / mf
+                            })
+                            .collect()
+                    };
                     let scale = fpc_h * mf / (mf - 1.0);
                     for &p in &psu_map[h] {
                         for j in 0..k {
@@ -1918,8 +2057,8 @@ pub fn taylor_covariance_apply_in(
                 }
 
                 let center = d.sm_enum == SingletonMethod::Center;
-                let scope = (d.sm_enum != SingletonMethod::None)
-                    .then(|| center_scope(strata_idx, &counts, active));
+                let scope = (d.sm_enum != SingletonMethod::None || d.domain_rule)
+                    .then(|| center_scope(strata_idx, &counts, None, active, d.domain_rule));
                 let mut grand_mean = vec![0.0; k];
                 if let Some(s) = scope.as_ref().filter(|s| center && s.n_units > 0) {
                     for j in 0..k {
@@ -1945,11 +2084,23 @@ pub fn taylor_covariance_apply_in(
                         }
                         continue;
                     }
+                    let lonely = scope.as_ref().is_some_and(|s| s.lonely[h]);
+                    if lonely && !center {
+                        continue;
+                    }
                     let nf = n_h as f64;
                     let scale = fpc_h * nf / (nf - 1.0);
                     for j in 0..k {
                         for l in j..k {
-                            let c_h = cross[h * k * k + j * k + l] - sums[j][h] * sums[l][h] / nf;
+                            let cross_h = cross[h * k * k + j * k + l];
+                            // Centred at the grand mean when lonely, else at
+                            // the stratum mean.
+                            let c_h = if lonely {
+                                let (gj, gl) = (grand_mean[j], grand_mean[l]);
+                                cross_h - gj * sums[l][h] - gl * sums[j][h] + nf * gj * gl
+                            } else {
+                                cross_h - sums[j][h] * sums[l][h] / nf
+                            };
                             add(&mut cov, j, l, scale * c_h);
                         }
                     }
@@ -2213,6 +2364,7 @@ pub fn quantiles_woodruff(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: Option<&BooleanChunked>,
+    rows: Option<&BooleanChunked>,
     design: &TaylorDesign,
     probs: &[f64],
     quantile_method: SvyQuantileMethod,
@@ -2223,7 +2375,7 @@ pub fn quantiles_woodruff(
     else {
         return Ok(nan_rows());
     };
-    let active = design.domain_rows(weights, domain_mask);
+    let active = design.domain_rows(y.len(), rows, domain_mask);
 
     Ok(probs
         .iter()

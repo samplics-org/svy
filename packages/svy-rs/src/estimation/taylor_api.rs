@@ -18,10 +18,10 @@ use crate::estimation::taylor::{
     SrsRef, SvyQuantileMethod, TaylorDesign, active_count, build_taylor_design, degrees_of_freedom,
     degrees_of_freedom_from_design, degrees_of_freedom_in_domain, point_estimate_mean,
     point_estimate_mean_domain, point_estimate_ratio, point_estimate_ratio_domain,
-    point_estimate_total, point_estimate_total_domain, quantiles_woodruff, scores_mean,
-    scores_mean_arr, scores_mean_domain, scores_ratio, scores_ratio_domain, scores_total,
-    scores_total_domain, srs_variance_mean, srs_variance_mean_domain, srs_variance_ratio,
-    srs_variance_ratio_domain, srs_variance_total, srs_variance_total_domain,
+    point_estimate_total, point_estimate_total_domain, quantiles_woodruff, rows_column,
+    scores_mean, scores_mean_arr, scores_mean_domain, scores_ratio, scores_ratio_domain,
+    scores_total, scores_total_domain, srs_variance_mean, srs_variance_mean_domain,
+    srs_variance_ratio, srs_variance_ratio_domain, srs_variance_total, srs_variance_total_domain,
     taylor_covariance_apply, taylor_covariance_apply_in, taylor_variance_apply_in,
     weighted_quantile,
 };
@@ -63,7 +63,7 @@ fn parse_srs_ref(deff_ref: Option<&str>, deff_pop_total: Option<f64>) -> PolarsR
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 pub fn taylor_mean(
     _py: Python,
     data: PyDataFrame,
@@ -76,6 +76,7 @@ pub fn taylor_mean(
     fpc_ssu_col: Option<String>,
     by_col: Option<String>,
     singleton_method: Option<String>,
+    domain_rows_col: Option<String>,
     deff_ref: Option<String>,
     deff_pop_total: Option<f64>,
     calib_kind: Option<String>,
@@ -116,6 +117,7 @@ pub fn taylor_mean(
                     fpc_col.as_deref(),
                     fpc_ssu_col.as_deref(),
                     singleton_method.as_deref(),
+                    domain_rows_col.as_deref(),
                     srs,
                     calib,
                 )
@@ -138,6 +140,7 @@ pub fn taylor_mean(
                 fpc_ssu_col.as_deref(),
                 &by,
                 singleton_method.as_deref(),
+                domain_rows_col.as_deref(),
                 srs,
                 calib,
             )
@@ -149,7 +152,7 @@ pub fn taylor_mean(
 /// Batched ungrouped mean over many variables sharing one design (see
 /// `compute_mean_multi`). Returns one row per variable, in input order.
 #[pyfunction]
-#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None))]
+#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None))]
 pub fn taylor_mean_multi(
     _py: Python,
     data: PyDataFrame,
@@ -161,6 +164,7 @@ pub fn taylor_mean_multi(
     fpc_col: Option<String>,
     fpc_ssu_col: Option<String>,
     singleton_method: Option<String>,
+    domain_rows_col: Option<String>,
     deff_ref: Option<String>,
     deff_pop_total: Option<f64>,
 ) -> PyResult<PyDataFrame> {
@@ -179,6 +183,7 @@ pub fn taylor_mean_multi(
                 fpc_col.as_deref(),
                 fpc_ssu_col.as_deref(),
                 singleton_method.as_deref(),
+                domain_rows_col.as_deref(),
                 srs,
             )
         })
@@ -242,6 +247,7 @@ fn ungrouped_estimate<T: Send>(
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
+    rows: Option<&BooleanChunked>,
     calib: Option<CalibSweep>,
     value_work: impl FnOnce() -> PolarsResult<(Vec<f64>, T)> + Send,
 ) -> PolarsResult<(f64, u32, T)> {
@@ -252,7 +258,7 @@ fn ungrouped_estimate<T: Send>(
     let design = design_res?.with_calib(calib);
     let (scores, extra) = value_res?;
 
-    let active = design.domain_rows(weights, None);
+    let active = design.domain_rows(weights.len(), rows, None);
     let (variance, df_val) = rayon::join(
         || taylor_variance_apply_in(&scores, &design, active.as_deref()),
         || degrees_of_freedom_from_design(weights, &design, None),
@@ -320,11 +326,13 @@ fn compute_mean_ungrouped(
     fpc_col: Option<&str>,
     fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    domain_rows_col: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
+    let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
     let psu = psu_col.map(|c| df.column(c)).transpose()?;
     let ssu = ssu_col.map(|c| df.column(c)).transpose()?;
@@ -343,6 +351,7 @@ fn compute_mean_ungrouped(
         fpc,
         fpc_ssu,
         singleton_method,
+        rows.as_ref(),
         calib,
         || {
             let Ok(estimate) = point_estimate_mean(y, weights) else {
@@ -383,9 +392,11 @@ fn compute_mean_multi(
     fpc_col: Option<&str>,
     fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    domain_rows_col: Option<&str>,
     srs: SrsRef,
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
+    let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
     let psu = psu_col.map(|c| df.column(c)).transpose()?;
     let ssu = ssu_col.map(|c| df.column(c)).transpose()?;
@@ -403,7 +414,7 @@ fn compute_mean_multi(
     // the term Amdahl's law was multiplying.
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let df_val = degrees_of_freedom_from_design(weights, &design, None);
-    let active = design.domain_rows(weights, None);
+    let active = design.domain_rows(weights.len(), rows.as_ref(), None);
 
     // Resolve every response column to its typed slice BEFORE fanning out.
     // `df.column()` mutates the frame's internal schema cache, so calling it
@@ -467,11 +478,13 @@ fn compute_mean_grouped(
     fpc_ssu_col: Option<&str>,
     by_col: &str,
     singleton_method: Option<&str>,
+    domain_rows_col: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
 ) -> PolarsResult<(DataFrame, Vec<f64>)> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
+    let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
     let psu = psu_col.map(|c| df.column(c)).transpose()?;
     let ssu = ssu_col.map(|c| df.column(c)).transpose()?;
@@ -504,7 +517,7 @@ fn compute_mean_grouped(
         .map(
             |&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
                 let domain_mask = by_str.equal(group);
-                let active = design.domain_rows(weights, Some(&domain_mask));
+                let active = design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
                 let n_domain = active_count(weights, Some(&domain_mask));
                 let Ok(estimate) = point_estimate_mean_domain(y, weights, &domain_mask) else {
                     let nan = f64::NAN;
@@ -554,7 +567,7 @@ fn compute_mean_grouped(
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 pub fn taylor_total(
     _py: Python,
     data: PyDataFrame,
@@ -567,6 +580,7 @@ pub fn taylor_total(
     fpc_ssu_col: Option<String>,
     by_col: Option<String>,
     singleton_method: Option<String>,
+    domain_rows_col: Option<String>,
     deff_ref: Option<String>,
     deff_pop_total: Option<f64>,
     calib_kind: Option<String>,
@@ -600,6 +614,7 @@ pub fn taylor_total(
             fpc_col.as_deref(),
             fpc_ssu_col.as_deref(),
             singleton_method.as_deref(),
+            domain_rows_col.as_deref(),
             srs,
             calib,
         )
@@ -620,6 +635,7 @@ pub fn taylor_total(
                 fpc_ssu_col.as_deref(),
                 &by,
                 singleton_method.as_deref(),
+                domain_rows_col.as_deref(),
                 srs,
                 calib,
             )
@@ -630,7 +646,7 @@ pub fn taylor_total(
 
 /// Batched ungrouped total over many variables sharing one design build.
 #[pyfunction]
-#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None))]
+#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None))]
 pub fn taylor_total_multi(
     _py: Python,
     data: PyDataFrame,
@@ -642,6 +658,7 @@ pub fn taylor_total_multi(
     fpc_col: Option<String>,
     fpc_ssu_col: Option<String>,
     singleton_method: Option<String>,
+    domain_rows_col: Option<String>,
     deff_ref: Option<String>,
     deff_pop_total: Option<f64>,
 ) -> PyResult<PyDataFrame> {
@@ -660,6 +677,7 @@ pub fn taylor_total_multi(
                 fpc_col.as_deref(),
                 fpc_ssu_col.as_deref(),
                 singleton_method.as_deref(),
+                domain_rows_col.as_deref(),
                 srs,
             )
         })
@@ -677,11 +695,13 @@ fn compute_total_ungrouped(
     fpc_col: Option<&str>,
     fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    domain_rows_col: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
+    let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
     let psu = psu_col.map(|c| df.column(c)).transpose()?;
     let ssu = ssu_col.map(|c| df.column(c)).transpose()?;
@@ -700,6 +720,7 @@ fn compute_total_ungrouped(
         fpc,
         fpc_ssu,
         singleton_method,
+        rows.as_ref(),
         calib,
         || {
             let estimate = point_estimate_total(y, weights)?;
@@ -733,9 +754,11 @@ fn compute_total_multi(
     fpc_col: Option<&str>,
     fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    domain_rows_col: Option<&str>,
     srs: SrsRef,
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
+    let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
     let psu = psu_col.map(|c| df.column(c)).transpose()?;
     let ssu = ssu_col.map(|c| df.column(c)).transpose()?;
@@ -750,7 +773,7 @@ fn compute_total_multi(
     // same strata/PSU columns a second time (see `compute_mean_multi`).
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let df_val = degrees_of_freedom_from_design(weights, &design, None);
-    let active = design.domain_rows(weights, None);
+    let active = design.domain_rows(weights.len(), rows.as_ref(), None);
 
     // Hoist column resolution out of the parallel region (see compute_mean_multi).
     let y_cols: Vec<&Float64Chunked> = value_cols
@@ -809,11 +832,13 @@ fn compute_total_grouped(
     fpc_ssu_col: Option<&str>,
     by_col: &str,
     singleton_method: Option<&str>,
+    domain_rows_col: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
 ) -> PolarsResult<(DataFrame, Vec<f64>)> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
+    let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
     let psu = psu_col.map(|c| df.column(c)).transpose()?;
     let ssu = ssu_col.map(|c| df.column(c)).transpose()?;
@@ -842,7 +867,7 @@ fn compute_total_grouped(
         .map(
             |&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
                 let domain_mask = by_str.equal(group);
-                let active = design.domain_rows(weights, Some(&domain_mask));
+                let active = design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
                 let n_domain = active_count(weights, Some(&domain_mask));
                 let estimate = point_estimate_total_domain(y, weights, &domain_mask)?;
                 let scores = scores_total_domain(y, weights, &domain_mask)?;
@@ -889,7 +914,7 @@ fn compute_total_grouped(
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, numerator_col, denominator_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
+#[pyo3(signature = (data, numerator_col, denominator_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 pub fn taylor_ratio(
     _py: Python,
     data: PyDataFrame,
@@ -903,6 +928,7 @@ pub fn taylor_ratio(
     fpc_ssu_col: Option<String>,
     by_col: Option<String>,
     singleton_method: Option<String>,
+    domain_rows_col: Option<String>,
     deff_ref: Option<String>,
     deff_pop_total: Option<f64>,
     calib_kind: Option<String>,
@@ -937,6 +963,7 @@ pub fn taylor_ratio(
             fpc_col.as_deref(),
             fpc_ssu_col.as_deref(),
             singleton_method.as_deref(),
+            domain_rows_col.as_deref(),
             srs,
             calib,
         )
@@ -958,6 +985,7 @@ pub fn taylor_ratio(
                 fpc_ssu_col.as_deref(),
                 &by,
                 singleton_method.as_deref(),
+                domain_rows_col.as_deref(),
                 srs,
                 calib,
             )
@@ -969,7 +997,7 @@ pub fn taylor_ratio(
 /// Batched ungrouped ratio over paired numerator/denominator columns sharing one
 /// design build. `numerator_cols` and `denominator_cols` must be equal length.
 #[pyfunction]
-#[pyo3(signature = (data, numerator_cols, denominator_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None))]
+#[pyo3(signature = (data, numerator_cols, denominator_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None))]
 pub fn taylor_ratio_multi(
     _py: Python,
     data: PyDataFrame,
@@ -982,6 +1010,7 @@ pub fn taylor_ratio_multi(
     fpc_col: Option<String>,
     fpc_ssu_col: Option<String>,
     singleton_method: Option<String>,
+    domain_rows_col: Option<String>,
     deff_ref: Option<String>,
     deff_pop_total: Option<f64>,
 ) -> PyResult<PyDataFrame> {
@@ -1001,6 +1030,7 @@ pub fn taylor_ratio_multi(
                 fpc_col.as_deref(),
                 fpc_ssu_col.as_deref(),
                 singleton_method.as_deref(),
+                domain_rows_col.as_deref(),
                 srs,
             )
         })
@@ -1019,12 +1049,14 @@ fn compute_ratio_ungrouped(
     fpc_col: Option<&str>,
     fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    domain_rows_col: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
 ) -> PolarsResult<DataFrame> {
     let y = df.column(numerator_col)?.f64()?;
     let x = df.column(denominator_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
+    let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
     let psu = psu_col.map(|c| df.column(c)).transpose()?;
     let ssu = ssu_col.map(|c| df.column(c)).transpose()?;
@@ -1043,6 +1075,7 @@ fn compute_ratio_ungrouped(
         fpc,
         fpc_ssu,
         singleton_method,
+        rows.as_ref(),
         calib,
         || {
             let Ok(estimate) = point_estimate_ratio(y, x, weights) else {
@@ -1079,9 +1112,11 @@ fn compute_ratio_multi(
     fpc_col: Option<&str>,
     fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    domain_rows_col: Option<&str>,
     srs: SrsRef,
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
+    let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
     let psu = psu_col.map(|c| df.column(c)).transpose()?;
     let ssu = ssu_col.map(|c| df.column(c)).transpose()?;
@@ -1096,7 +1131,7 @@ fn compute_ratio_multi(
     // same strata/PSU columns a second time (see `compute_mean_multi`).
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let df_val = degrees_of_freedom_from_design(weights, &design, None);
-    let active = design.domain_rows(weights, None);
+    let active = design.domain_rows(weights.len(), rows.as_ref(), None);
 
     // Hoist column resolution out of the parallel region (see compute_mean_multi).
     let y_cols: Vec<&Float64Chunked> = numerator_cols
@@ -1184,12 +1219,14 @@ fn compute_ratio_grouped(
     fpc_ssu_col: Option<&str>,
     by_col: &str,
     singleton_method: Option<&str>,
+    domain_rows_col: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
 ) -> PolarsResult<(DataFrame, Vec<f64>)> {
     let y = df.column(numerator_col)?.f64()?;
     let x = df.column(denominator_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
+    let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
     let psu = psu_col.map(|c| df.column(c)).transpose()?;
     let ssu = ssu_col.map(|c| df.column(c)).transpose()?;
@@ -1218,7 +1255,7 @@ fn compute_ratio_grouped(
         .map(
             |&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
                 let domain_mask = by_str.equal(group);
-                let active = design.domain_rows(weights, Some(&domain_mask));
+                let active = design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
                 let n_domain = active_count(weights, Some(&domain_mask));
                 let Ok(estimate) = point_estimate_ratio_domain(y, x, weights, &domain_mask) else {
                     let nan = f64::NAN;
@@ -1276,7 +1313,7 @@ fn compute_ratio_grouped(
 /// pair columns are named `y`/`x` positionally, and carry no directional
 /// meaning, since both statistics are symmetric.
 #[pyfunction]
-#[pyo3(signature = (data, y_cols, x_cols, kind, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None))]
+#[pyo3(signature = (data, y_cols, x_cols, kind, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None))]
 pub fn taylor_assoc(
     _py: Python,
     data: PyDataFrame,
@@ -1291,6 +1328,7 @@ pub fn taylor_assoc(
     fpc_ssu_col: Option<String>,
     by_col: Option<String>,
     singleton_method: Option<String>,
+    domain_rows_col: Option<String>,
     deff_ref: Option<String>,
     deff_pop_total: Option<f64>,
 ) -> PyResult<PyDataFrame> {
@@ -1328,6 +1366,7 @@ pub fn taylor_assoc(
                 fpc_ssu_col.as_deref(),
                 by_col.as_deref(),
                 singleton_method.as_deref(),
+                domain_rows_col.as_deref(),
                 srs,
             )
         })
@@ -1349,9 +1388,11 @@ fn compute_assoc(
     fpc_ssu_col: Option<&str>,
     by_col: Option<&str>,
     singleton_method: Option<&str>,
+    domain_rows_col: Option<&str>,
     srs: SrsRef,
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
+    let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
     let psu = psu_col.map(|c| df.column(c)).transpose()?;
     let ssu = ssu_col.map(|c| df.column(c)).transpose()?;
@@ -1412,7 +1453,7 @@ fn compute_assoc(
                     _ => None,
                 };
                 let (y, x) = (ys[pi], xs[pi]);
-                let active = design.domain_rows(weights, mask.as_ref());
+                let active = design.domain_rows(weights.len(), rows.as_ref(), mask.as_ref());
                 let estimate = point_estimate_assoc(kind, y, x, weights, mask.as_ref())?;
                 let scores = scores_assoc(kind, y, x, weights, mask.as_ref())?;
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
@@ -1478,7 +1519,7 @@ enum LevelScale {
 }
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 pub fn taylor_prop(
     _py: Python,
     data: PyDataFrame,
@@ -1491,6 +1532,7 @@ pub fn taylor_prop(
     fpc_ssu_col: Option<String>,
     by_col: Option<String>,
     singleton_method: Option<String>,
+    domain_rows_col: Option<String>,
     deff_ref: Option<String>,
     deff_pop_total: Option<f64>,
     calib_kind: Option<String>,
@@ -1512,6 +1554,7 @@ pub fn taylor_prop(
         fpc_ssu_col,
         by_col,
         singleton_method,
+        domain_rows_col,
         deff_ref,
         deff_pop_total,
         calib_kind,
@@ -1527,7 +1570,7 @@ pub fn taylor_prop(
 /// Estimated count of each level (`svytotal(~factor(y))`), with the joint
 /// covariance across levels (and by-groups).
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 pub fn taylor_factor_total(
     _py: Python,
     data: PyDataFrame,
@@ -1540,6 +1583,7 @@ pub fn taylor_factor_total(
     fpc_ssu_col: Option<String>,
     by_col: Option<String>,
     singleton_method: Option<String>,
+    domain_rows_col: Option<String>,
     deff_ref: Option<String>,
     deff_pop_total: Option<f64>,
     calib_kind: Option<String>,
@@ -1561,6 +1605,7 @@ pub fn taylor_factor_total(
         fpc_ssu_col,
         by_col,
         singleton_method,
+        domain_rows_col,
         deff_ref,
         deff_pop_total,
         calib_kind,
@@ -1586,6 +1631,7 @@ fn taylor_levels(
     fpc_ssu_col: Option<String>,
     by_col: Option<String>,
     singleton_method: Option<String>,
+    domain_rows_col: Option<String>,
     deff_ref: Option<String>,
     deff_pop_total: Option<f64>,
     calib_kind: Option<String>,
@@ -1620,6 +1666,7 @@ fn taylor_levels(
             fpc_col.as_deref(),
             fpc_ssu_col.as_deref(),
             singleton_method.as_deref(),
+            domain_rows_col.as_deref(),
             srs,
             calib,
             scale,
@@ -1641,6 +1688,7 @@ fn taylor_levels(
                 fpc_ssu_col.as_deref(),
                 &by,
                 singleton_method.as_deref(),
+                domain_rows_col.as_deref(),
                 srs,
                 calib,
                 scale,
@@ -1653,7 +1701,7 @@ fn taylor_levels(
 /// Batched ungrouped proportions over many category columns sharing one design
 /// build. Rows are (variable, level), grouped by variable in input order.
 #[pyfunction]
-#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, deff_ref=None, deff_pop_total=None))]
+#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None))]
 pub fn taylor_prop_multi(
     _py: Python,
     data: PyDataFrame,
@@ -1665,6 +1713,7 @@ pub fn taylor_prop_multi(
     fpc_col: Option<String>,
     fpc_ssu_col: Option<String>,
     singleton_method: Option<String>,
+    domain_rows_col: Option<String>,
     deff_ref: Option<String>,
     deff_pop_total: Option<f64>,
 ) -> PyResult<PyDataFrame> {
@@ -1683,6 +1732,7 @@ pub fn taylor_prop_multi(
                 fpc_col.as_deref(),
                 fpc_ssu_col.as_deref(),
                 singleton_method.as_deref(),
+                domain_rows_col.as_deref(),
                 srs,
             )
         })
@@ -1700,11 +1750,13 @@ fn compute_levels_ungrouped(
     fpc_col: Option<&str>,
     fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    domain_rows_col: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
     scale: LevelScale,
 ) -> PolarsResult<(DataFrame, Vec<f64>)> {
     let weights = df.column(weight_col)?.f64()?;
+    let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
     let psu = psu_col.map(|c| df.column(c)).transpose()?;
     let ssu = ssu_col.map(|c| df.column(c)).transpose()?;
@@ -1739,7 +1791,7 @@ fn compute_levels_ungrouped(
     let design =
         build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?.with_calib(calib);
     let df_val = degrees_of_freedom_from_design(weights, &design, None);
-    let active = design.domain_rows(weights, None);
+    let active = design.domain_rows(weights.len(), rows.as_ref(), None);
 
     for lvl in &levels {
         let indicator: Vec<Option<f64>> = value_str
@@ -1811,9 +1863,11 @@ fn compute_prop_multi(
     fpc_col: Option<&str>,
     fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    domain_rows_col: Option<&str>,
     srs: SrsRef,
 ) -> PolarsResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
+    let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
     let psu = psu_col.map(|c| df.column(c)).transpose()?;
     let ssu = ssu_col.map(|c| df.column(c)).transpose()?;
@@ -1828,7 +1882,7 @@ fn compute_prop_multi(
     // Design indexed once; df taken off its codes (see `compute_mean_multi`).
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let df_val = degrees_of_freedom_from_design(weights, &design, None);
-    let active = design.domain_rows(weights, None);
+    let active = design.domain_rows(weights.len(), rows.as_ref(), None);
 
     // Hoist String-cast + level enumeration out of the parallel region: keep the
     // owned casted columns alive, borrow their StringChunked, and precompute each
@@ -1936,11 +1990,13 @@ fn compute_levels_grouped(
     fpc_ssu_col: Option<&str>,
     by_col: &str,
     singleton_method: Option<&str>,
+    domain_rows_col: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
     scale: LevelScale,
 ) -> PolarsResult<(DataFrame, Vec<f64>)> {
     let weights = df.column(weight_col)?.f64()?;
+    let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
     let psu = psu_col.map(|c| df.column(c)).transpose()?;
     let ssu = ssu_col.map(|c| df.column(c)).transpose()?;
@@ -1983,7 +2039,7 @@ fn compute_levels_grouped(
         .par_iter()
         .map(|&group| -> PolarsResult<Vec<PropRow>> {
             let domain_mask = by_str.equal(group);
-            let active = design.domain_rows(weights, Some(&domain_mask));
+            let active = design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
             let n_domain = active_count(weights, Some(&domain_mask));
             let mut out: Vec<PropRow> = Vec::with_capacity(levels.len());
             for lvl in &levels {
@@ -2087,7 +2143,7 @@ fn compute_levels_grouped(
 /// Woodruff quantiles for one variable. One row per probability (and per
 /// domain when `by_col` is set), carrying the probability in a `prob` column.
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, probs, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
+#[pyo3(signature = (data, value_col, weight_col, probs, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn taylor_quantile(
     _py: Python,
@@ -2102,6 +2158,7 @@ pub fn taylor_quantile(
     fpc_ssu_col: Option<String>,
     by_col: Option<String>,
     singleton_method: Option<String>,
+    domain_rows_col: Option<String>,
     quantile_method: Option<String>,
     calib_kind: Option<String>,
     calib_cells: Option<Vec<String>>,
@@ -2137,6 +2194,7 @@ pub fn taylor_quantile(
             fpc_col.as_deref(),
             fpc_ssu_col.as_deref(),
             singleton_method.as_deref(),
+            domain_rows_col.as_deref(),
             calib,
             &probs,
             q_method,
@@ -2152,6 +2210,7 @@ pub fn taylor_quantile(
             fpc_ssu_col.as_deref(),
             by,
             singleton_method.as_deref(),
+            domain_rows_col.as_deref(),
             calib,
             &probs,
             q_method,
@@ -2165,7 +2224,7 @@ pub fn taylor_quantile(
 /// `compute_quantile_multi`). Rows are ordered variable-major, then by
 /// probability, matching the input order of both.
 #[pyfunction]
-#[pyo3(signature = (data, value_cols, weight_col, probs, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
+#[pyo3(signature = (data, value_cols, weight_col, probs, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn taylor_quantile_multi(
     _py: Python,
@@ -2179,6 +2238,7 @@ pub fn taylor_quantile_multi(
     fpc_col: Option<String>,
     fpc_ssu_col: Option<String>,
     singleton_method: Option<String>,
+    domain_rows_col: Option<String>,
     quantile_method: Option<String>,
     calib_kind: Option<String>,
     calib_cells: Option<Vec<String>>,
@@ -2214,6 +2274,7 @@ pub fn taylor_quantile_multi(
                 fpc_col.as_deref(),
                 fpc_ssu_col.as_deref(),
                 singleton_method.as_deref(),
+                domain_rows_col.as_deref(),
                 calib,
                 &probs,
                 q_method,
@@ -2266,7 +2327,7 @@ fn without_prob(mut df: DataFrame) -> PolarsResult<DataFrame> {
 }
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
+#[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn taylor_median(
     _py: Python,
@@ -2280,6 +2341,7 @@ pub fn taylor_median(
     fpc_ssu_col: Option<String>,
     by_col: Option<String>,
     singleton_method: Option<String>,
+    domain_rows_col: Option<String>,
     quantile_method: Option<String>,
     calib_kind: Option<String>,
     calib_cells: Option<Vec<String>>,
@@ -2301,6 +2363,7 @@ pub fn taylor_median(
         fpc_ssu_col,
         by_col,
         singleton_method,
+        domain_rows_col,
         quantile_method,
         calib_kind,
         calib_cells,
@@ -2317,7 +2380,7 @@ pub fn taylor_median(
 /// Batched ungrouped median over many variables. One row per variable, in
 /// input order.
 #[pyfunction]
-#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
+#[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn taylor_median_multi(
     _py: Python,
@@ -2330,6 +2393,7 @@ pub fn taylor_median_multi(
     fpc_col: Option<String>,
     fpc_ssu_col: Option<String>,
     singleton_method: Option<String>,
+    domain_rows_col: Option<String>,
     quantile_method: Option<String>,
     calib_kind: Option<String>,
     calib_cells: Option<Vec<String>>,
@@ -2350,6 +2414,7 @@ pub fn taylor_median_multi(
         fpc_col,
         fpc_ssu_col,
         singleton_method,
+        domain_rows_col,
         quantile_method,
         calib_kind,
         calib_cells,
@@ -2366,6 +2431,7 @@ pub fn taylor_median_multi(
 /// The design columns every quantile path needs, resolved once.
 struct QuantileCols<'a> {
     weights: &'a Float64Chunked,
+    rows: Option<BooleanChunked>,
     strata: Option<&'a Column>,
     psu: Option<&'a Column>,
     design: TaylorDesign,
@@ -2380,9 +2446,11 @@ fn resolve_quantile_cols<'a>(
     fpc_col: Option<&str>,
     fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    domain_rows_col: Option<&str>,
     calib: Option<CalibSweep>,
 ) -> PolarsResult<QuantileCols<'a>> {
     let weights = df.column(weight_col)?.f64()?;
+    let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
     let psu = psu_col.map(|c| df.column(c)).transpose()?;
     let ssu = ssu_col.map(|c| df.column(c)).transpose()?;
@@ -2399,6 +2467,7 @@ fn resolve_quantile_cols<'a>(
         build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?.with_calib(calib);
     Ok(QuantileCols {
         weights,
+        rows,
         strata,
         psu,
         design,
@@ -2415,6 +2484,7 @@ fn compute_quantile_ungrouped(
     fpc_col: Option<&str>,
     fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    domain_rows_col: Option<&str>,
     calib: Option<CalibSweep>,
     probs: &[f64],
     q_method: SvyQuantileMethod,
@@ -2429,10 +2499,19 @@ fn compute_quantile_ungrouped(
         fpc_col,
         fpc_ssu_col,
         singleton_method,
+        domain_rows_col,
         calib,
     )?;
 
-    let rows = quantiles_woodruff(y, cols.weights, None, &cols.design, probs, q_method)?;
+    let rows = quantiles_woodruff(
+        y,
+        cols.weights,
+        None,
+        cols.rows.as_ref(),
+        &cols.design,
+        probs,
+        q_method,
+    )?;
     let df_val = degrees_of_freedom(cols.weights, cols.strata, cols.psu)?;
     let n = active_count(cols.weights, None);
     let k = rows.len();
@@ -2456,6 +2535,7 @@ fn compute_quantile_multi(
     fpc_col: Option<&str>,
     fpc_ssu_col: Option<&str>,
     singleton_method: Option<&str>,
+    domain_rows_col: Option<&str>,
     calib: Option<CalibSweep>,
     probs: &[f64],
     q_method: SvyQuantileMethod,
@@ -2469,6 +2549,7 @@ fn compute_quantile_multi(
         fpc_col,
         fpc_ssu_col,
         singleton_method,
+        domain_rows_col,
         calib,
     )?;
 
@@ -2482,7 +2563,17 @@ fn compute_quantile_multi(
 
     let per_var = (0..value_cols.len())
         .into_par_iter()
-        .map(|i| quantiles_woodruff(y_cols[i], cols.weights, None, &cols.design, probs, q_method))
+        .map(|i| {
+            quantiles_woodruff(
+                y_cols[i],
+                cols.weights,
+                None,
+                cols.rows.as_ref(),
+                &cols.design,
+                probs,
+                q_method,
+            )
+        })
         .collect::<PolarsResult<Vec<_>>>()?;
 
     let k = probs.len();
@@ -2516,6 +2607,7 @@ fn compute_quantile_grouped(
     fpc_ssu_col: Option<&str>,
     by_col: &str,
     singleton_method: Option<&str>,
+    domain_rows_col: Option<&str>,
     calib: Option<CalibSweep>,
     probs: &[f64],
     q_method: SvyQuantileMethod,
@@ -2530,6 +2622,7 @@ fn compute_quantile_grouped(
         fpc_col,
         fpc_ssu_col,
         singleton_method,
+        domain_rows_col,
         calib,
     )?;
     let by_str = df.column(by_col)?.str()?;
@@ -2549,6 +2642,7 @@ fn compute_quantile_grouped(
                 y,
                 cols.weights,
                 Some(&domain_mask),
+                cols.rows.as_ref(),
                 &cols.design,
                 probs,
                 q_method,

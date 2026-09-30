@@ -288,6 +288,8 @@ class WgtAdjustment(msgspec.Struct, frozen=True, kw_only=True):
 # =============================================================================
 
 _SINGLETON_METHODS = ("certainty", "skip", "scale", "center", "collapse", "pool")
+_SINGLETON_DOMAINS = ("ignore", "warn", "error", "apply")
+SingletonDomains = Literal["ignore", "warn", "error", "apply"]
 _POOLED = "__pooled__"
 
 
@@ -327,7 +329,9 @@ class SingletonSpec(msgspec.Struct, frozen=True, kw_only=True):
 
     The sample keeps it only while it describes the data: the singleton strata
     found in the data must be exactly the ones it handles (and a collapse
-    target must still exist). Otherwise it is cleared with a warning.
+    target must still exist). Otherwise it is cleared with a warning. A rule
+    with no strata (``domains`` set on a sample without singletons) is kept
+    while the sample has none.
 
     Parameters
     ----------
@@ -340,12 +344,20 @@ class SingletonSpec(msgspec.Struct, frozen=True, kw_only=True):
         ``collapse``: (singleton stratum, target stratum) pairs.
     name
         ``pool``: the pooled pseudo-stratum's name.
+    domains
+        Strata with several PSUs but one inside an estimation domain
+        (``where=`` crossed with a ``by=`` level): ``"warn"`` (default) uses
+        the standard domain variance and notes it under the result,
+        ``"ignore"`` does so silently (R's default), ``"error"`` raises, and
+        ``"apply"`` (``center`` and ``scale`` only) handles them as
+        singletons, R's ``options(survey.adjust.domain.lonely = TRUE)``.
     """
 
     method: Literal["certainty", "skip", "scale", "center", "collapse", "pool"]
     strata: tuple[Any, ...] = ()
     mapping: tuple[tuple[Any, Any], ...] = ()
     name: str | None = None
+    domains: SingletonDomains = "warn"
 
     def __post_init__(self) -> None:
         if self.method not in _SINGLETON_METHODS:
@@ -358,8 +370,17 @@ class SingletonSpec(msgspec.Struct, frozen=True, kw_only=True):
             unique.setdefault(_typed(v), v)
         strata = tuple(unique.values())
         mapping = tuple((_stratum_value(a), _stratum_value(b)) for a, b in self.mapping)
+        if self.domains not in _SINGLETON_DOMAINS:
+            raise ValueError(f"Unknown domains {self.domains!r}; use one of {_SINGLETON_DOMAINS}.")
+        if self.domains == "apply" and self.method not in ("center", "scale"):
+            raise ValueError(
+                f"domains='apply' handles a domain's one-PSU strata as singletons, which "
+                f"center and scale define; {self.method} takes 'ignore', 'warn' or 'error'."
+            )
+        # A rule set only for its domains holds no strata.
+        empty_ok = self.domains != "warn"
         if self.method == "collapse":
-            if not mapping or strata:
+            if (not mapping and not empty_ok) or strata:
                 raise ValueError("collapse takes a non-empty mapping and no strata.")
             sources = {_typed(a) for a, _ in mapping}
             if len(sources) != len(mapping):
@@ -367,7 +388,7 @@ class SingletonSpec(msgspec.Struct, frozen=True, kw_only=True):
             bad = [b for _, b in mapping if _typed(b) in sources]
             if bad:
                 raise ValueError(f"collapse targets must not be singletons themselves: {bad!r}")
-        elif not strata or mapping:
+        elif (not strata and not empty_ok) or mapping:
             raise ValueError(f"{self.method} takes a non-empty strata and no mapping.")
         name = self.name
         if self.method == "pool":
@@ -381,34 +402,38 @@ class SingletonSpec(msgspec.Struct, frozen=True, kw_only=True):
         msgspec.structs.force_setattr(self, "name", name)
 
     @classmethod
-    def certainty(cls, strata: Any) -> SingletonSpec:
+    def certainty(cls, strata: Any = (), *, domains: SingletonDomains = "warn") -> SingletonSpec:
         """Each singleton's PSU becomes a stratum, its SSUs (or rows) the PSUs."""
-        return cls(method="certainty", strata=_strata_arg(strata))
+        return cls(method="certainty", strata=_strata_arg(strata), domains=domains)
 
     @classmethod
-    def skip(cls, strata: Any) -> SingletonSpec:
+    def skip(cls, strata: Any = (), *, domains: SingletonDomains = "warn") -> SingletonSpec:
         """The singleton strata contribute nothing to the variance."""
-        return cls(method="skip", strata=_strata_arg(strata))
+        return cls(method="skip", strata=_strata_arg(strata), domains=domains)
 
     @classmethod
-    def scale(cls, strata: Any) -> SingletonSpec:
+    def scale(cls, strata: Any = (), *, domains: SingletonDomains = "warn") -> SingletonSpec:
         """As ``skip``, with the variance scaled up by the singleton fraction."""
-        return cls(method="scale", strata=_strata_arg(strata))
+        return cls(method="scale", strata=_strata_arg(strata), domains=domains)
 
     @classmethod
-    def center(cls, strata: Any) -> SingletonSpec:
+    def center(cls, strata: Any = (), *, domains: SingletonDomains = "warn") -> SingletonSpec:
         """The singletons' variance is taken around the grand mean."""
-        return cls(method="center", strata=_strata_arg(strata))
+        return cls(method="center", strata=_strata_arg(strata), domains=domains)
 
     @classmethod
-    def collapse(cls, mapping: Mapping[Any, Any]) -> SingletonSpec:
+    def collapse(
+        cls, mapping: Mapping[Any, Any] | None = None, *, domains: SingletonDomains = "warn"
+    ) -> SingletonSpec:
         """Each singleton stratum is merged into its target stratum."""
-        return cls(method="collapse", mapping=tuple(dict(mapping).items()))
+        return cls(method="collapse", mapping=tuple(dict(mapping or {}).items()), domains=domains)
 
     @classmethod
-    def pool(cls, strata: Any, name: str = _POOLED) -> SingletonSpec:
+    def pool(
+        cls, strata: Any = (), name: str = _POOLED, *, domains: SingletonDomains = "warn"
+    ) -> SingletonSpec:
         """The singleton strata are pooled into one pseudo-stratum."""
-        return cls(method="pool", strata=_strata_arg(strata), name=name)
+        return cls(method="pool", strata=_strata_arg(strata), name=name, domains=domains)
 
     @property
     def handled(self) -> tuple[Any, ...]:
@@ -431,12 +456,13 @@ class SingletonSpec(msgspec.Struct, frozen=True, kw_only=True):
 
     def _code(self, prefix: str, fmt: Any) -> str:
         """The constructor call that rebuilds this spec."""
+        domains = "" if self.domains == "warn" else f", domains={self.domains!r}"
         if self.method == "collapse":
             items = ", ".join(f"{fmt(a)}: {fmt(b)}" for a, b in self.mapping)
-            return f"{prefix}SingletonSpec.collapse({{{items}}})"
+            return f"{prefix}SingletonSpec.collapse({{{items}}}{domains})"
         strata = "[" + ", ".join(fmt(v) for v in self.strata) + "]"
         name = "" if self.method != "pool" or self.name == _POOLED else f", name={self.name!r}"
-        return f"{prefix}SingletonSpec.{self.method}({strata}{name})"
+        return f"{prefix}SingletonSpec.{self.method}({strata}{name}{domains})"
 
 
 def _value_code(value: Any) -> str:

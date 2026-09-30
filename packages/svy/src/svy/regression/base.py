@@ -24,7 +24,7 @@ except ImportError:
 from svy.core.containers import FDist, TDist
 from svy.core.data_prep import calib_kwargs, prepare_data
 from svy.core.enumerations import DistFamily, LinkFunction
-from svy.core.singleton import require_singleton_rule
+from svy.core.singleton import domain_singleton_findings, require_singleton_rule
 from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import WhereArg
 from svy.core.warnings import WarnCode
@@ -556,6 +556,15 @@ class GLM:
             df = df.with_columns(
                 cast(pl.Expr, bool_expr).fill_null(False).cast(pl.Boolean).alias(dom_col)
             )
+        # Rows with a missing covariate or response are out of the domain too
+        # (they already carry a zero weight): the singleton rules count a
+        # domain's rows whatever their weight, as R's subset() does.
+        if prep.domain_col is not None and prep.domain_col in df.columns:
+            present = pl.col(prep.domain_col).cast(pl.Utf8) == str(prep.domain_val)
+            if dom_col is not None:
+                present = present & pl.col(dom_col)
+            dom_col = "__where_domain__"
+            df = df.with_columns(present.alias(dom_col))
 
         # Drop rows with INVALID weights (null / non-finite / negative) —
         # unconditionally: prepare_data always provides a weight column,
@@ -772,6 +781,19 @@ class GLM:
             eng_df: pl.DataFrame = df.select(final_selects)
         except Exception as e:
             raise ValueError(f"Failed to prepare data: {e}")
+
+        findings = (
+            []
+            if rep_cols
+            else domain_singleton_findings(
+                self._sample,
+                df,
+                strata_col=s_col,
+                psu_col=p_col,
+                mask=pl.col(dom_col) if dom_col else None,
+                where="GLM.fit",
+            )
+        )
 
         # Zero-weight rows (kept for design structure) may carry nulls in
         # engineered features (e.g. Cat dummies of a null value); the Rust
@@ -1064,6 +1086,7 @@ class GLM:
             feature_names=feature_names,
             alpha=alpha,
             where_clause=format_where_clause(where),
+            findings=tuple(findings),
         )
 
         # Persist the exact rows the fit used (post null-drop, post weight
