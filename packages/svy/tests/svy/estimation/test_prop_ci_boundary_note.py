@@ -20,7 +20,7 @@ import warnings
 import polars as pl
 import pytest
 
-from svy import Design, Sample, col
+from svy import Design, Sample, Singleton, col
 from svy.core.warnings import Severity, WarnCode
 from svy.estimation.base import prop_ci_boundary_note
 
@@ -290,7 +290,8 @@ def test_prints_with_the_domain_singleton_note():
     f = _frame().filter(
         ~((pl.col("stratum") == 1) & (pl.col("female") == 0)) | (pl.col("psu") == "1-1")
     )
-    s = Sample(f, Design(stratum="stratum", psu="psu", wgt="wgt"))
+    rule = Singleton("center", on_domain_singletons="warn")
+    s = Sample(f, Design(stratum="stratum", psu="psu", wgt="wgt", singleton=rule))
     r = _no_warning(lambda: s.estimation.prop("y_zero", by="female"))
     assert [str(x.code) for x in r.findings] == ["DOMAIN_SINGLETON_PSU", "PROP_CI_BOUNDARY"]
     lines = [ln for ln in r.__plain_str__().splitlines() if ln.startswith("note:")]
