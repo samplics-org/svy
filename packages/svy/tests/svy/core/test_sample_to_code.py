@@ -23,6 +23,15 @@ import svy
 from svy.errors import MethodError
 
 
+def _declare(sample, method, **kw):
+    """A fork of ``sample`` with the singleton rule declared on its design."""
+    from svy.core.design import Singleton as _Rule
+
+    new = sample._fork()
+    new.update_design(singleton=_Rule(method, **kw))
+    return new
+
+
 DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
 STYPE = {"E": 4421.0, "H": 755.0, "M": 1018.0}
 SCHWIDE = {"No": 1000.0, "Yes": 5194.0}
@@ -311,43 +320,44 @@ def test_switching_back_to_an_earlier_weight(base):
 @pytest.mark.parametrize(
     "rule",
     [
-        lambda s: s.singleton.collapse(using={4: 3}),
-        lambda s: s.singleton.collapse(),
-        lambda s: s.singleton.pool(),
-        lambda s: s.singleton.certainty(),
-        lambda s: s.singleton.skip(),
-        lambda s: s.singleton.scale(),
-        lambda s: s.singleton.center(),
+        lambda s: _declare(s, "collapse", using={4: 3}),
+        lambda s: _declare(s, "collapse"),
+        lambda s: _declare(s, "pool"),
+        lambda s: _declare(s, "self_representing"),
+        lambda s: _declare(s, "skip"),
+        lambda s: _declare(s, "scale"),
+        lambda s: _declare(s, "center"),
     ],
     ids=["collapse_map", "collapse_default", "pool", "certainty", "skip", "scale", "center"],
 )
 def test_every_singleton_rule(strat, rule):
     s = rule(svy.Sample(strat, svy.Design(stratum="h", psu="psu", ssu="ssu", wgt="w")))
     assert s.design.singleton is not None
-    assert "singleton=svy.SingletonSpec." in s.to_code()
+    assert "singleton=svy.Singleton(" in s.to_code()
     _assert_rebuilds(s, by="g")
 
 
 def test_singleton_rule_on_tuple_and_date_strata(strat):
     s = svy.Sample(strat, svy.Design(stratum=("day", "even"), psu="psu", wgt="w"))
-    s = s.singleton.collapse(using={(dt.date(2020, 1, 5), True): (dt.date(2020, 1, 4), False)})
+    s = _declare(s, "collapse", using={(dt.date(2020, 1, 5), True): (dt.date(2020, 1, 4), False)})
     _assert_rebuilds(s, by="g")
 
 
-def test_a_cleared_rule_is_not_in_the_script(strat):
-    s = svy.Sample(strat, svy.Design(stratum="h", psu="psu", wgt="w")).singleton.collapse(
-        using={4: 3}
+def test_a_rule_the_data_no_longer_needs_stays_in_the_script(strat):
+    # The rule is declared intent: after the filter its mapping entry is unused
+    # (an INFO finding), and the script declares it as the design does.
+    s = _declare(
+        svy.Sample(strat, svy.Design(stratum="h", psu="psu", wgt="w")), "collapse", using={4: 3}
     )
-    with pytest.warns(UserWarning, match="cleared"):
-        s = s.wrangling.filter_records(pl.col("h") != 4)
-        s.estimation.mean("y")
-    assert "singleton" not in s.to_code()
+    s = s.wrangling.filter_records(pl.col("h") != 4)
+    s.estimation.mean("y")
+    assert "singleton=svy.Singleton('collapse', using={4: 3})" in s.to_code()
     _assert_rebuilds(s)
 
 
 def test_singleton_with_replicates_and_record(strat):
-    s = svy.Sample(strat, svy.Design(stratum="h", psu="psu", wgt="w")).singleton.collapse(
-        using={4: 3}
+    s = _declare(
+        svy.Sample(strat, svy.Design(stratum="h", psu="psu", wgt="w")), "collapse", using={4: 3}
     )
     s = s.weighting.create_bs_wgts(n_reps=10, rstate=2)
     s = s.weighting.poststratify({"a": 60.0, "b": 50.0}, cells="g")

@@ -62,13 +62,14 @@ def filter_records(
             probe = _resolve_target(sample, filtered_data, inplace=False)
             probe._check_for_singletons()
             n_single = len(probe._singletons or [])
-            if n_single and on_singletons == "error":
+            rule = sample._design.singleton if sample._design is not None else None
+            if n_single and on_singletons == "error" and rule is None:
                 raise MethodError(
                     title="Singletons detected after filtering",
                     detail=f"Found {n_single} singleton group(s).",
                     code="SINGLETONS_AFTER_FILTER",
                     where="wrangling.filter_records",
-                    hint="Collapse strata, adjust PSUs, or handle via the singleton utilities.",
+                    hint='Declare a rule for them: sample.update_design(singleton=svy.Singleton("center")).',
                 )
         target = (
             probe
@@ -94,12 +95,19 @@ def filter_records(
             if target is not probe:
                 target._check_for_singletons()
             if getattr(target, "_singletons", None):
+                n = len(target._singletons or [])
+                rule = target._design.singleton if target._design is not None else None
+                # A declared rule applies to them: reported, not warned about.
+                handled = f"; handled by the design's rule {rule!r}" if rule is not None else ""
                 target.warn(
                     code="SINGLETONS_DETECTED",
                     title="Singleton PSUs/strata detected after filtering",
-                    detail=f"Found {len(target._singletons or [])} singleton group(s).",
+                    detail=f"Found {n} singleton group(s){handled}.",
                     where="wrangling.filter_records",
-                    level=finding_level(on_singletons),
+                    level=finding_level("ignore" if rule is not None else on_singletons),
+                    hint=None
+                    if rule is not None
+                    else 'Declare a rule: sample.update_design(singleton=svy.Singleton("center")).',
                 )
 
         return target

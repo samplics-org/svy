@@ -45,7 +45,7 @@ from svy.serialize.structs import (
     RepWgtsData,
     ResultData,
     SdrWgtsData,
-    SingletonSpecData,
+    SingletonData,
     TableData,
     TableStatsData,
     TDistData,
@@ -67,7 +67,7 @@ __all__ = [
     "BootstrapWgtsData",
     "RepWgtsData",
     "WgtAdjustmentData",
-    "SingletonSpecData",
+    "SingletonData",
     "PopSizeData",
     "DesignData",
     # Public API

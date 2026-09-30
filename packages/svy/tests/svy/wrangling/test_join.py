@@ -12,6 +12,15 @@ from svy.core.warnings import Severity
 from svy.errors import DimensionError, MethodError
 
 
+def _declare(sample, method, **kw):
+    """A fork of ``sample`` with the singleton rule declared on its design."""
+    from svy.core.design import Singleton as _Rule
+
+    new = sample._fork()
+    new.update_design(singleton=_Rule(method, **kw))
+    return new
+
+
 def _persons():
     df = pl.DataFrame(
         {
@@ -307,7 +316,7 @@ def test_a_joined_variable_can_become_a_design_variable():
 def test_singleton_handling_survives_a_join():
     df = _persons().data.with_columns(pl.Series("psu", [1, 1, 1, 2, 2, 6, 3]))
     s = svy.Sample(df, svy.Design(stratum="stratum", psu="psu", wgt="wgt"))
-    handled = s.singleton.certainty()
+    handled = _declare(s, "self_representing")
     out = handled.wrangling.join(
         _households(), on={"hh": "hh_id"}, cols=["rooms"], on_unmatched="ignore"
     )

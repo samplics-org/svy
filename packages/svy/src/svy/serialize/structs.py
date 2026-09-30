@@ -466,20 +466,24 @@ RepWgtsData = BootstrapWgtsData | JackknifeWgtsData | BrrWgtsData | SdrWgtsData
 StratumValue = CatValue | None | list[CatValue | None]
 
 
-class SingletonSpecData(msgspec.Struct, kw_only=True, frozen=True):
-    """How singleton strata are handled (mirrors ``svy.core.design.SingletonSpec``).
+class SingletonData(msgspec.Struct, kw_only=True, frozen=True):
+    """The declared singleton rule (mirrors ``svy.core.design.Singleton``).
 
-    Strata are the stratum columns' values (dates restored through "temporal"); ``mapping``
-    holds collapse's (singleton, target) pairs; ``domains`` is how strata with one PSU in a
-    domain are handled ("warn" when read from an older payload).
+    Defaults are left out. ``using`` is a collapse strategy name or the
+    (singleton, target) pairs of an explicit mapping, strata as their columns'
+    values (dates restored through "temporal"). What the rule did to the data
+    is not saved: it is recomputed on load.
     """
 
     method: str
-    strata: list[StratumValue] = []
-    mapping: list[tuple[StratumValue, StratumValue]] = []
-    name: str | None = None
-    #: Left out unless set, so a default rule saves as before.
     domains: str | msgspec.UnsetType = msgspec.UNSET
+    on_domain_singletons: str | msgspec.UnsetType = msgspec.UNSET
+    using: str | list[tuple[StratumValue, StratumValue]] | msgspec.UnsetType = msgspec.UNSET
+    within: list[str] | msgspec.UnsetType = msgspec.UNSET
+    order_by: list[str] | msgspec.UnsetType = msgspec.UNSET
+    descending: bool | msgspec.UnsetType = msgspec.UNSET
+    rstate: int | msgspec.UnsetType = msgspec.UNSET
+    name: str | msgspec.UnsetType = msgspec.UNSET
 
 
 @_kinded("design")
@@ -507,7 +511,7 @@ class DesignData(msgspec.Struct, kw_only=True, frozen=True):
     wr: bool = False
     rep_wgts: RepWgtsData | None = None
     wgt_adjustment: WgtAdjustmentData | None = None
-    singleton: SingletonSpecData | None = None
+    singleton: SingletonData | None = None
     #: Saved forms of design parts with no field of their own, by part name.
     parts: dict[str, Any] | None = None
 
