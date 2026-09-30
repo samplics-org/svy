@@ -30,6 +30,7 @@ from svy.core.types import WhereArg
 from svy.core.variance_method import resolve_variance_method
 from svy.core.warnings import WarnCode
 from svy.errors.model_errors import ModelError
+from svy.estimation.replication import replicate_params
 from svy.regression.glm import GLMCoef, GLMFit, GLMStats, delta_var, offset_values
 from svy.regression.links import FAMILY_LABELS, link_inverse, link_mu_eta, resolve_link
 from svy.regression.prediction import GLMPred
@@ -972,9 +973,10 @@ class GLM:
             coefs_r = np.asarray(_rw.coefficients(), dtype=float)
             Bc = B - B.mean(axis=0)
             cov_mat = (Bc * coefs_r[:, None]).T @ Bc
-            rep_df = getattr(rep_wgts, "df", None)
-            if rep_df:
-                df_design = max(1, int(rep_df) - (k - 1))
+            # Replication df is the recorded df, else n_reps - 1 (as in
+            # estimation), never the Taylor PSU/strata count.
+            _, rep_df, _ = replicate_params(self._sample, where="GLM.fit")
+            df_design = max(1, rep_df - (k - 1))
 
         # A coefficient that is not identified in the fit, or in any replicate
         # refit, has no variance to report: its row and column are the

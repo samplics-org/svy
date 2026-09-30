@@ -108,6 +108,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **`glm.fit(method="replication")` used the Taylor df when the replicate weights recorded none.** Without `RepWgts.df`, the replicate fit kept the design df (#PSUs - #strata - (k - 1)), which also shrank on a `where=` domain. It now uses `n_reps - 1` less k - 1, like estimation and the categorical tests, and does not shrink on a domain. Matches R `svyglm` on `svrepdesign(degf = n_reps - 1)`.
+
 - **The singleton error on a replicate design did not say that the replicates were not used.** `tabulate`, `ttest` and `ranktest` compute a Taylor variance from the stratum and PSU columns even when the design has replicate weights. Estimation does the same unless `method="replication"` is passed. Without a singleton rule they raise `SINGLETON_ERROR`. On a replicate design the error now says that this variance is Taylor linearization and that the replicate weights are not used. Its hint says `method="replication"` uses the replicates (estimation, `tabulate`, `ttest`, `ranktest` and `glm.fit`).
 
 - **`add_stage` results did not detect singletons.** The combined sample was built without its design keys, so a stratum left with one PSU (after a filter, say) went unnoticed and Taylor estimates left it out silently. It is now checked like a constructed sample, and applies a singleton rule carried from stage 1.
