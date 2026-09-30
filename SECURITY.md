@@ -23,7 +23,7 @@ svy runs entirely on your machine. Your survey data is never sent anywhere.
 - **Compiled code.** `svy-rs` is Rust; `svy-io` is Rust around the [ReadStat](https://github.com/WizardMac/ReadStat) C library, whose source is vendored in this repository. Both are compiled into their wheels. Every Rust dependency is pinned in the `Cargo.lock` files and the Python dependencies in `uv.lock`, all in this repository.
 - **Builds.** Wheels are built from tagged commits by the GitHub Actions workflows in [`.github/workflows`](.github/workflows), with every action pinned to a commit hash.
 - **Publishing.** Releases are uploaded to PyPI through trusted publishing (OIDC), with no stored API tokens. `svy` and `svy-rs` releases carry PyPI [attestations](https://docs.pypi.org/attestations/) linking each file to the workflow run that built it.
-- **Updates.** Dependabot watches the Python, Rust and GitHub Actions dependencies and opens pull requests for security updates as they are published.
+- **Updates.** Dependabot watches the Python, Rust and GitHub Actions dependencies, including transitive ones, for published vulnerabilities, and the lockfiles are updated when it reports one.
 - **Integrity of example datasets.** Downloads must use https, including after redirects. Each file is checked against the SHA-256 hash the catalog publishes; where it publishes none, the hash of the first download is pinned in the cache and every later download and cached read must match it.
 
 ## Platforms
