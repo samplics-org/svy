@@ -1331,10 +1331,16 @@ def domains_applied(sample: Sample) -> bool:
     return rule is not None and rule.domains == SingletonDomains.APPLY
 
 
-def require_singleton_rule(sample: Sample, *, where: str) -> None:
+def require_singleton_rule(
+    sample: Sample, *, where: str, use_replicates: str | None = None
+) -> None:
     """Before a Taylor variance: raise when the design has singleton strata and
     no rule for them (R's ``options(survey.lonely.psu = "fail")``), or when its
-    rule cannot be applied to the current data."""
+    rule cannot be applied to the current data.
+
+    ``use_replicates`` says how the caller's analysis gets a replication
+    variance instead; on a design with replicate weights the error leads with
+    it."""
     sync = getattr(sample, "_sync_parts", None)
     if sync is not None:
         sync()
@@ -1344,6 +1350,11 @@ def require_singleton_rule(sample: Sample, *, where: str) -> None:
     if singleton_config(sample) is None and getattr(sample, "_singletons", None):
         singles = _Engine(sample, _sync=False).detected()
         if singles:
+            rep_wgts = sample._design.rep_wgts
+            if rep_wgts is not None and use_replicates is not None:
+                raise SingletonError.for_taylor_on_replicates(
+                    singles, rep_wgts=rep_wgts, use_replicates=use_replicates, where=where
+                )
             raise SingletonError.from_singletons(singles, where=where)
 
 

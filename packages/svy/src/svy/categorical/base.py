@@ -206,7 +206,14 @@ class Categorical:
         svy's count CIs in R, pass ``df = degf(design)`` to ``confint()``.
         """
         alpha = validate_alpha(alpha, where="Sample.categorical.tabulate")
-        require_singleton_rule(self._sample, where="Sample.categorical.tabulate")
+        require_singleton_rule(
+            self._sample,
+            where="Sample.categorical.tabulate",
+            use_replicates=(
+                "tabulate has no replication variance yet; "
+                "sample.estimation.prop(..., method='replication') uses the replicates."
+            ),
+        )
         from scipy.stats import t as t_dist
 
         _raw = self._sample._data
@@ -602,7 +609,14 @@ class Categorical:
             When `by` is specified, returns a list of test results.
         """
         alpha = validate_alpha(alpha, where="Sample.categorical.ttest")
-        require_singleton_rule(self._sample, where="Sample.categorical.ttest")
+        require_singleton_rule(
+            self._sample,
+            where="Sample.categorical.ttest",
+            use_replicates=(
+                "ttest has no replication variance yet; "
+                "sample.estimation.mean(..., method='replication') uses the replicates."
+            ),
+        )
         # The population-size column has to survive prepare_data's projection
         # for the FPC to be computable below.
         pop_size = self._sample._design.pop_size
@@ -888,7 +902,11 @@ class Categorical:
                 param="method / score_fn",
                 hint="Use one or the other.",
             )
-        require_singleton_rule(self._sample, where="Sample.categorical.ranktest")
+        require_singleton_rule(
+            self._sample,
+            where="Sample.categorical.ranktest",
+            use_replicates="ranktest has no replication variance yet.",
+        )
         if score_fn is not None:
             return self._ranktest_custom_score(
                 y=y,

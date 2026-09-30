@@ -245,7 +245,11 @@ class Estimation:
         )
 
         # Fail-fast on unhandled singletons (Taylor variance path).
-        require_singleton_rule(self._sample, where="estimation")
+        require_singleton_rule(
+            self._sample,
+            where="estimation",
+            use_replicates="Pass method='replication' to use the replicates.",
+        )
         config = singleton_config(self._sample)
 
         strata_col = None
