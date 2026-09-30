@@ -30,6 +30,18 @@ pip install "svy[all]"      # adds rich terminal output and the online dataset c
 
 A base install makes no network calls: its example datasets are the subsets packaged with svy. The `report` extra adds rich terminal output, and `remote` adds downloads of the full example datasets from the svyLab catalog.
 
+**Platforms.** Python 3.11 or later. Prebuilt wheels for Linux (x86_64 and aarch64, glibc 2.28 or later), macOS (arm64 and x86_64) and Windows (x86_64), so no compiler or Rust toolchain is needed. Elsewhere pip builds from source, which needs Rust 1.91 or later.
+
+**Offline machines.** Download the wheels on a connected machine, copy the folder, and install from it. Match `--python-version` and `--platform` to the offline machine (for Windows, `--platform win_amd64`); on a machine of the same kind, leave both out.
+
+```bash
+pip download "svy[report]" --dest svy-wheels --only-binary=:all: --python-version 3.12 \
+  --platform manylinux_2_28_x86_64 --platform manylinux_2_17_x86_64 --platform manylinux2014_x86_64
+pip install --no-index --find-links svy-wheels "svy[report]"   # on the offline machine
+```
+
+**Security and data handling.** svy runs locally, sends no telemetry, and never sends your data anywhere. [SECURITY.md](SECURITY.md) covers network access, dependencies, how releases are built and published, and how to report a vulnerability.
+
 ## The whole workflow as one chain
 
 Every transformation returns a new `Sample`, so an entire workflow reads as one fluent pipeline. Load a bundled survey (runs offline), create an indicator, adjust the weights for nonresponse, trim extreme weights, and estimate the population literacy rate with a design-based standard error:
