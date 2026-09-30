@@ -6,6 +6,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+## [0.31.0] — 2026-09-30
+
 ### Added
 
 - **Replication variance for `tabulate`, `ttest` and `ranktest`: `method="replication"`.** They took only a Taylor variance, so a replicate design still needed its strata, PSUs and a singleton rule. With `method="replication"`, `tabulate` re-estimates cell proportions and totals with each replicate weight and computes the Rao-Scott F and chi-square from their replicate covariance. `ttest` re-estimates the mean, or the two group means and their difference. `ranktest` re-totals the full-sample influence values with each replicate, as R's `svyranktest` does. The df is the replicate df (`n_reps - 1` unless the design records one), minus 1 for the t-tests and minus k - 1 for the k-sample rank test; it does not shrink on a domain. `where=`, `by=`, paired t-tests and `score_fn` work as with Taylor. The singleton rule, FPC and calibration sweep do not apply, and no domain-singleton findings are reported. `method=None` is Taylor, as in estimation: replication is never picked implicitly. Checked against R survey 4.5 (`svymean`, `svytotal`, `svychisq`, `svyttest`, `svyranktest` on `svrepdesign`) for BRR, Fay-BRR, JK1, JKn, bootstrap and SDR.
@@ -1074,7 +1076,9 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.29.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.31.0...HEAD
+[0.31.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.31.0
+[0.30.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.30.0
 [0.29.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.29.0
 [0.28.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.28.0
 [0.27.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.27.0

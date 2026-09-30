@@ -1,6 +1,6 @@
 [project]
 name = "svy"
-version = "0.30.0"
+version = "0.31.0"
 description = "End-to-end surveys: design, sample, analyze, report."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -29,8 +29,8 @@ dependencies = [
   # explicitly so polars 2.0 cannot flip it underneath a survey estimate.
   "polars[pyarrow]>=1.36.1",
   "scipy>=1.13",
-  "svy-io>=0.4.0,<0.5.0",
-  "svy-rs>=0.17.1,<0.18.0",
+  "svy-io>=0.5.0,<0.6.0",
+  "svy-rs>=0.18.0,<0.19.0",
 ]
 
 [project.urls]

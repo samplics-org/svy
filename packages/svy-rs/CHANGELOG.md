@@ -4,6 +4,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-09-30
+
 ### Added
 
 - `tabulate_rs`, `ttest_rs` and `ranktest_rs` take `rep_weight_cols`, `rep_coefs`, `rep_df` and `variance_center` for a replication variance (`categorical::replicate`). Cell proportions, totals and means are re-estimated with each replicate; rank tests re-total the full-sample influence values. The stratum, PSU, FPC, singleton and calibration arguments are not used on that path. `ranktest_rs` takes `scores_given` (replication only) for scores computed by the caller, and its two-sample output has `level_0` and `level_1`. `rao_scott` takes the design df `nu` instead of the strata and PSU counts.
@@ -262,7 +264,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 Baseline for this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.17.1...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.18.0...HEAD
+[0.18.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.18.0
 [0.17.1]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.17.1
 [0.17.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.17.0
 [0.16.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.16.0
