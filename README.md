@@ -25,8 +25,10 @@ svy is a design-based, production-oriented library covering the full survey work
 
 ```bash
 pip install svy             # or: uv add svy
-pip install "svy[report]"   # adds rich terminal and HTML reporting
+pip install "svy[all]"      # adds rich terminal output and the online dataset catalog
 ```
+
+A base install makes no network calls: its example datasets are the subsets packaged with svy. The `report` extra adds rich terminal output, and `remote` adds downloads of the full example datasets from the svyLab catalog.
 
 ## The whole workflow as one chain
 

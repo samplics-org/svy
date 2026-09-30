@@ -34,6 +34,8 @@ or
 uv add svy
 ```
 
+A base install makes no network calls: its example datasets are the subsets packaged with svy. `svy[remote]` adds downloads of the full example datasets from the svyLab catalog; `svy[all]` installs both extras.
+
 ---
 
 ## Quick Start

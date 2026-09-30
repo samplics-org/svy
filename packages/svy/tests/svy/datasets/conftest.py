@@ -220,10 +220,10 @@ def isolate_module_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, routes
     monkeypatch.setattr(api, "API_URL", "https://svylab.test")
 
     # 5. Also patch _cache's httpx.Client usage for downloads.
-    #    ``monkeypatch.setattr(_cache.httpx, "Client", ...)`` would mutate the
+    #    ``monkeypatch.setattr(httpx, "Client", ...)`` would mutate the
     #    shared httpx module and bleed into api.py's client construction too.
-    #    Instead, rebind _cache.httpx to a shim namespace with only Client
-    #    overridden — api.py's ``httpx`` reference is unaffected.
+    #    Instead, make _cache's lazy loader return a shim namespace with only
+    #    Client overridden — api.py's ``httpx`` is unaffected.
     real_httpx_client = httpx.Client  # grab the real class BEFORE patching
 
     class _MockClientFactory:
@@ -246,7 +246,7 @@ def isolate_module_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, routes
         Client = _MockClientFactory
         Timeout = httpx.Timeout
 
-    monkeypatch.setattr(_cache, "httpx", _HttpxShim)
+    monkeypatch.setattr(_cache, "load_httpx", lambda **_: _HttpxShim)
 
     yield
 

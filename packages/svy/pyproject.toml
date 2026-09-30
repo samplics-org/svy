@@ -20,7 +20,6 @@ classifiers = [
 
 requires-python = ">=3.11"
 dependencies = [
-  "httpx>=0.28.1",
   "numpy>=2.0",
   # 0.21 is the first release where structs.replace runs __post_init__.
   # Below it, every clone silently skipped the normalization that keeps
@@ -46,13 +45,16 @@ svy-io = { workspace = true } # overrides the above during dev
 svy-rs = { workspace = true }
 
 [project.optional-dependencies]
-report = ["rich>=14.1", "great-tables>=0.18"]
-all = ["rich>=14.1", "great-tables>=0.18"]
+report = ["rich>=14.1"]
+# Online dataset catalog; a base install makes no network calls.
+remote = ["httpx>=0.28.1"]
+all = ["rich>=14.1", "httpx>=0.28.1"]
 
 [dependency-groups]
 dev = [
   "codecov",
   "coverage>=7.8.0",
+  "httpx>=0.28.1",
   "jupyterlab",
   "line_profiler",
   "pytest",

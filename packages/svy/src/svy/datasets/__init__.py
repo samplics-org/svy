@@ -37,7 +37,11 @@ Errors
 DatasetError                 -- all dataset/catalog/integrity failures;
                                 differentiate via ``.code``
                                 (CATALOG_UNREACHABLE, CATALOG_BAD_STATUS,
-                                 DATASET_NOT_FOUND, DATASET_SHA_MISMATCH).
+                                 REMOTE_UNAVAILABLE, DATASET_NOT_FOUND,
+                                 DATASET_SHA_MISMATCH).
+
+The online catalog needs the ``remote`` extra (``pip install "svy[remote]"``).
+Without it, the bundled subsets work and svy makes no network calls.
 
 ``DatasetError`` lives in ``svy.errors.dataset_errors`` alongside the rest
 of the error taxonomy and inherits from ``SvyError``.
@@ -68,7 +72,7 @@ def catalog(*, use_cache: bool = True, source: Source = "auto") -> DatasetCatalo
         ``"remote"`` queries the online catalog; ``"bundled"`` lists only the
         packaged subsets (offline); ``"auto"`` tries remote and falls back to
         the bundled list if the catalog is unreachable (or immediately when
-        ``SVYLAB_OFFLINE`` is set).
+        ``SVYLAB_OFFLINE`` is set, or silently without the ``remote`` extra).
     """
     if source == "bundled" or (source == "auto" and _offline_env()):
         return _bundled.catalog()
@@ -77,6 +81,8 @@ def catalog(*, use_cache: bool = True, source: Source = "auto") -> DatasetCatalo
     try:
         return api.catalog(use_cache=use_cache)
     except DatasetError as exc:
+        if exc.code == "REMOTE_UNAVAILABLE" and _bundled.slugs():
+            return _bundled.catalog()
         if exc.code in _CATALOG_UNREACHABLE and _bundled.slugs():
             warn_no_sample("Dataset catalog unreachable; listing bundled subsets only.")
             return _bundled.catalog()
@@ -89,7 +95,8 @@ def describe(slug: str, *, use_cache: bool = True, source: Source = "auto") -> D
 
     Honors the same ``source`` policy as :func:`catalog`.  Under ``"auto"``,
     bundled metadata is used only as a fallback when the catalog is
-    unreachable (or immediately when ``SVYLAB_OFFLINE`` is set).
+    unreachable (or immediately when ``SVYLAB_OFFLINE`` is set, or silently
+    without the ``remote`` extra).
     """
     if source == "bundled" or (source == "auto" and _offline_env()):
         ds = _bundled.describe(slug)
@@ -105,7 +112,7 @@ def describe(slug: str, *, use_cache: bool = True, source: Source = "auto") -> D
     try:
         return api.describe(slug, use_cache=use_cache)
     except DatasetError as exc:
-        if exc.code == "DATASET_NOT_FOUND":
+        if exc.code in {"DATASET_NOT_FOUND", "REMOTE_UNAVAILABLE"}:
             ds = _bundled.describe(slug)
             if ds is not None:
                 return ds

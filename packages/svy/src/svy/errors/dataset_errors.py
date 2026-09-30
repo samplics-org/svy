@@ -61,6 +61,30 @@ class DatasetError(SvyError):
             extra={"url": url, "status": status},
         )
 
+    @classmethod
+    def remote_unavailable(
+        cls,
+        *,
+        where: Optional[str],
+        hint: Optional[str] = (
+            'Install it with pip install "svy[remote]", or use source="bundled" '
+            "for the datasets packaged with svy."
+        ),
+        docs_url: Optional[str] = None,
+    ) -> "DatasetError":
+        return cls(
+            title="Online dataset catalog unavailable",
+            detail=(
+                "Reaching the online dataset catalog needs the optional 'httpx' "
+                "package, which is not installed."
+            ),
+            code="REMOTE_UNAVAILABLE",
+            where=where,
+            param="source",
+            hint=hint,
+            docs_url=docs_url,
+        )
+
     # ---- Dataset lookup ---------------------------------------------------
 
     @classmethod

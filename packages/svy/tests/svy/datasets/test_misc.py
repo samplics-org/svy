@@ -29,7 +29,7 @@ class TestApiLifecycle:
         monkeypatch.setattr(api, "_client", None)
         # Bypass HTTP/2 by using a transport-only Client.
         monkeypatch.setattr(
-            api.httpx,
+            httpx,
             "Client",
             lambda *a, **kw: real_client_cls(
                 transport=httpx.MockTransport(lambda req: httpx.Response(200, content=b"[]"))
@@ -43,7 +43,7 @@ class TestApiLifecycle:
         real_client_cls = httpx.Client
         monkeypatch.setattr(api, "_client", None)
         monkeypatch.setattr(
-            api.httpx,
+            httpx,
             "Client",
             lambda *a, **kw: real_client_cls(
                 transport=httpx.MockTransport(lambda req: httpx.Response(200, content=b"[]"))

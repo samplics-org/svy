@@ -34,14 +34,18 @@ import os
 import threading
 import time
 
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
-import httpx
 import msgspec
 
 from svy.datasets._cache import validate_slug
+from svy.datasets._http import load_httpx
 from svy.datasets.types import Dataset, DatasetCatalog
 from svy.errors.dataset_errors import DatasetError
+
+
+if TYPE_CHECKING:
+    import httpx
 
 
 log = logging.getLogger(__name__)
@@ -57,7 +61,7 @@ _REGISTRY_PATH: Final[str] = "/api/data/examples/registry"
 _DOWNLOAD_PATH_TMPL: Final[str] = "/api/data/examples/by-name/{slug}/download"
 
 # Separate, short timeouts for metadata (unlike parquet downloads which are long).
-_API_TIMEOUT: Final[httpx.Timeout] = httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0)
+_API_TIMEOUT: Final[dict[str, float]] = {"connect": 5.0, "read": 15.0, "write": 10.0, "pool": 5.0}
 
 # Default TTL for in-process caches.
 _LIST_TTL_SECONDS: Final[float] = 300.0  # 5 min
@@ -73,15 +77,17 @@ _client_lock = threading.Lock()
 def _get_client() -> httpx.Client:
     """Return a process-wide shared ``httpx.Client``.
 
-    Lazily initialized so importing this module doesn't open a connection.
+    Lazily initialized so importing this module doesn't open a connection
+    or require ``httpx``.
     """
     global _client
     if _client is None:
+        httpx = load_httpx(where="datasets.api._get_client")
         with _client_lock:
             if _client is None:
                 _client = httpx.Client(
                     follow_redirects=True,
-                    timeout=_API_TIMEOUT,
+                    timeout=httpx.Timeout(**_API_TIMEOUT),
                     headers={"User-Agent": "svy-datasets-client"},
                 )
     return _client
@@ -101,6 +107,7 @@ def close() -> None:
 
 def _fetch(path: str) -> bytes:
     """Issue a GET against the configured catalog and return raw bytes."""
+    httpx = load_httpx(where="datasets.api._fetch")
     url = f"{API_URL}/{path.lstrip('/')}"
     try:
         r = _get_client().get(url)

@@ -28,8 +28,7 @@ from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit
 
-import httpx
-
+from svy.datasets._http import load_httpx
 from svy.errors.dataset_errors import DatasetError
 
 
@@ -45,9 +44,12 @@ CACHE_DIR: Final[Path] = Path(
 _DOWNLOAD_CHUNK: Final[int] = 1024 * 1024  # 1 MB
 _HASH_CHUNK: Final[int] = 1024 * 1024  # 1 MB
 
-_DOWNLOAD_TIMEOUT: Final[httpx.Timeout] = httpx.Timeout(
-    connect=10.0, read=300.0, write=30.0, pool=10.0
-)
+_DOWNLOAD_TIMEOUT: Final[dict[str, float]] = {
+    "connect": 10.0,
+    "read": 300.0,
+    "write": 30.0,
+    "pool": 10.0,
+}
 
 # Per-slug download locks: ensures two threads asking for the same dataset
 # don't both download it.  One downloads; the other waits and reuses.
@@ -229,6 +231,33 @@ def ensure_cached(
         return str(local_path)
 
 
+def latest_cached(slug: str) -> Path | None:
+    """
+    Return the most recently downloaded cached copy of ``slug``, or None.
+
+    Used by ``source="auto"`` to load a full dataset without touching the
+    network.  Any version qualifies; a copy whose TOFU pin no longer matches
+    is skipped.  Never raises for an unusable slug: it simply has no cache.
+    """
+    if not _SLUG_RE.fullmatch(slug) or ".." in slug or not CACHE_DIR.is_dir():
+        return None
+    candidates = sorted(
+        CACHE_DIR.glob(f"{slug}@*.parquet"),
+        key=lambda f: f.stat().st_mtime,
+        reverse=True,
+    )
+    for path in candidates:
+        pin = _read_pin(path)
+        if not pin:
+            return path
+        key = (str(path), pin)
+        if key in _verified or _sha256_of(path) == pin:
+            _mark_verified(key)
+            return path
+        log.warning("Cached file %s failed its pinned hash check; ignoring it.", path)
+    return None
+
+
 def clear(slug: str | None = None) -> int:
     """
     Remove cached files (parquet + TOFU hash pins).  If ``slug`` is given,
@@ -283,6 +312,7 @@ def _download(*, url: str, dest: Path, sha256: str, slug: str) -> str:
     plain http via a redirect.
     """
     _WHERE = "datasets._cache._download"
+    httpx = load_httpx(where=_WHERE)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     log.info("Downloading dataset %r -> %s", slug, dest)
 
@@ -296,7 +326,9 @@ def _download(*, url: str, dest: Path, sha256: str, slug: str) -> str:
     h = hashlib.sha256()
 
     try:
-        with httpx.Client(timeout=_DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
+        with httpx.Client(
+            timeout=httpx.Timeout(**_DOWNLOAD_TIMEOUT), follow_redirects=True
+        ) as client:
             with client.stream("GET", url) as r:
                 r.raise_for_status()
                 _require_https(str(r.url), slug=slug, where=_WHERE)
