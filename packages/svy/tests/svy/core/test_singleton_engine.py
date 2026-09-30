@@ -574,8 +574,16 @@ class TestCollapseNext:
         assert singletons_resolved_for_variance(result)
 
     def test_collapse_next_with_order_by(self, sample):
-        result = _declare(sample, "collapse", using="next", order_by="income")
+        # region is constant within each stratum, so it can order them.
+        result = _declare(sample, "collapse", using="next", order_by="region")
         assert singletons_resolved_for_variance(result)
+
+    def test_collapse_order_by_a_column_varying_within_strata_raises(self, sample):
+        # income differs between rows of a stratum: it gives a stratum no one place.
+        result = _declare(sample, "collapse", using="next", order_by="income")
+        with pytest.raises(SingletonError) as err:
+            _resolve(result)
+        assert err.value.code == "SINGLETON_ORDER_BY_INVALID"
 
 
 class TestCollapsePrevious:

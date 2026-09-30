@@ -42,6 +42,21 @@ _VAR_EXCLUDE_COL = SVY_VAR_EXCLUDE
 _VAR_IS_SINGLETON_COL = SVY_VAR_IS_SINGLETON  # For CENTER method
 _VAR_COLS = (_VAR_STRATUM_COL, _VAR_PSU_COL, _VAR_EXCLUDE_COL, _VAR_IS_SINGLETON_COL)
 
+#: For the collapse options read per stratum: error code, what the column is
+#: for, and an example of a column that fits.
+_STRATUM_COLUMN_ROLES = {
+    "within": (
+        "SINGLETON_WITHIN_INVALID",
+        "say which strata a singleton may join",
+        "the region the stratum lies in",
+    ),
+    "order_by": (
+        "SINGLETON_ORDER_BY_INVALID",
+        "give the stratum one place in the order",
+        "a stratum code or its position along a frame",
+    ),
+}
+
 # Must match Sample._concatenate_cols, which builds the internal stratum key.
 _KEY_SEP = "__by__"
 _KEY_NULL = "__Null__"
@@ -314,7 +329,7 @@ class _Engine:
         # Add order_by columns for sort values
         for col in order_cols:
             if col in df.columns:
-                agg_exprs.append(pl.col(col).first().alias(f"_order_{col}"))
+                agg_exprs.append(pl.col(col).drop_nulls().first().alias(f"_order_{col}"))
 
         agg = cast(
             pl.DataFrame, df.lazy().group_by(effective_stratum_col).agg(agg_exprs).collect()
@@ -379,50 +394,53 @@ class _Engine:
     ) -> dict[str, tuple[Any, ...]]:
         """Each stratum's values of the ``within`` columns, which must be
         constant within a stratum."""
-        missing = [c for c in within_cols if c not in df.columns]
+        return self._stratum_values(df, stratum_col, within_cols, param="within")
+
+    def _stratum_values(
+        self, df: pl.DataFrame, stratum_col: str, cols: list[str], *, param: str
+    ) -> dict[str, tuple[Any, ...]]:
+        """Each stratum's values of ``cols`` (``within`` or ``order_by``), which
+        must be in the data and constant within each stratum; missing values
+        are ignored."""
+        code, purpose, example = _STRATUM_COLUMN_ROLES[param]
+        missing = [c for c in cols if c not in df.columns]
         if missing:
             raise SingletonError(
-                title="within names columns not in the data",
-                detail=f"collapse within={within_cols}: {missing} not in the data.",
-                code="SINGLETON_WITHIN_INVALID",
+                title=f"{param} names columns not in the data",
+                detail=f"collapse {param}={cols}: {missing} not in the data.",
+                code=code,
                 where="svy.Singleton",
-                param="within",
+                param=param,
                 got=missing,
-                hint="within names columns constant within each stratum, e.g. a region.",
+                hint=f"{param} names columns constant within each stratum, e.g. {example}.",
             )
-        # A missing value says nothing about where a stratum lies.
+        # A missing value says nothing about the stratum.
         grouped = df.group_by(stratum_col).agg(
-            *[
-                pl.col(c).drop_nulls().n_unique().alias(f"__n_{i}__")
-                for i, c in enumerate(within_cols)
-            ],
-            *[pl.col(c).drop_nulls().first().alias(c) for c in within_cols],
+            *[pl.col(c).drop_nulls().n_unique().alias(f"__n_{i}__") for i, c in enumerate(cols)],
+            *[pl.col(c).drop_nulls().first().alias(c) for c in cols],
         )
         varying = [
             (c, grouped.filter(pl.col(f"__n_{i}__") > 1).get_column(stratum_col).to_list())
-            for i, c in enumerate(within_cols)
+            for i, c in enumerate(cols)
         ]
         varying = [(c, keys) for c, keys in varying if keys]
         if varying:
             col, keys = varying[0]
             shown = self._key_values(sorted(map(str, keys))[:3])
             raise SingletonError(
-                title="within column varies within a stratum",
+                title=f"{param} column varies within a stratum",
                 detail=(
-                    f"collapse within={col!r}: {col!r} takes several values in "
-                    f"{len(keys)} strata (e.g. {_shown(shown)}), so it does "
-                    "not say which strata a singleton may join."
+                    f"collapse {param}={col!r}: {col!r} takes several values in "
+                    f"{len(keys)} strata (e.g. {_shown(shown)}), so it does not {purpose}."
                 ),
-                code="SINGLETON_WITHIN_INVALID",
+                code=code,
                 where="svy.Singleton",
-                param="within",
+                param=param,
                 got=col,
-                hint="Use a column constant within each stratum, e.g. the region the "
-                "stratum lies in.",
+                hint=f"Use a column constant within each stratum, e.g. {example}.",
             )
         return {
-            str(row[0]): tuple(row[1:])
-            for row in grouped.select(stratum_col, *within_cols).iter_rows()
+            str(row[0]): tuple(row[1:]) for row in grouped.select(stratum_col, *cols).iter_rows()
         }
 
     def _select_target(
@@ -1596,6 +1614,11 @@ def _resolve_collapse(
     from svy.core.warnings import Severity
 
     using: Any = rule.using
+    if rule.order_by:
+        stratum_col = cast(str, facet._internal_cols()[0])
+        facet._stratum_values(
+            facet._narrow_data(), stratum_col, list(rule.order_by), param="order_by"
+        )
     if isinstance(using, tuple):
         using = _checked_mapping(sample, facet, using, singles, within=rule.within)
     new_data, _, result = facet._apply_collapse(

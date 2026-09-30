@@ -226,6 +226,61 @@ class TestWithin:
 # ---------------------------------------------------------------------------
 
 
+class TestOrderBy:
+    RANK = {"a": 5, "b": 1, "c": 3, "d": 2, "e": 4}  # order: b, d, c, e, a
+
+    def _ranked(self, **overrides) -> pl.DataFrame:
+        return DATA.with_columns(
+            pl.col("st").replace_strict({**self.RANK, **overrides}).alias("rank")
+        )
+
+    def test_a_non_stratum_column_orders_the_strata(self):
+        by_key = sample(self._ranked(), Singleton("collapse", using="next"))
+        by_rank = sample(self._ranked(), Singleton("collapse", using="next", order_by="rank"))
+        assert resolved(by_key) == {"d": "a", "e": "a"}
+        assert resolved(by_rank) == {"d": "c", "e": "a"}
+
+    def test_descending(self):
+        s = sample(
+            self._ranked(), Singleton("collapse", using="next", order_by="rank", descending=True)
+        )
+        assert resolved(s) == {"d": "b", "e": "c"}
+
+    def test_nulls_are_ignored(self):
+        holey = self._ranked().with_columns(
+            pl.when(pl.col("id").is_in([1, 20])).then(None).otherwise("rank").alias("rank")
+        )
+        s = sample(holey, Singleton("collapse", using="next", order_by="rank"))
+        assert resolved(s) == {"d": "c", "e": "a"}
+
+    def test_a_column_that_varies_within_a_stratum_raises(self):
+        varies = self._ranked().with_columns(
+            pl.when(pl.col("psu") == "b1").then(9).otherwise("rank").alias("rank")
+        )
+        s = sample(varies, Singleton("collapse", using="next", order_by="rank"))
+        err = problem(s)
+        assert err.code == "SINGLETON_ORDER_BY_INVALID"
+        assert err.param == "order_by"
+        assert err.detail == (
+            "collapse order_by='rank': 'rank' takes several values in 1 strata (e.g. 'b'), "
+            "so it does not give the stratum one place in the order."
+        )
+        # The facts stay readable: the rule is unresolved, the singletons listed.
+        assert s.singletons["handled"].to_list() == [None, None]
+
+    def test_it_is_checked_for_every_strategy(self):
+        varies = self._ranked().with_columns(
+            pl.when(pl.col("psu") == "b1").then(9).otherwise("rank").alias("rank")
+        )
+        for using in ("smallest", "largest", "previous", {"d": "a", "e": "c"}):
+            rule = Singleton("collapse", using=using, order_by="rank")
+            assert problem(sample(varies, rule)).code == "SINGLETON_ORDER_BY_INVALID"
+
+    def test_a_missing_column_is_named(self):
+        with pytest.raises(ValueError, match="within/order_by read nope"):
+            sample(singleton=Singleton("collapse", order_by="nope"))
+
+
 class TestMessages:
     def _floats(self, rule) -> svy.Sample:
         return sample(singleton=rule, stratum="code")
