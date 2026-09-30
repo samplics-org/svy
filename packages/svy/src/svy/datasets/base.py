@@ -67,9 +67,12 @@ def _resolve_source(name: str, *, source: Source, force_download: bool) -> pl.La
 
     - ``"bundled"``: read the packaged subset; never touch the network.
     - ``"remote"``: require the online catalog; error if unreachable.
-    - ``"auto"``: bundled-first when ``SVYLAB_OFFLINE`` is set; otherwise try
-      remote and, if the catalog/download is unreachable, fall back to the
-      bundled subset (with a warning) when one exists.
+    - ``"auto"``: bundled-first when ``SVYLAB_OFFLINE`` is set.  Otherwise a
+      full copy already in the local cache is read without touching the
+      network; failing that, try remote and, if the catalog/download is
+      unreachable, fall back to the bundled subset (with a warning) when one
+      exists.  Without ``httpx`` (no ``remote`` extra) the bundled subset is
+      the expected result, so that fallback is silent.
     """
     if source == "auto" and _offline_env():
         source = "bundled"
@@ -86,6 +89,11 @@ def _resolve_source(name: str, *, source: Source, force_download: bool) -> pl.La
     if source == "remote":
         return _scan_remote(name, force_download=force_download)
 
+    if not force_download:
+        cached = _cache.latest_cached(name)
+        if cached is not None:
+            return pl.scan_parquet(cached)
+
     # auto: remote, then bundled fallback on network/catalog failure. A slug
     # the catalog does not know but the wheel carries is bundled-only (the
     # synthetic panel): the bundled file IS the dataset, no warning.
@@ -93,6 +101,9 @@ def _resolve_source(name: str, *, source: Source, force_download: bool) -> pl.La
         return _scan_remote(name, force_download=force_download)
     except DatasetError as exc:
         if exc.code == "DATASET_NOT_FOUND" and _bundled.has(name):
+            return _bundled.read_lazy(name)
+        # force_download asks for a download, so it is not silently swapped.
+        if exc.code == "REMOTE_UNAVAILABLE" and not force_download and _bundled.has(name):
             return _bundled.read_lazy(name)
         if exc.code in _FALLBACK_CODES and _bundled.has(name):
             b = _bundled.describe(name)
@@ -190,15 +201,19 @@ def load(
         Where to load the data from.
 
         - ``"remote"``  — the full online dataset; errors if the catalog is
-          unreachable.
+          unreachable. Needs the ``remote`` extra
+          (``pip install "svy[remote]"``).
         - ``"bundled"`` — the small subset shipped inside the package; never
           touches the network. Deterministic and offline-safe (used by docs
           and CI). Note this is a *reduced* dataset, so results differ from
           the full data.
-        - ``"auto"``    — remote first, falling back to the bundled subset
-          (with a warning) if the catalog/download is unreachable. Set the
-          ``SVYLAB_OFFLINE`` environment variable to make ``"auto"`` prefer
-          the bundled subset without any network attempt.
+        - ``"auto"``    — a full copy already in the local cache if there is
+          one (no network access); otherwise remote, falling back to the
+          bundled subset (with a warning) if the catalog/download is
+          unreachable. Without the ``remote`` extra it reads the bundled
+          subset silently. Set the ``SVYLAB_OFFLINE`` environment variable
+          to make ``"auto"`` prefer the bundled subset without any network
+          attempt.
 
     Returns
     -------
