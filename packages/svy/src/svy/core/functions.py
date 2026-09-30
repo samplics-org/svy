@@ -364,6 +364,36 @@ def _resolve_case_id(samples: Sequence[Sample], kind: str, case_id: str | None) 
     return case_id
 
 
+def _resolve_singleton(samples: Sequence[Sample], kind: str):
+    """The singleton rule of the inputs, carried when they all declare the
+    same one (a rule is intent, like R's global lonely.psu option)."""
+    rules = [s._design.singleton for s in samples]
+    if all(r is None for r in rules):
+        return None
+    if any(r != rules[0] for r in rules):
+        shown = ", ".join(f"sample {i}: {r!r}" for i, r in enumerate(rules, start=1))
+        raise MethodError.not_applicable(
+            where=_CTX,
+            method="combine_samples",
+            param="singleton",
+            reason=f"the samples declare different singleton rules ({shown})",
+            hint="Declare the same rule on every sample, or none and declare it on the "
+            "result: combined.update_design(singleton=svy.Singleton(...)).",
+        )
+    rule = rules[0]
+    if rule.mapping is not None and kind != "panel":
+        raise MethodError.not_applicable(
+            where=_CTX,
+            method="combine_samples",
+            param="singleton",
+            reason="the samples' collapse rule names strata by value, and the combined "
+            "strata are (wave, stratum) pairs",
+            hint="Declare the rule on the result: combined.update_design(singleton="
+            'svy.Singleton("collapse", using={(wave, stratum): (wave, target), ...})).',
+        )
+    return rule
+
+
 def _resolve_rep_wgts(samples: Sequence[Sample], kind: str):
     """Replicate weights carried by the inputs: rejected, except producer
     longitudinal replicates identical on every wave of a panel."""
@@ -660,6 +690,7 @@ def combine_samples(
 
     case_id = _resolve_case_id(samples, kind, case_id)
     rep_wgts = _resolve_rep_wgts(samples, kind)
+    singleton = _resolve_singleton(samples, kind)
 
     wr_values = {s._design.wr for s in samples}
     if len(wr_values) > 1:
@@ -871,6 +902,7 @@ def combine_samples(
         pop_size=first.pop_size,
         wr=first.wr,
         rep_wgts=rep_wgts,
+        singleton=singleton,
     )
 
     combined = Sample(data=stacked, design=design)

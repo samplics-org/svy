@@ -2,6 +2,7 @@
 import contextlib
 import os
 import shutil
+import sys
 import tempfile
 import warnings
 import zipfile
@@ -108,6 +109,25 @@ def _as_path(obj):
 
 # ---------------- zip archives ----------------
 
+_PKG_DIR = os.path.dirname(os.path.abspath(__file__)) + os.sep
+
+
+def _caller_stacklevel() -> int:
+    """``stacklevel`` naming the first frame outside svy_io, for ``warnings.warn``.
+
+    Readers reach the warning through different depths (directly, or via the
+    ``_as_data_path`` context manager and contextlib), so a fixed level would
+    point into library code for some of them.
+    """
+    level, frame = 1, sys._getframe(1)
+    while frame is not None and (
+        frame.f_code.co_filename.startswith(_PKG_DIR)
+        or frame.f_code.co_filename == contextlib.__file__
+    ):
+        level += 1
+        frame = frame.f_back
+    return level
+
 
 def _pick_zip_member(names: list[str], exts: tuple[str, ...]) -> str | None:
     """First member matching ``exts``, tried in order; warns when several match."""
@@ -119,7 +139,7 @@ def _pick_zip_member(names: list[str], exts: tuple[str, ...]) -> str | None:
                     f"Zip file contains {len(matches)} {ext} files. "
                     f"Using the first one: {matches[0]}",
                     UserWarning,
-                    stacklevel=4,
+                    stacklevel=_caller_stacklevel(),
                 )
             return matches[0]
     return None

@@ -2,8 +2,8 @@
 """
 Singleton handling at the ESTIMATION level.
 
-Singletons (strata with a single PSU) are chosen/handled at the *sample* level
-(``sample.singleton.*``), but they only become a problem when a variance is
+Singletons (strata with a single PSU) are handled by the rule declared on the
+design (``svy.Singleton``), but they only become a problem when a variance is
 actually computed. Estimation is therefore the decision point: when it hits an
 unhandled singleton it must either adopt a chosen method or fail.
 
@@ -28,6 +28,21 @@ import svy
 
 from svy.core.enumerations import PopParam
 from svy.errors.singleton_errors import SingletonError
+
+
+def _result(sample):
+    """What the design's singleton rule did to the current data (internal)."""
+    sample._sync_parts()
+    return sample._singleton_result
+
+
+def _declare(sample, method, **kw):
+    """A fork of ``sample`` with the singleton rule declared on its design."""
+    from svy.core.design import Singleton as _Rule
+
+    new = sample._fork()
+    new.update_design(singleton=_Rule(method, **kw))
+    return new
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -133,7 +148,7 @@ def assert_valid_estimate(result):
 @pytest.mark.parametrize("method", ALL_METHODS)
 def test_default_unhandled_singletons_raise(singleton_sample, method):
     """With singletons present and no strategy chosen, estimation must raise."""
-    assert singleton_sample.singleton.exists
+    assert singleton_sample.n_singletons > 0
     with pytest.raises(SingletonError):
         estimate(singleton_sample, method)
 
@@ -152,8 +167,8 @@ def test_structural_strategies_allow_estimation(singleton_sample, method, strate
     True; "handled" is signalled by the attached config (``last_result``), which
     is exactly the predicate the fail-by-default check keys off.
     """
-    handled = getattr(singleton_sample.singleton, strategy)()
-    assert handled.singleton.last_result is not None
+    handled = _declare(singleton_sample, strategy)
+    assert _result(handled) is not None
     assert_valid_estimate(estimate(handled, method))
 
 
@@ -163,17 +178,17 @@ def test_structural_strategies_allow_estimation(singleton_sample, method, strate
 
 
 @pytest.mark.parametrize("method", ALL_METHODS)
-@pytest.mark.parametrize("strategy", ["skip", "certainty", "center"])
+@pytest.mark.parametrize("strategy", ["skip", "self_representing", "center"])
 def test_variance_config_strategies_allow_estimation(singleton_sample, method, strategy):
-    """skip/certainty/center attach a config the variance engine consumes."""
-    handled = getattr(singleton_sample.singleton, strategy)()
+    """skip/self_representing/center attach a config the variance engine consumes."""
+    handled = _declare(singleton_sample, strategy)
     assert_valid_estimate(estimate(handled, method))
 
 
 @pytest.mark.parametrize("method", ["mean", "total"])
 def test_scale_allows_estimation(singleton_sample, method):
     """scale (R's 'average') excludes singletons then inflates the variance."""
-    handled = singleton_sample.singleton.scale()
+    handled = _declare(singleton_sample, "scale")
     assert_valid_estimate(estimate(handled, method))
 
 
@@ -185,18 +200,8 @@ def test_scale_allows_estimation(singleton_sample, method):
 @pytest.mark.parametrize("method", ALL_METHODS)
 def test_clean_design_needs_no_handling(clean_sample, method):
     """A design without singletons estimates cleanly and never raises."""
-    assert not clean_sample.singleton.exists
+    assert not (clean_sample.n_singletons > 0)
     assert_valid_estimate(estimate(clean_sample, method))
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SCENARIO 5: explicit raise_error() short-circuits before estimation
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-def test_explicit_raise_error(singleton_sample):
-    with pytest.raises(SingletonError):
-        singleton_sample.singleton.raise_error()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -211,7 +216,7 @@ SCALE_METHODS = ["mean", "total", "prop", "ratio"]
 
 def _scale_sample(df):
     design = svy.Design(case_id="id", stratum="stratum", psu="psu", wgt="weight")
-    return svy.Sample(data=df, design=design).singleton.scale()
+    return _declare(svy.Sample(data=df, design=design), "scale")
 
 
 @pytest.mark.parametrize("method", SCALE_METHODS)
@@ -241,8 +246,8 @@ def test_scale_point_estimate_respects_by_and_where(method):
     )
     design = svy.Design(case_id="id", stratum="stratum", psu="psu", wgt="weight")
     sample = svy.Sample(data=df, design=design)
-    scaled = sample.singleton.scale().estimation
-    centered = sample.singleton.center().estimation
+    scaled = _declare(sample, "scale").estimation
+    centered = _declare(sample, "center").estimation
 
     by_scaled = getattr(scaled, method)("income", by="grp").estimates
     by_centered = getattr(centered, method)("income", by="grp").estimates

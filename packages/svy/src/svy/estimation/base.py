@@ -416,7 +416,7 @@ class Estimation:
 
     def _singleton_variance(self, prep: PreparedData) -> tuple[str | None, list[SvyWarning]]:
         """The kernels' ``singleton_method`` and the domain-singleton findings
-        of this call (raising under ``domains="error"``).
+        of this call (raising under ``on_domain_singletons="error"``).
 
         Under ``domains="apply"`` the kernels treat a stratum with one PSU in
         the domain as a singleton: centred with ``center``; with ``scale`` left
@@ -450,14 +450,14 @@ class Estimation:
         return None
 
     def _scale_singletons_active(self) -> bool:
-        """``True`` when the sample was marked with ``singleton.scale()``."""
+        """``True`` when the design declares ``svy.Singleton("scale")``."""
         config = self._get_polars_design_info().get("singleton_config")
         return bool(config) and self._get_enum_value(config, "method").lower() == "scale"
 
     def _singleton_scale_factors(
         self, result_df: pl.DataFrame, prep: PreparedData | None
     ) -> np.ndarray:
-        """Per-row variance inflation ``nstrat/nokstrat`` under ``singleton.scale()``.
+        """Per-row variance inflation ``nstrat/nokstrat`` under ``svy.Singleton("scale")``.
 
         R's ``lonely.psu="average"`` (``survey:::onestage``) drops the singleton
         strata's contributions and multiplies the summed variance matrix by
@@ -543,7 +543,7 @@ class Estimation:
         *,
         prep: PreparedData | None = None,
     ) -> tuple[pl.DataFrame, list[float] | None]:
-        """Inflate ``var``/``se``/``deff`` and ``cov_flat`` under ``singleton.scale()``.
+        """Inflate ``var``/``se``/``deff`` and ``cov_flat`` under ``svy.Singleton("scale")``.
 
         Each result row gets the factor of the domain it describes; the
         covariance between rows ``i`` and ``j`` is scaled by ``sqrt(f_i f_j)``

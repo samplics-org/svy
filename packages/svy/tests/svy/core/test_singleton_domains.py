@@ -6,6 +6,10 @@ The fixture (see test_singleton_adjustments.center_domain): strata 1-6 hold
 (its first row has y = 0) and in PSU 2 for ``g2``; ``reg == 1`` is PSU 1 of
 every stratum.
 
+``svy.Singleton(..., domains=...)`` picks the variance formula ("standard" or
+"apply"), ``on_domain_singletons=`` what svy reports ("ignore", the default,
+records the finding; "warn" prints a note; "error" raises).
+
 R golden values: options(survey.adjust.domain.lonely = TRUE) with
 survey.lonely.psu = "adjust" (center) and "average" (scale), survey 4.5.
 """
@@ -22,12 +26,27 @@ import pytest
 
 import svy
 
-from svy.core.design import SingletonSpec
+from svy.core.design import Singleton
 from svy.core.singleton import find_domain_singletons
 from svy.core.warnings import Severity
 from svy.errors import MethodError
 from svy.errors.singleton_errors import SingletonError
 from svy.serialize import serialize, to_design
+
+
+def _result(sample):
+    """What the design's singleton rule did to the current data (internal)."""
+    sample._sync_parts()
+    return sample._singleton_result
+
+
+def _declare(sample, method, **kw):
+    """A fork of ``sample`` with the singleton rule declared on its design."""
+    from svy.core.design import Singleton as _Rule
+
+    new = sample._fork()
+    new.update_design(singleton=_Rule(method, **kw))
+    return new
 
 
 DATA = Path(__file__).resolve().parents[2] / "test_data" / "singleton_center_domain_29092026.csv"
@@ -60,123 +79,131 @@ def by_se(result):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SingletonSpec.domains
+# svy.Singleton(domains=..., on_domain_singletons=...)
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-class TestSpec:
-    def test_default_is_warn(self):
-        assert SingletonSpec.center([5]).domains == "warn"
+class TestRule:
+    def test_defaults(self):
+        rule = Singleton("center")
+        assert (rule.domains, rule.on_domain_singletons) == ("standard", "ignore")
 
     @pytest.mark.parametrize("method", ["center", "scale"])
     def test_apply_on_center_and_scale(self, method):
-        spec = getattr(SingletonSpec, method)([5], domains="apply")
-        assert spec.domains == "apply"
+        assert Singleton(method, domains="apply").domains == "apply"
 
-    @pytest.mark.parametrize("method", ["certainty", "skip", "pool"])
+    @pytest.mark.parametrize("method", ["self_representing", "skip", "pool", "collapse"])
     def test_apply_refused_elsewhere(self, method):
-        with pytest.raises(ValueError, match="center and scale define"):
-            getattr(SingletonSpec, method)([5], domains="apply")
-        with pytest.raises(ValueError, match="center and scale define"):
-            SingletonSpec.collapse({5: 1}, domains="apply")
+        with pytest.raises(MethodError, match="center and scale define") as err:
+            Singleton(method, domains="apply")
+        assert err.value.hint == 'svy.Singleton("center", domains="apply")'
 
     def test_unknown_domains(self):
-        with pytest.raises(ValueError, match="Unknown domains"):
-            SingletonSpec.center([5], domains="adjust")
+        with pytest.raises(MethodError, match="domains") as err:
+            Singleton("center", domains="adjust")
+        assert err.value.code == "INVALID_CHOICE"
 
-    @pytest.mark.parametrize("domains", ["ignore", "error", "apply"])
-    def test_no_strata_only_with_a_domains_setting(self, domains):
-        assert SingletonSpec.center(domains=domains).strata == ()
-        assert SingletonSpec.collapse(domains="error").mapping == ()
-        with pytest.raises(ValueError, match="non-empty strata"):
-            SingletonSpec.center()
-        with pytest.raises(ValueError, match="non-empty mapping"):
-            SingletonSpec.collapse()
+    @pytest.mark.parametrize("value", ["warn", "ignore", "error"])
+    def test_former_domains_values_point_to_on_domain_singletons(self, value):
+        with pytest.raises(MethodError, match="on_domain_singletons") as err:
+            Singleton("scale", domains=value)
+        assert err.value.hint == f'svy.Singleton("scale", on_domain_singletons="{value}")'
 
-    def test_repr_and_code_name_domains_only_when_set(self):
-        assert repr(SingletonSpec.center([5])) == "SingletonSpec.center([5])"
-        assert repr(SingletonSpec.scale([5], domains="apply")) == (
-            "SingletonSpec.scale([5], domains='apply')"
-        )
-        assert SingletonSpec.collapse({5: 1}, domains="ignore")._to_code() == (
-            "svy.SingletonSpec.collapse({5: 1}, domains='ignore')"
-        )
-        assert SingletonSpec.pool([5, 6], name="p", domains="error")._to_code() == (
-            "svy.SingletonSpec.pool([5, 6], name='p', domains='error')"
+    def test_unknown_on_domain_singletons(self):
+        with pytest.raises(MethodError, match="on_domain_singletons"):
+            Singleton("center", on_domain_singletons="yes")
+
+    def test_repr_and_code_name_settings_only_when_set(self):
+        assert repr(Singleton("center")) == "Singleton('center')"
+        assert repr(Singleton("scale", domains="apply")) == "Singleton('scale', domains='apply')"
+        assert Singleton("skip", on_domain_singletons="warn")._to_code() == (
+            "svy.Singleton('skip', on_domain_singletons='warn')"
         )
 
 
 class TestSerialization:
     def test_round_trip(self, data, design):
-        sample = svy.Sample(data, design).singleton.center(domains="apply")
+        rule = Singleton("center", domains="apply", on_domain_singletons="error")
+        sample = svy.Sample(data, design).update_design(singleton=rule)
         back = to_design(serialize(sample.design))
-        assert back.singleton == sample.design.singleton
+        assert back.singleton == rule
 
-    def test_default_is_not_saved(self, data, design):
-        saved = msgspec.to_builtins(serialize(svy.Sample(data, design).singleton.skip().design))
-        assert "domains" not in saved["singleton"]
-
-    def test_payload_without_domains_reads_as_warn(self, data, design):
-        saved = msgspec.to_builtins(serialize(svy.Sample(data, design).singleton.skip().design))
-        payload = msgspec.json.encode(saved)
-        back = to_design(msgspec.json.decode(payload, type=type(serialize(design))))
-        assert back.singleton.domains == "warn"
+    def test_defaults_are_not_saved(self, data, design):
+        saved = msgspec.to_builtins(serialize(_declare(svy.Sample(data, design), "skip").design))
+        assert saved["singleton"] == {"method": "skip"}
 
     def test_to_code_rebuilds_the_rule(self, no_singletons):
-        sample = no_singletons.singleton.center(domains="apply")
-        assert "domains='apply'" in sample.to_code()
+        sample = _declare(no_singletons, "center", domains="apply")
+        assert "singleton=svy.Singleton('center', domains='apply')" in sample.to_code()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# sample.singleton.*(domains=...)
+# The rule on a sample with or without singletons
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-class TestFacet:
+class TestDeclared:
     @pytest.mark.parametrize(
-        "method", ["certainty", "skip", "collapse", "pool", "scale", "center"]
+        "method", ["self_representing", "skip", "collapse", "pool", "scale", "center"]
     )
-    def test_default_call_without_singletons_is_a_no_op(self, no_singletons, method):
-        assert getattr(no_singletons.singleton, method)() is no_singletons
-
-    @pytest.mark.parametrize(
-        "method", ["certainty", "skip", "collapse", "pool", "scale", "center"]
-    )
-    @pytest.mark.parametrize("domains", ["ignore", "error"])
-    def test_setting_is_recorded_without_singletons(self, no_singletons, method, domains):
-        sample = getattr(no_singletons.singleton, method)(domains=domains)
-        spec = sample.design.singleton
-        assert (spec.method, spec.domains) == (method, domains)
-        assert spec.handled == ()
+    @pytest.mark.parametrize("on", ["ignore", "warn", "error"])
+    def test_kept_without_singletons(self, no_singletons, method, on):
+        sample = _declare(no_singletons, method, on_domain_singletons=on)
+        assert sample.design.singleton == Singleton(method, on_domain_singletons=on)
+        assert _result(sample) is None
         assert no_singletons.design.singleton is None
 
     @pytest.mark.parametrize("method", ["center", "scale"])
-    def test_apply_recorded_without_singletons(self, no_singletons, method):
-        spec = getattr(no_singletons.singleton, method)(domains="apply").design.singleton
-        assert (spec.method, spec.domains) == (method, "apply")
+    def test_apply_without_singletons_reaches_the_kernels(self, no_singletons, method):
+        sample = _declare(no_singletons, method, domains="apply")
+        assert _result(sample).method == method
 
-    def test_setting_is_recorded_with_singletons(self, data, design):
-        spec = svy.Sample(data, design).singleton.center(domains="apply").design.singleton
-        assert set(spec.strata) == {5, 6}
-        assert spec.domains == "apply"
+    def test_with_singletons(self, data, design):
+        sample = _declare(svy.Sample(data, design), "center", domains="apply")
+        handled = {s.stratum_values["stratum"] for s in _result(sample).detected}
+        assert handled == {5, 6}
 
-    @pytest.mark.parametrize("method", ["certainty", "skip", "collapse", "pool"])
-    def test_apply_refused_with_a_guiding_error(self, no_singletons, method):
-        with pytest.raises(MethodError, match="domains") as err:
-            getattr(no_singletons.singleton, method)(domains="apply")
-        assert 'center(domains="apply")' in str(err.value)
-
-    def test_unknown_domains_refused(self, no_singletons):
-        with pytest.raises(MethodError, match="domains"):
-            no_singletons.singleton.center(domains="yes")
-
-    def test_rule_without_strata_cleared_when_singletons_appear(self, data, design):
+    def test_singletons_appearing_later_are_handled_silently(self, data, design):
         sample = svy.Sample(data.filter(pl.col("stratum") <= 4), design)
-        sample = sample.singleton.center(domains="apply")
-        sample = sample.wrangling.filter_records(~((pl.col("stratum") == 1) & (pl.col("psu") > 1)))
-        # The rule is checked against the data when the sample is next used.
-        with pytest.warns(UserWarning, match="singleton strata changed"):
-            assert sample.design.singleton is None
+        sample = _declare(sample, "center", domains="apply")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            sample = sample.wrangling.filter_records(
+                ~((pl.col("stratum") == 1) & (pl.col("psu") > 1))
+            )
+            assert sample.design.singleton == Singleton("center", domains="apply")
+            assert sample.estimation.mean("y").estimates
+        detected = _result(sample).detected
+        assert [s.stratum_values["stratum"] for s in detected] == [1]
+
+
+class TestDomainSingletons:
+    def test_by_levels(self, data, design):
+        found = svy.Sample(data, design).domain_singletons(by="dom")
+        assert found.columns == ["dom", "stratum", "psu", "n", "n_psus"]
+        assert found.select("dom", "stratum", "n_psus").rows() == [("g1", 2, 2), ("g2", 2, 2)]
+        assert found["psu"].to_list() == [1, 2]  # the PSU column's own values
+
+    def test_where(self, data, design):
+        found = svy.Sample(data, design).domain_singletons(where=svy.col("reg") == 1)
+        assert found["stratum"].to_list() == [1, 2, 3, 4]
+
+    def test_matches_the_estimate_finding(self, data, design):
+        sample = _declare(svy.Sample(data, design), "center")
+        where = svy.col("reg") == 1
+        found = sample.domain_singletons(by="dom", where=where)
+        r = sample.estimation.total("y", by="dom", where=where)
+        pairs = [f"stratum={h} in dom={g}" for g, h in found.select("dom", "stratum").rows()]
+        assert pairs == r.findings[0].extra["pairs"]
+
+    def test_none(self, data, design):
+        sample = svy.Sample(data, design)
+        assert sample.domain_singletons().is_empty()
+        assert sample.domain_singletons(by="stratum").is_empty()
+
+    def test_unknown_by_column(self, data, design):
+        with pytest.raises(MethodError, match="not in the data"):
+            svy.Sample(data, design).domain_singletons(by="nope")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -192,8 +219,8 @@ def _found(df, **kw):
 class TestDetection:
     def test_by_levels(self, data):
         assert _found(data, psu_col="psu", by_col="dom", by_cols=["dom"]) == [
-            "dom=g1: stratum=2",
-            "dom=g2: stratum=2",
+            "stratum=2 in dom=g1",
+            "stratum=2 in dom=g2",
         ]
 
     def test_a_zero_value_row_still_places_its_psu(self, data):
@@ -213,7 +240,7 @@ class TestDetection:
         )
         assert _found(d, psu_col="psu", mask=pl.col("dom") == "g2") == []
         sample = svy.Sample(d, svy.Design(stratum="stratum", psu="psu", wgt="wgt"))
-        r = sample.singleton.center().estimation.mean("y", where=dom("g2"))
+        r = _declare(sample, "center").estimation.mean("y", where=dom("g2"))
         assert r.findings == []
 
     def test_where_mask(self, data):
@@ -225,7 +252,7 @@ class TestDetection:
     def test_missing_values_leave_the_domain(self, data, design):
         # g2 has one row in each PSU of stratum 3, and y2 is missing on both:
         # in PSU 1, g2 reaches strata 1 and 4 (lonely) but not 3.
-        sample = svy.Sample(data, design).singleton.center()
+        sample = _declare(svy.Sample(data, design), "center")
         where = dom("g2") & (svy.col("psu") == 1)
         r = sample.estimation.total("y2", where=where, drop_nulls=True)
         assert r.findings[0].extra["pairs"] == ["stratum=1", "stratum=4"]
@@ -244,10 +271,8 @@ class TestDetection:
 
     def test_by_column_that_is_the_stratum(self, data, design):
         # by="stratum" names the same column twice.
-        r = (
-            svy.Sample(data, design)
-            .singleton.center()
-            .estimation.mean("y", by="stratum", where=svy.col("reg") == 1)
+        r = _declare(svy.Sample(data, design), "center").estimation.mean(
+            "y", by="stratum", where=svy.col("reg") == 1
         )
         assert len(r.findings[0].extra["pairs"]) == 4
 
@@ -261,10 +286,10 @@ class TestDetection:
             by_col="dom",
             by_cols=["dom"],
         )
-        assert found[0].label == "dom=g1: stratum=2, s2=x"
+        assert found[0].label == "stratum=2, s2=x in dom=g1"
 
     def test_calibrated_design_has_none(self, data, design):
-        sample = svy.Sample(data, design).singleton.center()
+        sample = _declare(svy.Sample(data, design), "center")
         ps = sample.weighting.poststratify(controls={"u": 700.0, "v": 400.0}, cells="ps")
         assert ps.estimation.total("y", by="dom").findings == []
 
@@ -274,77 +299,115 @@ class TestDetection:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# domains= ignore / warn / error / apply
+# on_domain_singletons= ignore / warn / error, domains= standard / apply
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+def _notes(result):
+    return [ln for ln in result.__plain_str__().splitlines() if ln.startswith("note:")]
+
+
 class TestPolicy:
-    def test_warn_records_a_finding_and_a_note_not_a_python_warning(self, data, design):
-        sample = svy.Sample(data, design).singleton.center()
+    def test_ignore_records_the_finding_and_prints_nothing(self, data, design):
+        sample = _declare(svy.Sample(data, design), "center")
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             r = sample.estimation.mean("y", by="dom")
         (f,) = r.findings
-        assert f.code == "DOMAIN_SINGLETON_PSU" and f.level == Severity.WARNING
-        assert f.extra["pairs"] == ["dom=g1: stratum=2", "dom=g2: stratum=2"]
-        text = str(r)
-        assert "note: 1 stratum has a single PSU within 2 domains" in " ".join(text.split())
-        assert 'sample.singleton.center(domains="apply")' in r.__plain_str__()
+        assert f.code == "DOMAIN_SINGLETON_PSU" and f.level == Severity.INFO
+        assert f.extra["pairs"] == ["stratum=2 in dom=g1", "stratum=2 in dom=g2"]
+        assert _notes(r) == [] and "note:" not in str(r)
         kept = [w for w in sample.warnings if w.code == "DOMAIN_SINGLETON_PSU"]
         assert kept and kept[-1].level == Severity.INFO
 
-    def test_warn_uses_the_standard_variance(self, data, design):
-        warn = svy.Sample(data, design).singleton.center().estimation.total("y", by="dom")
-        ignore = svy.Sample(data, design).singleton.center(domains="ignore")
-        ignored = ignore.estimation.total("y", by="dom")
-        assert by_se(warn) == by_se(ignored)
-        assert ignored.findings == []
-        assert "note:" not in ignored.__plain_str__()
-
-    def test_no_rule_behaves_like_warn(self, no_singletons):
-        r = no_singletons.estimation.mean("y", by="dom")
+    def test_warn_prints_one_note_not_a_python_warning(self, data, design):
+        sample = _declare(svy.Sample(data, design), "center", on_domain_singletons="warn")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            r = sample.estimation.mean("y", by="dom")
         assert r.findings[0].level == Severity.WARNING
-        assert "note:" in r.__plain_str__()
+        assert _notes(r) == [
+            "note: 2 domain × stratum pairs with one PSU in the domain (stratum=2 in dom=g1; "
+            "stratum=2 in dom=g2); standard domain variance used"
+        ]
+        assert r.findings[0].hint.startswith('svy.Singleton("center", domains="apply")')
+
+    def test_the_setting_does_not_change_the_numbers(self, data, design):
+        ses = [
+            by_se(
+                _declare(
+                    svy.Sample(data, design), "center", on_domain_singletons=on
+                ).estimation.total("y", by="dom")
+            )
+            for on in ("ignore", "warn")
+        ]
+        assert ses[0] == ses[1]
+
+    def test_no_rule_behaves_like_ignore(self, no_singletons):
+        r = no_singletons.estimation.mean("y", by="dom")
+        assert r.findings[0].level == Severity.INFO
+        assert _notes(r) == []
 
     def test_error_raises_before_estimating(self, data, design):
-        sample = svy.Sample(data, design).singleton.center(domains="error")
+        sample = _declare(svy.Sample(data, design), "center", on_domain_singletons="error")
         with pytest.raises(SingletonError) as err:
             sample.estimation.mean("y", by="dom")
         assert err.value.code == "DOMAIN_SINGLETON"
-        assert "dom=g1: stratum=2" in str(err.value)
-        assert 'center(domains="apply")' in str(err.value)
+        assert "stratum=2 in dom=g1" in str(err.value)
+        assert 'svy.Singleton("center", domains="apply")' in str(err.value)
         # Nothing to find, nothing raised.
         assert sample.estimation.mean("y").estimates
 
     @pytest.mark.parametrize(
         "method, how", [("center", "centered at the grand mean"), ("scale", "left out")]
     )
-    def test_apply_notes_what_it_did(self, data, design, method, how):
-        sample = getattr(svy.Sample(data, design).singleton, method)(domains="apply")
-        r = sample.estimation.mean("y", by="dom")
-        assert r.findings[0].level == Severity.INFO
-        assert how in r.__plain_str__()
+    def test_apply_reports_what_it_did_as_asked(self, data, design, method, how):
+        quiet = _declare(svy.Sample(data, design), method, domains="apply")
+        r = quiet.estimation.mean("y", by="dom")
+        assert r.findings[0].level == Severity.INFO and _notes(r) == []
+        assert how in r.findings[0].detail
+        loud = _declare(
+            svy.Sample(data, design), method, domains="apply", on_domain_singletons="warn"
+        )
+        (note,) = _notes(loud.estimation.mean("y", by="dom"))
+        assert how in note and 'domains="apply"' in note
 
     def test_one_note_per_call(self, data, design):
         # y2 is missing on g2's rows of stratum 3: that variable finds one more pair.
-        sample = svy.Sample(data, design).singleton.center()
+        sample = _declare(svy.Sample(data, design), "center", on_domain_singletons="warn")
         r = sample.estimation.total(
             ["y", "y2"], by="dom", where=svy.col("reg") == 1, drop_nulls=True
         )
-        notes = [ln for ln in r.__plain_str__().splitlines() if ln.startswith("note:")]
-        assert len(notes) == 1
-        assert "and " in notes[0] and "more" in notes[0]
+        (note,) = _notes(r)
+        assert note.startswith("note: 7 domain × stratum pairs") and "; 4 more)" in note
+
+    def test_a_where_domain_alone_counts_strata(self, data, design):
+        sample = _declare(svy.Sample(data, design), "center", on_domain_singletons="warn")
+        (note,) = _notes(sample.estimation.total("y", where=svy.col("reg") == 1))
+        assert note.startswith("note: 4 strata with one PSU in the domain (stratum=1; ")
+
+    def test_integer_valued_float_strata_print_as_integers(self, data):
+        d = data.with_columns(pl.col("stratum").cast(pl.Float64) + 2000)
+        design = svy.Design(
+            stratum="stratum",
+            psu="psu",
+            wgt="wgt",
+            singleton=Singleton("center", on_domain_singletons="warn"),
+        )
+        (note,) = _notes(svy.Sample(d, design).estimation.mean("y", by="dom"))
+        assert "stratum=2002 in dom=g1" in note and "2002.0" not in note
 
     def test_findings_are_plain_in_glm_to_dict(self, data, design):
-        fit = svy.Sample(data, design).singleton.center().glm.fit("y", x=["x"], where=dom("g1"))
+        fit = _declare(svy.Sample(data, design), "center").glm.fit("y", x=["x"], where=dom("g1"))
         d = fit.fitted.to_dict()
         json.dumps(d)
         assert d["findings"][0]["code"] == "DOMAIN_SINGLETON_PSU"
 
 
-@pytest.mark.parametrize("domains", ["warn", "apply"])
-def test_every_analysis_reports_the_domain(data, design, domains):
-    sample = svy.Sample(data, design).singleton.center(domains=domains)
+@pytest.mark.parametrize("domains", ["standard", "apply"])
+@pytest.mark.parametrize("on", ["ignore", "warn"])
+def test_every_analysis_reports_the_domain(data, design, domains, on):
+    sample = _declare(svy.Sample(data, design), "center", domains=domains, on_domain_singletons=on)
     c = sample.categorical
     results = [
         sample.estimation.prop("cat", where=dom("g1")),
@@ -361,8 +424,9 @@ def test_every_analysis_reports_the_domain(data, design, domains):
     ]
     for r in results:
         assert [f.code for f in r.findings] == ["DOMAIN_SINGLETON_PSU"], type(r).__name__
-        assert "note:" in r.__plain_str__(), type(r).__name__
-        assert "note:" in str(r), type(r).__name__
+        shown = on == "warn"
+        assert ("note:" in r.__plain_str__()) is shown, type(r).__name__
+        assert ("note:" in str(r)) is shown, type(r).__name__
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -430,7 +494,7 @@ def test_verify_apply_against_r(data, design, method):
     svyglm(y ~ x, subset(d, dom == "g1")); svyranktest(y ~ factor(reg), subset(d, dom == "g2"))
     """
     r = R_APPLY[method]
-    sample = getattr(svy.Sample(data, design).singleton, method)(domains="apply")
+    sample = _declare(svy.Sample(data, design), method, domains="apply")
     e, c = sample.estimation, sample.categorical
     reg1 = svy.col("reg") == 1
 
@@ -469,5 +533,5 @@ def test_apply_without_full_sample_singletons(data, design):
     sample = svy.Sample(data.filter(pl.col("stratum") <= 4), design)
     standard = sample.estimation.total("y", by="dom")
     assert by_se(standard) == _approx([389.641389363, 265.579019489, 173.45])
-    applied = sample.singleton.center(domains="apply").estimation.total("y", by="dom")
+    applied = _declare(sample, "center", domains="apply").estimation.total("y", by="dom")
     assert by_se(applied) == _approx([391.734795063, 327.11788508, 173.45])

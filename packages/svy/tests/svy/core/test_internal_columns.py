@@ -31,6 +31,15 @@ from svy.errors import MethodError
 from svy.serialize import from_json, to_design, to_json
 
 
+def _declare(sample, method, **kw):
+    """A fork of ``sample`` with the singleton rule declared on its design."""
+    from svy.core.design import Singleton as _Rule
+
+    new = sample._fork()
+    new.update_design(singleton=_Rule(method, **kw))
+    return new
+
+
 STRATUM_KEY = key_col("stratum")
 PSU_KEY = key_col("psu")
 SSU_KEY = key_col("ssu")
@@ -210,12 +219,12 @@ def test_show_data_hides_bookkeeping():
 
 SINGLE_DATA = make_frame(singleton=True)
 SINGLETON_RULES = {
-    "certainty": lambda s: s.singleton.certainty(),
-    "skip": lambda s: s.singleton.skip(),
-    "scale": lambda s: s.singleton.scale(),
-    "center": lambda s: s.singleton.center(),
-    "pool": lambda s: s.singleton.pool(),
-    "collapse": lambda s: s.singleton.collapse(),
+    "certainty": lambda s: _declare(s, "self_representing"),
+    "skip": lambda s: _declare(s, "skip"),
+    "scale": lambda s: _declare(s, "scale"),
+    "center": lambda s: _declare(s, "center"),
+    "pool": lambda s: _declare(s, "pool"),
+    "collapse": lambda s: _declare(s, "collapse"),
 }
 
 
@@ -231,7 +240,7 @@ def test_singleton_variance_columns_are_bookkeeping(rule, tmp_path):
 
 
 def test_singleton_rule_survives_a_second_round_trip(tmp_path):
-    s = svy.Sample(SINGLE_DATA, DESIGNS["strata"]).singleton.collapse()
+    s = _declare(svy.Sample(SINGLE_DATA, DESIGNS["strata"]), "collapse")
     once = roundtrip(s, tmp_path)
     twice = roundtrip(once, tmp_path)
     assert_same_estimates(s, twice)
@@ -425,7 +434,9 @@ def test_add_stage_drops_the_next_stages_keys():
     assert STRATUM_KEY in s2._data.columns
     c = s1.sampling.add_stage(s2)
     assert c.design.stratum == "region"
-    assert not {STRATUM_KEY, PSU_KEY} & set(c._data.columns), "urban keys would describe region"
+    # The keys are rebuilt for the combined design: region, not stage 2's urban.
+    keys = c._data.select(pl.col(STRATUM_KEY).cast(pl.Utf8), pl.col("region").cast(pl.Utf8))
+    assert keys[STRATUM_KEY].to_list() == keys["region"].to_list()
     assert not set(c.data.columns) & BOOKKEEPING_COLUMNS
 
 
@@ -467,7 +478,8 @@ def test_write_csv_writes_what_is_shown(tmp_path):
 
 
 def test_to_code_runs_on_the_saved_file(tmp_path):
-    s = svy.Sample(SINGLE_DATA, DESIGNS["strata"]).singleton.scale()
+    # skip: scale has no replicate analogue (SINGLETON_REPLICATES).
+    s = _declare(svy.Sample(SINGLE_DATA, DESIGNS["strata"]), "skip")
     s = s.weighting.create_jk_wgts(rep_prefix="jk")
     s = s.weighting.poststratify(G_TOTALS, cells="g", wgt_name="nw")
     p = tmp_path / "s.parquet"
@@ -483,7 +495,7 @@ def test_to_code_runs_on_the_saved_file(tmp_path):
 
 
 def test_serialize_design_round_trip_is_unchanged():
-    s = svy.Sample(SINGLE_DATA, DESIGNS["strata"]).singleton.collapse()
+    s = _declare(svy.Sample(SINGLE_DATA, DESIGNS["strata"]), "collapse")
     s = s.weighting.poststratify(G_TOTALS, cells="g", wgt_name="nw")
     text = to_json(s.design)
     text = text.decode() if isinstance(text, bytes) else text

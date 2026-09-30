@@ -9,9 +9,24 @@ import svy_rs as ps
 
 import svy
 
-from svy.core.enumerations import SingletonHandling
+from svy.core.enumerations import SingletonMethod
 from svy.core.singleton import _VAR_EXCLUDE_COL
 from svy.errors.singleton_errors import SingletonError
+
+
+def _result(sample):
+    """What the design's singleton rule did to the current data (internal)."""
+    sample._sync_parts()
+    return sample._singleton_result
+
+
+def _declare(sample, method, **kw):
+    """A fork of ``sample`` with the singleton rule declared on its design."""
+    from svy.core.design import Singleton as _Rule
+
+    new = sample._fork()
+    new.update_design(singleton=_Rule(method, **kw))
+    return new
 
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
@@ -47,15 +62,15 @@ def adjustment_sample():
 
 
 def test_scale_config_correctness(adjustment_sample):
-    sample = adjustment_sample.singleton.scale()
-    result = sample.singleton.last_result
-    assert result.method == SingletonHandling.SCALE
+    sample = _declare(adjustment_sample, "scale")
+    result = _result(sample)
+    assert result.method == SingletonMethod.SCALE
     assert result.config.singleton_fraction == 0.5
     assert result.config.var_exclude_col == _VAR_EXCLUDE_COL
 
 
 def test_scale_excludes_singletons_from_data(adjustment_sample):
-    sample = adjustment_sample.singleton.scale()
+    sample = _declare(adjustment_sample, "scale")
     df = sample._data
     assert df.filter(pl.col("stratum") == "A").get_column(_VAR_EXCLUDE_COL).all()
     assert not df.filter(pl.col("stratum") == "B").get_column(_VAR_EXCLUDE_COL).any()
@@ -63,7 +78,7 @@ def test_scale_excludes_singletons_from_data(adjustment_sample):
 
 def test_scale_inflation_is_uniform(adjustment_sample):
     """R's "average" multiplies the whole variance matrix by 1/(1-f), whatever the statistic."""
-    est = adjustment_sample.singleton.scale().estimation
+    est = _declare(adjustment_sample, "scale").estimation
 
     mock_result = pl.DataFrame({"est": [50.0], "var": [100.0], "se": [10.0], "deff": [1.5]})
     res, cov = est._apply_scale_adjustment(mock_result, [100.0, -40.0, -40.0, 100.0])
@@ -78,7 +93,7 @@ def test_scale_estimation_flow_integration(adjustment_sample, monkeypatch):
     """
     Verify integration for MEAN calculation.
     """
-    sample = adjustment_sample.singleton.scale()
+    sample = _declare(adjustment_sample, "scale")
 
     def mock_taylor_mean(*args, **kwargs):
         # Mirrors the kernel contract: (result frame, optional flat covariance).
@@ -110,20 +125,20 @@ def test_scale_estimation_flow_integration(adjustment_sample, monkeypatch):
 
 
 def test_center_config_correctness(adjustment_sample):
-    sample = adjustment_sample.singleton.center()
-    result = sample.singleton.last_result
-    assert result.method == SingletonHandling.CENTER
+    sample = _declare(adjustment_sample, "center")
+    result = _result(sample)
+    assert result.method == SingletonMethod.CENTER
     assert result.config.singleton_fraction is None
 
 
 def test_center_does_not_exclude_rows(adjustment_sample):
-    sample = adjustment_sample.singleton.center()
+    sample = _declare(adjustment_sample, "center")
     df = sample._data
     assert not df.get_column(_VAR_EXCLUDE_COL).any()
 
 
 def test_center_arg_passing(adjustment_sample, monkeypatch):
-    sample = adjustment_sample.singleton.center()
+    sample = _declare(adjustment_sample, "center")
     captured_kwargs = {}
 
     def mock_taylor_mean(*args, **kwargs):
@@ -207,7 +222,7 @@ def test_verify_singleton_methods():
     }
 
     # SCALE
-    s_scale = sample.singleton.scale()
+    s_scale = _declare(sample, "scale")
     res_scale = s_scale.estimation.mean("y")
     est_scale = res_scale.estimates[0]
 
@@ -216,7 +231,7 @@ def test_verify_singleton_methods():
     assert est_scale.df == pytest.approx(R_EXPECTED["DF"], abs=1e-6)
 
     # CENTER
-    s_center = sample.singleton.center()
+    s_center = _declare(sample, "center")
     res_center = s_center.estimation.mean("y")
     est_center = res_center.estimates[0]
 
@@ -237,7 +252,7 @@ def test_verify_scale_unequal_weights():
     # Strata A-D hold 3, 2, 1, 4 PSUs (f = 1/4); x stays integer on purpose.
     data = pl.read_csv(DATA_DIR / "singleton_scale_13092026.csv")
     sample = svy.Sample(data, svy.Design(stratum="stratum", psu="psu", wgt="wgt"))
-    est = sample.singleton.scale().estimation
+    est = _declare(sample, "scale").estimation
 
     mean = est.mean("y", deff="wor").estimates[0]
     assert mean.est == pytest.approx(10.277204, abs=1e-6)
@@ -284,7 +299,7 @@ def test_verify_scale_domain_fraction():
     """
     data = pl.read_csv(DATA_DIR / "singleton_scale_domain_13092026.csv")
     sample = svy.Sample(data, svy.Design(stratum="stratum", psu="psu", wgt="wgt"))
-    est = sample.singleton.scale().estimation
+    est = _declare(sample, "scale").estimation
     g1 = svy.col("g") == 1
 
     full = est.mean("y", deff="wor").estimates[0]
@@ -334,7 +349,7 @@ def test_verify_skip_unequal_weights():
     """
     data = pl.read_csv(DATA_DIR / "singleton_scale_13092026.csv")
     sample = svy.Sample(data, svy.Design(stratum="stratum", psu="psu", wgt="wgt"))
-    est = sample.singleton.skip().estimation
+    est = _declare(sample, "skip").estimation
 
     # Every row stays in the estimator: the point estimates are the full-sample ones.
     mean = est.mean("y", deff="wor").estimates[0]
@@ -405,7 +420,7 @@ def test_verify_center_domain_grand_mean(center_domain):
     svyby(~y2, ~dom, d, svytotal, na.rm = TRUE); svytotal(~y, d)
     """
     data, design = center_domain
-    est = svy.Sample(data, design).singleton.center().estimation
+    est = _declare(svy.Sample(data, design), "center").estimation
     reg1 = svy.col("reg") == 1
     g = [("g1",), ("g2",), ("g3",)]
 
@@ -449,7 +464,7 @@ def test_verify_center_domain_quantile(center_domain):
     """svyquantile(~y, subset(d, dom == "g1"), quantiles = 0.5, ci = TRUE, qrule = "math")
     and the same for g2; R's g1 upper bound is NaN (above the CDF's range)."""
     data, design = center_domain
-    est = svy.Sample(data, design).singleton.center().estimation
+    est = _declare(svy.Sample(data, design), "center").estimation
     g1 = est.median("y", where=svy.col("dom") == "g1").estimates[0]
     assert (g1.est, g1.lci) == pytest.approx((4.11, 1.77))
     assert math.isnan(g1.uci)
@@ -469,14 +484,14 @@ def test_verify_center_domain_element_and_fpc(center_domain):
     data, design = center_domain
     first_row = pl.int_range(pl.len()).over("stratum", "psu") == 0
     element = data.filter((pl.col("stratum") != 5) | first_row)
-    est = svy.Sample(element, svy.Design(stratum="stratum", wgt="wgt")).singleton.center()
+    est = _declare(svy.Sample(element, svy.Design(stratum="stratum", wgt="wgt")), "center")
     tot = _by_se(est.estimation.total("y", by="dom"))
     assert [tot[k] for k in [("g1",), ("g2",), ("g3",)]] == pytest.approx(
         [320.087828212, 360.206440533, 163.303263685]
     )
 
     fpc = svy.Design(stratum="stratum", psu="psu", wgt="wgt", pop_size="fpc")
-    est = svy.Sample(data, fpc).singleton.center()
+    est = _declare(svy.Sample(data, fpc), "center")
     tot = _by_se(est.estimation.total("y", by="dom"))
     assert [tot[k] for k in [("g1",), ("g2",), ("g3",)]] == pytest.approx(
         [322.676166692, 228.476644453, 151.084704618]
@@ -491,7 +506,7 @@ def test_verify_center_domain_calibrated_keeps_whole_frame(center_domain):
     svyby(~y, ~dom, ps, svytotal)
     """
     data, design = center_domain
-    sample = svy.Sample(data, design).singleton.center()
+    sample = _declare(svy.Sample(data, design), "center")
     ps = sample.weighting.poststratify(controls={"u": 700.0, "v": 400.0}, cells="ps")
     tot = _by_se(ps.estimation.total("y", by="dom"))
     assert [tot[k] for k in [("g1",), ("g2",), ("g3",)]] == pytest.approx(
@@ -563,7 +578,7 @@ def test_verify_singleton_rule_in_every_analysis(center_domain, method):
     as estimation does (they used to leave singleton strata out, R's "remove")."""
     data, design = center_domain
     data = data.with_columns(b=(pl.col("y") > 4).cast(pl.Int64))
-    sample = getattr(svy.Sample(data, design).singleton, method)()
+    sample = _declare(svy.Sample(data, design), method)
     cat, r = sample.categorical, R_ANALYSES[method]
     g1, g2, g3 = (svy.col("dom") == g for g in ("g1", "g2", "g3"))
 
@@ -592,12 +607,14 @@ def test_verify_singleton_rule_in_every_analysis(center_domain, method):
     assert rank.stats.value == pytest.approx(r["rank"])
 
 
-@pytest.mark.parametrize("method", ["certainty", "skip", "collapse", "pool", "center", "scale"])
+@pytest.mark.parametrize(
+    "method", ["self_representing", "skip", "collapse", "pool", "center", "scale"]
+)
 def test_tabulate_uses_the_singleton_rule_like_estimation(center_domain, method):
     """A one-way table's SEs are the proportions' SEs under every rule,
     including those that recode the strata and PSUs."""
     data, design = center_domain
-    sample = getattr(svy.Sample(data, design).singleton, method)()
+    sample = _declare(svy.Sample(data, design), method)
     table = sample.categorical.tabulate("cat")
     prop = sample.estimation.prop("cat")
     assert [e.se for e in table.estimates] == pytest.approx([e.se for e in prop.estimates])
@@ -631,7 +648,7 @@ def test_verify_scale_calibrated_counts_every_stratum(center_domain):
     m <- svymean(~I(y - 4), subset(ps, dom == "g3")); coef(m) / SE(m)
     """
     data, design = center_domain
-    sample = svy.Sample(data, design).singleton.scale()
+    sample = _declare(svy.Sample(data, design), "scale")
     ps = sample.weighting.poststratify(controls={"u": 700.0, "v": 400.0}, cells="ps")
     g = [("g1",), ("g2",), ("g3",)]
     tot = _by_se(ps.estimation.total("y", by="dom"))
