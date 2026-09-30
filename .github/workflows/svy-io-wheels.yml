@@ -283,11 +283,12 @@ jobs:
           sys.exit(1 if bad else 0)
           PY
 
-      - name: Upload to PyPI
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+      # `maturin upload` does not produce PyPI attestations; this is the same
+      # trusted-publishing action svy-wheels.yml and svy-rs-wheels.yml use.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
-          command: upload
-          args: --skip-existing dist/*
+          packages-dir: dist
+          skip-existing: true
 
   release:
     name: GitHub Release
