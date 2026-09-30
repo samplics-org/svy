@@ -427,7 +427,6 @@ def replicate_prop(
         by_col=prep.by_col,
         as_factor=True,
         ci_method=ci_method,
-        by_cols=prep.by_cols,
     )
     return est._build_estimate_result_light(
         est_list,
@@ -439,6 +438,7 @@ def replicate_prop(
         method=method,
         design_df=df_val,
         cov_filled=cov_flat is not None,
+        ci_method=ci_method,
     )
 
 

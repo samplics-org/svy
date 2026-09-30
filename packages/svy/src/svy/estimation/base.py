@@ -30,7 +30,7 @@ from svy.core.singleton import (
     singleton_config,
 )
 from svy.core.types import WhereArg
-from svy.core.warnings import SvyWarning, WarnCode
+from svy.core.warnings import Severity, SvyWarning, WarnCode
 from svy.errors import DimensionError, MethodError
 from svy.estimation.estimate import (
     Estimate,
@@ -82,7 +82,7 @@ from svy.estimation.taylor import (
 from svy.estimation.taylor import (
     taylor_total_multi as _taylor_total_multi,
 )
-from svy.ui.printing import format_where_clause, row_sort_key
+from svy.ui.printing import format_where_clause
 from svy.utils.checks import validate_alpha
 from svy.utils.helpers import _colspec_to_list
 from svy.wrangling.rows import _compile_where_to_pl_expr
@@ -102,6 +102,23 @@ _PROP_CI_METHODS = ("logit", "beta", "korn-graubard", "wilson")
 # Weighted sums land a few ulps off (an SE of 1e-17, a p-hat of 1 - 1e-16), and
 # exact comparisons would read those as an interior estimate with an interval.
 _PROP_CI_TOL = 1e-12
+
+
+def prop_ci_boundary_note(findings: Sequence[Any]) -> str | None:
+    """One note for every ``PROP_CI_BOUNDARY`` finding of a call: the rows of
+    several results (a list of variables) counted together, split by variable."""
+    found = [f for f in findings if f.code == WarnCode.PROP_CI_BOUNDARY and f.extra]
+    if not found:
+        return None
+    counts: dict[str, int] = {}
+    for f in found:
+        counts[f.var] = counts.get(f.var, 0) + f.extra["n_rows"]
+    n = sum(counts.values())
+    rows = "1 row" if n == 1 else f"{n} rows"
+    split = ", ".join(f"{y}: {k}" for y, k in counts.items()) + "; " if len(counts) > 1 else ""
+    methods = ", ".join(dict.fromkeys(str(f.got) for f in found))
+    return f"note: CI undefined at p = 0 or 1 for {rows} ({split}ci_method='{methods}')"
+
 
 if TYPE_CHECKING:
     from svy.core.data_prep import PreparedData
@@ -916,7 +933,6 @@ class Estimation:
         as_factor: bool,
         x_name: str | None = None,
         ci_method: str = "logit",
-        by_cols: Sequence[str] | None = None,
     ) -> list[ParamEst]:
         n_rows = result_df.height
         if n_rows == 0:
@@ -1039,18 +1055,6 @@ class Estimation:
                     method=ci_method_norm,
                 )
 
-        if ci_method_norm != "korn-graubard":
-            undefined = np.flatnonzero(df_ok & boundary)
-            if undefined.size:
-                self._warn_prop_ci_boundary(
-                    ci_method_norm,
-                    y_name,
-                    by_cols if by_col else None,
-                    [by_levels[i] for i in undefined],
-                    [y_levels[i] for i in undefined],
-                    [float(est_arr[i]) for i in undefined],
-                )
-
         return [
             ParamEst(
                 y=y_name,
@@ -1070,39 +1074,46 @@ class Estimation:
             for i in range(n_rows)
         ]
 
-    def _warn_prop_ci_boundary(
-        self,
-        method: str,
-        y_name: str,
-        by_cols: Sequence[str] | None,
-        by_levels: list,
-        y_levels: list,
-        estimates: list[float],
-    ) -> None:
-        """One warning per call listing the cells whose interval is NaN because p
-        is 0 or 1, by the user's column names, in domain order."""
+    def _prop_ci_boundary_findings(
+        self, rows: Sequence[ParamEst], param: PopParam, ci_method: str
+    ) -> list[SvyWarning]:
+        """The finding on the rows whose interval is NaN because p is 0 or 1.
+
+        ``rows`` are native-levelled and in table order. korn-graubard has a
+        one-sided interval there, and rows with no degrees of freedom are NaN
+        for another reason, so neither is flagged. Like the domain-singleton
+        finding, it is kept on the sample at INFO, so it is never raised, and
+        noted under the result's table.
+        """
+        cells = [
+            p
+            for p in rows
+            if p.df is not None
+            and p.df > 0
+            and (p.est <= _PROP_CI_TOL or p.est >= 1.0 - _PROP_CI_TOL)
+            and math.isnan(p.lci)
+        ]
+        if not cells:
+            return []
+        method = self._normalize_ci_method(ci_method)
+        y_name = cells[0].y
         max_listed = 10
-        by_tuple = tuple(by_cols) if by_cols else None
-        by_lookup = self._level_lookup(by_tuple) if by_tuple else {}
-        found = []
-        for by_level, y_level, p in zip(by_levels, y_levels, estimates):
-            domain = (
-                self._native_by_level(by_level, by_tuple, by_lookup)
-                if by_tuple and by_level is not None
-                else ()
-            )
-            found.append((domain, y_level, p))
-        found.sort(key=lambda t: tuple(row_sort_key(str(v)) for v in (*t[0], t[1])))
-        cells = []
-        for domain, y_level, p in found:
-            cell = f"{y_name}={y_level}" if y_level is not None else y_name
-            if domain:
-                cell += " in " + ", ".join(f"{c}={v}" for c, v in zip(by_tuple or (), domain))
-            cells.append(f"{cell} (p={round(p)})")
-        listed = "; ".join(cells[:max_listed])
+        listed_cells = []
+        for p in cells[:max_listed]:
+            cell = f"{y_name}={p.y_level}" if p.y_level is not None else y_name
+            if p.by and p.by_level:
+                cell += " in " + ", ".join(f"{c}={v}" for c, v in zip(p.by, p.by_level))
+            listed_cells.append(f"{cell} (p={round(p.est)})")
+        listed = "; ".join(listed_cells)
         if len(cells) > max_listed:
             listed += f"; and {len(cells) - max_listed} more"
-        self._sample.warn(
+        # mean() has no ci_method.
+        use = (
+            "ci_method='korn-graubard'"
+            if param == PopParam.PROP
+            else "prop(..., ci_method='korn-graubard')"
+        )
+        kept = self._sample.warn(
             code=WarnCode.PROP_CI_BOUNDARY,
             title="Confidence interval undefined at a proportion of 0 or 1",
             detail=(
@@ -1110,15 +1121,28 @@ class Estimation:
                 "is 0 or 1: the zero standard error comes from the estimate itself, "
                 f"not from the design. lci and uci are NaN for: {listed}."
             ),
-            where="estimation.prop",
+            where="estimation.prop" if param == PopParam.PROP else "estimation.mean",
+            level=Severity.INFO,
             param="ci_method",
             got=method,
             hint=(
-                "Use ci_method='korn-graubard', which gives a one-sided interval at "
-                "0 and 1 (Korn & Graubard 1998; NCHS data presentation standards)."
+                f"Use {use}, which gives a one-sided "
+                "interval at 0 and 1 (Korn & Graubard 1998; NCHS data presentation standards)."
             ),
+            extra={
+                "n_rows": len(cells),
+                "cells": [
+                    {
+                        "by": dict(zip(p.by, p.by_level)) if p.by and p.by_level else None,
+                        "level": p.y_level,
+                        "p": round(p.est),
+                    }
+                    for p in cells
+                ],
+            },
             var=y_name,
         )
+        return [msgspec.structs.replace(kept, level=Severity.WARNING)]
 
     def _quantile_result_to_param_est(
         self,
@@ -1390,7 +1414,10 @@ class Estimation:
         cov_filled: bool = False,
         q_method: _QuantileMethod | None = None,
         findings: Sequence[SvyWarning] = (),
+        ci_method: str = "logit",
     ) -> Estimate:
+        """``ci_method`` is the interval method the proportion rows were given, with
+        ``_polars_result_to_param_est``'s default; other rows ignore it."""
         metadata = getattr(self._sample, "_metadata", None)
         estimate = Estimate(param, alpha=alpha, metadata=metadata)
         estimate.method = method.method if method is not None else "Taylor"
@@ -1433,6 +1460,8 @@ class Estimation:
         if n_psus is not None:
             estimate.n_psus = n_psus
         estimate.findings = list(findings)
+        if param == PopParam.PROP or (as_factor and param == PopParam.MEAN):
+            estimate.findings += self._prop_ci_boundary_findings(rows, param, ci_method)
         return estimate
 
     # The two helpers below exist only to populate reporting metadata, but they

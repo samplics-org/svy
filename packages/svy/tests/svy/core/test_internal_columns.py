@@ -609,10 +609,8 @@ def _boundary_message(by) -> str:
         pov=pl.when(pl.col("quint").is_in(["poorest", "2nd"])).then(1).otherwise(pl.col("pov"))
     )
     s = svy.Sample(df, svy.Design(stratum="st", psu="psu", wgt="w"))
-    with pytest.warns(svy.SvyUserWarning, match=r"\[PROP_CI_BOUNDARY\]") as rec:
-        s.estimation.prop("pov", by=by, ci_method="logit")
-    (w,) = [r for r in rec if "PROP_CI_BOUNDARY" in str(r.message)]
-    return str(w.message)
+    (f,) = s.estimation.prop("pov", by=by, ci_method="logit").findings
+    return f.detail
 
 
 def test_prop_boundary_warning_names_the_by_column_in_domain_order():
