@@ -537,9 +537,11 @@ def finding_notes(findings: Iterable[Any]) -> list[str]:
     """The notes printed under a result's table for what its call found: one
     per kind of finding, merged across the call's results."""
     from svy.core.singleton import domain_singleton_note
+    from svy.estimation.base import prop_ci_boundary_note
 
-    note = domain_singleton_note(list(findings))
-    return [note] if note else []
+    found = list(findings)
+    notes = (domain_singleton_note(found), prop_ci_boundary_note(found))
+    return [n for n in notes if n]
 
 
 def make_panel(
