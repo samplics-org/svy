@@ -334,7 +334,9 @@ class TestRefusals:
         )
 
         with pytest.raises(ModelError, match="known dispersion"):
-            Sample(df, design).glm.fit(y=Y, x=X_COLS, family="negative_binomial")
+            Sample(df, design).glm.fit(
+                y=Y, x=X_COLS, family="negative_binomial", method="replication"
+            )
 
     def test_replicate_weights_are_fine_with_a_known_theta(self, api):
         df = api.with_columns(

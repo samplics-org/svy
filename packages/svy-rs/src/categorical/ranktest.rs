@@ -15,6 +15,7 @@
 
 use polars::prelude::*;
 
+use crate::categorical::replicate::RepSpec;
 use crate::estimation::taylor::{degrees_of_freedom, singleton_rows};
 use crate::regression::wols::{fit_wols, influence_covariance, influence_se};
 
@@ -459,6 +460,151 @@ pub fn ranktest_k_sample(
         chisq,
         f_stat,
         p_value,
+        levels,
+        group_means,
+        group_ses,
+        n_obs: n,
+    })
+}
+
+// ============================================================================
+// Replication variance
+// ============================================================================
+
+/// The WLS of the rank scores on the group dummies, and the replication
+/// covariance of its coefficients: R's `svytotal(infn, design)` on a
+/// replicate design, which re-totals the full-sample influence values with
+/// each replicate weight rather than re-ranking. `score_method = None` means
+/// `y` already holds the scores (a caller-supplied score function).
+fn rep_fit(
+    y: &[f64],
+    g: &[u32],
+    w: &[f64],
+    n: usize,
+    n_groups: usize,
+    score_method: Option<RankScoreMethod>,
+    rows: &[bool],
+    spec: &RepSpec,
+) -> PolarsResult<(Vec<f64>, Vec<Vec<f64>>)> {
+    let rankscore = match score_method {
+        Some(m) => {
+            let n_hat: f64 = w.iter().sum();
+            apply_score(&compute_midranks(y, w, n), n_hat, m)
+        }
+        None => y.to_vec(),
+    };
+    let k = n_groups;
+    let mut xmat = vec![0.0; n * k];
+    for i in 0..n {
+        xmat[i * k] = 1.0;
+        let gi = g[i] as usize;
+        if gi > 0 && gi < n_groups {
+            xmat[i * k + gi] = 1.0;
+        }
+    }
+    let wols =
+        fit_wols(&rankscore, &xmat, w, n, k).map_err(|e| PolarsError::ComputeError(e.into()))?;
+    // Rows outside the domain, or zero-weighted, are not in R's subset design.
+    let mask: Vec<bool> = rows.iter().zip(w).map(|(&r, &wi)| r && wi != 0.0).collect();
+    let full: Vec<f64> = (0..k)
+        .map(|j| {
+            (0..n)
+                .filter(|&i| mask[i])
+                .map(|i| w[i] * wols.influence[i * k + j])
+                .sum()
+        })
+        .collect();
+    let cov = spec.cov(&full, &spec.totals(&wols.influence, k, &mask));
+    Ok((wols.beta, cov))
+}
+
+/// Two-sample rank test with a replication variance (R's svyranktest on a
+/// svyrep.design). df = replicate df - 1.
+pub fn ranktest_two_sample_rep(
+    y: &[f64],
+    g: &[u32],
+    w: &[f64],
+    n: usize,
+    score_method: Option<RankScoreMethod>,
+    levels: Vec<String>,
+    rows: &[bool],
+    spec: &RepSpec,
+) -> PolarsResult<RankTestTwoResult> {
+    let (beta, cov) = rep_fit(y, g, w, n, 2, score_method, rows, spec)?;
+    let ses: Vec<f64> = (0..2).map(|j| cov[j][j].max(0.0).sqrt()).collect();
+    let delta = beta[1];
+    let t_stat = if ses[1] > 0.0 {
+        delta / ses[1]
+    } else {
+        f64::NAN
+    };
+    let df = (spec.df - 1.0).max(1.0);
+    Ok(RankTestTwoResult {
+        delta,
+        se: ses[1],
+        t_stat,
+        df,
+        p_value: two_sided_t_pvalue(t_stat, df),
+        levels,
+        group_means: vec![beta[0], beta[0] + beta[1]],
+        group_ses: ses,
+        n_obs: n,
+    })
+}
+
+/// K-sample rank test with a replication variance (R's multiranktest on a
+/// svyrep.design). ddf = replicate df - (k - 1).
+pub fn ranktest_k_sample_rep(
+    y: &[f64],
+    g: &[u32],
+    w: &[f64],
+    n: usize,
+    n_groups: usize,
+    score_method: Option<RankScoreMethod>,
+    levels: Vec<String>,
+    rows: &[bool],
+    spec: &RepSpec,
+) -> PolarsResult<RankTestKResult> {
+    if n_groups < 2 {
+        return Err(PolarsError::ComputeError(
+            format!(
+                "Rank test requires at least 2 groups with positive weight, found {}",
+                n_groups
+            )
+            .into(),
+        ));
+    }
+    let ndf = n_groups - 1;
+    let (beta, cov) = rep_fit(y, g, w, n, n_groups, score_method, rows, spec)?;
+    let beta_test: Vec<f64> = beta[1..].to_vec();
+    let mut v_test = vec![0.0; ndf * ndf];
+    for a in 0..ndf {
+        for b in 0..ndf {
+            v_test[a * ndf + b] = cov[a + 1][b + 1];
+        }
+    }
+    let chisq = match crate::regression::wols::solve_kxk(&v_test, &beta_test, ndf) {
+        Some(v_inv_beta) => beta_test
+            .iter()
+            .zip(v_inv_beta.iter())
+            .map(|(&b, &vb)| b * vb)
+            .sum(),
+        None => f64::NAN,
+    };
+    let ddf = (spec.df - ndf as f64).max(1.0);
+    let f_stat = chisq / ndf as f64;
+    let mut group_means = vec![beta[0]];
+    let mut group_ses = vec![cov[0][0].max(0.0).sqrt()];
+    for j in 1..n_groups {
+        group_means.push(beta[0] + beta[j]);
+        group_ses.push(cov[j][j].max(0.0).sqrt());
+    }
+    Ok(RankTestKResult {
+        ndf,
+        ddf,
+        chisq,
+        f_stat,
+        p_value: f_survival(f_stat, ndf as f64, ddf),
         levels,
         group_means,
         group_ses,

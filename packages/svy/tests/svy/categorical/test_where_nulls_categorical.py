@@ -91,14 +91,14 @@ class TestTTest:
 class TestRankTest:
     def test_kruskal_wallis(self, sample):
         r = sample.categorical.ranktest(
-            y="y", group="grp", method=RankScoreMethod.KRUSKAL_WALLIS, where=W
+            y="y", group="grp", score=RankScoreMethod.KRUSKAL_WALLIS, where=W
         )
         assert r.stats.value == pytest.approx(0.4672088553686697, rel=REL)
         assert r.stats.df == 7
         assert r.stats.p_value == pytest.approx(0.6545447939569580, rel=1e-7)
 
     def test_equals_drop_nulls_path(self, sample):
-        kw = dict(y="y", group="grp", method="vander-waerden", where=W)
+        kw = dict(y="y", group="grp", score="vander-waerden", where=W)
         a = sample.categorical.ranktest(**kw)
         b = sample.categorical.ranktest(**kw, drop_nulls=True)
         assert a.stats.value == pytest.approx(b.stats.value, rel=1e-12)

@@ -23,6 +23,7 @@ from svy.estimation.estimate import Estimate
 
 if TYPE_CHECKING:
     from svy.core.data_prep import PreparedData
+    from svy.core.sample import Sample
     from svy.estimation.base import Estimation
 
 
@@ -32,13 +33,18 @@ if TYPE_CHECKING:
 
 
 def get_rep_weight_cols(est: Estimation) -> list[str]:
-    rw = est._sample._design.rep_wgts
+    return rep_weight_cols(est._sample)
+
+
+def rep_weight_cols(sample: Sample) -> list[str]:
+    """The design's replicate-weight columns, resolved against the data."""
+    rw = sample._design.rep_wgts
     if rw is None:
         return []
     if hasattr(rw, "_cached_cols") and rw._cached_cols is not None:
         return rw._cached_cols
 
-    _lraw = est._sample._data
+    _lraw = sample._data
     local_data: pl.DataFrame = (
         cast(pl.DataFrame, _lraw.collect())
         if isinstance(_lraw, pl.LazyFrame)
@@ -89,14 +95,21 @@ def get_rep_weight_cols(est: Estimation) -> list[str]:
 
 
 def _get_rep_params(est: Estimation, fay_coef: float = 0.0):
-    design = est._sample._design
-    rw = design.rep_wgts
+    return replicate_params(est._sample, fay_coef, where="estimation.replication")
+
+
+def replicate_params(
+    sample: Sample, fay_coef: float = 0.0, *, where: str
+) -> tuple[list[str], int, list[float]]:
+    """The replicate-weight columns, the design df and the per-replicate
+    variance coefficients."""
+    rw = sample._design.rep_wgts
     if rw is None:
         raise ValueError("Replication weights required for replication-based estimation.")
-    rep_weight_cols = get_rep_weight_cols(est)
-    if not rep_weight_cols:
+    rep_cols = rep_weight_cols(sample)
+    if not rep_cols:
         raise ValueError("No replicate weight columns found.")
-    n_reps = len(rep_weight_cols)
+    n_reps = len(rep_cols)
     df_val = int(rw.df) if rw.df and rw.df > 0 else max(1, n_reps - 1)
     # Both coefficient channels are length-checked at construction against the
     # recorded n_reps; this catches the case that check cannot see -- a recorded
@@ -109,7 +122,7 @@ def _get_rep_params(est: Estimation, fay_coef: float = 0.0):
                 detail=f"RepWeights.{_param} has {len(_supplied)} entries but "
                 f"{n_reps} replicate weight columns were resolved.",
                 code=f"{_param.upper()}_LENGTH_MISMATCH",
-                where="estimation.replication",
+                where=where,
                 param=f"rep_wgts.{_param}",
                 expected=n_reps,
                 got=len(_supplied),
@@ -125,7 +138,7 @@ def _get_rep_params(est: Estimation, fay_coef: float = 0.0):
         changes["fay_coef"] = float(fay_coef)
     effective = msgspec.structs.replace(rw, **changes) if changes else rw
 
-    return rep_weight_cols, df_val, effective.coefficients()
+    return rep_cols, df_val, effective.coefficients()
 
 
 # ---------------------------------------------------------------------------

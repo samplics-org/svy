@@ -50,7 +50,7 @@ CALLS = {
     "tabulate": lambda s, a: s.categorical.tabulate("grp", alpha=a),
     "ttest": lambda s, a: s.categorical.ttest("y", mean_h0=10, alpha=a),
     "ranktest": lambda s, a: s.categorical.ranktest(
-        "y", group="grp", method="kruskal-wallis", alpha=a
+        "y", group="grp", score="kruskal-wallis", alpha=a
     ),
     "Estimate.contrast": lambda s, a: s.estimation.mean("y", by="grp").contrast(
         _diff(s.estimation.mean("y", by="grp")), alpha=a

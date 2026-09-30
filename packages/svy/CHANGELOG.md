@@ -8,6 +8,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **Replication variance for `tabulate`, `ttest` and `ranktest`: `method="replication"`.** They took only a Taylor variance, so a replicate design still needed its strata, PSUs and a singleton rule. With `method="replication"`, `tabulate` re-estimates cell proportions and totals with each replicate weight and computes the Rao-Scott F and chi-square from their replicate covariance. `ttest` re-estimates the mean, or the two group means and their difference. `ranktest` re-totals the full-sample influence values with each replicate, as R's `svyranktest` does. The df is the replicate df (`n_reps - 1` unless the design records one), minus 1 for the t-tests and minus k - 1 for the k-sample rank test; it does not shrink on a domain. `where=`, `by=`, paired t-tests and `score_fn` work as with Taylor. The singleton rule, FPC and calibration sweep do not apply, and no domain-singleton findings are reported. `method=None` is Taylor, as in estimation: replication is never picked implicitly. Checked against R survey 4.5 (`svymean`, `svytotal`, `svychisq`, `svyttest`, `svyranktest` on `svrepdesign`) for BRR, Fay-BRR, JK1, JKn, bootstrap and SDR.
+
 - **`read_spss` and `read_stata` read zip archives**, like `read_sas`: the first `.sav`, `.zsav` or `.por` member, or the first `.dta` member, is read, labels included. Needs svy-io with zip support for SPSS and Stata (see its changelog).
 
 - **`read_xpt`, `read_xpt_with_labels`, `create_from_xpt` and `write_xpt`**, aliases of the SAS functions: `read_sas` reads SAS Transport, and `write_sas` writes it. With svy-io's content-based dispatch, `read_sas` reads transport files under any name (e.g. `.ssp`) and refuses SAS CPORT files with a hint on converting them. `catalog_path=` labels transport files too.
@@ -41,6 +43,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **`GLMFit.where_clause`**, the `where=` domain of the fit, formatted as `Estimate.where_clause` is and printed under the modeled variable. `GLMFitData` carries it (default `None`).
 
 ### Changed
+
+- **Breaking: `ranktest` takes the rank score as `score=`; `method=` is the variance method.** `ranktest(y, group=..., method="kruskal-wallis")` becomes `ranktest(y, group=..., score="kruskal-wallis")`, so `method=` means `"taylor"` or `"replication"` as in `tabulate`, `ttest`, `glm.fit` and estimation. Passing a rank score as `method=` raises `INVALID_CHOICE` with a hint naming `score=`.
+
+- **Breaking: `glm.fit` uses Taylor linearization unless `method="replication"` is passed.** It used replicate weights whenever the design had them, unlike estimation and the categorical tests, where replication is never implicit. `glm.fit(..., method="replication")` gives the previous replicate standard errors. With the Taylor default on a replicate design, the singleton rule applies and `TAYLOR_WITHOUT_DESIGN` warns when the design has no stratum or psu.
 
 - **Breaking: `PROP_CI_BOUNDARY` is a note under the table, not a warning.** When a proportion is 0 or 1 and the interval method has none there (logit, beta, wilson), `prop()` and `mean(as_factor=True)` no longer raise a `SvyUserWarning`; the estimate prints one line under its table, `note: CI undefined at p = 0 or 1 for 19 rows (ci_method='logit')`, on every such result, a repeat on an unchanged sample included. The NaN bounds are in the table, so the note is shown by default. The finding is kept like `DOMAIN_SINGLETON_PSU`: it keeps its detail and hint, is on the estimate's `findings` (WARNING) and in `sample.warnings` (INFO), and its `extra` holds `n_rows` and every cell (`by`, `level`, `p`). A list of estimates prints one note, split by variable (`for 5 rows (a: 3, b: 2; ci_method='logit')`). Code that relied on the warning, e.g. running with warnings as errors, should check `estimate.findings`. `to_polars()` is unchanged.
 
@@ -102,7 +108,9 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
-- **The singleton error on a replicate design did not say that the replicates were not used.** `tabulate`, `ttest` and `ranktest` compute a Taylor variance from the stratum and PSU columns even when the design has replicate weights. Estimation does the same unless `method="replication"` is passed. Without a singleton rule they raise `SINGLETON_ERROR`. On a replicate design the error now says that this variance is Taylor linearization and that the replicate weights are not used. Its hint points to where the replicates are used: `method="replication"` for estimation, and `estimation.prop` or `estimation.mean` for `tabulate` and `ttest`. `ranktest` has no replication variance yet. GLM already uses the replicates and is unaffected.
+- **`glm.fit(method="replication")` used the Taylor df when the replicate weights recorded none.** Without `RepWgts.df`, the replicate fit kept the design df (#PSUs - #strata - (k - 1)), which also shrank on a `where=` domain. It now uses `n_reps - 1` less k - 1, like estimation and the categorical tests, and does not shrink on a domain. Matches R `svyglm` on `svrepdesign(degf = n_reps - 1)`.
+
+- **The singleton error on a replicate design did not say that the replicates were not used.** `tabulate`, `ttest` and `ranktest` compute a Taylor variance from the stratum and PSU columns even when the design has replicate weights. Estimation does the same unless `method="replication"` is passed. Without a singleton rule they raise `SINGLETON_ERROR`. On a replicate design the error now says that this variance is Taylor linearization and that the replicate weights are not used. Its hint says `method="replication"` uses the replicates (estimation, `tabulate`, `ttest`, `ranktest` and `glm.fit`).
 
 - **`add_stage` results did not detect singletons.** The combined sample was built without its design keys, so a stratum left with one PSU (after a filter, say) went unnoticed and Taylor estimates left it out silently. It is now checked like a constructed sample, and applies a singleton rule carried from stage 1.
 

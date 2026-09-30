@@ -6,6 +6,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ### Added
 
+- `tabulate_rs`, `ttest_rs` and `ranktest_rs` take `rep_weight_cols`, `rep_coefs`, `rep_df` and `variance_center` for a replication variance (`categorical::replicate`). Cell proportions, totals and means are re-estimated with each replicate; rank tests re-total the full-sample influence values. The stratum, PSU, FPC, singleton and calibration arguments are not used on that path. `ranktest_rs` takes `scores_given` (replication only) for scores computed by the caller, and its two-sample output has `level_0` and `level_1`. `rao_scott` takes the design df `nu` instead of the strata and PSU counts.
+
 - The Taylor kernels read a `":domains"` suffix on `singleton_method` (`"center:domains"`, `"scale:domains"`, and `"none:domains"` for estimation's Python-side `scale` factor): a stratum with several PSUs but one holding domain rows is centred at the grand mean, or left out and counted with the singletons, as R does with `survey.adjust.domain.lonely = TRUE`. `SingletonMethod::parse_rule` and `SingletonRule` parse it; `fit_glm_rs`'s `singleton_meat` applies it too. The Taylor estimators take `domain_rows_col`, the analysis's domain rows (`where=` with its variables present): the singleton rules count a domain's rows by it whatever their weight, as R's `subset()` keeps zero-weight rows, while the df and `n` still count nonzero weights. The t-test, rank-test, table and GLM kernels count their domain the same way.
 
 - `ttest_rs` two-sample output has `n_0` and `n_1`, the records in each group.
