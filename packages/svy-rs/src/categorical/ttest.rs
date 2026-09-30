@@ -18,6 +18,7 @@
 
 use polars::prelude::*;
 
+use crate::categorical::replicate::RepSpec;
 use crate::estimation::calib_sweep::{CalibSweep, sweep_scores};
 use crate::estimation::taylor::{
     degrees_of_freedom, point_estimate_mean, point_estimate_mean_domain, scores_mean,
@@ -377,4 +378,100 @@ fn compute_per_group_ses(
     }
 
     Ok(ses)
+}
+
+// ============================================================================
+// Replication variance
+// ============================================================================
+
+/// One-sample t-test with a replication variance (R's svyttest on a
+/// svyrep.design: svymean re-estimated with every replicate). `domain` is the
+/// domain's rows; df = replicate df - 1.
+pub fn ttest_one_sample_rep(
+    y: &Float64Chunked,
+    weights: &Float64Chunked,
+    domain: Option<&BooleanChunked>,
+    null_value: f64,
+    spec: &RepSpec,
+) -> PolarsResult<TTestOneResult> {
+    let n = y.len();
+    let mut y_arr = vec![0.0; n];
+    let mut w_arr = vec![0.0; n];
+    let mut mask = vec![false; n];
+    for i in 0..n {
+        let yi = y.get(i).unwrap_or(f64::NAN);
+        let in_dom = domain.map_or(true, |m| m.get(i).unwrap_or(false));
+        if in_dom && !yi.is_nan() {
+            y_arr[i] = yi;
+            w_arr[i] = weights.get(i).unwrap_or(0.0);
+            mask[i] = true;
+        }
+    }
+    let (estimate, reps) = spec.means(&y_arr, &w_arr, &mask);
+    let se = spec.cov(&[estimate], &[reps])[0][0].max(0.0).sqrt();
+    let df = (spec.df - 1.0).max(1.0);
+    let diff = estimate - null_value;
+    let t_stat = if se > 0.0 { diff / se } else { f64::NAN };
+    Ok(TTestOneResult {
+        estimate,
+        se,
+        diff,
+        se_diff: se,
+        t_stat,
+        df,
+        p_value: crate::categorical::ranktest::two_sided_t_pvalue(t_stat, df),
+        n_obs: count_active(y, weights, domain),
+    })
+}
+
+/// Two-sample t-test with a replication variance (R's svyttest on a
+/// svyrep.design, whose svrepglm slope is the difference of the two domain
+/// means, re-estimated with every replicate). df = replicate df - 1.
+pub fn ttest_two_sample_rep(
+    y: &[f64],
+    g: &[u32],
+    w: &[f64],
+    levels: Vec<String>,
+    null_value: f64,
+    rows: &[bool],
+    spec: &RepSpec,
+) -> PolarsResult<TTestTwoResult> {
+    let mut means = Vec::with_capacity(2);
+    let mut reps = Vec::with_capacity(2);
+    let mut group_ns = vec![0usize; 2];
+    for group in 0..2u32 {
+        // Rows outside the domain, or zero-weighted, are not in R's subset.
+        let mask: Vec<bool> = (0..y.len())
+            .map(|i| rows[i] && w[i] != 0.0 && g[i] == group)
+            .collect();
+        group_ns[group as usize] = mask.iter().filter(|&&m| m).count();
+        let (m, r) = spec.means(y, w, &mask);
+        means.push(m);
+        reps.push(r);
+    }
+    let diff_reps: Vec<f64> = reps[1].iter().zip(&reps[0]).map(|(a, b)| a - b).collect();
+    let diff = means[1] - means[0];
+    let cov = spec.cov(
+        &[means[0], means[1], diff],
+        &[reps[0].clone(), reps[1].clone(), diff_reps],
+    );
+    let se_diff = cov[2][2].max(0.0).sqrt();
+    let t_stat = if se_diff > 0.0 {
+        (diff - null_value) / se_diff
+    } else {
+        f64::NAN
+    };
+    let df = (spec.df - 1.0).max(1.0);
+    Ok(TTestTwoResult {
+        diff,
+        se_diff,
+        t_stat,
+        df,
+        p_value: crate::categorical::ranktest::two_sided_t_pvalue(t_stat, df),
+        levels,
+        group_means: means,
+        group_ses: vec![cov[0][0].max(0.0).sqrt(), cov[1][1].max(0.0).sqrt()],
+        n_obs: group_ns.iter().sum(),
+        group_ns,
+    })
 }

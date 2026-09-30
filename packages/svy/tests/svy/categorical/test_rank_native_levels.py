@@ -40,18 +40,18 @@ def _plain(result) -> str:
 
 class TestRankTestLevels:
     def test_two_sample_groups(self, sample):
-        r = sample.categorical.ranktest("y", group="b", method="kruskal-wallis")
+        r = sample.categorical.ranktest("y", group="b", score="kruskal-wallis")
         assert r.groups.levels == (False, True)
         assert all(type(v) is bool for v in r.groups.levels)
         assert "[false vs true]" in _plain(r)
 
     def test_k_sample_groups(self, sample):
-        r = sample.categorical.ranktest("y", group="zone", method="kruskal-wallis")
+        r = sample.categorical.ranktest("y", group="zone", score="kruskal-wallis")
         assert r.group_levels == [1, 2, 3]
         assert all(type(v) is int for v in r.group_levels)
 
     def test_two_sample_by(self, sample):
-        r = sample.categorical.ranktest("y", group="b", by="zone", method="kruskal-wallis")
+        r = sample.categorical.ranktest("y", group="b", by="zone", score="kruskal-wallis")
         assert sorted(r.by_levels) == [1, 2, 3]
         assert all(type(v) is int for v in r.by_levels)
         assert [x.diff[0].by_level for x in r] == r.by_levels
@@ -59,7 +59,7 @@ class TestRankTestLevels:
         assert r.to_polars()["zone"].dtype == pl.Int64
 
     def test_k_sample_by_bool(self, sample):
-        r = sample.categorical.ranktest("y", group="zone", by="b", method="median")
+        r = sample.categorical.ranktest("y", group="zone", by="b", score="median")
         assert sorted(r.by_levels) == [False, True]
         assert all(x.group_levels == [1, 2, 3] for x in r)
         text = _plain(r)
@@ -67,7 +67,7 @@ class TestRankTestLevels:
 
     def test_where_drops_level(self, sample):
         r = sample.categorical.ranktest(
-            "y", group="zone", where=pl.col("zone") != 2, method="kruskal-wallis"
+            "y", group="zone", where=pl.col("zone") != 2, score="kruskal-wallis"
         )
         assert r.groups.levels == (1, 3)
 
@@ -78,7 +78,7 @@ class TestRankTestLevels:
         assert all(type(x.diff[0].by_level) is int for x in r)
 
     def test_string_group_unchanged(self, sample):
-        r = sample.categorical.ranktest("y", group="g", method="kruskal-wallis")
+        r = sample.categorical.ranktest("y", group="g", score="kruskal-wallis")
         assert r.groups.levels == ("a", "b")
         assert "['a' vs 'b']" in _plain(r)
 

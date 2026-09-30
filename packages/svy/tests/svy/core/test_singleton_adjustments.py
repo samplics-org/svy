@@ -603,7 +603,7 @@ def test_verify_singleton_rule_in_every_analysis(center_domain, method):
     logit = sample.glm.fit("b", x=["x"], family="binomial")
     assert [c.se for c in logit.coefs] == pytest.approx(r["logit"], rel=2e-6)
 
-    rank = cat.ranktest("y", group="reg", method="kruskal-wallis")
+    rank = cat.ranktest("y", group="reg", score="kruskal-wallis")
     assert rank.stats.value == pytest.approx(r["rank"])
 
 
@@ -625,7 +625,7 @@ def test_tabulate_uses_the_singleton_rule_like_estimation(center_domain, method)
     [
         lambda s: s.categorical.ttest("y", mean_h0=4),
         lambda s: s.categorical.ttest("y", group="reg"),
-        lambda s: s.categorical.ranktest("y", group="reg", method="kruskal-wallis"),
+        lambda s: s.categorical.ranktest("y", group="reg", score="kruskal-wallis"),
         lambda s: s.categorical.ranktest("y", group="reg", score_fn=lambda r, n: r / n),
         lambda s: s.categorical.tabulate("cat"),
         lambda s: s.glm.fit("y", x=["x"]),

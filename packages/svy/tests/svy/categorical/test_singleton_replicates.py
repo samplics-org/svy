@@ -2,9 +2,10 @@
 """Singleton strata on a design with replicate weights.
 
 tabulate, ttest and ranktest compute a Taylor variance from the stratum and PSU
-columns whether or not the design carries replicate weights, so a singleton
-stratum without a rule raises SINGLETON_ERROR on a replicate design too. The
-error says the replicates are not used and where a replication variance is.
+columns by default, whether or not the design carries replicate weights, so a
+singleton stratum without a rule raises SINGLETON_ERROR on a replicate design
+too. The error says the replicates are not used and that method='replication'
+uses them.
 """
 
 from __future__ import annotations
@@ -64,18 +65,18 @@ CALLS = {
     "ttest-two-group": lambda s: s.categorical.ttest("y", group="g"),
     "ttest-by": lambda s: s.categorical.ttest("y", by="d"),
     "ttest-where": lambda s: s.categorical.ttest("y", group="g", where=svy.col("d") == 1),
-    "ranktest": lambda s: s.categorical.ranktest("y", group="g", method="kruskal-wallis"),
+    "ranktest": lambda s: s.categorical.ranktest("y", group="g", score="kruskal-wallis"),
     "ranktest-by": lambda s: s.categorical.ranktest(
-        "y", group="g", method="kruskal-wallis", by="d"
+        "y", group="g", score="kruskal-wallis", by="d"
     ),
 }
 
 WHERE = {name: f"Sample.categorical.{name.split('-')[0]}" for name in CALLS}
 
 USE_REPLICATES = {
-    "tabulate": "sample.estimation.prop(..., method='replication')",
-    "ttest": "sample.estimation.mean(..., method='replication')",
-    "ranktest": "ranktest has no replication variance yet.",
+    "tabulate": "Pass method='replication'",
+    "ttest": "Pass method='replication'",
+    "ranktest": "Pass method='replication'",
 }
 
 
@@ -126,7 +127,7 @@ def test_domain_singleton_findings_are_the_taylor_ones():
                 "tabulate": lambda s: s.categorical.tabulate("c", where=where),
                 "ttest": lambda s: s.categorical.ttest("y", where=where),
                 "ranktest": lambda s: s.categorical.ranktest(
-                    "y", group="g", method="kruskal-wallis", where=where
+                    "y", group="g", score="kruskal-wallis", where=where
                 ),
             }.items()
         }
@@ -153,4 +154,4 @@ def test_singleton_introduced_by_a_filter_after_creating_replicates():
     assert s.design.rep_wgts is not None and s.n_singletons == 1
     err = _raised(CALLS["ttest-two-group"], s)
     assert "replicate weights (BRR" in err.detail
-    assert "sample.estimation.mean(..., method='replication')" in err.hint
+    assert "Pass method='replication'" in err.hint

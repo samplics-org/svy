@@ -15,11 +15,18 @@ use pyo3_polars::PyDataFrame;
 use crate::estimation::calib_sweep::{CalibSpec, CalibSweep, build_calib_sweep};
 use crate::estimation::taylor::active_count;
 
-use crate::categorical::ranktest::{RankScoreMethod, ranktest_k_sample, ranktest_two_sample};
+use crate::categorical::ranktest::{
+    RankScoreMethod, ranktest_k_sample, ranktest_k_sample_rep, ranktest_two_sample,
+    ranktest_two_sample_rep,
+};
+use crate::categorical::replicate::{RepSpec, replicate_cells};
 use crate::categorical::tabulation::{
     count_strata_psus, domain_levels, estimate_proportions, estimate_totals, rao_scott,
 };
-use crate::categorical::ttest::{ttest_one_sample, ttest_one_sample_domain, ttest_two_sample};
+use crate::categorical::ttest::{
+    ttest_one_sample, ttest_one_sample_domain, ttest_one_sample_rep, ttest_two_sample,
+    ttest_two_sample_rep,
+};
 
 // ============================================================================
 // Shared column-extraction helpers
@@ -45,6 +52,30 @@ pub(crate) fn get_opt_f64<'a>(
     match col {
         Some(c) => Ok(Some(df.column(c)?.as_materialized_series().f64()?)),
         None => Ok(None),
+    }
+}
+
+/// The replicate weights, when the caller asked for a replication variance.
+fn rep_spec(
+    df: &DataFrame,
+    rep_weight_cols: Option<Vec<String>>,
+    rep_coefs: Option<Vec<f64>>,
+    rep_df: Option<f64>,
+    variance_center: &str,
+) -> PyResult<Option<RepSpec>> {
+    let to_py = |e: PolarsError| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string());
+    match rep_weight_cols {
+        None => Ok(None),
+        Some(cols) => {
+            let coefs = rep_coefs.ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "rep_coefs is required with rep_weight_cols",
+                )
+            })?;
+            RepSpec::from_frame(df, &cols, coefs, variance_center, rep_df)
+                .map(Some)
+                .map_err(to_py)
+        }
     }
 }
 
@@ -244,7 +275,8 @@ where
     fpc_col=None, fpc_ssu_col=None, singleton_method=None,
     null_value=0.0, domain_col=None, domain_val=None, by_col=None,
     calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None,
-    calib_pins_total=None, calib_new_wgt=None))]
+    calib_pins_total=None, calib_new_wgt=None,
+    rep_weight_cols=None, rep_coefs=None, rep_df=None, variance_center="rep_mean"))]
 pub fn ttest_rs(
     _py: Python,
     data: PyDataFrame,
@@ -267,8 +299,13 @@ pub fn ttest_rs(
     calib_prev_wgt: Option<String>,
     calib_pins_total: Option<bool>,
     calib_new_wgt: Option<String>,
+    rep_weight_cols: Option<Vec<String>>,
+    rep_coefs: Option<Vec<f64>>,
+    rep_df: Option<f64>,
+    variance_center: &str,
 ) -> PyResult<PyDataFrame> {
     let df: DataFrame = data.into();
+    let rep = rep_spec(&df, rep_weight_cols, rep_coefs, rep_df, variance_center)?;
     let calib = calib_kind.zip(calib_prev_wgt).and_then(|(kind, prev)| {
         build_calib_sweep(
             &df,
@@ -298,6 +335,7 @@ pub fn ttest_rs(
         domain_val.as_deref(),
         by_col.as_deref(),
         calib.as_ref(),
+        rep.as_ref(),
     )
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok(PyDataFrame(result))
@@ -319,6 +357,7 @@ fn compute_svyttest(
     domain_val: Option<&str>,
     by_col: Option<&str>,
     calib: Option<&CalibSweep>,
+    rep: Option<&RepSpec>,
 ) -> PolarsResult<DataFrame> {
     match by_col {
         None => compute_svyttest_single(
@@ -336,6 +375,7 @@ fn compute_svyttest(
             domain_col,
             domain_val,
             calib,
+            rep,
         ),
         Some(by) => compute_by_groups(df, by, domain_col, domain_val, |temp_df, d_col, d_val| {
             compute_svyttest_single(
@@ -353,6 +393,7 @@ fn compute_svyttest(
                 d_col,
                 d_val,
                 calib,
+                rep,
             )
         }),
     }
@@ -373,6 +414,7 @@ fn compute_svyttest_single(
     domain_col: Option<&str>,
     domain_val: Option<&str>,
     calib: Option<&CalibSweep>,
+    rep: Option<&RepSpec>,
 ) -> PolarsResult<DataFrame> {
     let strata = get_opt_col(df, strata_col)?;
     let psu = get_opt_col(df, psu_col)?;
@@ -386,7 +428,19 @@ fn compute_svyttest_single(
             let y = df.column(y_col)?.as_materialized_series().f64()?;
             let weights = df.column(weight_col)?.as_materialized_series().f64()?;
 
-            let res = if let (Some(d_col), Some(d_val)) = (domain_col, domain_val) {
+            let res = if let Some(spec) = rep {
+                let mask = match (domain_col, domain_val) {
+                    (Some(d_col), Some(d_val)) => Some(
+                        df.column(d_col)?
+                            .as_materialized_series()
+                            .cast(&DataType::String)?
+                            .str()?
+                            .equal(d_val),
+                    ),
+                    _ => None,
+                };
+                ttest_one_sample_rep(y, weights, mask.as_ref(), null_value, spec)?
+            } else if let (Some(d_col), Some(d_val)) = (domain_col, domain_val) {
                 let d_series = df.column(d_col)?.as_materialized_series();
                 let d_str = d_series.cast(&DataType::String)?;
                 let d_ca = d_str.str()?;
@@ -447,22 +501,33 @@ fn compute_svyttest_single(
                 ));
             }
 
-            let res = ttest_two_sample(
-                &y_arr,
-                &g_arr,
-                &w_arr,
-                n,
-                strata,
-                psu,
-                ssu,
-                fpc,
-                fpc_ssu,
-                singleton_method,
-                calib,
-                levels.clone(),
-                null_value,
-                &rows,
-            )?;
+            let res = match rep {
+                Some(spec) => ttest_two_sample_rep(
+                    &y_arr,
+                    &g_arr,
+                    &w_arr,
+                    levels.clone(),
+                    null_value,
+                    &rows,
+                    spec,
+                )?,
+                None => ttest_two_sample(
+                    &y_arr,
+                    &g_arr,
+                    &w_arr,
+                    n,
+                    strata,
+                    psu,
+                    ssu,
+                    fpc,
+                    fpc_ssu,
+                    singleton_method,
+                    calib,
+                    levels.clone(),
+                    null_value,
+                    &rows,
+                )?,
+            };
 
             df![
                 "type" => vec!["two-sample"],
@@ -497,6 +562,8 @@ fn compute_svyttest_single(
     strata_col=None, psu_col=None, ssu_col=None,
     fpc_col=None, fpc_ssu_col=None, score_method=None,
     singleton_method=None, domain_col=None, domain_val=None, by_col=None,
+    rep_weight_cols=None, rep_coefs=None, rep_df=None, variance_center="rep_mean",
+    scores_given=false,
 ))]
 pub fn ranktest_rs(
     _py: Python,
@@ -514,8 +581,21 @@ pub fn ranktest_rs(
     domain_col: Option<String>,
     domain_val: Option<String>,
     by_col: Option<String>,
+    rep_weight_cols: Option<Vec<String>>,
+    rep_coefs: Option<Vec<f64>>,
+    rep_df: Option<f64>,
+    variance_center: &str,
+    // `y_col` already holds the rank scores (a caller-supplied score function).
+    // Replication only: on Taylor the facade tests such scores with ttest_rs.
+    scores_given: bool,
 ) -> PyResult<PyDataFrame> {
     let df: DataFrame = data.into();
+    let rep = rep_spec(&df, rep_weight_cols, rep_coefs, rep_df, variance_center)?;
+    if scores_given && rep.is_none() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "scores_given requires rep_weight_cols",
+        ));
+    }
     let result = compute_svyranktest(
         &df,
         &y_col,
@@ -531,6 +611,8 @@ pub fn ranktest_rs(
         domain_col.as_deref(),
         domain_val.as_deref(),
         by_col.as_deref(),
+        rep.as_ref(),
+        scores_given,
     )
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok(PyDataFrame(result))
@@ -551,6 +633,8 @@ fn compute_svyranktest(
     domain_col: Option<&str>,
     domain_val: Option<&str>,
     by_col: Option<&str>,
+    rep: Option<&RepSpec>,
+    scores_given: bool,
 ) -> PolarsResult<DataFrame> {
     match by_col {
         None => compute_svyranktest_single(
@@ -567,6 +651,8 @@ fn compute_svyranktest(
             singleton_method,
             domain_col,
             domain_val,
+            rep,
+            scores_given,
         ),
         Some(by) => compute_by_groups(df, by, domain_col, domain_val, |temp_df, d_col, d_val| {
             compute_svyranktest_single(
@@ -583,6 +669,8 @@ fn compute_svyranktest(
                 singleton_method,
                 d_col,
                 d_val,
+                rep,
+                scores_given,
             )
         }),
     }
@@ -602,16 +690,23 @@ fn compute_svyranktest_single(
     singleton_method: Option<&str>,
     domain_col: Option<&str>,
     domain_val: Option<&str>,
+    rep: Option<&RepSpec>,
+    scores_given: bool,
 ) -> PolarsResult<DataFrame> {
     let method = score_method
         .and_then(RankScoreMethod::from_str)
         .unwrap_or(RankScoreMethod::Wilcoxon);
 
-    let method_name = match method {
-        RankScoreMethod::Wilcoxon | RankScoreMethod::KruskalWallis => "KruskalWallis",
-        RankScoreMethod::VanDerWaerden => "vanderWaerden",
-        RankScoreMethod::Median => "median",
+    let method_name = if scores_given {
+        "custom"
+    } else {
+        match method {
+            RankScoreMethod::Wilcoxon | RankScoreMethod::KruskalWallis => "KruskalWallis",
+            RankScoreMethod::VanDerWaerden => "vanderWaerden",
+            RankScoreMethod::Median => "median",
+        }
     };
+    let rep_score = (!scores_given).then_some(method);
 
     let strata = get_opt_col(df, strata_col)?;
     let psu = get_opt_col(df, psu_col)?;
@@ -625,27 +720,35 @@ fn compute_svyranktest_single(
     let n_groups = levels.len();
 
     if n_groups == 2 {
-        let res = ranktest_two_sample(
-            &y_arr,
-            &g_arr,
-            &w_arr,
-            n,
-            strata,
-            psu,
-            ssu,
-            fpc,
-            fpc_ssu,
-            method,
-            singleton_method,
-            levels,
-            &rows,
-        )?;
+        let (level_0, level_1) = (levels[0].clone(), levels[1].clone());
+        let res = match rep {
+            Some(spec) => {
+                ranktest_two_sample_rep(&y_arr, &g_arr, &w_arr, n, rep_score, levels, &rows, spec)?
+            }
+            None => ranktest_two_sample(
+                &y_arr,
+                &g_arr,
+                &w_arr,
+                n,
+                strata,
+                psu,
+                ssu,
+                fpc,
+                fpc_ssu,
+                method,
+                singleton_method,
+                levels,
+                &rows,
+            )?,
+        };
 
         df![
             "type" => vec!["two-sample"],
             "method" => vec![method_name],
             "y" => vec![y_col],
             "group" => vec![group_col],
+            "level_0" => vec![level_0],
+            "level_1" => vec![level_1],
             "delta" => vec![res.delta],
             "se" => vec![res.se],
             "t" => vec![res.t_stat],
@@ -654,22 +757,27 @@ fn compute_svyranktest_single(
             "n" => vec![res.n_obs as u32],
         ]
     } else {
-        let res = ranktest_k_sample(
-            &y_arr,
-            &g_arr,
-            &w_arr,
-            n,
-            n_groups,
-            strata,
-            psu,
-            ssu,
-            fpc,
-            fpc_ssu,
-            method,
-            singleton_method,
-            levels,
-            &rows,
-        )?;
+        let res = match rep {
+            Some(spec) => ranktest_k_sample_rep(
+                &y_arr, &g_arr, &w_arr, n, n_groups, rep_score, levels, &rows, spec,
+            )?,
+            None => ranktest_k_sample(
+                &y_arr,
+                &g_arr,
+                &w_arr,
+                n,
+                n_groups,
+                strata,
+                psu,
+                ssu,
+                fpc,
+                fpc_ssu,
+                method,
+                singleton_method,
+                levels,
+                &rows,
+            )?,
+        };
 
         df![
             "type" => vec!["k-sample"],
@@ -698,6 +806,7 @@ fn compute_svyranktest_single(
     compute_totals=false,
     calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None,
     calib_pins_total=None, calib_new_wgt=None, domain_col=None,
+    rep_weight_cols=None, rep_coefs=None, rep_df=None, variance_center="rep_mean",
 ))]
 pub fn tabulate_rs(
     _py: Python,
@@ -719,8 +828,13 @@ pub fn tabulate_rs(
     calib_pins_total: Option<bool>,
     calib_new_wgt: Option<String>,
     domain_col: Option<String>,
+    rep_weight_cols: Option<Vec<String>>,
+    rep_coefs: Option<Vec<f64>>,
+    rep_df: Option<f64>,
+    variance_center: &str,
 ) -> PyResult<(PyDataFrame, PyDataFrame)> {
     let df: DataFrame = data.into();
+    let rep = rep_spec(&df, rep_weight_cols, rep_coefs, rep_df, variance_center)?;
     let calib = calib_kind.zip(calib_prev_wgt).and_then(|(kind, prev)| {
         build_calib_sweep(
             &df,
@@ -748,6 +862,7 @@ pub fn tabulate_rs(
         compute_totals,
         calib.as_ref(),
         domain_col.as_deref(),
+        rep.as_ref(),
     )
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok((PyDataFrame(result.0), PyDataFrame(result.1)))
@@ -767,6 +882,7 @@ fn compute_tabulate(
     compute_totals: bool,
     calib: Option<&CalibSweep>,
     domain_col: Option<&str>,
+    rep: Option<&RepSpec>,
 ) -> PolarsResult<(DataFrame, DataFrame)> {
     // Domain (`where=`): out-of-domain rows keep their design columns and
     // get weight 0, exactly R's subset() on a survey design, so the PSU
@@ -859,18 +975,43 @@ fn compute_tabulate(
         y_effective = &combined_key;
     }
 
-    let (levels, proportions, ses, cov_matrix, deff_vec, df_val) = estimate_proportions(
-        y_effective,
-        weights,
-        strata.as_ref(),
-        psu.as_ref(),
-        ssu.as_ref(),
-        fpc.as_ref(),
-        fpc_ssu.as_ref(),
-        singleton_method,
-        calib,
-        domain.as_ref(),
-    )?;
+    // Replication: cell shares and totals re-estimated with every replicate.
+    let rep_cells = match rep {
+        Some(spec) => {
+            let levels = domain_levels(y_effective, domain.as_ref())?;
+            let cells = replicate_cells(y_effective, weights, domain.as_ref(), &levels, spec);
+            Some((levels, cells))
+        }
+        None => None,
+    };
+    let (levels, proportions, ses, cov_matrix, deff_vec, df_val) = match &rep_cells {
+        Some((levels, cells)) => {
+            let k = levels.len();
+            let ses: Vec<f64> = (0..k)
+                .map(|j| cells.prop_cov[j][j].max(0.0).sqrt())
+                .collect();
+            (
+                levels.clone(),
+                cells.proportions.clone(),
+                ses,
+                cells.prop_cov.clone(),
+                vec![f64::NAN; k],
+                rep.map_or(0, |s| s.df.max(0.0) as u32),
+            )
+        }
+        None => estimate_proportions(
+            y_effective,
+            weights,
+            strata.as_ref(),
+            psu.as_ref(),
+            ssu.as_ref(),
+            fpc.as_ref(),
+            fpc_ssu.as_ref(),
+            singleton_method,
+            calib,
+            domain.as_ref(),
+        )?,
+    };
 
     let k = levels.len();
     let mut rowvars: Vec<String> = Vec::with_capacity(k);
@@ -893,7 +1034,12 @@ fn compute_tabulate(
         }
     }
 
-    let (est_vals, se_vals) = if compute_totals {
+    let (est_vals, se_vals) = if let (true, Some((_, cells))) = (compute_totals, &rep_cells) {
+        let ses = (0..levels.len())
+            .map(|j| cells.total_cov[j][j].max(0.0).sqrt())
+            .collect();
+        (cells.totals.clone(), ses)
+    } else if compute_totals {
         estimate_totals(
             y_effective,
             weights,
@@ -967,18 +1113,17 @@ fn compute_tabulate(
             }
         }
 
-        let (n_strata_count, n_psu_count) =
-            count_strata_psus(strata.as_ref(), psu.as_ref(), n_obs, domain.as_ref());
+        let nu = match rep {
+            Some(spec) => spec.df,
+            None => {
+                let (n_strata_count, n_psu_count) =
+                    count_strata_psus(strata.as_ref(), psu.as_ref(), n_obs, domain.as_ref());
+                (n_psu_count - n_strata_count) as f64
+            }
+        };
 
-        let (p_chisq, p_df, p_p, p_adj_f, p_adj_ndf, p_adj_ddf, p_adj_p) = rao_scott(
-            &prop_ordered,
-            &cov_ordered,
-            nr,
-            nc,
-            n_obs,
-            n_strata_count,
-            n_psu_count,
-        );
+        let (p_chisq, p_df, p_p, p_adj_f, p_adj_ndf, p_adj_ddf, p_adj_p) =
+            rao_scott(&prop_ordered, &cov_ordered, nr, nc, n_obs, nu);
 
         df![
             "stat" => vec!["chisq", "f"],

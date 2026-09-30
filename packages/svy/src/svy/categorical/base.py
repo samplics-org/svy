@@ -44,8 +44,10 @@ from svy.core.types import (
     Number,
     WhereArg,
 )
+from svy.core.variance_method import resolve_variance_method
 from svy.errors import MethodError
 from svy.estimation.estimate import row_counts
+from svy.estimation.replication import replicate_params
 from svy.ui.printing import format_where_clause
 from svy.utils.checks import assert_no_missing, drop_missing, validate_alpha
 from svy.utils.where import _compile_where
@@ -129,7 +131,7 @@ def _normalize_rank_method(
         return method
     if not isinstance(method, str):
         raise TypeError(
-            f"'method' must be a RankScoreMethod, a string, or None, got {type(method).__name__}. "
+            f"'score' must be a RankScoreMethod, a string, or None, got {type(method).__name__}. "
             f"Use 'kruskal-wallis', 'vander-waerden', or 'median'."
         )
     result = _MAP.get(method.strip().lower())
@@ -140,14 +142,44 @@ def _normalize_rank_method(
     return result
 
 
+def _is_rank_score(value: object) -> bool:
+    if isinstance(value, _RankScoreMethod):
+        return True
+    if not isinstance(value, str):
+        return False
+    try:
+        _normalize_rank_method(value)  # type: ignore[arg-type]
+    except ValueError:
+        return False
+    return True
+
+
+def _score_label(value: object) -> str:
+    return value.value if isinstance(value, _RankScoreMethod) else str(value)
+
+
 # -------------------------------------------
 # Categorical data analysis facade on Sample
 # -------------------------------------------
 
 
+_USE_REPLICATES = "Pass method='replication' to use the replicates."
+
+
 class Categorical:
     def __init__(self, sample: Sample) -> None:
         self._sample = sample
+
+    def _replication(self, method: str | None, *, where: str) -> dict | None:
+        """The kernel's replicate arguments, or None for a Taylor variance.
+
+        Replicate weights carry the design, so a replication variance needs no
+        singleton rule, FPC or calibration sweep."""
+        if resolve_variance_method(self._sample, method, where=where) is None:
+            require_singleton_rule(self._sample, where=where, use_replicates=_USE_REPLICATES)
+            return None
+        cols, df_val, coefs = replicate_params(self._sample, where=where)
+        return {"rep_weight_cols": cols, "rep_coefs": coefs, "rep_df": float(df_val)}
 
     # ════════════════════════════════════════════════════════════════════════
     # TABULATE (Rust backend)
@@ -161,6 +193,7 @@ class Categorical:
         units: Literal["proportion", "percent", "count"] = "proportion",
         count_total: float | int | None = None,
         where: WhereArg = None,
+        method: Literal["taylor", "replication"] | None = None,
         alpha: float = 0.05,
         drop_nulls: bool = False,
         use_labels: bool | None = None,
@@ -184,6 +217,12 @@ class Categorical:
             Output units: ``'proportion'``, ``'percent'``, or ``'count'``. Default ``'proportion'``.
         count_total : float | int | None
             Total for count scaling. Default None.
+        method : {"taylor", "replication"} | None
+            Variance method. None (the default) is Taylor linearization;
+            ``"replication"`` uses the design's replicate weights: cell
+            proportions and totals are re-estimated with each replicate, and
+            the Rao-Scott test uses their replicate covariance (R's
+            ``svymean``/``svytotal``/``svychisq`` on a ``svrepdesign``).
         alpha : float
             Significance level for confidence intervals. Default 0.05.
         drop_nulls : bool
@@ -204,16 +243,11 @@ class Categorical:
         and svy's ``estimation.total``. R's ``confint()`` default on
         ``svytotal`` uses the normal critical value instead; to reproduce
         svy's count CIs in R, pass ``df = degf(design)`` to ``confint()``.
+        With ``method="replication"`` the df is the replicate df
+        (``n_reps - 1`` unless the design records one), domain or not.
         """
         alpha = validate_alpha(alpha, where="Sample.categorical.tabulate")
-        require_singleton_rule(
-            self._sample,
-            where="Sample.categorical.tabulate",
-            use_replicates=(
-                "tabulate has no replication variance yet; "
-                "sample.estimation.prop(..., method='replication') uses the replicates."
-            ),
-        )
+        rep_kw = self._replication(method, where="Sample.categorical.tabulate")
         from scipy.stats import t as t_dist
 
         _raw = self._sample._data
@@ -243,6 +277,8 @@ class Categorical:
             else []
         )
         _rec_cols += [c for c in _var_cols if c not in cols]
+        if rep_kw is not None:
+            _rec_cols += [c for c in rep_kw["rep_weight_cols"] if c not in cols + _rec_cols]
 
         # Domain mask: materialized as a column so it filters along with any
         # row drop below (design nulls), then handed to the kernel.
@@ -381,39 +417,52 @@ class Categorical:
         # FPC, from the full frame: n_h counts every sampled unit of the
         # stratum whether or not it has an in-domain row, as R's subset()
         # keeps the fpc of the parent design.
-        fpc_col = fpc_ssu_col = None
-        if design.pop_size is not None:
-            from svy.estimation._fpc import compute_fpc_columns
+        if rep_kw is not None:
+            # Replicate weights are passed as they are: a cell share is a
+            # ratio, and a bare count is the replicate total.
+            cells_df, stats_df = rs.tabulate_rs(
+                concat_data,
+                rowvar_col=rowvar,
+                weight_col="__svy_scaled_wgt__",
+                colvar_col=colvar,
+                compute_totals=compute_totals,
+                domain_col=domain_col,
+                **rep_kw,
+            )
+            findings = []
+        else:
+            fpc_col = fpc_ssu_col = None
+            if design.pop_size is not None:
+                from svy.estimation._fpc import compute_fpc_columns
 
-            concat_data, fpc_col, fpc_ssu_col = compute_fpc_columns(
-                concat_data, design.pop_size, strata_col, psu_col, ssu_col
+                concat_data, fpc_col, fpc_ssu_col = compute_fpc_columns(
+                    concat_data, design.pop_size, strata_col, psu_col, ssu_col
+                )
+
+            findings = domain_singleton_findings(
+                self._sample,
+                concat_data,
+                strata_col=strata_col,
+                psu_col=psu_col,
+                mask=pl.col(domain_col) if domain_col else None,
+                where="Sample.categorical.tabulate",
             )
 
-        findings = domain_singleton_findings(
-            self._sample,
-            concat_data,
-            strata_col=strata_col,
-            psu_col=psu_col,
-            mask=pl.col(domain_col) if domain_col else None,
-            where="Sample.categorical.tabulate",
-        )
-
-        # Call Rust backend
-        cells_df, stats_df = rs.tabulate_rs(
-            concat_data,
-            rowvar_col=rowvar,
-            weight_col="__svy_scaled_wgt__",
-            colvar_col=colvar,
-            strata_col=strata_col,
-            psu_col=psu_col,
-            ssu_col=ssu_col,
-            fpc_col=fpc_col,
-            fpc_ssu_col=fpc_ssu_col,
-            singleton_method=taylor_singleton_method(self._sample),
-            compute_totals=compute_totals,
-            domain_col=domain_col,
-            **calib_kwargs(self._sample, concat_data),
-        )
+            cells_df, stats_df = rs.tabulate_rs(
+                concat_data,
+                rowvar_col=rowvar,
+                weight_col="__svy_scaled_wgt__",
+                colvar_col=colvar,
+                strata_col=strata_col,
+                psu_col=psu_col,
+                ssu_col=ssu_col,
+                fpc_col=fpc_col,
+                fpc_ssu_col=fpc_ssu_col,
+                singleton_method=taylor_singleton_method(self._sample),
+                compute_totals=compute_totals,
+                domain_col=domain_col,
+                **calib_kwargs(self._sample, concat_data),
+            )
 
         # Unpack cells DataFrame into CellEst objects — vectorized CI computation
         df_val = int(cells_df["df"][0]) if cells_df.height > 0 else 1
@@ -582,6 +631,7 @@ class Categorical:
         y_pair: str | None = None,
         by: str | None = None,
         where: WhereArg = None,
+        method: Literal["taylor", "replication"] | None = None,
         alpha: float = 0.05,
         alternative: Literal["two-sided", "less", "greater"] = "two-sided",
         drop_nulls: bool = False,
@@ -599,6 +649,10 @@ class Categorical:
             where: Subpopulation filter. Restricts the analysis to observations
                 matching the condition. Accepts Polars expressions, dicts, or lists.
                 Default None.
+            method: Variance method. None (the default) is Taylor linearization;
+                "replication" re-estimates the means (and their difference) with
+                each replicate weight, as R's svyttest on a svrepdesign. The df
+                is then the replicate df minus 1.
             alpha: Significance level for confidence intervals. Default 0.05.
             alternative: Alternative hypothesis. One of "two-sided", "less", "greater".
                 Default "two-sided".
@@ -609,17 +663,10 @@ class Categorical:
             When `by` is specified, returns a list of test results.
         """
         alpha = validate_alpha(alpha, where="Sample.categorical.ttest")
-        require_singleton_rule(
-            self._sample,
-            where="Sample.categorical.ttest",
-            use_replicates=(
-                "ttest has no replication variance yet; "
-                "sample.estimation.mean(..., method='replication') uses the replicates."
-            ),
-        )
+        rep_kw = self._replication(method, where="Sample.categorical.ttest")
         # The population-size column has to survive prepare_data's projection
         # for the FPC to be computable below.
-        pop_size = self._sample._design.pop_size
+        pop_size = self._sample._design.pop_size if rep_kw is None else None
         pop_cols: list[str] = []
         if pop_size is not None:
             _pop = pop_size if isinstance(pop_size, str) else pop_size.psu
@@ -656,26 +703,40 @@ class Categorical:
                 ttest_df, pop_size, prep.strata_col, prep.psu_col, prep.ssu_col
             )
 
-        findings = self._domain_findings(prep, ttest_df, where="Sample.categorical.ttest")
+        if rep_kw is not None:
+            findings = []
+            result_df: pl.DataFrame = rs.ttest_rs(
+                ttest_df,
+                y_col=prep.y_col,
+                weight_col=prep.weight_col,
+                group_col=group,
+                null_value=float(mean_h0),
+                domain_col=prep.domain_col,
+                domain_val=prep.domain_val,
+                by_col=prep.by_col,
+                **rep_kw,
+            )
+        else:
+            findings = self._domain_findings(prep, ttest_df, where="Sample.categorical.ttest")
 
-        # Single Rust call — handles by-levels internally
-        result_df: pl.DataFrame = rs.ttest_rs(
-            ttest_df,
-            y_col=prep.y_col,
-            weight_col=prep.weight_col,
-            group_col=group,
-            strata_col=prep.strata_col,
-            psu_col=prep.psu_col,
-            ssu_col=prep.ssu_col,
-            fpc_col=fpc_col,
-            fpc_ssu_col=fpc_ssu_col,
-            singleton_method=prep.singleton_method,
-            null_value=float(mean_h0),
-            **calib_kwargs(self._sample, ttest_df),
-            domain_col=prep.domain_col,
-            domain_val=prep.domain_val,
-            by_col=prep.by_col,
-        )
+            # Single Rust call — handles by-levels internally
+            result_df = rs.ttest_rs(
+                ttest_df,
+                y_col=prep.y_col,
+                weight_col=prep.weight_col,
+                group_col=group,
+                strata_col=prep.strata_col,
+                psu_col=prep.psu_col,
+                ssu_col=prep.ssu_col,
+                fpc_col=fpc_col,
+                fpc_ssu_col=fpc_ssu_col,
+                singleton_method=prep.singleton_method,
+                null_value=float(mean_h0),
+                **calib_kwargs(self._sample, ttest_df),
+                domain_col=prep.domain_col,
+                domain_val=prep.domain_val,
+                by_col=prep.by_col,
+            )
 
         # The kernel returns by and group levels as strings; restore the
         # source columns' types.
@@ -865,12 +926,13 @@ class Categorical:
         y: str,
         *,
         group: str,
-        method: _RankScoreMethod
+        score: _RankScoreMethod
         | Literal["kruskal-wallis", "vander-waerden", "median"]
         | None = None,
         score_fn: Callable[[np.ndarray, float], np.ndarray] | None = None,
         by: str | None = None,
         where: WhereArg = None,
+        method: Literal["taylor", "replication"] | None = None,
         alpha: float = 0.05,
         alternative: Literal["two-sided", "less", "greater"] = "two-sided",
         drop_nulls: bool = False,
@@ -881,32 +943,47 @@ class Categorical:
         Implements Lumley & Scott (2013) methodology via the Rust backend.
         Automatically selects two-sample (Wilcoxon) or k-sample (Kruskal-Wallis)
         form based on the number of unique levels in ``group``.
+
+        ``score`` names the rank score (``"kruskal-wallis"``,
+        ``"vander-waerden"`` or ``"median"``); ``score_fn`` supplies one
+        instead. ``method`` is the variance method: None (the default) is
+        Taylor linearization; ``"replication"`` re-totals the full-sample
+        influence values with each replicate weight, as R's ``svyranktest``
+        on a ``svrepdesign`` does (the ranks are not recomputed per
+        replicate). Its df is the replicate df minus the number of groups
+        less one.
         """
         alpha = validate_alpha(alpha, where="Sample.categorical.ranktest")
         from svy.errors import MethodError
 
-        # --- Validate method / score_fn ---
-        if method is None and score_fn is None:
+        # `method=` named the rank score before it named the variance method.
+        if _is_rank_score(method):
+            raise MethodError.invalid_choice(
+                where="Sample.categorical.ranktest",
+                param="method",
+                got=method,
+                allowed=["taylor", "replication"],
+                hint=f"The rank score is passed as score=: score={_score_label(method)!r}.",
+            )
+
+        # --- Validate score / score_fn ---
+        if score is None and score_fn is None:
             raise MethodError.invalid_choice(
                 where="ranktest",
-                param="method / score_fn",
+                param="score / score_fn",
                 got=None,
                 allowed=["kruskal-wallis", "vander-waerden", "median"],
-                hint="Provide method='kruskal-wallis' or similar.",
+                hint="Provide score='kruskal-wallis' or similar.",
             )
-        if method is not None and score_fn is not None:
+        if score is not None and score_fn is not None:
             raise MethodError.not_applicable(
                 where="ranktest",
                 method="ranktest",
-                reason="cannot specify both 'method' and 'score_fn'",
-                param="method / score_fn",
+                reason="cannot specify both 'score' and 'score_fn'",
+                param="score / score_fn",
                 hint="Use one or the other.",
             )
-        require_singleton_rule(
-            self._sample,
-            where="Sample.categorical.ranktest",
-            use_replicates="ranktest has no replication variance yet.",
-        )
+        rep_kw = self._replication(method, where="Sample.categorical.ranktest")
         if score_fn is not None:
             return self._ranktest_custom_score(
                 y=y,
@@ -917,10 +994,11 @@ class Categorical:
                 alpha=alpha,
                 alternative=alternative,
                 drop_nulls=drop_nulls,
+                rep_kw=rep_kw,
             )
 
         # Normalize and map to Rust string
-        _method = _normalize_rank_method(method)
+        _method = _normalize_rank_method(score)
         score_method_str = {
             _RankScoreMethod.KRUSKAL_WALLIS: "wilcoxon",
             _RankScoreMethod.VANDER_WAERDEN: "vanderwaerden",
@@ -938,23 +1016,37 @@ class Categorical:
             select_columns=True,
         )
 
-        findings = self._domain_findings(prep, prep.df, where="Sample.categorical.ranktest")
+        if rep_kw is not None:
+            findings = []
+            result_df: pl.DataFrame = rs.ranktest_rs(
+                prep.df,
+                y_col=prep.y_col,
+                group_col=group,
+                weight_col=prep.weight_col,
+                score_method=score_method_str,
+                domain_col=prep.domain_col,
+                domain_val=prep.domain_val,
+                by_col=prep.by_col,
+                **rep_kw,
+            )
+        else:
+            findings = self._domain_findings(prep, prep.df, where="Sample.categorical.ranktest")
 
-        # Single Rust call — handles by-levels internally
-        result_df: pl.DataFrame = rs.ranktest_rs(
-            prep.df,
-            y_col=prep.y_col,
-            group_col=group,
-            weight_col=prep.weight_col,
-            strata_col=prep.strata_col,
-            psu_col=prep.psu_col,
-            ssu_col=prep.ssu_col,
-            score_method=score_method_str,
-            singleton_method=prep.singleton_method,
-            domain_col=prep.domain_col,
-            domain_val=prep.domain_val,
-            by_col=prep.by_col,
-        )
+            # Single Rust call — handles by-levels internally
+            result_df = rs.ranktest_rs(
+                prep.df,
+                y_col=prep.y_col,
+                group_col=group,
+                weight_col=prep.weight_col,
+                strata_col=prep.strata_col,
+                psu_col=prep.psu_col,
+                ssu_col=prep.ssu_col,
+                score_method=score_method_str,
+                singleton_method=prep.singleton_method,
+                domain_col=prep.domain_col,
+                domain_val=prep.domain_val,
+                by_col=prep.by_col,
+            )
 
         by_lookup = level_lookup(self._sample._data, [by]) if by is not None else {}
         group_lookup = level_lookup(self._sample._data, [group])
@@ -1174,6 +1266,7 @@ class Categorical:
         alpha: float,
         alternative: str,
         drop_nulls: bool,
+        rep_kw: dict | None = None,
     ) -> RankTestTwoSample | RankTestByResult:
         """
         Rank test with a custom score function.
@@ -1182,6 +1275,10 @@ class Categorical:
         then delegates to rs.ttest_rs on the scores as the y variable.
         With ``by``, ranks and scores are computed within each by-level
         and one test is returned per level.
+
+        A replication variance goes through rs.ranktest_rs instead, which
+        re-totals the scores' influence values with each replicate as R's
+        svyranktest does; replicating the t-test would refit the difference.
         """
         from scipy.stats import t as t_dist
 
@@ -1226,22 +1323,38 @@ class Categorical:
         df = prep.df.with_columns(pl.Series(name=score_col_name, values=scores_full))
 
         method_name = getattr(score_fn, "__name__", "custom")
-        findings = self._domain_findings(prep, df, where="Sample.categorical.ranktest")
+        if rep_kw is not None:
+            findings = []
+            result_df: pl.DataFrame = rs.ranktest_rs(
+                df,
+                y_col=score_col_name,
+                group_col=group,
+                weight_col=prep.weight_col,
+                domain_col=prep.domain_col,
+                domain_val=prep.domain_val,
+                by_col=prep.by_col,
+                scores_given=True,
+                **rep_kw,
+            )
+            if "delta" in result_df.columns:
+                result_df = result_df.rename({"delta": "diff"})
+        else:
+            findings = self._domain_findings(prep, df, where="Sample.categorical.ranktest")
 
-        result_df: pl.DataFrame = rs.ttest_rs(
-            df,
-            y_col=score_col_name,
-            weight_col=prep.weight_col,
-            group_col=group,
-            strata_col=prep.strata_col,
-            psu_col=prep.psu_col,
-            ssu_col=prep.ssu_col,
-            singleton_method=prep.singleton_method,
-            null_value=0.0,
-            domain_col=prep.domain_col,
-            domain_val=prep.domain_val,
-            by_col=prep.by_col,
-        )
+            result_df = rs.ttest_rs(
+                df,
+                y_col=score_col_name,
+                weight_col=prep.weight_col,
+                group_col=group,
+                strata_col=prep.strata_col,
+                psu_col=prep.psu_col,
+                ssu_col=prep.ssu_col,
+                singleton_method=prep.singleton_method,
+                null_value=0.0,
+                domain_col=prep.domain_col,
+                domain_val=prep.domain_val,
+                by_col=prep.by_col,
+            )
 
         by_lookup = level_lookup(self._sample._data, [by]) if by is not None else {}
         group_lookup = level_lookup(self._sample._data, [group])
