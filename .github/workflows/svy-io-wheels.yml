@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - "packages/svy-io/**"
+      - ".github/workflows/svy-io-wheels.yml"
   workflow_dispatch:
 
 permissions:
@@ -122,7 +123,7 @@ jobs:
           target: ${{ matrix.target }}
           sccache: ${{ runner.os != 'macOS' }}
           before-script-linux: |
-            set -eux
+            set -euxo pipefail
 
             # Avoid host includes leaking into cross builds
             unset CPATH || true
@@ -135,26 +136,45 @@ jobs:
             for x in microdnf dnf yum apt-get; do
               if command -v "$x" >/dev/null 2>&1; then PM="$x"; break; fi
             done
-            if [ -n "$PM" ]; then
+            if [ -z "$PM" ]; then
+              echo "::error::No package manager found to install clang/llvm"
+              exit 1
+            fi
+
+            install_clang() {
               if [ "$PM" = "apt-get" ]; then
                 apt-get update && apt-get install -y clang llvm llvm-dev
-              elif [ "$PM" = "microdnf" ]; then
-                microdnf install -y clang llvm-devel || true
               else
-                $PM install -y clang llvm-devel || true
+                "$PM" install -y clang llvm-devel
               fi
-            fi
+            }
+
+            # Distro mirrors fail transiently; retry with fresh metadata
+            attempts=5
+            for i in $(seq 1 "$attempts"); do
+              if install_clang; then break; fi
+              if [ "$i" -eq "$attempts" ]; then
+                echo "::error::clang/llvm install failed after $attempts attempts"
+                exit 1
+              fi
+              [ "$PM" = "apt-get" ] || "$PM" clean all || true
+              sleep $((i * 15))
+            done
 
             # libclang discovery for bindgen
             if command -v llvm-config >/dev/null 2>&1; then
-              export LIBCLANG_PATH="$(llvm-config --libdir || true)"
+              export LIBCLANG_PATH="$(llvm-config --libdir)"
             fi
             if [ -z "${LIBCLANG_PATH:-}" ]; then
               for d in /usr/lib64 /usr/lib/llvm/lib /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu; do
                 if [ -f "$d/libclang.so" ]; then export LIBCLANG_PATH="$d"; break; fi
               done
             fi
-            echo "LIBCLANG_PATH=${LIBCLANG_PATH:-unset}"
+            if ! ls "${LIBCLANG_PATH:-/nonexistent}"/libclang*.so* >/dev/null 2>&1; then
+              echo "::error::libclang not found (LIBCLANG_PATH=${LIBCLANG_PATH:-unset})"
+              exit 1
+            fi
+            echo "LIBCLANG_PATH=$LIBCLANG_PATH"
 
             # If cross-compiling, pass sysroot to bindgen
             if [ "${{ matrix.target || '' }}" = "aarch64-unknown-linux-gnu" ]; then
