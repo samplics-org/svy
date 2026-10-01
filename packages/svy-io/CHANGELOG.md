@@ -4,6 +4,8 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-30
+
 ### Added
 
 - **SPSS and Stata readers accept zip archives.** `read_sav` reads the first `.sav` (else `.zsav`) member, `read_por` the first `.por`, `read_spss` the first `.sav`, `.zsav` or `.por` and dispatches on it, and `read_dta`/`read_stata`/`read_stata_arrow` the first `.dta`. As with `read_sas`, an archive with no matching member raises `FileNotFoundError` listing its files, several matches warn (at the caller's line) and use the first, and the extracted file is removed after the parse.
@@ -104,7 +106,8 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 First release tracked in this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-io-v0.4.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-io-v0.5.0...HEAD
+[0.5.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.5.0
 [0.4.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.4.0
 [0.3.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.3.0
 [0.2.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.2.0
