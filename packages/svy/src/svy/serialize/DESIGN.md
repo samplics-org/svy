@@ -59,7 +59,7 @@ consumers can switch on the result type without introspection.
 ### 2.5 `schema_version` on top-level structs
 
 Every top-level struct carries `schema_version: str = SCHEMA_VERSION` where
-`SCHEMA_VERSION = "svy-result/0.6"`. Consumers can check the version to know
+`SCHEMA_VERSION = "svy-result/0.7"`. Consumers can check the version to know
 what fields to expect.
 
 **Versioning policy:** bump the minor version (0.1 → 0.2) when fields are added
@@ -90,6 +90,9 @@ ignore unknown fields.
 - `0.6` — `EstimateData.level_orders` added: the categories of each Enum variable
   whose levels the rows carry, in the Enum's order, so the table lists them in
   that order. `None` when no such variable, or decoded from an older payload.
+- `0.7` — `EstimateData.ci_method` (how the intervals were built),
+  `GLMStatsData.theta` / `theta_se` (negative binomial) and `GLMFitData.offset`
+  added. `None` when decoded from an older payload.
 
 ### 2.6 Sub-structs are untagged
 

@@ -317,6 +317,7 @@ def taylor_assoc(
         method=None,
         deff_ref=deff_ref,
         findings=findings,
+        ci_method=ci_method,
     )
 
 
@@ -361,4 +362,5 @@ def replicate_assoc(
         prep.by_cols,
         as_factor=False,
         method=method,
+        ci_method=ci_method,
     )

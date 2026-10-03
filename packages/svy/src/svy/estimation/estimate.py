@@ -390,6 +390,7 @@ class Estimate:
     __slots__ = (
         "param",
         "q_method",
+        "ci_method",
         "alpha",
         "estimates",
         "covariance",
@@ -441,6 +442,10 @@ class Estimate:
         self.level_orders: dict[str, list[str]] = {}
         #: Quantile rule of a median or quantile; None for every other parameter.
         self.q_method: QuantileMethod | None = None
+        #: How the intervals were built: "logit", "beta", "korn-graubard" or
+        #: "wilson" for proportions, "fisher" for correlations, "woodruff" for
+        #: Taylor quantiles, "wald" (est ± t·se) otherwise.
+        self.ci_method: str | None = None
         self.where_clause: str | None = None
         #: Full design degrees of freedom (R's ``degf``), as opposed to the
         #: per-row domain-aware df. Cross-domain contrasts are referred to

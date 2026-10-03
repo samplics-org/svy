@@ -678,6 +678,18 @@ class Estimation:
             )
         return m
 
+    def _interval_method(
+        self, param: PopParam, as_factor: bool, method: RepWgts | None, ci_method: str
+    ) -> str:
+        """The interval method an estimate's rows were given, for the record."""
+        if param == PopParam.PROP or (as_factor and param == PopParam.MEAN):
+            return self._normalize_ci_method(ci_method)
+        if param in (PopParam.CORR, PopParam.COV):
+            return ci_method
+        if param in (PopParam.QUANTILE, PopParam.MEDIAN) and method is None:
+            return "woodruff"
+        return "wald"
+
     @staticmethod
     def _normalize_ci_method(method: str) -> str:
         """Normalize CI method name to canonical form.
@@ -1428,6 +1440,7 @@ class Estimation:
         estimate.method = method.method if method is not None else "Taylor"
         if q_method is not None:
             estimate.q_method = q_method
+        estimate.ci_method = self._interval_method(param, as_factor, method, ci_method)
         estimate.deff_ref = deff_ref
         estimate.design_df = design_df
         estimate._cov_filled = cov_filled or len(est_list) <= 1

@@ -26,7 +26,8 @@
   ],
   "kind": "glm_fit",
   "link": "identity",
-  "schema_version": "svy-result/0.6",
+  "offset": null,
+  "schema_version": "svy-result/0.7",
   "stats": {
     "aic": 6020.5,
     "bic": 6040.3,
@@ -36,6 +37,8 @@
     "r_squared": 0.215,
     "r_squared_adj": 0.21,
     "scale": 120000000.0,
+    "theta": null,
+    "theta_se": null,
     "wald": {
       "df_den": 496.0,
       "df_num": 3.0,
