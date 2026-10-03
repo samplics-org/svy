@@ -12,13 +12,17 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 - **Dates in expressions.** `svy.date(year, month, day)` builds a date from three columns, expressions or integers; `Expr.str_to_date(fmt)` parses text (`svy.col("dob").to_str().pad_left(8, "0").str_to_date("%d%m%Y")` reads `8082025` as 8 August 2025). Both raise on values that are not dates; `strict=False` gives null instead, for codes such as 98. `Expr.days_between(other)`, `months_between(other)` and `years_between(other)` count from the date to `other` in days, whole months and whole years, as Stata's `datediff()` does (31 January to 29 February is 0 months; a 29 February birthday completes its year on 1 March).
 
-- **Allocation by size and by a power.** `sample.sampling.allocate(method="size", group_mos=...)` allocates in proportion to each stratum's total measure of size, as a PPS design usually does; `sample.sampling.group_totals(mos=None, by=None)` gives those totals, keyed like `group_sizes()`, from the design's `mos` unless another column is named (missing and non-positive values add nothing). `power=` raises the measure to a power for `"proportional"` (`N_h ** power`; `power=0.5` is square-root allocation) and `"size"`. The usual `min_n`, rounding to the exact total and cap at the frame size apply; a stratum with no size gets 0.
+- **Allocation by size and by a power, counted from the frame.** `sample.sampling.allocate()` counts the frame's units per stratum (crossed with the new `by=`) itself, so its group sizes no longer need to be passed in; a dict of sizes is passed only for a custom allocation, from counts outside the frame. `method="size"` allocates in proportion to each group's total measure of size, summed from the design's `mos` (or `mos=`); missing and non-positive values add nothing, and a group with no size gets 0. `power=` raises the measure to a power for `"proportional"` (`N_h ** power`; `power=0.5` is square-root allocation) and `"size"`. The usual `min_n`, rounding to the exact total and cap at the frame size apply. `svy.selection.allocate` takes the same `method="size"`, `group_mos=` and `power=`.
 
 - **`Design.case_id` on several columns.** `svy.Design(case_id=["cluster", "hh", "line"])` identifies a record by the columns together, as a CSPro export does, like `stratum` and `psu` take a list. Everything that uses the case id takes the columns together: uniqueness (duplicates are reported as tuples), nulls, the panel checks, the case as the variance PSU on a panel, `combine_samples(kind="panel", case_id=[...])`, `wrangling.lag`, the panel `adjust`, renames, `to_code()` and the saved design (`DesignData.case_id` is a list). Removing one of the columns removes the case id. Results equal those with the same id built as one column.
 
 ### Changed
 
 - **`read_stata` returns Stata integer variables as Int64.** `byte`, `int` and `long` variables were Float64, and `write_stata` wrote integer columns as `double`. Integer columns now keep their type both ways, so a code `1` matches the value label keyed `1`. Needs the svy-io release with integer storage (see its changelog).
+
+### Deprecated
+
+- **`sample.sampling.group_sizes()`**, which only fed `allocate()`; `allocate(by=...)` counts the frame itself, and `sample.describe(by=...)` shows the groups. Removed in 2026.0.
 
 ## [0.31.0] — 2026-09-30
 

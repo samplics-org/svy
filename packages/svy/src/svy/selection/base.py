@@ -34,6 +34,7 @@ from svy.selection.pps import pps_rs as _pps_rs
 from svy.selection.pps import pps_sys as _pps_sys
 from svy.selection.pps import pps_wr as _pps_wr
 from svy.selection.srs import srs as _srs
+from svy.utils.deprecation import deprecated
 from svy.utils.random_state import RandomState
 
 
@@ -255,20 +256,11 @@ class Selection:
         return _add_stage(self._sample, next_stage, prob_name=prob_name, wgt_name=wgt_name)
 
     # ------------------------------------------------------------------ #
-    # Allocation helpers
+    # Allocation
     # ------------------------------------------------------------------ #
 
-    def group_sizes(
-        self,
-        *,
-        by: str | Sequence[str] | None = None,
-    ) -> dict[str, int]:
-        """
-        Return per-group frame counts for the current sample.
-
-        The returned dict can be passed directly to ``allocate()`` or used
-        to inspect stratum balance before selecting.
-        """
+    def _frame_groups(self, by: str | Sequence[str] | None):
+        """The frame with its stratum (x by) key column, the key column and the keys."""
         from typing import cast
 
         import polars as pl
@@ -276,57 +268,44 @@ class Selection:
         data = self._sample._data
         if isinstance(data, pl.LazyFrame):
             data = cast(pl.DataFrame, data.collect())
-
         stratum_col = self._sample._internal_design.get("stratum")
         by_cols = self._sample._to_cols(by) if by is not None else []
-
         stratum_by_col, _, G, _, _, data = _build_group_keys(
             data,
             stratum_col=stratum_col,
             by_cols=by_cols,
             sample_ref=self._sample,
         )
-        return _compute_pop_sizes(data, stratum_by_col, G)
+        return data, stratum_by_col, G
 
-    def group_totals(
-        self,
-        mos: str | None = None,
-        *,
-        by: str | Sequence[str] | None = None,
-    ) -> dict[str, float]:
+    def _group_mos(self, mos: str | None, by: str | Sequence[str] | None) -> dict[str, float]:
+        """Per-group totals of the measure of size, keyed like the frame counts.
+
+        Missing and non-positive values add nothing: such units cannot be
+        drawn with probability proportional to size.
         """
-        Return per-group totals of the measure of size for the current sample.
-
-        Keyed like ``group_sizes()``, for ``allocate(method="size",
-        group_mos=...)``. ``mos`` defaults to the design's ``mos``. Missing
-        and non-positive values add nothing, as such units cannot be drawn
-        with probability proportional to size.
-        """
-        from typing import cast
-
         import polars as pl
 
         from svy.errors import MethodError
 
         mos_col = mos if mos is not None else self._sample._design.mos
+        where = "sampling.allocate"
         if mos_col is None:
             raise MethodError(
                 title="No measure of size",
-                detail="group_totals() needs a measure of size column.",
+                detail="allocate(method='size') needs a measure of size column.",
                 code="MOS_MISSING",
-                where="selection.group_totals",
+                where=where,
                 param="mos",
                 hint="Pass mos='column' or declare Design(mos='column').",
             )
-        data = self._sample._data
-        if isinstance(data, pl.LazyFrame):
-            data = cast(pl.DataFrame, data.collect())
+        data, stratum_by_col, G = self._frame_groups(by)
         if mos_col not in data.columns:
             raise MethodError(
                 title="Measure of size column not found",
                 detail=f"Column {mos_col!r} is not in the data.",
                 code="MOS_MISSING",
-                where="selection.group_totals",
+                where=where,
                 param="mos",
                 got=mos_col,
             )
@@ -335,19 +314,10 @@ class Selection:
                 title="Measure of size must be numeric",
                 detail=f"Column {mos_col!r} has type {data.schema[mos_col]}.",
                 code="MOS_NOT_NUMERIC",
-                where="selection.group_totals",
+                where=where,
                 param="mos",
                 got=str(data.schema[mos_col]),
             )
-
-        stratum_col = self._sample._internal_design.get("stratum")
-        by_cols = self._sample._to_cols(by) if by is not None else []
-        stratum_by_col, _, G, _, _, data = _build_group_keys(
-            data,
-            stratum_col=stratum_col,
-            by_cols=by_cols,
-            sample_ref=self._sample,
-        )
         positive = pl.col(mos_col).cast(pl.Float64).clip(lower_bound=0.0).sum()
         if not G or stratum_by_col is None:
             return {"__all__": float(data.select(positive).item())}
@@ -355,14 +325,35 @@ class Selection:
         totals = dict(zip(agg[stratum_by_col].to_list(), agg["__mos__"].to_list()))
         return {g: float(totals.get(g, 0.0)) for g in G}
 
+    @deprecated(
+        since="0.32.0",
+        remove_in="2026.0",
+        use="sample.sampling.allocate(..., by=...), which counts the frame itself, "
+        "or sample.describe(by=...) to look at the groups",
+    )
+    def group_sizes(
+        self,
+        *,
+        by: str | Sequence[str] | None = None,
+    ) -> dict[str, int]:
+        """
+        Return per-group frame counts for the current sample.
+
+        Deprecated: ``allocate()`` counts the frame itself.
+        """
+        data, stratum_by_col, G = self._frame_groups(by)
+        return _compute_pop_sizes(data, stratum_by_col, G)
+
     def allocate(
         self,
-        group_sizes: dict[str, int],
+        group_sizes: dict[str, int] | None = None,
         *,
         method: AllocationMethod = "proportional",
         n_total: int | None = None,
         n_per_group: int | None = None,
         rate: float | dict[str, float] | None = None,
+        by: str | Sequence[str] | None = None,
+        mos: str | None = None,
         group_sds: dict[str, float] | None = None,
         group_mos: dict[str, float] | None = None,
         power: float = 1.0,
@@ -372,10 +363,76 @@ class Selection:
         """
         Compute a per-group ``n`` mapping using a named allocation method.
 
-        Pass the returned dict directly as ``n=`` to srs(), pps_sys(), etc.
-        ``method="size"`` takes ``group_mos=group_totals(...)``; ``power=``
-        raises the measure (``N_h`` or the size total) to a power.
+        The groups are the design's strata, crossed with ``by=``; the frame's
+        units are counted per group, and ``method="size"`` sums the measure of
+        size (``mos=``, default the design's ``mos``) per group. Pass the
+        returned dict as ``n=`` to srs(), pps_sys(), etc. with the same
+        ``by=``.
+
+        Parameters
+        ----------
+        group_sizes : dict | None
+            Custom counts ``{group: N_h}`` from outside the frame (e.g. a
+            population register), used instead of counting the frame. With
+            ``method="size"`` they need ``group_mos=`` too.
+        method : {"proportional", "neyman", "size", "equal", "rate"}
+            ``"size"`` allocates in proportion to the groups' measure-of-size
+            totals.
+        by : str | Sequence[str] | None
+            Columns crossed with the design's strata to form the groups.
+        mos : str | None
+            Measure of size column for ``method="size"``; default the design's.
+        group_sds, group_mos : dict | None
+            Per-group SDs (``"neyman"``) and custom size totals (``"size"``).
+        power : float
+            ``N_h ** power`` (``"proportional"``) or ``MOS_h ** power``
+            (``"size"``); 0.5 is square-root allocation.
+
+        Examples
+        --------
+        >>> n_map = sample.sampling.allocate(method="proportional", n_total=500, by="region")
+        >>> sample = sample.sampling.srs(n_map, by="region")
+        >>> n_map = sample.sampling.allocate(method="size", n_total=60, by="region")
+        >>> n_map = sample.sampling.allocate(register_counts, n_total=500)  # custom counts
         """
+        from svy.errors import MethodError
+
+        where = "sampling.allocate"
+        if group_sizes is not None and by is not None:
+            raise MethodError(
+                title="Custom counts and by= together",
+                detail="by= says how to count the frame, but group_sizes= replaces that count.",
+                code="ALLOCATE_SIZES_AND_BY",
+                where=where,
+                param="by",
+                hint="Drop group_sizes= to count the frame by group, or drop by=.",
+            )
+        if mos is not None and method != "size":
+            raise MethodError(
+                title="mos= without method='size'",
+                detail=f"allocate(method={method!r}) does not use a measure of size.",
+                code="ALLOCATE_MOS_UNUSED",
+                where=where,
+                param="mos",
+                hint="Use method='size', or drop mos=.",
+            )
+        if group_sizes is None:
+            data, stratum_by_col, G = self._frame_groups(by)
+            group_sizes = _compute_pop_sizes(data, stratum_by_col, G)
+            if method == "size" and group_mos is None:
+                group_mos = self._group_mos(mos, by)
+        elif method == "size" and group_mos is None:
+            raise MethodError(
+                title="Custom counts need custom size totals",
+                detail=(
+                    "With group_sizes= the groups are yours, so the frame's measure of "
+                    "size cannot be summed over them."
+                ),
+                code="ALLOCATE_MOS_MISSING",
+                where=where,
+                param="group_mos",
+                hint="Pass group_mos={group: size total} with the same keys as group_sizes.",
+            )
         return _allocate(
             group_sizes,
             method=method,

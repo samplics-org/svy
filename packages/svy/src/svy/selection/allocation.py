@@ -349,19 +349,20 @@ def allocate(
     """
     Compute a per-group n mapping using a named allocation method.
 
-    This is a pure function -- pass the returned dict directly as n= to
-    any selection method (srs, pps_sys, etc.).
+    This is the pure function behind ``sample.sampling.allocate()``, which
+    counts the frame itself. Call it directly for counts that come from
+    outside a sample (a population register); pass the returned dict as n=
+    to any selection method (srs, pps_sys, etc.).
 
     Parameters
     ----------
-    group_sizes       : {group_key: frame_count} from Selection.group_sizes().
+    group_sizes       : {group_key: N_h}
     method            : "proportional" | "neyman" | "size" | "equal" | "rate"
     n_total           : target total sample size (proportional / neyman / size)
     n_per_group       : target per-group size (equal)
     rate              : sampling rate in (0, 1] -- scalar or per-group dict
     group_sds         : within-group SDs of target variable (neyman only)
-    group_mos         : per-group totals of the measure of size, from
-                        Selection.group_totals() (size only)
+    group_mos         : per-group totals of the measure of size (size only)
     power             : n_h proportional to N_h ** power (proportional) or
                         MOS_h ** power (size); default 1, 0.5 is square-root
                         allocation
@@ -375,36 +376,30 @@ def allocate(
 
     Examples
     --------
-    Proportional allocation::
+    From a sample, which counts its frame per stratum (x by)::
 
-        sizes = sample.sampling.group_sizes(by="region")
-        n_map = sample.sampling.allocate(sizes, method="proportional", n_total=500)
+        n_map = sample.sampling.allocate(method="proportional", n_total=500, by="region")
         sample = sample.sampling.srs(n_map, by="region")
 
     Square-root allocation (n_h proportional to N_h ** 0.5)::
 
-        n_map = sample.sampling.allocate(sizes, n_total=500, power=0.5)
+        n_map = sample.sampling.allocate(n_total=500, power=0.5, by="region")
 
     In proportion to each stratum's total measure of size, for a PPS design::
 
-        mos = sample.sampling.group_totals("hh_count", by="region")
-        n_map = sample.sampling.allocate(sizes, method="size", n_total=60, group_mos=mos)
+        n_map = sample.sampling.allocate(method="size", n_total=60, by="region")
         sample = sample.sampling.pps_sys(n_map, by="region")
 
-    Fixed 10% sampling rate::
+    Fixed 10% sampling rate, equal allocation, Neyman::
 
-        n_map = sample.sampling.allocate(sizes, method="rate", rate=0.10)
-        sample = sample.sampling.pps_sys(n_map, by="region")
+        n_map = sample.sampling.allocate(method="rate", rate=0.10, by="region")
+        n_map = sample.sampling.allocate(method="equal", n_per_group=50, by="region")
+        n_map = sample.sampling.allocate(method="neyman", n_total=300, by="region",
+                                         group_sds={"North": 12.4, "South": 9.1})
 
-    Neyman with known within-stratum SDs::
+    From counts outside a sample::
 
-        sds = {"North": 12.4, "South": 9.1, "West": 11.0}
-        n_map = sample.sampling.allocate(sizes, method="neyman",
-                                          n_total=300, group_sds=sds)
-
-    Equal allocation (50 per stratum, capped at stratum size)::
-
-        n_map = sample.sampling.allocate(sizes, method="equal", n_per_group=50)
+        allocate({"North": 52_000, "South": 31_000}, method="proportional", n_total=400)
     """
     _METHODS = get_args(AllocationMethod)
     if method not in _METHODS:
@@ -432,7 +427,7 @@ def allocate(
         if group_mos is None:
             raise ValueError(
                 "allocate(method='size') requires group_mos=, the per-group totals "
-                "of the measure of size: group_mos=sample.sampling.group_totals(mos, by=...)."
+                "of the measure of size; sample.sampling.allocate() sums them from the frame."
             )
         return _size_allocation(
             group_sizes,
