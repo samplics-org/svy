@@ -12,6 +12,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 - **Dates in expressions.** `svy.date(year, month, day)` builds a date from three columns, expressions or integers; `Expr.str_to_date(fmt)` parses text (`svy.col("dob").to_str().pad_left(8, "0").str_to_date("%d%m%Y")` reads `8082025` as 8 August 2025). Both raise on values that are not dates; `strict=False` gives null instead, for codes such as 98. `Expr.days_between(other)`, `months_between(other)` and `years_between(other)` count from the date to `other` in days, whole months and whole years, as Stata's `datediff()` does (31 January to 29 February is 0 months; a 29 February birthday completes its year on 1 March).
 
+- **Allocation by size and by a power.** `sample.sampling.allocate(method="size", group_mos=...)` allocates in proportion to each stratum's total measure of size, as a PPS design usually does; `sample.sampling.group_totals(mos=None, by=None)` gives those totals, keyed like `group_sizes()`, from the design's `mos` unless another column is named (missing and non-positive values add nothing). `power=` raises the measure to a power for `"proportional"` (`N_h ** power`; `power=0.5` is square-root allocation) and `"size"`. The usual `min_n`, rounding to the exact total and cap at the frame size apply; a stratum with no size gets 0.
+
 ### Changed
 
 - **`read_stata` returns Stata integer variables as Int64.** `byte`, `int` and `long` variables were Float64, and `write_stata` wrote integer columns as `double`. Integer columns now keep their type both ways, so a code `1` matches the value label keyed `1`. Needs the svy-io release with integer storage (see its changelog).
