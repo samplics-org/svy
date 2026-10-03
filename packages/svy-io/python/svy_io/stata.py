@@ -507,24 +507,6 @@ def _extract_tagged_missings(
     return out, specs
 
 
-def _coerce_ints_to_f64_for_stata(df: pl.DataFrame) -> pl.DataFrame:
-    """Cast all integer columns to Float64 (Stata writer expects numeric doubles)."""
-    int_dtypes = {
-        pl.Int8,
-        pl.Int16,
-        pl.Int32,
-        pl.Int64,
-        pl.UInt8,
-        pl.UInt16,
-        pl.UInt32,
-        pl.UInt64,
-    }
-    casts = [
-        pl.col(name).cast(pl.Float64) for name, dtype in df.schema.items() if dtype in int_dtypes
-    ]
-    return df.with_columns(casts) if casts else df
-
-
 def _df_to_ipc_bytes(df: pl.DataFrame) -> bytes:
     """Fast IPC serialization"""
     bio = io.BytesIO()
@@ -595,8 +577,9 @@ def write_dta(
     # Pipeline transformations
     df_w = _apply_inf_policy(df, na_policy=na_policy)
     df_w = _adjust_temporals(df_w, adjust_tz=adjust_tz)
+    # Integer columns go through as-is: the native writer stores each one as
+    # the smallest Stata byte/int/long that holds its values.
     df_w, user_missing_specs = _extract_tagged_missings(df_w)
-    df_w = _coerce_ints_to_f64_for_stata(df_w)
 
     ipc_bytes = _df_to_ipc_bytes(df_w)
     var_labels_json = json.dumps(var_labels) if var_labels else None

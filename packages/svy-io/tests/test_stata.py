@@ -41,15 +41,15 @@ def test_stata_data_types_read_into_expected_types_45():
     df, _meta = _read_dta(tpath("types.dta"))
     # vapply(typeof) in R ~ polars dtype mapping here
     got = {k: str(v) for k, v in df.schema.items()}
-    # Expect numeric columns parsed as floats (double in R), strings as Utf8
+    # Float storage reads as Float64, integer storage (byte/int/long) as Int64
     assert got == {
         "vfloat": "Float64",
         "vdouble": "Float64",
-        "vlong": "Float64",
-        "vint": "Float64",
-        "vbyte": "Float64",
+        "vlong": "Int64",
+        "vint": "Int64",
+        "vbyte": "Int64",
         "vstr": "String",
-        "vdate": "Float64",  # pre-conversion raw numeric is ok if you don’t convert yet
+        "vdate": "Int64",  # stored as long; raw numeric until coerce_temporals
         "vdatetime": "Float64",  # same
     }
 
@@ -201,11 +201,11 @@ def test_can_roundtrip_basic_types(tmp_path):
     assert got.dtype == pl.Float64
     assert got.to_list() == x
 
-    # integers → Stata read path usually yields Float64; compare values numerically
+    # integers are stored as Stata integers and read back as Int64
     xi = list(range(1, 11)) + [None]
     goti = _roundtrip_var(tmp_path, xi, dtype=pl.Int64, version=118, na_policy="nan")
-    assert goti.dtype == pl.Float64
-    assert goti.to_list() == _as_float_list(xi)
+    assert goti.dtype == pl.Int64
+    assert goti.to_list() == xi
 
     # logicals → 1/0 on read
     xb = [True, False, True, None]

@@ -25,10 +25,12 @@ use arrow::record_batch::RecordBatch;
 use readstat_sys::{
     readstat_add_label_set, readstat_add_variable, readstat_begin_row, readstat_begin_writing_dta,
     readstat_end_row, readstat_end_writing, readstat_insert_double_value,
+    readstat_insert_int8_value, readstat_insert_int16_value, readstat_insert_int32_value,
     readstat_insert_missing_value, readstat_insert_string_value, readstat_label_double_value,
     readstat_label_set_t, readstat_set_data_writer,
-    readstat_type_e_READSTAT_TYPE_DOUBLE as T_DOUBLE,
-    readstat_type_e_READSTAT_TYPE_STRING as T_STRING, readstat_variable_set_label,
+    readstat_type_e_READSTAT_TYPE_DOUBLE as T_DOUBLE, readstat_type_e_READSTAT_TYPE_INT8 as T_INT8,
+    readstat_type_e_READSTAT_TYPE_INT16 as T_INT16, readstat_type_e_READSTAT_TYPE_INT32 as T_INT32,
+    readstat_type_e_READSTAT_TYPE_STRING as T_STRING, readstat_type_t, readstat_variable_set_label,
     readstat_variable_set_label_set, readstat_variable_t, readstat_writer_init,
     readstat_writer_set_file_format_version, readstat_writer_set_file_label,
 };
@@ -147,6 +149,84 @@ fn as_f64_opt(a: &dyn Array, row: usize) -> Option<f64> {
     }
 }
 
+fn as_i64_opt(a: &dyn Array, row: usize) -> Option<i64> {
+    if a.is_null(row) {
+        return None;
+    }
+    macro_rules! down {
+        ($T:ty) => {
+            a.as_any().downcast_ref::<$T>().unwrap().value(row) as i64
+        };
+    }
+    use DataType::*;
+    match a.data_type() {
+        Int64 => Some(down!(Int64Array)),
+        Int32 => Some(down!(Int32Array)),
+        Int16 => Some(down!(Int16Array)),
+        Int8 => Some(down!(Int8Array)),
+        UInt64 => Some(down!(UInt64Array)),
+        UInt32 => Some(down!(UInt32Array)),
+        UInt16 => Some(down!(UInt16Array)),
+        UInt8 => Some(down!(UInt8Array)),
+        _ => None,
+    }
+}
+
+/// Smallest and largest non-null value of an integer column across batches;
+/// `None` when the column is not an integer type. An all-null integer column
+/// reports `Some(None)`.
+fn int_col_range(batches: &[RecordBatch], j: usize) -> Option<Option<(i128, i128)>> {
+    use arrow::compute::{max, min};
+    let mut range: Option<(i128, i128)> = None;
+    for b in batches {
+        let a = b.column(j).as_ref();
+        macro_rules! mm {
+            ($T:ty) => {{
+                let a = a.as_any().downcast_ref::<$T>().unwrap();
+                (min(a).map(|v| v as i128), max(a).map(|v| v as i128))
+            }};
+        }
+        use DataType::*;
+        let (lo, hi) = match a.data_type() {
+            Int64 => mm!(Int64Array),
+            Int32 => mm!(Int32Array),
+            Int16 => mm!(Int16Array),
+            Int8 => mm!(Int8Array),
+            UInt64 => mm!(UInt64Array),
+            UInt32 => mm!(UInt32Array),
+            UInt16 => mm!(UInt16Array),
+            UInt8 => mm!(UInt8Array),
+            _ => return None,
+        };
+        if let (Some(lo), Some(hi)) = (lo, hi) {
+            range = Some(match range {
+                Some((l, h)) => (l.min(lo), h.max(hi)),
+                None => (lo, hi),
+            });
+        }
+    }
+    Some(range)
+}
+
+/// Stata storage for an integer column: the smallest of byte/int/long whose
+/// non-missing span holds every value, else double. The upper bounds stop
+/// short of the type maximum because Stata reserves the top codes for `.`
+/// and `.a`-`.z`; the lower bounds exclude the two's-complement minimum.
+fn dta_int_storage(range: Option<(i128, i128)>) -> readstat_type_t {
+    const SPANS: [(readstat_type_t, i128, i128); 3] = [
+        (T_INT8, -127, 100),
+        (T_INT16, -32_767, 32_740),
+        (T_INT32, -2_147_483_647, 2_147_483_620),
+    ];
+    let Some((lo, hi)) = range else {
+        return T_INT8;
+    };
+    SPANS
+        .iter()
+        .find(|(_, min, max)| *min <= lo && hi <= *max)
+        .map_or(T_DOUBLE, |(t, _, _)| *t)
+}
+
 #[derive(Clone, Copy, Default)]
 struct StringColStats {
     max_len: usize,
@@ -229,13 +309,17 @@ fn write_stata_minimal(
             is_text_dt(dt) || matches!(dt, DataType::Dictionary(_, v) if is_text_dt(v.as_ref()));
     }
 
+    let mut col_types: Vec<readstat_type_t> = Vec::with_capacity(ncols);
     let mut rvars: Vec<*const readstat_variable_t> = Vec::with_capacity(ncols);
     let mut _keep_names: Vec<CString> = Vec::with_capacity(ncols);
     let mut _keep_label_sets: Vec<(*const readstat_label_set_t, Vec<CString>)> = Vec::new();
 
     // Define variables
     for (j, field) in schema.fields().iter().enumerate() {
-        let mut typ = T_DOUBLE;
+        let mut typ = match int_col_range(batches, j) {
+            Some(range) => dta_int_storage(range),
+            None => T_DOUBLE,
+        };
         let mut width: usize = 0;
 
         if is_str_col[j] {
@@ -354,6 +438,7 @@ fn write_stata_minimal(
         }
 
         _keep_names.push(cname);
+        col_types.push(typ);
         rvars.push(var);
     }
 
@@ -415,6 +500,26 @@ fn write_stata_minimal(
                                 ));
                             }
                         }
+                    }
+                } else if col_types[j] != T_DOUBLE {
+                    // The storage type was chosen from this column's range, so
+                    // the narrowing casts below cannot truncate.
+                    let rc = match as_i64_opt(arr.as_ref(), i) {
+                        Some(v) => unsafe {
+                            match col_types[j] {
+                                T_INT8 => readstat_insert_int8_value(writer, rvars[j], v as i8),
+                                T_INT16 => readstat_insert_int16_value(writer, rvars[j], v as i16),
+                                _ => readstat_insert_int32_value(writer, rvars[j], v as i32),
+                            }
+                        },
+                        None => unsafe { readstat_insert_missing_value(writer, rvars[j]) },
+                    };
+                    if rc != 0 {
+                        return Err(anyhow!(
+                            "insert integer value into '{}' failed with rc={}",
+                            schema.field(j).name(),
+                            rc
+                        ));
                     }
                 } else {
                     if let Some(v) = as_f64_opt(arr.as_ref(), i) {
