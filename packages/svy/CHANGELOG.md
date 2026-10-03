@@ -6,6 +6,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Added
+
+- **`Expr.to_polars()`** returns the polars expression a svy expression wraps, to filter or derive on a plain polars frame before a `Sample` exists. It replaces importing `to_polars_expr` from `svy.core.expr`.
+
 ### Changed
 
 - **`read_stata` returns Stata integer variables as Int64.** `byte`, `int` and `long` variables were Float64, and `write_stata` wrote integer columns as `double`. Integer columns now keep their type both ways, so a code `1` matches the value label keyed `1`. Needs the svy-io release with integer storage (see its changelog).
