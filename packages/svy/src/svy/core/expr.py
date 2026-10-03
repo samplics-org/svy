@@ -74,6 +74,26 @@ def _box(x: Any) -> pl.Expr:
     return pl.lit(x)
 
 
+def _as_date(x: Any) -> pl.Expr:
+    return _box(x).cast(pl.Date)
+
+
+def _whole_months(start: pl.Expr, end: pl.Expr) -> pl.Expr:
+    # Stata's datediff "month": count calendar months, then give back the last
+    # one when the end's day of the month has not reached the start's.
+    months = (end.dt.year() - start.dt.year()).cast(pl.Int64) * 12 + (
+        end.dt.month().cast(pl.Int64) - start.dt.month().cast(pl.Int64)
+    )
+    d_start, d_end = start.dt.day(), end.dt.day()
+    return (
+        pl.when((months > 0) & (d_end < d_start))
+        .then(months - 1)
+        .when((months < 0) & (d_end > d_start))
+        .then(months + 1)
+        .otherwise(months)
+    )
+
+
 # =============================================================================
 # Conditional Expression Builders
 # =============================================================================
@@ -797,6 +817,56 @@ class Expr:
         """Truncate datetime (e.g., '1d', '1h', '1mo')."""
         return _typing.cast(T, Expr(self._e.dt.truncate(every)))
 
+    def str_to_date(self: T, fmt: str | None = None, *, strict: bool = True) -> T:
+        """
+        Parse text into a date.
+
+        Parameters
+        ----------
+        fmt : str | None
+            A strftime format such as ``"%d%m%Y"``. ``None`` infers it.
+        strict : bool
+            ``True`` raises on a value that is not a date in ``fmt``;
+            ``False`` gives null for it.
+
+        Examples
+        --------
+        Day-month-year stored as a number, the leading zero dropped
+        (``8082025`` for 8 August 2025)::
+
+            svy.col("dob").to_str().pad_left(8, "0").str_to_date("%d%m%Y")
+        """
+        return _typing.cast(T, Expr(self._e.str.to_date(fmt, strict=strict)))
+
+    def days_between(self: T, other: Any) -> T:
+        """
+        Days from this date to `other`; negative when `other` is earlier.
+
+        Datetimes are truncated to their date. Matches Stata's
+        ``datediff(self, other, "day")``.
+        """
+        return _typing.cast(T, Expr((_as_date(other) - _as_date(self._e)).dt.total_days()))
+
+    def months_between(self: T, other: Any) -> T:
+        """
+        Whole months from this date to `other`; negative when `other` is earlier.
+
+        A month is complete when `other`'s day of the month reaches this date's,
+        so 31 January to 29 February is 0 months and 15 January to 15 February
+        is 1. Matches Stata's ``datediff(self, other, "month")``.
+        """
+        return _typing.cast(T, Expr(_whole_months(_as_date(self._e), _as_date(other))))
+
+    def years_between(self: T, other: Any) -> T:
+        """
+        Whole years from this date to `other` (age at `other` for a birth date).
+
+        A 29 February start completes its year on 1 March in common years.
+        Matches Stata's ``datediff(self, other, "year")``.
+        """
+        months = _whole_months(_as_date(self._e), _as_date(other))
+        return _typing.cast(T, Expr((months / 12).cast(pl.Int64)))
+
     # -------------------------------------------------------------------------
     # List Operations
     # -------------------------------------------------------------------------
@@ -929,6 +999,34 @@ def lit(value: Any) -> Expr:
         svy.lit(100)
     """
     return Expr(pl.lit(value))
+
+
+def date(year: Any, month: Any, day: Any, *, strict: bool = True) -> Expr:
+    """
+    Build a date from its year, month and day.
+
+    Each part is an expression, a column name or an integer.
+
+    Parameters
+    ----------
+    strict : bool
+        ``True`` raises on parts that are not a date (day 31 in April, a
+        "don't know" code of 98); ``False`` gives null for them.
+
+    Example:
+        svy.date("dose1_y", "dose1_m", "dose1_d")
+    """
+    y, m, d = (pl.col(p) if isinstance(p, str) else _box(p) for p in (year, month, day))
+    if strict:
+        return Expr(pl.date(y, m, d))
+    text = pl.concat_str(
+        [
+            p.cast(pl.Int64).cast(pl.Utf8).str.pad_start(w, "0")
+            for p, w in ((y, 4), (m, 2), (d, 2))
+        ],
+        separator="-",
+    )
+    return Expr(text.str.to_date("%Y-%m-%d", strict=False))
 
 
 def when(condition: Expr | pl.Expr) -> _When:
