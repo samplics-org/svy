@@ -6,6 +6,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Added
+
+- **`Expr.to_polars()`** returns the polars expression a svy expression wraps, to filter or derive on a plain polars frame before a `Sample` exists. It replaces importing `to_polars_expr` from `svy.core.expr`.
+
 ## [0.31.0] — 2026-09-30
 
 ### Added
