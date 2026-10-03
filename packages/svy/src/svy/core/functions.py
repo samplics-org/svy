@@ -15,9 +15,15 @@ from typing import Any, Literal, Sequence
 import msgspec
 import polars as pl
 
-from svy.core.design import Design, PopSize
+from svy.core.design import Design, PopSize, _norm_spec
 from svy.core.enumerations import MeasurementType, MetadataSource
-from svy.core.panel import design_varies_within_case, duplicate_case_ids, wave_overlap
+from svy.core.panel import (
+    CaseId,
+    case_id_cols,
+    design_varies_within_case,
+    duplicate_case_ids,
+    wave_overlap,
+)
 from svy.core.sample import Sample
 from svy.core.types import Category
 from svy.core.warnings import check_on_finding, finding_level
@@ -339,7 +345,13 @@ def _merge_metadata(combined: Sample, samples: Sequence[Sample]) -> None:
         )
 
 
-def _resolve_case_id(samples: Sequence[Sample], kind: str, case_id: str | None) -> str | None:
+def _case_label(case_id: CaseId) -> str:
+    return f"'{case_id}'" if isinstance(case_id, str) else str(list(case_id))
+
+
+def _resolve_case_id(
+    samples: Sequence[Sample], kind: str, case_id: CaseId | None
+) -> CaseId | None:
     """The case column: the explicit one, else the one every input declares."""
     declared = {s._design.case_id for s in samples}
     shared = next(iter(declared)) if len(declared) == 1 else None
@@ -427,22 +439,24 @@ def _resolve_rep_wgts(samples: Sequence[Sample], kind: str):
     )
 
 
-def _check_panel_ids(frames: Sequence[pl.DataFrame], case_id: str) -> None:
-    missing = [j for j, f in enumerate(frames, start=1) if case_id not in f.columns]
+def _check_panel_ids(frames: Sequence[pl.DataFrame], case_id: CaseId) -> None:
+    cols = case_id_cols(case_id)
+    label = _case_label(case_id)
+    missing = [j for j, f in enumerate(frames, start=1) if any(c not in f.columns for c in cols)]
     if missing:
         raise MethodError.not_applicable(
             where=_CTX,
             method="combine_samples",
-            reason=f"case_id column '{case_id}' is missing from sample(s) {missing}",
+            reason=f"case_id column {label} is missing from sample(s) {missing}",
             param="case_id",
             hint="Every wave must carry the case id under this one name.",
         )
     for j, f in enumerate(frames, start=1):
-        if f.get_column(case_id).null_count() > 0:
+        if any(f.get_column(c).null_count() > 0 for c in cols):
             raise MethodError.not_applicable(
                 where=_CTX,
                 method="combine_samples",
-                reason=f"case_id column '{case_id}' has nulls in sample {j}",
+                reason=f"case_id column {label} has nulls in sample {j}",
                 param="case_id",
             )
         dups = duplicate_case_ids(f, case_id, None)
@@ -450,7 +464,7 @@ def _check_panel_ids(frames: Sequence[pl.DataFrame], case_id: str) -> None:
             raise MethodError.not_applicable(
                 where=_CTX,
                 method="combine_samples",
-                reason=f"case_id column '{case_id}' is not unique in sample {j}: {dups}",
+                reason=f"case_id column {label} is not unique in sample {j}: {dups}",
                 param="case_id",
                 hint=(
                     "A case is one row per wave. If these are household rows, the "
@@ -501,7 +515,7 @@ def _check_panel_units(
 
 
 def _check_constant_within_case(
-    stacked: pl.DataFrame, case_id: str, cols: Sequence[str], *, what: str = "design columns"
+    stacked: pl.DataFrame, case_id: CaseId, cols: Sequence[str], *, what: str = "design columns"
 ) -> None:
     varies = design_varies_within_case(stacked, case_id, cols)
     if varies:
@@ -509,7 +523,7 @@ def _check_constant_within_case(
         raise MethodError.not_applicable(
             where=_CTX,
             method="combine_samples",
-            reason=f"{what} vary within case_id '{case_id}' across waves: {detail}",
+            reason=f"{what} vary within case_id {_case_label(case_id)} across waves: {detail}",
             hint=(
                 "The case is nested in its PSU: movers keep their base-wave stratum "
                 "and PSU (and the base-wave replicate columns)."
@@ -518,7 +532,7 @@ def _check_constant_within_case(
 
 
 def _report_overlap(
-    stacked: pl.DataFrame, case_id: str, wave_name: str, found: list[dict[str, Any]]
+    stacked: pl.DataFrame, case_id: CaseId, wave_name: str, found: list[dict[str, Any]]
 ) -> None:
     for ov in wave_overlap(stacked, case_id, wave_name):
         log.info("panel overlap %s", ov)
@@ -558,7 +572,7 @@ def combine_samples(
     wave_name: str = "wave",
     wave_labels: Sequence[str] | None = None,
     kind: Literal["cross_sectional", "cs", "panel"] = "cross_sectional",
-    case_id: str | None = None,
+    case_id: str | Sequence[str] | None = None,
     on_mixed_design: Literal["error", "warn", "ignore"] = "error",
     wgt_name: str = "combined_wgt",
 ) -> Sample:
@@ -612,9 +626,10 @@ def combine_samples(
         wave, consecutive waves overlap (an empty overlap errors, a small one
         warns), design columns are constant within a case, and a later
         wave's (stratum, PSU) set is a subset of wave 1's.
-    case_id : str | None
-        Column identifying the followed case, present in every input under
-        this one name (rename upfront if the waves differ). Required for
+    case_id : str | Sequence[str] | None
+        Column identifying the followed case, or several that identify it
+        together (cluster, household, line), present in every input under
+        the same names (rename upfront if the waves differ). Required for
         ``kind="panel"`` unless every input declares the same
         ``Design.case_id``. On a cross-sectional stack it is kept only when
         every input declares it and it stays unique on the stacked frame.
@@ -665,10 +680,16 @@ def combine_samples(
         )
     if kind == "cs":
         kind = "cross_sectional"
-    if case_id is not None and (not isinstance(case_id, str) or not case_id):
-        raise MethodError.invalid_choice(
-            where=_CTX, param="case_id", got=case_id, allowed=["<column name>"]
-        )
+    if case_id is not None:
+        try:
+            case_id = _norm_spec("case_id", case_id)
+        except (TypeError, ValueError):
+            raise MethodError.invalid_choice(
+                where=_CTX,
+                param="case_id",
+                got=case_id,
+                allowed=["<column name>", "<list of column names>"],
+            ) from None
     if adjust not in (None, "average", "none"):
         raise MethodError.invalid_choice(
             where=_CTX, param="adjust", got=adjust, allowed=["average", "none", None]

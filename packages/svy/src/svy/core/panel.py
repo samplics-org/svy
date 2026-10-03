@@ -3,7 +3,7 @@
 
 A panel is a long ``Sample`` whose ``Design.case_id`` identifies the followed
 entity and whose ``Design.wave`` orders its rows. Nothing here knows about a
-``Sample``; the functions take a frame and two column names so
+``Sample``; the functions take a frame and the case and wave columns so
 ``combine_samples`` can run them on the raw per-wave frames before concat and
 ``Sample._validate_design`` can run them on the stacked one.
 """
@@ -16,7 +16,27 @@ import msgspec
 import polars as pl
 
 
-__all__ = ["WaveOverlap", "wave_overlap", "duplicate_case_ids", "design_varies_within_case"]
+__all__ = [
+    "WaveOverlap",
+    "case_id_cols",
+    "wave_overlap",
+    "duplicate_case_ids",
+    "design_varies_within_case",
+]
+
+CaseId = str | Sequence[str]
+
+
+def case_id_cols(case_id: CaseId) -> list[str]:
+    """The case id's columns: one, or several that identify a record together."""
+    return [case_id] if isinstance(case_id, str) else list(case_id)
+
+
+def _ids(frame: pl.DataFrame, cols: list[str]) -> list[Any]:
+    """Case ids as values for one column, as tuples for several."""
+    if len(cols) == 1:
+        return frame.get_column(cols[0]).to_list()
+    return list(frame.select(cols).iter_rows())
 
 
 class WaveOverlap(msgspec.Struct, frozen=True):
@@ -34,19 +54,20 @@ class WaveOverlap(msgspec.Struct, frozen=True):
         )
 
 
-def wave_overlap(data: pl.DataFrame, case_id: str, wave: str) -> list[WaveOverlap]:
+def wave_overlap(data: pl.DataFrame, case_id: CaseId, wave: str) -> list[WaveOverlap]:
     """Common / lost / new case counts for every consecutive pair of waves.
 
     Waves are ordered by their code, the order ``combine_samples`` assigns
     (caller order) and the order a producer's period codes carry.
     """
-    ids = data.select(case_id, wave).drop_nulls().unique()
+    cols = case_id_cols(case_id)
+    ids = data.select(*cols, wave).drop_nulls().unique()
     waves = sorted(ids.get_column(wave).unique().to_list())
     out: list[WaveOverlap] = []
     for a, b in zip(waves, waves[1:]):
-        prev = ids.filter(pl.col(wave) == a).select(case_id)
-        cur = ids.filter(pl.col(wave) == b).select(case_id)
-        common = prev.join(cur, on=case_id, how="inner").height
+        prev = ids.filter(pl.col(wave) == a).select(cols)
+        cur = ids.filter(pl.col(wave) == b).select(cols)
+        common = prev.join(cur, on=cols, how="inner").height
         out.append(
             WaveOverlap(
                 prev=a, wave=b, common=common, lost=prev.height - common, new=cur.height - common
@@ -56,16 +77,20 @@ def wave_overlap(data: pl.DataFrame, case_id: str, wave: str) -> list[WaveOverla
 
 
 def duplicate_case_ids(
-    data: pl.DataFrame, case_id: str, wave: str | None, *, limit: int = 10
+    data: pl.DataFrame, case_id: CaseId, wave: str | None, *, limit: int = 10
 ) -> list[Any]:
-    """Case ids appearing more than once within a wave (overall without a wave)."""
-    keys = [case_id] if wave is None else [case_id, wave]
+    """Case ids appearing more than once within a wave (overall without a wave).
+
+    Values for a one-column id, tuples for an id on several columns.
+    """
+    cols = case_id_cols(case_id)
+    keys = cols if wave is None else [*cols, wave]
     dup = data.group_by(keys).len().filter(pl.col("len") > 1)
-    return dup.get_column(case_id).unique().sort().head(limit).to_list()
+    return _ids(dup.select(cols).unique().sort(cols).head(limit), cols)
 
 
 def design_varies_within_case(
-    data: pl.DataFrame, case_id: str, cols: Sequence[str], *, limit: int = 10
+    data: pl.DataFrame, case_id: CaseId, cols: Sequence[str], *, limit: int = 10
 ) -> dict[str, list[Any]]:
     """Design columns that take more than one value inside a case.
 
@@ -74,13 +99,14 @@ def design_varies_within_case(
     base-wave stratum and PSU, because that is where the sampling variance
     comes from.
     """
-    cols = [c for c in dict.fromkeys(cols) if c in data.columns and c != case_id]
+    id_cols = case_id_cols(case_id)
+    cols = [c for c in dict.fromkeys(cols) if c in data.columns and c not in id_cols]
     if not cols:
         return {}
-    agg = data.group_by(case_id).agg([pl.col(c).n_unique().alias(c) for c in cols])
+    agg = data.group_by(id_cols).agg([pl.col(c).n_unique().alias(c) for c in cols])
     out: dict[str, list[Any]] = {}
     for c in cols:
-        bad = agg.filter(pl.col(c) > 1).get_column(case_id).sort().head(limit).to_list()
+        bad = _ids(agg.filter(pl.col(c) > 1).select(id_cols).sort(id_cols).head(limit), id_cols)
         if bad:
             out[c] = bad
     return out

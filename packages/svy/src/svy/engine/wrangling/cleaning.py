@@ -49,7 +49,7 @@ def _design_with_renamed_columns(design: Any, renames: dict[str, str]) -> Any:
     new_hit = _map_name_in_design(d.hit, renames)
     new_mos = _map_name_in_design(d.mos, renames)
     new_pop_size = _map_name_in_design(d.pop_size, renames)
-    new_case_id = _map_name_in_design(d.case_id, renames)
+    new_case_id = _map_tuple_in_design(d.case_id, renames)
     new_wave = _map_name_in_design(d.wave, renames)
 
     # Map Tuple-or-str fields
