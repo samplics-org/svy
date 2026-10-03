@@ -18,7 +18,7 @@ svy/weighting/types.py — weighting-specific domain objects (TrimConfig, TrimRe
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Sequence
 
 import numpy as np
@@ -101,6 +101,42 @@ class TrimConfig:
             raise WeightingError.trim_param_range(
                 where=where, param="tol", got=self.tol, expected="in (0, 1)"
             )
+
+    def to_code(self) -> str:
+        """Source that rebuilds this specification: ``svy.TrimConfig(...)``.
+
+        Raises a ``WeightingError`` for a bound given as a callable, which has
+        no source form.
+        """
+        args = []
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if value != f.default:
+                args.append(f"{f.name}={_spec_code(f.name, value)}")
+        return f"svy.TrimConfig({', '.join(args)})"
+
+
+def _spec_code(name: str, value: object) -> str:
+    from svy.core.design import _value_code
+
+    if isinstance(value, (Threshold, _ComposedCap)):
+        return value.to_code()
+    if isinstance(value, list):
+        return f"[{', '.join(_value_code(v) for v in value)}]"
+    if callable(value):
+        from svy.errors.weighting_errors import WeightingError
+
+        raise WeightingError(
+            title="Bound not writable as code",
+            detail=f"A TrimConfig whose {name} bound is a callable cannot be written as code.",
+            code="TO_CODE_CALLABLE",
+            where="TrimConfig.to_code",
+            param=name,
+            got=getattr(value, "__name__", type(value).__name__),
+            hint="Express the bound as a number or a svy.Threshold, e.g. "
+            'svy.Threshold.quantile(0.99) or svy.Threshold("median") + 6 * svy.Threshold("iqr").',
+        )
+    return _value_code(value)
 
 
 # ---------------------------------------------------------------------------

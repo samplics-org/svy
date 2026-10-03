@@ -16,9 +16,17 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 - **`Design.case_id` on several columns.** `svy.Design(case_id=["cluster", "hh", "line"])` identifies a record by the columns together, as a CSPro export does, like `stratum` and `psu` take a list. Everything that uses the case id takes the columns together: uniqueness (duplicates are reported as tuples), nulls, the panel checks, the case as the variance PSU on a panel, `combine_samples(kind="panel", case_id=[...])`, `wrangling.lag`, the panel `adjust`, renames, `to_code()` and the saved design (`DesignData.case_id` is a list). Removing one of the columns removes the case id. Results equal those with the same id built as one column.
 
+- **`to_code()` on design objects.** `Design`, the replicate weights (`BootstrapWgts`, `JackknifeWgts`, `BrrWgts`, `SdrWgts`), `PopSize`, `WgtAdjustment`, `Singleton`, `Threshold` (and compositions such as `svy.Threshold("median") + 6 * svy.Threshold("iqr")`) and `TrimConfig` return source that rebuilds an equal object with only `import svy`, so a script can reproduce a run without rendering the constructors by hand. A `Singleton` or `TrimConfig` holding a Python callable, or a `Singleton` with a Generator `rstate`, has no source form and raises a guiding error. Composed thresholds now compare equal by value.
+
 ### Changed
 
 - **`read_stata` returns Stata integer variables as Int64.** `byte`, `int` and `long` variables were Float64, and `write_stata` wrote integer columns as `double`. Integer columns now keep their type both ways, so a code `1` matches the value label keyed `1`. Needs the svy-io release with integer storage (see its changelog).
+
+- **A design part's value implements `to_code()`**, which the default `DesignPart.to_code` calls; it was the private `_to_code()`.
+
+### Fixed
+
+- **Replicate weights' repr quotes the method and names `fay_coef`.** It printed `method=BRR` and `fay=0.5`; it now prints `method='BRR'` and `fay_coef=0.5`, the parameter's name.
 
 ## [0.31.0] — 2026-09-30
 

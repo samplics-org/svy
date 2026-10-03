@@ -94,6 +94,11 @@ class PopSize(NamedTuple):
     psu: str
     ssu: str | None = None
 
+    def to_code(self) -> str:
+        """Source that rebuilds this spec: ``svy.PopSize(...)``."""
+        ssu = "" if self.ssu is None else f", ssu={self.ssu!r}"
+        return f"svy.PopSize(psu={self.psu!r}{ssu})"
+
 
 # =============================================================================
 # Replicate Weights (Strict Configuration)
@@ -280,7 +285,8 @@ class WgtAdjustment(msgspec.Struct, frozen=True, kw_only=True):
     def is_variance_consumed(self) -> bool:
         return self.kind in self.VARIANCE_CONSUMED
 
-    def _to_code(self) -> str:
+    def to_code(self) -> str:
+        """Source that rebuilds this record: ``svy.WgtAdjustment(...)``."""
         return _struct_code(self, "svy.WgtAdjustment")
 
 
@@ -594,7 +600,12 @@ class Singleton(_SingletonMethodField, frozen=True, kw_only=True):
     def __repr__(self) -> str:
         return self._code("", repr)
 
-    def _to_code(self) -> str:
+    def to_code(self) -> str:
+        """Source that rebuilds this rule: ``svy.Singleton(...)``.
+
+        Raises a ``MethodError`` for a rule holding a callable ``using`` or a
+        Generator ``rstate``, which have no source form.
+        """
         if self.rstate is not None and not isinstance(self.rstate, int):
             raise _rule_error(
                 "rstate",
@@ -1421,20 +1432,30 @@ class Design:
             )
         )
 
-    def _to_code(self) -> str:
+    def to_code(self) -> str:
         """Source that rebuilds this design: ``svy.Design(...)``, runnable with
-        only ``import svy``."""
+        only ``import svy`` (and ``import datetime`` when a singleton mapping
+        names date strata).
+
+        Examples
+        --------
+        >>> d = svy.Design(stratum="region", psu="ea", wgt="w")
+        >>> d.to_code()
+        "svy.Design(stratum='region', wgt='w', psu='ea')"
+        >>> eval(d.to_code()) == d
+        True
+        """
         return f"svy.Design({', '.join(self._code_args())})"
 
     def _code_args(self) -> list[str]:
-        """The ``name=value`` arguments of ``_to_code``, one per set field or part."""
+        """The ``name=value`` arguments of ``to_code``, one per set field or part."""
         args = []
         for f in _FIELDS:
             value = getattr(self, f)
             if value is None or (f == "wr" and value is False):
                 continue
             if isinstance(value, PopSize):
-                code = f"svy.PopSize(psu={value.psu!r}, ssu={value.ssu!r})"
+                code = value.to_code()
             else:
                 code = _value_code(value)
             args.append(f"{f}={code}")

@@ -191,6 +191,21 @@ class Threshold(Term):
             return NotImplemented
         return self.__add__(replace(other, k=-other.k))
 
+    def to_code(self) -> str:
+        """Source that rebuilds this threshold: ``svy.Threshold(...)``."""
+        from svy.core.design import _value_code
+
+        if self.stat == "absolute" and self.k > 0:
+            return f"svy.Threshold.absolute({_value_code(self.k)})"
+        if self.stat == "quantile" and self.k == 1.0:
+            return f"svy.Threshold.quantile({_value_code(self.p)})"
+        args = [repr(self.stat)]
+        if self.k != 1.0:
+            args.append(_value_code(self.k))
+        if self.p is not None:
+            args.append(f"p={_value_code(self.p)}")
+        return f"svy.Threshold({', '.join(args)})"
+
     def __repr__(self) -> str:
         if self.stat == "absolute":
             return f"Threshold.absolute({self.k})"
@@ -237,6 +252,26 @@ class _ComposedCap:
         if not isinstance(other, Threshold):
             return NotImplemented
         return _ComposedCap(self._parts + [replace(other, k=-other.k)])
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, _ComposedCap):
+            return NotImplemented
+        return self._parts == other._parts
+
+    def __hash__(self) -> int:
+        return hash(tuple(self._parts))
+
+    def to_code(self) -> str:
+        """Source that rebuilds this composition: ``svy.Threshold(...) + ...``."""
+        parts = []
+        for i, cap in enumerate(self._parts):
+            if i == 0:
+                parts.append(cap.to_code())
+            elif cap.k < 0:
+                parts.append(f"- {replace(cap, k=-cap.k).to_code()}")
+            else:
+                parts.append(f"+ {cap.to_code()}")
+        return " ".join(parts)
 
     def __repr__(self) -> str:
         parts = []

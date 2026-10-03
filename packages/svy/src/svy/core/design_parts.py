@@ -37,7 +37,7 @@ Hooks (all receive the part's value; the defaults do nothing):
 ``to_data(value)`` / ``from_data(data)``
     The saved form (``svy.serialize``).
 ``to_code(value)``
-    Runnable ``svy.``-prefixed source.
+    Runnable ``svy.``-prefixed source; the default calls ``value.to_code()``.
 ``repr(value)``
     Its piece of ``repr(design)``, or None.
 
@@ -115,7 +115,7 @@ class DesignPart:
         return data
 
     def to_code(self, value: Any) -> str:
-        return value._to_code()
+        return value.to_code()
 
     def repr(self, value: Any) -> str | None:
         return None if value is None else f"{self.name}={value!r}"
