@@ -53,7 +53,13 @@ class TargetTwoMeans(msgspec.Struct, frozen=True, tag="two_mean"):
     power: Number = 0.80
 
 
-Target = TargetProp | TargetMean | TargetTwoProps | TargetTwoMeans
+class TargetAllocation(msgspec.Struct, frozen=True, tag="allocation"):
+    n: int
+    method: str = "proportional"
+    power: Number = 1.0
+
+
+Target = TargetProp | TargetMean | TargetTwoProps | TargetTwoMeans | TargetAllocation
 
 
 # =============================================================================
@@ -67,3 +73,16 @@ class Size(msgspec.Struct, frozen=True, tag="size"):
     n1_deff: Number | tuple[Number, Number] | None = None  # after DEFF
     n2_fpc: Number | tuple[Number, Number] | None = None  # after FPC (if pop_size provided)
     n: Number | tuple[Number, Number] = 0  # final after nonresponse adjustment
+
+
+class Allocation(msgspec.Struct, frozen=True, tag="allocation"):
+    """One stratum's share of an allocated sample size.
+
+    ``stratum`` is the key as given in ``pop_size`` (a value, or a tuple for
+    several stratum columns); ``sigma`` is set for Neyman allocation.
+    """
+
+    stratum: object
+    pop_size: Number
+    n: int
+    sigma: Number | None = None

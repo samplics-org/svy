@@ -12,13 +12,17 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 - **Dates in expressions.** `svy.date(year, month, day)` builds a date from three columns, expressions or integers; `Expr.str_to_date(fmt)` parses text (`svy.col("dob").to_str().pad_left(8, "0").str_to_date("%d%m%Y")` reads `8082025` as 8 August 2025). Both raise on values that are not dates; `strict=False` gives null instead, for codes such as 98. `Expr.days_between(other)`, `months_between(other)` and `years_between(other)` count from the date to `other` in days, whole months and whole years, as Stata's `datediff()` does (31 January to 29 February is 0 months; a 29 February birthday completes its year on 1 March).
 
-- **Allocation by size and by a power.** `sample.sampling.allocate(method="size", group_mos=...)` allocates in proportion to each stratum's total measure of size, as a PPS design usually does; `sample.sampling.group_totals(mos=None, by=None)` gives those totals, keyed like `group_sizes()`, from the design's `mos` unless another column is named (missing and non-positive values add nothing). `power=` raises the measure to a power for `"proportional"` (`N_h ** power`; `power=0.5` is square-root allocation) and `"size"`. The usual `min_n`, rounding to the exact total and cap at the frame size apply; a stratum with no size gets 0.
+- **`SampleSize().allocate(n, pop_size=...)` splits an overall sample size across strata**, as a sample-size planning goal beside `estimate_prop` and `estimate_mean`: `method="proportional"` (n_h ∝ N_h, or N_h ** `power`; `power=0.5` is square-root allocation), `"neyman"` (∝ N_h · S_h, with `sigma=` per stratum, e.g. from a previous survey) or `"equal"` (n / H). `pop_size` maps each stratum to its unit count or to any size total the split should follow (households per stratum for a PPS design); its keys are any stratum values, tuples for several stratum columns, independent of a design. Largest-remainder rounding makes the strata sum to n; `min_n` floors non-empty strata and `cap_at_population` caps n_h at N_h. `SampleSize.n` gives `{stratum: n_h}`, which `sample.sampling.srs(n=...)` and the `pps_*` methods take as is; `SampleSize.allocation` lists the rows.
 
 - **`Design.case_id` on several columns.** `svy.Design(case_id=["cluster", "hh", "line"])` identifies a record by the columns together, as a CSPro export does, like `stratum` and `psu` take a list. Everything that uses the case id takes the columns together: uniqueness (duplicates are reported as tuples), nulls, the panel checks, the case as the variance PSU on a panel, `combine_samples(kind="panel", case_id=[...])`, `wrangling.lag`, the panel `adjust`, renames, `to_code()` and the saved design (`DesignData.case_id` is a list). Removing one of the columns removes the case id. Results equal those with the same id built as one column.
 
 ### Changed
 
 - **`read_stata` returns Stata integer variables as Int64.** `byte`, `int` and `long` variables were Float64, and `write_stata` wrote integer columns as `double`. Integer columns now keep their type both ways, so a code `1` matches the value label keyed `1`. Needs the svy-io release with integer storage (see its changelog).
+
+### Removed
+
+- **BREAKING: `sample.sampling.allocate()`, `sample.sampling.group_sizes()` and `svy.selection.allocate()`.** Allocation is planning, not a sampling action: use `svy.SampleSize().allocate(n, pop_size=...)`, with `pop_size` the strata's counts (e.g. from `sample.estimation.total(...)` or your frame) or size totals, and pass `.n` to the selectors. The `"rate"` method is gone (a fixed fraction is n = f · N, proportional allocation), as is `"size"` (pass the size totals as `pop_size`).
 
 ## [0.31.0] — 2026-09-30
 

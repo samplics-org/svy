@@ -2,7 +2,9 @@ from .base import (
     SampleSize,
 )
 from .types import (
+    Allocation,
     Target,
+    TargetAllocation,
     TargetMean,
     TargetProp,
     TargetTwoMeans,
@@ -12,7 +14,9 @@ from .types import (
 
 __all__ = [
     "SampleSize",
+    "Allocation",
     "Target",
+    "TargetAllocation",
     "TargetMean",
     "TargetProp",
     "TargetTwoMeans",
