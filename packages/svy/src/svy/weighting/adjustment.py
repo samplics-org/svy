@@ -18,6 +18,7 @@ except ImportError:  # pragma: no cover
     rust_adjust_nr = None
 
 from svy.core.design import WgtAdjustment
+from svy.core.panel import case_id_cols
 from svy.core.types import DomainScalarMap
 from svy.core.warnings import Severity, WarnCode, check_on_finding
 from svy.errors import WeightingError
@@ -188,6 +189,7 @@ def _adjust_panel(
     """
     case_id, wave = design.case_id, design.wave
     assert case_id is not None and wave is not None  # noqa: S101 — caller checked
+    case_cols = case_id_cols(case_id)
     n = df.height
     mask = _where_mask(df, where, where=ctx)
     scope = np.ones(n, dtype=bool) if mask is None else mask
@@ -203,12 +205,12 @@ def _adjust_panel(
 
     virtual = df.head(0)
     if wave_subset:
-        in_scope_cases = df.filter(pl.Series(scope)).select(case_id).unique()
+        in_scope_cases = df.filter(pl.Series(scope)).select(case_cols).unique()
         virtual = (
             df.filter(pl.col(wave) < scope_waves.min())
-            .join(in_scope_cases, on=case_id, how="anti")
+            .join(in_scope_cases, on=case_cols, how="anti")
             .sort(wave)
-            .unique(subset=[case_id], keep="last", maintain_order=True)
+            .unique(subset=case_cols, keep="last", maintain_order=True)
         )
 
     n_virtual = virtual.height
@@ -228,14 +230,14 @@ def _adjust_panel(
 
     fac_names = [f"__svy_f{i}" for i in range(len(wgt_cols))]
     per_case = (
-        aug.select(case_id, wave)
+        aug.select(*case_cols, wave)
         .with_columns([pl.Series(nm, factor[:, i]) for i, nm in enumerate(fac_names)])
         .filter(pl.Series(assigned))
         .sort(wave)
-        .unique(subset=[case_id], keep="last", maintain_order=True)
+        .unique(subset=case_cols, keep="last", maintain_order=True)
         .drop(wave)
     )
-    joined = df.select(case_id).join(per_case, on=case_id, how="left", maintain_order="left")
+    joined = df.select(case_cols).join(per_case, on=case_cols, how="left", maintain_order="left")
     case_factor = joined.select(fac_names).fill_null(1.0).to_numpy().astype(np.float64)
     return old[:n] * case_factor, resp_codes, scope, spec, wave_subset
 

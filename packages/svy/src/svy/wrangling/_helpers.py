@@ -388,6 +388,18 @@ def _auto_clean_design(target: "Sample") -> None:
             field_notes[field] = f"{field}={tuple(c for c in x if c not in cols)!r}"
         return kept or None
 
+    def keep_whole(
+        field: str,
+        x: str | tuple[str, ...] | None,
+    ) -> str | tuple[str, ...] | None:
+        # An identifier on several columns is not one without all of them.
+        if x is None or isinstance(x, str):
+            return keep_name(field, x)
+        if all(c in cols for c in x):
+            return x
+        field_notes[field] = f"{field}={x!r}"
+        return None
+
     pop_size = current_design.pop_size
     if isinstance(pop_size, PopSize):
         if pop_size.psu not in cols:
@@ -402,7 +414,7 @@ def _auto_clean_design(target: "Sample") -> None:
             removed.append(field_notes.pop("pop_size"))
 
     fields = {
-        "case_id": keep_name("case_id", current_design.case_id),
+        "case_id": keep_whole("case_id", current_design.case_id),
         "wave": keep_name("wave", current_design.wave),
         "stratum": keep_tuple("stratum", current_design.stratum),
         "wgt": keep_name("wgt", current_design.wgt),

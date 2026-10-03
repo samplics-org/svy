@@ -8,10 +8,10 @@ from svy.core.design import Design, PopSize
 
 # ---------- field groups ----------
 # Fields that must be str | None
-STR_ONLY_FIELDS = ("case_id", "wave", "wgt", "prob", "hit", "mos")
+STR_ONLY_FIELDS = ("wave", "wgt", "prob", "hit", "mos")
 
 # Fields that accept str | Sequence[str] | None (normalized to tuple[str, ...] | None)
-MULTI_COL_FIELDS = ("stratum", "psu", "ssu")
+MULTI_COL_FIELDS = ("case_id", "stratum", "psu", "ssu")
 
 # All stringly fields (for a few generic tests)
 STR_FIELDS = STR_ONLY_FIELDS + MULTI_COL_FIELDS

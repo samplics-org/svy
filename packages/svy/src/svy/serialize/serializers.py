@@ -502,7 +502,7 @@ def _serialize_design(design: Design) -> DesignData:
         else:
             others[part.name] = msgspec.to_builtins(data)
     return DesignData(
-        case_id=design.case_id,
+        case_id=_as_list(design.case_id),
         wave=design.wave,
         stratum=_as_list(design.stratum),
         wgt=design.wgt,
@@ -545,7 +545,7 @@ def to_design(data: DesignData) -> Design:
                 raw = msgspec.convert(raw, type=part.data_type)
         parts[part.name] = None if raw is None else part.from_data(raw)
     return Design(
-        case_id=data.case_id,
+        case_id=_as_tuple(data.case_id),
         wave=data.wave,
         stratum=_as_tuple(data.stratum),
         wgt=data.wgt,

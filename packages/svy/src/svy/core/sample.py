@@ -20,7 +20,12 @@ from svy.core.describe_runtime import run_describe
 from svy.core.design import Design, PopSize, RepWeights
 from svy.core.enumerations import MeasurementType
 from svy.core.expr import to_polars_expr
-from svy.core.panel import design_varies_within_case, duplicate_case_ids, wave_overlap
+from svy.core.panel import (
+    case_id_cols,
+    design_varies_within_case,
+    duplicate_case_ids,
+    wave_overlap,
+)
 from svy.core.repwgts import JackknifeWgts, RepWgts, unit_columns
 from svy.core.types import (
     _MISSING,
@@ -619,7 +624,7 @@ class Sample:
         rw_lines = fn().splitlines() if callable(fn) else None
 
         rows = [
-            ("Case id", str(getattr(design, "case_id", None))),
+            ("Case id", self._fmt_tuple_names(getattr(design, "case_id", None))),
             ("Wave", str(getattr(design, "wave", None))),
             ("Stratum", self._fmt_tuple_names(getattr(design, "stratum", None))),
             ("PSU", design._fmt_psu()),
@@ -1117,10 +1122,13 @@ class Sample:
         if design.case_id is None:
             return
         cid = design.case_id
-        if cid not in data.columns:
-            raise ValueError(f"Design.case_id {cid!r} not found in data columns.")
-        if data.get_column(cid).null_count() > 0:
-            raise ValueError(f"Design.case_id {cid!r} contains nulls.")
+        cid_cols = case_id_cols(cid)
+        absent = [c for c in cid_cols if c not in data.columns]
+        if absent:
+            raise ValueError(f"Design.case_id {cid!r}: {absent} not found in data columns.")
+        with_nulls = [c for c in cid_cols if data.get_column(c).null_count() > 0]
+        if with_nulls:
+            raise ValueError(f"Design.case_id {cid!r} contains nulls in {with_nulls}.")
         dups = duplicate_case_ids(data, cid, design.wave)
         if dups:
             scope = f"within wave {design.wave!r}" if design.wave else "across rows"
@@ -1147,7 +1155,7 @@ class Sample:
             )
         # Stacked cross-sections may keep a unique case_id next to the wave
         # column; only a frame where some case repeats is a panel to pair.
-        if data.get_column(cid).n_unique() == data.height:
+        if data.select(cid_cols).n_unique() == data.height:
             return
         for ov in wave_overlap(data, cid, design.wave):
             if ov.common == 0:

@@ -97,7 +97,7 @@ def _design_with_renamed_columns(
         for value in (design._parts.get(part.name),)
     }
     return design.update(
-        case_id=_map_name_in_design(design.case_id, renames),
+        case_id=_map_tuple_in_design(design.case_id, renames),
         wave=_map_name_in_design(design.wave, renames),
         stratum=_map_tuple_in_design(design.stratum, renames),
         wgt=_map_name_in_design(design.wgt, renames),
