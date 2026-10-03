@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Literal, Sequence
 import polars as pl
 
 from svy.core.enumerations import MetadataSource
+from svy.core.panel import case_id_cols
 from svy.errors import DimensionError, MethodError
 from svy.wrangling._helpers import _eager_df
 from svy.wrangling.mutate import mutate as _mutate
@@ -91,8 +92,8 @@ def lag(
             hint="Pass name= to write the lag under another name.",
         )
 
-    case_id, wave = design.case_id, design.wave
-    over = dict(partition_by=case_id, order_by=wave)
+    case_cols, wave = case_id_cols(design.case_id), design.wave
+    over = dict(partition_by=case_cols, order_by=wave)
     if gaps == "skip":
         new_data = df.select(
             pl.col(c).shift(n).over(**over).alias(nm) for c, nm in zip(col_list, names)
@@ -104,11 +105,11 @@ def lag(
         rank = "__svy_wave_rank"
         tmp = df.with_columns(pl.col(wave).rank(method="dense").cast(pl.Int64).alias(rank))
         src = tmp.select(
-            pl.col(case_id),
+            *[pl.col(c) for c in case_cols],
             (pl.col(rank) + n).alias(rank),
             *[pl.col(c).alias(nm) for c, nm in zip(col_list, names)],
         )
-        new_data = tmp.join(src, on=[case_id, rank], how="left", maintain_order="left").select(
+        new_data = tmp.join(src, on=[*case_cols, rank], how="left", maintain_order="left").select(
             names
         )
 

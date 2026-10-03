@@ -690,7 +690,7 @@ _FIELDS: tuple[str, ...] = (
 
 
 class Design:
-    case_id: str | None
+    case_id: str | tuple[str, ...] | None
     wave: str | None
     stratum: str | tuple[str, ...] | None
     wgt: str | None
@@ -715,7 +715,7 @@ class Design:
 
     def __init__(
         self,
-        case_id: str | None = None,
+        case_id: str | Sequence[str] | None = None,
         wave: str | None = None,
         stratum: str | Sequence[str] | None = None,
         wgt: str | None = None,
@@ -733,12 +733,13 @@ class Design:
     ) -> None:
         object.__setattr__(self, "_frozen", False)
 
+        norm_case_id = _norm_spec("case_id", case_id)
         norm_stratum = _norm_spec("stratum", stratum)
         norm_psu = _norm_spec("psu", psu)
         norm_ssu = _norm_spec("ssu", ssu)
         norm_pop_size = _norm_pop_size(pop_size)
 
-        object.__setattr__(self, "case_id", case_id)
+        object.__setattr__(self, "case_id", norm_case_id)
         object.__setattr__(self, "wave", wave)
         object.__setattr__(self, "stratum", norm_stratum)
         object.__setattr__(self, "wgt", wgt)
@@ -751,7 +752,7 @@ class Design:
         object.__setattr__(self, "wr", wr)
 
         # Validate simple string-or-None fields (pop_size excluded — handled by _norm_pop_size)
-        for name in ("case_id", "wave", "wgt", "prob", "hit", "mos"):
+        for name in ("wave", "wgt", "prob", "hit", "mos"):
             val = getattr(self, name)
             if val is not None and not isinstance(val, str):
                 raise TypeError(f"{name!r} must be str | None, got {type(val).__name__}")
@@ -855,7 +856,7 @@ class Design:
     def update(
         self,
         *,
-        case_id: str | None | _MissingType = _MISSING,
+        case_id: str | Sequence[str] | None | _MissingType = _MISSING,
         wave: str | None | _MissingType = _MISSING,
         stratum: str | Sequence[str] | None | _MissingType = _MISSING,
         wgt: str | None | _MissingType = _MISSING,
@@ -899,7 +900,7 @@ class Design:
     def fill_missing(
         self,
         *,
-        case_id: str | None | _MissingType = _MISSING,
+        case_id: str | Sequence[str] | None | _MissingType = _MISSING,
         wave: str | None | _MissingType = _MISSING,
         stratum: str | Sequence[str] | None | _MissingType = _MISSING,
         wgt: str | None | _MissingType = _MISSING,
@@ -1008,7 +1009,7 @@ class Design:
         self,
         *,
         only_if_none: bool,
-        case_id: str | None | _MissingType = _MISSING,
+        case_id: str | Sequence[str] | None | _MissingType = _MISSING,
         wave: str | None | _MissingType = _MISSING,
         stratum: str | Sequence[str] | None | _MissingType = _MISSING,
         wgt: str | None | _MissingType = _MISSING,
@@ -1058,13 +1059,14 @@ class Design:
                 return _MISSING
             return _norm_pop_size(val)
 
+        case_id_arg = _norm_multi_arg("case_id", case_id)
         stratum_arg = _norm_multi_arg("stratum", stratum)
         psu_arg = _norm_multi_arg("psu", psu)
         ssu_arg = _norm_multi_arg("ssu", ssu)
         pop_size_arg = _norm_pop_size_arg(pop_size)
 
         fields: dict[str, Any] = {
-            "case_id": pick(self.case_id, case_id),
+            "case_id": pick(self.case_id, case_id_arg),
             "wave": pick(self.wave, wave),
             "stratum": pick(self.stratum, stratum_arg),
             "wgt": pick(self.wgt, wgt),
@@ -1155,7 +1157,7 @@ class Design:
                 continue
 
             # Handle multi-column fields
-            if name in {"stratum", "psu", "ssu"}:
+            if name in {"case_id", "stratum", "psu", "ssu"}:
                 if isinstance(val, str):
                     add(val)
                 elif isinstance(val, (tuple, list)):
@@ -1281,7 +1283,7 @@ class Design:
         t.add_column("Value", justify="left", no_wrap=False, overflow="fold")
 
         rows: list[tuple[str, str]] = [
-            ("Case id", str(self.case_id)),
+            ("Case id", self._fmt_tuple_names(self.case_id)),
             ("Wave", str(self.wave)),
             ("Stratum", self._fmt_tuple_names(self.stratum)),
             ("PSU", self._fmt_psu()),
@@ -1313,7 +1315,7 @@ class Design:
         """Plain-text fallback when rich is not installed."""
         lines: list[str] = [
             "Design",
-            f"  Case id          : {self.case_id}",
+            f"  Case id          : {self._fmt_tuple_names(self.case_id)}",
             f"  Wave             : {self.wave}",
             f"  Stratum          : {self._fmt_tuple_names(self.stratum)}",
             f"  PSU              : {self._fmt_psu()}",

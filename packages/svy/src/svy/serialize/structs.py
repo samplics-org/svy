@@ -498,7 +498,7 @@ class DesignData(msgspec.Struct, kw_only=True, frozen=True):
 
     kind: Literal["design"] = "design"
     schema_version: str = DESIGN_SCHEMA_VERSION
-    case_id: str | None = None
+    case_id: str | list[str] | None = None
     wave: str | None = None
     stratum: str | list[str] | None = None
     wgt: str | None = None
