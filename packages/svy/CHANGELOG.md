@@ -8,6 +8,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **`Expr.to_polars()`** returns the polars expression a svy expression wraps, to filter or derive on a plain polars frame before a `Sample` exists. It replaces importing `to_polars_expr` from `svy.core.expr`.
+
 - **`Design.case_id` on several columns.** `svy.Design(case_id=["cluster", "hh", "line"])` identifies a record by the columns together, as a CSPro export does, like `stratum` and `psu` take a list. Everything that uses the case id takes the columns together: uniqueness (duplicates are reported as tuples), nulls, the panel checks, the case as the variance PSU on a panel, `combine_samples(kind="panel", case_id=[...])`, `wrangling.lag`, the panel `adjust`, renames, `to_code()` and the saved design (`DesignData.case_id` is a list). Removing one of the columns removes the case id. Results equal those with the same id built as one column.
 
 ## [0.31.0] — 2026-09-30
