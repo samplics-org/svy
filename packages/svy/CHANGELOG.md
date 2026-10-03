@@ -10,6 +10,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 - **`Expr.to_polars()`** returns the polars expression a svy expression wraps, to filter or derive on a plain polars frame before a `Sample` exists. It replaces importing `to_polars_expr` from `svy.core.expr`.
 
+- **Dates in expressions.** `svy.date(year, month, day)` builds a date from three columns, expressions or integers; `Expr.str_to_date(fmt)` parses text (`svy.col("dob").to_str().pad_left(8, "0").str_to_date("%d%m%Y")` reads `8082025` as 8 August 2025). Both raise on values that are not dates; `strict=False` gives null instead, for codes such as 98. `Expr.days_between(other)`, `months_between(other)` and `years_between(other)` count from the date to `other` in days, whole months and whole years, as Stata's `datediff()` does (31 January to 29 February is 0 months; a 29 February birthday completes its year on 1 March).
+
 - **`Design.case_id` on several columns.** `svy.Design(case_id=["cluster", "hh", "line"])` identifies a record by the columns together, as a CSPro export does, like `stratum` and `psu` take a list. Everything that uses the case id takes the columns together: uniqueness (duplicates are reported as tuples), nulls, the panel checks, the case as the variance PSU on a panel, `combine_samples(kind="panel", case_id=[...])`, `wrangling.lag`, the panel `adjust`, renames, `to_code()` and the saved design (`DesignData.case_id` is a list). Removing one of the columns removes the case id. Results equal those with the same id built as one column.
 
 ## [0.31.0] — 2026-09-30
