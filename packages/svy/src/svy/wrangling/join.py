@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Literal, Mapping, Sequence
 
 import polars as pl
 
+from svy.checks.functions import check_key
 from svy.core import constants as K
 from svy.core.warnings import check_on_finding, finding_level
 from svy.errors import DimensionError, MethodError
@@ -117,8 +118,9 @@ def _as(expr: pl.Expr, dtype: pl.DataType) -> pl.Expr:
 
 
 def _repeated(frame: pl.DataFrame, keys: list[str]) -> tuple[int, list[tuple]]:
-    dup = frame.group_by(keys).len().filter(pl.col("len") > 1).sort(keys)
-    return dup.height, [tuple(r) for r in dup.select(keys).head(_SHOWN).iter_rows()]
+    rep = check_key(frame, keys, limit=_SHOWN)
+    shown = rep.examples if len(keys) > 1 else [(e,) for e in rep.examples]
+    return rep.n_duplicated, shown
 
 
 def join(

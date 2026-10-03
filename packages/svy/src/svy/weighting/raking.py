@@ -22,6 +22,7 @@ except ImportError:  # pragma: no cover
     rust_rake = None
     rust_trim_weights = None
 
+from svy.checks.functions import margin_totals_check
 from svy.core.design import WgtAdjustment
 from svy.core.types import Category, ControlsType
 from svy.core.warnings import WarnCode, check_on_finding, finding_level
@@ -85,10 +86,7 @@ def _check_margins_agree(totals: dict[str, float], *, where: str) -> None:
     Raking cannot satisfy margins whose totals differ; without this it would
     silently iterate to max_iter and return whatever it reached.
     """
-    if len(totals) < 2:
-        return
-    lo, hi = min(totals.values()), max(totals.values())
-    if hi > 0 and (hi - lo) / hi > 1e-6:
+    if not margin_totals_check(totals).agree:
         raise WeightingError.margins_disagree(where=where, totals=totals)
 
 

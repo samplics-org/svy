@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from svy import (
+    checks,  # noqa: F401
     serialize,  # noqa: F401
 )
 from svy.categorical import (
@@ -151,6 +152,7 @@ __version__ = "0.31.0"
 
 __all__ = [
     # --- Modules ----
+    "checks",
     "datasets",
     "serialize",
     # --- Core Classes ---

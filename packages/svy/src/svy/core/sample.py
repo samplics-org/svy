@@ -13,6 +13,7 @@ import msgspec
 import numpy as np
 import polars as pl
 
+from svy.checks.functions import kish_deff
 from svy.core import design_parts as _dp
 from svy.core.constants import BOOKKEEPING_COLUMNS, SVY_ROW_INDEX, key_col
 from svy.core.describe import DescribeResult
@@ -1517,13 +1518,6 @@ class Sample:
 
     @property
     def deff_w(self) -> DomainScalarMap | Number:
-        def deff_due_to_weighting(w: np.ndarray) -> Number:
-            if w is None:
-                raise ValueError("Sample weight is None")
-            mean_w = np.mean(w)
-            relvar_w = np.power(w - mean_w, 2) / mean_w**2
-            return float(1 + np.mean(relvar_w))
-
         _dw = (
             cast(pl.DataFrame, self._data)
             if not isinstance(self._data, pl.LazyFrame)
@@ -1533,7 +1527,7 @@ class Sample:
             w = np.ones(_dw.shape[0])
         else:
             w = _dw[self._design.wgt].to_numpy()
-        return deff_due_to_weighting(w)
+        return kish_deff(w)
 
     @property
     def strata(self):
