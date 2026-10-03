@@ -189,6 +189,17 @@ class Expr:
     def __repr__(self) -> str:
         return f"Expr({self._e!r})"
 
+    def to_polars(self) -> pl.Expr:
+        """
+        The polars expression this wraps, for use on a plain polars frame.
+
+        Examples
+        --------
+        >>> cond = (svy.col("age") >= 18) & svy.col("region").is_in(["N", "S"])
+        >>> df.filter(cond.to_polars()).height
+        """
+        return self._e
+
     def __bool__(self) -> bool:
         raise TypeError(
             "the truth value of an Expr is ambiguous. "
