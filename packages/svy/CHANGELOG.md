@@ -10,10 +10,6 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 - **`Design.case_id` on several columns.** `svy.Design(case_id=["cluster", "hh", "line"])` identifies a record by the columns together, as a CSPro export does, like `stratum` and `psu` take a list. Everything that uses the case id takes the columns together: uniqueness (duplicates are reported as tuples), nulls, the panel checks, the case as the variance PSU on a panel, `combine_samples(kind="panel", case_id=[...])`, `wrangling.lag`, the panel `adjust`, renames, `to_code()` and the saved design (`DesignData.case_id` is a list). Removing one of the columns removes the case id. Results equal those with the same id built as one column.
 
-### Fixed
-
-- **`Design.columns()` lists the case id's columns** when it has several; it listed only a one-column id, so the columns were not protected from removal.
-
 ## [0.31.0] — 2026-09-30
 
 ### Added
