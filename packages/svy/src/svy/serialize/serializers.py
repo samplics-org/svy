@@ -251,6 +251,8 @@ def _glm_stats_to_data(s: Any) -> GLMStatsData:
         r_squared=_f(s.r_squared) if s.r_squared is not None else None,
         r_squared_adj=_f(s.r_squared_adj) if s.r_squared_adj is not None else None,
         iterations=_i(s.iterations) if s.iterations is not None else None,
+        theta=_f(s.theta) if s.theta is not None else None,
+        theta_se=_f(s.theta_se) if s.theta_se is not None else None,
     )
 
 
@@ -288,6 +290,7 @@ def _serialize_estimate(result: Estimate) -> EstimateData:
         n_psus=_i(result.n_psus),
         where_clause=result.where_clause,
         q_method=_enum(result.q_method) if result.q_method is not None else None,
+        ci_method=result.ci_method,
         deff_ref=result.deff_ref,
         as_factor=bool(result.as_factor),
         labels=[
@@ -372,6 +375,7 @@ def _serialize_glm_fit(result: GLMFit) -> GLMFitData:
         feature_names=list(result.feature_names),
         alpha=_f(result.alpha),
         where_clause=result.where_clause,
+        offset=result.offset,
     )
 
 

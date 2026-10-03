@@ -21,7 +21,7 @@ import msgspec
 # Constants
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = "svy-result/0.6"
+SCHEMA_VERSION = "svy-result/0.7"
 
 #: A design is an input, read back into a live ``Design``: its own schema.
 DESIGN_SCHEMA_VERSION = "svy-design/0.1"
@@ -235,6 +235,10 @@ class GLMStatsData(msgspec.Struct, kw_only=True, frozen=True):
     r_squared: float | None = None
     r_squared_adj: float | None = None
     iterations: int | None = None
+    #: Negative binomial dispersion and its design-based SE; None for other
+    #: families, or decoded from an older payload.
+    theta: float | None = None
+    theta_se: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +266,10 @@ class EstimateData(msgspec.Struct, kw_only=True, frozen=True):
     #: Quantile rule of a median or quantile; None for every other parameter.
     #: Payloads written before this carry "Linear" there, and still decode.
     q_method: str | None = None
+    #: How the intervals were built ("logit", "beta", "korn-graubard",
+    #: "wilson", "fisher", "woodruff" or "wald"); None when decoded from an
+    #: older payload.
+    ci_method: str | None = None
     #: Which SRS reference the design effect was measured against, or None when
     #: none was requested. Optional so payloads written before it existed still
     #: decode; a deff is ambiguous without it, since the two references differ
@@ -360,6 +368,8 @@ class GLMFitData(msgspec.Struct, kw_only=True, frozen=True):
     alpha: float = 0.05
     #: The fit's ``where=`` domain, formatted for display; None without one.
     where_clause: str | None = None
+    #: The offset column the model was fitted with; None without one.
+    offset: str | None = None
 
 
 @_kinded("glm_pred")
