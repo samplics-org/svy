@@ -15,6 +15,9 @@ from typing import Any, Sequence
 import msgspec
 import polars as pl
 
+from svy.core._check import check_key
+from svy.core._check import key_values as _ids
+
 
 __all__ = [
     "WaveOverlap",
@@ -26,17 +29,12 @@ __all__ = [
 
 CaseId = str | Sequence[str]
 
+_WAVE = "__svy_panel_wave"
+
 
 def case_id_cols(case_id: CaseId) -> list[str]:
     """The case id's columns: one, or several that identify a record together."""
     return [case_id] if isinstance(case_id, str) else list(case_id)
-
-
-def _ids(frame: pl.DataFrame, cols: list[str]) -> list[Any]:
-    """Case ids as values for one column, as tuples for several."""
-    if len(cols) == 1:
-        return frame.get_column(cols[0]).to_list()
-    return list(frame.select(cols).iter_rows())
 
 
 class WaveOverlap(msgspec.Struct, frozen=True):
@@ -84,9 +82,13 @@ def duplicate_case_ids(
     Values for a one-column id, tuples for an id on several columns.
     """
     cols = case_id_cols(case_id)
-    keys = cols if wave is None else [*cols, wave]
-    dup = data.group_by(keys).len().filter(pl.col("len") > 1)
-    return _ids(dup.select(cols).unique().sort(cols).head(limit), cols)
+    if wave is None:
+        return check_key(data, cols, limit=limit).examples
+    # A struct is never null, so rows with a null wave still pair up as one wave.
+    frame = data.select(*cols, pl.struct(wave).alias(_WAVE))
+    examples = check_key(frame, [*cols, _WAVE], limit=frame.height).examples
+    ids = [e[0] if len(cols) == 1 else e[:-1] for e in examples]
+    return list(dict.fromkeys(ids))[:limit]
 
 
 def design_varies_within_case(
