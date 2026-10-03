@@ -8,6 +8,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **`Expr.to_polars()`** returns the polars expression a svy expression wraps, to filter or derive on a plain polars frame before a `Sample` exists. It replaces importing `to_polars_expr` from `svy.core.expr`.
+
 - **Allocation by size and by a power.** `sample.sampling.allocate(method="size", group_mos=...)` allocates in proportion to each stratum's total measure of size, as a PPS design usually does; `sample.sampling.group_totals(mos=None, by=None)` gives those totals, keyed like `group_sizes()`, from the design's `mos` unless another column is named (missing and non-positive values add nothing). `power=` raises the measure to a power for `"proportional"` (`N_h ** power`; `power=0.5` is square-root allocation) and `"size"`. The usual `min_n`, rounding to the exact total and cap at the frame size apply; a stratum with no size gets 0.
 
 ## [0.31.0] — 2026-09-30

@@ -103,6 +103,23 @@ def test_to_polars_expr_incomplete_when_raises_typeerror():
         _ = to_polars_expr(partial)
 
 
+def test_expr_to_polars_filters_a_plain_frame():
+    df = _df_basic()
+    cond = (col("x") >= 2) & col("g").is_in(["a", "b"])
+    p = cond.to_polars()
+    assert isinstance(p, pl.Expr)
+    assert df.filter(p)["x"].to_list() == [3, 4]
+
+
+def test_expr_to_polars_from_when_and_public_namespace():
+    import svy
+
+    e = svy.when(svy.col("x") > 2).then(svy.lit("hi")).otherwise(svy.lit("lo"))
+    out = _df_basic().select(e.alias("z").to_polars())["z"].to_list()
+    assert out == ["lo", "lo", "lo", "hi", "hi"]
+    assert to_polars_expr(e).meta.eq(e.to_polars())
+
+
 # =============================================================================
 # __repr__
 # =============================================================================
