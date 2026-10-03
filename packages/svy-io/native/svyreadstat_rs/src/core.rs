@@ -1,6 +1,6 @@
 // native/svyreadstat_rs/src/core.rs
 use anyhow::Result;
-use arrow::array::{ArrayRef, Float64Builder, StringBuilder};
+use arrow::array::{ArrayRef, Float64Builder, Int64Builder, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
@@ -12,11 +12,13 @@ use std::os::raw::{c_char, c_int, c_void};
 use std::sync::Arc;
 
 use readstat_sys::{
-    readstat_double_value, readstat_get_file_label, readstat_get_row_count,
+    readstat_double_value, readstat_get_file_label, readstat_get_row_count, readstat_int32_value,
     readstat_measure_e_READSTAT_MEASURE_NOMINAL as MEASURE_NOMINAL,
     readstat_measure_e_READSTAT_MEASURE_ORDINAL as MEASURE_ORDINAL,
     readstat_measure_e_READSTAT_MEASURE_SCALE as MEASURE_SCALE, readstat_metadata_t,
     readstat_string_value, readstat_type_class_e_READSTAT_TYPE_CLASS_STRING as TCLASS_STRING,
+    readstat_type_e_READSTAT_TYPE_FLOAT as T_FLOAT, readstat_type_e_READSTAT_TYPE_INT8 as T_INT8,
+    readstat_type_e_READSTAT_TYPE_INT16 as T_INT16, readstat_type_e_READSTAT_TYPE_INT32 as T_INT32,
     readstat_type_e_READSTAT_TYPE_STRING as T_STRING,
     readstat_type_e_READSTAT_TYPE_STRING_REF as T_STRING_REF, readstat_value_is_system_missing,
     readstat_value_is_tagged_missing, readstat_value_t, readstat_value_tag,
@@ -24,7 +26,7 @@ use readstat_sys::{
     readstat_variable_get_label, readstat_variable_get_measure,
     readstat_variable_get_missing_range_hi, readstat_variable_get_missing_range_lo,
     readstat_variable_get_missing_ranges_count, readstat_variable_get_name,
-    readstat_variable_get_type_class, readstat_variable_t,
+    readstat_variable_get_type, readstat_variable_get_type_class, readstat_variable_t,
 };
 
 pub(crate) const HANDLER_OK: c_int = 0;
@@ -153,11 +155,15 @@ pub(crate) struct ColBuilders {
     pub(crate) user_missing: Option<UserMissing>,
     pub(crate) sb: Option<StringBuilder>,
     pub(crate) fb: Option<Float64Builder>,
+    pub(crate) ib: Option<Int64Builder>,
 }
 
+/// Every integer storage type (Stata byte/int/long) is widened to Int64:
+/// arithmetic on the narrow polars types overflows silently.
 pub(crate) enum ColKind {
     Str,
-    F64,
+    F64 { float32: bool },
+    I64 { storage: &'static str },
 }
 
 pub(crate) struct ParseCtx {
@@ -269,9 +275,14 @@ impl ColBuilders {
                     sb.append_null();
                 }
             }
-            ColKind::F64 => {
+            ColKind::F64 { .. } => {
                 if let Some(fb) = self.fb.as_mut() {
                     fb.append_null();
+                }
+            }
+            ColKind::I64 { .. } => {
+                if let Some(ib) = self.ib.as_mut() {
+                    ib.append_null();
                 }
             }
         }
@@ -285,9 +296,14 @@ impl ColBuilders {
                     sb.append_value(s);
                 }
             }
-            ColKind::F64 => {
+            ColKind::F64 { .. } => {
                 if let Some(fb) = self.fb.as_mut() {
                     fb.append_null();
+                }
+            }
+            ColKind::I64 { .. } => {
+                if let Some(ib) = self.ib.as_mut() {
+                    ib.append_null();
                 }
             }
         }
@@ -296,9 +312,14 @@ impl ColBuilders {
     #[inline(always)]
     pub(crate) fn push_f64(&mut self, v: f64) {
         match self.kind {
-            ColKind::F64 => {
+            ColKind::F64 { .. } => {
                 if let Some(fb) = self.fb.as_mut() {
                     fb.append_value(v);
+                }
+            }
+            ColKind::I64 { .. } => {
+                if let Some(ib) = self.ib.as_mut() {
+                    ib.append_value(v as i64);
                 }
             }
             ColKind::Str => {
@@ -306,6 +327,18 @@ impl ColBuilders {
                     sb.append_value(format!("{v}"));
                 }
             }
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn push_i64(&mut self, v: i64) {
+        match self.kind {
+            ColKind::I64 { .. } => {
+                if let Some(ib) = self.ib.as_mut() {
+                    ib.append_value(v);
+                }
+            }
+            _ => self.push_f64(v as f64),
         }
     }
 }
@@ -435,6 +468,7 @@ unsafe fn on_variable_impl(
                     cap * STRING_CAPACITY_MULTIPLIER,
                 )),
                 fb: None,
+                ib: None,
             };
             rctx.name_to_idx.insert(name, rctx.cols.len());
             rctx.cols.push(b);
@@ -482,10 +516,18 @@ unsafe fn on_variable_impl(
         _ => None,
     };
 
+    // Only Stata stores integers; SAS and SPSS numerics are always doubles.
     let kind = if readstat_variable_get_type_class(var) == TCLASS_STRING {
         ColKind::Str
     } else {
-        ColKind::F64
+        match readstat_variable_get_type(var) {
+            t if t == T_INT8 => ColKind::I64 { storage: "int8" },
+            t if t == T_INT16 => ColKind::I64 { storage: "int16" },
+            t if t == T_INT32 => ColKind::I64 { storage: "int32" },
+            t => ColKind::F64 {
+                float32: t == T_FLOAT,
+            },
+        }
     };
 
     let label_set = if label_set_name.is_null() {
@@ -553,8 +595,9 @@ unsafe fn on_variable_impl(
                 cap * STRING_CAPACITY_MULTIPLIER,
             )),
             fb: None,
+            ib: None,
         },
-        ColKind::F64 => ColBuilders {
+        ColKind::F64 { .. } => ColBuilders {
             kind,
             name: name.clone(),
             label,
@@ -564,6 +607,19 @@ unsafe fn on_variable_impl(
             user_missing,
             sb: None,
             fb: Some(Float64Builder::with_capacity(cap)),
+            ib: None,
+        },
+        ColKind::I64 { .. } => ColBuilders {
+            kind,
+            name: name.clone(),
+            label,
+            label_set,
+            fmt,
+            measure,
+            user_missing,
+            sb: None,
+            fb: None,
+            ib: Some(Int64Builder::with_capacity(cap)),
         },
     };
 
@@ -672,6 +728,8 @@ unsafe fn on_value_impl(
             Some(s) => col.push_str(&s),
             None => col.push_missing(),
         }
+    } else if vt == T_INT8 || vt == T_INT16 || vt == T_INT32 {
+        col.push_i64(readstat_int32_value(value) as i64);
     } else {
         let d = readstat_double_value(value);
         col.push_f64(d);
@@ -793,7 +851,7 @@ pub(crate) fn finalize_to_ipc(mut ctx: ParseCtx) -> Result<(Vec<u8>, MetaOut)> {
                     user_missing: col.user_missing,
                 });
             }
-            ColKind::F64 => {
+            ColKind::F64 { float32 } => {
                 let arr = Arc::new(
                     col.fb
                         .take()
@@ -811,7 +869,30 @@ pub(crate) fn finalize_to_ipc(mut ctx: ParseCtx) -> Result<(Vec<u8>, MetaOut)> {
                     label: col.label,
                     label_set: col.label_set,
                     fmt: col.fmt,
-                    kind: "double".into(),
+                    kind: if float32 { "float" } else { "double" }.into(),
+                    measure: col.measure,
+                    user_missing: col.user_missing,
+                });
+            }
+            ColKind::I64 { storage } => {
+                let arr = Arc::new(
+                    col.ib
+                        .take()
+                        .ok_or_else(|| anyhow!("integer builder missing"))?
+                        .finish(),
+                ) as ArrayRef;
+                let mut field = Field::new(&col.name, DataType::Int64, true);
+                if !fmeta.is_empty() {
+                    field = field.with_metadata(fmeta);
+                }
+                fields.push(field);
+                arrays.push(arr);
+                vars_meta.push(VarMeta {
+                    name: col.name,
+                    label: col.label,
+                    label_set: col.label_set,
+                    fmt: col.fmt,
+                    kind: storage.into(),
                     measure: col.measure,
                     user_missing: col.user_missing,
                 });

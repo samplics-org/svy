@@ -292,7 +292,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, set)| crate::core::ColBuilders {
-                kind: crate::core::ColKind::F64,
+                kind: crate::core::ColKind::F64 { float32: false },
                 name: format!("v{i}"),
                 label: None,
                 label_set: set.map(str::to_string),
@@ -301,6 +301,7 @@ mod tests {
                 user_missing: None,
                 sb: None,
                 fb: None,
+                ib: None,
             })
             .collect();
         ParseCtx {
