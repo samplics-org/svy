@@ -1,5 +1,5 @@
-# src/svy/checks/types.py
-"""Reports returned by the ``svy.checks`` functions."""
+# src/svy/core/check.py
+"""Reports of ``Sample.check()``."""
 
 from __future__ import annotations
 
@@ -203,3 +203,65 @@ class MarginCheck(_Report, frozen=True, kw_only=True):
             ("Tolerance", f"{self.rtol:.3g}"),
         ]
         return rows
+
+
+class SingletonCheck(_Report, frozen=True, kw_only=True):
+    """Strata with a single PSU and whether the design's rule handles them.
+
+    ``n_unhandled`` counts those the rule (``svy.Singleton``) does not handle,
+    all of them without a rule: the next Taylor analysis raises on these.
+    ``examples`` lists the first singleton strata.
+    """
+
+    n_singletons: int
+    n_unhandled: int
+    examples: list[Any]
+
+    def _title(self) -> str:
+        return "Singleton check"
+
+    def _rows(self) -> list[tuple[str, str]]:
+        rows = [
+            ("Strata with one PSU", _fmt(self.n_singletons)),
+            ("Not handled by a rule", _fmt(self.n_unhandled)),
+        ]
+        if self.examples:
+            rows.append(("Examples", ", ".join(_key(s) for s in self.examples)))
+        return rows
+
+
+class SampleCheck(msgspec.Struct, frozen=True, kw_only=True):
+    """What ``Sample.check()`` found in the data against its design.
+
+    One section per part of the design; a section is None when the design
+    does not declare that part (no weight, no case id, no strata and PSUs).
+    """
+
+    weights: WeightCheck | None = None
+    case_id: KeyCheck | None = None
+    nesting: NestingCheck | None = None
+    singletons: SingletonCheck | None = None
+
+    def _sections(self) -> list[_Report]:
+        return [s for s in (self.weights, self.case_id, self.nesting, self.singletons) if s]
+
+    def __rich_console__(self, console, options):
+        for section in self._sections():
+            yield from section.__rich_console__(console, options)
+
+    def __plain_str__(self) -> str:
+        parts = [s.__plain_str__() for s in self._sections()]
+        return "\n\n".join(parts) if parts else "Sample check: nothing declared to check"
+
+    def __str__(self) -> str:
+        from svy.ui.printing import render_rich_to_str, resolve_width
+
+        if not self._sections():
+            return self.__plain_str__()
+        try:
+            return render_rich_to_str(self, width=resolve_width(self))
+        except Exception:
+            return self.__plain_str__()
+
+    def __repr__(self) -> str:
+        return self.__plain_str__()

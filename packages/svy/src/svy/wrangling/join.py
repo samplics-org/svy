@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING, Literal, Mapping, Sequence
 
 import polars as pl
 
-from svy.checks.functions import check_key
 from svy.core import constants as K
+from svy.core._check import check_key
 from svy.core.warnings import check_on_finding, finding_level
 from svy.errors import DimensionError, MethodError
 from svy.wrangling._helpers import _eager_df, _guard_weight_writes, _resolve_target

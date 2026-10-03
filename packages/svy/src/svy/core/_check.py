@@ -1,5 +1,5 @@
-# src/svy/checks/functions.py
-"""Data-quality checks on a frame: weights, record keys, PSU nesting, rake margins.
+# src/svy/core/_check.py
+"""Data checks on a frame: weights, record keys, PSU nesting, rake margins.
 
 Each check takes a polars frame and column names and returns a frozen report.
 They report what they find and never raise on the data's content; they raise
@@ -8,7 +8,6 @@ only on bad input (a missing column, a non-numeric weight).
 
 from __future__ import annotations
 
-import math
 import numbers
 
 from typing import Any, Mapping, Sequence
@@ -16,21 +15,16 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import polars as pl
 
-from svy.checks.types import KeyCheck, MarginCheck, NestingCheck, WeightCheck
+from svy.core.check import KeyCheck, MarginCheck, NestingCheck, WeightCheck
 from svy.errors import DimensionError, MethodError
 
 
-__all__ = [
-    "check_weights",
-    "check_key",
-    "check_nesting",
-    "check_margins",
-]
+__all__ = ["check_weights", "check_key", "check_nesting", "margin_totals_check"]
 
 Columns = str | Sequence[str]
 
 # Raking refuses margins whose totals differ by more than this, relative to the
-# largest; check_margins defaults to the same tolerance.
+# largest.
 MARGINS_RTOL = 1e-6
 
 _N = "__svy_check_n"
@@ -243,42 +237,3 @@ def margin_totals_check(totals: Mapping[str, float], *, rtol: float = MARGINS_RT
         if hi > 0:
             spread = (hi - lo) / hi
     return MarginCheck(totals=totals, agree=not spread > rtol, max_rel_diff=spread, rtol=rtol)
-
-
-def check_margins(
-    controls: Mapping[str, Mapping[Any, float]], *, rtol: float = MARGINS_RTOL
-) -> MarginCheck:
-    """Whether rake's ``controls`` margins sum to the same population total.
-
-    ``controls`` is ``{margin: {level: total}}`` as ``rake`` takes it. The
-    margins agree when ``(max - min) / max`` over their totals is at most
-    ``rtol``; with the default, exactly when ``rake`` accepts them.
-    """
-    from svy.errors import WeightingError
-    from svy.weighting._keys import target_vector
-
-    where = "checks.check_margins"
-    if isinstance(rtol, bool) or not isinstance(rtol, numbers.Real) or not math.isfinite(rtol):
-        raise MethodError.invalid_type(
-            where=where, param="rtol", got=rtol, expected="a non-negative number"
-        )
-    if rtol < 0:
-        raise MethodError.invalid_range(where=where, param="rtol", got=rtol)
-    if not isinstance(controls, Mapping) or not controls:
-        raise WeightingError.targets_type(
-            where=where,
-            param="controls",
-            got=controls,
-            expected="a non-empty dict {column: {level: number}}",
-            hint="e.g. controls={'region': {'North': ..., 'South': ...}}.",
-        )
-    totals: dict[str, float] = {}
-    for margin, levels in controls.items():
-        param = f"controls[{margin!r}]"
-        if not isinstance(levels, Mapping) or not levels:
-            raise WeightingError.targets_type(
-                where=where, param=param, got=levels, expected="a non-empty dict {level: number}"
-            )
-        vec = np.asarray(target_vector(levels, list(levels), where=where, param=param))
-        totals[margin] = float(vec.sum())
-    return margin_totals_check(totals, rtol=float(rtol))

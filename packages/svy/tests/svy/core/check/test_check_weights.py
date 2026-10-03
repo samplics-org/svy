@@ -7,7 +7,8 @@ import pytest
 
 import svy
 
-from svy.checks import WeightCheck, check_weights
+from svy.core._check import check_weights
+from svy.core.check import WeightCheck
 from svy.errors import DimensionError, MethodError
 
 

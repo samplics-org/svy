@@ -4,7 +4,8 @@ import msgspec
 import polars as pl
 import pytest
 
-from svy.checks import NestingCheck, check_nesting
+from svy.core._check import check_nesting
+from svy.core.check import NestingCheck
 from svy.errors import DimensionError, MethodError
 
 

@@ -6,7 +6,8 @@ import msgspec
 import polars as pl
 import pytest
 
-from svy.checks import KeyCheck, check_key
+from svy.core._check import check_key
+from svy.core.check import KeyCheck
 from svy.core.panel import duplicate_case_ids
 from svy.errors import DimensionError, MethodError
 

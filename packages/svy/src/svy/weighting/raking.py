@@ -22,7 +22,7 @@ except ImportError:  # pragma: no cover
     rust_rake = None
     rust_trim_weights = None
 
-from svy.checks.functions import margin_totals_check
+from svy.core._check import margin_totals_check
 from svy.core.design import WgtAdjustment
 from svy.core.types import Category, ControlsType
 from svy.core.warnings import WarnCode, check_on_finding, finding_level

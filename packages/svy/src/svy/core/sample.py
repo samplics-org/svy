@@ -13,8 +13,8 @@ import msgspec
 import numpy as np
 import polars as pl
 
-from svy.checks.functions import kish_deff
 from svy.core import design_parts as _dp
+from svy.core._check import kish_deff
 from svy.core.constants import BOOKKEEPING_COLUMNS, SVY_ROW_INDEX, key_col
 from svy.core.describe import DescribeResult
 from svy.core.describe_runtime import run_describe
@@ -57,6 +57,7 @@ from svy.utils.trace import log_step
 
 if TYPE_CHECKING:
     from svy.categorical import Categorical
+    from svy.core.check import SampleCheck
     from svy.estimation import Estimation
     from svy.metadata import LabellingCatalog
     from svy.regression import GLM
@@ -1487,6 +1488,64 @@ class Sample:
     def n_singletons(self) -> int:
         """How many strata have a single PSU in the current data."""
         return self.singletons.height
+
+    def check(self, *, limit: int = 10) -> SampleCheck:
+        """Check the data against its design, one report section per design part.
+
+        - ``weights``: null, non-finite, negative and zero weights; min, max,
+          max/min, sum, Kish design effect and effective sample size.
+        - ``case_id``: whether the case id is unique (within wave on a
+          panel), with null ids and examples of repeated ones.
+        - ``nesting``: PSU codes found in more than one stratum. svy treats a
+          PSU as the (stratum, PSU) pair, as R's ``nest=TRUE`` does, so such a
+          code is several clusters; the data cannot tell a reused code from a
+          PSU split across strata, so this is reported, not refused.
+        - ``singletons``: strata with one PSU and whether the design's
+          singleton rule handles them.
+
+        A section is None when the design does not declare that part. Nothing
+        is raised on the data's content; take the sections you need.
+
+        Parameters
+        ----------
+        limit : int
+            How many examples a section lists.
+        """
+        from svy.core._check import (
+            check_key,
+            check_nesting,
+            check_weights,
+            key_values,
+        )
+        from svy.core.check import SampleCheck, SingletonCheck
+        from svy.core.panel import case_id_cols
+
+        data = cast(pl.DataFrame, self._data)
+        if isinstance(data, pl.LazyFrame):
+            data = cast(pl.DataFrame, data.collect())
+        design = self._design
+
+        weights = check_weights(data, design.wgt) if design.wgt is not None else None
+        case_id = None
+        if design.case_id is not None:
+            keys = case_id_cols(design.case_id)
+            if design.wave is not None:
+                keys = [*keys, design.wave]
+            case_id = check_key(data, keys, limit=limit)
+        nesting = None
+        singletons = None
+        if design.stratum is not None and design.psu is not None:
+            nesting = check_nesting(data, design.stratum, design.psu, limit=limit)
+        if design.stratum is not None:
+            frame = self.singletons
+            singletons = SingletonCheck(
+                n_singletons=frame.height,
+                n_unhandled=frame.get_column("handled").null_count() if frame.height else 0,
+                examples=key_values(frame.head(limit), _colspec_to_list(design.stratum)),
+            )
+        return SampleCheck(
+            weights=weights, case_id=case_id, nesting=nesting, singletons=singletons
+        )
 
     def domain_singletons(
         self, by: str | Sequence[str] | None = None, *, where: WhereArg = None

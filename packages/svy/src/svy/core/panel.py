@@ -15,8 +15,8 @@ from typing import Any, Sequence
 import msgspec
 import polars as pl
 
-from svy.checks.functions import check_key
-from svy.checks.functions import key_values as _ids
+from svy.core._check import check_key
+from svy.core._check import key_values as _ids
 
 
 __all__ = [
