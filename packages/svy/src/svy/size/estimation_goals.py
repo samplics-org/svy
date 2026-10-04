@@ -28,7 +28,7 @@ from svy.engine.size_and_power.size import (
     _wald_sample_size_prop,
 )
 from svy.size._normalize import _normalize_one_prop_method
-from svy.size.types import Size
+from svy.size.types import Size, TargetMean, TargetProp
 from svy.utils.checks import validate_alpha
 from svy.utils.helpers import _get_keys_from_maps
 
@@ -57,6 +57,11 @@ def _broadcast_scalars(strata: list, params: dict) -> None:
             params[k] = dict(zip(strata, [v] * m))
 
 
+def _as_input(v: Any) -> Any:
+    """A goal input as recorded on its Target: dicts copied, scalars as given."""
+    return dict(v) if isinstance(v, Mapping) else v
+
+
 def _has_pop(pop_size) -> bool:
     """True if pop_size carries at least one non-None value."""
     if isinstance(pop_size, Mapping):
@@ -80,7 +85,8 @@ def _build_sizes(ss, *, stratified: bool, strata, n0, n1_deff, n2_fpc, n_final) 
         _n2 = cast(DomainScalarMap, n2_fpc)
         _nf = cast(DomainScalarMap, n_final)
         ss._size = [
-            Size(stratum=str(s), n0=_n0[s], n1_deff=_n1[s], n2_fpc=_n2[s], n=_nf[s]) for s in _n0
+            Size(stratum=s, n0=_n0[s], n1_deff=_n1[s], n2_fpc=_n2[s], n=_nf[s])
+            for s in (strata if strata is not None else _n0)
         ]
 
 
@@ -125,6 +131,15 @@ def estimate_prop(
     """
     alpha = _checked_alpha(alpha, where="SampleSize.estimate_prop")
     ss._param = PopParam.PROP
+    ss._target = TargetProp(
+        p=_as_input(p),
+        moe=_as_input(moe),
+        alpha=_as_input(alpha),
+        method=_as_input(method),
+        pop_size=_as_input(pop_size),
+        deff=_as_input(deff),
+        resp_rate=_as_input(resp_rate),
+    )
 
     stratified = any(isinstance(v, Mapping) for v in [p, moe, pop_size, alpha, deff, resp_rate])
 
@@ -229,6 +244,15 @@ def estimate_mean(
     """
     alpha = _checked_alpha(alpha, where="SampleSize.estimate_mean")
     ss._param = PopParam.MEAN
+    ss._target = TargetMean(
+        sigma=_as_input(sigma),
+        moe=_as_input(moe),
+        alpha=_as_input(alpha),
+        method=_as_input(method),
+        pop_size=_as_input(pop_size),
+        deff=_as_input(deff),
+        resp_rate=_as_input(resp_rate),
+    )
 
     stratified = any(
         isinstance(v, Mapping) for v in [sigma, moe, pop_size, alpha, deff, resp_rate]
