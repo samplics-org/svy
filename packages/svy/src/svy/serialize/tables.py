@@ -13,7 +13,7 @@ import polars as pl
 from svy.categorical.table import table_frame
 from svy.categorical.ttest import ttest_one_group_frame, ttest_two_groups_frame
 from svy.core.containers import _chisq_frame
-from svy.core.describe import _describe_frame
+from svy.core.describe import _describe_frame, _flatten_by
 from svy.errors.serialization_errors import SerializationError
 from svy.estimation.estimate import (
     Estimate,
@@ -121,7 +121,7 @@ def _chi_square(d: ChiSquareData, *, row_index: str | None = None) -> pl.DataFra
 
 
 def _describe(d: DescribeResultData, *, row_index: str | None = None) -> pl.DataFrame:
-    return _indexed(_describe_frame(d.items), row_index)
+    return _indexed(_describe_frame([_flatten_by(it) for it in d.items]), row_index)
 
 
 _TABLES: dict[type, Callable[..., pl.DataFrame]] = {
