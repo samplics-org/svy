@@ -15,7 +15,7 @@ import polars as pl
 
 from svy.core import design_parts as _dp
 from svy.core._check import kish_deff
-from svy.core.constants import BOOKKEEPING_COLUMNS, SVY_ROW_INDEX, key_col
+from svy.core.constants import BOOKKEEPING_COLUMNS, SVY_OWN_PREFIX, SVY_ROW_INDEX, key_col
 from svy.core.describe import DescribeResult
 from svy.core.describe_runtime import run_describe
 from svy.core.design import Design, PopSize, RepWeights
@@ -2469,17 +2469,28 @@ class Sample:
     # ════════════════════════════════════════════════════════════════════════
     # UI HELPERS (printing/describe hygiene)
     # ════════════════════════════════════════════════════════════════════════
-    def _hidden_columns_for_ui(self) -> set[str]:
-        """Columns that should never appear in user-facing prints (describe, etc.)."""
-        # Bookkeeping, and the record's snapshotted adjustment cells, kept so
-        # the variance sweep can reproduce the membership the adjustment used.
-        from svy.weighting._engine import AUX_PREFIX, CELLS_PREFIX
+    @property
+    def internal_columns(self) -> list[str]:
+        """The columns of ``sample.data`` that svy made, not the user.
 
-        return {
+        Today these are the weight-adjustment record's snapshots (the cells of
+        a poststratification or raking, the auxiliaries of a calibration),
+        named ``__svy_*``. The design needs them: keep them when saving data
+        the design must work with again, and leave them out when showing the
+        data. svy's other bookkeeping (the row index, design keys) is never in
+        ``sample.data``.
+        """
+        return [
             c
             for c in cast(pl.DataFrame, self._data).columns
-            if c in BOOKKEEPING_COLUMNS or c.startswith((CELLS_PREFIX, AUX_PREFIX))
-        }
+            if c.startswith(SVY_OWN_PREFIX) and c not in BOOKKEEPING_COLUMNS
+        ]
+
+    def _hidden_columns_for_ui(self) -> set[str]:
+        """Columns that should never appear in user-facing prints (describe, etc.)."""
+        return {
+            c for c in cast(pl.DataFrame, self._data).columns if c in BOOKKEEPING_COLUMNS
+        } | set(self.internal_columns)
 
     # ════════════════════════════════════════════════════════════════════════
     # DESCRIPTIVE STATISTICS (schema-aware)
