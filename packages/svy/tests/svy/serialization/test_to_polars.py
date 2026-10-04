@@ -105,6 +105,16 @@ CASES = [
     ),
     ("chi_square", lambda s: s.categorical.tabulate("region", "sex").stats.chisq, {}),
     ("describe", lambda s: s.describe(["y", "region", "zone", "d"]), {}),
+    (
+        "contrast",
+        lambda s: s.estimation.mean("y", by="region").contrast(
+            {
+                "n_s": svy.estd("North") - svy.estd("South"),
+                "ratio": svy.estd("East") / svy.estd("West"),
+            }
+        ),
+        {},
+    ),
     ("glm", lambda s: s.glm.fit("y", x=["z", svy.Cat("region")]), {}),
     (
         "glm_logit_exp",

@@ -94,7 +94,9 @@ ignore unknown fields.
   `GLMStatsData.theta` / `theta_se` (negative binomial) and `GLMFitData.offset`
   added. `None` when decoded from an older payload. Describe items carry
   `by` / `by_level` (`describe(by=...)`), and `DescribeResultData.top_k` is
-  `None` when every level was listed.
+  `None` when every level was listed. New kind `"contrast"`: `ContrastData`
+  (`Estimate.contrast(...)`: rows, `method`, `alpha`, `df`, and the source
+  estimate's `param` and `y`); the contrasts' joint covariance is not saved.
 
 ### 2.6 Sub-structs are untagged
 
@@ -351,11 +353,26 @@ Source: `svy.core.describe.DescribeResult` (msgspec.Struct)
 | `weighted`      | `bool`              | `weighted`           |
 | `weight_col`    | `str \| None`       | `weight_col`         |
 | `drop_nulls`    | `bool`              | `drop_nulls`         |
-| `top_k`         | `int`               | `top_k`              |
+| `top_k`         | `int \| None`       | `top_k` (None: every level listed) |
 | `percentiles`   | `list[float]`       | `percentiles` (tuple)|
 | `generated_at`  | `str`               | `generated_at` (datetime → isoformat) |
 | `notes`         | `str \| None`       | `notes`              |
 | `items`         | `list[dict[str, Any]]` | `items` (tuple of DescribeItem union) |
+
+#### ContrastData (`kind = "contrast"`)
+
+Source: `svy.estimation.contrast.Contrast`. Excludes `covariance` (the
+contrasts' joint `L V Lᵀ`): saved contrasts are shown, not combined.
+
+| Field            | Type                    | Source attribute |
+| ---------------- | ----------------------- | ---------------- |
+| `schema_version` | `str`                   | constant         |
+| `method`         | `str`                   | `method`         |
+| `alpha`          | `float`                 | `alpha`          |
+| `df`             | `float`                 | `df`             |
+| `param`          | `str \| None`           | `param`          |
+| `y`              | `str \| None`           | `y`              |
+| `estimates`      | `list[ContrastEstData]` | `estimates`      |
 
 ### 5.2 Sub-structs (untagged, JSON-safe)
 
@@ -481,6 +498,22 @@ Source: `svy.core.containers.TDist`
 | `df`      | `int \| float`  |
 | `value`   | `float`         |
 | `p_value` | `float`         |
+
+#### ContrastEstData
+
+Source: `svy.estimation.contrast.ContrastEst`
+
+| Field      | Type    |
+| ---------- | ------- |
+| `contrast` | `str`   |
+| `est`      | `float` |
+| `se`       | `float` |
+| `cv`       | `float` |
+| `lci`      | `float` |
+| `uci`      | `float` |
+| `t`        | `float` |
+| `p_value`  | `float` |
+| `df`       | `float` |
 
 #### GLMCoefData
 
