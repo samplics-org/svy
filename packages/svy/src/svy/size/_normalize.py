@@ -16,9 +16,6 @@ from svy.core.enumerations import (
 from svy.core.enumerations import (
     PropVarMode as _PropVarMode,
 )
-from svy.core.enumerations import (
-    TwoPropsSizeMethod as _TwoPropsSizeMethod,
-)
 
 
 _ONE_PROP_METHOD_MAP = {
@@ -47,42 +44,6 @@ def _normalize_one_prop_method(
     result = _ONE_PROP_METHOD_MAP.get(method.strip().lower())
     if result is None:
         raise ValueError(f"Unknown method {method!r}. Use 'wald' or 'fleiss'.")
-    return result
-
-
-_TWO_PROPS_METHOD_MAP = {
-    "wald": _TwoPropsSizeMethod.WALD,
-    "miettinen-nurminen": _TwoPropsSizeMethod.MIETTINEN_NURMINEN,
-    "newcombe": _TwoPropsSizeMethod.NEWCOMBE,
-    "farrington-manning": _TwoPropsSizeMethod.FARRINGTON_MANNING,
-}
-
-
-def _normalize_two_props_method(
-    method: Literal["wald", "miettinen-nurminen", "newcombe", "farrington-manning"] | None,
-) -> _TwoPropsSizeMethod:
-    """
-    Normalize user-facing method string to internal TwoPropsSizeMethod enum.
-
-    Accepts (case-insensitive):
-      - "wald"                  → TwoPropsSizeMethod.WALD  (default)
-      - "miettinen-nurminen"    → TwoPropsSizeMethod.MIETTINEN_NURMINEN
-      - "newcombe"              → TwoPropsSizeMethod.NEWCOMBE
-      - "farrington-manning"    → TwoPropsSizeMethod.FARRINGTON_MANNING
-    """
-    if method is None:
-        return _TwoPropsSizeMethod.WALD
-    if not isinstance(method, str):
-        raise TypeError(
-            f"'method' must be a string or None, got {type(method).__name__}. "
-            f"Use 'wald', 'miettinen-nurminen', 'newcombe', or 'farrington-manning'."
-        )
-    result = _TWO_PROPS_METHOD_MAP.get(method.strip().lower())
-    if result is None:
-        raise ValueError(
-            f"Unknown method {method!r}. "
-            f"Use 'wald', 'miettinen-nurminen', 'newcombe', or 'farrington-manning'."
-        )
     return result
 
 

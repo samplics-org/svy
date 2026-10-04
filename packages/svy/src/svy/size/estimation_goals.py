@@ -194,7 +194,7 @@ def estimate_mean(
     moe: Number | DomainScalarMap,
     *,
     pop_size: Number | DomainScalarMap | None = None,
-    method: Literal["wald", "fleiss"] | DomainScalarMap = "wald",
+    method: Literal["wald"] = "wald",
     alpha: Number | DomainScalarMap = 0.05,
     deff: Number | DomainScalarMap = 1.0,
     resp_rate: Number | DomainScalarMap = 1.0,
@@ -214,7 +214,7 @@ def estimate_mean(
         Target population size. If None, no finite population correction is applied.
         Scalar or per-stratum mapping.
     method : str, default 'wald'
-        Calculation method: ``'wald'`` or ``'fleiss'``. Only ``'wald'`` is currently implemented.
+        Calculation method. Only ``'wald'`` is available.
     alpha : Number | DomainScalarMap, default 0.05
         Significance level.
     deff : Number | DomainScalarMap, default 1.0
@@ -228,6 +228,17 @@ def estimate_mean(
         The updated SampleSize instance (chainable).
     """
     alpha = _checked_alpha(alpha, where="SampleSize.estimate_mean")
+    from svy.errors.method_errors import MethodError
+
+    if method != "wald":
+        raise MethodError.invalid_choice(
+            where="SampleSize.estimate_mean",
+            param="method",
+            got=method,
+            allowed=["wald"],
+            hint="The Fleiss correction applies to proportions (estimate_prop), not to means.",
+        )
+
     ss._param = PopParam.MEAN
 
     stratified = any(
@@ -270,11 +281,7 @@ def estimate_mean(
         all_scalars = all(isinstance(x, (int, float)) for x in [sigma, moe, alpha])
         assert all_scalars, "All inputs must be scalars when not stratified."
 
-    _method = _normalize_one_prop_method(method)
-    if _method is _OnePropSizeMethod.WALD:
-        n0 = _wald_sample_size_mean(half_ci=moe, sigma=sigma, alpha=alpha)
-    else:
-        raise NotImplementedError("Fleiss method is not implemented for the mean.")
+    n0 = _wald_sample_size_mean(half_ci=moe, sigma=sigma, alpha=alpha)
 
     # Pipeline: n0 (SRS) -> DEFF -> FPC -> nonresponse (see estimate_prop).
     n1_deff = _apply_deff(n=n0, deff=deff)

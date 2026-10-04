@@ -18,9 +18,6 @@ from typing import TYPE_CHECKING, Literal, cast
 
 from svy.core.enumerations import MeanVarMode as _MeanVarMode
 from svy.core.enumerations import PopParam
-from svy.core.enumerations import (
-    TwoPropsSizeMethod as _TwoPropsSizeMethod,
-)
 from svy.core.types import DomainScalarMap, Number
 from svy.engine.size_and_power.size import (
     _apply_deff_pair,
@@ -29,10 +26,7 @@ from svy.engine.size_and_power.size import (
     _wald_sample_size_two_means,
     _wald_sample_size_two_props,
 )
-from svy.size._normalize import (
-    _normalize_prop_var_mode,
-    _normalize_two_props_method,
-)
+from svy.size._normalize import _normalize_prop_var_mode
 from svy.size.estimation_goals import (
     _broadcast_scalars,
     _build_sizes,
@@ -55,7 +49,7 @@ def compare_props(
     two_sides: bool = True,
     delta: Number | DomainScalarMap = 0.0,
     alloc_ratio: Number | DomainScalarMap = 1.0,
-    method: Literal["wald", "miettinen-nurminen", "newcombe", "farrington-manning"] = "wald",
+    method: Literal["wald"] = "wald",
     alpha: Number | DomainScalarMap = 0.05,
     power: Number | DomainScalarMap = 0.80,
     var_mode: Literal["alt-props", "pooled-prop", "max-var"] = "alt-props",
@@ -64,6 +58,9 @@ def compare_props(
 ) -> SampleSize:
     """
     Compute required sample size for comparing two proportions.
+
+    The two groups are treated as independent samples (two areas, or two rounds of
+    fresh cross-sections). Correlation between rounds of a panel is not accounted for.
 
     Parameters
     ----------
@@ -83,8 +80,7 @@ def compare_props(
     alloc_ratio : Number | DomainScalarMap, default 1.0
         Allocation ratio n2/n1.
     method : str, default 'wald'
-        Calculation method: ``'wald'``, ``'miettinen-nurminen'``, ``'newcombe'``, or
-        ``'farrington-manning'``. Only ``'wald'`` is currently implemented.
+        Calculation method. Only ``'wald'`` is available; ``var_mode`` sets its variance.
     alpha : Number | DomainScalarMap, default 0.05
         Significance level.
     power : Number | DomainScalarMap, default 0.80
@@ -102,6 +98,18 @@ def compare_props(
         The updated SampleSize instance (chainable).
     """
     alpha = _checked_alpha(alpha, where="SampleSize.compare_props")
+    from svy.errors.method_errors import MethodError
+
+    if method != "wald":
+        raise MethodError.invalid_choice(
+            where="SampleSize.compare_props",
+            param="method",
+            got=method,
+            allowed=["wald"],
+            hint="Use method='wald'; var_mode='alt-props', 'pooled-prop' or 'max-var' "
+            "sets its variance.",
+        )
+
     ss._param = PopParam.PROP
 
     stratified = any(
@@ -163,26 +171,18 @@ def compare_props(
     else:
         epsilon = cast(Number, p2) - cast(Number, p1)
 
-    _method = _normalize_two_props_method(method)
     _var_mode = _normalize_prop_var_mode(var_mode)
-    if _method is _TwoPropsSizeMethod.WALD:
-        n0 = _wald_sample_size_two_props(
-            two_sides=two_sides,
-            epsilon=epsilon,
-            prop_1=p1,
-            prop_2=p2,
-            delta=delta,
-            kappa=alloc_ratio,
-            alpha=alpha,
-            power=power,
-            var_mode=_var_mode,
-        )
-    elif _method is _TwoPropsSizeMethod.MIETTINEN_NURMINEN:
-        raise NotImplementedError("miettinen-nurminen method is not implemented yet.")
-    elif _method is _TwoPropsSizeMethod.NEWCOMBE:
-        raise NotImplementedError("newcombe method is not implemented yet.")
-    else:
-        raise NotImplementedError("farrington-manning method is not implemented yet.")
+    n0 = _wald_sample_size_two_props(
+        two_sides=two_sides,
+        epsilon=epsilon,
+        prop_1=p1,
+        prop_2=p2,
+        delta=delta,
+        kappa=alloc_ratio,
+        alpha=alpha,
+        power=power,
+        var_mode=_var_mode,
+    )
 
     # Pipeline: n0 (SRS) -> DEFF -> FPC -> nonresponse (see estimate_prop).
     n1_deff = _apply_deff_pair(n=n0, deff=deff)
@@ -221,6 +221,9 @@ def compare_means(
 ) -> SampleSize:
     """
     Compute required sample size for comparing two means.
+
+    The two groups are treated as independent samples (two areas, or two rounds of
+    fresh cross-sections). Correlation between rounds of a panel is not accounted for.
 
     Parameters
     ----------

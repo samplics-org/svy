@@ -20,6 +20,7 @@ Coverage:
 import pytest
 
 from svy import SampleSize
+from svy.errors import MethodError
 from svy.size.types import Size
 
 
@@ -713,9 +714,23 @@ def test_invalid_method_raises():
         SampleSize().estimate_prop(p=0.5, moe=0.05, method="invalid")
 
 
-def test_fleiss_mean_raises_not_implemented():
-    with pytest.raises(NotImplementedError):
+def test_fleiss_mean_raises_method_error():
+    with pytest.raises(MethodError) as ei:
         SampleSize().estimate_mean(sigma=30, moe=5, method="fleiss")
+    assert ei.value.code == "INVALID_CHOICE"
+    assert ei.value.where == "SampleSize.estimate_mean"
+    assert ei.value.hint
+
+
+@pytest.mark.parametrize("method", ["miettinen-nurminen", "newcombe", "farrington-manning"])
+def test_compare_props_unavailable_method_raises_method_error(method):
+    with pytest.raises(MethodError) as ei:
+        SampleSize().compare_props(p1=0.4, p2=0.5, method=method)
+    assert ei.value.code == "INVALID_CHOICE"
+    assert ei.value.where == "SampleSize.compare_props"
+    assert ei.value.param == "method"
+    assert ei.value.expected == ["wald"]
+    assert "var_mode" in ei.value.hint
 
 
 # =============================================================================

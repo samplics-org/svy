@@ -262,14 +262,6 @@ class SingletonDomains(StrEnum):
 
 
 @unique
-class TwoPropsSizeMethod(StrEnum):
-    WALD = "Wald (closed-form)"
-    NEWCOMBE = "Newcombe"
-    MIETTINEN_NURMINEN = "Miettinen-Nurminen"
-    FARRINGTON_MANNING = "Farrington-Manning"
-
-
-@unique
 class TableType(StrEnum):
     ONE_WAY = "One-Way"
     TWO_WAY = "Two-Way"
