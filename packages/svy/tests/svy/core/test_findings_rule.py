@@ -19,7 +19,6 @@ import svy
 
 from svy import Design, Sample, SvyUserWarning
 from svy.core.warnings import Severity, WarnCode, WarningStore
-from svy.selection import allocate
 
 
 def _null_cell_sample() -> Sample:
@@ -245,7 +244,7 @@ def test_without_replacement_too_large_n_is_still_an_error():
 
 def test_allocation_without_a_sample_is_raised_only():
     with pytest.warns(SvyUserWarning, match="exceeds the total frame") as rec:
-        allocate({"a": 3, "b": 2}, method="proportional", n_total=10)
+        svy.SampleSize().allocate(10, pop_size={"a": 3, "b": 2})
     assert rec[0].filename == __file__
 
 

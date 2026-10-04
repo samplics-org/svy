@@ -24,11 +24,13 @@ from typing import Literal
 
 from svy.core.enumerations import PopParam
 from svy.core.types import DomainScalarMap, Number
+from svy.size.allocation_goals import AllocationMethod
+from svy.size.allocation_goals import allocate as _allocate
 from svy.size.comparison_goals import compare_means as _compare_means
 from svy.size.comparison_goals import compare_props as _compare_props
 from svy.size.estimation_goals import estimate_mean as _estimate_mean
 from svy.size.estimation_goals import estimate_prop as _estimate_prop
-from svy.size.types import Size, Target
+from svy.size.types import Allocation, Size, Target
 from svy.ui.printing import make_panel, render_rich_to_str, resolve_width
 
 
@@ -71,13 +73,14 @@ class SampleSize:
     _PANEL_BORDER: str = "cyan"
     PRINT_WIDTH: int | None = None
 
-    __slots__ = ("_param", "_target", "_size", "_group_labels")
+    __slots__ = ("_param", "_target", "_size", "_group_labels", "_allocation")
 
     def __init__(self):
         self._param = None
         self._target = None
         self._size = None
         self._group_labels = None
+        self._allocation = None
 
     # ---------- internal helpers ----------
 
@@ -140,6 +143,9 @@ class SampleSize:
             import polars as pl
         except Exception as e:
             raise ImportError("to_polars() requires the 'polars' package") from e
+
+        if self._allocation is not None:
+            return self._allocation_frame()
 
         objs = self._iter_sizes()
         stratified = len(objs) > 1 or (len(objs) == 1 and objs[0].stratum is not None)
@@ -287,6 +293,15 @@ class SampleSize:
 
     def _format_table_ascii(self) -> str:
         """ASCII fallback — used by __plain_str__ and render_plain_table."""
+        if self._allocation is not None:
+            from svy.ui.printing import render_plain_table
+
+            df = self._allocation_frame()
+            rows = [
+                [str(v) if i == 0 else self._fmt_num(v) for i, v in enumerate(r)]
+                for r in df.rows()
+            ]
+            return f"Sample Size\n\n{render_plain_table(tuple(df.columns), rows)}"
         objs = self._iter_sizes()
         if not objs:
             return "<no sizes>"
@@ -457,6 +472,8 @@ class SampleSize:
         return render_rich_to_str(self, width=resolve_width(self))
 
     def __repr__(self) -> str:
+        if self._allocation is not None:
+            return f"SampleSize(allocation, strata={len(self._allocation)}, n={self._target.n})"
         objs = self._iter_sizes()
         n = len(objs)
         stratified = n > 1 or (n == 1 and objs[0].stratum is not None)
@@ -514,6 +531,23 @@ class SampleSize:
 
             yield Text(self.__plain_str__())
 
+    def _allocation_frame(self):
+        import polars as pl
+
+        rows = self._allocation or []
+        neyman = any(a.sigma is not None for a in rows)
+        data: dict[str, list] = {
+            "stratum": [
+                ", ".join(map(str, a.stratum)) if isinstance(a.stratum, tuple) else str(a.stratum)
+                for a in rows
+            ],
+            "pop_size": [float(a.pop_size) for a in rows],
+        }
+        if neyman:
+            data["sigma"] = [float(a.sigma) for a in rows]  # type: ignore[arg-type]
+        data["n"] = [a.n for a in rows]
+        return pl.DataFrame(data)
+
     # ---------- properties ----------
 
     @property
@@ -523,6 +557,28 @@ class SampleSize:
     @property
     def size(self) -> Size | list[Size] | None:
         return self._size
+
+    @property
+    def allocation(self) -> list[Allocation] | None:
+        """The strata of an ``allocate()`` result, one row each; None otherwise."""
+        return None if self._allocation is None else list(self._allocation)
+
+    @property
+    def n(self) -> int | float | dict[object, int | float] | None:
+        """The sample size to draw: a number, or ``{stratum: n_h}`` when stratified.
+
+        Pass it as ``n=`` to ``sample.sampling.srs()``, ``pps_sys()``, etc.
+        Stratum keys are those given to the goal (tuples for several stratum
+        columns), which the selectors accept as is.
+        """
+        if self._allocation is not None:
+            return {a.stratum: a.n for a in self._allocation}
+        objs = self._iter_sizes()
+        if not objs:
+            return None
+        if len(objs) == 1 and objs[0].stratum is None:
+            return objs[0].n
+        return {s.stratum: s.n for s in objs}
 
     @property
     def param(self) -> PopParam | None:
@@ -541,6 +597,7 @@ class SampleSize:
         deff: Number | DomainScalarMap = 1.0,
         resp_rate: Number | DomainScalarMap = 1.0,
     ) -> "SampleSize":
+        self._allocation = None
         return _estimate_prop(
             self,
             p,
@@ -563,6 +620,7 @@ class SampleSize:
         deff: Number | DomainScalarMap = 1.0,
         resp_rate: Number | DomainScalarMap = 1.0,
     ) -> "SampleSize":
+        self._allocation = None
         return _estimate_mean(
             self,
             sigma,
@@ -593,6 +651,7 @@ class SampleSize:
     ) -> "SampleSize":
         if group_labels is not None:
             self._group_labels = group_labels
+        self._allocation = None
         return _compare_props(
             self,
             p1,
@@ -629,6 +688,7 @@ class SampleSize:
     ) -> "SampleSize":
         if group_labels is not None:
             self._group_labels = group_labels
+        self._allocation = None
         return _compare_means(
             self,
             mu1,
@@ -644,4 +704,60 @@ class SampleSize:
             power=power,
             deff=deff,
             resp_rate=resp_rate,
+        )
+
+    def allocate(
+        self,
+        n: int,
+        *,
+        pop_size: Mapping[object, Number],
+        method: AllocationMethod = "proportional",
+        sigma: Number | Mapping[object, Number] | None = None,
+        power: Number = 1.0,
+        min_n: int = 1,
+        cap_at_population: bool = True,
+    ) -> "SampleSize":
+        """
+        Split an overall sample size ``n`` across strata.
+
+        Parameters
+        ----------
+        n : int
+            Overall sample size.
+        pop_size : dict
+            ``{stratum: N_h}``: unit counts, or any size totals the split
+            should follow (households per stratum for a PPS design). Keys are
+            any stratum values, tuples for several stratum columns.
+        method : {"proportional", "neyman", "equal"}
+            ``n_h`` proportional to ``N_h``, to ``N_h * S_h``, or ``n / H``.
+        sigma : number | dict | None
+            ``S_h``, each stratum's standard deviation of the target variable
+            (Neyman only), e.g. from a previous survey.
+        power : float
+            Proportional to ``N_h ** power``; 0.5 is square-root allocation.
+        min_n : int
+            Minimum per non-empty stratum.
+        cap_at_population : bool
+            Cap ``n_h`` at ``N_h``, redistributing the surplus.
+
+        Every method rounds by largest remainder, so the strata sum to ``n``.
+        ``.n`` gives ``{stratum: n_h}`` for ``srs(n=...)``, ``pps_sys(n=...)``.
+
+        Examples
+        --------
+        >>> ss = svy.SampleSize().allocate(400, pop_size={"North": 52_000, "South": 31_000})
+        >>> ss.n
+        {'North': 251, 'South': 149}
+        >>> svy.SampleSize().allocate(400, pop_size=N_h, method="neyman", sigma=S_h)
+        >>> svy.SampleSize().allocate(400, pop_size=households, power=0.5)
+        """
+        return _allocate(
+            self,
+            n,
+            pop_size=pop_size,
+            method=method,
+            sigma=sigma,
+            power=power,
+            min_n=min_n,
+            cap_at_population=cap_at_population,
         )
