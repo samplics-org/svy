@@ -4,6 +4,33 @@
 from enum import Enum, StrEnum, unique
 
 
+_DESCRIPTIONS: dict[type, dict[str, tuple[str, str]]] = {}
+
+
+class _Described(StrEnum):
+    """A StrEnum whose members carry a label and a one-line description, for apps to show."""
+
+    @property
+    def label(self) -> str:
+        return _DESCRIPTIONS[type(self)][self.value][0]
+
+    @property
+    def description(self) -> str:
+        return _DESCRIPTIONS[type(self)][self.value][1]
+
+    @classmethod
+    def describe(cls) -> tuple[tuple[str, str, str], ...]:
+        """``(value, label, description)`` for every member, in order."""
+        return tuple((m.value, m.label, m.description) for m in cls)
+
+
+def _describe(cls: type, entries: dict[str, tuple[str, str]]) -> None:
+    missing = {m.value for m in cls} ^ set(entries)  # type: ignore[attr-defined]
+    if missing:
+        raise RuntimeError(f"{cls.__name__} descriptions do not match its members: {missing}")
+    _DESCRIPTIONS[cls] = entries
+
+
 @unique
 class CaseStyle(StrEnum):
     SNAKE = "Snake"
@@ -13,7 +40,7 @@ class CaseStyle(StrEnum):
 
 
 @unique
-class DistFamily(StrEnum):
+class DistFamily(_Described):
     GAUSSIAN = "Gaussian"
     BINOMIAL = "Binomial"
     POISSON = "Poisson"
@@ -22,6 +49,28 @@ class DistFamily(StrEnum):
     NEGATIVE_BINOMIAL = "NegativeBinomial"
     # Phase 2:
     # BETA = "Beta"
+
+
+_describe(
+    DistFamily,
+    {
+        "Gaussian": ("Gaussian", "Continuous outcome; usually with the identity link."),
+        "Binomial": ("Binomial", "Binary outcome or proportion; usually with the logit link."),
+        "Poisson": ("Poisson", "Counts; usually with the log link."),
+        "Gamma": (
+            "Gamma",
+            "Positive, right-skewed outcome; variance grows with the mean squared.",
+        ),
+        "InverseGaussian": (
+            "Inverse Gaussian",
+            "Positive, strongly skewed outcome; variance grows with the mean cubed.",
+        ),
+        "NegativeBinomial": (
+            "Negative binomial",
+            "Overdispersed counts; variance mu + mu^2 / theta.",
+        ),
+    },
+)
 
 
 # @unique
@@ -123,7 +172,7 @@ class LetterCase(str, Enum):
 
 
 @unique
-class LinkFunction(StrEnum):
+class LinkFunction(_Described):
     IDENTITY = "identity"
     LOGIT = "logit"
     PROBIT = "probit"
@@ -133,6 +182,25 @@ class LinkFunction(StrEnum):
     SQRT = "sqrt"
     INVERSE = "inverse"
     INVERSE_SQUARED = "inverse_squared"
+
+
+_describe(
+    LinkFunction,
+    {
+        "identity": ("Identity", "g(mu) = mu; coefficients are differences in the mean."),
+        "logit": ("Logit", "log(mu / (1 - mu)); exponentiated coefficients are odds ratios."),
+        "probit": ("Probit", "Inverse standard normal CDF of mu."),
+        "cauchit": ("Cauchit", "Inverse Cauchy CDF of mu; heavier tails than probit."),
+        "cloglog": (
+            "Complementary log-log",
+            "log(-log(1 - mu)); exponentiated coefficients are hazard ratios.",
+        ),
+        "log": ("Log", "log(mu); exponentiated coefficients are rate ratios."),
+        "sqrt": ("Square root", "sqrt(mu)."),
+        "inverse": ("Inverse", "1 / mu."),
+        "inverse_squared": ("Inverse squared", "1 / mu^2."),
+    },
+)
 
 
 @unique
@@ -192,12 +260,25 @@ class PropVarMode(StrEnum):
 
 
 @unique
-class QuantileMethod(StrEnum):
+class QuantileMethod(_Described):
     LOWER = "Lower"
     HIGHER = "Higher"
     NEAREST = "Nearest"
     LINEAR = "Linear"
     MIDDLE = "Middle"
+
+
+# All rules say what to take when p falls between two observations of the weighted CDF.
+_describe(
+    QuantileMethod,
+    {
+        "Lower": ("Lower", "The lower of the two observations."),
+        "Higher": ("Higher", 'The higher of the two observations (R\'s qrule "math").'),
+        "Nearest": ("Nearest", "The observation whose cumulative weight is closer to p."),
+        "Linear": ("Linear", "Interpolate linearly between the two observations."),
+        "Middle": ("Middle", "The average of the two observations."),
+    },
+)
 
 
 # @unique
@@ -208,10 +289,10 @@ class QuantileMethod(StrEnum):
 
 
 @unique
-class RankScoreMethod(StrEnum):
+class RankScoreMethod(_Described):
     """Score function for design-based rank tests.
 
-    KRUSKAL_WALLIS (WILCOXON in teh case of two groups) uses proportional ranks g(r) = r/N.
+    KRUSKAL_WALLIS (WILCOXON in the case of two groups) uses proportional ranks g(r) = r/N.
     VANDER_WAERDEN uses inverse-Normal scores g(r) = Φ⁻¹(r/N).
     MEDIAN uses indicator scores g(r) = I(r > N/2).
     """
@@ -219,6 +300,16 @@ class RankScoreMethod(StrEnum):
     KRUSKAL_WALLIS = "Kruskal-Wallis"
     VANDER_WAERDEN = "vanderWaerden"
     MEDIAN = "Median"
+
+
+_describe(
+    RankScoreMethod,
+    {
+        "Kruskal-Wallis": ("Kruskal-Wallis", "Proportional ranks r/N; Wilcoxon for two groups."),
+        "vanderWaerden": ("van der Waerden", "Normal scores, the inverse normal CDF of r/N."),
+        "Median": ("Median", "Whether a rank is above N/2."),
+    },
+)
 
 
 @unique
@@ -236,7 +327,7 @@ class SelectMethod(StrEnum):
 
 
 @unique
-class SingletonMethod(StrEnum):
+class SingletonMethod(_Described):
     """What ``svy.Singleton(method=...)`` does with strata holding one PSU."""
 
     CENTER = "center"  # grand-mean centering (R "adjust", Stata singleunit(centered))
@@ -245,6 +336,28 @@ class SingletonMethod(StrEnum):
     SELF_REPRESENTING = "self_representing"  # PSU -> stratum, SSUs/rows -> PSUs
     COLLAPSE = "collapse"  # merged into another stratum
     POOL = "pool"  # all singletons in one pseudo-stratum
+
+
+_describe(
+    SingletonMethod,
+    {
+        "center": (
+            "Center",
+            'Center the single PSU at the grand mean (R "adjust", Stata centered).',
+        ),
+        "scale": (
+            "Scale",
+            'Leave the single PSU out and scale the variance up (R "average", Stata scaled).',
+        ),
+        "skip": ("Skip", 'Leave the single PSU out of the variance (R "remove").'),
+        "self_representing": (
+            "Self-representing",
+            "Make the PSU its own stratum, with its SSUs (or rows) as PSUs.",
+        ),
+        "collapse": ("Collapse", "Merge the stratum into another stratum."),
+        "pool": ("Pool", "Put every single-PSU stratum into one pseudo-stratum."),
+    },
+)
 
 
 @unique
