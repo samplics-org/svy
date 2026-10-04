@@ -44,6 +44,15 @@ _CHUNK_RE = re.compile(r"(\d+)")
 # =============================================================================
 
 
+def _stratum_label(stratum: object) -> str:
+    """How a stratum key prints: "overall" when unstratified, "N, u" for a tuple."""
+    if stratum is None:
+        return "overall"
+    if isinstance(stratum, tuple):
+        return ", ".join(map(str, stratum))
+    return str(stratum)
+
+
 class SampleSize:
     """
     Compute required sample sizes for survey objectives under simple or stratified designs.
@@ -181,7 +190,7 @@ class SampleSize:
         rows = []
         if group_len is None:
             for s in objs:
-                label = getattr(s, "stratum", None) or getattr(s, "domain", None) or "overall"
+                label = _stratum_label(s.stratum)
                 row: dict[str, object] = {
                     "n0": float(s.n0),
                     "n1_deff": float(s.n1_deff),
@@ -189,7 +198,7 @@ class SampleSize:
                     "n": float(s.n),
                 }
                 if include_stratum:
-                    row["stratum"] = "" if label is None else str(label)
+                    row["stratum"] = label
                 rows.append(row)
             df = pl.DataFrame(rows)
             cols = (["stratum"] if include_stratum else []) + ["n0", "n1_deff", "n2_fpc", "n"]
@@ -200,7 +209,7 @@ class SampleSize:
             if len(group_labels) != group_len:
                 raise ValueError(f"group_labels length {len(group_labels)} != {group_len}")
             for s in objs:
-                label = getattr(s, "stratum", None) or getattr(s, "domain", None) or "overall"
+                label = _stratum_label(s.stratum)
                 n0, n1, n2, n = (getattr(s, f) for f in fields)
                 for i in range(group_len):
                     row: dict[str, object] = {
@@ -211,7 +220,7 @@ class SampleSize:
                         "n": float(n[i]),
                     }
                     if include_stratum:
-                        row["stratum"] = "" if label is None else str(label)
+                        row["stratum"] = label
                     rows.append(row)
             df = pl.DataFrame(rows)
             cols = (["stratum"] if include_stratum else []) + [
@@ -324,13 +333,13 @@ class SampleSize:
             )
             rows = []
             for s in objs:
-                label = getattr(s, "stratum", None) or getattr(s, "domain", None) or "overall"
+                label = _stratum_label(s.stratum)
                 n0, n1, n2, n = s.n0, s.n1_deff, s.n2_fpc, s.n
                 m = len(n)
                 _glabels = self._group_labels or [f"group{j + 1}" for j in range(m)]
                 for i in range(m):
                     if stratified:
-                        rows.append((str(label), _glabels[i], n0[i], n1[i], n2[i], n[i]))
+                        rows.append((label, _glabels[i], n0[i], n1[i], n2[i], n[i]))
                     else:
                         rows.append((_glabels[i], n0[i], n1[i], n2[i], n[i]))
             if stratified:
@@ -345,7 +354,7 @@ class SampleSize:
             )
             rows = []
             for s in objs:
-                label = getattr(s, "stratum", None) or getattr(s, "domain", None) or "overall"
+                label = _stratum_label(s.stratum)
                 if stratified:
                     rows.append((str(label), s.n0, s.n1_deff, s.n2_fpc, s.n))
                 else:
@@ -405,7 +414,7 @@ class SampleSize:
             )
             rows = []
             for s in objs:
-                label = getattr(s, "stratum", None) or getattr(s, "domain", None) or "overall"
+                label = _stratum_label(s.stratum)
                 n0, n1, n2, n = s.n0, s.n1_deff, s.n2_fpc, s.n
                 m = len(n)
                 _glabels = self._group_labels or [f"group{j + 1}" for j in range(m)]
@@ -443,7 +452,7 @@ class SampleSize:
             )
             rows = []
             for s in objs:
-                label = getattr(s, "stratum", None) or getattr(s, "domain", None) or "overall"
+                label = _stratum_label(s.stratum)
                 if stratified:
                     rows.append(
                         [
@@ -537,10 +546,7 @@ class SampleSize:
         rows = self._allocation or []
         neyman = any(a.sigma is not None for a in rows)
         data: dict[str, list] = {
-            "stratum": [
-                ", ".join(map(str, a.stratum)) if isinstance(a.stratum, tuple) else str(a.stratum)
-                for a in rows
-            ],
+            "stratum": [_stratum_label(a.stratum) for a in rows],
             "pop_size": [float(a.pop_size) for a in rows],
         }
         if neyman:
@@ -708,7 +714,7 @@ class SampleSize:
 
     def allocate(
         self,
-        n: int,
+        n: int | None = None,
         *,
         pop_size: Mapping[object, Number],
         method: AllocationMethod = "proportional",
@@ -722,8 +728,11 @@ class SampleSize:
 
         Parameters
         ----------
-        n : int
-            Overall sample size.
+        n : int | None
+            Overall sample size. Omitted, it is the n of the goal this
+            ``SampleSize`` holds, rounded up:
+            ``SampleSize().estimate_mean(...).allocate(pop_size=...)``. That
+            goal must give one overall n (scalar inputs, not a comparison).
         pop_size : dict
             ``{stratum: N_h}``: unit counts, or any size totals the split
             should follow (households per stratum for a PPS design). Keys are
@@ -750,6 +759,7 @@ class SampleSize:
         {'North': 251, 'South': 149}
         >>> svy.SampleSize().allocate(400, pop_size=N_h, method="neyman", sigma=S_h)
         >>> svy.SampleSize().allocate(400, pop_size=households, power=0.5)
+        >>> svy.SampleSize().estimate_mean(sigma=12, moe=1.5).allocate(pop_size=N_h)
         """
         return _allocate(
             self,

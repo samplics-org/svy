@@ -402,7 +402,8 @@ class DescribeResultData(msgspec.Struct, kw_only=True, frozen=True):
     weighted: bool
     weight_col: str | None = None
     drop_nulls: bool
-    top_k: int
+    #: None when every level was listed (``describe(top_k=None)``).
+    top_k: int | None
     percentiles: list[float]
     generated_at: str
     notes: str | None = None

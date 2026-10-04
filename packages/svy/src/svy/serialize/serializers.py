@@ -400,7 +400,7 @@ def _serialize_describe_result(result: DescribeResult) -> DescribeResultData:
         weighted=result.weighted,
         weight_col=result.weight_col,
         drop_nulls=result.drop_nulls,
-        top_k=_i(result.top_k),
+        top_k=None if result.top_k is None else _i(result.top_k),
         percentiles=list(result.percentiles),
         generated_at=result.generated_at.isoformat(),
         notes=result.notes,

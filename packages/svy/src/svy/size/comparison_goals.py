@@ -28,11 +28,13 @@ from svy.engine.size_and_power.size import (
 )
 from svy.size._normalize import _normalize_prop_var_mode
 from svy.size.estimation_goals import (
+    _as_input,
     _broadcast_scalars,
     _build_sizes,
     _checked_alpha,
     _has_pop,
 )
+from svy.size.types import TargetTwoMeans, TargetTwoProps
 from svy.utils.helpers import _get_keys_from_maps
 
 
@@ -111,6 +113,20 @@ def compare_props(
         )
 
     ss._param = PopParam.PROP
+    ss._target = TargetTwoProps(
+        p1=_as_input(p1),
+        p2=_as_input(p2),
+        alloc_ratio=_as_input(alloc_ratio),
+        alpha=_as_input(alpha),
+        power=_as_input(power),
+        method=method,
+        var_mode=var_mode,
+        two_sides=two_sides,
+        delta=_as_input(delta),
+        pop_size=_as_input(pop_size),
+        deff=_as_input(deff),
+        resp_rate=_as_input(resp_rate),
+    )
 
     stratified = any(
         isinstance(v, Mapping)
@@ -266,6 +282,21 @@ def compare_means(
     from svy.errors.method_errors import MethodError
 
     ss._param = PopParam.MEAN
+    ss._target = TargetTwoMeans(
+        mu1=_as_input(mu1),
+        mu2=_as_input(mu2),
+        sigma1=_as_input(sigma1),
+        sigma2=_as_input(sigma2),
+        alloc_ratio=_as_input(alloc_ratio),
+        alpha=_as_input(alpha),
+        power=_as_input(power),
+        method=method,
+        two_sides=two_sides,
+        delta=_as_input(delta),
+        pop_size=_as_input(pop_size),
+        deff=_as_input(deff),
+        resp_rate=_as_input(resp_rate),
+    )
 
     if method != "wald":
         raise MethodError.invalid_choice(

@@ -92,7 +92,9 @@ ignore unknown fields.
   that order. `None` when no such variable, or decoded from an older payload.
 - `0.7` — `EstimateData.ci_method` (how the intervals were built),
   `GLMStatsData.theta` / `theta_se` (negative binomial) and `GLMFitData.offset`
-  added. `None` when decoded from an older payload.
+  added. `None` when decoded from an older payload. Describe items carry
+  `by` / `by_level` (`describe(by=...)`), and `DescribeResultData.top_k` is
+  `None` when every level was listed.
 
 ### 2.6 Sub-structs are untagged
 

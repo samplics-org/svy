@@ -122,7 +122,15 @@ class Freq(msgspec.Struct, frozen=True):
 # ------------- column-level payloads -------------
 
 
-class DescribeBase(msgspec.Struct, frozen=True):
+class _ByGroup(msgspec.Struct, frozen=True, kw_only=True):
+    #: The ``by=`` columns and this item's group of them (a tuple of values in
+    #: ``by`` order); None without ``by=``. Keyword-only, so they come after
+    #: every other field and leave the items' field order as it was.
+    by: tuple[str, ...] | None = None
+    by_level: tuple[Any, ...] | None = None
+
+
+class DescribeBase(_ByGroup, frozen=True):
     name: str
     mtype: MeasurementType
     n: int  # total rows seen
@@ -216,7 +224,7 @@ class DescribeResult(msgspec.Struct, frozen=True):
     weighted: bool
     weight_col: str | None
     drop_nulls: bool
-    top_k: int
+    top_k: int | None
     percentiles: tuple[float, ...]
     generated_at: dt.datetime
     notes: str | None = None
@@ -233,7 +241,7 @@ class DescribeResult(msgspec.Struct, frozen=True):
         """
         from svy.serialize import serialize
 
-        return _describe_frame(serialize(self).items)
+        return _describe_frame([_flatten_by(it) for it in serialize(self).items])
 
     # ---------- repr ----------
     def __repr__(self) -> str:
@@ -362,7 +370,7 @@ class DescribeResult(msgspec.Struct, frozen=True):
 
             for it in num_items:
                 t.add_row(
-                    it.name,
+                    _item_label(it),
                     "Continuous" if isinstance(it, DescribeContinuous) else "Discrete",
                     str(it.n),
                     str(it.n_missing),
@@ -412,7 +420,7 @@ class DescribeResult(msgspec.Struct, frozen=True):
                 tops = list(it.levels or ())
                 if not tops:
                     t.add_row(
-                        it.name,
+                        _item_label(it),
                         ("nominal" if isinstance(it, DescribeNominal) else "ordinal"),
                         str(it.n),
                         str(it.n_missing),
@@ -426,7 +434,7 @@ class DescribeResult(msgspec.Struct, frozen=True):
                     top_txt = f"{f.level}: {_f(f.count)} ({_perc(f.prop)})"
                     if idx == 0:
                         t.add_row(
-                            it.name,
+                            _item_label(it),
                             ("nominal" if isinstance(it, DescribeNominal) else "ordinal"),
                             str(it.n),
                             str(it.n_missing),
@@ -459,7 +467,7 @@ class DescribeResult(msgspec.Struct, frozen=True):
             for it in bool_items:
                 fpart = f"{_f(it.false.count)} / {_perc(it.false.prop)}" if it.false else "—"
                 tpart = f"{_f(it.true.count)} / {_perc(it.true.prop)}" if it.true else "—"
-                t.add_row(it.name, str(it.n), str(it.n_missing), fpart, tpart)
+                t.add_row(_item_label(it), str(it.n), str(it.n_missing), fpart, tpart)
 
             sections.append(Padding(t, (0, 0, 0, INDENT)))
 
@@ -494,7 +502,7 @@ class DescribeResult(msgspec.Struct, frozen=True):
 
             for it in str_items:
                 t.add_row(
-                    it.name,
+                    _item_label(it),
                     str(it.n),
                     str(it.n_missing),
                     _s(it.n_unique),
@@ -526,7 +534,7 @@ class DescribeResult(msgspec.Struct, frozen=True):
                 )
             for it in dt_items:
                 t.add_row(
-                    it.name,
+                    _item_label(it),
                     str(it.n),
                     str(it.n_missing),
                     _fmt_dt(it.min),
@@ -546,6 +554,23 @@ class DescribeResult(msgspec.Struct, frozen=True):
 
 
 # ------------- formatting helpers -------------
+
+
+def _flatten_by(item: Mapping[str, Any]) -> dict[str, Any]:
+    """A serialized item with its ``by`` group as one leading column per ``by`` variable."""
+    by, level = item.get("by"), item.get("by_level")
+    rest = {k: v for k, v in item.items() if k not in ("by", "by_level")}
+    if not by:
+        return rest
+    return {**dict(zip(by, level or [None] * len(by))), **rest}
+
+
+def _item_label(item: Any) -> str:
+    """An item's name, with its ``by`` group when there is one: ``hh (region=North)``."""
+    if not item.by:
+        return item.name
+    group = ", ".join(f"{b}={lvl}" for b, lvl in zip(item.by, item.by_level or ()))
+    return f"{item.name} ({group})"
 
 
 def _describe_frame(items: Sequence[Mapping[str, Any]]) -> pl.DataFrame:
