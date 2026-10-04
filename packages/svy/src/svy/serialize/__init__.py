@@ -27,6 +27,8 @@ from svy.serialize.structs import (
     BrrWgtsData,
     CellEstData,
     ChiSquareData,
+    ContrastData,
+    ContrastEstData,
     DescribeResultData,
     DesignData,
     DiffEstData,
@@ -89,6 +91,8 @@ __all__ = [
     "TableData",
     "GLMFitData",
     "GLMPredData",
+    "ContrastData",
+    "ContrastEstData",
     "DescribeResultData",
     # Sub-structs
     "ParamEstData",

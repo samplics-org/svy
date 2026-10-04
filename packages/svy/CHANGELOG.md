@@ -8,6 +8,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **Contrasts can be saved.** `svy.serialize.to_json(est.contrast(...))` writes a `ContrastData` (kind `"contrast"`): each contrast's `est`, `se`, `cv`, `lci`, `uci`, `t`, `p_value` and `df`, with `method`, `alpha`, `df` and the source estimate's `param` and `y`, which `Contrast.param` and `Contrast.y` now also give; `serialize.to_polars()` returns the live table. The contrasts' joint covariance is not saved: take contrasts on the live estimate, which has it.
+
 - **`sample.internal_columns`** lists the columns of `sample.data` that svy made, not the user: the weight-adjustment record's snapshots (`__svy_cells_*`, `__svy_aux_*`), which the design needs to reproduce the adjustment's variance. Keep them when saving data the design must work with, leave them out when showing it; `describe()` already does.
 
 - **`sample.describe(by=...)` describes each group** of one or several columns (crossed), a null being a group of its own: every item carries `by` and `by_level`, `to_polars()` has a column per `by` variable, and printed names show the group (`hh (reg=North)`). It is where counts and sums per group come from: a categorical column's `levels`, or `n` and `sum` of a numeric one. `top_k=None` lists every level instead of the first 10. Saved describe items carry `by` / `by_level`, and `DescribeResultData.top_k` is `None` when every level was listed (schema `svy-result/0.7`).

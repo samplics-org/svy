@@ -527,6 +527,42 @@ class DesignData(msgspec.Struct, kw_only=True, frozen=True):
     parts: dict[str, Any] | None = None
 
 
+class ContrastEstData(msgspec.Struct, kw_only=True, frozen=True):
+    """One contrast row (mirrors ``svy.estimation.contrast.ContrastEst``)."""
+
+    contrast: str
+    est: float
+    se: float
+    cv: float
+    lci: float
+    uci: float
+    t: float
+    p_value: float
+    df: float
+
+
+@_kinded("contrast")
+class ContrastData(msgspec.Struct, kw_only=True, frozen=True):
+    """
+    Serialization struct for ``svy.estimation.contrast.Contrast``.
+
+    Excludes: covariance (the contrasts' joint covariance ``L V Lᵀ``). A saved
+    contrast is a result to show, not to combine further: contrasts are taken
+    on the live estimate, which has the covariance.
+    """
+
+    kind: Literal["contrast"] = "contrast"
+    schema_version: str = SCHEMA_VERSION
+    method: str
+    alpha: float
+    df: float
+    #: The parameter and variable of the estimate the contrasts were taken
+    #: over; None when unknown.
+    param: str | None = None
+    y: str | None = None
+    estimates: list[ContrastEstData] = []
+
+
 # ---------------------------------------------------------------------------
 # Discriminated union
 # ---------------------------------------------------------------------------
@@ -541,4 +577,5 @@ ResultData = (
     | GLMFitData
     | GLMPredData
     | DescribeResultData
+    | ContrastData
 )

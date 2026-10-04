@@ -333,7 +333,7 @@ class Contrast:
     ``L V Lᵀ`` is kept on :attr:`covariance` (row order = printed order).
     """
 
-    __slots__ = ("estimates", "covariance", "alpha", "df", "method", "_print_width")
+    __slots__ = ("estimates", "covariance", "alpha", "df", "method", "param", "y", "_print_width")
 
     def __init__(
         self,
@@ -343,12 +343,18 @@ class Contrast:
         alpha: float,
         df: float,
         method: str,
+        param: str | None = None,
+        y: str | None = None,
     ):
         self.estimates = estimates
         self.covariance = covariance
         self.alpha = alpha
         self.df = df
         self.method = method
+        #: The parameter and variable of the estimate the contrast was taken
+        #: over (``"Mean"``, ``"income"``); None when built from bare arrays.
+        self.param = param
+        self.y = y
         self._print_width: int | None = None
 
     def to_dicts(self) -> list[dict[str, Any]]:

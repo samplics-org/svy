@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Literal
 
+import msgspec
 import polars as pl
 
 from svy.categorical.table import table_frame
@@ -25,6 +26,7 @@ from svy.regression.glm import glm_frame
 from svy.regression.prediction import glm_pred_frame
 from svy.serialize.structs import (
     ChiSquareData,
+    ContrastData,
     DescribeResultData,
     EstimateData,
     EstimateListData,
@@ -124,6 +126,11 @@ def _describe(d: DescribeResultData, *, row_index: str | None = None) -> pl.Data
     return _indexed(_describe_frame([_flatten_by(it) for it in d.items]), row_index)
 
 
+def _contrast(d: ContrastData, *, row_index: str | None = None) -> pl.DataFrame:
+    rows = [msgspec.structs.asdict(c) for c in d.estimates]
+    return _indexed(pl.from_dicts(rows) if rows else pl.DataFrame(), row_index)
+
+
 _TABLES: dict[type, Callable[..., pl.DataFrame]] = {
     EstimateData: _estimate,
     EstimateListData: _estimate_list,
@@ -134,6 +141,7 @@ _TABLES: dict[type, Callable[..., pl.DataFrame]] = {
     GLMPredData: _glm_pred,
     ChiSquareData: _chi_square,
     DescribeResultData: _describe,
+    ContrastData: _contrast,
 }
 
 

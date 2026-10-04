@@ -27,6 +27,7 @@ from svy.core.describe import DescribeResult
 from svy.core.design import Design, PopSize
 from svy.errors.model_errors import ModelError
 from svy.errors.serialization_errors import SerializationError
+from svy.estimation.contrast import Contrast
 from svy.estimation.estimate import Estimate, EstimateList
 from svy.regression.glm import GLMFit
 from svy.regression.prediction import GLMPred
@@ -34,6 +35,8 @@ from svy.serialize.structs import (
     _KIND_TO_STRUCT,
     CellEstData,
     ChiSquareData,
+    ContrastData,
+    ContrastEstData,
     DescribeResultData,
     DesignData,
     DiffEstData,
@@ -390,6 +393,32 @@ def _serialize_glm_pred(result: GLMPred) -> GLMPredData:
         lci=_arr(result.lci),
         uci=_arr(result.uci),
         residuals=_arr(result.residuals) if result.residuals is not None else None,
+    )
+
+
+@_register(Contrast)
+def _serialize_contrast(result: Contrast) -> ContrastData:
+    """Serialize ``svy.estimation.contrast.Contrast``."""
+    return ContrastData(
+        method=result.method,
+        alpha=_f(result.alpha),
+        df=_f(result.df),
+        param=result.param,
+        y=result.y,
+        estimates=[
+            ContrastEstData(
+                contrast=str(c.contrast),
+                est=_f(c.est),
+                se=_f(c.se),
+                cv=_f(c.cv),
+                lci=_f(c.lci),
+                uci=_f(c.uci),
+                t=_f(c.t),
+                p_value=_f(c.p_value),
+                df=_f(c.df),
+            )
+            for c in result.estimates
+        ],
     )
 
 

@@ -910,7 +910,7 @@ class Estimate:
             df = max(row_dfs)
 
         values = np.array([p.est for p in self.estimates], dtype=float)
-        return linear_contrast(
+        result = linear_contrast(
             self.keys(),
             values,
             self.covariance,
@@ -924,6 +924,9 @@ class Estimate:
                 *self._reversed_pair_aliases(),
             ],
         )
+        result.param = self.param.value
+        result.y = self.estimates[0].y if self.estimates else None
+        return result
 
     def covariance_to_polars(self) -> pl.DataFrame:
         """Tidy lower-triangle view of the between-estimate covariance.
