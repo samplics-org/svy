@@ -4,8 +4,10 @@ from __future__ import annotations
 import datetime as dt
 import logging
 
+from functools import partial
 from typing import TYPE_CHECKING, Sequence
 
+import msgspec
 import polars as pl
 
 from .describe import (
@@ -206,7 +208,7 @@ def _desc_discrete(
     weighted: bool,
     weight_col: str | None,
     drop_nulls: bool,
-    top_k: int,
+    top_k: int | None,
     percentiles: Sequence[float],
 ) -> DescribeDiscrete:
     cont = _desc_continuous(
@@ -257,7 +259,7 @@ def _build_freqs(
     *,
     weighted: bool,
     w: pl.Series | None,
-    top_k: int,
+    top_k: int | None,
 ) -> tuple[tuple[Freq, ...], int]:
     """Return (top-k level frequencies, TRUE number of distinct levels).
 
@@ -285,7 +287,7 @@ def _build_freqs(
         )
         denom = float(s.len())
     n_levels = int(full.height)
-    tbl = full.head(top_k)
+    tbl = full if top_k is None else full.head(top_k)
     levels = tuple(
         Freq(
             level=row["__k"],
@@ -305,7 +307,7 @@ def _desc_nominal_or_ordinal(
     weighted: bool,
     weight_col: str | None,
     drop_nulls: bool,
-    top_k: int,
+    top_k: int | None,
     ordinal: bool,
 ) -> DescribeNominal | DescribeOrdinal:
     s_base = df.get_column(col)
@@ -458,7 +460,7 @@ def _desc_string(
     weighted: bool,
     weight_col: str | None,
     drop_nulls: bool,
-    top_k: int,
+    top_k: int | None,
 ) -> DescribeString:
     s_base = df.get_column(col).cast(pl.Utf8)
     if drop_nulls:
@@ -508,19 +510,17 @@ def _desc_string(
     )
 
 
-def run_describe(
-    *,
+def _describe_columns(
     df: pl.DataFrame,
-    metadata: "MetadataStore | None" = None,
-    columns: Sequence[str] | None = None,
-    weighted: bool = False,
-    weight_col: str | None = None,
-    drop_nulls: bool = True,
-    top_k: int = 10,
-    percentiles: Sequence[float] = DEFAULT_PERCENTILES,
-) -> DescribeResult:
-    cols = _resolve_columns(df, columns)
-
+    cols: Sequence[str],
+    metadata: "MetadataStore | None",
+    *,
+    weighted: bool,
+    weight_col: str | None,
+    drop_nulls: bool,
+    top_k: int | None,
+    percentiles: Sequence[float],
+) -> list[DescribeItem]:
     items: list[DescribeItem] = []
     for col in cols:
         mtype: MeasurementType
@@ -605,12 +605,55 @@ def run_describe(
                 )
             )
 
+    return items
+
+
+def run_describe(
+    *,
+    df: pl.DataFrame,
+    metadata: "MetadataStore | None" = None,
+    columns: Sequence[str] | None = None,
+    weighted: bool = False,
+    weight_col: str | None = None,
+    drop_nulls: bool = True,
+    top_k: int | None = 10,
+    percentiles: Sequence[float] = DEFAULT_PERCENTILES,
+    by: Sequence[str] | None = None,
+) -> DescribeResult:
+    cols = _resolve_columns(df, columns)
+
+    describe = partial(
+        _describe_columns,
+        cols=cols,
+        metadata=metadata,
+        weighted=weighted,
+        weight_col=weight_col,
+        drop_nulls=drop_nulls,
+        top_k=top_k,
+        percentiles=percentiles,
+    )
+    if not by:
+        items = describe(df)
+    else:
+        by_cols = list(by)
+        items = []
+        levels = df.select(by_cols).unique().sort(by_cols, nulls_last=True)
+        for level in levels.iter_rows():
+            mask = pl.all_horizontal(
+                pl.col(c).is_null() if v is None else pl.col(c) == v
+                for c, v in zip(by_cols, level)
+            )
+            items += [
+                msgspec.structs.replace(it, by=tuple(by_cols), by_level=tuple(level))
+                for it in describe(df.filter(mask))
+            ]
+
     return DescribeResult(
         items=tuple(items),
         weighted=weighted,
         weight_col=weight_col,
         drop_nulls=drop_nulls,
-        top_k=int(top_k),
+        top_k=None if top_k is None else int(top_k),
         percentiles=tuple(float(p) for p in percentiles),
         generated_at=dt.datetime.now(dt.timezone.utc),
         notes=None,

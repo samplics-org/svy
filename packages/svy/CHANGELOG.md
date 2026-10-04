@@ -8,6 +8,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **`sample.describe(by=...)` describes each group** of one or several columns (crossed), a null being a group of its own: every item carries `by` and `by_level`, `to_polars()` has a column per `by` variable, and printed names show the group (`hh (reg=North)`). It is where counts and sums per group come from: a categorical column's `levels`, or `n` and `sum` of a numeric one. `top_k=None` lists every level instead of the first 10. Saved describe items carry `by` / `by_level`, and `DescribeResultData.top_k` is `None` when every level was listed (schema `svy-result/0.7`).
+
 - **Results record their interval method: `Estimate.ci_method`.** `"logit"`, `"beta"`, `"korn-graubard"` or `"wilson"` for proportions and factor means, `"fisher"` or `"wald"` for correlations, `"woodruff"` for Taylor quantiles, and `"wald"` (est ± t·se) for means, totals, ratios, covariances and replicate quantiles, so a methods appendix can say which interval was used. Saved results carry it, and GLM fits now also keep `theta` / `theta_se` (negative binomial) and the `offset` column: schema `svy-result/0.7` adds `EstimateData.ci_method`, `GLMStatsData.theta`, `GLMStatsData.theta_se` and `GLMFitData.offset`, `None` when read from an older payload.
 
 - **`Expr.to_polars()`** returns the polars expression a svy expression wraps, to filter or derive on a plain polars frame before a `Sample` exists. It replaces importing `to_polars_expr` from `svy.core.expr`.
