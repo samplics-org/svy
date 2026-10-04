@@ -37,7 +37,7 @@ from svy.weighting.replication import create_jk_wgts as _create_jk_wgts
 from svy.weighting.replication import create_sdr_wgts as _create_sdr_wgts
 from svy.weighting.standardization import standardize as _standardize
 from svy.weighting.trimming import trim as _trim
-from svy.weighting.types import TrimConfig
+from svy.weighting.types import ThresholdSpec, TrimConfig
 
 
 if TYPE_CHECKING:
@@ -1180,9 +1180,9 @@ class Weighting:
 
     def trim(
         self,
-        upper=None,
-        lower=None,
-        by=None,
+        upper: ThresholdSpec | None = None,
+        lower: ThresholdSpec | None = None,
+        by: str | Sequence[str] | None = None,
         redistribute: bool = True,
         min_cell_size: int = 10,
         max_iter: int = 10,

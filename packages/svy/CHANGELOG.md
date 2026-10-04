@@ -8,6 +8,9 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **Choice enums carry a label and a description.** `SingletonMethod`, `DistFamily`, `LinkFunction`, `QuantileMethod` and `RankScoreMethod` members have `.label` and `.description`, and `describe()` lists `(value, label, description)` for every member, so applications show svy's own wording instead of copying it. The enums are unchanged otherwise (still `StrEnum`).
+- **`sample.weighting.trim()` annotates `upper`, `lower` and `by`** (a threshold or a number; one or several columns).
+
 - **Contrasts can be saved.** `svy.serialize.to_json(est.contrast(...))` writes a `ContrastData` (kind `"contrast"`): each contrast's `est`, `se`, `cv`, `lci`, `uci`, `t`, `p_value` and `df`, with `method`, `alpha`, `df` and the source estimate's `param` and `y`, which `Contrast.param` and `Contrast.y` now also give; `serialize.to_polars()` returns the live table. The contrasts' joint covariance is not saved: take contrasts on the live estimate, which has it.
 
 - **`sample.internal_columns`** lists the columns of `sample.data` that svy made, not the user: the weight-adjustment record's snapshots (`__svy_cells_*`, `__svy_aux_*`), which the design needs to reproduce the adjustment's variance. Keep them when saving data the design must work with, leave them out when showing it; `describe()` already does.
