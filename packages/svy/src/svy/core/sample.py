@@ -2499,10 +2499,11 @@ class Sample:
         self,
         columns: Sequence[str] | None = None,
         *,
+        by: str | Sequence[str] | None = None,
         weighted: bool = False,
         weight_col: str | None = None,
         drop_nulls: bool = True,
-        top_k: int = 10,
+        top_k: int | None = 10,
         percentiles: Sequence[float] = (0.05, 0.25, 0.50, 0.75, 0.95),
     ) -> DescribeResult:
         """
@@ -2510,6 +2511,18 @@ class Sample:
 
         Internal, concatenated design columns (e.g., stratum/psu/ssu with the internal
         suffix) and the synthetic row index are excluded from the description.
+
+        Parameters
+        ----------
+        by : str | Sequence[str] | None
+            Describe each group of these columns (crossed when several): every
+            item carries ``by`` and ``by_level``, and ``to_polars()`` has a
+            column per ``by`` variable. A null is a group of its own. This is
+            where counts per group come from: a categorical column's
+            ``levels``, or ``n`` and ``sum`` of a numeric one, per group.
+        top_k : int | None
+            How many levels a categorical or text column lists; None lists
+            them all.
         """
         # Resolve default weight column from the active design if requested
         if weighted and weight_col is None:
@@ -2519,9 +2532,28 @@ class Sample:
         # Build the hidden/internal columns set using the UI helper
         hidden = self._hidden_columns_for_ui()
 
-        # Resolve the final column list, excluding hidden/internal ones
+        by_cols = self._to_cols(by) if by is not None else []
+        absent = [c for c in by_cols if c not in self._data.columns]
+        if absent:
+            raise DimensionError.missing_columns(
+                where="Sample.describe",
+                param="by",
+                missing=absent,
+                available=[c for c in self._data.columns if c not in hidden],
+            )
+        if top_k is not None and (
+            isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 1
+        ):
+            raise MethodError.invalid_type(
+                where="Sample.describe",
+                param="top_k",
+                got=top_k,
+                expected="a positive int or None",
+            )
+
+        # Resolve the final column list, excluding hidden/internal ones and by=
         if columns is None:
-            cols = [c for c in self._data.columns if c not in hidden]
+            cols = [c for c in self._data.columns if c not in hidden and c not in by_cols]
         else:
             cols = [c for c in columns if c in self._data.columns and c not in hidden]
 
@@ -2547,6 +2579,7 @@ class Sample:
             drop_nulls=drop_nulls,
             top_k=top_k,
             percentiles=percentiles,
+            by=by_cols or None,
         )
 
     # ════════════════════════════════════════════════════════════════════════

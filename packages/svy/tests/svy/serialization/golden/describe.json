@@ -3,6 +3,8 @@
   "generated_at": "2026-07-10T12:00:00",
   "items": [
     {
+      "by": null,
+      "by_level": null,
       "drop_nulls": false,
       "max": 90000.0,
       "mean": 50000.0,
