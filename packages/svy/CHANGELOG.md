@@ -24,6 +24,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Changed
 
+- **`SampleSize().compare_props` and `estimate_mean` take only `method="wald"`.** `compare_props` listed `"miettinen-nurminen"`, `"newcombe"` and `"farrington-manning"`, and `estimate_mean` listed `"fleiss"`, but none were implemented and they raised `NotImplementedError`. They now raise `MethodError` (`INVALID_CHOICE`) with a hint, as `compare_means` does; `var_mode=` still sets the Wald variance for two proportions. The `compare_*` docstrings now state that the two groups are independent samples: correlation between panel rounds is not accounted for.
+
 - **`SampleSize.target` records every argument of the goal**, for `estimate_prop`, `estimate_mean`, `compare_props` and `compare_means` as for `allocate`: the formula (`method`, `var_mode`), `alpha`, `power`, `two_sides`, `delta`, `pop_size`, `deff` and `resp_rate`, scalars or per-stratum dicts as given (it was None except after `allocate`). Stratum keys are kept as given, in the given order: `Size.stratum` and the keys of `SampleSize.n` are the input's values (tuples for several stratum columns) instead of their text, so `n` goes to `srs(n=...)` as is; tables print a tuple as `N, u`, and a stratum keyed `0` no longer prints as `overall`.
 
 - **`read_stata` returns Stata integer variables as Int64.** `byte`, `int` and `long` variables were Float64, and `write_stata` wrote integer columns as `double`. Integer columns now keep their type both ways, so a code `1` matches the value label keyed `1`. Needs the svy-io release with integer storage (see its changelog).
