@@ -8,6 +8,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **`sample.internal_columns`** lists the columns of `sample.data` that svy made, not the user: the weight-adjustment record's snapshots (`__svy_cells_*`, `__svy_aux_*`), which the design needs to reproduce the adjustment's variance. Keep them when saving data the design must work with, leave them out when showing it; `describe()` already does.
+
 - **Results record their interval method: `Estimate.ci_method`.** `"logit"`, `"beta"`, `"korn-graubard"` or `"wilson"` for proportions and factor means, `"fisher"` or `"wald"` for correlations, `"woodruff"` for Taylor quantiles, and `"wald"` (est ± t·se) for means, totals, ratios, covariances and replicate quantiles, so a methods appendix can say which interval was used. Saved results carry it, and GLM fits now also keep `theta` / `theta_se` (negative binomial) and the `offset` column: schema `svy-result/0.7` adds `EstimateData.ci_method`, `GLMStatsData.theta`, `GLMStatsData.theta_se` and `GLMFitData.offset`, `None` when read from an older payload.
 
 - **`Expr.to_polars()`** returns the polars expression a svy expression wraps, to filter or derive on a plain polars frame before a `Sample` exists. It replaces importing `to_polars_expr` from `svy.core.expr`.
