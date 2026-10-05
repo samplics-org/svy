@@ -30,11 +30,11 @@ def test_use_weight_metadata_is_isolated(base_sample):
     derived = base_sample.use_weight("w2")
     derived.set_var_label("age", "Age in years")
 
-    assert base_sample.resolve_labels("age").var_label == ""
-    assert derived.resolve_labels("age").var_label == "Age in years"
+    assert "age" not in base_sample.meta.var_labels
+    assert derived.meta.var_labels["age"] == "Age in years"
 
     base_sample.set_var_label("age", "Original label")
-    assert derived.resolve_labels("age").var_label == "Age in years"
+    assert derived.meta.var_labels["age"] == "Age in years"
 
 
 def test_use_weight_value_labels_are_isolated(base_sample):
@@ -71,4 +71,4 @@ def test_use_weight_updates_design_without_mutating_original(base_sample):
 def test_replace_data_isolates_metadata(base_sample):
     derived = base_sample._replace_data(base_sample._data)
     derived.set_var_label("age", "changed")
-    assert base_sample.resolve_labels("age").var_label == ""
+    assert "age" not in base_sample.meta.var_labels

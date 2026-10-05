@@ -45,7 +45,7 @@ def _households():
         }
     )
     s = svy.Sample(df, svy.Design(wgt="wgt"))
-    s.meta.set_label("region", "Region of residence")
+    s.meta.set_var_label("region", "Region of residence")
     s.meta.set_value_labels("region", {10: "North", 20: "South"})
     return s
 
@@ -429,7 +429,7 @@ def test_a_refused_join_leaves_the_sample_untouched_even_inplace():
 
 def test_the_warning_and_labels_stay_on_the_result():
     p = _persons()
-    p.meta.set_label("age", "Age in years")
+    p.meta.set_var_label("age", "Age in years")
     with pytest.warns(svy.SvyUserWarning, match=r"\[JOIN_UNMATCHED\]"):
         out = p.wrangling.join(_households(), on={"hh": "hh_id"}, cols=["region"])
     assert not [w for w in p.warnings if w.code == "JOIN_UNMATCHED"]

@@ -145,7 +145,7 @@ def apply_labels(
                         hint="Pass overwrite=True to replace existing labels.",
                     )
 
-            meta.set_label(var, lbl)
+            meta.set_var_label(var, lbl)
 
     # -- Apply value labels ----------------------------------------------
     if categories is not None:

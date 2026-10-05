@@ -489,7 +489,7 @@ def test_shared_catalog_and_scheme_refs_carried(two_cycles):
     s2.meta.set_scheme("x", "yn")
     c = svy.combine_samples([s1, s2])
     assert c.meta.catalog is catalog
-    assert c.meta.resolve_labels("x").labels == {1: "yes", 2: "no"}
+    assert c.meta.value_labels["x"] == {1: "yes", 2: "no"}
     assert c.meta.get("x").scheme_ref is not None
 
 
@@ -517,7 +517,7 @@ def test_scheme_vs_direct_label_conflict_dropped(two_cycles):
     s2.meta.set_value_labels("x", {1: "male", 2: "female"})
     with pytest.warns(UserWarning, match="Value labels conflict"):
         c = svy.combine_samples([s1, s2])
-    assert not c.meta.resolve_labels("x").labels
+    assert "x" not in c.meta.value_labels
 
 
 def test_sample_names_propagate(two_cycles):
@@ -531,7 +531,7 @@ def test_identical_value_labels_merge(two_cycles):
     s1, s2 = two_cycles
     s1.meta.set_value_labels("x", {1: "low", 2: "high"})
     s2.meta.set_value_labels("x", {1: "low", 2: "high"})
-    s1.meta.set_label("x", "The X")
+    s1.meta.set_var_label("x", "The X")
     c = svy.combine_samples([s1, s2])
     assert c.meta.get("x").labels == {1: "low", 2: "high"}
     assert c.meta.get("x").label == "The X"

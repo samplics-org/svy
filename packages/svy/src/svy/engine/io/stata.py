@@ -114,7 +114,7 @@ def _write_stata(
                 var_labels[var] = str(meta.label)
 
             # Get value labels (direct or resolved from scheme)
-            resolved = store.resolve_labels(var)
+            resolved = store._resolve(var)
             if resolved.has_value_labels:
                 value_labels[var] = resolved.labels
 
