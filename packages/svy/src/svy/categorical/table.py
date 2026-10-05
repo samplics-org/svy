@@ -274,14 +274,14 @@ class Table:
         """Get variable label or fall back to variable name."""
         if not self._resolve_use_labels() or self._metadata is None:
             return var
-        resolved = self._metadata.resolve_labels(var)
+        resolved = self._metadata._resolve(var)
         return resolved.var_label if resolved.has_var_label else var
 
     def _get_value_label(self, var: str, value: Category) -> str:
         """Get value label or fall back to string representation."""
         if not self._resolve_use_labels() or self._metadata is None:
             return str(value)
-        resolved = self._metadata.resolve_labels(var)
+        resolved = self._metadata._resolve(var)
         # Try the value as-is first
         label = resolved.display(value)
         # If we got back the string representation, try converting to int
@@ -735,7 +735,7 @@ class Table:
         resolve_labels = use_labels if use_labels is not None else self._resolve_use_labels()
 
         if resolve_labels and self._metadata is not None:
-            row_resolved = self._metadata.resolve_labels(self.rowvar)
+            row_resolved = self._metadata._resolve(self.rowvar)
             if row_resolved.has_value_labels:
                 _row_label_map = {str(k): str(v) for k, v in row_resolved.labels.items()}
                 df = df.with_columns(
@@ -743,7 +743,7 @@ class Table:
                 )
 
             if self.colvar is not None:
-                col_resolved = self._metadata.resolve_labels(self.colvar)
+                col_resolved = self._metadata._resolve(self.colvar)
                 if col_resolved.has_value_labels:
                     _col_label_map = {str(k): str(v) for k, v in col_resolved.labels.items()}
                     df = df.with_columns(
@@ -754,7 +754,7 @@ class Table:
             dict.fromkeys(self.rowvals or df.get_column("rowvar").unique().to_list())
         )
         if resolve_labels and self._metadata is not None:
-            row_resolved = self._metadata.resolve_labels(self.rowvar)
+            row_resolved = self._metadata._resolve(self.rowvar)
             if row_resolved.has_value_labels:
                 row_levels = [row_resolved.display(v) for v in row_levels]
             else:
@@ -817,7 +817,7 @@ class Table:
             dict.fromkeys(self.colvals or df.get_column("colvar").unique().to_list())
         )
         if resolve_labels and self._metadata is not None:
-            col_resolved = self._metadata.resolve_labels(self.colvar)
+            col_resolved = self._metadata._resolve(self.colvar)
             if col_resolved.has_value_labels:
                 col_levels = [col_resolved.display(v) for v in col_levels_raw]
             else:
@@ -911,7 +911,7 @@ class Table:
 
 def _headers_for_display(tbl: "Table") -> list[str]:
     if tbl._resolve_use_labels() and tbl._metadata is not None:
-        row_resolved = tbl._metadata.resolve_labels(tbl.rowvar)
+        row_resolved = tbl._metadata._resolve(tbl.rowvar)
         row_header = row_resolved.var_label if row_resolved.has_var_label else "Row"
     else:
         row_header = "Row"
@@ -919,7 +919,7 @@ def _headers_for_display(tbl: "Table") -> list[str]:
     base = [row_header]
     if tbl.is_crosstab:
         if tbl._resolve_use_labels() and tbl._metadata is not None:
-            col_resolved = tbl._metadata.resolve_labels(tbl.colvar or "")
+            col_resolved = tbl._metadata._resolve(tbl.colvar or "")
             col_header = col_resolved.var_label if col_resolved.has_var_label else "Col"
         else:
             col_header = "Col"

@@ -88,6 +88,12 @@ def _next_data_version() -> int:
     return next(_DATA_VERSION_COUNTER)
 
 
+_REMOVED_LABEL_API = {
+    "labels": "sample.meta.value_labels",
+    "resolve_labels": "sample.meta.var_labels[var] and sample.meta.value_labels[var]",
+}
+
+
 class Sample:
     """A sample class for survey data."""
 
@@ -1573,6 +1579,10 @@ class Sample:
             from svy.errors.singleton_errors import SingletonAPIRemoved
 
             raise SingletonAPIRemoved.accessor()
+        if name in _REMOVED_LABEL_API:
+            from svy.errors.label_errors import LabelAPIRemoved
+
+            raise LabelAPIRemoved.replaced(where=f"Sample.{name}", use=_REMOVED_LABEL_API[name])
         raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
 
     @property
@@ -1727,21 +1737,6 @@ class Sample:
         """Access variable metadata registry."""
         return self._metadata
 
-    @property
-    def labels(self) -> dict[str, dict[Category, str]]:
-        """
-        Return value labels for all variables that have them.
-
-        Returns a dict mapping variable name to its value labels dict.
-        This is a convenience property for backward compatibility.
-        """
-        result: dict[str, dict[Category, str]] = {}
-        for var in self._metadata:
-            resolved = self._metadata.resolve_labels(var)
-            if resolved.has_value_labels:
-                result[var] = resolved.labels
-        return result
-
     # ════════════════════════════════════════════════════════════════════════
     # METADATA CONVENIENCE METHODS
     # ════════════════════════════════════════════════════════════════════════
@@ -1766,7 +1761,7 @@ class Sample:
         --------
         >>> svy.set_var_label("q1", "How satisfied are you with our service?")
         """
-        self._metadata.set_label(var, label)
+        self._metadata.set_var_label(var, label)
         return self
 
     def set_var_labels(self, **labels: str) -> Self:
@@ -1791,7 +1786,7 @@ class Sample:
         ...     age="What is your age?",
         ... )
         """
-        self._metadata.set_labels(**labels)
+        self._metadata.set_var_labels(**labels)
         return self
 
     def set_value_labels(self, var: str, labels: dict[Category, str]) -> Self:
@@ -1839,27 +1834,6 @@ class Sample:
         """
         self._metadata.set_scheme(var, concept)
         return self
-
-    def resolve_labels(self, var: str):
-        """
-        Get fully resolved labels for a variable.
-
-        Parameters
-        ----------
-        var : str
-            Variable name.
-
-        Returns
-        -------
-        ResolvedLabels
-            The resolved labels (ready for display).
-
-        Examples
-        --------
-        >>> labels = svy.resolve_labels("q1")
-        >>> labels.display(5)  # "Very satisfied"
-        """
-        return self._metadata.resolve_labels(var)
 
     # ════════════════════════════════════════════════════════════════════════
     # MUTATOR / ACCESSOR METHODS (schema, data, design)

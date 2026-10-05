@@ -251,7 +251,7 @@ def _merge_metadata(combined: Sample, samples: Sequence[Sample]) -> None:
 
     for s in samples:
         for name in s.meta.variables:
-            labels = s.meta.resolve_labels(name).labels
+            labels = s.meta._resolve(name).labels
             if labels:
                 if name in resolved:
                     if resolved[name] != labels and name not in conflicted:

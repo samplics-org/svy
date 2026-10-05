@@ -23,9 +23,9 @@ from svy.metadata import MetadataStore
 @pytest.fixture
 def store():
     s = MetadataStore()
-    s.set_label("q", "Question")
+    s.set_var_label("q", "Question")
     s.set_value_labels("q", {1: "Yes", 99: "Refused"})
-    s.set_label("age", "Age")
+    s.set_var_label("age", "Age")
     return s
 
 
@@ -68,7 +68,7 @@ def test_a_label_read_back_from_spss_still_applies(store, df, tmp):
 
     recovered = MetadataStore()
     import_labels_from_svyio_meta(recovered, meta, back)
-    resolved = recovered.resolve_labels("q")
+    resolved = recovered._resolve("q")
 
     assert resolved.display(1.0) == "Yes"
     assert resolved.display(99.0) == "Refused"

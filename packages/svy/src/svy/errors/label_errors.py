@@ -246,3 +246,36 @@ class LabelError(SvyError):
             hint=hint,
             docs_url=docs_url,
         )
+
+
+@dataclass(eq=False)
+class LabelAPIRemoved(LabelError, AttributeError):
+    """A label accessor removed in 2026.0; names its replacement.
+
+    Also an ``AttributeError``, so ``hasattr`` on the old name is False.
+    """
+
+    @classmethod
+    def replaced(cls, *, where: str, use: str) -> "LabelAPIRemoved":
+        return cls(
+            title=f"{where} was removed",
+            detail=f"Use {use} instead.",
+            code="LABEL_API_REMOVED",
+            where=where,
+            hint="meta.var_labels[var] gives the variable label and meta.value_labels[var] "
+            "the code-to-label mapping; set them with set_var_label(s) and set_value_labels.",
+        )
+
+
+@dataclass(eq=False)
+class LabelsReadOnly(LabelError, TypeError):
+    """``meta.var_labels`` / ``meta.value_labels`` are views; edits go through setters."""
+
+    @classmethod
+    def view(cls, *, where: str, use: str) -> "LabelsReadOnly":
+        return cls(
+            title=f"{where} is read-only",
+            detail=f"Changing this mapping would not change the metadata. Use {use}.",
+            code="LABEL_READ_ONLY",
+            where=where,
+        )

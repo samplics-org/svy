@@ -11,7 +11,7 @@ This module provides a comprehensive metadata model that unifies:
 The core types are:
 - VariableMeta: Complete metadata for a single variable
 - SchemeRef: Lazy reference to a catalog scheme
-- ResolvedLabels: Cached, ready-to-use labels for display
+- ResolvedLabels: Cached, ready-to-use labels for display (internal)
 - MetadataStore: Per-Sample registry with resolution and caching
 """
 
@@ -356,7 +356,7 @@ class ResolvedLabels(msgspec.Struct, frozen=True):
 
     Examples
     --------
-    >>> resolved = store.resolve_labels("q1")
+    >>> resolved = store._resolve("q1")
     >>> resolved.display(1)  # "Strongly disagree"
     >>> resolved.display(99)  # "99" (no label, falls back to str)
     >>> resolved.display(None)  # ""
@@ -485,6 +485,37 @@ class ResolvedLabels(msgspec.Struct, frozen=True):
 # =============================================================================
 
 
+_REMOVED = {
+    "resolve_labels": "meta.var_labels[var] and meta.value_labels[var]",
+    "resolve_all": "meta.var_labels and meta.value_labels",
+    "set_label": "meta.set_var_label(var, label)",
+    "set_labels": "meta.set_var_labels(**labels)",
+}
+
+
+class _LabelView(dict):
+    """A dict that refuses edits: it is a copy, so an edit would silently not stick."""
+
+    __slots__ = ("_where", "_use")
+
+    def __init__(self, data, *, where: str, use: str) -> None:
+        super().__init__(data)
+        self._where = where
+        self._use = use
+
+    def _refuse(self, *args: Any, **kwargs: Any) -> Any:
+        from svy.errors.label_errors import LabelsReadOnly
+
+        raise LabelsReadOnly.view(where=self._where, use=self._use)
+
+    __setitem__ = __delitem__ = __ior__ = _refuse
+    clear = pop = popitem = setdefault = update = _refuse
+
+    def __reduce__(self):
+        # Copies and pickles are plain dicts; rebuilding through __setitem__ would refuse.
+        return (dict, (dict(self),))
+
+
 class MetadataStore:
     """
     Registry of variable metadata for a Sample.
@@ -504,9 +535,11 @@ class MetadataStore:
     --------
     >>> store = MetadataStore(catalog=my_catalog)
     >>> store.infer_from_dataframe(df)
-    >>> store.set_label("q1", "How satisfied are you?")
+    >>> store.set_var_label("q1", "How satisfied are you?")
     >>> store.set_scheme("q1", "satisfaction")
-    >>> resolved = store.resolve_labels("q1")
+    >>> store.var_labels["q1"]
+    'How satisfied are you?'
+    >>> store.value_labels["q1"]  # from the "satisfaction" scheme
     """
 
     __slots__ = ("_vars", "_catalog", "_resolved_cache")
@@ -535,6 +568,36 @@ class MetadataStore:
     def variables(self) -> list[str]:
         """List of all variable names with metadata."""
         return list(self._vars.keys())
+
+    @property
+    def var_labels(self) -> Mapping[str, str]:
+        """Variable label of every variable that has one. Read-only."""
+        return _LabelView(
+            {var: meta.label for var, meta in self._vars.items() if meta.label},
+            where="meta.var_labels",
+            use="meta.set_var_label(var, label)",
+        )
+
+    @property
+    def value_labels(self) -> Mapping[str, Mapping[Category, str]]:
+        """Code-to-label mapping of every variable that has one, catalog schemes
+        resolved. Read-only."""
+        use = "meta.set_value_labels(var, {code: label})"
+        out = {}
+        for var in self._vars:
+            labels = self._resolve(var).labels
+            if labels:
+                out[var] = _LabelView(labels, where=f"meta.value_labels[{var!r}]", use=use)
+        return _LabelView(out, where="meta.value_labels", use=use)
+
+    def __getattr__(self, name: str) -> Any:
+        # Reached only for names that are not attributes.
+        use = _REMOVED.get(name)
+        if use is not None:
+            from svy.errors.label_errors import LabelAPIRemoved
+
+            raise LabelAPIRemoved.replaced(where=f"MetadataStore.{name}", use=use)
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
 
     def __len__(self) -> int:
         """Number of variables with metadata."""
@@ -638,7 +701,7 @@ class MetadataStore:
     # Label resolution
     # =========================================================================
 
-    def resolve_labels(self, var: str) -> ResolvedLabels:
+    def _resolve(self, var: str) -> ResolvedLabels:
         """
         Get fully resolved labels for a variable.
 
@@ -688,22 +751,11 @@ class MetadataStore:
         self._resolved_cache[var] = resolved
         return resolved
 
-    def resolve_all(self) -> dict[str, ResolvedLabels]:
-        """
-        Resolve labels for all variables.
-
-        Returns
-        -------
-        dict[str, ResolvedLabels]
-            Mapping of variable name to resolved labels.
-        """
-        return {var: self.resolve_labels(var) for var in self._vars}
-
     # =========================================================================
     # Convenience setters
     # =========================================================================
 
-    def set_label(self, var: str, label: str) -> Self:
+    def set_var_label(self, var: str, label: str) -> Self:
         """
         Set variable label (question text).
 
@@ -729,7 +781,7 @@ class MetadataStore:
         self.set(var, meta)
         return self
 
-    def set_labels(self, **labels: str) -> Self:
+    def set_var_labels(self, **labels: str) -> Self:
         """
         Set multiple variable labels.
 
@@ -745,14 +797,14 @@ class MetadataStore:
 
         Examples
         --------
-        >>> store.set_labels(
+        >>> store.set_var_labels(
         ...     q1="How satisfied are you?",
         ...     q2="Would you recommend us?",
         ...     age="What is your age?",
         ... )
         """
         for var, label in labels.items():
-            self.set_label(var, label)
+            self.set_var_label(var, label)
         return self
 
     def set_value_labels(self, var: str, labels: dict[Category, str]) -> Self:
