@@ -39,6 +39,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Removed
 
+- **BREAKING: `combine_samples(adjust=..., wave_labels=..., kind="cs")`.** `adjust=None` averaged the weights and `adjust="none"` kept them; the choice is now `average_wgts=` (True divides by k, False keeps each wave's weight, unset picks True for cross-sections and False for a panel). Wave labels are the keys of a mapping, so a label cannot drift from its sample: `svy.combine_samples({"2015-16": s1, "2017-18": s2})`; a list still works and labels the waves "wave 1".."wave k". The `"cs"` alias of `kind="cross_sectional"` is gone. `adjust=` and `wave_labels=` raise `PARAM_RENAMED` naming the replacement.
+
 - **BREAKING: `sample.sampling.allocate()`, `sample.sampling.group_sizes()` and `svy.selection.allocate()`.** Allocation is planning, not a sampling action: use `svy.SampleSize().allocate(n, pop_size=...)`, with `pop_size` the strata's counts (e.g. from `sample.estimation.total(...)` or your frame) or size totals, and pass `.n` to the selectors. The `"rate"` method is gone (a fixed fraction is n = f · N, proportional allocation), as is `"size"` (pass the size totals as `pop_size`).
 
 ## [0.31.0] — 2026-09-30

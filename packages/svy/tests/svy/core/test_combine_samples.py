@@ -54,7 +54,8 @@ def test_average_default_and_design(two_cycles):
 
 
 def test_wave_metadata(two_cycles):
-    c = svy.combine_samples(list(two_cycles), wave_labels=["2017-2018", "2019-2020"])
+    s1, s2 = two_cycles
+    c = svy.combine_samples({"2017-2018": s1, "2019-2020": s2})
     meta = c.meta.get("wave")
     assert meta.mtype == MeasurementType.ORDINAL
     assert meta.labels == {1: "2017-2018", 2: "2019-2020"}
@@ -65,8 +66,8 @@ def test_default_wave_labels(two_cycles):
     assert c.meta.get("wave").labels == {1: "wave 1", 2: "wave 2"}
 
 
-def test_adjust_none_keeps_weight(two_cycles):
-    c = svy.combine_samples(list(two_cycles), adjust="none")
+def test_average_wgts_false_keeps_weight(two_cycles):
+    c = svy.combine_samples(list(two_cycles), average_wgts=False)
     assert c.design.wgt == "combined_wgt"
     assert c.data["combined_wgt"].to_list() == c.data["w"].to_list()
 
@@ -94,9 +95,9 @@ def test_waves_may_name_their_weights_differently():
     assert got.filter(pl.col("wave") == 2)["w"].null_count() == 6  # null-filled, untouched
 
 
-def test_mean_invariant_to_adjust(two_cycles):
+def test_mean_invariant_to_averaging(two_cycles):
     ca = svy.combine_samples(list(two_cycles))
-    cn = svy.combine_samples(list(two_cycles), adjust="none")
+    cn = svy.combine_samples(list(two_cycles), average_wgts=False)
     ma = ca.estimation.mean("x").to_polars()
     mn = cn.estimation.mean("x").to_polars()
     assert ma["est"][0] == pytest.approx(mn["est"][0])
@@ -422,12 +423,7 @@ def test_nonconstant_wave_column_errors():
 
 def test_numeric_labels_out_of_order_warn(two_cycles):
     with pytest.warns(UserWarning, match="not increasing"):
-        svy.combine_samples(list(two_cycles), wave_labels=["2024", "2023"])
-
-
-def test_wave_labels_length_mismatch(two_cycles):
-    with pytest.raises(MethodError, match="wave_labels"):
-        svy.combine_samples(list(two_cycles), wave_labels=["only-one"])
+        svy.combine_samples(dict(zip(["2024", "2023"], two_cycles)))
 
 
 # ── column harmonization ────────────────────────────────────────────────────
@@ -544,7 +540,7 @@ def test_panel_identical_units():
     df1, df2 = _cycle([1, 1, 2, 2, 1, 2]), _cycle([1, 1, 2, 2, 1, 2], 2.0)
     c = svy.combine_samples([_sample(df1), _sample(df2)], kind="panel", case_id="id")
     assert c.design.stratum == ("strat",)  # NOT wave-qualified
-    assert c.design.wgt == "combined_wgt"  # adjust resolves to "none": each wave's own w
+    assert c.design.wgt == "combined_wgt"  # average_wgts resolves to False: each wave's own w
     assert c.design.case_id == "id"
     assert c.design.wave == "wave"
     assert c.design.psu == ("psu",)
@@ -557,7 +553,7 @@ def test_panel_units_absent_from_wave1_error(two_cycles):
 
 def test_panel_rejects_average(two_cycles):
     with pytest.raises(MethodError, match="half a person"):
-        svy.combine_samples(list(two_cycles), kind="panel", adjust="average")
+        svy.combine_samples(list(two_cycles), kind="panel", average_wgts=True)
 
 
 def test_panel_requires_case_id():
@@ -573,9 +569,9 @@ def test_panel_case_id_taken_from_designs():
     assert c.design.case_id == "id"
 
 
-def test_cs_alias_and_case_id_not_kept_on_cross_sections(two_cycles):
+def test_case_id_not_kept_on_cross_sections(two_cycles):
     s1, s2 = two_cycles
-    c = svy.combine_samples([s1, s2], kind="cs", case_id="id")
+    c = svy.combine_samples([s1, s2], kind="cross_sectional", case_id="id")
     assert c.design.case_id is None  # ids repeat across the stacked waves
     assert c.design.wave == "wave"
     assert c.design.stratum == ("wave", "strat")
@@ -730,7 +726,7 @@ def test_nchs_multispan_recipe(two_cycles):
     s1, s2 = two_cycles
     a = s1.weighting.normalize(factor=4 / 6)
     b = s2.weighting.normalize(factor=2 / 6)
-    c = svy.combine_samples([a, b], adjust="none")
+    c = svy.combine_samples([a, b], average_wgts=False)
     want = s1.data["w"].sum() * 4 / 6 + s2.data["w"].sum() * 2 / 6
     assert c.data["norm_wgt"].sum() == pytest.approx(want)
 
@@ -765,3 +761,75 @@ def test_nhanes_two_cycle_stack_matches_r_svydesign():
     t = c.estimation.total("HI_CHOL", drop_nulls=True).to_polars()
     assert t["est"][0] == pytest.approx(14317622.627336, abs=1e-3)
     assert t["se"][0] == pytest.approx(1010355.371850, abs=1e-3)
+
+
+# ── labelled waves and weight averaging ────────────────────────────────────
+
+
+def test_mapping_keys_label_a_reused_wave_column():
+    s1 = _sample(_cycle([1, 1, 2, 2, 1, 2], extra={"cycle": pl.lit(9)}))
+    s2 = _sample(_cycle([3, 3, 4, 4, 3, 4], extra={"cycle": pl.lit(10)}))
+    c = svy.combine_samples({"2015-16": s1, "2017-18": s2}, wave_name="cycle")
+    assert c.meta.get("cycle").labels == {9: "2015-16", 10: "2017-18"}
+
+
+def test_mapping_and_list_give_the_same_estimates(two_cycles):
+    s1, s2 = two_cycles
+    by_list = svy.combine_samples([s1, s2]).estimation.total("x").to_polars()
+    by_map = svy.combine_samples({"a": s1, "b": s2}).estimation.total("x").to_polars()
+    assert by_map["est"][0] == by_list["est"][0]
+    assert by_map["se"][0] == by_list["se"][0]
+
+
+@pytest.mark.parametrize("key", [1, ""])
+def test_mapping_keys_must_be_text(two_cycles, key):
+    s1, s2 = two_cycles
+    with pytest.raises(MethodError, match="samples"):
+        svy.combine_samples({key: s1, "b": s2})
+
+
+def test_average_wgts_true_is_the_cross_sectional_default(two_cycles):
+    default = svy.combine_samples(list(two_cycles))
+    explicit = svy.combine_samples(list(two_cycles), average_wgts=True)
+    assert explicit.data["combined_wgt"].to_list() == default.data["combined_wgt"].to_list()
+
+
+@pytest.mark.parametrize("bad", ["average", "none", 1])
+def test_average_wgts_takes_only_a_bool(two_cycles, bad):
+    with pytest.raises(MethodError, match="average_wgts"):
+        svy.combine_samples(list(two_cycles), average_wgts=bad)
+
+
+def test_averaging_without_weights_errors():
+    d = svy.Design(stratum="strat", psu="psu")
+    a = svy.Sample(_cycle([1, 1, 2, 2, 1, 2]), d)
+    b = svy.Sample(_cycle([3, 3, 4, 4, 3, 4]), d)
+    with pytest.raises(MethodError, match="average_wgts=False"):
+        svy.combine_samples([a, b])
+    assert svy.combine_samples([a, b], average_wgts=False).design.wgt is None
+
+
+@pytest.mark.parametrize(
+    "legacy, new",
+    [
+        ({"adjust": "average"}, "average_wgts"),
+        ({"adjust": "none"}, "average_wgts"),
+        ({"adjust": None}, "average_wgts"),
+        ({"wave_labels": ["a", "b"]}, "mapping"),
+    ],
+)
+def test_removed_parameters_name_their_replacement(two_cycles, legacy, new):
+    with pytest.raises(MethodError, match=new) as e:
+        svy.combine_samples(list(two_cycles), **legacy)
+    assert e.value.code == "PARAM_RENAMED"
+
+
+def test_unknown_keyword_is_a_type_error(two_cycles):
+    with pytest.raises(TypeError, match="nope"):
+        svy.combine_samples(list(two_cycles), nope=1)
+
+
+def test_cs_alias_removed(two_cycles):
+    with pytest.raises(MethodError, match="cross_sectional") as e:
+        svy.combine_samples(list(two_cycles), kind="cs")
+    assert "alias was removed" in (e.value.hint or "")
