@@ -17,11 +17,11 @@ from svy.metadata import MetadataStore
 def metadata_store():
     """MetadataStore with labels for testing."""
     store = MetadataStore()
-    store.set_label("gender", "Sex of respondent")
+    store.set_var_label("gender", "Sex of respondent")
     store.set_value_labels("gender", {1: "Male", 2: "Female"})
-    store.set_label("region", "Geographic region")
+    store.set_var_label("region", "Geographic region")
     store.set_value_labels("region", {"N": "North", "S": "South", "E": "East", "W": "West"})
-    store.set_label("satisfaction", "How satisfied are you?")
+    store.set_var_label("satisfaction", "How satisfied are you?")
     store.set_value_labels(
         "satisfaction",
         {
@@ -353,7 +353,7 @@ class TestMetadataPreservation:
     def test_update_can_change_metadata(self, one_way_table_with_meta, metadata_store):
         """update() can change metadata."""
         new_store = MetadataStore()
-        new_store.set_label("gender", "New Label")
+        new_store.set_var_label("gender", "New Label")
         updated = one_way_table_with_meta.update(metadata=new_store)
         assert updated._metadata is new_store
 
@@ -464,7 +464,7 @@ class TestEdgeCases:
     def test_metadata_with_no_labels_for_variable(self):
         """Metadata store without labels for the table variable."""
         store = MetadataStore()
-        store.set_label("other_var", "Other Variable")  # Different variable
+        store.set_var_label("other_var", "Other Variable")  # Different variable
 
         tbl = Table.one_way(
             rowvar="gender",

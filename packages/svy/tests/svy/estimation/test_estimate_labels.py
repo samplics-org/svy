@@ -17,12 +17,12 @@ from svy.metadata import MetadataStore
 def metadata_store():
     """MetadataStore with labels for testing."""
     store = MetadataStore()
-    store.set_label("region", "Geographic Region")
+    store.set_var_label("region", "Geographic Region")
     store.set_value_labels("region", {"N": "North", "S": "South", "E": "East", "W": "West"})
-    store.set_label("gender", "Sex of Respondent")
+    store.set_var_label("gender", "Sex of Respondent")
     store.set_value_labels("gender", {1: "Male", 2: "Female"})
-    store.set_label("income", "Annual Income ($)")
-    store.set_label("employed", "Employment Status")
+    store.set_var_label("income", "Annual Income ($)")
+    store.set_var_label("employed", "Employment Status")
     store.set_value_labels("employed", {0: "Unemployed", 1: "Employed"})
     return store
 

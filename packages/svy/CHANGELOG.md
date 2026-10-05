@@ -29,6 +29,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 - **`sample.check()` checks the data against its design** and returns one report with a section per declared part, `None` for a part the design does not declare: `weights` (null, non-finite, negative and zero counts; min, max, max/min, sum, mean, Kish design effect and effective sample size over the positive weights), `case_id` (unique, within wave on a panel; null ids and examples of repeated ones; several id columns together), `nesting` (PSU codes found in more than one stratum: svy treats a PSU as the (stratum, PSU) pair, as R's `nest=TRUE` does, so this is reported, not refused) and `singletons` (strata with one PSU and whether the singleton rule handles them). It never raises on the data's content; `limit=` caps the examples. `rake`'s margin check, the join duplicate check, the panel case-id check and `deff_w` share its code.
 
+- **`sample.meta.var_labels` and `sample.meta.value_labels`** give every variable's label and code-to-label mapping, catalog schemes resolved: `meta.var_labels["RIAGENDR"]` is `"Gender"`, `meta.value_labels["RIAGENDR"]` is `{1: "Male", 2: "Female"}`. Both are read-only: an edit raises `LabelsReadOnly` (also a `TypeError`) naming the setter, since a copy would silently not change the metadata; `dict(...)` gives an editable copy.
+
 ### Changed
 
 - **`SampleSize().compare_props` and `estimate_mean` take only `method="wald"`.** `compare_props` listed `"miettinen-nurminen"`, `"newcombe"` and `"farrington-manning"`, and `estimate_mean` listed `"fleiss"`, but none were implemented and they raised `NotImplementedError`. They now raise `MethodError` (`INVALID_CHOICE`) with a hint, as `compare_means` does; `var_mode=` still sets the Wald variance for two proportions. The `compare_*` docstrings now state that the two groups are independent samples: correlation between panel rounds is not accounted for.
@@ -38,6 +40,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **`read_stata` returns Stata integer variables as Int64.** `byte`, `int` and `long` variables were Float64, and `write_stata` wrote integer columns as `double`. Integer columns now keep their type both ways, so a code `1` matches the value label keyed `1`. Needs the svy-io release with integer storage (see its changelog).
 
 ### Removed
+
+- **BREAKING: `meta.resolve_labels()`, `meta.resolve_all()`, `sample.resolve_labels()` and `sample.labels`.** Use `meta.var_labels` and `meta.value_labels`. `meta.set_label()` / `set_labels()` are now `set_var_label()` / `set_var_labels()`, the names `Sample` already used. `ResolvedLabels` is no longer exported from `svy.metadata`. Each old name raises `LabelAPIRemoved` (also an `AttributeError`) naming its replacement.
 
 - **BREAKING: `sample.sampling.allocate()`, `sample.sampling.group_sizes()` and `svy.selection.allocate()`.** Allocation is planning, not a sampling action: use `svy.SampleSize().allocate(n, pop_size=...)`, with `pop_size` the strata's counts (e.g. from `sample.estimation.total(...)` or your frame) or size totals, and pass `.n` to the selectors. The `"rate"` method is gone (a fixed fraction is n = f · N, proportional allocation), as is `"size"` (pass the size totals as `pop_size`).
 

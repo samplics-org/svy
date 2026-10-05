@@ -306,7 +306,7 @@ def build_metadata_for_export(
             var_labels[var] = str(meta.label)
 
         # Get value labels (direct or resolved from scheme)
-        resolved = store.resolve_labels(var)
+        resolved = store._resolve(var)
         if resolved.has_value_labels:
             # ensure codes are JSON-serializable primitives; texts are str
             value_labels[var] = {

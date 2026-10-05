@@ -22,7 +22,7 @@ def _panel(waves=(1, 2, 3)):
     df = df.with_columns(pl.col("wave").replace_strict(codes))
     s = svy.Sample(df, svy.Design(case_id="id", wave="wave", wgt="w"))
     s.meta.set_value_labels("y", {1: "one", 2: "two"})
-    s.meta.set_label("y", "Outcome")
+    s.meta.set_var_label("y", "Outcome")
     return s
 
 

@@ -49,7 +49,7 @@ def sample() -> svy.Sample:
 @pytest.fixture(scope="module")
 def labelled(sample) -> svy.Sample:
     s = svy.Sample(sample.data, sample.design)
-    s.meta.set_label("zone", "Zone of residence")
+    s.meta.set_var_label("zone", "Zone of residence")
     s.meta.set_value_labels("zone", {1: "Urban", 2: "Rural", 3: "Peri-urban"})
     s.meta.set_value_labels("sex", {"f": "Female", "m": "Male"})
     return s

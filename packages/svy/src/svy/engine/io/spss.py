@@ -102,7 +102,7 @@ def _write_spss(
             continue
         if meta.label:
             var_labels[var] = meta.label
-        resolved = store.resolve_labels(var)
+        resolved = store._resolve(var)
         if resolved.has_value_labels:
             # SPSS stores value-label keys as strings.
             value_labels.append(

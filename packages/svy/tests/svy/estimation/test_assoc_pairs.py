@@ -27,8 +27,8 @@ def sample() -> Sample:
 
 @pytest.fixture
 def labelled(sample) -> Sample:
-    sample.meta.set_label("api00", "API 2000")
-    sample.meta.set_label("stype", "School type")
+    sample.meta.set_var_label("api00", "API 2000")
+    sample.meta.set_var_label("stype", "School type")
     sample.meta.set_value_labels("stype", {"E": "Elementary", "H": "High", "M": "Middle"})
     return sample
 

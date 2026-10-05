@@ -254,6 +254,6 @@ def test_a_catalog_labelled_variable_prints_every_code():
         "district", VariableMeta(name="district", scheme_ref=SchemeRef(concept="gm_district"))
     )
 
-    resolved = store.resolve_labels("district")
+    resolved = store._resolve("district")
     assert resolved.labels[99] == "Refused"
     assert resolved.labels[101] == "Banjul"

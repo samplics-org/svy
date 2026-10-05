@@ -57,10 +57,10 @@ def sample():
 
 @pytest.fixture
 def labelled(sample):
-    sample.meta.set_label("api00", "API 2000")
-    sample.meta.set_label("api99", "API 1999")
-    sample.meta.set_label("enroll", "Enrollment")
-    sample.meta.set_label("hi_api", "High API")
+    sample.meta.set_var_label("api00", "API 2000")
+    sample.meta.set_var_label("api99", "API 1999")
+    sample.meta.set_var_label("enroll", "Enrollment")
+    sample.meta.set_var_label("hi_api", "High API")
     return sample
 
 

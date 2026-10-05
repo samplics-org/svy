@@ -481,7 +481,7 @@ class Estimate:
         resolve = use_labels if use_labels is not None else self._resolve_use_labels()
         if not resolve or self._metadata is None:
             return var
-        resolved = self._metadata.resolve_labels(var)
+        resolved = self._metadata._resolve(var)
         return resolved.var_label if resolved.has_var_label else var
 
     def _get_value_label(self, var: str, value: Category, use_labels: bool | None = None) -> str:
@@ -489,7 +489,7 @@ class Estimate:
         resolve = use_labels if use_labels is not None else self._resolve_use_labels()
         if not resolve or self._metadata is None:
             return _display_level(value)
-        resolved = self._metadata.resolve_labels(var)
+        resolved = self._metadata._resolve(var)
         # Try the value as-is first
         label = resolved.display(value)
         # If we got back the string representation, try converting to int
@@ -678,7 +678,7 @@ class Estimate:
         n_by = len(self.estimates[0].by or ())
         out: dict[str, VarLabels] = {}
         for col in names:
-            resolved = self._metadata.resolve_labels(col)
+            resolved = self._metadata._resolve(col)
             values: dict[Any, str] = {}
             if resolved.has_value_labels:
                 for p in self.estimates:
@@ -690,7 +690,7 @@ class Estimate:
             for var in dict.fromkeys(v for p in self.estimates for v in (p.y, p.x)):
                 if var is None or var in out:
                     continue
-                resolved = self._metadata.resolve_labels(var)
+                resolved = self._metadata._resolve(var)
                 out[var] = VarLabels(resolved.var_label if resolved.has_var_label else "", {})
         return out
 

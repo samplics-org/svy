@@ -13,12 +13,11 @@ from svy.metadata import (
     CategoryScheme,
     Label,
     MetadataStore,
-    ResolvedLabels,
     SchemeRef,
     VariableMeta,
 )
 from svy.metadata.labels import SchemeEntry
-from svy.metadata.variable_meta import ValueLabel
+from svy.metadata.variable_meta import ResolvedLabels, ValueLabel
 
 
 class TestValueLabelRoundTrip:
@@ -54,7 +53,7 @@ class TestValueLabelRoundTrip:
         the workflow that would have hit it.
         """
         store = MetadataStore()
-        store.set_label("sex", "Sex of respondent")
+        store.set_var_label("sex", "Sex of respondent")
         # 8 is a value like any other: it gets a label and prints as one.
         store.set_value_labels("sex", {1: "Male", 2: "Female", 8: "Don't know"})
 
@@ -114,7 +113,7 @@ class TestCloneNormalizes:
             labels={"q1": "Satisfaction with service"},
             categories={"q1": {1: "Yes", 2: "No"}},
         )
-        assert out.labels["q1"] == {1: "Yes", 2: "No"}
+        assert out.meta.value_labels["q1"] == {1: "Yes", 2: "No"}
 
 
 class TestSchemeRef:
@@ -364,7 +363,7 @@ class TestMetadataStore:
     def test_set_label(self):
         """Set variable label convenience method."""
         store = MetadataStore()
-        store.set_label("q1", "What is your age?")
+        store.set_var_label("q1", "What is your age?")
 
         assert store.get("q1") is not None
         assert store.get("q1").label == "What is your age?"
@@ -373,7 +372,7 @@ class TestMetadataStore:
     def test_set_labels(self):
         """Set multiple labels."""
         store = MetadataStore()
-        store.set_labels(
+        store.set_var_labels(
             q1="Question 1",
             q2="Question 2",
             q3="Question 3",
@@ -427,14 +426,14 @@ class TestMetadataStore:
             ),
         )
 
-        resolved = store.resolve_labels("q1")
+        resolved = store._resolve("q1")
         assert resolved.var_label == "Test"
         assert resolved.labels == {1: "Yes", 0: "No"}
 
     def test_resolve_labels_empty(self):
         """Resolve returns empty for unknown variable."""
         store = MetadataStore()
-        resolved = store.resolve_labels("unknown")
+        resolved = store._resolve("unknown")
 
         assert resolved.var_label == ""
         assert resolved.labels == {}
@@ -444,8 +443,8 @@ class TestMetadataStore:
         store = MetadataStore()
         store.set("q1", VariableMeta(name="q1", label="Test"))
 
-        r1 = store.resolve_labels("q1")
-        r2 = store.resolve_labels("q1")
+        r1 = store._resolve("q1")
+        r2 = store._resolve("q1")
 
         # Same object from cache
         assert r1 is r2
@@ -455,12 +454,12 @@ class TestMetadataStore:
         store = MetadataStore()
         store.set("q1", VariableMeta(name="q1", label="Test 1"))
 
-        r1 = store.resolve_labels("q1")
+        r1 = store._resolve("q1")
         assert r1.var_label == "Test 1"
 
         store.set("q1", VariableMeta(name="q1", label="Test 2"))
 
-        r2 = store.resolve_labels("q1")
+        r2 = store._resolve("q1")
         assert r2.var_label == "Test 2"
         assert r1 is not r2
 
@@ -491,7 +490,7 @@ class TestMetadataStore:
     def test_infer_preserves_existing(self):
         """Infer doesn't overwrite existing by default."""
         store = MetadataStore()
-        store.set_label("age", "What is your age?")
+        store.set_var_label("age", "What is your age?")
 
         df = pl.DataFrame({"age": [25, 30], "name": ["A", "B"]})
         store.infer_from_dataframe(df, overwrite=False)
@@ -504,7 +503,7 @@ class TestMetadataStore:
     def test_infer_overwrite(self):
         """Infer can overwrite existing."""
         store = MetadataStore()
-        store.set_label("age", "What is your age?")
+        store.set_var_label("age", "What is your age?")
 
         df = pl.DataFrame({"age": [25, 30]})
         store.infer_from_dataframe(df, overwrite=True)
@@ -515,9 +514,9 @@ class TestMetadataStore:
     def test_align_to_dataframe(self):
         """Align removes dropped columns, adds new ones."""
         store = MetadataStore()
-        store.set_label("a", "Column A")
-        store.set_label("b", "Column B")
-        store.set_label("c", "Column C")
+        store.set_var_label("a", "Column A")
+        store.set_var_label("b", "Column B")
+        store.set_var_label("c", "Column C")
 
         # DataFrame only has 'b' and 'd'
         df = pl.DataFrame({"b": [1, 2], "d": [3, 4]})
@@ -535,8 +534,8 @@ class TestMetadataStore:
         """Convenience methods support chaining."""
         store = MetadataStore()
         result = (
-            store.set_label("q1", "Question 1")
-            .set_label("q2", "Question 2")
+            store.set_var_label("q1", "Question 1")
+            .set_var_label("q2", "Question 2")
             .set_value_labels("q1", {1: "Yes", 0: "No"})
             .set_type("q2", MeasurementType.ORDINAL)
         )
@@ -547,9 +546,9 @@ class TestMetadataStore:
     def test_variables_property(self):
         """Variables property returns list of names."""
         store = MetadataStore()
-        store.set_label("a", "A")
-        store.set_label("b", "B")
-        store.set_label("c", "C")
+        store.set_var_label("a", "A")
+        store.set_var_label("b", "B")
+        store.set_var_label("c", "C")
 
         vars = store.variables
         assert set(vars) == {"a", "b", "c"}
@@ -557,8 +556,8 @@ class TestMetadataStore:
     def test_iteration(self):
         """Can iterate over variable names."""
         store = MetadataStore()
-        store.set_label("a", "A")
-        store.set_label("b", "B")
+        store.set_var_label("a", "A")
+        store.set_var_label("b", "B")
 
         names = list(store)
         assert set(names) == {"a", "b"}
@@ -592,9 +591,9 @@ class TestMetadataStore:
     def test_summary_specific_vars(self):
         """Summary can filter to specific variables."""
         store = MetadataStore()
-        store.set_label("q1", "Question 1")
-        store.set_label("q2", "Question 2")
-        store.set_label("q3", "Question 3")
+        store.set_var_label("q1", "Question 1")
+        store.set_var_label("q2", "Question 2")
+        store.set_var_label("q3", "Question 3")
 
         summary = store.summary(["q1", "q3"])
         assert len(summary) == 2
@@ -606,7 +605,7 @@ class TestMetadataStore:
     def test_summary_unknown_var(self):
         """Summary handles unknown variables gracefully."""
         store = MetadataStore()
-        store.set_label("q1", "Question 1")
+        store.set_var_label("q1", "Question 1")
 
         summary = store.summary(["q1", "unknown"])
         assert len(summary) == 2
@@ -650,9 +649,9 @@ class TestMetadataStore:
     def test_inspect_multiple(self):
         """Inspect returns detailed metadata for multiple variables."""
         store = MetadataStore()
-        store.set_label("q1", "Question 1")
-        store.set_label("q2", "Question 2")
-        store.set_label("q3", "Question 3")
+        store.set_var_label("q1", "Question 1")
+        store.set_var_label("q2", "Question 2")
+        store.set_var_label("q3", "Question 3")
 
         result = store.inspect(["q1", "q2"])
         assert len(result) == 2
@@ -662,7 +661,7 @@ class TestMetadataStore:
     def test_inspect_unknown_var(self):
         """Inspect handles unknown variables gracefully."""
         store = MetadataStore()
-        store.set_label("q1", "Question 1")
+        store.set_var_label("q1", "Question 1")
 
         result = store.inspect(["q1", "unknown"])
         assert len(result) == 2
@@ -674,9 +673,9 @@ class TestMetadataStore:
     def test_coverage(self):
         """Coverage shows metadata vs data overlap."""
         store = MetadataStore()
-        store.set_label("q1", "Question 1")
-        store.set_label("q2", "Question 2")
-        store.set_label("orphan", "Orphaned variable")  # not in data
+        store.set_var_label("q1", "Question 1")
+        store.set_var_label("q2", "Question 2")
+        store.set_var_label("orphan", "Orphaned variable")  # not in data
 
         df = pl.DataFrame({"q1": [1, 2], "q2": [3, 4], "unlabeled": [5, 6]})
 
@@ -708,7 +707,7 @@ class TestMetadataStore:
     def test_unlabeled(self):
         """Unlabeled returns variables in data without labels."""
         store = MetadataStore()
-        store.set_label("q1", "Question 1")
+        store.set_var_label("q1", "Question 1")
         store.set("q2", VariableMeta(name="q2"))  # no label
 
         df = pl.DataFrame({"q1": [1], "q2": [2], "q3": [3]})
@@ -721,9 +720,9 @@ class TestMetadataStore:
     def test_orphaned(self):
         """Orphaned returns variables in metadata but not in data."""
         store = MetadataStore()
-        store.set_label("q1", "Question 1")
-        store.set_label("old_var", "Old variable")
-        store.set_label("deleted", "Deleted variable")
+        store.set_var_label("q1", "Question 1")
+        store.set_var_label("old_var", "Old variable")
+        store.set_var_label("deleted", "Deleted variable")
 
         df = pl.DataFrame({"q1": [1], "new_var": [2]})
 
@@ -748,15 +747,15 @@ class TestUpdate:
         """Data-side knowledge: labels already chosen."""
         store = MetadataStore()
         store.set_value_labels("age", {98: "Don't know"})
-        store.set_label("sex", "Sex (recoded 2024)")
+        store.set_var_label("sex", "Sex (recoded 2024)")
         return store
 
     @staticmethod
     def _spec() -> MetadataStore:
         """Instrument-side knowledge: question wording and value labels."""
         store = MetadataStore()
-        store.set_label("age", "How old are you?")
-        store.set_label("sex", "Sex?")
+        store.set_var_label("age", "How old are you?")
+        store.set_var_label("sex", "Sex?")
         store.set_value_labels("sex", {1: "Male", 2: "Female"})
         return store
 
@@ -804,7 +803,7 @@ class TestUpdate:
 
     def test_variables_only_in_this_store_are_untouched(self):
         store = self._analyst()
-        store.set_label("weight", "Sampling weight")
+        store.set_var_label("weight", "Sampling weight")
         store.update(self._spec())
         assert store.get("weight").label == "Sampling weight"
 
@@ -821,9 +820,9 @@ class TestUpdate:
     def test_resolved_labels_see_the_merged_value(self):
         # the cache is keyed per variable, so a merge must invalidate it
         store = self._analyst()
-        assert store.resolve_labels("sex").labels == {}
+        assert store._resolve("sex").labels == {}
         store.update(self._spec())
-        assert store.resolve_labels("sex").labels == {1: "Male", 2: "Female"}
+        assert store._resolve("sex").labels == {1: "Male", 2: "Female"}
 
 
 class TestIntegration:
@@ -845,7 +844,7 @@ class TestIntegration:
         store.infer_from_dataframe(df)
 
         # Add labels
-        store.set_labels(
+        store.set_var_labels(
             gender="What is your gender?",
             age="What is your age?",
             satisfaction="How satisfied are you?",
@@ -869,11 +868,11 @@ class TestIntegration:
         store.set_categories("satisfaction", [1, 2, 3, 4, 5], ordered=True)
 
         # Resolve and use
-        gender_labels = store.resolve_labels("gender")
+        gender_labels = store._resolve("gender")
         assert gender_labels.display(1) == "Male"
         assert gender_labels.display(2) == "Female"
 
-        sat_labels = store.resolve_labels("satisfaction")
+        sat_labels = store._resolve("satisfaction")
         assert sat_labels.display(5) == "Very satisfied"
 
         # Apply to data
@@ -885,7 +884,7 @@ class TestIntegration:
         store = MetadataStore()
 
         # Set up some metadata
-        store.set_labels(
+        store.set_var_labels(
             q1="How satisfied are you?",
             q2="Would you recommend us?",
             old_q="Old question (removed from survey)",

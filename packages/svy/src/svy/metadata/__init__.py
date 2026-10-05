@@ -9,14 +9,12 @@ from svy.metadata.variable_meta import (
     # Registry
     MetadataStore,
     # Core metadata types
-    ResolvedLabels,
     SchemeRef,
     VariableMeta,
 )
 
 
 __all__ = [
-    "ResolvedLabels",
     "SchemeRef",
     "VariableMeta",
     "MetadataStore",

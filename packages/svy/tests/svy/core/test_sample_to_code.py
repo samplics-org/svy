@@ -142,7 +142,7 @@ def test_output_is_deterministic_and_compiles(base):
 
 def test_no_metadata_in_the_script(api):
     s = svy.Sample(api, svy.Design(wgt="pw", psu="dnum"))
-    s.meta.set_label("stype", "School type")
+    s.meta.set_var_label("stype", "School type")
     assert "School type" not in s.to_code()
 
 

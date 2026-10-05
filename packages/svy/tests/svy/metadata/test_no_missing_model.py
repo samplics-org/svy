@@ -16,18 +16,17 @@ from svy.metadata import (
     CategoryScheme,
     LabellingCatalog,
     MetadataStore,
-    ResolvedLabels,
     VariableMeta,
 )
-from svy.metadata.variable_meta import SchemeRef
+from svy.metadata.variable_meta import ResolvedLabels, SchemeRef
 
 
 def test_a_declared_code_is_an_ordinary_labelled_value():
     store = MetadataStore()
-    store.set_label("age", "Age")
+    store.set_var_label("age", "Age")
     store.set_value_labels("age", {98: "Don't know", 99: "Refused"})
 
-    resolved = store.resolve_labels("age")
+    resolved = store._resolve("age")
     assert resolved.var_label == "Age"
     assert resolved.labels == {98: "Don't know", 99: "Refused"}
     assert resolved.display(99) == "Refused"
@@ -40,7 +39,7 @@ def test_the_same_holds_for_a_code_that_arrives_from_a_catalogue():
     store = MetadataStore(catalog=catalog)
     store.set("q", VariableMeta(name="q", scheme_ref=SchemeRef(concept="yesno")))
 
-    assert store.resolve_labels("q").labels[99] == "Refused"
+    assert store._resolve("q").labels[99] == "Refused"
 
 
 def test_there_is_no_missing_model_to_declare():
@@ -77,7 +76,7 @@ def test_a_declared_code_does_not_change_an_estimate():
 
     # labelling the code changes what it is called, and nothing else
     assert df.select(pl.col("age").mean()).item() == pytest.approx(57.6)
-    assert store.resolve_labels("age").labels == {99: "Refused"}
+    assert store._resolve("age").labels == {99: "Refused"}
 
 
 def test_the_writers_have_nothing_to_declare_as_user_missing():
@@ -93,10 +92,10 @@ def test_the_writers_have_nothing_to_declare_as_user_missing():
     `svy_io` exposes no `write_spss` for the writer to call.
     """
     store = MetadataStore()
-    store.set_label("q", "Q")
+    store.set_var_label("q", "Q")
     store.set_value_labels("q", {1: "Yes", 99: "Refused"})
 
-    resolved = store.resolve_labels("q")
+    resolved = store._resolve("q")
     assert resolved.var_label == "Q"
     assert resolved.labels == {1: "Yes", 99: "Refused"}
     assert not hasattr(store.get("q"), "missing")
