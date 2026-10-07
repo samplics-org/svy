@@ -16,6 +16,7 @@ def sample():
             "w": rng.uniform(1, 3, n),
             "area": rng.integers(1, 3, n).astype(float),
             "reg": rng.integers(1, 3, n),
+            "sex": rng.integers(1, 3, n),
             "y": rng.uniform(0, 1, n),
         }
     )
@@ -85,3 +86,22 @@ def test_saved_result_still_round_trips(sample):
     t = sample.categorical.ttest("y", group="area")
     back = svy.serialize.from_json(svy.serialize.to_json(t))
     assert back.groups.levels == [1.0, 2.0]
+
+
+def test_by_headers_use_labels(sample):
+    sample.set_value_labels("reg", {1: "Norte", 2: "Sul"})
+    out = sample.categorical.ttest("y", group="area", by="reg").__plain_str__()
+    assert "── reg = Norte " in out and "── reg = Sul " in out
+
+
+def test_multi_by_headers_use_each_variables_labels(sample):
+    sample.set_value_labels("reg", {1: "Norte", 2: "Sul"})
+    sample.set_value_labels("sex", {1: "M", 2: "F"})
+    out = sample.categorical.ttest("y", group="area", by=["reg", "sex"]).__plain_str__()
+    assert "── reg = Sul, sex = F " in out
+
+
+def test_by_headers_use_labels_false(sample):
+    sample.set_value_labels("reg", {1: "Norte", 2: "Sul"})
+    r = sample.categorical.ttest("y", group="area", by="reg", use_labels=False)
+    assert "── reg = 1 " in r.__plain_str__()

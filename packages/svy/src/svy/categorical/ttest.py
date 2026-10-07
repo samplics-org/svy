@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from typing import TYPE_CHECKING, Any, ClassVar, Iterator, Literal, Self, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar, Iterator, Literal, Mapping, Self, Sequence
 
 import msgspec
 
@@ -30,6 +30,8 @@ from svy.utils.formats import _fmt_fixed
 
 if TYPE_CHECKING:
     import polars as pl
+
+    from svy.metadata.variable_meta import ResolvedLabels
 
 log = logging.getLogger(__name__)
 
@@ -130,6 +132,13 @@ class GroupLevels(msgspec.Struct, frozen=True):
     var: str
     levels: tuple[Category, Category]
     labels: tuple[str, str] | None = None  # value labels of `levels`; None prints codes
+
+    def labelled(self, labels: ResolvedLabels | None) -> GroupLevels:
+        """A copy carrying `labels`' text for each level; unchanged when None."""
+        if labels is None:
+            return self
+        a, b = self.levels
+        return msgspec.structs.replace(self, labels=(labels.display(a), labels.display(b)))
 
     def label_of(self, level: Category | None) -> str | None:
         if self.labels is None:
@@ -858,9 +867,11 @@ class TTestByResult:
         alpha: float = 0.05,
         where_clause: str | None = None,
         findings: Sequence[SvyWarning] = (),
+        by_labels: Mapping[str, ResolvedLabels] | None = None,
     ) -> None:
         self.results = results
         self.by = by
+        self.by_labels = dict(by_labels or {})
         self.y = y
         self.mean_h0 = mean_h0
         self.groups = groups
@@ -893,10 +904,16 @@ class TTestByResult:
         level_str = _level_text(by_level)
         parts = level_str.split(_BY_SEP)
         if len(parts) == len(self._by_list) and len(parts) > 1:
-            return ", ".join(f"{var} = {val}" for var, val in zip(self._by_list, parts))
-        # Single by or unable to split — use var = level format
-        by_name = ", ".join(self._by_list)
-        return f"{by_name} = {level_str}"
+            return ", ".join(
+                f"{var} = {self._by_text(var, val)}" for var, val in zip(self._by_list, parts)
+            )
+        if len(self._by_list) == 1:
+            level_str = self._by_text(self._by_list[0], level_str)
+        return f"{', '.join(self._by_list)} = {level_str}"
+
+    def _by_text(self, var: str, text: str) -> str:
+        labels = self.by_labels.get(var)
+        return text if labels is None else labels.display(text)
 
     # ── Width configuration ──────────────────────────────────────────────
 
