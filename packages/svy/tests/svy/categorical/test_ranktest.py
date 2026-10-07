@@ -512,5 +512,33 @@ class TestRankScoreMethodEnum:
             _normalize_rank_method(1)
 
 
+class TestDefaultScore:
+    def test_no_score_is_kruskal_wallis_matching_r(self, sample_strat_clust):
+        r = sample_strat_clust.categorical.ranktest(y="income", group="sex", drop_nulls=True)
+        assert r.stats.value == pytest.approx(0.784492299264955, rel=REL)
+        assert r.stats.p_value == pytest.approx(0.436117228247927, rel=REL)
+
+    def test_no_score_equals_explicit_on_k_samples(self, sample_strat_clust):
+        kw = dict(y="income", group="educ", drop_nulls=True)
+        default = sample_strat_clust.categorical.ranktest(**kw)
+        explicit = sample_strat_clust.categorical.ranktest(**kw, score="kruskal-wallis")
+        assert default.stats.value == explicit.stats.value
+        assert default.method_name == explicit.method_name
+
+    def test_score_fn_alone_still_works(self, sample_strat_clust):
+        r = sample_strat_clust.categorical.ranktest(
+            y="income", group="sex", score_fn=lambda rk, n: rk / n, drop_nulls=True
+        )
+        assert r.stats.value == pytest.approx(0.784492299264955, rel=REL)
+
+    def test_score_and_score_fn_together_still_raise(self, sample_strat_clust):
+        from svy.errors import MethodError
+
+        with pytest.raises(MethodError, match="cannot specify both"):
+            sample_strat_clust.categorical.ranktest(
+                y="income", group="sex", score="median", score_fn=lambda rk, n: rk / n
+            )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

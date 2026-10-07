@@ -946,7 +946,8 @@ class Categorical:
 
         ``score`` names the rank score (``"kruskal-wallis"``,
         ``"vander-waerden"`` or ``"median"``); ``score_fn`` supplies one
-        instead. ``method`` is the variance method: None (the default) is
+        instead. With neither, the score is ``"kruskal-wallis"`` (Wilcoxon for
+        two groups), R's ``svyranktest`` default. ``method`` is the variance method: None (the default) is
         Taylor linearization; ``"replication"`` re-totals the full-sample
         influence values with each replicate weight, as R's ``svyranktest``
         on a ``svrepdesign`` does (the ranks are not recomputed per
@@ -967,14 +968,6 @@ class Categorical:
             )
 
         # --- Validate score / score_fn ---
-        if score is None and score_fn is None:
-            raise MethodError.invalid_choice(
-                where="ranktest",
-                param="score / score_fn",
-                got=None,
-                allowed=["kruskal-wallis", "vander-waerden", "median"],
-                hint="Provide score='kruskal-wallis' or similar.",
-            )
         if score is not None and score_fn is not None:
             raise MethodError.not_applicable(
                 where="ranktest",
@@ -998,7 +991,7 @@ class Categorical:
             )
 
         # Normalize and map to Rust string
-        _method = _normalize_rank_method(score)
+        _method = _normalize_rank_method(score if score is not None else "kruskal-wallis")
         score_method_str = {
             _RankScoreMethod.KRUSKAL_WALLIS: "wilcoxon",
             _RankScoreMethod.VANDER_WAERDEN: "vanderwaerden",
