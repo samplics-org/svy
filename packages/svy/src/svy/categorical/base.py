@@ -64,6 +64,7 @@ except ImportError:
 if TYPE_CHECKING:
     from svy.categorical.ranktest import RankTestByResult
     from svy.core.sample import Sample
+    from svy.metadata.variable_meta import ResolvedLabels
 
 log = logging.getLogger(__name__)
 
@@ -635,6 +636,7 @@ class Categorical:
         alpha: float = 0.05,
         alternative: Literal["two-sided", "less", "greater"] = "two-sided",
         drop_nulls: bool = False,
+        use_labels: bool | None = None,
     ) -> TTestOneGroup | TTestTwoGroups | TTestByResult:
         """
         Perform a design-based t-test.
@@ -657,6 +659,9 @@ class Categorical:
             alternative: Alternative hypothesis. One of "two-sided", "less", "greater".
                 Default "two-sided".
             drop_nulls: If True, drop rows with missing values. Default False.
+            use_labels: Show the group's value labels instead of its codes. None
+                (the default) shows them when the group has any; the result keeps
+                the codes either way.
 
         Returns:
             TTestOneGroup for one-sample tests, TTestTwoGroups for two-sample tests.
@@ -664,6 +669,11 @@ class Categorical:
         """
         alpha = validate_alpha(alpha, where="Sample.categorical.ttest")
         rep_kw = self._replication(method, where="Sample.categorical.ttest")
+        group_labels = None
+        if group is not None and use_labels is not False:
+            resolved = self._sample.meta._resolve(group)
+            if resolved.has_value_labels:
+                group_labels = resolved
         # The population-size column has to survive prepare_data's projection
         # for the FPC to be computable below.
         pop_size = self._sample._design.pop_size if rep_kw is None else None
@@ -760,6 +770,7 @@ class Categorical:
                     by=by,
                     by_level=by_level,
                     group_lookup=group_lookup,
+                    group_labels=group_labels,
                 )
                 results.append(res)
             # Determine shared metadata for TTestByResult header
@@ -789,6 +800,7 @@ class Categorical:
                 by=None,
                 by_level=None,
                 group_lookup=group_lookup,
+                group_labels=group_labels,
             )
             return msgspec.structs.replace(one, findings=tuple(findings))
 
@@ -805,6 +817,7 @@ class Categorical:
         by: str | None,
         by_level: object,
         group_lookup: dict[str, object] | None = None,
+        group_labels: ResolvedLabels | None = None,
     ) -> TTestOneGroup | TTestTwoGroups:
         """Unpack a single row from the ttest result DataFrame into a Python container."""
         from scipy.stats import t as t_dist
@@ -906,7 +919,13 @@ class Categorical:
 
             return TTestTwoGroups(
                 y=y_name,
-                groups=GroupLevels(var=group, levels=(level_0, level_1)),
+                groups=GroupLevels(
+                    var=group,
+                    levels=(level_0, level_1),
+                    labels=None
+                    if group_labels is None
+                    else (group_labels.display(level_0), group_labels.display(level_1)),
+                ),
                 alternative=alternative,
                 diff=[diff_est],
                 estimates=[
