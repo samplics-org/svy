@@ -10,6 +10,7 @@ from typing import (
     Final,
     Iterable,
     Iterator,
+    Literal,
     Self,
     Sequence,
     TypeGuard,
@@ -167,6 +168,7 @@ _TBL_SLOTS: tuple[str, ...] = (
     "rowvals",
     "colvals",
     "findings",
+    "share_of",
     "_frozen",
     # presentation-only fields (mutable through properties)
     "_decimals",
@@ -195,6 +197,7 @@ class Table:
     alpha: float
     rowvals: Sequence[Category] | None
     colvals: Sequence[Category] | None
+    share_of: Literal["total", "row", "col"]  # what each cell is a share of
     _frozen: bool
     _decimals: int | dict[str, int] | None
     _print_width: int | None
@@ -214,6 +217,7 @@ class Table:
         alpha: float = 0.05,
         metadata: "MetadataStore | None" = None,
         findings: Sequence[SvyWarning] = (),
+        share_of: Literal["total", "row", "col"] = "total",
     ) -> None:
         if not (0.0 < float(alpha) < 1.0):
             raise MethodError.invalid_range(
@@ -252,6 +256,7 @@ class Table:
         object.__setattr__(self, "colvals", list(colvals) if colvals is not None else None)
         # What the call found that bears on the table (e.g. DOMAIN_SINGLETON_PSU).
         object.__setattr__(self, "findings", tuple(findings))
+        object.__setattr__(self, "share_of", share_of)
         # presentation defaults (mutable through properties even when frozen)
         object.__setattr__(self, "_decimals", None)
         object.__setattr__(self, "_print_width", None)
@@ -525,7 +530,9 @@ class Table:
         row_label = self._get_var_label(self.rowvar)
         if self.is_crosstab:
             col_label = self._get_var_label(self.colvar or "")
-            title = f"Table: [bold]{row_label}[/bold] × [bold]{col_label}[/bold]"
+            title = (
+                f"Table: [bold]{row_label}[/bold] × [bold]{col_label}[/bold]{self._share_note()}"
+            )
         else:
             title = f"Table: [bold]{row_label}[/bold]"
 
@@ -534,6 +541,9 @@ class Table:
         tests = [Text(f" {line}") for line in self._test_lines()]
         notes = [Text(n, style="dim") for n in finding_notes(self.findings)]
         yield make_panel([t, *tests, *notes], title=title, obj=self, kind="estimate")
+
+    def _share_note(self) -> str:
+        return {"row": " (row shares)", "col": " (column shares)"}.get(self.share_of, "")
 
     def _test_lines(self) -> list[str]:
         if self.stats is None:
@@ -547,7 +557,7 @@ class Table:
         row_label = self._get_var_label(self.rowvar)
         if self.is_crosstab:
             col_label = self._get_var_label(self.colvar or "")
-            title = f"Table: {row_label} × {col_label}"
+            title = f"Table: {row_label} × {col_label}{self._share_note()}"
         else:
             title = f"Table: {row_label}"
         body = render_plain_table(headers, rows)
@@ -639,6 +649,7 @@ class Table:
             alpha=_pick(self.alpha, alpha),
             metadata=pick(self._metadata, metadata),
             findings=self.findings,
+            share_of=self.share_of,
         )
 
     def update(self, **kw) -> Self:
@@ -712,6 +723,7 @@ class Table:
             "colvals": list(self.colvals) if self.colvals is not None else None,
             "estimates": [c.to_dict() for c in (self.estimates or [])],
             "stats": stats_payload,
+            "share_of": self.share_of,
         }
 
     # ------------------------------------------------------------------ #

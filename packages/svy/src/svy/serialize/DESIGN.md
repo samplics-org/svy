@@ -59,7 +59,7 @@ consumers can switch on the result type without introspection.
 ### 2.5 `schema_version` on top-level structs
 
 Every top-level struct carries `schema_version: str = SCHEMA_VERSION` where
-`SCHEMA_VERSION = "svy-result/0.7"`. Consumers can check the version to know
+`SCHEMA_VERSION = "svy-result/0.8"`. Consumers can check the version to know
 what fields to expect.
 
 **Versioning policy:** bump the minor version (0.1 → 0.2) when fields are added
@@ -97,6 +97,9 @@ ignore unknown fields.
   `None` when every level was listed. New kind `"contrast"`: `ContrastData`
   (`Estimate.contrast(...)`: rows, `method`, `alpha`, `df`, and the source
   estimate's `param` and `y`); the contrasts' joint covariance is not saved.
+- `0.8` — `TableData.share_of` added: whether the cells are shares of the table
+  total, their row or their column (`tabulate(share_of=)`). `"total"` when decoded
+  from an older payload.
 
 ### 2.6 Sub-structs are untagged
 

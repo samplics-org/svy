@@ -363,6 +363,7 @@ def _serialize_table(result: Table) -> TableData:
         stats=_table_stats_to_data(result.stats) if result.stats is not None else None,
         rowvals=_list_or_none(result.rowvals),
         colvals=_list_or_none(result.colvals),
+        share_of=result.share_of,
     )
 
 

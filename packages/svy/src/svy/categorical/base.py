@@ -64,6 +64,7 @@ except ImportError:
 if TYPE_CHECKING:
     from svy.categorical.ranktest import RankTestByResult
     from svy.core.sample import Sample
+    from svy.estimation.estimate import Estimate
     from svy.metadata.variable_meta import ResolvedLabels
 
 log = logging.getLogger(__name__)
@@ -203,6 +204,7 @@ class Categorical:
         colvar: str | None = None,
         *,
         units: Literal["proportion", "percent", "count"] = "proportion",
+        share_of: Literal["total", "row", "col"] = "total",
         count_total: float | int | None = None,
         where: WhereArg = None,
         method: Literal["taylor", "replication"] | None = None,
@@ -227,6 +229,13 @@ class Categorical:
             and a null key outside the domain is not missing data.
         units : str
             Output units: ``'proportion'``, ``'percent'``, or ``'count'``. Default ``'proportion'``.
+        share_of : {"total", "row", "col"}
+            What each cell is a share of: the table total (the default), its
+            row, or its column. Row shares are ``estimation.prop(colvar,
+            by=rowvar)`` (column shares the reverse), with the same estimates,
+            SEs and intervals, and a level absent from a row shows as 0. The
+            Rao-Scott test does not depend on it. Two-way tables only; not
+            with ``units="count"`` or ``count_total``.
         count_total : float | int | None
             Total for count scaling. Default None.
         method : {"taylor", "replication"} | None
@@ -260,6 +269,7 @@ class Categorical:
         """
         alpha = validate_alpha(alpha, where="Sample.categorical.tabulate")
         rep_kw = self._replication(method, where="Sample.categorical.tabulate")
+        _check_share_of(share_of, colvar=colvar, units=units, count_total=count_total)
         from scipy.stats import t as t_dist
 
         _raw = self._sample._data
@@ -571,6 +581,21 @@ class Categorical:
                 ),
             )
 
+        if share_of != "total":
+            cell_rows, share_findings = self._conditional_cells(
+                rowvar,
+                cast(str, colvar),
+                share_of=share_of,
+                scale=_display_scale,
+                where=where,
+                method=method,
+                alpha=alpha,
+                drop_nulls=drop_nulls,
+                norm=_norm_label,
+            )
+            seen = {f.code for f in findings}
+            findings = [*findings, *(f for f in share_findings if f.code not in seen)]
+
         # levels for display
         _dom_data = _level_data.filter(pl.col(domain_col)) if domain_col else _level_data
 
@@ -603,12 +628,49 @@ class Categorical:
             alpha=alpha,
             metadata=metadata,
             findings=findings,
+            share_of=share_of,
         )
 
         if use_labels is not None:
             table.use_labels = use_labels
 
         return table
+
+    def _conditional_cells(
+        self,
+        rowvar: str,
+        colvar: str,
+        *,
+        share_of: str,
+        scale: float,
+        norm: Callable[[str], str],
+        **prop_kw: Any,
+    ) -> tuple[list[CellEst], tuple]:
+        """Row (or column) shares as ``prop(colvar, by=rowvar)`` (or the reverse) estimates."""
+        y, by = (colvar, rowvar) if share_of == "row" else (rowvar, colvar)
+        est = self._sample.estimation.prop(y, by=by, **prop_kw)
+        params = list(cast("Estimate", est).estimates)
+
+        def text(values: list) -> list[str]:
+            return [norm(v) for v in pl.Series(values).cast(pl.String).to_list()]
+
+        y_text = text([p.y_level for p in params])
+        by_text = text([p.by_level[0] if p.by_level else None for p in params])
+        rows, cols = (by_text, y_text) if share_of == "row" else (y_text, by_text)
+        cells = [
+            CellEst(
+                rowvar=r,
+                colvar=c,
+                est=float(p.est) * scale,
+                se=float(p.se) * scale,
+                cv=float(p.cv),
+                lci=float(p.lci) * scale,
+                uci=float(p.uci) * scale,
+                n=p.n,
+            )
+            for r, c, p in zip(rows, cols, params)
+        ]
+        return cells, tuple(cast("Estimate", est).findings)
 
     # ════════════════════════════════════════════════════════════════════════
     # T-TEST: Main entry point (Rust backend)
@@ -1472,3 +1534,29 @@ def _label_rank_result(result: Any, group_labels: Any, by_labels: dict) -> Any:
         result.by_labels = by_labels
         return result
     return relabel(result)
+
+
+def _check_share_of(share_of: Any, *, colvar: str | None, units: Any, count_total: Any) -> None:
+    where = "Sample.categorical.tabulate"
+    if share_of not in ("total", "row", "col"):
+        raise MethodError.invalid_choice(
+            where=where, param="share_of", got=share_of, allowed=["total", "row", "col"]
+        )
+    if share_of == "total":
+        return
+    if colvar is None:
+        raise MethodError.not_applicable(
+            where=where,
+            method=f"share_of={share_of!r}",
+            reason="row and column shares need a two-way table",
+            param="share_of",
+            hint="Pass colvar=, or use share_of='total'.",
+        )
+    if _normalize_units(units) is _TableUnits.COUNT or count_total is not None:
+        raise MethodError.not_applicable(
+            where=where,
+            method=f"share_of={share_of!r}",
+            reason="a count does not depend on what it is a share of",
+            param="share_of",
+            hint="Use units='proportion' or 'percent' with row or column shares.",
+        )

@@ -27,7 +27,7 @@
   "kind": "glm_fit",
   "link": "identity",
   "offset": null,
-  "schema_version": "svy-result/0.7",
+  "schema_version": "svy-result/0.8",
   "stats": {
     "aic": 6020.5,
     "bic": 6040.3,
