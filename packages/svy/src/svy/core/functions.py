@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 import msgspec
 import polars as pl
@@ -566,15 +566,15 @@ def _report_overlap(
 
 
 def combine_samples(
-    samples: Sequence[Sample],
+    samples: Sequence[Sample] | Mapping[str, Sample],
     *,
-    adjust: Literal["average", "none"] | None = None,
+    average_wgts: bool | None = None,
     wave_name: str = "wave",
-    wave_labels: Sequence[str] | None = None,
-    kind: Literal["cross_sectional", "cs", "panel"] = "cross_sectional",
+    kind: Literal["cross_sectional", "panel"] = "cross_sectional",
     case_id: str | Sequence[str] | None = None,
     on_mixed_design: Literal["error", "warn", "ignore"] = "error",
     wgt_name: str = "combined_wgt",
+    **_legacy: Any,
 ) -> Sample:
     """Combine repeated cross-sections or panel waves into one long Sample.
 
@@ -582,7 +582,7 @@ def combine_samples(
     pooling, not estimate pooling. With ``kind="cross_sectional"`` each wave
     contributes its own strata (the design nests wave → stratum → PSU), so
     Taylor variance treats waves as independent automatically. The estimand
-    under ``adjust="average"`` is the PERIOD-AVERAGE population: weights are
+    under ``average_wgts=True`` is the PERIOD-AVERAGE population: weights are
     divided by k, which matters only for totals — means, proportions and
     ratios are invariant to it.
 
@@ -595,10 +595,14 @@ def combine_samples(
     Caller order of ``samples`` IS the time order; the wave column gets ordinal
     codes 1..k in that order (or reuses an existing wave column present in all
     inputs, e.g. NHANES SDDSRVYR, validating it increases in caller order).
+    Pass a mapping to label the waves: its keys become the wave codes' value
+    labels, so a label cannot drift from its sample::
+
+        svy.combine_samples({"2015-16": nhanes_2015_16, "2017-18": nhanes_2017_18})
 
     For bespoke factors (e.g. the NCHS 1999–2004 recipe of 4/6 and 2/6 on the
     4-yr and 2-yr weight files), pre-adjust each input with
-    ``sample.weighting.normalize(factor=...)`` and pass ``adjust="none"``.
+    ``sample.weighting.normalize(factor=...)`` and pass ``average_wgts=False``.
 
     Never combine for trend questions — use ``by=wave_name`` on the combined
     sample instead. ``design_history`` of the inputs is not carried: the
@@ -606,21 +610,19 @@ def combine_samples(
 
     Parameters
     ----------
-    samples : Sequence[Sample]
-        Two or more samples, in time order.
-    adjust : {"average", "none"} | None
-        "average" multiplies every weight by 1/k into ``wgt_name``. None picks
-        the mode default: "average" for cross-sections, "none" for a panel.
-        Explicit "average" with ``kind="panel"`` errors — a person is not
-        half a person for appearing in two waves.
+    samples : Sequence[Sample] | Mapping[str, Sample]
+        Two or more samples, in time order. A mapping's keys label the waves;
+        without them a created wave column is labelled "wave 1".."wave k".
+    average_wgts : bool | None
+        True multiplies every weight by 1/k into ``wgt_name``; False keeps
+        each wave's weight. None picks by ``kind``: True for cross-sections,
+        False for a panel. True with ``kind="panel"`` errors — a person is
+        not half a person for appearing in two waves.
     wave_name : str
         Wave-id column name; reused if already present in all inputs. Fills
         ``Design.wave`` on the result.
-    wave_labels : Sequence[str] | None
-        Value labels for the wave codes, in caller order. Defaults to
-        "wave 1".."wave k" when the column is created.
-    kind : {"cross_sectional", "cs", "panel"}
-        "cross_sectional" (alias "cs") for repeated cross-sections;
+    kind : {"cross_sectional", "panel"}
+        "cross_sectional" for repeated cross-sections;
         "panel" for waves observing the same cases, which requires
         ``case_id`` and validates the pairing: the id is unique within each
         wave, consecutive waves overlap (an empty overlap errors, a small one
@@ -652,12 +654,26 @@ def combine_samples(
         ``SvyUserWarning``; "ignore" records it at INFO level without raising.
     wgt_name : str
         Name of the combined weight column the function creates, holding each
-        wave's own weight (divided by k under ``adjust="average"``). The waves'
+        wave's own weight (divided by k under ``average_wgts=True``). The waves'
         weight columns may be named differently; the other design roles must
         share one name per role.
     """
     # Findings wait for the combined sample, so they are recorded on it.
     found: list[dict[str, Any]] = []
+    _reject_legacy_kwargs(_legacy)
+    wave_labels: list[str] | None = None
+    if isinstance(samples, Mapping):
+        bad = [key for key in samples if not isinstance(key, str) or not key]
+        if bad:
+            raise MethodError.invalid_type(
+                where=_CTX,
+                param="samples",
+                got=bad[0],
+                expected="non-empty str keys (the wave labels)",
+                hint='Label each wave with text: {"2015-16": s1, "2017-18": s2}.',
+            )
+        wave_labels = list(samples)
+        samples = list(samples.values())
     samples = list(samples)
     k = len(samples)
     if k < 2:
@@ -674,12 +690,16 @@ def combine_samples(
                 reason=f"item {j} is not a Sample (got {type(s).__name__})",
             )
 
-    if kind not in ("cross_sectional", "cs", "panel"):
+    if kind not in ("cross_sectional", "panel"):
         raise MethodError.invalid_choice(
-            where=_CTX, param="kind", got=kind, allowed=["cross_sectional", "cs", "panel"]
+            where=_CTX,
+            param="kind",
+            got=kind,
+            allowed=["cross_sectional", "panel"],
+            hint='The "cs" alias was removed; write kind="cross_sectional".'
+            if kind == "cs"
+            else None,
         )
-    if kind == "cs":
-        kind = "cross_sectional"
     if case_id is not None:
         try:
             case_id = _norm_spec("case_id", case_id)
@@ -690,24 +710,23 @@ def combine_samples(
                 got=case_id,
                 allowed=["<column name>", "<list of column names>"],
             ) from None
-    if adjust not in (None, "average", "none"):
+    if average_wgts is not None and not isinstance(average_wgts, bool):
         raise MethodError.invalid_choice(
-            where=_CTX, param="adjust", got=adjust, allowed=["average", "none", None]
+            where=_CTX, param="average_wgts", got=average_wgts, allowed=[True, False, None]
         )
     check_on_finding(on_mixed_design, param="on_mixed_design", where=_CTX)
-    if kind == "panel" and adjust == "average":
+    if kind == "panel" and average_wgts:
         raise MethodError.not_applicable(
             where=_CTX,
             method="combine_samples",
             reason=(
-                "adjust='average' with kind='panel' divides longitudinal weights by k, "
+                "average_wgts=True with kind='panel' divides longitudinal weights by k, "
                 "but a person is not half a person for appearing in two waves"
             ),
-            hint="Use adjust='none' (the panel default) with longitudinal weights.",
+            hint="Leave average_wgts unset (False for a panel) with longitudinal weights.",
         )
-    resolved_adjust = (
-        adjust if adjust is not None else ("average" if kind == "cross_sectional" else "none")
-    )
+    if average_wgts is None:
+        average_wgts = kind == "cross_sectional"
 
     case_id = _resolve_case_id(samples, kind, case_id)
     rep_wgts = _resolve_rep_wgts(samples, kind)
@@ -725,12 +744,13 @@ def combine_samples(
         samples, kind, allow_mixed=on_mixed_design != "error"
     )
 
-    if resolved_adjust == "average" and not canonical["wgt"]:
+    if average_wgts and not canonical["wgt"]:
         raise MethodError.not_applicable(
             where=_CTX,
             method="combine_samples",
-            reason="adjust='average' requires a weight declared on every input design",
-            param="adjust",
+            reason="averaging the weights requires a weight declared on every input design",
+            param="average_wgts",
+            hint="Declare each input's weight, or pass average_wgts=False.",
         )
 
     frames: list[pl.DataFrame] = [s.data for s in samples]
@@ -815,19 +835,11 @@ def combine_samples(
             )
         )
 
-    if wave_labels is not None and len(wave_labels) != k:
-        raise MethodError.not_applicable(
-            where=_CTX,
-            method="combine_samples",
-            reason=f"wave_labels has {len(wave_labels)} entries for {k} samples",
-            param="wave_labels",
-        )
-
     frames, codes, created = _resolve_wave_codes(frames, wave_name)
 
     # The combined weight is a new column, like every weighting method's:
     # each wave's own weight (whatever it is called there), divided by k
-    # under adjust="average".
+    # under average_wgts=True.
     if canonical["wgt"]:
         for j, f in enumerate(frames, start=1):
             if wgt_name in f.columns:
@@ -838,7 +850,7 @@ def combine_samples(
                     param="wgt_name",
                     hint="Choose a different wgt_name.",
                 )
-        factor = 1.0 / k if resolved_adjust == "average" else 1.0
+        factor = 1.0 / k if average_wgts else 1.0
         frames = [
             f.with_columns((pl.col(s._design.wgt).cast(pl.Float64) * factor).alias(wgt_name))
             for f, s in zip(frames, samples)
@@ -946,10 +958,10 @@ def combine_samples(
                 where=_CTX,
                 method="combine_samples",
                 reason=(
-                    f"wave_labels conflict with the value labels already carried by the "
-                    f"reused column '{wave_name}'"
+                    f"the wave labels (the keys of samples) conflict with the value labels "
+                    f"already carried by the reused column '{wave_name}'"
                 ),
-                hint="Drop wave_labels to keep the existing labels, or relabel before combining.",
+                hint="Pass a list to keep the existing labels, or relabel before combining.",
             )
         combined.meta.set_value_labels(wave_name, label_map)
         _warn_if_numeric_labels_unordered(wave_labels, combined)
@@ -959,6 +971,39 @@ def combine_samples(
         )
 
     return combined
+
+
+# Removed parameters, kept only to make the break legible: the call still fails.
+_LEGACY_HINTS = {
+    "adjust": (
+        "average_wgts",
+        'adjust="average" is average_wgts=True, adjust="none" is average_wgts=False; '
+        "leave it unset for the default.",
+    ),
+    "wave_labels": (
+        "samples",
+        'Pass the samples as a mapping keyed by label: {"2015-16": s1, "2017-18": s2}.',
+    ),
+}
+
+
+def _reject_legacy_kwargs(kwargs: dict[str, Any]) -> None:
+    if not kwargs:
+        return
+    for old, (new, hint) in _LEGACY_HINTS.items():
+        if old in kwargs:
+            raise MethodError(
+                title="Parameter removed",
+                detail=f"`{old}=` was removed from combine_samples; use `{new}=`.",
+                code="PARAM_RENAMED",
+                where=_CTX,
+                param=old,
+                expected=new,
+                got=old,
+                hint=hint,
+            )
+    unknown = next(iter(kwargs))
+    raise TypeError(f"combine_samples() got an unexpected keyword argument {unknown!r}")
 
 
 def _warn_if_numeric_labels_unordered(wave_labels: Sequence[str], combined: Sample) -> None:
@@ -971,10 +1016,10 @@ def _warn_if_numeric_labels_unordered(wave_labels: Sequence[str], combined: Samp
             code="WAVE_LABELS_UNORDERED",
             title="Wave labels out of order",
             detail=(
-                f"wave_labels look numeric but are not increasing: {list(wave_labels)}. "
+                f"wave labels look numeric but are not increasing: {list(wave_labels)}. "
                 "Caller order of `samples` is the time order — check the order of your inputs."
             ),
             where=_CTX,
-            param="wave_labels",
+            param="samples",
             got=list(wave_labels),
         )

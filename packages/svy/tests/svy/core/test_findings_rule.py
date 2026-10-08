@@ -179,7 +179,7 @@ def test_combine_samples_records_on_the_combined_sample():
     s1 = _cycle([1, 1, 2, 2, 1, 2], only=list("abcdef"))
     s2 = _cycle([3, 3, 4, 4, 3, 4], 2.0)
     with pytest.warns(SvyUserWarning) as rec:
-        c = svy.combine_samples([s1, s2], wave_labels=["2", "1"])
+        c = svy.combine_samples({"2": s1, "1": s2})
     msgs = [str(r.message) for r in _svy_records(rec)]
     assert any(m.startswith("[COMBINE_COLUMNS_NULL_FILLED]") for m in msgs)
     assert any(m.startswith("[WAVE_LABELS_UNORDERED]") for m in msgs)

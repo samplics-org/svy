@@ -553,7 +553,7 @@ class Weighting:
         factor : number | None
             Multiply every weight by this instead of hitting a target -- e.g.
             ``factor=4/6`` for the NCHS multi-span combined-weight recipe
-            before ``combine_samples(..., adjust="none")``. Cannot be combined
+            before ``combine_samples(..., average_wgts=False)``. Cannot be combined
             with controls, shares, cells or where.
         shares : dict | None
             Composition per cell; the weight total carries through unchanged.
