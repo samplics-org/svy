@@ -33,6 +33,7 @@ from svy.wrangling.rows import distinct as _distinct
 from svy.wrangling.rows import filter_records as _filter_records
 from svy.wrangling.rows import order_by as _order_by
 from svy.wrangling.rows import with_row_index as _with_row_index
+from svy.wrangling.values import DtypeName
 from svy.wrangling.values import bottom_and_top_code as _bottom_and_top_code
 from svy.wrangling.values import bottom_code as _bottom_code
 from svy.wrangling.values import cast_columns as _cast_columns
@@ -285,13 +286,13 @@ class Wrangling:
 
     def cast(
         self,
-        cols: str | Sequence[str] | Mapping[str, pl.DataType],
-        dtype: pl.DataType | None = None,
+        cols: str | Sequence[str] | Mapping[str, pl.DataType | DtypeName],
+        dtype: pl.DataType | DtypeName | None = None,
         *,
         strict: bool = True,
         inplace: bool = False,
     ) -> "Sample":
-        """Cast columns to specified data type(s)."""
+        """Cast columns to polars dtypes or dtype names such as ``"Int64"``."""
         return _cast_columns(
             self._sample,
             cols,

@@ -6,7 +6,9 @@ casting, and null-filling.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
+import difflib
+
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence, get_args
 
 import polars as pl
 
@@ -28,6 +30,47 @@ from svy.wrangling._helpers import (
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample
+
+
+# Parameterised types (tz-aware Datetime, Enum, Decimal) stay polars-only.
+DtypeName = Literal[
+    "Int8",
+    "Int16",
+    "Int32",
+    "Int64",
+    "UInt8",
+    "UInt16",
+    "UInt32",
+    "UInt64",
+    "Float32",
+    "Float64",
+    "String",
+    "Boolean",
+    "Date",
+    "Datetime",
+    "Categorical",
+]
+
+_DTYPES: dict[str, Any] = {name: getattr(pl, name) for name in get_args(DtypeName)}
+
+
+def _resolve_dtype(dtype: Any, *, param: str) -> Any:
+    if not isinstance(dtype, str):
+        return dtype
+    if dtype in _DTYPES:
+        return _DTYPES[dtype]
+    close = difflib.get_close_matches(dtype, list(_DTYPES), n=1, cutoff=0.5)
+    raise MethodError(
+        title="Unknown dtype name",
+        detail=f"{dtype!r} is not a dtype name; expected one of {list(_DTYPES)}.",
+        code="CAST_UNKNOWN_DTYPE",
+        where="wrangling.cast",
+        param=param,
+        got=dtype,
+        expected=list(_DTYPES),
+        hint=(f"Did you mean {close[0]!r}? " if close else "")
+        + "Pass a polars dtype for parameterised types (e.g. pl.Datetime(time_zone=...)).",
+    )
 
 
 def top_code(
@@ -222,8 +265,8 @@ def categorize(
 
 def cast_columns(
     sample: "Sample",
-    cols: str | Sequence[str] | Mapping[str, pl.DataType],
-    dtype: pl.DataType | None = None,
+    cols: str | Sequence[str] | Mapping[str, pl.DataType | DtypeName],
+    dtype: pl.DataType | DtypeName | None = None,
     *,
     strict: bool = True,
     inplace: bool = False,
@@ -234,6 +277,8 @@ def cast_columns(
     lose fractional parts raises — Polars' own strict cast only guards
     overflow, so 1.7 -> 1 would otherwise truncate silently (risky on
     weight columns). Pass ``strict=False`` to allow truncation.
+
+    Dtypes are polars dtypes or their names (``"Int64"``, ``"String"``, ...).
     """
 
     def _cast_expr(col_name: str, target_dt: pl.DataType, strict: bool) -> pl.Expr:
@@ -252,8 +297,8 @@ def cast_columns(
 
     if isinstance(cols, Mapping):
         col_names = set(cols.keys())
-        pairs = list(cols.items())
-        exprs = [_cast_expr(c, dt, strict) for c, dt in cols.items()]  # type: ignore[arg-type]
+        pairs = [(c, _resolve_dtype(dt, param="cols")) for c, dt in cols.items()]
+        exprs = [_cast_expr(c, dt, strict) for c, dt in pairs]
     else:
         if dtype is None:
             raise MethodError(
@@ -262,10 +307,11 @@ def cast_columns(
                 code="CAST_DTYPE_REQUIRED",
                 where="wrangling.cast",
             )
+        target_dt = _resolve_dtype(dtype, param="dtype")
         col_list = [cols] if isinstance(cols, str) else list(cols)
         col_names = set(col_list)
-        pairs = [(c, dtype) for c in col_list]
-        exprs = [_cast_expr(c, dtype, strict) for c in col_list]
+        pairs = [(c, target_dt) for c in col_list]
+        exprs = [_cast_expr(c, target_dt, strict) for c in col_list]
 
     if strict:
         data = sample._data
