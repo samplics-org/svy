@@ -512,7 +512,7 @@ def read_xpt(
 
     bio = io.BytesIO(ipc_bytes)
     try:
-        df = pl.read_ipc(bio, memory_map=False)  # Arrow IPC file
+        df = pl.read_ipc(bio)  # Arrow IPC file
     except ComputeError:
         bio.seek(0)
         df = pl.read_ipc_stream(bio)  # Fallback: IPC stream
@@ -642,7 +642,7 @@ def read_sas(
     # Robust loader: try FILE first; if footer is missing, use STREAM.
     bio = io.BytesIO(ipc_bytes)
     try:
-        df = pl.read_ipc(bio, memory_map=False)
+        df = pl.read_ipc(bio)
     except ComputeError as e:
         if "InvalidFooter" in str(e):
             bio.seek(0)

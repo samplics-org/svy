@@ -4,10 +4,16 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-10-08
+
 ### Changed
 
 - **BREAKING: `write_dta` writes integer columns as Stata integers.** Every integer column was cast to Float64 and stored as `double`. Each one (Int8 to Int64, UInt8 to UInt64) is now stored as the smallest Stata type that holds its non-missing values: `byte` (−127 to 100), `int` (−32,767 to 32,740) or `long` (−2,147,483,647 to 2,147,483,620), and `double` only beyond that. Nulls are written as `.`. Value labels attach to the integer variable, and Stata's `describe` shows the expected storage. A column holding `TaggedNA` values is still written as `double`.
 - **BREAKING: `read_dta` returns integer storage as Int64.** Stata `byte`, `int` and `long` variables were read as Float64, so a code read back as `1.0` no longer matched the value label keyed `"1"`. They are now Int64 columns. They are not Int8/Int16/Int32 because arithmetic on those polars types overflows without an error. `.` and `.a` to `.z` are null, and tagged missings are reported and hydrated as for doubles. `float` and `double` storage still read as Float64. `meta["vars"][i]["kind"]` gives the storage type: `"int8"`, `"int16"`, `"int32"`, `"float"`, `"double"` or `"string"`; it was always `"double"` for numerics. SAS and SPSS files hold only doubles and strings, so their readers are unchanged. `read_stata_arrow` returns int64 columns the same way.
+
+### Fixed
+
+- **The readers work with polars 2.0.** Every SAS, SPSS and Stata read failed with `read_ipc() got an unexpected keyword argument 'memory_map'`, an argument polars 2.0 removed.
 
 ## [0.5.0] — 2026-09-30
 
@@ -111,7 +117,8 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 First release tracked in this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-io-v0.5.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-io-v0.6.0...HEAD
+[0.6.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.6.0
 [0.5.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.5.0
 [0.4.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.4.0
 [0.3.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.3.0

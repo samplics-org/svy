@@ -6,6 +6,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+## [0.32.0] — 2026-10-08
+
 ### Added
 
 - **Row and column percentages: `tabulate(share_of="row" | "col")`.** Each cell is a share of its row (or column) instead of the table total, the way offices publish crosstabs. Row shares are `estimation.prop(colvar, by=rowvar)` (column shares the reverse): same estimates, SEs and intervals, for Taylor and replication, with `where=`; a level absent from a row shows as 0. The Rao-Scott test is unchanged. The title says `(row shares)` / `(column shares)` and `Table.share_of` records it. Two-way tables only, and not with `units="count"` or `count_total`. Saved tables carry it: schema `svy-result/0.8` adds `TableData.share_of` (`"total"` when read from an older payload).
@@ -1127,7 +1129,8 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.31.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.32.0...HEAD
+[0.32.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.32.0
 [0.31.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.31.0
 [0.30.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.30.0
 [0.29.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.29.0
