@@ -311,7 +311,7 @@ def read_sav(
 
     bio = io.BytesIO(ipc_bytes)
     try:
-        df = pl.read_ipc(bio, memory_map=False)
+        df = pl.read_ipc(bio)
     except ComputeError as e:
         if "InvalidFooter" in str(e):
             bio.seek(0)
@@ -381,7 +381,7 @@ def read_por(
 
     bio = io.BytesIO(ipc_bytes)
     try:
-        df = pl.read_ipc(bio, memory_map=False)
+        df = pl.read_ipc(bio)
     except ComputeError as e:
         if "InvalidFooter" in str(e):
             bio.seek(0)

@@ -196,7 +196,7 @@ def read_dta(
     # Read IPC with proper error handling
     bio = io.BytesIO(ipc_bytes)
     try:
-        df = pl.read_ipc(bio, memory_map=False)
+        df = pl.read_ipc(bio)
     except ComputeError as e:
         if "InvalidFooter" in str(e):
             bio.seek(0)
