@@ -6,6 +6,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Added
+
+- **`sample.wrangling.cast` takes dtype names**: `cast("age", "Int64")` or `cast({"age": "Int64", "region": "String"})`, so a cast needs no `import polars` and can be written in a config file. The names are polars' own (`Int8`…`UInt64`, `Float32`, `Float64`, `String`, `Boolean`, `Date`, `Datetime`, `Categorical`), listed by `svy.wrangling.DtypeName`; an unknown name raises `CAST_UNKNOWN_DTYPE` with the closest match. Polars dtypes still work and are needed for parameterised types (a time-zoned `Datetime`, `Enum`, `Decimal`).
+
 ## [0.32.0] — 2026-10-08
 
 ### Added

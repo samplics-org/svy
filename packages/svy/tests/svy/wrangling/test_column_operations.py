@@ -1,6 +1,8 @@
 # tests/svy/wrangling/test_column_operations.py
 """Tests for column manipulation operations: remove_columns, keep_columns, cast, fill_null."""
 
+from typing import get_args
+
 import polars as pl
 import pytest
 
@@ -8,6 +10,7 @@ from svy import SvyUserWarning
 from svy.core.design import Design
 from svy.core.sample import Sample
 from svy.errors import MethodError
+from svy.wrangling import DtypeName
 
 
 # ---------- Fixtures ----------
@@ -247,6 +250,56 @@ def test_cast_int_to_categorical():
     s = Sample(df)
     out = s.wrangling.cast("code", pl.Categorical)
     assert out._data["code"].dtype == pl.Categorical
+
+
+@pytest.mark.parametrize("name", get_args(DtypeName))
+def test_cast_dtype_name_matches_polars_dtype(name):
+    assert str(getattr(pl, name)) == name
+    s = Sample(pl.DataFrame({"x": [1, 0, 1]}))
+    by_name = s.wrangling.cast("x", name)
+    by_object = s.wrangling.cast("x", getattr(pl, name))
+    assert by_name._data.schema == by_object._data.schema
+    assert by_name._data.equals(by_object._data)
+
+
+def test_cast_mapping_mixes_names_and_dtypes(sample_basic: Sample):
+    out = sample_basic.wrangling.cast({"a": "Float64", "b": pl.String, "c": "Categorical"})
+    assert out._data.schema["a"] == pl.Float64
+    assert out._data.schema["b"] == pl.String
+    assert out._data.schema["c"] == pl.Categorical
+
+
+def test_cast_dtype_name_sequence_inplace(sample_basic: Sample):
+    out = sample_basic.wrangling.cast(["a", "b"], "Int8", inplace=True)
+    assert out is sample_basic
+    assert sample_basic._data.schema["a"] == pl.Int8
+    assert sample_basic._data.schema["b"] == pl.Int8
+
+
+@pytest.mark.parametrize(
+    ("cols", "dtype", "param", "suggestion"),
+    [
+        ("a", "int64", "dtype", "'Int64'"),
+        ({"a": "Utf8"}, None, "cols", None),
+        ("a", "Enum", "dtype", None),
+    ],
+)
+def test_cast_unknown_dtype_name_raises(sample_basic: Sample, cols, dtype, param, suggestion):
+    with pytest.raises(MethodError) as exc_info:
+        sample_basic.wrangling.cast(cols, dtype)
+    err = exc_info.value
+    assert err.code == "CAST_UNKNOWN_DTYPE"
+    assert err.param == param
+    if suggestion:
+        assert suggestion in err.hint
+
+
+def test_cast_dtype_name_keeps_truncation_guard():
+    s = Sample(pl.DataFrame({"w": [1.0, 1.7, 2.0]}))
+    with pytest.raises(MethodError) as exc_info:
+        s.wrangling.cast("w", "Int64")
+    assert exc_info.value.code == "CAST_TRUNCATION"
+    assert s.wrangling.cast("w", "Int64", strict=False)._data["w"].to_list() == [1, 1, 2]
 
 
 # ==================== fill_null ====================
