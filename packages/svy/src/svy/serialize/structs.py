@@ -21,7 +21,7 @@ import msgspec
 # Constants
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = "svy-result/0.7"
+SCHEMA_VERSION = "svy-result/0.8"
 
 #: A design is an input, read back into a live ``Design``: its own schema.
 DESIGN_SCHEMA_VERSION = "svy-design/0.1"
@@ -345,6 +345,8 @@ class TableData(msgspec.Struct, kw_only=True, frozen=True):
     stats: TableStatsData | None = None
     rowvals: list[CatValue] | None = None
     colvals: list[CatValue] | None = None
+    #: What each cell is a share of: "total", "row" or "col".
+    share_of: str = "total"
 
 
 @_kinded("glm_fit")
