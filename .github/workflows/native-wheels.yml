@@ -1,0 +1,43 @@
+name: Native wheels
+# Builds the svy-rs and svy-io extension wheels once per run for the test
+# workflows. Both are abi3 (cp311), so one wheel serves every Python in the
+# matrix. Each wheel is cached on its own sources: a Python-only change skips
+# the Rust compile entirely.
+on:
+  workflow_call:
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build native wheels
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - id: svy-rs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: wheels/svy-rs
+          key: svy-rs-wheel-v1-${{ runner.os }}-${{ hashFiles('packages/svy-rs/src/**', 'packages/svy-rs/svy_rs/**', 'packages/svy-rs/Cargo.toml', 'packages/svy-rs/Cargo.lock', 'packages/svy-rs/pyproject.toml') }}
+      - id: svy-io
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: wheels/svy-io
+          key: svy-io-wheel-v1-${{ runner.os }}-${{ hashFiles('packages/svy-io/native/**', 'packages/svy-io/ReadStat/src/**', 'packages/svy-io/python/**', 'packages/svy-io/pyproject.toml') }}
+      - if: steps.svy-rs.outputs.cache-hit != 'true' || steps.svy-io.outputs.cache-hit != 'true'
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "latest"
+          python-version: "3.11"
+      - name: Build svy-rs
+        if: steps.svy-rs.outputs.cache-hit != 'true'
+        run: uv build --package svy-rs --wheel --out-dir wheels/svy-rs
+      - name: Build svy-io
+        if: steps.svy-io.outputs.cache-hit != 'true'
+        run: uv build --package svy-io --wheel --out-dir wheels/svy-io
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-wheels
+          path: wheels/*/*.whl
+          if-no-files-found: error
+          retention-days: 1

@@ -36,6 +36,19 @@ include = [
 ]
 features = ["vendored", "extension-module"]
 
+# uv rebuilds a local package only when a cache key changes; without the native
+# sources here, a Rust or ReadStat edit leaves a stale extension in the venv.
+[tool.uv]
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "native/**/*.rs" },
+  { file = "native/**/Cargo.toml" },
+  { file = "native/**/Cargo.lock" },
+  { file = "native/**/*.h" },
+  { file = "ReadStat/src/**/*.c" },
+  { file = "ReadStat/src/**/*.h" },
+]
+
 [dependency-groups]
 dev = [
     "maturin>=1.9.4",

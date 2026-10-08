@@ -7,6 +7,7 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - ".github/workflows/svy-tests.yml"
+      - ".github/workflows/native-wheels.yml"
   # No path filter on PRs: these jobs are required status checks on main,
   # so they must report on every PR (a path-filtered required check would
   # leave non-matching PRs stuck waiting forever).
@@ -19,20 +20,37 @@ permissions:
   contents: read
 
 jobs:
+  native:
+    uses: ./.github/workflows/native-wheels.yml
+
   test:
     name: Test svy (py${{ matrix.python-version }})
+    needs: native
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
+      # A job skipped by a failed `needs` reports success to required checks.
+      - name: Require the native wheels
+        if: needs.native.result != 'success'
+        run: exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: "latest"
           python-version: ${{ matrix.python-version }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: native-wheels
+          path: wheels
       - name: Install deps
-        run: uv sync --all-packages
+        run: |
+          uv sync --all-packages --no-install-package svy-rs --no-install-package svy-io
+          uv pip install --python .venv --no-deps wheels/*/*.whl
       - name: Run tests
+        env:
+          UV_NO_SYNC: "1"  # a sync would rebuild svy-rs and svy-io from source
         run: make test-svy
