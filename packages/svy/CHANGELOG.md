@@ -6,6 +6,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+## [0.32.1] — 2026-10-08
+
 ### Added
 
 - **`sample.wrangling.cast` takes dtype names**: `cast("age", "Int64")` or `cast({"age": "Int64", "region": "String"})`, so a cast needs no `import polars` and can be written in a config file. The names are polars' own (`Int8`…`UInt64`, `Float32`, `Float64`, `String`, `Boolean`, `Date`, `Datetime`, `Categorical`), listed by `svy.wrangling.DtypeName`; an unknown name raises `CAST_UNKNOWN_DTYPE` with the closest match. Polars dtypes still work and are needed for parameterised types (a time-zoned `Datetime`, `Enum`, `Decimal`).
@@ -1133,7 +1135,8 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.32.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.32.1...HEAD
+[0.32.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.32.1
 [0.32.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.32.0
 [0.31.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.31.0
 [0.30.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.30.0
