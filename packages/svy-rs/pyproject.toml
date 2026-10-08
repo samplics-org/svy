@@ -35,3 +35,13 @@ build-backend = "maturin"
 module-name = "svy_rs._internal"
 python-source = "."
 features = ["pyo3/extension-module"]
+
+# uv rebuilds a local package only when a cache key changes; without the Rust
+# sources here, a Rust edit leaves a stale extension in the venv.
+[tool.uv]
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "Cargo.toml" },
+  { file = "Cargo.lock" },
+  { file = "src/**/*.rs" },
+]

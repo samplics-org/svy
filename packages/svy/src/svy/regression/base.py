@@ -42,6 +42,7 @@ from svy.wrangling.rows import _compile_where_to_pl_expr
 if TYPE_CHECKING:
     from svy.core.sample import Sample
     from svy.estimation.contrast import Contrast
+    from svy.metadata.variable_meta import ResolvedLabels
     from svy.regression.margins import GLMMargins
 
 log = logging.getLogger(__name__)
@@ -86,6 +87,32 @@ _LINK_NAMES = (
     "'identity', 'logit', 'probit', 'cauchit', 'cloglog', 'log', 'sqrt', "
     "'inverse', or 'inverse_squared'"
 )
+
+
+def _ref_from_label(feat: Cat, levels: list, value_labels: ResolvedLabels) -> Any:
+    """`Cat.ref` as a level: a code as given, else the level whose value label it is."""
+    if feat.ref is None or feat.ref in levels or not value_labels.has_value_labels:
+        return feat.ref
+    matches = [lv for lv in levels if value_labels.display(lv) == feat.ref]
+    if len(matches) > 1:
+        raise ModelError(
+            title="Reference label is ambiguous",
+            detail=(f"Cat({feat.name!r}, ref={feat.ref!r}): the label names levels {matches!r}."),
+            code="CAT_REF_AMBIGUOUS",
+            where="GLM.fit",
+            param=feat.name,
+            got=feat.ref,
+            expected=levels,
+            hint="Pass the code of the reference level instead.",
+        )
+    return matches[0] if matches else feat.ref
+
+
+def _level_labels(levels: list, value_labels: ResolvedLabels) -> dict[Any, str]:
+    """Each level's value label; a label shared by several levels gets its code appended."""
+    text = {lv: value_labels.display(lv) for lv in levels}
+    shared = {t for t in text.values() if list(text.values()).count(t) > 1}
+    return {lv: f"{t} ({lv})" if t in shared else t for lv, t in text.items()}
 
 
 def _dummy_expr(var: str, level: Any) -> pl.Expr:
@@ -416,6 +443,7 @@ class GLM:
         tol: float = 1e-8,
         max_iter: int = 100,
         alpha: float = 0.05,
+        use_labels: bool | None = None,
     ) -> GLM:
         """
         Fit a GLM to the survey data.
@@ -480,6 +508,11 @@ class GLM:
             Maximum IRLS iterations.
         alpha : float
             Significance level for confidence intervals.
+        use_labels : bool | None
+            Name a categorical term's levels by their value labels in printed
+            coefficients and margins (``area_RURAL``); ``term`` keeps the code.
+            None (the default) does when the column has labels. ``Cat(ref=)``
+            accepts a label either way.
 
         Returns
         -------
@@ -627,6 +660,7 @@ class GLM:
         feature_exprs: list[pl.Expr] = []
         feature_names: list[str] = []
         term_info: dict = {}
+        term_labels: dict[str, str] = {}  # engineered name -> printed name
 
         if intercept:
             feature_exprs.append(pl.lit(1.0).alias("_intercept_"))
@@ -661,7 +695,9 @@ class GLM:
                     )
                     return [], []
 
-                if feat.ref is not None and feat.ref not in levels:
+                value_labels = self._sample.meta._resolve(feat.name)
+                ref = _ref_from_label(feat, levels, value_labels)
+                if ref is not None and ref not in levels:
                     raise ModelError(
                         title="Reference level not found",
                         detail=(
@@ -675,9 +711,10 @@ class GLM:
                         param=feat.name,
                         got=feat.ref,
                         expected=levels,
-                        hint="Check the level's value and dtype (e.g. 1 vs '1').",
+                        hint="Check the level's value and dtype (e.g. 1 vs '1'), "
+                        "or pass one of the column's value labels.",
                     )
-                ref_val = feat.ref if feat.ref is not None else levels[0]
+                ref_val = ref if ref is not None else levels[0]
                 levels = [ref_val] + [v for v in levels if v != ref_val]
 
                 # `dummies` pairs each engineered column with the level value
@@ -691,6 +728,11 @@ class GLM:
                     "ref": ref_val,
                     "dummies": dummies,
                 }
+                if use_labels is not False and value_labels.has_value_labels:
+                    level_text = _level_labels(levels, value_labels)
+                    term_info[feat.name]["labels"] = level_text
+                    for name, level in dummies:
+                        term_labels[name] = f"{feat.name}_{level_text[level]}"
 
                 exprs, names = [], []
                 for name, level in dummies:
@@ -711,6 +753,10 @@ class GLM:
                         name = f"{ln}:{rn}"
                         exprs.append((le * re).alias(name))
                         names.append(name)
+                        if ln in term_labels or rn in term_labels:
+                            term_labels[name] = (
+                                f"{term_labels.get(ln, ln)}:{term_labels.get(rn, rn)}"
+                            )
                 return exprs, names
 
             else:
@@ -1084,6 +1130,7 @@ class GLM:
                     lci=est - t_crit * se,
                     uci=est + t_crit * se,
                     wald=TDist(value=t_val, df=df_design, p_value=p_val),
+                    label=term_labels.get(name),
                 )
             )
 
