@@ -8,6 +8,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **Two-way tables print their Rao-Scott tests.** `print(tab)` on a crosstab ends with `Rao-Scott F(3.30, 49.48) = 11.67, p < 0.001` (second-order) and `Rao-Scott chi2(3) = 35.21, p < 0.001` (first-order); one-way tables are unchanged. `ChiSquare`, `FDist` and `TDist` print in the same form on their own.
+
+- **`ttest(use_labels=)` and `ranktest(use_labels=)` show labelled groups and `by=` levels by their value labels**, as `tabulate` does: `Groups: area = [URBANA vs RURAL]`, the level rows and `── reg = Norte` section headers. None (the default) uses the labels when the variable has any; False shows the codes. The result keeps the codes (`GroupLevels.labels` holds the labels), and `to_polars("estimates")` adds a `<group>_label` column (`group_level_label` with `tidy=False`). Saved results keep the codes only.
+
 - **Choice enums carry a label and a description.** `SingletonMethod`, `DistFamily`, `LinkFunction`, `QuantileMethod` and `RankScoreMethod` members have `.label` and `.description`, and `describe()` lists `(value, label, description)` for every member, so applications show svy's own wording instead of copying it. The enums are unchanged otherwise (still `StrEnum`).
 - **`sample.weighting.trim()` annotates `upper`, `lower` and `by`** (a threshold or a number; one or several columns).
 
@@ -32,6 +36,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **`sample.meta.var_labels` and `sample.meta.value_labels`** give every variable's label and code-to-label mapping, catalog schemes resolved: `meta.var_labels["RIAGENDR"]` is `"Gender"`, `meta.value_labels["RIAGENDR"]` is `{1: "Male", 2: "Female"}`. Both are read-only: an edit raises `LabelsReadOnly` (also a `TypeError`) naming the setter, since a copy would silently not change the metadata; `dict(...)` gives an editable copy.
 
 ### Changed
+
+- **`ranktest` defaults to the Kruskal-Wallis score** (Wilcoxon for two groups), R's `svyranktest` default. Without `score=` or `score_fn=` it raised `INVALID_CHOICE`, although `score` defaulted to None.
 
 - **`SampleSize().compare_props` and `estimate_mean` take only `method="wald"`.** `compare_props` listed `"miettinen-nurminen"`, `"newcombe"` and `"farrington-manning"`, and `estimate_mean` listed `"fleiss"`, but none were implemented and they raised `NotImplementedError`. They now raise `MethodError` (`INVALID_CHOICE`) with a hint, as `compare_means` does; `var_mode=` still sets the Wald variance for two proportions. The `compare_*` docstrings now state that the two groups are independent samples: correlation between panel rounds is not accounted for.
 

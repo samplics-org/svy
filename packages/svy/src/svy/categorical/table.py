@@ -531,8 +531,15 @@ class Table:
 
         from rich.text import Text
 
+        tests = [Text(f" {line}") for line in self._test_lines()]
         notes = [Text(n, style="dim") for n in finding_notes(self.findings)]
-        yield make_panel([t, *notes], title=title, obj=self, kind="estimate")
+        yield make_panel([t, *tests, *notes], title=title, obj=self, kind="estimate")
+
+    def _test_lines(self) -> list[str]:
+        if self.stats is None:
+            return []
+        lines = [] if self.stats.f is None else [f"Rao-Scott {self.stats.f}"]
+        return [*lines, f"Rao-Scott {self.stats.chisq}"]
 
     def __plain_str__(self) -> str:
         headers = _headers_for_display(self)
@@ -544,7 +551,9 @@ class Table:
         else:
             title = f"Table: {row_label}"
         body = render_plain_table(headers, rows)
-        return "\n".join([f"{title}\n\n{body}", *finding_notes(self.findings)])
+        return "\n".join(
+            [f"{title}\n\n{body}", *self._test_lines(), *finding_notes(self.findings)]
+        )
 
     def __str__(self) -> str:
         return render_rich_to_str(self, width=resolve_width(self))

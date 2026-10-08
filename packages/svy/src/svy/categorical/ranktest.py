@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Mapping, Sequence
 
 import msgspec
 
@@ -27,7 +27,7 @@ from svy.categorical.ttest import (
     DiffEst,
     GroupLevels,
     TtestEst,
-    _level_repr,
+    _groups_header,
     _level_text,
 )
 from svy.core.containers import FDist, TDist
@@ -45,6 +45,8 @@ from svy.utils.formats import _fmt_fixed
 
 if TYPE_CHECKING:
     import polars as pl
+
+    from svy.metadata.variable_meta import ResolvedLabels
 
 log = logging.getLogger(__name__)
 
@@ -326,12 +328,9 @@ class RankTestTwoSample(
 
         _validate_two_sample(self)
 
-        gvar = self.groups.var
-        g1, g2 = self.groups.levels
-
         header_lines = [
             Text(f"Y = {self.y!r}"),
-            Text(f"Groups: {gvar} = [{_level_repr(g1)} vs {_level_repr(g2)}]"),
+            Text(_groups_header(self.groups)),
             Text(""),
         ]
 
@@ -663,9 +662,11 @@ class RankTestByResult:
         where_clause: str | None = None,
         findings: Sequence[SvyWarning] = (),
         by_levels: list | None = None,
+        by_labels: Mapping[str, ResolvedLabels] | None = None,
     ) -> None:
         self.results = results
         self.by = by
+        self.by_labels = dict(by_labels or {})
         self.y = y
         self.group_var = group_var
         self.method_name = method_name
@@ -710,9 +711,16 @@ class RankTestByResult:
         level_str = _level_text(by_level)
         parts = level_str.split(_BY_SEP)
         if len(parts) == len(self._by_list) and len(parts) > 1:
-            return ", ".join(f"{var} = {val}" for var, val in zip(self._by_list, parts))
-        by_name = ", ".join(self._by_list)
-        return f"{by_name} = {level_str}"
+            return ", ".join(
+                f"{var} = {self._by_text(var, val)}" for var, val in zip(self._by_list, parts)
+            )
+        if len(self._by_list) == 1:
+            level_str = self._by_text(self._by_list[0], level_str)
+        return f"{', '.join(self._by_list)} = {level_str}"
+
+    def _by_text(self, var: str, text: str) -> str:
+        labels = self.by_labels.get(var)
+        return text if labels is None else labels.display(text)
 
     # ── Export ───────────────────────────────────────────────────────────
 
@@ -740,10 +748,7 @@ class RankTestByResult:
         # Shared header
         header_lines: list = [Text(f"Y = {self.y!r}")]
         if is_two_sample:
-            g1, g2 = self.groups.levels
-            header_lines.append(
-                Text(f"Groups: {self.groups.var} = [{_level_repr(g1)} vs {_level_repr(g2)}]")
-            )
+            header_lines.append(Text(_groups_header(self.groups)))
         else:
             header_lines.append(Text(f"Groups: {self.group_var}"))
         header_lines.append(Text(f"By: {', '.join(self._by_list)}"))
@@ -783,7 +788,6 @@ class RankTestByResult:
         by_display = ", ".join(self._by_list)
         is_two_sample = self.groups is not None
         if is_two_sample:
-            g1, g2 = self.groups.levels
             pair_txt = (
                 "paired"
                 if (self.results and getattr(self.results[0], "paired", False))
@@ -792,7 +796,7 @@ class RankTestByResult:
             lines = [
                 f"Rank Test: Two-sample ({self.method_name}, {pair_txt})",
                 f"  Y = {self.y!r}",
-                f"  Groups: {self.groups.var} = [{_level_repr(g1)} vs {_level_repr(g2)}]",
+                f"  {_groups_header(self.groups)}",
                 f"  By: {by_display}",
             ]
         else:
@@ -866,11 +870,10 @@ def _fmt_p(p: float, *, small: float = 1e-4) -> str:
 
 
 def _plain_two_sample(rt: RankTestTwoSample) -> str:
-    g1, g2 = rt.groups.levels
     body_lines = [
         f"Rank Test: Two-sample ({rt.method_name})",
         f"  Y = {rt.y!r}",
-        f"  Groups: {rt.groups.var} = [{_level_repr(g1)} vs {_level_repr(g2)}]",
+        f"  {_groups_header(rt.groups)}",
         "",
     ]
     body = _plain_two_sample_body(rt)

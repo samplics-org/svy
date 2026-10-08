@@ -1,6 +1,8 @@
 # src/svy/core/containers.py
 from __future__ import annotations
 
+import math
+
 from typing import TYPE_CHECKING, Any
 
 import msgspec
@@ -19,10 +21,29 @@ if TYPE_CHECKING:
 # ##############################################
 
 
+def _fmt_df(df: Number) -> str:
+    return str(int(df)) if float(df).is_integer() else f"{df:.2f}"
+
+
+def _fmt_test(name: str, dfs: tuple[Number, ...], value: Number, p_value: Number) -> str:
+    """``F(3.30, 49.48) = 11.67, p < 0.001``."""
+    stat = "nan" if math.isnan(value) else f"{value:.2f}"
+    if math.isnan(p_value):
+        p = "p = nan"
+    elif p_value < 0.001:
+        p = "p < 0.001"
+    else:
+        p = f"p = {p_value:.3f}"
+    return f"{name}({', '.join(_fmt_df(d) for d in dfs)}) = {stat}, {p}"
+
+
 class ChiSquare(msgspec.Struct, frozen=True):
     df: Number
     value: Number
     p_value: Number
+
+    def __str__(self) -> str:
+        return _fmt_test("chi2", (self.df,), self.value, self.p_value)
 
     def to_polars(self) -> pl.DataFrame:
         """One-row frame: df, value, p_value."""
@@ -48,11 +69,17 @@ class FDist(msgspec.Struct, frozen=True):
     value: Number
     p_value: Number
 
+    def __str__(self) -> str:
+        return _fmt_test("F", (self.df_num, self.df_den), self.value, self.p_value)
+
 
 class TDist(msgspec.Struct, frozen=True):
     df: Number
     value: Number
     p_value: Number
+
+    def __str__(self) -> str:
+        return _fmt_test("t", (self.df,), self.value, self.p_value)
 
 
 ################################################

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 
-from typing import TYPE_CHECKING, Callable, Literal, cast
+from typing import TYPE_CHECKING, Any, Callable, Literal, cast
 
 import msgspec
 import numpy as np
@@ -64,6 +64,7 @@ except ImportError:
 if TYPE_CHECKING:
     from svy.categorical.ranktest import RankTestByResult
     from svy.core.sample import Sample
+    from svy.metadata.variable_meta import ResolvedLabels
 
 log = logging.getLogger(__name__)
 
@@ -169,6 +170,17 @@ _USE_REPLICATES = "Pass method='replication' to use the replicates."
 class Categorical:
     def __init__(self, sample: Sample) -> None:
         self._sample = sample
+
+    def _value_labels(self, var: str | None, use_labels: bool | None) -> ResolvedLabels | None:
+        """`var`'s value labels when they are to be shown, else None."""
+        if var is None or use_labels is False:
+            return None
+        resolved = self._sample.meta._resolve(var)
+        return resolved if resolved.has_value_labels else None
+
+    def _by_value_labels(self, by: Any, use_labels: bool | None) -> dict[str, ResolvedLabels]:
+        names = [by] if isinstance(by, str) else list(by or [])
+        return {v: lab for v in names if (lab := self._value_labels(v, use_labels)) is not None}
 
     def _replication(self, method: str | None, *, where: str) -> dict | None:
         """The kernel's replicate arguments, or None for a Taylor variance.
@@ -635,6 +647,7 @@ class Categorical:
         alpha: float = 0.05,
         alternative: Literal["two-sided", "less", "greater"] = "two-sided",
         drop_nulls: bool = False,
+        use_labels: bool | None = None,
     ) -> TTestOneGroup | TTestTwoGroups | TTestByResult:
         """
         Perform a design-based t-test.
@@ -657,6 +670,9 @@ class Categorical:
             alternative: Alternative hypothesis. One of "two-sided", "less", "greater".
                 Default "two-sided".
             drop_nulls: If True, drop rows with missing values. Default False.
+            use_labels: Show the group's value labels instead of its codes. None
+                (the default) shows them when the group has any; the result keeps
+                the codes either way.
 
         Returns:
             TTestOneGroup for one-sample tests, TTestTwoGroups for two-sample tests.
@@ -664,6 +680,7 @@ class Categorical:
         """
         alpha = validate_alpha(alpha, where="Sample.categorical.ttest")
         rep_kw = self._replication(method, where="Sample.categorical.ttest")
+        group_labels = self._value_labels(group, use_labels)
         # The population-size column has to survive prepare_data's projection
         # for the FPC to be computable below.
         pop_size = self._sample._design.pop_size if rep_kw is None else None
@@ -760,6 +777,7 @@ class Categorical:
                     by=by,
                     by_level=by_level,
                     group_lookup=group_lookup,
+                    group_labels=group_labels,
                 )
                 results.append(res)
             # Determine shared metadata for TTestByResult header
@@ -776,6 +794,7 @@ class Categorical:
                 alpha=alpha,
                 where_clause=format_where_clause(where),
                 findings=findings,
+                by_labels=self._by_value_labels(by, use_labels),
             )
         else:
             one = self._unpack_ttest_row(
@@ -789,6 +808,7 @@ class Categorical:
                 by=None,
                 by_level=None,
                 group_lookup=group_lookup,
+                group_labels=group_labels,
             )
             return msgspec.structs.replace(one, findings=tuple(findings))
 
@@ -805,6 +825,7 @@ class Categorical:
         by: str | None,
         by_level: object,
         group_lookup: dict[str, object] | None = None,
+        group_labels: ResolvedLabels | None = None,
     ) -> TTestOneGroup | TTestTwoGroups:
         """Unpack a single row from the ttest result DataFrame into a Python container."""
         from scipy.stats import t as t_dist
@@ -906,7 +927,7 @@ class Categorical:
 
             return TTestTwoGroups(
                 y=y_name,
-                groups=GroupLevels(var=group, levels=(level_0, level_1)),
+                groups=GroupLevels(var=group, levels=(level_0, level_1)).labelled(group_labels),
                 alternative=alternative,
                 diff=[diff_est],
                 estimates=[
@@ -936,6 +957,7 @@ class Categorical:
         alpha: float = 0.05,
         alternative: Literal["two-sided", "less", "greater"] = "two-sided",
         drop_nulls: bool = False,
+        use_labels: bool | None = None,
     ) -> RankTestTwoSample | RankTestKSample | RankTestByResult:
         """
         Perform a design-based rank test.
@@ -946,12 +968,14 @@ class Categorical:
 
         ``score`` names the rank score (``"kruskal-wallis"``,
         ``"vander-waerden"`` or ``"median"``); ``score_fn`` supplies one
-        instead. ``method`` is the variance method: None (the default) is
+        instead. With neither, the score is ``"kruskal-wallis"`` (Wilcoxon for
+        two groups), R's ``svyranktest`` default. ``method`` is the variance method: None (the default) is
         Taylor linearization; ``"replication"`` re-totals the full-sample
         influence values with each replicate weight, as R's ``svyranktest``
         on a ``svrepdesign`` does (the ranks are not recomputed per
         replicate). Its df is the replicate df minus the number of groups
-        less one.
+        less one. ``use_labels`` shows the two groups and the ``by`` levels by
+        their value labels: None (the default) when they have any.
         """
         alpha = validate_alpha(alpha, where="Sample.categorical.ranktest")
         from svy.errors import MethodError
@@ -967,14 +991,6 @@ class Categorical:
             )
 
         # --- Validate score / score_fn ---
-        if score is None and score_fn is None:
-            raise MethodError.invalid_choice(
-                where="ranktest",
-                param="score / score_fn",
-                got=None,
-                allowed=["kruskal-wallis", "vander-waerden", "median"],
-                hint="Provide score='kruskal-wallis' or similar.",
-            )
         if score is not None and score_fn is not None:
             raise MethodError.not_applicable(
                 where="ranktest",
@@ -984,8 +1000,10 @@ class Categorical:
                 hint="Use one or the other.",
             )
         rep_kw = self._replication(method, where="Sample.categorical.ranktest")
+        group_labels = self._value_labels(group, use_labels)
+        by_labels = self._by_value_labels(by, use_labels)
         if score_fn is not None:
-            return self._ranktest_custom_score(
+            result = self._ranktest_custom_score(
                 y=y,
                 group=group,
                 score_fn=score_fn,
@@ -996,9 +1014,10 @@ class Categorical:
                 drop_nulls=drop_nulls,
                 rep_kw=rep_kw,
             )
+            return _label_rank_result(result, group_labels, by_labels)
 
         # Normalize and map to Rust string
-        _method = _normalize_rank_method(score)
+        _method = _normalize_rank_method(score if score is not None else "kruskal-wallis")
         score_method_str = {
             _RankScoreMethod.KRUSKAL_WALLIS: "wilcoxon",
             _RankScoreMethod.VANDER_WAERDEN: "vanderwaerden",
@@ -1102,17 +1121,21 @@ class Categorical:
             _groups = first.groups if first and isinstance(first, RankTestTwoSample) else None
             _method = first.method_name if first else ""
             _by_levels = [by_lookup.get(v, v) for v in result_df[prep.by_col].to_list()]
-            return RankTestByResult(
-                results,
-                by=by,
-                y=y,
-                group_var=group,
-                method_name=_method,
-                groups=_groups,
-                alpha=alpha,
-                where_clause=format_where_clause(where),
-                by_levels=_by_levels,
-                findings=findings,
+            return _label_rank_result(
+                RankTestByResult(
+                    results,
+                    by=by,
+                    y=y,
+                    group_var=group,
+                    method_name=_method,
+                    groups=_groups,
+                    alpha=alpha,
+                    where_clause=format_where_clause(where),
+                    by_levels=_by_levels,
+                    findings=findings,
+                ),
+                group_labels,
+                by_labels,
             )
         else:
             one = self._unpack_ranktest_row(
@@ -1126,7 +1149,9 @@ class Categorical:
                 by=None,
                 by_level=None,
             )
-            return msgspec.structs.replace(one, findings=tuple(findings))
+            return _label_rank_result(
+                msgspec.structs.replace(one, findings=tuple(findings)), group_labels, by_labels
+            )
 
     def _unpack_ranktest_row(
         self,
@@ -1429,3 +1454,21 @@ class Categorical:
             )
 
         return msgspec.structs.replace(_unpack_row(0, None), findings=tuple(findings))
+
+
+def _label_rank_result(result: Any, group_labels: Any, by_labels: dict) -> Any:
+    """Attach the value labels to a rank-test result; the codes are kept."""
+    from svy.categorical.ranktest import RankTestByResult, RankTestTwoSample
+
+    def relabel(r: Any) -> Any:
+        if not isinstance(r, RankTestTwoSample):
+            return r
+        return msgspec.structs.replace(r, groups=r.groups.labelled(group_labels))
+
+    if isinstance(result, RankTestByResult):
+        result.results = [relabel(r) for r in result.results]
+        if result.groups is not None:
+            result.groups = result.groups.labelled(group_labels)
+        result.by_labels = by_labels
+        return result
+    return relabel(result)
