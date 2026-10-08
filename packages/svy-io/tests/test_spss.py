@@ -818,17 +818,18 @@ def test_write_sav_does_not_mutate_caller_value_labels():
     assert value_labels == before
 
 
-def test_write_sav_labels_per_column_under_global_string_cache(tmp_path):
-    """Regression: under a global pl.StringCache, categorical columns used to
-    emit value labels for EVERY string in the cache (and cache-order codes),
-    not just their own categories."""
-    with pl.StringCache():
-        df = pl.DataFrame(
-            {
-                "a": pl.Series(["x", "y", "x"]).cast(pl.Categorical),
-                "b": pl.Series(["p", "q", "q"]).cast(pl.Categorical),
-            }
-        )
+def test_write_sav_labels_per_column_with_a_shared_category_store(tmp_path):
+    """Regression: categorical columns sharing one category store used to emit
+    value labels for EVERY string in the store (and store-order codes), not
+    just their own categories."""
+    df = pl.DataFrame(
+        {
+            "a": pl.Series(["x", "y", "x"]).cast(pl.Categorical),
+            "b": pl.Series(["p", "q", "q"]).cast(pl.Categorical),
+        }
+    )
+    # Guards against the test going vacuous if polars stops sharing the store by default.
+    assert df["b"].to_physical().min() > 0
     path = tmp_path / "cache.sav"
     write_sav(df, path)
     _, meta = read_sav(path)
