@@ -127,6 +127,7 @@ class GLMCoef(msgspec.Struct, frozen=True):
     uci: float
     wald: TDist | None = None
     wald_adj: TDist | None = None
+    label: str | None = None  # printed name from value labels; `term` stays the column name
 
     def to_dict(self) -> dict[str, Any]:
         return _to_builtins(self)
@@ -402,7 +403,7 @@ class GLMFit(msgspec.Struct, frozen=True):
             if exponentiate:
                 est, lci, uci = math.exp(est), math.exp(lci), math.exp(uci)
             coef_tbl.add_row(
-                row.term,
+                row.label or row.term,
                 _fmt_fixed(est),
                 _fmt_fixed(row.se),
                 _fmt_fixed(t_val),
@@ -494,7 +495,7 @@ class GLMFit(msgspec.Struct, frozen=True):
                 est, lci, uci = math.exp(est), math.exp(lci), math.exp(uci)
             rows.append(
                 [
-                    c.term,
+                    c.label or c.term,
                     _fmt_fixed(est),
                     _fmt_fixed(c.se),
                     _fmt_fixed(t_val),
@@ -581,4 +582,8 @@ def glm_frame(r: Any, *, exponentiate: bool = False) -> pl.DataFrame:
             row["adj_p_value"] = c.wald_adj.p_value
             row["adj_df"] = c.wald_adj.df
         data.append(row)
+    labels = [getattr(c, "label", None) for c in r.coefs]
+    if any(labels):
+        for row, c, lab in zip(data, r.coefs, labels):
+            row["term_label"] = lab or c.term
     return pl.DataFrame(data)

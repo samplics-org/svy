@@ -438,6 +438,11 @@ def _categorical_contrast_ame(
     from scipy import stats
 
     levels = list(info.get("levels") or [])
+    labels = info.get("labels") or {}
+
+    def text(level: object) -> str:
+        return str(labels.get(level, level))
+
     ref = info.get("ref")
     others = [lv for lv in levels if lv != ref]
     if not others:
@@ -470,7 +475,7 @@ def _categorical_contrast_ame(
         term=var,
         # Contrast labels, one per row, the way `values` carries the at-values
         # of a predictive margin: in both cases it names the rows of this term.
-        values=np.array([f"{lv} - {ref}" for lv in others], dtype=object),
+        values=np.array([f"{text(lv)} - {text(ref)}" for lv in others], dtype=object),
         margin=margins,
         se=se,
         lci=margins - t_crit * se,
