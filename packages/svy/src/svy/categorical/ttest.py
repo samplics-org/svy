@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from typing import TYPE_CHECKING, Any, ClassVar, Iterator, Literal, Self, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar, Iterator, Literal, Mapping, Self, Sequence
 
 import msgspec
 
@@ -31,6 +31,8 @@ from svy.utils.formats import _fmt_fixed
 if TYPE_CHECKING:
     import polars as pl
 
+    from svy.metadata.variable_meta import ResolvedLabels
+
 log = logging.getLogger(__name__)
 
 # Keys used by the central UI for styling
@@ -45,6 +47,18 @@ def _level_text(value: Any) -> str:
 def _level_repr(value: Any) -> str:
     """A level in a ``Groups: [a vs b]`` header: text quoted, bools lowercase."""
     return repr(value) if isinstance(value, str) else _level_text(value)
+
+
+def _groups_header(groups: Any) -> str:
+    g1, g2 = groups.levels
+    labels = getattr(groups, "labels", None)
+    a, b = labels if labels is not None else (_level_repr(g1), _level_repr(g2))
+    return f"Groups: {groups.var} = [{a} vs {b}]"
+
+
+def _group_level_text(groups: Any, level: Any) -> str:
+    label = groups.label_of(level) if isinstance(groups, GroupLevels) else None
+    return _level_text(level) if label is None else label
 
 
 # =============================================================================
@@ -117,6 +131,19 @@ class GroupLevels(msgspec.Struct, frozen=True):
 
     var: str
     levels: tuple[Category, Category]
+    labels: tuple[str, str] | None = None  # value labels of `levels`; None prints codes
+
+    def labelled(self, labels: ResolvedLabels | None) -> GroupLevels:
+        """A copy carrying `labels`' text for each level; unchanged when None."""
+        if labels is None:
+            return self
+        a, b = self.levels
+        return msgspec.structs.replace(self, labels=(labels.display(a), labels.display(b)))
+
+    def label_of(self, level: Category | None) -> str | None:
+        if self.labels is None:
+            return None
+        return next((lab for lv, lab in zip(self.levels, self.labels) if lv == level), None)
 
 
 # ------ Helper functions --------
@@ -485,7 +512,7 @@ class TTestTwoGroups(msgspec.Struct, tag="two", tag_field="kind", kw_only=True, 
             if show_group:
                 row.append(str(e.group or ""))
             if show_level:
-                row.append(_level_text(e.group_level))
+                row.append(_group_level_text(self.groups, e.group_level))
             if show_ylev:
                 row.append(_level_text(e.y_level))
             row += [
@@ -536,14 +563,12 @@ class TTestTwoGroups(msgspec.Struct, tag="two", tag_field="kind", kw_only=True, 
 
         _validate_two_sample(self)
 
-        gvar = self.groups.var
-        g1, g2 = self.groups.levels
         pair_txt = "paired" if self.paired else "unpaired"
 
         # Build header info
         header_lines = [
             Text(f"Y = {self.y!r}"),
-            Text(f"Groups: {gvar} = [{_level_repr(g1)} vs {_level_repr(g2)}]"),
+            Text(_groups_header(self.groups)),
             Text(""),
         ]
 
@@ -759,12 +784,20 @@ def ttest_two_groups_frame(
                 }
             )
 
+        labels = getattr(r.groups, "labels", None)
         if not tidy:
             df = pl.DataFrame(msgspec.to_builtins(r.estimates))
             if "by" in df.columns and df["by"].is_null().all():
                 df = df.drop("by", "by_level")
             if "y_level" in df.columns and df["y_level"].is_null().all():
                 df = df.drop("y_level")
+            if labels is not None:
+                df = df.with_columns(
+                    pl.Series(
+                        "group_level_label",
+                        [r.groups.label_of(e.group_level) for e in r.estimates],
+                    )
+                )
             return df
 
         # tidy=True: promote group/by/y to named columns
@@ -776,6 +809,8 @@ def ttest_two_groups_frame(
             # group is always present for two-sample
             if e.group is not None:
                 row[e.group] = e.group_level
+                if labels is not None:
+                    row[f"{e.group}_label"] = r.groups.label_of(e.group_level)
             if e.y_level is not None:
                 row[e.y] = e.y_level
             row.update(
@@ -832,9 +867,11 @@ class TTestByResult:
         alpha: float = 0.05,
         where_clause: str | None = None,
         findings: Sequence[SvyWarning] = (),
+        by_labels: Mapping[str, ResolvedLabels] | None = None,
     ) -> None:
         self.results = results
         self.by = by
+        self.by_labels = dict(by_labels or {})
         self.y = y
         self.mean_h0 = mean_h0
         self.groups = groups
@@ -867,10 +904,16 @@ class TTestByResult:
         level_str = _level_text(by_level)
         parts = level_str.split(_BY_SEP)
         if len(parts) == len(self._by_list) and len(parts) > 1:
-            return ", ".join(f"{var} = {val}" for var, val in zip(self._by_list, parts))
-        # Single by or unable to split — use var = level format
-        by_name = ", ".join(self._by_list)
-        return f"{by_name} = {level_str}"
+            return ", ".join(
+                f"{var} = {self._by_text(var, val)}" for var, val in zip(self._by_list, parts)
+            )
+        if len(self._by_list) == 1:
+            level_str = self._by_text(self._by_list[0], level_str)
+        return f"{', '.join(self._by_list)} = {level_str}"
+
+    def _by_text(self, var: str, text: str) -> str:
+        labels = self.by_labels.get(var)
+        return text if labels is None else labels.display(text)
 
     # ── Width configuration ──────────────────────────────────────────────
 
@@ -916,10 +959,7 @@ class TTestByResult:
             header_lines.append(Text(f"H₀: μ = {_fmt_fixed(self.mean_h0, dec=4)}"))
         else:
             if self.groups:
-                g1, g2 = self.groups.levels
-                header_lines.append(
-                    Text(f"Groups: {self.groups.var} = [{_level_repr(g1)} vs {_level_repr(g2)}]")
-                )
+                header_lines.append(Text(_groups_header(self.groups)))
         header_lines.append(Text(f"By: {', '.join(self._by_list)}"))
         if self.where_clause:
             where_text = Text()
@@ -971,7 +1011,6 @@ class TTestByResult:
             ]
         else:
             if self.groups:
-                g1, g2 = self.groups.levels
                 pair_txt = (
                     "paired"
                     if (self.results and getattr(self.results[0], "paired", False))
@@ -980,7 +1019,7 @@ class TTestByResult:
                 lines = [
                     f"T-Test: Two-sample ({pair_txt})",
                     f"  Y = {self.y!r}",
-                    f"  Groups: {self.groups.var} = [{_level_repr(g1)} vs {_level_repr(g2)}]",
+                    f"  {_groups_header(self.groups)}",
                     f"  By: {by_display}",
                 ]
             else:
@@ -1079,10 +1118,12 @@ def ttest_to_markdown(tt: TTestOneGroup | TTestTwoGroups, *, dec: int = 4) -> st
 
 
 def _rows_for_plain(tt: TTestOneGroup | TTestTwoGroups, *, dec: int = 4) -> Iterator[list[str]]:
+    groups = tt.groups if isinstance(tt, TTestTwoGroups) else None
+
     def fmt_e(e: TtestEst) -> list[str]:
         return [
             str(e.group or ""),
-            _level_text(e.group_level),
+            _group_level_text(groups, e.group_level),
             _level_text(e.y_level),
             _fmt_fixed(e.est, dec=dec),
             _fmt_fixed(e.se, dec=dec),
@@ -1115,7 +1156,7 @@ def _plain_estimates_table(tt: TTestOneGroup | TTestTwoGroups) -> str:
     for e in estimates:
         row: list[str] = []
         if is_two:
-            row.append(_level_text(e.group_level))
+            row.append(_group_level_text(tt.groups, e.group_level))
         row += [
             _fmt_fixed(e.est, dec=4),
             _fmt_fixed(e.se, dec=4),
@@ -1159,12 +1200,11 @@ def _plain_one_sample(tt: TTestOneGroup) -> str:
 
 
 def _plain_two_sample(tt: TTestTwoGroups) -> str:
-    g1, g2 = tt.groups.levels
     pair_txt = "paired" if tt.paired else "unpaired"
     lines = [
         f"T-Test: Two-sample ({pair_txt})",
         f"  Y = {tt.y!r}",
-        f"  Groups: {tt.groups.var} = [{_level_repr(g1)} vs {_level_repr(g2)}]",
+        f"  {_groups_header(tt.groups)}",
         "",
     ]
     lines.append(_plain_estimates_table(tt))

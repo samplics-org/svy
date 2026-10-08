@@ -8,6 +8,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **Two-way tables print their Rao-Scott tests.** `print(tab)` on a crosstab ends with `Rao-Scott F(3.30, 49.48) = 11.67, p < 0.001` (second-order) and `Rao-Scott chi2(3) = 35.21, p < 0.001` (first-order); one-way tables are unchanged. `ChiSquare`, `FDist` and `TDist` print in the same form on their own.
+
+- **`ttest(use_labels=)` and `ranktest(use_labels=)` show labelled groups and `by=` levels by their value labels**, as `tabulate` does: `Groups: area = [URBANA vs RURAL]`, the level rows and `── reg = Norte` section headers. None (the default) uses the labels when the variable has any; False shows the codes. The result keeps the codes (`GroupLevels.labels` holds the labels), and `to_polars("estimates")` adds a `<group>_label` column (`group_level_label` with `tidy=False`). Saved results keep the codes only.
+
 - **Choice enums carry a label and a description.** `SingletonMethod`, `DistFamily`, `LinkFunction`, `QuantileMethod` and `RankScoreMethod` members have `.label` and `.description`, and `describe()` lists `(value, label, description)` for every member, so applications show svy's own wording instead of copying it. The enums are unchanged otherwise (still `StrEnum`).
 - **`sample.weighting.trim()` annotates `upper`, `lower` and `by`** (a threshold or a number; one or several columns).
 
