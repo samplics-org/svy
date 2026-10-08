@@ -55,6 +55,9 @@ make dev                    # debug build (fast iteration)
 make build                  # release build
 ```
 
+`uv sync` and `uv run` rebuild svy-rs or svy-io (release mode) whenever their Rust or
+ReadStat sources change, so the first `uv run` after a native edit takes a few minutes.
+
 > Tip: install `sccache` and set `RUSTC_WRAPPER=sccache` to speed up Rust rebuilds.
 
 ---
