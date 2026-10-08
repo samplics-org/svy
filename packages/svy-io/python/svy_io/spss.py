@@ -553,11 +553,8 @@ def write_sav(
 
     for col_name in to_write.columns:
         if to_write[col_name].dtype == pl.Categorical:
-            # Encode against the categories actually present in THIS column.
-            # get_categories()/to_physical() reflect the dtype's category
-            # store, which under a global pl.StringCache contains every
-            # string interned by any column — leaking foreign labels and
-            # cache-order-dependent codes into the file.
+            # The category store is shared across columns; encode this column's
+            # own values so foreign labels and store-order codes don't leak.
             str_col = to_write[col_name].cast(pl.String)
             cats = str_col.drop_nulls().unique(maintain_order=True).to_list()
             code_map = {c: float(i + 1) for i, c in enumerate(cats)}
