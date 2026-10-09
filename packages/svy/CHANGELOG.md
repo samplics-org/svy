@@ -6,6 +6,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Changed
+
+- **Requires polars 2.0 or later** (was 1.36.1). The lock and CI test 2.x only; polars 2.0 needs Python 3.10+, within svy's 3.11+.
+
 ### Fixed
 
 - **Wide frames are fast.** `Sample()` cost grew with the square of the column count: 6.3 s at 20k rows × 4000 columns, now 38 ms. Every wrangling step is also 2–5× faster on wide frames, since a derived sample no longer deep-copies each variable's metadata.

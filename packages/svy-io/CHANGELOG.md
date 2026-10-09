@@ -4,6 +4,10 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 ## [Unreleased]
 
+### Changed
+
+- **Requires polars 2.0 or later** (was 1.34.0), as svy does.
+
 ## [0.6.0] — 2026-10-08
 
 ### Changed
