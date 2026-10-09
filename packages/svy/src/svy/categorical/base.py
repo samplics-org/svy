@@ -272,12 +272,7 @@ class Categorical:
         _check_share_of(share_of, colvar=colvar, units=units, count_total=count_total)
         from scipy.stats import t as t_dist
 
-        _raw = self._sample._data
-        local_data: pl.DataFrame = (
-            cast(pl.DataFrame, _raw)
-            if not isinstance(_raw, pl.LazyFrame)
-            else cast(pl.DataFrame, _raw.collect())
-        )
+        local_data: pl.DataFrame = self._sample._data
         design = self._sample._design
 
         # required columns

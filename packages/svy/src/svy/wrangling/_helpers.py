@@ -13,7 +13,7 @@ module (columns, values, rows, mutate, labels).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Iterable, cast
+from typing import TYPE_CHECKING, Iterable
 
 import polars as pl
 
@@ -24,17 +24,6 @@ from svy.errors import MethodError
 
 if TYPE_CHECKING:
     from svy.core.sample import Sample
-
-
-# -------------------------------------------------------------------
-# LazyFrame materialisation helper
-# -------------------------------------------------------------------
-
-
-def _eager_df(sample: "Sample") -> pl.DataFrame:
-    """Return sample._data as an eager DataFrame, collecting if LazyFrame."""
-    data = sample._data
-    return data if isinstance(data, pl.DataFrame) else cast(pl.DataFrame, data.collect())
 
 
 # -------------------------------------------------------------------
@@ -176,8 +165,8 @@ def _guard_weight_writes(
 
     svy's bookkeeping columns are refused the same way, whatever the design.
     """
-    old = _eager_df(sample)
-    new = new_data if isinstance(new_data, pl.DataFrame) else new_data.collect()
+    old = sample._data
+    new = new_data
     written = set(targets)
     same_rows = old.height == new.height
     reserved = [

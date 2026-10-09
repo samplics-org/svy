@@ -149,12 +149,7 @@ class Estimation:
                 return self._design_cache
             self._design_cache = None
 
-        _raw_data = self._sample._data
-        local_data: pl.DataFrame = (
-            cast(pl.DataFrame, _raw_data.collect())
-            if isinstance(_raw_data, pl.LazyFrame)
-            else cast(pl.DataFrame, _raw_data)
-        )
+        local_data: pl.DataFrame = self._sample._data
         design = self._sample._design
 
         cache: dict[str, Any] = {
@@ -238,12 +233,7 @@ class Estimation:
             self._polars_cache = None
 
         design = self._sample._design
-        _data_raw = self._sample._data
-        data: pl.DataFrame = (
-            cast(pl.DataFrame, _data_raw.collect())
-            if isinstance(_data_raw, pl.LazyFrame)
-            else cast(pl.DataFrame, _data_raw)
-        )
+        data: pl.DataFrame = self._sample._data
 
         # Fail-fast on unhandled singletons (Taylor variance path).
         require_singleton_rule(

@@ -7,8 +7,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal, Sequence
 
-import polars as pl
-
 from svy.core.types import WhereArg
 from svy.core.warnings import check_on_finding, finding_level
 from svy.errors import MethodError, SvyError
@@ -50,8 +48,6 @@ def filter_records(
         # dropped by BOTH the filter and its negation. Count them so the
         # user is told instead of rows silently vanishing from either side.
         _null_df = sample._data.select(pred.is_null().sum().alias("__n_null__"))
-        if isinstance(_null_df, pl.LazyFrame):
-            _null_df = _null_df.collect()
         n_null_pred = int(_null_df.item())
 
         filtered_data = sample._data.filter(pred)

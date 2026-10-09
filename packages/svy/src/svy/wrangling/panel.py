@@ -10,7 +10,6 @@ import polars as pl
 from svy.core.enumerations import MetadataSource
 from svy.core.panel import case_id_cols
 from svy.errors import DimensionError, MethodError
-from svy.wrangling._helpers import _eager_df
 from svy.wrangling.mutate import mutate as _mutate
 
 
@@ -62,7 +61,7 @@ def lag(
         raise MethodError.invalid_choice(
             where=ctx, param="cols", got=cols, allowed=["column names"]
         )
-    df = _eager_df(sample)
+    df = sample._data
     missing = [c for c in col_list if c not in df.columns]
     if missing:
         raise DimensionError.missing_columns(
