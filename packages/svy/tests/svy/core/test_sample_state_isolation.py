@@ -72,3 +72,29 @@ def test_replace_data_isolates_metadata(base_sample):
     derived = base_sample._replace_data(base_sample._data)
     derived.set_var_label("age", "changed")
     assert "age" not in base_sample.meta.var_labels
+
+
+def test_wrangling_fork_metadata_is_isolated_both_ways(base_sample):
+    derived = base_sample.wrangling.mutate({"age2": svy.col("age") * 2})
+    derived.set_value_labels("age", {10: "ten"})
+    base_sample.set_var_label("age", "Age")
+
+    base_meta = base_sample.meta.get("age")
+    assert base_meta.value_labels in (None, ())
+    assert derived.meta.get("age").labels == {10: "ten"}
+    assert "age" not in derived.meta.var_labels
+
+
+def test_wrangling_works_on_a_sample_with_a_catalog():
+    from svy.metadata import CategoryScheme, LabellingCatalog
+
+    catalog = LabellingCatalog().register(
+        CategoryScheme(concept="yesno", entries={1: "Yes", 0: "No"})
+    )
+    s = svy.Sample(pl.DataFrame({"q": [0, 1, 1], "w": [1.0, 1.0, 2.0]}), catalog=catalog)
+    s.use_scheme("q", "yesno")
+
+    derived = s.wrangling.mutate({"q2": svy.col("q") + 1})
+
+    assert derived.meta.catalog is catalog
+    assert derived.meta.value_labels["q"] == {1: "Yes", 0: "No"}

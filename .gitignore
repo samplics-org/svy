@@ -148,6 +148,7 @@ specs/
 # git does not descend into an excluded directory to find a negated pattern.
 **/benchmarks/*
 !packages/svy/benchmarks/bench_kernel.py
+!packages/svy/benchmarks/bench_wrangling.py
 !packages/svy/benchmarks/check_regression.py
 !packages/svy/benchmarks/baselines/
 examples/

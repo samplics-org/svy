@@ -522,6 +522,7 @@ def _describe_columns(
     percentiles: Sequence[float],
 ) -> list[DescribeItem]:
     items: list[DescribeItem] = []
+    schema = df.schema
     for col in cols:
         mtype: MeasurementType
         if metadata is not None:
@@ -529,9 +530,9 @@ def _describe_columns(
             if meta is not None:
                 mtype = meta.mtype
             else:
-                mtype = _infer_mtype_from_polars(df.schema[col])
+                mtype = _infer_mtype_from_polars(schema[col])
         else:
-            mtype = _infer_mtype_from_polars(df.schema[col])
+            mtype = _infer_mtype_from_polars(schema[col])
 
         if mtype is MeasurementType.CONTINUOUS:
             items.append(

@@ -549,6 +549,14 @@ class MetadataStore:
         self._catalog = catalog
         self._resolved_cache: dict[str, ResolvedLabels] = {}
 
+    def __deepcopy__(self, memo: dict[int, Any]) -> MetadataStore:
+        # Records are frozen, so sharing them isolates the copy; the catalog is
+        # shared as Sample.clone shares it (its lock cannot be deep-copied).
+        new = MetadataStore(catalog=self._catalog)
+        new._vars = dict(self._vars)
+        new._resolved_cache = dict(self._resolved_cache)
+        return new
+
     # =========================================================================
     # Properties
     # =========================================================================
@@ -1003,11 +1011,11 @@ class MetadataStore:
         Self
             For method chaining.
         """
-        for name in df.columns:
+        # df.schema rebuilds the whole schema on each access.
+        for name, dtype in df.schema.items():
             if not overwrite and name in self._vars:
                 continue
 
-            dtype = df.schema[name]
             mtype = self._infer_mtype(dtype)
             categories: tuple[Category, ...] | None = None
 
