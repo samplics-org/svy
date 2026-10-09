@@ -6,6 +6,11 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Fixed
+
+- **Wide frames are fast.** `Sample()` cost grew with the square of the column count: 6.3 s at 20k rows × 4000 columns, now 38 ms. Every wrangling step is also 2–5× faster on wide frames, since a derived sample no longer deep-copies each variable's metadata.
+- **Wrangling works on a Sample built with `catalog=`.** Every step raised `TypeError: cannot pickle '_thread.RLock' object`; the derived sample now shares the catalog, as `clone()` does.
+
 ## [0.32.1] — 2026-10-08
 
 ### Added
