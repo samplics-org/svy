@@ -495,7 +495,7 @@ fn compute_mean_grouped(
         .map(|c| df.column(c).and_then(|s| s.f64()))
         .transpose()?;
     let by_str = df.column(by_col)?.str()?;
-    let unique_groups = by_str.unique()?;
+    let unique_groups = crate::estimation::sorted_groups(by_str)?;
 
     // Index the design once — it is identical across by-groups; only the
     // domain-masked scores change per group.
@@ -849,7 +849,7 @@ fn compute_total_grouped(
         .map(|c| df.column(c).and_then(|s| s.f64()))
         .transpose()?;
     let by_str = df.column(by_col)?.str()?;
-    let unique_groups = by_str.unique()?;
+    let unique_groups = crate::estimation::sorted_groups(by_str)?;
 
     let design =
         build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?.with_calib(calib);
@@ -1237,7 +1237,7 @@ fn compute_ratio_grouped(
         .map(|c| df.column(c).and_then(|s| s.f64()))
         .transpose()?;
     let by_str = df.column(by_col)?.str()?;
-    let unique_groups = by_str.unique()?;
+    let unique_groups = crate::estimation::sorted_groups(by_str)?;
 
     let design =
         build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?.with_calib(calib);
@@ -1421,7 +1421,7 @@ fn compute_assoc(
     let by_str = by_col
         .map(|c| df.column(c).and_then(|s| s.str()))
         .transpose()?;
-    let unique_groups = by_str.map(|s| s.unique()).transpose()?;
+    let unique_groups = by_str.map(crate::estimation::sorted_groups).transpose()?;
     let groups: Vec<Option<&str>> = match unique_groups.as_ref() {
         Some(u) => u.iter().flatten().map(Some).collect(),
         None => vec![None],
@@ -2018,7 +2018,7 @@ fn compute_levels_grouped(
     levels.sort();
 
     let by_str = df.column(by_col)?.str()?;
-    let unique_groups = by_str.unique()?;
+    let unique_groups = crate::estimation::sorted_groups(by_str)?;
 
     // Design is identical across all (group, level) cells; index it once.
     let design =
@@ -2626,7 +2626,7 @@ fn compute_quantile_grouped(
         calib,
     )?;
     let by_str = df.column(by_col)?.str()?;
-    let unique_groups = by_str.unique()?;
+    let unique_groups = crate::estimation::sorted_groups(by_str)?;
 
     let k = probs.len();
     let mut by_vals: Vec<&str> = Vec::new();

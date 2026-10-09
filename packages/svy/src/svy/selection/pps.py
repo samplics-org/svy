@@ -463,9 +463,9 @@ def _pps_writeback(
             hit_col=hit_col,
             is_pps=True,
         )
-        df_new = src_df.join(other=temp, on=row_col, how=join_how, maintain_order="left").with_columns(
-            pl.col(row_col).cast(pl.Int64)
-        )
+        df_new = src_df.join(
+            other=temp, on=row_col, how=join_how, maintain_order="left"
+        ).with_columns(pl.col(row_col).cast(pl.Int64))
     else:
         prev_prob_col = design.prob
         if prev_prob_col is not None:
@@ -491,9 +491,9 @@ def _pps_writeback(
                 SVY_CERTAINTY: pl.Boolean,
             }
         )
-        df_new = src_df.join(other=temp, on=row_col, how=join_how, maintain_order="left").with_columns(
-            pl.col(row_col).cast(pl.Int64)
-        )
+        df_new = src_df.join(
+            other=temp, on=row_col, how=join_how, maintain_order="left"
+        ).with_columns(pl.col(row_col).cast(pl.Int64))
         if join_how == "left":
             df_new = df_new.with_columns(
                 pl.when(pl.col(out_prob_col).is_not_null())

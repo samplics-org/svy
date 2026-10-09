@@ -5,7 +5,7 @@ Column operations: clean, rename, remove, keep.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal, Mapping, Sequence, cast
+from typing import TYPE_CHECKING, Literal, Mapping, Sequence
 
 import polars as pl
 
@@ -45,12 +45,7 @@ def clean_names(
     inplace: bool = False,
 ) -> "Sample":
     """Standardize column names for easier downstream work."""
-    _raw_data = sample._data
-    _df_data: pl.DataFrame = (
-        cast(pl.DataFrame, _raw_data)
-        if not isinstance(_raw_data, pl.LazyFrame)
-        else cast(pl.DataFrame, _raw_data.collect())
-    )
+    _df_data: pl.DataFrame = sample._data
     cleaned_data, renames = _clean_names(
         data=_df_data,
         minimal=minimal,
@@ -98,12 +93,7 @@ def rename_columns(
         )
 
     try:
-        _raw2 = sample._data
-        _df2: pl.DataFrame = (
-            cast(pl.DataFrame, _raw2)
-            if not isinstance(_raw2, pl.LazyFrame)
-            else cast(pl.DataFrame, _raw2.collect())
-        )
+        _df2: pl.DataFrame = sample._data
         renamed_data = _rename(_df2, renames=renames)
     except (ValueError, KeyError):
         raise

@@ -44,12 +44,7 @@ def rep_weight_cols(sample: Sample) -> list[str]:
     if hasattr(rw, "_cached_cols") and rw._cached_cols is not None:
         return rw._cached_cols
 
-    _lraw = sample._data
-    local_data: pl.DataFrame = (
-        cast(pl.DataFrame, _lraw.collect())
-        if isinstance(_lraw, pl.LazyFrame)
-        else cast(pl.DataFrame, _lraw)
-    )
+    local_data: pl.DataFrame = sample._data
 
     if rw.prefix:
         # The spec's own columns; see core.data_prep._resolve_rep_weight_cols.

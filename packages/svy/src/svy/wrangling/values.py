@@ -21,7 +21,6 @@ from svy.engine.wrangling.cleaning import (
 )
 from svy.errors import DimensionError, MethodError
 from svy.wrangling._helpers import (
-    _eager_df,
     _guard_weight_writes,
     _rebuild_concat_if_touched,
     _resolve_target,
@@ -82,7 +81,7 @@ def top_code(
     inplace: bool = False,
 ) -> "Sample":
     """Cap values at upper bounds (top coding)."""
-    _df = _eager_df(sample)
+    _df = sample._data
     new_data = _top_code(_df, top_codes=top_codes, replace=replace, into=into)
     _guard_weight_writes(
         sample, new_data, where="wrangling.top_code", targets=top_codes if replace else ()
@@ -102,7 +101,7 @@ def bottom_code(
     inplace: bool = False,
 ) -> "Sample":
     """Cap values at lower bounds (bottom coding)."""
-    _df = _eager_df(sample)
+    _df = sample._data
     new_data = _bottom_code(_df, bottom_codes=bottom_codes, replace=replace, into=into)
     _guard_weight_writes(
         sample, new_data, where="wrangling.bottom_code", targets=bottom_codes if replace else ()
@@ -122,7 +121,7 @@ def bottom_and_top_code(
     inplace: bool = False,
 ) -> "Sample":
     """Cap values at both lower and upper bounds."""
-    _df = _eager_df(sample)
+    _df = sample._data
     new_data = _bottom_and_top_code(
         _df,
         bottom_and_top_codes=bottom_and_top_codes,
@@ -151,7 +150,7 @@ def recode(
     inplace: bool = False,
 ) -> "Sample":
     """Map old values to new labels."""
-    _df = _eager_df(sample)
+    _df = sample._data
     new_data = _recode(_df, cols=cols, recodes=recodes, replace=replace, into=into)
     _guard_weight_writes(
         sample,
@@ -203,7 +202,7 @@ def categorize(
 
     # -- Compute bins from percentiles if needed -------------------------
     if percentiles is not None:
-        _df = _eager_df(sample)
+        _df = sample._data
 
         if col not in _df.columns:
             raise DimensionError.missing_columns(
@@ -244,7 +243,7 @@ def categorize(
 
     # -- Delegate to existing _categorize --------------------------------
     # Fix 3: reuse _df if already materialised, otherwise get it now
-    _df_cat = _df if percentiles is not None else _eager_df(sample)
+    _df_cat = _df if percentiles is not None else sample._data
     new_data = _categorize(
         data=_df_cat,
         varname=col,
@@ -315,7 +314,7 @@ def cast_columns(
 
     if strict:
         data = sample._data
-        schema = data.collect_schema() if isinstance(data, pl.LazyFrame) else data.schema
+        schema = data.schema
         to_check = [
             c for c, dt in pairs if _is_integer_dtype(dt) and c in schema and schema[c].is_float()
         ]
@@ -331,8 +330,6 @@ def cast_columns(
                     for c in to_check
                 ]
             )
-            if isinstance(check_df, pl.LazyFrame):
-                check_df = check_df.collect()
             offenders = {c: int(check_df[c][0]) for c in to_check if int(check_df[c][0]) > 0}
             if offenders:
                 raise MethodError(
@@ -377,7 +374,7 @@ def fill_null(
         int_cols: set[str] = set()
         if strategy == "mean":
             data = sample._data
-            schema = data.collect_schema() if isinstance(data, pl.LazyFrame) else data.schema
+            schema = data.schema
             int_cols = {c for c in col_list if c in schema and schema[c].is_integer()}
             if int_cols:
                 sample.warn(

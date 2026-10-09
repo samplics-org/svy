@@ -15,7 +15,7 @@ from svy.core import constants as K
 from svy.core._check import check_key
 from svy.core.warnings import check_on_finding, finding_level
 from svy.errors import DimensionError, MethodError
-from svy.wrangling._helpers import _eager_df, _guard_weight_writes, _resolve_target
+from svy.wrangling._helpers import _guard_weight_writes, _resolve_target
 
 
 if TYPE_CHECKING:
@@ -157,10 +157,10 @@ def join(
     left_keys = [a for a, _ in pairs]
     right_keys = [b for _, b in pairs]
 
-    df = _eager_df(sample)
+    df = sample._data
     if isinstance(other, Sample):
         other_meta = other._metadata
-        other_df = _eager_df(other)
+        other_df = other._data
     elif isinstance(other, pl.LazyFrame):
         other_meta = None
         other_df = other
