@@ -141,6 +141,18 @@ class TestOrdering:
         assert set(shuffled) == set(baseline)
         assert shuffled != baseline
 
+    def test_random_order_is_pinned_for_a_seed(self, wired):
+        # Golden: a seed must give these rows on every polars and NumPy version.
+        ids = load("toy", order_type="random", rstate=42, n=8)["id"].to_list()
+        assert ids == [174, 34, 64, 188, 18, 5, 160, 123]
+
+    @pytest.mark.parametrize("seed", [2**40 + 3, -5])
+    def test_random_takes_wide_and_negative_seeds(self, wired, seed):
+        r1 = load("toy", order_type="random", rstate=seed)["id"].to_list()
+        r2 = load("toy", order_type="random", rstate=seed)["id"].to_list()
+        assert r1 == r2
+        assert sorted(r1) == list(range(200))
+
     def test_invalid_order_type_raises(self, wired):
         with pytest.raises(ValueError, match="order_type"):
             load("toy", order_type="sideways")
