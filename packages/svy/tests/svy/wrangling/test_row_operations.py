@@ -281,3 +281,14 @@ def test_with_row_index_large_offset():
     s = Sample(df)
     out = s.wrangling.with_row_index(offset=1000000)
     assert out._data["row_index"].to_list() == [1000000, 1000001, 1000002]
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_order_by_keeps_ties_in_input_order_on_two_keys_nulls_first(descending):
+    n = 1000
+    df = pl.DataFrame(
+        {"id": range(n), "a": [i % 3 for i in range(n)], "b": [i % 5 for i in range(n)]}
+    )
+    out = Sample(df).wrangling.order_by(["a", "b"], descending=descending, nulls_last=False)
+    inversions = out._data.select((pl.col("id").diff().over(["a", "b"]) < 0).sum()).item()
+    assert inversions == 0

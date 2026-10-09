@@ -113,7 +113,7 @@ def _build_group_keys(
         stratum_by_col = key_col("stratum_by")
         stratum_by_arr = data[stratum_by_col].to_numpy()
 
-    G = _unique_as_str(data[stratum_by_col].unique().to_list()) if stratum_by_col else []
+    G = _unique_as_str(data[stratum_by_col].unique(maintain_order=True).to_list()) if stratum_by_col else []
 
     if by_cols:
         data = cast(
@@ -128,11 +128,11 @@ def _build_group_keys(
             ),
         )
         by_only_col = key_col("only_by")
-        B = _unique_as_str(data[by_only_col].unique().to_list())
+        B = _unique_as_str(data[by_only_col].unique(maintain_order=True).to_list())
     else:
         B = []
 
-    S = _unique_as_str(data[stratum_col].unique().to_list()) if stratum_col else []
+    S = _unique_as_str(data[stratum_col].unique(maintain_order=True).to_list()) if stratum_col else []
 
     return stratum_by_col, stratum_by_arr, G, B, S, data
 

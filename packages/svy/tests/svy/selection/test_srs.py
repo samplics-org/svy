@@ -387,3 +387,23 @@ def test_sample_select_srs_sublevel_unrecognized_keys_raises():
         assert False, "Expected ValueError for unrecognized keys in n"
     except Exception as e:
         assert "keys" in str(e)
+
+
+def _tied_frame(n=600):
+    return pl.DataFrame(
+        {
+            "id": range(n),
+            "a": [i % 3 for i in range(n)],
+            "b": [i % 4 for i in range(n)],
+            "size": [1.0 + i % 7 for i in range(n)],
+        }
+    )
+
+
+def test_srs_order_by_walks_ties_in_frame_order():
+    df = _tied_frame()
+    ordered = Sample(df).sampling.srs(n=40, order_by=["a", "b"], rstate=np.random.default_rng(3))
+    presorted = Sample(df.sort(["a", "b"], maintain_order=True)).sampling.srs(
+        n=40, rstate=np.random.default_rng(3)
+    )
+    assert ordered.data["id"].sort().to_list() == presorted.data["id"].sort().to_list()

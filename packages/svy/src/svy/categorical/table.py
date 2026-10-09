@@ -772,7 +772,7 @@ class Table:
                     )
 
         row_levels = list(
-            dict.fromkeys(self.rowvals or df.get_column("rowvar").unique().to_list())
+            dict.fromkeys(self.rowvals or df.get_column("rowvar").unique(maintain_order=True).to_list())
         )
         if resolve_labels and self._metadata is not None:
             row_resolved = self._metadata._resolve(self.rowvar)
@@ -835,7 +835,7 @@ class Table:
 
         # TWO-WAY
         col_levels_raw = list(
-            dict.fromkeys(self.colvals or df.get_column("colvar").unique().to_list())
+            dict.fromkeys(self.colvals or df.get_column("colvar").unique(maintain_order=True).to_list())
         )
         if resolve_labels and self._metadata is not None:
             col_resolved = self._metadata._resolve(self.colvar)
@@ -1042,11 +1042,13 @@ def show_table(tbl: Table, *, dec: int = 5, use_rich: bool = True) -> None:
 
 def _reindex_rows_only(df, *, row_levels, row_name: str):
     skel = pl.DataFrame({row_name: row_levels})
-    return skel.join(df, on=row_name, how="left")
+    return skel.join(df, on=row_name, how="left", maintain_order="left")
 
 
 def _reindex_polars(wide, *, row_levels, col_levels, row_name: str):
-    wide = pl.DataFrame({row_name: row_levels}).join(wide, on=row_name, how="left")
+    wide = pl.DataFrame({row_name: row_levels}).join(
+        wide, on=row_name, how="left", maintain_order="left"
+    )
 
     current_cols = [c for c in wide.columns if c != row_name]
     desired_cols = [c for c in col_levels if c in current_cols]

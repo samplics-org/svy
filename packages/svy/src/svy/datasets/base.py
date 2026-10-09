@@ -304,7 +304,7 @@ def _apply_order(
     if order_by is None:
         return lf
 
-    return lf.sort(order_by, descending=(order_type == "descending"))
+    return lf.sort(order_by, descending=(order_type == "descending"), maintain_order=True)
 
 
 # --------------------------------------------------------------------------- #

@@ -196,7 +196,7 @@ class Estimation:
                     return s_temp.to_numpy(), None
                 return (
                     s_temp.cast(pl.Categorical).to_physical().to_numpy(),
-                    s_temp.unique().to_list(),
+                    s_temp.unique().sort().to_list(),
                 )
 
             s = local_data[target_col]
@@ -207,7 +207,7 @@ class Estimation:
             # non-string dtypes go through Utf8 first.
             if s.dtype not in (pl.Utf8, pl.Categorical, pl.Enum):
                 s = s.cast(pl.Utf8)
-            return (s.cast(pl.Categorical).to_physical().to_numpy(), s.unique().to_list())
+            return (s.cast(pl.Categorical).to_physical().to_numpy(), s.unique().sort().to_list())
 
         cache["stratum"] = _process_component(design.stratum, "stratum")
         cache["psu"] = _process_component(design.variance_psu, "psu")

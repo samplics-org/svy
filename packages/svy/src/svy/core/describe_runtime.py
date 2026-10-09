@@ -274,7 +274,7 @@ def _build_freqs(
             pl.DataFrame({"__k": s, "__w": w})
             .group_by("__k")
             .agg(pl.col("__w").sum().alias("count"))
-            .sort("count", descending=True)
+            .sort(["count", "__k"], descending=[True, False], nulls_last=True)
         )
         denom = _to_float(full["count"].sum()) if full.height else 0.0
     else:
@@ -283,7 +283,7 @@ def _build_freqs(
             .group_by("__k")
             .len()
             .rename({"len": "count"})
-            .sort("count", descending=True)
+            .sort(["count", "__k"], descending=[True, False], nulls_last=True)
         )
         denom = float(s.len())
     n_levels = int(full.height)

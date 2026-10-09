@@ -132,7 +132,9 @@ def order_by(
     inplace: bool = False,
 ) -> "Sample":
     """Sort rows by one or more columns."""
-    new_data = sample._data.sort(by=cols, descending=descending, nulls_last=nulls_last)
+    new_data = sample._data.sort(
+        by=cols, descending=descending, nulls_last=nulls_last, maintain_order=True
+    )
     return _resolve_target(sample, new_data, inplace=inplace)
 
 

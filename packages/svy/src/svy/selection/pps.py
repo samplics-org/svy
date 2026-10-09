@@ -463,7 +463,7 @@ def _pps_writeback(
             hit_col=hit_col,
             is_pps=True,
         )
-        df_new = src_df.join(other=temp, on=row_col, how=join_how).with_columns(
+        df_new = src_df.join(other=temp, on=row_col, how=join_how, maintain_order="left").with_columns(
             pl.col(row_col).cast(pl.Int64)
         )
     else:
@@ -491,7 +491,7 @@ def _pps_writeback(
                 SVY_CERTAINTY: pl.Boolean,
             }
         )
-        df_new = src_df.join(other=temp, on=row_col, how=join_how).with_columns(
+        df_new = src_df.join(other=temp, on=row_col, how=join_how, maintain_order="left").with_columns(
             pl.col(row_col).cast(pl.Int64)
         )
         if join_how == "left":

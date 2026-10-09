@@ -190,3 +190,16 @@ def test_same_order_across_processes():
     ]
     assert all(r == runs[0] for r in runs[1:])
     assert runs[0]["mean"]["keys"] == list("abcdefgh")
+
+
+def test_estimate_strata_are_sorted():
+    df = pl.DataFrame(
+        {
+            "st": ["north", "south", "east", "west", "central"] * 20,
+            "y": [float(i % 9) for i in range(100)],
+            "w": [1.0] * 100,
+        }
+    )
+    sample = Sample(df, Design(stratum="st", wgt="w"))
+    for _ in range(5):
+        assert sample.estimation.mean("y").strata == ["central", "east", "north", "south", "west"]

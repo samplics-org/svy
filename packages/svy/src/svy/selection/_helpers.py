@@ -56,7 +56,9 @@ def _apply_order(
         return data.sample(fraction=1.0, with_replacement=False, shuffle=True, seed=seed)
     if order_by is not None:
         sort_cols = [order_by] if isinstance(order_by, str) else list(order_by)
-        return data.sort(by=sort_cols, descending=(order_type == "descending"))
+        return data.sort(
+            by=sort_cols, descending=(order_type == "descending"), maintain_order=True
+        )
     return data
 
 

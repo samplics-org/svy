@@ -428,7 +428,13 @@ def _srs_writeback(
         )
         # left join so non-eligible rows stay with null selection columns
         join_how = "left" if where_mask is not None else "inner"
-        df_new = src_df.join(other=temp, left_on=SVY_ROW_INDEX, right_on=row_col, how=join_how)
+        df_new = src_df.join(
+            other=temp,
+            left_on=SVY_ROW_INDEX,
+            right_on=row_col,
+            how=join_how,
+            maintain_order="left",
+        )
     else:
         prob_col = prob_name or design.prob or SVY_PROB
         if design.prob is not None:
@@ -449,7 +455,13 @@ def _srs_writeback(
         )
         # left join: non-eligible rows get null for prob/hit/weight
         join_how = "left" if where_mask is not None else "inner"
-        df_new = src_df.join(other=temp, left_on=SVY_ROW_INDEX, right_on=row_col, how=join_how)
+        df_new = src_df.join(
+            other=temp,
+            left_on=SVY_ROW_INDEX,
+            right_on=row_col,
+            how=join_how,
+            maintain_order="left",
+        )
         if join_how == "left":
             # weight is 1/prob only where prob is not null
             df_new = df_new.with_columns(

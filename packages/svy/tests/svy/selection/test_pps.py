@@ -455,3 +455,23 @@ class TestOtherPPSMethods:
         samp = Sample(DF.clone(), design)
         with pytest.raises(TypeError):
             samp.sampling.pps_wr(n=2, order_by="age", drop_nulls=True)
+
+
+def test_pps_sys_order_by_walks_ties_in_frame_order():
+    n = 600
+    df = pl.DataFrame(
+        {
+            "id": range(n),
+            "a": [i % 3 for i in range(n)],
+            "b": [i % 4 for i in range(n)],
+            "size": [1.0 + i % 7 for i in range(n)],
+        }
+    )
+    design = Design(mos="size")
+    ordered = Sample(df, design).sampling.pps_sys(
+        n=40, order_by=["a", "b"], rstate=np.random.default_rng(3)
+    )
+    presorted = Sample(df.sort(["a", "b"], maintain_order=True), design).sampling.pps_sys(
+        n=40, rstate=np.random.default_rng(3)
+    )
+    assert ordered.data["id"].sort().to_list() == presorted.data["id"].sort().to_list()

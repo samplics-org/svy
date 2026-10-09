@@ -178,3 +178,10 @@ def test_describe_str_lists_each_column_type(sample: Sample):
     assert "Numeric" in s
     assert "Categorical" in s
     assert "Boolean" in s
+
+
+def test_describe_top_k_breaks_count_ties_by_level():
+    df = pl.DataFrame({"g": ["d", "b", "e", "a", "c"] * 4 + ["z"] * 9})
+    for _ in range(5):
+        item = Sample(df).describe(columns=["g"], weighted=False, top_k=3).items[0]
+        assert [f.level for f in item.levels] == ["z", "a", "b"]
