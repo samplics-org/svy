@@ -772,7 +772,9 @@ class Table:
                     )
 
         row_levels = list(
-            dict.fromkeys(self.rowvals or df.get_column("rowvar").unique(maintain_order=True).to_list())
+            dict.fromkeys(
+                self.rowvals or df.get_column("rowvar").unique(maintain_order=True).to_list()
+            )
         )
         if resolve_labels and self._metadata is not None:
             row_resolved = self._metadata._resolve(self.rowvar)
@@ -835,7 +837,9 @@ class Table:
 
         # TWO-WAY
         col_levels_raw = list(
-            dict.fromkeys(self.colvals or df.get_column("colvar").unique(maintain_order=True).to_list())
+            dict.fromkeys(
+                self.colvals or df.get_column("colvar").unique(maintain_order=True).to_list()
+            )
         )
         if resolve_labels and self._metadata is not None:
             col_resolved = self._metadata._resolve(self.colvar)

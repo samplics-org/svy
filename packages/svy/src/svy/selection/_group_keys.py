@@ -87,9 +87,6 @@ def _build_group_keys(
     S               : unique stratum keys
     data            : DataFrame with synthetic group columns appended
     """
-    if isinstance(data, pl.LazyFrame):
-        data = cast(pl.DataFrame, data.collect())
-
     group_parts: list[str] = []
     if stratum_col is not None:
         group_parts.append(stratum_col)
@@ -113,7 +110,11 @@ def _build_group_keys(
         stratum_by_col = key_col("stratum_by")
         stratum_by_arr = data[stratum_by_col].to_numpy()
 
-    G = _unique_as_str(data[stratum_by_col].unique(maintain_order=True).to_list()) if stratum_by_col else []
+    G = (
+        _unique_as_str(data[stratum_by_col].unique(maintain_order=True).to_list())
+        if stratum_by_col
+        else []
+    )
 
     if by_cols:
         data = cast(
@@ -132,7 +133,11 @@ def _build_group_keys(
     else:
         B = []
 
-    S = _unique_as_str(data[stratum_col].unique(maintain_order=True).to_list()) if stratum_col else []
+    S = (
+        _unique_as_str(data[stratum_col].unique(maintain_order=True).to_list())
+        if stratum_col
+        else []
+    )
 
     return stratum_by_col, stratum_by_arr, G, B, S, data
 
