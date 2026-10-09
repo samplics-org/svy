@@ -456,7 +456,7 @@ fn compute_replicate_assoc(
 
     // Ungrouped runs as a single unnamed domain, so one path covers both shapes.
     let by_str = by_col.map(|c| df.column(c).and_then(|s| s.str())).transpose()?;
-    let unique_groups = by_str.map(|s| s.unique()).transpose()?;
+    let unique_groups = by_str.map(crate::estimation::sorted_groups).transpose()?;
     let group_names: Vec<Option<&str>> = match unique_groups.as_ref() {
         Some(u) => u.iter().flatten().map(Some).collect(),
         None => vec![None],

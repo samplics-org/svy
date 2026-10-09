@@ -1061,3 +1061,35 @@ def test_the_two_corrections_stay_independent(key):
     sub = df.filter(pl.col("sch.wide") == "Yes") if domain else df
     expected = 1.0 / (1.0 - sub.height / sub["pw"].sum())
     assert got["wor"]["deff"] / got["wr"]["deff"] == pytest.approx(expected, rel=1e-9)
+
+
+_GROUPS = [f"g{i:02d}" for i in range(12)]
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda df: ps.taylor_mean(df, "y", "w", by_col="g"),
+        lambda df: ps.taylor_total(df, "y", "w", by_col="g"),
+        lambda df: ps.taylor_ratio(df, "y", "x", "w", by_col="g"),
+        lambda df: ps.taylor_prop(df, "c", "w", by_col="g"),
+        lambda df: ps.taylor_quantile(df, "y", "w", [0.5], by_col="g"),
+    ],
+    ids=["mean", "total", "ratio", "prop", "quantile"],
+)
+def test_by_groups_come_back_sorted(call):
+    rng = np.random.default_rng(0)
+    n = 600
+    df = pl.DataFrame(
+        {
+            "y": rng.normal(size=n),
+            "x": rng.uniform(1, 2, n),
+            "c": [str(i % 3) for i in range(n)],
+            "w": np.ones(n),
+            "g": [_GROUPS[(7 * i) % 12] for i in range(n)],
+        }
+    )
+    for _ in range(3):
+        out = call(df)
+        frame = out[0] if isinstance(out, tuple) else out
+        assert frame["g"].unique(maintain_order=True).to_list() == _GROUPS

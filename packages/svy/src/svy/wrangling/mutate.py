@@ -5,7 +5,7 @@ Column creation and transformation via ``mutate()``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Mapping, cast
+from typing import TYPE_CHECKING, Mapping
 
 import numpy as np
 import polars as pl
@@ -101,12 +101,7 @@ def mutate(
     inplace: bool = False,
 ) -> "Sample":
     """Create or transform columns using expressions, scalars, or arrays."""
-    _raw_ld = sample._data
-    local_data: pl.DataFrame = (
-        cast(pl.DataFrame, _raw_ld)
-        if not isinstance(_raw_ld, pl.LazyFrame)
-        else cast(pl.DataFrame, _raw_ld.collect())
-    )
+    local_data: pl.DataFrame = sample._data
     n_rows = local_data.height
     existing_cols = set(local_data.columns)
 

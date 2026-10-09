@@ -5,15 +5,14 @@ Unified data preparation for all svy Rust backend calls.
 Centralizes the common operations that every public API (estimation and
 categorical) needs before calling Rust:
 
-  1. Materialize LazyFrame
-  2. Column selection (only needed columns for efficiency)
-  3. Missing value handling (drop or assert)
-  4. Concatenated design columns (stratum, psu, ssu, by)
-  5. Paired difference (y - y_pair)
-  6. Weight column creation (if no design weight)
-  7. Type casting (y→Float64, strata/psu→String)
-  8. Singleton filtering
-  9. FPC column computation
+  1. Column selection (only needed columns for efficiency)
+  2. Missing value handling (drop or assert)
+  3. Concatenated design columns (stratum, psu, ssu, by)
+  4. Paired difference (y - y_pair)
+  5. Weight column creation (if no design weight)
+  6. Type casting (y→Float64, strata/psu→String)
+  7. Singleton filtering
+  8. FPC column computation
   10. Where clause → domain column + zero weights (main AND replicate)
       for non-domain observations
 
@@ -87,8 +86,6 @@ def _get_design_codes(sample: Sample, design) -> dict[str, pl.Series] | None:
         return cached[1]
 
     data = sample._data
-    if isinstance(data, pl.LazyFrame):
-        data = data.collect()
 
     exprs: list[pl.Expr] = []
     key_to_name: dict[str, str] = {}
@@ -413,12 +410,7 @@ def prepare_data(
     _sync = getattr(sample, "_sync_parts", None)
     if _sync is not None:
         _sync()
-    _raw = sample._data
-    local_data: pl.DataFrame = (
-        cast(pl.DataFrame, _raw)
-        if not isinstance(_raw, pl.LazyFrame)
-        else cast(pl.DataFrame, _raw.collect())
-    )
+    local_data: pl.DataFrame = sample._data
     design = sample._design
 
     # ── Phase C: attach cached integer design codes ─────────────────────

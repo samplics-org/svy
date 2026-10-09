@@ -176,11 +176,7 @@ class _Engine:
     # ══════════════════════════════════════════════════════════════════════
 
     def _narrow_data(self) -> "pl.DataFrame":
-        """Narrow self._sample._data to pl.DataFrame, collecting if LazyFrame."""
-        raw = self._sample._data
-        if isinstance(raw, pl.LazyFrame):
-            return cast(pl.DataFrame, raw.collect())
-        return cast(pl.DataFrame, raw)
+        return self._sample._data
 
     def _narrow_design(self) -> "Design":
         """Narrow self._sample._design to Design."""
