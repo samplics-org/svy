@@ -4,6 +4,10 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ## [Unreleased]
 
+### Changed
+
+- **Requires polars 2.0 or later** (was 1.39.1), as svy does. The Rust side is unchanged (polars crate 0.55).
+
 ## [0.18.0] — 2026-09-30
 
 ### Added
