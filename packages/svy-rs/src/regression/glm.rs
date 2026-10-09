@@ -1373,7 +1373,7 @@ pub fn fit_glm_by(
     // Materialize by_col as strings, enumerate unique levels.
     let by_str_series = by_col.cast(&DataType::String)?;
     let by_str = by_str_series.str()?;
-    let unique_groups = by_str.unique()?;
+    let unique_groups = crate::estimation::sorted_groups(by_str)?;
 
     // Domain fits are independent; fan them out over the rayon pool and collect
     // in level order (deterministic, thread-count-independent — see the policy
