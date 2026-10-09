@@ -15,6 +15,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **Wide frames are fast.** `Sample()` cost grew with the square of the column count: 6.3 s at 20k rows × 4000 columns, now 38 ms. Every wrangling step is also 2–5× faster on wide frames, since a derived sample no longer deep-copies each variable's metadata.
 - **Wrangling works on a Sample built with `catalog=`.** Every step raised `TypeError: cannot pickle '_thread.RLock' object`; the derived sample now shares the catalog, as `clone()` does.
 - **Row order no longer depends on polars internals.** Sorts on two or more columns kept tied rows in an arbitrary order. Tied rows now keep their input order in `wrangling.order_by`, in selection `order_by`, in `show_data` and in `load(order_by=)`. **A seeded draw with `order_by` on two or more columns can select different units than before**; a single sort column is unaffected. Selection results are joined back in the sample's row order. `Estimate.strata` is sorted, as documented, rather than in a different order on each call. `describe(top_k=)` breaks count ties by level, so the same levels are kept on every run.
+- **`Sample()` collects a LazyFrame.** Without a design the frame stayed lazy, and every later step resolved its schema again, with a polars `PerformanceWarning` each time. A design already collected it.
 
 ## [0.32.1] — 2026-10-08
 

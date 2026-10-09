@@ -132,11 +132,13 @@ class Sample:
 
     def __init__(
         self,
-        data: pl.DataFrame,
+        data: pl.DataFrame | pl.LazyFrame,
         design: Design | None = None,
         *,
         catalog: LabellingCatalog | None = None,
     ) -> None:
+        if isinstance(data, pl.LazyFrame):
+            data = data.collect()
         local_design = Design() if design is None else copy.deepcopy(design)
         # FPC is computed in the estimation layer from pop_size column(s).
         # _fpc is kept for backward compatibility but is not used by the
@@ -968,7 +970,7 @@ class Sample:
             psu=psu_cols,
             ssu=ssu_cols,
         )
-        concat_data = cast(pl.DataFrame, out.collect() if isinstance(out, pl.LazyFrame) else out)
+        concat_data = cast(pl.DataFrame, out)
         return concat_data, (by_cols, stratum_cols, psu_cols, ssu_cols)
 
     @staticmethod
@@ -1064,11 +1066,7 @@ class Sample:
     # VALIDATION OF DESIGN
     # ════════════════════════════════════════════════════════════════════════
     def _validate_design(self) -> None:
-        data: pl.DataFrame = (
-            cast(pl.DataFrame, self._data)
-            if not isinstance(self._data, pl.LazyFrame)
-            else cast(pl.DataFrame, self._data.collect())
-        )
+        data: pl.DataFrame = self._data
         design = cast("Design", self._design)
 
         schema: dict[str, pl.DataType] = data.schema
@@ -1202,7 +1200,7 @@ class Sample:
         """
         from svy.wrangling._helpers import _unchanged, _weight_lineage_columns
 
-        old = self._data if isinstance(self._data, pl.DataFrame) else self._data.collect()
+        old = self._data
         design = self._design
         history = getattr(self, "_design_history", ())
         if data.height != old.height:
@@ -1327,11 +1325,7 @@ class Sample:
     ) -> tuple[pl.DataFrame, dict[str, int]]:
         # NOTE: 'df' argument name preserved for API compatibility
         if df is None:
-            df = (
-                cast(pl.DataFrame, self._data)
-                if not isinstance(self._data, pl.LazyFrame)
-                else cast(pl.DataFrame, self._data.collect())
-            )
+            df = self._data
         if wgt_col is None:
             n = int(df.height)
             return df, {"n_in": n, "n_out": n, "n_removed": 0}
@@ -1587,11 +1581,7 @@ class Sample:
 
     @property
     def deff_w(self) -> DomainScalarMap | Number:
-        _dw = (
-            cast(pl.DataFrame, self._data)
-            if not isinstance(self._data, pl.LazyFrame)
-            else cast(pl.DataFrame, self._data.collect())
-        )
+        _dw = self._data
         if self._design.wgt is None:
             w = np.ones(_dw.shape[0])
         else:
@@ -2122,11 +2112,7 @@ class Sample:
         catalog: LabellingCatalog | None | _MissingType = _MISSING,
     ) -> Sample:
         if data is _MISSING:
-            src_data: pl.DataFrame | None = (
-                cast(pl.DataFrame, self._data)
-                if not isinstance(self._data, pl.LazyFrame)
-                else cast(pl.DataFrame, self._data.collect())
-            )
+            src_data: pl.DataFrame | None = self._data
         else:
             src_data = cast(pl.DataFrame | None, data)
 
@@ -2140,11 +2126,7 @@ class Sample:
         else:
             src_catalog = cast("LabellingCatalog | None", catalog)
 
-        _fallback = (
-            cast(pl.DataFrame, self._data)
-            if not isinstance(self._data, pl.LazyFrame)
-            else cast(pl.DataFrame, self._data.collect())
-        )
+        _fallback = self._data
         if src_data is None:
             src_data = self._without_bookkeeping(_fallback)
         elif data is _MISSING:
@@ -2538,11 +2520,7 @@ class Sample:
             )
 
         # Keep schema aligned just in case data changed
-        _desc_data = (
-            cast(pl.DataFrame, self._data)
-            if not isinstance(self._data, pl.LazyFrame)
-            else cast(pl.DataFrame, self._data.collect())
-        )
+        _desc_data = self._data
         self._metadata.infer_from_dataframe(_desc_data, overwrite=False)
 
         return run_describe(
