@@ -2,6 +2,10 @@
 
 Lightweight, Pythonic file I/O for **SAS**, **SPSS**, and **Stata** powered by the ReadStat C library. Returns **Polars** DataFrames and preserves useful metadata — with a tiny, consistent API.
 
+📘 Documentation: [svylab.com/docs/svy-io](https://svylab.com/docs/svy-io/)
+📊 Analyse the data as a survey with [svy](https://svylab.com/docs/svy/)
+📦 Source: [github.com/samplics-org/svy](https://github.com/samplics-org/svy)
+
 ---
 
 ## Installation
@@ -110,6 +114,7 @@ write_dta(
 
 ## Help & links
 
-- Source & issues: https://github.com/samplics-org/svy-io
+- Documentation: https://svylab.com/docs/svy-io/
+- Source & issues: https://github.com/samplics-org/svy
 - ReadStat (upstream): https://github.com/WizardMac/ReadStat
 - Polars docs: https://pola-rs.github.io/polars/
