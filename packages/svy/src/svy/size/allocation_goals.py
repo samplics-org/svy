@@ -97,7 +97,7 @@ def allocate(
         raise MethodError.invalid_type(
             where=_WHERE,
             param="pop_size",
-            got=type(pop_size).__name__,
+            got=pop_size,
             expected="a non-empty dict {stratum: N_h}",
             hint="Allocation splits n across strata, so pop_size names them: "
             "{'North': 52_000, 'South': 31_000}.",

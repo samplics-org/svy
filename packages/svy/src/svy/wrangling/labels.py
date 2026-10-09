@@ -91,7 +91,7 @@ def apply_labels(
             raise MethodError.invalid_type(
                 where="wrangling.apply_labels",
                 param="labels",
-                got=type(labels).__name__,
+                got=labels,
                 expected="dict[str, str]",
             )
         all_vars.update(labels.keys())
@@ -101,7 +101,7 @@ def apply_labels(
             raise MethodError.invalid_type(
                 where="wrangling.apply_labels",
                 param="categories",
-                got=type(categories).__name__,
+                got=categories,
                 expected="dict[str, dict[Any, str]]",
             )
         all_vars.update(categories.keys())
@@ -128,7 +128,7 @@ def apply_labels(
                 raise MethodError.invalid_type(
                     where="wrangling.apply_labels",
                     param=f"labels[{var!r}]",
-                    got=type(lbl).__name__,
+                    got=lbl,
                     expected="str",
                 )
 
@@ -157,7 +157,7 @@ def apply_labels(
                 raise MethodError.invalid_type(
                     where="wrangling.apply_labels",
                     param=f"categories[{var!r}]",
-                    got=type(val_labels).__name__,
+                    got=val_labels,
                     expected="dict[value, str]",
                 )
 
@@ -168,7 +168,7 @@ def apply_labels(
                     raise MethodError.invalid_type(
                         where="wrangling.apply_labels",
                         param=f"categories[{var!r}][{key!r}]",
-                        got=type(val).__name__,
+                        got=val,
                         expected="str",
                         hint="Value labels must be strings.",
                     )
