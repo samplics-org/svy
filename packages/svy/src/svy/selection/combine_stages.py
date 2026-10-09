@@ -264,6 +264,7 @@ def _combine_stages(
         left_on=next_psu,
         right_on=s1_join_cols,
         how="left",
+        maintain_order="left",
     )
 
     # ------------------------------------------------------------------
@@ -366,6 +367,7 @@ def _apply_chaining_writeback(
         other=src_df.select([row_col, prev_prob_col]),
         on=row_col,
         how="left",
+        maintain_order="left",
     )
     stage1_probs = prev[prev_prob_col].fill_null(1.0).to_numpy().astype(np.float64)
     combined_probs = stage1_probs * stage2_probs

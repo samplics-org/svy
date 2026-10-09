@@ -2416,6 +2416,7 @@ class Sample:
                     by=sort_cols,
                     descending=(order_type == "descending"),
                     nulls_last=nulls_last,
+                    maintain_order=True,
                 )
 
             # ── Apply offset and limit ─────────────────────────────────────

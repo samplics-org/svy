@@ -1474,7 +1474,7 @@ class GLM:
                 unseen = pl.col(var).is_null() | ~pl.col(var).is_in(wanted.implode())
                 bad = new_data.filter(unseen).get_column(var).unique().sort().to_list()
             else:
-                bad = [v for v in col.unique().to_list() if v not in levels]
+                bad = [v for v in col.unique().sort().to_list() if v not in levels]
             if bad:
                 raise ModelError(
                     title="Unknown level in prediction data",
