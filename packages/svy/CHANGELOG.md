@@ -6,6 +6,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+## [0.32.2] — 2026-10-10
+
 ### Changed
 
 - **Requires polars 2.0 or later** (was 1.36.1). The lock and CI test 2.x only; polars 2.0 needs Python 3.10+, within svy's 3.11+.
@@ -1149,7 +1151,8 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.32.1...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.32.2...HEAD
+[0.32.2]: https://github.com/samplics-org/svy/releases/tag/svy-v0.32.2
 [0.32.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.32.1
 [0.32.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.32.0
 [0.31.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.31.0
