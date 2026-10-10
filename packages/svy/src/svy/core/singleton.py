@@ -1118,17 +1118,19 @@ def domain_singleton_frame(
     if mask is None and by_col is None:
         # Every row is in the domain: every stratum keeps all its units.
         return df.clear().select(strata_col)
-    active = pl.lit(True) if mask is None else mask
     units = pl.col(psu_col).n_unique() if psu_col else pl.len()
-    full = df.group_by(strata_col).agg(units.alias("__svy_n_full__"))
+    # Lazy, so polars runs both group-bys at once: this runs on every estimate.
+    lf = df.lazy()
+    full = lf.group_by(strata_col).agg(units.alias("__svy_n_full__"))
     keys = [by_col, strata_col] if by_col else [strata_col]
     firsts = [pl.col(c).first() for c in dict.fromkeys(name_cols) if c not in keys]
     return (
-        df.filter(active)
+        (lf if mask is None else lf.filter(mask))
         .group_by(keys)
         .agg(units.alias("__svy_n_dom__"), *firsts)
         .join(full, on=strata_col)
         .filter((pl.col("__svy_n_dom__") == 1) & (pl.col("__svy_n_full__") > 1))
+        .collect()
     )
 
 

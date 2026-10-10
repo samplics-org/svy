@@ -11,6 +11,7 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 ### Fixed
 
 - Grouped Taylor kernels (`taylor_mean`, `taylor_total`, `taylor_ratio`, `taylor_prop`, `taylor_factor_total`, `taylor_quantile`, `taylor_median`, `taylor_assoc`), `replicate_assoc` and `fit_glm_rs` with `by_col` return by-groups in sorted order. They followed polars' hash order, which changed from process to process; `svy` re-sorts, so its results are unchanged.
+- Faster Taylor kernels, same results. The design build densifies UInt32 codes and maps PSUs to strata through lookup tables instead of hash maps (a PSU code shared by two strata keeps the hash path); the df counts PSUs the same way. Grouped kernels take each group's df from the built design rather than re-indexing the columns, build each group mask once, overlap group discovery with the design build, and `taylor_prop` builds each level's indicator once rather than per group. Domain masks are read from their bits; `active_count` and the ungrouped total read contiguous weights directly. `fit_glm_rs`'s separation check skips the log for binomial rows far from the boundary.
 
 ## [0.18.0] — 2026-09-30
 

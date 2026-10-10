@@ -2248,7 +2248,12 @@ fn separation_check(
             y_i == 0.0 && mu_i <= MU_FLOOR
         };
         let at_edge = y_i == 0.0 || (binomial && y_i == 1.0);
-        if at_edge && (at_floor || w_i * family.unit_deviance(y_i, mu_i) < resolution) {
+        // Binomial deviance is -2 ln(u) >= 2 (1 - u): a row this far out skips the log.
+        let far = binomial && {
+            let mu_c = mu_i.clamp(MU_FLOOR, 1.0 - MU_FLOOR);
+            w_i * if y_i == 1.0 { 1.0 - mu_c } else { mu_c } >= resolution
+        };
+        if at_edge && (at_floor || (!far && w_i * family.unit_deviance(y_i, mu_i) < resolution)) {
             boundary_rows += 1;
         } else {
             retained[i] = w_i;

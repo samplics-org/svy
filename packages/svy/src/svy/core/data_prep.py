@@ -736,7 +736,10 @@ def prepare_data(
 
         # Step 2: build the fused expression list for the domain flag and
         # all weight zeroing in a single pass over the frame.
-        exprs: list[pl.Expr] = [mask.cast(pl.String).alias("__svy_domain__")]
+        # Same strings as mask.cast(pl.String) (the mask has no nulls), at half the cost.
+        exprs: list[pl.Expr] = [
+            pl.when(mask).then(pl.lit("true")).otherwise(pl.lit("false")).alias("__svy_domain__")
+        ]
 
         # Main weight: zero on the non-domain branch. If design has no wgt
         # the column doesn't exist yet — synthesize it inline. This one column
