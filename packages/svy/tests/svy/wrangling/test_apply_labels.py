@@ -160,6 +160,22 @@ def test_apply_labels_categories_inner_must_be_dict():
     assert exc_info.value.code == "INVALID_TYPE"
 
 
+@pytest.mark.parametrize(
+    "kwargs, got",
+    [
+        ({"labels": ["x"]}, "list"),
+        ({"labels": {"a": {1: "one"}}}, "dict"),
+        ({"categories": ["x"]}, "list"),
+        ({"categories": {"a": "one"}}, "str"),
+    ],
+)
+def test_apply_labels_type_error_names_the_type_passed(kwargs, got):
+    s = Sample(pl.DataFrame({"a": [1, 2]}))
+    with pytest.raises(MethodError) as exc_info:
+        s.wrangling.apply_labels(**kwargs)
+    assert exc_info.value.got == got
+
+
 def test_apply_labels_category_values_must_be_strings():
     df = pl.DataFrame({"a": [1, 2]})
     s = Sample(df)

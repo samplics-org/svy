@@ -47,7 +47,7 @@ def _normalize_name_seq(
                 raise MethodError.invalid_type(
                     where=where,
                     param=f"{param}[{i}]",
-                    got=type(x).__name__,
+                    got=x,
                     expected="str",
                     hint=f"Item at index {i} must be a string column name.",
                 )
@@ -58,7 +58,7 @@ def _normalize_name_seq(
     raise MethodError.invalid_type(
         where=where,
         param=param,
-        got=type(names).__name__,
+        got=names,
         expected="str | Sequence[str] | None",
         hint="Pass a column name or a list/tuple of names.",
     )

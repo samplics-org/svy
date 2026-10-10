@@ -138,7 +138,7 @@ def controls_margins_template(
             raise MethodError.invalid_type(
                 where=where,
                 param="margins",
-                got=(mname, col),
+                got=col if isinstance(mname, str) else mname,
                 expected="dict[str, str]",
                 hint="Both margin keys and values must be strings.",
             )
