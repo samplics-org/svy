@@ -212,6 +212,33 @@ def run_end_to_end(n_rows: int, reps: int, n_reps: int) -> None:
     )
 
 
+# ── Wrangling (each step returns a new Sample) ──────────────────────────────
+
+
+def run_wrangling(n_rows: int, reps: int) -> None:
+    """Sample construction and single wrangling steps on the estimation frame.
+
+    Each step rebuilds the derived sample's design state, so a regression in
+    that rebuild shows up here and nowhere in the estimation cases.
+    """
+    df = gen_data(n_rows)
+    design = Design(stratum=("geo1", "urbrur"), psu="ea", wgt="hhweight")
+    w = Sample(data=df, design=design).wrangling
+    regions = pl.DataFrame({"region": range(5), "zone": ["n", "s", "e", "w", "c"]})
+
+    cases = {
+        "wrangling/Sample()": lambda: Sample(data=df, design=design),
+        "wrangling/mutate": lambda: w.mutate({"z": svy.col("tot_exp") * 2}),
+        "wrangling/filter_records": lambda: w.filter_records(svy.col("region") > 1),
+        "wrangling/cast": lambda: w.cast("region", "Int32"),
+        "wrangling/recode": lambda: w.recode("region", {9: [0, 1]}),
+        "wrangling/order_by": lambda: w.order_by("tot_exp"),
+        "wrangling/join m:1": lambda: w.join(regions, on="region"),
+    }
+    for label, fn in cases.items():
+        emit_case(label, n_rows, fn, reps)
+
+
 # ── GLM (IRLS kernel + sandwich) ────────────────────────────────────────────
 
 
@@ -309,6 +336,7 @@ def main() -> None:
         reps = args.reps_large if n_rows >= 1_000_000 else args.reps
         print(f"# ── {n_rows:,} rows (best of {reps}) ──")
         run_end_to_end(n_rows, reps, args.n_reps)
+        run_wrangling(n_rows, reps)
         # A 1e6 x 20 binomial fit is seconds, not milliseconds; best-of-3 is
         # enough to see a real change and keeps the harness usable.
         run_glm(n_rows, min(reps, 3))

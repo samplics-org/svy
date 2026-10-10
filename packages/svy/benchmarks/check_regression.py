@@ -134,14 +134,20 @@ def compare(before: dict, after: dict, threshold: float) -> int:
         print()
         return 2
 
-    width = max(len(lbl) for lbl, _ in common) + 2
+    in_both = set(common)
+    shown = [(lbl, r) for lbl in sorted(after) for r in sorted(after[lbl], key=int)]
+    width = max(len(lbl) for lbl, _ in shown) + 2
     print(f"\n{'benchmark':<{width}}{'rows':>10}{'baseline':>12}{'now':>10}{'change':>10}")
     print("-" * (width + 42))
 
     regressions: list[tuple[str, str, float]] = []
     improvements = 0
-    for label, rows in common:
-        b, a = before[label][rows], after[label][rows]
+    for label, rows in shown:
+        a = after[label][rows]
+        if (label, rows) not in in_both:
+            print(f"{label:<{width}}{int(rows):>10,}{'-':>12}{a:>8.2f}ms{'new':>10}")
+            continue
+        b = before[label][rows]
         ratio = a / b
         pct = (ratio - 1.0) * 100.0
         flag = ""
@@ -153,10 +159,9 @@ def compare(before: dict, after: dict, threshold: float) -> int:
             improvements += 1
         print(f"{label:<{width}}{int(rows):>10,}{b:>10.2f}ms{a:>8.2f}ms{pct:>+9.1f}%{flag}")
 
-    new = [(lbl, r) for lbl in after for r in after[lbl] if (lbl, r) not in set(common)]
-    missing = [(lbl, r) for lbl in before for r in before[lbl] if (lbl, r) not in set(common)]
-    if new:
-        print(f"\nNew since baseline (not compared): {', '.join(sorted({n[0] for n in new}))}")
+    missing = [(lbl, r) for lbl in before for r in before[lbl] if (lbl, r) not in in_both]
+    if len(shown) > len(common):
+        print("\n'new': not in the baseline, so not compared until it is re-recorded.")
     if missing:
         print(f"Missing from this run: {', '.join(sorted({m[0] for m in missing}))}")
 
