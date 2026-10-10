@@ -4,6 +4,10 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ## [Unreleased]
 
+### Changed
+
+- **Requires polars 2.0 or later** (was 1.39.1), as svy does. The Rust side is unchanged (polars crate 0.55).
+
 ### Fixed
 
 - Grouped Taylor kernels (`taylor_mean`, `taylor_total`, `taylor_ratio`, `taylor_prop`, `taylor_factor_total`, `taylor_quantile`, `taylor_median`, `taylor_assoc`), `replicate_assoc` and `fit_glm_rs` with `by_col` return by-groups in sorted order. They followed polars' hash order, which changed from process to process; `svy` re-sorts, so its results are unchanged.

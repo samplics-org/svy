@@ -287,19 +287,12 @@ def _apply_order(
     rstate: RandomState,
 ) -> pl.LazyFrame:
     if order_type == "random":
-        seed = _seed_from_rstate(rstate)
-        # Reproducible shuffle: hash(row_index + seed), sort on that.
-        # Stays fully lazy and avoids collecting to shuffle.
-        return (
-            lf.with_row_index("_svy_shuffle_idx")
-            .with_columns(
-                (pl.col("_svy_shuffle_idx").cast(pl.UInt64) + pl.lit(seed))
-                .hash()
-                .alias("_svy_shuffle_key")
-            )
-            .sort("_svy_shuffle_key")
-            .drop(["_svy_shuffle_idx", "_svy_shuffle_key"])
-        )
+        seed = _seed_from_rstate(rstate) & (2**64 - 1)
+        n = lf.select(pl.len()).collect().item()
+        # Legacy RandomState: NumPy freezes its stream, so a seed gives the same
+        # rows on every NumPy and polars version (polars' hash() does not).
+        perm = np.random.RandomState([seed & 0xFFFFFFFF, seed >> 32]).permutation(n)
+        return lf.select(pl.all().gather(perm))
 
     if order_by is None:
         return lf

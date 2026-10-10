@@ -6,12 +6,17 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Changed
+
+- **Requires polars 2.0 or later** (was 1.36.1). The lock and CI test 2.x only; polars 2.0 needs Python 3.10+, within svy's 3.11+.
+
 ### Fixed
 
 - **Wide frames are fast.** `Sample()` cost grew with the square of the column count: 6.3 s at 20k rows × 4000 columns, now 38 ms. Every wrangling step is also 2–5× faster on wide frames, since a derived sample no longer deep-copies each variable's metadata.
 - **Wrangling works on a Sample built with `catalog=`.** Every step raised `TypeError: cannot pickle '_thread.RLock' object`; the derived sample now shares the catalog, as `clone()` does.
 - **Row order no longer depends on polars internals.** Sorts on two or more columns kept tied rows in an arbitrary order. Tied rows now keep their input order in `wrangling.order_by`, in selection `order_by`, in `show_data` and in `load(order_by=)`. **A seeded draw with `order_by` on two or more columns can select different units than before**; a single sort column is unaffected. Selection results are joined back in the sample's row order. `Estimate.strata` is sorted, as documented, rather than in a different order on each call. `describe(top_k=)` breaks count ties by level, so the same levels are kept on every run.
 - **`Sample()` collects a LazyFrame.** Without a design the frame stayed lazy, and every later step resolved its schema again, with a polars `PerformanceWarning` each time. A design already collected it.
+- **A seeded `load(order_type="random")` gives the same rows on every polars version.** It shuffled by polars' `hash()`, which changed in polars 2.0, so the same seed already loaded different rows there; it now uses NumPy's frozen legacy stream. Seeds wider than 32 bits and negative seeds are used in full.
 - **`INVALID_TYPE` errors name the type passed.** `apply_labels`, column-name lists, `rake` margins and allocation `pop_size` reported `got: str` whatever was passed.
 
 ## [0.32.1] — 2026-10-08
