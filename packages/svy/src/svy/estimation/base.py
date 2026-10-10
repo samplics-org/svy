@@ -590,17 +590,17 @@ class Estimation:
         kernel as zero weights. Grouped kernels report per-row domain df;
         contrasts span domains and are referred to this value instead.
         """
-        active = prep.df.filter(pl.col(prep.weight_col) > 0)
+        # Lazy, so the filter fuses into the aggregation instead of copying the frame.
+        active = prep.df.lazy().filter(pl.col(prep.weight_col) > 0)
         s, p = prep.strata_col, prep.psu_col
-        if s and p:
-            per_stratum = active.group_by(s).agg(pl.col(p).n_unique().alias("m"))
-            return int((per_stratum["m"] - 1).clip(lower_bound=0).sum())
         if s:
-            per_stratum = active.group_by(s).agg(pl.len().alias("m"))
-            return int((per_stratum["m"] - 1).clip(lower_bound=0).sum())
-        if p:
-            return max(0, active[p].n_unique() - 1)
-        return max(0, active.height - 1)
+            m = pl.col(p).n_unique() if p else pl.len()
+            per_stratum = active.group_by(s).agg(m.alias("m"))
+            return int(
+                per_stratum.select((pl.col("m") - 1).clip(lower_bound=0).sum()).collect().item()
+            )
+        n = pl.col(p).n_unique() if p else pl.len()
+        return max(0, int(active.select(n).collect().item()) - 1)
 
     @staticmethod
     def _normalize_deff(deff: object) -> str | None:

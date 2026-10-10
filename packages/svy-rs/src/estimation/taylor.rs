@@ -100,6 +100,21 @@ impl SvyQuantileMethod {
 // Point Estimates
 // ============================================================================
 
+/// A mask as in/out flags, null counting as out, read straight from its bits:
+/// `BooleanChunked::iter()` costs several times more per row.
+pub(crate) fn mask_flags(mask: &BooleanChunked) -> Vec<bool> {
+    let mut out = Vec::with_capacity(mask.len());
+    for arr in mask.downcast_iter() {
+        match arr.validity() {
+            Some(valid) if valid.unset_bits() > 0 => {
+                out.extend(arr.values().iter().zip(valid.iter()).map(|(v, ok)| v && ok))
+            }
+            _ => out.extend(arr.values().iter()),
+        }
+    }
+    out
+}
+
 /// Contiguous, null-free slices of two columns, if available.
 ///
 /// After `prepare_data` the y/weight columns are typically single-chunk and
@@ -164,8 +179,8 @@ pub fn point_estimate_mean_domain(
     let (sum_wy, sum_w) = if let Some((ys, ws)) = cont_pair(y, weights) {
         let mut sum_wy = 0.0f64;
         let mut sum_w = 0.0f64;
-        for (i, m) in domain_mask.iter().enumerate() {
-            if m == Some(true) {
+        for (i, m) in mask_flags(domain_mask).into_iter().enumerate() {
+            if m {
                 sum_wy += ys[i] * ws[i];
                 sum_w += ws[i];
             }
@@ -215,8 +230,8 @@ pub fn point_estimate_total_domain(
 ) -> PolarsResult<f64> {
     if let Some((ys, ws)) = cont_pair(y, weights) {
         let mut sum_wy = 0.0f64;
-        for (i, m) in domain_mask.iter().enumerate() {
-            if m == Some(true) {
+        for (i, m) in mask_flags(domain_mask).into_iter().enumerate() {
+            if m {
                 sum_wy += ys[i] * ws[i];
             }
         }
@@ -282,8 +297,8 @@ pub fn point_estimate_ratio_domain(
     let (sum_wy, sum_wx) = if let Some((ys, ws, xs)) = fast {
         let mut sum_wy = 0.0f64;
         let mut sum_wx = 0.0f64;
-        for (i, m) in domain_mask.iter().enumerate() {
-            if m == Some(true) {
+        for (i, m) in mask_flags(domain_mask).into_iter().enumerate() {
+            if m {
                 sum_wy += ys[i] * ws[i];
                 sum_wx += xs[i] * ws[i];
             }
@@ -577,7 +592,7 @@ pub fn scores_mean_domain(
     // branch-free slice passes. Same rows/order → bit-identical.
     if let Some((ys, ws)) = cont_pair(y, weights) {
         let n = ys.len();
-        let in_domain: Vec<bool> = domain_mask.iter().map(|m| m == Some(true)).collect();
+        let in_domain = mask_flags(domain_mask);
         let mut sum_wy = 0.0f64;
         let mut sum_w = 0.0f64;
         for i in 0..n {
@@ -638,6 +653,18 @@ pub fn scores_mean_domain(
     Ok(Float64Chunked::from_slice_options("scores".into(), &scores))
 }
 
+/// [`scores_total`] flattened for the variance, nulls as 0.0, without the
+/// `Float64Chunked` round-trip on contiguous input.
+pub fn scores_total_arr(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult<Vec<f64>> {
+    if let Some((ys, ws)) = cont_pair(y, weights) {
+        return Ok(ys.iter().zip(ws).map(|(y, w)| w * y).collect());
+    }
+    Ok(scores_total(y, weights)?
+        .iter()
+        .map(|s| s.unwrap_or(0.0))
+        .collect())
+}
+
 pub fn scores_total(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult<Float64Chunked> {
     let scores: Vec<Option<f64>> = y
         .iter()
@@ -656,10 +683,10 @@ pub fn scores_total_domain(
     domain_mask: &BooleanChunked,
 ) -> PolarsResult<Float64Chunked> {
     if let Some((ys, ws)) = cont_pair(y, weights) {
-        let scores: Vec<f64> = domain_mask
-            .iter()
+        let scores: Vec<f64> = mask_flags(domain_mask)
+            .into_iter()
             .enumerate()
-            .map(|(i, m)| if m == Some(true) { ws[i] * ys[i] } else { 0.0 })
+            .map(|(i, m)| if m { ws[i] * ys[i] } else { 0.0 })
             .collect();
         return Ok(Float64Chunked::from_slice("scores".into(), &scores));
     }
@@ -723,7 +750,7 @@ pub fn scores_ratio_domain(
     };
     if let Some((ys, ws, xs)) = fast {
         let n = ys.len();
-        let in_domain: Vec<bool> = domain_mask.iter().map(|m| m == Some(true)).collect();
+        let in_domain = mask_flags(domain_mask);
         let mut sum_wy = 0.0f64;
         let mut sum_wx = 0.0f64;
         for i in 0..n {
@@ -1002,6 +1029,11 @@ pub fn index_categorical_pair(a: &StringChunked, b: &StringChunked) -> (Vec<u32>
 /// code values (which may be sparse or arbitrarily ordered). Integer hashing is
 /// ~10× cheaper than hashing the label strings, which is the whole point.
 fn densify_int_codes(col: &Column) -> PolarsResult<(Vec<u32>, u32)> {
+    if let Ok(ca) = col.u32() {
+        if let Some(codes) = densify_small_u32(ca) {
+            return Ok(codes);
+        }
+    }
     let s = col.cast(&DataType::Int64)?;
     let ca = s.i64()?;
     let mut map: FxHashMap<i64, u32> = FxHashMap::default();
@@ -1018,6 +1050,34 @@ fn densify_int_codes(col: &Column) -> PolarsResult<(Vec<u32>, u32)> {
         })
         .collect();
     Ok((indices, next_idx))
+}
+
+/// [`densify_int_codes`] through a lookup table instead of a hash map, for the
+/// small-valued UInt32 codes the Python layer passes. `None` when the values
+/// are too sparse for a table.
+fn densify_small_u32(ca: &UInt32Chunked) -> Option<(Vec<u32>, u32)> {
+    let max = ca.max()? as usize;
+    if max > 4 * ca.len() + 1024 {
+        return None;
+    }
+    let mut table = vec![u32::MAX; max + 1];
+    let mut next_idx = 0u32;
+    let mut code = |v: u32| {
+        let t = &mut table[v as usize];
+        if *t == u32::MAX {
+            *t = next_idx;
+            next_idx += 1;
+        }
+        *t
+    };
+    let indices: Vec<u32> = match ca.cont_slice() {
+        Ok(vals) => vals.iter().map(|&v| code(v)).collect(),
+        Err(_) => ca
+            .iter()
+            .map(|opt| opt.map_or(u32::MAX, &mut code))
+            .collect(),
+    };
+    Some((indices, next_idx))
 }
 
 /// Build dense first-appearance codes for one design column, dispatching on
@@ -1090,6 +1150,35 @@ fn build_stratum_psu_map(
     // — and thus every standard error — differ at the ULP level run-to-run.
     // Sort each stratum's PSUs so the order is canonical and the result is
     // bit-reproducible.
+    // PSU codes are dense, so an owner table replaces the hash sets; a code
+    // shared by two strata (integer codes need not be nested) falls back.
+    let n_psus = psu_indices
+        .iter()
+        .filter(|&&p| p != u32::MAX)
+        .max()
+        .map_or(0, |&p| p as usize + 1);
+    let mut owner = vec![u32::MAX; n_psus];
+    let mut psu_per_stratum: Vec<Vec<u32>> = vec![Vec::new(); n_strata as usize];
+    let mut shared = false;
+    for (&stratum, &psu) in strata_indices.iter().zip(psu_indices.iter()) {
+        if stratum != u32::MAX && psu != u32::MAX {
+            let o = &mut owner[psu as usize];
+            if *o == u32::MAX {
+                *o = stratum;
+                psu_per_stratum[stratum as usize].push(psu);
+            } else if *o != stratum {
+                shared = true;
+                break;
+            }
+        }
+    }
+    if !shared {
+        for v in &mut psu_per_stratum {
+            v.sort_unstable();
+        }
+        let n_psus_per_stratum = psu_per_stratum.iter().map(|v| v.len() as u32).collect();
+        return (psu_per_stratum, n_psus_per_stratum);
+    }
     let mut stratum_psus: Vec<FxHashSet<u32>> = vec![FxHashSet::default(); n_strata as usize];
     for (&stratum, &psu) in strata_indices.iter().zip(psu_indices.iter()) {
         if stratum != u32::MAX && psu != u32::MAX {
@@ -2272,16 +2361,38 @@ fn is_active(w: Option<f64>) -> bool {
     w.is_some_and(|v| v != 0.0 && !v.is_nan())
 }
 
+#[inline]
+fn weights_slice(weights: &Float64Chunked) -> Option<&[f64]> {
+    if weights.null_count() == 0 {
+        weights.cont_slice().ok()
+    } else {
+        None
+    }
+}
+
 /// Mask of active (nonzero weight, in-domain) observations. Shared so the
 /// column-driven and design-driven df entry points cannot drift apart.
 fn active_mask(weights: &Float64Chunked, domain: Option<&BooleanChunked>) -> Vec<bool> {
     match domain {
-        None => weights.iter().map(is_active).collect(),
-        Some(mask) => weights
-            .iter()
-            .zip(mask.iter())
-            .map(|(w, d)| is_active(w) && d.unwrap_or(false))
-            .collect(),
+        None => match weights_slice(weights) {
+            Some(ws) => ws.iter().map(|&w| is_active(Some(w))).collect(),
+            None => weights.iter().map(is_active).collect(),
+        },
+        Some(mask) => {
+            let flags = mask_flags(mask);
+            match weights_slice(weights) {
+                Some(ws) => ws
+                    .iter()
+                    .zip(flags)
+                    .map(|(&w, d)| d && is_active(Some(w)))
+                    .collect(),
+                None => weights
+                    .iter()
+                    .zip(flags)
+                    .map(|(w, d)| d && is_active(w))
+                    .collect(),
+            }
+        }
     }
 }
 
@@ -2291,12 +2402,25 @@ fn active_mask(weights: &Float64Chunked, domain: Option<&BooleanChunked>) -> Vec
 /// every out-of-domain row.
 pub fn active_count(weights: &Float64Chunked, domain: Option<&BooleanChunked>) -> u32 {
     match domain {
-        None => weights.iter().filter(|w| is_active(*w)).count() as u32,
-        Some(mask) => weights
-            .iter()
-            .zip(mask.iter())
-            .filter(|(w, d)| is_active(*w) && d.unwrap_or(false))
-            .count() as u32,
+        None => match weights_slice(weights) {
+            Some(ws) => ws.iter().filter(|&&w| is_active(Some(w))).count() as u32,
+            None => weights.iter().filter(|w| is_active(*w)).count() as u32,
+        },
+        Some(mask) => {
+            let flags = mask_flags(mask);
+            match weights_slice(weights) {
+                Some(ws) => ws
+                    .iter()
+                    .zip(flags)
+                    .filter(|&(&w, d)| d && is_active(Some(w)))
+                    .count() as u32,
+                None => weights
+                    .iter()
+                    .zip(flags)
+                    .filter(|(w, d)| *d && is_active(*w))
+                    .count() as u32,
+            }
+        }
     }
 }
 
@@ -2310,13 +2434,20 @@ fn df_from_codes(active: &[bool], strata: Option<(&[u32], u32)>, psu: Option<&[u
         }
         (None, Some(psu_idx)) => {
             // No strata, with PSU: df = n_unique_active_psus - 1
-            let mut seen: FxHashSet<u32> = FxHashSet::default();
+            let n_psus = psu_idx
+                .iter()
+                .filter(|&&p| p != u32::MAX)
+                .max()
+                .map_or(0, |&p| p as usize + 1);
+            let mut seen = vec![false; n_psus];
+            let mut n_seen = 0u32;
             for (&p, &act) in psu_idx.iter().zip(active.iter()) {
-                if act && p != u32::MAX {
-                    seen.insert(p);
+                if act && p != u32::MAX && !seen[p as usize] {
+                    seen[p as usize] = true;
+                    n_seen += 1;
                 }
             }
-            seen.len().saturating_sub(1) as u32
+            n_seen.saturating_sub(1)
         }
         (Some((str_idx, n_strata)), None) => {
             // Stratified, no PSU: df = sum_h(n_active_h - 1)
@@ -2332,19 +2463,42 @@ fn df_from_codes(active: &[bool], strata: Option<(&[u32], u32)>, psu: Option<&[u
             // Stratified + clustered: df = sum_h(n_active_psus_h - 1), where
             // PSUs are nested within stratum (so labels reused across strata are
             // distinct). psu codes are pair-nested; strata codes give the stratum.
-            let mut stratum_psus: Vec<FxHashSet<u32>> =
-                vec![FxHashSet::default(); n_strata as usize];
+            // Codes are dense, so an owner table replaces per-stratum hash sets;
+            // integer PSU codes need not be nested, so a shared code falls back.
+            let n_psus = psu_idx
+                .iter()
+                .filter(|&&p| p != u32::MAX)
+                .max()
+                .map_or(0, |&p| p as usize + 1);
+            let mut owner = vec![u32::MAX; n_psus];
+            let mut counts = vec![0u32; n_strata as usize];
             for ((&s, &p), &act) in str_idx.iter().zip(psu_idx.iter()).zip(active.iter()) {
                 if act && s != u32::MAX && p != u32::MAX {
-                    stratum_psus[s as usize].insert(p);
+                    let o = &mut owner[p as usize];
+                    if *o == u32::MAX {
+                        *o = s;
+                        counts[s as usize] += 1;
+                    } else if *o != s {
+                        return df_shared_psu_codes(active, str_idx, n_strata, psu_idx);
+                    }
                 }
             }
-            stratum_psus
-                .iter()
-                .map(|psus| psus.len().saturating_sub(1) as u32)
-                .sum()
+            counts.iter().map(|&c| c.saturating_sub(1)).sum()
         }
     }
+}
+
+fn df_shared_psu_codes(active: &[bool], str_idx: &[u32], n_strata: u32, psu_idx: &[u32]) -> u32 {
+    let mut stratum_psus: Vec<FxHashSet<u32>> = vec![FxHashSet::default(); n_strata as usize];
+    for ((&s, &p), &act) in str_idx.iter().zip(psu_idx.iter()).zip(active.iter()) {
+        if act && s != u32::MAX && p != u32::MAX {
+            stratum_psus[s as usize].insert(p);
+        }
+    }
+    stratum_psus
+        .iter()
+        .map(|psus| psus.len().saturating_sub(1) as u32)
+        .sum()
 }
 
 // ============================================================================
@@ -2608,11 +2762,11 @@ pub fn srs_variance_mean_domain(
         // Fast path: slice-index y/weights while filtering by the mask.
         let mut yv = Vec::new();
         let mut wv = Vec::new();
-        for (i, m) in domain_mask.iter().enumerate() {
+        for (i, m) in mask_flags(domain_mask).into_iter().enumerate() {
             // w > 0 mirrors srs_variance_mean: zero-weight rows (out-of-domain
             // or missing-y under drop_nulls) carry no information and must not
             // inflate n, or deff comes out too large.
-            if m == Some(true) && ws[i] > 0.0 {
+            if m && ws[i] > 0.0 {
                 yv.push(ys[i]);
                 wv.push(ws[i]);
             }
@@ -2650,6 +2804,11 @@ pub fn srs_variance_total(
     srs: SrsRef,
 ) -> PolarsResult<f64> {
     // Zero-weight rows are excluded from n (see srs_variance_mean).
+    if let Some((ys, ws)) = cont_pair(y, weights) {
+        if ws.iter().all(|&w| w > 0.0) {
+            return srs_total_from(ys, ws, srs);
+        }
+    }
     let mut yv: Vec<f64> = Vec::new();
     let mut wv: Vec<f64> = Vec::new();
     for (yi, wi) in y.iter().zip(weights.iter()) {
@@ -2659,6 +2818,10 @@ pub fn srs_variance_total(
             wv.push(w_val);
         }
     }
+    srs_total_from(&yv, &wv, srs)
+}
+
+fn srs_total_from(yv: &[f64], wv: &[f64], srs: SrsRef) -> PolarsResult<f64> {
     let n = yv.len() as f64;
     if n < 2.0 {
         return Ok(f64::NAN);
@@ -2668,7 +2831,7 @@ pub fn srs_variance_total(
         return Ok(f64::NAN);
     }
     let wn: Vec<f64> = wv.iter().map(|w| w / sum_w).collect();
-    let s2_y = weighted_s2(&yv, &wn);
+    let s2_y = weighted_s2(yv, &wn);
     Ok(((sum_w.powi(2) / n) * s2_y) * srs.fpc(n, sum_w))
 }
 
@@ -2681,11 +2844,11 @@ pub fn srs_variance_total_domain(
     let (yv, wv) = if let Some((ys, ws)) = cont_pair(y, weights) {
         let mut yv = Vec::new();
         let mut wv = Vec::new();
-        for (i, m) in domain_mask.iter().enumerate() {
+        for (i, m) in mask_flags(domain_mask).into_iter().enumerate() {
             // w > 0 mirrors srs_variance_mean: zero-weight rows (out-of-domain
             // or missing-y under drop_nulls) carry no information and must not
             // inflate n, or deff comes out too large.
-            if m == Some(true) && ws[i] > 0.0 {
+            if m && ws[i] > 0.0 {
                 yv.push(ys[i]);
                 wv.push(ws[i]);
             }
@@ -2704,17 +2867,7 @@ pub fn srs_variance_total_domain(
         }
         (yv, wv)
     };
-    let n = yv.len() as f64;
-    if n < 2.0 {
-        return Ok(f64::NAN);
-    }
-    let sum_w: f64 = wv.iter().sum();
-    if sum_w <= 0.0 {
-        return Ok(f64::NAN);
-    }
-    let wn: Vec<f64> = wv.iter().map(|w| w / sum_w).collect();
-    let s2_y = weighted_s2(&yv, &wn);
-    Ok(((sum_w.powi(2) / n) * s2_y) * srs.fpc(n, sum_w))
+    srs_total_from(&yv, &wv, srs)
 }
 
 pub fn srs_variance_ratio(
@@ -2774,9 +2927,9 @@ pub fn srs_variance_ratio_domain(
         let mut yv = Vec::new();
         let mut xv = Vec::new();
         let mut wv = Vec::new();
-        for (i, m) in domain_mask.iter().enumerate() {
+        for (i, m) in mask_flags(domain_mask).into_iter().enumerate() {
             // See srs_variance_mean_domain: zero-weight rows must not inflate n.
-            if m == Some(true) && ws[i] > 0.0 {
+            if m && ws[i] > 0.0 {
                 yv.push(ys[i]);
                 xv.push(xs[i]);
                 wv.push(ws[i]);
@@ -3486,5 +3639,62 @@ mod tests {
                 "scores_mean_arr diverged from the chunked round-trip ({label})"
             );
         }
+    }
+
+    #[test]
+    fn test_u32_codes_densify_like_the_hash_path() {
+        let vals = [
+            Some(40u32),
+            Some(7),
+            None,
+            Some(40),
+            Some(3),
+            Some(7),
+            None,
+            Some(3),
+        ];
+        let as_u32 =
+            Column::from(UInt32Chunked::from_slice_options("c".into(), &vals).into_series());
+        let as_i64: Vec<Option<i64>> = vals.iter().map(|v| v.map(i64::from)).collect();
+        let as_i64 =
+            Column::from(Int64Chunked::from_slice_options("c".into(), &as_i64).into_series());
+        let expected = (vec![0, 1, u32::MAX, 0, 2, 1, u32::MAX, 2], 3);
+        assert_eq!(densify_int_codes(&as_u32).unwrap(), expected);
+        assert_eq!(densify_int_codes(&as_i64).unwrap(), expected);
+
+        // Too sparse for a table: the hash path, same first-appearance codes.
+        let sparse = Column::from(
+            UInt32Chunked::from_slice("c".into(), &[u32::MAX - 1, 5, 5]).into_series(),
+        );
+        assert_eq!(densify_int_codes(&sparse).unwrap(), (vec![0, 1, 1], 2));
+    }
+
+    #[test]
+    fn test_psu_codes_shared_across_strata_count_in_each() {
+        let strata = icol("s".into(), &[10, 10, 10, 10, 99, 99, 99, 99]);
+        let psu = icol("p".into(), &[7, 7, 3, 3, 7, 7, 3, 3]);
+        let w = Float64Chunked::from_slice("w".into(), &[1.0; 8]);
+        let design =
+            build_taylor_design(Some(&strata), Some(&psu), None, None, None, None).unwrap();
+        assert_eq!(design.psu_per_stratum, Some(vec![vec![0, 1], vec![0, 1]]));
+        assert_eq!(degrees_of_freedom_from_design(&w, &design, None), 2);
+
+        let nested = icol("p".into(), &[7, 7, 3, 3, 8, 8, 4, 4]);
+        let design =
+            build_taylor_design(Some(&strata), Some(&nested), None, None, None, None).unwrap();
+        assert_eq!(design.psu_per_stratum, Some(vec![vec![0, 1], vec![2, 3]]));
+        assert_eq!(degrees_of_freedom_from_design(&w, &design, None), 2);
+    }
+
+    #[test]
+    fn test_mask_flags_read_null_as_out() {
+        let a = BooleanChunked::from_slice_options("m".into(), &[Some(true), None, Some(false)]);
+        let b = BooleanChunked::from_slice("m".into(), &[true, false]);
+        let mut chunked = a.clone();
+        chunked.append(&b).unwrap();
+        assert_eq!(mask_flags(&a), vec![true, false, false]);
+        assert_eq!(mask_flags(&chunked), vec![true, false, false, true, false]);
+        let w = Float64Chunked::from_slice("w".into(), &[1.0, 1.0, 1.0, 2.0, 0.0]);
+        assert_eq!(active_count(&w, Some(&chunked)), 2);
     }
 }

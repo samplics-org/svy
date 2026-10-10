@@ -18,6 +18,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **`Sample()` collects a LazyFrame.** Without a design the frame stayed lazy, and every later step resolved its schema again, with a polars `PerformanceWarning` each time. A design already collected it.
 - **A seeded `load(order_type="random")` gives the same rows on every polars version.** It shuffled by polars' `hash()`, which changed in polars 2.0, so the same seed already loaded different rows there; it now uses NumPy's frozen legacy stream. Seeds wider than 32 bits and negative seeds are used in full.
 - **`INVALID_TYPE` errors name the type passed.** `apply_labels`, column-name lists, `rake` margins and allocation `pop_size` reported `got: str` whatever was passed.
+- **Estimation is faster, and the slowdown since 0.26 is gone.** At 1M rows, a stratified clustered mean or total takes 10 ms (was 24–27 ms), `by=` 62 ms (was 110 ms) and `where=` 24 ms (was 47 ms); calibrated designs, `prop`, `median`, `corr` and `cov` are 20–50% faster. The domain-singleton check and the full-design df behind `by=` ran eagerly on every call. GLM fits skip a log per row in the separation check.
 
 ## [0.32.1] — 2026-10-08
 

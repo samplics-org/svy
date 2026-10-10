@@ -16,12 +16,12 @@ use crate::estimation::association::{
 use crate::estimation::calib_sweep::{CalibSpec, CalibSweep, build_calib_sweep};
 use crate::estimation::taylor::{
     SrsRef, SvyQuantileMethod, TaylorDesign, active_count, build_taylor_design, degrees_of_freedom,
-    degrees_of_freedom_from_design, degrees_of_freedom_in_domain, point_estimate_mean,
-    point_estimate_mean_domain, point_estimate_ratio, point_estimate_ratio_domain,
-    point_estimate_total, point_estimate_total_domain, quantiles_woodruff, rows_column,
-    scores_mean, scores_mean_arr, scores_mean_domain, scores_ratio, scores_ratio_domain,
-    scores_total, scores_total_domain, srs_variance_mean, srs_variance_mean_domain,
-    srs_variance_ratio, srs_variance_ratio_domain, srs_variance_total, srs_variance_total_domain,
+    degrees_of_freedom_from_design, point_estimate_mean, point_estimate_mean_domain,
+    point_estimate_ratio, point_estimate_ratio_domain, point_estimate_total,
+    point_estimate_total_domain, quantiles_woodruff, rows_column, scores_mean, scores_mean_arr,
+    scores_mean_domain, scores_ratio, scores_ratio_domain, scores_total, scores_total_arr,
+    scores_total_domain, srs_variance_mean, srs_variance_mean_domain, srs_variance_ratio,
+    srs_variance_ratio_domain, srs_variance_total, srs_variance_total_domain,
     taylor_covariance_apply, taylor_covariance_apply_in, taylor_variance_apply_in,
     weighted_quantile,
 };
@@ -495,12 +495,16 @@ fn compute_mean_grouped(
         .map(|c| df.column(c).and_then(|s| s.f64()))
         .transpose()?;
     let by_str = df.column(by_col)?.str()?;
-    let unique_groups = crate::estimation::sorted_groups(by_str)?;
+    // Group discovery and the design build are independent full passes.
+    let (unique_groups, design) = rayon::join(
+        || crate::estimation::sorted_groups(by_str),
+        || build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method),
+    );
+    let unique_groups = unique_groups?;
 
     // Index the design once — it is identical across by-groups; only the
     // domain-masked scores change per group.
-    let design =
-        build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?.with_calib(calib);
+    let design = design?.with_calib(calib);
 
     // Groups are independent; fan the per-group work out over the rayon pool
     // and collect in group order (deterministic, thread-count-independent).
@@ -508,35 +512,48 @@ fn compute_mean_grouped(
     // A by-group is a domain, so its df must be counted on its own active
     // PSUs/strata. Broadcasting one frame-level df here would hand every group
     // the df of the surrounding analysis mask instead (issue #3).
-    let group_dfs: Vec<u32> = groups
-        .par_iter()
-        .map(|&g| degrees_of_freedom_in_domain(weights, strata, psu, Some(&by_str.equal(g))))
-        .collect::<PolarsResult<Vec<_>>>()?;
-    let rows = groups
-        .par_iter()
-        .map(
-            |&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
-                let domain_mask = by_str.equal(group);
-                let active = design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
-                let n_domain = active_count(weights, Some(&domain_mask));
-                let Ok(estimate) = point_estimate_mean_domain(y, weights, &domain_mask) else {
-                    let nan = f64::NAN;
-                    return Ok((group, nan, nan, nan, n_domain, nan, vec![0.0; y.len()]));
-                };
-                let scores = scores_mean_domain(y, weights, &domain_mask)?;
-                let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-                let variance = taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
-                let se = variance.max(0.0).sqrt();
-                let srs_var = srs_variance_mean_domain(y, weights, &domain_mask, srs)?;
-                let deff = if srs_var > 0.0 {
-                    variance / srs_var
-                } else {
-                    f64::NAN
-                };
-                Ok((group, estimate, se, variance, n_domain, deff, scores_arr))
-            },
-        )
-        .collect::<PolarsResult<Vec<_>>>()?;
+    let masks: Vec<BooleanChunked> = groups.par_iter().map(|&g| by_str.equal(g)).collect();
+    let (group_dfs, rows) = rayon::join(
+        || {
+            masks
+                .par_iter()
+                .map(|m| degrees_of_freedom_from_design(weights, &design, Some(m)))
+                .collect::<Vec<u32>>()
+        },
+        || {
+            groups
+                .par_iter()
+                .zip(masks.par_iter())
+                .map(
+                    |(&group, mask)| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
+                        let domain_mask = mask.clone();
+                        let active =
+                            design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
+                        let n_domain = active_count(weights, Some(&domain_mask));
+                        let Ok(estimate) = point_estimate_mean_domain(y, weights, &domain_mask)
+                        else {
+                            let nan = f64::NAN;
+                            return Ok((group, nan, nan, nan, n_domain, nan, vec![0.0; y.len()]));
+                        };
+                        let scores = scores_mean_domain(y, weights, &domain_mask)?;
+                        let scores_arr: Vec<f64> =
+                            scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+                        let variance =
+                            taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
+                        let se = variance.max(0.0).sqrt();
+                        let srs_var = srs_variance_mean_domain(y, weights, &domain_mask, srs)?;
+                        let deff = if srs_var > 0.0 {
+                            variance / srs_var
+                        } else {
+                            f64::NAN
+                        };
+                        Ok((group, estimate, se, variance, n_domain, deff, scores_arr))
+                    },
+                )
+                .collect::<PolarsResult<Vec<_>>>()
+        },
+    );
+    let rows = rows?;
 
     let n_groups = rows.len();
     let mut by_vals: Vec<&str> = Vec::with_capacity(n_groups);
@@ -724,7 +741,7 @@ fn compute_total_ungrouped(
         calib,
         || {
             let estimate = point_estimate_total(y, weights)?;
-            let scores = scores_to_arr(&scores_total(y, weights)?);
+            let scores = scores_total_arr(y, weights)?;
             let srs_var = srs_variance_total(y, weights, srs)?;
             Ok((scores, (estimate, srs_var)))
         },
@@ -786,8 +803,7 @@ fn compute_total_multi(
         .map(|i| -> PolarsResult<(String, f64, f64, f64, u32, f64)> {
             let y = y_cols[i];
             let estimate = point_estimate_total(y, weights)?;
-            let scores = scores_total(y, weights)?;
-            let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+            let scores_arr = scores_total_arr(y, weights)?;
             let variance = taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
             let se = variance.max(0.0).sqrt();
             let n = active_count(weights, None);
@@ -849,41 +865,56 @@ fn compute_total_grouped(
         .map(|c| df.column(c).and_then(|s| s.f64()))
         .transpose()?;
     let by_str = df.column(by_col)?.str()?;
-    let unique_groups = crate::estimation::sorted_groups(by_str)?;
-
-    let design =
-        build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?.with_calib(calib);
+    // Group discovery and the design build are independent full passes.
+    let (unique_groups, design) = rayon::join(
+        || crate::estimation::sorted_groups(by_str),
+        || build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method),
+    );
+    let unique_groups = unique_groups?;
+    let design = design?.with_calib(calib);
 
     let groups: Vec<&str> = unique_groups.iter().flatten().collect();
     // A by-group is a domain, so its df must be counted on its own active
     // PSUs/strata. Broadcasting one frame-level df here would hand every group
     // the df of the surrounding analysis mask instead (issue #3).
-    let group_dfs: Vec<u32> = groups
-        .par_iter()
-        .map(|&g| degrees_of_freedom_in_domain(weights, strata, psu, Some(&by_str.equal(g))))
-        .collect::<PolarsResult<Vec<_>>>()?;
-    let rows = groups
-        .par_iter()
-        .map(
-            |&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
-                let domain_mask = by_str.equal(group);
-                let active = design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
-                let n_domain = active_count(weights, Some(&domain_mask));
-                let estimate = point_estimate_total_domain(y, weights, &domain_mask)?;
-                let scores = scores_total_domain(y, weights, &domain_mask)?;
-                let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-                let variance = taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
-                let se = variance.max(0.0).sqrt();
-                let srs_var = srs_variance_total_domain(y, weights, &domain_mask, srs)?;
-                let deff = if srs_var > 0.0 {
-                    variance / srs_var
-                } else {
-                    f64::NAN
-                };
-                Ok((group, estimate, se, variance, n_domain, deff, scores_arr))
-            },
-        )
-        .collect::<PolarsResult<Vec<_>>>()?;
+    let masks: Vec<BooleanChunked> = groups.par_iter().map(|&g| by_str.equal(g)).collect();
+    let (group_dfs, rows) = rayon::join(
+        || {
+            masks
+                .par_iter()
+                .map(|m| degrees_of_freedom_from_design(weights, &design, Some(m)))
+                .collect::<Vec<u32>>()
+        },
+        || {
+            groups
+                .par_iter()
+                .zip(masks.par_iter())
+                .map(
+                    |(&group, mask)| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
+                        let domain_mask = mask.clone();
+                        let active =
+                            design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
+                        let n_domain = active_count(weights, Some(&domain_mask));
+                        let estimate = point_estimate_total_domain(y, weights, &domain_mask)?;
+                        let scores = scores_total_domain(y, weights, &domain_mask)?;
+                        let scores_arr: Vec<f64> =
+                            scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+                        let variance =
+                            taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
+                        let se = variance.max(0.0).sqrt();
+                        let srs_var = srs_variance_total_domain(y, weights, &domain_mask, srs)?;
+                        let deff = if srs_var > 0.0 {
+                            variance / srs_var
+                        } else {
+                            f64::NAN
+                        };
+                        Ok((group, estimate, se, variance, n_domain, deff, scores_arr))
+                    },
+                )
+                .collect::<PolarsResult<Vec<_>>>()
+        },
+    );
+    let rows = rows?;
 
     let n_groups = rows.len();
     let mut by_vals: Vec<&str> = Vec::with_capacity(n_groups);
@@ -1237,44 +1268,60 @@ fn compute_ratio_grouped(
         .map(|c| df.column(c).and_then(|s| s.f64()))
         .transpose()?;
     let by_str = df.column(by_col)?.str()?;
-    let unique_groups = crate::estimation::sorted_groups(by_str)?;
-
-    let design =
-        build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?.with_calib(calib);
+    // Group discovery and the design build are independent full passes.
+    let (unique_groups, design) = rayon::join(
+        || crate::estimation::sorted_groups(by_str),
+        || build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method),
+    );
+    let unique_groups = unique_groups?;
+    let design = design?.with_calib(calib);
 
     let groups: Vec<&str> = unique_groups.iter().flatten().collect();
     // A by-group is a domain, so its df must be counted on its own active
     // PSUs/strata. Broadcasting one frame-level df here would hand every group
     // the df of the surrounding analysis mask instead (issue #3).
-    let group_dfs: Vec<u32> = groups
-        .par_iter()
-        .map(|&g| degrees_of_freedom_in_domain(weights, strata, psu, Some(&by_str.equal(g))))
-        .collect::<PolarsResult<Vec<_>>>()?;
-    let rows = groups
-        .par_iter()
-        .map(
-            |&group| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
-                let domain_mask = by_str.equal(group);
-                let active = design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
-                let n_domain = active_count(weights, Some(&domain_mask));
-                let Ok(estimate) = point_estimate_ratio_domain(y, x, weights, &domain_mask) else {
-                    let nan = f64::NAN;
-                    return Ok((group, nan, nan, nan, n_domain, nan, vec![0.0; y.len()]));
-                };
-                let scores = scores_ratio_domain(y, x, weights, &domain_mask)?;
-                let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-                let variance = taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
-                let se = variance.max(0.0).sqrt();
-                let srs_var = srs_variance_ratio_domain(y, x, weights, &domain_mask, srs)?;
-                let deff = if srs_var > 0.0 {
-                    variance / srs_var
-                } else {
-                    f64::NAN
-                };
-                Ok((group, estimate, se, variance, n_domain, deff, scores_arr))
-            },
-        )
-        .collect::<PolarsResult<Vec<_>>>()?;
+    let masks: Vec<BooleanChunked> = groups.par_iter().map(|&g| by_str.equal(g)).collect();
+    let (group_dfs, rows) = rayon::join(
+        || {
+            masks
+                .par_iter()
+                .map(|m| degrees_of_freedom_from_design(weights, &design, Some(m)))
+                .collect::<Vec<u32>>()
+        },
+        || {
+            groups
+                .par_iter()
+                .zip(masks.par_iter())
+                .map(
+                    |(&group, mask)| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
+                        let domain_mask = mask.clone();
+                        let active =
+                            design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
+                        let n_domain = active_count(weights, Some(&domain_mask));
+                        let Ok(estimate) = point_estimate_ratio_domain(y, x, weights, &domain_mask)
+                        else {
+                            let nan = f64::NAN;
+                            return Ok((group, nan, nan, nan, n_domain, nan, vec![0.0; y.len()]));
+                        };
+                        let scores = scores_ratio_domain(y, x, weights, &domain_mask)?;
+                        let scores_arr: Vec<f64> =
+                            scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+                        let variance =
+                            taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
+                        let se = variance.max(0.0).sqrt();
+                        let srs_var = srs_variance_ratio_domain(y, x, weights, &domain_mask, srs)?;
+                        let deff = if srs_var > 0.0 {
+                            variance / srs_var
+                        } else {
+                            f64::NAN
+                        };
+                        Ok((group, estimate, se, variance, n_domain, deff, scores_arr))
+                    },
+                )
+                .collect::<PolarsResult<Vec<_>>>()
+        },
+    );
+    let rows = rows?;
 
     let n_groups = rows.len();
     let mut by_vals: Vec<&str> = Vec::with_capacity(n_groups);
@@ -1433,11 +1480,11 @@ fn compute_assoc(
         .par_iter()
         .map(|g| match (g, by_str) {
             (Some(gv), Some(bs)) => {
-                degrees_of_freedom_in_domain(weights, strata, psu, Some(&bs.equal(*gv)))
+                degrees_of_freedom_from_design(weights, &design, Some(&bs.equal(*gv)))
             }
-            _ => Ok(degrees_of_freedom_from_design(weights, &design, None)),
+            _ => degrees_of_freedom_from_design(weights, &design, None),
         })
-        .collect::<PolarsResult<Vec<_>>>()?;
+        .collect();
 
     let n_pairs = ys.len();
     let combos: Vec<(usize, usize)> = (0..groups.len())
@@ -2018,11 +2065,15 @@ fn compute_levels_grouped(
     levels.sort();
 
     let by_str = df.column(by_col)?.str()?;
-    let unique_groups = crate::estimation::sorted_groups(by_str)?;
+    // Group discovery and the design build are independent full passes.
+    let (unique_groups, design) = rayon::join(
+        || crate::estimation::sorted_groups(by_str),
+        || build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method),
+    );
+    let unique_groups = unique_groups?;
 
     // Design is identical across all (group, level) cells; index it once.
-    let design =
-        build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?.with_calib(calib);
+    let design = design?.with_calib(calib);
 
     // Fan out over groups; each group emits its level rows in `levels` order,
     // then flatten in group order for a deterministic layout.
@@ -2031,28 +2082,34 @@ fn compute_levels_grouped(
     // A by-group is a domain, so its df must be counted on its own active
     // PSUs/strata. Broadcasting one frame-level df here would hand every group
     // the df of the surrounding analysis mask instead (issue #3).
-    let group_dfs: Vec<u32> = groups
+    let masks: Vec<BooleanChunked> = groups.par_iter().map(|&g| by_str.equal(g)).collect();
+    let group_dfs: Vec<u32> = masks
         .par_iter()
-        .map(|&g| degrees_of_freedom_in_domain(weights, strata, psu, Some(&by_str.equal(g))))
-        .collect::<PolarsResult<Vec<_>>>()?;
+        .map(|m| degrees_of_freedom_from_design(weights, &design, Some(m)))
+        .collect();
+    let indicators: Vec<Float64Chunked> = levels
+        .par_iter()
+        .map(|lvl| {
+            let indicator: Vec<Option<f64>> = value_str
+                .iter()
+                .map(|v| match v {
+                    Some(val) if val == lvl => Some(1.0),
+                    Some(_) => Some(0.0),
+                    None => None,
+                })
+                .collect();
+            Float64Chunked::from_slice_options("indicator".into(), &indicator)
+        })
+        .collect();
     let per_group = groups
         .par_iter()
-        .map(|&group| -> PolarsResult<Vec<PropRow>> {
-            let domain_mask = by_str.equal(group);
+        .zip(masks.par_iter())
+        .map(|(&group, mask)| -> PolarsResult<Vec<PropRow>> {
+            let domain_mask = mask.clone();
             let active = design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
             let n_domain = active_count(weights, Some(&domain_mask));
             let mut out: Vec<PropRow> = Vec::with_capacity(levels.len());
-            for lvl in &levels {
-                let indicator: Vec<Option<f64>> = value_str
-                    .iter()
-                    .map(|v| match v {
-                        Some(val) if val == lvl => Some(1.0),
-                        Some(_) => Some(0.0),
-                        None => None,
-                    })
-                    .collect();
-                let indicator_ca =
-                    Float64Chunked::from_slice_options("indicator".into(), &indicator);
+            for (lvl, indicator_ca) in levels.iter().zip(&indicators) {
                 let (estimate, scores, srs_var) = match scale {
                     LevelScale::Share => {
                         match point_estimate_mean_domain(&indicator_ca, weights, &domain_mask) {
@@ -2648,12 +2705,8 @@ fn compute_quantile_grouped(
                 q_method,
             )?;
             // Per-group df: see the note in compute_mean_grouped.
-            let df_val = degrees_of_freedom_in_domain(
-                cols.weights,
-                cols.strata,
-                cols.psu,
-                Some(&domain_mask),
-            )?;
+            let df_val =
+                degrees_of_freedom_from_design(cols.weights, &cols.design, Some(&domain_mask));
 
             by_vals.extend(std::iter::repeat_n(group, k));
             dfs.extend(std::iter::repeat_n(df_val, k));
