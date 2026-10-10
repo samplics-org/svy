@@ -2245,7 +2245,7 @@ wheels = [
 
 [[package]]
 name = "svy"
-version = "0.32.1"
+version = "0.32.2"
 source = { editable = "packages/svy" }
 dependencies = [
     { name = "msgspec" },
@@ -2346,7 +2346,7 @@ dev = [
 
 [[package]]
 name = "svy-rs"
-version = "0.18.0"
+version = "0.18.1"
 source = { editable = "packages/svy-rs" }
 dependencies = [
     { name = "polars", extra = ["pyarrow"] },
