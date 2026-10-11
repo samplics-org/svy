@@ -159,6 +159,24 @@ def run_end_to_end(n_rows: int, reps: int, n_reps: int) -> None:
             best_ms(lambda: rep_est.mean(y="tot_exp", method="replication"), reps),
         )
 
+        # Reads, concat and filters hand svy chunked columns; generated frames
+        # never are, which hid a kernel path ~30x slower than this one.
+        chunked = pl.concat([df.slice(i, 10_000) for i in range(0, n_rows, 10_000)], rechunk=False)
+        ch = Sample(data=chunked, design=rep_design)
+        rep_cases = {
+            "rep/mean chunked": lambda: ch.estimation.mean(y="tot_exp", method="replication"),
+            "rep/mean by=sex chunked": lambda: ch.estimation.mean(
+                y="tot_exp", by="sex", method="replication"
+            ),
+            "rep/prop chunked": lambda: ch.estimation.prop(y="sex", method="replication"),
+            "rep/median chunked": lambda: ch.estimation.median(y="tot_exp", method="replication"),
+            "rep/glm chunked": lambda: ch.glm.fit(
+                y="tot_exp", x=["hhsize", Cat("sex")], method="replication"
+            ),
+        }
+        for label, fn in rep_cases.items():
+            emit_case(label, n_rows, fn, reps)
+
     # Calibrated designs: the score-centring sweep is variance-path work that
     # none of the cases above reach, because they all use an unadjusted design.
     # One case per sweep kind, since the three are different formulas -- cells
