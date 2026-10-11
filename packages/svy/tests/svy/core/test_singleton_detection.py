@@ -352,3 +352,18 @@ class TestSingletonDetectionRegressions:
             if "ColumnNotFoundError" in str(type(e)) or "regioncluster" in str(e).lower():
                 pytest.fail(f"Bug still exists! String concatenation failed: {e}")
             raise
+
+
+def test_detection_runs_once_per_construction(monkeypatch):
+    calls = []
+    original = Sample._check_for_singletons
+
+    def counted(self):
+        calls.append(1)
+        return original(self)
+
+    monkeypatch.setattr(Sample, "_check_for_singletons", counted)
+    data = pl.DataFrame({"stratum": ["A", "A", "B"], "psu": [1, 2, 3], "value": [1, 2, 3]})
+    sample = Sample(data=data, design=Design(stratum="stratum", psu="psu"))
+    assert len(calls) == 1
+    assert sample.n_singletons == 1

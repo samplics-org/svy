@@ -29,11 +29,11 @@ from typing import TYPE_CHECKING, Mapping, Sequence, cast
 
 import polars as pl
 
-from svy.core.constants import _BY_SEP, key_col
+from svy.core.constants import key_col
 from svy.core.singleton import taylor_singleton_method
 from svy.core.types import WhereArg
 from svy.errors import DimensionError
-from svy.utils.checks import assert_no_missing, drop_missing
+from svy.utils.checks import any_missing, assert_no_missing, drop_missing
 from svy.utils.helpers import _colspec_to_list
 
 
@@ -54,12 +54,11 @@ _SSU_CODE = "__svy_ssu_code__"
 
 
 def _code_expr(cols: list[str], alias: str) -> pl.Expr:
-    """Factorize one design group to UInt32 codes. Mirrors the string-concat
-    null handling (null → "__Null__" token, so nulls form a group) so the code
-    partition matches the string path exactly."""
-    parts = [pl.col(c).cast(pl.Utf8).fill_null("__Null__") for c in cols]
-    concat = pl.concat_str(parts, separator=_BY_SEP) if len(parts) > 1 else parts[0]
-    return concat.cast(pl.Categorical).to_physical().cast(pl.UInt32).alias(alias)
+    """Factorize one design group to UInt32 codes; nulls form their own group
+    (code 0), as in the string keys."""
+    cols = list(dict.fromkeys(cols))  # a PSU may repeat its stratum column
+    key = pl.col(cols[0]) if len(cols) == 1 else pl.struct(cols)
+    return key.rank("dense").fill_null(0).cast(pl.UInt32).alias(alias)
 
 
 def _get_design_codes(sample: Sample, design) -> dict[str, pl.Series] | None:
@@ -193,9 +192,13 @@ def level_lookup(data: pl.DataFrame | pl.LazyFrame, cols: Sequence[str]) -> dict
     cols = list(cols)
     if not cols or any(c not in data.collect_schema().names() for c in cols):
         return {}
-    uniq = data.select(cols).unique()
-    if isinstance(uniq, pl.LazyFrame):
-        uniq = uniq.collect()
+    if isinstance(data, pl.DataFrame) and len(cols) == 1:
+        # Several times cheaper than a frame-level unique on string columns.
+        uniq = data.get_column(cols[0]).unique().to_frame()
+    else:
+        uniq = data.select(cols).unique()
+        if isinstance(uniq, pl.LazyFrame):
+            uniq = uniq.collect()
 
     if len(cols) > 1:
         keys = uniq.select(
@@ -413,17 +416,15 @@ def prepare_data(
     local_data: pl.DataFrame = sample._data
     design = sample._design
 
-    # ── Phase C: attach cached integer design codes ─────────────────────
-    # Attach the (cached, full-data) UInt32 stratum/psu/ssu codes BEFORE any
-    # row filtering so they filter along with the data; the Rust kernel then
-    # densifies the filtered subset, matching the string path bit-for-bit.
-    # Skipped when singleton variance columns take over the design (that path
-    # keeps its own string columns).
+    # ── Phase C: cached integer design codes ────────────────────────────
+    # The (cached, full-data) UInt32 stratum/psu/ssu codes are attached below,
+    # BEFORE any row filtering so they filter along with the data; the Rust
+    # kernel then densifies the filtered subset, matching the string path
+    # bit-for-bit. Skipped when singleton variance columns take over the
+    # design (that path keeps its own string columns).
     _sr_early = getattr(sample, "_singleton_result", None)
     _use_codes = not (_sr_early and _sr_early.config and _sr_early.config.var_stratum_col)
     _design_codes = _get_design_codes(sample, design) if _use_codes else None
-    if _design_codes:
-        local_data = local_data.with_columns(list(_design_codes.values()))
 
     # ── Resolve replicate weight columns (cached on design.rep_wgts) ─────
     # These must be carried through `needed` so they survive select_columns,
@@ -489,17 +490,22 @@ def prepare_data(
             if _c in local_data.columns:
                 calib_cols.append(_c)
     needed.extend(calib_cols)
-    # Carry the Phase C design-code columns through column selection.
-    if _design_codes:
-        needed.extend(s.name for s in _design_codes.values())
     needed = sample._dedup_preserve_order(needed)
 
+    # ── Column selection (optional optimization) and design codes ────────
+    # Selecting before the missing handling leaves the same rows: it reads
+    # only `needed` columns. One query either way.
+    _code_series = list(_design_codes.values()) if _design_codes else []
+    if select_columns:
+        local_data = local_data.select([*needed, *_code_series])
+    elif _code_series:
+        local_data = local_data.with_columns(_code_series)
+    needed.extend(s.name for s in _code_series)
+
     # ── Missing handling ─────────────────────────────────────────────────
-    # Applied BEFORE column selection so that the same rows are affected
-    # regardless of select_columns. Only analysis-relevant columns are
-    # checked — replicate weights are excluded from the null check because
-    # a rare NA in one of N replicate columns should not affect rows for
-    # the entire analysis.
+    # Only analysis-relevant columns are checked — replicate weights are
+    # excluded from the null check because a rare NA in one of N replicate
+    # columns should not affect rows for the entire analysis.
     #
     # With drop_nulls=True, missing values (null/NaN/±inf) fall in two
     # classes:
@@ -600,10 +606,6 @@ def prepare_data(
             _fill_extra_cols = [
                 c for c in (extra_cols or ()) if c in _scoped and local_data.schema[c].is_numeric()
             ]
-
-    # ── Column selection (optional optimization) ─────────────────────────
-    if select_columns:
-        local_data = local_data.select(needed)
 
     # ── Concatenated design columns ──────────────────────────────────────
     # When Phase C codes are active, skip the stratum/psu/ssu string concats
@@ -709,15 +711,13 @@ def prepare_data(
     # block above). Only engaged when something is actually missing, so the
     # no-missing fast path is unchanged.
     _miss_checks: list[pl.Expr] = []
-    if _domain_missing_cols:
+    if _domain_missing_cols and any_missing(df, _domain_missing_cols, infinite=True):
         _dm_schema = df.schema
         for c in _domain_missing_cols:
             e = pl.col(c).is_null()
             if _dm_schema[c] in (pl.Float32, pl.Float64):
                 e = e | pl.col(c).is_nan() | pl.col(c).is_infinite()
             _miss_checks.append(e)
-        if not df.select(pl.any_horizontal(_miss_checks).any()).item():
-            _miss_checks = []
 
     _zero_where = where is not None and apply_where
     if _zero_where or _miss_checks:

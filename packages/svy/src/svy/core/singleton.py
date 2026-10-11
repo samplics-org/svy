@@ -1532,14 +1532,14 @@ def _derive_singleton_state(sample: Sample) -> None:
     if (
         prev is not None
         and prev[0] == key
-        and prev[1].columns == cols
-        and prev[1].height == data.height
-        and all(_same(prev[1].get_column(c), data.get_column(c)) for c in cols)
+        and list(prev[1]) == cols
+        and all(_same(prev[1][c], data.get_column(c)) for c in cols)
     ):
         return
     _rederive(sample)
     key, cols = _basis(sample)
-    sample.__dict__["_singleton_basis"] = (key, cast(pl.DataFrame, sample._data).select(cols))
+    data = cast(pl.DataFrame, sample._data)
+    sample.__dict__["_singleton_basis"] = (key, {c: data.get_column(c) for c in cols})
 
 
 def _rederive(sample: Sample) -> None:
@@ -1556,7 +1556,8 @@ def _rederive(sample: Sample) -> None:
         ensure()
     sample._check_for_singletons()
     data = sample._data
-    stale = [c for c in _VAR_COLS if c in data.collect_schema().names()]
+    names = set(data.collect_schema().names())
+    stale = [c for c in _VAR_COLS if c in names]
     if stale:
         sample._data = data.drop(stale)
     state = sample.__dict__

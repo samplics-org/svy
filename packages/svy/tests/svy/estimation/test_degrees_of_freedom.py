@@ -345,3 +345,19 @@ def test_median_df_zero_cell_has_nan_ci(toy):
     }
     assert cells["B"].df == 0
     assert math.isnan(cells["B"].lci) and math.isnan(cells["B"].uci)
+
+
+def test_t_critical_values_match_scipy_t_ppf():
+    import numpy as np
+
+    from scipy import stats
+
+    from svy.estimation.base import Estimation
+
+    df = np.array([0.0, 1.0, 2.0, 7.5, 36.0, 1e6])
+    for alpha in (0.01, 0.05, 0.1):
+        got = Estimation._t_crit_arr(alpha, df)
+        assert math.isnan(got[0])
+        np.testing.assert_array_equal(got[1:], stats.t.ppf(1 - alpha / 2, df[1:]))
+        assert Estimation._t_crit(alpha, 36) == stats.t.ppf(1 - alpha / 2, 36)
+        assert math.isnan(Estimation._t_crit(alpha, 0))
