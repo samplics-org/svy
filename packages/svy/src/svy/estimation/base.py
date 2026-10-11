@@ -235,111 +235,15 @@ class Estimation:
                 return self._polars_cache
             self._polars_cache = None
 
-        design = self._sample._design
-        data: pl.DataFrame = self._sample._data
-
         # Fail-fast on unhandled singletons (Taylor variance path).
         require_singleton_rule(
             self._sample,
             where="estimation",
             use_replicates="Pass method='replication' to use the replicates.",
         )
-        config = singleton_config(self._sample)
-
-        strata_col = None
-        psu_col = None
-        weight_col = design.wgt
-
-        if config and config.var_stratum_col:
-            strata_col = config.var_stratum_col
-            psu_col = config.var_psu_col
-        else:
-            if design.stratum:
-                if isinstance(design.stratum, str):
-                    strata_col = design.stratum
-                elif isinstance(design.stratum, (list, tuple)):
-                    if len(design.stratum) == 1:
-                        strata_col = design.stratum[0]
-                    else:
-                        strata_col = key_col("strata")
-                        if strata_col not in data.columns:
-                            expr = pl.concat_str(
-                                [
-                                    pl.col(c).cast(pl.String).fill_null("__Null__")
-                                    for c in design.stratum
-                                ],
-                                separator=_BY_SEP,
-                            )
-                            data = data.with_columns(expr.alias(strata_col))
-
-            var_psu = design.variance_psu
-            if var_psu:
-                if isinstance(var_psu, str):
-                    psu_col = var_psu
-                elif isinstance(var_psu, (list, tuple)):
-                    if len(var_psu) == 1:
-                        psu_col = var_psu[0]
-                    else:
-                        psu_col = key_col("variance_psu")
-                        if psu_col not in data.columns:
-                            expr = pl.concat_str(
-                                [pl.col(c).cast(pl.String).fill_null("__Null__") for c in var_psu],
-                                separator=_BY_SEP,
-                            )
-                            data = data.with_columns(expr.alias(psu_col))
-
-        casts = []
-        if strata_col and data[strata_col].dtype != pl.String:
-            casts.append(pl.col(strata_col).cast(pl.String))
-        if psu_col and data[psu_col].dtype != pl.String:
-            casts.append(pl.col(psu_col).cast(pl.String))
-
-        # Resolve SSU column
-        ssu_col = None
-        ssu_spec = getattr(design, "ssu", None)
-        if ssu_spec:
-            if isinstance(ssu_spec, str):
-                ssu_col = ssu_spec
-            elif isinstance(ssu_spec, (list, tuple)) and len(ssu_spec) == 1:
-                ssu_col = ssu_spec[0]
-        if ssu_col and ssu_col in data.columns and data[ssu_col].dtype != pl.String:
-            casts.append(pl.col(ssu_col).cast(pl.String))
-
-        if casts:
-            data = data.with_columns(casts)
-
-        if not weight_col:
-            weight_col = "__unit_wgt__"
-            if weight_col not in data.columns:
-                data = data.with_columns(pl.lit(1.0).alias(weight_col))
-        else:
-            if data[weight_col].dtype != pl.Float64:
-                data = data.with_columns(pl.col(weight_col).cast(pl.Float64))
-
-        # --- FPC column computation ---
-        fpc_col = None
-        fpc_ssu_col = None
-        pop_size = getattr(design, "pop_size", None)
-
-        if pop_size is not None:
-            data, fpc_col, fpc_ssu_col = self._compute_fpc_columns(
-                data=data,
-                pop_size=pop_size,
-                strata_col=strata_col,
-                psu_col=psu_col,
-                ssu_col=ssu_col,
-            )
-
         self._polars_cache = {
             "_data_version": self._sample._data_version,
-            "data": data,
-            "strata_col": strata_col,
-            "psu_col": psu_col,
-            "ssu_col": ssu_col,
-            "weight_col": weight_col,
-            "fpc_col": fpc_col,
-            "fpc_ssu_col": fpc_ssu_col,
-            "singleton_config": config,
+            "singleton_config": singleton_config(self._sample),
         }
         return self._polars_cache
 
@@ -711,17 +615,18 @@ class Estimation:
         report NaN bounds, matching survey, instead of a zero-width CI that
         reads as a point estimate known with certainty (issue #96).
         """
-        from scipy import stats
+        from scipy.special import stdtrit
 
-        return float(stats.t.ppf(1 - alpha / 2, df)) if df > 0 else float("nan")
+        return float(stdtrit(df, 1 - alpha / 2)) if df > 0 else float("nan")
 
     @staticmethod
     def _t_crit_arr(alpha: float, df_arr: np.ndarray) -> np.ndarray:
         """Vectorised :meth:`_t_crit`; NaN wherever df <= 0."""
-        from scipy import stats
+        # stdtrit is the ufunc behind stats.t.ppf, without its ~30 µs of dispatch.
+        from scipy.special import stdtrit
 
         pos = df_arr > 0
-        return np.where(pos, stats.t.ppf(1 - alpha / 2, np.where(pos, df_arr, 1.0)), np.nan)
+        return np.where(pos, stdtrit(np.where(pos, df_arr, 1.0), 1 - alpha / 2), np.nan)
 
     def _compute_prop_ci(
         self,

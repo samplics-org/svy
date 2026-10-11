@@ -176,13 +176,16 @@ class Sample:
 
         # Initialize MetadataStore (replaces _labels)
         self._metadata = MetadataStore(catalog=catalog)
-        self._metadata.infer_from_dataframe(self._without_bookkeeping(self._data))
+        # The caller's columns: bookkeeping was refused above, and NaN filling
+        # touches only floats, which carry no categories.
+        self._metadata.infer_from_dataframe(data)
 
         self._print_width = None
+        self._singletons = None
 
-        self._check_for_singletons()
         self._validate_design()
         self._resolve_jackknife_kind()
+        # Detects the singletons (the singleton part's derive).
         self._sync_parts(force=True)
 
     def _sync_parts(self, *, force: bool = False) -> None:
@@ -818,45 +821,20 @@ class Sample:
         stratum_cols = [stratum] if isinstance(stratum, str) else (stratum if stratum else None)
         psu_cols = [psu] if isinstance(psu, str) else (psu if psu else None)
 
-        singletons = pl.DataFrame()
-
-        if stratum is not None and psu is not None:
-            singletons = (
-                cast(pl.DataFrame, self._data)
-                .select(cast(list, stratum_cols) + cast(list, psu_cols))
-                .unique()
-                .group_by(stratum_cols)
-                .agg(n_psus=pl.len())
-                .filter(pl.col("n_psus") == 1)
-            )
-        elif psu is not None:
-            singletons = (
-                cast(pl.DataFrame, self._data)
-                .select(cast(list, psu_cols) + [SVY_ROW_INDEX])
-                .unique()
-                .group_by(psu_cols)
-                .agg(n_psus=pl.len())
-                .filter(pl.col("n_psus") == 1)
-            )
-        elif stratum is not None:
-            singletons = (
-                cast(pl.DataFrame, self._data)
-                .select(cast(list, stratum_cols) + [SVY_ROW_INDEX])
-                .unique()
-                .group_by(stratum_cols)
-                .agg(n_psus=pl.len())
-                .filter(pl.col("n_psus") == 1)
-            )
-
-        if not singletons.is_empty():
-            if stratum_cols is not None:
-                self._singletons = singletons.select(stratum_cols).to_dicts()
-            elif psu_cols is not None:
-                self._singletons = singletons.select(psu_cols).to_dicts()
-            else:
-                self._singletons = None
+        if stratum_cols is not None and psu_cols is not None:
+            group_cols = stratum_cols
+            n = (pl.col(psu_cols[0]) if len(psu_cols) == 1 else pl.struct(psu_cols)).n_unique()
+        elif stratum_cols is not None or psu_cols is not None:
+            group_cols = cast(list, stratum_cols or psu_cols)
+            n = pl.len()
         else:
             self._singletons = None
+            return
+        counts = cast(pl.DataFrame, self._data).group_by(group_cols).agg(n_psus=n)
+        single = counts.get_column("n_psus") == 1
+        self._singletons = (
+            counts.filter(single).select(group_cols).to_dicts() if single.any() else None
+        )
 
     # ════════════════════════════════════════════════════════════════════════
     # SCHEMA & COLUMN HELPERS
@@ -1878,7 +1856,6 @@ class Sample:
             self._data = local_data
         else:
             self._internal_design = self._key_names()
-        self._check_for_singletons()
         self._validate_design()
         self._sync_parts(force=True)
 

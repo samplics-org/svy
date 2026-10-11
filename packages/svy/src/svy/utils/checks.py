@@ -156,6 +156,20 @@ def to_stringnumber(*, token: object) -> Category:
 # ------------------------------------------------------------------ #
 
 
+def any_missing(df: pl.DataFrame, cols: Sequence[str], *, infinite: bool) -> bool:
+    """Whether any of ``cols`` holds a NULL, a NaN or (with ``infinite``) a ±∞,
+    from null counts and float buffers rather than a query."""
+    for c in cols:
+        s = df.get_column(c)
+        if s.null_count():
+            return True
+        if s.dtype in (pl.Float32, pl.Float64):
+            v = s.to_numpy()
+            if (not np.isfinite(v).all()) if infinite else np.isnan(v).any():
+                return True
+    return False
+
+
 def drop_missing(
     *,
     df: pl.DataFrame,
@@ -175,6 +189,8 @@ def drop_missing(
     missing = [c for c in cols if c not in df_cols]
     if missing:
         raise KeyError(f"Columns not found: {missing}")
+    if not any_missing(df, cols, infinite=treat_infinite_as_missing):
+        return df
 
     # Build the lazy query
     lf = df.lazy().drop_nulls(subset=cols)
@@ -205,7 +221,7 @@ def assert_no_missing(
     Optimized to perform a SINGLE scan of the data rather than multiple.
     `scope` names the rows checked when they are not the whole frame.
     """
-    if not subset or df.is_empty():
+    if not subset or df.is_empty() or not any_missing(df, subset, infinite=True):
         return
 
     schema = df.schema

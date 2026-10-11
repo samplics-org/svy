@@ -10,6 +10,7 @@ from polars.testing import assert_frame_equal
 
 from svy.core.types import Category
 from svy.utils.checks import (
+    any_missing,
     as_1d,
     as_float64_1d,
     check_same_length,
@@ -232,3 +233,34 @@ def test_remove_missing_values_streaming_same_result():
     eager_like = drop_missing(df=df, cols=cols, streaming=False)
     streamed = drop_missing(df=df, cols=cols, streaming=True)
     assert_frame_equal(eager_like, streamed)
+
+
+# -----------------------
+# any_missing
+# -----------------------
+
+
+@pytest.mark.parametrize(
+    "values, infinite, expected",
+    [
+        ([1.0, 2.0], True, False),
+        ([1.0, None], False, True),
+        ([1.0, float("nan")], False, True),
+        ([1.0, float("inf")], False, False),
+        ([1.0, float("-inf")], True, True),
+    ],
+)
+def test_any_missing_floats(values, infinite, expected):
+    df = pl.DataFrame({"a": values}, schema={"a": pl.Float64})
+    assert any_missing(df, ["a"], infinite=infinite) is expected
+
+
+def test_any_missing_non_float_reads_nulls_only():
+    df = pl.DataFrame({"i": [1, 2], "s": ["x", None]})
+    assert not any_missing(df, ["i"], infinite=True)
+    assert any_missing(df, ["i", "s"], infinite=True)
+
+
+def test_drop_missing_returns_the_frame_when_nothing_is_missing():
+    df = pl.DataFrame({"a": [1.0, 2.0], "b": ["x", "y"]})
+    assert drop_missing(df=df, cols=["a", "b"], treat_infinite_as_missing=True) is df

@@ -1028,10 +1028,9 @@ class MetadataStore:
                         pass
                 elif dtype.base_type() == pl.Categorical:
                     try:
-                        n_unique = df.select(pl.col(name).n_unique()).item()
-                        if n_unique <= max_categories:
-                            cats = df.get_column(name).unique(maintain_order=True).to_list()
-                            categories = tuple(c for c in cats if c is not None)
+                        uniq = df.get_column(name).unique(maintain_order=True)
+                        if uniq.len() <= max_categories:
+                            categories = tuple(c for c in uniq.to_list() if c is not None)
                     except Exception:
                         pass
             elif mtype == MeasurementType.BOOLEAN:
@@ -1039,10 +1038,9 @@ class MetadataStore:
             elif mtype == MeasurementType.STRING:
                 # Check if low-cardinality string should be treated as nominal
                 try:
-                    n_unique = df.select(pl.col(name).n_unique()).item()
-                    if n_unique <= max_categories:
-                        cats = df.get_column(name).unique(maintain_order=True).to_list()
-                        categories = tuple(c for c in cats if c is not None)
+                    uniq = df.get_column(name).unique(maintain_order=True)
+                    if uniq.len() <= max_categories:
+                        categories = tuple(c for c in uniq.to_list() if c is not None)
                         # Treat low-cardinality strings as nominal
                         mtype = MeasurementType.NOMINAL
                 except Exception:
