@@ -124,3 +124,22 @@ def test_stage1_ssu_does_not_carry_over():
     ).sampling.pps_sys(n=2, by="region", rstate=5)
     out = s1.sampling.add_stage(_stage2("ea"))
     assert out.design.ssu is None
+
+
+@pytest.mark.parametrize("by_key", ["psu", "stratum"])
+def test_second_stage_by_psu_has_no_empty_cell_findings(by_key):
+    psus = pl.DataFrame(
+        {"stratum": [f"S{i // 4}" for i in range(12)], "psu": list(range(12)), "mos": [5.0] * 12}
+    )
+    units = psus.join(pl.DataFrame({"unit": list(range(10))}), how="cross")
+    first = Sample(psus, Design(stratum="stratum", psu="psu", mos="mos")).sampling.pps_sys(
+        2, rstate=1
+    )
+    sel = first.data["psu"].to_list()
+    n = {p: 3 for p in sel} if by_key == "psu" else {"S0": 3, "S1": 3, "S2": 3}
+    second = first.sampling.add_stage(units.filter(pl.col("psu").is_in(sel))).sampling.srs(
+        n, by="psu", rstate=2
+    )
+    codes = {f.code for f in second.warnings}
+    assert not codes & {"SELECTION_STRATUM_EMPTY", "SELECTION_GROUP_EMPTY"}
+    assert second.data.height == 3 * len(sel)

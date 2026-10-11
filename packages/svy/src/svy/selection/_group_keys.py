@@ -253,13 +253,21 @@ def _normalize_n_for_groups(
     if n_keys == G_set:
         return n_map
 
+    # Broadcasts cover only the stratum x by cells present in the frame: an
+    # absent cell (a PSU of another stratum) is not an empty group.
     # ── exact B match: broadcast within each stratum ─────────────────────────
     if B and n_keys == B_set:
-        return {f"{s}{_SEP}{b}": n_map[b] for s in S for b in B} if S else n_map
+        if not S:
+            return n_map
+        cells = {f"{s}{_SEP}{b}": n_map[b] for s in S for b in B}
+        return {g: cells[g] for g in G}
 
     # ── exact S match: broadcast across by ───────────────────────────────────
     if S and n_keys == S_set:
-        return {f"{s}{_SEP}{b}": n_map[s] for s in S for b in B} if B else n_map
+        if not B:
+            return n_map
+        cells = {f"{s}{_SEP}{b}": n_map[s] for s in S for b in B}
+        return {g: cells[g] for g in G}
 
     # ── sublevel component match ──────────────────────────────────────────────
     sub = _match_sublevel(n_map, G)

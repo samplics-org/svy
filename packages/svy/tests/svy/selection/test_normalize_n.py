@@ -478,3 +478,31 @@ class TestEdgeCases:
     def test_scalar_zero_is_valid(self):
         result = nn(0, **SB)
         assert all(v == 0 for v in result.values())
+
+
+# ---------------------------------------------------------------------------
+# Dict n broadcast over a partial cross (by nested in strata)
+# ---------------------------------------------------------------------------
+
+# PSUs nested in regions: each by-level exists in one stratum only
+NESTED = dict(
+    G=["North__by__1", "North__by__2", "South__by__3"],
+    B=["1", "2", "3"],
+    S=["North", "South"],
+)
+
+
+class TestBroadcastOverPresentCells:
+    def test_b_keys_cover_only_present_cells(self):
+        assert nn({1: 4, 2: 5, 3: 6}, **NESTED) == {
+            "North__by__1": 4,
+            "North__by__2": 5,
+            "South__by__3": 6,
+        }
+
+    def test_s_keys_cover_only_present_cells(self):
+        assert nn({"North": 4, "South": 6}, **NESTED) == {
+            "North__by__1": 4,
+            "North__by__2": 4,
+            "South__by__3": 6,
+        }
