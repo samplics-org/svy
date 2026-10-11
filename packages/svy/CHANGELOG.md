@@ -11,6 +11,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **Agent skills ship with svy.** Guidance for coding agents, matching the installed version: an entry file (namespace map, a complete example, getting full-precision numbers out, rules, common wrong names) and one file per namespace (io, design, wrangling, estimation, categorical, glm, weighting, sampling). Run `svy-skills` once per project (or `svy.skills.install()`) to link them into `.claude/skills/`; upgrades then update them. Rerun it when a release adds a skill or after recreating the environment; `--copy` copies instead. Other packages can ship skills under the `svy.skills` entry-point group, and one run installs them all.
 - **Wrong names say what to use.** A name that does not exist on `svy`, a `Sample`, a `Design`, a sample namespace or a result raises `UnknownNameError` (an `AttributeError`, code `UNKNOWN_NAME`) that names the replacement: `svy.SurveyDesign` → `svy.Sample(data, svy.Design(...))`, `sample.mean` → `sample.estimation.mean`, `estimation.tabulate` → `categorical.tabulate`, `estimation.proportion` → `prop`, `result.est` → `result.to_polars()`, plus close matches. `svy.Design(data)`, unknown `Design` arguments (`strata=` → `stratum=`, `weights=` → `wgt=`, `cluster=` → `psu=`) and a pandas frame passed to `Sample` raise `UsageError` (a `TypeError`) with the fix. `help(svy)` now shows where to start.
 
+### Fixed
+
+- **A `Generator` passed as `rstate` advances.** `srs`, every `pps_*` method and `show_data(order_type="random")` derived their seed from the generator's state without drawing from it, so reusing one generator gave the same sample every time: a loop of draws simulated one sample R times. They now draw their seed from it, as NumPy code expects. **A draw given a `Generator` selects different units than before**; integer and `SeedSequence` seeds are unaffected.
+
 ## [0.32.2] — 2026-10-10
 
 ### Changed
