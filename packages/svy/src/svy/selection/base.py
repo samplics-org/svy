@@ -60,7 +60,8 @@ class Selection:
         hit_name: str | None = None,
         rstate: RandomState = None,
         drop_nulls: bool = False,
-    ) -> "Sample":
+        n_draws: int | None = None,
+    ) -> "Sample | list[Sample]":
         """
         Simple Random Sample, optionally stratified by (stratum x by).
 
@@ -70,6 +71,9 @@ class Selection:
             Row filter applied before selection.  Eligible rows (True)
             participate in the draw; non-eligible rows (False) are kept
             in the output with prob=null, weight=null, hit=null.
+        n_draws : int, optional
+            Draw this many samples, returned as a list; each equals a single call
+            with its own seed. Leave out for one sample.
         """
         return _srs(
             self._sample,
@@ -84,6 +88,7 @@ class Selection:
             hit_name=hit_name,
             rstate=rstate,
             drop_nulls=drop_nulls,
+            n_draws=n_draws,
         )
 
     # ------------------------------------------------------------------ #
@@ -104,7 +109,8 @@ class Selection:
         hit_name: str | None = None,
         rstate: RandomState = None,
         drop_nulls: bool = False,
-    ) -> "Sample":
+        n_draws: int | None = None,
+    ) -> "Sample | list[Sample]":
         """
         PPS systematic sampling without replacement.
 
@@ -127,6 +133,7 @@ class Selection:
             hit_name=hit_name,
             rstate=rstate,
             drop_nulls=drop_nulls,
+            n_draws=n_draws,
         )
 
     def pps_wr(
@@ -141,7 +148,8 @@ class Selection:
         hit_name: str | None = None,
         rstate: RandomState = None,
         drop_nulls: bool = False,
-    ) -> "Sample":
+        n_draws: int | None = None,
+    ) -> "Sample | list[Sample]":
         """PPS sampling with replacement."""
         return _pps_wr(
             self._sample,
@@ -154,6 +162,7 @@ class Selection:
             hit_name=hit_name,
             rstate=rstate,
             drop_nulls=drop_nulls,
+            n_draws=n_draws,
         )
 
     def pps_brewer(
@@ -168,7 +177,8 @@ class Selection:
         hit_name: str | None = None,
         rstate: RandomState = None,
         drop_nulls: bool = False,
-    ) -> "Sample":
+        n_draws: int | None = None,
+    ) -> "Sample | list[Sample]":
         """Brewer PPS sampling without replacement."""
         return _pps_brewer(
             self._sample,
@@ -181,6 +191,7 @@ class Selection:
             hit_name=hit_name,
             rstate=rstate,
             drop_nulls=drop_nulls,
+            n_draws=n_draws,
         )
 
     def pps_murphy(
@@ -195,7 +206,8 @@ class Selection:
         hit_name: str | None = None,
         rstate: RandomState = None,
         drop_nulls: bool = False,
-    ) -> "Sample":
+        n_draws: int | None = None,
+    ) -> "Sample | list[Sample]":
         """Murphy PPS sampling without replacement (n=2 only)."""
         return _pps_murphy(
             self._sample,
@@ -208,6 +220,7 @@ class Selection:
             hit_name=hit_name,
             rstate=rstate,
             drop_nulls=drop_nulls,
+            n_draws=n_draws,
         )
 
     def pps_rs(
@@ -222,7 +235,8 @@ class Selection:
         hit_name: str | None = None,
         rstate: RandomState = None,
         drop_nulls: bool = False,
-    ) -> "Sample":
+        n_draws: int | None = None,
+    ) -> "Sample | list[Sample]":
         """Rao-Sampford PPS sampling without replacement."""
         return _pps_rs(
             self._sample,
@@ -235,6 +249,7 @@ class Selection:
             hit_name=hit_name,
             rstate=rstate,
             drop_nulls=drop_nulls,
+            n_draws=n_draws,
         )
 
     # ------------------------------------------------------------------ #

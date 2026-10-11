@@ -125,5 +125,7 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Sampling
     m.add_function(wrap_pyfunction!(sampling::api::select_srs_rs, m)?)?;
     m.add_function(wrap_pyfunction!(sampling::api::select_pps_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(sampling::api::select_srs_batch_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(sampling::api::select_pps_batch_rs, m)?)?;
     Ok(())
 }

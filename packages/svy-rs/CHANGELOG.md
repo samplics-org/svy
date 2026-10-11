@@ -6,6 +6,7 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ### Added
 
+- `select_srs_batch_rs` and `select_pps_batch_rs` run `select_srs_rs` / `select_pps_rs` once per seed, in parallel, from one set of inputs. `SrsN` and `PpsN` derive `Clone`.
 - `fit_glm_reps_rs` refits a GLM under each replicate weight column, in parallel, and returns each replicate's coefficients and separation record, or its error message. `fit_glm_domain` with `want_variance = false` now fills the separation record; the negative binomial's theta loop, its other caller, ignores it.
 
 ### Changed

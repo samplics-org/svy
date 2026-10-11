@@ -199,3 +199,26 @@ def _warn_empty_strata(
                 ),
                 got={"stratum": group},
             )
+
+
+def _child_seeds(rstate: Any, n_draws: Any, *, where: str) -> list[np.random.SeedSequence]:
+    """One seed per draw: child r of ``SeedSequence(rstate)``; a Generator advances first."""
+    from svy.errors import MethodError
+    from svy.utils.random_state import advance_generator, resolve_seed_sequence
+
+    if isinstance(n_draws, bool) or not isinstance(n_draws, (int, np.integer)):
+        raise MethodError.invalid_type(
+            where=where,
+            param="n_draws",
+            got=n_draws,
+            expected="int >= 1",
+            hint="Pass the number of samples to draw, e.g. n_draws=1000.",
+        )
+    if n_draws < 1:
+        raise MethodError.invalid_range(
+            where=where,
+            param="n_draws",
+            got=n_draws,
+            hint="Pass at least 1, or leave n_draws out for a single sample.",
+        )
+    return resolve_seed_sequence(advance_generator(rstate)).spawn(int(n_draws))

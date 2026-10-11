@@ -31,6 +31,25 @@ impl<T: Element + Clone> Array1<'_, T> {
     }
 }
 
+/// The sample size as a scalar or per-stratum map; exactly one must be given.
+fn parse_n<N>(
+    n_scalar: Option<usize>,
+    n_map: Option<HashMap<i64, usize>>,
+    scalar: impl FnOnce(usize) -> N,
+    per_stratum: impl FnOnce(HashMap<i64, usize>) -> N,
+) -> PyResult<N> {
+    match (n_scalar, n_map) {
+        (Some(v), None) => Ok(scalar(v)),
+        (None, Some(m)) => Ok(per_stratum(m)),
+        (Some(_), Some(_)) => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "Provide either n_scalar or n_map, not both",
+        )),
+        (None, None) => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "Provide either n_scalar or n_map",
+        )),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SRS
 // ---------------------------------------------------------------------------
@@ -59,20 +78,7 @@ pub fn select_srs_rs(
     wr: bool,
     seed: Option<u64>,
 ) -> PyResult<(Vec<i64>, Vec<i64>, Vec<f64>)> {
-    let n = match (n_scalar, n_map) {
-        (Some(v), None) => SrsN::Scalar(v),
-        (None, Some(m)) => SrsN::PerStratum(m),
-        (Some(_), Some(_)) => {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Provide either n_scalar or n_map, not both",
-            ));
-        }
-        (None, None) => {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Provide either n_scalar or n_map",
-            ));
-        }
-    };
+    let n = parse_n(n_scalar, n_map, SrsN::Scalar, SrsN::PerStratum)?;
 
     let stratum = stratum.as_ref().map(Array1::values);
 
@@ -127,20 +133,7 @@ pub fn select_pps_rs(
         ))
     })?;
 
-    let n = match (n_scalar, n_map) {
-        (Some(v), None) => PpsN::Scalar(v),
-        (None, Some(m)) => PpsN::PerStratum(m),
-        (Some(_), Some(_)) => {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Provide either n_scalar or n_map, not both",
-            ));
-        }
-        (None, None) => {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Provide either n_scalar or n_map",
-            ));
-        }
-    };
+    let n = parse_n(n_scalar, n_map, PpsN::Scalar, PpsN::PerStratum)?;
 
     let stratum = stratum.as_ref().map(Array1::values);
 
@@ -154,4 +147,80 @@ pub fn select_pps_rs(
         seed,
     )
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// Many draws
+// ---------------------------------------------------------------------------
+
+/// `select_srs_rs` once per seed, in parallel; draw r is that call with `seeds[r]`.
+#[pyfunction]
+#[pyo3(signature = (frame, seeds, n_scalar=None, n_map=None, stratum=None, wr=false))]
+pub fn select_srs_batch_rs(
+    frame: Array1<'_, i64>,
+    seeds: Vec<u64>,
+    n_scalar: Option<usize>,
+    n_map: Option<HashMap<i64, usize>>,
+    stratum: Option<Array1<'_, i64>>,
+    wr: bool,
+) -> PyResult<Vec<(Vec<i64>, Vec<i64>, Vec<f64>)>> {
+    use rayon::prelude::*;
+    let n = parse_n(n_scalar, n_map, SrsN::Scalar, SrsN::PerStratum)?;
+    let frame = frame.values();
+    let stratum = stratum.as_ref().map(Array1::values);
+    seeds
+        .par_iter()
+        .map(|&seed| select_srs(&frame, n.clone(), stratum.as_deref(), wr, Some(seed)))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+}
+
+/// `select_pps_rs` once per seed, in parallel; draw r is that call with `seeds[r]`.
+#[pyfunction]
+#[pyo3(signature = (
+    frame,
+    mos,
+    seeds,
+    n_scalar=None,
+    n_map=None,
+    stratum=None,
+    method="sys",
+    certainty_threshold=1.0
+))]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn select_pps_batch_rs(
+    frame: Array1<'_, i64>,
+    mos: Array1<'_, f64>,
+    seeds: Vec<u64>,
+    n_scalar: Option<usize>,
+    n_map: Option<HashMap<i64, usize>>,
+    stratum: Option<Array1<'_, i64>>,
+    method: &str,
+    certainty_threshold: f64,
+) -> PyResult<Vec<(Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>)>> {
+    use rayon::prelude::*;
+    let pps_method = PpsMethod::from_str(method).ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Unknown PPS method {method:?}. Use: sys, wr, brewer, murphy, rs"
+        ))
+    })?;
+    let n = parse_n(n_scalar, n_map, PpsN::Scalar, PpsN::PerStratum)?;
+    let frame = frame.values();
+    let mos = mos.values();
+    let stratum = stratum.as_ref().map(Array1::values);
+    seeds
+        .par_iter()
+        .map(|&seed| {
+            select_pps(
+                &frame,
+                n.clone(),
+                &mos,
+                stratum.as_deref(),
+                pps_method,
+                certainty_threshold,
+                Some(seed),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
 }

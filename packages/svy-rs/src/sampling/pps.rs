@@ -24,6 +24,7 @@ impl PpsMethod {
     }
 }
 
+#[derive(Clone)]
 pub enum PpsN {
     Scalar(usize),
     PerStratum(HashMap<i64, usize>),
