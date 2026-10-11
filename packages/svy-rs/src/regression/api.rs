@@ -13,6 +13,7 @@ use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 
+use crate::estimation::into_contiguous;
 use crate::estimation::calib_sweep::{CalibSpec, CalibSweep, build_calib_sweep};
 use crate::estimation::taylor::SingletonRule;
 use crate::regression::glm::{
@@ -268,7 +269,7 @@ pub fn design_vcov_rs(
     psu_col: Option<String>,
     fpc_col: Option<String>,
 ) -> PyResult<Vec<f64>> {
-    let df: DataFrame = data.into();
+    let df = into_contiguous(data);
     let n = df.height();
     let p = value_cols.len();
     if p == 0 {

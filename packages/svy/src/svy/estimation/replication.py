@@ -322,7 +322,9 @@ def replicate_factor(
     # Levels are the values' text, as in the Taylor kernel, so any dtype works.
     # A null y is out of the domain with zero weight; the kernel has no null
     # level, so those rows go.
-    data = data.filter(pl.col(y).is_not_null()).with_columns(pl.col(y).cast(pl.String))
+    if data.get_column(y).null_count():
+        data = data.filter(pl.col(y).is_not_null())
+    data = data.with_columns(pl.col(y).cast(pl.String))
     fn = rs.replicate_prop if param == PopParam.MEAN else rs.replicate_factor_total
     result_df, cov_flat = fn(
         data,
@@ -414,7 +416,9 @@ def replicate_prop(
     data = est._ensure_float64(prep.df, rep_weight_cols)
     # A null y is out of the domain with zero weight; the kernel has no null
     # level, so those rows go.
-    data = est._coerce_y_for_prop(data.filter(pl.col(y).is_not_null()), y)
+    if data.get_column(y).null_count():
+        data = data.filter(pl.col(y).is_not_null())
+    data = est._coerce_y_for_prop(data, y)
     result_df, cov_flat = rs.replicate_prop(
         data,
         value_col=y,

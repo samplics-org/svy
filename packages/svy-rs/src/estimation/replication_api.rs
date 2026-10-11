@@ -8,6 +8,7 @@ use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 
+use crate::estimation::into_contiguous;
 use crate::estimation::taylor::{SvyQuantileMethod, active_count};
 use crate::estimation::association::{
     AssocKind, PairProducts, replicate_association,
@@ -97,7 +98,7 @@ pub fn replicate_mean(
     by_col: Option<String>,
     domain_mask_col: Option<String>,
 ) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
-    let df: DataFrame = data.into();
+    let df = into_contiguous(data);
     let n_reps = rep_weight_cols.len();
     let variance_center  = parse_variance_center(center)?;
     // Coefficients are computed by the RepWeights variant on the Python side;
@@ -226,7 +227,7 @@ pub fn replicate_total(
     by_col: Option<String>,
     domain_mask_col: Option<String>,
 ) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
-    let df: DataFrame = data.into();
+    let df = into_contiguous(data);
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
     // Coefficients are computed by the RepWeights variant on the Python side;
@@ -364,7 +365,7 @@ pub fn replicate_assoc(
     by_col: Option<String>,
     domain_mask_col: Option<String>,
 ) -> PyResult<PyDataFrame> {
-    let df: DataFrame = data.into();
+    let df = into_contiguous(data);
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
     // Coefficients are computed by the RepWeights variant on the Python side;
@@ -551,7 +552,7 @@ pub fn replicate_ratio(
     by_col: Option<String>,
     domain_mask_col: Option<String>,
 ) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
-    let df: DataFrame = data.into();
+    let df = into_contiguous(data);
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
     // Coefficients are computed by the RepWeights variant on the Python side;
@@ -748,7 +749,7 @@ fn replicate_levels(
     domain_mask_col: Option<String>,
     normalize: bool,
 ) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
-    let df: DataFrame = data.into();
+    let df = into_contiguous(data);
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
     // Coefficients are computed by the RepWeights variant on the Python side;
@@ -964,7 +965,7 @@ pub fn replicate_quantile(
     by_col: Option<String>,
     quantile_method: Option<String>,
 ) -> PyResult<PyDataFrame> {
-    let df: DataFrame = data.into();
+    let df = into_contiguous(data);
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
     // Coefficients are computed by the RepWeights variant on the Python side;

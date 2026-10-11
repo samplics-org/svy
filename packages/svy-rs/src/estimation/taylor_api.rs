@@ -10,6 +10,7 @@ use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 use rayon::prelude::*;
 
+use crate::estimation::into_contiguous;
 use crate::estimation::association::{
     AssocKind, point_estimate_assoc, scores_assoc, srs_variance_assoc_of,
 };
@@ -25,20 +26,6 @@ use crate::estimation::taylor::{
     taylor_covariance_apply, taylor_covariance_apply_in, taylor_variance_apply_in,
     weighted_quantile,
 };
-
-/// Convert the incoming Python DataFrame and ensure one chunk per column.
-///
-/// After `prepare_data` the frame is usually already single-chunk, but scaled or
-/// concatenated inputs can arrive fragmented. A single rechunk here (one copy)
-/// lets every downstream kernel take its contiguous `cont_slice` fast path
-/// instead of the per-element chunked-iterator fallback.
-fn into_contiguous(data: PyDataFrame) -> DataFrame {
-    let mut df: DataFrame = data.into();
-    if df.first_col_n_chunks() > 1 {
-        df.rechunk_mut_par();
-    }
-    df
-}
 
 /// Resolve the SRS reference the design effect is measured against.
 ///
