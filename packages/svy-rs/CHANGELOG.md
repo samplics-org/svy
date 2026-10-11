@@ -4,6 +4,17 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ## [Unreleased]
 
+### Added
+
+- `fit_glm_reps_rs` refits a GLM under each replicate weight column, in parallel, and returns each replicate's coefficients and separation record, or its error message. `fit_glm_domain` with `want_variance = false` now fills the separation record; the negative binomial's theta loop, its other caller, ignores it.
+
+### Changed
+
+- `select_srs_rs` and `select_pps_rs` read `frame`, `mos` and `stratum` from a numpy array of the exact dtype in place, or copy any other sequence as before.
+- `into_contiguous` rechunks when any column has several chunks (it checked the first column only) and is used by the replication kernels, `tabulate_rs`, `ttest_rs`, `ranktest_rs`, `design_vcov_rs` and `fit_glm_reps_rs` as well as the Taylor ones. Chunked replicate columns had sent the replication kernels to a per-cell copy.
+- `taylor_covariance_apply_in` forms cross-products only among the columns with a nonzero value in a stratum (PSU totals, element rows, or SSU totals at stage 2), falling back to every column when one is non-finite. Bit-identical; the element-design branch no longer allocates a `strata × k × k` buffer.
+- Replicate quantiles: `quantile_estimates_cols` and `quantile_by_domain_cols` sort `y` once (per domain) and run the replicates in parallel on the replicate columns in place. `matrix_quantile_estimates` and `matrix_quantile_by_domain` wrap them. Bit-identical to sorting per replicate.
+
 ## [0.18.1] — 2026-10-10
 
 ### Changed
