@@ -17,7 +17,8 @@ use crate::estimation::into_contiguous;
 use crate::estimation::calib_sweep::{CalibSpec, CalibSweep, build_calib_sweep};
 use crate::estimation::taylor::SingletonRule;
 use crate::regression::glm::{
-    GlmResult, design_codes, design_vcov_of_totals, fit_glm_by, fit_glm_where, fit_one,
+    GlmResult, design_codes, design_vcov_of_totals, fit_glm_by, fit_glm_reps, fit_glm_where,
+    fit_one,
 };
 
 type GlmTuple = (
@@ -70,6 +71,98 @@ fn optional_column_to_series(df: &DataFrame, name: &Option<String>) -> PyResult<
         Some(n) => column_to_series(df, n).map(Some),
         None => Ok(None),
     }
+}
+
+/// One replicate refit: coefficients and separation record, or the error.
+type RepFit = (Option<Vec<f64>>, Option<(usize, Vec<f64>)>, Option<String>);
+
+/// Refit the model under each replicate weight column, in parallel: the
+/// coefficients a replicate variance needs, without each fit's sandwich.
+#[pyfunction]
+#[pyo3(signature = (
+    y_name,
+    x_names,
+    rep_weight_names,
+    data,
+    stratum_name=None,
+    psu_name=None,
+    offset_name=None,
+    where_col=None,
+    family="gaussian".to_string(),
+    link="identity".to_string(),
+    theta=None,
+    tol=1e-8,
+    max_iter=100,
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn fit_glm_reps_rs(
+    _py: Python,
+    y_name: String,
+    x_names: Vec<String>,
+    rep_weight_names: Vec<String>,
+    data: PyDataFrame,
+    stratum_name: Option<String>,
+    psu_name: Option<String>,
+    offset_name: Option<String>,
+    where_col: Option<String>,
+    family: String,
+    link: String,
+    theta: Option<f64>,
+    tol: f64,
+    max_iter: usize,
+) -> PyResult<Vec<RepFit>> {
+    let df = into_contiguous(data);
+    let y = column_to_series(&df, &y_name)?;
+    let x_cols = x_names
+        .iter()
+        .map(|n| column_to_series(&df, n))
+        .collect::<PyResult<Vec<_>>>()?;
+    let reps = rep_weight_names
+        .iter()
+        .map(|n| column_to_series(&df, n))
+        .collect::<PyResult<Vec<_>>>()?;
+    let stratum = optional_column_to_series(&df, &stratum_name)?;
+    let psu = optional_column_to_series(&df, &psu_name)?;
+    let offset = optional_column_to_series(&df, &offset_name)?;
+    let mask: Option<Vec<bool>> = match where_col {
+        Some(name) => {
+            let cast = column_to_series(&df, &name)?
+                .cast(&DataType::Boolean)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+            let ca = cast
+                .bool()
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+            Some(ca.iter().map(|v| v.unwrap_or(false)).collect())
+        }
+        None => None,
+    };
+    let fits = _py.detach(|| {
+        fit_glm_reps(
+            &y,
+            &x_cols,
+            &reps,
+            stratum.as_ref(),
+            psu.as_ref(),
+            offset.as_ref(),
+            mask.as_deref(),
+            &family,
+            &link,
+            theta,
+            tol,
+            max_iter,
+        )
+    });
+    Ok(fits
+        .into_iter()
+        .map(|f| match f {
+            Ok(r) => (
+                Some(r.params),
+                r.separation.map(|s| (s.boundary_rows, s.gram)),
+                None,
+            ),
+            Err(e) => (None, None, Some(e.to_string())),
+        })
+        .collect())
 }
 
 #[pyfunction]
