@@ -86,7 +86,7 @@ from svy.estimation.taylor import (
 )
 from svy.ui.printing import format_where_clause
 from svy.utils.checks import validate_alpha
-from svy.utils.helpers import _colspec_to_list
+from svy.utils.helpers import _collect, _colspec_to_list
 from svy.wrangling.rows import _compile_where_to_pl_expr
 
 from .association import guard_pandas_method as _guard_pandas_method
@@ -503,11 +503,10 @@ class Estimation:
         if s:
             m = pl.col(p).n_unique() if p else pl.len()
             per_stratum = active.group_by(s).agg(m.alias("m"))
-            return int(
-                per_stratum.select((pl.col("m") - 1).clip(lower_bound=0).sum()).collect().item()
-            )
+            df_s = per_stratum.select((pl.col("m") - 1).clip(lower_bound=0).sum())
+            return int(_collect(df_s, prep.df.height).item())
         n = pl.col(p).n_unique() if p else pl.len()
-        return max(0, int(active.select(n).collect().item()) - 1)
+        return max(0, int(_collect(active.select(n), prep.df.height).item()) - 1)
 
     @staticmethod
     def _normalize_deff(deff: object) -> str | None:

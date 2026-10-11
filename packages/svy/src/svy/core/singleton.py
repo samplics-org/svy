@@ -18,6 +18,7 @@ from svy.core.constants import (
 from svy.core.enumerations import SingletonDomains, SingletonMethod
 from svy.core.types import WhereArg
 from svy.errors.singleton_errors import SingletonError
+from svy.utils.helpers import _collect
 from svy.utils.random_state import RandomState, resolve_random_state
 
 
@@ -257,9 +258,8 @@ class _Engine:
                 pl.col(psu_col).first().alias("any_psu"),
             )
             .filter(pl.col("n_psu") == 1)
-            .collect()
         )
-        agg = cast(pl.DataFrame, agg)
+        agg = _collect(agg, df.height)
 
         if agg.height == 0:
             return []
@@ -327,9 +327,7 @@ class _Engine:
             if col in df.columns:
                 agg_exprs.append(pl.col(col).drop_nulls().first().alias(f"_order_{col}"))
 
-        agg = cast(
-            pl.DataFrame, df.lazy().group_by(effective_stratum_col).agg(agg_exprs).collect()
-        )
+        agg = _collect(df.lazy().group_by(effective_stratum_col).agg(agg_exprs), df.height)
 
         # Extract stratum values (use original stratum columns, not the override)
         values_map: dict[Any, dict[str, Any]] = {}
@@ -1124,13 +1122,13 @@ def domain_singleton_frame(
     full = lf.group_by(strata_col).agg(units.alias("__svy_n_full__"))
     keys = [by_col, strata_col] if by_col else [strata_col]
     firsts = [pl.col(c).first() for c in dict.fromkeys(name_cols) if c not in keys]
-    return (
+    return _collect(
         (lf if mask is None else lf.filter(mask))
         .group_by(keys)
         .agg(units.alias("__svy_n_dom__"), *firsts)
         .join(full, on=strata_col)
-        .filter((pl.col("__svy_n_dom__") == 1) & (pl.col("__svy_n_full__") > 1))
-        .collect()
+        .filter((pl.col("__svy_n_dom__") == 1) & (pl.col("__svy_n_full__") > 1)),
+        df.height,
     )
 
 
