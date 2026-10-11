@@ -6,6 +6,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Added
+
+- **Agent skills ship with svy.** Guidance for coding agents, matching the installed version: an entry file (namespace map, a complete example, getting full-precision numbers out, rules, common wrong names) and one file per namespace (io, design, wrangling, estimation, categorical, glm, weighting, sampling). Run `svy-skills` once per project (or `svy.skills.install()`) to link them into `.claude/skills/`; upgrades then update them. Rerun it when a release adds a skill or after recreating the environment; `--copy` copies instead. Other packages can ship skills under the `svy.skills` entry-point group, and one run installs them all.
+
 ## [0.32.2] — 2026-10-10
 
 ### Changed
