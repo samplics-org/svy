@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
+import polars as pl
 
 from svy.core.enumerations import TableUnits
 from svy.core.types import DF, Category
@@ -62,6 +63,16 @@ def _normalize_name_seq(
         expected="str | Sequence[str] | None",
         hint="Pass a column name or a list/tuple of names.",
     )
+
+
+# Below this, polars' streaming engine costs 1-2 ms more than in-memory on a
+# group_by; above it, streaming is faster.
+_STREAMING_MIN_ROWS = 250_000
+
+
+def _collect(lf: pl.LazyFrame, n_rows: int) -> pl.DataFrame:
+    """Collect ``lf`` on the engine that is faster for an ``n_rows`` input."""
+    return lf.collect(engine="in-memory" if n_rows < _STREAMING_MIN_ROWS else "auto")
 
 
 def _colspec_to_list(spec: str | Sequence[str] | None) -> list[str]:
