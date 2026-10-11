@@ -76,17 +76,17 @@ def _select_pps(*, method, frame, n, mos, stratum, certainty_threshold, rstate):
         n_scalar = int(n)
         n_map = None
 
-    strat_int, strat_list = _encode_stratum(stratum)
+    strat_int, strat_codes = _encode_stratum(stratum)
 
     from svy.errors import MethodError
 
     try:
         sel, hits, probs, cert = _select_pps_rs(
-            frame=frame.tolist(),
-            mos=mos.tolist(),
+            frame=np.ascontiguousarray(frame, dtype=np.int64),
+            mos=np.ascontiguousarray(mos, dtype=np.float64),
             n_scalar=n_scalar,
             n_map=(_remap_n_map(n_map, strat_int) if n_map is not None else None),
-            stratum=strat_list,
+            stratum=strat_codes,
             method=method_str,
             certainty_threshold=certainty_threshold,
             seed=seed,
