@@ -1959,6 +1959,26 @@ pub fn taylor_covariance_apply(score_cols: &[Vec<f64>], d: &TaylorDesign) -> Vec
     taylor_covariance_apply_in(score_cols, d, None)
 }
 
+/// The columns with a nonzero value among `values(j)`, or all `k` when any value
+/// is non-finite. A column of zeros adds only ±0 terms to a cross-product, which
+/// leave every sum bit-identical, unless a ±∞/NaN partner turns 0·∞ into NaN.
+fn present_cols<I: Iterator<Item = f64>>(k: usize, values: impl Fn(usize) -> I) -> Vec<usize> {
+    let mut present = Vec::new();
+    for j in 0..k {
+        let mut nonzero = false;
+        for v in values(j) {
+            if !v.is_finite() {
+                return (0..k).collect();
+            }
+            nonzero |= v != 0.0;
+        }
+        if nonzero {
+            present.push(j);
+        }
+    }
+    present
+}
+
 /// [`taylor_covariance_apply`] for estimates of one domain. Estimates of
 /// different domains keep the whole frame, as R's `svyby(covmat=TRUE)` takes
 /// their covariance from influence functions on the full design.
@@ -2111,10 +2131,19 @@ pub fn taylor_covariance_apply_in(
                             .collect()
                     };
                     let scale = fpc_h * mf / (mf - 1.0);
+                    // A lonely stratum centres at the grand mean, so every column counts.
+                    let present = if lonely {
+                        (0..k).collect()
+                    } else {
+                        {
+                            let pt = &psu_totals;
+                            present_cols(k, |j| psu_map[h].iter().map(move |&p| pt[j][p as usize]))
+                        }
+                    };
                     for &p in &psu_map[h] {
-                        for j in 0..k {
+                        for (a, &j) in present.iter().enumerate() {
                             let dj = psu_totals[j][p as usize] - means_h[j];
-                            for l in j..k {
+                            for &l in &present[a..] {
                                 let dl = psu_totals[l][p as usize] - means_h[l];
                                 add(&mut cov, j, l, scale * dj * dl);
                             }
@@ -2125,23 +2154,20 @@ pub fn taylor_covariance_apply_in(
             }
             _ => {
                 // Stratified element sampling: units are the PSUs, grouped by
-                // stratum. One pass accumulates per-stratum sums, counts, and
-                // the k×k cross-product sums.
+                // stratum. One pass accumulates per-stratum sums and counts;
+                // the cross-products are summed per stratum below.
                 let mut sums = vec![vec![0.0; n_strata]; k];
                 let mut counts = vec![0u32; n_strata];
-                let mut cross = vec![0.0; n_strata * k * k];
+                let mut rows_of: Vec<Vec<usize>> = vec![Vec::new(); n_strata];
                 for (i, &st) in strata_idx.iter().enumerate() {
                     if st == u32::MAX {
                         continue;
                     }
                     let h = st as usize;
                     counts[h] += 1;
+                    rows_of[h].push(i);
                     for j in 0..k {
-                        let sj = cols[j][i];
-                        sums[j][h] += sj;
-                        for l in j..k {
-                            cross[h * k * k + j * k + l] += sj * cols[l][i];
-                        }
+                        sums[j][h] += cols[j][i];
                     }
                 }
 
@@ -2179,9 +2205,29 @@ pub fn taylor_covariance_apply_in(
                     }
                     let nf = n_h as f64;
                     let scale = fpc_h * nf / (nf - 1.0);
-                    for j in 0..k {
-                        for l in j..k {
-                            let cross_h = cross[h * k * k + j * k + l];
+                    let rows_h = &rows_of[h];
+                    // A lonely stratum centres at the grand mean, so every column counts.
+                    let present = if lonely {
+                        (0..k).collect()
+                    } else {
+                        {
+                            let cs = &cols;
+                            present_cols(k, |j| rows_h.iter().map(move |&i| cs[j][i]))
+                        }
+                    };
+                    let np = present.len();
+                    let mut cross = vec![0.0; np * np];
+                    for &i in rows_h {
+                        for (a, &j) in present.iter().enumerate() {
+                            let sj = cols[j][i];
+                            for (b, &l) in present.iter().enumerate().skip(a) {
+                                cross[a * np + b] += sj * cols[l][i];
+                            }
+                        }
+                    }
+                    for (a, &j) in present.iter().enumerate() {
+                        for (b, &l) in present.iter().enumerate().skip(a) {
+                            let cross_h = cross[a * np + b];
                             // Centred at the grand mean when lonely, else at
                             // the stratum mean.
                             let c_h = if lonely {
@@ -2262,8 +2308,9 @@ pub fn taylor_covariance_apply_in(
             .map(|t| t.iter().sum::<f64>() / nf)
             .collect();
         let scale = stage1_sampling_fraction * fpc_ssu_val * nf / (nf - 1.0);
-        for j in 0..k {
-            for l in j..k {
+        let present = present_cols(k, |j| ssu_totals[j].iter().copied());
+        for (a, &j) in present.iter().enumerate() {
+            for &l in &present[a..] {
                 let s: f64 = (0..n_ssus as usize)
                     .map(|a| (ssu_totals[j][a] - means[j]) * (ssu_totals[l][a] - means[l]))
                     .sum();
@@ -3216,6 +3263,46 @@ mod tests {
         assert!((cov[0][0] - var_a).abs() < 1e-10 * var_a.abs().max(1.0));
         let var_from_cov = cov[0][0] + 2.0 * cov[0][1] + cov[1][1];
         assert!((var_from_cov - var_c).abs() < 1e-10 * var_c.abs().max(1.0));
+    }
+
+    #[test]
+    fn test_taylor_covariance_domains_in_disjoint_strata() {
+        let a = vec![1.0, -2.0, 3.0, -4.0, 0.0, 0.0, 0.0, 0.0];
+        let b = vec![0.0, 0.0, 0.0, 0.0, 10.0, -12.0, 14.0, -16.0];
+        let combined: Vec<f64> = a.iter().zip(b.iter()).map(|(x, y)| x - y).collect();
+        let strata = scol("s".into(), &["A", "A", "A", "A", "B", "B", "B", "B"]);
+        let psu = scol("p".into(), &["1", "1", "2", "2", "1", "1", "2", "2"]);
+        let designs = [
+            build_taylor_design(Some(&strata), Some(&psu), None, None, None, None).unwrap(),
+            build_taylor_design(Some(&strata), None, None, None, None, None).unwrap(),
+        ];
+        for (i, d) in designs.iter().enumerate() {
+            let cov = taylor_covariance_apply(&[a.clone(), b.clone()], d);
+            assert_eq!(cov[0][1].to_bits(), 0.0f64.to_bits(), "design {i}");
+            assert_eq!(cov[1][0].to_bits(), 0.0f64.to_bits(), "design {i}");
+            let var_c = taylor_variance_apply(&combined, d);
+            let var_from_cov = cov[0][0] + cov[1][1];
+            assert!(
+                (var_from_cov - var_c).abs() < 1e-10 * var_c.abs().max(1.0),
+                "design {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_taylor_covariance_nonfinite_score_reaches_absent_domain() {
+        let a = vec![f64::INFINITY, -2.0, 3.0, -4.0, 0.0, 0.0, 0.0, 0.0];
+        let b = vec![0.0, 0.0, 0.0, 0.0, 10.0, -12.0, 14.0, -16.0];
+        let strata = scol("s".into(), &["A", "A", "A", "A", "B", "B", "B", "B"]);
+        let psu = scol("p".into(), &["1", "1", "2", "2", "1", "1", "2", "2"]);
+        let designs = [
+            build_taylor_design(Some(&strata), Some(&psu), None, None, None, None).unwrap(),
+            build_taylor_design(Some(&strata), None, None, None, None, None).unwrap(),
+        ];
+        for (i, d) in designs.iter().enumerate() {
+            let cov = taylor_covariance_apply(&[a.clone(), b.clone()], d);
+            assert!(cov[0][1].is_nan(), "design {i}: {}", cov[0][1]);
+        }
     }
 
     #[test]
