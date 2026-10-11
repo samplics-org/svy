@@ -13,8 +13,6 @@ from __future__ import annotations
 
 from typing import Iterable, Mapping, cast
 
-import numpy as np
-import numpy.typing as npt
 import polars as pl
 
 from svy.core.constants import key_col
@@ -62,7 +60,7 @@ def _build_group_keys(
     sample_ref,
 ) -> tuple[
     str | None,
-    npt.NDArray[np.object_] | None,
+    pl.Series | None,
     list[str],
     list[str],
     list[str],
@@ -81,7 +79,7 @@ def _build_group_keys(
     Returns
     -------
     stratum_by_col  : name of the combined (stratum x by) column, or None
-    stratum_by_arr  : numpy array of combined labels per row, or None
+    stratum_by_arr  : combined labels per row, or None
     G               : unique combined group keys  (stratum x by)
     B               : unique by-only keys
     S               : unique stratum keys
@@ -93,22 +91,26 @@ def _build_group_keys(
     group_parts.extend(by_cols)
 
     stratum_by_col: str | None = None
-    stratum_by_arr: npt.NDArray[np.object_] | None = None
+    stratum_by_arr: pl.Series | None = None
 
     if group_parts:
-        data = cast(
-            pl.DataFrame,
-            sample_ref._concatenate_cols(
-                data,
-                sep=_SEP,
-                null_token="__Null__",
-                categorical=True,
-                drop_original=False,
-                stratum_by=group_parts,
-            ),
-        )
         stratum_by_col = key_col("stratum_by")
-        stratum_by_arr = data[stratum_by_col].to_numpy()
+        if group_parts == [stratum_col]:
+            # The stratum key already carries these labels, with nulls tokenized.
+            data = data.with_columns(pl.col(stratum_col).alias(stratum_by_col))
+        else:
+            data = cast(
+                pl.DataFrame,
+                sample_ref._concatenate_cols(
+                    data,
+                    sep=_SEP,
+                    null_token="__Null__",
+                    categorical=True,
+                    drop_original=False,
+                    stratum_by=group_parts,
+                ),
+            )
+        stratum_by_arr = data[stratum_by_col]
 
     G = (
         _unique_as_str(data[stratum_by_col].unique(maintain_order=True).to_list())

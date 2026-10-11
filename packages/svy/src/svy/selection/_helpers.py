@@ -136,7 +136,7 @@ def _warn_n_exceeds_population(
 
 def _warn_zero_mos(
     mos_arr: np.ndarray,
-    group_labels: np.ndarray | None,
+    group_labels: pl.Series | None,
     *,
     drop_nulls: bool,
     sample: Any = None,
@@ -152,7 +152,7 @@ def _warn_zero_mos(
         return
     n_bad = int(bad_mask.sum())
     group_info = (
-        f" in group(s) {np.unique(group_labels[bad_mask]).tolist()}"
+        f" in group(s) {np.unique(group_labels.to_numpy()[bad_mask]).tolist()}"
         if group_labels is not None
         else ""
     )

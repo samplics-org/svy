@@ -76,8 +76,6 @@ def _select_pps(*, method, frame, n, mos, stratum, certainty_threshold, rstate):
         n_scalar = int(n)
         n_map = None
 
-    # stratum_by_arr contains the composite group key strings (e.g. "North__by__urban")
-    # encoded as object dtype numpy array; convert to i64 index for Rust
     strat_int, strat_list = _encode_stratum(stratum)
 
     from svy.errors import MethodError

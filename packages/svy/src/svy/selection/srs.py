@@ -45,24 +45,16 @@ from svy.utils.random_state import RandomState, resolve_random_state, seed_from_
 from svy.utils.where import _compile_where
 
 
-def _encode_stratum(stratum):
-    """
-    Convert a numpy object/string stratum array to (label_map, i64_list).
+def _encode_stratum(stratum: pl.Series | None) -> tuple[dict[str, int], list[int] | None]:
+    """The label -> i64 code map the Rust API takes, and each row's code.
 
-    The Rust API takes i64 stratum labels and i64-keyed n_map.
-    We assign each unique string label a stable integer index and return
-    both the mapping and the encoded list.
-
-    Returns (label_to_int: dict, encoded: list[int] | None)
+    Codes follow the sorted labels: the draw for a given seed depends on them.
     """
     if stratum is None:
         return {}, None
-    import numpy as np
-
-    str_arr = np.asarray(stratum, dtype=str)
-    unique_labels, encoded_arr = np.unique(str_arr, return_inverse=True)
-    seen = {lbl: i for i, lbl in enumerate(unique_labels)}
-    return seen, encoded_arr.tolist()
+    labels = sorted(stratum.unique().cast(pl.String).to_list())
+    codes = stratum.cast(pl.Enum(labels)).to_physical().cast(pl.Int64)
+    return {lbl: i for i, lbl in enumerate(labels)}, codes.to_list()
 
 
 def _remap_n_map(n_map, label_to_int):
