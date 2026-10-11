@@ -85,7 +85,9 @@ def _ea_frame() -> pl.DataFrame:
 
 def _stage1(**kw) -> svy.Sample:
     design = svy.Design(mos="mos", stratum="region", psu="ea", **kw)
-    return svy.Sample(_ea_frame(), design).sampling.pps_sys(n=2, by="region", rstate=5)
+    return svy.Sample(_ea_frame(), design).sampling.pps_sys(
+        n=2, by="region", rstate=5, certainty_threshold=1.0
+    )
 
 
 def _stage2() -> svy.Sample:

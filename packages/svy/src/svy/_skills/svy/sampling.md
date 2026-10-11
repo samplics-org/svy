@@ -32,8 +32,11 @@ clusters = frame_sample.sampling.pps_sys(n=3, rstate=42)  # 3 clusters per regio
 - The result is a new `Sample` of the selected units with
   `svy_prob_selection` and `svy_sample_weight` columns, which the design now
   uses. `prob_name=` and `wgt_name=` rename them.
-- `certainty_threshold=` takes units with probability at or above it with
-  certainty.
+- No unit is taken with certainty by default. For `pps_sys`, `pps_brewer`
+  and `pps_rs`, a unit whose n × size share reaches 1 raises; pass
+  `certainty_threshold=1.0` to take such units with certainty.
+- `n_draws=R` returns a list of R samples, each its own draw, for
+  simulations and design comparisons.
 
 Second stage: add the listing of the selected clusters, then select within
 each cluster. The final weight is the product of the stage weights.

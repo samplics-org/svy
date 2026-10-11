@@ -111,7 +111,9 @@ def _stage1(singleton=None) -> svy.Sample:
         }
     )
     design = svy.Design(mos="mos", stratum="region", psu="ea", singleton=singleton)
-    return svy.Sample(ea, design).sampling.pps_sys(n=2, by="region", rstate=5)
+    return svy.Sample(ea, design).sampling.pps_sys(
+        n=2, by="region", rstate=5, certainty_threshold=1.0
+    )
 
 
 def _stage2(selected: list[int]) -> svy.Sample:

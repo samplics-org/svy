@@ -325,7 +325,11 @@ def test_sample_select_pps_sys_sublevel_mapping_broadcasts_by_component():
     samp = Sample(DF2, design)
     n_map = {"Less than HS": 2, "HS or higher": 3}
     samp2 = samp.sampling.pps_sys(
-        n=n_map, by="education", drop_nulls=True, rstate=np.random.default_rng(42)
+        n=n_map,
+        by="education",
+        drop_nulls=True,
+        rstate=np.random.default_rng(42),
+        certainty_threshold=1.0,
     )
 
     n_regions = DF2["region"].n_unique()

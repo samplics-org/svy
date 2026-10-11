@@ -89,7 +89,8 @@ def _pps_kernel_args(*, method, frame, n, mos, stratum, certainty_threshold) -> 
         "n_map": _remap_n_map(n_map, strat_int) if n_map is not None else None,
         "stratum": strat_codes,
         "method": _PPS_METHOD[method],
-        "certainty_threshold": certainty_threshold,
+        # None takes nothing with certainty; _pps_prepare has refused any unit at 1.
+        "certainty_threshold": 1.0 if certainty_threshold is None else certainty_threshold,
     }
 
 
@@ -109,6 +110,34 @@ def _kernel_error(method: PPSMethod, e: ValueError) -> MethodError:
     return MethodError.not_applicable(
         where=f"Sample.selection.pps_{name}", method=f"pps_{name}", reason=str(e)
     )
+
+
+def _refuse_units_at_one(method: PPSMethod, n, mos: np.ndarray, stratum: pl.Series | None) -> None:
+    """Raise when a unit's n x share of size reaches 1: a draw cannot give it a probability above 1."""
+    groups = stratum.cast(pl.String) if stratum is not None else pl.Series(["__all__"] * len(mos))
+    agg = (
+        pl.DataFrame({"g": groups, "m": mos})
+        .group_by("g")
+        .agg(pl.col("m").max().alias("top"), pl.col("m").sum().alias("total"))
+    )
+    over = []
+    for g, top, total in agg.iter_rows():
+        n_g = n if isinstance(n, int) else n.get(g, 0)
+        # The kernel's own tolerance, so the two agree on a unit exactly at 1.
+        if n_g > 0 and total > 0 and n_g * top / total >= 1.0 - 1e-12:
+            over.append(g)
+    if over:
+        name = _PPS_METHOD[method]
+        raise MethodError.not_applicable(
+            where=f"Sample.sampling.pps_{name}",
+            method=f"pps_{name}",
+            reason=(
+                f"in {', '.join(map(repr, sorted(over)[:5]))}"
+                f"{' and others' if len(over) > 5 else ''}, a unit's size share times n reaches 1, "
+                "so its selection probability would exceed 1"
+            ),
+            hint="Pass certainty_threshold=1.0 to take such units with certainty, or lower n.",
+        )
 
 
 def _select_pps(*, method, frame, n, mos, stratum, certainty_threshold, rstate):
@@ -162,7 +191,7 @@ def pps_sys(
     sample: "Sample",
     n: int | Mapping[Category, Number],
     *,
-    certainty_threshold: float = 1.0,
+    certainty_threshold: float | None = None,
     by: str | Sequence[str] | None = None,
     where: WhereArg = None,
     order_by: str | Sequence[str] | None = None,
@@ -198,7 +227,7 @@ def pps_wr(
     sample: "Sample",
     n: int | Mapping[Category, Number],
     *,
-    certainty_threshold: float = 1.0,
+    certainty_threshold: float | None = None,
     by: str | Sequence[str] | None = None,
     where: WhereArg = None,
     prob_name: str | None = None,
@@ -232,7 +261,7 @@ def pps_brewer(
     sample: "Sample",
     n: int | Mapping[Category, Number],
     *,
-    certainty_threshold: float = 1.0,
+    certainty_threshold: float | None = None,
     by: str | Sequence[str] | None = None,
     where: WhereArg = None,
     prob_name: str | None = None,
@@ -266,7 +295,7 @@ def pps_murphy(
     sample: "Sample",
     n: int | Mapping[Category, Number],
     *,
-    certainty_threshold: float = 1.0,
+    certainty_threshold: float | None = None,
     by: str | Sequence[str] | None = None,
     where: WhereArg = None,
     prob_name: str | None = None,
@@ -300,7 +329,7 @@ def pps_rs(
     sample: "Sample",
     n: int | Mapping[Category, Number],
     *,
-    certainty_threshold: float = 1.0,
+    certainty_threshold: float | None = None,
     by: str | Sequence[str] | None = None,
     where: WhereArg = None,
     prob_name: str | None = None,
@@ -340,7 +369,7 @@ def _pps(
     n: int | Mapping[Category, Number],
     *,
     method: PPSMethod,
-    certainty_threshold: float = 1.0,
+    certainty_threshold: float | None = None,
     by: str | Sequence[str] | None = None,
     where: WhereArg = None,
     wr: bool = False,
@@ -383,7 +412,12 @@ def _pps(
         )
     rstate = advance_generator(rstate)
     prep = _pps_prepare(
-        sample, n, order_type=order_type, seed=seed_from_random_state(rstate), **kwargs
+        sample,
+        n,
+        method=method,
+        order_type=order_type,
+        seed=seed_from_random_state(rstate),
+        **kwargs,
     )
     sel_idx, hits, probs, certainty = _select_pps(
         method=method,
@@ -429,7 +463,8 @@ def _pps_prepare(
     sample: "Sample",
     n: int | Mapping[Category, Number],
     *,
-    certainty_threshold: float,
+    method: PPSMethod,
+    certainty_threshold: float | None,
     by: str | Sequence[str] | None,
     where: WhereArg,
     wr: bool,
@@ -521,6 +556,8 @@ def _pps_prepare(
         )
     mos_arr = data[design.mos].to_numpy()
     _warn_zero_mos(mos_arr, stratum_by_arr, drop_nulls=drop_nulls, sample=sample)
+    if certainty_threshold is None and method in (PPSMethod.SYS, PPSMethod.BREWER, PPSMethod.RS):
+        _refuse_units_at_one(method, n_norm, mos_arr, stratum_by_arr)
 
     row_col = SVY_ROW_INDEX
     return _PpsPrepared(
@@ -550,7 +587,7 @@ def _pps_draws(
             for c in children
         ]
     base = sample._fork()
-    prep = _pps_prepare(base, n, order_type=order_type, seed=None, **kwargs)
+    prep = _pps_prepare(base, n, method=method, order_type=order_type, seed=None, **kwargs)
     seeds = [seed_from_random_state(resolve_random_state(c)) for c in children]
     draws = _select_pps_draws(
         method=method,

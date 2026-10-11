@@ -45,7 +45,7 @@ def _hh_frame() -> pl.DataFrame:
 def _stage1(psu="ea", **kw) -> Sample:
     df = _ea_frame()
     return Sample(df, Design(mos="mos", stratum="region", psu=psu, **kw)).sampling.pps_sys(
-        n=2, by="region", rstate=5
+        n=2, by="region", rstate=5, certainty_threshold=1.0
     )
 
 
@@ -121,7 +121,7 @@ def test_stage1_ssu_does_not_carry_over():
     s1 = Sample(
         _ea_frame().with_columns(pl.col("ea").alias("seg")),
         Design(mos="mos", stratum="region", psu="ea", ssu="seg"),
-    ).sampling.pps_sys(n=2, by="region", rstate=5)
+    ).sampling.pps_sys(n=2, by="region", rstate=5, certainty_threshold=1.0)
     out = s1.sampling.add_stage(_stage2("ea"))
     assert out.design.ssu is None
 
@@ -133,7 +133,7 @@ def test_second_stage_by_psu_has_no_empty_cell_findings(by_key):
     )
     units = psus.join(pl.DataFrame({"unit": list(range(10))}), how="cross")
     first = Sample(psus, Design(stratum="stratum", psu="psu", mos="mos")).sampling.pps_sys(
-        2, rstate=1
+        2, rstate=1, certainty_threshold=1.0
     )
     sel = first.data["psu"].to_list()
     n = {p: 3 for p in sel} if by_key == "psu" else {"S0": 3, "S1": 3, "S2": 3}
