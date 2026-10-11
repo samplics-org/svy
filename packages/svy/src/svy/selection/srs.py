@@ -41,7 +41,12 @@ from svy.selection._helpers import (
 from svy.selection.combine_stages import _apply_chaining_writeback
 from svy.utils.checks import assert_no_missing, drop_missing
 from svy.utils.helpers import _colspec_to_list
-from svy.utils.random_state import RandomState, resolve_random_state, seed_from_random_state
+from svy.utils.random_state import (
+    RandomState,
+    advance_generator,
+    resolve_random_state,
+    seed_from_random_state,
+)
 from svy.utils.where import _compile_where
 
 
@@ -245,6 +250,7 @@ def srs(
     which would imply "eligible but never selected".
     """
     _ensure_row_index(sample)
+    rstate = advance_generator(rstate)
 
     src_df: pl.DataFrame = sample._data
     assert isinstance(src_df, pl.DataFrame), "selection requires an eager DataFrame"

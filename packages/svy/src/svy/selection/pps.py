@@ -49,7 +49,12 @@ from svy.selection.srs import (
 )
 from svy.utils.checks import assert_no_missing, drop_missing
 from svy.utils.helpers import _colspec_to_list
-from svy.utils.random_state import RandomState, resolve_random_state, seed_from_random_state
+from svy.utils.random_state import (
+    RandomState,
+    advance_generator,
+    resolve_random_state,
+    seed_from_random_state,
+)
 
 
 def _select_pps(*, method, frame, n, mos, stratum, certainty_threshold, rstate):
@@ -310,6 +315,7 @@ def _pps(
     columns.
     """
     _ensure_row_index(sample)
+    rstate = advance_generator(rstate)
 
     src_df = sample._data
     assert isinstance(src_df, pl.DataFrame), "selection requires an eager DataFrame"

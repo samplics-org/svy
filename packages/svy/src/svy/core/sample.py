@@ -51,7 +51,7 @@ from svy.core.warnings import (
 from svy.errors import DimensionError, MethodError, SvyError
 from svy.metadata import MetadataStore
 from svy.utils.helpers import _colspec_to_list, _normalize_columns_arg
-from svy.utils.random_state import seed_from_random_state
+from svy.utils.random_state import advance_generator, seed_from_random_state
 from svy.utils.trace import log_step
 
 
@@ -2372,7 +2372,7 @@ class Sample:
             if n is None:
                 n = out.height
 
-            seed = seed_from_random_state(rstate)  # type: ignore[arg-type]
+            seed = seed_from_random_state(advance_generator(rstate))  # type: ignore[arg-type]
 
             # ── Apply ordering ─────────────────────────────────────────────
             if order_type == "random":

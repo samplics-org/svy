@@ -139,6 +139,14 @@ def spawn_child_rngs(
     return {k: np.random.Generator(np.random.PCG64(ss)) for k, ss in zip(keys, children_ss)}
 
 
+def advance_generator(random_state: RandomState) -> RandomState:
+    """A caller's Generator as a SeedSequence drawn from it, which advances it; else unchanged."""
+    # Entry points hash state into a seed; without this a reused generator gave the same draw.
+    if isinstance(random_state, np.random.Generator):
+        return np.random.SeedSequence(random_state.integers(0, 2**32, size=4, dtype=np.uint32))
+    return random_state
+
+
 def seed_from_random_state(random_state: RandomState) -> int | None:
     """
     Convert RandomState to a single 32-bit integer seed.
