@@ -45,7 +45,7 @@ from svy.utils.random_state import RandomState, resolve_random_state, seed_from_
 from svy.utils.where import _compile_where
 
 
-def _encode_stratum(stratum: pl.Series | None) -> tuple[dict[str, int], list[int] | None]:
+def _encode_stratum(stratum: pl.Series | None) -> tuple[dict[str, int], np.ndarray | None]:
     """The label -> i64 code map the Rust API takes, and each row's code.
 
     Codes follow the sorted labels: the draw for a given seed depends on them.
@@ -54,7 +54,7 @@ def _encode_stratum(stratum: pl.Series | None) -> tuple[dict[str, int], list[int
         return {}, None
     labels = sorted(stratum.unique().cast(pl.String).to_list())
     codes = stratum.cast(pl.Enum(labels)).to_physical().cast(pl.Int64)
-    return {lbl: i for i, lbl in enumerate(labels)}, codes.to_list()
+    return {lbl: i for i, lbl in enumerate(labels)}, codes.to_numpy()
 
 
 def _remap_n_map(n_map, label_to_int):
@@ -78,13 +78,13 @@ def _select_srs(frame, n, *, stratum, wr, rstate):
         n_scalar = int(n)
         n_map = None
 
-    strat_int, strat_list = _encode_stratum(stratum)
+    strat_int, strat_codes = _encode_stratum(stratum)
 
     sel, hits, probs = _select_srs_rs(
-        frame=frame.tolist(),
+        frame=np.ascontiguousarray(frame, dtype=np.int64),
         n_scalar=n_scalar,
         n_map=(_remap_n_map(n_map, strat_int) if n_map is not None else None),
-        stratum=strat_list,
+        stratum=strat_codes,
         wr=wr,
         seed=seed,
     )
