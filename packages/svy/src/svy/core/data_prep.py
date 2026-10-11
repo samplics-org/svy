@@ -413,7 +413,8 @@ def prepare_data(
     _sync = getattr(sample, "_sync_parts", None)
     if _sync is not None:
         _sync()
-    local_data: pl.DataFrame = sample._data
+    _contiguous = getattr(sample, "_contiguous_data", None)
+    local_data: pl.DataFrame = _contiguous() if _contiguous is not None else sample._data
     design = sample._design
 
     # ── Phase C: cached integer design codes ────────────────────────────

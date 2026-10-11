@@ -586,17 +586,19 @@ class Sample:
         # access with zero overhead. Forks that must diverge deterministically
         # (see ``_replace_data``) reassign ``_data_version`` explicitly after
         # copying, so this hook's copy-time ordering does not matter there.
-        if (
-            name == "_data"
-            and isinstance(value, pl.DataFrame)
-            and max(value.n_chunks("all"), default=1) > 1
-        ):
-            # Kernels read contiguous columns in place but copy chunked ones
-            # (CSV/Parquet reads, concat) cell by cell on every call.
-            value = value.rechunk()
         object.__setattr__(self, name, value)
         if name == "_data" or name == "_design":
             object.__setattr__(self, "_data_version", _next_data_version())
+
+    def _contiguous_data(self) -> pl.DataFrame:
+        """``_data`` with one chunk per column, which kernels read in place."""
+        data = cast(pl.DataFrame, self._data)
+        # Here, on the way to a kernel, not on every rebind: each wrangling step would copy.
+        if max(data.n_chunks("all"), default=1) > 1:
+            data = data.rechunk()
+            # Same rows, so the data version and every cache keyed on it stand.
+            object.__setattr__(self, "_data", data)
+        return data
 
     # ════════════════════════════════════════════════════════════════════════
     # INITIALIZATION HELPERS
