@@ -36,6 +36,14 @@ uv add svy
 
 A base install makes no network calls: its example datasets are the subsets packaged with svy. `svy[remote]` adds downloads of the full example datasets from the svyLab catalog; `svy[all]` installs both extras.
 
+**Coding agents.** svy ships agent skills: guidance for coding agents such as Claude Code, matching the installed version. Run this once per project, from the project folder:
+
+```bash
+uv run svy-skills    # or svy-skills with the environment active; svy.skills.install() from Python
+```
+
+It links the skills into `.claude/skills/`, so upgrading svy updates them. Rerun it when a release adds a skill or after recreating the environment; `--copy` copies them instead, e.g. to commit them.
+
 ---
 
 ## Quick Start
