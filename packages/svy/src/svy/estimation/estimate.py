@@ -11,6 +11,7 @@ import polars as pl
 
 from svy.core.enumerations import PopParam, QuantileMethod
 from svy.core.types import Category, Number, RandomState
+from svy.errors.api_errors import guided_getattr
 
 # Import central UI helpers
 from svy.ui.printing import (
@@ -382,6 +383,8 @@ class Estimate:
     Enum's order (recorded in ``level_orders``). ``keys()``, ``domains`` and
     the rows and columns of ``covariance`` follow the same order.
     """
+
+    __getattr__ = guided_getattr("Estimate", "Estimate")
 
     DECIMALS: int | dict[str, int] | None = None
     PRINT_WIDTH: int | None = None
@@ -1100,6 +1103,8 @@ class EstimateList(list):
     column for whatever differs between them (``y``, ``prob``, or both), because
     a bare list would otherwise print object reprs.
     """
+
+    __getattr__ = guided_getattr("EstimateList", "EstimateList")
 
     __slots__ = ()
 

@@ -1,4 +1,14 @@
 # svy/__init__.py
+"""Design-based analysis of complex survey data.
+
+Bind data to its design, then call a namespace of the sample::
+
+    sample = svy.Sample(data, svy.Design(stratum="stratum", psu="cluster", wgt="weight"))
+    sample.estimation.mean("income", by="sex").to_polars()
+
+Namespaces: ``wrangling``, ``estimation``, ``categorical``, ``glm``, ``weighting``, ``sampling``.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -383,4 +393,8 @@ def __getattr__(name: str):
         module = import_module(f"svy.{name}")
         globals()[name] = module  # later lookups skip __getattr__
         return module
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    if name.startswith("_"):
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from svy.errors.api_errors import UnknownNameError
+
+    raise UnknownNameError.unknown(owner="svy", label="svy", name=name, available=__all__)

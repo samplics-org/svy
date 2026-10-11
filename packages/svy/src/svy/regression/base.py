@@ -29,6 +29,7 @@ from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import WhereArg
 from svy.core.variance_method import resolve_variance_method
 from svy.core.warnings import WarnCode
+from svy.errors.api_errors import guided_getattr
 from svy.errors.model_errors import ModelError
 from svy.estimation.replication import replicate_params
 from svy.regression.glm import GLMCoef, GLMFit, GLMStats, delta_var, offset_values
@@ -322,6 +323,8 @@ class GLM:
     >>> sample.glm.fit(y="outcome", x=["age"], where=svy.col("sex") == "F")
     >>> sample.glm.predict(new_data)
     """
+
+    __getattr__ = guided_getattr("GLM", "sample.glm")
 
     PRINT_WIDTH: ClassVar[int | None] = None
 

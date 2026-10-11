@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 import polars as pl
 
 from svy.core.types import MutateValue, WhereArg
+from svy.errors.api_errors import guided_getattr
 from svy.wrangling.columns import clean_names as _clean_names
 from svy.wrangling.columns import keep_columns as _keep_columns
 from svy.wrangling.columns import remove_columns as _remove_columns
@@ -63,6 +64,8 @@ class Wrangling:
     --------
     >>> sample.wrangling.clean_names().wrangling.mutate({"x": 1})
     """
+
+    __getattr__ = guided_getattr("Wrangling", "sample.wrangling")
 
     def __init__(self, sample: "Sample") -> None:
         self._sample = sample

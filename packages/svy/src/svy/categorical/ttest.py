@@ -12,6 +12,7 @@ from msgspec import field
 from svy.core.types import Category, Number
 from svy.core.warnings import SvyWarning
 from svy.errors import DimensionError, MethodError
+from svy.errors.api_errors import guided_getattr
 from svy.estimation import ParamEst
 from svy.estimation.estimate import _display_level
 
@@ -199,6 +200,8 @@ def _validate_two_sample(tt: "TTestTwoGroups") -> None:
 
 class TTestOneGroup(msgspec.Struct, tag="one", tag_field="kind", kw_only=True, frozen=True):
     """One-sample t-test: H0: mean(y) == mean_h0."""
+
+    __getattr__ = guided_getattr("TTestOneGroup", "TTestOneGroup")
 
     PRINT_WIDTH: ClassVar[int | None] = None
 
@@ -406,6 +409,8 @@ class TTestOneGroup(msgspec.Struct, tag="one", tag_field="kind", kw_only=True, f
 
 class TTestTwoGroups(msgspec.Struct, tag="two", tag_field="kind", kw_only=True, frozen=True):
     """Two-sample t-test comparing two levels of a grouping variable."""
+
+    __getattr__ = guided_getattr("TTestTwoGroups", "TTestTwoGroups")
 
     PRINT_WIDTH: ClassVar[int | None] = None
 
@@ -853,6 +858,8 @@ class TTestByResult:
     Supports iteration, indexing, and len() so existing code that
     does ``for r in results:`` or ``results[0]`` keeps working.
     """
+
+    __getattr__ = guided_getattr("TTestByResult", "TTestByResult")
 
     PRINT_WIDTH: ClassVar[int | None] = None
 

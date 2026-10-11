@@ -27,6 +27,7 @@ from svy.core.containers import ChiSquare, FDist
 from svy.core.enumerations import TableType
 from svy.core.types import Category, Number
 from svy.errors import MethodError
+from svy.errors.api_errors import guided_getattr
 from svy.estimation import ParamEst
 
 # Import central UI helpers (consistent with estimate.py and ttest.py)
@@ -180,6 +181,7 @@ _TBL_SLOTS: tuple[str, ...] = (
 
 
 class Table:
+    __getattr__ = guided_getattr("Table", "Table")
     __slots__ = _TBL_SLOTS
 
     # class-level width override (honored by resolve_width)

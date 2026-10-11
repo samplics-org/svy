@@ -33,6 +33,7 @@ from svy.core.types import WhereArg
 from svy.core.variance_method import normalize_variance_method, resolve_variance_method
 from svy.core.warnings import Severity, SvyWarning, WarnCode
 from svy.errors import DimensionError, MethodError
+from svy.errors.api_errors import guided_getattr
 from svy.estimation.estimate import (
     Estimate,
     EstimateList,
@@ -127,6 +128,8 @@ if TYPE_CHECKING:
 
 
 class Estimation:
+    __getattr__ = guided_getattr("Estimation", "sample.estimation")
+
     def __init__(self, sample: Sample) -> None:
         self._sample = sample
         self._design_cache: dict[str, Any] | None = None

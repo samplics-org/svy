@@ -139,6 +139,10 @@ class Sample:
     ) -> None:
         if isinstance(data, pl.LazyFrame):
             data = data.collect()
+        elif not isinstance(data, pl.DataFrame):
+            from svy.errors.api_errors import UsageError
+
+            raise UsageError.not_polars(where="svy.Sample", got=data)
         local_design = Design() if design is None else copy.deepcopy(design)
         # FPC is computed in the estimation layer from pop_size column(s).
         # _fpc is kept for backward compatibility but is not used by the
@@ -1577,7 +1581,13 @@ class Sample:
             from svy.errors.label_errors import LabelAPIRemoved
 
             raise LabelAPIRemoved.replaced(where=f"Sample.{name}", use=_REMOVED_LABEL_API[name])
-        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+        if name.startswith("_"):
+            raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+        from svy.errors.api_errors import UnknownNameError, public_names
+
+        raise UnknownNameError.unknown(
+            owner="Sample", label="sample", name=name, available=public_names(type(self))
+        )
 
     @property
     def deff_w(self) -> DomainScalarMap | Number:
