@@ -123,7 +123,7 @@ class Selection:
         self,
         n: int | Mapping[Category, Number],
         *,
-        certainty_threshold: float = 1.0,
+        certainty_threshold: float | None = None,
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
         order_by: str | Sequence[str] | None = None,
@@ -145,9 +145,10 @@ class Selection:
         n : int or mapping
             Units per stratum, or per stratum x ``by`` cell. A mapping may be keyed by cell, by
             ``by`` level or by stratum; every key must be given (0 skips one).
-        certainty_threshold : float, default 1.0
+        certainty_threshold : float, optional
             Units whose inclusion probability reaches this, in (0, 1], are taken with certainty,
-            and the rest are drawn from what remains.
+            and the rest are drawn from what remains. By default none is, and a unit whose
+            probability would reach 1 raises.
         by : str or sequence of str, optional
             Columns that subdivide the design's strata; units are drawn in each stratum x ``by`` cell.
         where : expression or mapping, optional
@@ -195,7 +196,7 @@ class Selection:
         self,
         n: int | Mapping[Category, Number],
         *,
-        certainty_threshold: float = 1.0,
+        certainty_threshold: float | None = None,
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
         prob_name: str | None = None,
@@ -215,7 +216,7 @@ class Selection:
         n : int or mapping
             Units per stratum, or per stratum x ``by`` cell. A mapping may be keyed by cell, by
             ``by`` level or by stratum; every key must be given (0 skips one).
-        certainty_threshold : float, default 1.0
+        certainty_threshold : float, optional
             Not used by this method.
         by : str or sequence of str, optional
             Columns that subdivide the design's strata; units are drawn in each stratum x ``by`` cell.
@@ -258,7 +259,7 @@ class Selection:
         self,
         n: int | Mapping[Category, Number],
         *,
-        certainty_threshold: float = 1.0,
+        certainty_threshold: float | None = None,
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
         prob_name: str | None = None,
@@ -278,9 +279,10 @@ class Selection:
         n : int or mapping
             Units per stratum, or per stratum x ``by`` cell. A mapping may be keyed by cell, by
             ``by`` level or by stratum; every key must be given (0 skips one).
-        certainty_threshold : float, default 1.0
+        certainty_threshold : float, optional
             Units whose inclusion probability reaches this, in (0, 1], are taken with certainty,
-            and the rest are drawn from what remains.
+            and the rest are drawn from what remains. By default none is, and a unit whose
+            probability would reach 1 raises.
         by : str or sequence of str, optional
             Columns that subdivide the design's strata; units are drawn in each stratum x ``by`` cell.
         where : expression or mapping, optional
@@ -322,7 +324,7 @@ class Selection:
         self,
         n: int | Mapping[Category, Number],
         *,
-        certainty_threshold: float = 1.0,
+        certainty_threshold: float | None = None,
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
         prob_name: str | None = None,
@@ -342,7 +344,7 @@ class Selection:
         n : int or mapping
             Units per stratum, or per stratum x ``by`` cell. A mapping may be keyed by cell, by
             ``by`` level or by stratum; every key must be given (0 skips one).
-        certainty_threshold : float, default 1.0
+        certainty_threshold : float, optional
             Not used by this method.
         by : str or sequence of str, optional
             Columns that subdivide the design's strata; units are drawn in each stratum x ``by`` cell.
@@ -385,7 +387,7 @@ class Selection:
         self,
         n: int | Mapping[Category, Number],
         *,
-        certainty_threshold: float = 1.0,
+        certainty_threshold: float | None = None,
         by: str | Sequence[str] | None = None,
         where: WhereArg = None,
         prob_name: str | None = None,
@@ -405,9 +407,10 @@ class Selection:
         n : int or mapping
             Units per stratum, or per stratum x ``by`` cell. A mapping may be keyed by cell, by
             ``by`` level or by stratum; every key must be given (0 skips one).
-        certainty_threshold : float, default 1.0
+        certainty_threshold : float, optional
             Units whose inclusion probability reaches this, in (0, 1], are taken with certainty,
-            and the rest are drawn from what remains.
+            and the rest are drawn from what remains. By default none is, and a unit whose
+            probability would reach 1 raises.
         by : str or sequence of str, optional
             Columns that subdivide the design's strata; units are drawn in each stratum x ``by`` cell.
         where : expression or mapping, optional

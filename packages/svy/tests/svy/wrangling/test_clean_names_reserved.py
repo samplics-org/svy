@@ -36,7 +36,9 @@ def _frame() -> pl.DataFrame:
 
 
 def _selected() -> Sample:
-    return Sample(_frame(), Design(mos="mos", psu="ea")).sampling.pps_sys(n=4, rstate=2)
+    return Sample(_frame(), Design(mos="mos", psu="ea")).sampling.pps_sys(
+        n=4, rstate=2, certainty_threshold=1.0
+    )
 
 
 def _two_stage() -> Sample:
@@ -122,7 +124,7 @@ def test_absent_reserved_name_is_not_claimed():
 
 def test_custom_output_names_are_user_columns():
     s = Sample(_frame(), Design(mos="mos", psu="ea")).sampling.pps_sys(
-        n=4, rstate=2, wgt_name="Design Wgt"
+        n=4, rstate=2, wgt_name="Design Wgt", certainty_threshold=1.0
     )
     out = s.wrangling.clean_names()
     assert "design_wgt" in out._data.columns

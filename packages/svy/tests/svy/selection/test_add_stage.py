@@ -83,7 +83,7 @@ def _selected_ea_sample() -> Sample:
     df = _ea_frame()
     design = Design(mos="mos", stratum="region", psu="ea")
     samp = Sample(data=df, design=design)
-    return samp.sampling.pps_sys(n=3, rstate=RNG)
+    return samp.sampling.pps_sys(n=3, rstate=RNG, certainty_threshold=1.0)
 
 
 def _hh_sample_obj() -> Sample:
@@ -581,7 +581,7 @@ class TestMultiColumnPSU:
         df = self._ea_multi()
         design = Design(mos="mos", psu=("region", "ea"))
         samp = Sample(data=df, design=design)
-        ea_sel = samp.sampling.pps_sys(n=3, rstate=RNG)
+        ea_sel = samp.sampling.pps_sys(n=3, rstate=RNG, certainty_threshold=1.0)
 
         hh_design = Design(psu=("region", "ea"))
         hh = Sample(data=self._hh_multi(), design=hh_design)
@@ -684,7 +684,7 @@ class TestCornerCases:
         df = pl.DataFrame({"ea": [1], "mos": [100.0]})
         design = Design(mos="mos", psu="ea")
         samp = Sample(data=df, design=design)
-        ea_sel = samp.sampling.pps_sys(n=1, rstate=RNG)
+        ea_sel = samp.sampling.pps_sys(n=1, rstate=RNG, certainty_threshold=1.0)
 
         hh_df = pl.DataFrame(
             {
@@ -731,7 +731,9 @@ class TestCornerCases:
         hh = Sample(data=hh_with_mos, design=hh_design)
         hh_stage = ea.sampling.add_stage(hh)
         hh_stage = hh_stage.update_design(mos="income")
-        hh_sample = hh_stage.sampling.pps_sys(n=2, by="ea", rstate=np.random.default_rng(21))
+        hh_sample = hh_stage.sampling.pps_sys(
+            n=2, by="ea", rstate=np.random.default_rng(21), certainty_threshold=1.0
+        )
         assert SVY_PROB in hh_sample.data.columns
         assert SVY_PROB_STAGE1 in hh_sample.data.columns
         assert SVY_PROB_STAGE2 in hh_sample.data.columns
