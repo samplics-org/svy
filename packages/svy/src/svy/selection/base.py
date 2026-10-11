@@ -63,17 +63,41 @@ class Selection:
         n_draws: int | None = None,
     ) -> "Sample | list[Sample]":
         """
-        Simple Random Sample, optionally stratified by (stratum x by).
+        Simple random sample, optionally stratified by stratum x ``by``.
 
         Parameters
         ----------
-        where : WhereArg, optional
-            Row filter applied before selection.  Eligible rows (True)
-            participate in the draw; non-eligible rows (False) are kept
-            in the output with prob=null, weight=null, hit=null.
+        n : int or mapping
+            Units per stratum, or per stratum x ``by`` cell. A mapping may be keyed by cell, by
+            ``by`` level or by stratum; every key must be given (0 skips one).
+        by : str or sequence of str, optional
+            Columns that subdivide the design's strata; units are drawn in each stratum x ``by`` cell.
+        where : expression or mapping, optional
+            Draw only from rows where this holds; the other rows stay in the output with null
+            selection columns.
+        wr : bool, default False
+            With replacement; a unit drawn k times is one row with ``k`` hits.
+        order_by : str or sequence of str, optional
+            Columns to sort the frame by before drawing.
+        order_type : {"ascending", "descending", "random"}, default "ascending"
+            Sort direction; ``"random"`` shuffles, within ``order_by`` groups when given.
+        prob_name, wgt_name, hit_name : str, optional
+            Names of the probability, weight and hit columns (default ``svy_prob_selection``,
+            ``svy_sample_weight``, ``svy_number_of_hits``); a name already in the data raises.
+        rstate : int, Generator or SeedSequence, optional
+            Seed; a Generator advances with each call.
+        drop_nulls : bool, default False
+            Drop rows missing a value the draw uses (design, ``by`` and ``order_by`` columns);
+            otherwise such rows raise.
         n_draws : int, optional
-            Draw this many samples, returned as a list; each equals a single call
-            with its own seed. Leave out for one sample.
+            Draw this many samples and return them as a list, also for 1; draw r equals a single
+            call with child r of ``SeedSequence(rstate)``, and this sample is left as it was.
+
+        Returns
+        -------
+        Sample or list[Sample]
+            This sample, holding the drawn rows with their selection columns and its design's
+            ``prob``, ``wgt`` and ``hit`` set; with ``n_draws``, a list of new samples.
         """
         return _srs(
             self._sample,
@@ -114,11 +138,42 @@ class Selection:
         """
         PPS systematic sampling without replacement.
 
+        The size measure is the design's ``mos``. Systematic selection depends on the frame's order (``order_by``).
+
         Parameters
         ----------
-        where : WhereArg, optional
-            Row filter — eligible rows participate in the draw; others
-            are kept with null selection columns.
+        n : int or mapping
+            Units per stratum, or per stratum x ``by`` cell. A mapping may be keyed by cell, by
+            ``by`` level or by stratum; every key must be given (0 skips one).
+        certainty_threshold : float, default 1.0
+            Units whose inclusion probability reaches this, in (0, 1], are taken with certainty,
+            and the rest are drawn from what remains.
+        by : str or sequence of str, optional
+            Columns that subdivide the design's strata; units are drawn in each stratum x ``by`` cell.
+        where : expression or mapping, optional
+            Draw only from rows where this holds; the other rows stay in the output with null
+            selection columns.
+        order_by : str or sequence of str, optional
+            Columns to sort the frame by before drawing.
+        order_type : {"ascending", "descending", "random"}, default "ascending"
+            Sort direction; ``"random"`` shuffles, within ``order_by`` groups when given.
+        prob_name, wgt_name, hit_name : str, optional
+            Names of the probability, weight and hit columns (default ``svy_prob_selection``,
+            ``svy_sample_weight``, ``svy_number_of_hits``); a name already in the data raises.
+        rstate : int, Generator or SeedSequence, optional
+            Seed; a Generator advances with each call.
+        drop_nulls : bool, default False
+            Drop rows missing a value the draw uses (design, ``by`` and ``order_by`` columns);
+            otherwise such rows raise.
+        n_draws : int, optional
+            Draw this many samples and return them as a list, also for 1; draw r equals a single
+            call with child r of ``SeedSequence(rstate)``, and this sample is left as it was.
+
+        Returns
+        -------
+        Sample or list[Sample]
+            This sample, holding the drawn rows with their selection columns and its design's
+            ``prob``, ``wgt`` and ``hit`` set; with ``n_draws``, a list of new samples.
         """
         return _pps_sys(
             self._sample,
@@ -150,7 +205,41 @@ class Selection:
         drop_nulls: bool = False,
         n_draws: int | None = None,
     ) -> "Sample | list[Sample]":
-        """PPS sampling with replacement."""
+        """
+        PPS sampling with replacement.
+
+        The size measure is the design's ``mos``. A unit drawn k times is one row with ``k`` hits.
+
+        Parameters
+        ----------
+        n : int or mapping
+            Units per stratum, or per stratum x ``by`` cell. A mapping may be keyed by cell, by
+            ``by`` level or by stratum; every key must be given (0 skips one).
+        certainty_threshold : float, default 1.0
+            Not used by this method.
+        by : str or sequence of str, optional
+            Columns that subdivide the design's strata; units are drawn in each stratum x ``by`` cell.
+        where : expression or mapping, optional
+            Draw only from rows where this holds; the other rows stay in the output with null
+            selection columns.
+        prob_name, wgt_name, hit_name : str, optional
+            Names of the probability, weight and hit columns (default ``svy_prob_selection``,
+            ``svy_sample_weight``, ``svy_number_of_hits``); a name already in the data raises.
+        rstate : int, Generator or SeedSequence, optional
+            Seed; a Generator advances with each call.
+        drop_nulls : bool, default False
+            Drop rows missing a value the draw uses (design and ``by`` columns); otherwise such
+            rows raise.
+        n_draws : int, optional
+            Draw this many samples and return them as a list, also for 1; draw r equals a single
+            call with child r of ``SeedSequence(rstate)``, and this sample is left as it was.
+
+        Returns
+        -------
+        Sample or list[Sample]
+            This sample, holding the drawn rows with their selection columns and its design's
+            ``prob``, ``wgt`` and ``hit`` set; with ``n_draws``, a list of new samples.
+        """
         return _pps_wr(
             self._sample,
             n,
@@ -179,7 +268,42 @@ class Selection:
         drop_nulls: bool = False,
         n_draws: int | None = None,
     ) -> "Sample | list[Sample]":
-        """Brewer PPS sampling without replacement."""
+        """
+        Brewer PPS sampling without replacement.
+
+        The size measure is the design's ``mos``.
+
+        Parameters
+        ----------
+        n : int or mapping
+            Units per stratum, or per stratum x ``by`` cell. A mapping may be keyed by cell, by
+            ``by`` level or by stratum; every key must be given (0 skips one).
+        certainty_threshold : float, default 1.0
+            Units whose inclusion probability reaches this, in (0, 1], are taken with certainty,
+            and the rest are drawn from what remains.
+        by : str or sequence of str, optional
+            Columns that subdivide the design's strata; units are drawn in each stratum x ``by`` cell.
+        where : expression or mapping, optional
+            Draw only from rows where this holds; the other rows stay in the output with null
+            selection columns.
+        prob_name, wgt_name, hit_name : str, optional
+            Names of the probability, weight and hit columns (default ``svy_prob_selection``,
+            ``svy_sample_weight``, ``svy_number_of_hits``); a name already in the data raises.
+        rstate : int, Generator or SeedSequence, optional
+            Seed; a Generator advances with each call.
+        drop_nulls : bool, default False
+            Drop rows missing a value the draw uses (design and ``by`` columns); otherwise such
+            rows raise.
+        n_draws : int, optional
+            Draw this many samples and return them as a list, also for 1; draw r equals a single
+            call with child r of ``SeedSequence(rstate)``, and this sample is left as it was.
+
+        Returns
+        -------
+        Sample or list[Sample]
+            This sample, holding the drawn rows with their selection columns and its design's
+            ``prob``, ``wgt`` and ``hit`` set; with ``n_draws``, a list of new samples.
+        """
         return _pps_brewer(
             self._sample,
             n,
@@ -208,7 +332,41 @@ class Selection:
         drop_nulls: bool = False,
         n_draws: int | None = None,
     ) -> "Sample | list[Sample]":
-        """Murphy PPS sampling without replacement (n=2 only)."""
+        """
+        Murphy PPS sampling without replacement; ``n`` must be 2 per stratum.
+
+        The size measure is the design's ``mos``.
+
+        Parameters
+        ----------
+        n : int or mapping
+            Units per stratum, or per stratum x ``by`` cell. A mapping may be keyed by cell, by
+            ``by`` level or by stratum; every key must be given (0 skips one).
+        certainty_threshold : float, default 1.0
+            Not used by this method.
+        by : str or sequence of str, optional
+            Columns that subdivide the design's strata; units are drawn in each stratum x ``by`` cell.
+        where : expression or mapping, optional
+            Draw only from rows where this holds; the other rows stay in the output with null
+            selection columns.
+        prob_name, wgt_name, hit_name : str, optional
+            Names of the probability, weight and hit columns (default ``svy_prob_selection``,
+            ``svy_sample_weight``, ``svy_number_of_hits``); a name already in the data raises.
+        rstate : int, Generator or SeedSequence, optional
+            Seed; a Generator advances with each call.
+        drop_nulls : bool, default False
+            Drop rows missing a value the draw uses (design and ``by`` columns); otherwise such
+            rows raise.
+        n_draws : int, optional
+            Draw this many samples and return them as a list, also for 1; draw r equals a single
+            call with child r of ``SeedSequence(rstate)``, and this sample is left as it was.
+
+        Returns
+        -------
+        Sample or list[Sample]
+            This sample, holding the drawn rows with their selection columns and its design's
+            ``prob``, ``wgt`` and ``hit`` set; with ``n_draws``, a list of new samples.
+        """
         return _pps_murphy(
             self._sample,
             n,
@@ -237,7 +395,42 @@ class Selection:
         drop_nulls: bool = False,
         n_draws: int | None = None,
     ) -> "Sample | list[Sample]":
-        """Rao-Sampford PPS sampling without replacement."""
+        """
+        Rao-Sampford (rejective) PPS sampling without replacement.
+
+        The size measure is the design's ``mos``.
+
+        Parameters
+        ----------
+        n : int or mapping
+            Units per stratum, or per stratum x ``by`` cell. A mapping may be keyed by cell, by
+            ``by`` level or by stratum; every key must be given (0 skips one).
+        certainty_threshold : float, default 1.0
+            Units whose inclusion probability reaches this, in (0, 1], are taken with certainty,
+            and the rest are drawn from what remains.
+        by : str or sequence of str, optional
+            Columns that subdivide the design's strata; units are drawn in each stratum x ``by`` cell.
+        where : expression or mapping, optional
+            Draw only from rows where this holds; the other rows stay in the output with null
+            selection columns.
+        prob_name, wgt_name, hit_name : str, optional
+            Names of the probability, weight and hit columns (default ``svy_prob_selection``,
+            ``svy_sample_weight``, ``svy_number_of_hits``); a name already in the data raises.
+        rstate : int, Generator or SeedSequence, optional
+            Seed; a Generator advances with each call.
+        drop_nulls : bool, default False
+            Drop rows missing a value the draw uses (design and ``by`` columns); otherwise such
+            rows raise.
+        n_draws : int, optional
+            Draw this many samples and return them as a list, also for 1; draw r equals a single
+            call with child r of ``SeedSequence(rstate)``, and this sample is left as it was.
+
+        Returns
+        -------
+        Sample or list[Sample]
+            This sample, holding the drawn rows with their selection columns and its design's
+            ``prob``, ``wgt`` and ``hit`` set; with ``n_draws``, a list of new samples.
+        """
         return _pps_rs(
             self._sample,
             n,
