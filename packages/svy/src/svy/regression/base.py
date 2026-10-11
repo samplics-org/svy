@@ -998,18 +998,42 @@ class GLM:
         rep_separated: dict[int, int] = {}
         if rep_wgts is not None and rep_cols:
             rep_betas = []
-            for rc in rep_cols:
-                try:
-                    r_chosen = _run_engine(rc, None)
-                except Exception as e:
+            # (beta, separation, error) per replicate; older svy-rs fits one at a time.
+            if hasattr(rs, "fit_glm_reps_rs"):
+                rep_fits = rs.fit_glm_reps_rs(
+                    y_name=y,
+                    x_names=feature_names,
+                    rep_weight_names=rep_cols,
+                    data=eng_df,
+                    stratum_name=s_col,
+                    psu_name=p_col,
+                    offset_name=offset,
+                    where_col=dom_col,
+                    family=fam_str,
+                    link=link_str,
+                    theta=theta,
+                    tol=tol,
+                    max_iter=max_iter,
+                )
+            else:
+                rep_fits = []
+                for rc in rep_cols:
+                    try:
+                        r_chosen = _run_engine(rc, None)
+                    except Exception as e:
+                        rep_fits.append((None, None, str(e)))
+                        break
+                    rep_fits.append((r_chosen[1], r_chosen[11][1], None))
+            for rc, (r_beta, r_sep, r_err) in zip(rep_cols, rep_fits):
+                if r_err is not None:
                     raise ModelError(
                         title="Replicate GLM fit failed",
-                        detail=f"Refit with replicate weight {rc!r} failed: {e}",
+                        detail=f"Refit with replicate weight {rc!r} failed: {r_err}",
                         code="REPLICATE_FIT_FAILED",
                         where="GLM.fit",
-                    ) from e
-                rep_betas.append(np.asarray(r_chosen[1], dtype=float))
-                for j in _not_identified(r_chosen[11][1], k)[0]:
+                    )
+                rep_betas.append(np.asarray(r_beta, dtype=float))
+                for j in _not_identified(r_sep, k)[0]:
                     rep_separated[j] = rep_separated.get(j, 0) + 1
             B = np.vstack(rep_betas)
             # The variant computes its own coefficients, the same call the

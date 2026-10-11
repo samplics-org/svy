@@ -1447,6 +1447,73 @@ pub fn fit_glm_by(
     Ok(results)
 }
 
+/// Coefficients (and separation) refitted under each replicate weight, in
+/// parallel. The negative binomial keeps its own fit; every other family skips
+/// the sandwich, which a replicate variance does not use.
+#[allow(clippy::too_many_arguments)]
+pub fn fit_glm_reps(
+    y: &Series,
+    x_cols: &[Series],
+    rep_weights: &[Series],
+    strata: Option<&Series>,
+    psu: Option<&Series>,
+    offset: Option<&Series>,
+    domain_mask: Option<&[bool]>,
+    family_str: &str,
+    link_str: &str,
+    theta: Option<f64>,
+    tol: f64,
+    max_iter: usize,
+) -> Vec<PolarsResult<GlmResult>> {
+    let negbin = matches!(
+        family_str.to_lowercase().as_str(),
+        "negativebinomial" | "negative_binomial"
+    );
+    rep_weights
+        .par_iter()
+        .map(|w| {
+            if negbin {
+                fit_one(
+                    y,
+                    x_cols.to_vec(),
+                    w,
+                    strata,
+                    psu,
+                    None,
+                    offset,
+                    domain_mask,
+                    family_str,
+                    link_str,
+                    theta,
+                    tol,
+                    max_iter,
+                    None,
+                    SingletonRule::NONE,
+                )
+            } else {
+                fit_glm_domain(
+                    y,
+                    x_cols.to_vec(),
+                    w,
+                    strata,
+                    psu,
+                    None,
+                    offset,
+                    domain_mask,
+                    family_str,
+                    link_str,
+                    theta,
+                    tol,
+                    max_iter,
+                    None,
+                    SingletonRule::NONE,
+                    false,
+                )
+            }
+        })
+        .collect()
+}
+
 /// Core GLM fit. When `domain_mask` is `None`, behavior is byte-identical to
 /// the original `fit_glm`. When `Some`, out-of-domain rows contribute 0 to
 /// both the IRLS loop and the sandwich meat, while the strata/PSU
@@ -1729,9 +1796,12 @@ pub(crate) fn fit_glm_domain(
         }
     }
 
-    // The negative binomial's theta loop refits beta several times and needs
-    // nothing else; the sandwich below is the most expensive part of a fit.
+    // The negative binomial's theta loop and replicate refits need beta (and,
+    // for refits, separation) only; the sandwich below is the costly part.
     if !want_variance {
+        let separation = separation_check(
+            family, n, k, &y_vals, &x, &w_samp, &mu, domain_mask, deviance, tol,
+        );
         return Ok(GlmResult {
             params: (0..k).map(|i| beta[(i, 0)]).collect(),
             cov_params: Vec::new(),
@@ -1745,7 +1815,7 @@ pub(crate) fn fit_glm_domain(
             converged,
             theta: None,
             theta_se: None,
-            separation: None,
+            separation,
         });
     }
 

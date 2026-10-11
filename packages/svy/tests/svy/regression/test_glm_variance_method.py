@@ -131,3 +131,38 @@ def test_taylor_on_a_replicate_design_needs_the_singleton_rule():
         s.glm.fit("y", x=["x"])
     assert "Pass method='replication'" in err.value.hint
     assert _ses(s.glm.fit("y", x=["x"], method="replication"))[0] > 0
+
+
+def _coef_bits(fit) -> list[tuple[float, float]]:
+    return [(c.est, c.se) for c in fit.fitted.coefs]
+
+
+@pytest.mark.parametrize("family", ["gaussian", "binomial"])
+def test_batched_replicate_refits_match_one_at_a_time(monkeypatch, family):
+    from svy.regression import base as glm_base
+
+    df = _frame().with_columns(b=(pl.col("y") > 1).cast(pl.Int64))
+    yname = "y" if family == "gaussian" else "b"
+    sample = svy.Sample(df, svy.Design(stratum="st", psu="psu", wgt="w", rep_wgts=REP))
+    batched = sample.glm.fit(yname, x=["x"], family=family, method="replication")
+
+    real = glm_base.rs
+
+    class _NoBatch:
+        def __getattr__(self, name):
+            if name == "fit_glm_reps_rs":
+                raise AttributeError(name)
+            return getattr(real, name)
+
+    monkeypatch.setattr(glm_base, "rs", _NoBatch())
+    looped = sample.glm.fit(yname, x=["x"], family=family, method="replication")
+    assert _coef_bits(batched) == _coef_bits(looped)
+
+
+def test_failed_replicate_refit_names_the_replicate():
+    df = _frame().with_columns(pl.lit(0.0).alias("bs7"))
+    sample = svy.Sample(df, svy.Design(stratum="st", psu="psu", wgt="w", rep_wgts=REP))
+    with pytest.raises(svy.errors.ModelError) as exc:
+        sample.glm.fit("y", x=["x"], method="replication")
+    assert exc.value.code == "REPLICATE_FIT_FAILED"
+    assert "'bs7'" in str(exc.value)

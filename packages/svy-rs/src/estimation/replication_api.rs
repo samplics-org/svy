@@ -4,6 +4,8 @@
 // variance estimation.  The matrix math lives in replication.rs; this file
 // only handles DataFrame I/O, argument parsing, and looping over by-groups.
 
+use std::borrow::Cow;
+
 use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
@@ -19,7 +21,7 @@ use crate::estimation::replication::{
     index_domains,
     matrix_mean_by_domain, matrix_mean_by_domain_cols, matrix_mean_estimates,
     matrix_mean_estimates_cols,
-    matrix_quantile_by_domain, matrix_quantile_estimates,
+    quantile_by_domain_cols, quantile_estimates_cols,
     matrix_prop_by_domain, matrix_prop_estimates, matrix_prop_estimates_cols,
     matrix_prop_by_domain_str, matrix_prop_estimates_str, matrix_prop_estimates_str_cols,
     matrix_ratio_by_domain, matrix_ratio_by_domain_cols, matrix_ratio_estimates,
@@ -54,6 +56,20 @@ fn get_cont_rep_cols<'a>(
         }
     }
     Ok(Some(cols))
+}
+
+/// Each replicate column in place, or copied with nulls as 0 when it has any.
+fn rep_columns<'a>(df: &'a DataFrame, rep_weight_cols: &[String]) -> PolarsResult<Vec<Cow<'a, [f64]>>> {
+    rep_weight_cols
+        .iter()
+        .map(|name| {
+            let ca = df.column(name)?.f64()?;
+            Ok(match ca.cont_slice() {
+                Ok(s) => Cow::Borrowed(s),
+                Err(_) => Cow::Owned(ca.iter().map(|v| v.unwrap_or(0.0)).collect()),
+            })
+        })
+        .collect()
 }
 
 /// Materialise the `where=` domain mask as a dense `Vec<f64>` (1.0 inside the
@@ -1030,14 +1046,12 @@ fn compute_replicate_quantile_ungrouped(
 ) -> PolarsResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
-    let n = y.len();
-    let n_reps = rep_weight_cols.len();
     let y_arr: Vec<f64> = y.iter().map(|v| v.unwrap_or(f64::NAN)).collect();
     let w_arr: Vec<f64> = weights.iter().map(|v| v.unwrap_or(0.0)).collect();
 
-    let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
-    let (theta_full, theta_reps) =
-        matrix_quantile_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps, probs, q_method);
+    let cols = rep_columns(df, rep_weight_cols)?;
+    let refs: Vec<&[f64]> = cols.iter().map(|c| c.as_ref()).collect();
+    let (theta_full, theta_reps) = quantile_estimates_cols(&y_arr, &w_arr, &refs, probs, q_method);
 
     let variances: Vec<f64> = (0..probs.len())
         .map(|j| variance_from_replicates(theta_full[j], &theta_reps[j], &rep_coefs, center))
@@ -1059,15 +1073,14 @@ fn compute_replicate_quantile_grouped(
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
     let by_str  = df.column(by_col)?.str()?;
-    let n = y.len();
-    let n_reps = rep_weight_cols.len();
     let y_arr: Vec<f64> = y.iter().map(|v| v.unwrap_or(f64::NAN)).collect();
     let w_arr: Vec<f64> = weights.iter().map(|v| v.unwrap_or(0.0)).collect();
 
     let (domain_ids, domain_names, n_domains) = index_domains(by_str);
-    let (rep_w_matrix, _, _) = extract_rep_weights_matrix(df, rep_weight_cols)?;
-    let (theta_full_vec, theta_reps_vec, counts) = matrix_quantile_by_domain(
-        &y_arr, &w_arr, &rep_w_matrix, &domain_ids, n_domains, n, n_reps, probs, q_method);
+    let cols = rep_columns(df, rep_weight_cols)?;
+    let refs: Vec<&[f64]> = cols.iter().map(|c| c.as_ref()).collect();
+    let (theta_full_vec, theta_reps_vec, counts) = quantile_by_domain_cols(
+        &y_arr, &w_arr, &refs, &domain_ids, n_domains, probs, q_method);
 
     let k = probs.len();
     let n_rows = n_domains * k;
