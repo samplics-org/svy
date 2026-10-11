@@ -32,7 +32,19 @@ pub use taylor::{
     taylor_variance_matrix, taylor_variance_matrix_in,
 };
 
-use polars::prelude::{ChunkSort, ChunkUnique, PolarsResult, StringChunked};
+use polars::prelude::{ChunkSort, ChunkUnique, DataFrame, PolarsResult, StringChunked};
+use pyo3_polars::PyDataFrame;
+
+/// The incoming frame with one chunk per column: kernels read contiguous columns
+/// in place and fall back to a per-element copy on chunked ones (any filtered or
+/// concatenated frame).
+pub(crate) fn into_contiguous(data: PyDataFrame) -> DataFrame {
+    let mut df: DataFrame = data.into();
+    if df.columns().iter().any(|c| c.n_chunks() > 1) {
+        df.rechunk_mut_par();
+    }
+    df
+}
 
 /// Unique by-group levels, sorted: `unique()` is hash-ordered and varies by process.
 pub(crate) fn sorted_groups(by: &StringChunked) -> PolarsResult<StringChunked> {

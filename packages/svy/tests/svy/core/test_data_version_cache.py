@@ -179,3 +179,12 @@ def test_domain_estimate_uses_codes(sample):
     assert dom != pytest.approx(full)
     # stratum 'a' rows: y = 10, 12, 11 with w = 1, 2, 1 → (10 + 24 + 11) / 4.
     assert dom == pytest.approx(11.25)
+
+
+def test_sample_data_is_contiguous(df):
+    chunked = pl.concat([df.slice(0, 2), df.slice(2)], rechunk=False)
+    assert max(chunked.n_chunks("all")) > 1
+    sample = svy.Sample(chunked)
+    assert max(sample._data.n_chunks("all")) == 1
+    sample.set_data(chunked)
+    assert max(sample._data.n_chunks("all")) == 1

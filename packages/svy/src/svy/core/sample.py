@@ -586,6 +586,14 @@ class Sample:
         # access with zero overhead. Forks that must diverge deterministically
         # (see ``_replace_data``) reassign ``_data_version`` explicitly after
         # copying, so this hook's copy-time ordering does not matter there.
+        if (
+            name == "_data"
+            and isinstance(value, pl.DataFrame)
+            and max(value.n_chunks("all"), default=1) > 1
+        ):
+            # Kernels read contiguous columns in place but copy chunked ones
+            # (CSV/Parquet reads, concat) cell by cell on every call.
+            value = value.rechunk()
         object.__setattr__(self, name, value)
         if name == "_data" or name == "_design":
             object.__setattr__(self, "_data_version", _next_data_version())

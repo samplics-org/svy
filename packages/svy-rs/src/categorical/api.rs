@@ -12,6 +12,7 @@ use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 
+use crate::estimation::into_contiguous;
 use crate::estimation::calib_sweep::{CalibSpec, CalibSweep, build_calib_sweep};
 use crate::estimation::taylor::active_count;
 
@@ -304,7 +305,7 @@ pub fn ttest_rs(
     rep_df: Option<f64>,
     variance_center: &str,
 ) -> PyResult<PyDataFrame> {
-    let df: DataFrame = data.into();
+    let df = into_contiguous(data);
     let rep = rep_spec(&df, rep_weight_cols, rep_coefs, rep_df, variance_center)?;
     let calib = calib_kind.zip(calib_prev_wgt).and_then(|(kind, prev)| {
         build_calib_sweep(
@@ -589,7 +590,7 @@ pub fn ranktest_rs(
     // Replication only: on Taylor the facade tests such scores with ttest_rs.
     scores_given: bool,
 ) -> PyResult<PyDataFrame> {
-    let df: DataFrame = data.into();
+    let df = into_contiguous(data);
     let rep = rep_spec(&df, rep_weight_cols, rep_coefs, rep_df, variance_center)?;
     if scores_given && rep.is_none() {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -833,7 +834,7 @@ pub fn tabulate_rs(
     rep_df: Option<f64>,
     variance_center: &str,
 ) -> PyResult<(PyDataFrame, PyDataFrame)> {
-    let df: DataFrame = data.into();
+    let df = into_contiguous(data);
     let rep = rep_spec(&df, rep_weight_cols, rep_coefs, rep_df, variance_center)?;
     let calib = calib_kind.zip(calib_prev_wgt).and_then(|(kind, prev)| {
         build_calib_sweep(
