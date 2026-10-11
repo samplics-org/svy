@@ -40,6 +40,14 @@ pip download "svy[report]" --dest svy-wheels --only-binary=:all: --python-versio
 pip install --no-index --find-links svy-wheels "svy[report]"   # on the offline machine
 ```
 
+**Coding agents.** svy ships agent skills: guidance for coding agents such as Claude Code, matching the installed version. Run this once per project, from the project folder:
+
+```bash
+uv run svy-skills    # or svy-skills with the environment active; svy.skills.install() from Python
+```
+
+It links the skills into `.claude/skills/`, so upgrading svy updates them. Rerun it when a release adds a skill or after recreating the environment; `--copy` copies them instead, e.g. to commit them.
+
 **Security and data handling.** svy runs locally, sends no telemetry, and never sends your data anywhere. [SECURITY.md](SECURITY.md) covers network access, dependencies, how releases are built and published, and how to report a vulnerability.
 
 ## The whole workflow as one chain
