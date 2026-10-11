@@ -10,12 +10,18 @@ from __future__ import annotations
 
 import logging
 
-from typing import TYPE_CHECKING, Literal, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Mapping, NamedTuple, Sequence, cast
 
 import numpy as np
 import polars as pl
 
 from svy_rs import select_pps_rs as _select_pps_rs
+
+
+try:
+    from svy_rs import select_pps_batch_rs as _select_pps_batch_rs
+except ImportError:
+    _select_pps_batch_rs = None
 
 from svy.core.constants import (
     SVY_CERTAINTY,
@@ -35,6 +41,7 @@ from svy.selection._group_keys import (
 )
 from svy.selection._helpers import (
     _apply_order,
+    _child_seeds,
     _warn_empty_strata,
     _warn_n_exceeds_population,
     _warn_zero_mos,
@@ -57,59 +64,87 @@ from svy.utils.random_state import (
 )
 
 
-def _select_pps(*, method, frame, n, mos, stratum, certainty_threshold, rstate):
-    """Adapter: translate old Python engine calling convention to Rust."""
-    import numpy as np
+_PPS_METHOD = {
+    PPSMethod.SYS: "sys",
+    PPSMethod.WR: "wr",
+    PPSMethod.BREWER: "brewer",
+    PPSMethod.MURPHY: "murphy",
+    PPSMethod.RS: "rs",
+}
 
-    from svy.core.enumerations import PPSMethod
-    from svy.utils.random_state import seed_from_random_state
 
-    method_str = {
-        PPSMethod.SYS: "sys",
-        PPSMethod.WR: "wr",
-        PPSMethod.BREWER: "brewer",
-        PPSMethod.MURPHY: "murphy",
-        PPSMethod.RS: "rs",
-    }[method]
-
-    seed = seed_from_random_state(rstate)
-
+def _pps_kernel_args(*, method, frame, n, mos, stratum, certainty_threshold) -> dict:
+    """The Rust kernel's arguments other than the seed, shared by every draw."""
     if isinstance(n, dict):
         n_scalar = None
         n_map = {str(k): int(v) for k, v in n.items()}
     else:
         n_scalar = int(n)
         n_map = None
-
     strat_int, strat_codes = _encode_stratum(stratum)
+    return {
+        "frame": np.ascontiguousarray(frame, dtype=np.int64),
+        "mos": np.ascontiguousarray(mos, dtype=np.float64),
+        "n_scalar": n_scalar,
+        "n_map": _remap_n_map(n_map, strat_int) if n_map is not None else None,
+        "stratum": strat_codes,
+        "method": _PPS_METHOD[method],
+        "certainty_threshold": certainty_threshold,
+    }
 
-    from svy.errors import MethodError
 
-    try:
-        sel, hits, probs, cert = _select_pps_rs(
-            frame=np.ascontiguousarray(frame, dtype=np.int64),
-            mos=np.ascontiguousarray(mos, dtype=np.float64),
-            n_scalar=n_scalar,
-            n_map=(_remap_n_map(n_map, strat_int) if n_map is not None else None),
-            stratum=strat_codes,
-            method=method_str,
-            certainty_threshold=certainty_threshold,
-            seed=seed,
-        )
-    except ValueError as e:
-        # Kernel-side validation (Murphy n != 2, Sampford n*p >= 1 or
-        # degenerate acceptance, invalid MOS, ...) as a typed svy error.
-        raise MethodError.not_applicable(
-            where=f"Sample.selection.pps_{method_str}",
-            method=f"pps_{method_str}",
-            reason=str(e),
-        ) from None
+def _pps_arrays(sel, hits, probs, cert) -> tuple[np.ndarray, ...]:
     return (
         np.asarray(sel, dtype=np.int64),
         np.asarray(hits, dtype=np.int64),
         np.asarray(probs, dtype=np.float64),
         np.asarray(cert, dtype=bool),
     )
+
+
+def _kernel_error(method: PPSMethod, e: ValueError) -> MethodError:
+    # Kernel-side validation (Murphy n != 2, Sampford n*p >= 1 or
+    # degenerate acceptance, invalid MOS, ...) as a typed svy error.
+    name = _PPS_METHOD[method]
+    return MethodError.not_applicable(
+        where=f"Sample.selection.pps_{name}", method=f"pps_{name}", reason=str(e)
+    )
+
+
+def _select_pps(*, method, frame, n, mos, stratum, certainty_threshold, rstate):
+    """One PPS draw from the Rust kernel."""
+    args = _pps_kernel_args(
+        method=method,
+        frame=frame,
+        n=n,
+        mos=mos,
+        stratum=stratum,
+        certainty_threshold=certainty_threshold,
+    )
+    try:
+        return _pps_arrays(*_select_pps_rs(**args, seed=seed_from_random_state(rstate)))
+    except ValueError as e:
+        raise _kernel_error(method, e) from None
+
+
+def _select_pps_draws(*, method, frame, n, mos, stratum, certainty_threshold, seeds):
+    """One PPS draw per seed; older svy-rs has no batch kernel and draws them in turn."""
+    args = _pps_kernel_args(
+        method=method,
+        frame=frame,
+        n=n,
+        mos=mos,
+        stratum=stratum,
+        certainty_threshold=certainty_threshold,
+    )
+    try:
+        if _select_pps_batch_rs is not None:
+            draws = _select_pps_batch_rs(**args, seeds=seeds)
+        else:
+            draws = [_select_pps_rs(**args, seed=seed) for seed in seeds]
+    except ValueError as e:
+        raise _kernel_error(method, e) from None
+    return [_pps_arrays(*d) for d in draws]
 
 
 if TYPE_CHECKING:
@@ -137,7 +172,8 @@ def pps_sys(
     hit_name: str | None = None,
     rstate: RandomState = None,
     drop_nulls: bool = False,
-) -> "Sample":
+    n_draws: int | None = None,
+) -> "Sample | list[Sample]":
     """PPS systematic sampling without replacement."""
     return _pps(
         sample,
@@ -154,6 +190,7 @@ def pps_sys(
         hit_name=hit_name,
         rstate=rstate,
         drop_nulls=drop_nulls,
+        n_draws=n_draws,
     )
 
 
@@ -169,7 +206,8 @@ def pps_wr(
     hit_name: str | None = None,
     rstate: RandomState = None,
     drop_nulls: bool = False,
-) -> "Sample":
+    n_draws: int | None = None,
+) -> "Sample | list[Sample]":
     """PPS sampling with replacement."""
     return _pps(
         sample,
@@ -186,6 +224,7 @@ def pps_wr(
         hit_name=hit_name,
         rstate=rstate,
         drop_nulls=drop_nulls,
+        n_draws=n_draws,
     )
 
 
@@ -201,7 +240,8 @@ def pps_brewer(
     hit_name: str | None = None,
     rstate: RandomState = None,
     drop_nulls: bool = False,
-) -> "Sample":
+    n_draws: int | None = None,
+) -> "Sample | list[Sample]":
     """Brewer PPS sampling without replacement."""
     return _pps(
         sample,
@@ -218,6 +258,7 @@ def pps_brewer(
         hit_name=hit_name,
         rstate=rstate,
         drop_nulls=drop_nulls,
+        n_draws=n_draws,
     )
 
 
@@ -233,7 +274,8 @@ def pps_murphy(
     hit_name: str | None = None,
     rstate: RandomState = None,
     drop_nulls: bool = False,
-) -> "Sample":
+    n_draws: int | None = None,
+) -> "Sample | list[Sample]":
     """Murphy PPS sampling without replacement (n=2 only)."""
     return _pps(
         sample,
@@ -250,6 +292,7 @@ def pps_murphy(
         hit_name=hit_name,
         rstate=rstate,
         drop_nulls=drop_nulls,
+        n_draws=n_draws,
     )
 
 
@@ -265,7 +308,8 @@ def pps_rs(
     hit_name: str | None = None,
     rstate: RandomState = None,
     drop_nulls: bool = False,
-) -> "Sample":
+    n_draws: int | None = None,
+) -> "Sample | list[Sample]":
     """Rao-Sampford PPS sampling without replacement."""
     return _pps(
         sample,
@@ -282,6 +326,7 @@ def pps_rs(
         hit_name=hit_name,
         rstate=rstate,
         drop_nulls=drop_nulls,
+        n_draws=n_draws,
     )
 
 
@@ -306,7 +351,8 @@ def _pps(
     hit_name: str | None = None,
     rstate: RandomState = None,
     drop_nulls: bool = False,
-) -> "Sample":
+    n_draws: int | None = None,
+) -> "Sample | list[Sample]":
     """
     PPS selection with n broadcasting semantics.
 
@@ -314,8 +360,89 @@ def _pps(
     the draw; non-eligible rows are kept in the output with null selection
     columns.
     """
-    _ensure_row_index(sample)
+    kwargs = {
+        "certainty_threshold": certainty_threshold,
+        "by": by,
+        "where": where,
+        "wr": wr,
+        "order_by": order_by,
+        "prob_name": prob_name,
+        "wgt_name": wgt_name,
+        "hit_name": hit_name,
+        "drop_nulls": drop_nulls,
+    }
+    if n_draws is not None:
+        return _pps_draws(
+            sample,
+            n,
+            method=method,
+            n_draws=n_draws,
+            order_type=order_type,
+            rstate=rstate,
+            **kwargs,
+        )
     rstate = advance_generator(rstate)
+    prep = _pps_prepare(
+        sample, n, order_type=order_type, seed=seed_from_random_state(rstate), **kwargs
+    )
+    sel_idx, hits, probs, certainty = _select_pps(
+        method=method,
+        frame=prep.frame,
+        n=prep.n,
+        mos=prep.mos,
+        stratum=prep.stratum,
+        certainty_threshold=certainty_threshold,
+        rstate=resolve_random_state(rstate),
+    )
+    return _pps_writeback(
+        sample,
+        prep.src_df,
+        prep.data,
+        prep.design,
+        sel_idx,
+        hits,
+        probs,
+        certainty,
+        row_col=SVY_ROW_INDEX,
+        prob_name=prob_name,
+        wgt_name=wgt_name,
+        hit_name=hit_name,
+        wr=wr,
+        where_mask=prep.where_mask,
+    )
+
+
+class _PpsPrepared(NamedTuple):
+    """What a draw needs from the frame, computed once for every draw."""
+
+    src_df: pl.DataFrame
+    data: pl.DataFrame
+    design: Any
+    where_mask: Any
+    frame: np.ndarray
+    n: int | dict[str, int]
+    stratum: pl.Series | None
+    mos: np.ndarray
+
+
+def _pps_prepare(
+    sample: "Sample",
+    n: int | Mapping[Category, Number],
+    *,
+    certainty_threshold: float,
+    by: str | Sequence[str] | None,
+    where: WhereArg,
+    wr: bool,
+    order_by: str | Sequence[str] | None,
+    order_type: Literal["ascending", "descending", "random"],
+    prob_name: str | None,
+    wgt_name: str | None,
+    hit_name: str | None,
+    drop_nulls: bool,
+    seed: int | None,
+) -> _PpsPrepared:
+    """Checks, eligible rows, order, groups and size measures."""
+    _ensure_row_index(sample)
 
     src_df = sample._data
     assert isinstance(src_df, pl.DataFrame), "selection requires an eager DataFrame"
@@ -371,8 +498,6 @@ def _pps(
         assert_no_missing(df=df, subset=cols)
         data = df
 
-    rng = resolve_random_state(rstate)
-    seed = seed_from_random_state(rstate)
     data = _apply_order(data, order_by=order_by, order_type=order_type, seed=seed)
 
     stratum_col = sample._internal_design["stratum"]
@@ -398,34 +523,63 @@ def _pps(
     _warn_zero_mos(mos_arr, stratum_by_arr, drop_nulls=drop_nulls, sample=sample)
 
     row_col = SVY_ROW_INDEX
-    frame = data[row_col].to_numpy()
+    return _PpsPrepared(
+        src_df, data, design, where_mask, data[row_col].to_numpy(), n_norm, stratum_by_arr, mos_arr
+    )
 
-    sel_idx, hits, probs, certainty = _select_pps(
+
+def _pps_draws(
+    sample: "Sample",
+    n: int | Mapping[Category, Number],
+    *,
+    method: PPSMethod,
+    n_draws: int,
+    order_type: Literal["ascending", "descending", "random"],
+    rstate: RandomState,
+    **kwargs: Any,
+) -> "list[Sample]":
+    """``n_draws`` samples; the input is left as it was."""
+    children = _child_seeds(rstate, n_draws, where=f"Sample.sampling.pps_{_PPS_METHOD[method]}")
+    if order_type == "random":
+        # The shuffle depends on the seed, so each draw prepares its own frame.
+        return [
+            cast(
+                "Sample",
+                _pps(sample._fork(), n, method=method, order_type=order_type, rstate=c, **kwargs),
+            )
+            for c in children
+        ]
+    base = sample._fork()
+    prep = _pps_prepare(base, n, order_type=order_type, seed=None, **kwargs)
+    seeds = [seed_from_random_state(resolve_random_state(c)) for c in children]
+    draws = _select_pps_draws(
         method=method,
-        frame=frame,
-        n=n_norm,
-        mos=mos_arr,
-        stratum=stratum_by_arr,
-        certainty_threshold=certainty_threshold,
-        rstate=rng,
+        frame=prep.frame,
+        n=prep.n,
+        mos=prep.mos,
+        stratum=prep.stratum,
+        certainty_threshold=kwargs["certainty_threshold"],
+        seeds=seeds,
     )
-
-    return _pps_writeback(
-        sample,
-        src_df,
-        data,
-        design,
-        sel_idx,
-        hits,
-        probs,
-        certainty,
-        row_col=row_col,
-        prob_name=prob_name,
-        wgt_name=wgt_name,
-        hit_name=hit_name,
-        wr=wr,
-        where_mask=where_mask,
-    )
+    return [
+        _pps_writeback(
+            base._fork(),
+            prep.src_df,
+            prep.data,
+            prep.design,
+            sel_idx,
+            hits,
+            probs,
+            certainty,
+            row_col=SVY_ROW_INDEX,
+            prob_name=kwargs["prob_name"],
+            wgt_name=kwargs["wgt_name"],
+            hit_name=kwargs["hit_name"],
+            wr=kwargs["wr"],
+            where_mask=prep.where_mask,
+        )
+        for sel_idx, hits, probs, certainty in draws
+    ]
 
 
 def _pps_writeback(

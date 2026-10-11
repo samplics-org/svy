@@ -11,13 +11,19 @@ from __future__ import annotations
 
 import logging
 
-from typing import TYPE_CHECKING, Literal, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Mapping, NamedTuple, Sequence, cast
 
 import numpy as np
 import numpy.typing as npt
 import polars as pl
 
 from svy_rs import select_srs_rs as _select_srs_rs
+
+
+try:
+    from svy_rs import select_srs_batch_rs as _select_srs_batch_rs
+except ImportError:
+    _select_srs_batch_rs = None
 
 from svy.core.constants import (
     SVY_HIT,
@@ -35,6 +41,7 @@ from svy.selection._group_keys import (
 )
 from svy.selection._helpers import (
     _apply_order,
+    _child_seeds,
     _warn_empty_strata,
     _warn_n_exceeds_population,
 )
@@ -67,37 +74,48 @@ def _remap_n_map(n_map, label_to_int):
     return {label_to_int[k]: v for k, v in n_map.items() if k in label_to_int}
 
 
-def _select_srs(frame, n, *, stratum, wr, rstate):
-    """Adapter: translate old Python engine calling convention to Rust."""
-    import numpy as np
-
-    from svy.utils.random_state import seed_from_random_state
-
-    seed = seed_from_random_state(rstate)
-
-    # n_norm is either int or dict[str, int]
+def _srs_kernel_args(frame, n, stratum) -> dict:
+    """The Rust kernel's arguments other than the seed, shared by every draw."""
     if isinstance(n, dict):
         n_scalar = None
         n_map = {str(k): int(v) for k, v in n.items()}
     else:
         n_scalar = int(n)
         n_map = None
-
     strat_int, strat_codes = _encode_stratum(stratum)
+    return {
+        "frame": np.ascontiguousarray(frame, dtype=np.int64),
+        "n_scalar": n_scalar,
+        "n_map": _remap_n_map(n_map, strat_int) if n_map is not None else None,
+        "stratum": strat_codes,
+    }
 
-    sel, hits, probs = _select_srs_rs(
-        frame=np.ascontiguousarray(frame, dtype=np.int64),
-        n_scalar=n_scalar,
-        n_map=(_remap_n_map(n_map, strat_int) if n_map is not None else None),
-        stratum=strat_codes,
-        wr=wr,
-        seed=seed,
-    )
+
+def _kernel_arrays(sel, hits, probs) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return (
         np.asarray(sel, dtype=np.int64),
         np.asarray(hits, dtype=np.int64),
         np.asarray(probs, dtype=np.float64),
     )
+
+
+def _select_srs(frame, n, *, stratum, wr, rstate):
+    """One SRS draw from the Rust kernel."""
+    return _kernel_arrays(
+        *_select_srs_rs(
+            **_srs_kernel_args(frame, n, stratum), wr=wr, seed=seed_from_random_state(rstate)
+        )
+    )
+
+
+def _select_srs_draws(frame, n, *, stratum, wr, seeds):
+    """One SRS draw per seed; older svy-rs has no batch kernel and draws them in turn."""
+    args = _srs_kernel_args(frame, n, stratum)
+    if _select_srs_batch_rs is not None:
+        draws = _select_srs_batch_rs(**args, wr=wr, seeds=seeds)
+    else:
+        draws = [_select_srs_rs(**args, wr=wr, seed=seed) for seed in seeds]
+    return [_kernel_arrays(*d) for d in draws]
 
 
 if TYPE_CHECKING:
@@ -208,7 +226,8 @@ def srs(
     hit_name: str | None = None,
     rstate: RandomState = None,
     drop_nulls: bool = False,
-) -> "Sample":
+    n_draws: int | None = None,
+) -> "Sample | list[Sample]":
     """
     Simple Random Sample (SRS), optionally stratified by (stratum x by).
 
@@ -233,6 +252,8 @@ def srs(
     rstate     : random state / seed
     drop_nulls : drop rows with missing values in design columns before
                  drawing (applied only within the eligible subset)
+    n_draws    : draw this many samples, returned as a list; draw r equals a
+                 single call with child r of ``SeedSequence(rstate).spawn(n_draws)``
 
     ``n`` semantics
     ---------------
@@ -249,9 +270,92 @@ def srs(
     "not in scope for this selection stage" -- distinct from prob=0
     which would imply "eligible but never selected".
     """
-    _ensure_row_index(sample)
+    if n_draws is not None:
+        return _srs_draws(
+            sample,
+            n,
+            n_draws=n_draws,
+            by=by,
+            where=where,
+            wr=wr,
+            order_by=order_by,
+            order_type=order_type,
+            prob_name=prob_name,
+            wgt_name=wgt_name,
+            hit_name=hit_name,
+            rstate=rstate,
+            drop_nulls=drop_nulls,
+        )
     rstate = advance_generator(rstate)
+    prep = _srs_prepare(
+        sample,
+        n,
+        by=by,
+        where=where,
+        wr=wr,
+        order_by=order_by,
+        order_type=order_type,
+        prob_name=prob_name,
+        wgt_name=wgt_name,
+        hit_name=hit_name,
+        drop_nulls=drop_nulls,
+        seed=seed_from_random_state(rstate),
+    )
+    if not isinstance(prep, _Prepared):
+        return prep
+    sel_idx, hits, probs = _select_srs(
+        frame=prep.frame,
+        n=prep.n,
+        stratum=prep.stratum,
+        wr=wr,
+        rstate=resolve_random_state(rstate),
+    )
+    return _srs_writeback(
+        sample,
+        prep.src_df,
+        prep.data,
+        prep.design,
+        sel_idx,
+        hits,
+        probs,
+        row_col=SVY_ROW_INDEX,
+        prob_name=prob_name,
+        wgt_name=wgt_name,
+        hit_name=hit_name,
+        wr=wr,
+        where_mask=prep.where_mask,
+    )
 
+
+class _Prepared(NamedTuple):
+    """What a draw needs from the frame, computed once for every draw."""
+
+    src_df: pl.DataFrame
+    data: pl.DataFrame
+    design: Any
+    where_mask: Any
+    frame: np.ndarray
+    n: int | dict[str, int]
+    stratum: pl.Series | None
+
+
+def _srs_prepare(
+    sample: "Sample",
+    n: int | Mapping[Category, Number],
+    *,
+    by: str | Sequence[str] | None,
+    where: WhereArg,
+    wr: bool,
+    order_by: str | Sequence[str] | None,
+    order_type: Literal["ascending", "descending", "random"],
+    prob_name: str | None,
+    wgt_name: str | None,
+    hit_name: str | None,
+    drop_nulls: bool,
+    seed: int | None,
+) -> "_Prepared | Sample":
+    """Checks, eligible rows, order and groups; the finished sample when no row is eligible."""
+    _ensure_row_index(sample)
     src_df: pl.DataFrame = sample._data
     assert isinstance(src_df, pl.DataFrame), "selection requires an eager DataFrame"
     design = sample._design
@@ -305,8 +409,6 @@ def srs(
         assert_no_missing(df=df_reduced, subset=cols)
         data = df_reduced
 
-    rng = resolve_random_state(rstate)
-    seed = seed_from_random_state(rstate)
     data = _apply_order(data, order_by=order_by, order_type=order_type, seed=seed)
 
     stratum_col: str | None = sample._internal_design["stratum"]
@@ -336,26 +438,53 @@ def srs(
         )
 
     frame: npt.NDArray[np.int_] = data[row_col].to_numpy().astype(np.int_, copy=False)
+    return _Prepared(src_df, data, design, where_mask, frame, n_norm, stratum_by_arr)
 
-    sel_idx, hits, probs = _select_srs(
-        frame=frame, n=n_norm, stratum=stratum_by_arr, wr=wr, rstate=rng
-    )
 
-    return _srs_writeback(
-        sample,
-        src_df,
-        data,
-        design,
-        sel_idx,
-        hits,
-        probs,
-        row_col=row_col,
-        prob_name=prob_name,
-        wgt_name=wgt_name,
-        hit_name=hit_name,
-        wr=wr,
-        where_mask=where_mask,
+def _srs_draws(
+    sample: "Sample",
+    n: int | Mapping[Category, Number],
+    *,
+    n_draws: int,
+    rstate: RandomState,
+    order_type: Literal["ascending", "descending", "random"],
+    **kwargs: Any,
+) -> "list[Sample]":
+    """``n_draws`` samples; the input is left as it was."""
+    children = _child_seeds(rstate, n_draws, where="Sample.sampling.srs")
+    if order_type == "random":
+        # The shuffle depends on the seed, so each draw prepares its own frame.
+        return [
+            cast("Sample", srs(sample._fork(), n, order_type=order_type, rstate=c, **kwargs))
+            for c in children
+        ]
+    base = sample._fork()
+    keep = ("by", "where", "wr", "order_by", "prob_name", "wgt_name", "hit_name", "drop_nulls")
+    prep = _srs_prepare(base, n, order_type=order_type, seed=None, **{k: kwargs[k] for k in keep})
+    if not isinstance(prep, _Prepared):
+        return [prep._fork() for _ in children]
+    seeds = [seed_from_random_state(resolve_random_state(c)) for c in children]
+    draws = _select_srs_draws(
+        prep.frame, prep.n, stratum=prep.stratum, wr=kwargs["wr"], seeds=seeds
     )
+    return [
+        _srs_writeback(
+            base._fork(),
+            prep.src_df,
+            prep.data,
+            prep.design,
+            sel_idx,
+            hits,
+            probs,
+            row_col=SVY_ROW_INDEX,
+            prob_name=kwargs["prob_name"],
+            wgt_name=kwargs["wgt_name"],
+            hit_name=kwargs["hit_name"],
+            wr=kwargs["wr"],
+            where_mask=prep.where_mask,
+        )
+        for sel_idx, hits, probs in draws
+    ]
 
 
 def _srs_empty_writeback(sample, src_df, design, *, prob_name, wgt_name, hit_name, wr):

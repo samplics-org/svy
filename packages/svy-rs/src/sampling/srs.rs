@@ -26,6 +26,7 @@ impl std::error::Error for SamplingError {}
 
 pub type Result<T> = std::result::Result<T, SamplingError>;
 
+#[derive(Clone)]
 pub enum SrsN {
     Scalar(usize),
     PerStratum(HashMap<i64, usize>),

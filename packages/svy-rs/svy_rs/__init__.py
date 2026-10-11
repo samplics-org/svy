@@ -29,8 +29,10 @@ from svy_rs._internal import (
     replicate_quantile,
     replicate_ratio,
     replicate_total,
+    select_pps_batch_rs,
     select_pps_rs,
     # Sampling
+    select_srs_batch_rs,
     select_srs_rs,
     tabulate_rs,
     # Taylor linearization
