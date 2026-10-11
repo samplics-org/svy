@@ -6,6 +6,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Added
+
+- **Wrong names say what to use.** A name that does not exist on `svy`, a `Sample`, a `Design`, a sample namespace or a result raises `UnknownNameError` (an `AttributeError`, code `UNKNOWN_NAME`) that names the replacement: `svy.SurveyDesign` → `svy.Sample(data, svy.Design(...))`, `sample.mean` → `sample.estimation.mean`, `estimation.tabulate` → `categorical.tabulate`, `estimation.proportion` → `prop`, `result.est` → `result.to_polars()`, plus close matches. `svy.Design(data)`, unknown `Design` arguments (`strata=` → `stratum=`, `weights=` → `wgt=`, `cluster=` → `psu=`) and a pandas frame passed to `Sample` raise `UsageError` (a `TypeError`) with the fix. `help(svy)` now shows where to start.
+
 ## [0.32.2] — 2026-10-10
 
 ### Changed

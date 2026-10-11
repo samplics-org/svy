@@ -732,6 +732,10 @@ class Design:
         **parts: Any,
     ) -> None:
         object.__setattr__(self, "_frozen", False)
+        if hasattr(case_id, "columns"):
+            from svy.errors.api_errors import UsageError
+
+            raise UsageError.data_in_design(got=case_id)
 
         norm_case_id = _norm_spec("case_id", case_id)
         norm_stratum = _norm_spec("stratum", stratum)
@@ -768,7 +772,7 @@ class Design:
             "singleton": singleton,
             **parts,
         }
-        _dp.check_part_names(given, where="Design()")
+        _dp.check_part_names(given, where="Design()", fields=_FIELDS)
         fields = self._fields()
         object.__setattr__(
             self,
@@ -808,7 +812,16 @@ class Design:
             raise AttributeError(name) from None
         if name in parts:
             return parts[name]
-        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+        if name.startswith("_"):
+            raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+        from svy.errors.api_errors import UnknownNameError, public_names
+
+        raise UnknownNameError.unknown(
+            owner="Design",
+            label="design",
+            name=name,
+            available=[*public_names(type(self)), *parts],
+        )
 
     def _with_part(self, name: str, value: Any) -> Self:
         """This design with one part replaced, bypassing the update rules."""
@@ -1081,7 +1094,7 @@ class Design:
 
         # Each part decides what it becomes: a passed value is taken (the part
         # may pair it with the new fields), one not passed follows its rule.
-        _dp.check_part_names(parts, where="Design.update()")
+        _dp.check_part_names(parts, where="Design.update()", fields=_FIELDS)
         new_parts: dict[str, Any] = {}
         for part in _dp.registered():
             arg = parts.get(part.name, _MISSING)

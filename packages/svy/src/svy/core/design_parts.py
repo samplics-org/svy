@@ -144,10 +144,14 @@ def registered() -> tuple[DesignPart, ...]:
     return tuple(_REGISTRY.values())
 
 
-def check_part_names(given: Mapping[str, Any], *, where: str) -> None:
+def check_part_names(given: Mapping[str, Any], *, where: str, fields: Iterable[str] = ()) -> None:
     unknown = [k for k in given if k not in _REGISTRY]
     if unknown:
-        raise TypeError(f"{where} got unexpected keyword argument(s): {', '.join(unknown)}")
+        from svy.errors.api_errors import UsageError
+
+        raise UsageError.unknown_arguments(
+            where=where, unknown=unknown, known=[*fields, *_REGISTRY]
+        )
 
 
 def _unit_columns(value: str | tuple[str, ...] | None) -> tuple[str, ...]:

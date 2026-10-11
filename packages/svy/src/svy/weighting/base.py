@@ -21,6 +21,7 @@ from svy.core.repwgts import BootstrapKind
 from svy.core.terms import Feature
 from svy.core.types import Category, ControlsType, DomainScalarMap, Number, WhereArg
 from svy.errors import WeightingError
+from svy.errors.api_errors import guided_getattr
 from svy.utils.random_state import RandomState
 from svy.weighting.adjustment import adjust as _adjust
 from svy.weighting.calibration import build_aux_matrix as _build_aux_matrix
@@ -173,6 +174,8 @@ class Weighting:
     ``code`` and ``expected``/``got`` in the data's own values, so
     ``err.to_dict()`` is enough to act on.
     """
+
+    __getattr__ = guided_getattr("Weighting", "sample.weighting")
 
     def __init__(self, sample: Any) -> None:
         self._sample = sample

@@ -25,6 +25,7 @@ import numpy as np
 import polars as pl
 
 from svy.errors import MethodError
+from svy.errors.api_errors import guided_getattr
 from svy.ui.printing import (
     make_panel,
     render_plain_table,
@@ -332,6 +333,8 @@ class Contrast:
     the added t statistic and p-value; the full contrast covariance
     ``L V Lᵀ`` is kept on :attr:`covariance` (row order = printed order).
     """
+
+    __getattr__ = guided_getattr("Contrast", "Contrast")
 
     __slots__ = ("estimates", "covariance", "alpha", "df", "method", "param", "y", "_print_width")
 
