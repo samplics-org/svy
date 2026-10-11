@@ -1340,6 +1340,7 @@ pub fn matrix_prop_by_domain_str(
 ///
 /// Sorts once and evaluates every probability against the same CDF, returning
 /// one value per entry of `probs`.
+#[cfg(test)]
 fn weighted_quantiles_vec(
     y: &[f64],
     weights: &[f64],
@@ -1393,43 +1394,142 @@ fn weighted_median_vec(y: &[f64], weights: &[f64], n: usize, q_method: SvyQuanti
     weighted_quantiles_vec(y, weights, n, &[0.5], q_method)[0]
 }
 
-/// Compute quantile estimates for all replicates simultaneously.
+/// Finite-`y` indices of `rows`, stably sorted by `y`. Restricted to any one set of
+/// weights it is the order `weighted_quantiles_vec` sorts that set into.
+fn sorted_finite(y: &[f64], rows: impl Iterator<Item = usize>) -> Vec<usize> {
+    let mut order: Vec<usize> = rows.filter(|&i| y[i].is_finite()).collect();
+    order.sort_by(|&a, &b| y[a].partial_cmp(&y[b]).unwrap_or(std::cmp::Ordering::Equal));
+    order
+}
+
+/// [`weighted_quantiles_vec`] over `order` (from [`sorted_finite`]), without re-sorting.
+fn quantiles_in_order(
+    y: &[f64],
+    weights: &[f64],
+    order: &[usize],
+    probs: &[f64],
+    q_method: SvyQuantileMethod,
+) -> Vec<f64> {
+    let mut y_sorted = Vec::with_capacity(order.len());
+    let mut w_sorted = Vec::with_capacity(order.len());
+    for &i in order {
+        if weights[i] > 0.0 {
+            y_sorted.push(y[i]);
+            w_sorted.push(weights[i]);
+        }
+    }
+    if y_sorted.is_empty() {
+        return vec![f64::NAN; probs.len()];
+    }
+    let total_w: f64 = w_sorted.iter().sum();
+    if total_w <= 0.0 {
+        return vec![f64::NAN; probs.len()];
+    }
+    let mut cdf = Vec::with_capacity(w_sorted.len());
+    let mut cumsum = 0.0;
+    for w in &w_sorted {
+        cumsum += w;
+        cdf.push(cumsum / total_w);
+    }
+    probs
+        .iter()
+        .map(|&p| weighted_quantile(&y_sorted, &cdf, p, q_method))
+        .collect()
+}
+
+/// Quantile estimates for the full sample and every replicate column.
 ///
 /// Returns `(full_estimates[P], replicate_estimates[P][R])`, indexed by the
 /// position of each probability in `probs`.
+pub fn quantile_estimates_cols(
+    y: &[f64],
+    full_weights: &[f64],
+    rep_cols: &[&[f64]],
+    probs: &[f64],
+    q_method: SvyQuantileMethod,
+) -> (Vec<f64>, Vec<Vec<f64>>) {
+    use rayon::prelude::*;
+    let order = sorted_finite(y, 0..y.len());
+    let theta_full = quantiles_in_order(y, full_weights, &order, probs, q_method);
+    let per_rep: Vec<Vec<f64>> = rep_cols
+        .par_iter()
+        .map(|col| quantiles_in_order(y, col, &order, probs, q_method))
+        .collect();
+    let theta_reps = (0..probs.len())
+        .map(|j| per_rep.iter().map(|r| r[j]).collect())
+        .collect();
+    (theta_full, theta_reps)
+}
+
+/// Quantile estimates by domain for the full sample and every replicate column.
+///
+/// Returns `(full_estimates[K][P], replicate_estimates[K][P][R], domain_counts[K])`.
+pub fn quantile_by_domain_cols(
+    y: &[f64],
+    full_weights: &[f64],
+    rep_cols: &[&[f64]],
+    domain_ids: &[u32],
+    n_domains: usize,
+    probs: &[f64],
+    q_method: SvyQuantileMethod,
+) -> (Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>) {
+    use rayon::prelude::*;
+    let mut rows: Vec<Vec<usize>> = vec![Vec::new(); n_domains];
+    let mut counts = vec![0u32; n_domains];
+    for (i, &d) in domain_ids.iter().enumerate() {
+        let d = d as usize;
+        if d < n_domains {
+            rows[d].push(i);
+            counts[d] += u32::from(full_weights[i] != 0.0);
+        }
+    }
+    let orders: Vec<Vec<usize>> = rows.into_iter().map(|r| sorted_finite(y, r.into_iter())).collect();
+    let theta_full = orders
+        .iter()
+        .map(|o| quantiles_in_order(y, full_weights, o, probs, q_method))
+        .collect();
+    let per_rep: Vec<Vec<Vec<f64>>> = rep_cols
+        .par_iter()
+        .map(|col| {
+            orders
+                .iter()
+                .map(|o| quantiles_in_order(y, col, o, probs, q_method))
+                .collect()
+        })
+        .collect();
+    let theta_reps = (0..n_domains)
+        .map(|d| {
+            (0..probs.len())
+                .map(|j| per_rep.iter().map(|r| r[d][j]).collect())
+                .collect()
+        })
+        .collect();
+    (theta_full, theta_reps, counts)
+}
+
+/// Columns of a row-major `n × n_reps` matrix.
+fn matrix_columns(rep_weights: &[f64], n: usize, n_reps: usize) -> Vec<Vec<f64>> {
+    (0..n_reps)
+        .map(|r| (0..n).map(|i| rep_weights[i * n_reps + r]).collect())
+        .collect()
+}
+
+/// [`quantile_estimates_cols`] on a flattened row-major `n × n_reps` matrix.
 pub fn matrix_quantile_estimates(
     y: &[f64],
     full_weights: &[f64],
-    rep_weights: &[f64], // Flattened (n × R) row-major
+    rep_weights: &[f64],
     n: usize,
     n_reps: usize,
     probs: &[f64],
     q_method: SvyQuantileMethod,
 ) -> (Vec<f64>, Vec<Vec<f64>>) {
-    // Full sample estimates
-    let theta_full = weighted_quantiles_vec(y, full_weights, n, probs, q_method);
-
-    // Replicate estimates
-    let mut theta_reps: Vec<Vec<f64>> = vec![Vec::with_capacity(n_reps); probs.len()];
-
-    // Extract each replicate's weights and compute every quantile from one sort
-    for r in 0..n_reps {
-        let rep_w: Vec<f64> = (0..n).map(|i| rep_weights[i * n_reps + r]).collect();
-
-        for (j, theta_r) in weighted_quantiles_vec(y, &rep_w, n, probs, q_method)
-            .into_iter()
-            .enumerate()
-        {
-            theta_reps[j].push(theta_r);
-        }
-    }
-
-    (theta_full, theta_reps)
+    let cols = matrix_columns(rep_weights, n, n_reps);
+    let refs: Vec<&[f64]> = cols.iter().map(|c| c.as_slice()).collect();
+    quantile_estimates_cols(&y[..n], &full_weights[..n], &refs, probs, q_method)
 }
 
-/// Compute quantile estimates by domain for all replicates.
-///
-/// Returns `(full_estimates[K][P], replicate_estimates[K][P][R], domain_counts[K])`.
+/// [`quantile_by_domain_cols`] on a flattened row-major `n × n_reps` matrix.
 pub fn matrix_quantile_by_domain(
     y: &[f64],
     full_weights: &[f64],
@@ -1441,58 +1541,17 @@ pub fn matrix_quantile_by_domain(
     probs: &[f64],
     q_method: SvyQuantileMethod,
 ) -> (Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>) {
-    // Organize data by domain
-    let mut domain_data: Vec<Vec<(f64, f64, usize)>> = vec![Vec::new(); n_domains];
-    let mut counts = vec![0u32; n_domains];
-
-    for i in 0..n {
-        let d = domain_ids[i] as usize;
-        if d >= n_domains {
-            continue;
-        }
-        domain_data[d].push((y[i], full_weights[i], i));
-        counts[d] += u32::from(full_weights[i] != 0.0);
-    }
-
-    // The domain's y values never change across replicates — hoist them out of
-    // the replicate loop; only the weights are re-read per replicate.
-    let y_by_domain: Vec<Vec<f64>> = domain_data
-        .iter()
-        .map(|rows| rows.iter().map(|(yi, _, _)| *yi).collect())
-        .collect();
-
-    // Compute full sample estimates for each domain
-    let mut theta_full = Vec::with_capacity(n_domains);
-    for d in 0..n_domains {
-        let w_d: Vec<f64> = domain_data[d].iter().map(|(_, wi, _)| *wi).collect();
-        let n_d = y_by_domain[d].len();
-
-        theta_full.push(weighted_quantiles_vec(&y_by_domain[d], &w_d, n_d, probs, q_method));
-    }
-
-    // Compute replicate estimates for each domain
-    let mut theta_reps: Vec<Vec<Vec<f64>>> =
-        vec![vec![Vec::with_capacity(n_reps); probs.len()]; n_domains];
-
-    for r in 0..n_reps {
-        for d in 0..n_domains {
-            let w_d: Vec<f64> = domain_data[d]
-                .iter()
-                .map(|(_, _, i)| rep_weights[i * n_reps + r])
-                .collect();
-            let n_d = y_by_domain[d].len();
-
-            for (j, est) in
-                weighted_quantiles_vec(&y_by_domain[d], &w_d, n_d, probs, q_method)
-                    .into_iter()
-                    .enumerate()
-            {
-                theta_reps[d][j].push(est);
-            }
-        }
-    }
-
-    (theta_full, theta_reps, counts)
+    let cols = matrix_columns(rep_weights, n, n_reps);
+    let refs: Vec<&[f64]> = cols.iter().map(|c| c.as_slice()).collect();
+    quantile_by_domain_cols(
+        &y[..n],
+        &full_weights[..n],
+        &refs,
+        &domain_ids[..n],
+        n_domains,
+        probs,
+        q_method,
+    )
 }
 
 /// Compute median estimates for all replicates simultaneously
@@ -1727,6 +1786,48 @@ mod tests {
             "Median {} should be >= 4 with heavy weight on 5",
             median
         );
+    }
+
+    #[test]
+    fn test_presorted_quantiles_match_per_set_sort() {
+        let mut state: u64 = 12345;
+        let mut next = move || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (state >> 33) as f64 / (1u64 << 31) as f64
+        };
+        let n = 300;
+        // Few distinct values, so ties are everywhere; NaN/inf y and 0/negative/NaN weights.
+        let y: Vec<f64> = (0..n)
+            .map(|i| match i % 37 {
+                0 => f64::NAN,
+                1 => f64::INFINITY,
+                _ => (next() * 12.0).floor(),
+            })
+            .collect();
+        let order = sorted_finite(&y, 0..n);
+        let probs = [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0];
+        for q in [
+            SvyQuantileMethod::Linear,
+            SvyQuantileMethod::Lower,
+            SvyQuantileMethod::Higher,
+            SvyQuantileMethod::Nearest,
+            SvyQuantileMethod::Middle,
+        ] {
+            for _ in 0..20 {
+                let w: Vec<f64> = (0..n)
+                    .map(|i| match i % 29 {
+                        0 => 0.0,
+                        1 => -1.0,
+                        2 => f64::NAN,
+                        _ => next() * 3.0,
+                    })
+                    .collect();
+                let want = weighted_quantiles_vec(&y, &w, n, &probs, q);
+                let got = quantiles_in_order(&y, &w, &order, &probs, q);
+                let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+                assert_eq!(bits(&got), bits(&want), "{q:?}");
+            }
+        }
     }
 
     #[test]
