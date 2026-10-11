@@ -39,6 +39,12 @@ Changelog = "https://github.com/samplics-org/svy/blob/main/packages/svy/CHANGELO
 Source = "https://github.com/samplics-org/svy"
 Issues = "https://github.com/samplics-org/svy/issues"
 
+[project.scripts]
+svy-skills = "svy.skills:main"
+
+[project.entry-points."svy.skills"]
+svy = "svy._skills"
+
 [tool.uv.sources]
 svy-io = { workspace = true } # overrides the above during dev
 svy-rs = { workspace = true }
