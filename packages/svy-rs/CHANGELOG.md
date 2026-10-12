@@ -4,6 +4,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-10-12
+
 ### Added
 
 - `select_srs_batch_rs` and `select_pps_batch_rs` run `select_srs_rs` / `select_pps_rs` once per seed, in parallel, from one set of inputs. `SrsN` and `PpsN` derive `Clone`.
@@ -287,7 +289,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 Baseline for this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.18.1...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.19.0...HEAD
+[0.19.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.19.0
 [0.18.1]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.18.1
 [0.18.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.18.0
 [0.17.1]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.17.1
