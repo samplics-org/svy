@@ -123,7 +123,16 @@ def _hydrate_user_missing(
             conditions = []
 
             if na_values:
-                conditions.append(col.is_in(na_values))
+                # Cast lookup values to the column's dtype — polars 2.0
+                # dropped lossy coercion in is_in, so int literals against a
+                # Float64 column (common for SPSS numeric vars) raise.
+                col_dtype = df.schema[col_name]
+                try:
+                    na_cast = [v if v is None else col_dtype.to_python()(v)
+                               for v in na_values]
+                except Exception:
+                    na_cast = na_values
+                conditions.append(col.is_in(na_cast))
 
             if na_range and len(na_range) == 2:
                 low, high = na_range

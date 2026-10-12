@@ -4,6 +4,12 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-10-12
+
+### Fixed
+
+- **SPSS user-missing values are cast to the column dtype before `is_in`.** polars 2.0 dropped lossy coercion in `is_in`, so int user-missing codes (e.g. `[7, 9]`) against a Float64 column raised `InvalidOperationError`.
+
 ### Changed
 
 - **Requires polars 2.0 or later** (was 1.34.0), as svy does.
@@ -121,7 +127,8 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 First release tracked in this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-io-v0.6.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-io-v0.6.1...HEAD
+[0.6.1]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.6.1
 [0.6.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.6.0
 [0.5.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.5.0
 [0.4.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.4.0

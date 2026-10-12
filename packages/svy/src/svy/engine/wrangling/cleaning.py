@@ -291,9 +291,20 @@ def _recode(
         expr = pl.col(col)
         builder = None
 
+        col_dtype = out.schema[col]
+
         for new_val, old_vals in normalized.items():
-            # Build condition: col is in old_vals
-            cond = pl.col(col).is_in(list(old_vals))
+            # Build condition: col is in old_vals.  Cast the lookup values
+            # to the column's dtype — polars 2.0 dropped lossy coercion in
+            # is_in, so a Float64 column needs Float64 literals (int 7 → 7.0).
+            non_none_vals = [v for v in old_vals if v is not None]
+            if non_none_vals:
+                vals = pl.Series("_recode_vals", non_none_vals)
+                if vals.dtype != col_dtype:
+                    vals = vals.cast(col_dtype)
+                cond = pl.col(col).is_in(vals)
+            else:
+                cond = pl.lit(False)
 
             # Handle None separately
             if None in old_vals:
