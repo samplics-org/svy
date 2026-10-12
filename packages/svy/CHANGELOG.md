@@ -6,6 +6,12 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+## [0.33.1] — 2026-10-12
+
+### Fixed
+
+- **`wrangling.recode` casts lookup values to the column dtype before `is_in`.** polars 2.0 dropped lossy coercion in `is_in`, so int literals (e.g. `[7, 9]`) against a Float64 column (common for survey data read from Stata/SPSS/SAS files) raised `InvalidOperationError`.
+
 ## [0.33.0] — 2026-10-12
 
 ### Added
@@ -1173,7 +1179,8 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.33.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.33.1...HEAD
+[0.33.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.33.1
 [0.33.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.33.0
 [0.32.2]: https://github.com/samplics-org/svy/releases/tag/svy-v0.32.2
 [0.32.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.32.1
