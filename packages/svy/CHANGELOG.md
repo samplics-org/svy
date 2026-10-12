@@ -6,6 +6,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+## [0.33.0] — 2026-10-12
+
 ### Added
 
 - **Agent skills ship with svy.** Guidance for coding agents, matching the installed version: an entry file (namespace map, a complete example, getting full-precision numbers out, rules, common wrong names) and one file per namespace (io, design, wrangling, estimation, categorical, glm, weighting, sampling). Run `svy-skills` once per project (or `svy.skills.install()`) to link them into `.claude/skills/`; upgrades then update them. Rerun it when a release adds a skill or after recreating the environment; `--copy` copies instead. Other packages can ship skills under the `svy.skills` entry-point group, and one run installs them all.
@@ -1171,7 +1173,8 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.32.2...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.33.0...HEAD
+[0.33.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.33.0
 [0.32.2]: https://github.com/samplics-org/svy/releases/tag/svy-v0.32.2
 [0.32.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.32.1
 [0.32.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.32.0
