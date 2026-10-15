@@ -4,6 +4,16 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ## [Unreleased]
 
+## [0.19.1] — 2026-10-15
+
+### Fixed
+
+- `svy_rs.__version__` reported 0.18.1 in the 0.19.0 wheel.
+
+### Added
+
+- Python 3.15 classifier; the abi3 wheels already install there.
+
 ## [0.19.0] — 2026-10-12
 
 ### Added
@@ -289,7 +299,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 Baseline for this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.19.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.19.1...HEAD
+[0.19.1]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.19.1
 [0.19.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.19.0
 [0.18.1]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.18.1
 [0.18.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.18.0
