@@ -23,7 +23,11 @@ from .helpers import (
     _with_bad_string_hint,
 )
 from .labelled import LabelledSPSS, labelled_spss
-from .metadata import normalize_user_missing
+from .metadata import (
+    normalize_user_missing,
+    normalize_user_missing_spec,
+    normalize_value_labels,
+)
 
 
 # -------------------- User-defined missing integration --------------------
@@ -128,8 +132,7 @@ def _hydrate_user_missing(
                 # Float64 column (common for SPSS numeric vars) raise.
                 col_dtype = df.schema[col_name]
                 try:
-                    na_cast = [v if v is None else col_dtype.to_python()(v)
-                               for v in na_values]
+                    na_cast = [v if v is None else col_dtype.to_python()(v) for v in na_values]
                 except Exception:
                     na_cast = na_values
                 conditions.append(col.is_in(na_cast))
@@ -579,20 +582,41 @@ def write_sav(
     if categorical_exprs:
         to_write = to_write.with_columns(categorical_exprs)
 
-    # Merge categorical labels with user-provided.
-    # Copy first so the caller's list/dicts are never mutated.
-    if categorical_labels:
-        if value_labels is None:
-            value_labels = []
-        else:
-            value_labels = [{**vl, "labels": dict(vl.get("labels", {}))} for vl in value_labels]
+    # Categorical codes are written as 1..k, so their labels are numeric too.
+    labels_by_col = normalize_value_labels(value_labels, dict(to_write.schema))
+    for col_name, labels in normalize_value_labels(categorical_labels).items():
+        labels_by_col.setdefault(col_name, {}).update(labels)
+    missing_specs = normalize_user_missing_spec(user_missing)
 
-        for col_name, labels in categorical_labels.items():
-            existing = next((vl for vl in value_labels if vl["col"] == col_name), None)
-            if existing:
-                existing["labels"].update(labels)
-            else:
-                value_labels.append({"col": col_name, "labels": labels})
+    unknown = sorted(
+        {c for c in labels_by_col if c not in df.columns}
+        | {m["col"] for m in missing_specs if m["col"] not in df.columns}
+    )
+    if unknown:
+        raise ValueError(
+            f"value_labels/user_missing name columns that are not in the DataFrame: {unknown}"
+        )
+    non_numeric = [
+        m["col"]
+        for m in missing_specs
+        if any(isinstance(v, str) for v in [*m["na_values"], *(m["na_range"] or ())])
+    ]
+    if non_numeric:
+        raise ValueError(f"user-missing values must be numeric; columns: {sorted(non_numeric)}")
+
+    # The native writer wants text codes and {col, values, range}.
+    native_labels = [
+        {"col": col, "labels": {str(k): v for k, v in labels.items()}}
+        for col, labels in labels_by_col.items()
+    ]
+    native_missing = [
+        {
+            "col": m["col"],
+            "values": [float(v) for v in m["na_values"]],
+            "range": tuple(float(v) for v in m["na_range"]) if m["na_range"] else None,
+        }
+        for m in missing_specs
+    ]
 
     # Convert to Arrow IPC
     bio = io.BytesIO()
@@ -605,8 +629,8 @@ def write_sav(
         path,
         compress=compress,
         var_labels=var_labels,
-        user_missing=user_missing,
-        value_labels=value_labels,
+        user_missing=native_missing or None,
+        value_labels=native_labels or None,
     )
 
     return df

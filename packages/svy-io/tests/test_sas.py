@@ -1,13 +1,13 @@
 # tests/test_sas.py
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import polars as pl
 import pytest
 
-from svy_io import read_sas, read_sas_arrow, read_xpt, write_xpt
+from svy_io import read_sas, read_sas_arrow, write_xpt
 from svy_io.tagged_na import na_tag
 
 
@@ -301,23 +301,10 @@ def test_value_label_set_in_arrow_metadata():
 
 
 # @pytest.mark.skip(reason="read_xpt not implemented yet")
-def test_xpt_can_read_date_times(tmp_path):
-    """XPT: Date/time roundtrip"""
-    path = tmp_path / "roundtrip.xpt"
-    df = pl.DataFrame(
-        {
-            "date": [date.today()],
-            "datetime": [datetime.now()],
-        }
-    )
-    write_xpt(df, path)
-    # XPT roundtrip loses SAS formats, so temporal detection relies on
-    # (opt-in) name-based inference here.
-    df2, _meta = read_xpt(path, infer_temporal_formats=True)  # <-- unpack
-
-    assert df2.schema["date"] == pl.Date
-    # datetime dtype can include a time unit; check via isinstance
-    assert isinstance(df2.schema["datetime"], pl.Datetime)
+def test_xpt_write_refuses_dates_rather_than_writing_missing(tmp_path):
+    df = pl.DataFrame({"date": [date.today()], "datetime": [datetime.now()]})
+    with pytest.raises(ValueError, match="date/time"):
+        write_xpt(df, tmp_path / "roundtrip.xpt")
 
 
 @pytest.mark.skip(reason="write_xpt not implemented yet")

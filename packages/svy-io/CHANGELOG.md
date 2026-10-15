@@ -4,6 +4,17 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 ## [Unreleased]
 
+### Changed
+
+- **`write_sav` and `write_dta` take value labels and user missings in one shape, through one normalizer.** `value_labels` may be `{col: {code: text}}` or `[{"col", "labels"}]` in both writers; `user_missing` takes the reader's `{col, na_values, na_range}` or `{col, values, range}`. Codes written as `"1"`, `1.0` or `1` are the same code, so labels read from any file write back.
+- **`write_dta` and `write_xpt` refuse date and time columns.** Their native writers have no temporal encoding and wrote every value as missing.
+
+### Fixed
+
+- **`write_sav` dropped labels and missings without a word.** Labels with non-text codes and missings keyed `na_values` were ignored; malformed entries and unknown columns now raise.
+- **`write_dta` rejected labels read from a Stata or SPSS file**, whose codes arrive as text.
+- **Invalid names failed with a ReadStat code (`rc=26`).** `write_dta` checks Stata 14+ names and `write_xpt` checks XPT names (length by version, ASCII) and says what is wrong.
+
 ## [0.6.1] — 2026-10-12
 
 ### Fixed

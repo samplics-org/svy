@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import tempfile
 
 from contextlib import ExitStack
@@ -23,8 +24,11 @@ from .helpers import (
     _split_encoding,
     _with_bad_string_hint,
 )
-from .metadata import normalize_user_missing
+from .metadata import normalize_user_missing, reject_temporal_columns
 from .tagged_na import TaggedNA
+
+
+_XPT_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 # -------------------- hydrate tagged NA --------------------
@@ -803,6 +807,14 @@ def write_xpt(
 
     if label is not None and len(label) > 40:
         raise ValueError(f"label must be <= 40 characters, got {len(label)}")
+
+    bad_names = [c for c in df.columns if len(c) > max_len or not _XPT_NAME_RE.match(c)]
+    if bad_names:
+        raise ValueError(
+            f"XPT v{version} variable names must be at most {max_len} ASCII letters, digits "
+            f"or underscores, not starting with a digit: {bad_names}"
+        )
+    reject_temporal_columns(df, "SAS Transport")
 
     # --- XPT requires numeric == double; make that explicit ---
     int_cols = [
