@@ -43,6 +43,8 @@ from svy.core.terms import Cat
 
 N_STRATA = 20  # geo1 (10) x urbrur (2)
 PSU_PER_STRATUM = 50
+# Best-of-5 on a ~2ms case is noisy enough to trip the 1.25x gate on its own.
+MIN_TIME_S = 0.2
 
 
 # ── Synthetic data ──────────────────────────────────────────────────────────
@@ -83,13 +85,16 @@ def gen_data(n_rows: int, *, n_reps: int = 0, seed: int = 42) -> pl.DataFrame:
 
 
 def best_ms(fn, reps: int) -> float:
-    """Warm once, then return best-of-`reps` wall-clock in milliseconds."""
+    """Warm once, then return the best wall-clock in ms over at least `reps` runs and MIN_TIME_S."""
     fn()
     best = float("inf")
-    for _ in range(reps):
+    n = 0
+    start = time.perf_counter()
+    while n < reps or time.perf_counter() - start < MIN_TIME_S:
         t0 = time.perf_counter()
         fn()
         best = min(best, time.perf_counter() - t0)
+        n += 1
     return best * 1000.0
 
 
@@ -352,7 +357,7 @@ def main() -> None:
     print(f"svy {svy.__version__}  |  columns tab-separated: BENCH<TAB>label<TAB>rows<TAB>ms\n")
     for n_rows in args.rows:
         reps = args.reps_large if n_rows >= 1_000_000 else args.reps
-        print(f"# ── {n_rows:,} rows (best of {reps}) ──")
+        print(f"# ── {n_rows:,} rows (best of {reps}+ runs, >= {MIN_TIME_S}s) ──")
         run_end_to_end(n_rows, reps, args.n_reps)
         run_wrangling(n_rows, reps)
         # A 1e6 x 20 binomial fit is seconds, not milliseconds; best-of-3 is
