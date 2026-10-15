@@ -14,6 +14,8 @@ what they need directly and never look at the surface as a whole.
 
 import pathlib
 
+from importlib.metadata import version
+
 import pytest
 import svy_io
 
@@ -88,3 +90,7 @@ def test_no_submodule_is_orphaned():
             orphans.append(name)
 
     assert orphans == [], f"modules nothing imports: {orphans}"
+
+
+def test_version_matches_package_metadata():
+    assert svy_io.__version__ == version("svy-io")
