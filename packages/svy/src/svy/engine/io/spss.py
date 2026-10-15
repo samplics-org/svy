@@ -9,6 +9,7 @@ import polars as pl
 from svy.metadata import MetadataStore
 
 from .core import (
+    build_metadata_for_export,
     to_polars,
     to_writer_table,
 )
@@ -38,6 +39,8 @@ def _read_spss(
         - File info dict
     """
     # 1. Call Engine (Capture generic result, DO NOT unpack here)
+    kwargs.setdefault("coerce_temporals", True)
+    kwargs.setdefault("normalize_names", False)
     res = sio.read_spss(str(path), encoding=encoding, **kwargs)
 
     # 2. Normalize Result (Handle 2-tuple vs 3-tuple vs Dict)
@@ -93,22 +96,7 @@ def _write_spss(
     takes none. The old signature accepted one and passed it to a function that
     did not exist.
     """
-    var_labels: Dict[str, str] = {}
-    value_labels: list[Dict[str, Any]] = []
-
-    for var in df.columns:
-        meta = store.get(var)
-        if meta is None:
-            continue
-        if meta.label:
-            var_labels[var] = meta.label
-        resolved = store._resolve(var)
-        if resolved.has_value_labels:
-            # SPSS stores value-label keys as strings.
-            value_labels.append(
-                {"col": var, "labels": {str(k): v for k, v in resolved.labels.items()}}
-            )
-
+    meta = build_metadata_for_export(df, store)
     table = to_writer_table(df)
     # `write_sav`, not `write_spss`: the latter has never existed in svy-io, and
     # the `# type: ignore[attr-defined]` that used to sit here was the type
@@ -118,7 +106,7 @@ def _write_spss(
     sio.write_sav(
         table,
         str(path),
-        var_labels=var_labels or None,
-        value_labels=value_labels or None,
+        var_labels=meta["var_labels"] or None,
+        value_labels=meta["value_labels"] or None,
         **kwargs,
     )

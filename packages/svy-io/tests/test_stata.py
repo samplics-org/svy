@@ -239,24 +239,16 @@ def test_can_roundtrip_missing_values_as_much_as_possible(tmp_path):
     assert g3.to_list()[0] in ("", None)
 
 
-def test_can_roundtrip_date_times_and_label_preservation(tmp_path):
-    if not HAVE_READ_DTA or not HAVE_WRITE_DTA:
-        pytest.xfail("stub pending")
+def test_write_refuses_dates_rather_than_writing_missing(tmp_path):
+    df = pl.DataFrame({"d": [_date(2010, 1, 1)], "ts": [_datetime(2010, 1, 1, 9)], "x": [1]})
+    with pytest.raises(ValueError, match="date/time"):
+        _write_dta(df, tmp_path / "d.dta", version=118)
 
-    # Dates and datetimes: we currently rely on numeric encodings on read.
-    d = [_date(2010, 1, 1), None, _date(2010, 1, 3)]
-    ts = [_datetime(2010, 1, 1, 9, 0, 0), None, _datetime(2010, 1, 2, 12, 0, 0)]
-    df = pl.DataFrame(
-        {
-            "d": pl.Series("d", d, dtype=pl.Date),
-            "ts": pl.Series("ts", ts, dtype=pl.Datetime),
-            "x": [1, 2, 3],
-        }
-    )
 
-    df2, meta, _ = _roundtrip(tmp_path, df, version=118, file_label="abc", na_policy="nan")
+def test_file_label_roundtrips(tmp_path):
+    df = pl.DataFrame({"x": [1, 2, 3]})
+    df2, meta, _ = _roundtrip(tmp_path, df, version=118, file_label="abc")
     assert df2.height == df.height
-    # When reader exposes file_label, assert equality (kept as xfail until then)
     assert meta.get("file_label") == "abc"
 
 
@@ -527,18 +519,7 @@ def test_write_dta_returns_input_unaltered_invisibly(tmp_path):
     if not HAVE_READ_DTA or not HAVE_WRITE_DTA:
         pytest.xfail("stub pending")
 
-    df = pl.DataFrame(
-        {
-            "x": [1, 2, 3, 4, 5],
-            "dt": [
-                _datetime(2022, 1, 1, 12, 0, 0),
-                _datetime(2022, 1, 2, 12, 0, 0),
-                _datetime(2022, 1, 3, 12, 0, 0),
-                _datetime(2022, 1, 4, 12, 0, 0),
-                _datetime(2022, 1, 5, 12, 0, 0),
-            ],
-        }
-    )
+    df = pl.DataFrame({"x": [1, 2, 3, 4, 5], "s": list("abcde")})
 
     out = tmp_path / "inv.dta"
     df_returned = _write_dta(df, out, version=118)

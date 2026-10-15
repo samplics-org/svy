@@ -6,6 +6,20 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: dates read as dates.** `read_spss`, `read_stata` and `read_sas` (and their `create_from_*`) return Date, Datetime and Duration columns; they returned the raw numbers (seconds since 1582, days since 1960). Pass `coerce_temporals=False` for the old result.
+- **BREAKING: SPSS variable names are kept as written.** They were lowercased and had dots turned into underscores, unlike Stata and SAS names. Pass `normalize_names=True` for the old names.
+- **`write_sas` writes variable labels and dates.** Only value labels are left out, with a warning.
+- **`write_stata` writes dates as Stata days and milliseconds from 1960** with a warning, since it cannot set `%td`/`%tc` yet.
+
+### Fixed
+
+- **A Stata file read with svy could not be written back as Stata.** Value-label codes arrive as text and the Stata writer rejected them. `write_spss`, `write_stata` and `write_sas` now build labels in one place.
+- **`write_stata` failed on label sets Stata cannot hold** (fractional or text codes, as SPSS files carry). It writes the rest and warns which sets were skipped.
+- **Every kind of missing reads as a null.** Stata's `.a`–`.z` arrived as an Object column of `TaggedNA` that could not be estimated or written, and SAS's `.A`–`.Z` as NaN, which `drop_nulls` keeps.
+- **Write failures were reported as `IO_READ_FAILED`.** They are now `IO_WRITE_FAILED`.
+
 ## [0.33.1] — 2026-10-12
 
 ### Fixed

@@ -1,13 +1,13 @@
 # tests/test_sas.py
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import polars as pl
 import pytest
 
-from svy_io import read_sas, read_sas_arrow, read_xpt, write_xpt
+from svy_io import read_sas, read_sas_arrow, write_xpt
 from svy_io.tagged_na import na_tag
 
 
@@ -301,23 +301,20 @@ def test_value_label_set_in_arrow_metadata():
 
 
 # @pytest.mark.skip(reason="read_xpt not implemented yet")
-def test_xpt_can_read_date_times(tmp_path):
-    """XPT: Date/time roundtrip"""
+def test_xpt_roundtrips_dates_times_and_variable_labels(tmp_path):
     path = tmp_path / "roundtrip.xpt"
     df = pl.DataFrame(
         {
-            "date": [date.today()],
-            "datetime": [datetime.now()],
+            "d": [date(2024, 1, 31), None],
+            "t": [datetime(2024, 1, 31, 12, 30, 5), None],
+            "x": [1.0, 2.0],
         }
     )
-    write_xpt(df, path)
-    # XPT roundtrip loses SAS formats, so temporal detection relies on
-    # (opt-in) name-based inference here.
-    df2, _meta = read_xpt(path, infer_temporal_formats=True)  # <-- unpack
-
-    assert df2.schema["date"] == pl.Date
-    # datetime dtype can include a time unit; check via isinstance
-    assert isinstance(df2.schema["datetime"], pl.Datetime)
+    write_xpt(df, path, var_labels={"d": "Visit date"})
+    df2, meta = read_sas(path, coerce_temporals=True)
+    assert df2["d"].to_list() == [date(2024, 1, 31), None]
+    assert df2["t"].to_list() == [datetime(2024, 1, 31, 12, 30, 5), None]
+    assert next(v for v in meta["vars"] if v["name"] == "d")["label"] == "Visit date"
 
 
 @pytest.mark.skip(reason="write_xpt not implemented yet")

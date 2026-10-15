@@ -4,8 +4,18 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 ## [Unreleased]
 
+### Changed
+
+- **`write_sav` and `write_dta` take value labels and user missings in one shape, through one normalizer.** `value_labels` may be `{col: {code: text}}` or `[{"col", "labels"}]` in both writers; `user_missing` takes the reader's `{col, na_values, na_range}` or `{col, values, range}`. Codes written as `"1"`, `1.0` or `1` are the same code, so labels read from any file write back.
+- **`write_dta` refuses date and time columns.** Its native writer has no temporal encoding and wrote every value as missing.
+- **`write_xpt` writes dates, datetimes and times** as SAS numbers with `DATE9.`, `DATETIME20.` and `TIME8.` formats (they were written as missing), and takes `var_labels`.
+- **`read_sav`, `read_por` and `read_spss` take `normalize_names`.** `False` keeps names as the file has them; the default still lowercases them and turns dots into underscores.
+
 ### Fixed
 
+- **`write_sav` dropped labels and missings without a word.** Labels with non-text codes and missings keyed `na_values` were ignored; malformed entries and unknown columns now raise.
+- **`write_dta` rejected labels read from a Stata or SPSS file**, whose codes arrive as text.
+- **Invalid names failed with a ReadStat code (`rc=26`).** `write_dta` checks Stata 14+ names and `write_xpt` checks XPT names (length by version, ASCII) and says what is wrong.
 - **`read_sav(user_na=True)` accepts value labels that share text.** Two codes with the same label (e.g. several occupation codes labelled "uncodeable") raised `labels must be unique`. Only codes must be unique, as in haven; the warning on shared label text is gone too.
 
 ## [0.6.1] — 2026-10-12

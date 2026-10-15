@@ -18,11 +18,12 @@ from polars.exceptions import ComputeError
 import svy_io.svyreadstat_rs as native
 
 from .helpers import _as_data_path, _normalize_n_max, _split_encoding, _with_bad_string_hint
-from .metadata import normalize_user_missing
+from .metadata import normalize_user_missing, normalize_value_labels, reject_temporal_columns
 from .tagged_na import TaggedNA
 
 
 _STATA_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_STATA_UNICODE_NAME_RE = re.compile(r"^[^\W\d]\w*$")
 
 # Stata holds a value-label code in an int32 and reserves 0x7FFFFFE5 upward for
 # the missing values (. and .a through .z), so the usable span stops just short
@@ -319,6 +320,14 @@ def _validate_dta_names_and_labels(
             raise ValueError(
                 "Variables for Stata <14 must match ^[A-Za-z_][A-Za-z0-9_]*$: " + ", ".join(bad)
             )
+    else:
+        # Stata 14+ allows Unicode letters, still no dots, spaces or leading digits.
+        bad = [c for c in df.columns if not _STATA_UNICODE_NAME_RE.match(c)]
+        if bad:
+            raise ValueError(
+                "Stata variable names must start with a letter or underscore and hold only "
+                "letters, digits and underscores: " + ", ".join(bad)
+            )
 
     # Check file label length
     if file_label is not None and len(file_label) > 80:
@@ -533,7 +542,7 @@ def write_dta(
     version: int = 15,
     file_label: str | None = None,
     var_labels: dict[str, str] | None = None,
-    value_labels: dict[str, dict] | None = None,
+    value_labels: dict[str, dict] | list[dict] | None = None,
     strl_threshold: int = 2045,
     adjust_tz: bool = True,
     na_policy: str = "nan",
@@ -551,6 +560,9 @@ def write_dta(
     else:
         raise TypeError("path must be a filesystem path or a writable file-like object")
 
+    # Codes read from any file arrive as text ("1"); Stata needs integers.
+    value_labels = normalize_value_labels(value_labels, dict(df.schema)) or None
+
     version_internal = _stata_file_format(int(version))
     version_human = (
         int(version)
@@ -565,6 +577,7 @@ def write_dta(
         value_labels=value_labels,
     )
     _ensure_strl_policy(df, version_human=version_human, strl_threshold=int(strl_threshold))
+    reject_temporal_columns(df, "Stata")
 
     nul_cols = _columns_with_interior_nul(df)
     if nul_cols:

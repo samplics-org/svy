@@ -86,21 +86,20 @@ def test_stata_carries_labels_too(store, df, tmp):
     assert recovered.get("q").label == "Question"
 
 
-def test_sas_writes_xpt_and_says_the_labels_are_dropped(store, df, tmp):
-    """XPT is the only SAS format ReadStat writes, and it carries no labels.
-
-    Degrading is right; degrading quietly is not — someone exporting a labelled
-    dataset to SAS should be told the labels did not come with it.
-    """
+def test_sas_writes_xpt_with_variable_labels_and_says_value_labels_are_dropped(store, df, tmp):
+    """XPT carries variable labels but no value labels; dropping those must not be silent."""
     path = tmp / "t.xpt"
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         _write_sas(df, store, path)
 
-    assert any("carries no variable or value labels" in str(w.message) for w in caught)
+    assert any("carries no value labels" in str(w.message) for w in caught)
 
-    back, _, _ = _read_sas(path)
+    back, meta, _ = _read_sas(path)
     assert back["q"].to_list() == [1.0, 99.0, 1.0]
+    recovered = MetadataStore()
+    import_labels_from_svyio_meta(recovered, meta, back)
+    assert recovered.get("q").label == "Question"
 
 
 def test_the_sas_format_argument_is_reported_as_ignored(store, df, tmp):

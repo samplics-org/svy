@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import tempfile
 
 from contextlib import ExitStack
@@ -25,6 +26,9 @@ from .helpers import (
 )
 from .metadata import normalize_user_missing
 from .tagged_na import TaggedNA
+
+
+_XPT_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 # -------------------- hydrate tagged NA --------------------
@@ -765,6 +769,31 @@ def read_sas_arrow(
 # ---------------- WRITERS ----------------
 
 
+_SAS_EPOCH_DATE = pl.date(1960, 1, 1)
+_SAS_EPOCH_DATETIME = pl.datetime(1960, 1, 1)
+
+
+def _sas_temporals(df: pl.DataFrame) -> tuple[pl.DataFrame, Dict[str, str]]:
+    """Dates as days, datetimes and times as seconds, all from 1960-01-01, with their SAS formats."""
+    exprs, formats = [], {}
+    for name, dtype in df.schema.items():
+        col = pl.col(name)
+        if dtype == pl.Date:
+            exprs.append((col - _SAS_EPOCH_DATE).dt.total_days().cast(pl.Float64))
+            formats[name] = "DATE9."
+        elif isinstance(dtype, pl.Datetime):
+            us = (col - _SAS_EPOCH_DATETIME).dt.total_microseconds()
+            exprs.append((us / 1e6).alias(name))
+            formats[name] = "DATETIME20."
+        elif dtype == pl.Time:
+            exprs.append((col.cast(pl.Int64) / 1e9).alias(name))
+            formats[name] = "TIME8."
+        elif isinstance(dtype, pl.Duration):
+            exprs.append((col.dt.total_microseconds() / 1e6).alias(name))
+            formats[name] = "TIME8."
+    return (df.with_columns(exprs) if exprs else df), formats
+
+
 def write_xpt(
     df: pl.DataFrame,
     path: str | Path,
@@ -773,14 +802,17 @@ def write_xpt(
     name: str | None = None,
     label: str | None = None,
     adjust_tz: bool = True,
+    var_labels: Dict[str, str] | None = None,
 ) -> None:
     """
     Write a Polars DataFrame to SAS Transport (XPT) format (v5 or v8).
 
+    Dates, datetimes and times are written as SAS numbers with DATE9.,
+    DATETIME20. and TIME8. formats, so readers that honour formats get them back.
+
     Primary path: svyreadstat_rs.df_write_xpt_file (Arrow IPC).
     Fallback (if native fails or writes 0 bytes): pyreadstat.write_xport().
     """
-    import io
     import os
 
     from pathlib import Path
@@ -804,6 +836,16 @@ def write_xpt(
     if label is not None and len(label) > 40:
         raise ValueError(f"label must be <= 40 characters, got {len(label)}")
 
+    bad_names = [c for c in df.columns if len(c) > max_len or not _XPT_NAME_RE.match(c)]
+    if bad_names:
+        raise ValueError(
+            f"XPT v{version} variable names must be at most {max_len} ASCII letters, digits "
+            f"or underscores, not starting with a digit: {bad_names}"
+        )
+    unknown = sorted(set(var_labels or {}) - set(df.columns))
+    if unknown:
+        raise ValueError(f"var_labels name columns that are not in the DataFrame: {unknown}")
+
     # --- XPT requires numeric == double; make that explicit ---
     int_cols = [
         c
@@ -819,6 +861,8 @@ def write_xpt(
 
         df = _adjust_temporals(df, adjust_tz=True)
 
+    df, formats = _sas_temporals(df)
+
     # --- Try the native writer first ---
     def _try_native(ipc_bytes: bytes) -> None:
         # Raises RuntimeError on native error
@@ -830,32 +874,33 @@ def write_xpt(
             label=label,
         )
 
-    # Build Arrow IPC **file** bytes, then retry with **stream** if footer complaints show up.
-    try:
-        bio_file = io.BytesIO()
-        df.write_ipc(bio_file)  # file format, includes footer
-        _try_native(bio_file.getvalue())
-    except RuntimeError as e:
-        msg = str(e)
-        if "InvalidFooter" in msg or "correct footer" in msg or "footer" in msg:
-            # Native likely expects a stream – retry with stream bytes
-            bio_stream = io.BytesIO()
-            try:
-                df.write_ipc_stream(bio_stream)
-                _try_native(bio_stream.getvalue())
-            except AttributeError:
-                # Very old Polars: stream via PyArrow
-                import pyarrow as pa
-                import pyarrow.ipc as pa_ipc
+    # The native writer reads each field's "label" and "format" from Arrow metadata.
+    import pyarrow as pa
+    import pyarrow.ipc as pa_ipc
 
-                table = df.to_arrow()
-                sink = pa.BufferOutputStream()
-                with pa_ipc.new_stream(sink, table.schema) as writer:
-                    writer.write_table(table)
-                _try_native(sink.getvalue().to_pybytes())
-        else:
-            # Some other native error—bubble up to the fallback
+    table = df.to_arrow()
+    fields = []
+    for field in table.schema:
+        meta = {}
+        if (var_labels or {}).get(field.name):
+            meta["label"] = var_labels[field.name]
+        if field.name in formats:
+            meta["format"] = formats[field.name]
+        fields.append(field.with_metadata(meta) if meta else field)
+    table = table.cast(pa.schema(fields))
+
+    def _ipc(new_writer) -> bytes:
+        sink = pa.BufferOutputStream()
+        with new_writer(sink, table.schema) as writer:
+            writer.write_table(table)
+        return sink.getvalue().to_pybytes()
+
+    try:
+        _try_native(_ipc(pa_ipc.new_file))
+    except RuntimeError as e:
+        if "footer" not in str(e):
             raise
+        _try_native(_ipc(pa_ipc.new_stream))
 
     # If we got here without exception but the file is empty, the native layer didn't finalize.
     if os.path.exists(path) and os.stat(path).st_size == 0:

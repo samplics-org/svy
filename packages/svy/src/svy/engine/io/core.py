@@ -36,10 +36,30 @@ def _py_scalar(x: Any) -> Any:
     return x
 
 
+def _missing_as_null(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    svy has no model of missing values, so every kind of missing becomes a null:
+    Stata's .a-.z arrive as TaggedNA objects, SAS's .A-.Z as NaN. None of the
+    three formats stores a NaN that means anything else.
+    """
+    fixed = []
+    for name, dtype in df.schema.items():
+        if dtype.is_float():
+            fixed.append(pl.col(name).fill_nan(None))
+        elif dtype == pl.Object:
+            values = [None if isinstance(v, sio.TaggedNA) else v for v in df[name].to_list()]
+            if all(
+                v is None or (isinstance(v, (int, float)) and not isinstance(v, bool))
+                for v in values
+            ):
+                fixed.append(pl.Series(name, values, dtype=pl.Float64, strict=False))
+    return df.with_columns(fixed) if fixed else df
+
+
 def to_polars(df_like: Any) -> pl.DataFrame:
     """Best-effort conversion to Polars without adding hard deps."""
     if isinstance(df_like, pl.DataFrame):
-        return df_like
+        return _missing_as_null(df_like)
     # Try Arrow first (common interop path), then pandas/iterables
     try:
         import pyarrow as pa
