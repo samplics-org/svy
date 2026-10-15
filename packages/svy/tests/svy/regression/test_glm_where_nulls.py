@@ -124,3 +124,13 @@ def test_where_column_also_a_covariate(samples):
     for c, r in zip(fit.fitted.coefs, GAUSSIAN):
         assert c.est == pytest.approx(r[0], rel=REL)
         assert c.se == pytest.approx(r[1], rel=REL)
+
+
+def test_where_on_integer_y_sees_uncast_dtype(samples):
+    assert samples["taylor"].data["ybin"].dtype == pl.Int64
+    fit = samples["taylor"].glm.fit(
+        y="ybin", x=["z"], family="binomial", where=W & ~pl.col("ybin").is_in([-1, 9])
+    )
+    for c, r in zip(fit.fitted.coefs, LOGIT):
+        assert c.est == pytest.approx(r[0], rel=REL)
+        assert c.se == pytest.approx(r[1], rel=REL)

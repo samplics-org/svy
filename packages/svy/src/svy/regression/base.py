@@ -37,7 +37,6 @@ from svy.regression.links import FAMILY_LABELS, link_inverse, link_mu_eta, resol
 from svy.regression.prediction import GLMPred
 from svy.ui.printing import format_where_clause
 from svy.utils.checks import validate_alpha
-from svy.wrangling.rows import _compile_where_to_pl_expr
 
 
 if TYPE_CHECKING:
@@ -571,9 +570,9 @@ class GLM:
         # Covariates go through null_zero_cols: rows with missing values are
         # KEPT with zeroed weights (main + replicate) so the design structure
         # (PSUs in stratum centering, df) is preserved — matching R svyglm —
-        # instead of physically dropped. `where` is passed only to keep its
-        # columns and scope the null check to the domain (apply_where=False):
-        # the domain itself is built below.
+        # instead of physically dropped. With apply_where=False, `where` only
+        # scopes the null check and comes back as a mask (prep.where_col),
+        # evaluated before y is cast to Float64.
         prep = prepare_data(
             self._sample,
             y=y,
@@ -597,13 +596,7 @@ class GLM:
         # domain restriction itself, so the strata/PSU structure and the df
         # stay those of the full design). The predicate becomes a Boolean
         # column the engine takes as its domain mask.
-        dom_col: str | None = None
-        if where is not None:
-            dom_col = "__where_domain__"
-            bool_expr = _compile_where_to_pl_expr(where)
-            df = df.with_columns(
-                cast(pl.Expr, bool_expr).fill_null(False).cast(pl.Boolean).alias(dom_col)
-            )
+        dom_col = prep.where_col
         # Rows with a missing covariate or response are out of the domain too
         # (they already carry a zero weight): the singleton rules count a
         # domain's rows whatever their weight, as R's subset() does.
