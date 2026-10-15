@@ -32,6 +32,7 @@ Exit codes: 0 clean, 1 regression, 2 the run looks like a debug build.
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import platform
 import statistics
@@ -89,10 +90,8 @@ def machine_id() -> str:
 
 def record(path: Path, results: dict, note: str) -> None:
     try:
-        import svy
-
-        version = getattr(svy, "__version__", "unknown")
-    except Exception:  # pragma: no cover - recording should not hard-fail here
+        version = importlib.metadata.version("svy")
+    except importlib.metadata.PackageNotFoundError:  # pragma: no cover
         version = "unknown"
 
     path.parent.mkdir(parents=True, exist_ok=True)
