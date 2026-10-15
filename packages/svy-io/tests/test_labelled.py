@@ -48,12 +48,9 @@ def test_label_must_be_length1_string_or_missing():
     # multiple-length label not a concept here; any str is fine
 
 
-def test_labels_must_be_unique():
-    def test_labels_must_be_unique():
-        # Under Python's value->label mapping, we can't create duplicate keys,
-        # so we assert that duplicate *label strings* are rejected.
-        with pytest.raises(ValueError):
-            labelled(1, {1: "female", 2: "female"})
+def test_duplicate_label_text_is_allowed():
+    x = labelled([1, 2], {1: "uncodeable", 2: "uncodeable"})
+    assert x.labels == {1: "uncodeable", 2: "uncodeable"}
 
 
 # ---- basic api / methods ----
