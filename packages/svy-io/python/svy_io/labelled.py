@@ -69,11 +69,6 @@ def _normalize_labels(
     if len(set(codes)) != len(codes):
         raise ValueError("label codes must be unique")
 
-    # Optional: warn (not error) on duplicate label strings
-    names = [v for _, v in items if v is not None]
-    if len(set(names)) != len(names):
-        warnings.warn("duplicate label strings detected; proceeding (haven allows this)")
-
     return dict(items)
 
 
@@ -98,12 +93,6 @@ def _validate_labels_match_data_type(values: List[Value], labels: Dict[Any, str]
     # we keep the explicit check for symmetry with haven)
     keys = [k for k in labels.keys() if k is not None]
     if len(set(keys)) != len(keys):
-        raise ValueError("labels must be unique")
-
-    # In our orientation (value -> label_string), also ensure label strings
-    # themselves are unique, mirroring haven's "no duplicated codes" constraint.
-    label_names = [nm for nm in labels.values() if nm is not None]
-    if len(set(label_names)) != len(label_names):
         raise ValueError("labels must be unique")
 
 
