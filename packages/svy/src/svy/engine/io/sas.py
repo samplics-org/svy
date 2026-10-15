@@ -42,6 +42,7 @@ def _read_sas(
     """
     # 1. Call Engine
     # SAS supports encoding, so we pass it. It does NOT support 'columns'.
+    kwargs.setdefault("coerce_temporals", True)
     res = sio.read_sas(str(path), encoding=encoding, **kwargs)
 
     # 2. Normalize Result (Robustness for Tests vs Production)
@@ -103,9 +104,8 @@ def _write_sas(
     (the ``# type: ignore[attr-defined]`` that used to sit on the call was the
     type checker saying exactly that).
 
-    XPT carries no variable or value labels, so metadata is *not* written and a
-    warning says so rather than letting it vanish quietly. Use ``write_spss``
-    or ``write_stata`` when the labels have to travel with the data.
+    XPT carries variable labels but no value labels; a warning names the
+    variables whose value labels are not written.
     """
     if format is not None:
         warn_no_sample(f"format={format!r} is ignored: ReadStat writes SAS Transport (XPT) only.")
@@ -113,13 +113,12 @@ def _write_sas(
         warn_no_sample("encoding is ignored by the XPT writer.")
 
     meta = build_metadata_for_export(df, store)
-    labelled = {*meta["var_labels"], *meta["value_labels"]}
-    if labelled:
+    if meta["value_labels"]:
         warn_no_sample(
-            f"SAS Transport carries no variable or value labels, so metadata for "
-            f"{', '.join(sorted(labelled))} is not written. Use write_spss or "
-            f"write_stata to keep labels with the data."
+            f"SAS Transport carries no value labels, so those of "
+            f"{', '.join(sorted(meta['value_labels']))} are not written. Use write_spss or "
+            f"write_stata to keep them with the data."
         )
 
     table = to_writer_table(df)
-    sio.write_xpt(table, str(path), **kwargs)
+    sio.write_xpt(table, str(path), var_labels=meta["var_labels"] or None, **kwargs)

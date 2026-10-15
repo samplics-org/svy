@@ -293,10 +293,12 @@ def read_sav(
     coerce_temporals: bool = True,
     infer_temporal_formats: bool = False,
     zap_empty_str: bool = False,
+    normalize_names: bool = True,
 ) -> Tuple[pl.DataFrame, Dict[str, Any]]:
     """Fast, file-like–safe SPSS .sav reader (ReadStat backend).
 
     A ``.zip`` path is read from its first ``.sav`` (else ``.zsav``) member.
+    ``normalize_names=False`` keeps variable names as the file has them.
     """
     n_max = _normalize_n_max(n_max)
 
@@ -336,7 +338,8 @@ def read_sav(
         meta["n_rows"] = 0
 
     # Normalize names BEFORE downstream processing
-    df, meta = _normalize_names(df, meta)
+    if normalize_names:
+        df, meta = _normalize_names(df, meta)
 
     if coerce_temporals:
         from svy_io.temporals import coerce_spss_temporals
@@ -364,6 +367,7 @@ def read_por(
     coerce_temporals: bool = False,
     infer_temporal_formats: bool = False,
     zap_empty_str: bool = False,
+    normalize_names: bool = True,
 ) -> Tuple[pl.DataFrame, Dict[str, Any]]:
     """Fast, file-like–safe SPSS .por reader (ReadStat backend).
 
@@ -405,7 +409,8 @@ def read_por(
         df = df.head(0)
         meta["n_rows"] = 0
 
-    df, meta = _normalize_names(df, meta)
+    if normalize_names:
+        df, meta = _normalize_names(df, meta)
 
     if coerce_temporals:
         from svy_io.temporals import coerce_spss_temporals
@@ -433,6 +438,7 @@ def read_spss(
     coerce_temporals: bool = False,
     infer_temporal_formats: bool = False,
     zap_empty_str: bool = False,
+    normalize_names: bool = True,
 ) -> Tuple[pl.DataFrame, Dict[str, Any]]:
     """
     Auto-dispatch based on extension. Requires a real filesystem path since we
@@ -458,6 +464,7 @@ def read_spss(
                 coerce_temporals=coerce_temporals,
                 infer_temporal_formats=infer_temporal_formats,
                 zap_empty_str=zap_empty_str,
+                normalize_names=normalize_names,
             )
 
     if ext in (".sav", ".zsav"):
@@ -471,6 +478,7 @@ def read_spss(
             coerce_temporals=coerce_temporals,
             infer_temporal_formats=infer_temporal_formats,
             zap_empty_str=zap_empty_str,
+            normalize_names=normalize_names,
         )
     elif ext == ".por":
         return read_por(
@@ -483,6 +491,7 @@ def read_spss(
             coerce_temporals=coerce_temporals,
             infer_temporal_formats=infer_temporal_formats,
             zap_empty_str=zap_empty_str,
+            normalize_names=normalize_names,
         )
     else:
         raise ValueError(f"Unknown SPSS file extension: {ext}")

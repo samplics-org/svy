@@ -53,6 +53,7 @@ def _read_stata(
 
     # 2. Call Engine
     # 'columns' is applied here, after the read, and NOT passed to sio.
+    kwargs.setdefault("coerce_temporals", True)
     res = sio.read_stata(str(path), **kwargs)
 
     # 3. Normalize Result
@@ -84,6 +85,33 @@ def _read_stata(
     return df, raw_meta, file_info
 
 
+def _stata_temporals(df: pl.DataFrame) -> pl.DataFrame:
+    """Dates as days and datetimes/times as milliseconds from 1960-01-01, Stata's own units."""
+    exprs = []
+    for name, dtype in df.schema.items():
+        col = pl.col(name)
+        if dtype == pl.Date:
+            exprs.append((col - pl.date(1960, 1, 1)).dt.total_days())
+        elif isinstance(dtype, pl.Datetime):
+            naive = col.dt.replace_time_zone(None) if dtype.time_zone else col
+            exprs.append(
+                (naive - pl.datetime(1960, 1, 1)).dt.total_milliseconds().cast(pl.Float64)
+            )
+        elif dtype == pl.Time:
+            exprs.append((col.cast(pl.Int64) // 1_000_000).cast(pl.Float64))
+        elif isinstance(dtype, pl.Duration):
+            exprs.append(col.dt.total_milliseconds().cast(pl.Float64))
+    if not exprs:
+        return df
+    names = [name for name, dtype in df.schema.items() if dtype.is_temporal()]
+    # The Stata writer cannot set %td/%tc yet, so the values travel without their format.
+    warn_no_sample(
+        f"{', '.join(names)} are written as Stata dates (days, or milliseconds, from "
+        f"1960-01-01) without a date format; in Stata, `format {names[0]} %td` (or %tc) shows them as dates."
+    )
+    return df.with_columns(exprs)
+
+
 def _write_stata(
     df: pl.DataFrame,
     store: MetadataStore,
@@ -110,6 +138,7 @@ def _write_stata(
         File encoding (ignored for Stata).
     """
     meta = build_metadata_for_export(df, store)
+    df = _stata_temporals(df)
     table = to_writer_table(df)
 
     if encoding is not None:

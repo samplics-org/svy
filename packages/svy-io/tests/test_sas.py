@@ -301,10 +301,20 @@ def test_value_label_set_in_arrow_metadata():
 
 
 # @pytest.mark.skip(reason="read_xpt not implemented yet")
-def test_xpt_write_refuses_dates_rather_than_writing_missing(tmp_path):
-    df = pl.DataFrame({"date": [date.today()], "datetime": [datetime.now()]})
-    with pytest.raises(ValueError, match="date/time"):
-        write_xpt(df, tmp_path / "roundtrip.xpt")
+def test_xpt_roundtrips_dates_times_and_variable_labels(tmp_path):
+    path = tmp_path / "roundtrip.xpt"
+    df = pl.DataFrame(
+        {
+            "d": [date(2024, 1, 31), None],
+            "t": [datetime(2024, 1, 31, 12, 30, 5), None],
+            "x": [1.0, 2.0],
+        }
+    )
+    write_xpt(df, path, var_labels={"d": "Visit date"})
+    df2, meta = read_sas(path, coerce_temporals=True)
+    assert df2["d"].to_list() == [date(2024, 1, 31), None]
+    assert df2["t"].to_list() == [datetime(2024, 1, 31, 12, 30, 5), None]
+    assert next(v for v in meta["vars"] if v["name"] == "d")["label"] == "Visit date"
 
 
 @pytest.mark.skip(reason="write_xpt not implemented yet")
