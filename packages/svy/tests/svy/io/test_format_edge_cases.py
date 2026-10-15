@@ -1,0 +1,282 @@
+"""
+Edge cases through the real svy-io writers and readers, for SPSS, Stata and SAS Transport.
+
+Each test pins what a format keeps, what it cannot hold, and how svy says so.
+Known gaps are strict xfails, so fixing one turns its test red until the mark goes.
+"""
+
+from __future__ import annotations
+
+import math
+import warnings
+
+from datetime import date, datetime
+from pathlib import Path
+
+import polars as pl
+import pytest
+
+import svy
+
+from svy.errors.io_errors import IoError
+
+
+FORMATS = {
+    "sav": (svy.write_spss, svy.create_from_spss),
+    "dta": (svy.write_stata, svy.create_from_stata),
+    "xpt": (svy.write_sas, svy.create_from_xpt),
+}
+LABELLED = ["sav", "dta"]  # the XPT writer carries no labels
+
+FIXTURES = Path(__file__).resolve().parents[4] / "svy-io/tests/data"
+
+
+def _roundtrip(tmp_path, sample, fmt):
+    write, read = FORMATS[fmt]
+    path = tmp_path / f"t.{fmt}"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        write(sample, path)
+    return read(path), [str(w.message) for w in caught]
+
+
+def _labelled(df, var, labels):
+    return svy.Sample(df).set_value_labels(var, labels)
+
+
+# ---- values and missing values ----
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_numeric_nulls_survive(tmp_path, fmt):
+    df = pl.DataFrame({"x": [1.0, None, 3.0], "n": [1, None, 3]})
+    back, _ = _roundtrip(tmp_path, svy.Sample(df), fmt)
+    assert back.data["x"].to_list() == [1.0, None, 3.0]
+    assert back.data["n"].to_list() == [1, None, 3]
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_all_null_numeric_column_survives(tmp_path, fmt):
+    df = pl.DataFrame(
+        {"x": [None, None], "k": [1.0, 2.0]}, schema={"x": pl.Float64, "k": pl.Float64}
+    )
+    back, _ = _roundtrip(tmp_path, svy.Sample(df), fmt)
+    assert back.data["x"].to_list() == [None, None]
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_string_null_becomes_empty_string(tmp_path, fmt):
+    # None of the three formats has a missing value for text.
+    df = pl.DataFrame({"s": ["a", None, ""], "k": [1.0, 2.0, 3.0]})
+    back, _ = _roundtrip(tmp_path, svy.Sample(df), fmt)
+    assert back.data["s"].to_list() == ["a", "", ""]
+
+
+@pytest.mark.parametrize("fmt", ["sav", "dta"])
+def test_nan_and_infinity_become_missing(tmp_path, fmt):
+    df = pl.DataFrame({"x": [math.nan, math.inf, -math.inf, 1.0]})
+    back, _ = _roundtrip(tmp_path, svy.Sample(df), fmt)
+    assert back.data["x"].to_list() == [None, None, None, 1.0]
+
+
+def test_xpt_keeps_infinity_and_drops_nan(tmp_path):
+    df = pl.DataFrame({"x": [math.nan, math.inf, -math.inf, 1.0]})
+    back, _ = _roundtrip(tmp_path, svy.Sample(df), "xpt")
+    assert back.data["x"].to_list() == [None, math.inf, -math.inf, 1.0]
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_integers_beyond_int32_survive(tmp_path, fmt):
+    df = pl.DataFrame({"x": [2**31, 2**53, -(2**40)]})
+    back, _ = _roundtrip(tmp_path, svy.Sample(df), fmt)
+    assert back.data["x"].to_list() == [2**31, 2**53, -(2**40)]
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+@pytest.mark.xfail(strict=True, reason="a zero-row file does not round-trip in any format yet")
+def test_zero_rows_roundtrip(tmp_path, fmt):
+    df = pl.DataFrame({"x": []}, schema={"x": pl.Float64})
+    back, _ = _roundtrip(tmp_path, svy.Sample(df), fmt)
+    assert back.n_records == 0
+
+
+@pytest.mark.xfail(
+    strict=True, reason="XPT pads with blanks, so trailing all-blank rows read as padding"
+)
+def test_xpt_keeps_trailing_blank_rows(tmp_path):
+    df = pl.DataFrame({"s": ["a", ""]})
+    back, _ = _roundtrip(tmp_path, svy.Sample(df), "xpt")
+    assert back.n_records == 2
+
+
+# ---- dates ----
+
+
+@pytest.mark.parametrize("fmt", ["dta", "xpt"])
+def test_dates_are_refused_rather_than_written_missing(tmp_path, fmt):
+    df = pl.DataFrame({"d": [date(2024, 1, 31)], "t": [datetime(2024, 1, 31, 12, 30, 5)]})
+    with pytest.raises(IoError, match="date/time"):
+        _roundtrip(tmp_path, svy.Sample(df), fmt)
+
+
+@pytest.mark.xfail(strict=True, reason="svy reads SPSS dates as seconds since 1582, not as dates")
+def test_spss_dates_roundtrip_as_dates(tmp_path):
+    df = pl.DataFrame({"d": [date(2024, 1, 31)], "t": [datetime(2024, 1, 31, 12, 30, 5)]})
+    back, _ = _roundtrip(tmp_path, svy.Sample(df), "sav")
+    assert back.data["d"].to_list() == [date(2024, 1, 31)]
+
+
+# ---- names ----
+
+
+@pytest.mark.parametrize("fmt", ["dta", "xpt"])
+def test_mixed_case_names_survive(tmp_path, fmt):
+    df = pl.DataFrame({"HH1": [1.0], "Q1a": [2.0]})
+    back, _ = _roundtrip(tmp_path, svy.Sample(df), fmt)
+    assert back.data.columns == ["HH1", "Q1a"]
+
+
+@pytest.mark.xfail(
+    strict=True, reason="the SPSS reader lowercases names and turns dots into underscores"
+)
+def test_spss_mixed_case_names_survive(tmp_path):
+    df = pl.DataFrame({"HH1": [1.0], "Q1a": [2.0]})
+    back, _ = _roundtrip(tmp_path, svy.Sample(df), "sav")
+    assert back.data.columns == ["HH1", "Q1a"]
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_invalid_names_fail_with_a_readable_message(tmp_path, fmt):
+    df = pl.DataFrame({"q1.a": [1.0]})
+    with pytest.raises(IoError, match=r"(?i)name") as err:
+        _roundtrip(tmp_path, svy.Sample(df), fmt)
+    assert "rc=" not in str(err.value)
+
+
+def test_xpt_rejects_names_longer_than_32(tmp_path):
+    with pytest.raises(IoError, match="at most 32"):
+        _roundtrip(tmp_path, svy.Sample(pl.DataFrame({"v" * 40: [1.0]})), "xpt")
+
+
+def test_xpt_rejects_non_ascii_names(tmp_path):
+    with pytest.raises(IoError, match="ASCII"):
+        _roundtrip(tmp_path, svy.Sample(pl.DataFrame({"région": [1.0]})), "xpt")
+
+
+def test_write_failure_is_reported_as_a_write(tmp_path):
+    with pytest.raises(IoError) as err:
+        _roundtrip(tmp_path, svy.Sample(pl.DataFrame({"q1.a": [1.0]})), "dta")
+    assert err.value.code == "IO_WRITE_FAILED"
+
+
+# ---- value labels ----
+
+
+@pytest.mark.parametrize("fmt", LABELLED)
+@pytest.mark.parametrize(
+    "labels",
+    [
+        {-1: "inapplicable", 1: "yes", 2: "no"},  # negative reserve codes
+        {1: "uncodeable", 2: "uncodeable"},  # shared text
+        {1: "yes", 2: "no", 9: "don't know"},  # a code with no data
+        {1: "Côte d'Ivoire", 2: "São Tomé"},  # non-ASCII text
+    ],
+    ids=["negative", "shared-text", "unused-code", "non-ascii"],
+)
+def test_value_labels_survive(tmp_path, fmt, labels):
+    df = pl.DataFrame({"x": [-1.0, 1.0, 2.0]})
+    back, _ = _roundtrip(tmp_path, _labelled(df, "x", labels), fmt)
+    assert back.meta.value_labels["x"] == {str(k): v for k, v in labels.items()}
+
+
+@pytest.mark.parametrize("fmt", LABELLED)
+@pytest.mark.parametrize("key", [1, 1.0, "1"], ids=["int", "float", "text"])
+def test_label_codes_of_any_spelling_are_written(tmp_path, fmt, key):
+    df = pl.DataFrame({"x": [1.0, 2.0]})
+    back, _ = _roundtrip(tmp_path, _labelled(df, "x", {key: "yes"}), fmt)
+    assert back.meta.value_labels["x"] == {"1": "yes"}
+
+
+def test_spss_keeps_fractional_and_text_codes(tmp_path):
+    df = pl.DataFrame({"x": [1.5, 2.0], "s": ["a", "b"]})
+    sample = _labelled(df, "x", {1.5: "half", 2: "two"}).set_value_labels("s", {"a": "Alpha"})
+    back, _ = _roundtrip(tmp_path, sample, "sav")
+    assert back.meta.value_labels["x"] == {"1.5": "half", "2": "two"}
+    assert back.meta.value_labels["s"] == {"a": "Alpha"}
+
+
+def test_stata_skips_label_sets_it_cannot_hold_and_says_so(tmp_path):
+    df = pl.DataFrame({"x": [1.5, 2.0], "s": ["a", "b"], "ok": [1.0, 2.0]})
+    sample = (
+        _labelled(df, "x", {1.5: "half"})
+        .set_value_labels("s", {"a": "Alpha"})
+        .set_value_labels("ok", {1: "yes"})
+    )
+    back, warned = _roundtrip(tmp_path, sample, "dta")
+    assert back.meta.value_labels["ok"] == {"1": "yes"}
+    assert not back.meta.value_labels.get("x") and not back.meta.value_labels.get("s")
+    assert any("s, x" in w for w in warned)
+
+
+def test_xpt_says_labels_are_not_written(tmp_path):
+    sample = _labelled(pl.DataFrame({"x": [1.0]}), "x", {1: "yes"})
+    _, warned = _roundtrip(tmp_path, sample, "xpt")
+    assert any("not written" in w for w in warned)
+
+
+@pytest.mark.parametrize("fmt", LABELLED)
+def test_variable_labels_survive(tmp_path, fmt):
+    sample = svy.Sample(pl.DataFrame({"x": [1.0]})).set_var_label("x", "Région (déclarée)")
+    back, _ = _roundtrip(tmp_path, sample, fmt)
+    assert back.meta.var_labels["x"] == "Région (déclarée)"
+
+
+# ---- across formats, from files other software wrote ----
+
+
+@pytest.mark.skipif(not FIXTURES.is_dir(), reason="svy-io test data not available")
+@pytest.mark.parametrize("target", LABELLED)
+@pytest.mark.parametrize(
+    "source, reader",
+    [
+        ("spss/labelled-num.sav", svy.create_from_spss),
+        ("spss/labelled-str.sav", svy.create_from_spss),
+        ("spss/labelled-num-na.sav", svy.create_from_spss),
+        ("stata/types.dta", svy.create_from_stata),
+        ("stata/tagged-na-int.dta", svy.create_from_stata),
+        ("sas/hadley.xpt", svy.create_from_xpt),
+    ],
+)
+def test_read_then_write_keeps_data_and_writable_labels(tmp_path, source, reader, target):
+    original = reader(FIXTURES / source)
+    back, warned = _roundtrip(tmp_path, original, target)
+    assert back.n_records == original.n_records
+    assert [c.lower() for c in back.data.columns] == [c.lower() for c in original.data.columns]
+    skipped = " ".join(warned)
+    for var, labels in original.meta.value_labels.items():
+        if labels and var not in skipped:
+            kept = back.meta.value_labels.get(var) or back.meta.value_labels.get(var.lower())
+            assert kept == labels, var
+
+
+@pytest.mark.skipif(not FIXTURES.is_dir(), reason="svy-io test data not available")
+def test_xpt_ibm_denormal_zero_reads_as_zero():
+    # Written by SAS: NHANES stores a zero phlebotomy weight as an IBM denormal.
+    w = svy.read_xpt(FIXTURES / "sas/nhanes_ghb_l.xpt")["WTPH2YR"]
+    assert (w == 0).sum() == 449
+    assert w.min() == 0
+
+
+@pytest.mark.skipif(not FIXTURES.is_dir(), reason="svy-io test data not available")
+@pytest.mark.parametrize(
+    "source, read",
+    [
+        ("stata/tagged-na-double.dta", svy.read_stata),
+        ("stata/tagged-na-int.dta", svy.read_stata),
+        ("sas/tagged-na.sas7bdat", svy.read_sas),
+    ],
+)
+def test_tagged_missings_read_as_nulls(source, read):
+    x = read(FIXTURES / source)["x"]
+    assert x.dtype == pl.Float64
+    assert x.null_count() > 0
