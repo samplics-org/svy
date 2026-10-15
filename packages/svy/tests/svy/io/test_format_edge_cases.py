@@ -26,7 +26,7 @@ FORMATS = {
     "dta": (svy.write_stata, svy.create_from_stata),
     "xpt": (svy.write_sas, svy.create_from_xpt),
 }
-LABELLED = ["sav", "dta"]  # the XPT writer carries no labels
+LABELLED = ["sav", "dta"]  # XPT carries variable labels only
 
 FIXTURES = Path(__file__).resolve().parents[4] / "svy-io/tests/data"
 
@@ -112,36 +112,47 @@ def test_xpt_keeps_trailing_blank_rows(tmp_path):
 # ---- dates ----
 
 
-@pytest.mark.parametrize("fmt", ["dta", "xpt"])
-def test_dates_are_refused_rather_than_written_missing(tmp_path, fmt):
-    df = pl.DataFrame({"d": [date(2024, 1, 31)], "t": [datetime(2024, 1, 31, 12, 30, 5)]})
-    with pytest.raises(IoError, match="date/time"):
-        _roundtrip(tmp_path, svy.Sample(df), fmt)
+DATED = pl.DataFrame(
+    {"d": [date(2024, 1, 31), None], "t": [datetime(2024, 1, 31, 12, 30, 5), None]}
+)
 
 
-@pytest.mark.xfail(strict=True, reason="svy reads SPSS dates as seconds since 1582, not as dates")
-def test_spss_dates_roundtrip_as_dates(tmp_path):
-    df = pl.DataFrame({"d": [date(2024, 1, 31)], "t": [datetime(2024, 1, 31, 12, 30, 5)]})
-    back, _ = _roundtrip(tmp_path, svy.Sample(df), "sav")
-    assert back.data["d"].to_list() == [date(2024, 1, 31)]
+@pytest.mark.parametrize("fmt", ["sav", "xpt"])
+def test_dates_roundtrip_as_dates(tmp_path, fmt):
+    back, _ = _roundtrip(tmp_path, svy.Sample(DATED), fmt)
+    assert back.data["d"].to_list() == [date(2024, 1, 31), None]
+    assert back.data["t"].to_list() == [datetime(2024, 1, 31, 12, 30, 5), None]
+
+
+def test_stata_keeps_date_values_as_stata_numbers_and_says_so(tmp_path):
+    back, warned = _roundtrip(tmp_path, svy.Sample(DATED), "dta")
+    days = (date(2024, 1, 31) - date(1960, 1, 1)).days
+    ms = (datetime(2024, 1, 31, 12, 30, 5) - datetime(1960, 1, 1)).total_seconds() * 1000
+    assert back.data["d"].to_list() == [days, None]
+    assert back.data["t"].to_list() == [ms, None]
+    assert any("%td" in w for w in warned)
+
+
+@pytest.mark.skipif(not FIXTURES.is_dir(), reason="svy-io test data not available")
+@pytest.mark.parametrize(
+    "source, read, column, first",
+    [
+        ("spss/datetime.sav", svy.read_spss, "date", date(2014, 9, 22)),
+        ("stata/datetime-d.dta", svy.read_stata, "date", date(2015, 11, 2)),
+        ("sas/datetime.sas7bdat", svy.read_sas, "VAR2", date(2015, 2, 2)),
+    ],
+)
+def test_dates_in_files_read_as_dates(source, read, column, first):
+    assert read(FIXTURES / source)[column][0] == first
 
 
 # ---- names ----
 
 
-@pytest.mark.parametrize("fmt", ["dta", "xpt"])
+@pytest.mark.parametrize("fmt", FORMATS)
 def test_mixed_case_names_survive(tmp_path, fmt):
     df = pl.DataFrame({"HH1": [1.0], "Q1a": [2.0]})
     back, _ = _roundtrip(tmp_path, svy.Sample(df), fmt)
-    assert back.data.columns == ["HH1", "Q1a"]
-
-
-@pytest.mark.xfail(
-    strict=True, reason="the SPSS reader lowercases names and turns dots into underscores"
-)
-def test_spss_mixed_case_names_survive(tmp_path):
-    df = pl.DataFrame({"HH1": [1.0], "Q1a": [2.0]})
-    back, _ = _roundtrip(tmp_path, svy.Sample(df), "sav")
     assert back.data.columns == ["HH1", "Q1a"]
 
 
@@ -218,13 +229,13 @@ def test_stata_skips_label_sets_it_cannot_hold_and_says_so(tmp_path):
     assert any("s, x" in w for w in warned)
 
 
-def test_xpt_says_labels_are_not_written(tmp_path):
+def test_xpt_says_value_labels_are_not_written(tmp_path):
     sample = _labelled(pl.DataFrame({"x": [1.0]}), "x", {1: "yes"})
     _, warned = _roundtrip(tmp_path, sample, "xpt")
     assert any("not written" in w for w in warned)
 
 
-@pytest.mark.parametrize("fmt", LABELLED)
+@pytest.mark.parametrize("fmt", FORMATS)
 def test_variable_labels_survive(tmp_path, fmt):
     sample = svy.Sample(pl.DataFrame({"x": [1.0]})).set_var_label("x", "Région (déclarée)")
     back, _ = _roundtrip(tmp_path, sample, fmt)

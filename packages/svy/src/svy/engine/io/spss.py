@@ -39,6 +39,8 @@ def _read_spss(
         - File info dict
     """
     # 1. Call Engine (Capture generic result, DO NOT unpack here)
+    kwargs.setdefault("coerce_temporals", True)
+    kwargs.setdefault("normalize_names", False)
     res = sio.read_spss(str(path), encoding=encoding, **kwargs)
 
     # 2. Normalize Result (Handle 2-tuple vs 3-tuple vs Dict)
