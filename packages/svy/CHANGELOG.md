@@ -19,6 +19,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **`write_stata` failed on label sets Stata cannot hold** (fractional or text codes, as SPSS files carry). It writes the rest and warns which sets were skipped.
 - **Every kind of missing reads as a null.** Stata's `.a`–`.z` arrived as an Object column of `TaggedNA` that could not be estimated or written, and SAS's `.A`–`.Z` as NaN, which `drop_nulls` keeps.
 - **Write failures were reported as `IO_READ_FAILED`.** They are now `IO_WRITE_FAILED`.
+- **A sample with no rows wrote an empty file** that no reader could open. `write_spss`, `write_stata` and `write_sas` now write its columns.
+- **`write_sas` warns when the last rows are blank in every text column.** XPT cannot tell them from padding, so they do not read back.
 
 ## [0.33.1] — 2026-10-12
 

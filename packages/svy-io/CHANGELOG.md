@@ -13,6 +13,7 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 ### Fixed
 
+- **A frame with no rows wrote a 0-byte file.** `write_sav`, `write_dta` and `write_xpt` now write its columns with no rows.
 - **`write_sav` dropped labels and missings without a word.** Labels with non-text codes and missings keyed `na_values` were ignored; malformed entries and unknown columns now raise.
 - **`write_dta` rejected labels read from a Stata or SPSS file**, whose codes arrive as text.
 - **Invalid names failed with a ReadStat code (`rc=26`).** `write_dta` checks Stata 14+ names and `write_xpt` checks XPT names (length by version, ASCII) and says what is wrong.

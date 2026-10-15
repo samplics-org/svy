@@ -93,20 +93,26 @@ def test_integers_beyond_int32_survive(tmp_path, fmt):
 
 
 @pytest.mark.parametrize("fmt", FORMATS)
-@pytest.mark.xfail(strict=True, reason="a zero-row file does not round-trip in any format yet")
 def test_zero_rows_roundtrip(tmp_path, fmt):
-    df = pl.DataFrame({"x": []}, schema={"x": pl.Float64})
+    df = pl.DataFrame({"x": [], "s": []}, schema={"x": pl.Float64, "s": pl.String})
     back, _ = _roundtrip(tmp_path, svy.Sample(df), fmt)
     assert back.n_records == 0
+    assert back.data.columns == ["x", "s"]
 
 
-@pytest.mark.xfail(
-    strict=True, reason="XPT pads with blanks, so trailing all-blank rows read as padding"
-)
-def test_xpt_keeps_trailing_blank_rows(tmp_path):
-    df = pl.DataFrame({"s": ["a", ""]})
-    back, _ = _roundtrip(tmp_path, svy.Sample(df), "xpt")
+@pytest.mark.parametrize("width", [1, 100])
+def test_xpt_drops_trailing_blank_rows_and_says_so(tmp_path, width):
+    df = pl.DataFrame({"s": ["a" * width, "", None, "b", " ", None]})
+    back, warned = _roundtrip(tmp_path, svy.Sample(df), "xpt")
+    assert back.n_records == 4
+    assert any("last 2 row(s)" in w for w in warned)
+
+
+def test_xpt_keeps_trailing_rows_with_a_number(tmp_path):
+    df = pl.DataFrame({"s": ["a", ""], "x": [1.0, None]})
+    back, warned = _roundtrip(tmp_path, svy.Sample(df), "xpt")
     assert back.n_records == 2
+    assert not any("row(s)" in w for w in warned)
 
 
 # ---- dates ----
