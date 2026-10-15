@@ -870,3 +870,16 @@ def test_write_sav_overlong_string_errors_up_front(tmp_path):
     with pytest.raises(Exception, match="2000"):
         write_sav(df, target)
     assert not target.exists()
+
+
+def test_user_na_accepts_duplicate_label_text(tmp_path):
+    path = tmp_path / "dup.sav"
+    write_sav(
+        pl.DataFrame({"occ": [1.0, 2.0, 99.0]}),
+        path,
+        value_labels=[{"col": "occ", "labels": {"1": "uncodeable", "2": "uncodeable", "99": "no answer"}}],
+        user_missing=[{"col": "occ", "values": [99.0]}],
+    )
+    df, meta = read_sav(path, user_na=True)
+    assert df["occ"].to_list() == [1.0, 2.0, 99.0]
+    assert meta["labelled_columns"]["occ"].labels[2] == "uncodeable"
