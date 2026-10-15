@@ -2,21 +2,27 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
 
 import polars as pl
 
+from svy.core.warnings import warn_no_sample
 from svy.metadata import MetadataStore
 
 from .core import (
+    _canonical_code,
+    build_metadata_for_export,
     to_polars,
     to_writer_table,
 )
 
 
 log = logging.getLogger(__name__)
+
+_DTA_CODE_MIN, _DTA_CODE_MAX = -2147483647, 2147483620  # int32, minus . and .a-.z
 
 try:
     import svy_io as sio
@@ -103,35 +109,37 @@ def _write_stata(
     encoding : str | None
         File encoding (ignored for Stata).
     """
-    # 1. Prepare Metadata
-    var_labels: Dict[str, str] = {}
-    value_labels: Dict[str, Dict[Any, Any]] = {}
-
-    for var in df.columns:
-        meta = store.get(var)
-        if meta is not None:
-            if meta.label:
-                var_labels[var] = str(meta.label)
-
-            # Get value labels (direct or resolved from scheme)
-            resolved = store._resolve(var)
-            if resolved.has_value_labels:
-                value_labels[var] = resolved.labels
-
-    # 2. Prepare Table
+    meta = build_metadata_for_export(df, store)
     table = to_writer_table(df)
 
-    # 3. Handle Encoding
     if encoding is not None:
         log.warning("Stata engine does not support 'encoding'. It will be ignored.")
 
-    # 4. Call Engine
-    # We pass var_labels/value_labels instead of 'metadata'
+    # Stata labels integer codes of numeric variables only, below its missing-value
+    # codes; SPSS also labels text and fractional codes, so a converted file can carry
+    # sets Stata cannot hold.
+    unfit = sorted(
+        var
+        for var, labels in meta["value_labels"].items()
+        if not df.schema[var].is_numeric()
+        or not all(
+            re.fullmatch(r"-?\d+", code := _canonical_code(k))
+            and _DTA_CODE_MIN <= int(code) <= _DTA_CODE_MAX
+            for k in labels
+        )
+    )
+    if unfit:
+        warn_no_sample(
+            f"Stata labels integer codes of numeric variables only, so value labels for "
+            f"{', '.join(unfit)} are not written. Use write_spss to keep them."
+        )
+        meta["value_labels"] = {v: m for v, m in meta["value_labels"].items() if v not in unfit}
+
     sio.write_stata(
         table,
         str(path),
-        var_labels=var_labels if var_labels else None,
-        value_labels=value_labels if value_labels else None,
+        var_labels=meta["var_labels"] or None,
+        value_labels=meta["value_labels"] or None,
         version=version if version is not None else 15,
         **kwargs,
     )

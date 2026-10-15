@@ -10,6 +10,7 @@ from svy.core.warnings import warn_no_sample
 from svy.metadata import MetadataStore
 
 from .core import (
+    build_metadata_for_export,
     to_polars,
     to_writer_table,
 )
@@ -111,9 +112,8 @@ def _write_sas(
     if encoding is not None:
         warn_no_sample("encoding is ignored by the XPT writer.")
 
-    labelled = [
-        v for v in df.columns if (m := store.get(v)) is not None and (m.label or m.value_labels)
-    ]
+    meta = build_metadata_for_export(df, store)
+    labelled = {*meta["var_labels"], *meta["value_labels"]}
     if labelled:
         warn_no_sample(
             f"SAS Transport carries no variable or value labels, so metadata for "

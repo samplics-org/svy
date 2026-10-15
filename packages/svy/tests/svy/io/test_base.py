@@ -106,8 +106,7 @@ def test_write_spss_renders_metadata_and_calls_backend(tmp_path, dummy_svyio):
     # passed while the real call raised AttributeError.
     last = [c for c in dummy_svyio.calls if c.fn == "write_sav"][-1]
     assert last.kwargs["var_labels"]["sex"] == "Sex of respondent"
-    sex_labels = next(vl for vl in last.kwargs["value_labels"] if vl["col"] == "sex")
-    assert sex_labels["labels"] == {"1": "Male", "2": "Female"}
+    assert last.kwargs["value_labels"]["sex"] == {1: "Male", 2: "Female"}
 
 
 def test_write_stata_splits_metadata_correctly(tmp_path, dummy_svyio):

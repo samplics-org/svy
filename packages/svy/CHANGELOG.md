@@ -6,6 +6,13 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Fixed
+
+- **A Stata file read with svy could not be written back as Stata.** Value-label codes arrive as text and the Stata writer rejected them. `write_spss`, `write_stata` and `write_sas` now build labels in one place.
+- **`write_stata` failed on label sets Stata cannot hold** (fractional or text codes, as SPSS files carry). It writes the rest and warns which sets were skipped.
+- **Every kind of missing reads as a null.** Stata's `.a`–`.z` arrived as an Object column of `TaggedNA` that could not be estimated or written, and SAS's `.A`–`.Z` as NaN, which `drop_nulls` keeps.
+- **Write failures were reported as `IO_READ_FAILED`.** They are now `IO_WRITE_FAILED`.
+
 ## [0.33.1] — 2026-10-12
 
 ### Fixed
