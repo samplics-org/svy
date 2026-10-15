@@ -138,6 +138,9 @@ _MASK_COL = "__svy_where_mask__"
 # the fly. Carried through to Rust (not dropped), so it stays namespaced.
 _DOMAIN_MASK_COL = "__svy_domain_mask__"
 
+# Boolean `where` predicate handed back when ``apply_where=False``.
+_WHERE_COL = "__svy_where_domain__"
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Return type
@@ -159,6 +162,7 @@ class PreparedData:
     domain_col: str | None = None
     domain_val: str | None = None
     domain_mask_col: str | None = None
+    where_col: str | None = None
     by_col: str | None = None
     by_cols: list[str] = field(default_factory=list)
     singleton_method: str | None = None
@@ -400,7 +404,8 @@ def prepare_data(
         null) so it is not read as a level.
     apply_where : bool
         False when the caller builds its own domain from ``where`` (GLM):
-        ``where`` then only scopes the null check and keeps its columns.
+        ``where`` then only scopes the null check, and its predicate comes
+        back as ``where_col``, evaluated on the uncast columns.
 
     Returns
     -------
@@ -720,6 +725,16 @@ def prepare_data(
                 e = e | pl.col(c).is_nan() | pl.col(c).is_infinite()
             _miss_checks.append(e)
 
+    where_col = None
+    if where is not None and not apply_where:
+        where_col = _WHERE_COL
+        df = df.with_columns(
+            sample.estimation._compile_where_expr(where)
+            .fill_null(False)
+            .cast(pl.Boolean)
+            .alias(where_col)
+        )
+
     _zero_where = where is not None and apply_where
     if _zero_where or _miss_checks:
         _keep_exprs: list[pl.Expr] = []
@@ -913,6 +928,7 @@ def prepare_data(
         domain_col=domain_col,
         domain_val=domain_val,
         domain_mask_col=domain_mask_col,
+        where_col=where_col,
         by_col=by_col,
         by_cols=by_cols_list,
         singleton_method=singleton_method,
