@@ -6,6 +6,14 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+## [0.34.0] — 2026-10-15
+
+Requires [`svy-io`](../svy-io/CHANGELOG.md) 0.7.0, which carries the reader and writer changes below.
+
+### Added
+
+- **Python 3.15.** CI tests 3.11 to 3.15.
+
 ### Changed
 
 - **BREAKING: dates read as dates.** `read_spss`, `read_stata` and `read_sas` (and their `create_from_*`) return Date, Datetime and Duration columns; they returned the raw numbers (seconds since 1582, days since 1960). Pass `coerce_temporals=False` for the old result.
@@ -21,6 +29,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **Write failures were reported as `IO_READ_FAILED`.** They are now `IO_WRITE_FAILED`.
 - **A sample with no rows wrote an empty file** that no reader could open. `write_spss`, `write_stata` and `write_sas` now write its columns.
 - **`write_sas` warns when the last rows are blank in every text column.** XPT cannot tell them from padding, so they do not read back.
+- **`glm.fit(where=)` sees `y` with its own dtype.** `where` ran after `y` was cast to Float64, so `is_in` with an integer list on an integer `y` raised `InvalidOperationError` on polars 2.
 
 ## [0.33.1] — 2026-10-12
 
@@ -1195,7 +1204,8 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.33.1...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.34.0...HEAD
+[0.34.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.34.0
 [0.33.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.33.1
 [0.33.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.33.0
 [0.32.2]: https://github.com/samplics-org/svy/releases/tag/svy-v0.32.2

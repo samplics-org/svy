@@ -4,6 +4,12 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-10-15
+
+### Added
+
+- **Python 3.15.** CI tests 3.11 to 3.15; the abi3 wheels already install there.
+
 ### Changed
 
 - **`write_sav` and `write_dta` take value labels and user missings in one shape, through one normalizer.** `value_labels` may be `{col: {code: text}}` or `[{"col", "labels"}]` in both writers; `user_missing` takes the reader's `{col, na_values, na_range}` or `{col, values, range}`. Codes written as `"1"`, `1.0` or `1` are the same code, so labels read from any file write back.
@@ -142,7 +148,8 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 First release tracked in this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-io-v0.6.1...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-io-v0.7.0...HEAD
+[0.7.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.7.0
 [0.6.1]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.6.1
 [0.6.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.6.0
 [0.5.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.5.0
