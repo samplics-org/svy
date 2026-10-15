@@ -7,7 +7,7 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 ### Changed
 
 - **`write_sav` and `write_dta` take value labels and user missings in one shape, through one normalizer.** `value_labels` may be `{col: {code: text}}` or `[{"col", "labels"}]` in both writers; `user_missing` takes the reader's `{col, na_values, na_range}` or `{col, values, range}`. Codes written as `"1"`, `1.0` or `1` are the same code, so labels read from any file write back.
-- **`write_dta` refuses date and time columns.** Its native writer has no temporal encoding and wrote every value as missing.
+- **`write_dta` writes dates as `%td` and datetimes as `%tc`** (they were written as missing), so they read back as dates. Times of day and durations are still refused.
 - **`write_xpt` writes dates, datetimes and times** as SAS numbers with `DATE9.`, `DATETIME20.` and `TIME8.` formats (they were written as missing), and takes `var_labels`.
 - **`read_sav`, `read_por` and `read_spss` take `normalize_names`.** `False` keeps names as the file has them; the default still lowercases them and turns dots into underscores.
 

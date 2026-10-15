@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 import warnings
 
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 import polars as pl
@@ -117,20 +117,19 @@ DATED = pl.DataFrame(
 )
 
 
-@pytest.mark.parametrize("fmt", ["sav", "xpt"])
+@pytest.mark.parametrize("fmt", FORMATS)
 def test_dates_roundtrip_as_dates(tmp_path, fmt):
     back, _ = _roundtrip(tmp_path, svy.Sample(DATED), fmt)
     assert back.data["d"].to_list() == [date(2024, 1, 31), None]
     assert back.data["t"].to_list() == [datetime(2024, 1, 31, 12, 30, 5), None]
 
 
-def test_stata_keeps_date_values_as_stata_numbers_and_says_so(tmp_path):
-    back, warned = _roundtrip(tmp_path, svy.Sample(DATED), "dta")
-    days = (date(2024, 1, 31) - date(1960, 1, 1)).days
-    ms = (datetime(2024, 1, 31, 12, 30, 5) - datetime(1960, 1, 1)).total_seconds() * 1000
-    assert back.data["d"].to_list() == [days, None]
-    assert back.data["t"].to_list() == [ms, None]
-    assert any("%td" in w for w in warned)
+def test_stata_writes_times_as_milliseconds_and_says_so(tmp_path):
+    df = pl.DataFrame({"t": [time(12, 30, 5)], "dur": [timedelta(seconds=90)]})
+    back, warned = _roundtrip(tmp_path, svy.Sample(df), "dta")
+    assert back.data["t"].to_list() == [45_005_000.0]
+    assert back.data["dur"].to_list() == [90_000.0]
+    assert any("t, dur" in w for w in warned)
 
 
 @pytest.mark.skipif(not FIXTURES.is_dir(), reason="svy-io test data not available")

@@ -161,9 +161,13 @@ def normalize_user_missing_spec(user_missing: Any) -> List[Dict[str, Any]]:
     return out
 
 
-def reject_temporal_columns(df: Any, fmt: str) -> None:
+def reject_temporal_columns(df: Any, fmt: str, *, allow: tuple[type, ...] = ()) -> None:
     """Raise for date/time columns a writer cannot encode, instead of writing them as missing."""
-    temporal = [name for name, dtype in df.schema.items() if dtype.is_temporal()]
+    temporal = [
+        name
+        for name, dtype in df.schema.items()
+        if dtype.is_temporal() and not isinstance(dtype, allow)
+    ]
     if temporal:
         raise ValueError(
             f"The {fmt} writer cannot store date/time columns yet: {temporal}. "

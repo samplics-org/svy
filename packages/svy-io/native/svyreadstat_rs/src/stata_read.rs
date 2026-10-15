@@ -39,7 +39,7 @@ fn dta_format(data_path: &str) -> Option<u32> {
 /// only a file that fails that check is read as readstat's Windows-1252
 /// default. The resolved encoding is reported in the metadata.
 #[inline]
-fn parse_dta_impl(
+pub(crate) fn parse_dta_impl(
     data_path: &str,
     rows_skip: usize,
     n_max: Option<usize>,

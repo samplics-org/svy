@@ -86,30 +86,21 @@ def _read_stata(
 
 
 def _stata_temporals(df: pl.DataFrame) -> pl.DataFrame:
-    """Dates as days and datetimes/times as milliseconds from 1960-01-01, Stata's own units."""
-    exprs = []
+    """Times and durations as milliseconds; Stata has no type for them. Dates go through as %td/%tc."""
+    exprs = {}
     for name, dtype in df.schema.items():
         col = pl.col(name)
-        if dtype == pl.Date:
-            exprs.append((col - pl.date(1960, 1, 1)).dt.total_days())
-        elif isinstance(dtype, pl.Datetime):
-            naive = col.dt.replace_time_zone(None) if dtype.time_zone else col
-            exprs.append(
-                (naive - pl.datetime(1960, 1, 1)).dt.total_milliseconds().cast(pl.Float64)
-            )
-        elif dtype == pl.Time:
-            exprs.append((col.cast(pl.Int64) // 1_000_000).cast(pl.Float64))
+        if dtype == pl.Time:
+            exprs[name] = (col.cast(pl.Int64) // 1_000_000).cast(pl.Float64)
         elif isinstance(dtype, pl.Duration):
-            exprs.append(col.dt.total_milliseconds().cast(pl.Float64))
+            exprs[name] = col.dt.total_milliseconds().cast(pl.Float64)
     if not exprs:
         return df
-    names = [name for name, dtype in df.schema.items() if dtype.is_temporal()]
-    # The Stata writer cannot set %td/%tc yet, so the values travel without their format.
     warn_no_sample(
-        f"{', '.join(names)} are written as Stata dates (days, or milliseconds, from "
-        f"1960-01-01) without a date format; in Stata, `format {names[0]} %td` (or %tc) shows them as dates."
+        f"{', '.join(exprs)} are written as milliseconds (since midnight, for times of day); "
+        "Stata has no time-of-day or duration type."
     )
-    return df.with_columns(exprs)
+    return df.with_columns(**exprs)
 
 
 def _write_stata(

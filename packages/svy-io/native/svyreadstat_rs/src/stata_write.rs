@@ -11,13 +11,14 @@ use std::os::raw::c_void;
 use std::path::Path;
 
 use arrow::array::{
-    Array, BooleanArray, DictionaryArray, Float32Array, Float64Array, Int8Array, Int16Array,
-    Int32Array, Int64Array, LargeStringArray, StringArray, StringViewArray, UInt8Array,
-    UInt16Array, UInt32Array, UInt64Array,
+    Array, BooleanArray, Date32Array, Date64Array, DictionaryArray, Float32Array, Float64Array,
+    Int8Array, Int16Array, Int32Array, Int64Array, LargeStringArray, StringArray, StringViewArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow::datatypes::{
-    DataType, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type,
-    UInt64Type,
+    DataType, Int8Type, Int16Type, Int32Type, Int64Type, TimeUnit, UInt8Type, UInt16Type,
+    UInt32Type, UInt64Type,
 };
 use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::record_batch::RecordBatch;
@@ -30,9 +31,10 @@ use readstat_sys::{
     readstat_label_set_t, readstat_set_data_writer,
     readstat_type_e_READSTAT_TYPE_DOUBLE as T_DOUBLE, readstat_type_e_READSTAT_TYPE_INT8 as T_INT8,
     readstat_type_e_READSTAT_TYPE_INT16 as T_INT16, readstat_type_e_READSTAT_TYPE_INT32 as T_INT32,
-    readstat_type_e_READSTAT_TYPE_STRING as T_STRING, readstat_type_t, readstat_variable_set_label,
-    readstat_variable_set_label_set, readstat_variable_t, readstat_writer_init,
-    readstat_writer_set_file_format_version, readstat_writer_set_file_label,
+    readstat_type_e_READSTAT_TYPE_STRING as T_STRING, readstat_type_t,
+    readstat_variable_set_format, readstat_variable_set_label, readstat_variable_set_label_set,
+    readstat_variable_t, readstat_writer_init, readstat_writer_set_file_format_version,
+    readstat_writer_set_file_label,
 };
 
 use crate::core::WriterGuard;
@@ -147,6 +149,51 @@ fn as_f64_opt(a: &dyn Array, row: usize) -> Option<f64> {
         Boolean => Some(if down!(BooleanArray) { 1.0 } else { 0.0 }),
         _ => None,
     }
+}
+
+const MS_PER_DAY: i64 = 86_400_000;
+const UNIX_MINUS_STATA_DAYS: i64 = 3_653;
+const UNIX_MINUS_STATA_MS: i64 = UNIX_MINUS_STATA_DAYS * MS_PER_DAY;
+
+/// Stata display format for a date (`%td`) or datetime (`%tc`) column.
+fn stata_temporal_format(dt: &DataType) -> Option<&'static str> {
+    match dt {
+        DataType::Date32 | DataType::Date64 => Some("%td"),
+        DataType::Timestamp(_, _) => Some("%tc"),
+        _ => None,
+    }
+}
+
+/// Days (`%td`) or milliseconds (`%tc`) since 1960-01-01. Timestamps are
+/// floored to the millisecond, Stata's resolution; a zoned one is its UTC instant.
+fn temporal_as_stata(a: &dyn Array, row: usize) -> Option<f64> {
+    if a.is_null(row) {
+        return None;
+    }
+    macro_rules! down {
+        ($T:ty) => {
+            a.as_any().downcast_ref::<$T>().unwrap().value(row)
+        };
+    }
+    let unix_ms = match a.data_type() {
+        DataType::Date32 => {
+            return Some((down!(Date32Array) as i64 + UNIX_MINUS_STATA_DAYS) as f64);
+        }
+        DataType::Date64 => {
+            let days = down!(Date64Array).div_euclid(MS_PER_DAY);
+            return Some((days + UNIX_MINUS_STATA_DAYS) as f64);
+        }
+        DataType::Timestamp(TimeUnit::Second, _) => down!(TimestampSecondArray) * 1_000,
+        DataType::Timestamp(TimeUnit::Millisecond, _) => down!(TimestampMillisecondArray),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            down!(TimestampMicrosecondArray).div_euclid(1_000)
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+            down!(TimestampNanosecondArray).div_euclid(1_000_000)
+        }
+        _ => return None,
+    };
+    Some((unix_ms + UNIX_MINUS_STATA_MS) as f64)
 }
 
 fn as_i64_opt(a: &dyn Array, row: usize) -> Option<i64> {
@@ -302,6 +349,11 @@ fn write_stata_minimal(
 
     let str_stats = compute_string_metadata(batches);
     let mut is_str_col: Vec<bool> = vec![false; ncols];
+    let is_temporal_col: Vec<bool> = schema
+        .fields()
+        .iter()
+        .map(|f| stata_temporal_format(f.data_type()).is_some())
+        .collect();
 
     for j in 0..ncols {
         let dt = batches[0].column(j).data_type();
@@ -359,6 +411,13 @@ fn write_stata_minimal(
                 "readstat_add_variable failed for '{}'",
                 field.name()
             ));
+        }
+
+        if let Some(fmt) = stata_temporal_format(field.data_type()) {
+            let c = CString::new(fmt)?;
+            unsafe {
+                readstat_variable_set_format(var, c.as_ptr());
+            }
         }
 
         if let Some(map) = var_labels {
@@ -522,7 +581,12 @@ fn write_stata_minimal(
                         ));
                     }
                 } else {
-                    if let Some(v) = as_f64_opt(arr.as_ref(), i) {
+                    let v = if is_temporal_col[j] {
+                        temporal_as_stata(arr.as_ref(), i)
+                    } else {
+                        as_f64_opt(arr.as_ref(), i)
+                    };
+                    if let Some(v) = v {
                         unsafe {
                             let rc = readstat_insert_double_value(writer, rvars[j], v);
                             if rc != 0 {
@@ -623,4 +687,98 @@ pub fn df_write_dta_file(
         value_labels.as_ref(),
     )
     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("df_write_dta_file: {}", e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{ArrayRef, Float64Array};
+    use arrow::datatypes::{Field, Schema};
+    use std::sync::Arc;
+
+    // 2024-01-31 and 2024-01-31 12:30:05.250, as Unix days and milliseconds.
+    const UNIX_DAYS: i32 = 19_753;
+    const UNIX_MS: i64 = UNIX_DAYS as i64 * MS_PER_DAY + 45_005_250;
+    const STATA_DAYS: f64 = 23_406.0;
+    const STATA_MS: f64 = 2_022_323_405_250.0;
+
+    #[test]
+    fn dates_and_datetimes_convert_to_days_and_ms_since_1960() {
+        let date = Date32Array::from(vec![
+            Some(UNIX_DAYS),
+            Some(-UNIX_MINUS_STATA_DAYS as i32),
+            None,
+        ]);
+        assert_eq!(temporal_as_stata(&date, 0), Some(STATA_DAYS));
+        assert_eq!(temporal_as_stata(&date, 1), Some(0.0));
+        assert_eq!(temporal_as_stata(&date, 2), None);
+
+        let date64 = Date64Array::from(vec![UNIX_DAYS as i64 * MS_PER_DAY]);
+        assert_eq!(temporal_as_stata(&date64, 0), Some(STATA_DAYS));
+
+        let arrays: [ArrayRef; 4] = [
+            Arc::new(TimestampSecondArray::from(vec![UNIX_MS / 1_000])),
+            Arc::new(TimestampMillisecondArray::from(vec![UNIX_MS])),
+            Arc::new(TimestampMicrosecondArray::from(vec![UNIX_MS * 1_000 + 999])),
+            Arc::new(
+                TimestampNanosecondArray::from(vec![UNIX_MS * 1_000_000 + 999_999])
+                    .with_timezone("UTC"),
+            ),
+        ];
+        let got: Vec<f64> = arrays
+            .iter()
+            .map(|a| temporal_as_stata(a.as_ref(), 0).unwrap())
+            .collect();
+        assert_eq!(got, [STATA_MS - 250.0, STATA_MS, STATA_MS, STATA_MS]);
+    }
+
+    #[test]
+    fn sub_millisecond_times_before_1970_floor_rather_than_round_toward_zero() {
+        let ts = TimestampMicrosecondArray::from(vec![-1]);
+        assert_eq!(
+            temporal_as_stata(&ts, 0),
+            Some((UNIX_MINUS_STATA_MS - 1) as f64)
+        );
+    }
+
+    #[test]
+    fn written_dates_read_back_with_td_and_tc_formats() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("d", DataType::Date32, true),
+            Field::new("t", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+            Field::new("x", DataType::Float64, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Date32Array::from(vec![Some(UNIX_DAYS), None])),
+                Arc::new(TimestampMicrosecondArray::from(vec![
+                    Some(UNIX_MS * 1_000),
+                    None,
+                ])),
+                Arc::new(Float64Array::from(vec![1.5, 2.5])),
+            ],
+        )
+        .unwrap();
+        let path = std::env::temp_dir().join(format!("svy_dta_dates_{}.dta", std::process::id()));
+        let path = path.to_str().unwrap();
+        write_stata_minimal(&[batch], path, None, 118, 2045, None, None).unwrap();
+        let (ipc, meta) =
+            crate::stata_read::parse_dta_impl(path, 0, None, None, None, false).unwrap();
+        let _ = std::fs::remove_file(path);
+
+        let fmts: Vec<Option<&str>> = meta.vars.iter().map(|v| v.fmt.as_deref()).collect();
+        assert_eq!(fmts[..2], [Some("%td"), Some("%tc")]);
+        assert_ne!(fmts[2], Some("%td"));
+
+        let back = &ipc_to_batches(&ipc).unwrap()[0];
+        let col = |j: usize| {
+            (0..2)
+                .map(|i| as_f64_opt(back.column(j).as_ref(), i))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(col(0), [Some(STATA_DAYS), None]);
+        assert_eq!(col(1), [Some(STATA_MS), None]);
+        assert_eq!(col(2), [Some(1.5), Some(2.5)]);
+    }
 }

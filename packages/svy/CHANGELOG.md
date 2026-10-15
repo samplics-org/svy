@@ -11,7 +11,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **BREAKING: dates read as dates.** `read_spss`, `read_stata` and `read_sas` (and their `create_from_*`) return Date, Datetime and Duration columns; they returned the raw numbers (seconds since 1582, days since 1960). Pass `coerce_temporals=False` for the old result.
 - **BREAKING: SPSS variable names are kept as written.** They were lowercased and had dots turned into underscores, unlike Stata and SAS names. Pass `normalize_names=True` for the old names.
 - **`write_sas` writes variable labels and dates.** Only value labels are left out, with a warning.
-- **`write_stata` writes dates as Stata days and milliseconds from 1960** with a warning, since it cannot set `%td`/`%tc` yet.
+- **`write_stata` writes dates as `%td` and datetimes as `%tc`**, so they read back as dates. Times of day and durations are written as milliseconds, with a warning.
 
 ### Fixed
 
