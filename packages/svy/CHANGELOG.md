@@ -10,6 +10,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 Requires [`svy-io`](../svy-io/CHANGELOG.md) 0.7.0, which carries the reader and writer changes below.
 
+### Added
+
+- **Python 3.15.** CI tests 3.11 to 3.15.
+
 ### Changed
 
 - **BREAKING: dates read as dates.** `read_spss`, `read_stata` and `read_sas` (and their `create_from_*`) return Date, Datetime and Duration columns; they returned the raw numbers (seconds since 1582, days since 1960). Pass `coerce_temporals=False` for the old result.
