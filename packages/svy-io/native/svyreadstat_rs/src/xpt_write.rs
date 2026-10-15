@@ -180,11 +180,10 @@ fn write_xpt_impl(
     let cursor = Cursor::new(ipc_bytes);
     let reader = FileReader::try_new(cursor, None)?;
     let schema = reader.schema();
-    let batches: Vec<_> = reader.collect::<std::result::Result<_, _>>()?;
-
+    let mut batches: Vec<_> = reader.collect::<std::result::Result<_, _>>()?;
+    // A zero-row frame arrives with no batches; the writer still needs its columns.
     if batches.is_empty() {
-        let _ = File::create(path)?;
-        return Ok(());
+        batches.push(RecordBatch::new_empty(schema.clone()));
     }
 
     let writer = unsafe { readstat_writer_init() };
