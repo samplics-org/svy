@@ -549,6 +549,9 @@ def write_dta(
 ) -> pl.DataFrame:
     """
     Write a Stata .dta using the Rust native writer (ReadStat backend).
+
+    Dates are written as %td days and datetimes as %tc milliseconds from 1960-01-01;
+    zoned datetimes keep their wall-clock time (``adjust_tz=True``) or their UTC time.
     """
     if isinstance(path, (str, os.PathLike)):
         out_path = str(Path(path).resolve())
@@ -577,7 +580,7 @@ def write_dta(
         value_labels=value_labels,
     )
     _ensure_strl_policy(df, version_human=version_human, strl_threshold=int(strl_threshold))
-    reject_temporal_columns(df, "Stata")
+    reject_temporal_columns(df, "Stata", allow=(pl.Date, pl.Datetime))
 
     nul_cols = _columns_with_interior_nul(df)
     if nul_cols:

@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 import warnings
 
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 import polars as pl
@@ -93,20 +93,26 @@ def test_integers_beyond_int32_survive(tmp_path, fmt):
 
 
 @pytest.mark.parametrize("fmt", FORMATS)
-@pytest.mark.xfail(strict=True, reason="a zero-row file does not round-trip in any format yet")
 def test_zero_rows_roundtrip(tmp_path, fmt):
-    df = pl.DataFrame({"x": []}, schema={"x": pl.Float64})
+    df = pl.DataFrame({"x": [], "s": []}, schema={"x": pl.Float64, "s": pl.String})
     back, _ = _roundtrip(tmp_path, svy.Sample(df), fmt)
     assert back.n_records == 0
+    assert back.data.columns == ["x", "s"]
 
 
-@pytest.mark.xfail(
-    strict=True, reason="XPT pads with blanks, so trailing all-blank rows read as padding"
-)
-def test_xpt_keeps_trailing_blank_rows(tmp_path):
-    df = pl.DataFrame({"s": ["a", ""]})
-    back, _ = _roundtrip(tmp_path, svy.Sample(df), "xpt")
+@pytest.mark.parametrize("width", [1, 100])
+def test_xpt_drops_trailing_blank_rows_and_says_so(tmp_path, width):
+    df = pl.DataFrame({"s": ["a" * width, "", None, "b", " ", None]})
+    back, warned = _roundtrip(tmp_path, svy.Sample(df), "xpt")
+    assert back.n_records == 4
+    assert any("last 2 row(s)" in w for w in warned)
+
+
+def test_xpt_keeps_trailing_rows_with_a_number(tmp_path):
+    df = pl.DataFrame({"s": ["a", ""], "x": [1.0, None]})
+    back, warned = _roundtrip(tmp_path, svy.Sample(df), "xpt")
     assert back.n_records == 2
+    assert not any("row(s)" in w for w in warned)
 
 
 # ---- dates ----
@@ -117,20 +123,19 @@ DATED = pl.DataFrame(
 )
 
 
-@pytest.mark.parametrize("fmt", ["sav", "xpt"])
+@pytest.mark.parametrize("fmt", FORMATS)
 def test_dates_roundtrip_as_dates(tmp_path, fmt):
     back, _ = _roundtrip(tmp_path, svy.Sample(DATED), fmt)
     assert back.data["d"].to_list() == [date(2024, 1, 31), None]
     assert back.data["t"].to_list() == [datetime(2024, 1, 31, 12, 30, 5), None]
 
 
-def test_stata_keeps_date_values_as_stata_numbers_and_says_so(tmp_path):
-    back, warned = _roundtrip(tmp_path, svy.Sample(DATED), "dta")
-    days = (date(2024, 1, 31) - date(1960, 1, 1)).days
-    ms = (datetime(2024, 1, 31, 12, 30, 5) - datetime(1960, 1, 1)).total_seconds() * 1000
-    assert back.data["d"].to_list() == [days, None]
-    assert back.data["t"].to_list() == [ms, None]
-    assert any("%td" in w for w in warned)
+def test_stata_writes_times_as_milliseconds_and_says_so(tmp_path):
+    df = pl.DataFrame({"t": [time(12, 30, 5)], "dur": [timedelta(seconds=90)]})
+    back, warned = _roundtrip(tmp_path, svy.Sample(df), "dta")
+    assert back.data["t"].to_list() == [45_005_000.0]
+    assert back.data["dur"].to_list() == [90_000.0]
+    assert any("t, dur" in w for w in warned)
 
 
 @pytest.mark.skipif(not FIXTURES.is_dir(), reason="svy-io test data not available")

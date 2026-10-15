@@ -6,6 +6,7 @@ import random
 
 from datetime import date as _date
 from datetime import datetime as _datetime
+from datetime import time as _time
 from pathlib import Path
 
 import polars as pl
@@ -239,10 +240,44 @@ def test_can_roundtrip_missing_values_as_much_as_possible(tmp_path):
     assert g3.to_list()[0] in ("", None)
 
 
-def test_write_refuses_dates_rather_than_writing_missing(tmp_path):
-    df = pl.DataFrame({"d": [_date(2010, 1, 1)], "ts": [_datetime(2010, 1, 1, 9)], "x": [1]})
+def test_dates_and_datetimes_roundtrip_with_td_and_tc(tmp_path):
+    ts = [_datetime(2024, 1, 31, 12, 30, 5, 250000), _datetime(1955, 6, 1, 23, 59), None]
+    df = pl.DataFrame(
+        {
+            "d": [_date(2024, 1, 31), _date(1955, 6, 1), None],
+            "ts_ns": pl.Series(ts, dtype=pl.Datetime("ns")),
+            "ts_ms": pl.Series(ts, dtype=pl.Datetime("ms")),
+            "x": [1, 2, 3],
+        }
+    )
+    path = tmp_path / "d.dta"
+    _write_dta(df, path, version=118)
+    back, meta = _read_dta(str(path), coerce_temporals=True)
+    assert {v["name"]: v["fmt"] for v in meta["vars"] if v["name"] != "x"} == {
+        "d": "%td",
+        "ts_ns": "%tc",
+        "ts_ms": "%tc",
+    }
+    assert back.schema["d"] == pl.Date
+    assert back["d"].to_list() == df["d"].to_list()
+    for name in ("ts_ns", "ts_ms"):
+        assert isinstance(back.schema[name], pl.Datetime)
+        assert back[name].to_list() == ts
+
+
+@pytest.mark.parametrize("adjust_tz, hour", [(True, 9), (False, 14)])
+def test_zoned_datetimes_keep_wall_clock_or_utc(tmp_path, adjust_tz, hour):
+    ts = pl.Series([_datetime(2024, 1, 31, 9)]).dt.replace_time_zone("America/New_York")
+    path = tmp_path / "tz.dta"
+    _write_dta(pl.DataFrame({"ts": ts}), path, version=118, adjust_tz=adjust_tz)
+    back, _ = _read_dta(str(path), coerce_temporals=True)
+    assert back["ts"].to_list() == [_datetime(2024, 1, 31, hour)]
+
+
+def test_write_refuses_times_rather_than_writing_missing(tmp_path):
+    df = pl.DataFrame({"t": [_time(9, 30)], "x": [1]})
     with pytest.raises(ValueError, match="date/time"):
-        _write_dta(df, tmp_path / "d.dta", version=118)
+        _write_dta(df, tmp_path / "t.dta", version=118)
 
 
 def test_file_label_roundtrips(tmp_path):

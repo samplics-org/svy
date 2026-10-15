@@ -61,16 +61,22 @@ unsafe extern "C" fn data_writer_cb(
 
 fn ipc_to_batches(buf: &[u8]) -> Result<Vec<RecordBatch>> {
     let mut batches = Vec::new();
-    if buf.starts_with(b"ARROW1") {
+    let schema = if buf.starts_with(b"ARROW1") {
         let mut fr = FileReader::try_new(Cursor::new(buf), None)?;
         for b in fr.by_ref() {
             batches.push(b?);
         }
+        fr.schema()
     } else {
         let mut sr = StreamReader::try_new(Cursor::new(buf), None)?;
         while let Some(res) = sr.next() {
             batches.push(res?);
         }
+        sr.schema()
+    };
+    // A zero-row frame arrives with no batches; the writers still need its columns.
+    if batches.is_empty() {
+        batches.push(RecordBatch::new_empty(schema));
     }
     Ok(batches)
 }
@@ -308,8 +314,7 @@ fn write_spss_minimal(
     value_labels: Option<&[ValueLabelsInfo]>,
 ) -> Result<()> {
     if batches.is_empty() {
-        let _ = File::create(out_path)?;
-        return Ok(());
+        return Err(anyhow!("no record batches to write"));
     }
 
     let writer = unsafe { readstat_writer_init() };

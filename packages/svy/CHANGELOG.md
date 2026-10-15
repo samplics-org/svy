@@ -11,7 +11,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **BREAKING: dates read as dates.** `read_spss`, `read_stata` and `read_sas` (and their `create_from_*`) return Date, Datetime and Duration columns; they returned the raw numbers (seconds since 1582, days since 1960). Pass `coerce_temporals=False` for the old result.
 - **BREAKING: SPSS variable names are kept as written.** They were lowercased and had dots turned into underscores, unlike Stata and SAS names. Pass `normalize_names=True` for the old names.
 - **`write_sas` writes variable labels and dates.** Only value labels are left out, with a warning.
-- **`write_stata` writes dates as Stata days and milliseconds from 1960** with a warning, since it cannot set `%td`/`%tc` yet.
+- **`write_stata` writes dates as `%td` and datetimes as `%tc`**, so they read back as dates. Times of day and durations are written as milliseconds, with a warning.
 
 ### Fixed
 
@@ -19,6 +19,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **`write_stata` failed on label sets Stata cannot hold** (fractional or text codes, as SPSS files carry). It writes the rest and warns which sets were skipped.
 - **Every kind of missing reads as a null.** Stata's `.a`–`.z` arrived as an Object column of `TaggedNA` that could not be estimated or written, and SAS's `.A`–`.Z` as NaN, which `drop_nulls` keeps.
 - **Write failures were reported as `IO_READ_FAILED`.** They are now `IO_WRITE_FAILED`.
+- **A sample with no rows wrote an empty file** that no reader could open. `write_spss`, `write_stata` and `write_sas` now write its columns.
+- **`write_sas` warns when the last rows are blank in every text column.** XPT cannot tell them from padding, so they do not read back.
 
 ## [0.33.1] — 2026-10-12
 

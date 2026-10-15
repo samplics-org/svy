@@ -23,6 +23,20 @@ except Exception as e:  # pragma: no cover
     raise ImportError("svy.engine.io requires 'svy-io' (pip install svy-io).") from e
 
 
+def _trailing_blank_rows(df: pl.DataFrame) -> int:
+    """Count the trailing rows XPT readers drop: text in every column, all spaces or null."""
+    text = (pl.String, pl.Categorical, pl.Enum)
+    if df.width == 0 or df.height == 0 or not all(isinstance(t, text) for t in df.dtypes):
+        return 0
+    blank = df.select(
+        pl.all_horizontal(
+            pl.col(c).cast(pl.String).str.strip_chars(" ").fill_null("") == "" for c in df.columns
+        )
+    ).to_series()
+    filled = (~blank).arg_true()
+    return df.height if filled.is_empty() else df.height - 1 - int(filled.max())
+
+
 def _read_sas(
     path: str | Path,
     *,
@@ -118,6 +132,13 @@ def _write_sas(
             f"SAS Transport carries no value labels, so those of "
             f"{', '.join(sorted(meta['value_labels']))} are not written. Use write_spss or "
             f"write_stata to keep them with the data."
+        )
+
+    blank = _trailing_blank_rows(df)
+    if blank:
+        warn_no_sample(
+            f"SAS Transport pads files with blanks, so the last {blank} row(s), blank in every "
+            f"column, will not read back. Use write_spss or write_stata to keep them."
         )
 
     table = to_writer_table(df)
