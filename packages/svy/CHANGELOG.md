@@ -6,10 +6,6 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
-## [0.34.0] — 2026-10-15
-
-Requires [`svy-io`](../svy-io/CHANGELOG.md) 0.7.0, which carries the reader and writer changes below.
-
 ### Changed
 
 - **BREAKING: dates read as dates.** `read_spss`, `read_stata` and `read_sas` (and their `create_from_*`) return Date, Datetime and Duration columns; they returned the raw numbers (seconds since 1582, days since 1960). Pass `coerce_temporals=False` for the old result.
@@ -1199,8 +1195,7 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.34.0...HEAD
-[0.34.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.34.0
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.33.1...HEAD
 [0.33.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.33.1
 [0.33.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.33.0
 [0.32.2]: https://github.com/samplics-org/svy/releases/tag/svy-v0.32.2
