@@ -170,6 +170,7 @@ _TBL_SLOTS: tuple[str, ...] = (
     "colvals",
     "findings",
     "share_of",
+    "units",
     "_frozen",
     # presentation-only fields (mutable through properties)
     "_decimals",
@@ -200,6 +201,7 @@ class Table:
     rowvals: Sequence[Category] | None
     colvals: Sequence[Category] | None
     share_of: Literal["total", "row", "col"]  # what each cell is a share of
+    units: Literal["proportion", "percent", "count"]
     _frozen: bool
     _decimals: int | dict[str, int] | None
     _print_width: int | None
@@ -220,6 +222,7 @@ class Table:
         metadata: "MetadataStore | None" = None,
         findings: Sequence[SvyWarning] = (),
         share_of: Literal["total", "row", "col"] = "total",
+        units: Literal["proportion", "percent", "count"] = "proportion",
     ) -> None:
         if not (0.0 < float(alpha) < 1.0):
             raise MethodError.invalid_range(
@@ -259,6 +262,7 @@ class Table:
         # What the call found that bears on the table (e.g. DOMAIN_SINGLETON_PSU).
         object.__setattr__(self, "findings", tuple(findings))
         object.__setattr__(self, "share_of", share_of)
+        object.__setattr__(self, "units", units)
         # presentation defaults (mutable through properties even when frozen)
         object.__setattr__(self, "_decimals", None)
         object.__setattr__(self, "_print_width", None)
@@ -652,6 +656,7 @@ class Table:
             metadata=pick(self._metadata, metadata),
             findings=self.findings,
             share_of=self.share_of,
+            units=self.units,
         )
 
     def update(self, **kw) -> Self:

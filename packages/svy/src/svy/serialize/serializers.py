@@ -9,18 +9,19 @@ attributes and convert types (numpy → list, StrEnum → str, etc.).
 
 from __future__ import annotations
 
+import copy
 import datetime as dt
 import math
 
 from enum import Enum
-from typing import Any, Callable, cast
+from typing import Any, Callable, Mapping, cast
 
 import msgspec
 import msgspec.inspect as mi
 import numpy as np
 
 from svy.categorical.table import Table
-from svy.categorical.ttest import TTestOneGroup, TTestTwoGroups
+from svy.categorical.ttest import TTestByResult, TTestOneGroup, TTestTwoGroups
 from svy.core import design_parts as _design_parts
 from svy.core.containers import ChiSquare
 from svy.core.describe import DescribeResult
@@ -35,6 +36,7 @@ from svy.serialize.structs import (
     _KIND_TO_STRUCT,
     CellEstData,
     ChiSquareData,
+    CoefPartData,
     ContrastData,
     ContrastEstData,
     DescribeResultData,
@@ -55,9 +57,12 @@ from svy.serialize.structs import (
     TableData,
     TableStatsData,
     TDistData,
+    TermData,
     TtestEstData,
+    TTestOneGroupByData,
     TTestOneGroupData,
     TTestStatsData,
+    TTestTwoGroupsByData,
     TTestTwoGroupsData,
     VarLabelsData,
 )
@@ -182,6 +187,7 @@ def _group_levels_to_data(g: Any) -> GroupLevelsData:
     return GroupLevelsData(
         var=g.var,
         levels=list(g.levels),
+        labels=list(g.labels) if g.labels is not None else None,
     )
 
 
@@ -230,7 +236,7 @@ def _table_stats_to_data(s: Any) -> TableStatsData:
     )
 
 
-def _glm_coef_to_data(c: Any) -> GLMCoefData:
+def _glm_coef_to_data(c: Any, dummies: dict[str, tuple[str, Any]] | None = None) -> GLMCoefData:
     return GLMCoefData(
         term=c.term,
         est=_f(c.est),
@@ -239,7 +245,43 @@ def _glm_coef_to_data(c: Any) -> GLMCoefData:
         uci=_f(c.uci),
         wald=_tdist_to_data(c.wald) if c.wald is not None else None,
         wald_adj=_tdist_to_data(c.wald_adj) if c.wald_adj is not None else None,
+        label=c.label,
+        parts=_coef_parts(c.term, dummies) if dummies is not None else None,
     )
+
+
+def _coef_parts(term: str, dummies: dict[str, tuple[str, Any]]) -> list[CoefPartData] | None:
+    """The (variable, level) factors of a term, from the fit's dummy map, not its name."""
+    if term == "_intercept_":
+        return None
+    parts = []
+    for name in term.split(":"):
+        var, level = dummies.get(name, (name, None))
+        parts.append(CoefPartData(variable=var, level=level))
+    return parts
+
+
+def _terms_to_data(term_info: dict) -> list[TermData]:
+    terms = []
+    for name, info in term_info.items():
+        if info.get("type") == "categorical":
+            labels = info.get("labels")
+            terms.append(
+                TermData(
+                    name=name,
+                    type="categorical",
+                    levels=list(info.get("levels") or []),
+                    reference=info.get("ref"),
+                    level_labels=(
+                        [LevelLabelData(code=k, label=str(v)) for k, v in labels.items()]
+                        if labels
+                        else None
+                    ),
+                )
+            )
+        else:
+            terms.append(TermData(name=name, type="continuous"))
+    return terms
 
 
 def _glm_stats_to_data(s: Any) -> GLMStatsData:
@@ -345,6 +387,23 @@ def _serialize_ttest_two_groups(result: TTestTwoGroups) -> TTestTwoGroupsData:
     )
 
 
+@_register(TTestByResult)
+def _serialize_ttest_by(result: TTestByResult) -> TTestOneGroupByData | TTestTwoGroupsByData:
+    """Serialize ``svy.categorical.ttest.TTestByResult``, by the kind of its members."""
+    common = dict(
+        y=result.y,
+        by=result.by,
+        alpha=_f(result.alpha),
+        where_clause=result.where_clause,
+    )
+    # Every member is one kind: two-group when the call had a group=.
+    if result.groups is not None or any(isinstance(r, TTestTwoGroups) for r in result):
+        return TTestTwoGroupsByData(
+            **common, results=[_serialize_ttest_two_groups(r) for r in result]
+        )
+    return TTestOneGroupByData(**common, results=[_serialize_ttest_one_group(r) for r in result])
+
+
 @_register(ChiSquare)
 def _serialize_chi_square(result: ChiSquare) -> ChiSquareData:
     """Serialize ``svy.core.containers.ChiSquare``."""
@@ -364,22 +423,30 @@ def _serialize_table(result: Table) -> TableData:
         rowvals=_list_or_none(result.rowvals),
         colvals=_list_or_none(result.colvals),
         share_of=result.share_of,
+        units=result.units,
     )
 
 
 @_register(GLMFit)
 def _serialize_glm_fit(result: GLMFit) -> GLMFitData:
     """Serialize ``svy.regression.glm.GLMFit``."""
+    term_info = result.term_info or {}
+    dummies = {
+        dummy: (var, level)
+        for var, info in term_info.items()
+        for dummy, level in (info.get("dummies") or [])
+    }
     return GLMFitData(
         y=result.y,
         family=result.family,
         link=result.link,
         stats=_glm_stats_to_data(result.stats),
-        coefs=[_glm_coef_to_data(c) for c in result.coefs],
+        coefs=[_glm_coef_to_data(c, dummies) for c in result.coefs],
         feature_names=list(result.feature_names),
         alpha=_f(result.alpha),
         where_clause=result.where_clause,
         offset=result.offset,
+        terms=_terms_to_data(term_info),
     )
 
 
@@ -452,7 +519,7 @@ def serialize(result: Any) -> ResultData | DesignData:
     result
         A ``Design`` (gives a ``DesignData``; see ``to_design``), or a svy
         result object: ``Estimate``, ``TTestOneGroup``,
-        ``TTestTwoGroups``, ``ChiSquare``, ``Table``, ``GLMFit``,
+        ``TTestTwoGroups``, ``TTestByResult``, ``ChiSquare``, ``Table``, ``GLMFit``,
         ``GLMPred``, ``DescribeResult``, or a fitted ``GLM`` wrapper.
 
     Returns
@@ -687,13 +754,34 @@ def from_json(data: bytes) -> ResultData | DesignData:
         If the payload has no ``kind`` field (code ``PAYLOAD_MISSING_KIND``)
         or an unrecognized one (code ``PAYLOAD_UNKNOWN_KIND``).
     """
-    raw = msgspec.json.decode(data)
+    return _decode(msgspec.json.decode(data), where="from_json")
+
+
+def from_dict(data: Mapping[str, Any]) -> ResultData | DesignData:
+    """
+    Decode a dict back into a ``Data`` struct: the output of ``to_dict``, or
+    ``to_json`` read by any JSON parser.
+
+    ``data`` is not modified.
+
+    Raises
+    ------
+    SerializationError
+        If the payload has no ``kind`` field (code ``PAYLOAD_MISSING_KIND``)
+        or an unrecognized one (code ``PAYLOAD_UNKNOWN_KIND``).
+    """
+    return _decode(copy.deepcopy(dict(data)), where="from_dict")
+
+
+def _decode(raw: dict[str, Any], *, where: str) -> ResultData | DesignData:
     kind = raw.get("kind")
     if kind is None:
-        raise SerializationError.missing_kind()
+        raise SerializationError.missing_kind(where=where)
     cls = _KIND_TO_STRUCT.get(kind)
     if cls is None:
-        raise SerializationError.unknown_kind(kind=kind, known=sorted(_KIND_TO_STRUCT))
+        raise SerializationError.unknown_kind(
+            kind=kind, known=sorted(_KIND_TO_STRUCT), where=where
+        )
     _put_special(raw, raw.pop(NONFINITE_FIELD, None) or {}, lambda tag, _: float(tag))
     temporal = raw.pop(TEMPORAL_FIELD, None) or {}
     data = msgspec.convert(_null_to_nan(raw, mi.type_info(cls)), type=cls)

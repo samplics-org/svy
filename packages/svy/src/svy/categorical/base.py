@@ -627,6 +627,7 @@ class Categorical:
             metadata=metadata,
             findings=findings,
             share_of=share_of,
+            units=_units.value.lower(),
         )
 
         if use_labels is not None:

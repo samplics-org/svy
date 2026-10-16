@@ -49,17 +49,22 @@ one builder per kind means the live and payload tables cannot drift.
 ### 2.3 msgspec.Struct for all structs
 
 Consistent with svy's existing patterns. Gives us `msgspec.json.encode/decode`
-for free and native tagged-union support via `tag`/`tag_field`.
+for free.
 
 ### 2.4 `kind`-tagged discriminated union
 
-Each top-level struct has a `kind` field (via msgspec's `tag_field="kind"`) so
-consumers can switch on the result type without introspection.
+Each top-level struct has a plain `kind: Literal[...]` field, registered by
+the `_kinded` decorator, so consumers can switch on the result type without
+introspection. It is not msgspec's `tag_field`: a tag is not an attribute of
+the decoded struct, and `kind` must be. `from_json` and `from_dict` pick the
+struct from `kind` themselves. Because of that, a field cannot hold a union of
+two top-level structs; a container of one kind of member (a t-test by domain)
+gets one kind per member type instead.
 
 ### 2.5 `schema_version` on top-level structs
 
 Every top-level struct carries `schema_version: str = SCHEMA_VERSION` where
-`SCHEMA_VERSION = "svy-result/0.8"`. Consumers can check the version to know
+`SCHEMA_VERSION = "svy-result/0.9"`. Consumers can check the version to know
 what fields to expect.
 
 **Versioning policy:** bump the minor version (0.1 → 0.2) when fields are added
@@ -100,6 +105,11 @@ ignore unknown fields.
 - `0.8` — `TableData.share_of` added: whether the cells are shares of the table
   total, their row or their column (`tabulate(share_of=)`). `"total"` when decoded
   from an older payload.
+- `0.9` — `TableData.units` (`"proportion"`, `"percent"` or `"count"`);
+  `ttest_one_group_by` and `ttest_two_groups_by` for `ttest(..., by=...)`;
+  `GLMFitData.terms` and `GLMCoefData.label` / `parts`, so a regression table
+  knows each coefficient's variable, level and reference without parsing names;
+  `GroupLevelsData.labels`. All optional: older payloads decode with `None`.
 
 ### 2.6 Sub-structs are untagged
 
@@ -119,7 +129,8 @@ Internal or large fields not needed for rendering, comparison, or reporting:
 | `Estimate`     | `domains`       | Internal domain tracking        |
 | `Estimate`     | `as_factor`     | Presentation flag               |
 | `GLMFit`       | `cov_matrix`    | Large ndarray; internal         |
-| `GLMFit`       | `term_info`     | Internal dict                   |
+
+`GLMFit.term_info` travels typed, as `GLMFitData.terms`.
 
 ### 2.8 GLM wrapper support
 
@@ -209,7 +220,7 @@ and of the covariance matrix.
 ## 4. Public API
 
 ```python
-from svy.serialize import serialize, to_json, to_dict, from_json, to_design, to_polars
+from svy.serialize import serialize, to_json, to_dict, from_json, from_dict, to_design, to_polars
 
 # Serialize a svy result object to a stable struct
 data = serialize(result)  # -> ResultData
@@ -223,6 +234,9 @@ d = to_dict(result)  # -> dict[str, Any]
 # Decode JSON bytes back to a struct
 data = from_json(json_bytes)  # -> ResultData
 
+# Decode a dict (to_dict, or to_json read by any JSON parser); input untouched
+data = from_dict(d)  # -> ResultData
+
 # The table the live result's to_polars() returns
 df = to_polars(data, row_index="row")  # -> pl.DataFrame
 ```
@@ -231,8 +245,8 @@ df = to_polars(data, row_index="row")  # -> pl.DataFrame
 
 ### 5.1 Top-level structs (kind-tagged, versioned)
 
-All top-level structs are `msgspec.Struct, tag_field="kind", kw_only=True,
-frozen=True` with `schema_version: str = SCHEMA_VERSION`.
+All top-level structs are `msgspec.Struct, kw_only=True, frozen=True` with a
+`kind` field (section 2.4) and `schema_version: str = SCHEMA_VERSION`.
 
 #### EstimateData (`kind = "estimate"`)
 
@@ -286,6 +300,19 @@ Source: `svy.categorical.ttest.TTestTwoGroups` (msgspec.Struct)
 | `estimates`    | `list[TtestEstData]`        | `estimates`      |
 | `stats`        | `TTestStatsData \| None`    | `stats`          |
 
+#### TTestOneGroupByData / TTestTwoGroupsByData (`kind = "ttest_one_group_by"` / `"ttest_two_groups_by"`)
+
+Source: `svy.categorical.ttest.TTestByResult`, by the type of its members.
+
+| Field          | Type                                   | Source attribute |
+| -------------- | -------------------------------------- | ---------------- |
+| `schema_version` | `str`                                | constant         |
+| `y`            | `str`                                  | `y`              |
+| `by`           | `str`                                  | `by`             |
+| `alpha`        | `float`                                | `alpha`          |
+| `where_clause` | `str \| None`                          | `where_clause`   |
+| `results`      | `list[TTestOneGroupData]` / `list[TTestTwoGroupsData]` | one per `by` level; its rows carry `by_level` |
+
 #### ChiSquareData (`kind = "chi_square"`)
 
 Source: `svy.core.containers.ChiSquare` (msgspec.Struct)
@@ -312,6 +339,8 @@ Source: `svy.categorical.table.Table` (not msgspec; `__slots__`)
 | `stats`        | `TableStatsData \| None`     | `stats`          |
 | `rowvals`      | `list[str \| int \| float \| bool] \| None` | `rowvals` |
 | `colvals`      | `list[str \| int \| float \| bool] \| None` | `colvals` |
+| `share_of`     | `str` (default `"total"`)    | `share_of`       |
+| `units`        | `str \| None`                | `units`          |
 
 #### GLMFitData (`kind = "glm_fit"`)
 
@@ -328,8 +357,10 @@ Source: `svy.regression.glm.GLMFit` (msgspec.Struct)
 | `feature_names` | `list[str]`           | `feature_names`    |
 | `alpha`         | `float` (default 0.05) | `alpha`           |
 | `where_clause`  | `str \| None`         | `where_clause`     |
+| `offset`        | `str \| None`         | `offset`           |
+| `terms`         | `list[TermData] \| None` | `term_info`     |
 
-Excluded: `cov_matrix`, `term_info`.
+Excluded: `cov_matrix`.
 
 #### GLMPredData (`kind = "glm_pred"`)
 
@@ -451,6 +482,7 @@ Source: `svy.categorical.ttest.GroupLevels`
 | ------- | ------------------------------------------ |
 | `var`   | `str`                                      |
 | `levels` | `list[str \| int \| float \| bool]`      |
+| `labels` | `list[str] \| None` (aligned with `levels`) |
 
 #### CellEstData
 
@@ -531,6 +563,21 @@ Source: `svy.regression.glm.GLMCoef`
 | `uci`      | `float`              |
 | `wald`     | `TDistData \| None`  |
 | `wald_adj` | `TDistData \| None`  |
+| `label`    | `str \| None` (printed name from value labels) |
+| `parts`    | `list[CoefPartData] \| None` (None for the intercept) |
+
+#### CoefPartData
+
+One factor of a coefficient's term, from the fit's dummy map rather than the
+column name (`yrs_school_x` cannot be split safely): `variable: str`,
+`level: str | int | float | bool | None` (None for a continuous factor). An
+interaction has one part per factor.
+
+#### TermData
+
+A predictor of the fit: `name: str`, `type: "continuous" | "categorical"`,
+`levels` (reference first) and `reference` for a categorical, and
+`level_labels: list[LevelLabelData] | None` when it has value labels.
 
 #### GLMStatsData
 

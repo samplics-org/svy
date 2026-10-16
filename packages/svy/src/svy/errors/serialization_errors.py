@@ -87,13 +87,14 @@ class SerializationError(SvyError):
     def missing_kind(
         cls,
         *,
-        hint: Optional[str] = "Only decode JSON produced by svy.serialize.to_json().",
+        where: str = "from_json",
+        hint: Optional[str] = "Only decode payloads from svy.serialize.to_json() or to_dict().",
     ) -> "SerializationError":
         return cls(
             title="Payload missing 'kind'",
-            detail="The JSON payload has no 'kind' discriminator, so its result type cannot be determined.",
+            detail="The payload has no 'kind' discriminator, so its result type cannot be determined.",
             code="PAYLOAD_MISSING_KIND",
-            where="from_json",
+            where=where,
             param="kind",
             hint=hint,
         )
@@ -104,6 +105,7 @@ class SerializationError(SvyError):
         *,
         kind: str,
         known: Sequence[str],
+        where: str = "from_json",
         hint: Optional[
             str
         ] = "The payload may come from a newer svy; upgrade svy or re-serialize.",
@@ -112,7 +114,7 @@ class SerializationError(SvyError):
             title="Unknown payload kind",
             detail=f"No payload struct is registered for kind '{kind}'.",
             code="PAYLOAD_UNKNOWN_KIND",
-            where="from_json",
+            where=where,
             param="kind",
             expected=list(known),
             got=kind,

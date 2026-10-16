@@ -34,7 +34,9 @@ from svy.serialize.structs import (
     GLMPredData,
     ResultData,
     TableData,
+    TTestOneGroupByData,
     TTestOneGroupData,
+    TTestTwoGroupsByData,
     TTestTwoGroupsData,
 )
 
@@ -104,6 +106,24 @@ def _ttest_two_groups(
     return _indexed(ttest_two_groups_frame(d, component, tidy=tidy), row_index)
 
 
+def _ttest_by(
+    d: TTestOneGroupByData | TTestTwoGroupsByData,
+    *,
+    row_index: str | None = None,
+    component: Literal["test", "estimates"] = "test",
+    tidy: bool = True,
+) -> pl.DataFrame:
+    member = _ttest_one_group if isinstance(d, TTestOneGroupByData) else _ttest_two_groups
+    frames, offset = [], 0
+    for r in d.results:
+        f = member(r, row_index=row_index, component=component, tidy=tidy)
+        if row_index and not f.is_empty():
+            f = f.with_columns(pl.col(row_index) + offset)
+        frames.append(f)
+        offset += len(r.diff if component == "test" else r.estimates)
+    return pl.concat(frames, how="diagonal") if frames else pl.DataFrame()
+
+
 def _table(d: TableData, *, row_index: str | None = None, tidy: bool = True) -> pl.DataFrame:
     return _indexed(table_frame(d, tidy=tidy), row_index)
 
@@ -136,6 +156,8 @@ _TABLES: dict[type, Callable[..., pl.DataFrame]] = {
     EstimateListData: _estimate_list,
     TTestOneGroupData: _ttest_one_group,
     TTestTwoGroupsData: _ttest_two_groups,
+    TTestOneGroupByData: _ttest_by,
+    TTestTwoGroupsByData: _ttest_by,
     TableData: _table,
     GLMFitData: _glm_fit,
     GLMPredData: _glm_pred,
@@ -157,7 +179,8 @@ def to_polars(data: ResultData, *, row_index: str | None = None, **options: Any)
         Name of a first column (``UInt32``) holding each table row's position
         in the payload's rows: ``estimates`` for an estimate, a table and a
         t-test's ``component="estimates"``, ``diff`` for a t-test's
-        ``component="test"``, ``coefs`` for a GLM fit, the prediction arrays
+        ``component="test"`` (counted through the members of a t-test by
+        domain), ``coefs`` for a GLM fit, the prediction arrays
         for a GLM prediction, and ``items`` for a describe result. For an estimate list it counts through
         the members' estimates in order. Estimate tables are sorted for
         display, so this column is the way back to a payload row.
