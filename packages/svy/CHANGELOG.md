@@ -11,10 +11,16 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **Joint predictive margins.** A tuple key in `GLM.margins(at=...)` sets several variables together, one row per cell: `at={("frailty", "insurance"): [("frail", "medicaid"), ...]}`. `None` as the value means every fitted level of a categorical, or every combination for a tuple key. The result has term `"frailty#insurance"` and one column per variable.
 - **Marginal effects at fixed values.** `variables=` with `at=` gives each effect with the `at` variables set to each cell, e.g. the effect of frailty within each insurance group. `variables=` was ignored when `at=` was given.
 - **`GLMMarginsList`.** `GLM.margins()` returns it wherever it returned a list. It is still a `list`; printing shows every table instead of object reprs, and `to_polars()` stacks the members into one frame.
+- **Serialized results carry what a report needs (`svy-result/0.9`).** A table records its `units` (`"proportion"`, `"percent"` or `"count"`, also on `Table`). `ttest(..., by=...)` serializes, as `ttest_one_group_by` or `ttest_two_groups_by`. A GLM fit carries its `terms` (type, levels, reference, value labels), and each coefficient its printed `label` and `parts`, the (variable, level) of each factor, so names like `sex_Male` need no parsing. All new fields are optional; older payloads decode with `None`.
+- **`svy.serialize.from_dict`** decodes the output of `to_dict`, or `to_json` read by any JSON parser.
 
 ### Changed
 
 - **BREAKING: `GLMMargins.values` is split into `at` and `contrast`.** `at` holds the value each variable was set to, one column per variable, for single-variable margins too; `contrast` holds the `"k - ref"` labels of a categorical effect. In `to_polars()` the `value` column becomes a column named after each variable, or `contrast`. A single result and a stacked list now share the same columns.
+
+### Fixed
+
+- **A serialized two-group t-test lost its group's value labels**, so its `to_polars()` had no `<group>_label` column.
 
 ## [0.34.0] — 2026-10-15
 

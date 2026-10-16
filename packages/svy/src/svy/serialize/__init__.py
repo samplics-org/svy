@@ -4,12 +4,13 @@ svy.serialize — stable, versioned serialization for svy result objects.
 
 Public API::
 
-    from svy.serialize import serialize, to_json, to_dict, from_json, to_design, to_polars
+    from svy.serialize import serialize, to_json, to_dict, from_json, from_dict, to_design, to_polars
 
     data = serialize(result)       # -> ResultData (kind-tagged struct)
     js   = to_json(result)         # -> bytes
     d    = to_dict(result)         # -> dict[str, Any]
     data = from_json(js)           # -> ResultData
+    data = from_dict(d)            # -> ResultData
     df   = to_polars(data)         # -> pl.DataFrame, as result.to_polars()
 
     js     = to_json(sample.design)        # a design, too
@@ -19,7 +20,14 @@ See ``DESIGN.md`` in this directory for the full design rationale and
 struct reference.
 """
 
-from svy.serialize.serializers import from_json, serialize, to_design, to_dict, to_json
+from svy.serialize.serializers import (
+    from_dict,
+    from_json,
+    serialize,
+    to_design,
+    to_dict,
+    to_json,
+)
 from svy.serialize.structs import (
     DESIGN_SCHEMA_VERSION,
     SCHEMA_VERSION,
@@ -27,6 +35,7 @@ from svy.serialize.structs import (
     BrrWgtsData,
     CellEstData,
     ChiSquareData,
+    CoefPartData,
     ContrastData,
     ContrastEstData,
     DescribeResultData,
@@ -51,9 +60,12 @@ from svy.serialize.structs import (
     TableData,
     TableStatsData,
     TDistData,
+    TermData,
     TtestEstData,
+    TTestOneGroupByData,
     TTestOneGroupData,
     TTestStatsData,
+    TTestTwoGroupsByData,
     TTestTwoGroupsData,
     VarLabelsData,
     WgtAdjustmentData,
@@ -77,6 +89,7 @@ __all__ = [
     "to_json",
     "to_dict",
     "from_json",
+    "from_dict",
     "to_polars",
     "to_design",
     # Constants
@@ -87,6 +100,8 @@ __all__ = [
     "EstimateListData",
     "TTestOneGroupData",
     "TTestTwoGroupsData",
+    "TTestOneGroupByData",
+    "TTestTwoGroupsByData",
     "ChiSquareData",
     "TableData",
     "GLMFitData",
@@ -105,6 +120,8 @@ __all__ = [
     "FDistData",
     "TDistData",
     "GLMCoefData",
+    "CoefPartData",
+    "TermData",
     "GLMStatsData",
     "VarLabelsData",
     "LevelLabelData",

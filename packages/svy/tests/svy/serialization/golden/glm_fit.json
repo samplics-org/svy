@@ -3,7 +3,14 @@
   "coefs": [
     {
       "est": 32000.0,
+      "label": null,
       "lci": 28000.0,
+      "parts": [
+        {
+          "level": null,
+          "variable": "intercept"
+        }
+      ],
       "se": 2000.0,
       "term": "intercept",
       "uci": 36000.0,
@@ -27,7 +34,7 @@
   "kind": "glm_fit",
   "link": "identity",
   "offset": null,
-  "schema_version": "svy-result/0.8",
+  "schema_version": "svy-result/0.9",
   "stats": {
     "aic": 6020.5,
     "bic": 6040.3,
@@ -52,6 +59,7 @@
       "value": 42.1
     }
   },
+  "terms": [],
   "where_clause": null,
   "y": "income"
 }

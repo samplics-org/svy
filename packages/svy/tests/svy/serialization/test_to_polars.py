@@ -95,6 +95,18 @@ CASES = [
         {},
     ),
     ("ttest_two_by", lambda s: s.categorical.ttest("y", group="sex", by="zone")[1], {}),
+    ("ttest_one_by_all", lambda s: s.categorical.ttest("y", mean_h0=50, by="region"), {}),
+    (
+        "ttest_one_by_all_est",
+        lambda s: s.categorical.ttest("y", mean_h0=50, by="region"),
+        {"component": "estimates"},
+    ),
+    ("ttest_two_by_all", lambda s: s.categorical.ttest("y", group="sex", by="zone"), {}),
+    (
+        "ttest_two_by_all_est",
+        lambda s: s.categorical.ttest("y", group="sex", by="zone"),
+        {"component": "estimates"},
+    ),
     ("table_one", lambda s: s.categorical.tabulate("region"), {}),
     ("table_two", lambda s: s.categorical.tabulate("region", "sex"), {}),
     ("table_two_raw", lambda s: s.categorical.tabulate("region", "sex"), {"tidy": False}),
@@ -147,6 +159,8 @@ def _payload_rows(data, opts) -> list:
     kind = data.kind
     if kind == "estimate_list":
         return [p for m in data.estimates for p in m.estimates]
+    if kind.endswith("_by"):
+        return [p for m in data.results for p in _payload_rows(m, opts)]
     if kind.startswith("ttest"):
         return data.estimates if opts.get("component") == "estimates" else data.diff
     if kind == "glm_fit":
@@ -204,7 +218,8 @@ def test_every_serializable_kind_has_a_table(sample):
 
     covered = {type(serialize(_live(c[1](sample)))) for c in CASES}
     assert covered == set(_TABLES)
-    assert len(_TABLES) == len(_SERIALIZERS)
+    # A t-test by domain serializes to one of two kinds.
+    assert len(_TABLES) == len(_SERIALIZERS) + 1
 
 
 def test_stacked_list_names_each_member(sample):
