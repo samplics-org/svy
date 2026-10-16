@@ -36,6 +36,10 @@ _ALIASES: dict[str, dict[str, str]] = {
         "mean": "svy.Sample(data, design).estimation.mean(...)",
         "read_excel": "polars.read_excel(...), then svy.Sample(...)",
     },
+    "GLMMargins": {
+        "values": "at (the values each variable was set to) or contrast (effect labels)",
+        "value": "at (the values each variable was set to) or contrast (effect labels)",
+    },
     "Sample": {
         "regression": "sample.glm",
         "model": "sample.glm",

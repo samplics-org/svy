@@ -337,7 +337,7 @@ class TestGLMMarginPredictive:
 
         margins = model.margins(at={"meals": [20, 50, 80]})
 
-        np.testing.assert_array_equal(margins.values, np.array([20, 50, 80]))
+        np.testing.assert_array_equal(margins.at["meals"], np.array([20, 50, 80]))
 
 
 # =============================================================================
@@ -480,7 +480,7 @@ class TestGLMMarginOutput:
         assert isinstance(df, pl.DataFrame)
         assert "margin" in df.columns
         assert "se" in df.columns
-        assert "value" in df.columns
+        assert "meals" in df.columns
         assert df.height == 3
 
     def test_to_dict(self, api_binary):
