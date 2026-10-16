@@ -1361,7 +1361,7 @@ class GLM:
 
     def margins(
         self,
-        at: dict[str, list] | None = None,
+        at: dict[str | tuple[str, ...], list | None] | None = None,
         variables: list[str] | None = None,
         alpha: float = 0.05,
     ) -> "GLMMargins | list[GLMMargins]":
