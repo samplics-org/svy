@@ -14,6 +14,7 @@ import msgspec
 import numpy as np
 import polars as pl
 
+from svy.errors.api_errors import guided_getattr
 from svy.regression.glm import delta_var, offset_values
 from svy.regression.links import link_inverse, link_mu_eta, link_mu_eta2
 from svy.ui.printing import make_panel, render_plain_table, render_rich_to_str, resolve_width
@@ -200,6 +201,60 @@ class GLMMargins(msgspec.Struct, frozen=True):
             ).print(self)
             return
         print(self.__plain_str__())
+
+
+class GLMMarginsList(list):
+    """
+    A list of :class:`GLMMargins` that prints every table and stacks into
+    one frame.
+
+    A plain ``list`` subclass: indexing, iteration, ``len()`` and
+    ``isinstance(result, list)`` behave as before.
+    """
+
+    __getattr__ = guided_getattr("GLMMarginsList", "GLMMarginsList")
+
+    __slots__ = ()
+
+    def _members(self) -> list[GLMMargins]:
+        return [m for m in self if isinstance(m, GLMMargins)]
+
+    def to_polars(self) -> pl.DataFrame:
+        """
+        Stack the members, one row per margin: ``term``, one column per
+        ``at`` variable (null where a member does not set it), the estimates,
+        then ``value`` (text when members mix numeric values and labels).
+        """
+        frames = [m.to_polars() for m in self._members()]
+        if not frames:
+            return pl.DataFrame()
+        df = pl.concat(frames, how="diagonal_relaxed")
+        stats = ["margin", "se", "lci", "uci", "value"]
+        at_cols = [c for c in df.columns if c not in ("term", *stats)]
+        return df.select("term", *at_cols, *[c for c in stats if c in df.columns])
+
+    def __plain_str__(self) -> str:
+        """Plain-text fallback when rich is not installed. Never calls str(self)."""
+        return "\n\n".join(m.__plain_str__() for m in self._members())
+
+    def __str__(self) -> str:
+        members = self._members()
+        if not members:
+            return super().__repr__()
+        try:
+            return render_rich_to_str(self, width=resolve_width(members[0]))
+        except Exception:
+            return self.__plain_str__()
+
+    # print([...]) and the REPL both reach for a list's repr.
+    __repr__ = __str__
+
+    def __rich_console__(self, console, options):
+        yield from self._members()
+
+    def show(self, *, use_rich: bool = True) -> None:
+        for m in self._members():
+            m.show(use_rich=use_rich)
 
 
 def _fmt_value(v: object) -> str:
@@ -766,7 +821,7 @@ def compute_average_marginal_effects(
     glm: GLM,
     variables: list[str] | None = None,
     alpha: float = 0.05,
-) -> list[GLMMargins]:
+) -> GLMMarginsList:
     """
     Compute average marginal effects: a derivative for a continuous
     predictor, a contrast per non-reference level for a categorical one.
@@ -799,7 +854,7 @@ def compute_average_marginal_effects(
             ame, se_val = _continuous_ame(glm, fit, data, var, pieces, **kw)
             m, s, values = np.array([ame]), np.array([se_val]), None
         results.append(_with_ci(var, m, s, df=df, alpha=alpha, margin_type="ame", values=values))
-    return results
+    return GLMMarginsList(results)
 
 
 def compute_conditional_effects(
@@ -807,7 +862,7 @@ def compute_conditional_effects(
     variables: list[str],
     specs: list[_AtSpec],
     alpha: float = 0.05,
-) -> list[GLMMargins]:
+) -> GLMMarginsList:
     """
     Average marginal effects with the `at` variables set to each cell on
     every fitted row: one result per (variable, at key), one row per cell
@@ -872,7 +927,7 @@ def compute_conditional_effects(
                     },
                 )
             )
-    return results
+    return GLMMarginsList(results)
 
 
 # =============================================================================
@@ -885,7 +940,7 @@ def margins(
     at: dict[str | tuple[str, ...], list | None] | None = None,
     variables: list[str] | None = None,
     alpha: float = 0.05,
-) -> GLMMargins | list[GLMMargins]:
+) -> GLMMargins | GLMMarginsList:
     """
     Compute marginal effects or predictive margins.
 
@@ -908,7 +963,7 @@ def margins(
 
     Returns
     -------
-    GLMMargins or list of GLMMargins
+    GLMMargins or GLMMarginsList
         Predictive margins: one per `at` key, a single result for one key.
         Marginal effects: always a list.
 
@@ -935,4 +990,4 @@ def margins(
         else compute_joint_predictive_margins(glm, spec, alpha)
         for spec in specs
     ]
-    return results[0] if len(results) == 1 else results
+    return results[0] if len(results) == 1 else GLMMarginsList(results)

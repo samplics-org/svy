@@ -30,8 +30,9 @@ import pytest
 
 from svy.core.sample import Design, Sample
 from svy.core.terms import Cat, Cross
+from svy.errors.api_errors import UnknownNameError
 from svy.errors.model_errors import ModelError
-from svy.regression import GLMMargins
+from svy.regression import GLMMargins, GLMMarginsList
 
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
@@ -243,6 +244,60 @@ class TestJointMarginsOutput:
         assert "yr_rnd" in text
         assert "Contrast" in text
         assert "Yes - No" in text
+
+
+class TestGLMMarginsList:
+    def test_several_results_come_as_a_list(self, model):
+        for res in (
+            model.margins(),
+            model.margins(at={"meals": [20], ("awards", "yr_rnd"): None}),
+            model.margins(variables=["meals"], at={"yr_rnd": None}),
+        ):
+            assert isinstance(res, GLMMarginsList)
+            assert isinstance(res, list)
+            assert all(isinstance(m, GLMMargins) for m in res)
+
+    def test_one_at_key_is_still_a_single_result(self, model):
+        assert type(model.margins(at={("awards", "yr_rnd"): None})) is GLMMargins
+
+    def test_print_shows_every_table(self, model):
+        res = model.margins(at={"meals": [20, 80], ("awards", "yr_rnd"): None})
+        text = str(res)
+        assert "GLMMargins(" not in text
+        assert "meals" in text and "awards#yr_rnd" in text
+        assert repr(res) == text
+
+    def test_plain_text_joins_every_table(self, model):
+        text = model.margins(at={"meals": [20], ("awards", "yr_rnd"): None}).__plain_str__()
+        assert "GLM Margins: meals" in text
+        assert "GLM Margins: awards#yr_rnd" in text
+
+    def test_empty_list_prints_as_a_list(self, model):
+        res = model.margins(variables=[])
+        assert isinstance(res, GLMMarginsList)
+        assert str(res) == "[]"
+        assert res.to_polars().is_empty()
+
+    def test_to_polars_stacks_with_null_at_columns(self, model):
+        df = model.margins(at={"meals": [20, 80], ("awards", "yr_rnd"): None}).to_polars()
+        assert df.columns == ["term", "awards", "yr_rnd", "margin", "se", "lci", "uci", "value"]
+        assert df["term"].to_list() == ["meals"] * 2 + ["awards#yr_rnd"] * 4
+        assert df["awards"].null_count() == 2
+        assert df["value"].dtype == pl.Int64
+        assert df["value"].to_list()[:2] == [20, 80]
+
+    def test_to_polars_mixed_values_become_text(self, model):
+        df = model.margins(at={"meals": [20, 80], "awards": None}).to_polars()
+        assert df["value"].to_list() == ["20", "80", "No", "Yes"]
+
+    def test_to_polars_effects_keep_contrast_labels(self, model):
+        df = model.margins(variables=["meals", "awards"], at={"yr_rnd": None}).to_polars()
+        assert df.columns == ["term", "yr_rnd", "margin", "se", "lci", "uci", "value"]
+        assert df["value"].to_list() == [None, None, "Yes - No", "Yes - No"]
+
+    def test_unknown_attribute_is_guided(self, model):
+        with pytest.raises(UnknownNameError, match="GLMMarginsList"):
+            model.margins().margin
 
 
 class TestAtValidation:

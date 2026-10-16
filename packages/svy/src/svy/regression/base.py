@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from svy.core.sample import Sample
     from svy.estimation.contrast import Contrast
     from svy.metadata.variable_meta import ResolvedLabels
-    from svy.regression.margins import GLMMargins
+    from svy.regression.margins import GLMMargins, GLMMarginsList
 
 log = logging.getLogger(__name__)
 
@@ -1364,7 +1364,7 @@ class GLM:
         at: dict[str | tuple[str, ...], list | None] | None = None,
         variables: list[str] | None = None,
         alpha: float = 0.05,
-    ) -> "GLMMargins | list[GLMMargins]":
+    ) -> "GLMMargins | GLMMarginsList":
         from svy.regression.margins import margins as compute_margins
 
         alpha = validate_alpha(alpha, where="GLM.margins")

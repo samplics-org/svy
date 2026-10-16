@@ -10,6 +10,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 - **Joint predictive margins.** A tuple key in `GLM.margins(at=...)` sets several variables together, one row per cell: `at={("frailty", "insurance"): [("frail", "medicaid"), ...]}`. `None` as the value means every fitted level of a categorical, or every combination for a tuple key. The result has term `"frailty#insurance"`, an `at` field with one column per variable, and the same columns in `to_polars()`.
 - **Marginal effects at fixed values.** `variables=` with `at=` gives each effect with the `at` variables set to each cell, e.g. the effect of frailty within each insurance group. `variables=` was ignored when `at=` was given.
+- **`GLMMarginsList`.** `GLM.margins()` returns it wherever it returned a list. It is still a `list`; printing shows every table instead of object reprs, and `to_polars()` stacks the members into one frame.
 
 ## [0.34.0] — 2026-10-15
 
