@@ -340,9 +340,7 @@ class RepWgtsPart(DesignPart):
         return variant(**{f: _as_tuple(getattr(data, f)) for f in type(data).__struct_fields__})
 
     def repr(self, value: Any) -> str | None:
-        if value is None:
-            return "rep_wgts=None"
-        return f"rep_wgts={value.method}(n_reps={value.n_reps}, prefix='{value.prefix}', df={value.df})"
+        return f"rep_wgts={value!r}"
 
 
 def _rep_wgts_with_renames(
@@ -517,7 +515,7 @@ class WgtAdjustmentPart(DesignPart):
         )
 
     def repr(self, value: Any) -> str | None:
-        return None
+        return None if value is None else f"wgt_adjustment={value!r}"
 
 
 # ---------------------------------------------------------------------------
