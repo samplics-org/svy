@@ -8,6 +8,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **`sample.sampling.multistage([Stage(...), ...])`.** Draws every stage in one call from a frame that holds all stages' ids: stage 1 within the design's strata, each later stage within every selected parent, SRS or PPS (`mos=`). Each stage's conditional probability and weight is a column (`svy_prob_selection_stage{k}`), with their products as `prob`/`wgt`; the design gets `psu` (stage-1 unit) and `ssu` (stage-2 unit). A parent with fewer units than asked gives all of them, with one INFO finding. `add_stage` remains for frames listed in the field.
 - **Joint predictive margins.** A tuple key in `GLM.margins(at=...)` sets several variables together, one row per cell: `at={("frailty", "insurance"): [("frail", "medicaid"), ...]}`. `None` as the value means every fitted level of a categorical, or every combination for a tuple key. The result has term `"frailty#insurance"` and one column per variable.
 - **Marginal effects at fixed values.** `variables=` with `at=` gives each effect with the `at` variables set to each cell, e.g. the effect of frailty within each insurance group. `variables=` was ignored when `at=` was given.
 - **`GLMMarginsList`.** `GLM.margins()` returns it wherever it returned a list. It is still a `list`; printing shows every table instead of object reprs, and `to_polars()` stacks the members into one frame.

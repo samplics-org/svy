@@ -24,6 +24,7 @@ clusters = frame_sample.sampling.pps_sys(n=3, rstate=42)  # 3 clusters per regio
 | `pps_brewer(n)`, `pps_rs(n)`, `pps_murphy(n)` | PPS without replacement: Brewer, Rao-Sampford, Murphy (n=2) |
 | `pps_wr(n)` | PPS with replacement |
 | `add_stage(next_stage)` | chain the next stage's frame onto the selected units |
+| `multistage([Stage(...), ...])` | every stage in one call, from a frame holding all stages' ids (`from svy.selection import Stage`) |
 
 - `n` is per stratum: an int for every stratum, or `{stratum: n}`.
   `by=` selects within each level of another column.
