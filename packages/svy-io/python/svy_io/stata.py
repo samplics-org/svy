@@ -271,6 +271,9 @@ def read_stata_arrow(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+_DTA_118_MAX_VARS = 32_767
+
+
 def _stata_file_format(version: int) -> int:
     """Map a Stata release (8-15) or internal format code to a format code."""
     v = int(version)
@@ -539,7 +542,7 @@ def write_dta(
     df: pl.DataFrame,
     path: str | os.PathLike | io.BufferedIOBase,
     *,
-    version: int = 15,
+    version: int | None = None,
     file_label: str | None = None,
     var_labels: dict[str, str] | None = None,
     value_labels: dict[str, dict] | list[dict] | None = None,
@@ -549,6 +552,9 @@ def write_dta(
 ) -> pl.DataFrame:
     """
     Write a Stata .dta using the Rust native writer (ReadStat backend).
+
+    ``version=None`` writes format 118, which every Stata 14+ edition opens, or 119
+    when the frame has more than 32,767 columns.
 
     Dates are written as %td days and datetimes as %tc milliseconds from 1960-01-01;
     zoned datetimes keep their wall-clock time (``adjust_tz=True``) or their UTC time.
@@ -566,7 +572,14 @@ def write_dta(
     # Codes read from any file arrive as text ("1"); Stata needs integers.
     value_labels = normalize_value_labels(value_labels, dict(df.schema)) or None
 
+    if version is None:
+        version = 119 if df.width > _DTA_118_MAX_VARS else 118
     version_internal = _stata_file_format(int(version))
+    if version_internal < 119 and df.width > _DTA_118_MAX_VARS:
+        raise ValueError(
+            f"Stata format {version_internal} holds at most {_DTA_118_MAX_VARS} variables, "
+            f"got {df.width}; use version=119"
+        )
     version_human = (
         int(version)
         if int(version) < 113

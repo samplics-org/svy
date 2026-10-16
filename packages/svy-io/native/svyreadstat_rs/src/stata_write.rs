@@ -221,11 +221,12 @@ fn as_i64_opt(a: &dyn Array, row: usize) -> Option<i64> {
         UInt32 => Some(down!(UInt32Array)),
         UInt16 => Some(down!(UInt16Array)),
         UInt8 => Some(down!(UInt8Array)),
+        Boolean => Some(down!(BooleanArray)),
         _ => None,
     }
 }
 
-/// Smallest and largest non-null value of an integer column across batches;
+/// Smallest and largest non-null value of an integer or boolean column across batches;
 /// `None` when the column is not an integer type. An all-null integer column
 /// reports `Some(None)`.
 fn int_col_range(batches: &[RecordBatch], j: usize) -> Option<Option<(i128, i128)>> {
@@ -249,6 +250,7 @@ fn int_col_range(batches: &[RecordBatch], j: usize) -> Option<Option<(i128, i128
             UInt32 => mm!(UInt32Array),
             UInt16 => mm!(UInt16Array),
             UInt8 => mm!(UInt8Array),
+            Boolean => (Some(0), Some(1)),
             _ => return None,
         };
         if let (Some(lo), Some(hi)) = (lo, hi) {

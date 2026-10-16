@@ -570,3 +570,49 @@ def test_stata_nonexistent_format_codes_rejected():
     for bad in (116, 120, 130):
         with pytest.raises(ValueError):
             _stata_file_format(bad)
+
+
+def _dta_release(path) -> int:
+    head = Path(path).read_bytes()[:64]
+    return int(head.split(b"<release>")[1].split(b"</release>")[0])
+
+
+def test_write_dta_default_format_is_118(tmp_path):
+    from svy_io.stata import write_dta
+
+    out = tmp_path / "d.dta"
+    write_dta(pl.DataFrame({"x": [1, 2]}), out)
+    assert _dta_release(out) == 118
+
+
+def test_write_dta_default_format_is_119_past_32767_variables(tmp_path):
+    from svy_io.stata import write_dta
+
+    df = pl.DataFrame({f"v{i}": [1] for i in range(32_768)})
+    out = tmp_path / "wide.dta"
+    write_dta(df, out)
+    assert _dta_release(out) == 119
+    with pytest.raises(ValueError, match="at most 32767"):
+        write_dta(df, tmp_path / "wide118.dta", version=118)
+
+
+def test_write_dta_value_labels_at_int32_extremes_are_sorted(tmp_path):
+    import struct
+
+    from svy_io.stata import read_dta, write_dta
+
+    lo, hi = -2_147_483_647, 2_147_483_620
+    labels = {hi: "max", lo: "min"}
+    out = tmp_path / "vl.dta"
+    write_dta(pl.DataFrame({"v": [lo, hi]}), out, version=118, value_labels={"v": labels})
+
+    raw = out.read_bytes()
+    table = raw.index(b"<lbl>") + len(b"<lbl>") + 4 + 129 + 3
+    n, _ = struct.unpack_from("<ii", raw, table)
+    assert list(struct.unpack_from(f"<{n}i", raw, table + 8 + 4 * n)) == [lo, hi]
+
+    df, meta = read_dta(str(out))
+    assert df["v"].to_list() == [lo, hi]
+    assert meta["value_labels"] == [
+        {"set_name": "v", "mapping": {str(k): v for k, v in sorted(labels.items())}}
+    ]

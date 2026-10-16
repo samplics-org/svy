@@ -4,6 +4,14 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-10-16
+
+### Fixed
+
+- **`write_dta` wrote format 119 by default, which Stata BE/SE cannot open.** It now writes 118 (every Stata 14+ edition), or 119 when the frame has more than 32,767 columns; asking for an older format with that many columns raises instead of writing a corrupt header.
+- **Boolean columns were written to Stata as double.** They are now stored as byte 0/1.
+- **Value labels with codes far apart, such as ±2 billion, were written out of order.** ReadStat's sort subtracted two int32 codes, which overflows.
+
 ## [0.7.0] — 2026-10-15
 
 ### Added
@@ -148,7 +156,8 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 First release tracked in this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-io-v0.7.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-io-v0.7.1...HEAD
+[0.7.1]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.7.1
 [0.7.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.7.0
 [0.6.1]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.6.1
 [0.6.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.6.0
