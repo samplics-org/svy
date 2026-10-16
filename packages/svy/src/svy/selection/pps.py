@@ -644,7 +644,6 @@ def _pps_writeback(
     join_how = "left" if where_mask is not None else "inner"
 
     if is_chaining:
-        assert design.prob is not None
         temp = _apply_chaining_writeback(
             src_df=src_df,
             sel_idx=sel_idx,
@@ -652,7 +651,6 @@ def _pps_writeback(
             probs=probs,
             certainty=certainty,
             row_col=row_col,
-            prev_prob_col=design.prob,
             out_prob_col=out_prob_col,
             out_wgt_col=wgt_col,
             hit_col=hit_col,

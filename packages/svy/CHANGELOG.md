@@ -16,6 +16,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 - **BREAKING: `GLMMargins.values` is split into `at` and `contrast`.** `at` holds the value each variable was set to, one column per variable, for single-variable margins too; `contrast` holds the `"k - ref"` labels of a categorical effect. In `to_polars()` the `value` column becomes a column named after each variable, or `contrast`. A single result and a stacked list now share the same columns.
 
+### Fixed
+
+- **`add_stage` chains more than two stages.** A third call raised `DuplicateError` on `svy_prob_selection_stage1`. Each stage k now keeps `svy_prob_selection_stage{k}` and `svy_sample_weight_stage{k}`, its hits and certainty get the `_stage{k}` suffix, and the overall probability is the product of every stage's. The next stage links on its Design `psu`, matched to the same-named column of the current sample, else to the stage-1 PSU. A link that matches several rows of the current sample, such as a bare frame past stage two, now raises instead of duplicating rows; so does `add_stage` before selecting from the stage just added.
+
 ## [0.34.0] — 2026-10-15
 
 Requires [`svy-io`](../svy-io/CHANGELOG.md) 0.7.0, which carries the reader and writer changes below.

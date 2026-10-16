@@ -2,8 +2,8 @@
 """
 Multi-stage / two-phase sampling — add_stage().
 
-Chains a second-stage frame or pre-selected Sample onto the current
-stage-1 sample.  Called from the Selection facade in base.py.
+Chains the next stage's frame or pre-selected Sample onto the current
+sample.  Called from the Selection facade in base.py.
 """
 
 from __future__ import annotations
@@ -14,7 +14,13 @@ from typing import TYPE_CHECKING, cast
 
 import polars as pl
 
-from svy.core.constants import BOOKKEEPING_COLUMNS, SVY_PROB, SVY_ROW_INDEX, SVY_WEIGHT
+from svy.core.constants import (
+    BOOKKEEPING_COLUMNS,
+    SVY_PROB,
+    SVY_PROB_STAGE1,
+    SVY_ROW_INDEX,
+    SVY_WEIGHT,
+)
 from svy.errors import MethodError
 from svy.selection._helpers import _psu_list
 from svy.selection.combine_stages import CombineResult, _combine_stages
@@ -32,21 +38,23 @@ def add_stage(
     wgt_name: str | None = None,
 ) -> "Sample":
     """
-    Chain a second-stage frame or selected sample onto the current stage.
+    Chain the next stage's frame or selected sample onto the current stage.
 
-    The combined ``Sample`` represents the second-stage population.
+    The combined ``Sample`` represents the next stage's population.
     Unconditional probabilities (pi_hij = pi_hi * pi_j|hi) are computed
     immediately when ``next_stage`` is a pre-selected ``Sample``, or
-    deferred to the next selection call otherwise.
+    deferred to the next selection call otherwise. Chains any number of
+    stages: select each added stage before adding the next.
 
     Parameters
     ----------
-    sample     : current stage-1 Sample (injected by the Selection facade)
+    sample     : current selected Sample (injected by the Selection facade)
     next_stage : pl.DataFrame | pl.LazyFrame | Sample
-        Three cases:
+        Rows join on ``next_stage.design.psu``, matched to the same-named
+        column of the current sample, else to the stage-1 PSU. Three cases:
 
-        * **DataFrame / LazyFrame** — bare frame.  Stage-1 columns are
-          joined on the stage-1 PSU column.  The returned Sample is ready
+        * **DataFrame / LazyFrame** — bare frame, joined on the stage-1
+          PSU, so only for the second stage.  The returned Sample is ready
           for a subsequent selection call.
         * **Sample without selection probs** — treated as a bare frame.
         * **Sample with selection probs** — combined probabilities computed
@@ -68,17 +76,21 @@ def add_stage(
         stratum  — from stage-1 design
         psu      — from stage-1 design
         ssu      — None; next_stage.design.psu is only the key linking rows
-                   to their stage-1 PSU
+                   to the units selected at the last stage
         prob     — svy_prob_selection_stage1  (chaining trigger)
-        wgt      — None; recomputed after stage-2 selection
+        wgt      — None; recomputed after the next selection
         hit, mos, pop_size, rep_wgts — None
         wr       — False
 
-    Stage-1 column renames (always applied):
-        svy_prob_selection  -> svy_prob_selection_stage1
-        svy_sample_weight   -> svy_sample_weight_stage1
-        svy_certainty       -> svy_certainty_stage1       (if present)
-        svy_number_of_hits  -> svy_number_of_hits_stage1  (if present)
+    Column renames for the last stage k (always applied):
+        svy_prob_selection  -> svy_prob_selection_stage1  (k = 1; dropped after,
+        svy_sample_weight   -> svy_sample_weight_stage1    as the product of stages)
+        svy_certainty       -> svy_certainty_stage{k}       (if present)
+        svy_number_of_hits  -> svy_number_of_hits_stage{k}  (if present)
+
+    The next selection writes svy_prob_selection_stage{k+1} and
+    svy_sample_weight_stage{k+1} (conditional), and the overall
+    probability as the product of every stage's.
     """
     from svy.core.design import Design as _Design
     from svy.core.sample import Sample as _Sample
@@ -92,6 +104,13 @@ def add_stage(
             method="add_stage",
             reason="Current stage has no selection probabilities.",
             hint="Run a selection method (pps_sys, srs, etc.) before add_stage().",
+        )
+    if s1_design.prob == SVY_PROB_STAGE1:
+        raise MethodError.not_applicable(
+            where="Sample.sampling.add_stage",
+            method="add_stage",
+            reason="The last added stage has not been selected yet.",
+            hint="Select from it (pps_sys, srs, etc.) before calling add_stage() again.",
         )
     if s1_design.psu is None:
         raise MethodError.not_applicable(

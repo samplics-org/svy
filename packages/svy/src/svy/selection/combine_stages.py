@@ -8,15 +8,32 @@ import numpy as np
 import polars as pl
 
 from svy.core.constants import (
-    SVY_CERT_STAGE1,
     SVY_CERTAINTY,
-    SVY_HITS_STAGE1,
-    SVY_PROB_STAGE1,
-    SVY_PROB_STAGE2,
-    SVY_WGT_STAGE1,
-    SVY_WGT_STAGE2,
+    SVY_HIT,
+    SVY_PROB,
+    SVY_WEIGHT,
 )
 from svy.errors import DimensionError, MethodError
+
+
+def _stage_col(base: str, k: int) -> str:
+    return f"{base}_stage{k}"
+
+
+def _completed_stages(columns: list[str]) -> int:
+    """Number of stages whose conditional probability is already a column."""
+    k = 0
+    while _stage_col(SVY_PROB, k + 1) in columns:
+        k += 1
+    return k
+
+
+def _prior_prob(k: int) -> pl.Expr:
+    """Product of the conditional probabilities of stages 1..k."""
+    expr = pl.col(_stage_col(SVY_PROB, 1))
+    for j in range(2, k + 1):
+        expr = expr * pl.col(_stage_col(SVY_PROB, j))
+    return expr
 
 
 # ---------------------------------------------------------------------------
@@ -142,18 +159,37 @@ def _combine_stages(
                 ),
             )
 
+    # The next stage's psu names the unit selected at the last stage; past two
+    # stages that unit is not the stage-1 PSU.
+    link = next_psu if all(c in stage1_df.columns for c in next_psu) else stage1_psu
+    if stage1_df.select(link).is_duplicated().any():
+        raise MethodError.not_applicable(
+            where="Sample.sampling.add_stage",
+            method="add_stage",
+            param="next_stage",
+            reason=(
+                f"next_stage links on {link}, which does not identify one selected unit "
+                "of the current sample: its rows would be duplicated"
+            ),
+            hint=(
+                "Pass next_stage as a Sample whose Design psu= is the column identifying "
+                "the units selected at the last stage, e.g. "
+                "Sample(frame, Design(psu='ea'))."
+            ),
+        )
+
     # ------------------------------------------------------------------
     # 2. Validate PSU matching
     # ------------------------------------------------------------------
-    if len(stage1_psu) == 1 and len(next_psu) == 1:
-        s1_vals = set(stage1_df[stage1_psu[0]].unique().to_list())
+    if len(link) == 1 and len(next_psu) == 1:
+        s1_vals = set(stage1_df[link[0]].unique().to_list())
         ns_vals = set(next_df[next_psu[0]].unique().to_list())
     else:
         # Form composite keys in Polars — avoids Python tuple allocation per row
         _sep = "__"
         s1_vals = set(
             stage1_df.select(
-                pl.concat_str([pl.col(c).cast(pl.Utf8) for c in stage1_psu], separator=_sep).alias(
+                pl.concat_str([pl.col(c).cast(pl.Utf8) for c in link], separator=_sep).alias(
                     "__k__"
                 )
             )["__k__"]
@@ -207,15 +243,27 @@ def _combine_stages(
             )
 
     # ------------------------------------------------------------------
-    # 3. Always-rename map for stage-1 design columns
+    # 3. Always-rename map for the last stage's design columns
     # ------------------------------------------------------------------
+    done = _completed_stages(stage1_df.columns)
+    last = max(done, 1)
+    new = last + 1
+    pairs: list[tuple[str | None, str]] = [
+        (SVY_CERTAINTY, _stage_col(SVY_CERTAINTY, last)),
+        (stage1_hit_col, _stage_col(SVY_HIT, last)),
+    ]
+    stale: list[str] = []
+    if done == 0:
+        pairs += [
+            (stage1_prob_col, _stage_col(SVY_PROB, 1)),
+            (stage1_wgt_col, _stage_col(SVY_WEIGHT, 1)),
+        ]
+    else:
+        # The combined prob and weight are the product of the stage columns;
+        # the next selection rewrites them.
+        stale = [c for c in (stage1_prob_col, stage1_wgt_col) if c in stage1_df.columns]
     always_rename: dict[str, str] = {}
-    for src, dst in [
-        (stage1_prob_col, SVY_PROB_STAGE1),
-        (stage1_wgt_col, SVY_WGT_STAGE1),
-        (SVY_CERTAINTY, SVY_CERT_STAGE1),
-        (stage1_hit_col, SVY_HITS_STAGE1),
-    ]:
+    for src, dst in pairs:
         if src and src in stage1_df.columns:
             always_rename[src] = dst
 
@@ -224,21 +272,25 @@ def _combine_stages(
     # ------------------------------------------------------------------
     # PSU columns must always be included — they are the join keys.
     # Exclude everything else in stage1_exclude_cols.
-    psu_set = set(stage1_psu)
-    s1_cols = [c for c in stage1_df.columns if c not in stage1_exclude_cols or c in psu_set]
+    psu_set = set(stage1_psu) | set(link)
+    s1_cols = [
+        c
+        for c in stage1_df.columns
+        if (c not in stage1_exclude_cols or c in psu_set) and c not in stale
+    ]
     s1_slice = stage1_df.select(s1_cols)
 
     rename_map = {k: v for k, v in always_rename.items() if k in s1_slice.columns}
     if rename_map:
         s1_slice = s1_slice.rename(rename_map)
 
-    # Collision rule: non-PSU column already in next_df → append _stage1
-    # PSU columns from both stages are protected — they are join keys.
-    psu_protected: set[str] = psu_set | set(next_psu)
+    # Collision rule: column already in next_df → append _stage{last}.
+    # The join keys of both sides are protected.
+    psu_protected: set[str] = set(link) | set(next_psu)
     collision_rename: dict[str, str] = {}
     for col in s1_slice.columns:
         if col in next_df.columns and col not in psu_protected:
-            collision_rename[col] = f"{col}_stage1"
+            collision_rename[col] = _stage_col(col, last)
     if collision_rename:
         s1_slice = s1_slice.rename(collision_rename)
 
@@ -248,7 +300,7 @@ def _combine_stages(
     # s1 PSU cols in s1_slice after renaming (should be unchanged since
     # PSU cols are protected from both always_rename and collision_rename)
     s1_join_cols: list[str] = []
-    for col in stage1_psu:
+    for col in link:
         renamed = rename_map.get(col) or collision_rename.get(col) or col
         s1_join_cols.append(renamed)
 
@@ -273,17 +325,15 @@ def _combine_stages(
     if already_selected:
         s2_rename: dict[str, str] = {}
         if next_prob_col and next_prob_col in combined_data.columns:
-            s2_rename[next_prob_col] = SVY_PROB_STAGE2
+            s2_rename[next_prob_col] = _stage_col(SVY_PROB, new)
         if next_wgt_col and next_wgt_col in combined_data.columns:
-            s2_rename[next_wgt_col] = SVY_WGT_STAGE2
+            s2_rename[next_wgt_col] = _stage_col(SVY_WEIGHT, new)
         if s2_rename:
             combined_data = combined_data.rename(s2_rename)
 
+        overall = _prior_prob(new)
         combined_data = combined_data.with_columns(
-            [
-                (pl.col(SVY_PROB_STAGE1) * pl.col(SVY_PROB_STAGE2)).alias(out_prob_col),
-                (1.0 / (pl.col(SVY_PROB_STAGE1) * pl.col(SVY_PROB_STAGE2))).alias(out_wgt_col),
-            ]
+            [overall.alias(out_prob_col), (1.0 / overall).alias(out_wgt_col)]
         )
 
         return CombineResult(
@@ -299,7 +349,7 @@ def _combine_stages(
     # ------------------------------------------------------------------
     return CombineResult(
         data=combined_data,
-        chaining_prob_col=SVY_PROB_STAGE1,
+        chaining_prob_col=_stage_col(SVY_PROB, 1),
         out_prob_col=out_prob_col,
         out_wgt_col=out_wgt_col,
         already_selected=False,
@@ -319,7 +369,6 @@ def _apply_chaining_writeback(
     probs,
     certainty,
     row_col: str,
-    prev_prob_col: str,
     out_prob_col: str,
     out_wgt_col: str,
     hit_col: str,
@@ -328,25 +377,23 @@ def _apply_chaining_writeback(
     """
     Build the write-back temp DataFrame when in chaining mode.
 
-    Retrieves stage-1 probs from ``src_df``, multiplies by stage-2
-    probs, and returns a DataFrame ready to join onto ``src_df``.
+    Multiplies the probabilities of the completed stages in ``src_df``
+    by this stage's, and returns a DataFrame ready to join onto ``src_df``.
 
     Parameters
     ----------
     src_df : pl.DataFrame
-        Full source DataFrame containing the stage-1 prob column.
+        Full source DataFrame containing the per-stage prob columns.
     sel_idx : array-like
         Selected row index values.
     hits : array-like
         Hit counts from the selection engine.
     probs : array-like
-        Stage-2 inclusion probabilities from the selection engine.
+        This stage's inclusion probabilities from the selection engine.
     certainty : array-like | None
         Certainty flags (PPS only); pass None for SRS.
     row_col : str
         Row index column name.
-    prev_prob_col : str
-        Stage-1 probability column name (``svy_prob_selection_stage1``).
     out_prob_col : str
         Desired combined probability column name.
     out_wgt_col : str
@@ -362,14 +409,15 @@ def _apply_chaining_writeback(
         Temp DataFrame to join onto ``src_df``.
     """
     stage2_probs = np.asarray(probs, dtype=np.float64)
+    done = _completed_stages(src_df.columns)
 
     prev = pl.DataFrame({row_col: sel_idx}).join(
-        other=src_df.select([row_col, prev_prob_col]),
+        other=src_df.select([row_col, _prior_prob(done).alias("__prior__")]),
         on=row_col,
         how="left",
         maintain_order="left",
     )
-    stage1_probs = prev[prev_prob_col].fill_null(1.0).to_numpy().astype(np.float64)
+    stage1_probs = prev["__prior__"].fill_null(1.0).to_numpy().astype(np.float64)
     combined_probs = stage1_probs * stage2_probs
 
     safe_s2 = np.where(stage2_probs > 0, stage2_probs, np.nan)
@@ -377,16 +425,16 @@ def _apply_chaining_writeback(
 
     row_data: dict = {
         row_col: sel_idx,
-        SVY_PROB_STAGE2: stage2_probs,
-        SVY_WGT_STAGE2: (1.0 / safe_s2),
+        _stage_col(SVY_PROB, done + 1): stage2_probs,
+        _stage_col(SVY_WEIGHT, done + 1): (1.0 / safe_s2),
         out_prob_col: combined_probs,
         out_wgt_col: (1.0 / safe_combined),
         hit_col: np.asarray(hits, dtype=np.int64),
     }
     cast_schema: dict = {
         row_col: src_df[row_col].dtype,
-        SVY_PROB_STAGE2: pl.Float64,
-        SVY_WGT_STAGE2: pl.Float64,
+        _stage_col(SVY_PROB, done + 1): pl.Float64,
+        _stage_col(SVY_WEIGHT, done + 1): pl.Float64,
         out_prob_col: pl.Float64,
         out_wgt_col: pl.Float64,
         hit_col: pl.Int64,
