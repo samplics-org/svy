@@ -29,6 +29,7 @@
     }
   ],
   "groups": {
+    "labels": null,
     "levels": [
       "Rural",
       "Urban"
@@ -37,7 +38,7 @@
   },
   "kind": "ttest_two_groups",
   "paired": false,
-  "schema_version": "svy-result/0.8",
+  "schema_version": "svy-result/0.9",
   "stats": {
     "df": 18.0,
     "p_value": 0.0015,

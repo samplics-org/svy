@@ -6,6 +6,15 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Added
+
+- **Serialized results carry what a report needs (`svy-result/0.9`).** A table records its `units` (`"proportion"`, `"percent"` or `"count"`, also on `Table`). `ttest(..., by=...)` serializes, as `ttest_one_group_by` or `ttest_two_groups_by`. A GLM fit carries its `terms` (type, levels, reference, value labels), and each coefficient its printed `label` and `parts`, the (variable, level) of each factor, so names like `sex_Male` need no parsing. All new fields are optional; older payloads decode with `None`.
+- **`svy.serialize.from_dict`** decodes the output of `to_dict`, or `to_json` read by any JSON parser.
+
+### Fixed
+
+- **A serialized two-group t-test lost its group's value labels**, so its `to_polars()` had no `<group>_label` column.
+
 ## [0.34.0] — 2026-10-15
 
 Requires [`svy-io`](../svy-io/CHANGELOG.md) 0.7.0, which carries the reader and writer changes below.

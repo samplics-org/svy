@@ -21,7 +21,7 @@ import msgspec
 # Constants
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = "svy-result/0.8"
+SCHEMA_VERSION = "svy-result/0.9"
 
 #: A design is an input, read back into a live ``Design``: its own schema.
 DESIGN_SCHEMA_VERSION = "svy-design/0.1"
@@ -178,6 +178,13 @@ class GroupLevelsData(msgspec.Struct, kw_only=True, frozen=True):
 
     var: str
     levels: list[CatValue]
+    #: Value labels of ``levels``, aligned with them; None prints codes.
+    labels: list[str] | None = None
+
+    def label_of(self, level: CatValue | None) -> str | None:
+        if self.labels is None:
+            return None
+        return next((lab for lv, lab in zip(self.levels, self.labels) if lv == level), None)
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +217,25 @@ class TableStatsData(msgspec.Struct, kw_only=True, frozen=True):
 # ---------------------------------------------------------------------------
 
 
+class CoefPartData(msgspec.Struct, kw_only=True, frozen=True):
+    """One factor of a coefficient's term: a variable, and its level for a categorical."""
+
+    variable: str
+    level: CatValue | None = None
+
+
+class TermData(msgspec.Struct, kw_only=True, frozen=True):
+    """A predictor of a fit: a continuous variable, or a categorical with its levels."""
+
+    name: str
+    type: Literal["continuous", "categorical"]
+    #: Fitted levels, the reference first; None for a continuous predictor.
+    levels: list[CatValue] | None = None
+    reference: CatValue | None = None
+    #: Value labels of the levels, when the fit printed them.
+    level_labels: list[LevelLabelData] | None = None
+
+
 class GLMCoefData(msgspec.Struct, kw_only=True, frozen=True):
     """A single coefficient in a regression table (mirrors ``svy.regression.glm.GLMCoef``)."""
 
@@ -220,6 +246,11 @@ class GLMCoefData(msgspec.Struct, kw_only=True, frozen=True):
     uci: float
     wald: TDistData | None = None
     wald_adj: TDistData | None = None
+    #: Printed name from value labels; ``term`` stays the column name.
+    label: str | None = None
+    #: The term's factors, two or more for an interaction; None for the
+    #: intercept, or decoded from an older payload.
+    parts: list[CoefPartData] | None = None
 
 
 class GLMStatsData(msgspec.Struct, kw_only=True, frozen=True):
@@ -331,6 +362,38 @@ class TTestTwoGroupsData(msgspec.Struct, kw_only=True, frozen=True):
     stats: TTestStatsData | None = None
 
 
+@_kinded("ttest_one_group_by")
+class TTestOneGroupByData(msgspec.Struct, kw_only=True, frozen=True):
+    """
+    Serialization struct for ``svy.categorical.ttest.TTestByResult`` of
+    one-group tests: one member per ``by`` level, whose rows carry it.
+    """
+
+    kind: Literal["ttest_one_group_by"] = "ttest_one_group_by"
+    schema_version: str = SCHEMA_VERSION
+    y: str
+    by: str
+    alpha: float = 0.05
+    where_clause: str | None = None
+    results: list[TTestOneGroupData] = []
+
+
+@_kinded("ttest_two_groups_by")
+class TTestTwoGroupsByData(msgspec.Struct, kw_only=True, frozen=True):
+    """
+    Serialization struct for ``svy.categorical.ttest.TTestByResult`` of
+    two-group tests: one member per ``by`` level, whose rows carry it.
+    """
+
+    kind: Literal["ttest_two_groups_by"] = "ttest_two_groups_by"
+    schema_version: str = SCHEMA_VERSION
+    y: str
+    by: str
+    alpha: float = 0.05
+    where_clause: str | None = None
+    results: list[TTestTwoGroupsData] = []
+
+
 @_kinded("table")
 class TableData(msgspec.Struct, kw_only=True, frozen=True):
     """Serialization struct for ``svy.categorical.table.Table``."""
@@ -347,6 +410,9 @@ class TableData(msgspec.Struct, kw_only=True, frozen=True):
     colvals: list[CatValue] | None = None
     #: What each cell is a share of: "total", "row" or "col".
     share_of: str = "total"
+    #: "proportion", "percent" or "count"; None when decoded from an older
+    #: payload, whose units were not recorded.
+    units: str | None = None
 
 
 @_kinded("glm_fit")
@@ -354,7 +420,7 @@ class GLMFitData(msgspec.Struct, kw_only=True, frozen=True):
     """
     Serialization struct for ``svy.regression.glm.GLMFit``.
 
-    Excludes: cov_matrix, term_info.
+    Excludes: cov_matrix. ``term_info`` travels as ``terms``.
     """
 
     kind: Literal["glm_fit"] = "glm_fit"
@@ -372,6 +438,8 @@ class GLMFitData(msgspec.Struct, kw_only=True, frozen=True):
     where_clause: str | None = None
     #: The offset column the model was fitted with; None without one.
     offset: str | None = None
+    #: The predictors, in fit order; None when decoded from an older payload.
+    terms: list[TermData] | None = None
 
 
 @_kinded("glm_pred")
@@ -574,6 +642,8 @@ ResultData = (
     | EstimateListData
     | TTestOneGroupData
     | TTestTwoGroupsData
+    | TTestOneGroupByData
+    | TTestTwoGroupsByData
     | ChiSquareData
     | TableData
     | GLMFitData
