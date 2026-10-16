@@ -268,6 +268,8 @@ class SvyError(Exception):
     def to_dict(self) -> dict[str, Any]:
         return {
             "error": {
+                # The class, so callers can tell a ModelError from a MethodError without its text.
+                "type": type(self).__name__,
                 "code": self.code,
                 "title": self.title,
                 "detail": self.detail,
