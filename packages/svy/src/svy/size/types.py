@@ -70,6 +70,8 @@ class TargetTwoProps(msgspec.Struct, frozen=True, tag="two_prop"):
     pop_size: NumberOrMap | None = None
     deff: NumberOrMap = 1.0
     resp_rate: NumberOrMap = 1.0
+    rho: NumberOrMap = 0.0
+    overlap: NumberOrMap = 0.0
 
 
 class TargetTwoMeans(msgspec.Struct, frozen=True, tag="two_mean"):
@@ -88,6 +90,8 @@ class TargetTwoMeans(msgspec.Struct, frozen=True, tag="two_mean"):
     pop_size: NumberOrMap | None = None
     deff: NumberOrMap = 1.0
     resp_rate: NumberOrMap = 1.0
+    rho: NumberOrMap = 0.0
+    overlap: NumberOrMap = 0.0
 
 
 class TargetAllocation(msgspec.Struct, frozen=True, tag="allocation"):

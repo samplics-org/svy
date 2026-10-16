@@ -57,12 +57,15 @@ def compare_props(
     var_mode: Literal["alt-props", "pooled-prop", "max-var"] = "alt-props",
     deff: Number | DomainScalarMap = 1.0,
     resp_rate: Number | DomainScalarMap = 1.0,
+    rho: Number | DomainScalarMap = 0.0,
+    overlap: Number | DomainScalarMap = 0.0,
 ) -> SampleSize:
     """
     Compute required sample size for comparing two proportions.
 
-    The two groups are treated as independent samples (two areas, or two rounds of
-    fresh cross-sections). Correlation between rounds of a panel is not accounted for.
+    The two groups are independent samples (two areas, or two rounds of fresh
+    cross-sections) unless ``rho`` and ``overlap`` say that some units are in both
+    rounds, which lowers the variance of the change (Kish).
 
     Parameters
     ----------
@@ -93,6 +96,12 @@ def compare_props(
         Design effect. Scalar or per-stratum mapping.
     resp_rate : Number | DomainScalarMap, default 1.0
         Anticipated response rate. Scalar or per-stratum mapping.
+    rho : Number | DomainScalarMap, default 0.0
+        Correlation of a unit's values between the two rounds. Scalar or per-stratum mapping.
+    overlap : Number | DomainScalarMap, default 0.0
+        Share of the smaller round's units that are also in the other round, in [0, 1].
+        With m such units, Var(d) = V1/n1 + V2/n2 - 2 rho m sqrt(V1 V2) / (n1 n2).
+        ``rho=0`` or ``overlap=0`` treats the rounds as independent.
 
     Returns
     -------
@@ -126,11 +135,25 @@ def compare_props(
         pop_size=_as_input(pop_size),
         deff=_as_input(deff),
         resp_rate=_as_input(resp_rate),
+        rho=_as_input(rho),
+        overlap=_as_input(overlap),
     )
 
     stratified = any(
         isinstance(v, Mapping)
-        for v in [p1, p2, pop_size, delta, alloc_ratio, alpha, power, deff, resp_rate]
+        for v in [
+            p1,
+            p2,
+            pop_size,
+            delta,
+            alloc_ratio,
+            alpha,
+            power,
+            deff,
+            resp_rate,
+            rho,
+            overlap,
+        ]
     )
 
     if stratified:
@@ -147,6 +170,8 @@ def compare_props(
                     power=power,
                     deff=deff,
                     resp_rate=resp_rate,
+                    rho=rho,
+                    overlap=overlap,
                 ).items()
                 if isinstance(v, Mapping)
             }
@@ -161,6 +186,8 @@ def compare_props(
             "power": power,
             "deff": deff,
             "resp_rate": resp_rate,
+            "rho": rho,
+            "overlap": overlap,
         }
         _broadcast_scalars(strata, params)
         p1, p2, pop_size, delta, alloc_ratio, alpha, power, deff, resp_rate = (
@@ -174,6 +201,7 @@ def compare_props(
             params["deff"],
             params["resp_rate"],
         )
+        rho, overlap = params["rho"], params["overlap"]
     else:
         all_scalars = all(
             isinstance(x, (int, float)) for x in [p1, p2, delta, alloc_ratio, alpha, power]
@@ -198,6 +226,8 @@ def compare_props(
         alpha=alpha,
         power=power,
         var_mode=_var_mode,
+        rho=rho,
+        overlap=overlap,
     )
 
     # Pipeline: n0 (SRS) -> DEFF -> FPC -> nonresponse (see estimate_prop).
@@ -234,12 +264,15 @@ def compare_means(
     power: Number | DomainScalarMap = 0.80,
     deff: Number | DomainScalarMap = 1.0,
     resp_rate: Number | DomainScalarMap = 1.0,
+    rho: Number | DomainScalarMap = 0.0,
+    overlap: Number | DomainScalarMap = 0.0,
 ) -> SampleSize:
     """
     Compute required sample size for comparing two means.
 
-    The two groups are treated as independent samples (two areas, or two rounds of
-    fresh cross-sections). Correlation between rounds of a panel is not accounted for.
+    The two groups are independent samples (two areas, or two rounds of fresh
+    cross-sections) unless ``rho`` and ``overlap`` say that some units are in both
+    rounds, which lowers the variance of the change (Kish).
 
     Parameters
     ----------
@@ -272,6 +305,12 @@ def compare_means(
         Design effect. Scalar or per-stratum mapping.
     resp_rate : Number | DomainScalarMap, default 1.0
         Anticipated response rate. Scalar or per-stratum mapping.
+    rho : Number | DomainScalarMap, default 0.0
+        Correlation of a unit's values between the two rounds. Scalar or per-stratum mapping.
+    overlap : Number | DomainScalarMap, default 0.0
+        Share of the smaller round's units that are also in the other round, in [0, 1].
+        With m such units, Var(d) = V1/n1 + V2/n2 - 2 rho m sqrt(V1 V2) / (n1 n2).
+        ``rho=0`` or ``overlap=0`` treats the rounds as independent.
 
     Returns
     -------
@@ -296,6 +335,8 @@ def compare_means(
         pop_size=_as_input(pop_size),
         deff=_as_input(deff),
         resp_rate=_as_input(resp_rate),
+        rho=_as_input(rho),
+        overlap=_as_input(overlap),
     )
 
     if method != "wald":
@@ -320,6 +361,8 @@ def compare_means(
             power,
             deff,
             resp_rate,
+            rho,
+            overlap,
         ]
     )
 
@@ -339,6 +382,8 @@ def compare_means(
                     power=power,
                     deff=deff,
                     resp_rate=resp_rate,
+                    rho=rho,
+                    overlap=overlap,
                 ).items()
                 if isinstance(v, Mapping)
             }
@@ -354,6 +399,8 @@ def compare_means(
             "power": power,
             "deff": deff,
             "resp_rate": resp_rate,
+            "rho": rho,
+            "overlap": overlap,
         }
         if sigma2 is not None:
             params["sigma2"] = sigma2
@@ -370,6 +417,7 @@ def compare_means(
             params["deff"],
             params["resp_rate"],
         )
+        rho, overlap = params["rho"], params["overlap"]
         sigma2 = params.get("sigma2")
     else:
         all_scalars = all(
@@ -396,6 +444,8 @@ def compare_means(
         alpha=alpha,
         power=power,
         var_mode=var_mode,
+        rho=rho,
+        overlap=overlap,
     )
 
     # Pipeline: n0 (SRS) -> DEFF -> FPC -> nonresponse (see estimate_prop).
