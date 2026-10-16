@@ -41,9 +41,11 @@ class GLMMargins(msgspec.Struct, frozen=True):
     ----------
     term : str
         Variable name for the margin; ``"a#b"`` for a joint margin.
-    values : np.ndarray | None
-        At-values of a single-variable predictive margin, or contrast
-        labels of a categorical marginal effect.
+    at : dict[str, np.ndarray] | None
+        The value each variable was set to, one column per variable,
+        aligned with ``margin``. None for an effect over the observed values.
+    contrast : np.ndarray | None
+        ``"k - ref"`` labels of a categorical marginal effect.
     margin : np.ndarray
         Marginal effect or predicted mean at each value.
     se : np.ndarray
@@ -58,15 +60,15 @@ class GLMMargins(msgspec.Struct, frozen=True):
         Significance level.
     margin_type : str
         Type of margin: "ame" (average marginal effect) or "predictive" (predictive margin).
-    at : dict[str, np.ndarray] | None
-        One column per variable fixed by a tuple key of ``at=`` (a joint
-        margin) or conditioned on (a marginal effect), aligned with ``margin``.
     """
 
     PRINT_WIDTH: ClassVar[int | None] = None
 
+    __getattr__ = guided_getattr("GLMMargins", "GLMMargins")
+
     term: str
-    values: np.ndarray | None
+    at: dict[str, np.ndarray] | None
+    contrast: np.ndarray | None
     margin: np.ndarray
     se: np.ndarray
     lci: np.ndarray
@@ -74,7 +76,6 @@ class GLMMargins(msgspec.Struct, frozen=True):
     df: float
     alpha: float
     margin_type: str
-    at: dict[str, np.ndarray] | None = None
 
     @classmethod
     def set_default_print_width(cls, width: int | None) -> None:
@@ -99,9 +100,9 @@ class GLMMargins(msgspec.Struct, frozen=True):
         data: dict = {"term": [self.term] * len(self.margin)}
         for var, col in (self.at or {}).items():
             data[var] = col
+        if self.contrast is not None:
+            data["contrast"] = self.contrast
         data.update(margin=self.margin, se=self.se, lci=self.lci, uci=self.uci)
-        if self.values is not None:
-            data["value"] = self.values
         return pl.DataFrame(data)
 
     def to_dict(self) -> dict:
@@ -116,10 +117,10 @@ class GLMMargins(msgspec.Struct, frozen=True):
             "alpha": self.alpha,
             "margin_type": self.margin_type,
         }
-        if self.values is not None:
-            d["values"] = self.values.tolist()
         if self.at is not None:
             d["at"] = {var: col.tolist() for var, col in self.at.items()}
+        if self.contrast is not None:
+            d["contrast"] = self.contrast.tolist()
         return d
 
     def __len__(self) -> int:
@@ -129,9 +130,8 @@ class GLMMargins(msgspec.Struct, frozen=True):
         """Headers and formatted rows shared by the rich and plain renderers."""
         conf_pct = _fmt_conf_pct(self.alpha)
         label_cols = [(var, list(col)) for var, col in (self.at or {}).items()]
-        if self.values is not None:
-            label = "Contrast" if self.margin_type == "ame" else "Value"
-            label_cols.append((label, list(self.values)))
+        if self.contrast is not None:
+            label_cols.append(("Contrast", list(self.contrast)))
         headers = [name for name, _ in label_cols] + ["Margin", "SE", f"{conf_pct}% CI"]
         rows = [
             [_fmt_value(col[i]) for _, col in label_cols]
@@ -156,7 +156,7 @@ class GLMMargins(msgspec.Struct, frozen=True):
 
     def __repr__(self) -> str:
         conf_pct = _fmt_conf_pct(self.alpha)
-        if self.values is not None or self.at is not None:
+        if self.at is not None or self.contrast is not None:
             return f"GLMMargins(term='{self.term}', n={len(self)}, {conf_pct}% CI, type={self.margin_type})"
         return f"GLMMargins(term='{self.term}', {conf_pct}% CI, type={self.margin_type})"
 
@@ -222,16 +222,15 @@ class GLMMarginsList(list):
     def to_polars(self) -> pl.DataFrame:
         """
         Stack the members, one row per margin: ``term``, one column per
-        ``at`` variable (null where a member does not set it), the estimates,
-        then ``value`` (text when members mix numeric values and labels).
+        ``at`` variable (null where a member does not set it), ``contrast``,
+        then the estimates.
         """
         frames = [m.to_polars() for m in self._members()]
         if not frames:
             return pl.DataFrame()
         df = pl.concat(frames, how="diagonal_relaxed")
-        stats = ["margin", "se", "lci", "uci", "value"]
-        at_cols = [c for c in df.columns if c not in ("term", *stats)]
-        return df.select("term", *at_cols, *[c for c in stats if c in df.columns])
+        tail = [c for c in ("contrast", "margin", "se", "lci", "uci") if c in df.columns]
+        return df.select("term", *[c for c in df.columns if c not in ("term", *tail)], *tail)
 
     def __plain_str__(self) -> str:
         """Plain-text fallback when rich is not installed. Never calls str(self)."""
@@ -581,15 +580,16 @@ def _with_ci(
     df: float,
     alpha: float,
     margin_type: str,
-    values: np.ndarray | None = None,
     at: dict[str, np.ndarray] | None = None,
+    contrast: np.ndarray | None = None,
 ) -> GLMMargins:
     from scipy import stats
 
     t_crit = stats.t.ppf(1 - alpha / 2, df)
     return GLMMargins(
         term=term,
-        values=values,
+        at=at,
+        contrast=contrast,
         margin=margins,
         se=se,
         lci=margins - t_crit * se,
@@ -597,7 +597,6 @@ def _with_ci(
         df=df,
         alpha=alpha,
         margin_type=margin_type,
-        at=at,
     )
 
 
@@ -772,7 +771,7 @@ def compute_predictive_margins(
         df=_model_df(fit),
         alpha=alpha,
         margin_type="predictive",
-        values=at_values,
+        at={variable: at_values},
     )
 
 
@@ -849,11 +848,13 @@ def compute_average_marginal_effects(
         info = term_info.get(var) or {}
         if info.get("type") == "categorical":
             labels, m, s = _categorical_contrasts(glm, fit, data, var, info, **kw)
-            values = np.array(labels, dtype=object)
+            contrast = np.array(labels, dtype=object)
         else:
             ame, se_val = _continuous_ame(glm, fit, data, var, pieces, **kw)
-            m, s, values = np.array([ame]), np.array([se_val]), None
-        results.append(_with_ci(var, m, s, df=df, alpha=alpha, margin_type="ame", values=values))
+            m, s, contrast = np.array([ame]), np.array([se_val]), None
+        results.append(
+            _with_ci(var, m, s, df=df, alpha=alpha, margin_type="ame", contrast=contrast)
+        )
     return GLMMarginsList(results)
 
 
@@ -921,7 +922,7 @@ def compute_conditional_effects(
                     df=df,
                     alpha=alpha,
                     margin_type="ame",
-                    values=np.array(labels, dtype=object) if is_cat else None,
+                    contrast=np.array(labels, dtype=object) if is_cat else None,
                     at={
                         name: np.asarray([r[j] for r in rows]) for j, name in enumerate(spec.names)
                     },

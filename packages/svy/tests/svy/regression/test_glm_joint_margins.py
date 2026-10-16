@@ -146,19 +146,19 @@ class TestJointPredictiveMargins:
 
     def test_none_on_a_string_key_uses_fitted_levels(self, model):
         res = model.margins(at={"awards": None})
-        assert res.values.tolist() == ["No", "Yes"]
+        assert res.at["awards"].tolist() == ["No", "Yes"]
 
     def test_mixed_keys_give_one_result_each(self, model):
         res = model.margins(at={"awards": None, ("awards", "yr_rnd"): None})
         assert [r.term for r in res] == ["awards", "awards#yr_rnd"]
-        assert res[0].at is None
+        assert list(res[0].at) == ["awards"]
         assert list(res[1].at) == ["awards", "yr_rnd"]
 
 
 class TestMarginalEffectsAtValues:
     def test_categorical_effect_vs_r(self, model):
         (res,) = model.margins(variables=["awards"], at={"yr_rnd": None})
-        assert res.values.tolist() == ["Yes - No", "Yes - No"]
+        assert res.contrast.tolist() == ["Yes - No", "Yes - No"]
         _assert_matches(
             {(c,): v for c, v in zip(res.at["yr_rnd"], zip(res.margin, res.se))},
             {(k,): v for k, v in R_AWARDS_EFFECT_BY_YR_RND.items()},
@@ -166,7 +166,7 @@ class TestMarginalEffectsAtValues:
 
     def test_continuous_slope_vs_r(self, model):
         (res,) = model.margins(variables=["meals"], at={"awards": ["No", "Yes"]})
-        assert res.values is None
+        assert res.contrast is None
         _assert_matches(
             {(c,): v for c, v in zip(res.at["awards"], zip(res.margin, res.se))},
             {(k,): v for k, v in R_MEALS_SLOPE_BY_AWARDS.items()},
@@ -192,7 +192,7 @@ class TestMarginalEffectsAtValues:
     def test_many_levels_repeat_each_cell_per_contrast(self, api):
         model = _fit(api, x=[Cat("stype", ref="E"), Cat("yr_rnd", ref="No"), "meals"])
         (res,) = model.margins(variables=["stype"], at={"yr_rnd": None})
-        assert res.values.tolist() == ["H - E", "M - E"] * 2
+        assert res.contrast.tolist() == ["H - E", "M - E"] * 2
         assert res.at["yr_rnd"].tolist() == ["No", "No", "Yes", "Yes"]
 
     def test_joint_cell_conditioning(self, model):
@@ -208,7 +208,7 @@ class TestJointMarginsOutput:
     def test_fields(self, model):
         res = model.margins(at={("awards", "yr_rnd"): None})
         assert res.term == "awards#yr_rnd"
-        assert res.values is None
+        assert res.contrast is None
         assert res.margin_type == "predictive"
         assert len(res) == 4
 
@@ -218,22 +218,32 @@ class TestJointMarginsOutput:
         assert df["awards"].to_list() == ["Yes", "No"]
         assert df["meals"].to_list() == [20, 80]
 
-    def test_to_polars_effect_keeps_value_column(self, model):
+    def test_to_polars_single_variable_is_named(self, model):
+        df = model.margins(at={"meals": [20, 80]}).to_polars()
+        assert df.columns == ["term", "meals", "margin", "se", "lci", "uci"]
+        assert df["meals"].to_list() == [20, 80]
+
+    def test_to_polars_effect_has_contrast_column(self, model):
         (res,) = model.margins(variables=["awards"], at={"yr_rnd": None})
         assert res.to_polars().columns == [
             "term",
             "yr_rnd",
+            "contrast",
             "margin",
             "se",
             "lci",
             "uci",
-            "value",
         ]
+
+    def test_values_is_guided_to_at_and_contrast(self, model):
+        res = model.margins(at={"meals": [20]})
+        with pytest.raises(UnknownNameError, match="contrast"):
+            res.values
 
     def test_to_dict(self, model):
         d = model.margins(at={("awards", "yr_rnd"): None}).to_dict()
         assert d["at"] == {"awards": ["No", "No", "Yes", "Yes"], "yr_rnd": ["No", "Yes"] * 2}
-        assert "values" not in d
+        assert "contrast" not in d
 
     def test_repr(self, model):
         r = repr(model.margins(at={("awards", "yr_rnd"): None}))
@@ -280,20 +290,25 @@ class TestGLMMarginsList:
 
     def test_to_polars_stacks_with_null_at_columns(self, model):
         df = model.margins(at={"meals": [20, 80], ("awards", "yr_rnd"): None}).to_polars()
-        assert df.columns == ["term", "awards", "yr_rnd", "margin", "se", "lci", "uci", "value"]
+        assert df.columns == ["term", "meals", "awards", "yr_rnd", "margin", "se", "lci", "uci"]
         assert df["term"].to_list() == ["meals"] * 2 + ["awards#yr_rnd"] * 4
+        assert df["meals"].to_list() == [20, 80, None, None, None, None]
         assert df["awards"].null_count() == 2
-        assert df["value"].dtype == pl.Int64
-        assert df["value"].to_list()[:2] == [20, 80]
 
-    def test_to_polars_mixed_values_become_text(self, model):
+    def test_to_polars_keeps_each_variable_its_type(self, model):
         df = model.margins(at={"meals": [20, 80], "awards": None}).to_polars()
-        assert df["value"].to_list() == ["20", "80", "No", "Yes"]
+        assert df["meals"].dtype == pl.Int64
+        assert df["awards"].to_list() == [None, None, "No", "Yes"]
 
-    def test_to_polars_effects_keep_contrast_labels(self, model):
+    def test_to_polars_effects_stack_contrast_labels(self, model):
         df = model.margins(variables=["meals", "awards"], at={"yr_rnd": None}).to_polars()
-        assert df.columns == ["term", "yr_rnd", "margin", "se", "lci", "uci", "value"]
-        assert df["value"].to_list() == [None, None, "Yes - No", "Yes - No"]
+        assert df.columns == ["term", "yr_rnd", "contrast", "margin", "se", "lci", "uci"]
+        assert df["contrast"].to_list() == [None, None, "Yes - No", "Yes - No"]
+
+    def test_stacked_matches_single_result_columns(self, model):
+        single = model.margins(at={"meals": [20, 80]}).to_polars()
+        stacked = model.margins(at={"meals": [20, 80], "awards": None}).to_polars()
+        assert stacked.filter(pl.col("term") == "meals").select(single.columns).equals(single)
 
     def test_unknown_attribute_is_guided(self, model):
         with pytest.raises(UnknownNameError, match="GLMMarginsList"):
