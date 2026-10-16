@@ -63,7 +63,7 @@ class TestCategoricalAME:
     def test_contrasts_match_r(self, model):
         cat = next(m for m in model.margins() if m.term == "stype")
 
-        assert list(cat.values) == ["H - E", "M - E"]
+        assert list(cat.contrast) == ["H - E", "M - E"]
         np.testing.assert_allclose(cat.margin, [R_AME["H - E"][1], R_AME["M - E"][1]], rtol=RTOL)
         np.testing.assert_allclose(cat.se, [R_AME["H - E"][2], R_AME["M - E"][2]], rtol=1e-5)
 
@@ -90,8 +90,8 @@ class TestCategoricalAME:
     def test_exports_carry_the_contrast_labels(self, model):
         cat = next(m for m in model.margins() if m.term == "stype")
 
-        assert cat.to_polars()["value"].to_list() == ["H - E", "M - E"]
-        assert cat.to_dict()["values"] == ["H - E", "M - E"]
+        assert cat.to_polars()["contrast"].to_list() == ["H - E", "M - E"]
+        assert cat.to_dict()["contrast"] == ["H - E", "M - E"]
 
     def test_renders_without_assuming_numeric_values(self, model):
         cat = next(m for m in model.margins() if m.term == "stype")

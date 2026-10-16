@@ -8,8 +8,15 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **Joint predictive margins.** A tuple key in `GLM.margins(at=...)` sets several variables together, one row per cell: `at={("frailty", "insurance"): [("frail", "medicaid"), ...]}`. `None` as the value means every fitted level of a categorical, or every combination for a tuple key. The result has term `"frailty#insurance"` and one column per variable.
+- **Marginal effects at fixed values.** `variables=` with `at=` gives each effect with the `at` variables set to each cell, e.g. the effect of frailty within each insurance group. `variables=` was ignored when `at=` was given.
+- **`GLMMarginsList`.** `GLM.margins()` returns it wherever it returned a list. It is still a `list`; printing shows every table instead of object reprs, and `to_polars()` stacks the members into one frame.
 - **`to_code()` on `Design`, the replicate-weight variants, `WgtAdjustment`, `Singleton` and `PopSize`.** Python source that rebuilds the object with `import svy`: `eval(design.to_code()) == design`.
 - **`SvyError.to_dict()` names the error class** under `"type"` (e.g. `"ModelError"`), so callers need not match the message.
+
+### Changed
+
+- **BREAKING: `GLMMargins.values` is split into `at` and `contrast`.** `at` holds the value each variable was set to, one column per variable, for single-variable margins too; `contrast` holds the `"k - ref"` labels of a categorical effect. In `to_polars()` the `value` column becomes a column named after each variable, or `contrast`. A single result and a stacked list now share the same columns.
 
 ### Fixed
 
