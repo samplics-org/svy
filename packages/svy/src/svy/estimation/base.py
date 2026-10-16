@@ -1,6 +1,7 @@
 # src/svy/estimation/base.py
 from __future__ import annotations
 
+import copy
 import logging
 import math
 
@@ -125,6 +126,22 @@ def prop_ci_boundary_note(findings: Sequence[Any]) -> str | None:
 if TYPE_CHECKING:
     from svy.core.data_prep import PreparedData
     from svy.core.sample import Sample
+
+
+def _append_overall(grouped: Estimate, whole: Estimate) -> Estimate:
+    out = copy.copy(grouped)
+    out.estimates = [*grouped.estimates, *whole.estimates]
+    k1, k2 = len(grouped.estimates), len(whole.estimates)
+    cov = np.zeros((k1 + k2, k1 + k2))
+    if grouped.covariance.shape == (k1, k1) and whole.covariance.shape == (k2, k2):
+        cov[:k1, :k1] = grouped.covariance
+        cov[k1:, k1:] = whole.covariance
+    out.covariance = cov
+    # The overall rows come from their own call: nothing links them to the domains.
+    out._cov_filled = False
+    seen = {f.code for f in grouped.findings}
+    out.findings = [*grouped.findings, *(f for f in whole.findings if f.code not in seen)]
+    return out
 
 
 class Estimation:
@@ -507,6 +524,28 @@ class Estimation:
             return int(_collect(df_s, prep.df.height).item())
         n = pl.col(p).n_unique() if p else pl.len()
         return max(0, int(_collect(active.select(n), prep.df.height).item()) - 1)
+
+    def _with_overall(self, name: str, call: dict[str, Any]) -> Any:
+        """The ``by`` result of ``name`` with its ``by=None`` rows appended to each member."""
+        kwargs = {k: v for k, v in call.items() if k not in ("self", "overall")}
+        if kwargs.get("by") is None:
+            raise MethodError(
+                title="overall=True needs by=",
+                detail=(
+                    "The overall row is added beside the domain rows; without by= "
+                    "the result is already the overall estimate."
+                ),
+                code="OVERALL_WITHOUT_BY",
+                where=f"Sample.estimation.{name}",
+                param="overall",
+                hint="Pass by=, or drop overall=True.",
+            )
+        estimate = getattr(self, name)
+        grouped = estimate(**kwargs)
+        whole = estimate(**{**kwargs, "by": None})
+        if isinstance(grouped, Estimate):
+            return _append_overall(grouped, whole)
+        return type(grouped)(_append_overall(g, w) for g, w in zip(grouped, whole))
 
     @staticmethod
     def _normalize_deff(deff: object) -> str | None:
@@ -1546,6 +1585,7 @@ class Estimation:
         y: str | Sequence[str],
         *,
         by: str | Sequence[str] | None = None,
+        overall: bool = False,
         where: WhereArg = None,
         method: Literal["taylor", "replication"] | None = None,
         deff: Literal["wor", "wr"] | None = None,
@@ -1591,11 +1631,18 @@ class Estimation:
             The one detectable case raises: if the weights sum to no more than
             the sample size, the correction is non-positive and no design effect
             exists to report.
+        overall : bool, default False
+            With ``by``, also return the estimate over all domains, as the
+            ``by=None`` call gives it: rows with no domain level, listed last
+            and printed as "All". The combined result refuses ``contrast()``;
+            contrast the ``by`` result instead.
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design (Taylor when strata/PSU
             are available, replication otherwise).
         """
+        if overall:
+            return self._with_overall("mean", locals())
         alpha = validate_alpha(alpha, where="Sample.estimation.mean")
         deff_ref = self._normalize_deff(deff)
 
@@ -1676,6 +1723,7 @@ class Estimation:
         y: str | Sequence[str],
         *,
         by: str | Sequence[str] | None = None,
+        overall: bool = False,
         where: WhereArg = None,
         method: Literal["taylor", "replication"] | None = None,
         deff: Literal["wor", "wr"] | None = None,
@@ -1719,10 +1767,17 @@ class Estimation:
             The one detectable case raises: if the weights sum to no more than
             the sample size, the correction is non-positive and no design effect
             exists to report.
+        overall : bool, default False
+            With ``by``, also return the estimate over all domains, as the
+            ``by=None`` call gives it: rows with no domain level, listed last
+            and printed as "All". The combined result refuses ``contrast()``;
+            contrast the ``by`` result instead.
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
         """
+        if overall:
+            return self._with_overall("total", locals())
         alpha = validate_alpha(alpha, where="Sample.estimation.total")
         deff_ref = self._normalize_deff(deff)
 
@@ -1800,6 +1855,7 @@ class Estimation:
         y: str | Sequence[str],
         *,
         by: str | Sequence[str] | None = None,
+        overall: bool = False,
         where: WhereArg = None,
         method: Literal["taylor", "replication"] | None = None,
         ci_method: Literal["logit", "beta", "korn-graubard", "wilson"] = "logit",
@@ -1843,10 +1899,17 @@ class Estimation:
             The one detectable case raises: if the weights sum to no more than
             the sample size, the correction is non-positive and no design effect
             exists to report.
+        overall : bool, default False
+            With ``by``, also return the estimate over all domains, as the
+            ``by=None`` call gives it: rows with no domain level, listed last
+            and printed as "All". The combined result refuses ``contrast()``;
+            contrast the ``by`` result instead.
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
         """
+        if overall:
+            return self._with_overall("prop", locals())
         alpha = validate_alpha(alpha, where="Sample.estimation.prop")
         deff_ref = self._normalize_deff(deff)
 
@@ -1926,6 +1989,7 @@ class Estimation:
         x: str | Sequence[str],
         *,
         by: str | Sequence[str] | None = None,
+        overall: bool = False,
         where: WhereArg = None,
         method: Literal["taylor", "replication"] | None = None,
         deff: Literal["wor", "wr"] | None = None,
@@ -1969,10 +2033,17 @@ class Estimation:
             The one detectable case raises: if the weights sum to no more than
             the sample size, the correction is non-positive and no design effect
             exists to report.
+        overall : bool, default False
+            With ``by``, also return the estimate over all domains, as the
+            ``by=None`` call gives it: rows with no domain level, listed last
+            and printed as "All". The combined result refuses ``contrast()``;
+            contrast the ``by`` result instead.
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
         """
+        if overall:
+            return self._with_overall("ratio", locals())
         alpha = validate_alpha(alpha, where="Sample.estimation.ratio")
         deff_ref = self._normalize_deff(deff)
 
@@ -2285,6 +2356,7 @@ class Estimation:
         *,
         p: float | Sequence[float] = (0.25, 0.50, 0.75),
         by: str | Sequence[str] | None = None,
+        overall: bool = False,
         where: WhereArg = None,
         method: Literal["taylor", "replication"] | None = None,
         fay_coef: float = 0.0,
@@ -2313,6 +2385,11 @@ class Estimation:
             one member per probability, in the order given.
         by : str or sequence of str, optional
             Domain columns. Each result then carries one row per domain.
+        overall : bool, default False
+            With ``by``, also return the estimate over all domains, as the
+            ``by=None`` call gives it: rows with no domain level, listed last
+            and printed as "All". The combined result refuses ``contrast()``;
+            contrast the ``by`` result instead.
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
@@ -2331,6 +2408,8 @@ class Estimation:
         --------
         median : The p = 0.5 case, reported as ``PopParam.MEDIAN``.
         """
+        if overall:
+            return self._with_overall("quantile", locals())
         alpha = validate_alpha(alpha, where="Sample.estimation.quantile")
         probs, p_is_scalar = self._normalize_probs(p)
 
@@ -2415,6 +2494,7 @@ class Estimation:
         y: str | Sequence[str],
         *,
         by: str | Sequence[str] | None = None,
+        overall: bool = False,
         where: WhereArg = None,
         method: Literal["taylor", "replication"] | None = None,
         fay_coef: float = 0.0,
@@ -2431,6 +2511,11 @@ class Estimation:
             A single column, or a list. A list returns a ``list[Estimate]``.
             Ungrouped Taylor medians run in parallel across variables (median
             amortises no design build; the sort dominates).
+        overall : bool, default False
+            With ``by``, also return the estimate over all domains, as the
+            ``by=None`` call gives it: rows with no domain level, listed last
+            and printed as "All". The combined result refuses ``contrast()``;
+            contrast the ``by`` result instead.
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
@@ -2440,6 +2525,8 @@ class Estimation:
         quantile : Any probability. ``median(y)`` equals ``quantile(y, p=0.5)``
             numerically; only the reported ``param`` differs.
         """
+        if overall:
+            return self._with_overall("median", locals())
         alpha = validate_alpha(alpha, where="Sample.estimation.median")
         if not isinstance(y, str):
             ys = list(y)

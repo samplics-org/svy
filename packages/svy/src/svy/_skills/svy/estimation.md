@@ -55,7 +55,8 @@ women_by_region = sample.estimation.mean(
 )
 ```
 
-`by=` gives one row per level (or combination of levels). `where=` restricts
+`by=` gives one row per level (or combination of levels); add `overall=True`
+for the all-domains row too, listed last. `where=` restricts
 to a subpopulation; it takes an expression built with `svy.col`, or a list of
 them combined with and. Both keep the full design for the variance and set the
 degrees of freedom from the PSUs that hold domain members. Do not filter the

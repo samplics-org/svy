@@ -111,14 +111,27 @@ def row_order(
     names = label_vars(estimates, param=param, as_factor=as_factor)
     ranks = level_ranks(orders)
     levels = [_row_levels(p, names, n_by) for p in estimates]
+    # Overall rows (overall=True) go after every domain.
+    last = [n_by > 0 and p.by is None for p in estimates]
     try:
-        keys = [tuple(ranked_sort_key(v, ranks.get(c)) for c, v in lv) for lv in levels]
+        keys = [
+            (last[i], *(ranked_sort_key(v, ranks.get(c)) for c, v in lv))
+            for i, lv in enumerate(levels)
+        ]
         return sorted(range(len(estimates)), key=keys.__getitem__)
     except TypeError:
         # A level the data lookup could not restore stays a string beside
         # native values; compare everything as text rather than fail.
-        keys = [tuple(ranked_sort_key(str(v), ranks.get(c)) for c, v in lv) for lv in levels]
+        keys = [
+            (last[i], *(ranked_sort_key(str(v), ranks.get(c)) for c, v in lv))
+            for i, lv in enumerate(levels)
+        ]
         return sorted(range(len(estimates)), key=keys.__getitem__)
+
+
+def _has_overall_rows(estimates: Sequence[Any]) -> bool:
+    """Rows of overall=True: no domain, beside rows that have one."""
+    return any(p.by is None for p in estimates) and any(p.by for p in estimates)
 
 
 def _label_of(lab: VarLabels | None, raw: Any) -> str | None:
@@ -212,10 +225,12 @@ def estimate_frame(
         if show_prob and est.prob is not None:
             # Leading column, so quantiles read p → estimate left to right.
             r["prob"] = est.prob
-        for col, raw in _row_levels(est, names, n_by):
+        overall_row = n_by > 0 and est.by is None
+        for i, (col, raw) in enumerate(_row_levels(est, names, n_by)):
             lab = labels.get(col)
             if display:
-                r[(lab.var_label if lab else "") or col] = _label_of(lab, raw)
+                shown = "All" if overall_row and i < n_by else _label_of(lab, raw)
+                r[(lab.var_label if lab else "") or col] = shown
                 continue
             r[col] = raw
             if col in labelled:
@@ -274,6 +289,9 @@ def estimate_frame(
             shown.setdefault(_label_of(lab, raw), i)
         ranks[(lab.var_label if lab else "") or var] = shown
     sort_display_rows(rows, numeric_keys=skip, ranks=ranks)
+    if n_by:
+        # Overall rows (overall=True) go after every domain; the sort is stable.
+        rows.sort(key=lambda r: estimates[r[_ROW_POS]].by is None)
     order = [r.pop(_ROW_POS) for r in rows]
     df = pl.from_dicts(rows)
     if row_index:
@@ -885,6 +903,17 @@ class Estimate:
                 ),
                 code="CONTRAST_NO_COVARIANCE",
                 where="Estimate.contrast",
+            )
+        if k > 1 and not self._cov_filled and _has_overall_rows(self.estimates):
+            raise MethodError(
+                title="No between-estimate covariance on this result",
+                detail=(
+                    "The overall rows of overall=True come from their own call, so "
+                    "no covariance links them to the domain rows."
+                ),
+                code="CONTRAST_NO_COVARIANCE",
+                where="Estimate.contrast",
+                hint="Contrast the by= result without overall=True.",
             )
         if k > 1 and not self._cov_filled:
             raise MethodError(

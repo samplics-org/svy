@@ -6,6 +6,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Added
+
+- **`overall=True` on `mean`, `total`, `prop`, `ratio`, `quantile` and `median`.** With `by=`, the result also carries the estimate over all domains, as the `by=None` call gives it: rows with no domain level, listed last and printed as "All". The combined result refuses `contrast()`, since nothing links the overall rows to the domain rows; contrast the `by=` result.
+
 ## [0.34.0] — 2026-10-15
 
 Requires [`svy-io`](../svy-io/CHANGELOG.md) 0.7.0, which carries the reader and writer changes below.
