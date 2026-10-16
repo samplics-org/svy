@@ -13,6 +13,7 @@ _group_keys.py  _build_group_keys, _normalize_n_for_groups, _compute_pop_sizes
 srs.py          srs() + _srs_writeback, _ensure_row_index, _apply_where
 pps.py          pps_sys/wr/brewer/murphy/rs() + _pps() + _pps_writeback
 multistage.py   add_stage()
+stages.py       multistage() + Stage
 allocation.py   allocate() -- proportional / neyman / equal / rate
 """
 
@@ -29,6 +30,8 @@ from svy.selection.pps import pps_rs as _pps_rs
 from svy.selection.pps import pps_sys as _pps_sys
 from svy.selection.pps import pps_wr as _pps_wr
 from svy.selection.srs import srs as _srs
+from svy.selection.stages import Stage
+from svy.selection.stages import multistage as _multistage
 from svy.utils.random_state import RandomState
 
 
@@ -451,6 +454,44 @@ class Selection:
     # ------------------------------------------------------------------ #
     # Multi-stage
     # ------------------------------------------------------------------ #
+
+    def multistage(
+        self,
+        stages: Sequence[Stage],
+        *,
+        rstate: RandomState = None,
+    ) -> "Sample":
+        """
+        Draw several stages in one call, each within the units selected at the stage before.
+
+        For a frame with one row per final unit and every stage's id columns (a register).
+        Stage 1 is stratified by the design's strata; each later stage draws within every
+        selected parent. ``add_stage`` stays the tool when later frames are listed in the field.
+
+        Parameters
+        ----------
+        stages : sequence of svy.selection.Stage
+            The stages, in order.
+        rstate : int, Generator or SeedSequence, optional
+            Seed; one stream drives every stage in order.
+
+        Returns
+        -------
+        Sample
+            This sample, holding the rows of the selected final units with
+            ``svy_prob_selection_stage{k}`` / ``svy_sample_weight_stage{k}`` (given the stage
+            before) and their products ``svy_prob_selection`` / ``svy_sample_weight``; its design
+            gets ``psu`` = the stage-1 unit, ``ssu`` = the stage-2 unit, ``prob`` and ``wgt``.
+
+        Examples
+        --------
+        >>> from svy.selection import Stage
+        >>> sample.sampling.multistage(
+        ...     [Stage("district", n=3), Stage("ea", n=2, mos="hh"), Stage(None, n=12)],
+        ...     rstate=1,
+        ... )
+        """
+        return _multistage(self._sample, stages, rstate=rstate)
 
     def add_stage(
         self,

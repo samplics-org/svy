@@ -539,7 +539,6 @@ def _srs_writeback(
     hit_col = hit_name or design.hit or SVY_HIT
 
     if is_chaining:
-        assert design.prob is not None
         temp = _apply_chaining_writeback(
             src_df=src_df,
             sel_idx=sel_idx,
@@ -547,7 +546,6 @@ def _srs_writeback(
             probs=probs,
             certainty=None,
             row_col=row_col,
-            prev_prob_col=design.prob,
             out_prob_col=out_prob_col,
             out_wgt_col=wgt_col,
             hit_col=hit_col,

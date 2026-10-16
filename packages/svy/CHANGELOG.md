@@ -9,6 +9,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 ### Added
 
 - **Sample size for overlapping rounds.** `SampleSize().compare_props` and `compare_means` take `rho=` (a unit's correlation between rounds) and `overlap=` (share of the smaller round in both), scalar or per stratum. Var(d) gains Kish's `-2 rho m sqrt(V1 V2)/(n1 n2)`; full overlap matches Stata `power pairedmeans`. The defaults keep the independent-samples result.
+- **`sample.sampling.multistage([Stage(...), ...])`.** Draws every stage in one call from a frame that holds all stages' ids: stage 1 within the design's strata, each later stage within every selected parent, SRS or PPS (`mos=`). Each stage's conditional probability and weight is a column (`svy_prob_selection_stage{k}`), with their products as `prob`/`wgt`; the design gets `psu` (stage-1 unit) and `ssu` (stage-2 unit). A parent with fewer units than asked gives all of them, with one INFO finding. `add_stage` remains for frames listed in the field.
 - **Joint predictive margins.** A tuple key in `GLM.margins(at=...)` sets several variables together, one row per cell: `at={("frailty", "insurance"): [("frail", "medicaid"), ...]}`. `None` as the value means every fitted level of a categorical, or every combination for a tuple key. The result has term `"frailty#insurance"` and one column per variable.
 - **Marginal effects at fixed values.** `variables=` with `at=` gives each effect with the `at` variables set to each cell, e.g. the effect of frailty within each insurance group. `variables=` was ignored when `at=` was given.
 - **`GLMMarginsList`.** `GLM.margins()` returns it wherever it returned a list. It is still a `list`; printing shows every table instead of object reprs, and `to_polars()` stacks the members into one frame.
@@ -26,6 +27,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **A serialized two-group t-test lost its group's value labels**, so its `to_polars()` had no `<group>_label` column.
 - **`Design` printed a short form of its replicate weights**, dropping `fay_coef`, scale and units, and did not show `wgt_adjustment`. It shows both in full.
 - **Replicate weights printed as invalid Python:** the method and kind unquoted and `fay=` for `fay_coef=`.
+- **`add_stage` chains more than two stages.** A third call raised `DuplicateError` on `svy_prob_selection_stage1`. Each stage k now keeps `svy_prob_selection_stage{k}` and `svy_sample_weight_stage{k}`, its hits and certainty get the `_stage{k}` suffix, and the overall probability is the product of every stage's. The next stage links on its Design `psu`, matched to the same-named column of the current sample, else to the stage-1 PSU. A link that matches several rows of the current sample, such as a bare frame past stage two, now raises instead of duplicating rows; so does `add_stage` before selecting from the stage just added.
 
 ## [0.34.0] — 2026-10-15
 
