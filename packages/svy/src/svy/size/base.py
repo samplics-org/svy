@@ -653,6 +653,8 @@ class SampleSize:
         var_mode: Literal["alt-props", "pooled-prop", "max-var"] = "alt-props",
         deff: Number | DomainScalarMap = 1.0,
         resp_rate: Number | DomainScalarMap = 1.0,
+        rho: Number | DomainScalarMap = 0.0,
+        overlap: Number | DomainScalarMap = 0.0,
         group_labels: list[str] | None = None,
     ) -> "SampleSize":
         if group_labels is not None:
@@ -672,6 +674,8 @@ class SampleSize:
             var_mode=var_mode,
             deff=deff,
             resp_rate=resp_rate,
+            rho=rho,
+            overlap=overlap,
         )
 
     def compare_means(
@@ -690,6 +694,8 @@ class SampleSize:
         power: Number | DomainScalarMap = 0.80,
         deff: Number | DomainScalarMap = 1.0,
         resp_rate: Number | DomainScalarMap = 1.0,
+        rho: Number | DomainScalarMap = 0.0,
+        overlap: Number | DomainScalarMap = 0.0,
         group_labels: list[str] | None = None,
     ) -> "SampleSize":
         if group_labels is not None:
@@ -710,6 +716,8 @@ class SampleSize:
             power=power,
             deff=deff,
             resp_rate=resp_rate,
+            rho=rho,
+            overlap=overlap,
         )
 
     def allocate(

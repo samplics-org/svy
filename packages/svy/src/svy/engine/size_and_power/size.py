@@ -255,6 +255,29 @@ def _validate_power(power: Number) -> float:
     return b
 
 
+def _validate_overlap(rho: Number, overlap: Number) -> tuple[float, float]:
+    r, o = float(rho), float(overlap)
+    if not (math.isfinite(r) and -1.0 <= r <= 1.0):
+        raise MethodError.invalid_range(
+            where=None,
+            param="rho",
+            got=rho,
+            min_=-1.0,
+            max_=1.0,
+            hint="rho is the correlation of a unit's values between the two rounds.",
+        )
+    if not (math.isfinite(o) and 0.0 <= o <= 1.0):
+        raise MethodError.invalid_range(
+            where=None,
+            param="overlap",
+            got=overlap,
+            min_=0.0,
+            max_=1.0,
+            hint="overlap is the share of the smaller round's units that are in both rounds.",
+        )
+    return r, o
+
+
 def _validate_sigma(sigma: Number, *, param: str = "sigma") -> float:
     s = float(sigma)
     if not (math.isfinite(s) and s > 0.0):
@@ -1003,6 +1026,8 @@ def _wald_two_group_sizes(
     alpha: Number,
     power: Number,
     delta: Number,
+    rho: Number = 0.0,
+    overlap: Number = 0.0,
 ) -> tuple[Number, Number]:
     z_a, z_b = _zcrit_pair(
         two_sides=two_sides,
@@ -1010,7 +1035,24 @@ def _wald_two_group_sizes(
         power=float(power),
         delta=float(delta),
     )
-    var_factor = v1 + (float(v2) / float(kappa))  # (float(v1) / float(kappa)) + v2
+    r, o = _validate_overlap(rho, overlap)
+    k = float(kappa)
+    # Kish's overlap: m = o * min(n1, n2) units in both rounds add
+    # -2 rho m sqrt(V1 V2) / (n1 n2) to Var(d); per n1 that is the last term.
+    var_factor = v1 + float(v2) / k - 2.0 * r * o * min(1.0, k) * math.sqrt(v1 * v2) / k
+    if var_factor <= 0.0:
+        raise MethodError(
+            title="No variance left in the change",
+            detail=(
+                f"With rho={r} and overlap={o}, the variance of the difference is "
+                f"{var_factor:.3g} per unit: the two rounds would always agree."
+            ),
+            code="SIZE_NO_VARIANCE",
+            where="SampleSize.compare",
+            param="rho",
+            got=r,
+            hint="Use a correlation below 1, or a partial overlap.",
+        )
     n1 = _wald_n2_from_varfactor(var_factor=var_factor, denom=float(denom), z_a=z_a, z_b=z_b)
     n2 = int(math.ceil(float(kappa) * n1))
     return n1, n2
@@ -1027,6 +1069,8 @@ def _wald_sample_size_two_means(
     alpha: Number | DomainScalarMap,
     power: Number | DomainScalarMap,
     var_mode: MeanVarMode = MeanVarMode.EQUAL_VAR,
+    rho: Number | DomainScalarMap = 0.0,
+    overlap: Number | DomainScalarMap = 0.0,
 ) -> tuple[Number, Number] | dict[Category, tuple[Number, Number]]:
     if (
         _is_number(epsilon)
@@ -1046,6 +1090,8 @@ def _wald_sample_size_two_means(
             alpha=cast(Number, alpha),
             power=cast(Number, power),
             var_mode=var_mode,
+            rho=rho,
+            overlap=overlap,
         )
     elif _is_map(epsilon) and _is_map(alpha) and _is_map(power):
         return _wald_sample_size_two_means_map(
@@ -1058,6 +1104,8 @@ def _wald_sample_size_two_means(
             alpha=alpha,
             power=power,
             var_mode=var_mode,
+            rho=rho,
+            overlap=overlap,
         )
     else:
         raise ValueError("Invalid input types")
@@ -1074,6 +1122,8 @@ def _wald_sample_size_two_means_scalar(
     alpha: Number,
     power: Number,
     var_mode: MeanVarMode = MeanVarMode.EQUAL_VAR,
+    rho: Number = 0.0,
+    overlap: Number = 0.0,
 ) -> tuple[Number, Number]:
     d0 = _as_float(delta)
     eps = _as_float(epsilon)  # signed
@@ -1094,7 +1144,16 @@ def _wald_sample_size_two_means_scalar(
             k = _choose_kappa(float(kappa) if kappa is not None else None, default_kappa=k_opt)
 
     return _wald_two_group_sizes(
-        v1=v1, v2=v2, kappa=k, denom=denom, two_sides=two_sides, alpha=a, power=b, delta=d0
+        v1=v1,
+        v2=v2,
+        kappa=k,
+        denom=denom,
+        two_sides=two_sides,
+        alpha=a,
+        power=b,
+        delta=d0,
+        rho=rho,
+        overlap=overlap,
     )
 
 
@@ -1109,6 +1168,8 @@ def _wald_sample_size_two_means_map(
     alpha: DomainScalarMap | Number,
     power: DomainScalarMap | Number,
     var_mode: MeanVarMode = MeanVarMode.EQUAL_VAR,
+    rho: DomainScalarMap | Number = 0.0,
+    overlap: DomainScalarMap | Number = 0.0,
 ) -> dict[Category, tuple[Number, Number]]:
     keys = _ensure_same_keys(
         epsilon,
@@ -1130,6 +1191,8 @@ def _wald_sample_size_two_means_map(
             alpha=_lookup(alpha, k),
             power=_lookup(power, k),
             var_mode=var_mode,
+            rho=_lookup(rho, k),
+            overlap=_lookup(overlap, k),
         )
         out[k] = (n1k, n2k)
     return out
@@ -1149,6 +1212,8 @@ def _wald_sample_size_two_props(
     alpha: Number | DomainScalarMap,
     power: Number | DomainScalarMap,
     var_mode: PropVarMode = PropVarMode.ALT_PROPS,
+    rho: Number | DomainScalarMap = 0.0,
+    overlap: Number | DomainScalarMap = 0.0,
 ) -> tuple[Number, Number] | dict[Category, tuple[Number, Number]]:
     if (
         _is_number(epsilon)
@@ -1169,6 +1234,8 @@ def _wald_sample_size_two_props(
             alpha=cast(Number, alpha),
             power=cast(Number, power),
             var_mode=var_mode,
+            rho=rho,
+            overlap=overlap,
         )
     elif (
         _is_map(epsilon)
@@ -1189,6 +1256,8 @@ def _wald_sample_size_two_props(
             alpha=alpha,
             power=power,
             var_mode=var_mode,
+            rho=rho,
+            overlap=overlap,
         )
     else:
         raise ValueError("Invalid input types")
@@ -1205,6 +1274,8 @@ def _wald_sample_size_two_props_scalar(
     power: Number,
     kappa: Number | None = None,
     var_mode: PropVarMode = PropVarMode.ALT_PROPS,
+    rho: Number = 0.0,
+    overlap: Number = 0.0,
 ) -> tuple[Number, Number]:
     d0 = _as_float(delta)
     eps = _as_float(epsilon)  # signed
@@ -1232,7 +1303,16 @@ def _wald_sample_size_two_props_scalar(
             k = _choose_kappa(float(kappa) if kappa is not None else None, default_kappa=1.0)
 
     return _wald_two_group_sizes(
-        v1=v1, v2=v2, kappa=k, denom=denom, two_sides=two_sides, alpha=a, power=b, delta=d0
+        v1=v1,
+        v2=v2,
+        kappa=k,
+        denom=denom,
+        two_sides=two_sides,
+        alpha=a,
+        power=b,
+        delta=d0,
+        rho=rho,
+        overlap=overlap,
     )
 
 
@@ -1247,6 +1327,8 @@ def _wald_sample_size_two_props_map(
     alpha: DomainScalarMap | Number,
     power: DomainScalarMap | Number,
     var_mode: PropVarMode = PropVarMode.ALT_PROPS,
+    rho: DomainScalarMap | Number = 0.0,
+    overlap: DomainScalarMap | Number = 0.0,
 ) -> dict[Category, tuple[Number, Number]]:
     keys = _ensure_same_keys(
         epsilon,
@@ -1269,6 +1351,8 @@ def _wald_sample_size_two_props_map(
             alpha=_lookup(alpha, k),
             power=_lookup(power, k),
             var_mode=var_mode,
+            rho=_lookup(rho, k),
+            overlap=_lookup(overlap, k),
         )
         out[k] = (n1k, n2k)
     return out
