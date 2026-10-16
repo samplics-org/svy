@@ -106,7 +106,7 @@ def test_margins_contrast_uses_labels(sample):
     glm = sample.glm.fit("y", x=[svy.Cat("area")], family="binomial")
     m = glm.margins(variables=["area"])
     m = m[0] if isinstance(m, list) else m
-    assert m.to_polars()["value"].to_list() == ["RURAL - URBANA"]
+    assert m.to_polars()["contrast"].to_list() == ["RURAL - URBANA"]
 
 
 def test_predict_unaffected(sample):

@@ -440,12 +440,12 @@ def test_margins_keep_identified_standard_errors(sep_model):
     g = ame["g"].to_polars()
     assert np.isfinite(g["se"].to_numpy()).all()
     pm = sep_model.margins(at={"g": ["a", "b", "c"]}).to_polars()
-    by = dict(zip(pm["value"].to_list(), pm["margin"].to_list()))
-    se = dict(zip(pm["value"].to_list(), pm["se"].to_list()))
+    by = dict(zip(pm["g"].to_list(), pm["margin"].to_list()))
+    se = dict(zip(pm["g"].to_list(), pm["se"].to_list()))
     assert by["c"] < 1e-6 and se["c"] < 1e-6
     assert np.isfinite(se["a"]) and se["a"] > 1e-3
     # c - a is minus a's margin, with its standard error.
-    ca = g.filter(pl.col("value") == "c - a").row(0, named=True)
+    ca = g.filter(pl.col("contrast") == "c - a").row(0, named=True)
     assert ca["margin"] == pytest.approx(-by["a"], abs=1e-6)
     assert ca["se"] == pytest.approx(se["a"], rel=1e-6)
 
