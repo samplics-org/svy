@@ -335,6 +335,10 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
             return [f"{self.prefix}{i:0{padding}d}" for i in range(1, self.n_reps + 1)]
         return [f"{self.prefix}{i}" for i in range(1, self.n_reps + 1)]
 
+    def to_code(self) -> str:
+        """Python source that rebuilds these replicate weights, runnable with ``import svy``."""
+        return self._to_code()
+
     def _to_code(self) -> str:
         """``svy.<Variant>(...)`` with the fields that differ from their defaults."""
         from svy.core.design import _struct_code
@@ -454,7 +458,11 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
         return []
 
     def __repr__(self) -> str:
-        parts = [f"method={self.method}", f"prefix='{self.prefix}'", f"n_reps={self.n_reps}"]
+        parts = [
+            f"method={str(self.method)!r}",
+            f"prefix={self.prefix!r}",
+            f"n_reps={self.n_reps}",
+        ]
         if self.df is not None:
             parts.append(f"df={self.df}")
         parts.extend(self._variant_parts())
@@ -515,7 +523,7 @@ class BootstrapWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="Bootstrap", ta
         return [1.0 / self.n_reps] * self.n_reps
 
     def _variant_parts(self) -> list[str]:
-        return [f"kind={self.kind}"]
+        return [f"kind={str(self.kind)!r}"]
 
     def _plain_variant_lines(self) -> list[str]:
         return [f"Kind     : {self.kind}"]
@@ -567,7 +575,7 @@ class JackknifeWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="Jackknife", ta
         return [(self.n_reps - 1) / self.n_reps] * self.n_reps
 
     def _variant_parts(self) -> list[str]:
-        return [] if self.kind is None else [f"kind={self.kind}"]
+        return [] if self.kind is None else [f"kind={str(self.kind)!r}"]
 
     def _plain_variant_lines(self) -> list[str]:
         return [] if self.kind is None else [f"Kind     : {self.kind}"]
@@ -588,7 +596,7 @@ class BrrWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="BRR", tag_field="met
         return [coef] * self.n_reps
 
     def _variant_parts(self) -> list[str]:
-        return [f"fay={self.fay_coef}"]
+        return [f"fay_coef={self.fay_coef}"]
 
     def _plain_variant_lines(self) -> list[str]:
         return [f"Fay coef : {self.fay_coef}"]

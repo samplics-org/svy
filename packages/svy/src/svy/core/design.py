@@ -94,6 +94,10 @@ class PopSize(NamedTuple):
     psu: str
     ssu: str | None = None
 
+    def to_code(self) -> str:
+        """Python source that rebuilds this specification, runnable with ``import svy``."""
+        return f"svy.{self!r}"
+
 
 # =============================================================================
 # Replicate Weights (Strict Configuration)
@@ -279,6 +283,10 @@ class WgtAdjustment(msgspec.Struct, frozen=True, kw_only=True):
     @property
     def is_variance_consumed(self) -> bool:
         return self.kind in self.VARIANCE_CONSUMED
+
+    def to_code(self) -> str:
+        """Python source that rebuilds this record, runnable with ``import svy``."""
+        return self._to_code()
 
     def _to_code(self) -> str:
         return _struct_code(self, "svy.WgtAdjustment")
@@ -593,6 +601,10 @@ class Singleton(_SingletonMethodField, frozen=True, kw_only=True):
 
     def __repr__(self) -> str:
         return self._code("", repr)
+
+    def to_code(self) -> str:
+        """Python source that rebuilds this rule, runnable with ``import svy``."""
+        return self._to_code()
 
     def _to_code(self) -> str:
         if self.rstate is not None and not isinstance(self.rstate, int):
@@ -1434,9 +1446,19 @@ class Design:
             )
         )
 
+    def to_code(self) -> str:
+        """
+        Python source that rebuilds this design, runnable with ``import svy``
+        (and ``import datetime`` when a stratum value is a date).
+
+        Examples
+        --------
+        >>> svy.Design(stratum="region", psu="ea", wgt="w").to_code()
+        "svy.Design(stratum='region', wgt='w', psu='ea')"
+        """
+        return self._to_code()
+
     def _to_code(self) -> str:
-        """Source that rebuilds this design: ``svy.Design(...)``, runnable with
-        only ``import svy``."""
         return f"svy.Design({', '.join(self._code_args())})"
 
     def _code_args(self) -> list[str]:
