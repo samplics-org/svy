@@ -714,7 +714,7 @@ static int dta_compare_value_labels(const readstat_value_label_t *vl1, const rea
     if (vl2->tag) {
         return -1;
     }
-    return vl1->int32_key - vl2->int32_key;
+    return (vl1->int32_key > vl2->int32_key) - (vl1->int32_key < vl2->int32_key);
 }
 
 static readstat_error_t dta_emit_value_labels(readstat_writer_t *writer, dta_ctx_t *ctx) {

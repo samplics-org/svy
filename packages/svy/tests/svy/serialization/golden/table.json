@@ -24,8 +24,9 @@
     "High"
   ],
   "rowvar": "education",
-  "schema_version": "svy-result/0.8",
+  "schema_version": "svy-result/0.9",
   "share_of": "total",
   "stats": null,
-  "type": "Two-Way"
+  "type": "Two-Way",
+  "units": "proportion"
 }

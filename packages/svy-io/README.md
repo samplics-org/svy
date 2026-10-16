@@ -95,7 +95,7 @@ df_out = pl.DataFrame({"id": [1, 2, 3], "income": [50000, 62000, 58000]})
 write_dta(
     df_out,
     "output.dta",
-    version=15,                              # 8–15 supported
+    version=14,                              # 8–15; default writes format 118
     file_label="Survey Data 2024",
     var_labels={"income": "Annual income (USD)"}
 )

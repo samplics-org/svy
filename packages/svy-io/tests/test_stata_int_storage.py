@@ -180,3 +180,12 @@ def test_sas_and_spss_numerics_stay_double(tmp_path):
     for df, meta in frames:
         assert set(_kinds(meta).values()) <= {"double", "string"}
         assert not any(dt.is_integer() for dt in df.schema.values())
+
+
+def test_boolean_column_is_byte(tmp_path):
+    df = pl.DataFrame({"b": [True, False, None]})
+
+    got, meta = _roundtrip(tmp_path, df)
+
+    assert _kinds(meta) == {"b": "int8"}
+    assert got["b"].to_list() == [1, 0, None]
