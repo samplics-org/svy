@@ -6,13 +6,17 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+## [0.35.0] — 2026-10-16
+
+Requires [`svy-io`](../svy-io/CHANGELOG.md) 0.7.1, which fixes writing Stata files.
+
 ### Added
 
-- **Sample size for overlapping rounds.** `SampleSize().compare_props` and `compare_means` take `rho=` (a unit's correlation between rounds) and `overlap=` (share of the smaller round in both), scalar or per stratum. Var(d) gains Kish's `-2 rho m sqrt(V1 V2)/(n1 n2)`; full overlap matches Stata `power pairedmeans`. The defaults keep the independent-samples result.
-- **`sample.sampling.multistage([Stage(...), ...])`.** Draws every stage in one call from a frame that holds all stages' ids: stage 1 within the design's strata, each later stage within every selected parent, SRS or PPS (`mos=`). Each stage's conditional probability and weight is a column (`svy_prob_selection_stage{k}`), with their products as `prob`/`wgt`; the design gets `psu` (stage-1 unit) and `ssu` (stage-2 unit). A parent with fewer units than asked gives all of them, with one INFO finding. `add_stage` remains for frames listed in the field.
 - **Joint predictive margins.** A tuple key in `GLM.margins(at=...)` sets several variables together, one row per cell: `at={("frailty", "insurance"): [("frail", "medicaid"), ...]}`. `None` as the value means every fitted level of a categorical, or every combination for a tuple key. The result has term `"frailty#insurance"` and one column per variable.
 - **Marginal effects at fixed values.** `variables=` with `at=` gives each effect with the `at` variables set to each cell, e.g. the effect of frailty within each insurance group. `variables=` was ignored when `at=` was given.
 - **`GLMMarginsList`.** `GLM.margins()` returns it wherever it returned a list. It is still a `list`; printing shows every table instead of object reprs, and `to_polars()` stacks the members into one frame.
+- **Sample size for overlapping rounds.** `SampleSize().compare_props` and `compare_means` take `rho=` (a unit's correlation between rounds) and `overlap=` (share of the smaller round in both), scalar or per stratum. Var(d) gains Kish's `-2 rho m sqrt(V1 V2)/(n1 n2)`; full overlap matches Stata `power pairedmeans`. The defaults keep the independent-samples result.
+- **`sample.sampling.multistage([Stage(...), ...])`.** Draws every stage in one call from a frame that holds all stages' ids: stage 1 within the design's strata, each later stage within every selected parent, SRS or PPS (`mos=`). Each stage's conditional probability and weight is a column (`svy_prob_selection_stage{k}`), with their products as `prob`/`wgt`; the design gets `psu` (stage-1 unit) and `ssu` (stage-2 unit). A parent with fewer units than asked gives all of them, with one INFO finding. `add_stage` remains for frames listed in the field.
 - **Serialized results carry what a report needs (`svy-result/0.9`).** A table records its `units` (`"proportion"`, `"percent"` or `"count"`, also on `Table`). `ttest(..., by=...)` serializes, as `ttest_one_group_by` or `ttest_two_groups_by`. A GLM fit carries its `terms` (type, levels, reference, value labels), and each coefficient its printed `label` and `parts`, the (variable, level) of each factor, so names like `sex_Male` need no parsing. All new fields are optional; older payloads decode with `None`.
 - **`svy.serialize.from_dict`** decodes the output of `to_dict`, or `to_json` read by any JSON parser.
 - **`to_code()` on `Design`, the replicate-weight variants, `WgtAdjustment`, `Singleton` and `PopSize`.** Python source that rebuilds the object with `import svy`: `eval(design.to_code()) == design`.
@@ -1227,7 +1231,8 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.34.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.35.0...HEAD
+[0.35.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.35.0
 [0.34.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.34.0
 [0.33.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.33.1
 [0.33.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.33.0
