@@ -6,6 +6,16 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Added
+
+- **`to_code()` on `Design`, the replicate-weight variants, `WgtAdjustment`, `Singleton` and `PopSize`.** Python source that rebuilds the object with `import svy`: `eval(design.to_code()) == design`.
+- **`SvyError.to_dict()` names the error class** under `"type"` (e.g. `"ModelError"`), so callers need not match the message.
+
+### Fixed
+
+- **`Design` printed a short form of its replicate weights**, dropping `fay_coef`, scale and units, and did not show `wgt_adjustment`. It shows both in full.
+- **Replicate weights printed as invalid Python:** the method and kind unquoted and `fay=` for `fay_coef=`.
+
 ## [0.34.0] — 2026-10-15
 
 Requires [`svy-io`](../svy-io/CHANGELOG.md) 0.7.0, which carries the reader and writer changes below.

@@ -190,3 +190,10 @@ def test_to_dict_truncates_non_none_got():
     got_out = err.to_dict()["error"]["got"]
     assert got_out.endswith("…")
     assert len(got_out) < 300
+
+
+def test_to_dict_keeps_the_error_class():
+    from svy.errors.model_errors import ModelError
+
+    assert SvyError(title="X", detail="Y").to_dict()["error"]["type"] == "SvyError"
+    assert ModelError.not_fitted(where="w").to_dict()["error"]["type"] == "ModelError"
