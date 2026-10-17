@@ -67,6 +67,58 @@ def test_store_lists_its_findings_with_counts():
     assert "WARNING" in plain and "SECOND" in plain
 
 
+_LONG = (
+    "Stage 2 (ea) asks for more units than 2 parent(s) hold, so all their units are taken, "
+    "with probability 1: geo1=geo_02, geo2=geo_02_02; geo1=geo_03, geo2=geo_03_05"
+)
+
+
+def _widths(text: str) -> list[int]:
+    return [len(line.rstrip()) for line in text.splitlines()]
+
+
+def _long_store() -> WarningStore:
+    store = WarningStore()
+    store.add(SvyWarning(code="LONG", title="t", detail=_LONG, level=Severity.INFO))
+    store.add(_finding(Severity.WARNING, "SHORT"))
+    return store
+
+
+def test_store_stacks_labelled_blocks():
+    plain = _long_store().__plain_str__()
+    assert "  Level   INFO\n  Code    LONG\n  Detail  Stage 2" in plain
+    assert "  Level   WARNING\n  Code    SHORT\n  Detail  What happened." in plain
+    assert max(_widths(plain)) <= 88
+    # Continuation lines sit under the detail column, not under the labels.
+    detail = plain.split("Detail  Stage 2")[1].split("\n\n")[0]
+    assert all(line.startswith(" " * 10) for line in detail.splitlines()[1:])
+
+
+def test_store_prints_within_text_width():
+    store = _long_store()
+    shown = _rich(store)
+    assert max(_widths(shown)) <= 88
+    assert "Level" in shown and "Code" in shown and "Detail" in shown
+    assert "geo2=geo_03_05" in shown
+
+
+def test_error_panel_capped_at_text_width():
+    e = SvyError(title="Bad", detail=_LONG, code="BAD", hint=_LONG)
+    shown = _rich(e)
+    assert max(_widths(shown)) <= 88
+    assert "geo2=geo_03_05" in shown
+
+
+def test_print_width_env_overrides_text_width(monkeypatch):
+    monkeypatch.setenv("SVY_PRINT_WIDTH", "60")
+    assert max(_widths(_rich(SvyError(title="Bad", detail=_LONG, code="BAD")))) <= 60
+    assert max(_widths(_long_store().__plain_str__())) <= 60
+
+
+def test_error_message_is_not_wrapped():
+    assert _LONG in str(SvyError(title="Bad", detail=_LONG, code="BAD"))
+
+
 def test_sample_warnings_print():
     frame = pl.DataFrame(
         {
