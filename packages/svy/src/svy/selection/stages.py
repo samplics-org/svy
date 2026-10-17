@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence, cast
 
 import msgspec
 import polars as pl
@@ -11,6 +11,7 @@ import polars as pl
 from svy.core.constants import SVY_PROB, SVY_WEIGHT
 from svy.core.warnings import Severity
 from svy.errors.method_errors import MethodError
+from svy.selection._group_keys import _SEP, _build_group_keys, _normalize_n_for_groups
 from svy.selection._helpers import _finding
 from svy.selection.combine_stages import _stage_col
 from svy.utils.random_state import RandomState, resolve_random_state
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
 _PPS = ("sys", "brewer", "murphy", "rs")
 _ROW = "__svy_ms_row__"
 _PARENT = "__svy_ms_parent__"
+_SKEY = "__svy_ms_stratum__"
 
 
 class Stage(msgspec.Struct, frozen=True):
@@ -34,8 +36,10 @@ class Stage(msgspec.Struct, frozen=True):
         Id column(s) of this stage's units, unique within the unit selected before; ``None``
         (last stage only) draws the frame's rows.
     n : int, mapping or None
-        Units per stratum at stage 1 (an int, or a mapping keyed by stratum); units per
-        selected parent after; ``None`` takes all. A parent with fewer units gives all of them.
+        Units per stratum at stage 1; units per selected parent after; ``None`` takes all.
+        A parent with fewer units gives all of them. At stage 1 a mapping is keyed as for
+        :meth:`Selection.srs`: by stratum (a tuple for several stratum columns), or by one
+        stratum variable, e.g. ``{"Urban": 6, "Rural": 4}`` for ``("region", "urbrur")``.
     mos : str, optional
         Size measure, constant within a unit; given, the stage is PPS.
     method : {"srs", "sys", "brewer", "murphy", "rs"}, optional
@@ -111,6 +115,8 @@ def multistage(
     gen = resolve_random_state(rstate)
 
     rows = sample._data.with_row_index(_ROW)
+    n1 = stages[0].n
+    n_map = _stage1_n(sample, rows, n1) if isinstance(n1, Mapping) else None
     # Units are keyed by the chain of ids above them, strata first: an id need only be
     # unique within its parent.
     chain: list[str] = list(strata)
@@ -119,7 +125,16 @@ def multistage(
         unit_cols = [_ROW] if stage.unit is None else _cols(stage.unit)
         parents = strata if k == 1 else chain
         keys = chain + [c for c in unit_cols if c not in chain]
-        probs = _draw_stage(sample, rows, stage, k, parents=parents, keys=keys, gen=gen)
+        probs = _draw_stage(
+            sample,
+            rows,
+            stage,
+            k,
+            parents=parents,
+            keys=keys,
+            n_map=n_map if k == 1 else None,
+            gen=gen,
+        )
         prob_col = _stage_col(SVY_PROB, k)
         rows = rows.join(probs.rename({SVY_PROB: prob_col}), on=keys, how="inner")
         prob_cols.append(prob_col)
@@ -223,6 +238,7 @@ def _draw_stage(
     *,
     parents: list[str],
     keys: list[str],
+    n_map: dict[str, int] | None,
     gen: Any,
 ) -> pl.DataFrame:
     """Each selected unit of stage ``k`` with its probability given its parent."""
@@ -231,7 +247,8 @@ def _draw_stage(
     attrs = [stage.mos] if stage.mos else []
     _check_constant(rows, keys, attrs, k)
 
-    units = rows.select(list(dict.fromkeys(parents + keys + attrs))).unique(
+    skey = [sample._internal_design["stratum"]] if n_map is not None else []
+    units = rows.select(list(dict.fromkeys(parents + keys + attrs + skey))).unique(
         subset=keys, maintain_order=True
     )
     if parents:
@@ -239,12 +256,14 @@ def _draw_stage(
     else:
         units = units.with_columns(pl.lit(1, dtype=pl.Int64).alias(_PARENT))
     sizes = units.group_by(_PARENT, maintain_order=True).agg(
-        pl.len().alias("N"), *[pl.first(c) for c in parents]
+        pl.len().alias("N"),
+        *[pl.first(c) for c in parents],
+        *[pl.first(c).cast(pl.String).alias(_SKEY) for c in skey],
     )
 
     want: dict[int, int] = {}
     for rec in sizes.iter_rows(named=True):
-        want[rec[_PARENT]] = _n_for(stage, k, rec, parents)
+        want[rec[_PARENT]] = _n_for(stage, rec, n_map)
     capped = [
         tuple(rec[c] for c in parents)
         if len(parents) > 1
@@ -293,23 +312,46 @@ def _draw_stage(
     return pl.concat(parts, how="vertical_relaxed")
 
 
-def _n_for(stage: Stage, k: int, rec: dict, parents: list[str]) -> int:
+def _n_for(stage: Stage, rec: dict, n_map: dict[str, int] | None) -> int:
     if stage.n is None:
         return rec["N"]
-    if not isinstance(stage.n, Mapping):
-        return int(stage.n)
-    key = rec[parents[0]] if len(parents) == 1 else tuple(rec[c] for c in parents)
-    if key not in stage.n:
-        raise MethodError(
-            title="Stratum missing from n",
-            detail=f"Stage 1 n= has no entry for stratum {key!r}.",
-            code="MULTISTAGE_N_MISSING",
-            where="Sample.sampling.multistage",
-            param="n",
-            got=sorted(map(repr, stage.n)),
-            hint="Give every stratum a size (0 skips one).",
+    if n_map is None:
+        return cast(int, stage.n)
+    return n_map[rec[_SKEY]]
+
+
+def _stage1_n(sample: "Sample", rows: pl.DataFrame, n: Mapping[Any, int]) -> dict[str, int]:
+    """Stage-1 ``n`` keyed by stratum key, resolved as ``srs`` and ``pps_*`` resolve it."""
+    skey = sample._internal_design["stratum"]
+    strata: list[str] = []
+    if skey is not None:
+        *_, strata, _ = _build_group_keys(
+            rows.select(skey), stratum_col=skey, by_cols=[], sample_ref=sample
         )
-    return int(stage.n[key])
+    try:
+        return cast(dict[str, int], _normalize_n_for_groups(n, G=strata, B=[], S=strata))
+    except MethodError:
+        pass
+    shown = [tuple(s.split(_SEP)) if _SEP in s else s for s in strata]
+    raise MethodError(
+        title="Stage 1 n= does not match the strata",
+        detail=(
+            f"Stage 1 n= keys must give each stratum exactly one size; strata: {shown[:10]!r}"
+            + (" ..." if len(shown) > 10 else "")
+            if strata
+            else "The design has no stratum, so stage 1 n= cannot be a mapping."
+        ),
+        code="MULTISTAGE_N_MISSING",
+        where="Sample.sampling.multistage",
+        param="n",
+        got=sorted(map(repr, n)),
+        hint=(
+            "Key n by stratum (a tuple for several stratum columns) or by one stratum "
+            "variable, and give every stratum a size (0 skips one)."
+            if strata
+            else "Pass an int, or add a stratum to the design."
+        ),
+    )
 
 
 def _check_constant(rows: pl.DataFrame, keys: list[str], cols: list[str], k: int) -> None:

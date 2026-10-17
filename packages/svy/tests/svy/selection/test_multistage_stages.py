@@ -242,3 +242,93 @@ class TestErrors:
         with pytest.raises(MethodError) as exc:
             _draw([Stage("district", n={"north": 1}), Stage(None, n=1)])
         assert exc.value.code == "MULTISTAGE_N_MISSING"
+
+
+URB = FRAME.with_columns(
+    urbrur=pl.when(pl.col("district") <= 3).then(pl.lit("Urban")).otherwise(pl.lit("Rural"))
+)
+TWO = ("region", "urbrur")
+
+
+def _psus(out) -> dict:
+    df = out.data.select(*TWO, "district").unique().group_by(*TWO).len()
+    return {(r, u): n for r, u, n in df.iter_rows()}
+
+
+class TestStageOneN:
+    def test_full_tuple_keys(self):
+        n = {("north", "Urban"): 1, ("north", "Rural"): 2, ("south", "Urban"): 3}
+        out = _draw([Stage("district", n={**n, ("south", "Rural"): 0})], URB, stratum=TWO)
+        assert _psus(out) == n
+
+    def test_one_variable_broadcasts_across_the_other(self):
+        out = _draw([Stage("district", n={"Urban": 2, "Rural": 1})], URB, stratum=TWO)
+        assert _psus(out) == {
+            ("north", "Urban"): 2,
+            ("north", "Rural"): 1,
+            ("south", "Urban"): 2,
+            ("south", "Rural"): 1,
+        }
+
+    def test_first_variable_broadcasts_too(self):
+        out = _draw([Stage("district", n={"north": 1, "south": 3})], URB, stratum=TWO)
+        assert _psus(out) == {
+            ("north", "Urban"): 1,
+            ("north", "Rural"): 1,
+            ("south", "Urban"): 3,
+            ("south", "Rural"): 3,
+        }
+
+    def test_broadcast_draws_as_its_full_expansion(self):
+        stages = [Stage("ea", n=1, mos="ea_hh"), Stage(None, n=5)]
+        short = _draw([Stage("district", n={"Urban": 2, "Rural": 1}), *stages], URB, stratum=TWO)
+        full = {
+            (r, u): 2 if u == "Urban" else 1
+            for r in ("north", "south")
+            for u in ("Urban", "Rural")
+        }
+        long = _draw([Stage("district", n=full), *stages], URB, stratum=TWO)
+        assert short.data.equals(long.data)
+
+    def test_broadcast_with_pps_and_zero(self):
+        out = _draw(
+            [Stage("district", n={"Urban": 0, "Rural": 2}, mos="ea_hh"), Stage(None, n=1)],
+            URB.with_columns(ea_hh=pl.col("district") * 10),
+            stratum=TWO,
+        )
+        assert _psus(out) == {("north", "Rural"): 2, ("south", "Rural"): 2}
+
+    def test_stage_one_probability_is_n_over_n_per_stratum(self):
+        out = _draw([Stage("district", n={"Urban": 2, "Rural": 1})], URB, stratum=TWO)
+        p = out.data.select("urbrur", "svy_prob_selection_stage1").unique()
+        assert dict(p.iter_rows()) == {"Urban": 2 / 3, "Rural": 1 / 3}
+
+    def test_int_stratum_keys(self):
+        n = {d: 1 + d % 2 for d in range(1, 7)}
+        out = _draw([Stage("ea", n=n)], stratum=("region", "district"))
+        got = out.data.select("region", "district", "ea").unique().group_by("district").len()
+        assert dict(got.iter_rows()) == {d: 2 * k for d, k in n.items()}
+
+    @pytest.mark.parametrize(
+        "n",
+        [
+            {"Urban": 2},
+            {"north": 1, "south": 1, "east": 1},
+            {("north", "Urban"): 1, "Rural": 1},
+            {"north": 1, "Urban": 2},
+            {("north", "Urban"): 1, ("north", "Rural"): 1, ("south", "Urban"): 1},
+            {"Urban": 2, "Rural": 1, "Suburban": 1},
+        ],
+        ids=["incomplete", "orphan", "mixed", "ambiguous", "missing-cell", "extra-level"],
+    )
+    def test_keys_that_do_not_match_raise(self, n):
+        with pytest.raises(MethodError) as exc:
+            _draw([Stage("district", n=n)], URB, stratum=TWO)
+        assert (exc.value.code, exc.value.param) == ("MULTISTAGE_N_MISSING", "n")
+
+    def test_mapping_without_stratum_raises(self):
+        with pytest.raises(MethodError) as exc:
+            svy.Sample(FRAME, svy.Design()).sampling.multistage(
+                [Stage("district", n={"north": 1})], rstate=1
+            )
+        assert exc.value.code == "MULTISTAGE_N_MISSING"
