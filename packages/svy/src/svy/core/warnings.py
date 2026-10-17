@@ -67,6 +67,19 @@ class WarnCode(StrEnum):
     DATA_VALUE_NOT_LABELED = "DATA_VALUE_NOT_LABELED"
 
 
+# ---------- Views: SvyError's renderers with a finding's marker and colours ----------
+class _WarningView(SvyError):
+    _MARK = "⚠️"
+    _MARK_RICH = "▲"
+    _KIND = "warning"
+
+
+class _InfoView(SvyError):
+    _MARK = "ℹ️"
+    _MARK_RICH = "ℹ"
+    _KIND = "info"
+
+
 # ---------- Warning value (immutable) ----------
 class SvyWarning(msgspec.Struct, frozen=True):
     """
@@ -110,7 +123,14 @@ class SvyWarning(msgspec.Struct, frozen=True):
                 "ts": self.ts.isoformat(),
             }
         )
-        return SvyError(
+        view = (
+            SvyError
+            if self.level >= Severity.ERROR
+            else _WarningView
+            if self.level >= Severity.WARNING
+            else _InfoView
+        )
+        return view(
             title=self.title,
             detail=self.detail,
             code=str(self.code),
@@ -135,6 +155,12 @@ class SvyWarning(msgspec.Struct, frozen=True):
 
     def html(self) -> str:
         return self._as_error().html()
+
+    def __str__(self) -> str:
+        return self.text()
+
+    def __rich_console__(self, console, options):
+        yield from self._as_error().__rich_console__(console, options)
 
     def to_dict(self) -> dict[str, Any]:
         # Similar to SvyError.to_dict(), but tagged as a warning
@@ -305,6 +331,53 @@ class WarningStore:
 
     def __iter__(self):
         return iter(self._items)
+
+    # --- display: one row per finding; print a finding for its full panel ---
+    def _title(self) -> str:
+        c = self.counts()
+        parts = [f"{c[k]} {k.lower()}" for k in ("ERROR", "WARNING", "INFO") if c[k]]
+        return f"Findings ({', '.join(parts)})" if parts else "Findings"
+
+    def __plain_str__(self) -> str:
+        from svy.ui.printing import render_plain_table
+
+        if not self._items:
+            return "No findings."
+        rows = [[w.level.name, str(w.code), w.detail] for w in self._items]
+        return f"{self._title()}\n\n{render_plain_table(['Level', 'Code', 'Detail'], rows)}"
+
+    def __str__(self) -> str:
+        if not self._items:
+            return "No findings."
+        try:
+            from svy.ui.printing import render_rich_to_str, resolve_width
+
+            return render_rich_to_str(self, width=resolve_width(self))
+        except Exception:
+            return self.__plain_str__()
+
+    # The REPL shows a bare `sample.warnings` through its repr.
+    __repr__ = __str__
+
+    def __rich_console__(self, console, options):
+        from rich.table import Table
+        from rich.text import Text
+
+        from svy.ui.printing import make_panel, styles
+
+        if not self._items:
+            yield Text("No findings.", style="dim")
+            return
+        table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
+        table.add_column("Level")
+        table.add_column("Code")
+        table.add_column("Detail", overflow="fold")
+        for w in self._items:
+            kind = "error" if w.level >= Severity.ERROR else w.level.name.lower()
+            table.add_row(
+                Text(w.level.name, style=styles(kind=kind)["title"]), str(w.code), w.detail
+            )
+        yield make_panel([table], title=self._title(), obj=self, kind="panel")
 
 
 # ---------- One rule for findings ----------

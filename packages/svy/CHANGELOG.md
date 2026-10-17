@@ -6,8 +6,13 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Added
+
+- **Findings print.** `print(sample.warnings)` lists the findings in a table, and a single finding (`SvyWarning`) prints as a panel like an error, marked by its level (ℹ info, ▲ warning) instead of ✗.
+
 ### Changed
 
+- **`STAGE_TAKES_ALL` names the parents.** The message reads `geo1=geo_02, geo2=geo_02_02; ...` and names the stage's unit; `got` holds the parents as `{column: value}` mappings rather than a count.
 - **Stage-1 `n` in `multistage` is keyed as in `srs` and `pps_*`.** Besides the full stratum (a tuple for several stratum columns), a mapping keyed by one stratum variable is broadcast, e.g. `Stage("ea", n={"Urban": 6, "Rural": 4}, mos="hh")` on a design stratified by `("region", "urbrur")`. Keys that match no stratum now raise `MULTISTAGE_N_MISSING` instead of being ignored.
 
 ## [0.35.0] — 2026-10-16

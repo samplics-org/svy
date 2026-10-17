@@ -52,6 +52,12 @@ class Components:
     error_header_style: str = "bold red"
     error_title_style: str = "bold red"
 
+    # Finding styles (SvyWarning)
+    warning_border: str = "yellow"
+    warning_title_style: str = "bold yellow"
+    info_border: str = "blue"
+    info_title_style: str = "bold blue"
+
 
 @dataclass(frozen=True)
 class Theme:

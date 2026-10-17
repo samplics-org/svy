@@ -422,6 +422,14 @@ def styles(
         border_def = getattr(c, "error_border", "red")
         header_def = getattr(c, "error_header_style", "bold red")
         title_def = getattr(c, "error_title_style", "bold red")
+    elif eff_kind == "warning":
+        border_def = getattr(c, "warning_border", "yellow")
+        header_def = getattr(c, "header_style", "bold")
+        title_def = getattr(c, "warning_title_style", "bold yellow")
+    elif eff_kind == "info":
+        border_def = getattr(c, "info_border", "blue")
+        header_def = getattr(c, "header_style", "bold")
+        title_def = getattr(c, "info_title_style", "bold blue")
     elif eff_kind == "ttest":
         border_def = getattr(c, "ttest_border", "green")
         header_def = getattr(c, "header_style", "bold")

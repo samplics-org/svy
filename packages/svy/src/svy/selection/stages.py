@@ -265,27 +265,26 @@ def _draw_stage(
     for rec in sizes.iter_rows(named=True):
         want[rec[_PARENT]] = _n_for(stage, rec, n_map)
     capped = [
-        tuple(rec[c] for c in parents)
-        if len(parents) > 1
-        else rec.get(parents[0])
-        if parents
-        else None
+        {c: rec[c] for c in parents}
         for rec in sizes.iter_rows(named=True)
         if stage.n is not None and want[rec[_PARENT]] > rec["N"]
     ]
     if capped:
+        what = "rows" if stage.unit is None else ", ".join(_cols(stage.unit))
+        named = [", ".join(f"{c}={v}" for c, v in p.items()) or "the whole frame" for p in capped]
         _finding(
             sample,
             code="STAGE_TAKES_ALL",
             title="Stage takes every unit of some parents",
             detail=(
-                f"Stage {k} asks for more units than {len(capped)} parent(s) hold; all their "
-                f"units are taken, with probability 1: {capped[:10]!r}"
-                + (" ..." if len(capped) > 10 else "")
+                f"Stage {k} ({what}) asks for more units than {len(capped)} parent(s) hold, "
+                "so all their units are taken, with probability 1: "
+                + "; ".join(named[:10])
+                + (f"; and {len(named) - 10} more" if len(named) > 10 else "")
             ),
             level=Severity.INFO,
             param="n",
-            got=len(capped),
+            got=capped,
         )
 
     n_by_parent = dict(zip(sizes[_PARENT].to_list(), sizes["N"].to_list()))

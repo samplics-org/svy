@@ -22,7 +22,7 @@ import datetime as _dt
 
 from dataclasses import dataclass
 from textwrap import indent as _indent
-from typing import Any, Mapping, Optional
+from typing import Any, ClassVar, Mapping, Optional
 
 
 # svy's text form of a key over several columns (e.g. weighting cells), used
@@ -101,10 +101,15 @@ class SvyError(Exception):
     _HEADER_STYLE: str | None = None
     _TITLE_STYLE: str | None = None
 
+    # Marker and panel theme; finding views (SvyWarning) override them.
+    _MARK: ClassVar[str] = "❌"
+    _MARK_RICH: ClassVar[str] = "✗"
+    _KIND: ClassVar[str] = "error"
+
     # ---- Plain multi-line text (universal, no ANSI) ----
     def text(self, *, indent: int = 2, surround: bool = True) -> str:
         lines: list[str] = [
-            f"❌ {self.title} [{self.code}]",
+            f"{self._MARK} {self.title} [{self.code}]",
             f"{self.detail}",
         ]
         meta: list[str] = []
@@ -201,7 +206,7 @@ class SvyError(Exception):
             "\033[2m",
             "\033[0m",
         )
-        line1 = f"{B}❌ {self.title}{RESET}  {DIM}[{self.code}]{RESET}"
+        line1 = f"{B}{self._MARK} {self.title}{RESET}  {DIM}[{self.code}]{RESET}"
         line2 = f"{self.detail}"
         meta: list[str] = []
         if self.where:
@@ -223,7 +228,7 @@ class SvyError(Exception):
     # ---- Markdown (great for README / notebooks) ----
     def markdown(self) -> str:
         # Note: Added TWO spaces between title and code to match test expectation
-        out = [f"**❌ {self.title}** `[{self.code}]`", f"{self.detail}"]
+        out = [f"**{self._MARK} {self.title}** `[{self.code}]`", f"{self.detail}"]
         bullets: list[str] = []
         if self.where:
             bullets.append(f"- **where**: `{self.where}`")
@@ -247,7 +252,7 @@ class SvyError(Exception):
         return f"""
 <div role="alert" class="rounded-xl border border-rose-200 bg-white p-4 text-rose-800 shadow-sm">
   <div class="flex items-start gap-3">
-    <div class="mt-1">❌</div>
+    <div class="mt-1">{self._MARK}</div>
     <div class="flex-1">
       <p class="font-semibold">{self._escape(self.title)} <span class="text-slate-500">[{self.code}]</span></p>
       <p class="text-sm mt-1">{self._escape(self.detail)}</p>
@@ -297,12 +302,12 @@ class SvyError(Exception):
                 yield self.text()
                 return
 
-            s = styles(self, kind="error")  # ← use theme-driven error styles
+            s = styles(self, kind=self._KIND)
 
             # Header. Use a width-1 marker (✗) rather than an emoji: emoji
             # occupy two terminal cells but render ~1 in HTML/browser fonts,
             # which knocks the panel's right border out of alignment in docs.
-            header = Text("✗ ", style=s["title"])
+            header = Text(f"{self._MARK_RICH} ", style=s["title"])
             header.append(self.title, style=s["title"])
             header.append(f" [{self.code}]", style="dim")
 
@@ -343,7 +348,7 @@ class SvyError(Exception):
 
             from rich.padding import Padding
 
-            yield make_panel([Padding(content, (1, 1))], title="", obj=self, kind="error")
+            yield make_panel([Padding(content, (1, 1))], title="", obj=self, kind=self._KIND)
         except Exception:
             # Graceful fallback if rich missing or any error
             yield self.text()
