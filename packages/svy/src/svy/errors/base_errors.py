@@ -346,9 +346,13 @@ class SvyError(Exception):
                 content.add_row(Text(""))
                 content.add_row(meta)
 
+            from rich.constrain import Constrain
             from rich.padding import Padding
 
-            yield make_panel([Padding(content, (1, 1))], title="", obj=self, kind=self._KIND)
+            from ..ui.printing import text_width
+
+            panel = make_panel([Padding(content, (1, 1))], title="", obj=self, kind=self._KIND)
+            yield Constrain(panel, width=text_width(self))
         except Exception:
             # Graceful fallback if rich missing or any error
             yield self.text()

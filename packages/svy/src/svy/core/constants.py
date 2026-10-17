@@ -4,6 +4,8 @@ from typing import Final
 
 # Default width for Rich console printing and __str__ representations.
 SVY_DEFAULT_PRINT_WIDTH: Final[int] = 120
+# Prose (errors, findings) reads and fits docs pages better narrower than tables.
+SVY_TEXT_PRINT_WIDTH: Final[int] = 88
 
 SVY_PREFIX = "svy_"
 SVY_PRIV_PREFIX = "__svy__"

@@ -9,7 +9,7 @@ import sys
 
 from typing import Any, Iterable, Mapping, Sequence
 
-from svy.core.constants import SVY_DEFAULT_PRINT_WIDTH
+from svy.core.constants import SVY_DEFAULT_PRINT_WIDTH, SVY_TEXT_PRINT_WIDTH
 from svy.ui.theme import THEME
 
 
@@ -69,6 +69,27 @@ def resolve_width(
 
     # 4. Fallback to constant
     return default
+
+
+def text_width(owner: object | None = None) -> int:
+    """Width for prose output (errors, findings); the usual overrides still apply."""
+    return resolve_width(owner, default=SVY_TEXT_PRINT_WIDTH)
+
+
+def wrap_labelled(label: str, value: str, *, label_width: int, width: int) -> list[str]:
+    """``label`` padded to ``label_width``, then ``value`` wrapped under its own column."""
+    import textwrap
+
+    head = f"{label:<{label_width}}  "
+    lines = textwrap.wrap(
+        value,
+        width=max(width, len(head) + 20),
+        initial_indent=head,
+        subsequent_indent=" " * len(head),
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+    return lines or [head.rstrip()]
 
 
 # -----------------------------------------------------------------------------

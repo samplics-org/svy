@@ -332,27 +332,36 @@ class WarningStore:
     def __iter__(self):
         return iter(self._items)
 
-    # --- display: one row per finding; print a finding for its full panel ---
+    # --- display: one labelled block per finding; print a finding for its full panel ---
+    _LABELS = ("Level", "Code", "Detail")
+
     def _title(self) -> str:
         c = self.counts()
         parts = [f"{c[k]} {k.lower()}" for k in ("ERROR", "WARNING", "INFO") if c[k]]
         return f"Findings ({', '.join(parts)})" if parts else "Findings"
 
     def __plain_str__(self) -> str:
-        from svy.ui.printing import render_plain_table
+        from svy.ui.printing import text_width, wrap_labelled
 
         if not self._items:
             return "No findings."
-        rows = [[w.level.name, str(w.code), w.detail] for w in self._items]
-        return f"{self._title()}\n\n{render_plain_table(['Level', 'Code', 'Detail'], rows)}"
+        label_width = max(map(len, self._LABELS))
+        width = text_width(self) - 2
+        blocks = []
+        for w in self._items:
+            lines = []
+            for label, value in zip(self._LABELS, (w.level.name, str(w.code), w.detail)):
+                lines += wrap_labelled(label, value, label_width=label_width, width=width)
+            blocks.append("\n".join(f"  {line}" for line in lines))
+        return f"{self._title()}\n\n" + "\n\n".join(blocks)
 
     def __str__(self) -> str:
         if not self._items:
             return "No findings."
         try:
-            from svy.ui.printing import render_rich_to_str, resolve_width
+            from svy.ui.printing import render_rich_to_str, text_width
 
-            return render_rich_to_str(self, width=resolve_width(self))
+            return render_rich_to_str(self, width=text_width(self))
         except Exception:
             return self.__plain_str__()
 
@@ -360,24 +369,28 @@ class WarningStore:
     __repr__ = __str__
 
     def __rich_console__(self, console, options):
+        from rich.constrain import Constrain
         from rich.table import Table
         from rich.text import Text
 
-        from svy.ui.printing import make_panel, styles
+        from svy.ui.printing import make_panel, styles, text_width
 
         if not self._items:
             yield Text("No findings.", style="dim")
             return
-        table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
-        table.add_column("Level")
-        table.add_column("Code")
-        table.add_column("Detail", overflow="fold")
-        for w in self._items:
+        grid = Table.grid(padding=(0, 2))
+        grid.add_column(style="bold", no_wrap=True)
+        grid.add_column(overflow="fold")
+        for i, w in enumerate(self._items):
+            if i:
+                grid.add_row("", "")
             kind = "error" if w.level >= Severity.ERROR else w.level.name.lower()
-            table.add_row(
-                Text(w.level.name, style=styles(kind=kind)["title"]), str(w.code), w.detail
-            )
-        yield make_panel([table], title=self._title(), obj=self, kind="panel")
+            level, code, detail = self._LABELS
+            grid.add_row(level, Text(w.level.name, style=styles(kind=kind)["title"]))
+            grid.add_row(code, str(w.code))
+            grid.add_row(detail, w.detail)
+        panel = make_panel([grid], title=self._title(), obj=self, kind="panel")
+        yield Constrain(panel, width=text_width(self))
 
 
 # ---------- One rule for findings ----------
