@@ -6,6 +6,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Changed
+
+- **Stage-1 `n` in `multistage` is keyed as in `srs` and `pps_*`.** Besides the full stratum (a tuple for several stratum columns), a mapping keyed by one stratum variable is broadcast, e.g. `Stage("ea", n={"Urban": 6, "Rural": 4}, mos="hh")` on a design stratified by `("region", "urbrur")`. Keys that match no stratum now raise `MULTISTAGE_N_MISSING` instead of being ignored.
+
 ## [0.35.0] — 2026-10-16
 
 Requires [`svy-io`](../svy-io/CHANGELOG.md) 0.7.1, which fixes writing Stata files.
