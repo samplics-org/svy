@@ -37,8 +37,9 @@
     "var": "urban"
   },
   "kind": "ttest_two_groups",
+  "pair": null,
   "paired": false,
-  "schema_version": "svy-result/0.9",
+  "schema_version": "svy-result/0.10",
   "stats": {
     "df": 18.0,
     "p_value": 0.0015,

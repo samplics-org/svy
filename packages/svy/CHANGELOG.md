@@ -9,12 +9,17 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 ### Added
 
 - **Findings print.** `print(sample.warnings)` lists each finding as a block of `Level`, `Code` and `Detail` lines, and a single finding (`SvyWarning`) prints as a panel like an error, marked by its level (ℹ info, ▲ warning) instead of ✗.
+- **A paired t-test names its two variables (`svy-result/0.10`).** `ttest(y, y_pair=...)` results, with or without `group=` or `by=`, carry `pair = (y, y_pair)`, serialized too, and print `Y = 'y' - 'y_pair'`; `y` still holds the difference's name. `None` when unpaired or decoded from an older payload.
 
 ### Changed
 
 - **Errors and findings print at most 88 columns wide** (`SVY_TEXT_PRINT_WIDTH`), so they fit notebooks and docs pages; result tables keep 120. `SVY_PRINT_WIDTH` still overrides both. `str(error)` is unchanged.
 - **`STAGE_TAKES_ALL` names the parents.** The message reads `geo1=geo_02, geo2=geo_02_02; ...` and names the stage's unit; `got` holds the parents as `{column: value}` mappings rather than a count.
 - **Stage-1 `n` in `multistage` is keyed as in `srs` and `pps_*`.** Besides the full stratum (a tuple for several stratum columns), a mapping keyed by one stratum variable is broadcast, e.g. `Stage("ea", n={"Urban": 6, "Rural": 4}, mos="hh")` on a design stratified by `("region", "urbrur")`. Keys that match no stratum now raise `MULTISTAGE_N_MISSING` instead of being ignored.
+
+### Fixed
+
+- **A paired two-group t-test reported `paired=False`** and printed "unpaired". `ttest(y, y_pair=..., group=...)` now sets `paired=True`.
 
 ## [0.35.0] — 2026-10-16
 

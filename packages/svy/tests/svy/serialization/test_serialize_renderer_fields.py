@@ -54,7 +54,7 @@ def _round_trip(result):
 
 
 def test_schema_version():
-    assert SCHEMA_VERSION == "svy-result/0.9"
+    assert SCHEMA_VERSION == "svy-result/0.10"
 
 
 class TestTableUnits:
@@ -132,6 +132,48 @@ class TestTTestByDomain:
     def test_where_clause_kept(self, sample):
         res = sample.categorical.ttest("y", mean_h0=50, by="region", where=pl.col("age") > 30)
         assert serialize(res).where_clause == res.where_clause is not None
+
+
+class TestPairedTTest:
+    @pytest.mark.parametrize("kw", [{}, {"group": "sex"}, {"by": "region"}])
+    def test_names_both_variables(self, sample, kw):
+        res = sample.categorical.ttest("y", y_pair="age", **kw)
+        assert res.pair == ("y", "age")
+        assert _round_trip(res).pair == ["y", "age"]
+
+    def test_by_members_carry_the_pair(self, sample):
+        data = _round_trip(sample.categorical.ttest("y", y_pair="age", by="region"))
+        assert [r.pair for r in data.results] == [["y", "age"]] * 3
+
+    def test_two_groups_is_marked_paired(self, sample):
+        res = sample.categorical.ttest("y", y_pair="age", group="sex")
+        assert res.paired is True
+        assert _round_trip(res).paired is True
+
+    @pytest.mark.parametrize("kw", [{"mean_h0": 50}, {"group": "sex"}, {"by": "region"}])
+    def test_unpaired_has_no_pair(self, sample, kw):
+        res = sample.categorical.ttest("y", **kw)
+        assert res.pair is None
+        assert getattr(res, "paired", False) is False
+        assert _round_trip(res).pair is None
+
+    def test_y_is_the_difference_in_pair_order(self, sample):
+        res = sample.categorical.ttest("y", y_pair="age")
+        df = sample.data
+        expected = ((df["y"] - df["age"]) * df["w"]).sum() / df["w"].sum()
+        assert res.y == "svy_y_minus_age"
+        assert res.estimates[0].est == pytest.approx(expected, rel=1e-12)
+
+    @pytest.mark.parametrize("kw", [{}, {"group": "sex"}, {"by": "region"}])
+    def test_header_names_both_variables(self, sample, kw):
+        res = sample.categorical.ttest("y", y_pair="age", **kw)
+        assert "Y = 'y' - 'age'" in res.__plain_str__()
+
+    def test_older_payload_decodes_without_pair(self, sample):
+        raw = json.loads(to_json(sample.categorical.ttest("y", y_pair="age")))
+        raw.pop("pair")
+        raw["schema_version"] = "svy-result/0.9"
+        assert from_json(json.dumps(raw)).pair is None
 
 
 class TestGLMTerms:

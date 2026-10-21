@@ -363,6 +363,7 @@ def _serialize_ttest_one_group(result: TTestOneGroup) -> TTestOneGroupData:
     """Serialize ``svy.categorical.ttest.TTestOneGroup``."""
     return TTestOneGroupData(
         y=result.y,
+        pair=list(result.pair) if result.pair is not None else None,
         mean_h0=_f(result.mean_h0),
         alternative=result.alternative,
         alpha=_f(result.alpha),
@@ -379,6 +380,7 @@ def _serialize_ttest_two_groups(result: TTestTwoGroups) -> TTestTwoGroupsData:
         y=result.y,
         groups=_group_levels_to_data(result.groups),
         paired=result.paired,
+        pair=list(result.pair) if result.pair is not None else None,
         alternative=result.alternative,
         alpha=_f(result.alpha),
         diff=[_diff_est_to_data(d) for d in result.diff],
@@ -392,6 +394,7 @@ def _serialize_ttest_by(result: TTestByResult) -> TTestOneGroupByData | TTestTwo
     """Serialize ``svy.categorical.ttest.TTestByResult``, by the kind of its members."""
     common = dict(
         y=result.y,
+        pair=list(result.pair) if result.pair is not None else None,
         by=result.by,
         alpha=_f(result.alpha),
         where_clause=result.where_clause,

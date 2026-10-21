@@ -767,6 +767,7 @@ class Categorical:
             select_columns=True,
         )
         y_name = f"svy_{y}_minus_{y_pair}" if y_pair else y
+        pair = (y, y_pair) if y_pair else None
 
         # FPC. prepare_data leaves this to each facade, and this one used to
         # skip it, so every t-test on a design with pop_size silently answered
@@ -831,6 +832,7 @@ class Categorical:
                     result_df=result_df,
                     row_idx=i,
                     y_name=y_name,
+                    pair=pair,
                     group=group,
                     mean_h0=mean_h0,
                     alpha=alpha,
@@ -850,6 +852,7 @@ class Categorical:
                 results,
                 by=by,
                 y=y_name,
+                pair=pair,
                 mean_h0=_mean_h0,
                 groups=_groups,
                 alpha=alpha,
@@ -862,6 +865,7 @@ class Categorical:
                 result_df=result_df,
                 row_idx=0,
                 y_name=y_name,
+                pair=pair,
                 group=group,
                 mean_h0=mean_h0,
                 alpha=alpha,
@@ -879,6 +883,7 @@ class Categorical:
         result_df: pl.DataFrame,
         row_idx: int,
         y_name: str,
+        pair: tuple[str, str] | None,
         group: str | None,
         mean_h0: Number,
         alpha: float,
@@ -941,6 +946,7 @@ class Categorical:
             )
             return TTestOneGroup(
                 y=y_name,
+                pair=pair,
                 mean_h0=mean_h0,
                 alternative=alternative,
                 diff=[diff_est],
@@ -989,6 +995,8 @@ class Categorical:
             return TTestTwoGroups(
                 y=y_name,
                 groups=GroupLevels(var=group, levels=(level_0, level_1)).labelled(group_labels),
+                paired=pair is not None,
+                pair=pair,
                 alternative=alternative,
                 diff=[diff_est],
                 estimates=[

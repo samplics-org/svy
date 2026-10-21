@@ -34,6 +34,6 @@
   "n_strata": 10,
   "param": "Mean",
   "q_method": "Linear",
-  "schema_version": "svy-result/0.9",
+  "schema_version": "svy-result/0.10",
   "where_clause": null
 }

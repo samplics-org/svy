@@ -57,6 +57,10 @@ def _groups_header(groups: Any) -> str:
     return f"Groups: {groups.var} = [{a} vs {b}]"
 
 
+def _y_header(y: str, pair: Sequence[str] | None) -> str:
+    return f"Y = {y!r}" if pair is None else f"Y = {pair[0]!r} - {pair[1]!r}"
+
+
 def _group_level_text(groups: Any, level: Any) -> str:
     label = groups.label_of(level) if isinstance(groups, GroupLevels) else None
     return _level_text(level) if label is None else label
@@ -206,6 +210,7 @@ class TTestOneGroup(msgspec.Struct, tag="one", tag_field="kind", kw_only=True, f
     PRINT_WIDTH: ClassVar[int | None] = None
 
     y: str
+    pair: tuple[str, str] | None = None  # (y, y_pair) of a paired test; y is their difference
     mean_h0: Number = 0.0
     alternative: Literal["two-sided", "less", "greater"] = "two-sided"
     diff: list[DiffEst] = field(default_factory=list)
@@ -358,7 +363,7 @@ class TTestOneGroup(msgspec.Struct, tag="one", tag_field="kind", kw_only=True, f
 
         # Build header info
         header_lines = [
-            Text(f"Y = {self.y!r}"),
+            Text(_y_header(self.y, self.pair)),
             Text(f"H₀: μ = {_fmt_fixed(self.mean_h0, dec=4)}"),
             Text(""),
         ]
@@ -417,6 +422,7 @@ class TTestTwoGroups(msgspec.Struct, tag="two", tag_field="kind", kw_only=True, 
     y: str
     groups: GroupLevels
     paired: bool = False
+    pair: tuple[str, str] | None = None  # (y, y_pair) of a paired test; y is their difference
     alternative: Literal["two-sided", "less", "greater"] = "two-sided"
     diff: list[DiffEst] = field(default_factory=list)
     estimates: list[TtestEst] = field(default_factory=list)
@@ -572,7 +578,7 @@ class TTestTwoGroups(msgspec.Struct, tag="two", tag_field="kind", kw_only=True, 
 
         # Build header info
         header_lines = [
-            Text(f"Y = {self.y!r}"),
+            Text(_y_header(self.y, self.pair)),
             Text(_groups_header(self.groups)),
             Text(""),
         ]
@@ -869,6 +875,7 @@ class TTestByResult:
         *,
         by: str,
         y: str,
+        pair: tuple[str, str] | None = None,
         mean_h0: Number | None = None,
         groups: GroupLevels | None = None,
         alpha: float = 0.05,
@@ -880,6 +887,7 @@ class TTestByResult:
         self.by = by
         self.by_labels = dict(by_labels or {})
         self.y = y
+        self.pair = pair
         self.mean_h0 = mean_h0
         self.groups = groups
         self.alpha = alpha
@@ -961,7 +969,7 @@ class TTestByResult:
         is_one_sample = self.mean_h0 is not None
 
         # Shared header
-        header_lines: list = [Text(f"Y = {self.y!r}")]
+        header_lines: list = [Text(_y_header(self.y, self.pair))]
         if is_one_sample:
             header_lines.append(Text(f"H₀: μ = {_fmt_fixed(self.mean_h0, dec=4)}"))
         else:
@@ -1012,7 +1020,7 @@ class TTestByResult:
         if is_one_sample:
             lines = [
                 "T-Test: One-sample",
-                f"  Y = {self.y!r}",
+                f"  {_y_header(self.y, self.pair)}",
                 f"  H₀: μ = {_fmt_fixed(self.mean_h0, dec=4)}",
                 f"  By: {by_display}",
             ]
@@ -1025,7 +1033,7 @@ class TTestByResult:
                 )
                 lines = [
                     f"T-Test: Two-sample ({pair_txt})",
-                    f"  Y = {self.y!r}",
+                    f"  {_y_header(self.y, self.pair)}",
                     f"  {_groups_header(self.groups)}",
                     f"  By: {by_display}",
                 ]
@@ -1195,7 +1203,7 @@ def _plain_stats_line(tt: TTestOneGroup | TTestTwoGroups) -> str | None:
 def _plain_one_sample(tt: TTestOneGroup) -> str:
     lines = [
         "T-Test: One-sample",
-        f"  Y = {tt.y!r}",
+        f"  {_y_header(tt.y, tt.pair)}",
         f"  H\u2080: \u03bc = {_fmt_fixed(tt.mean_h0, dec=4)}",
         "",
     ]
@@ -1210,7 +1218,7 @@ def _plain_two_sample(tt: TTestTwoGroups) -> str:
     pair_txt = "paired" if tt.paired else "unpaired"
     lines = [
         f"T-Test: Two-sample ({pair_txt})",
-        f"  Y = {tt.y!r}",
+        f"  {_y_header(tt.y, tt.pair)}",
         f"  {_groups_header(tt.groups)}",
         "",
     ]
