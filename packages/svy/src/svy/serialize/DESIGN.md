@@ -64,7 +64,7 @@ gets one kind per member type instead.
 ### 2.5 `schema_version` on top-level structs
 
 Every top-level struct carries `schema_version: str = SCHEMA_VERSION` where
-`SCHEMA_VERSION = "svy-result/0.9"`. Consumers can check the version to know
+`SCHEMA_VERSION = "svy-result/0.10"`. Consumers can check the version to know
 what fields to expect.
 
 **Versioning policy:** bump the minor version (0.1 → 0.2) when fields are added
@@ -110,6 +110,10 @@ ignore unknown fields.
   `GLMFitData.terms` and `GLMCoefData.label` / `parts`, so a regression table
   knows each coefficient's variable, level and reference without parsing names;
   `GroupLevelsData.labels`. All optional: older payloads decode with `None`.
+- `0.10` — `pair` on the four t-test kinds: the two variables of a paired test
+  (`ttest(y, y_pair=...)`), y first, since `y` holds only their difference.
+  `TTestTwoGroupsData.paired` is now true for a paired test. `None` when
+  unpaired, or decoded from an older payload.
 
 ### 2.6 Sub-structs are untagged
 
@@ -277,6 +281,7 @@ Source: `svy.categorical.ttest.TTestOneGroup` (msgspec.Struct)
 | -------------- | --------------------------- | ---------------- |
 | `schema_version` | `str`                     | constant         |
 | `y`            | `str`                       | `y`              |
+| `pair`         | `list[str] \| None`         | `pair`           |
 | `mean_h0`      | `float`                     | `mean_h0`        |
 | `alternative`  | `str`                       | `alternative`    |
 | `alpha`        | `float`                     | `alpha`          |
@@ -294,6 +299,7 @@ Source: `svy.categorical.ttest.TTestTwoGroups` (msgspec.Struct)
 | `y`            | `str`                       | `y`              |
 | `groups`       | `GroupLevelsData`           | `groups`         |
 | `paired`       | `bool`                      | `paired`         |
+| `pair`         | `list[str] \| None`         | `pair`           |
 | `alternative`  | `str`                       | `alternative`    |
 | `alpha`        | `float`                     | `alpha`          |
 | `diff`         | `list[DiffEstData]`         | `diff`           |
@@ -308,6 +314,7 @@ Source: `svy.categorical.ttest.TTestByResult`, by the type of its members.
 | -------------- | -------------------------------------- | ---------------- |
 | `schema_version` | `str`                                | constant         |
 | `y`            | `str`                                  | `y`              |
+| `pair`         | `list[str] \| None`                    | `pair`           |
 | `by`           | `str`                                  | `by`             |
 | `alpha`        | `float`                                | `alpha`          |
 | `where_clause` | `str \| None`                          | `where_clause`   |

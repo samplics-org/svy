@@ -21,7 +21,7 @@ import msgspec
 # Constants
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = "svy-result/0.9"
+SCHEMA_VERSION = "svy-result/0.10"
 
 #: A design is an input, read back into a live ``Design``: its own schema.
 DESIGN_SCHEMA_VERSION = "svy-design/0.1"
@@ -338,6 +338,9 @@ class TTestOneGroupData(msgspec.Struct, kw_only=True, frozen=True):
     kind: Literal["ttest_one_group"] = "ttest_one_group"
     schema_version: str = SCHEMA_VERSION
     y: str
+    #: The two variables of a paired test, y first; ``y`` is their difference.
+    #: None when unpaired, or decoded from an older payload.
+    pair: list[str] | None = None
     mean_h0: float = 0.0
     alternative: str = "two-sided"
     alpha: float = 0.05
@@ -355,6 +358,9 @@ class TTestTwoGroupsData(msgspec.Struct, kw_only=True, frozen=True):
     y: str
     groups: GroupLevelsData
     paired: bool = False
+    #: The two variables of a paired test, y first; ``y`` is their difference.
+    #: None when unpaired, or decoded from an older payload.
+    pair: list[str] | None = None
     alternative: str = "two-sided"
     alpha: float = 0.05
     diff: list[DiffEstData] = []
@@ -372,6 +378,9 @@ class TTestOneGroupByData(msgspec.Struct, kw_only=True, frozen=True):
     kind: Literal["ttest_one_group_by"] = "ttest_one_group_by"
     schema_version: str = SCHEMA_VERSION
     y: str
+    #: The two variables of a paired test, y first; ``y`` is their difference.
+    #: None when unpaired, or decoded from an older payload.
+    pair: list[str] | None = None
     by: str
     alpha: float = 0.05
     where_clause: str | None = None
@@ -388,6 +397,9 @@ class TTestTwoGroupsByData(msgspec.Struct, kw_only=True, frozen=True):
     kind: Literal["ttest_two_groups_by"] = "ttest_two_groups_by"
     schema_version: str = SCHEMA_VERSION
     y: str
+    #: The two variables of a paired test, y first; ``y`` is their difference.
+    #: None when unpaired, or decoded from an older payload.
+    pair: list[str] | None = None
     by: str
     alpha: float = 0.05
     where_clause: str | None = None
