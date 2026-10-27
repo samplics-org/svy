@@ -121,6 +121,26 @@ def row_order(
         return sorted(range(len(estimates)), key=keys.__getitem__)
 
 
+def _code_ranks(
+    estimates: Sequence[Any], names: Sequence[str], n_by: int, variables: set[str]
+) -> dict[str, dict[Any, int]]:
+    """Each of ``variables``' levels among ``estimates`` mapped to its position in code order."""
+    codes: dict[str, set[Any]] = {var: set() for var in variables}
+    for est in estimates:
+        for col, raw in _row_levels(est, names, n_by):
+            if col in codes:
+                codes[col].add(raw)
+    out = {}
+    for var, raws in codes.items():
+        try:
+            ordered = sorted(raws, key=ranked_sort_key)
+        except TypeError:
+            # Same fallback as row_order: a level left as text beside native values.
+            ordered = sorted(raws, key=lambda v: ranked_sort_key(str(v)))
+        out[var] = {raw: i for i, raw in enumerate(ordered)}
+    return out
+
+
 def _label_of(lab: VarLabels | None, raw: Any) -> str | None:
     if raw is None:
         return None
@@ -145,7 +165,8 @@ def estimate_frame(
     variable names and adds a ``<var>_label`` column for each variable with
     value labels in ``labels``; rows sort by code. The display view, which
     printing uses, puts the labels in place of the codes and the variable
-    labels in place of the names, and sorts on what is shown. Either view
+    labels in place of the names; labelled levels still sort by code, others
+    on what is shown. Either view
     lists the levels of a variable in ``orders`` (an Enum's categories) in
     that order. Correlation and covariance rows also carry their pair in
     ``y`` and ``x`` columns, after the domains. ``row_index`` adds a first
@@ -251,18 +272,20 @@ def estimate_frame(
             r["n"] = est.n
         rows.append(r)
 
-    # Display rows sort on what is shown, after label resolution: raw codes
-    # ("Rural", "Urban") and their labels ("2. Rural", "1. Urban") order
-    # differently. Data rows sort on the codes.
+    # Labelled levels sort by code in both views, so a questionnaire's answer
+    # order survives printing; other display rows sort on the text shown.
     skip = {*_DECIMAL_KEYS, _ROW_POS, "n"}
     if pair:
         # Pairs keep the order they were requested in within each domain.
         skip |= {*_PAIR_COLS, *(f"{c}_label" for c in _PAIR_COLS)}
     if not display:
         skip |= {"df"} | {f"{c}_label" for c in labelled}
+    code_ranks = level_ranks(orders)
+    if display:
+        code_ranks |= _code_ranks(estimates, names, n_by, labelled - code_ranks.keys())
     # A column's name and values differ between the views; rank what is shown.
     ranks: dict[str, dict[Any, int]] = {}
-    for var, rank in level_ranks(orders).items():
+    for var, rank in code_ranks.items():
         if var not in names:
             continue
         lab = labels.get(var)
