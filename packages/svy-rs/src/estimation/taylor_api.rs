@@ -1489,6 +1489,11 @@ fn compute_assoc(
                 let (y, x) = (ys[pi], xs[pi]);
                 let active = design.domain_rows(weights.len(), rows.as_ref(), mask.as_ref());
                 let estimate = point_estimate_assoc(kind, y, x, weights, mask.as_ref())?;
+                let n = active_count(weights, mask.as_ref());
+                // An undefined estimate (a constant column's correlation) has no variance either.
+                if estimate.is_nan() {
+                    return Ok((gi, pi, estimate, f64::NAN, f64::NAN, n, f64::NAN));
+                }
                 let scores = scores_assoc(kind, y, x, weights, mask.as_ref())?;
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
                 let variance = taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
@@ -1499,7 +1504,6 @@ fn compute_assoc(
                 } else {
                     f64::NAN
                 };
-                let n = active_count(weights, mask.as_ref());
                 Ok((gi, pi, estimate, se, variance, n, deff))
             },
         )

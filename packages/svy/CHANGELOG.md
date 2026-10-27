@@ -43,6 +43,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 - **A paired two-group t-test reported `paired=False`** and printed "unpaired". `ttest(y, y_pair=..., group=...)` now sets `paired=True`.
 - **`prop` under replication returned a Boolean `y`'s levels as 0/1 and rejected an Enum `y`.** Both now come back as under Taylor, so `to_polars()` has the same schema whatever the method.
+- **`corr` with a constant column raised a `RuntimeError`, and with `by=` gave a NaN estimate with SE 0.** Both now give NaN for the estimate, SE and interval, as R does; other pairs in the same call are unaffected.
 
 ## [0.35.0] — 2026-10-16
 

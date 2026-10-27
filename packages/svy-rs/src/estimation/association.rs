@@ -357,9 +357,11 @@ pub fn scores_corr(
             "Sum of weights is zero; correlation is undefined".into(),
         ));
     }
+    // A constant column leaves the correlation (point_estimate_corr) NaN, with no scores.
     if !(m.m_yy > 0.0 && m.m_xx > 0.0) {
-        return Err(PolarsError::ComputeError(
-            "Zero weighted variance; correlation is undefined for a constant column".into(),
+        return Ok(Float64Chunked::from_slice(
+            "scores".into(),
+            &vec![0.0; y.len()],
         ));
     }
     Ok(assoc_score_values(y, x, weights, &m, None, AssocKind::Corr))
@@ -1212,11 +1214,12 @@ mod tests {
     /// A constant column has no correlation to report; the ungrouped path says
     /// so explicitly rather than emitting a silently meaningless number.
     #[test]
-    fn test_constant_column_is_rejected() {
+    fn test_constant_column_has_nan_correlation_and_no_scores() {
         let (y, _, w) = fixture();
         let konst = fc("k", &[2.0; 6]);
         assert!(point_estimate_corr(&y, &konst, &w).unwrap().is_nan());
-        assert!(scores_corr(&y, &konst, &w).is_err());
+        let scores = scores_corr(&y, &konst, &w).unwrap();
+        assert!(scores.iter().all(|s| s == Some(0.0)));
     }
 
     // ------------------------------------------------------------------

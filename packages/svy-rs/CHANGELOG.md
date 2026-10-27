@@ -4,6 +4,10 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ## [Unreleased]
 
+### Fixed
+
+- `scores_corr` returns zero scores for a constant column instead of an error, and `taylor_assoc` reports a NaN SE, variance and deff for any NaN estimate.
+
 ## [0.19.1] — 2026-10-15
 
 ### Fixed
