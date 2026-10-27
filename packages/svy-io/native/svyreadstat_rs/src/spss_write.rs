@@ -27,6 +27,7 @@ use arrow::record_batch::RecordBatch;
 
 use readstat_sys::{
     readstat_add_label_set, readstat_add_variable, readstat_begin_row, readstat_begin_writing_sav,
+    readstat_compress_e_READSTAT_COMPRESS_BINARY as COMPRESS_BINARY,
     readstat_compress_e_READSTAT_COMPRESS_NONE as COMPRESS_NONE,
     readstat_compress_e_READSTAT_COMPRESS_ROWS as COMPRESS_ROWS, readstat_end_row,
     readstat_end_writing, readstat_insert_double_value, readstat_insert_missing_value,
@@ -327,7 +328,12 @@ fn write_spss_minimal(
     let compress_type = match compress {
         "none" => COMPRESS_NONE,
         "byte" => COMPRESS_ROWS,
-        _ => COMPRESS_ROWS,
+        "zsav" => COMPRESS_BINARY,
+        other => {
+            return Err(anyhow!(
+                "unknown compress {other:?}; expected 'none', 'byte' or 'zsav'"
+            ));
+        }
     };
     unsafe {
         readstat_writer_set_compression(writer, compress_type);
@@ -719,4 +725,38 @@ pub fn df_write_sav_file(
         value_labels_converted.as_deref(),
     )
     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("df_write_sav_file: {}", e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{ArrayRef, Float64Array};
+    use arrow::datatypes::{Field, Schema};
+    use std::sync::Arc;
+
+    #[test]
+    fn unknown_compress_is_rejected_before_the_file_is_created() {
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Float64, true)]));
+        let x: ArrayRef = Arc::new(Float64Array::from(vec![1.0]));
+        let batch = RecordBatch::try_new(schema, vec![x]).unwrap();
+        let path = std::env::temp_dir().join("svy_io_unknown_compress.sav");
+        let _ = std::fs::remove_file(&path);
+
+        let err = write_spss_minimal(
+            &[batch],
+            path.to_str().unwrap(),
+            None,
+            "rows",
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("unknown compress \"rows\""),
+            "{err}"
+        );
+        assert!(!path.exists());
+    }
 }

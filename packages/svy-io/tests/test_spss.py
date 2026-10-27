@@ -766,6 +766,26 @@ def test_all_compression_types_roundtrip_successfully():
         assert df.shape == df_out.shape
 
 
+def test_reads_zsav_written_by_haven(test_data_dir):
+    # haven::write_sav(data.frame(x = c(1.5, NA, -2.25), s = c("a", "bb", "")), compress = "zsav")
+    df, _meta = read_sav(test_data_dir / "spss/compressed.zsav")
+
+    assert df["x"].to_list() == [1.5, None, -2.25]
+    assert df["s"].to_list() == ["a", "bb", ""]
+
+
+def test_zsav_write_is_zlib_compressed_and_reads_back(tmp_path):
+    df = pl.DataFrame({"x": [1.5, None, -2.25], "s": ["a", "bb", ""]})
+    path = tmp_path / "out.zsav"
+
+    write_sav(df, path, compress="zsav")
+
+    assert path.read_bytes()[:4] == b"$FL3"
+    df_out, _meta = read_sav(path)
+    assert df_out["x"].to_list() == [1.5, None, -2.25]
+    assert df_out["s"].to_list() == ["a", "bb", ""]
+
+
 # Fixtures ----------------------------------------------------------------
 
 
