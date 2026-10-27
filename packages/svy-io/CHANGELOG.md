@@ -4,6 +4,10 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 ## [Unreleased]
 
+### Fixed
+
+- **`.zsav` files could not be read, and `write_sav(compress="zsav")` wrote a plain `.sav`.** The bundled zlib was built without its default allocator, so every zlib stream failed to open. Both directions now work and read back in haven; an unknown `compress` value raises instead of falling back to byte compression.
+
 ## [0.7.1] — 2026-10-16
 
 ### Fixed
