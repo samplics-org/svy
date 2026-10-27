@@ -137,14 +137,14 @@ def _check_alternative(alternative: object, *, where: str) -> None:
 
 @contextmanager
 def _test_groups(*, where: str) -> Iterator[None]:
-    """The kernel's group-count error, raised as the input error it is."""
+    """The kernel's group-count error, coded; still the RuntimeError it was."""
     try:
         yield
     except RuntimeError as e:
         msg = str(e)
         if "requires exactly 2 groups" not in msg and "at least 2 groups" not in msg:
             raise
-        raise EstimationError.ValueError(
+        raise EstimationError.RuntimeError(
             title="Wrong number of groups",
             detail=msg.splitlines()[0] + ".",
             code=Code.TEST_GROUP_COUNT,

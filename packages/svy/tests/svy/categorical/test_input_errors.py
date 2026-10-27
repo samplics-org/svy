@@ -120,7 +120,7 @@ def test_units_aliases_still_work(sample):
 def test_ttest_group_with_more_than_two_levels(sample):
     e = _raises(
         EstimationError,
-        ValueError,
+        RuntimeError,
         Code.TEST_GROUP_COUNT,
         lambda: sample.categorical.ttest("y", group="g4"),
         param="group",
