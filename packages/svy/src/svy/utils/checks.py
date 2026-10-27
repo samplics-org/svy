@@ -188,8 +188,13 @@ def drop_missing(
     df_cols = set(df.columns)
     missing = [c for c in cols if c not in df_cols]
     if missing:
-        raise DataError.missing_columns(
-            where="drop_missing", param="columns", missing=missing, available=df.columns
+        raise DataError.KeyError(
+            title="Column(s) not found",
+            detail=f"Columns not found: {missing}",
+            code=Code.MISSING_COLUMNS,
+            where="drop_missing",
+            param="columns",
+            got=missing,
         )
     if not any_missing(df, cols, infinite=treat_infinite_as_missing):
         return df
