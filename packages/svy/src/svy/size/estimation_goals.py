@@ -62,6 +62,24 @@ def _require_numbers(*, where: str, **values: Any) -> None:
             )
 
 
+_POSITIVE_HINT = {
+    "pop_size": "pop_size counts the population's units; None skips the finite population correction.",
+    "alloc_ratio": "alloc_ratio is n2 / n1, the second group's size relative to the first.",
+}
+
+
+def _require_positive(*, where: str, **values: Any) -> None:
+    """Every value > 0, per stratum and per group; None (no pop_size) passes."""
+    for param, v in values.items():
+        per_stratum = v.values() if isinstance(v, Mapping) else [v]
+        for x in per_stratum:
+            for y in x if isinstance(x, tuple) else (x,):
+                if y is not None and isinstance(y, (int, float)) and not y > 0:
+                    raise SelectionError.invalid_range(
+                        where=where, param=param, got=y, min_=0, hint=_POSITIVE_HINT[param]
+                    )
+
+
 def _broadcast_scalars(strata: list, params: dict) -> None:
     """Broadcast any non-Mapping param to a per-stratum dict in-place."""
     m = len(strata)
@@ -143,6 +161,7 @@ def estimate_prop(
         The updated SampleSize instance (chainable).
     """
     alpha = _checked_alpha(alpha, where="SampleSize.estimate_prop")
+    _require_positive(where="SampleSize.estimate_prop", pop_size=pop_size)
     ss._param = PopParam.PROP
     ss._target = TargetProp(
         p=_as_input(p),
@@ -255,6 +274,7 @@ def estimate_mean(
         The updated SampleSize instance (chainable).
     """
     alpha = _checked_alpha(alpha, where="SampleSize.estimate_mean")
+    _require_positive(where="SampleSize.estimate_mean", pop_size=pop_size)
 
     if method != "wald":
         raise SelectionError.invalid_choice(

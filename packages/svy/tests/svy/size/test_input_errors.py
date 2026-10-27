@@ -167,3 +167,132 @@ def test_empty_mapping():
         param="p",
         says="'p' is an empty mapping",
     )
+
+
+# ---- values that used to give a wrong size silently ----------------------------------
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: S().estimate_prop(p=0.5, moe=0.05, pop_size=0),
+        lambda: S().estimate_prop(p=0.5, moe=0.05, pop_size=-5),
+        lambda: S().estimate_mean(sigma={"a": 1, "b": 1}, moe=0.5, pop_size={"a": 100, "b": 0}),
+        lambda: S().compare_props(p1=0.5, p2=0.4, pop_size=(1000, 0)),
+        lambda: S().compare_means(mu1=1, mu2=2, sigma1=1, pop_size=-1),
+    ],
+    ids=["prop zero", "prop negative", "mean one stratum", "props one group", "means"],
+)
+def test_population_size_must_be_positive(call):
+    e = _raises(SelectionError, ValueError, Code.INVALID_RANGE, call, param="pop_size")
+    assert "None skips the finite population correction" in e.hint
+
+
+def test_population_size_still_corrects():
+    # n0 = ceil(1.96^2 * 0.25 / 0.05^2) = 385; FPC: ceil(1000 * 385 / (1000 + 385 - 1)) = 279.
+    assert S().estimate_prop(p=0.5, moe=0.05, pop_size=1000).n == 279.0
+
+
+def test_a_stratum_without_population_size_is_not_corrected():
+    out = S().estimate_prop(p={"a": 0.5, "b": 0.5}, moe=0.05, pop_size={"a": 1000, "b": None})
+    assert out.n == {"a": 279.0, "b": 385.0}
+
+
+@pytest.mark.parametrize("alloc_ratio", [0, -1, {"a": 1.0, "b": 0.0}], ids=["zero", "neg", "map"])
+@pytest.mark.parametrize("goal", ["compare_props", "compare_means"])
+def test_allocation_ratio_must_be_positive(goal, alloc_ratio):
+    strat = isinstance(alloc_ratio, dict)
+    args = {"p1": 0.5, "p2": 0.4} if goal == "compare_props" else {"mu1": 1, "mu2": 2, "sigma1": 1}
+    if strat:
+        args = {k: {"a": v, "b": v} for k, v in args.items()}
+    _raises(
+        SelectionError,
+        ValueError,
+        Code.INVALID_RANGE,
+        lambda: getattr(S(), goal)(**args, alloc_ratio=alloc_ratio),
+        param="alloc_ratio",
+    )
+
+
+@pytest.mark.parametrize("two_sides", ["no", 1, None], ids=["str", "int", "None"])
+@pytest.mark.parametrize("goal", ["compare_props", "compare_means"])
+def test_two_sides_must_be_a_bool(goal, two_sides):
+    args = {"p1": 0.5, "p2": 0.4} if goal == "compare_props" else {"mu1": 1, "mu2": 2, "sigma1": 1}
+    _raises(
+        SelectionError,
+        TypeError,
+        Code.INVALID_TYPE,
+        lambda: getattr(S(), goal)(**args, two_sides=two_sides),
+        param="two_sides",
+    )
+
+
+def test_one_sided_test_needs_fewer_units():
+    # z_alpha drops from 1.96 to 1.645: n = ceil((1.645 + 0.8416)^2 * 2 / 1) = 13.
+    assert S().compare_means(mu1=1, mu2=2, sigma1=1, two_sides=False).n == (13.0, 13.0)
+
+
+@pytest.mark.parametrize("labels", [["a", "b", "c"], ["a"], []], ids=["three", "one", "empty"])
+@pytest.mark.parametrize("goal", ["compare_props", "compare_means"])
+def test_two_group_labels(goal, labels):
+    args = {"p1": 0.5, "p2": 0.4} if goal == "compare_props" else {"mu1": 1, "mu2": 2, "sigma1": 1}
+    e = _raises(
+        SelectionError,
+        ValueError,
+        Code.GROUP_LABELS_LENGTH,
+        lambda: getattr(S(), goal)(**args, group_labels=labels),
+        param="group_labels",
+        says=f"{len(labels)} names for 2 groups",
+    )
+    assert e.expected == 2
+
+
+@pytest.mark.parametrize("labels", ["ab", ["a", 2]], ids=["str", "non-str label"])
+def test_group_labels_of_wrong_type(labels):
+    _raises(
+        SelectionError,
+        TypeError,
+        Code.INVALID_TYPE,
+        lambda: S().compare_props(p1=0.5, p2=0.4, group_labels=labels),
+        param="group_labels",
+    )
+
+
+def test_group_labels_reach_the_table():
+    table = S().compare_props(p1=0.5, p2=0.4, group_labels=("treated", "control")).to_polars()
+    assert sorted(table["group"].to_list()) == ["control", "treated"]
+
+
+def test_to_polars_checks_its_own_labels():
+    _raises(
+        SelectionError,
+        ValueError,
+        Code.GROUP_LABELS_LENGTH,
+        lambda: S().compare_props(p1=0.5, p2=0.4).to_polars(group_labels=["x"]),
+        param="group_labels",
+    )
+
+
+@pytest.mark.parametrize(
+    "min_n, kind, code",
+    [
+        (-1, ValueError, Code.INVALID_RANGE),
+        (1.5, TypeError, Code.INVALID_TYPE),
+        (True, TypeError, Code.INVALID_TYPE),
+    ],
+    ids=["negative", "fraction", "bool"],
+)
+def test_min_n(min_n, kind, code):
+    _raises(
+        SelectionError,
+        kind,
+        code,
+        lambda: S().allocate(10, pop_size={"a": 10, "b": 20}, min_n=min_n),
+        param="min_n",
+    )
+
+
+def test_min_n_zero_sets_no_floor():
+    # Proportional: 10 * 2/302 = 0.07 for "a"; with no floor it may get 0 units.
+    out = S().allocate(10, pop_size={"a": 2, "b": 300}, min_n=0)
+    assert out.n == {"a": 0, "b": 10}
