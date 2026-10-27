@@ -32,8 +32,8 @@ list of columns, which returns one result per column.
 mean_income = sample.estimation.mean("income")
 mean_income.to_polars()  # est, se, lci, uci, cv, df, n
 
-sample.estimation.total("employed").to_polars()   # number employed
-sample.estimation.prop("educ").to_polars()        # one row per educ level
+sample.estimation.total("employed").to_polars()  # number employed
+sample.estimation.prop("educ").to_polars()  # one row per educ level
 sample.estimation.quantile("income", p=(0.1, 0.5, 0.9)).to_polars()
 sample.estimation.corr(("income", "age")).to_polars()
 ```

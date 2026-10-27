@@ -30,7 +30,7 @@ one_way = sample.categorical.tabulate("educ", units="percent")
 one_way.to_polars()  # educ, est, se, lci, uci, n
 
 two_way = sample.categorical.tabulate("region", "sex", units="percent", share_of="row")
-print(two_way)       # cells, then the Rao-Scott F and chi-square tests
+print(two_way)  # cells, then the Rao-Scott F and chi-square tests
 two_way.to_polars()  # region, sex, est, se, lci, uci, n
 two_way.crosstab(stats=("est", "se"))  # wide layout
 two_way.stats.f.p_value  # Rao-Scott F test of independence
