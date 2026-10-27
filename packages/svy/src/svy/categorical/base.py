@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import logging
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, Literal, cast
 
 import msgspec
@@ -23,7 +25,14 @@ from svy.categorical.table import CellEst, Table, TableStats
 from svy.categorical.ttest import TTestByResult, TTestOneGroup, TTestTwoGroups
 from svy.core.constants import key_col
 from svy.core.containers import ChiSquare, FDist
-from svy.core.data_prep import calib_kwargs, level_lookup, prepare_data, record_columns
+from svy.core.data_prep import (
+    calib_kwargs,
+    check_columns,
+    extract_where_cols,
+    level_lookup,
+    prepare_data,
+    record_columns,
+)
 from svy.core.enumerations import (
     RankScoreMethod as _RankScoreMethod,
 )
@@ -45,7 +54,7 @@ from svy.core.types import (
     WhereArg,
 )
 from svy.core.variance_method import resolve_variance_method
-from svy.errors import EstimationError
+from svy.errors import Code, EstimationError
 from svy.errors._api import guided_getattr
 from svy.errors._findings import reports_findings
 from svy.estimation.estimate import row_counts
@@ -99,14 +108,51 @@ def _normalize_units(
     if units is None:
         return _TableUnits.PROPORTION
     if not isinstance(units, str):
-        raise TypeError(
-            f"'units' must be a string or None, got {type(units).__name__}. "
-            f"Use 'proportion', 'percent', or 'count'."
+        raise EstimationError.invalid_type(
+            where="Sample.categorical.tabulate",
+            param="units",
+            got=units,
+            expected="'proportion', 'percent', 'count' or None",
         )
     result = _MAP.get(units.strip().lower())
     if result is None:
-        raise ValueError(f"Unknown units {units!r}. Use 'proportion', 'percent', or 'count'.")
+        raise EstimationError.invalid_choice(
+            where="Sample.categorical.tabulate",
+            param="units",
+            got=units,
+            allowed=["proportion", "percent", "count"],
+        )
     return result
+
+
+_ALTERNATIVES = ("two-sided", "less", "greater")
+
+
+def _check_alternative(alternative: object, *, where: str) -> None:
+    if alternative not in _ALTERNATIVES:
+        raise EstimationError.invalid_choice(
+            where=where, param="alternative", got=alternative, allowed=_ALTERNATIVES
+        )
+
+
+@contextmanager
+def _test_groups(*, where: str) -> Iterator[None]:
+    """The kernel's group-count error, raised as the input error it is."""
+    try:
+        yield
+    except RuntimeError as e:
+        msg = str(e)
+        if "requires exactly 2 groups" not in msg and "at least 2 groups" not in msg:
+            raise
+        raise EstimationError.ValueError(
+            title="Wrong number of groups",
+            detail=msg.splitlines()[0] + ".",
+            code=Code.TEST_GROUP_COUNT,
+            where=where,
+            param="group",
+            hint="A t-test compares two levels of group= and a rank test at least two, "
+            "within the analysis domain; where= selects them.",
+        ) from e
 
 
 def _normalize_rank_method(
@@ -134,14 +180,19 @@ def _normalize_rank_method(
     if isinstance(method, _RankScoreMethod):
         return method
     if not isinstance(method, str):
-        raise TypeError(
-            f"'score' must be a RankScoreMethod, a string, or None, got {type(method).__name__}. "
-            f"Use 'kruskal-wallis', 'vander-waerden', or 'median'."
+        raise EstimationError.invalid_type(
+            where="Sample.categorical.ranktest",
+            param="score",
+            got=method,
+            expected="a RankScoreMethod, 'kruskal-wallis', 'vander-waerden', 'median' or None",
         )
     result = _MAP.get(method.strip().lower())
     if result is None:
-        raise ValueError(
-            f"Unknown rank method {method!r}. Use 'kruskal-wallis', 'vander-waerden', or 'median'."
+        raise EstimationError.invalid_choice(
+            where="Sample.categorical.ranktest",
+            param="score",
+            got=method,
+            allowed=["kruskal-wallis", "vander-waerden", "median"],
         )
     return result
 
@@ -279,6 +330,21 @@ class Categorical:
 
         local_data: pl.DataFrame = self._sample._data
         design = self._sample._design
+
+        for param, value in (("rowvar", rowvar), ("colvar", colvar)):
+            if value is not None and not isinstance(value, str):
+                raise EstimationError.invalid_type(
+                    where="Sample.categorical.tabulate",
+                    param=param,
+                    got=value,
+                    expected="a column name",
+                )
+        check_columns(
+            local_data.columns,
+            rowvar=[rowvar],
+            colvar=[colvar],
+            where=extract_where_cols(where),
+        )
 
         # required columns
         key_cols = [rowvar] + ([colvar] if colvar else [])
@@ -743,6 +809,7 @@ class Categorical:
             When `by` is specified, returns a list of test results.
         """
         alpha = validate_alpha(alpha, where="Sample.categorical.ttest")
+        _check_alternative(alternative, where="Sample.categorical.ttest")
         rep_kw = self._replication(method, where="Sample.categorical.ttest")
         group_labels = self._value_labels(group, use_labels)
         # The population-size column has to survive prepare_data's projection
@@ -785,40 +852,41 @@ class Categorical:
                 ttest_df, pop_size, prep.strata_col, prep.psu_col, prep.ssu_col
             )
 
-        if rep_kw is not None:
-            findings = []
-            result_df: pl.DataFrame = rs.ttest_rs(
-                ttest_df,
-                y_col=prep.y_col,
-                weight_col=prep.weight_col,
-                group_col=group,
-                null_value=float(mean_h0),
-                domain_col=prep.domain_col,
-                domain_val=prep.domain_val,
-                by_col=prep.by_col,
-                **rep_kw,
-            )
-        else:
-            findings = self._domain_findings(prep, ttest_df, where="Sample.categorical.ttest")
+        with _test_groups(where="Sample.categorical.ttest"):
+            if rep_kw is not None:
+                findings = []
+                result_df: pl.DataFrame = rs.ttest_rs(
+                    ttest_df,
+                    y_col=prep.y_col,
+                    weight_col=prep.weight_col,
+                    group_col=group,
+                    null_value=float(mean_h0),
+                    domain_col=prep.domain_col,
+                    domain_val=prep.domain_val,
+                    by_col=prep.by_col,
+                    **rep_kw,
+                )
+            else:
+                findings = self._domain_findings(prep, ttest_df, where="Sample.categorical.ttest")
 
-            # Single Rust call — handles by-levels internally
-            result_df = rs.ttest_rs(
-                ttest_df,
-                y_col=prep.y_col,
-                weight_col=prep.weight_col,
-                group_col=group,
-                strata_col=prep.strata_col,
-                psu_col=prep.psu_col,
-                ssu_col=prep.ssu_col,
-                fpc_col=fpc_col,
-                fpc_ssu_col=fpc_ssu_col,
-                singleton_method=prep.singleton_method,
-                null_value=float(mean_h0),
-                **calib_kwargs(self._sample, ttest_df),
-                domain_col=prep.domain_col,
-                domain_val=prep.domain_val,
-                by_col=prep.by_col,
-            )
+                # Single Rust call — handles by-levels internally
+                result_df = rs.ttest_rs(
+                    ttest_df,
+                    y_col=prep.y_col,
+                    weight_col=prep.weight_col,
+                    group_col=group,
+                    strata_col=prep.strata_col,
+                    psu_col=prep.psu_col,
+                    ssu_col=prep.ssu_col,
+                    fpc_col=fpc_col,
+                    fpc_ssu_col=fpc_ssu_col,
+                    singleton_method=prep.singleton_method,
+                    null_value=float(mean_h0),
+                    **calib_kwargs(self._sample, ttest_df),
+                    domain_col=prep.domain_col,
+                    domain_val=prep.domain_val,
+                    by_col=prep.by_col,
+                )
 
         # The kernel returns by and group levels as strings; restore the
         # source columns' types.
@@ -1051,6 +1119,7 @@ class Categorical:
         their value labels: None (the default) when they have any.
         """
         alpha = validate_alpha(alpha, where="Sample.categorical.ranktest")
+        _check_alternative(alternative, where="Sample.categorical.ranktest")
         from svy.errors import EstimationError
 
         # `method=` named the rank score before it named the variance method.
@@ -1108,37 +1177,40 @@ class Categorical:
             select_columns=True,
         )
 
-        if rep_kw is not None:
-            findings = []
-            result_df: pl.DataFrame = rs.ranktest_rs(
-                prep.df,
-                y_col=prep.y_col,
-                group_col=group,
-                weight_col=prep.weight_col,
-                score_method=score_method_str,
-                domain_col=prep.domain_col,
-                domain_val=prep.domain_val,
-                by_col=prep.by_col,
-                **rep_kw,
-            )
-        else:
-            findings = self._domain_findings(prep, prep.df, where="Sample.categorical.ranktest")
+        with _test_groups(where="Sample.categorical.ranktest"):
+            if rep_kw is not None:
+                findings = []
+                result_df: pl.DataFrame = rs.ranktest_rs(
+                    prep.df,
+                    y_col=prep.y_col,
+                    group_col=group,
+                    weight_col=prep.weight_col,
+                    score_method=score_method_str,
+                    domain_col=prep.domain_col,
+                    domain_val=prep.domain_val,
+                    by_col=prep.by_col,
+                    **rep_kw,
+                )
+            else:
+                findings = self._domain_findings(
+                    prep, prep.df, where="Sample.categorical.ranktest"
+                )
 
-            # Single Rust call — handles by-levels internally
-            result_df = rs.ranktest_rs(
-                prep.df,
-                y_col=prep.y_col,
-                group_col=group,
-                weight_col=prep.weight_col,
-                strata_col=prep.strata_col,
-                psu_col=prep.psu_col,
-                ssu_col=prep.ssu_col,
-                score_method=score_method_str,
-                singleton_method=prep.singleton_method,
-                domain_col=prep.domain_col,
-                domain_val=prep.domain_val,
-                by_col=prep.by_col,
-            )
+                # Single Rust call — handles by-levels internally
+                result_df = rs.ranktest_rs(
+                    prep.df,
+                    y_col=prep.y_col,
+                    group_col=group,
+                    weight_col=prep.weight_col,
+                    strata_col=prep.strata_col,
+                    psu_col=prep.psu_col,
+                    ssu_col=prep.ssu_col,
+                    score_method=score_method_str,
+                    singleton_method=prep.singleton_method,
+                    domain_col=prep.domain_col,
+                    domain_val=prep.domain_val,
+                    by_col=prep.by_col,
+                )
 
         by_lookup = level_lookup(self._sample._data, [by]) if by is not None else {}
         group_lookup = level_lookup(self._sample._data, [group])
@@ -1424,38 +1496,39 @@ class Categorical:
         df = prep.df.with_columns(pl.Series(name=score_col_name, values=scores_full))
 
         method_name = getattr(score_fn, "__name__", "custom")
-        if rep_kw is not None:
-            findings = []
-            result_df: pl.DataFrame = rs.ranktest_rs(
-                df,
-                y_col=score_col_name,
-                group_col=group,
-                weight_col=prep.weight_col,
-                domain_col=prep.domain_col,
-                domain_val=prep.domain_val,
-                by_col=prep.by_col,
-                scores_given=True,
-                **rep_kw,
-            )
-            if "delta" in result_df.columns:
-                result_df = result_df.rename({"delta": "diff"})
-        else:
-            findings = self._domain_findings(prep, df, where="Sample.categorical.ranktest")
+        with _test_groups(where="Sample.categorical.ranktest"):
+            if rep_kw is not None:
+                findings = []
+                result_df: pl.DataFrame = rs.ranktest_rs(
+                    df,
+                    y_col=score_col_name,
+                    group_col=group,
+                    weight_col=prep.weight_col,
+                    domain_col=prep.domain_col,
+                    domain_val=prep.domain_val,
+                    by_col=prep.by_col,
+                    scores_given=True,
+                    **rep_kw,
+                )
+                if "delta" in result_df.columns:
+                    result_df = result_df.rename({"delta": "diff"})
+            else:
+                findings = self._domain_findings(prep, df, where="Sample.categorical.ranktest")
 
-            result_df = rs.ttest_rs(
-                df,
-                y_col=score_col_name,
-                weight_col=prep.weight_col,
-                group_col=group,
-                strata_col=prep.strata_col,
-                psu_col=prep.psu_col,
-                ssu_col=prep.ssu_col,
-                singleton_method=prep.singleton_method,
-                null_value=0.0,
-                domain_col=prep.domain_col,
-                domain_val=prep.domain_val,
-                by_col=prep.by_col,
-            )
+                result_df = rs.ttest_rs(
+                    df,
+                    y_col=score_col_name,
+                    weight_col=prep.weight_col,
+                    group_col=group,
+                    strata_col=prep.strata_col,
+                    psu_col=prep.psu_col,
+                    ssu_col=prep.ssu_col,
+                    singleton_method=prep.singleton_method,
+                    null_value=0.0,
+                    domain_col=prep.domain_col,
+                    domain_val=prep.domain_val,
+                    by_col=prep.by_col,
+                )
 
         by_lookup = level_lookup(self._sample._data, [by]) if by is not None else {}
         group_lookup = level_lookup(self._sample._data, [group])
