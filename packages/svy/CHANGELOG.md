@@ -50,6 +50,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **Rao-Scott tests reported `F(0, 0) = 0.00, p = 1.000` where they are undefined**: one row or column level, or no design variance. They are now NaN; without design variance the uncorrected X² is still reported.
 - **One by-group with no weight, or without both groups, failed a whole `ttest(by=)` or `ranktest(by=)`.** That group now gets a NaN row labelled with the frame's groups; without `by=` the error stands.
 - **`corr` with a constant column raised a `RuntimeError`, and with `by=` gave a NaN estimate with SE 0.** Both now give NaN for the estimate, SE and interval, as R does; other pairs in the same call are unaffected.
+- **Paired JK2 (`create_jk_wgts(paired=True)`) without `rstate` always deleted the same PSUs**, because the kernel read a missing seed as 0. It now draws a fresh seed, as bootstrap does; a given `rstate` gives the same replicates as before.
+- **`adjust` silently lost the weight of a class with nonrespondents but no respondents.** That now raises `NO_RESPONDENTS` naming the classes; collapse them first. When only a replicate loses a class's respondents, the replicate keeps losing that weight and a `REPLICATE_NO_RESPONDENTS` warning names the replicates and classes.
+- **Calibration on a singular system used an approximate ridge solve**, so redundant but consistent controls (one implied by others) gave weights about 1e-8 off. It now uses the minimum-norm pseudo-inverse, as R's `grake` does with `MASS::ginv`.
+- **Calibrated replicate weights were never checked against the controls.** A replicate that misses them (a deleted PSU can take an auxiliary's only units) now raises `CALIBRATION_NOT_MET` naming it, or warns under `on_nonconvergence="warn"`, before anything is written.
 
 ## [0.35.0] — 2026-10-16
 
