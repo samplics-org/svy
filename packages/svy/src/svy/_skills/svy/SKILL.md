@@ -45,7 +45,7 @@ There is no `svy.Survey`, `svy.SurveyDesign`, `svy.svydesign` or
 ```python
 import svy
 
-data = svy.read_csv("survey.csv")  # a polars DataFrame
+data = svy.io.read_csv("survey.csv")  # a polars DataFrame
 sample = svy.Sample(data, svy.Design(stratum="stratum", psu="cluster", wgt="weight"))
 
 result = sample.estimation.mean("income", by="sex")

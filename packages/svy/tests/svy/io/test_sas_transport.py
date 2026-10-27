@@ -33,7 +33,7 @@ def ssp(tmp_path):
 
 def test_read_sas_reads_xpt_named_ssp(ssp, caplog):
     with caplog.at_level(logging.WARNING, logger="svy.io.base"):
-        df = svy.read_sas(ssp)
+        df = svy.io.read_sas(ssp)
 
     assert df.columns == ["dupersid", "perwt"]
     assert df["perwt"].to_list() == [100.5, 200.0, 50.25]
@@ -41,14 +41,14 @@ def test_read_sas_reads_xpt_named_ssp(ssp, caplog):
 
 
 def test_create_from_sas_builds_a_sample_from_ssp(ssp):
-    sample = svy.create_from_sas(ssp)
+    sample = svy.io.create_from_sas(ssp)
 
     assert isinstance(sample, svy.Sample)
     assert sample.data["dupersid"].to_list() == [1.0, 2.0, 3.0]
 
 
 def test_read_sas_columns_on_xpt(ssp):
-    df = svy.read_sas(ssp, columns=["perwt"])
+    df = svy.io.read_sas(ssp, columns=["perwt"])
 
     assert df.columns == ["perwt"]
 
@@ -58,7 +58,7 @@ def test_cport_raises_a_guiding_error(tmp_path):
     path.write_bytes(CPORT_HEAD + b"\x00" * 200)
 
     with pytest.raises(IoError) as exc:
-        svy.read_sas(path)
+        svy.io.read_sas(path)
 
     err = exc.value
     assert err.code == "READSTAT_PARSE_FAILED"
@@ -68,7 +68,7 @@ def test_cport_raises_a_guiding_error(tmp_path):
 
 @pytest.mark.skipif(not SAS_DATA.is_dir(), reason="svy-io test data not available")
 def test_catalog_labels_an_xpt():
-    sample = svy.create_from_xpt(
+    sample = svy.io.create_from_xpt(
         SAS_DATA / "hadley.xpt", catalog_path=SAS_DATA / "formats.sas7bcat"
     )
 
@@ -91,15 +91,16 @@ def test_xpt_aliases_are_the_sas_functions(alias, target):
 
 
 @pytest.mark.parametrize("name", ["read_xpt", "create_from_xpt", "write_xpt"])
-def test_xpt_aliases_are_exported_at_top_level(name):
-    assert getattr(svy, name) is getattr(svy.io, name)
-    assert name in svy.__all__
+def test_xpt_aliases_say_they_moved_to_io(name):
+    with pytest.raises(AttributeError, match=rf"svy\.io\.{name}"):
+        getattr(svy, name)
+    assert name not in svy.__all__
 
 
 def test_write_xpt_then_read_xpt_round_trips(ssp, tmp_path):
-    sample = svy.create_from_xpt(ssp)
+    sample = svy.io.create_from_xpt(ssp)
     out = tmp_path / "out.xpt"
 
-    svy.write_xpt(sample, out)
+    svy.io.write_xpt(sample, out)
 
-    assert svy.read_xpt(out).equals(svy.read_sas(ssp))
+    assert svy.io.read_xpt(out).equals(svy.io.read_sas(ssp))

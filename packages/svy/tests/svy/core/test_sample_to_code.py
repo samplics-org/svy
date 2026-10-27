@@ -155,9 +155,9 @@ def test_no_metadata_in_the_script(api):
 def test_parquet_path_is_read_back(base, tmp_path, kind):
     s = base.weighting.poststratify(STYPE, cells="stype")
     path = tmp_path / "survey.parquet"
-    svy.write_parquet(s, path)
+    svy.io.write_parquet(s, path)
     script = s.to_code(data=kind(path))
-    assert f"data = svy.read_parquet({str(path)!r})" in script
+    assert f"data = svy.io.read_parquet({str(path)!r})" in script
     back = _run(script)
     assert back.design == s.design
     assert _estimates(back, "api00", "sch.wide", "stype") == _estimates(
@@ -169,7 +169,7 @@ def test_uppercase_extension_and_awkward_path(base, tmp_path):
     folder = tmp_path / "o'brien \\ data"
     folder.mkdir()
     path = folder / "SURVEY.PARQUET"
-    svy.write_parquet(base, path)
+    svy.io.write_parquet(base, path)
     back = _run(base.to_code(data=path))
     assert back.design == base.design
 
@@ -186,7 +186,7 @@ def test_other_formats_are_refused_with_a_hint(base, path):
     with pytest.raises(DesignError) as exc:
         base.to_code(data=path)
     assert exc.value.code == "TO_CODE_DATA_NOT_PARQUET"
-    assert "svy.write_parquet" in (exc.value.hint or "")
+    assert "svy.io.write_parquet" in (exc.value.hint or "")
 
 
 # ---------------------------------------------------------------------------
@@ -302,7 +302,7 @@ def test_renamed_replicates(base):
 def test_every_record_kind(base, adjust):
     s = adjust(base)
     assert s.design.wgt_adjustment is not None
-    assert "svy.WgtAdjustment(" in s.to_code()
+    assert "svy.core.WgtAdjustment(" in s.to_code()
     _assert_rebuilds(s, y="api00", by="sch.wide", cat="stype")
 
 

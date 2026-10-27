@@ -8,7 +8,7 @@ from svy.core.enumerations import RankScoreMethod
 BASE_DIR = Path("tests/test_data")
 DATA_PATH = BASE_DIR / "svy_synthetic_sample_07082025.csv"
 
-data = svy.read_csv(DATA_PATH).fill_nan(None).drop_nulls()
+data = svy.io.read_csv(DATA_PATH).fill_nan(None).drop_nulls()
 design = svy.Design(stratum="region", psu="cluster", wgt="samp_wgt")
 sample = svy.Sample(data=data, design=design)
 

@@ -337,7 +337,7 @@ class TestContrastGuards:
             rs[0].contrast(estd("E") - estd("H"))
 
     def test_estimate_list_single_member_delegates(self, dclus1):
-        lst = svy.EstimateList([dclus1.estimation.mean("api00", by="stype")])
+        lst = svy.estimation.EstimateList([dclus1.estimation.mean("api00", by="stype")])
         c = lst.contrast(estd("E") - estd("H"))
         assert c.estimates[0].est == pytest.approx(30.2966269841261, rel=TOL)
 

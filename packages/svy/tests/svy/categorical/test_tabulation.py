@@ -5,7 +5,9 @@ import math
 import polars as pl
 import pytest
 
-from svy import CellEst, Design, Sample, Table, TableType, TableUnits
+from svy import Design, Sample
+from svy.categorical import CellEst, Table
+from svy.enums import TableType, TableUnits
 
 
 def _declare(sample, method, **kw):

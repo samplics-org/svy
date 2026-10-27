@@ -294,14 +294,9 @@ def test_update_rep_weights_drops_kind_when_the_method_changes():
 def test_variants_are_publicly_exported():
     """They are on the read path: rep_wgts hands one back."""
 
-    for name in (
-        "RepWgts",
-        "BootstrapWgts",
-        "JackknifeWgts",
-        "BrrWgts",
-        "SdrWgts",
-    ):
+    for name in ("BootstrapWgts", "JackknifeWgts", "BrrWgts", "SdrWgts"):
         assert hasattr(svy, name), name
+    assert hasattr(svy.typing, "RepWgts")
 
 
 # =============================================================================

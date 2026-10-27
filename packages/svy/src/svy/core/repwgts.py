@@ -720,7 +720,7 @@ def RepWeights(  # noqa: N802 - a factory that replaced a class of this name
     >>> BrrWgts(prefix="brr_", n_reps=32, fay_coef=0.5)
 
     This is a function, not a class: ``isinstance(x, svy.RepWeights)`` and the
-    annotation ``x: svy.RepWeights`` do not work. Use ``svy.RepWgts``, the union
+    annotation ``x: svy.RepWeights`` do not work. Use ``svy.typing.RepWgts``, the union
     of the four variants, for both.
 
     Parameters that do not belong to ``method`` are refused rather than stored --

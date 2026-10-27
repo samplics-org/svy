@@ -162,7 +162,7 @@ def test_sample_given_pandas_guides():
 def test_sample_given_other_data_guides():
     with pytest.raises(UsageError) as info:
         svy.Sample({"w": [1.0]}, svy.Design(wgt="w"))
-    assert "svy.read_csv" in info.value.hint
+    assert "svy.io.read_csv" in info.value.hint
 
 
 def test_module_docstring_points_to_sample():

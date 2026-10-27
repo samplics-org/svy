@@ -23,7 +23,8 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from svy import Design, RankScoreMethod, Sample
+from svy import Design, Sample
+from svy.enums import RankScoreMethod
 
 
 BASE_DIR = Path(__file__).parents[2]

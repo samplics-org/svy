@@ -3,7 +3,8 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from svy import Design, ParamEst, Sample
+from svy import Design, Sample
+from svy.estimation import ParamEst
 
 
 TOL = 1e-7

@@ -16,7 +16,8 @@ import pytest
 
 import svy
 
-from svy import EstimateList, QuantileMethod
+from svy.enums import QuantileMethod
+from svy.estimation import EstimateList
 from svy.serialize import from_json, to_json
 
 

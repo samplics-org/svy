@@ -29,9 +29,9 @@ def zip_without_data(tmp_path):
 @pytest.mark.parametrize(
     "reader, where, exts",
     [
-        (svy.read_sas, "io.read_sas", ".sas7bdat"),
-        (svy.read_spss, "io.read_spss", ".sav/.zsav/.por"),
-        (svy.read_stata, "io.read_stata", ".dta"),
+        (svy.io.read_sas, "io.read_sas", ".sas7bdat"),
+        (svy.io.read_spss, "io.read_spss", ".sav/.zsav/.por"),
+        (svy.io.read_stata, "io.read_stata", ".dta"),
     ],
 )
 def test_zip_without_member_names_the_members(reader, where, exts, zip_without_data):
@@ -51,7 +51,7 @@ def test_zip_without_member_names_the_members(reader, where, exts, zip_without_d
 
 def test_create_from_sas_zip_without_member(zip_without_data):
     with pytest.raises(IoError) as exc:
-        svy.create_from_sas(zip_without_data)
+        svy.io.create_from_sas(zip_without_data)
 
     assert exc.value.code == "ARCHIVE_MEMBER_NOT_FOUND"
 
@@ -64,7 +64,7 @@ def test_read_sas_zip_with_xpt_member_reads(tmp_path):
         z.write(xpt, "h188b.xpt")
         z.writestr("readme.txt", "notes")
 
-    df = svy.read_sas(path)
+    df = svy.io.read_sas(path)
 
     assert df["perwt"].to_list() == [100.5, 200.0]
 
@@ -88,8 +88,8 @@ def test_read_spss_zip_with_sav_member_reads(tmp_path, frame, caplog):
     path = _zip_with(tmp_path, sav)
 
     with caplog.at_level(logging.WARNING, logger="svy.io.base"):
-        df = svy.read_spss(path, columns=["wgt"])
-    sample = svy.create_from_spss(path)
+        df = svy.io.read_spss(path, columns=["wgt"])
+    sample = svy.io.create_from_spss(path)
 
     assert df.columns == ["wgt"]
     assert df["wgt"].to_list() == [0.5, 1.5, 1.0]
@@ -104,15 +104,15 @@ def test_read_stata_zip_with_dta_member_reads(tmp_path, frame, caplog):
     path = _zip_with(tmp_path, dta)
 
     with caplog.at_level(logging.WARNING, logger="svy.io.base"):
-        df = svy.read_stata(path)
-    sample = svy.create_from_stata(path)
+        df = svy.io.read_stata(path)
+    sample = svy.io.create_from_stata(path)
 
     assert df["wgt"].to_list() == [0.5, 1.5, 1.0]
     assert sample.meta.get("wgt").label == "Final weight"
     assert "may not match format" not in caplog.text
 
 
-@pytest.mark.parametrize("reader", [svy.read_sas, svy.read_spss, svy.read_stata])
+@pytest.mark.parametrize("reader", [svy.io.read_sas, svy.io.read_spss, svy.io.read_stata])
 def test_missing_zip_is_file_not_found(reader, tmp_path):
     path = tmp_path / "absent.zip"
 

@@ -2,7 +2,7 @@
 """`__svy_` columns are svy's; everything in `sample.data` is your data or your design's.
 
 svy keeps its derived bookkeeping (row index, design keys, singleton variance
-columns) in ``sample._data`` only. ``sample.data`` and ``svy.write_parquet``
+columns) in ``sample._data`` only. ``sample.data`` and ``svy.io.write_parquet``
 show the user's columns plus ``design.columns()``, the weight-adjustment
 record's snapshots included, and nothing else. A user column named like the
 bookkeeping is refused with a guiding error.
@@ -130,8 +130,8 @@ def assert_same_estimates(a: svy.Sample, b: svy.Sample) -> None:
 
 def roundtrip(s: svy.Sample, tmp_path) -> svy.Sample:
     p = tmp_path / "s.parquet"
-    svy.write_parquet(s, p)
-    back = svy.read_parquet(p)
+    svy.io.write_parquet(s, p)
+    back = svy.io.read_parquet(p)
     assert back.columns == s.data.columns
     assert back.equals(s.data)
     return svy.Sample(back, s.design)
@@ -473,7 +473,7 @@ def test_write_parquet_writes_what_is_shown(kind, tmp_path):
 def test_write_csv_writes_what_is_shown(tmp_path):
     s = sample("tuple").weighting.poststratify(G_TOTALS, cells="g", wgt_name="nw")
     p = tmp_path / "s.csv"
-    svy.write_csv(s, p)
+    svy.io.write_csv(s, p)
     assert pl.read_csv(p).columns == s.data.columns
 
 
@@ -483,7 +483,7 @@ def test_to_code_runs_on_the_saved_file(tmp_path):
     s = s.weighting.create_jk_wgts(rep_prefix="jk")
     s = s.weighting.poststratify(G_TOTALS, cells="g", wgt_name="nw")
     p = tmp_path / "s.parquet"
-    svy.write_parquet(s, p)
+    svy.io.write_parquet(s, p)
     scope: dict = {}
     exec(s.to_code(data=p), scope)
     rebuilt = scope["sample"]

@@ -109,4 +109,4 @@ sample.meta.var_labels["employed"]
 ```
 
 Value labels show in printed results; `to_polars()` keeps the codes.
-`svy.read_stata` and `svy.read_spss` bring the file's labels in.
+`svy.io.read_stata` and `svy.io.read_spss` bring the file's labels in.

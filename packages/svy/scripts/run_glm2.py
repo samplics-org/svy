@@ -7,7 +7,7 @@ HOME = Path.home()
 # DATA_PATH = home / "Publications/2026/jss-svy/data"
 
 data = (
-    svy.read_csv(HOME / "Publications/2026/jss-svy/data" / "hh_sample_for_r.csv")
+    svy.io.read_csv(HOME / "Publications/2026/jss-svy/data" / "hh_sample_for_r.csv")
     # .fill_nan(None)
     # .drop_nulls()
     # .select(

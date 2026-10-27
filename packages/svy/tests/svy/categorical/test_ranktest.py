@@ -41,10 +41,10 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from svy import RankScoreMethod
 from svy.categorical.base import _normalize_rank_method
 from svy.core.design import Design
 from svy.core.sample import Sample
+from svy.enums import RankScoreMethod
 
 
 BASE_DIR = Path(__file__).parents[2]
