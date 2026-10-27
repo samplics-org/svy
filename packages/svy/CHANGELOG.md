@@ -8,6 +8,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **`svy.utils.deprecated_param(old, new, since=, remove_in=)`** keeps a renamed keyword working through a deprecation period: `old=` warns (`DeprecationWarning` naming `new=`, at the user's line) and is passed on as `new=`; both together raise `UsageError.TypeError` (`PARAM_GIVEN_TWICE`). Stack one per renamed keyword.
 - **`@experimental` (`svy.utils`) and `svy.errors.ExperimentalWarning`.** A decorated function warns once per session (`EXPERIMENTAL`), notes every result it returns (`note: Experimental method [EXPERIMENTAL]`, kept in saved payloads) and says so in its docstring. The warning is not recorded in `sample.warnings`, and filtering it out keeps the result note. An experimental feature may change in any release without a deprecation period.
 - **Every error and warning links to its code.** `docs_url` defaults to the code's entry in the new reference page, https://svylab.com/docs/svy/reference/codes.html, and errors print it as `Docs:`. The page lists every code with the class it is raised as, its message and hint; `scripts/render_codes.py` writes it from the source.
 - **Findings print.** `print(sample.warnings)` lists each finding as a block of `Level`, `Code` and `Detail` lines, and a single finding (`SvyWarning`) prints as a panel like an error, marked by its level (ℹ info, ▲ warning) instead of ✗.
