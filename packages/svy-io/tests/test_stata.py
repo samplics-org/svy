@@ -287,12 +287,6 @@ def test_file_label_roundtrips(tmp_path):
     assert meta.get("file_label") == "abc"
 
 
-def test_can_roundtrip_tagged_NAs(tmp_path):
-    pytest.xfail("tagged NAs on write/read not implemented yet")
-    # Once implemented: create numeric column with user-missing tags .a/.b etc,
-    # and assert tags persist both in data and in value label domains.
-
-
 def test_infinity_gets_converted_to_NA_on_write(tmp_path):
     if not HAVE_READ_DTA or not HAVE_WRITE_DTA:
         pytest.xfail("stub pending")
