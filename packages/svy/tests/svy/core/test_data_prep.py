@@ -23,6 +23,7 @@ from svy.core.constants import key_col
 from svy.core.data_prep import _PSU_CODE, _STRATUM_CODE, extract_where_cols, prepare_data
 from svy.core.design import Design
 from svy.core.sample import Sample
+from svy.errors import Code, DataError
 
 
 # ---------- Fixtures ----------
@@ -181,22 +182,22 @@ class TestDropNullsScope:
         assert prep.df.height == 100
         assert prep.df.filter(pl.col(prep.weight_col) == 0.0).height == 5
 
-    def test_nulls_in_weight_column_drop_rows(self, base_df):
-        """Nulls in the weight column should cause drops."""
+    def test_nulls_in_weight_column_raise(self, base_df):
         df = base_df.with_columns(
             pl.when(pl.arange(0, pl.len()) < 3).then(None).otherwise(pl.col("wgt")).alias("wgt")
         )
         design = Design(stratum="stratum", psu="psu", wgt="wgt")
         sample = Sample(data=df, design=design)
 
-        prep = prepare_data(
-            sample,
-            y="y_var",
-            drop_nulls=True,
-            cast_y_float=True,
-            select_columns=False,
-        )
-        assert prep.df.height == 97
+        with pytest.raises(DataError.ValueError, match=r"wgt \(NULL\)") as exc:
+            prepare_data(
+                sample,
+                y="y_var",
+                drop_nulls=True,
+                cast_y_float=True,
+                select_columns=False,
+            )
+        assert exc.value.code == Code.MISSING_VALUES
 
 
 # ==================== select_columns Invariance ====================

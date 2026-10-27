@@ -516,7 +516,8 @@ class GLM:
             ``svrepdesign``), with df the replicate df less the extra
             coefficients.
         drop_nulls : bool
-            Drop rows with missing values.
+            Exclude rows missing the response or a covariate from the fit; they keep
+            their place in the variance. A missing stratum, PSU or weight raises.
         tol : float
             Convergence tolerance.
         max_iter : int

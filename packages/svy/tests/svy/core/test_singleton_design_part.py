@@ -28,7 +28,7 @@ import svy
 from svy.core.design import Singleton
 from svy.core.enumerations import SingletonMethod
 from svy.core.singleton import _VAR_EXCLUDE_COL, _VAR_PSU_COL, _VAR_STRATUM_COL
-from svy.errors import SerializationError, WeightingError
+from svy.errors import Code, DataError, SerializationError, WeightingError
 from svy.errors._singleton import SingletonError
 from svy.serialize import from_json, to_design, to_json
 
@@ -1096,24 +1096,21 @@ def test_categorical_strata():
     assert ses(h) == pytest.approx(BASELINE_SES["single/pool"], rel=1e-12)
 
 
-def _null_round_trip(s: svy.Sample, rule) -> svy.Sample:
-    """Null strata need drop_nulls=True at estimation (as before this change)."""
+def _null_round_trip(s: svy.Sample, rule, col: str) -> svy.Sample:
+    """The rule resolves a null stratum, but estimating on it raises, saved or not."""
     h = rule(s)
 
-    def ests(x: svy.Sample) -> list:
-        return [
-            (p.est, p.se)
-            for e in (
-                x.estimation.mean("y", drop_nulls=True),
-                x.estimation.total("y", drop_nulls=True),
-            )
-            for p in e.estimates
-        ]
+    def assert_raises_missing(x: svy.Sample) -> None:
+        for est in (x.estimation.mean, x.estimation.total):
+            with pytest.raises(DataError.ValueError) as exc:
+                est("y", drop_nulls=True)
+            assert exc.value.code == Code.MISSING_VALUES
+            assert exc.value.got == [f"{col} (NULL)"]
 
-    live = ests(h)
+    assert_raises_missing(h)
     for design in (_saved(h), _coded(h)):
         r = svy.Sample(h.data, design)
-        assert ests(r) == live
+        assert_raises_missing(r)
         assert _result(r).applied == _result(h).applied
         assert r._data[_VAR_STRATUM_COL].to_list() == h._data[_VAR_STRATUM_COL].to_list()
     return h
@@ -1124,7 +1121,7 @@ def test_strata_with_a_null():
         pl.when(pl.col("st") == "e").then(None).otherwise(pl.col("st")).alias("st")
     )
     s = svy.Sample(df, svy.Design(**DESIGNS["single"]))
-    h = _null_round_trip(s, lambda s: _declare(s, "self_representing"))
+    h = _null_round_trip(s, lambda s: _declare(s, "self_representing"), "st")
     assert resolved(h) == [None, "d"]
     assert _result(h).applied == ("__Null__", "d")
 
@@ -1135,7 +1132,9 @@ def test_tuple_strata_with_a_null():
     )
     s = svy.Sample(df, svy.Design(**DESIGNS["tuple"]))
     h = _null_round_trip(
-        s, lambda s: _declare(s, "collapse", using={("S", None): ("S", 3), ("N", 4): ("N", 1)})
+        s,
+        lambda s: _declare(s, "collapse", using={("S", None): ("S", 3), ("N", 4): ("N", 1)}),
+        "code",
     )
     assert resolved(h) == {("N", 4): ("N", 1), ("S", None): ("S", 3)}
 

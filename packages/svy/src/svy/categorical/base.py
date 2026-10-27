@@ -26,6 +26,8 @@ from svy.categorical.ttest import TTestByResult, TTestOneGroup, TTestTwoGroups
 from svy.core.constants import key_col
 from svy.core.containers import ChiSquare, FDist
 from svy.core.data_prep import (
+    _ANALYSIS_MISSING_HINT,
+    _DESIGN_MISSING_HINT,
     calib_kwargs,
     check_columns,
     extract_where_cols,
@@ -60,7 +62,7 @@ from svy.errors._findings import reports_findings
 from svy.estimation.estimate import row_counts
 from svy.estimation.replication import replicate_params
 from svy.ui.printing import format_where_clause
-from svy.utils.checks import assert_no_missing, drop_missing, validate_alpha
+from svy.utils.checks import any_missing, assert_no_missing, validate_alpha
 from svy.utils.where import _compile_where
 
 
@@ -302,8 +304,9 @@ class Categorical:
             ``svymean``/``svytotal``/``svychisq`` on a ``svrepdesign``).
         alpha : float
             Significance level for confidence intervals. Default 0.05.
-        drop_nulls : bool
-            If True, drop rows with missing values. Default False.
+        drop_nulls : bool, default False
+            Exclude rows missing a table value from the estimate; they keep their
+            place in the variance. A missing stratum, PSU or weight raises.
         use_labels : bool | None
             If True, display labels instead of codes. None uses Table default.
 
@@ -380,41 +383,52 @@ class Categorical:
             _rec_cols.append(domain_col)
         local_data = local_data.select(cols + _rec_cols)
 
-        if domain_col is None:
-            if drop_nulls:
-                valid_data = drop_missing(df=local_data, cols=cols, treat_infinite_as_missing=True)
-            else:
-                assert_no_missing(df=local_data, subset=cols)
-                valid_data = local_data
+        # Design columns must be complete everywhere; the table variables only
+        # inside the domain. With drop_nulls a missing table value leaves the
+        # domain (weight 0) rather than the frame, so its PSU stays in the variance.
+        design_only = [c for c in cols if c not in key_cols]
+        assert_no_missing(df=local_data, subset=design_only, hint=_DESIGN_MISSING_HINT)
+        if drop_nulls:
+            if any_missing(local_data, key_cols, infinite=True):
+                schema = local_data.schema
+                keys_present = pl.all_horizontal(
+                    pl.col(c).is_finite().fill_null(False)
+                    if schema[c] in (pl.Float32, pl.Float64)
+                    else pl.col(c).is_not_null()
+                    for c in key_cols
+                )
+                if domain_col is None:
+                    domain_col = "__svy_domain__"
+                    local_data = local_data.with_columns(keys_present.alias(domain_col))
+                else:
+                    local_data = local_data.with_columns(
+                        (pl.col(domain_col) & keys_present).alias(domain_col)
+                    )
+        elif domain_col is None:
+            assert_no_missing(df=local_data, subset=key_cols, hint=_ANALYSIS_MISSING_HINT)
         else:
-            # Design columns must be complete everywhere; the keys only
-            # inside the domain. With drop_nulls a null key leaves the domain
-            # (weight 0) rather than the frame.
-            design_only = [c for c in cols if c not in key_cols]
-            if drop_nulls:
-                valid_data = (
-                    drop_missing(df=local_data, cols=design_only, treat_infinite_as_missing=True)
-                    if design_only
-                    else local_data
-                )
-                valid_data = valid_data.with_columns(
-                    (
-                        pl.col(domain_col)
-                        & pl.all_horizontal(pl.col(c).is_not_null() for c in key_cols)
-                    ).alias(domain_col)
-                )
-            else:
-                if design_only:
-                    assert_no_missing(df=local_data, subset=design_only)
-                assert_no_missing(df=local_data.filter(pl.col(domain_col)), subset=key_cols)
-                valid_data = local_data
-            if not valid_data.get_column(domain_col).any():
-                raise EstimationError.not_applicable(
-                    where="Sample.categorical.tabulate",
-                    method="tabulate",
-                    reason="No rows are in scope for `where`.",
-                    hint="Check `where` and for nulls in the table variables.",
-                )
+            assert_no_missing(
+                df=local_data.filter(pl.col(domain_col)),
+                subset=key_cols,
+                scope="inside the `where` domain",
+                hint=_ANALYSIS_MISSING_HINT,
+            )
+        valid_data = local_data
+        if domain_col is not None and not valid_data.get_column(domain_col).any():
+            raise EstimationError.not_applicable(
+                where="Sample.categorical.tabulate",
+                method="tabulate",
+                reason=(
+                    "No rows are in scope for `where`."
+                    if where_expr is not None
+                    else "Every row is missing a table value."
+                ),
+                hint=(
+                    "Check `where` and for nulls in the table variables."
+                    if where_expr is not None
+                    else "Check the table variables for missing values."
+                ),
+            )
 
         # Create concatenated design columns
         _cc, _ = self._sample._create_concatenated_cols_from_lists(
@@ -799,7 +813,9 @@ class Categorical:
             alpha: Significance level for confidence intervals. Default 0.05.
             alternative: Alternative hypothesis. One of "two-sided", "less", "greater".
                 Default "two-sided".
-            drop_nulls: If True, drop rows with missing values. Default False.
+            drop_nulls: Exclude rows missing a value this call uses from the estimate;
+                they keep their place in the variance. A missing stratum, PSU or
+                weight raises. Default False.
             use_labels: Show the group's value labels instead of its codes. None
                 (the default) shows them when the group has any; the result keeps
                 the codes either way.
@@ -1117,6 +1133,9 @@ class Categorical:
         replicate). Its df is the replicate df minus the number of groups
         less one. ``use_labels`` shows the two groups and the ``by`` levels by
         their value labels: None (the default) when they have any.
+        ``drop_nulls`` excludes rows missing a value the test uses from the
+        estimate; they keep their place in the variance. A missing stratum, PSU
+        or weight raises.
         """
         alpha = validate_alpha(alpha, where="Sample.categorical.ranktest")
         _check_alternative(alternative, where="Sample.categorical.ranktest")

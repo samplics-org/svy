@@ -1633,6 +1633,9 @@ class Estimation:
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design (Taylor when strata/PSU
             are available, replication otherwise).
+        drop_nulls : bool, default False
+            Exclude rows missing a value this call uses from the estimate; they keep
+            their place in the variance. A missing stratum, PSU or weight raises.
         """
         alpha = validate_alpha(alpha, where="Sample.estimation.mean")
         deff_ref = self._normalize_deff(deff)
@@ -1761,6 +1764,9 @@ class Estimation:
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
+        drop_nulls : bool, default False
+            Exclude rows missing a value this call uses from the estimate; they keep
+            their place in the variance. A missing stratum, PSU or weight raises.
         """
         alpha = validate_alpha(alpha, where="Sample.estimation.total")
         deff_ref = self._normalize_deff(deff)
@@ -1886,6 +1892,9 @@ class Estimation:
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
+        drop_nulls : bool, default False
+            Exclude rows missing a value this call uses from the estimate; they keep
+            their place in the variance. A missing stratum, PSU or weight raises.
         """
         alpha = validate_alpha(alpha, where="Sample.estimation.prop")
         deff_ref = self._normalize_deff(deff)
@@ -2013,6 +2022,9 @@ class Estimation:
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
+        drop_nulls : bool, default False
+            Exclude rows missing a value this call uses from the estimate; they keep
+            their place in the variance. A missing stratum, PSU or weight raises.
         """
         alpha = validate_alpha(alpha, where="Sample.estimation.ratio")
         deff_ref = self._normalize_deff(deff)
@@ -2230,6 +2242,9 @@ class Estimation:
             ``'fisher'`` builds the interval on the arctanh scale and
             transforms back, keeping it inside [-1, 1]. ``'wald'`` gives the
             symmetric ``est ± t·se``, which can exceed the bounds.
+        drop_nulls : bool, default False
+            Exclude rows missing a value this call uses from the estimate; they keep
+            their place in the variance. A missing stratum, PSU or weight raises.
 
         Returns
         -------
@@ -2385,6 +2400,9 @@ class Estimation:
         q_method : str, default "higher"
             Tie-handling rule when a probability falls between observations,
             analogous to R's ``qrule``.
+        drop_nulls : bool, default False
+            Exclude rows missing a value this call uses from the estimate; they keep
+            their place in the variance. A missing stratum, PSU or weight raises.
 
         Returns
         -------
@@ -2501,6 +2519,9 @@ class Estimation:
         method : str | None
             Variance estimation method: ``'taylor'`` or ``'replication'``.
             If None, auto-detected from the design.
+        drop_nulls : bool, default False
+            Exclude rows missing a value this call uses from the estimate; they keep
+            their place in the variance. A missing stratum, PSU or weight raises.
 
         See Also
         --------

@@ -214,7 +214,11 @@ def drop_missing(
 
 
 def assert_no_missing(
-    *, df: pl.DataFrame, subset: Sequence[str], scope: str | None = None
+    *,
+    df: pl.DataFrame,
+    subset: Sequence[str],
+    scope: str | None = None,
+    hint: str = "Set drop_nulls=True to leave those rows out.",
 ) -> None:
     """
     Raise with a helpful message if any column in subset has NULL/NaN/±∞.
@@ -267,7 +271,7 @@ def assert_no_missing(
             + f"; affected: {', '.join(missing_errors)}.",
             code=Code.MISSING_VALUES,
             got=missing_errors,
-            hint="Set drop_nulls=True to leave those rows out.",
+            hint=hint,
         )
 
 
