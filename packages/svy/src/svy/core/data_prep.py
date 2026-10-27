@@ -52,6 +52,16 @@ _STRATUM_CODE = "__svy_stratum_code__"
 _PSU_CODE = "__svy_psu_code__"
 _SSU_CODE = "__svy_ssu_code__"
 
+_ANALYSIS_MISSING_HINT = (
+    "Set drop_nulls=True to exclude those rows from the estimate; "
+    "they keep their place in the variance."
+)
+_DESIGN_MISSING_HINT = (
+    "A row without its stratum, PSU or weight has no place in the design, even with "
+    "drop_nulls=True: fill those values or remove the rows (wrangling.filter_records) "
+    "before estimating."
+)
+
 
 def _code_expr(cols: list[str], alias: str) -> pl.Expr:
     """Factorize one design group to UInt32 codes; nulls form their own group
@@ -553,8 +563,12 @@ def prepare_data(
     # excluded from the null check because a rare NA in one of N replicate
     # columns should not affect rows for the entire analysis.
     #
-    # With drop_nulls=True, missing values (null/NaN/±inf) fall in two
-    # classes:
+    # Design fields and singleton helpers must be complete, drop_nulls or
+    # not: a row with no stratum, PSU or weight has no place in the design,
+    # and deleting it would change the variance behind the user's back.
+    #
+    # With drop_nulls=True, the other missing values (null/NaN/±inf) fall in
+    # two classes:
     #   * ANALYSIS values — numeric y/x/y_pair (cast_y_float paths), group,
     #     and by labels: the row is KEPT and treated like an out-of-domain
     #     observation — its weights (main + replicate) are zeroed in the
@@ -563,9 +577,8 @@ def prepare_data(
     #     domain), silently understating domain SEs and df; keeping them
     #     preserves the design structure, matching R's na.rm=TRUE /
     #     subset() domain semantics.
-    #   * Everything else (design fields, singleton helpers, extra_cols —
-    #     regression covariates and multi-y batches — and categorical y
-    #     when cast_y_float=False): rows are physically dropped, as before.
+    #   * Everything else (extra_cols not in null_zero_cols, and categorical
+    #     y when cast_y_float=False): rows are physically dropped.
     # Columns referenced only by `where` are excluded from the drop: a null
     # predicate value makes the row out-of-domain via Kleene logic in the
     # domain block.
@@ -584,8 +597,12 @@ def prepare_data(
     _fill_extra_cols: list[str] = []
     _structural = set(fields)
     _structural.update(_singleton_check_cols)
+    # The codes are derived from the design fields, so checking the fields
+    # reports the user's column instead of an internal one.
+    _design_check = [c for c in null_check_cols if c in _structural]
     if _design_codes:
         _structural.update(s.name for s in _design_codes.values())
+    assert_no_missing(df=local_data, subset=_design_check, hint=_DESIGN_MISSING_HINT)
     if drop_nulls:
         _domain_roles: list[str] = []
         if factor_y:
@@ -615,7 +632,11 @@ def prepare_data(
         ]
         _dm_set = set(_domain_missing_cols)
         _where_only = (set(where_cols) - _structural) - _dm_set
-        drop_cols = [c for c in null_check_cols if c not in _dm_set and c not in _where_only]
+        drop_cols = [
+            c
+            for c in null_check_cols
+            if c not in _structural and c not in _dm_set and c not in _where_only
+        ]
         if drop_cols:
             local_data = drop_missing(
                 df=local_data,
@@ -623,7 +644,11 @@ def prepare_data(
                 treat_infinite_as_missing=True,
             )
     elif where is None:
-        assert_no_missing(df=local_data, subset=null_check_cols)
+        assert_no_missing(
+            df=local_data,
+            subset=[c for c in null_check_cols if c not in _structural],
+            hint=_ANALYSIS_MISSING_HINT,
+        )
     else:
         by_cols_in = [by] if isinstance(by, str) else list(by or ())
         _analysis = {
@@ -636,9 +661,7 @@ def prepare_data(
             *(null_zero_cols or ()),
         }
         _where_only = (set(where_cols) - _structural) - _analysis
-        _design_check = [c for c in null_check_cols if c in _structural]
         _scoped = [c for c in null_check_cols if c not in _structural and c not in _where_only]
-        assert_no_missing(df=local_data, subset=_design_check)
         if _scoped:
             _in_domain = sample.estimation._compile_where_expr(where).fill_null(False)
             assert_no_missing(
@@ -647,6 +670,7 @@ def prepare_data(
                 ),
                 subset=_scoped,
                 scope="inside the `where` domain",
+                hint=_ANALYSIS_MISSING_HINT,
             )
             _domain_missing_cols = _scoped
             _fill_extra_cols = [

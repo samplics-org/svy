@@ -12,7 +12,9 @@ REL = 1e-7
 @pytest.fixture
 def synthetic_sample_df():
     base = Path(__file__).parent.parent.parent
-    return pl.read_csv(base / "test_data/svy_synthetic_sample_07082025.csv")
+    df = pl.read_csv(base / "test_data/svy_synthetic_sample_07082025.csv")
+    # As the R references do before svydesign(): a missing weight raises in svy.
+    return df.filter(pl.col("samp_wgt").is_not_nan())
 
 
 # =============================================================================
