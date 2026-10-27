@@ -24,6 +24,7 @@ from typing import Literal
 
 from svy.core.enumerations import PopParam
 from svy.core.types import DomainScalarMap, Number
+from svy.errors import Code, SelectionError
 from svy.size.allocation_goals import AllocationMethod
 from svy.size.allocation_goals import allocate as _allocate
 from svy.size.comparison_goals import compare_means as _compare_means
@@ -51,6 +52,23 @@ def _stratum_label(stratum: object) -> str:
     if isinstance(stratum, tuple):
         return ", ".join(map(str, stratum))
     return str(stratum)
+
+
+def _check_group_labels(labels: object, *, n: int, where: str) -> None:
+    if not isinstance(labels, (list, tuple)) or not all(isinstance(x, str) for x in labels):
+        raise SelectionError.invalid_type(
+            where=where, param="group_labels", got=labels, expected=f"a list of {n} strings"
+        )
+    if len(labels) != n:
+        raise SelectionError.ValueError(
+            title="Wrong number of group labels",
+            detail=f"group_labels has {len(labels)} names for {n} groups.",
+            code=Code.GROUP_LABELS_LENGTH,
+            where=where,
+            param="group_labels",
+            expected=n,
+            got=list(labels),
+        )
 
 
 class SampleSize:
@@ -206,8 +224,7 @@ class SampleSize:
         else:
             if not group_labels:
                 group_labels = self._group_labels or [f"group{i + 1}" for i in range(group_len)]
-            if len(group_labels) != group_len:
-                raise ValueError(f"group_labels length {len(group_labels)} != {group_len}")
+            _check_group_labels(group_labels, n=group_len, where="SampleSize.to_polars")
             for s in objs:
                 label = _stratum_label(s.stratum)
                 n0, n1, n2, n = (getattr(s, f) for f in fields)
@@ -658,7 +675,8 @@ class SampleSize:
         group_labels: list[str] | None = None,
     ) -> "SampleSize":
         if group_labels is not None:
-            self._group_labels = group_labels
+            _check_group_labels(group_labels, n=2, where="SampleSize.compare_props")
+            self._group_labels = list(group_labels)
         self._allocation = None
         return _compare_props(
             self,
@@ -699,7 +717,8 @@ class SampleSize:
         group_labels: list[str] | None = None,
     ) -> "SampleSize":
         if group_labels is not None:
-            self._group_labels = group_labels
+            _check_group_labels(group_labels, n=2, where="SampleSize.compare_means")
+            self._group_labels = list(group_labels)
         self._allocation = None
         return _compare_means(
             self,
