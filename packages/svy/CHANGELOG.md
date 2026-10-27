@@ -10,6 +10,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 - **Every error and warning links to its code.** `docs_url` defaults to the code's entry in the new reference page, https://svylab.com/docs/svy/reference/codes.html, and errors print it as `Docs:`. The page lists every code with the class it is raised as, its message and hint; `scripts/render_codes.py` writes it from the source.
 - **Findings print.** `print(sample.warnings)` lists each finding as a block of `Level`, `Code` and `Detail` lines, and a single finding (`SvyWarning`) prints as a panel like an error, marked by its level (ℹ info, ▲ warning) instead of ✗.
+- **Results keep the warnings their call raised (`svy-result/0.11`).** Estimates, tables, t-tests, rank tests and GLM fits hold every WARNING-level finding of the call in `findings`, also when the sample's store already recorded it on an earlier call, so a repeat `glm.fit` still carries `GLM_SEPARATION`. Each prints once as `note: title [CODE]`, and saved results carry them as `findings` (code, level, title, detail, hint, var, got; INFO left out; `None` when empty or decoded from an older payload).
 - **A paired t-test names its two variables (`svy-result/0.10`).** `ttest(y, y_pair=...)` results, with or without `group=` or `by=`, carry `pair = (y, y_pair)`, serialized too, and print `Y = 'y' - 'y_pair'`; `y` still holds the difference's name. `None` when unpaired or decoded from an older payload.
 
 ### Changed

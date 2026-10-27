@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import builtins
+import functools
 import logging
 import warnings as _pywarnings
 
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, ClassVar, Iterable, Iterator, Sequence
+from typing import Any, Callable, ClassVar, Iterable, Iterator, Sequence, TypeVar
 
 import msgspec
 
@@ -242,6 +243,55 @@ def findings_to(sample: Any) -> Iterator[None]:
         _FINDINGS_SAMPLE.reset(token)
 
 
+#: The lists collecting what each running call raises, outermost first; a result
+#: keeps what its call found, a repeat the store suppresses included.
+_COLLECTING: ContextVar[tuple[list[SvyWarning], ...]] = ContextVar("svy_collecting", default=())
+
+
+def collect_finding(finding: SvyWarning) -> None:
+    if finding.level >= Severity.WARNING:
+        for found in _COLLECTING.get():
+            found.append(finding)
+
+
+@contextmanager
+def collecting_findings() -> Iterator[list[SvyWarning]]:
+    found: list[SvyWarning] = []
+    token = _COLLECTING.set((*_COLLECTING.get(), found))
+    try:
+        yield found
+    finally:
+        _COLLECTING.reset(token)
+
+
+def merge_findings(
+    own: Iterable[SvyWarning], found: Iterable[SvyWarning]
+) -> tuple[SvyWarning, ...]:
+    """``own``, then each finding of ``found`` it does not already hold."""
+    out = list(own)
+    seen = {(f.key(), f.level) for f in out}
+    for f in found:
+        if (f.key(), f.level) not in seen:
+            seen.add((f.key(), f.level))
+            out.append(f)
+    return tuple(out)
+
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def reports_findings(fn: _F) -> _F:
+    """The warnings ``fn`` raises are kept on the result it returns."""
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        with collecting_findings() as found:
+            result = fn(*args, **kwargs)
+        return result._add_findings(found) if found else result
+
+    return wrapper  # type: ignore[return-value]
+
+
 def emit_finding(finding: SvyWarning) -> None:
     """Record ``finding`` on the sample at hand (which also raises it), or, with
     no sample, raise it at the caller's line."""
@@ -251,6 +301,7 @@ def emit_finding(finding: SvyWarning) -> None:
         return
     from svy.core.design import _user_stacklevel
 
+    collect_finding(finding)
     _pywarnings.warn(finding, stacklevel=_user_stacklevel())
 
 

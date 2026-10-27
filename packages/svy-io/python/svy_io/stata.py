@@ -17,7 +17,13 @@ from polars.exceptions import ComputeError
 
 import svy_io.svyreadstat_rs as native
 
-from .helpers import _as_data_path, _normalize_n_max, _split_encoding, _with_bad_string_hint
+from .helpers import (
+    _as_data_path,
+    _normalize_n_max,
+    _reject_nul,
+    _split_encoding,
+    _with_bad_string_hint,
+)
 from .metadata import normalize_user_missing, normalize_value_labels, reject_temporal_columns
 from .tagged_na import TaggedNA
 
@@ -505,6 +511,10 @@ def _extract_tagged_missings(
 
         for i, v in enumerate(vals):
             if isinstance(v, TaggedNA):
+                if len(v.tag) != 1 or not "a" <= v.tag <= "z":
+                    raise ValueError(
+                        f"Stata tagged missings use the tags a-z; column {name!r} has {v.tag!r}"
+                    )
                 rows.append(i)
                 tags.append(v.tag)
                 vals[i] = None
@@ -591,6 +601,12 @@ def write_dta(
         version_human=version_human,
         file_label=file_label,
         value_labels=value_labels,
+    )
+    _reject_nul("file_label", [("file_label", file_label)] if file_label else [])
+    _reject_nul("variable labels", (var_labels or {}).items())
+    _reject_nul(
+        "value labels",
+        ((col, lbl) for col, labels in (value_labels or {}).items() for lbl in labels.values()),
     )
     _ensure_strl_policy(df, version_human=version_human, strl_threshold=int(strl_threshold))
     reject_temporal_columns(df, "Stata", allow=(pl.Date, pl.Datetime))

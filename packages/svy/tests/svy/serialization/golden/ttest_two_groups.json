@@ -28,6 +28,7 @@
       "y_level": null
     }
   ],
+  "findings": null,
   "groups": {
     "labels": null,
     "levels": [
@@ -39,7 +40,7 @@
   "kind": "ttest_two_groups",
   "pair": null,
   "paired": false,
-  "schema_version": "svy-result/0.10",
+  "schema_version": "svy-result/0.11",
   "stats": {
     "df": 18.0,
     "p_value": 0.0015,

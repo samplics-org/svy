@@ -54,15 +54,20 @@ pub(crate) unsafe fn configure_parser(
         }
         keep_enc = Some(c);
     }
-    if let Some(nm) = n_max {
-        let limit = rows_skip.saturating_add(nm);
-        if limit > 0 {
-            unsafe {
-                readstat_sys::readstat_set_row_limit(parser, limit as ::std::os::raw::c_long)
-            };
-        }
+    if let Some(limit) = n_max.and_then(|nm| row_limit(rows_skip, nm)) {
+        unsafe { readstat_sys::readstat_set_row_limit(parser, limit) };
     }
     Ok(keep_enc)
+}
+
+/// The parser's row limit, or `None` for no limit: zero, or too many rows for a C `long`
+/// (32 bits on Windows), which no file can hold.
+fn row_limit(rows_skip: usize, n_max: usize) -> Option<::std::os::raw::c_long> {
+    let limit = rows_skip.saturating_add(n_max);
+    if limit == 0 {
+        return None;
+    }
+    limit.try_into().ok()
 }
 pub(crate) const HANDLER_ABORT: c_int = 1;
 
@@ -956,6 +961,21 @@ impl Drop for WriterGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn row_limit_is_skip_plus_n_max() {
+        assert_eq!(row_limit(0, 5), Some(5));
+        assert_eq!(row_limit(10, 5), Some(15));
+        assert_eq!(row_limit(0, 0), None);
+    }
+
+    #[test]
+    fn row_limit_past_c_long_means_no_limit() {
+        let c_long_max = ::std::os::raw::c_long::MAX as usize;
+        assert_eq!(row_limit(0, c_long_max), Some(::std::os::raw::c_long::MAX));
+        assert_eq!(row_limit(1, c_long_max), None);
+        assert_eq!(row_limit(usize::MAX, usize::MAX), None);
+    }
 
     #[test]
     fn safe_capacity_uses_default_when_unknown() {

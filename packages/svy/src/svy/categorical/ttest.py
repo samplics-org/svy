@@ -12,7 +12,7 @@ from msgspec import field
 from svy.core.types import Category, Number
 from svy.errors import EstimationError
 from svy.errors._api import guided_getattr
-from svy.errors._findings import SvyWarning
+from svy.errors._findings import SvyWarning, merge_findings
 from svy.estimation import ParamEst
 from svy.estimation.estimate import _display_level
 
@@ -414,6 +414,9 @@ class TTestOneGroup(msgspec.Struct, tag="one", tag_field="kind", kw_only=True, f
             return
         print(self.__plain_str__())
 
+    def _add_findings(self, found: Sequence[SvyWarning]) -> Self:
+        return msgspec.structs.replace(self, findings=merge_findings(self.findings, found))
+
 
 class TTestTwoGroups(msgspec.Struct, tag="two", tag_field="kind", kw_only=True, frozen=True):
     """Two-sample t-test comparing two levels of a grouping variable."""
@@ -631,6 +634,9 @@ class TTestTwoGroups(msgspec.Struct, tag="two", tag_field="kind", kw_only=True, 
             ).print(self)
             return
         print(self.__plain_str__())
+
+    def _add_findings(self, found: Sequence[SvyWarning]) -> Self:
+        return msgspec.structs.replace(self, findings=merge_findings(self.findings, found))
 
 
 def ttest_one_group_frame(
@@ -1078,6 +1084,11 @@ class TTestByResult:
             ).print(self)
             return
         print(self.__plain_str__())
+
+    def _add_findings(self, found: Sequence[SvyWarning]) -> Self:
+        self.results = [r._add_findings(found) for r in self.results]
+        self.findings = merge_findings(self.findings, found)
+        return self
 
 
 # =============================================================================

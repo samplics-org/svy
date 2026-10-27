@@ -360,6 +360,8 @@ fn write_spss_minimal(
     let mut rvars: Vec<*const readstat_variable_t> = Vec::with_capacity(ncols);
     let mut _keep_names: Vec<CString> = Vec::with_capacity(ncols);
     let mut _keep_label_sets: Vec<(*const readstat_label_set_t, Vec<CString>)> = Vec::new();
+    // ReadStat stores string missing values by pointer and reads them in begin_writing.
+    let mut _keep_missing: Vec<CString> = Vec::new();
 
     // Define variables
     for (j, field) in schema.fields().iter().enumerate() {
@@ -400,18 +402,21 @@ fn write_spss_minimal(
             _ => None,
         };
         if let Some(fmt) = want_fmt {
-            if let Ok(cfmt) = CString::new(fmt) {
-                unsafe { readstat_variable_set_format(var, cfmt.as_ptr()) };
-            }
+            let cfmt = CString::new(fmt)?;
+            unsafe { readstat_variable_set_format(var, cfmt.as_ptr()) };
         }
 
         // Variable label
         if let Some(map) = var_labels {
             if let Some(lbl) = map.get(field.name()) {
                 if !lbl.is_empty() {
-                    if let Ok(c) = CString::new(lbl.as_str()) {
-                        unsafe { readstat_variable_set_label(var, c.as_ptr()) };
-                    }
+                    let c = CString::new(lbl.as_str()).map_err(|_| {
+                        anyhow!(
+                            "variable label of column '{}' contains an embedded NUL",
+                            field.name()
+                        )
+                    })?;
+                    unsafe { readstat_variable_set_label(var, c.as_ptr()) };
                 }
             }
         }
@@ -420,7 +425,17 @@ fn write_spss_minimal(
         if let Some(user_miss) = user_missing {
             for um in user_miss {
                 if um.col == field.name().as_str() {
+                    let mut rcs = Vec::new();
                     if is_str_col[j] {
+                        // SAV stores string missing values only for strings of at most 8 bytes.
+                        if width > 8 {
+                            return Err(anyhow!(
+                                "column '{}' holds strings up to {} bytes; SPSS user-missing \
+                                 values apply only to string columns of at most 8 bytes",
+                                field.name(),
+                                width
+                            ));
+                        }
                         // String: only discrete user-missing values are supported
                         for val in &um.values {
                             // To string (avoid trailing .0 for whole numbers)
@@ -429,25 +444,32 @@ fn write_spss_minimal(
                             } else {
                                 val.to_string()
                             };
-                            if let Ok(c_val) = CString::new(val_string.as_str()) {
-                                unsafe {
-                                    readstat_variable_add_missing_string_value(var, c_val.as_ptr());
-                                }
-                            }
+                            let c_val = CString::new(val_string)?;
+                            rcs.push(unsafe {
+                                readstat_variable_add_missing_string_value(var, c_val.as_ptr())
+                            });
+                            _keep_missing.push(c_val);
                         }
                         // Note: SPSS (ReadStat) does not expose a "string range" API; ignore um.range for strings.
                     } else {
                         // Numeric: discrete + range
                         for &val in &um.values {
-                            unsafe {
-                                readstat_variable_add_missing_double_value(var, val);
-                            }
+                            rcs.push(unsafe {
+                                readstat_variable_add_missing_double_value(var, val)
+                            });
                         }
                         if let Some((low, high)) = um.range {
-                            unsafe {
-                                readstat_variable_add_missing_double_range(var, low, high);
-                            }
+                            rcs.push(unsafe {
+                                readstat_variable_add_missing_double_range(var, low, high)
+                            });
                         }
+                    }
+                    if let Some(rc) = rcs.into_iter().find(|&rc| rc != 0) {
+                        return Err(anyhow!(
+                            "adding user-missing values to column '{}' failed with rc={}",
+                            field.name(),
+                            rc
+                        ));
                     }
                 }
             }
@@ -463,45 +485,58 @@ fn write_spss_minimal(
                     let label_set =
                         unsafe { readstat_add_label_set(writer, typ, c_label_set_name.as_ptr()) };
 
-                    if !label_set.is_null() {
-                        let mut c_strings = Vec::new();
+                    if label_set.is_null() {
+                        return Err(anyhow!(
+                            "readstat_add_label_set failed for '{}'",
+                            field.name()
+                        ));
+                    }
+                    let mut c_strings = Vec::new();
 
-                        for (value, label) in &vl.labels {
-                            if let Ok(c_label) = CString::new(label.as_str()) {
-                                if is_str_col[j] {
-                                    // String value labels
-                                    if let Ok(c_val) = CString::new(value.as_str()) {
-                                        unsafe {
-                                            readstat_label_string_value(
-                                                label_set,
-                                                c_val.as_ptr(),
-                                                c_label.as_ptr(),
-                                            );
-                                        }
-                                        c_strings.push(c_val);
-                                    }
-                                } else {
-                                    // Numeric value labels
-                                    if let Ok(num_val) = value.parse::<f64>() {
-                                        unsafe {
-                                            readstat_label_double_value(
-                                                label_set,
-                                                num_val,
-                                                c_label.as_ptr(),
-                                            );
-                                        }
-                                    }
-                                }
-                                c_strings.push(c_label);
+                    for (value, label) in &vl.labels {
+                        let c_label = CString::new(label.as_str()).map_err(|_| {
+                            anyhow!(
+                                "value label {:?} on column '{}' contains an embedded NUL",
+                                label,
+                                field.name()
+                            )
+                        })?;
+                        if is_str_col[j] {
+                            let c_val = CString::new(value.as_str()).map_err(|_| {
+                                anyhow!(
+                                    "value label code {:?} on column '{}' contains an embedded NUL",
+                                    value,
+                                    field.name()
+                                )
+                            })?;
+                            unsafe {
+                                readstat_label_string_value(
+                                    label_set,
+                                    c_val.as_ptr(),
+                                    c_label.as_ptr(),
+                                );
+                            }
+                            c_strings.push(c_val);
+                        } else {
+                            let num_val: f64 = value.parse().map_err(|_| {
+                                anyhow!(
+                                    "value label code {:?} on column '{}' is not numeric",
+                                    value,
+                                    field.name()
+                                )
+                            })?;
+                            unsafe {
+                                readstat_label_double_value(label_set, num_val, c_label.as_ptr());
                             }
                         }
-
-                        unsafe {
-                            readstat_variable_set_label_set(var, label_set);
-                        }
-
-                        _keep_label_sets.push((label_set, c_strings));
+                        c_strings.push(c_label);
                     }
+
+                    unsafe {
+                        readstat_variable_set_label_set(var, label_set);
+                    }
+
+                    _keep_label_sets.push((label_set, c_strings));
                 }
             }
         }
@@ -629,47 +664,56 @@ pub fn df_write_sav_file(
         pyo3::exceptions::PyRuntimeError::new_err(format!("Arrow IPC decode failed: {}", e))
     })?;
 
+    let bad_entry = |what: &str, e: PyErr| {
+        pyo3::exceptions::PyValueError::new_err(format!("df_write_sav_file: bad {what} entry: {e}"))
+    };
+
     // Convert user_missing from Python-friendly dicts
-    let user_missing_converted: Option<Vec<UserMissingInfo>> =
-        user_missing.as_ref().map(|um_vec| {
-            Python::attach(|py| {
-                um_vec
-                    .iter()
-                    .filter_map(|um_dict| {
-                        let col = um_dict.get("col")?.extract::<String>(py).ok()?;
-
-                        let values = um_dict
-                            .get("values")
-                            .and_then(|v| v.extract::<Vec<f64>>(py).ok())
-                            .unwrap_or_default();
-
-                        let range = um_dict
-                            .get("range")
-                            .and_then(|r| r.extract::<(f64, f64)>(py).ok());
-
-                        Some(UserMissingInfo { col, values, range })
-                    })
-                    .collect()
-            })
-        });
+    let user_missing_converted: Option<Vec<UserMissingInfo>> = match &user_missing {
+        None => None,
+        Some(um_vec) => Some(Python::attach(|py| {
+            um_vec
+                .iter()
+                .map(|um_dict| {
+                    let col = um_dict
+                        .get("col")
+                        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("col"))?
+                        .extract::<String>(py)?;
+                    let values = match um_dict.get("values") {
+                        Some(v) if !v.is_none(py) => v.extract::<Vec<f64>>(py)?,
+                        _ => Vec::new(),
+                    };
+                    let range = match um_dict.get("range") {
+                        Some(r) if !r.is_none(py) => Some(r.extract::<(f64, f64)>(py)?),
+                        _ => None,
+                    };
+                    Ok(UserMissingInfo { col, values, range })
+                })
+                .collect::<PyResult<Vec<_>>>()
+                .map_err(|e| bad_entry("user_missing", e))
+        })?),
+    };
 
     // Convert value_labels from Python-friendly dicts
-    let value_labels_converted: Option<Vec<ValueLabelsInfo>> =
-        value_labels.as_ref().map(|vl_vec| {
-            Python::attach(|py| {
-                vl_vec
-                    .iter()
-                    .filter_map(|vl_dict| {
-                        let col = vl_dict.get("col")?.extract::<String>(py).ok()?;
-                        let labels = vl_dict
-                            .get("labels")?
-                            .extract::<HashMap<String, String>>(py)
-                            .ok()?;
-                        Some(ValueLabelsInfo { col, labels })
-                    })
-                    .collect()
-            })
-        });
+    let value_labels_converted: Option<Vec<ValueLabelsInfo>> = match &value_labels {
+        None => None,
+        Some(vl_vec) => Some(Python::attach(|py| {
+            vl_vec
+                .iter()
+                .map(|vl_dict| {
+                    let field = |key: &str| {
+                        vl_dict
+                            .get(key)
+                            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(key.to_string()))
+                    };
+                    let col = field("col")?.extract::<String>(py)?;
+                    let labels = field("labels")?.extract::<HashMap<String, String>>(py)?;
+                    Ok(ValueLabelsInfo { col, labels })
+                })
+                .collect::<PyResult<Vec<_>>>()
+                .map_err(|e| bad_entry("value_labels", e))
+        })?),
+    };
 
     write_spss_minimal(
         &batches,

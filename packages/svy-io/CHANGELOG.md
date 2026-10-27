@@ -7,6 +7,12 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 ### Fixed
 
 - **`.zsav` files could not be read, and `write_sav(compress="zsav")` wrote a plain `.sav`.** The bundled zlib was built without its default allocator, so every zlib stream failed to open. Both directions now work and read back in haven; an unknown `compress` value raises instead of falling back to byte compression.
+- **`write_sav` could write garbage for a user-missing value on a string column.** The value's buffer was freed before ReadStat read it, so the file could be unreadable. User-missing values on string columns wider than 8 bytes, which SPSS cannot store, now raise instead of being dropped.
+- **`write_dta` wrote tagged missings (`TaggedNA`) as plain `.`.** Tags `.a` to `.z` are now written, so they survive a round trip; a tag outside `a`-`z` raises.
+- **Writers silently dropped labels containing a NUL** (variable, value and file labels, XPT member names) and malformed native `user_missing`/`value_labels` entries. They now raise, and an XPT version other than 5 or 8 no longer silently becomes 8.
+- **`write_dta` overflowed on datetimes near the int64 limit**, panicking in debug builds and writing a wrong date in release.
+- **On Windows, `rows_skip + n_max` beyond 2,147,483,647 wrapped**, so a reader could silently return too few rows. A limit that a C `long` cannot hold now means no limit.
+- **Readers leaked the ReadStat parser when the path contained a NUL**, about 190 bytes per call.
 
 ## [0.7.1] — 2026-10-16
 

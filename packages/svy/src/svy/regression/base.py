@@ -8,13 +8,14 @@ from __future__ import annotations
 import logging
 import math
 
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Sequence, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, Sequence, cast
 
 import msgspec
 import numpy as np
 import polars as pl
 
 from svy.errors import Code, ModelWarning
+from svy.errors._findings import SvyWarning, merge_findings, reports_findings
 
 
 # Rust backend
@@ -430,6 +431,7 @@ class GLM:
     def stats(self) -> GLMStats:
         return self._ensure_fitted().stats
 
+    @reports_findings
     def fit(
         self,
         y: str,
@@ -1744,3 +1746,10 @@ class GLM:
             r_squared_adj=r2_adj,
             iterations=iters,
         )
+
+    def _add_findings(self, found: Sequence[SvyWarning]) -> Self:
+        if self.fitted is not None:
+            self.fitted = msgspec.structs.replace(
+                self.fitted, findings=merge_findings(self.fitted.findings, found)
+            )
+        return self

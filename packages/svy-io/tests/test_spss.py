@@ -903,3 +903,24 @@ def test_user_na_accepts_duplicate_label_text(tmp_path):
     df, meta = read_sav(path, user_na=True)
     assert df["occ"].to_list() == [1.0, 2.0, 99.0]
     assert meta["labelled_columns"]["occ"].labels[2] == "uncodeable"
+
+
+def test_string_user_missing_value_is_stored(tmp_path):
+    # The value must outlive the writer setup; it is not in the data, so its padded
+    # bytes appear only in the variable's missing-value record.
+    path = tmp_path / "strmiss.sav"
+    write_sav(
+        pl.DataFrame({"s": ["1", "2", "3"]}),
+        path,
+        compress="none",
+        user_missing=[{"col": "s", "na_values": [777]}],
+    )
+    assert b"777     " in path.read_bytes()
+    df, _ = read_sav(path)
+    assert df["s"].to_list() == ["1", "2", "3"]
+
+
+def test_string_user_missing_on_wide_string_column_raises(tmp_path):
+    df = pl.DataFrame({"s": ["short", "more than 8 bytes"]})
+    with pytest.raises(ValueError, match=r"at most 8 bytes; columns: \['s'\]"):
+        write_sav(df, tmp_path / "wide.sav", user_missing=[{"col": "s", "na_values": [9]}])
