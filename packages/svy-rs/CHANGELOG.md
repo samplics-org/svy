@@ -4,6 +4,11 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ## [Unreleased]
 
+### Fixed
+
+- `adjust_nr` returns `WeightingError::NoRespondents` when the full-sample column (column 0) has a class with nonrespondent or unknown weight but no units to carry it, instead of a factor of 1. Replicate columns keep the factor of 1.
+- The calibration solve falls back to an SVD pseudo-inverse with R `ginv`'s tolerance on a singular system, instead of a Tikhonov ridge.
+
 ## [0.19.1] — 2026-10-15
 
 ### Fixed

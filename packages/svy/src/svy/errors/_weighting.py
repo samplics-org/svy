@@ -404,6 +404,26 @@ class WeightingError(SvyError):
         )
 
     @classmethod
+    def no_respondents(
+        cls, *, where: Optional[str], cells: Sequence[Any], weight: str
+    ) -> "WeightingError":
+        listed = ", ".join(repr(c) for c in cells)
+        return cls.ValueError(
+            title="Class without respondents",
+            detail=(
+                f"Adjustment classes {listed} hold nonrespondent or unknown-eligibility "
+                f"weight in {weight!r} but no respondents to carry it, so that weight "
+                "would be lost."
+            ),
+            code=Code.NO_RESPONDENTS,
+            where=where,
+            param="cells",
+            expected="respondents in every class with weight to move",
+            got=list(cells),
+            hint="Collapse each such class into a neighbouring one, or use coarser cells.",
+        )
+
+    @classmethod
     def no_rows_in_scope(
         cls,
         *,
@@ -549,9 +569,12 @@ class WeightingError(SvyError):
         got: Any = None,
         max_rel_error: float | None = None,
         domains: Sequence[Any] = (),
+        replicates: Sequence[str] = (),
     ) -> "WeightingError":
         doms = list(domains)
         scope = f" in domain(s) {show_list(doms)}" if doms else ""
+        if replicates:
+            scope += f" in replicate weight(s) {show_list(list(replicates))}"
         miss = f" (largest relative miss {max_rel_error:.3g})" if max_rel_error is not None else ""
         return cls.RuntimeError(
             title="Controls not met",

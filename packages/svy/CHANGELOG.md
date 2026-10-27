@@ -44,6 +44,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 - **A paired two-group t-test reported `paired=False`** and printed "unpaired". `ttest(y, y_pair=..., group=...)` now sets `paired=True`.
 - **`prop` under replication returned a Boolean `y`'s levels as 0/1 and rejected an Enum `y`.** Both now come back as under Taylor, so `to_polars()` has the same schema whatever the method.
+- **Paired JK2 (`create_jk_wgts(paired=True)`) without `rstate` always deleted the same PSUs**, because the kernel read a missing seed as 0. It now draws a fresh seed, as bootstrap does; a given `rstate` gives the same replicates as before.
+- **`adjust` silently lost the weight of a class with nonrespondents but no respondents.** That now raises `NO_RESPONDENTS` naming the classes; collapse them first. When only a replicate loses a class's respondents, the replicate keeps losing that weight and a `REPLICATE_NO_RESPONDENTS` warning names the replicates and classes.
+- **Calibration on a singular system used an approximate ridge solve**, so redundant but consistent controls (one implied by others) gave weights about 1e-8 off. It now uses the minimum-norm pseudo-inverse, as R's `grake` does with `MASS::ginv`.
+- **Calibrated replicate weights were never checked against the controls.** A replicate that misses them (a deleted PSU can take an auxiliary's only units) now raises `CALIBRATION_NOT_MET` naming it, or warns under `on_nonconvergence="warn"`, before anything is written.
 
 ## [0.35.0] — 2026-10-16
 

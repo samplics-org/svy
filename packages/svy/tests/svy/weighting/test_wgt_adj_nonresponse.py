@@ -6,7 +6,9 @@ import pytest
 from numpy.testing import assert_allclose
 
 from svy import col
+from svy.core.design import RepWeights
 from svy.core.sample import Design, Sample
+from svy.errors import Code, WeightingError, WeightingWarning
 
 
 # ---------------------------------------------------------------------------
@@ -162,13 +164,38 @@ def test_adjust_stratified_unknown_to_inelig_false(sample_data_basic):
 
 
 def test_adjust_zero_respondents_in_class(sample_data_no_respondents):
+    # X: nr, in; Y: uk, nr. Neither has a respondent to carry its nonrespondent weight.
     sample = Sample(data=sample_data_no_respondents, design=Design(wgt="weight"))
-    sample = sample.weighting.adjust(
-        cells="adj_class", resp_status="status", unknown_to_inelig=True, respondents_only=False
+    with pytest.raises(WeightingError) as exc:
+        sample.weighting.adjust(
+            cells="adj_class", resp_status="status", unknown_to_inelig=True, respondents_only=False
+        )
+    assert exc.value.code == Code.NO_RESPONDENTS
+    assert exc.value.got == ["X", "Y"]
+    assert "'X', 'Y' hold nonrespondent or unknown-eligibility weight in 'weight'" in str(
+        exc.value
     )
-    adjusted = sample.data[NR_WGT].to_numpy()
-    expected = np.array([0.0, 5.0, 0.0, 0.0])  # X: nr,in  Y: uk,nr
-    np.testing.assert_allclose(adjusted, expected, atol=1e-9)
+
+
+def test_replicate_class_without_respondents_is_recorded():
+    # Replicate r1 drops class B's respondent; the full sample keeps it.
+    df = pl.DataFrame(
+        {
+            "status": ["rr", "nr", "rr", "nr"],
+            "cls": ["A", "A", "B", "B"],
+            "w": [1.0, 1.0, 1.0, 1.0],
+            "r1": [1.0, 1.0, 0.0, 1.0],
+            "r2": [1.0, 1.0, 1.0, 1.0],
+        }
+    )
+    reps = RepWeights(method="Bootstrap", prefix="r", n_reps=2)
+    sample = Sample(df, Design(wgt="w", rep_wgts=reps))
+
+    with pytest.warns(WeightingWarning, match=r"\[REPLICATE_NO_RESPONDENTS\]") as rec:
+        out = sample.weighting.adjust(resp_status="status", cells="cls", respondents_only=False)
+
+    assert rec[0].message.got == {"r1": ["B"]}
+    assert out.data["nr_wgt"].to_list() == [2.0, 0.0, 2.0, 0.0]
 
 
 def test_adjust_all_respondents(sample_data_all_respondents):
@@ -330,14 +357,15 @@ def test_adjust_no_design_update(sample_data_basic):
 def _make_twoway_sample():
     df = pl.DataFrame(
         {
-            "id": [1, 2, 3, 4, 5, 6],
-            "weight": [1.0] * 6,
-            "status": ["rr", "nr", "rr", "in", "rr", "uk"],
-            "region": ["North", "North", "North", "North", "South", "South"],
-            "sex": ["M", "M", "F", "F", "M", "F"],
+            "id": [1, 2, 3, 4, 5, 6, 7],
+            "weight": [1.0] * 7,
+            "status": ["rr", "nr", "rr", "in", "rr", "uk", "rr"],
+            "region": ["North", "North", "North", "North", "South", "South", "South"],
+            "sex": ["M", "M", "F", "F", "M", "F", "F"],
         }
     )
-    expected = np.array([2.0, 0.0, 1.0, 1.0, 1.0, 0.0])
+    # (South, F): its unknown's weight goes to its one eligible unit, the respondent.
+    expected = np.array([2.0, 0.0, 1.0, 1.0, 1.0, 0.0, 2.0])
     return df, expected
 
 

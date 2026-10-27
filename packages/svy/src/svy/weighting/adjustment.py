@@ -137,6 +137,61 @@ def _encode_resp_status(
     )
 
 
+def _check_respondents(
+    sample: Sample,
+    wgts: np.ndarray,
+    spec: CellSpec,
+    resp_codes: np.ndarray,
+    unknown_to_inelig: bool,
+    wgt_cols: list[str],
+    where: str,
+) -> None:
+    """Find classes with weight to move but no units to move it to (the kernel's rule).
+
+    On the full-sample weight that raises. A replicate can drop a class's respondents
+    that the full sample has; the kernel then loses that weight, which is recorded.
+    """
+    rows = np.arange(len(resp_codes)) if spec.in_scope is None else np.flatnonzero(spec.in_scope)
+    codes = spec.codes[rows]
+    lost: dict[str, list[Any]] = {}
+    for j, col in enumerate(wgt_cols):
+        w = wgts[rows, j]
+        rr, nr, ine, uk = (
+            np.bincount(codes, weights=w * (resp_codes[rows] == s), minlength=spec.n_cells)
+            for s in range(4)
+        )
+        if unknown_to_inelig:
+            bad = ((nr > 0) & (rr <= 1e-10)) | ((uk > 0) & (rr + nr + ine <= 1e-10))
+        else:
+            bad = (nr + uk > 0) & (rr <= 1e-10)
+        if not bad.any():
+            continue
+        cells = [spec.labels[c] for c in np.flatnonzero(bad)]
+        if j == 0:
+            raise WeightingError.no_respondents(where=where, cells=cells, weight=col)
+        lost[col] = cells
+    if not lost:
+        return
+    classes = sorted({c for cells in lost.values() for c in cells}, key=str)
+    sample.warn(
+        WeightingWarning(
+            code=Code.REPLICATE_NO_RESPONDENTS,
+            title="Replicates lost nonrespondent weight",
+            detail=(
+                f"{len(lost)} replicate weight(s) have adjustment classes with no "
+                f"respondents (classes {', '.join(repr(c) for c in classes)}), so those "
+                "replicates drop the class's nonrespondent weight."
+            ),
+            where=where,
+            level=Severity.WARNING,
+            param="cells",
+            expected="respondents in every class of every replicate",
+            got={col: list(cells) for col, cells in lost.items()},
+            hint="Collapse small classes so each replicate keeps respondents in every class.",
+        )
+    )
+
+
 def _apply_nr(
     wgts: np.ndarray,
     spec: CellSpec,
@@ -223,6 +278,7 @@ def _adjust_panel(
     spec = build_cells(aug, cells, pl.col("__svy_scope__"), where=ctx)
     codes_aug = np.concatenate([resp_codes, np.ones(n_virtual, dtype=np.int64)])
     old = aug.select(wgt_cols).to_numpy().astype(np.float64)
+    _check_respondents(sample, old, spec, codes_aug, unknown_to_inelig, wgt_cols, ctx)
     new = _apply_nr(old, spec, codes_aug, unknown_to_inelig)
 
     factor = np.ones_like(old)
@@ -317,6 +373,7 @@ def adjust(
             df.get_column(resp_status).to_list(), resp_mapping, column=resp_status, where=ctx
         )
         old = df.select(wgt_cols).to_numpy().astype(np.float64)
+        _check_respondents(sample, old, spec, resp_codes, unknown_to_inelig, wgt_cols, ctx)
         new_wgts = _apply_nr(old, spec, resp_codes, unknown_to_inelig)
         # Filter from the encoded codes (0 == respondent) — the single source
         # of truth already used for the adjustment itself. Re-deriving the

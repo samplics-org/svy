@@ -175,10 +175,9 @@ fn solve_linear_system(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> 
             }
         }
 
-        // Check for singular matrix
+        // Singular, e.g. controls that imply one another: the minimum-norm solution.
         if max_val < 1e-10 {
-            // Try pseudo-inverse approach (simplified)
-            return solve_with_regularization(a, b);
+            return solve_pseudoinverse(a, b);
         }
 
         // Swap rows
@@ -212,38 +211,26 @@ fn solve_linear_system(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> 
     Ok(x)
 }
 
-/// Solve with Tikhonov regularization for singular/ill-conditioned matrices
-fn solve_with_regularization(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> {
+/// `A⁺ b` through the SVD, dropping singular values at or below 256·ε times the largest,
+/// as R's `MASS::ginv(tol = 256 * .Machine$double.eps)` in `grake`.
+fn solve_pseudoinverse(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> {
     let n = a.nrows();
-    let lambda_reg = 1e-6;
+    let m = faer::Mat::<f64>::from_fn(n, n, |i, j| a[[i, j]]);
+    let svd = m.thin_svd().map_err(|_| {
+        WeightingError::InvalidInput("calibration system: the SVD did not converge".to_string())
+    })?;
+    let (u, v) = (svd.U(), svd.V());
+    let s = svd.S().column_vector();
+    let s_max = (0..n).map(|k| s[k]).fold(0.0, f64::max);
 
-    // A_reg = A' A + λI
-    let mut a_reg = Array2::zeros((n, n));
-    for i in 0..n {
+    let mut x = Array1::zeros(n);
+    for k in (0..n).filter(|&k| s[k] > 256.0 * f64::EPSILON * s_max) {
+        let coef = (0..n).map(|i| u[(i, k)] * b[i]).sum::<f64>() / s[k];
         for j in 0..n {
-            let mut sum = 0.0;
-            for k in 0..n {
-                sum += a[[k, i]] * a[[k, j]];
-            }
-            a_reg[[i, j]] = sum;
-            if i == j {
-                a_reg[[i, j]] += lambda_reg;
-            }
+            x[j] += v[(j, k)] * coef;
         }
     }
-
-    // b_reg = A' b
-    let mut b_reg = Array1::zeros(n);
-    for i in 0..n {
-        let mut sum = 0.0;
-        for k in 0..n {
-            sum += a[[k, i]] * b[k];
-        }
-        b_reg[i] = sum;
-    }
-
-    // Solve regularized system
-    solve_linear_system(&a_reg, &b_reg)
+    Ok(x)
 }
 
 /// Domain-specific calibration
@@ -431,6 +418,51 @@ pub fn calibrate_parallel(
 mod tests {
     use super::*;
     use ndarray::array;
+
+    #[test]
+    fn singular_system_gets_the_minimum_norm_solution() {
+        // pinv([[1, 1], [1, 1]]) = [[1, 1], [1, 1]] / 4, so x = [4, 4] / 4.
+        let a = array![[1.0, 1.0], [1.0, 1.0]];
+        let x = solve_pseudoinverse(&a, &array![2.0, 2.0]).unwrap();
+        assert!((x[0] - 1.0).abs() < 1e-14 && (x[1] - 1.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn redundant_controls_calibrate_like_the_reduced_set() {
+        // Intercept + female + male spans what intercept + female spans; linear
+        // calibration weights depend only on that span.
+        let wgt = array![[1.0], [2.0], [1.5], [1.0], [2.5], [1.0]];
+        let female = [1.0, 0.0, 1.0, 1.0, 0.0, 0.0];
+        let full = Array2::from_shape_fn((6, 3), |(i, j)| match j {
+            0 => 1.0,
+            1 => female[i],
+            _ => 1.0 - female[i],
+        });
+        let reduced = full.slice(s![.., 0..2]).to_owned();
+
+        let w_full = calibrate_linear(
+            wgt.view(),
+            full.view(),
+            array![12.0, 7.0, 5.0].view(),
+            None,
+            false,
+        )
+        .unwrap();
+        let w_red = calibrate_linear(
+            wgt.view(),
+            reduced.view(),
+            array![12.0, 7.0].view(),
+            None,
+            false,
+        )
+        .unwrap();
+
+        for i in 0..6 {
+            assert!((w_full[[i, 0]] - w_red[[i, 0]]).abs() < 1e-12);
+        }
+        let females: f64 = (0..6).map(|i| female[i] * w_full[[i, 0]]).sum();
+        assert!((w_full.column(0).sum() - 12.0).abs() < 1e-12 && (females - 7.0).abs() < 1e-12);
+    }
 
     #[test]
     fn test_linear_calibration_simple() {
