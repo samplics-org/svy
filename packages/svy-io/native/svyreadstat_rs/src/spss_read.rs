@@ -116,6 +116,9 @@ fn parse_sav_impl(
         panic_err: None,
     };
 
+    // Before the parser exists, so a bad path cannot return without freeing it.
+    let cpath = CString::new(path)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid path: {e}")))?;
     unsafe {
         let p = readstat_parser_init();
         if p.is_null() {
@@ -139,8 +142,6 @@ fn parse_sav_impl(
             }
         };
 
-        let cpath = CString::new(path)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid path: {e}")))?;
         let rc = readstat_parse_sav(p, cpath.as_ptr(), &mut ctx as *mut _ as *mut c_void);
         readstat_parser_free(p);
 
@@ -207,6 +208,9 @@ fn parse_por_impl(
         panic_err: None,
     };
 
+    // Before the parser exists, so a bad path cannot return without freeing it.
+    let cpath = CString::new(path)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid path: {e}")))?;
     unsafe {
         let p = readstat_parser_init();
         if p.is_null() {
@@ -230,8 +234,6 @@ fn parse_por_impl(
             }
         };
 
-        let cpath = CString::new(path)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid path: {e}")))?;
         let rc = readstat_parse_por(p, cpath.as_ptr(), &mut ctx as *mut _ as *mut c_void);
         readstat_parser_free(p);
 
