@@ -23,6 +23,9 @@ from svy.errors import Code, DataError, DataWarning
 from svy.wrangling._helpers import (
     _guard_weight_writes,
     _rebuild_concat_if_touched,
+    _require_columns,
+    _require_number,
+    _require_numeric,
     _resolve_target,
 )
 
@@ -72,6 +75,20 @@ def _resolve_dtype(dtype: Any, *, param: str) -> Any:
     )
 
 
+_FILL_STRATEGIES = ("forward", "backward", "mean", "min", "max", "zero", "one")
+
+
+def _check_bounds(sample: "Sample", bounds: Mapping[str, Any], *, where: str, param: str) -> None:
+    if not isinstance(bounds, Mapping):
+        raise DataError.invalid_type(
+            where=where, param=param, got=bounds, expected="a mapping {column: bound}"
+        )
+    _require_columns(sample, bounds, where=where, param=param)
+    _require_numeric(sample, bounds, where=where, param=param)
+    for v in bounds.values():
+        _require_number(v, where=where, param=param)
+
+
 def top_code(
     sample: "Sample",
     top_codes: Mapping[str, float],
@@ -81,6 +98,7 @@ def top_code(
     inplace: bool = False,
 ) -> "Sample":
     """Cap values at upper bounds (top coding)."""
+    _check_bounds(sample, top_codes, where="wrangling.top_code", param="top_codes")
     _df = sample._data
     new_data = _top_code(_df, top_codes=top_codes, replace=replace, into=into)
     _guard_weight_writes(
@@ -101,6 +119,7 @@ def bottom_code(
     inplace: bool = False,
 ) -> "Sample":
     """Cap values at lower bounds (bottom coding)."""
+    _check_bounds(sample, bottom_codes, where="wrangling.bottom_code", param="bottom_codes")
     _df = sample._data
     new_data = _bottom_code(_df, bottom_codes=bottom_codes, replace=replace, into=into)
     _guard_weight_writes(
@@ -121,6 +140,18 @@ def bottom_and_top_code(
     inplace: bool = False,
 ) -> "Sample":
     """Cap values at both lower and upper bounds."""
+    where = "wrangling.bottom_and_top_code"
+    for pair in bottom_and_top_codes.values():
+        if not isinstance(pair, (tuple, list)) or len(pair) != 2:
+            raise DataError.invalid_type(
+                where=where, param="bottom_and_top_codes", got=pair, expected="(lower, upper)"
+            )
+    _check_bounds(
+        sample,
+        {c: v for c, pair in bottom_and_top_codes.items() for v in pair},
+        where=where,
+        param="bottom_and_top_codes",
+    )
     _df = sample._data
     new_data = _bottom_and_top_code(
         _df,
@@ -150,6 +181,9 @@ def recode(
     inplace: bool = False,
 ) -> "Sample":
     """Map old values to new labels."""
+    _require_columns(
+        sample, [cols] if isinstance(cols, str) else cols, where="wrangling.recode", param="cols"
+    )
     _df = sample._data
     new_data = _recode(_df, cols=cols, recodes=recodes, replace=replace, into=into)
     _guard_weight_writes(
@@ -198,6 +232,25 @@ def categorize(
             where="wrangling.categorize",
             param="bins / percentiles",
             hint="Use 'bins' for explicit edges or 'percentiles' to compute from data.",
+        )
+
+    _require_columns(sample, [col], where="wrangling.categorize", param="col")
+    _require_numeric(sample, [col], where="wrangling.categorize", param="col")
+    if bins is not None and any(lo >= hi for lo, hi in zip(bins, bins[1:])):
+        raise DataError.invalid_value(
+            where="wrangling.categorize",
+            param="bins",
+            got=list(bins),
+            detail=f"bins must be strictly increasing; got {list(bins)}.",
+            hint="Unsorted edges match no value, so every row would be null.",
+        )
+    if isinstance(percentiles, bool) or (isinstance(percentiles, int) and percentiles < 2):
+        raise DataError.invalid_range(
+            where="wrangling.categorize",
+            param="percentiles",
+            got=percentiles,
+            min_=2,
+            hint="percentiles=4 cuts at the quartiles.",
         )
 
     # -- Compute bins from percentiles if needed -------------------------
@@ -312,6 +365,8 @@ def cast_columns(
         pairs = [(c, target_dt) for c in col_list]
         exprs = [_cast_expr(c, target_dt, strict) for c in col_list]
 
+    _require_columns(sample, [c for c, _ in pairs], where="wrangling.cast", param="cols")
+
     if strict:
         data = sample._data
         schema = data.schema
@@ -345,7 +400,17 @@ def cast_columns(
                     "to allow truncation.",
                 )
 
-    new_data = sample._data.with_columns(exprs)
+    try:
+        new_data = sample._data.with_columns(exprs)
+    except pl.exceptions.InvalidOperationError as e:
+        raise DataError.ValueError(
+            title="Cast failed",
+            detail=str(e).split("\n")[0],
+            code=Code.CAST_FAILED,
+            where="wrangling.cast",
+            param="cols",
+            hint="strict=False turns values that do not convert into nulls.",
+        ) from e
     _guard_weight_writes(
         sample, new_data, where="wrangling.cast", targets=col_names, widening_only=True
     )
@@ -369,6 +434,18 @@ def fill_null(
     warning records the dtype change.
     """
     col_list = [cols] if isinstance(cols, str) else list(cols)
+    _require_columns(sample, col_list, where="wrangling.fill_null", param="cols")
+    if strategy is not None and value is not None:
+        raise DataError.invalid_value(
+            where="wrangling.fill_null",
+            param="strategy",
+            got=strategy,
+            detail="Give value= or strategy=, not both.",
+        )
+    if strategy is not None and strategy not in _FILL_STRATEGIES:
+        raise DataError.invalid_choice(
+            where="wrangling.fill_null", param="strategy", got=strategy, allowed=_FILL_STRATEGIES
+        )
 
     if strategy is not None:
         int_cols: set[str] = set()

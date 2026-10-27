@@ -243,6 +243,7 @@ class Code(StrEnum):
     # ── Data ──────────────────────────────────────────────────────────────────
     AMBIGUOUS_BINS = "AMBIGUOUS_BINS"
     CAST_DTYPE_REQUIRED = "CAST_DTYPE_REQUIRED"
+    CAST_FAILED = "CAST_FAILED"
     CAST_TRUNCATION = "CAST_TRUNCATION"
     CAST_UNKNOWN_DTYPE = "CAST_UNKNOWN_DTYPE"
     COLUMN_NOT_NUMERIC = "COLUMN_NOT_NUMERIC"
