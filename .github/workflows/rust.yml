@@ -1,0 +1,75 @@
+name: Rust checks
+# `cargo fmt --check`, clippy under `-D warnings` and the Rust unit tests for
+# svy-rs and svy-io. The toolchain is pinned because each stable release adds
+# clippy lints; bump RUST_TOOLCHAIN on purpose, with the fixes it asks for.
+on:
+  push:
+    branches: [main]
+  # No path filter on PRs, matching svy-tests.yml: if this becomes a required
+  # status check on main, a path-filtered check would leave every non-matching
+  # PR stuck waiting for a run that never starts.
+  pull_request:
+    branches: [main]
+concurrency:
+  group: ci-${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+env:
+  RUST_TOOLCHAIN: "1.99"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Rust ${{ matrix.crate }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Without the default extension-module feature the tests link libpython.
+          - crate: svy-rs
+            dir: packages/svy-rs
+            features: --no-default-features
+          - crate: svy-io
+            dir: packages/svy-io/native/svyreadstat_rs
+            features: ""
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "latest"
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ matrix.dir }}/target
+          key: rust-${{ matrix.crate }}-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles(format('{0}/Cargo.lock', matrix.dir)) }}
+      # PyO3 builds against this interpreter; the tests load its shared libpython.
+      - name: Point PyO3 at Python
+        run: |
+          uv python install 3.11
+          py="$(uv python find 3.11)"
+          echo "PYO3_PYTHON=$py" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$("$py" -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')" >> "$GITHUB_ENV"
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Format readstat-sys
+        if: matrix.crate == 'svy-io'
+        run: cargo fmt --manifest-path ../readstat-sys/Cargo.toml -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets ${{ matrix.features }} -- -D warnings
+      - name: Clippy readstat-sys
+        if: matrix.crate == 'svy-io'
+        run: cargo clippy -p readstat-sys --all-targets -- -D warnings
+      - name: Test
+        run: cargo test ${{ matrix.features }}

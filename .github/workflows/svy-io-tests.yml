@@ -54,9 +54,3 @@ jobs:
         env:
           UV_NO_SYNC: "1"  # a sync would rebuild svy-rs and svy-io from source
         run: make test-svy-io
-
-  # No Rust job yet. `cargo test` links and passes now that `extension-module`
-  # is a crate feature maturin enables, but `cargo fmt --check` fails on four
-  # drifted files and `cargo clippy -- -D warnings` reports 28 errors across
-  # nine lint kinds. Adding a job that always fails would train people to
-  # ignore it.
