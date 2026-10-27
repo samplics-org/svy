@@ -8,6 +8,7 @@ for the method-vs-function test and the per-subpackage functions.py convention.
 
 from __future__ import annotations
 
+import inspect
 import logging
 
 from typing import Any, Literal, Mapping, Sequence
@@ -26,7 +27,7 @@ from svy.core.panel import (
 )
 from svy.core.sample import Sample
 from svy.core.types import Category
-from svy.errors import Code, DesignError, DesignWarning, LabelWarning
+from svy.errors import Code, DesignError, DesignWarning, LabelWarning, UsageError
 from svy.errors._findings import check_on_finding, finding_level
 from svy.metadata.variable_meta import VariableMeta
 
@@ -1012,8 +1013,8 @@ def _reject_legacy_kwargs(kwargs: dict[str, Any]) -> None:
                 got=old,
                 hint=hint,
             )
-    unknown = next(iter(kwargs))
-    raise TypeError(f"combine_samples() got an unexpected keyword argument {unknown!r}")
+    known = [n for n in inspect.signature(combine_samples).parameters if n not in ("_legacy",)]
+    raise UsageError.unknown_arguments(where="combine_samples", unknown=kwargs, known=known)
 
 
 def _warn_if_numeric_labels_unordered(wave_labels: Sequence[str], combined: Sample) -> None:

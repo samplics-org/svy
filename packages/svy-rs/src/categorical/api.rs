@@ -179,8 +179,6 @@ fn prepare_two_sample_data(
             w_arr.push(0.0);
             g_arr.push(0);
         } else {
-            // Keep original y for non-domain rows — rank must be computed on
-            // full dataset (matching R's subset() behavior), only weight is zeroed
             y_arr.push(yi);
             w_arr.push(if in_domain { wi } else { 0.0 });
             g_arr.push(gi);

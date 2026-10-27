@@ -73,8 +73,16 @@ fn compute_midranks(y: &[f64], w: &[f64], n: usize) -> Vec<f64> {
         while j < n && y[indices[j]] == y_val {
             j += 1;
         }
-        // Average midranks for positions i..j
-        let avg: f64 = cumw[i..j].iter().sum::<f64>() / (j - i) as f64;
+        // Zero-weight rows (out of domain, missing y) are not in R's subset
+        // design, so they must not join the tie average.
+        let (sum, count) = (i..j)
+            .filter(|&pos| w[indices[pos]] > 0.0)
+            .fold((0.0, 0usize), |(s, c), pos| (s + cumw[pos], c + 1));
+        let avg = if count > 0 {
+            sum / count as f64
+        } else {
+            cumw[i..j].iter().sum::<f64>() / (j - i) as f64
+        };
         for pos in i..j {
             midrank_sorted[pos] = avg;
         }

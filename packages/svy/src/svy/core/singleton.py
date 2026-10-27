@@ -462,13 +462,21 @@ class _Engine:
         if isinstance(using, dict):
             target_key = cast(dict[str, str], using).get(singleton.stratum_key)
             if target_key is None:
-                raise ValueError(
-                    f"Mapping does not contain key for singleton {singleton.stratum_key!r}"
+                raise SingletonError.ValueError(
+                    title="Singleton missing from the collapse mapping",
+                    detail=f"Mapping does not contain key for singleton {singleton.stratum_key!r}",
+                    code=Code.SINGLETON_UNMAPPED,
+                    where="singleton.collapse",
+                    param="using",
                 )
             target = next((c for c in candidates if c.stratum_key == target_key), None)
             if target is None:
-                raise ValueError(
-                    f"Target {target_key!r} not found in candidates or is a singleton"
+                raise SingletonError.ValueError(
+                    title="Collapse target not available",
+                    detail=f"Target {target_key!r} not found in candidates or is a singleton",
+                    code=Code.SINGLETON_TARGET_MISSING,
+                    where="singleton.collapse",
+                    param="using",
                 )
             return target
 
@@ -481,8 +489,12 @@ class _Engine:
                 target_key = self._resolve(target_key)
             target = next((c for c in candidates if c.stratum_key == target_key), None)
             if target is None:
-                raise ValueError(
-                    f"Callable returned {target_key!r} which is not a valid candidate"
+                raise SingletonError.ValueError(
+                    title="Collapse target not available",
+                    detail=f"Callable returned {target_key!r} which is not a valid candidate",
+                    code=Code.SINGLETON_TARGET_MISSING,
+                    where="singleton.collapse",
+                    param="using",
                 )
             return target
 
@@ -499,7 +511,12 @@ class _Engine:
         elif using in ("next", "previous"):
             ties = self._get_adjacent_stratum(singleton, candidates, using, order_by, descending)
         else:
-            raise ValueError(f"Unknown strategy: {using!r}")
+            raise SingletonError.invalid_choice(
+                where="singleton.collapse",
+                param="using",
+                got=using,
+                allowed=["smallest", "largest", "next", "previous"],
+            )
 
         if len(ties) == 1:
             return ties[0]
@@ -1058,10 +1075,15 @@ class _StrataIndex:
                 return self.fallback[form]
             if form in self.ambiguous:
                 if strict:
-                    raise ValueError(
-                        f"Stratum {stratum!r} matches several strata "
-                        f"({', '.join(map(repr, sorted(self.ambiguous[form])))}); name it "
-                        "by its columns' values."
+                    raise SingletonError.ValueError(
+                        title="Ambiguous stratum",
+                        detail=f"Stratum {stratum!r} matches several strata "
+                        f"({', '.join(map(repr, sorted(self.ambiguous[form])))}).",
+                        code=Code.SINGLETON_STRATUM_AMBIGUOUS,
+                        where="svy.Singleton",
+                        param="stratum",
+                        got=stratum,
+                        hint="Name it by its columns' values.",
                     )
                 return None
         # A value saved in another type (a date read back from JSON as its ISO
