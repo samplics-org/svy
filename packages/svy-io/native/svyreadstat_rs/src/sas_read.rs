@@ -28,6 +28,7 @@ use crate::core::{
 /// - Efficient column skipping
 /// - GIL released during parsing for Python concurrency
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn parse_sas_impl(
     data_path: &str,
     catalog_path: Option<&str>,
@@ -233,6 +234,7 @@ pub(crate) fn resolve_format_label_sets(ctx: &mut ParseCtx) {
     rows_skip=0,
     lossy_utf8=false
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn df_parse_sas_file<'py>(
     py: Python<'py>,
     data_path: &str,

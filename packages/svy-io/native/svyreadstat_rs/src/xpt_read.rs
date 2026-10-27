@@ -18,6 +18,7 @@ use crate::core::{
 };
 use crate::sas_read::{parse_catalog, resolve_format_label_sets};
 
+#[allow(clippy::too_many_arguments)]
 fn parse_xpt_impl(
     data_path: &str,
     rows_skip: usize,
@@ -110,6 +111,7 @@ fn parse_xpt_impl(
     catalog_path=None,
     catalog_encoding=None
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn df_parse_xpt_file<'py>(
     py: Python<'py>,
     data_path: &str,
