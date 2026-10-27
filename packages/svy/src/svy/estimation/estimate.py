@@ -11,6 +11,7 @@ import polars as pl
 
 from svy.core.enumerations import PopParam, QuantileMethod
 from svy.core.types import Category, Number, RandomState
+from svy.errors import Code
 from svy.errors._api import guided_getattr
 
 # Import central UI helpers
@@ -221,7 +222,7 @@ def estimate_frame(
                     f"Each row names its pair in 'y' and 'x', but '{clash[0]}' is "
                     "also a domain column here."
                 ),
-                code="PAIR_COLUMN_CLASH",
+                code=Code.PAIR_COLUMN_CLASH,
                 where="Estimate.to_polars",
                 hint="Rename the domain variable before estimating.",
             )
@@ -247,7 +248,7 @@ def estimate_frame(
                     raise EstimationError.ValueError(
                         title="Label column clashes with a variable",
                         detail=f"The labels of '{col}' would go in '{name}', which is also a variable here.",
-                        code="LABEL_COLUMN_CLASH",
+                        code=Code.LABEL_COLUMN_CLASH,
                         where="Estimate.to_polars",
                         hint="Rename the variable, or pass use_labels=False.",
                     )
@@ -885,7 +886,7 @@ class Estimate:
                     "linearized score column, so no between-quantile "
                     "covariance exists to combine them with."
                 ),
-                code="CONTRAST_UNSUPPORTED_PARAM",
+                code=Code.CONTRAST_UNSUPPORTED_PARAM,
                 where="Estimate.contrast",
                 param="param",
                 got=self.param.name,
@@ -894,7 +895,7 @@ class Estimate:
             raise EstimationError.ValueError(
                 title="Nothing to contrast",
                 detail="This result carries no estimates.",
-                code="CONTRAST_EMPTY",
+                code=Code.CONTRAST_EMPTY,
                 where="Estimate.contrast",
             )
         k = len(self.estimates)
@@ -906,7 +907,7 @@ class Estimate:
                     "between their rows, so only a single-row result can be "
                     "contrasted."
                 ),
-                code="CONTRAST_NO_COVARIANCE",
+                code=Code.CONTRAST_NO_COVARIANCE,
                 where="Estimate.contrast",
             )
         if k > 1 and not self._cov_filled:
@@ -919,7 +920,7 @@ class Estimate:
                     "prop('y') instead of prop(['y', ...])) and contrast "
                     "that result."
                 ),
-                code="CONTRAST_NO_COVARIANCE",
+                code=Code.CONTRAST_NO_COVARIANCE,
                 where="Estimate.contrast",
             )
 
@@ -930,7 +931,7 @@ class Estimate:
                 raise EstimationError.ValueError(
                     title="No degrees of freedom on this result",
                     detail="Neither a design df nor per-row df is available.",
-                    code="CONTRAST_NO_DF",
+                    code=Code.CONTRAST_NO_DF,
                     where="Estimate.contrast",
                 )
             df = max(row_dfs)
@@ -1162,7 +1163,7 @@ class EstimateList(list):
                 "independently — there is no covariance between them. "
                 "Contrast one member, e.g. result[0].contrast(...)."
             ),
-            code="CONTRAST_LIST_AMBIGUOUS",
+            code=Code.CONTRAST_LIST_AMBIGUOUS,
             where="EstimateList.contrast",
         )
 

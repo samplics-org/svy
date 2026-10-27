@@ -16,7 +16,7 @@ from svy.core.types import (
     FloatArray,
     Number,
 )
-from svy.errors import SelectionError
+from svy.errors import Code, SelectionError
 
 
 # ============================================================
@@ -310,7 +310,7 @@ def _infeasible(detail: str) -> SelectionError:
     return SelectionError.ValueError(
         title="Infeasible design",
         detail=detail,
-        code="INFEASIBLE_DESIGN",
+        code=Code.INFEASIBLE_DESIGN,
     )
 
 
@@ -1047,7 +1047,7 @@ def _wald_two_group_sizes(
                 f"With rho={r} and overlap={o}, the variance of the difference is "
                 f"{var_factor:.3g} per unit: the two rounds would always agree."
             ),
-            code="SIZE_NO_VARIANCE",
+            code=Code.SIZE_NO_VARIANCE,
             where="SampleSize.compare",
             param="rho",
             got=r,

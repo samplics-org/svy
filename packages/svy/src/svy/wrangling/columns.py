@@ -12,7 +12,7 @@ import polars as pl
 from svy.core.constants import BOOKKEEPING_COLUMNS, SVY_HIT, SVY_PROB, SVY_WEIGHT
 from svy.core.repwgts import RepWgts
 from svy.engine.wrangling.cleaning import _clean_names, _rename
-from svy.errors import DataError
+from svy.errors import Code, DataError
 from svy.utils.helpers import _normalize_columns_arg
 from svy.wrangling._helpers import (
     _auto_clean_design,
@@ -86,7 +86,7 @@ def rename_columns(
         raise DataError.ValueError(
             title="Reserved column names cannot be renamed",
             detail=f"Forbidden: {hit}",
-            code="RENAME_FORBIDDEN",
+            code=Code.RENAME_FORBIDDEN,
             where="wrangling.rename_columns",
             got=hit,
             hint="These names are svy's own; rename to or from another name.",
@@ -101,7 +101,7 @@ def rename_columns(
         raise DataError.RuntimeError(
             title="Rename failed",
             detail=str(ex),
-            code="RENAME_FAILED",
+            code=Code.RENAME_FAILED,
             where="wrangling.rename_columns",
         ) from ex
 
@@ -220,7 +220,7 @@ def remove_columns(
         raise DataError.ValueError(
             title="Cannot remove design-referenced columns",
             detail=", ".join(blocked),
-            code="DROP_PROTECTED_COLUMNS",
+            code=Code.DROP_PROTECTED_COLUMNS,
             where="wrangling.remove_columns",
             hint="Pass force=True to drop them and automatically clean the design.",
         )
@@ -251,7 +251,7 @@ def keep_columns(
         raise DataError.ValueError(
             title="Keeping these columns would remove design-referenced columns",
             detail=", ".join(to_drop),
-            code="KEEP_DROPS_PROTECTED",
+            code=Code.KEEP_DROPS_PROTECTED,
             where="wrangling.keep_columns",
             hint="Pass force=True to proceed; the design will be cleaned automatically.",
         )

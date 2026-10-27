@@ -24,7 +24,7 @@ import svy_rs as rs
 
 from svy.core.enumerations import PopParam
 from svy.core.repwgts import RepWgts
-from svy.errors import EstimationError
+from svy.errors import Code, EstimationError
 
 from .estimate import Estimate, ParamEst, row_counts
 from .replication import _get_rep_params
@@ -59,7 +59,7 @@ def normalize_kind(kind: str) -> str:
                 "are themselves estimated, so the Pearson score would "
                 "understate the variance."
             ),
-            code="CORR_KIND_NOT_IMPLEMENTED",
+            code=Code.CORR_KIND_NOT_IMPLEMENTED,
             where="estimation.corr",
             param="kind",
             expected=f"one of {SUPPORTED_KINDS}",
@@ -69,7 +69,7 @@ def normalize_kind(kind: str) -> str:
     raise EstimationError.ValueError(
         title=f"Unknown correlation kind {k!r}",
         detail=f"kind must be one of {SUPPORTED_KINDS}.",
-        code="CORR_KIND_UNKNOWN",
+        code=Code.CORR_KIND_UNKNOWN,
         where="estimation.corr",
         param="kind",
         expected=f"one of {SUPPORTED_KINDS}",
@@ -93,7 +93,7 @@ def guard_pandas_method(method: object) -> None:
                 "'replication'); the coefficient is chosen with kind=. pandas "
                 "spells the coefficient method=, which is the likely mix-up."
             ),
-            code="CORR_METHOD_IS_KIND",
+            code=Code.CORR_METHOD_IS_KIND,
             where="estimation.corr",
             param="method",
             expected="'taylor' or 'replication'",
@@ -121,7 +121,7 @@ def parse_cols(cols: object, *, where: str) -> list[tuple[str, str]]:
         return EstimationError.ValueError(
             title="Invalid cols argument",
             detail=detail,
-            code="ASSOC_COLS_INVALID",
+            code=Code.ASSOC_COLS_INVALID,
             where=where,
             param="cols",
             expected="a pair, a list of columns, or a list of pairs",

@@ -18,7 +18,7 @@ import pytest
 from svy import SvyWarning
 from svy.core.sample import Design, Sample
 from svy.core.terms import Cat
-from svy.errors import WeightingError
+from svy.errors import Code, WeightingError
 from svy.weighting.types import TrimConfig
 
 
@@ -247,11 +247,10 @@ def test_calibrate_trim_cycle_min_cell_size_skips_with_warning():
             update_design_wgts=False,
             trimming=TrimConfig(upper=1.01, min_cell_size=999),
         )
-    from svy.errors._findings import WarnCode
 
     w = out.data.get_column("cw").to_numpy()
     np.testing.assert_allclose(w, plain_w)
-    assert out._warnings.list(code=WarnCode.DOMAIN_SKIPPED)
+    assert out._warnings.list(code=Code.DOMAIN_SKIPPED)
 
 
 # Group b's total is out of reach of its cap (on_nonconvergence="warn" keeps the

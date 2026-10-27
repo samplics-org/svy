@@ -13,7 +13,7 @@ import polars as pl
 
 from svy.core import constants as K
 from svy.core._check import check_key
-from svy.errors import DataError, DataWarning
+from svy.errors import Code, DataError, DataWarning
 from svy.errors._findings import check_on_finding, finding_level
 from svy.wrangling._helpers import _guard_weight_writes, _resolve_target
 
@@ -93,7 +93,7 @@ def _align_key(left: pl.Series, right: pl.Series) -> pl.DataType | None:
                     f"{lt} on this sample, {rt} on the other; "
                     f"values such as {fractional} cannot match an integer key."
                 ),
-                code="JOIN_KEY_TYPE_MISMATCH",
+                code=Code.JOIN_KEY_TYPE_MISMATCH,
                 where=_WHERE,
                 param="on",
             )
@@ -103,7 +103,7 @@ def _align_key(left: pl.Series, right: pl.Series) -> pl.DataType | None:
     raise DataError.TypeError(
         title="Join key types do not match",
         detail=f"{lt} on this sample, {rt} on the other.",
-        code="JOIN_KEY_TYPE_MISMATCH",
+        code=Code.JOIN_KEY_TYPE_MISMATCH,
         where=_WHERE,
         param="on",
         hint="Cast one side first so both hold the same kind of value.",
@@ -206,7 +206,7 @@ def join(
         raise DataError.ValueError(
             title="A key cannot also be brought in",
             detail=", ".join(as_key),
-            code="JOIN_KEY_IN_COLS",
+            code=Code.JOIN_KEY_IN_COLS,
             where=_WHERE,
             param="cols",
             hint="The key is already on this sample; leave it out of cols.",
@@ -227,7 +227,7 @@ def join(
         raise DataError.ValueError(
             title="Naming a column that is not brought in",
             detail=", ".join(stray),
-            code="JOIN_INTO_NOT_BROUGHT",
+            code=Code.JOIN_INTO_NOT_BROUGHT,
             where=_WHERE,
             param="into",
             hint="into names columns of the other side. Add them to cols, or leave cols out.",
@@ -252,7 +252,7 @@ def join(
         raise DataError.ValueError(
             title="Join would overwrite columns",
             detail=", ".join(taken + doubled),
-            code="JOIN_COLUMN_EXISTS",
+            code=Code.JOIN_COLUMN_EXISTS,
             where=_WHERE,
             param="into",
             hint='Name them on the way in, e.g. into={"region": "region_hh"}, or pass suffix="_hh".',
@@ -262,7 +262,7 @@ def join(
         raise DataError.ValueError(
             title="Join would add columns that read as replicate weights",
             detail=", ".join(as_replicate),
-            code="JOIN_COLUMN_EXISTS",
+            code=Code.JOIN_COLUMN_EXISTS,
             where=_WHERE,
             param="into",
             hint="Name them so they do not match this sample's replicate-weight prefix.",
@@ -291,7 +291,7 @@ def join(
         raise DataError.ValueError(
             title="Join key repeats on the other side",
             detail=f"{n_rep} key value(s) match more than one record, e.g. {shown}.",
-            code="JOIN_KEY_NOT_UNIQUE",
+            code=Code.JOIN_KEY_NOT_UNIQUE,
             where=_WHERE,
             param="on",
             hint="Each record here must match at most one record there. Deduplicate first.",
@@ -303,7 +303,7 @@ def join(
             raise DataError.ValueError(
                 title="Join key repeats on this sample",
                 detail=f"{n_rep} key value(s) appear on more than one record, e.g. {shown}.",
-                code="JOIN_KEY_NOT_UNIQUE",
+                code=Code.JOIN_KEY_NOT_UNIQUE,
                 where=_WHERE,
                 param="on",
                 hint='Use validate="m:1" when several records share one match.',
@@ -327,7 +327,7 @@ def join(
         raise DataError.ValueError(
             title="Records without a match",
             detail=f"{n_unmatched} of {df.height} record(s) found no match.",
-            code="JOIN_UNMATCHED",
+            code=Code.JOIN_UNMATCHED,
             where=_WHERE,
             param="on_unmatched",
             hint='Pass on_unmatched="warn" to keep them with nulls.',
@@ -345,7 +345,7 @@ def join(
     if n_unmatched:
         target.warn(
             DataWarning(
-                code="JOIN_UNMATCHED",
+                code=Code.JOIN_UNMATCHED,
                 title="Records without a match",
                 detail=(
                     f"{n_unmatched} of {df.height} record(s) found no match; "

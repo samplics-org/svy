@@ -35,8 +35,8 @@ import polars as pl
 
 from svy.core.design import WgtAdjustment
 from svy.core.types import DomainScalarMap
-from svy.errors import WeightingError, WeightingWarning
-from svy.errors._findings import Severity, WarnCode, check_on_finding, finding_level
+from svy.errors import Code, WeightingError, WeightingWarning
+from svy.errors._findings import Severity, check_on_finding, finding_level
 from svy.errors._weighting import show
 from svy.weighting._engine import (
     CellSpec,
@@ -135,7 +135,7 @@ def _record_partial(
     shown = ", ".join(show(d) for d in partial[:5]) + (", ..." if len(partial) > 5 else "")
     sample.warn(
         WeightingWarning(
-            code=WarnCode.DOMAIN_LEVELS_PARTIAL,
+            code=Code.DOMAIN_LEVELS_PARTIAL,
             title="Domains missing some levels",
             detail=(
                 f"{len(partial)} domain(s) of {'/'.join(by_cols)} do not observe every level "

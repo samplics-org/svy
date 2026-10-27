@@ -18,7 +18,7 @@ import polars as pl
 
 from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import Category
-from svy.errors import WeightingError
+from svy.errors import Code, WeightingError
 from svy.weighting._keys import _NOT_FOUND, LevelIndex, _Ambiguous, match_keys, target_vector
 
 
@@ -38,7 +38,7 @@ def _expand_term(
             raise WeightingError.ValueError(
                 title="Missing values in continuous auxiliary",
                 detail=f"Column '{term}' has {n_null} null value(s).",
-                code="AUX_NA",
+                code=Code.AUX_NA,
                 where=where,
                 param=str(term),
                 hint="Impute or drop missing values (e.g. wrangling.fill_null) "

@@ -15,7 +15,7 @@ from typing import Any, Literal, Sequence
 import numpy as np
 import polars as pl
 
-from svy.errors import SelectionWarning
+from svy.errors import Code, SelectionWarning
 from svy.errors._findings import Severity
 
 
@@ -109,7 +109,7 @@ def _warn_n_exceeds_population(
         if pop == 0:
             _finding(
                 sample,
-                code="SELECTION_GROUP_EMPTY",
+                code=Code.SELECTION_GROUP_EMPTY,
                 title="Group with no frame units",
                 detail=(
                     f"Selection: group {group!r} has 0 units in the frame -- "
@@ -126,7 +126,7 @@ def _warn_n_exceeds_population(
         elif n_req > pop and wr:
             _finding(
                 sample,
-                code="SELECTION_N_EXCEEDS_GROUP",
+                code=Code.SELECTION_N_EXCEEDS_GROUP,
                 title="Sample size exceeds the group",
                 detail=(
                     f"Selection: requested n={n_req} exceeds the population "
@@ -165,7 +165,7 @@ def _warn_zero_mos(
     action = "dropped before selection" if drop_nulls else "present in frame"
     _finding(
         sample,
-        code="SELECTION_MOS_NONPOSITIVE",
+        code=Code.SELECTION_MOS_NONPOSITIVE,
         title="Units with MOS <= 0",
         detail=(
             f"PPS selection: {n_bad} unit(s) with MOS <= 0 are {action}{group_info}. "
@@ -197,7 +197,7 @@ def _warn_empty_strata(
         if pop_sizes.get(group, 0) == 0:
             _finding(
                 sample,
-                code="SELECTION_STRATUM_EMPTY",
+                code=Code.SELECTION_STRATUM_EMPTY,
                 title="Stratum with no frame units",
                 detail=(
                     f"Selection: stratum {group!r} has n > 0 in the allocation "

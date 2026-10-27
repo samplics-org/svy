@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
 import polars as pl
@@ -13,7 +12,7 @@ from svy.core.constants import (
     SVY_PROB,
     SVY_WEIGHT,
 )
-from svy.errors import SelectionError
+from svy.errors import Code, SelectionError, SelectionWarning
 
 
 def _stage_col(base: str, k: int) -> str:
@@ -90,7 +89,7 @@ def _combine_stages(
     already_selected: bool,
     out_prob_col: str,
     out_wgt_col: str,
-    found: list[dict[str, Any]] | None = None,
+    found: list[SelectionWarning] | None = None,
 ) -> CombineResult:
     """
     Core engine for combining two sampling stages.
@@ -229,13 +228,21 @@ def _combine_stages(
             f"sample."
         )
         if found is None:
-            from svy.errors._findings import warn_no_sample
+            from svy.errors._findings import emit_finding
 
-            warn_no_sample(detail)
+            emit_finding(
+                SelectionWarning(
+                    code=Code.STAGE_PSUS_UNMATCHED,
+                    title="Stage-1 PSUs without next-stage records",
+                    detail=detail,
+                    where="Sample.sampling.add_stage",
+                )
+            )
         else:
             found.append(
-                dict(
-                    code="STAGE_PSUS_UNMATCHED",
+                SelectionWarning(
+                    where="Sample.sampling.add_stage",
+                    code=Code.STAGE_PSUS_UNMATCHED,
                     title="Stage-1 PSUs without next-stage records",
                     detail=detail,
                     got=len(not_in_ns),

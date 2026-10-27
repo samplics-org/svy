@@ -32,7 +32,7 @@ import polars as pl
 from svy.core.constants import key_col
 from svy.core.singleton import taylor_singleton_method
 from svy.core.types import WhereArg
-from svy.errors import DataError, DesignWarning
+from svy.errors import Code, DataError, DesignWarning
 from svy.utils.checks import any_missing, assert_no_missing, drop_missing
 from svy.utils.helpers import _colspec_to_list
 
@@ -1016,7 +1016,7 @@ def _warn_invalid_record(sample, design, rec, *, missing: list[str], wrong_weigh
     if hasattr(sample, "warn"):
         sample.warn(
             DesignWarning(
-                code="ADJUSTMENT_NOT_CREDITED",
+                code=Code.ADJUSTMENT_NOT_CREDITED,
                 title="Weight adjustment not credited",
                 detail=detail,
                 where="estimation",
@@ -1024,9 +1024,16 @@ def _warn_invalid_record(sample, design, rec, *, missing: list[str], wrong_weigh
             )
         )
     else:
-        from svy.errors._findings import warn_no_sample
+        from svy.errors._findings import emit_finding
 
-        warn_no_sample(detail)
+        emit_finding(
+            DesignWarning(
+                code=Code.ADJUSTMENT_NOT_CREDITED,
+                title="Weight adjustment not credited",
+                detail=detail,
+                where="estimation",
+            )
+        )
 
 
 def record_columns(design, df) -> list[str]:

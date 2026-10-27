@@ -20,12 +20,11 @@ import pytest
 import svy
 
 from svy import Cat, Design, Sample, SvyWarning, TrimConfig, col
-from svy.errors import WeightingError
-from svy.errors._findings import WarnCode
+from svy.errors import Code, WeightingError
 
 
-NULL = WarnCode.CELLS_NULL_UNADJUSTED
-MAXIT = WarnCode.MAX_ITER_REACHED
+NULL = Code.CELLS_NULL_UNADJUSTED
+MAXIT = Code.WEIGHTING_NOT_CONVERGED
 
 
 def _codes(s: Sample, code) -> list:
@@ -249,11 +248,11 @@ def test_panel_adjust_records_skipped_rule():
             respondents_only=False,
         )
     assert _svy(rec) and all(r.filename == __file__ for r in _svy(rec))
-    w = _one(out, WarnCode.PANEL_SCOPE_NOT_WAVES)
+    w = _one(out, Code.PANEL_SCOPE_NOT_WAVES)
     assert "missing-in-scope rule was skipped" in w.detail
     assert "where=col('wave') == 2" in w.hint
     ok = s.weighting.adjust("resp", cells="g", where=col("wave") == 2, respondents_only=False)
-    assert not _codes(ok, WarnCode.PANEL_SCOPE_NOT_WAVES)
+    assert not _codes(ok, Code.PANEL_SCOPE_NOT_WAVES)
 
 
 def test_panel_adjust_null_cells_count_real_rows_only():
@@ -289,7 +288,7 @@ def test_standardize_partial_domain_recorded_not_warned():
             "a", shares={"x": 1, "y": 1}, by="g"
         )
     assert _svy(rec) and all(r.filename == __file__ for r in _svy(rec))
-    w = _one(out, WarnCode.DOMAIN_LEVELS_PARTIAL)
+    w = _one(out, Code.DOMAIN_LEVELS_PARTIAL)
     assert w.got == ["g2"]
     assert "do not observe every level" in w.detail
 
@@ -318,7 +317,7 @@ RK = {
 
 
 def test_rake_strict_false_records_max_iter(rk, capsys):
-    with pytest.warns(SvyWarning, match=r"\[MAX_ITER_REACHED\]") as rec:
+    with pytest.warns(SvyWarning, match=r"\[WEIGHTING_NOT_CONVERGED\]") as rec:
         out = rk.weighting.rake(controls=RK, max_iter=3, tol=1e-20, on_nonconvergence="warn")
     assert _svy(rec) and all(r.filename == __file__ for r in _svy(rec))
     assert capsys.readouterr().out == ""
@@ -334,20 +333,20 @@ def test_rake_strict_raises_and_leaves_sample_untouched(rk, capsys):
     for inplace in (False, True):
         with pytest.raises(WeightingError) as ei:
             rk.weighting.rake(controls=RK, max_iter=3, tol=1e-20, inplace=inplace)
-        assert ei.value.code == "CONVERGENCE_FAILED"
+        assert ei.value.code == "WEIGHTING_NOT_CONVERGED"
     assert rk.data.columns == before_cols and rk.design == before_design
     assert not _codes(rk, MAXIT)
     assert capsys.readouterr().out == ""
 
 
 def test_rake_display_iter_still_prints(rk, capsys):
-    with pytest.warns(SvyWarning, match=r"\[MAX_ITER_REACHED\]"):
+    with pytest.warns(SvyWarning, match=r"\[WEIGHTING_NOT_CONVERGED\]"):
         rk.weighting.rake(
             controls=RK, max_iter=3, tol=1e-20, on_nonconvergence="warn", display_iter=True
         )
     out = capsys.readouterr().out
     assert "Raking: max margin error =" in out and "[not converged]" in out
-    with pytest.warns(SvyWarning, match=r"\[MAX_ITER_REACHED\]"):
+    with pytest.warns(SvyWarning, match=r"\[WEIGHTING_NOT_CONVERGED\]"):
         rk.weighting.rake(
             controls=RK,
             trimming=TrimConfig(upper=13.0, max_iter=2),
@@ -377,7 +376,7 @@ CYCLES = {
 
 @pytest.mark.parametrize("name", list(CYCLES))
 def test_trim_cycle_strict_false_records(tight, name, capsys):
-    with pytest.warns(SvyWarning, match=r"\[MAX_ITER_REACHED\]") as rec:
+    with pytest.warns(SvyWarning, match=r"\[WEIGHTING_NOT_CONVERGED\]") as rec:
         out = CYCLES[name](tight, on_nonconvergence="warn")
     assert _svy(rec) and all(r.filename == __file__ for r in _svy(rec))
     w = _one(out, MAXIT)
@@ -392,7 +391,7 @@ def test_trim_cycle_strict_failure_leaves_sample_untouched(tight, name, inplace)
     history = tight.design_history if hasattr(tight, "design_history") else None
     with pytest.raises(WeightingError) as ei:
         CYCLES[name](tight, inplace=inplace)
-    assert ei.value.code == "CONVERGENCE_FAILED"
+    assert ei.value.code == "WEIGHTING_NOT_CONVERGED"
     assert tight.data.equals(data)
     assert tight.design == design
     if history is not None:
@@ -403,7 +402,7 @@ def test_standardize_trim_cycle_recorded():
     df = pl.DataFrame(
         {"c": ["a"] * 10 + ["b"] * 2, "g": ["g"] * 12, "w": [1.0] * 10 + [30.0, 1.0]}
     )
-    with pytest.warns(SvyWarning, match=r"\[MAX_ITER_REACHED\]") as rec:
+    with pytest.warns(SvyWarning, match=r"\[WEIGHTING_NOT_CONVERGED\]") as rec:
         out = Sample(df, Design(wgt="w")).weighting.standardize(
             "c", shares={"a": 5, "b": 1}, by="g", trimming=CFG, on_nonconvergence="warn"
         )
@@ -428,7 +427,7 @@ def test_calibrate_where_keeps_scoped_findings():
             "w": [1.0] * 10 + [30.0, 1.0, 1.0],
         }
     )
-    with pytest.warns(SvyWarning, match=r"\[MAX_ITER_REACHED\]"):
+    with pytest.warns(SvyWarning, match=r"\[WEIGHTING_NOT_CONVERGED\]"):
         out = Sample(df, Design(wgt="w")).weighting.calibrate(
             controls={Cat("c"): {"a": 10, "b": 6}},
             where=col("k") == 1,
@@ -545,8 +544,8 @@ def test_calibrate_trimming_cycle_owns_the_fit_check(cal):
     cfg = TrimConfig(upper=6.0, max_iter=3)
     with pytest.raises(WeightingError) as ei:
         cal.weighting.calibrate(controls={Cat("c"): {"a": 20, "b": 30}, "one": 60}, trimming=cfg)
-    assert ei.value.code == "CONVERGENCE_FAILED"
-    with pytest.warns(SvyWarning, match=r"\[MAX_ITER_REACHED\]"):
+    assert ei.value.code == "WEIGHTING_NOT_CONVERGED"
+    with pytest.warns(SvyWarning, match=r"\[WEIGHTING_NOT_CONVERGED\]"):
         out = cal.weighting.calibrate(
             controls={Cat("c"): {"a": 20, "b": 30}, "one": 60},
             trimming=cfg,

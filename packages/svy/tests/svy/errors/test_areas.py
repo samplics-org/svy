@@ -64,6 +64,7 @@ AREA_CODES = {
     "Serialization": "SERIALIZATION_ERROR",
 }
 WARNING_AREAS = [
+    "Usage",
     "Design",
     "Singleton",
     "Estimation",
@@ -240,6 +241,7 @@ SHARED = {
         "REP_WGTS_RENAME_COLLISION",
     ),
     "mutate_cycle": (dict(cycle_list="a, b", where="w"), ValueError, "MUTATE_CYCLE"),
+    "param_renamed": (dict(where="w", method="m", old="a", new="b"), TypeError, "PARAM_RENAMED"),
 }
 
 

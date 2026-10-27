@@ -26,7 +26,7 @@ from svy.core.panel import (
 )
 from svy.core.sample import Sample
 from svy.core.types import Category
-from svy.errors import DesignError, DesignWarning, LabelWarning
+from svy.errors import Code, DesignError, DesignWarning, LabelWarning
 from svy.errors._findings import check_on_finding, finding_level
 from svy.metadata.variable_meta import VariableMeta
 
@@ -312,7 +312,7 @@ def _merge_metadata(combined: Sample, samples: Sequence[Sample]) -> None:
                     combined.meta.set(name, meta.clone(scheme_ref=None))
         combined.warn(
             LabelWarning(
-                code="COMBINE_CATALOGS_RESOLVED",
+                code=Code.COMBINE_CATALOGS_RESOLVED,
                 title="Labelling catalogs resolved",
                 detail=(
                     "Inputs carry different labelling catalogs; scheme references were "
@@ -325,7 +325,7 @@ def _merge_metadata(combined: Sample, samples: Sequence[Sample]) -> None:
     if conflicted:
         combined.warn(
             LabelWarning(
-                code="COMBINE_LABELS_CONFLICT",
+                code=Code.COMBINE_LABELS_CONFLICT,
                 title="Value labels dropped",
                 detail=(
                     f"Value labels conflict across inputs for {sorted(conflicted)}; the coding "
@@ -339,7 +339,7 @@ def _merge_metadata(combined: Sample, samples: Sequence[Sample]) -> None:
     if mtype_conflicts:
         combined.warn(
             LabelWarning(
-                code="COMBINE_MTYPE_CONFLICT",
+                code=Code.COMBINE_MTYPE_CONFLICT,
                 title="Measurement types disagree",
                 detail=(
                     f"Measurement types disagree across inputs for {sorted(mtype_conflicts)}; "
@@ -482,7 +482,7 @@ def _check_panel_ids(frames: Sequence[pl.DataFrame], case_id: CaseId) -> None:
 def _check_panel_units(
     frames: Sequence[pl.DataFrame],
     canonical: dict[str, tuple[str, ...]],
-    found: list[dict[str, Any]],
+    found: list[DesignWarning],
 ) -> None:
     """Later waves' (stratum, psu) set must be a subset of wave 1's; a PSU
     entirely lost is a real panel event and warns."""
@@ -508,8 +508,9 @@ def _check_panel_units(
         lost = sorted(map(str, first_set - units))
         if lost:
             found.append(
-                dict(
-                    code="PANEL_UNITS_LOST",
+                DesignWarning(
+                    where=_CTX,
+                    code=Code.PANEL_UNITS_LOST,
                     title="Design units lost between waves",
                     detail=(
                         f"{len(lost)} design unit(s) {unit_cols} of sample 1 have no row in "
@@ -538,7 +539,7 @@ def _check_constant_within_case(
 
 
 def _report_overlap(
-    stacked: pl.DataFrame, case_id: CaseId, wave_name: str, found: list[dict[str, Any]]
+    stacked: pl.DataFrame, case_id: CaseId, wave_name: str, found: list[DesignWarning]
 ) -> None:
     for ov in wave_overlap(stacked, case_id, wave_name):
         log.info("panel overlap %s", ov)
@@ -559,8 +560,9 @@ def _report_overlap(
         n_prev = ov.common + ov.lost
         if ov.common < 0.5 * n_prev:
             found.append(
-                dict(
-                    code="PANEL_SMALL_OVERLAP",
+                DesignWarning(
+                    where=_CTX,
+                    code=Code.PANEL_SMALL_OVERLAP,
                     title="Small panel overlap",
                     detail=(
                         f"Small panel overlap between wave {ov.prev!r} and wave {ov.wave!r}: "
@@ -665,7 +667,7 @@ def combine_samples(
         share one name per role.
     """
     # Findings wait for the combined sample, so they are recorded on it.
-    found: list[dict[str, Any]] = []
+    found: list[DesignWarning] = []
     _reject_legacy_kwargs(_legacy)
     wave_labels: list[str] | None = None
     if isinstance(samples, Mapping):
@@ -833,8 +835,9 @@ def combine_samples(
             "the original columns are untouched."
         )
         found.append(
-            dict(
-                code="COMBINE_MIXED_DESIGN",
+            DesignWarning(
+                where=_CTX,
+                code=Code.COMBINE_MIXED_DESIGN,
                 title="Waves declare different designs",
                 detail=message,
                 level=finding_level(on_mixed_design),
@@ -885,8 +888,9 @@ def combine_samples(
     partial = sorted(c for c in all_cols if any(c not in f.columns for f in frames))
     if partial:
         found.append(
-            dict(
-                code="COMBINE_COLUMNS_NULL_FILLED",
+            DesignWarning(
+                where=_CTX,
+                code=Code.COMBINE_COLUMNS_NULL_FILLED,
                 title="Columns null-filled",
                 detail=(
                     f"{len(partial)} column(s) are missing from some inputs and were "
@@ -952,7 +956,7 @@ def combine_samples(
         )
     _merge_metadata(combined, samples)
     for f in found:
-        combined.warn(DesignWarning(where=_CTX, **f))
+        combined.warn(f)
 
     combined.meta.set_type(wave_name, MeasurementType.ORDINAL)
     existing_wave_labels = combined.meta.get(wave_name)
@@ -1001,7 +1005,7 @@ def _reject_legacy_kwargs(kwargs: dict[str, Any]) -> None:
             raise DesignError.TypeError(
                 title="Parameter removed",
                 detail=f"`{old}=` was removed from combine_samples; use `{new}=`.",
-                code="PARAM_RENAMED",
+                code=Code.PARAM_RENAMED,
                 where=_CTX,
                 param=old,
                 expected=new,
@@ -1020,7 +1024,7 @@ def _warn_if_numeric_labels_unordered(wave_labels: Sequence[str], combined: Samp
     if any(nums[i] >= nums[i + 1] for i in range(len(nums) - 1)):
         combined.warn(
             DesignWarning(
-                code="WAVE_LABELS_UNORDERED",
+                code=Code.WAVE_LABELS_UNORDERED,
                 title="Wave labels out of order",
                 detail=(
                     f"wave labels look numeric but are not increasing: {list(wave_labels)}. "

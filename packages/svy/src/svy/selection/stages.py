@@ -9,7 +9,7 @@ import msgspec
 import polars as pl
 
 from svy.core.constants import SVY_PROB, SVY_WEIGHT
-from svy.errors import SelectionError
+from svy.errors import Code, SelectionError
 from svy.errors._findings import Severity
 from svy.selection._group_keys import _SEP, _build_group_keys, _normalize_n_for_groups
 from svy.selection._helpers import _finding
@@ -83,7 +83,7 @@ def _stage_error(param: str, got: Any, expected: str) -> SelectionError:
     return SelectionError.ValueError(
         title="Invalid stage",
         detail=f"Stage {param}= got {got!r}; expected {expected}.",
-        code="INVALID_STAGE",
+        code=Code.INVALID_STAGE,
         where="svy.selection.Stage",
         param=param,
         got=got,
@@ -174,7 +174,7 @@ def _check_stages(sample: "Sample", stages: list[Stage]) -> None:
         raise SelectionError.ValueError(
             title="multistage needs a list of stages",
             detail="Pass one svy.selection.Stage per stage, in order.",
-            code="INVALID_STAGE",
+            code=Code.INVALID_STAGE,
             where="Sample.sampling.multistage",
             param="stages",
             got=stages,
@@ -199,7 +199,7 @@ def _check_stages(sample: "Sample", stages: list[Stage]) -> None:
                 "multistage draws every stage from a frame; this sample's design already "
                 f"has prob={design.prob!r} and wgt={design.wgt!r}."
             ),
-            code="MULTISTAGE_ALREADY_SELECTED",
+            code=Code.MULTISTAGE_ALREADY_SELECTED,
             where="Sample.sampling.multistage",
             hint="Start from the frame, or add a stage to a drawn sample with add_stage.",
         )
@@ -210,7 +210,7 @@ def _check_stages(sample: "Sample", stages: list[Stage]) -> None:
         raise SelectionError.KeyError(
             title="Stage column not in the frame",
             detail=f"The stages use {missing!r}, which the frame does not have.",
-            code="MULTISTAGE_COLUMN_MISSING",
+            code=Code.MULTISTAGE_COLUMN_MISSING,
             where="Sample.sampling.multistage",
             got=missing,
             expected=sorted(columns),
@@ -223,7 +223,7 @@ def _check_stages(sample: "Sample", stages: list[Stage]) -> None:
         raise SelectionError.ValueError(
             title="Output column already in the frame",
             detail=f"multistage writes {taken!r}, which the frame already has.",
-            code="MULTISTAGE_COLUMN_TAKEN",
+            code=Code.MULTISTAGE_COLUMN_TAKEN,
             where="Sample.sampling.multistage",
             got=taken,
             hint="Rename or drop them first.",
@@ -274,7 +274,7 @@ def _draw_stage(
         named = [", ".join(f"{c}={v}" for c, v in p.items()) or "the whole frame" for p in capped]
         _finding(
             sample,
-            code="STAGE_TAKES_ALL",
+            code=Code.STAGE_TAKES_ALL,
             title="Stage takes every unit of some parents",
             detail=(
                 f"Stage {k} ({what}) asks for more units than {len(capped)} parent(s) hold, "
@@ -340,7 +340,7 @@ def _stage1_n(sample: "Sample", rows: pl.DataFrame, n: Mapping[Any, int]) -> dic
             if strata
             else "The design has no stratum, so stage 1 n= cannot be a mapping."
         ),
-        code="MULTISTAGE_N_MISSING",
+        code=Code.MULTISTAGE_N_MISSING,
         where="Sample.sampling.multistage",
         param="n",
         got=sorted(map(repr, n)),
@@ -365,7 +365,7 @@ def _check_constant(rows: pl.DataFrame, keys: list[str], cols: list[str], k: int
                     f"At stage {k}, {col!r} takes several values within unit {unit!r} "
                     f"({bad.height} unit(s) in all); it must be one value per unit."
                 ),
-                code="MULTISTAGE_NOT_CONSTANT",
+                code=Code.MULTISTAGE_NOT_CONSTANT,
                 where="Sample.sampling.multistage",
                 param=col,
                 got=unit,

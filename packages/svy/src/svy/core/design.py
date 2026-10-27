@@ -29,7 +29,7 @@ from svy.core.repwgts import (
     RepWgts,
     resolve_rep_variant,
 )
-from svy.errors import DesignError, DesignWarning
+from svy.errors import Code, DesignError, DesignWarning
 from svy.ui.printing import make_panel, render_rich_to_str, resolve_width
 
 
@@ -159,7 +159,7 @@ def _warn_rep_wgts_reset(rep: RepWgts, new_wgt: str | None) -> None:
 
     emit_finding(
         DesignWarning(
-            code="REP_WGTS_RESET",
+            code=Code.REP_WGTS_RESET,
             title="Replicate weights removed",
             detail=(
                 f"Replicate weights '{rep.prefix}' go with weight {rep.wgt!r}, not {new_wgt!r}, "
@@ -333,7 +333,7 @@ def _rule_error(param: str, detail: str, *, got: Any = None, hint: str | None = 
     return DesignError.ValueError(
         title="Invalid singleton rule",
         detail=detail,
-        code="INVALID_SINGLETON_RULE",
+        code=Code.INVALID_SINGLETON_RULE,
         where=_RULE_WHERE,
         param=param,
         got=got,

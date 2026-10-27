@@ -28,8 +28,8 @@ from typing import TYPE_CHECKING, Any, Mapping, Sequence
 import numpy as np
 import polars as pl
 
-from svy.errors import WeightingError, WeightingWarning
-from svy.errors._findings import Severity, WarnCode
+from svy.errors import Code, WeightingError, WeightingWarning
+from svy.errors._findings import Severity
 from svy.utils.where import _compile_where
 from svy.weighting._keys import LevelIndex, match_keys, target_vector
 
@@ -251,7 +251,7 @@ def record_null_rows(
     )
     sample.warn(
         WeightingWarning(
-            code=WarnCode.CELLS_NULL_UNADJUSTED,
+            code=Code.CELLS_NULL_UNADJUSTED,
             title="Rows with a null left unadjusted",
             detail=(
                 f"{n} row(s) in scope have a null in `{param}` ({listed}) and {action}, so {kept}."
@@ -434,7 +434,7 @@ def record_trim_cycle(
     """A trim-and-readjust cycle that ran out of cycles and was kept.
 
     ``infeasible`` is the TRIM_INFEASIBLE diagnosis, when the controls were out
-    of reach of the bounds; it is recorded in place of MAX_ITER_REACHED.
+    of reach of the bounds; it is recorded in place of WEIGHTING_NOT_CONVERGED.
     """
     if infeasible is not None:
         sample.warn(
@@ -457,7 +457,7 @@ def record_trim_cycle(
         return
     sample.warn(
         WeightingWarning(
-            code=WarnCode.MAX_ITER_REACHED,
+            code=Code.WEIGHTING_NOT_CONVERGED,
             title=f"{what} did not converge",
             detail=(
                 f"{what} did not converge after {trimming.max_iter} cycles; the weights "

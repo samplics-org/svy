@@ -10,53 +10,15 @@ import warnings as _pywarnings
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Any, ClassVar, Iterable, Iterator, Sequence
 
 import msgspec
 
 from ._base import Severity, SvyError, SvyWarning
+from ._codes import Code
 
 
 log = logging.getLogger(__name__)
-
-
-# ---------- Codes ----------
-class WarnCode(StrEnum):
-    # ── Design / data quality ──────────────────────────────────────────
-    MISSING_LABELS = "MISSING_LABELS"
-    UNKNOWN_CATEGORY = "UNKNOWN_CATEGORY"
-    ZERO_WEIGHT = "ZERO_WEIGHT"
-    NEGATIVE_WEIGHT = "NEGATIVE_WEIGHT"
-    SINGLETON_PSU = "SINGLETON_PSU"
-    STRATUM_WITH_ONE_PSU = "STRATUM_WITH_ONE_PSU"
-    COLLAPSED_STRATA = "COLLAPSED_STRATA"
-    POSTSTRATA_EMPTY = "POSTSTRATA_EMPTY"
-    CONTROL_MISMATCH = "CONTROL_MISMATCH"
-    DESIGN_INCOMPLETE = "DESIGN_INCOMPLETE"
-    JACKKNIFE_KIND_UNSPECIFIED = "JACKKNIFE_KIND_UNSPECIFIED"
-    JACKKNIFE_COEFS_UNAVAILABLE = "JACKKNIFE_COEFS_UNAVAILABLE"
-    TAYLOR_WITHOUT_DESIGN = "TAYLOR_WITHOUT_DESIGN"
-    # ── Estimation ─────────────────────────────────────────────────────
-    PROP_CI_BOUNDARY = "PROP_CI_BOUNDARY"  # CI undefined at an estimated proportion of 0 or 1
-    # a stratum with several PSUs has one inside an estimation domain
-    DOMAIN_SINGLETON_PSU = "DOMAIN_SINGLETON_PSU"
-    # ── Regression ─────────────────────────────────────────────────────
-    GLM_SEPARATION = "GLM_SEPARATION"  # response perfectly predicted; some coefficients infinite
-    # ── Weighting (generic — shared across trim, rake, calibrate, …) ──
-    REPLICATE_SKIPPED = "REPLICATE_SKIPPED"  # rep weights present but not adjusted
-    DOMAIN_SKIPPED = "DOMAIN_SKIPPED"  # domain skipped (e.g. below min_cell_size)
-    MAX_ITER_REACHED = "MAX_ITER_REACHED"  # iterative method hit max_iter without converging
-    WEIGHT_SUM_CHANGED = "WEIGHT_SUM_CHANGED"  # total weight sum changed unexpectedly
-    WEIGHT_ADJ_AUDIT = "WEIGHT_ADJ_AUDIT"  # info-level audit record for any weight adjustment
-    CELLS_NULL_UNADJUSTED = (
-        "CELLS_NULL_UNADJUSTED"  # in-scope rows with a null cell kept their weight
-    )
-    DOMAIN_LEVELS_PARTIAL = "DOMAIN_LEVELS_PARTIAL"  # standardize: a domain lacks some levels
-    PANEL_SCOPE_NOT_WAVES = "PANEL_SCOPE_NOT_WAVES"  # panel adjust: `where` is not a set of waves
-
-    LABEL_KEY_NOT_IN_DATA = "LABEL_KEY_NOT_IN_DATA"
-    DATA_VALUE_NOT_LABELED = "DATA_VALUE_NOT_LABELED"
 
 
 # ---------- Aggregation / escalation ----------
@@ -66,7 +28,7 @@ class SvyWarningsError(SvyError):
     Escalation exception that keeps your formatting surfaces.
     """
 
-    _DEFAULT_CODE: ClassVar[str] = "SVY_WARNINGS_ERROR"
+    _DEFAULT_CODE: ClassVar[str] = Code.SVY_WARNINGS_ERROR
 
     @classmethod
     def from_warnings(
@@ -157,7 +119,7 @@ class WarningStore:
         self,
         *,
         min_level: Severity | None = None,
-        code: WarnCode | str | None = None,
+        code: str | None = None,
         where_contains: str | None = None,
     ) -> builtins.list[SvyWarning]:
         out = self._items
@@ -290,13 +252,6 @@ def emit_finding(finding: SvyWarning) -> None:
     from svy.core.design import _user_stacklevel
 
     _pywarnings.warn(finding, stacklevel=_user_stacklevel())
-
-
-def warn_no_sample(message: str) -> None:
-    """A svy warning where there is no sample to record it on."""
-    from svy.core.design import _user_stacklevel
-
-    _pywarnings.warn(SvyWarning(title=message, detail=""), stacklevel=_user_stacklevel())
 
 
 # ---------- on_* parameters ----------

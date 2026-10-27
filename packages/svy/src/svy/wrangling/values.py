@@ -19,7 +19,7 @@ from svy.engine.wrangling.cleaning import (
     _recode,
     _top_code,
 )
-from svy.errors import DataError, DataWarning
+from svy.errors import Code, DataError, DataWarning
 from svy.wrangling._helpers import (
     _guard_weight_writes,
     _rebuild_concat_if_touched,
@@ -62,7 +62,7 @@ def _resolve_dtype(dtype: Any, *, param: str) -> Any:
     raise DataError.ValueError(
         title="Unknown dtype name",
         detail=f"{dtype!r} is not a dtype name; expected one of {list(_DTYPES)}.",
-        code="CAST_UNKNOWN_DTYPE",
+        code=Code.CAST_UNKNOWN_DTYPE,
         where="wrangling.cast",
         param=param,
         got=dtype,
@@ -185,7 +185,7 @@ def categorize(
         raise DataError.ValueError(
             title="Ambiguous bin specification",
             detail="Provide either 'bins' or 'percentiles', not both.",
-            code="AMBIGUOUS_BINS",
+            code=Code.AMBIGUOUS_BINS,
             where="wrangling.categorize",
             param="bins / percentiles",
             hint="Use 'bins' for explicit edges or 'percentiles' to compute from data.",
@@ -194,7 +194,7 @@ def categorize(
         raise DataError.ValueError(
             title="No bin specification",
             detail="One of 'bins' or 'percentiles' must be provided.",
-            code="MISSING_BINS",
+            code=Code.MISSING_BINS,
             where="wrangling.categorize",
             param="bins / percentiles",
             hint="Use 'bins' for explicit edges or 'percentiles' to compute from data.",
@@ -234,7 +234,7 @@ def categorize(
         raise DataError.ValueError(
             title="Label count mismatch",
             detail=f"Expected {n_bins} labels for {n_bins} bins, got {len(labels)}.",
-            code="LABELS_LENGTH_MISMATCH",
+            code=Code.LABELS_LENGTH_MISMATCH,
             where="wrangling.categorize",
             param="labels",
             expected=n_bins,
@@ -303,7 +303,7 @@ def cast_columns(
             raise DataError.TypeError(
                 title="dtype required when cols is not a mapping",
                 detail="Provide dtype parameter or pass a dict mapping columns to types",
-                code="CAST_DTYPE_REQUIRED",
+                code=Code.CAST_DTYPE_REQUIRED,
                 where="wrangling.cast",
             )
         target_dt = _resolve_dtype(dtype, param="dtype")
@@ -339,7 +339,7 @@ def cast_columns(
                         "Casting would silently truncate them (Polars strict "
                         "casting only guards overflow)."
                     ),
-                    code="CAST_TRUNCATION",
+                    code=Code.CAST_TRUNCATION,
                     where="wrangling.cast",
                     hint="Round explicitly first (e.g. .round(0)) or pass strict=False "
                     "to allow truncation.",
@@ -379,7 +379,7 @@ def fill_null(
             if int_cols:
                 sample.warn(
                     DataWarning(
-                        code="MEAN_FILL_INT_CAST",
+                        code=Code.MEAN_FILL_INT_CAST,
                         title="Integer column(s) cast to Float64 for mean fill",
                         detail=(
                             f"Column(s) {sorted(int_cols)} are integer-typed; the "

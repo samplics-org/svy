@@ -742,7 +742,7 @@ class Weighting:
             not as non-convergence.
         on_nonconvergence : {"error", "warn", "ignore"}
             What to do when the trim-standardize cycle (``trimming=``) runs out
-            of cycles (``MAX_ITER_REACHED``); with "warn" or "ignore" the last
+            of cycles (``WEIGHTING_NOT_CONVERGED``); with "warn" or "ignore" the last
             cycle's weights are kept. "error" raises and leaves the sample as it was; "warn" records the finding in
             ``sample.warnings`` and raises it once as a ``SvyWarning``; "ignore"
             records it at INFO level without raising.
@@ -1238,7 +1238,7 @@ class Weighting:
             redistributed weight.
         on_nonconvergence : {"error", "warn", "ignore"}
             What to do when a domain does not converge within ``max_iter``
-            (``MAX_ITER_REACHED``); with "warn" or "ignore" the last iterate is
+            (``WEIGHTING_NOT_CONVERGED``); with "warn" or "ignore" the last iterate is
             kept. "error" raises and leaves the sample as it was; "warn" records the finding in
             ``sample.warnings`` and raises it once as a ``SvyWarning``; "ignore"
             records it at INFO level without raising.

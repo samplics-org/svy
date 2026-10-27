@@ -6,7 +6,8 @@ from typing import Any, Dict, Iterable, Tuple
 
 import polars as pl
 
-from svy.errors._findings import warn_no_sample
+from svy.errors import Code, IoWarning
+from svy.errors._findings import emit_finding
 from svy.metadata import MetadataStore
 
 from .core import (
@@ -122,23 +123,47 @@ def _write_sas(
     variables whose value labels are not written.
     """
     if format is not None:
-        warn_no_sample(f"format={format!r} is ignored: ReadStat writes SAS Transport (XPT) only.")
+        emit_finding(
+            IoWarning(
+                code=Code.IO_OPTION_IGNORED,
+                title="Option ignored",
+                detail=f"format={format!r} is ignored: ReadStat writes SAS Transport (XPT) only.",
+                where="io.write_sas",
+            )
+        )
     if encoding is not None:
-        warn_no_sample("encoding is ignored by the XPT writer.")
+        emit_finding(
+            IoWarning(
+                code=Code.IO_OPTION_IGNORED,
+                title="Option ignored",
+                detail="encoding is ignored by the XPT writer.",
+                where="io.write_sas",
+            )
+        )
 
     meta = build_metadata_for_export(df, store)
     if meta["value_labels"]:
-        warn_no_sample(
-            f"SAS Transport carries no value labels, so those of "
-            f"{', '.join(sorted(meta['value_labels']))} are not written. Use write_spss or "
-            f"write_stata to keep them with the data."
+        emit_finding(
+            IoWarning(
+                code=Code.IO_LABELS_NOT_WRITTEN,
+                title="Value labels not written",
+                detail=f"SAS Transport carries no value labels, so those of "
+                f"{', '.join(sorted(meta['value_labels']))} are not written. Use write_spss or "
+                f"write_stata to keep them with the data.",
+                where="io.write_sas",
+            )
         )
 
     blank = _trailing_blank_rows(df)
     if blank:
-        warn_no_sample(
-            f"SAS Transport pads files with blanks, so the last {blank} row(s), blank in every "
-            f"column, will not read back. Use write_spss or write_stata to keep them."
+        emit_finding(
+            IoWarning(
+                code=Code.IO_BLANK_ROWS_LOST,
+                title="Blank rows will not read back",
+                detail=f"SAS Transport pads files with blanks, so the last {blank} row(s), blank in every "
+                f"column, will not read back. Use write_spss or write_stata to keep them.",
+                where="io.write_sas",
+            )
         )
 
     table = to_writer_table(df)

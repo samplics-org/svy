@@ -19,8 +19,8 @@ import msgspec
 import numpy as np
 import polars as pl
 
-from svy.errors import WeightingError, WeightingWarning
-from svy.errors._findings import Severity, WarnCode, check_on_finding, finding_level
+from svy.errors import Code, WeightingError, WeightingWarning
+from svy.errors._findings import Severity, check_on_finding, finding_level
 
 
 try:
@@ -192,7 +192,7 @@ def _run_trim(
         raise WeightingError.ValueError(
             title="Negative weights found",
             detail=f"trim() found {n_neg} negative weight(s). Trimming cannot proceed.",
-            code="NEGATIVE_WEIGHTS",
+            code=Code.NEGATIVE_WEIGHTS,
             where=where,
             param=wgt,
             got=n_neg,
@@ -205,7 +205,7 @@ def _run_trim(
     if n_zero > 0:
         sample.warn(
             WeightingWarning(
-                code=WarnCode.ZERO_WEIGHT,
+                code=Code.ZERO_WEIGHT,
                 title="Zero-weight units excluded from trimming",
                 detail=(
                     f"{n_zero} unit(s) have zero weights and will be preserved "
@@ -280,7 +280,7 @@ def _run_trim(
         if not r.converged:
             sample.warn(
                 WeightingWarning(
-                    code=WarnCode.MAX_ITER_REACHED,
+                    code=Code.WEIGHTING_NOT_CONVERGED,
                     title="Trimming did not converge",
                     detail=(
                         f"Domain {label!r}: max_iter={config.max_iter} reached "
@@ -303,7 +303,7 @@ def _run_trim(
         if abs(sum_after - sum_before) > config.tol * max(sum_before, 1.0):
             sample.warn(
                 WeightingWarning(
-                    code=WarnCode.WEIGHT_SUM_CHANGED,
+                    code=Code.WEIGHT_SUM_CHANGED,
                     title="Total weight sum changed",
                     detail=(
                         f"Weight sum changed from {sum_before:.4f} to {sum_after:.4f} "
@@ -440,7 +440,7 @@ def _trim_domain(
     if n_positive < config.min_cell_size:
         sample.warn(
             WeightingWarning(
-                code=WarnCode.DOMAIN_SKIPPED,
+                code=Code.DOMAIN_SKIPPED,
                 title="Domain skipped — cell too small",
                 detail=(
                     f"Domain {domain_label!r} has {n_positive} positive-weight unit(s), "
@@ -536,7 +536,7 @@ def _emit_audit(
 ) -> None:
     sample.warn(
         WeightingWarning(
-            code=WarnCode.WEIGHT_ADJ_AUDIT,
+            code=Code.WEIGHT_ADJ_AUDIT,
             title=f"Trim audit — domain {domain!r}",
             detail=(
                 f"domain={domain!r}, "

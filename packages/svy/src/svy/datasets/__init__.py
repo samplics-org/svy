@@ -53,8 +53,9 @@ from svy.datasets import _bundled, api
 from svy.datasets._cache import clear as _clear_cache
 from svy.datasets.base import Source, _offline_env, load
 from svy.datasets.types import Dataset, DatasetCatalog
+from svy.errors import Code, DatasetWarning
 from svy.errors._dataset import DatasetError
-from svy.errors._findings import warn_no_sample
+from svy.errors._findings import emit_finding
 
 
 _CATALOG_UNREACHABLE = {"CATALOG_UNREACHABLE", "CATALOG_BAD_STATUS"}
@@ -84,7 +85,14 @@ def catalog(*, use_cache: bool = True, source: Source = "auto") -> DatasetCatalo
         if exc.code == "REMOTE_UNAVAILABLE" and _bundled.slugs():
             return _bundled.catalog()
         if exc.code in _CATALOG_UNREACHABLE and _bundled.slugs():
-            warn_no_sample("Dataset catalog unreachable; listing bundled subsets only.")
+            emit_finding(
+                DatasetWarning(
+                    code=Code.DATASET_CATALOG_OFFLINE,
+                    title="Dataset catalog unreachable",
+                    detail="Dataset catalog unreachable; listing bundled subsets only.",
+                    where="datasets.catalog",
+                )
+            )
             return _bundled.catalog()
         raise
 
@@ -119,8 +127,13 @@ def describe(slug: str, *, use_cache: bool = True, source: Source = "auto") -> D
         if exc.code in _CATALOG_UNREACHABLE:
             ds = _bundled.describe(slug)
             if ds is not None:
-                warn_no_sample(
-                    f"Dataset catalog unreachable; using bundled metadata for {slug!r}."
+                emit_finding(
+                    DatasetWarning(
+                        code=Code.DATASET_CATALOG_OFFLINE,
+                        title="Dataset catalog unreachable",
+                        detail=f"Dataset catalog unreachable; using bundled metadata for {slug!r}.",
+                        where="datasets.describe",
+                    )
                 )
                 return ds
         raise

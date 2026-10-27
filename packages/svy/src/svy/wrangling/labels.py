@@ -8,8 +8,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from svy.core.enumerations import MeasurementType
-from svy.errors import DataError, LabelWarning
-from svy.errors._findings import Severity, WarnCode
+from svy.errors import Code, DataError, LabelWarning
+from svy.errors._findings import Severity
 from svy.wrangling._helpers import _fork
 from svy.wrangling._naming import _check_nan_keys
 
@@ -61,7 +61,7 @@ def apply_labels(
         raise DataError.ValueError(
             title="No labels provided",
             detail=("At least one of 'labels' or 'categories' must be provided."),
-            code="MISSING_LABELS",
+            code=Code.MISSING_LABELS,
             where="wrangling.apply_labels",
             param="labels / categories",
             hint=("Pass labels={'var': 'Label'} and/or categories={'var': {val: 'text'}}."),
@@ -206,7 +206,7 @@ def apply_labels(
             if extra_label_keys:
                 target.warn(
                     LabelWarning(
-                        code=WarnCode.LABEL_KEY_NOT_IN_DATA,
+                        code=Code.LABEL_KEY_NOT_IN_DATA,
                         title="Category labels for values not in data",
                         detail=(
                             f"Variable {var!r}: label keys "
@@ -227,7 +227,7 @@ def apply_labels(
             if unlabeled_values:
                 target.warn(
                     LabelWarning(
-                        code=WarnCode.DATA_VALUE_NOT_LABELED,
+                        code=Code.DATA_VALUE_NOT_LABELED,
                         title="Data values without labels",
                         detail=(
                             f"Variable {var!r}: values {unlabeled_values} have no corresponding label."

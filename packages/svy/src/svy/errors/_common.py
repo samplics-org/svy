@@ -3,12 +3,30 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Iterable, Optional, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Iterable, Mapping, Optional, Self
+
+from ._codes import Code
 
 
 class _Constructors:
     """Problems any part of svy can raise: ``EstimationError.missing_columns(...)``
     is an ``EstimationError`` and a ``KeyError``."""
+
+    if TYPE_CHECKING:
+        # The fields every error takes (from _base._Report), for the calls below.
+        def __init__(
+            self,
+            title: str,
+            detail: str,
+            code: str = ...,
+            where: str | None = ...,
+            param: str | None = ...,
+            got: Any = ...,
+            expected: Any = ...,
+            hint: str | None = ...,
+            docs_url: str | None = ...,
+            extra: Mapping[str, Any] | None = ...,
+        ) -> None: ...
 
     # Set on every error class by _base._add_kinds; declared so type checkers see them.
     TypeError: ClassVar[type[Self]]
@@ -37,7 +55,7 @@ class _Constructors:
         return cls.ValueError(
             title="Invalid option",
             detail=f"Parameter '{param}' must be one of {allowed_list}.",
-            code="INVALID_CHOICE",
+            code=Code.INVALID_CHOICE,
             where=where,
             param=param,
             expected=allowed_list,
@@ -62,7 +80,7 @@ class _Constructors:
             # `reason` is authored prose and most call sites already end it with a
             # period; appending unconditionally produced "…(got psu=None)..".
             detail=f"'{method}' cannot be used here: {reason.rstrip('.')}.",
-            code="METHOD_NOT_APPLICABLE",
+            code=Code.METHOD_NOT_APPLICABLE,
             where=where,
             param=param,
             hint=hint,
@@ -90,7 +108,7 @@ class _Constructors:
                 "variable that the design, its weight-adjustment record, replicate "
                 "weights or history still read as the old one."
             ),
-            code="WEIGHT_OVERWRITE",
+            code=Code.WEIGHT_OVERWRITE,
             where=where,
             param=col,
             got=list(columns),
@@ -113,7 +131,7 @@ class _Constructors:
                 "the data and design and would overwrite them. Names starting with "
                 "'__svy_' are svy's."
             ),
-            code="RESERVED_COLUMN",
+            code=Code.RESERVED_COLUMN,
             where=where,
             param=col,
             got=columns,
@@ -134,7 +152,7 @@ class _Constructors:
                 "or removed outside svy cannot be checked against the design's "
                 "weights, replicate weights and history."
             ),
-            code="DATA_ROWS_CHANGED",
+            code=Code.DATA_ROWS_CHANGED,
             where=where,
             expected=n_old,
             got=n_new,
@@ -151,7 +169,7 @@ class _Constructors:
         return cls.ValueError(
             title="No replicate weights to rename",
             detail="The design carries no replicate weights.",
-            code="REP_WGTS_MISSING",
+            code=Code.REP_WGTS_MISSING,
             where=where,
             hint=(
                 "Declare them with Design(rep_wgts=...) or create them with "
@@ -165,7 +183,7 @@ class _Constructors:
         return cls.ValueError(
             title="Invalid replicate-weight prefix",
             detail=f"The new prefix must be a non-empty string; got {got!r}.",
-            code="REP_WGTS_PREFIX_INVALID",
+            code=Code.REP_WGTS_PREFIX_INVALID,
             where=where,
             param="prefix",
             got=got,
@@ -181,7 +199,7 @@ class _Constructors:
         return cls.KeyError(
             title="Unknown replicate-weight set",
             detail=f"No replicate weights with prefix {got!r}. This sample carries: {listed}.",
-            code="REP_WGTS_UNKNOWN_PREFIX",
+            code=Code.REP_WGTS_UNKNOWN_PREFIX,
             where=where,
             param="prefixes",
             got=got,
@@ -203,7 +221,7 @@ class _Constructors:
                 f"Renaming to {prefix!r} would give names that are already columns, "
                 f"or that two replicate sets would share: {shown}{more}."
             ),
-            code="REP_WGTS_RENAME_COLLISION",
+            code=Code.REP_WGTS_RENAME_COLLISION,
             where=where,
             param="prefix",
             got=prefix,
@@ -218,7 +236,7 @@ class _Constructors:
         return cls.ValueError(
             title="Column transformation failed",
             detail=f"Dependency cycle or unresolved forward reference among: {cycle_list}",
-            code="MUTATE_CYCLE",
+            code=Code.MUTATE_CYCLE,
             where=where,
             hint="Split into multiple mutate calls or remove circular references.",
             docs_url=None,
@@ -244,7 +262,7 @@ class _Constructors:
         return cls.ValueError(
             title="Invalid numeric range",
             detail=f"Parameter '{param}' is out of range.",
-            code="INVALID_RANGE",
+            code=Code.INVALID_RANGE,
             where=where,
             param=param,
             expected=exp,
@@ -267,7 +285,7 @@ class _Constructors:
         return cls.TypeError(
             title="Invalid type",
             detail=f"Parameter '{param}' has the wrong type.",
-            code="INVALID_TYPE",
+            code=Code.INVALID_TYPE,
             where=where,
             param=param,
             expected=expected,
@@ -297,7 +315,7 @@ class _Constructors:
         return cls.ValueError(
             title="Mapping keys mismatch",
             detail=" ".join(detail_parts) or "Keys do not match the expected set.",
-            code="INVALID_MAPPING_KEYS",
+            code=Code.INVALID_MAPPING_KEYS,
             where=where,
             param=param,
             expected="exact match of domain keys",
@@ -319,7 +337,7 @@ class _Constructors:
         return cls.ValueError(
             title="Invalid row count",
             detail="Parameter 'n' must be a non-negative integer or None.",
-            code="INVALID_N",
+            code=Code.INVALID_N,
             where=where,
             param="n",
             expected=expected,
@@ -344,7 +362,7 @@ class _Constructors:
         return cls.KeyError(
             title="Column(s) not found",
             detail=f"Missing: {', '.join(map(repr, missing_list))}.",
-            code="MISSING_COLUMNS",
+            code=Code.MISSING_COLUMNS,
             where=where,
             param=param,
             expected="subset of dataframe columns",
@@ -368,7 +386,7 @@ class _Constructors:
         return cls.ValueError(
             title="Sampling failed",
             detail=f"Requested n={n} exceeds available rows={available_rows} for sampling without replacement.",
-            code="SAMPLE_TOO_LARGE",
+            code=Code.SAMPLE_TOO_LARGE,
             where=where,
             param=param,
             expected=f"n ≤ {available_rows}",
@@ -389,7 +407,7 @@ class _Constructors:
         return cls.ValueError(
             title="No estimates to display",
             detail="The table/test has no estimate rows.",
-            code="EMPTY_ESTIMATES",
+            code=Code.EMPTY_ESTIMATES,
             where=where,
             param=param,
             hint=hint,
@@ -412,7 +430,7 @@ class _Constructors:
         return cls.ValueError(
             title="Domain keys mismatch",
             detail=f"For domain '{domain}', expected keys {sorted(exp)}, got {sorted(got)}.",
-            code="DOMAIN_KEYS_MISMATCH",
+            code=Code.DOMAIN_KEYS_MISMATCH,
             where=where,
             param=domain,
             expected=sorted(exp),
@@ -435,7 +453,7 @@ class _Constructors:
         return cls.ValueError(
             title="Group levels mismatch",
             detail=f"Group '{var}' expected levels {tuple(expected_levels)}, but estimates include {sorted(set(got_levels))}.",
-            code="GROUP_LEVELS_MISMATCH",
+            code=Code.GROUP_LEVELS_MISMATCH,
             where=where,
             param=var,
             expected=list(expected_levels),
@@ -443,3 +461,20 @@ class _Constructors:
             hint=hint,
             docs_url=docs_url,
         )
+
+    @classmethod
+    def param_renamed(
+        cls, *, where: Optional[str], method: str, old: str, new: str, note: str = ""
+    ) -> Self:
+        return cls.TypeError(
+            title="Parameter renamed",
+            detail=f"'{method}' cannot be used here: `{old}=` was renamed to `{new}=`.",
+            code=Code.PARAM_RENAMED,
+            where=where,
+            param=old,
+            expected=new,
+            got=old,
+            hint=f"Replace {old}= with {new}=." + (f" {note}" if note else ""),
+        )
+
+    # ---- method-specific ---------------------------------------------------

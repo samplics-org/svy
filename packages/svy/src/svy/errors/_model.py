@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar, Optional
 
 from ._base import SvyError, SvyWarning
+from ._codes import Code
 
 
 @dataclass(eq=False)
@@ -14,7 +15,7 @@ class ModelError(SvyError):
     mathematical domain violations, singular matrices, or state issues.
     """
 
-    _DEFAULT_CODE: ClassVar[str] = "MODEL_ERROR"
+    _DEFAULT_CODE: ClassVar[str] = Code.MODEL_ERROR
 
     # ---- State Errors -------------------------------------------------------
 
@@ -29,7 +30,7 @@ class ModelError(SvyError):
         return cls.ValueError(
             title="Model not fitted",
             detail=f"Cannot call '{method}' because the model has not been fitted yet.",
-            code="MODEL_NOT_FITTED",
+            code=Code.MODEL_NOT_FITTED,
             where=where,
             hint=hint,
         )
@@ -52,7 +53,7 @@ class ModelError(SvyError):
         return cls.ValueError(
             title="Distribution domain violation",
             detail=f"The target data violates the requirements for family '{family}': {violation}.",
-            code="DOMAIN_VIOLATION",
+            code=Code.DOMAIN_VIOLATION,
             where=where,
             param="family",
             expected=f"valid range for {family}",
@@ -74,7 +75,7 @@ class ModelError(SvyError):
         return cls.ValueError(
             title="Singular design matrix",
             detail="The design matrix is singular (not invertible); parameters cannot be estimated uniquely.",
-            code="SINGULAR_MATRIX",
+            code=Code.SINGULAR_MATRIX,
             where=where,
             expected=f"full rank ({dim})",
             got=f"rank {rank}",
@@ -94,7 +95,7 @@ class ModelError(SvyError):
         return cls.RuntimeError(
             title="Convergence failed",
             detail=f"Optimization did not converge after {iterations} iterations.",
-            code="CONVERGENCE_FAILED",
+            code=Code.CONVERGENCE_FAILED,
             where=where,
             param="max_iter",
             extra={"tolerance": tol, "last_diff": last_diff},
@@ -113,7 +114,7 @@ class ModelError(SvyError):
         return cls.ValueError(
             title="Insufficient degrees of freedom",
             detail=f"Number of observations ({n_obs}) is too small for the number of parameters ({n_params}).",
-            code="INSUFFICIENT_DOF",
+            code=Code.INSUFFICIENT_DOF,
             where=where,
             expected=f"n > {n_params}",
             got=n_obs,

@@ -18,8 +18,7 @@ from svy.core.repwgts import (
     SdrWgts,
     resolve_rep_variant,
 )
-from svy.errors import DesignError
-from svy.errors._findings import WarnCode
+from svy.errors import Code, DesignError
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +347,7 @@ def test_design_units_alone_do_not_drive_the_derivation():
         s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jkn", stratum=None, psu=None)
     assert s._design.stratum == "stratum" and s._design.psu == "psu"
     assert s._design.rep_wgts.rep_coefs is None  # not derived from the Design
-    assert WarnCode.JACKKNIFE_COEFS_UNAVAILABLE in {w.code for w in s.warnings.list()}
+    assert Code.JACKKNIFE_COEFS_UNAVAILABLE in {w.code for w in s.warnings.list()}
     with pytest.raises(DesignError):
         s._design.rep_wgts.coefficients()
 
@@ -392,13 +391,13 @@ def test_an_unspecifiable_kind_still_falls_back_and_warns():
     assert s._design.rep_wgts.kind is None
     assert s._design.rep_wgts.coefficients() == pytest.approx([2 / 3] * 3)
     codes = {w.code for w in s.warnings.list()}
-    assert WarnCode.JACKKNIFE_KIND_UNSPECIFIED in codes
+    assert Code.JACKKNIFE_KIND_UNSPECIFIED in codes
 
 
 def test_unspecified_kind_on_an_unstratified_design_is_silent():
     s = _jk_sample([1, 1, 1, 1], n_reps=4)
     codes = {w.code for w in s.warnings.list()}
-    assert WarnCode.JACKKNIFE_KIND_UNSPECIFIED not in codes
+    assert Code.JACKKNIFE_KIND_UNSPECIFIED not in codes
 
 
 def test_a_kind_contradicted_by_the_units_is_an_error():
@@ -417,7 +416,7 @@ def test_a_kind_that_matches_no_scheme_only_warns():
     with pytest.warns(svy.SvyWarning, match=r"\[JACKKNIFE_KIND_UNSPECIFIED\]"):
         s = _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=3, kind="jkn")
     codes = {w.code for w in s.warnings.list()}
-    assert WarnCode.JACKKNIFE_KIND_UNSPECIFIED in codes
+    assert Code.JACKKNIFE_KIND_UNSPECIFIED in codes
 
 
 # =============================================================================

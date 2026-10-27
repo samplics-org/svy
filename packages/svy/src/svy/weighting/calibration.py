@@ -33,7 +33,7 @@ import msgspec
 import numpy as np
 import polars as pl
 
-from svy.errors import WeightingWarning
+from svy.errors import Code, WeightingWarning
 
 
 try:
@@ -53,7 +53,7 @@ from svy.core.design import WgtAdjustment
 from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import Category, Number
 from svy.errors import WeightingError
-from svy.errors._findings import Severity, WarnCode, check_on_finding, finding_level
+from svy.errors._findings import Severity, check_on_finding, finding_level
 from svy.errors._weighting import show
 from svy.weighting._calibration_utils import _expand_term, _match_term_targets
 from svy.weighting._engine import (
@@ -144,7 +144,7 @@ def build_aux_matrix(
         X = df.select(final_exprs).to_numpy()
         return X, {lab: np.nan for lab in all_labels}
 
-    domains = template_levels(df, by_n, na=na, na_label=na_label, where=where, code="BY_NA")
+    domains = template_levels(df, by_n, na=na, na_label=na_label, where=where, code=Code.BY_NA)
     if na == "drop":
         df = df.filter(pl.all_horizontal([pl.col(c).is_not_null() for c in by_n]))
     X = df.select(final_exprs).to_numpy()
@@ -162,7 +162,7 @@ def _refuse_by_nulls(df: pl.DataFrame, by_cols: list[str], *, where: str) -> Non
         raise WeightingError.ValueError(
             title="Missing values in `by` columns",
             detail=f"Nulls found in {listed}; calibration needs a domain for every row.",
-            code="BY_NA",
+            code=Code.BY_NA,
             where=where,
             param="by",
             expected=0,
@@ -540,7 +540,7 @@ def calibrate_matrix(
         raise WeightingError.ValueError(
             title="No targets",
             detail="calibrate_matrix() needs controls=: one total per column of aux_vars.",
-            code="CONTROLS_MISSING",
+            code=Code.CONTROLS_MISSING,
             where=where,
             param="controls",
             hint="e.g. controls=[N, total_x], in aux_vars column order, or keyed by labels=.",
@@ -573,7 +573,7 @@ def calibrate_matrix(
         raise WeightingError.ValueError(
             title="Shape mismatch",
             detail=f"aux_vars has {X.shape[0]} rows; data has {df.height}.",
-            code="SHAPE_MISMATCH",
+            code=Code.SHAPE_MISMATCH,
             where=where,
             param="aux_vars",
             expected={"rows": df.height, "cols": X.shape[1]},
@@ -603,7 +603,7 @@ def calibrate_matrix(
             raise WeightingError.ValueError(
                 title="Controls do not match aux_vars",
                 detail=f"`{param}` has {len(vec)} totals; aux_vars has {X.shape[1]} columns.",
-                code="SHAPE_MISMATCH",
+                code=Code.SHAPE_MISMATCH,
                 where=where,
                 param=param,
                 expected={"totals": X.shape[1]},
@@ -721,7 +721,7 @@ def calibrate_matrix(
             if len(_w_pos) < trimming.min_cell_size:
                 sample.warn(
                     WeightingWarning(
-                        code=WarnCode.DOMAIN_SKIPPED,
+                        code=Code.DOMAIN_SKIPPED,
                         title="Domain skipped — cell too small",
                         detail=(
                             f"Trim domain {_label!r} has {len(_w_pos)} positive-weight "

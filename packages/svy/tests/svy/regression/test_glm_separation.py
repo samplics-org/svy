@@ -22,7 +22,7 @@ import pytest
 
 import svy
 
-from svy.errors._findings import WarnCode
+from svy.errors import Code
 
 
 SEP = r"ignore:\[GLM_SEPARATION\]:svy.SvyWarning"
@@ -78,7 +78,7 @@ def _coef(fit, term):
 
 
 def _findings(sample):
-    return [w for w in sample.warnings if w.code == WarnCode.GLM_SEPARATION]
+    return [w for w in sample.warnings if w.code == Code.GLM_SEPARATION]
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +148,7 @@ def test_every_binomial_link(data, link):
     assert [c.term for c in fit.coefs if np.isnan(c.se)] == ["g_c"]
 
 
-@pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyWarning")
+@pytest.mark.filterwarnings(r"ignore:\[GLM_NOT_CONVERGED\]:svy.SvyWarning")
 def test_cauchit_separation_found_without_convergence(data):
     # Cauchit's heavy tail drifts slowly: IRLS runs out of iterations, and the
     # separated rows are still found at the boundary.
@@ -156,7 +156,7 @@ def test_cauchit_separation_found_without_convergence(data):
     with pytest.warns(svy.SvyWarning, match=r"\[GLM_SEPARATION\]"):
         fit = s.glm.fit(y="y", x=["x", svy.Cat("g")], family="binomial", link="cauchit").fitted
     assert [c.term for c in fit.coefs if np.isnan(c.se)] == ["g_c"]
-    assert {w.code for w in s.warnings} == {"MAX_ITER_REACHED", "GLM_SEPARATION"}
+    assert {w.code for w in s.warnings} == {"GLM_NOT_CONVERGED", "GLM_SEPARATION"}
 
 
 @pytest.mark.parametrize("theta", [None, 2.0])

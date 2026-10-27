@@ -5,7 +5,7 @@ calibrate, calibrate_matrix).
 - The cycle iterates: the bounds are checked on the readjusted weights, so a
   feasible cap that needs several cycles converges given enough of them.
 - A failed cycle whose controls are out of reach of the bounds is reported as
-  TRIM_INFEASIBLE instead of CONVERGENCE_FAILED / MAX_ITER_REACHED, following
+  TRIM_INFEASIBLE instead of WEIGHTING_NOT_CONVERGED / WEIGHTING_NOT_CONVERGED, following
   on_nonconvergence.
 """
 
@@ -19,8 +19,8 @@ import polars as pl
 import pytest
 
 from svy import Cat, Cross, Design, Sample, SvyWarning, Threshold, TrimConfig, col
-from svy.errors import WeightingError
-from svy.errors._findings import Severity, WarnCode
+from svy.errors import Code, WeightingError
+from svy.errors._findings import Severity
 
 
 INFEASIBLE = "TRIM_INFEASIBLE"
@@ -109,7 +109,7 @@ def test_too_few_cycles_is_still_non_convergence(tight, name):
     call = _cycles(10.0, 6.0, TrimConfig(upper=4.0, max_iter=2))[name]
     with pytest.raises(WeightingError) as ei:
         call(tight)
-    assert ei.value.code == "CONVERGENCE_FAILED"
+    assert ei.value.code == "WEIGHTING_NOT_CONVERGED"
     assert "max_iter" in ei.value.hint
 
 
@@ -236,7 +236,7 @@ def test_rake_relative_threshold_is_not_diagnosed(tight):
             controls={"c": {"a": 10, "b": 30}},
             trimming=TrimConfig(upper=Threshold("median", 1.5), max_iter=3),
         )
-    assert ei.value.code == "CONVERGENCE_FAILED"
+    assert ei.value.code == "WEIGHTING_NOT_CONVERGED"
 
 
 def test_rake_names_the_margin_level():
@@ -334,7 +334,7 @@ def test_calibrate_untrimmed_units_are_unbounded():
         )
     w = out.data["calib_wgt"].to_numpy()
     assert w[10:].sum() == pytest.approx(100.0)
-    assert out.warnings.list(code=WarnCode.DOMAIN_SKIPPED)
+    assert out.warnings.list(code=Code.DOMAIN_SKIPPED)
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +351,7 @@ def test_warn_records_trim_infeasible_once(tight, name):
     assert found.level == Severity.WARNING
     assert f"{_WGT[name]!r} holds the last cycle's weights" in found.detail
     assert "NOT been modified" not in found.detail
-    assert not out.warnings.list(code=WarnCode.MAX_ITER_REACHED)
+    assert not out.warnings.list(code=Code.WEIGHTING_NOT_CONVERGED)
     assert _WGT[name] in out.data.columns
     json.dumps(found.to_dict())
 

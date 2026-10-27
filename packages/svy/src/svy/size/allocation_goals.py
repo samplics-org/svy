@@ -14,7 +14,7 @@ from svy.engine.size_and_power.allocation import (
     _neyman_allocation,
     _proportional_allocation,
 )
-from svy.errors import SelectionError
+from svy.errors import Code, SelectionError
 from svy.size.types import Allocation, TargetAllocation
 
 
@@ -31,7 +31,7 @@ def _engine_error(ex: ValueError) -> SelectionError:
     return SelectionError.ValueError(
         title="Allocation not possible",
         detail=str(ex),
-        code="ALLOCATION_INVALID",
+        code=Code.ALLOCATION_INVALID,
         where=_WHERE,
     )
 

@@ -19,7 +19,7 @@ import polars as pl
 
 from svy.core.constants import BOOKKEEPING_COLUMNS
 from svy.core.design import Design, PopSize
-from svy.errors import DataError, DesignWarning
+from svy.errors import Code, DataError, DesignWarning
 
 
 if TYPE_CHECKING:
@@ -448,7 +448,7 @@ def _auto_clean_design(target: "Sample") -> None:
     if removed:
         target.warn(
             DesignWarning(
-                code="DESIGN_FIELDS_REMOVED",
+                code=Code.DESIGN_FIELDS_REMOVED,
                 title="Design fields removed",
                 detail="Removed from the design with the dropped columns: "
                 + ", ".join(removed)

@@ -37,7 +37,7 @@ import pytest
 from scipy import stats
 
 from svy import Design, Sample, col
-from svy.errors._findings import WarnCode
+from svy.errors import Code
 
 
 ALPHA = 0.05
@@ -124,7 +124,7 @@ def _beta_ci(p: float, se: float, n_d: int, df: int) -> tuple[float, float]:
 
 
 def _boundary_warnings(sample: Sample) -> list:
-    return sample.warnings.list(code=WarnCode.PROP_CI_BOUNDARY)
+    return sample.warnings.list(code=Code.PROP_CI_BOUNDARY)
 
 
 # =============================================================================
@@ -372,7 +372,7 @@ class TestReplication:
         )
         for e in r.estimates:
             assert math.isnan(e.lci) and math.isnan(e.uci)
-        assert [f.code for f in r.findings] == [WarnCode.PROP_CI_BOUNDARY]
+        assert [f.code for f in r.findings] == [Code.PROP_CI_BOUNDARY]
         assert _boundary_warnings(s)
 
 
@@ -448,7 +448,7 @@ class TestBoundary:
             e = cells[(by_level, lv)]
             assert e.est == p
             assert math.isnan(e.lci) and math.isnan(e.uci)
-        assert [f.code for f in r.findings] == [WarnCode.PROP_CI_BOUNDARY]
+        assert [f.code for f in r.findings] == [Code.PROP_CI_BOUNDARY]
         (w,) = _boundary_warnings(s)
         assert "korn-graubard" in w.hint
         assert w.got == method

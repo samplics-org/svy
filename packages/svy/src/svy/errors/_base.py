@@ -14,6 +14,7 @@ from enum import IntEnum
 from textwrap import indent as _indent
 from typing import Any, ClassVar, Mapping, Optional
 
+from ._codes import Code, code_url
 from ._common import _Constructors
 
 
@@ -428,10 +429,10 @@ class SvyError(_Report, _Constructors, Exception):
     that picks it, ``EstimationError.missing_columns(...)``.
     """
 
-    code: str = "SVY_ERROR"
+    code: str = Code.SVY_ERROR
     http_status: int = 400  # kept for potential API surfaces
 
-    _DEFAULT_CODE: ClassVar[str] = "SVY_ERROR"
+    _DEFAULT_CODE: ClassVar[str] = Code.SVY_ERROR
     # True on a class that already is one builtin, so it gets no kinds of its own.
     _IS_KIND: ClassVar[bool] = False
 
@@ -441,8 +442,11 @@ class SvyError(_Report, _Constructors, Exception):
             _add_kinds(cls)
 
     def __post_init__(self) -> None:
-        if self.code == "SVY_ERROR":
+        if self.code == Code.SVY_ERROR:
             self.code = self._DEFAULT_CODE
+        self.code = str(self.code)
+        if self.docs_url is None:
+            self.docs_url = code_url(self.code)
 
 
 _add_kinds(SvyError)
@@ -457,7 +461,7 @@ class SvyWarning(_Report, UserWarning):
     ``warnings.filterwarnings("ignore", category=svy.SvyWarning)``.
     """
 
-    code: str = "SVY_WARNING"
+    code: str = Code.SVY_WARNING
     level: Severity = Severity.WARNING
     var: Optional[str] = None
     rows: Optional[tuple[int, ...]] = None
@@ -481,6 +485,9 @@ class SvyWarning(_Report, UserWarning):
     def __post_init__(self) -> None:
         if self.rows is not None and not isinstance(self.rows, tuple):
             self.rows = tuple(self.rows)
+        self.code = str(self.code)
+        if self.docs_url is None:
+            self.docs_url = code_url(self.code)
 
     def _level_name(self) -> str:
         return self.level.name

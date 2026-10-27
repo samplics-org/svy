@@ -18,12 +18,12 @@ import polars as pl
 import pytest
 
 from svy import Cat, Design, Sample, SvyWarning, TrimConfig, col
-from svy.errors import UsageError, WeightingError
-from svy.errors._findings import Severity, WarnCode
+from svy.errors import Code, UsageError, WeightingError
+from svy.errors._findings import Severity
 from svy.weighting.base import Weighting
 
 
-MAXIT = WarnCode.MAX_ITER_REACHED
+MAXIT = Code.WEIGHTING_NOT_CONVERGED
 NOTMET = "CALIBRATION_NOT_MET"
 
 
@@ -351,21 +351,21 @@ NONCONV = {
     "rake": (
         "rk",
         lambda s, **k: s.weighting.rake(controls=RK, max_iter=3, tol=1e-20, **k),
-        "CONVERGENCE_FAILED",
+        "WEIGHTING_NOT_CONVERGED",
         MAXIT,
         "rk_wgt",
     ),
     "rake_trim_cycle": (
         "tight",
         lambda s, **k: s.weighting.rake(controls={"c": {"a": 10, "b": 6}}, trimming=CFG, **k),
-        "CONVERGENCE_FAILED",
+        "WEIGHTING_NOT_CONVERGED",
         MAXIT,
         "rk_wgt",
     ),
     "poststratify_trim_cycle": (
         "tight",
         lambda s, **k: s.weighting.poststratify({"a": 10, "b": 6}, cells="c", trimming=CFG, **k),
-        "CONVERGENCE_FAILED",
+        "WEIGHTING_NOT_CONVERGED",
         MAXIT,
         "ps_wgt",
     ),
@@ -374,7 +374,7 @@ NONCONV = {
         lambda s, **k: s.weighting.calibrate(
             controls={Cat("c"): {"a": 10, "b": 6}}, trimming=CFG, **k
         ),
-        "CONVERGENCE_FAILED",
+        "WEIGHTING_NOT_CONVERGED",
         MAXIT,
         "calib_wgt",
     ),
@@ -383,7 +383,7 @@ NONCONV = {
         lambda s, **k: s.weighting.calibrate(
             controls={Cat("c"): {"a": 10, "b": 6}}, where=col("w") > 0, trimming=CFG, **k
         ),
-        "CONVERGENCE_FAILED",
+        "WEIGHTING_NOT_CONVERGED",
         MAXIT,
         "calib_wgt",
     ),
@@ -397,7 +397,7 @@ NONCONV = {
             trimming=CFG,
             **k,
         ),
-        "CONVERGENCE_FAILED",
+        "WEIGHTING_NOT_CONVERGED",
         MAXIT,
         "calib_wgt",
     ),
@@ -431,21 +431,21 @@ NONCONV = {
     "standardize_trim_cycle": (
         "tight",
         lambda s, **k: s.weighting.standardize("c", shares={"a": 5, "b": 1}, trimming=CFG, **k),
-        "CONVERGENCE_FAILED",
+        "WEIGHTING_NOT_CONVERGED",
         MAXIT,
         "std_wgt",
     ),
     "adjust_trimming": (
         "tight_rr",
         lambda s, **k: s.weighting.adjust("st", trimming=ONE_PASS, **k),
-        "CONVERGENCE_FAILED",
+        "WEIGHTING_NOT_CONVERGED",
         MAXIT,
         "nr_wgt",
     ),
     "trim": (
         "tight",
         lambda s, **k: s.weighting.trim(upper=5.0, max_iter=1, tol=1e-20, min_cell_size=1, **k),
-        "CONVERGENCE_FAILED",
+        "WEIGHTING_NOT_CONVERGED",
         MAXIT,
         "trim_wgt",
     ),
@@ -454,7 +454,7 @@ NONCONV = {
         lambda s, **k: s.weighting.trim(
             upper=5.0, max_iter=1, tol=1e-20, min_cell_size=1, where=col("w") > 0, **k
         ),
-        "CONVERGENCE_FAILED",
+        "WEIGHTING_NOT_CONVERGED",
         MAXIT,
         "trim_wgt",
     ),
@@ -463,7 +463,7 @@ NONCONV = {
         lambda s, **k: s.weighting.trim(
             upper=5.0, by="dom", max_iter=1, tol=1e-20, min_cell_size=1, **k
         ),
-        "CONVERGENCE_FAILED",
+        "WEIGHTING_NOT_CONVERGED",
         MAXIT,
         "trim_wgt",
     ),
@@ -574,7 +574,7 @@ def test_weights_only_ignore_returns_array_quietly(cal):
 def test_ignored_finding_does_not_block_a_later_warn(rk):
     # INFO and WARNING records of one finding are separate entries
     out = rk.weighting.rake(controls=RK, max_iter=3, tol=1e-20, on_nonconvergence="ignore")
-    with pytest.warns(SvyWarning, match=r"\[MAX_ITER_REACHED\]"):
+    with pytest.warns(SvyWarning, match=r"\[WEIGHTING_NOT_CONVERGED\]"):
         out = out.weighting.rake(
             controls=RK, max_iter=3, tol=1e-20, on_nonconvergence="warn", wgt_name="rk2"
         )
@@ -699,14 +699,14 @@ def test_trim_error_names_only_the_failing_domain(two_domains):
 
 
 def test_trim_warn_records_one_finding_per_failing_domain(two_domains):
-    with pytest.warns(SvyWarning, match=r"\[MAX_ITER_REACHED\]"):
+    with pytest.warns(SvyWarning, match=r"\[WEIGHTING_NOT_CONVERGED\]"):
         out = two_domains.weighting.trim(
             upper=5.0, by="dom", max_iter=1, tol=1e-20, min_cell_size=1, on_nonconvergence="warn"
         )
     found = _found(out, MAXIT)
     assert [w.got["domain"] for w in found] == ["A"]
     assert found[0].param == "max_iter"
-    audits = _found(out, WarnCode.WEIGHT_ADJ_AUDIT)
+    audits = _found(out, Code.WEIGHT_ADJ_AUDIT)
     assert sorted(a.extra["domain"] for a in audits) == ["A", "B"]
 
 
@@ -728,7 +728,7 @@ def test_trim_in_place_column_error_leaves_weight(tight):
 
 
 def test_adjust_trimming_finding_names_the_config(tight_rr):
-    with pytest.warns(SvyWarning, match=r"\[MAX_ITER_REACHED\]"):
+    with pytest.warns(SvyWarning, match=r"\[WEIGHTING_NOT_CONVERGED\]"):
         out = tight_rr.weighting.adjust("st", trimming=ONE_PASS, on_nonconvergence="warn")
     assert _found(out, MAXIT)[0].param == "trimming.max_iter"
     with pytest.raises(WeightingError) as ei:
@@ -741,7 +741,7 @@ def test_adjust_trimming_error_either_design_mode(tight_rr, update):
     data, design = tight_rr.data, tight_rr.design
     with pytest.raises(WeightingError) as ei:
         tight_rr.weighting.adjust("st", trimming=ONE_PASS, update_design_wgts=update, inplace=True)
-    assert ei.value.code == "CONVERGENCE_FAILED"
+    assert ei.value.code == "WEIGHTING_NOT_CONVERGED"
     assert tight_rr.data.equals(data) and tight_rr.design == design
 
 
@@ -789,7 +789,7 @@ def test_rake_trim_cycle_error_reports_trimming_cap(tight):
             controls=RAKE_TIGHT, max_iter=50, trimming=TrimConfig(upper=4.0, max_iter=3)
         )
     err = ei.value
-    assert err.code == "CONVERGENCE_FAILED"
+    assert err.code == "WEIGHTING_NOT_CONVERGED"
     assert err.got["max_iter"] == 3 and err.got["trim_bounds_met"] is False
     assert "after 3 iterations" in err.detail
     assert "trimming.max_iter (now 3)" in err.hint

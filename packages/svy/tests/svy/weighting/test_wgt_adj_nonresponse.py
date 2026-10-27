@@ -490,7 +490,7 @@ def test_adjust_trim_none_unchanged():
 
 
 # max_iter=1 leaves the redistribution unconverged; the single pass is what is checked.
-@pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyWarning")
+@pytest.mark.filterwarnings(r"ignore:\[WEIGHTING_NOT_CONVERGED\]:svy.SvyWarning")
 def test_adjust_trim_no_iteration():
     """Adjustment trimming is one-shot — TrimConfig.max_iter controls
     only the internal trim redistribution, not an outer cycle."""

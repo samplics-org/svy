@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import ClassVar, Optional
 
 from ._base import SvyError, SvyWarning
+from ._codes import Code
 
 
 @dataclass(eq=False)
@@ -14,7 +15,7 @@ class DatasetError(SvyError):
     service failures, unknown slugs, hash mismatches, and related issues.
     """
 
-    _DEFAULT_CODE: ClassVar[str] = "DATASET_ERROR"
+    _DEFAULT_CODE: ClassVar[str] = Code.DATASET_ERROR
 
     # ---- Catalog reachability ---------------------------------------------
 
@@ -31,7 +32,7 @@ class DatasetError(SvyError):
         return cls.OSError(
             title="Catalog unreachable",
             detail=f"Could not reach the dataset catalog at {url}: {reason}",
-            code="CATALOG_UNREACHABLE",
+            code=Code.CATALOG_UNREACHABLE,
             where=where,
             hint=hint,
             docs_url=docs_url,
@@ -51,7 +52,7 @@ class DatasetError(SvyError):
         return cls.OSError(
             title="Catalog request failed",
             detail=f"Catalog at {url} returned HTTP {status}.",
-            code="CATALOG_BAD_STATUS",
+            code=Code.CATALOG_BAD_STATUS,
             where=where,
             hint=hint,
             docs_url=docs_url,
@@ -75,7 +76,7 @@ class DatasetError(SvyError):
                 "Reaching the online dataset catalog needs the optional 'httpx' "
                 "package, which is not installed."
             ),
-            code="REMOTE_UNAVAILABLE",
+            code=Code.REMOTE_UNAVAILABLE,
             where=where,
             param="source",
             hint=hint,
@@ -96,7 +97,7 @@ class DatasetError(SvyError):
         return cls.KeyError(
             title="Dataset not found",
             detail=f"No dataset in the catalog has slug {slug!r}.",
-            code="DATASET_NOT_FOUND",
+            code=Code.DATASET_NOT_FOUND,
             where=where,
             param="name",
             got=slug,
@@ -122,7 +123,7 @@ class DatasetError(SvyError):
         return cls.OSError(
             title="Dataset download failed",
             detail=f"Could not download dataset {slug!r} from {url}: {reason}",
-            code="DATASET_DOWNLOAD_FAILED",
+            code=Code.DATASET_DOWNLOAD_FAILED,
             where=where,
             hint=hint,
             docs_url=docs_url,
@@ -145,7 +146,7 @@ class DatasetError(SvyError):
         return cls.KeyError(
             title="Dataset not bundled",
             detail=(f"Dataset {slug!r} is not available offline as a bundled dataset."),
-            code="DATASET_NOT_BUNDLED",
+            code=Code.DATASET_NOT_BUNDLED,
             where=where,
             param="source",
             got="bundled",
@@ -174,7 +175,7 @@ class DatasetError(SvyError):
         return cls.FileNotFoundError(
             title="Bundled dataset unavailable",
             detail=f"The bundled copy of dataset {slug!r} could not be read: {reason}",
-            code="BUNDLED_UNAVAILABLE",
+            code=Code.BUNDLED_UNAVAILABLE,
             where=where,
             param="source",
             got="bundled",
@@ -198,7 +199,7 @@ class DatasetError(SvyError):
         return cls.ValueError(
             title="Invalid dataset slug",
             detail=f"Dataset slug {slug!r} contains disallowed characters.",
-            code="DATASET_INVALID_SLUG",
+            code=Code.DATASET_INVALID_SLUG,
             where=where,
             param="slug",
             got=slug,
@@ -221,7 +222,7 @@ class DatasetError(SvyError):
         return cls.ValueError(
             title="Insecure dataset download URL",
             detail=f"Refusing to download dataset {slug!r} over an insecure URL.",
-            code="DATASET_INSECURE_URL",
+            code=Code.DATASET_INSECURE_URL,
             where=where,
             param="download_url",
             expected="https://...",
@@ -245,7 +246,7 @@ class DatasetError(SvyError):
         return cls.ValueError(
             title="Dataset integrity check failed",
             detail=f"SHA-256 mismatch for dataset {slug!r}.",
-            code="DATASET_SHA_MISMATCH",
+            code=Code.DATASET_SHA_MISMATCH,
             where=where,
             param="sha256",
             expected=expected,

@@ -18,7 +18,8 @@ import pytest
 import svy
 
 from svy import Design, Sample, SvyWarning
-from svy.errors._findings import Severity, WarnCode, WarningStore
+from svy.errors import Code
+from svy.errors._findings import Severity, WarningStore
 
 
 def _null_cell_sample() -> Sample:
@@ -48,7 +49,7 @@ def test_recorded_and_raised_once_at_the_callers_line():
     assert rec[0].filename == __file__
     assert str(rec[0].message).startswith("[CELLS_NULL_UNADJUSTED] Rows with a null left")
     assert issubclass(rec[0].category, UserWarning)
-    assert len(out.warnings.list(code=WarnCode.CELLS_NULL_UNADJUSTED)) == 1
+    assert len(out.warnings.list(code=Code.CELLS_NULL_UNADJUSTED)) == 1
 
 
 def test_category_filter_silences_but_still_records():
@@ -58,7 +59,7 @@ def test_category_filter_silences_but_still_records():
         warnings.filterwarnings("ignore", category=SvyWarning)
         out = _ps(s)
     assert not _svy_records(rec)
-    assert out.warnings.list(code=WarnCode.CELLS_NULL_UNADJUSTED)
+    assert out.warnings.list(code=Code.CELLS_NULL_UNADJUSTED)
 
 
 def test_warnings_as_errors_turn_a_finding_into_an_exception():
@@ -68,7 +69,7 @@ def test_warnings_as_errors_turn_a_finding_into_an_exception():
         with pytest.raises(SvyWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
             _ps(s)
     # the failed default-mode call left the caller's sample alone
-    assert not s.warnings.list(code=WarnCode.CELLS_NULL_UNADJUSTED)
+    assert not s.warnings.list(code=Code.CELLS_NULL_UNADJUSTED)
 
 
 def test_info_entries_are_recorded_not_raised():
@@ -77,7 +78,7 @@ def test_info_entries_are_recorded_not_raised():
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
         out = s.weighting.trim(upper=15.0)
-    assert out.warnings.list(code=WarnCode.WEIGHT_ADJ_AUDIT)
+    assert out.warnings.list(code=Code.WEIGHT_ADJ_AUDIT)
     assert not _svy_records(rec)
 
 
@@ -113,8 +114,8 @@ def test_forks_do_not_raise_their_parents_findings_again():
         b = a.weighting.normalize(wgt_name="n2")
         c = a.wrangling.mutate({"z": pl.lit(1)})
     assert not _svy_records(rec)
-    assert b.warnings.list(code=WarnCode.CELLS_NULL_UNADJUSTED)
-    assert c.warnings.list(code=WarnCode.CELLS_NULL_UNADJUSTED)
+    assert b.warnings.list(code=Code.CELLS_NULL_UNADJUSTED)
+    assert c.warnings.list(code=Code.CELLS_NULL_UNADJUSTED)
 
 
 def test_record_is_json_ready():
@@ -351,5 +352,5 @@ def test_trim_without_redistribution_records_the_sum_change_quietly():
     s = Sample(df, Design(wgt="w"))
     msgs = _raised(lambda: s.weighting.trim(upper=5.0, redistribute=False, inplace=True))
     assert not msgs
-    (w,) = s.warnings.list(code=WarnCode.WEIGHT_SUM_CHANGED)
+    (w,) = s.warnings.list(code=Code.WEIGHT_SUM_CHANGED)
     assert w.level == Severity.INFO

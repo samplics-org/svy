@@ -32,9 +32,9 @@ from svy.core.singleton import (
 )
 from svy.core.types import WhereArg
 from svy.core.variance_method import normalize_variance_method, resolve_variance_method
-from svy.errors import EstimationError, EstimationWarning
+from svy.errors import Code, EstimationError, EstimationWarning
 from svy.errors._api import guided_getattr
-from svy.errors._findings import Severity, SvyWarning, WarnCode
+from svy.errors._findings import Severity, SvyWarning
 from svy.estimation.estimate import (
     Estimate,
     EstimateList,
@@ -110,7 +110,7 @@ _PROP_CI_TOL = 1e-12
 def prop_ci_boundary_note(findings: Sequence[Any]) -> str | None:
     """One note for every ``PROP_CI_BOUNDARY`` finding of a call: the rows of
     several results (a list of variables) counted together, split by variable."""
-    found = [f for f in findings if f.code == WarnCode.PROP_CI_BOUNDARY and f.extra]
+    found = [f for f in findings if f.code == Code.PROP_CI_BOUNDARY and f.extra]
     if not found:
         return None
     counts: dict[str, int] = {}
@@ -547,7 +547,7 @@ class Estimation:
                     "behaviour) or 'wr' (with replacement). A boolean cannot say "
                     "which reference is wanted."
                 ),
-                code="DEFF_BOOL_REJECTED",
+                code=Code.DEFF_BOOL_REJECTED,
                 where="estimation.deff",
                 param="deff",
                 expected="'wor', 'wr', or None",
@@ -566,7 +566,7 @@ class Estimation:
             raise EstimationError.ValueError(
                 title=f"Unknown deff reference {deff!r}",
                 detail="deff selects the SRS reference: 'wor' or 'wr'.",
-                code="DEFF_REFERENCE_UNKNOWN",
+                code=Code.DEFF_REFERENCE_UNKNOWN,
                 where="estimation.deff",
                 param="deff",
                 expected="'wor', 'wr', or None",
@@ -884,7 +884,7 @@ class Estimation:
                     "this is a census, in which case there is no sampling "
                     "variance to compare against."
                 ),
-                code="DEFF_NOT_COMPUTABLE",
+                code=Code.DEFF_NOT_COMPUTABLE,
                 where="estimation.deff",
                 param="deff",
                 expected="weights summing to more than the sample size",
@@ -1030,7 +1030,7 @@ class Estimation:
         )
         kept = self._sample.warn(
             EstimationWarning(
-                code=WarnCode.PROP_CI_BOUNDARY,
+                code=Code.PROP_CI_BOUNDARY,
                 title="Confidence interval undefined at a proportion of 0 or 1",
                 detail=(
                     f"ci_method='{method}' has no interval when the estimated proportion "
@@ -1994,7 +1994,7 @@ class Estimation:
                         "same length (or one of them a single column, which is "
                         "broadcast to the other)."
                     ),
-                    code="RATIO_LENGTH_MISMATCH",
+                    code=Code.RATIO_LENGTH_MISMATCH,
                     where="estimation.ratio",
                     param="x",
                     expected=f"len == {len(ys)} (or a single column)",
