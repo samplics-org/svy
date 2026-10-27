@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from typing import TYPE_CHECKING, Any, Literal, Mapping, NamedTuple, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Mapping, NamedTuple, Self, Sequence
 
 import msgspec
 import numpy as np
@@ -13,6 +13,7 @@ from svy.core.enumerations import PopParam, QuantileMethod
 from svy.core.types import Category, Number, RandomState
 from svy.errors import Code
 from svy.errors._api import guided_getattr
+from svy.errors._findings import merge_findings
 
 # Import central UI helpers
 from svy.ui.printing import (
@@ -1113,6 +1114,10 @@ class Estimate:
             self.layout = layout
         return self
 
+    def _add_findings(self, found: Sequence[SvyWarning]) -> Self:
+        self.findings = list(merge_findings(self.findings, found))
+        return self
+
 
 class EstimateList(list):
     """A list of :class:`Estimate` results that prints as one table.
@@ -1346,3 +1351,8 @@ class EstimateList(list):
         content.extend(Text(n, style="dim") for n in notes)
 
         yield make_panel(content, title=self._title(), obj=self, kind="estimate")
+
+    def _add_findings(self, found: Sequence[SvyWarning]) -> Self:
+        for member in self._members():
+            member._add_findings(found)
+        return self

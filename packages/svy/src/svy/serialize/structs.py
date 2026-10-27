@@ -21,7 +21,7 @@ import msgspec
 # Constants
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = "svy-result/0.10"
+SCHEMA_VERSION = "svy-result/0.11"
 
 #: A design is an input, read back into a live ``Design``: its own schema.
 DESIGN_SCHEMA_VERSION = "svy-design/0.1"
@@ -277,6 +277,18 @@ class GLMStatsData(msgspec.Struct, kw_only=True, frozen=True):
 # ---------------------------------------------------------------------------
 
 
+class FindingData(msgspec.Struct, kw_only=True, frozen=True):
+    """A warning the call that made a result raised (``svy.SvyWarning``)."""
+
+    code: str
+    level: str
+    title: str
+    detail: str
+    hint: str | None = None
+    var: str | None = None
+    got: Any = None
+
+
 @_kinded("estimate")
 class EstimateData(msgspec.Struct, kw_only=True, frozen=True):
     """
@@ -315,6 +327,9 @@ class EstimateData(msgspec.Struct, kw_only=True, frozen=True):
     #: The categories of each Enum variable whose levels the rows carry, in the
     #: Enum's order, which is the order the table lists those levels in.
     level_orders: dict[str, list[str]] | None = None
+    #: The warnings the call raised, at WARNING level; None when there were none,
+    #: or decoded from an older payload.
+    findings: list[FindingData] | None = None
 
 
 @_kinded("estimate_list")
@@ -347,6 +362,9 @@ class TTestOneGroupData(msgspec.Struct, kw_only=True, frozen=True):
     diff: list[DiffEstData] = []
     estimates: list[TtestEstData] = []
     stats: TTestStatsData | None = None
+    #: The warnings the call raised, at WARNING level; None when there were none,
+    #: or decoded from an older payload.
+    findings: list[FindingData] | None = None
 
 
 @_kinded("ttest_two_groups")
@@ -366,6 +384,9 @@ class TTestTwoGroupsData(msgspec.Struct, kw_only=True, frozen=True):
     diff: list[DiffEstData] = []
     estimates: list[TtestEstData] = []
     stats: TTestStatsData | None = None
+    #: The warnings the call raised, at WARNING level; None when there were none,
+    #: or decoded from an older payload.
+    findings: list[FindingData] | None = None
 
 
 @_kinded("ttest_one_group_by")
@@ -385,6 +406,9 @@ class TTestOneGroupByData(msgspec.Struct, kw_only=True, frozen=True):
     alpha: float = 0.05
     where_clause: str | None = None
     results: list[TTestOneGroupData] = []
+    #: The warnings the call raised, at WARNING level; None when there were none,
+    #: or decoded from an older payload.
+    findings: list[FindingData] | None = None
 
 
 @_kinded("ttest_two_groups_by")
@@ -404,6 +428,9 @@ class TTestTwoGroupsByData(msgspec.Struct, kw_only=True, frozen=True):
     alpha: float = 0.05
     where_clause: str | None = None
     results: list[TTestTwoGroupsData] = []
+    #: The warnings the call raised, at WARNING level; None when there were none,
+    #: or decoded from an older payload.
+    findings: list[FindingData] | None = None
 
 
 @_kinded("table")
@@ -425,6 +452,9 @@ class TableData(msgspec.Struct, kw_only=True, frozen=True):
     #: "proportion", "percent" or "count"; None when decoded from an older
     #: payload, whose units were not recorded.
     units: str | None = None
+    #: The warnings the call raised, at WARNING level; None when there were none,
+    #: or decoded from an older payload.
+    findings: list[FindingData] | None = None
 
 
 @_kinded("glm_fit")
@@ -452,6 +482,9 @@ class GLMFitData(msgspec.Struct, kw_only=True, frozen=True):
     offset: str | None = None
     #: The predictors, in fit order; None when decoded from an older payload.
     terms: list[TermData] | None = None
+    #: The warnings the call raised, at WARNING level; None when there were none,
+    #: or decoded from an older payload.
+    findings: list[FindingData] | None = None
 
 
 @_kinded("glm_pred")

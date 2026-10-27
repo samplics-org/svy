@@ -45,6 +45,7 @@ from svy.serialize.structs import (
     EstimateData,
     EstimateListData,
     FDistData,
+    FindingData,
     GLMCoefData,
     GLMFitData,
     GLMPredData,
@@ -308,6 +309,17 @@ def _glm_stats_to_data(s: Any) -> GLMStatsData:
 _SERIALIZERS: dict[type, Callable[[Any], ResultData]] = {}
 
 
+def _findings_to_data(findings: Any) -> list[FindingData] | None:
+    """The WARNING-level findings of a result, JSON-ready; None when there are none."""
+    keep = ("code", "level", "title", "detail", "hint", "var", "got")
+    out = [
+        FindingData(**{k: d[k] for k in keep})
+        for d in (f.to_dict() for f in findings or ())
+        if d["level"] == "WARNING"
+    ]
+    return out or None
+
+
 def _register(cls: type) -> Callable[[Callable[[Any], ResultData]], Callable[[Any], ResultData]]:
     """Decorator: register a serializer function for a result class."""
 
@@ -349,6 +361,7 @@ def _serialize_estimate(result: Estimate) -> EstimateData:
         ]
         or None,
         level_orders=dict(result.level_orders) or None,
+        findings=_findings_to_data(result.findings),
     )
 
 
@@ -370,6 +383,7 @@ def _serialize_ttest_one_group(result: TTestOneGroup) -> TTestOneGroupData:
         diff=[_diff_est_to_data(d) for d in result.diff],
         estimates=[_ttest_est_to_data(e) for e in result.estimates],
         stats=_ttest_stats_to_data(result.stats) if result.stats is not None else None,
+        findings=_findings_to_data(result.findings),
     )
 
 
@@ -386,18 +400,20 @@ def _serialize_ttest_two_groups(result: TTestTwoGroups) -> TTestTwoGroupsData:
         diff=[_diff_est_to_data(d) for d in result.diff],
         estimates=[_ttest_est_to_data(e) for e in result.estimates],
         stats=_ttest_stats_to_data(result.stats) if result.stats is not None else None,
+        findings=_findings_to_data(result.findings),
     )
 
 
 @_register(TTestByResult)
 def _serialize_ttest_by(result: TTestByResult) -> TTestOneGroupByData | TTestTwoGroupsByData:
     """Serialize ``svy.categorical.ttest.TTestByResult``, by the kind of its members."""
-    common = dict(
+    common: dict[str, Any] = dict(
         y=result.y,
         pair=list(result.pair) if result.pair is not None else None,
         by=result.by,
         alpha=_f(result.alpha),
         where_clause=result.where_clause,
+        findings=_findings_to_data(result.findings),
     )
     # Every member is one kind: two-group when the call had a group=.
     if result.groups is not None or any(isinstance(r, TTestTwoGroups) for r in result):
@@ -427,6 +443,7 @@ def _serialize_table(result: Table) -> TableData:
         colvals=_list_or_none(result.colvals),
         share_of=result.share_of,
         units=result.units,
+        findings=_findings_to_data(result.findings),
     )
 
 
@@ -450,6 +467,7 @@ def _serialize_glm_fit(result: GLMFit) -> GLMFitData:
         where_clause=result.where_clause,
         offset=result.offset,
         terms=_terms_to_data(term_info),
+        findings=_findings_to_data(result.findings),
     )
 
 

@@ -28,6 +28,7 @@ from svy.core.enumerations import TableType
 from svy.core.types import Category, Number
 from svy.errors import EstimationError
 from svy.errors._api import guided_getattr
+from svy.errors._findings import merge_findings
 from svy.estimation import ParamEst
 
 # Import central UI helpers (consistent with estimate.py and ttest.py)
@@ -614,6 +615,7 @@ class Table:
         colvals: Sequence[Category] | None | _Missing = _MISSING,
         alpha: float | _Missing = _MISSING,
         metadata: "MetadataStore | None | _Missing" = _MISSING,
+        findings: "Sequence[SvyWarning] | _Missing" = _MISSING,
     ) -> Self:
         pick = _pick_if_none if only_if_none else _pick
 
@@ -653,13 +655,16 @@ class Table:
             colvals=pick(self.colvals, colvals_arg),
             alpha=_pick(self.alpha, alpha),
             metadata=pick(self._metadata, metadata),
-            findings=self.findings,
+            findings=_pick(self.findings, findings),
             share_of=self.share_of,
             units=self.units,
         )
 
     def update(self, **kw) -> Self:
         return self._merge(only_if_none=False, **kw)
+
+    def _add_findings(self, found: Sequence[SvyWarning]) -> Self:
+        return self.update(findings=merge_findings(self.findings, found))
 
     def fill_missing(self, **kw) -> Self:
         return self._merge(only_if_none=True, **kw)

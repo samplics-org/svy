@@ -566,10 +566,15 @@ def finding_notes(findings: Iterable[Any]) -> list[str]:
     """The notes printed under a result's table for what its call found: one
     per kind of finding, merged across the call's results."""
     from svy.core.singleton import domain_singleton_note
+    from svy.errors._findings import Code, Severity
     from svy.estimation.base import prop_ci_boundary_note
 
     found = list(findings)
-    notes = (domain_singleton_note(found), prop_ci_boundary_note(found))
+    notes = [domain_singleton_note(found), prop_ci_boundary_note(found)]
+    # Any other warning the call raised: one line per code, the details are on the result.
+    own = {Code.DOMAIN_SINGLETON_PSU, Code.PROP_CI_BOUNDARY}
+    other = {f.code: f.title for f in found if f.code not in own and f.level >= Severity.WARNING}
+    notes += [f"note: {title} [{code}]" for code, title in other.items()]
     return [n for n in notes if n]
 
 
