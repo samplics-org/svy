@@ -644,13 +644,16 @@ def create_jk_wgts(
     psu_int = _to_int_array(data, psu_col)
     stratum_int = _to_int_array(data, strat_col)
 
+    # JK2 deletes a random PSU per stratum. The kernel treats a missing seed as 0,
+    # so without rstate draw a fresh one, as bootstrap does.
+    seed = rstate if rstate is not None else int(resolve_random_state(None).integers(0, 2**63 - 1))
     assert rust_create_jk_wgts is not None  # noqa: S101
     rep_mat, df_val, rep_coefs = rust_create_jk_wgts(
         main_weights,
         psu_int,
         stratum_int,
         paired,
-        rstate,
+        seed,
     )
     n_reps = rep_mat.shape[1]
 

@@ -13,6 +13,12 @@ pub enum WeightingError {
 
     #[error("All weights are zero in group {0}")]
     ZeroWeights(usize),
+
+    #[error(
+        "Adjustment class {class} has nonrespondent or unknown weight but no respondents \
+         to carry it (weight column {column})"
+    )]
+    NoRespondents { class: i64, column: usize },
 }
 
 pub type Result<T> = std::result::Result<T, WeightingError>;

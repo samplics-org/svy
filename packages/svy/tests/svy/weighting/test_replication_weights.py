@@ -349,6 +349,27 @@ class TestJackknifeWeights:
         for c1, c2 in zip(s1.design.rep_wgts.columns, s2.design.rep_wgts.columns):
             np.testing.assert_array_almost_equal(s1.data[c1].to_numpy(), s2.data[c2].to_numpy())
 
+    def test_jk2_without_rstate_draws_a_fresh_seed(self):
+        # 20 strata of 3 PSUs: two draws delete the same PSUs with chance (1/3)^20.
+        n_strata, n_psu = 20, 3
+        df = pl.DataFrame(
+            {
+                "st": [h for h in range(n_strata) for _ in range(n_psu)],
+                "psu": list(range(n_strata * n_psu)),
+                "w": [1.0] * (n_strata * n_psu),
+            }
+        )
+        sample = Sample(df, Design(stratum="st", psu="psu", wgt="w"))
+
+        def deleted(s):
+            cols = s.design.rep_wgts.columns
+            return np.column_stack([s.data[c].to_numpy() == 0.0 for c in cols])
+
+        first = deleted(sample.weighting.create_jk_wgts(paired=True))
+        second = deleted(sample.weighting.create_jk_wgts(paired=True))
+        assert first.sum() == second.sum() == n_strata
+        assert not np.array_equal(first, second)
+
     def test_jk2_rstate_parameter_accepted(self, odd_psu_sample):
         sample = odd_psu_sample.weighting.create_jk_wgts(paired=True, rstate=12345)
         assert sample.design.rep_wgts.n_reps == 3
@@ -420,6 +441,7 @@ class TestBootstrapAdjustment:
             sums = sample.data.select(["base_wgt", "nr_wgt"]).sum()
             assert sums[0, 0] == sums[0, 1]
 
+    @pytest.mark.filterwarnings(r"ignore:\[REPLICATE_NO_RESPONDENTS\]:svy.SvyWarning")
     def test_bootstrap_then_adjust_reproducibility(self, bootstrap_adjustment_sample):
         def _run():
             return (
@@ -437,6 +459,7 @@ class TestBootstrapAdjustment:
 
         assert np.allclose(_run(), _run(), equal_nan=True)
 
+    @pytest.mark.filterwarnings(r"ignore:\[REPLICATE_NO_RESPONDENTS\]:svy.SvyWarning")
     def test_bootstrap_adjust_creates_rep_columns(self, bootstrap_adjustment_sample):
         sample = (
             Sample(data=bootstrap_adjustment_sample, design=Design(wgt="base_wgt", psu="psu"))
