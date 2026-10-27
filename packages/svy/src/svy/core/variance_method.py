@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from svy.errors import Code, DesignWarning
+from svy.errors import Code, DesignError, DesignWarning, UsageError
 
 
 if TYPE_CHECKING:
@@ -32,16 +32,27 @@ def normalize_variance_method(method: str | None) -> Literal["taylor", "replicat
     if method is None:
         return None
     if not isinstance(method, str):
-        raise TypeError(
-            f"'method' must be a string or None, got {type(method).__name__}. "
-            f"Use method='taylor' or method='replication'."
+        raise UsageError.invalid_type(
+            where=None,
+            param="method",
+            got=method,
+            expected="a string or None",
+            hint="Use method='taylor' or method='replication'.",
         )
     m = method.strip().lower()
     if m in ("taylor", "linearization", "lin"):
         return "taylor"
     if m in ("replication", "replicate", "rep", "bootstrap", "brr", "jackknife", "jk", "sdr"):
         return "replication"
-    raise ValueError(f"Unknown estimation method {method!r}. Use 'taylor' or 'replication'.")
+    raise UsageError.ValueError(
+        title="Unknown estimation method",
+        detail=f"Unknown estimation method {method!r}.",
+        code=Code.INVALID_CHOICE,
+        param="method",
+        expected=["taylor", "replication"],
+        got=method,
+        hint="Use 'taylor' or 'replication'.",
+    )
 
 
 def resolve_variance_method(sample: Sample, method: str | None, *, where: str) -> RepWgts | None:
@@ -65,9 +76,14 @@ def resolve_variance_method(sample: Sample, method: str | None, *, where: str) -
 
     if normalized == "replication":
         if design.rep_wgts is None:
-            raise ValueError(
-                "Replication requires rep_wgts in the design. "
-                "Create replicate weights first or use method='taylor'."
+            raise DesignError.ValueError(
+                title="No replicate weights",
+                detail="Replication requires rep_wgts in the design.",
+                code=Code.REP_WGTS_MISSING,
+                where=where,
+                param="method",
+                hint="Create replicate weights with sample.weighting.create_*_wgts, "
+                "or use method='taylor'.",
             )
         return design.rep_wgts
 

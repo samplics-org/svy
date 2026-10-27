@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Mapping, Sequence, cast
 
 import polars as pl
 
-from svy.core.constants import key_col
+from svy.core.constants import SVY_OWN_PREFIX, key_col
 from svy.core.singleton import taylor_singleton_method
 from svy.core.types import WhereArg
 from svy.errors import Code, DataError, DesignWarning
@@ -353,6 +353,36 @@ def _resolve_rep_weight_cols(data: pl.DataFrame, design) -> list[str]:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def check_columns(data_columns: list[str], **roles: Sequence[str | None]) -> None:
+    present = set(data_columns)
+    for param, cols in roles.items():
+        missing = [c for c in cols if c is not None and c not in present]
+        if missing:
+            raise DataError.missing_columns(
+                where="core.data_prep",
+                param=param,
+                missing=missing,
+                available=[c for c in data_columns if not c.startswith(SVY_OWN_PREFIX)],
+            )
+
+
+def _require_numeric(df: pl.DataFrame, col: str, *, param: str) -> None:
+    dtype = df.schema[col]
+    if dtype.is_numeric() or dtype in (pl.Boolean, pl.Null):
+        return
+    raise DataError.TypeError(
+        title="Column is not numeric",
+        detail=f"'{col}' is {dtype}; {param} must be numeric here.",
+        code=Code.COLUMN_NOT_NUMERIC,
+        where="core.data_prep",
+        param=param,
+        expected="a numeric column",
+        got=str(dtype),
+        hint="prop() and tabulate() take categorical variables; "
+        "sample.wrangling.cast() converts numbers stored as text.",
+    )
+
+
 def prepare_data(
     sample: Sample,
     *,
@@ -459,6 +489,16 @@ def prepare_data(
         needed.extend(extra_cols)
     where_cols = extract_where_cols(where)
     needed.extend(where_cols)
+    check_columns(
+        local_data.columns,
+        y=[y],
+        x=[x],
+        y_pair=[y_pair],
+        group=[group],
+        by=[by] if isinstance(by, str) else list(by or ()),
+        where=where_cols,
+        columns=extra_cols or [],
+    )
     key = id(design)
     data_version = getattr(sample, "_data_version", None)
     cached = _design_fields_cache.get(key)
@@ -880,10 +920,13 @@ def prepare_data(
     # list short).
     casts: list[pl.Expr] = []
     if cast_y_float:
+        _require_numeric(df, y_col, param="y")
         if df[y_col].dtype != pl.Float64:
             casts.append(pl.col(y_col).cast(pl.Float64))
-    if x and df[x].dtype != pl.Float64:
-        casts.append(pl.col(x).cast(pl.Float64))
+    if x:
+        _require_numeric(df, x, param="x")
+        if df[x].dtype != pl.Float64:
+            casts.append(pl.col(x).cast(pl.Float64))
     # Design columns → String, EXCEPT the Phase C integer code columns, which
     # must stay UInt32 so the Rust kernel takes its integer fast path.
     _code_cols = {_STRATUM_CODE, _PSU_CODE, _SSU_CODE}

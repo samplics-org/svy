@@ -10,7 +10,7 @@ import numpy as np
 import polars as pl
 
 from svy.core.types import Category, RandomState
-from svy.errors import UsageError
+from svy.errors import Code, DataError, UsageError
 
 
 # ------------------------------------------------------------------ #
@@ -260,13 +260,14 @@ def assert_no_missing(
             missing_errors.append(f"{c} (±∞)")
 
     if missing_errors:
-        detail = ", ".join(missing_errors)
-        raise ValueError(
-            "Missing or invalid values found in required columns"
+        raise DataError.ValueError(
+            title="Missing values",
+            detail="Missing or invalid values found in required columns"
             + (f" {scope}" if scope else "")
-            + "; "
-            "set drop_nulls=True to automatically drop them. "
-            f"Affected: {detail}"
+            + f"; affected: {', '.join(missing_errors)}.",
+            code=Code.MISSING_VALUES,
+            got=missing_errors,
+            hint="Set drop_nulls=True to leave those rows out.",
         )
 
 
