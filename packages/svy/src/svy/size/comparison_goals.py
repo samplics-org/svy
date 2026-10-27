@@ -34,6 +34,7 @@ from svy.size.estimation_goals import (
     _build_sizes,
     _checked_alpha,
     _has_pop,
+    _require_numbers,
 )
 from svy.size.types import TargetTwoMeans, TargetTwoProps
 from svy.utils.helpers import _get_keys_from_maps
@@ -203,10 +204,15 @@ def compare_props(
         )
         rho, overlap = params["rho"], params["overlap"]
     else:
-        all_scalars = all(
-            isinstance(x, (int, float)) for x in [p1, p2, delta, alloc_ratio, alpha, power]
+        _require_numbers(
+            where="SampleSize.compare_props",
+            p1=p1,
+            p2=p2,
+            delta=delta,
+            alloc_ratio=alloc_ratio,
+            alpha=alpha,
+            power=power,
         )
-        assert all_scalars, "All inputs must be scalars when not stratified."
 
     if stratified:
         _p1_map = cast(DomainScalarMap, p1)
@@ -419,11 +425,18 @@ def compare_means(
         rho, overlap = params["rho"], params["overlap"]
         sigma2 = params.get("sigma2")
     else:
-        all_scalars = all(
-            isinstance(x, (int, float))
-            for x in [mu1, mu2, sigma1, delta, alloc_ratio, alpha, power]
-        ) and (sigma2 is None or isinstance(sigma2, (int, float)))
-        assert all_scalars, "All inputs must be scalars when not stratified."
+        _require_numbers(
+            where="SampleSize.compare_means",
+            mu1=mu1,
+            mu2=mu2,
+            sigma1=sigma1,
+            delta=delta,
+            alloc_ratio=alloc_ratio,
+            alpha=alpha,
+            power=power,
+        )
+        if sigma2 is not None:
+            _require_numbers(where="SampleSize.compare_means", sigma2=sigma2)
 
     if stratified:
         _mu1_map = cast(DomainScalarMap, mu1)

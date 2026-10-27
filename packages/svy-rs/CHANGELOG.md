@@ -6,6 +6,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ### Fixed
 
+- `rao_scott` returns NaN statistics instead of panicking on NaN proportions or a failed SVD, and instead of 0 and p = 1 when the test is undefined. The Taylor design df no longer underflows when strata outnumber PSUs.
+- `ttest_rs` and `ranktest_rs` with `by_col` give a NaN row for a by-group with no weight or fewer than the groups the test needs.
 - `scores_corr` returns zero scores for a constant column instead of an error, and `taylor_assoc` reports a NaN SE, variance and deff for any NaN estimate.
 
 ## [0.19.1] — 2026-10-15

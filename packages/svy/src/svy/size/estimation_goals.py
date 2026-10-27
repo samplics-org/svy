@@ -50,6 +50,18 @@ def _checked_alpha(alpha: Any, *, where: str) -> Any:
     return validate_alpha(alpha, where=where)
 
 
+def _require_numbers(*, where: str, **values: Any) -> None:
+    """Without strata every input is one number; name the first that is not."""
+    for param, v in values.items():
+        if not isinstance(v, (int, float)):
+            raise SelectionError.invalid_type(
+                where=where,
+                param=param,
+                got=v,
+                expected="a number, or a mapping of numbers by stratum",
+            )
+
+
 def _broadcast_scalars(strata: list, params: dict) -> None:
     """Broadcast any non-Mapping param to a per-stratum dict in-place."""
     m = len(strata)
@@ -177,8 +189,7 @@ def estimate_prop(
             params["resp_rate"],
         )
     else:
-        all_scalars = all(isinstance(x, (int, float)) for x in [p, moe, alpha])
-        assert all_scalars, "All inputs must be scalars when not stratified."
+        _require_numbers(where="SampleSize.estimate_prop", p=p, moe=moe, alpha=alpha)
 
     _method = _normalize_one_prop_method(method)
     if _method is _OnePropSizeMethod.WALD:
@@ -302,8 +313,7 @@ def estimate_mean(
             params["resp_rate"],
         )
     else:
-        all_scalars = all(isinstance(x, (int, float)) for x in [sigma, moe, alpha])
-        assert all_scalars, "All inputs must be scalars when not stratified."
+        _require_numbers(where="SampleSize.estimate_mean", sigma=sigma, moe=moe, alpha=alpha)
 
     n0 = _wald_sample_size_mean(half_ci=moe, sigma=sigma, alpha=alpha)
 

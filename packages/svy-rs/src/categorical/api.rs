@@ -190,6 +190,33 @@ fn prepare_two_sample_data(
     Ok((y_arr, w_arr, g_arr, level_set, n, rows))
 }
 
+/// Whether any row in the domain has `y` and a positive weight.
+fn has_positive_weight(
+    y: &Float64Chunked,
+    weights: &Float64Chunked,
+    mask: Option<&BooleanChunked>,
+) -> bool {
+    (0..y.len()).any(|i| {
+        let in_domain = mask.map_or(true, |m| m.get(i).unwrap_or(false));
+        in_domain && y.get(i).is_some_and(|v| !v.is_nan()) && weights.get(i).unwrap_or(0.0) > 0.0
+    })
+}
+
+/// Positive-weight rows per level of `frame_levels`, from `prepare_two_sample_data`'s output.
+fn level_counts(w: &[f64], g: &[u32], levels: &[String], frame_levels: &[String]) -> Vec<u32> {
+    let mut counts = vec![0u32; frame_levels.len()];
+    for (&wi, &gi) in w.iter().zip(g) {
+        if wi <= 0.0 {
+            continue;
+        }
+        let label = &levels[gi as usize];
+        if let Some(k) = frame_levels.iter().position(|l| l == label) {
+            counts[k] += 1;
+        }
+    }
+    counts
+}
+
 // ============================================================================
 // Generic by-group helper
 // ============================================================================
@@ -377,26 +404,39 @@ fn compute_svyttest(
             domain_val,
             calib,
             rep,
+            None,
         ),
-        Some(by) => compute_by_groups(df, by, domain_col, domain_val, |temp_df, d_col, d_val| {
-            compute_svyttest_single(
-                temp_df,
-                y_col,
-                weight_col,
-                group_col,
-                strata_col,
-                psu_col,
-                ssu_col,
-                fpc_col,
-                fpc_ssu_col,
-                singleton_method,
-                null_value,
-                d_col,
-                d_val,
-                calib,
-                rep,
-            )
-        }),
+        Some(by) => {
+            let frame_levels = match group_col {
+                Some(g_col) => {
+                    prepare_two_sample_data(
+                        df, y_col, weight_col, g_col, strata_col, psu_col, domain_col, domain_val,
+                    )?
+                    .3
+                }
+                None => Vec::new(),
+            };
+            compute_by_groups(df, by, domain_col, domain_val, |temp_df, d_col, d_val| {
+                compute_svyttest_single(
+                    temp_df,
+                    y_col,
+                    weight_col,
+                    group_col,
+                    strata_col,
+                    psu_col,
+                    ssu_col,
+                    fpc_col,
+                    fpc_ssu_col,
+                    singleton_method,
+                    null_value,
+                    d_col,
+                    d_val,
+                    calib,
+                    rep,
+                    Some(&frame_levels),
+                )
+            })
+        }
     }
 }
 
@@ -416,40 +456,54 @@ fn compute_svyttest_single(
     domain_val: Option<&str>,
     calib: Option<&CalibSweep>,
     rep: Option<&RepSpec>,
+    // Some inside a by-group: the group's levels over the whole frame. A by-group
+    // without weight, or without both groups, then gives a NaN row, not an error.
+    frame_levels: Option<&[String]>,
 ) -> PolarsResult<DataFrame> {
     let strata = get_opt_col(df, strata_col)?;
     let psu = get_opt_col(df, psu_col)?;
     let ssu = get_opt_col(df, ssu_col)?;
     let fpc = get_opt_f64(df, fpc_col)?;
     let fpc_ssu = get_opt_f64(df, fpc_ssu_col)?;
+    let nan = f64::NAN;
 
     match group_col {
         None => {
             // One-sample test
             let y = df.column(y_col)?.as_materialized_series().f64()?;
             let weights = df.column(weight_col)?.as_materialized_series().f64()?;
+            let mask = match (domain_col, domain_val) {
+                (Some(d_col), Some(d_val)) => Some(
+                    df.column(d_col)?
+                        .as_materialized_series()
+                        .cast(&DataType::String)?
+                        .str()?
+                        .equal(d_val),
+                ),
+                _ => None,
+            };
+
+            if frame_levels.is_some() && !has_positive_weight(y, weights, mask.as_ref()) {
+                return df![
+                    "type" => vec!["one-sample"],
+                    "y" => vec![y_col],
+                    "estimate" => vec![nan],
+                    "diff" => vec![nan],
+                    "se" => vec![nan],
+                    "t" => vec![nan],
+                    "df" => vec![nan],
+                    "p_value" => vec![nan],
+                    "n" => vec![0u32],
+                ];
+            }
 
             let res = if let Some(spec) = rep {
-                let mask = match (domain_col, domain_val) {
-                    (Some(d_col), Some(d_val)) => Some(
-                        df.column(d_col)?
-                            .as_materialized_series()
-                            .cast(&DataType::String)?
-                            .str()?
-                            .equal(d_val),
-                    ),
-                    _ => None,
-                };
                 ttest_one_sample_rep(y, weights, mask.as_ref(), null_value, spec)?
-            } else if let (Some(d_col), Some(d_val)) = (domain_col, domain_val) {
-                let d_series = df.column(d_col)?.as_materialized_series();
-                let d_str = d_series.cast(&DataType::String)?;
-                let d_ca = d_str.str()?;
-                let mask = d_ca.equal(d_val);
+            } else if let Some(mask) = mask.as_ref() {
                 ttest_one_sample_domain(
                     y,
                     weights,
-                    &mask,
+                    mask,
                     strata,
                     psu,
                     ssu,
@@ -491,6 +545,32 @@ fn compute_svyttest_single(
             let (y_arr, w_arr, g_arr, levels, n, rows) = prepare_two_sample_data(
                 df, y_col, weight_col, g_col, strata_col, psu_col, domain_col, domain_val,
             )?;
+
+            if let Some(frame) = frame_levels
+                && levels.len() != 2
+                && frame.len() == 2
+            {
+                let counts = level_counts(&w_arr, &g_arr, &levels, frame);
+                return df![
+                    "type" => vec!["two-sample"],
+                    "y" => vec![y_col],
+                    "group" => vec![g_col],
+                    "level_0" => vec![frame[0].as_str()],
+                    "level_1" => vec![frame[1].as_str()],
+                    "diff" => vec![nan],
+                    "se" => vec![nan],
+                    "t" => vec![nan],
+                    "df" => vec![nan],
+                    "p_value" => vec![nan],
+                    "mean_0" => vec![nan],
+                    "mean_1" => vec![nan],
+                    "se_0" => vec![nan],
+                    "se_1" => vec![nan],
+                    "n" => vec![counts.iter().sum::<u32>()],
+                    "n_0" => vec![counts[0]],
+                    "n_1" => vec![counts[1]],
+                ];
+            }
 
             if levels.len() != 2 {
                 return Err(PolarsError::ComputeError(
@@ -654,26 +734,34 @@ fn compute_svyranktest(
             domain_val,
             rep,
             scores_given,
+            None,
         ),
-        Some(by) => compute_by_groups(df, by, domain_col, domain_val, |temp_df, d_col, d_val| {
-            compute_svyranktest_single(
-                temp_df,
-                y_col,
-                group_col,
-                weight_col,
-                strata_col,
-                psu_col,
-                ssu_col,
-                fpc_col,
-                fpc_ssu_col,
-                score_method,
-                singleton_method,
-                d_col,
-                d_val,
-                rep,
-                scores_given,
-            )
-        }),
+        Some(by) => {
+            let frame_levels = prepare_two_sample_data(
+                df, y_col, weight_col, group_col, strata_col, psu_col, domain_col, domain_val,
+            )?
+            .3;
+            compute_by_groups(df, by, domain_col, domain_val, |temp_df, d_col, d_val| {
+                compute_svyranktest_single(
+                    temp_df,
+                    y_col,
+                    group_col,
+                    weight_col,
+                    strata_col,
+                    psu_col,
+                    ssu_col,
+                    fpc_col,
+                    fpc_ssu_col,
+                    score_method,
+                    singleton_method,
+                    d_col,
+                    d_val,
+                    rep,
+                    scores_given,
+                    Some(&frame_levels),
+                )
+            })
+        }
     }
 }
 
@@ -693,6 +781,9 @@ fn compute_svyranktest_single(
     domain_val: Option<&str>,
     rep: Option<&RepSpec>,
     scores_given: bool,
+    // Some inside a by-group: the group's levels over the whole frame. A by-group
+    // with fewer than two weighted groups then gives a NaN row, not an error.
+    frame_levels: Option<&[String]>,
 ) -> PolarsResult<DataFrame> {
     let method = score_method
         .and_then(RankScoreMethod::from_str)
@@ -719,6 +810,45 @@ fn compute_svyranktest_single(
         df, y_col, weight_col, group_col, strata_col, psu_col, domain_col, domain_val,
     )?;
     let n_groups = levels.len();
+
+    if let Some(frame) = frame_levels
+        && n_groups < 2
+        && frame.len() >= 2
+    {
+        let nan = f64::NAN;
+        let n_obs = level_counts(&w_arr, &g_arr, &levels, frame)
+            .iter()
+            .sum::<u32>();
+        return if frame.len() == 2 {
+            df![
+                "type" => vec!["two-sample"],
+                "method" => vec![method_name],
+                "y" => vec![y_col],
+                "group" => vec![group_col],
+                "level_0" => vec![frame[0].as_str()],
+                "level_1" => vec![frame[1].as_str()],
+                "delta" => vec![nan],
+                "se" => vec![nan],
+                "t" => vec![nan],
+                "df" => vec![nan],
+                "p_value" => vec![nan],
+                "n" => vec![n_obs],
+            ]
+        } else {
+            df![
+                "type" => vec!["k-sample"],
+                "method" => vec![method_name],
+                "y" => vec![y_col],
+                "group" => vec![group_col],
+                "ndf" => vec![(frame.len() - 1) as u32],
+                "ddf" => vec![nan],
+                "chisq" => vec![nan],
+                "f_stat" => vec![nan],
+                "p_value" => vec![nan],
+                "n" => vec![n_obs],
+            ]
+        };
+    }
 
     if n_groups == 2 {
         let (level_0, level_1) = (levels[0].clone(), levels[1].clone());
@@ -1119,7 +1249,7 @@ fn compute_tabulate(
             None => {
                 let (n_strata_count, n_psu_count) =
                     count_strata_psus(strata.as_ref(), psu.as_ref(), n_obs, domain.as_ref());
-                (n_psu_count - n_strata_count) as f64
+                n_psu_count as f64 - n_strata_count as f64
             }
         };
 

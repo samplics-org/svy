@@ -429,6 +429,14 @@ pub fn rao_scott(
     let k = nr * nc;
     let n_f = n_obs as f64;
     let p = proportions;
+    let df_base = (nr.saturating_sub(1) * nc.saturating_sub(1)) as f64;
+    let nan = f64::NAN;
+
+    // No association to test with one row or column level, and no proportions
+    // when the domain has no weight (they arrive as NaN).
+    if df_base == 0.0 || p.iter().any(|v| !v.is_finite()) {
+        return (nan, df_base, nan, nan, nan, nan, nan);
+    }
 
     // 1. Design matrices: X1 (main effects), X2 (interactions)
     let x1_cols = 1 + (nr - 1) + (nc - 1);
@@ -464,7 +472,9 @@ pub fn rao_scott(
     // 3. Build full interaction model matrix X12 = [X1 | X2]
     //    Then extract Cmat = QR residuals of X2 columns projected off X1
     //    This matches R: Cmat <- qr.resid(qr(X1), X12[,-(1:(nr+nc-1))])
-    let x1_qr = x1.rb().thin_svd().unwrap();
+    let Ok(x1_qr) = x1.rb().thin_svd() else {
+        return (nan, df_base, nan, nan, nan, nan, nan);
+    };
     let x1_proj = {
         // Q * Q' projection matrix (via thin SVD of X1)
         let u = x1_qr.U();
@@ -495,7 +505,10 @@ pub fn rao_scott(
     let cmat_t = cmat.transpose();
     let denom = &cmat_t * &idmat_over_n * &cmat;
     let numr = &cmat_t * &idmat * &v_surv * &idmat * &cmat;
-    let denom_inv = denom.rb().thin_svd().unwrap().pseudoinverse();
+    let Ok(denom_svd) = denom.rb().thin_svd() else {
+        return (nan, df_base, nan, nan, nan, nan, nan);
+    };
+    let denom_inv = denom_svd.pseudoinverse();
     let delta = &denom_inv * &numr;
 
     // 6. Chi-square statistics
@@ -521,32 +534,28 @@ pub fn rao_scott(
     chisq_p *= n_f;
 
     // 7. Rao-Scott corrections
-    let df_base = ((nr - 1) * (nc - 1)) as f64;
     let dd = delta.nrows().min(delta.ncols());
     let trace_d: f64 = (0..dd).map(|i| delta[(i, i)]).sum();
     let d2 = &delta * &delta;
     let trace_d2: f64 = (0..dd).map(|i| d2[(i, i)]).sum();
 
+    // Without design variance there is nothing to correct by: the X² is kept,
+    // its corrected p-value and the F are undefined.
+    if !(trace_d > 1e-9) {
+        return (chisq_p, df_base, nan, nan, nan, nan, nan);
+    }
+
     // First-order Rao-Scott correction (matches R's svychisq statistic="Chisq"):
     //   R reports the RAW X² as the displayed "X-squared" value, but computes
     //   the p-value from X²/mean(delta) evaluated against chi2(df_base).
-    let mean_delta = if df_base > 0.0 && trace_d > 1e-9 {
-        trace_d / df_base
-    } else {
-        1.0
-    };
+    let mean_delta = trace_d / df_base;
     let chisq_p_for_p = chisq_p / mean_delta;
 
     // Second-order (F) correction: F = X² / trace(delta), with Satterthwaite df
     // R only computes F from the Pearson X² (see surveychisq.R line 111).
-    let (f_p, ndf, ddf) = if trace_d > 1e-9 {
-        let fp = chisq_p / trace_d;
-        let nd = trace_d.powi(2) / trace_d2;
-        let dd_val = nu * nd;
-        (fp, nd, dd_val)
-    } else {
-        (0.0, 0.0, 0.0)
-    };
+    let f_p = chisq_p / trace_d;
+    let ndf = trace_d.powi(2) / trace_d2;
+    let ddf = nu * ndf;
 
     (
         chisq_p,
@@ -605,5 +614,45 @@ pub fn count_strata_psus(
         (None, Some(p)) => (1, p.unique().map(|u| u.len()).unwrap_or(n)),
         (Some(s), None) => (s.unique().map(|u| u.len()).unwrap_or(1), n),
         (None, None) => (1, n),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn zero_cov(k: usize) -> Vec<Vec<f64>> {
+        vec![vec![0.0; k]; k]
+    }
+
+    fn all_nan(stats: &[f64]) -> bool {
+        stats.iter().all(|v| v.is_nan())
+    }
+
+    #[test]
+    fn nan_proportions_give_nan_statistics() {
+        let p = [f64::NAN; 4];
+        let (chisq, df, p_chisq, f, ndf, ddf, p_f) = rao_scott(&p, &zero_cov(4), 2, 2, 10, 3.0);
+        assert_eq!(df, 1.0);
+        assert!(all_nan(&[chisq, p_chisq, f, ndf, ddf, p_f]));
+    }
+
+    #[test]
+    fn one_row_level_has_no_test() {
+        let p = [0.5, 0.5];
+        let (chisq, df, p_chisq, f, ndf, ddf, p_f) = rao_scott(&p, &zero_cov(2), 1, 2, 10, 3.0);
+        assert_eq!(df, 0.0);
+        assert!(all_nan(&[chisq, p_chisq, f, ndf, ddf, p_f]));
+    }
+
+    #[test]
+    fn no_design_variance_keeps_x2_and_leaves_the_corrections_undefined() {
+        // Margins 0.5/0.5, so every expected cell is 0.25:
+        // X2 = 100 * 4 * (0.4 - 0.25)^2 / 0.25 = 36.
+        let p = [0.4, 0.1, 0.1, 0.4];
+        let (chisq, df, p_chisq, f, ndf, ddf, p_f) = rao_scott(&p, &zero_cov(4), 2, 2, 100, 3.0);
+        assert!((chisq - 36.0).abs() < 1e-12);
+        assert_eq!(df, 1.0);
+        assert!(all_nan(&[p_chisq, f, ndf, ddf, p_f]));
     }
 }
