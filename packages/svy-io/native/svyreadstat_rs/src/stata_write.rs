@@ -66,7 +66,7 @@ fn ipc_to_batches(buf: &[u8]) -> Result<Vec<RecordBatch>> {
         fr.schema()
     } else {
         let mut sr = StreamReader::try_new(Cursor::new(buf), None)?;
-        while let Some(res) = sr.next() {
+        for res in sr.by_ref() {
             batches.push(res?);
         }
         sr.schema()
@@ -301,14 +301,14 @@ fn compute_string_metadata(batches: &[RecordBatch]) -> Vec<Option<StringColStats
         for (j, f) in b.schema().fields().iter().enumerate() {
             let col = b.column(j);
             let is_str = is_text_dt(f.data_type())
-                || matches!(f.data_type(), &DataType::Dictionary(_, ref v) if is_text_dt(v.as_ref()));
+                || matches!(f.data_type(), DataType::Dictionary(_, v) if is_text_dt(v.as_ref()));
             if !is_str {
                 continue;
             }
             let stats = all_stats[j].get_or_insert(StringColStats::default());
             for i in 0..col.len() {
                 if let Some(s) = get_string_value(col.as_ref(), i) {
-                    let blen = s.as_bytes().len();
+                    let blen = s.len();
                     if blen > stats.max_len {
                         stats.max_len = blen;
                     }
@@ -393,6 +393,7 @@ unsafe fn insert_missing(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_stata_minimal(
     batches: &[RecordBatch],
     out_path: &str,
@@ -429,18 +430,18 @@ fn write_stata_minimal(
     let ncols = schema.fields().len();
 
     let str_stats = compute_string_metadata(batches);
-    let mut is_str_col: Vec<bool> = vec![false; ncols];
     let is_temporal_col: Vec<bool> = schema
         .fields()
         .iter()
         .map(|f| stata_temporal_format(f.data_type()).is_some())
         .collect();
 
-    for j in 0..ncols {
-        let dt = batches[0].column(j).data_type();
-        is_str_col[j] =
-            is_text_dt(dt) || matches!(dt, DataType::Dictionary(_, v) if is_text_dt(v.as_ref()));
-    }
+    let is_str_col: Vec<bool> = (0..ncols)
+        .map(|j| {
+            let dt = batches[0].column(j).data_type();
+            is_text_dt(dt) || matches!(dt, DataType::Dictionary(_, v) if is_text_dt(v.as_ref()))
+        })
+        .collect();
 
     let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
     let n_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -486,7 +487,7 @@ fn write_stata_minimal(
             }
 
             typ = T_STRING;
-            width = std::cmp::max(1, std::cmp::min(2045, stats.max_len));
+            width = stats.max_len.clamp(1, 2045);
         }
 
         let cname = CString::new(field.name().as_str())?;
@@ -505,19 +506,18 @@ fn write_stata_minimal(
             }
         }
 
-        if let Some(map) = var_labels {
-            if let Some(lbl) = map.get(field.name()) {
-                if !lbl.is_empty() {
-                    let c = CString::new(lbl.as_str()).map_err(|_| {
-                        anyhow!(
-                            "variable label of column '{}' contains an embedded NUL",
-                            field.name()
-                        )
-                    })?;
-                    unsafe {
-                        readstat_variable_set_label(var, c.as_ptr());
-                    }
-                }
+        if let Some(map) = var_labels
+            && let Some(lbl) = map.get(field.name())
+            && !lbl.is_empty()
+        {
+            let c = CString::new(lbl.as_str()).map_err(|_| {
+                anyhow!(
+                    "variable label of column '{}' contains an embedded NUL",
+                    field.name()
+                )
+            })?;
+            unsafe {
+                readstat_variable_set_label(var, c.as_ptr());
             }
         }
 
@@ -592,6 +592,7 @@ fn write_stata_minimal(
 
     let mut outfile = File::create(Path::new(out_path))?;
     let total_rows: i64 = batches.iter().map(|b| b.num_rows() as i64).sum();
+    #[allow(clippy::useless_conversion)] // c_long is 32-bit on Windows
     let row_count = total_rows
         .try_into()
         .map_err(|_| anyhow!("row count {total_rows} exceeds platform limit"))?;
@@ -730,6 +731,7 @@ fn write_stata_minimal(
     strl_threshold=2045,
     user_missing_json=None
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn df_write_dta_file(
     ipc_bytes: Bound<'_, PyBytes>,
     out_path: &str,

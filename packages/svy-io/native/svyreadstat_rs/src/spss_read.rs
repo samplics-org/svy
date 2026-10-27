@@ -21,6 +21,7 @@ use crate::core::{
 /// Parse SPSS .sav file
 #[pyfunction]
 #[pyo3(signature = (path, encoding=None, _user_na=false, cols_skip=None, n_max=None, rows_skip=0, lossy_utf8=false))]
+#[allow(clippy::too_many_arguments)]
 pub fn df_parse_sav_file(
     py: Python<'_>,
     path: &str,
@@ -50,6 +51,7 @@ pub fn df_parse_sav_file(
 /// Parse SPSS portable (.por) file
 #[pyfunction]
 #[pyo3(signature = (path, encoding=None, _user_na=false, cols_skip=None, n_max=None, rows_skip=0, lossy_utf8=false))]
+#[allow(clippy::too_many_arguments)]
 pub fn df_parse_por_file(
     py: Python<'_>,
     path: &str,
