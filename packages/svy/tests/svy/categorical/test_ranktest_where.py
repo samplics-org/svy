@@ -636,5 +636,54 @@ class TestD10CustomScoreFnBy:
             assert rc.diff[0].diff == pytest.approx(rb.diff[0].diff, rel=1e-10)
 
 
+# =============================================================================
+# D11: Out-of-domain rows tied on y with domain rows must not move the ranks
+# R (subset() drops the rows, so they never join ave()'s tie groups):
+#   des <- svydesign(ids=~p, strata=~h, weights=~w, data=df)
+#   sub <- subset(des, d == "x")
+#   svyranktest(y ~ g, subset(sub, g != "c"))  # t 0.6244744019778879, df 6
+#   svyranktest(y ~ g, sub)                    # Chisq 0.196019858925388, df 2, ddf 6
+# =============================================================================
+
+
+class TestD11TiesAcrossDomainBoundary:
+    @pytest.fixture
+    def sample(self) -> Sample:
+        data = pl.DataFrame(
+            {
+                "h": ["1"] * 10 + ["2"] * 10,
+                "p": [f"p{i // 2:02d}" for i in range(20)],
+                "w": [1, 2, 1.5, 1, 2, 1, 1, 3, 2, 1, 1, 1.5, 2, 1, 1, 2, 3, 1, 1, 2],
+                "y": [1.0, 1, 2, 2, 3, 3, 4, 4, 5, 5, 2, 2, 3, 4, 4, 5, 6, 6, 7, 8],
+                "g": ["a", "b", "c", "a", "b"] * 4,
+                "d": ["x", "x", "z", "x"] * 5,
+            },
+            schema_overrides={"w": pl.Float64},
+        )
+        return Sample(data, Design(stratum="h", psu="p", wgt="w"))
+
+    def test_two_sample(self, sample):
+        r = sample.categorical.ranktest(
+            y="y", group="g", where=(pl.col("d") == "x") & (pl.col("g") != "c")
+        )
+        assert r.stats.value == pytest.approx(0.6244744019778879, rel=1e-9)
+        assert r.stats.df == 6
+        assert r.stats.p_value == pytest.approx(0.5553025133420808, rel=1e-9)
+        assert r.diff[0].diff == pytest.approx(0.0896390746934226, rel=1e-9)
+
+    def test_k_sample(self, sample):
+        r = sample.categorical.ranktest(y="y", group="g", where=pl.col("d") == "x")
+        # svy reports F = Chisq / df
+        assert r.stats.value == pytest.approx(0.196019858925388 / 2, rel=1e-9)
+        assert (r.stats.df_num, r.stats.df_den) == (2, 6)
+        assert r.stats.p_value == pytest.approx(0.908061678045246, rel=1e-9)
+
+    def test_by_matches_where(self, sample):
+        by = sample.categorical.ranktest(y="y", group="g", by="d")
+        where = sample.categorical.ranktest(y="y", group="g", where=pl.col("d") == "x")
+        x = dict(zip(map(str, by.by_levels), by))["x"]
+        assert x.stats.value == pytest.approx(where.stats.value, rel=1e-12)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
