@@ -3,6 +3,9 @@
 use crate::rng::Rng;
 use std::collections::HashMap;
 
+/// Selected rows, their hits and inclusion probabilities.
+pub type SrsDraw = (Vec<i64>, Vec<i64>, Vec<f64>);
+
 #[derive(Debug, Clone)]
 pub enum SamplingError {
     EmptyFrame,
@@ -43,7 +46,7 @@ pub fn select_srs(
     stratum: Option<&[i64]>,
     wr: bool,
     seed: Option<u64>,
-) -> Result<(Vec<i64>, Vec<i64>, Vec<f64>)> {
+) -> Result<SrsDraw> {
     match stratum {
         None => {
             let n_scalar = match n {
@@ -85,7 +88,7 @@ fn srs_unstratified_indexed(
     n: usize,
     wr: bool,
     seed: Option<u64>,
-) -> Result<(Vec<i64>, Vec<i64>, Vec<f64>)> {
+) -> Result<SrsDraw> {
     let cap = positions.len();
 
     if cap == 0 {
@@ -152,7 +155,7 @@ fn select_srs_stratified(
     stratum: &[i64],
     wr: bool,
     seed: Option<u64>,
-) -> Result<(Vec<i64>, Vec<i64>, Vec<f64>)> {
+) -> Result<SrsDraw> {
     // Group positions by stratum — one pass, no per-stratum alloc of frame values
     let mut strat_map: HashMap<i64, Vec<usize>> = HashMap::new();
     for (pos, &s) in stratum.iter().enumerate() {
@@ -185,7 +188,7 @@ fn select_srs_stratified(
 
     // Parallel execution when there are enough strata to justify the overhead
     use rayon::prelude::*;
-    let results: Vec<Result<(Vec<i64>, Vec<i64>, Vec<f64>)>> = if tasks.len() >= 4 {
+    let results: Vec<Result<SrsDraw>> = if tasks.len() >= 4 {
         tasks
             .par_iter()
             .map(|(_, positions, n_s, child_seed)| {

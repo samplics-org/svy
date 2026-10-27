@@ -20,6 +20,16 @@ use crate::estimation::{
     taylor_variance_matrix_in,
 };
 
+/// Levels, proportions, SEs, covariance matrix, deffs and df.
+type PropTable = (
+    Vec<String>,
+    Vec<f64>,
+    Vec<f64>,
+    Vec<Vec<f64>>,
+    Vec<f64>,
+    u32,
+);
+
 // ============================================================================
 // Numeric-aware sorting (matches Python's _numsort_key)
 // ============================================================================
@@ -33,7 +43,7 @@ fn numsort_key(s: &str) -> (u8, f64, String) {
     }
 }
 
-pub fn sort_levels(levels: &mut Vec<String>) {
+pub fn sort_levels(levels: &mut [String]) {
     levels.sort_by(|a, b| {
         let ka = numsort_key(a);
         let kb = numsort_key(b);
@@ -198,6 +208,7 @@ fn beta_cf(x: f64, a: f64, b: f64) -> f64 {
 /// rather than separate per-level calls + polarization identity.
 ///
 /// Returns (levels, proportions, SEs, covariance_matrix, deff_vec, df).
+#[allow(clippy::too_many_arguments)]
 pub fn estimate_proportions(
     y: &StringChunked,
     weights: &Float64Chunked,
@@ -209,14 +220,7 @@ pub fn estimate_proportions(
     singleton_method: Option<&str>,
     calib: Option<&CalibSweep>,
     domain: Option<&BooleanChunked>,
-) -> PolarsResult<(
-    Vec<String>,
-    Vec<f64>,
-    Vec<f64>,
-    Vec<Vec<f64>>,
-    Vec<f64>,
-    u32,
-)> {
+) -> PolarsResult<PropTable> {
     let levels = domain_levels(y, domain)?;
 
     let k = levels.len();
@@ -247,8 +251,8 @@ pub fn estimate_proportions(
         }
         match opt_val {
             None => {
-                for j in 0..k {
-                    indicators[j][i] = None;
+                for ind in indicators.iter_mut().take(k) {
+                    ind[i] = None;
                 }
             }
             Some(val) => {
@@ -309,7 +313,7 @@ pub fn estimate_proportions(
 /// Row `i` is in the tabulation domain (every row when there is no mask).
 #[inline]
 pub fn in_domain(domain: Option<&BooleanChunked>, i: usize) -> bool {
-    domain.map_or(true, |m| m.get(i).unwrap_or(false))
+    domain.is_none_or(|m| m.get(i).unwrap_or(false))
 }
 
 /// Sorted distinct keys among the in-domain rows: an out-of-domain row's
@@ -340,6 +344,7 @@ pub fn domain_levels(
 // ============================================================================
 
 /// Compute weighted totals and SEs for each level.
+#[allow(clippy::too_many_arguments)]
 pub fn estimate_totals(
     y: &StringChunked,
     weights: &Float64Chunked,
@@ -378,8 +383,8 @@ pub fn estimate_totals(
         }
         match opt_val {
             None => {
-                for j in 0..kk {
-                    indicators[j][i] = None;
+                for ind in indicators.iter_mut().take(kk) {
+                    ind[i] = None;
                 }
             }
             Some(val) => {
@@ -390,8 +395,8 @@ pub fn estimate_totals(
         }
     }
 
-    for j in 0..kk {
-        let ind_ca = Float64Chunked::from_slice_options("ind".into(), &indicators[j]);
+    for ind in indicators.iter().take(kk) {
+        let ind_ca = Float64Chunked::from_slice_options("ind".into(), ind);
         let est = point_estimate_total(&ind_ca, weights)?;
         let scores = sweep_scores(&scores_total(&ind_ca, weights)?, calib);
         let var = taylor_variance_in(
@@ -478,7 +483,7 @@ pub fn rao_scott(
     let x1_proj = {
         // Q * Q' projection matrix (via thin SVD of X1)
         let u = x1_qr.U();
-        &u * u.transpose()
+        u * u.transpose()
     };
     // Cmat = (I - X1 (X1'X1)^{-1} X1') X2 = X2 - proj(X1) X2
     let cmat = &x2 - &x1_proj * &x2;
@@ -498,13 +503,13 @@ pub fn rao_scott(
     let idmat_over_n = {
         let mut m = idmat.clone();
         for i in 0..k {
-            m[(i, i)] = m[(i, i)] / n_f;
+            m[(i, i)] /= n_f;
         }
         m
     };
     let cmat_t = cmat.transpose();
-    let denom = &cmat_t * &idmat_over_n * &cmat;
-    let numr = &cmat_t * &idmat * &v_surv * &idmat * &cmat;
+    let denom = cmat_t * &idmat_over_n * &cmat;
+    let numr = cmat_t * &idmat * &v_surv * &idmat * &cmat;
     let Ok(denom_svd) = denom.rb().thin_svd() else {
         return (nan, df_base, nan, nan, nan, nan, nan);
     };
@@ -522,10 +527,10 @@ pub fn rao_scott(
     }
 
     let mut chisq_p = 0.0;
-    for r in 0..nr {
-        for c in 0..nc {
+    for (r, &rm) in row_margin.iter().enumerate() {
+        for (c, &cm) in col_margin.iter().enumerate() {
             let i = r * nc + c;
-            let expected = row_margin[r] * col_margin[c];
+            let expected = rm * cm;
             if expected > 0.0 {
                 chisq_p += (p[i] - expected).powi(2) / expected;
             }
@@ -541,6 +546,7 @@ pub fn rao_scott(
 
     // Without design variance there is nothing to correct by: the X² is kept,
     // its corrected p-value and the F are undefined.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN takes this branch on purpose
     if !(trace_d > 1e-9) {
         return (chisq_p, df_base, nan, nan, nan, nan, nan);
     }

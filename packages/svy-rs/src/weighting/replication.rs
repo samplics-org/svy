@@ -12,6 +12,9 @@ use ndarray::{Array1, Array2, ArrayView1, ShapeBuilder};
 use rayon::prelude::*;
 use std::collections::HashMap;
 
+/// Each stratum's index and PSUs, and each (stratum, PSU)'s position within its stratum.
+type BrrStratumMap = (HashMap<i64, (i64, Vec<i64>)>, HashMap<(i64, i64), usize>);
+
 /// Result type for replication functions
 pub type Result<T> = std::result::Result<T, ReplicationError>;
 
@@ -107,7 +110,7 @@ fn try_get_hadamard(n: usize) -> Option<Array2<f64>> {
     if n.is_power_of_two() {
         return Some(generate_hadamard_sylvester(n));
     }
-    if n % 4 != 0 {
+    if !n.is_multiple_of(4) {
         return None;
     }
     // Try Paley Type I (n-1 prime, ≡ 3 mod 4)
@@ -178,11 +181,11 @@ fn is_prime(n: usize) -> bool {
     if n == 2 {
         return true;
     }
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         return false;
     }
     let sqrt_n = (n as f64).sqrt() as usize + 1;
-    (3..=sqrt_n).step_by(2).all(|i| n % i != 0)
+    (3..=sqrt_n).step_by(2).all(|i| !n.is_multiple_of(i))
 }
 
 fn next_power_of_2(n: usize) -> usize {
@@ -229,14 +232,14 @@ pub fn create_brr_weights(
     // a full Hadamard set). Requesting MORE would silently duplicate columns
     // via `r % h_size` — duplicated replicates add no information while
     // looking like more — so that is an error.
-    if let Some(r) = n_reps {
-        if r > h_size {
-            return Err(ReplicationError::InvalidInput(format!(
-                "n_reps={r} exceeds the Hadamard matrix order {h_size} for {n_strata} strata; \
+    if let Some(r) = n_reps
+        && r > h_size
+    {
+        return Err(ReplicationError::InvalidInput(format!(
+            "n_reps={r} exceeds the Hadamard matrix order {h_size} for {n_strata} strata; \
                  BRR supports at most {h_size} distinct replicates here (n_reps <= {h_size}, \
                  or omit n_reps to use {h_size})"
-            )));
-        }
+        )));
     }
     let n_reps = n_reps.map(|r| r.max(h_size)).unwrap_or(h_size);
 
@@ -277,7 +280,7 @@ fn build_brr_stratum_map(
     stratum: &ArrayView1<i64>,
     psu: &ArrayView1<i64>,
     seed: Option<u64>,
-) -> Result<(HashMap<i64, (i64, Vec<i64>)>, HashMap<(i64, i64), usize>)> {
+) -> Result<BrrStratumMap> {
     // Use HashSet for O(1) PSU deduplication, then convert to sorted Vec
     use std::collections::HashSet as HSet;
     let mut stratum_set: HashMap<i64, HSet<i64>> = HashMap::new();
@@ -370,13 +373,13 @@ pub fn create_jkn_weights(
             got: psu.len(),
         });
     }
-    if let Some(s) = &stratum {
-        if s.len() != n_obs {
-            return Err(ReplicationError::DimensionMismatch {
-                expected: n_obs,
-                got: s.len(),
-            });
-        }
+    if let Some(s) = &stratum
+        && s.len() != n_obs
+    {
+        return Err(ReplicationError::DimensionMismatch {
+            expected: n_obs,
+            got: s.len(),
+        });
     }
 
     let stratum_vec = stratum
@@ -556,13 +559,13 @@ pub fn create_bootstrap_weights(
             got: psu.len(),
         });
     }
-    if let Some(s) = &stratum {
-        if s.len() != n_obs {
-            return Err(ReplicationError::DimensionMismatch {
-                expected: n_obs,
-                got: s.len(),
-            });
-        }
+    if let Some(s) = &stratum
+        && s.len() != n_obs
+    {
+        return Err(ReplicationError::DimensionMismatch {
+            expected: n_obs,
+            got: s.len(),
+        });
     }
     if n_reps < 1 {
         return Err(ReplicationError::InvalidInput(
@@ -622,11 +625,11 @@ pub fn create_bootstrap_weights(
                 // Apply counts via pre-built index — no O(N) scan
                 for (pi, &p) in psus.iter().enumerate() {
                     let c = counts[pi] as f64;
-                    if c > 0.0 {
-                        if let Some(obs) = psu_obs.get(&(s, p)) {
-                            for &i in obs {
-                                rep_wgt[i] = wgt[i] * c * adj;
-                            }
+                    if c > 0.0
+                        && let Some(obs) = psu_obs.get(&(s, p))
+                    {
+                        for &i in obs {
+                            rep_wgt[i] = wgt[i] * c * adj;
                         }
                     }
                 }
@@ -686,6 +689,7 @@ pub fn create_poisson_bootstrap_weights(
 
     // sqrt((w - 1) / w) is not real below 1, and a NaN here would propagate
     // silently into every downstream estimate.  `!(w >= 1.0)` also rejects NaN.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN takes this branch on purpose
     if let Some(bad) = wgt.iter().position(|&w| !(w >= 1.0)) {
         return Err(ReplicationError::InvalidInput(format!(
             "Poisson bootstrap requires weights >= 1 (the adjustment factor is \
@@ -742,21 +746,21 @@ pub fn create_sdr_weights(
             "SDR requires ≥2 replicates".into(),
         ));
     }
-    if let Some(s) = &stratum {
-        if s.len() != n_obs {
-            return Err(ReplicationError::DimensionMismatch {
-                expected: n_obs,
-                got: s.len(),
-            });
-        }
+    if let Some(s) = &stratum
+        && s.len() != n_obs
+    {
+        return Err(ReplicationError::DimensionMismatch {
+            expected: n_obs,
+            got: s.len(),
+        });
     }
-    if let Some(o) = &order {
-        if o.len() != n_obs {
-            return Err(ReplicationError::DimensionMismatch {
-                expected: n_obs,
-                got: o.len(),
-            });
-        }
+    if let Some(o) = &order
+        && o.len() != n_obs
+    {
+        return Err(ReplicationError::DimensionMismatch {
+            expected: n_obs,
+            got: o.len(),
+        });
     }
 
     let stratum_vec = stratum

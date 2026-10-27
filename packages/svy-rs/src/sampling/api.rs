@@ -9,8 +9,8 @@ use pyo3::prelude::*;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use crate::sampling::pps::{PpsMethod, PpsN, select_pps};
-use crate::sampling::srs::{SrsN, select_srs};
+use crate::sampling::pps::{PpsDraw, PpsMethod, PpsN, select_pps};
+use crate::sampling::srs::{SrsDraw, SrsN, select_srs};
 
 /// A 1-D input: a numpy array of exactly `T`, or any sequence (older callers pass lists).
 #[derive(FromPyObject)]
@@ -77,7 +77,7 @@ pub fn select_srs_rs(
     stratum: Option<Array1<'_, i64>>,
     wr: bool,
     seed: Option<u64>,
-) -> PyResult<(Vec<i64>, Vec<i64>, Vec<f64>)> {
+) -> PyResult<SrsDraw> {
     let n = parse_n(n_scalar, n_map, SrsN::Scalar, SrsN::PerStratum)?;
 
     let stratum = stratum.as_ref().map(Array1::values);
@@ -117,6 +117,7 @@ pub fn select_srs_rs(
     certainty_threshold=1.0,
     seed=None
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn select_pps_rs(
     frame: Array1<'_, i64>,
     mos: Array1<'_, f64>,
@@ -126,7 +127,7 @@ pub fn select_pps_rs(
     method: &str,
     certainty_threshold: f64,
     seed: Option<u64>,
-) -> PyResult<(Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>)> {
+) -> PyResult<PpsDraw> {
     let pps_method = PpsMethod::from_str(method).ok_or_else(|| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
             "Unknown PPS method {method:?}. Use: sys, wr, brewer, murphy, rs"
@@ -163,7 +164,7 @@ pub fn select_srs_batch_rs(
     n_map: Option<HashMap<i64, usize>>,
     stratum: Option<Array1<'_, i64>>,
     wr: bool,
-) -> PyResult<Vec<(Vec<i64>, Vec<i64>, Vec<f64>)>> {
+) -> PyResult<Vec<SrsDraw>> {
     use rayon::prelude::*;
     let n = parse_n(n_scalar, n_map, SrsN::Scalar, SrsN::PerStratum)?;
     let frame = frame.values();
@@ -197,7 +198,7 @@ pub fn select_pps_batch_rs(
     stratum: Option<Array1<'_, i64>>,
     method: &str,
     certainty_threshold: f64,
-) -> PyResult<Vec<(Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>)>> {
+) -> PyResult<Vec<PpsDraw>> {
     use rayon::prelude::*;
     let pps_method = PpsMethod::from_str(method).ok_or_else(|| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(

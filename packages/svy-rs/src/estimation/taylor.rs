@@ -84,7 +84,7 @@ pub enum SvyQuantileMethod {
 }
 
 impl SvyQuantileMethod {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "lower" => SvyQuantileMethod::Lower,
             "higher" => SvyQuantileMethod::Higher,
@@ -125,10 +125,11 @@ pub(crate) fn mask_flags(mask: &BooleanChunked) -> Vec<bool> {
 /// null; `cont_slice()` returns `Err` in those cases rather than panicking.
 #[inline]
 fn cont_pair<'a>(a: &'a Float64Chunked, b: &'a Float64Chunked) -> Option<(&'a [f64], &'a [f64])> {
-    if a.null_count() == 0 && b.null_count() == 0 {
-        if let (Ok(sa), Ok(sb)) = (a.cont_slice(), b.cont_slice()) {
-            return Some((sa, sb));
-        }
+    if a.null_count() == 0
+        && b.null_count() == 0
+        && let (Ok(sa), Ok(sb)) = (a.cont_slice(), b.cont_slice())
+    {
+        return Some((sa, sb));
     }
     None
 }
@@ -1029,10 +1030,10 @@ pub fn index_categorical_pair(a: &StringChunked, b: &StringChunked) -> (Vec<u32>
 /// code values (which may be sparse or arbitrarily ordered). Integer hashing is
 /// ~10× cheaper than hashing the label strings, which is the whole point.
 fn densify_int_codes(col: &Column) -> PolarsResult<(Vec<u32>, u32)> {
-    if let Ok(ca) = col.u32() {
-        if let Some(codes) = densify_small_u32(ca) {
-            return Ok(codes);
-        }
+    if let Ok(ca) = col.u32()
+        && let Some(codes) = densify_small_u32(ca)
+    {
+        return Ok(codes);
     }
     let s = col.cast(&DataType::Int64)?;
     let ca = s.i64()?;
@@ -1348,6 +1349,7 @@ fn scale_stage1(cov: &mut [Vec<f64>], scope: Option<&CenterScope>, sm: Singleton
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn variance_stratified_optimized(
     scores: &[f64],
     strata_indices: &[u32],
@@ -1403,10 +1405,11 @@ fn variance_stratified_optimized(
                 let fpc_h = fpc_per_stratum.map(|f| f[h]).unwrap_or(1.0);
 
                 if n_psus_h == 1 {
-                    if center && scope.as_ref().is_some_and(|s| s.present[h]) {
-                        if let Some(&p) = psu_map[h].first() {
-                            total_var += fpc_h * (psu_totals[p as usize] - grand_mean).powi(2);
-                        }
+                    if center
+                        && scope.as_ref().is_some_and(|s| s.present[h])
+                        && let Some(&p) = psu_map[h].first()
+                    {
+                        total_var += fpc_h * (psu_totals[p as usize] - grand_mean).powi(2);
                     }
                     continue;
                 }
@@ -1867,6 +1870,7 @@ pub fn taylor_variance(
 }
 
 /// [`taylor_variance`] for a domain: `active` is [`singleton_domain_rows`].
+#[allow(clippy::too_many_arguments)]
 pub fn taylor_variance_in(
     scores: &Float64Chunked,
     strata: Option<&Column>,
@@ -2099,14 +2103,15 @@ pub fn taylor_covariance_apply_in(
                     }
                     let fpc_h = d.fpc_per_stratum.as_deref().map(|f| f[h]).unwrap_or(1.0);
                     if m_h == 1 {
-                        if center && scope.as_ref().is_some_and(|s| s.present[h]) {
-                            if let Some(&p) = psu_map[h].first() {
-                                for j in 0..k {
-                                    let dj = psu_totals[j][p as usize] - grand_mean[j];
-                                    for l in j..k {
-                                        let dl = psu_totals[l][p as usize] - grand_mean[l];
-                                        add(&mut cov, j, l, fpc_h * dj * dl);
-                                    }
+                        if center
+                            && scope.as_ref().is_some_and(|s| s.present[h])
+                            && let Some(&p) = psu_map[h].first()
+                        {
+                            for j in 0..k {
+                                let dj = psu_totals[j][p as usize] - grand_mean[j];
+                                for l in j..k {
+                                    let dl = psu_totals[l][p as usize] - grand_mean[l];
+                                    add(&mut cov, j, l, fpc_h * dj * dl);
                                 }
                             }
                         }
@@ -2604,6 +2609,7 @@ pub fn quantiles_woodruff(
 /// The interval is centered at the CDF evaluated at q, as in R's svyquantile.
 ///
 /// Returns: (variance, se_proportion) where se_proportion is needed for CI calculation
+#[allow(clippy::too_many_arguments)]
 pub fn median_variance_woodruff(
     y: &Float64Chunked,
     weights: &Float64Chunked,
@@ -2647,6 +2653,7 @@ pub fn median_variance_woodruff(
 }
 
 /// Compute median variance for a domain using Woodruff method
+#[allow(clippy::too_many_arguments)]
 pub fn median_variance_woodruff_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
@@ -2789,11 +2796,11 @@ pub fn srs_variance_mean(
     let mut yv = Vec::new();
     let mut wv = Vec::new();
     for (yi, wi) in y.iter().zip(weights.iter()) {
-        if let (Some(y_val), Some(w_val)) = (yi, wi) {
-            if w_val > 0.0 {
-                yv.push(y_val);
-                wv.push(w_val);
-            }
+        if let (Some(y_val), Some(w_val)) = (yi, wi)
+            && w_val > 0.0
+        {
+            yv.push(y_val);
+            wv.push(w_val);
         }
     }
     srs_mean_from(&yv, &wv, srs)
@@ -2823,11 +2830,11 @@ pub fn srs_variance_mean_domain(
         let mut yv = Vec::new();
         let mut wv = Vec::new();
         for ((yi, wi), mi) in y.iter().zip(weights.iter()).zip(domain_mask.iter()) {
-            if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi) {
-                if w_val > 0.0 {
-                    yv.push(y_val);
-                    wv.push(w_val);
-                }
+            if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi)
+                && w_val > 0.0
+            {
+                yv.push(y_val);
+                wv.push(w_val);
             }
         }
         (yv, wv)
@@ -2851,10 +2858,10 @@ pub fn srs_variance_total(
     srs: SrsRef,
 ) -> PolarsResult<f64> {
     // Zero-weight rows are excluded from n (see srs_variance_mean).
-    if let Some((ys, ws)) = cont_pair(y, weights) {
-        if ws.iter().all(|&w| w > 0.0) {
-            return srs_total_from(ys, ws, srs);
-        }
+    if let Some((ys, ws)) = cont_pair(y, weights)
+        && ws.iter().all(|&w| w > 0.0)
+    {
+        return srs_total_from(ys, ws, srs);
     }
     let mut yv: Vec<f64> = Vec::new();
     let mut wv: Vec<f64> = Vec::new();
@@ -2905,11 +2912,11 @@ pub fn srs_variance_total_domain(
         let mut yv = Vec::new();
         let mut wv = Vec::new();
         for ((yi, wi), mi) in y.iter().zip(weights.iter()).zip(domain_mask.iter()) {
-            if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi) {
-                if w_val > 0.0 {
-                    yv.push(y_val);
-                    wv.push(w_val);
-                }
+            if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi)
+                && w_val > 0.0
+            {
+                yv.push(y_val);
+                wv.push(w_val);
             }
         }
         (yv, wv)
@@ -2993,12 +3000,12 @@ pub fn srs_variance_ratio_domain(
             .zip(weights.iter())
             .zip(domain_mask.iter())
         {
-            if let (Some(y_val), Some(x_val), Some(w_val), Some(true)) = (yi, xi, wi, mi) {
-                if w_val > 0.0 {
-                    yv.push(y_val);
-                    xv.push(x_val);
-                    wv.push(w_val);
-                }
+            if let (Some(y_val), Some(x_val), Some(w_val), Some(true)) = (yi, xi, wi, mi)
+                && w_val > 0.0
+            {
+                yv.push(y_val);
+                xv.push(x_val);
+                wv.push(w_val);
             }
         }
         (yv, xv, wv)
@@ -3308,7 +3315,7 @@ mod tests {
     #[test]
     fn test_weighted_quantile_uniform_weights() {
         let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let w = vec![1.0, 1.0, 1.0, 1.0, 1.0];
+        let w = [1.0, 1.0, 1.0, 1.0, 1.0];
 
         // CDF = [0.2, 0.4, 0.6, 0.8, 1.0]
         let total: f64 = w.iter().sum();
@@ -3327,13 +3334,13 @@ mod tests {
         assert!(median_lower <= 3.0);
         assert!(median_higher >= 3.0);
         // Linear should interpolate
-        assert!(median_linear >= 2.0 && median_linear <= 3.0);
+        assert!((2.0..=3.0).contains(&median_linear));
     }
 
     #[test]
     fn test_weighted_quantile_nonuniform_weights() {
         let y = vec![1.0, 2.0, 3.0];
-        let w = vec![1.0, 2.0, 1.0]; // value 2 has more weight
+        let w = [1.0, 2.0, 1.0]; // value 2 has more weight
 
         // CDF = [0.25, 0.75, 1.0]
         let total: f64 = w.iter().sum();
@@ -3349,7 +3356,7 @@ mod tests {
 
         // p=0.5 falls between 0.25 and 0.75
         // Should interpolate between y[0]=1 and y[1]=2
-        assert!(median_linear >= 1.0 && median_linear <= 2.0);
+        assert!((1.0..=2.0).contains(&median_linear));
     }
 
     #[test]
@@ -3379,7 +3386,7 @@ mod tests {
         let linear = weighted_quantile(&y, &cdf, 0.5, SvyQuantileMethod::Linear);
         assert_eq!(linear, 1.0);
         assert!(
-            linear >= 1.0 && linear <= 3.0,
+            (1.0..=3.0).contains(&linear),
             "Linear must stay in data range"
         );
 
@@ -3438,7 +3445,7 @@ mod tests {
 
         // The full covariance matrix path must agree with the scalar path.
         let cov_reused = taylor_variance_matrix(
-            &[scores.clone()],
+            std::slice::from_ref(&scores),
             Some(&strata),
             Some(&psu_reused),
             None,
@@ -3645,20 +3652,17 @@ mod tests {
 
     #[test]
     fn test_quantile_method_from_str() {
+        assert_eq!(SvyQuantileMethod::parse("lower"), SvyQuantileMethod::Lower);
         assert_eq!(
-            SvyQuantileMethod::from_str("lower"),
-            SvyQuantileMethod::Lower
-        );
-        assert_eq!(
-            SvyQuantileMethod::from_str("HIGHER"),
+            SvyQuantileMethod::parse("HIGHER"),
             SvyQuantileMethod::Higher
         );
         assert_eq!(
-            SvyQuantileMethod::from_str("Linear"),
+            SvyQuantileMethod::parse("Linear"),
             SvyQuantileMethod::Linear
         );
         assert_eq!(
-            SvyQuantileMethod::from_str("unknown"),
+            SvyQuantileMethod::parse("unknown"),
             SvyQuantileMethod::Higher
         ); // default
     }

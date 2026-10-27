@@ -83,9 +83,7 @@ fn compute_midranks(y: &[f64], w: &[f64], n: usize) -> Vec<f64> {
         } else {
             cumw[i..j].iter().sum::<f64>() / (j - i) as f64
         };
-        for pos in i..j {
-            midrank_sorted[pos] = avg;
-        }
+        midrank_sorted[i..j].fill(avg);
         i = j;
     }
 
@@ -135,6 +133,7 @@ pub(crate) fn probit(p: f64) -> f64 {
     }
 
     // Coefficients for rational approximation
+    #[allow(clippy::excessive_precision)] // as published
     const A: [f64; 6] = [
         -3.969683028665376e+01,
         2.209460984245205e+02,
@@ -251,6 +250,7 @@ pub struct RankTestKResult {
 ///   5. tot.infn <- svytotal(infn, design)
 ///   6. t = coef(m)[2] / SE(tot.infn)[2]
 ///   7. df = degf(design) - 1
+#[allow(clippy::too_many_arguments)]
 pub fn ranktest_two_sample(
     y: &[f64],
     g: &[u32], // group indices: 0 or 1
@@ -347,6 +347,7 @@ pub fn ranktest_two_sample(
 ///   3. V <- svy.varcoef(m, design)
 ///   4. Wald test: beta[-1]' V[-1,-1]^{-1} beta[-1]
 ///   5. F = chisq / ndf, p from F(ndf, ddf)
+#[allow(clippy::too_many_arguments)]
 pub fn ranktest_k_sample(
     y: &[f64],
     g: &[u32], // group indices: 0..k-1
@@ -457,9 +458,9 @@ pub fn ranktest_k_sample(
 
     let mut group_means = vec![wols.beta[0]]; // reference group mean
     let mut group_ses = vec![ses[0]];
-    for j in 1..k {
-        group_means.push(wols.beta[0] + wols.beta[j]);
-        group_ses.push(ses[j]); // approximate
+    for (&b, &se) in wols.beta[1..k].iter().zip(&ses[1..k]) {
+        group_means.push(wols.beta[0] + b);
+        group_ses.push(se); // approximate
     }
 
     Ok(RankTestKResult {
@@ -484,6 +485,7 @@ pub fn ranktest_k_sample(
 /// replicate design, which re-totals the full-sample influence values with
 /// each replicate weight rather than re-ranking. `score_method = None` means
 /// `y` already holds the scores (a caller-supplied score function).
+#[allow(clippy::too_many_arguments)]
 fn rep_fit(
     y: &[f64],
     g: &[u32],
@@ -528,6 +530,7 @@ fn rep_fit(
 
 /// Two-sample rank test with a replication variance (R's svyranktest on a
 /// svyrep.design). df = replicate df - 1.
+#[allow(clippy::too_many_arguments)]
 pub fn ranktest_two_sample_rep(
     y: &[f64],
     g: &[u32],
@@ -562,6 +565,7 @@ pub fn ranktest_two_sample_rep(
 
 /// K-sample rank test with a replication variance (R's multiranktest on a
 /// svyrep.design). ddf = replicate df - (k - 1).
+#[allow(clippy::too_many_arguments)]
 pub fn ranktest_k_sample_rep(
     y: &[f64],
     g: &[u32],
@@ -632,8 +636,8 @@ pub fn two_sided_t_pvalue(t: f64, df: f64) -> f64 {
     // P(|T| > |t|) = 2 * P(T > |t|) for symmetric t-distribution
     // Using the relationship: P(T > t) = 0.5 * I_{df/(df + t^2)}(df/2, 1/2)
     let x = df / (df + t * t);
-    let p = regularized_incomplete_beta(x, df / 2.0, 0.5);
-    p // This gives 2 * P(T > |t|) directly
+
+    regularized_incomplete_beta(x, df / 2.0, 0.5) // This gives 2 * P(T > |t|) directly
 }
 
 /// Survival function of F distribution: P(F > x) where F ~ F(d1, d2).

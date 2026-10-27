@@ -211,32 +211,32 @@ pub fn trim_impl(
     let ess_before = ess(&raw);
 
     // Degenerate threshold: return unchanged
-    if let Some(cap) = upper {
-        if cap <= 0.0 {
-            return Ok(TrimOutput {
-                weights: Array1::from(raw),
-                n_trimmed_upper: 0,
-                n_trimmed_lower: 0,
-                weight_sum_before,
-                weight_sum_after: weight_sum_before,
-                ess_before,
-                ess_after: ess_before,
-                iterations: 0,
-                converged: true,
-            });
-        }
+    if let Some(cap) = upper
+        && cap <= 0.0
+    {
+        return Ok(TrimOutput {
+            weights: Array1::from(raw),
+            n_trimmed_upper: 0,
+            n_trimmed_lower: 0,
+            weight_sum_before,
+            weight_sum_after: weight_sum_before,
+            ess_before,
+            ess_after: ess_before,
+            iterations: 0,
+            converged: true,
+        });
     }
     let lower = match lower {
         Some(f) if f <= 0.0 => None, // degenerate lower — ignore
         other => other,
     };
 
-    if let (Some(cap), Some(floor)) = (upper, lower) {
-        if floor >= cap {
-            return Err(WeightingError::InvalidInput(format!(
-                "lower ({floor:.6}) >= upper ({cap:.6}). Check threshold specifications."
-            )));
-        }
+    if let (Some(cap), Some(floor)) = (upper, lower)
+        && floor >= cap
+    {
+        return Err(WeightingError::InvalidInput(format!(
+            "lower ({floor:.6}) >= upper ({cap:.6}). Check threshold specifications."
+        )));
     }
 
     // Working copy — single allocation (raw consumed here)

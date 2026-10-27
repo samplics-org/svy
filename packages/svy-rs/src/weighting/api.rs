@@ -9,12 +9,26 @@ use ndarray::{Array1, ArrayView1};
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
+/// What `trim_weights` returns to Python.
+type TrimOutput = (
+    Py<numpy::PyArray1<f64>>, // trimmed weights
+    usize,                    // n_trimmed_upper
+    usize,                    // n_trimmed_lower
+    f64,                      // weight_sum_before
+    f64,                      // weight_sum_after
+    f64,                      // ess_before
+    f64,                      // ess_after
+    usize,                    // iterations
+    bool,                     // converged
+);
+
 // ============================================================================
 // Raking
 // ============================================================================
 
 #[pyfunction]
 #[pyo3(signature = (wgt, margin_indices, margin_targets, ll_bound=None, up_bound=None, tol=1e-6, max_iter=100))]
+#[allow(clippy::too_many_arguments)]
 pub fn rake(
     py: Python<'_>,
     wgt: PyReadonlyArray2<f64>,
@@ -348,17 +362,7 @@ pub fn trim_weights(
     redistribute: bool,
     max_iter: usize,
     tol: f64,
-) -> PyResult<(
-    Py<numpy::PyArray1<f64>>, // trimmed weights
-    usize,                    // n_trimmed_upper
-    usize,                    // n_trimmed_lower
-    f64,                      // weight_sum_before
-    f64,                      // weight_sum_after
-    f64,                      // ess_before
-    f64,                      // ess_after
-    usize,                    // iterations
-    bool,                     // converged
-)> {
+) -> PyResult<TrimOutput> {
     let out = crate::weighting::trimming::trim_impl(
         weights.as_array(),
         upper,

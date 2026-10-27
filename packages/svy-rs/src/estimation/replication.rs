@@ -7,6 +7,12 @@ use std::collections::HashMap;
 // Import from taylor module for median functions
 use super::taylor::{SvyQuantileMethod, weighted_quantile};
 
+/// Per domain: full-sample estimates `[K][P]`, replicate estimates `[K][P][R]`, row counts `[K]`.
+pub type DomainReps = (Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>);
+
+/// The levels found, then [`DomainReps`] over them.
+pub type LevelReps<L> = (Vec<L>, Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>);
+
 /// Replication method
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RepMethod {
@@ -17,7 +23,7 @@ pub enum RepMethod {
 }
 
 impl RepMethod {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "brr" => Some(RepMethod::BRR),
             "bootstrap" | "bs" => Some(RepMethod::Bootstrap),
@@ -29,22 +35,17 @@ impl RepMethod {
 }
 
 /// Centering method for variance estimation
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum VarianceCenter {
     /// Center on mean of replicate estimates (default, matches Stata and R survey default)
+    #[default]
     ReplicateMean,
     /// Center on full sample estimate (matches R survey mse=TRUE)
     FullSample,
 }
 
-impl Default for VarianceCenter {
-    fn default() -> Self {
-        VarianceCenter::ReplicateMean
-    }
-}
-
 impl VarianceCenter {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "rep_mean" | "repmean" | "mean" | "average" | "replicates" => {
                 Some(VarianceCenter::ReplicateMean)
@@ -791,12 +792,13 @@ pub fn matrix_total_by_domain(
         }
     }
 
-    let theta_reps: Vec<Vec<f64>> = rep_sum_wy.iter().map(|wy_vec| wy_vec.clone()).collect();
+    let theta_reps: Vec<Vec<f64>> = rep_sum_wy.to_vec();
 
     (sum_wy, theta_reps, counts)
 }
 
 /// Compute ratio estimates by domain
+#[allow(clippy::too_many_arguments)]
 pub fn matrix_ratio_by_domain(
     y: &[f64],
     x: &[f64],
@@ -888,8 +890,8 @@ pub fn matrix_prop_estimates(
     let mut levels: Vec<i64> = Vec::new();
 
     for &val in y {
-        if !level_map.contains_key(&val) {
-            level_map.insert(val, levels.len());
+        if let std::collections::hash_map::Entry::Vacant(e) = level_map.entry(val) {
+            e.insert(levels.len());
             levels.push(val);
         }
     }
@@ -949,8 +951,8 @@ fn prop_level_index(y: &[i64]) -> (Vec<i64>, Vec<usize>) {
     let mut level_map: HashMap<i64, usize> = HashMap::new();
     let mut levels: Vec<i64> = Vec::new();
     for &val in y {
-        if !level_map.contains_key(&val) {
-            level_map.insert(val, levels.len());
+        if let std::collections::hash_map::Entry::Vacant(e) = level_map.entry(val) {
+            e.insert(levels.len());
             levels.push(val);
         }
     }
@@ -1097,6 +1099,7 @@ pub fn matrix_prop_estimates_str_cols(
 
 /// Compute proportion estimates by level and domain.
 /// Category values are integers (Boolean or numeric columns).
+#[allow(clippy::too_many_arguments)]
 pub fn matrix_prop_by_domain(
     y: &[i64],
     full_weights: &[f64],
@@ -1106,14 +1109,14 @@ pub fn matrix_prop_by_domain(
     n: usize,
     n_reps: usize,
     normalize: bool,
-) -> (Vec<i64>, Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>) {
+) -> LevelReps<i64> {
     // Find unique levels
     let mut level_map: HashMap<i64, usize> = HashMap::new();
     let mut levels: Vec<i64> = Vec::new();
 
     for &val in y {
-        if !level_map.contains_key(&val) {
-            level_map.insert(val, levels.len());
+        if let std::collections::hash_map::Entry::Vacant(e) = level_map.entry(val) {
+            e.insert(levels.len());
             levels.push(val);
         }
     }
@@ -1264,6 +1267,7 @@ pub fn matrix_prop_estimates_str(
 /// Compute proportion estimates by level and domain.
 /// Category values are strings (String or Categorical columns).
 /// Returns (levels, full_estimates[D][L], replicate_estimates[D][L][R], counts[D])
+#[allow(clippy::too_many_arguments)]
 pub fn matrix_prop_by_domain_str(
     y: &[String],
     full_weights: &[f64],
@@ -1273,7 +1277,7 @@ pub fn matrix_prop_by_domain_str(
     n: usize,
     n_reps: usize,
     normalize: bool,
-) -> (Vec<String>, Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>) {
+) -> LevelReps<String> {
     // Find unique levels
     let mut level_map: HashMap<&str, usize> = HashMap::new();
     let mut levels: Vec<String> = Vec::new();
@@ -1495,7 +1499,7 @@ pub fn quantile_by_domain_cols(
     n_domains: usize,
     probs: &[f64],
     q_method: SvyQuantileMethod,
-) -> (Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>) {
+) -> DomainReps {
     use rayon::prelude::*;
     let mut rows: Vec<Vec<usize>> = vec![Vec::new(); n_domains];
     let mut counts = vec![0u32; n_domains];
@@ -1556,6 +1560,7 @@ pub fn matrix_quantile_estimates(
 }
 
 /// [`quantile_by_domain_cols`] on a flattened row-major `n × n_reps` matrix.
+#[allow(clippy::too_many_arguments)]
 pub fn matrix_quantile_by_domain(
     y: &[f64],
     full_weights: &[f64],
@@ -1566,7 +1571,7 @@ pub fn matrix_quantile_by_domain(
     n_reps: usize,
     probs: &[f64],
     q_method: SvyQuantileMethod,
-) -> (Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>) {
+) -> DomainReps {
     let cols = matrix_columns(rep_weights, n, n_reps);
     let refs: Vec<&[f64]> = cols.iter().map(|c| c.as_slice()).collect();
     quantile_by_domain_cols(
@@ -1597,6 +1602,7 @@ pub fn matrix_median_estimates(
 
 /// Compute median estimates by domain for all replicates
 /// Returns (full_estimates[K], replicate_estimates[K][R], domain_counts[K])
+#[allow(clippy::too_many_arguments)]
 pub fn matrix_median_by_domain(
     y: &[f64],
     full_weights: &[f64],
@@ -1638,23 +1644,23 @@ mod tests {
     #[test]
     fn test_variance_center_from_str() {
         assert_eq!(
-            VarianceCenter::from_str("rep_mean"),
+            VarianceCenter::parse("rep_mean"),
             Some(VarianceCenter::ReplicateMean)
         );
         assert_eq!(
-            VarianceCenter::from_str("mean"),
+            VarianceCenter::parse("mean"),
             Some(VarianceCenter::ReplicateMean)
         );
         assert_eq!(
-            VarianceCenter::from_str("full_sample"),
+            VarianceCenter::parse("full_sample"),
             Some(VarianceCenter::FullSample)
         );
         assert_eq!(
-            VarianceCenter::from_str("estimate"),
+            VarianceCenter::parse("estimate"),
             Some(VarianceCenter::FullSample)
         );
         assert_eq!(
-            VarianceCenter::from_str("mse"),
+            VarianceCenter::parse("mse"),
             Some(VarianceCenter::FullSample)
         );
     }
@@ -1782,12 +1788,12 @@ mod tests {
 
     #[test]
     fn test_sdr_from_str() {
-        assert_eq!(RepMethod::from_str("sdr"), Some(RepMethod::SDR));
-        assert_eq!(RepMethod::from_str("SDR"), Some(RepMethod::SDR));
-        assert_eq!(RepMethod::from_str("acs"), Some(RepMethod::SDR));
-        assert_eq!(RepMethod::from_str("ACS"), Some(RepMethod::SDR));
+        assert_eq!(RepMethod::parse("sdr"), Some(RepMethod::SDR));
+        assert_eq!(RepMethod::parse("SDR"), Some(RepMethod::SDR));
+        assert_eq!(RepMethod::parse("acs"), Some(RepMethod::SDR));
+        assert_eq!(RepMethod::parse("ACS"), Some(RepMethod::SDR));
         assert_eq!(
-            RepMethod::from_str("successive-difference"),
+            RepMethod::parse("successive-difference"),
             Some(RepMethod::SDR)
         );
     }
@@ -1799,7 +1805,7 @@ mod tests {
 
         let median = weighted_median_vec(&y, &w, 5, SvyQuantileMethod::Linear);
         assert!(
-            median >= 2.5 && median <= 3.5,
+            (2.5..=3.5).contains(&median),
             "Median {} should be around 3",
             median
         );

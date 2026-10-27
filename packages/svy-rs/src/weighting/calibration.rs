@@ -270,13 +270,13 @@ pub fn calibrate_by_domain(
             got: x_matrix.nrows(),
         });
     }
-    if let Some(s_arr) = &scale {
-        if s_arr.len() != n_obs {
-            return Err(WeightingError::DimensionMismatch {
-                expected: n_obs,
-                got: s_arr.len(),
-            });
-        }
+    if let Some(s_arr) = &scale
+        && s_arr.len() != n_obs
+    {
+        return Err(WeightingError::DimensionMismatch {
+            expected: n_obs,
+            got: s_arr.len(),
+        });
     }
 
     // Handle scale

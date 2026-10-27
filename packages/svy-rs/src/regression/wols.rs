@@ -139,9 +139,7 @@ fn solve_gauss(a: &[f64], b: &[f64], k: usize) -> Option<Vec<f64>> {
         // Swap rows
         if max_row != col {
             for j in 0..=(k) {
-                let tmp = aug[col * (k + 1) + j];
-                aug[col * (k + 1) + j] = aug[max_row * (k + 1) + j];
-                aug[max_row * (k + 1) + j] = tmp;
+                aug.swap(col * (k + 1) + j, max_row * (k + 1) + j);
             }
         }
 
@@ -288,6 +286,7 @@ pub fn fit_wols(y: &[f64], x: &[f64], w: &[f64], n: usize, k: usize) -> Result<W
 ///
 /// # Returns
 /// Vector of length k: the design-based SE for each coefficient.
+#[allow(clippy::too_many_arguments)]
 pub fn influence_se(
     influence: &[f64],
     w: &[f64],
@@ -345,6 +344,7 @@ pub fn influence_se(
 ///
 /// # Returns
 /// Flattened k x k covariance matrix (row-major).
+#[allow(clippy::too_many_arguments)]
 pub fn influence_covariance(
     influence: &[f64],
     w: &[f64],

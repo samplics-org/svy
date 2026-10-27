@@ -29,6 +29,16 @@ use crate::categorical::ttest::{
     ttest_two_sample_rep,
 };
 
+/// What `prepare_two_sample_data` hands the two-sample and rank tests.
+type TwoSampleData = (
+    Vec<f64>,    // y
+    Vec<f64>,    // w (zeroed for non-domain/NA)
+    Vec<u32>,    // g (0-based group indices)
+    Vec<String>, // sorted unique group labels
+    usize,       // n
+    Vec<bool>,   // the domain's rows (in the domain, y present), whatever the weight
+);
+
 // ============================================================================
 // Shared column-extraction helpers
 // ============================================================================
@@ -99,6 +109,7 @@ fn sort_labels(labels: &mut [String], dtype: &DataType) {
 ///
 /// For domain estimation: zeros weights for non-domain obs but keeps all rows
 /// so strata/PSU structure is preserved for correct variance estimation.
+#[allow(clippy::too_many_arguments)]
 fn prepare_two_sample_data(
     df: &DataFrame,
     y_col: &str,
@@ -108,14 +119,7 @@ fn prepare_two_sample_data(
     _psu_col: Option<&str>,
     domain_col: Option<&str>,
     domain_val: Option<&str>,
-) -> PolarsResult<(
-    Vec<f64>,    // y
-    Vec<f64>,    // w (zeroed for non-domain/NA)
-    Vec<u32>,    // g (0-based group indices)
-    Vec<String>, // sorted unique group labels
-    usize,       // n
-    Vec<bool>,   // the domain's rows (in the domain, y present), whatever the weight
-)> {
+) -> PolarsResult<TwoSampleData> {
     let n = df.height();
     let y_ca = df.column(y_col)?.as_materialized_series().f64()?;
     let w_ca = df.column(w_col)?.as_materialized_series().f64()?;
@@ -128,11 +132,7 @@ fn prepare_two_sample_data(
             let d_series = df.column(d_col)?.as_materialized_series();
             let d_str = d_series.cast(&DataType::String)?;
             let d_ca = d_str.str()?;
-            Some(
-                d_ca.iter()
-                    .map(|opt| opt.map_or(false, |v| v == d_val))
-                    .collect(),
-            )
+            Some(d_ca.iter().map(|opt| opt == Some(d_val)).collect())
         }
         _ => None,
     };
@@ -142,14 +142,14 @@ fn prepare_two_sample_data(
     {
         let mut seen = std::collections::HashSet::new();
         for i in 0..n {
-            let in_domain = domain_mask.as_ref().map_or(true, |m| m[i]);
+            let in_domain = domain_mask.as_ref().is_none_or(|m| m[i]);
             let w_val = w_ca.get(i).unwrap_or(0.0);
-            if in_domain && w_val > 0.0 {
-                if let Some(label) = g_ca.get(i) {
-                    if seen.insert(label.to_string()) {
-                        level_set.push(label.to_string());
-                    }
-                }
+            if in_domain
+                && w_val > 0.0
+                && let Some(label) = g_ca.get(i)
+                && seen.insert(label.to_string())
+            {
+                level_set.push(label.to_string());
             }
         }
     }
@@ -168,7 +168,7 @@ fn prepare_two_sample_data(
     for i in 0..n {
         let yi = y_ca.get(i).unwrap_or(f64::NAN);
         let wi = w_ca.get(i).unwrap_or(0.0);
-        let in_domain = domain_mask.as_ref().map_or(true, |m| m[i]);
+        let in_domain = domain_mask.as_ref().is_none_or(|m| m[i]);
         let label = g_ca.get(i).unwrap_or("__NULL__");
         let gi = label_to_idx.get(label).copied().unwrap_or(0);
 
@@ -195,7 +195,7 @@ fn has_positive_weight(
     mask: Option<&BooleanChunked>,
 ) -> bool {
     (0..y.len()).any(|i| {
-        let in_domain = mask.map_or(true, |m| m.get(i).unwrap_or(false));
+        let in_domain = mask.is_none_or(|m| m.get(i).unwrap_or(false));
         in_domain && y.get(i).is_some_and(|v| !v.is_nan()) && weights.get(i).unwrap_or(0.0) > 0.0
     })
 }
@@ -303,6 +303,7 @@ where
     calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None,
     calib_pins_total=None, calib_new_wgt=None,
     rep_weight_cols=None, rep_coefs=None, rep_df=None, variance_center="rep_mean"))]
+#[allow(clippy::too_many_arguments)]
 pub fn ttest_rs(
     _py: Python,
     data: PyDataFrame,
@@ -367,6 +368,7 @@ pub fn ttest_rs(
     Ok(PyDataFrame(result))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_svyttest(
     df: &DataFrame,
     y_col: &str,
@@ -438,6 +440,7 @@ fn compute_svyttest(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_svyttest_single(
     df: &DataFrame,
     y_col: &str,
@@ -644,6 +647,7 @@ fn compute_svyttest_single(
     rep_weight_cols=None, rep_coefs=None, rep_df=None, variance_center="rep_mean",
     scores_given=false,
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn ranktest_rs(
     _py: Python,
     data: PyDataFrame,
@@ -697,6 +701,7 @@ pub fn ranktest_rs(
     Ok(PyDataFrame(result))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_svyranktest(
     df: &DataFrame,
     y_col: &str,
@@ -763,6 +768,7 @@ fn compute_svyranktest(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_svyranktest_single(
     df: &DataFrame,
     y_col: &str,
@@ -937,6 +943,7 @@ fn compute_svyranktest_single(
     calib_pins_total=None, calib_new_wgt=None, domain_col=None,
     rep_weight_cols=None, rep_coefs=None, rep_df=None, variance_center="rep_mean",
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn tabulate_rs(
     _py: Python,
     data: PyDataFrame,
@@ -997,6 +1004,7 @@ pub fn tabulate_rs(
     Ok((PyDataFrame(result.0), PyDataFrame(result.1)))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_tabulate(
     df: &DataFrame,
     rowvar_col: &str,
@@ -1049,15 +1057,9 @@ fn compute_tabulate(
     };
     // Design columns as owned Columns (cheap Arc clone); the variance/df kernels
     // dispatch on dtype. Tabulate always supplies String columns today.
-    let strata = strata_col
-        .map(|c| df.column(c).map(|col| col.clone()))
-        .transpose()?;
-    let psu = psu_col
-        .map(|c| df.column(c).map(|col| col.clone()))
-        .transpose()?;
-    let ssu = ssu_col
-        .map(|c| df.column(c).map(|col| col.clone()))
-        .transpose()?;
+    let strata = strata_col.map(|c| df.column(c).cloned()).transpose()?;
+    let psu = psu_col.map(|c| df.column(c).cloned()).transpose()?;
+    let ssu = ssu_col.map(|c| df.column(c).cloned()).transpose()?;
     let fpc = fpc_col
         .map(|c| {
             df.column(c)
@@ -1097,7 +1099,7 @@ fn compute_tabulate(
                 _ => None,
             })
             .collect();
-        combined_key = StringChunked::from_iter(keys.into_iter());
+        combined_key = StringChunked::from_iter(keys);
         y_effective = &combined_key;
     } else {
         combined_key = rowvar_ca.clone();

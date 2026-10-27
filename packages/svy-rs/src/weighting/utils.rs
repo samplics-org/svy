@@ -56,16 +56,16 @@ pub fn check_bounds(
         if init_w > 1e-10 {
             let ratio = raked_w / init_w;
 
-            if let Some(ll) = ll_bound {
-                if ratio < ll {
-                    return false;
-                }
+            if let Some(ll) = ll_bound
+                && ratio < ll
+            {
+                return false;
             }
 
-            if let Some(up) = up_bound {
-                if ratio > up {
-                    return false;
-                }
+            if let Some(up) = up_bound
+                && ratio > up
+            {
+                return false;
             }
         }
     }
