@@ -38,7 +38,7 @@ log = logging.getLogger(__name__)
 _DECIMAL_KEYS = ("est", "se", "lci", "uci", "cv", "deff")
 
 
-def _print_width(width: Any, *, where: str) -> int:
+def checked_print_width(width: Any, *, where: str) -> int:
     try:
         w = int(width)
     except Exception as ex:
@@ -593,7 +593,7 @@ class Estimate:
         if width is None:
             self._print_width = None
             return self
-        self._print_width = _print_width(width, where="Estimate.set_print_width")
+        self._print_width = checked_print_width(width, where="Estimate.set_print_width")
         return self
 
     @classmethod
@@ -601,7 +601,7 @@ class Estimate:
         if width is None:
             cls.PRINT_WIDTH = None
             return
-        cls.PRINT_WIDTH = _print_width(width, where="Estimate.set_default_print_width")
+        cls.PRINT_WIDTH = checked_print_width(width, where="Estimate.set_default_print_width")
 
     # --- Properties ---
 
