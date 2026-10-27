@@ -45,6 +45,9 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 - **A paired two-group t-test reported `paired=False`** and printed "unpaired". `ttest(y, y_pair=..., group=...)` now sets `paired=True`.
 - **`prop` under replication returned a Boolean `y`'s levels as 0/1 and rejected an Enum `y`.** Both now come back as under Taylor, so `to_polars()` has the same schema whatever the method.
+- **`tabulate` panicked on a `where=` domain whose weights are all zero.** Its Rao-Scott tests are now NaN.
+- **Rao-Scott tests reported `F(0, 0) = 0.00, p = 1.000` where they are undefined**: one row or column level, or no design variance. They are now NaN; without design variance the uncorrected X² is still reported.
+- **One by-group with no weight, or without both groups, failed a whole `ttest(by=)` or `ranktest(by=)`.** That group now gets a NaN row labelled with the frame's groups; without `by=` the error stands.
 
 ## [0.35.0] — 2026-10-16
 

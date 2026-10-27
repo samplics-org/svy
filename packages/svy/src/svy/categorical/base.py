@@ -1176,12 +1176,15 @@ class Categorical:
             results = []
             for i in range(result_df.height):
                 raw_level = result_df[prep.by_col][i]
+                # A by-group with fewer than two weighted groups comes back as a
+                # NaN row over the frame's levels, so it is labelled with those.
+                by_group_levels = _active_group_levels(raw_level)
                 res = self._unpack_ranktest_row(
                     result_df=result_df,
                     row_idx=i,
                     y_name=y,
                     group=group,
-                    group_levels=_active_group_levels(raw_level),
+                    group_levels=by_group_levels if len(by_group_levels) >= 2 else _group_levels,
                     alpha=alpha,
                     alternative=alternative,
                     by=by,
