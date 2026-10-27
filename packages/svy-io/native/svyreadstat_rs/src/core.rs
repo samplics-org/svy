@@ -458,27 +458,27 @@ unsafe fn on_variable_impl(
 
     let cap = safe_capacity(rctx.row_capacity);
 
-    if let Some(skip) = &rctx.cols_skip {
-        if skip.contains_key(&name) {
-            let b = ColBuilders {
-                kind: ColKind::Str,
-                name: name.clone(),
-                label: None,
-                label_set: None,
-                fmt: None,
-                measure: None,
-                user_missing: None,
-                sb: Some(StringBuilder::with_capacity(
-                    cap,
-                    cap * STRING_CAPACITY_MULTIPLIER,
-                )),
-                fb: None,
-                ib: None,
-            };
-            rctx.name_to_idx.insert(name, rctx.cols.len());
-            rctx.cols.push(b);
-            return HANDLER_OK;
-        }
+    if let Some(skip) = &rctx.cols_skip
+        && skip.contains_key(&name)
+    {
+        let b = ColBuilders {
+            kind: ColKind::Str,
+            name: name.clone(),
+            label: None,
+            label_set: None,
+            fmt: None,
+            measure: None,
+            user_missing: None,
+            sb: Some(StringBuilder::with_capacity(
+                cap,
+                cap * STRING_CAPACITY_MULTIPLIER,
+            )),
+            fb: None,
+            ib: None,
+        };
+        rctx.name_to_idx.insert(name, rctx.cols.len());
+        rctx.cols.push(b);
+        return HANDLER_OK;
     }
 
     let label = {
@@ -685,10 +685,10 @@ unsafe fn on_value_impl(
         rctx.decode(CStr::from_ptr(p)).trim().to_string()
     };
 
-    if let Some(skip) = &rctx.cols_skip {
-        if skip.contains_key(&name) {
-            return HANDLER_OK;
-        }
+    if let Some(skip) = &rctx.cols_skip
+        && skip.contains_key(&name)
+    {
+        return HANDLER_OK;
     }
 
     let is_tagged = rctx.detect_tagged && readstat_value_is_tagged_missing(value) != 0;
@@ -815,10 +815,10 @@ pub(crate) fn finalize_to_ipc(mut ctx: ParseCtx) -> Result<(Vec<u8>, MetaOut)> {
     let mut vars_meta = Vec::with_capacity(ctx.cols.len());
 
     for mut col in ctx.cols.drain(..) {
-        if let Some(skip) = &ctx.cols_skip {
-            if skip.contains_key(&col.name) {
-                continue;
-            }
+        if let Some(skip) = &ctx.cols_skip
+            && skip.contains_key(&col.name)
+        {
+            continue;
         }
 
         let mut fmeta: HashMap<String, String> = HashMap::new();
@@ -943,7 +943,7 @@ pub(crate) fn finalize_to_ipc(mut ctx: ParseCtx) -> Result<(Vec<u8>, MetaOut)> {
     Ok((buf, meta))
 }
 
-/// ---------- Writer guard ----------
+// ---------- Writer guard ----------
 
 /// RAII guard that frees a readstat writer on drop, so early `?`/error
 /// returns in the write paths cannot leak the writer (and everything it
@@ -996,7 +996,7 @@ mod tests {
         // stay bounded (~1 MB of string data per column, not tens of GB).
         assert_eq!(safe_capacity(Some(999_999_999)), MAX_PREALLOC_ROWS);
         assert_eq!(safe_capacity(Some(usize::MAX)), MAX_PREALLOC_ROWS);
-        assert!(MAX_PREALLOC_ROWS * STRING_CAPACITY_MULTIPLIER <= 16 * 1024 * 1024);
+        const { assert!(MAX_PREALLOC_ROWS * STRING_CAPACITY_MULTIPLIER <= 16 * 1024 * 1024) };
     }
 
     #[test]

@@ -315,6 +315,7 @@ fn write_xpt_impl(
     // All record batches are written; a large frame is commonly split into
     // several batches by Arrow IPC serialization.
     let total_rows: i64 = batches.iter().map(|b| b.num_rows() as i64).sum();
+    #[allow(clippy::useless_conversion)] // c_long is 32-bit on Windows
     let row_count = total_rows
         .try_into()
         .map_err(|_| anyhow!("row count {total_rows} exceeds platform limit"))?;

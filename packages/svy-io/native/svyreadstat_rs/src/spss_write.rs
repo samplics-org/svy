@@ -70,7 +70,7 @@ fn ipc_to_batches(buf: &[u8]) -> Result<Vec<RecordBatch>> {
         fr.schema()
     } else {
         let mut sr = StreamReader::try_new(Cursor::new(buf), None)?;
-        while let Some(res) = sr.next() {
+        for res in sr.by_ref() {
             batches.push(res?);
         }
         sr.schema()
@@ -274,14 +274,14 @@ fn compute_string_metadata(batches: &[RecordBatch]) -> Vec<Option<StringColStats
         for (j, f) in b.schema().fields().iter().enumerate() {
             let col = b.column(j);
             let is_str = is_text_dt(f.data_type())
-                || matches!(f.data_type(), &DataType::Dictionary(_, ref v) if is_text_dt(v.as_ref()));
+                || matches!(f.data_type(), DataType::Dictionary(_, v) if is_text_dt(v.as_ref()));
             if !is_str {
                 continue;
             }
             let stats = all_stats[j].get_or_insert(StringColStats::default());
             for i in 0..col.len() {
                 if let Some(s) = get_string_value(col.as_ref(), i) {
-                    let blen = s.as_bytes().len();
+                    let blen = s.len();
                     if blen > stats.max_len {
                         stats.max_len = blen;
                     }
@@ -349,13 +349,12 @@ fn write_spss_minimal(
     let ncols = schema.fields().len();
 
     let str_stats = compute_string_metadata(batches);
-    let mut is_str_col: Vec<bool> = vec![false; ncols];
-
-    for j in 0..ncols {
-        let dt = batches[0].column(j).data_type();
-        is_str_col[j] =
-            is_text_dt(dt) || matches!(dt, DataType::Dictionary(_, v) if is_text_dt(v.as_ref()));
-    }
+    let is_str_col: Vec<bool> = (0..ncols)
+        .map(|j| {
+            let dt = batches[0].column(j).data_type();
+            is_text_dt(dt) || matches!(dt, DataType::Dictionary(_, v) if is_text_dt(v.as_ref()))
+        })
+        .collect();
 
     let mut rvars: Vec<*const readstat_variable_t> = Vec::with_capacity(ncols);
     let mut _keep_names: Vec<CString> = Vec::with_capacity(ncols);
@@ -407,18 +406,17 @@ fn write_spss_minimal(
         }
 
         // Variable label
-        if let Some(map) = var_labels {
-            if let Some(lbl) = map.get(field.name()) {
-                if !lbl.is_empty() {
-                    let c = CString::new(lbl.as_str()).map_err(|_| {
-                        anyhow!(
-                            "variable label of column '{}' contains an embedded NUL",
-                            field.name()
-                        )
-                    })?;
-                    unsafe { readstat_variable_set_label(var, c.as_ptr()) };
-                }
-            }
+        if let Some(map) = var_labels
+            && let Some(lbl) = map.get(field.name())
+            && !lbl.is_empty()
+        {
+            let c = CString::new(lbl.as_str()).map_err(|_| {
+                anyhow!(
+                    "variable label of column '{}' contains an embedded NUL",
+                    field.name()
+                )
+            })?;
+            unsafe { readstat_variable_set_label(var, c.as_ptr()) };
         }
 
         // User-defined missing values
@@ -548,6 +546,7 @@ fn write_spss_minimal(
     // Open output and begin writing
     let mut outfile = File::create(Path::new(out_path))?;
     let total_rows: i64 = batches.iter().map(|b| b.num_rows() as i64).sum();
+    #[allow(clippy::useless_conversion)] // c_long is 32-bit on Windows
     let row_count = total_rows
         .try_into()
         .map_err(|_| anyhow!("row count {total_rows} exceeds platform limit"))?;
