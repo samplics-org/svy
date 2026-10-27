@@ -4,12 +4,12 @@ from __future__ import annotations
 import math
 import numbers
 
-from typing import Any, Sequence, cast, overload
+from typing import Any, Sequence, cast
 
 import numpy as np
 import polars as pl
 
-from svy.core.types import Category, RandomState
+from svy.core.types import Category
 from svy.errors import Code, DataError, UsageError
 
 
@@ -30,81 +30,6 @@ def validate_alpha(alpha: Any, *, where: str) -> float:
             where=where, param="alpha", got=alpha, min_=0.0, max_=1.0, hint=hint
         )
     return float(alpha)
-
-
-# ------------------------------------------------------------------ #
-# Array Checks
-# ------------------------------------------------------------------ #
-
-
-def as_1d(*, a: np.ndarray, name: str) -> np.ndarray:
-    """Ensure array is 1-D."""
-    # Fast path: check dimension directly if it's already a numpy array
-    if isinstance(a, np.ndarray):
-        if a.ndim != 1:
-            raise ValueError(f"{name} must be 1-D.")
-        return a
-
-    # Conversion path
-    arr = np.asarray(a)
-    if arr.ndim != 1:
-        raise ValueError(f"{name} must be 1-D.")
-    return arr
-
-
-def as_float64_1d(*, a: np.ndarray, name: str) -> np.ndarray:
-    """Ensure array is 1-D and float64."""
-    # Combine checks to avoid redundant asarray calls
-    arr = np.asarray(a)
-    if arr.ndim != 1:
-        raise ValueError(f"{name} must be 1-D.")
-    return arr.astype(float, copy=False)
-
-
-def check_same_length(*arrays: tuple[np.ndarray, str]) -> None:
-    """Verify all provided arrays have the same first dimension."""
-    if not arrays:
-        return
-
-    # Check against the first array's length
-    n = arrays[0][0].shape[0]
-
-    for arr, name in arrays[1:]:
-        if arr.shape[0] != n:
-            # Only construct the error message on failure
-            labels = ", ".join(f"{nm}={a.shape[0]}" for a, nm in arrays)
-            raise ValueError(f"Arrays must share the same length: {labels}")
-
-
-def check_weights_finite_positive(*, w: np.ndarray) -> None:
-    """Verify weights are finite and positive-summing."""
-    finite_mask = np.isfinite(w)
-    if not finite_mask.all() or w.sum() <= 0 or (w.size > 0 and w[finite_mask].min() < 0):
-        raise ValueError("Weights must be finite and sum to a positive value.")
-
-
-def validate_xyw(
-    *,
-    y: np.ndarray,
-    w: np.ndarray,
-    x: np.ndarray | None = None,
-    require_x: bool = False,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
-    """Standardize and validate target, weight, and auxiliary variables."""
-    y = as_float64_1d(a=y, name="y")
-    w = as_float64_1d(a=w, name="samp_weight")
-
-    check_same_length((y, "y"), (w, "samp_weight"))
-    check_weights_finite_positive(w=w)
-
-    if x is None:
-        if require_x:
-            raise ValueError("Parameter x must be provided.")
-    else:
-        x = as_float64_1d(a=x, name="x")
-        check_same_length((y, "y"), (x, "x"))
-
-    return y, w, x
 
 
 # ------------------------------------------------------------------ #
@@ -188,7 +113,14 @@ def drop_missing(
     df_cols = set(df.columns)
     missing = [c for c in cols if c not in df_cols]
     if missing:
-        raise KeyError(f"Columns not found: {missing}")
+        raise DataError.KeyError(
+            title="Column(s) not found",
+            detail=f"Columns not found: {missing}",
+            code=Code.MISSING_COLUMNS,
+            where="drop_missing",
+            param="columns",
+            got=missing,
+        )
     if not any_missing(df, cols, infinite=treat_infinite_as_missing):
         return df
 
@@ -273,41 +205,3 @@ def assert_no_missing(
             got=missing_errors,
             hint=hint,
         )
-
-
-# ------------------------------------------------------------------ #
-# Random State Generator
-# ------------------------------------------------------------------ #
-
-
-@overload
-def check_random_state() -> np.random.Generator: ...
-@overload
-def check_random_state(rstate: None = ...) -> np.random.Generator: ...
-@overload
-def check_random_state(rstate: int) -> np.random.Generator: ...
-@overload
-def check_random_state(rstate: np.random.RandomState) -> np.random.Generator: ...
-@overload
-def check_random_state(rstate: np.random.Generator) -> np.random.Generator: ...
-
-
-def check_random_state(rstate: RandomState = None) -> np.random.Generator:
-    """
-    Normalize various seeds / RNGs to a numpy Generator.
-    """
-    if rstate is None:
-        return np.random.default_rng()
-
-    if isinstance(rstate, np.random.Generator):
-        return rstate
-
-    if isinstance(rstate, (int, np.integer)):
-        return np.random.default_rng(int(rstate))
-
-    if isinstance(rstate, np.random.RandomState):
-        # Make a stable seed from the legacy RNG
-        seed = int(rstate.randint(0, 2**32, dtype=np.uint32))
-        return np.random.default_rng(seed)
-
-    raise TypeError(f"Unsupported random state type: {type(rstate)!r}")

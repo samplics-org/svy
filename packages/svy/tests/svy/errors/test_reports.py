@@ -55,6 +55,7 @@ def test_public_surface():
         "WarningStore",
         "UsageError",
         "UsageWarning",
+        "ExperimentalWarning",
         "UnknownNameError",
         "SerializationError",
         *(

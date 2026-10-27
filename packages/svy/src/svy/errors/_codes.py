@@ -312,6 +312,9 @@ class Code(StrEnum):
     SINGLETON_RULE_NOT_SAVABLE = "SINGLETON_RULE_NOT_SAVABLE"
     UNSUPPORTED_RESULT_TYPE = "UNSUPPORTED_RESULT_TYPE"
 
+    # ── Experimental ──────────────────────────────────────────────────────────
+    EXPERIMENTAL = "EXPERIMENTAL"
+
     # ── Defaults: a report built without a code ───────────────────────────────
     DATASET_ERROR = "DATASET_ERROR"
     DATA_ERROR = "DATA_ERROR"
