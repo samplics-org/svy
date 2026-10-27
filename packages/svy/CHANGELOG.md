@@ -48,6 +48,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **`tabulate` panicked on a `where=` domain whose weights are all zero.** Its Rao-Scott tests are now NaN.
 - **Rao-Scott tests reported `F(0, 0) = 0.00, p = 1.000` where they are undefined**: one row or column level, or no design variance. They are now NaN; without design variance the uncorrected X² is still reported.
 - **One by-group with no weight, or without both groups, failed a whole `ttest(by=)` or `ranktest(by=)`.** That group now gets a NaN row labelled with the frame's groups; without `by=` the error stands.
+- **`corr` with a constant column raised a `RuntimeError`, and with `by=` gave a NaN estimate with SE 0.** Both now give NaN for the estimate, SE and interval, as R does; other pairs in the same call are unaffected.
 
 ## [0.35.0] — 2026-10-16
 

@@ -254,6 +254,29 @@ def test_deff_exceeds_one_under_clustering(sample):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("fixture", ["sample", "rep_sample"])
+@pytest.mark.parametrize("by", [None, "grp"])
+def test_constant_column_has_nan_correlation_and_se(request, fixture, by):
+    s = request.getfixturevalue(fixture)
+    s = Sample(s.data.with_columns(k=pl.lit(3.0)), s.design)
+    method = "replication" if fixture == "rep_sample" else "taylor"
+
+    rows = s.estimation.corr([("y", "k")], by=by, method=method).to_dicts()
+
+    assert len(rows) == (1 if by is None else 2)
+    for r in rows:
+        assert all(r[k] != r[k] for k in ("est", "se", "lci", "uci"))  # NaN
+
+
+def test_constant_column_leaves_other_pairs_alone(sample):
+    s = Sample(sample.data.with_columns(k=pl.lit(3.0)), sample.design)
+
+    r = _row(s.estimation.corr([("y", "x"), ("y", "k")]))
+
+    assert r["est"] == pytest.approx(R_CORR, rel=1e-10)
+    assert r["se"] == pytest.approx(R_CORR_SE, rel=1e-9)
+
+
 def test_single_column_is_rejected(sample):
     with pytest.raises(EstimationError, match="nothing to pair with"):
         sample.estimation.corr("y")
