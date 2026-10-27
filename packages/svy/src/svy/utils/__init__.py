@@ -1,4 +1,4 @@
-from .deprecation import deprecated
+from .deprecation import deprecated, deprecated_param
 from .experimental import experimental
 from .logconfig import enable_debug, enable_logging, temporary_log_level  # re-export
 from .random_state import RandomState, seed_from_random_state
@@ -6,6 +6,7 @@ from .random_state import RandomState, seed_from_random_state
 
 __all__ = [
     "deprecated",
+    "deprecated_param",
     "experimental",
     "enable_logging",
     "enable_debug",
