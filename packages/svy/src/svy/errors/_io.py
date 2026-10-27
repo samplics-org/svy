@@ -79,12 +79,27 @@ class IoError(SvyError):
         )
 
     @classmethod
+    def _kind_of(cls, error: BaseException | None) -> type["IoError"]:
+        # An engine's ValueError or TypeError stays one, so `except ValueError` still works.
+        if isinstance(error, ValueError):
+            return cls.ValueError
+        if isinstance(error, TypeError):
+            return cls.TypeError
+        return cls.OSError
+
+    @classmethod
     def read_failed(
-        cls, *, where: Optional[str], path: str | Path, reason: str | None = None
+        cls,
+        *,
+        where: Optional[str],
+        path: str | Path,
+        reason: str | None = None,
+        error: BaseException | None = None,
     ) -> "IoError":
-        return cls.OSError(
+        kind = cls._kind_of(error)
+        return kind(
             title="Unexpected read failure",
-            detail=reason or "Read failed for an unknown reason.",
+            detail=reason or str(error or "") or "Read failed for an unknown reason.",
             code=Code.IO_READ_FAILED,
             where=where,
             extra={"path": str(path)},
@@ -92,11 +107,17 @@ class IoError(SvyError):
 
     @classmethod
     def write_failed(
-        cls, *, where: Optional[str], path: str | Path, reason: str | None = None
+        cls,
+        *,
+        where: Optional[str],
+        path: str | Path,
+        reason: str | None = None,
+        error: BaseException | None = None,
     ) -> "IoError":
-        return cls.OSError(
+        kind = cls._kind_of(error)
+        return kind(
             title="Unexpected write failure",
-            detail=reason or "Write failed for an unknown reason.",
+            detail=reason or str(error or "") or "Write failed for an unknown reason.",
             code=Code.IO_WRITE_FAILED,
             where=where,
             extra={"path": str(path)},
