@@ -55,6 +55,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **`adjust` silently lost the weight of a class with nonrespondents but no respondents.** That now raises `NO_RESPONDENTS` naming the classes; collapse them first. When only a replicate loses a class's respondents, the replicate keeps losing that weight and a `REPLICATE_NO_RESPONDENTS` warning names the replicates and classes.
 - **Calibration on a singular system used an approximate ridge solve**, so redundant but consistent controls (one implied by others) gave weights about 1e-8 off. It now uses the minimum-norm pseudo-inverse, as R's `grake` does with `MASS::ginv`.
 - **Calibrated replicate weights were never checked against the controls.** A replicate that misses them (a deleted PSU can take an auxiliary's only units) now raises `CALIBRATION_NOT_MET` naming it, or warns under `on_nonconvergence="warn"`, before anything is written.
+- **A GLM on a design with no residual df left (too few PSUs for its coefficients) reported df 1**, so its intervals and p-values looked finite. The df, intervals and p-values are now NaN, as R `svyglm` reports with `df.residual <= 0`; estimates and SEs are unchanged.
 
 ## [0.35.0] — 2026-10-16
 

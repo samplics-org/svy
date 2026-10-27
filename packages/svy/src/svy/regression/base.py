@@ -225,6 +225,12 @@ def _not_identified(
     return flagged, [(coef, value)]
 
 
+def _residual_df(design_df: int, k: int) -> int | float:
+    """R svyglm's ``degf(design) - (k - 1)``; NaN when nothing is left, so tests are NaN."""
+    df = design_df - (k - 1)
+    return df if df > 0 else math.nan
+
+
 def _as_model_error(exc: Exception) -> ModelError | None:
     """Recognise an engine failure that the caller can act on."""
     msg = str(exc)
@@ -967,13 +973,12 @@ class GLM:
         # R's svyglm: df_resid = degf(design) - (k - 1), where k - 1 is the
         # number of non-intercept fitted parameters. This differs from the
         # estimation namespace (mean, prop, ratio) which uses the raw design
-        # df since no parameters are fitted. The max(1, ...) guard protects
-        # against degenerate designs with very few PSUs relative to k.
+        # df since no parameters are fitted. A design with no df left (too few
+        # PSUs for k) has no t reference, so the df is NaN, as R's p-values are.
         # Restricted to in-domain, positive-weight rows (Rust returns its
         # own df_resid; we recompute here for the t-quantile convention).
         in_dom_df = eng_df.filter(pl.Series(in_dom_mask))
-        df_design = self._compute_design_df(in_dom_df, s_col, p_col, n)
-        df_design = max(1, df_design - (k - 1))
+        df_design = _residual_df(self._compute_design_df(in_dom_df, s_col, p_col, n), k)
 
         # ── Replicate variance (R svrepglm) ──────────────────────────────
         # When the design carries replicate weights, V(beta) comes from the
@@ -1049,7 +1054,7 @@ class GLM:
             # Replication df is the recorded df, else n_reps - 1 (as in
             # estimation), never the Taylor PSU/strata count.
             _, rep_df, _ = replicate_params(self._sample, where="GLM.fit")
-            df_design = max(1, rep_df - (k - 1))
+            df_design = _residual_df(rep_df, k)
 
         # A coefficient that is not identified in the fit, or in any replicate
         # refit, has no variance to report: its row and column are the
@@ -1648,18 +1653,18 @@ class GLM:
     def _compute_design_df(
         self, df: pl.DataFrame, s_col: str | None, p_col: str | None, n: int
     ) -> int:
-        """Compute design-based degrees of freedom."""
+        """Design degrees of freedom, R's ``degf``; zero or less when the design has none."""
         if p_col and s_col:
             psu_per_stratum = df.group_by(s_col).agg(pl.col(p_col).n_unique())
             total_psu = psu_per_stratum[p_col].sum()
             n_strata = psu_per_stratum.height  # already one row per stratum
-            return int(max(1, total_psu - n_strata))
+            return int(total_psu - n_strata)
         elif p_col:
-            return max(1, df.get_column(p_col).n_unique() - 1)
+            return df.get_column(p_col).n_unique() - 1
         elif s_col:
-            return max(1, n - df.get_column(s_col).n_unique())
+            return n - df.get_column(s_col).n_unique()
         else:
-            return max(1, n - 1)
+            return n - 1
 
     def _build_stats(
         self,
@@ -1669,7 +1674,7 @@ class GLM:
         dev: float,
         null_dev: float,
         iters: int,
-        df_design: int,
+        df_design: int | float,
         intercept: bool,
         params: np.ndarray | None = None,
         cov_mat: np.ndarray | None = None,

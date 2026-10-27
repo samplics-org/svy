@@ -11,6 +11,7 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 - `scores_corr` returns zero scores for a constant column instead of an error, and `taylor_assoc` reports a NaN SE, variance and deff for any NaN estimate.
 - `adjust_nr` returns `WeightingError::NoRespondents` when the full-sample column (column 0) has a class with nonrespondent or unknown weight but no units to carry it, instead of a factor of 1. Replicate columns keep the factor of 1.
 - The calibration solve falls back to an SVD pseudo-inverse with R `ginv`'s tolerance on a singular system, instead of a Tikhonov ridge.
+- The GLM `df_resid` is NaN, not 1, when the domain leaves no design df, and a non-finite null deviance is NaN, not 0.
 
 ## [0.19.1] — 2026-10-15
 

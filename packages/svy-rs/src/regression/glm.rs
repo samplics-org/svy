@@ -1192,7 +1192,11 @@ fn null_deviance_with_offset(
         }
     }
 
-    if deviance.is_finite() { deviance } else { 0.0 }
+    if deviance.is_finite() {
+        deviance
+    } else {
+        f64::NAN
+    }
 }
 
 /// One fit, dispatching on the family.
@@ -2103,7 +2107,7 @@ pub(crate) fn fit_glm_domain(
     let tmp = &bread * &meat;
     let cov = &tmp * &bread;
 
-    // df_resid — domain-aware. We restrict the PSU and stratum counts to
+    // df_resid — domain-aware, NaN when the domain leaves no df (as R's p-values are). We restrict the PSU and stratum counts to
     // those with at least one in-domain row with positive weight. This
     // matches R's behavior: domains shrink the effective df when entire
     // PSUs/strata fall outside the domain.
@@ -2123,14 +2127,14 @@ pub(crate) fn fit_glm_domain(
             }
         }
         let df = (total_psus as isize) - (nonempty_strata as isize);
-        if df <= 0 { 1.0 } else { df as f64 }
+        if df <= 0 { f64::NAN } else { df as f64 }
     } else if psu.is_some() {
         let psus_in_dom: HashSet<usize> = (0..n)
             .filter(|&i| domain_mask.map_or(true, |m| m[i]) && w_samp[i] > 0.0)
             .map(|i| psu_idx[i])
             .collect();
         let m = psus_in_dom.len() as isize;
-        if m <= 1 { 1.0 } else { (m - 1) as f64 }
+        if m <= 1 { f64::NAN } else { (m - 1) as f64 }
     } else if strata.is_some() {
         // Count rows in domain and strata containing in-domain rows.
         let mut n_dom: isize = 0;
@@ -2143,12 +2147,16 @@ pub(crate) fn fit_glm_domain(
             }
         }
         let df = n_dom - (strata_in_dom.len() as isize);
-        if df <= 0 { 1.0 } else { df as f64 }
+        if df <= 0 { f64::NAN } else { df as f64 }
     } else {
         let n_dom: isize = (0..n)
             .filter(|&i| domain_mask.map_or(true, |m| m[i]) && w_samp[i] > 0.0)
             .count() as isize;
-        if n_dom <= 1 { 1.0 } else { (n_dom - 1) as f64 }
+        if n_dom <= 1 {
+            f64::NAN
+        } else {
+            (n_dom - 1) as f64
+        }
     };
 
     // Dispersion (phi), reporting only: the Pearson estimate
