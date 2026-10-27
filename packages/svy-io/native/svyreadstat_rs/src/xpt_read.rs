@@ -53,6 +53,8 @@ fn parse_xpt_impl(
         parse_catalog(&mut ctx, cat_path, catalog_encoding, lossy_utf8)?;
     }
 
+    // Before the parser exists, so a bad path cannot return without freeing it.
+    let c_path = CString::new(data_path)?;
     unsafe {
         let p = readstat_parser_init();
         if p.is_null() {
@@ -75,11 +77,7 @@ fn parse_xpt_impl(
         };
         readstat_set_value_label_handler(p, Some(on_value_label_cb));
 
-        let rc = readstat_parse_xport(
-            p,
-            CString::new(data_path)?.as_ptr(),
-            &mut ctx as *mut _ as *mut c_void,
-        );
+        let rc = readstat_parse_xport(p, c_path.as_ptr(), &mut ctx as *mut _ as *mut c_void);
         readstat_parser_free(p);
 
         // A panic caught inside a handler callback is an internal error.
