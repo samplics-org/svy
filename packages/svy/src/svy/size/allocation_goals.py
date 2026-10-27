@@ -89,6 +89,18 @@ def allocate(
         raise SelectionError.invalid_type(
             where=_WHERE, param="n", got=n, expected="a positive integer"
         )
+    if isinstance(min_n, bool) or not isinstance(min_n, int):
+        raise SelectionError.invalid_type(
+            where=_WHERE, param="min_n", got=min_n, expected="an integer >= 0"
+        )
+    if min_n < 0:
+        raise SelectionError.invalid_range(
+            where=_WHERE,
+            param="min_n",
+            got=min_n,
+            min_=0,
+            hint="min_n is the fewest units a non-empty stratum gets; 0 sets no floor.",
+        )
     if method not in get_args(AllocationMethod):
         raise SelectionError.invalid_choice(
             where=_WHERE, param="method", got=method, allowed=list(get_args(AllocationMethod))

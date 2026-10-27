@@ -35,6 +35,7 @@ from svy.size.estimation_goals import (
     _checked_alpha,
     _has_pop,
     _require_numbers,
+    _require_positive,
 )
 from svy.size.types import TargetTwoMeans, TargetTwoProps
 from svy.utils.helpers import _get_keys_from_maps
@@ -111,6 +112,11 @@ def compare_props(
         The updated SampleSize instance (chainable).
     """
     alpha = _checked_alpha(alpha, where="SampleSize.compare_props")
+    if not isinstance(two_sides, bool):
+        raise SelectionError.invalid_type(
+            where="SampleSize.compare_props", param="two_sides", got=two_sides, expected="True or False"
+        )
+    _require_positive(where="SampleSize.compare_props", pop_size=pop_size, alloc_ratio=alloc_ratio)
 
     if method != "wald":
         raise SelectionError.invalid_choice(
@@ -324,6 +330,11 @@ def compare_means(
         The updated SampleSize instance (chainable).
     """
     alpha = _checked_alpha(alpha, where="SampleSize.compare_means")
+    if not isinstance(two_sides, bool):
+        raise SelectionError.invalid_type(
+            where="SampleSize.compare_means", param="two_sides", got=two_sides, expected="True or False"
+        )
+    _require_positive(where="SampleSize.compare_means", pop_size=pop_size, alloc_ratio=alloc_ratio)
 
     ss._param = PopParam.MEAN
     ss._target = TargetTwoMeans(
