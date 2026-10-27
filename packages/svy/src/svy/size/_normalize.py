@@ -16,6 +16,7 @@ from svy.core.enumerations import (
 from svy.core.enumerations import (
     PropVarMode as _PropVarMode,
 )
+from svy.errors import SelectionError
 
 
 _ONE_PROP_METHOD_MAP = {
@@ -37,13 +38,20 @@ def _normalize_one_prop_method(
     if method is None:
         return _OnePropSizeMethod.WALD
     if not isinstance(method, str):
-        raise TypeError(
-            f"'method' must be a string or None, got {type(method).__name__}. "
-            f"Use 'wald' or 'fleiss'."
+        raise SelectionError.invalid_type(
+            where="SampleSize.estimate_prop",
+            param="method",
+            got=method,
+            expected="'wald', 'fleiss' or None",
         )
     result = _ONE_PROP_METHOD_MAP.get(method.strip().lower())
     if result is None:
-        raise ValueError(f"Unknown method {method!r}. Use 'wald' or 'fleiss'.")
+        raise SelectionError.invalid_choice(
+            where="SampleSize.estimate_prop",
+            param="method",
+            got=method,
+            allowed=list(_ONE_PROP_METHOD_MAP),
+        )
     return result
 
 
@@ -68,13 +76,18 @@ def _normalize_prop_var_mode(
     if var_mode is None:
         return _PropVarMode.ALT_PROPS
     if not isinstance(var_mode, str):
-        raise TypeError(
-            f"'var_mode' must be a string or None, got {type(var_mode).__name__}. "
-            f"Use 'alt-props', 'pooled-prop', or 'max-var'."
+        raise SelectionError.invalid_type(
+            where="SampleSize.compare_props",
+            param="var_mode",
+            got=var_mode,
+            expected="'alt-props', 'pooled-prop', 'max-var' or None",
         )
     result = _PROP_VAR_MODE_MAP.get(var_mode.strip().lower())
     if result is None:
-        raise ValueError(
-            f"Unknown var_mode {var_mode!r}. Use 'alt-props', 'pooled-prop', or 'max-var'."
+        raise SelectionError.invalid_choice(
+            where="SampleSize.compare_props",
+            param="var_mode",
+            got=var_mode,
+            allowed=list(_PROP_VAR_MODE_MAP),
         )
     return result

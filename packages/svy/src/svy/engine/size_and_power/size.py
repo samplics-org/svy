@@ -505,6 +505,16 @@ def _fleiss_sample_size_prop_scalar(
 ) -> float:
     p = _validate_prob(target, param="p")
     d = _validate_moe(half_ci, upper=1.0)
+    if d >= 0.5:
+        # The Fleiss factor is 8d(1 - 2d) near the bounds: zero or negative from d = 0.5.
+        raise SelectionError.invalid_range(
+            where="SampleSize.estimate_prop",
+            param="moe",
+            got=half_ci,
+            min_=0,
+            max_=0.5,
+            hint="Fleiss's method needs moe < 0.5; method='wald' takes up to 1.",
+        )
     z = _zcrit(_as_float(alpha), True)
     f = _fleiss_factor_scalar(p=p, d=d)
     n = (f * (z * z) / (4.0 * d * d)) + (1.0 / d) - (2.0 * z * z) + ((z + 2.0) / f)
