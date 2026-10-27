@@ -1,7 +1,7 @@
 // native/svyreadstat_rs/src/xpt_write.rs
 // COMPLETE REWRITE - must use readstat row-by-row API
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use arrow::array::*;
 use arrow::datatypes::{
     DataType, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type,

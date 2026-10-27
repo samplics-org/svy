@@ -12,8 +12,8 @@ use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 
-use crate::estimation::into_contiguous;
 use crate::estimation::calib_sweep::{CalibSpec, CalibSweep, build_calib_sweep};
+use crate::estimation::into_contiguous;
 use crate::estimation::taylor::active_count;
 
 use crate::categorical::ranktest::{
