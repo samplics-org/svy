@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import math
-
 import numpy as np
 import polars as pl
 import pytest
@@ -11,123 +9,9 @@ from polars.testing import assert_frame_equal
 from svy.core.types import Category
 from svy.utils.checks import (
     any_missing,
-    as_1d,
-    as_float64_1d,
-    check_same_length,
-    check_weights_finite_positive,
     drop_missing,
     to_stringnumber,
-    validate_xyw,
 )
-
-
-# -----------------------
-# as_1d / as_float64_1d
-# -----------------------
-
-
-def test_as_1d_ok():
-    a = np.array([1, 2, 3])
-    out = as_1d(a=a, name="a")
-    assert out.ndim == 1
-    assert out.shape == (3,)
-
-
-def test_as_1d_raises_on_2d():
-    a = np.array([[1, 2], [3, 4]])
-    with pytest.raises(ValueError, match="a must be 1-D"):
-        as_1d(a=a, name="a")
-
-
-def test_as_float64_1d_casts_and_is_1d():
-    a = np.array([1, 2, 3], dtype=np.int32)
-    out = as_float64_1d(a=a, name="a")
-    assert out.ndim == 1
-    assert out.dtype == float
-    np.testing.assert_allclose(out, np.array([1.0, 2.0, 3.0]))
-
-
-# -----------------------
-# check_same_length / weights
-# -----------------------
-
-
-def test_check_same_length_ok():
-    a = np.arange(5)
-    b = np.ones(5)
-    # Should not raise
-    check_same_length((a, "a"), (b, "b"))
-
-
-def test_check_same_length_mismatch_raises():
-    a = np.arange(5)
-    b = np.ones(4)
-    with pytest.raises(ValueError):
-        check_same_length((a, "a"), (b, "b"))
-
-
-def test_check_weights_finite_positive_ok():
-    w = np.array([0.5, 0.5, 1.0])
-    check_weights_finite_positive(w=w)  # no raise
-
-
-@pytest.mark.parametrize(
-    "w",
-    [
-        np.array([0.0, 0.0]),  # sum == 0
-        np.array([1.0, math.nan]),  # NaN present
-        np.array([1.0, math.inf, -math.inf]),  # non-finite
-    ],
-)
-def test_check_weights_finite_positive_raises(w):
-    with pytest.raises(ValueError, match="Weights must be finite and sum to a positive value"):
-        check_weights_finite_positive(w=w)
-
-
-# -----------------------
-# validate_xyw
-# -----------------------
-
-
-def test_validate_xyw_basic_no_x():
-    y = np.array([1, 2, 3], dtype=int)
-    w = np.array([0.2, 0.3, 0.5], dtype=float)
-    yy, ww, xx = validate_xyw(y=y, w=w, x=None, require_x=False)
-    assert yy.dtype == float and ww.dtype == float
-    assert xx is None
-    np.testing.assert_allclose(yy, y.astype(float))
-    np.testing.assert_allclose(ww, w)
-
-
-def test_validate_xyw_requires_x_raises():
-    y = np.array([1, 2, 3])
-    w = np.array([1.0, 1.0, 1.0])
-    with pytest.raises(ValueError, match="Parameter x must be provided"):
-        validate_xyw(y=y, w=w, x=None, require_x=True)
-
-
-def test_validate_xyw_with_x_ok():
-    y = np.array([1, 2, 3])
-    w = np.array([1.0, 2.0, 3.0])
-    x = np.array([4.0, 5.0, 6.0])
-    yy, ww, xx = validate_xyw(y=y, w=w, x=x, require_x=True)
-    assert xx is not None and xx.dtype == float
-    np.testing.assert_allclose(xx, x)
-
-
-def test_validate_xyw_x_length_mismatch_raises():
-    y = np.array([1, 2, 3])
-    w = np.array([1.0, 2.0, 3.0])
-    x = np.array([1.0, 2.0])
-    with pytest.raises(ValueError):
-        validate_xyw(y=y, w=w, x=x, require_x=True)
-
-
-def test_validate_xyw_weights_invalid_raises():
-    y = np.array([1, 2, 3])
-    w = np.array([0.0, 0.0, 0.0])
-    with pytest.raises(ValueError, match="Weights must be finite"):
-        validate_xyw(y=y, w=w, x=None, require_x=False)
 
 
 # -----------------------
