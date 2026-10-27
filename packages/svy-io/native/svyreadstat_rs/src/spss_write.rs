@@ -552,11 +552,8 @@ fn write_spss_minimal(
         .try_into()
         .map_err(|_| anyhow!("row count {total_rows} exceeds platform limit"))?;
     unsafe {
-        let rc = readstat_begin_writing_sav(
-            writer,
-            &mut outfile as *mut File as *mut c_void,
-            row_count,
-        );
+        let rc =
+            readstat_begin_writing_sav(writer, &mut outfile as *mut File as *mut c_void, row_count);
         if rc != 0 {
             return Err(anyhow!("readstat_begin_writing_sav failed with rc={}", rc));
         }

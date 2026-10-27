@@ -1804,7 +1804,16 @@ pub(crate) fn fit_glm_domain(
     // for refits, separation) only; the sandwich below is the costly part.
     if !want_variance {
         let separation = separation_check(
-            family, n, k, &y_vals, &x, &w_samp, &mu, domain_mask, deviance, tol,
+            family,
+            n,
+            k,
+            &y_vals,
+            &x,
+            &w_samp,
+            &mu,
+            domain_mask,
+            deviance,
+            tol,
         );
         return Ok(GlmResult {
             params: (0..k).map(|i| beta[(i, 0)]).collect(),

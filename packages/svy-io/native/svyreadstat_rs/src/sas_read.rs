@@ -245,19 +245,18 @@ pub fn df_parse_sas_file<'py>(
     lossy_utf8: bool,
 ) -> PyResult<(Py<PyAny>, String)> {
     // Release GIL during parsing for better Python concurrency
-    let result =
-        py.detach(|| {
-            parse_sas_impl(
-                data_path,
-                catalog_path,
-                encoding,
-                catalog_encoding,
-                rows_skip,
-                n_max,
-                cols_skip,
-                lossy_utf8,
-            )
-        });
+    let result = py.detach(|| {
+        parse_sas_impl(
+            data_path,
+            catalog_path,
+            encoding,
+            catalog_encoding,
+            rows_skip,
+            n_max,
+            cols_skip,
+            lossy_utf8,
+        )
+    });
 
     let (ipc, meta) =
         result.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
@@ -338,7 +337,10 @@ mod tests {
         );
         resolve_format_label_sets(&mut ctx);
         let sets: Vec<_> = ctx.cols.iter().map(|c| c.label_set.as_deref()).collect();
-        assert_eq!(sets, [Some("WORKSHOP"), Some("$GENDER"), Some("BEST12"), None]);
+        assert_eq!(
+            sets,
+            [Some("WORKSHOP"), Some("$GENDER"), Some("BEST12"), None]
+        );
         // the format keeps its width
         assert_eq!(ctx.cols[0].fmt.as_deref(), Some("WORKSHOP5"));
     }
@@ -352,7 +354,16 @@ mod tests {
 
     #[test]
     fn test_parse_sas_validates_path() {
-        let result = parse_sas_impl("nonexistent.sas7bdat", None, None, None, 0, None, None, false);
+        let result = parse_sas_impl(
+            "nonexistent.sas7bdat",
+            None,
+            None,
+            None,
+            0,
+            None,
+            None,
+            false,
+        );
         assert!(result.is_err());
     }
 
@@ -360,7 +371,16 @@ mod tests {
     fn test_parse_sas_handles_skip_params() {
         // Test that skip parameters are properly configured
         let cols_skip = Some(vec!["var1".to_string(), "var2".to_string()]);
-        let result = parse_sas_impl("test.sas7bdat", None, None, None, 10, Some(50), cols_skip, false);
+        let result = parse_sas_impl(
+            "test.sas7bdat",
+            None,
+            None,
+            None,
+            10,
+            Some(50),
+            cols_skip,
+            false,
+        );
         // Will fail on nonexistent file, but tests parameter handling
         assert!(result.is_err());
     }

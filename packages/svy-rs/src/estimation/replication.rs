@@ -196,10 +196,7 @@ pub fn extract_rep_weights_matrix(
         .collect::<PolarsResult<_>>()?;
 
     // Borrow each column as one contiguous null-free slice, if possible.
-    let contiguous: Option<Vec<&[f64]>> = f64_cols
-        .iter()
-        .map(|c| c.cont_slice().ok())
-        .collect();
+    let contiguous: Option<Vec<&[f64]>> = f64_cols.iter().map(|c| c.cont_slice().ok()).collect();
 
     match contiguous {
         Some(cols) => {
@@ -300,7 +297,11 @@ pub fn matrix_mean_estimates_cols(
 ) -> (f64, Vec<f64>) {
     let sum_wy: f64 = y.iter().zip(full_weights.iter()).map(|(a, b)| a * b).sum();
     let sum_w: f64 = full_weights.iter().sum();
-    let theta_full = if sum_w > 0.0 { sum_wy / sum_w } else { f64::NAN };
+    let theta_full = if sum_w > 0.0 {
+        sum_wy / sum_w
+    } else {
+        f64::NAN
+    };
 
     use rayon::prelude::*;
     // `domain_mask` zeroes the replicate weight for `where=` domain rows in the
@@ -460,7 +461,11 @@ pub fn matrix_ratio_estimates_cols(
 ) -> (f64, Vec<f64>) {
     let sum_wy: f64 = y.iter().zip(full_weights.iter()).map(|(a, b)| a * b).sum();
     let sum_wx: f64 = x.iter().zip(full_weights.iter()).map(|(a, b)| a * b).sum();
-    let theta_full = if sum_wx > 0.0 { sum_wy / sum_wx } else { f64::NAN };
+    let theta_full = if sum_wx > 0.0 {
+        sum_wy / sum_wx
+    } else {
+        f64::NAN
+    };
 
     use rayon::prelude::*;
     let theta_reps: Vec<f64> = rep_cols
@@ -622,7 +627,13 @@ pub fn matrix_mean_by_domain_cols(
                 }
             }
             (0..n_domains)
-                .map(|d| if sw[d] > 0.0 { swy[d] / sw[d] } else { f64::NAN })
+                .map(|d| {
+                    if sw[d] > 0.0 {
+                        swy[d] / sw[d]
+                    } else {
+                        f64::NAN
+                    }
+                })
                 .collect()
         })
         .collect();
@@ -705,7 +716,13 @@ pub fn matrix_ratio_by_domain_cols(
         counts[d] += u32::from(full_weights[i] != 0.0);
     }
     let theta_full: Vec<f64> = (0..n_domains)
-        .map(|d| if sum_wx[d] > 0.0 { sum_wy[d] / sum_wx[d] } else { f64::NAN })
+        .map(|d| {
+            if sum_wx[d] > 0.0 {
+                sum_wy[d] / sum_wx[d]
+            } else {
+                f64::NAN
+            }
+        })
         .collect();
 
     use rayon::prelude::*;
@@ -723,7 +740,13 @@ pub fn matrix_ratio_by_domain_cols(
                 }
             }
             (0..n_domains)
-                .map(|d| if swx[d] > 0.0 { swy[d] / swx[d] } else { f64::NAN })
+                .map(|d| {
+                    if swx[d] > 0.0 {
+                        swy[d] / swx[d]
+                    } else {
+                        f64::NAN
+                    }
+                })
                 .collect()
         })
         .collect();
@@ -1483,7 +1506,10 @@ pub fn quantile_by_domain_cols(
             counts[d] += u32::from(full_weights[i] != 0.0);
         }
     }
-    let orders: Vec<Vec<usize>> = rows.into_iter().map(|r| sorted_finite(y, r.into_iter())).collect();
+    let orders: Vec<Vec<usize>> = rows
+        .into_iter()
+        .map(|r| sorted_finite(y, r.into_iter()))
+        .collect();
     let theta_full = orders
         .iter()
         .map(|o| quantiles_in_order(y, full_weights, o, probs, q_method))
@@ -1582,7 +1608,15 @@ pub fn matrix_median_by_domain(
     q_method: SvyQuantileMethod,
 ) -> (Vec<f64>, Vec<Vec<f64>>, Vec<u32>) {
     let (full, reps, counts) = matrix_quantile_by_domain(
-        y, full_weights, rep_weights, domain_ids, n_domains, n, n_reps, &[0.5], q_method,
+        y,
+        full_weights,
+        rep_weights,
+        domain_ids,
+        n_domains,
+        n,
+        n_reps,
+        &[0.5],
+        q_method,
     );
     (
         full.into_iter().map(|v| v[0]).collect(),
@@ -1684,8 +1718,7 @@ mod tests {
         let coefs = vec![0.25, 0.25, 0.25, 0.25];
 
         for center in [VarianceCenter::ReplicateMean, VarianceCenter::FullSample] {
-            let expected =
-                variance_from_replicates(theta_full, &theta_reps, &coefs, center);
+            let expected = variance_from_replicates(theta_full, &theta_reps, &coefs, center);
             // The signature no longer admits a method at all; this pins the
             // property that made removing it safe -- the coefficients are the
             // only thing that distinguishes one replication scheme from another.
@@ -1705,9 +1738,8 @@ mod tests {
         let coefs = vec![0.5, 1.0, 1.5, 2.0];
         // center = mean = 100; sum c_r * (rep - 100)^2
         //        = 0.5*4 + 1.0*4 + 1.5*1 + 2.0*1 = 2 + 4 + 1.5 + 2 = 9.5
-        let var = variance_from_replicates(
-            100.0, &theta_reps, &coefs, VarianceCenter::ReplicateMean,
-        );
+        let var =
+            variance_from_replicates(100.0, &theta_reps, &coefs, VarianceCenter::ReplicateMean);
         assert!((var - 9.5).abs() < 1e-12, "got {var}");
     }
 
@@ -1792,7 +1824,9 @@ mod tests {
     fn test_presorted_quantiles_match_per_set_sort() {
         let mut state: u64 = 12345;
         let mut next = move || {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (state >> 33) as f64 / (1u64 << 31) as f64
         };
         let n = 300;
@@ -1856,8 +1890,12 @@ mod tests {
     fn test_matrix_prop_estimates_str_two_levels() {
         // 6 obs: 4 "yes", 2 "no", equal weights → yes=2/3, no=1/3
         let y = vec![
-            "yes".to_string(), "yes".to_string(), "no".to_string(),
-            "yes".to_string(), "no".to_string(), "yes".to_string(),
+            "yes".to_string(),
+            "yes".to_string(),
+            "no".to_string(),
+            "yes".to_string(),
+            "no".to_string(),
+            "yes".to_string(),
         ];
         let w = vec![1.0; 6];
         // 2 replicates, all weight = 1
@@ -1869,7 +1907,7 @@ mod tests {
         assert_eq!(levels, vec!["no".to_string(), "yes".to_string()]);
         let no_idx = 0;
         let yes_idx = 1;
-        assert!((theta_full[no_idx]  - 2.0 / 6.0).abs() < 1e-10);
+        assert!((theta_full[no_idx] - 2.0 / 6.0).abs() < 1e-10);
         assert!((theta_full[yes_idx] - 4.0 / 6.0).abs() < 1e-10);
         assert!((theta_full[no_idx] + theta_full[yes_idx] - 1.0).abs() < 1e-10);
         assert_eq!(theta_reps[no_idx].len(), 2);
@@ -1899,10 +1937,12 @@ mod tests {
         // 4 obs: domain A (obs 0,1), domain B (obs 2,3)
         // y: A→["yes","no"], B→["no","no"]
         let y = vec![
-            "yes".to_string(), "no".to_string(),
-            "no".to_string(),  "no".to_string(),
+            "yes".to_string(),
+            "no".to_string(),
+            "no".to_string(),
+            "no".to_string(),
         ];
-        let w    = vec![1.0; 4];
+        let w = vec![1.0; 4];
         let rep_w = vec![1.0f64; 4 * 2]; // 2 reps
         let domain_ids = vec![0u32, 0, 1, 1];
 

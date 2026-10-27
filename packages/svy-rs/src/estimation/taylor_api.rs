@@ -10,11 +10,11 @@ use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 use rayon::prelude::*;
 
-use crate::estimation::into_contiguous;
 use crate::estimation::association::{
     AssocKind, point_estimate_assoc, scores_assoc, srs_variance_assoc_of,
 };
 use crate::estimation::calib_sweep::{CalibSpec, CalibSweep, build_calib_sweep};
+use crate::estimation::into_contiguous;
 use crate::estimation::taylor::{
     SrsRef, SvyQuantileMethod, TaylorDesign, active_count, build_taylor_design, degrees_of_freedom,
     degrees_of_freedom_from_design, point_estimate_mean, point_estimate_mean_domain,
