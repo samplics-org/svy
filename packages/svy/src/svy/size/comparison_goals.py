@@ -114,7 +114,10 @@ def compare_props(
     alpha = _checked_alpha(alpha, where="SampleSize.compare_props")
     if not isinstance(two_sides, bool):
         raise SelectionError.invalid_type(
-            where="SampleSize.compare_props", param="two_sides", got=two_sides, expected="True or False"
+            where="SampleSize.compare_props",
+            param="two_sides",
+            got=two_sides,
+            expected="True or False",
         )
     _require_positive(where="SampleSize.compare_props", pop_size=pop_size, alloc_ratio=alloc_ratio)
 
@@ -332,7 +335,10 @@ def compare_means(
     alpha = _checked_alpha(alpha, where="SampleSize.compare_means")
     if not isinstance(two_sides, bool):
         raise SelectionError.invalid_type(
-            where="SampleSize.compare_means", param="two_sides", got=two_sides, expected="True or False"
+            where="SampleSize.compare_means",
+            param="two_sides",
+            got=two_sides,
+            expected="True or False",
         )
     _require_positive(where="SampleSize.compare_means", pop_size=pop_size, alloc_ratio=alloc_ratio)
 

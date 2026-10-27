@@ -2657,7 +2657,9 @@ class Sample:
         if columns is None:
             cols = [c for c in self._data.columns if c not in hidden and c not in by_cols]
         else:
-            cols = [c for c in columns if c in self._data.columns and c not in hidden]
+            cols = [
+                c for c in _colspec_to_list(columns) if c in self._data.columns and c not in hidden
+            ]
 
         if not cols:
             raise DataError.invalid_value(
