@@ -13,7 +13,7 @@ from svy.core.design import Design, PopSize, RepWeights
 
 BASE_DIR = Path("tests/test_data")
 DATA_PATH = BASE_DIR / "svy_synthetic_sample_07082025.csv"
-data = svy.read_csv(DATA_PATH).fill_nan(None).drop_nulls()
+data = svy.io.read_csv(DATA_PATH).fill_nan(None).drop_nulls()
 
 # ── D0: Simple weighted design ───────────────────────────────────────────────
 print("=" * 60)

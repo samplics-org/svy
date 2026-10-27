@@ -230,7 +230,8 @@ def test_stacked_list_names_each_member(sample):
 
 
 def test_empty_estimate():
-    from svy import Estimate, PopParam
+    from svy.enums import PopParam
+    from svy.estimation import Estimate
 
     assert to_polars(serialize(Estimate(PopParam.MEAN))).is_empty()
 
@@ -364,7 +365,8 @@ def test_temporal_level_in_labels_and_prop(sample):
 
 def test_duration_level_round_trip():
     """Durations cannot be a by variable yet; the payload still carries one exactly."""
-    from svy import Estimate, ParamEst, PopParam
+    from svy.enums import PopParam
+    from svy.estimation import Estimate, ParamEst
 
     est = Estimate(PopParam.MEAN, alpha=0.05)
     est.method, est.n_strata, est.n_psus = "Taylor", 1, 2

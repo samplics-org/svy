@@ -2069,17 +2069,17 @@ class Sample:
         record, singleton handling).
 
         The data is the caller's: ``data`` only points to it. A ``.parquet`` path
-        adds ``data = svy.read_parquet(path)``, the pair of
-        ``svy.write_parquet(sample, path)``; without it the script expects a
+        adds ``data = svy.io.read_parquet(path)``, the pair of
+        ``svy.io.write_parquet(sample, path)``; without it the script expects a
         ``data`` frame. Metadata (labels) is not included.
 
         Examples
         --------
-        >>> svy.write_parquet(sample, "survey.parquet")
+        >>> svy.io.write_parquet(sample, "survey.parquet")
         >>> print(sample.to_code(data="survey.parquet"))
         import svy
         <BLANKLINE>
-        data = svy.read_parquet('survey.parquet')
+        data = svy.io.read_parquet('survey.parquet')
         sample = svy.Sample(data, svy.Design(stratum='region', psu='ea', wgt='w'))
         """
         lines = ["import svy", ""]
@@ -2093,10 +2093,10 @@ class Sample:
                     where="Sample.to_code",
                     param="data",
                     got=path,
-                    hint="Save the data with svy.write_parquet(sample, 'survey.parquet') "
+                    hint="Save the data with svy.io.write_parquet(sample, 'survey.parquet') "
                     "and pass that path, or pass nothing and define `data` yourself.",
                 )
-            lines.append(f"data = svy.read_parquet({path!r})")
+            lines.append(f"data = svy.io.read_parquet({path!r})")
         args = self.design._code_args()
         if any("datetime." in a for a in args):
             lines.insert(0, "import datetime")

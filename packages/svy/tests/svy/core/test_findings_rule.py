@@ -256,14 +256,14 @@ def test_glm_finding_recorded():
 
 
 def test_accessor_overwrite_is_raised_only():
-    @svy.register_sample_accessor("_svy_test_acc")
+    @svy.extensions.register_sample_accessor("_svy_test_acc")
     class A:
         def __init__(self, s):
             self.s = s
 
     with pytest.warns(SvyWarning, match="already defined") as rec:
 
-        @svy.register_sample_accessor("_svy_test_acc")
+        @svy.extensions.register_sample_accessor("_svy_test_acc")
         class B:
             def __init__(self, s):
                 self.s = s

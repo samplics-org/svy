@@ -3,7 +3,8 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from svy import Design, Sample, TableUnits
+from svy import Design, Sample
+from svy.enums import TableUnits
 
 
 REL = 1e-7

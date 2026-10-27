@@ -24,7 +24,7 @@ REP_WGTS = [
 
 PARTS = [
     *REP_WGTS,
-    svy.WgtAdjustment(kind="raking", prev_wgt="w0", new_wgt="w", aux=("a", "b")),
+    svy.core.WgtAdjustment(kind="raking", prev_wgt="w0", new_wgt="w", aux=("a", "b")),
     svy.Singleton("collapse"),
     svy.Singleton("skip"),
     svy.PopSize(psu="N"),

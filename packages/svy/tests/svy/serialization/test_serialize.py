@@ -22,25 +22,15 @@ import msgspec
 import numpy as np
 import pytest
 
-from svy import (
-    CellEst,
-    ChiSquare,
-    DescribeResult,
-    Estimate,
-    FDist,
-    GLMFit,
-    GLMPred,
-    ParamEst,
-    PopParam,
-    Table,
-    TableType,
-    TTestOneGroup,
-    TTestTwoGroups,
-)
+from svy.categorical import CellEst, Table, TTestOneGroup, TTestTwoGroups
 from svy.categorical.ttest import DiffEst, GroupLevels, TtestEst, TTestStats
+from svy.core import ChiSquare, DescribeResult, FDist
 from svy.core.containers import TDist
 from svy.core.describe import DescribeContinuous
 from svy.core.enumerations import MeasurementType, QuantileMethod
+from svy.enums import PopParam, TableType
+from svy.estimation import Estimate, ParamEst
+from svy.regression import GLMFit, GLMPred
 from svy.regression.glm import GLMCoef, GLMStats
 from svy.serialize import from_json, serialize, to_dict, to_json
 from svy.serialize.serializers import _SERIALIZERS

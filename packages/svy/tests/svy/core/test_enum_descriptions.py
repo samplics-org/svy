@@ -47,8 +47,8 @@ def test_labels_are_distinct_within_an_enum():
 
 
 def test_public_singleton_method_is_the_described_one():
-    assert svy.SingletonMethod is SingletonMethod
-    assert svy.SingletonMethod.SKIP.label == "Skip"
+    assert svy.enums.SingletonMethod is SingletonMethod
+    assert svy.enums.SingletonMethod.SKIP.label == "Skip"
 
 
 def test_a_mismatched_description_table_is_refused():

@@ -8,13 +8,13 @@ svy works on polars DataFrames. Read files with svy's readers; each returns a
 
 | Reader | Files |
 | ------ | ----- |
-| `svy.read_csv(path)` | CSV |
-| `svy.read_parquet(path)` | Parquet |
-| `svy.read_stata(path)`, `svy.read_dta(path)` | Stata `.dta`, with value labels |
-| `svy.read_spss(path)`, `svy.read_sav(path)` | SPSS `.sav` |
-| `svy.read_sas(path)`, `svy.read_xpt(path)` | SAS `.sas7bdat`, `.xpt` |
+| `svy.io.read_csv(path)` | CSV |
+| `svy.io.read_parquet(path)` | Parquet |
+| `svy.io.read_stata(path)`, `svy.io.read_dta(path)` | Stata `.dta`, with value labels |
+| `svy.io.read_spss(path)`, `svy.io.read_sav(path)` | SPSS `.sav` |
+| `svy.io.read_sas(path)`, `svy.io.read_xpt(path)` | SAS `.sas7bdat`, `.xpt` |
 
-`svy.write_*` mirror them. `svy.create_from_csv(path)` (and `_parquet`,
+`svy.write_*` mirror them. `svy.io.create_from_csv(path)` (and `_parquet`,
 `_stata`, ...) reads straight into a `Sample` with no design yet; prefer
 reading, then `svy.Sample(data, design)`.
 
@@ -24,7 +24,7 @@ reading, then `svy.Sample(data, design)`.
 import polars as pl
 import svy
 
-data = svy.read_csv("survey.csv")
+data = svy.io.read_csv("survey.csv")
 sample = svy.Sample(data, svy.Design(stratum="stratum", psu="cluster", wgt="weight"))
 ```
 
@@ -47,8 +47,8 @@ building the sample. The household id is often unique only within a cluster,
 so join on both.
 
 ```python
-households = svy.read_csv("households.csv")  # cluster, hh_id, region, stratum, weight
-persons = svy.read_csv("persons.csv")  # cluster, hh_id, person_id, sex, age, ...
+households = svy.io.read_csv("households.csv")  # cluster, hh_id, region, stratum, weight
+persons = svy.io.read_csv("persons.csv")  # cluster, hh_id, person_id, sex, age, ...
 
 people = persons.join(households, on=["cluster", "hh_id"], how="left", validate="m:1")
 assert people.height == persons.height

@@ -292,7 +292,7 @@ class WgtAdjustment(msgspec.Struct, frozen=True, kw_only=True):
         return self._to_code()
 
     def _to_code(self) -> str:
-        return _struct_code(self, "svy.WgtAdjustment")
+        return _struct_code(self, "svy.core.WgtAdjustment")
 
 
 # =============================================================================

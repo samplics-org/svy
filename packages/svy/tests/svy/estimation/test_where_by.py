@@ -12,9 +12,10 @@ import numpy as np
 import polars as pl
 import pytest
 
-from svy import PopParam, col
+from svy import col
 from svy.core.design import Design
 from svy.core.sample import Sample
+from svy.enums import PopParam
 from svy.estimation.estimate import Estimate
 
 

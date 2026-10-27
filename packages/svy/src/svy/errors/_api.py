@@ -211,9 +211,9 @@ class UsageError(SvyError):
             code=Code.DATA_NOT_POLARS,
             where=where,
             got=f"{type(got).__module__}.{type(got).__name__}",
-            hint="Convert with polars.from_pandas(df), or read with svy.read_csv and the other svy readers."
+            hint="Convert with polars.from_pandas(df), or read with svy.io.read_csv and the other svy readers."
             if is_pandas
-            else "Read files with svy.read_csv, svy.read_parquet, svy.read_stata, ...",
+            else "Read files with svy.io.read_csv, svy.io.read_parquet, svy.io.read_stata, ...",
         )
 
 
@@ -261,6 +261,18 @@ class UnknownNameError(UsageError, AttributeError):
             where=label,
             got=name,
             hint=hint,
+        )
+
+    @classmethod
+    def moved(cls, *, label: str, name: str, home: str, since: str) -> "UnknownNameError":
+        return cls(
+            title=f"{label}.{name} moved",
+            detail=f"{label}.{name} moved to {home}.{name} in {since}.",
+            code=Code.NAME_MOVED,
+            where=label,
+            got=name,
+            expected=f"{home}.{name}",
+            hint=f"Use {home}.{name}, or `from {home} import {name}`.",
         )
 
 

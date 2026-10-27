@@ -15,56 +15,35 @@ import logging
 
 from typing import TYPE_CHECKING
 
-from svy import (
-    serialize,  # noqa: F401
-)
-from svy.categorical import (
-    Categorical,
-    CellEst,
-    Table,
-    TableStats,
-    TTestOneGroup,
-    TTestTwoGroups,
+from svy import (  # noqa: F401  (subpackages, reached as svy.categorical, ...)
+    categorical,
+    enums,
+    errors,
+    estimation,
+    extensions,
+    io,
+    regression,
+    selection,
+    serialize,
+    size,
+    typing,
+    utils,
+    weighting,
 )
 from svy.core import (
-    DF,
-    DT,
     RE,
     BootstrapWgts,
     BrrWgts,
     Cap,
-    CaseStyle,
     Cat,
-    Category,
-    ChiSquare,
     Cross,
-    DescribeResult,
     Design,
-    DistFamily,
-    FDist,
-    Feature,
     JackknifeWgts,
-    LetterCase,
-    LinkFunction,
-    MeasurementType,
-    Number,
-    OnePropSizeMethod,
-    PopParam,
     PopSize,
-    PPSMethod,
-    QuantileMethod,
-    RankScoreMethod,
     RepWeights,
-    RepWgts,
     Sample,
     SdrWgts,
     Singleton,
-    SingletonInfo,
-    SingletonMethod,
-    StratumInfo,
-    TableType,
-    TableUnits,
-    WgtAdjustment,
     all_horizontal,
     any_horizontal,
     coalesce,
@@ -79,73 +58,10 @@ from svy.core import (
     sum_horizontal,
     when,
 )
-from svy.errors import (
-    DatasetError,
-    LabelError,
-    ModelError,
-    SerializationError,
-    SvyError,
-    SvyWarning,
-)
-from svy.estimation import (
-    Contrast,
-    ContrastEst,
-    ContrastExpr,
-    Estimate,
-    EstimateList,
-    Estimation,
-    ParamEst,
-    estd,
-)
-from svy.extensions import register_sample_accessor
-from svy.io import (
-    create_from_csv,
-    create_from_dta,
-    create_from_parquet,
-    create_from_sas,
-    create_from_sav,
-    create_from_spss,
-    create_from_stata,
-    create_from_xpt,
-    read_csv,
-    read_dta,
-    read_parquet,
-    read_sas,
-    read_sav,
-    read_spss,
-    read_stata,
-    read_xpt,
-    scan_csv,
-    scan_parquet,
-    write_csv,
-    write_dta,
-    write_parquet,
-    write_sas,
-    write_sav,
-    write_spss,
-    write_stata,
-    write_xpt,
-)
-from svy.regression import GLM as GLM
-from svy.regression import GLMFit as GLMFit
-from svy.regression import GLMPred as GLMPred
-from svy.selection import Selection
-from svy.size import (
-    SampleSize,
-    Target,
-    TargetMean,
-    TargetProp,
-    TargetTwoMeans,
-    TargetTwoProps,
-)
-from svy.utils import (
-    RandomState,
-    enable_debug,
-    enable_logging,
-    seed_from_random_state,
-    temporary_log_level,
-)
-from svy.weighting import Threshold, TrimConfig, TrimResult
+from svy.errors import SvyError, SvyWarning
+from svy.estimation import estd
+from svy.size import SampleSize, TargetMean, TargetProp, TargetTwoMeans, TargetTwoProps
+from svy.weighting import Threshold, TrimConfig
 
 
 # ---------------------------------------------------------------------------
@@ -158,107 +74,22 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 __version__ = "0.35.0"
 
 __all__ = [
-    # --- Modules ----
+    # --- Modules ---
     "datasets",
+    "io",
     "serialize",
-    # --- Core Classes ---
-    "Design",
+    # --- Core ---
     "Sample",
-    # --- Categorical Analysis ---
-    "Table",
-    "TableStats",
-    "CellEst",
-    "TTestOneGroup",
-    "TTestTwoGroups",
-    "Categorical",
-    # --- Estimation & Stats ---
-    "Estimation",
-    "Estimate",
-    "EstimateList",
-    "ParamEst",
-    "Contrast",
-    "ContrastEst",
-    "ContrastExpr",
-    "estd",
-    "ChiSquare",
-    "FDist",
-    "DescribeResult",
-    # --- Sample Size ---
-    "SampleSize",
-    "Target",
-    "TargetMean",
-    "TargetProp",
-    "TargetTwoMeans",
-    "TargetTwoProps",
-    # --- Sample Selection ---
-    "Selection",
-    # --- IO ---
-    "create_from_sas",
-    "read_sas",
-    "write_sas",
-    "create_from_xpt",
-    "read_xpt",
-    "write_xpt",
-    "create_from_spss",
-    "read_spss",
-    "write_spss",
-    "create_from_sav",
-    "read_sav",
-    "write_sav",
-    "create_from_stata",
-    "read_stata",
-    "write_stata",
-    "create_from_dta",
-    "read_dta",
-    "write_dta",
-    "create_from_csv",
-    "combine_samples",
-    "read_csv",
-    "write_csv",
-    "scan_csv",
-    "create_from_parquet",
-    "read_parquet",
-    "scan_parquet",
-    "write_parquet",
-    # --- Types & Enumerations ---
-    "Category",
-    "DF",
-    "DT",
-    "Number",
-    "CaseStyle",
-    "DistFamily",
-    "LetterCase",
-    "LinkFunction",
-    "MeasurementType",
-    "PopParam",
+    "Design",
     "PopSize",
-    "OnePropSizeMethod",
-    "PPSMethod",
-    "QuantileMethod",
-    "RankScoreMethod",
+    "Singleton",
+    "combine_samples",
+    # --- Replicate weights ---
+    "RepWeights",
     "BootstrapWgts",
     "BrrWgts",
     "JackknifeWgts",
-    "RepWeights",
-    "RepWgts",
     "SdrWgts",
-    "SingletonMethod",
-    "Singleton",
-    "SingletonInfo",
-    "StratumInfo",
-    "TableType",
-    "TableUnits",
-    "Threshold",
-    "WgtAdjustment",
-    "TrimConfig",
-    "TrimResult",
-    # --- Errors ---
-    "SvyError",
-    "SvyWarning",
-    "DatasetError",
-    "LabelError",
-    "ModelError",
-    "SerializationError",
     # --- Expressions ---
     "col",
     "cols",
@@ -272,21 +103,62 @@ __all__ = [
     "sum_horizontal",
     "min_horizontal",
     "max_horizontal",
-    # --- Terms ---
-    "Cap",
+    # --- Model terms ---
     "Cat",
     "Cross",
-    "Feature",
+    "Cap",
     "RE",
-    # --- Utilities ---
-    "enable_logging",
-    "enable_debug",
-    "temporary_log_level",
-    "RandomState",
-    "seed_from_random_state",
-    # --- Extensions ---
-    "register_sample_accessor",
+    # --- Inputs ---
+    "estd",
+    "SampleSize",
+    "TargetMean",
+    "TargetProp",
+    "TargetTwoMeans",
+    "TargetTwoProps",
+    "Threshold",
+    "TrimConfig",
+    # --- Errors ---
+    "SvyError",
+    "SvyWarning",
 ]
+
+# Names that left the top level in 2026.0: the error says where each one went.
+_MOVED: dict[str, str] = {
+    **dict.fromkeys(io.__all__, "svy.io"),
+    **dict.fromkeys(
+        ["Table", "TableStats", "CellEst", "TTestOneGroup", "TTestTwoGroups", "Categorical"],
+        "svy.categorical",
+    ),
+    **dict.fromkeys(
+        [
+            "Estimate",
+            "EstimateList",
+            "ParamEst",
+            "Contrast",
+            "ContrastEst",
+            "ContrastExpr",
+            "Estimation",
+        ],
+        "svy.estimation",
+    ),
+    **dict.fromkeys(["GLM", "GLMFit", "GLMPred"], "svy.regression"),
+    "Selection": "svy.selection",
+    "TrimResult": "svy.weighting",
+    **dict.fromkeys(enums.__all__, "svy.enums"),
+    **dict.fromkeys(typing.__all__, "svy.typing"),
+    **dict.fromkeys(
+        ["DatasetError", "LabelError", "ModelError", "SerializationError"], "svy.errors"
+    ),
+    **dict.fromkeys(
+        ["enable_logging", "enable_debug", "temporary_log_level", "seed_from_random_state"],
+        "svy.utils",
+    ),
+    "register_sample_accessor": "svy.extensions",
+    **dict.fromkeys(
+        ["ChiSquare", "FDist", "DescribeResult", "SingletonInfo", "StratumInfo", "WgtAdjustment"],
+        "svy.core",
+    ),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -393,4 +265,6 @@ def __getattr__(name: str):
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     from svy.errors._api import UnknownNameError
 
+    if name in _MOVED:
+        raise UnknownNameError.moved(label="svy", name=name, home=_MOVED[name], since="2026.0")
     raise UnknownNameError.unknown(owner="svy", label="svy", name=name, available=__all__)

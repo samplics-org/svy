@@ -205,7 +205,7 @@ class TestRemovedNamespace:
     def test_removed_names(self):
         for name in ("SingletonFacet", "SingletonResult", "SingletonSummary", "SingletonHandling"):
             assert not hasattr(svy, name)
-        assert svy.SingletonInfo and svy.StratumInfo  # a collapse callable receives them
+        assert svy.core.SingletonInfo and svy.core.StratumInfo  # a collapse callable receives them
 
 
 # ---------------------------------------------------------------------------

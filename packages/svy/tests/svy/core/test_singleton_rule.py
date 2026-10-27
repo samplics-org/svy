@@ -183,7 +183,7 @@ def test_rule_is_frozen_and_hashable():
 
 def test_exported():
     assert svy.Singleton is Singleton and svy.core.Singleton is Singleton
-    assert svy.SingletonMethod is SingletonMethod
+    assert svy.enums.SingletonMethod is SingletonMethod
     assert not hasattr(svy, "SingletonSpec")
 
 

@@ -22,9 +22,9 @@ from svy.errors._io import IoError
 
 
 FORMATS = {
-    "sav": (svy.write_spss, svy.create_from_spss),
-    "dta": (svy.write_stata, svy.create_from_stata),
-    "xpt": (svy.write_sas, svy.create_from_xpt),
+    "sav": (svy.io.write_spss, svy.io.create_from_spss),
+    "dta": (svy.io.write_stata, svy.io.create_from_stata),
+    "xpt": (svy.io.write_sas, svy.io.create_from_xpt),
 }
 LABELLED = ["sav", "dta"]  # XPT carries variable labels only
 
@@ -142,9 +142,9 @@ def test_stata_writes_times_as_milliseconds_and_says_so(tmp_path):
 @pytest.mark.parametrize(
     "source, read, column, first",
     [
-        ("spss/datetime.sav", svy.read_spss, "date", date(2014, 9, 22)),
-        ("stata/datetime-d.dta", svy.read_stata, "date", date(2015, 11, 2)),
-        ("sas/datetime.sas7bdat", svy.read_sas, "VAR2", date(2015, 2, 2)),
+        ("spss/datetime.sav", svy.io.read_spss, "date", date(2014, 9, 22)),
+        ("stata/datetime-d.dta", svy.io.read_stata, "date", date(2015, 11, 2)),
+        ("sas/datetime.sas7bdat", svy.io.read_sas, "VAR2", date(2015, 2, 2)),
     ],
 )
 def test_dates_in_files_read_as_dates(source, read, column, first):
@@ -255,12 +255,12 @@ def test_variable_labels_survive(tmp_path, fmt):
 @pytest.mark.parametrize(
     "source, reader",
     [
-        ("spss/labelled-num.sav", svy.create_from_spss),
-        ("spss/labelled-str.sav", svy.create_from_spss),
-        ("spss/labelled-num-na.sav", svy.create_from_spss),
-        ("stata/types.dta", svy.create_from_stata),
-        ("stata/tagged-na-int.dta", svy.create_from_stata),
-        ("sas/hadley.xpt", svy.create_from_xpt),
+        ("spss/labelled-num.sav", svy.io.create_from_spss),
+        ("spss/labelled-str.sav", svy.io.create_from_spss),
+        ("spss/labelled-num-na.sav", svy.io.create_from_spss),
+        ("stata/types.dta", svy.io.create_from_stata),
+        ("stata/tagged-na-int.dta", svy.io.create_from_stata),
+        ("sas/hadley.xpt", svy.io.create_from_xpt),
     ],
 )
 def test_read_then_write_keeps_data_and_writable_labels(tmp_path, source, reader, target):
@@ -278,7 +278,7 @@ def test_read_then_write_keeps_data_and_writable_labels(tmp_path, source, reader
 @pytest.mark.skipif(not FIXTURES.is_dir(), reason="svy-io test data not available")
 def test_xpt_ibm_denormal_zero_reads_as_zero():
     # Written by SAS: NHANES stores a zero phlebotomy weight as an IBM denormal.
-    w = svy.read_xpt(FIXTURES / "sas/nhanes_ghb_l.xpt")["WTPH2YR"]
+    w = svy.io.read_xpt(FIXTURES / "sas/nhanes_ghb_l.xpt")["WTPH2YR"]
     assert (w == 0).sum() == 449
     assert w.min() == 0
 
@@ -287,9 +287,9 @@ def test_xpt_ibm_denormal_zero_reads_as_zero():
 @pytest.mark.parametrize(
     "source, read",
     [
-        ("stata/tagged-na-double.dta", svy.read_stata),
-        ("stata/tagged-na-int.dta", svy.read_stata),
-        ("sas/tagged-na.sas7bdat", svy.read_sas),
+        ("stata/tagged-na-double.dta", svy.io.read_stata),
+        ("stata/tagged-na-int.dta", svy.io.read_stata),
+        ("sas/tagged-na.sas7bdat", svy.io.read_sas),
     ],
 )
 def test_tagged_missings_read_as_nulls(source, read):

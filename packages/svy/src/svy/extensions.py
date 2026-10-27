@@ -6,6 +6,8 @@ from svy.errors._findings import emit_finding
 from .core import Sample
 
 
+__all__ = ["register_sample_accessor"]
+
 # This dictionary holds the registered accessors
 # Key: name (e.g., 'sae'), Value: The Class
 _sample_accessors = {}
