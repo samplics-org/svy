@@ -419,6 +419,10 @@ def replicate_prop(
     if data.get_column(y).null_count():
         data = data.filter(pl.col(y).is_not_null())
     data = est._coerce_y_for_prop(data, y)
+    # The kernel turns a Boolean into 0/1 and rejects an Enum; as text, their
+    # levels map back to the source values as under Taylor.
+    if data.schema[y] == pl.Boolean or isinstance(data.schema[y], pl.Enum):
+        data = data.with_columns(pl.col(y).cast(pl.String))
     result_df, cov_flat = rs.replicate_prop(
         data,
         value_col=y,

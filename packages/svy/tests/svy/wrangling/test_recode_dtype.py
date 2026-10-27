@@ -7,7 +7,6 @@ unless the lookup values are cast to the column's dtype.
 """
 
 import polars as pl
-import pytest
 
 from svy.core.sample import Sample
 

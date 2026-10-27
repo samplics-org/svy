@@ -16,11 +16,13 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **Errors and findings print at most 88 columns wide** (`SVY_TEXT_PRINT_WIDTH`), so they fit notebooks and docs pages; result tables keep 120. `SVY_PRINT_WIDTH` still overrides both. `str(error)` is unchanged.
 - **`STAGE_TAKES_ALL` names the parents.** The message reads `geo1=geo_02, geo2=geo_02_02; ...` and names the stage's unit; `got` holds the parents as `{column: value}` mappings rather than a count.
 - **Stage-1 `n` in `multistage` is keyed as in `srs` and `pps_*`.** Besides the full stratum (a tuple for several stratum columns), a mapping keyed by one stratum variable is broadcast, e.g. `Stage("ea", n={"Urban": 6, "Rural": 4}, mos="hh")` on a design stratified by `("region", "urbrur")`. Keys that match no stratum now raise `MULTISTAGE_N_MISSING` instead of being ignored.
+- **Table headers name an unlabelled variable** instead of `Row` or `Col`, and the row and column headers are left-aligned with their levels whether labelled or not.
 - **Printed estimates list labelled levels in code order**, as `to_polars()`, tables and GLM terms do: `prop(y="a4", by="area")` prints `URBANA` (1) before `RURAL` (2) and answers in questionnaire order. Unlabelled levels still sort on their text.
 
 ### Fixed
 
 - **A paired two-group t-test reported `paired=False`** and printed "unpaired". `ttest(y, y_pair=..., group=...)` now sets `paired=True`.
+- **`prop` under replication returned a Boolean `y`'s levels as 0/1 and rejected an Enum `y`.** Both now come back as under Taylor, so `to_polars()` has the same schema whatever the method.
 
 ## [0.35.0] — 2026-10-16
 

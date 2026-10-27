@@ -64,45 +64,52 @@ def _by(result) -> list:
     return [p.by_level[0] if len(p.by_level) == 1 else p.by_level for p in result.estimates]
 
 
+def _method(which: str) -> dict:
+    # Every estimator defaults to Taylor, even with replicate weights.
+    return {"method": "replication"} if which == "rep_sample" else {}
+
+
 @pytest.mark.parametrize("which", ["sample", "rep_sample"])
 class TestEnumOrder:
     @pytest.mark.parametrize("stat", ["mean", "total", "median"])
     def test_by(self, request, which, stat):
         s = request.getfixturevalue(which)
-        r = getattr(s.estimation, stat)("y", by="quarter")
+        r = getattr(s.estimation, stat)("y", by="quarter", **_method(which))
         assert _by(r) == Q_ORDER
         assert r.domains == Q_ORDER
 
     def test_ratio_by(self, request, which):
         s = request.getfixturevalue(which)
-        assert _by(s.estimation.ratio("y", "x", by="quarter")) == Q_ORDER
+        assert _by(s.estimation.ratio("y", "x", by="quarter", **_method(which))) == Q_ORDER
 
     def test_prop_levels(self, request, which):
         s = request.getfixturevalue(which)
-        assert [p.y_level for p in s.estimation.prop("status").estimates] == S_ORDER
+        assert [
+            p.y_level for p in s.estimation.prop("status", **_method(which)).estimates
+        ] == S_ORDER
 
     def test_prop_by(self, request, which):
         s = request.getfixturevalue(which)
-        r = s.estimation.prop("status", by="quarter")
+        r = s.estimation.prop("status", by="quarter", **_method(which))
         assert [(p.by_level[0], p.y_level) for p in r.estimates] == list(
             itertools.product(Q_ORDER, S_ORDER)
         )
 
     def test_mean_as_factor(self, request, which):
         s = request.getfixturevalue(which)
-        r = s.estimation.mean("status", as_factor=True)
+        r = s.estimation.mean("status", as_factor=True, **_method(which))
         assert [p.y_level for p in r.estimates] == S_ORDER
 
     def test_several_by(self, request, which):
         s = request.getfixturevalue(which)
-        r = s.estimation.mean("y", by=["quarter", "region"])
+        r = s.estimation.mean("y", by=["quarter", "region"], **_method(which))
         assert _by(r) == list(itertools.product(Q_ORDER, R_ORDER))
 
     def test_enum_beside_plain_by(self, request, which):
         s = request.getfixturevalue(which)
-        r = s.estimation.mean("y", by=["sex", "quarter"])
+        r = s.estimation.mean("y", by=["sex", "quarter"], **_method(which))
         assert _by(r) == list(itertools.product(["f", "m"], Q_ORDER))
-        r = s.estimation.ratio("y", "x", by=["region", "sex"])
+        r = s.estimation.ratio("y", "x", by=["region", "sex"], **_method(which))
         assert _by(r) == list(itertools.product(R_ORDER, ["f", "m"]))
 
 

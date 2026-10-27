@@ -63,8 +63,11 @@ sample = sample.wrangling.recode(
     into="educ2",
 )
 sample = sample.wrangling.categorize(
-    "age", bins=[0, 15, 25, 45, 65, 120], labels=["0-14", "15-24", "25-44", "45-64", "65+"],
-    right=False, into="age_group",
+    "age",
+    bins=[0, 15, 25, 45, 65, 120],
+    labels=["0-14", "15-24", "25-44", "45-64", "65+"],
+    right=False,
+    into="age_group",
 )
 sample = sample.wrangling.top_code({"income": 50_000}, into="income_tc")
 ```
@@ -76,7 +79,9 @@ new `svy_<col>_recoded` or `svy_<col>_categorized` column, and
 ## Joining
 
 ```python
-regions = pl.DataFrame({"region": ["North", "South", "East", "West"], "zone": ["A", "A", "B", "B"]})
+regions = pl.DataFrame(
+    {"region": ["North", "South", "East", "West"], "zone": ["A", "A", "B", "B"]}
+)
 sample = sample.wrangling.join(regions, on="region")
 ```
 

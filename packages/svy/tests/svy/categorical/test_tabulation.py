@@ -85,7 +85,7 @@ def test_plain_fallback_when_rich_missing(monkeypatch, capsys):
     else:
         out = str(tbl)
 
-    assert "Table(" in out or "Row" in out  # some plain-text evidence
+    assert out.split()[:3] == ["r", "c", "Estimate"]
 
 
 def test_crosstab_prop(df_basic, mock_design):

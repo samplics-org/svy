@@ -121,9 +121,7 @@ class TestTTestByDomain:
     @pytest.mark.parametrize("component", ["test", "estimates"])
     def test_table_matches_live(self, request, fixture, component):
         live = request.getfixturevalue(fixture)
-        assert to_polars(_round_trip(live), component=component).equals(
-            live.to_polars(component)
-        )
+        assert to_polars(_round_trip(live), component=component).equals(live.to_polars(component))
 
     def test_row_index_counts_through_members(self, two):
         df = to_polars(serialize(two), component="estimates", row_index="i")
