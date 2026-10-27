@@ -19,7 +19,7 @@ import svy
 
 from svy import SvyWarning, col
 from svy.core.functions import combine_samples
-from svy.errors import MethodError
+from svy.errors import DataError, DesignError, UsageError
 from svy.errors._findings import Severity
 from svy.wrangling.base import Wrangling
 
@@ -116,7 +116,7 @@ def test_error_raises_and_leaves_sample(name, inplace):
     build, call, code, err_code = CASES[name]
     s = build()
     data, design = s.data, s.design
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(DataError) as ei:
         call(s, "error", inplace)
     assert ei.value.code == err_code
     assert s.data.equals(data) and s.design == design
@@ -127,7 +127,7 @@ def test_error_raises_and_leaves_sample(name, inplace):
 @pytest.mark.parametrize("value", ["raise", "Warn", None, False])
 def test_bad_value_refused(name, value):
     build, call, _, _ = CASES[name]
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(UsageError) as ei:
         call(build(), value, False)
     assert ei.value.code == "INVALID_CHOICE"
     assert ei.value.expected == ["error", "warn", "ignore"]
@@ -206,14 +206,14 @@ def test_combine_mixed_ignore_and_warn_agree():
 def test_combine_mixed_error_leaves_inputs():
     samples = _mixed()
     data = [s.data for s in samples]
-    with pytest.raises(MethodError, match="on_mixed_design"):
+    with pytest.raises(DesignError, match="on_mixed_design"):
         combine_samples(samples)
     assert all(s.data.equals(d) for s, d in zip(samples, data))
 
 
 @pytest.mark.parametrize("value", ["raise", None, True])
 def test_combine_mixed_bad_value(value):
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(UsageError) as ei:
         combine_samples(_mixed(), on_mixed_design=value)
     assert ei.value.code == "INVALID_CHOICE"
 

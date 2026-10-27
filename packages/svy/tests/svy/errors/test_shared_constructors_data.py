@@ -2,20 +2,20 @@ import io
 
 import pytest
 
+from svy.errors import DesignError
 from svy.errors._base import SvyError
-from svy.errors._dimension import DimensionError
 
 
-def test_dimension_error_defaults_code():
-    err = DimensionError(title="Bad shape", detail="Mismatch.")
+def test_area_error_defaults_code():
+    err = DesignError(title="Bad shape", detail="Mismatch.")
     assert isinstance(err, SvyError)
-    assert err.code in {"DIMENSION_ERROR", "SVY_ERROR"}  # tolerate future default changes
+    assert err.code == "DESIGN_ERROR"
     s = str(err)
     assert "Bad shape" in s
 
 
 def test_invalid_n_ctor():
-    err = DimensionError.invalid_n(where="sample.show_data", got=-3)
+    err = DesignError.invalid_n(where="sample.show_data", got=-3)
     assert err.code == "INVALID_N"
     assert err.param == "n"
     assert err.expected == "n >= 0 or None"
@@ -33,7 +33,7 @@ def test_invalid_n_ctor():
 
 
 def test_missing_columns_ctor():
-    err = DimensionError.missing_columns(
+    err = DesignError.missing_columns(
         where="sample.show_data",
         param="columns",
         missing=["foo", "bar"],
@@ -53,7 +53,7 @@ def test_missing_columns_ctor():
 
 
 def test_sample_too_large_ctor():
-    err = DimensionError.sample_too_large(where="sample.show_data", n=100, available_rows=42)
+    err = DesignError.sample_too_large(where="sample.show_data", n=100, available_rows=42)
     assert err.code == "SAMPLE_TOO_LARGE"
     assert err.param == "n"
     assert err.expected == "n ≤ 42"
@@ -68,7 +68,7 @@ def test_rich_console_if_available():
         from rich.console import Console
     except Exception:
         pytest.skip("rich not installed")
-    err = DimensionError.invalid_n(where="sample.show_data", got=-1)
+    err = DesignError.invalid_n(where="sample.show_data", got=-1)
     buf = io.StringIO()
     Console(file=buf, width=80, force_terminal=True, color_system=None).print(err)
     out = buf.getvalue()

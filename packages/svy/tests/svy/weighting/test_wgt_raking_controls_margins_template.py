@@ -4,7 +4,7 @@ import polars as pl
 import pytest
 
 from svy.core.sample import Design, Sample
-from svy.errors import DimensionError
+from svy.errors import WeightingError
 
 
 @pytest.fixture
@@ -53,7 +53,7 @@ def test_controls_margins_template_cat_na_error_raises_on_nulls(sample):
         .alias("age_group")
     )
     sample2 = Sample(data=df2, design=Design(wgt="initial_weight"))
-    with pytest.raises(DimensionError) as ei:
+    with pytest.raises(WeightingError) as ei:
         sample2.weighting.controls_margins_template(margins={"age": "age_group"}, na="error")
     msg = str(ei.value)
     assert "Missing values in margin column" in msg or "MARGIN_NA" in msg

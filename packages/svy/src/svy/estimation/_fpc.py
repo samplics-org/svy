@@ -13,7 +13,7 @@ import logging
 import polars as pl
 
 from svy.core.design import PopSize
-from svy.errors import DimensionError, MethodError
+from svy.errors import EstimationError
 
 
 log = logging.getLogger(__name__)
@@ -99,7 +99,7 @@ def build_fpc_psu_column(
     # Validate: all values must be >= 1 (population counts, not fractions)
     min_val = data[pop_col].cast(pl.Float64).min()
     if min_val is not None and min_val < 1:
-        raise MethodError(
+        raise EstimationError.ValueError(
             title="Invalid FPC values",
             detail=f"FPC column '{pop_col}' contains values < 1 ({min_val}). "
             f"Population sizes must be counts (N >= 1), not sampling fractions.",
@@ -119,7 +119,7 @@ def build_fpc_psu_column(
         non_constant = n_unique_per_stratum.filter(pl.col("__nuniq__") > 1)
         if non_constant.height > 0:
             bad_strata = non_constant[strata_col].to_list()
-            raise DimensionError(
+            raise EstimationError.ValueError(
                 title="FPC not constant within strata",
                 detail=f"FPC column '{pop_col}' varies within strata: {bad_strata}. "
                 f"Population size must be the same for all observations in a stratum.",
@@ -147,7 +147,7 @@ def build_fpc_psu_column(
         bad = check.filter(pl.col("__N_h__") < pl.col("__n_h__").cast(pl.Float64))
         if bad.height > 0:
             bad_strata = bad[strata_col].to_list()
-            raise DimensionError(
+            raise EstimationError.ValueError(
                 title="FPC population size < sample size",
                 detail=f"FPC column '{pop_col}' has population size < sample size "
                 f"in strata: {bad_strata}.",
@@ -171,7 +171,7 @@ def build_fpc_psu_column(
         # Unstratified: pop_col must be constant across all rows
         n_unique = data[pop_col].n_unique()
         if n_unique > 1:
-            raise DimensionError(
+            raise EstimationError.ValueError(
                 title="FPC not constant in unstratified design",
                 detail=f"FPC column '{pop_col}' has {n_unique} distinct values, "
                 f"but must be constant for unstratified designs.",
@@ -188,7 +188,7 @@ def build_fpc_psu_column(
         n_pop = data[pop_col].cast(pl.Float64).first()
 
         if n_pop is not None and n_pop < n_h:
-            raise DimensionError(
+            raise EstimationError.ValueError(
                 title="FPC population size < sample size",
                 detail=f"FPC column '{pop_col}' has population size ({n_pop}) < "
                 f"sample size ({n_h}).",
@@ -234,7 +234,7 @@ def build_fpc_ssu_column(
     # Validate: all values must be >= 1 (population counts)
     min_val = data[pop_col].cast(pl.Float64).min()
     if min_val is not None and min_val < 1:
-        raise MethodError(
+        raise EstimationError.ValueError(
             title="Invalid FPC values",
             detail=f"FPC column '{pop_col}' contains values < 1 ({min_val}). "
             f"Population sizes must be counts (N >= 1), not sampling fractions.",
@@ -251,7 +251,7 @@ def build_fpc_ssu_column(
     non_constant = n_unique_per_psu.filter(pl.col("__nuniq__") > 1)
     if non_constant.height > 0:
         bad_psus = non_constant.select(psu_keys).rows()
-        raise DimensionError(
+        raise EstimationError.ValueError(
             title="FPC not constant within PSUs",
             detail=f"FPC column '{pop_col}' varies within PSUs: {bad_psus}. "
             f"SSU population size must be the same for all observations in a PSU.",
@@ -279,7 +279,7 @@ def build_fpc_ssu_column(
     bad = check.filter(pl.col("__M_hi__") < pl.col("__m_hi__").cast(pl.Float64))
     if bad.height > 0:
         bad_psus = bad.select(psu_keys).rows()
-        raise DimensionError(
+        raise EstimationError.ValueError(
             title="FPC population size < sample size",
             detail=f"FPC column '{pop_col}' has population size < sample size "
             f"in PSUs: {bad_psus}.",

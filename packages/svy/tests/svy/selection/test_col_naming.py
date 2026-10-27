@@ -9,19 +9,19 @@ prob_name=
     custom prob column name appears in output
     custom prob name updates design.prob
     default (None) uses svy_prob_selection
-    prob_name that already exists raises MethodError
+    prob_name that already exists raises SelectionError
 
 wgt_name=
     custom weight column name appears in output
     custom weight name updates design.wgt
     default (None) uses svy_sample_weight
-    wgt_name that already exists raises MethodError
+    wgt_name that already exists raises SelectionError
 
 hit_name=
     custom hit column name appears in output
     custom hit name updates design.hit
     default (None) uses svy_number_of_hits
-    hit_name that already exists raises MethodError
+    hit_name that already exists raises SelectionError
 
 All three custom names together
     all three custom columns present
@@ -54,7 +54,7 @@ import pytest
 from svy import Sample
 from svy.core.constants import SVY_CERTAINTY, SVY_HIT, SVY_PROB, SVY_WEIGHT
 from svy.core.design import Design
-from svy.errors import MethodError
+from svy.errors import SelectionError
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +347,7 @@ class TestChainingWithCustomNames:
 
 class TestColNameGuard:
     def test_prob_name_collision_raises(self):
-        """prob_name that already exists in frame -> MethodError."""
+        """prob_name that already exists in frame -> SelectionError."""
         data = pl.DataFrame(
             {
                 "unit_id": list(range(10)),
@@ -355,7 +355,7 @@ class TestColNameGuard:
             }
         )
         samp = Sample(data=data, design=Design())
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             samp.sampling.srs(n=3, prob_name="existing_prob", rstate=RNG)
 
     def test_wgt_name_collision_raises(self):
@@ -366,7 +366,7 @@ class TestColNameGuard:
             }
         )
         samp = Sample(data=data, design=Design())
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             samp.sampling.srs(n=3, wgt_name="existing_wgt", rstate=RNG)
 
     def test_hit_name_collision_raises(self):
@@ -377,20 +377,20 @@ class TestColNameGuard:
             }
         )
         samp = Sample(data=data, design=Design())
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             samp.sampling.srs(n=3, hit_name="existing_hits", rstate=RNG)
 
     def test_error_mentions_column_name(self):
         data = pl.DataFrame({"unit_id": list(range(10)), "my_prob": [0.5] * 10})
         samp = Sample(data=data, design=Design())
-        with pytest.raises(MethodError) as exc:
+        with pytest.raises(SelectionError) as exc:
             samp.sampling.srs(n=3, prob_name="my_prob", rstate=RNG)
         assert "my_prob" in str(exc.value)
 
     def test_error_mentions_param_name(self):
         data = pl.DataFrame({"unit_id": list(range(10)), "my_prob": [0.5] * 10})
         samp = Sample(data=data, design=Design())
-        with pytest.raises(MethodError) as exc:
+        with pytest.raises(SelectionError) as exc:
             samp.sampling.srs(n=3, prob_name="my_prob", rstate=RNG)
         assert "prob_name" in str(exc.value)
 
@@ -399,7 +399,7 @@ class TestColNameGuard:
         samp = _make_sample(20, mos=True)
         data_with_col = samp.data.with_columns(pl.lit(0.5).alias("taken"))
         samp2 = Sample(data=data_with_col, design=samp._design)
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             samp2.sampling.pps_sys(n=3, prob_name="taken", rstate=RNG)
 
     def test_guard_fires_before_draw(self):
@@ -412,7 +412,7 @@ class TestColNameGuard:
         original_rows = samp._data.height
         try:
             samp.sampling.srs(n=3, prob_name="existing", rstate=RNG)
-        except MethodError:
+        except SelectionError:
             pass
         # Sample should be unchanged
         assert samp._data.height == original_rows

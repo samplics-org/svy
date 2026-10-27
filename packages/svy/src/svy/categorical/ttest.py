@@ -10,7 +10,7 @@ import msgspec
 from msgspec import field
 
 from svy.core.types import Category, Number
-from svy.errors import DimensionError, MethodError
+from svy.errors import EstimationError
 from svy.errors._api import guided_getattr
 from svy.errors._findings import SvyWarning
 from svy.estimation import ParamEst
@@ -156,20 +156,20 @@ class GroupLevels(msgspec.Struct, frozen=True):
 
 def _validate_one_sample(tt: "TTestOneGroup") -> None:
     if not (0.0 < float(tt.alpha) < 1.0):
-        raise MethodError.invalid_range(
+        raise EstimationError.invalid_range(
             where="TTestOneGroup", param="alpha", got=tt.alpha, min_=0.0, max_=1.0
         )
     if not tt.estimates:
-        raise DimensionError.empty_estimates(where="TTestOneGroup", param="estimates")
+        raise EstimationError.empty_estimates(where="TTestOneGroup", param="estimates")
 
 
 def _validate_two_sample(tt: "TTestTwoGroups") -> None:
     if not (0.0 < float(tt.alpha) < 1.0):
-        raise MethodError.invalid_range(
+        raise EstimationError.invalid_range(
             where="TTestTwoGroups", param="alpha", got=tt.alpha, min_=0.0, max_=1.0
         )
     if not tt.groups or not isinstance(tt.groups.levels, tuple) or len(tt.groups.levels) != 2:
-        raise MethodError.invalid_choice(
+        raise EstimationError.invalid_choice(
             where="TTestTwoGroups",
             param="groups.levels",
             got=getattr(tt.groups, "levels", None),
@@ -177,21 +177,21 @@ def _validate_two_sample(tt: "TTestTwoGroups") -> None:
             hint="Provide exactly two group levels for a two-sample t-test.",
         )
     if not tt.estimates:
-        raise DimensionError.empty_estimates(where="TTestTwoGroups", param="estimates")
+        raise EstimationError.empty_estimates(where="TTestTwoGroups", param="estimates")
 
     gvar = tt.groups.var
     exp_levels = set(tt.groups.levels)
     got_levels = {e.group_level for e in tt.estimates if e.group == gvar}
     other_vars = {e.group for e in tt.estimates if e.group and e.group != gvar}
     if other_vars:
-        raise MethodError.not_applicable(
+        raise EstimationError.not_applicable(
             where="TTestTwoGroups",
             method="estimates",
             reason=f"found estimates for other group variables {sorted(other_vars)}; expected only '{gvar}'",
             param="estimates",
         )
     if not got_levels.issubset(exp_levels):
-        raise DimensionError.group_levels_mismatch(
+        raise EstimationError.group_levels_mismatch(
             where="TTestTwoGroups",
             var=gvar,
             expected_levels=sorted(exp_levels),

@@ -11,6 +11,8 @@ import msgspec
 import numpy as np
 import polars as pl
 
+from svy.errors import WeightingWarning
+
 
 try:
     from svy_rs._internal import adjust_nr as rust_adjust_nr  # type: ignore[import-untyped]
@@ -421,16 +423,18 @@ def adjust(
     if not rule_applied:
         wave = design.wave
         sample.warn(
-            code=WarnCode.PANEL_SCOPE_NOT_WAVES,
-            title="Missing-in-scope rule skipped",
-            detail=(
-                "adjust on a panel: `where` is not a set of waves, so cases with earlier "
-                "rows but none in scope are NOT added as nonrespondents (the "
-                "missing-in-scope rule was skipped)."
-            ),
-            where=ctx,
-            level=Severity.WARNING,
-            param="where",
-            hint=f"Scope one or more whole waves, e.g. where=col({wave!r}) == 2, to apply it.",
+            WeightingWarning(
+                code=WarnCode.PANEL_SCOPE_NOT_WAVES,
+                title="Missing-in-scope rule skipped",
+                detail=(
+                    "adjust on a panel: `where` is not a set of waves, so cases with earlier "
+                    "rows but none in scope are NOT added as nonrespondents (the "
+                    "missing-in-scope rule was skipped)."
+                ),
+                where=ctx,
+                level=Severity.WARNING,
+                param="where",
+                hint=f"Scope one or more whole waves, e.g. where=col({wave!r}) == 2, to apply it.",
+            )
         )
     return sample

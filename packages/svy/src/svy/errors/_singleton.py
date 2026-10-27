@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar, Mapping, Protocol, Sequence
 
 import msgspec
 
-from ._base import SvyError
+from ._base import SvyError, SvyWarning
 
 
 # ---- Runtime-safe typing: no import from svy.core.singleton ----
@@ -35,10 +35,7 @@ def _value(v: Any) -> str:
 
 @dataclass(eq=False)
 class SingletonError(SvyError):
-    def __post_init__(self) -> None:
-        # If caller didn't set a specific code, use a type-specific default.
-        if self.code == "SVY_ERROR":
-            self.code = "SINGLETON_ERROR"
+    _DEFAULT_CODE: ClassVar[str] = "SINGLETON_ERROR"
 
     @classmethod
     def from_singletons(
@@ -76,7 +73,7 @@ class SingletonError(SvyError):
         # Convert to plain Python types; works for msgspec.Struct, dataclasses, dicts, etc.
         payload = [msgspec.to_builtins(s) for s in singletons]
 
-        return cls(
+        return cls.ValueError(
             title=f"{n} singleton PSU(s) detected",
             detail="\n".join(lines),
             code="SINGLETON_ERROR",
@@ -170,7 +167,7 @@ class SingletonError(SvyError):
             "under the result",
             f'  • svy.Singleton("{m or "center"}")   — recorded only (R default)',
         ]
-        return cls(
+        return cls.ValueError(
             title="Strata with a single PSU in a domain",
             detail="\n".join(lines),
             code="DOMAIN_SINGLETON",
@@ -187,6 +184,8 @@ class SingletonAPIRemoved(SingletonError, AttributeError):
 
     Also an ``AttributeError``, so ``hasattr(sample, "singleton")`` is False.
     """
+
+    _IS_KIND: ClassVar[bool] = True
 
     @classmethod
     def accessor(cls) -> "SingletonAPIRemoved":
@@ -209,3 +208,8 @@ class SingletonAPIRemoved(SingletonError, AttributeError):
             hint='sample.singleton.center() is now svy.Design(..., singleton="center"); '
             'certainty() is "self_representing".',
         )
+
+
+@dataclass(eq=False)
+class SingletonWarning(SvyWarning):
+    pass

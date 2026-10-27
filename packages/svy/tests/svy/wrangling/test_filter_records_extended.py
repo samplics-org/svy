@@ -8,7 +8,7 @@ from svy import SvyWarning
 from svy.core.design import Design
 from svy.core.expr import col
 from svy.core.sample import Sample
-from svy.errors import MethodError
+from svy.errors import DataError
 
 
 # ---------- Fixtures ----------
@@ -217,7 +217,7 @@ def test_filter_all_rows_match(sample_basic: Sample):
 
 
 def test_filter_missing_column_raises(sample_basic: Sample):
-    with pytest.raises(MethodError):
+    with pytest.raises(DataError):
         sample_basic.wrangling.filter_records({"nonexistent": 1})
 
 

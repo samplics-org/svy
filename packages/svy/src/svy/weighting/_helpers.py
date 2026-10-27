@@ -110,11 +110,11 @@ def _unique_name(base: str, existing: set[str]) -> str:
 
 
 def _ensure_columns(df: pl.DataFrame, cols: list[str], *, where: str) -> None:
-    from svy.errors import MethodError
+    from svy.errors import WeightingError
 
     missing = [c for c in cols if c not in df.columns]
     if missing:
-        raise MethodError.invalid_choice(
+        raise WeightingError.invalid_choice(
             where=where,
             param="columns",
             got=missing,

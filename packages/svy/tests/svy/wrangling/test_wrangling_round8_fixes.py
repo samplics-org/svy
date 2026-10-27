@@ -19,7 +19,7 @@ import svy
 
 from svy.core.design import RepWeights
 from svy.core.sample import Design, Sample
-from svy.errors import MethodError
+from svy.errors import DataError
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +133,7 @@ class TestMutateOrdering:
         """Circular same-call redefinitions are ambiguous — error, not
         silent old-value evaluation."""
         s = Sample(pl.DataFrame({"a": [1.0], "b": [2.0]}))
-        with pytest.raises(MethodError, match="[Cc]ircular"):
+        with pytest.raises(DataError, match="[Cc]ircular"):
             s.wrangling.mutate({"a": pl.col("b") + 1, "b": pl.col("a") + 1})
 
 
@@ -238,7 +238,7 @@ class TestMeanFillIntegers:
 class TestCastTruncationGuard:
     def test_strict_float_to_int_truncation_raises(self):
         s = Sample(pl.DataFrame({"x": [1.7, 2.0, 3.5]}))
-        with pytest.raises(MethodError, match="[Tt]runcat|[Ll]ossy"):
+        with pytest.raises(DataError, match="[Tt]runcat|[Ll]ossy"):
             s.wrangling.cast("x", pl.Int64)
 
     def test_strict_whole_floats_ok(self):
@@ -254,7 +254,7 @@ class TestCastTruncationGuard:
 
     def test_mapping_form_guarded(self):
         s = Sample(pl.DataFrame({"x": [1.7], "y": [2.0]}))
-        with pytest.raises(MethodError):
+        with pytest.raises(DataError):
             s.wrangling.cast({"x": pl.Int64, "y": pl.Int64})
 
     def test_int_to_int_unaffected(self):

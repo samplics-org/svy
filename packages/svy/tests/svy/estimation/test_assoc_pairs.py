@@ -11,7 +11,7 @@ import pytest
 from polars.testing import assert_frame_equal
 
 from svy import Design, Sample, estd
-from svy.errors import MethodError
+from svy.errors import EstimationError
 from svy.serialize import from_json, to_json, to_polars
 
 
@@ -108,7 +108,7 @@ def test_saved_frame_matches_the_live_frame(labelled, use_labels, by):
 def test_domain_named_like_a_pair_column_raises(sample):
     s = sample.wrangling.rename_columns({"stype": "x"})
     r = s.estimation.corr(COLS, by="x")
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(EstimationError) as exc:
         r.to_polars()
     assert exc.value.code == "PAIR_COLUMN_CLASH"
 
@@ -140,7 +140,7 @@ def test_contrast_resolves_the_pair_either_way_round(sample):
 
 def test_multi_row_contrast_explains_the_missing_covariance(sample):
     r = sample.estimation.corr(COLS)
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(EstimationError) as exc:
         r.contrast(estd("api00", "api99") - estd("api00", "enroll"))
     assert exc.value.code == "CONTRAST_NO_COVARIANCE"
     assert "prop(" not in str(exc.value)

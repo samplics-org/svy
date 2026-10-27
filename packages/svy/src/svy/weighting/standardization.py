@@ -35,7 +35,7 @@ import polars as pl
 
 from svy.core.design import WgtAdjustment
 from svy.core.types import DomainScalarMap
-from svy.errors import WeightingError
+from svy.errors import WeightingError, WeightingWarning
 from svy.errors._findings import Severity, WarnCode, check_on_finding, finding_level
 from svy.errors._weighting import show
 from svy.weighting._engine import (
@@ -134,20 +134,22 @@ def _record_partial(
         return
     shown = ", ".join(show(d) for d in partial[:5]) + (", ..." if len(partial) > 5 else "")
     sample.warn(
-        code=WarnCode.DOMAIN_LEVELS_PARTIAL,
-        title="Domains missing some levels",
-        detail=(
-            f"{len(partial)} domain(s) of {'/'.join(by_cols)} do not observe every level "
-            f"of {'/'.join(cells_cols)}: {shown}. Shares were renormalized over "
-            "the levels present, so these domains are standardized to a different "
-            "population than the others."
-        ),
-        where=_CTX,
-        level=Severity.WARNING,
-        param="by",
-        got=list(partial),
-        hint="Collapse sparse levels of the composition axis, or accept that these "
-        "domains follow a different standard.",
+        WeightingWarning(
+            code=WarnCode.DOMAIN_LEVELS_PARTIAL,
+            title="Domains missing some levels",
+            detail=(
+                f"{len(partial)} domain(s) of {'/'.join(by_cols)} do not observe every level "
+                f"of {'/'.join(cells_cols)}: {shown}. Shares were renormalized over "
+                "the levels present, so these domains are standardized to a different "
+                "population than the others."
+            ),
+            where=_CTX,
+            level=Severity.WARNING,
+            param="by",
+            got=list(partial),
+            hint="Collapse sparse levels of the composition axis, or accept that these "
+            "domains follow a different standard.",
+        )
     )
 
 

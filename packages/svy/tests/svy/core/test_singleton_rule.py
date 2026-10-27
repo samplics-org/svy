@@ -22,7 +22,7 @@ import svy
 from svy.core.design import Design, Singleton, WgtAdjustment
 from svy.core.enumerations import SingletonDomains, SingletonMethod
 from svy.core.repwgts import BrrWgts
-from svy.errors import MethodError, SerializationError
+from svy.errors import DesignError, SerializationError
 from svy.serialize import (
     DesignData,
     SingletonData,
@@ -69,14 +69,14 @@ def test_method_is_positional_and_the_rest_keyword_only():
 
 
 def test_unknown_method_lists_the_choices():
-    with pytest.raises(MethodError) as err:
+    with pytest.raises(DesignError) as err:
         Singleton("adjust")  # type: ignore[arg-type]
     assert err.value.code == "INVALID_CHOICE"
     assert err.value.expected == METHODS
 
 
 def test_certainty_points_to_self_representing_and_to_skip():
-    with pytest.raises(MethodError, match="self_representing") as err:
+    with pytest.raises(DesignError, match="self_representing") as err:
         Singleton("certainty")  # type: ignore[arg-type]
     assert "method='skip'" in err.value.hint
 
@@ -93,19 +93,19 @@ def test_certainty_points_to_self_representing_and_to_skip():
 )
 @pytest.mark.parametrize("method", ["center", "scale", "skip", "self_representing", "pool"])
 def test_collapse_options_belong_to_collapse(method, kwargs, param):
-    with pytest.raises(MethodError, match=f"{param} applies to method='collapse' only") as err:
+    with pytest.raises(DesignError, match=f"{param} applies to method='collapse' only") as err:
         Singleton(method, **kwargs)
     assert err.value.code == "INVALID_SINGLETON_RULE" and err.value.param == param
 
 
 @pytest.mark.parametrize("method", ["center", "scale", "skip", "self_representing", "collapse"])
 def test_name_belongs_to_pool(method):
-    with pytest.raises(MethodError, match="name applies to method='pool' only"):
+    with pytest.raises(DesignError, match="name applies to method='pool' only"):
         Singleton(method, name="rest")
 
 
 def test_pool_name_must_be_a_non_empty_string():
-    with pytest.raises(MethodError, match="non-empty string"):
+    with pytest.raises(DesignError, match="non-empty string"):
         Singleton("pool", name="")
 
 
@@ -115,7 +115,7 @@ def test_collapse_strategies(using):
 
 
 def test_unknown_strategy():
-    with pytest.raises(MethodError) as err:
+    with pytest.raises(DesignError) as err:
         Singleton("collapse", using="nearest")
     assert err.value.code == "INVALID_CHOICE"
 
@@ -143,7 +143,7 @@ def test_collapse_mapping_keeps_native_values_and_tuples():
     ],
 )
 def test_invalid_mappings(using, match):
-    with pytest.raises(MethodError, match=match):
+    with pytest.raises(DesignError, match=match):
         Singleton("collapse", using=using)
 
 
@@ -164,12 +164,12 @@ def test_columns_as_a_name_or_a_list(param):
     rule = Singleton("collapse", **{param: ["region", "urban", "region"]})
     assert getattr(rule, param) == ("region", "urban")
     for bad in ("", [], ["region", 3]):
-        with pytest.raises(MethodError, match=f"{param} names one column"):
+        with pytest.raises(DesignError, match=f"{param} names one column"):
             Singleton("collapse", **{param: bad})
 
 
 def test_rstate_is_not_a_bool():
-    with pytest.raises(MethodError, match="rstate"):
+    with pytest.raises(DesignError, match="rstate"):
         Singleton("collapse", rstate=True)
 
 
@@ -226,9 +226,9 @@ def test_repr_is_the_constructor_call(rule, shown):
 
 
 def test_a_callable_or_generator_rule_cannot_be_written_as_code():
-    with pytest.raises(MethodError, match="callable"):
+    with pytest.raises(DesignError, match="callable"):
         Singleton("collapse", using=lambda s, c: c[0])._to_code()
-    with pytest.raises(MethodError, match="Generator"):
+    with pytest.raises(DesignError, match="Generator"):
         Singleton("collapse", rstate=np.random.default_rng(1))._to_code()
 
 
@@ -257,7 +257,7 @@ def test_design_needs_a_stratum_for_a_rule():
 
 
 def test_design_rejects_other_types():
-    with pytest.raises(MethodError, match="wrong type") as err:
+    with pytest.raises(DesignError, match="wrong type") as err:
         Design(stratum="st", singleton={"d": "a"})  # type: ignore[arg-type]
     assert err.value.expected == "svy.Singleton | str | None"
 

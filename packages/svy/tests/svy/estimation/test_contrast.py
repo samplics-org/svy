@@ -24,7 +24,7 @@ import svy
 
 from svy import Cat, Design, Sample, estd
 from svy.core.repwgts import RepWeights
-from svy.errors import MethodError
+from svy.errors import EstimationError
 
 
 def _declare(sample, method, **kw):
@@ -139,7 +139,7 @@ class TestTaylorMeanContrast:
 
     def test_unknown_key_raises_listing_valid(self, dclus1):
         r = dclus1.estimation.mean("api00", by="stype")
-        with pytest.raises(MethodError, match="Valid keys"):
+        with pytest.raises(EstimationError, match="Valid keys"):
             r.contrast(estd("X") - estd("H"))
 
     def test_scaling_and_division(self, dclus1):
@@ -328,12 +328,12 @@ class TestGlmContrast:
 class TestContrastGuards:
     def test_quantile_refused(self, dclus1):
         r = dclus1.estimation.median("api00", by="stype")
-        with pytest.raises(MethodError, match="quantile"):
+        with pytest.raises(EstimationError, match="quantile"):
             r.contrast(estd("E") - estd("H"))
 
     def test_multi_variable_prop_refused(self, dclus1):
         rs = dclus1.estimation.prop(["stype", "comp.imp"])
-        with pytest.raises(MethodError, match="independently"):
+        with pytest.raises(EstimationError, match="independently"):
             rs[0].contrast(estd("E") - estd("H"))
 
     def test_estimate_list_single_member_delegates(self, dclus1):
@@ -385,7 +385,7 @@ class TestContrastGuards:
         by_int = r.contrast(estd(2) - estd(1)).estimates[0]
         assert by_int.est == by_str.est
         assert by_int.se == by_str.se
-        with pytest.raises(MethodError, match="Valid keys"):
+        with pytest.raises(EstimationError, match="Valid keys"):
             r.contrast(estd(3) - estd(1))
 
 
@@ -417,7 +417,7 @@ class TestLabelResolution:
         assert by_label.se == by_code.se
 
     def test_unknown_label_still_raises(self, labeled_result):
-        with pytest.raises(MethodError, match="Valid keys"):
+        with pytest.raises(EstimationError, match="Valid keys"):
             labeled_result.contrast(estd("Kindergarten") - estd("High"))
 
 

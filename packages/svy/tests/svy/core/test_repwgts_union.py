@@ -18,7 +18,7 @@ from svy.core.repwgts import (
     SdrWgts,
     resolve_rep_variant,
 )
-from svy.errors import MethodError
+from svy.errors import DesignError
 from svy.errors._findings import WarnCode
 
 
@@ -59,7 +59,7 @@ def test_foreign_parameters_are_unrepresentable(ctor, kwargs):
 
 def test_jackknife_rejects_a_bootstrap_kind():
     """Both variants have a ``kind``; the vocabularies are not interchangeable."""
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DesignError) as exc:
         JackknifeWgts(prefix="w", n_reps=10, kind="poisson")
     assert "jk1" in str(exc.value)
 
@@ -81,7 +81,7 @@ def test_jackknife_kind_is_unspecified_by_default():
 
 def test_declared_jkn_without_coefficients_refuses_to_guess():
     """An unmet claim fails; an absent one falls back."""
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DesignError) as exc:
         JackknifeWgts(prefix="w", n_reps=10, kind="jkn").coefficients()
     assert "scale" in str(exc.value)
 
@@ -172,7 +172,7 @@ def test_bootstrap_kind_aliases_normalize(given):
 )
 def test_factory_rejects_foreign_parameters_and_names_the_owner(kwargs, param):
     """The wrapper is the boundary that enforces what the union cannot express."""
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DesignError) as exc:
         RepWeights(prefix="w", n_reps=10, **kwargs)
     rendered = str(exc.value)
     assert param in rendered
@@ -349,7 +349,7 @@ def test_design_units_alone_do_not_drive_the_derivation():
     assert s._design.stratum == "stratum" and s._design.psu == "psu"
     assert s._design.rep_wgts.rep_coefs is None  # not derived from the Design
     assert WarnCode.JACKKNIFE_COEFS_UNAVAILABLE in {w.code for w in s.warnings.list()}
-    with pytest.raises(MethodError):
+    with pytest.raises(DesignError):
         s._design.rep_wgts.coefficients()
 
 
@@ -364,7 +364,7 @@ def test_unbalanced_jkn_is_not_derived_and_still_refuses():
     with pytest.warns(svy.SvyWarning, match=r"\[JACKKNIFE_COEFS_UNAVAILABLE\]"):
         s = _jk_sample([1, 1, 1, 1, 2, 2], n_reps=3, kind="jkn")
     assert s._design.rep_wgts.rep_coefs is None
-    with pytest.raises(MethodError):
+    with pytest.raises(DesignError):
         s._design.rep_wgts.coefficients()
 
 
@@ -406,7 +406,7 @@ def test_a_kind_contradicted_by_the_units_is_an_error():
     exactly on the PSU count, so the label is simply wrong and svy can say which
     it should be. Warning and carrying on would ship a coefficient wrong by a
     known factor."""
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DesignError) as exc:
         _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jk2")
     assert "jkn" in str(exc.value)
 
@@ -435,12 +435,12 @@ def test_factory_forwards_unknown_parameters_to_the_variant():
 def test_a_foreign_parameter_is_refused_even_at_its_neutral_value():
     """fay_coef=0.0 on a bootstrap is still a Fay parameter on a design that has
     none. Callers that know the variant should not be sending it at all."""
-    with pytest.raises(MethodError):
+    with pytest.raises(DesignError):
         RepWeights(method="bootstrap", prefix="b", n_reps=10, fay_coef=0.0)
 
 
 def test_a_foreign_parameter_carrying_a_value_still_names_its_owner():
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DesignError) as exc:
         RepWeights(method="bootstrap", prefix="b", n_reps=10, fay_coef=0.5)
     assert "BrrWgts" in str(exc.value)
 
@@ -463,7 +463,7 @@ def test_jk1_against_stratified_units_is_an_error():
     jk1 and jkn both imply one replicate per PSU and differ only in
     stratification. jk1 there returns (R-1)/R where (n_h-1)/n_h is correct --
     0.875 against 0.5, SEs overstated by 32%, in silence."""
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DesignError) as exc:
         _jk_sample([1, 1, 1, 1, 2, 2, 2, 2], n_reps=4, kind="jk1")
     assert "jkn" in str(exc.value)
 

@@ -38,7 +38,7 @@ def test_unsupported_type_ctor_builds_clear_error():
 
     # repr includes class name and key fields
     r = repr(err)
-    assert "SerializationError(" in r and "code='UNSUPPORTED_RESULT_TYPE'" in r
+    assert r.startswith("SerializationError.TypeError(") and "code='UNSUPPORTED_RESULT_TYPE'" in r
 
 
 def test_missing_kind_ctor():

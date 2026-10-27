@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import ClassVar, Optional
 
-from ._base import SvyError
+from ._base import SvyError, SvyWarning
 
 
 @dataclass(eq=False)
@@ -14,10 +14,7 @@ class DatasetError(SvyError):
     service failures, unknown slugs, hash mismatches, and related issues.
     """
 
-    def __post_init__(self) -> None:
-        # If caller didn't set a specific code, use a type-specific default.
-        if self.code == "SVY_ERROR":
-            self.code = "DATASET_ERROR"
+    _DEFAULT_CODE: ClassVar[str] = "DATASET_ERROR"
 
     # ---- Catalog reachability ---------------------------------------------
 
@@ -31,7 +28,7 @@ class DatasetError(SvyError):
         hint: Optional[str] = "Check your network connection or SVYLAB_API_URL.",
         docs_url: Optional[str] = None,
     ) -> "DatasetError":
-        return cls(
+        return cls.OSError(
             title="Catalog unreachable",
             detail=f"Could not reach the dataset catalog at {url}: {reason}",
             code="CATALOG_UNREACHABLE",
@@ -51,7 +48,7 @@ class DatasetError(SvyError):
         hint: Optional[str] = "The catalog service may be temporarily unavailable.",
         docs_url: Optional[str] = None,
     ) -> "DatasetError":
-        return cls(
+        return cls.OSError(
             title="Catalog request failed",
             detail=f"Catalog at {url} returned HTTP {status}.",
             code="CATALOG_BAD_STATUS",
@@ -72,7 +69,7 @@ class DatasetError(SvyError):
         ),
         docs_url: Optional[str] = None,
     ) -> "DatasetError":
-        return cls(
+        return cls.ImportError(
             title="Online dataset catalog unavailable",
             detail=(
                 "Reaching the online dataset catalog needs the optional 'httpx' "
@@ -96,7 +93,7 @@ class DatasetError(SvyError):
         hint: Optional[str] = "Call svy.datasets.catalog() to see available slugs.",
         docs_url: Optional[str] = None,
     ) -> "DatasetError":
-        return cls(
+        return cls.KeyError(
             title="Dataset not found",
             detail=f"No dataset in the catalog has slug {slug!r}.",
             code="DATASET_NOT_FOUND",
@@ -122,7 +119,7 @@ class DatasetError(SvyError):
         ),
         docs_url: Optional[str] = None,
     ) -> "DatasetError":
-        return cls(
+        return cls.OSError(
             title="Dataset download failed",
             detail=f"Could not download dataset {slug!r} from {url}: {reason}",
             code="DATASET_DOWNLOAD_FAILED",
@@ -145,7 +142,7 @@ class DatasetError(SvyError):
         docs_url: Optional[str] = None,
     ) -> "DatasetError":
         listed = ", ".join(bundled) if bundled else "(none)"
-        return cls(
+        return cls.KeyError(
             title="Dataset not bundled",
             detail=(f"Dataset {slug!r} is not available offline as a bundled dataset."),
             code="DATASET_NOT_BUNDLED",
@@ -174,7 +171,7 @@ class DatasetError(SvyError):
         ),
         docs_url: Optional[str] = None,
     ) -> "DatasetError":
-        return cls(
+        return cls.FileNotFoundError(
             title="Bundled dataset unavailable",
             detail=f"The bundled copy of dataset {slug!r} could not be read: {reason}",
             code="BUNDLED_UNAVAILABLE",
@@ -198,7 +195,7 @@ class DatasetError(SvyError):
         "and must start with a letter or digit.",
         docs_url: Optional[str] = None,
     ) -> "DatasetError":
-        return cls(
+        return cls.ValueError(
             title="Invalid dataset slug",
             detail=f"Dataset slug {slug!r} contains disallowed characters.",
             code="DATASET_INVALID_SLUG",
@@ -221,7 +218,7 @@ class DatasetError(SvyError):
         "only for localhost).",
         docs_url: Optional[str] = None,
     ) -> "DatasetError":
-        return cls(
+        return cls.ValueError(
             title="Insecure dataset download URL",
             detail=f"Refusing to download dataset {slug!r} over an insecure URL.",
             code="DATASET_INSECURE_URL",
@@ -245,7 +242,7 @@ class DatasetError(SvyError):
         hint: Optional[str] = "Re-run with force_download=True, or check SVYLAB_API_URL.",
         docs_url: Optional[str] = None,
     ) -> "DatasetError":
-        return cls(
+        return cls.ValueError(
             title="Dataset integrity check failed",
             detail=f"SHA-256 mismatch for dataset {slug!r}.",
             code="DATASET_SHA_MISMATCH",
@@ -257,3 +254,8 @@ class DatasetError(SvyError):
             docs_url=docs_url,
             extra={"slug": slug},
         )
+
+
+@dataclass(eq=False)
+class DatasetWarning(SvyWarning):
+    pass

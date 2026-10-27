@@ -7,7 +7,7 @@ import difflib
 
 from dataclasses import dataclass
 from functools import cache
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, ClassVar, Iterable
 
 from ._base import SvyError
 
@@ -28,6 +28,10 @@ _TO_POLARS = "result.to_polars()"
 _ALIASES: dict[str, dict[str, str]] = {
     "svy": {
         "SvyUserWarning": "svy.SvyWarning, its name since 2026.0",
+        "MethodError": "the error of the part of svy you called, in svy.errors (EstimationError, "
+        "WeightingError, DataError, ...), or the builtin it also is (ValueError, TypeError)",
+        "DimensionError": "the error of the part of svy you called, in svy.errors (DataError, "
+        "EstimationError, ...); a missing column is also a KeyError",
         "Survey": _SAMPLE_AND_DESIGN,
         "SurveyDesign": _SAMPLE_AND_DESIGN,
         "survey_design": _SAMPLE_AND_DESIGN,
@@ -39,6 +43,11 @@ _ALIASES: dict[str, dict[str, str]] = {
     },
     "svy.errors": {
         "SvyUserWarning": "svy.errors.SvyWarning, its name since 2026.0",
+        # Split by area in 2026.0; the builtin kind (ValueError, ...) catches across areas.
+        "MethodError": "the error of the part of svy you called (EstimationError, "
+        "WeightingError, DataError, ...), or the builtin it also is (ValueError, TypeError)",
+        "DimensionError": "the error of the part of svy you called (DataError, "
+        "EstimationError, ...); a missing column is also a KeyError",
     },
     "GLMMargins": {
         "values": "at (the values each variable was set to) or contrast (effect labels)",
@@ -148,11 +157,72 @@ def public_names(obj: Any) -> list[str]:
 
 
 @dataclass(eq=False)
-class UnknownNameError(SvyError, AttributeError):
+class UsageError(SvyError):
+    """svy's API used in a way it does not take: an unknown or removed name or
+    argument, data of the wrong kind. Says what to use instead."""
+
+    _DEFAULT_CODE: ClassVar[str] = "USAGE_ERROR"
+
+    @classmethod
+    def data_in_design(cls, *, got: Any) -> "UsageError":
+        return cls.TypeError(
+            title="Design does not take data",
+            detail="A Design names the design columns; the data goes to Sample.",
+            code="DESIGN_GIVEN_DATA",
+            where="svy.Design",
+            got=type(got).__name__,
+            hint=f"Use {_SAMPLE_AND_DESIGN}.",
+        )
+
+    @classmethod
+    def unknown_arguments(
+        cls, *, where: str, unknown: Iterable[str], known: Iterable[str]
+    ) -> "UsageError":
+        unknown, known = list(unknown), sorted(known)
+        fixes = []
+        for name in unknown:
+            if name in ("data", "df"):
+                fixes.append(f"{name}: the data goes to svy.Sample(data, design)")
+            elif name == "nest":
+                fixes.append("nest: PSU codes are always taken within stratum; drop it")
+            elif name in _DESIGN_ARGS:
+                fixes.append(f"{name}: use {_DESIGN_ARGS[name]}=")
+            elif close := difflib.get_close_matches(name, known, n=1, cutoff=0.7):
+                fixes.append(f"{name}: did you mean {close[0]}=?")
+        return cls.TypeError(
+            title="Unknown argument",
+            detail=f"{where} got unexpected keyword argument(s): {', '.join(unknown)}"
+            + ("; " + "; ".join(fixes) if fixes else "")
+            + ".",
+            code="UNKNOWN_ARGUMENT",
+            where=where,
+            got=unknown,
+            expected=known,
+        )
+
+    @classmethod
+    def not_polars(cls, *, where: str, got: Any) -> "UsageError":
+        is_pandas = type(got).__module__.split(".")[0] == "pandas"
+        return cls.TypeError(
+            title="Data must be a polars DataFrame",
+            detail=f"{where} takes a polars DataFrame or LazyFrame.",
+            code="DATA_NOT_POLARS",
+            where=where,
+            got=f"{type(got).__module__}.{type(got).__name__}",
+            hint="Convert with polars.from_pandas(df), or read with svy.read_csv and the other svy readers."
+            if is_pandas
+            else "Read files with svy.read_csv, svy.read_parquet, svy.read_stata, ...",
+        )
+
+
+@dataclass(eq=False)
+class UnknownNameError(UsageError, AttributeError):
     """A name that does not exist; says what to use instead.
 
     Also an ``AttributeError``, so ``hasattr`` stays False.
     """
+
+    _IS_KIND: ClassVar[bool] = True
 
     @classmethod
     def unknown(
@@ -218,62 +288,3 @@ _DESIGN_ARGS = {
     "rep_weights": "rep_wgts",
     "probs": "prob",
 }
-
-
-@dataclass(eq=False)
-class UsageError(SvyError, TypeError):
-    """An argument svy does not take, or data of the wrong kind; says what to do.
-
-    Also a ``TypeError``, as Python raises for a wrong call.
-    """
-
-    @classmethod
-    def data_in_design(cls, *, got: Any) -> "UsageError":
-        return cls(
-            title="Design does not take data",
-            detail="A Design names the design columns; the data goes to Sample.",
-            code="DESIGN_GIVEN_DATA",
-            where="svy.Design",
-            got=type(got).__name__,
-            hint=f"Use {_SAMPLE_AND_DESIGN}.",
-        )
-
-    @classmethod
-    def unknown_arguments(
-        cls, *, where: str, unknown: Iterable[str], known: Iterable[str]
-    ) -> "UsageError":
-        unknown, known = list(unknown), sorted(known)
-        fixes = []
-        for name in unknown:
-            if name in ("data", "df"):
-                fixes.append(f"{name}: the data goes to svy.Sample(data, design)")
-            elif name == "nest":
-                fixes.append("nest: PSU codes are always taken within stratum; drop it")
-            elif name in _DESIGN_ARGS:
-                fixes.append(f"{name}: use {_DESIGN_ARGS[name]}=")
-            elif close := difflib.get_close_matches(name, known, n=1, cutoff=0.7):
-                fixes.append(f"{name}: did you mean {close[0]}=?")
-        return cls(
-            title="Unknown argument",
-            detail=f"{where} got unexpected keyword argument(s): {', '.join(unknown)}"
-            + ("; " + "; ".join(fixes) if fixes else "")
-            + ".",
-            code="UNKNOWN_ARGUMENT",
-            where=where,
-            got=unknown,
-            expected=known,
-        )
-
-    @classmethod
-    def not_polars(cls, *, where: str, got: Any) -> "UsageError":
-        is_pandas = type(got).__module__.split(".")[0] == "pandas"
-        return cls(
-            title="Data must be a polars DataFrame",
-            detail=f"{where} takes a polars DataFrame or LazyFrame.",
-            code="DATA_NOT_POLARS",
-            where=where,
-            got=f"{type(got).__module__}.{type(got).__name__}",
-            hint="Convert with polars.from_pandas(df), or read with svy.read_csv and the other svy readers."
-            if is_pandas
-            else "Read files with svy.read_csv, svy.read_parquet, svy.read_stata, ...",
-        )

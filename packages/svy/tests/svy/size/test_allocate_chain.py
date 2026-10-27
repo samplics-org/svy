@@ -6,7 +6,7 @@ import pytest
 
 import svy
 
-from svy.errors import MethodError
+from svy.errors import SelectionError
 
 
 POP = {"North": 52_000, "South": 31_000}
@@ -43,17 +43,17 @@ def test_reallocating_keeps_the_total():
 
 
 def test_without_a_previous_goal_n_is_required():
-    with pytest.raises(MethodError, match="no n to split"):
+    with pytest.raises(SelectionError, match="no n to split"):
         svy.SampleSize().allocate(pop_size=POP)
 
 
 def test_a_stratified_goal_cannot_be_split_again():
     ss = svy.SampleSize().estimate_prop(p={"a": 0.3, "b": 0.5}, moe=0.05)
-    with pytest.raises(MethodError, match="stratified"):
+    with pytest.raises(SelectionError, match="stratified"):
         ss.allocate(pop_size={"a": 100, "b": 200})
 
 
 def test_a_comparison_has_no_overall_n():
     ss = svy.SampleSize().compare_props(p1=0.3, p2=0.4)
-    with pytest.raises(MethodError, match="comparison group"):
+    with pytest.raises(SelectionError, match="comparison group"):
         ss.allocate(pop_size=POP)

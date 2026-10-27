@@ -5,7 +5,7 @@ import pytest
 
 import svy
 
-from svy.errors import DimensionError, MethodError
+from svy.errors import DataError
 
 
 def _panel(waves=(1, 2, 3)):
@@ -68,7 +68,7 @@ def test_custom_names_and_several_columns():
     s = _panel().wrangling.mutate({"z": svy.col("y") * 10})
     out = s.wrangling.lag(["y", "z"], name=["py", "pz"])
     assert out.data["pz"].to_list() == [None, 10, 20, None, None, None, 60]
-    with pytest.raises(DimensionError):
+    with pytest.raises(DataError):
         s.wrangling.lag(["y", "z"], name="only_one")
 
 
@@ -82,19 +82,19 @@ def test_copy_on_write_and_inplace():
 
 def test_requires_panel():
     df = pl.DataFrame({"id": [1, 2], "y": [1, 2]})
-    with pytest.raises(MethodError, match="kind='panel'"):
+    with pytest.raises(DataError, match="kind='panel'"):
         svy.Sample(df, svy.Design(case_id="id")).wrangling.lag("y")
 
 
 def test_guards():
     s = _panel()
-    with pytest.raises(MethodError, match="n"):
+    with pytest.raises(DataError, match="n"):
         s.wrangling.lag("y", 0)
-    with pytest.raises(MethodError, match="already exist"):
+    with pytest.raises(DataError, match="already exist"):
         s.wrangling.lag("y", name="y")
-    with pytest.raises(DimensionError):
+    with pytest.raises(DataError):
         s.wrangling.lag("nope")
-    with pytest.raises(MethodError, match="gaps"):
+    with pytest.raises(DataError, match="gaps"):
         s.wrangling.lag("y", gaps="fill")  # type: ignore[arg-type]
 
 

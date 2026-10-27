@@ -13,7 +13,7 @@ from svy.core.constants import (
     SVY_PROB,
     SVY_WEIGHT,
 )
-from svy.errors import DimensionError, MethodError
+from svy.errors import SelectionError
 
 
 def _stage_col(base: str, k: int) -> str:
@@ -139,7 +139,7 @@ def _combine_stages(
     # ------------------------------------------------------------------
     for col in stage1_psu:
         if col not in stage1_df.columns:
-            raise DimensionError.missing_columns(
+            raise SelectionError.missing_columns(
                 where="Sample.sampling.add_stage",
                 param="design.psu",
                 missing=[col],
@@ -148,7 +148,7 @@ def _combine_stages(
             )
     for col in next_psu:
         if col not in next_df.columns:
-            raise DimensionError.missing_columns(
+            raise SelectionError.missing_columns(
                 where="Sample.sampling.add_stage",
                 param="next_stage",
                 missing=[col],
@@ -163,7 +163,7 @@ def _combine_stages(
     # stages that unit is not the stage-1 PSU.
     link = next_psu if all(c in stage1_df.columns for c in next_psu) else stage1_psu
     if stage1_df.select(link).is_duplicated().any():
-        raise MethodError.not_applicable(
+        raise SelectionError.not_applicable(
             where="Sample.sampling.add_stage",
             method="add_stage",
             param="next_stage",
@@ -209,7 +209,7 @@ def _combine_stages(
     unmatched = ns_vals - s1_vals
     if unmatched:
         sample_unmatched = sorted(unmatched)[:5]
-        raise MethodError.invalid_choice(
+        raise SelectionError.invalid_choice(
             where="Sample.sampling.add_stage",
             param="next_stage PSU values",
             got=sample_unmatched,

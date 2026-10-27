@@ -86,9 +86,9 @@ def test_a_repeat_the_store_suppresses_is_not_raised():
     kw = dict(code="X_TEST", title="t", detail="same", where="test")
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
-        s.warn(**kw)
-        s.warn(**kw)
-        s.warn(**{**kw, "detail": "other"})
+        s.warn(SvyWarning(**kw))
+        s.warn(SvyWarning(**kw))
+        s.warn(SvyWarning(**{**kw, "detail": "other"}))
     assert [str(r.message) for r in _svy_records(rec)] == ["[X_TEST] t: same", "[X_TEST] t: other"]
     assert len(s.warnings.list(code="X_TEST")) == 2
 
@@ -99,7 +99,7 @@ def test_a_capped_code_is_not_raised():
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
         for i in range(3):
-            s.warn(code="X_CAP", title="t", detail=str(i), where="test")
+            s.warn(SvyWarning(code="X_CAP", title="t", detail=str(i), where="test"))
     assert len(_svy_records(rec)) == 1
     assert len(s.warnings.list(code="X_CAP")) == 1
 
@@ -142,7 +142,7 @@ def _run(*flags: str) -> subprocess.CompletedProcess:
 def test_command_line_filters():
     default = _run()
     assert default.returncode == 0
-    assert "SvyWarning: [CELLS_NULL_UNADJUSTED]" in default.stderr
+    assert "WeightingWarning: [CELLS_NULL_UNADJUSTED]" in default.stderr
     assert "<string>:4" in default.stderr
     assert _run("-W", "ignore").stderr == ""
     assert _run("-W", "ignore::UserWarning").stderr == ""
@@ -287,7 +287,7 @@ def _raised(fn) -> list[str]:
 
 def test_same_finding_on_an_unchanged_sample_once():
     s = _null_cell_sample()
-    assert len(_raised(lambda: [s.warn(**_KW) for _ in range(3)])) == 1
+    assert len(_raised(lambda: [s.warn(SvyWarning(**_KW)) for _ in range(3)])) == 1
     assert len(s.warnings.list(code="X_STATE")) == 1
 
 
@@ -302,20 +302,20 @@ def test_same_finding_on_an_unchanged_sample_once():
 )
 def test_a_new_state_is_a_new_event(change):
     s = _null_cell_sample()
-    assert len(_raised(lambda: s.warn(**_KW))) == 1
+    assert len(_raised(lambda: s.warn(SvyWarning(**_KW)))) == 1
     change(s)
-    assert len(_raised(lambda: s.warn(**_KW))) == 1
-    assert len(_raised(lambda: s.warn(**_KW))) == 0
+    assert len(_raised(lambda: s.warn(SvyWarning(**_KW)))) == 1
+    assert len(_raised(lambda: s.warn(SvyWarning(**_KW)))) == 0
     found = s.warnings.list(code="X_STATE")
     assert len(found) == 2 and found[0].state != found[1].state
 
 
 def test_forks_keep_their_own_state():
     s = _null_cell_sample()
-    _raised(lambda: s.warn(**_KW))
+    _raised(lambda: s.warn(SvyWarning(**_KW)))
     fork = s.wrangling.mutate({"z": pl.lit(1)})
-    assert len(_raised(lambda: fork.warn(**_KW))) == 1
-    assert len(_raised(lambda: s.warn(**_KW))) == 0
+    assert len(_raised(lambda: fork.warn(SvyWarning(**_KW)))) == 1
+    assert len(_raised(lambda: s.warn(SvyWarning(**_KW)))) == 0
     assert len(s.warnings.list(code="X_STATE")) == 1
     assert len(fork.warnings.list(code="X_STATE")) == 2
 
@@ -325,7 +325,7 @@ def test_per_code_cap_spans_states():
     s._warnings = WarningStore(max_per_code=2)
     n = 0
     for _ in range(4):
-        n += len(_raised(lambda: s.warn(**_KW)))
+        n += len(_raised(lambda: s.warn(SvyWarning(**_KW))))
         s.set_design(s.design)
     assert n == 2 and len(s.warnings.list(code="X_STATE")) == 2
 

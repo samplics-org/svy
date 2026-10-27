@@ -12,7 +12,7 @@ import polars as pl
 
 from svy.core.expr import Expr, to_polars_expr
 from svy.core.types import MutateValue
-from svy.errors import DimensionError, MethodError
+from svy.errors import DataError
 from svy.wrangling._helpers import (
     _guard_weight_writes,
     _rebuild_concat_if_touched,
@@ -126,7 +126,7 @@ def mutate(
                 raw = spec
             out_obj = _as_output_obj(raw, out_name, n_rows)
         except Exception as ex:
-            raise MethodError(
+            raise DataError.RuntimeError(
                 title="Column transformation failed",
                 detail=str(ex),
                 code="MUTATE_COMPILE_FAILED",
@@ -170,13 +170,13 @@ def mutate(
                 for name in ready
                 if compiled[name][1] - current_cols
             }
-            raise DimensionError.missing_columns(
+            raise DataError.missing_columns(
                 missing=sum(missing_by_out.values(), []),
                 param="columns",
                 where="wrangling.mutate",
             ) from ex
         except Exception as ex:
-            raise MethodError(
+            raise DataError.RuntimeError(
                 title="Column transformation failed",
                 detail=str(ex),
                 code="MUTATE_WITH_COLUMNS_FAILED",
@@ -202,14 +202,14 @@ def mutate(
         )
 
         if missing_outside:
-            raise DimensionError.missing_columns(
+            raise DataError.missing_columns(
                 where="wrangling.mutate",
                 param="specs",
                 missing=missing_outside,
                 available=local_data.columns,
             )
 
-        raise MethodError(
+        raise DataError.ValueError(
             title="Dependency resolution failed",
             detail=f"Circular or mutually dependent outputs: {unresolved}",
             code="MUTATE_DEPENDENCY_ERROR",

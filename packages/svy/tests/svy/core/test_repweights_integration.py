@@ -14,7 +14,7 @@ import pytest
 import svy
 
 from svy.core.design import RepWeights
-from svy.errors import MethodError
+from svy.errors import DataError
 
 
 def _result(sample):
@@ -98,7 +98,7 @@ def test_remove_unrelated_column_keeps_rep_weights(rep_sample):
 
 
 def test_remove_rep_weight_column_is_protected(rep_sample):
-    with pytest.raises(MethodError):
+    with pytest.raises(DataError):
         rep_sample.wrangling.remove_columns("rw1")
 
 

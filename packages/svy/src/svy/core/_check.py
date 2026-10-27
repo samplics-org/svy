@@ -16,7 +16,7 @@ import numpy as np
 import polars as pl
 
 from svy.core.check import KeyCheck, MarginCheck, NestingCheck, WeightCheck
-from svy.errors import DimensionError, MethodError
+from svy.errors import DataError
 
 
 __all__ = ["check_weights", "check_key", "check_nesting", "margin_totals_check"]
@@ -41,7 +41,7 @@ def key_values(frame: pl.DataFrame, cols: list[str]) -> list[Any]:
 def _as_cols(columns: Any, *, param: str, where: str) -> list[str]:
     cols = [columns] if isinstance(columns, str) else columns
     if not isinstance(cols, Sequence) or not cols or not all(isinstance(c, str) for c in cols):
-        raise MethodError.invalid_type(
+        raise DataError.invalid_type(
             where=where,
             param=param,
             got=columns,
@@ -52,11 +52,11 @@ def _as_cols(columns: Any, *, param: str, where: str) -> list[str]:
 
 def _check_limit(limit: Any, *, where: str) -> int:
     if isinstance(limit, bool) or not isinstance(limit, numbers.Integral):
-        raise MethodError.invalid_type(
+        raise DataError.invalid_type(
             where=where, param="limit", got=limit, expected="a non-negative integer"
         )
     if limit < 0:
-        raise MethodError.invalid_range(
+        raise DataError.invalid_range(
             where=where, param="limit", got=limit, hint="limit is how many examples to list."
         )
     return int(limit)
@@ -65,13 +65,13 @@ def _check_limit(limit: Any, *, where: str) -> int:
 def _frame(data: Any, cols: list[str], *, param: str, where: str) -> pl.DataFrame:
     """The ``cols`` of ``data``, eager."""
     if not isinstance(data, (pl.DataFrame, pl.LazyFrame)):
-        raise MethodError.invalid_type(
+        raise DataError.invalid_type(
             where=where, param="data", got=data, expected="a polars DataFrame or LazyFrame"
         )
     available = data.collect_schema().names()
     missing = [c for c in cols if c not in available]
     if missing:
-        raise DimensionError.missing_columns(
+        raise DataError.missing_columns(
             where=where, param=param, missing=missing, available=available
         )
     out = data.select(cols)
@@ -97,11 +97,11 @@ def check_weights(data: pl.DataFrame | pl.LazyFrame, wgt: str) -> WeightCheck:
     """
     where = "checks.check_weights"
     if not isinstance(wgt, str):
-        raise MethodError.invalid_type(where=where, param="wgt", got=wgt, expected="a column name")
+        raise DataError.invalid_type(where=where, param="wgt", got=wgt, expected="a column name")
     frame = _frame(data, [wgt], param="wgt", where=where)
     dtype = frame.schema[wgt]
     if not (dtype.is_numeric() or dtype == pl.Null):
-        raise MethodError(
+        raise DataError.ValueError(
             title="Weight column is not numeric",
             detail=f"{wgt!r} is {dtype}.",
             code="WEIGHT_NOT_NUMERIC",

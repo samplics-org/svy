@@ -28,7 +28,7 @@ import svy
 from svy.core.design import Singleton
 from svy.core.enumerations import SingletonMethod
 from svy.core.singleton import _VAR_EXCLUDE_COL, _VAR_PSU_COL, _VAR_STRATUM_COL
-from svy.errors import SerializationError
+from svy.errors import SerializationError, WeightingError
 from svy.errors._singleton import SingletonError
 from svy.serialize import from_json, to_design, to_json
 
@@ -724,7 +724,7 @@ def test_forced_removal_of_the_stratum_drops_the_rule_in_the_one_warning():
 def test_a_within_column_is_protected_and_follows_renames():
     h = _declare(sample(), "collapse", within="reg")
     assert resolved(h) == {"d": "a", "e": "c"}
-    with pytest.raises(svy.MethodError):
+    with pytest.raises(svy.errors.DataError):
         h.wrangling.remove_columns("reg")
     r = h.wrangling.rename_columns({"reg": "region"})
     assert r.design.singleton == Singleton("collapse", within="region")
@@ -1045,9 +1045,8 @@ def test_replicates_on_explicit_units_ignore_the_rule():
 
 
 def test_brr_on_the_rules_units_still_refuses_odd_strata():
-    from svy.errors import DimensionError
 
-    with pytest.raises(DimensionError, match="BRR needs 2 PSUs"):
+    with pytest.raises(WeightingError, match="BRR needs 2 PSUs"):
         handled().weighting.create_brr_wgts()
 
 
@@ -1311,7 +1310,7 @@ def test_an_incomplete_or_wrong_mapping_raises_at_estimation():
     with pytest.raises(SingletonError, match="no longer has: 99"):
         h.estimation.mean("y")
     # 5 is a singleton itself: refused when the rule is built.
-    with pytest.raises(svy.MethodError, match="must not be singleton strata"):
+    with pytest.raises(svy.errors.DesignError, match="must not be singleton strata"):
         Singleton("collapse", using={4: 5, 5: 1})
     # A target that became a singleton in the data: raised at estimation.
     h = _declare(_int_sample(), "collapse", using={4: 1, 5: 3})
@@ -1454,7 +1453,7 @@ def test_filter_records_reports_singletons_a_rule_handles_at_info():
     assert "handled by the design's rule Singleton('center')" in w.detail
     assert w.level.name == "INFO"
     plain = svy.Sample(NO_SINGLETONS, svy.Design(**DESIGNS["single"]))
-    with pytest.raises(svy.MethodError, match="Singletons detected"):
+    with pytest.raises(svy.errors.DataError, match="Singletons detected"):
         plain.wrangling.filter_records(
             svy.col("psu") != "b1", check_singletons=True, on_singletons="error"
         )

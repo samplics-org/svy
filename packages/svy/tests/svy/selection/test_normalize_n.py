@@ -22,7 +22,7 @@ Scalar n
     by only (no stratum)      -> broadcast to all by-levels
 
 Dict n -- ungrouped (Problem 1 -- must error)
-    any dict with G=[]        -> MethodError
+    any dict with G=[]        -> SelectionError
 
 Dict n -- exact G match
     all cells covered         -> pass-through
@@ -31,37 +31,37 @@ Dict n -- exact G match
 Dict n -- exact B match (by-level broadcast)
     all by-levels, with stratum -> correct cross-product
     all by-levels, no stratum   -> direct pass-through
-    INCOMPLETE by-levels        -> MethodError (Problem 2)
+    INCOMPLETE by-levels        -> SelectionError (Problem 2)
 
 Dict n -- exact S match (stratum broadcast)
     all strata, with by       -> correct cross-product
     all strata, no by         -> direct pass-through
-    INCOMPLETE strata         -> MethodError (Problem 2)
+    INCOMPLETE strata         -> SelectionError (Problem 2)
 
 Dict n -- sublevel component match
     keys match one component per cell, all cells covered -> correct map
-    one cell has zero matching keys (incomplete)         -> MethodError
-    one cell has two matching keys (ambiguous)           -> MethodError
-    unrecognized keys (match nothing)                    -> MethodError
+    one cell has zero matching keys (incomplete)         -> SelectionError
+    one cell has two matching keys (ambiguous)           -> SelectionError
+    unrecognized keys (match nothing)                    -> SelectionError
 
 Dict n -- tuple keys
     S-level tuple keys, all strata                       -> correct map
     B-level tuple keys (single-element tuples)           -> correct map
     G-level tuple keys for multi-col stratum             -> correct map
-    incomplete tuple S-keys                              -> MethodError
+    incomplete tuple S-keys                              -> SelectionError
 
 Dict n -- mixed errors
-    partial G (some cells missing)                       -> MethodError
-    partial S (some strata missing)                      -> MethodError
-    partial B (some by-levels missing)                   -> MethodError
-    extra unknown keys                                   -> MethodError
+    partial G (some cells missing)                       -> SelectionError
+    partial S (some strata missing)                      -> SelectionError
+    partial B (some by-levels missing)                   -> SelectionError
+    extra unknown keys                                   -> SelectionError
 """
 
 from __future__ import annotations
 
 import pytest
 
-from svy.errors import MethodError
+from svy.errors import SelectionError
 from svy.selection._group_keys import _coerce_key, _normalize_n_for_groups
 
 
@@ -172,19 +172,19 @@ class TestScalarN:
 
 class TestDictUngrouped:
     def test_dict_with_no_grouping_raises(self):
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             nn({"A": 3, "B": 5}, **UG)
 
     def test_dict_single_key_no_grouping_raises(self):
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             nn({"North": 5}, **UG)
 
     def test_dict_matching_nothing_no_grouping_raises(self):
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             nn({"ZZZ": 10}, **UG)
 
     def test_error_message_mentions_scalar(self):
-        with pytest.raises(MethodError) as exc:
+        with pytest.raises(SelectionError) as exc:
             nn({"A": 5}, **UG)
         assert "scalar" in str(exc.value).lower() or "grouping" in str(exc.value).lower()
 
@@ -251,16 +251,16 @@ class TestExactBMatch:
         assert result["North__by__urban"] == 10
 
     def test_incomplete_b_keys_raises(self):
-        """Passing only 'urban' missing 'rural' -> MethodError (Problem 2)."""
-        with pytest.raises(MethodError):
+        """Passing only 'urban' missing 'rural' -> SelectionError (Problem 2)."""
+        with pytest.raises(SelectionError):
             nn({"urban": 10}, **SB)
 
     def test_incomplete_b_single_key_raises(self):
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             nn({"rural": 5}, **SB)
 
     def test_incomplete_b_error_mentions_missing(self):
-        with pytest.raises(MethodError) as exc:
+        with pytest.raises(SelectionError) as exc:
             nn({"urban": 10}, **SB)
         msg = str(exc.value)
         assert "rural" in msg or "missing" in msg.lower() or "incomplete" in msg.lower()
@@ -292,16 +292,16 @@ class TestExactSMatch:
         assert result["North__by__urban"] == 5
 
     def test_incomplete_s_keys_raises(self):
-        """Passing only 'North' missing 'South' -> MethodError (Problem 2)."""
-        with pytest.raises(MethodError):
+        """Passing only 'North' missing 'South' -> SelectionError (Problem 2)."""
+        with pytest.raises(SelectionError):
             nn({"North": 5}, **SB)
 
     def test_incomplete_s_single_key_raises(self):
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             nn({"South": 3}, **SO)
 
     def test_incomplete_s_error_mentions_missing(self):
-        with pytest.raises(MethodError) as exc:
+        with pytest.raises(SelectionError) as exc:
             nn({"North": 5}, **SB)
         msg = str(exc.value)
         assert "South" in msg or "missing" in msg.lower() or "incomplete" in msg.lower()
@@ -322,23 +322,23 @@ class TestSublevelMatch:
 
     def test_incomplete_coverage_raises(self):
         """One G-cell has no matching key -> should raise."""
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             nn({"urban": 10}, **SB)
 
     def test_ambiguous_keys_raises(self):
-        """Keys match multiple components of the same cell -> MethodError."""
+        """Keys match multiple components of the same cell -> SelectionError."""
         # "North__by__urban" contains both "North" and "urban"
         # -> ambiguous which value to use
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             nn({"North": 3, "urban": 10}, **SB)
 
     def test_unrecognized_keys_raises(self):
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             nn({"ZZZ": 5, "YYY": 3}, **SB)
 
     def test_partially_recognized_raises(self):
-        """One key is valid, other is not -> MethodError."""
-        with pytest.raises(MethodError):
+        """One key is valid, other is not -> SelectionError."""
+        with pytest.raises(SelectionError):
             nn({"North": 3, "ZZZ": 5}, **SB)
 
 
@@ -368,8 +368,8 @@ class TestTupleKeys:
         assert result["Dakar__by__Zone2__by__rural"] == 0
 
     def test_incomplete_tuple_s_keys_raises(self):
-        """Missing one tuple stratum key -> MethodError."""
-        with pytest.raises(MethodError):
+        """Missing one tuple stratum key -> SelectionError."""
+        with pytest.raises(SelectionError):
             nn(
                 {("Dakar", "Zone1"): 5, ("Dakar", "Zone2"): 3},  # Thies missing
                 **MC,
@@ -388,7 +388,7 @@ class TestTupleKeys:
         assert result["Dakar__by__Zone2__by__rural"] == 3
 
     def test_tuple_keys_unrecognized_raises(self):
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             nn({("Unknown", "Zone1"): 5}, **MC)
 
 
@@ -399,25 +399,25 @@ class TestTupleKeys:
 
 class TestPartialCoverage:
     def test_partial_G_raises(self):
-        """Subset of full composite keys -> MethodError."""
+        """Subset of full composite keys -> SelectionError."""
         partial = {k: 5 for k in list(SB["G"])[:2]}
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             nn(partial, **SB)
 
     def test_partial_S_raises(self):
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             nn({"North": 5}, **SO)
 
     def test_partial_B_raises(self):
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             nn({"urban": 10}, **BO)
 
     def test_partial_S_in_stratum_by_design_raises(self):
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             nn({"North": 5}, **SB)
 
     def test_partial_B_in_stratum_by_design_raises(self):
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             nn({"urban": 10}, **SB)
 
     def test_explicit_zero_is_not_partial(self):
@@ -431,13 +431,13 @@ class TestPartialCoverage:
         assert result == {"North": 0, "South": 0}
 
     def test_extra_key_raises(self):
-        """An extra unrecognized key -> MethodError."""
-        with pytest.raises(MethodError):
+        """An extra unrecognized key -> SelectionError."""
+        with pytest.raises(SelectionError):
             nn({"North": 5, "South": 3, "East": 2}, **SO)
 
     def test_error_is_method_error(self):
-        """Errors must be MethodError, not bare ValueError/KeyError."""
-        with pytest.raises(MethodError):
+        """Errors must be SelectionError, not bare ValueError/KeyError."""
+        with pytest.raises(SelectionError):
             nn({"North": 5}, **SB)
 
 
@@ -468,7 +468,7 @@ class TestEdgeCases:
         S = provinces[:]
         # Missing one province raises
         partial = {p: 5 for p in provinces[:-1]}
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             nn(partial, G=G, B=[], S=S)
         # All present is fine
         complete = {p: 5 for p in provinces}

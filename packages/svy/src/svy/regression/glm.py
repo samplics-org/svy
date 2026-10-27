@@ -212,7 +212,7 @@ class GLMFit(msgspec.Struct, frozen=True):
         for c in self.coefs:
             if c.wald is not None:
                 return float(c.wald.df)
-        raise ModelError(
+        raise ModelError.ValueError(
             title="No degrees of freedom on this fit",
             detail="The fit carries no Wald statistics to take the design df from.",
             code="GLM_NO_DF",
@@ -235,7 +235,7 @@ class GLMFit(msgspec.Struct, frozen=True):
         alpha = validate_alpha(alpha, where="GLM.contrast")
 
         if self.cov_matrix is None:
-            raise ModelError(
+            raise ModelError.ValueError(
                 title="No covariance on this fit",
                 detail="The fit carries no coefficient covariance matrix.",
                 code="GLM_NO_COVARIANCE",
@@ -276,7 +276,7 @@ class GLMFit(msgspec.Struct, frozen=True):
         names = self.keys()
         missing = [c for c in cols if c not in names]
         if missing or self.cov_matrix is None:
-            raise ModelError(
+            raise ModelError.KeyError(
                 title="Unknown model term",
                 detail=(
                     f"term {name!r} resolves to coefficients {cols!r}, but "

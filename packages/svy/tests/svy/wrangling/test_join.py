@@ -8,7 +8,7 @@ import pytest
 import svy
 
 from svy.core.constants import SVY_ROW_INDEX
-from svy.errors import DimensionError, MethodError
+from svy.errors import DataError
 from svy.errors._findings import Severity
 
 
@@ -89,7 +89,7 @@ def test_estimates_on_existing_columns_do_not_move():
 
 
 def test_default_brings_every_non_key_column_and_refuses_a_clash():
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DataError) as exc:
         _persons().wrangling.join(_households(), on={"hh": "hh_id"})
     assert exc.value.code == "JOIN_COLUMN_EXISTS"
     assert "wgt" in str(exc.value)
@@ -97,7 +97,7 @@ def test_default_brings_every_non_key_column_and_refuses_a_clash():
 
 @pytest.mark.parametrize("name", ["wgt", "stratum", "age"])
 def test_never_overwrites_a_column(name):
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DataError) as exc:
         _persons().wrangling.join(
             _households(), on={"hh": "hh_id"}, cols=["rooms"], into={"rooms": name}
         )
@@ -105,7 +105,7 @@ def test_never_overwrites_a_column(name):
 
 
 def test_two_columns_cannot_land_on_one_name():
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DataError) as exc:
         _persons().wrangling.join(
             _households(), on={"hh": "hh_id"}, into={"rooms": "x", "region": "x", "wgt": "w2"}
         )
@@ -114,7 +114,7 @@ def test_two_columns_cannot_land_on_one_name():
 
 def test_repeated_key_on_the_other_side_is_refused_with_examples():
     hh = pl.DataFrame({"hh": [1, 1, 2], "region": [10, 11, 20]})
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DataError) as exc:
         _persons().wrangling.join(hh, on="hh", cols=["region"])
     assert exc.value.code == "JOIN_KEY_NOT_UNIQUE"
     assert "(1,)" in str(exc.value)
@@ -122,7 +122,7 @@ def test_repeated_key_on_the_other_side_is_refused_with_examples():
 
 def test_one_to_one_checks_this_side_too():
     p = _persons()
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DataError) as exc:
         p.wrangling.join(_households(), on={"hh": "hh_id"}, cols=["rooms"], validate="1:1")
     assert exc.value.code == "JOIN_KEY_NOT_UNIQUE"
     heads = p.wrangling.filter_records(svy.col("line") == 1)
@@ -156,7 +156,7 @@ def test_unmatched_keep_error_and_indicator():
     found = [w for w in out.warnings if w.code == "JOIN_UNMATCHED"]
     assert len(found) == 1 and found[0].level == Severity.INFO
     assert out.data["in_hh"].to_list() == [True] * 6 + [False]
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DataError) as exc:
         p.wrangling.join(hh, on={"hh": "hh_id"}, cols=["rooms"], on_unmatched="error")
     assert exc.value.code == "JOIN_UNMATCHED"
 
@@ -175,7 +175,7 @@ def test_integer_widths_join_and_text_against_numbers_is_refused():
     out = _persons().wrangling.join(hh, on="hh", on_unmatched="ignore")
     assert out.data["rooms"].to_list()[:4] == [None, 2, 2, 5]
     as_text = pl.DataFrame({"hh": ["1", "2"], "rooms": [2, 5]})
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DataError) as exc:
         _persons().wrangling.join(as_text, on="hh")
     assert exc.value.code == "JOIN_KEY_TYPE_MISMATCH"
 
@@ -217,11 +217,11 @@ def test_lazy_frame_and_missing_columns():
         lazy, on={"hh": "hh_id"}, cols=["rooms"], on_unmatched="ignore"
     )
     assert out.data["rooms"].to_list()[0] == 3
-    with pytest.raises(DimensionError):
+    with pytest.raises(DataError):
         _persons().wrangling.join(lazy, on={"hh": "nope"}, cols=["rooms"])
-    with pytest.raises(DimensionError):
+    with pytest.raises(DataError):
         _persons().wrangling.join(lazy, on={"hh": "hh_id"}, cols=["nope"])
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DataError) as exc:
         _persons().wrangling.join(lazy, on={"hh": "hh_id"}, cols=["hh_id"])
     assert exc.value.code == "JOIN_KEY_IN_COLS"
 
@@ -252,7 +252,7 @@ def test_svy_columns_stay_out_by_default_and_come_in_only_renamed():
         on_unmatched="ignore",
     )
     assert out.data["base_wgt"].to_list()[:2] == [7.0, 5.0]
-    with pytest.raises(MethodError):
+    with pytest.raises(DataError):
         _persons().wrangling.join(sel, on={"hh": "hh_id"}, cols=["svy_sample_weight"])
 
 
@@ -264,7 +264,7 @@ def test_a_column_that_reads_as_a_replicate_weight_is_refused():
         svy.Design(wgt="wgt", rep_wgts=svy.RepWeights(method="bootstrap", prefix="rw", n_reps=2)),
     )
     hh = pl.DataFrame({"hh": [1, 2, 3], "rw3": [1.0, 1.0, 1.0]})
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DataError) as exc:
         s.wrangling.join(hh, on="hh")
     assert "replicate" in str(exc.value)
 
@@ -419,7 +419,7 @@ def test_unmatched_records_fall_out_of_a_domain_not_out_of_the_sample():
 def test_a_refused_join_leaves_the_sample_untouched_even_inplace():
     p = _persons()
     before = p.data.clone()
-    with pytest.raises(MethodError):
+    with pytest.raises(DataError):
         p.wrangling.join(
             _households(), on={"hh": "hh_id"}, cols=["rooms"], on_unmatched="error", inplace=True
         )
@@ -518,7 +518,7 @@ def test_an_explicit_name_wins_over_the_suffix_and_is_still_checked():
         on_unmatched="ignore",
     )
     assert "base_wgt" in out.data.columns and "wgt_hh" not in out.data.columns
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DataError) as exc:
         _persons().wrangling.join(
             _households(), on={"hh": "hh_id"}, into={"wgt": "age"}, suffix="_hh"
         )
@@ -527,14 +527,14 @@ def test_an_explicit_name_wins_over_the_suffix_and_is_still_checked():
 
 def test_a_suffixed_name_that_still_clashes_is_refused():
     p = _persons().wrangling.mutate({"wgt_hh": 1.0})
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DataError) as exc:
         p.wrangling.join(_households(), on={"hh": "hh_id"}, suffix="_hh")
     assert exc.value.code == "JOIN_COLUMN_EXISTS"
     assert "wgt_hh" in str(exc.value)
 
 
 def test_naming_a_column_that_is_not_brought_is_refused():
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DataError) as exc:
         _persons().wrangling.join(
             _households(), on={"hh": "hh_id"}, cols=["rooms"], into={"wgt": "hh_wgt"}
         )
@@ -546,7 +546,7 @@ def test_into_as_one_name_needs_one_column():
         _households(), on={"hh": "hh_id"}, cols="rooms", into="hh_rooms", on_unmatched="ignore"
     )
     assert "hh_rooms" in out.data.columns
-    with pytest.raises(MethodError):
+    with pytest.raises(DataError):
         _persons().wrangling.join(
             _households(), on={"hh": "hh_id"}, cols=["rooms", "region"], into="x"
         )
@@ -559,7 +559,7 @@ def test_into_never_renames_this_sample():
     )
     assert out.data["wgt"].to_list() == p.data["wgt"].to_list()
     assert out.design.wgt == "wgt"
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DataError) as exc:
         p.wrangling.join(_households(), on={"hh": "hh_id"}, cols=["rooms"], into={"age": "x"})
     assert exc.value.code == "JOIN_INTO_NOT_BROUGHT"
 
@@ -585,7 +585,7 @@ def test_whole_decimal_key_on_this_side_joins_and_keeps_its_type():
 
 def test_a_decimal_key_with_fractions_is_refused_with_examples():
     hh = pl.DataFrame({"hh": [1.0, 2.5, 3.0], "rooms": [2, 5, 3]})
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DataError) as exc:
         _persons().wrangling.join(hh, on="hh")
     assert exc.value.code == "JOIN_KEY_TYPE_MISMATCH"
     assert "2.5" in str(exc.value)

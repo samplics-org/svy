@@ -8,7 +8,7 @@ import pytest
 
 import svy
 
-from svy.errors import MethodError
+from svy.errors import DataError
 
 
 # StataNow 19.5: datediff(a, b, "day" / "month" / "year")
@@ -154,5 +154,5 @@ def test_dates_in_a_mutate_step():
 def test_mutate_reports_an_unparseable_date():
     df = pl.DataFrame({"d": ["28072025", "99999999"], "w": [1.0, 1.0]})
     s = svy.Sample(df, svy.Design(wgt="w"))
-    with pytest.raises(MethodError, match="strict=False"):
+    with pytest.raises(DataError, match="strict=False"):
         s.wrangling.mutate({"dt": svy.col("d").str_to_date("%d%m%Y")})

@@ -24,7 +24,7 @@ import svy_rs as rs
 
 from svy.core.enumerations import PopParam
 from svy.core.repwgts import RepWgts
-from svy.errors import DimensionError, MethodError
+from svy.errors import EstimationError
 
 from .estimate import Estimate, ParamEst, row_counts
 from .replication import _get_rep_params
@@ -51,7 +51,7 @@ def normalize_kind(kind: str) -> str:
     if k in ("pearson", "corr", "correlation"):
         return "pearson"
     if k in _PLANNED_KINDS:
-        raise MethodError(
+        raise EstimationError.NotImplementedError(
             title=f"Correlation kind {k!r} is not supported yet",
             detail=(
                 f"Only {', '.join(SUPPORTED_KINDS)} is implemented today. "
@@ -66,7 +66,7 @@ def normalize_kind(kind: str) -> str:
             got=k,
             hint="Use kind='pearson', or track the issue for rank-based support.",
         )
-    raise MethodError(
+    raise EstimationError.ValueError(
         title=f"Unknown correlation kind {k!r}",
         detail=f"kind must be one of {SUPPORTED_KINDS}.",
         code="CORR_KIND_UNKNOWN",
@@ -86,7 +86,7 @@ def guard_pandas_method(method: object) -> None:
     argument they wanted, not handed a message about Taylor linearization.
     """
     if isinstance(method, str) and method.lower() in ("pearson", *_PLANNED_KINDS):
-        raise MethodError(
+        raise EstimationError.ValueError(
             title=f"{method!r} is a correlation kind, not a variance method",
             detail=(
                 "In svy, method= selects the variance estimator ('taylor' or "
@@ -117,8 +117,8 @@ def parse_cols(cols: object, *, where: str) -> list[tuple[str, str]]:
     a variance explicitly with ``cov(("a", "a"))``.
     """
 
-    def _fail(detail: str, got: object, hint: str) -> DimensionError:
-        return DimensionError(
+    def _fail(detail: str, got: object, hint: str) -> EstimationError:
+        return EstimationError.ValueError(
             title="Invalid cols argument",
             detail=detail,
             code="ASSOC_COLS_INVALID",

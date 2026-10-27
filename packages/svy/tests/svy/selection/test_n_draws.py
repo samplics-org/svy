@@ -8,7 +8,7 @@ import pytest
 
 import svy
 
-from svy.errors import MethodError
+from svy.errors import SelectionError
 from svy.errors._base import SvyWarning
 from svy.selection import pps as pps_mod
 from svy.selection import srs as srs_mod
@@ -113,13 +113,13 @@ def test_where_with_no_eligible_rows_gives_null_selection_columns():
 
 @pytest.mark.parametrize("bad", [0, -3])
 def test_n_draws_below_one_raises(bad):
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(SelectionError) as exc:
         _draw("srs", n_draws=bad)
     assert exc.value.code == "INVALID_RANGE"
 
 
 @pytest.mark.parametrize("bad", [1.5, True, "10"])
 def test_n_draws_not_an_int_raises(bad):
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(SelectionError) as exc:
         _draw("pps_sys", n_draws=bad)
     assert exc.value.code == "INVALID_TYPE"

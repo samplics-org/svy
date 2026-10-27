@@ -12,9 +12,9 @@ import datetime as _dt
 import difflib
 
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from typing import Any, ClassVar, Iterable, Mapping, Optional, Self, Sequence
 
-from ._method import MethodError
+from ._base import SvyError, SvyWarning
 
 
 _SHOWN = 8
@@ -64,12 +64,10 @@ def _sorted(values: Iterable[Any]) -> list[Any]:
 
 
 @dataclass(eq=False)
-class WeightingError(MethodError):
+class WeightingError(SvyError):
     """A weighting call that cannot run on the inputs given."""
 
-    def __post_init__(self) -> None:
-        if self.code == "SVY_ERROR":
-            self.code = "WEIGHTING_ERROR"
+    _DEFAULT_CODE: ClassVar[str] = "WEIGHTING_ERROR"
 
     # ---- targets (controls / shares / resp_mapping) ----------------------
 
@@ -102,7 +100,7 @@ class WeightingError(MethodError):
             hint += (
                 " A level absent from the data (or outside `where`) can only take a target of 0."
             )
-        return cls(
+        return cls.ValueError(
             title="Target keys do not match the data",
             detail=f"Mapping keys mismatch in `{param}`: " + "; ".join(parts) + ".",
             code="CONTROLS_KEYS_MISMATCH",
@@ -118,7 +116,7 @@ class WeightingError(MethodError):
         cls, *, where: Optional[str], param: str, key: Any, matches: Sequence[Any]
     ) -> "WeightingError":
         m = _sorted(matches)
-        return cls(
+        return cls.ValueError(
             title="Target key matches several levels",
             detail=f"The key {show(key)} in `{param}` reads as each of {show_list(m)}.",
             code="CONTROLS_KEY_AMBIGUOUS",
@@ -133,7 +131,7 @@ class WeightingError(MethodError):
     def key_duplicate(
         cls, *, where: Optional[str], param: str, level: Any, keys: Sequence[Any]
     ) -> "WeightingError":
-        return cls(
+        return cls.ValueError(
             title="Two keys name the same level",
             detail=f"The keys {show_list(keys)} in `{param}` both name the level {show(level)}.",
             code="CONTROLS_KEY_DUPLICATE",
@@ -149,7 +147,7 @@ class WeightingError(MethodError):
         cls, *, where: Optional[str], param: str, bad: Mapping[Any, Any], nonneg: bool = True
     ) -> "WeightingError":
         kind = "finite, non-negative numbers" if nonneg else "finite numbers"
-        return cls(
+        return cls.ValueError(
             title="Invalid target values",
             detail=(
                 f"`{param}` values must all be {kind}; "
@@ -167,7 +165,7 @@ class WeightingError(MethodError):
 
     @classmethod
     def all_zero(cls, *, where: Optional[str], param: str) -> "WeightingError":
-        return cls(
+        return cls.ValueError(
             title="Targets are all zero",
             detail=f"`{param}` must include at least one positive value.",
             code="CONTROLS_ALL_ZERO",
@@ -178,7 +176,7 @@ class WeightingError(MethodError):
 
     @classmethod
     def targets_missing(cls, *, where: Optional[str], method: str) -> "WeightingError":
-        return cls(
+        return cls.ValueError(
             title="No targets",
             detail=f"{method}() needs targets: Either controls= or shares= must be specified.",
             code="CONTROLS_MISSING",
@@ -189,7 +187,7 @@ class WeightingError(MethodError):
 
     @classmethod
     def targets_conflict(cls, *, where: Optional[str], method: str) -> "WeightingError":
-        return cls(
+        return cls.ValueError(
             title="Both controls and shares",
             detail=f"{method}() takes exactly one of controls= or shares=, not both.",
             code="CONTROLS_CONFLICT",
@@ -202,7 +200,7 @@ class WeightingError(MethodError):
     def targets_type(
         cls, *, where: Optional[str], param: str, got: Any, expected: str, hint: str | None = None
     ) -> "WeightingError":
-        return cls(
+        return cls.TypeError(
             title="Targets have the wrong type",
             detail=f"`{param}` must be {expected}; got {type(got).__name__}.",
             code="CONTROLS_TYPE_INVALID",
@@ -218,7 +216,7 @@ class WeightingError(MethodError):
         cls, *, where: Optional[str], param: str, got: Any, levels: Sequence[Any] | None = None
     ) -> "WeightingError":
         example = _example(levels, "100") if levels else "{'a': 100, 'b': 250}"
-        return cls(
+        return cls.ValueError(
             title="One number for several cells",
             detail=(
                 f"`{param}` is a single number but `cells` names one or more columns. "
@@ -239,7 +237,7 @@ class WeightingError(MethodError):
     def cells_required(
         cls, *, where: Optional[str], param: str, reason: str, hint: str
     ) -> "WeightingError":
-        return cls(
+        return cls.ValueError(
             title="cells= is required",
             detail=reason,
             code="CELLS_REQUIRED",
@@ -254,7 +252,7 @@ class WeightingError(MethodError):
     ) -> "WeightingError":
         listed = ", ".join(f"{c}={t:,.6g}" for c, t in totals.items())
         first = next(iter(totals))
-        return cls(
+        return cls.ValueError(
             title="Margins disagree on the total",
             detail=f"Margins disagree on the population total: {listed}.",
             code="MARGINS_DISAGREE",
@@ -291,7 +289,7 @@ class WeightingError(MethodError):
             example.setdefault("nr", [])
             example["nr"] = [*example["nr"], *unknown]
         ex = "{" + ", ".join(f"{k!r}: {show_list(v, limit=20)}" for k, v in example.items()) + "}"
-        return cls(
+        return cls.ValueError(
             title="Unknown response statuses",
             detail=(
                 f"Values of {column!r} match no response status: "
@@ -314,7 +312,7 @@ class WeightingError(MethodError):
 
     @classmethod
     def resp_mapping_key(cls, *, where: Optional[str], key: Any) -> "WeightingError":
-        return cls(
+        return cls.ValueError(
             title="Unknown response status code",
             detail=f"resp_mapping key {show(key)} is not a response status code.",
             code="RESP_MAPPING_KEY_INVALID",
@@ -332,7 +330,7 @@ class WeightingError(MethodError):
         listed = "; ".join(
             f"{show(v)} under {', '.join(codes)}" for v, codes in list(conflicts.items())[:_SHOWN]
         )
-        return cls(
+        return cls.ValueError(
             title="A status is mapped twice",
             detail=f"resp_mapping puts a value under two statuses: {listed}.",
             code="RESP_MAPPING_CONFLICT",
@@ -350,19 +348,20 @@ class WeightingError(MethodError):
         *,
         where: Optional[str],
         param: str,
-        missing: Sequence[str],
-        available: Sequence[str],
+        missing: Iterable[str],
+        available: Iterable[str] | None = None,
         hint: str | None = None,
-    ) -> "WeightingError":
+        docs_url: str | None = None,
+    ) -> Self:
         miss = list(missing)
-        cols = _user_columns(available)
+        cols = _user_columns(available or ())
         close = [
             f"{m!r} -> {c[0]!r}"
             for m in miss
             if isinstance(m, str) and (c := difflib.get_close_matches(m, cols, n=1))
         ]
         guess = f" Did you mean {', '.join(close)}?" if close else ""
-        return cls(
+        return cls.KeyError(
             title="Column(s) not found",
             detail=f"`{param}` names {show_list(miss)}, not found in data.",
             code="MISSING_COLUMNS",
@@ -371,11 +370,12 @@ class WeightingError(MethodError):
             expected=cols,
             got=miss,
             hint=(hint or "Check spelling or pass existing column names.") + guess,
+            docs_url=docs_url,
         )
 
     @classmethod
     def no_weight(cls, *, where: Optional[str], method: str) -> "WeightingError":
-        return cls(
+        return cls.ValueError(
             title="No sample weight",
             detail=f"Sample weight is None. Set design.wgt before calling {method}().",
             code="WGT_MISSING",
@@ -392,7 +392,7 @@ class WeightingError(MethodError):
         k = 2
         while f"{wgt_name}_{k}" in taken:
             k += 1
-        return cls(
+        return cls.ValueError(
             title="Weight name already used",
             detail=f"Column '{wgt_name}' already exists. Choose a different wgt_name.",
             code="WGT_NAME_EXISTS",
@@ -413,7 +413,7 @@ class WeightingError(MethodError):
     ) -> "WeightingError":
         if nulls:
             listed = ", ".join(f"{c!r} {n}" for c, n in nulls.items())
-            return cls(
+            return cls.ValueError(
                 title="Nothing to adjust",
                 detail=(
                     f"No rows are in scope for this adjustment ({method}): every row "
@@ -426,7 +426,7 @@ class WeightingError(MethodError):
                 got=dict(nulls),
                 hint="Fill the nulls (wrangling.fill_null) or choose other cells.",
             )
-        return cls(
+        return cls.ValueError(
             title="Nothing to adjust",
             detail=f"No rows are in scope for this adjustment ({method}).",
             code="NO_ROWS_IN_SCOPE",
@@ -439,7 +439,7 @@ class WeightingError(MethodError):
 
     @classmethod
     def where_invalid(cls, *, where: Optional[str], reason: str) -> "WeightingError":
-        return cls(
+        return cls.ValueError(
             title="`where` cannot be evaluated",
             detail=f"`where` could not be evaluated against the data: {reason}",
             code="WHERE_INVALID",
@@ -450,7 +450,7 @@ class WeightingError(MethodError):
 
     @classmethod
     def columns_empty(cls, *, where: Optional[str], param: str) -> "WeightingError":
-        return cls(
+        return cls.ValueError(
             title="No columns named",
             detail=f"`{param}` sequence must not be empty.",
             code="COLUMNS_EMPTY",
@@ -465,7 +465,7 @@ class WeightingError(MethodError):
     def param_renamed(
         cls, *, where: Optional[str], method: str, old: str, new: str, note: str = ""
     ) -> "WeightingError":
-        return cls(
+        return cls.TypeError(
             title="Parameter renamed",
             detail=f"'{method}' cannot be used here: `{old}=` was renamed to `{new}=`.",
             code="PARAM_RENAMED",
@@ -490,7 +490,7 @@ class WeightingError(MethodError):
         got: Mapping[str, Any] | None = None,
         expected: Mapping[str, Any] | None = None,
     ) -> "WeightingError":
-        return cls(
+        return cls.RuntimeError(
             title="Did not converge",
             detail=(
                 f"{what} did not converge after {max_iter} iterations. The sample has "
@@ -508,7 +508,7 @@ class WeightingError(MethodError):
     def bounds_exceeded(
         cls, *, where: Optional[str], bounds: tuple[float | None, float | None]
     ) -> "WeightingError":
-        return cls(
+        return cls.ValueError(
             title="Adjustment factor out of bounds",
             detail=(
                 f"The raked weights leave the factor g = new/old weight outside "
@@ -526,7 +526,7 @@ class WeightingError(MethodError):
     def bounds_invalid(
         cls, *, where: Optional[str], got: Any, reason: str, as_type: bool = False
     ) -> "WeightingError":
-        kind = _TypeWeightingError if as_type else _ValueWeightingError
+        kind = cls.TypeError if as_type else cls.ValueError
         return kind(
             title="Invalid bounds",
             detail=f"`bounds` {reason}.",
@@ -545,7 +545,7 @@ class WeightingError(MethodError):
     def not_supported_yet(
         cls, *, where: Optional[str], param: str, got: Any, hint: str
     ) -> "WeightingError":
-        return _NotImplementedWeightingError(
+        return cls.NotImplementedError(
             title="Not supported yet",
             detail=f"`{param}` is not supported by this method yet.",
             code="NOT_SUPPORTED",
@@ -569,7 +569,7 @@ class WeightingError(MethodError):
         doms = list(domains)
         scope = f" in domain(s) {show_list(doms)}" if doms else ""
         miss = f" (largest relative miss {max_rel_error:.3g})" if max_rel_error is not None else ""
-        return cls(
+        return cls.RuntimeError(
             title="Controls not met",
             detail=(
                 f"The calibrated weights do not reproduce the control totals{scope} within "
@@ -592,7 +592,7 @@ class WeightingError(MethodError):
     @classmethod
     def cells_by_overlap(cls, *, where: Optional[str], overlap: Sequence[str]) -> "WeightingError":
         ov = sorted(overlap)
-        return cls(
+        return cls.ValueError(
             title="Same column in by= and cells=",
             detail=(
                 f"{ov} appears in both by= and cells=. Domains and the composition axis "
@@ -607,7 +607,7 @@ class WeightingError(MethodError):
 
     @classmethod
     def factor_conflict(cls, *, where: Optional[str], given: Sequence[str]) -> "WeightingError":
-        return cls(
+        return cls.ValueError(
             title="factor= combined with targets",
             detail=(
                 "factor multiplies every weight and cannot be combined with controls, "
@@ -624,7 +624,7 @@ class WeightingError(MethodError):
     def ref_level_unknown(
         cls, *, where: Optional[str], column: str, ref: Any, levels: Sequence[Any]
     ) -> "WeightingError":
-        return cls(
+        return cls.ValueError(
             title="Reference level not found",
             detail=f"Reference level {show(ref)} not found in {column!r}.",
             code="REF_LEVEL_UNKNOWN",
@@ -637,7 +637,7 @@ class WeightingError(MethodError):
 
     @classmethod
     def no_terms(cls, *, where: Optional[str]) -> "WeightingError":
-        return cls(
+        return cls.ValueError(
             title="No auxiliaries",
             detail="No terms specified.",
             code="AUX_TERMS_EMPTY",
@@ -648,7 +648,7 @@ class WeightingError(MethodError):
 
     @classmethod
     def term_invalid(cls, *, where: Optional[str], term: Any) -> "WeightingError":
-        return cls(
+        return cls.ValueError(
             title="Unsupported term",
             detail=f"{type(term).__name__} is not a calibration term.",
             code="TERM_INVALID",
@@ -661,7 +661,7 @@ class WeightingError(MethodError):
 
     @classmethod
     def trim_bounds_missing(cls, *, where: Optional[str]) -> "WeightingError":
-        return _ValueWeightingError(
+        return cls.ValueError(
             title="No trimming bounds",
             detail="At least one of `upper` or `lower` must be specified.",
             code="TRIM_BOUNDS_MISSING",
@@ -701,7 +701,7 @@ class WeightingError(MethodError):
                 f"a lower bound at or below the mean weight{here}, e.g. "
                 "lower=svy.Threshold('median', 0.3)"
             )
-        return cls(
+        return cls.ValueError(
             title="Trimming bounds cannot keep the total",
             detail=detail + " The sample has NOT been modified.",
             code="TRIM_INFEASIBLE",
@@ -751,7 +751,7 @@ class WeightingError(MethodError):
             hint = f"Widen the trimming bounds ({c['control']}{dom} needs {fix}) or check the controls."
         else:
             hint = "Widen the trimming bounds so each control's units can carry its total, or check the controls."
-        return cls(
+        return cls.ValueError(
             title="Trimming bounds cannot meet the controls",
             detail=detail + " The sample has NOT been modified.",
             code="TRIM_INFEASIBLE",
@@ -766,7 +766,7 @@ class WeightingError(MethodError):
     def psu_required(
         cls, *, where: Optional[str], method: str, note: str = ""
     ) -> "WeightingError":
-        return cls(
+        return cls.ValueError(
             title="PSU required",
             detail=f"{method}() resamples PSUs and requires psu (got psu=None).",
             code="PSU_REQUIRED",
@@ -779,7 +779,7 @@ class WeightingError(MethodError):
     def threshold_invalid(
         cls, *, where: Optional[str], got: Any, reason: str, as_type: bool = False
     ) -> "WeightingError":
-        kind = _TypeWeightingError if as_type else _ValueWeightingError
+        kind = cls.TypeError if as_type else cls.ValueError
         return kind(
             title="Invalid trimming threshold",
             detail=reason,
@@ -795,7 +795,7 @@ class WeightingError(MethodError):
     def trim_param_range(
         cls, *, where: Optional[str], param: str, got: Any, expected: str
     ) -> "WeightingError":
-        return _ValueWeightingError(
+        return cls.ValueError(
             title="Invalid trimming setting",
             detail=f"{param} must be {expected}, got {got}.",
             code="INVALID_RANGE",
@@ -808,15 +808,5 @@ class WeightingError(MethodError):
 
 
 @dataclass(eq=False)
-class _ValueWeightingError(WeightingError, ValueError):
-    """For inputs that raised ValueError before they had a code."""
-
-
-@dataclass(eq=False)
-class _TypeWeightingError(WeightingError, TypeError):
-    """For inputs that raised TypeError before they had a code."""
-
-
-@dataclass(eq=False)
-class _NotImplementedWeightingError(WeightingError, NotImplementedError):
-    """For options that raised NotImplementedError before they had a code."""
+class WeightingWarning(SvyWarning):
+    pass

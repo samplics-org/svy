@@ -9,7 +9,7 @@ import pytest
 from svy.core._check import check_key
 from svy.core.check import KeyCheck
 from svy.core.panel import duplicate_case_ids
-from svy.errors import DimensionError, MethodError
+from svy.errors import DataError
 
 
 def test_unique_key():
@@ -63,14 +63,14 @@ def test_lazy_frame_and_string_keys():
 
 def test_bad_input():
     df = pl.DataFrame({"id": [1]})
-    with pytest.raises(DimensionError) as exc:
+    with pytest.raises(DataError) as exc:
         check_key(df, ["id", "line"])
     assert exc.value.code == "MISSING_COLUMNS" and exc.value.got == ["line"]
     for cols in ([], [1], None):
-        with pytest.raises(MethodError):
+        with pytest.raises(DataError):
             check_key(df, cols)
     for limit in (-1, 1.5, True):
-        with pytest.raises(MethodError):
+        with pytest.raises(DataError):
             check_key(df, "id", limit=limit)
 
 

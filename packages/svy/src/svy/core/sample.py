@@ -39,7 +39,7 @@ from svy.core.types import (
     WhereArg,
     _MissingType,
 )
-from svy.errors import DimensionError, MethodError, SvyError
+from svy.errors import DesignError, DesignWarning, SvyError
 from svy.errors._findings import (
     Severity,
     SvyWarning,
@@ -284,7 +284,7 @@ class Sample:
         # 4-strata x 2-PSU design -- in silence. Naming a stratum unit says the
         # replicates were drawn within those strata; jk1 says they were not.
         if rw.kind == "jk1" and n_strata > 1:
-            raise MethodError.invalid_choice(
+            raise DesignError.invalid_choice(
                 where="Sample",
                 param="rep_wgts.kind",
                 got="jk1",
@@ -311,7 +311,7 @@ class Sample:
             # which is not a mislabelling at all.
             alternatives = [k for k, v in implied.items() if v == rw.n_reps]
             if alternatives:
-                raise MethodError.invalid_choice(
+                raise DesignError.invalid_choice(
                     where="Sample",
                     param="rep_wgts.kind",
                     got=rw.kind,
@@ -326,22 +326,24 @@ class Sample:
                     ),
                 )
             self.warn(
-                code=WarnCode.JACKKNIFE_KIND_UNSPECIFIED,
-                title=f"Jackknife kind {rw.kind!r} does not match the units",
-                detail=(
-                    f"kind={rw.kind!r} implies {expected} replicates "
-                    f"({'one per stratum' if rw.kind == 'jk2' else 'one per PSU'}), "
-                    f"but n_reps is {rw.n_reps}. The frame has {n_psus} PSUs "
-                    f"across {n_strata} strata."
-                ),
-                where="Sample",
-                param="rep_wgts.kind",
-                expected=expected,
-                got=rw.n_reps,
-                hint=(
-                    "Expected when the frame is a subset of what the replicate "
-                    "weights were built from. Otherwise the kind is probably wrong."
-                ),
+                DesignWarning(
+                    code=WarnCode.JACKKNIFE_KIND_UNSPECIFIED,
+                    title=f"Jackknife kind {rw.kind!r} does not match the units",
+                    detail=(
+                        f"kind={rw.kind!r} implies {expected} replicates "
+                        f"({'one per stratum' if rw.kind == 'jk2' else 'one per PSU'}), "
+                        f"but n_reps is {rw.n_reps}. The frame has {n_psus} PSUs "
+                        f"across {n_strata} strata."
+                    ),
+                    where="Sample",
+                    param="rep_wgts.kind",
+                    expected=expected,
+                    got=rw.n_reps,
+                    hint=(
+                        "Expected when the frame is a subset of what the replicate "
+                        "weights were built from. Otherwise the kind is probably wrong."
+                    ),
+                )
             )
             return
 
@@ -368,33 +370,37 @@ class Sample:
                 rw = msgspec.structs.replace(rw, kind=inferred)
                 self._design = design = design.update(rep_wgts=rw)
                 self.warn(
-                    code=WarnCode.JACKKNIFE_KIND_UNSPECIFIED,
-                    level=Severity.INFO,
-                    title=f"Jackknife kind read as {inferred!r} from the declared units",
-                    detail=(
-                        f"n_reps is {rw.n_reps} against {n_psus} PSUs across "
-                        f"{n_strata} strata, which is {inferred}. Set kind "
-                        f"explicitly to assert it yourself."
-                    ),
-                    where="Sample",
-                    param="rep_wgts.kind",
+                    DesignWarning(
+                        code=WarnCode.JACKKNIFE_KIND_UNSPECIFIED,
+                        level=Severity.INFO,
+                        title=f"Jackknife kind read as {inferred!r} from the declared units",
+                        detail=(
+                            f"n_reps is {rw.n_reps} against {n_psus} PSUs across "
+                            f"{n_strata} strata, which is {inferred}. Set kind "
+                            f"explicitly to assert it yourself."
+                        ),
+                        where="Sample",
+                        param="rep_wgts.kind",
+                    )
                 )
             elif n_strata > 1 and rw.scale is None and rw.rep_coefs is None:
                 self.warn(
-                    code=WarnCode.JACKKNIFE_KIND_UNSPECIFIED,
-                    title="Stratified design with an unspecified jackknife kind",
-                    detail=(
-                        f"The design has {n_strata} strata, but the replicate "
-                        f"weights do not say which jackknife they are, so the "
-                        f"unstratified JK1 coefficient (R-1)/R is being used."
-                    ),
-                    where="Sample",
-                    param="rep_wgts.kind",
-                    hint=(
-                        "Set kind='jkn' for the stratified delete-one-PSU "
-                        "jackknife, 'jk2' for the paired one-replicate-per-stratum "
-                        "scheme, or 'jk1' if these really are unstratified."
-                    ),
+                    DesignWarning(
+                        code=WarnCode.JACKKNIFE_KIND_UNSPECIFIED,
+                        title="Stratified design with an unspecified jackknife kind",
+                        detail=(
+                            f"The design has {n_strata} strata, but the replicate "
+                            f"weights do not say which jackknife they are, so the "
+                            f"unstratified JK1 coefficient (R-1)/R is being used."
+                        ),
+                        where="Sample",
+                        param="rep_wgts.kind",
+                        hint=(
+                            "Set kind='jkn' for the stratified delete-one-PSU "
+                            "jackknife, 'jk2' for the paired one-replicate-per-stratum "
+                            "scheme, or 'jk1' if these really are unstratified."
+                        ),
+                    )
                 )
             if rw.kind is None:
                 return  # nothing was inferable; the JK1 global still applies
@@ -559,19 +565,21 @@ class Sample:
                 "JackknifeWgts(..., stratum='VARSTRAT', psu='VARUNIT')",
             )
         self.warn(
-            code=WarnCode.JACKKNIFE_COEFS_UNAVAILABLE,
-            title="JKn coefficients cannot be derived",
-            detail=(
-                f"rep_wgts declares kind='jkn' but {reason}. Replication "
-                f"estimates will raise until the coefficients are supplied."
-            ),
-            where="Sample",
-            param="rep_wgts.scale",
-            hint=(
-                f"{fixes[0].capitalize()}."
-                if len(fixes) == 1
-                else "; ".join(f"{i}) {f}" for i, f in enumerate(fixes, start=1)) + "."
-            ),
+            DesignWarning(
+                code=WarnCode.JACKKNIFE_COEFS_UNAVAILABLE,
+                title="JKn coefficients cannot be derived",
+                detail=(
+                    f"rep_wgts declares kind='jkn' but {reason}. Replication "
+                    f"estimates will raise until the coefficients are supplied."
+                ),
+                where="Sample",
+                param="rep_wgts.scale",
+                hint=(
+                    f"{fixes[0].capitalize()}."
+                    if len(fixes) == 1
+                    else "; ".join(f"{i}) {f}" for i, f in enumerate(fixes, start=1)) + "."
+                ),
+            )
         )
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -977,11 +985,13 @@ class Sample:
         }
 
     @staticmethod
-    def _refuse_bookkeeping(columns: Iterable[str], *, where: str) -> None:
-        """Refuse user columns named like svy's bookkeeping, which svy would overwrite."""
+    def _refuse_bookkeeping(
+        columns: Iterable[str], *, where: str, error: type[SvyError] = DesignError
+    ) -> None:
+        """Refuse user columns named like svy's bookkeeping; ``error`` is the caller's area."""
         taken = [c for c in columns if c in BOOKKEEPING_COLUMNS]
         if taken:
-            raise MethodError.reserved_columns(where=where, columns=taken)
+            raise error.reserved_columns(where=where, columns=taken)
 
     @staticmethod
     def _without_bookkeeping(data: pl.DataFrame) -> pl.DataFrame:
@@ -1198,7 +1208,7 @@ class Sample:
                 design is not None
                 and any(part.has_lineage(value) for part, value in design._part_items())
             ):
-                raise MethodError.data_rows_changed(
+                raise DesignError.data_rows_changed(
                     where=where, n_old=old.height, n_new=data.height
                 )
             return
@@ -1209,7 +1219,7 @@ class Sample:
             if c in data.columns and not _unchanged(old.get_column(c), data.get_column(c))
         }
         if bad:
-            raise MethodError.weight_overwrite(where=where, columns=bad)
+            raise DesignError.weight_overwrite(where=where, columns=bad)
 
     def _install_data(self, data: pl.DataFrame, *, where: str, align: bool) -> None:
         """Checks run before anything is rebound; a later failure restores the
@@ -1332,13 +1342,15 @@ class Sample:
         if n_removed > 0:
             try:
                 self.warn(
-                    code="INVALID_WEIGHT_ROWS_REMOVED",
-                    title="Rows removed due to invalid weights",
-                    detail=(f"Removed {n_removed} row(s) where {wgt_col!r} was NaN/inf/<=0."),
-                    where="sample._remove_invalid_weight",
-                    level=Severity.INFO,
-                    param=wgt_col,
-                    extra={"n_in": n_in, "n_out": n_out, "n_removed": n_removed},
+                    DesignWarning(
+                        code="INVALID_WEIGHT_ROWS_REMOVED",
+                        title="Rows removed due to invalid weights",
+                        detail=(f"Removed {n_removed} row(s) where {wgt_col!r} was NaN/inf/<=0."),
+                        where="sample._remove_invalid_weight",
+                        level=Severity.INFO,
+                        param=wgt_col,
+                        extra={"n_in": n_in, "n_out": n_out, "n_removed": n_removed},
+                    )
                 )
             except Exception:
                 pass
@@ -2075,7 +2087,7 @@ class Sample:
         if data is not None:
             path = os.fspath(data)
             if not path.lower().endswith(".parquet"):
-                raise MethodError(
+                raise DesignError.ValueError(
                     title="to_code reads parquet only",
                     detail=f"data= points to {path!r}, which is not a .parquet file.",
                     code="TO_CODE_DATA_NOT_PARQUET",
@@ -2221,7 +2233,7 @@ class Sample:
 
             # ── Validate n and offset ──────────────────────────────────────
             if n is not None and n < 0:
-                raise DimensionError(
+                raise DesignError.ValueError(
                     title="Invalid row count",
                     detail="Parameter 'n' must be a non-negative integer.",
                     code="INVALID_N",
@@ -2230,7 +2242,7 @@ class Sample:
                     got=n,
                 )
             if offset < 0:
-                raise DimensionError(
+                raise DesignError.ValueError(
                     title="Invalid offset",
                     detail="Offset must be non-negative.",
                     code="INVALID_OFFSET",
@@ -2242,7 +2254,7 @@ class Sample:
             # ── Validate order_type ────────────────────────────────────────
             allowed_order = ("ascending", "descending", "random")
             if order_type not in allowed_order:
-                raise MethodError(
+                raise DesignError.TypeError(
                     title="Invalid order type",
                     detail=f"'order_type' must be one of {allowed_order}.",
                     code="INVALID_ORDER_TYPE",
@@ -2261,7 +2273,7 @@ class Sample:
                     preds = []
                     for k, v in where.items():
                         if k not in local_data.columns:
-                            raise DimensionError(
+                            raise DesignError.KeyError(
                                 title="Filter column not found",
                                 detail=f"Column {k!r} not in data.",
                                 code="MISSING_FILTER_COLUMN",
@@ -2270,7 +2282,7 @@ class Sample:
                             )
                         if isinstance(v, (list, tuple, set)) and not isinstance(v, (str, bytes)):
                             if len(v) == 0:
-                                raise MethodError(
+                                raise DesignError.ValueError(
                                     title="Empty membership filter",
                                     detail=f"Value for {k!r} is empty.",
                                     code="EMPTY_IN_VALUES",
@@ -2294,7 +2306,7 @@ class Sample:
                             elif isinstance(e, pl.Expr):
                                 compiled.append(e)
                             else:
-                                raise MethodError(
+                                raise DesignError.TypeError(
                                     title="Unsupported filter element",
                                     detail=f"Got {type(e)}.",
                                     code="UNSUPPORTED_FILTER_EXPR",
@@ -2307,7 +2319,7 @@ class Sample:
                 elif hasattr(where, "_e") or isinstance(where, pl.Expr):
                     predicate_pl = to_polars_expr(where) if hasattr(where, "_e") else where
                 else:
-                    raise MethodError(
+                    raise DesignError.TypeError(
                         title="Unsupported filter",
                         detail=f"Type {type(where)} not supported.",
                         code="UNSUPPORTED_WHERE",
@@ -2316,7 +2328,7 @@ class Sample:
             except SvyError:
                 raise
             except Exception as ex:
-                raise MethodError(
+                raise DesignError.RuntimeError(
                     title="Failed to build filter",
                     detail=str(ex),
                     code="FILTER_BUILD_FAILED",
@@ -2332,7 +2344,7 @@ class Sample:
             try:
                 want_cols = list(_normalize_columns_arg(data=out, columns=columns))
             except ValueError as ex:
-                raise DimensionError(
+                raise DesignError.KeyError(
                     title="Column(s) not found",
                     detail=str(ex),
                     code="MISSING_COLUMNS",
@@ -2343,7 +2355,7 @@ class Sample:
 
             missing = [c for c in want_cols if c not in out.columns]
             if missing:
-                raise DimensionError(
+                raise DesignError.KeyError(
                     title="Column(s) not found",
                     detail=f"Missing: {', '.join(map(repr, missing))}.",
                     code="MISSING_COLUMNS",
@@ -2359,7 +2371,7 @@ class Sample:
                 sort_cols = [order_by] if isinstance(order_by, str) else list(order_by)
                 miss_sort = [c for c in sort_cols if c not in out.columns]
                 if miss_sort:
-                    raise DimensionError(
+                    raise DesignError.KeyError(
                         title="Sort column(s) not found",
                         detail=f"Missing in selection: {', '.join(map(repr, miss_sort))}.",
                         code="MISSING_SORT_COLUMNS",
@@ -2405,7 +2417,7 @@ class Sample:
             except Exception as e:
                 msg = str(e).lower()
                 if "with_replacement=false" in msg or "not enough rows" in msg:
-                    raise DimensionError(
+                    raise DesignError.RuntimeError(
                         title="Slicing failed",
                         detail=str(e),
                         code="SLICE_FAILED",
@@ -2487,7 +2499,7 @@ class Sample:
         by_cols = self._to_cols(by) if by is not None else []
         absent = [c for c in by_cols if c not in self._data.columns]
         if absent:
-            raise DimensionError.missing_columns(
+            raise DesignError.missing_columns(
                 where="Sample.describe",
                 param="by",
                 missing=absent,
@@ -2496,7 +2508,7 @@ class Sample:
         if top_k is not None and (
             isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 1
         ):
-            raise MethodError.invalid_type(
+            raise DesignError.invalid_type(
                 where="Sample.describe",
                 param="top_k",
                 got=top_k,
@@ -2533,43 +2545,14 @@ class Sample:
     # ════════════════════════════════════════════════════════════════════════
     # WARNING API (record non-fatal issues)
     # ════════════════════════════════════════════════════════════════════════
-    def warn(
-        self,
-        *,
-        code: WarnCode | str,
-        title: str,
-        detail: str,
-        where: str,
-        level: Severity = Severity.WARNING,
-        param: str | None = None,
-        expected: Any = None,
-        got: Any = None,
-        hint: str | None = None,
-        docs_url: str | None = None,
-        extra: dict[str, Any] | None = None,
-        var: str | None = None,
-        rows: Sequence[int] | None = None,
-    ) -> SvyWarning:
-        w = SvyWarning(
-            code=code,
-            title=title,
-            detail=detail,
-            where=where,
-            level=level,
-            param=param,
-            expected=expected,
-            got=got,
-            hint=hint,
-            docs_url=docs_url,
-            extra=extra,
-            var=var,
-            rows=None if rows is None else tuple(rows),
-            state=getattr(self, "_data_version", None),
-        )
+    def warn(self, finding: SvyWarning) -> SvyWarning:
+        """Record ``finding`` on this sample and raise it, unless it is INFO or a repeat."""
+        w = finding
+        w.state = getattr(self, "_data_version", None)
         # One rule for findings: recorded, and raised once at the user's line.
         # A repeat the store suppresses is not raised again, and INFO entries
         # (audit records) are recorded only.
-        if self._warnings.add(w) and level >= Severity.WARNING:
+        if self._warnings.add(w) and w.level >= Severity.WARNING:
             from svy.core.design import _user_stacklevel
 
             warnings.warn(w, stacklevel=_user_stacklevel())

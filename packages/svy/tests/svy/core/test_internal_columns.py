@@ -27,7 +27,7 @@ from svy.core.constants import (
     SVY_VAR_STRATUM,
     key_col,
 )
-from svy.errors import MethodError
+from svy.errors import DataError, DesignError, SvyError
 from svy.serialize import from_json, to_design, to_json
 
 
@@ -508,8 +508,8 @@ def test_serialize_design_round_trip_is_unchanged():
 # ---------------------------------------------------------------------------
 
 
-def _reserved(fn) -> MethodError:
-    with pytest.raises(MethodError) as ei:
+def _reserved(fn, error: type[SvyError] = DesignError) -> SvyError:
+    with pytest.raises(error) as ei:
         fn()
     assert ei.value.code == "RESERVED_COLUMN"
     return ei.value
@@ -560,23 +560,23 @@ def test_clone_refuses_reserved_names():
 @pytest.mark.parametrize("name", [SVY_ROW_INDEX, SVY_VAR_STRATUM, STRATUM_KEY])
 def test_mutate_refuses_reserved_names(name):
     s = sample("tuple")
-    err = _reserved(lambda: s.wrangling.mutate({name: pl.lit(1)}))
+    err = _reserved(lambda: s.wrangling.mutate({name: pl.lit(1)}), DataError)
     assert err.where == "wrangling.mutate"
     assert s.data.columns == USER
 
 
 def test_value_writers_refuse_reserved_names():
     s = sample("tuple")
-    _reserved(lambda: s.wrangling.recode("g", {"ab": ["a", "b"]}, into=SVY_VAR_PSU))
-    _reserved(lambda: s.wrangling.top_code({"y": 60.0}, into=SVY_VAR_EXCLUDE))
-    _reserved(lambda: s.wrangling.cast(SVY_ROW_INDEX, pl.Int64))
-    _reserved(lambda: s.wrangling.with_row_index(SVY_ROW_INDEX))
+    _reserved(lambda: s.wrangling.recode("g", {"ab": ["a", "b"]}, into=SVY_VAR_PSU), DataError)
+    _reserved(lambda: s.wrangling.top_code({"y": 60.0}, into=SVY_VAR_EXCLUDE), DataError)
+    _reserved(lambda: s.wrangling.cast(SVY_ROW_INDEX, pl.Int64), DataError)
+    _reserved(lambda: s.wrangling.with_row_index(SVY_ROW_INDEX), DataError)
 
 
 def test_rename_refuses_reserved_names():
     s = sample("tuple")
     for pair in ({"reg": STRATUM_KEY}, {SVY_ROW_INDEX: "rid"}):
-        with pytest.raises(MethodError) as ei:
+        with pytest.raises(DataError) as ei:
             s.wrangling.rename_columns(pair)
         assert ei.value.code == "RENAME_FORBIDDEN"
 
@@ -584,7 +584,7 @@ def test_rename_refuses_reserved_names():
 def test_join_refuses_reserved_names():
     s = sample("tuple")
     other = pl.DataFrame({"reg": ["N", "S"], "v": [1, 2]})
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(DataError) as ei:
         s.wrangling.join(other, on="reg", into={"v": SVY_ROW_INDEX})
     assert ei.value.code == "JOIN_COLUMN_EXISTS"
 

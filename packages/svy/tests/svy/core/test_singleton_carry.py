@@ -10,7 +10,7 @@ import pytest
 import svy
 
 from svy.core.design import Singleton
-from svy.errors import MethodError
+from svy.errors import DesignError
 
 
 def _result(sample):
@@ -51,7 +51,7 @@ class TestCombineSamples:
     def test_different_rules_are_refused(self, second):
         a = _sample(_cycle([1, 1, 2, 2, 1, 2]), "center")
         b = _sample(_cycle([3, 3, 4, 4, 3, 4]), second)
-        with pytest.raises(MethodError, match="different singleton rules") as err:
+        with pytest.raises(DesignError, match="different singleton rules") as err:
             svy.combine_samples([a, b])
         assert "combined.update_design(singleton=" in err.value.hint
 
@@ -60,7 +60,7 @@ class TestCombineSamples:
         rule = Singleton("collapse", using={2: 1})
         a = _sample(_cycle([1, 1, 2, 2, 1, 2], psu=(1, 2, 3, 3, 1, 3)), rule)
         b = _sample(_cycle([1, 1, 2, 2, 1, 2], psu=(1, 2, 3, 3, 1, 3)), rule)
-        with pytest.raises(MethodError, match=r"\(wave, stratum\) pairs"):
+        with pytest.raises(DesignError, match=r"\(wave, stratum\) pairs"):
             svy.combine_samples([a, b])
 
     def test_the_carried_rule_applies_to_the_combined_strata(self):

@@ -48,22 +48,30 @@ def _warning(**kw) -> SvyWarning:
 
 def test_public_surface():
     assert set(svy.errors.__all__) == {
-        "DatasetError",
-        "DimensionError",
-        "IoError",
-        "LabelError",
-        "MethodError",
-        "ModelError",
-        "SerializationError",
-        "Severity",
-        "SingletonError",
         "SvyError",
         "SvyWarning",
-        "UnknownNameError",
-        "UsageError",
+        "Severity",
         "WarnCode",
         "WarningStore",
-        "WeightingError",
+        "UsageError",
+        "UnknownNameError",
+        "SerializationError",
+        *(
+            f"{area}{kind}"
+            for area in (
+                "Data",
+                "Dataset",
+                "Design",
+                "Estimation",
+                "Io",
+                "Label",
+                "Model",
+                "Selection",
+                "Singleton",
+                "Weighting",
+            )
+            for kind in ("Error", "Warning")
+        ),
     }
     assert svy.SvyWarning is svy.errors.SvyWarning
     assert svy.SvyError is svy.errors.SvyError
@@ -101,7 +109,9 @@ def test_caught_warning_is_the_recorded_one():
     s = _sample()
     with pytest.warns(SvyWarning) as rec:
         recorded = s.warn(
-            code="SOME_CODE", title="t", detail="d", where="w", hint="h", var="y", rows=[0]
+            SvyWarning(
+                code="SOME_CODE", title="t", detail="d", where="w", hint="h", var="y", rows=[0]
+            )
         )
     (caught,) = rec
     assert caught.message is recorded
@@ -118,7 +128,7 @@ def test_info_is_recorded_not_raised():
     s = _sample()
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        w = s.warn(code="AUDIT", title="t", detail="d", where="w", level=Severity.INFO)
+        w = s.warn(SvyWarning(code="AUDIT", title="t", detail="d", where="w", level=Severity.INFO))
     assert s.warnings.list() == [w]
 
 
@@ -153,7 +163,7 @@ def test_error_filter_raises_the_instance():
 
 def test_emit_without_a_sample_raises_the_record():
     with pytest.warns(SvyWarning) as rec:
-        emit_finding(code="LOOSE", title="t", detail="d", where="w", hint="h")
+        emit_finding(SvyWarning(code="LOOSE", title="t", detail="d", where="w", hint="h"))
     assert (rec[0].message.code, rec[0].message.hint) == ("LOOSE", "h")
 
 
@@ -219,10 +229,10 @@ def test_copies_keep_class_and_fields(report, how):
 def test_derived_sample_copies_the_warnings():
     s = _sample()
     with pytest.warns(SvyWarning):
-        s.warn(code="FIRST", title="t", detail="d", where="w")
+        s.warn(SvyWarning(code="FIRST", title="t", detail="d", where="w"))
     derived = s.wrangling.mutate({"z": pl.col("y") * 2})
     with pytest.warns(SvyWarning):
-        derived.warn(code="SECOND", title="t", detail="d", where="w")
+        derived.warn(SvyWarning(code="SECOND", title="t", detail="d", where="w"))
     assert [w.code for w in s.warnings] == ["FIRST"]
     assert [w.code for w in derived.warnings] == ["FIRST", "SECOND"]
     assert derived.warnings.list()[0] is not s.warnings.list()[0]

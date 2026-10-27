@@ -4,7 +4,7 @@ import pytest
 
 from svy.core.sample import Sample
 from svy.core.terms import Cat, Cross
-from svy.errors import MethodError
+from svy.errors import WeightingError
 
 
 def _make_sample():
@@ -132,10 +132,10 @@ def test_build_aux_matrix_with_by_single_and_multi_keys():
 def test_build_aux_matrix_continuous_na_raises():
     """Nulls in a continuous auxiliary raise (round 8, W8) — silently
     filling 0.0 biased the calibration totals."""
-    from svy.errors import DimensionError
+    from svy.errors import WeightingError
 
     s = _make_sample()
-    with pytest.raises(DimensionError, match="null value"):
+    with pytest.raises(WeightingError, match="null value"):
         s.weighting.build_aux_matrix(x=["x"])
 
 
@@ -155,10 +155,10 @@ def test_build_aux_matrix_requires_some_output_columns():
     s = _make_sample()
 
     # Case 1: Empty list
-    with pytest.raises(MethodError, match="No terms specified"):
+    with pytest.raises(WeightingError, match="No terms specified"):
         s.weighting.build_aux_matrix(x=[])
 
     # Case 2: None
     # This matches the "if not terms:" check in build_aux_matrix
-    with pytest.raises(MethodError, match="No terms specified"):
+    with pytest.raises(WeightingError, match="No terms specified"):
         s.weighting.build_aux_matrix(x=None)

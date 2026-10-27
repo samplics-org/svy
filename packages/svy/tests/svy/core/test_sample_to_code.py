@@ -20,7 +20,7 @@ import pytest
 
 import svy
 
-from svy.errors import MethodError
+from svy.errors import DesignError
 
 
 def _declare(sample, method, **kw):
@@ -183,7 +183,7 @@ def test_without_data_the_script_expects_a_frame(base):
 
 @pytest.mark.parametrize("path", ["survey.csv", "survey.dta", "survey", "survey.parquet.gz"])
 def test_other_formats_are_refused_with_a_hint(base, path):
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DesignError) as exc:
         base.to_code(data=path)
     assert exc.value.code == "TO_CODE_DATA_NOT_PARQUET"
     assert "svy.write_parquet" in (exc.value.hint or "")

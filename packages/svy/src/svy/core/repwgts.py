@@ -29,7 +29,7 @@ from typing import Literal, Sequence, Union, cast, get_args
 
 import msgspec
 
-from svy.errors import MethodError
+from svy.errors import DesignError
 
 
 # =============================================================================
@@ -100,7 +100,7 @@ def normalize_jackknife_kind(kind: str) -> JackknifeKind:
         raise TypeError(f"'kind' must be a string, got {type(kind).__name__}.")
     resolved = _JK_KIND_ALIASES.get(kind.strip().lower())
     if resolved is None:
-        raise MethodError.invalid_choice(
+        raise DesignError.invalid_choice(
             where="svy.RepWeights",
             param="kind",
             got=kind,
@@ -549,7 +549,7 @@ class JackknifeWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="Jackknife", ta
             # (n_h-1)/n_h is the only standard coefficient that is not
             # closed-form in n_reps, and nothing supplied it. An unmet claim
             # fails; an absent one (kind=None) falls back to the JK1 global.
-            raise MethodError.not_applicable(
+            raise DesignError.not_applicable(
                 where="RepWeights.coefficients",
                 method="jackknife",
                 reason=(
@@ -676,7 +676,7 @@ def normalize_bootstrap_kind(kind: str) -> BootstrapKind:
         raise TypeError(f"'kind' must be a string, got {type(kind).__name__}.")
     resolved = _BS_KIND_ALIASES.get(kind.strip().lower())
     if resolved is None:
-        raise MethodError.invalid_choice(
+        raise DesignError.invalid_choice(
             where="svy.RepWeights",
             param="kind",
             got=kind,
@@ -762,7 +762,7 @@ def _foreign_param_error(variant: type, name: str, value: object = None) -> Exce
     if owned is None:
         return TypeError(f"Unexpected keyword argument {name!r}")
     owner, owner_method = owned
-    return MethodError.invalid_choice(
+    return DesignError.invalid_choice(
         where="svy.RepWeights",
         param=name,
         got=value,

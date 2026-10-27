@@ -32,7 +32,7 @@ from svy.core.singleton import (
 )
 from svy.core.types import WhereArg
 from svy.core.variance_method import normalize_variance_method, resolve_variance_method
-from svy.errors import DimensionError, MethodError
+from svy.errors import EstimationError, EstimationWarning
 from svy.errors._api import guided_getattr
 from svy.errors._findings import Severity, SvyWarning, WarnCode
 from svy.estimation.estimate import (
@@ -539,7 +539,7 @@ class Estimation:
                 if deff
                 else "Omit the argument, or pass deff=None."
             )
-            raise MethodError(
+            raise EstimationError.TypeError(
                 title=f"deff no longer accepts {deff!r}",
                 detail=(
                     "deff now names the SRS reference the design variance is "
@@ -563,7 +563,7 @@ class Estimation:
             "replace": "wr",  # R spells the with-replacement reference this way
         }.get(m, m)
         if m not in ("wor", "wr"):
-            raise MethodError(
+            raise EstimationError.ValueError(
                 title=f"Unknown deff reference {deff!r}",
                 detail="deff selects the SRS reference: 'wor' or 'wr'.",
                 code="DEFF_REFERENCE_UNKNOWN",
@@ -872,7 +872,7 @@ class Estimation:
             # column of NaN, which reads as "no design effect" instead of "this
             # could not be computed". A partially missing column is left alone --
             # one degenerate by-group should not fail the whole call.
-            raise MethodError(
+            raise EstimationError.ValueError(
                 title="Design effect is not computable for this design",
                 detail=(
                     "The without-replacement reference divides by 1 - n/N, with "
@@ -1029,33 +1029,35 @@ class Estimation:
             else "prop(..., ci_method='korn-graubard')"
         )
         kept = self._sample.warn(
-            code=WarnCode.PROP_CI_BOUNDARY,
-            title="Confidence interval undefined at a proportion of 0 or 1",
-            detail=(
-                f"ci_method='{method}' has no interval when the estimated proportion "
-                "is 0 or 1: the zero standard error comes from the estimate itself, "
-                f"not from the design. lci and uci are NaN for: {listed}."
-            ),
-            where="estimation.prop" if param == PopParam.PROP else "estimation.mean",
-            level=Severity.INFO,
-            param="ci_method",
-            got=method,
-            hint=(
-                f"Use {use}, which gives a one-sided "
-                "interval at 0 and 1 (Korn & Graubard 1998; NCHS data presentation standards)."
-            ),
-            extra={
-                "n_rows": len(cells),
-                "cells": [
-                    {
-                        "by": dict(zip(p.by, p.by_level)) if p.by and p.by_level else None,
-                        "level": p.y_level,
-                        "p": round(p.est),
-                    }
-                    for p in cells
-                ],
-            },
-            var=y_name,
+            EstimationWarning(
+                code=WarnCode.PROP_CI_BOUNDARY,
+                title="Confidence interval undefined at a proportion of 0 or 1",
+                detail=(
+                    f"ci_method='{method}' has no interval when the estimated proportion "
+                    "is 0 or 1: the zero standard error comes from the estimate itself, "
+                    f"not from the design. lci and uci are NaN for: {listed}."
+                ),
+                where="estimation.prop" if param == PopParam.PROP else "estimation.mean",
+                level=Severity.INFO,
+                param="ci_method",
+                got=method,
+                hint=(
+                    f"Use {use}, which gives a one-sided "
+                    "interval at 0 and 1 (Korn & Graubard 1998; NCHS data presentation standards)."
+                ),
+                extra={
+                    "n_rows": len(cells),
+                    "cells": [
+                        {
+                            "by": dict(zip(p.by, p.by_level)) if p.by and p.by_level else None,
+                            "level": p.y_level,
+                            "p": round(p.est),
+                        }
+                        for p in cells
+                    ],
+                },
+                var=y_name,
+            )
         )
         return [dataclasses.replace(kept, level=Severity.WARNING)]
 
@@ -1985,7 +1987,7 @@ class Estimation:
             if len(xs) == 1 and len(ys) > 1:
                 xs = xs * len(ys)
             if len(ys) != len(xs):
-                raise DimensionError(
+                raise EstimationError.ValueError(
                     title="Mismatched numerator/denominator lengths",
                     detail=(
                         "ratio() requires the numerator and denominator to be the "

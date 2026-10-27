@@ -13,7 +13,7 @@ import polars as pl
 import pytest
 
 from svy import Design, Sample
-from svy.errors import DimensionError
+from svy.errors import WeightingError
 
 
 def _frame(psus_per_stratum: list[int], rows_per_psu: int = 2) -> pl.DataFrame:
@@ -128,7 +128,7 @@ class TestTuplePsuMatchesCompositeColumn:
 
 
 def test_brr_tuple_psu_odd_count_raises_guiding_error():
-    with pytest.raises(DimensionError) as exc:
+    with pytest.raises(WeightingError) as exc:
         _pair(_frame([3, 4]), method="brr", psu=("reg", "ea"))
     assert exc.value.code == "ODD_PSU_COUNT"
 
@@ -139,7 +139,7 @@ def test_jk2_tuple_psu_odd_count_forms_triplet():
 
 
 def test_jk2_tuple_psu_single_psu_stratum_raises_guiding_error():
-    with pytest.raises(DimensionError) as exc:
+    with pytest.raises(WeightingError) as exc:
         _pair(_frame([1, 4]), method="jk2", psu=("reg", "ea"))
     assert exc.value.code == "INSUFFICIENT_PSU"
 

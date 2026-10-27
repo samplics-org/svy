@@ -18,7 +18,7 @@ from polars.testing import assert_frame_equal
 
 import svy
 
-from svy.errors import SerializationError
+from svy.errors import EstimationError, SerializationError
 from svy.regression.base import GLM
 from svy.serialize import from_json, serialize, to_json, to_polars
 
@@ -301,11 +301,10 @@ def test_payload_stores_only_present_levels(labelled):
 
 
 def test_label_column_clash_raises(sample):
-    from svy.errors import MethodError
 
     s = svy.Sample(sample.data.with_columns(zone_label=pl.col("sex")), sample.design)
     s.meta.set_value_labels("zone", {1: "Urban", 2: "Rural", 3: "Peri-urban"})
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(EstimationError) as exc:
         s.estimation.mean("y", by=["zone", "zone_label"]).to_polars()
     assert exc.value.code == "LABEL_COLUMN_CLASH"
 

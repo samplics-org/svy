@@ -14,6 +14,8 @@ import msgspec
 import numpy as np
 import polars as pl
 
+from svy.errors import WeightingWarning
+
 
 try:
     from svy_rs._internal import rake as rust_rake  # type: ignore[import-untyped]
@@ -25,7 +27,7 @@ except ImportError:  # pragma: no cover
 from svy.core._check import margin_totals_check
 from svy.core.design import WgtAdjustment
 from svy.core.types import Category, ControlsType
-from svy.errors import DimensionError, MethodError, WeightingError
+from svy.errors import WeightingError
 from svy.errors._findings import WarnCode, check_on_finding, finding_level
 from svy.weighting._engine import (
     CELLS_PREFIX,
@@ -135,7 +137,7 @@ def controls_margins_template(
     check_na_option(na, where=where)
     for mname, col in margins.items():
         if not isinstance(mname, str) or not isinstance(col, str):
-            raise MethodError.invalid_type(
+            raise WeightingError.invalid_type(
                 where=where,
                 param="margins",
                 got=col if isinstance(mname, str) else mname,
@@ -268,7 +270,7 @@ def rake(
     null_counts = dict(zip(rake_cols, df.select(rake_cols).null_count().row(0)))
     with_nulls = {c: int(n) for c, n in null_counts.items() if n > 0}
     if with_nulls:
-        raise DimensionError(
+        raise WeightingError.ValueError(
             title="Null values in raking column",
             detail=(
                 f"{', '.join(f'{c!r} has {n} null value(s)' for c, n in with_nulls.items())}. "
@@ -557,19 +559,21 @@ def rake(
         )
     elif not converged:
         sample.warn(
-            code=WarnCode.MAX_ITER_REACHED,
-            title=f"{what} did not converge",
-            detail=(
-                f"{what} did not converge after {cap} "
-                f"{'cycles' if trimming is not None else 'iterations'} (max margin error "
-                f"{miss['max_margin_error']:.3g}, tol {tol:g}); {wgt_name!r} holds the "
-                "last iterate."
-            ),
-            where=ctx,
-            level=finding_level(on_nonconvergence),
-            param=cap_param,
-            expected={"tol": tol},
-            got=miss,
-            hint=hint,
+            WeightingWarning(
+                code=WarnCode.MAX_ITER_REACHED,
+                title=f"{what} did not converge",
+                detail=(
+                    f"{what} did not converge after {cap} "
+                    f"{'cycles' if trimming is not None else 'iterations'} (max margin error "
+                    f"{miss['max_margin_error']:.3g}, tol {tol:g}); {wgt_name!r} holds the "
+                    "last iterate."
+                ),
+                where=ctx,
+                level=finding_level(on_nonconvergence),
+                param=cap_param,
+                expected={"tol": tol},
+                got=miss,
+                hint=hint,
+            )
         )
     return sample

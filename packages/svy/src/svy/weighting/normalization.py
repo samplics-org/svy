@@ -20,7 +20,7 @@ import polars as pl
 
 from svy.core.design import WgtAdjustment
 from svy.core.types import DomainScalarMap, Number
-from svy.errors import MethodError, WeightingError
+from svy.errors import WeightingError
 from svy.weighting._engine import (
     build_cells,
     record_null_cells,
@@ -58,7 +58,7 @@ def normalize(
         if given:
             raise WeightingError.factor_conflict(where=ctx, given=given)
         if not float(factor) > 0.0:
-            raise MethodError.invalid_range(
+            raise WeightingError.invalid_range(
                 where=ctx, param="factor", got=factor, min_=0.0, max_=None
             )
     df = sample._data

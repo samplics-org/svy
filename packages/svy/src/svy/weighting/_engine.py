@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Sequence
 import numpy as np
 import polars as pl
 
-from svy.errors import MethodError, WeightingError
+from svy.errors import WeightingError, WeightingWarning
 from svy.errors._findings import Severity, WarnCode
 from svy.utils.where import _compile_where
 from svy.weighting._keys import LevelIndex, match_keys, target_vector
@@ -94,11 +94,11 @@ def _cells_to_cols(
             raise WeightingError.columns_empty(where=where, param=param)
         for c in cols:
             if not isinstance(c, str):
-                raise MethodError.invalid_type(
+                raise WeightingError.invalid_type(
                     where=where, param=param, got=c, expected="str | Sequence[str] | None"
                 )
         return cols
-    raise MethodError.invalid_type(
+    raise WeightingError.invalid_type(
         where=where, param=param, got=cells, expected="str | Sequence[str] | None"
     )
 
@@ -250,21 +250,23 @@ def record_null_rows(
         else f"{wgt_name!r} keeps their {prev_wgt!r} value"
     )
     sample.warn(
-        code=WarnCode.CELLS_NULL_UNADJUSTED,
-        title="Rows with a null left unadjusted",
-        detail=(
-            f"{n} row(s) in scope have a null in `{param}` ({listed}) and {action}, so {kept}."
-        ),
-        where=where,
-        level=Severity.WARNING,
-        param=param,
-        expected=0,
-        got=counts,
-        hint=(
-            "Fill the nulls (wrangling.fill_null) or recode them to a level to adjust "
-            "these rows, or leave them out with where= to make the choice explicit."
-        ),
-        extra={"n_rows": n, "wgt_name": wgt_name, **(extra or {})},
+        WeightingWarning(
+            code=WarnCode.CELLS_NULL_UNADJUSTED,
+            title="Rows with a null left unadjusted",
+            detail=(
+                f"{n} row(s) in scope have a null in `{param}` ({listed}) and {action}, so {kept}."
+            ),
+            where=where,
+            level=Severity.WARNING,
+            param=param,
+            expected=0,
+            got=counts,
+            hint=(
+                "Fill the nulls (wrangling.fill_null) or recode them to a level to adjust "
+                "these rows, or leave them out with where= to make the choice explicit."
+            ),
+            extra={"n_rows": n, "wgt_name": wgt_name, **(extra or {})},
+        )
     )
 
 
@@ -436,33 +438,37 @@ def record_trim_cycle(
     """
     if infeasible is not None:
         sample.warn(
-            code=infeasible.code,
-            title=infeasible.title,
-            detail=infeasible.detail.replace(
-                " The sample has NOT been modified.",
-                f" {wgt_name!r} holds the last cycle's weights, which miss the trimming "
-                "bounds or the controls.",
-            ),
-            where=infeasible.where,
-            level=level,
-            param=infeasible.param,
-            expected=infeasible.expected,
-            got=infeasible.got,
-            hint=infeasible.hint,
+            WeightingWarning(
+                code=infeasible.code,
+                title=infeasible.title,
+                detail=infeasible.detail.replace(
+                    " The sample has NOT been modified.",
+                    f" {wgt_name!r} holds the last cycle's weights, which miss the trimming "
+                    "bounds or the controls.",
+                ),
+                where=infeasible.where,
+                level=level,
+                param=infeasible.param,
+                expected=infeasible.expected,
+                got=infeasible.got,
+                hint=infeasible.hint,
+            )
         )
         return
     sample.warn(
-        code=WarnCode.MAX_ITER_REACHED,
-        title=f"{what} did not converge",
-        detail=(
-            f"{what} did not converge after {trimming.max_iter} cycles; the weights "
-            "are the last cycle's, which may miss the targets or the trimming bounds."
-        ),
-        where=where,
-        level=level,
-        param="trimming.max_iter",
-        got={"cycles": trimming.max_iter},
-        hint="Increase TrimConfig.max_iter or use a less restrictive trim threshold.",
+        WeightingWarning(
+            code=WarnCode.MAX_ITER_REACHED,
+            title=f"{what} did not converge",
+            detail=(
+                f"{what} did not converge after {trimming.max_iter} cycles; the weights "
+                "are the last cycle's, which may miss the targets or the trimming bounds."
+            ),
+            where=where,
+            level=level,
+            param="trimming.max_iter",
+            got={"cycles": trimming.max_iter},
+            hint="Increase TrimConfig.max_iter or use a less restrictive trim threshold.",
+        )
     )
 
 

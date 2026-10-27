@@ -8,7 +8,7 @@ import pytest
 import svy
 
 from svy import Design, Sample, SvyWarning, col, estd
-from svy.errors import MethodError
+from svy.errors import DesignError
 from svy.serialize import from_json, serialize, to_design, to_json
 
 
@@ -144,13 +144,13 @@ class TestSameAsOneColumn:
 
     def test_combine_samples_checks_every_column(self):
         waves = [_people(), _people().drop("ln")]
-        with pytest.raises(MethodError, match=r"\['clu', 'hh', 'ln'\] is missing from sample"):
+        with pytest.raises(DesignError, match=r"\['clu', 'hh', 'ln'\] is missing from sample"):
             svy.combine_samples(
                 [Sample(w, Design(wgt="w")) for w in waves], kind="panel", case_id=list(ID)
             )
 
     def test_combine_samples_rejects_a_bad_case_id(self):
-        with pytest.raises(MethodError, match="case_id"):
+        with pytest.raises(DesignError, match="case_id"):
             svy.combine_samples(
                 [Sample(_people(), Design(wgt="w"))] * 2, kind="panel", case_id=["clu", 3]
             )

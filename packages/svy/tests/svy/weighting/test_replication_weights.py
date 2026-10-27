@@ -11,7 +11,7 @@ import pytest
 
 from svy import Sample
 from svy.core.design import Design
-from svy.errors import DimensionError, MethodError
+from svy.errors import DesignError, WeightingError
 
 
 @pytest.fixture
@@ -113,9 +113,9 @@ class TestBRRWeights:
     def test_brr_custom_n_reps_beyond_hadamard_errors(self, simple_stratified_sample):
         """3 strata -> Hadamard order 4; requesting more replicates than the
         order used to silently duplicate columns and is now a typed error."""
-        from svy.errors import MethodError
+        from svy.errors import WeightingError
 
-        with pytest.raises(MethodError, match="n_reps"):
+        with pytest.raises(WeightingError, match="n_reps"):
             simple_stratified_sample.weighting.create_brr_wgts(n_reps=8)
 
     def test_brr_small_n_reps_rounds_up_to_hadamard(self, simple_stratified_sample):
@@ -165,7 +165,7 @@ class TestBRRWeights:
             sample.weighting.create_brr_wgts()
 
     def test_brr_rejects_odd_psu_count(self, odd_psu_sample):
-        with pytest.raises(DimensionError) as exc:
+        with pytest.raises(WeightingError) as exc:
             odd_psu_sample.weighting.create_brr_wgts()
 
         err = exc.value
@@ -199,7 +199,7 @@ class TestBRRWeights:
         data = pl.DataFrame({"stratum": strata, "psu": psus, "wgt": [1.0] * len(psus)})
         sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum", psu="psu"))
 
-        with pytest.raises(DimensionError) as exc:
+        with pytest.raises(WeightingError) as exc:
             sample.weighting.create_brr_wgts()
         assert expected_count_phrase in exc.value.detail
 
@@ -220,7 +220,7 @@ class TestBRRWeights:
         data = pl.DataFrame({"stratum": strata, "psu": psus, "wgt": [1.0] * len(psus)})
         sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum", psu="psu"))
 
-        with pytest.raises(DimensionError) as exc:
+        with pytest.raises(WeightingError) as exc:
             sample.weighting.create_brr_wgts()
 
         err = exc.value
@@ -251,7 +251,7 @@ class TestBRRWeights:
         """The `< 2` guard is now jk2's alone -- it can triple, but not pair one."""
         data = pl.DataFrame({"stratum": [1, 2, 2, 2, 2], "psu": [1, 2, 2, 3, 3], "wgt": [1.0] * 5})
         sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum", psu="psu"))
-        with pytest.raises(DimensionError) as exc:
+        with pytest.raises(WeightingError) as exc:
             sample.weighting.create_jk_wgts(paired=True)
         assert exc.value.code == "INSUFFICIENT_PSU"
 
@@ -266,7 +266,7 @@ class TestBRRWeights:
         data = pl.DataFrame({"stratum": strata, "psu": psus, "wgt": [1.0] * len(psus)})
         sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum", psu="psu"))
 
-        with pytest.raises(DimensionError) as exc:
+        with pytest.raises(WeightingError) as exc:
             sample.weighting.create_brr_wgts()
         err = exc.value
         assert len(err.got) == 7  # every offender, as data
@@ -527,7 +527,7 @@ class TestVarianceStrataPairing:
         assert sample.design.rep_wgts.stratum == "stratum"
 
     def test_brr_rejects_odd_psu_counts(self, odd_psu_sample):
-        with pytest.raises(DimensionError):
+        with pytest.raises(WeightingError):
             odd_psu_sample.weighting.create_brr_wgts()
 
     def test_order_by_is_accepted_by_the_generator(self, multi_psu_sample):
@@ -560,7 +560,7 @@ class TestVarianceStrataPairing:
         """
         data = pl.DataFrame({"stratum": [1, 2, 2, 2, 2], "psu": [1, 2, 2, 3, 3], "wgt": [1.0] * 5})
         sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum", psu="psu"))
-        with pytest.raises(DimensionError) as exc:
+        with pytest.raises(WeightingError) as exc:
             sample.weighting.create_brr_wgts()
         assert exc.value.code == "ODD_PSU_COUNT"
         assert exc.value.got == {1: 1}
@@ -568,11 +568,11 @@ class TestVarianceStrataPairing:
     def test_no_psu_raises(self):
         data = pl.DataFrame({"stratum": [1, 1, 2, 2], "wgt": [1.0] * 4})
         sample = Sample(data=data, design=Design(wgt="wgt", stratum="stratum"))
-        with pytest.raises(MethodError):
+        with pytest.raises(WeightingError):
             sample.weighting.create_brr_wgts()
 
     def test_an_explicit_unit_column_must_exist(self, multi_psu_sample):
-        with pytest.raises(MethodError):
+        with pytest.raises(WeightingError):
             multi_psu_sample.weighting.create_brr_wgts(stratum="not_a_column")
 
     def test_explicit_units_override_the_design(self, multi_psu_sample):
@@ -982,7 +982,7 @@ def test_rao_wu_kind_aliases_normalize(multi_psu_sample, given):
 
 
 def test_unknown_kind_raises_and_names_the_variants(pumf_like_sample):
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DesignError) as exc:
         pumf_like_sample.weighting.create_bs_wgts(n_reps=4, kind="rao–wu")  # en dash
     rendered = str(exc.value)
     assert "kind" in rendered
@@ -1006,7 +1006,7 @@ def test_poisson_does_not_require_psu(pumf_like_sample):
 
 
 def test_rao_wu_still_requires_psu(pumf_like_sample):
-    with pytest.raises(MethodError, match="psu"):
+    with pytest.raises(WeightingError, match="psu"):
         pumf_like_sample.weighting.create_bs_wgts(n_reps=8, kind="rao-wu")
 
 

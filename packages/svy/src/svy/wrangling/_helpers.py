@@ -19,7 +19,7 @@ import polars as pl
 
 from svy.core.constants import BOOKKEEPING_COLUMNS
 from svy.core.design import Design, PopSize
-from svy.errors import MethodError
+from svy.errors import DataError, DesignWarning
 
 
 if TYPE_CHECKING:
@@ -180,7 +180,7 @@ def _guard_weight_writes(
         )
     ]
     if reserved:
-        raise MethodError.reserved_columns(where=where, columns=reserved)
+        raise DataError.reserved_columns(where=where, columns=reserved)
     roles = _weight_lineage_columns(sample)
     if not roles:
         return
@@ -194,7 +194,7 @@ def _guard_weight_writes(
 
     bad = {c: why for c, why in roles.items() if not allowed(c)}
     if bad:
-        raise MethodError.weight_overwrite(where=where, columns=bad)
+        raise DataError.weight_overwrite(where=where, columns=bad)
 
 
 # -------------------------------------------------------------------
@@ -447,9 +447,13 @@ def _auto_clean_design(target: "Sample") -> None:
 
     if removed:
         target.warn(
-            code="DESIGN_FIELDS_REMOVED",
-            title="Design fields removed",
-            detail="Removed from the design with the dropped columns: " + ", ".join(removed) + ".",
-            where="wrangling",
-            got=list(removed),
+            DesignWarning(
+                code="DESIGN_FIELDS_REMOVED",
+                title="Design fields removed",
+                detail="Removed from the design with the dropped columns: "
+                + ", ".join(removed)
+                + ".",
+                where="wrangling",
+                got=list(removed),
+            )
         )

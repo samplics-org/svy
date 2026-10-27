@@ -17,7 +17,7 @@ import pytest
 
 from svy import Design, Sample
 from svy.core.data_prep import level_lookup
-from svy.errors import MethodError
+from svy.errors import EstimationError
 from svy.estimation.contrast import linear_contrast
 from svy.serialize import from_json, to_json
 
@@ -266,12 +266,12 @@ class TestContrastKeys:
 
     def test_unknown_key_still_raises(self, sample):
         r = sample.estimation.mean("y", by="zone")
-        with pytest.raises(MethodError, match="Unknown contrast key"):
+        with pytest.raises(EstimationError, match="Unknown contrast key"):
             r.contrast({4: 1, 1: -1})
 
     def test_ambiguous_string_key_raises(self):
         keys = [("1", 2), (1, "2")]
-        with pytest.raises(MethodError, match="Unknown contrast key"):
+        with pytest.raises(EstimationError, match="Unknown contrast key"):
             linear_contrast(
                 keys,
                 np.array([1.0, 2.0]),

@@ -16,7 +16,7 @@ import polars as pl
 import pytest
 
 from svy import Cat, Cross, Design, Sample, SvyWarning
-from svy.errors import MethodError, SvyError, WeightingError
+from svy.errors import SvyError, WeightingError
 
 
 N = 24
@@ -525,6 +525,6 @@ def test_replicate_weights_follow_text_keys(sample):
 
 
 def test_keyed_errors_are_method_errors(sample):
-    # Callers catching MethodError keep working.
-    with pytest.raises(MethodError):
+    # Callers catching WeightingError keep working.
+    with pytest.raises(WeightingError):
         sample.weighting.poststratify({"x": 1.0}, cells="int")

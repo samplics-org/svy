@@ -262,10 +262,10 @@ NA_OPTIONS = ("error", "level", "drop")
 
 
 def check_na_option(na: Any, *, where: str) -> None:
-    from svy.errors import MethodError
+    from svy.errors import WeightingError
 
     if na not in NA_OPTIONS:
-        raise MethodError.invalid_choice(
+        raise WeightingError.invalid_choice(
             where=where,
             param="na",
             got=na,
@@ -279,12 +279,12 @@ def template_levels(
 ) -> list[Any]:
     """The levels a template lists for ``cols``: the columns' own values (tuples
     for several), with nulls handled by ``na``."""
-    from svy.errors import DimensionError
+    from svy.errors import WeightingError
 
     nulls = {c: int(n) for c, n in zip(cols, df.select(cols).null_count().row(0)) if n}
     if nulls and na == "error":
         listed = ", ".join(f"{c!r} ({n} null{'' if n == 1 else 's'})" for c, n in nulls.items())
-        raise DimensionError(
+        raise WeightingError.ValueError(
             title="Missing values in template columns",
             detail=f"Nulls found in {listed}. Choose na='level' or na='drop', or fix the data.",
             code=code,

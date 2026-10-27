@@ -12,7 +12,7 @@ import polars as pl
 from svy.core.constants import BOOKKEEPING_COLUMNS, SVY_HIT, SVY_PROB, SVY_WEIGHT
 from svy.core.repwgts import RepWgts
 from svy.engine.wrangling.cleaning import _clean_names, _rename
-from svy.errors import MethodError
+from svy.errors import DataError
 from svy.utils.helpers import _normalize_columns_arg
 from svy.wrangling._helpers import (
     _auto_clean_design,
@@ -83,7 +83,7 @@ def rename_columns(
     forbidden = BOOKKEEPING_COLUMNS | {SVY_WEIGHT, SVY_PROB, SVY_HIT}
     hit = sorted({c for pair in renames.items() for c in pair if c in forbidden})
     if hit:
-        raise MethodError(
+        raise DataError.ValueError(
             title="Reserved column names cannot be renamed",
             detail=f"Forbidden: {hit}",
             code="RENAME_FORBIDDEN",
@@ -98,7 +98,7 @@ def rename_columns(
     except (ValueError, KeyError):
         raise
     except Exception as ex:
-        raise MethodError(
+        raise DataError.RuntimeError(
             title="Rename failed",
             detail=str(ex),
             code="RENAME_FAILED",
@@ -156,18 +156,18 @@ def rename_rep_wgts(
     """
     where = "wrangling.rename_rep_wgts"
     if not isinstance(prefixes, Mapping):
-        raise MethodError.invalid_rep_prefix(where=where, got=prefixes)
+        raise DataError.invalid_rep_prefix(where=where, got=prefixes)
     data_columns = sample._data.collect_schema().names()
     sets = _rep_sets(sample, data_columns)
     if not sets:
-        raise MethodError.no_rep_wgts(where=where)
+        raise DataError.no_rep_wgts(where=where)
 
     for old, new in prefixes.items():
         if not isinstance(new, str) or not new.strip():
-            raise MethodError.invalid_rep_prefix(where=where, got=new)
+            raise DataError.invalid_rep_prefix(where=where, got=new)
         if old not in sets:
             known = {p: (rw.wgt, rw.n_reps) for p, (rw, _) in sets.items()}
-            raise MethodError.unknown_rep_prefix(where=where, got=old, known=known)
+            raise DataError.unknown_rep_prefix(where=where, got=old, known=known)
 
     renames: dict[str, str] = {}
     targets: dict[str, str] = {}
@@ -184,7 +184,7 @@ def rename_rep_wgts(
             targets[name] = old
             renames[c] = name
     if overlap:
-        raise MethodError.rep_rename_collision(
+        raise DataError.rep_rename_collision(
             where=where, prefix=", ".join(sorted(set(prefixes.values()))), existing=sorted(overlap)
         )
     renames = {c: n for c, n in renames.items() if c != n}
@@ -192,7 +192,7 @@ def rename_rep_wgts(
         return sample
     taken = sorted(set(renames.values()) & (set(data_columns) - set(renames)))
     if taken:
-        raise MethodError.rep_rename_collision(
+        raise DataError.rep_rename_collision(
             where=where, prefix=", ".join(sorted(set(prefixes.values()))), existing=taken
         )
     return rename_columns(sample, renames, inplace=inplace)
@@ -217,7 +217,7 @@ def remove_columns(
     protected = _required_columns(sample)
     blocked = [c for c in cols if c in protected]
     if blocked and not force:
-        raise MethodError(
+        raise DataError.ValueError(
             title="Cannot remove design-referenced columns",
             detail=", ".join(blocked),
             code="DROP_PROTECTED_COLUMNS",
@@ -248,7 +248,7 @@ def keep_columns(
     protected = _required_columns(sample)
     to_drop = [c for c in protected if c not in cols]
     if to_drop and not force:
-        raise MethodError(
+        raise DataError.ValueError(
             title="Keeping these columns would remove design-referenced columns",
             detail=", ".join(to_drop),
             code="KEEP_DROPS_PROTECTED",

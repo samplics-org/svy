@@ -33,7 +33,7 @@ from svy.core.constants import (
     SVY_WEIGHT,
 )
 from svy.core.types import DF, Category, Number, WhereArg
-from svy.errors import MethodError
+from svy.errors import SelectionError
 from svy.selection._group_keys import (
     _build_group_keys,
     _compute_pop_sizes,
@@ -138,7 +138,7 @@ def _check_output_col_names(
     where: str,
 ) -> None:
     """
-    Raise MethodError if any user-supplied output column name already exists
+    Raise SelectionError if any user-supplied output column name already exists
     in the frame.  This prevents silently overwriting existing data.
     """
     existing = set(df.columns)
@@ -148,7 +148,7 @@ def _check_output_col_names(
         (hit_name, "hit_name"),
     ]:
         if col is not None and col in existing:
-            raise MethodError.not_applicable(
+            raise SelectionError.not_applicable(
                 where=where,
                 method="selection",
                 reason=f"Column {col!r} already exists in the frame.",
@@ -394,7 +394,7 @@ def _srs_prepare(
     names = set(df_reduced.columns) if hasattr(df_reduced, "columns") else set(df_reduced.schema)
     missing_cols = [c for c in cols if c not in names]
     if missing_cols:
-        raise MethodError.invalid_choice(
+        raise SelectionError.invalid_choice(
             where="Sample.sampling.srs",
             param="columns",
             got=missing_cols,

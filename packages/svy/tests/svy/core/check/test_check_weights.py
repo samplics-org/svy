@@ -9,7 +9,7 @@ import svy
 
 from svy.core._check import check_weights
 from svy.core.check import WeightCheck
-from svy.errors import DimensionError, MethodError
+from svy.errors import DataError
 
 
 def test_clean_weights():
@@ -85,7 +85,7 @@ def test_integer_weights_and_lazy_frames():
 
 
 def test_missing_weight_column():
-    with pytest.raises(DimensionError) as exc:
+    with pytest.raises(DataError) as exc:
         check_weights(pl.DataFrame({"w": [1.0]}), "wt")
     assert exc.value.code == "MISSING_COLUMNS"
     assert exc.value.param == "wgt"
@@ -93,7 +93,7 @@ def test_missing_weight_column():
 
 
 def test_non_numeric_weight():
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(DataError) as exc:
         check_weights(pl.DataFrame({"w": ["1", "2"]}), "w")
     assert exc.value.code == "WEIGHT_NOT_NUMERIC"
     assert exc.value.where == "checks.check_weights"
@@ -101,9 +101,9 @@ def test_non_numeric_weight():
 
 
 def test_bad_arguments():
-    with pytest.raises(MethodError):
+    with pytest.raises(DataError):
         check_weights(pl.DataFrame({"w": [1.0]}), ["w"])
-    with pytest.raises(MethodError):
+    with pytest.raises(DataError):
         check_weights({"w": [1.0]}, "w")
 
 

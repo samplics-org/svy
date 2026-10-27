@@ -18,7 +18,7 @@ import pytest
 from svy import SvyWarning
 from svy.core.sample import Design, Sample
 from svy.core.terms import Cat
-from svy.errors import MethodError
+from svy.errors import WeightingError
 from svy.weighting.types import TrimConfig
 
 
@@ -68,7 +68,7 @@ def test_adjust_unmatched_status_raises():
         ),
         Design(wgt="wgt"),
     )
-    with pytest.raises(MethodError, match="noncontact"):
+    with pytest.raises(WeightingError, match="noncontact"):
         s.weighting.adjust(
             resp_status="status",
             cells=None,
@@ -81,7 +81,7 @@ def test_adjust_null_status_raises():
         pl.DataFrame({"wgt": [1.0] * 3, "status": ["rr", None, "nr"]}),
         Design(wgt="wgt"),
     )
-    with pytest.raises(MethodError):
+    with pytest.raises(WeightingError):
         s.weighting.adjust(resp_status="status", cells=None)
 
 
@@ -200,7 +200,7 @@ def test_strict_trim_calibrate_failure_mutates_nothing():
 
     # Absolute cap (floats > 1) far below what the totals require: the final
     # calibrate always pushes weights back above the cap -> cannot converge
-    with pytest.raises(MethodError, match="cannot converge"):
+    with pytest.raises(WeightingError, match="cannot converge"):
         s.weighting.calibrate(
             controls={Cat("grp"): {"a": 500.0, "b": 500.0}},
             wgt_name="cw",
@@ -220,7 +220,7 @@ def test_strict_trim_calibrate_failure_mutates_nothing():
 
 def test_calibrate_trim_cycle_unknown_by_column_raises():
     s = _calib_sample()
-    with pytest.raises(MethodError, match="trimming.by|by"):
+    with pytest.raises(WeightingError, match="trimming.by|by"):
         s.weighting.calibrate(
             controls={Cat("grp"): {"a": 40.0, "b": 40.0}},
             wgt_name="cw",

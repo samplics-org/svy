@@ -17,7 +17,7 @@ import svy_rs as rs
 
 from svy.core.enumerations import PopParam, QuantileMethod
 from svy.core.repwgts import BrrWgts, RepWgts, _RepWgtsBase
-from svy.errors import DimensionError
+from svy.errors import EstimationError
 from svy.estimation.estimate import Estimate
 
 
@@ -52,7 +52,7 @@ def rep_weight_cols(sample: Sample) -> list[str]:
         present = set(local_data.columns)
         missing = [c for c in cols if c not in present]
         if missing:
-            raise DimensionError.missing_columns(
+            raise EstimationError.missing_columns(
                 where="estimation.replication",
                 param="rep_wgts",
                 missing=missing,
@@ -112,7 +112,7 @@ def replicate_params(
     for _param in ("scale", "rep_coefs"):
         _supplied = getattr(rw, _param, None)
         if _supplied is not None and len(_supplied) != n_reps:
-            raise DimensionError(
+            raise EstimationError.ValueError(
                 title=f"{_param} length mismatch",
                 detail=f"RepWeights.{_param} has {len(_supplied)} entries but "
                 f"{n_reps} replicate weight columns were resolved.",

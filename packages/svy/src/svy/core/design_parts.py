@@ -54,6 +54,8 @@ from typing import TYPE_CHECKING, Any, Iterable, Mapping
 import msgspec
 import numpy as np
 
+from svy.errors import DesignError, SingletonWarning
+
 
 if TYPE_CHECKING:
     import polars as pl
@@ -535,11 +537,13 @@ def warn_singleton_dropped(rule: Singleton, reason: str, *, sample: Any = None) 
 
     with findings_to(sample) if sample is not None else nullcontext():
         emit_finding(
-            code="SINGLETON_RULE_CLEARED",
-            title="Singleton rule removed",
-            detail=singleton_dropped_message(rule, reason),
-            where="Sample.update_design",
-            param="singleton",
+            SingletonWarning(
+                code="SINGLETON_RULE_CLEARED",
+                title="Singleton rule removed",
+                detail=singleton_dropped_message(rule, reason),
+                where="Sample.update_design",
+                param="singleton",
+            )
         )
 
 
@@ -554,9 +558,7 @@ class SingletonPart(DesignPart):
         if isinstance(value, str):
             value = Singleton(value)  # type: ignore[arg-type]
         if not isinstance(value, Singleton):
-            from svy.errors._method import MethodError
-
-            raise MethodError.invalid_type(
+            raise DesignError.invalid_type(
                 where="Design",
                 param="singleton",
                 got=value,
@@ -628,7 +630,7 @@ class SingletonPart(DesignPart):
         if value.rstate is not None and not isinstance(value.rstate, int):
             from svy.errors import SerializationError
 
-            raise SerializationError(
+            raise SerializationError.ValueError(
                 title="Cannot save the singleton rule",
                 detail="a collapse rule with a Generator rstate cannot be saved.",
                 code="SINGLETON_RULE_NOT_SAVABLE",
@@ -643,7 +645,7 @@ class SingletonPart(DesignPart):
         elif value.using is not None:
             from svy.errors import SerializationError
 
-            raise SerializationError(
+            raise SerializationError.ValueError(
                 title="Cannot save the singleton rule",
                 detail="a collapse rule chosen by a callable cannot be saved.",
                 code="SINGLETON_RULE_NOT_SAVABLE",

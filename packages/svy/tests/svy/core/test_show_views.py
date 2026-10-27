@@ -5,8 +5,7 @@ import pytest
 from svy.core.design import Design
 from svy.core.expr import col, lit, when
 from svy.core.sample import Sample
-from svy.errors._dimension import DimensionError
-from svy.errors._method import MethodError
+from svy.errors import DesignError
 
 
 # ---------- fixtures ----------
@@ -298,41 +297,41 @@ class TestShowDataColumnsStar:
 
 class TestShowDataErrors:
     def test_invalid_n(self, sample_small):
-        with pytest.raises(DimensionError) as ei:
+        with pytest.raises(DesignError) as ei:
             sample_small.show_data(n=-5)
         assert ei.value.code == "INVALID_N"
 
     def test_invalid_offset(self, sample_small):
-        with pytest.raises(DimensionError) as ei:
+        with pytest.raises(DesignError) as ei:
             sample_small.show_data(offset=-5)
         assert ei.value.code == "INVALID_OFFSET"
 
     def test_missing_column(self, sample_small):
-        with pytest.raises(DimensionError) as ei:
+        with pytest.raises(DesignError) as ei:
             sample_small.show_data(columns=["id", "does_not_exist"], n=2)
         assert ei.value.code == "MISSING_COLUMNS"
 
     def test_sort_missing_column(self, sample_small):
-        with pytest.raises(DimensionError) as ei:
+        with pytest.raises(DesignError) as ei:
             sample_small.show_data(columns=["id"], order_by="age_not_here", n=2)
         assert ei.value.code == "MISSING_SORT_COLUMNS"
 
     def test_invalid_order_type(self, sample_small):
-        with pytest.raises(MethodError) as ei:
+        with pytest.raises(DesignError) as ei:
             sample_small.show_data(order_type="sideways", n=2)
         assert ei.value.code == "INVALID_ORDER_TYPE"
 
     def test_missing_filter_column(self, sample_small):
-        with pytest.raises(DimensionError) as ei:
+        with pytest.raises(DesignError) as ei:
             sample_small.show_data(where={"not_a_col": 1})
         assert ei.value.code == "MISSING_FILTER_COLUMN"
 
     def test_unsupported_where_type(self, sample_small):
-        with pytest.raises(MethodError) as ei:
+        with pytest.raises(DesignError) as ei:
             sample_small.show_data(where=object())
         assert ei.value.code == "UNSUPPORTED_WHERE"
 
     def test_where_empty_in_values(self, sample_small):
-        with pytest.raises(MethodError) as ei:
+        with pytest.raises(DesignError) as ei:
             sample_small.show_data(where={"geo1": []})
         assert ei.value.code == "EMPTY_IN_VALUES"

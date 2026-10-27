@@ -19,7 +19,7 @@ import pytest
 from numpy.testing import assert_allclose
 
 from svy import Design, Sample, col
-from svy.errors import MethodError
+from svy.errors import DataError
 
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
@@ -111,7 +111,7 @@ def test_every_writing_step_is_refused_on_every_role(chain, role, step, inplace)
     s = chain()
     column, phrase = ROLES[role]
     snap = _snapshot(s)
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(DataError) as ei:
         STEPS[step](s, column, inplace)
     err = ei.value
     assert err.code == "WEIGHT_OVERWRITE"
@@ -130,7 +130,7 @@ def test_writing_into_an_existing_name_via_into_is_refused(chain, role):
         lambda: s.wrangling.categorize("api00", bins=[0, 600, 1000], into=column),
         lambda: s.wrangling.top_code({"api00": 1.0}, into=column),
     ):
-        with pytest.raises((MethodError, ValueError), match="already exists|WEIGHT_OVERWRITE"):
+        with pytest.raises((DataError, ValueError), match="already exists|WEIGHT_OVERWRITE"):
             step()
     _assert_untouched(s, snap)
 
@@ -139,14 +139,14 @@ def test_join_under_a_weight_name_is_refused(chain):
     s = chain()
     other = s.data.select("snum", pl.lit(1.0).alias("tr"))
     snap = _snapshot(s)
-    with pytest.raises(MethodError):
+    with pytest.raises(DataError):
         s.wrangling.join(other, on="snum")
     _assert_untouched(s, snap)
 
 
 def test_error_message_and_hint(chain):
     s = chain()
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(DataError) as ei:
         s.wrangling.mutate({"rk": pl.col("rk") + 1})
     err = ei.value
     assert err.title == "Weight columns cannot be overwritten"
@@ -158,7 +158,7 @@ def test_error_message_and_hint(chain):
 
 def test_several_columns_are_all_named(chain):
     s = chain()
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(DataError) as ei:
         s.wrangling.mutate({"tr": pl.col("tr") * 2, "pw": pl.col("pw") * 2, "api00": 1})
     assert set(ei.value.got) == {"tr", "pw"}
     assert "'tr' is the design's weight" in ei.value.detail
@@ -186,7 +186,7 @@ def test_exact_widening_cast_is_allowed_and_changes_nothing_else(chain, column, 
 )
 def test_other_casts_are_refused(chain, column, dtype):
     s = chain()
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(DataError) as ei:
         s.wrangling.cast(column, dtype, strict=False)
     assert ei.value.code == "WEIGHT_OVERWRITE"
 
@@ -242,7 +242,7 @@ def test_a_removed_history_column_is_no_longer_protected(chain):
     with no_warnings():
         s = s.wrangling.remove_columns(CELLS)
         s = s.wrangling.mutate({CELLS: 1})
-    with pytest.raises(MethodError):
+    with pytest.raises(DataError):
         s.wrangling.mutate({"pw": 1.0})
 
 
