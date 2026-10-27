@@ -190,6 +190,7 @@ pub fn fit_glm_reps_rs(
     calib_new_wgt=None,
     singleton_method=None,
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn fit_glm_rs(
     _py: Python,
     y_name: String,

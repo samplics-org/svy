@@ -1357,6 +1357,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::excessive_precision)] // as R prints them
     fn test_golden_cov_matches_r_svyvar() {
         let (y, x, w) = (fc("y", &G_Y), fc("x", &G_X), fc("w", &G_W));
         let est = point_estimate_cov(&y, &x, &w).unwrap();
@@ -1369,6 +1370,7 @@ mod tests {
     /// The diagonal of `svyvar` is the variance, so cov(y,y) must reproduce it
     /// through exactly the same code path.
     #[test]
+    #[allow(clippy::excessive_precision)] // as R prints them
     fn test_golden_variance_matches_r_svyvar_diagonal() {
         let (y, w) = (fc("y", &G_Y), fc("w", &G_W));
         let est = point_estimate_cov(&y, &y, &w).unwrap();
@@ -1382,6 +1384,7 @@ mod tests {
     /// by its own delta method over the five moment means, with no shared code
     /// or algebra with our score.
     #[test]
+    #[allow(clippy::excessive_precision)] // as R prints them
     fn test_golden_corr_matches_r_svycontrast() {
         let (y, x, w) = (fc("y", &G_Y), fc("x", &G_X), fc("w", &G_W));
         let est = point_estimate_corr(&y, &x, &w).unwrap();
@@ -1397,6 +1400,7 @@ mod tests {
     /// Stratification is handled by the shared variance kernel, but the score
     /// must stay correct underneath it.
     #[test]
+    #[allow(clippy::excessive_precision)] // as R prints them
     fn test_golden_cov_stratified_matches_r() {
         let (y, x, w) = (fc("y", &G_Y), fc("x", &G_X), fc("w", &G_W));
         let se = se_of(
@@ -1579,6 +1583,7 @@ mod tests {
 
     /// The matrix must be symmetric and carry unit correlations on the diagonal.
     #[test]
+    #[allow(clippy::excessive_precision)] // as R prints them
     fn test_multi_moments_symmetry_and_diagonal() {
         let (y, x, w) = (fc("y", &G_Y), fc("x", &G_X), fc("w", &G_W));
         let mm = multi_moments(&[&y, &x], &w, None).unwrap();
@@ -1627,6 +1632,7 @@ mod tests {
 
     /// R's per-replicate covariances, from
     /// `svyvar(~y+x, as.svrepdesign(d, type="JK1"), return.replicates=TRUE)`.
+    #[allow(clippy::excessive_precision)] // as R prints them
     const R_COV_REPS: [f64; 8] = [
         40.722413332298757,
         46.226109824772017,
@@ -1639,6 +1645,7 @@ mod tests {
     ];
 
     /// Correlations derived from each replicate's own variance matrix.
+    #[allow(clippy::excessive_precision)] // as R prints them
     const R_CORR_REPS: [f64; 8] = [
         0.48055776528106858,
         0.48070293973143952,

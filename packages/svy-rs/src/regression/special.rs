@@ -19,6 +19,7 @@ use std::f64::consts::PI;
 const ASYMPTOTIC_FROM: f64 = 20.0;
 
 /// Lanczos coefficients, g = 7, n = 9 — the usual set, good to ~1e-15.
+#[allow(clippy::excessive_precision, clippy::inconsistent_digit_grouping)] // as published
 const LANCZOS: [f64; 9] = [
     0.999_999_999_999_809_93,
     676.520_368_121_885_1,
@@ -103,6 +104,7 @@ mod tests {
     use super::*;
 
     /// R, at 17 significant digits.
+    #[allow(clippy::excessive_precision)] // as published
     const DIGAMMA: [(f64, f64); 14] = [
         (0.1, -10.423754940411076),
         (0.5, -1.9635100260214231),
@@ -120,6 +122,7 @@ mod tests {
         (1000.0, 6.907255195648812),
     ];
 
+    #[allow(clippy::excessive_precision)] // as published
     const TRIGAMMA: [(f64, f64); 14] = [
         (0.1, 101.43329915079275),
         (0.5, 4.934802200544679),
@@ -137,6 +140,7 @@ mod tests {
         (1000.0, 0.0010005001666666335),
     ];
 
+    #[allow(clippy::excessive_precision)] // as published
     const LGAMMA: [(f64, f64); 14] = [
         (0.1, 2.252712651734206),
         (0.5, 0.57236494292470008),

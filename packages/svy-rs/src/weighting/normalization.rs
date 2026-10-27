@@ -9,10 +9,10 @@ use ndarray::{Array1, Array2, ArrayView2, Axis};
 /// * `wgt` - Weight matrix (n_obs, n_reps)
 /// * `by_arr` - Optional grouping variable (n_obs,). If None, normalize globally.
 /// * `control` - Optional target sums. If None, target = count of observations.
-///               Can be:
-///               - None: target = n (or counts by group)
-///               - Single value: same target for all groups
-///               - Array: one target per group
+///   Can be:
+///   - None: target = n (or counts by group)
+///   - Single value: same target for all groups
+///   - Array: one target per group
 ///
 /// # Returns
 /// Normalized weight matrix

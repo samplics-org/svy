@@ -27,6 +27,9 @@ use crate::estimation::taylor::{
     weighted_quantile,
 };
 
+/// One by-group: label, estimate, SE, variance, n, deff and scores.
+type GroupRow<'a> = (&'a str, f64, f64, f64, u32, f64, Vec<f64>);
+
 /// Resolve the SRS reference the design effect is measured against.
 ///
 /// `None` keeps the historical behaviour -- without replacement, with the
@@ -51,6 +54,7 @@ fn parse_srs_ref(deff_ref: Option<&str>, deff_pop_total: Option<f64>) -> PolarsR
 
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn taylor_mean(
     _py: Python,
     data: PyDataFrame,
@@ -140,6 +144,7 @@ pub fn taylor_mean(
 /// `compute_mean_multi`). Returns one row per variable, in input order.
 #[pyfunction]
 #[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn taylor_mean_multi(
     _py: Python,
     data: PyDataFrame,
@@ -178,25 +183,6 @@ pub fn taylor_mean_multi(
     Ok(PyDataFrame(result))
 }
 
-/// Shared skeleton for the ungrouped single-estimate Taylor kernels.
-///
-/// Two overlaps, both free of any effect on the numbers:
-///
-/// 1. Indexing the design (densify strata, nest PSU codes, per-stratum maps)
-///    reads none of the response columns, and the point estimate / scores / SRS
-///    variance read none of the design columns. They run concurrently.
-/// 2. The variance and the df both read the finished design but neither feeds
-///    the other, so they run concurrently too — and taking df from the design's
-///    codes drops the second densification pass over the same columns, which at
-///    1M rows was on its own about a third of the kernel.
-///
-/// Every half is internally unchanged and still accumulates in row order, so the
-/// output is bit-identical and independent of `RAYON_NUM_THREADS`, as
-/// `estimation/mod.rs` requires.
-///
-/// `value_work` returns the score vector plus whatever else the caller needs out
-/// of the response columns.
-
 /// Build a score-centring sweep from the record columns Python passes.
 ///
 /// `new_wgt` normally IS `weight_col`, since the record is only honoured when
@@ -226,6 +212,25 @@ fn make_calib(
     build_calib_sweep(df, &spec)
 }
 
+/// Shared skeleton for the ungrouped single-estimate Taylor kernels.
+///
+/// Two overlaps, both free of any effect on the numbers:
+///
+/// 1. Indexing the design (densify strata, nest PSU codes, per-stratum maps)
+///    reads none of the response columns, and the point estimate / scores / SRS
+///    variance read none of the design columns. They run concurrently.
+/// 2. The variance and the df both read the finished design but neither feeds
+///    the other, so they run concurrently too — and taking df from the design's
+///    codes drops the second densification pass over the same columns, which at
+///    1M rows was on its own about a third of the kernel.
+///
+/// Every half is internally unchanged and still accumulates in row order, so the
+/// output is bit-identical and independent of `RAYON_NUM_THREADS`, as
+/// `estimation/mod.rs` requires.
+///
+/// `value_work` returns the score vector plus whatever else the caller needs out
+/// of the response columns.
+#[allow(clippy::too_many_arguments)]
 fn ungrouped_estimate<T: Send>(
     weights: &Float64Chunked,
     strata: Option<&Column>,
@@ -294,15 +299,16 @@ fn flat_cov_in(
     let mut cov = taylor_covariance_apply_in(score_cols, design, active);
     for (i, est) in estimates.iter().enumerate() {
         if est.is_nan() {
-            for j in 0..cov.len() {
-                cov[i][j] = f64::NAN;
-                cov[j][i] = f64::NAN;
+            cov[i].fill(f64::NAN);
+            for row in cov.iter_mut() {
+                row[i] = f64::NAN;
             }
         }
     }
     flatten_cov(cov)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_mean_ungrouped(
     df: &DataFrame,
     value_col: &str,
@@ -369,6 +375,7 @@ fn compute_mean_ungrouped(
 /// computed with the same kernels as `compute_mean_ungrouped`, so every row is
 /// bit-identical to the corresponding single-variable call. Output is one row
 /// per variable, in input order.
+#[allow(clippy::too_many_arguments)]
 fn compute_mean_multi(
     df: &DataFrame,
     value_cols: &[String],
@@ -454,6 +461,7 @@ fn compute_mean_multi(
         "df" => dfs, "n" => ns, "deff" => deffs]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_mean_grouped(
     df: &DataFrame,
     value_col: &str,
@@ -511,32 +519,28 @@ fn compute_mean_grouped(
             groups
                 .par_iter()
                 .zip(masks.par_iter())
-                .map(
-                    |(&group, mask)| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
-                        let domain_mask = mask.clone();
-                        let active =
-                            design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
-                        let n_domain = active_count(weights, Some(&domain_mask));
-                        let Ok(estimate) = point_estimate_mean_domain(y, weights, &domain_mask)
-                        else {
-                            let nan = f64::NAN;
-                            return Ok((group, nan, nan, nan, n_domain, nan, vec![0.0; y.len()]));
-                        };
-                        let scores = scores_mean_domain(y, weights, &domain_mask)?;
-                        let scores_arr: Vec<f64> =
-                            scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-                        let variance =
-                            taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
-                        let se = variance.max(0.0).sqrt();
-                        let srs_var = srs_variance_mean_domain(y, weights, &domain_mask, srs)?;
-                        let deff = if srs_var > 0.0 {
-                            variance / srs_var
-                        } else {
-                            f64::NAN
-                        };
-                        Ok((group, estimate, se, variance, n_domain, deff, scores_arr))
-                    },
-                )
+                .map(|(&group, mask)| -> PolarsResult<GroupRow<'_>> {
+                    let domain_mask = mask.clone();
+                    let active =
+                        design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
+                    let n_domain = active_count(weights, Some(&domain_mask));
+                    let Ok(estimate) = point_estimate_mean_domain(y, weights, &domain_mask) else {
+                        let nan = f64::NAN;
+                        return Ok((group, nan, nan, nan, n_domain, nan, vec![0.0; y.len()]));
+                    };
+                    let scores = scores_mean_domain(y, weights, &domain_mask)?;
+                    let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+                    let variance =
+                        taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
+                    let se = variance.max(0.0).sqrt();
+                    let srs_var = srs_variance_mean_domain(y, weights, &domain_mask, srs)?;
+                    let deff = if srs_var > 0.0 {
+                        variance / srs_var
+                    } else {
+                        f64::NAN
+                    };
+                    Ok((group, estimate, se, variance, n_domain, deff, scores_arr))
+                })
                 .collect::<PolarsResult<Vec<_>>>()
         },
     );
@@ -572,6 +576,7 @@ fn compute_mean_grouped(
 
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn taylor_total(
     _py: Python,
     data: PyDataFrame,
@@ -651,6 +656,7 @@ pub fn taylor_total(
 /// Batched ungrouped total over many variables sharing one design build.
 #[pyfunction]
 #[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn taylor_total_multi(
     _py: Python,
     data: PyDataFrame,
@@ -689,6 +695,7 @@ pub fn taylor_total_multi(
     Ok(PyDataFrame(result))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_total_ungrouped(
     df: &DataFrame,
     value_col: &str,
@@ -748,6 +755,7 @@ fn compute_total_ungrouped(
 
 /// Batched ungrouped totals: design built once, variables in parallel. See
 /// `compute_mean_multi`. Each row is bit-identical to `compute_total_ungrouped`.
+#[allow(clippy::too_many_arguments)]
 fn compute_total_multi(
     df: &DataFrame,
     value_cols: &[String],
@@ -824,6 +832,7 @@ fn compute_total_multi(
         "df" => dfs, "n" => ns, "deff" => deffs]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_total_grouped(
     df: &DataFrame,
     value_col: &str,
@@ -876,28 +885,25 @@ fn compute_total_grouped(
             groups
                 .par_iter()
                 .zip(masks.par_iter())
-                .map(
-                    |(&group, mask)| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
-                        let domain_mask = mask.clone();
-                        let active =
-                            design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
-                        let n_domain = active_count(weights, Some(&domain_mask));
-                        let estimate = point_estimate_total_domain(y, weights, &domain_mask)?;
-                        let scores = scores_total_domain(y, weights, &domain_mask)?;
-                        let scores_arr: Vec<f64> =
-                            scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-                        let variance =
-                            taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
-                        let se = variance.max(0.0).sqrt();
-                        let srs_var = srs_variance_total_domain(y, weights, &domain_mask, srs)?;
-                        let deff = if srs_var > 0.0 {
-                            variance / srs_var
-                        } else {
-                            f64::NAN
-                        };
-                        Ok((group, estimate, se, variance, n_domain, deff, scores_arr))
-                    },
-                )
+                .map(|(&group, mask)| -> PolarsResult<GroupRow<'_>> {
+                    let domain_mask = mask.clone();
+                    let active =
+                        design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
+                    let n_domain = active_count(weights, Some(&domain_mask));
+                    let estimate = point_estimate_total_domain(y, weights, &domain_mask)?;
+                    let scores = scores_total_domain(y, weights, &domain_mask)?;
+                    let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+                    let variance =
+                        taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
+                    let se = variance.max(0.0).sqrt();
+                    let srs_var = srs_variance_total_domain(y, weights, &domain_mask, srs)?;
+                    let deff = if srs_var > 0.0 {
+                        variance / srs_var
+                    } else {
+                        f64::NAN
+                    };
+                    Ok((group, estimate, se, variance, n_domain, deff, scores_arr))
+                })
                 .collect::<PolarsResult<Vec<_>>>()
         },
     );
@@ -933,6 +939,7 @@ fn compute_total_grouped(
 
 #[pyfunction]
 #[pyo3(signature = (data, numerator_col, denominator_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn taylor_ratio(
     _py: Python,
     data: PyDataFrame,
@@ -1016,6 +1023,7 @@ pub fn taylor_ratio(
 /// design build. `numerator_cols` and `denominator_cols` must be equal length.
 #[pyfunction]
 #[pyo3(signature = (data, numerator_cols, denominator_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn taylor_ratio_multi(
     _py: Python,
     data: PyDataFrame,
@@ -1056,6 +1064,7 @@ pub fn taylor_ratio_multi(
     Ok(PyDataFrame(result))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_ratio_ungrouped(
     df: &DataFrame,
     numerator_col: &str,
@@ -1119,6 +1128,7 @@ fn compute_ratio_ungrouped(
 
 /// Batched ungrouped ratios: design built once, (numerator, denominator) pairs
 /// estimated in parallel. See `compute_mean_multi`. One row per pair, in order.
+#[allow(clippy::too_many_arguments)]
 fn compute_ratio_multi(
     df: &DataFrame,
     numerator_cols: &[String],
@@ -1225,6 +1235,7 @@ fn compute_ratio_multi(
         "df" => dfs, "n" => ns, "deff" => deffs]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_ratio_grouped(
     df: &DataFrame,
     numerator_col: &str,
@@ -1279,32 +1290,29 @@ fn compute_ratio_grouped(
             groups
                 .par_iter()
                 .zip(masks.par_iter())
-                .map(
-                    |(&group, mask)| -> PolarsResult<(&str, f64, f64, f64, u32, f64, Vec<f64>)> {
-                        let domain_mask = mask.clone();
-                        let active =
-                            design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
-                        let n_domain = active_count(weights, Some(&domain_mask));
-                        let Ok(estimate) = point_estimate_ratio_domain(y, x, weights, &domain_mask)
-                        else {
-                            let nan = f64::NAN;
-                            return Ok((group, nan, nan, nan, n_domain, nan, vec![0.0; y.len()]));
-                        };
-                        let scores = scores_ratio_domain(y, x, weights, &domain_mask)?;
-                        let scores_arr: Vec<f64> =
-                            scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-                        let variance =
-                            taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
-                        let se = variance.max(0.0).sqrt();
-                        let srs_var = srs_variance_ratio_domain(y, x, weights, &domain_mask, srs)?;
-                        let deff = if srs_var > 0.0 {
-                            variance / srs_var
-                        } else {
-                            f64::NAN
-                        };
-                        Ok((group, estimate, se, variance, n_domain, deff, scores_arr))
-                    },
-                )
+                .map(|(&group, mask)| -> PolarsResult<GroupRow<'_>> {
+                    let domain_mask = mask.clone();
+                    let active =
+                        design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
+                    let n_domain = active_count(weights, Some(&domain_mask));
+                    let Ok(estimate) = point_estimate_ratio_domain(y, x, weights, &domain_mask)
+                    else {
+                        let nan = f64::NAN;
+                        return Ok((group, nan, nan, nan, n_domain, nan, vec![0.0; y.len()]));
+                    };
+                    let scores = scores_ratio_domain(y, x, weights, &domain_mask)?;
+                    let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+                    let variance =
+                        taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
+                    let se = variance.max(0.0).sqrt();
+                    let srs_var = srs_variance_ratio_domain(y, x, weights, &domain_mask, srs)?;
+                    let deff = if srs_var > 0.0 {
+                        variance / srs_var
+                    } else {
+                        f64::NAN
+                    };
+                    Ok((group, estimate, se, variance, n_domain, deff, scores_arr))
+                })
                 .collect::<PolarsResult<Vec<_>>>()
         },
     );
@@ -1348,6 +1356,7 @@ fn compute_ratio_grouped(
 /// meaning, since both statistics are symmetric.
 #[pyfunction]
 #[pyo3(signature = (data, y_cols, x_cols, kind, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn taylor_assoc(
     _py: Python,
     data: PyDataFrame,
@@ -1558,6 +1567,7 @@ enum LevelScale {
 
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn taylor_prop(
     _py: Python,
     data: PyDataFrame,
@@ -1609,6 +1619,7 @@ pub fn taylor_prop(
 /// covariance across levels (and by-groups).
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn taylor_factor_total(
     _py: Python,
     data: PyDataFrame,
@@ -1740,6 +1751,7 @@ fn taylor_levels(
 /// build. Rows are (variable, level), grouped by variable in input order.
 #[pyfunction]
 #[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn taylor_prop_multi(
     _py: Python,
     data: PyDataFrame,
@@ -1778,6 +1790,7 @@ pub fn taylor_prop_multi(
     Ok(PyDataFrame(result))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_levels_ungrouped(
     df: &DataFrame,
     value_col: &str,
@@ -1891,6 +1904,7 @@ fn compute_levels_ungrouped(
 /// parallel (each variable loops its own category levels). See
 /// `compute_mean_multi`. Rows are (variable, level), grouped by variable in
 /// input order, levels sorted — identical to per-variable `compute_levels_ungrouped`.
+#[allow(clippy::too_many_arguments)]
 fn compute_prop_multi(
     df: &DataFrame,
     value_cols: &[String],
@@ -2017,6 +2031,7 @@ fn compute_prop_multi(
         "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_levels_grouped(
     df: &DataFrame,
     value_col: &str,
@@ -2103,16 +2118,11 @@ fn compute_levels_grouped(
             for (lvl, indicator_ca) in levels.iter().zip(&indicators) {
                 let (estimate, scores, srs_var) = match scale {
                     LevelScale::Share => {
-                        match point_estimate_mean_domain(&indicator_ca, weights, &domain_mask) {
+                        match point_estimate_mean_domain(indicator_ca, weights, &domain_mask) {
                             Ok(estimate) => (
                                 estimate,
-                                scores_mean_domain(&indicator_ca, weights, &domain_mask)?,
-                                srs_variance_mean_domain(
-                                    &indicator_ca,
-                                    weights,
-                                    &domain_mask,
-                                    srs,
-                                )?,
+                                scores_mean_domain(indicator_ca, weights, &domain_mask)?,
+                                srs_variance_mean_domain(indicator_ca, weights, &domain_mask, srs)?,
                             ),
                             Err(_) => (
                                 f64::NAN,
@@ -2122,9 +2132,9 @@ fn compute_levels_grouped(
                         }
                     }
                     LevelScale::Count => (
-                        point_estimate_total_domain(&indicator_ca, weights, &domain_mask)?,
-                        scores_total_domain(&indicator_ca, weights, &domain_mask)?,
-                        srs_variance_total_domain(&indicator_ca, weights, &domain_mask, srs)?,
+                        point_estimate_total_domain(indicator_ca, weights, &domain_mask)?,
+                        scores_total_domain(indicator_ca, weights, &domain_mask)?,
+                        srs_variance_total_domain(indicator_ca, weights, &domain_mask, srs)?,
                     ),
                 };
                 let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
@@ -2176,7 +2186,7 @@ fn compute_levels_grouped(
     let n_rows = by_vals.len();
     let dfs_vec: Vec<u32> = group_dfs
         .iter()
-        .flat_map(|d| std::iter::repeat(*d).take(levels.len()))
+        .flat_map(|d| std::iter::repeat_n(*d, levels.len()))
         .collect();
     debug_assert_eq!(dfs_vec.len(), n_rows);
     let out = df![by_col => by_vals, "y" => vec![value_col; n_rows], "level" => level_vals,
@@ -2228,7 +2238,7 @@ pub fn taylor_quantile(
     );
     let q_method = quantile_method
         .as_deref()
-        .map(SvyQuantileMethod::from_str)
+        .map(SvyQuantileMethod::parse)
         .unwrap_or(SvyQuantileMethod::Higher);
 
     let result = match by_col.as_deref() {
@@ -2308,7 +2318,7 @@ pub fn taylor_quantile_multi(
     );
     let q_method = quantile_method
         .as_deref()
-        .map(SvyQuantileMethod::from_str)
+        .map(SvyQuantileMethod::parse)
         .unwrap_or(SvyQuantileMethod::Higher);
     let result = _py
         .detach(|| {
@@ -2359,7 +2369,7 @@ pub fn weighted_quantile_at(
     }
     let q_method = quantile_method
         .as_deref()
-        .map(SvyQuantileMethod::from_str)
+        .map(SvyQuantileMethod::parse)
         .unwrap_or(SvyQuantileMethod::Higher);
     Ok(probs
         .iter()
@@ -2485,6 +2495,7 @@ struct QuantileCols<'a> {
     design: TaylorDesign,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_quantile_cols<'a>(
     df: &'a DataFrame,
     weight_col: &str,
@@ -2522,6 +2533,7 @@ fn resolve_quantile_cols<'a>(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_quantile_ungrouped(
     df: &DataFrame,
     value_col: &str,
@@ -2573,6 +2585,7 @@ fn compute_quantile_ungrouped(
 /// sort-bound, so unlike mean/total this amortises no design work beyond the
 /// shared `TaylorDesign` — the win is running independent variables in
 /// parallel. Each row is identical to `compute_quantile_ungrouped`.
+#[allow(clippy::too_many_arguments)]
 fn compute_quantile_multi(
     df: &DataFrame,
     value_cols: &[String],
@@ -2644,6 +2657,7 @@ fn compute_quantile_multi(
         "var" => variances, "df" => vec![df_val; n_rows], "n" => ns]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_quantile_grouped(
     df: &DataFrame,
     value_col: &str,
@@ -2682,28 +2696,25 @@ fn compute_quantile_grouped(
     let mut ns: Vec<u32> = Vec::new();
     let mut flat: Vec<(f64, f64, f64)> = Vec::new();
 
-    for group_val in unique_groups.iter() {
-        if let Some(group) = group_val {
-            let domain_mask = by_str.equal(group);
-            let n_domain = active_count(cols.weights, Some(&domain_mask));
-            let rows = quantiles_woodruff(
-                y,
-                cols.weights,
-                Some(&domain_mask),
-                cols.rows.as_ref(),
-                &cols.design,
-                probs,
-                q_method,
-            )?;
-            // Per-group df: see the note in compute_mean_grouped.
-            let df_val =
-                degrees_of_freedom_from_design(cols.weights, &cols.design, Some(&domain_mask));
+    for group in unique_groups.iter().flatten() {
+        let domain_mask = by_str.equal(group);
+        let n_domain = active_count(cols.weights, Some(&domain_mask));
+        let rows = quantiles_woodruff(
+            y,
+            cols.weights,
+            Some(&domain_mask),
+            cols.rows.as_ref(),
+            &cols.design,
+            probs,
+            q_method,
+        )?;
+        // Per-group df: see the note in compute_mean_grouped.
+        let df_val = degrees_of_freedom_from_design(cols.weights, &cols.design, Some(&domain_mask));
 
-            by_vals.extend(std::iter::repeat_n(group, k));
-            dfs.extend(std::iter::repeat_n(df_val, k));
-            ns.extend(std::iter::repeat_n(n_domain, k));
-            flat.extend(rows);
-        }
+        by_vals.extend(std::iter::repeat_n(group, k));
+        dfs.extend(std::iter::repeat_n(df_val, k));
+        ns.extend(std::iter::repeat_n(n_domain, k));
+        flat.extend(rows);
     }
 
     let n_rows = by_vals.len();

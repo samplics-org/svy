@@ -34,6 +34,9 @@ use crate::regression::glm::{
 };
 use crate::regression::special::{digamma, lgamma, trigamma};
 
+/// y, X (column-major), the contributing-row weights, and the offset.
+type Materialised = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
+
 /// The identity and sqrt links can push mu to zero, and y/mu is the first
 /// thing the score does.
 const MU_FLOOR: f64 = 1e-10;
@@ -97,6 +100,7 @@ fn theta_ml(y: &[f64], mu: &[f64], w: &[f64], eps: f64, limit: usize) -> PolarsR
         w_sum += w[i];
         denom += w[i] * r * r;
     }
+    #[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN takes this branch on purpose
     if !(denom > 0.0) {
         return Err(PolarsError::ComputeError(
             "negative binomial: the Pearson statistic is zero, so theta has no \
@@ -264,7 +268,7 @@ fn materialise(
     domain_mask: Option<&[bool]>,
     n: usize,
     k: usize,
-) -> PolarsResult<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>)> {
+) -> PolarsResult<Materialised> {
     let y_cast = y.cast(&DataType::Float64)?;
     let y_vals: Vec<f64> = y_cast.f64()?.iter().map(|v| v.unwrap_or(0.0)).collect();
 

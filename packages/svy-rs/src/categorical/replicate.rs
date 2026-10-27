@@ -41,7 +41,7 @@ impl RepSpec {
                 .into(),
             ));
         }
-        let center = VarianceCenter::from_str(center).ok_or_else(|| {
+        let center = VarianceCenter::parse(center).ok_or_else(|| {
             PolarsError::ComputeError(
                 format!("Unknown center: {center}. Use 'rep_mean' or 'estimate'").into(),
             )

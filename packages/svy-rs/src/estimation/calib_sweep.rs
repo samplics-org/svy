@@ -170,8 +170,7 @@ impl CalibSweep {
         }
         let mut cell_w = vec![0.0; k];
         let mut total = 0.0;
-        for i in 0..x.len() {
-            let c = codes[i];
+        for (i, &c) in codes.iter().enumerate().take(x.len()) {
             if c == OUT_OF_SCOPE {
                 continue;
             }
@@ -322,10 +321,10 @@ fn floats_from(df: &DataFrame, name: &str) -> PolarsResult<Vec<f64>> {
     // runs over the full frame once per estimation call, per column.
     if matches!(col.dtype(), DataType::Float64) {
         let ca = col.f64()?;
-        if ca.null_count() == 0 {
-            if let Ok(sl) = ca.cont_slice() {
-                return Ok(sl.to_vec());
-            }
+        if ca.null_count() == 0
+            && let Ok(sl) = ca.cont_slice()
+        {
+            return Ok(sl.to_vec());
         }
     }
     let s = col.cast(&DataType::Float64)?;

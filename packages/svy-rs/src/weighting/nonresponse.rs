@@ -19,7 +19,7 @@ const UK: i64 = 3; // Unknown
 /// * `adj_class` - Adjustment class for each observation (n_obs,)
 /// * `resp_status` - Response status: 0=RR, 1=NR, 2=IN, 3=UK (n_obs,)
 /// * `unknown_to_inelig` - If true, distribute UK to eligible (IN+RR+NR);
-///                         If false, UK joins NR pool (distributed to RR only)
+///   If false, UK joins NR pool (distributed to RR only)
 ///
 /// # Returns
 /// Adjusted weight matrix. Non-respondents and unknowns get weight=0.

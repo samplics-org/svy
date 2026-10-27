@@ -5,6 +5,9 @@ pub use crate::sampling::srs::Result;
 use crate::sampling::srs::SamplingError;
 use std::collections::HashMap;
 
+/// Selected rows, their hits, inclusion probabilities and certainty flags.
+pub type PpsDraw = (Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>);
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PpsMethod {
     Sys,
@@ -54,7 +57,7 @@ pub fn select_pps(
     method: PpsMethod,
     certainty_threshold: f64,
     seed: Option<u64>,
-) -> Result<(Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>)> {
+) -> Result<PpsDraw> {
     if !(certainty_threshold > 0.0 && certainty_threshold <= 1.0) {
         return Err(SamplingError::InvalidInput(
             "certainty_threshold must be in (0, 1]".into(),
@@ -67,14 +70,14 @@ pub fn select_pps(
             frame.len()
         )));
     }
-    if let Some(strat) = stratum {
-        if strat.len() != frame.len() {
-            return Err(SamplingError::InvalidInput(format!(
-                "stratum length ({}) must match frame length ({})",
-                strat.len(),
-                frame.len()
-            )));
-        }
+    if let Some(strat) = stratum
+        && strat.len() != frame.len()
+    {
+        return Err(SamplingError::InvalidInput(format!(
+            "stratum length ({}) must match frame length ({})",
+            strat.len(),
+            frame.len()
+        )));
     }
     match stratum {
         None => {
@@ -167,7 +170,7 @@ fn pps_indexed(
     method: PpsMethod,
     certainty_threshold: f64,
     seed: Option<u64>,
-) -> Result<(Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>)> {
+) -> Result<PpsDraw> {
     let cap = positions.len();
 
     if cap == 0 || n == 0 {
@@ -231,7 +234,7 @@ fn select_pps_stratified(
     method: PpsMethod,
     certainty_threshold: f64,
     seed: Option<u64>,
-) -> Result<(Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>)> {
+) -> Result<PpsDraw> {
     let mut strat_map: HashMap<i64, Vec<usize>> = HashMap::new();
     for (pos, &s) in stratum.iter().enumerate() {
         strat_map.entry(s).or_default().push(pos);
@@ -261,7 +264,7 @@ fn select_pps_stratified(
         .collect();
 
     use rayon::prelude::*;
-    let results: Vec<Result<(Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>)>> = if tasks.len() >= 4 {
+    let results: Vec<Result<PpsDraw>> = if tasks.len() >= 4 {
         tasks
             .par_iter()
             .map(|(positions, n_s, child_seed)| {
@@ -321,7 +324,7 @@ fn pps_sys(
     n: usize,
     certainty_threshold: f64,
     seed: Option<u64>,
-) -> Result<(Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>)> {
+) -> Result<PpsDraw> {
     let cap = positions.len();
     let (cert_mask, n_rem) = extract_certainty(p0, n, certainty_threshold);
     let mut hits = vec![0i64; cap];
@@ -388,7 +391,7 @@ fn pps_wr(
     p0: &[f64],
     n: usize,
     seed: Option<u64>,
-) -> Result<(Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>)> {
+) -> Result<PpsDraw> {
     let cap = positions.len();
     let mut rng = Rng::new(seed.unwrap_or(0));
     let mut hits = vec![0i64; cap];
@@ -426,7 +429,7 @@ fn pps_brewer(
     n: usize,
     certainty_threshold: f64,
     seed: Option<u64>,
-) -> Result<(Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>)> {
+) -> Result<PpsDraw> {
     let cap = p0.len();
     let (cert_mask, n_rem) = extract_certainty(p0, n, certainty_threshold);
     let mut hits = vec![0i64; cap];
@@ -511,7 +514,7 @@ fn pps_murphy(
     positions: &[usize],
     p0: &[f64],
     seed: Option<u64>,
-) -> Result<(Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>)> {
+) -> Result<PpsDraw> {
     let cap = p0.len();
     if cap < 2 || p0.iter().filter(|&&p| p > 0.0).count() < 2 {
         return Err(SamplingError::InvalidInput(
@@ -534,9 +537,9 @@ fn pps_murphy(
     let mut u = rng.next_f64() * rem_total;
     let second = {
         let mut chosen = if first == cap - 1 { cap - 2 } else { cap - 1 };
-        for i in 0..cap {
+        for (i, &p) in p0.iter().enumerate().take(cap) {
             if i != first {
-                u -= p0[i];
+                u -= p;
                 if u <= 0.0 {
                     chosen = i;
                     break;
@@ -571,7 +574,7 @@ fn pps_rs(
     n: usize,
     certainty_threshold: f64,
     seed: Option<u64>,
-) -> Result<(Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>)> {
+) -> Result<PpsDraw> {
     const MAX_ATTEMPTS: usize = 1000;
     let cap = p0.len();
     let (cert_mask, n_rem) = extract_certainty(p0, n, certainty_threshold);
@@ -692,7 +695,7 @@ fn assemble_pps_output(
     hits: &[i64],
     cert_mask: &[bool],
     n_rem: usize,
-) -> Result<(Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>)> {
+) -> Result<PpsDraw> {
     // Non-certainty units were selected via n_rem draws over the *remaining*
     // pool, so their inclusion probability must be renormalised over the
     // remaining MOS mass: pi_i = n_rem * p0_i / total_rem, not n * p0_i.
