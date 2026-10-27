@@ -14,24 +14,6 @@ def test_area_error_defaults_code():
     assert "Bad shape" in s
 
 
-def test_invalid_n_ctor():
-    err = DesignError.invalid_n(where="sample.show_data", got=-3)
-    assert err.code == "INVALID_N"
-    assert err.param == "n"
-    assert err.expected == "n >= 0 or None"
-    assert err.got == -3
-
-    # string contains clear guidance
-    s = str(err)
-    assert "Invalid row count" in s and "non-negative" in s
-
-    # to_dict and markdown
-    d = err.to_dict()
-    assert d["param"] == "n"
-    md = err.markdown()
-    assert "`[INVALID_N]`" in md
-
-
 def test_missing_columns_ctor():
     err = DesignError.missing_columns(
         where="sample.show_data",
@@ -52,25 +34,15 @@ def test_missing_columns_ctor():
     assert "Param:" in html and "columns" in html
 
 
-def test_sample_too_large_ctor():
-    err = DesignError.sample_too_large(where="sample.show_data", n=100, available_rows=42)
-    assert err.code == "SAMPLE_TOO_LARGE"
-    assert err.param == "n"
-    assert err.expected == "n ≤ 42"
-    assert err.got == 100
-    s = err.summary()
-    assert "Sampling failed" in s and "42" in s
-
-
 @pytest.mark.optional
 def test_rich_console_if_available():
     try:
         from rich.console import Console
     except Exception:
         pytest.skip("rich not installed")
-    err = DesignError.invalid_n(where="sample.show_data", got=-1)
+    err = DesignError.missing_columns(where="sample.show_data", param="columns", missing=["z"])
     buf = io.StringIO()
     Console(file=buf, width=80, force_terminal=True, color_system=None).print(err)
     out = buf.getvalue()
-    assert "Invalid row count" in out or "❌ Invalid row count" in out
-    assert "INVALID_N" in out
+    assert "Column(s) not found" in out
+    assert "MISSING_COLUMNS" in out

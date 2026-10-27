@@ -232,17 +232,6 @@ class _Constructors:
         )
 
     @classmethod
-    def mutate_cycle(cls, cycle_list: str, *, where: str | None = None) -> Self:
-        return cls.ValueError(
-            title="Column transformation failed",
-            detail=f"Dependency cycle or unresolved forward reference among: {cycle_list}",
-            code=Code.MUTATE_CYCLE,
-            where=where,
-            hint="Split into multiple mutate calls or remove circular references.",
-            docs_url=None,
-        )
-
-    @classmethod
     def invalid_range(
         cls,
         *,
@@ -295,58 +284,6 @@ class _Constructors:
         )
 
     @classmethod
-    def invalid_mapping_keys(
-        cls,
-        *,
-        where: str | None,
-        param: str,
-        missing: Iterable[Any] = (),
-        extra: Iterable[Any] = (),
-        hint: str | None = None,
-        docs_url: str | None = None,
-    ) -> Self:
-        miss = list(missing)
-        ext = list(extra)
-        detail_parts = []
-        if miss:
-            detail_parts.append(f"Missing keys: {miss}.")
-        if ext:
-            detail_parts.append(f"Unexpected keys: {ext}.")
-        return cls.ValueError(
-            title="Mapping keys mismatch",
-            detail=" ".join(detail_parts) or "Keys do not match the expected set.",
-            code=Code.INVALID_MAPPING_KEYS,
-            where=where,
-            param=param,
-            expected="exact match of domain keys",
-            got={"missing": miss, "extra": ext},
-            hint=hint or "Ensure your mapping keys exactly match the domain categories.",
-            docs_url=docs_url,
-        )
-
-    @classmethod
-    def invalid_n(
-        cls,
-        *,
-        where: Optional[str],
-        got: Any,
-        expected: Any = "n >= 0 or None",
-        hint: Optional[str] = "Use None to select all rows.",
-        docs_url: Optional[str] = None,
-    ) -> Self:
-        return cls.ValueError(
-            title="Invalid row count",
-            detail="Parameter 'n' must be a non-negative integer or None.",
-            code=Code.INVALID_N,
-            where=where,
-            param="n",
-            expected=expected,
-            got=got,
-            hint=hint,
-            docs_url=docs_url,
-        )
-
-    @classmethod
     def missing_columns(
         cls,
         *,
@@ -373,29 +310,6 @@ class _Constructors:
         )
 
     @classmethod
-    def sample_too_large(
-        cls,
-        *,
-        where: Optional[str],
-        n: int,
-        available_rows: int,
-        param: str = "n",
-        hint: Optional[str] = "When sampling without replacement, ensure n ≤ number of rows.",
-        docs_url: Optional[str] = None,
-    ) -> Self:
-        return cls.ValueError(
-            title="Sampling failed",
-            detail=f"Requested n={n} exceeds available rows={available_rows} for sampling without replacement.",
-            code=Code.SAMPLE_TOO_LARGE,
-            where=where,
-            param=param,
-            expected=f"n ≤ {available_rows}",
-            got=n,
-            hint=hint,
-            docs_url=docs_url,
-        )
-
-    @classmethod
     def empty_estimates(
         cls,
         *,
@@ -410,31 +324,6 @@ class _Constructors:
             code=Code.EMPTY_ESTIMATES,
             where=where,
             param=param,
-            hint=hint,
-            docs_url=docs_url,
-        )
-
-    @classmethod
-    def domain_keys_mismatch(
-        cls,
-        *,
-        where: str | None,
-        domain: str,
-        expected_keys: Iterable[Any],
-        got_keys: Iterable[Any],
-        hint: str | None = "Align your provided levels/controls with the domain categories.",
-        docs_url: str | None = None,
-    ) -> Self:
-        exp = set(expected_keys)
-        got = set(got_keys)
-        return cls.ValueError(
-            title="Domain keys mismatch",
-            detail=f"For domain '{domain}', expected keys {sorted(exp)}, got {sorted(got)}.",
-            code=Code.DOMAIN_KEYS_MISMATCH,
-            where=where,
-            param=domain,
-            expected=sorted(exp),
-            got=sorted(got),
             hint=hint,
             docs_url=docs_url,
         )
@@ -476,5 +365,3 @@ class _Constructors:
             got=old,
             hint=f"Replace {old}= with {new}=." + (f" {note}" if note else ""),
         )
-
-    # ---- method-specific ---------------------------------------------------

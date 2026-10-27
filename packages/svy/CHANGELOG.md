@@ -31,6 +31,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Removed
 
+- **Error constructors svy never raised.** `ModelError.convergence_failed`, `insufficient_dof` and `singular_matrix`; `LabelError.ambiguous_pick`, `inconsistent_missing_kinds`, `invalid_locale`, `invalid_missing_codes` and `invalid_scheme_id`; `IoError.engine_contract_violation` and `unsupported_ext`; and the shared `domain_keys_mismatch`, `invalid_mapping_keys`, `invalid_n`, `mutate_cycle` and `sample_too_large`, with their codes.
 - **BREAKING: `MethodError` and `DimensionError`.** They named kinds of problem; the area class and its builtin replace them, and their constructors (`invalid_choice`, `missing_columns`, ...) are on every area class, so `WeightingError.invalid_choice(...)` is a `WeightingError` and a `ValueError`. `svy.MethodError` and `svy.errors.MethodError` (and `DimensionError`) raise `UNKNOWN_NAME` saying so. `UsageError` and `WeightingError` are no longer a `TypeError` and a `MethodError` themselves; their kinds are.
 - **BREAKING: `Severity.ERROR` and `WarningStore.raise_if_errors()`.** A finding is `INFO` (recorded) or `WARNING` (recorded and raised); what must stop the call raises an error. `escalate()` now defaults to `min_level=Severity.WARNING`. `trim()` on negative weights raises without first recording a `NEGATIVE_WEIGHT` finding.
 

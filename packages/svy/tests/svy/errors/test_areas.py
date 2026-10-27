@@ -202,20 +202,8 @@ SHARED = {
         "INVALID_RANGE",
     ),
     "invalid_type": (dict(where="w", param="p", got=1, expected="str"), TypeError, "INVALID_TYPE"),
-    "invalid_mapping_keys": (
-        dict(where="w", param="p", missing=["a"]),
-        ValueError,
-        "INVALID_MAPPING_KEYS",
-    ),
     "missing_columns": (dict(where="w", param="p", missing=["z"]), KeyError, "MISSING_COLUMNS"),
-    "invalid_n": (dict(where="w", got=-1), ValueError, "INVALID_N"),
-    "sample_too_large": (dict(where="w", n=5, available_rows=3), ValueError, "SAMPLE_TOO_LARGE"),
     "empty_estimates": (dict(where="w"), ValueError, "EMPTY_ESTIMATES"),
-    "domain_keys_mismatch": (
-        dict(where="w", domain="d", expected_keys=[1], got_keys=[2]),
-        ValueError,
-        "DOMAIN_KEYS_MISMATCH",
-    ),
     "group_levels_mismatch": (
         dict(where="w", var="v", expected_levels=[1, 2], got_levels=[3]),
         ValueError,
@@ -240,7 +228,6 @@ SHARED = {
         ValueError,
         "REP_WGTS_RENAME_COLLISION",
     ),
-    "mutate_cycle": (dict(cycle_list="a, b", where="w"), ValueError, "MUTATE_CYCLE"),
     "param_renamed": (dict(where="w", method="m", old="a", new="b"), TypeError, "PARAM_RENAMED"),
 }
 
@@ -276,11 +263,6 @@ OWN = [
         lambda: DatasetError.bundled_unavailable(where="w", slug="s", reason="r"),
         DatasetError,
         FileNotFoundError,
-    ),
-    (
-        lambda: ModelError.convergence_failed(where="w", iterations=5, tol=1e-6),
-        ModelError,
-        RuntimeError,
     ),
     (lambda: ModelError.not_fitted(where="w"), ModelError, ValueError),
     (

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Iterable, Optional
+from typing import ClassVar, Optional
 
 from ._base import SvyError, SvyWarning
 from ._codes import Code
@@ -59,23 +59,6 @@ class IoError(SvyError):
         )
 
     @classmethod
-    def unsupported_ext(
-        cls,
-        *,
-        where: Optional[str],
-        path: str | Path,
-        expected_exts: Iterable[str],
-    ) -> "IoError":
-        exts = tuple(sorted(set(e.lower() for e in expected_exts)))
-        return cls.ValueError(
-            title="Unsupported file extension",
-            detail=f"Path {Path(path)} does not match expected extensions {exts}.",
-            code=Code.UNSUPPORTED_EXTENSION,
-            where=where,
-            extra={"path": str(path), "expected_exts": exts},
-        )
-
-    @classmethod
     def parse_failed(
         cls,
         *,
@@ -93,16 +76,6 @@ class IoError(SvyError):
             where=where,
             hint=hint,
             extra={"path": str(path), "format": fmt, "engine_msg": engine_msg},
-        )
-
-    @classmethod
-    def engine_contract_violation(cls, *, where: Optional[str], got: Any) -> "IoError":
-        return cls.RuntimeError(
-            title="Engine contract violation",
-            detail="Adapter returned an unexpected shape or payload.",
-            code=Code.ENGINE_CONTRACT_VIOLATION,
-            where=where,
-            got=type(got).__name__,
         )
 
     @classmethod

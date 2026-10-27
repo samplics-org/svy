@@ -61,66 +61,6 @@ class ModelError(SvyError):
             hint=hint or "Check your target variable or filter invalid rows.",
         )
 
-    # ---- Linear Algebra / Optimization Errors -------------------------------
-
-    @classmethod
-    def singular_matrix(
-        cls,
-        *,
-        where: Optional[str],
-        rank: int,
-        dim: int,
-        hint: Optional[str] = "Check for perfect multicollinearity among predictors.",
-    ) -> "ModelError":
-        return cls.ValueError(
-            title="Singular design matrix",
-            detail="The design matrix is singular (not invertible); parameters cannot be estimated uniquely.",
-            code=Code.SINGULAR_MATRIX,
-            where=where,
-            expected=f"full rank ({dim})",
-            got=f"rank {rank}",
-            hint=hint,
-        )
-
-    @classmethod
-    def convergence_failed(
-        cls,
-        *,
-        where: Optional[str],
-        iterations: int,
-        tol: float,
-        last_diff: float | None = None,
-        hint: Optional[str] = "Increase max_iter or check for data issues.",
-    ) -> "ModelError":
-        return cls.RuntimeError(
-            title="Convergence failed",
-            detail=f"Optimization did not converge after {iterations} iterations.",
-            code=Code.CONVERGENCE_FAILED,
-            where=where,
-            param="max_iter",
-            extra={"tolerance": tol, "last_diff": last_diff},
-            hint=hint,
-        )
-
-    @classmethod
-    def insufficient_dof(
-        cls,
-        *,
-        where: Optional[str],
-        n_obs: int,
-        n_params: int,
-        hint: Optional[str] = "Reduce the number of predictors or increase sample size.",
-    ) -> "ModelError":
-        return cls.ValueError(
-            title="Insufficient degrees of freedom",
-            detail=f"Number of observations ({n_obs}) is too small for the number of parameters ({n_params}).",
-            code=Code.INSUFFICIENT_DOF,
-            where=where,
-            expected=f"n > {n_params}",
-            got=n_obs,
-            hint=hint,
-        )
-
 
 @dataclass(eq=False)
 class ModelWarning(SvyWarning):

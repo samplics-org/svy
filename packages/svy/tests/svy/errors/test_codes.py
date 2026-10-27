@@ -138,7 +138,7 @@ def test_shared_codes_are_raised_by_any_area(entries):
             assert any(r.startswith("<Area>Error.") for r in e.raised_as), e.code
 
 
-@pytest.mark.parametrize("old", ["MAX_ITER_REACHED", "SINGLETON_PSU"])
+@pytest.mark.parametrize("old", ["MAX_ITER_REACHED", "CONVERGENCE_FAILED", "SINGLETON_PSU"])
 def test_split_or_unused_codes_are_gone(old):
     assert old not in Code.__members__
 
