@@ -42,7 +42,10 @@ def data() -> pl.DataFrame:
             "fi": rng.choice([1.0, 2.0], N),
             "d": pl.Series([dt.date(2020, 1, 1), dt.date(2021, 1, 1)])[rng.integers(0, 2, N)],
         }
-    ).with_columns(pl.col("g").cast(pl.Categorical).alias("gc"))
+    ).with_columns(
+        pl.col("g").cast(pl.Categorical).alias("gc"),
+        pl.col("g").cast(pl.Enum(["b", "a"])).alias("ge"),
+    )
 
 
 @pytest.fixture(scope="module")
@@ -120,31 +123,67 @@ class TestByLevels:
         assert {p.by_level for p in r.estimates} == {(1, True), (2, True), (3, True)}
 
 
+REP = "replication"  # every estimator defaults to Taylor, even with replicate weights
+
+
 class TestReplicationByLevels:
     @pytest.mark.parametrize("by", ["zone", "b", "f"])
     def test_mean(self, rep_sample, data, by):
-        assert _levels(_by(rep_sample.estimation.mean("y", by=by))) == _source(data, by)
+        assert _levels(_by(rep_sample.estimation.mean("y", by=by, method=REP))) == _source(
+            data, by
+        )
 
     def test_multiple_by(self, rep_sample, data):
-        r = rep_sample.estimation.total("y", by=["b", "zone"])
+        r = rep_sample.estimation.total("y", by=["b", "zone"], method=REP)
         assert {p.by_level for p in r.estimates} == set(data.select("b", "zone").unique().rows())
 
     def test_ratio(self, rep_sample, data):
-        assert _levels(_by(rep_sample.estimation.ratio("y", "x", by="b"))) == _source(data, "b")
+        assert _levels(_by(rep_sample.estimation.ratio("y", "x", by="b", method=REP))) == _source(
+            data, "b"
+        )
 
     def test_prop(self, rep_sample, data):
-        r = rep_sample.estimation.prop("b", by="zone")
+        r = rep_sample.estimation.prop("b", by="zone", method=REP)
         assert _levels(_by(r)) == _source(data, "zone")
         assert _levels(p.y_level for p in r.estimates) == _source(data, "b")
 
     def test_median_and_quantile(self, rep_sample, data):
-        assert _levels(_by(rep_sample.estimation.median("y", by="zone"))) == _source(data, "zone")
-        for r in rep_sample.estimation.quantile("y", p=[0.25], by="zone"):
+        assert _levels(_by(rep_sample.estimation.median("y", by="zone", method=REP))) == _source(
+            data, "zone"
+        )
+        for r in rep_sample.estimation.quantile("y", p=[0.25], by="zone", method=REP):
             assert _levels(_by(r)) == _source(data, "zone")
 
     def test_as_factor(self, rep_sample):
-        r = rep_sample.estimation.mean("zone", as_factor=True)
+        r = rep_sample.estimation.mean("zone", as_factor=True, method=REP)
         assert [p.y_level for p in r.estimates] == [1, 2, 3]
+
+
+class TestPropLevelsAcrossMethods:
+    @pytest.mark.parametrize(
+        "y, dtype",
+        [("b", pl.Boolean), ("zone", pl.Int64), ("fi", pl.Float64), ("g", pl.String)],
+    )
+    @pytest.mark.parametrize("by", [None, "b", "ge"])
+    def test_level_dtype_is_the_source(self, rep_sample, data, y, dtype, by):
+        if by == y:
+            pytest.skip("y is its own domain")
+        for method in ("taylor", "replication"):
+            df = rep_sample.estimation.prop(y, by=by, method=method).to_polars()
+            assert df.schema[y] == dtype
+            assert set(df[y].to_list()) == set(data[y].unique().to_list())
+
+    @pytest.mark.parametrize("y", ["b", "zone", "fi", "g", "gc", "ge"])
+    @pytest.mark.parametrize("by", [None, "b", "ge"])
+    def test_same_frame_under_both_methods(self, rep_sample, y, by):
+        if by == y:
+            pytest.skip("y is its own domain")
+        taylor = rep_sample.estimation.prop(y, by=by, method="taylor").to_polars()
+        rep = rep_sample.estimation.prop(y, by=by, method="replication").to_polars()
+        assert taylor.schema == rep.schema
+        keys = [c for c in (by, y) if c is not None]
+        assert taylor.select(keys).equals(rep.select(keys))
+        np.testing.assert_allclose(rep["est"].to_numpy(), taylor["est"].to_numpy(), rtol=1e-12)
 
 
 class TestYLevels:
