@@ -242,6 +242,7 @@ class _Constructors:
         max_: float | int | None = None,
         hint: str | None = None,
         docs_url: str | None = None,
+        detail: str | None = None,
     ) -> Self:
         exp = (
             f"{min_} < {param} < {max_}"
@@ -250,7 +251,7 @@ class _Constructors:
         )
         return cls.ValueError(
             title="Invalid numeric range",
-            detail=f"Parameter '{param}' is out of range.",
+            detail=detail or f"Parameter '{param}' is out of range.",
             code=Code.INVALID_RANGE,
             where=where,
             param=param,
@@ -270,10 +271,11 @@ class _Constructors:
         expected: str,
         hint: str | None = None,
         docs_url: str | None = None,
+        detail: str | None = None,
     ) -> Self:
         return cls.TypeError(
             title="Invalid type",
-            detail=f"Parameter '{param}' has the wrong type.",
+            detail=detail or f"Parameter '{param}' has the wrong type.",
             code=Code.INVALID_TYPE,
             where=where,
             param=param,
@@ -281,6 +283,26 @@ class _Constructors:
             got=type(got).__name__ if got is not None else None,
             hint=hint,
             docs_url=docs_url,
+        )
+
+    @classmethod
+    def invalid_value(
+        cls,
+        *,
+        where: str | None,
+        param: str,
+        got: Any,
+        detail: str,
+        hint: str | None = None,
+    ) -> Self:
+        return cls.ValueError(
+            title="Invalid value",
+            detail=detail,
+            code=Code.INVALID_VALUE,
+            where=where,
+            param=param,
+            got=got,
+            hint=hint,
         )
 
     @classmethod

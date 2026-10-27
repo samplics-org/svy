@@ -19,6 +19,8 @@ import numpy as np
 
 from numpy.typing import NDArray
 
+from svy.errors import WeightingError
+
 
 # A "Feature" can be a simple string (column name) or a Term object
 Feature = Union[str, "Term"]
@@ -116,23 +118,39 @@ class Threshold(Term):
 
     def __post_init__(self) -> None:
         if self.stat not in _SUPPORTED_STATS:
-            raise ValueError(
-                f"Unsupported stat {self.stat!r}. Must be one of: {sorted(_SUPPORTED_STATS)}"
+            raise WeightingError.threshold_invalid(
+                where="svy.Threshold",
+                got=self.stat,
+                reason=f"Unsupported stat {self.stat!r}. Must be one of: {sorted(_SUPPORTED_STATS)}",
             )
         if self.k == 0:
-            raise ValueError(f"k must be nonzero, got {self.k}")
+            raise WeightingError.threshold_invalid(
+                where="svy.Threshold", got=self.stat, reason=f"k must be nonzero, got {self.k}"
+            )
         if self.stat == "quantile":
             if self.p is None:
-                raise ValueError("A quantile threshold needs p: use Threshold.quantile(p).")
+                raise WeightingError.threshold_invalid(
+                    where="svy.Threshold",
+                    got=self.stat,
+                    reason="A quantile threshold needs p: use Threshold.quantile(p).",
+                )
             if not (0 < self.p <= 1):
                 hint = (
                     f" For the {self.p:g}th percentile use {self.p / 100:g}."
                     if 1 < self.p <= 100
                     else ""
                 )
-                raise ValueError(f"Quantile p must be in (0, 1], got {self.p}.{hint}")
+                raise WeightingError.threshold_invalid(
+                    where="svy.Threshold",
+                    got=self.stat,
+                    reason=f"Quantile p must be in (0, 1], got {self.p}.{hint}",
+                )
         elif self.p is not None:
-            raise ValueError(f"p applies only to a quantile threshold, not {self.stat!r}.")
+            raise WeightingError.threshold_invalid(
+                where="svy.Threshold",
+                got=self.stat,
+                reason=f"p applies only to a quantile threshold, not {self.stat!r}.",
+            )
 
     @classmethod
     def quantile(cls, p: float) -> "Threshold":
@@ -143,7 +161,11 @@ class Threshold(Term):
     def absolute(cls, value: float) -> "Threshold":
         """The value itself, whatever the data. Same as passing the bare number."""
         if not value > 0:
-            raise ValueError(f"An absolute threshold must be > 0, got {value}.")
+            raise WeightingError.threshold_invalid(
+                where="svy.Threshold",
+                got=value,
+                reason=f"An absolute threshold must be > 0, got {value}.",
+            )
         return cls("absolute", float(value))
 
     def compute(self, values: FloatArr) -> float:

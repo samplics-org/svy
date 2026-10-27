@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Sequence
 import msgspec
 import polars as pl
 
+from svy.errors import DataError
+
 from .describe import (
     DescribeBoolean,
     DescribeContinuous,
@@ -59,7 +61,9 @@ def _resolve_columns(df: pl.DataFrame, columns: Sequence[str] | None) -> list[st
     names = set(df.columns)
     for c in columns:
         if c not in names:
-            raise KeyError(f"Column {c!r} not found in data.")
+            raise DataError.missing_columns(
+                where="describe", param="columns", missing=[c], available=df.columns
+            )
         out.append(c)
     return out
 
@@ -79,7 +83,9 @@ def _weight_series(df: pl.DataFrame, weight_col: str | None) -> pl.Series | None
     if weight_col is None:
         return None
     if weight_col not in df.columns:
-        raise KeyError(f"Weight column {weight_col!r} not found.")
+        raise DataError.missing_columns(
+            where="describe", param="weight", missing=[weight_col], available=df.columns
+        )
     return df.get_column(weight_col).cast(pl.Float64)
 
 

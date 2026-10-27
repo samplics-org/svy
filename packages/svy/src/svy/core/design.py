@@ -180,18 +180,42 @@ def _norm_spec(
         return None
     if isinstance(value, str):
         if value == "":
-            raise ValueError(f"'{name}' must not be an empty string when provided")
+            raise DesignError.invalid_value(
+                where="Design",
+                param=name,
+                got=value,
+                detail=f"'{name}' must not be an empty string when provided",
+            )
         return value
     if isinstance(value, (bytes, bytearray)) or not isinstance(value, Sequence):
-        raise TypeError(f"'{name}' must be str | Sequence[str] | None")
+        raise DesignError.invalid_type(
+            where="Design",
+            param=name,
+            got=value,
+            expected="str | Sequence[str] | None",
+            detail=f"'{name}' must be str | Sequence[str] | None",
+        )
     items = list(value)
     if not items:
-        raise ValueError(f"'{name}' sequence must not be empty")
+        raise DesignError.invalid_value(
+            where="Design", param=name, got=value, detail=f"'{name}' sequence must not be empty"
+        )
     for i, s in enumerate(items):
         if not isinstance(s, str):
-            raise TypeError(f"'{name}' items must be str; got {type(s).__name__} at index {i}")
+            raise DesignError.invalid_type(
+                where="Design",
+                param=name,
+                got=s,
+                expected="str",
+                detail=f"'{name}' items must be str; got {type(s).__name__} at index {i}",
+            )
         if s == "":
-            raise ValueError(f"'{name}' items must not contain empty strings")
+            raise DesignError.invalid_value(
+                where="Design",
+                param=name,
+                got=value,
+                detail=f"'{name}' items must not contain empty strings",
+            )
     return tuple(items)
 
 
@@ -203,17 +227,38 @@ def _norm_pop_size(
         return None
     if isinstance(value, PopSize):
         if not value.psu or not isinstance(value.psu, str):
-            raise ValueError("PopSize.psu must be a non-empty string")
+            raise DesignError.invalid_value(
+                where="PopSize",
+                param="psu",
+                got=value.psu,
+                detail="PopSize.psu must be a non-empty string",
+            )
         # ssu is optional: PopSize(psu=...) alone specifies a PSU-only FPC
         # (the type signature always allowed it; validation rejected it).
         if value.ssu is not None and (not value.ssu or not isinstance(value.ssu, str)):
-            raise ValueError("PopSize.ssu must be a non-empty string or None")
+            raise DesignError.invalid_value(
+                where="PopSize",
+                param="ssu",
+                got=value.ssu,
+                detail="PopSize.ssu must be a non-empty string or None",
+            )
         return value
     if isinstance(value, str):
         if not value:
-            raise ValueError("'pop_size' must not be an empty string when provided")
+            raise DesignError.invalid_value(
+                where="Design",
+                param="pop_size",
+                got=value,
+                detail="'pop_size' must not be an empty string when provided",
+            )
         return value
-    raise TypeError(f"'pop_size' must be str | PopSize | None, got {type(value).__name__}")
+    raise DesignError.invalid_type(
+        where="Design",
+        param="pop_size",
+        got=value,
+        expected="str | PopSize | None",
+        detail=f"'pop_size' must be str | PopSize | None, got {type(value).__name__}",
+    )
 
 
 # =============================================================================
@@ -314,8 +359,12 @@ def _stratum_value(value: Any) -> Any:
         value = tuple(value)
     for v in value if isinstance(value, tuple) else (value,):
         if isinstance(v, (list, tuple, dict, set)):
-            raise TypeError(
-                f"a stratum value must be a scalar or a tuple of scalars; got {value!r}"
+            raise DesignError.invalid_type(
+                where=_RULE_WHERE,
+                param="stratum",
+                got=value,
+                expected="a scalar or a tuple of scalars",
+                detail=f"a stratum value must be a scalar or a tuple of scalars; got {value!r}",
             )
         hash(v)
     return value
@@ -768,12 +817,29 @@ class Design:
         for name in ("wave", "wgt", "prob", "hit", "mos"):
             val = getattr(self, name)
             if val is not None and not isinstance(val, str):
-                raise TypeError(f"{name!r} must be str | None, got {type(val).__name__}")
+                raise DesignError.invalid_type(
+                    where="Design",
+                    param=name,
+                    got=val,
+                    expected="str | None",
+                    detail=f"{name!r} must be str | None, got {type(val).__name__}",
+                )
             if isinstance(val, str) and not val:
-                raise ValueError(f"{name!r} must not be an empty string when provided")
+                raise DesignError.invalid_value(
+                    where="Design",
+                    param=name,
+                    got=val,
+                    detail=f"{name!r} must not be an empty string when provided",
+                )
 
         if not isinstance(self.wr, bool):
-            raise TypeError(f"'wr' must be bool, got {type(self.wr).__name__}")
+            raise DesignError.invalid_type(
+                where="Design",
+                param="wr",
+                got=self.wr,
+                expected="bool",
+                detail=f"'wr' must be bool, got {type(self.wr).__name__}",
+            )
 
         given = {
             "rep_wgts": rep_wgts,
@@ -841,12 +907,24 @@ class Design:
     # -----------------------------
     def __setattr__(self, name: str, value: object) -> None:
         if getattr(self, "_frozen", False):
-            raise AttributeError("Design is frozen; use .update(...) to create a modified copy.")
+            raise DesignError.AttributeError(
+                title="Design is frozen",
+                detail="Design is frozen; use .update(...) to create a modified copy.",
+                code=Code.DESIGN_FROZEN,
+                where="Design",
+                param=name,
+            )
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name: str) -> None:
         if getattr(self, "_frozen", False):
-            raise AttributeError("Design is frozen; attributes cannot be deleted.")
+            raise DesignError.AttributeError(
+                title="Design is frozen",
+                detail="Design is frozen; attributes cannot be deleted.",
+                code=Code.DESIGN_FROZEN,
+                where="Design",
+                param=name,
+            )
         object.__delattr__(self, name)
 
     # -----------------------------
@@ -1002,8 +1080,11 @@ class Design:
         for name in ("method", "prefix", "n_reps"):
             if name not in supplied:
                 if cur is None:
-                    raise ValueError(
-                        f"When initializing RepWeights for the first time, '{name}' is mandatory."
+                    raise DesignError.invalid_value(
+                        where="Design.update_rep_weights",
+                        param=name,
+                        got=None,
+                        detail=f"When initializing RepWeights for the first time, '{name}' is mandatory.",
                     )
                 supplied[name] = getattr(cur, name)
 
@@ -1061,17 +1142,44 @@ class Design:
                 return None
             if isinstance(val, str):
                 if val == "":
-                    raise ValueError(f"'{field_name}' must not be an empty string when provided")
+                    raise DesignError.invalid_value(
+                        where="Design.update",
+                        param=field_name,
+                        got=val,
+                        detail=f"'{field_name}' must not be an empty string when provided",
+                    )
                 return val
             if not isinstance(val, Sequence) or isinstance(val, (bytes, bytearray)):
-                raise TypeError(f"'{field_name}' must be a sequence of str")
+                raise DesignError.invalid_type(
+                    where="Design.update",
+                    param=field_name,
+                    got=val,
+                    expected="str | Sequence[str] | None",
+                    detail=f"'{field_name}' must be a sequence of str",
+                )
             if len(val) == 0:
-                raise ValueError(f"'{field_name}' sequence must not be empty")
+                raise DesignError.invalid_value(
+                    where="Design.update",
+                    param=field_name,
+                    got=val,
+                    detail=f"'{field_name}' sequence must not be empty",
+                )
             for x in val:
                 if not isinstance(x, str):
-                    raise TypeError(f"'{field_name}' items must be str")
+                    raise DesignError.invalid_type(
+                        where="Design.update",
+                        param=field_name,
+                        got=x,
+                        expected="str",
+                        detail=f"'{field_name}' items must be str",
+                    )
                 if x == "":
-                    raise ValueError(f"'{field_name}' items must not be empty")
+                    raise DesignError.invalid_value(
+                        where="Design.update",
+                        param=field_name,
+                        got=val,
+                        detail=f"'{field_name}' items must not be empty",
+                    )
             return cast(tuple[str, ...], tuple(val))
 
         def _norm_pop_size_arg(
@@ -1372,9 +1480,20 @@ class Design:
         try:
             w = int(width)
         except Exception as ex:
-            raise TypeError(f"print width must be int or None; got {width!r}") from ex
+            raise DesignError.invalid_type(
+                where="Design.set_default_print_width",
+                param="width",
+                got=width,
+                expected="int or None",
+            ) from ex
         if w <= 20:
-            raise ValueError("print width must be > 20 characters.")
+            raise DesignError.invalid_range(
+                where="Design.set_default_print_width",
+                param="width",
+                got=width,
+                min_=20,
+                hint="Use more than 20 characters.",
+            )
         cls.PRINT_WIDTH = w
 
     def show(self, *, use_rich: bool = True) -> None:

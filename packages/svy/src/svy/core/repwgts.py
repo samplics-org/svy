@@ -29,7 +29,7 @@ from typing import Literal, Sequence, Union, cast, get_args
 
 import msgspec
 
-from svy.errors import DesignError
+from svy.errors import Code, DesignError
 
 
 # =============================================================================
@@ -97,7 +97,13 @@ _JK_KIND_ALIASES: dict[str, str] = {
 def normalize_jackknife_kind(kind: str) -> JackknifeKind:
     """Normalize a jackknife ``kind``. Case- and separator-insensitive."""
     if not isinstance(kind, str):
-        raise TypeError(f"'kind' must be a string, got {type(kind).__name__}.")
+        raise DesignError.invalid_type(
+            where="svy.RepWeights",
+            param="kind",
+            got=kind,
+            expected="a string",
+            detail=f"'kind' must be a string, got {type(kind).__name__}.",
+        )
     resolved = _JK_KIND_ALIASES.get(kind.strip().lower())
     if resolved is None:
         raise DesignError.invalid_choice(
@@ -154,14 +160,21 @@ def _normalize_scale(value: float | Sequence[float], n_reps: int, param: str) ->
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return (float(value),) * n_reps
     if isinstance(value, (str, bytes, bytearray)) or not isinstance(value, Sequence):
-        raise TypeError(
-            f"'{param}' must be a float or a sequence of floats, got {type(value).__name__}."
+        raise DesignError.invalid_type(
+            where="svy.RepWeights",
+            param=param,
+            got=value,
+            expected="a float or a sequence of floats",
+            detail=f"'{param}' must be a float or a sequence of floats, got {type(value).__name__}.",
         )
     values = tuple(float(v) for v in value)
     if len(values) != n_reps:
-        raise ValueError(
-            f"'{param}' has {len(values)} entries but n_reps is {n_reps}. "
-            f"Pass a scalar to use the same coefficient for every replicate."
+        raise DesignError.invalid_value(
+            where="svy.RepWeights",
+            param=param,
+            got=len(values),
+            detail=f"'{param}' has {len(values)} entries but n_reps is {n_reps}.",
+            hint="Pass a scalar to use the same coefficient for every replicate.",
         )
     return values
 
@@ -179,22 +192,47 @@ def _normalize_unit(value: str | Sequence[str] | None, param: str) -> str | tupl
         return None
     if isinstance(value, str):
         if not value.strip():
-            raise ValueError(f"RepWeights {param!r} must not be an empty column name.")
+            raise DesignError.invalid_value(
+                where="svy.RepWeights",
+                param=param,
+                got=value,
+                detail=f"RepWeights {param!r} must not be an empty column name.",
+            )
         return value
     if isinstance(value, (bytes, bytearray)) or not isinstance(value, Sequence):
-        raise TypeError(
-            f"RepWeights {param!r} must be str | Sequence[str] | None, got {type(value).__name__}."
+        raise DesignError.invalid_type(
+            where="svy.RepWeights",
+            param=param,
+            got=value,
+            expected="str | Sequence[str] | None",
+            detail=f"RepWeights {param!r} must be str | Sequence[str] | None, "
+            f"got {type(value).__name__}.",
         )
     items = tuple(value)
     if not items:
-        raise ValueError(f"RepWeights {param!r} sequence must not be empty.")
+        raise DesignError.invalid_value(
+            where="svy.RepWeights",
+            param=param,
+            got=value,
+            detail=f"RepWeights {param!r} sequence must not be empty.",
+        )
     for i, item in enumerate(items):
         if not isinstance(item, str):
-            raise TypeError(
-                f"RepWeights {param!r} items must be str; got {type(item).__name__} at index {i}."
+            raise DesignError.invalid_type(
+                where="svy.RepWeights",
+                param=param,
+                got=item,
+                expected="str",
+                detail=f"RepWeights {param!r} items must be str; got {type(item).__name__} "
+                f"at index {i}.",
             )
         if not item.strip():
-            raise ValueError(f"RepWeights {param!r} items must not be empty.")
+            raise DesignError.invalid_value(
+                where="svy.RepWeights",
+                param=param,
+                got=value,
+                detail=f"RepWeights {param!r} items must not be empty.",
+            )
     return items
 
 
@@ -273,20 +311,52 @@ class _RepWgtsBase(msgspec.Struct, frozen=True, kw_only=True):
     wgt: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.prefix or not self.prefix.strip():
-            raise ValueError("RepWeights 'prefix' cannot be empty or whitespace.")
+        if not isinstance(self.prefix, str) or not self.prefix.strip():
+            raise DesignError.invalid_value(
+                where="svy.RepWeights",
+                param="prefix",
+                got=self.prefix,
+                detail="RepWeights 'prefix' cannot be empty or whitespace.",
+            )
         if self.wgt is not None and (not isinstance(self.wgt, str) or not self.wgt.strip()):
-            raise ValueError("RepWeights 'wgt' must be a non-empty column name or None.")
+            raise DesignError.invalid_value(
+                where="svy.RepWeights",
+                param="wgt",
+                got=self.wgt,
+                detail="RepWeights 'wgt' must be a non-empty column name or None.",
+            )
+        if isinstance(self.n_reps, bool) or not isinstance(self.n_reps, int):
+            raise DesignError.invalid_type(
+                where="svy.RepWeights", param="n_reps", got=self.n_reps, expected="an integer >= 2"
+            )
         if self.n_reps < 2:
-            raise ValueError(f"n_reps must be >= 2. Got {self.n_reps}.")
+            raise DesignError.invalid_range(
+                where="svy.RepWeights",
+                param="n_reps",
+                got=self.n_reps,
+                min_=2,
+                detail=f"n_reps must be >= 2. Got {self.n_reps}.",
+            )
         for _unit in ("stratum", "psu"):
             msgspec.structs.force_setattr(
                 self, _unit, _normalize_unit(getattr(self, _unit), _unit)
             )
         if self.df is not None and self.df <= 0:
-            raise ValueError(f"df must be > 0. Got {self.df}.")
+            raise DesignError.invalid_range(
+                where="svy.RepWeights",
+                param="df",
+                got=self.df,
+                min_=0,
+                detail=f"df must be > 0. Got {self.df}.",
+            )
         if self.padding is not None and self.padding < 0:
-            raise ValueError(f"padding must be >= 0. Got {self.padding}.")
+            raise DesignError.invalid_range(
+                where="svy.RepWeights",
+                param="padding",
+                got=self.padding,
+                min_=0,
+                detail=f"padding must be >= 0. Got {self.padding}.",
+            )
         if self.scale is not None:
             msgspec.structs.force_setattr(
                 self, "scale", _normalize_scale(self.scale, self.n_reps, "scale")
@@ -589,7 +659,13 @@ class BrrWgts(_RepWgtsBase, frozen=True, kw_only=True, tag="BRR", tag_field="met
     def __post_init__(self) -> None:
         super().__post_init__()
         if self.fay_coef < 0:
-            raise ValueError(f"fay_coef cannot be negative. Got {self.fay_coef}.")
+            raise DesignError.invalid_range(
+                where="svy.RepWeights",
+                param="fay_coef",
+                got=self.fay_coef,
+                min_=0,
+                detail=f"fay_coef cannot be negative. Got {self.fay_coef}.",
+            )
 
     def _default_coefficients(self) -> list[float]:
         coef = 1.0 / (self.n_reps * (1.0 - self.fay_coef) ** 2)
@@ -642,9 +718,12 @@ def resolve_rep_variant(
     "jackknife"/"jk"/"jkn", "sdr".
     """
     if not isinstance(method, str):
-        raise TypeError(
-            f"'method' must be a string, got {type(method).__name__}. "
-            f"Use 'brr', 'bootstrap', 'jackknife', or 'sdr'."
+        raise DesignError.invalid_type(
+            where="svy.RepWeights",
+            param="method",
+            got=method,
+            expected="'brr', 'bootstrap', 'jackknife' or 'sdr'",
+            detail=f"'method' must be a string, got {type(method).__name__}.",
         )
     normalized = method.strip().lower()
     variant = _REP_METHOD_ALIASES.get(normalized)
@@ -655,14 +734,27 @@ def resolve_rep_variant(
     # a different mistake from a typo, and gets a different message. Compared
     # case-insensitively so the string and the enum member behave alike.
     if normalized in _NON_REPLICATE_METHODS:
-        raise ValueError(
-            f"Method '{method}' is not a valid replication method "
-            f"(expected one of: {list(_REPLICATE_METHOD_NAMES)}). "
-            f"Taylor linearization carries no replicate weights: leave "
-            f"Design.rep_wgts as None and pass method='taylor' at estimation time."
+        raise DesignError.ValueError(
+            title="Not a replication method",
+            detail=f"Method '{method}' is not a valid replication method "
+            f"(expected one of: {list(_REPLICATE_METHOD_NAMES)}).",
+            code=Code.INVALID_CHOICE,
+            where="svy.RepWeights",
+            param="method",
+            expected=list(_REPLICATE_METHOD_NAMES),
+            got=method,
+            hint="Taylor linearization carries no replicate weights: leave "
+            "Design.rep_wgts as None and pass method='taylor' at estimation time.",
         )
-    raise ValueError(
-        f"Unknown replication method {method!r}. Use 'brr', 'bootstrap', 'jackknife', or 'sdr'."
+    raise DesignError.ValueError(
+        title="Unknown replication method",
+        detail=f"Unknown replication method {method!r}.",
+        code=Code.INVALID_CHOICE,
+        where="svy.RepWeights",
+        param="method",
+        expected=list(_REPLICATE_METHOD_NAMES),
+        got=method,
+        hint="Use 'brr', 'bootstrap', 'jackknife', or 'sdr'.",
     )
 
 
@@ -673,7 +765,13 @@ def normalize_bootstrap_kind(kind: str) -> BootstrapKind:
     matching :func:`resolve_rep_variant`.
     """
     if not isinstance(kind, str):
-        raise TypeError(f"'kind' must be a string, got {type(kind).__name__}.")
+        raise DesignError.invalid_type(
+            where="svy.RepWeights",
+            param="kind",
+            got=kind,
+            expected="a string",
+            detail=f"'kind' must be a string, got {type(kind).__name__}.",
+        )
     resolved = _BS_KIND_ALIASES.get(kind.strip().lower())
     if resolved is None:
         raise DesignError.invalid_choice(
