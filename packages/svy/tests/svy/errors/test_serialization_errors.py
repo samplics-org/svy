@@ -1,5 +1,5 @@
-from svy.errors.base_errors import SvyError
-from svy.errors.serialization_errors import SerializationError
+from svy.errors._base import SvyError
+from svy.errors._serialization import SerializationError
 
 
 def test_serialization_error_defaults_code():
@@ -33,8 +33,8 @@ def test_unsupported_type_ctor_builds_clear_error():
 
     # dict
     d = err.to_dict()
-    assert d["error"]["code"] == "UNSUPPORTED_RESULT_TYPE"
-    assert d["error"]["got"] == "list"
+    assert d["code"] == "UNSUPPORTED_RESULT_TYPE"
+    assert d["got"] == "list"
 
     # repr includes class name and key fields
     r = repr(err)

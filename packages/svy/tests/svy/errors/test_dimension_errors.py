@@ -2,8 +2,8 @@ import io
 
 import pytest
 
-from svy.errors.base_errors import SvyError
-from svy.errors.dimension_errors import DimensionError
+from svy.errors._base import SvyError
+from svy.errors._dimension import DimensionError
 
 
 def test_dimension_error_defaults_code():
@@ -27,7 +27,7 @@ def test_invalid_n_ctor():
 
     # to_dict and markdown
     d = err.to_dict()
-    assert d["error"]["param"] == "n"
+    assert d["param"] == "n"
     md = err.markdown()
     assert "`[INVALID_N]`" in md
 

@@ -229,7 +229,7 @@ def _combine_stages(
             f"sample."
         )
         if found is None:
-            from svy.core.warnings import warn_no_sample
+            from svy.errors._findings import warn_no_sample
 
             warn_no_sample(detail)
         else:

@@ -17,7 +17,7 @@ import pytest
 
 from svy.datasets import api
 from svy.datasets.types import Dataset
-from svy.errors.dataset_errors import DatasetError
+from svy.errors._dataset import DatasetError
 
 
 REGISTRY_PATH = "/api/data/examples/registry"
@@ -226,7 +226,7 @@ class TestRegistrySlugValidation:
 
     def test_describe_traversal_slug_not_found(self, routes, make_backend_entry):
         from svy.datasets import api
-        from svy.errors.dataset_errors import DatasetError
+        from svy.errors._dataset import DatasetError
 
         routes.add_json(
             "/api/data/examples/registry",

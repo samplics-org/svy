@@ -25,7 +25,7 @@ import numpy as np
 import polars as pl
 
 from svy.errors import MethodError
-from svy.errors.api_errors import guided_getattr
+from svy.errors._api import guided_getattr
 from svy.ui.printing import (
     make_panel,
     render_plain_table,

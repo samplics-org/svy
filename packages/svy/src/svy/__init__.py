@@ -87,7 +87,7 @@ from svy.errors import (
     ModelError,
     SerializationError,
     SvyError,
-    SvyUserWarning,
+    SvyWarning,
 )
 from svy.estimation import (
     Contrast,
@@ -256,7 +256,7 @@ __all__ = [
     "TrimResult",
     # --- Errors ---
     "SvyError",
-    "SvyUserWarning",
+    "SvyWarning",
     "DatasetError",
     "DimensionError",
     "LabelError",
@@ -395,6 +395,6 @@ def __getattr__(name: str):
         return module
     if name.startswith("_"):
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    from svy.errors.api_errors import UnknownNameError
+    from svy.errors._api import UnknownNameError
 
     raise UnknownNameError.unknown(owner="svy", label="svy", name=name, available=__all__)

@@ -23,8 +23,8 @@ import polars as pl
 
 from svy.core.design import WgtAdjustment
 from svy.core.types import DomainScalarMap, Number
-from svy.core.warnings import check_on_finding, finding_level
 from svy.errors import WeightingError
+from svy.errors._findings import check_on_finding, finding_level
 from svy.weighting._engine import (
     CellSpec,
     build_cells,

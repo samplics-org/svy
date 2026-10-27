@@ -32,7 +32,7 @@ import pytest
 import svy
 
 from svy.core.sample import Design, RepWeights, Sample
-from svy.errors.model_errors import ModelError
+from svy.errors._model import ModelError
 
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"

@@ -5,8 +5,8 @@ import pytest
 from svy.core.design import Design
 from svy.core.expr import col, lit, when
 from svy.core.sample import Sample
-from svy.errors.dimension_errors import DimensionError
-from svy.errors.method_errors import MethodError
+from svy.errors._dimension import DimensionError
+from svy.errors._method import MethodError
 
 
 # ---------- fixtures ----------

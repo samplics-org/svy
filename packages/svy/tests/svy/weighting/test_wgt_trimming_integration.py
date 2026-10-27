@@ -16,7 +16,7 @@ import pytest
 
 from numpy.testing import assert_allclose
 
-from svy import SvyUserWarning
+from svy import SvyWarning
 from svy.core.sample import Design, Sample
 from svy.weighting.types import TrimConfig
 
@@ -117,7 +117,7 @@ class TestPostStratifyTrimming:
     def test_trim_ps_strict_false_stores_partial(self, skewed_ps_sample):
         """strict=False stores partial result even without convergence."""
         sample = Sample(data=skewed_ps_sample, design=Design(wgt="weight"))
-        with pytest.warns(SvyUserWarning, match=r"\[TRIM_INFEASIBLE\]"):
+        with pytest.warns(SvyWarning, match=r"\[TRIM_INFEASIBLE\]"):
             out = sample.weighting.poststratify(
                 controls={"A": 50.0, "B": 50.0},
                 cells="strat",
@@ -156,7 +156,7 @@ class TestPostStratifyTrimming:
 
 class TestCalibrateTrimming:
     # The trim-calibrate cycle stops unconverged (on_nonconvergence="warn"); not what is checked.
-    @pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyUserWarning")
+    @pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyWarning")
     def test_trim_calib_produces_calib_wgt(self, skewed_calib_sample):
         """calibrate(trimming=...) still produces calib_wgt column."""
         sample = Sample(data=skewed_calib_sample, design=Design(wgt="weight"))
@@ -183,7 +183,7 @@ class TestCalibrateTrimming:
         )
 
     # The trim-calibrate cycle stops unconverged (on_nonconvergence="warn"); not what is checked.
-    @pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyUserWarning")
+    @pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyWarning")
     def test_trim_calib_design_updated(self, skewed_calib_sample):
         """After trim, design.wgt points to the calibrated weight column."""
         target = float((skewed_calib_sample["x"] * skewed_calib_sample["weight"]).sum())
@@ -196,7 +196,7 @@ class TestCalibrateTrimming:
         assert out.design.wgt == "calib_wgt"
 
     # The trim-calibrate cycle stops unconverged (on_nonconvergence="warn"); not what is checked.
-    @pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyUserWarning")
+    @pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyWarning")
     def test_trim_calib_rep_weights_adjusted(self, skewed_calib_sample):
         """Replicate weights are calibrated when present."""
         df = skewed_calib_sample.with_columns(

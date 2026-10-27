@@ -39,16 +39,14 @@ from svy.core.types import (
     WhereArg,
     _MissingType,
 )
-from svy.core.warnings import (
+from svy.errors import DimensionError, MethodError, SvyError
+from svy.errors._findings import (
     Severity,
-    SvyUserWarning,
     SvyWarning,
     WarnCode,
     WarningStore,
     findings_to,
-    warning_message,
 )
-from svy.errors import DimensionError, MethodError, SvyError
 from svy.metadata import MetadataStore
 from svy.utils.helpers import _colspec_to_list, _normalize_columns_arg
 from svy.utils.random_state import advance_generator, seed_from_random_state
@@ -140,7 +138,7 @@ class Sample:
         if isinstance(data, pl.LazyFrame):
             data = data.collect()
         elif not isinstance(data, pl.DataFrame):
-            from svy.errors.api_errors import UsageError
+            from svy.errors._api import UsageError
 
             raise UsageError.not_polars(where="svy.Sample", got=data)
         local_design = Design() if design is None else copy.deepcopy(design)
@@ -1562,16 +1560,16 @@ class Sample:
     def __getattr__(self, name: str) -> Any:
         # Reached only for names that are not attributes.
         if name == "singleton":
-            from svy.errors.singleton_errors import SingletonAPIRemoved
+            from svy.errors._singleton import SingletonAPIRemoved
 
             raise SingletonAPIRemoved.accessor()
         if name in _REMOVED_LABEL_API:
-            from svy.errors.label_errors import LabelAPIRemoved
+            from svy.errors._label import LabelAPIRemoved
 
             raise LabelAPIRemoved.replaced(where=f"Sample.{name}", use=_REMOVED_LABEL_API[name])
         if name.startswith("_"):
             raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
-        from svy.errors.api_errors import UnknownNameError, public_names
+        from svy.errors._api import UnknownNameError, public_names
 
         raise UnknownNameError.unknown(
             owner="Sample", label="sample", name=name, available=public_names(type(self))
@@ -2574,9 +2572,5 @@ class Sample:
         if self._warnings.add(w) and level >= Severity.WARNING:
             from svy.core.design import _user_stacklevel
 
-            warnings.warn(
-                warning_message(code, title, detail),
-                SvyUserWarning,
-                stacklevel=_user_stacklevel(),
-            )
+            warnings.warn(w, stacklevel=_user_stacklevel())
         return w

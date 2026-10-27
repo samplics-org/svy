@@ -51,7 +51,7 @@ def test_use_weight_value_labels_are_isolated(base_sample):
 def test_use_weight_warnings_are_isolated(base_sample):
     derived = base_sample.use_weight("w2")
     n_before = len(base_sample.warnings)
-    with pytest.warns(svy.SvyUserWarning, match=r"\[TEST\]"):
+    with pytest.warns(svy.SvyWarning, match=r"\[TEST\]"):
         derived.warn(
             code="TEST",
             title="test",

@@ -1,10 +1,10 @@
-# src/svy/errors/dataset_errors.py
+# src/svy/errors/_dataset.py
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional
 
-from .base_errors import SvyError
+from ._base import SvyError
 
 
 @dataclass(eq=False)

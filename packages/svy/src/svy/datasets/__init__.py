@@ -43,18 +43,18 @@ DatasetError                 -- all dataset/catalog/integrity failures;
 The online catalog needs the ``remote`` extra (``pip install "svy[remote]"``).
 Without it, the bundled subsets work and svy makes no network calls.
 
-``DatasetError`` lives in ``svy.errors.dataset_errors`` alongside the rest
+``DatasetError`` lives in ``svy.errors._dataset`` alongside the rest
 of the error taxonomy and inherits from ``SvyError``.
 """
 
 from __future__ import annotations
 
-from svy.core.warnings import warn_no_sample
 from svy.datasets import _bundled, api
 from svy.datasets._cache import clear as _clear_cache
 from svy.datasets.base import Source, _offline_env, load
 from svy.datasets.types import Dataset, DatasetCatalog
-from svy.errors.dataset_errors import DatasetError
+from svy.errors._dataset import DatasetError
+from svy.errors._findings import warn_no_sample
 
 
 _CATALOG_UNREACHABLE = {"CATALOG_UNREACHABLE", "CATALOG_BAD_STATUS"}

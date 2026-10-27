@@ -1,6 +1,6 @@
 # tests/test_base_errors.py
 
-from svy.errors.base_errors import SvyError
+from svy.errors._base import SvyError
 
 
 def _make_error(**kw) -> SvyError:
@@ -152,11 +152,10 @@ def test_html_is_escaped_and_contains_core_fields():
 def test_to_dict_payload_and_truncation():
     long_got = "y" * 300
     err = _make_error(got=long_got, extra={"a": 1})
-    d = err.to_dict()
-    assert set(d.keys()) == {"error"}
-    e = d["error"]
-    # required fields present
-    for k in [
+    e = err.to_dict()
+    assert set(e) == {
+        "type",
+        "level",
         "code",
         "title",
         "detail",
@@ -167,8 +166,8 @@ def test_to_dict_payload_and_truncation():
         "hint",
         "docs_url",
         "extra",
-    ]:
-        assert k in e
+    }
+    assert e["level"] == "ERROR"
     # truncation applied to 'got'
     assert e["got"].endswith("…")
     assert e["extra"] == {"a": 1}
@@ -176,8 +175,7 @@ def test_to_dict_payload_and_truncation():
 
 def test_to_dict_handles_none_fields_cleanly():
     err = SvyError(title="X", detail="Y")
-    d = err.to_dict()
-    e = d["error"]
+    e = err.to_dict()
     assert e["code"] == "SVY_ERROR"
     assert e["where"] is None
     assert e["param"] is None
@@ -187,13 +185,13 @@ def test_to_dict_handles_none_fields_cleanly():
 
 def test_to_dict_truncates_non_none_got():
     err = SvyError(title="X", detail="Y", got="z" * 300)
-    got_out = err.to_dict()["error"]["got"]
+    got_out = err.to_dict()["got"]
     assert got_out.endswith("…")
     assert len(got_out) < 300
 
 
 def test_to_dict_keeps_the_error_class():
-    from svy.errors.model_errors import ModelError
+    from svy.errors._model import ModelError
 
-    assert SvyError(title="X", detail="Y").to_dict()["error"]["type"] == "SvyError"
-    assert ModelError.not_fitted(where="w").to_dict()["error"]["type"] == "ModelError"
+    assert SvyError(title="X", detail="Y").to_dict()["type"] == "SvyError"
+    assert ModelError.not_fitted(where="w").to_dict()["type"] == "ModelError"

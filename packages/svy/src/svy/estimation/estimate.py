@@ -11,7 +11,7 @@ import polars as pl
 
 from svy.core.enumerations import PopParam, QuantileMethod
 from svy.core.types import Category, Number, RandomState
-from svy.errors.api_errors import guided_getattr
+from svy.errors._api import guided_getattr
 
 # Import central UI helpers
 from svy.ui.printing import (
@@ -26,7 +26,7 @@ from svy.ui.printing import (
 
 
 if TYPE_CHECKING:
-    from svy.core.warnings import SvyWarning
+    from svy.errors._findings import SvyWarning
     from svy.estimation.contrast import Contrast, ContrastExpr
     from svy.metadata import MetadataStore
 

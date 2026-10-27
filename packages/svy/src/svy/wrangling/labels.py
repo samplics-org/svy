@@ -8,8 +8,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from svy.core.enumerations import MeasurementType
-from svy.core.warnings import Severity, WarnCode
 from svy.errors import DimensionError, MethodError
+from svy.errors._findings import Severity, WarnCode
 from svy.wrangling._helpers import _fork
 from svy.wrangling._naming import _check_nan_keys
 

@@ -13,7 +13,7 @@ import msgspec
 from msgspec.structs import force_setattr
 
 from svy.core.types import Category
-from svy.errors.label_errors import LabelError
+from svy.errors._label import LabelError
 from svy.metadata.variable_meta import ValueLabel, _clone_struct, _coerce_labels
 
 

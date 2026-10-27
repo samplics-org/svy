@@ -13,11 +13,18 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Changed
 
+- **BREAKING: a warning is one object.** `SvyWarning` is now the Python warning class, replacing `SvyUserWarning`, and carries the fields an error does (`code`, `title`, `detail`, `hint`, `got`, ...). The instance recorded in `sample.warnings` is the one `warnings.catch_warnings` hands back, so read `w.message.code` instead of parsing the text. Filter with `category=svy.SvyWarning`; `str(warning)` is still `"[CODE] title: detail"`, so message filters keep working. `svy.SvyUserWarning` raises `UNKNOWN_NAME` naming `svy.SvyWarning`.
+- **BREAKING: errors and warnings live in `svy.errors`.** `SvyWarning`, `Severity`, `WarnCode` and `WarningStore` move there from `svy.core.warnings`, whose import now raises naming the new home; `IoError`, `SingletonError`, `UsageError` and `UnknownNameError` join `svy.errors.__all__`. The modules inside are private: import from `svy.errors`, not `svy.errors.model_errors`.
+- **BREAKING: `to_dict()` has one shape for errors and warnings**: the fields plus `type` and `level` (`"ERROR"`, `"WARNING"`, `"INFO"`), without the `{"error": ...}` / `{"warning": ...}` envelope; a warning adds `var`, `rows` and `ts`. `WarningStore.to_dicts()` and `to_polars()` use it, and so do the findings in GLM and t-test `to_dict()`.
 - **Errors and findings print at most 88 columns wide** (`SVY_TEXT_PRINT_WIDTH`), so they fit notebooks and docs pages; result tables keep 120. `SVY_PRINT_WIDTH` still overrides both. `str(error)` is unchanged.
 - **`STAGE_TAKES_ALL` names the parents.** The message reads `geo1=geo_02, geo2=geo_02_02; ...` and names the stage's unit; `got` holds the parents as `{column: value}` mappings rather than a count.
 - **Stage-1 `n` in `multistage` is keyed as in `srs` and `pps_*`.** Besides the full stratum (a tuple for several stratum columns), a mapping keyed by one stratum variable is broadcast, e.g. `Stage("ea", n={"Urban": 6, "Rural": 4}, mos="hh")` on a design stratified by `("region", "urbrur")`. Keys that match no stratum now raise `MULTISTAGE_N_MISSING` instead of being ignored.
 - **Table headers name an unlabelled variable** instead of `Row` or `Col`, and the row and column headers are left-aligned with their levels whether labelled or not.
 - **`GLM_SEPARATION` names terms as the coefficient table prints them** (`classe_B`, not `classe_2.0`); `got` keeps the coded names of `GLMCoef.term`.
+
+### Removed
+
+- **BREAKING: `Severity.ERROR` and `WarningStore.raise_if_errors()`.** A finding is `INFO` (recorded) or `WARNING` (recorded and raised); what must stop the call raises an error. `escalate()` now defaults to `min_level=Severity.WARNING`. `trim()` on negative weights raises without first recording a `NEGATIVE_WEIGHT` finding.
 
 ### Fixed
 

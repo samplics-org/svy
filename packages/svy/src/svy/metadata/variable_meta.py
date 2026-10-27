@@ -504,7 +504,7 @@ class _LabelView(dict):
         self._use = use
 
     def _refuse(self, *args: Any, **kwargs: Any) -> Any:
-        from svy.errors.label_errors import LabelsReadOnly
+        from svy.errors._label import LabelsReadOnly
 
         raise LabelsReadOnly.view(where=self._where, use=self._use)
 
@@ -602,7 +602,7 @@ class MetadataStore:
         # Reached only for names that are not attributes.
         use = _REMOVED.get(name)
         if use is not None:
-            from svy.errors.label_errors import LabelAPIRemoved
+            from svy.errors._label import LabelAPIRemoved
 
             raise LabelAPIRemoved.replaced(where=f"MetadataStore.{name}", use=use)
         raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")

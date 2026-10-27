@@ -11,7 +11,7 @@ import svy
 
 from svy.core.enumerations import SingletonMethod
 from svy.core.singleton import _VAR_EXCLUDE_COL
-from svy.errors.singleton_errors import SingletonError
+from svy.errors._singleton import SingletonError
 
 
 def _result(sample):

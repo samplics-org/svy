@@ -18,7 +18,7 @@ import itertools
 
 from typing import Any, Iterable, Mapping, Sequence
 
-from svy.errors.weighting_errors import WeightingError
+from svy.errors._weighting import WeightingError
 
 
 KEY_SEP = "_&_"

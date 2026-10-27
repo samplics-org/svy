@@ -1,4 +1,4 @@
-# svy/errors/singleton_errors.py
+# svy/errors/_singleton.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Protocol, Sequence
 
 import msgspec
 
-from .base_errors import SvyError
+from ._base import SvyError
 
 
 # ---- Runtime-safe typing: no import from svy.core.singleton ----

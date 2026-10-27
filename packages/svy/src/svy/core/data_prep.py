@@ -1022,7 +1022,7 @@ def _warn_invalid_record(sample, design, rec, *, missing: list[str], wrong_weigh
             param="wgt_adjustment",
         )
     else:
-        from svy.core.warnings import warn_no_sample
+        from svy.errors._findings import warn_no_sample
 
         warn_no_sample(detail)
 

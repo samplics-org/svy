@@ -17,9 +17,9 @@ import numpy as np
 import polars as pl
 import pytest
 
-from svy import Cat, Design, Sample, SvyUserWarning, TrimConfig, col
-from svy.core.warnings import Severity, WarnCode
+from svy import Cat, Design, Sample, SvyWarning, TrimConfig, col
 from svy.errors import MethodError, WeightingError
+from svy.errors._findings import Severity, WarnCode
 from svy.weighting.base import Weighting
 
 
@@ -28,7 +28,7 @@ NOTMET = "CALIBRATION_NOT_MET"
 
 
 def _svy(rec) -> list:
-    return [r for r in rec if issubclass(r.category, SvyUserWarning)]
+    return [r for r in rec if issubclass(r.category, SvyWarning)]
 
 
 def _found(s: Sample, code) -> list:
@@ -501,7 +501,7 @@ def test_on_nonconvergence_error_is_the_default(request, name):
 @pytest.mark.parametrize("inplace", [False, True])
 def test_on_nonconvergence_warn(request, name, inplace):
     s, call, _, code, wgt = _case(request, name)
-    with pytest.warns(SvyUserWarning, match=rf"\[{code}\]") as rec:
+    with pytest.warns(SvyWarning, match=rf"\[{code}\]") as rec:
         out = call(s, on_nonconvergence="warn", inplace=inplace)
     raised = [r for r in _svy(rec) if f"[{code}]" in str(r.message)]
     assert len(raised) == 1 and raised[0].filename == __file__
@@ -532,7 +532,7 @@ def test_on_nonconvergence_ignore(request, name, inplace):
 @pytest.mark.parametrize("name", list(NONCONV))
 def test_warn_and_ignore_keep_the_same_weights(request, name):
     s, call, _, code, wgt = _case(request, name)
-    with pytest.warns(SvyUserWarning):
+    with pytest.warns(SvyWarning):
         warned = call(s, on_nonconvergence="warn")
     ignored = call(s, on_nonconvergence="ignore")
     np.testing.assert_array_equal(warned.data[wgt].to_numpy(), ignored.data[wgt].to_numpy())
@@ -574,7 +574,7 @@ def test_weights_only_ignore_returns_array_quietly(cal):
 def test_ignored_finding_does_not_block_a_later_warn(rk):
     # INFO and WARNING records of one finding are separate entries
     out = rk.weighting.rake(controls=RK, max_iter=3, tol=1e-20, on_nonconvergence="ignore")
-    with pytest.warns(SvyUserWarning, match=r"\[MAX_ITER_REACHED\]"):
+    with pytest.warns(SvyWarning, match=r"\[MAX_ITER_REACHED\]"):
         out = out.weighting.rake(
             controls=RK, max_iter=3, tol=1e-20, on_nonconvergence="warn", wgt_name="rk2"
         )
@@ -610,7 +610,7 @@ CELLS_BY_RULE = (
 )
 ON_TRIAD = (
     '"error" raises and leaves the sample as it was; "warn" records the finding in '
-    '``sample.warnings`` and raises it once as a ``SvyUserWarning``; "ignore" records it '
+    '``sample.warnings`` and raises it once as a ``SvyWarning``; "ignore" records it '
     "at INFO level without raising."
 )
 
@@ -699,7 +699,7 @@ def test_trim_error_names_only_the_failing_domain(two_domains):
 
 
 def test_trim_warn_records_one_finding_per_failing_domain(two_domains):
-    with pytest.warns(SvyUserWarning, match=r"\[MAX_ITER_REACHED\]"):
+    with pytest.warns(SvyWarning, match=r"\[MAX_ITER_REACHED\]"):
         out = two_domains.weighting.trim(
             upper=5.0, by="dom", max_iter=1, tol=1e-20, min_cell_size=1, on_nonconvergence="warn"
         )
@@ -728,7 +728,7 @@ def test_trim_in_place_column_error_leaves_weight(tight):
 
 
 def test_adjust_trimming_finding_names_the_config(tight_rr):
-    with pytest.warns(SvyUserWarning, match=r"\[MAX_ITER_REACHED\]"):
+    with pytest.warns(SvyWarning, match=r"\[MAX_ITER_REACHED\]"):
         out = tight_rr.weighting.adjust("st", trimming=ONE_PASS, on_nonconvergence="warn")
     assert _found(out, MAXIT)[0].param == "trimming.max_iter"
     with pytest.raises(WeightingError) as ei:
@@ -796,7 +796,7 @@ def test_rake_trim_cycle_error_reports_trimming_cap(tight):
 
 
 def test_rake_trim_cycle_finding_names_trimming_cap(tight):
-    with pytest.warns(SvyUserWarning, match=r"Trim-rake cycle did not converge after 3 cycles"):
+    with pytest.warns(SvyWarning, match=r"Trim-rake cycle did not converge after 3 cycles"):
         out = tight.weighting.rake(
             controls=RAKE_TIGHT,
             max_iter=50,

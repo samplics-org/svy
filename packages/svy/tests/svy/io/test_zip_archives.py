@@ -14,7 +14,7 @@ import svy_io
 
 import svy
 
-from svy.errors.io_errors import IoError, map_os_error
+from svy.errors._io import IoError, map_os_error
 
 
 @pytest.fixture

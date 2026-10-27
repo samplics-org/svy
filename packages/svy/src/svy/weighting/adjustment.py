@@ -20,8 +20,8 @@ except ImportError:  # pragma: no cover
 from svy.core.design import WgtAdjustment
 from svy.core.panel import case_id_cols
 from svy.core.types import DomainScalarMap
-from svy.core.warnings import Severity, WarnCode, check_on_finding
 from svy.errors import WeightingError
+from svy.errors._findings import Severity, WarnCode, check_on_finding
 from svy.weighting._engine import CellSpec, _where_mask, build_cells, record_null_cells
 from svy.weighting._keys import native, text_forms
 from svy.weighting.trimming import _run_trim as _apply_trim

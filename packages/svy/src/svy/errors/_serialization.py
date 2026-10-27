@@ -1,10 +1,10 @@
-# svy/errors/serialization_errors.py
+# svy/errors/_serialization.py
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-from .base_errors import SvyError
+from ._base import SvyError
 
 
 _DOCS_URL = "https://svylab.com/docs/svy/tutorials/serialization.html"

@@ -28,9 +28,9 @@ import svy
 
 from svy.core.design import Singleton
 from svy.core.singleton import find_domain_singletons
-from svy.core.warnings import Severity
 from svy.errors import MethodError
-from svy.errors.singleton_errors import SingletonError
+from svy.errors._findings import Severity
+from svy.errors._singleton import SingletonError
 from svy.serialize import serialize, to_design
 
 
@@ -401,6 +401,16 @@ class TestPolicy:
         fit = _declare(svy.Sample(data, design), "center").glm.fit("y", x=["x"], where=dom("g1"))
         d = fit.fitted.to_dict()
         json.dumps(d)
+        assert d["findings"][0]["code"] == "DOMAIN_SINGLETON_PSU"
+
+    @pytest.mark.parametrize("group", [None, "reg"])
+    def test_findings_are_plain_in_ttest_to_dict(self, data, design, group):
+        c = _declare(svy.Sample(data, design), "center").categorical
+        kw = {"mean_h0": 4} if group is None else {"group": group}
+        r = c.ttest("y", where=dom("g1"), **kw)
+        d = r.to_dict()
+        json.dumps(d)
+        assert d["findings"] == [f.to_dict() for f in r.findings]
         assert d["findings"][0]["code"] == "DOMAIN_SINGLETON_PSU"
 
 

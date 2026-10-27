@@ -1,10 +1,10 @@
-# svy/errors/dimension_errors.py
+# svy/errors/_dimension.py
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional
 
-from .base_errors import SvyError
+from ._base import SvyError
 
 
 @dataclass(eq=False)

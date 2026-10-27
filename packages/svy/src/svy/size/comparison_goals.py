@@ -109,7 +109,7 @@ def compare_props(
         The updated SampleSize instance (chainable).
     """
     alpha = _checked_alpha(alpha, where="SampleSize.compare_props")
-    from svy.errors.method_errors import MethodError
+    from svy.errors._method import MethodError
 
     if method != "wald":
         raise MethodError.invalid_choice(
@@ -318,7 +318,7 @@ def compare_means(
         The updated SampleSize instance (chainable).
     """
     alpha = _checked_alpha(alpha, where="SampleSize.compare_means")
-    from svy.errors.method_errors import MethodError
+    from svy.errors._method import MethodError
 
     ss._param = PopParam.MEAN
     ss._target = TargetTwoMeans(

@@ -23,9 +23,9 @@ import numpy as np
 import polars as pl
 
 from svy.core.types import Category, RandomState, WhereArg
-from svy.core.warnings import warn_no_sample
 from svy.datasets import _bundled, _cache, api
-from svy.errors.dataset_errors import DatasetError
+from svy.errors._dataset import DatasetError
+from svy.errors._findings import warn_no_sample
 from svy.utils.where import _compile_where
 
 

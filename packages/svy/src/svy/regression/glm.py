@@ -17,8 +17,8 @@ import polars as pl
 from msgspec import field
 
 from svy.core.containers import FDist, TDist
-from svy.core.warnings import SvyWarning
 from svy.errors import ModelError
+from svy.errors._findings import SvyWarning
 from svy.ui.printing import (
     finding_notes,
     make_panel,
@@ -195,7 +195,7 @@ class GLMFit(msgspec.Struct, frozen=True):
         )
         d.pop("cov_matrix", None)
         d.pop("term_info", None)
-        d["findings"] = [w.to_dict()["warning"] for w in self.findings]
+        d["findings"] = [w.to_dict() for w in self.findings]
         return d
 
     def _ci_headers(self) -> tuple[str, str]:

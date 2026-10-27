@@ -81,7 +81,7 @@ def test_wgt_name_names_the_created_weight(two_cycles):
 def test_waves_may_name_their_weights_differently():
     df1 = _cycle([1, 1, 2, 2, 1, 2])
     df2 = _cycle([1, 1, 2, 2, 1, 2], 2.0, wgt_name="w2")
-    with pytest.warns(svy.SvyUserWarning, match=r"\[COMBINE_COLUMNS_NULL_FILLED\]"):
+    with pytest.warns(svy.SvyWarning, match=r"\[COMBINE_COLUMNS_NULL_FILLED\]"):
         c = svy.combine_samples(
             [_sample(df1), _sample(df2, wgt_name="w2")],
             kind="panel",
@@ -168,7 +168,7 @@ def test_mixed_clustering_errors_by_default(two_cycles):
 
 # The lacking wave has no column for the missing role, so it is null-filled.
 NULL_FILLED_EXPECTED = pytest.mark.filterwarnings(
-    r"ignore:\[COMBINE_COLUMNS_NULL_FILLED\]:svy.SvyUserWarning"
+    r"ignore:\[COMBINE_COLUMNS_NULL_FILLED\]:svy.SvyWarning"
 )
 
 

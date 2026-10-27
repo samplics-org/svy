@@ -8,8 +8,8 @@ import pytest
 import svy
 
 from svy.core.constants import SVY_ROW_INDEX
-from svy.core.warnings import Severity
 from svy.errors import DimensionError, MethodError
+from svy.errors._findings import Severity
 
 
 def _declare(sample, method, **kw):
@@ -139,7 +139,7 @@ def test_multi_column_key():
 
 
 def test_unmatched_warns_by_default_with_the_count():
-    with pytest.warns(svy.SvyUserWarning, match=r"\[JOIN_UNMATCHED\]"):
+    with pytest.warns(svy.SvyWarning, match=r"\[JOIN_UNMATCHED\]"):
         out = _persons().wrangling.join(_households(), on={"hh": "hh_id"}, cols=["rooms"])
     warns = [w for w in out.warnings if w.code == "JOIN_UNMATCHED"]
     assert len(warns) == 1
@@ -149,7 +149,7 @@ def test_unmatched_warns_by_default_with_the_count():
 def test_unmatched_keep_error_and_indicator():
     p, hh = _persons(), _households()
     with warnings.catch_warnings():
-        warnings.simplefilter("error", svy.SvyUserWarning)
+        warnings.simplefilter("error", svy.SvyWarning)
         out = p.wrangling.join(
             hh, on={"hh": "hh_id"}, cols=["rooms"], on_unmatched="ignore", indicator="in_hh"
         )
@@ -376,7 +376,7 @@ def test_order_follows_this_sample_whatever_the_other_order():
 
 def test_nothing_matches():
     hh = pl.DataFrame({"hh": [90, 91], "rooms": [1, 2]})
-    with pytest.warns(svy.SvyUserWarning, match=r"\[JOIN_UNMATCHED\]"):
+    with pytest.warns(svy.SvyWarning, match=r"\[JOIN_UNMATCHED\]"):
         out = _persons().wrangling.join(hh, on="hh", indicator="m")
     assert out.data["rooms"].null_count() == 7
     assert not any(out.data["m"].to_list())
@@ -404,7 +404,7 @@ def test_blanks_brought_in_are_told_apart_from_no_match_by_the_indicator():
 
 
 def test_unmatched_records_fall_out_of_a_domain_not_out_of_the_sample():
-    with pytest.warns(svy.SvyUserWarning, match=r"\[JOIN_UNMATCHED\]"):
+    with pytest.warns(svy.SvyWarning, match=r"\[JOIN_UNMATCHED\]"):
         out = _persons().wrangling.join(_households(), on={"hh": "hh_id"}, cols=["region"])
     by = out.estimation.mean("age", by="region", drop_nulls=True)
     # region 10: ages 35, 8 (w 1) and 40 (w 2); region 20: 60, 58, 20 (w 3).
@@ -430,7 +430,7 @@ def test_a_refused_join_leaves_the_sample_untouched_even_inplace():
 def test_the_warning_and_labels_stay_on_the_result():
     p = _persons()
     p.meta.set_var_label("age", "Age in years")
-    with pytest.warns(svy.SvyUserWarning, match=r"\[JOIN_UNMATCHED\]"):
+    with pytest.warns(svy.SvyWarning, match=r"\[JOIN_UNMATCHED\]"):
         out = p.wrangling.join(_households(), on={"hh": "hh_id"}, cols=["region"])
     assert not [w for w in p.warnings if w.code == "JOIN_UNMATCHED"]
     assert "region" not in p.meta

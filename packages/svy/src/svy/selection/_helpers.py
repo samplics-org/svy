@@ -15,7 +15,7 @@ from typing import Any, Literal, Sequence
 import numpy as np
 import polars as pl
 
-from svy.core.warnings import Severity
+from svy.errors._findings import Severity
 
 
 log = logging.getLogger(__name__)
@@ -71,7 +71,7 @@ def _finding(sample: Any, *, code: str, title: str, detail: str, **fields: Any) 
     if sample is not None:
         sample.warn(code=code, title=title, detail=detail, where="Sample.sampling", **fields)
     elif fields.get("level") != Severity.INFO:
-        from svy.core.warnings import warn_no_sample
+        from svy.errors._findings import warn_no_sample
 
         warn_no_sample(detail)
 

@@ -15,7 +15,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from svy import Cat, Cross, Design, Sample, SvyUserWarning
+from svy import Cat, Cross, Design, Sample, SvyWarning
 from svy.errors import MethodError, SvyError, WeightingError
 
 
@@ -489,7 +489,7 @@ def test_where_scopes_the_levels(sample):
 def test_null_cells_keep_todays_behaviour():
     df = pl.DataFrame({"c": [1, 2, None, 1, 2], "w": [1.0, 2.0, 3.0, 4.0, 5.0]})
     s = Sample(df, Design(wgt="w"))
-    with pytest.warns(SvyUserWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
+    with pytest.warns(SvyWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
         out = s.weighting.poststratify({"1": 10.0, "2": 20.0}, cells="c")
     assert _w(out, "ps_wgt")[2] == 3.0
     with pytest.raises(WeightingError) as ei:

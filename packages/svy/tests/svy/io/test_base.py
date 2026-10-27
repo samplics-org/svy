@@ -180,7 +180,7 @@ def test_aliases_point_to_spss_variants():
 
 
 def test_read_stata_parse_error_surfaces_engine_hint(dummy_svyio, tmp_path, monkeypatch):
-    from svy.errors.io_errors import IoError
+    from svy.errors._io import IoError
 
     p = tmp_path / "fake.dta"
     p.touch()

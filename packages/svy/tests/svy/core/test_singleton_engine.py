@@ -20,7 +20,7 @@ from svy.core.singleton import (
     SingletonInfo,
     SingletonResult,
 )
-from svy.errors.singleton_errors import SingletonError
+from svy.errors._singleton import SingletonError
 
 
 def _result(sample):

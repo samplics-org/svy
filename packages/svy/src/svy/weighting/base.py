@@ -21,7 +21,7 @@ from svy.core.repwgts import BootstrapKind
 from svy.core.terms import Feature
 from svy.core.types import Category, ControlsType, DomainScalarMap, Number, WhereArg
 from svy.errors import WeightingError
-from svy.errors.api_errors import guided_getattr
+from svy.errors._api import guided_getattr
 from svy.utils.random_state import RandomState
 from svy.weighting.adjustment import adjust as _adjust
 from svy.weighting.calibration import build_aux_matrix as _build_aux_matrix
@@ -167,7 +167,7 @@ class Weighting:
     ``trimming.max_iter``. Every ``on_*``
     parameter in svy means the same: "error" raises and leaves the sample as
     it was; "warn" records the finding in ``sample.warnings`` and raises it
-    once as a ``SvyUserWarning``; "ignore" records it at INFO level without
+    once as a ``SvyWarning``; "ignore" records it at INFO level without
     raising.
 
     Failures raise ``WeightingError`` (a ``MethodError``) with a stable
@@ -498,7 +498,7 @@ class Weighting:
             What to do when trimming (``trimming=``) does not converge within
             ``trimming.max_iter`` iterations; with "warn" or "ignore" the last
             iterate is kept. "error" raises and leaves the sample as it was; "warn" records the finding in
-            ``sample.warnings`` and raises it once as a ``SvyUserWarning``; "ignore"
+            ``sample.warnings`` and raises it once as a ``SvyWarning``; "ignore"
             records it at INFO level without raising.
         inplace : bool
             Adopt the result on this Sample instead of returning a new one.
@@ -654,7 +654,7 @@ class Weighting:
             out of cycles; with "warn" or "ignore" the last cycle's weights are
             kept. "error" raises and leaves the sample as it was; "warn"
             records the finding in ``sample.warnings`` and raises it once as a
-            ``SvyUserWarning``; "ignore" records it at INFO level without
+            ``SvyWarning``; "ignore" records it at INFO level without
             raising.
         trimming : TrimConfig | None
             Alternate trimming and re-poststratification until both hold, for
@@ -744,7 +744,7 @@ class Weighting:
             What to do when the trim-standardize cycle (``trimming=``) runs out
             of cycles (``MAX_ITER_REACHED``); with "warn" or "ignore" the last
             cycle's weights are kept. "error" raises and leaves the sample as it was; "warn" records the finding in
-            ``sample.warnings`` and raises it once as a ``SvyUserWarning``; "ignore"
+            ``sample.warnings`` and raises it once as a ``SvyWarning``; "ignore"
             records it at INFO level without raising.
         inplace : bool
             Adopt the result on this Sample instead of returning a new one.
@@ -879,7 +879,7 @@ class Weighting:
             the trim-rake cycle within ``trimming.max_iter``); with "warn" or
             "ignore" the last iterate is kept. "error" raises and leaves the sample as it was; "warn"
             records the finding in ``sample.warnings`` and raises it once as a
-            ``SvyUserWarning``; "ignore" records it at INFO level without
+            ``SvyWarning``; "ignore" records it at INFO level without
             raising.
         trimming : TrimConfig | None
             Alternate trimming and re-raking until both hold, for at most
@@ -1056,7 +1056,7 @@ class Weighting:
             "warn" or "ignore" the approximate solution is kept. "error"
             raises and leaves the sample as it was; "warn" records the finding
             in ``sample.warnings`` and raises it once as a
-            ``SvyUserWarning``; "ignore" records it at INFO level without
+            ``SvyWarning``; "ignore" records it at INFO level without
             raising.
         trimming : TrimConfig | None
             Alternate trimming and re-calibration until both hold, for at most
@@ -1149,7 +1149,7 @@ class Weighting:
             cycles; with "warn" or "ignore" the approximate solution is kept.
             "error" raises and leaves the sample as it was; "warn" records the
             finding in ``sample.warnings`` and raises it once as a
-            ``SvyUserWarning``; "ignore" records it at INFO level without
+            ``SvyWarning``; "ignore" records it at INFO level without
             raising.
         trimming : TrimConfig | None
             Alternate trimming and re-calibration until both hold, for at most
@@ -1240,7 +1240,7 @@ class Weighting:
             What to do when a domain does not converge within ``max_iter``
             (``MAX_ITER_REACHED``); with "warn" or "ignore" the last iterate is
             kept. "error" raises and leaves the sample as it was; "warn" records the finding in
-            ``sample.warnings`` and raises it once as a ``SvyUserWarning``; "ignore"
+            ``sample.warnings`` and raises it once as a ``SvyWarning``; "ignore"
             records it at INFO level without raising.
         inplace : bool
             Adopt the result on this Sample instead of returning a new one.

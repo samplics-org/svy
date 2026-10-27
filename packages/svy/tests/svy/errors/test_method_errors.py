@@ -2,8 +2,8 @@ import io
 
 import pytest
 
-from svy.errors.base_errors import SvyError
-from svy.errors.method_errors import MethodError
+from svy.errors._base import SvyError
+from svy.errors._method import MethodError
 
 
 def test_method_error_defaults_code():
@@ -49,9 +49,9 @@ def test_invalid_choice_ctor_builds_clear_error():
 
     # dict
     d = err.to_dict()
-    assert d["error"]["code"] == "INVALID_CHOICE"
-    assert d["error"]["param"] == "how"
-    assert d["error"]["got"] == "nope"
+    assert d["code"] == "INVALID_CHOICE"
+    assert d["param"] == "how"
+    assert d["got"] == "nope"
 
     # repr includes class name and key fields
     r = repr(err)

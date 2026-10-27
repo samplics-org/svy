@@ -7,7 +7,7 @@ import pytest
 
 import svy
 
-from svy.errors.method_errors import MethodError
+from svy.errors._method import MethodError
 
 
 NS = {"svy": svy, "datetime": datetime}

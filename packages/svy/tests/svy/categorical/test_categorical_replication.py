@@ -26,7 +26,7 @@ import svy
 
 from svy.core.repwgts import BootstrapWgts, BrrWgts, JackknifeWgts, SdrWgts
 from svy.errors import MethodError
-from svy.errors.singleton_errors import SingletonError
+from svy.errors._singleton import SingletonError
 
 
 HERE = Path(__file__).parent

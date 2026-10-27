@@ -28,8 +28,8 @@ from typing import TYPE_CHECKING, Any, Mapping, Sequence
 import numpy as np
 import polars as pl
 
-from svy.core.warnings import Severity, WarnCode
 from svy.errors import MethodError, WeightingError
+from svy.errors._findings import Severity, WarnCode
 from svy.utils.where import _compile_where
 from svy.weighting._keys import LevelIndex, match_keys, target_vector
 
@@ -555,7 +555,7 @@ def _out_of_reach(
 
 def control_name(cols: Sequence[str] | None, label: Any) -> str:
     """A cell or level as the caller would write it: ``c='b'`` or ``(c, d)=('b', 1)``."""
-    from svy.errors.weighting_errors import show
+    from svy.errors._weighting import show
 
     if not cols:
         return show(label)

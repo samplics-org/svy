@@ -84,7 +84,7 @@ class TrimConfig:
     tol: float = 1e-6
 
     def __post_init__(self) -> None:
-        from svy.errors.weighting_errors import WeightingError
+        from svy.errors._weighting import WeightingError
 
         where = "TrimConfig"
         if self.upper is None and self.lower is None:
@@ -173,7 +173,7 @@ def resolve_threshold(spec: ThresholdSpec, weights: FloatArr) -> float:
         like Threshold("mean") - 10 * Threshold("sd") that yields a negative
         value for the given weight distribution).
     """
-    from svy.errors.weighting_errors import WeightingError
+    from svy.errors._weighting import WeightingError
 
     where = "Sample.weighting.trim"
     if isinstance(spec, (Threshold, _ComposedCap)):

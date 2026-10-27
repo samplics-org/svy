@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import logging
 
 from typing import TYPE_CHECKING, Any, Callable, Literal, Sequence, cast
@@ -17,7 +18,7 @@ from svy.core.constants import (
 )
 from svy.core.enumerations import SingletonDomains, SingletonMethod
 from svy.core.types import WhereArg
-from svy.errors.singleton_errors import SingletonError
+from svy.errors._singleton import SingletonError
 from svy.utils.helpers import _collect
 from svy.utils.random_state import RandomState, resolve_random_state
 
@@ -26,7 +27,7 @@ if TYPE_CHECKING:
     from svy.core.design import Design
     from svy.core.design import Singleton as SingletonRule
     from svy.core.sample import Sample
-    from svy.core.warnings import SvyWarning
+    from svy.errors._findings import SvyWarning
 
 log = logging.getLogger(__name__)
 
@@ -1256,7 +1257,7 @@ def domain_singleton_findings(
         raise SingletonError.from_domain_singletons(
             pairs, by_domains=by_domains, method=method, applied=applied, where=where
         )
-    from svy.core.warnings import Severity, SvyWarning, WarnCode
+    from svy.errors._findings import Severity, SvyWarning, WarnCode
 
     fields: dict[str, Any] = dict(
         code=WarnCode.DOMAIN_SINGLETON_PSU,
@@ -1277,14 +1278,14 @@ def domain_singleton_findings(
     warn = getattr(sample, "warn", None)
     kept = warn(level=Severity.INFO, **fields) if warn is not None else SvyWarning(**fields)
     level = Severity.WARNING if on == "warn" else Severity.INFO
-    return [msgspec.structs.replace(kept, level=level)]
+    return [dataclasses.replace(kept, level=level)]
 
 
 def domain_singleton_note(findings: Sequence[Any]) -> str | None:
     """One note for every domain-singleton finding of a call that asked for
     one (``on_domain_singletons="warn"``): the pairs of several results
     (variables with different missing values) merged."""
-    from svy.core.warnings import Severity
+    from svy.errors._findings import Severity
 
     found = [
         f
@@ -1432,7 +1433,7 @@ def domain_singletons_frame(
     by_cols = _Engine._to_cols(by)
     missing = [c for c in by_cols if c not in data.columns]
     if missing:
-        from svy.errors.method_errors import MethodError
+        from svy.errors._method import MethodError
 
         raise MethodError.not_applicable(
             where="Sample.domain_singletons",
@@ -1619,7 +1620,7 @@ def _resolve_collapse(
 ) -> tuple[pl.DataFrame, SingletonResult]:
     """Apply a collapse rule: an explicit mapping checked against the data, or
     a strategy re-run (an INFO finding when its mapping changed)."""
-    from svy.core.warnings import Severity
+    from svy.errors._findings import Severity
 
     using: Any = rule.using
     if rule.order_by:
@@ -1681,7 +1682,7 @@ def _checked_mapping(
     a singleton it does not map, or a target that is gone, is itself a
     singleton or lies outside the singleton's ``within`` values, raises.
     """
-    from svy.core.warnings import Severity
+    from svy.errors._findings import Severity
 
     index = facet._strata_index()
     now = {s.stratum_key for s in singles}

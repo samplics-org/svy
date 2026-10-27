@@ -29,7 +29,7 @@ from typing import Final
 from urllib.parse import urlsplit
 
 from svy.datasets._http import load_httpx
-from svy.errors.dataset_errors import DatasetError
+from svy.errors._dataset import DatasetError
 
 
 log = logging.getLogger(__name__)

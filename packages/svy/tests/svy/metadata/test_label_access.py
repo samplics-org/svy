@@ -5,7 +5,7 @@ import polars as pl
 import pytest
 
 from svy import Sample
-from svy.errors.label_errors import LabelAPIRemoved, LabelsReadOnly
+from svy.errors._label import LabelAPIRemoved, LabelsReadOnly
 from svy.metadata import CategoryScheme, LabellingCatalog, MetadataStore, VariableMeta
 from svy.metadata.variable_meta import SchemeRef
 

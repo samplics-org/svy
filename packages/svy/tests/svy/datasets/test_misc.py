@@ -11,7 +11,7 @@ import pytest
 
 from svy.datasets import _cache, api, load
 from svy.datasets.base import _normalize_by
-from svy.errors.dataset_errors import DatasetError
+from svy.errors._dataset import DatasetError
 
 
 # --------------------------------------------------------------------------- #

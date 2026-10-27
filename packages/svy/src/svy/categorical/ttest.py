@@ -10,9 +10,9 @@ import msgspec
 from msgspec import field
 
 from svy.core.types import Category, Number
-from svy.core.warnings import SvyWarning
 from svy.errors import DimensionError, MethodError
-from svy.errors.api_errors import guided_getattr
+from svy.errors._api import guided_getattr
+from svy.errors._findings import SvyWarning
 from svy.estimation import ParamEst
 from svy.estimation.estimate import _display_level
 
@@ -254,7 +254,10 @@ class TTestOneGroup(msgspec.Struct, tag="one", tag_field="kind", kw_only=True, f
         Returns:
             A dictionary representation of all fields.
         """
-        return msgspec.to_builtins(self)
+        d = msgspec.to_builtins(self)
+        # Findings in the shape they have everywhere else, not their raw fields.
+        d["findings"] = [w.to_dict() for w in self.findings]
+        return d
 
     def to_polars(
         self,
@@ -465,7 +468,10 @@ class TTestTwoGroups(msgspec.Struct, tag="two", tag_field="kind", kw_only=True, 
         Returns:
             A dictionary representation of all fields.
         """
-        return msgspec.to_builtins(self)
+        d = msgspec.to_builtins(self)
+        # Findings in the shape they have everywhere else, not their raw fields.
+        d["findings"] = [w.to_dict() for w in self.findings]
+        return d
 
     def to_polars(
         self,

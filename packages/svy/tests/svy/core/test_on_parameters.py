@@ -17,15 +17,15 @@ import pytest
 
 import svy
 
-from svy import SvyUserWarning, col
+from svy import SvyWarning, col
 from svy.core.functions import combine_samples
-from svy.core.warnings import Severity
 from svy.errors import MethodError
+from svy.errors._findings import Severity
 from svy.wrangling.base import Wrangling
 
 
 def _svy(rec) -> list:
-    return [r for r in rec if issubclass(r.category, SvyUserWarning)]
+    return [r for r in rec if issubclass(r.category, SvyWarning)]
 
 
 def _persons() -> svy.Sample:
@@ -103,7 +103,7 @@ def test_ignore_records_info_without_raising(name, inplace):
 def test_warn_records_and_raises_once(name, inplace):
     build, call, code, _ = CASES[name]
     s = build()
-    with pytest.warns(SvyUserWarning, match=rf"\[{code}\]") as rec:
+    with pytest.warns(SvyWarning, match=rf"\[{code}\]") as rec:
         out = call(s, "warn", inplace)
     assert len([r for r in _svy(rec) if f"[{code}]" in str(r.message)]) == 1
     found = out.warnings.list(code=code)
@@ -141,7 +141,7 @@ def test_join_all_matched_records_nothing_in_any_mode():
 
 
 def test_join_default_still_warns():
-    with pytest.warns(SvyUserWarning, match=r"\[JOIN_UNMATCHED\]"):
+    with pytest.warns(SvyWarning, match=r"\[JOIN_UNMATCHED\]"):
         out = _persons().wrangling.join(_households(), on={"hh": "hh_id"})
     assert out.warnings.list(code="JOIN_UNMATCHED")[0].level == Severity.WARNING
 
@@ -163,7 +163,7 @@ def test_filter_records_no_singletons_records_nothing():
 
 def test_filter_records_inplace_warn_filters_the_sample():
     s = _persons()
-    with pytest.warns(SvyUserWarning):
+    with pytest.warns(SvyWarning):
         out = s.wrangling.filter_records(
             col("psu") != 5, check_singletons=True, on_singletons="warn", inplace=True
         )
@@ -185,9 +185,9 @@ def test_combine_mixed_ignore_records_info():
 
 
 # The mixed waves lack a design column, so it is null-filled: a side effect here.
-@pytest.mark.filterwarnings(r"ignore:\[COMBINE_COLUMNS_NULL_FILLED\]:svy.SvyUserWarning")
+@pytest.mark.filterwarnings(r"ignore:\[COMBINE_COLUMNS_NULL_FILLED\]:svy.SvyWarning")
 def test_combine_mixed_warn_records_and_raises_once():
-    with pytest.warns(SvyUserWarning, match=r"\[COMBINE_MIXED_DESIGN\]") as rec:
+    with pytest.warns(SvyWarning, match=r"\[COMBINE_MIXED_DESIGN\]") as rec:
         c = combine_samples(_mixed(), on_mixed_design="warn")
     assert len([r for r in _svy(rec) if "COMBINE_MIXED_DESIGN" in str(r.message)]) == 1
     found = c.warnings.list(code="COMBINE_MIXED_DESIGN")
@@ -195,9 +195,9 @@ def test_combine_mixed_warn_records_and_raises_once():
 
 
 # The mixed waves lack a design column, so it is null-filled: a side effect here.
-@pytest.mark.filterwarnings(r"ignore:\[COMBINE_COLUMNS_NULL_FILLED\]:svy.SvyUserWarning")
+@pytest.mark.filterwarnings(r"ignore:\[COMBINE_COLUMNS_NULL_FILLED\]:svy.SvyWarning")
 def test_combine_mixed_ignore_and_warn_agree():
-    with pytest.warns(SvyUserWarning):
+    with pytest.warns(SvyWarning):
         warned = combine_samples(_mixed(), on_mixed_design="warn")
     ignored = combine_samples(_mixed(), on_mixed_design="ignore")
     assert warned.data.equals(ignored.data) and warned.design == ignored.design
@@ -224,7 +224,7 @@ def test_combine_mixed_bad_value(value):
 
 ON_TRIAD = (
     '"error" raises and leaves the sample as it was; "warn" records the finding in '
-    '``sample.warnings`` and raises it once as a ``SvyUserWarning``; "ignore" records it '
+    '``sample.warnings`` and raises it once as a ``SvyWarning``; "ignore" records it '
     "at INFO level without raising."
 )
 

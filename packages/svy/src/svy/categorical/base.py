@@ -46,7 +46,7 @@ from svy.core.types import (
 )
 from svy.core.variance_method import resolve_variance_method
 from svy.errors import MethodError
-from svy.errors.api_errors import guided_getattr
+from svy.errors._api import guided_getattr
 from svy.estimation.estimate import row_counts
 from svy.estimation.replication import replicate_params
 from svy.ui.printing import format_where_clause

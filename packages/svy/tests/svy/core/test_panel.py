@@ -4,7 +4,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from svy import Design, Sample, SvyUserWarning, col, estd
+from svy import Design, Sample, SvyWarning, col, estd
 
 
 def _long(n_cases=60, seed=7):
@@ -130,7 +130,7 @@ class TestPlumbing:
         s = Sample(long, Design(case_id="id", wave="wave", wgt="w"))
         with pytest.raises(Exception):
             s.wrangling.remove_columns("id")
-        with pytest.warns(SvyUserWarning, match=r"\[DESIGN_FIELDS_REMOVED\]"):
+        with pytest.warns(SvyWarning, match=r"\[DESIGN_FIELDS_REMOVED\]"):
             out = s.wrangling.remove_columns("id", force=True)
         assert out.design.case_id is None
 

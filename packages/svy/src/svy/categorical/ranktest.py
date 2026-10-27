@@ -32,7 +32,7 @@ from svy.categorical.ttest import (
 )
 from svy.core.containers import FDist, TDist
 from svy.core.types import Category
-from svy.core.warnings import SvyWarning
+from svy.errors._findings import SvyWarning
 from svy.ui.printing import (
     finding_notes,
     make_panel,

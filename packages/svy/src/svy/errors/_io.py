@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-from .base_errors import SvyError
+from ._base import SvyError
 
 
 @dataclass(eq=False)

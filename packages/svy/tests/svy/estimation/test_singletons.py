@@ -27,7 +27,7 @@ import pytest
 import svy
 
 from svy.core.enumerations import PopParam
-from svy.errors.singleton_errors import SingletonError
+from svy.errors._singleton import SingletonError
 
 
 def _result(sample):

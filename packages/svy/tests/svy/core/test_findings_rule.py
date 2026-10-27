@@ -1,6 +1,6 @@
 # tests/svy/core/test_findings_rule.py
 """One rule for findings: recorded in ``sample.warnings`` and raised once as a
-``svy.SvyUserWarning`` at the caller's line; INFO entries are recorded only.
+``svy.SvyWarning`` at the caller's line; INFO entries are recorded only.
 Without a sample the finding is only raised, with the same category and line."""
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ import pytest
 
 import svy
 
-from svy import Design, Sample, SvyUserWarning
-from svy.core.warnings import Severity, WarnCode, WarningStore
+from svy import Design, Sample, SvyWarning
+from svy.errors._findings import Severity, WarnCode, WarningStore
 
 
 def _null_cell_sample() -> Sample:
@@ -31,7 +31,7 @@ def _ps(s: Sample, **k) -> Sample:
 
 
 def _svy_records(rec) -> list:
-    return [r for r in rec if issubclass(r.category, SvyUserWarning)]
+    return [r for r in rec if issubclass(r.category, SvyWarning)]
 
 
 # ---------------------------------------------------------------------------
@@ -41,7 +41,7 @@ def _svy_records(rec) -> list:
 
 def test_recorded_and_raised_once_at_the_callers_line():
     s = _null_cell_sample()
-    with pytest.warns(SvyUserWarning) as rec:
+    with pytest.warns(SvyWarning) as rec:
         out = _ps(s)
     rec = _svy_records(rec)
     assert len(rec) == 1
@@ -55,7 +55,7 @@ def test_category_filter_silences_but_still_records():
     s = _null_cell_sample()
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
-        warnings.filterwarnings("ignore", category=SvyUserWarning)
+        warnings.filterwarnings("ignore", category=SvyWarning)
         out = _ps(s)
     assert not _svy_records(rec)
     assert out.warnings.list(code=WarnCode.CELLS_NULL_UNADJUSTED)
@@ -64,8 +64,8 @@ def test_category_filter_silences_but_still_records():
 def test_warnings_as_errors_turn_a_finding_into_an_exception():
     s = _null_cell_sample()
     with warnings.catch_warnings():
-        warnings.simplefilter("error", SvyUserWarning)
-        with pytest.raises(SvyUserWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
+        warnings.simplefilter("error", SvyWarning)
+        with pytest.raises(SvyWarning, match=r"\[CELLS_NULL_UNADJUSTED\]"):
             _ps(s)
     # the failed default-mode call left the caller's sample alone
     assert not s.warnings.list(code=WarnCode.CELLS_NULL_UNADJUSTED)
@@ -106,7 +106,7 @@ def test_a_capped_code_is_not_raised():
 
 def test_forks_do_not_raise_their_parents_findings_again():
     s = _null_cell_sample()
-    with pytest.warns(SvyUserWarning):
+    with pytest.warns(SvyWarning):
         a = _ps(s)
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
@@ -117,15 +117,9 @@ def test_forks_do_not_raise_their_parents_findings_again():
     assert c.warnings.list(code=WarnCode.CELLS_NULL_UNADJUSTED)
 
 
-def test_error_level_entries_are_raised_too():
-    s = _null_cell_sample()
-    with pytest.warns(SvyUserWarning, match="ERR_TEST"):
-        s.warn(code="ERR_TEST", title="t", detail="d", where="test", level=Severity.ERROR)
-
-
 def test_record_is_json_ready():
     s = _null_cell_sample()
-    with pytest.warns(SvyUserWarning):
+    with pytest.warns(SvyWarning):
         out = _ps(s)
     json.dumps(out.warnings.to_dicts())
 
@@ -148,7 +142,7 @@ def _run(*flags: str) -> subprocess.CompletedProcess:
 def test_command_line_filters():
     default = _run()
     assert default.returncode == 0
-    assert "SvyUserWarning: [CELLS_NULL_UNADJUSTED]" in default.stderr
+    assert "SvyWarning: [CELLS_NULL_UNADJUSTED]" in default.stderr
     assert "<string>:4" in default.stderr
     assert _run("-W", "ignore").stderr == ""
     assert _run("-W", "ignore::UserWarning").stderr == ""
@@ -178,7 +172,7 @@ def _cycle(strat, wgt_scale=1.0, **extra):
 def test_combine_samples_records_on_the_combined_sample():
     s1 = _cycle([1, 1, 2, 2, 1, 2], only=list("abcdef"))
     s2 = _cycle([3, 3, 4, 4, 3, 4], 2.0)
-    with pytest.warns(SvyUserWarning) as rec:
+    with pytest.warns(SvyWarning) as rec:
         c = svy.combine_samples({"2": s1, "1": s2})
     msgs = [str(r.message) for r in _svy_records(rec)]
     assert any(m.startswith("[COMBINE_COLUMNS_NULL_FILLED]") for m in msgs)
@@ -193,21 +187,21 @@ def test_rep_reset_recorded_via_update_design_and_raised_via_bare_design():
     df = pl.DataFrame({"w": [1.0, 2.0], "v": [1.0, 1.0], "r1": [1.0, 2.0], "r2": [1.0, 2.0]})
     rw = svy.BrrWgts(prefix="r", n_reps=2)
     s = Sample(df, Design(wgt="w", rep_wgts=rw))
-    with pytest.warns(SvyUserWarning, match=r"\[REP_WGTS_RESET\]") as rec:
+    with pytest.warns(SvyWarning, match=r"\[REP_WGTS_RESET\]") as rec:
         s.update_design(wgt="v")
     assert rec[0].filename == __file__
     assert s.warnings.list(code="REP_WGTS_RESET")
-    with pytest.warns(SvyUserWarning, match=r"\[REP_WGTS_RESET\]") as rec:
+    with pytest.warns(SvyWarning, match=r"\[REP_WGTS_RESET\]") as rec:
         Design(wgt="w", rep_wgts=rw).update(wgt="v")
     assert rec[0].filename == __file__
-    with pytest.warns(SvyUserWarning, match=r"\[REP_WGTS_RESET\]"):
+    with pytest.warns(SvyWarning, match=r"\[REP_WGTS_RESET\]"):
         t = Sample(df, Design(wgt="w", rep_wgts=rw)).use_weight("v")
     assert t.warnings.list(code="REP_WGTS_RESET")
 
 
 def test_design_fields_removed_recorded():
     s = _cycle([1, 1, 2, 2, 1, 2])
-    with pytest.warns(SvyUserWarning, match=r"\[DESIGN_FIELDS_REMOVED\]") as rec:
+    with pytest.warns(SvyWarning, match=r"\[DESIGN_FIELDS_REMOVED\]") as rec:
         out = s.wrangling.remove_columns("psu", force=True)
     assert rec[0].filename == __file__
     assert out.warnings.list(code="DESIGN_FIELDS_REMOVED")[0].got
@@ -219,7 +213,7 @@ def test_adjustment_not_credited_recorded():
     )
     cells = s.design.wgt_adjustment.cells[0]
     stripped = s._replace_data(s.data.drop(cells))
-    with pytest.warns(SvyUserWarning, match=r"\[ADJUSTMENT_NOT_CREDITED\]") as rec:
+    with pytest.warns(SvyWarning, match=r"\[ADJUSTMENT_NOT_CREDITED\]") as rec:
         stripped.estimation.mean("x")
     assert rec[0].filename == __file__
     assert stripped.warnings.list(code="ADJUSTMENT_NOT_CREDITED")
@@ -243,7 +237,7 @@ def test_without_replacement_too_large_n_is_still_an_error():
 
 
 def test_allocation_without_a_sample_is_raised_only():
-    with pytest.warns(SvyUserWarning, match="exceeds the total frame") as rec:
+    with pytest.warns(SvyWarning, match="exceeds the total frame") as rec:
         svy.SampleSize().allocate(10, pop_size={"a": 3, "b": 2})
     assert rec[0].filename == __file__
 
@@ -254,7 +248,7 @@ def test_glm_finding_recorded():
         {"y": rng.normal(size=30), "x": rng.normal(size=30), "c": ["k"] * 30, "w": [1.0] * 30}
     )
     s = Sample(df, Design(wgt="w"))
-    with pytest.warns(SvyUserWarning, match=r"\[GLM_TERM_DROPPED\]") as rec:
+    with pytest.warns(SvyWarning, match=r"\[GLM_TERM_DROPPED\]") as rec:
         s.glm.fit(y="y", x=["x", svy.Cat("c")])
     assert rec[0].filename == __file__
     assert s.warnings.list(code="GLM_TERM_DROPPED")
@@ -266,7 +260,7 @@ def test_accessor_overwrite_is_raised_only():
         def __init__(self, s):
             self.s = s
 
-    with pytest.warns(SvyUserWarning, match="already defined") as rec:
+    with pytest.warns(SvyWarning, match="already defined") as rec:
 
         @svy.register_sample_accessor("_svy_test_acc")
         class B:

@@ -154,7 +154,7 @@ def _user_stacklevel() -> int:
 
 
 def _warn_rep_wgts_reset(rep: RepWgts, new_wgt: str | None) -> None:
-    from svy.core.warnings import emit_finding
+    from svy.errors._findings import emit_finding
 
     emit_finding(
         code="REP_WGTS_RESET",
@@ -326,7 +326,7 @@ def _typed(value: Any) -> Any:
 
 
 def _rule_error(param: str, detail: str, *, got: Any = None, hint: str | None = None) -> Exception:
-    from svy.errors.method_errors import MethodError
+    from svy.errors._method import MethodError
 
     return MethodError(
         title="Invalid singleton rule",
@@ -498,7 +498,7 @@ class Singleton(_SingletonMethodField, frozen=True, kw_only=True):
                     hint="R's lonely.psu='certainty' and Stata's singleunit(certainty) make "
                     "a singleton contribute nothing: that is method='skip'.",
                 )
-        from svy.errors.method_errors import MethodError
+        from svy.errors._method import MethodError
 
         raise MethodError.invalid_choice(
             where=_RULE_WHERE,
@@ -521,7 +521,7 @@ class Singleton(_SingletonMethodField, frozen=True, kw_only=True):
                 hint=f'svy.Singleton("{method.value}", on_domain_singletons="{value}")',
             )
         if value not in SingletonDomains._value2member_map_:
-            from svy.errors.method_errors import MethodError
+            from svy.errors._method import MethodError
 
             raise MethodError.invalid_choice(
                 where=_RULE_WHERE,
@@ -547,7 +547,7 @@ class Singleton(_SingletonMethodField, frozen=True, kw_only=True):
 
     @staticmethod
     def _on_domain_singletons(value: Any) -> None:
-        from svy.core.warnings import check_on_finding
+        from svy.errors._findings import check_on_finding
 
         check_on_finding(value, param="on_domain_singletons", where=_RULE_WHERE)
 
@@ -555,7 +555,7 @@ class Singleton(_SingletonMethodField, frozen=True, kw_only=True):
     def _using(value: Any) -> Any:
         if isinstance(value, str):
             if value not in _COLLAPSE_STRATEGIES:
-                from svy.errors.method_errors import MethodError
+                from svy.errors._method import MethodError
 
                 raise MethodError.invalid_choice(
                     where=_RULE_WHERE,
@@ -745,7 +745,7 @@ class Design:
     ) -> None:
         object.__setattr__(self, "_frozen", False)
         if hasattr(case_id, "columns"):
-            from svy.errors.api_errors import UsageError
+            from svy.errors._api import UsageError
 
             raise UsageError.data_in_design(got=case_id)
 
@@ -826,7 +826,7 @@ class Design:
             return parts[name]
         if name.startswith("_"):
             raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
-        from svy.errors.api_errors import UnknownNameError, public_names
+        from svy.errors._api import UnknownNameError, public_names
 
         raise UnknownNameError.unknown(
             owner="Design",

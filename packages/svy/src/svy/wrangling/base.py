@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 import polars as pl
 
 from svy.core.types import MutateValue, WhereArg
-from svy.errors.api_errors import guided_getattr
+from svy.errors._api import guided_getattr
 from svy.wrangling.columns import clean_names as _clean_names
 from svy.wrangling.columns import keep_columns as _keep_columns
 from svy.wrangling.columns import remove_columns as _remove_columns
@@ -350,7 +350,7 @@ class Wrangling:
             What to do when ``check_singletons`` finds some; the finding is
             ``SINGLETONS_DETECTED``. "error" raises and leaves the sample as it
             was; "warn" records the finding in ``sample.warnings`` and raises
-            it once as a ``SvyUserWarning``; "ignore" records it at INFO level
+            it once as a ``SvyWarning``; "ignore" records it at INFO level
             without raising.
         inplace : bool
             Filter this Sample instead of returning a new one.
@@ -467,7 +467,7 @@ class Wrangling:
         ``on_unmatched`` says what to do when some records find no match; the
         finding is ``JOIN_UNMATCHED``. "error" raises and leaves the sample as
         it was; "warn" records the finding in ``sample.warnings`` and raises it
-        once as a ``SvyUserWarning``; "ignore" records it at INFO level without
+        once as a ``SvyWarning``; "ignore" records it at INFO level without
         raising.
         """
         return _join(

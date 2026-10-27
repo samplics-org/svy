@@ -33,10 +33,10 @@ import pytest
 from numpy.testing import assert_allclose
 from svy_rs._internal import trim_weights as _rust_trim_weights  # type: ignore[import-untyped]
 
-from svy import BootstrapWgts, SvyUserWarning
+from svy import BootstrapWgts, SvyWarning
 from svy.core.sample import Design, Sample
-from svy.core.warnings import Severity, WarnCode
-from svy.errors import WeightingError
+from svy.errors import DimensionError, WeightingError
+from svy.errors._findings import Severity, WarnCode
 from svy.weighting.types import (
     Threshold,
     TrimConfig,
@@ -681,7 +681,7 @@ class TestTrimByDomain:
             data=pl.DataFrame({"weight": weights, "domain": domains}),
             design=Design(wgt="weight"),
         )
-        with pytest.warns(SvyUserWarning, match=r"\[DOMAIN_SKIPPED\]"):
+        with pytest.warns(SvyWarning, match=r"\[DOMAIN_SKIPPED\]"):
             out = sample.weighting.trim(upper=50.0, by="domain", min_cell_size=10)
         warns = _warnings_of(out, WarnCode.DOMAIN_SKIPPED)
         assert len(warns) == 1
@@ -706,18 +706,11 @@ class TestTrimByDomain:
 
 
 class TestTrimWarnings:
-    def test_negative_weight_raises_and_emits_error_warning(self):
+    def test_negative_weight_raises_without_a_finding(self):
         sample = _make_sample([-1.0, 10.0, 10.0])
-        # inplace=True on purpose: the assertion below is about the warning
-        # landing on *this* sample. Under the default (inplace=False) the
-        # operation works on a fork, so a raise leaves the caller's sample
-        # untouched -- warning store included, which is the point of the
-        # isolation. The error is still raised and still emitted to the log.
-        with pytest.raises(Exception, match="negative weight|Negative weights"):
+        with pytest.raises(DimensionError, match="NEGATIVE_WEIGHTS"):
             sample.weighting.trim(upper=50.0, inplace=True)
-        warns = _warnings_of(sample, WarnCode.NEGATIVE_WEIGHT)
-        assert len(warns) == 1
-        assert warns[0].level == Severity.ERROR
+        assert _warnings_of(sample, WarnCode.NEGATIVE_WEIGHT) == []
 
     def test_zero_weight_emits_info_warning(self):
         sample = _make_sample([0.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0])
@@ -776,7 +769,7 @@ class TestTrimWarnings:
         assert len(warns) == 0
 
     def test_max_iter_reached_warning(self, skewed_sample):
-        with pytest.warns(SvyUserWarning, match=r"\[MAX_ITER_REACHED\]"):
+        with pytest.warns(SvyWarning, match=r"\[MAX_ITER_REACHED\]"):
             out = skewed_sample.weighting.trim(
                 upper=50.0, redistribute=True, max_iter=1, tol=1e-20, on_nonconvergence="warn"
             )
@@ -833,7 +826,7 @@ class TestTrimConvergence:
         assert audits[0].extra["converged"] is True
 
     # One iteration is not enough here; the count is what is checked.
-    @pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyUserWarning")
+    @pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyWarning")
     def test_max_iter_1_records_one_iteration(self, skewed_sample):
         out = skewed_sample.weighting.trim(upper=50.0, max_iter=1, on_nonconvergence="warn")
         audits = _warnings_of(out, WarnCode.WEIGHT_ADJ_AUDIT)
@@ -887,7 +880,7 @@ class TestTrimEdgeCases:
     def test_all_weights_zero_no_crash(self):
         sample = _make_sample([0.0, 0.0, 0.0])
         # All zero → no positive units → domain skipped at min_cell_size=1
-        with pytest.warns(SvyUserWarning, match=r"\[DOMAIN_SKIPPED\]"):
+        with pytest.warns(SvyWarning, match=r"\[DOMAIN_SKIPPED\]"):
             out = sample.weighting.trim(upper=50.0, min_cell_size=1)
         # No crash, weights unchanged
         w = out.data[TRIM_WGT].to_numpy()
@@ -1080,7 +1073,7 @@ class TestTrimInfeasible:
     def test_skipped_domain_is_not_judged(self):
         # B has too few units to be trimmed at all, so its bound is not checked.
         s = _make_sample([1.0] * 9 + [12.0] + [5.0] * 2, ["A"] * 10 + ["B"] * 2)
-        with pytest.warns(SvyUserWarning, match=r"\[DOMAIN_SKIPPED\]"):
+        with pytest.warns(SvyWarning, match=r"\[DOMAIN_SKIPPED\]"):
             out = s.weighting.trim(upper=3.0, by="domain", min_cell_size=5)
         assert list(out.data[TRIM_WGT].to_numpy()[-2:]) == [5.0, 5.0]
 

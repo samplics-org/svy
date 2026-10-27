@@ -25,8 +25,8 @@ except ImportError:  # pragma: no cover
 from svy.core._check import margin_totals_check
 from svy.core.design import WgtAdjustment
 from svy.core.types import Category, ControlsType
-from svy.core.warnings import WarnCode, check_on_finding, finding_level
 from svy.errors import DimensionError, MethodError, WeightingError
+from svy.errors._findings import WarnCode, check_on_finding, finding_level
 from svy.weighting._engine import (
     CELLS_PREFIX,
     _where_mask,

@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 
 from svy.core.types import Category, Number, WhereArg
-from svy.errors.api_errors import guided_getattr
+from svy.errors._api import guided_getattr
 from svy.selection.multistage import add_stage as _add_stage
 from svy.selection.pps import pps_brewer as _pps_brewer
 from svy.selection.pps import pps_murphy as _pps_murphy

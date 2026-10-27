@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import math
 
-from svy.core.warnings import warn_no_sample
+from svy.errors._findings import warn_no_sample
 
 
 # ---------------------------------------------------------------------------

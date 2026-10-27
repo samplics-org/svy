@@ -8,8 +8,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal, Sequence
 
 from svy.core.types import WhereArg
-from svy.core.warnings import check_on_finding, finding_level
 from svy.errors import MethodError, SvyError
+from svy.errors._findings import check_on_finding, finding_level
 from svy.utils.where import _compile_where as _compile_where_to_pl_expr
 from svy.wrangling._helpers import _internal_columns, _resolve_target
 

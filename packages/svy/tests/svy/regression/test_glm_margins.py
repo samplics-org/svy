@@ -519,7 +519,7 @@ class TestGLMMarginEdgeCases:
 
     def test_margins_not_fitted_raises(self, api_strat):
         """Margins before fit raises error."""
-        from svy.errors.model_errors import ModelError
+        from svy.errors._model import ModelError
 
         sample = Sample(api_strat, Design(wgt="pw"))
 

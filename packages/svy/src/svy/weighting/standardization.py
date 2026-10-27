@@ -35,9 +35,9 @@ import polars as pl
 
 from svy.core.design import WgtAdjustment
 from svy.core.types import DomainScalarMap
-from svy.core.warnings import Severity, WarnCode, check_on_finding, finding_level
 from svy.errors import WeightingError
-from svy.errors.weighting_errors import show
+from svy.errors._findings import Severity, WarnCode, check_on_finding, finding_level
+from svy.errors._weighting import show
 from svy.weighting._engine import (
     CellSpec,
     _cells_to_cols,

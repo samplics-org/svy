@@ -41,7 +41,7 @@ import msgspec
 from svy.datasets._cache import validate_slug
 from svy.datasets._http import load_httpx
 from svy.datasets.types import Dataset, DatasetCatalog
-from svy.errors.dataset_errors import DatasetError
+from svy.errors._dataset import DatasetError
 
 
 if TYPE_CHECKING:

@@ -19,8 +19,8 @@ import msgspec
 import numpy as np
 import polars as pl
 
-from svy.core.warnings import Severity, WarnCode, check_on_finding, finding_level
 from svy.errors import DimensionError, MethodError, WeightingError
+from svy.errors._findings import Severity, WarnCode, check_on_finding, finding_level
 
 
 try:
@@ -189,15 +189,6 @@ def _run_trim(
     neg_mask = w_orig < 0
     if neg_mask.any():
         n_neg = int(neg_mask.sum())
-        sample.warn(
-            code=WarnCode.NEGATIVE_WEIGHT,
-            title="Negative weights found",
-            detail=f"{n_neg} unit(s) have negative weights. Trim cannot proceed.",
-            where=where,
-            level=Severity.ERROR,
-            got=n_neg,
-            hint="Remove or correct negative weights before trimming.",
-        )
         raise DimensionError(
             title="Negative weights found",
             detail=f"trim() found {n_neg} negative weight(s). Trimming cannot proceed.",

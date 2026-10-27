@@ -1,10 +1,10 @@
-# svy/errors/model_errors.py
+# svy/errors/_model.py
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from .base_errors import SvyError
+from ._base import SvyError
 
 
 @dataclass(eq=False)
@@ -60,23 +60,6 @@ class ModelError(SvyError):
             expected=f"valid range for {family}",
             got=found_values,
             hint=hint or "Check your target variable or filter invalid rows.",
-        )
-
-    @classmethod
-    def perfect_separation(
-        cls,
-        *,
-        where: Optional[str],
-        var_name: str,
-        hint: Optional[str] = "Try penalization or removing the variable.",
-    ) -> "ModelError":
-        return cls(
-            title="Perfect separation detected",
-            detail=f"Variable '{var_name}' perfectly predicts the outcome.",
-            code="PERFECT_SEPARATION",
-            where=where,
-            param=var_name,
-            hint=hint,
         )
 
     # ---- Linear Algebra / Optimization Errors -------------------------------

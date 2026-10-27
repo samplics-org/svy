@@ -5,9 +5,9 @@ import polars as pl
 import pytest
 
 from svy.core.enumerations import MeasurementType
-from svy.errors.dimension_errors import DimensionError
-from svy.errors.label_errors import LabelError
-from svy.errors.method_errors import MethodError
+from svy.errors._dimension import DimensionError
+from svy.errors._label import LabelError
+from svy.errors._method import MethodError
 from svy.metadata import Label
 
 

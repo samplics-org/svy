@@ -16,7 +16,7 @@ from svy.core.types import (
     FloatArray,
     Number,
 )
-from svy.errors.method_errors import MethodError
+from svy.errors._method import MethodError
 
 
 # ============================================================

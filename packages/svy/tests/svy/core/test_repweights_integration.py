@@ -103,7 +103,7 @@ def test_remove_rep_weight_column_is_protected(rep_sample):
 
 
 def test_remove_rep_weight_column_with_force_drops_rep_design(rep_sample):
-    with pytest.warns(svy.SvyUserWarning, match=r"\[DESIGN_FIELDS_REMOVED\]"):
+    with pytest.warns(svy.SvyWarning, match=r"\[DESIGN_FIELDS_REMOVED\]"):
         out = rep_sample.wrangling.remove_columns("rw1", force=True)
     assert "rw1" not in out._data.columns
     # A partial replicate set cannot be represented; the replicate design
@@ -120,7 +120,7 @@ def test_keep_columns_with_design_columns_keeps_rep_weights(rep_sample):
 
 
 def test_keep_columns_force_drops_rep_design(rep_sample):
-    with pytest.warns(svy.SvyUserWarning, match=r"\[DESIGN_FIELDS_REMOVED\]"):
+    with pytest.warns(svy.SvyWarning, match=r"\[DESIGN_FIELDS_REMOVED\]"):
         out = rep_sample.wrangling.keep_columns(["y"], force=True)
     assert out.design.rep_wgts is None
 

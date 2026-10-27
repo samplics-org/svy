@@ -10,8 +10,8 @@ from rich.console import Console
 
 import svy
 
-from svy.core.warnings import Severity, SvyWarning, WarningStore
-from svy.errors.base_errors import SvyError
+from svy.errors._base import SvyError
+from svy.errors._findings import Severity, SvyWarning, WarningStore
 from svy.selection import Stage
 
 
@@ -27,11 +27,11 @@ def _finding(level: Severity, code: str = "SOME_CODE") -> SvyWarning:
 
 @pytest.mark.parametrize(
     "level, mark, rich_mark",
-    [(Severity.INFO, "ℹ️", "ℹ"), (Severity.WARNING, "⚠️", "▲"), (Severity.ERROR, "❌", "✗")],
+    [(Severity.INFO, "ℹ️", "ℹ"), (Severity.WARNING, "⚠️", "▲")],
 )
 def test_finding_prints_like_an_error_with_its_marker(level, mark, rich_mark):
     w = _finding(level)
-    text = str(w)
+    text = w.text()
     assert f"{mark} A title [SOME_CODE]" in text
     assert "What happened." in text and "- param: n" in text
     assert f"{rich_mark} A title [SOME_CODE]" in _rich(w)

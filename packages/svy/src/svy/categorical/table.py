@@ -27,7 +27,7 @@ from svy.core.containers import ChiSquare, FDist
 from svy.core.enumerations import TableType
 from svy.core.types import Category, Number
 from svy.errors import MethodError
-from svy.errors.api_errors import guided_getattr
+from svy.errors._api import guided_getattr
 from svy.estimation import ParamEst
 
 # Import central UI helpers (consistent with estimate.py and ttest.py)
@@ -44,7 +44,7 @@ from svy.utils.formats import _fmt_fixed
 
 
 if TYPE_CHECKING:
-    from svy.core.warnings import SvyWarning
+    from svy.errors._findings import SvyWarning
     from svy.metadata import MetadataStore
 
 

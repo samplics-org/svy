@@ -467,7 +467,7 @@ class TestGLMDomainValidation:
 
     def test_poisson_negative_raises(self, api_strat):
         """Poisson with negative values raises error."""
-        from svy.errors.model_errors import ModelError
+        from svy.errors._model import ModelError
 
         # Create data with negative values
         bad_data = api_strat.with_columns((pl.col("enroll") - 1000).alias("bad_enroll"))
@@ -482,7 +482,7 @@ class TestGLMDomainValidation:
 
     def test_gamma_non_positive_raises(self, api_strat):
         """Gamma with non-positive values raises error."""
-        from svy.errors.model_errors import ModelError
+        from svy.errors._model import ModelError
 
         # Create data with zero/negative values
         bad_data = api_strat.with_columns((pl.col("api00") - 1000).alias("bad_api"))

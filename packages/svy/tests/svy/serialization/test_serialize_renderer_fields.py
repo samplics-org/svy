@@ -14,7 +14,7 @@ import pytest
 
 import svy
 
-from svy.errors.serialization_errors import SerializationError
+from svy.errors._serialization import SerializationError
 from svy.serialize import (
     SCHEMA_VERSION,
     TTestOneGroupByData,
