@@ -193,17 +193,19 @@ fn write_xpt_impl(
     // Frees the writer on every exit path (including early `?` returns).
     let _writer_guard = WriterGuard(writer);
 
+    if version != 5 && version != 8 {
+        return Err(anyhow!("XPT version must be 5 or 8, got {version}"));
+    }
     unsafe {
-        let xpt_version = if version == 5 { 5 } else { 8 };
-        readstat_writer_set_file_format_version(writer, xpt_version);
+        readstat_writer_set_file_format_version(writer, version as u8);
         readstat_set_data_writer(writer, Some(data_writer_cb));
     }
 
     if let Some(lbl) = label {
-        if let Ok(lbl_cstr) = CString::new(lbl) {
-            unsafe {
-                readstat_writer_set_file_label(writer, lbl_cstr.as_ptr());
-            }
+        let lbl_cstr = CString::new(lbl)
+            .map_err(|_| anyhow!("file label {lbl:?} contains an embedded NUL"))?;
+        unsafe {
+            readstat_writer_set_file_label(writer, lbl_cstr.as_ptr());
         }
     }
 
@@ -217,10 +219,10 @@ fn write_xpt_impl(
         })
         .unwrap_or_else(|| "DATA".to_string());
 
-    if let Ok(member_cstr) = CString::new(member_name) {
-        unsafe {
-            readstat_writer_set_table_name(writer, member_cstr.as_ptr());
-        }
+    let member_cstr = CString::new(member_name.as_str())
+        .map_err(|_| anyhow!("member name {member_name:?} contains an embedded NUL"))?;
+    unsafe {
+        readstat_writer_set_table_name(writer, member_cstr.as_ptr());
     }
 
     // Add variables
@@ -281,17 +283,25 @@ fn write_xpt_impl(
 
         let metadata = field.metadata();
         if let Some(label_str) = metadata.get("label") {
-            if let Ok(label_cstr) = CString::new(label_str.as_str()) {
-                unsafe {
-                    readstat_variable_set_label(var, label_cstr.as_ptr());
-                }
+            let label_cstr = CString::new(label_str.as_str()).map_err(|_| {
+                anyhow!(
+                    "variable label of column '{}' contains an embedded NUL",
+                    field.name()
+                )
+            })?;
+            unsafe {
+                readstat_variable_set_label(var, label_cstr.as_ptr());
             }
         }
         if let Some(format_str) = metadata.get("format") {
-            if let Ok(format_cstr) = CString::new(format_str.as_str()) {
-                unsafe {
-                    readstat_variable_set_format(var, format_cstr.as_ptr());
-                }
+            let format_cstr = CString::new(format_str.as_str()).map_err(|_| {
+                anyhow!(
+                    "format of column '{}' contains an embedded NUL",
+                    field.name()
+                )
+            })?;
+            unsafe {
+                readstat_variable_set_format(var, format_cstr.as_ptr());
             }
         }
 

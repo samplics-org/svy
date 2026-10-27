@@ -87,3 +87,100 @@ def test_write_dta_accepts_text_codes_read_from_a_file(tmp_path):
     )
     _, meta = read_dta(path)
     assert {"1": "yes", "-1": "inapplicable"} in [vl["mapping"] for vl in meta["value_labels"]]
+
+
+def _df():
+    import polars as pl
+
+    return pl.DataFrame({"x": [1.0, 2.0]})
+
+
+@pytest.mark.parametrize(
+    ("write", "kwargs", "what", "names"),
+    [
+        ("write_sav", {"var_labels": {"x": "a\x00b"}}, "variable labels", "'x'"),
+        ("write_sav", {"value_labels": {"x": {1: "a\x00b"}}}, "value labels", "'x'"),
+        ("write_dta", {"file_label": "a\x00b"}, "file_label", "'file_label'"),
+        ("write_dta", {"var_labels": {"x": "a\x00b"}}, "variable labels", "'x'"),
+        ("write_dta", {"value_labels": {"x": {1: "a\x00b"}}}, "value labels", "'x'"),
+        ("write_xpt", {"label": "a\x00b"}, "name and label", "'label'"),
+        ("write_xpt", {"name": "a\x00b"}, "name and label", "'name'"),
+        ("write_xpt", {"var_labels": {"x": "a\x00b"}}, "variable labels", "'x'"),
+    ],
+)
+def test_writers_reject_nul_in_labels(tmp_path, write, kwargs, what, names):
+    import svy_io
+
+    with pytest.raises(ValueError, match=rf"^{what} cannot contain NUL \(\\x00\): \[{names}\]$"):
+        getattr(svy_io, write)(_df(), tmp_path / "out.bin", **kwargs)
+
+
+def _ipc(df):
+    import io
+
+    bio = io.BytesIO()
+    df.write_ipc(bio)
+    return bio.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"user_missing": [{"values": [9.0]}]}, r"bad user_missing entry: .*'col'"),
+        ({"user_missing": [{"col": "x", "values": ["nine"]}]}, "bad user_missing entry"),
+        ({"value_labels": [{"col": "x"}]}, r"bad value_labels entry: .*'labels'"),
+    ],
+)
+def test_native_sav_writer_rejects_malformed_specs(tmp_path, kwargs, message):
+    from svy_io import svyreadstat_rs as native
+
+    with pytest.raises(ValueError, match=message):
+        native.df_write_sav_file(_ipc(_df()), str(tmp_path / "n.sav"), **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"var_labels": {"x": "a\x00b"}}, "variable label of column 'x' contains an embedded NUL"),
+        (
+            {"value_labels": [{"col": "x", "labels": {"one": "1"}}]},
+            "value label code \"one\" on column 'x' is not numeric",
+        ),
+        (
+            {"value_labels": [{"col": "x", "labels": {"1": "a\x00b"}}]},
+            r"value label \"a\\0b\" on column 'x' contains an embedded NUL",
+        ),
+    ],
+)
+def test_native_sav_writer_rejects_bad_labels(tmp_path, kwargs, message):
+    from svy_io import svyreadstat_rs as native
+
+    with pytest.raises(RuntimeError, match=message):
+        native.df_write_sav_file(_ipc(_df()), str(tmp_path / "n.sav"), **kwargs)
+
+
+def test_native_dta_writer_rejects_nul_in_variable_label(tmp_path):
+    from svy_io import svyreadstat_rs as native
+
+    with pytest.raises(
+        RuntimeError, match="variable label of column 'x' contains an embedded NUL"
+    ):
+        native.df_write_dta_file(
+            _ipc(_df()), str(tmp_path / "n.dta"), 118, None, '{"x": "a\\u0000b"}', None, 2045, None
+        )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"version": 6}, "XPT version must be 5 or 8, got 6"),
+        ({"label": "a\x00b"}, r"file label \"a\\0b\" contains an embedded NUL"),
+        ({"name": "a\x00b"}, r"member name \"a\\0b\" contains an embedded NUL"),
+    ],
+)
+def test_native_xpt_writer_rejects_bad_header(tmp_path, kwargs, message):
+    from svy_io import svyreadstat_rs as native
+
+    args = {"version": 8, "name": "DATA", "label": None, **kwargs}
+    with pytest.raises(RuntimeError, match=message):
+        native.df_write_xpt_file(_ipc(_df()), str(tmp_path / "n.xpt"), **args)

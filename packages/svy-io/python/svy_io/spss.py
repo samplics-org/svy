@@ -19,6 +19,7 @@ from .helpers import (
     _as_data_path,
     _extract_from_zip,
     _normalize_n_max,
+    _reject_nul,
     _split_encoding,
     _with_bad_string_hint,
 )
@@ -615,7 +616,10 @@ def write_sav(
     too_wide = sorted(
         m["col"]
         for m in missing_specs
-        if (to_write.schema[m["col"]] == pl.String or isinstance(to_write.schema[m["col"]], pl.Enum))
+        if (
+            to_write.schema[m["col"]] == pl.String
+            or isinstance(to_write.schema[m["col"]], pl.Enum)
+        )
         and (to_write[m["col"]].cast(pl.String).str.len_bytes().max() or 0) > 8
     )
     if too_wide:
@@ -623,6 +627,11 @@ def write_sav(
             "SPSS user-missing values apply only to string columns of at most 8 bytes; "
             f"columns: {too_wide}"
         )
+    _reject_nul("variable labels", (var_labels or {}).items())
+    _reject_nul(
+        "value labels",
+        ((col, f"{k}{v}") for col, labels in labels_by_col.items() for k, v in labels.items()),
+    )
 
     # The native writer wants text codes and {col, values, range}.
     native_labels = [

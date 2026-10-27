@@ -21,6 +21,7 @@ from .factor import as_factor, check_ordered_levels, ordered_categories
 from .helpers import (
     _extract_from_zip,
     _normalize_n_max,
+    _reject_nul,
     _split_encoding,
     _with_bad_string_hint,
 )
@@ -845,6 +846,8 @@ def write_xpt(
     unknown = sorted(set(var_labels or {}) - set(df.columns))
     if unknown:
         raise ValueError(f"var_labels name columns that are not in the DataFrame: {unknown}")
+    _reject_nul("name and label", [("name", name), ("label", label)])
+    _reject_nul("variable labels", (var_labels or {}).items())
 
     # --- XPT requires numeric == double; make that explicit ---
     int_cols = [

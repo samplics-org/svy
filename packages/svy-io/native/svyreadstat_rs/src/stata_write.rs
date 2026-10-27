@@ -28,15 +28,14 @@ use readstat_sys::{
     readstat_end_row, readstat_end_writing, readstat_error_t, readstat_insert_double_value,
     readstat_insert_int8_value, readstat_insert_int16_value, readstat_insert_int32_value,
     readstat_insert_missing_value, readstat_insert_string_value,
-    readstat_insert_tagged_missing_value, readstat_label_double_value,
-    readstat_label_set_t, readstat_set_data_writer,
-    readstat_type_e_READSTAT_TYPE_DOUBLE as T_DOUBLE, readstat_type_e_READSTAT_TYPE_INT8 as T_INT8,
-    readstat_type_e_READSTAT_TYPE_INT16 as T_INT16, readstat_type_e_READSTAT_TYPE_INT32 as T_INT32,
+    readstat_insert_tagged_missing_value, readstat_label_double_value, readstat_label_set_t,
+    readstat_set_data_writer, readstat_type_e_READSTAT_TYPE_DOUBLE as T_DOUBLE,
+    readstat_type_e_READSTAT_TYPE_INT8 as T_INT8, readstat_type_e_READSTAT_TYPE_INT16 as T_INT16,
+    readstat_type_e_READSTAT_TYPE_INT32 as T_INT32,
     readstat_type_e_READSTAT_TYPE_STRING as T_STRING, readstat_type_t,
     readstat_variable_set_format, readstat_variable_set_label, readstat_variable_set_label_set,
     readstat_variable_t, readstat_writer_init, readstat_writer_set_file_format_version,
-    readstat_writer_t,
-    readstat_writer_set_file_label,
+    readstat_writer_set_file_label, readstat_writer_t,
 };
 
 use crate::core::WriterGuard;
@@ -183,7 +182,8 @@ fn temporal_as_stata(a: &dyn Array, row: usize) -> Option<f64> {
             a.as_any().downcast_ref::<$T>().unwrap().value(row)
         };
     }
-    let unix_ms = match a.data_type() {
+    // i128 because shifting a timestamp near i64::MAX to the 1960 epoch overflows i64.
+    let unix_ms: i128 = match a.data_type() {
         DataType::Date32 => {
             return Some((down!(Date32Array) as i64 + UNIX_MINUS_STATA_DAYS) as f64);
         }
@@ -191,17 +191,17 @@ fn temporal_as_stata(a: &dyn Array, row: usize) -> Option<f64> {
             let days = down!(Date64Array).div_euclid(MS_PER_DAY);
             return Some((days + UNIX_MINUS_STATA_DAYS) as f64);
         }
-        DataType::Timestamp(TimeUnit::Second, _) => down!(TimestampSecondArray) * 1_000,
-        DataType::Timestamp(TimeUnit::Millisecond, _) => down!(TimestampMillisecondArray),
+        DataType::Timestamp(TimeUnit::Second, _) => down!(TimestampSecondArray) as i128 * 1_000,
+        DataType::Timestamp(TimeUnit::Millisecond, _) => down!(TimestampMillisecondArray).into(),
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            down!(TimestampMicrosecondArray).div_euclid(1_000)
+            down!(TimestampMicrosecondArray).div_euclid(1_000).into()
         }
         DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            down!(TimestampNanosecondArray).div_euclid(1_000_000)
+            down!(TimestampNanosecondArray).div_euclid(1_000_000).into()
         }
         _ => return None,
     };
-    Some((unix_ms + UNIX_MINUS_STATA_MS) as f64)
+    Some((unix_ms + UNIX_MINUS_STATA_MS as i128) as f64)
 }
 
 fn as_i64_opt(a: &dyn Array, row: usize) -> Option<i64> {
@@ -340,7 +340,10 @@ fn tags_by_column(
     let mut by_col = vec![HashMap::new(); names.len()];
     for spec in specs {
         let Some(j) = names.iter().position(|n| *n == spec.col) else {
-            return Err(anyhow!("tagged missings name column '{}', which is not in the data", spec.col));
+            return Err(anyhow!(
+                "tagged missings name column '{}', which is not in the data",
+                spec.col
+            ));
         };
         if is_str_col[j] {
             return Err(anyhow!(
@@ -505,10 +508,14 @@ fn write_stata_minimal(
         if let Some(map) = var_labels {
             if let Some(lbl) = map.get(field.name()) {
                 if !lbl.is_empty() {
-                    if let Ok(c) = CString::new(lbl.as_str()) {
-                        unsafe {
-                            readstat_variable_set_label(var, c.as_ptr());
-                        }
+                    let c = CString::new(lbl.as_str()).map_err(|_| {
+                        anyhow!(
+                            "variable label of column '{}' contains an embedded NUL",
+                            field.name()
+                        )
+                    })?;
+                    unsafe {
+                        readstat_variable_set_label(var, c.as_ptr());
                     }
                 }
             }
@@ -876,5 +883,15 @@ mod tests {
         assert_eq!(col(0), [Some(STATA_DAYS), None]);
         assert_eq!(col(1), [Some(STATA_MS), None]);
         assert_eq!(col(2), [Some(1.5), Some(2.5)]);
+    }
+
+    #[test]
+    fn extreme_timestamps_shift_to_1960_without_overflow() {
+        let ms = TimestampMillisecondArray::from(vec![i64::MAX]);
+        assert_eq!(temporal_as_stata(&ms, 0), Some(9.223372352473975e18));
+
+        let secs = TimestampSecondArray::from(vec![i64::MAX, i64::MIN]);
+        assert_eq!(temporal_as_stata(&secs, 0), Some(9.223372037170395e21));
+        assert_eq!(temporal_as_stata(&secs, 1), Some(-9.223372036539157e21));
     }
 }
