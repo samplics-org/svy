@@ -72,7 +72,7 @@ def test_enum_beside_plain(sample):
 
 def test_numbers_sort_numerically(sample):
     t = sample.categorical.tabulate("k", "status")
-    assert t.rowvals == ["1", "2", "10"]
+    assert t.rowvals == [1, 2, 10]
     assert _cells(t) == list(itertools.product(["1", "2", "10"], S_ORDER))
 
 

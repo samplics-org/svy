@@ -679,15 +679,17 @@ class Categorical:
         # levels for display
         _dom_data = _level_data.filter(pl.col(domain_col)) if domain_col else _level_data
 
-        def _levels(col: str) -> list:
-            return _dom_data[col].unique().sort().cast(pl.String).to_list()
+        def _levels(col: str) -> tuple[list, list[str]]:
+            """The levels as the column holds them, and as text, the form cells carry."""
+            s = _dom_data[col].unique().sort()
+            return s.to_list(), s.cast(pl.String).to_list()
 
-        rowvals = _levels(rowvar)
-        colvals = _levels(colvar) if colvar else None
+        rowvals, row_text = _levels(rowvar)
+        colvals, col_text = _levels(colvar) if colvar else (None, [])
 
         # Cells come back in the kernel's order; list them by row, then column level.
-        row_pos = {_norm_label(str(v)): i for i, v in enumerate(rowvals)}
-        col_pos = {_norm_label(str(v)): i for i, v in enumerate(colvals or [])}
+        row_pos = {_norm_label(str(v)): i for i, v in enumerate(row_text)}
+        col_pos = {_norm_label(str(v)): i for i, v in enumerate(col_text)}
         cell_rows.sort(
             key=lambda c: (
                 row_pos.get(c.rowvar, len(row_pos)),

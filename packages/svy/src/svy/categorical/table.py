@@ -72,6 +72,15 @@ class TableStats(msgspec.Struct):
 _CELL_FIELDS = ("rowvar", "colvar", "est", "se", "cv", "lci", "uci", "n")
 
 
+def _level_text(value: object) -> str:
+    """A level as its cells spell it: polars' text cast, with whole floats as integers."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
 class CellEst(msgspec.Struct):
     rowvar: str
     colvar: str
@@ -290,10 +299,17 @@ class Table:
         resolved = self._metadata._resolve(var)
         return resolved.var_label if resolved.has_var_label else var
 
+    def _source_value(self, var: str, text: str) -> Category:
+        """The level a cell's text stands for, as the column holds it."""
+        levels = self.rowvals if var == self.rowvar else self.colvals
+        return {_level_text(v): v for v in levels or ()}.get(text, text)
+
     def _get_value_label(self, var: str, value: Category) -> str:
         """Get value label or fall back to string representation."""
+        if isinstance(value, str):
+            value = self._source_value(var, value)
         if not self._resolve_use_labels() or self._metadata is None:
-            return str(value)
+            return _level_text(value)
         resolved = self._metadata._resolve(var)
         # Try the value as-is first
         label = resolved.display(value)
@@ -305,7 +321,7 @@ class Table:
                 label = resolved.display(int_value)
             except (ValueError, TypeError):
                 pass
-        return label
+        return _level_text(value) if label == str(value) else label
 
     def _get_row_display(self, value: Category) -> str:
         """Get display string for a row value."""
@@ -783,7 +799,7 @@ class Table:
         if resolve_labels and self._metadata is not None:
             row_resolved = self._metadata._resolve(self.rowvar)
             if row_resolved.has_value_labels:
-                _row_label_map = {str(k): str(v) for k, v in row_resolved.labels.items()}
+                _row_label_map = {_level_text(k): str(v) for k, v in row_resolved.labels.items()}
                 df = df.with_columns(
                     pl.col("rowvar").replace_strict(_row_label_map, default=pl.col("rowvar"))
                 )
@@ -791,7 +807,9 @@ class Table:
             if self.colvar is not None:
                 col_resolved = self._metadata._resolve(self.colvar)
                 if col_resolved.has_value_labels:
-                    _col_label_map = {str(k): str(v) for k, v in col_resolved.labels.items()}
+                    _col_label_map = {
+                        _level_text(k): str(v) for k, v in col_resolved.labels.items()
+                    }
                     df = df.with_columns(
                         pl.col("colvar").replace_strict(_col_label_map, default=pl.col("colvar"))
                     )
@@ -804,11 +822,11 @@ class Table:
         if resolve_labels and self._metadata is not None:
             row_resolved = self._metadata._resolve(self.rowvar)
             if row_resolved.has_value_labels:
-                row_levels = [row_resolved.display(v) for v in row_levels]
+                row_levels = [self._get_row_display(_level_text(v)) for v in row_levels]
             else:
-                row_levels = [str(v) for v in row_levels]
+                row_levels = [_level_text(v) for v in row_levels]
         else:
-            row_levels = [str(v) for v in row_levels]
+            row_levels = [_level_text(v) for v in row_levels]
 
         if sort_rows and (self.rowvals is None):
             row_levels = sorted([_norm_label(x) for x in row_levels], key=level_sort_key)
@@ -869,11 +887,11 @@ class Table:
         if resolve_labels and self._metadata is not None:
             col_resolved = self._metadata._resolve(self.colvar)
             if col_resolved.has_value_labels:
-                col_levels = [col_resolved.display(v) for v in col_levels_raw]
+                col_levels = [self._get_col_display(_level_text(v)) for v in col_levels_raw]
             else:
-                col_levels = [str(v) for v in col_levels_raw]
+                col_levels = [_level_text(v) for v in col_levels_raw]
         else:
-            col_levels = [str(v) for v in col_levels_raw]
+            col_levels = [_level_text(v) for v in col_levels_raw]
 
         if sort_cols and (self.colvals is None):
             col_levels = sorted([_norm_label(x) for x in col_levels], key=level_sort_key)
