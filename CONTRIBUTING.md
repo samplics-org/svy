@@ -118,6 +118,7 @@ Lint/format/type-check settings (ruff, mypy, pytest) are configured once in the 
 
 ### Native (Rust/PyO3) contributions
 
+- Follow the [Rust guide](docs/rust-guide.md) for svy-rs and svy-io.
 - Keep the FFI boundary small and ergonomic in Python.
 - Prefer safe Rust; clearly justify any `unsafe` and guard it with tests.
 - Map ReadStat errors to Python exceptions with context (file, variable, format).
