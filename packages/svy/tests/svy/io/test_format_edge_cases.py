@@ -18,7 +18,7 @@ import pytest
 
 import svy
 
-from svy.errors.io_errors import IoError
+from svy.errors._io import IoError
 
 
 FORMATS = {

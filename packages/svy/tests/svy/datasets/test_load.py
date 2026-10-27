@@ -20,7 +20,7 @@ import pytest
 
 from svy.datasets import load
 from svy.datasets.base import _seed_from_rstate
-from svy.errors.dataset_errors import DatasetError
+from svy.errors._dataset import DatasetError
 
 
 # --------------------------------------------------------------------------- #

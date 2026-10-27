@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Tuple
 
 import polars as pl
 
-from svy.core.warnings import warn_no_sample
+from svy.errors._findings import warn_no_sample
 from svy.metadata import MetadataStore
 
 from .core import (

@@ -10,7 +10,7 @@ import pytest
 import svy
 
 from svy.core.repwgts import BootstrapWgts
-from svy.errors.singleton_errors import SingletonError
+from svy.errors._singleton import SingletonError
 
 
 def _frame() -> pl.DataFrame:

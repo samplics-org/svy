@@ -21,7 +21,7 @@ import polars as pl
 import pytest
 
 from svy import Design, Sample, Singleton, col
-from svy.core.warnings import Severity, WarnCode
+from svy.errors._findings import Severity, WarnCode
 from svy.estimation.base import prop_ci_boundary_note
 
 

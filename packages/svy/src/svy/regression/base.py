@@ -28,9 +28,9 @@ from svy.core.singleton import domain_singleton_findings, require_singleton_rule
 from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import WhereArg
 from svy.core.variance_method import resolve_variance_method
-from svy.core.warnings import WarnCode
-from svy.errors.api_errors import guided_getattr
-from svy.errors.model_errors import ModelError
+from svy.errors._api import guided_getattr
+from svy.errors._findings import WarnCode
+from svy.errors._model import ModelError
 from svy.estimation.replication import replicate_params
 from svy.regression.glm import GLMCoef, GLMFit, GLMStats, delta_var, offset_values
 from svy.regression.links import FAMILY_LABELS, link_inverse, link_mu_eta, resolve_link

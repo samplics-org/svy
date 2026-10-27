@@ -1,5 +1,5 @@
-from svy.errors.base_errors import SvyError
-from svy.errors.label_errors import LabelError
+from svy.errors._base import SvyError
+from svy.errors._label import LabelError
 
 
 def test_label_error_is_subclass_and_default_code_namespace():
@@ -93,7 +93,7 @@ def test_serialization_error_constructor():
     assert e.extra == {"n": 2}
     # rendering still works
     d = e.to_dict()
-    assert d["error"]["code"] == "LABEL_SERIALIZATION_ERROR"
+    assert d["code"] == "LABEL_SERIALIZATION_ERROR"
 
 
 def test_invalid_scheme_id_constructor():

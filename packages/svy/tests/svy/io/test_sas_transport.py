@@ -16,7 +16,7 @@ import svy_io
 
 import svy
 
-from svy.errors.io_errors import IoError
+from svy.errors._io import IoError
 
 
 SAS_DATA = Path(__file__).resolve().parents[4] / "svy-io/tests/data/sas"

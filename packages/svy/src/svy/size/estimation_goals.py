@@ -243,7 +243,7 @@ def estimate_mean(
         The updated SampleSize instance (chainable).
     """
     alpha = _checked_alpha(alpha, where="SampleSize.estimate_mean")
-    from svy.errors.method_errors import MethodError
+    from svy.errors._method import MethodError
 
     if method != "wald":
         raise MethodError.invalid_choice(

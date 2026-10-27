@@ -1,6 +1,7 @@
 # src/svy/estimation/base.py
 from __future__ import annotations
 
+import dataclasses
 import logging
 import math
 
@@ -31,9 +32,9 @@ from svy.core.singleton import (
 )
 from svy.core.types import WhereArg
 from svy.core.variance_method import normalize_variance_method, resolve_variance_method
-from svy.core.warnings import Severity, SvyWarning, WarnCode
 from svy.errors import DimensionError, MethodError
-from svy.errors.api_errors import guided_getattr
+from svy.errors._api import guided_getattr
+from svy.errors._findings import Severity, SvyWarning, WarnCode
 from svy.estimation.estimate import (
     Estimate,
     EstimateList,
@@ -1056,7 +1057,7 @@ class Estimation:
             },
             var=y_name,
         )
-        return [msgspec.structs.replace(kept, level=Severity.WARNING)]
+        return [dataclasses.replace(kept, level=Severity.WARNING)]
 
     def _quantile_result_to_param_est(
         self,

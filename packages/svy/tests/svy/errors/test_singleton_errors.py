@@ -2,8 +2,8 @@ from typing import Any, Mapping
 
 import msgspec
 
-from svy.errors.base_errors import SvyError
-from svy.errors.singleton_errors import SingletonError
+from svy.errors._base import SvyError
+from svy.errors._singleton import SingletonError
 
 
 class _Info(msgspec.Struct):

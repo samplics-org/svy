@@ -12,7 +12,7 @@ import pytest
 from svy.core.enumerations import DistFamily
 from svy.core.sample import Design, Sample
 from svy.core.terms import Cat
-from svy.errors.model_errors import ModelError
+from svy.errors._model import ModelError
 
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
@@ -730,7 +730,7 @@ class TestGLMPredictEdgeCases:
 
     def test_predict_not_fitted_raises(self, sample_weighted, api_strat):
         """Predict before fit raises error."""
-        from svy.errors.model_errors import ModelError
+        from svy.errors._model import ModelError
 
         with pytest.raises(ModelError):
             sample_weighted.glm.predict(api_strat.head(5))

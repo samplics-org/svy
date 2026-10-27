@@ -17,7 +17,7 @@ import pytest
 
 from numpy.testing import assert_allclose
 
-from svy import Design, Sample, SvyUserWarning
+from svy import Design, Sample, SvyWarning
 from svy.core.repwgts import BrrWgts
 from svy.errors import MethodError
 
@@ -33,7 +33,7 @@ def no_warnings(allow: str | None = None):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         if allow is not None:
-            warnings.filterwarnings("ignore", message=rf"\[{allow}\]", category=SvyUserWarning)
+            warnings.filterwarnings("ignore", message=rf"\[{allow}\]", category=SvyWarning)
         yield
 
 
@@ -90,7 +90,7 @@ def test_look_alikes_do_not_change_the_replicate_columns(padded):
 @pytest.mark.parametrize("inplace", [False, True], ids=["fork", "inplace"])
 @pytest.mark.parametrize("padded", [False, True], ids=["unpadded", "padded"])
 # The SEs are Taylor on a BRR-only design, deliberately; the baselines report it.
-@pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyUserWarning")
+@pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyWarning")
 def test_rename_rep_wgts_touches_only_the_replicates(padded, inplace):
     s = _received(padded)
     look = PADDED_LOOK_ALIKES if padded else UNPADDED_LOOK_ALIKES
@@ -113,7 +113,7 @@ def test_rename_rep_wgts_touches_only_the_replicates(padded, inplace):
 
 @pytest.mark.parametrize("padded", [False, True], ids=["unpadded", "padded"])
 # The SEs are Taylor on a BRR-only design, deliberately; the baselines report it.
-@pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyUserWarning")
+@pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyWarning")
 def test_renaming_a_look_alike_leaves_the_replicate_spec_alone(padded):
     s = _received(padded)
     se = _se(s)
@@ -127,7 +127,7 @@ def test_renaming_a_look_alike_leaves_the_replicate_spec_alone(padded):
 
 
 # The SEs are Taylor on a BRR-only design, deliberately; the baselines report it.
-@pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyUserWarning")
+@pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyWarning")
 def test_renaming_the_weight_does_not_move_its_replicates():
     s = _received(False)
     with no_warnings():
@@ -332,7 +332,7 @@ def test_estimation_reads_only_the_replicates_next_to_look_alikes(padded):
     without = _received(padded, look_alikes=[])
     # Taylor on replicates with no stratum/psu is a finding: recorded on each
     # sample and raised once per sample, however many estimates follow.
-    with pytest.warns(SvyUserWarning, match=r"\[TAYLOR_WITHOUT_DESIGN\]") as rec:
+    with pytest.warns(SvyWarning, match=r"\[TAYLOR_WITHOUT_DESIGN\]") as rec:
         assert_allclose(_se(with_look), _se(without))
         assert_allclose(_est(with_look), _est(without))
     assert len(rec) == 2 and all(r.filename == __file__ for r in rec)

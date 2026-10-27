@@ -20,7 +20,7 @@ from svy.engine.io import (
     _write_stata,
     import_labels_from_svyio_meta,
 )
-from svy.errors.io_errors import IoError, map_os_error
+from svy.errors._io import IoError, map_os_error
 
 
 log = logging.getLogger(__name__)

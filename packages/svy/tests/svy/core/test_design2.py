@@ -74,7 +74,7 @@ def test_valid_design_update_method(df_base, design_ok):
 
 
 # Changing the weight drops design_ok's replicates: a side effect here.
-@pytest.mark.filterwarnings(r"ignore:\[REP_WGTS_RESET\]:svy.SvyUserWarning")
+@pytest.mark.filterwarnings(r"ignore:\[REP_WGTS_RESET\]:svy.SvyWarning")
 def test_missing_referenced_column_in_design(df_base, design_ok):
     bad = design_ok.update(wgt="does_not_exist")
     with pytest.raises(ValueError, match="not found"):
@@ -177,7 +177,7 @@ def test_rep_weights_not_numeric(df_base, design_ok):
 
 
 # Changing the weight drops design_ok's replicates: a side effect here.
-@pytest.mark.filterwarnings(r"ignore:\[REP_WGTS_RESET\]:svy.SvyUserWarning")
+@pytest.mark.filterwarnings(r"ignore:\[REP_WGTS_RESET\]:svy.SvyWarning")
 def test_weight_column_not_numeric(df_base, design_ok):
     bad = design_ok.update(wgt="strataA")  # string col
     with pytest.raises(TypeError, match="Weight column .* must be numeric"):

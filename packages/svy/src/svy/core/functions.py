@@ -26,8 +26,8 @@ from svy.core.panel import (
 )
 from svy.core.sample import Sample
 from svy.core.types import Category
-from svy.core.warnings import check_on_finding, finding_level
 from svy.errors import MethodError
+from svy.errors._findings import check_on_finding, finding_level
 from svy.metadata.variable_meta import VariableMeta
 
 
@@ -651,7 +651,7 @@ def combine_samples(
         mistaken for real codes, and the finding is ``COMBINE_MIXED_DESIGN``.
         "error" raises and leaves the sample as it was; "warn" records the
         finding in ``sample.warnings`` and raises it once as a
-        ``SvyUserWarning``; "ignore" records it at INFO level without raising.
+        ``SvyWarning``; "ignore" records it at INFO level without raising.
     wgt_name : str
         Name of the combined weight column the function creates, holding each
         wave's own weight (divided by k under ``average_wgts=True``). The waves'

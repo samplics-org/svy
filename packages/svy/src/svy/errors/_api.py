@@ -1,4 +1,4 @@
-# src/svy/errors/api_errors.py
+# src/svy/errors/_api.py
 """Guiding errors for names and arguments that do not exist in svy's API."""
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from functools import cache
 from typing import Any, Callable, Iterable
 
-from .base_errors import SvyError
+from ._base import SvyError
 
 
 _NAMESPACES = ("wrangling", "estimation", "categorical", "glm", "weighting", "sampling")
@@ -27,6 +27,7 @@ _TO_POLARS = "result.to_polars()"
 # Names other software uses, or that are commonly guessed, mapped to svy's.
 _ALIASES: dict[str, dict[str, str]] = {
     "svy": {
+        "SvyUserWarning": "svy.SvyWarning, its name since 2026.0",
         "Survey": _SAMPLE_AND_DESIGN,
         "SurveyDesign": _SAMPLE_AND_DESIGN,
         "survey_design": _SAMPLE_AND_DESIGN,
@@ -35,6 +36,9 @@ _ALIASES: dict[str, dict[str, str]] = {
         "sample": "svy.Sample(data, design)",
         "mean": "svy.Sample(data, design).estimation.mean(...)",
         "read_excel": "polars.read_excel(...), then svy.Sample(...)",
+    },
+    "svy.errors": {
+        "SvyUserWarning": "svy.errors.SvyWarning, its name since 2026.0",
     },
     "GLMMargins": {
         "values": "at (the values each variable was set to) or contrast (effect labels)",

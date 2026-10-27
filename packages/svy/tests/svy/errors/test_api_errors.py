@@ -6,7 +6,7 @@ import pytest
 
 import svy
 
-from svy.errors.api_errors import UnknownNameError, UsageError
+from svy.errors._api import UnknownNameError, UsageError
 
 
 @pytest.fixture
@@ -82,7 +82,7 @@ def test_sample_unknown_name_guides(sample, name, expected):
 
 
 def test_sample_removed_api_errors_unchanged(sample):
-    from svy.errors.label_errors import LabelAPIRemoved
+    from svy.errors._label import LabelAPIRemoved
 
     with pytest.raises(LabelAPIRemoved):
         sample.labels  # noqa: B018

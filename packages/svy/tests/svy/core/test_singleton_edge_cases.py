@@ -13,7 +13,7 @@ import svy
 
 from svy.core.design import Singleton
 from svy.errors import MethodError
-from svy.errors.singleton_errors import SingletonError
+from svy.errors._singleton import SingletonError
 
 
 def _result(sample):

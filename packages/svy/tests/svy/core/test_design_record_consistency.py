@@ -19,7 +19,7 @@ import pytest
 
 from numpy.testing import assert_allclose
 
-from svy import Design, Sample, SvyUserWarning
+from svy import Design, Sample, SvyWarning
 from svy.core.constants import key_col
 from svy.core.design import PopSize, WgtAdjustment
 from svy.core.repwgts import BootstrapWgts, BrrWgts, JackknifeWgts, SdrWgts
@@ -40,7 +40,7 @@ def no_warnings(allow: str | None = None):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         if allow is not None:
-            warnings.filterwarnings("ignore", message=rf"\[{allow}\]", category=SvyUserWarning)
+            warnings.filterwarnings("ignore", message=rf"\[{allow}\]", category=SvyWarning)
         yield
 
 
@@ -712,7 +712,7 @@ def test_unknown_weight_with_replicates_passed_keeps_them(small):
     s = Sample(small, Design(wgt="w", rep_wgts=rw))
     # No replicate-reset warning; the Taylor-on-replicates finding is recorded
     # and raised once.
-    with pytest.warns(SvyUserWarning) as rec:
+    with pytest.warns(SvyWarning) as rec:
         s.update_design(wgt="other_w", rep_wgts=rw)
         _se(s, "y")
     assert [str(r.message).split("]")[0] for r in rec] == ["[TAYLOR_WITHOUT_DESIGN"]
@@ -931,7 +931,7 @@ def test_record_reset_is_seen_by_the_next_estimate(api):
 
 
 # BRR replicates with no stratum or psu: Taylor on them is the finding, expected here.
-@pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyUserWarning")
+@pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyWarning")
 def test_replicate_se_after_restore(small):
     rw = BrrWgts(prefix="r", n_reps=4)
     s = Sample(small, Design(wgt="w", rep_wgts=rw))
@@ -1105,7 +1105,7 @@ def test_provenance_only_records(api, kind):
 
 
 # BRR replicates with no stratum or psu: Taylor on them is the finding, expected here.
-@pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyUserWarning")
+@pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyWarning")
 def test_replicates_only_design_unknown_weight(small):
     rw = BrrWgts(prefix="r", n_reps=4)
     s = Sample(small, Design(wgt="w", rep_wgts=rw))

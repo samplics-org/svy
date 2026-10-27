@@ -22,10 +22,10 @@ import pytest
 
 import svy
 
-from svy.core.warnings import WarnCode
+from svy.errors._findings import WarnCode
 
 
-SEP = r"ignore:\[GLM_SEPARATION\]:svy.SvyUserWarning"
+SEP = r"ignore:\[GLM_SEPARATION\]:svy.SvyWarning"
 
 
 def _data() -> pl.DataFrame:
@@ -148,12 +148,12 @@ def test_every_binomial_link(data, link):
     assert [c.term for c in fit.coefs if np.isnan(c.se)] == ["g_c"]
 
 
-@pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyUserWarning")
+@pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyWarning")
 def test_cauchit_separation_found_without_convergence(data):
     # Cauchit's heavy tail drifts slowly: IRLS runs out of iterations, and the
     # separated rows are still found at the boundary.
     s = _sample(data)
-    with pytest.warns(svy.SvyUserWarning, match=r"\[GLM_SEPARATION\]"):
+    with pytest.warns(svy.SvyWarning, match=r"\[GLM_SEPARATION\]"):
         fit = s.glm.fit(y="y", x=["x", svy.Cat("g")], family="binomial", link="cauchit").fitted
     assert [c.term for c in fit.coefs if np.isnan(c.se)] == ["g_c"]
     assert {w.code for w in s.warnings} == {"MAX_ITER_REACHED", "GLM_SEPARATION"}
@@ -191,7 +191,7 @@ def test_finding_names_terms_rows_and_levels(data):
 
 def test_finding_raised_at_the_callers_line(data):
     s = _sample(data)
-    with pytest.warns(svy.SvyUserWarning, match=r"\[GLM_SEPARATION\]") as rec:
+    with pytest.warns(svy.SvyWarning, match=r"\[GLM_SEPARATION\]") as rec:
         s.glm.fit(y="y", x=["x", svy.Cat("g")], family="binomial")
     assert rec[0].filename == __file__
 

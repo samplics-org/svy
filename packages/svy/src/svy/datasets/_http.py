@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from types import ModuleType
 
-from svy.errors.dataset_errors import DatasetError
+from svy.errors._dataset import DatasetError
 
 
 def load_httpx(*, where: str) -> ModuleType:

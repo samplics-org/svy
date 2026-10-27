@@ -1,12 +1,12 @@
 # tests/datasets/test_errors.py
-"""Tests for ``svy.errors.dataset_errors.DatasetError``."""
+"""Tests for ``svy.errors._dataset.DatasetError``."""
 
 from __future__ import annotations
 
 import pytest
 
 from svy.errors import SvyError
-from svy.errors.dataset_errors import DatasetError
+from svy.errors._dataset import DatasetError
 
 
 class TestDefaultCode:

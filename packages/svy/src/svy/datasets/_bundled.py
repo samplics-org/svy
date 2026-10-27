@@ -32,7 +32,7 @@ from typing import Any
 import polars as pl
 
 from svy.datasets.types import Dataset, DatasetCatalog
-from svy.errors.dataset_errors import DatasetError
+from svy.errors._dataset import DatasetError
 
 
 _PACKAGE = "svy.datasets"

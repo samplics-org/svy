@@ -37,7 +37,7 @@ import pytest
 from scipy import stats
 
 from svy import Design, Sample, col
-from svy.core.warnings import WarnCode
+from svy.errors._findings import WarnCode
 
 
 ALPHA = 0.05

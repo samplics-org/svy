@@ -26,8 +26,8 @@ from svy.core import design_parts as _design_parts
 from svy.core.containers import ChiSquare
 from svy.core.describe import DescribeResult
 from svy.core.design import Design, PopSize
-from svy.errors.model_errors import ModelError
-from svy.errors.serialization_errors import SerializationError
+from svy.errors._model import ModelError
+from svy.errors._serialization import SerializationError
 from svy.estimation.contrast import Contrast
 from svy.estimation.estimate import Estimate, EstimateList
 from svy.regression.glm import GLMFit

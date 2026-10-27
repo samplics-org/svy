@@ -1,6 +1,6 @@
 # src/svy/extensions.py
 
-from svy.core.warnings import warn_no_sample
+from svy.errors._findings import warn_no_sample
 
 from .core import Sample
 

@@ -15,7 +15,7 @@ from svy.categorical.table import table_frame
 from svy.categorical.ttest import ttest_one_group_frame, ttest_two_groups_frame
 from svy.core.containers import _chisq_frame
 from svy.core.describe import _describe_frame, _flatten_by
-from svy.errors.serialization_errors import SerializationError
+from svy.errors._serialization import SerializationError
 from svy.estimation.estimate import (
     Estimate,
     VarLabels,

@@ -192,7 +192,7 @@ class DatasetCatalog(tuple):
         for ds in self:
             if ds.slug == slug:
                 return ds
-        from svy.errors.dataset_errors import DatasetError
+        from svy.errors._dataset import DatasetError
 
         raise DatasetError.not_found(where="DatasetCatalog.get", slug=slug)
 

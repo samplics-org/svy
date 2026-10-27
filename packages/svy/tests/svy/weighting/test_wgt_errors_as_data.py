@@ -59,7 +59,7 @@ def check(err: SvyError, code: str) -> dict:
     _no_numpy(err.got)
     for text in (err.detail, err.hint or "", str(err.expected), str(err.got)):
         assert "np." not in text and "numpy" not in text
-    payload = json.loads(json.dumps(err.to_dict()))["error"]
+    payload = json.loads(json.dumps(err.to_dict()))
     assert payload["code"] == code
     return payload
 
@@ -84,14 +84,14 @@ def test_to_dict_keeps_structured_values():
         got={"missing": [np.int64(3)], ("A", 1): np.float64(2.5), dt.date(2024, 1, 2): 1},
         extra={"n": np.int32(4)},
     )
-    e = json.loads(json.dumps(err.to_dict()))["error"]
+    e = json.loads(json.dumps(err.to_dict()))
     assert e["expected"] == [1, "2024-01-01", ["a", True]]
     assert e["got"] == {"missing": [3], "A_&_1": 2.5, "2024-01-02": 1}
     assert e["extra"] == {"n": 4}
 
 
 def test_to_dict_still_shortens_prose():
-    e = SvyError(title="t", detail="d", got="z" * 300).to_dict()["error"]
+    e = SvyError(title="t", detail="d", got="z" * 300).to_dict()
     assert e["got"].endswith("…")
 
 
@@ -151,7 +151,7 @@ def test_adjust_unknown_int_statuses_are_native(s):
         "RESP_STATUS_UNKNOWN",
     )
     assert err.got == {7: 2}
-    assert json.loads(json.dumps(err.to_dict()))["error"]["got"] == {"7": 2}
+    assert json.loads(json.dumps(err.to_dict()))["got"] == {"7": 2}
 
 
 def test_adjust_null_status(s):

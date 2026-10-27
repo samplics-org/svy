@@ -10,7 +10,7 @@ import numpy as np
 import polars as pl
 
 from svy.core.types import Category, RandomState
-from svy.errors.method_errors import MethodError
+from svy.errors._method import MethodError
 
 
 # ------------------------------------------------------------------ #

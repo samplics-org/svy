@@ -147,7 +147,7 @@ def registered() -> tuple[DesignPart, ...]:
 def check_part_names(given: Mapping[str, Any], *, where: str, fields: Iterable[str] = ()) -> None:
     unknown = [k for k in given if k not in _REGISTRY]
     if unknown:
-        from svy.errors.api_errors import UsageError
+        from svy.errors._api import UsageError
 
         raise UsageError.unknown_arguments(
             where=where, unknown=unknown, known=[*fields, *_REGISTRY]
@@ -531,7 +531,7 @@ def singleton_dropped_message(rule: Singleton, reason: str) -> str:
 
 
 def warn_singleton_dropped(rule: Singleton, reason: str, *, sample: Any = None) -> None:
-    from svy.core.warnings import emit_finding, findings_to
+    from svy.errors._findings import emit_finding, findings_to
 
     with findings_to(sample) if sample is not None else nullcontext():
         emit_finding(
@@ -554,7 +554,7 @@ class SingletonPart(DesignPart):
         if isinstance(value, str):
             value = Singleton(value)  # type: ignore[arg-type]
         if not isinstance(value, Singleton):
-            from svy.errors.method_errors import MethodError
+            from svy.errors._method import MethodError
 
             raise MethodError.invalid_type(
                 where="Design",

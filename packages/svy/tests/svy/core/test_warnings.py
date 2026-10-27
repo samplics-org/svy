@@ -1,5 +1,5 @@
-from svy.core.warnings import Severity, SvyWarning, SvyWarningsError, WarnCode
-from svy.errors.base_errors import SvyError
+from svy.errors._base import SvyError
+from svy.errors._findings import Severity, SvyWarning, SvyWarningsError, WarnCode
 
 
 def test_svy_warnings_error_defaults_code():
@@ -27,7 +27,7 @@ def test_from_warnings_ctor():
             title="Singleton PSU",
             detail="Stratum 'A' has a single PSU.",
             where="design",
-            level=Severity.ERROR,
+            level=Severity.INFO,
         ),
         SvyWarning(
             code=WarnCode.ZERO_WEIGHT,
@@ -48,7 +48,7 @@ def test_from_warnings_ctor():
     # detail lists each warning with level and code
     d = err.detail
     assert d.startswith("Escalated warnings:")
-    assert "ERROR SINGLETON_PSU at design: Singleton PSU" in d
+    assert "INFO SINGLETON_PSU at design: Singleton PSU" in d
     assert "WARNING ZERO_WEIGHT: Zero weight" in d
 
 

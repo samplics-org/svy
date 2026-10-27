@@ -7,7 +7,7 @@ import pytest
 
 import svy
 
-from svy import Design, Sample, SvyUserWarning, col, estd
+from svy import Design, Sample, SvyWarning, col, estd
 from svy.errors import MethodError
 from svy.serialize import from_json, serialize, to_design, to_json
 
@@ -183,7 +183,7 @@ class TestPlumbing:
 
     def test_removing_one_column_drops_the_whole_id(self):
         s = Sample(_people(), Design(case_id=list(ID), wgt="w"))
-        with pytest.warns(SvyUserWarning, match=r"\[DESIGN_FIELDS_REMOVED\]"):
+        with pytest.warns(SvyWarning, match=r"\[DESIGN_FIELDS_REMOVED\]"):
             out = s.wrangling.remove_columns("ln", force=True)
         assert out.design.case_id is None
 

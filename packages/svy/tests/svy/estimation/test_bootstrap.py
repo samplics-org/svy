@@ -126,7 +126,7 @@ class TestBootstrapMean:
             assert by_results[educ].se == pytest.approx(expected["se"], rel=TOL)
 
     # Taylor on a replicate-only design is the finding; this test asks for it.
-    @pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyUserWarning")
+    @pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyWarning")
     def test_mean_point_estimate_matches_taylor(self, boot_sample):
         """Point estimates should be identical regardless of method."""
         boot = boot_sample.estimation.mean(y="income", method="replication")
@@ -190,7 +190,7 @@ class TestBootstrapTotal:
 
 class TestBootstrapMethodResolution:
     # Taylor on this replicate-only design is the finding; the method is what is checked.
-    @pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyUserWarning")
+    @pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyWarning")
     def test_default_is_taylor_on_replication_only_design(self, boot_sample):
         """method=None means Taylor, never replication.
 
@@ -203,7 +203,7 @@ class TestBootstrapMethodResolution:
         assert result.method.upper() == "TAYLOR"
 
     # Raised once per sample state and boot_sample is shared, so the record is checked.
-    @pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyUserWarning")
+    @pytest.mark.filterwarnings(r"ignore:\[TAYLOR_WITHOUT_DESIGN\]:svy.SvyWarning")
     def test_replication_only_design_warns_that_taylor_is_srs_like(self, boot_sample):
         """The silent half of the old bug: Taylor here has no design to use.
 

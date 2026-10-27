@@ -4,7 +4,7 @@ import pytest
 
 import svy
 
-from svy.errors.model_errors import ModelError
+from svy.errors._model import ModelError
 
 
 @pytest.fixture

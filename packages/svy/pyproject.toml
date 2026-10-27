@@ -90,10 +90,10 @@ markers = [
 #
 # A svy finding is an error unless the test expects it: `pytest.warns(...)`
 # when the finding is what the test checks, otherwise
-# `@pytest.mark.filterwarnings(r"ignore:\[CODE\]:svy.SvyUserWarning")`.
+# `@pytest.mark.filterwarnings(r"ignore:\[CODE\]:svy.SvyWarning")`.
 filterwarnings = [
     "error::DeprecationWarning",
-    "error::svy.SvyUserWarning",
+    "error::svy.SvyWarning",
 ]
 
 # testpaths = ["tests"]

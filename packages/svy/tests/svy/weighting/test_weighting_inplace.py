@@ -17,7 +17,8 @@ import polars as pl
 import pytest
 
 from svy import Design, Sample
-from svy.core.warnings import WarnCode
+from svy.errors import WeightingError
+from svy.errors._findings import WarnCode
 from svy.weighting import Weighting
 
 
@@ -188,14 +189,17 @@ def test_fork_isolates_the_warning_store(sample):
     effect on my Sample" is only true if the warning store is untouched as
     well. The error is still raised, and still emitted to the log.
     """
-    negative = sample.wrangling.mutate({"wgt_neg": pl.lit(-1.0)}).update_design(wgt="wgt_neg")
-    before = len(negative._warnings.list(code=WarnCode.NEGATIVE_WEIGHT))
+    # A zero weight is recorded (INFO) before the bound is found infeasible.
+    zero = sample.wrangling.mutate(
+        {"wgt_zero": pl.when(pl.int_range(pl.len()) == 0).then(0.0).otherwise(pl.col("wgt"))}
+    ).update_design(wgt="wgt_zero")
+    before = len(zero._warnings.list(code=WarnCode.ZERO_WEIGHT))
 
-    with pytest.raises(Exception, match="negative weight|Negative weights"):
-        negative.weighting.trim(upper=15.0)
-    assert len(negative._warnings.list(code=WarnCode.NEGATIVE_WEIGHT)) == before
+    with pytest.raises(WeightingError, match="TRIM_INFEASIBLE"):
+        zero.weighting.trim(upper=0.5, min_cell_size=1)
+    assert len(zero._warnings.list(code=WarnCode.ZERO_WEIGHT)) == before
 
     # inplace=True is how you ask for the diagnostic to land on your Sample
-    with pytest.raises(Exception, match="negative weight|Negative weights"):
-        negative.weighting.trim(upper=15.0, inplace=True)
-    assert len(negative._warnings.list(code=WarnCode.NEGATIVE_WEIGHT)) == before + 1
+    with pytest.raises(WeightingError, match="TRIM_INFEASIBLE"):
+        zero.weighting.trim(upper=0.5, min_cell_size=1, inplace=True)
+    assert len(zero._warnings.list(code=WarnCode.ZERO_WEIGHT)) == before + 1

@@ -13,7 +13,7 @@ import pytest
 import svy
 
 from svy.core.design import Singleton
-from svy.errors.singleton_errors import SingletonAPIRemoved, SingletonError
+from svy.errors._singleton import SingletonAPIRemoved, SingletonError
 from svy.utils import deprecated
 
 

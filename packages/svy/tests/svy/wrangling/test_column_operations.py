@@ -6,7 +6,7 @@ from typing import get_args
 import polars as pl
 import pytest
 
-from svy import SvyUserWarning
+from svy import SvyWarning
 from svy.core.design import Design
 from svy.core.sample import Sample
 from svy.errors import MethodError
@@ -92,14 +92,14 @@ def test_remove_columns_design_column_raises_without_force(sample_with_design: S
 
 
 def test_remove_columns_design_column_allowed_with_force(sample_with_design: Sample):
-    with pytest.warns(SvyUserWarning, match=r"\[DESIGN_FIELDS_REMOVED\]"):
+    with pytest.warns(SvyWarning, match=r"\[DESIGN_FIELDS_REMOVED\]"):
         out = sample_with_design.wrangling.remove_columns("stratum", force=True)
     assert "stratum" not in out._data.columns
     assert out._design.stratum is None
 
 
 def test_remove_columns_multiple_design_columns_with_force(sample_with_design: Sample):
-    with pytest.warns(SvyUserWarning, match=r"\[DESIGN_FIELDS_REMOVED\]"):
+    with pytest.warns(SvyWarning, match=r"\[DESIGN_FIELDS_REMOVED\]"):
         out = sample_with_design.wrangling.remove_columns(["stratum", "psu", "weight"], force=True)
     assert "stratum" not in out._data.columns
     assert "psu" not in out._data.columns
@@ -157,7 +157,7 @@ def test_keep_columns_raises_if_drops_design_column(sample_with_design: Sample):
 
 
 def test_keep_columns_with_force_cleans_design(sample_with_design: Sample):
-    with pytest.warns(SvyUserWarning, match=r"\[DESIGN_FIELDS_REMOVED\]"):
+    with pytest.warns(SvyWarning, match=r"\[DESIGN_FIELDS_REMOVED\]"):
         out = sample_with_design.wrangling.keep_columns(["id", "value"], force=True)
     assert "id" in out._data.columns
     assert "value" in out._data.columns

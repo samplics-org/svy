@@ -1,26 +1,16 @@
-# svy/errors/base_errors.py
-"""
-Custom exception hierarchy for the svy library.
+# svy/errors/_base.py
+"""What errors and warnings share: the fields and every renderer.
 
-This module defines a structured base error with multiple renderers:
-- text(): plain multi-line (default for __str__)
-- ansi(): colored terminal block (optional, no extra deps)
-- markdown(): for notebooks/docs
-- html(): compact Tailwind-friendly fragment
-- to_dict(): JSON-serializable payload
-- __rich_console__: pretty panel when 'rich' is installed (optional)
-
-Design goals:
-- Short, specific `title`; details in `detail`
-- Clear "expected vs got"
-- Consistent fields for logging/telemetry
+- ``SvyError`` stops the call; ``SvyWarning`` is recorded on the sample and raised as the Python warning.
+- Renderers: ``text``, ``ansi``, ``markdown``, ``html``, ``to_dict`` (one shape for both), rich panel.
 """
 
 from __future__ import annotations
 
 import datetime as _dt
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import IntEnum
 from textwrap import indent as _indent
 from typing import Any, ClassVar, Mapping, Optional
 
@@ -69,24 +59,27 @@ def _jsonable(x: Any) -> Any:
     return str(x)
 
 
-class SvyUserWarning(UserWarning):
-    """A finding svy reports about the data or a sample.
+def _rebuild(cls: type[Any], state: dict[str, Any]) -> Any:
+    obj = cls.__new__(cls)
+    obj.__dict__.update(state)
+    return obj
 
-    A finding about a sample is also recorded in ``sample.warnings``. Filter
-    them all at once with ``warnings.filterwarnings("ignore", category=svy.SvyUserWarning)``.
-    """
+
+class Severity(IntEnum):
+    INFO = 10  # recorded, not raised
+    WARNING = 20
 
 
 @dataclass(eq=False)
-class SvyError(Exception):
-    """
-    Base svy error with rich context + multiple renderers.
+class _Report:
+    """The fields and renderers errors and warnings share.
+
     Keep `title` short; put specifics in `detail`.
     """
 
     title: str
     detail: str
-    code: str = "SVY_ERROR"
+    code: str = ""
     where: Optional[str] = None
     param: Optional[str] = None
     got: Any = None
@@ -94,17 +87,23 @@ class SvyError(Exception):
     hint: Optional[str] = None
     docs_url: Optional[str] = None
     extra: Optional[Mapping[str, Any]] = None
-    http_status: int = 400  # kept for potential API surfaces
 
     # Optional, class-level overrides (match other classes' knobs)
-    _PANEL_BORDER: str | None = None
-    _HEADER_STYLE: str | None = None
-    _TITLE_STYLE: str | None = None
+    _PANEL_BORDER: ClassVar[str | None] = None
+    _HEADER_STYLE: ClassVar[str | None] = None
+    _TITLE_STYLE: ClassVar[str | None] = None
 
-    # Marker and panel theme; finding views (SvyWarning) override them.
+    # Marker and panel theme; SvyWarning sets them from its level.
     _MARK: ClassVar[str] = "❌"
     _MARK_RICH: ClassVar[str] = "✗"
     _KIND: ClassVar[str] = "error"
+
+    def _level_name(self) -> str:
+        return "ERROR"
+
+    # Exceptions are rebuilt from `args` by default, which these never set.
+    def __reduce__(self) -> tuple[Any, ...]:
+        return (_rebuild, (type(self), dict(self.__dict__)))
 
     # ---- Plain multi-line text (universal, no ANSI) ----
     def text(self, *, indent: int = 2, surround: bool = True) -> str:
@@ -173,8 +172,9 @@ class SvyError(Exception):
         if self.extra and len(repr(self.extra)) <= 200:
             add("extra", self.extra, limit=200)
         # http_status is useful but fixed; include only if not default
-        if getattr(self, "http_status", 400) != 400:
-            add("http_status", self.http_status, always=True)
+        status = getattr(self, "http_status", 400)
+        if status != 400:
+            add("http_status", status, always=True)
 
         return f"{cls}({', '.join(fields)})"
 
@@ -269,23 +269,22 @@ class SvyError(Exception):
 </div>
 """.strip()
 
-    # ---- JSON payload for programmatic use ----
+    # ---- JSON payload for programmatic use: one shape for errors and warnings ----
     def to_dict(self) -> dict[str, Any]:
         return {
-            "error": {
-                # The class, so callers can tell a ModelError from a MethodError without its text.
-                "type": type(self).__name__,
-                "code": self.code,
-                "title": self.title,
-                "detail": self.detail,
-                "where": self.where,
-                "param": self.param,
-                "expected": self._payload(self.expected),
-                "got": self._payload(self.got),
-                "hint": self.hint,
-                "docs_url": self.docs_url,
-                "extra": _jsonable(dict(self.extra)) if self.extra else None,
-            }
+            # The class, so callers can tell a ModelError from a MethodError without its text.
+            "type": type(self).__name__,
+            "level": self._level_name(),
+            "code": str(self.code),
+            "title": self.title,
+            "detail": self.detail,
+            "where": self.where,
+            "param": self.param,
+            "expected": self._payload(self.expected),
+            "got": self._payload(self.got),
+            "hint": self.hint,
+            "docs_url": self.docs_url,
+            "extra": _jsonable(dict(self.extra)) if self.extra else None,
         }
 
     # ---- Optional pretty rendering when Rich is installed ----
@@ -383,3 +382,65 @@ class SvyError(Exception):
             .replace(">", "&gt;")
             .replace('"', "&quot;")
         )
+
+
+@dataclass(eq=False)
+class SvyError(_Report, Exception):
+    """Base svy error with rich context + multiple renderers."""
+
+    code: str = "SVY_ERROR"
+    http_status: int = 400  # kept for potential API surfaces
+
+
+@dataclass(eq=False)
+class SvyWarning(_Report, UserWarning):
+    """A finding: svy reports it without stopping.
+
+    The same instance is recorded in ``sample.warnings`` and raised as the Python
+    warning, so a caught warning carries every field. Silence them all with
+    ``warnings.filterwarnings("ignore", category=svy.SvyWarning)``.
+    """
+
+    code: str = "SVY_WARNING"
+    level: Severity = Severity.WARNING
+    var: Optional[str] = None
+    rows: Optional[tuple[int, ...]] = None
+    # The sample state (its data version) the finding describes: the same
+    # finding on a new state is a new event.
+    state: Optional[int] = None
+    ts: _dt.datetime = field(default_factory=lambda: _dt.datetime.now(_dt.timezone.utc))
+
+    @property
+    def _MARK(self) -> str:
+        return "⚠️" if self.level >= Severity.WARNING else "ℹ️"
+
+    @property
+    def _MARK_RICH(self) -> str:
+        return "▲" if self.level >= Severity.WARNING else "ℹ"
+
+    @property
+    def _KIND(self) -> str:
+        return "warning" if self.level >= Severity.WARNING else "info"
+
+    def _level_name(self) -> str:
+        return self.level.name
+
+    # Python prints and filters a warning by its str, matched from the start:
+    # filters such as ``ignore:\[CODE\]`` rely on this line.
+    def __str__(self) -> str:
+        return (
+            f"[{self.code}] {self.title}: {self.detail}"
+            if self.detail
+            else f"[{self.code}] {self.title}"
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        d = super().to_dict()
+        d["var"] = self.var
+        d["rows"] = None if self.rows is None else list(self.rows)
+        d["ts"] = self.ts.isoformat()
+        return d
+
+    def key(self) -> tuple[Any, ...]:
+        """What makes two findings the same event, for de-duplication."""
+        return (str(self.code), self.where, self.param, self.var, self.detail, self.state)

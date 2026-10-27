@@ -17,7 +17,7 @@ import pytest
 import svy
 
 from svy.core.repwgts import BrrWgts
-from svy.errors.singleton_errors import SingletonError
+from svy.errors._singleton import SingletonError
 
 
 N_REPS = 4

@@ -50,9 +50,9 @@ except ImportError:  # pragma: no cover
 from svy.core.design import WgtAdjustment
 from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import Category, Number
-from svy.core.warnings import Severity, WarnCode, check_on_finding, finding_level
 from svy.errors import DimensionError, WeightingError
-from svy.errors.weighting_errors import show
+from svy.errors._findings import Severity, WarnCode, check_on_finding, finding_level
+from svy.errors._weighting import show
 from svy.weighting._calibration_utils import _expand_term, _match_term_targets
 from svy.weighting._engine import (
     AUX_PREFIX,

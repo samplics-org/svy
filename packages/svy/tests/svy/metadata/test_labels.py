@@ -171,7 +171,7 @@ def test_a_scheme_round_trips_through_plain_msgspec():
 def test_a_duplicate_code_is_rejected():
     import pytest
 
-    from svy.errors.label_errors import LabelError
+    from svy.errors._label import LabelError
     from svy.metadata.labels import CategoryScheme, SchemeEntry
 
     with pytest.raises(LabelError):
@@ -214,7 +214,7 @@ def test_a_concept_is_normalised_on_the_way_in_and_out():
 def test_registering_one_concept_twice_needs_overwrite():
     import pytest
 
-    from svy.errors.label_errors import LabelError
+    from svy.errors._label import LabelError
     from svy.metadata.labels import LabellingCatalog, make_scheme
 
     catalog = LabellingCatalog().register(make_scheme(concept="sex", mapping={1: "M"}))

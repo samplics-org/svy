@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from svy.core.warnings import WarnCode
+from svy.errors._findings import WarnCode
 
 
 if TYPE_CHECKING:

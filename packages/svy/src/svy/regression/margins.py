@@ -14,7 +14,7 @@ import msgspec
 import numpy as np
 import polars as pl
 
-from svy.errors.api_errors import guided_getattr
+from svy.errors._api import guided_getattr
 from svy.regression.glm import delta_var, offset_values
 from svy.regression.links import link_inverse, link_mu_eta, link_mu_eta2
 from svy.ui.printing import make_panel, render_plain_table, render_rich_to_str, resolve_width
@@ -379,7 +379,7 @@ def _fitted_frame(glm: GLM, fit: GLMFit) -> tuple[pl.DataFrame, np.ndarray]:
     observations — matching Stata ``margins`` after a domain fit and R
     ``marginaleffects`` on ``svyglm(design = subset(...))``.
     """
-    from svy.errors.model_errors import ModelError
+    from svy.errors._model import ModelError
 
     frame = glm._fit_frame
     w_col = glm._fit_weight_col
@@ -631,7 +631,7 @@ class _AtSpec(msgspec.Struct, frozen=True):
 
 
 def _fitted_levels(fit: GLMFit, var: str, key: object) -> list:
-    from svy.errors.model_errors import ModelError
+    from svy.errors._model import ModelError
 
     info = (fit.term_info or {}).get(var) or {}
     if info.get("type") != "categorical":
@@ -656,7 +656,7 @@ def _parse_at(glm: GLM, fit: GLMFit, at: dict) -> list[_AtSpec]:
     tuple key is several variables at each listed cell; None enumerates the
     fitted levels (the full grid for a tuple key).
     """
-    from svy.errors.model_errors import ModelError
+    from svy.errors._model import ModelError
 
     if not isinstance(at, dict):
         raise ModelError(
@@ -869,7 +869,7 @@ def compute_conditional_effects(
     every fitted row: one result per (variable, at key), one row per cell
     (per cell and contrast for a categorical variable).
     """
-    from svy.errors.model_errors import ModelError
+    from svy.errors._model import ModelError
 
     fit, data, weights, beta_vec, cov = _fitted_parts(glm)
     w_sum = weights.sum()
@@ -973,7 +973,7 @@ def margins(
     ValueError
         If a variable in `at` or `variables` is not in the model.
     """
-    from svy.errors.model_errors import ModelError
+    from svy.errors._model import ModelError
 
     if glm.fitted is None:
         raise ModelError.not_fitted(where="GLM.margins")

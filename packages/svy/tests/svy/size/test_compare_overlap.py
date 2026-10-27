@@ -14,7 +14,7 @@ import pytest
 from scipy import stats
 
 from svy import SampleSize
-from svy.errors.method_errors import MethodError
+from svy.errors._method import MethodError
 
 
 def _z(alpha=0.05, power=0.8, two_sides=True):

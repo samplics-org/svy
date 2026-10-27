@@ -9,7 +9,7 @@ import pytest
 import svy
 
 from svy.errors import MethodError
-from svy.errors.base_errors import SvyUserWarning
+from svy.errors._base import SvyWarning
 from svy.selection import pps as pps_mod
 from svy.selection import srs as srs_mod
 
@@ -106,7 +106,7 @@ def test_findings_are_on_every_draw():
 
 
 def test_where_with_no_eligible_rows_gives_null_selection_columns():
-    with pytest.warns(SvyUserWarning):
+    with pytest.warns(SvyWarning):
         drawn = _draw("srs", where=svy.col("y") > 2.0, n_draws=2, rstate=1)
     assert all(s.data["svy_prob_selection"].null_count() == N for s in drawn)
 

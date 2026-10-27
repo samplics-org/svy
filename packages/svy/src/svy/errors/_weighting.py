@@ -1,4 +1,4 @@
-# svy/errors/weighting_errors.py
+# svy/errors/_weighting.py
 """Errors raised by ``Sample.weighting`` for inputs the caller can fix.
 
 Every constructor carries a stable code, ``expected``/``got`` in the data's own
@@ -14,7 +14,7 @@ import difflib
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
-from .method_errors import MethodError
+from ._method import MethodError
 
 
 _SHOWN = 8

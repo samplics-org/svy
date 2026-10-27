@@ -343,8 +343,8 @@ def _rule_units(
     """
     from svy.core.constants import SVY_VAR_PSU, SVY_VAR_STRATUM
     from svy.core.enumerations import SingletonMethod
-    from svy.core.warnings import Severity
-    from svy.errors.singleton_errors import SingletonError
+    from svy.errors._findings import Severity
+    from svy.errors._singleton import SingletonError
 
     design = sample._design
     if stratum is not None or psu is not None or design.stratum is None:

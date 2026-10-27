@@ -18,9 +18,9 @@ import numpy as np
 import polars as pl
 import pytest
 
-from svy import Cat, Cross, Design, Sample, SvyUserWarning, Threshold, TrimConfig, col
-from svy.core.warnings import Severity, WarnCode
+from svy import Cat, Cross, Design, Sample, SvyWarning, Threshold, TrimConfig, col
 from svy.errors import WeightingError
+from svy.errors._findings import Severity, WarnCode
 
 
 INFEASIBLE = "TRIM_INFEASIBLE"
@@ -327,7 +327,7 @@ def test_calibrate_untrimmed_units_are_unbounded():
     # Group b is below min_cell_size, so it is calibrated but never trimmed and
     # can carry any total: not out of reach, whatever b's control.
     df = pl.DataFrame({"grp": ["a"] * 10 + ["b"] * 2, "w": [1.0] * 12})
-    with pytest.warns(SvyUserWarning, match=r"\[DOMAIN_SKIPPED\]"):
+    with pytest.warns(SvyWarning, match=r"\[DOMAIN_SKIPPED\]"):
         out = Sample(df, Design(wgt="w")).weighting.calibrate(
             controls={Cat("grp"): {"a": 10.0, "b": 100.0}},
             trimming=TrimConfig(upper=2.0, by="grp", min_cell_size=5),
@@ -344,9 +344,9 @@ def test_calibrate_untrimmed_units_are_unbounded():
 
 @pytest.mark.parametrize("name", list(OUT))
 def test_warn_records_trim_infeasible_once(tight, name):
-    with pytest.warns(SvyUserWarning, match=r"\[TRIM_INFEASIBLE\]") as rec:
+    with pytest.warns(SvyWarning, match=r"\[TRIM_INFEASIBLE\]") as rec:
         out = OUT[name](tight, on_nonconvergence="warn")
-    assert len([r for r in rec if issubclass(r.category, SvyUserWarning)]) == 1
+    assert len([r for r in rec if issubclass(r.category, SvyWarning)]) == 1
     [found] = out.warnings.list(code=INFEASIBLE)
     assert found.level == Severity.WARNING
     assert f"{_WGT[name]!r} holds the last cycle's weights" in found.detail
@@ -359,14 +359,14 @@ def test_warn_records_trim_infeasible_once(tight, name):
 @pytest.mark.parametrize("name", list(OUT))
 def test_ignore_records_at_info_without_raising(tight, name):
     with warnings.catch_warnings():
-        warnings.simplefilter("error", SvyUserWarning)
+        warnings.simplefilter("error", SvyWarning)
         out = OUT[name](tight, on_nonconvergence="ignore")
     [found] = out.warnings.list(code=INFEASIBLE)
     assert found.level == Severity.INFO
 
 
 @pytest.mark.parametrize("mode", ["warn", "ignore"])
-@pytest.mark.filterwarnings(r"ignore:\[TRIM_INFEASIBLE\]:svy.SvyUserWarning")
+@pytest.mark.filterwarnings(r"ignore:\[TRIM_INFEASIBLE\]:svy.SvyWarning")
 def test_warn_and_ignore_keep_the_same_weights(tight, mode):
     kept = OUT["poststratify"](tight, on_nonconvergence=mode)
     ref = OUT["poststratify"](tight, on_nonconvergence="ignore")

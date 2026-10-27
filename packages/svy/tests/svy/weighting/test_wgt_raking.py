@@ -205,8 +205,8 @@ def test_rake_replicate_weights_custom_wgt_name(sample_data_for_raking, mock_des
 
 
 def test_rake_stops_at_max_iter_on_no_convergence(sample_data_for_raking, mock_design, capsys):
-    from svy import SvyUserWarning
-    from svy.core.warnings import WarnCode
+    from svy import SvyWarning
+    from svy.errors._findings import WarnCode
 
     sample = Sample(data=sample_data_for_raking, design=mock_design)
     controls = {
@@ -220,9 +220,7 @@ def test_rake_stops_at_max_iter_on_no_convergence(sample_data_for_raking, mock_d
     assert sample.design.wgt == original_wgt  # design not mutated
 
     # strict=False: stores partial weights, records the finding and warns once
-    with pytest.warns(
-        SvyUserWarning, match=r"\[MAX_ITER_REACHED\] Raking did not converge"
-    ) as rec:
+    with pytest.warns(SvyWarning, match=r"\[MAX_ITER_REACHED\] Raking did not converge") as rec:
         sample = sample.weighting.rake(
             controls=controls, max_iter=3, tol=1e-20, on_nonconvergence="warn"
         )
@@ -338,7 +336,7 @@ def test_trim_rake_caps_extreme_weight(mock_design):
 
 
 # One cycle is allowed not to converge (on_nonconvergence="warn").
-@pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyUserWarning")
+@pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyWarning")
 def test_trim_rake_single_cycle_max_iter_1(mock_design):
     """max_iter=1 means one rake + one trim + one final rake — three total Rust calls."""
     from svy.weighting.types import TrimConfig

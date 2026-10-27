@@ -29,7 +29,7 @@ from svy.core.design import Singleton
 from svy.core.enumerations import SingletonMethod
 from svy.core.singleton import _VAR_EXCLUDE_COL, _VAR_PSU_COL, _VAR_STRATUM_COL
 from svy.errors import SerializationError
-from svy.errors.singleton_errors import SingletonError
+from svy.errors._singleton import SingletonError
 from svy.serialize import from_json, to_design, to_json
 
 

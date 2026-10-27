@@ -9,8 +9,8 @@ import msgspec
 import polars as pl
 
 from svy.core.constants import SVY_PROB, SVY_WEIGHT
-from svy.core.warnings import Severity
-from svy.errors.method_errors import MethodError
+from svy.errors._findings import Severity
+from svy.errors._method import MethodError
 from svy.selection._group_keys import _SEP, _build_group_keys, _normalize_n_for_groups
 from svy.selection._helpers import _finding
 from svy.selection.combine_stages import _stage_col
