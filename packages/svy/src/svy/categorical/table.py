@@ -503,8 +503,7 @@ class Table:
         from rich.table import Table as RTable
 
         headers = _headers_for_display(self)
-        if not self.is_crosstab:
-            headers = [h for h in headers if h != "Col"]
+        n_keys = 2 if self.is_crosstab else 1
 
         dec_map = self._decimals_map(fallback_each=4)
 
@@ -519,9 +518,9 @@ class Table:
             expand=False,
         )
 
-        for h in headers:
-            justify = "left" if h in ("Row", "Col") else "right"
-            no_wrap = h in ("Row", "Col")
+        for i, h in enumerate(headers):
+            no_wrap = i < n_keys
+            justify = "left" if no_wrap else "right"
             overflow = "ellipsis" if no_wrap else "fold"
             t.add_column(h, justify=justify, no_wrap=no_wrap, overflow=overflow)
 
@@ -942,20 +941,9 @@ class Table:
 
 
 def _headers_for_display(tbl: "Table") -> list[str]:
-    if tbl._resolve_use_labels() and tbl._metadata is not None:
-        row_resolved = tbl._metadata._resolve(tbl.rowvar)
-        row_header = row_resolved.var_label if row_resolved.has_var_label else "Row"
-    else:
-        row_header = "Row"
-
-    base = [row_header]
+    base = [tbl._get_var_label(tbl.rowvar)]
     if tbl.is_crosstab:
-        if tbl._resolve_use_labels() and tbl._metadata is not None:
-            col_resolved = tbl._metadata._resolve(tbl.colvar or "")
-            col_header = col_resolved.var_label if col_resolved.has_var_label else "Col"
-        else:
-            col_header = "Col"
-        base.append(col_header)
+        base.append(tbl._get_var_label(tbl.colvar or ""))
     base += ["Estimate", "Std Err", "CV", "Lower", "Upper"]
     return base
 

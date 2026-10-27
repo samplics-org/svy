@@ -10,7 +10,6 @@ from svy.categorical.table import CellEst, Table
 
 
 def test_table_show_uses_rich_is_captured_by_capsys(capsys):
-    # Two-way table ensures "Col" header appears
     tbl = Table.two_way(
         rowvar="row",
         colvar="col",
@@ -18,7 +17,7 @@ def test_table_show_uses_rich_is_captured_by_capsys(capsys):
     )
     tbl.show(use_rich=True)
     out = capsys.readouterr().out
-    assert "Estimate" in out and "Row" in out and "Col" in out
+    assert "Estimate" in out and "row" in out and "col" in out
 
 
 def test_str_one_way_hides_col_header():
