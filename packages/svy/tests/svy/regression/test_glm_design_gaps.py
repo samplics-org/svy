@@ -28,6 +28,8 @@ AIC(svyglm) is the Lumley-Scott dAIC; BIC(svyglm) requires a maximal
 model (no plain BIC exists), hence stats.bic is None.
 """
 
+import math
+
 from pathlib import Path
 
 import numpy as np
@@ -326,3 +328,48 @@ def test_unweighted_null_y_counts(api_strat=None):
     assert st.n == 90
     # df = (n_in - 1) - (k - 1) = 89 - 1 = 88
     assert m.fitted.coefs[0].wald.df == 88
+
+
+# 3 PSUs give degf = 2, too few for 4 coefficients: R survey 4.5,
+#   d <- svydesign(ids=~psu, weights=~w, data=df); fit <- svyglm(y ~ x1 + x2 + x3, d)
+#   fit$df.residual  # -1; summary(fit) p-values NaN, estimates and SEs finite
+_NO_DF_EST = [1.1286906894529856, 0.52174175243606868, -0.78241713899142551, 0.20732217615838511]
+_NO_DF_SE = [0.067769909854332774, 0.042995966823658464, 0.19446822152346033, 0.094526870985153125]
+
+
+def _no_df_sample():
+    x1 = [0.5, 1.2, 2.3, 3.1, 0.7, 1.9, 2.2, 3.8, 0.1, 1.4, 2.9, 3.3]
+    x2 = [1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0]
+    x3 = [2.1, 1.3, 0.4, 3.2, 1.8, 2.6, 0.9, 1.1, 2.4, 0.2, 1.7, 3.0]
+    e = [0.2, -0.1, 0.3, -0.4, 0.1, 0.25, -0.2, 0.15, -0.3, 0.05, 0.2, -0.1]
+    df = pl.DataFrame(
+        {
+            "psu": [p for p in (1, 2, 3) for _ in range(4)],
+            "w": [1.0, 2.0, 1.5, 1.0, 2.0, 1.0, 1.5, 2.0, 1.0, 1.0, 2.0, 1.5],
+            "x1": x1,
+            "x2": x2,
+            "x3": x3,
+            "y": [1 + 0.5 * a - 0.8 * b + 0.3 * c + u for a, b, c, u in zip(x1, x2, x3, e)],
+        }
+    )
+    return Sample(df, Design(psu="psu", wgt="w"))
+
+
+def test_design_without_residual_df_has_nan_tests():
+    fit = _no_df_sample().glm.fit(y="y", x=["x1", "x2", "x3"])
+    coefs = fit.fitted.coefs
+
+    assert [c.est for c in coefs] == pytest.approx(_NO_DF_EST, rel=1e-10)
+    assert [c.se for c in coefs] == pytest.approx(_NO_DF_SE, rel=1e-10)
+    for c in coefs:
+        assert math.isnan(c.wald.df) and math.isnan(c.wald.p_value)
+        assert math.isnan(c.lci) and math.isnan(c.uci)
+
+
+def test_nan_design_df_survives_a_json_round_trip():
+    from svy.serialize import from_json, to_json
+
+    fit = _no_df_sample().glm.fit(y="y", x=["x1", "x2", "x3"])
+    back = from_json(to_json(fit))
+
+    assert all(math.isnan(c.wald.df) and math.isnan(c.lci) for c in back.coefs)

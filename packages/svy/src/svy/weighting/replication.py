@@ -746,6 +746,21 @@ def create_bs_wgts(
     generalized bootstrap for sample surveys with special attention to Poisson
     sampling. *International Statistical Review*, 80(1), 127-148.
     """
+    if isinstance(n_reps, bool) or not isinstance(n_reps, int):
+        raise WeightingError.invalid_type(
+            where="Sample.weighting.create_bs_wgts",
+            param="n_reps",
+            got=n_reps,
+            expected="an integer >= 2",
+        )
+    if n_reps < 2:
+        raise WeightingError.invalid_range(
+            where="Sample.weighting.create_bs_wgts",
+            param="n_reps",
+            got=n_reps,
+            min_=2,
+            hint="Replicate weights need at least 2 replicates; a few hundred is usual.",
+        )
     df = sample._data
     design = sample._design
     kind = normalize_bootstrap_kind(kind)
