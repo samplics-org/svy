@@ -19,6 +19,7 @@ from svy.wrangling._helpers import (
     _design_source_columns,
     _internal_columns,
     _rebuild_concat_columns,
+    _require_columns,
     _required_columns,
     _resolve_target,
 )
@@ -77,8 +78,16 @@ def rename_columns(
     inplace: bool = False,
 ) -> "Sample":
     """Rename columns directly."""
+    if not isinstance(renames, Mapping):
+        raise DataError.invalid_type(
+            where="wrangling.rename_columns",
+            param="renames",
+            got=renames,
+            expected="a mapping {old_name: new_name}",
+        )
     if not renames:
         return sample
+    _require_columns(sample, renames, where="wrangling.rename_columns", param="renames")
 
     forbidden = BOOKKEEPING_COLUMNS | {SVY_WEIGHT, SVY_PROB, SVY_HIT}
     hit = sorted({c for pair in renames.items() for c in pair if c in forbidden})
@@ -207,6 +216,7 @@ def remove_columns(
 ) -> "Sample":
     """Remove columns from the sample."""
     cols = _normalize_columns_arg(data=sample._data, columns=columns)
+    _require_columns(sample, cols, where="wrangling.remove_columns", param="columns")
 
     internal = _internal_columns(sample)
     cols = [c for c in cols if c not in internal]
@@ -241,6 +251,7 @@ def keep_columns(
 ) -> "Sample":
     """Keep only specified columns, removing all others."""
     cols = _normalize_columns_arg(data=sample._data, columns=columns)
+    _require_columns(sample, cols, where="wrangling.keep_columns", param="columns")
 
     internal = _internal_columns(sample)
     cols_with_internal = list(cols) + [c for c in internal if c not in cols]

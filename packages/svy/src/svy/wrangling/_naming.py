@@ -23,7 +23,7 @@ from svy.core.enumerations import (
 from svy.core.enumerations import (
     LetterCase as _LetterCase,
 )
-from svy.errors import LabelError
+from svy.errors import Code, DataError, LabelError
 
 
 if TYPE_CHECKING:
@@ -172,15 +172,22 @@ def _normalize_case_style(
     if case_style is None:
         return _CaseStyle.SNAKE
     if not isinstance(case_style, str):
-        raise TypeError(
-            f"'case_style' must be a string or None, got "
-            f"{type(case_style).__name__}. "
-            f"Use 'snake', 'camel', 'pascal', or 'kebab'."
+        raise DataError.invalid_type(
+            where="wrangling.clean_names",
+            param="case_style",
+            got=case_style,
+            expected="'snake', 'camel', 'pascal', or 'kebab' or None",
         )
     result = _MAP.get(case_style.strip().lower())
     if result is None:
-        raise ValueError(
-            f"Unknown case_style {case_style!r}. Use 'snake', 'camel', 'pascal', or 'kebab'."
+        raise DataError.ValueError(
+            title="Invalid option",
+            detail=f"Unknown case_style {case_style!r}. Use 'snake', 'camel', 'pascal', or 'kebab'.",
+            code=Code.INVALID_CHOICE,
+            where="wrangling.clean_names",
+            param="case_style",
+            got=case_style,
+            expected=list(_MAP),
         )
     return result
 
@@ -198,14 +205,21 @@ def _normalize_letter_case(
     if letter_case is None:
         return _LetterCase.LOWER
     if not isinstance(letter_case, str):
-        raise TypeError(
-            f"'letter_case' must be a string or None, got "
-            f"{type(letter_case).__name__}. "
-            f"Use 'lower', 'upper', 'title', or 'original'."
+        raise DataError.invalid_type(
+            where="wrangling.clean_names",
+            param="letter_case",
+            got=letter_case,
+            expected="'lower', 'upper', 'title', or 'original' or None",
         )
     result = _MAP.get(letter_case.strip().lower())
     if result is None:
-        raise ValueError(
-            f"Unknown letter_case {letter_case!r}. Use 'lower', 'upper', 'title', or 'original'."
+        raise DataError.ValueError(
+            title="Invalid option",
+            detail=f"Unknown letter_case {letter_case!r}. Use 'lower', 'upper', 'title', or 'original'.",
+            code=Code.INVALID_CHOICE,
+            where="wrangling.clean_names",
+            param="letter_case",
+            got=letter_case,
+            expected=list(_MAP),
         )
     return result

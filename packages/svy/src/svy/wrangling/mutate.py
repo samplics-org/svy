@@ -101,6 +101,13 @@ def mutate(
     inplace: bool = False,
 ) -> "Sample":
     """Create or transform columns using expressions, scalars, or arrays."""
+    if not isinstance(specs, Mapping):
+        raise DataError.invalid_type(
+            where="wrangling.mutate",
+            param="specs",
+            got=specs,
+            expected="a mapping {new_column: expression}",
+        )
     local_data: pl.DataFrame = sample._data
     n_rows = local_data.height
     existing_cols = set(local_data.columns)

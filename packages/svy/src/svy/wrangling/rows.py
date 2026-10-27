@@ -11,7 +11,7 @@ from svy.core.types import WhereArg
 from svy.errors import Code, DataError, DataWarning, SingletonWarning, SvyError
 from svy.errors._findings import check_on_finding, finding_level
 from svy.utils.where import _compile_where as _compile_where_to_pl_expr
-from svy.wrangling._helpers import _internal_columns, _resolve_target
+from svy.wrangling._helpers import _internal_columns, _require_columns, _resolve_target
 
 
 if TYPE_CHECKING:
@@ -132,6 +132,16 @@ def order_by(
     inplace: bool = False,
 ) -> "Sample":
     """Sort rows by one or more columns."""
+    col_list = [cols] if isinstance(cols, str) else list(cols)
+    _require_columns(sample, col_list, where="wrangling.order_by", param="cols")
+    if not isinstance(descending, bool) and len(descending) != len(col_list):
+        raise DataError.invalid_value(
+            where="wrangling.order_by",
+            param="descending",
+            got=list(descending),
+            detail=f"descending has {len(descending)} entries for {len(col_list)} columns.",
+            hint="Give one bool per column, or a single bool for all.",
+        )
     new_data = sample._data.sort(
         by=cols, descending=descending, nulls_last=nulls_last, maintain_order=True
     )
@@ -154,6 +164,14 @@ def distinct(
         subset = [c for c in sample._data.collect_schema().names() if c not in internal]
     else:
         subset = [cols] if isinstance(cols, str) else list(cols)
+        _require_columns(sample, subset, where="wrangling.distinct", param="cols")
+    if keep not in ("first", "last", "any", "none"):
+        raise DataError.invalid_choice(
+            where="wrangling.distinct",
+            param="keep",
+            got=keep,
+            allowed=("first", "last", "any", "none"),
+        )
     new_data = sample._data.unique(
         subset=subset,
         keep=keep,
@@ -171,5 +189,13 @@ def with_row_index(
 ) -> "Sample":
     """Add a row index column."""
     sample._refuse_bookkeeping([name], where="wrangling.with_row_index", error=DataError)
+    if name in sample._data.collect_schema().names():
+        raise DataError.invalid_value(
+            where="wrangling.with_row_index",
+            param="name",
+            got=name,
+            detail=f"A column named {name!r} already exists.",
+            hint="Pass another name=.",
+        )
     new_data = sample._data.with_row_index(name=name, offset=offset)
     return _resolve_target(sample, new_data, inplace=inplace)
