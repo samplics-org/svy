@@ -202,6 +202,7 @@ SHARED = {
         "INVALID_RANGE",
     ),
     "invalid_type": (dict(where="w", param="p", got=1, expected="str"), TypeError, "INVALID_TYPE"),
+    "invalid_value": (dict(where="w", param="p", got="", detail="d"), ValueError, "INVALID_VALUE"),
     "missing_columns": (dict(where="w", param="p", missing=["z"]), KeyError, "MISSING_COLUMNS"),
     "empty_estimates": (dict(where="w"), ValueError, "EMPTY_ESTIMATES"),
     "group_levels_mismatch": (
