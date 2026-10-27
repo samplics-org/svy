@@ -32,6 +32,7 @@ from svy.core.constants import (
     SVY_ROW_INDEX,
     SVY_WEIGHT,
 )
+from svy.core.data_prep import extract_where_cols
 from svy.core.types import DF, Category, Number, WhereArg
 from svy.errors import SelectionError
 from svy.selection._group_keys import (
@@ -41,6 +42,7 @@ from svy.selection._group_keys import (
 )
 from svy.selection._helpers import (
     _apply_order,
+    _check_columns,
     _child_seeds,
     _warn_empty_strata,
     _warn_n_exceeds_population,
@@ -360,6 +362,14 @@ def _srs_prepare(
     assert isinstance(src_df, pl.DataFrame), "selection requires an eager DataFrame"
     design = sample._design
 
+    _check_columns(
+        src_df.columns,
+        "Sample.sampling.srs",
+        by=_colspec_to_list(by),
+        order_by=_colspec_to_list(order_by),
+        where=extract_where_cols(where),
+    )
+
     # -- Apply where mask -------------------------------------------------
     eligible_df, where_mask = _apply_where(src_df, where)
 
@@ -391,16 +401,6 @@ def _srs_prepare(
     cols = sample._dedup_preserve_order(cols)
 
     df_reduced: DF = eligible_df.select(cols)
-    names = set(df_reduced.columns) if hasattr(df_reduced, "columns") else set(df_reduced.schema)
-    missing_cols = [c for c in cols if c not in names]
-    if missing_cols:
-        raise SelectionError.invalid_choice(
-            where="Sample.sampling.srs",
-            param="columns",
-            got=missing_cols,
-            allowed=sorted(names),
-            hint="Check that all design and by= columns exist in the data.",
-        )
     assert isinstance(df_reduced, pl.DataFrame)
 
     if drop_nulls:

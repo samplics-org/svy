@@ -9,6 +9,8 @@ from typing import Hashable, Sequence, TypeAlias
 import numpy as np
 import numpy.typing as npt
 
+from svy.errors import UsageError
+
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +64,24 @@ def _hash_to_words(
 # ------------------------
 
 
+def _check_random_state(random_state: object) -> None:
+    if random_state is None or isinstance(
+        random_state, (np.random.Generator, np.random.SeedSequence, np.random.RandomState)
+    ):
+        return
+    if not isinstance(random_state, (int, np.integer)):
+        raise UsageError.invalid_type(
+            where=None,
+            param="rstate",
+            got=random_state,
+            expected="an int seed, a numpy Generator or SeedSequence, or None",
+        )
+    if random_state < 0:
+        raise UsageError.invalid_range(
+            where=None, param="rstate", got=random_state, hint="Seeds are non-negative integers."
+        )
+
+
 def resolve_random_state(random_state: RandomState) -> np.random.Generator:
     """
     Resolve a flexible 'random_state' into a np.random.Generator.
@@ -71,6 +91,7 @@ def resolve_random_state(random_state: RandomState) -> np.random.Generator:
     - Generator        -> returned as-is
     - None             -> fresh unseeded Generator
     """
+    _check_random_state(random_state)
     if isinstance(random_state, np.random.Generator):
         return random_state
 
@@ -85,6 +106,7 @@ def resolve_seed_sequence(random_state: RandomState) -> np.random.SeedSequence:
     """
     Resolve to a SeedSequence for reproducible, order-invariant derivations.
     """
+    _check_random_state(random_state)
     if isinstance(random_state, np.random.SeedSequence):
         return random_state
 
@@ -152,6 +174,7 @@ def seed_from_random_state(random_state: RandomState) -> int | None:
     Convert RandomState to a single 32-bit integer seed.
     Useful for interoperability with libraries requiring a simple int seed (e.g. Polars).
     """
+    _check_random_state(random_state)
     if random_state is None:
         return None
 
