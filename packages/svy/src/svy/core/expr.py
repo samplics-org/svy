@@ -16,6 +16,8 @@ from typing import Any, Iterable, Mapping, TypeVar
 
 import polars as pl
 
+from svy.errors import DataError
+
 
 log = logging.getLogger(__name__)
 
@@ -46,12 +48,22 @@ def to_polars_expr(x: Any) -> pl.Expr:
                 return val
 
     if isinstance(x, _Then):
-        raise TypeError(
-            "Incomplete conditional expression: call .otherwise(...) to finalize "
-            "your when(...).then(...) expression."
+        raise DataError.invalid_type(
+            where="svy.when",
+            param="expr",
+            got=x,
+            expected="a finished expression",
+            detail="Incomplete conditional expression: call .otherwise(...) to finalize "
+            "your when(...).then(...) expression.",
         )
 
-    raise TypeError(f"Unsupported expression type: {type(x).__name__!r}")
+    raise DataError.invalid_type(
+        where="svy.col",
+        param="expr",
+        got=x,
+        expected="an svy or polars expression",
+        detail=f"Unsupported expression type: {type(x).__name__!r}",
+    )
 
 
 def _compile_to_polars(e: Any) -> pl.Expr:
@@ -71,7 +83,20 @@ def _box(x: Any) -> pl.Expr:
         return x
     if isinstance(x, (list, tuple)):
         return pl.lit(pl.Series(x))
-    return pl.lit(x)
+    return _lit(x)
+
+
+def _lit(value: Any) -> pl.Expr:
+    try:
+        return pl.lit(value)
+    except TypeError as e:
+        raise DataError.invalid_type(
+            where="svy.lit",
+            param="value",
+            got=value,
+            expected="a number, string, date, bool, None or a sequence of them",
+            detail=str(e),
+        ) from e
 
 
 def _as_date(x: Any) -> pl.Expr:
@@ -134,9 +159,13 @@ class _Then:
         elif isinstance(condition, pl.Expr):
             cond_expr = condition
         else:
-            raise TypeError(
-                f"when() expects an Expr, got {type(condition).__name__!r}. "
-                "Use svy.col('name') to reference columns."
+            raise DataError.invalid_type(
+                where="svy.when",
+                param="condition",
+                got=condition,
+                expected="an expression",
+                detail=f"when() expects an Expr, got {type(condition).__name__!r}. "
+                "Use svy.col('name') to reference columns.",
             )
         return _When(cond_expr, self._w)
 
@@ -201,15 +230,21 @@ class Expr:
         return self._e
 
     def __bool__(self) -> bool:
-        raise TypeError(
-            "the truth value of an Expr is ambiguous. "
-            "You probably got here by using a Python standard library function "
-            "instead of the native expressions API. Here are some things you "
-            "might want to try:\n"
-            "- instead of `expr1 and expr2`, use `expr1 & expr2`\n"
-            "- instead of `expr1 or expr2`, use `expr1 | expr2`\n"
-            "- instead of `not expr`, use `~expr`\n"
-            "- instead of `lo <= expr <= hi`, use `expr.between(lo, hi)`"
+        raise DataError.invalid_type(
+            where="svy.col",
+            param="expr",
+            got=self,
+            expected="& | ~ or a comparison, not and/or/not/if",
+            detail=(
+                "the truth value of an Expr is ambiguous. "
+                "You probably got here by using a Python standard library function "
+                "instead of the native expressions API. Here are some things you "
+                "might want to try:\n"
+                "- instead of `expr1 and expr2`, use `expr1 & expr2`\n"
+                "- instead of `expr1 or expr2`, use `expr1 | expr2`\n"
+                "- instead of `not expr`, use `~expr`\n"
+                "- instead of `lo <= expr <= hi`, use `expr.between(lo, hi)`"
+            ),
         )
 
     # -------------------------------------------------------------------------
@@ -669,7 +704,12 @@ class Expr:
             return _typing.cast(T, Expr(self._e.ewm_mean(span=span)))
         elif alpha is not None:
             return _typing.cast(T, Expr(self._e.ewm_mean(alpha=alpha)))
-        raise ValueError("Either 'span' or 'alpha' must be provided")
+        raise DataError.invalid_value(
+            where="Expr.ewm_mean",
+            param="span",
+            got=None,
+            detail="Either 'span' or 'alpha' must be provided",
+        )
 
     # -------------------------------------------------------------------------
     # String Operations
@@ -988,7 +1028,13 @@ def col(name: str) -> Expr:
         svy.col('age') > 18
     """
     if not isinstance(name, str):
-        raise TypeError(f"col() expects a string column name, got {type(name).__name__!r}")
+        raise DataError.invalid_type(
+            where="svy.col",
+            param="name",
+            got=name,
+            expected="a column name",
+            detail=f"col() expects a string column name, got {type(name).__name__!r}",
+        )
     return Expr(pl.col(name))
 
 
@@ -1009,7 +1055,7 @@ def lit(value: Any) -> Expr:
     Example:
         svy.lit(100)
     """
-    return Expr(pl.lit(value))
+    return Expr(_lit(value))
 
 
 def date(year: Any, month: Any, day: Any, *, strict: bool = True) -> Expr:
@@ -1054,9 +1100,13 @@ def when(condition: Expr | pl.Expr) -> _When:
     elif isinstance(condition, pl.Expr):
         cond_expr = condition
     else:
-        raise TypeError(
-            f"when() expects an Expr, got {type(condition).__name__!r}. "
-            "Use svy.col('name') to reference columns."
+        raise DataError.invalid_type(
+            where="svy.when",
+            param="condition",
+            got=condition,
+            expected="an expression",
+            detail=f"when() expects an Expr, got {type(condition).__name__!r}. "
+            "Use svy.col('name') to reference columns.",
         )
     return _When(cond_expr)
 
@@ -1069,7 +1119,12 @@ def coalesce(*exprs: Expr | Any) -> Expr:
         svy.coalesce(svy.col('preferred_name'), svy.col('first_name'), svy.lit('Unknown'))
     """
     if not exprs:
-        raise ValueError("coalesce() requires at least one expression")
+        raise DataError.invalid_value(
+            where="svy.coalesce",
+            param="exprs",
+            got=exprs,
+            detail="coalesce() requires at least one expression",
+        )
     pl_exprs = [_box(e) for e in exprs]
     return Expr(pl.coalesce(pl_exprs))
 

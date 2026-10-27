@@ -54,7 +54,7 @@ from typing import TYPE_CHECKING, Any, Iterable, Mapping
 import msgspec
 import numpy as np
 
-from svy.errors import Code, DesignError, SingletonWarning
+from svy.errors import Code, DataError, DesignError, SingletonWarning
 
 
 if TYPE_CHECKING:
@@ -131,9 +131,19 @@ def register(part: DesignPart) -> DesignPart:
     from svy.core.design import _FIELDS, Design
 
     if not part.name or part.name in _REGISTRY or part.name in _FIELDS:
-        raise ValueError(f"Design part name {part.name!r} is empty or taken.")
+        raise DesignError.invalid_value(
+            where="design_parts.register",
+            param="name",
+            got=part.name,
+            detail=f"Design part name {part.name!r} is empty or taken.",
+        )
     if hasattr(Design, part.name):
-        raise ValueError(f"Design part name {part.name!r} shadows a Design attribute.")
+        raise DesignError.invalid_value(
+            where="design_parts.register",
+            param="name",
+            got=part.name,
+            detail=f"Design part name {part.name!r} shadows a Design attribute.",
+        )
     _REGISTRY[part.name] = part
     return part
 
@@ -186,17 +196,29 @@ class RepWgtsPart(DesignPart):
             return None
         # Every variant inherits the base, so this covers the whole union.
         if not isinstance(value, _RepWgtsBase):
-            raise TypeError("'rep_wgts' must be RepWgts | None")
+            raise DesignError.invalid_type(
+                where="Design",
+                param="rep_wgts",
+                got=value,
+                expected="svy.BrrWgts, JackknifeWgts, BootstrapWgts, SdrWgts or None",
+                detail="'rep_wgts' must be RepWgts | None",
+            )
         # Replicates describe one weight column; a design pointing elsewhere
         # would estimate with one and vary with the other.
         wgt = fields["wgt"]
         if value.wgt is None:
             return value if wgt is None else msgspec.structs.replace(value, wgt=wgt)
         if value.wgt != wgt:
-            raise ValueError(
-                f"rep_wgts go with weight {value.wgt!r} but the design's weight is "
-                f"{wgt!r}. Pass replicate weights built from {wgt!r}, or leave "
-                "rep_wgts.wgt unset to pair them with the design's weight."
+            raise DesignError.ValueError(
+                title="Replicate weights for another weight",
+                detail=f"rep_wgts go with weight {value.wgt!r} but the design's weight is {wgt!r}.",
+                code=Code.REP_WGTS_WGT_MISMATCH,
+                where="Design",
+                param="rep_wgts",
+                expected=wgt,
+                got=value.wgt,
+                hint=f"Pass replicate weights built from {wgt!r}, or leave "
+                "rep_wgts.wgt unset to pair them with the design's weight.",
             )
         return value
 
@@ -293,13 +315,25 @@ class RepWgtsPart(DesignPart):
         expected = value.columns_from_data(data.columns)
         missing = [c for c in expected if c not in data.columns]
         if missing:
-            raise ValueError(
-                f"Expected replicate weight columns not found in data: {missing[:10]}"
-                + ("..." if len(missing) > 10 else "")
+            raise DataError.ValueError(
+                title="Column(s) not found",
+                detail=f"Expected replicate weight columns not found in data: {missing[:10]}"
+                + ("..." if len(missing) > 10 else ""),
+                code=Code.MISSING_COLUMNS,
+                where="Sample",
+                param="rep_wgts",
+                got=missing,
             )
         if value.n_reps > 0 and value.n_reps != len(expected):
-            raise ValueError(
-                f"RepWeights.n_reps ({value.n_reps}) does not match number of columns found ({len(expected)})."
+            raise DesignError.ValueError(
+                title="Replicate count does not match the columns",
+                detail=f"RepWeights.n_reps ({value.n_reps}) does not match number of columns "
+                f"found ({len(expected)}).",
+                code=Code.REP_WGTS_COUNT_MISMATCH,
+                where="Sample",
+                param="n_reps",
+                expected=len(expected),
+                got=value.n_reps,
             )
         schema = data.schema
         non_numeric = [
@@ -309,8 +343,14 @@ class RepWgtsPart(DesignPart):
         ]
         if non_numeric:
             suffix = "..." if len(non_numeric) > 3 else ""
-            raise TypeError(
-                f"Replicate weight columns must be numeric; got non-numeric types for: {non_numeric[:3]}{suffix}"
+            raise DataError.TypeError(
+                title="Column is not numeric",
+                detail="Replicate weight columns must be numeric; got non-numeric types for: "
+                f"{non_numeric[:3]}{suffix}",
+                code=Code.COLUMN_NOT_NUMERIC,
+                where="Sample",
+                param="rep_wgts",
+                got=non_numeric,
             )
 
     def to_data(self, value: Any) -> Any:
@@ -388,25 +428,41 @@ def _rep_wgts_with_renames(
         new = renames[old]
         suffix = old[len(rep_wgts.prefix) :]
         if not new.endswith(suffix) or len(new) == len(suffix):
-            raise ValueError(
-                f"Cannot rename replicate weight column {old!r} to {new!r}: "
-                f"the replicate number suffix {suffix!r} must be preserved."
+            raise DesignError.ValueError(
+                title="Replicate-weight rename",
+                detail=f"Cannot rename replicate weight column {old!r} to {new!r}: "
+                f"the replicate number suffix {suffix!r} must be preserved.",
+                code=Code.REP_WGTS_RENAME_INVALID,
+                where="rename_columns",
+                param="rep_wgts",
+                hint="Rename all replicate columns together with a common new prefix, "
+                "keeping the numeric suffixes.",
             )
         new_prefixes.add(new[: len(new) - len(suffix)])
     if len(new_prefixes) > 1:
-        raise ValueError(
-            "Replicate weight columns must all be renamed with the same prefix; "
-            f"got prefixes {sorted(new_prefixes)}."
+        raise DesignError.ValueError(
+            title="Replicate-weight rename",
+            detail="Replicate weight columns must all be renamed with the same prefix; "
+            f"got prefixes {sorted(new_prefixes)}.",
+            code=Code.REP_WGTS_RENAME_INVALID,
+            where="rename_columns",
+            param="rep_wgts",
+            hint="Rename all replicate columns together with a common new prefix, "
+            "keeping the numeric suffixes.",
         )
     # A partial rename cannot be represented: the spec names its columns as
     # prefix + number, so the new prefix would claim columns never renamed.
     not_renamed = [c for c in rep_cols if c not in renames]
     if not_renamed:
-        raise ValueError(
-            f"Partial replicate-weight rename: {len(not_renamed)} of "
-            f"{len(rep_cols)} replicate columns were not renamed "
-            f"(e.g. {not_renamed[:3]}). Rename all replicate columns together "
-            "with a common new prefix, keeping the numeric suffixes."
+        raise DesignError.ValueError(
+            title="Replicate-weight rename",
+            detail=f"Partial replicate-weight rename: {len(not_renamed)} of "
+            f"{len(rep_cols)} replicate columns were not renamed (e.g. {not_renamed[:3]}).",
+            code=Code.REP_WGTS_RENAME_INVALID,
+            where="rename_columns",
+            param="rep_wgts",
+            hint="Rename all replicate columns together with a common new prefix, "
+            "keeping the numeric suffixes.",
         )
     return msgspec.structs.replace(rep_wgts, prefix=new_prefixes.pop(), **unit_updates)
 
@@ -430,11 +486,23 @@ class WgtAdjustmentPart(DesignPart):
         if value is None:
             return None
         if not isinstance(value, WgtAdjustment):
-            raise TypeError("'wgt_adjustment' must be WgtAdjustment | None")
+            raise DesignError.invalid_type(
+                where="Design",
+                param="wgt_adjustment",
+                got=value,
+                expected="WgtAdjustment | None",
+                detail="'wgt_adjustment' must be WgtAdjustment | None",
+            )
         if value.new_wgt != fields["wgt"]:
-            raise ValueError(
-                f"wgt_adjustment describes weight {value.new_wgt!r} but the "
-                f"design's weight is {fields['wgt']!r}."
+            raise DesignError.ValueError(
+                title="Weight adjustment for another weight",
+                detail=f"wgt_adjustment describes weight {value.new_wgt!r} but the "
+                f"design's weight is {fields['wgt']!r}.",
+                code=Code.WGT_ADJUSTMENT_MISMATCH,
+                where="Design",
+                param="wgt_adjustment",
+                expected=fields["wgt"],
+                got=value.new_wgt,
             )
         return value
 
@@ -566,7 +634,14 @@ class SingletonPart(DesignPart):
                 hint='e.g. singleton="center" or singleton=svy.Singleton("collapse", within="region").',
             )
         if fields["stratum"] is None:
-            raise ValueError("singleton handling applies to strata; the design has no stratum.")
+            raise DesignError.ValueError(
+                title="Singleton rule without strata",
+                detail="singleton handling applies to strata; the design has no stratum.",
+                code=Code.SINGLETON_WITHOUT_STRATUM,
+                where="Design",
+                param="singleton",
+                hint="Declare stratum= with the singleton rule, or drop the rule.",
+            )
         return value
 
     def after_update(

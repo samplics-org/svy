@@ -39,7 +39,7 @@ from svy.core.types import (
     WhereArg,
     _MissingType,
 )
-from svy.errors import Code, DesignError, DesignWarning, SvyError
+from svy.errors import Code, DataError, DesignError, DesignWarning, SvyError
 from svy.errors._findings import (
     Severity,
     SvyWarning,
@@ -92,6 +92,33 @@ _REMOVED_LABEL_API = {
 }
 
 
+def _missing_column(*missing: str, param: str, detail: str) -> DataError:
+    # A ValueError, as these checks always were; MISSING_COLUMNS elsewhere is a KeyError.
+    return DataError.ValueError(
+        title="Column(s) not found",
+        detail=detail,
+        code=Code.MISSING_COLUMNS,
+        where="Sample",
+        param=param,
+        got=list(missing),
+        hint="Check spelling or inspect sample.data.columns.",
+    )
+
+
+def _print_width(width: Any, *, where: str) -> int:
+    try:
+        w = int(width)
+    except Exception as ex:
+        raise DesignError.invalid_type(
+            where=where, param="width", got=width, expected="int or None"
+        ) from ex
+    if w <= 20:
+        raise DesignError.invalid_range(
+            where=where, param="width", got=width, min_=20, hint="Use more than 20 characters."
+        )
+    return w
+
+
 class Sample:
     """A sample class for survey data."""
 
@@ -141,6 +168,14 @@ class Sample:
             from svy.errors._api import UsageError
 
             raise UsageError.not_polars(where="svy.Sample", got=data)
+        if design is not None and not isinstance(design, Design):
+            raise DesignError.invalid_type(
+                where="svy.Sample",
+                param="design",
+                got=design,
+                expected="a svy.Design or None",
+                hint='e.g. svy.Sample(df, svy.Design(stratum="region", psu="ea", wgt="w")).',
+            )
         local_design = Design() if design is None else copy.deepcopy(design)
         # FPC is computed in the estimation layer from pop_size column(s).
         # _fpc is kept for backward compatibility but is not used by the
@@ -806,13 +841,7 @@ class Sample:
         if width is None:
             self._print_width = None
             return self
-        try:
-            w = int(width)
-        except Exception as ex:
-            raise TypeError(f"print width must be int or None; got {width!r}") from ex
-        if w <= 20:
-            raise ValueError("print width must be > 20 characters.")
-        self._print_width = w
+        self._print_width = _print_width(width, where="Sample.set_print_width")
         return self
 
     @classmethod
@@ -820,13 +849,7 @@ class Sample:
         if width is None:
             cls.PRINT_WIDTH = None
             return
-        try:
-            w = int(width)
-        except Exception as ex:
-            raise TypeError(f"class print width must be int or None; got {width!r}") from ex
-        if w <= 20:
-            raise ValueError("class print width must be > 20 characters.")
-        cls.PRINT_WIDTH = w
+        cls.PRINT_WIDTH = _print_width(width, where="Sample.set_default_print_width")
 
     # ════════════════════════════════════════════════════════════════════════
     # DESIGN DIAGNOSTICS
@@ -896,8 +919,11 @@ class Sample:
                 continue
             missing = [c for c in cols if c not in names]
             if missing:
-                raise KeyError(
-                    f"group '{group_name}' references missing columns {missing}; available: {sorted(names)}"
+                raise DataError.missing_columns(
+                    where="Sample",
+                    param=group_name,
+                    missing=missing,
+                    available=[c for c in sorted(names) if not c.startswith(SVY_OWN_PREFIX)],
                 )
             parts = [pl.col(c).cast(pl.Utf8).fill_null(null_token) for c in cols]
             expr = pl.concat_str(parts, separator=sep)
@@ -919,20 +945,40 @@ class Sample:
             return []
         if isinstance(spec, str):
             if spec == "":
-                raise ValueError("column names must not be empty strings")
+                raise DataError.invalid_value(
+                    where="Sample",
+                    param="columns",
+                    got=spec,
+                    detail="column names must not be empty strings",
+                )
             return [spec]
         if isinstance(spec, Sequence) and not isinstance(spec, (str, bytes, bytearray)):
             out: list[str] = []
             for i, x in enumerate(spec):
                 if not isinstance(x, str):
-                    raise TypeError(
-                        f"column names must be str; item {i} has type {type(x).__name__}"
+                    raise DataError.invalid_type(
+                        where="Sample",
+                        param="columns",
+                        got=x,
+                        expected="str",
+                        detail=f"column names must be str; item {i} has type {type(x).__name__}",
                     )
                 if x == "":
-                    raise ValueError("column names must not be empty strings")
+                    raise DataError.invalid_value(
+                        where="Sample",
+                        param="columns",
+                        got=spec,
+                        detail="column names must not be empty strings",
+                    )
                 out.append(x)
             return out
-        raise TypeError(f"invalid column spec: {spec!r}")
+        raise DataError.invalid_type(
+            where="Sample",
+            param="columns",
+            got=spec,
+            expected="str | Sequence[str] | None",
+            detail=f"invalid column spec: {spec!r}",
+        )
 
     def _create_concatenated_cols_from_lists(
         self,
@@ -1091,10 +1137,24 @@ class Sample:
             if isinstance(design.pop_size, PopSize):
                 for col_name in (design.pop_size.psu, design.pop_size.ssu):
                     if col_name in schema and not _is_numeric_dtype(schema[col_name]):
-                        raise TypeError(f"Population size column {col_name!r} must be numeric.")
+                        raise DataError.TypeError(
+                            title="Column is not numeric",
+                            detail=f"Population size column {col_name!r} must be numeric.",
+                            code=Code.COLUMN_NOT_NUMERIC,
+                            where="Sample",
+                            param="pop_size",
+                            got=str(schema[col_name]),
+                        )
             elif isinstance(design.pop_size, str):
                 if design.pop_size in schema and not _is_numeric_dtype(schema[design.pop_size]):
-                    raise TypeError(f"Population size column {design.pop_size!r} must be numeric.")
+                    raise DataError.TypeError(
+                        title="Column is not numeric",
+                        detail=f"Population size column {design.pop_size!r} must be numeric.",
+                        code=Code.COLUMN_NOT_NUMERIC,
+                        where="Sample",
+                        param="pop_size",
+                        got=str(schema[design.pop_size]),
+                    )
 
         # 2. What each design part checks against the frame (replicate weights:
         # present, as many as declared, numeric).
@@ -1104,19 +1164,51 @@ class Sample:
         # 3. Validate types for standard design variables
         if design.wgt is not None:
             if design.wgt not in schema:
-                raise ValueError(f"Weight column {design.wgt!r} not found in data.")
+                raise _missing_column(
+                    design.wgt,
+                    param="wgt",
+                    detail=f"Weight column {design.wgt!r} not found in data.",
+                )
             if not _is_numeric_dtype(schema[design.wgt]):
-                raise TypeError(f"Weight column {design.wgt!r} must be numeric.")
+                raise DataError.TypeError(
+                    title="Column is not numeric",
+                    detail=f"Weight column {design.wgt!r} must be numeric.",
+                    code=Code.WEIGHT_NOT_NUMERIC,
+                    where="Sample",
+                    param="wgt",
+                    got=str(schema[design.wgt]),
+                )
 
         if design.prob is not None:
             if not _is_numeric_dtype(schema[design.prob]):
-                raise TypeError(f"'prob' column {design.prob!r} must be numeric.")
+                raise DataError.TypeError(
+                    title="Column is not numeric",
+                    detail=f"'prob' column {design.prob!r} must be numeric.",
+                    code=Code.COLUMN_NOT_NUMERIC,
+                    where="Sample",
+                    param="prob",
+                    got=str(schema[design.prob]),
+                )
         if design.mos is not None:
             if not _is_numeric_dtype(schema[design.mos]):
-                raise TypeError(f"'mos' column {design.mos!r} must be numeric.")
+                raise DataError.TypeError(
+                    title="Column is not numeric",
+                    detail=f"'mos' column {design.mos!r} must be numeric.",
+                    code=Code.COLUMN_NOT_NUMERIC,
+                    where="Sample",
+                    param="mos",
+                    got=str(schema[design.mos]),
+                )
         if design.hit is not None:
             if not _is_integer_dtype(schema[design.hit]):
-                raise TypeError(f"'hit' column {design.hit!r} must be an integer dtype.")
+                raise DataError.TypeError(
+                    title="Column is not numeric",
+                    detail=f"'hit' column {design.hit!r} must be an integer dtype.",
+                    code=Code.COLUMN_NOT_NUMERIC,
+                    where="Sample",
+                    param="hit",
+                    got=str(schema[design.hit]),
+                )
 
         # 4. Case id and wave: the record identifier, unique within wave on a
         # panel and unique overall on a cross-section.
@@ -1124,24 +1216,42 @@ class Sample:
 
     def _validate_case_id(self, data: pl.DataFrame, design: Design) -> None:
         if design.wave is not None and design.wave not in data.columns:
-            raise ValueError(f"Design.wave {design.wave!r} not found in data columns.")
+            raise _missing_column(
+                design.wave,
+                param="wave",
+                detail=f"Design.wave {design.wave!r} not found in data columns.",
+            )
         if design.case_id is None:
             return
         cid = design.case_id
         cid_cols = case_id_cols(cid)
         absent = [c for c in cid_cols if c not in data.columns]
         if absent:
-            raise ValueError(f"Design.case_id {cid!r}: {absent} not found in data columns.")
+            raise _missing_column(
+                *absent,
+                param="case_id",
+                detail=f"Design.case_id {cid!r}: {absent} not found in data columns.",
+            )
         with_nulls = [c for c in cid_cols if data.get_column(c).null_count() > 0]
         if with_nulls:
-            raise ValueError(f"Design.case_id {cid!r} contains nulls in {with_nulls}.")
+            raise DesignError.ValueError(
+                title="Invalid case_id",
+                detail=f"Design.case_id {cid!r} contains nulls in {with_nulls}.",
+                code=Code.CASE_ID_INVALID,
+                where="Sample",
+                param="case_id",
+            )
         dups = duplicate_case_ids(data, cid, design.wave)
         if dups:
             scope = f"within wave {design.wave!r}" if design.wave else "across rows"
-            raise ValueError(
-                f"Design.case_id {cid!r} must be unique {scope}; duplicated: {dups}. "
-                "A case is one row per wave: if these are household rows, the "
-                "person-level file needs a person id."
+            raise DesignError.ValueError(
+                title="Invalid case_id",
+                detail=f"Design.case_id {cid!r} must be unique {scope}; duplicated: {dups}.",
+                code=Code.CASE_ID_INVALID,
+                where="Sample",
+                param="case_id",
+                hint="A case is one row per wave: if these are household rows, the "
+                "person-level file needs a person id.",
             )
         if design.wave is None:
             return
@@ -1154,10 +1264,14 @@ class Sample:
         varies = design_varies_within_case(data, cid, design_cols)
         if varies:
             detail = "; ".join(f"{c}: {ids}" for c, ids in varies.items())
-            raise ValueError(
-                f"Design columns must be constant within case_id {cid!r} across waves "
-                f"(the case is nested in its PSU); violators: {detail}. "
-                "Movers keep their base-wave stratum and PSU."
+            raise DesignError.ValueError(
+                title="Invalid case_id",
+                detail=f"Design columns must be constant within case_id {cid!r} across waves "
+                f"(the case is nested in its PSU); violators: {detail}.",
+                code=Code.CASE_ID_INVALID,
+                where="Sample",
+                param="case_id",
+                hint="Movers keep their base-wave stratum and PSU.",
             )
         # Stacked cross-sections may keep a unique case_id next to the wave
         # column; only a frame where some case repeats is a panel to pair.
@@ -1165,13 +1279,18 @@ class Sample:
             return
         for ov in wave_overlap(data, cid, design.wave):
             if ov.common == 0:
-                raise ValueError(
-                    f"No case of wave {ov.prev!r} appears in wave {ov.wave!r}: these look "
-                    "like two unrelated cross-sections stacked as a panel. Check case_id."
+                raise DesignError.ValueError(
+                    title="Invalid case_id",
+                    detail=f"No case of wave {ov.prev!r} appears in wave {ov.wave!r}: these look "
+                    "like two unrelated cross-sections stacked as a panel.",
+                    code=Code.CASE_ID_INVALID,
+                    where="Sample",
+                    param="case_id",
+                    hint="Check case_id.",
                 )
 
     @staticmethod
-    def _missing_columns_error(design: Design, data_columns: Sequence[str]) -> ValueError | None:
+    def _missing_columns_error(design: Design, data_columns: Sequence[str]) -> DataError | None:
         present = set(data_columns)
         missing = [c for c in design.columns(data_columns=data_columns) if c not in present]
         if not missing:
@@ -1184,9 +1303,11 @@ class Sample:
             for part, value in design._part_items()
             if (note := part.missing_note(value, missing_set)) is not None
         ]
-        return ValueError(
-            f"Design references columns not found in data: {shown}{more}"
-            + ("" if not notes else " " + " ".join(notes))
+        return _missing_column(
+            *missing,
+            param="design",
+            detail=f"Design references columns not found in data: {shown}{more}"
+            + ("" if not notes else " " + " ".join(notes)),
         )
 
     def _check_data_lineage(self, data: pl.DataFrame, *, where: str) -> None:
@@ -1280,7 +1401,11 @@ class Sample:
         expected = rw.columns_from_data(data_columns)
         missing = [c for c in expected if c not in data_columns]
         if missing:
-            raise ValueError(f"Replicate weight columns not in data: {missing}")
+            raise _missing_column(
+                *missing,
+                param="rep_wgts",
+                detail=f"Replicate weight columns not in data: {missing}",
+            )
 
     # ════════════════════════════════════════════════════════════════════════
     # COPYING / REPLACEMENT (internal)
@@ -1330,7 +1455,9 @@ class Sample:
             n = int(df.height)
             return df, {"n_in": n, "n_out": n, "n_removed": 0}
         if wgt_col not in df.collect_schema().names():
-            raise ValueError(f"Weight column {wgt_col!r} not found in data.")
+            raise _missing_column(
+                wgt_col, param="wgt", detail=f"Weight column {wgt_col!r} not found in data."
+            )
 
         n_in = int(df.height)
         w_expr = pl.col(wgt_col).cast(pl.Float64, strict=False)
@@ -1976,7 +2103,9 @@ class Sample:
         # replicate-reset warning included, is acted on.
         wgt = kwargs.get("wgt")
         if isinstance(wgt, str) and wgt not in cast(pl.DataFrame, self._data).columns:
-            raise ValueError(f"Design references columns not found in data: [{wgt!r}]")
+            raise _missing_column(
+                wgt, param="wgt", detail=f"Design references columns not found in data: [{wgt!r}]"
+            )
         with findings_to(self):
             new = self._design.update(**self._with_restored_record(kwargs))
         self._replace_design(new)
@@ -2030,12 +2159,21 @@ class Sample:
         """
         # 1. Validate the new weight column
         if wgt not in self._data.columns:
-            raise ValueError(f"Weight column {wgt!r} not found in data.")
+            raise _missing_column(
+                wgt, param="wgt", detail=f"Weight column {wgt!r} not found in data."
+            )
 
         # Check if it is numeric (using the schema or dtypes)
         dtype = self._data.schema[wgt]
         if dtype not in INTEGER_DTYPES and dtype not in FLOAT_DTYPES:
-            raise TypeError(f"Weight column {wgt!r} must be numeric; got {dtype}.")
+            raise DataError.TypeError(
+                title="Column is not numeric",
+                detail=f"Weight column {wgt!r} must be numeric; got {dtype}.",
+                code=Code.WEIGHT_NOT_NUMERIC,
+                where="Sample",
+                param="wgt",
+                got=str(dtype),
+            )
 
         # 2. Create a lightweight copy of the current sample
         # _replace_data duplicates the Sample shell without duplicating the
@@ -2522,8 +2660,12 @@ class Sample:
             cols = [c for c in columns if c in self._data.columns and c not in hidden]
 
         if not cols:
-            raise ValueError(
-                "No visible columns to describe after excluding internal design columns."
+            raise DataError.invalid_value(
+                where="Sample.describe",
+                param="columns",
+                got=columns,
+                detail="No visible columns to describe after excluding internal design columns.",
+                hint="columns= names data columns; design and svy's own columns are left out.",
             )
 
         # Keep schema aligned just in case data changed
