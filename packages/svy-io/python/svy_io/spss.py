@@ -612,6 +612,17 @@ def write_sav(
     ]
     if non_numeric:
         raise ValueError(f"user-missing values must be numeric; columns: {sorted(non_numeric)}")
+    too_wide = sorted(
+        m["col"]
+        for m in missing_specs
+        if (to_write.schema[m["col"]] == pl.String or isinstance(to_write.schema[m["col"]], pl.Enum))
+        and (to_write[m["col"]].cast(pl.String).str.len_bytes().max() or 0) > 8
+    )
+    if too_wide:
+        raise ValueError(
+            "SPSS user-missing values apply only to string columns of at most 8 bytes; "
+            f"columns: {too_wide}"
+        )
 
     # The native writer wants text codes and {col, values, range}.
     native_labels = [

@@ -354,6 +354,8 @@ fn write_spss_minimal(
     let mut rvars: Vec<*const readstat_variable_t> = Vec::with_capacity(ncols);
     let mut _keep_names: Vec<CString> = Vec::with_capacity(ncols);
     let mut _keep_label_sets: Vec<(*const readstat_label_set_t, Vec<CString>)> = Vec::new();
+    // ReadStat stores string missing values by pointer and reads them in begin_writing.
+    let mut _keep_missing: Vec<CString> = Vec::new();
 
     // Define variables
     for (j, field) in schema.fields().iter().enumerate() {
@@ -414,7 +416,17 @@ fn write_spss_minimal(
         if let Some(user_miss) = user_missing {
             for um in user_miss {
                 if um.col == field.name().as_str() {
+                    let mut rcs = Vec::new();
                     if is_str_col[j] {
+                        // SAV stores string missing values only for strings of at most 8 bytes.
+                        if width > 8 {
+                            return Err(anyhow!(
+                                "column '{}' holds strings up to {} bytes; SPSS user-missing \
+                                 values apply only to string columns of at most 8 bytes",
+                                field.name(),
+                                width
+                            ));
+                        }
                         // String: only discrete user-missing values are supported
                         for val in &um.values {
                             // To string (avoid trailing .0 for whole numbers)
@@ -423,25 +435,30 @@ fn write_spss_minimal(
                             } else {
                                 val.to_string()
                             };
-                            if let Ok(c_val) = CString::new(val_string.as_str()) {
-                                unsafe {
-                                    readstat_variable_add_missing_string_value(var, c_val.as_ptr());
-                                }
-                            }
+                            let c_val = CString::new(val_string)?;
+                            rcs.push(unsafe {
+                                readstat_variable_add_missing_string_value(var, c_val.as_ptr())
+                            });
+                            _keep_missing.push(c_val);
                         }
                         // Note: SPSS (ReadStat) does not expose a "string range" API; ignore um.range for strings.
                     } else {
                         // Numeric: discrete + range
                         for &val in &um.values {
-                            unsafe {
-                                readstat_variable_add_missing_double_value(var, val);
-                            }
+                            rcs.push(unsafe { readstat_variable_add_missing_double_value(var, val) });
                         }
                         if let Some((low, high)) = um.range {
-                            unsafe {
-                                readstat_variable_add_missing_double_range(var, low, high);
-                            }
+                            rcs.push(unsafe {
+                                readstat_variable_add_missing_double_range(var, low, high)
+                            });
                         }
+                    }
+                    if let Some(rc) = rcs.into_iter().find(|&rc| rc != 0) {
+                        return Err(anyhow!(
+                            "adding user-missing values to column '{}' failed with rc={}",
+                            field.name(),
+                            rc
+                        ));
                     }
                 }
             }
