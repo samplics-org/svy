@@ -6,6 +6,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ### Fixed
 
+- `rao_scott` returns NaN statistics instead of panicking on NaN proportions or a failed SVD, and instead of 0 and p = 1 when the test is undefined. The Taylor design df no longer underflows when strata outnumber PSUs.
+- `ttest_rs` and `ranktest_rs` with `by_col` give a NaN row for a by-group with no weight or fewer than the groups the test needs.
 - `adjust_nr` returns `WeightingError::NoRespondents` when the full-sample column (column 0) has a class with nonrespondent or unknown weight but no units to carry it, instead of a factor of 1. Replicate columns keep the factor of 1.
 - The calibration solve falls back to an SVD pseudo-inverse with R `ginv`'s tolerance on a singular system, instead of a Tikhonov ridge.
 

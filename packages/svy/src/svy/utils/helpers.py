@@ -10,7 +10,7 @@ import polars as pl
 
 from svy.core.enumerations import TableUnits
 from svy.core.types import DF, Category
-from svy.errors import UsageError
+from svy.errors import Code, UsageError
 
 
 log = logging.getLogger(__name__)
@@ -149,7 +149,13 @@ def _get_keys_from_maps(**kwargs: Mapping[Any, Any]) -> list[Category]:
     # Canonical reference is the first mapping
     ref_name, ref_map = mappings[0]
     if not ref_map:
-        raise ValueError(f"Argument '{ref_name}' is an empty mapping.")
+        raise UsageError.ValueError(
+            title="Empty mapping",
+            detail=f"Argument '{ref_name}' is an empty mapping.",
+            code=Code.MAPPING_KEYS_MISMATCH,
+            param=ref_name,
+            hint="Give one entry per stratum, or a single number for all.",
+        )
 
     ref_keys = list(ref_map.keys())
     ref_set = set(ref_keys)
@@ -166,8 +172,16 @@ def _get_keys_from_maps(**kwargs: Mapping[Any, Any]) -> list[Category]:
             if extra:
                 parts.append(f"extra: {sorted(extra)!r}")
 
-            detail = "; ".join(parts)
-            raise ValueError(f"Keys of '{name}' do not match '{ref_name}'. {detail}")
+            raise UsageError.ValueError(
+                title="Mappings with different keys",
+                detail=f"Keys of '{name}' do not match '{ref_name}'. {'; '.join(parts)}",
+                code=Code.MAPPING_KEYS_MISMATCH,
+                param=name,
+                expected=sorted(ref_set, key=str),
+                got=sorted(current_set, key=str),
+                hint="Every per-stratum mapping needs the same strata; "
+                "a single number applies to all of them.",
+            )
 
     return ref_keys
 
