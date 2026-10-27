@@ -529,6 +529,7 @@ fn accumulate_weighted_crossprod(cols: &[f64], w: &[f64], n: usize, k: usize, ou
 /// Summation is plain blocked f64, as R's `crossprod` is; Kahan compensation
 /// bought ~1e-16 on a quantity the sandwich is insensitive to and cost the
 /// vectorization of the whole accumulation.
+#[allow(clippy::too_many_arguments)]
 fn build_irls_normal_eqs(
     family: Family,
     link: Link,
@@ -702,6 +703,7 @@ pub(crate) fn stratum_scales(
 ///
 /// `col_at(i, j)` is row `i`'s already-weighted value in column `j`; `psu_idx`
 /// is `None` when every row is its own PSU.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn singleton_meat(
     meat: &mut [f64],
     p: usize,
@@ -834,6 +836,7 @@ pub(crate) fn singleton_meat(
 ///
 /// The caller passes influence functions, not raw variables: the weights are
 /// already folded into the columns.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn design_vcov_of_totals(
     cols: &[f64],
     n: usize,
@@ -923,8 +926,8 @@ pub(crate) fn design_vcov_of_totals(
                         mean[j] += totals[li * p + j];
                     }
                 }
-                for j in 0..p {
-                    mean[j] /= m as f64;
+                for v in mean.iter_mut().take(p) {
+                    *v /= m as f64;
                 }
 
                 local.iter_mut().for_each(|v| *v = 0.0);
@@ -993,6 +996,7 @@ fn check_rank(XtWX: &Mat<f64>, k: usize, cols: &[Series]) -> PolarsResult<()> {
             d -= l[p * k + j] * l[p * k + j];
         }
         // Negated so a NaN diagonal is aliased rather than accepted.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN takes this branch on purpose
         if !(d > ALIAS_TOL * XtWX[(j, j)]) {
             // Its factor column stays zero, so the columns after it are
             // measured against the ones that were actually kept.
@@ -1137,7 +1141,7 @@ fn null_deviance_with_offset(
     tol: f64,
     max_iter: usize,
 ) -> f64 {
-    let contributes = |i: usize| domain_mask.map_or(true, |m| m[i]) && w_samp[i] > 0.0;
+    let contributes = |i: usize| domain_mask.is_none_or(|m| m[i]) && w_samp[i] > 0.0;
 
     let mut b = 0.0f64;
     let mut deviance = f64::INFINITY;
@@ -1269,6 +1273,7 @@ pub(crate) fn fit_one(
 /// Equivalent to `fit_glm_domain(..., domain_mask=None)` with no singleton
 /// handling; the unit tests' entry point.
 #[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 pub fn fit_glm(
     y: &Series,
     x_cols: Vec<Series>,
@@ -1357,6 +1362,7 @@ pub fn fit_glm_where(
 /// contributing to the IRLS and the sandwich meat are restricted to the
 /// domain. This produces correct domain-estimation SEs matching R's
 /// `svyglm(..., design = subset(d, ...))`.
+#[allow(clippy::too_many_arguments)]
 pub fn fit_glm_by(
     y: &Series,
     x_cols: Vec<Series>,
@@ -1386,15 +1392,12 @@ pub fn fit_glm_by(
     let attempts: Vec<(String, PolarsResult<GlmResult>)> = groups
         .par_iter()
         .map(|&group_val| {
-            let mask_vec: Vec<bool> = by_str
-                .iter()
-                .map(|v| v.map_or(false, |s| s == group_val))
-                .collect();
+            let mask_vec: Vec<bool> = by_str.iter().map(|v| v == Some(group_val)).collect();
 
             // Clone the x_cols Vec for each domain fit. The Series themselves
             // are cheap reference-counted handles in polars; the clone copies
             // only the Vec, not the underlying data.
-            let xs = x_cols.iter().cloned().collect();
+            let xs = x_cols.to_vec();
             let res = fit_one(
                 y,
                 xs,
@@ -1522,6 +1525,7 @@ pub fn fit_glm_reps(
 /// the original `fit_glm`. When `Some`, out-of-domain rows contribute 0 to
 /// both the IRLS loop and the sandwich meat, while the strata/PSU
 /// enumeration remains based on the full design.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn fit_glm_domain(
     y: &Series,
     x_cols: Vec<Series>,
@@ -1677,7 +1681,7 @@ pub(crate) fn fit_glm_domain(
     let mut eta = vec![0.0; n];
 
     for i in 0..n {
-        let in_domain = domain_mask.map_or(true, |m| m[i]);
+        let in_domain = domain_mask.is_none_or(|m| m[i]);
         let y_init = if in_domain { y_vals[i] } else { 0.5 };
         mu[i] = family.initial_mu(y_init, w_samp[i]);
         // R seeds eta at linkfun(mustart) without the offset; it enters through
@@ -1734,9 +1738,7 @@ pub(crate) fn fit_glm_domain(
 
         // 4) eta/mu at beta_new, column-outer: each term is one contiguous
         //    pass over x, where a row-outer loop strides by n per term.
-        for i in 0..n {
-            eta[i] = offset_vals[i];
-        }
+        eta[..n].copy_from_slice(&offset_vals[..n]);
         for j in 0..k {
             let bj = beta_new[(j, 0)];
             if bj == 0.0 {
@@ -1967,8 +1969,8 @@ pub(crate) fn fit_glm_domain(
         ),
         None => {
             let mut scores = vec![0.0f64; n];
-            for i in 0..n {
-                scores[i] = score_at(i);
+            for (i, s) in scores.iter_mut().enumerate().take(n) {
+                *s = score_at(i);
             }
             let (scale_h, psus_h) =
                 stratum_scales(&strata_obs, psu_opt, n_psu_levels, fpc_rows.as_deref());
@@ -2049,8 +2051,8 @@ pub(crate) fn fit_glm_domain(
                             mean[j] += totals[li * k + j];
                         }
                     }
-                    for j in 0..k {
-                        mean[j] /= m as f64;
+                    for v in mean.iter_mut().take(k) {
+                        *v /= m as f64;
                     }
 
                     local.iter_mut().for_each(|v| *v = 0.0);
@@ -2124,10 +2126,10 @@ pub(crate) fn fit_glm_domain(
     let df_resid = if psu.is_some() && strata.is_some() {
         let mut total_psus: usize = 0;
         let mut nonempty_strata: usize = 0;
-        for h in 0..n_strata {
-            let psus_in_dom: HashSet<usize> = strata_obs[h]
+        for obs in strata_obs.iter().take(n_strata) {
+            let psus_in_dom: HashSet<usize> = obs
                 .iter()
-                .filter(|&&i| domain_mask.map_or(true, |m| m[i]) && w_samp[i] > 0.0)
+                .filter(|&&i| domain_mask.is_none_or(|m| m[i]) && w_samp[i] > 0.0)
                 .map(|&i| psu_idx[i])
                 .collect();
             if !psus_in_dom.is_empty() {
@@ -2139,7 +2141,7 @@ pub(crate) fn fit_glm_domain(
         if df <= 0 { f64::NAN } else { df as f64 }
     } else if psu.is_some() {
         let psus_in_dom: HashSet<usize> = (0..n)
-            .filter(|&i| domain_mask.map_or(true, |m| m[i]) && w_samp[i] > 0.0)
+            .filter(|&i| domain_mask.is_none_or(|m| m[i]) && w_samp[i] > 0.0)
             .map(|i| psu_idx[i])
             .collect();
         let m = psus_in_dom.len() as isize;
@@ -2149,7 +2151,7 @@ pub(crate) fn fit_glm_domain(
         let mut n_dom: isize = 0;
         let mut strata_in_dom: HashSet<usize> = HashSet::new();
         for i in 0..n {
-            let in_domain = domain_mask.map_or(true, |m| m[i]);
+            let in_domain = domain_mask.is_none_or(|m| m[i]);
             if in_domain && w_samp[i] > 0.0 {
                 n_dom += 1;
                 strata_in_dom.insert(strata_idx[i]);
@@ -2159,7 +2161,7 @@ pub(crate) fn fit_glm_domain(
         if df <= 0 { f64::NAN } else { df as f64 }
     } else {
         let n_dom: isize = (0..n)
-            .filter(|&i| domain_mask.map_or(true, |m| m[i]) && w_samp[i] > 0.0)
+            .filter(|&i| domain_mask.is_none_or(|m| m[i]) && w_samp[i] > 0.0)
             .count() as isize;
         if n_dom <= 1 {
             f64::NAN
@@ -2215,7 +2217,7 @@ pub(crate) fn fit_glm_domain(
         let mut sum_wy = 0.0;
         let mut sum_w = 0.0;
         for i in 0..n {
-            let in_domain = domain_mask.map_or(true, |m| m[i]);
+            let in_domain = domain_mask.is_none_or(|m| m[i]);
             if !in_domain || w_samp[i] <= 0.0 {
                 continue;
             }
@@ -2226,7 +2228,7 @@ pub(crate) fn fit_glm_domain(
 
         let mut dev0 = 0.0;
         for i in 0..n {
-            let in_domain = domain_mask.map_or(true, |m| m[i]);
+            let in_domain = domain_mask.is_none_or(|m| m[i]);
             if !in_domain {
                 continue;
             }
@@ -2376,6 +2378,7 @@ mod tests {
     /// R: pnorm(x) at 17 significant digits.
     /// The erfc route agrees to ~1e-14 relative across the whole range.
     #[test]
+    #[allow(clippy::excessive_precision)] // as R prints them
     fn norm_cdf_matches_r_pnorm() {
         let cases: [(f64, f64); 13] = [
             (-8.5, 9.4795348222033192e-18),

@@ -14,8 +14,9 @@
 // PERF_PLAN baseline table: ~20 strata, ~50 PSUs per stratum. Inputs are
 // single-chunk and null-free (the common post-`prepare_data` case).
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use polars::prelude::*;
+use std::hint::black_box;
 
 use _internal::estimation::association::{
     AssocKind, PairProducts, bivar_moments, multi_moments, point_estimate_corr,
@@ -240,7 +241,8 @@ fn bench_replicate_association(c: &mut Criterion) {
     g.sample_size(10);
     const N_REPS: usize = 200;
 
-    for &n in &[100_000usize] {
+    {
+        let &n = &100_000usize;
         let y = make_col(n, 1);
         let x = make_col(n, 2);
         let w = make_w(n);

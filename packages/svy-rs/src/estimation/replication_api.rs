@@ -84,7 +84,7 @@ fn get_domain_mask(df: &DataFrame, mask_col: Option<&str>) -> PolarsResult<Optio
 }
 
 fn parse_variance_center(center: &str) -> PyResult<VarianceCenter> {
-    VarianceCenter::from_str(center).ok_or_else(|| {
+    VarianceCenter::parse(center).ok_or_else(|| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
             "Unknown center: {}. Use 'replicate_mean' or 'full_sample'",
             center
@@ -98,6 +98,7 @@ fn parse_variance_center(center: &str) -> PyResult<VarianceCenter> {
 
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn replicate_mean(
     _py: Python,
     data: PyDataFrame,
@@ -124,38 +125,36 @@ pub fn replicate_mean(
     }
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 
-    let result = _py.detach(|| {
-        if by_col.is_none() {
-            compute_replicate_mean_ungrouped(
-                &df,
-                &value_col,
-                &weight_col,
-                &rep_weight_cols,
-                &rep_coefs,
-                variance_center,
-                df_val,
-                domain_mask_col.as_deref(),
-            )
-            .map(|out| (out, None))
-        } else {
-            compute_replicate_mean_grouped(
-                &df,
-                &value_col,
-                &weight_col,
-                &rep_weight_cols,
-                &rep_coefs,
-                variance_center,
-                df_val,
-                by_col.as_ref().unwrap(),
-            )
-            .map(|(out, cov)| (out, Some(cov)))
-        }
+    let result = _py.detach(|| match by_col.as_ref() {
+        None => compute_replicate_mean_ungrouped(
+            &df,
+            &value_col,
+            &weight_col,
+            &rep_weight_cols,
+            &rep_coefs,
+            variance_center,
+            df_val,
+            domain_mask_col.as_deref(),
+        )
+        .map(|out| (out, None)),
+        Some(by) => compute_replicate_mean_grouped(
+            &df,
+            &value_col,
+            &weight_col,
+            &rep_weight_cols,
+            &rep_coefs,
+            variance_center,
+            df_val,
+            by,
+        )
+        .map(|(out, cov)| (out, Some(cov))),
     });
     result
         .map(|(out, cov)| (PyDataFrame(out), cov))
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_replicate_mean_ungrouped(
     df: &DataFrame,
     value_col: &str,
@@ -184,13 +183,14 @@ fn compute_replicate_mean_ungrouped(
             matrix_mean_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps, mask)
         }
     };
-    let variance = variance_from_replicates(theta_full, &theta_reps, &rep_coefs, center);
+    let variance = variance_from_replicates(theta_full, &theta_reps, rep_coefs, center);
     let se = variance.sqrt();
 
     df!["y" => vec![value_col], "est" => vec![theta_full], "se" => vec![se],
         "var" => vec![variance], "df" => vec![df_val], "n" => vec![active_count(weights, None)]]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_replicate_mean_grouped(
     df: &DataFrame,
     value_col: &str,
@@ -235,7 +235,7 @@ fn compute_replicate_mean_grouped(
 
     for (k, domain_name) in domain_names.iter().enumerate() {
         let variance =
-            variance_from_replicates(theta_full_vec[k], &theta_reps_vec[k], &rep_coefs, center);
+            variance_from_replicates(theta_full_vec[k], &theta_reps_vec[k], rep_coefs, center);
         by_vals.push(domain_name.clone());
         estimates.push(theta_full_vec[k]);
         ses.push(variance.sqrt());
@@ -246,7 +246,7 @@ fn compute_replicate_mean_grouped(
     let cov = flatten_cov(covariance_from_replicates(
         &theta_full_vec,
         &theta_reps_vec,
-        &rep_coefs,
+        rep_coefs,
         center,
     ));
     let out = df![by_col => by_vals, "y" => vec![value_col; n_domains], "est" => estimates,
@@ -260,6 +260,7 @@ fn compute_replicate_mean_grouped(
 
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn replicate_total(
     _py: Python,
     data: PyDataFrame,
@@ -286,38 +287,36 @@ pub fn replicate_total(
     }
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 
-    let result = _py.detach(|| {
-        if by_col.is_none() {
-            compute_replicate_total_ungrouped(
-                &df,
-                &value_col,
-                &weight_col,
-                &rep_weight_cols,
-                &rep_coefs,
-                variance_center,
-                df_val,
-                domain_mask_col.as_deref(),
-            )
-            .map(|out| (out, None))
-        } else {
-            compute_replicate_total_grouped(
-                &df,
-                &value_col,
-                &weight_col,
-                &rep_weight_cols,
-                &rep_coefs,
-                variance_center,
-                df_val,
-                by_col.as_ref().unwrap(),
-            )
-            .map(|(out, cov)| (out, Some(cov)))
-        }
+    let result = _py.detach(|| match by_col.as_ref() {
+        None => compute_replicate_total_ungrouped(
+            &df,
+            &value_col,
+            &weight_col,
+            &rep_weight_cols,
+            &rep_coefs,
+            variance_center,
+            df_val,
+            domain_mask_col.as_deref(),
+        )
+        .map(|out| (out, None)),
+        Some(by) => compute_replicate_total_grouped(
+            &df,
+            &value_col,
+            &weight_col,
+            &rep_weight_cols,
+            &rep_coefs,
+            variance_center,
+            df_val,
+            by,
+        )
+        .map(|(out, cov)| (out, Some(cov))),
     });
     result
         .map(|(out, cov)| (PyDataFrame(out), cov))
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_replicate_total_ungrouped(
     df: &DataFrame,
     value_col: &str,
@@ -344,13 +343,14 @@ fn compute_replicate_total_ungrouped(
             matrix_total_estimates(&y_arr, &w_arr, &rep_w_matrix, n, n_reps, mask)
         }
     };
-    let variance = variance_from_replicates(theta_full, &theta_reps, &rep_coefs, center);
+    let variance = variance_from_replicates(theta_full, &theta_reps, rep_coefs, center);
     let se = variance.sqrt();
 
     df!["y" => vec![value_col], "est" => vec![theta_full], "se" => vec![se],
         "var" => vec![variance], "df" => vec![df_val], "n" => vec![active_count(weights, None)]]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_replicate_total_grouped(
     df: &DataFrame,
     value_col: &str,
@@ -395,7 +395,7 @@ fn compute_replicate_total_grouped(
 
     for (k, domain_name) in domain_names.iter().enumerate() {
         let variance =
-            variance_from_replicates(theta_full_vec[k], &theta_reps_vec[k], &rep_coefs, center);
+            variance_from_replicates(theta_full_vec[k], &theta_reps_vec[k], rep_coefs, center);
         by_vals.push(domain_name.clone());
         estimates.push(theta_full_vec[k]);
         ses.push(variance.sqrt());
@@ -406,7 +406,7 @@ fn compute_replicate_total_grouped(
     let cov = flatten_cov(covariance_from_replicates(
         &theta_full_vec,
         &theta_reps_vec,
-        &rep_coefs,
+        rep_coefs,
         center,
     ));
     let out = df![by_col => by_vals, "y" => vec![value_col; n_domains], "est" => estimates,
@@ -573,8 +573,7 @@ fn compute_replicate_assoc(
                 let products = PairProducts::new(ys[pi], xs[pi], weights, mask)?;
                 let theta_full = products.estimate(&w_full, kind);
                 let theta_reps = replicate_association(&products, &rep_cols, kind);
-                let variance =
-                    variance_from_replicates(theta_full, &theta_reps, &rep_coefs, center);
+                let variance = variance_from_replicates(theta_full, &theta_reps, rep_coefs, center);
                 let n_rows = match mask {
                     Some(m) => m
                         .iter()
@@ -625,6 +624,7 @@ fn compute_replicate_assoc(
 
 #[pyfunction]
 #[pyo3(signature = (data, numerator_col, denominator_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn replicate_ratio(
     _py: Python,
     data: PyDataFrame,
@@ -652,40 +652,38 @@ pub fn replicate_ratio(
     }
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 
-    let result = _py.detach(|| {
-        if by_col.is_none() {
-            compute_replicate_ratio_ungrouped(
-                &df,
-                &numerator_col,
-                &denominator_col,
-                &weight_col,
-                &rep_weight_cols,
-                &rep_coefs,
-                variance_center,
-                df_val,
-                domain_mask_col.as_deref(),
-            )
-            .map(|out| (out, None))
-        } else {
-            compute_replicate_ratio_grouped(
-                &df,
-                &numerator_col,
-                &denominator_col,
-                &weight_col,
-                &rep_weight_cols,
-                &rep_coefs,
-                variance_center,
-                df_val,
-                by_col.as_ref().unwrap(),
-            )
-            .map(|(out, cov)| (out, Some(cov)))
-        }
+    let result = _py.detach(|| match by_col.as_ref() {
+        None => compute_replicate_ratio_ungrouped(
+            &df,
+            &numerator_col,
+            &denominator_col,
+            &weight_col,
+            &rep_weight_cols,
+            &rep_coefs,
+            variance_center,
+            df_val,
+            domain_mask_col.as_deref(),
+        )
+        .map(|out| (out, None)),
+        Some(by) => compute_replicate_ratio_grouped(
+            &df,
+            &numerator_col,
+            &denominator_col,
+            &weight_col,
+            &rep_weight_cols,
+            &rep_coefs,
+            variance_center,
+            df_val,
+            by,
+        )
+        .map(|(out, cov)| (out, Some(cov))),
     });
     result
         .map(|(out, cov)| (PyDataFrame(out), cov))
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_replicate_ratio_ungrouped(
     df: &DataFrame,
     numerator_col: &str,
@@ -715,13 +713,14 @@ fn compute_replicate_ratio_ungrouped(
             matrix_ratio_estimates(&y_arr, &x_arr, &w_arr, &rep_w_matrix, n, n_reps, mask)
         }
     };
-    let variance = variance_from_replicates(theta_full, &theta_reps, &rep_coefs, center);
+    let variance = variance_from_replicates(theta_full, &theta_reps, rep_coefs, center);
     let se = variance.sqrt();
 
     df!["y" => vec![numerator_col], "x" => vec![denominator_col], "est" => vec![theta_full],
         "se" => vec![se], "var" => vec![variance], "df" => vec![df_val], "n" => vec![active_count(weights, None)]]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_replicate_ratio_grouped(
     df: &DataFrame,
     numerator_col: &str,
@@ -772,7 +771,7 @@ fn compute_replicate_ratio_grouped(
 
     for (k, domain_name) in domain_names.iter().enumerate() {
         let variance =
-            variance_from_replicates(theta_full_vec[k], &theta_reps_vec[k], &rep_coefs, center);
+            variance_from_replicates(theta_full_vec[k], &theta_reps_vec[k], rep_coefs, center);
         by_vals.push(domain_name.clone());
         estimates.push(theta_full_vec[k]);
         ses.push(variance.sqrt());
@@ -783,7 +782,7 @@ fn compute_replicate_ratio_grouped(
     let cov = flatten_cov(covariance_from_replicates(
         &theta_full_vec,
         &theta_reps_vec,
-        &rep_coefs,
+        rep_coefs,
         center,
     ));
     let out = df![by_col => by_vals, "y" => vec![numerator_col; n_domains], "x" => vec![denominator_col; n_domains],
@@ -797,6 +796,7 @@ fn compute_replicate_ratio_grouped(
 
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn replicate_prop(
     _py: Python,
     data: PyDataFrame,
@@ -828,6 +828,7 @@ pub fn replicate_prop(
 /// design), with the joint covariance across levels (and by-groups).
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn replicate_factor_total(
     _py: Python,
     data: PyDataFrame,
@@ -885,38 +886,36 @@ fn replicate_levels(
     }
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 
-    let result = _py.detach(|| {
-        if by_col.is_none() {
-            compute_replicate_prop_ungrouped(
-                &df,
-                &value_col,
-                &weight_col,
-                &rep_weight_cols,
-                &rep_coefs,
-                variance_center,
-                df_val,
-                domain_mask_col.as_deref(),
-                normalize,
-            )
-        } else {
-            compute_replicate_prop_grouped(
-                &df,
-                &value_col,
-                &weight_col,
-                &rep_weight_cols,
-                &rep_coefs,
-                variance_center,
-                df_val,
-                by_col.as_ref().unwrap(),
-                normalize,
-            )
-        }
+    let result = _py.detach(|| match by_col.as_ref() {
+        None => compute_replicate_prop_ungrouped(
+            &df,
+            &value_col,
+            &weight_col,
+            &rep_weight_cols,
+            &rep_coefs,
+            variance_center,
+            df_val,
+            domain_mask_col.as_deref(),
+            normalize,
+        ),
+        Some(by) => compute_replicate_prop_grouped(
+            &df,
+            &value_col,
+            &weight_col,
+            &rep_weight_cols,
+            &rep_coefs,
+            variance_center,
+            df_val,
+            by,
+            normalize,
+        ),
     });
     result
         .map(|(out, cov)| (PyDataFrame(out), Some(cov)))
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_replicate_prop_ungrouped(
     df: &DataFrame,
     value_col: &str,
@@ -960,7 +959,7 @@ fn compute_replicate_prop_ungrouped(
         };
         let n_l = levels.len();
         let vars: Vec<f64> = (0..n_l)
-            .map(|l| variance_from_replicates(theta_full[l], &theta_reps[l], &rep_coefs, center))
+            .map(|l| variance_from_replicates(theta_full[l], &theta_reps[l], rep_coefs, center))
             .collect();
         (n_l, levels, theta_full, vars, theta_reps)
     } else {
@@ -993,7 +992,7 @@ fn compute_replicate_prop_ungrouped(
         };
         let n_l = levels.len();
         let vars: Vec<f64> = (0..n_l)
-            .map(|l| variance_from_replicates(theta_full[l], &theta_reps[l], &rep_coefs, center))
+            .map(|l| variance_from_replicates(theta_full[l], &theta_reps[l], rep_coefs, center))
             .collect();
         let str_levels: Vec<String> = levels.iter().map(|l| l.to_string()).collect();
         (n_l, str_levels, theta_full, vars, theta_reps)
@@ -1002,7 +1001,7 @@ fn compute_replicate_prop_ungrouped(
     let cov = flatten_cov(covariance_from_replicates(
         &estimates,
         &theta_reps,
-        &rep_coefs,
+        rep_coefs,
         center,
     ));
     let ses: Vec<f64> = variances.iter().map(|v| v.sqrt()).collect();
@@ -1013,6 +1012,7 @@ fn compute_replicate_prop_ungrouped(
     Ok((out, cov))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_replicate_prop_grouped(
     df: &DataFrame,
     value_col: &str,
@@ -1107,7 +1107,7 @@ fn compute_replicate_prop_grouped(
         for (l, level) in levels_str.iter().enumerate() {
             let theta_full = theta_full_mat[d][l];
             let variance =
-                variance_from_replicates(theta_full, &theta_reps_mat[d][l], &rep_coefs, center);
+                variance_from_replicates(theta_full, &theta_reps_mat[d][l], rep_coefs, center);
             by_vals.push(domain_name.clone());
             level_strs.push(level.clone());
             estimates.push(theta_full);
@@ -1121,7 +1121,7 @@ fn compute_replicate_prop_grouped(
     let cov = flatten_cov(covariance_from_replicates(
         &estimates,
         &theta_reps_flat,
-        &rep_coefs,
+        rep_coefs,
         center,
     ));
     let n_rows = by_vals.len();
@@ -1167,7 +1167,7 @@ pub fn replicate_quantile(
     }
     let q_method = quantile_method
         .as_deref()
-        .map(SvyQuantileMethod::from_str)
+        .map(SvyQuantileMethod::parse)
         .unwrap_or(SvyQuantileMethod::Higher);
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 
@@ -1237,6 +1237,7 @@ pub fn replicate_median(
     Ok(PyDataFrame(result))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_replicate_quantile_ungrouped(
     df: &DataFrame,
     value_col: &str,
@@ -1258,7 +1259,7 @@ fn compute_replicate_quantile_ungrouped(
     let (theta_full, theta_reps) = quantile_estimates_cols(&y_arr, &w_arr, &refs, probs, q_method);
 
     let variances: Vec<f64> = (0..probs.len())
-        .map(|j| variance_from_replicates(theta_full[j], &theta_reps[j], &rep_coefs, center))
+        .map(|j| variance_from_replicates(theta_full[j], &theta_reps[j], rep_coefs, center))
         .collect();
     let ses: Vec<f64> = variances.iter().map(|v| v.sqrt()).collect();
     let k = probs.len();
@@ -1267,6 +1268,7 @@ fn compute_replicate_quantile_ungrouped(
         "se" => ses, "var" => variances, "df" => vec![df_val; k], "n" => vec![active_count(weights, None); k]]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_replicate_quantile_grouped(
     df: &DataFrame,
     value_col: &str,

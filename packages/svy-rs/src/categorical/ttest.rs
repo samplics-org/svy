@@ -102,6 +102,7 @@ fn count_active(y: &Float64Chunked, w: &Float64Chunked, domain: Option<&BooleanC
 ///   tt <- svymean(~y, design)
 ///   t = coef(tt) / SE(tt)
 ///   df = degf(design) - 1
+#[allow(clippy::too_many_arguments)]
 pub fn ttest_one_sample(
     y: &Float64Chunked,
     weights: &Float64Chunked,
@@ -160,6 +161,7 @@ pub fn ttest_one_sample(
 }
 
 /// One-sample t-test within a domain.
+#[allow(clippy::too_many_arguments)]
 pub fn ttest_one_sample_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
@@ -231,6 +233,7 @@ pub fn ttest_one_sample_domain(
 /// We implement this via weighted OLS + influence functions + taylor_variance,
 /// which is mathematically identical to the sandwich variance from svyglm
 /// for Gaussian identity-link models.
+#[allow(clippy::too_many_arguments)]
 pub fn ttest_two_sample(
     y: &[f64],
     g: &[u32], // group indices: 0 or 1
@@ -337,6 +340,7 @@ pub fn ttest_two_sample(
 
 /// Compute per-group SEs using domain estimation.
 /// Accepts pre-built Float64Chunked to avoid cloning y and w on every call.
+#[allow(clippy::too_many_arguments)]
 fn compute_per_group_ses(
     y_chunked: &Float64Chunked,
     g: &[u32],
@@ -400,7 +404,7 @@ pub fn ttest_one_sample_rep(
     let mut mask = vec![false; n];
     for i in 0..n {
         let yi = y.get(i).unwrap_or(f64::NAN);
-        let in_dom = domain.map_or(true, |m| m.get(i).unwrap_or(false));
+        let in_dom = domain.is_none_or(|m| m.get(i).unwrap_or(false));
         if in_dom && !yi.is_nan() {
             y_arr[i] = yi;
             w_arr[i] = weights.get(i).unwrap_or(0.0);
