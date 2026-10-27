@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 
 from svy.core.enumerations import MeasurementType, MetadataSource
 from svy.core.types import Category
+from svy.errors import Code, LabelError
 
 
 log = logging.getLogger(__name__)
@@ -242,8 +243,13 @@ class VariableMeta(msgspec.Struct, frozen=True):
         """Coerce labels to pairs; a variable cannot have both sources."""
         force_setattr(self, "value_labels", _coerce_labels(self.value_labels))
         if self.value_labels is not None and self.scheme_ref is not None:
-            raise ValueError(
-                f"Variable {self.name!r}: cannot specify both value_labels and scheme_ref"
+            raise LabelError.ValueError(
+                title="Two sources of value labels",
+                detail=f"Variable {self.name!r}: cannot specify both value_labels and scheme_ref",
+                code=Code.LABEL_SOURCE_CONFLICT,
+                where="VariableMeta",
+                param="value_labels",
+                hint="Give the labels inline or point to a catalog scheme, not both.",
             )
 
     @property
@@ -290,6 +296,13 @@ class VariableMeta(msgspec.Struct, frozen=True):
         self, labels: dict[Category, str], *, clear_scheme: bool = True
     ) -> VariableMeta:
         """Return a copy with updated value labels."""
+        if not isinstance(labels, Mapping):
+            raise LabelError.invalid_type(
+                where="value labels",
+                param="labels",
+                got=labels,
+                expected="a mapping {code: label}",
+            )
         return self.clone(
             value_labels=dict(labels),
             scheme_ref=None if clear_scheme else self.scheme_ref,
@@ -308,6 +321,10 @@ class VariableMeta(msgspec.Struct, frozen=True):
         self, categories: Iterable[Category], *, ordered: bool | None = None
     ) -> VariableMeta:
         """Return a copy with updated categories."""
+        if isinstance(categories, (str, bytes)) or not isinstance(categories, Iterable):
+            raise LabelError.invalid_type(
+                where="categories", param="categories", got=categories, expected="a list of codes"
+            )
         new_mtype = self.mtype
         if ordered is True:
             new_mtype = MeasurementType.ORDINAL
@@ -660,7 +677,15 @@ class MetadataStore:
         """
         meta = self._vars.get(var)
         if meta is None:
-            raise KeyError(f"No metadata for variable: {var!r}")
+            raise LabelError.KeyError(
+                title="No metadata for the variable",
+                detail=f"No metadata for variable: {var!r}",
+                code=Code.LABEL_VARIABLE_UNKNOWN,
+                where="MetadataStore.require",
+                param="var",
+                got=var,
+                hint="store.get(var) returns None instead; store.variables lists what is held.",
+            )
         return meta
 
     def set(self, var: str, meta: VariableMeta) -> None:
@@ -679,6 +704,10 @@ class MetadataStore:
         If meta.name doesn't match var, a new VariableMeta is created
         with the correct name.
         """
+        if not isinstance(meta, VariableMeta):
+            raise LabelError.invalid_type(
+                where="MetadataStore.set", param="meta", got=meta, expected="a VariableMeta"
+            )
         if meta.name != var:
             meta = meta.clone(name=var)
         self._vars[var] = meta
@@ -960,6 +989,13 @@ class MetadataStore:
         --------
         >>> store.rename_variables({"old_name": "new_name", "q1": "question_1"})
         """
+        if not isinstance(renames, Mapping):
+            raise LabelError.invalid_type(
+                where="MetadataStore.rename_variables",
+                param="renames",
+                got=renames,
+                expected="a mapping {old_name: new_name}",
+            )
         for old_name, new_name in renames.items():
             if old_name in self._vars and old_name != new_name:
                 meta = self._vars.pop(old_name)
@@ -1176,6 +1212,10 @@ class MetadataStore:
         >>> store.update(other)                    # fill gaps only
         >>> store.update(other, overwrite=True)    # `other` wins on conflicts
         """
+        if not isinstance(other, MetadataStore):
+            raise LabelError.invalid_type(
+                where="MetadataStore.update", param="other", got=other, expected="a MetadataStore"
+            )
         for var in other.variables:
             incoming = other.get(var)
             if incoming is None:  # pragma: no cover - variables() lists real keys
@@ -1395,6 +1435,13 @@ class MetadataStore:
         --------
         >>> store.coverage(sample.data)
         """
+        if data is not None and not isinstance(data, pl.DataFrame):
+            raise LabelError.invalid_type(
+                where="MetadataStore.coverage",
+                param="data",
+                got=data,
+                expected="a polars DataFrame",
+            )
         data_cols = set(data.columns) if data is not None else set()
         all_vars = set(self._vars.keys()) | data_cols
 
