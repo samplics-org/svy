@@ -46,9 +46,14 @@ def offset_values(fit: GLMFit, data: pl.DataFrame) -> np.ndarray | float:
     if fit.offset is None:
         return 0.0
     if fit.offset not in data.columns:
-        raise ValueError(
-            f"model was fitted with offset={fit.offset!r}, so that column must be "
-            f"present in the data passed here; got {list(data.columns)}."
+        raise ModelError.ValueError(
+            title="Offset column missing",
+            detail=f"model was fitted with offset={fit.offset!r}, so that column must be "
+            f"present in the data passed here; got {list(data.columns)}.",
+            code=Code.PRED_COLUMN_MISSING,
+            where="GLM.predict",
+            param="offset",
+            got=fit.offset,
         )
     return data.get_column(fit.offset).to_numpy().astype(float)
 
@@ -111,10 +116,31 @@ def _ratio_labels(link: str) -> tuple[str, str]:
     try:
         return RATIO_LINKS[link]
     except KeyError:
-        raise ValueError(
-            f"exponentiate=True is not meaningful for the {link!r} link: exp(beta) "
-            f"is a ratio only for {', '.join(sorted(RATIO_LINKS))}."
+        raise ModelError.ValueError(
+            title="Not a ratio",
+            detail=f"exponentiate=True is not meaningful for the {link!r} link: exp(beta) "
+            f"is a ratio only for {', '.join(sorted(RATIO_LINKS))}.",
+            code=Code.EXPONENTIATE_NOT_RATIO,
+            where="GLMFit",
+            param="exponentiate",
+            got=link,
+            expected=sorted(RATIO_LINKS),
+            hint="Leave exponentiate=False for this link; the coefficients are on its own scale.",
         ) from None
+
+
+def _print_width(width: Any, *, where: str) -> int:
+    try:
+        w = int(width)
+    except Exception as ex:
+        raise ModelError.invalid_type(
+            where=where, param="width", got=width, expected="int or None"
+        ) from ex
+    if w <= 20:
+        raise ModelError.invalid_range(
+            where=where, param="width", got=width, min_=20, hint="Use more than 20 characters."
+        )
+    return w
 
 
 class GLMCoef(msgspec.Struct, frozen=True):
@@ -181,13 +207,7 @@ class GLMFit(msgspec.Struct, frozen=True):
         if width is None:
             cls.PRINT_WIDTH = None
             return
-        try:
-            w = int(width)
-        except Exception as ex:
-            raise TypeError(f"print width must be int or None; got {width!r}") from ex
-        if w <= 20:
-            raise ValueError("print width must be > 20 characters.")
-        cls.PRINT_WIDTH = w
+        cls.PRINT_WIDTH = _print_width(width, where="GLMFit.set_default_print_width")
 
     def to_dict(self) -> dict[str, Any]:
         d = _to_builtins(
@@ -266,7 +286,9 @@ class GLMFit(msgspec.Struct, frozen=True):
 
         name = getattr(term, "name", term)
         if not isinstance(name, str):
-            raise TypeError(f"term must be a str or Cat, got {type(term).__name__}")
+            raise ModelError.invalid_type(
+                where="GLMFit.term_test", param="term", got=term, expected="a str or Cat"
+            )
 
         info = (self.term_info or {}).get(name)
         if info is not None and info.get("type") == "categorical":

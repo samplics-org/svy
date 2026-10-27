@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from svy.errors import Code, ModelError
+
 
 # eta bound R's probit linkinv applies: -qnorm(.Machine$double.eps).
 _PROBIT_ETA_MAX = 8.1258906647019042
@@ -73,7 +75,14 @@ def link_inverse(link: str, eta: np.ndarray) -> np.ndarray:
         return 1.0 / np.sqrt(np.maximum(eta, 1e-10))
 
     else:
-        raise ValueError(f"Unknown link: {name}")
+        raise ModelError.ValueError(
+            title="Unknown link",
+            detail=f"Unknown link: {name}",
+            code=Code.INVALID_CHOICE,
+            where="svy.regression.links",
+            param="link",
+            got=name,
+        )
 
 
 def link_mu_eta(link: str, eta: np.ndarray) -> np.ndarray:
@@ -112,7 +121,14 @@ def link_mu_eta(link: str, eta: np.ndarray) -> np.ndarray:
         return -0.5 * (mu**3)
 
     else:
-        raise ValueError(f"Unknown link: {name}")
+        raise ModelError.ValueError(
+            title="Unknown link",
+            detail=f"Unknown link: {name}",
+            code=Code.INVALID_CHOICE,
+            where="svy.regression.links",
+            param="link",
+            got=name,
+        )
 
 
 def link_mu_eta2(link: str, eta: np.ndarray) -> np.ndarray:
@@ -151,7 +167,14 @@ def link_mu_eta2(link: str, eta: np.ndarray) -> np.ndarray:
         return 0.75 * (mu**5)
 
     else:
-        raise ValueError(f"Unknown link: {name}")
+        raise ModelError.ValueError(
+            title="Unknown link",
+            detail=f"Unknown link: {name}",
+            code=Code.INVALID_CHOICE,
+            where="svy.regression.links",
+            param="link",
+            got=name,
+        )
 
 
 # =============================================================================
@@ -213,8 +236,14 @@ def resolve_link(family: str, link: str | None) -> str:
     name = link.lower()
     allowed = FAMILY_LINKS.get(fam)
     if allowed is not None and name not in allowed:
-        raise ValueError(
-            f"family {fam!r} does not admit link {name!r}. "
-            f"Use one of: {', '.join(sorted(allowed))}."
+        raise ModelError.ValueError(
+            title="Link not admitted",
+            detail=f"family {fam!r} does not admit link {name!r}.",
+            code=Code.LINK_NOT_ADMITTED,
+            where="GLM.fit",
+            param="link",
+            got=name,
+            expected=sorted(allowed),
+            hint=f"Use one of: {', '.join(sorted(allowed))}.",
         )
     return name
