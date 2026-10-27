@@ -15,7 +15,7 @@ def synthetic_sample_df():
     """Load and prepare the synthetic sample dataset."""
     BASE_DIR = Path(__file__).parent.parent.parent
     df = pl.read_csv(BASE_DIR / "test_data/svy_synthetic_sample_07082025.csv")
-    # As the R references do before svydesign(): a missing weight raises in svy.
+    # R's svydesign() rejects missing weights; a missing weight raises in svy.
     df = df.filter(pl.col("samp_wgt").is_not_nan())
     return df.with_columns(
         pl.when(pl.col("resp2") == 1)
