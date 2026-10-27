@@ -16,7 +16,7 @@ from svy.core.types import (
     FloatArray,
     Number,
 )
-from svy.errors._method import MethodError
+from svy.errors import SelectionError
 
 
 # ============================================================
@@ -88,8 +88,8 @@ def _resolve_maps(
 # ============================================================
 
 
-def _resp_rate_error(rv: object) -> MethodError:
-    return MethodError.invalid_range(
+def _resp_rate_error(rv: object) -> SelectionError:
+    return SelectionError.invalid_range(
         where=None,
         param="resp_rate",
         got=rv,
@@ -117,7 +117,7 @@ def _apply_nonresponse(
 
     Validation:
     - resp_rate must be finite and in (0, 1].
-      * strict=True (default): raise MethodError on invalid entries.
+      * strict=True (default): raise SelectionError on invalid entries.
       * strict=False: leave n unchanged for that key.
     """
 
@@ -144,8 +144,8 @@ def _apply_nonresponse(
 # ============================================================
 
 
-def _deff_error(dv: object) -> MethodError:
-    return MethodError.invalid_range(
+def _deff_error(dv: object) -> SelectionError:
+    return SelectionError.invalid_range(
         where=None,
         param="deff",
         got=dv,
@@ -169,7 +169,7 @@ def _apply_deff(
         * Mapping keys must match if both are mappings.
 
     Validation:
-      - deff must be finite and > 0; invalid values raise MethodError.
+      - deff must be finite and > 0; invalid values raise SelectionError.
     """
 
     def _adjust(n_val: Number, d_val: Number) -> float:
@@ -237,14 +237,14 @@ _EPS = 1e-12
 def _validate_prob(p: Number, *, param: str) -> float:
     p_f = float(p)
     if not (math.isfinite(p_f) and 0.0 < p_f < 1.0):
-        raise MethodError.invalid_range(where=None, param=param, got=p, min_=0.0, max_=1.0)
+        raise SelectionError.invalid_range(where=None, param=param, got=p, min_=0.0, max_=1.0)
     return p_f
 
 
 def _validate_power(power: Number) -> float:
     b = float(power)
     if not (math.isfinite(b) and 0.0 < b < 1.0):
-        raise MethodError.invalid_range(
+        raise SelectionError.invalid_range(
             where=None,
             param="power",
             got=power,
@@ -258,7 +258,7 @@ def _validate_power(power: Number) -> float:
 def _validate_overlap(rho: Number, overlap: Number) -> tuple[float, float]:
     r, o = float(rho), float(overlap)
     if not (math.isfinite(r) and -1.0 <= r <= 1.0):
-        raise MethodError.invalid_range(
+        raise SelectionError.invalid_range(
             where=None,
             param="rho",
             got=rho,
@@ -267,7 +267,7 @@ def _validate_overlap(rho: Number, overlap: Number) -> tuple[float, float]:
             hint="rho is the correlation of a unit's values between the two rounds.",
         )
     if not (math.isfinite(o) and 0.0 <= o <= 1.0):
-        raise MethodError.invalid_range(
+        raise SelectionError.invalid_range(
             where=None,
             param="overlap",
             got=overlap,
@@ -281,7 +281,7 @@ def _validate_overlap(rho: Number, overlap: Number) -> tuple[float, float]:
 def _validate_sigma(sigma: Number, *, param: str = "sigma") -> float:
     s = float(sigma)
     if not (math.isfinite(s) and s > 0.0):
-        raise MethodError.invalid_range(
+        raise SelectionError.invalid_range(
             where=None,
             param=param,
             got=sigma,
@@ -294,7 +294,7 @@ def _validate_moe(moe: Number, *, upper: float | None = None) -> float:
     d = float(moe)
     ok = math.isfinite(d) and d > 0.0 and (upper is None or d < upper)
     if not ok:
-        raise MethodError.invalid_range(
+        raise SelectionError.invalid_range(
             where=None,
             param="moe",
             got=moe,
@@ -306,8 +306,8 @@ def _validate_moe(moe: Number, *, upper: float | None = None) -> float:
     return d
 
 
-def _infeasible(detail: str) -> MethodError:
-    return MethodError(
+def _infeasible(detail: str) -> SelectionError:
+    return SelectionError.ValueError(
         title="Infeasible design",
         detail=detail,
         code="INFEASIBLE_DESIGN",
@@ -1041,7 +1041,7 @@ def _wald_two_group_sizes(
     # -2 rho m sqrt(V1 V2) / (n1 n2) to Var(d); per n1 that is the last term.
     var_factor = v1 + float(v2) / k - 2.0 * r * o * min(1.0, k) * math.sqrt(v1 * v2) / k
     if var_factor <= 0.0:
-        raise MethodError(
+        raise SelectionError.ValueError(
             title="No variance left in the change",
             detail=(
                 f"With rho={r} and overlap={o}, the variance of the difference is "

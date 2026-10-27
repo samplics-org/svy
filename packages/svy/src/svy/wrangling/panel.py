@@ -9,7 +9,7 @@ import polars as pl
 
 from svy.core.enumerations import MetadataSource
 from svy.core.panel import case_id_cols
-from svy.errors import DimensionError, MethodError
+from svy.errors import DataError
 from svy.wrangling.mutate import mutate as _mutate
 
 
@@ -38,7 +38,7 @@ def lag(
     ctx = "Sample.wrangling.lag"
     design = sample._design
     if design.case_id is None or design.wave is None:
-        raise MethodError.not_applicable(
+        raise DataError.not_applicable(
             where=ctx,
             method="lag",
             reason="lag needs a panel: Design.case_id and Design.wave must both be set",
@@ -48,23 +48,19 @@ def lag(
             ),
         )
     if not isinstance(n, int) or n == 0:
-        raise MethodError.invalid_choice(
+        raise DataError.invalid_choice(
             where=ctx, param="n", got=n, allowed=["a non-zero int (negative for a lead)"]
         )
     if gaps not in ("null", "skip"):
-        raise MethodError.invalid_choice(
-            where=ctx, param="gaps", got=gaps, allowed=["null", "skip"]
-        )
+        raise DataError.invalid_choice(where=ctx, param="gaps", got=gaps, allowed=["null", "skip"])
 
     col_list = [cols] if isinstance(cols, str) else list(cols)
     if not col_list:
-        raise MethodError.invalid_choice(
-            where=ctx, param="cols", got=cols, allowed=["column names"]
-        )
+        raise DataError.invalid_choice(where=ctx, param="cols", got=cols, allowed=["column names"])
     df = sample._data
     missing = [c for c in col_list if c not in df.columns]
     if missing:
-        raise DimensionError.missing_columns(
+        raise DataError.missing_columns(
             where=ctx, param="cols", missing=missing, available=df.columns
         )
 
@@ -75,7 +71,7 @@ def lag(
     else:
         names = [name] if isinstance(name, str) else list(name)
         if len(names) != len(col_list):
-            raise DimensionError(
+            raise DataError.ValueError(
                 title="name/cols length mismatch",
                 detail=f"{len(names)} name(s) for {len(col_list)} column(s).",
                 code="LAG_NAME_MISMATCH",
@@ -84,7 +80,7 @@ def lag(
             )
     taken = [nm for nm in names if nm in df.columns]
     if taken:
-        raise MethodError.not_applicable(
+        raise DataError.not_applicable(
             where=ctx,
             method="lag",
             reason=f"column(s) {taken} already exist",

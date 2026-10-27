@@ -8,7 +8,7 @@ import pytest
 
 import svy
 
-from svy.errors import MethodError
+from svy.errors import SelectionError
 
 
 def alloc(n, pop_size, **kw):
@@ -21,7 +21,7 @@ def alloc(n, pop_size, **kw):
 
 
 def test_neyman_missing_sigma_raises():
-    with pytest.raises(MethodError, match="sigma"):
+    with pytest.raises(SelectionError, match="sigma"):
         alloc(50, {"a": 100, "b": 100}, method="neyman", sigma={"a": 10.0})
 
 
@@ -31,7 +31,7 @@ def test_neyman_missing_sigma_for_empty_stratum_ok():
 
 
 def test_neyman_requires_sigma():
-    with pytest.raises(MethodError, match="standard deviation"):
+    with pytest.raises(SelectionError, match="standard deviation"):
         alloc(50, {"a": 100, "b": 100}, method="neyman")
 
 
@@ -146,13 +146,13 @@ def test_proportional_power_zero_is_equal_split():
 
 @pytest.mark.parametrize("bad", [-0.5, float("nan"), float("inf")])
 def test_invalid_power_raises(bad):
-    with pytest.raises(MethodError, match="power must be"):
+    with pytest.raises(SelectionError, match="power must be"):
         alloc(5, {"a": 10, "b": 20}, power=bad)
 
 
 @pytest.mark.parametrize("kwargs", [{"method": "neyman", "sigma": 1.0}, {"method": "equal"}])
 def test_power_only_for_proportional(kwargs):
-    with pytest.raises(MethodError, match="power="):
+    with pytest.raises(SelectionError, match="power="):
         alloc(5, {"a": 10}, power=0.5, **kwargs)
 
 
@@ -207,7 +207,7 @@ def test_equal_caps_and_redistributes():
     ],
 )
 def test_bad_input_raises(n, pop_size, kwargs):
-    with pytest.raises(MethodError):
+    with pytest.raises(SelectionError):
         svy.SampleSize().allocate(n, pop_size=pop_size, **kwargs)
 
 

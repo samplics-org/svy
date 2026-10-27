@@ -19,7 +19,7 @@ import msgspec
 import numpy as np
 import polars as pl
 
-from svy.errors import DimensionError, MethodError, WeightingError
+from svy.errors import WeightingError, WeightingWarning
 from svy.errors._findings import Severity, WarnCode, check_on_finding, finding_level
 
 
@@ -171,7 +171,7 @@ def _run_trim(
             hint="Check that the weight column exists in the data.",
         )
     if replace and wgt_name is not None:
-        raise MethodError.not_applicable(
+        raise WeightingError.not_applicable(
             where=where,
             method="trim",
             reason="Pass either replace=True or wgt_name=..., not both.",
@@ -189,7 +189,7 @@ def _run_trim(
     neg_mask = w_orig < 0
     if neg_mask.any():
         n_neg = int(neg_mask.sum())
-        raise DimensionError(
+        raise WeightingError.ValueError(
             title="Negative weights found",
             detail=f"trim() found {n_neg} negative weight(s). Trimming cannot proceed.",
             code="NEGATIVE_WEIGHTS",
@@ -204,15 +204,17 @@ def _run_trim(
     n_zero = int((w_orig == 0.0).sum())
     if n_zero > 0:
         sample.warn(
-            code=WarnCode.ZERO_WEIGHT,
-            title="Zero-weight units excluded from trimming",
-            detail=(
-                f"{n_zero} unit(s) have zero weights and will be preserved "
-                "but excluded from trimming and redistribution."
-            ),
-            where=where,
-            level=Severity.INFO,
-            got=n_zero,
+            WeightingWarning(
+                code=WarnCode.ZERO_WEIGHT,
+                title="Zero-weight units excluded from trimming",
+                detail=(
+                    f"{n_zero} unit(s) have zero weights and will be preserved "
+                    "but excluded from trimming and redistribution."
+                ),
+                where=where,
+                level=Severity.INFO,
+                got=n_zero,
+            )
         )
 
     # ── Domain splitting or global ────────────────────────────────────────
@@ -277,19 +279,21 @@ def _run_trim(
         _emit_audit(sample, r, domain=label, where=where)
         if not r.converged:
             sample.warn(
-                code=WarnCode.MAX_ITER_REACHED,
-                title="Trimming did not converge",
-                detail=(
-                    f"Domain {label!r}: max_iter={config.max_iter} reached "
-                    f"without convergence (tol={config.tol}). "
-                    f"Iterations run: {r.iterations}."
-                ),
-                where=where,
-                level=finding_level(on_nonconvergence),
-                param=param,
-                expected={"tol": config.tol},
-                got={"domain": label, "iterations": r.iterations},
-                hint=f"Increase {param} or relax tol.",
+                WeightingWarning(
+                    code=WarnCode.MAX_ITER_REACHED,
+                    title="Trimming did not converge",
+                    detail=(
+                        f"Domain {label!r}: max_iter={config.max_iter} reached "
+                        f"without convergence (tol={config.tol}). "
+                        f"Iterations run: {r.iterations}."
+                    ),
+                    where=where,
+                    level=finding_level(on_nonconvergence),
+                    param=param,
+                    expected={"tol": config.tol},
+                    got={"domain": label, "iterations": r.iterations},
+                    hint=f"Increase {param} or relax tol.",
+                )
             )
 
     # ── Warn if weight sum changed without redistribution ─────────────────
@@ -298,17 +302,19 @@ def _run_trim(
         sum_after = float(np.sum(w_out[w_orig > 0]))
         if abs(sum_after - sum_before) > config.tol * max(sum_before, 1.0):
             sample.warn(
-                code=WarnCode.WEIGHT_SUM_CHANGED,
-                title="Total weight sum changed",
-                detail=(
-                    f"Weight sum changed from {sum_before:.4f} to {sum_after:.4f} "
-                    f"({100 * (sum_after - sum_before) / sum_before:+.2f}%). "
-                    "Set redistribute=True to preserve the total weight sum."
-                ),
-                where=where,
-                # Recorded, not raised: redistribute=False asked for exactly this.
-                level=Severity.INFO,
-                hint="Use redistribute=True to avoid changing the weighted sample size.",
+                WeightingWarning(
+                    code=WarnCode.WEIGHT_SUM_CHANGED,
+                    title="Total weight sum changed",
+                    detail=(
+                        f"Weight sum changed from {sum_before:.4f} to {sum_after:.4f} "
+                        f"({100 * (sum_after - sum_before) / sum_before:+.2f}%). "
+                        "Set redistribute=True to preserve the total weight sum."
+                    ),
+                    where=where,
+                    # Recorded, not raised: redistribute=False asked for exactly this.
+                    level=Severity.INFO,
+                    hint="Use redistribute=True to avoid changing the weighted sample size.",
+                )
             )
 
     # ── Write back main weight ────────────────────────────────────────────
@@ -433,15 +439,17 @@ def _trim_domain(
 
     if n_positive < config.min_cell_size:
         sample.warn(
-            code=WarnCode.DOMAIN_SKIPPED,
-            title="Domain skipped — cell too small",
-            detail=(
-                f"Domain {domain_label!r} has {n_positive} positive-weight unit(s), "
-                f"below min_cell_size={config.min_cell_size}. Trimming skipped."
-            ),
-            where=where,
-            level=Severity.WARNING,
-            hint="Increase min_cell_size or combine small domains.",
+            WeightingWarning(
+                code=WarnCode.DOMAIN_SKIPPED,
+                title="Domain skipped — cell too small",
+                detail=(
+                    f"Domain {domain_label!r} has {n_positive} positive-weight unit(s), "
+                    f"below min_cell_size={config.min_cell_size}. Trimming skipped."
+                ),
+                where=where,
+                level=Severity.WARNING,
+                hint="Increase min_cell_size or combine small domains.",
+            )
         )
         return None
 
@@ -527,29 +535,31 @@ def _emit_audit(
     where: str,
 ) -> None:
     sample.warn(
-        code=WarnCode.WEIGHT_ADJ_AUDIT,
-        title=f"Trim audit — domain {domain!r}",
-        detail=(
-            f"domain={domain!r}, "
-            f"upper={result.upper_threshold}, lower={result.lower_threshold}, "
-            f"n_trimmed_upper={result.n_trimmed_upper}, "
-            f"n_trimmed_lower={result.n_trimmed_lower}, "
-            f"ess_before={result.ess_before:.2f}, ess_after={result.ess_after:.2f}, "
-            f"iterations={result.iterations}, converged={result.converged}"
-        ),
-        where=where,
-        level=Severity.INFO,
-        extra={
-            "domain": domain,
-            "upper_threshold": result.upper_threshold,
-            "lower_threshold": result.lower_threshold,
-            "n_trimmed_upper": result.n_trimmed_upper,
-            "n_trimmed_lower": result.n_trimmed_lower,
-            "weight_sum_before": result.weight_sum_before,
-            "weight_sum_after": result.weight_sum_after,
-            "ess_before": result.ess_before,
-            "ess_after": result.ess_after,
-            "iterations": result.iterations,
-            "converged": result.converged,
-        },
+        WeightingWarning(
+            code=WarnCode.WEIGHT_ADJ_AUDIT,
+            title=f"Trim audit — domain {domain!r}",
+            detail=(
+                f"domain={domain!r}, "
+                f"upper={result.upper_threshold}, lower={result.lower_threshold}, "
+                f"n_trimmed_upper={result.n_trimmed_upper}, "
+                f"n_trimmed_lower={result.n_trimmed_lower}, "
+                f"ess_before={result.ess_before:.2f}, ess_after={result.ess_after:.2f}, "
+                f"iterations={result.iterations}, converged={result.converged}"
+            ),
+            where=where,
+            level=Severity.INFO,
+            extra={
+                "domain": domain,
+                "upper_threshold": result.upper_threshold,
+                "lower_threshold": result.lower_threshold,
+                "n_trimmed_upper": result.n_trimmed_upper,
+                "n_trimmed_lower": result.n_trimmed_lower,
+                "weight_sum_before": result.weight_sum_before,
+                "weight_sum_after": result.weight_sum_after,
+                "ess_before": result.ess_before,
+                "ess_after": result.ess_after,
+                "iterations": result.iterations,
+                "converged": result.converged,
+            },
+        )
     )

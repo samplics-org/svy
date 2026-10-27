@@ -33,6 +33,8 @@ import msgspec
 import numpy as np
 import polars as pl
 
+from svy.errors import WeightingWarning
+
 
 try:
     from svy_rs._internal import calibrate as rust_calibrate  # type: ignore[import-untyped]
@@ -50,7 +52,7 @@ except ImportError:  # pragma: no cover
 from svy.core.design import WgtAdjustment
 from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import Category, Number
-from svy.errors import DimensionError, WeightingError
+from svy.errors import WeightingError
 from svy.errors._findings import Severity, WarnCode, check_on_finding, finding_level
 from svy.errors._weighting import show
 from svy.weighting._calibration_utils import _expand_term, _match_term_targets
@@ -157,7 +159,7 @@ def _refuse_by_nulls(df: pl.DataFrame, by_cols: list[str], *, where: str) -> Non
     nulls = {c: int(n) for c, n in zip(by_cols, df.select(by_cols).null_count().row(0)) if n}
     if nulls:
         listed = ", ".join(f"{c!r} ({n} null{'' if n == 1 else 's'})" for c, n in nulls.items())
-        raise DimensionError(
+        raise WeightingError.ValueError(
             title="Missing values in `by` columns",
             detail=f"Nulls found in {listed}; calibration needs a domain for every row.",
             code="BY_NA",
@@ -535,7 +537,7 @@ def calibrate_matrix(
     check_on_finding(on_nonconvergence, param="on_nonconvergence", where=where)
     _refuse_bounds(bounds, where=where)
     if controls is None:
-        raise WeightingError(
+        raise WeightingError.ValueError(
             title="No targets",
             detail="calibrate_matrix() needs controls=: one total per column of aux_vars.",
             code="CONTROLS_MISSING",
@@ -568,7 +570,7 @@ def calibrate_matrix(
     if X.ndim == 1:
         X = X.reshape(-1, 1)
     if X.shape[0] != df.height:
-        raise DimensionError(
+        raise WeightingError.ValueError(
             title="Shape mismatch",
             detail=f"aux_vars has {X.shape[0]} rows; data has {df.height}.",
             code="SHAPE_MISMATCH",
@@ -598,7 +600,7 @@ def calibrate_matrix(
             nonneg=False,
         )
         if len(vec) != X.shape[1]:
-            raise DimensionError(
+            raise WeightingError.ValueError(
                 title="Controls do not match aux_vars",
                 detail=f"`{param}` has {len(vec)} totals; aux_vars has {X.shape[1]} columns.",
                 code="SHAPE_MISMATCH",
@@ -718,15 +720,17 @@ def calibrate_matrix(
             _w_pos = _w_pos[_w_pos > 0].astype(np.float64)
             if len(_w_pos) < trimming.min_cell_size:
                 sample.warn(
-                    code=WarnCode.DOMAIN_SKIPPED,
-                    title="Domain skipped — cell too small",
-                    detail=(
-                        f"Trim domain {_label!r} has {len(_w_pos)} positive-weight "
-                        f"unit(s), below min_cell_size={trimming.min_cell_size}. "
-                        "Trimming skipped."
-                    ),
-                    where=where,
-                    level=Severity.WARNING,
+                    WeightingWarning(
+                        code=WarnCode.DOMAIN_SKIPPED,
+                        title="Domain skipped — cell too small",
+                        detail=(
+                            f"Trim domain {_label!r} has {len(_w_pos)} positive-weight "
+                            f"unit(s), below min_cell_size={trimming.min_cell_size}. "
+                            "Trimming skipped."
+                        ),
+                        where=where,
+                        level=Severity.WARNING,
+                    )
                 )
                 continue
             _up = resolve_threshold(trimming.upper, _w_pos) if trimming.upper is not None else None
@@ -932,16 +936,18 @@ def calibrate_matrix(
     if missed is not None:
         err = WeightingError.calibration_not_met(where=where, **missed)
         sample.warn(
-            code=err.code,
-            title=err.title,
-            detail=err.detail.split(" Pass on_nonconvergence=")[0]
-            + f" {wgt_name!r} holds the approximate solution.",
-            where=where,
-            level=finding_level(on_nonconvergence),
-            param=err.param,
-            expected=err.expected,
-            got=err.got,
-            hint=err.hint,
-            extra=err.extra,
+            WeightingWarning(
+                code=err.code,
+                title=err.title,
+                detail=err.detail.split(" Pass on_nonconvergence=")[0]
+                + f" {wgt_name!r} holds the approximate solution.",
+                where=where,
+                level=finding_level(on_nonconvergence),
+                param=err.param,
+                expected=err.expected,
+                got=err.got,
+                hint=err.hint,
+                extra=err.extra,
+            )
         )
     return sample

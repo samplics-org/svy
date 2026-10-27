@@ -19,7 +19,7 @@ from scipy import stats
 import svy
 
 from svy.core.containers import FDist
-from svy.errors import MethodError
+from svy.errors import UsageError
 from svy.regression.glm import GLMFit, GLMStats
 from svy.serialize import from_json, to_json, to_polars
 from svy.serialize.structs import GLMFitData
@@ -266,7 +266,7 @@ class TestPredAndMargins:
 class TestValidation:
     @pytest.mark.parametrize("alpha", [0, 0.0, 1, 1.0, -0.05, 1.5, float("nan"), float("inf")])
     def test_out_of_range(self, sample, alpha):
-        with pytest.raises(MethodError) as exc:
+        with pytest.raises(UsageError) as exc:
             sample.glm.fit("y_num", x=["x"], alpha=alpha)
         assert exc.value.code == "INVALID_RANGE"
         assert exc.value.param == "alpha"
@@ -275,18 +275,18 @@ class TestValidation:
 
     @pytest.mark.parametrize("alpha", ["0.05", True, False, None, [0.05]])
     def test_wrong_type(self, sample, alpha):
-        with pytest.raises(MethodError) as exc:
+        with pytest.raises(UsageError) as exc:
             sample.glm.fit("y_num", x=["x"], alpha=alpha)
         assert exc.value.code == "INVALID_TYPE"
         assert exc.value.param == "alpha"
 
     def test_replication_fit_validates_too(self, jk_sample):
-        with pytest.raises(MethodError, match="INVALID_RANGE"):
+        with pytest.raises(UsageError, match="INVALID_RANGE"):
             jk_sample.glm.fit("y_num", x=["x"], alpha=1.0)
 
     def test_refused_before_fitting(self, data):
         glm = svy.Sample(data, svy.Design(stratum="stratum", psu="psu", wgt="wgt")).glm
-        with pytest.raises(MethodError):
+        with pytest.raises(UsageError):
             glm.fit("y_num", x=["x"], alpha=0)
         assert glm.fitted is None
 

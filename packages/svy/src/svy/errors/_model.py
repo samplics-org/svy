@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
-from ._base import SvyError
+from ._base import SvyError, SvyWarning
 
 
 @dataclass(eq=False)
@@ -14,9 +14,7 @@ class ModelError(SvyError):
     mathematical domain violations, singular matrices, or state issues.
     """
 
-    def __post_init__(self) -> None:
-        if self.code == "SVY_ERROR":
-            self.code = "MODEL_ERROR"
+    _DEFAULT_CODE: ClassVar[str] = "MODEL_ERROR"
 
     # ---- State Errors -------------------------------------------------------
 
@@ -28,7 +26,7 @@ class ModelError(SvyError):
         method: str = "predict",
         hint: Optional[str] = "Call .fit() on the estimator first.",
     ) -> "ModelError":
-        return cls(
+        return cls.ValueError(
             title="Model not fitted",
             detail=f"Cannot call '{method}' because the model has not been fitted yet.",
             code="MODEL_NOT_FITTED",
@@ -51,7 +49,7 @@ class ModelError(SvyError):
         """
         E.g. Negative values for Gamma, or non-binary for Binomial.
         """
-        return cls(
+        return cls.ValueError(
             title="Distribution domain violation",
             detail=f"The target data violates the requirements for family '{family}': {violation}.",
             code="DOMAIN_VIOLATION",
@@ -73,7 +71,7 @@ class ModelError(SvyError):
         dim: int,
         hint: Optional[str] = "Check for perfect multicollinearity among predictors.",
     ) -> "ModelError":
-        return cls(
+        return cls.ValueError(
             title="Singular design matrix",
             detail="The design matrix is singular (not invertible); parameters cannot be estimated uniquely.",
             code="SINGULAR_MATRIX",
@@ -93,7 +91,7 @@ class ModelError(SvyError):
         last_diff: float | None = None,
         hint: Optional[str] = "Increase max_iter or check for data issues.",
     ) -> "ModelError":
-        return cls(
+        return cls.RuntimeError(
             title="Convergence failed",
             detail=f"Optimization did not converge after {iterations} iterations.",
             code="CONVERGENCE_FAILED",
@@ -112,7 +110,7 @@ class ModelError(SvyError):
         n_params: int,
         hint: Optional[str] = "Reduce the number of predictors or increase sample size.",
     ) -> "ModelError":
-        return cls(
+        return cls.ValueError(
             title="Insufficient degrees of freedom",
             detail=f"Number of observations ({n_obs}) is too small for the number of parameters ({n_params}).",
             code="INSUFFICIENT_DOF",
@@ -121,3 +119,8 @@ class ModelError(SvyError):
             got=n_obs,
             hint=hint,
         )
+
+
+@dataclass(eq=False)
+class ModelWarning(SvyWarning):
+    pass

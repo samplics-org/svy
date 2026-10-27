@@ -9,7 +9,7 @@ import pytest
 from svy import SvyWarning
 from svy.core.design import Design
 from svy.core.sample import Sample
-from svy.errors import MethodError
+from svy.errors import DataError
 from svy.wrangling import DtypeName
 
 
@@ -86,7 +86,7 @@ def test_remove_columns_inplace(sample_basic: Sample):
 
 
 def test_remove_columns_design_column_raises_without_force(sample_with_design: Sample):
-    with pytest.raises(MethodError) as exc_info:
+    with pytest.raises(DataError) as exc_info:
         sample_with_design.wrangling.remove_columns("stratum")
     assert exc_info.value.code == "DROP_PROTECTED_COLUMNS"
 
@@ -151,7 +151,7 @@ def test_keep_columns_preserves_data(sample_basic: Sample):
 
 
 def test_keep_columns_raises_if_drops_design_column(sample_with_design: Sample):
-    with pytest.raises(MethodError) as exc_info:
+    with pytest.raises(DataError) as exc_info:
         sample_with_design.wrangling.keep_columns(["id", "value"])
     assert exc_info.value.code == "KEEP_DROPS_PROTECTED"
 
@@ -226,7 +226,7 @@ def test_cast_inplace(sample_basic: Sample):
 
 
 def test_cast_requires_dtype_when_not_mapping(sample_basic: Sample):
-    with pytest.raises(MethodError) as exc_info:
+    with pytest.raises(DataError) as exc_info:
         sample_basic.wrangling.cast("a")
     assert exc_info.value.code == "CAST_DTYPE_REQUIRED"
 
@@ -285,7 +285,7 @@ def test_cast_dtype_name_sequence_inplace(sample_basic: Sample):
     ],
 )
 def test_cast_unknown_dtype_name_raises(sample_basic: Sample, cols, dtype, param, suggestion):
-    with pytest.raises(MethodError) as exc_info:
+    with pytest.raises(DataError) as exc_info:
         sample_basic.wrangling.cast(cols, dtype)
     err = exc_info.value
     assert err.code == "CAST_UNKNOWN_DTYPE"
@@ -296,7 +296,7 @@ def test_cast_unknown_dtype_name_raises(sample_basic: Sample, cols, dtype, param
 
 def test_cast_dtype_name_keeps_truncation_guard():
     s = Sample(pl.DataFrame({"w": [1.0, 1.7, 2.0]}))
-    with pytest.raises(MethodError) as exc_info:
+    with pytest.raises(DataError) as exc_info:
         s.wrangling.cast("w", "Int64")
     assert exc_info.value.code == "CAST_TRUNCATION"
     assert s.wrangling.cast("w", "Int64", strict=False)._data["w"].to_list() == [1, 1, 2]

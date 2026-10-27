@@ -6,7 +6,7 @@ import pytest
 
 import svy
 
-from svy.errors import MethodError
+from svy.errors import SelectionError
 from svy.size import (
     TargetAllocation,
     TargetMean,
@@ -186,7 +186,7 @@ def test_size_n_feeds_selection_with_tuple_keys():
 
 
 def test_keys_that_print_alike_are_refused():
-    with pytest.raises(MethodError, match="distinct"):
+    with pytest.raises(SelectionError, match="distinct"):
         svy.SampleSize().allocate(10, pop_size={1: 100, "1": 100})
 
 
@@ -199,7 +199,7 @@ def test_an_empty_stratum_gets_zero():
 
 
 def test_every_stratum_empty_is_refused():
-    with pytest.raises(MethodError):
+    with pytest.raises(SelectionError):
         svy.SampleSize().allocate(10, pop_size={"a": 0, "b": 0})
 
 

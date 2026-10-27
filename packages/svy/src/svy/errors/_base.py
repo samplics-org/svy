@@ -14,6 +14,8 @@ from enum import IntEnum
 from textwrap import indent as _indent
 from typing import Any, ClassVar, Mapping, Optional
 
+from ._common import _Constructors
+
 
 # svy's text form of a key over several columns (e.g. weighting cells), used
 # when such a key has to become a JSON object key.
@@ -272,8 +274,8 @@ class _Report:
     # ---- JSON payload for programmatic use: one shape for errors and warnings ----
     def to_dict(self) -> dict[str, Any]:
         return {
-            # The class, so callers can tell a ModelError from a MethodError without its text.
-            "type": type(self).__name__,
+            # The class with its kind, "ModelError.ValueError", so callers can tell areas apart.
+            "type": type(self).__qualname__,
             "level": self._level_name(),
             "code": str(self.code),
             "title": self.title,
@@ -384,12 +386,66 @@ class _Report:
         )
 
 
+# The builtin each error also is: ``ModelError.ValueError`` is caught as a
+# ModelError, as a ValueError and as a SvyError.
+_KINDS: tuple[type[Exception], ...] = (
+    TypeError,
+    ValueError,
+    KeyError,
+    AttributeError,
+    NotImplementedError,
+    RuntimeError,
+    ImportError,
+    OSError,
+    FileNotFoundError,
+    PermissionError,
+)
+
+
+def _add_kinds(cls: type[SvyError]) -> None:
+    for kind in _KINDS:
+        name = kind.__name__
+        # A real attribute path, so tracebacks read ``svy.errors.ModelError.ValueError``
+        # and pickle finds the class again.
+        pair = type(
+            name,
+            (cls, kind),
+            {
+                "__module__": cls.__module__,
+                "__qualname__": f"{cls.__qualname__}.{name}",
+                "__doc__": f"A {cls.__name__} that is also a {name}.",
+                "_IS_KIND": True,
+            },
+        )
+        setattr(cls, name, pair)
+
+
 @dataclass(eq=False)
-class SvyError(_Report, Exception):
-    """Base svy error with rich context + multiple renderers."""
+class SvyError(_Report, _Constructors, Exception):
+    """Base svy error with rich context + multiple renderers.
+
+    Raise an area's kind, ``EstimationError.ValueError(...)``, or a constructor
+    that picks it, ``EstimationError.missing_columns(...)``.
+    """
 
     code: str = "SVY_ERROR"
     http_status: int = 400  # kept for potential API surfaces
+
+    _DEFAULT_CODE: ClassVar[str] = "SVY_ERROR"
+    # True on a class that already is one builtin, so it gets no kinds of its own.
+    _IS_KIND: ClassVar[bool] = False
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        if not cls.__dict__.get("_IS_KIND", False):
+            _add_kinds(cls)
+
+    def __post_init__(self) -> None:
+        if self.code == "SVY_ERROR":
+            self.code = self._DEFAULT_CODE
+
+
+_add_kinds(SvyError)
 
 
 @dataclass(eq=False)
@@ -421,6 +477,10 @@ class SvyWarning(_Report, UserWarning):
     @property
     def _KIND(self) -> str:
         return "warning" if self.level >= Severity.WARNING else "info"
+
+    def __post_init__(self) -> None:
+        if self.rows is not None and not isinstance(self.rows, tuple):
+            self.rows = tuple(self.rows)
 
     def _level_name(self) -> str:
         return self.level.name

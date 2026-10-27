@@ -26,7 +26,7 @@ from svy.core.panel import (
 )
 from svy.core.sample import Sample
 from svy.core.types import Category
-from svy.errors import MethodError
+from svy.errors import DesignError, DesignWarning, LabelWarning
 from svy.errors._findings import check_on_finding, finding_level
 from svy.metadata.variable_meta import VariableMeta
 
@@ -133,7 +133,7 @@ def _check_design_alignment(
                     if role in _MIXABLE_ROLES and kind == "cross_sectional"
                     else ""
                 )
-                raise MethodError.not_applicable(
+                raise DesignError.not_applicable(
                     where=_CTX,
                     method="combine_samples",
                     reason=(
@@ -147,7 +147,7 @@ def _check_design_alignment(
                     ),
                 )
             if len(rm[role]) != len(cols):
-                raise MethodError.not_applicable(
+                raise DesignError.not_applicable(
                     where=_CTX,
                     method="combine_samples",
                     reason=(
@@ -158,7 +158,7 @@ def _check_design_alignment(
                     hint="Declare the same design roles (with matching arity) on every input.",
                 )
             fix = ", ".join(f"{o!r}: {n!r}" for o, n in zip(rm[role], cols) if o != n)
-            raise MethodError.not_applicable(
+            raise DesignError.not_applicable(
                 where=_CTX,
                 method="combine_samples",
                 reason=(
@@ -180,7 +180,7 @@ def _resolve_wave_codes(
     present = [wave_name in f.columns for f in frames]
     if any(present) and not all(present):
         missing = [j for j, p in enumerate(present, start=1) if not p]
-        raise MethodError.not_applicable(
+        raise DesignError.not_applicable(
             where=_CTX,
             method="combine_samples",
             reason=(
@@ -194,7 +194,7 @@ def _resolve_wave_codes(
         for j, f in enumerate(frames, start=1):
             vals = f.get_column(wave_name).drop_nulls().unique().to_list()
             if len(vals) != 1 or f.get_column(wave_name).null_count() > 0:
-                raise MethodError.not_applicable(
+                raise DesignError.not_applicable(
                     where=_CTX,
                     method="combine_samples",
                     reason=(
@@ -205,13 +205,13 @@ def _resolve_wave_codes(
                 )
             codes.append(vals[0])
         if len(set(codes)) != len(codes):
-            raise MethodError.not_applicable(
+            raise DesignError.not_applicable(
                 where=_CTX,
                 method="combine_samples",
                 reason=f"reused wave column '{wave_name}' repeats a value across samples: {codes}",
             )
         if any(codes[i] >= codes[i + 1] for i in range(len(codes) - 1)):  # type: ignore[operator]
-            raise MethodError.not_applicable(
+            raise DesignError.not_applicable(
                 where=_CTX,
                 method="combine_samples",
                 reason=(
@@ -311,37 +311,43 @@ def _merge_metadata(combined: Sample, samples: Sequence[Sample]) -> None:
                 else:
                     combined.meta.set(name, meta.clone(scheme_ref=None))
         combined.warn(
-            code="COMBINE_CATALOGS_RESOLVED",
-            title="Labelling catalogs resolved",
-            detail=(
-                "Inputs carry different labelling catalogs; scheme references were "
-                "resolved to direct value labels on the combined sample."
-            ),
-            where=_CTX,
+            LabelWarning(
+                code="COMBINE_CATALOGS_RESOLVED",
+                title="Labelling catalogs resolved",
+                detail=(
+                    "Inputs carry different labelling catalogs; scheme references were "
+                    "resolved to direct value labels on the combined sample."
+                ),
+                where=_CTX,
+            )
         )
 
     if conflicted:
         combined.warn(
-            code="COMBINE_LABELS_CONFLICT",
-            title="Value labels dropped",
-            detail=(
-                f"Value labels conflict across inputs for {sorted(conflicted)}; the coding "
-                "changed between waves. Labels for these variables were DROPPED — recode "
-                "before combining."
-            ),
-            where=_CTX,
-            got=sorted(conflicted),
+            LabelWarning(
+                code="COMBINE_LABELS_CONFLICT",
+                title="Value labels dropped",
+                detail=(
+                    f"Value labels conflict across inputs for {sorted(conflicted)}; the coding "
+                    "changed between waves. Labels for these variables were DROPPED — recode "
+                    "before combining."
+                ),
+                where=_CTX,
+                got=sorted(conflicted),
+            )
         )
     if mtype_conflicts:
         combined.warn(
-            code="COMBINE_MTYPE_CONFLICT",
-            title="Measurement types disagree",
-            detail=(
-                f"Measurement types disagree across inputs for {sorted(mtype_conflicts)}; "
-                "the first sample's type was kept."
-            ),
-            where=_CTX,
-            got=sorted(mtype_conflicts),
+            LabelWarning(
+                code="COMBINE_MTYPE_CONFLICT",
+                title="Measurement types disagree",
+                detail=(
+                    f"Measurement types disagree across inputs for {sorted(mtype_conflicts)}; "
+                    "the first sample's type was kept."
+                ),
+                where=_CTX,
+                got=sorted(mtype_conflicts),
+            )
         )
 
 
@@ -358,7 +364,7 @@ def _resolve_case_id(
     if case_id is None:
         case_id = shared
     if kind == "panel" and case_id is None:
-        raise MethodError.not_applicable(
+        raise DesignError.not_applicable(
             where=_CTX,
             method="combine_samples",
             reason="kind='panel' needs the column identifying the followed case",
@@ -384,7 +390,7 @@ def _resolve_singleton(samples: Sequence[Sample], kind: str):
         return None
     if any(r != rules[0] for r in rules):
         shown = ", ".join(f"sample {i}: {r!r}" for i, r in enumerate(rules, start=1))
-        raise MethodError.not_applicable(
+        raise DesignError.not_applicable(
             where=_CTX,
             method="combine_samples",
             param="singleton",
@@ -394,7 +400,7 @@ def _resolve_singleton(samples: Sequence[Sample], kind: str):
         )
     rule = rules[0]
     if rule.mapping is not None and kind != "panel":
-        raise MethodError.not_applicable(
+        raise DesignError.not_applicable(
             where=_CTX,
             method="combine_samples",
             param="singleton",
@@ -427,7 +433,7 @@ def _resolve_rep_wgts(samples: Sequence[Sample], kind: str):
         if kind != "panel"
         else "the waves carry different replicate-weight designs"
     )
-    raise MethodError.not_applicable(
+    raise DesignError.not_applicable(
         where=_CTX,
         method="combine_samples",
         reason=reason,
@@ -444,7 +450,7 @@ def _check_panel_ids(frames: Sequence[pl.DataFrame], case_id: CaseId) -> None:
     label = _case_label(case_id)
     missing = [j for j, f in enumerate(frames, start=1) if any(c not in f.columns for c in cols)]
     if missing:
-        raise MethodError.not_applicable(
+        raise DesignError.not_applicable(
             where=_CTX,
             method="combine_samples",
             reason=f"case_id column {label} is missing from sample(s) {missing}",
@@ -453,7 +459,7 @@ def _check_panel_ids(frames: Sequence[pl.DataFrame], case_id: CaseId) -> None:
         )
     for j, f in enumerate(frames, start=1):
         if any(f.get_column(c).null_count() > 0 for c in cols):
-            raise MethodError.not_applicable(
+            raise DesignError.not_applicable(
                 where=_CTX,
                 method="combine_samples",
                 reason=f"case_id column {label} has nulls in sample {j}",
@@ -461,7 +467,7 @@ def _check_panel_ids(frames: Sequence[pl.DataFrame], case_id: CaseId) -> None:
             )
         dups = duplicate_case_ids(f, case_id, None)
         if dups:
-            raise MethodError.not_applicable(
+            raise DesignError.not_applicable(
                 where=_CTX,
                 method="combine_samples",
                 reason=f"case_id column {label} is not unique in sample {j}: {dups}",
@@ -488,7 +494,7 @@ def _check_panel_units(
         units = set(f.select(unit_cols).unique().iter_rows())
         extra = sorted(map(str, units - first_set))
         if extra:
-            raise MethodError.not_applicable(
+            raise DesignError.not_applicable(
                 where=_CTX,
                 method="combine_samples",
                 reason=(
@@ -520,7 +526,7 @@ def _check_constant_within_case(
     varies = design_varies_within_case(stacked, case_id, cols)
     if varies:
         detail = "; ".join(f"{c}: {ids}" for c, ids in varies.items())
-        raise MethodError.not_applicable(
+        raise DesignError.not_applicable(
             where=_CTX,
             method="combine_samples",
             reason=f"{what} vary within case_id {_case_label(case_id)} across waves: {detail}",
@@ -537,7 +543,7 @@ def _report_overlap(
     for ov in wave_overlap(stacked, case_id, wave_name):
         log.info("panel overlap %s", ov)
         if ov.common == 0:
-            raise MethodError.not_applicable(
+            raise DesignError.not_applicable(
                 where=_CTX,
                 method="combine_samples",
                 reason=(
@@ -665,7 +671,7 @@ def combine_samples(
     if isinstance(samples, Mapping):
         bad = [key for key in samples if not isinstance(key, str) or not key]
         if bad:
-            raise MethodError.invalid_type(
+            raise DesignError.invalid_type(
                 where=_CTX,
                 param="samples",
                 got=bad[0],
@@ -677,21 +683,21 @@ def combine_samples(
     samples = list(samples)
     k = len(samples)
     if k < 2:
-        raise MethodError.not_applicable(
+        raise DesignError.not_applicable(
             where=_CTX,
             method="combine_samples",
             reason=f"at least 2 samples are required, got {k}",
         )
     for j, s in enumerate(samples, start=1):
         if not isinstance(s, Sample):
-            raise MethodError.not_applicable(
+            raise DesignError.not_applicable(
                 where=_CTX,
                 method="combine_samples",
                 reason=f"item {j} is not a Sample (got {type(s).__name__})",
             )
 
     if kind not in ("cross_sectional", "panel"):
-        raise MethodError.invalid_choice(
+        raise DesignError.invalid_choice(
             where=_CTX,
             param="kind",
             got=kind,
@@ -704,19 +710,19 @@ def combine_samples(
         try:
             case_id = _norm_spec("case_id", case_id)
         except (TypeError, ValueError):
-            raise MethodError.invalid_choice(
+            raise DesignError.invalid_choice(
                 where=_CTX,
                 param="case_id",
                 got=case_id,
                 allowed=["<column name>", "<list of column names>"],
             ) from None
     if average_wgts is not None and not isinstance(average_wgts, bool):
-        raise MethodError.invalid_choice(
+        raise DesignError.invalid_choice(
             where=_CTX, param="average_wgts", got=average_wgts, allowed=[True, False, None]
         )
     check_on_finding(on_mixed_design, param="on_mixed_design", where=_CTX)
     if kind == "panel" and average_wgts:
-        raise MethodError.not_applicable(
+        raise DesignError.not_applicable(
             where=_CTX,
             method="combine_samples",
             reason=(
@@ -734,7 +740,7 @@ def combine_samples(
 
     wr_values = {s._design.wr for s in samples}
     if len(wr_values) > 1:
-        raise MethodError.not_applicable(
+        raise DesignError.not_applicable(
             where=_CTX,
             method="combine_samples",
             reason="inputs disagree on with-replacement (wr) status",
@@ -745,7 +751,7 @@ def combine_samples(
     )
 
     if average_wgts and not canonical["wgt"]:
-        raise MethodError.not_applicable(
+        raise DesignError.not_applicable(
             where=_CTX,
             method="combine_samples",
             reason="averaging the weights requires a weight declared on every input design",
@@ -763,7 +769,7 @@ def combine_samples(
         for c in canonical[role]:
             other = next((r for r, cols in canonical.items() if r != role and c in cols), None)
             if other is not None:
-                raise MethodError.not_applicable(
+                raise DesignError.not_applicable(
                     where=_CTX,
                     method="combine_samples",
                     reason=(
@@ -790,7 +796,7 @@ def combine_samples(
         for i, f in enumerate(frames):
             taken = [c for c in new_cols if c in f.columns]
             if taken:
-                raise MethodError.not_applicable(
+                raise DesignError.not_applicable(
                     where=_CTX,
                     method="combine_samples",
                     reason=(
@@ -843,7 +849,7 @@ def combine_samples(
     if canonical["wgt"]:
         for j, f in enumerate(frames, start=1):
             if wgt_name in f.columns:
-                raise MethodError.not_applicable(
+                raise DesignError.not_applicable(
                     where=_CTX,
                     method="combine_samples",
                     reason=f"column '{wgt_name}' already exists in sample {j}",
@@ -868,7 +874,7 @@ def combine_samples(
                 dtypes.setdefault(col, dt)
     if conflicts:
         detail = ", ".join(f"{c} ({' vs '.join(dts)})" for c, dts in sorted(conflicts.items()))
-        raise MethodError.not_applicable(
+        raise DesignError.not_applicable(
             where=_CTX,
             method="combine_samples",
             reason=f"shared column(s) have conflicting dtypes: {detail}",
@@ -946,7 +952,7 @@ def combine_samples(
         )
     _merge_metadata(combined, samples)
     for f in found:
-        combined.warn(where=_CTX, **f)
+        combined.warn(DesignWarning(where=_CTX, **f))
 
     combined.meta.set_type(wave_name, MeasurementType.ORDINAL)
     existing_wave_labels = combined.meta.get(wave_name)
@@ -954,7 +960,7 @@ def combine_samples(
     if wave_labels is not None:
         label_map = dict(zip(codes, wave_labels))
         if existing_map and not created and existing_map != label_map:
-            raise MethodError.not_applicable(
+            raise DesignError.not_applicable(
                 where=_CTX,
                 method="combine_samples",
                 reason=(
@@ -992,7 +998,7 @@ def _reject_legacy_kwargs(kwargs: dict[str, Any]) -> None:
         return
     for old, (new, hint) in _LEGACY_HINTS.items():
         if old in kwargs:
-            raise MethodError(
+            raise DesignError.TypeError(
                 title="Parameter removed",
                 detail=f"`{old}=` was removed from combine_samples; use `{new}=`.",
                 code="PARAM_RENAMED",
@@ -1013,13 +1019,15 @@ def _warn_if_numeric_labels_unordered(wave_labels: Sequence[str], combined: Samp
         return
     if any(nums[i] >= nums[i + 1] for i in range(len(nums) - 1)):
         combined.warn(
-            code="WAVE_LABELS_UNORDERED",
-            title="Wave labels out of order",
-            detail=(
-                f"wave labels look numeric but are not increasing: {list(wave_labels)}. "
-                "Caller order of `samples` is the time order — check the order of your inputs."
-            ),
-            where=_CTX,
-            param="samples",
-            got=list(wave_labels),
+            DesignWarning(
+                code="WAVE_LABELS_UNORDERED",
+                title="Wave labels out of order",
+                detail=(
+                    f"wave labels look numeric but are not increasing: {list(wave_labels)}. "
+                    "Caller order of `samples` is the time order — check the order of your inputs."
+                ),
+                where=_CTX,
+                param="samples",
+                got=list(wave_labels),
+            )
         )

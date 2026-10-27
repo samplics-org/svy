@@ -7,7 +7,7 @@ import pytest
 
 import svy
 
-from svy.errors import DimensionError, MethodError
+from svy.errors import DesignError
 from svy.serialize import serialize, to_json
 
 
@@ -85,12 +85,12 @@ def test_top_k_none_lists_every_level():
 
 @pytest.mark.parametrize("bad", [0, -1, 2.5, True, "10"])
 def test_bad_top_k(bad):
-    with pytest.raises(MethodError):
+    with pytest.raises(DesignError):
         _sample().describe(["sex"], top_k=bad)
 
 
 def test_missing_by_column():
-    with pytest.raises(DimensionError):
+    with pytest.raises(DesignError):
         _sample().describe(["hh"], by="region")
 
 

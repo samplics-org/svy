@@ -14,6 +14,8 @@ import msgspec
 import numpy as np
 import polars as pl
 
+from svy.errors import ModelWarning
+
 
 # Rust backend
 try:
@@ -95,7 +97,7 @@ def _ref_from_label(feat: Cat, levels: list, value_labels: ResolvedLabels) -> An
         return feat.ref
     matches = [lv for lv in levels if value_labels.display(lv) == feat.ref]
     if len(matches) > 1:
-        raise ModelError(
+        raise ModelError.ValueError(
             title="Reference label is ambiguous",
             detail=(f"Cat({feat.name!r}, ref={feat.ref!r}): the label names levels {matches!r}."),
             code="CAT_REF_AMBIGUOUS",
@@ -228,7 +230,7 @@ def _as_model_error(exc: Exception) -> ModelError | None:
     msg = str(exc)
     for needle, code, hint in _ENGINE_ERRORS:
         if needle in msg:
-            return ModelError(
+            return ModelError.ValueError(
                 title="GLM cannot be fitted",
                 detail=msg,
                 code=code,
@@ -617,15 +619,17 @@ class GLM:
         df = df.filter(_valid_w)
         if df.height < _n_before:
             self._sample.warn(
-                code="GLM_ROWS_DROPPED",
-                title="Rows with invalid weights dropped",
-                detail=(
-                    f"{_n_before - df.height} row(s) dropped: weight column {w_col!r} is "
-                    "null, non-finite or negative there."
-                ),
-                where="GLM.fit",
-                param=w_col,
-                got=_n_before - df.height,
+                ModelWarning(
+                    code="GLM_ROWS_DROPPED",
+                    title="Rows with invalid weights dropped",
+                    detail=(
+                        f"{_n_before - df.height} row(s) dropped: weight column {w_col!r} is "
+                        "null, non-finite or negative there."
+                    ),
+                    where="GLM.fit",
+                    param=w_col,
+                    got=_n_before - df.height,
+                )
             )
 
         # In-domain rows: where == true (when set) and positive weight.
@@ -637,7 +641,7 @@ class GLM:
         level_df = df.filter(_in_dom_expr)
 
         if level_df.height == 0:
-            raise ModelError(
+            raise ModelError.ValueError(
                 title="No observations to fit",
                 detail=(
                     "No row has a positive weight"
@@ -679,22 +683,24 @@ class GLM:
 
                 if len(levels) < 2:
                     self._sample.warn(
-                        code="GLM_TERM_DROPPED",
-                        title="Categorical term dropped",
-                        detail=(
-                            f"Categorical {feat.name!r} has fewer than 2 levels among the "
-                            "rows being fitted and was dropped from the model."
-                        ),
-                        where="GLM.fit",
-                        param=feat.name,
-                        var=feat.name,
+                        ModelWarning(
+                            code="GLM_TERM_DROPPED",
+                            title="Categorical term dropped",
+                            detail=(
+                                f"Categorical {feat.name!r} has fewer than 2 levels among the "
+                                "rows being fitted and was dropped from the model."
+                            ),
+                            where="GLM.fit",
+                            param=feat.name,
+                            var=feat.name,
+                        )
                     )
                     return [], []
 
                 value_labels = self._sample.meta._resolve(feat.name)
                 ref = _ref_from_label(feat, levels, value_labels)
                 if ref is not None and ref not in levels:
-                    raise ModelError(
+                    raise ModelError.ValueError(
                         title="Reference level not found",
                         detail=(
                             f"Cat({feat.name!r}, ref={feat.ref!r}): the reference "
@@ -767,7 +773,7 @@ class GLM:
         # polars "duplicate output name", which says nothing about the model.
         _dupes = sorted({nm for nm in feature_names if feature_names.count(nm) > 1})
         if _dupes:
-            raise ModelError(
+            raise ModelError.ValueError(
                 title="Duplicate model term",
                 detail=(
                     f"The terms {_dupes!r} are each engineered twice. A repeated "
@@ -975,7 +981,7 @@ class GLM:
         # silently fell back to Taylor SEs).
         rep_wgts = design0.rep_wgts if rep_cols else None
         if rep_wgts is not None and rep_cols and dispersion is not None and theta is None:
-            raise ModelError(
+            raise ModelError.ValueError(
                 title="Replicate variance needs a known dispersion",
                 detail=(
                     "On a replicate-weight design the negative binomial's theta "
@@ -1019,7 +1025,7 @@ class GLM:
                     rep_fits.append((r_chosen[1], r_chosen[11][1], None))
             for rc, (r_beta, r_sep, r_err) in zip(rep_cols, rep_fits):
                 if r_err is not None:
-                    raise ModelError(
+                    raise ModelError.RuntimeError(
                         title="Replicate GLM fit failed",
                         detail=f"Refit with replicate weight {rc!r} failed: {r_err}",
                         code="REPLICATE_FIT_FAILED",
@@ -1083,17 +1089,19 @@ class GLM:
 
         if not converged:
             self._sample.warn(
-                code=WarnCode.MAX_ITER_REACHED,
-                title="GLM did not converge",
-                detail=(
-                    f"GLM did not converge in {iters} iterations (tol={tol:g}); the "
-                    "coefficients and standard errors below are the last iterate. "
-                    "Raise max_iter, or check for separation in the response."
-                ),
-                where="GLM.fit",
-                param="max_iter",
-                got={"iterations": iters},
-                expected={"tol": tol},
+                ModelWarning(
+                    code=WarnCode.MAX_ITER_REACHED,
+                    title="GLM did not converge",
+                    detail=(
+                        f"GLM did not converge in {iters} iterations (tol={tol:g}); the "
+                        "coefficients and standard errors below are the last iterate. "
+                        "Raise max_iter, or check for separation in the response."
+                    ),
+                    where="GLM.fit",
+                    param="max_iter",
+                    got={"iterations": iters},
+                    expected={"tol": tol},
+                )
             )
 
         if unidentified:
@@ -1301,14 +1309,16 @@ class GLM:
         if rep_separated:
             got["replicate_refits"] = {feature_names[j]: c for j, c in rep_separated.items()}
         self._sample.warn(
-            code=WarnCode.GLM_SEPARATION,
-            title="Outcome separated: some coefficients are not identified",
-            detail=" ".join(parts),
-            where="GLM.fit",
-            param="x",
-            var=terms[0] if terms else None,
-            got=got,
-            hint=" ".join(hints),
+            ModelWarning(
+                code=WarnCode.GLM_SEPARATION,
+                title="Outcome separated: some coefficients are not identified",
+                detail=" ".join(parts),
+                where="GLM.fit",
+                param="x",
+                var=terms[0] if terms else None,
+                got=got,
+                hint=" ".join(hints),
+            )
         )
 
     def predict(
@@ -1447,7 +1457,7 @@ class GLM:
             for j, name in enumerate(names)
         ]
         if missing:
-            raise ModelError(
+            raise ModelError.KeyError(
                 title="Column missing from prediction data",
                 detail=(
                     "The model was fitted on columns that are absent from the "
@@ -1502,7 +1512,7 @@ class GLM:
             else:
                 bad = [v for v in col.unique().sort().to_list() if v not in levels]
             if bad:
-                raise ModelError(
+                raise ModelError.ValueError(
                     title="Unknown level in prediction data",
                     detail=(
                         f"Column {var!r} holds {bad!r}, which the fit never saw. "

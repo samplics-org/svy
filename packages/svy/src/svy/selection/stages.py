@@ -9,8 +9,8 @@ import msgspec
 import polars as pl
 
 from svy.core.constants import SVY_PROB, SVY_WEIGHT
+from svy.errors import SelectionError
 from svy.errors._findings import Severity
-from svy.errors._method import MethodError
 from svy.selection._group_keys import _SEP, _build_group_keys, _normalize_n_for_groups
 from svy.selection._helpers import _finding
 from svy.selection.combine_stages import _stage_col
@@ -79,8 +79,8 @@ class Stage(msgspec.Struct, frozen=True):
             raise _stage_error("certainty_threshold", self.certainty_threshold, "a PPS stage")
 
 
-def _stage_error(param: str, got: Any, expected: str) -> MethodError:
-    return MethodError(
+def _stage_error(param: str, got: Any, expected: str) -> SelectionError:
+    return SelectionError.ValueError(
         title="Invalid stage",
         detail=f"Stage {param}= got {got!r}; expected {expected}.",
         code="INVALID_STAGE",
@@ -171,7 +171,7 @@ def multistage(
 
 def _check_stages(sample: "Sample", stages: list[Stage]) -> None:
     if not stages or not all(isinstance(s, Stage) for s in stages):
-        raise MethodError(
+        raise SelectionError.ValueError(
             title="multistage needs a list of stages",
             detail="Pass one svy.selection.Stage per stage, in order.",
             code="INVALID_STAGE",
@@ -193,7 +193,7 @@ def _check_stages(sample: "Sample", stages: list[Stage]) -> None:
             )
     design = sample.design
     if design.prob is not None or design.wgt is not None:
-        raise MethodError(
+        raise SelectionError.ValueError(
             title="Frame already has selection weights",
             detail=(
                 "multistage draws every stage from a frame; this sample's design already "
@@ -207,7 +207,7 @@ def _check_stages(sample: "Sample", stages: list[Stage]) -> None:
     needed = {c for s in stages for c in (*_cols(s.unit), *_cols(s.mos))}
     missing = sorted(needed - columns)
     if missing:
-        raise MethodError(
+        raise SelectionError.KeyError(
             title="Stage column not in the frame",
             detail=f"The stages use {missing!r}, which the frame does not have.",
             code="MULTISTAGE_COLUMN_MISSING",
@@ -220,7 +220,7 @@ def _check_stages(sample: "Sample", stages: list[Stage]) -> None:
         out |= {_stage_col(SVY_PROB, k), _stage_col(SVY_WEIGHT, k)}
     taken = sorted(out & columns)
     if taken:
-        raise MethodError(
+        raise SelectionError.ValueError(
             title="Output column already in the frame",
             detail=f"multistage writes {taken!r}, which the frame already has.",
             code="MULTISTAGE_COLUMN_TAKEN",
@@ -329,10 +329,10 @@ def _stage1_n(sample: "Sample", rows: pl.DataFrame, n: Mapping[Any, int]) -> dic
         )
     try:
         return cast(dict[str, int], _normalize_n_for_groups(n, G=strata, B=[], S=strata))
-    except MethodError:
+    except SelectionError:
         pass
     shown = [tuple(s.split(_SEP)) if _SEP in s else s for s in strata]
-    raise MethodError(
+    raise SelectionError.ValueError(
         title="Stage 1 n= does not match the strata",
         detail=(
             f"Stage 1 n= keys must give each stratum exactly one size; strata: {shown[:10]!r}"
@@ -359,7 +359,7 @@ def _check_constant(rows: pl.DataFrame, keys: list[str], cols: list[str], k: int
         bad = rows.group_by(keys).agg(pl.col(col).n_unique().alias("_k")).filter(pl.col("_k") > 1)
         if bad.height:
             unit = bad.select(keys).row(0)
-            raise MethodError(
+            raise SelectionError.ValueError(
                 title="Value varies within a unit",
                 detail=(
                     f"At stage {k}, {col!r} takes several values within unit {unit!r} "

@@ -194,4 +194,4 @@ def test_to_dict_keeps_the_error_class():
     from svy.errors._model import ModelError
 
     assert SvyError(title="X", detail="Y").to_dict()["type"] == "SvyError"
-    assert ModelError.not_fitted(where="w").to_dict()["type"] == "ModelError"
+    assert ModelError.not_fitted(where="w").to_dict()["type"] == "ModelError.ValueError"

@@ -17,7 +17,7 @@ import polars as pl
 import pytest
 
 from svy import Cat, Design, Sample, TrimConfig
-from svy.errors import DimensionError, MethodError, SvyError, WeightingError
+from svy.errors import SvyError, WeightingError
 
 
 def _df() -> pl.DataFrame:
@@ -461,10 +461,10 @@ def test_psu_required(s):
 def test_data_nulls_are_structured():
     df = _df().with_columns(pl.Series("sex", ["M", None] * 4))
     t = Sample(df, Design(wgt="w"))
-    err = raises(lambda: t.weighting.rake(controls={"sex": {"M": 1}}), "MARGIN_NA", DimensionError)
+    err = raises(lambda: t.weighting.rake(controls={"sex": {"M": 1}}), "MARGIN_NA", WeightingError)
     assert err.got == {"sex": 4}
     err = raises(
-        lambda: t.weighting.calibrate(controls={"M": {"x": 1}}, by="sex"), "BY_NA", DimensionError
+        lambda: t.weighting.calibrate(controls={"M": {"x": 1}}, by="sex"), "BY_NA", WeightingError
     )
     assert err.got == {"sex": 4}
     raises(
@@ -472,7 +472,7 @@ def test_data_nulls_are_structured():
             aux_vars=np.ones((8, 1)), controls={"M": [1]}, by="sex"
         ),
         "BY_NA",
-        DimensionError,
+        WeightingError,
     )
 
 
@@ -480,13 +480,13 @@ def test_shape_mismatch(s):
     err = raises(
         lambda: s.weighting.calibrate_matrix(aux_vars=np.ones((5, 1)), controls=[1.0]),
         "SHAPE_MISMATCH",
-        DimensionError,
+        WeightingError,
     )
     assert err.expected == {"rows": 8, "cols": 1} and err.got == {"rows": 5, "cols": 1}
     err = raises(
         lambda: s.weighting.calibrate_matrix(aux_vars=np.ones((8, 1)), controls=[1.0, 2]),
         "SHAPE_MISMATCH",
-        DimensionError,
+        WeightingError,
     )
     assert err.got == {"totals": 2}
 
@@ -494,16 +494,16 @@ def test_shape_mismatch(s):
 def test_replicate_psu_counts_are_structured():
     df = pl.DataFrame({"stratum": [1, 2, 2, 2, 2], "psu": [1, 2, 2, 3, 3], "wgt": [1.0] * 5})
     t = Sample(df, Design(wgt="wgt", stratum="stratum", psu="psu"))
-    err = raises(t.weighting.create_brr_wgts, "ODD_PSU_COUNT", DimensionError)
+    err = raises(t.weighting.create_brr_wgts, "ODD_PSU_COUNT", WeightingError)
     assert err.got == {1: 1}
     assert "1=1" in err.detail
     err = raises(
-        lambda: t.weighting.create_jk_wgts(paired=True), "INSUFFICIENT_PSU", DimensionError
+        lambda: t.weighting.create_jk_wgts(paired=True), "INSUFFICIENT_PSU", WeightingError
     )
     assert err.got == {1: 1}
 
 
 def test_codes_are_stable_on_method_error(s):
-    # WeightingError is a MethodError, so existing handlers still catch it.
-    with pytest.raises(MethodError):
+    # WeightingError is a WeightingError, so existing handlers still catch it.
+    with pytest.raises(WeightingError):
         s.weighting.poststratify({"x": 1}, cells="sex")

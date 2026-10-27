@@ -21,7 +21,7 @@ from svy.core.constants import (
     SVY_ROW_INDEX,
     SVY_WEIGHT,
 )
-from svy.errors import MethodError
+from svy.errors import SelectionError, SelectionWarning
 from svy.selection._helpers import _psu_list
 from svy.selection.combine_stages import CombineResult, _combine_stages
 
@@ -99,21 +99,21 @@ def add_stage(
     s1_design = s1._design
 
     if s1_design.prob is None:
-        raise MethodError.not_applicable(
+        raise SelectionError.not_applicable(
             where="Sample.sampling.add_stage",
             method="add_stage",
             reason="Current stage has no selection probabilities.",
             hint="Run a selection method (pps_sys, srs, etc.) before add_stage().",
         )
     if s1_design.prob == SVY_PROB_STAGE1:
-        raise MethodError.not_applicable(
+        raise SelectionError.not_applicable(
             where="Sample.sampling.add_stage",
             method="add_stage",
             reason="The last added stage has not been selected yet.",
             hint="Select from it (pps_sys, srs, etc.) before calling add_stage() again.",
         )
     if s1_design.psu is None:
-        raise MethodError.not_applicable(
+        raise SelectionError.not_applicable(
             where="Sample.sampling.add_stage",
             method="add_stage",
             reason="Current stage Design has no PSU.",
@@ -136,7 +136,7 @@ def add_stage(
         ns_design = next_stage._design
         already_selected = ns_design.prob is not None
     else:
-        raise MethodError.invalid_type(
+        raise SelectionError.invalid_type(
             where="Sample.sampling.add_stage",
             param="next_stage",
             got=next_stage,
@@ -211,5 +211,5 @@ def add_stage(
     combined._refresh_internal_state()
 
     for f in found:
-        combined.warn(where="Sample.sampling.add_stage", **f)
+        combined.warn(SelectionWarning(where="Sample.sampling.add_stage", **f))
     return combined

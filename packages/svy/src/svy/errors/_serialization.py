@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import ClassVar, Optional, Sequence
 
 from ._base import SvyError
 
@@ -17,9 +17,7 @@ class SerializationError(SvyError):
     struct, or a JSON payload cannot be decoded back into one.
     """
 
-    def __post_init__(self) -> None:
-        if self.code == "SVY_ERROR":
-            self.code = "SERIALIZATION_ERROR"
+    _DEFAULT_CODE: ClassVar[str] = "SERIALIZATION_ERROR"
 
     # ---- Encoding (result object -> payload) --------------------------------
 
@@ -31,7 +29,7 @@ class SerializationError(SvyError):
         registered: Sequence[str],
         hint: Optional[str] = "Pass a svy result object (e.g. Estimate, Table, GLMFit).",
     ) -> "SerializationError":
-        return cls(
+        return cls.TypeError(
             title="No serializer registered",
             detail=f"Objects of type '{got_type}' cannot be serialized.",
             code="UNSUPPORTED_RESULT_TYPE",
@@ -49,7 +47,7 @@ class SerializationError(SvyError):
         got_type: str,
         hint: Optional[str] = "Pass the DesignData from serialize(design) or from_json().",
     ) -> "SerializationError":
-        return cls(
+        return cls.ValueError(
             title="Not a design payload",
             detail=f"to_design() needs a DesignData, got '{got_type}'.",
             code="PAYLOAD_NOT_A_DESIGN",
@@ -70,7 +68,7 @@ class SerializationError(SvyError):
         supported: Sequence[str],
         hint: Optional[str] = "Read its fields directly; this result kind has no table.",
     ) -> "SerializationError":
-        return cls(
+        return cls.ValueError(
             title="No table for this payload",
             detail=f"'{got_type}' has no table view.",
             code="PAYLOAD_NO_TABLE",
@@ -90,7 +88,7 @@ class SerializationError(SvyError):
         where: str = "from_json",
         hint: Optional[str] = "Only decode payloads from svy.serialize.to_json() or to_dict().",
     ) -> "SerializationError":
-        return cls(
+        return cls.ValueError(
             title="Payload missing 'kind'",
             detail="The payload has no 'kind' discriminator, so its result type cannot be determined.",
             code="PAYLOAD_MISSING_KIND",
@@ -110,7 +108,7 @@ class SerializationError(SvyError):
             str
         ] = "The payload may come from a newer svy; upgrade svy or re-serialize.",
     ) -> "SerializationError":
-        return cls(
+        return cls.ValueError(
             title="Unknown payload kind",
             detail=f"No payload struct is registered for kind '{kind}'.",
             code="PAYLOAD_UNKNOWN_KIND",

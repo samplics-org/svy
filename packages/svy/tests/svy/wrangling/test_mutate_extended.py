@@ -7,7 +7,7 @@ import pytest
 
 from svy.core.expr import col, when
 from svy.core.sample import Sample
-from svy.errors import MethodError
+from svy.errors import DataError
 
 
 # ---------- Fixtures ----------
@@ -258,31 +258,31 @@ def test_mutate_series_bool(sample_basic: Sample):
 
 def test_mutate_unsupported_type_raises():
     s = Sample(pl.DataFrame({"a": [1, 2, 3]}))
-    with pytest.raises((MethodError, TypeError)):
+    with pytest.raises((DataError, TypeError)):
         s.wrangling.mutate({"c": object()})
 
 
 def test_mutate_list_wrong_length_raises(sample_basic: Sample):
-    with pytest.raises(MethodError) as exc_info:
+    with pytest.raises(DataError) as exc_info:
         sample_basic.wrangling.mutate({"c": [1, 2]})  # n=3, list has 2
     assert exc_info.value.code == "MUTATE_COMPILE_FAILED"
 
 
 def test_mutate_numpy_wrong_length_raises(sample_basic: Sample):
-    with pytest.raises(MethodError):
+    with pytest.raises(DataError):
         sample_basic.wrangling.mutate({"c": np.array([1, 2, 3, 4])})  # n=3, array has 4
 
 
 def test_mutate_series_wrong_length_raises(sample_basic: Sample):
     s = pl.Series("x", [1, 2])
-    with pytest.raises(MethodError):
+    with pytest.raises(DataError):
         sample_basic.wrangling.mutate({"c": s})
 
 
 def test_mutate_self_reference_raises():
     s = Sample(pl.DataFrame({"a": [1, 2, 3]}))
     # Column depends on itself (if 'c' doesn't exist)
-    with pytest.raises((MethodError, Exception)):
+    with pytest.raises((DataError, Exception)):
         s.wrangling.mutate({"c": pl.col("c") + 1})
 
 

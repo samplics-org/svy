@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from svy.core.enumerations import MeasurementType
-from svy.errors import DimensionError, MethodError
+from svy.errors import DataError, LabelWarning
 from svy.errors._findings import Severity, WarnCode
 from svy.wrangling._helpers import _fork
 from svy.wrangling._naming import _check_nan_keys
@@ -58,7 +58,7 @@ def apply_labels(
 ) -> "Sample":
     """Apply variable labels and/or value labels."""
     if labels is None and categories is None:
-        raise MethodError(
+        raise DataError.ValueError(
             title="No labels provided",
             detail=("At least one of 'labels' or 'categories' must be provided."),
             code="MISSING_LABELS",
@@ -88,7 +88,7 @@ def apply_labels(
     all_vars: set[str] = set()
     if labels is not None:
         if not isinstance(labels, dict):
-            raise MethodError.invalid_type(
+            raise DataError.invalid_type(
                 where="wrangling.apply_labels",
                 param="labels",
                 got=labels,
@@ -98,7 +98,7 @@ def apply_labels(
 
     if categories is not None:
         if not isinstance(categories, dict):
-            raise MethodError.invalid_type(
+            raise DataError.invalid_type(
                 where="wrangling.apply_labels",
                 param="categories",
                 got=categories,
@@ -110,7 +110,7 @@ def apply_labels(
     missing = [v for v in all_vars if v not in col_names]
     if missing:
         if strict:
-            raise DimensionError.missing_columns(
+            raise DataError.missing_columns(
                 where="wrangling.apply_labels",
                 param="labels / categories",
                 missing=missing,
@@ -125,7 +125,7 @@ def apply_labels(
                 continue
 
             if not isinstance(lbl, str):
-                raise MethodError.invalid_type(
+                raise DataError.invalid_type(
                     where="wrangling.apply_labels",
                     param=f"labels[{var!r}]",
                     got=lbl,
@@ -135,7 +135,7 @@ def apply_labels(
             if not overwrite:
                 existing = meta.get(var)
                 if existing is not None and existing.label is not None:
-                    raise MethodError.not_applicable(
+                    raise DataError.not_applicable(
                         where="wrangling.apply_labels",
                         method="apply_labels",
                         reason=(
@@ -154,7 +154,7 @@ def apply_labels(
                 continue
 
             if not isinstance(val_labels, dict):
-                raise MethodError.invalid_type(
+                raise DataError.invalid_type(
                     where="wrangling.apply_labels",
                     param=f"categories[{var!r}]",
                     got=val_labels,
@@ -165,7 +165,7 @@ def apply_labels(
 
             for key, val in val_labels.items():
                 if not isinstance(val, str):
-                    raise MethodError.invalid_type(
+                    raise DataError.invalid_type(
                         where="wrangling.apply_labels",
                         param=f"categories[{var!r}][{key!r}]",
                         got=val,
@@ -176,7 +176,7 @@ def apply_labels(
             # Check measurement type compatibility
             meas = _measurement_of(sample, var)
             if meas is not None and meas not in allowed_for_value_labels:
-                raise MethodError.not_applicable(
+                raise DataError.not_applicable(
                     where="wrangling.apply_labels",
                     method="value labels",
                     reason=(f"Variable {var!r} is measured as {getattr(meas, 'name', meas)}."),
@@ -187,7 +187,7 @@ def apply_labels(
             if not overwrite:
                 existing = meta.get(var)
                 if existing is not None and existing.value_labels is not None:
-                    raise MethodError.not_applicable(
+                    raise DataError.not_applicable(
                         where="wrangling.apply_labels",
                         method="apply_labels",
                         reason=(
@@ -205,33 +205,39 @@ def apply_labels(
             extra_label_keys = label_keys - actual_values
             if extra_label_keys:
                 target.warn(
-                    code=WarnCode.LABEL_KEY_NOT_IN_DATA,
-                    title="Category labels for values not in data",
-                    detail=(
-                        f"Variable {var!r}: label keys "
-                        f"{extra_label_keys} do not match any values "
-                        f"in the data."
-                    ),
-                    where="wrangling.apply_labels",
-                    level=Severity.INFO,
-                    var=var,
-                    got=sorted(str(k) for k in extra_label_keys),
-                    hint=("These labels will be stored but won't match any current data values."),
+                    LabelWarning(
+                        code=WarnCode.LABEL_KEY_NOT_IN_DATA,
+                        title="Category labels for values not in data",
+                        detail=(
+                            f"Variable {var!r}: label keys "
+                            f"{extra_label_keys} do not match any values "
+                            f"in the data."
+                        ),
+                        where="wrangling.apply_labels",
+                        level=Severity.INFO,
+                        var=var,
+                        got=sorted(str(k) for k in extra_label_keys),
+                        hint=(
+                            "These labels will be stored but won't match any current data values."
+                        ),
+                    )
                 )
 
             unlabeled_values = actual_values - label_keys
             if unlabeled_values:
                 target.warn(
-                    code=WarnCode.DATA_VALUE_NOT_LABELED,
-                    title="Data values without labels",
-                    detail=(
-                        f"Variable {var!r}: values {unlabeled_values} have no corresponding label."
-                    ),
-                    where="wrangling.apply_labels",
-                    level=Severity.INFO,
-                    var=var,
-                    got=sorted(str(v) for v in unlabeled_values),
-                    hint=("Add labels for these values or ignore this warning."),
+                    LabelWarning(
+                        code=WarnCode.DATA_VALUE_NOT_LABELED,
+                        title="Data values without labels",
+                        detail=(
+                            f"Variable {var!r}: values {unlabeled_values} have no corresponding label."
+                        ),
+                        where="wrangling.apply_labels",
+                        level=Severity.INFO,
+                        var=var,
+                        got=sorted(str(v) for v in unlabeled_values),
+                        hint=("Add labels for these values or ignore this warning."),
+                    )
                 )
 
             meta.set_value_labels(var, dict(val_labels))

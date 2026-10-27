@@ -45,7 +45,7 @@ from svy.core.types import (
     WhereArg,
 )
 from svy.core.variance_method import resolve_variance_method
-from svy.errors import MethodError
+from svy.errors import EstimationError
 from svy.errors._api import guided_getattr
 from svy.estimation.estimate import row_counts
 from svy.estimation.replication import replicate_params
@@ -341,7 +341,7 @@ class Categorical:
                 assert_no_missing(df=local_data.filter(pl.col(domain_col)), subset=key_cols)
                 valid_data = local_data
             if not valid_data.get_column(domain_col).any():
-                raise MethodError.not_applicable(
+                raise EstimationError.not_applicable(
                     where="Sample.categorical.tabulate",
                     method="tabulate",
                     reason="No rows are in scope for `where`.",
@@ -1047,11 +1047,11 @@ class Categorical:
         their value labels: None (the default) when they have any.
         """
         alpha = validate_alpha(alpha, where="Sample.categorical.ranktest")
-        from svy.errors import MethodError
+        from svy.errors import EstimationError
 
         # `method=` named the rank score before it named the variance method.
         if _is_rank_score(method):
-            raise MethodError.invalid_choice(
+            raise EstimationError.invalid_choice(
                 where="Sample.categorical.ranktest",
                 param="method",
                 got=method,
@@ -1061,7 +1061,7 @@ class Categorical:
 
         # --- Validate score / score_fn ---
         if score is not None and score_fn is not None:
-            raise MethodError.not_applicable(
+            raise EstimationError.not_applicable(
                 where="ranktest",
                 method="ranktest",
                 reason="cannot specify both 'score' and 'score_fn'",
@@ -1378,7 +1378,7 @@ class Categorical:
 
         from svy.categorical.ttest import DiffEst, GroupLevels
         from svy.core.containers import TDist
-        from svy.errors import MethodError
+        from svy.errors import EstimationError
 
         prep = prepare_data(
             self._sample,
@@ -1456,7 +1456,7 @@ class Categorical:
         def _unpack_row(row_idx: int, by_level: object) -> RankTestTwoSample:
             row = result_df.row(row_idx, named=True)
             if row["type"] != "two-sample":
-                raise MethodError.not_applicable(
+                raise EstimationError.not_applicable(
                     where="ranktest",
                     method="ranktest",
                     reason="Custom score_fn with more than 2 groups is not yet supported. "
@@ -1546,13 +1546,13 @@ def _label_rank_result(result: Any, group_labels: Any, by_labels: dict) -> Any:
 def _check_share_of(share_of: Any, *, colvar: str | None, units: Any, count_total: Any) -> None:
     where = "Sample.categorical.tabulate"
     if share_of not in ("total", "row", "col"):
-        raise MethodError.invalid_choice(
+        raise EstimationError.invalid_choice(
             where=where, param="share_of", got=share_of, allowed=["total", "row", "col"]
         )
     if share_of == "total":
         return
     if colvar is None:
-        raise MethodError.not_applicable(
+        raise EstimationError.not_applicable(
             where=where,
             method=f"share_of={share_of!r}",
             reason="row and column shares need a two-way table",
@@ -1560,7 +1560,7 @@ def _check_share_of(share_of: Any, *, colvar: str | None, units: Any, count_tota
             hint="Pass colvar=, or use share_of='total'.",
         )
     if _normalize_units(units) is _TableUnits.COUNT or count_total is not None:
-        raise MethodError.not_applicable(
+        raise EstimationError.not_applicable(
             where=where,
             method=f"share_of={share_of!r}",
             reason="a count does not depend on what it is a share of",

@@ -19,7 +19,7 @@ from svy.engine.wrangling.cleaning import (
     _recode,
     _top_code,
 )
-from svy.errors import DimensionError, MethodError
+from svy.errors import DataError, DataWarning
 from svy.wrangling._helpers import (
     _guard_weight_writes,
     _rebuild_concat_if_touched,
@@ -59,7 +59,7 @@ def _resolve_dtype(dtype: Any, *, param: str) -> Any:
     if dtype in _DTYPES:
         return _DTYPES[dtype]
     close = difflib.get_close_matches(dtype, list(_DTYPES), n=1, cutoff=0.5)
-    raise MethodError(
+    raise DataError.ValueError(
         title="Unknown dtype name",
         detail=f"{dtype!r} is not a dtype name; expected one of {list(_DTYPES)}.",
         code="CAST_UNKNOWN_DTYPE",
@@ -182,7 +182,7 @@ def categorize(
 
     # -- Validate: exactly one of bins / percentiles ---------------------
     if bins is not None and percentiles is not None:
-        raise MethodError(
+        raise DataError.ValueError(
             title="Ambiguous bin specification",
             detail="Provide either 'bins' or 'percentiles', not both.",
             code="AMBIGUOUS_BINS",
@@ -191,7 +191,7 @@ def categorize(
             hint="Use 'bins' for explicit edges or 'percentiles' to compute from data.",
         )
     if bins is None and percentiles is None:
-        raise MethodError(
+        raise DataError.ValueError(
             title="No bin specification",
             detail="One of 'bins' or 'percentiles' must be provided.",
             code="MISSING_BINS",
@@ -205,7 +205,7 @@ def categorize(
         _df = sample._data
 
         if col not in _df.columns:
-            raise DimensionError.missing_columns(
+            raise DataError.missing_columns(
                 where="wrangling.categorize",
                 param="col",
                 missing=[col],
@@ -231,7 +231,7 @@ def categorize(
     # -- Validate labels vs bins -----------------------------------------
     n_bins = len(bins) - 1  # type: ignore[arg-type]
     if labels is not None and len(labels) != n_bins:
-        raise MethodError(
+        raise DataError.ValueError(
             title="Label count mismatch",
             detail=f"Expected {n_bins} labels for {n_bins} bins, got {len(labels)}.",
             code="LABELS_LENGTH_MISMATCH",
@@ -300,7 +300,7 @@ def cast_columns(
         exprs = [_cast_expr(c, dt, strict) for c, dt in pairs]
     else:
         if dtype is None:
-            raise MethodError(
+            raise DataError.TypeError(
                 title="dtype required when cols is not a mapping",
                 detail="Provide dtype parameter or pass a dict mapping columns to types",
                 code="CAST_DTYPE_REQUIRED",
@@ -332,7 +332,7 @@ def cast_columns(
             )
             offenders = {c: int(check_df[c][0]) for c in to_check if int(check_df[c][0]) > 0}
             if offenders:
-                raise MethodError(
+                raise DataError.ValueError(
                     title="Lossy float-to-integer cast",
                     detail=(
                         f"Value(s) with fractional parts per column: {offenders}. "
@@ -378,14 +378,16 @@ def fill_null(
             int_cols = {c for c in col_list if c in schema and schema[c].is_integer()}
             if int_cols:
                 sample.warn(
-                    code="MEAN_FILL_INT_CAST",
-                    title="Integer column(s) cast to Float64 for mean fill",
-                    detail=(
-                        f"Column(s) {sorted(int_cols)} are integer-typed; the "
-                        "mean is generally fractional, so they were cast to "
-                        "Float64 instead of truncating the fill value."
-                    ),
-                    where="wrangling.fill_null",
+                    DataWarning(
+                        code="MEAN_FILL_INT_CAST",
+                        title="Integer column(s) cast to Float64 for mean fill",
+                        detail=(
+                            f"Column(s) {sorted(int_cols)} are integer-typed; the "
+                            "mean is generally fractional, so they were cast to "
+                            "Float64 instead of truncating the fill value."
+                        ),
+                        where="wrangling.fill_null",
+                    )
                 )
         exprs = [
             (pl.col(c).cast(pl.Float64) if c in int_cols else pl.col(c))

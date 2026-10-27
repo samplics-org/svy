@@ -16,7 +16,7 @@ from svy.engine.size_and_power.size import (
     _wald_sample_size_one_mean_scalar,
     _wald_sample_size_two_means_scalar,
 )
-from svy.errors import MethodError
+from svy.errors import SelectionError
 
 
 # =============================================================================
@@ -70,7 +70,7 @@ class TestCompareMeans:
             SampleSize().compare_means(mu1=10.0, mu2=12.0)
 
     def test_invalid_method_raises(self):
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             SampleSize().compare_means(mu1=10.0, mu2=12.0, sigma1=5.0, method="fleiss")
 
 
@@ -163,7 +163,7 @@ class TestNonInferioritySigned:
 
     def test_equivalence_infeasible_raises(self):
         """|eps| >= delta cannot reach equivalence power."""
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             _wald_sample_size_two_means_scalar(
                 two_sides=True,
                 epsilon=0.6,
@@ -183,17 +183,17 @@ class TestNonInferioritySigned:
 class TestParamValidation:
     @pytest.mark.parametrize("p", [-0.2, 0.0, 1.0, 1.5])
     def test_estimate_prop_invalid_p_raises(self, p):
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             SampleSize().estimate_prop(p=p, moe=0.05)
 
     @pytest.mark.parametrize("moe", [-0.1, 0.0, 5.0])
     def test_estimate_prop_invalid_moe_raises(self, moe):
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             SampleSize().estimate_prop(p=0.5, moe=moe)
 
     def test_compare_props_invalid_p_raises(self):
         """The old code silently clipped p1=1.5 to ~1."""
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             SampleSize().compare_props(p1=1.5, p2=0.5)
 
 
@@ -218,12 +218,12 @@ def test_pooled_prop_unequal_allocation():
 class TestCrashGuards:
     def test_power_out_of_range_raises(self):
         """power=80 used to crash with 'cannot convert float NaN to integer'."""
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             SampleSize().compare_props(p1=0.3, p2=0.5, power=80)
 
     def test_delta_equals_epsilon_raises(self):
         """delta == eps used to crash with OverflowError."""
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             SampleSize().compare_props(p1=0.6, p2=0.5, delta=-0.10, two_sides=False)
 
 
@@ -235,20 +235,20 @@ class TestCrashGuards:
 class TestNoSilentSanitization:
     def test_resp_rate_percent_raises(self):
         """resp_rate=90 (percent instead of fraction) used to be ignored."""
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             SampleSize().estimate_prop(p=0.5, moe=0.05, resp_rate=90)
 
     def test_negative_deff_raises(self):
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             SampleSize().estimate_prop(p=0.5, moe=0.05, deff=-2.0)
 
     def test_negative_sigma_raises(self):
         """sigma=-5 used to be clamped to ~0, giving n0=1."""
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             SampleSize().estimate_mean(sigma=-5, moe=1)
 
     def test_comparison_resp_rate_raises(self):
-        with pytest.raises(MethodError):
+        with pytest.raises(SelectionError):
             SampleSize().compare_props(p1=0.3, p2=0.5, resp_rate=85)
 
 

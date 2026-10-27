@@ -20,7 +20,7 @@ import pytest
 
 from svy.core.design import Design, PopSize
 from svy.core.sample import Sample
-from svy.errors import DimensionError, MethodError
+from svy.errors import EstimationError
 
 
 BASE_DIR = Path(__file__).parents[2]
@@ -449,11 +449,11 @@ class TestFPCValidation:
     """Tests for FPC input validation."""
 
     def test_unstratified_non_constant_fpc_raises(self, data):
-        """Unstratified design with varying fpc_psu should raise DimensionError."""
+        """Unstratified design with varying fpc_psu should raise EstimationError."""
         # fpc_psu is 15 for stratum A and 10 for stratum B — not constant
         design = Design(psu="psu", wgt="wgt", pop_size="fpc_psu")
         sample = Sample(data, design)
-        with pytest.raises(DimensionError, match="FPC not constant"):
+        with pytest.raises(EstimationError, match="FPC not constant"):
             sample.estimation.mean("y")
 
     def test_stratified_constant_fpc_ok(self, data):
@@ -464,24 +464,24 @@ class TestFPCValidation:
         assert result.estimates[0].se > 0
 
     def test_fpc_fraction_raises(self, data):
-        """FPC values < 1 (fractions) should raise MethodError."""
+        """FPC values < 1 (fractions) should raise EstimationError."""
         data_frac = data.with_columns((pl.col("fpc_psu").cast(pl.Float64) / 100).alias("fpc_frac"))
         design = Design(stratum="stratum", psu="psu", wgt="wgt", pop_size="fpc_frac")
         sample = Sample(data_frac, design)
-        with pytest.raises(MethodError, match="Invalid FPC values"):
+        with pytest.raises(EstimationError, match="Invalid FPC values"):
             sample.estimation.mean("y")
 
     def test_fpc_n_greater_than_N_raises(self, data):
-        """Population size < sample size should raise DimensionError."""
+        """Population size < sample size should raise EstimationError."""
         # Set N=1, but we have 3-4 PSUs per stratum
         data_small = data.with_columns(pl.lit(1).alias("tiny_N"))
         design = Design(stratum="stratum", psu="psu", wgt="wgt", pop_size="tiny_N")
         sample = Sample(data_small, design)
-        with pytest.raises(DimensionError, match="FPC population size < sample size"):
+        with pytest.raises(EstimationError, match="FPC population size < sample size"):
             sample.estimation.mean("y")
 
     def test_ssu_fpc_non_constant_within_psu_raises(self, data):
-        """SSU population size varying within a PSU should raise DimensionError."""
+        """SSU population size varying within a PSU should raise EstimationError."""
         # Create a column that varies within PSUs
         data_bad = data.with_columns(pl.arange(0, pl.len()).alias("varying_ssu_pop") + 10)
         design = Design(
@@ -492,7 +492,7 @@ class TestFPCValidation:
             pop_size=PopSize(psu="fpc_psu", ssu="varying_ssu_pop"),
         )
         sample = Sample(data_bad, design)
-        with pytest.raises(DimensionError, match="FPC not constant within PSU"):
+        with pytest.raises(EstimationError, match="FPC not constant within PSU"):
             sample.estimation.mean("y")
 
     def test_ssu_fpc_psu_labels_reused_across_strata(self):

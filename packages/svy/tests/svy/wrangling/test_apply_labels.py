@@ -7,7 +7,7 @@ import polars as pl
 import pytest
 
 from svy.core.sample import Sample
-from svy.errors import DimensionError, LabelError, MethodError
+from svy.errors import DataError, LabelError
 from svy.metadata import VariableMeta
 
 
@@ -112,7 +112,7 @@ def test_apply_labels_inplace_returns_same_instance(sample_basic: Sample):
 def test_apply_labels_no_args_raises():
     df = pl.DataFrame({"a": [1]})
     s = Sample(df)
-    with pytest.raises(MethodError) as exc_info:
+    with pytest.raises(DataError) as exc_info:
         s.wrangling.apply_labels()
     assert exc_info.value.code == "MISSING_LABELS"
 
@@ -120,7 +120,7 @@ def test_apply_labels_no_args_raises():
 def test_apply_labels_both_none_raises():
     df = pl.DataFrame({"a": [1]})
     s = Sample(df)
-    with pytest.raises(MethodError) as exc_info:
+    with pytest.raises(DataError) as exc_info:
         s.wrangling.apply_labels(labels=None, categories=None)
     assert exc_info.value.code == "MISSING_LABELS"
 
@@ -131,7 +131,7 @@ def test_apply_labels_both_none_raises():
 def test_apply_labels_labels_must_be_dict():
     df = pl.DataFrame({"a": [1]})
     s = Sample(df)
-    with pytest.raises(MethodError) as exc_info:
+    with pytest.raises(DataError) as exc_info:
         s.wrangling.apply_labels(labels=["not", "a", "dict"])
     assert exc_info.value.code == "INVALID_TYPE"
 
@@ -139,7 +139,7 @@ def test_apply_labels_labels_must_be_dict():
 def test_apply_labels_labels_values_must_be_strings():
     df = pl.DataFrame({"a": [1]})
     s = Sample(df)
-    with pytest.raises(MethodError) as exc_info:
+    with pytest.raises(DataError) as exc_info:
         s.wrangling.apply_labels(labels={"a": 123})
     assert exc_info.value.code == "INVALID_TYPE"
 
@@ -147,7 +147,7 @@ def test_apply_labels_labels_values_must_be_strings():
 def test_apply_labels_categories_must_be_dict():
     df = pl.DataFrame({"a": [1, 2]})
     s = Sample(df)
-    with pytest.raises(MethodError) as exc_info:
+    with pytest.raises(DataError) as exc_info:
         s.wrangling.apply_labels(categories=["not", "a", "dict"])
     assert exc_info.value.code == "INVALID_TYPE"
 
@@ -155,7 +155,7 @@ def test_apply_labels_categories_must_be_dict():
 def test_apply_labels_categories_inner_must_be_dict():
     df = pl.DataFrame({"a": [1, 2]})
     s = Sample(df)
-    with pytest.raises(MethodError) as exc_info:
+    with pytest.raises(DataError) as exc_info:
         s.wrangling.apply_labels(categories={"a": "not a dict"})
     assert exc_info.value.code == "INVALID_TYPE"
 
@@ -171,7 +171,7 @@ def test_apply_labels_categories_inner_must_be_dict():
 )
 def test_apply_labels_type_error_names_the_type_passed(kwargs, got):
     s = Sample(pl.DataFrame({"a": [1, 2]}))
-    with pytest.raises(MethodError) as exc_info:
+    with pytest.raises(DataError) as exc_info:
         s.wrangling.apply_labels(**kwargs)
     assert exc_info.value.got == got
 
@@ -179,7 +179,7 @@ def test_apply_labels_type_error_names_the_type_passed(kwargs, got):
 def test_apply_labels_category_values_must_be_strings():
     df = pl.DataFrame({"a": [1, 2]})
     s = Sample(df)
-    with pytest.raises(MethodError):
+    with pytest.raises(DataError):
         s.wrangling.apply_labels(categories={"a": {1: 123}})
 
 
@@ -194,12 +194,12 @@ def test_apply_labels_nan_key_forbidden():
 
 
 def test_apply_labels_missing_column_raises_strict(sample_basic: Sample):
-    with pytest.raises(DimensionError):
+    with pytest.raises(DataError):
         sample_basic.wrangling.apply_labels(labels={"nonexistent": "Label"}, strict=True)
 
 
 def test_apply_labels_missing_column_in_categories_raises_strict(sample_basic: Sample):
-    with pytest.raises(DimensionError):
+    with pytest.raises(DataError):
         sample_basic.wrangling.apply_labels(categories={"nonexistent": {1: "X"}}, strict=True)
 
 
@@ -220,7 +220,7 @@ def test_apply_labels_partial_missing_non_strict(sample_basic: Sample):
 
 def test_apply_labels_missing_in_labels_and_categories_combined(sample_basic: Sample):
     """Missing variable referenced in both labels and categories."""
-    with pytest.raises(DimensionError):
+    with pytest.raises(DataError):
         sample_basic.wrangling.apply_labels(
             labels={"nonexistent": "Label"},
             categories={"nonexistent": {1: "X"}},
@@ -241,7 +241,7 @@ def test_apply_labels_overwrite_false_raises_for_labels():
     df = pl.DataFrame({"a": [1, 2, 3]})
     s = Sample(df)
     s = s.wrangling.apply_labels(labels={"a": "First label"})
-    with pytest.raises(MethodError) as exc_info:
+    with pytest.raises(DataError) as exc_info:
         s.wrangling.apply_labels(labels={"a": "Second label"}, overwrite=False)
     assert "overwrite=True" in str(exc_info.value.hint)
 
@@ -250,7 +250,7 @@ def test_apply_labels_overwrite_false_raises_for_categories():
     df = pl.DataFrame({"a": [1, 2]})
     s = Sample(df)
     s = s.wrangling.apply_labels(categories={"a": {1: "One", 2: "Two"}})
-    with pytest.raises(MethodError) as exc_info:
+    with pytest.raises(DataError) as exc_info:
         s.wrangling.apply_labels(categories={"a": {1: "X"}}, overwrite=False)
     assert "overwrite=True" in str(exc_info.value.hint)
 

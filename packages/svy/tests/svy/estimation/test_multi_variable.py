@@ -20,7 +20,7 @@ import pytest
 from svy import col
 from svy.core.design import Design
 from svy.core.sample import Sample
-from svy.errors import DimensionError
+from svy.errors import EstimationError
 from svy.estimation.estimate import Estimate
 
 
@@ -169,7 +169,7 @@ def test_ratio_paired_matches_loop(multi_sample):
 
 
 def test_ratio_length_mismatch_raises(multi_sample):
-    with pytest.raises(DimensionError, match="same length"):
+    with pytest.raises(EstimationError, match="same length"):
         multi_sample.estimation.ratio(["y0", "y1"], ["denom", "y2", "y3"])
 
 

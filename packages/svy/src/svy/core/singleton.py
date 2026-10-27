@@ -18,6 +18,7 @@ from svy.core.constants import (
 )
 from svy.core.enumerations import SingletonDomains, SingletonMethod
 from svy.core.types import WhereArg
+from svy.errors import SingletonWarning
 from svy.errors._singleton import SingletonError
 from svy.utils.helpers import _collect
 from svy.utils.random_state import RandomState, resolve_random_state
@@ -400,7 +401,7 @@ class _Engine:
         code, purpose, example = _STRATUM_COLUMN_ROLES[param]
         missing = [c for c in cols if c not in df.columns]
         if missing:
-            raise SingletonError(
+            raise SingletonError.KeyError(
                 title=f"{param} names columns not in the data",
                 detail=f"collapse {param}={cols}: {missing} not in the data.",
                 code=code,
@@ -422,7 +423,7 @@ class _Engine:
         if varying:
             col, keys = varying[0]
             shown = self._key_values(sorted(map(str, keys))[:3])
-            raise SingletonError(
+            raise SingletonError.ValueError(
                 title=f"{param} column varies within a stratum",
                 detail=(
                     f"collapse {param}={col!r}: {col!r} takes several values in "
@@ -450,7 +451,7 @@ class _Engine:
     ) -> StratumInfo:
         """Select target stratum for a singleton using the specified strategy."""
         if not candidates:
-            raise SingletonError(
+            raise SingletonError.ValueError(
                 title="No valid merge targets",
                 detail=f"No non-singleton strata available for {singleton.stratum_key!r}",
                 code="NO_MERGE_TARGETS",
@@ -876,7 +877,7 @@ class _Engine:
             )
 
             if not candidates:
-                raise SingletonError(
+                raise SingletonError.ValueError(
                     title="No valid merge targets",
                     detail=(
                         f"No non-singleton strata available for {singleton.stratum_key!r} "
@@ -1257,7 +1258,7 @@ def domain_singleton_findings(
         raise SingletonError.from_domain_singletons(
             pairs, by_domains=by_domains, method=method, applied=applied, where=where
         )
-    from svy.errors._findings import Severity, SvyWarning, WarnCode
+    from svy.errors._findings import Severity, WarnCode
 
     fields: dict[str, Any] = dict(
         code=WarnCode.DOMAIN_SINGLETON_PSU,
@@ -1276,7 +1277,10 @@ def domain_singleton_findings(
         },
     )
     warn = getattr(sample, "warn", None)
-    kept = warn(level=Severity.INFO, **fields) if warn is not None else SvyWarning(**fields)
+    kept = SingletonWarning(**fields)
+    if warn is not None:
+        kept.level = Severity.INFO
+        warn(kept)
     level = Severity.WARNING if on == "warn" else Severity.INFO
     return [dataclasses.replace(kept, level=level)]
 
@@ -1433,9 +1437,7 @@ def domain_singletons_frame(
     by_cols = _Engine._to_cols(by)
     missing = [c for c in by_cols if c not in data.columns]
     if missing:
-        from svy.errors._method import MethodError
-
-        raise MethodError.not_applicable(
+        raise SingletonError.not_applicable(
             where="Sample.domain_singletons",
             method="domain_singletons",
             param="by",
@@ -1598,7 +1600,7 @@ def _rederive(sample: Sample) -> None:
         state["_singleton_problem"] = err
         return
     except ValueError as err:
-        state["_singleton_problem"] = SingletonError(
+        state["_singleton_problem"] = SingletonError.ValueError(
             title="The singleton rule cannot be applied",
             detail=str(err),
             code="SINGLETON_RULE_UNRESOLVED",
@@ -1648,13 +1650,15 @@ def _resolve_collapse(
         pairs = cast(dict[str, str], result.applied)
         shown = _mapping_text(facet, pairs)
         sample.warn(
-            level=Severity.INFO,
-            code="SINGLETON_COLLAPSE_CHANGED",
-            title="Singleton collapse changed",
-            detail=f"the singletons now collapse as {shown} (using={rule.using!r}).",
-            where="svy.Singleton",
-            param="singleton",
-            extra={"mapping": {str(k): str(v) for k, v in pairs.items()}},
+            SingletonWarning(
+                level=Severity.INFO,
+                code="SINGLETON_COLLAPSE_CHANGED",
+                title="Singleton collapse changed",
+                detail=f"the singletons now collapse as {shown} (using={rule.using!r}).",
+                where="svy.Singleton",
+                param="singleton",
+                extra={"mapping": {str(k): str(v) for k, v in pairs.items()}},
+            )
         )
     return new_data, result
 
@@ -1709,16 +1713,18 @@ def _checked_mapping(
     unmapped = [k for k in sorted(now) if k not in keyed]
     if unused:
         sample.warn(
-            level=Severity.INFO,
-            code="SINGLETON_MAPPING_UNUSED",
-            title="Collapse mapping entries not used",
-            detail=f"not singleton strata in this data, so not collapsed: {_shown(unused)}.",
-            where="svy.Singleton",
-            param="using",
-            extra={"strata": [str(v) for v in unused]},
+            SingletonWarning(
+                level=Severity.INFO,
+                code="SINGLETON_MAPPING_UNUSED",
+                title="Collapse mapping entries not used",
+                detail=f"not singleton strata in this data, so not collapsed: {_shown(unused)}.",
+                where="svy.Singleton",
+                param="using",
+                extra={"strata": [str(v) for v in unused]},
+            )
         )
     if gone:
-        raise SingletonError(
+        raise SingletonError.KeyError(
             title="Collapse target not in the data",
             detail=f"the collapse mapping merges into strata the data no longer has: "
             f"{_shown(gone)}.",
@@ -1730,7 +1736,7 @@ def _checked_mapping(
             '"collapse", using={...})).',
         )
     if lonely:
-        raise SingletonError(
+        raise SingletonError.ValueError(
             title="Collapse target is a singleton",
             detail=f"the collapse mapping merges into strata that now have one PSU: "
             f"{_shown(lonely)}.",
@@ -1753,7 +1759,7 @@ def _checked_mapping(
                     facet._key_values([b for _, b in outside], index),
                 )
             ]
-            raise SingletonError(
+            raise SingletonError.ValueError(
                 title="Collapse target outside within",
                 detail=f"the collapse mapping merges strata with different {', '.join(cols)}: "
                 f"{', '.join(pairs)}.",
@@ -1766,7 +1772,7 @@ def _checked_mapping(
             )
     if unmapped:
         values = facet._key_values(unmapped, index)
-        raise SingletonError(
+        raise SingletonError.ValueError(
             title="Singletons missing from the collapse mapping",
             detail=f"{len(values)} singleton {'stratum is' if len(values) == 1 else 'strata are'} "
             f"not in the collapse mapping: {_shown(values[:10])}"

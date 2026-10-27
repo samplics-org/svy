@@ -6,7 +6,7 @@ import pytest
 
 from svy.core._check import check_nesting
 from svy.core.check import NestingCheck
-from svy.errors import DimensionError, MethodError
+from svy.errors import DataError
 
 
 def test_nested_psus():
@@ -62,12 +62,12 @@ def test_limit_caps_examples_not_counts():
 
 def test_bad_input():
     df = pl.DataFrame({"st": [1], "psu": [1]})
-    with pytest.raises(DimensionError) as exc:
+    with pytest.raises(DataError) as exc:
         check_nesting(df, "stratum", "psu")
     assert exc.value.code == "MISSING_COLUMNS" and exc.value.got == ["stratum"]
-    with pytest.raises(MethodError):
+    with pytest.raises(DataError):
         check_nesting(df, [], "psu")
-    with pytest.raises(MethodError):
+    with pytest.raises(DataError):
         check_nesting(df, "st", "psu", limit=-1)
 
 

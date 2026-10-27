@@ -126,7 +126,7 @@ class Wrangling:
 
         Raises
         ------
-        MethodError
+        DataError
             ``REP_WGTS_MISSING`` when the sample has no replicate weights,
             ``REP_WGTS_UNKNOWN_PREFIX`` for a prefix it does not carry,
             ``REP_WGTS_PREFIX_INVALID`` for an empty new prefix, and

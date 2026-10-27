@@ -94,7 +94,7 @@ def test_coefficients_follow_the_resolved_replicate_count(brr_sample):
 # JKn dead ends announce themselves at construction
 # ==========================================================================
 #
-# The MethodError from coefficients() stays lazy on purpose -- such a Sample is
+# The EstimationError from coefficients() stays lazy on purpose -- such a Sample is
 # still usable for Taylor, wrangling and where=. What was missing was the early
 # signal, so the failure surfaced at a call site far from its cause.
 
@@ -189,7 +189,7 @@ def test_jkn_error_names_both_fixes():
                 wgt="wgt", rep_wgts=JackknifeWgts(prefix="rw", n_reps=n_reps, kind="jkn")
             ),
         )
-    with pytest.raises(svy.MethodError) as exc:
+    with pytest.raises(svy.errors.DesignError) as exc:
         s.estimation.mean("y", method="replication")
     text = str(exc.value)
     assert "psu" in text and "scale=" in text
@@ -253,7 +253,7 @@ def test_renaming_both_design_and_rep_units_keeps_them_independent():
 
 def test_a_unit_column_is_protected_from_a_casual_drop():
     s = _units_sample(np.random.default_rng(33))
-    with pytest.raises(svy.MethodError):
+    with pytest.raises(svy.errors.DataError):
         s.wrangling.remove_columns(["vstrat"])
 
 
@@ -301,7 +301,7 @@ def test_jkn_with_a_psu_but_no_stratum_refuses_rather_than_reproducing_jk1():
     assert s._design.rep_wgts.rep_coefs is None
     warns = s.warnings.list(code="JACKKNIFE_COEFS_UNAVAILABLE")
     assert warns and "no stratum" in warns[0].detail
-    with pytest.raises(svy.MethodError):
+    with pytest.raises(svy.errors.DesignError):
         s._design.rep_wgts.coefficients()
 
 
@@ -491,7 +491,7 @@ def test_recovery_refuses_columns_without_the_delete_one_signature():
         )
     assert s._design.rep_wgts.rep_coefs is None
     assert s.warnings.list(code="JACKKNIFE_COEFS_UNAVAILABLE")
-    with pytest.raises(svy.MethodError):
+    with pytest.raises(svy.errors.DesignError):
         s._design.rep_wgts.coefficients()
 
 

@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional
+from typing import Any, ClassVar, Iterable, Optional
 
-from ._base import SvyError
+from ._base import SvyError, SvyWarning
 
 
 @dataclass(eq=False)
@@ -15,10 +15,7 @@ class LabelError(SvyError):
     locale resolution, and (de)serialization.
     """
 
-    def __post_init__(self) -> None:
-        # Adopt a stable, filterable default code namespace for label errors.
-        if self.code == "SVY_ERROR":
-            self.code = "LABEL_ERROR"
+    _DEFAULT_CODE: ClassVar[str] = "LABEL_ERROR"
 
     # ---------------------------------------------------------------------
     # Convenience constructors
@@ -36,7 +33,7 @@ class LabelError(SvyError):
         ] = "Use catalog.list() or catalog.search() to discover available schemes.",
         docs_url: Optional[str] = None,
     ) -> "LabelError":
-        return cls(
+        return cls.KeyError(
             title="Scheme not found",
             detail=f"No label scheme found for {param}.",
             code="LABEL_UNKNOWN_SCHEME",
@@ -57,7 +54,7 @@ class LabelError(SvyError):
         hint: Optional[str] = "Pass overwrite=True or choose a different id.",
         docs_url: Optional[str] = None,
     ) -> "LabelError":
-        return cls(
+        return cls.ValueError(
             title="Scheme already exists",
             detail=f"A label scheme with id {scheme_id!r} already exists.",
             code="LABEL_SCHEME_EXISTS",
@@ -80,7 +77,7 @@ class LabelError(SvyError):
         docs_url: Optional[str] = None,
     ) -> "LabelError":
         missing_list = list(not_in_mapping)
-        return cls(
+        return cls.ValueError(
             title="Invalid missing codes",
             detail="Some missing codes are not present in the value-label mapping.",
             code="LABEL_INVALID_MISSING_CODES",
@@ -102,7 +99,7 @@ class LabelError(SvyError):
         docs_url: Optional[str] = None,
     ) -> "LabelError":
         keys = list(offending_keys)
-        return cls(
+        return cls.ValueError(
             title="Inconsistent missing kinds",
             detail="Keys in missing_kinds must also be listed in 'missing'.",
             code="LABEL_INCONSISTENT_MISSING_KINDS",
@@ -124,7 +121,7 @@ class LabelError(SvyError):
         ] = "Use an explicit code (e.g., 9) for missing; do not use NaN as a dict key.",
         docs_url: Optional[str] = None,
     ) -> "LabelError":
-        return cls(
+        return cls.ValueError(
             title="NaN key is not allowed",
             detail="Do not use NaN as a category key in value-label mappings.",
             code="LABEL_NAN_KEY",
@@ -144,7 +141,7 @@ class LabelError(SvyError):
         code: object,
         docs_url: Optional[str] = None,
     ) -> "LabelError":
-        return cls(
+        return cls.ValueError(
             title="Duplicate category code",
             detail=(
                 f"The code {code!r} appears more than once. A scheme holds one "
@@ -168,7 +165,7 @@ class LabelError(SvyError):
         hint: Optional[str] = "Use primary subtags or BCP-47 style locales (e.g., 'en', 'en-US').",
         docs_url: Optional[str] = None,
     ) -> "LabelError":
-        return cls(
+        return cls.ValueError(
             title="Invalid locale",
             detail="Locale is malformed or unsupported for label scheme selection.",
             code="LABEL_INVALID_LOCALE",
@@ -191,7 +188,7 @@ class LabelError(SvyError):
         docs_url: Optional[str] = None,
     ) -> "LabelError":
         ids = list(candidates)
-        return cls(
+        return cls.ValueError(
             title="Ambiguous scheme selection",
             detail=f"Multiple equally suitable schemes found for concept {concept!r}.",
             code="LABEL_AMBIGUOUS_PICK",
@@ -215,7 +212,7 @@ class LabelError(SvyError):
         docs_url: Optional[str] = None,
         extra: Optional[dict[str, Any]] = None,
     ) -> "LabelError":
-        return cls(
+        return cls.ValueError(
             title="Label catalog serialization failed",
             detail=reason,
             code="LABEL_SERIALIZATION_ERROR",
@@ -235,7 +232,7 @@ class LabelError(SvyError):
         hint: Optional[str] = "Use make_scheme() to derive an id or pass a normalized id.",
         docs_url: Optional[str] = None,
     ) -> "LabelError":
-        return cls(
+        return cls.ValueError(
             title="Invalid scheme id",
             detail="The provided scheme id does not conform to the expected format.",
             code="LABEL_INVALID_ID",
@@ -255,6 +252,8 @@ class LabelAPIRemoved(LabelError, AttributeError):
     Also an ``AttributeError``, so ``hasattr`` on the old name is False.
     """
 
+    _IS_KIND: ClassVar[bool] = True
+
     @classmethod
     def replaced(cls, *, where: str, use: str) -> "LabelAPIRemoved":
         return cls(
@@ -271,6 +270,8 @@ class LabelAPIRemoved(LabelError, AttributeError):
 class LabelsReadOnly(LabelError, TypeError):
     """``meta.var_labels`` / ``meta.value_labels`` are views; edits go through setters."""
 
+    _IS_KIND: ClassVar[bool] = True
+
     @classmethod
     def view(cls, *, where: str, use: str) -> "LabelsReadOnly":
         return cls(
@@ -279,3 +280,8 @@ class LabelsReadOnly(LabelError, TypeError):
             code="LABEL_READ_ONLY",
             where=where,
         )
+
+
+@dataclass(eq=False)
+class LabelWarning(SvyWarning):
+    pass

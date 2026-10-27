@@ -18,7 +18,7 @@ import pytest
 from numpy.testing import assert_allclose
 
 from svy import Design, Sample, col
-from svy.errors import MethodError
+from svy.errors import DesignError
 
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
@@ -105,7 +105,7 @@ def test_changed_values_are_refused(chain, role, setter):
     s = chain()
     column, phrase = ROLES[role]
     state = _state(s)
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(DesignError) as ei:
         SETTERS[setter](s, _changed(s.data, column))
     err = ei.value
     assert err.code == "WEIGHT_OVERWRITE"
@@ -147,7 +147,7 @@ def test_widening_cast_is_accepted_narrowing_is_not(chain, setter):
         out = SETTERS[setter](s, s.data.with_columns(pl.col(CELLS).cast(pl.Int64)))
     assert out.data.schema[CELLS] == pl.Int64
     s = chain()
-    with pytest.raises(MethodError, match="WEIGHT_OVERWRITE"):
+    with pytest.raises(DesignError, match="WEIGHT_OVERWRITE"):
         SETTERS[setter](s, s.data.with_columns(pl.col("tr").cast(pl.Float32)))
 
 
@@ -163,7 +163,7 @@ def test_float32_weight_widened_is_accepted(apiclus1):
 def test_rows_changed_with_lineage_are_refused(chain, setter):
     s = chain()
     state = _state(s)
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(DesignError) as ei:
         SETTERS[setter](s, s.data.head(100))
     err = ei.value
     assert err.code == "DATA_ROWS_CHANGED"
@@ -184,7 +184,7 @@ def test_rows_changed_with_lineage_are_refused(chain, setter):
 )
 def test_each_kind_of_lineage_blocks_a_row_change(apiclus1, build):
     s = build(apiclus1)
-    with pytest.raises(MethodError, match="DATA_ROWS_CHANGED"):
+    with pytest.raises(DesignError, match="DATA_ROWS_CHANGED"):
         s.set_data(s.data.head(100))
 
 
@@ -198,7 +198,7 @@ def test_rows_changed_on_a_plain_design_are_accepted(apiclus1, setter):
 
 def test_plain_design_weight_is_still_protected(apiclus1):
     s = Sample(apiclus1, Design(wgt="pw", psu="dnum"))
-    with pytest.raises(MethodError, match="WEIGHT_OVERWRITE"):
+    with pytest.raises(DesignError, match="WEIGHT_OVERWRITE"):
         s.set_data(_changed(s.data, "pw"))
 
 

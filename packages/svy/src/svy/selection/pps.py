@@ -33,7 +33,7 @@ from svy.core.constants import (
 )
 from svy.core.enumerations import PPSMethod
 from svy.core.types import Category, Number, WhereArg
-from svy.errors import MethodError
+from svy.errors import SelectionError
 from svy.selection._group_keys import (
     _build_group_keys,
     _compute_pop_sizes,
@@ -103,11 +103,11 @@ def _pps_arrays(sel, hits, probs, cert) -> tuple[np.ndarray, ...]:
     )
 
 
-def _kernel_error(method: PPSMethod, e: ValueError) -> MethodError:
+def _kernel_error(method: PPSMethod, e: ValueError) -> SelectionError:
     # Kernel-side validation (Murphy n != 2, Sampford n*p >= 1 or
     # degenerate acceptance, invalid MOS, ...) as a typed svy error.
     name = _PPS_METHOD[method]
-    return MethodError.not_applicable(
+    return SelectionError.not_applicable(
         where=f"Sample.selection.pps_{name}", method=f"pps_{name}", reason=str(e)
     )
 
@@ -128,7 +128,7 @@ def _refuse_units_at_one(method: PPSMethod, n, mos: np.ndarray, stratum: pl.Seri
             over.append(g)
     if over:
         name = _PPS_METHOD[method]
-        raise MethodError.not_applicable(
+        raise SelectionError.not_applicable(
             where=f"Sample.sampling.pps_{name}",
             method=f"pps_{name}",
             reason=(
@@ -518,7 +518,7 @@ def _pps_prepare(
     names = set(df.columns) if hasattr(df, "columns") else set(df.schema)
     missing_cols = [c for c in cols if c not in names]
     if missing_cols:
-        raise MethodError.invalid_choice(
+        raise SelectionError.invalid_choice(
             where="Sample.sampling.pps",
             param="columns",
             got=missing_cols,
@@ -548,7 +548,7 @@ def _pps_prepare(
     _warn_n_exceeds_population(n_norm, pop_sizes, wr=wr, pps=True, sample=sample)
 
     if design.mos is None:
-        raise MethodError.not_applicable(
+        raise SelectionError.not_applicable(
             where="Sample.sampling.pps",
             method="pps",
             reason="Missing mandatory MOS for PPS sampling.",

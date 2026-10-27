@@ -169,7 +169,7 @@ def test_derive_runs_on_every_change():
 
 def test_wrangling_protects_and_force_cleans():
     s = svy.Sample(DATA, design())
-    with pytest.raises(svy.MethodError, match="design-referenced"):
+    with pytest.raises(svy.errors.DataError, match="design-referenced"):
         s.wrangling.remove_columns("reg")
     with pytest.warns(
         UserWarning, match=r"Removed from the design with the dropped columns: note\."

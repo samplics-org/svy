@@ -12,7 +12,7 @@ import polars as pl
 import pytest
 
 from svy import Cat, Design, Sample
-from svy.errors import DimensionError, MethodError, SvyError, WeightingError
+from svy.errors import SvyError, WeightingError
 
 
 LEVELS = {
@@ -95,7 +95,7 @@ def test_margins_template_native_keys(col):
 @pytest.mark.parametrize("col", list(LEVELS))
 def test_margins_template_na_options(col):
     s = _sample(with_null=True)
-    with pytest.raises(DimensionError) as ei:
+    with pytest.raises(WeightingError) as ei:
         s.weighting.controls_margins_template(margins={col: col})
     assert ei.value.code == "MARGIN_NA"
     assert ei.value.got == {col: 1}
@@ -147,7 +147,7 @@ def test_margins_template_legacy_cat_na_names_the_new_one():
 
 
 def test_margins_template_bad_na_value():
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(WeightingError) as ei:
         _sample().weighting.controls_margins_template(margins={"int": "int"}, na="keep")
     assert ei.value.code == "INVALID_CHOICE"
     assert ei.value.expected == ["error", "level", "drop"]
@@ -183,7 +183,7 @@ def test_aux_template_native_keys(col):
 @pytest.mark.parametrize("col", list(LEVELS))
 def test_aux_template_na_options(col):
     s = _sample(with_null=True)
-    with pytest.raises(DimensionError) as ei:
+    with pytest.raises(WeightingError) as ei:
         s.weighting.control_aux_template(x=["w"], by=col)
     assert ei.value.code == "BY_NA"
     assert ei.value.got == {col: 1}

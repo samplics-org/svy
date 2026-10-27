@@ -27,6 +27,7 @@ from svy.engine.size_and_power.size import (
     _wald_sample_size_mean,
     _wald_sample_size_prop,
 )
+from svy.errors import SelectionError
 from svy.size._normalize import _normalize_one_prop_method
 from svy.size.types import Size, TargetMean, TargetProp
 from svy.utils.checks import validate_alpha
@@ -243,10 +244,9 @@ def estimate_mean(
         The updated SampleSize instance (chainable).
     """
     alpha = _checked_alpha(alpha, where="SampleSize.estimate_mean")
-    from svy.errors._method import MethodError
 
     if method != "wald":
-        raise MethodError.invalid_choice(
+        raise SelectionError.invalid_choice(
             where="SampleSize.estimate_mean",
             param="method",
             got=method,

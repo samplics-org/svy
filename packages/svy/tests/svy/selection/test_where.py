@@ -580,9 +580,9 @@ class TestPpsMethodBoundaries:
         return Sample(df, Design(mos="size"))
 
     def test_murphy_rejects_n_not_2(self):
-        from svy.errors import MethodError
+        from svy.errors import SelectionError
 
-        with pytest.raises(MethodError, match="exactly 2"):
+        with pytest.raises(SelectionError, match="exactly 2"):
             self._samp().sampling.pps_murphy(n=3, rstate=RNG)
 
     def test_murphy_n_2_works(self):

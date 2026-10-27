@@ -18,7 +18,7 @@ import polars as pl
 
 from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import Category
-from svy.errors import DimensionError, WeightingError
+from svy.errors import WeightingError
 from svy.weighting._keys import _NOT_FOUND, LevelIndex, _Ambiguous, match_keys, target_vector
 
 
@@ -35,7 +35,7 @@ def _expand_term(
             # Silently filling with 0 would bias the calibration totals; the
             # Cat branch treats null as an explicit level needing a target,
             # so a continuous auxiliary must be complete.
-            raise DimensionError(
+            raise WeightingError.ValueError(
                 title="Missing values in continuous auxiliary",
                 detail=f"Column '{term}' has {n_null} null value(s).",
                 code="AUX_NA",

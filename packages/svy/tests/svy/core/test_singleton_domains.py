@@ -28,7 +28,7 @@ import svy
 
 from svy.core.design import Singleton
 from svy.core.singleton import find_domain_singletons
-from svy.errors import MethodError
+from svy.errors import DesignError, UsageError
 from svy.errors._findings import Severity
 from svy.errors._singleton import SingletonError
 from svy.serialize import serialize, to_design
@@ -94,23 +94,23 @@ class TestRule:
 
     @pytest.mark.parametrize("method", ["self_representing", "skip", "pool", "collapse"])
     def test_apply_refused_elsewhere(self, method):
-        with pytest.raises(MethodError, match="center and scale define") as err:
+        with pytest.raises(DesignError, match="center and scale define") as err:
             Singleton(method, domains="apply")
         assert err.value.hint == 'svy.Singleton("center", domains="apply")'
 
     def test_unknown_domains(self):
-        with pytest.raises(MethodError, match="domains") as err:
+        with pytest.raises(DesignError, match="domains") as err:
             Singleton("center", domains="adjust")
         assert err.value.code == "INVALID_CHOICE"
 
     @pytest.mark.parametrize("value", ["warn", "ignore", "error"])
     def test_former_domains_values_point_to_on_domain_singletons(self, value):
-        with pytest.raises(MethodError, match="on_domain_singletons") as err:
+        with pytest.raises(DesignError, match="on_domain_singletons") as err:
             Singleton("scale", domains=value)
         assert err.value.hint == f'svy.Singleton("scale", on_domain_singletons="{value}")'
 
     def test_unknown_on_domain_singletons(self):
-        with pytest.raises(MethodError, match="on_domain_singletons"):
+        with pytest.raises(UsageError, match="on_domain_singletons"):
             Singleton("center", on_domain_singletons="yes")
 
     def test_repr_and_code_name_settings_only_when_set(self):
@@ -202,7 +202,7 @@ class TestDomainSingletons:
         assert sample.domain_singletons(by="stratum").is_empty()
 
     def test_unknown_by_column(self, data, design):
-        with pytest.raises(MethodError, match="not in the data"):
+        with pytest.raises(SingletonError, match="not in the data"):
             svy.Sample(data, design).domain_singletons(by="nope")
 
 

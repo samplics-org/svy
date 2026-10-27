@@ -532,9 +532,9 @@ class TestDefaultScore:
         assert r.stats.value == pytest.approx(0.784492299264955, rel=REL)
 
     def test_score_and_score_fn_together_still_raise(self, sample_strat_clust):
-        from svy.errors import MethodError
+        from svy.errors import EstimationError
 
-        with pytest.raises(MethodError, match="cannot specify both"):
+        with pytest.raises(EstimationError, match="cannot specify both"):
             sample_strat_clust.categorical.ranktest(
                 y="income", group="sex", score="median", score_fn=lambda rk, n: rk / n
             )

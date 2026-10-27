@@ -2,15 +2,14 @@ import io
 
 import pytest
 
+from svy.errors import DesignError
 from svy.errors._base import SvyError
-from svy.errors._method import MethodError
 
 
-def test_method_error_defaults_code():
-    err = MethodError(title="Bad mode", detail="Not supported.")
+def test_area_error_defaults_code():
+    err = DesignError(title="Bad mode", detail="Not supported.")
     assert isinstance(err, SvyError)
-    # __post_init__ should set a specific default if caller left "SVY_ERROR"
-    assert err.code in {"METHOD_ERROR", "SVY_ERROR"}  # tolerate if you later change the default
+    assert err.code == "DESIGN_ERROR"
     # String contains title and code
     s = str(err)
     assert "Bad mode" in s
@@ -18,7 +17,7 @@ def test_method_error_defaults_code():
 
 
 def test_invalid_choice_ctor_builds_clear_error():
-    err = MethodError.invalid_choice(
+    err = DesignError.invalid_choice(
         where="sample.show_data",
         param="how",
         got="nope",
@@ -55,11 +54,11 @@ def test_invalid_choice_ctor_builds_clear_error():
 
     # repr includes class name and key fields
     r = repr(err)
-    assert "MethodError(" in r and "title=" in r and "code='INVALID_CHOICE'" in r
+    assert r.startswith("DesignError.ValueError(") and "code='INVALID_CHOICE'" in r
 
 
 def test_not_applicable_ctor():
-    err = MethodError.not_applicable(
+    err = DesignError.not_applicable(
         where="svy.weight",
         method="rake",
         reason="no controls provided",
@@ -78,7 +77,7 @@ def test_rich_console_if_available():
         from rich.console import Console
     except Exception:
         pytest.skip("rich not installed")
-    err = MethodError.invalid_choice(
+    err = DesignError.invalid_choice(
         where="sample.show_data",
         param="how",
         got="x",

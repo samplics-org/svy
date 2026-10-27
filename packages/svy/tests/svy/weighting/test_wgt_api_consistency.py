@@ -18,7 +18,7 @@ import polars as pl
 import pytest
 
 from svy import Cat, Design, Sample, SvyWarning, TrimConfig, col
-from svy.errors import MethodError, WeightingError
+from svy.errors import UsageError, WeightingError
 from svy.errors._findings import Severity, WarnCode
 from svy.weighting.base import Weighting
 
@@ -543,7 +543,7 @@ def test_warn_and_ignore_keep_the_same_weights(request, name):
 def test_on_nonconvergence_bad_value(request, name, value):
     s, call, _, _, _ = _case(request, name)
     data = s.data
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(UsageError) as ei:
         call(s, on_nonconvergence=value)
     err = ei.value
     assert err.code == "INVALID_CHOICE" and err.param == "on_nonconvergence"
@@ -754,7 +754,7 @@ def test_new_on_nonconvergence_refuses_bad_value(tight_rr, name):
         "adjust": lambda **k: tight_rr.weighting.adjust("st", **k),
         "trim": lambda **k: tight_rr.weighting.trim(upper=2.0, **k),
     }
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(UsageError) as ei:
         calls[name](on_nonconvergence="raise")
     assert ei.value.code == "INVALID_CHOICE"
 

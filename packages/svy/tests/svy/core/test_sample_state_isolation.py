@@ -10,6 +10,8 @@ import pytest
 
 import svy
 
+from svy.errors import SvyWarning
+
 
 @pytest.fixture
 def base_sample():
@@ -53,10 +55,12 @@ def test_use_weight_warnings_are_isolated(base_sample):
     n_before = len(base_sample.warnings)
     with pytest.warns(svy.SvyWarning, match=r"\[TEST\]"):
         derived.warn(
-            code="TEST",
-            title="test",
-            detail="test warning",
-            where="tests",
+            SvyWarning(
+                code="TEST",
+                title="test",
+                detail="test warning",
+                where="tests",
+            )
         )
     assert len(base_sample.warnings) == n_before
     assert len(derived.warnings) == n_before + 1

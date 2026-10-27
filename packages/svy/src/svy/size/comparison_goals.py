@@ -26,6 +26,7 @@ from svy.engine.size_and_power.size import (
     _wald_sample_size_two_means,
     _wald_sample_size_two_props,
 )
+from svy.errors import SelectionError
 from svy.size._normalize import _normalize_prop_var_mode
 from svy.size.estimation_goals import (
     _as_input,
@@ -109,10 +110,9 @@ def compare_props(
         The updated SampleSize instance (chainable).
     """
     alpha = _checked_alpha(alpha, where="SampleSize.compare_props")
-    from svy.errors._method import MethodError
 
     if method != "wald":
-        raise MethodError.invalid_choice(
+        raise SelectionError.invalid_choice(
             where="SampleSize.compare_props",
             param="method",
             got=method,
@@ -318,7 +318,6 @@ def compare_means(
         The updated SampleSize instance (chainable).
     """
     alpha = _checked_alpha(alpha, where="SampleSize.compare_means")
-    from svy.errors._method import MethodError
 
     ss._param = PopParam.MEAN
     ss._target = TargetTwoMeans(
@@ -340,7 +339,7 @@ def compare_means(
     )
 
     if method != "wald":
-        raise MethodError.invalid_choice(
+        raise SelectionError.invalid_choice(
             where="SampleSize.compare_means",
             param="method",
             got=method,

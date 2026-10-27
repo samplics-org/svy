@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Iterable, Iterator, Sequence
+from typing import Any, ClassVar, Iterable, Iterator, Sequence
 
 import msgspec
 
@@ -66,10 +66,7 @@ class SvyWarningsError(SvyError):
     Escalation exception that keeps your formatting surfaces.
     """
 
-    def __post_init__(self) -> None:
-        # If caller didn't set a specific code, use a type-specific default.
-        if self.code == "SVY_ERROR":
-            self.code = "SVY_WARNINGS_ERROR"
+    _DEFAULT_CODE: ClassVar[str] = "SVY_WARNINGS_ERROR"
 
     @classmethod
     def from_warnings(
@@ -80,7 +77,7 @@ class SvyWarningsError(SvyError):
         code: str = "SVY_WARNINGS_ERROR",
     ) -> "SvyWarningsError":
         if not warnings:
-            return cls(
+            return cls.RuntimeError(
                 title="No warnings to escalate",
                 detail="SvyWarningsError.from_warnings called with an empty list.",
                 code=code,
@@ -92,7 +89,7 @@ class SvyWarningsError(SvyError):
             lines.append(f"- {w.level.name} {w.code}{loc}: {w.title} — {w.detail}")
         more = "" if len(warnings) <= 5 else f"\n… and {len(warnings) - 5} more"
         detail = "Escalated warnings:\n" + "\n".join(lines) + more
-        return cls(
+        return cls.RuntimeError(
             title=f"{len(warnings)} warning(s) escalated",
             detail=detail,
             code=code,
@@ -283,19 +280,16 @@ def findings_to(sample: Any) -> Iterator[None]:
         _FINDINGS_SAMPLE.reset(token)
 
 
-def emit_finding(
-    *, code: WarnCode | str, title: str, detail: str, where: str, **fields: Any
-) -> None:
-    """Record ``code`` on the sample at hand (which also raises it), or, with
+def emit_finding(finding: SvyWarning) -> None:
+    """Record ``finding`` on the sample at hand (which also raises it), or, with
     no sample, raise it at the caller's line."""
     sample = _FINDINGS_SAMPLE.get()
     if sample is not None:
-        sample.warn(code=code, title=title, detail=detail, where=where, **fields)
+        sample.warn(finding)
         return
     from svy.core.design import _user_stacklevel
 
-    w = SvyWarning(code=code, title=title, detail=detail, where=where, **fields)
-    _pywarnings.warn(w, stacklevel=_user_stacklevel())
+    _pywarnings.warn(finding, stacklevel=_user_stacklevel())
 
 
 def warn_no_sample(message: str) -> None:
@@ -314,9 +308,9 @@ ON_FINDING: tuple[str, ...] = ("error", "warn", "ignore")
 
 def check_on_finding(value: Any, *, param: str, where: str) -> None:
     if not isinstance(value, str) or value not in ON_FINDING:
-        from ._method import MethodError
+        from ._api import UsageError
 
-        raise MethodError.invalid_choice(
+        raise UsageError.invalid_choice(
             where=where,
             param=param,
             got=value,

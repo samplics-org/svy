@@ -19,7 +19,7 @@ from numpy.testing import assert_allclose
 
 from svy import Design, Sample, SvyWarning
 from svy.core.repwgts import BrrWgts
-from svy.errors import MethodError
+from svy.errors import DataError
 
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
@@ -146,7 +146,7 @@ def test_a_look_alike_target_is_a_collision_and_nothing_changes():
     s = _received(False, look_alikes=["final_w1"])
     for inplace in (False, True):
         data, design = s.data, s.design
-        with pytest.raises(MethodError) as ei:
+        with pytest.raises(DataError) as ei:
             s.wrangling.rename_rep_wgts({"w": "final_w"}, inplace=inplace)
         assert ei.value.code == "REP_WGTS_RENAME_COLLISION"
         assert "final_w1" in ei.value.detail
@@ -255,7 +255,7 @@ def test_renaming_only_a_history_set(two_sets):
 def test_renamed_replicates_stay_protected(two_sets):
     s = two_sets().wrangling.rename_rep_wgts({"pw": "base_r", "ps": "ps_r"})
     for name, owner in (("ps_r3", "'ps'"), ("base_r3", "'pw'")):
-        with pytest.raises(MethodError) as ei:
+        with pytest.raises(DataError) as ei:
             s.wrangling.mutate({name: 0.0})
         assert ei.value.code == "WEIGHT_OVERWRITE"
         assert f"replicate weight of {owner}" in ei.value.detail
@@ -269,7 +269,7 @@ def test_renamed_replicates_stay_protected(two_sets):
 def _untouched(s, call):
     data, design, history = s.data, s.design, s.design_history
     for inplace in (False, True):
-        with pytest.raises(MethodError) as ei:
+        with pytest.raises(DataError) as ei:
             call(inplace)
         assert s.data.equals(data)
         assert s.design == design and s.design_history == history

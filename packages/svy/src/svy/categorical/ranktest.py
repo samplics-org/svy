@@ -57,14 +57,14 @@ log = logging.getLogger(__name__)
 
 
 def _validate_two_sample(rt: RankTestTwoSample) -> None:
-    from svy.errors import MethodError
+    from svy.errors import EstimationError
 
     if not (0.0 < float(rt.alpha) < 1.0):
-        raise MethodError.invalid_range(
+        raise EstimationError.invalid_range(
             where="RankTestTwoSample", param="alpha", got=rt.alpha, min_=0.0, max_=1.0
         )
     if not rt.groups or not isinstance(rt.groups.levels, tuple) or len(rt.groups.levels) != 2:
-        raise MethodError.invalid_choice(
+        raise EstimationError.invalid_choice(
             where="RankTestTwoSample",
             param="groups.levels",
             got=getattr(rt.groups, "levels", None),
@@ -78,14 +78,14 @@ def _validate_two_sample(rt: RankTestTwoSample) -> None:
 
 
 def _validate_k_sample(rt: RankTestKSample) -> None:
-    from svy.errors import DimensionError, MethodError
+    from svy.errors import EstimationError
 
     if not (0.0 < float(rt.alpha) < 1.0):
-        raise MethodError.invalid_range(
+        raise EstimationError.invalid_range(
             where="RankTestKSample", param="alpha", got=rt.alpha, min_=0.0, max_=1.0
         )
     if len(rt.group_levels) < 2:
-        raise DimensionError.empty_estimates(where="RankTestKSample", param="group_levels")
+        raise EstimationError.empty_estimates(where="RankTestKSample", param="group_levels")
 
 
 # =============================================================================

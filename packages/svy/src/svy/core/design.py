@@ -29,6 +29,7 @@ from svy.core.repwgts import (
     RepWgts,
     resolve_rep_variant,
 )
+from svy.errors import DesignError, DesignWarning
 from svy.ui.printing import make_panel, render_rich_to_str, resolve_width
 
 
@@ -157,15 +158,17 @@ def _warn_rep_wgts_reset(rep: RepWgts, new_wgt: str | None) -> None:
     from svy.errors._findings import emit_finding
 
     emit_finding(
-        code="REP_WGTS_RESET",
-        title="Replicate weights removed",
-        detail=(
-            f"Replicate weights '{rep.prefix}' go with weight {rep.wgt!r}, not {new_wgt!r}, "
-            "so they were removed from the design and variance falls back to Taylor "
-            f"linearization. Pass rep_wgts= with the update to keep them with {new_wgt!r}."
-        ),
-        where="Design.update",
-        param="rep_wgts",
+        DesignWarning(
+            code="REP_WGTS_RESET",
+            title="Replicate weights removed",
+            detail=(
+                f"Replicate weights '{rep.prefix}' go with weight {rep.wgt!r}, not {new_wgt!r}, "
+                "so they were removed from the design and variance falls back to Taylor "
+                f"linearization. Pass rep_wgts= with the update to keep them with {new_wgt!r}."
+            ),
+            where="Design.update",
+            param="rep_wgts",
+        )
     )
 
 
@@ -326,9 +329,8 @@ def _typed(value: Any) -> Any:
 
 
 def _rule_error(param: str, detail: str, *, got: Any = None, hint: str | None = None) -> Exception:
-    from svy.errors._method import MethodError
 
-    return MethodError(
+    return DesignError.ValueError(
         title="Invalid singleton rule",
         detail=detail,
         code="INVALID_SINGLETON_RULE",
@@ -498,9 +500,8 @@ class Singleton(_SingletonMethodField, frozen=True, kw_only=True):
                     hint="R's lonely.psu='certainty' and Stata's singleunit(certainty) make "
                     "a singleton contribute nothing: that is method='skip'.",
                 )
-        from svy.errors._method import MethodError
 
-        raise MethodError.invalid_choice(
+        raise DesignError.invalid_choice(
             where=_RULE_WHERE,
             param="method",
             got=value,
@@ -521,9 +522,7 @@ class Singleton(_SingletonMethodField, frozen=True, kw_only=True):
                 hint=f'svy.Singleton("{method.value}", on_domain_singletons="{value}")',
             )
         if value not in SingletonDomains._value2member_map_:
-            from svy.errors._method import MethodError
-
-            raise MethodError.invalid_choice(
+            raise DesignError.invalid_choice(
                 where=_RULE_WHERE,
                 param="domains",
                 got=value,
@@ -555,9 +554,7 @@ class Singleton(_SingletonMethodField, frozen=True, kw_only=True):
     def _using(value: Any) -> Any:
         if isinstance(value, str):
             if value not in _COLLAPSE_STRATEGIES:
-                from svy.errors._method import MethodError
-
-                raise MethodError.invalid_choice(
+                raise DesignError.invalid_choice(
                     where=_RULE_WHERE,
                     param="using",
                     got=value,

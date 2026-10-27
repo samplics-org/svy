@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal, Sequence
 
 from svy.core.types import WhereArg
-from svy.errors import MethodError, SvyError
+from svy.errors import DataError, DataWarning, SingletonWarning, SvyError
 from svy.errors._findings import check_on_finding, finding_level
 from svy.utils.where import _compile_where as _compile_where_to_pl_expr
 from svy.wrangling._helpers import _internal_columns, _resolve_target
@@ -60,7 +60,7 @@ def filter_records(
             n_single = len(probe._singletons or [])
             rule = sample._design.singleton if sample._design is not None else None
             if n_single and on_singletons == "error" and rule is None:
-                raise MethodError(
+                raise DataError.ValueError(
                     title="Singletons detected after filtering",
                     detail=f"Found {n_single} singleton group(s).",
                     code="SINGLETONS_AFTER_FILTER",
@@ -75,16 +75,18 @@ def filter_records(
 
         if n_null_pred > 0:
             target.warn(
-                code="NULL_PREDICATE_ROWS_DROPPED",
-                title="Rows with null filter predicate dropped",
-                detail=(
-                    f"{n_null_pred} row(s) evaluated to null under the filter "
-                    "predicate and were dropped (Kleene logic: null is not "
-                    "true). Such rows are excluded by both the filter and "
-                    "its negation."
-                ),
-                where="wrangling.filter_records",
-                hint="fill_null the referenced columns first to keep these rows.",
+                DataWarning(
+                    code="NULL_PREDICATE_ROWS_DROPPED",
+                    title="Rows with null filter predicate dropped",
+                    detail=(
+                        f"{n_null_pred} row(s) evaluated to null under the filter "
+                        "predicate and were dropped (Kleene logic: null is not "
+                        "true). Such rows are excluded by both the filter and "
+                        "its negation."
+                    ),
+                    where="wrangling.filter_records",
+                    hint="fill_null the referenced columns first to keep these rows.",
+                )
             )
 
         if check_singletons:
@@ -96,14 +98,16 @@ def filter_records(
                 # A declared rule applies to them: reported, not warned about.
                 handled = f"; handled by the design's rule {rule!r}" if rule is not None else ""
                 target.warn(
-                    code="SINGLETONS_DETECTED",
-                    title="Singleton PSUs/strata detected after filtering",
-                    detail=f"Found {n} singleton group(s){handled}.",
-                    where="wrangling.filter_records",
-                    level=finding_level("ignore" if rule is not None else on_singletons),
-                    hint=None
-                    if rule is not None
-                    else 'Declare a rule: sample.update_design(singleton=svy.Singleton("center")).',
+                    SingletonWarning(
+                        code="SINGLETONS_DETECTED",
+                        title="Singleton PSUs/strata detected after filtering",
+                        detail=f"Found {n} singleton group(s){handled}.",
+                        where="wrangling.filter_records",
+                        level=finding_level("ignore" if rule is not None else on_singletons),
+                        hint=None
+                        if rule is not None
+                        else 'Declare a rule: sample.update_design(singleton=svy.Singleton("center")).',
+                    )
                 )
 
         return target
@@ -111,7 +115,7 @@ def filter_records(
     except SvyError:
         raise
     except Exception as ex:
-        raise MethodError(
+        raise DataError.RuntimeError(
             title="Filter failed",
             detail=str(ex),
             code="FILTER_FAILED",
@@ -166,6 +170,6 @@ def with_row_index(
     inplace: bool = False,
 ) -> "Sample":
     """Add a row index column."""
-    sample._refuse_bookkeeping([name], where="wrangling.with_row_index")
+    sample._refuse_bookkeeping([name], where="wrangling.with_row_index", error=DataError)
     new_data = sample._data.with_row_index(name=name, offset=offset)
     return _resolve_target(sample, new_data, inplace=inplace)

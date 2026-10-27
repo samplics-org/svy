@@ -213,9 +213,9 @@ def estimate_frame(
         )
         clash = sorted(set(_PAIR_COLS) & set(shown))
         if clash:
-            from svy.errors import MethodError
+            from svy.errors import EstimationError
 
-            raise MethodError(
+            raise EstimationError.ValueError(
                 title="Domain variable clashes with the pair columns",
                 detail=(
                     f"Each row names its pair in 'y' and 'x', but '{clash[0]}' is "
@@ -242,9 +242,9 @@ def estimate_frame(
             if col in labelled:
                 name = f"{col}_label"
                 if name in r or name in names:
-                    from svy.errors import MethodError
+                    from svy.errors import EstimationError
 
-                    raise MethodError(
+                    raise EstimationError.ValueError(
                         title="Label column clashes with a variable",
                         detail=f"The labels of '{col}' would go in '{name}', which is also a variable here.",
                         code="LABEL_COLUMN_CLASH",
@@ -870,7 +870,7 @@ class Estimate:
         (:attr:`design_df`, R's ``degf`` convention), not the per-row
         domain-aware df.
         """
-        from svy.errors import MethodError
+        from svy.errors import EstimationError
         from svy.estimation.contrast import linear_contrast
         from svy.utils.checks import validate_alpha
 
@@ -878,7 +878,7 @@ class Estimate:
             alpha = validate_alpha(alpha, where="Estimate.contrast")
 
         if self.param in (PopParam.QUANTILE, PopParam.MEDIAN):
-            raise MethodError(
+            raise EstimationError.ValueError(
                 title="Contrasts are not defined for quantiles",
                 detail=(
                     "Woodruff quantile intervals do not arise from a "
@@ -891,7 +891,7 @@ class Estimate:
                 got=self.param.name,
             )
         if not self.estimates:
-            raise MethodError(
+            raise EstimationError.ValueError(
                 title="Nothing to contrast",
                 detail="This result carries no estimates.",
                 code="CONTRAST_EMPTY",
@@ -899,7 +899,7 @@ class Estimate:
             )
         k = len(self.estimates)
         if k > 1 and not self._cov_filled and self.param in _ASSOC_PARAMS:
-            raise MethodError(
+            raise EstimationError.ValueError(
                 title="No between-estimate covariance on this result",
                 detail=(
                     "Correlation and covariance results carry no covariance "
@@ -910,7 +910,7 @@ class Estimate:
                 where="Estimate.contrast",
             )
         if k > 1 and not self._cov_filled:
-            raise MethodError(
+            raise EstimationError.ValueError(
                 title="No between-estimate covariance on this result",
                 detail=(
                     "Multi-variable convenience calls estimate each variable "
@@ -927,7 +927,7 @@ class Estimate:
         if df is None:
             row_dfs = [p.df for p in self.estimates if p.df is not None]
             if not row_dfs:
-                raise MethodError(
+                raise EstimationError.ValueError(
                     title="No degrees of freedom on this result",
                     detail="Neither a design df nor per-row df is available.",
                     code="CONTRAST_NO_DF",
@@ -1153,9 +1153,9 @@ class EstimateList(list):
         members = self._members()
         if len(members) == 1:
             return members[0].contrast(contrasts, alpha=alpha)
-        from svy.errors import MethodError
+        from svy.errors import EstimationError
 
-        raise MethodError(
+        raise EstimationError.ValueError(
             title="contrast() needs a single result",
             detail=(
                 f"This list holds {len(members)} results, estimated "

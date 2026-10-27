@@ -24,7 +24,7 @@ import pytest
 import svy
 
 from svy import Design, Sample, estd
-from svy.errors import MethodError
+from svy.errors import EstimationError
 
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
@@ -100,7 +100,7 @@ def test_is_linear_and_coefs():
     assert (estd("a") - 2 * estd("b")).is_linear()
     assert not (estd("a") / estd("b")).is_linear()
     assert (estd("a") + 1).is_linear() is False
-    with pytest.raises(MethodError, match="[Nn]onlinear"):
+    with pytest.raises(EstimationError, match="[Nn]onlinear"):
         (estd("a") / estd("b")).coefs()
     assert (estd("a") / estd("b")).keys() == ["a", "b"]
 
@@ -116,14 +116,14 @@ def test_t_ci_and_p_on_design_df(by_stype):
 
 
 def test_division_by_zero_estimate_named(by_stype):
-    with pytest.raises(MethodError, match="denominator .*estd\\('E'\\).* evaluates to 0"):
+    with pytest.raises(EstimationError, match="denominator .*estd\\('E'\\).* evaluates to 0"):
         by_stype.contrast(estd("H") / (estd("E") - estd("E")))
-    with pytest.raises(MethodError, match="[Ll]og"):
+    with pytest.raises(EstimationError, match="[Ll]og"):
         by_stype.contrast((estd("E") - estd("H") - estd("M")).log())
 
 
 def test_unknown_key_in_nonlinear_expression(by_stype):
-    with pytest.raises(MethodError, match="Unknown contrast key"):
+    with pytest.raises(EstimationError, match="Unknown contrast key"):
         by_stype.contrast(estd("H") / estd("Z"))
 
 

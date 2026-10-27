@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+from svy.errors import DesignWarning
 from svy.errors._findings import WarnCode
 
 
@@ -83,20 +84,22 @@ def resolve_variance_method(sample: Sample, method: str | None, *, where: str) -
     # hazard is in the number, not in who asked for it.
     if design.rep_wgts is not None and design.stratum is None and design.variance_psu is None:
         sample.warn(
-            code=WarnCode.TAYLOR_WITHOUT_DESIGN,
-            title="Taylor variance on a design with no stratum or psu",
-            detail=(
-                "The design carries replicate weights "
-                f"({design.rep_wgts.method}, n_reps={design.rep_wgts.n_reps}) but no "
-                "stratum or psu, so linearization has no clustering or "
-                "stratification to work from and the variance is SRS-like."
-            ),
-            where=where,
-            param="method",
-            hint=(
-                "Pass method='replication' to use the replicate weights, or "
-                "declare stratum/psu if the frame carries them. Pass "
-                "method='taylor' explicitly to keep this variance."
-            ),
+            DesignWarning(
+                code=WarnCode.TAYLOR_WITHOUT_DESIGN,
+                title="Taylor variance on a design with no stratum or psu",
+                detail=(
+                    "The design carries replicate weights "
+                    f"({design.rep_wgts.method}, n_reps={design.rep_wgts.n_reps}) but no "
+                    "stratum or psu, so linearization has no clustering or "
+                    "stratification to work from and the variance is SRS-like."
+                ),
+                where=where,
+                param="method",
+                hint=(
+                    "Pass method='replication' to use the replicate weights, or "
+                    "declare stratum/psu if the frame carries them. Pass "
+                    "method='taylor' explicitly to keep this variance."
+                ),
+            )
         )
     return None

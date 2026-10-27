@@ -12,7 +12,7 @@ import pytest
 import svy
 
 from svy.core.design import Singleton
-from svy.errors import MethodError
+from svy.errors import DesignError
 from svy.errors._singleton import SingletonError
 
 
@@ -496,7 +496,7 @@ def test_error_lists_five_pairs_and_counts_the_rest():
 
 
 def test_descending_must_be_a_bool():
-    with pytest.raises(MethodError, match="descending is True or False"):
+    with pytest.raises(DesignError, match="descending is True or False"):
         Singleton("collapse", descending="yes")  # type: ignore[arg-type]
 
 

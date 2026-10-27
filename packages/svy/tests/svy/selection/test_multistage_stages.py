@@ -7,7 +7,7 @@ import pytest
 
 import svy
 
-from svy.errors._method import MethodError
+from svy.errors import SelectionError
 from svy.selection import Stage
 
 
@@ -193,7 +193,7 @@ class TestErrors:
         ],
     )
     def test_invalid_stage(self, kw, param):
-        with pytest.raises(MethodError) as exc:
+        with pytest.raises(SelectionError) as exc:
             Stage(**kw)
         assert (exc.value.code, exc.value.param) == ("INVALID_STAGE", param)
 
@@ -212,34 +212,34 @@ class TestErrors:
         ],
     )
     def test_invalid_stage_lists(self, stages):
-        with pytest.raises(MethodError) as exc:
+        with pytest.raises(SelectionError) as exc:
             _draw(stages)
         assert exc.value.code == "INVALID_STAGE"
 
     def test_missing_column(self):
-        with pytest.raises(MethodError) as exc:
+        with pytest.raises(SelectionError) as exc:
             _draw([Stage("county", n=1)])
         assert exc.value.code == "MULTISTAGE_COLUMN_MISSING"
 
     def test_output_column_taken(self):
-        with pytest.raises(MethodError) as exc:
+        with pytest.raises(SelectionError) as exc:
             _draw(frame=FRAME.with_columns(svy_prob_selection_stage2=pl.lit(1.0)))
         assert exc.value.code == "MULTISTAGE_COLUMN_TAKEN"
 
     def test_frame_already_selected(self):
         s = svy.Sample(FRAME.with_columns(w=pl.lit(2.0)), svy.Design(stratum="region", wgt="w"))
-        with pytest.raises(MethodError) as exc:
+        with pytest.raises(SelectionError) as exc:
             s.sampling.multistage(STAGES, rstate=1)
         assert exc.value.code == "MULTISTAGE_ALREADY_SELECTED"
 
     def test_mos_varies_within_unit(self):
         frame = FRAME.with_columns(ea_hh=pl.col("ea_hh") + (pl.col("dwelling") == 1).cast(int))
-        with pytest.raises(MethodError) as exc:
+        with pytest.raises(SelectionError) as exc:
             _draw(frame=frame)
         assert (exc.value.code, exc.value.param) == ("MULTISTAGE_NOT_CONSTANT", "ea_hh")
 
     def test_stratum_missing_from_n(self):
-        with pytest.raises(MethodError) as exc:
+        with pytest.raises(SelectionError) as exc:
             _draw([Stage("district", n={"north": 1}), Stage(None, n=1)])
         assert exc.value.code == "MULTISTAGE_N_MISSING"
 
@@ -322,12 +322,12 @@ class TestStageOneN:
         ids=["incomplete", "orphan", "mixed", "ambiguous", "missing-cell", "extra-level"],
     )
     def test_keys_that_do_not_match_raise(self, n):
-        with pytest.raises(MethodError) as exc:
+        with pytest.raises(SelectionError) as exc:
             _draw([Stage("district", n=n)], URB, stratum=TWO)
         assert (exc.value.code, exc.value.param) == ("MULTISTAGE_N_MISSING", "n")
 
     def test_mapping_without_stratum_raises(self):
-        with pytest.raises(MethodError) as exc:
+        with pytest.raises(SelectionError) as exc:
             svy.Sample(FRAME, svy.Design()).sampling.multistage(
                 [Stage("district", n={"north": 1})], rstate=1
             )

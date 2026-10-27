@@ -5,9 +5,7 @@ import polars as pl
 import pytest
 
 from svy.core.enumerations import MeasurementType
-from svy.errors._dimension import DimensionError
-from svy.errors._label import LabelError
-from svy.errors._method import MethodError
+from svy.errors import LabelError
 from svy.metadata import Label
 
 
@@ -44,7 +42,7 @@ class SampleHarness:
         ls = [labels] if isinstance(labels, str) else list(labels)
 
         if len(vs) != len(ls):
-            raise MethodError(
+            raise LabelError(
                 title="Label assignment mismatch",
                 detail=f"Lengths differ: vars={len(vs)} labels={len(ls)}",
                 code="LABELS_LENGTH_MISMATCH",
@@ -60,7 +58,7 @@ class SampleHarness:
         missing = [v for v in vs if v not in col_names]
         if missing:
             if strict:
-                raise DimensionError.missing_columns(
+                raise LabelError.missing_columns(
                     where="wrangling.apply_labels",
                     param="vars",
                     missing=missing,
@@ -78,7 +76,7 @@ class SampleHarness:
 
         if categories is not None:
             if not isinstance(categories, dict):
-                raise MethodError.invalid_type(
+                raise LabelError.invalid_type(
                     where="wrangling.apply_labels",
                     param="categories",
                     got=categories,
@@ -105,7 +103,7 @@ class SampleHarness:
                 for var_name, m in per_var_categories.items():  # type: ignore[union-attr]
                     if m is not None:
                         if not isinstance(m, dict):
-                            raise MethodError.invalid_type(
+                            raise LabelError.invalid_type(
                                 where="wrangling.apply_labels",
                                 param=f"categories[{var_name}]",
                                 got=type(m).__name__,
@@ -129,7 +127,7 @@ class SampleHarness:
 
         for v, lb in zip(vs, ls):
             if not overwrite and v in self._sample._labels:
-                raise MethodError.not_applicable(
+                raise LabelError.not_applicable(
                     where="wrangling.apply_labels",
                     method="apply_labels",
                     reason=f"variable '{v}' already has labels; set overwrite=True to replace",
@@ -146,7 +144,7 @@ class SampleHarness:
             if mapping_for_v:
                 meas = _measurement_of(v)
                 if meas is not None and meas not in allowed_for_value_labels:
-                    raise MethodError.not_applicable(
+                    raise LabelError.not_applicable(
                         where="wrangling.apply_labels",
                         method="value labels",
                         reason=f"variable '{v}' is measured as {getattr(meas, 'name', meas)}",
@@ -157,7 +155,7 @@ class SampleHarness:
 
                 for key, val in mapping_for_v.items():
                     if not isinstance(val, str):
-                        raise MethodError.invalid_type(
+                        raise LabelError.invalid_type(
                             where="wrangling.apply_labels",
                             param=f"categories[{v}][{key}]",
                             got=type(val).__name__,
@@ -210,13 +208,13 @@ def sample(df, measurements):
 
 
 def test_apply_labels_length_mismatch_raises(sample):
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(LabelError) as ei:
         sample.apply_labels(["sex", "edu"], ["Sex"])  # length mismatch
     assert "LABELS_LENGTH_MISMATCH" in str(ei.value)
 
 
 def test_apply_labels_missing_columns_strict(sample):
-    with pytest.raises(DimensionError) as ei:
+    with pytest.raises(LabelError) as ei:
         sample.apply_labels(["sex", "missing"], ["Sex", "Missing"])
     assert "MISSING_COLUMNS" in str(ei.value)
 
@@ -257,7 +255,7 @@ def test_apply_labels_rejects_nan_key_in_categories_global(sample):
 
 def test_apply_labels_blocks_value_labels_on_non_categorical_when_measured(sample):
     # 'age' is CONTINUOUS in fixture measurements
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(LabelError) as ei:
         sample.apply_labels("age", "Age", categories={0: "Zero", 1: "One"})
     s = ei.value.summary()
     assert "value labels" in s or "METHOD_NOT_APPLICABLE" in str(ei.value)
@@ -265,14 +263,14 @@ def test_apply_labels_blocks_value_labels_on_non_categorical_when_measured(sampl
 
 def test_apply_labels_overwrite_false_raises(sample):
     sample.apply_labels("sex", "Sex")
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(LabelError) as ei:
         sample.apply_labels("sex", "Sex v2", overwrite=False)
     assert "already has labels" in str(ei.value)
 
 
 def test_apply_labels_mapping_values_must_be_strings(sample):
     # Bad: mapping value is int
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(LabelError) as ei:
         sample.apply_labels("sex", "Sex", categories={1: 100})
     assert "INVALID_TYPE" in str(ei.value) or "Invalid type" in str(ei.value)
 

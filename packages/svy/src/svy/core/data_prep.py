@@ -32,7 +32,7 @@ import polars as pl
 from svy.core.constants import key_col
 from svy.core.singleton import taylor_singleton_method
 from svy.core.types import WhereArg
-from svy.errors import DimensionError
+from svy.errors import DataError, DesignWarning
 from svy.utils.checks import any_missing, assert_no_missing, drop_missing
 from svy.utils.helpers import _colspec_to_list
 
@@ -315,7 +315,7 @@ def _resolve_rep_weight_cols(data: pl.DataFrame, design) -> list[str]:
         present = set(data_cols)
         missing = [c for c in cols if c not in present]
         if missing:
-            raise DimensionError.missing_columns(
+            raise DataError.missing_columns(
                 where="core.data_prep", param="rep_wgts", missing=missing, available=data_cols
             )
     elif hasattr(rw, "wgts") and rw.wgts:
@@ -1015,11 +1015,13 @@ def _warn_invalid_record(sample, design, rec, *, missing: list[str], wrong_weigh
     )
     if hasattr(sample, "warn"):
         sample.warn(
-            code="ADJUSTMENT_NOT_CREDITED",
-            title="Weight adjustment not credited",
-            detail=detail,
-            where="estimation",
-            param="wgt_adjustment",
+            DesignWarning(
+                code="ADJUSTMENT_NOT_CREDITED",
+                title="Weight adjustment not credited",
+                detail=detail,
+                where="estimation",
+                param="wgt_adjustment",
+            )
         )
     else:
         from svy.errors._findings import warn_no_sample

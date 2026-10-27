@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Literal, Sequence
 import numpy as np
 import polars as pl
 
+from svy.errors import SingletonWarning
+
 
 try:
     from svy_rs._internal import (
@@ -49,7 +51,7 @@ from svy.core.repwgts import (
     SdrWgts,
     normalize_bootstrap_kind,
 )
-from svy.errors import DimensionError, MethodError, WeightingError
+from svy.errors import WeightingError
 from svy.utils.checks import drop_missing
 from svy.utils.random_state import RandomState, resolve_random_state
 from svy.weighting._helpers import (
@@ -134,7 +136,7 @@ def _pair_variance_strata(
 
     _method = method.lower()
     if _method not in ("brr", "jk2"):
-        raise MethodError.invalid_choice(
+        raise WeightingError.invalid_choice(
             where=where,
             param="method",
             got=_method,
@@ -149,7 +151,7 @@ def _pair_variance_strata(
         _internal = getattr(sample, "_internal_design", None) or {}
         stratum_col_for_grouping = _internal.get("stratum")
         if stratum_col_for_grouping is None or stratum_col_for_grouping not in df.columns:
-            raise MethodError.not_applicable(
+            raise WeightingError.not_applicable(
                 where=where,
                 method="variance strata pairing",
                 reason=(
@@ -233,7 +235,7 @@ def _pair_variance_strata(
         # ``Sample.singleton``. Here it is simply not 2.
         unpairable = [(s, c) for s, c in stratum_counts.items() if c % 2 != 0]
         if unpairable:
-            raise DimensionError(
+            raise WeightingError.ValueError(
                 title="BRR needs 2 PSUs per variance stratum",
                 detail=(
                     f"BRR pairs PSUs into variance strata of exactly 2. "
@@ -257,7 +259,7 @@ def _pair_variance_strata(
     else:  # jk2: absorbs an odd count into a triplet, but cannot pair a lone PSU
         small_strata = [(s, c) for s, c in stratum_counts.items() if c < 2]
         if small_strata:
-            raise DimensionError(
+            raise WeightingError.ValueError(
                 title="Insufficient PSUs per stratum",
                 detail=(
                     f"All strata must have at least 2 PSUs. "
@@ -370,13 +372,15 @@ def _rule_units(
         if paired:
             return None
         sample.warn(
-            level=Severity.INFO,
-            code="SINGLETON_SKIPPED_IN_REPLICATES",
-            title="Singleton strata contribute nothing to the replicates",
-            detail=f"{len(sample._singletons or [])} singleton strata contribute nothing to "
-            "the replicate variance, as the design's rule Singleton('skip') declares.",
-            where=where,
-            param="singleton",
+            SingletonWarning(
+                level=Severity.INFO,
+                code="SINGLETON_SKIPPED_IN_REPLICATES",
+                title="Singleton strata contribute nothing to the replicates",
+                detail=f"{len(sample._singletons or [])} singleton strata contribute nothing to "
+                "the replicate variance, as the design's rule Singleton('skip') declares.",
+                where=where,
+                param="singleton",
+            )
         )
         return None
     return SVY_VAR_STRATUM, SVY_VAR_PSU
@@ -530,7 +534,7 @@ def create_brr_wgts(
     if n_reps is not None and rust_brr_hadamard_size is not None:
         h_size = rust_brr_hadamard_size(len(set(stratum_int.tolist())))
         if n_reps > h_size:
-            raise MethodError.invalid_range(
+            raise WeightingError.invalid_range(
                 where="Sample.weighting.create_brr_wgts",
                 param="n_reps",
                 got=n_reps,
@@ -744,7 +748,7 @@ def create_bs_wgts(
     kind = normalize_bootstrap_kind(kind)
 
     if n_reps is None:
-        raise MethodError.invalid_range(
+        raise WeightingError.invalid_range(
             where="Sample.weighting.create_bs_wgts",
             param="n_reps",
             got=None,
@@ -850,7 +854,7 @@ def create_sdr_wgts(
     design = sample._design
 
     if n_reps < 2:
-        raise MethodError.invalid_range(
+        raise WeightingError.invalid_range(
             where="Sample.weighting.create_sdr_wgts",
             param="n_reps",
             got=n_reps,

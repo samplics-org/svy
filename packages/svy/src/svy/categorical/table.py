@@ -26,7 +26,7 @@ from msgspec import structs as ms_structs
 from svy.core.containers import ChiSquare, FDist
 from svy.core.enumerations import TableType
 from svy.core.types import Category, Number
-from svy.errors import MethodError
+from svy.errors import EstimationError
 from svy.errors._api import guided_getattr
 from svy.estimation import ParamEst
 
@@ -225,7 +225,7 @@ class Table:
         units: Literal["proportion", "percent", "count"] = "proportion",
     ) -> None:
         if not (0.0 < float(alpha) < 1.0):
-            raise MethodError.invalid_range(
+            raise EstimationError.invalid_range(
                 where="Table.__init__",
                 param="alpha",
                 got=alpha,
@@ -235,14 +235,14 @@ class Table:
             )
 
         if type is TableType.ONE_WAY and colvar is not None:
-            raise MethodError.not_applicable(
+            raise EstimationError.not_applicable(
                 where="Table.__init__",
                 method="TableType.ONE_WAY",
                 reason="ONE_WAY tables must have colvar=None",
                 param="colvar",
             )
         if type is TableType.TWO_WAY and not colvar:
-            raise MethodError.not_applicable(
+            raise EstimationError.not_applicable(
                 where="Table.__init__",
                 method="TableType.TWO_WAY",
                 reason="TWO_WAY tables must have a non-empty colvar",

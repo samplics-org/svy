@@ -9,7 +9,7 @@ import pytest
 
 from svy import Design, Sample
 from svy.core.constants import SVY_HIT, SVY_PROB, SVY_PROB_STAGE1, SVY_WEIGHT
-from svy.errors import MethodError
+from svy.errors import SelectionError
 
 
 def _p(k: int) -> str:
@@ -320,7 +320,7 @@ class TestErrors:
     def test_bare_frame_past_second_stage_raises(self):
         s = _stage2()
         hh = _hhs().join(_eas().select("ea", "district"), on="ea")
-        with pytest.raises(MethodError, match="does not identify one selected unit") as exc:
+        with pytest.raises(SelectionError, match="does not identify one selected unit") as exc:
             s.sampling.add_stage(hh.filter(pl.col("ea").is_in(s.data["ea"].to_list())))
         assert "psu=" in exc.value.hint
 
@@ -329,17 +329,17 @@ class TestErrors:
         s = _stage2()
         hh = _hhs().join(_eas().select("ea", "district"), on="ea").rename({"ea": "ea_code"})
         hh = hh.filter(pl.col("ea_code").is_in(s.data["ea"].to_list()))
-        with pytest.raises(MethodError, match="does not identify one selected unit"):
+        with pytest.raises(SelectionError, match="does not identify one selected unit"):
             s.sampling.add_stage(Sample(hh, Design(psu="ea_code")))
 
     def test_add_stage_before_selecting_raises(self):
         s = _stage1()
         s = s.sampling.add_stage(_within(s, _eas(), "district"))
-        with pytest.raises(MethodError, match="not been selected yet"):
+        with pytest.raises(SelectionError, match="not been selected yet"):
             s.sampling.add_stage(_hhs())
 
     def test_unmatched_link_values_raise(self):
         s = _stage2()
         hh = Sample(_hhs(), Design(psu="ea"))  # households of unselected EAs too
-        with pytest.raises(MethodError, match="next_stage PSU values"):
+        with pytest.raises(SelectionError, match="next_stage PSU values"):
             s.sampling.add_stage(hh)

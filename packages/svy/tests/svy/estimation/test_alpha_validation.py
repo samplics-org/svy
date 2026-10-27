@@ -12,7 +12,7 @@ import pytest
 
 import svy
 
-from svy.errors import MethodError
+from svy.errors import UsageError
 
 
 @pytest.fixture(scope="module")
@@ -77,7 +77,7 @@ BAD_TYPE = ["0.05", True, False, [0.05], (0.05,), object()]
 
 
 def _check(call, alpha, code):
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(UsageError) as ei:
         call(alpha)
     err = ei.value
     assert err.code == code and err.param == "alpha"
@@ -170,7 +170,7 @@ def test_size_wrong_type(name, alpha):
 @pytest.mark.parametrize("name", list(SIZE_CALLS))
 @pytest.mark.parametrize("bad", [0.0, 1.0, float("nan"), "0.05", True])
 def test_size_per_stratum_alpha_checked(name, bad):
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(UsageError) as ei:
         SIZE_CALLS[name]({"r1": 0.05, "r2": bad})
     assert ei.value.param == "alpha"
     assert ei.value.code in ("INVALID_RANGE", "INVALID_TYPE")

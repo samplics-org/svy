@@ -2,23 +2,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, ClassVar, Iterable, Optional
 
-from ._base import SvyError
+from ._base import SvyError, SvyWarning
 
 
 @dataclass(eq=False)
 class IoError(SvyError):
     """Structured I/O errors for reads/writes across SPSS/Stata/SAS."""
 
-    def __post_init__(self) -> None:
-        if self.code == "SVY_ERROR":
-            self.code = "IO_ERROR"
+    _DEFAULT_CODE: ClassVar[str] = "IO_ERROR"
 
     # ---------- Convenience constructors ----------
     @classmethod
     def not_found(cls, *, where: Optional[str], path: str | Path) -> "IoError":
-        return cls(
+        return cls.FileNotFoundError(
             title="File not found",
             detail=f"No file at {Path(path)}",
             code="FILE_NOT_FOUND",
@@ -30,7 +28,7 @@ class IoError(SvyError):
     def archive_member_not_found(
         cls, *, where: Optional[str], path: str | Path, engine_msg: str
     ) -> "IoError":
-        return cls(
+        return cls.FileNotFoundError(
             title="No readable file in archive",
             detail=engine_msg,
             code="ARCHIVE_MEMBER_NOT_FOUND",
@@ -41,7 +39,7 @@ class IoError(SvyError):
 
     @classmethod
     def not_a_file(cls, *, where: Optional[str], path: str | Path) -> "IoError":
-        return cls(
+        return cls.OSError(
             title="Not a file",
             detail=f"Expected a file, got directory: {Path(path)}",
             code="NOT_A_FILE",
@@ -51,7 +49,7 @@ class IoError(SvyError):
 
     @classmethod
     def permission_denied(cls, *, where: Optional[str], path: str | Path) -> "IoError":
-        return cls(
+        return cls.PermissionError(
             title="Permission denied",
             detail=f"Access refused for path: {Path(path)}",
             code="PERMISSION_DENIED",
@@ -68,7 +66,7 @@ class IoError(SvyError):
         expected_exts: Iterable[str],
     ) -> "IoError":
         exts = tuple(sorted(set(e.lower() for e in expected_exts)))
-        return cls(
+        return cls.ValueError(
             title="Unsupported file extension",
             detail=f"Path {Path(path)} does not match expected extensions {exts}.",
             code="UNSUPPORTED_EXTENSION",
@@ -87,7 +85,7 @@ class IoError(SvyError):
         hint: str
         | None = "Ensure the file is a valid, uncorrupted data file of the expected format.",
     ) -> "IoError":
-        return cls(
+        return cls.ValueError(
             title=f"{fmt.upper()} parse error",
             detail=engine_msg or "The underlying reader failed to parse the file.",
             code="READSTAT_PARSE_FAILED",
@@ -98,7 +96,7 @@ class IoError(SvyError):
 
     @classmethod
     def engine_contract_violation(cls, *, where: Optional[str], got: Any) -> "IoError":
-        return cls(
+        return cls.RuntimeError(
             title="Engine contract violation",
             detail="Adapter returned an unexpected shape or payload.",
             code="ENGINE_CONTRACT_VIOLATION",
@@ -110,7 +108,7 @@ class IoError(SvyError):
     def read_failed(
         cls, *, where: Optional[str], path: str | Path, reason: str | None = None
     ) -> "IoError":
-        return cls(
+        return cls.OSError(
             title="Unexpected read failure",
             detail=reason or "Read failed for an unknown reason.",
             code="IO_READ_FAILED",
@@ -122,7 +120,7 @@ class IoError(SvyError):
     def write_failed(
         cls, *, where: Optional[str], path: str | Path, reason: str | None = None
     ) -> "IoError":
-        return cls(
+        return cls.OSError(
             title="Unexpected write failure",
             detail=reason or "Write failed for an unknown reason.",
             code="IO_WRITE_FAILED",
@@ -149,3 +147,8 @@ def map_os_error(e: BaseException, *, where: str, path: str | Path) -> IoError:
     if isinstance(e, PermissionError):
         return IoError.permission_denied(where=where, path=path)
     return IoError.read_failed(where=where, path=path, reason=str(e))
+
+
+@dataclass(eq=False)
+class IoWarning(SvyWarning):
+    pass

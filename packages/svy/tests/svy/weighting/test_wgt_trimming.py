@@ -35,7 +35,7 @@ from svy_rs._internal import trim_weights as _rust_trim_weights  # type: ignore[
 
 from svy import BootstrapWgts, SvyWarning
 from svy.core.sample import Design, Sample
-from svy.errors import DimensionError, WeightingError
+from svy.errors import WeightingError
 from svy.errors._findings import Severity, WarnCode
 from svy.weighting.types import (
     Threshold,
@@ -708,7 +708,7 @@ class TestTrimByDomain:
 class TestTrimWarnings:
     def test_negative_weight_raises_without_a_finding(self):
         sample = _make_sample([-1.0, 10.0, 10.0])
-        with pytest.raises(DimensionError, match="NEGATIVE_WEIGHTS"):
+        with pytest.raises(WeightingError, match="NEGATIVE_WEIGHTS"):
             sample.weighting.trim(upper=50.0, inplace=True)
         assert _warnings_of(sample, WarnCode.NEGATIVE_WEIGHT) == []
 

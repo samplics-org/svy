@@ -6,7 +6,7 @@ import pytest
 
 import svy
 
-from svy.errors import MethodError
+from svy.errors import EstimationError
 
 
 @pytest.fixture
@@ -137,13 +137,13 @@ def test_boundary_note_is_carried(sample):
     ],
 )
 def test_combinations_that_make_no_sense_raise(sample, kw):
-    with pytest.raises(MethodError) as e:
+    with pytest.raises(EstimationError) as e:
         sample.categorical.tabulate("classe", **kw)
     assert e.value.code == "METHOD_NOT_APPLICABLE"
 
 
 def test_unknown_share_of_raises(sample):
-    with pytest.raises(MethodError) as e:
+    with pytest.raises(EstimationError) as e:
         sample.categorical.tabulate("classe", "internet", share_of="rows")
     assert e.value.code == "INVALID_CHOICE"
 

@@ -25,7 +25,7 @@ import pytest
 import svy
 
 from svy.core.repwgts import BootstrapWgts, BrrWgts, JackknifeWgts, SdrWgts
-from svy.errors import MethodError
+from svy.errors import EstimationError
 from svy.errors._singleton import SingletonError
 
 
@@ -334,7 +334,7 @@ def test_ci_uses_the_replicate_df(frame):
 @pytest.mark.parametrize("old", ["kruskal-wallis", "median", "vdw"])
 def test_ranktest_rank_score_passed_as_method_points_to_score(frame, old):
     cat = _sample(frame, "brr").categorical
-    with pytest.raises(MethodError, match="score=") as err:
+    with pytest.raises(EstimationError, match="score=") as err:
         cat.ranktest("y", group="grp", method=old)
     assert err.value.code == "INVALID_CHOICE"
     assert err.value.param == "method"

@@ -14,7 +14,7 @@ import pytest
 from scipy import stats
 
 from svy import SampleSize
-from svy.errors._method import MethodError
+from svy.errors import SelectionError
 
 
 def _z(alpha=0.05, power=0.8, two_sides=True):
@@ -89,12 +89,12 @@ def test_inputs_are_recorded():
     "kw, param", [(dict(rho=1.5), "rho"), (dict(rho=-2), "rho"), (dict(overlap=1.2), "overlap")]
 )
 def test_out_of_range_inputs_name_the_parameter(kw, param):
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(SelectionError) as exc:
         SampleSize().compare_means(0, 2, 10, **kw)
     assert exc.value.param == param
 
 
 def test_no_variance_left_raises():
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(SelectionError) as exc:
         SampleSize().compare_means(0, 2, 10, rho=1, overlap=1)
     assert exc.value.code == "SIZE_NO_VARIANCE"

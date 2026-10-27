@@ -81,9 +81,7 @@ from svy.core import (
 )
 from svy.errors import (
     DatasetError,
-    DimensionError,
     LabelError,
-    MethodError,
     ModelError,
     SerializationError,
     SvyError,
@@ -258,9 +256,7 @@ __all__ = [
     "SvyError",
     "SvyWarning",
     "DatasetError",
-    "DimensionError",
     "LabelError",
-    "MethodError",
     "ModelError",
     "SerializationError",
     # --- Expressions ---

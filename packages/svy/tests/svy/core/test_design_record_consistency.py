@@ -23,7 +23,7 @@ from svy import Design, Sample, SvyWarning
 from svy.core.constants import key_col
 from svy.core.design import PopSize, WgtAdjustment
 from svy.core.repwgts import BootstrapWgts, BrrWgts, JackknifeWgts, SdrWgts
-from svy.errors import MethodError
+from svy.errors import DataError
 
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "test_data"
@@ -446,7 +446,7 @@ def test_set_and_update_design_validate_record_columns(api):
 def test_remove_record_column_needs_force(api, which):
     rk = _rake(api())
     col = rk.design.wgt_adjustment.cells[0] if which == "cells" else "pw"
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(DataError) as ei:
         rk.wrangling.remove_columns(col)
     assert ei.value.code == "DROP_PROTECTED_COLUMNS"
     assert col in str(ei.value)
@@ -454,7 +454,7 @@ def test_remove_record_column_needs_force(api, which):
 
 def test_remove_aux_column_needs_force(api):
     cal = api().weighting.calibrate(controls=GREG_CONTROLS, wgt_name="cal")
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(DataError) as ei:
         cal.wrangling.drop(cal.design.wgt_adjustment.aux[1])
     assert ei.value.code == "DROP_PROTECTED_COLUMNS"
 
@@ -462,7 +462,7 @@ def test_remove_aux_column_needs_force(api):
 @pytest.mark.parametrize("op", ["keep_columns", "select"])
 def test_keep_without_record_columns_needs_force(api, op):
     rk = _rake(api())
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(DataError) as ei:
         getattr(rk.wrangling, op)(["api00", "rk", "pw", "dnum", "fpc"])
     assert ei.value.code == "KEEP_DROPS_PROTECTED"
     assert rk.design.wgt_adjustment.cells[0] in str(ei.value)
@@ -515,7 +515,7 @@ def test_force_removing_a_replicate_column_drops_the_replicates(small):
 def test_force_removing_replicate_units(small):
     rw = JackknifeWgts(prefix="r", n_reps=4, stratum="s", psu="p", scale=0.75)
     s = Sample(small, Design(wgt="w", rep_wgts=rw))
-    with pytest.raises(MethodError):
+    with pytest.raises(DataError):
         s.wrangling.remove_columns("p")
     with pytest.warns(UserWarning, match=r"rep_wgts.psu='p'"):
         out = s.wrangling.remove_columns("p", force=True)
@@ -527,7 +527,7 @@ def test_force_removing_replicate_units(small):
 def test_force_removing_popsize_columns(small):
     df = small.with_columns(pl.lit(100.0).alias("N1"), pl.lit(10.0).alias("N2"))
     s = Sample(df, Design(wgt="w", stratum="s", psu="p", pop_size=PopSize(psu="N1", ssu="N2")))
-    with pytest.raises(MethodError):
+    with pytest.raises(DataError):
         s.wrangling.remove_columns("N2")
     with pytest.warns(UserWarning, match="pop_size.ssu"):
         out = s.wrangling.remove_columns("N2", force=True)
@@ -726,7 +726,7 @@ def test_replicates_only_design_on_padded_columns(small):
     df = small.rename({f"r{i}": f"r0{i}" for i in range(1, 5)})
     s = Sample(df, Design(wgt="w", rep_wgts=BrrWgts(prefix="r", n_reps=4)))
     assert s.design.columns(data_columns=df.columns)[-4:] == ["r01", "r02", "r03", "r04"]
-    with pytest.raises(MethodError):
+    with pytest.raises(DataError):
         s.wrangling.remove_columns("r03")
     with pytest.warns(UserWarning, match="rep_wgts"):
         s.update_design(wgt="other_w")
@@ -1090,7 +1090,7 @@ def test_provenance_only_records(api, kind):
     assert out.design.columns() == ["nw", "dnum", "fpc", "pw"]
     # Provenance-only: estimation treats the weights as fixed.
     assert_allclose(se_nw, _fixed_weight_se(out))
-    with pytest.raises(MethodError) as ei:
+    with pytest.raises(DataError) as ei:
         out.wrangling.remove_columns("pw")
     assert ei.value.code == "DROP_PROTECTED_COLUMNS"
     with no_warnings():
@@ -1136,7 +1136,7 @@ def test_padded_replicates_columns_and_pairing(small, padding):
         assert s.design.columns() == ["w", "r01", "r02", "r03", "r04"]
     else:
         assert s.design.columns() == ["w", "r1", "r2", "r3", "r4"]
-    with pytest.raises(MethodError):
+    with pytest.raises(DataError):
         s.wrangling.remove_columns("r02")
     with no_warnings():
         out = s.wrangling.rename_columns({"w": "base"})

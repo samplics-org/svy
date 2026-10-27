@@ -7,7 +7,7 @@ import pytest
 
 import svy
 
-from svy.errors import MethodError
+from svy.errors import SelectionError
 
 
 # Shares 0.6, 0.3, 0.1 per stratum: with n=2 the first unit's n·p is 1.2.
@@ -25,7 +25,7 @@ def _sample(frame):
 
 @pytest.mark.parametrize("method", ["pps_sys", "pps_brewer", "pps_rs"])
 def test_a_unit_at_one_raises_by_default(method):
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(SelectionError) as exc:
         getattr(_sample(DOMINANT).sampling, method)(2, rstate=1)
     assert "certainty_threshold=1.0" in str(exc.value)
 
@@ -53,5 +53,5 @@ def test_wr_and_murphy_draw_a_dominant_unit_at_random(method):
 
 
 def test_n_draws_raises_the_same_way():
-    with pytest.raises(MethodError):
+    with pytest.raises(SelectionError):
         _sample(DOMINANT).sampling.pps_sys(2, n_draws=3, rstate=1)

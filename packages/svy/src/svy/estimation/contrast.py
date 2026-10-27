@@ -24,7 +24,7 @@ import msgspec
 import numpy as np
 import polars as pl
 
-from svy.errors import MethodError
+from svy.errors import EstimationError
 from svy.errors._api import guided_getattr
 from svy.ui.printing import (
     make_panel,
@@ -111,7 +111,7 @@ class ContrastExpr:
     def coefs(self) -> dict[Any, float]:
         """Compile a linear tree to the sparse ``{key: coefficient}`` form."""
         if not self.is_linear():
-            raise MethodError(
+            raise EstimationError.ValueError(
                 title="Not a linear contrast",
                 detail=f"{self!r} is nonlinear and has no coefficient form.",
                 code="CONTRAST_NONLINEAR",
@@ -259,7 +259,7 @@ def _evaluate(
         va, ga = _evaluate(node.left, theta, index)
         vb, gb = _evaluate(node.right, theta, index)
         if vb == 0.0:
-            raise MethodError(
+            raise EstimationError.ValueError(
                 title="Division by a zero estimate",
                 detail=f"The denominator {node.right!r} evaluates to 0, so {node!r} is undefined.",
                 code="CONTRAST_DIV_ZERO",
@@ -269,7 +269,7 @@ def _evaluate(
     if isinstance(node, _Log):
         v, g = _evaluate(node.node, theta, index)
         if v <= 0.0:
-            raise MethodError(
+            raise EstimationError.ValueError(
                 title="Log of a non-positive estimate",
                 detail=f"{node.node!r} evaluates to {v:g}, so {node!r} is undefined.",
                 code="CONTRAST_LOG_DOMAIN",
@@ -448,7 +448,7 @@ def _normalize_contrasts(
     if isinstance(contrasts, ContrastExpr):
         return {"contrast": contrasts}
     if not isinstance(contrasts, Mapping) or not contrasts:
-        raise MethodError(
+        raise EstimationError.ValueError(
             title="Invalid contrast specification",
             detail=(
                 "contrast() takes a contrast expression (estd(a) - estd(b)), "
@@ -467,7 +467,7 @@ def _normalize_contrasts(
             for name, spec in contrasts.items()
         }
     if any(is_named):
-        raise MethodError(
+        raise EstimationError.ValueError(
             title="Mixed contrast specification",
             detail=(
                 "Either every value is a contrast (an expression or a "
@@ -569,7 +569,7 @@ def linear_contrast(
     est_arr = np.asarray(values, dtype=float)
     vcov = np.asarray(vcov, dtype=float)
     if vcov.shape != (k, k):
-        raise MethodError(
+        raise EstimationError.ValueError(
             title="Covariance shape mismatch",
             detail=f"Expected a {k}x{k} covariance matrix, got {vcov.shape}.",
             code="CONTRAST_COV_SHAPE",
@@ -588,7 +588,7 @@ def linear_contrast(
             else:
                 index[key] = idx
         if unknown:
-            raise MethodError(
+            raise EstimationError.KeyError(
                 title="Unknown contrast key",
                 detail=(
                     f"Contrast {name!r} references {unknown!r}, which do(es) "

@@ -18,7 +18,7 @@ import pytest
 
 from svy import Sample
 from svy.core.design import Design
-from svy.errors import MethodError
+from svy.errors import EstimationError
 from svy.estimation.base import Estimation
 
 
@@ -54,7 +54,7 @@ def test_booleans_are_rejected(value):
     than mapped. Silently accepting it would leave two spellings for one
     meaning; silently ignoring it would drop a design effect the caller asked
     for, since Literal is not enforced at runtime."""
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(EstimationError) as exc:
         normalize(value)
     assert "DEFF_BOOL_REJECTED" in str(exc.value)
 
@@ -62,7 +62,7 @@ def test_booleans_are_rejected(value):
 def test_true_is_told_which_reference_it_used_to_mean():
     """The guidance has to be actionable: True selected the without-replacement
     reference, so name it rather than just refusing."""
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(EstimationError) as exc:
         normalize(True)
     message = str(exc.value)
     assert "deff='wor'" in message
@@ -70,21 +70,21 @@ def test_true_is_told_which_reference_it_used_to_mean():
 
 
 def test_false_is_told_to_drop_the_argument():
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(EstimationError) as exc:
         normalize(False)
     assert "Omit the argument" in str(exc.value)
 
 
 @pytest.mark.parametrize("value", ["srs", "kish", "deft", "yes", ""])
 def test_unknown_references_are_rejected(value):
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(EstimationError) as exc:
         normalize(value)
     assert "DEFF_REFERENCE_UNKNOWN" in str(exc.value)
 
 
 def test_rejection_names_the_valid_options():
     """An error that does not say what to type instead is only half useful."""
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(EstimationError) as exc:
         normalize("nonsense")
     message = str(exc.value)
     assert "'wor'" in message and "'wr'" in message
@@ -94,7 +94,7 @@ def test_bool_check_precedes_string_handling():
     """bool subclasses int and str(True) is "True", so the bool branch has to
     run first or it would fall through to the alias lookup and be reported as
     an unknown reference rather than as a rejected boolean."""
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(EstimationError) as exc:
         normalize(True)
     assert "DEFF_BOOL_REJECTED" in str(exc.value)
     assert "DEFF_REFERENCE_UNKNOWN" not in str(exc.value)
@@ -142,7 +142,7 @@ def test_degenerate_correction_raises_rather_than_returning_nan(label, make):
     "this could not be computed", which is the distinction the error draws.
     """
     est = _sample(make(_honest())).estimation
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(EstimationError) as exc:
         est.mean("y", deff="wor")
     assert "DEFF_NOT_COMPUTABLE" in str(exc.value)
 
@@ -151,7 +151,7 @@ def test_error_names_both_causes_and_the_remedy():
     """Rescaled weights and a census produce the same condition, so the message
     has to offer both readings -- and say what to do instead."""
     est = _sample(np.ones(500)).estimation
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(EstimationError) as exc:
         est.mean("y", deff="wor")
     message = str(exc.value)
     assert "rescaled" in message
@@ -286,6 +286,6 @@ def test_batched_rejects_a_boolean_before_fanning_out():
     """Normalization happens ahead of the batched dispatch, so an invalid value
     fails once rather than once per variable."""
     est = _multi_sample().estimation
-    with pytest.raises(MethodError) as exc:
+    with pytest.raises(EstimationError) as exc:
         est.mean(["y1", "y2"], deff=True)
     assert "DEFF_BOOL_REJECTED" in str(exc.value)

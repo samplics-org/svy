@@ -635,7 +635,7 @@ def _fitted_levels(fit: GLMFit, var: str, key: object) -> list:
 
     info = (fit.term_info or {}).get(var) or {}
     if info.get("type") != "categorical":
-        raise ModelError(
+        raise ModelError.ValueError(
             title="No levels to enumerate",
             detail=(
                 f"at={{{key!r}: None}} asks for every fitted level of {var!r}, "
@@ -659,7 +659,7 @@ def _parse_at(glm: GLM, fit: GLMFit, at: dict) -> list[_AtSpec]:
     from svy.errors._model import ModelError
 
     if not isinstance(at, dict):
-        raise ModelError(
+        raise ModelError.TypeError(
             title="at= must be a dict",
             detail=f"Got {type(at).__name__}.",
             code="MARGINS_AT_TYPE",
@@ -681,7 +681,7 @@ def _parse_at(glm: GLM, fit: GLMFit, at: dict) -> list[_AtSpec]:
         ):
             names = key
         else:
-            raise ModelError(
+            raise ModelError.ValueError(
                 title="Invalid at= key",
                 detail=(
                     f"{key!r} is neither a variable name nor a tuple of distinct variable names."
@@ -703,7 +703,7 @@ def _parse_at(glm: GLM, fit: GLMFit, at: dict) -> list[_AtSpec]:
             cells = []
             for cell in values:
                 if not isinstance(cell, (tuple, list)) or len(cell) != len(names):
-                    raise ModelError(
+                    raise ModelError.ValueError(
                         title="Cell does not match its key",
                         detail=(
                             f"at={{{key!r}: ...}} needs one value per variable in "
@@ -884,7 +884,7 @@ def compute_conditional_effects(
         is_cat = info.get("type") == "categorical"
         for spec in specs:
             if var in spec.names:
-                raise ModelError(
+                raise ModelError.ValueError(
                     title="Effect variable fixed by at=",
                     detail=(
                         f"{var!r} is in variables= and in at={{{spec.key!r}: ...}}; "

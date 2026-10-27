@@ -17,7 +17,7 @@ import polars as pl
 
 from svy.core.constants import key_col
 from svy.core.types import DF, Category, Number
-from svy.errors import MethodError
+from svy.errors import SelectionError
 
 
 _SEP = "__by__"  # internal composite-key separator
@@ -231,7 +231,7 @@ def _normalize_n_for_groups(
 
     # Problem 1: dict with no grouping — keys are meaningless
     if not G:
-        raise MethodError.not_applicable(
+        raise SelectionError.not_applicable(
             where="Sample.sampling",
             method="srs/pps",
             reason=(
@@ -298,7 +298,7 @@ def _normalize_n_for_groups(
     else:
         detail = f"Keys do not match any valid universe. Unrecognised keys: {extra_keys}."
 
-    raise MethodError.invalid_choice(
+    raise SelectionError.invalid_choice(
         where="Sample.sampling",
         param="n",
         got=sorted(n_keys),

@@ -10,7 +10,7 @@ import polars as pl
 
 from svy.core.enumerations import TableUnits
 from svy.core.types import DF, Category
-from svy.errors import MethodError
+from svy.errors import UsageError
 
 
 log = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ def _normalize_name_seq(
     Validate and normalize a sequence of column names.
     Accepts: None, single str, or Sequence[str].
     Returns: list[str] or None.
-    Raises: MethodError if inputs contain non-strings.
+    Raises: UsageError if inputs contain non-strings.
     """
     if names is None:
         return None
@@ -45,7 +45,7 @@ def _normalize_name_seq(
             if x is None or x == "":
                 continue
             if not isinstance(x, str):
-                raise MethodError.invalid_type(
+                raise UsageError.invalid_type(
                     where=where,
                     param=f"{param}[{i}]",
                     got=x,
@@ -56,7 +56,7 @@ def _normalize_name_seq(
         return out
 
     # Fallback for invalid types passed as the container itself
-    raise MethodError.invalid_type(
+    raise UsageError.invalid_type(
         where=where,
         param=param,
         got=names,

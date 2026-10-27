@@ -14,7 +14,7 @@ from svy.engine.size_and_power.allocation import (
     _neyman_allocation,
     _proportional_allocation,
 )
-from svy.errors import MethodError
+from svy.errors import SelectionError
 from svy.size.types import Allocation, TargetAllocation
 
 
@@ -27,8 +27,8 @@ AllocationMethod = Literal["proportional", "neyman", "equal"]
 _WHERE = "SampleSize.allocate"
 
 
-def _engine_error(ex: ValueError) -> MethodError:
-    return MethodError(
+def _engine_error(ex: ValueError) -> SelectionError:
+    return SelectionError.ValueError(
         title="Allocation not possible",
         detail=str(ex),
         code="ALLOCATION_INVALID",
@@ -43,7 +43,7 @@ def _n_from_previous_goal(ss: SampleSize) -> tuple[int, str | None, Number]:
     sizes = ss._iter_sizes()
     goal = getattr(ss._param, "name", None)
     if not sizes:
-        raise MethodError.not_applicable(
+        raise SelectionError.not_applicable(
             where=_WHERE,
             method="allocate()",
             reason="no n to split: pass n, or compute one first",
@@ -51,7 +51,7 @@ def _n_from_previous_goal(ss: SampleSize) -> tuple[int, str | None, Number]:
             hint="svy.SampleSize().estimate_mean(...).allocate(pop_size=...), or allocate(n, ...).",
         )
     if len(sizes) > 1 or sizes[0].stratum is not None:
-        raise MethodError.not_applicable(
+        raise SelectionError.not_applicable(
             where=_WHERE,
             method="allocate()",
             reason="the previous goal is stratified: it already gives n per stratum",
@@ -60,7 +60,7 @@ def _n_from_previous_goal(ss: SampleSize) -> tuple[int, str | None, Number]:
         )
     total = sizes[0].n
     if isinstance(total, tuple):
-        raise MethodError.not_applicable(
+        raise SelectionError.not_applicable(
             where=_WHERE,
             method="allocate()",
             reason="the previous goal gives one n per comparison group, not an overall n",
@@ -86,15 +86,15 @@ def allocate(
     if n is None:
         n, from_goal, from_n = _n_from_previous_goal(ss)
     if isinstance(n, bool) or not isinstance(n, int) or n <= 0:
-        raise MethodError.invalid_type(
+        raise SelectionError.invalid_type(
             where=_WHERE, param="n", got=n, expected="a positive integer"
         )
     if method not in get_args(AllocationMethod):
-        raise MethodError.invalid_choice(
+        raise SelectionError.invalid_choice(
             where=_WHERE, param="method", got=method, allowed=list(get_args(AllocationMethod))
         )
     if not isinstance(pop_size, Mapping) or not pop_size:
-        raise MethodError.invalid_type(
+        raise SelectionError.invalid_type(
             where=_WHERE,
             param="pop_size",
             got=pop_size,
@@ -103,7 +103,7 @@ def allocate(
             "{'North': 52_000, 'South': 31_000}.",
         )
     if power != 1.0 and method != "proportional":
-        raise MethodError.not_applicable(
+        raise SelectionError.not_applicable(
             where=_WHERE,
             method=f"allocate(method={method!r})",
             reason="power= applies to proportional allocation (n_h ~ N_h ** power)",
@@ -111,7 +111,7 @@ def allocate(
         )
     if method == "neyman":
         if sigma is None:
-            raise MethodError.not_applicable(
+            raise SelectionError.not_applicable(
                 where=_WHERE,
                 method="allocate(method='neyman')",
                 reason="Neyman allocation needs each stratum's standard deviation S_h",
@@ -122,7 +122,7 @@ def allocate(
             missing = [k for k in pop_size if k not in sigma and pop_size[k] > 0]
             extra = [k for k in sigma if k not in pop_size]
             if missing or extra:
-                raise MethodError.invalid_choice(
+                raise SelectionError.invalid_choice(
                     where=_WHERE,
                     param="sigma",
                     got=list(sigma),
@@ -132,7 +132,7 @@ def allocate(
         else:
             sigma = dict.fromkeys(pop_size, sigma)
     elif sigma is not None:
-        raise MethodError.not_applicable(
+        raise SelectionError.not_applicable(
             where=_WHERE,
             method=f"allocate(method={method!r})",
             reason="sigma= is used by Neyman allocation only",
@@ -148,7 +148,7 @@ def allocate(
         or v == float("inf")
     }
     if bad:
-        raise MethodError.invalid_type(
+        raise SelectionError.invalid_type(
             where=_WHERE,
             param="pop_size",
             got=bad,
@@ -158,7 +158,7 @@ def allocate(
     # The engine works on string keys; keep the caller's keys for the result.
     keys = {str(k): k for k in pop_size}
     if len(keys) != len(pop_size):
-        raise MethodError.invalid_choice(
+        raise SelectionError.invalid_choice(
             where=_WHERE,
             param="pop_size",
             got=list(pop_size),

@@ -7,7 +7,7 @@ import pytest
 
 import svy
 
-from svy.errors._method import MethodError
+from svy.errors import DesignError
 
 
 NS = {"svy": svy, "datetime": datetime}
@@ -78,5 +78,5 @@ def test_design_repr_shows_the_weight_adjustment():
 
 def test_unrepresentable_singleton_rule_still_refuses():
     rule = svy.Singleton("collapse", using=lambda s: s)
-    with pytest.raises(MethodError, match="callable"):
+    with pytest.raises(DesignError, match="callable"):
         rule.to_code()

@@ -170,7 +170,7 @@ class Weighting:
     once as a ``SvyWarning``; "ignore" records it at INFO level without
     raising.
 
-    Failures raise ``WeightingError`` (a ``MethodError``) with a stable
+    Failures raise ``WeightingError`` (a ``WeightingError``) with a stable
     ``code`` and ``expected``/``got`` in the data's own values, so
     ``err.to_dict()`` is enough to act on.
     """

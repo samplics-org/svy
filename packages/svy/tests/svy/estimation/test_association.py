@@ -24,7 +24,7 @@ import pytest
 from svy import Sample
 from svy.core.design import Design, RepWeights
 from svy.core.enumerations import PopParam
-from svy.errors import DimensionError, MethodError
+from svy.errors import EstimationError
 
 
 R_CORR = 0.52860852253793722
@@ -255,33 +255,33 @@ def test_deff_exceeds_one_under_clustering(sample):
 
 
 def test_single_column_is_rejected(sample):
-    with pytest.raises(DimensionError, match="nothing to pair with"):
+    with pytest.raises(EstimationError, match="nothing to pair with"):
         sample.estimation.corr("y")
 
 
 def test_duplicate_columns_rejected_in_flat_list(sample):
     """Three or more columns expand to all pairs, where a repeat is degenerate."""
-    with pytest.raises(DimensionError, match="duplicate"):
+    with pytest.raises(EstimationError, match="duplicate"):
         sample.estimation.corr(["y", "x", "y"])
 
 
 def test_planned_kind_reports_not_implemented(sample):
     """'spearman' is recognised, so say it is unimplemented, not invalid."""
-    with pytest.raises(MethodError, match="not supported yet"):
+    with pytest.raises(EstimationError, match="not supported yet"):
         sample.estimation.corr(("y", "x"), kind="spearman")
 
 
 def test_unknown_kind_is_rejected(sample):
-    with pytest.raises(MethodError, match="Unknown correlation kind"):
+    with pytest.raises(EstimationError, match="Unknown correlation kind"):
         sample.estimation.corr(("y", "x"), kind="nonsense")
 
 
 def test_pandas_style_method_is_redirected_to_kind(sample):
     """pandas spells the coefficient method=; point the user at kind=."""
-    with pytest.raises(MethodError, match="not a variance method"):
+    with pytest.raises(EstimationError, match="not a variance method"):
         sample.estimation.corr(("y", "x"), method="spearman")
 
 
 def test_mixed_cols_are_rejected(sample):
-    with pytest.raises(DimensionError, match="mixes column names and pairs"):
+    with pytest.raises(EstimationError, match="mixes column names and pairs"):
         sample.estimation.corr(["y", ("x", "z")])
