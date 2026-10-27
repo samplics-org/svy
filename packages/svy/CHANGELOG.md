@@ -16,6 +16,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **Errors and findings print at most 88 columns wide** (`SVY_TEXT_PRINT_WIDTH`), so they fit notebooks and docs pages; result tables keep 120. `SVY_PRINT_WIDTH` still overrides both. `str(error)` is unchanged.
 - **`STAGE_TAKES_ALL` names the parents.** The message reads `geo1=geo_02, geo2=geo_02_02; ...` and names the stage's unit; `got` holds the parents as `{column: value}` mappings rather than a count.
 - **Stage-1 `n` in `multistage` is keyed as in `srs` and `pps_*`.** Besides the full stratum (a tuple for several stratum columns), a mapping keyed by one stratum variable is broadcast, e.g. `Stage("ea", n={"Urban": 6, "Rural": 4}, mos="hh")` on a design stratified by `("region", "urbrur")`. Keys that match no stratum now raise `MULTISTAGE_N_MISSING` instead of being ignored.
+- **`GLM_SEPARATION` names terms as the coefficient table prints them** (`classe_B`, not `classe_2.0`); `got` keeps the coded names of `GLMCoef.term`.
 
 ### Fixed
 
