@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
 import polars as pl
 
 from svy.core.enumerations import CaseStyle, LetterCase
+from svy.errors import DataError
 
 
 if TYPE_CHECKING:
@@ -96,14 +97,29 @@ def _normalize_into(
         return None
     if isinstance(into, str):
         if len(cols) != 1:
-            raise ValueError(
-                "into as a string is only valid when a single input column is provided."
+            raise DataError.invalid_value(
+                where="wrangling",
+                param="into",
+                got=into,
+                detail="into as a string is only valid when a single input column is provided.",
+                hint="Map each input column to its output name: into={'a': 'a2', 'b': 'b2'}.",
             )
         return {cols[0]: into}
     if isinstance(into, Mapping):
+        unknown = [k for k in into if k not in cols]
+        if unknown:
+            raise DataError.invalid_value(
+                where="wrangling",
+                param="into",
+                got=unknown,
+                detail=f"into names columns that are not being coded: {unknown}.",
+                hint=f"Its keys are the input columns: {list(cols)}.",
+            )
         # keep only truthy targets
         return {k: v for k, v in into.items() if v}
-    raise TypeError("into must be a string, a mapping, or None.")
+    raise DataError.invalid_type(
+        where="wrangling", param="into", got=into, expected="a string, a mapping, or None"
+    )
 
 
 def _target_name(
@@ -361,7 +377,13 @@ def _categorize(
         raise KeyError(f"Column not found: {varname!r}")
 
     if len(bins) < 2:
-        raise ValueError("bins must have at least 2 edges")
+        raise DataError.invalid_value(
+            where="wrangling.categorize",
+            param="bins",
+            got=list(bins),
+            detail="bins must have at least 2 edges",
+            hint="Two edges make one bin: bins=[0, 18, 65, 120] makes three.",
+        )
 
     n_bins = len(bins) - 1
     if labels is not None and len(labels) != n_bins:
@@ -414,7 +436,12 @@ def _rename(data: pl.DataFrame, renames: Mapping[str, str]) -> pl.DataFrame:
 
     dests = list(renames.values())
     if len(dests) != len(set(dests)):
-        raise ValueError(f"Duplicate destination names in renames: {dests}")
+        raise DataError.invalid_value(
+            where="wrangling.rename_columns",
+            param="renames",
+            got=dests,
+            detail=f"Duplicate destination names in renames: {dests}",
+        )
 
     missing = [c for c in renames if c not in data.columns]
     if missing:

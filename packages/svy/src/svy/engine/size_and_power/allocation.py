@@ -216,6 +216,11 @@ def _neyman_allocation(
         )
         n_total = total_pop
 
+    negative = {g: sd for g, sd in group_sds.items() if not (math.isfinite(sd) and sd >= 0)}
+    if negative:
+        raise ValueError(
+            f"neyman_allocation: group_sds must be finite and >= 0; got {negative!r}."
+        )
     measure = {g: float(group_sizes[g]) * float(group_sds.get(g, 0.0)) for g in groups}
     if sum(measure.values()) == 0:
         raise ValueError(
