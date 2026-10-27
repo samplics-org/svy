@@ -31,6 +31,40 @@ if TYPE_CHECKING:
 # -------------------------------------------------------------------
 
 
+def _require_columns(sample: "Sample", cols: Iterable[str], *, where: str, param: str) -> None:
+    present = sample._data.collect_schema().names()
+    missing = [c for c in cols if c not in present]
+    if missing:
+        internal = _internal_columns(sample)
+        raise DataError.missing_columns(
+            where=where,
+            param=param,
+            missing=missing,
+            available=[c for c in present if c not in internal],
+        )
+
+
+def _require_numeric(sample: "Sample", cols: Iterable[str], *, where: str, param: str) -> None:
+    schema = sample._data.collect_schema()
+    for c in cols:
+        dtype = schema[c]
+        if not (dtype.is_numeric() or dtype == pl.Null):
+            raise DataError.TypeError(
+                title="Column is not numeric",
+                detail=f"'{c}' is {dtype}; {where.split('.')[-1]}() works on numeric columns.",
+                code=Code.COLUMN_NOT_NUMERIC,
+                where=where,
+                param=param,
+                got=str(dtype),
+                hint="sample.wrangling.cast() converts numbers stored as text.",
+            )
+
+
+def _require_number(value: object, *, where: str, param: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise DataError.invalid_type(where=where, param=param, got=value, expected="a number")
+
+
 def _fork(sample: "Sample", new_data: pl.DataFrame) -> "Sample":
     """
     Create a new Sample that shares the original's Design (immutable)
