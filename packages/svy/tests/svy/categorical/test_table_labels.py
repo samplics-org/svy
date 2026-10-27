@@ -1,6 +1,8 @@
 # tests/svy/categorical/test_table_labels.py
 """Tests for Table label integration with MetadataStore."""
 
+import re
+
 import polars as pl
 import pytest
 
@@ -93,6 +95,24 @@ def two_way_table_with_meta(metadata_store):
         ],
         rowvals=[1, 2],
         colvals=["N", "S"],
+        metadata=metadata_store,
+    )
+
+
+@pytest.fixture
+def two_way_table_unlabelled_col(metadata_store):
+    """Labelled row variable crossed with a column variable that has no labels."""
+    return Table.two_way(
+        rowvar="gender",
+        colvar="internet",
+        estimates=[
+            CellEst(rowvar="1", colvar="0", est=0.2, se=0.02, cv=0.1, lci=0.16, uci=0.24),
+            CellEst(rowvar="1", colvar="1", est=0.3, se=0.02, cv=0.07, lci=0.26, uci=0.34),
+            CellEst(rowvar="2", colvar="0", est=0.2, se=0.02, cv=0.1, lci=0.16, uci=0.24),
+            CellEst(rowvar="2", colvar="1", est=0.3, se=0.02, cv=0.07, lci=0.26, uci=0.34),
+        ],
+        rowvals=[1, 2],
+        colvals=[0, 1],
         metadata=metadata_store,
     )
 
@@ -194,16 +214,16 @@ class TestUseLabelsSetting:
 class TestHeadersWithLabels:
     """Tests for header display with labels."""
 
-    def test_headers_without_metadata_use_row_col(self, one_way_table):
-        """Without metadata, headers use 'Row' and 'Col'."""
+    def test_headers_without_metadata_use_var_names(self, one_way_table):
+        """Without metadata, headers use the variable names."""
         headers = _headers_for_display(one_way_table)
-        assert headers[0] == "Row"
+        assert headers[0] == "gender"
 
     def test_headers_without_metadata_two_way(self, two_way_table):
-        """Two-way table without metadata uses 'Row' and 'Col'."""
+        """Two-way table without metadata uses the variable names."""
         headers = _headers_for_display(two_way_table)
-        assert headers[0] == "Row"
-        assert headers[1] == "Col"
+        assert headers[0] == "gender"
+        assert headers[1] == "region"
 
     def test_headers_with_metadata_use_var_labels(self, one_way_table_with_meta):
         """With metadata, headers use variable labels."""
@@ -217,10 +237,43 @@ class TestHeadersWithLabels:
         assert headers[1] == "Geographic region"
 
     def test_headers_with_use_labels_false(self, one_way_table_with_meta):
-        """With use_labels=False, headers use 'Row'/'Col' even with metadata."""
+        """With use_labels=False, headers use the variable names even with metadata."""
         one_way_table_with_meta.use_labels = False
         headers = _headers_for_display(one_way_table_with_meta)
-        assert headers[0] == "Row"
+        assert headers[0] == "gender"
+
+    @pytest.mark.parametrize(
+        ("fixture", "use_labels", "expected"),
+        [
+            ("two_way_table", None, ["gender", "region"]),
+            ("two_way_table_with_meta", False, ["gender", "region"]),
+            ("two_way_table_unlabelled_col", None, ["Sex of respondent", "internet"]),
+        ],
+    )
+    def test_unlabelled_variable_header_is_its_name(self, fixture, use_labels, expected, request):
+        tbl = request.getfixturevalue(fixture)
+        tbl.use_labels = use_labels
+        assert _headers_for_display(tbl)[:2] == expected
+
+    def test_unlabelled_col_header_printed(self, two_way_table_unlabelled_col):
+        out = str(two_way_table_unlabelled_col)
+        assert "internet" in out.splitlines()[2]
+        assert "Col" not in out
+
+    def test_one_way_keeps_header_of_variable_named_col(self):
+        tbl = Table.one_way(
+            rowvar="Col",
+            estimates=[CellEst(rowvar="a", colvar="", est=1.0, se=0.0, cv=0.0, lci=1.0, uci=1.0)],
+        )
+        assert _headers_for_display(tbl)[0] == "Col"
+        assert "Col" in str(tbl).splitlines()[2]
+
+    def test_labelled_key_columns_left_justified(self, two_way_table_with_meta):
+        lines = re.sub(r"\x1b\[[0-9;]*m", "", str(two_way_table_with_meta)).splitlines()
+        header = next(ln for ln in lines if "Estimate" in ln)
+        first_row = next(ln for ln in lines if "Male" in ln)
+        assert first_row.index("Male") == header.index("Sex of respondent")
+        assert first_row.index("North") == header.index("Geographic region")
 
     def test_headers_always_include_stats(self, one_way_table):
         """Headers always include statistic columns."""
@@ -473,9 +526,8 @@ class TestEdgeCases:
             ],
             metadata=store,
         )
-        # Should fall back to defaults
         headers = _headers_for_display(tbl)
-        assert headers[0] == "Row"  # Falls back to "Row"
+        assert headers[0] == "gender"
 
 
 if __name__ == "__main__":
