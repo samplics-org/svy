@@ -14,7 +14,7 @@ import msgspec
 import numpy as np
 import polars as pl
 
-from svy.errors import ModelWarning
+from svy.errors import Code, ModelWarning
 
 
 # Rust backend
@@ -31,7 +31,6 @@ from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import WhereArg
 from svy.core.variance_method import resolve_variance_method
 from svy.errors._api import guided_getattr
-from svy.errors._findings import WarnCode
 from svy.errors._model import ModelError
 from svy.estimation.replication import replicate_params
 from svy.regression.glm import GLMCoef, GLMFit, GLMStats, delta_var, offset_values
@@ -100,7 +99,7 @@ def _ref_from_label(feat: Cat, levels: list, value_labels: ResolvedLabels) -> An
         raise ModelError.ValueError(
             title="Reference label is ambiguous",
             detail=(f"Cat({feat.name!r}, ref={feat.ref!r}): the label names levels {matches!r}."),
-            code="CAT_REF_AMBIGUOUS",
+            code=Code.CAT_REF_AMBIGUOUS,
             where="GLM.fit",
             param=feat.name,
             got=feat.ref,
@@ -135,27 +134,27 @@ def _dummy_expr(var: str, level: Any) -> pl.Expr:
 _ENGINE_ERRORS: tuple[tuple[str, str, str], ...] = (
     (
         "rank deficient",
-        "RANK_DEFICIENT",
+        Code.RANK_DEFICIENT,
         "Drop the term named above, or the column it duplicates, and refit.",
     ),
     (
         "needs more observations than parameters",
-        "INSUFFICIENT_OBSERVATIONS",
+        Code.INSUFFICIENT_OBSERVATIONS,
         "Fit fewer terms, or widen the domain.",
     ),
     (
         "non-finite value",
-        "NON_FINITE_INPUT",
+        Code.NON_FINITE_INPUT,
         "Replace the infinite or NaN entries, or drop those rows.",
     ),
     (
         "theta must be finite and positive",
-        "NB_THETA_INVALID",
+        Code.NB_THETA_INVALID,
         "Omit theta= to estimate the dispersion from the data.",
     ),
     (
         "Pearson statistic is zero",
-        "NB_THETA_UNDEFINED",
+        Code.NB_THETA_UNDEFINED,
         "Check the response, or pass theta= to fit at a known value.",
     ),
     (
@@ -620,7 +619,7 @@ class GLM:
         if df.height < _n_before:
             self._sample.warn(
                 ModelWarning(
-                    code="GLM_ROWS_DROPPED",
+                    code=Code.GLM_ROWS_DROPPED,
                     title="Rows with invalid weights dropped",
                     detail=(
                         f"{_n_before - df.height} row(s) dropped: weight column {w_col!r} is "
@@ -648,7 +647,7 @@ class GLM:
                     + (" inside the where clause" if where is not None else "")
                     + ". Nothing was fitted."
                 ),
-                code="GLM_NO_OBSERVATIONS",
+                code=Code.GLM_NO_OBSERVATIONS,
                 where="GLM.fit",
                 hint=(
                     "Check the where clause and the weight column; rows with a missing "
@@ -684,7 +683,7 @@ class GLM:
                 if len(levels) < 2:
                     self._sample.warn(
                         ModelWarning(
-                            code="GLM_TERM_DROPPED",
+                            code=Code.GLM_TERM_DROPPED,
                             title="Categorical term dropped",
                             detail=(
                                 f"Categorical {feat.name!r} has fewer than 2 levels among the "
@@ -708,7 +707,7 @@ class GLM:
                             "A silently substituted reference would change the "
                             "meaning of every coefficient."
                         ),
-                        code="CAT_REF_NOT_FOUND",
+                        code=Code.CAT_REF_NOT_FOUND,
                         where="GLM.fit",
                         param=feat.name,
                         got=feat.ref,
@@ -780,7 +779,7 @@ class GLM:
                     "predictor, or a Cat level whose dummy name collides with "
                     "another column, makes the design matrix singular."
                 ),
-                code="DUPLICATE_TERM",
+                code=Code.DUPLICATE_TERM,
                 where="GLM.fit",
                 got=_dupes,
                 hint="List each predictor once.",
@@ -989,7 +988,7 @@ class GLM:
                     "spread of the refits to mean anything, and it is not. Pass "
                     "theta= to fit every replicate at a known dispersion."
                 ),
-                code="NB_REPLICATE_THETA",
+                code=Code.NB_REPLICATE_THETA,
                 where="GLM.fit",
                 hint="Estimate theta once on the full sample, then pass it.",
             )
@@ -1028,7 +1027,7 @@ class GLM:
                     raise ModelError.RuntimeError(
                         title="Replicate GLM fit failed",
                         detail=f"Refit with replicate weight {rc!r} failed: {r_err}",
-                        code="REPLICATE_FIT_FAILED",
+                        code=Code.REPLICATE_FIT_FAILED,
                         where="GLM.fit",
                     )
                 rep_betas.append(np.asarray(r_beta, dtype=float))
@@ -1090,7 +1089,7 @@ class GLM:
         if not converged:
             self._sample.warn(
                 ModelWarning(
-                    code=WarnCode.MAX_ITER_REACHED,
+                    code=Code.GLM_NOT_CONVERGED,
                     title="GLM did not converge",
                     detail=(
                         f"GLM did not converge in {iters} iterations (tol={tol:g}); the "
@@ -1310,7 +1309,7 @@ class GLM:
             got["replicate_refits"] = {feature_names[j]: c for j, c in rep_separated.items()}
         self._sample.warn(
             ModelWarning(
-                code=WarnCode.GLM_SEPARATION,
+                code=Code.GLM_SEPARATION,
                 title="Outcome separated: some coefficients are not identified",
                 detail=" ".join(parts),
                 where="GLM.fit",
@@ -1463,7 +1462,7 @@ class GLM:
                     "The model was fitted on columns that are absent from the "
                     f"data given here: {sorted(missing)!r}."
                 ),
-                code="PRED_COLUMN_MISSING",
+                code=Code.PRED_COLUMN_MISSING,
                 where="GLM.predict",
                 expected=sorted(missing),
                 got=sorted(columns),
@@ -1519,7 +1518,7 @@ class GLM:
                         "Coding them as the reference level would silently change "
                         "the prediction."
                     ),
-                    code="PRED_UNKNOWN_LEVEL",
+                    code=Code.PRED_UNKNOWN_LEVEL,
                     where="GLM.predict",
                     param=var,
                     got=bad,

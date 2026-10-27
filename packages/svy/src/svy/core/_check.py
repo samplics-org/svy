@@ -16,7 +16,7 @@ import numpy as np
 import polars as pl
 
 from svy.core.check import KeyCheck, MarginCheck, NestingCheck, WeightCheck
-from svy.errors import DataError
+from svy.errors import Code, DataError
 
 
 __all__ = ["check_weights", "check_key", "check_nesting", "margin_totals_check"]
@@ -104,7 +104,7 @@ def check_weights(data: pl.DataFrame | pl.LazyFrame, wgt: str) -> WeightCheck:
         raise DataError.ValueError(
             title="Weight column is not numeric",
             detail=f"{wgt!r} is {dtype}.",
-            code="WEIGHT_NOT_NUMERIC",
+            code=Code.WEIGHT_NOT_NUMERIC,
             where=where,
             param="wgt",
             got=str(dtype),

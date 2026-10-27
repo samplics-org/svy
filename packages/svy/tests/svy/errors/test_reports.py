@@ -15,7 +15,7 @@ import pytest
 import svy
 
 from svy.errors import ModelError, Severity, SvyError, SvyWarning, WarningStore
-from svy.errors._findings import SvyWarningsError, emit_finding, warn_no_sample
+from svy.errors._findings import SvyWarningsError, emit_finding
 
 
 _SHARED = {
@@ -51,9 +51,10 @@ def test_public_surface():
         "SvyError",
         "SvyWarning",
         "Severity",
-        "WarnCode",
+        "Code",
         "WarningStore",
         "UsageError",
+        "UsageWarning",
         "UnknownNameError",
         "SerializationError",
         *(
@@ -165,12 +166,6 @@ def test_emit_without_a_sample_raises_the_record():
     with pytest.warns(SvyWarning) as rec:
         emit_finding(SvyWarning(code="LOOSE", title="t", detail="d", where="w", hint="h"))
     assert (rec[0].message.code, rec[0].message.hint) == ("LOOSE", "h")
-
-
-def test_uncoded_message_keeps_its_text():
-    with pytest.warns(SvyWarning, match="Accessor 'x' is already defined") as rec:
-        warn_no_sample("Accessor 'x' is already defined on Sample. Overwriting.")
-    assert rec[0].message.code == "SVY_WARNING"
 
 
 # ---- one shape, one set of renderers --------------------------------------------

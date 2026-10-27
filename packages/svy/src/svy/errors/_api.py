@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from functools import cache
 from typing import Any, Callable, ClassVar, Iterable
 
-from ._base import SvyError
+from ._base import SvyError, SvyWarning
+from ._codes import Code
 
 
 _NAMESPACES = ("wrangling", "estimation", "categorical", "glm", "weighting", "sampling")
@@ -43,6 +44,7 @@ _ALIASES: dict[str, dict[str, str]] = {
     },
     "svy.errors": {
         "SvyUserWarning": "svy.errors.SvyWarning, its name since 2026.0",
+        "WarnCode": "svy.errors.Code, which lists every error and warning code since 2026.0",
         # Split by area in 2026.0; the builtin kind (ValueError, ...) catches across areas.
         "MethodError": "the error of the part of svy you called (EstimationError, "
         "WeightingError, DataError, ...), or the builtin it also is (ValueError, TypeError)",
@@ -161,14 +163,14 @@ class UsageError(SvyError):
     """svy's API used in a way it does not take: an unknown or removed name or
     argument, data of the wrong kind. Says what to use instead."""
 
-    _DEFAULT_CODE: ClassVar[str] = "USAGE_ERROR"
+    _DEFAULT_CODE: ClassVar[str] = Code.USAGE_ERROR
 
     @classmethod
     def data_in_design(cls, *, got: Any) -> "UsageError":
         return cls.TypeError(
             title="Design does not take data",
             detail="A Design names the design columns; the data goes to Sample.",
-            code="DESIGN_GIVEN_DATA",
+            code=Code.DESIGN_GIVEN_DATA,
             where="svy.Design",
             got=type(got).__name__,
             hint=f"Use {_SAMPLE_AND_DESIGN}.",
@@ -194,7 +196,7 @@ class UsageError(SvyError):
             detail=f"{where} got unexpected keyword argument(s): {', '.join(unknown)}"
             + ("; " + "; ".join(fixes) if fixes else "")
             + ".",
-            code="UNKNOWN_ARGUMENT",
+            code=Code.UNKNOWN_ARGUMENT,
             where=where,
             got=unknown,
             expected=known,
@@ -206,7 +208,7 @@ class UsageError(SvyError):
         return cls.TypeError(
             title="Data must be a polars DataFrame",
             detail=f"{where} takes a polars DataFrame or LazyFrame.",
-            code="DATA_NOT_POLARS",
+            code=Code.DATA_NOT_POLARS,
             where=where,
             got=f"{type(got).__module__}.{type(got).__name__}",
             hint="Convert with polars.from_pandas(df), or read with svy.read_csv and the other svy readers."
@@ -255,7 +257,7 @@ class UnknownNameError(UsageError, AttributeError):
         return cls(
             title=f"{label}.{name} does not exist",
             detail=detail,
-            code="UNKNOWN_NAME",
+            code=Code.UNKNOWN_NAME,
             where=label,
             got=name,
             hint=hint,
@@ -288,3 +290,8 @@ _DESIGN_ARGS = {
     "rep_weights": "rep_wgts",
     "probs": "prob",
 }
+
+
+@dataclass(eq=False)
+class UsageWarning(SvyWarning):
+    pass

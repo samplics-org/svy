@@ -24,7 +24,7 @@ import msgspec
 import numpy as np
 import polars as pl
 
-from svy.errors import EstimationError
+from svy.errors import Code, EstimationError
 from svy.errors._api import guided_getattr
 from svy.ui.printing import (
     make_panel,
@@ -114,7 +114,7 @@ class ContrastExpr:
             raise EstimationError.ValueError(
                 title="Not a linear contrast",
                 detail=f"{self!r} is nonlinear and has no coefficient form.",
-                code="CONTRAST_NONLINEAR",
+                code=Code.CONTRAST_NONLINEAR,
                 where="contrast",
             )
         out: dict[Any, float] = {}
@@ -262,7 +262,7 @@ def _evaluate(
             raise EstimationError.ValueError(
                 title="Division by a zero estimate",
                 detail=f"The denominator {node.right!r} evaluates to 0, so {node!r} is undefined.",
-                code="CONTRAST_DIV_ZERO",
+                code=Code.CONTRAST_DIV_ZERO,
                 where="contrast",
             )
         return va / vb, (ga * vb - va * gb) / (vb * vb)
@@ -272,7 +272,7 @@ def _evaluate(
             raise EstimationError.ValueError(
                 title="Log of a non-positive estimate",
                 detail=f"{node.node!r} evaluates to {v:g}, so {node!r} is undefined.",
-                code="CONTRAST_LOG_DOMAIN",
+                code=Code.CONTRAST_LOG_DOMAIN,
                 where="contrast",
             )
         return float(np.log(v)), g / v
@@ -455,7 +455,7 @@ def _normalize_contrasts(
                 "one contrast as {key: coef, ...}, or several as "
                 "{'name': expression-or-dict, ...}."
             ),
-            code="CONTRAST_INVALID_SPEC",
+            code=Code.CONTRAST_INVALID_SPEC,
             where="contrast",
             param="contrasts",
             got=type(contrasts).__name__,
@@ -475,7 +475,7 @@ def _normalize_contrasts(
                 "value is a coefficient (giving one contrast); mixing the "
                 "two forms is ambiguous."
             ),
-            code="CONTRAST_MIXED_SPEC",
+            code=Code.CONTRAST_MIXED_SPEC,
             where="contrast",
             param="contrasts",
         )
@@ -572,7 +572,7 @@ def linear_contrast(
         raise EstimationError.ValueError(
             title="Covariance shape mismatch",
             detail=f"Expected a {k}x{k} covariance matrix, got {vcov.shape}.",
-            code="CONTRAST_COV_SHAPE",
+            code=Code.CONTRAST_COV_SHAPE,
             where="contrast",
         )
 
@@ -594,7 +594,7 @@ def linear_contrast(
                     f"Contrast {name!r} references {unknown!r}, which do(es) "
                     f"not identify any estimate. Valid keys: {resolver.keys!r}."
                 ),
-                code="CONTRAST_UNKNOWN_KEY",
+                code=Code.CONTRAST_UNKNOWN_KEY,
                 where="contrast",
                 param="contrasts",
                 got=unknown,

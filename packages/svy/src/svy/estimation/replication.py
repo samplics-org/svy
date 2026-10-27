@@ -17,7 +17,7 @@ import svy_rs as rs
 
 from svy.core.enumerations import PopParam, QuantileMethod
 from svy.core.repwgts import BrrWgts, RepWgts, _RepWgtsBase
-from svy.errors import EstimationError
+from svy.errors import Code, EstimationError
 from svy.estimation.estimate import Estimate
 
 
@@ -26,6 +26,8 @@ if TYPE_CHECKING:
     from svy.core.sample import Sample
     from svy.estimation.base import Estimation
 
+
+_LENGTH_CODES = {"scale": Code.SCALE_LENGTH_MISMATCH, "rep_coefs": Code.REP_COEFS_LENGTH_MISMATCH}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -116,7 +118,7 @@ def replicate_params(
                 title=f"{_param} length mismatch",
                 detail=f"RepWeights.{_param} has {len(_supplied)} entries but "
                 f"{n_reps} replicate weight columns were resolved.",
-                code=f"{_param.upper()}_LENGTH_MISMATCH",
+                code=_LENGTH_CODES[_param],
                 where=where,
                 param=f"rep_wgts.{_param}",
                 expected=n_reps,

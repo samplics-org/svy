@@ -7,11 +7,12 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from ._base import SvyError, SvyWarning
+from ._codes import Code
 
 
 @dataclass(eq=False)
 class SelectionError(SvyError):
-    _DEFAULT_CODE: ClassVar[str] = "SELECTION_ERROR"
+    _DEFAULT_CODE: ClassVar[str] = Code.SELECTION_ERROR
 
 
 @dataclass(eq=False)

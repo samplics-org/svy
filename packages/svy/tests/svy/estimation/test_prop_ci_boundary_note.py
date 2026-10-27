@@ -21,7 +21,8 @@ import polars as pl
 import pytest
 
 from svy import Design, Sample, Singleton, col
-from svy.errors._findings import Severity, WarnCode
+from svy.errors import Code
+from svy.errors._findings import Severity
 from svy.estimation.base import prop_ci_boundary_note
 
 
@@ -66,7 +67,7 @@ def _plain(text: str) -> str:
 
 
 def _boundary(sample: Sample) -> list:
-    return sample.warnings.list(code=WarnCode.PROP_CI_BOUNDARY)
+    return sample.warnings.list(code=Code.PROP_CI_BOUNDARY)
 
 
 DOMAINS = {
@@ -98,7 +99,7 @@ def test_prop_records_note_without_warning(method, ci_method, domain):
     nan_rows = [e for e in r.estimates if math.isnan(e.lci)]
     assert len(nan_rows) == 2
     (f,) = r.findings
-    assert f.code == WarnCode.PROP_CI_BOUNDARY
+    assert f.code == Code.PROP_CI_BOUNDARY
     assert f.level == Severity.WARNING
     assert f.where == "estimation.prop"
     assert f.param == "ci_method" and f.got == ci_method

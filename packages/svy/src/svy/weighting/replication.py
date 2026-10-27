@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Literal, Sequence
 import numpy as np
 import polars as pl
 
-from svy.errors import SingletonWarning
+from svy.errors import Code, SingletonWarning
 
 
 try:
@@ -243,7 +243,7 @@ def _pair_variance_strata(
                     f"a multiple of 2, leaving a PSU with no partner: "
                     f"{_fmt_strata(unpairable)}."
                 ),
-                code="ODD_PSU_COUNT",
+                code=Code.ODD_PSU_COUNT,
                 where=where,
                 param="stratum",
                 expected="A multiple of 2 PSUs per stratum",
@@ -266,7 +266,7 @@ def _pair_variance_strata(
                     f"Found {_n_strata(len(small_strata))} with fewer: "
                     f"{_fmt_strata(small_strata)}."
                 ),
-                code="INSUFFICIENT_PSU",
+                code=Code.INSUFFICIENT_PSU,
                 where=where,
                 param="stratum",
                 expected="≥2 PSUs per stratum",
@@ -374,7 +374,7 @@ def _rule_units(
         sample.warn(
             SingletonWarning(
                 level=Severity.INFO,
-                code="SINGLETON_SKIPPED_IN_REPLICATES",
+                code=Code.SINGLETON_SKIPPED_IN_REPLICATES,
                 title="Singleton strata contribute nothing to the replicates",
                 detail=f"{len(sample._singletons or [])} singleton strata contribute nothing to "
                 "the replicate variance, as the design's rule Singleton('skip') declares.",

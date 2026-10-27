@@ -9,7 +9,7 @@ import polars as pl
 
 from svy.core.enumerations import MetadataSource
 from svy.core.panel import case_id_cols
-from svy.errors import DataError
+from svy.errors import Code, DataError
 from svy.wrangling.mutate import mutate as _mutate
 
 
@@ -74,7 +74,7 @@ def lag(
             raise DataError.ValueError(
                 title="name/cols length mismatch",
                 detail=f"{len(names)} name(s) for {len(col_list)} column(s).",
-                code="LAG_NAME_MISMATCH",
+                code=Code.LAG_NAME_MISMATCH,
                 where=ctx,
                 param="name",
             )

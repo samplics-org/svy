@@ -14,7 +14,7 @@ import msgspec
 import numpy as np
 import polars as pl
 
-from svy.errors import WeightingWarning
+from svy.errors import Code, WeightingWarning
 
 
 try:
@@ -28,7 +28,7 @@ from svy.core._check import margin_totals_check
 from svy.core.design import WgtAdjustment
 from svy.core.types import Category, ControlsType
 from svy.errors import WeightingError
-from svy.errors._findings import WarnCode, check_on_finding, finding_level
+from svy.errors._findings import check_on_finding, finding_level
 from svy.weighting._engine import (
     CELLS_PREFIX,
     _where_mask,
@@ -157,7 +157,7 @@ def controls_margins_template(
     result: dict[str, dict[Category, float]] = {}
     for mname, col in margins.items():
         levels = template_levels(
-            df, [col], na=na, na_label=na_label, where=where, code="MARGIN_NA"
+            df, [col], na=na, na_label=na_label, where=where, code=Code.MARGIN_NA
         )
         result[mname] = {lab: np.nan for lab in levels}
     return result
@@ -276,7 +276,7 @@ def rake(
                 f"{', '.join(f'{c!r} has {n} null value(s)' for c, n in with_nulls.items())}. "
                 "Raking requires complete data."
             ),
-            code="MARGIN_NA",
+            code=Code.MARGIN_NA,
             where=ctx,
             param=next(iter(with_nulls)),
             expected=0,
@@ -560,7 +560,7 @@ def rake(
     elif not converged:
         sample.warn(
             WeightingWarning(
-                code=WarnCode.MAX_ITER_REACHED,
+                code=Code.WEIGHTING_NOT_CONVERGED,
                 title=f"{what} did not converge",
                 detail=(
                     f"{what} did not converge after {cap} "

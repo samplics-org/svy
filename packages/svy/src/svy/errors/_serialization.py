@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import ClassVar, Optional, Sequence
 
 from ._base import SvyError
+from ._codes import Code
 
 
 _DOCS_URL = "https://svylab.com/docs/svy/tutorials/serialization.html"
@@ -17,7 +18,7 @@ class SerializationError(SvyError):
     struct, or a JSON payload cannot be decoded back into one.
     """
 
-    _DEFAULT_CODE: ClassVar[str] = "SERIALIZATION_ERROR"
+    _DEFAULT_CODE: ClassVar[str] = Code.SERIALIZATION_ERROR
 
     # ---- Encoding (result object -> payload) --------------------------------
 
@@ -32,7 +33,7 @@ class SerializationError(SvyError):
         return cls.TypeError(
             title="No serializer registered",
             detail=f"Objects of type '{got_type}' cannot be serialized.",
-            code="UNSUPPORTED_RESULT_TYPE",
+            code=Code.UNSUPPORTED_RESULT_TYPE,
             where="serialize",
             expected=list(registered),
             got=got_type,
@@ -50,7 +51,7 @@ class SerializationError(SvyError):
         return cls.ValueError(
             title="Not a design payload",
             detail=f"to_design() needs a DesignData, got '{got_type}'.",
-            code="PAYLOAD_NOT_A_DESIGN",
+            code=Code.PAYLOAD_NOT_A_DESIGN,
             where="to_design",
             expected=["DesignData"],
             got=got_type,
@@ -71,7 +72,7 @@ class SerializationError(SvyError):
         return cls.ValueError(
             title="No table for this payload",
             detail=f"'{got_type}' has no table view.",
-            code="PAYLOAD_NO_TABLE",
+            code=Code.PAYLOAD_NO_TABLE,
             where="to_polars",
             expected=list(supported),
             got=got_type,
@@ -91,7 +92,7 @@ class SerializationError(SvyError):
         return cls.ValueError(
             title="Payload missing 'kind'",
             detail="The payload has no 'kind' discriminator, so its result type cannot be determined.",
-            code="PAYLOAD_MISSING_KIND",
+            code=Code.PAYLOAD_MISSING_KIND,
             where=where,
             param="kind",
             hint=hint,
@@ -111,7 +112,7 @@ class SerializationError(SvyError):
         return cls.ValueError(
             title="Unknown payload kind",
             detail=f"No payload struct is registered for kind '{kind}'.",
-            code="PAYLOAD_UNKNOWN_KIND",
+            code=Code.PAYLOAD_UNKNOWN_KIND,
             where=where,
             param="kind",
             expected=list(known),

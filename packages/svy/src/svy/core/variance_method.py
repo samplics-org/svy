@@ -9,8 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from svy.errors import DesignWarning
-from svy.errors._findings import WarnCode
+from svy.errors import Code, DesignWarning
 
 
 if TYPE_CHECKING:
@@ -85,7 +84,7 @@ def resolve_variance_method(sample: Sample, method: str | None, *, where: str) -
     if design.rep_wgts is not None and design.stratum is None and design.variance_psu is None:
         sample.warn(
             DesignWarning(
-                code=WarnCode.TAYLOR_WITHOUT_DESIGN,
+                code=Code.TAYLOR_WITHOUT_DESIGN,
                 title="Taylor variance on a design with no stratum or psu",
                 detail=(
                     "The design carries replicate weights "

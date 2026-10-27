@@ -39,11 +39,10 @@ from svy.core.types import (
     WhereArg,
     _MissingType,
 )
-from svy.errors import DesignError, DesignWarning, SvyError
+from svy.errors import Code, DesignError, DesignWarning, SvyError
 from svy.errors._findings import (
     Severity,
     SvyWarning,
-    WarnCode,
     WarningStore,
     findings_to,
 )
@@ -327,7 +326,7 @@ class Sample:
                 )
             self.warn(
                 DesignWarning(
-                    code=WarnCode.JACKKNIFE_KIND_UNSPECIFIED,
+                    code=Code.JACKKNIFE_KIND_UNSPECIFIED,
                     title=f"Jackknife kind {rw.kind!r} does not match the units",
                     detail=(
                         f"kind={rw.kind!r} implies {expected} replicates "
@@ -371,7 +370,7 @@ class Sample:
                 self._design = design = design.update(rep_wgts=rw)
                 self.warn(
                     DesignWarning(
-                        code=WarnCode.JACKKNIFE_KIND_UNSPECIFIED,
+                        code=Code.JACKKNIFE_KIND_UNSPECIFIED,
                         level=Severity.INFO,
                         title=f"Jackknife kind read as {inferred!r} from the declared units",
                         detail=(
@@ -386,7 +385,7 @@ class Sample:
             elif n_strata > 1 and rw.scale is None and rw.rep_coefs is None:
                 self.warn(
                     DesignWarning(
-                        code=WarnCode.JACKKNIFE_KIND_UNSPECIFIED,
+                        code=Code.JACKKNIFE_KIND_UNSPECIFIED,
                         title="Stratified design with an unspecified jackknife kind",
                         detail=(
                             f"The design has {n_strata} strata, but the replicate "
@@ -566,7 +565,7 @@ class Sample:
             )
         self.warn(
             DesignWarning(
-                code=WarnCode.JACKKNIFE_COEFS_UNAVAILABLE,
+                code=Code.JACKKNIFE_COEFS_UNAVAILABLE,
                 title="JKn coefficients cannot be derived",
                 detail=(
                     f"rep_wgts declares kind='jkn' but {reason}. Replication "
@@ -1343,7 +1342,7 @@ class Sample:
             try:
                 self.warn(
                     DesignWarning(
-                        code="INVALID_WEIGHT_ROWS_REMOVED",
+                        code=Code.INVALID_WEIGHT_ROWS_REMOVED,
                         title="Rows removed due to invalid weights",
                         detail=(f"Removed {n_removed} row(s) where {wgt_col!r} was NaN/inf/<=0."),
                         where="sample._remove_invalid_weight",
@@ -2090,7 +2089,7 @@ class Sample:
                 raise DesignError.ValueError(
                     title="to_code reads parquet only",
                     detail=f"data= points to {path!r}, which is not a .parquet file.",
-                    code="TO_CODE_DATA_NOT_PARQUET",
+                    code=Code.TO_CODE_DATA_NOT_PARQUET,
                     where="Sample.to_code",
                     param="data",
                     got=path,
@@ -2236,7 +2235,7 @@ class Sample:
                 raise DesignError.ValueError(
                     title="Invalid row count",
                     detail="Parameter 'n' must be a non-negative integer.",
-                    code="INVALID_N",
+                    code=Code.INVALID_N,
                     where="sample.show_data",
                     param="n",
                     got=n,
@@ -2245,7 +2244,7 @@ class Sample:
                 raise DesignError.ValueError(
                     title="Invalid offset",
                     detail="Offset must be non-negative.",
-                    code="INVALID_OFFSET",
+                    code=Code.INVALID_OFFSET,
                     where="sample.show_data",
                     param="offset",
                     got=offset,
@@ -2257,7 +2256,7 @@ class Sample:
                 raise DesignError.TypeError(
                     title="Invalid order type",
                     detail=f"'order_type' must be one of {allowed_order}.",
-                    code="INVALID_ORDER_TYPE",
+                    code=Code.INVALID_ORDER_TYPE,
                     where="sample.show_data",
                     param="order_type",
                     expected=allowed_order,
@@ -2276,7 +2275,7 @@ class Sample:
                             raise DesignError.KeyError(
                                 title="Filter column not found",
                                 detail=f"Column {k!r} not in data.",
-                                code="MISSING_FILTER_COLUMN",
+                                code=Code.MISSING_FILTER_COLUMN,
                                 where="sample.show_data",
                                 got=k,
                             )
@@ -2285,7 +2284,7 @@ class Sample:
                                 raise DesignError.ValueError(
                                     title="Empty membership filter",
                                     detail=f"Value for {k!r} is empty.",
-                                    code="EMPTY_IN_VALUES",
+                                    code=Code.EMPTY_IN_VALUES,
                                     where="sample.show_data",
                                     param=str(k),
                                 )
@@ -2309,7 +2308,7 @@ class Sample:
                                 raise DesignError.TypeError(
                                     title="Unsupported filter element",
                                     detail=f"Got {type(e)}.",
-                                    code="UNSUPPORTED_FILTER_EXPR",
+                                    code=Code.UNSUPPORTED_FILTER_EXPR,
                                     where="sample.show_data",
                                 )
                         acc2 = compiled[0]
@@ -2322,7 +2321,7 @@ class Sample:
                     raise DesignError.TypeError(
                         title="Unsupported filter",
                         detail=f"Type {type(where)} not supported.",
-                        code="UNSUPPORTED_WHERE",
+                        code=Code.UNSUPPORTED_WHERE,
                         where="sample.show_data",
                     )
             except SvyError:
@@ -2331,7 +2330,7 @@ class Sample:
                 raise DesignError.RuntimeError(
                     title="Failed to build filter",
                     detail=str(ex),
-                    code="FILTER_BUILD_FAILED",
+                    code=Code.FILTER_BUILD_FAILED,
                     where="sample.show_data",
                 ) from ex
 
@@ -2347,7 +2346,7 @@ class Sample:
                 raise DesignError.KeyError(
                     title="Column(s) not found",
                     detail=str(ex),
-                    code="MISSING_COLUMNS",
+                    code=Code.MISSING_COLUMNS,
                     where="sample.show_data",
                     param="columns",
                     got=columns,
@@ -2358,7 +2357,7 @@ class Sample:
                 raise DesignError.KeyError(
                     title="Column(s) not found",
                     detail=f"Missing: {', '.join(map(repr, missing))}.",
-                    code="MISSING_COLUMNS",
+                    code=Code.MISSING_COLUMNS,
                     where="sample.show_data",
                     got=missing,
                 )
@@ -2374,7 +2373,7 @@ class Sample:
                     raise DesignError.KeyError(
                         title="Sort column(s) not found",
                         detail=f"Missing in selection: {', '.join(map(repr, miss_sort))}.",
-                        code="MISSING_SORT_COLUMNS",
+                        code=Code.MISSING_SORT_COLUMNS,
                         where="sample.show_data",
                         got=miss_sort,
                     )
@@ -2420,7 +2419,7 @@ class Sample:
                     raise DesignError.RuntimeError(
                         title="Slicing failed",
                         detail=str(e),
-                        code="SLICE_FAILED",
+                        code=Code.SLICE_FAILED,
                         where="sample.show_data",
                         param="n",
                         got=n,

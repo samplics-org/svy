@@ -54,7 +54,7 @@ from typing import TYPE_CHECKING, Any, Iterable, Mapping
 import msgspec
 import numpy as np
 
-from svy.errors import DesignError, SingletonWarning
+from svy.errors import Code, DesignError, SingletonWarning
 
 
 if TYPE_CHECKING:
@@ -538,7 +538,7 @@ def warn_singleton_dropped(rule: Singleton, reason: str, *, sample: Any = None) 
     with findings_to(sample) if sample is not None else nullcontext():
         emit_finding(
             SingletonWarning(
-                code="SINGLETON_RULE_CLEARED",
+                code=Code.SINGLETON_RULE_CLEARED,
                 title="Singleton rule removed",
                 detail=singleton_dropped_message(rule, reason),
                 where="Sample.update_design",
@@ -633,7 +633,7 @@ class SingletonPart(DesignPart):
             raise SerializationError.ValueError(
                 title="Cannot save the singleton rule",
                 detail="a collapse rule with a Generator rstate cannot be saved.",
-                code="SINGLETON_RULE_NOT_SAVABLE",
+                code=Code.SINGLETON_RULE_NOT_SAVABLE,
                 param="rstate",
                 hint="Use an int seed, e.g. svy.Singleton('collapse', rstate=42).",
             )
@@ -648,7 +648,7 @@ class SingletonPart(DesignPart):
             raise SerializationError.ValueError(
                 title="Cannot save the singleton rule",
                 detail="a collapse rule chosen by a callable cannot be saved.",
-                code="SINGLETON_RULE_NOT_SAVABLE",
+                code=Code.SINGLETON_RULE_NOT_SAVABLE,
                 param="using",
                 hint="Save the mapping it produced, which the handled column of "
                 "sample.singletons shows: svy.Singleton('collapse', using={singleton: target}).",

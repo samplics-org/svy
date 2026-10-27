@@ -17,7 +17,7 @@ import polars as pl
 from msgspec import field
 
 from svy.core.containers import FDist, TDist
-from svy.errors import ModelError
+from svy.errors import Code, ModelError
 from svy.errors._findings import SvyWarning
 from svy.ui.printing import (
     finding_notes,
@@ -215,7 +215,7 @@ class GLMFit(msgspec.Struct, frozen=True):
         raise ModelError.ValueError(
             title="No degrees of freedom on this fit",
             detail="The fit carries no Wald statistics to take the design df from.",
-            code="GLM_NO_DF",
+            code=Code.GLM_NO_DF,
             where="GLM.contrast",
         )
 
@@ -238,7 +238,7 @@ class GLMFit(msgspec.Struct, frozen=True):
             raise ModelError.ValueError(
                 title="No covariance on this fit",
                 detail="The fit carries no coefficient covariance matrix.",
-                code="GLM_NO_COVARIANCE",
+                code=Code.GLM_NO_COVARIANCE,
                 where="GLM.contrast",
             )
         values = np.array([c.est for c in self.coefs], dtype=float)
@@ -284,7 +284,7 @@ class GLMFit(msgspec.Struct, frozen=True):
                     if missing
                     else "The fit carries no coefficient covariance matrix."
                 ),
-                code="GLM_UNKNOWN_TERM",
+                code=Code.GLM_UNKNOWN_TERM,
                 where="GLM.term_test",
                 param="term",
                 got=name,

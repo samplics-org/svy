@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import math
 
-from svy.errors._findings import warn_no_sample
+from svy.errors import Code, SelectionWarning
+from svy.errors._findings import emit_finding
 
 
 # ---------------------------------------------------------------------------
@@ -46,9 +47,14 @@ def _apply_population_caps(
             out[g] = group_sizes[g]
         receivers = [g for g in out if out[g] < group_sizes[g]]
         if not receivers:
-            warn_no_sample(
-                f"{label}: total allocation reduced by {surplus} because every "
-                "group is capped at its frame size."
+            emit_finding(
+                SelectionWarning(
+                    code=Code.ALLOCATION_CAPPED,
+                    title="Allocation reduced by the frame sizes",
+                    detail=f"{label}: total allocation reduced by {surplus} because every "
+                    "group is capped at its frame size.",
+                    where="SampleSize.allocate",
+                )
             )
             return out
         m = np.array([max(measure.get(g, 0.0), 0.0) for g in receivers], dtype=np.float64)
@@ -88,9 +94,14 @@ def _allocate_by_measure(
     floored = np.where(N > 0, np.maximum(np.floor(raw), min_n), 0.0)
     remainder = n_total - int(floored.sum())
     if remainder < 0:
-        warn_no_sample(
-            f"{label}: min_n={min_n} floors exceed n_total="
-            f"{n_total}; min_n is not honored and allocation is rescaled."
+        emit_finding(
+            SelectionWarning(
+                code=Code.ALLOCATION_MIN_N_IGNORED,
+                title="min_n not honored",
+                detail=f"{label}: min_n={min_n} floors exceed n_total="
+                f"{n_total}; min_n is not honored and allocation is rescaled.",
+                where="SampleSize.allocate",
+            )
         )
         floored = np.floor(raw * (n_total / raw.sum()))
         remainder = n_total - int(floored.sum())
@@ -140,9 +151,14 @@ def _proportional_allocation(
     if n_total <= 0:
         raise ValueError(f"proportional_allocation: n_total must be > 0, got {n_total}.")
     if n_total > total_pop:
-        warn_no_sample(
-            f"proportional_allocation: n_total={n_total} exceeds the total frame "
-            f"size of {total_pop}. Capping at frame size."
+        emit_finding(
+            SelectionWarning(
+                code=Code.ALLOCATION_EXCEEDS_FRAME,
+                title="Allocation capped at the frame size",
+                detail=f"proportional_allocation: n_total={n_total} exceeds the total frame "
+                f"size of {total_pop}. Capping at frame size.",
+                where="SampleSize.allocate",
+            )
         )
         n_total = total_pop
 
@@ -189,9 +205,14 @@ def _neyman_allocation(
         raise ValueError(f"neyman_allocation: n_total must be > 0, got {n_total}.")
     total_pop = sum(group_sizes.values())
     if cap_at_population and n_total > total_pop:
-        warn_no_sample(
-            f"neyman_allocation: n_total={n_total} exceeds the total frame "
-            f"size of {total_pop}. Capping at frame size."
+        emit_finding(
+            SelectionWarning(
+                code=Code.ALLOCATION_EXCEEDS_FRAME,
+                title="Allocation capped at the frame size",
+                detail=f"neyman_allocation: n_total={n_total} exceeds the total frame "
+                f"size of {total_pop}. Capping at frame size.",
+                where="SampleSize.allocate",
+            )
         )
         n_total = total_pop
 
@@ -225,9 +246,14 @@ def _equal_allocation(
     if total_pop == 0:
         raise ValueError("equal_allocation: total frame size is 0.")
     if cap_at_population and n_total > total_pop:
-        warn_no_sample(
-            f"equal_allocation: n_total={n_total} exceeds the total frame "
-            f"size of {total_pop}. Capping at frame size."
+        emit_finding(
+            SelectionWarning(
+                code=Code.ALLOCATION_EXCEEDS_FRAME,
+                title="Allocation capped at the frame size",
+                detail=f"equal_allocation: n_total={n_total} exceeds the total frame "
+                f"size of {total_pop}. Capping at frame size.",
+                where="SampleSize.allocate",
+            )
         )
         n_total = total_pop
     measure = {g: 1.0 if size > 0 else 0.0 for g, size in group_sizes.items()}

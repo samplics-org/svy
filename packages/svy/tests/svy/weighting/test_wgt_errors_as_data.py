@@ -379,7 +379,7 @@ def test_convergence_failed(s):
             max_iter=1,
             tol=1e-15,
         ),
-        "CONVERGENCE_FAILED",
+        "WEIGHTING_NOT_CONVERGED",
     )
     assert err.got["max_iter"] == 1 and err.got["max_margin_error"] > 0
     assert err.expected == {"tol": 1e-15}
@@ -392,11 +392,11 @@ def test_trim_cycles_not_converged():
     cfg = TrimConfig(upper=4.0, max_iter=2)
     raises(
         lambda: t.weighting.poststratify({"a": 10, "b": 6}, cells="c", trimming=cfg),
-        "CONVERGENCE_FAILED",
+        "WEIGHTING_NOT_CONVERGED",
     )
     raises(
         lambda: t.weighting.calibrate(controls={Cat("c"): {"a": 10, "b": 6}}, trimming=cfg),
-        "CONVERGENCE_FAILED",
+        "WEIGHTING_NOT_CONVERGED",
     )
 
 

@@ -15,7 +15,7 @@ Coverage:
   - Design update
   - Chaining
   - Warning codes: NEGATIVE_WEIGHT, ZERO_WEIGHT, REPLICATE_SKIPPED,
-                   DOMAIN_SKIPPED, MAX_ITER_REACHED, WEIGHT_SUM_CHANGED,
+                   DOMAIN_SKIPPED, WEIGHTING_NOT_CONVERGED, WEIGHT_SUM_CHANGED,
                    WEIGHT_ADJ_AUDIT
   - TRIM_INFEASIBLE: bounds redistribution cannot honour (mean outside them)
   - Edge cases: all-equal weights, single unit, zero-weight units,
@@ -35,8 +35,8 @@ from svy_rs._internal import trim_weights as _rust_trim_weights  # type: ignore[
 
 from svy import BootstrapWgts, SvyWarning
 from svy.core.sample import Design, Sample
-from svy.errors import WeightingError
-from svy.errors._findings import Severity, WarnCode
+from svy.errors import Code, WeightingError
+from svy.errors._findings import Severity
 from svy.weighting.types import (
     Threshold,
     TrimConfig,
@@ -106,7 +106,7 @@ def _make_sample(weights: list[float], domain: list[str] | None = None) -> Sampl
     return Sample(data=pl.DataFrame(data), design=Design(wgt="weight"))
 
 
-def _warnings_of(sample: Sample, code: WarnCode) -> list:
+def _warnings_of(sample: Sample, code: str) -> list:
     return sample._warnings.list(code=code)
 
 
@@ -589,14 +589,14 @@ class TestTrimRedistribute:
 
     def test_redistribute_false_emits_weight_sum_changed_warning(self, skewed_sample):
         out = skewed_sample.weighting.trim(upper=50.0, redistribute=False)
-        warns = _warnings_of(out, WarnCode.WEIGHT_SUM_CHANGED)
+        warns = _warnings_of(out, Code.WEIGHT_SUM_CHANGED)
         assert len(warns) == 1
         # redistribute=False asked for this: recorded, not raised
         assert warns[0].level == Severity.INFO
 
     def test_redistribute_true_no_weight_sum_warning(self, skewed_sample):
         out = skewed_sample.weighting.trim(upper=50.0, redistribute=True)
-        warns = _warnings_of(out, WarnCode.WEIGHT_SUM_CHANGED)
+        warns = _warnings_of(out, Code.WEIGHT_SUM_CHANGED)
         assert len(warns) == 0
 
 
@@ -683,7 +683,7 @@ class TestTrimByDomain:
         )
         with pytest.warns(SvyWarning, match=r"\[DOMAIN_SKIPPED\]"):
             out = sample.weighting.trim(upper=50.0, by="domain", min_cell_size=10)
-        warns = _warnings_of(out, WarnCode.DOMAIN_SKIPPED)
+        warns = _warnings_of(out, Code.DOMAIN_SKIPPED)
         assert len(warns) == 1
         assert "B" in warns[0].detail
 
@@ -696,7 +696,7 @@ class TestTrimByDomain:
             design=Design(wgt="weight"),
         )
         out = sample.weighting.trim(upper=50.0, by="domain", min_cell_size=5, redistribute=False)
-        warns = _warnings_of(out, WarnCode.DOMAIN_SKIPPED)
+        warns = _warnings_of(out, Code.DOMAIN_SKIPPED)
         assert len(warns) == 0
 
 
@@ -710,12 +710,12 @@ class TestTrimWarnings:
         sample = _make_sample([-1.0, 10.0, 10.0])
         with pytest.raises(WeightingError, match="NEGATIVE_WEIGHTS"):
             sample.weighting.trim(upper=50.0, inplace=True)
-        assert _warnings_of(sample, WarnCode.NEGATIVE_WEIGHT) == []
+        assert _warnings_of(sample, "NEGATIVE_WEIGHT") == []
 
     def test_zero_weight_emits_info_warning(self):
         sample = _make_sample([0.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0])
         out = sample.weighting.trim(upper=50.0, min_cell_size=1)
-        warns = _warnings_of(out, WarnCode.ZERO_WEIGHT)
+        warns = _warnings_of(out, Code.ZERO_WEIGHT)
         assert len(warns) == 1
         assert warns[0].level == Severity.INFO
 
@@ -727,7 +727,7 @@ class TestTrimWarnings:
 
     def test_no_zero_weight_warning_when_none_present(self, skewed_sample):
         out = skewed_sample.weighting.trim(upper=50.0)
-        warns = _warnings_of(out, WarnCode.ZERO_WEIGHT)
+        warns = _warnings_of(out, Code.ZERO_WEIGHT)
         assert len(warns) == 0
 
     def test_replicate_weights_are_trimmed(self, skewed_sample):
@@ -745,7 +745,7 @@ class TestTrimWarnings:
         out = sample.weighting.trim(upper=50.0)
 
         # No REPLICATE_SKIPPED warning
-        assert len(_warnings_of(out, WarnCode.REPLICATE_SKIPPED)) == 0
+        assert len(_warnings_of(out, "REPLICATE_SKIPPED")) == 0
 
         # New rep columns created with trim_wgt prefix
         assert "trim_wgt1" in out.data.columns
@@ -765,32 +765,32 @@ class TestTrimWarnings:
 
     def test_no_replicate_warning_when_no_rep_weights(self, skewed_sample):
         out = skewed_sample.weighting.trim(upper=50.0)
-        warns = _warnings_of(out, WarnCode.REPLICATE_SKIPPED)
+        warns = _warnings_of(out, "REPLICATE_SKIPPED")
         assert len(warns) == 0
 
     def test_max_iter_reached_warning(self, skewed_sample):
-        with pytest.warns(SvyWarning, match=r"\[MAX_ITER_REACHED\]"):
+        with pytest.warns(SvyWarning, match=r"\[WEIGHTING_NOT_CONVERGED\]"):
             out = skewed_sample.weighting.trim(
                 upper=50.0, redistribute=True, max_iter=1, tol=1e-20, on_nonconvergence="warn"
             )
-        warns = _warnings_of(out, WarnCode.MAX_ITER_REACHED)
+        warns = _warnings_of(out, Code.WEIGHTING_NOT_CONVERGED)
         assert len(warns) >= 1
         assert warns[0].level == Severity.WARNING
 
     def test_no_max_iter_warning_when_converged(self, skewed_sample):
         out = skewed_sample.weighting.trim(upper=50.0, max_iter=100, tol=1e-6)
-        warns = _warnings_of(out, WarnCode.MAX_ITER_REACHED)
+        warns = _warnings_of(out, Code.WEIGHTING_NOT_CONVERGED)
         assert len(warns) == 0
 
     def test_audit_record_emitted_info(self, skewed_sample):
         out = skewed_sample.weighting.trim(upper=50.0)
-        audits = _warnings_of(out, WarnCode.WEIGHT_ADJ_AUDIT)
+        audits = _warnings_of(out, Code.WEIGHT_ADJ_AUDIT)
         assert len(audits) == 1
         assert audits[0].level == Severity.INFO
 
     def test_audit_record_extra_has_expected_keys(self, skewed_sample):
         out = skewed_sample.weighting.trim(upper=50.0)
-        audit = _warnings_of(out, WarnCode.WEIGHT_ADJ_AUDIT)[0]
+        audit = _warnings_of(out, Code.WEIGHT_ADJ_AUDIT)[0]
         for key in (
             "upper_threshold",
             "lower_threshold",
@@ -807,7 +807,7 @@ class TestTrimWarnings:
 
     def test_audit_record_per_domain_when_by_set(self, domain_sample):
         out = domain_sample.weighting.trim(upper=50.0, by="domain", min_cell_size=1)
-        audits = _warnings_of(out, WarnCode.WEIGHT_ADJ_AUDIT)
+        audits = _warnings_of(out, Code.WEIGHT_ADJ_AUDIT)
         # One audit record per domain
         assert len(audits) == 2
         domains_reported = {a.extra["domain"] for a in audits}
@@ -822,14 +822,14 @@ class TestTrimWarnings:
 class TestTrimConvergence:
     def test_converges_with_sufficient_iterations(self, skewed_sample):
         out = skewed_sample.weighting.trim(upper=50.0, max_iter=50, tol=1e-6)
-        audits = _warnings_of(out, WarnCode.WEIGHT_ADJ_AUDIT)
+        audits = _warnings_of(out, Code.WEIGHT_ADJ_AUDIT)
         assert audits[0].extra["converged"] is True
 
     # One iteration is not enough here; the count is what is checked.
-    @pytest.mark.filterwarnings(r"ignore:\[MAX_ITER_REACHED\]:svy.SvyWarning")
+    @pytest.mark.filterwarnings(r"ignore:\[WEIGHTING_NOT_CONVERGED\]:svy.SvyWarning")
     def test_max_iter_1_records_one_iteration(self, skewed_sample):
         out = skewed_sample.weighting.trim(upper=50.0, max_iter=1, on_nonconvergence="warn")
-        audits = _warnings_of(out, WarnCode.WEIGHT_ADJ_AUDIT)
+        audits = _warnings_of(out, Code.WEIGHT_ADJ_AUDIT)
         assert audits[0].extra["iterations"] == 1
 
 
@@ -1086,7 +1086,7 @@ class TestTrimInfeasible:
         s = _make_sample([5.0] * 10)
         out = s.weighting.trim(upper=3.0, redistribute=False)
         assert out.data[TRIM_WGT].sum() == pytest.approx(30.0)
-        changed = _warnings_of(out, WarnCode.WEIGHT_SUM_CHANGED)
+        changed = _warnings_of(out, Code.WEIGHT_SUM_CHANGED)
         assert len(changed) == 1 and changed[0].level == Severity.INFO
 
     @pytest.mark.parametrize("wgt_name", ["trim_wgt", None])

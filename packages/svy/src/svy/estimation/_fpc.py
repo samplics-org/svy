@@ -13,7 +13,7 @@ import logging
 import polars as pl
 
 from svy.core.design import PopSize
-from svy.errors import EstimationError
+from svy.errors import Code, EstimationError
 
 
 log = logging.getLogger(__name__)
@@ -103,7 +103,7 @@ def build_fpc_psu_column(
             title="Invalid FPC values",
             detail=f"FPC column '{pop_col}' contains values < 1 ({min_val}). "
             f"Population sizes must be counts (N >= 1), not sampling fractions.",
-            code="FPC_INVALID_VALUES",
+            code=Code.FPC_INVALID_VALUES,
             where=_WHERE,
             param="pop_size",
             expected="N >= 1 (population counts)",
@@ -123,7 +123,7 @@ def build_fpc_psu_column(
                 title="FPC not constant within strata",
                 detail=f"FPC column '{pop_col}' varies within strata: {bad_strata}. "
                 f"Population size must be the same for all observations in a stratum.",
-                code="FPC_NOT_CONSTANT",
+                code=Code.FPC_NOT_CONSTANT,
                 where=_WHERE,
                 param="pop_size",
                 expected="constant N within each stratum",
@@ -151,7 +151,7 @@ def build_fpc_psu_column(
                 title="FPC population size < sample size",
                 detail=f"FPC column '{pop_col}' has population size < sample size "
                 f"in strata: {bad_strata}.",
-                code="FPC_POP_LT_SAMPLE",
+                code=Code.FPC_POP_LT_SAMPLE,
                 where=_WHERE,
                 param="pop_size",
                 expected="N >= n (population >= sampled PSUs)",
@@ -175,7 +175,7 @@ def build_fpc_psu_column(
                 title="FPC not constant in unstratified design",
                 detail=f"FPC column '{pop_col}' has {n_unique} distinct values, "
                 f"but must be constant for unstratified designs.",
-                code="FPC_NOT_CONSTANT",
+                code=Code.FPC_NOT_CONSTANT,
                 where=_WHERE,
                 param="pop_size",
                 expected="constant N across all observations",
@@ -192,7 +192,7 @@ def build_fpc_psu_column(
                 title="FPC population size < sample size",
                 detail=f"FPC column '{pop_col}' has population size ({n_pop}) < "
                 f"sample size ({n_h}).",
-                code="FPC_POP_LT_SAMPLE",
+                code=Code.FPC_POP_LT_SAMPLE,
                 where=_WHERE,
                 param="pop_size",
                 expected=f"N >= {n_h}",
@@ -238,7 +238,7 @@ def build_fpc_ssu_column(
             title="Invalid FPC values",
             detail=f"FPC column '{pop_col}' contains values < 1 ({min_val}). "
             f"Population sizes must be counts (N >= 1), not sampling fractions.",
-            code="FPC_INVALID_VALUES",
+            code=Code.FPC_INVALID_VALUES,
             where=_WHERE,
             param="pop_size.ssu",
             expected="M >= 1 (population counts)",
@@ -255,7 +255,7 @@ def build_fpc_ssu_column(
             title="FPC not constant within PSUs",
             detail=f"FPC column '{pop_col}' varies within PSUs: {bad_psus}. "
             f"SSU population size must be the same for all observations in a PSU.",
-            code="FPC_NOT_CONSTANT",
+            code=Code.FPC_NOT_CONSTANT,
             where=_WHERE,
             param="pop_size.ssu",
             expected="constant M within each PSU",
@@ -283,7 +283,7 @@ def build_fpc_ssu_column(
             title="FPC population size < sample size",
             detail=f"FPC column '{pop_col}' has population size < sample size "
             f"in PSUs: {bad_psus}.",
-            code="FPC_POP_LT_SAMPLE",
+            code=Code.FPC_POP_LT_SAMPLE,
             where=_WHERE,
             param="pop_size.ssu",
             expected="M >= m (population >= sampled SSUs)",

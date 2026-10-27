@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar, Iterable, Mapping, Optional, Self, Sequence
 
 from ._base import SvyError, SvyWarning
+from ._codes import Code
 
 
 _SHOWN = 8
@@ -67,7 +68,7 @@ def _sorted(values: Iterable[Any]) -> list[Any]:
 class WeightingError(SvyError):
     """A weighting call that cannot run on the inputs given."""
 
-    _DEFAULT_CODE: ClassVar[str] = "WEIGHTING_ERROR"
+    _DEFAULT_CODE: ClassVar[str] = Code.WEIGHTING_ERROR
 
     # ---- targets (controls / shares / resp_mapping) ----------------------
 
@@ -103,7 +104,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="Target keys do not match the data",
             detail=f"Mapping keys mismatch in `{param}`: " + "; ".join(parts) + ".",
-            code="CONTROLS_KEYS_MISMATCH",
+            code=Code.CONTROLS_KEYS_MISMATCH,
             where=where,
             param=param,
             expected=list(levels),
@@ -119,7 +120,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="Target key matches several levels",
             detail=f"The key {show(key)} in `{param}` reads as each of {show_list(m)}.",
-            code="CONTROLS_KEY_AMBIGUOUS",
+            code=Code.CONTROLS_KEY_AMBIGUOUS,
             where=where,
             param=param,
             expected=m,
@@ -134,7 +135,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="Two keys name the same level",
             detail=f"The keys {show_list(keys)} in `{param}` both name the level {show(level)}.",
-            code="CONTROLS_KEY_DUPLICATE",
+            code=Code.CONTROLS_KEY_DUPLICATE,
             where=where,
             param=param,
             expected=level,
@@ -153,7 +154,7 @@ class WeightingError(SvyError):
                 f"`{param}` values must all be {kind}; "
                 f"got {', '.join(f'{show(k)}: {show(v)}' for k, v in list(bad.items())[:_SHOWN])}."
             ),
-            code="CONTROLS_VALUE_INVALID",
+            code=Code.CONTROLS_VALUE_INVALID,
             where=where,
             param=param,
             expected="finite number >= 0" if nonneg else "finite number",
@@ -168,7 +169,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="Targets are all zero",
             detail=f"`{param}` must include at least one positive value.",
-            code="CONTROLS_ALL_ZERO",
+            code=Code.CONTROLS_ALL_ZERO,
             where=where,
             param=param,
             hint="At least one level needs a positive target.",
@@ -179,7 +180,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="No targets",
             detail=f"{method}() needs targets: Either controls= or shares= must be specified.",
-            code="CONTROLS_MISSING",
+            code=Code.CONTROLS_MISSING,
             where=where,
             param="controls",
             hint="controls= sets the totals; shares= fixes the composition and keeps the total.",
@@ -190,7 +191,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="Both controls and shares",
             detail=f"{method}() takes exactly one of controls= or shares=, not both.",
-            code="CONTROLS_CONFLICT",
+            code=Code.CONTROLS_CONFLICT,
             where=where,
             param="controls",
             hint="controls= sets the totals; shares= fixes the composition and keeps the total.",
@@ -203,7 +204,7 @@ class WeightingError(SvyError):
         return cls.TypeError(
             title="Targets have the wrong type",
             detail=f"`{param}` must be {expected}; got {type(got).__name__}.",
-            code="CONTROLS_TYPE_INVALID",
+            code=Code.CONTROLS_TYPE_INVALID,
             where=where,
             param=param,
             expected=expected,
@@ -222,7 +223,7 @@ class WeightingError(SvyError):
                 f"`{param}` is a single number but `cells` names one or more columns. "
                 "A scalar sets one cell's total, so it cannot describe several cells."
             ),
-            code="CONTROLS_SCALAR_FOR_CELLS",
+            code=Code.CONTROLS_SCALAR_FOR_CELLS,
             where=where,
             param=param,
             expected="dict with one entry per cell",
@@ -240,7 +241,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="cells= is required",
             detail=reason,
-            code="CELLS_REQUIRED",
+            code=Code.CELLS_REQUIRED,
             where=where,
             param=param,
             hint=hint,
@@ -255,7 +256,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="Margins disagree on the total",
             detail=f"Margins disagree on the population total: {listed}.",
-            code="MARGINS_DISAGREE",
+            code=Code.MARGINS_DISAGREE,
             where=where,
             param="controls",
             got=dict(totals),
@@ -299,7 +300,7 @@ class WeightingError(SvyError):
                 )
                 + ". Every row needs one, since an unmatched row would count as a respondent."
             ),
-            code="RESP_STATUS_UNKNOWN",
+            code=Code.RESP_STATUS_UNKNOWN,
             where=where,
             param="resp_mapping" if mapping is not None else "resp_status",
             expected=list(allowed),
@@ -315,7 +316,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="Unknown response status code",
             detail=f"resp_mapping key {show(key)} is not a response status code.",
-            code="RESP_MAPPING_KEY_INVALID",
+            code=Code.RESP_MAPPING_KEY_INVALID,
             where=where,
             param="resp_mapping",
             expected=["rr", "nr", "in", "uk"],
@@ -333,7 +334,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="A status is mapped twice",
             detail=f"resp_mapping puts a value under two statuses: {listed}.",
-            code="RESP_MAPPING_CONFLICT",
+            code=Code.RESP_MAPPING_CONFLICT,
             where=where,
             param="resp_mapping",
             got={v: list(c) for v, c in conflicts.items()},
@@ -364,7 +365,7 @@ class WeightingError(SvyError):
         return cls.KeyError(
             title="Column(s) not found",
             detail=f"`{param}` names {show_list(miss)}, not found in data.",
-            code="MISSING_COLUMNS",
+            code=Code.MISSING_COLUMNS,
             where=where,
             param=param,
             expected=cols,
@@ -378,7 +379,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="No sample weight",
             detail=f"Sample weight is None. Set design.wgt before calling {method}().",
-            code="WGT_MISSING",
+            code=Code.WGT_MISSING,
             where=where,
             param="design.wgt",
             hint="sample.update_design(wgt='<weight column>').",
@@ -395,7 +396,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="Weight name already used",
             detail=f"Column '{wgt_name}' already exists. Choose a different wgt_name.",
-            code="WGT_NAME_EXISTS",
+            code=Code.WGT_NAME_EXISTS,
             where=where,
             param="wgt_name",
             got=wgt_name,
@@ -419,7 +420,7 @@ class WeightingError(SvyError):
                     f"No rows are in scope for this adjustment ({method}): every row "
                     f"within `where` has a null cell ({listed})."
                 ),
-                code="NO_ROWS_IN_SCOPE",
+                code=Code.NO_ROWS_IN_SCOPE,
                 where=where,
                 param="cells",
                 expected="at least one row with every cell present",
@@ -429,7 +430,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="Nothing to adjust",
             detail=f"No rows are in scope for this adjustment ({method}).",
-            code="NO_ROWS_IN_SCOPE",
+            code=Code.NO_ROWS_IN_SCOPE,
             where=where,
             param="where",
             expected="at least one row",
@@ -442,7 +443,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="`where` cannot be evaluated",
             detail=f"`where` could not be evaluated against the data: {reason}",
-            code="WHERE_INVALID",
+            code=Code.WHERE_INVALID,
             where=where,
             param="where",
             hint="Check that every column referenced by `where` exists.",
@@ -453,30 +454,13 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="No columns named",
             detail=f"`{param}` sequence must not be empty.",
-            code="COLUMNS_EMPTY",
+            code=Code.COLUMNS_EMPTY,
             where=where,
             param=param,
             expected="a column name or a non-empty list of them",
             got=[],
             hint=f"Pass {param}=None for no grouping, or name at least one column.",
         )
-
-    @classmethod
-    def param_renamed(
-        cls, *, where: Optional[str], method: str, old: str, new: str, note: str = ""
-    ) -> "WeightingError":
-        return cls.TypeError(
-            title="Parameter renamed",
-            detail=f"'{method}' cannot be used here: `{old}=` was renamed to `{new}=`.",
-            code="PARAM_RENAMED",
-            where=where,
-            param=old,
-            expected=new,
-            got=old,
-            hint=f"Replace {old}= with {new}=." + (f" {note}" if note else ""),
-        )
-
-    # ---- method-specific ---------------------------------------------------
 
     @classmethod
     def not_converged(
@@ -496,7 +480,7 @@ class WeightingError(SvyError):
                 f"{what} did not converge after {max_iter} iterations. The sample has "
                 'NOT been modified. Pass on_nonconvergence="warn" to keep the last iterate.'
             ),
-            code="CONVERGENCE_FAILED",
+            code=Code.WEIGHTING_NOT_CONVERGED,
             where=where,
             param="max_iter",
             expected=dict(expected) if expected else None,
@@ -515,7 +499,7 @@ class WeightingError(SvyError):
                 f"bounds={show(tuple(bounds))}. Bounds are checked after raking, "
                 "not enforced during it."
             ),
-            code="BOUNDS_EXCEEDED",
+            code=Code.BOUNDS_EXCEEDED,
             where=where,
             param="bounds",
             expected={"bounds": list(bounds)},
@@ -530,7 +514,7 @@ class WeightingError(SvyError):
         return kind(
             title="Invalid bounds",
             detail=f"`bounds` {reason}.",
-            code="INVALID_TYPE" if as_type else "INVALID_RANGE",
+            code=Code.INVALID_TYPE if as_type else Code.INVALID_RANGE,
             where=where,
             param="bounds",
             expected="None or a 2-tuple (lo, hi) of numbers or None, with lo <= hi",
@@ -548,7 +532,7 @@ class WeightingError(SvyError):
         return cls.NotImplementedError(
             title="Not supported yet",
             detail=f"`{param}` is not supported by this method yet.",
-            code="NOT_SUPPORTED",
+            code=Code.NOT_SUPPORTED,
             where=where,
             param=param,
             expected=None,
@@ -577,7 +561,7 @@ class WeightingError(SvyError):
                 'controls inconsistent. Pass on_nonconvergence="warn" to keep the approximate '
                 "solution."
             ),
-            code="CALIBRATION_NOT_MET",
+            code=Code.CALIBRATION_NOT_MET,
             where=where,
             param="controls",
             expected=expected,
@@ -598,7 +582,7 @@ class WeightingError(SvyError):
                 f"{ov} appears in both by= and cells=. Domains and the composition axis "
                 "must be different variables."
             ),
-            code="CELLS_BY_OVERLAP",
+            code=Code.CELLS_BY_OVERLAP,
             where=where,
             param="by",
             got=ov,
@@ -613,7 +597,7 @@ class WeightingError(SvyError):
                 "factor multiplies every weight and cannot be combined with controls, "
                 f"shares, cells or where (got {', '.join(given)})."
             ),
-            code="FACTOR_CONFLICT",
+            code=Code.FACTOR_CONFLICT,
             where=where,
             param="factor",
             got=list(given),
@@ -627,7 +611,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="Reference level not found",
             detail=f"Reference level {show(ref)} not found in {column!r}.",
-            code="REF_LEVEL_UNKNOWN",
+            code=Code.REF_LEVEL_UNKNOWN,
             where=where,
             param=f"Cat({column!r}).ref",
             expected=list(levels),
@@ -640,7 +624,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="No auxiliaries",
             detail="No terms specified.",
-            code="AUX_TERMS_EMPTY",
+            code=Code.AUX_TERMS_EMPTY,
             where=where,
             param="x",
             hint="Name at least one auxiliary, e.g. x=['income', Cat('region')].",
@@ -651,7 +635,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="Unsupported term",
             detail=f"{type(term).__name__} is not a calibration term.",
-            code="TERM_INVALID",
+            code=Code.TERM_INVALID,
             where=where,
             param="controls",
             expected="str | Cat | Cross",
@@ -664,7 +648,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="No trimming bounds",
             detail="At least one of `upper` or `lower` must be specified.",
-            code="TRIM_BOUNDS_MISSING",
+            code=Code.TRIM_BOUNDS_MISSING,
             where=where,
             param="upper",
             hint="e.g. upper=Threshold.quantile(0.99), or lower=0.5.",
@@ -704,7 +688,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="Trimming bounds cannot keep the total",
             detail=detail + " The sample has NOT been modified.",
-            code="TRIM_INFEASIBLE",
+            code=Code.TRIM_INFEASIBLE,
             where=where,
             param=side if len(sides) == 1 else "upper/lower",
             expected="lower <= mean positive weight <= upper, in every domain",
@@ -754,7 +738,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="Trimming bounds cannot meet the controls",
             detail=detail + " The sample has NOT been modified.",
-            code="TRIM_INFEASIBLE",
+            code=Code.TRIM_INFEASIBLE,
             where=where,
             param="trimming",
             expected="every control reachable by weights within the trimming bounds",
@@ -769,7 +753,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="PSU required",
             detail=f"{method}() resamples PSUs and requires psu (got psu=None).",
-            code="PSU_REQUIRED",
+            code=Code.PSU_REQUIRED,
             where=where,
             param="psu",
             hint="Pass psu=, or set it on the Design." + (f" {note}" if note else ""),
@@ -783,7 +767,7 @@ class WeightingError(SvyError):
         return kind(
             title="Invalid trimming threshold",
             detail=reason,
-            code="THRESHOLD_INVALID",
+            code=Code.THRESHOLD_INVALID,
             where=where,
             param="upper/lower",
             expected="a number > 0, a Threshold, or a callable",
@@ -798,7 +782,7 @@ class WeightingError(SvyError):
         return cls.ValueError(
             title="Invalid trimming setting",
             detail=f"{param} must be {expected}, got {got}.",
-            code="INVALID_RANGE",
+            code=Code.INVALID_RANGE,
             where=where,
             param=param,
             expected=expected,

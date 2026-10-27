@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal, Sequence
 
 from svy.core.types import WhereArg
-from svy.errors import DataError, DataWarning, SingletonWarning, SvyError
+from svy.errors import Code, DataError, DataWarning, SingletonWarning, SvyError
 from svy.errors._findings import check_on_finding, finding_level
 from svy.utils.where import _compile_where as _compile_where_to_pl_expr
 from svy.wrangling._helpers import _internal_columns, _resolve_target
@@ -63,7 +63,7 @@ def filter_records(
                 raise DataError.ValueError(
                     title="Singletons detected after filtering",
                     detail=f"Found {n_single} singleton group(s).",
-                    code="SINGLETONS_AFTER_FILTER",
+                    code=Code.SINGLETONS_AFTER_FILTER,
                     where="wrangling.filter_records",
                     hint='Declare a rule for them: sample.update_design(singleton=svy.Singleton("center")).',
                 )
@@ -76,7 +76,7 @@ def filter_records(
         if n_null_pred > 0:
             target.warn(
                 DataWarning(
-                    code="NULL_PREDICATE_ROWS_DROPPED",
+                    code=Code.NULL_PREDICATE_ROWS_DROPPED,
                     title="Rows with null filter predicate dropped",
                     detail=(
                         f"{n_null_pred} row(s) evaluated to null under the filter "
@@ -99,7 +99,7 @@ def filter_records(
                 handled = f"; handled by the design's rule {rule!r}" if rule is not None else ""
                 target.warn(
                     SingletonWarning(
-                        code="SINGLETONS_DETECTED",
+                        code=Code.SINGLETONS_DETECTED,
                         title="Singleton PSUs/strata detected after filtering",
                         detail=f"Found {n} singleton group(s){handled}.",
                         where="wrangling.filter_records",
@@ -118,7 +118,7 @@ def filter_records(
         raise DataError.RuntimeError(
             title="Filter failed",
             detail=str(ex),
-            code="FILTER_FAILED",
+            code=Code.FILTER_FAILED,
             where="wrangling.filter_records",
         ) from ex
 

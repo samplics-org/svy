@@ -2,16 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Iterable, Optional
+from typing import ClassVar, Optional
 
 from ._base import SvyError, SvyWarning
+from ._codes import Code
 
 
 @dataclass(eq=False)
 class IoError(SvyError):
     """Structured I/O errors for reads/writes across SPSS/Stata/SAS."""
 
-    _DEFAULT_CODE: ClassVar[str] = "IO_ERROR"
+    _DEFAULT_CODE: ClassVar[str] = Code.IO_ERROR
 
     # ---------- Convenience constructors ----------
     @classmethod
@@ -19,7 +20,7 @@ class IoError(SvyError):
         return cls.FileNotFoundError(
             title="File not found",
             detail=f"No file at {Path(path)}",
-            code="FILE_NOT_FOUND",
+            code=Code.FILE_NOT_FOUND,
             where=where,
             extra={"path": str(path)},
         )
@@ -31,7 +32,7 @@ class IoError(SvyError):
         return cls.FileNotFoundError(
             title="No readable file in archive",
             detail=engine_msg,
-            code="ARCHIVE_MEMBER_NOT_FOUND",
+            code=Code.ARCHIVE_MEMBER_NOT_FOUND,
             where=where,
             hint="Check the archive's contents, or extract the data file and read it directly.",
             extra={"path": str(path), "engine_msg": engine_msg},
@@ -42,7 +43,7 @@ class IoError(SvyError):
         return cls.OSError(
             title="Not a file",
             detail=f"Expected a file, got directory: {Path(path)}",
-            code="NOT_A_FILE",
+            code=Code.NOT_A_FILE,
             where=where,
             extra={"path": str(path)},
         )
@@ -52,26 +53,9 @@ class IoError(SvyError):
         return cls.PermissionError(
             title="Permission denied",
             detail=f"Access refused for path: {Path(path)}",
-            code="PERMISSION_DENIED",
+            code=Code.PERMISSION_DENIED,
             where=where,
             extra={"path": str(path)},
-        )
-
-    @classmethod
-    def unsupported_ext(
-        cls,
-        *,
-        where: Optional[str],
-        path: str | Path,
-        expected_exts: Iterable[str],
-    ) -> "IoError":
-        exts = tuple(sorted(set(e.lower() for e in expected_exts)))
-        return cls.ValueError(
-            title="Unsupported file extension",
-            detail=f"Path {Path(path)} does not match expected extensions {exts}.",
-            code="UNSUPPORTED_EXTENSION",
-            where=where,
-            extra={"path": str(path), "expected_exts": exts},
         )
 
     @classmethod
@@ -88,20 +72,10 @@ class IoError(SvyError):
         return cls.ValueError(
             title=f"{fmt.upper()} parse error",
             detail=engine_msg or "The underlying reader failed to parse the file.",
-            code="READSTAT_PARSE_FAILED",
+            code=Code.READSTAT_PARSE_FAILED,
             where=where,
             hint=hint,
             extra={"path": str(path), "format": fmt, "engine_msg": engine_msg},
-        )
-
-    @classmethod
-    def engine_contract_violation(cls, *, where: Optional[str], got: Any) -> "IoError":
-        return cls.RuntimeError(
-            title="Engine contract violation",
-            detail="Adapter returned an unexpected shape or payload.",
-            code="ENGINE_CONTRACT_VIOLATION",
-            where=where,
-            got=type(got).__name__,
         )
 
     @classmethod
@@ -111,7 +85,7 @@ class IoError(SvyError):
         return cls.OSError(
             title="Unexpected read failure",
             detail=reason or "Read failed for an unknown reason.",
-            code="IO_READ_FAILED",
+            code=Code.IO_READ_FAILED,
             where=where,
             extra={"path": str(path)},
         )
@@ -123,7 +97,7 @@ class IoError(SvyError):
         return cls.OSError(
             title="Unexpected write failure",
             detail=reason or "Write failed for an unknown reason.",
-            code="IO_WRITE_FAILED",
+            code=Code.IO_WRITE_FAILED,
             where=where,
             extra={"path": str(path)},
         )

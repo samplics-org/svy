@@ -9,7 +9,8 @@ from typing import Any, Dict, Iterable, Tuple
 
 import polars as pl
 
-from svy.errors._findings import warn_no_sample
+from svy.errors import Code, IoWarning
+from svy.errors._findings import emit_finding
 from svy.metadata import MetadataStore
 
 from .core import (
@@ -96,9 +97,14 @@ def _stata_temporals(df: pl.DataFrame) -> pl.DataFrame:
             exprs[name] = col.dt.total_milliseconds().cast(pl.Float64)
     if not exprs:
         return df
-    warn_no_sample(
-        f"{', '.join(exprs)} are written as milliseconds (since midnight, for times of day); "
-        "Stata has no time-of-day or duration type."
+    emit_finding(
+        IoWarning(
+            code=Code.IO_TEMPORAL_AS_NUMBER,
+            title="Times written as numbers",
+            detail=f"{', '.join(exprs)} are written as milliseconds (since midnight, for times of day); "
+            "Stata has no time-of-day or duration type.",
+            where="io.write_stata",
+        )
     )
     return df.with_columns(**exprs)
 
@@ -149,9 +155,14 @@ def _write_stata(
         )
     )
     if unfit:
-        warn_no_sample(
-            f"Stata labels integer codes of numeric variables only, so value labels for "
-            f"{', '.join(unfit)} are not written. Use write_spss to keep them."
+        emit_finding(
+            IoWarning(
+                code=Code.IO_LABELS_NOT_WRITTEN,
+                title="Value labels not written",
+                detail=f"Stata labels integer codes of numeric variables only, so value labels for "
+                f"{', '.join(unfit)} are not written. Use write_spss to keep them.",
+                where="io.write_stata",
+            )
         )
         meta["value_labels"] = {v: m for v, m in meta["value_labels"].items() if v not in unfit}
 

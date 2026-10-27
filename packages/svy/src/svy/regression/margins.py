@@ -14,6 +14,7 @@ import msgspec
 import numpy as np
 import polars as pl
 
+from svy.errors import Code
 from svy.errors._api import guided_getattr
 from svy.regression.glm import delta_var, offset_values
 from svy.regression.links import link_inverse, link_mu_eta, link_mu_eta2
@@ -641,7 +642,7 @@ def _fitted_levels(fit: GLMFit, var: str, key: object) -> list:
                 f"at={{{key!r}: None}} asks for every fitted level of {var!r}, "
                 "but it is not categorical in the model."
             ),
-            code="MARGINS_AT_LEVELS",
+            code=Code.MARGINS_AT_LEVELS,
             where="GLM.margins",
             param="at",
             got=var,
@@ -662,7 +663,7 @@ def _parse_at(glm: GLM, fit: GLMFit, at: dict) -> list[_AtSpec]:
         raise ModelError.TypeError(
             title="at= must be a dict",
             detail=f"Got {type(at).__name__}.",
-            code="MARGINS_AT_TYPE",
+            code=Code.MARGINS_AT_TYPE,
             where="GLM.margins",
             param="at",
             got=type(at).__name__,
@@ -686,7 +687,7 @@ def _parse_at(glm: GLM, fit: GLMFit, at: dict) -> list[_AtSpec]:
                 detail=(
                     f"{key!r} is neither a variable name nor a tuple of distinct variable names."
                 ),
-                code="MARGINS_AT_KEY",
+                code=Code.MARGINS_AT_KEY,
                 where="GLM.margins",
                 param="at",
                 got=key,
@@ -709,7 +710,7 @@ def _parse_at(glm: GLM, fit: GLMFit, at: dict) -> list[_AtSpec]:
                             f"at={{{key!r}: ...}} needs one value per variable in "
                             f"each cell; got {cell!r}."
                         ),
-                        code="MARGINS_AT_CELL",
+                        code=Code.MARGINS_AT_CELL,
                         where="GLM.margins",
                         param="at",
                         got=cell,
@@ -890,7 +891,7 @@ def compute_conditional_effects(
                         f"{var!r} is in variables= and in at={{{spec.key!r}: ...}}; "
                         "its effect cannot be taken with it held fixed."
                     ),
-                    code="MARGINS_AT_CONFLICT",
+                    code=Code.MARGINS_AT_CONFLICT,
                     where="GLM.margins",
                     param="at",
                     got=var,

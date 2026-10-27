@@ -154,7 +154,7 @@ def add_stage(
 
     exclude: set[str] = set(BOOKKEEPING_COLUMNS)
 
-    found: list[dict] = []
+    found: list[SelectionWarning] = []
     result: CombineResult = _combine_stages(
         stage1_df=s1_df,
         stage1_prob_col=s1_design.prob,
@@ -211,5 +211,5 @@ def add_stage(
     combined._refresh_internal_state()
 
     for f in found:
-        combined.warn(SelectionWarning(where="Sample.sampling.add_stage", **f))
+        combined.warn(f)
     return combined

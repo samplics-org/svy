@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Mapping, Protocol, Sequence
 import msgspec
 
 from ._base import SvyError, SvyWarning
+from ._codes import Code
 
 
 # ---- Runtime-safe typing: no import from svy.core.singleton ----
@@ -35,7 +36,7 @@ def _value(v: Any) -> str:
 
 @dataclass(eq=False)
 class SingletonError(SvyError):
-    _DEFAULT_CODE: ClassVar[str] = "SINGLETON_ERROR"
+    _DEFAULT_CODE: ClassVar[str] = Code.SINGLETON_ERROR
 
     @classmethod
     def from_singletons(
@@ -76,7 +77,7 @@ class SingletonError(SvyError):
         return cls.ValueError(
             title=f"{n} singleton PSU(s) detected",
             detail="\n".join(lines),
-            code="SINGLETON_ERROR",
+            code=Code.SINGLETON_ERROR,
             where=where,
             hint='sample.update_design(singleton=svy.Singleton("center")), or '
             'svy.Design(..., singleton="center") when building the sample.',
@@ -170,7 +171,7 @@ class SingletonError(SvyError):
         return cls.ValueError(
             title="Strata with a single PSU in a domain",
             detail="\n".join(lines),
-            code="DOMAIN_SINGLETON",
+            code=Code.DOMAIN_SINGLETON,
             where=where,
             param="on_domain_singletons",
             hint="sample.domain_singletons(by=..., where=...) lists them.",
@@ -203,7 +204,7 @@ class SingletonAPIRemoved(SingletonError, AttributeError):
                 "sample.design.singleton. To merge PSUs themselves, recode the PSU column:\n"
                 "  sample.wrangling.recode(psu_column, {new: [old, ...]}, replace=True)"
             ),
-            code="SINGLETON_API_REMOVED",
+            code=Code.SINGLETON_API_REMOVED,
             where="Sample.singleton",
             hint='sample.singleton.center() is now svy.Design(..., singleton="center"); '
             'certainty() is "self_representing".',

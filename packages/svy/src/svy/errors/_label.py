@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, ClassVar, Iterable, Optional
+from typing import Any, ClassVar, Optional
 
 from ._base import SvyError, SvyWarning
+from ._codes import Code
 
 
 @dataclass(eq=False)
@@ -15,7 +16,7 @@ class LabelError(SvyError):
     locale resolution, and (de)serialization.
     """
 
-    _DEFAULT_CODE: ClassVar[str] = "LABEL_ERROR"
+    _DEFAULT_CODE: ClassVar[str] = Code.LABEL_ERROR
 
     # ---------------------------------------------------------------------
     # Convenience constructors
@@ -36,7 +37,7 @@ class LabelError(SvyError):
         return cls.KeyError(
             title="Scheme not found",
             detail=f"No label scheme found for {param}.",
-            code="LABEL_UNKNOWN_SCHEME",
+            code=Code.LABEL_UNKNOWN_SCHEME,
             where=where,
             param=param,
             expected="existing scheme id or concept",
@@ -57,56 +58,11 @@ class LabelError(SvyError):
         return cls.ValueError(
             title="Scheme already exists",
             detail=f"A label scheme with id {scheme_id!r} already exists.",
-            code="LABEL_SCHEME_EXISTS",
+            code=Code.LABEL_SCHEME_EXISTS,
             where=where,
             param="id",
             expected="unique id",
             got=scheme_id,
-            hint=hint,
-            docs_url=docs_url,
-        )
-
-    @classmethod
-    def invalid_missing_codes(
-        cls,
-        *,
-        where: Optional[str],
-        param: str,
-        not_in_mapping: Iterable[Any],
-        hint: Optional[str] = "Ensure every missing code appears as a key in mapping.",
-        docs_url: Optional[str] = None,
-    ) -> "LabelError":
-        missing_list = list(not_in_mapping)
-        return cls.ValueError(
-            title="Invalid missing codes",
-            detail="Some missing codes are not present in the value-label mapping.",
-            code="LABEL_INVALID_MISSING_CODES",
-            where=where,
-            param=param,
-            expected="missing ⊆ mapping.keys()",
-            got=missing_list,
-            hint=hint,
-            docs_url=docs_url,
-        )
-
-    @classmethod
-    def inconsistent_missing_kinds(
-        cls,
-        *,
-        where: Optional[str],
-        offending_keys: Iterable[Any],
-        hint: Optional[str] = "Add these codes to 'missing' or remove their kind assignment.",
-        docs_url: Optional[str] = None,
-    ) -> "LabelError":
-        keys = list(offending_keys)
-        return cls.ValueError(
-            title="Inconsistent missing kinds",
-            detail="Keys in missing_kinds must also be listed in 'missing'.",
-            code="LABEL_INCONSISTENT_MISSING_KINDS",
-            where=where,
-            param="missing_kinds",
-            expected="keys(missing_kinds) ⊆ missing",
-            got=keys,
             hint=hint,
             docs_url=docs_url,
         )
@@ -124,7 +80,7 @@ class LabelError(SvyError):
         return cls.ValueError(
             title="NaN key is not allowed",
             detail="Do not use NaN as a category key in value-label mappings.",
-            code="LABEL_NAN_KEY",
+            code=Code.LABEL_NAN_KEY,
             where=where,
             param="mapping",
             expected="non-NaN keys",
@@ -147,56 +103,12 @@ class LabelError(SvyError):
                 f"The code {code!r} appears more than once. A scheme holds one "
                 f"entry per code, so a second would silently shadow the first."
             ),
-            code="LABEL_DUPLICATE_CODE",
+            code=Code.LABEL_DUPLICATE_CODE,
             where=where,
             param="entries",
             expected="each code once",
             got=repr(code),
             hint="Remove the duplicate, or merge the two entries.",
-            docs_url=docs_url,
-        )
-
-    @classmethod
-    def invalid_locale(
-        cls,
-        *,
-        where: Optional[str],
-        got: Any,
-        hint: Optional[str] = "Use primary subtags or BCP-47 style locales (e.g., 'en', 'en-US').",
-        docs_url: Optional[str] = None,
-    ) -> "LabelError":
-        return cls.ValueError(
-            title="Invalid locale",
-            detail="Locale is malformed or unsupported for label scheme selection.",
-            code="LABEL_INVALID_LOCALE",
-            where=where,
-            param="locale",
-            expected="language tag, e.g., 'fr', 'fr-CA'",
-            got=got,
-            hint=hint,
-            docs_url=docs_url,
-        )
-
-    @classmethod
-    def ambiguous_pick(
-        cls,
-        *,
-        where: Optional[str],
-        concept: str,
-        candidates: Iterable[str],
-        hint: Optional[str] = "Specify a concrete locale or scheme id to disambiguate.",
-        docs_url: Optional[str] = None,
-    ) -> "LabelError":
-        ids = list(candidates)
-        return cls.ValueError(
-            title="Ambiguous scheme selection",
-            detail=f"Multiple equally suitable schemes found for concept {concept!r}.",
-            code="LABEL_AMBIGUOUS_PICK",
-            where=where,
-            param="concept",
-            expected="unique best match",
-            got=ids,
-            hint=hint,
             docs_url=docs_url,
         )
 
@@ -215,33 +127,11 @@ class LabelError(SvyError):
         return cls.ValueError(
             title="Label catalog serialization failed",
             detail=reason,
-            code="LABEL_SERIALIZATION_ERROR",
+            code=Code.LABEL_SERIALIZATION_ERROR,
             where=where,
             hint=hint,
             docs_url=docs_url,
             extra=extra,
-        )
-
-    @classmethod
-    def invalid_scheme_id(
-        cls,
-        *,
-        where: Optional[str],
-        got: Any,
-        expected: str = "normalized id or 'concept:locale'",
-        hint: Optional[str] = "Use make_scheme() to derive an id or pass a normalized id.",
-        docs_url: Optional[str] = None,
-    ) -> "LabelError":
-        return cls.ValueError(
-            title="Invalid scheme id",
-            detail="The provided scheme id does not conform to the expected format.",
-            code="LABEL_INVALID_ID",
-            where=where,
-            param="id",
-            expected=expected,
-            got=got,
-            hint=hint,
-            docs_url=docs_url,
         )
 
 
@@ -259,7 +149,7 @@ class LabelAPIRemoved(LabelError, AttributeError):
         return cls(
             title=f"{where} was removed",
             detail=f"Use {use} instead.",
-            code="LABEL_API_REMOVED",
+            code=Code.LABEL_API_REMOVED,
             where=where,
             hint="meta.var_labels[var] gives the variable label and meta.value_labels[var] "
             "the code-to-label mapping; set them with set_var_label(s) and set_value_labels.",
@@ -277,7 +167,7 @@ class LabelsReadOnly(LabelError, TypeError):
         return cls(
             title=f"{where} is read-only",
             detail=f"Changing this mapping would not change the metadata. Use {use}.",
-            code="LABEL_READ_ONLY",
+            code=Code.LABEL_READ_ONLY,
             where=where,
         )
 

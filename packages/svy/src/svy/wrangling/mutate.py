@@ -12,7 +12,7 @@ import polars as pl
 
 from svy.core.expr import Expr, to_polars_expr
 from svy.core.types import MutateValue
-from svy.errors import DataError
+from svy.errors import Code, DataError
 from svy.wrangling._helpers import (
     _guard_weight_writes,
     _rebuild_concat_if_touched,
@@ -129,7 +129,7 @@ def mutate(
             raise DataError.RuntimeError(
                 title="Column transformation failed",
                 detail=str(ex),
-                code="MUTATE_COMPILE_FAILED",
+                code=Code.MUTATE_COMPILE_FAILED,
                 where="wrangling.mutate",
                 hint=(
                     "Check names, syntax, that array/series lengths "
@@ -179,7 +179,7 @@ def mutate(
             raise DataError.RuntimeError(
                 title="Column transformation failed",
                 detail=str(ex),
-                code="MUTATE_WITH_COLUMNS_FAILED",
+                code=Code.MUTATE_WITH_COLUMNS_FAILED,
                 where="wrangling.mutate",
             ) from ex
 
@@ -212,7 +212,7 @@ def mutate(
         raise DataError.ValueError(
             title="Dependency resolution failed",
             detail=f"Circular or mutually dependent outputs: {unresolved}",
-            code="MUTATE_DEPENDENCY_ERROR",
+            code=Code.MUTATE_DEPENDENCY_ERROR,
             where="wrangling.mutate",
             hint=("Split into multiple mutate() calls or break the circular reference."),
         )
