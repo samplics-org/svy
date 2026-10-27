@@ -1,7 +1,10 @@
 # svy/io/base.py
 from __future__ import annotations
 
+import inspect
 import logging
+import os
+import re
 import time
 
 from pathlib import Path
@@ -20,6 +23,7 @@ from svy.engine.io import (
     _write_stata,
     import_labels_from_svyio_meta,
 )
+from svy.errors import Code, UsageError
 from svy.errors._io import IoError, map_os_error
 
 
@@ -75,17 +79,53 @@ def _preflight_read(path: str | Path, *, where: str, fmt: str) -> None:
         )
 
 
+_UNEXPECTED_KWARG = re.compile(r"unexpected keyword argument '(\w+)'")
+# Arguments svy passes to the engine itself; never the user's to name.
+_ENGINE_OWN = {"source", "file", "path", "df", "store"}
+
+
+def _unknown_argument(e: TypeError, *, where: str, engine_fn: Callable) -> UsageError | None:
+    match = _UNEXPECTED_KWARG.search(str(e))
+    if match is None:
+        return None
+    try:
+        known = [n for n in inspect.signature(engine_fn).parameters if n not in _ENGINE_OWN]
+    except (TypeError, ValueError):
+        known = []
+    known = [n for n in known if n not in ("args", "kwargs")]
+    return UsageError.unknown_arguments(where=where, unknown=[match.group(1)], known=known)
+
+
+def _sample_frame(sample: Any, *, where: str, frames: bool) -> Any:
+    if isinstance(sample, Sample):
+        return sample.data
+    if frames and isinstance(sample, (pl.DataFrame, pl.LazyFrame)):
+        return sample
+    raise IoError.invalid_type(
+        where=where,
+        param="sample",
+        got=sample,
+        expected="a svy.Sample or a polars DataFrame" if frames else "a svy.Sample",
+    )
+
+
 def _wrap_io_op(op_name: str, fmt: str, path: str | Path, engine_fn: Callable, **kwargs) -> Any:
     """
     Generic wrapper to handle logging, timing, and error mapping uniformly.
     """
     where = f"io.{op_name}_{fmt}"
+    if not isinstance(path, (str, os.PathLike)):
+        raise IoError.invalid_type(
+            where=where, param="path", got=path, expected="a str or pathlib.Path"
+        )
     path_obj = Path(path)
+    reading = op_name in ("read", "scan")
 
     safe_kw = {k: v for k, v in kwargs.items() if k not in {"df", "store"}}
     log.debug("%s: path=%s, opts=%s", where, path_obj, safe_kw)
 
-    if op_name.startswith("read"):
+    # Not for scan: it takes glob patterns, which name no single file.
+    if op_name == "read":
         _preflight_read(path_obj, where=where, fmt=fmt)
 
     t0 = time.perf_counter()
@@ -107,8 +147,24 @@ def _wrap_io_op(op_name: str, fmt: str, path: str | Path, engine_fn: Callable, *
     except (FileNotFoundError, IsADirectoryError, PermissionError) as e:
         log.debug("%s os error: %s", where, e)
         raise map_os_error(e, where=where, path=path_obj) from e
+    except pl.exceptions.ColumnNotFoundError as e:
+        raise IoError.KeyError(
+            title="Column(s) not found",
+            detail=str(e).split("\n")[0],
+            code=Code.MISSING_COLUMNS,
+            where=where,
+            param="columns",
+            hint="Check spelling; columns=None reads every column.",
+        ) from e
+    except TypeError as e:
+        unknown = _unknown_argument(e, where=where, engine_fn=engine_fn)
+        if unknown is not None:
+            raise unknown from e
+        log.debug("%s failed: %s", where, e, exc_info=True)
+        failed = IoError.read_failed if reading else IoError.write_failed
+        raise failed(where=where, path=path_obj, error=e) from e
     except RuntimeError as e:
-        if not op_name.startswith("read"):
+        if not reading:
             log.debug("%s failed: %s", where, e)
             raise IoError.write_failed(where=where, path=path_obj, reason=str(e)) from e
         log.debug("%s parse failed: %s", where, e)
@@ -121,13 +177,12 @@ def _wrap_io_op(op_name: str, fmt: str, path: str | Path, engine_fn: Callable, *
         ) from e
     except Exception as e:
         log.debug("%s failed: %s", where, e, exc_info=True)
-        if not op_name.startswith("read"):
-            raise IoError.write_failed(where=where, path=path_obj, reason=str(e)) from e
-        raise IoError.read_failed(where=where, path=path_obj, reason=str(e)) from e
+        failed = IoError.read_failed if reading else IoError.write_failed
+        raise failed(where=where, path=path_obj, error=e) from e
 
     ms = (time.perf_counter() - t0) * 1000.0
 
-    if op_name.startswith("read"):
+    if reading:
         df_part = result[0] if isinstance(result, tuple) else result
         r, c = _summarize_df(df_part)
         log.debug("%s ok: rows=%s, cols=%s, elapsed=%.1f ms", where, r, c, ms)
@@ -149,7 +204,7 @@ def scan_csv(path: str | Path, **kwargs) -> pl.LazyFrame:
 
 
 def write_csv(sample: Sample | pl.DataFrame, path: str | Path, **kwargs) -> None:
-    _raw = sample.data if isinstance(sample, Sample) else sample
+    _raw = _sample_frame(sample, where="io.write_csv", frames=True)
     df: pl.DataFrame = (
         cast(pl.DataFrame, _raw)
         if not isinstance(_raw, pl.LazyFrame)
@@ -167,7 +222,7 @@ def scan_parquet(path: str | Path, **kwargs) -> pl.LazyFrame:
 
 
 def write_parquet(sample: Sample | pl.DataFrame, path: str | Path, **kwargs) -> None:
-    _raw = sample.data if isinstance(sample, Sample) else sample
+    _raw = _sample_frame(sample, where="io.write_parquet", frames=True)
     df: pl.DataFrame = (
         cast(pl.DataFrame, _raw)
         if not isinstance(_raw, pl.LazyFrame)
@@ -191,6 +246,7 @@ def read_spss_with_labels(
 
 
 def write_spss(sample: Sample, path: str | Path, **kwargs) -> None:
+    _sample_frame(sample, where="io.write_spss", frames=False)
     _wrap_io_op(
         "write",
         "spss",
@@ -214,6 +270,7 @@ def read_stata_with_labels(
 
 
 def write_stata(sample: Sample, path: str | Path, **kwargs) -> None:
+    _sample_frame(sample, where="io.write_stata", frames=False)
     _wrap_io_op(
         "write",
         "stata",
@@ -237,6 +294,7 @@ def read_sas_with_labels(
 
 
 def write_sas(sample: Sample, path: str | Path, **kwargs) -> None:
+    _sample_frame(sample, where="io.write_sas", frames=False)
     _wrap_io_op(
         "write",
         "sas",
