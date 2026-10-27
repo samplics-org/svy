@@ -87,7 +87,13 @@ def _colspec_to_list(spec: str | Sequence[str] | None) -> list[str]:
         return [spec]
 
     if not isinstance(spec, Sequence) or isinstance(spec, (bytes, bytearray)):
-        raise TypeError(f"Column spec must be str or Sequence[str], got {type(spec).__name__}")
+        raise UsageError.invalid_type(
+            where=None,
+            param="columns",
+            got=spec,
+            expected="a column name or a list of them",
+            detail=f"Column spec must be str or Sequence[str], got {type(spec).__name__}",
+        )
 
     # Iterative flattening using a deque as a stack
     out: list[str] = []
@@ -106,7 +112,13 @@ def _colspec_to_list(spec: str | Sequence[str] | None) -> list[str]:
             # extendleft reverses the input, so we reverse it back
             stack.extendleft(reversed(item))
         else:
-            raise TypeError(f"Column names must be strings; got {type(item).__name__}")
+            raise UsageError.invalid_type(
+                where=None,
+                param="columns",
+                got=item,
+                expected="a column name",
+                detail=f"Column names must be strings; got {type(item).__name__}",
+            )
 
     return out
 
@@ -127,7 +139,13 @@ def _normalize_columns_arg(data: DF, columns: str | Sequence[str] | None) -> lis
     if isinstance(columns, Sequence) and not isinstance(columns, (bytes, bytearray)):
         return list(columns)
 
-    raise TypeError(f"columns must be str | Sequence[str] | None, got {type(columns).__name__}")
+    raise UsageError.invalid_type(
+        where=None,
+        param="columns",
+        got=columns,
+        expected="a column name or a list of them",
+        detail=f"columns must be str | Sequence[str] | None, got {type(columns).__name__}",
+    )
 
 
 # ------------------------------------------------------------------ #

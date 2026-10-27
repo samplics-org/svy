@@ -505,7 +505,7 @@ def prepare_data(
         x=[x],
         y_pair=[y_pair],
         group=[group],
-        by=[by] if isinstance(by, str) else list(by or ()),
+        by=_colspec_to_list(by),
         where=where_cols,
         columns=extra_cols or [],
     )
