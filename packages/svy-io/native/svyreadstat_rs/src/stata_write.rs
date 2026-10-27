@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::File;
 use std::io::{Cursor, Write as IoWrite};
-use std::os::raw::c_void;
+use std::os::raw::{c_char, c_void};
 use std::path::Path;
 
 use arrow::array::{
@@ -25,16 +25,17 @@ use arrow::record_batch::RecordBatch;
 
 use readstat_sys::{
     readstat_add_label_set, readstat_add_variable, readstat_begin_row, readstat_begin_writing_dta,
-    readstat_end_row, readstat_end_writing, readstat_insert_double_value,
+    readstat_end_row, readstat_end_writing, readstat_error_t, readstat_insert_double_value,
     readstat_insert_int8_value, readstat_insert_int16_value, readstat_insert_int32_value,
-    readstat_insert_missing_value, readstat_insert_string_value, readstat_label_double_value,
-    readstat_label_set_t, readstat_set_data_writer,
-    readstat_type_e_READSTAT_TYPE_DOUBLE as T_DOUBLE, readstat_type_e_READSTAT_TYPE_INT8 as T_INT8,
-    readstat_type_e_READSTAT_TYPE_INT16 as T_INT16, readstat_type_e_READSTAT_TYPE_INT32 as T_INT32,
+    readstat_insert_missing_value, readstat_insert_string_value,
+    readstat_insert_tagged_missing_value, readstat_label_double_value, readstat_label_set_t,
+    readstat_set_data_writer, readstat_type_e_READSTAT_TYPE_DOUBLE as T_DOUBLE,
+    readstat_type_e_READSTAT_TYPE_INT8 as T_INT8, readstat_type_e_READSTAT_TYPE_INT16 as T_INT16,
+    readstat_type_e_READSTAT_TYPE_INT32 as T_INT32,
     readstat_type_e_READSTAT_TYPE_STRING as T_STRING, readstat_type_t,
     readstat_variable_set_format, readstat_variable_set_label, readstat_variable_set_label_set,
     readstat_variable_t, readstat_writer_init, readstat_writer_set_file_format_version,
-    readstat_writer_set_file_label,
+    readstat_writer_set_file_label, readstat_writer_t,
 };
 
 use crate::core::WriterGuard;
@@ -181,7 +182,8 @@ fn temporal_as_stata(a: &dyn Array, row: usize) -> Option<f64> {
             a.as_any().downcast_ref::<$T>().unwrap().value(row)
         };
     }
-    let unix_ms = match a.data_type() {
+    // i128 because shifting a timestamp near i64::MAX to the 1960 epoch overflows i64.
+    let unix_ms: i128 = match a.data_type() {
         DataType::Date32 => {
             return Some((down!(Date32Array) as i64 + UNIX_MINUS_STATA_DAYS) as f64);
         }
@@ -189,17 +191,17 @@ fn temporal_as_stata(a: &dyn Array, row: usize) -> Option<f64> {
             let days = down!(Date64Array).div_euclid(MS_PER_DAY);
             return Some((days + UNIX_MINUS_STATA_DAYS) as f64);
         }
-        DataType::Timestamp(TimeUnit::Second, _) => down!(TimestampSecondArray) * 1_000,
-        DataType::Timestamp(TimeUnit::Millisecond, _) => down!(TimestampMillisecondArray),
+        DataType::Timestamp(TimeUnit::Second, _) => down!(TimestampSecondArray) as i128 * 1_000,
+        DataType::Timestamp(TimeUnit::Millisecond, _) => down!(TimestampMillisecondArray).into(),
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            down!(TimestampMicrosecondArray).div_euclid(1_000)
+            down!(TimestampMicrosecondArray).div_euclid(1_000).into()
         }
         DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            down!(TimestampNanosecondArray).div_euclid(1_000_000)
+            down!(TimestampNanosecondArray).div_euclid(1_000_000).into()
         }
         _ => return None,
     };
-    Some((unix_ms + UNIX_MINUS_STATA_MS) as f64)
+    Some((unix_ms + UNIX_MINUS_STATA_MS as i128) as f64)
 }
 
 fn as_i64_opt(a: &dyn Array, row: usize) -> Option<i64> {
@@ -320,6 +322,77 @@ fn compute_string_metadata(batches: &[RecordBatch]) -> Vec<Option<StringColStats
     all_stats
 }
 
+/// The cells of one column that hold a tagged missing (`TaggedNA`), from Python's `user_missing_json`.
+#[derive(serde::Deserialize)]
+struct TaggedMissing {
+    col: String,
+    rows: Vec<usize>,
+    tags: Vec<String>,
+}
+
+/// Row -> tag maps, one per column, after checking each spec against the frame.
+fn tags_by_column(
+    specs: &[TaggedMissing],
+    names: &[&str],
+    is_str_col: &[bool],
+    n_rows: usize,
+) -> Result<Vec<HashMap<usize, c_char>>> {
+    let mut by_col = vec![HashMap::new(); names.len()];
+    for spec in specs {
+        let Some(j) = names.iter().position(|n| *n == spec.col) else {
+            return Err(anyhow!(
+                "tagged missings name column '{}', which is not in the data",
+                spec.col
+            ));
+        };
+        if is_str_col[j] {
+            return Err(anyhow!(
+                "column '{}' holds strings; tagged missings apply only to numeric variables",
+                spec.col
+            ));
+        }
+        if spec.rows.len() != spec.tags.len() {
+            return Err(anyhow!(
+                "column '{}': {} tagged rows but {} tags",
+                spec.col,
+                spec.rows.len(),
+                spec.tags.len()
+            ));
+        }
+        for (&row, tag) in spec.rows.iter().zip(&spec.tags) {
+            let &[b @ b'a'..=b'z'] = tag.as_bytes() else {
+                return Err(anyhow!(
+                    "column '{}': tag {:?} is not one of the Stata tags a-z",
+                    spec.col,
+                    tag
+                ));
+            };
+            if row >= n_rows {
+                return Err(anyhow!(
+                    "column '{}': tagged row {} is past the last row ({})",
+                    spec.col,
+                    row,
+                    n_rows
+                ));
+            }
+            by_col[j].insert(row, b as c_char);
+        }
+    }
+    Ok(by_col)
+}
+
+/// A tagged missing (`.a`-`.z`) when the cell has a tag, else the system missing `.`.
+unsafe fn insert_missing(
+    writer: *mut readstat_writer_t,
+    var: *const readstat_variable_t,
+    tag: Option<&c_char>,
+) -> readstat_error_t {
+    match tag {
+        Some(&t) => unsafe { readstat_insert_tagged_missing_value(writer, var, t) },
+        None => unsafe { readstat_insert_missing_value(writer, var) },
+    }
+}
+
 fn write_stata_minimal(
     batches: &[RecordBatch],
     out_path: &str,
@@ -328,6 +401,7 @@ fn write_stata_minimal(
     strl_threshold: i32,
     var_labels: Option<&HashMap<String, String>>,
     value_labels: Option<&HashMap<String, HashMap<String, String>>>,
+    tagged_missings: &[TaggedMissing],
 ) -> Result<()> {
     if batches.is_empty() {
         return Err(anyhow!("no record batches to write"));
@@ -367,6 +441,10 @@ fn write_stata_minimal(
         is_str_col[j] =
             is_text_dt(dt) || matches!(dt, DataType::Dictionary(_, v) if is_text_dt(v.as_ref()));
     }
+
+    let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    let n_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    let tags = tags_by_column(tagged_missings, &names, &is_str_col, n_rows)?;
 
     let mut col_types: Vec<readstat_type_t> = Vec::with_capacity(ncols);
     let mut rvars: Vec<*const readstat_variable_t> = Vec::with_capacity(ncols);
@@ -430,10 +508,14 @@ fn write_stata_minimal(
         if let Some(map) = var_labels {
             if let Some(lbl) = map.get(field.name()) {
                 if !lbl.is_empty() {
-                    if let Ok(c) = CString::new(lbl.as_str()) {
-                        unsafe {
-                            readstat_variable_set_label(var, c.as_ptr());
-                        }
+                    let c = CString::new(lbl.as_str()).map_err(|_| {
+                        anyhow!(
+                            "variable label of column '{}' contains an embedded NUL",
+                            field.name()
+                        )
+                    })?;
+                    unsafe {
+                        readstat_variable_set_label(var, c.as_ptr());
                     }
                 }
             }
@@ -521,8 +603,10 @@ fn write_stata_minimal(
         }
     }
 
+    let mut row_offset = 0;
     for b in batches {
         for i in 0..b.num_rows() {
+            let row = row_offset + i;
             unsafe {
                 let rc = readstat_begin_row(writer);
                 if rc != 0 {
@@ -578,7 +662,7 @@ fn write_stata_minimal(
                                 _ => readstat_insert_int32_value(writer, rvars[j], v as i32),
                             }
                         },
-                        None => unsafe { readstat_insert_missing_value(writer, rvars[j]) },
+                        None => unsafe { insert_missing(writer, rvars[j], tags[j].get(&row)) },
                     };
                     if rc != 0 {
                         return Err(anyhow!(
@@ -602,10 +686,11 @@ fn write_stata_minimal(
                         }
                     } else {
                         unsafe {
-                            let rc = readstat_insert_missing_value(writer, rvars[j]);
+                            let rc = insert_missing(writer, rvars[j], tags[j].get(&row));
                             if rc != 0 {
                                 return Err(anyhow!(
-                                    "insert_missing_value (double) failed with rc={}",
+                                    "insert missing value into '{}' failed with rc={}",
+                                    schema.field(j).name(),
                                     rc
                                 ));
                             }
@@ -621,6 +706,7 @@ fn write_stata_minimal(
                 }
             }
         }
+        row_offset += b.num_rows();
     }
 
     unsafe {
@@ -642,7 +728,7 @@ fn write_stata_minimal(
     var_labels_json=None,
     value_labels_json=None,
     strl_threshold=2045,
-    _user_missing_json=None
+    user_missing_json=None
 ))]
 pub fn df_write_dta_file(
     ipc_bytes: Bound<'_, PyBytes>,
@@ -652,7 +738,7 @@ pub fn df_write_dta_file(
     var_labels_json: Option<&str>,
     value_labels_json: Option<&str>,
     strl_threshold: i32,
-    _user_missing_json: Option<&str>,
+    user_missing_json: Option<&str>,
 ) -> PyResult<()> {
     let buf = ipc_bytes.as_bytes();
     let batches = ipc_to_batches(buf).map_err(|e| {
@@ -684,6 +770,15 @@ pub fn df_write_dta_file(
             None
         };
 
+    let tagged_missings: Vec<TaggedMissing> = match user_missing_json {
+        Some(js) => serde_json::from_str(js).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "user_missing_json must be a JSON list of {{col, rows, tags}}: {e}"
+            ))
+        })?,
+        None => Vec::new(),
+    };
+
     write_stata_minimal(
         &batches,
         out_path,
@@ -692,6 +787,7 @@ pub fn df_write_dta_file(
         strl_threshold,
         var_labels.as_ref(),
         value_labels.as_ref(),
+        &tagged_missings,
     )
     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("df_write_dta_file: {}", e)))
 }
@@ -769,7 +865,7 @@ mod tests {
         .unwrap();
         let path = std::env::temp_dir().join(format!("svy_dta_dates_{}.dta", std::process::id()));
         let path = path.to_str().unwrap();
-        write_stata_minimal(&[batch], path, None, 118, 2045, None, None).unwrap();
+        write_stata_minimal(&[batch], path, None, 118, 2045, None, None, &[]).unwrap();
         let (ipc, meta) =
             crate::stata_read::parse_dta_impl(path, 0, None, None, None, false).unwrap();
         let _ = std::fs::remove_file(path);
@@ -787,5 +883,15 @@ mod tests {
         assert_eq!(col(0), [Some(STATA_DAYS), None]);
         assert_eq!(col(1), [Some(STATA_MS), None]);
         assert_eq!(col(2), [Some(1.5), Some(2.5)]);
+    }
+
+    #[test]
+    fn extreme_timestamps_shift_to_1960_without_overflow() {
+        let ms = TimestampMillisecondArray::from(vec![i64::MAX]);
+        assert_eq!(temporal_as_stata(&ms, 0), Some(9.223372352473975e18));
+
+        let secs = TimestampSecondArray::from(vec![i64::MAX, i64::MIN]);
+        assert_eq!(temporal_as_stata(&secs, 0), Some(9.223372037170395e21));
+        assert_eq!(temporal_as_stata(&secs, 1), Some(-9.223372036539157e21));
     }
 }

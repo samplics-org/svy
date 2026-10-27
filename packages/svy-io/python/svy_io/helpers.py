@@ -7,6 +7,7 @@ import tempfile
 import warnings
 import zipfile
 
+from collections.abc import Iterable
 from contextlib import ExitStack
 from typing import Any
 
@@ -35,6 +36,13 @@ def _with_bad_string_hint(e: RuntimeError, hint: str = BAD_STRING_HINT) -> Runti
     if "(rc=17)" in str(e):
         return RuntimeError(f"{e}. Hint: {hint}.")
     return e
+
+
+def _reject_nul(what: str, named_texts: Iterable[tuple[str, object]]) -> None:
+    """Raise ``ValueError`` naming each entry whose text holds a NUL: ReadStat takes C strings."""
+    bad = sorted({name for name, text in named_texts if "\x00" in str(text)})
+    if bad:
+        raise ValueError(f"{what} cannot contain NUL (\\x00): {bad}")
 
 
 # ---------------- n_max normalization ----------------

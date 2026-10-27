@@ -128,14 +128,13 @@ def test_value_labels_match_integer_codes(tmp_path):
 
 
 def test_tagged_missing_on_integer_column_is_written_as_double(tmp_path):
-    # Tagged values send the column through the Float64 path; their tags are
-    # not written yet, so they come back as plain missings.
+    # Tagged values send the column through the Float64 path, and keep their tags.
     df = pl.DataFrame({"x": pl.Series([1, TaggedNA("a"), 3, None], dtype=pl.Object)})
 
     got, meta = _roundtrip(tmp_path, df)
 
     assert _kinds(meta) == {"x": "double"}
-    assert got["x"].to_list() == [1.0, None, 3.0, None]
+    assert got["x"].to_list() == [1.0, TaggedNA("a"), 3.0, None]
 
 
 def test_stata_integer_storage_reads_as_int64():
