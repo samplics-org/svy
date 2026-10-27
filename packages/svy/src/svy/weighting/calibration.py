@@ -624,10 +624,18 @@ def calibrate_matrix(
 
     by_cols = _cells_to_cols(by, where=where, param="by")
 
-    if isinstance(scale, (int, float)):
+    if isinstance(scale, (int, float)) and not isinstance(scale, bool):
         scale_arr = np.full(len(w), float(scale), dtype=np.float64)
     else:
-        scale_arr = np.asarray(scale, dtype=np.float64)
+        try:
+            scale_arr = np.asarray(scale, dtype=np.float64)
+        except (TypeError, ValueError) as e:
+            raise WeightingError.invalid_type(
+                where="Sample.weighting.calibrate",
+                param="scale",
+                got=scale,
+                expected="a number or one number per row",
+            ) from e
 
     totals_arr: np.ndarray = np.empty(0, dtype=np.float64)
     controls_dict_main: dict[int, list[float]] = {}

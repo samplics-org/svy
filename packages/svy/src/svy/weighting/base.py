@@ -13,6 +13,9 @@ Adding a new weighting method:
 
 from __future__ import annotations
 
+import difflib
+import inspect
+
 from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 
 import numpy as np
@@ -20,7 +23,7 @@ import numpy as np
 from svy.core.repwgts import BootstrapKind
 from svy.core.terms import Feature
 from svy.core.types import Category, ControlsType, DomainScalarMap, Number, WhereArg
-from svy.errors import WeightingError
+from svy.errors import Code, UsageError, WeightingError
 from svy.errors._api import guided_getattr
 from svy.utils.random_state import RandomState
 from svy.weighting.adjustment import adjust as _adjust
@@ -114,7 +117,17 @@ def _reject_legacy_kwargs(method: str, kwargs: dict[str, Any]) -> None:
                 note=_rename_note(old, new, kwargs),
             )
     unknown = next(iter(kwargs))
-    raise TypeError(f"{method}() got an unexpected keyword argument {unknown!r}")
+    known = [n for n in inspect.signature(getattr(Weighting, method)).parameters if n != "self"]
+    close = difflib.get_close_matches(unknown, known, n=1, cutoff=0.7)
+    raise UsageError.TypeError(
+        title="Unknown argument",
+        detail=f"{method}() got an unexpected keyword argument {unknown!r}",
+        code=Code.UNKNOWN_ARGUMENT,
+        where=f"Sample.weighting.{method}",
+        got=list(kwargs),
+        expected=known,
+        hint=f"Did you mean {close[0]}=?" if close else None,
+    )
 
 
 # The Sample state a weighting call may change; `_data` and `_design` go last
