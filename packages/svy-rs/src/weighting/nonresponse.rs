@@ -65,6 +65,19 @@ pub fn adjust_nr_impl(
     let mut factor_rr = Array2::ones((n_classes, n_reps));
     let mut factor_in = Array2::ones((n_classes, n_reps));
 
+    // A class with weight to move but nowhere to move it loses that weight. Column 0 is
+    // the full-sample weight, where that is an error; svy warns about a replicate's.
+    let no_respondents = |c: usize, r: usize| {
+        let row = class_indices
+            .iter()
+            .position(|&k| k == c)
+            .expect("every class index comes from a row");
+        WeightingError::NoRespondents {
+            class: adj_class[row],
+            column: r,
+        }
+    };
+
     for c in 0..n_classes {
         for r in 0..n_reps {
             if unknown_to_inelig {
@@ -72,6 +85,8 @@ pub fn adjust_nr_impl(
                 let denom_uk = sum_in[[c, r]] + sum_rr[[c, r]] + sum_nr[[c, r]];
                 let adj_uk = if denom_uk > 1e-10 {
                     (denom_uk + sum_uk[[c, r]]) / denom_uk
+                } else if r == 0 && sum_uk[[c, r]] > 0.0 {
+                    return Err(no_respondents(c, r));
                 } else {
                     1.0
                 };
@@ -80,6 +95,8 @@ pub fn adjust_nr_impl(
                 let denom_rr = sum_rr[[c, r]];
                 let adj_rr = if denom_rr > 1e-10 {
                     (sum_rr[[c, r]] + sum_nr[[c, r]]) / denom_rr
+                } else if r == 0 && sum_nr[[c, r]] > 0.0 {
+                    return Err(no_respondents(c, r));
                 } else {
                     1.0
                 };
@@ -91,6 +108,8 @@ pub fn adjust_nr_impl(
                 let denom_rr = sum_rr[[c, r]];
                 let adj_rr = if denom_rr > 1e-10 {
                     (sum_rr[[c, r]] + sum_nr[[c, r]] + sum_uk[[c, r]]) / denom_rr
+                } else if r == 0 && sum_nr[[c, r]] + sum_uk[[c, r]] > 0.0 {
+                    return Err(no_respondents(c, r));
                 } else {
                     1.0
                 };
@@ -213,5 +232,71 @@ mod tests {
 
         // Class 1: RR gets (2+4)/2 = 3.0x
         assert_relative_eq!(result[[3, 0]], 6.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn full_sample_class_without_respondents_is_an_error() {
+        let wgts = array![[1.0], [1.0], [0.0], [3.0]];
+        let adj_class = array![3, 3, 7, 7];
+        let resp_status = array![RR, NR, RR, NR];
+
+        for unknown_to_inelig in [true, false] {
+            let err = adjust_nr_impl(
+                wgts.view(),
+                adj_class.view(),
+                resp_status.view(),
+                unknown_to_inelig,
+            )
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                WeightingError::NoRespondents {
+                    class: 7,
+                    column: 0
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn replicate_class_without_respondents_keeps_a_factor_of_one() {
+        // Column 1 is a replicate that drops class 7's respondent.
+        let wgts = array![[1.0, 1.0], [1.0, 1.0], [2.0, 0.0], [3.0, 3.0]];
+        let adj_class = array![3, 3, 7, 7];
+        let resp_status = array![RR, NR, RR, NR];
+
+        let result =
+            adjust_nr_impl(wgts.view(), adj_class.view(), resp_status.view(), false).unwrap();
+        assert_eq!(result.column(0).to_vec(), [2.0, 0.0, 5.0, 0.0]);
+        assert_eq!(result.column(1).to_vec(), [2.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn unknowns_with_no_eligible_units_are_an_error() {
+        let wgts = array![[1.0], [1.0], [2.0]];
+        let adj_class = array![0, 0, 1];
+        let resp_status = array![RR, NR, UK];
+
+        let err =
+            adjust_nr_impl(wgts.view(), adj_class.view(), resp_status.view(), true).unwrap_err();
+        assert!(matches!(
+            err,
+            WeightingError::NoRespondents {
+                class: 1,
+                column: 0
+            }
+        ));
+    }
+
+    #[test]
+    fn class_with_nothing_to_move_keeps_its_weights() {
+        // Class 1 holds only ineligibles: no weight to carry, so no error.
+        let wgts = array![[1.0], [1.0], [2.0]];
+        let adj_class = array![0, 0, 1];
+        let resp_status = array![RR, NR, IN];
+
+        let result =
+            adjust_nr_impl(wgts.view(), adj_class.view(), resp_status.view(), false).unwrap();
+        assert_eq!(result.column(0).to_vec(), [2.0, 0.0, 2.0]);
     }
 }

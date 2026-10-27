@@ -14,7 +14,7 @@ from svy.errors import EstimationError
 from svy.errors._api import guided_getattr
 from svy.errors._findings import SvyWarning, merge_findings
 from svy.estimation import ParamEst
-from svy.estimation.estimate import _display_level
+from svy.estimation.estimate import _display_level, checked_print_width
 
 # Import central UI helpers (consistent with estimate.py)
 from svy.ui.printing import (
@@ -237,12 +237,7 @@ class TTestOneGroup(msgspec.Struct, tag="one", tag_field="kind", kw_only=True, f
         if width is None:
             cls.PRINT_WIDTH = None
             return
-        try:
-            w = int(width)
-        except Exception as ex:
-            raise TypeError(f"class print width must be int or None; got {width!r}") from ex
-        if w <= 20:
-            raise ValueError("class print width must be > 20 characters.")
+        w = checked_print_width(width, where="TTestOneGroup.set_default_print_width")
         cls.PRINT_WIDTH = w
 
     # ---------------- Data Export ----------------
@@ -454,12 +449,7 @@ class TTestTwoGroups(msgspec.Struct, tag="two", tag_field="kind", kw_only=True, 
         if width is None:
             cls.PRINT_WIDTH = None
             return
-        try:
-            w = int(width)
-        except Exception as ex:
-            raise TypeError(f"class print width must be int or None; got {width!r}") from ex
-        if w <= 20:
-            raise ValueError("class print width must be > 20 characters.")
+        w = checked_print_width(width, where="TTestTwoGroups.set_default_print_width")
         cls.PRINT_WIDTH = w
 
     # ---------------- Data Export ----------------
@@ -731,8 +721,8 @@ def ttest_one_group_frame(
         return pl.DataFrame(rows)
 
     else:
-        raise ValueError(
-            f"Invalid component '{component}'. Expected one of ['test', 'estimates']."
+        raise EstimationError.invalid_choice(
+            where="to_polars", param="component", got=component, allowed=["test", "estimates"]
         )
 
 
@@ -851,8 +841,8 @@ def ttest_two_groups_frame(
         return pl.DataFrame(rows)
 
     else:
-        raise ValueError(
-            f"Invalid component '{component}'. Expected one of ['test', 'estimates']."
+        raise EstimationError.invalid_choice(
+            where="to_polars", param="component", got=component, allowed=["test", "estimates"]
         )
 
 
@@ -949,12 +939,7 @@ class TTestByResult:
         if width is None:
             cls.PRINT_WIDTH = None
             return
-        try:
-            w = int(width)
-        except Exception as ex:
-            raise TypeError(f"print width must be int or None; got {width!r}") from ex
-        if w <= 20:
-            raise ValueError("print width must be > 20 characters.")
+        w = checked_print_width(width, where="TTestByResult.set_default_print_width")
         cls.PRINT_WIDTH = w
 
     # ── Export ───────────────────────────────────────────────────────────

@@ -26,10 +26,11 @@ from msgspec import structs as ms_structs
 from svy.core.containers import ChiSquare, FDist
 from svy.core.enumerations import TableType
 from svy.core.types import Category, Number
-from svy.errors import EstimationError
+from svy.errors import Code, EstimationError
 from svy.errors._api import guided_getattr
 from svy.errors._findings import merge_findings
 from svy.estimation import ParamEst
+from svy.estimation.estimate import checked_print_width
 
 # Import central UI helpers (consistent with estimate.py and ttest.py)
 from svy.ui.printing import (
@@ -392,12 +393,7 @@ class Table:
         if width is None:
             cls.PRINT_WIDTH = None
             return
-        try:
-            w = int(width)
-        except Exception as ex:
-            raise TypeError(f"class print width must be int or None; got {width!r}") from ex
-        if w <= 20:
-            raise ValueError("class print width must be > 20 characters.")
+        w = checked_print_width(width, where="Table.set_default_print_width")
         cls.PRINT_WIDTH = w
 
     # ----- presentation properties & helpers ---------------------------------
@@ -428,7 +424,12 @@ class Table:
         if value is None or isinstance(value, int) or isinstance(value, dict):
             object.__setattr__(self, "_decimals", value)
         else:
-            raise TypeError("decimals must be int | dict[str,int] | None")
+            raise EstimationError.invalid_type(
+                where="Table.decimals",
+                param="decimals",
+                got=value,
+                expected="int | dict[str, int] | None",
+            )
 
     def set_decimals(self, every: int | None = None, /, **overrides: int) -> Self:
         if every is None and not overrides:
@@ -437,7 +438,9 @@ class Table:
         base = {k: int(every) for k in _DECIMAL_KEYS} if every is not None else {}
         for k, v in overrides.items():
             if k not in _DECIMAL_KEYS:
-                raise ValueError(f"Unknown key {k!r}; allowed: {_DECIMAL_KEYS}")
+                raise EstimationError.invalid_choice(
+                    where="Table.set_decimals", param="decimals", got=k, allowed=_DECIMAL_KEYS
+                )
             base[k] = int(v)
         object.__setattr__(self, "_decimals", base)
         return self
@@ -451,9 +454,7 @@ class Table:
         if value is None:
             object.__setattr__(self, "_print_width", None)
             return
-        iv = int(value)
-        if iv <= 20:
-            raise ValueError("print_width must be > 20 or None")
+        iv = checked_print_width(value, where="Table.print_width")
         object.__setattr__(self, "_print_width", iv)
 
     def style(
@@ -489,12 +490,25 @@ class Table:
             object.__setattr__(self, name, value)
             return
         if getattr(self, "_frozen", False):
-            raise AttributeError("Table is frozen; use .update(...) to create a modified copy.")
+            raise EstimationError.AttributeError(
+                title="Table is frozen",
+                detail=f"Table is frozen; cannot set {name!r}.",
+                code=Code.TABLE_FROZEN,
+                where="Table",
+                param=name,
+                hint="Use .update(...) to create a modified copy.",
+            )
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name: str) -> None:
         if getattr(self, "_frozen", False):
-            raise AttributeError("Table is frozen; attributes cannot be deleted.")
+            raise EstimationError.AttributeError(
+                title="Table is frozen",
+                detail=f"Table is frozen; cannot delete {name!r}.",
+                code=Code.TABLE_FROZEN,
+                where="Table",
+                param=name,
+            )
         object.__delattr__(self, name)
 
     # ---- Rich rendering ----

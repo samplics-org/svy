@@ -466,6 +466,16 @@ def _controls_missed(
     return {"expected": expected, "got": got, "max_rel_error": worst, "domains": list(got)}
 
 
+def _replicates_not_met(rep_missed: dict[str, dict[str, Any]], *, where: str) -> WeightingError:
+    """One CALIBRATION_NOT_MET for every replicate weight that missed its controls."""
+    return WeightingError.calibration_not_met(
+        where=where,
+        got={name: m["got"] for name, m in rep_missed.items()},
+        max_rel_error=max(m["max_rel_error"] for m in rep_missed.values()),
+        replicates=list(rep_missed),
+    )
+
+
 def _cycle_infeasible(
     w: np.ndarray,
     X: np.ndarray,
@@ -846,6 +856,49 @@ def calibrate_matrix(
 
         new_w = _current_w
 
+    # Replicates are calibrated, and checked, before anything is written, so raising
+    # leaves the sample untouched. A replicate can miss controls the full sample meets
+    # (a deleted PSU can take an auxiliary's only units).
+    calib_reps = None
+    rep_missed: dict[str, dict[str, Any]] = {}
+    if not ignore_reps and design.rep_wgts is not None and design.rep_wgts.columns:
+        rep_cols = design.rep_wgts.columns
+        wgts_arr = df.select(rep_cols).to_numpy()
+
+        if isinstance(scale, (int, float)):
+            scale_arr = np.full(len(w), float(scale), dtype=np.float64)
+        else:
+            scale_arr = np.asarray(scale, dtype=np.float64)
+
+        if by_cols is None:
+            if len(rep_cols) >= 10:
+                assert rust_calibrate_parallel is not None  # noqa: S101
+                calib_reps = rust_calibrate_parallel(wgts_arr, X, totals_arr, scale_arr)
+            else:
+                assert rust_calibrate is not None  # noqa: S101
+                # Always pass additive=False — see module docstring.
+                calib_reps = rust_calibrate(wgts_arr, X, totals_arr, scale_arr, False)
+        else:
+            assert rust_calibrate_by_domain is not None  # noqa: S101
+            # Always pass additive=False — see module docstring.
+            calib_reps = rust_calibrate_by_domain(
+                wgts_arr, X, domain_indices, controls_dict_main, scale_arr, False
+            )
+
+        for j in range(len(rep_cols)):
+            m = _controls_missed(
+                calib_reps[:, j],
+                X,
+                totals=totals_arr,
+                domains=domains,
+                domain_indices=domain_indices,
+                controls_by_domain=controls_dict_main,
+            )
+            if m is not None:
+                rep_missed[f"{wgt_name}{j + 1}"] = m
+        if rep_missed and on_nonconvergence == "error":
+            raise _replicates_not_met(rep_missed, where=where)
+
     # ── Write results (only after the non-convergence guard above) ───────
     df = df.with_columns(pl.Series(name=wgt_name, values=new_w))
 
@@ -872,45 +925,17 @@ def calibrate_matrix(
             ),
         )
 
-    if not ignore_reps and design.rep_wgts is not None:
-        rep_cols = design.rep_wgts.columns
+    if calib_reps is not None and design.rep_wgts is not None:
+        n_reps = calib_reps.shape[1]
+        new_rep_names = [f"{wgt_name}{i}" for i in range(1, n_reps + 1)]
 
-        if rep_cols:
-            wgts_arr = df.select(rep_cols).to_numpy()
+        wgts_df = pl.DataFrame(calib_reps, schema=new_rep_names)
+        df = df.hstack(wgts_df)
 
-            if isinstance(scale, (int, float)):
-                scale_arr = np.full(len(w), float(scale), dtype=np.float64)
-            else:
-                scale_arr = np.asarray(scale, dtype=np.float64)
-
-            if by_cols is None:
-                n_reps = len(rep_cols)
-                if n_reps >= 10:
-                    assert rust_calibrate_parallel is not None  # noqa: S101
-                    calib_reps = rust_calibrate_parallel(wgts_arr, X, totals_arr, scale_arr)
-                else:
-                    assert rust_calibrate is not None  # noqa: S101
-                    # Always pass additive=False — see module docstring.
-                    calib_reps = rust_calibrate(wgts_arr, X, totals_arr, scale_arr, False)
-            else:
-                assert rust_calibrate_by_domain is not None  # noqa: S101
-                # Always pass additive=False — see module docstring.
-                calib_reps = rust_calibrate_by_domain(
-                    wgts_arr, X, domain_indices, controls_dict_main, scale_arr, False
-                )
-
-            n_reps = len(rep_cols)
-            new_rep_names = [f"{wgt_name}{i}" for i in range(1, n_reps + 1)]
-
-            wgts_df = pl.DataFrame(calib_reps, schema=new_rep_names)
-            df = df.hstack(wgts_df)
-
-            if update_design_wgts:
-                sample._design = sample._design.update(
-                    rep_wgts=msgspec.structs.replace(
-                        design.rep_wgts, prefix=wgt_name, n_reps=n_reps
-                    )
-                )
+        if update_design_wgts:
+            sample._design = sample._design.update(
+                rep_wgts=msgspec.structs.replace(design.rep_wgts, prefix=wgt_name, n_reps=n_reps)
+            )
 
     sample._data = df
     record_null_rows(
@@ -932,6 +957,23 @@ def calibrate_matrix(
             level=finding_level(on_nonconvergence),
             infeasible=infeasible,
             wgt_name=wgt_name,
+        )
+    if rep_missed:
+        err = _replicates_not_met(rep_missed, where=where)
+        sample.warn(
+            WeightingWarning(
+                code=err.code,
+                title=err.title,
+                detail=err.detail.split(" Pass on_nonconvergence=")[0]
+                + " They hold the approximate solution.",
+                where=where,
+                level=finding_level(on_nonconvergence),
+                param=err.param,
+                expected=err.expected,
+                got=err.got,
+                hint=err.hint,
+                extra=err.extra,
+            )
         )
     if missed is not None:
         err = WeightingError.calibration_not_met(where=where, **missed)

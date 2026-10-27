@@ -32,7 +32,9 @@ from svy.categorical.ttest import (
 )
 from svy.core.containers import FDist, TDist
 from svy.core.types import Category
+from svy.errors import EstimationError
 from svy.errors._findings import SvyWarning, merge_findings
+from svy.estimation.estimate import checked_print_width
 from svy.ui.printing import (
     finding_notes,
     make_panel,
@@ -122,12 +124,7 @@ class RankTestTwoSample(
         if width is None:
             cls.PRINT_WIDTH = None
             return
-        try:
-            w = int(width)
-        except Exception as ex:
-            raise TypeError(f"class print width must be int or None; got {width!r}") from ex
-        if w <= 20:
-            raise ValueError("class print width must be > 20 characters.")
+        w = checked_print_width(width, where="RankTestTwoSample.set_default_print_width")
         cls.PRINT_WIDTH = w
 
     # ---------------- Data Export ----------------
@@ -234,8 +231,8 @@ class RankTestTwoSample(
             return pl.DataFrame(rows)
 
         else:
-            raise ValueError(
-                f"Invalid component '{component}'. Expected one of ['test', 'estimates']."
+            raise EstimationError.invalid_choice(
+                where="to_polars", param="component", got=component, allowed=["test", "estimates"]
             )
 
     # ---------------- Presentation ----------------
@@ -401,12 +398,7 @@ class RankTestKSample(msgspec.Struct, tag="rank_k", tag_field="kind", kw_only=Tr
         if width is None:
             cls.PRINT_WIDTH = None
             return
-        try:
-            w = int(width)
-        except Exception as ex:
-            raise TypeError(f"class print width must be int or None; got {width!r}") from ex
-        if w <= 20:
-            raise ValueError("class print width must be > 20 characters.")
+        w = checked_print_width(width, where="RankTestKSample.set_default_print_width")
         cls.PRINT_WIDTH = w
 
     # ---------------- Data Export ----------------
@@ -495,8 +487,8 @@ class RankTestKSample(msgspec.Struct, tag="rank_k", tag_field="kind", kw_only=Tr
             return pl.DataFrame(rows)
 
         else:
-            raise ValueError(
-                f"Invalid component '{component}'. Expected one of ['test', 'estimates']."
+            raise EstimationError.invalid_choice(
+                where="to_polars", param="component", got=component, allowed=["test", "estimates"]
             )
 
     # ---------------- Presentation ----------------
@@ -701,12 +693,7 @@ class RankTestByResult:
         if width is None:
             cls.PRINT_WIDTH = None
             return
-        try:
-            w = int(width)
-        except Exception as ex:
-            raise TypeError(f"print width must be int or None; got {width!r}") from ex
-        if w <= 20:
-            raise ValueError("print width must be > 20 characters.")
+        w = checked_print_width(width, where="RankTestByResult.set_default_print_width")
         cls.PRINT_WIDTH = w
 
     # ── Helpers ──────────────────────────────────────────────────────────

@@ -41,7 +41,8 @@ def _pair(df, *, method, psu, stratum="reg", **kw):
     s = Sample(df, Design(stratum=stratum, psu=psu, wgt="w"))
     if method == "brr":
         return s.weighting.create_brr_wgts(**kw)
-    return s.weighting.create_jk_wgts(paired=True, **kw)
+    # JK2 deletes a random PSU per stratum: builds compared to each other share a seed.
+    return s.weighting.create_jk_wgts(paired=True, **{"rstate": 1, **kw})
 
 
 def _reps(s: Sample) -> np.ndarray:

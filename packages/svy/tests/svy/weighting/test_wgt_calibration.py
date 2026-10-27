@@ -429,3 +429,57 @@ def test_calibrate_where_scopes_the_adjustment():
     hit = d.filter(_pl.col("frame") == "new").group_by("A").agg(_pl.col("calib_wgt").sum())
     assert_allclose(sorted(hit["calib_wgt"].to_list()), [30.0, 50.0], rtol=1e-9)
     _np.testing.assert_allclose(d.filter(_pl.col("frame") == "old")["calib_wgt"].to_numpy(), 10.0)
+
+
+def _rep_sample_missing_aux():
+    # Replicate r1 drops every row with x > 0, so it cannot reach the x control.
+    df = pl.DataFrame(
+        {
+            "x": [1.0, 1.0, 0.0, 0.0],
+            "w": [1.0, 1.0, 1.0, 1.0],
+            "r1": [0.0, 0.0, 2.0, 2.0],
+            "r2": [2.0, 2.0, 0.0, 0.0],
+        }
+    )
+    from svy.core.design import RepWeights
+
+    reps = RepWeights(method="Bootstrap", prefix="r", n_reps=2)
+    return Sample(data=df, design=Design(wgt="w", rep_wgts=reps))
+
+
+def test_replicate_missing_controls_raises_and_leaves_sample_untouched():
+    from svy.errors import Code, WeightingError
+
+    s = _rep_sample_missing_aux()
+    with pytest.raises(WeightingError) as exc:
+        s.weighting.calibrate(controls={"x": 5.0}, wgt_name="cal")
+    assert exc.value.code == Code.CALIBRATION_NOT_MET
+    assert "in replicate weight(s) ['cal1'] within tolerance" in exc.value.detail
+    assert exc.value.got == {"cal1": [0.0]}
+    assert "cal" not in s.data.columns and s.design.wgt == "w"
+
+
+def test_replicate_missing_controls_warns_when_asked():
+    from svy.errors import WeightingWarning
+
+    s = _rep_sample_missing_aux()
+    with pytest.warns(WeightingWarning, match=r"\[CALIBRATION_NOT_MET\]") as rec:
+        out = s.weighting.calibrate(controls={"x": 5.0}, wgt_name="cal", on_nonconvergence="warn")
+    assert "in replicate weight(s) ['cal1'] within tolerance" in rec[0].message.detail
+    # r2: x-total 4 calibrated to 5, so g = 1.25 on its x rows; r1 keeps its weights.
+    assert_allclose(out.data["cal2"].to_numpy(), [2.5, 2.5, 0.0, 0.0], atol=1e-12)
+    assert_allclose(out.data["cal1"].to_numpy(), [0.0, 0.0, 2.0, 2.0], atol=1e-12)
+
+
+def test_redundant_controls_give_the_reduced_set_weights():
+    # one = f + m, so {one, f, m} spans what {one, f} spans: the same linear calibration.
+    f = [1.0, 0.0, 1.0, 1.0, 0.0, 0.0]
+    df = pl.DataFrame(
+        {"one": [1.0] * 6, "f": f, "m": [1.0 - v for v in f], "w": [1.0, 2.0, 1.5, 1.0, 2.5, 1.0]}
+    )
+    s = Sample(data=df, design=Design(wgt="w"))
+
+    full = s.weighting.calibrate(controls={"one": 12.0, "f": 7.0, "m": 5.0}, wgt_name="cal")
+    reduced = s.weighting.calibrate(controls={"one": 12.0, "f": 7.0}, wgt_name="cal")
+
+    assert_allclose(full.data["cal"].to_numpy(), reduced.data["cal"].to_numpy(), rtol=1e-12)
