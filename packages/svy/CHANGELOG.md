@@ -21,6 +21,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **Stage-1 `n` in `multistage` is keyed as in `srs` and `pps_*`.** Besides the full stratum (a tuple for several stratum columns), a mapping keyed by one stratum variable is broadcast, e.g. `Stage("ea", n={"Urban": 6, "Rural": 4}, mos="hh")` on a design stratified by `("region", "urbrur")`. Keys that match no stratum now raise `MULTISTAGE_N_MISSING` instead of being ignored.
 - **Table headers name an unlabelled variable** instead of `Row` or `Col`, and the row and column headers are left-aligned with their levels whether labelled or not.
 - **`GLM_SEPARATION` names terms as the coefficient table prints them** (`classe_B`, not `classe_2.0`); `got` keeps the coded names of `GLMCoef.term`.
+- **Printed estimates list labelled levels in code order**, as `to_polars()`, tables and GLM terms do: `prop(y="a4", by="area")` prints `URBANA` (1) before `RURAL` (2) and answers in questionnaire order. Unlabelled levels still sort on their text.
 
 ### Removed
 
