@@ -307,3 +307,8 @@ _DESIGN_ARGS = {
 @dataclass(eq=False)
 class UsageWarning(SvyWarning):
     pass
+
+
+@dataclass(eq=False)
+class ExperimentalWarning(SvyWarning):
+    """A feature that may change in any release, without a deprecation period."""

@@ -4,7 +4,7 @@
 - ``except svy.errors.WeightingError`` catches one area; ``category=WeightingWarning`` filters one.
 """
 
-from ._api import UnknownNameError, UsageError, UsageWarning
+from ._api import ExperimentalWarning, UnknownNameError, UsageError, UsageWarning
 from ._base import _KINDS, Severity, SvyError, SvyWarning
 from ._codes import Code
 from ._data import DataError, DataWarning
@@ -22,6 +22,7 @@ from ._weighting import WeightingError, WeightingWarning
 
 
 __all__ = [
+    "ExperimentalWarning",
     "Code",
     "DataError",
     "DataWarning",
