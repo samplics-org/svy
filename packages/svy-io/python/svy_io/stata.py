@@ -505,6 +505,10 @@ def _extract_tagged_missings(
 
         for i, v in enumerate(vals):
             if isinstance(v, TaggedNA):
+                if len(v.tag) != 1 or not "a" <= v.tag <= "z":
+                    raise ValueError(
+                        f"Stata tagged missings use the tags a-z; column {name!r} has {v.tag!r}"
+                    )
                 rows.append(i)
                 tags.append(v.tag)
                 vals[i] = None

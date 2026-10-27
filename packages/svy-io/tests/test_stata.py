@@ -616,3 +616,50 @@ def test_write_dta_value_labels_at_int32_extremes_are_sorted(tmp_path):
     assert meta["value_labels"] == [
         {"set_name": "v", "mapping": {str(k): v for k, v in sorted(labels.items())}}
     ]
+
+
+def test_tagged_missings_are_written(tmp_path):
+    from svy_io import TaggedNA
+    from svy_io.stata import read_dta, write_dta
+
+    out = tmp_path / "tagged.dta"
+    df = pl.DataFrame({"x": pl.Series([1.5, TaggedNA("a"), None, TaggedNA("z")], dtype=pl.Object)})
+    write_dta(df, out, version=118)
+
+    got, meta = read_dta(str(out))
+    assert got["x"].to_list() == [1.5, TaggedNA("a"), None, TaggedNA("z")]
+    assert meta["tagged_missings"] == [{"col": "x", "rows": [1, 3], "tags": ["a", "z"]}]
+
+
+@pytest.mark.parametrize("tag", ["A", "ab", ""])
+def test_tagged_missing_outside_a_to_z_raises(tmp_path, tag):
+    from svy_io import TaggedNA
+    from svy_io.stata import write_dta
+
+    df = pl.DataFrame({"x": pl.Series([1.0, TaggedNA(tag)], dtype=pl.Object)})
+    with pytest.raises(ValueError, match=rf"column 'x' has {tag!r}"):
+        write_dta(df, tmp_path / "bad.dta", version=118)
+
+
+@pytest.mark.parametrize(
+    ("spec", "message"),
+    [
+        ({"col": "nope", "rows": [0], "tags": ["a"]}, "column 'nope', which is not in the data"),
+        ({"col": "s", "rows": [0], "tags": ["a"]}, "column 's' holds strings"),
+        ({"col": "x", "rows": [0, 1], "tags": ["a"]}, "2 tagged rows but 1 tags"),
+        ({"col": "x", "rows": [0], "tags": ["A"]}, r"tag \"A\" is not one of the Stata tags a-z"),
+        ({"col": "x", "rows": [2], "tags": ["a"]}, r"tagged row 2 is past the last row \(2\)"),
+    ],
+)
+def test_native_tagged_missing_spec_is_checked(tmp_path, spec, message):
+    import io
+    import json
+
+    from svy_io import svyreadstat_rs as native
+
+    bio = io.BytesIO()
+    pl.DataFrame({"x": [1.0, None], "s": ["a", "b"]}).write_ipc(bio)
+    with pytest.raises(RuntimeError, match=message):
+        native.df_write_dta_file(
+            bio.getvalue(), str(tmp_path / "n.dta"), 118, None, None, None, 2045, json.dumps([spec])
+        )
