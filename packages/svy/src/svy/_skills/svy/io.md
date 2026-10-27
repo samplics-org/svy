@@ -48,7 +48,7 @@ so join on both.
 
 ```python
 households = svy.read_csv("households.csv")  # cluster, hh_id, region, stratum, weight
-persons = svy.read_csv("persons.csv")        # cluster, hh_id, person_id, sex, age, ...
+persons = svy.read_csv("persons.csv")  # cluster, hh_id, person_id, sex, age, ...
 
 people = persons.join(households, on=["cluster", "hh_id"], how="left", validate="m:1")
 assert people.height == persons.height

@@ -54,7 +54,7 @@ households.data.select("cluster", "hh_id", "svy_sample_weight")
 
 ```python
 size = svy.SampleSize().estimate_prop(p=0.3, moe=0.05, deff=1.5, resp_rate=0.85)
-size.n           # overall n, after design effect and response rate
+size.n  # overall n, after design effect and response rate
 size.to_polars()  # each step: n0, n1_deff, n2_fpc, n
 
 allocated = size.allocate(pop_size={"North": 5000, "South": 7000, "East": 3000, "West": 4000})

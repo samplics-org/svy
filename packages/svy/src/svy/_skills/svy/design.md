@@ -68,12 +68,12 @@ the user and let them choose a rule.
 
 ```python
 singleton_rules = [
-    "center",                                   # R lonely.psu="adjust"
-    "scale",                                    # R "average"
-    "skip",                                     # R "remove" and "certainty"
-    "self_representing",                        # the PSU becomes a stratum
-    svy.Singleton("collapse", within="region"), # merge into a stratum of the same region
-    "pool",                                     # singletons pooled into one stratum
+    "center",  # R lonely.psu="adjust"
+    "scale",  # R "average"
+    "skip",  # R "remove" and "certainty"
+    "self_representing",  # the PSU becomes a stratum
+    svy.Singleton("collapse", within="region"),  # merge into a stratum of the same region
+    "pool",  # singletons pooled into one stratum
 ]
 centered = svy.Sample(
     data, svy.Design(stratum="stratum", psu="cluster", wgt="weight", singleton="center")
