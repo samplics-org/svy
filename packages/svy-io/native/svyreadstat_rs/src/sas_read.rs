@@ -74,6 +74,8 @@ fn parse_sas_impl(
     }
 
     // Step 2: Parse data file
+    // Before the parser exists, so a bad path cannot return without freeing it.
+    let c_path = CString::new(data_path)?;
     unsafe {
         let parser = readstat_parser_init();
         if parser.is_null() {
@@ -95,7 +97,6 @@ fn parse_sas_impl(
             }
         };
 
-        let c_path = CString::new(data_path)?;
         let rc =
             readstat_parse_sas7bdat(parser, c_path.as_ptr(), &mut ctx as *mut _ as *mut c_void);
 
@@ -136,6 +137,7 @@ pub(crate) fn parse_catalog(
     catalog_encoding: Option<&str>,
     lossy_utf8: bool,
 ) -> Result<()> {
+    let c_path = CString::new(cat_path)?;
     unsafe {
         let parser = readstat_parser_init();
         if parser.is_null() {
@@ -154,7 +156,6 @@ pub(crate) fn parse_catalog(
             }
         };
 
-        let c_path = CString::new(cat_path)?;
         let rc = readstat_parse_sas7bcat(parser, c_path.as_ptr(), ctx as *mut _ as *mut c_void);
 
         readstat_parser_free(parser);
