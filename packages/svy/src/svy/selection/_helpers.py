@@ -15,7 +15,8 @@ from typing import Any, Literal, Sequence
 import numpy as np
 import polars as pl
 
-from svy.errors import Code, SelectionWarning
+from svy.core.constants import SVY_OWN_PREFIX
+from svy.errors import Code, SelectionError, SelectionWarning
 from svy.errors._findings import Severity
 
 
@@ -27,6 +28,19 @@ def _psu_list(psu) -> list[str]:
     if psu is None:
         return []
     return [psu] if isinstance(psu, str) else list(psu)
+
+
+def _check_columns(columns: list[str], caller: str, /, **roles: list[str]) -> None:
+    present = set(columns)
+    for param, cols in roles.items():
+        missing = [c for c in cols if c not in present]
+        if missing:
+            raise SelectionError.missing_columns(
+                where=caller,
+                param=param,
+                missing=missing,
+                available=[c for c in columns if not c.startswith(SVY_OWN_PREFIX)],
+            )
 
 
 def _apply_order(
@@ -44,6 +58,13 @@ def _apply_order(
                                              (implicit stratification for
                                              systematic PPS).
     """
+    if order_type not in ("ascending", "descending", "random"):
+        raise SelectionError.invalid_choice(
+            where="Sample.sampling",
+            param="order_type",
+            got=order_type,
+            allowed=("ascending", "descending", "random"),
+        )
     if order_type == "random":
         if order_by is not None:
             sort_cols = [order_by] if isinstance(order_by, str) else list(order_by)
@@ -118,10 +139,15 @@ def _warn_n_exceeds_population(
                 got={"group": group, "n": n_req},
             )
         elif n_req > pop and not wr and not pps:
-            raise ValueError(
-                f"Selection: requested n={n_req} exceeds the available "
-                f"population of {pop} units in group {group!r}. "
-                "Use wr=True for with-replacement sampling, or reduce n."
+            raise SelectionError.ValueError(
+                title="Sample size exceeds the group",
+                detail=f"Selection: requested n={n_req} exceeds the available "
+                f"population of {pop} units in group {group!r}.",
+                code=Code.SELECTION_N_EXCEEDS_GROUP,
+                where="Sample.sampling.srs",
+                param="n",
+                got={"group": group, "n": n_req, "available": pop},
+                hint="Use wr=True for with-replacement sampling, or reduce n.",
             )
         elif n_req > pop and wr:
             _finding(

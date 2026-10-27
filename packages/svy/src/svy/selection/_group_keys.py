@@ -11,13 +11,16 @@ None of these functions touch Sample or Design directly.
 
 from __future__ import annotations
 
+import math
+import numbers
+
 from typing import Iterable, Mapping, cast
 
 import polars as pl
 
 from svy.core.constants import key_col
 from svy.core.types import DF, Category, Number
-from svy.errors import SelectionError
+from svy.errors import Code, SelectionError
 
 
 _SEP = "__by__"  # internal composite-key separator
@@ -144,6 +147,28 @@ def _build_group_keys(
     return stratum_by_col, stratum_by_arr, G, B, S, data
 
 
+def _check_n(n: object) -> None:
+    values = list(n.values()) if isinstance(n, Mapping) else [n]
+    for v in values:
+        if isinstance(v, bool) or not isinstance(v, numbers.Real):
+            raise SelectionError.invalid_type(
+                where="Sample.sampling",
+                param="n",
+                got=v,
+                expected="a whole number of units, or a mapping of them",
+            )
+        x = float(v)
+        if not (math.isfinite(x) and x >= 0 and x.is_integer()):
+            raise SelectionError.ValueError(
+                title="Invalid sample size",
+                detail=f"n must be a non-negative whole number; got {v!r}.",
+                code=Code.SELECTION_N_INVALID,
+                where="Sample.sampling",
+                param="n",
+                got=v,
+            )
+
+
 def _normalize_n_for_groups(
     n: Number | Mapping[Category, Number],
     *,
@@ -222,12 +247,15 @@ def _normalize_n_for_groups(
             return None
         return result
 
+    _check_n(n)
+
     # ── scalar shortcut ─────────────────────────────────────────────────────
-    if isinstance(n, (int, float)):
-        return _broadcast(G, n) if G else int(n)
+    if not isinstance(n, Mapping):
+        count = int(n)
+        return _broadcast(G, count) if G else count
 
     # ── dict path ───────────────────────────────────────────────────────────
-    n_map = _coerce(n)
+    n_map = _coerce(cast(Mapping[Category, Number], n))
 
     # Problem 1: dict with no grouping — keys are meaningless
     if not G:
