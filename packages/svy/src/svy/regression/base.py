@@ -14,7 +14,7 @@ import msgspec
 import numpy as np
 import polars as pl
 
-from svy.errors import Code, ModelWarning
+from svy.errors import Code, DataError, ModelWarning
 from svy.errors._findings import SvyWarning, merge_findings, reports_findings
 
 
@@ -34,7 +34,7 @@ from svy.core.variance_method import resolve_variance_method
 from svy.errors._api import guided_getattr
 from svy.errors._model import ModelError
 from svy.estimation.replication import replicate_params
-from svy.regression.glm import GLMCoef, GLMFit, GLMStats, delta_var, offset_values
+from svy.regression.glm import GLMCoef, GLMFit, GLMStats, _print_width, delta_var, offset_values
 from svy.regression.links import FAMILY_LABELS, link_inverse, link_mu_eta, resolve_link
 from svy.regression.prediction import GLMPred
 from svy.ui.printing import format_where_clause
@@ -270,12 +270,20 @@ def _normalize_family(family: FamilyArg) -> str:
         "nb": "negativebinomial",
     }
     if not isinstance(family, str):
-        raise TypeError(
-            f"'family' must be a string, got {type(family).__name__}. Use {_FAMILY_NAMES}."
+        raise ModelError.invalid_type(
+            where="GLM.fit", param="family", got=family, expected=f"one of {_FAMILY_NAMES}"
         )
     result = _MAP.get(family.strip().lower())
     if result is None:
-        raise ValueError(f"Unknown family {family!r}. Use {_FAMILY_NAMES}.")
+        raise ModelError.ValueError(
+            title="Unknown family",
+            detail=f"Unknown family {family!r}. Use {_FAMILY_NAMES}.",
+            code=Code.INVALID_CHOICE,
+            where="GLM.fit",
+            param="family",
+            got=family,
+            expected=_FAMILY_NAMES,
+        )
     return result
 
 
@@ -309,12 +317,20 @@ def _normalize_link(link: LinkArg | None) -> str | None:
     if link is None:
         return None
     if not isinstance(link, str):
-        raise TypeError(
-            f"'link' must be a string or None, got {type(link).__name__}. Use {_LINK_NAMES}."
+        raise ModelError.invalid_type(
+            where="GLM.fit", param="link", got=link, expected=f"one of {_LINK_NAMES} or None"
         )
     result = _MAP.get(link.strip().lower())
     if result is None:
-        raise ValueError(f"Unknown link {link!r}. Use {_LINK_NAMES}.")
+        raise ModelError.ValueError(
+            title="Unknown link",
+            detail=f"Unknown link {link!r}. Use {_LINK_NAMES}.",
+            code=Code.INVALID_CHOICE,
+            where="GLM.fit",
+            param="link",
+            got=link,
+            expected=_LINK_NAMES,
+        )
     return result
 
 
@@ -376,13 +392,7 @@ class GLM:
         if width is None:
             self._print_width = None
             return self
-        try:
-            w = int(width)
-        except Exception as ex:
-            raise TypeError(f"print width must be int or None; got {width!r}") from ex
-        if w <= 20:
-            raise ValueError("print width must be > 20 characters.")
-        self._print_width = w
+        self._print_width = _print_width(width, where="GLM.set_print_width")
         return self
 
     @classmethod
@@ -391,13 +401,7 @@ class GLM:
         if width is None:
             cls.PRINT_WIDTH = None
             return
-        try:
-            w = int(width)
-        except Exception as ex:
-            raise TypeError(f"class print width must be int or None; got {width!r}") from ex
-        if w <= 20:
-            raise ValueError("class print width must be > 20 characters.")
-        cls.PRINT_WIDTH = w
+        cls.PRINT_WIDTH = _print_width(width, where="GLM.set_default_print_width")
 
     # --- Display Methods ---
 
@@ -533,6 +537,18 @@ class GLM:
         from scipy import stats
 
         alpha = validate_alpha(alpha, where="GLM.fit")
+        if isinstance(max_iter, bool) or not isinstance(max_iter, int):
+            raise ModelError.invalid_type(
+                where="GLM.fit", param="max_iter", got=max_iter, expected="an integer >= 1"
+            )
+        if max_iter < 1:
+            raise ModelError.invalid_range(where="GLM.fit", param="max_iter", got=max_iter, min_=1)
+        if isinstance(tol, bool) or not isinstance(tol, (int, float)):
+            raise ModelError.invalid_type(
+                where="GLM.fit", param="tol", got=tol, expected="a positive number"
+            )
+        if not (math.isfinite(tol) and tol > 0):
+            raise ModelError.invalid_range(where="GLM.fit", param="tol", got=tol, min_=0)
 
         # Resolve family/link
         fam_str = _normalize_family(family)
@@ -548,9 +564,18 @@ class GLM:
         offset_cols: list[str] = []
         if offset is not None:
             if not isinstance(offset, str):
-                raise TypeError(f"'offset' must be a column name, got {type(offset).__name__}.")
+                raise ModelError.invalid_type(
+                    where="GLM.fit", param="offset", got=offset, expected="a column name"
+                )
             if offset not in self._sample.data.columns:
-                raise ValueError(f"offset column {offset!r} not found in the data.")
+                raise ModelError.ValueError(
+                    title="Column(s) not found",
+                    detail=f"offset column {offset!r} not found in the data.",
+                    code=Code.MISSING_COLUMNS,
+                    where="GLM.fit",
+                    param="offset",
+                    got=[offset],
+                )
             offset_cols = [offset]
 
         # Replicate weight columns (method="replication") and the FPC
@@ -675,6 +700,17 @@ class GLM:
 
         def _resolve_feature(feat: Feature) -> tuple[list[pl.Expr], list[str]]:
             if isinstance(feat, str):
+                dtype = df.schema[feat]
+                if not (dtype.is_numeric() or dtype in (pl.Boolean, pl.Null)):
+                    raise DataError.TypeError(
+                        title="Column is not numeric",
+                        detail=f"'{feat}' is {dtype}; a predictor without Cat() must be numeric.",
+                        code=Code.COLUMN_NOT_NUMERIC,
+                        where="GLM.fit",
+                        param="x",
+                        got=str(dtype),
+                        hint=f"Wrap a categorical predictor in svy.Cat({feat!r}).",
+                    )
                 term_info[feat] = {"type": "continuous"}
                 return [pl.col(feat).cast(pl.Float64)], [feat]
 
@@ -769,7 +805,12 @@ class GLM:
                 return exprs, names
 
             else:
-                raise TypeError(f"Unknown feature type: {type(feat)}")
+                raise ModelError.invalid_type(
+                    where="GLM.fit",
+                    param="x",
+                    got=feat,
+                    expected="column names, svy.Cat or svy.Cross terms",
+                )
 
         for feat in feature_specs:
             exprs, names = _resolve_feature(feat)
@@ -1336,6 +1377,10 @@ class GLM:
         from scipy import stats
 
         alpha = validate_alpha(alpha, where="GLM.predict")
+        if not isinstance(new_data, pl.DataFrame):
+            raise ModelError.invalid_type(
+                where="GLM.predict", param="new_data", got=new_data, expected="a polars DataFrame"
+            )
         fit = self._ensure_fitted()
 
         # Build design matrix
@@ -1402,6 +1447,13 @@ class GLM:
                 cols.append(feat.name)
             elif isinstance(feat, Cross):
                 cols.extend(self._collect_feature_cols([feat.left, feat.right]))
+            else:
+                raise ModelError.invalid_type(
+                    where="GLM.fit",
+                    param="x",
+                    got=feat,
+                    expected="column names, svy.Cat or svy.Cross terms",
+                )
         return cols
 
     def _term_expr(

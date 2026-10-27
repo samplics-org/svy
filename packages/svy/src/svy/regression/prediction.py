@@ -13,6 +13,7 @@ import msgspec
 import numpy as np
 import polars as pl
 
+from svy.regression.glm import _print_width
 from svy.ui.printing import make_panel, render_rich_to_str, resolve_width
 from svy.utils.formats import _fmt_conf_pct
 
@@ -38,13 +39,7 @@ class GLMPred(msgspec.Struct, frozen=True):
         if width is None:
             cls.PRINT_WIDTH = None
             return
-        try:
-            w = int(width)
-        except Exception as ex:
-            raise TypeError(f"print width must be int or None; got {width!r}") from ex
-        if w <= 20:
-            raise ValueError("print width must be > 20 characters.")
-        cls.PRINT_WIDTH = w
+        cls.PRINT_WIDTH = _print_width(width, where="GLMPred.set_default_print_width")
 
     @property
     def conf_level(self) -> float:

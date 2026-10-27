@@ -14,9 +14,9 @@ import msgspec
 import numpy as np
 import polars as pl
 
-from svy.errors import Code
+from svy.errors import Code, ModelError
 from svy.errors._api import guided_getattr
-from svy.regression.glm import delta_var, offset_values
+from svy.regression.glm import _print_width, delta_var, offset_values
 from svy.regression.links import link_inverse, link_mu_eta, link_mu_eta2
 from svy.ui.printing import make_panel, render_plain_table, render_rich_to_str, resolve_width
 from svy.utils.formats import _fmt_conf_pct
@@ -83,13 +83,7 @@ class GLMMargins(msgspec.Struct, frozen=True):
         if width is None:
             cls.PRINT_WIDTH = None
             return
-        try:
-            w = int(width)
-        except Exception as ex:
-            raise TypeError(f"print width must be int or None; got {width!r}") from ex
-        if w <= 20:
-            raise ValueError("print width must be > 20 characters.")
-        cls.PRINT_WIDTH = w
+        cls.PRINT_WIDTH = _print_width(width, where="GLMMargins.set_default_print_width")
 
     @property
     def conf_level(self) -> float:
@@ -330,9 +324,19 @@ def _validate_at_variables(glm: GLM, at: dict[str, list]) -> None:
 
     for var in at.keys():
         if var not in model_vars:
-            raise ValueError(
-                f"Variable '{var}' not found in model. Available variables: {sorted(model_vars)}"
-            )
+            raise _unknown_variable(var, sorted(model_vars), param="at")
+
+
+def _unknown_variable(var: str, known: list[str], *, param: str) -> ModelError:
+    return ModelError.ValueError(
+        title="Variable not in the model",
+        detail=f"Variable '{var}' not found in model. Available variables: {known}",
+        code=Code.MARGINS_UNKNOWN_VARIABLE,
+        where="GLM.margins",
+        param=param,
+        got=var,
+        expected=known,
+    )
 
 
 def _validate_ame_variables(glm: GLM, variables: list[str]) -> list[str]:
@@ -349,15 +353,17 @@ def _validate_ame_variables(glm: GLM, variables: list[str]) -> list[str]:
     valid_vars = []
     for var in variables:
         if var not in term_info:
-            raise ValueError(
-                f"Variable '{var}' not found in model. "
-                f"Available variables: {sorted(term_info.keys())}"
-            )
+            raise _unknown_variable(var, sorted(term_info.keys()), param="variables")
 
         kind = term_info[var].get("type")
         if kind not in ("continuous", "categorical"):
-            raise ValueError(
-                f"Variable {var!r} has unsupported type {kind!r} for marginal effects."
+            raise ModelError.ValueError(
+                title="No marginal effect",
+                detail=f"Variable {var!r} has unsupported type {kind!r} for marginal effects.",
+                code=Code.MARGINS_NO_EFFECT,
+                where="GLM.margins",
+                param="variables",
+                got=var,
             )
 
         valid_vars.append(var)
@@ -498,9 +504,14 @@ def _continuous_ame(
     X, dmu_deta, d2mu_deta2 = pieces
     D = _term_derivative_matrix(glm, fit, data, var)
     if not D.any():
-        raise ValueError(
-            f"Variable {var!r} has no derivative with respect to any fitted "
-            f"coefficient; it cannot have a marginal effect in this model."
+        raise ModelError.ValueError(
+            title="No marginal effect",
+            detail=f"Variable {var!r} has no derivative with respect to any fitted "
+            f"coefficient; it cannot have a marginal effect in this model.",
+            code=Code.MARGINS_NO_EFFECT,
+            where="GLM.margins",
+            param="variables",
+            got=var,
         )
 
     deta_dx = D @ beta_vec
@@ -549,7 +560,14 @@ def _categorical_contrasts(
     ref = info.get("ref")
     others = [lv for lv in levels if lv != ref]
     if not others:
-        raise ValueError(f"Categorical {var!r} has no non-reference level to contrast.")
+        raise ModelError.ValueError(
+            title="No marginal effect",
+            detail=f"Categorical {var!r} has no non-reference level to contrast.",
+            code=Code.MARGINS_NO_EFFECT,
+            where="GLM.margins",
+            param="variables",
+            got=var,
+        )
 
     offset = offset_values(fit, data)
 
@@ -605,7 +623,7 @@ def _fitted_parts(glm: GLM) -> tuple[GLMFit, pl.DataFrame, np.ndarray, np.ndarra
     """The fit, its frame and weights, beta and V(beta)."""
     fit = glm.fitted
     if fit is None:
-        raise ValueError("Model not fitted")
+        raise ModelError.not_fitted(where="GLM.margins")
     if fit.cov_matrix is None:
         raise ValueError("Covariance matrix not available")
     data, weights = _fitted_frame(glm, fit)
