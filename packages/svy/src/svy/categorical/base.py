@@ -47,6 +47,7 @@ from svy.core.types import (
 from svy.core.variance_method import resolve_variance_method
 from svy.errors import EstimationError
 from svy.errors._api import guided_getattr
+from svy.errors._findings import reports_findings
 from svy.estimation.estimate import row_counts
 from svy.estimation.replication import replicate_params
 from svy.ui.printing import format_where_clause
@@ -201,6 +202,7 @@ class Categorical:
     # TABULATE (Rust backend)
     # ════════════════════════════════════════════════════════════════════════
 
+    @reports_findings
     def tabulate(
         self,
         rowvar: str,
@@ -695,6 +697,7 @@ class Categorical:
             where=where,
         )
 
+    @reports_findings
     def ttest(
         self,
         y: str,
@@ -1011,6 +1014,7 @@ class Categorical:
     # RANKTEST: Main entry point (Rust backend)
     # ════════════════════════════════════════════════════════════════════════
 
+    @reports_findings
     def ranktest(
         self,
         y: str,

@@ -34,7 +34,7 @@ from svy.core.types import WhereArg
 from svy.core.variance_method import normalize_variance_method, resolve_variance_method
 from svy.errors import Code, EstimationError, EstimationWarning
 from svy.errors._api import guided_getattr
-from svy.errors._findings import Severity, SvyWarning
+from svy.errors._findings import Severity, SvyWarning, reports_findings
 from svy.estimation.estimate import (
     Estimate,
     EstimateList,
@@ -1544,6 +1544,7 @@ class Estimation:
                 r.where_clause = wc
         return EstimateList(results)
 
+    @reports_findings
     def mean(
         self,
         y: str | Sequence[str],
@@ -1674,6 +1675,7 @@ class Estimation:
             result.where_clause = format_where_clause(where)
         return result
 
+    @reports_findings
     def total(
         self,
         y: str | Sequence[str],
@@ -1798,6 +1800,7 @@ class Estimation:
             result.where_clause = format_where_clause(where)
         return result
 
+    @reports_findings
     def prop(
         self,
         y: str | Sequence[str],
@@ -1923,6 +1926,7 @@ class Estimation:
             result.where_clause = format_where_clause(where)
         return result
 
+    @reports_findings
     def ratio(
         self,
         y: str | Sequence[str],
@@ -2149,6 +2153,7 @@ class Estimation:
             result.where_clause = format_where_clause(where)
         return result
 
+    @reports_findings
     def corr(
         self,
         cols: tuple[str, str] | Sequence[str] | Sequence[tuple[str, str]],
@@ -2220,6 +2225,7 @@ class Estimation:
             drop_nulls=drop_nulls,
         )
 
+    @reports_findings
     def cov(
         self,
         cols: tuple[str, str] | Sequence[str] | Sequence[tuple[str, str]],
@@ -2282,6 +2288,7 @@ class Estimation:
             raise ValueError(f"p contains duplicate probabilities: {probs}.")
         return probs, scalar
 
+    @reports_findings
     def quantile(
         self,
         y: str | Sequence[str],
@@ -2413,6 +2420,7 @@ class Estimation:
 
         return results[0] if p_is_scalar else EstimateList(results)
 
+    @reports_findings
     def median(
         self,
         y: str | Sequence[str],

@@ -44,6 +44,7 @@ from svy.errors._findings import (
     Severity,
     SvyWarning,
     WarningStore,
+    collect_finding,
     findings_to,
 )
 from svy.metadata import MetadataStore
@@ -2548,6 +2549,7 @@ class Sample:
         """Record ``finding`` on this sample and raise it, unless it is INFO or a repeat."""
         w = finding
         w.state = getattr(self, "_data_version", None)
+        collect_finding(w)
         # One rule for findings: recorded, and raised once at the user's line.
         # A repeat the store suppresses is not raised again, and INFO entries
         # (audit records) are recorded only.

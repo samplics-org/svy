@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Mapping, Self, Sequence
 
 import msgspec
 
@@ -32,7 +32,7 @@ from svy.categorical.ttest import (
 )
 from svy.core.containers import FDist, TDist
 from svy.core.types import Category
-from svy.errors._findings import SvyWarning
+from svy.errors._findings import SvyWarning, merge_findings
 from svy.ui.printing import (
     finding_notes,
     make_panel,
@@ -371,6 +371,9 @@ class RankTestTwoSample(
             return
         print(self.__plain_str__())
 
+    def _add_findings(self, found: Sequence[SvyWarning]) -> Self:
+        return msgspec.structs.replace(self, findings=merge_findings(self.findings, found))
+
 
 class RankTestKSample(msgspec.Struct, tag="rank_k", tag_field="kind", kw_only=True, frozen=True):
     """K-sample design-based rank test (Kruskal-Wallis-style).
@@ -630,6 +633,9 @@ class RankTestKSample(msgspec.Struct, tag="rank_k", tag_field="kind", kw_only=Tr
             return
         print(self.__plain_str__())
 
+    def _add_findings(self, found: Sequence[SvyWarning]) -> Self:
+        return msgspec.structs.replace(self, findings=merge_findings(self.findings, found))
+
 
 # =============================================================================
 # By-result container (returned when by= is set)
@@ -853,6 +859,11 @@ class RankTestByResult:
             ).print(self)
             return
         print(self.__plain_str__())
+
+    def _add_findings(self, found: Sequence[SvyWarning]) -> Self:
+        self.results = [r._add_findings(found) for r in self.results]
+        self.findings = merge_findings(self.findings, found)
+        return self
 
 
 # =============================================================================
