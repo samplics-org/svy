@@ -11,7 +11,7 @@ import polars as pl
 
 from svy.core.enumerations import PopParam, QuantileMethod
 from svy.core.types import Category, Number, RandomState
-from svy.errors import Code
+from svy.errors import Code, EstimationError
 from svy.errors._api import guided_getattr
 from svy.errors._findings import merge_findings
 
@@ -36,6 +36,21 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _DECIMAL_KEYS = ("est", "se", "lci", "uci", "cv", "deff")
+
+
+def _print_width(width: Any, *, where: str) -> int:
+    try:
+        w = int(width)
+    except Exception as ex:
+        raise EstimationError.invalid_type(
+            where=where, param="width", got=width, expected="int or None"
+        ) from ex
+    if w <= 20:
+        raise EstimationError.invalid_range(
+            where=where, param="width", got=width, hint="Use more than 20 characters."
+        )
+    return w
+
 
 _QUANTILE_PARAMS = (PopParam.QUANTILE, PopParam.MEDIAN)
 
@@ -578,13 +593,7 @@ class Estimate:
         if width is None:
             self._print_width = None
             return self
-        try:
-            w = int(width)
-        except Exception as ex:
-            raise TypeError(f"print width must be int or None; got {width!r}") from ex
-        if w <= 20:
-            raise ValueError("print width must be > 20 characters.")
-        self._print_width = w
+        self._print_width = _print_width(width, where="Estimate.set_print_width")
         return self
 
     @classmethod
@@ -592,13 +601,7 @@ class Estimate:
         if width is None:
             cls.PRINT_WIDTH = None
             return
-        try:
-            w = int(width)
-        except Exception as ex:
-            raise TypeError(f"class print width must be int or None; got {width!r}") from ex
-        if w <= 20:
-            raise ValueError("class print width must be > 20 characters.")
-        cls.PRINT_WIDTH = w
+        cls.PRINT_WIDTH = _print_width(width, where="Estimate.set_default_print_width")
 
     # --- Properties ---
 
@@ -611,11 +614,22 @@ class Estimate:
         if value is None or isinstance(value, int):
             self._decimals = value
         elif isinstance(value, dict):
-            if any(k not in _DECIMAL_KEYS for k in value):
-                raise ValueError(f"Unknown decimals key; allowed: {_DECIMAL_KEYS}")
+            unknown = [k for k in value if k not in _DECIMAL_KEYS]
+            if unknown:
+                raise EstimationError.invalid_choice(
+                    where="Estimate.decimals",
+                    param="decimals",
+                    got=unknown,
+                    allowed=_DECIMAL_KEYS,
+                )
             self._decimals = dict(value)
         else:
-            raise TypeError("decimals must be int | dict[str,int] | None")
+            raise EstimationError.invalid_type(
+                where="Estimate.decimals",
+                param="decimals",
+                got=value,
+                expected="int | dict[str, int] | None",
+            )
 
     @property
     def print_width(self) -> int | None:
@@ -632,7 +646,12 @@ class Estimate:
     @layout.setter
     def layout(self, value: Literal["auto", "horizontal", "vertical"]) -> None:
         if value not in ("auto", "horizontal", "vertical"):
-            raise ValueError("layout must be 'auto', 'horizontal', or 'vertical'")
+            raise EstimationError.invalid_choice(
+                where="Estimate.layout",
+                param="layout",
+                got=value,
+                allowed=("auto", "horizontal", "vertical"),
+            )
         self._layout = value
 
     # --- Export ---

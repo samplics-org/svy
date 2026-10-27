@@ -62,7 +62,14 @@ class ContrastExpr:
             return other
         if isinstance(other, Real) and not isinstance(other, bool):
             return _Const(float(other))
-        raise TypeError(f"cannot {what} a contrast expression and {type(other).__name__}")
+        raise EstimationError.TypeError(
+            title="Invalid contrast operand",
+            detail=f"cannot {what} a contrast expression and {type(other).__name__}",
+            code=Code.CONTRAST_OPERAND_INVALID,
+            where="svy.estd",
+            got=type(other).__name__,
+            expected="estd(...) or a number",
+        )
 
     def __add__(self, other: Any) -> "ContrastExpr":
         return _Add(self, self._wrap(other, "add"))
@@ -305,7 +312,14 @@ def estd(*key: Any) -> EstRef:
     >>> r.contrast({"ratio": estd(2) / estd(1), "pct change": estd(2) / estd(1) - 1})
     """
     if not key:
-        raise TypeError("estd() requires a key identifying an estimand")
+        raise EstimationError.TypeError(
+            title="No estimand named",
+            detail="estd() requires a key identifying an estimand",
+            code=Code.ESTD_KEY_MISSING,
+            where="svy.estd",
+            hint="Name the result row, e.g. estd('urban') or estd('urban', 'female') "
+            "for a by= cross; r.keys() lists them.",
+        )
     return EstRef(key[0] if len(key) == 1 else tuple(key))
 
 

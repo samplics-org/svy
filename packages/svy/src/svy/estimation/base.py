@@ -5,6 +5,7 @@ import dataclasses
 import logging
 import math
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence, cast
 
 import msgspec
@@ -17,6 +18,7 @@ from svy.core.data_prep import (
     BY_KEY_SEP,
     PreparedData,
     calib_applies,
+    check_columns,
     level_lookup,
     prepare_data,
 )
@@ -105,6 +107,17 @@ _PROP_CI_METHODS = ("logit", "beta", "korn-graubard", "wilson")
 # Weighted sums land a few ulps off (an SE of 1e-17, a p-hat of 1 - 1e-16), and
 # exact comparisons would read those as an interior estimate with an interval.
 _PROP_CI_TOL = 1e-12
+
+
+def _names(value: Any, *, param: str, where: str) -> list[str]:
+    names = (
+        [value] if isinstance(value, str) else list(value) if isinstance(value, Iterable) else None
+    )
+    if names is None or not all(isinstance(n, str) for n in names):
+        raise EstimationError.invalid_type(
+            where=where, param=param, got=value, expected="a column name or a list of them"
+        )
+    return names
 
 
 def prop_ci_boundary_note(findings: Sequence[Any]) -> str | None:
@@ -291,11 +304,14 @@ class Estimation:
             # Integer-valued check: floor(x) == x for every non-null value.
             is_integral = (non_null == non_null.floor()).all()
             if not is_integral:
-                raise TypeError(
-                    f"prop() received float column '{y}' with non-integer values. "
-                    f"prop() expects a categorical/indicator variable (e.g. 0/1 or discrete "
-                    f"codes). Cast to String/Categorical/Enum if this is a label, or recode "
-                    f"to integer levels."
+                raise EstimationError.TypeError(
+                    title="Not a categorical variable",
+                    detail=f"prop() received float column '{y}' with non-integer values.",
+                    code=Code.PROP_NOT_CATEGORICAL,
+                    where="Sample.estimation.prop",
+                    param="y",
+                    hint="prop() takes a categorical or indicator variable (0/1 or discrete "
+                    "codes); mean() estimates the average of a continuous one.",
                 )
             # NaN → null, then cast to Int64 so the Rust side sees a clean nullable integer.
             return data.with_columns(
@@ -702,7 +718,15 @@ class Estimation:
 
         method = self._normalize_ci_method(method)
         if method not in _PROP_CI_METHODS:
-            raise ValueError(f"Unknown CI method: {method!r}")
+            raise EstimationError.ValueError(
+                title="Unknown CI method",
+                detail=f"Unknown CI method: {method!r}.",
+                code=Code.INVALID_CHOICE,
+                where="Sample.estimation.prop",
+                param="ci_method",
+                expected=sorted(_PROP_CI_METHODS),
+                got=method,
+            )
 
         nan = float("nan")
         if df <= 0:
@@ -1445,13 +1469,23 @@ class Estimation:
         if q_method is None:
             return _QuantileMethod.HIGHER
         if not isinstance(q_method, str):
-            raise TypeError(
-                f"'q_method' must be a string or None, got {type(q_method).__name__}. "
-                f"Use one of: {tuple(_MAP)}."
+            raise EstimationError.invalid_type(
+                where="Sample.estimation.quantile",
+                param="q_method",
+                got=q_method,
+                expected=f"a string or None, one of {tuple(_MAP)}",
             )
         result = _MAP.get(q_method.strip().lower())
         if result is None:
-            raise ValueError(f"Unknown quantile method {q_method!r}. Use one of: {tuple(_MAP)}.")
+            raise EstimationError.ValueError(
+                title="Unknown quantile method",
+                detail=f"Unknown quantile method {q_method!r}.",
+                code=Code.INVALID_CHOICE,
+                where="Sample.estimation.quantile",
+                param="q_method",
+                expected=list(_MAP),
+                got=q_method,
+            )
         return result
 
     def _resolve_method(self, method: str | None) -> RepWgts | None:
@@ -1604,7 +1638,7 @@ class Estimation:
         deff_ref = self._normalize_deff(deff)
 
         if not isinstance(y, str):
-            ys = list(y)
+            ys = _names(y, param="y", where="Sample.estimation.mean")
             return self._taylor_multi(
                 ys,
                 # `single_call` re-enters mean(), which normalizes again, so it
@@ -1732,7 +1766,7 @@ class Estimation:
         deff_ref = self._normalize_deff(deff)
 
         if not isinstance(y, str):
-            ys = list(y)
+            ys = _names(y, param="y", where="Sample.estimation.total")
             return self._taylor_multi(
                 ys,
                 single_call=lambda yy: self.total(
@@ -1857,7 +1891,7 @@ class Estimation:
         deff_ref = self._normalize_deff(deff)
 
         if not isinstance(y, str):
-            ys = list(y)
+            ys = _names(y, param="y", where="Sample.estimation.prop")
             return self._taylor_multi(
                 ys,
                 single_call=lambda yy: self.prop(
@@ -1984,8 +2018,8 @@ class Estimation:
         deff_ref = self._normalize_deff(deff)
 
         if not (isinstance(y, str) and isinstance(x, str)):
-            ys = [y] if isinstance(y, str) else list(y)
-            xs = [x] if isinstance(x, str) else list(x)
+            ys = _names(y, param="y", where="Sample.estimation.ratio")
+            xs = _names(x, param="x", where="Sample.estimation.ratio")
             if len(ys) == 1 and len(xs) > 1:
                 ys = ys * len(xs)
             if len(xs) == 1 and len(ys) > 1:
@@ -2104,6 +2138,7 @@ class Estimation:
         # Every named column must survive preparation, so the first drives
         # `y` and the rest ride along as extras.
         named = list(dict.fromkeys([c for pair in pairs for c in pair]))
+        check_columns(self._sample._data.columns, cols=named)
         # The extras go through null_zero_cols so that, like y, a missing
         # value zeroes the row's weight instead of dropping the row (and
         # possibly its PSU) from the design.
@@ -2277,15 +2312,36 @@ class Estimation:
         probability, matching how ``y`` already behaves.
         """
         scalar = isinstance(p, (int, float)) and not isinstance(p, bool)
-        probs = [float(p)] if scalar else [float(v) for v in p]
+        values: list[Any] | None = [p] if scalar else list(p) if isinstance(p, Iterable) else None
+        if values is None or not all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) for v in values
+        ):
+            raise EstimationError.invalid_type(
+                where="Sample.estimation.quantile",
+                param="p",
+                got=p,
+                expected="a probability or a list of them",
+            )
+        probs = [float(v) for v in values]
+
+        def invalid(detail: str) -> EstimationError:
+            return EstimationError.ValueError(
+                title="Invalid probabilities",
+                detail=detail,
+                code=Code.QUANTILE_P_INVALID,
+                where="Sample.estimation.quantile",
+                param="p",
+                got=probs,
+                hint="Give distinct probabilities strictly between 0 and 1, e.g. p=[0.25, 0.75].",
+            )
 
         if not probs:
-            raise ValueError("p must contain at least one probability.")
+            raise invalid("p must contain at least one probability.")
         for v in probs:
             if not (0.0 < v < 1.0):
-                raise ValueError(f"Each probability must lie strictly in (0, 1); got {v}.")
+                raise invalid(f"Each probability must lie strictly in (0, 1); got {v}.")
         if len(set(probs)) != len(probs):
-            raise ValueError(f"p contains duplicate probabilities: {probs}.")
+            raise invalid(f"p contains duplicate probabilities: {probs}.")
         return probs, scalar
 
     @reports_findings
@@ -2348,7 +2404,7 @@ class Estimation:
             # Variables expand across results too; flatten so a list of
             # variables and a list of probabilities compose predictably.
             out = EstimateList()
-            for yy in y:
+            for yy in _names(y, param="y", where="Sample.estimation.quantile"):
                 res = self.quantile(
                     yy,
                     p=probs,
@@ -2453,7 +2509,7 @@ class Estimation:
         """
         alpha = validate_alpha(alpha, where="Sample.estimation.median")
         if not isinstance(y, str):
-            ys = list(y)
+            ys = _names(y, param="y", where="Sample.estimation.median")
             resolved_q = self._normalize_q_method(q_method)
             return self._taylor_multi(
                 ys,
