@@ -1103,6 +1103,7 @@ class GLM:
                 level_df=level_df,
                 term_info=term_info,
                 feature_names=feature_names,
+                term_labels=term_labels,
                 not_identified=not_identified,
                 combos=combos,
                 rep_separated=rep_separated,
@@ -1187,6 +1188,7 @@ class GLM:
         level_df: pl.DataFrame,
         term_info: dict[str, Any],
         feature_names: list[str],
+        term_labels: dict[str, str],
         not_identified: list[int],
         combos: list[tuple[dict[int, float], float]],
         rep_separated: dict[int, int],
@@ -1202,8 +1204,12 @@ class GLM:
         every retained row carries it.
         """
 
+        # The text names terms as the coefficient table prints them; `got` keeps codes.
+        def _shown(j: int) -> str:
+            return term_labels.get(feature_names[j], feature_names[j])
+
         def _listed(idx: Sequence[int]) -> str:
-            return ", ".join(repr(feature_names[j]) for j in idx)
+            return ", ".join(repr(_shown(j)) for j in idx)
 
         unidentified = sorted(set(not_identified) | set(rep_separated))
         rep_only = [j for j in sorted(rep_separated) if j not in set(not_identified)]
@@ -1217,7 +1223,7 @@ class GLM:
                 "iterations stopped."
             )
         if rep_only:
-            counts = ", ".join(f"{feature_names[j]!r} in {rep_separated[j]}" for j in rep_only)
+            counts = ", ".join(f"{_shown(j)!r} in {rep_separated[j]}" for j in rep_only)
             parts.append(
                 f"In some replicate refits {y!r} is predicted perfectly (quasi-complete "
                 f"separation): {counts} of {n_reps}. Those refits stopped at arbitrary "
@@ -1230,7 +1236,7 @@ class GLM:
         )
         for coef, value in combos:
             expr = " ".join(
-                ("+ " if v > 0 else "- ") + feature_names[j] for j, v in sorted(coef.items())
+                ("+ " if v > 0 else "- ") + _shown(j) for j, v in sorted(coef.items())
             ).removeprefix("+ ")
             parts.append(f"The combination {expr} is identified: {value:.6g}.")
 

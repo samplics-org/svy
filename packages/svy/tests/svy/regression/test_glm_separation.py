@@ -346,6 +346,57 @@ def test_replicate_refit_separated_only():
 
 
 # ---------------------------------------------------------------------------
+# Terms named as the coefficient table prints them
+# ---------------------------------------------------------------------------
+
+G_CODES = {"a": 1.0, "b": 2.0, "c": 3.0}
+G_LABELS = {1.0: "High", 2.0: "Middle", 3.0: "Low"}
+
+
+def _labelled(df: pl.DataFrame) -> svy.Sample:
+    s = _sample(df.with_columns(pl.col("g").replace_strict(G_CODES).alias("gc")))
+    s.meta.set_value_labels("gc", G_LABELS)
+    return s
+
+
+@pytest.mark.parametrize(
+    "use_labels, shown", [(None, "gc_Low"), (True, "gc_Low"), (False, "gc_3.0")]
+)
+def test_separated_term_named_as_printed(data, use_labels, shown):
+    s = _labelled(data)
+    fit, _ = _fit(s, y="y", x=["x", svy.Cat("gc")], family="binomial", use_labels=use_labels)
+    (w,) = _findings(s)
+    assert f"estimates of {shown!r} have no finite value" in w.detail
+    assert w.got["not_identified"] == ["gc_3.0"]
+    assert (_coef(fit, "gc_3.0").label or "gc_3.0") == shown
+
+
+def test_identified_combination_named_by_label(data):
+    s = _labelled(data.filter(pl.col("g") != "a"))
+    fit, _ = _fit(s, y="y", x=[svy.Cat("gc", ref="Low")], family="binomial")
+    (w,) = _findings(s)
+    total = _coef(fit, "_intercept_").est + _coef(fit, "gc_2.0").est
+    assert f"The combination _intercept_ + gc_Middle is identified: {total:.6g}." in w.detail
+    assert w.got["not_identified"] == ["_intercept_", "gc_2.0"]
+
+
+def test_replicate_refit_term_named_by_label():
+    df = _data().with_columns(
+        pl.when(pl.col("g") != "c")
+        .then(pl.col("y"))
+        .when(pl.int_range(pl.len()) == 2)
+        .then(1)
+        .otherwise(0)
+        .alias("y1")
+    )
+    s = _labelled(df).weighting.create_jk_wgts()
+    _fit(s, y="y1", x=["x", svy.Cat("gc")], family="binomial", method="replication")
+    (w,) = _findings(s)
+    assert f"'gc_Low' in 1 of {s.n_reps}" in w.detail
+    assert w.got["replicate_refits"] == {"gc_3.0": 1}
+
+
+# ---------------------------------------------------------------------------
 # No finding on ordinary fits
 # ---------------------------------------------------------------------------
 
