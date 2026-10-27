@@ -15,16 +15,18 @@ pass the result to ``svy.Sample`` and use ``sample.selection.srs(...)``.
 from __future__ import annotations
 
 import logging
+import numbers
 import os
 
-from typing import Literal, Mapping, Sequence, overload
+from typing import Any, Literal, Mapping, Sequence, get_args, overload
 
 import numpy as np
 import polars as pl
 
+from svy.core.data_prep import extract_where_cols
 from svy.core.types import Category, RandomState, WhereArg
 from svy.datasets import _bundled, _cache, api
-from svy.errors import Code, DatasetWarning
+from svy.errors import Code, DatasetWarning, UsageError
 from svy.errors._dataset import DatasetError
 from svy.errors._findings import emit_finding
 from svy.utils.where import _compile_where
@@ -232,12 +234,30 @@ def load(
     or the ``pps_*`` methods.  This function only slices for convenience.
     """
     _validate_args(n=n, rate=rate, by=by, order_type=order_type)
+    _check_source(source, where="datasets.load")
+    if isinstance(rate, numbers.Real):
+        rate = float(rate)
+    if isinstance(n, numbers.Integral):
+        n = int(n)
 
     # 1. Resolve the slug to a LazyFrame per the source policy (remote /
     #    bundled / auto-with-offline-fallback).
     lf = _resolve_source(name, source=source, force_download=force_download)
 
     # Filter first so Polars can push predicates into the Parquet reader.
+    available = lf.collect_schema().names()
+    for param, cols in (
+        ("where", extract_where_cols(where)),
+        ("select", list(select or ())),
+        ("order_by", _normalize_by(order_by) or []),
+        ("by", _normalize_by(by) or []),
+    ):
+        missing = [c for c in cols if c not in available]
+        if missing:
+            raise DatasetError.missing_columns(
+                where="datasets.load", param=param, missing=missing, available=available
+            )
+
     if where is not None:
         pred = _compile_where(where)
         if pred is not None:
@@ -269,14 +289,69 @@ def _validate_args(
     order_type: str,
 ) -> None:
     if n is not None and rate is not None:
-        raise ValueError("`n` and `rate` are mutually exclusive; pass only one.")
+        raise DatasetError.invalid_value(
+            where="datasets.load",
+            param="n",
+            got=n,
+            detail="`n` and `rate` are mutually exclusive; pass only one.",
+        )
     if by is None and isinstance(n, Mapping):
-        raise ValueError("`n` as a mapping requires `by` to be set.")
+        raise DatasetError.invalid_value(
+            where="datasets.load",
+            param="n",
+            got=n,
+            detail="`n` as a mapping requires `by` to be set.",
+        )
     if by is None and isinstance(rate, Mapping):
-        raise ValueError("`rate` as a mapping requires `by` to be set.")
+        raise DatasetError.invalid_value(
+            where="datasets.load",
+            param="rate",
+            got=rate,
+            detail="`rate` as a mapping requires `by` to be set.",
+        )
     if order_type not in ("ascending", "descending", "random"):
-        raise ValueError(
-            f"order_type must be 'ascending', 'descending', or 'random'; got {order_type!r}"
+        raise DatasetError.invalid_choice(
+            where="datasets.load",
+            param="order_type",
+            got=order_type,
+            allowed=["ascending", "descending", "random"],
+        )
+    n_values: list[Any] = list(n.values()) if isinstance(n, Mapping) else [] if n is None else [n]
+    for v in n_values:
+        if isinstance(v, bool) or not isinstance(v, numbers.Integral):
+            raise DatasetError.invalid_type(
+                where="datasets.load", param="n", got=v, expected="a whole number of rows"
+            )
+        if int(v) < 0:
+            raise DatasetError.invalid_range(where="datasets.load", param="n", got=v, min_=0)
+    per_group = isinstance(rate, Mapping)
+    rate_values: list[Any] = (
+        list(rate.values()) if isinstance(rate, Mapping) else [] if rate is None else [rate]
+    )
+    for v in rate_values:
+        if isinstance(v, bool) or not isinstance(v, numbers.Real):
+            raise DatasetError.invalid_type(
+                where="datasets.load", param="rate", got=v, expected="a fraction"
+            )
+        x = float(v)
+        low_ok = x >= 0 if per_group else x > 0
+        if not (low_ok and x <= 1):
+            raise DatasetError.invalid_range(
+                where="datasets.load",
+                param="rate",
+                got=v,
+                detail=(
+                    f"per-group rate must be in [0, 1]; got {v!r}"
+                    if per_group
+                    else f"rate must be in (0, 1]; got {v!r}"
+                ),
+            )
+
+
+def _check_source(source: object, *, where: str) -> None:
+    if source not in get_args(Source):
+        raise DatasetError.invalid_choice(
+            where=where, param="source", got=source, allowed=list(get_args(Source))
         )
 
 
@@ -328,7 +403,6 @@ def _apply_slice(
         if isinstance(n, int):
             return lf.head(n)
         if isinstance(rate, float):
-            _validate_rate(rate)
             # Rate needs a height; collect once.  For teaching datasets this
             # is trivial; power users can apply where/select first to shrink
             # before rate-slicing.
@@ -348,7 +422,6 @@ def _apply_slice(
         return _slice_per_group_mapping(df, by_cols, n, kind="n").lazy()
 
     if isinstance(rate, float):
-        _validate_rate(rate)
         parts = [
             part.head(int(round(len(part) * rate)))
             for _, part in df.group_by(by_cols, maintain_order=True)
@@ -389,8 +462,6 @@ def _slice_per_group_mapping(
             parts.append(part.head(int(value)))
         else:
             r = float(value)
-            if not (0.0 <= r <= 1.0):
-                raise ValueError(f"per-group rate must be in [0, 1]; got {r!r} for group {key!r}")
             parts.append(part.head(int(round(len(part) * r))))
     return pl.concat(parts) if parts else df.head(0)
 
@@ -408,19 +479,19 @@ def _normalize_by(by: str | Sequence[str] | None) -> list[str] | None:
     return list(by)
 
 
-def _validate_rate(rate: float) -> None:
-    if not (0.0 < rate <= 1.0):
-        raise ValueError(f"rate must be in (0, 1]; got {rate!r}")
-
-
 def _seed_from_rstate(rstate: RandomState) -> int:
     """Derive a 64-bit seed from any svy RandomState value."""
     if rstate is None:
         return int(np.random.default_rng().integers(0, 2**63 - 1))
-    if isinstance(rstate, int):
-        return rstate
+    if isinstance(rstate, numbers.Integral) and not isinstance(rstate, bool):
+        return int(rstate)
     if isinstance(rstate, np.random.Generator):
         return int(rstate.integers(0, 2**63 - 1))
     if isinstance(rstate, np.random.RandomState):
         return int(rstate.randint(0, 2**31 - 1))
-    raise TypeError(f"Unsupported rstate type: {type(rstate).__name__}")
+    raise UsageError.invalid_type(
+        where="datasets.load",
+        param="rstate",
+        got=rstate,
+        expected="an int seed, a numpy Generator or None",
+    )
