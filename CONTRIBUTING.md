@@ -76,7 +76,8 @@ make ci            # full local pipeline: lint + fmt + test
 uv run pytest                       # whole workspace
 uv run pytest packages/svy-io/tests # one package
 
-# Rust (if you touch native code)
+# Rust (if you touch native code), in packages/svy-rs or packages/svy-io/native/svyreadstat_rs;
+# the Rust checks workflow runs the same. svy-rs needs --no-default-features to link the tests.
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 cargo test
