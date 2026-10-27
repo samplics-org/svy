@@ -73,6 +73,7 @@ def test_matches_wide_computation_with_single_class():
     assert got == pytest.approx({1: factor, 2: 2 * factor, 3: 0.0, 4: 4 * factor, 5: 0.0, 6: 0.0})
 
 
+@pytest.mark.filterwarnings(r"ignore:\[REPLICATE_NO_RESPONDENTS\]:svy.SvyWarning")
 def test_replicate_columns_propagate_per_case():
     s = _long()
     # each case is its own PSU on this panel: JK1 replicates over cases
