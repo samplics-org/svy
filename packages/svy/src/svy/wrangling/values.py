@@ -365,7 +365,7 @@ def cast_columns(
         pairs = [(c, target_dt) for c in col_list]
         exprs = [_cast_expr(c, target_dt, strict) for c in col_list]
 
-    _require_columns(sample, [c for c, _ in pairs], where="wrangling.cast", param="cols")
+    _require_columns(sample, [str(c) for c, _ in pairs], where="wrangling.cast", param="cols")
 
     if strict:
         data = sample._data
