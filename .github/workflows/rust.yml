@@ -57,6 +57,7 @@ jobs:
       # PyO3 builds against this interpreter; the tests load its shared libpython.
       - name: Point PyO3 at Python
         run: |
+          uv python install 3.11
           py="$(uv python find 3.11)"
           echo "PYO3_PYTHON=$py" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=$("$py" -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')" >> "$GITHUB_ENV"
