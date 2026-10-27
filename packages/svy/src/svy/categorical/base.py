@@ -302,8 +302,9 @@ class Categorical:
             ``svymean``/``svytotal``/``svychisq`` on a ``svrepdesign``).
         alpha : float
             Significance level for confidence intervals. Default 0.05.
-        drop_nulls : bool
-            If True, drop rows with missing values. Default False.
+        drop_nulls : bool, default False
+            Exclude rows missing a table value from the estimate; they keep their
+            place in the variance. A missing stratum, PSU or weight raises.
         use_labels : bool | None
             If True, display labels instead of codes. None uses Table default.
 
@@ -799,7 +800,9 @@ class Categorical:
             alpha: Significance level for confidence intervals. Default 0.05.
             alternative: Alternative hypothesis. One of "two-sided", "less", "greater".
                 Default "two-sided".
-            drop_nulls: If True, drop rows with missing values. Default False.
+            drop_nulls: Exclude rows missing a value this call uses from the estimate;
+                they keep their place in the variance. A missing stratum, PSU or
+                weight raises. Default False.
             use_labels: Show the group's value labels instead of its codes. None
                 (the default) shows them when the group has any; the result keeps
                 the codes either way.
@@ -1117,6 +1120,9 @@ class Categorical:
         replicate). Its df is the replicate df minus the number of groups
         less one. ``use_labels`` shows the two groups and the ``by`` levels by
         their value labels: None (the default) when they have any.
+        ``drop_nulls`` excludes rows missing a value the test uses from the
+        estimate; they keep their place in the variance. A missing stratum, PSU
+        or weight raises.
         """
         alpha = validate_alpha(alpha, where="Sample.categorical.ranktest")
         _check_alternative(alternative, where="Sample.categorical.ranktest")
