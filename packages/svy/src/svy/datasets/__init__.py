@@ -51,7 +51,7 @@ from __future__ import annotations
 
 from svy.datasets import _bundled, api
 from svy.datasets._cache import clear as _clear_cache
-from svy.datasets.base import Source, _offline_env, load
+from svy.datasets.base import Source, _check_source, _offline_env, load
 from svy.datasets.types import Dataset, DatasetCatalog
 from svy.errors import Code, DatasetWarning
 from svy.errors._dataset import DatasetError
@@ -75,6 +75,7 @@ def catalog(*, use_cache: bool = True, source: Source = "auto") -> DatasetCatalo
         the bundled list if the catalog is unreachable (or immediately when
         ``SVYLAB_OFFLINE`` is set, or silently without the ``remote`` extra).
     """
+    _check_source(source, where="datasets.catalog")
     if source == "bundled" or (source == "auto" and _offline_env()):
         return _bundled.catalog()
     if source == "remote":
@@ -106,6 +107,7 @@ def describe(slug: str, *, use_cache: bool = True, source: Source = "auto") -> D
     unreachable (or immediately when ``SVYLAB_OFFLINE`` is set, or silently
     without the ``remote`` extra).
     """
+    _check_source(source, where="datasets.describe")
     if source == "bundled" or (source == "auto" and _offline_env()):
         ds = _bundled.describe(slug)
         if ds is None:
