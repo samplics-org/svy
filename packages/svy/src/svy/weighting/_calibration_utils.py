@@ -18,7 +18,7 @@ import polars as pl
 
 from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import Category
-from svy.errors import Code, WeightingError
+from svy.errors import Code, DataError, WeightingError
 from svy.weighting._keys import _NOT_FOUND, LevelIndex, _Ambiguous, match_keys, target_vector
 
 
@@ -43,6 +43,17 @@ def _expand_term(
                 param=str(term),
                 hint="Impute or drop missing values (e.g. wrangling.fill_null) "
                 "before calibrating on this auxiliary.",
+            )
+        dtype = df.schema[term]
+        if not (dtype.is_numeric() or dtype in (pl.Boolean, pl.Null)):
+            raise DataError.TypeError(
+                title="Column is not numeric",
+                detail=f"'{term}' is {dtype}; a continuous auxiliary must be numeric.",
+                code=Code.COLUMN_NOT_NUMERIC,
+                where=where,
+                param="controls",
+                got=str(dtype),
+                hint=f"Calibrate a categorical auxiliary as svy.Cat({term!r}).",
             )
         return [pl.col(term).cast(pl.Float64)], [term]
 
