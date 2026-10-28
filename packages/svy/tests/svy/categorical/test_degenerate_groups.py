@@ -40,6 +40,19 @@ def test_tabulate_over_a_zero_weight_domain_gives_nan_tests():
     )
 
 
+@pytest.mark.filterwarnings("error")
+@pytest.mark.parametrize(
+    "scaling",
+    [{"units": "proportion"}, {"units": "percent"}, {"units": "count", "count_total": 100}],
+)
+def test_tabulate_over_a_zero_weight_domain_is_nan_without_warnings(scaling):
+    table = _sample().categorical.tabulate(
+        rowvar="r", colvar="c", where=svy.col("s") == "1", **scaling
+    )
+
+    assert all(math.isnan(v) for v in table.to_polars()["est"])
+
+
 def test_tabulate_with_one_row_level_has_no_test():
     stats = _sample().categorical.tabulate(rowvar="r", colvar="c", where=svy.col("r") == "a").stats
 
