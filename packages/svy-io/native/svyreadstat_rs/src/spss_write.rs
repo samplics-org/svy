@@ -43,6 +43,11 @@ use crate::core::{OutputFile, WriterGuard, write_rc};
 use crate::errors::{Error, Op, Result};
 
 /// ReadStat data sink: write to a std::fs::File
+///
+/// # Safety
+///
+/// Called only by ReadStat: `data` is null or `len` readable bytes, and `ctx` is null or
+/// the pointer `OutputFile::as_ctx` returned.
 unsafe extern "C" fn data_writer_cb(
     data: *const std::os::raw::c_void,
     len: usize,
@@ -51,8 +56,10 @@ unsafe extern "C" fn data_writer_cb(
     if data.is_null() || ctx.is_null() {
         return -1;
     }
-    let file = &mut *(ctx as *mut File);
-    let bytes = std::slice::from_raw_parts(data as *const u8, len);
+    // SAFETY: `ctx` is the `OutputFile`'s `File`, alive and otherwise untouched while writing.
+    let file = unsafe { &mut *(ctx as *mut File) };
+    // SAFETY: ReadStat passes a buffer of `len` readable bytes, valid for the call.
+    let bytes = unsafe { std::slice::from_raw_parts(data as *const u8, len) };
     match file.write_all(bytes) {
         Ok(_) => len as isize,
         Err(_) => -1,
@@ -317,6 +324,7 @@ fn write_spss_minimal(
         return Err(Error::Invalid("no record batches to write".into()));
     }
 
+    // SAFETY: no preconditions; a null result is checked below.
     let writer = unsafe { readstat_writer_init() };
     if writer.is_null() {
         return Err(Error::Internal("readstat_writer_init() failed".into()));
@@ -334,6 +342,7 @@ fn write_spss_minimal(
             )));
         }
     };
+    // SAFETY: `writer` is live until `_writer_guard` drops.
     unsafe {
         readstat_writer_set_compression(writer, compress_type);
         readstat_set_data_writer(writer, Some(data_writer_cb));
@@ -342,6 +351,7 @@ fn write_spss_minimal(
     if let Some(lbl) = file_label {
         let c = CString::new(lbl)
             .map_err(|_| Error::Invalid(format!("file label {lbl:?} contains an embedded NUL")))?;
+        // SAFETY: `writer` is live; ReadStat copies the label.
         unsafe { readstat_writer_set_file_label(writer, c.as_ptr()) };
     }
 
@@ -390,6 +400,7 @@ fn write_spss_minimal(
                 field.name()
             ))
         })?;
+        // SAFETY: `writer` is live; ReadStat copies the name.
         let var = unsafe { readstat_add_variable(writer, cname.as_ptr(), typ, width as _) };
         if var.is_null() {
             return Err(Error::Write(format!(
@@ -407,6 +418,7 @@ fn write_spss_minimal(
         };
         if let Some(fmt) = want_fmt {
             let cfmt = CString::new(fmt).expect("SPSS format names hold no NUL");
+            // SAFETY: `var` lives as long as `writer`; ReadStat copies the format.
             unsafe { readstat_variable_set_format(var, cfmt.as_ptr()) };
         }
 
@@ -421,6 +433,7 @@ fn write_spss_minimal(
                     field.name()
                 ))
             })?;
+            // SAFETY: `var` lives as long as `writer`; ReadStat copies the label.
             unsafe { readstat_variable_set_label(var, c.as_ptr()) };
         }
 
@@ -449,6 +462,8 @@ fn write_spss_minimal(
                             };
                             let c_val =
                                 CString::new(val_string).expect("a formatted number holds no NUL");
+                            // SAFETY: `var` is live; ReadStat keeps this pointer until it begins
+                            // writing, so `c_val` is kept in `_keep_missing`.
                             rcs.push(unsafe {
                                 readstat_variable_add_missing_string_value(var, c_val.as_ptr())
                             });
@@ -458,11 +473,13 @@ fn write_spss_minimal(
                     } else {
                         // Numeric: discrete + range
                         for &val in &um.values {
+                            // SAFETY: `var` lives as long as `writer`.
                             rcs.push(unsafe {
                                 readstat_variable_add_missing_double_value(var, val)
                             });
                         }
                         if let Some((low, high)) = um.range {
+                            // SAFETY: `var` lives as long as `writer`.
                             rcs.push(unsafe {
                                 readstat_variable_add_missing_double_range(var, low, high)
                             });
@@ -486,6 +503,7 @@ fn write_spss_minimal(
                         .expect("the column name was checked for NUL above");
 
                     let label_set =
+                        // SAFETY: `writer` is live; ReadStat copies the name.
                         unsafe { readstat_add_label_set(writer, typ, c_label_set_name.as_ptr()) };
 
                     if label_set.is_null() {
@@ -512,6 +530,7 @@ fn write_spss_minimal(
                                     field.name()
                                 ))
                             })?;
+                            // SAFETY: `label_set` is live; ReadStat copies both strings.
                             unsafe {
                                 readstat_label_string_value(
                                     label_set,
@@ -528,6 +547,7 @@ fn write_spss_minimal(
                                     field.name()
                                 ))
                             })?;
+                            // SAFETY: `label_set` is live; ReadStat copies the label.
                             unsafe {
                                 readstat_label_double_value(label_set, num_val, c_label.as_ptr());
                             }
@@ -535,6 +555,7 @@ fn write_spss_minimal(
                         c_strings.push(c_label);
                     }
 
+                    // SAFETY: `var` and `label_set` belong to the live `writer`.
                     unsafe {
                         readstat_variable_set_label_set(var, label_set);
                     }
@@ -555,6 +576,7 @@ fn write_spss_minimal(
         .map_err(|_| Error::Invalid(format!("{total_rows} rows exceed this platform's limit")))?;
     let mut out = OutputFile::create(out_path)?;
     write_rc(
+        // SAFETY: `writer` is live, and `out` outlives every write `data_writer_cb` makes into it.
         unsafe { readstat_begin_writing_sav(writer, out.as_ctx(), row_count) },
         || "beginning the file".into(),
     )?;
@@ -563,6 +585,7 @@ fn write_spss_minimal(
     for b in batches {
         for i in 0..b.num_rows() {
             let row = row_offset + i;
+            // SAFETY: `writer` is live.
             write_rc(unsafe { readstat_begin_row(writer) }, || {
                 format!("beginning row {row}")
             })?;
@@ -570,17 +593,21 @@ fn write_spss_minimal(
             for (j, arr) in b.columns().iter().enumerate() {
                 let rc = if is_str_col[j] {
                     match get_string_value(arr.as_ref(), i).map(CString::new) {
+                        // SAFETY: `rvars[j]` is live; ReadStat copies `cs` into the row.
                         Some(Ok(cs)) => unsafe {
                             readstat_insert_string_value(writer, rvars[j], cs.as_ptr())
                         },
                         // A NUL cannot be stored, so the value is written as missing.
+                        // SAFETY: `rvars[j]` belongs to the live `writer`.
                         Some(Err(_)) | None => unsafe {
                             readstat_insert_missing_value(writer, rvars[j])
                         },
                     }
                 } else {
                     match as_f64_opt(arr.as_ref(), i) {
+                        // SAFETY: `rvars[j]` belongs to the live `writer`.
                         Some(v) => unsafe { readstat_insert_double_value(writer, rvars[j], v) },
+                        // SAFETY: `rvars[j]` belongs to the live `writer`.
                         None => unsafe { readstat_insert_missing_value(writer, rvars[j]) },
                     }
                 };
@@ -589,6 +616,7 @@ fn write_spss_minimal(
                 })?;
             }
 
+            // SAFETY: `writer` is live.
             write_rc(unsafe { readstat_end_row(writer) }, || {
                 format!("ending row {row}")
             })?;
@@ -596,6 +624,7 @@ fn write_spss_minimal(
         row_offset += b.num_rows();
     }
 
+    // SAFETY: `writer` is live, and so is `out`.
     write_rc(unsafe { readstat_end_writing(writer) }, || {
         "finishing the file".into()
     })?;

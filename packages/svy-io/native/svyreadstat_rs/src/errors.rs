@@ -101,10 +101,12 @@ impl Error {
 
 /// ReadStat's text for a return code, with the code itself.
 pub(crate) fn readstat_message(rc: readstat_sys::readstat_error_t) -> String {
+    // SAFETY: takes any code by value and returns a static string or null.
     let p = unsafe { readstat_sys::readstat_error_message(rc) };
     if p.is_null() {
         return format!("rc={rc}");
     }
+    // SAFETY: non-null, so one of ReadStat's static NUL-terminated messages.
     let text = unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy();
     format!("{text} (rc={rc})")
 }
