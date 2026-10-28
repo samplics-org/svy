@@ -25,11 +25,8 @@ except ImportError:
 
 from svy.core.constants import (
     SVY_CERTAINTY,
-    SVY_HIT,
-    SVY_PROB,
     SVY_PROB_STAGE1,
     SVY_ROW_INDEX,
-    SVY_WEIGHT,
 )
 from svy.core.data_prep import extract_where_cols
 from svy.core.enumerations import PPSMethod
@@ -54,6 +51,7 @@ from svy.selection.srs import (
     _check_output_col_names,
     _encode_stratum,
     _ensure_row_index,
+    _output_cols,
     _remap_n_map,
 )
 from svy.utils.checks import assert_no_missing, drop_missing
@@ -498,10 +496,11 @@ def _pps_prepare(
 
     # -- Guard: reject names that already exist in the frame -------------
     _check_output_col_names(
-        src_df,
+        sample,
         prob_name=prob_name,
         wgt_name=wgt_name,
         hit_name=hit_name,
+        pps=True,
         where="Sample.sampling.pps",
     )
 
@@ -637,13 +636,12 @@ def _pps_writeback(
     where_mask,
 ):
     """Merge PPS selection results back onto the Sample."""
-    is_chaining = design.prob == SVY_PROB_STAGE1
-    out_prob_col = prob_name or getattr(sample, "_stage_out_prob", None) or SVY_PROB
-    wgt_col = wgt_name or getattr(sample, "_stage_out_wgt", None) or design.wgt or SVY_WEIGHT
-    hit_col = hit_name or design.hit or SVY_HIT
+    out_prob_col, wgt_col, hit_col = _output_cols(
+        sample, design, prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name
+    )
     join_how = "left" if where_mask is not None else "inner"
 
-    if is_chaining:
+    if design.prob == SVY_PROB_STAGE1:
         temp = _apply_chaining_writeback(
             src_df=src_df,
             sel_idx=sel_idx,
@@ -668,7 +666,6 @@ def _pps_writeback(
             positions = np.searchsorted(row_arr[order], sel_idx)
             prev_probs = prob_arr[order[positions]]
             probs = probs * prev_probs
-        design = design.fill_missing(prob=out_prob_col)
         temp = pl.DataFrame(
             {
                 row_col: sel_idx,
@@ -698,10 +695,7 @@ def _pps_writeback(
             df_new = df_new.with_columns((1.0 / pl.col(out_prob_col)).alias(wgt_col))
 
     sample._data = df_new
-    if is_chaining:
-        sample._design = design.update(wgt=wgt_col, prob=out_prob_col, hit=hit_col, wr=wr)
-    else:
-        sample._design = design.fill_missing(wgt=wgt_col, prob=out_prob_col, hit=hit_col, wr=wr)
+    sample._design = design.update(wgt=wgt_col, prob=out_prob_col, hit=hit_col, wr=wr)
     for attr in ("_stage_out_prob", "_stage_out_wgt"):
         if hasattr(sample, attr):
             delattr(sample, attr)

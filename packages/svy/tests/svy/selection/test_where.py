@@ -193,9 +193,8 @@ class TestSrsWhere:
 
     def test_no_where_same_as_where_none(self):
         """srs(where=None) must be identical to srs() with no where argument."""
-        samp = _make_sample(20)
-        r1 = samp.sampling.srs(n=5, rstate=RNG)
-        r2 = samp.sampling.srs(n=5, where=None, rstate=RNG)
+        r1 = _make_sample(20).sampling.srs(n=5, rstate=RNG)
+        r2 = _make_sample(20).sampling.srs(n=5, where=None, rstate=RNG)
         assert r1._data.equals(r2._data)
 
     # -- Null / non-null selection columns -----------------------------------
