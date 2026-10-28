@@ -28,12 +28,18 @@ use readstat_sys::{
 use crate::core::{OutputFile, WriterGuard, write_rc};
 use crate::errors::{Error, Op, Result};
 
+/// # Safety
+///
+/// Called only by ReadStat: `data` is null or `len` readable bytes, and `ctx` is null or
+/// the pointer `OutputFile::as_ctx` returned.
 unsafe extern "C" fn data_writer_cb(data: *const c_void, len: usize, ctx: *mut c_void) -> isize {
     if data.is_null() || ctx.is_null() {
         return -1;
     }
-    let file = &mut *(ctx as *mut File);
-    let bytes = std::slice::from_raw_parts(data as *const u8, len);
+    // SAFETY: `ctx` is the `OutputFile`'s `File`, alive and otherwise untouched while writing.
+    let file = unsafe { &mut *(ctx as *mut File) };
+    // SAFETY: ReadStat passes a buffer of `len` readable bytes, valid for the call.
+    let bytes = unsafe { std::slice::from_raw_parts(data as *const u8, len) };
     match file.write_all(bytes) {
         Ok(_) => len as isize,
         Err(_) => -1,
@@ -189,6 +195,7 @@ fn write_xpt_impl(
         batches.push(RecordBatch::new_empty(schema.clone()));
     }
 
+    // SAFETY: no preconditions; a null result is checked below.
     let writer = unsafe { readstat_writer_init() };
     if writer.is_null() {
         return Err(Error::Internal("readstat_writer_init() failed".into()));
@@ -201,6 +208,7 @@ fn write_xpt_impl(
             "XPT version must be 5 or 8, got {version}"
         )));
     }
+    // SAFETY: `writer` is live until `_writer_guard` drops.
     unsafe {
         readstat_writer_set_file_format_version(writer, version as u8);
         readstat_set_data_writer(writer, Some(data_writer_cb));
@@ -209,6 +217,7 @@ fn write_xpt_impl(
     if let Some(lbl) = label {
         let lbl_cstr = CString::new(lbl)
             .map_err(|_| Error::Invalid(format!("file label {lbl:?} contains an embedded NUL")))?;
+        // SAFETY: `writer` is live; ReadStat copies the label.
         unsafe {
             readstat_writer_set_file_label(writer, lbl_cstr.as_ptr());
         }
@@ -229,6 +238,7 @@ fn write_xpt_impl(
             "member name {member_name:?} contains an embedded NUL"
         ))
     })?;
+    // SAFETY: `writer` is live; ReadStat copies the name.
     unsafe {
         readstat_writer_set_table_name(writer, member_cstr.as_ptr());
     }
@@ -289,6 +299,7 @@ fn write_xpt_impl(
             (readstat_type_e_READSTAT_TYPE_DOUBLE, 0)
         };
 
+        // SAFETY: `writer` is live; ReadStat copies the name.
         let var = unsafe { readstat_add_variable(writer, col_name.as_ptr(), var_type, width) };
         if var.is_null() {
             return Err(Error::Write(format!(
@@ -305,6 +316,7 @@ fn write_xpt_impl(
                     field.name()
                 ))
             })?;
+            // SAFETY: `var` lives as long as `writer`; ReadStat copies the label.
             unsafe {
                 readstat_variable_set_label(var, label_cstr.as_ptr());
             }
@@ -316,6 +328,7 @@ fn write_xpt_impl(
                     field.name()
                 ))
             })?;
+            // SAFETY: `var` lives as long as `writer`; ReadStat copies the format.
             unsafe {
                 readstat_variable_set_format(var, format_cstr.as_ptr());
             }
@@ -334,6 +347,7 @@ fn write_xpt_impl(
         .map_err(|_| Error::Invalid(format!("{total_rows} rows exceed this platform's limit")))?;
     let mut out = OutputFile::create(path)?;
     write_rc(
+        // SAFETY: `writer` is live, and `out` outlives every write `data_writer_cb` makes into it.
         unsafe { readstat_begin_writing_xport(writer, out.as_ctx(), row_count) },
         || "beginning the file".into(),
     )?;
@@ -342,6 +356,7 @@ fn write_xpt_impl(
     for batch in &batches {
         for i in 0..batch.num_rows() {
             let row = row_offset + i;
+            // SAFETY: `writer` is live.
             write_rc(unsafe { readstat_begin_row(writer) }, || {
                 format!("beginning row {row}")
             })?;
@@ -349,17 +364,21 @@ fn write_xpt_impl(
             for (j, arr) in batch.columns().iter().enumerate() {
                 let rc = if is_str_col[j] {
                     match get_string_value(arr.as_ref(), i).map(CString::new) {
+                        // SAFETY: `rvars[j]` is live; ReadStat copies `cs` into the row.
                         Some(Ok(cs)) => unsafe {
                             readstat_insert_string_value(writer, rvars[j], cs.as_ptr())
                         },
                         // A NUL cannot be stored, so the value is written as missing.
+                        // SAFETY: `rvars[j]` belongs to the live `writer`.
                         Some(Err(_)) | None => unsafe {
                             readstat_insert_missing_value(writer, rvars[j])
                         },
                     }
                 } else {
                     match as_f64_opt(arr.as_ref(), i) {
+                        // SAFETY: `rvars[j]` belongs to the live `writer`.
                         Some(v) => unsafe { readstat_insert_double_value(writer, rvars[j], v) },
+                        // SAFETY: `rvars[j]` belongs to the live `writer`.
                         None => unsafe { readstat_insert_missing_value(writer, rvars[j]) },
                     }
                 };
@@ -368,6 +387,7 @@ fn write_xpt_impl(
                 })?;
             }
 
+            // SAFETY: `writer` is live.
             write_rc(unsafe { readstat_end_row(writer) }, || {
                 format!("ending row {row}")
             })?;
@@ -375,6 +395,7 @@ fn write_xpt_impl(
         row_offset += batch.num_rows();
     }
 
+    // SAFETY: `writer` is live, and so is `out`.
     write_rc(unsafe { readstat_end_writing(writer) }, || {
         "finishing the file".into()
     })?;

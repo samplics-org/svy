@@ -1,5 +1,4 @@
 // native/svyreadstat_rs/src/lib.rs
-#![allow(unsafe_op_in_unsafe_fn)]
 mod core;
 mod errors;
 mod sas_read;

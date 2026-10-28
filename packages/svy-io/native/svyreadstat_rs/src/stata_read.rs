@@ -111,6 +111,8 @@ fn run_parse(
 
     // Before the parser exists, so a bad path cannot return without freeing it.
     let c_path = crate::core::c_path(data_path)?;
+    // SAFETY: the parser is freed once on every path out; `ctx`, the path and `_keep_enc`
+    // outlive the parse, and only the callbacks touch `ctx` until it returns.
     unsafe {
         let p = readstat_parser_init();
         if p.is_null() {

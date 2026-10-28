@@ -43,3 +43,7 @@ pyo3 = { version = "0.29", features = ["auto-initialize"] }
 lto = true
 codegen-units = 1
 opt-level = 3
+
+# Every `unsafe` block states the invariant it relies on.
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"
