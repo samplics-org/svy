@@ -7,16 +7,13 @@ use std::ffi::CString;
 use std::io::Cursor;
 
 use arrow::array::{
-    Array, BooleanArray, Date32Array, Date64Array, DictionaryArray, DurationMicrosecondArray,
-    DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray, Float32Array,
-    Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, LargeStringArray, StringArray,
-    StringViewArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
-    UInt64Array,
+    Array, AsArray, DictionaryArray, LargeStringArray, StringArray, StringViewArray,
 };
 use arrow::datatypes::{
-    DataType, Int8Type, Int16Type, Int32Type, Int64Type, TimeUnit, UInt8Type, UInt16Type,
-    UInt32Type, UInt64Type,
+    DataType, Date32Type, Date64Type, DurationMicrosecondType, DurationMillisecondType,
+    DurationNanosecondType, DurationSecondType, Float32Type, Float64Type, Int8Type, Int16Type,
+    Int32Type, Int64Type, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::record_batch::RecordBatch;
@@ -131,71 +128,53 @@ fn temporal_as_spss_seconds(a: &dyn Array, row: usize) -> Option<f64> {
     }
     match a.data_type() {
         DataType::Date32 => {
-            let arr = a.as_any().downcast_ref::<Date32Array>().unwrap();
+            let arr = a.as_primitive::<Date32Type>();
             let days_since_unix = arr.value(row) as i64;
             let total_secs = ((days_since_unix + UNIX_MINUS_SPSS_DAYS) as f64) * SECS_PER_DAY_F64;
             Some(total_secs)
         }
         DataType::Date64 => {
-            let arr = a.as_any().downcast_ref::<Date64Array>().unwrap();
+            let arr = a.as_primitive::<Date64Type>();
             let ms_since_unix = arr.value(row) as f64;
             Some((ms_since_unix / MSEC_PER_SEC_F64) + UNIX_MINUS_SPSS_SECS_F64)
         }
         DataType::Timestamp(TimeUnit::Second, _) => {
-            let arr = a.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
+            let arr = a.as_primitive::<TimestampSecondType>();
             let s = arr.value(row) as f64;
             Some(s + UNIX_MINUS_SPSS_SECS_F64)
         }
         DataType::Timestamp(TimeUnit::Millisecond, _) => {
-            let arr = a
-                .as_any()
-                .downcast_ref::<TimestampMillisecondArray>()
-                .unwrap();
+            let arr = a.as_primitive::<TimestampMillisecondType>();
             let ms = arr.value(row) as f64;
             Some((ms / MSEC_PER_SEC_F64) + UNIX_MINUS_SPSS_SECS_F64)
         }
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            let arr = a
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .unwrap();
+            let arr = a.as_primitive::<TimestampMicrosecondType>();
             let us = arr.value(row) as f64;
             Some((us / USEC_PER_SEC_F64) + UNIX_MINUS_SPSS_SECS_F64)
         }
         DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            let arr = a
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .unwrap();
+            let arr = a.as_primitive::<TimestampNanosecondType>();
             let ns = arr.value(row) as f64;
             Some((ns / NSEC_PER_SEC_F64) + UNIX_MINUS_SPSS_SECS_F64)
         }
         DataType::Duration(TimeUnit::Second) => {
-            let arr = a.as_any().downcast_ref::<DurationSecondArray>().unwrap();
+            let arr = a.as_primitive::<DurationSecondType>();
             let seconds = arr.value(row) as f64;
             Some(seconds)
         }
         DataType::Duration(TimeUnit::Millisecond) => {
-            let arr = a
-                .as_any()
-                .downcast_ref::<DurationMillisecondArray>()
-                .unwrap();
+            let arr = a.as_primitive::<DurationMillisecondType>();
             let ms = arr.value(row) as f64;
             Some(ms / MSEC_PER_SEC_F64)
         }
         DataType::Duration(TimeUnit::Microsecond) => {
-            let arr = a
-                .as_any()
-                .downcast_ref::<DurationMicrosecondArray>()
-                .unwrap();
+            let arr = a.as_primitive::<DurationMicrosecondType>();
             let us = arr.value(row) as f64;
             Some(us / USEC_PER_SEC_F64)
         }
         DataType::Duration(TimeUnit::Nanosecond) => {
-            let arr = a
-                .as_any()
-                .downcast_ref::<DurationNanosecondArray>()
-                .unwrap();
+            let arr = a.as_primitive::<DurationNanosecondType>();
             let ns = arr.value(row) as f64;
             Some(ns / NSEC_PER_SEC_F64)
         }
@@ -213,22 +192,22 @@ fn as_f64_opt(a: &dyn Array, row: usize) -> Option<f64> {
     }
     macro_rules! down {
         ($T:ty) => {
-            a.as_any().downcast_ref::<$T>().unwrap().value(row)
+            a.as_primitive::<$T>().value(row)
         };
     }
     use DataType::*;
     let result = match a.data_type() {
-        Float64 => Some(down!(Float64Array)),
-        Float32 => Some(down!(Float32Array) as f64),
-        Int64 => Some(down!(Int64Array) as f64),
-        Int32 => Some(down!(Int32Array) as f64),
-        Int16 => Some(down!(Int16Array) as f64),
-        Int8 => Some(down!(Int8Array) as f64),
-        UInt64 => Some(down!(UInt64Array) as f64),
-        UInt32 => Some(down!(UInt32Array) as f64),
-        UInt16 => Some(down!(UInt16Array) as f64),
-        UInt8 => Some(down!(UInt8Array) as f64),
-        Boolean => Some(if down!(BooleanArray) { 1.0 } else { 0.0 }),
+        Float64 => Some(down!(Float64Type)),
+        Float32 => Some(down!(Float32Type) as f64),
+        Int64 => Some(down!(Int64Type) as f64),
+        Int32 => Some(down!(Int32Type) as f64),
+        Int16 => Some(down!(Int16Type) as f64),
+        Int8 => Some(down!(Int8Type) as f64),
+        UInt64 => Some(down!(UInt64Type) as f64),
+        UInt32 => Some(down!(UInt32Type) as f64),
+        UInt16 => Some(down!(UInt16Type) as f64),
+        UInt8 => Some(down!(UInt8Type) as f64),
+        Boolean => Some(if a.as_boolean().value(row) { 1.0 } else { 0.0 }),
         _ => None,
     };
 

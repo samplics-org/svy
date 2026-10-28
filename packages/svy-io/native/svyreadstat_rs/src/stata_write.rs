@@ -8,14 +8,12 @@ use std::io::Cursor;
 use std::os::raw::c_char;
 
 use arrow::array::{
-    Array, BooleanArray, Date32Array, Date64Array, DictionaryArray, Float32Array, Float64Array,
-    Int8Array, Int16Array, Int32Array, Int64Array, LargeStringArray, StringArray, StringViewArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+    Array, AsArray, DictionaryArray, LargeStringArray, StringArray, StringViewArray,
 };
 use arrow::datatypes::{
-    DataType, Int8Type, Int16Type, Int32Type, Int64Type, TimeUnit, UInt8Type, UInt16Type,
-    UInt32Type, UInt64Type,
+    DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
+    Int64Type, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::record_batch::RecordBatch;
@@ -120,22 +118,22 @@ fn as_f64_opt(a: &dyn Array, row: usize) -> Option<f64> {
     }
     macro_rules! down {
         ($T:ty) => {
-            a.as_any().downcast_ref::<$T>().unwrap().value(row)
+            a.as_primitive::<$T>().value(row)
         };
     }
     use DataType::*;
     match a.data_type() {
-        Float64 => Some(down!(Float64Array)),
-        Float32 => Some(down!(Float32Array) as f64),
-        Int64 => Some(down!(Int64Array) as f64),
-        Int32 => Some(down!(Int32Array) as f64),
-        Int16 => Some(down!(Int16Array) as f64),
-        Int8 => Some(down!(Int8Array) as f64),
-        UInt64 => Some(down!(UInt64Array) as f64),
-        UInt32 => Some(down!(UInt32Array) as f64),
-        UInt16 => Some(down!(UInt16Array) as f64),
-        UInt8 => Some(down!(UInt8Array) as f64),
-        Boolean => Some(if down!(BooleanArray) { 1.0 } else { 0.0 }),
+        Float64 => Some(down!(Float64Type)),
+        Float32 => Some(down!(Float32Type) as f64),
+        Int64 => Some(down!(Int64Type) as f64),
+        Int32 => Some(down!(Int32Type) as f64),
+        Int16 => Some(down!(Int16Type) as f64),
+        Int8 => Some(down!(Int8Type) as f64),
+        UInt64 => Some(down!(UInt64Type) as f64),
+        UInt32 => Some(down!(UInt32Type) as f64),
+        UInt16 => Some(down!(UInt16Type) as f64),
+        UInt8 => Some(down!(UInt8Type) as f64),
+        Boolean => Some(if a.as_boolean().value(row) { 1.0 } else { 0.0 }),
         _ => None,
     }
 }
@@ -161,25 +159,25 @@ fn temporal_as_stata(a: &dyn Array, row: usize) -> Option<f64> {
     }
     macro_rules! down {
         ($T:ty) => {
-            a.as_any().downcast_ref::<$T>().unwrap().value(row)
+            a.as_primitive::<$T>().value(row)
         };
     }
     // i128 because shifting a timestamp near i64::MAX to the 1960 epoch overflows i64.
     let unix_ms: i128 = match a.data_type() {
         DataType::Date32 => {
-            return Some((down!(Date32Array) as i64 + UNIX_MINUS_STATA_DAYS) as f64);
+            return Some((down!(Date32Type) as i64 + UNIX_MINUS_STATA_DAYS) as f64);
         }
         DataType::Date64 => {
-            let days = down!(Date64Array).div_euclid(MS_PER_DAY);
+            let days = down!(Date64Type).div_euclid(MS_PER_DAY);
             return Some((days + UNIX_MINUS_STATA_DAYS) as f64);
         }
-        DataType::Timestamp(TimeUnit::Second, _) => down!(TimestampSecondArray) as i128 * 1_000,
-        DataType::Timestamp(TimeUnit::Millisecond, _) => down!(TimestampMillisecondArray).into(),
+        DataType::Timestamp(TimeUnit::Second, _) => down!(TimestampSecondType) as i128 * 1_000,
+        DataType::Timestamp(TimeUnit::Millisecond, _) => down!(TimestampMillisecondType).into(),
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            down!(TimestampMicrosecondArray).div_euclid(1_000).into()
+            down!(TimestampMicrosecondType).div_euclid(1_000).into()
         }
         DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            down!(TimestampNanosecondArray).div_euclid(1_000_000).into()
+            down!(TimestampNanosecondType).div_euclid(1_000_000).into()
         }
         _ => return None,
     };
@@ -192,20 +190,20 @@ fn as_i64_opt(a: &dyn Array, row: usize) -> Option<i64> {
     }
     macro_rules! down {
         ($T:ty) => {
-            a.as_any().downcast_ref::<$T>().unwrap().value(row) as i64
+            a.as_primitive::<$T>().value(row) as i64
         };
     }
     use DataType::*;
     match a.data_type() {
-        Int64 => Some(down!(Int64Array)),
-        Int32 => Some(down!(Int32Array)),
-        Int16 => Some(down!(Int16Array)),
-        Int8 => Some(down!(Int8Array)),
-        UInt64 => Some(down!(UInt64Array)),
-        UInt32 => Some(down!(UInt32Array)),
-        UInt16 => Some(down!(UInt16Array)),
-        UInt8 => Some(down!(UInt8Array)),
-        Boolean => Some(down!(BooleanArray)),
+        Int64 => Some(down!(Int64Type)),
+        Int32 => Some(down!(Int32Type)),
+        Int16 => Some(down!(Int16Type)),
+        Int8 => Some(down!(Int8Type)),
+        UInt64 => Some(down!(UInt64Type)),
+        UInt32 => Some(down!(UInt32Type)),
+        UInt16 => Some(down!(UInt16Type)),
+        UInt8 => Some(down!(UInt8Type)),
+        Boolean => Some(a.as_boolean().value(row) as i64),
         _ => None,
     }
 }
@@ -220,20 +218,20 @@ fn int_col_range(batches: &[RecordBatch], j: usize) -> Option<Option<(i128, i128
         let a = b.column(j).as_ref();
         macro_rules! mm {
             ($T:ty) => {{
-                let a = a.as_any().downcast_ref::<$T>().unwrap();
+                let a = a.as_primitive::<$T>();
                 (min(a).map(|v| v as i128), max(a).map(|v| v as i128))
             }};
         }
         use DataType::*;
         let (lo, hi) = match a.data_type() {
-            Int64 => mm!(Int64Array),
-            Int32 => mm!(Int32Array),
-            Int16 => mm!(Int16Array),
-            Int8 => mm!(Int8Array),
-            UInt64 => mm!(UInt64Array),
-            UInt32 => mm!(UInt32Array),
-            UInt16 => mm!(UInt16Array),
-            UInt8 => mm!(UInt8Array),
+            Int64 => mm!(Int64Type),
+            Int32 => mm!(Int32Type),
+            Int16 => mm!(Int16Type),
+            Int8 => mm!(Int8Type),
+            UInt64 => mm!(UInt64Type),
+            UInt32 => mm!(UInt32Type),
+            UInt16 => mm!(UInt16Type),
+            UInt8 => mm!(UInt8Type),
             Boolean => (Some(0), Some(1)),
             _ => return None,
         };
@@ -378,6 +376,14 @@ unsafe fn insert_missing(
     }
 }
 
+/// Compared as usize: a string over 2 GiB would wrap negative as an i32.
+fn exceeds_strl_threshold(max_len: usize, strl_threshold: i32) -> bool {
+    match usize::try_from(strl_threshold) {
+        Ok(threshold) => max_len > threshold,
+        Err(_) => true,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn write_stata_minimal(
     batches: &[RecordBatch],
@@ -392,6 +398,11 @@ fn write_stata_minimal(
     if batches.is_empty() {
         return Err(Error::Invalid("no record batches to write".into()));
     }
+    let version = u8::try_from(version_internal).map_err(|_| {
+        Error::Invalid(format!(
+            "Stata file format {version_internal} is out of range"
+        ))
+    })?;
 
     // SAFETY: no preconditions; a null result is checked below.
     let writer = unsafe { readstat_writer_init() };
@@ -402,7 +413,7 @@ fn write_stata_minimal(
     let _writer_guard = WriterGuard(writer);
     // SAFETY: `writer` is live until `_writer_guard` drops.
     unsafe {
-        readstat_writer_set_file_format_version(writer, version_internal as u8);
+        readstat_writer_set_file_format_version(writer, version);
         readstat_set_data_writer(writer, Some(data_writer_cb));
     }
 
@@ -455,7 +466,7 @@ fn write_stata_minimal(
                 has_nul: false,
             });
 
-            let needs_strl = (stats.max_len as i32) > strl_threshold;
+            let needs_strl = exceeds_strl_threshold(stats.max_len, strl_threshold);
 
             if needs_strl {
                 return Err(Error::Invalid(format!(
@@ -771,7 +782,10 @@ fn write_dta_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, Float64Array};
+    use arrow::array::{
+        ArrayRef, Date32Array, Date64Array, Float64Array, TimestampMicrosecondArray,
+        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    };
     use arrow::datatypes::{Field, Schema};
     use std::sync::Arc;
 
@@ -869,5 +883,53 @@ mod tests {
         let secs = TimestampSecondArray::from(vec![i64::MAX, i64::MIN]);
         assert_eq!(temporal_as_stata(&secs, 0), Some(9.223372037170395e21));
         assert_eq!(temporal_as_stata(&secs, 1), Some(-9.223372036539157e21));
+    }
+
+    #[test]
+    fn strl_threshold_compares_lengths_past_i32_max() {
+        let cases = [
+            (2045, 2045, false),
+            (2046, 2045, true),
+            (0, 0, false),
+            (1, -1, true),
+            (i32::MAX as usize + 1, 2045, true),
+            (usize::MAX, i32::MAX, true),
+        ];
+        for (max_len, threshold, expected) in cases {
+            assert_eq!(
+                exceeds_strl_threshold(max_len, threshold),
+                expected,
+                "{max_len} vs {threshold}"
+            );
+        }
+    }
+
+    #[test]
+    fn out_of_range_format_version_is_refused_before_writing() {
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Float64, true)]));
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(Float64Array::from(vec![1.5]))]).unwrap();
+        let path = std::env::temp_dir().join(format!("svy_dta_version_{}.dta", std::process::id()));
+        let path = path.to_str().unwrap();
+        // 374 wraps to 118 as a u8, a valid format.
+        for version in [374, -1] {
+            let err = write_stata_minimal(
+                std::slice::from_ref(&batch),
+                path,
+                None,
+                version,
+                2045,
+                None,
+                None,
+                &[],
+            )
+            .unwrap_err();
+            assert!(matches!(err, Error::Invalid(_)), "{err:?}");
+            assert_eq!(
+                err.to_string(),
+                format!("Stata file format {version} is out of range")
+            );
+            assert!(!std::path::Path::new(path).exists());
+        }
     }
 }

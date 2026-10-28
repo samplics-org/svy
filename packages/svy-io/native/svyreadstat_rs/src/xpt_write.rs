@@ -3,8 +3,8 @@
 
 use arrow::array::*;
 use arrow::datatypes::{
-    DataType, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type,
-    UInt64Type,
+    DataType, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type,
+    UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow::ipc::reader::FileReader;
 use pyo3::prelude::*;
@@ -85,73 +85,21 @@ fn as_f64_opt(arr: &dyn Array, row: usize) -> Option<f64> {
         return None;
     }
     match arr.data_type() {
-        DataType::Float64 => Some(
-            arr.as_any()
-                .downcast_ref::<Float64Array>()
-                .unwrap()
-                .value(row),
-        ),
-        DataType::Float32 => Some(
-            arr.as_any()
-                .downcast_ref::<Float32Array>()
-                .unwrap()
-                .value(row) as f64,
-        ),
-        DataType::Int64 => Some(
-            arr.as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .value(row) as f64,
-        ),
-        DataType::Int32 => Some(
-            arr.as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(row) as f64,
-        ),
-        DataType::Int16 => Some(
-            arr.as_any()
-                .downcast_ref::<Int16Array>()
-                .unwrap()
-                .value(row) as f64,
-        ),
-        DataType::Int8 => Some(arr.as_any().downcast_ref::<Int8Array>().unwrap().value(row) as f64),
-        DataType::UInt64 => Some(
-            arr.as_any()
-                .downcast_ref::<UInt64Array>()
-                .unwrap()
-                .value(row) as f64,
-        ),
-        DataType::UInt32 => Some(
-            arr.as_any()
-                .downcast_ref::<UInt32Array>()
-                .unwrap()
-                .value(row) as f64,
-        ),
-        DataType::UInt16 => Some(
-            arr.as_any()
-                .downcast_ref::<UInt16Array>()
-                .unwrap()
-                .value(row) as f64,
-        ),
-        DataType::UInt8 => Some(
-            arr.as_any()
-                .downcast_ref::<UInt8Array>()
-                .unwrap()
-                .value(row) as f64,
-        ),
-        DataType::Boolean => Some(
-            if arr
-                .as_any()
-                .downcast_ref::<BooleanArray>()
-                .unwrap()
-                .value(row)
-            {
-                1.0
-            } else {
-                0.0
-            },
-        ),
+        DataType::Float64 => Some(arr.as_primitive::<Float64Type>().value(row)),
+        DataType::Float32 => Some(arr.as_primitive::<Float32Type>().value(row) as f64),
+        DataType::Int64 => Some(arr.as_primitive::<Int64Type>().value(row) as f64),
+        DataType::Int32 => Some(arr.as_primitive::<Int32Type>().value(row) as f64),
+        DataType::Int16 => Some(arr.as_primitive::<Int16Type>().value(row) as f64),
+        DataType::Int8 => Some(arr.as_primitive::<Int8Type>().value(row) as f64),
+        DataType::UInt64 => Some(arr.as_primitive::<UInt64Type>().value(row) as f64),
+        DataType::UInt32 => Some(arr.as_primitive::<UInt32Type>().value(row) as f64),
+        DataType::UInt16 => Some(arr.as_primitive::<UInt16Type>().value(row) as f64),
+        DataType::UInt8 => Some(arr.as_primitive::<UInt8Type>().value(row) as f64),
+        DataType::Boolean => Some(if arr.as_boolean().value(row) {
+            1.0
+        } else {
+            0.0
+        }),
         _ => None,
     }
 }

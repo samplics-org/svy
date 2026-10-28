@@ -10,6 +10,7 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 ### Fixed
 
+- **`write_dta` skipped the strL error for a string over 2 GiB**, whose length wrapped negative, and a native format version outside 0-255 wrapped to another version. The version now raises `INVALID_VALUE`.
 - **A file that failed to parse read as an empty frame when `n_max=0`**, through `read_xpt` or the native readers.
 - **A SAS catalog that failed to parse was reported only on stderr.** `read_sas`, `read_xpt` and `read_sas_arrow` now raise a `UserWarning` and read the data without value labels.
 - **A failed write left a truncated file behind.** The output file is now removed.
