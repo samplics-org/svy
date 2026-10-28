@@ -20,6 +20,7 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ### Fixed
 
+- `probit` refines Acklam's approximation with one Halley step, so van der Waerden rank scores and the probit link match R `qnorm` to rounding instead of 1e-9.
 - Kernel inputs whose lengths disagree raise `SHAPE_MISMATCH` instead of panicking or zero-padding: GLM and negative binomial fits (weights, design columns, offset, domain mask, predictors) and the t-test and rank-test WOLS. svy always passes equal lengths.
 - `rao_scott` returns NaN statistics instead of panicking on NaN proportions or a failed SVD, and instead of 0 and p = 1 when the test is undefined. The Taylor design df no longer underflows when strata outnumber PSUs.
 - `tabulate_rs` gives a NaN SE for a NaN cell share, Taylor and replication, instead of 0.

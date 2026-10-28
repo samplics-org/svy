@@ -204,7 +204,7 @@ fn erfc(z: f64) -> f64 {
     (-z * z).exp() / SQRT_PI * f
 }
 
-fn norm_cdf(x: f64) -> f64 {
+pub(crate) fn norm_cdf(x: f64) -> f64 {
     0.5 * erfc(-x * std::f64::consts::FRAC_1_SQRT_2)
 }
 
