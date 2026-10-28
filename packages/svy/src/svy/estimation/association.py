@@ -332,6 +332,7 @@ def replicate_assoc(
     variance_center: str = "rep_mean",
     alpha: float = 0.05,
     ci_method: str = "fisher",
+    deff_ref: str | None = None,
 ) -> Estimate:
     """Replicate-weight correlation or covariance over ``pairs``."""
     rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
@@ -348,11 +349,12 @@ def replicate_assoc(
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
         domain_mask_col=prep.domain_mask_col,
+        deff_ref=deff_ref,
     )
 
-    # The replicate kernel reports no deff (no SRS reference on that path),
-    # so `deff` is never populated here.
-    est_list = result_to_param_est(est, result_df, param, alpha, False, prep.by_col, ci_method)
+    est_list = result_to_param_est(
+        est, result_df, param, alpha, deff_ref is not None, prep.by_col, ci_method
+    )
     est_cov = np.diag(result_df["var"].to_numpy())
     return est._build_estimate_result_light(
         est_list,
@@ -362,5 +364,6 @@ def replicate_assoc(
         prep.by_cols,
         as_factor=False,
         method=method,
+        deff_ref=deff_ref,
         ci_method=ci_method,
     )

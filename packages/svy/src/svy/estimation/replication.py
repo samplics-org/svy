@@ -156,6 +156,7 @@ def replicate_estimate(
     variance_center: str = "rep_mean",
     alpha: float = 0.05,
     ci_method: str = "logit",
+    deff_ref: str | None = None,
 ) -> Estimate:
     # The variant *is* the method: anything that is not one has no replicate
     # weights and cannot be estimated by replication.
@@ -175,6 +176,7 @@ def replicate_estimate(
             fay_coef=fay_coef,
             variance_center=variance_center,
             alpha=alpha,
+            deff_ref=deff_ref,
         )
     if param == PopParam.MEAN:
         return replicate_mean(
@@ -185,6 +187,7 @@ def replicate_estimate(
             fay_coef=fay_coef,
             variance_center=variance_center,
             alpha=alpha,
+            deff_ref=deff_ref,
         )
     elif param == PopParam.TOTAL:
         return replicate_total(
@@ -195,6 +198,7 @@ def replicate_estimate(
             fay_coef=fay_coef,
             variance_center=variance_center,
             alpha=alpha,
+            deff_ref=deff_ref,
         )
     elif param == PopParam.RATIO:
         if x is None:
@@ -208,6 +212,7 @@ def replicate_estimate(
             fay_coef=fay_coef,
             variance_center=variance_center,
             alpha=alpha,
+            deff_ref=deff_ref,
         )
     elif param == PopParam.PROP:
         return replicate_prop(
@@ -219,6 +224,7 @@ def replicate_estimate(
             variance_center=variance_center,
             alpha=alpha,
             ci_method=ci_method,
+            deff_ref=deff_ref,
         )
     else:
         raise ValueError(f"Unsupported parameter {param} for replication estimation.")
@@ -238,6 +244,7 @@ def replicate_mean(
     fay_coef: float = 0.0,
     variance_center: str = "rep_mean",
     alpha: float = 0.05,
+    deff_ref: str | None = None,
 ) -> Estimate:
     rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
     data = est._ensure_float64(prep.df, rep_weight_cols)
@@ -251,9 +258,16 @@ def replicate_mean(
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
         domain_mask_col=prep.domain_mask_col,
+        deff_ref=deff_ref,
     )
     est_list = est._polars_result_to_param_est(
-        result_df, y, PopParam.MEAN, alpha, deff=False, by_col=prep.by_col, as_factor=False
+        result_df,
+        y,
+        PopParam.MEAN,
+        alpha,
+        deff=deff_ref is not None,
+        by_col=prep.by_col,
+        as_factor=False,
     )
     return est._build_estimate_result_light(
         est_list,
@@ -263,6 +277,7 @@ def replicate_mean(
         prep.by_cols,
         as_factor=False,
         method=method,
+        deff_ref=deff_ref,
         design_df=df_val,
         cov_filled=cov_flat is not None,
     )
@@ -277,6 +292,7 @@ def replicate_total(
     fay_coef: float = 0.0,
     variance_center: str = "rep_mean",
     alpha: float = 0.05,
+    deff_ref: str | None = None,
 ) -> Estimate:
     rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
     data = est._ensure_float64(prep.df, rep_weight_cols)
@@ -290,9 +306,16 @@ def replicate_total(
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
         domain_mask_col=prep.domain_mask_col,
+        deff_ref=deff_ref,
     )
     est_list = est._polars_result_to_param_est(
-        result_df, y, PopParam.TOTAL, alpha, deff=False, by_col=prep.by_col, as_factor=False
+        result_df,
+        y,
+        PopParam.TOTAL,
+        alpha,
+        deff=deff_ref is not None,
+        by_col=prep.by_col,
+        as_factor=False,
     )
     return est._build_estimate_result_light(
         est_list,
@@ -302,6 +325,7 @@ def replicate_total(
         prep.by_cols,
         as_factor=False,
         method=method,
+        deff_ref=deff_ref,
         design_df=df_val,
         cov_filled=cov_flat is not None,
     )
@@ -317,6 +341,7 @@ def replicate_factor(
     fay_coef: float = 0.0,
     variance_center: str = "rep_mean",
     alpha: float = 0.05,
+    deff_ref: str | None = None,
 ) -> Estimate:
     """Per-level shares (``mean``) or counts (``total``) of ``y`` as a factor."""
     rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
@@ -338,9 +363,10 @@ def replicate_factor(
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
         domain_mask_col=prep.domain_mask_col,
+        deff_ref=deff_ref,
     )
     est_list = est._polars_result_to_param_est(
-        result_df, y, param, alpha, deff=False, by_col=prep.by_col, as_factor=True
+        result_df, y, param, alpha, deff=deff_ref is not None, by_col=prep.by_col, as_factor=True
     )
     return est._build_estimate_result_light(
         est_list,
@@ -350,6 +376,7 @@ def replicate_factor(
         prep.by_cols,
         as_factor=True,
         method=method,
+        deff_ref=deff_ref,
         design_df=df_val,
         cov_filled=cov_flat is not None,
     )
@@ -365,6 +392,7 @@ def replicate_ratio(
     fay_coef: float = 0.0,
     variance_center: str = "rep_mean",
     alpha: float = 0.05,
+    deff_ref: str | None = None,
 ) -> Estimate:
     rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
     data = est._ensure_float64(prep.df, rep_weight_cols)
@@ -379,13 +407,14 @@ def replicate_ratio(
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
         domain_mask_col=prep.domain_mask_col,
+        deff_ref=deff_ref,
     )
     est_list = est._polars_result_to_param_est(
         result_df,
         y,
         PopParam.RATIO,
         alpha,
-        deff=False,
+        deff=deff_ref is not None,
         by_col=prep.by_col,
         as_factor=False,
         x_name=x,
@@ -398,6 +427,7 @@ def replicate_ratio(
         prep.by_cols,
         as_factor=False,
         method=method,
+        deff_ref=deff_ref,
         design_df=df_val,
         cov_filled=cov_flat is not None,
     )
@@ -413,6 +443,7 @@ def replicate_prop(
     variance_center: str = "rep_mean",
     alpha: float = 0.05,
     ci_method: str = "logit",
+    deff_ref: str | None = None,
 ) -> Estimate:
     rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
     data = est._ensure_float64(prep.df, rep_weight_cols)
@@ -435,13 +466,14 @@ def replicate_prop(
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
         domain_mask_col=prep.domain_mask_col,
+        deff_ref=deff_ref,
     )
     est_list = est._polars_result_to_param_est(
         result_df,
         y,
         PopParam.PROP,
         alpha,
-        deff=False,
+        deff=deff_ref is not None,
         by_col=prep.by_col,
         as_factor=True,
         ci_method=ci_method,
@@ -454,6 +486,7 @@ def replicate_prop(
         prep.by_cols,
         as_factor=True,
         method=method,
+        deff_ref=deff_ref,
         design_df=df_val,
         cov_filled=cov_flat is not None,
         ci_method=ci_method,

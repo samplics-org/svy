@@ -1689,6 +1689,7 @@ class Estimation:
                 as_factor=as_factor,
                 variance_center=variance_center,
                 alpha=alpha,
+                deff_ref=deff_ref,
             )
 
         if where is not None:
@@ -1817,6 +1818,7 @@ class Estimation:
                 as_factor=as_factor,
                 variance_center=variance_center,
                 alpha=alpha,
+                deff_ref=deff_ref,
             )
 
         if where is not None:
@@ -1946,6 +1948,7 @@ class Estimation:
                 variance_center=variance_center,
                 alpha=alpha,
                 ci_method=ci_method,
+                deff_ref=deff_ref,
             )
 
         if where is not None:
@@ -2100,6 +2103,7 @@ class Estimation:
                 fay_coef=fay_coef,
                 variance_center=variance_center,
                 alpha=alpha,
+                deff_ref=deff_ref,
             )
 
         if where is not None:
@@ -2171,6 +2175,7 @@ class Estimation:
                 variance_center=variance_center,
                 alpha=alpha,
                 ci_method=ci_method,
+                deff_ref=deff_ref,
             )
 
         if where is not None:
