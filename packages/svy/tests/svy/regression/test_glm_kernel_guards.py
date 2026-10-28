@@ -93,7 +93,7 @@ class TestRefusals:
             }
         )
 
-        with pytest.raises(RuntimeError, match="non-finite value"):
+        with pytest.raises(ValueError, match="non-finite value") as info:
             rs.fit_glm_rs(
                 y_name="y",
                 x_names=["_intercept_", "x"],
@@ -102,6 +102,7 @@ class TestRefusals:
                 family="gaussian",
                 link="identity",
             )
+        assert info.value.code == "NON_FINITE_INPUT"
 
 
 class TestWarnings:

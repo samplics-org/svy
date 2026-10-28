@@ -19,6 +19,7 @@
 // #![allow(non_upper_case_globals)]
 #![allow(non_snake_case)]
 
+use crate::regression::error::{RResult, RegressionError};
 use faer::prelude::Solve;
 use faer::{Mat, MatRef, Side};
 
@@ -53,7 +54,7 @@ pub enum Family {
 }
 
 impl Family {
-    pub fn from_str(s: &str, theta: Option<f64>) -> PolarsResult<Self> {
+    pub fn from_str(s: &str, theta: Option<f64>) -> RResult<Self> {
         match s.to_lowercase().as_str() {
             "gaussian" => Ok(Family::Gaussian),
             "binomial" => Ok(Family::Binomial),
@@ -61,22 +62,13 @@ impl Family {
             "gamma" => Ok(Family::Gamma),
             "inversegaussian" | "inverse_gaussian" => Ok(Family::InverseGaussian),
             "negativebinomial" | "negative_binomial" => {
-                let th = theta.ok_or_else(|| {
-                    PolarsError::ComputeError(
-                        "negative binomial needs its dispersion: pass theta".into(),
-                    )
-                })?;
+                let th = theta.ok_or(RegressionError::ThetaMissing)?;
                 if !(th.is_finite() && th > 0.0) {
-                    return Err(PolarsError::ComputeError(
-                        format!("negative binomial theta must be finite and positive, got {th}")
-                            .into(),
-                    ));
+                    return Err(RegressionError::ThetaInvalid(th));
                 }
                 Ok(Family::NegativeBinomial(th))
             }
-            _ => Err(PolarsError::ComputeError(
-                format!("Unsupported family: {}", s).into(),
-            )),
+            _ => Err(RegressionError::UnsupportedFamily(s.to_string())),
         }
     }
 
@@ -255,7 +247,7 @@ fn norm_cdf(x: f64) -> f64 {
 }
 
 impl Link {
-    pub fn from_str(s: &str) -> PolarsResult<Self> {
+    pub fn from_str(s: &str) -> RResult<Self> {
         match s.to_lowercase().as_str() {
             "identity" => Ok(Link::Identity),
             "logit" => Ok(Link::Logit),
@@ -266,9 +258,7 @@ impl Link {
             "sqrt" => Ok(Link::Sqrt),
             "inverse" => Ok(Link::Inverse),
             "inverse_squared" => Ok(Link::InverseSquared),
-            _ => Err(PolarsError::ComputeError(
-                format!("Unsupported link: {}", s).into(),
-            )),
+            _ => Err(RegressionError::UnsupportedLink(s.to_string())),
         }
     }
 
@@ -425,7 +415,7 @@ pub(crate) fn design_codes(
     strata: Option<&Series>,
     psu: Option<&Series>,
     n: usize,
-) -> PolarsResult<(Vec<usize>, usize)> {
+) -> RResult<(Vec<usize>, usize)> {
     let (raw, n_levels) = match (strata, psu) {
         (Some(s), Some(p)) => {
             design_pair_codes(&s.clone().into_column(), &p.clone().into_column())?
@@ -981,7 +971,7 @@ pub(crate) fn design_vcov_of_totals(
 /// win" rule, but raising instead of reporting NA coefficients — consistent
 /// with the rest of svy, and better than today's alternative, a fit that
 /// "succeeds" with SE 0 or NaN and an F statistic around 1e30.
-fn check_rank(XtWX: &Mat<f64>, k: usize, cols: &[Series]) -> PolarsResult<()> {
+fn check_rank(XtWX: &Mat<f64>, k: usize, cols: &[Series]) -> RResult<()> {
     // An exactly aliased column leaves ~1e-16 of its own norm; a genuinely
     // collinear-but-distinct one (R^2 = 0.999999) leaves 1e-6. This separates
     // them by five orders of magnitude either way.
@@ -1022,21 +1012,14 @@ fn check_rank(XtWX: &Mat<f64>, k: usize, cols: &[Series]) -> PolarsResult<()> {
         .iter()
         .map(|&j| format!("'{}'", cols[j].name()))
         .collect();
-    Err(PolarsError::ComputeError(
-        format!(
-            "GLM design matrix is rank deficient: {} is collinear with the columns \
-             before it. Drop it, or one of the columns it duplicates.",
-            listed.join(", ")
-        )
-        .into(),
-    ))
+    Err(RegressionError::RankDeficient(listed.join(", ")))
 }
 
 /// Compute A^{-1} via solving A X = I with same solve strategy.
 ///
 /// Returns an error rather than panicking when even the SVD fails: a single
 /// non-finite entry in the information matrix used to reach `thin_svd().unwrap()`.
-pub(crate) fn invert_matrix(A: MatRef<'_, f64>, k: usize) -> PolarsResult<Mat<f64>> {
+pub(crate) fn invert_matrix(A: MatRef<'_, f64>, k: usize) -> RResult<Mat<f64>> {
     if let Ok(chol) = A.llt(Side::Lower) {
         let mut inv = Mat::<f64>::identity(k, k);
         chol.solve_in_place(inv.as_mut());
@@ -1060,11 +1043,7 @@ pub(crate) fn invert_matrix(A: MatRef<'_, f64>, k: usize) -> PolarsResult<Mat<f6
                         if !inv2[(rr, cc)].is_finite() {
                             return match A.thin_svd() {
                                 Ok(svd) => Ok(svd.pseudoinverse()),
-                                Err(_) => Err(PolarsError::ComputeError(
-                                    "GLM information matrix could not be inverted \
-                                     (degenerate or non-finite fit)"
-                                        .into(),
-                                )),
+                                Err(_) => Err(RegressionError::InfoNotInvertible),
                             };
                         }
                     }
@@ -1226,7 +1205,7 @@ pub(crate) fn fit_one(
     max_iter: usize,
     calib: Option<&CalibSweep>,
     singleton: SingletonRule,
-) -> PolarsResult<GlmResult> {
+) -> RResult<GlmResult> {
     if matches!(
         family_str.to_lowercase().as_str(),
         "negativebinomial" | "negative_binomial"
@@ -1288,7 +1267,7 @@ pub fn fit_glm(
     tol: f64,
     max_iter: usize,
     calib: Option<&CalibSweep>,
-) -> PolarsResult<GlmResult> {
+) -> RResult<GlmResult> {
     fit_one(
         y,
         x_cols,
@@ -1331,7 +1310,7 @@ pub fn fit_glm_where(
     max_iter: usize,
     calib: Option<&CalibSweep>,
     singleton: SingletonRule,
-) -> PolarsResult<GlmResult> {
+) -> RResult<GlmResult> {
     let cast = mask.cast(&DataType::Boolean)?;
     let ca = cast.bool()?;
     let mask_vec: Vec<bool> = ca.iter().map(|v| v.unwrap_or(false)).collect();
@@ -1379,7 +1358,7 @@ pub fn fit_glm_by(
     max_iter: usize,
     calib: Option<&CalibSweep>,
     singleton: SingletonRule,
-) -> PolarsResult<Vec<(String, GlmResult)>> {
+) -> RResult<Vec<(String, GlmResult)>> {
     // Materialize by_col as strings, enumerate unique levels.
     let by_str_series = by_col.cast(&DataType::String)?;
     let by_str = by_str_series.str()?;
@@ -1389,7 +1368,7 @@ pub fn fit_glm_by(
     // in level order (deterministic, thread-count-independent — see the policy
     // note in estimation/mod.rs). Each fit is a full, self-contained IRLS solve.
     let groups: Vec<&str> = unique_groups.iter().flatten().collect();
-    let attempts: Vec<(String, PolarsResult<GlmResult>)> = groups
+    let attempts: Vec<(String, RResult<GlmResult>)> = groups
         .par_iter()
         .map(|&group_val| {
             let mask_vec: Vec<bool> = by_str.iter().map(|v| v == Some(group_val)).collect();
@@ -1424,7 +1403,7 @@ pub fn fit_glm_by(
     // was missing or why.
     let mut results = Vec::with_capacity(attempts.len());
     let mut failed: Vec<String> = Vec::new();
-    let mut first_err: Option<PolarsError> = None;
+    let mut first_err: Option<RegressionError> = None;
     for (level, res) in attempts {
         match res {
             Ok(r) => results.push((level, r)),
@@ -1436,20 +1415,14 @@ pub fn fit_glm_by(
             }
         }
     }
-    if !failed.is_empty() {
-        let detail = first_err
-            .map(|e| e.to_string())
-            .unwrap_or_else(|| "unknown error".to_string());
-        return Err(PolarsError::ComputeError(
-            format!(
-                "GLM failed on {} of {} levels of '{}' ({}): {detail}",
-                failed.len(),
-                failed.len() + results.len(),
-                by_col.name(),
-                failed.join(", ")
-            )
-            .into(),
-        ));
+    if let Some(source) = first_err {
+        return Err(RegressionError::LevelsFailed {
+            n_failed: failed.len(),
+            total: failed.len() + results.len(),
+            by: by_col.name().to_string(),
+            levels: failed.join(", "),
+            source: Box::new(source),
+        });
     }
     Ok(results)
 }
@@ -1471,7 +1444,7 @@ pub fn fit_glm_reps(
     theta: Option<f64>,
     tol: f64,
     max_iter: usize,
-) -> Vec<PolarsResult<GlmResult>> {
+) -> Vec<RResult<GlmResult>> {
     let negbin = matches!(
         family_str.to_lowercase().as_str(),
         "negativebinomial" | "negative_binomial"
@@ -1543,7 +1516,7 @@ pub(crate) fn fit_glm_domain(
     calib: Option<&CalibSweep>,
     singleton: SingletonRule,
     want_variance: bool,
-) -> PolarsResult<GlmResult> {
+) -> RResult<GlmResult> {
     let family = Family::from_str(family_str, theta)?;
     let link = Link::from_str(link_str)?;
 
@@ -1568,24 +1541,23 @@ pub(crate) fn fit_glm_domain(
     }
 
     if y_ca.null_count() > 0 {
-        return Err(PolarsError::ComputeError(
-            format!("GLM response column '{}' contains null values", y.name()).into(),
-        ));
+        return Err(RegressionError::NullValues {
+            what: "response",
+            col: y.name().to_string(),
+        });
     }
     if w_ca.null_count() > 0 {
-        return Err(PolarsError::ComputeError(
-            format!(
-                "GLM weight column '{}' contains null values",
-                weights.name()
-            )
-            .into(),
-        ));
+        return Err(RegressionError::NullValues {
+            what: "weight",
+            col: weights.name().to_string(),
+        });
     }
     for s in &x_cast {
         if s.null_count() > 0 {
-            return Err(PolarsError::ComputeError(
-                format!("GLM predictor column '{}' contains null values", s.name()).into(),
-            ));
+            return Err(RegressionError::NullValues {
+                what: "predictor",
+                col: s.name().to_string(),
+            });
         }
     }
 
@@ -1599,9 +1571,10 @@ pub(crate) fn fit_glm_domain(
             let cast = s.cast(&DataType::Float64)?;
             let ca = cast.f64()?;
             if ca.null_count() > 0 {
-                return Err(PolarsError::ComputeError(
-                    format!("GLM offset column '{}' contains null values", s.name()).into(),
-                ));
+                return Err(RegressionError::NullValues {
+                    what: "offset",
+                    col: s.name().to_string(),
+                });
             }
             ca.iter().map(|v| v.unwrap_or(0.0)).collect()
         }
@@ -1634,9 +1607,7 @@ pub(crate) fn fit_glm_domain(
         .filter(|&i| domain_mask.is_none_or(|m| m[i]) && w_samp[i] > 0.0)
         .count();
     if n_obs <= k {
-        return Err(PolarsError::ComputeError(
-            format!("GLM needs more observations than parameters: n_obs={n_obs}, k={k}").into(),
-        ));
+        return Err(RegressionError::TooFewObservations { n_obs, k });
     }
 
     // Nulls are rejected above; NaN/Inf are not, and Rust's `f64::max` returns
@@ -1648,28 +1619,23 @@ pub(crate) fn fit_glm_domain(
             continue;
         }
         if !y_vals[i].is_finite() {
-            return Err(PolarsError::ComputeError(
-                format!(
-                    "GLM response column '{}' contains a non-finite value at row {i}",
-                    y.name()
-                )
-                .into(),
-            ));
+            return Err(RegressionError::NonFinite {
+                what: format!("response column '{}'", y.name()),
+                row: i,
+            });
         }
         if !offset_vals[i].is_finite() {
-            return Err(PolarsError::ComputeError(
-                format!("GLM offset contains a non-finite value at row {i}").into(),
-            ));
+            return Err(RegressionError::NonFinite {
+                what: "offset".to_string(),
+                row: i,
+            });
         }
         for j in 0..k {
             if !x[j * n + i].is_finite() {
-                return Err(PolarsError::ComputeError(
-                    format!(
-                        "GLM predictor column '{}' contains a non-finite value at row {i}",
-                        x_cast[j].name()
-                    )
-                    .into(),
-                ));
+                return Err(RegressionError::NonFinite {
+                    what: format!("predictor column '{}'", x_cast[j].name()),
+                    row: i,
+                });
             }
         }
     }
@@ -1796,9 +1762,7 @@ pub(crate) fn fit_glm_domain(
     // surface as an error, not NaN coefficients or a panic downstream.
     for j in 0..k {
         if !beta[(j, 0)].is_finite() {
-            return Err(PolarsError::ComputeError(
-                "GLM did not produce finite coefficients (degenerate or non-convergent fit)".into(),
-            ));
+            return Err(RegressionError::NonFiniteCoefficients);
         }
     }
 

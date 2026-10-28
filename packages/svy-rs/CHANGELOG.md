@@ -7,6 +7,7 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 ### Changed
 
 - **BREAKING: estimation and categorical kernels raise coded exceptions.** Bad input raises `svy_rs.KernelValueError` (a `ValueError`) and a numerical or polars failure `svy_rs.KernelRuntimeError` (a `RuntimeError`), each with a `code` that reuses `svy.errors.Code` names (`INVALID_CHOICE`, `SHAPE_MISMATCH`, `REP_COEFS_LENGTH_MISMATCH`, `TEST_GROUP_COUNT`, ...) plus `ZERO_DENOMINATOR` and `KERNEL_INTERNAL`. Input errors that were `RuntimeError`s, such as the t-test and rank-test group counts, are now `ValueError`s; messages are unchanged, except the unknown replicate `center` now names the accepted `'rep_mean'` and `'estimate'`.
+- **BREAKING: the regression kernels raise the coded exceptions too** (`fit_glm_rs`, `fit_glm_reps_rs`, `design_vcov_rs`, and `fit_wols` under the t-test and rank test). Family, link, theta, rank deficiency, too few observations, null and non-finite values are `ValueError`s (were `RuntimeError`), with the codes svy already used for them plus `NB_THETA_DIVERGED`; a failed information-matrix inversion or non-finite coefficients raise `GLM_DEGENERATE`, and a `by_col` failure carries its first level's code. Messages are unchanged.
 - `taylor_assoc` and `replicate_assoc` give a NaN estimate for a domain with no weight instead of failing.
 
 ### Fixed

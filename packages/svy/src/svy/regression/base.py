@@ -128,42 +128,18 @@ def _dummy_expr(var: str, level: Any) -> pl.Expr:
     return (pl.col(var) == pl.lit(level)).cast(pl.Float64)
 
 
-# Structural failures the kernel reports as a RuntimeError. They are the
-# user's problem to fix, not an internal error, so they are re-raised as
-# ModelError with the engine's own message — which already names the offending
-# column — plus the remedy.
-_ENGINE_ERRORS: tuple[tuple[str, str, str], ...] = (
-    (
-        "rank deficient",
-        Code.RANK_DEFICIENT,
-        "Drop the term named above, or the column it duplicates, and refit.",
-    ),
-    (
-        "needs more observations than parameters",
-        Code.INSUFFICIENT_OBSERVATIONS,
-        "Fit fewer terms, or widen the domain.",
-    ),
-    (
-        "non-finite value",
-        Code.NON_FINITE_INPUT,
-        "Replace the infinite or NaN entries, or drop those rows.",
-    ),
-    (
-        "theta must be finite and positive",
-        Code.NB_THETA_INVALID,
-        "Omit theta= to estimate the dispersion from the data.",
-    ),
-    (
-        "Pearson statistic is zero",
-        Code.NB_THETA_UNDEFINED,
-        "Check the response, or pass theta= to fit at a known value.",
-    ),
-    (
-        "profile likelihood in theta",
-        "NB_THETA_DIVERGED",
-        "Fit family='poisson', or pass theta= to fit at a known value.",
-    ),
-)
+# Structural failures the kernel reports with a code. They are the user's
+# problem to fix, not an internal error, so they are re-raised as ModelError
+# with the engine's own message — which already names the offending column —
+# plus the remedy.
+_ENGINE_HINTS: dict[str, str] = {
+    Code.RANK_DEFICIENT: "Drop the term named above, or the column it duplicates, and refit.",
+    Code.INSUFFICIENT_OBSERVATIONS: "Fit fewer terms, or widen the domain.",
+    Code.NON_FINITE_INPUT: "Replace the infinite or NaN entries, or drop those rows.",
+    Code.NB_THETA_INVALID: "Omit theta= to estimate the dispersion from the data.",
+    Code.NB_THETA_UNDEFINED: "Check the response, or pass theta= to fit at a known value.",
+    "NB_THETA_DIVERGED": "Fit family='poisson', or pass theta= to fit at a known value.",
+}
 
 
 # Separation leaves directions the retained rows cannot see at all (a column
@@ -233,17 +209,18 @@ def _residual_df(design_df: int, k: int) -> int | float:
 
 def _as_model_error(exc: Exception) -> ModelError | None:
     """Recognise an engine failure that the caller can act on."""
-    msg = str(exc)
-    for needle, code, hint in _ENGINE_ERRORS:
-        if needle in msg:
-            return ModelError.ValueError(
-                title="GLM cannot be fitted",
-                detail=msg,
-                code=code,
-                where="GLM.fit",
-                hint=hint,
-            )
-    return None
+    if not isinstance(exc, (rs.KernelValueError, rs.KernelRuntimeError)):
+        return None
+    hint = _ENGINE_HINTS.get(exc.code)
+    if hint is None:
+        return None
+    return ModelError.ValueError(
+        title="GLM cannot be fitted",
+        detail=str(exc),
+        code=exc.code,
+        where="GLM.fit",
+        hint=hint,
+    )
 
 
 def _normalize_family(family: FamilyArg) -> str:
@@ -953,10 +930,10 @@ class GLM:
             mapped = _as_model_error(e)
             if mapped is not None:
                 raise mapped from e
-            # A ModelError from the negative binomial path is already the
-            # message the caller needs; only an unrecognised failure gets
-            # wrapped.
-            if isinstance(e, (RuntimeError, ModelError)):
+            # Coded kernel errors and a ModelError from the negative binomial
+            # path already say what went wrong; only an unrecognised failure
+            # gets wrapped.
+            if isinstance(e, (RuntimeError, ModelError, rs.KernelValueError)):
                 raise
             raise RuntimeError(f"Rust GLM engine failed: {e}") from e
 

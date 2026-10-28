@@ -16,7 +16,7 @@
 //   3. Design-based SE via taylor_variance on influence functions
 //   4. t = coef[1] / SE[1], df = degf(design) - 1
 
-use crate::categorical::error::{CResult, CategoricalError};
+use crate::categorical::error::CResult;
 use polars::prelude::*;
 
 use crate::categorical::replicate::RepSpec;
@@ -261,7 +261,7 @@ pub fn ttest_two_sample(
     }
 
     // Fit weighted OLS
-    let wols = fit_wols(y, &xmat, w, n, k).map_err(CategoricalError::Wols)?;
+    let wols = fit_wols(y, &xmat, w, n, k)?;
 
     // Design-based SE via influence functions
     let active = singleton_rows(singleton_method, calib.is_some(), strata.is_some(), rows);

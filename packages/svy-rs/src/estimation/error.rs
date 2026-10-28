@@ -79,13 +79,3 @@ impl Coded for EstimationError {
         )
     }
 }
-
-// For callers still on PolarsResult: the message survives, the code does not.
-impl From<EstimationError> for PolarsError {
-    fn from(e: EstimationError) -> Self {
-        match e {
-            EstimationError::Polars(p) => p,
-            other => PolarsError::ComputeError(other.to_string().into()),
-        }
-    }
-}

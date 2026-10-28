@@ -282,7 +282,7 @@ pub fn ranktest_two_sample(
     }
 
     // Fit weighted OLS
-    let wols = fit_wols(&rankscore, &xmat, w, n, k).map_err(CategoricalError::Wols)?;
+    let wols = fit_wols(&rankscore, &xmat, w, n, k)?;
 
     // 4 & 5. Design-based SE via influence functions + taylor_variance
     let active = singleton_rows(singleton_method, false, strata.is_some(), rows);
@@ -388,7 +388,7 @@ pub fn ranktest_k_sample(
     }
 
     // Fit weighted OLS
-    let wols = fit_wols(&rankscore, &xmat, w, n, k).map_err(CategoricalError::Wols)?;
+    let wols = fit_wols(&rankscore, &xmat, w, n, k)?;
 
     // 4. Design-based covariance of coefficients
     let active = singleton_rows(singleton_method, false, strata.is_some(), rows);
@@ -505,7 +505,7 @@ fn rep_fit(
             xmat[i * k + gi] = 1.0;
         }
     }
-    let wols = fit_wols(&rankscore, &xmat, w, n, k).map_err(CategoricalError::Wols)?;
+    let wols = fit_wols(&rankscore, &xmat, w, n, k)?;
     // Rows outside the domain, or zero-weighted, are not in R's subset design.
     let mask: Vec<bool> = rows.iter().zip(w).map(|(&r, &wi)| r && wi != 0.0).collect();
     let full: Vec<f64> = (0..k)

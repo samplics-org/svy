@@ -9,6 +9,8 @@
 // When neither by_col nor where_col is given, a single-element vec with
 // level="" is returned, so the Python side can treat every case uniformly.
 
+use crate::errors::to_py_err;
+use crate::regression::error::RegressionError;
 use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
@@ -62,7 +64,7 @@ fn to_tuple(level: String, r: GlmResult) -> GlmTuple {
 
 fn column_to_series(df: &DataFrame, name: &str) -> PyResult<Series> {
     df.column(name)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+        .map_err(|e| to_py_err(&RegressionError::InputColumn(e)))
         .map(|c| c.as_materialized_series().clone())
 }
 
@@ -128,10 +130,10 @@ pub fn fit_glm_reps_rs(
         Some(name) => {
             let cast = column_to_series(&df, &name)?
                 .cast(&DataType::Boolean)
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+                .map_err(|e| to_py_err(&RegressionError::InputColumn(e)))?;
             let ca = cast
                 .bool()
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+                .map_err(|e| to_py_err(&RegressionError::InputColumn(e)))?;
             Some(ca.iter().map(|v| v.unwrap_or(false)).collect())
         }
         None => None,
@@ -218,7 +220,7 @@ pub fn fit_glm_rs(
 ) -> PyResult<Vec<GlmTuple>> {
     let singleton = SingletonRule::parse(singleton_method.as_deref());
     let df: DataFrame = data
-        .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("`data` is required"))?
+        .ok_or_else(|| to_py_err(&RegressionError::MissingData))?
         .into();
 
     let y = column_to_series(&df, &y_name)?;
@@ -276,7 +278,7 @@ pub fn fit_glm_rs(
                     singleton,
                 )
             })
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+            .map_err(|e| to_py_err(&e))?;
 
         return Ok(vec![to_tuple(String::new(), result)]);
     }
@@ -304,7 +306,7 @@ pub fn fit_glm_rs(
                     singleton,
                 )
             })
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+            .map_err(|e| to_py_err(&e))?;
 
         return Ok(vec![to_tuple(String::new(), result)]);
     }
@@ -333,7 +335,7 @@ pub fn fit_glm_rs(
                 singleton,
             )
         })
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        .map_err(|e| to_py_err(&e))?;
 
     Ok(results
         .into_iter()
@@ -375,10 +377,10 @@ pub fn design_vcov_rs(
         let s = column_to_series(&df, name)?;
         let cast = s
             .cast(&DataType::Float64)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+            .map_err(|e| to_py_err(&RegressionError::InputColumn(e)))?;
         let ca = cast
             .f64()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+            .map_err(|e| to_py_err(&RegressionError::InputColumn(e)))?;
         for (i, v) in ca.iter().enumerate() {
             cols[j * n + i] = v.unwrap_or(0.0);
         }
@@ -431,5 +433,5 @@ pub fn design_vcov_rs(
             None,
         ))
     })
-    .map_err(|e: PolarsError| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    .map_err(|e: RegressionError| to_py_err(&e))
 }

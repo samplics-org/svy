@@ -101,3 +101,77 @@ def test_polars_failure_is_a_coded_runtime_error(df):
     assert not isinstance(info.value, ValueError)
     assert info.value.code == "KERNEL_INTERNAL"
     assert "absent" in str(info.value)
+
+
+@pytest.fixture
+def glm_df():
+    return pl.DataFrame(
+        {
+            "y": [1.0, 3.0, 2.0, 5.0, 4.0, 6.0],
+            "one": [1.0] * 6,
+            "x": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            "x2": [2.0, 4.0, 6.0, 8.0, 10.0, 12.0],
+            "w": [1.0] * 6,
+            "g": ["a", "a", "a", "b", "b", "b"],
+        }
+    )
+
+
+GLM_INVALID_INPUT = [
+    ({"family": "weibull"}, "INVALID_CHOICE", "Unsupported family: weibull"),
+    ({"link": "cube"}, "INVALID_CHOICE", "Unsupported link: cube"),
+    (
+        {"family": "negative_binomial", "link": "log", "theta": -1.0},
+        "NB_THETA_INVALID",
+        "negative binomial theta must be finite and positive, got -1",
+    ),
+    (
+        {"x_names": ["one", "x", "x2"]},
+        "RANK_DEFICIENT",
+        "GLM design matrix is rank deficient: 'x2' is collinear",
+    ),
+    (
+        {"rows": 2},
+        "INSUFFICIENT_OBSERVATIONS",
+        "GLM needs more observations than parameters: n_obs=2, k=2",
+    ),
+    (
+        {"x_names": ["one", "x", "x2"], "by_col": "g"},
+        "INSUFFICIENT_OBSERVATIONS",
+        "GLM failed on 2 of 2 levels of 'g' (a, b): GLM needs more observations",
+    ),
+    (
+        {"null_y": True},
+        "MISSING_VALUES",
+        "GLM response column 'y' contains null values",
+    ),
+    (
+        {"inf_x": True},
+        "NON_FINITE_INPUT",
+        "GLM predictor column 'x' contains a non-finite value at row 2",
+    ),
+    ({"x_names": ["one", "absent"]}, "INVALID_VALUE", "absent"),
+    ({"no_data": True}, "INVALID_VALUE", "`data` is required"),
+]
+
+
+@pytest.mark.parametrize(("change", "code", "message"), GLM_INVALID_INPUT)
+def test_glm_invalid_input_is_a_coded_value_error(glm_df, change, code, message):
+    change = dict(change)
+    data = glm_df.head(change.pop("rows", glm_df.height))
+    if change.pop("null_y", False):
+        data = data.with_columns(
+            y=pl.when(pl.col("x") == 3).then(None).otherwise(pl.col("y"))
+        )
+    if change.pop("inf_x", False):
+        data = data.with_columns(
+            x=pl.when(pl.col("x") == 3).then(float("inf")).otherwise(pl.col("x"))
+        )
+    kwargs = {"y_name": "y", "x_names": ["one", "x"], "weight_name": "w", "data": data}
+    if change.pop("no_data", False):
+        kwargs["data"] = None
+    kwargs.update(change)
+    with pytest.raises(ps.KernelValueError) as info:
+        ps.fit_glm_rs(**kwargs)
+    assert info.value.code == code
+    assert message in str(info.value)
