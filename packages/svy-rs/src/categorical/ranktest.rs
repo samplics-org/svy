@@ -744,3 +744,129 @@ fn ln_gamma(x: f64) -> f64 {
     }
     -tmp + (2.5066282746310005 * ser / x).ln()
 }
+
+#[cfg(test)]
+#[allow(clippy::excessive_precision)] // as R prints them
+mod tests {
+    use super::*;
+    use crate::test_fixtures::{G2, G3, N, W, Y, psu, strata};
+    use approx::assert_relative_eq;
+
+    // R values: tests/golden/kernel_unit_r.R, svyranktest(y ~ g, test = ...).
+
+    fn two_sample(method: RankScoreMethod) -> RankTestTwoResult {
+        let (st, ps) = (strata(), psu());
+        ranktest_two_sample(
+            &Y,
+            &G2,
+            &W,
+            N,
+            Some(&st),
+            Some(&ps),
+            None,
+            None,
+            None,
+            method,
+            None,
+            vec!["0".into(), "1".into()],
+            &[true; N],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn two_sample_matches_r_svyranktest() {
+        let cases = [
+            (
+                RankScoreMethod::Wilcoxon,
+                [
+                    0.33027950310559018,
+                    4.2027894450336865,
+                    0.052219227568108796,
+                ],
+                1e-12,
+            ),
+            (
+                RankScoreMethod::Median,
+                [0.52190476190476187, 2.6772257470943535, 0.11578344739370217],
+                1e-12,
+            ),
+            // Scores go through `probit`, which is only good to Acklam's 1.15e-9.
+            (
+                RankScoreMethod::VanDerWaerden,
+                [1.053451041609837, 3.5426270371692969, 0.071267043498771748],
+                1.15e-9,
+            ),
+        ];
+        for (method, [delta, t, p], tol) in cases {
+            let r = two_sample(method);
+            assert_relative_eq!(r.delta, delta, max_relative = tol);
+            assert_relative_eq!(r.t_stat, t, max_relative = tol);
+            assert_eq!(r.df, 2.0, "{method:?}");
+            assert_relative_eq!(r.p_value, p, max_relative = tol);
+        }
+    }
+
+    #[test]
+    fn k_sample_matches_r_svyranktest() {
+        let (st, ps) = (strata(), psu());
+        let r = ranktest_k_sample(
+            &Y,
+            &G3,
+            &W,
+            N,
+            3,
+            Some(&st),
+            Some(&ps),
+            None,
+            None,
+            None,
+            RankScoreMethod::KruskalWallis,
+            None,
+            vec!["a".into(), "b".into(), "c".into()],
+            &[true; N],
+        )
+        .unwrap();
+        assert_relative_eq!(r.chisq, 6.6795536496961407, max_relative = 1e-12);
+        assert_eq!((r.ndf, r.ddf), (2, 1.0));
+        assert_relative_eq!(r.f_stat, 6.6795536496961407 / 2.0, max_relative = 1e-12);
+        assert_relative_eq!(r.p_value, 0.36085440455949547, max_relative = 1e-12);
+    }
+
+    #[test]
+    fn distribution_helpers_match_r() {
+        // 2 * pt(-|t|, df) and pf(x, d1, d2, lower.tail = FALSE)
+        assert_relative_eq!(
+            two_sided_t_pvalue(2.3, 7.0),
+            0.054991095204371523,
+            max_relative = 1e-12
+        );
+        assert_relative_eq!(
+            two_sided_t_pvalue(-0.4, 3.5),
+            0.71234489353444386,
+            max_relative = 1e-12
+        );
+        assert_relative_eq!(
+            f_survival(3.1, 2.0, 9.0),
+            0.09457909340249232,
+            max_relative = 1e-12
+        );
+        assert_relative_eq!(
+            f_survival(0.7, 1.6, 8.2),
+            0.49325934572987007,
+            max_relative = 1e-12
+        );
+    }
+
+    #[test]
+    fn probit_is_within_acklams_bound_of_qnorm() {
+        // Acklam's published relative error is 1.15e-9.
+        for (p, q) in [
+            (0.025, -1.95996398454005383),
+            (0.3, -0.52440051270804078),
+            (0.9, 1.28155156554460059),
+        ] {
+            assert_relative_eq!(probit(p), q, max_relative = 1.15e-9);
+        }
+    }
+}

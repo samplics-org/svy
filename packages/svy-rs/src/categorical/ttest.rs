@@ -480,3 +480,64 @@ pub fn ttest_two_sample_rep(
         group_ns,
     })
 }
+
+#[cfg(test)]
+#[allow(clippy::excessive_precision)] // as R prints them
+mod tests {
+    use super::*;
+    use crate::test_fixtures::{G2, N, W, Y, floats, psu, strata};
+    use approx::assert_relative_eq;
+
+    // R values: tests/golden/kernel_unit_r.R. P-values carry the incomplete beta's
+    // 1e-14 continued-fraction stop, so they get 1e-12; the rest is a few ulps.
+
+    #[test]
+    fn one_sample_matches_r_svyttest() {
+        let (st, ps) = (strata(), psu());
+        let r = ttest_one_sample(
+            &floats("y", &Y),
+            &floats("w", &W),
+            Some(&st),
+            Some(&ps),
+            None,
+            None,
+            None,
+            None,
+            None,
+            0.0,
+        )
+        .unwrap();
+        assert_relative_eq!(r.estimate, 4.1826086956521742, max_relative = 1e-14);
+        assert_relative_eq!(r.se, 0.41353154710429291, max_relative = 1e-13);
+        assert_relative_eq!(r.t_stat, 10.114364248484573, max_relative = 1e-13);
+        assert_eq!(r.df, 2.0);
+        assert_relative_eq!(r.p_value, 0.009634102196810301, max_relative = 1e-12);
+        assert_eq!(r.n_obs, N);
+    }
+
+    #[test]
+    fn two_sample_matches_r_svyttest() {
+        let (st, ps) = (strata(), psu());
+        let r = ttest_two_sample(
+            &Y,
+            &G2,
+            &W,
+            N,
+            Some(&st),
+            Some(&ps),
+            None,
+            None,
+            None,
+            None,
+            None,
+            vec!["0".into(), "1".into()],
+            0.0,
+            &[true; N],
+        )
+        .unwrap();
+        assert_relative_eq!(r.diff, 1.2647619047619041, max_relative = 1e-13);
+        assert_relative_eq!(r.t_stat, 3.0969258648989153, max_relative = 1e-13);
+        assert_eq!(r.df, 2.0);
+        assert_relative_eq!(r.p_value, 0.090356340868573512, max_relative = 1e-12);
+    }
+}

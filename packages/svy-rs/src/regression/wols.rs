@@ -414,6 +414,8 @@ pub fn influence_covariance(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_fixtures::{G2, N, W, X2, Y, psu, strata};
+    use approx::assert_relative_eq;
 
     #[test]
     fn slices_that_disagree_with_n_and_k_raise_dimension_mismatch() {
@@ -429,6 +431,49 @@ mod tests {
                 err.to_string(),
                 format!("{what} has length {got}, expected {expected}")
             );
+        }
+    }
+
+    // R values: tests/golden/kernel_unit_r.R, lm(y ~ g2 + x2, weights = w) and
+    // the SEs of svyglm(y ~ g2 + x2) on the stratified cluster design.
+    #[test]
+    #[allow(clippy::excessive_precision)] // as R prints them
+    fn coefficients_and_design_ses_match_r() {
+        let k = 3;
+        let x: Vec<f64> = (0..N).flat_map(|i| [1.0, G2[i] as f64, X2[i]]).collect();
+        let fit = fit_wols(&Y, &x, &W, N, k).unwrap();
+        let beta = [
+            1.89629588451279929,
+            0.13714752408103748,
+            1.00834193469162869,
+        ];
+        for (got, want) in fit.beta.iter().zip(beta) {
+            assert_relative_eq!(*got, want, max_relative = 1e-12);
+        }
+
+        let (st, ps) = (strata(), psu());
+        let ses = influence_se(
+            &fit.influence,
+            &W,
+            N,
+            k,
+            Some(&st),
+            Some(&ps),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let r_ses = [
+            0.298175333094242601,
+            0.090228917595754188,
+            0.098383047947286223,
+        ];
+        for (got, want) in ses.iter().zip(r_ses) {
+            assert_relative_eq!(*got, want, max_relative = 1e-12);
         }
     }
 }
