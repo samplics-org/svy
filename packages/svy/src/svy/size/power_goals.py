@@ -72,8 +72,10 @@ def _selected_n(row: dict[str, Any], *, where: str) -> tuple[float, float]:
     )
 
 
-def _finish(pw: Power, *, goal: str, args: dict[str, Any], rows: list[PowerRow]) -> Power:
-    pw._target = TargetPower(goal=goal, solve="power", args=args)
+def _finish(
+    pw: Power, *, goal: str, args: dict[str, Any], rows: list[PowerRow], solve: str = "power"
+) -> Power:
+    pw._target = TargetPower(goal=goal, solve=solve, args=args)
     pw._rows = rows
     return pw
 
