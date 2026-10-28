@@ -40,7 +40,7 @@
   "kind": "ttest_two_groups",
   "pair": null,
   "paired": false,
-  "schema_version": "svy-result/0.12",
+  "schema_version": "svy-result/0.13",
   "stats": {
     "df": 18.0,
     "p_value": 0.0015,
