@@ -142,10 +142,10 @@ def _test_groups(*, where: str) -> Iterator[None]:
     """The kernel's group-count error, coded; still the RuntimeError it was."""
     try:
         yield
-    except RuntimeError as e:
-        msg = str(e)
-        if "requires exactly 2 groups" not in msg and "at least 2 groups" not in msg:
+    except rs.KernelValueError as e:
+        if e.code != Code.TEST_GROUP_COUNT:
             raise
+        msg = str(e)
         raise EstimationError.RuntimeError(
             title="Wrong number of groups",
             detail=msg.splitlines()[0] + ".",

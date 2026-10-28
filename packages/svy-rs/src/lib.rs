@@ -2,6 +2,7 @@
 use pyo3::prelude::*;
 
 mod categorical;
+mod errors;
 // `pub` so the criterion benches in benches/ (a separate crate that links this
 // one as an rlib) can reach the kernel functions. The crate's real public
 // surface is the `_internal` PyModule below; these Rust-level items are only
@@ -18,6 +19,16 @@ mod weighting;
 
 #[pymodule]
 fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let py = m.py();
+    m.add(
+        "KernelValueError",
+        py.get_type::<errors::KernelValueError>(),
+    )?;
+    m.add(
+        "KernelRuntimeError",
+        py.get_type::<errors::KernelRuntimeError>(),
+    )?;
+
     // Taylor linearization
     m.add_function(wrap_pyfunction!(estimation::taylor_api::taylor_mean, m)?)?;
     m.add_function(wrap_pyfunction!(

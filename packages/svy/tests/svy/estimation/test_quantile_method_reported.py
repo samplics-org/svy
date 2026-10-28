@@ -221,32 +221,6 @@ class TestEdgeCases:
             Q_METHODS[q_method],
         )
 
-    @pytest.mark.parametrize("param", ["median", "quantile"])
-    def test_zero_weight_fallback_reports_rule(self, sample, jk_sample, monkeypatch, param):
-        """The empty result built when the kernel finds no weight keeps the rule."""
-        import svy.estimation.base as base
-
-        def boom(*args, **kwargs):
-            raise RuntimeError("Sum of weights is zero")
-
-        for name in (
-            "_taylor_median",
-            "_taylor_quantile",
-            "_replicate_median",
-            "_replicate_quantile",
-        ):
-            monkeypatch.setattr(base, name, boom)
-
-        for s, method in ((sample, None), (jk_sample, "replication")):
-            if param == "median":
-                res = s.estimation.median("y", q_method="middle", method=method)
-            else:
-                res = s.estimation.quantile("y", p=[0.2, 0.8], q_method="middle", method=method)
-            for m in _members(res):
-                assert m.estimates == []
-                assert m.q_method is QuantileMethod.MIDDLE
-                assert json.loads(to_json(m))["q_method"] == "Middle"
-
     @pytest.mark.parametrize("q_method", sorted(Q_METHODS))
     def test_nulls_dropped(self, data, q_method):
         with_nulls = data.with_columns(

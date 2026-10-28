@@ -9,6 +9,7 @@
 //!
 //! Matches R's `survey::svytable` + `survey::svychisq`.
 
+use crate::categorical::error::CResult;
 use faer::Mat;
 use faer::prelude::Reborrow;
 use polars::prelude::*;
@@ -220,7 +221,7 @@ pub fn estimate_proportions(
     singleton_method: Option<&str>,
     calib: Option<&CalibSweep>,
     domain: Option<&BooleanChunked>,
-) -> PolarsResult<PropTable> {
+) -> CResult<PropTable> {
     let levels = domain_levels(y, domain)?;
 
     let k = levels.len();
@@ -318,10 +319,7 @@ pub fn in_domain(domain: Option<&BooleanChunked>, i: usize) -> bool {
 
 /// Sorted distinct keys among the in-domain rows: an out-of-domain row's
 /// category never forms a cell.
-pub fn domain_levels(
-    y: &StringChunked,
-    domain: Option<&BooleanChunked>,
-) -> PolarsResult<Vec<String>> {
+pub fn domain_levels(y: &StringChunked, domain: Option<&BooleanChunked>) -> CResult<Vec<String>> {
     let mut levels: Vec<String> = match domain {
         None => y
             .unique()?
@@ -357,7 +355,7 @@ pub fn estimate_totals(
     calib: Option<&CalibSweep>,
     levels: &[String],
     domain: Option<&BooleanChunked>,
-) -> PolarsResult<(Vec<f64>, Vec<f64>)> {
+) -> CResult<(Vec<f64>, Vec<f64>)> {
     let mut totals = Vec::with_capacity(levels.len());
     let mut total_ses = Vec::with_capacity(levels.len());
     let active = singleton_domain_rows(

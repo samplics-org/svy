@@ -16,6 +16,7 @@
 //   3. Design-based SE via taylor_variance on influence functions
 //   4. t = coef[1] / SE[1], df = degf(design) - 1
 
+use crate::categorical::error::{CResult, CategoricalError};
 use polars::prelude::*;
 
 use crate::categorical::replicate::RepSpec;
@@ -114,7 +115,7 @@ pub fn ttest_one_sample(
     singleton_method: Option<&str>,
     calib: Option<&CalibSweep>,
     null_value: f64,
-) -> PolarsResult<TTestOneResult> {
+) -> CResult<TTestOneResult> {
     let n = count_active(y, weights, None);
 
     // Estimate mean using existing infrastructure
@@ -174,7 +175,7 @@ pub fn ttest_one_sample_domain(
     singleton_method: Option<&str>,
     calib: Option<&CalibSweep>,
     null_value: f64,
-) -> PolarsResult<TTestOneResult> {
+) -> CResult<TTestOneResult> {
     // Domain-aware mean estimation
     let estimate = point_estimate_mean_domain(y, weights, domain_mask)?;
     let scores = sweep_scores(&scores_mean_domain(y, weights, domain_mask)?, calib);
@@ -250,7 +251,7 @@ pub fn ttest_two_sample(
     null_value: f64,
     // The domain's rows for the singleton rules, whatever their weight.
     rows: &[bool],
-) -> PolarsResult<TTestTwoResult> {
+) -> CResult<TTestTwoResult> {
     // Build design matrix: [intercept, group_indicator]
     let k = 2;
     let mut xmat = vec![0.0; n * k];
@@ -260,7 +261,7 @@ pub fn ttest_two_sample(
     }
 
     // Fit weighted OLS
-    let wols = fit_wols(y, &xmat, w, n, k).map_err(|e| PolarsError::ComputeError(e.into()))?;
+    let wols = fit_wols(y, &xmat, w, n, k).map_err(CategoricalError::Wols)?;
 
     // Design-based SE via influence functions
     let active = singleton_rows(singleton_method, calib.is_some(), strata.is_some(), rows);
@@ -353,7 +354,7 @@ fn compute_per_group_ses(
     singleton_method: Option<&str>,
     calib: Option<&CalibSweep>,
     rows: &[bool],
-) -> PolarsResult<Vec<f64>> {
+) -> CResult<Vec<f64>> {
     let mut ses = Vec::with_capacity(2);
     for group_val in 0..2u32 {
         let mask_vec: Vec<bool> = g.iter().map(|&gi| gi == group_val).collect();
@@ -397,7 +398,7 @@ pub fn ttest_one_sample_rep(
     domain: Option<&BooleanChunked>,
     null_value: f64,
     spec: &RepSpec,
-) -> PolarsResult<TTestOneResult> {
+) -> CResult<TTestOneResult> {
     let n = y.len();
     let mut y_arr = vec![0.0; n];
     let mut w_arr = vec![0.0; n];
@@ -439,7 +440,7 @@ pub fn ttest_two_sample_rep(
     null_value: f64,
     rows: &[bool],
     spec: &RepSpec,
-) -> PolarsResult<TTestTwoResult> {
+) -> CResult<TTestTwoResult> {
     let mut means = Vec::with_capacity(2);
     let mut reps = Vec::with_capacity(2);
     let mut group_ns = vec![0usize; 2];

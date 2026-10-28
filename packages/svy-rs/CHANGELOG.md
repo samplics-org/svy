@@ -4,6 +4,11 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: estimation and categorical kernels raise coded exceptions.** Bad input raises `svy_rs.KernelValueError` (a `ValueError`) and a numerical or polars failure `svy_rs.KernelRuntimeError` (a `RuntimeError`), each with a `code` that reuses `svy.errors.Code` names (`INVALID_CHOICE`, `SHAPE_MISMATCH`, `REP_COEFS_LENGTH_MISMATCH`, `TEST_GROUP_COUNT`, ...) plus `ZERO_DENOMINATOR` and `KERNEL_INTERNAL`. Input errors that were `RuntimeError`s, such as the t-test and rank-test group counts, are now `ValueError`s; messages are unchanged, except the unknown replicate `center` now names the accepted `'rep_mean'` and `'estimate'`.
+- `taylor_assoc` and `replicate_assoc` give a NaN estimate for a domain with no weight instead of failing.
+
 ### Fixed
 
 - `rao_scott` returns NaN statistics instead of panicking on NaN proportions or a failed SVD, and instead of 0 and p = 1 when the test is undefined. The Taylor design df no longer underflows when strata outnumber PSUs.

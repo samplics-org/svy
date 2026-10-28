@@ -6,6 +6,8 @@
 // handles DataFrame I/O, argument parsing, domain/by-group orchestration,
 // and building the result DataFrames.
 
+use crate::categorical::error::{CResult, CategoricalError};
+use crate::errors::to_py_err;
 use std::collections::HashMap;
 
 use polars::prelude::*;
@@ -46,10 +48,7 @@ type TwoSampleData = (
 /// Fetch an optional design column as a `&Column` (dtype-agnostic). The
 /// downstream variance/df kernels dispatch on dtype: String is hashed, integer
 /// codes (Phase C) are densified.
-pub(crate) fn get_opt_col<'a>(
-    df: &'a DataFrame,
-    col: Option<&str>,
-) -> PolarsResult<Option<&'a Column>> {
+pub(crate) fn get_opt_col<'a>(df: &'a DataFrame, col: Option<&str>) -> CResult<Option<&'a Column>> {
     match col {
         Some(c) => Ok(Some(df.column(c)?)),
         None => Ok(None),
@@ -59,7 +58,7 @@ pub(crate) fn get_opt_col<'a>(
 pub(crate) fn get_opt_f64<'a>(
     df: &'a DataFrame,
     col: Option<&str>,
-) -> PolarsResult<Option<&'a Float64Chunked>> {
+) -> CResult<Option<&'a Float64Chunked>> {
     match col {
         Some(c) => Ok(Some(df.column(c)?.as_materialized_series().f64()?)),
         None => Ok(None),
@@ -74,18 +73,17 @@ fn rep_spec(
     rep_df: Option<f64>,
     variance_center: &str,
 ) -> PyResult<Option<RepSpec>> {
-    let to_py = |e: PolarsError| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string());
     match rep_weight_cols {
         None => Ok(None),
         Some(cols) => {
             let coefs = rep_coefs.ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                to_py_err(&CategoricalError::MissingInput(
                     "rep_coefs is required with rep_weight_cols",
-                )
+                ))
             })?;
             RepSpec::from_frame(df, &cols, coefs, variance_center, rep_df)
                 .map(Some)
-                .map_err(to_py)
+                .map_err(|e| to_py_err(&e))
         }
     }
 }
@@ -119,7 +117,7 @@ fn prepare_two_sample_data(
     _psu_col: Option<&str>,
     domain_col: Option<&str>,
     domain_val: Option<&str>,
-) -> PolarsResult<TwoSampleData> {
+) -> CResult<TwoSampleData> {
     let n = df.height();
     let y_ca = df.column(y_col)?.as_materialized_series().f64()?;
     let w_ca = df.column(w_col)?.as_materialized_series().f64()?;
@@ -228,9 +226,9 @@ fn compute_by_groups<F>(
     domain_col: Option<&str>,
     domain_val: Option<&str>,
     run_single: F,
-) -> PolarsResult<DataFrame>
+) -> CResult<DataFrame>
 where
-    F: Fn(&DataFrame, Option<&str>, Option<&str>) -> PolarsResult<DataFrame>,
+    F: Fn(&DataFrame, Option<&str>, Option<&str>) -> CResult<DataFrame>,
 {
     let by_series = df.column(by_col)?.as_materialized_series();
     let by_str = by_series.cast(&DataType::String)?;
@@ -364,7 +362,7 @@ pub fn ttest_rs(
         calib.as_ref(),
         rep.as_ref(),
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    .map_err(|e| to_py_err(&e))?;
     Ok(PyDataFrame(result))
 }
 
@@ -386,7 +384,7 @@ fn compute_svyttest(
     by_col: Option<&str>,
     calib: Option<&CalibSweep>,
     rep: Option<&RepSpec>,
-) -> PolarsResult<DataFrame> {
+) -> CResult<DataFrame> {
     match by_col {
         None => compute_svyttest_single(
             df,
@@ -460,7 +458,7 @@ fn compute_svyttest_single(
     // Some inside a by-group: the group's levels over the whole frame. A by-group
     // without weight, or without both groups, then gives a NaN row, not an error.
     frame_levels: Option<&[String]>,
-) -> PolarsResult<DataFrame> {
+) -> CResult<DataFrame> {
     let strata = get_opt_col(df, strata_col)?;
     let psu = get_opt_col(df, psu_col)?;
     let ssu = get_opt_col(df, ssu_col)?;
@@ -485,7 +483,7 @@ fn compute_svyttest_single(
             };
 
             if frame_levels.is_some() && !has_positive_weight(y, weights, mask.as_ref()) {
-                return df![
+                return Ok(df![
                     "type" => vec!["one-sample"],
                     "y" => vec![y_col],
                     "estimate" => vec![nan],
@@ -495,7 +493,7 @@ fn compute_svyttest_single(
                     "df" => vec![nan],
                     "p_value" => vec![nan],
                     "n" => vec![0u32],
-                ];
+                ]?);
             }
 
             let res = if let Some(spec) = rep {
@@ -529,7 +527,7 @@ fn compute_svyttest_single(
                 )?
             };
 
-            df![
+            Ok(df![
                 "type" => vec!["one-sample"],
                 "y" => vec![y_col],
                 "estimate" => vec![res.estimate],
@@ -539,7 +537,7 @@ fn compute_svyttest_single(
                 "df" => vec![res.df],
                 "p_value" => vec![res.p_value],
                 "n" => vec![res.n_obs as u32],
-            ]
+            ]?)
         }
         Some(g_col) => {
             // Two-sample test
@@ -552,7 +550,7 @@ fn compute_svyttest_single(
                 && frame.len() == 2
             {
                 let counts = level_counts(&w_arr, &g_arr, &levels, frame);
-                return df![
+                return Ok(df![
                     "type" => vec!["two-sample"],
                     "y" => vec![y_col],
                     "group" => vec![g_col],
@@ -570,17 +568,11 @@ fn compute_svyttest_single(
                     "n" => vec![counts.iter().sum::<u32>()],
                     "n_0" => vec![counts[0]],
                     "n_1" => vec![counts[1]],
-                ];
+                ]?);
             }
 
             if levels.len() != 2 {
-                return Err(PolarsError::ComputeError(
-                    format!(
-                        "Two-sample t-test requires exactly 2 groups, found {}",
-                        levels.len()
-                    )
-                    .into(),
-                ));
+                return Err(CategoricalError::TwoGroups(levels.len()));
             }
 
             let res = match rep {
@@ -611,7 +603,7 @@ fn compute_svyttest_single(
                 )?,
             };
 
-            df![
+            Ok(df![
                 "type" => vec!["two-sample"],
                 "y" => vec![y_col],
                 "group" => vec![g_col],
@@ -629,7 +621,7 @@ fn compute_svyttest_single(
                 "n" => vec![res.n_obs as u32],
                 "n_0" => vec![res.group_ns[0] as u32],
                 "n_1" => vec![res.group_ns[1] as u32],
-            ]
+            ]?)
         }
     }
 }
@@ -675,9 +667,9 @@ pub fn ranktest_rs(
     let df = into_contiguous(data);
     let rep = rep_spec(&df, rep_weight_cols, rep_coefs, rep_df, variance_center)?;
     if scores_given && rep.is_none() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+        return Err(to_py_err(&CategoricalError::MissingInput(
             "scores_given requires rep_weight_cols",
-        ));
+        )));
     }
     let result = compute_svyranktest(
         &df,
@@ -697,7 +689,7 @@ pub fn ranktest_rs(
         rep.as_ref(),
         scores_given,
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    .map_err(|e| to_py_err(&e))?;
     Ok(PyDataFrame(result))
 }
 
@@ -719,7 +711,7 @@ fn compute_svyranktest(
     by_col: Option<&str>,
     rep: Option<&RepSpec>,
     scores_given: bool,
-) -> PolarsResult<DataFrame> {
+) -> CResult<DataFrame> {
     match by_col {
         None => compute_svyranktest_single(
             df,
@@ -788,7 +780,7 @@ fn compute_svyranktest_single(
     // Some inside a by-group: the group's levels over the whole frame. A by-group
     // with fewer than two weighted groups then gives a NaN row, not an error.
     frame_levels: Option<&[String]>,
-) -> PolarsResult<DataFrame> {
+) -> CResult<DataFrame> {
     let method = score_method
         .and_then(RankScoreMethod::from_str)
         .unwrap_or(RankScoreMethod::Wilcoxon);
@@ -824,7 +816,7 @@ fn compute_svyranktest_single(
             .iter()
             .sum::<u32>();
         return if frame.len() == 2 {
-            df![
+            Ok(df![
                 "type" => vec!["two-sample"],
                 "method" => vec![method_name],
                 "y" => vec![y_col],
@@ -837,9 +829,9 @@ fn compute_svyranktest_single(
                 "df" => vec![nan],
                 "p_value" => vec![nan],
                 "n" => vec![n_obs],
-            ]
+            ]?)
         } else {
-            df![
+            Ok(df![
                 "type" => vec!["k-sample"],
                 "method" => vec![method_name],
                 "y" => vec![y_col],
@@ -850,7 +842,7 @@ fn compute_svyranktest_single(
                 "f_stat" => vec![nan],
                 "p_value" => vec![nan],
                 "n" => vec![n_obs],
-            ]
+            ]?)
         };
     }
 
@@ -877,7 +869,7 @@ fn compute_svyranktest_single(
             )?,
         };
 
-        df![
+        Ok(df![
             "type" => vec!["two-sample"],
             "method" => vec![method_name],
             "y" => vec![y_col],
@@ -890,7 +882,7 @@ fn compute_svyranktest_single(
             "df" => vec![res.df],
             "p_value" => vec![res.p_value],
             "n" => vec![res.n_obs as u32],
-        ]
+        ]?)
     } else {
         let res = match rep {
             Some(spec) => ranktest_k_sample_rep(
@@ -914,7 +906,7 @@ fn compute_svyranktest_single(
             )?,
         };
 
-        df![
+        Ok(df![
             "type" => vec!["k-sample"],
             "method" => vec![method_name],
             "y" => vec![y_col],
@@ -925,7 +917,7 @@ fn compute_svyranktest_single(
             "f_stat" => vec![res.f_stat],
             "p_value" => vec![res.p_value],
             "n" => vec![res.n_obs as u32],
-        ]
+        ]?)
     }
 }
 
@@ -1000,7 +992,7 @@ pub fn tabulate_rs(
         domain_col.as_deref(),
         rep.as_ref(),
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    .map_err(|e| to_py_err(&e))?;
     Ok((PyDataFrame(result.0), PyDataFrame(result.1)))
 }
 
@@ -1020,7 +1012,7 @@ fn compute_tabulate(
     calib: Option<&CalibSweep>,
     domain_col: Option<&str>,
     rep: Option<&RepSpec>,
-) -> PolarsResult<(DataFrame, DataFrame)> {
+) -> CResult<(DataFrame, DataFrame)> {
     // Domain (`where=`): out-of-domain rows keep their design columns and
     // get weight 0, exactly R's subset() on a survey design, so the PSU
     // structure and the df are those of the full design restricted to the

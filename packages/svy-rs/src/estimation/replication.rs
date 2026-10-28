@@ -1,6 +1,7 @@
 // src/estimation/replication.rs
 //! Replication-based variance estimation (BRR, Bootstrap, Jackknife)
 
+use crate::estimation::error::EResult;
 use polars::prelude::*;
 use std::collections::HashMap;
 
@@ -183,7 +184,7 @@ pub fn covariance_from_replicates(
 pub fn extract_rep_weights_matrix(
     df: &DataFrame,
     rep_weight_cols: &[String],
-) -> PolarsResult<(Vec<f64>, usize, usize)> {
+) -> EResult<(Vec<f64>, usize, usize)> {
     let n = df.height();
     let n_reps = rep_weight_cols.len();
     let mut matrix = vec![0.0; n * n_reps];

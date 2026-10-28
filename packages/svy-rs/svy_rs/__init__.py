@@ -5,6 +5,8 @@ WARNING: This is an internal package. Do not depend on it directly.
 """
 
 from svy_rs._internal import (
+    KernelRuntimeError,
+    KernelValueError,
     adjust_nr,
     calibrate,
     calibrate_by_domain,

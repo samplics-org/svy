@@ -345,3 +345,46 @@ class TestAroundTheRow:
         df = res.to_polars()
         assert df.height == 2
         assert df.filter(pl.col("r") == "q")["est"].is_nan().all()
+
+
+# ---------------------------------------------------------------------------
+# corr / cov: the zero-weight domain is a NaN row, like the other estimators
+# ---------------------------------------------------------------------------
+
+# svyvar(~y + x, subset(des, r == "z")): the y-x element and its SE.
+R_COV_YX = (0.0725577116092338, 0.0664770106843237)
+
+ASSOC = {
+    "corr": lambda e, **kw: e.corr(("y", "x"), **kw),
+    "cov": lambda e, **kw: e.cov(("y", "x"), **kw),
+}
+
+
+class TestAssociation:
+    def test_cov_by_matches_r(self, taylor):
+        rows = _rows(taylor.estimation.cov(("y", "x"), by="r"))
+        assert set(rows) == {("q",), ("z",)}
+        _assert_r(rows[("z",)], R_COV_YX)
+        _assert_undefined(rows[("q",)])
+        assert rows[("q",)].df == 0
+
+    @pytest.mark.parametrize("name", sorted(ASSOC))
+    @pytest.mark.parametrize(
+        "where",
+        [pl.col("r") == "q", pl.col("k") == "m", pl.col("r") == "absent"],
+        ids=["whole_psu", "scattered", "no_match"],
+    )
+    def test_where_gives_undefined_row(self, design, name, where):
+        _, s, kw = design
+        (e,) = ASSOC[name](s.estimation, where=where, **kw).estimates
+        _assert_undefined(e)
+
+    @pytest.mark.parametrize("name", sorted(ASSOC))
+    def test_by_keeps_every_level(self, design, name):
+        _, s, kw = design
+        rows = _rows(ASSOC[name](s.estimation, by="r", **kw))
+        assert set(rows) == {("q",), ("z",)}
+        _assert_undefined(rows[("q",)])
+        (w,) = ASSOC[name](s.estimation, where=pl.col("r") == "z", **kw).estimates
+        assert rows[("z",)].est == pytest.approx(w.est, abs=TOL)
+        assert rows[("z",)].se == pytest.approx(w.se, abs=TOL)

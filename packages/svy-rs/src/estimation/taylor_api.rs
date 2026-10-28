@@ -4,6 +4,8 @@
 // The heavy math lives in taylor.rs; this file only handles DataFrame I/O,
 // argument parsing, and looping over by-groups.
 
+use crate::errors::to_py_err;
+use crate::estimation::error::{EResult, EstimationError};
 use numpy::PyReadonlyArray1;
 use polars::prelude::*;
 use pyo3::prelude::*;
@@ -36,15 +38,17 @@ type GroupRow<'a> = (&'a str, f64, f64, f64, u32, f64, Vec<f64>);
 /// population size inferred from the sum of weights. `deff_pop_total` is the
 /// design's declared population size when it has one, which is what keeps the
 /// without-replacement reference correct after weights have been rescaled.
-fn parse_srs_ref(deff_ref: Option<&str>, deff_pop_total: Option<f64>) -> PolarsResult<SrsRef> {
+fn parse_srs_ref(deff_ref: Option<&str>, deff_pop_total: Option<f64>) -> EResult<SrsRef> {
     match deff_ref.unwrap_or("wor") {
         "wr" => Ok(SrsRef::WithReplacement),
         "wor" => Ok(SrsRef::WithoutReplacement {
             pop_total: deff_pop_total,
         }),
-        other => Err(PolarsError::ComputeError(
-            format!("unknown deff reference '{other}'; expected 'wor' or 'wr'").into(),
-        )),
+        other => Err(EstimationError::InvalidChoice {
+            what: "deff reference",
+            got: other.to_string(),
+            expected: "'wor' or 'wr'",
+        }),
     }
 }
 
@@ -88,8 +92,7 @@ pub fn taylor_mean(
         calib_pins_total,
         calib_new_wgt,
     );
-    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total).map_err(|e| to_py_err(&e))?;
 
     if by_col.is_none() {
         // Detach for the ungrouped path too: `compute_mean_ungrouped` overlaps
@@ -113,7 +116,7 @@ pub fn taylor_mean(
                     calib,
                 )
             })
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+            .map_err(|e| to_py_err(&e))?;
         return Ok((PyDataFrame(result), None));
     }
 
@@ -136,7 +139,7 @@ pub fn taylor_mean(
                 calib,
             )
         })
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        .map_err(|e| to_py_err(&e))?;
     Ok((PyDataFrame(result), Some(cov)))
 }
 
@@ -161,8 +164,7 @@ pub fn taylor_mean_multi(
     deff_pop_total: Option<f64>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
-    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total).map_err(|e| to_py_err(&e))?;
     let result = _py
         .detach(|| {
             compute_mean_multi(
@@ -179,7 +181,7 @@ pub fn taylor_mean_multi(
                 srs,
             )
         })
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        .map_err(|e| to_py_err(&e))?;
     Ok(PyDataFrame(result))
 }
 
@@ -241,8 +243,8 @@ fn ungrouped_estimate<T: Send>(
     singleton_method: Option<&str>,
     rows: Option<&BooleanChunked>,
     calib: Option<CalibSweep>,
-    value_work: impl FnOnce() -> PolarsResult<(Vec<f64>, T)> + Send,
-) -> PolarsResult<(f64, u32, T)> {
+    value_work: impl FnOnce() -> EResult<(Vec<f64>, T)> + Send,
+) -> EResult<(f64, u32, T)> {
     let (design_res, value_res) = rayon::join(
         || build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method),
         value_work,
@@ -322,7 +324,7 @@ fn compute_mean_ungrouped(
     domain_rows_col: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
-) -> PolarsResult<DataFrame> {
+) -> EResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
     let rows = rows_column(df, domain_rows_col)?;
@@ -364,8 +366,10 @@ fn compute_mean_ungrouped(
         f64::NAN
     };
 
-    df!["y" => vec![value_col], "est" => vec![estimate], "se" => vec![se],
-        "var" => vec![variance], "df" => vec![df_val], "n" => vec![n], "deff" => vec![deff]]
+    Ok(
+        df!["y" => vec![value_col], "est" => vec![estimate], "se" => vec![se],
+        "var" => vec![variance], "df" => vec![df_val], "n" => vec![n], "deff" => vec![deff]]?,
+    )
 }
 
 /// Batched ungrouped means: build the design ONCE and estimate every variable
@@ -388,7 +392,7 @@ fn compute_mean_multi(
     singleton_method: Option<&str>,
     domain_rows_col: Option<&str>,
     srs: SrsRef,
-) -> PolarsResult<DataFrame> {
+) -> EResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
     let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -421,7 +425,7 @@ fn compute_mean_multi(
 
     let rows = (0..value_cols.len())
         .into_par_iter()
-        .map(|i| -> PolarsResult<(String, f64, f64, f64, u32, f64)> {
+        .map(|i| -> EResult<(String, f64, f64, f64, u32, f64)> {
             let y = y_cols[i];
             let n = active_count(weights, None);
             let Ok(estimate) = point_estimate_mean(y, weights) else {
@@ -439,7 +443,7 @@ fn compute_mean_multi(
             };
             Ok((value_cols[i].clone(), estimate, se, variance, n, deff))
         })
-        .collect::<PolarsResult<Vec<_>>>()?;
+        .collect::<EResult<Vec<_>>>()?;
 
     let nv = rows.len();
     let mut ys: Vec<String> = Vec::with_capacity(nv);
@@ -457,8 +461,10 @@ fn compute_mean_multi(
         deffs.push(deff);
     }
     let dfs = vec![df_val; nv];
-    df!["y" => ys, "est" => estimates, "se" => ses, "var" => variances,
-        "df" => dfs, "n" => ns, "deff" => deffs]
+    Ok(
+        df!["y" => ys, "est" => estimates, "se" => ses, "var" => variances,
+        "df" => dfs, "n" => ns, "deff" => deffs]?,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -476,7 +482,7 @@ fn compute_mean_grouped(
     domain_rows_col: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
-) -> PolarsResult<(DataFrame, Vec<f64>)> {
+) -> EResult<(DataFrame, Vec<f64>)> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
     let rows = rows_column(df, domain_rows_col)?;
@@ -519,7 +525,7 @@ fn compute_mean_grouped(
             groups
                 .par_iter()
                 .zip(masks.par_iter())
-                .map(|(&group, mask)| -> PolarsResult<GroupRow<'_>> {
+                .map(|(&group, mask)| -> EResult<GroupRow<'_>> {
                     let domain_mask = mask.clone();
                     let active =
                         design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
@@ -541,7 +547,7 @@ fn compute_mean_grouped(
                     };
                     Ok((group, estimate, se, variance, n_domain, deff, scores_arr))
                 })
-                .collect::<PolarsResult<Vec<_>>>()
+                .collect::<EResult<Vec<_>>>()
         },
     );
     let rows = rows?;
@@ -610,8 +616,7 @@ pub fn taylor_total(
         calib_pins_total,
         calib_new_wgt,
     );
-    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total).map_err(|e| to_py_err(&e))?;
     if by_col.is_none() {
         let result = compute_total_ungrouped(
             &df,
@@ -627,7 +632,7 @@ pub fn taylor_total(
             srs,
             calib,
         )
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        .map_err(|e| to_py_err(&e))?;
         return Ok((PyDataFrame(result), None));
     }
     let by = by_col.unwrap();
@@ -649,7 +654,7 @@ pub fn taylor_total(
                 calib,
             )
         })
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        .map_err(|e| to_py_err(&e))?;
     Ok((PyDataFrame(result), Some(cov)))
 }
 
@@ -673,8 +678,7 @@ pub fn taylor_total_multi(
     deff_pop_total: Option<f64>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
-    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total).map_err(|e| to_py_err(&e))?;
     let result = _py
         .detach(|| {
             compute_total_multi(
@@ -691,7 +695,7 @@ pub fn taylor_total_multi(
                 srs,
             )
         })
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        .map_err(|e| to_py_err(&e))?;
     Ok(PyDataFrame(result))
 }
 
@@ -709,7 +713,7 @@ fn compute_total_ungrouped(
     domain_rows_col: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
-) -> PolarsResult<DataFrame> {
+) -> EResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
     let rows = rows_column(df, domain_rows_col)?;
@@ -749,8 +753,10 @@ fn compute_total_ungrouped(
         f64::NAN
     };
 
-    df!["y" => vec![value_col], "est" => vec![estimate], "se" => vec![se],
-        "var" => vec![variance], "df" => vec![df_val], "n" => vec![n], "deff" => vec![deff]]
+    Ok(
+        df!["y" => vec![value_col], "est" => vec![estimate], "se" => vec![se],
+        "var" => vec![variance], "df" => vec![df_val], "n" => vec![n], "deff" => vec![deff]]?,
+    )
 }
 
 /// Batched ungrouped totals: design built once, variables in parallel. See
@@ -768,7 +774,7 @@ fn compute_total_multi(
     singleton_method: Option<&str>,
     domain_rows_col: Option<&str>,
     srs: SrsRef,
-) -> PolarsResult<DataFrame> {
+) -> EResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
     let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -795,7 +801,7 @@ fn compute_total_multi(
 
     let rows = (0..value_cols.len())
         .into_par_iter()
-        .map(|i| -> PolarsResult<(String, f64, f64, f64, u32, f64)> {
+        .map(|i| -> EResult<(String, f64, f64, f64, u32, f64)> {
             let y = y_cols[i];
             let estimate = point_estimate_total(y, weights)?;
             let scores_arr = scores_total_arr(y, weights)?;
@@ -810,7 +816,7 @@ fn compute_total_multi(
             };
             Ok((value_cols[i].clone(), estimate, se, variance, n, deff))
         })
-        .collect::<PolarsResult<Vec<_>>>()?;
+        .collect::<EResult<Vec<_>>>()?;
 
     let nv = rows.len();
     let mut ys: Vec<String> = Vec::with_capacity(nv);
@@ -828,8 +834,10 @@ fn compute_total_multi(
         deffs.push(deff);
     }
     let dfs = vec![df_val; nv];
-    df!["y" => ys, "est" => estimates, "se" => ses, "var" => variances,
-        "df" => dfs, "n" => ns, "deff" => deffs]
+    Ok(
+        df!["y" => ys, "est" => estimates, "se" => ses, "var" => variances,
+        "df" => dfs, "n" => ns, "deff" => deffs]?,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -847,7 +855,7 @@ fn compute_total_grouped(
     domain_rows_col: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
-) -> PolarsResult<(DataFrame, Vec<f64>)> {
+) -> EResult<(DataFrame, Vec<f64>)> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
     let rows = rows_column(df, domain_rows_col)?;
@@ -885,7 +893,7 @@ fn compute_total_grouped(
             groups
                 .par_iter()
                 .zip(masks.par_iter())
-                .map(|(&group, mask)| -> PolarsResult<GroupRow<'_>> {
+                .map(|(&group, mask)| -> EResult<GroupRow<'_>> {
                     let domain_mask = mask.clone();
                     let active =
                         design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
@@ -904,7 +912,7 @@ fn compute_total_grouped(
                     };
                     Ok((group, estimate, se, variance, n_domain, deff, scores_arr))
                 })
-                .collect::<PolarsResult<Vec<_>>>()
+                .collect::<EResult<Vec<_>>>()
         },
     );
     let rows = rows?;
@@ -974,8 +982,7 @@ pub fn taylor_ratio(
         calib_pins_total,
         calib_new_wgt,
     );
-    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total).map_err(|e| to_py_err(&e))?;
     if by_col.is_none() {
         let result = compute_ratio_ungrouped(
             &df,
@@ -992,7 +999,7 @@ pub fn taylor_ratio(
             srs,
             calib,
         )
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        .map_err(|e| to_py_err(&e))?;
         return Ok((PyDataFrame(result), None));
     }
     let by = by_col.unwrap();
@@ -1015,7 +1022,7 @@ pub fn taylor_ratio(
                 calib,
             )
         })
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        .map_err(|e| to_py_err(&e))?;
     Ok((PyDataFrame(result), Some(cov)))
 }
 
@@ -1041,8 +1048,7 @@ pub fn taylor_ratio_multi(
     deff_pop_total: Option<f64>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
-    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total).map_err(|e| to_py_err(&e))?;
     let result = _py
         .detach(|| {
             compute_ratio_multi(
@@ -1060,7 +1066,7 @@ pub fn taylor_ratio_multi(
                 srs,
             )
         })
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        .map_err(|e| to_py_err(&e))?;
     Ok(PyDataFrame(result))
 }
 
@@ -1079,7 +1085,7 @@ fn compute_ratio_ungrouped(
     domain_rows_col: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
-) -> PolarsResult<DataFrame> {
+) -> EResult<DataFrame> {
     let y = df.column(numerator_col)?.f64()?;
     let x = df.column(denominator_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -1122,8 +1128,10 @@ fn compute_ratio_ungrouped(
         f64::NAN
     };
 
-    df!["y" => vec![numerator_col], "x" => vec![denominator_col], "est" => vec![estimate],
-        "se" => vec![se], "var" => vec![variance], "df" => vec![df_val], "n" => vec![n], "deff" => vec![deff]]
+    Ok(
+        df!["y" => vec![numerator_col], "x" => vec![denominator_col], "est" => vec![estimate],
+        "se" => vec![se], "var" => vec![variance], "df" => vec![df_val], "n" => vec![n], "deff" => vec![deff]]?,
+    )
 }
 
 /// Batched ungrouped ratios: design built once, (numerator, denominator) pairs
@@ -1142,7 +1150,7 @@ fn compute_ratio_multi(
     singleton_method: Option<&str>,
     domain_rows_col: Option<&str>,
     srs: SrsRef,
-) -> PolarsResult<DataFrame> {
+) -> EResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
     let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -1173,45 +1181,43 @@ fn compute_ratio_multi(
 
     let rows = (0..numerator_cols.len())
         .into_par_iter()
-        .map(
-            |i| -> PolarsResult<(String, String, f64, f64, f64, u32, f64)> {
-                let y = y_cols[i];
-                let x = x_cols[i];
-                let n = active_count(weights, None);
-                let Ok(estimate) = point_estimate_ratio(y, x, weights) else {
-                    let nan = f64::NAN;
-                    return Ok((
-                        numerator_cols[i].clone(),
-                        denominator_cols[i].clone(),
-                        nan,
-                        nan,
-                        nan,
-                        n,
-                        nan,
-                    ));
-                };
-                let scores = scores_ratio(y, x, weights)?;
-                let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
-                let variance = taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
-                let se = variance.max(0.0).sqrt();
-                let srs_var = srs_variance_ratio(y, x, weights, srs)?;
-                let deff = if srs_var > 0.0 {
-                    variance / srs_var
-                } else {
-                    f64::NAN
-                };
-                Ok((
+        .map(|i| -> EResult<(String, String, f64, f64, f64, u32, f64)> {
+            let y = y_cols[i];
+            let x = x_cols[i];
+            let n = active_count(weights, None);
+            let Ok(estimate) = point_estimate_ratio(y, x, weights) else {
+                let nan = f64::NAN;
+                return Ok((
                     numerator_cols[i].clone(),
                     denominator_cols[i].clone(),
-                    estimate,
-                    se,
-                    variance,
+                    nan,
+                    nan,
+                    nan,
                     n,
-                    deff,
-                ))
-            },
-        )
-        .collect::<PolarsResult<Vec<_>>>()?;
+                    nan,
+                ));
+            };
+            let scores = scores_ratio(y, x, weights)?;
+            let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+            let variance = taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
+            let se = variance.max(0.0).sqrt();
+            let srs_var = srs_variance_ratio(y, x, weights, srs)?;
+            let deff = if srs_var > 0.0 {
+                variance / srs_var
+            } else {
+                f64::NAN
+            };
+            Ok((
+                numerator_cols[i].clone(),
+                denominator_cols[i].clone(),
+                estimate,
+                se,
+                variance,
+                n,
+                deff,
+            ))
+        })
+        .collect::<EResult<Vec<_>>>()?;
 
     let nv = rows.len();
     let mut ys: Vec<String> = Vec::with_capacity(nv);
@@ -1231,8 +1237,10 @@ fn compute_ratio_multi(
         deffs.push(deff);
     }
     let dfs = vec![df_val; nv];
-    df!["y" => ys, "x" => xs, "est" => estimates, "se" => ses, "var" => variances,
-        "df" => dfs, "n" => ns, "deff" => deffs]
+    Ok(
+        df!["y" => ys, "x" => xs, "est" => estimates, "se" => ses, "var" => variances,
+        "df" => dfs, "n" => ns, "deff" => deffs]?,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1251,7 +1259,7 @@ fn compute_ratio_grouped(
     domain_rows_col: Option<&str>,
     srs: SrsRef,
     calib: Option<CalibSweep>,
-) -> PolarsResult<(DataFrame, Vec<f64>)> {
+) -> EResult<(DataFrame, Vec<f64>)> {
     let y = df.column(numerator_col)?.f64()?;
     let x = df.column(denominator_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -1290,7 +1298,7 @@ fn compute_ratio_grouped(
             groups
                 .par_iter()
                 .zip(masks.par_iter())
-                .map(|(&group, mask)| -> PolarsResult<GroupRow<'_>> {
+                .map(|(&group, mask)| -> EResult<GroupRow<'_>> {
                     let domain_mask = mask.clone();
                     let active =
                         design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
@@ -1313,7 +1321,7 @@ fn compute_ratio_grouped(
                     };
                     Ok((group, estimate, se, variance, n_domain, deff, scores_arr))
                 })
-                .collect::<PolarsResult<Vec<_>>>()
+                .collect::<EResult<Vec<_>>>()
         },
     );
     let rows = rows?;
@@ -1376,24 +1384,19 @@ pub fn taylor_assoc(
     deff_pop_total: Option<f64>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
-    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total).map_err(|e| to_py_err(&e))?;
     let result = _py
         .detach(|| {
             let kind = AssocKind::from_name(&kind)?;
             if y_cols.len() != x_cols.len() {
-                return Err(PolarsError::ComputeError(
-                    format!(
-                        "pair columns must be equal length, got {} and {}",
-                        y_cols.len(),
-                        x_cols.len()
-                    )
-                    .into(),
-                ));
+                return Err(EstimationError::PairLengths {
+                    y: y_cols.len(),
+                    x: x_cols.len(),
+                });
             }
             if y_cols.is_empty() {
-                return Err(PolarsError::ComputeError(
-                    "at least one column pair is required".into(),
+                return Err(EstimationError::Empty(
+                    "at least one column pair is required",
                 ));
             }
             compute_assoc(
@@ -1413,7 +1416,7 @@ pub fn taylor_assoc(
                 srs,
             )
         })
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        .map_err(|e| to_py_err(&e))?;
     Ok(PyDataFrame(result))
 }
 
@@ -1433,7 +1436,7 @@ fn compute_assoc(
     singleton_method: Option<&str>,
     domain_rows_col: Option<&str>,
     srs: SrsRef,
-) -> PolarsResult<DataFrame> {
+) -> EResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
     let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -1490,7 +1493,7 @@ fn compute_assoc(
     let rows = combos
         .par_iter()
         .map(
-            |&(gi, pi)| -> PolarsResult<(usize, usize, f64, f64, f64, u32, f64)> {
+            |&(gi, pi)| -> EResult<(usize, usize, f64, f64, f64, u32, f64)> {
                 let mask = match (groups[gi], by_str) {
                     (Some(g), Some(bs)) => Some(bs.equal(g)),
                     _ => None,
@@ -1516,7 +1519,7 @@ fn compute_assoc(
                 Ok((gi, pi, estimate, se, variance, n, deff))
             },
         )
-        .collect::<PolarsResult<Vec<_>>>()?;
+        .collect::<EResult<Vec<_>>>()?;
 
     let nv = rows.len();
     let mut by_vals: Vec<&str> = Vec::with_capacity(nv);
@@ -1702,8 +1705,7 @@ fn taylor_levels(
         calib_pins_total,
         calib_new_wgt,
     );
-    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total).map_err(|e| to_py_err(&e))?;
     if by_col.is_none() {
         let (result, cov) = compute_levels_ungrouped(
             &df,
@@ -1720,7 +1722,7 @@ fn taylor_levels(
             calib,
             scale,
         )
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        .map_err(|e| to_py_err(&e))?;
         return Ok((PyDataFrame(result), Some(cov)));
     }
     let by = by_col.unwrap();
@@ -1743,7 +1745,7 @@ fn taylor_levels(
                 scale,
             )
         })
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        .map_err(|e| to_py_err(&e))?;
     Ok((PyDataFrame(result), Some(cov)))
 }
 
@@ -1768,8 +1770,7 @@ pub fn taylor_prop_multi(
     deff_pop_total: Option<f64>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
-    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total).map_err(|e| to_py_err(&e))?;
     let result = _py
         .detach(|| {
             compute_prop_multi(
@@ -1786,7 +1787,7 @@ pub fn taylor_prop_multi(
                 srs,
             )
         })
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        .map_err(|e| to_py_err(&e))?;
     Ok(PyDataFrame(result))
 }
 
@@ -1805,7 +1806,7 @@ fn compute_levels_ungrouped(
     srs: SrsRef,
     calib: Option<CalibSweep>,
     scale: LevelScale,
-) -> PolarsResult<(DataFrame, Vec<f64>)> {
+) -> EResult<(DataFrame, Vec<f64>)> {
     let weights = df.column(weight_col)?.f64()?;
     let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -1917,7 +1918,7 @@ fn compute_prop_multi(
     singleton_method: Option<&str>,
     domain_rows_col: Option<&str>,
     srs: SrsRef,
-) -> PolarsResult<DataFrame> {
+) -> EResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
     let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -1949,7 +1950,7 @@ fn compute_prop_multi(
         .collect::<PolarsResult<Vec<_>>>()?;
     let levels_per_var: Vec<Vec<String>> = value_strs
         .iter()
-        .map(|vs| -> PolarsResult<Vec<String>> {
+        .map(|vs| -> EResult<Vec<String>> {
             let mut lv: Vec<String> = vs
                 .unique()?
                 .iter()
@@ -1958,12 +1959,12 @@ fn compute_prop_multi(
             lv.sort();
             Ok(lv)
         })
-        .collect::<PolarsResult<Vec<_>>>()?;
+        .collect::<EResult<Vec<_>>>()?;
 
     type PropRow = (String, String, f64, f64, f64, u32, f64); // y, level, est, se, var, n, deff
     let per_var = (0..value_cols.len())
         .into_par_iter()
-        .map(|i| -> PolarsResult<Vec<PropRow>> {
+        .map(|i| -> EResult<Vec<PropRow>> {
             let value_str = value_strs[i];
             let levels = &levels_per_var[i];
             let mut out: Vec<PropRow> = Vec::with_capacity(levels.len());
@@ -2005,7 +2006,7 @@ fn compute_prop_multi(
             }
             Ok(out)
         })
-        .collect::<PolarsResult<Vec<_>>>()?;
+        .collect::<EResult<Vec<_>>>()?;
 
     let mut ys: Vec<String> = Vec::new();
     let mut level_vals: Vec<String> = Vec::new();
@@ -2027,8 +2028,10 @@ fn compute_prop_multi(
     }
     let n_rows = ys.len();
     let dfs = vec![df_val; n_rows];
-    df!["y" => ys, "level" => level_vals, "est" => estimates, "se" => ses,
-        "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs]
+    Ok(
+        df!["y" => ys, "level" => level_vals, "est" => estimates, "se" => ses,
+        "var" => variances, "df" => dfs, "n" => ns, "deff" => deffs]?,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2047,7 +2050,7 @@ fn compute_levels_grouped(
     srs: SrsRef,
     calib: Option<CalibSweep>,
     scale: LevelScale,
-) -> PolarsResult<(DataFrame, Vec<f64>)> {
+) -> EResult<(DataFrame, Vec<f64>)> {
     let weights = df.column(weight_col)?.f64()?;
     let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -2110,7 +2113,7 @@ fn compute_levels_grouped(
     let per_group = groups
         .par_iter()
         .zip(masks.par_iter())
-        .map(|(&group, mask)| -> PolarsResult<Vec<PropRow>> {
+        .map(|(&group, mask)| -> EResult<Vec<PropRow>> {
             let domain_mask = mask.clone();
             let active = design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
             let n_domain = active_count(weights, Some(&domain_mask));
@@ -2160,7 +2163,7 @@ fn compute_levels_grouped(
             }
             Ok(out)
         })
-        .collect::<PolarsResult<Vec<_>>>()?;
+        .collect::<EResult<Vec<_>>>()?;
 
     let mut by_vals: Vec<String> = Vec::new();
     let mut level_vals: Vec<String> = Vec::new();
@@ -2274,7 +2277,7 @@ pub fn taylor_quantile(
             q_method,
         ),
     }
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    .map_err(|e| to_py_err(&e))?;
     Ok(PyDataFrame(result))
 }
 
@@ -2338,7 +2341,7 @@ pub fn taylor_quantile_multi(
                 q_method,
             )
         })
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        .map_err(|e| to_py_err(&e))?;
     Ok(PyDataFrame(result))
 }
 
@@ -2361,11 +2364,10 @@ pub fn weighted_quantile_at(
     let y = values_sorted.as_slice()?;
     let c = cdf.as_slice()?;
     if y.len() != c.len() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "values_sorted has {} entries but cdf has {}",
-            y.len(),
-            c.len()
-        )));
+        return Err(to_py_err(&EstimationError::CdfLength {
+            values: y.len(),
+            cdf: c.len(),
+        }));
     }
     let q_method = quantile_method
         .as_deref()
@@ -2379,7 +2381,7 @@ pub fn weighted_quantile_at(
 
 /// Drop the `prob` column so the legacy median entry points keep their exact
 /// pre-quantile schema.
-fn without_prob(mut df: DataFrame) -> PolarsResult<DataFrame> {
+fn without_prob(mut df: DataFrame) -> EResult<DataFrame> {
     let _ = df.drop_in_place("prob")?;
     Ok(df)
 }
@@ -2430,8 +2432,7 @@ pub fn taylor_median(
         calib_pins_total,
         calib_new_wgt,
     )?;
-    let result = without_prob(out.0)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    let result = without_prob(out.0).map_err(|e| to_py_err(&e))?;
     Ok(PyDataFrame(result))
 }
 
@@ -2481,8 +2482,7 @@ pub fn taylor_median_multi(
         calib_pins_total,
         calib_new_wgt,
     )?;
-    let result = without_prob(out.0)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    let result = without_prob(out.0).map_err(|e| to_py_err(&e))?;
     Ok(PyDataFrame(result))
 }
 
@@ -2507,7 +2507,7 @@ fn resolve_quantile_cols<'a>(
     singleton_method: Option<&str>,
     domain_rows_col: Option<&str>,
     calib: Option<CalibSweep>,
-) -> PolarsResult<QuantileCols<'a>> {
+) -> EResult<QuantileCols<'a>> {
     let weights = df.column(weight_col)?.f64()?;
     let rows = rows_column(df, domain_rows_col)?;
     let strata = strata_col.map(|c| df.column(c)).transpose()?;
@@ -2548,7 +2548,7 @@ fn compute_quantile_ungrouped(
     calib: Option<CalibSweep>,
     probs: &[f64],
     q_method: SvyQuantileMethod,
-) -> PolarsResult<DataFrame> {
+) -> EResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let cols = resolve_quantile_cols(
         df,
@@ -2577,8 +2577,10 @@ fn compute_quantile_ungrouped(
     let k = rows.len();
 
     let (estimates, ses, variances) = unzip_woodruff(rows);
-    df!["y" => vec![value_col; k], "prob" => probs.to_vec(), "est" => estimates,
-        "se" => ses, "var" => variances, "df" => vec![df_val; k], "n" => vec![n; k]]
+    Ok(
+        df!["y" => vec![value_col; k], "prob" => probs.to_vec(), "est" => estimates,
+        "se" => ses, "var" => variances, "df" => vec![df_val; k], "n" => vec![n; k]]?,
+    )
 }
 
 /// Batched ungrouped quantiles: variables fanned out over rayon. Quantiles are
@@ -2600,7 +2602,7 @@ fn compute_quantile_multi(
     calib: Option<CalibSweep>,
     probs: &[f64],
     q_method: SvyQuantileMethod,
-) -> PolarsResult<DataFrame> {
+) -> EResult<DataFrame> {
     let cols = resolve_quantile_cols(
         df,
         weight_col,
@@ -2635,7 +2637,7 @@ fn compute_quantile_multi(
                 q_method,
             )
         })
-        .collect::<PolarsResult<Vec<_>>>()?;
+        .collect::<EResult<Vec<_>>>()?;
 
     let k = probs.len();
     let n_rows = per_var.len() * k;
@@ -2653,8 +2655,10 @@ fn compute_quantile_multi(
         .flatten()
         .copied()
         .collect();
-    df!["y" => ys, "prob" => probs_rep, "est" => estimates, "se" => ses,
-        "var" => variances, "df" => vec![df_val; n_rows], "n" => ns]
+    Ok(
+        df!["y" => ys, "prob" => probs_rep, "est" => estimates, "se" => ses,
+        "var" => variances, "df" => vec![df_val; n_rows], "n" => ns]?,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2673,7 +2677,7 @@ fn compute_quantile_grouped(
     calib: Option<CalibSweep>,
     probs: &[f64],
     q_method: SvyQuantileMethod,
-) -> PolarsResult<DataFrame> {
+) -> EResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let cols = resolve_quantile_cols(
         df,
@@ -2723,8 +2727,10 @@ fn compute_quantile_grouped(
         .copied()
         .collect();
     let (estimates, ses, variances) = unzip_woodruff(flat);
-    df![by_col => by_vals, "y" => vec![value_col; n_rows], "prob" => probs_rep,
-        "est" => estimates, "se" => ses, "var" => variances, "df" => dfs, "n" => ns]
+    Ok(
+        df![by_col => by_vals, "y" => vec![value_col; n_rows], "prob" => probs_rep,
+        "est" => estimates, "se" => ses, "var" => variances, "df" => dfs, "n" => ns]?,
+    )
 }
 
 fn unzip_woodruff(rows: Vec<(f64, f64, f64)>) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
