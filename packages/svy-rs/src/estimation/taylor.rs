@@ -1,4 +1,4 @@
-// src/estimation/taylor.rs
+//! Taylor-linearisation kernels: point estimates, scores, design indexing and variance.
 
 use crate::estimation::error::{EResult, EstimationError};
 use polars::prelude::*;
@@ -18,12 +18,8 @@ pub enum SingletonMethod {
 }
 
 impl SingletonMethod {
-    /// The method and whether it also applies to strata with one PSU inside
-    /// the domain (R's `options(survey.adjust.domain.lonely = TRUE)`), written
-    /// `"center:domains"`. `"center"`/`"adjust"` and `"scale"`/`"average"` are
-    /// R's names; `None` or `"none"` leaves singleton strata out of the variance,
-    /// and `"none:domains"` drops those strata without scaling: estimation
-    /// applies `scale()`'s factor itself.
+    /// Parse `"<method>[:domains]"`; `adjust`/`average` are R's names for `center`/`scale`, and
+    /// `:domains` is R's `survey.adjust.domain.lonely`. `"none:domains"` drops without scaling.
     pub fn parse_rule(s: Option<&str>) -> EResult<(Self, bool)> {
         let Some(s) = s else {
             return Ok((SingletonMethod::None, false));
@@ -48,8 +44,7 @@ impl SingletonMethod {
     }
 }
 
-/// A singleton method and whether it also applies to strata with one PSU in
-/// the domain; parsed from `"center"` or `"center:domains"`.
+/// A singleton method and whether it also applies to strata with one PSU in the domain.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SingletonRule {
     pub method: SingletonMethod,
@@ -68,8 +63,7 @@ impl SingletonRule {
     }
 }
 
-/// Quantile interpolation method (matches R's approxfun and Python's QuantileMethod)
-/// Named SvyQuantileMethod to avoid collision with polars::prelude::QuantileMethod
+/// Quantile interpolation, as R's `approxfun`; named to avoid polars' `QuantileMethod`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum SvyQuantileMethod {
     /// Return lower value at discontinuity (R: method="constant", f=0)
@@ -79,7 +73,6 @@ pub enum SvyQuantileMethod {
     Higher,
     /// Return midpoint of lower and higher
     Middle,
-    /// Return nearest value
     Nearest,
     /// Linear interpolation (R: method="linear", default)
     Linear,
@@ -106,8 +99,7 @@ impl SvyQuantileMethod {
 // Point Estimates
 // ============================================================================
 
-/// A mask as in/out flags, null counting as out, read straight from its bits:
-/// `BooleanChunked::iter()` costs several times more per row.
+/// A mask as in/out flags (null = out) read from its bits; `iter()` costs several times more.
 pub(crate) fn mask_flags(mask: &BooleanChunked) -> Vec<bool> {
     let mut out = Vec::with_capacity(mask.len());
     for arr in mask.downcast_iter() {
@@ -121,14 +113,7 @@ pub(crate) fn mask_flags(mask: &BooleanChunked) -> Vec<bool> {
     out
 }
 
-/// Contiguous, null-free slices of two columns, if available.
-///
-/// After `prepare_data` the y/weight columns are typically single-chunk and
-/// null-free, so this is the common case. When it holds, callers take a
-/// branch-free fused loop over `&[f64]` instead of iterating `Option<f64>` and
-/// checking the validity bitmap per element. Returns `None` (→ Option-iterator
-/// fallback with identical semantics) when either column is chunked or has any
-/// null; `cont_slice()` returns `Err` in those cases rather than panicking.
+/// Contiguous, null-free slices of two columns, or `None` for the `Option` fallback.
 #[inline]
 fn cont_pair<'a>(a: &'a Float64Chunked, b: &'a Float64Chunked) -> Option<(&'a [f64], &'a [f64])> {
     if a.null_count() == 0
@@ -141,9 +126,7 @@ fn cont_pair<'a>(a: &'a Float64Chunked, b: &'a Float64Chunked) -> Option<(&'a [f
 }
 
 pub fn point_estimate_mean(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<f64> {
-    // Fast path: single fused pass over contiguous null-free slices. Summation
-    // order is unchanged (sequential 0..n; f64 add is not auto-vectorized
-    // without fast-math), so the result is bit-identical to the fallback.
+    // Sequential summation, as in the fallback, so the fast path is bit-identical.
     let (sum_wy, sum_w) = if let Some((ys, ws)) = cont_pair(y, weights) {
         let mut sum_wy = 0.0f64;
         let mut sum_w = 0.0f64;
@@ -180,9 +163,7 @@ pub fn point_estimate_mean_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> EResult<f64> {
-    // Fast path: y/weights are contiguous null-free (post-prepare_data), so
-    // index them as slices while iterating the mask once — no per-element
-    // Option unwrap on y/w, and a single pass. Bit-identical (same rows, order).
+    // Fast path: slices plus one pass over the mask; same rows and order, so bit-identical.
     let (sum_wy, sum_w) = if let Some((ys, ws)) = cont_pair(y, weights) {
         let mut sum_wy = 0.0f64;
         let mut sum_w = 0.0f64;
@@ -333,18 +314,8 @@ pub fn point_estimate_ratio_domain(
 // Weighted Quantile Functions
 // ============================================================================
 
-/// Compute weighted quantile using the specified interpolation method.
-///
-/// This matches R's svyquantile behavior:
-/// - Lower: method="constant", f=0
-/// - Higher: method="constant", f=1
-/// - Linear: method="linear" (default in R)
-///
-/// # Arguments
-/// * `y_sorted` - Y values sorted in ascending order
-/// * `cdf` - Cumulative distribution function values (cumsum(weights) / sum(weights))
-/// * `p` - Target quantile (0.0 to 1.0, e.g., 0.5 for median)
-/// * `method` - Interpolation method
+/// Weighted quantile of sorted `y` at `p`, with `cdf` = cumsum(w)/sum(w). Lower/Higher are R's
+/// `method="constant"` with f=0/1; Linear is `method="linear"`.
 pub fn weighted_quantile(y_sorted: &[f64], cdf: &[f64], p: f64, method: SvyQuantileMethod) -> f64 {
     let n = y_sorted.len();
     if n == 0 {
@@ -357,16 +328,13 @@ pub fn weighted_quantile(y_sorted: &[f64], cdf: &[f64], p: f64, method: SvyQuant
         return f64::NAN;
     }
 
-    // Find bracketing indices. At the boundaries the quantile is exactly the
-    // first (resp. last) value, so left == right — a two-point bracket there
-    // would return the wrong value for Higher/Middle and let Linear
-    // extrapolate outside the data range.
+    // At either boundary the quantile is that value: a two-point bracket would break Higher/Middle
+    // and let Linear extrapolate past the data.
     let (left, right) = if p <= cdf[0] {
         (0, 0)
     } else if p >= cdf[n - 1] {
         (n - 1, n - 1)
     } else {
-        // Binary search for the right position
         let idx = cdf.partition_point(|&x| x < p);
         ((idx.saturating_sub(1)), idx.min(n - 1))
     };
@@ -389,7 +357,6 @@ pub fn weighted_quantile(y_sorted: &[f64], cdf: &[f64], p: f64, method: SvyQuant
             if denom <= 0.0 {
                 return y_sorted[left];
             }
-            // Special case: if p exactly equals cdf[left] and we have two distinct points
             if (p - cdf[left]).abs() < 1e-12 && right != left {
                 return (y_sorted[left] + y_sorted[right]) / 2.0;
             }
@@ -399,11 +366,7 @@ pub fn weighted_quantile(y_sorted: &[f64], cdf: &[f64], p: f64, method: SvyQuant
     }
 }
 
-/// Sort `(value, weight)` pairs by value and build the normalised weighted CDF.
-///
-/// Returns `None` when the pairs are empty or carry no positive weight, i.e.
-/// whenever the quantile is undefined. Callers that need several quantiles of
-/// the same variable build this once and evaluate every probability against it.
+/// Sort pairs by value with the normalised CDF; `None` without positive weight.
 fn sorted_weighted_cdf(mut pairs: Vec<(f64, f64)>) -> Option<(Vec<f64>, Vec<f64>, f64)> {
     if pairs.is_empty() {
         return None;
@@ -411,7 +374,6 @@ fn sorted_weighted_cdf(mut pairs: Vec<(f64, f64)>) -> Option<(Vec<f64>, Vec<f64>
 
     pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    // unzip consumes pairs in one allocation instead of two map+collect passes
     let (y_sorted, w_sorted): (Vec<f64>, Vec<f64>) = pairs.into_iter().unzip();
 
     let total_w: f64 = w_sorted.iter().sum();
@@ -450,7 +412,6 @@ fn quantile_pairs(
     }
 }
 
-/// Compute weighted median (p=0.5 quantile)
 pub fn weighted_median(
     y: &Float64Chunked,
     weights: &Float64Chunked,
@@ -459,7 +420,6 @@ pub fn weighted_median(
     weighted_quantile_chunked(y, weights, 0.5, method)
 }
 
-/// Compute weighted quantile for a domain subset
 pub fn weighted_quantile_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
@@ -473,7 +433,6 @@ pub fn weighted_quantile_domain(
     }
 }
 
-/// Compute weighted median for a domain subset
 pub fn weighted_median_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
@@ -483,7 +442,6 @@ pub fn weighted_median_domain(
     weighted_quantile_domain(y, weights, domain_mask, 0.5, method)
 }
 
-/// Compute weighted quantile from Polars chunked arrays
 pub fn weighted_quantile_chunked(
     y: &Float64Chunked,
     weights: &Float64Chunked,
@@ -501,9 +459,7 @@ pub fn weighted_quantile_chunked(
 // ============================================================================
 
 pub fn scores_mean(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<Float64Chunked> {
-    // Fast path: contiguous null-free slices → two branch-free passes and a
-    // plain Vec<f64> output, skipping the Vec<Option<(f64,f64)>> the fallback
-    // must allocate. Summation order is unchanged, so results are bit-identical.
+    // Fast path skips the fallback's `Vec<Option<_>>`; same summation order, so bit-identical.
     if let Some((ys, ws)) = cont_pair(y, weights) {
         let mut sum_wy = 0.0f64;
         let mut sum_w = 0.0f64;
@@ -521,8 +477,7 @@ pub fn scores_mean(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<Floa
         return Ok(Float64Chunked::from_slice("scores".into(), &scores));
     }
 
-    // Fallback: single pass accumulating sums while collecting (y,w) pairs so
-    // null positions are preserved in the output.
+    // Fallback keeps nulls in place in the output.
     let n = y.len();
     let mut sum_wy = 0.0f64;
     let mut sum_w = 0.0f64;
@@ -552,13 +507,7 @@ pub fn scores_mean(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<Floa
     Ok(Float64Chunked::from_slice_options("scores".into(), &scores))
 }
 
-/// `scores_mean` returning the raw score array the variance actually consumes.
-///
-/// `taylor_variance` immediately turns the `Float64Chunked` from `scores_mean`
-/// back into a `Vec<f64>` (`unwrap_or(0.0)` per element), so the Chunked is a
-/// pure round-trip: one copy into an arrow buffer and one copy back out, 2 x 8 MB
-/// at 1M rows. Callers that only need the array skip both. Null positions map to
-/// 0.0 exactly as `taylor_variance` does, so the variance is bit-identical.
+/// `scores_mean` as the variance's array, nulls as 0.0, without the `Float64Chunked` round-trip.
 pub fn scores_mean_arr(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<Vec<f64>> {
     if let Some((ys, ws)) = cont_pair(y, weights) {
         let mut sum_wy = 0.0f64;
@@ -575,8 +524,7 @@ pub fn scores_mean_arr(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<
             .map(|i| (ws[i] / sum_w) * (ys[i] - est))
             .collect());
     }
-    // Nulls or chunking: defer to the reference implementation and flatten,
-    // which is exactly what `taylor_variance` did with its result.
+    // Nulls or chunking: the reference implementation, flattened as `taylor_variance` would.
     Ok(scores_mean(y, weights)?
         .iter()
         .map(|s| s.unwrap_or(0.0))
@@ -588,9 +536,7 @@ pub fn scores_mean_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> EResult<Float64Chunked> {
-    // Fast path: contiguous null-free y/weights. Materialise the in-domain flag
-    // once (a Vec<bool>, vs the fallback's Vec<Option<(f64,f64)>>), then two
-    // branch-free slice passes. Same rows/order → bit-identical.
+    // Fast path: an in-domain flag vector, then two branch-free slice passes; bit-identical.
     if let Some((ys, ws)) = cont_pair(y, weights) {
         let n = ys.len();
         let in_domain = mask_flags(domain_mask);
@@ -618,7 +564,6 @@ pub fn scores_mean_domain(
         return Ok(Float64Chunked::from_slice("scores".into(), &scores));
     }
 
-    // Fallback: single pass accumulating sums while collecting in-domain pairs.
     let n = y.len();
     let mut sum_wy = 0.0f64;
     let mut sum_w = 0.0f64;
@@ -654,8 +599,7 @@ pub fn scores_mean_domain(
     Ok(Float64Chunked::from_slice_options("scores".into(), &scores))
 }
 
-/// [`scores_total`] flattened for the variance, nulls as 0.0, without the
-/// `Float64Chunked` round-trip on contiguous input.
+/// [`scores_total`] for the variance, nulls as 0.0, without the `Float64Chunked` round-trip.
 pub fn scores_total_arr(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<Vec<f64>> {
     if let Some((ys, ws)) = cont_pair(y, weights) {
         return Ok(ys.iter().zip(ws).map(|(y, w)| w * y).collect());
@@ -708,7 +652,6 @@ pub fn scores_ratio(
     x: &Float64Chunked,
     weights: &Float64Chunked,
 ) -> EResult<Float64Chunked> {
-    // Single pass: accumulate sum_wy, sum_wx and collect (y,x,w) triples.
     let n = y.len();
     let mut sum_wy = 0.0f64;
     let mut sum_wx = 0.0f64;
@@ -774,7 +717,6 @@ pub fn scores_ratio_domain(
         return Ok(Float64Chunked::from_slice("scores".into(), &scores));
     }
 
-    // Single pass: accumulate sum_wy, sum_wx (in-domain) and collect quads.
     let n = y.len();
     let mut sum_wy = 0.0f64;
     let mut sum_wx = 0.0f64;
@@ -814,32 +756,8 @@ pub fn scores_ratio_domain(
     Ok(Float64Chunked::from_slice_options("scores".into(), &scores))
 }
 
-/// Influence-function scores for a quantile already located at `q`.
-///
-/// `u_i = I(y_i > q) - (1 - p)` is the negation of the contribution to
-/// `F(q) - p`; it carries the same variance and matches the sign convention in
-/// R's survey package. The score is that residual **centered on its own
-/// weighted mean**, exactly as the linearization of a weighted mean does:
-///
-/// ```text
-/// score_i = (w_i / sum_w) * (u_i - u_bar),   u_bar = sum(w_i u_i) / sum_w
-/// ```
-///
-/// The centering is not cosmetic. `u_bar` is zero only if `F(q)` lands exactly
-/// on `p`, which discreteness prevents — on a 5000-row fixture it sits around
-/// -4e-5, and dropping it moves the probability-scale SE by ~2e-4 relative.
-/// That is invisible under the `Higher`/`Lower` rules, whose CDF inversion
-/// snaps to an order statistic and absorbs it, but it propagates straight
-/// through the continuous `Linear` rule. R reaches the same place by computing
-/// the variance as `svymean(U, design)`, whose influence function centers on
-/// the realized mean.
-///
-/// Rows outside `domain_mask` (when given) score zero, so the domain estimator
-/// is linearized against the full design; `u_bar` is then the domain's own
-/// weighted mean, since `sum_w` covers only the domain.
-///
-/// `q` and `sum_w` are passed in rather than recomputed, so a caller estimating
-/// several probabilities sorts the data only once.
+/// Quantile scores at `q`: `(w_i/sum_w)(u_i - u_bar)`, `u_i = I(y_i > q) - (1 - p)` in R's sign.
+/// Centring on `u_bar` matters under Linear (F(q) != p exactly), as R's `svymean(U)` centres.
 fn scores_quantile_arr(
     y: &Float64Chunked,
     weights: &Float64Chunked,
@@ -850,8 +768,7 @@ fn scores_quantile_arr(
 ) -> Vec<f64> {
     let complement = 1.0 - p;
 
-    // u_i for in-scope rows, 0.0 elsewhere; weights folded in afterwards so the
-    // centering can use the weighted mean of u.
+    // Weights are folded in after centring on the weighted mean of u.
     let residuals: Vec<(f64, f64)> = match domain_mask {
         None => y
             .iter()
@@ -890,9 +807,6 @@ fn scores_quantile_arr(
         .collect()
 }
 
-/// Compute influence function scores for quantile estimation.
-///
-/// Score_i = (w_i / sum_w) * (I(y_i > q) - (1 - p))
 pub fn scores_quantile(
     y: &Float64Chunked,
     weights: &Float64Chunked,
@@ -916,7 +830,6 @@ pub fn scores_quantile(
     Ok(Float64Chunked::from_slice("scores".into(), &scores))
 }
 
-/// Compute influence function scores for the median (p = 0.5).
 pub fn scores_median(
     y: &Float64Chunked,
     weights: &Float64Chunked,
@@ -925,7 +838,6 @@ pub fn scores_median(
     scores_quantile(y, weights, 0.5, method)
 }
 
-/// Compute influence function scores for a quantile within a domain.
 pub fn scores_quantile_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
@@ -955,7 +867,6 @@ pub fn scores_quantile_domain(
     Ok(Float64Chunked::from_slice("scores".into(), &scores))
 }
 
-/// Compute influence function scores for the median within a domain.
 pub fn scores_median_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
@@ -971,10 +882,7 @@ pub fn scores_median_domain(
 
 #[doc(hidden)] // internal; exposed only so criterion benches can measure it
 pub fn index_categorical(col: &StringChunked) -> (Vec<u32>, u32) {
-    // FxHashMap (non-cryptographic) instead of the default SipHash map: a pure
-    // hot-path speedup. Codes are assigned in first-appearance order via
-    // `next_idx`, independent of the map's internal order, so the output is
-    // byte-for-byte identical to the SipHash version.
+    // FxHashMap is safe: codes follow first appearance (`next_idx`), not the map's order.
     let mut map: FxHashMap<&str, u32> = FxHashMap::default();
     let mut next_idx = 0u32;
     let indices: Vec<u32> = col
@@ -991,14 +899,10 @@ pub fn index_categorical(col: &StringChunked) -> (Vec<u32>, u32) {
     (indices, next_idx)
 }
 
-/// Index PSUs nested within strata: the PSU id is the (stratum, psu) pair,
-/// so PSU labels reused across strata (e.g. psu "1" in every stratum, as in
-/// NHANES/DHS-style data) are treated as distinct PSUs. This matches R's
-/// survey package and glm.rs, which key PSUs on (stratum, psu).
+/// Index PSUs on the (stratum, psu) pair, so labels reused across strata stay distinct, as R does.
 #[doc(hidden)] // internal; exposed only so criterion benches can measure it
 pub fn index_categorical_pair(a: &StringChunked, b: &StringChunked) -> (Vec<u32>, u32) {
-    // FxHashMap: see index_categorical — codes are first-appearance order, so
-    // the map's hash function does not affect the output.
+    // FxHashMap: codes are first-appearance order, independent of the hash.
     let mut map: FxHashMap<(&str, &str), u32> = FxHashMap::default();
     let mut next_idx = 0u32;
     let indices: Vec<u32> = a
@@ -1016,17 +920,8 @@ pub fn index_categorical_pair(a: &StringChunked, b: &StringChunked) -> (Vec<u32>
     (indices, next_idx)
 }
 
-/// Densify an integer design column to dense 0-based codes in FIRST-APPEARANCE
-/// order (nulls → `u32::MAX`).
-///
-/// Phase C: the Python layer factorizes each design column to integer codes
-/// once per data version and passes them instead of strings. Because those
-/// codes are bijective with the string labels they came from, re-densifying in
-/// first-appearance order here reproduces *exactly* the code assignment
-/// `index_categorical` would make on the original strings — so the variance /
-/// df results are bit-identical to the string path regardless of the incoming
-/// code values (which may be sparse or arbitrarily ordered). Integer hashing is
-/// ~10× cheaper than hashing the label strings, which is the whole point.
+/// Densify integer codes to 0-based FIRST-APPEARANCE codes (nulls → `u32::MAX`): exactly what
+/// `index_categorical` gives the original labels, at ~10× less hashing cost.
 fn densify_int_codes(col: &Column) -> EResult<(Vec<u32>, u32)> {
     if let Ok(ca) = col.u32()
         && let Some(codes) = densify_small_u32(ca)
@@ -1051,9 +946,7 @@ fn densify_int_codes(col: &Column) -> EResult<(Vec<u32>, u32)> {
     Ok((indices, next_idx))
 }
 
-/// [`densify_int_codes`] through a lookup table instead of a hash map, for the
-/// small-valued UInt32 codes the Python layer passes. `None` when the values
-/// are too sparse for a table.
+/// [`densify_int_codes`] by lookup table for small UInt32 codes; `None` when too sparse for one.
 fn densify_small_u32(ca: &UInt32Chunked) -> Option<(Vec<u32>, u32)> {
     let max = ca.max()? as usize;
     if max > 4 * ca.len() + 1024 {
@@ -1079,11 +972,7 @@ fn densify_small_u32(ca: &UInt32Chunked) -> Option<(Vec<u32>, u32)> {
     Some((indices, next_idx))
 }
 
-/// Build dense first-appearance codes for one design column, dispatching on
-/// dtype: `String` is hashed (`index_categorical`); any integer dtype is
-/// treated as pre-factorized codes and densified. This is the fallback-safe
-/// polymorphic entry — the String path keeps svy-rs's public API working for
-/// direct callers, the integer path is the Phase C fast path.
+/// Dense first-appearance codes for one design column: strings are hashed, integers densified.
 pub(crate) fn design_col_codes(col: &Column) -> EResult<(Vec<u32>, u32)> {
     let dt = col.dtype();
     if matches!(dt, DataType::String) {
@@ -1098,13 +987,8 @@ pub(crate) fn design_col_codes(col: &Column) -> EResult<(Vec<u32>, u32)> {
     }
 }
 
-/// Build nested PSU codes from `(strata, psu)`.
-///
-/// String columns are keyed on the `(stratum, psu)` pair so PSU labels reused
-/// across strata are distinct PSUs (`index_categorical_pair`). For integer
-/// columns the PSU code is assumed already pair-nested by the Python layer
-/// (`__svy_psu_code__` encodes the (stratum, psu) pair), so it is densified
-/// directly — matching the string pair's first-appearance order.
+/// Nested PSU codes: strings key on the `(stratum, psu)` pair; integer PSU codes arrive
+/// pair-nested from Python (`__svy_psu_code__`) and are densified directly.
 pub(crate) fn design_pair_codes(strata: &Column, psu: &Column) -> EResult<(Vec<u32>, u32)> {
     let dt = psu.dtype();
     if matches!(dt, DataType::String) {
@@ -1145,14 +1029,8 @@ fn build_stratum_psu_map(
     n_strata: u32,
     psu_indices: &[u32],
 ) -> (Vec<Vec<u32>>, Vec<u32>) {
-    // FxHashSet (deterministic, fixed-seed) not std HashSet (RandomState): the
-    // collected PSU order becomes the summation order in the stratified variance
-    // (`variance_stratified_optimized`), so a randomised order made the variance
-    // — and thus every standard error — differ at the ULP level run-to-run.
-    // Sort each stratum's PSUs so the order is canonical and the result is
-    // bit-reproducible.
-    // PSU codes are dense, so an owner table replaces the hash sets; a code
-    // shared by two strata (integer codes need not be nested) falls back.
+    // PSUs sorted per stratum: that order is the variance's summation order, so SEs are stable.
+    // Dense codes allow an owner table; a code shared across strata (un-nested) falls back.
     let n_psus = psu_indices
         .iter()
         .filter(|&&p| p != u32::MAX)
@@ -1234,23 +1112,11 @@ fn variance_unstratified_optimized(
     }
 }
 
-/// The strata a domain reaches, and how many units (PSUs, or rows without
-/// PSUs) and singleton strata they hold.
-///
-/// R estimates a domain on the subsetted design (`survey:::onestage`), so the
-/// singleton rules count only the strata holding domain rows: under
-/// `lonely.psu="adjust"` the grand mean averages their PSU totals
-/// (`n_PSUs_from_all_strata`) and a singleton stratum outside the domain drops
-/// out; under `"average"` the variance is scaled by `nstrat/nokstrat` over
-/// them. `active` marks the domain's rows; `None` takes every stratum with
-/// units.
-///
-/// With the domain rule, a stratum with several units but one holding domain
-/// rows is `lonely` (R's `nsubset == 1 && nPSU > 1`): centred at the grand
-/// mean under `center`, left out and counted with the singletons otherwise.
+/// Strata a domain reaches, with their units and singletons: R's singleton rules see only strata
+/// holding domain rows (`survey:::onestage` on the subset). `active` None takes every stratum.
 struct CenterScope {
     present: Vec<bool>,
-    lonely: Vec<bool>,
+    lonely: Vec<bool>, // domain rule: one unit holds domain rows (R's `nsubset == 1 && nPSU > 1`)
     n_units: usize,
     n_strata: usize,
     n_singletons: usize,
@@ -1419,7 +1285,6 @@ fn variance_stratified_optimized(
                     continue;
                 }
                 let psu_indices_h = &psu_map[h];
-                // Compute mean directly from global psu_totals — no per-stratum Vec alloc
                 let psu_mean_h: f64 = if lonely {
                     grand_mean
                 } else {
@@ -1537,8 +1402,7 @@ fn compute_stage2_variance(
             continue;
         }
 
-        // Get the FPC for this PSU's stratum: (N_h - n_h) / N_h
-        // stage1_sampling_fraction = n_h / N_h = 1 - fpc_h
+        // FPC of this PSU's stratum, (N_h - n_h) / N_h, so the sampling fraction is 1 - fpc_h.
         let fpc_psu_val = match (strata_for_psu, fpc_per_stratum) {
             (Some(s_for_p), Some(fpc_s)) => {
                 let stratum_idx = s_for_p[psu] as usize;
@@ -1558,8 +1422,7 @@ fn compute_stage2_variance(
             continue;
         }
 
-        // Get the unit-level FPC for this PSU
-        // Use the first observation in this PSU to look up the per-row fpc_ssu value
+        // Unit-level FPC of this PSU, read from its first row.
         let fpc_ssu_val = fpc_ssu_arr.map(|f| f[obs_indices[0]]).unwrap_or(1.0);
 
         let psu_scores: Vec<f64> = obs_indices.iter().map(|&i| scores[i]).collect();
@@ -1589,12 +1452,7 @@ fn compute_stage2_variance(
 // Main Public Variance Function
 // ============================================================================
 
-/// Design-only intermediates for the Taylor variance, factored out of
-/// `taylor_variance` so a domain/by-group loop can build them ONCE (the design
-/// is identical across groups — only the scores change) instead of re-indexing
-/// the strata/PSU/SSU columns on every group. See `taylor_variance` (which is
-/// just `build_taylor_design` + `taylor_variance_apply`) for the reference
-/// semantics; splitting it here keeps a single source of truth.
+/// Design-only Taylor variance intermediates, built once and reused across domains and by-groups.
 pub struct TaylorDesign {
     sm_enum: SingletonMethod,
     /// The method also applies to strata with one PSU in the domain.
@@ -1609,8 +1467,7 @@ pub struct TaylorDesign {
     fpc_val: f64,                      // unstratified single FPC
     fpc_per_stratum: Option<Vec<f64>>, // stratified per-stratum FPC (or [fpc_val] unstrat)
     stage2: Option<Stage2>,            // None ⇒ single stage
-    /// Score centring for a calibrating adjustment. Living on the design means
-    /// every caller of `taylor_variance_apply` picks it up unchanged.
+    /// Score centring for a calibrating adjustment, so every variance caller applies it.
     calib: Option<CalibSweep>,
 }
 
@@ -1623,17 +1480,13 @@ struct Stage2 {
 }
 
 impl TaylorDesign {
-    /// Attach a calibration sweep. Chained by the estimators that carry a
-    /// variance-consumed adjustment record.
     pub fn with_calib(mut self, calib: Option<CalibSweep>) -> Self {
         self.calib = calib;
         self
     }
 
-    /// The domain's rows ([`row_mask`]), when the variance depends on which
-    /// strata the domain reaches: a singleton rule in a stratified design.
-    /// `None` otherwise, and for a calibrated design, whose scores are nonzero
-    /// outside the domain (R keeps those rows too, so the whole frame counts).
+    /// The domain's rows ([`row_mask`]) when a stratified singleton rule depends on which strata it
+    /// reaches; `None` otherwise, and when calibrated (nonzero scores outside the domain, as in R).
     pub fn domain_rows(
         &self,
         n: usize,
@@ -1662,7 +1515,6 @@ pub fn build_taylor_design(
         fpc_ssu.map(|f| f.iter().map(|v| v.unwrap_or(1.0)).collect());
 
     let Some(strata_col) = strata else {
-        // Unstratified: single FPC value (take first element or 1.0)
         let fpc_val = fpc_arr
             .as_ref()
             .and_then(|f| f.first().copied())
@@ -1685,8 +1537,7 @@ pub fn build_taylor_design(
             psu_per_stratum: None,
             n_psus_per_stratum: None,
             fpc_val,
-            // Pass the single stage-1 FPC through so stage 2 can derive the
-            // stage-1 sampling fraction (mirrors the original tuple).
+            // Stage 2 derives the stage-1 sampling fraction from this FPC.
             fpc_per_stratum: Some(vec![fpc_val]),
             stage2,
             calib: None,
@@ -1710,8 +1561,7 @@ pub fn build_taylor_design(
 
     match psu {
         Some(psu_col) => {
-            // Nest PSU within stratum so PSU labels reused across strata are
-            // distinct PSUs (matches R survey / glm.rs).
+            // Nest PSU in stratum so reused labels stay distinct PSUs, as R survey and glm.rs do.
             let (psu_indices, _) = design_pair_codes(strata_col, psu_col)?;
             let (psu_per_stratum, n_psus_per_stratum) =
                 build_stratum_psu_map(&strata_indices, n_strata, &psu_indices);
@@ -1781,22 +1631,18 @@ fn build_stage2(
     }))
 }
 
-/// Apply a prebuilt [`TaylorDesign`] to a score vector. This is the only
-/// scores-dependent part; a by-group loop calls it once per group.
+/// Apply a prebuilt [`TaylorDesign`] to scores, the only per-group part of the variance.
 pub fn taylor_variance_apply(scores_arr: &[f64], d: &TaylorDesign) -> f64 {
     taylor_variance_apply_in(scores_arr, d, None)
 }
 
-/// [`taylor_variance_apply`] for a domain: `active` is
-/// [`TaylorDesign::domain_rows`].
+/// [`taylor_variance_apply`] for a domain: `active` is [`TaylorDesign::domain_rows`].
 pub fn taylor_variance_apply_in(
     scores_arr: &[f64],
     d: &TaylorDesign,
     active: Option<&[bool]>,
 ) -> f64 {
-    // Centre first when the design carries a calibration: the sweep replaces
-    // the scores the PSU-total formula then consumes, exactly as R applies
-    // postStrata at the top of svyrecvar.
+    // Centre first, as R applies postStrata at the top of svyrecvar.
     let swept;
     let scores_arr: &[f64] = match &d.calib {
         Some(c) => {
@@ -1887,11 +1733,8 @@ pub fn taylor_variance_in(
     Ok(taylor_variance_apply_in(&scores_arr, &design, active))
 }
 
-/// The rows of a domain as the singleton rules see them: in `rows` (the
-/// analysis's domain rows, `where=` with its variables present) and in
-/// `domain` (a `by` level); every row when both are `None`. Unlike the df and
-/// `n`, the weight plays no part: R's `subset()` keeps zero-weight rows, and a
-/// PSU holding only those still counts as present.
+/// A domain's rows as the singleton rules see them: in `rows` (`where=`) and `domain` (`by`).
+/// Weight plays no part: R's `subset()` keeps zero-weight rows, so their PSUs still count.
 pub fn row_mask(
     n: usize,
     rows: Option<&BooleanChunked>,
@@ -1910,9 +1753,7 @@ fn singleton_rows_needed(
     Ok((method != SingletonMethod::None || domain_rule) && stratified && !calibrated)
 }
 
-/// [`TaylorDesign::domain_rows`] for kernels that sweep a calibration into the
-/// scores themselves and call [`taylor_variance_in`]; `domain` marks the
-/// domain's rows (all rows when `None`).
+/// [`TaylorDesign::domain_rows`] for kernels that sweep calibration into the scores themselves.
 pub fn singleton_domain_rows(
     singleton_method: Option<&str>,
     calibrated: bool,
@@ -1949,23 +1790,14 @@ pub fn rows_column(df: &DataFrame, col: Option<&str>) -> EResult<Option<BooleanC
     .transpose()
 }
 
-/// Full k×k covariance between k estimates from their retained score columns.
-///
-/// The between-estimate analogue of `taylor_variance_apply`: every column gets
-/// the calibration sweep, is aggregated to PSU totals, and the stage-1
-/// cross-products accumulate per stratum with the same FPC, scaling, and
-/// singleton handling as the variance; stage 2 adds the SSU-level
-/// cross-products under the same stage-1-sampling-fraction guard. The diagonal
-/// equals `taylor_variance_apply` per column up to floating-point accumulation
-/// order — callers that need exact agreement keep the per-column variance and
-/// take only the off-diagonals from here.
+/// k×k covariance of k estimates from their score columns, under `taylor_variance_apply`'s rules.
+/// The diagonal matches it only up to summation order: callers needing exact agreement keep that.
 pub fn taylor_covariance_apply(score_cols: &[Vec<f64>], d: &TaylorDesign) -> Vec<Vec<f64>> {
     taylor_covariance_apply_in(score_cols, d, None)
 }
 
-/// The columns with a nonzero value among `values(j)`, or all `k` when any value
-/// is non-finite. A column of zeros adds only ±0 terms to a cross-product, which
-/// leave every sum bit-identical, unless a ±∞/NaN partner turns 0·∞ into NaN.
+/// Columns with a nonzero value among `values(j)`, or all `k` when any is non-finite: zero columns
+/// add only ±0 terms, leaving sums bit-identical unless a ±∞/NaN partner makes 0·∞ = NaN.
 fn present_cols<I: Iterator<Item = f64>>(k: usize, values: impl Fn(usize) -> I) -> Vec<usize> {
     let mut present = Vec::new();
     for j in 0..k {
@@ -1983,9 +1815,8 @@ fn present_cols<I: Iterator<Item = f64>>(k: usize, values: impl Fn(usize) -> I) 
     present
 }
 
-/// [`taylor_covariance_apply`] for estimates of one domain. Estimates of
-/// different domains keep the whole frame, as R's `svyby(covmat=TRUE)` takes
-/// their covariance from influence functions on the full design.
+/// [`taylor_covariance_apply`] for estimates of one domain. Different domains keep the whole frame,
+/// as R's `svyby(covmat=TRUE)` does.
 pub fn taylor_covariance_apply_in(
     score_cols: &[Vec<f64>],
     d: &TaylorDesign,
@@ -2017,7 +1848,6 @@ pub fn taylor_covariance_apply_in(
         None => score_cols.iter().map(|v| v.as_slice()).collect(),
     };
 
-    // Accumulate a symmetric pair contribution into the matrix.
     let add = |cov: &mut Vec<Vec<f64>>, j: usize, l: usize, v: f64| {
         cov[j][l] += v;
         if l != j {
@@ -2161,9 +1991,7 @@ pub fn taylor_covariance_apply_in(
                     scale_stage1(&mut cov, scope.as_ref(), d.sm_enum);
                 }
                 _ => {
-                    // Stratified element sampling: units are the PSUs, grouped by
-                    // stratum. One pass accumulates per-stratum sums and counts;
-                    // the cross-products are summed per stratum below.
+                    // Stratified element sampling: per-stratum sums and counts in one pass.
                     let mut sums = vec![vec![0.0; n_strata]; k];
                     let mut counts = vec![0u32; n_strata];
                     let mut rows_of: Vec<Vec<usize>> = vec![Vec::new(); n_strata];
@@ -2236,8 +2064,6 @@ pub fn taylor_covariance_apply_in(
                         for (a, &j) in present.iter().enumerate() {
                             for (b, &l) in present.iter().enumerate().skip(a) {
                                 let cross_h = cross[a * np + b];
-                                // Centred at the grand mean when lonely, else at
-                                // the stratum mean.
                                 let c_h = if lonely {
                                     let (gj, gl) = (grand_mean[j], grand_mean[l]);
                                     cross_h - gj * sums[l][h] - gl * sums[j][h] + nf * gj * gl
@@ -2339,12 +2165,7 @@ pub fn degrees_of_freedom(
     degrees_of_freedom_in_domain(weights, strata, psu, None)
 }
 
-/// Design df restricted to a domain.
-///
-/// `domain` is an optional per-row membership mask, ANDed into the nonzero-weight
-/// mask. `where=` filters reach this function as zero weights and so need no mask,
-/// but a by-group is only known as a mask — without it every group would report the
-/// df of the surrounding analysis mask instead of its own.
+/// Design df restricted to `domain`: by-groups arrive only as a mask, `where=` as zero weights.
 pub fn degrees_of_freedom_in_domain(
     weights: &Float64Chunked,
     strata: Option<&Column>,
@@ -2356,20 +2177,13 @@ pub fn degrees_of_freedom_in_domain(
         return Ok(0);
     }
 
-    // Build mask of active (nonzero weight, in-domain) observations.
-    // This ensures domain estimation (where non-domain obs have w=0, or are
-    // excluded by `domain`) gives the correct df, matching R's degf() on
-    // subsetted designs.
+    // Active rows (nonzero weight, in-domain), as R's degf() on a subsetted design.
     let active = active_mask(weights, domain);
 
-    // Design columns are resolved to dense first-appearance integer codes,
-    // dispatching on dtype (String hashed, integer densified). The unique
-    // counts below are order-independent, so this is identical to the previous
-    // string-only implementation and to the integer-code fast path.
+    // Unique counts ignore code order, so either dtype path gives the same df.
     let str_idx = strata.map(design_col_codes).transpose()?;
     let psu_idx = match (strata, psu) {
-        // PSUs are nested within stratum when stratified (so labels reused
-        // across strata are distinct); plain codes otherwise.
+        // Pair-nested PSUs when stratified, so reused labels stay distinct.
         (Some(s), Some(p)) => Some(design_pair_codes(s, p)?.0),
         (None, Some(p)) => Some(design_col_codes(p)?.0),
         _ => None,
@@ -2382,14 +2196,7 @@ pub fn degrees_of_freedom_in_domain(
     ))
 }
 
-/// Design df from a [`TaylorDesign`]'s already-resolved codes.
-///
-/// `degrees_of_freedom_in_domain` re-derives the strata and (stratum, psu) code
-/// vectors that `build_taylor_design` has just built from the very same columns
-/// — at 1M rows that duplicate densification was ~6.5 ms, a third of the whole
-/// ungrouped kernel. The codes are produced by identical calls
-/// (`design_col_codes` / `design_pair_codes`) on identical inputs, so reusing
-/// them is bit-identical by construction, not merely equivalent.
+/// Design df from a [`TaylorDesign`]'s codes, sparing a second densification of the same columns.
 pub fn degrees_of_freedom_from_design(
     weights: &Float64Chunked,
     design: &TaylorDesign,
@@ -2409,9 +2216,7 @@ pub fn degrees_of_freedom_from_design(
     )
 }
 
-/// A row carries population weight when its weight is nonzero. Zero-weight rows
-/// (out-of-domain rows under `where=`, nonrespondents left on file) represent no
-/// population units; negative calibrated weights do.
+/// Active means nonzero weight: zero-weight rows stand for no units; negative calibrated ones do.
 #[inline]
 fn is_active(w: Option<f64>) -> bool {
     w.is_some_and(|v| v != 0.0 && !v.is_nan())
@@ -2426,8 +2231,7 @@ fn weights_slice(weights: &Float64Chunked) -> Option<&[f64]> {
     }
 }
 
-/// Mask of active (nonzero weight, in-domain) observations. Shared so the
-/// column-driven and design-driven df entry points cannot drift apart.
+/// Active (nonzero-weight, in-domain) rows, shared so both df entry points agree.
 fn active_mask(weights: &Float64Chunked, domain: Option<&BooleanChunked>) -> Vec<bool> {
     match domain {
         None => match weights_slice(weights) {
@@ -2452,10 +2256,8 @@ fn active_mask(weights: &Float64Chunked, domain: Option<&BooleanChunked>) -> Vec
     }
 }
 
-/// Domain respondent count: rows with a nonzero weight, within `domain` when
-/// given. This is the `n` the proportion CIs read (Korn–Graubard's sample size).
-/// `where=` reaches the kernels as zeroed weights, so a row count would include
-/// every out-of-domain row.
+/// Domain respondents (nonzero weight, in `domain`): the Korn–Graubard `n` of the proportion CIs.
+/// `where=` arrives as zeroed weights, so a row count would include out-of-domain rows.
 pub fn active_count(weights: &Float64Chunked, domain: Option<&BooleanChunked>) -> u32 {
     match domain {
         None => match weights_slice(weights) {
@@ -2516,11 +2318,8 @@ fn df_from_codes(active: &[bool], strata: Option<(&[u32], u32)>, psu: Option<&[u
             counts.iter().map(|&c| c.saturating_sub(1)).sum()
         }
         (Some((str_idx, n_strata)), Some(psu_idx)) => {
-            // Stratified + clustered: df = sum_h(n_active_psus_h - 1), where
-            // PSUs are nested within stratum (so labels reused across strata are
-            // distinct). psu codes are pair-nested; strata codes give the stratum.
-            // Codes are dense, so an owner table replaces per-stratum hash sets;
-            // integer PSU codes need not be nested, so a shared code falls back.
+            // Stratified + clustered: df = sum_h(n_active_psus_h - 1), PSUs pair-nested.
+            // An owner table replaces hash sets; un-nested codes shared across strata fall back.
             let n_psus = psu_idx
                 .iter()
                 .filter(|&&p| p != u32::MAX)
@@ -2561,15 +2360,8 @@ fn df_shared_psu_codes(active: &[bool], str_idx: &[u32], n_strata: u32, psu_idx:
 // Quantile Variance using Woodruff Method
 // ============================================================================
 
-/// Woodruff estimates for several probabilities in one pass.
-///
-/// Both the sort behind the weighted CDF and the design indexing are done once;
-/// only the score vector and its variance are per-probability. Pass
-/// `domain_mask` to restrict the CDF to a domain — scores outside it are zero,
-/// so the variance is still taken over the full design.
-///
-/// Returns one `(estimate, var_p, se_p)` per entry of `probs`, in the same
-/// order. Entries are all-NaN where the quantile is undefined.
+/// Woodruff `(estimate, var_p, se_p)` per prob, sorting once; all-NaN where undefined.
+/// With `domain_mask`, scores outside are zero, so the variance still spans the full design.
 pub fn quantiles_woodruff(
     y: &Float64Chunked,
     weights: &Float64Chunked,
@@ -2594,9 +2386,7 @@ pub fn quantiles_woodruff(
             if q.is_nan() {
                 return (f64::NAN, f64::NAN, f64::NAN);
             }
-            // Variance of the estimated proportion P(Y <= q), on the
-            // probability scale; the caller inverts the CDF to get the
-            // interval on the quantile scale.
+            // Variance of P(Y <= q); the caller inverts the CDF for the interval.
             let scores = scores_quantile_arr(y, weights, domain_mask, q, p, sum_w);
             let var_p = taylor_variance_apply_in(&scores, design, active.as_deref());
             (q, var_p, var_p.max(0.0).sqrt())
@@ -2604,15 +2394,8 @@ pub fn quantiles_woodruff(
         .collect())
 }
 
-/// Compute variance of the median using the Woodruff (1952) method.
-///
-/// The Woodruff method computes variance for quantiles by:
-/// 1. Computing the variance of the proportion P(Y <= q) using Taylor linearization
-/// 2. Converting this to variance on the quantile scale using the inverse CDF
-///
-/// The interval is centered at the CDF evaluated at q, as in R's svyquantile.
-///
-/// Returns: (variance, se_proportion) where se_proportion is needed for CI calculation
+/// Woodruff (1952) median: Taylor variance of P(Y <= q), centred at F(q) as R's svyquantile.
+/// Returns `(var_p, se_p)` on the probability scale; the caller inverts the CDF for the CI.
 #[allow(clippy::too_many_arguments)]
 pub fn median_variance_woodruff(
     y: &Float64Chunked,
@@ -2631,32 +2414,15 @@ pub fn median_variance_woodruff(
         return Ok((f64::NAN, f64::NAN));
     }
 
-    // Compute scores for the proportion P(Y <= q)
     let scores = scores_median(y, weights, quantile_method)?;
 
-    // Compute variance of the proportion using Taylor linearization
     let var_p = taylor_variance(&scores, strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
     let se_p = var_p.max(0.0).sqrt();
 
-    // For the Woodruff method, we need to convert variance on probability scale
-    // to variance on quantile scale. This is done during CI calculation using
-    // the inverse CDF. For now, we return both the variance of the proportion
-    // and se_p so the caller can compute proper CIs.
-
-    // The variance of the quantile itself requires density estimation at the quantile,
-    // which is complex. Instead, we follow R's approach of computing CIs on the
-    // probability scale and inverting them.
-
-    // For a simple SE approximation, we can use the CI width approach:
-    // SE_q ≈ (Q(p + z*se_p) - Q(p - z*se_p)) / (2*z)
-    // But this requires the full data for inverse CDF lookup.
-
-    // Return var_p and se_p - the caller can use these for CI calculation
     Ok((var_p, se_p))
 }
 
-/// Compute median variance for a domain using Woodruff method
 #[allow(clippy::too_many_arguments)]
 pub fn median_variance_woodruff_domain(
     y: &Float64Chunked,
@@ -2689,46 +2455,20 @@ pub fn median_variance_woodruff_domain(
 // SRS Variance (Simple Random Sampling)
 // ============================================================================
 
-/// Which simple-random-sample reference the design effect is measured against.
-///
-/// deff is a ratio of the design variance to the variance of a hypothetical SRS
-/// of the same size, and the *reference* is a modelling choice separate from how
-/// the sample was actually drawn. The two differ by exactly one factor, the
-/// finite-population correction `1 - n/N`, so they diverge only as the sampling
-/// fraction grows: at n/N = 0.01 they agree to 1%, at n/N = 0.3 they differ by
-/// 43%.
-///
-/// `WithoutReplacement` is Kish's classic design effect. `WithReplacement` is
-/// the square of Kish's "deft"; because it omits the FPC entirely it does not
-/// depend on the scale of the weights, which is what makes it the usable option
-/// once weights have been normalized, raked or calibrated and `sum(w)` is no
-/// longer a population count.
+/// The SRS reference for deff; `WithoutReplacement` (Kish) and `WithReplacement` differ by the FPC.
+/// Without the FPC, `WithReplacement` ignores the weight scale, so it suits rescaled weights.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SrsRef {
     /// `S^2/n` -- no finite-population correction.
     WithReplacement,
-    /// `S^2/n * (1 - n/N)`. `pop_total` is the design's declared population
-    /// size; when absent the sum of weights stands in for N, which is only
-    /// valid while the weights remain reciprocals of selection probabilities.
+    /// `S^2/n * (1 - n/N)`; without `pop_total` the weight sum stands in for N, which is valid
+    /// only while weights are inverse selection probabilities.
     WithoutReplacement { pop_total: Option<f64> },
 }
 
 impl SrsRef {
-    /// The finite-population correction for this reference.
-    ///
-    /// Returns NaN rather than an error when the correction is degenerate.
-    /// That is deliberate: the kernels compute the SRS reference on every call,
-    /// including calls that never asked for a design effect, so failing here
-    /// would break estimation for anyone whose weights merely happen to sum to
-    /// about `n` -- unit weights being the obvious case. NaN propagates to the
-    /// `deff` column, and the Python layer, which knows whether a design effect
-    /// was actually requested, turns it into a structured error there.
-    ///
-    /// The comparison uses a tolerance rather than `> 0.0`: weights normalized
-    /// to sum to `n` land within ~1e-12 of it, on either side by luck, and a
-    /// hair above zero would otherwise yield an FPC near 1e-16 and a design
-    /// effect of ~1e16. A genuine near-census design bottoms out around 1e-6
-    /// (n = 999_999 of 1_000_000), well clear of this threshold.
+    /// The FPC, NaN when degenerate: it runs on every call, so Python raises only if deff is asked.
+    /// The 1e-9 floor absorbs weights normalized to `n` (~1e-12 off); near-census FPCs are ~1e-6.
     #[inline]
     pub fn fpc(&self, n: f64, sum_w: f64) -> f64 {
         match self {
@@ -2775,12 +2515,8 @@ pub fn srs_variance_mean(
     weights: &Float64Chunked,
     srs: SrsRef,
 ) -> EResult<f64> {
-    // Zero-weight rows (out-of-domain / missing-y under domain semantics)
-    // carry no information and must not inflate n — matching R's deff on
-    // subset()/na.rm designs, and the *_domain variants below.
-    //
-    // Fast path: contiguous null-free all-positive slices are used directly,
-    // skipping the yv/wv copies. Same accumulation order → bit-identical.
+    // Zero-weight rows must not inflate n, as in R's deff on subset() designs.
+    // Fast path for all-positive contiguous slices; same accumulation order, so bit-identical.
     if let Some((ys, ws)) = cont_pair(y, weights) {
         if ws.iter().all(|&w| w > 0.0) {
             return srs_mean_from(ys, ws, srs);
@@ -2817,13 +2553,10 @@ pub fn srs_variance_mean_domain(
     srs: SrsRef,
 ) -> EResult<f64> {
     let (yv, wv) = if let Some((ys, ws)) = cont_pair(y, weights) {
-        // Fast path: slice-index y/weights while filtering by the mask.
         let mut yv = Vec::new();
         let mut wv = Vec::new();
         for (i, m) in mask_flags(domain_mask).into_iter().enumerate() {
-            // w > 0 mirrors srs_variance_mean: zero-weight rows (out-of-domain
-            // or missing-y under drop_nulls) carry no information and must not
-            // inflate n, or deff comes out too large.
+            // w > 0 as in srs_variance_mean: counting zero-weight rows would inflate n and deff.
             if m && ws[i] > 0.0 {
                 yv.push(ys[i]);
                 wv.push(ws[i]);
@@ -2903,9 +2636,7 @@ pub fn srs_variance_total_domain(
         let mut yv = Vec::new();
         let mut wv = Vec::new();
         for (i, m) in mask_flags(domain_mask).into_iter().enumerate() {
-            // w > 0 mirrors srs_variance_mean: zero-weight rows (out-of-domain
-            // or missing-y under drop_nulls) carry no information and must not
-            // inflate n, or deff comes out too large.
+            // w > 0 as in srs_variance_mean: counting zero-weight rows would inflate n and deff.
             if m && ws[i] > 0.0 {
                 yv.push(ys[i]);
                 wv.push(ws[i]);
@@ -3041,15 +2772,8 @@ pub fn srs_variance_ratio_domain(
 // ============================================================================
 // Multivariate Taylor Variance (k score columns -> k x k covariance matrix)
 // ============================================================================
-/// Compute the full k×k covariance matrix from k score columns.
-///
-/// This is the multivariate extension of `taylor_variance`. For each stratum,
-/// it sums scores by PSU to get k-dimensional PSU totals, then computes
-/// the between-PSU covariance matrix using the outer product formula:
-///   Cov_h = fpc_h * (m_h / (m_h - 1)) * Σ_a (T_ha - T̄_h)(T_ha - T̄_h)'
-///
-/// This matches R's `vcov(svymean(...))` which computes the full covariance
-/// in a single pass over PSU totals.
+/// k×k covariance of k score columns, as R's `vcov(svymean(...))`; per stratum
+/// `fpc_h * m_h/(m_h-1) * Σ_a (T_ha - T̄_h)(T_ha - T̄_h)'`.
 pub fn taylor_variance_matrix(
     score_columns: &[Float64Chunked], // k score columns, each length n
     strata: Option<&Column>,
@@ -3094,13 +2818,12 @@ mod tests {
     use super::*;
     use approx::{abs_diff_eq, assert_abs_diff_eq, assert_relative_eq, relative_eq};
 
-    /// Build a String design column for the variance kernels, which now take
-    /// `&Column` (dtype-polymorphic since Phase C).
+    /// A String design column for the variance kernels.
     fn scol(name: PlSmallStr, vals: &[&str]) -> Column {
         Column::from(StringChunked::from_slice(name, vals).into_series())
     }
 
-    /// Build an integer design code column (Phase C fast path).
+    /// An integer design code column.
     fn icol(name: PlSmallStr, vals: &[i64]) -> Column {
         Column::from(Int64Chunked::from_slice(name, vals).into_series())
     }
@@ -3137,11 +2860,7 @@ mod tests {
         );
     }
 
-    /// Phase C: integer design codes must produce bit-identical variance and df
-    /// to the equivalent string labels, even when the codes are sparse and
-    /// arbitrarily valued — because the kernel re-densifies them in
-    /// first-appearance order, reproducing exactly what index_categorical would
-    /// assign to the strings.
+    /// Sparse, arbitrarily valued integer codes re-densify to exactly the string path's codes.
     #[test]
     fn test_integer_codes_match_string_path() {
         let y =
@@ -3152,9 +2871,7 @@ mod tests {
         // String design: PSU labels "1"/"2" are reused across strata A and B.
         let strata_s = scol("s".into(), &["A", "A", "A", "A", "B", "B", "B", "B"]);
         let psu_s = scol("p".into(), &["1", "1", "2", "2", "1", "1", "2", "2"]);
-        // Integer codes: deliberately SPARSE and not first-appearance-ordered.
-        // strata codes densify to {10→0, 99→1}; the nested psu codes encode the
-        // four (stratum, psu) pairs (so reused labels are distinct PSUs).
+        // SPARSE codes out of first-appearance order; psu codes encode the (stratum, psu) pairs.
         let strata_i = icol("s".into(), &[10, 10, 10, 10, 99, 99, 99, 99]);
         let psu_i = icol("p".into(), &[20, 20, 55, 55, 71, 71, 88, 88]);
 
@@ -3212,10 +2929,7 @@ mod tests {
         );
     }
 
-    /// The covariance kernel must agree with the variance kernel on its
-    /// diagonal, and a linear combination's variance computed two ways —
-    /// c' V c from the matrix vs the variance of the combined score column —
-    /// must match. Exercised over every stage-1 design branch.
+    /// The covariance diagonal matches the variance, and c'Vc the combined score's variance.
     #[test]
     fn test_taylor_covariance_matches_variance() {
         let a = vec![1.0, -2.0, 3.0, -4.0, 10.0, -12.0, 14.0, -16.0];
@@ -3257,8 +2971,7 @@ mod tests {
         }
     }
 
-    /// Singleton CENTER handling: the covariance diagonal must reproduce the
-    /// centered variance when a stratum has one PSU.
+    /// The covariance diagonal reproduces the centred variance with a one-PSU stratum.
     #[test]
     fn test_taylor_covariance_singleton_center() {
         let a = vec![1.0, -2.0, 3.0, -4.0, 5.0];
@@ -3334,8 +3047,7 @@ mod tests {
 
     #[test]
     fn test_weighted_quantile_nonuniform_weights() {
-        // Weights [1, 2, 1] give cdf = [0.25, 0.75, 1.0]; p = 0.5 is equidistant
-        // from cdf[0] and cdf[1], so Nearest takes the lower value.
+        // cdf = [0.25, 0.75, 1.0]: p = 0.5 is equidistant, so Nearest takes the lower value.
         // R svyquantile: qrule="math" gives 2, qrule="hf4" gives 1.5.
         let y = [1.0, 2.0, 3.0];
         let cdf = [0.25, 0.75, 1.0];
@@ -3350,9 +3062,7 @@ mod tests {
 
     #[test]
     fn test_weighted_quantile_lower_boundary() {
-        // y=1 carries 80% of the weight: cdf = [0.8, 0.9, 1.0].
-        // The median (p=0.5 <= cdf[0]) must be 1.0 for every method, and
-        // Linear must never extrapolate outside [1, 3].
+        // cdf = [0.8, 0.9, 1.0]: the median is 1.0 for every method; Linear must not extrapolate.
         let y = vec![1.0, 2.0, 3.0];
         let cdf = vec![0.8, 0.9, 1.0];
 
@@ -3393,9 +3103,7 @@ mod tests {
 
     #[test]
     fn test_psu_labels_reused_across_strata() {
-        // Two strata with 2 PSUs each. PSU labels "1","2" are reused in both
-        // strata (NHANES-style). The variance must match the same design with
-        // globally unique PSU labels; hand-computed value is 1.25 (SE 1.118).
+        // PSU labels reused in both strata must match unique labels; by hand 1.25 (SE 1.118).
         let y =
             Float64Chunked::from_slice("y".into(), &[1.0, 2.0, 3.0, 4.0, 10.0, 12.0, 14.0, 16.0]);
         let w = Float64Chunked::from_slice("w".into(), &[1.0; 8]);
@@ -3458,10 +3166,7 @@ mod tests {
 
     #[test]
     fn test_unstratified_two_stage_fpc_stage2() {
-        // Unstratified two-stage design with FPC at both stages must include
-        // the stage-2 contribution and match the identical design expressed
-        // with a single constant stratum. Hand-computed total variance = 2.8
-        // (stage 1 = 2.6667, stage 2 = 0.1333).
+        // Two-stage with FPC equals one constant stratum; by hand 2.8 = 2.6667 + 0.1333.
         let y = Float64Chunked::from_slice(
             "y".into(),
             &[
@@ -3536,8 +3241,6 @@ mod tests {
         (y, w)
     }
 
-    /// The two references differ by exactly the finite-population correction,
-    /// which is the whole basis for saying they agree when n/N is small.
     #[test]
     fn test_wr_and_wor_differ_by_exactly_the_fpc() {
         let (y, w) = srs_fixture();
@@ -3551,9 +3254,7 @@ mod tests {
         );
     }
 
-    /// The with-replacement reference ignores the scale of the weights. This is
-    /// the property that makes it usable once weights have been normalized or
-    /// calibrated and their sum is no longer a population count.
+    /// What makes it usable with normalized or calibrated weights.
     #[test]
     fn test_wr_reference_is_scale_invariant() {
         let (y, _) = srs_fixture();
@@ -3576,8 +3277,6 @@ mod tests {
         }
     }
 
-    /// The without-replacement reference is NOT scale-invariant -- the reason
-    /// rescaled weights silently shifted deff before this existed.
     #[test]
     fn test_wor_reference_moves_with_the_weight_scale() {
         let (y, w) = srs_fixture();
@@ -3592,13 +3291,10 @@ mod tests {
         );
     }
 
-    /// A declared population size is used in place of the weight sum, so the
-    /// without-replacement reference stays correct under rescaled weights.
     #[test]
     fn test_declared_pop_total_overrides_the_weight_sum() {
         let (y, _) = srs_fixture();
-        // Weights normalized to sum to n: sum(w) is useless as a population
-        // count, but the design still knows N = 600.
+        // Weights normalized to sum to n, while the design knows N = 600.
         let norm = Float64Chunked::from_slice("w".into(), &[1.0; 6]);
         let with_pop = srs_variance_mean(
             &y,
@@ -3612,12 +3308,7 @@ mod tests {
         assert_abs_diff_eq!(with_pop / wr, 1.0 - 6.0 / 600.0, epsilon = 1e-12);
     }
 
-    /// Without a declared population size, normalized weights make the
-    /// without-replacement reference uncomputable. It must say so rather than
-    /// return a silent NaN.
-    /// Weights normalized to sum to n land within ~1e-12 of n, on either side
-    /// by luck. A hair above zero would otherwise slip through the guard and
-    /// yield an FPC near 1e-16 -- a design effect of ~1e16 rather than an error.
+    /// Weights normalized to n sit within ~1e-12 of it: that must error, not give a ~1e16 deff.
     #[test]
     fn test_fpc_guard_survives_float_noise_around_n() {
         let (y, _) = srs_fixture();
@@ -3633,7 +3324,6 @@ mod tests {
         }
     }
 
-    /// A genuine near-census design must still be allowed through.
     #[test]
     fn test_near_census_design_is_still_computable() {
         let y = Float64Chunked::from_slice("y".into(), &[10.0, 12.0, 9.0, 15.0, 11.0, 13.0]);
@@ -3678,10 +3368,7 @@ mod tests {
         );
     }
 
-    /// `degrees_of_freedom_from_design` exists so the ungrouped kernels stop
-    /// densifying the strata/PSU columns a second time just to count df. It has
-    /// to agree with the column-driven entry point on every design shape,
-    /// including the zero-weight rows a `where=` filter produces.
+    /// Must agree on every design shape, including a `where=` filter's zero-weight rows.
     #[test]
     fn test_df_from_design_matches_column_path() {
         let strata_i = icol("s".into(), &[10, 10, 10, 10, 99, 99, 99, 99]);
@@ -3714,10 +3401,7 @@ mod tests {
         }
     }
 
-    /// `scores_mean_arr` skips the `Float64Chunked` round-trip that
-    /// `taylor_variance` used to undo immediately. It must produce exactly the
-    /// bits that round-trip produced, on both the contiguous fast path and the
-    /// null-bearing fallback.
+    /// Must give exactly the round-trip's bits, on the fast path and the null fallback.
     #[test]
     fn test_scores_mean_arr_matches_chunked_roundtrip() {
         let w = Float64Chunked::from_slice("w".into(), &[1.0, 2.5, 0.5, 3.0, 1.25]);

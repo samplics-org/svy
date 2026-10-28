@@ -1,4 +1,3 @@
-// native/readstat-sys/src/lib.rs
 // bindgen's output: its names and lints are not ours to fix.
 #[allow(
     non_camel_case_types,

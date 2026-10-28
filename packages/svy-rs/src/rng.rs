@@ -1,14 +1,6 @@
-// src/rng.rs
-//
-// Shared xoshiro256** RNG used across sampling and weighting modules.
-// No external rand crate needed — this is consistent with the rest of
-// the codebase (weighting/replication.rs uses the same algorithm).
+//! Seedable xoshiro256** RNG shared by sampling and weighting, with no external rand crate.
 
-/// Fast, seedable xoshiro256** pseudo-random number generator.
-///
-/// Used for reproducible random sampling. Seeded from a u64; child
-/// generators for independent strata are derived via wrapping addition
-/// on the seed so each stratum gets a deterministic but independent stream.
+/// xoshiro256** generator: a given seed always yields the same stream, so draws are reproducible.
 #[derive(Clone)]
 pub struct Rng {
     state: [u64; 4],
@@ -41,12 +33,7 @@ impl Rng {
         result
     }
 
-    /// Uniform random integer in [0, n), exactly uniform.
-    ///
-    /// Lemire's nearly-divisionless bounded sampling. The previous
-    /// `next_u64() % n` had modulo bias: values below 2^64 mod n were
-    /// selected slightly more often (negligible for small n, but free to
-    /// avoid). NOTE: this changed the sampled units for a given seed.
+    /// Uniform integer in [0, n) without modulo bias (Lemire's nearly-divisionless method).
     pub fn next_index(&mut self, n: usize) -> usize {
         debug_assert!(n > 0, "next_index requires n > 0");
         let n = n as u64;
@@ -67,7 +54,6 @@ impl Rng {
 
     /// Uniform random f64 in [0, 1).
     pub fn next_f64(&mut self) -> f64 {
-        // Use upper 53 bits for a uniform double
         (self.next_u64() >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
     }
 
@@ -79,8 +65,7 @@ impl Rng {
         }
     }
 
-    /// Weighted random choice: draw one index from `weights` (unnormalised).
-    /// `None` when there is nothing to draw: no weights, or a total that is not positive.
+    /// One index drawn proportional to unnormalised `weights`; `None` unless the total is positive.
     pub fn weighted_choice(&mut self, weights: &[f64]) -> Option<usize> {
         let total: f64 = weights.iter().sum();
         if total.is_nan() || total <= 0.0 {
@@ -184,8 +169,7 @@ mod tests {
 
     #[test]
     fn next_index_is_close_to_uniform() {
-        // 60k draws over 3 buckets: each expected 20k, sd ~ 115. A bound of
-        // 5 sd catches gross non-uniformity without being flaky.
+        // Expected 20k per bucket with sd ~115: a 600 bound (~5 sd) is not flaky.
         let mut rng = Rng::new(7);
         let n = 3usize;
         let draws = 60_000;

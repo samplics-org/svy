@@ -1,15 +1,4 @@
-// src/weighting/trimming.rs
-//
-// Pure trimming algorithm — no PyO3, no Python types.
-// Called from api.rs which handles the Python boundary.
-//
-// Performance notes:
-// - Single allocation for the output array (no clone per iteration)
-// - Zero-mask computed once upfront; zero units never touched
-// - Convergence check uses a running count of changed weights (integer)
-//   rather than floating-point max-diff scan over the full array
-// - Redistribution uses a single pass with precomputed sums
-// - All hot paths are branch-minimized and cache-friendly (sequential access)
+//! Iterative weight trimming, optionally redistributing the trimmed mass.
 
 use super::utils::{Result, WeightingError};
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
@@ -18,7 +7,6 @@ use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 // Output type
 // ---------------------------------------------------------------------------
 
-/// Output of trim_impl — flat primitives, maps directly to the Python tuple.
 pub struct TrimOutput {
     pub weights: Array1<f64>,
     pub n_trimmed_upper: usize,
@@ -50,10 +38,7 @@ fn ess(weights: &[f64]) -> f64 {
 // Single iteration
 // ---------------------------------------------------------------------------
 
-/// One trimming pass over the weight slice.
-///
-/// Returns (n_upper_trimmed, n_lower_trimmed, n_changed).
-/// Mutates `w` in place.
+/// One in-place trimming pass; returns (n_upper, n_lower, n_changed).
 #[inline]
 fn trim_once(
     w: &mut [f64],
@@ -70,8 +55,6 @@ fn trim_once(
     // ── Upper cap ────────────────────────────────────────────────────────────
     if let Some(cap) = upper {
         if redistribute {
-            // Two-pass: identify trimmed units and accumulate excess, then
-            // redistribute in a single pass over non-trimmed units.
             let mut excess = 0.0_f64;
             for i in 0..n {
                 if !zero_mask[i] && w[i] > cap {
@@ -82,14 +65,10 @@ fn trim_once(
                 }
             }
             if excess > 0.0 {
-                // Sum of non-trimmed active weights, strictly below cap.
-                // Units that were just capped (w[i] == cap) must not receive any
-                // redistributed mass, otherwise they overshoot and trigger another
-                // trim pass, producing instability.
+                // Strictly below the cap: just-capped units would overshoot and re-trim.
                 let mut denom = 0.0_f64;
                 for i in 0..n {
                     if !zero_mask[i] && w[i] < cap {
-                        // strict
                         denom += w[i];
                     }
                 }
@@ -97,7 +76,6 @@ fn trim_once(
                     let factor = excess / denom;
                     for i in 0..n {
                         if !zero_mask[i] && w[i] < cap {
-                            // strict
                             w[i] += w[i] * factor;
                         }
                     }
@@ -160,21 +138,7 @@ fn trim_once(
 // Public entry point
 // ---------------------------------------------------------------------------
 
-/// Iterative weight trimming on a 1-D weight array.
-///
-/// All thresholds must already be resolved to scalars by the caller
-/// (Python: `trim.py` / `types.py`). The engine receives flat primitives only.
-///
-/// # Arguments
-/// * `weights`      - Input float64 array, shape (n,). Must have no negatives.
-/// * `upper`        - Resolved upper cap, or None.
-/// * `lower`        - Resolved lower floor, or None.
-/// * `redistribute` - Redistribute trimmed mass to non-trimmed units.
-/// * `max_iter`     - Maximum iterations.
-/// * `tol`          - Convergence: fraction of active weights that changed.
-///
-/// # Returns
-/// `TrimOutput` holding the trimmed array and all diagnostics.
+/// Trims to caller-resolved bounds; converged once at most `tol` of nonzero weights change.
 pub fn trim_impl(
     weights: ArrayView1<f64>,
     upper: Option<f64>,
@@ -183,12 +147,9 @@ pub fn trim_impl(
     max_iter: usize,
     tol: f64,
 ) -> Result<TrimOutput> {
-    // Collect into owned Vec once — avoids repeated bounds checks in hot paths
-    // and ensures we own the data regardless of input memory layout.
     let raw: Vec<f64> = weights.iter().copied().collect();
 
-    // Guard: caller should have caught negatives, but assert at boundary.
-    // NaN would otherwise pass every comparison below and silently propagate.
+    // NaN would pass every comparison below and silently propagate.
     for &w in &raw {
         if w < 0.0 {
             return Err(WeightingError::InvalidInput(
@@ -202,15 +163,14 @@ pub fn trim_impl(
         }
     }
 
-    // Build zero mask once — zero units are never touched
+    // Zero weights are never trimmed nor given redistributed mass.
     let zero_mask: Vec<bool> = raw.iter().map(|&w| w == 0.0).collect();
     let n_active = zero_mask.iter().filter(|&&z| !z).count();
 
-    // Pre-trim diagnostics
     let weight_sum_before: f64 = raw.iter().sum();
     let ess_before = ess(&raw);
 
-    // Degenerate threshold: return unchanged
+    // A cap <= 0 is degenerate, not an error: the weights come back unchanged.
     if let Some(cap) = upper
         && cap <= 0.0
     {
@@ -239,7 +199,6 @@ pub fn trim_impl(
         )));
     }
 
-    // Working copy — single allocation (raw consumed here)
     let mut w: Vec<f64> = raw;
 
     let mut n_upper_total: usize = 0;
@@ -254,7 +213,6 @@ pub fn trim_impl(
         n_upper_total += n_up;
         n_lower_total += n_lo;
 
-        // Convergence: fraction of active weights that changed
         let frac = if n_active > 0 {
             n_changed as f64 / n_active as f64
         } else {
@@ -287,26 +245,7 @@ pub fn trim_impl(
 // Matrix entry point (replicate weights)
 // ---------------------------------------------------------------------------
 
-/// Trim a weight matrix column-by-column using pre-resolved scalar thresholds.
-///
-/// Designed for replicate weight trimming. Thresholds are fixed scalars derived
-/// from the main weight distribution by the Python caller — replicates all use
-/// the same cutoffs so variance estimates reflect weighting variability only,
-/// not threshold variability.
-///
-/// No diagnostics are returned: audit stats (ESS, n_trimmed, …) are only
-/// meaningful for the main weight and are computed by `trim_impl` / `trim_weights`.
-///
-/// # Arguments
-/// * `weights`      - Input matrix, shape (n, n_reps). No negative values.
-/// * `upper`        - Pre-resolved upper cap, or None.
-/// * `lower`        - Pre-resolved lower floor, or None.
-/// * `redistribute` - Redistribute trimmed mass within each column.
-/// * `max_iter`     - Maximum iterations per column.
-/// * `tol`          - Convergence tolerance per column.
-///
-/// # Returns
-/// Trimmed weight matrix, same shape as input.
+/// Trims each replicate with the full-sample cutoffs, so variance reflects weighting, not cutoffs.
 pub fn trim_matrix_impl(
     weights: ArrayView2<f64>,
     upper: Option<f64>,
@@ -320,7 +259,6 @@ pub fn trim_matrix_impl(
 
     for col in 0..n_cols {
         let col_view = weights.column(col);
-        // trim_impl owns its input — cheap copy of one weight column
         let result = trim_impl(col_view, upper, lower, redistribute, max_iter, tol)?;
         out.column_mut(col).assign(&result.weights);
     }
@@ -365,7 +303,6 @@ mod tests {
         let out = trim(&w, Some(50.0), None, true);
         assert_eq!(out.weights[3], 50.0);
         assert_relative_eq!(out.weight_sum_after, out.weight_sum_before, epsilon = 1e-9);
-        // Excess redistributed to first 3
         assert!(out.weights[0] > 10.0);
     }
 
@@ -460,7 +397,7 @@ mod tests {
         let w = [10.0; 10]; // IQR=0 → upper resolves to 0 in Python
         let out = trim_impl(
             ndarray::ArrayView1::from(&w[..]),
-            Some(0.0), // degenerate
+            Some(0.0),
             None,
             false,
             10,
@@ -521,7 +458,7 @@ mod tests {
             Some(2.0),
             None,
             true,
-            1,     // force 1 iteration
+            1,
             1e-20, // impossible tolerance
         )
         .unwrap();

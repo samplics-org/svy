@@ -9,8 +9,7 @@ pyo3::create_exception!(
     pyo3::exceptions::PyRuntimeError
 );
 
-/// An area error the wrappers raise as a coded exception. Codes reuse `svy.errors.Code`
-/// names where one fits, so Python branches on `e.code`, never on the message.
+/// Error raised with a `code` (a `svy.errors.Code` name where one fits) for Python to branch on.
 pub(crate) trait Coded: std::fmt::Display {
     fn code(&self) -> &'static str;
     /// Input the caller should not have sent (`ValueError`), not a numerical failure.

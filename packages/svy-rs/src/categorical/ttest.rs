@@ -1,20 +1,6 @@
-// src/categorical/ttest.rs
-//
-// Design-based t-tests for complex survey data.
-//
-// Two-sample test aligned with R survey::svyttest:
-//   R uses svyglm(y ~ group, design, family=gaussian()),
-//   which is equivalent to weighted OLS + sandwich variance.
-//
-// One-sample test uses the existing taylor_mean infrastructure
-// (scores_mean + taylor_variance), since R's svyttest for one-sample
-// just calls svymean.
-//
-// For two-sample:
-//   1. Fit weighted OLS: y ~ group_indicator
-//   2. Compute influence functions
-//   3. Design-based SE via taylor_variance on influence functions
-//   4. t = coef[1] / SE[1], df = degf(design) - 1
+//! Design-based one- and two-sample t-tests, matching R's `svyttest`.
+//!
+//! - One sample is R's svymean; two samples is svyglm(y ~ group), i.e. weighted OLS plus a sandwich.
 
 use crate::categorical::error::CResult;
 use polars::prelude::*;
@@ -34,19 +20,15 @@ use crate::regression::wols::{fit_wols, influence_se};
 /// Result for a one-sample t-test.
 #[allow(dead_code)]
 pub struct TTestOneResult {
-    /// Estimated mean
     pub estimate: f64,
-    /// Design-based SE of the mean
     pub se: f64,
-    /// Difference: estimate - null_value
+    /// estimate - null_value
     pub diff: f64,
-    /// SE of the difference (same as se for one-sample)
+    /// Equals `se` for one sample.
     pub se_diff: f64,
-    /// t-statistic: diff / se_diff
     pub t_stat: f64,
-    /// Degrees of freedom: degf(design) - 1
+    /// degf(design) - 1
     pub df: f64,
-    /// p-value
     pub p_value: f64,
     /// Records in the domain with a nonzero weight and a non-missing y
     pub n_obs: usize,
@@ -55,23 +37,16 @@ pub struct TTestOneResult {
 /// Result for a two-sample t-test.
 #[allow(dead_code)]
 pub struct TTestTwoResult {
-    /// Difference in means (group1 - group0)
+    /// group1 - group0
     pub diff: f64,
-    /// Design-based SE of the difference
     pub se_diff: f64,
-    /// t-statistic: diff / se_diff
     pub t_stat: f64,
-    /// Degrees of freedom: degf(design) - 1
+    /// degf(design) - 1
     pub df: f64,
-    /// p-value
     pub p_value: f64,
-    /// Group labels
     pub levels: Vec<String>,
-    /// Per-group estimates [mean0, mean1]
     pub group_means: Vec<f64>,
-    /// Per-group SEs [se0, se1]
     pub group_ses: Vec<f64>,
-    /// Per-group record counts [n0, n1]
     pub group_ns: Vec<usize>,
     /// Records in either group
     pub n_obs: usize,
@@ -97,12 +72,7 @@ fn count_active(y: &Float64Chunked, w: &Float64Chunked, domain: Option<&BooleanC
 // One-sample t-test
 // ============================================================================
 
-/// One-sample design-based t-test.
-///
-/// Matches R's svyttest(y ~ 0, design) or svyttest(y ~ 1, design):
-///   tt <- svymean(~y, design)
-///   t = coef(tt) / SE(tt)
-///   df = degf(design) - 1
+/// One-sample t-test: R's svyttest(y ~ 1), i.e. svymean with df = degf(design) - 1.
 #[allow(clippy::too_many_arguments)]
 pub fn ttest_one_sample(
     y: &Float64Chunked,
@@ -118,7 +88,6 @@ pub fn ttest_one_sample(
 ) -> CResult<TTestOneResult> {
     let n = count_active(y, weights, None);
 
-    // Estimate mean using existing infrastructure
     let estimate = point_estimate_mean(y, weights)?;
     let scores = sweep_scores(&scores_mean(y, weights)?, calib);
     let active = singleton_domain_rows(
@@ -140,11 +109,9 @@ pub fn ttest_one_sample(
     )?;
     let se = variance.max(0.0).sqrt();
 
-    // df = degf(design) - 1
     let design_df = degrees_of_freedom(weights, strata, psu)? as f64;
     let df = (design_df - 1.0).max(1.0);
 
-    // Test
     let diff = estimate - null_value;
     let t_stat = if se > 0.0 { diff / se } else { f64::NAN };
     let p_value = crate::categorical::ranktest::two_sided_t_pvalue(t_stat, df);
@@ -176,7 +143,6 @@ pub fn ttest_one_sample_domain(
     calib: Option<&CalibSweep>,
     null_value: f64,
 ) -> CResult<TTestOneResult> {
-    // Domain-aware mean estimation
     let estimate = point_estimate_mean_domain(y, weights, domain_mask)?;
     let scores = sweep_scores(&scores_mean_domain(y, weights, domain_mask)?, calib);
     let active = singleton_domain_rows(
@@ -198,7 +164,7 @@ pub fn ttest_one_sample_domain(
     )?;
     let se = variance.max(0.0).sqrt();
 
-    // df from FULL design (not domain subset)
+    // df from the full design, not the domain subset.
     let design_df = degrees_of_freedom(weights, strata, psu)? as f64;
     let df = (design_df - 1.0).max(1.0);
 
@@ -224,16 +190,7 @@ pub fn ttest_one_sample_domain(
 // Two-sample t-test
 // ============================================================================
 
-/// Two-sample design-based t-test.
-///
-/// Matches R's svyttest(y ~ group, design):
-///   m <- svyglm(y ~ group, design, family=gaussian())
-///   t = coef(m)[2] / SE(m)[2]
-///   df = m$df.resid
-///
-/// We implement this via weighted OLS + influence functions + taylor_variance,
-/// which is mathematically identical to the sandwich variance from svyglm
-/// for Gaussian identity-link models.
+/// Two-sample t-test: R's svyttest(y ~ group), whose gaussian svyglm sandwich equals weighted OLS + Taylor.
 #[allow(clippy::too_many_arguments)]
 pub fn ttest_two_sample(
     y: &[f64],
@@ -252,7 +209,6 @@ pub fn ttest_two_sample(
     // The domain's rows for the singleton rules, whatever their weight.
     rows: &[bool],
 ) -> CResult<TTestTwoResult> {
-    // Build design matrix: [intercept, group_indicator]
     let k = 2;
     let mut xmat = vec![0.0; n * k];
     for i in 0..n {
@@ -260,10 +216,8 @@ pub fn ttest_two_sample(
         xmat[i * k + 1] = g[i] as f64;
     }
 
-    // Fit weighted OLS
     let wols = fit_wols(y, &xmat, w, n, k)?;
 
-    // Design-based SE via influence functions
     let active = singleton_rows(singleton_method, calib.is_some(), strata.is_some(), rows)?;
     let ses = influence_se(
         &wols.influence,
@@ -280,7 +234,6 @@ pub fn ttest_two_sample(
         active.as_deref(),
     )?;
 
-    // coef[1] = difference in means, SE[1] = design-based SE
     let diff = wols.beta[1] - null_value;
     let se_diff = ses[1];
     let t_stat = if se_diff > 0.0 {
@@ -289,20 +242,17 @@ pub fn ttest_two_sample(
         f64::NAN
     };
 
-    // Build chunked arrays once — reused for degrees_of_freedom and per-group SE
     let y_chunked = Float64Chunked::from_slice("y".into(), y);
     let weights_chunked = Float64Chunked::from_slice("w".into(), w);
 
-    // df = degf(design) - 1 (matches R's m$df.resid for svyglm)
+    // degf(design) - 1 is R's m$df.resid.
     let design_df = degrees_of_freedom(&weights_chunked, strata, psu)? as f64;
     let df = (design_df - 1.0).max(1.0);
 
     let p_value = crate::categorical::ranktest::two_sided_t_pvalue(t_stat, df);
 
-    // Per-group means: beta[0] = mean of group 0, beta[0] + beta[1] = mean of group 1
     let group_means = vec![wols.beta[0], wols.beta[0] + wols.beta[1]];
 
-    // Per-group SEs — pass pre-built chunked arrays to avoid cloning
     let group_ses = compute_per_group_ses(
         &y_chunked,
         g,
@@ -339,8 +289,7 @@ pub fn ttest_two_sample(
     })
 }
 
-/// Compute per-group SEs using domain estimation.
-/// Accepts pre-built Float64Chunked to avoid cloning y and w on every call.
+/// Per-group SEs by domain estimation.
 #[allow(clippy::too_many_arguments)]
 fn compute_per_group_ses(
     y_chunked: &Float64Chunked,
@@ -389,9 +338,7 @@ fn compute_per_group_ses(
 // Replication variance
 // ============================================================================
 
-/// One-sample t-test with a replication variance (R's svyttest on a
-/// svyrep.design: svymean re-estimated with every replicate). `domain` is the
-/// domain's rows; df = replicate df - 1.
+/// One-sample t-test on a replicate design (R's svyttest on svyrep.design); df = replicate df - 1.
 pub fn ttest_one_sample_rep(
     y: &Float64Chunked,
     weights: &Float64Chunked,
@@ -429,9 +376,7 @@ pub fn ttest_one_sample_rep(
     })
 }
 
-/// Two-sample t-test with a replication variance (R's svyttest on a
-/// svyrep.design, whose svrepglm slope is the difference of the two domain
-/// means, re-estimated with every replicate). df = replicate df - 1.
+/// Two-sample t-test on a replicate design: R's svrepglm slope per replicate; df = replicate df - 1.
 pub fn ttest_two_sample_rep(
     y: &[f64],
     g: &[u32],

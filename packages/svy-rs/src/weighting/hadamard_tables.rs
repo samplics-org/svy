@@ -1,11 +1,9 @@
-// Hardcoded Hadamard matrices for sizes not constructible by Sylvester
-// Source: Sloane's Library of Hadamard Matrices (http://neilsloane.com/hadamard/)
-// and Wolter, K. M. (1985), Introduction to Variance Estimation, Appendix A
+//! Hardcoded Hadamard matrices for orders Sylvester's construction cannot build.
+//! Source: Sloane's library (http://neilsloane.com/hadamard/) and Wolter (1985), Appendix A.
 
 use ndarray::{Array2, array};
 
-/// Get a hardcoded Hadamard matrix for the given size
-/// Returns None if no hardcoded matrix is available for this size
+/// The hardcoded Hadamard matrix of order `n`, or `None` when the table has none.
 pub fn get_hardcoded_hadamard(n: usize) -> Option<Array2<f64>> {
     match n {
         36 => Some(

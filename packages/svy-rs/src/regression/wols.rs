@@ -1,19 +1,6 @@
-// src/regression/wols.rs
-//
-// Weighted Ordinary Least Squares with influence function computation.
-//
-// This provides a closed-form WLS solver (no iteration) for Gaussian
-// identity-link models. Used by ttest and ranktest engines which need:
-//   1. Regression coefficients: beta = (X'WX)^{-1} X'Wy
-//   2. Influence functions: h_i = (x_i * e_i) * (X'WX)^{-1}
-//      where e_i = y_i - x_i'beta (residuals)
-//   3. Design-based variance via taylor_variance on influence functions
-//
-// Matches R's pattern:
-//   m <- lm(y ~ g, weights = w)
-//   infn <- (model.matrix(m) * residuals(m)) %*% summary(m)$cov.unscaled
-//   tot.infn <- svytotal(infn, design)
-//   SE(tot.infn)  # design-based SE for each coefficient
+//! Closed-form weighted least squares with influence functions, for the t-tests and rank tests.
+//!
+//! - Matches R: `infn <- (model.matrix(m) * residuals(m)) %*% summary(m)$cov.unscaled`, then `svytotal(infn, design)`.
 
 use crate::regression::error::{RResult, RegressionError};
 use polars::prelude::*;
@@ -31,20 +18,14 @@ use crate::estimation::taylor::{
 /// Result of a weighted OLS fit with influence functions.
 #[allow(dead_code)]
 pub struct WolsResult {
-    /// Regression coefficients, length k
     pub beta: Vec<f64>,
-    /// Fitted values, length n
     pub fitted: Vec<f64>,
-    /// Residuals (y - fitted), length n
     pub residuals: Vec<f64>,
-    /// (X'WX)^{-1}, the unscaled covariance, k x k flattened row-major
+    /// (X'WX)^{-1}, row-major k x k
     pub cov_unscaled: Vec<f64>,
-    /// Influence functions, n x k flattened row-major
-    /// infn[i * k + j] = influence of obs i on coefficient j
+    /// Row-major n x k: influence of obs i on coefficient j at i * k + j
     pub influence: Vec<f64>,
-    /// Number of observations
     pub n: usize,
-    /// Number of parameters
     pub k: usize,
 }
 
@@ -52,19 +33,15 @@ pub struct WolsResult {
 // Matrix helpers (lightweight, no external dep needed for small k)
 // ============================================================================
 
-/// Solve A x = b for small symmetric positive definite A (k x k).
-/// Uses Cholesky with LU fallback. A is k x k row-major, b is k x 1.
+/// Solve A x = b for a small row-major SPD A by Cholesky, falling back to LU.
 pub fn solve_kxk(a: &[f64], b: &[f64], k: usize) -> Option<Vec<f64>> {
-    // Try Cholesky first
     if let Some(x) = solve_cholesky(a, b, k) {
         return Some(x);
     }
-    // LU fallback via Gaussian elimination with partial pivoting
     solve_gauss(a, b, k)
 }
 
 fn solve_cholesky(a: &[f64], b: &[f64], k: usize) -> Option<Vec<f64>> {
-    // Cholesky decomposition: A = L L'
     let mut l = vec![0.0; k * k];
     for i in 0..k {
         for j in 0..=i {
@@ -88,7 +65,6 @@ fn solve_cholesky(a: &[f64], b: &[f64], k: usize) -> Option<Vec<f64>> {
         }
     }
 
-    // Forward substitution: L y = b
     let mut y = vec![0.0; k];
     for i in 0..k {
         let mut sum = 0.0;
@@ -98,12 +74,11 @@ fn solve_cholesky(a: &[f64], b: &[f64], k: usize) -> Option<Vec<f64>> {
         y[i] = (b[i] - sum) / l[i * k + i];
     }
 
-    // Back substitution: L' x = y
     let mut x = vec![0.0; k];
     for i in (0..k).rev() {
         let mut sum = 0.0;
         for j in (i + 1)..k {
-            sum += l[j * k + i] * x[j]; // L' element is l[j][i]
+            sum += l[j * k + i] * x[j]; // L'[i][j] = l[j][i]
         }
         x[i] = (y[i] - sum) / l[i * k + i];
     }
@@ -112,7 +87,6 @@ fn solve_cholesky(a: &[f64], b: &[f64], k: usize) -> Option<Vec<f64>> {
 }
 
 fn solve_gauss(a: &[f64], b: &[f64], k: usize) -> Option<Vec<f64>> {
-    // Augmented matrix [A | b]
     let mut aug = vec![0.0; k * (k + 1)];
     for i in 0..k {
         for j in 0..k {
@@ -121,9 +95,7 @@ fn solve_gauss(a: &[f64], b: &[f64], k: usize) -> Option<Vec<f64>> {
         aug[i * (k + 1) + k] = b[i];
     }
 
-    // Forward elimination with partial pivoting
     for col in 0..k {
-        // Find pivot
         let mut max_row = col;
         let mut max_val = aug[col * (k + 1) + col].abs();
         for row in (col + 1)..k {
@@ -137,14 +109,12 @@ fn solve_gauss(a: &[f64], b: &[f64], k: usize) -> Option<Vec<f64>> {
             return None; // Singular
         }
 
-        // Swap rows
         if max_row != col {
             for j in 0..=(k) {
                 aug.swap(col * (k + 1) + j, max_row * (k + 1) + j);
             }
         }
 
-        // Eliminate
         let pivot = aug[col * (k + 1) + col];
         for row in (col + 1)..k {
             let factor = aug[row * (k + 1) + col] / pivot;
@@ -154,7 +124,6 @@ fn solve_gauss(a: &[f64], b: &[f64], k: usize) -> Option<Vec<f64>> {
         }
     }
 
-    // Back substitution
     let mut x = vec![0.0; k];
     for i in (0..k).rev() {
         let mut sum = aug[i * (k + 1) + k];
@@ -167,7 +136,6 @@ fn solve_gauss(a: &[f64], b: &[f64], k: usize) -> Option<Vec<f64>> {
     Some(x)
 }
 
-/// Invert a k x k symmetric matrix. Returns None if singular.
 fn invert_kxk(a: &[f64], k: usize) -> Option<Vec<f64>> {
     let mut inv = vec![0.0; k * k];
     for j in 0..k {
@@ -185,20 +153,7 @@ fn invert_kxk(a: &[f64], k: usize) -> Option<Vec<f64>> {
 // Core WLS Fit
 // ============================================================================
 
-/// Fit weighted OLS: y ~ X with sampling weights w.
-///
-/// Computes:
-///   beta = (X'WX)^{-1} X'Wy
-///   residuals = y - X beta
-///   cov_unscaled = (X'WX)^{-1}    (R's summary(lm)$cov.unscaled)
-///   influence[i] = (x_i * resid_i) %*% cov_unscaled   (n x k)
-///
-/// # Arguments
-/// * `y` - Response vector, length n
-/// * `x` - Design matrix, n x k, row-major
-/// * `w` - Sampling weights, length n (must be positive)
-/// * `n` - Number of observations
-/// * `k` - Number of predictors (columns of X)
+/// Weighted OLS of `y` on row-major n x k `x`, with influence `(x_i * resid_i) %*% (X'WX)^{-1}`.
 pub fn fit_wols(y: &[f64], x: &[f64], w: &[f64], n: usize, k: usize) -> RResult<WolsResult> {
     if n == 0 || k == 0 {
         return Err(RegressionError::WolsEmpty);
@@ -213,7 +168,6 @@ pub fn fit_wols(y: &[f64], x: &[f64], w: &[f64], n: usize, k: usize) -> RResult<
         }
     }
 
-    // Build X'WX (k x k) and X'Wy (k x 1)
     let mut xtwx = vec![0.0; k * k];
     let mut xtwy = vec![0.0; k];
 
@@ -237,10 +191,8 @@ pub fn fit_wols(y: &[f64], x: &[f64], w: &[f64], n: usize, k: usize) -> RResult<
         }
     }
 
-    // Solve for beta
     let beta = solve_kxk(&xtwx, &xtwy, k).ok_or(RegressionError::WolsSingular)?;
 
-    // Compute fitted values and residuals
     let mut fitted = vec![0.0; n];
     let mut residuals = vec![0.0; n];
     for i in 0..n {
@@ -252,11 +204,9 @@ pub fn fit_wols(y: &[f64], x: &[f64], w: &[f64], n: usize, k: usize) -> RResult<
         residuals[i] = y[i] - yhat;
     }
 
-    // cov_unscaled = (X'WX)^{-1}
     let cov_unscaled = invert_kxk(&xtwx, k).ok_or(RegressionError::WolsNotInvertible)?;
 
-    // Influence functions: infn[i, j] = sum_p (x[i,p] * resid[i]) * cov_unscaled[p, j]
-    // This matches R's: (xmat * (rankscore - fitted(m))) %*% summary(m)$cov.unscaled
+    // R: (xmat * (rankscore - fitted(m))) %*% summary(m)$cov.unscaled
     let mut influence = vec![0.0; n * k];
     for i in 0..n {
         let ei = residuals[i];
@@ -284,18 +234,7 @@ pub fn fit_wols(y: &[f64], x: &[f64], w: &[f64], n: usize, k: usize) -> RResult<
 // Design-based variance of influence function totals
 // ============================================================================
 
-/// Compute design-based SE for each WLS coefficient using influence functions.
-///
-/// This is the equivalent of R's:
-///   tot.infn <- svytotal(infn, design)
-///   SE(tot.infn)
-///
-/// R's svytotal(x, design) computes total = sum(x_i * w_i) and its variance
-/// from scores z_i = x_i * w_i. So we must multiply influence functions by
-/// sampling weights before passing to taylor_variance.
-///
-/// # Returns
-/// Vector of length k: the design-based SE for each coefficient.
+/// Design SE per coefficient, R's `SE(svytotal(infn, design))`: hence the influence is scaled by w first.
 #[allow(clippy::too_many_arguments)]
 pub fn influence_se(
     influence: &[f64],
@@ -308,22 +247,13 @@ pub fn influence_se(
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
-    // Swept here, on the weight-scaled influence functions, because that is
-    // literally R's matrix: `svy.varcoef` calls
-    // `svyrecvar(estfun %*% Ainv, ..., postStrata=)`, and `influence * w` IS
-    // `estfun %*% Ainv`. Sweeping after the bread is not the compromise an
-    // earlier note here claimed -- every sweep branch is a left multiplication
-    // by an operator fixed by the weights, cells and aux alone, applied
-    // identically to each column, so it commutes with any right multiplication:
-    // S(E A) = (S E) A. Confirmed against survey 4.5 on apiclus1.
+    // Swept on `influence * w`, which is R svy.varcoef's `estfun %*% Ainv`; the sweep commutes with the bread.
     calib: Option<&CalibSweep>,
     active: Option<&[bool]>,
 ) -> RResult<Vec<f64>> {
     let mut ses = Vec::with_capacity(k);
 
     for j in 0..k {
-        // Extract column j of influence matrix, scaled by weights:
-        // score_i = infn_i * w_i  (matches R's svytotal internals)
         let mut col_vals: Vec<f64> = (0..n).map(|i| influence[i * k + j] * w[i]).collect();
         if let Some(c) = calib {
             c.apply(&mut col_vals);
@@ -347,13 +277,7 @@ pub fn influence_se(
     Ok(ses)
 }
 
-/// Compute the full k x k design-based covariance matrix of WLS coefficients.
-///
-/// This computes the variance-covariance using PSU totals of weight-scaled
-/// influence functions, matching R's svyrecvar applied to svytotal influence.
-///
-/// # Returns
-/// Flattened k x k covariance matrix (row-major).
+/// Row-major k x k design covariance of the coefficients: R's svyrecvar on the weight-scaled influence.
 #[allow(clippy::too_many_arguments)]
 pub fn influence_covariance(
     influence: &[f64],
@@ -363,18 +287,10 @@ pub fn influence_covariance(
     strata: Option<&Column>,
     psu: Option<&Column>,
     singleton_method: Option<&str>,
-    // Swept here, on the weight-scaled influence functions, because that is
-    // literally R's matrix: `svy.varcoef` calls
-    // `svyrecvar(estfun %*% Ainv, ..., postStrata=)`, and `influence * w` IS
-    // `estfun %*% Ainv`. Sweeping after the bread is not the compromise an
-    // earlier note here claimed -- every sweep branch is a left multiplication
-    // by an operator fixed by the weights, cells and aux alone, applied
-    // identically to each column, so it commutes with any right multiplication:
-    // S(E A) = (S E) A. Confirmed against survey 4.5 on apiclus1.
+    // Swept on `influence * w`, which is R svy.varcoef's `estfun %*% Ainv`; the sweep commutes with the bread.
     calib: Option<&CalibSweep>,
     active: Option<&[bool]>,
 ) -> RResult<Vec<f64>> {
-    // Weight-scaled influence: infn_i * w_i (matches R svytotal).
     let cols: Vec<Vec<f64>> = (0..k)
         .map(|j| {
             let mut col: Vec<f64> = (0..n).map(|i| influence[i * k + j] * w[i]).collect();

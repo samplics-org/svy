@@ -1,22 +1,8 @@
-// src/regression/glm.rs
-//
-// Survey-robust GLM via IRLS + sandwich variance
-// Goal: match R survey::svyglm (linearization/sandwich) numerically.
-//
-// Key alignment points:
-// - Normalize weights to sum(w)=n for conditioning (sandwich invariant to global scaling).
-// - Build bread from FINAL (converged) Fisher information (XtWX) at final eta/mu.
-// - Meat: PSU totals of per-row score contributions, centered within stratum, scaled m/(m-1).
-//
-// Domain estimation (by_col / where):
-// - Out-of-domain rows contribute 0 to both IRLS normal equations and sandwich meat.
-// - Strata/PSU enumeration uses the full design — domain only affects which rows
-//   contribute, not the m/(m-1) centering structure. This matches R's
-//   subset(design, ...) semantics and the estimation namespace's by_col pattern.
-//
-// NOTE: This implements the classic "bread %*% meat %*% bread" route.
+//! Survey GLM by IRLS with a bread-meat-bread sandwich, matching R `svyglm` numerically.
+//!
+//! - Bread from the converged Fisher information; meat from PSU score totals centred within stratum, scaled m/(m-1).
+//! - Out-of-domain rows contribute 0, but strata and PSUs are the full design's, as R's subset().
 
-// #![allow(non_upper_case_globals)]
 #![allow(non_snake_case)]
 
 use crate::regression::error::{RResult, RegressionError};
@@ -44,12 +30,7 @@ pub enum Family {
     Poisson,
     Gamma,
     InverseGaussian,
-    /// Negative binomial with a KNOWN dispersion: Var(mu) = mu + mu^2/theta.
-    ///
-    /// Estimating theta is the Python side's outer loop. It needs digamma and
-    /// trigamma, and this crate carries no math dependency; scipy is already a
-    /// dependency of `svy`, so the profile likelihood lives there and the
-    /// kernel only ever sees a fixed theta.
+    /// Negative binomial at a known theta, Var(mu) = mu + mu^2/theta; `negbin` estimates theta around it.
     NegativeBinomial(f64),
 }
 
@@ -83,13 +64,7 @@ impl Family {
         }
     }
 
-    /// R's `family$initialize` starting value, on the prior-weight scale.
-    ///
-    /// IRLS stops on a relative change in the deviance, so on a flat surface
-    /// where it starts decides where it stops: seeding binomial at
-    /// `(y + 1/2)/2` instead of R's `(w y + 1/2)/(w + 1)` left cloglog's
-    /// coefficients 3e-5 from R's on apistrat, with the deviances agreeing to
-    /// 14 digits.
+    /// R's `family$initialize`, on the prior-weight scale: on a flat surface IRLS stops where its start leads.
     fn initial_mu(&self, y: f64, w: f64) -> f64 {
         let eps = 1e-10;
         match self {
@@ -108,9 +83,7 @@ impl Family {
         }
     }
 
-    /// Unit deviance d(y, mu) — matches R's family$dev.resids (squared,
-    /// per-observation) so that sum_i w_i * d(y_i, mu_i) reproduces R's
-    /// glm/svyglm deviance on the same weight scale.
+    /// R's `family$dev.resids`, so sum_i w_i d(y_i, mu_i) is svyglm's deviance on the same weight scale.
     fn unit_deviance(&self, y: f64, mu: f64) -> f64 {
         match self {
             Family::Gaussian => (y - mu).powi(2),
@@ -151,12 +124,7 @@ const PROBIT_ETA_MAX: f64 = 8.125_890_664_701_904;
 /// -qcauchy(.Machine$double.eps): the eta bound R's cauchit linkinv applies.
 const CAUCHIT_ETA_MAX: f64 = 1.433_540_284_805_664_8e15;
 
-/// pcauchy: the standard Cauchy CDF.
-///
-/// `atan(x)/pi + 0.5` loses digits in the tails — at eta = -1000 the two terms
-/// cancel to three and a half digits, which showed up as ~1e-7 in the fitted
-/// coefficients against R. Outside [-1, 1] the tail is computed from
-/// `atan(1/x)`, which is what R's pcauchy does.
+/// Standard Cauchy CDF; outside [-1, 1] it uses `atan(1/x)` as R's pcauchy, since `atan(x)/pi + 0.5` cancels.
 fn cauchy_cdf(x: f64) -> f64 {
     use std::f64::consts::PI;
     if x > 1.0 {
@@ -181,14 +149,8 @@ pub enum Link {
     InverseSquared,
 }
 
-// Standard normal CDF/PDF backing the probit link.
-//
-// Phi(x) = erfc(-x/sqrt2)/2, always evaluated on the tail side so that a mu
-// near 0 or 1 keeps full relative precision — a cheap erf approximation is
-// visible directly in the fitted probit coefficients. erfc uses the
-// all-positive confluent series below 1 (no cancellation, ~19 terms) and a
-// modified-Lentz continued fraction above, where the series would cancel.
-// Agrees with R's pnorm to ~5e-15 relative across the range (see tests).
+// Phi(x) = erfc(-x/sqrt2)/2 on the tail side, so mu near 0 or 1 stays precise; ~5e-15 of R's pnorm.
+// erfc: the all-positive confluent series below 1, a modified-Lentz continued fraction above.
 
 const M_1_SQRT_2PI: f64 = 0.398_942_280_401_432_7;
 const SQRT_PI: f64 = 1.772_453_850_905_516;
@@ -267,9 +229,7 @@ impl Link {
             Link::Identity => mu,
             Link::Logit => (mu / (1.0 - mu)).ln(),
             Link::Probit => probit(mu),
-            // qcauchy: -1/tan(pi*mu) rather than tan(pi*(mu - 1/2)), which
-            // is catastrophic as mu approaches 0 or 1 (the argument
-            // approaches +/-pi/2). R's qcauchy takes the same cotangent form.
+            // As R's qcauchy: tan(pi*(mu - 1/2)) is catastrophic as mu nears 0 or 1.
             Link::Cauchit => -1.0 / (std::f64::consts::PI * mu).tan(),
             Link::Cloglog => (-((1.0 - mu).max(1e-10).ln())).max(1e-10).ln(),
             Link::Log => mu.max(1e-10).ln(),
@@ -291,9 +251,7 @@ impl Link {
                 }
             }
 
-            // Clamps mirror R's make.link("probit"/"cloglog"): eta is bounded at
-            // +/-qnorm(eps) and mu at [eps, 1-eps], so mu never reaches 0 or 1
-            // exactly and the binomial variance stays positive.
+            // R's make.link clamps (eta at +/-qnorm(eps), mu in [eps, 1-eps]) keep the binomial variance positive.
             Link::Probit => norm_cdf(eta.clamp(-PROBIT_ETA_MAX, PROBIT_ETA_MAX)),
             Link::Cauchit => {
                 let e = eta.clamp(-CAUCHIT_ETA_MAX, CAUCHIT_ETA_MAX);
@@ -310,8 +268,7 @@ impl Link {
         }
     }
 
-    /// d2μ/dη2 — only the negative binomial's joint (beta, theta) bread needs
-    /// it, and only for the links that family admits.
+    /// d2μ/dη2, for the negative binomial's joint bread, so only for that family's links.
     pub(crate) fn mu_eta2(&self, mu: f64, eta: f64) -> f64 {
         match self {
             Link::Identity => 0.0,
@@ -385,10 +342,7 @@ impl Kahan {
 // Helpers
 // ============================================================================
 
-/// Materialise columns into one column-major `nrows * ncols` buffer.
-///
-/// Nulls are rejected upstream in `fit_glm_domain`, so each chunk's value
-/// slice is dense and copies wholesale.
+/// Column-major `nrows * ncols` copy; `fit_glm_domain` rejects nulls, so each chunk copies wholesale.
 pub(crate) fn cols_to_vec(cols: &[&Float64Chunked], nrows: usize) -> RResult<Vec<f64>> {
     let mut out = vec![0.0; nrows * cols.len()];
     for (j, col) in cols.iter().enumerate() {
@@ -443,13 +397,7 @@ pub(crate) fn check_lengths(
     Ok(())
 }
 
-/// Dense 0-based design codes for `strata` (and, when given, PSUs nested
-/// within them), reusing the estimation namespace's factorizers: the Python
-/// layer already hands the kernel integer code columns, and hashing those is
-/// ~10x cheaper than casting to String and hashing `(&str, &str)` per row.
-///
-/// Nulls arrive as `u32::MAX`; they are collected into one extra level so the
-/// code can index a `Vec` directly.
+/// Dense 0-based codes for `strata` and nested PSUs; nulls (`u32::MAX`) become one extra level.
 pub(crate) fn design_codes(
     strata: Option<&Series>,
     psu: Option<&Series>,
@@ -482,23 +430,13 @@ pub(crate) fn design_codes(
     Ok((out, total))
 }
 
-/// Rows per cache block in the cross-product accumulations. The X block of a
-/// 256-row window is k*2 KB, which stays in L1/L2 for every realistic k.
+/// Rows per cache block: a 256-row X block is k*2 KB, within L1/L2 for any realistic k.
 const XP_BLOCK: usize = 256;
 
-/// Rows per parallel chunk. Fixed rather than derived from the thread count,
-/// so the summation order — and therefore the result — is identical on every
-/// machine and at every core count.
+/// Rows per parallel chunk, fixed so the summation order, hence the result, is the same at any core count.
 const XP_CHUNK: usize = 8192;
 
-/// `out[a*k + b] += sum_i w[i] * cols[a*n + i] * cols[b*n + i]`, upper
-/// triangle only, over the rows `[0, n)` of a column-major `cols`.
-///
-/// Columns-outer with the row block innermost: the inner loop is a contiguous
-/// dot product the compiler can vectorize, and `w * cols[a]` is formed once
-/// per (block, a) instead of once per (block, a, b). Blocks are summed in
-/// index order within a chunk and chunks in index order, so the result does
-/// not depend on how rayon schedules them.
+/// Upper triangle of `out[a*k + b] += sum_i w[i] cols[a*n + i] cols[b*n + i]`, in an order rayon cannot change.
 fn accumulate_weighted_crossprod(cols: &[f64], w: &[f64], n: usize, k: usize, out: &mut [f64]) {
     let chunk_of = |lo: usize, hi: usize| -> Vec<f64> {
         let mut acc = vec![0.0f64; k * k];
@@ -548,16 +486,9 @@ fn accumulate_weighted_crossprod(cols: &[f64], w: &[f64], n: usize, k: usize, ou
     }
 }
 
-/// Build XtWX and XtWz from the current eta/mu (one IRLS step), mirroring
-/// fisherinf: t(D) %*% (w * D / V), D = X * d, d = dmu/deta.
+/// One IRLS step's XtWX and XtWz, as R's fisherinf: t(D) %*% (w * D / V), D = X * dmu/deta.
 ///
-/// When `domain_mask` is `Some`, rows where mask[i] is false contribute 0 to
-/// both XtWX and XtWz (and have `w_irls[i]` set to 0). When `None`, every row
-/// contributes.
-///
-/// Summation is plain blocked f64, as R's `crossprod` is; Kahan compensation
-/// bought ~1e-16 on a quantity the sandwich is insensitive to and cost the
-/// vectorization of the whole accumulation.
+/// Plain blocked sums as R's `crossprod`: Kahan bought ~1e-16 and cost the vectorization.
 #[allow(clippy::too_many_arguments)]
 fn build_irls_normal_eqs(
     family: Family,
@@ -576,7 +507,6 @@ fn build_irls_normal_eqs(
     XtWX: &mut Mat<f64>,
     XtWz: &mut Mat<f64>,
 ) {
-    // Pass 1 — per-row IRLS weight and working response. O(n), no k factor.
     for i in 0..n {
         let in_domain = domain_mask.is_none_or(|m| m[i]);
         let w_i = w_samp[i];
@@ -588,18 +518,15 @@ fn build_irls_normal_eqs(
 
         let mu_i = mu[i];
         let v = family.variance(mu_i).max(1e-12);
-        let d = link.mu_eta(mu_i, eta[i]); // dμ/dη
+        let d = link.mu_eta(mu_i, eta[i]);
         let wi = w_i * (d * d) / v;
 
         let safe_d = if d.abs() < 1e-12 { 1e-12 } else { d };
-        // Working response on the X-only scale: the offset is a known part of
-        // eta with no parameter, so it comes out here and goes back in wherever
-        // eta is rebuilt (R's glm.fit: z <- (eta - offset) + (y - mu)/mu.eta).
+        // The offset leaves z and returns wherever eta is rebuilt: R's z <- (eta - offset) + (y - mu)/mu.eta.
         z[i] = (eta[i] - offset[i]) + (y_vals[i] - mu_i) / safe_d;
         w_irls[i] = if wi < 1e-18 { 0.0 } else { wi };
     }
 
-    // Pass 2 — XtWX (blocked, columns-outer) and XtWz.
     let mut acc_wx = vec![0.0f64; k * k];
     accumulate_weighted_crossprod(x, w_irls, n, k, &mut acc_wx);
 
@@ -628,13 +555,12 @@ fn build_irls_normal_eqs(
     }
 }
 
-/// Solve A x = b with deterministic fallback chain.
+/// Solve A x = b by Cholesky, then LBLT, LU and an SVD pseudoinverse.
 fn solve_linear_system(A: MatRef<'_, f64>, b: MatRef<'_, f64>) -> Mat<f64> {
     if let Ok(chol) = A.llt(Side::Lower) {
         return chol.solve(b);
     }
 
-    // Symmetric indefinite
     let lblt = A.lblt(Side::Lower);
     let x = lblt.solve(b);
     let mut ok = true;
@@ -648,15 +574,11 @@ fn solve_linear_system(A: MatRef<'_, f64>, b: MatRef<'_, f64>) -> Mat<f64> {
         return x;
     }
 
-    // LU fallback
     let lu = A.partial_piv_lu();
     let x2 = lu.solve(b);
     for i in 0..x2.nrows() {
         if !x2[(i, 0)].is_finite() {
-            // Last resort: SVD pseudoinverse. If even the SVD fails to
-            // converge (degenerate system, e.g. a constant response in a
-            // complement domain), return the non-finite LU solution — the
-            // caller surfaces it as a fit error instead of a panic.
+            // If even the SVD fails (e.g. a constant response), the non-finite LU solution becomes a fit error, not a panic.
             return match A.thin_svd() {
                 Ok(svd) => svd.pseudoinverse() * b,
                 Err(_) => x2,
@@ -666,10 +588,7 @@ fn solve_linear_system(A: MatRef<'_, f64>, b: MatRef<'_, f64>) -> Mat<f64> {
     x2
 }
 
-/// Per-stratum `(1 - f_h) * m/(m-1)`, zero where the stratum cannot contribute
-/// (a single PSU), which is how those rows are kept out of the accumulation.
-///
-/// Returns `(scale_h, psus_h)`.
+/// Per-stratum `(1 - f_h) m/(m-1)` and PSU counts; a single-PSU stratum gets 0, which keeps its rows out.
 pub(crate) fn stratum_scales(
     strata_obs: &[Vec<usize>],
     psu_idx: Option<&[usize]>,
@@ -719,19 +638,9 @@ pub(crate) fn stratum_scales(
     (scale_h, psus_h)
 }
 
-/// Singleton handling on a finished `p * p` meat, R's `lonely.psu = "adjust"`
-/// and `"average"`: each singleton stratum the domain reaches adds its PSU
-/// total centred at the grand mean (scaled by its FPC factor alone), or the
-/// meat is scaled by `nstrat/nokstrat`. As in `taylor::center_scope`, only the
-/// strata holding `active` rows count (all of them when `active` is `None`).
+/// R's `lonely.psu` "adjust"/"average" on a finished `p * p` meat, over the strata holding `active` rows.
 ///
-/// With `domain_rule`, a stratum with several PSUs but one holding domain rows
-/// is re-centred at the grand mean (`center`), or taken out and counted with
-/// the singletons. Its standard term is already in the meat: centring at the
-/// grand mean instead of the stratum mean adds `scale_h m (T̄_h - Ḡ)(T̄_h - Ḡ)'`.
-///
-/// `col_at(i, j)` is row `i`'s already-weighted value in column `j`; `psu_idx`
-/// is `None` when every row is its own PSU.
+/// `domain_rule` "center" re-centres a stratum whose domain rows sit in one PSU, adding `scale_h m (T̄_h - Ḡ)(T̄_h - Ḡ)'`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn singleton_meat(
     meat: &mut [f64],
@@ -856,15 +765,7 @@ pub(crate) fn singleton_meat(
     }
 }
 
-/// Design-based variance-covariance of the totals of `p` already-weighted
-/// columns — R survey's `svyrecvar`.
-///
-/// `cols` is column-major, `n * p`. PSU totals are centred within stratum and
-/// scaled by `stratum_scales`. Returns the full symmetric `p * p` matrix,
-/// row-major.
-///
-/// The caller passes influence functions, not raw variables: the weights are
-/// already folded into the columns.
+/// R's `svyrecvar`: row-major `p * p` covariance of the totals of column-major, already-weighted `n * p` columns.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn design_vcov_of_totals(
     cols: &[f64],
@@ -1002,21 +903,12 @@ pub(crate) fn design_vcov_of_totals(
     out
 }
 
-/// Refuse an aliased design matrix.
-///
-/// A pivot-free Cholesky of XtWX in the model's own column order: column j is
-/// aliased when the variance it still has after projecting out the columns
-/// before it is a vanishing fraction of its own. That is R's "first columns
-/// win" rule, but raising instead of reporting NA coefficients — consistent
-/// with the rest of svy, and better than today's alternative, a fit that
-/// "succeeds" with SE 0 or NaN and an F statistic around 1e30.
+/// Raise on aliased columns by R's "first columns win" pivot-free Cholesky, rather than reporting NA coefficients.
 fn check_rank(XtWX: &Mat<f64>, k: usize, cols: &[Series]) -> RResult<()> {
-    // An exactly aliased column leaves ~1e-16 of its own norm; a genuinely
-    // collinear-but-distinct one (R^2 = 0.999999) leaves 1e-6. This separates
-    // them by five orders of magnitude either way.
+    // An aliased column leaves ~1e-16 of its norm, one at R^2 = 0.999999 leaves 1e-6: five orders either side.
     const ALIAS_TOL: f64 = 1e-11;
 
-    let mut l = vec![0.0f64; k * k]; // column-major lower factor
+    let mut l = vec![0.0f64; k * k]; // column-major
     let mut aliased: Vec<usize> = Vec::new();
 
     for j in 0..k {
@@ -1027,8 +919,7 @@ fn check_rank(XtWX: &Mat<f64>, k: usize, cols: &[Series]) -> RResult<()> {
         // Negated so a NaN diagonal is aliased rather than accepted.
         #[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN takes this branch on purpose
         if !(d > ALIAS_TOL * XtWX[(j, j)]) {
-            // Its factor column stays zero, so the columns after it are
-            // measured against the ones that were actually kept.
+            // A zero factor column measures later columns against the kept ones only.
             aliased.push(j);
             continue;
         }
@@ -1054,10 +945,7 @@ fn check_rank(XtWX: &Mat<f64>, k: usize, cols: &[Series]) -> RResult<()> {
     Err(RegressionError::RankDeficient(listed.join(", ")))
 }
 
-/// Compute A^{-1} via solving A X = I with same solve strategy.
-///
-/// Returns an error rather than panicking when even the SVD fails: a single
-/// non-finite entry in the information matrix used to reach `thin_svd().unwrap()`.
+/// A^{-1} by the `solve_linear_system` chain; an error, not a panic, when even the SVD fails.
 pub(crate) fn invert_matrix(A: MatRef<'_, f64>, k: usize) -> RResult<Mat<f64>> {
     if let Ok(chol) = A.llt(Side::Lower) {
         let mut inv = Mat::<f64>::identity(k, k);
@@ -1069,7 +957,6 @@ pub(crate) fn invert_matrix(A: MatRef<'_, f64>, k: usize) -> RResult<Mat<f64>> {
     let mut inv = Mat::<f64>::identity(k, k);
     lblt.solve_in_place(inv.as_mut());
 
-    // sanity: if not finite, LU then SVD
     for r in 0..k {
         for c in 0..k {
             if !inv[(r, c)].is_finite() {
@@ -1103,9 +990,7 @@ pub(crate) fn invert_matrix(A: MatRef<'_, f64>, k: usize) -> RResult<Mat<f64>> {
 pub struct GlmResult {
     pub params: Vec<f64>,
     pub cov_params: Vec<f64>,
-    /// Model-based (inverse-information) covariance (X'WX)^-1 at the final
-    /// beta — R svyglm's naive.cov, used for the Rao-Scott/dAIC design
-    /// effects. Same weight scale as the fit (weights normalized to mean 1).
+    /// R svyglm's naive.cov, (X'WX)^-1 at the final beta, on the fit's mean-1 weight scale.
     pub naive_cov: Vec<f64>,
     pub scale: f64,
     pub df_resid: f64,
@@ -1115,12 +1000,10 @@ pub struct GlmResult {
     pub n_obs: usize,
     /// Whether IRLS met the tolerance rather than exhausting `max_iter`.
     pub converged: bool,
-    /// Negative binomial dispersion, and its design-based standard error when
-    /// it was estimated rather than supplied. `None` for every other family.
+    /// Negative binomial theta, with its SE when estimated rather than supplied.
     pub theta: Option<f64>,
     pub theta_se: Option<f64>,
-    /// Set when the fit pushed some rows to the edge of the response's range;
-    /// see `separation_check`.
+    /// Set when the fit pushed rows to the edge of the response's range.
     pub separation: Option<Separation>,
 }
 
@@ -1128,25 +1011,18 @@ pub struct GlmResult {
 pub struct Separation {
     /// Contributing rows whose fitted value the fit cannot tell from y.
     pub boundary_rows: usize,
-    /// `sum_i w_i x_i x_i'` over the other contributing rows, row-major k*k.
-    /// A coefficient outside the row space of this matrix is not identified.
+    /// Row-major `sum_i w_i x_i x_i'` over the other rows; a coefficient outside its row space is not identified.
     pub gram: Vec<f64>,
 }
 
-/// A row's share of the deviance below this many convergence tolerances is
-/// one the fit resolves as sitting on the boundary. IRLS stops once the
-/// separated rows' total share falls to about 1.6 * tol (logit and log; about
-/// 3 * tol for cauchit), while rows of an ordinary fit sit orders of
-/// magnitude above: 10 leaves margin on both sides.
+/// In tolerances: separated rows' deviance share stops near 1.6 (logit, log; ~3 cauchit), ordinary rows orders above.
 const SEPARATION_RESOLUTION: f64 = 10.0;
 
 // ============================================================================
 // Core Algorithm
 // ============================================================================
 
-/// Null deviance under an offset: the deviance of the intercept-only model
-/// eta_i = b + offset_i, found by one-parameter IRLS. Mirrors R's glm(), which
-/// refits `y ~ 1` carrying the offset rather than using the weighted mean.
+/// Null deviance under an offset: as R's glm(), refit `y ~ 1` with the offset rather than use the weighted mean.
 #[allow(clippy::too_many_arguments)]
 fn null_deviance_with_offset(
     family: Family,
@@ -1221,12 +1097,7 @@ fn null_deviance_with_offset(
     }
 }
 
-/// One fit, dispatching on the family.
-///
-/// Only the negative binomial has anything to do before IRLS: unless its
-/// dispersion was supplied it has to be estimated, and the variance then spans
-/// (beta, theta) rather than beta alone. Everything else goes straight to the
-/// IRLS solve.
+/// One fit; only an estimated negative binomial theta leaves the plain IRLS path.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn fit_one(
     y: &Series,
@@ -1286,10 +1157,7 @@ pub(crate) fn fit_one(
     )
 }
 
-/// Full-sample GLM fit (no domain restriction).
-///
-/// Equivalent to `fit_glm_domain(..., domain_mask=None)` with no singleton
-/// handling; the unit tests' entry point.
+/// Full-sample fit without singleton handling; the unit tests' entry point.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn fit_glm(
@@ -1326,12 +1194,7 @@ pub fn fit_glm(
     )
 }
 
-/// Single fit restricted to the rows where `mask` is true.
-///
-/// A `where=` clause is one domain, not a by-variable: routing it through
-/// `fit_glm_by` fitted the complement as well and threw it away, doubling the
-/// CPU (rayon only hid it) and turning a degenerate complement into a
-/// swallowed error.
+/// One `where=` domain fit; `fit_glm_by` would also fit the complement, and fail on a degenerate one.
 #[allow(clippy::too_many_arguments)]
 pub fn fit_glm_where(
     y: &Series,
@@ -1373,13 +1236,7 @@ pub fn fit_glm_where(
     )
 }
 
-/// Per-domain GLM fits over the levels of `by_col`.
-///
-/// Returns one (level, GlmResult) pair per unique level of by_col. The full
-/// design (strata, PSU) is preserved across all fits — only the rows
-/// contributing to the IRLS and the sandwich meat are restricted to the
-/// domain. This produces correct domain-estimation SEs matching R's
-/// `svyglm(..., design = subset(d, ...))`.
+/// One fit per level of `by_col` over the full design, as R's `svyglm(..., design = subset(d, ...))`.
 #[allow(clippy::too_many_arguments)]
 pub fn fit_glm_by(
     y: &Series,
@@ -1398,23 +1255,18 @@ pub fn fit_glm_by(
     calib: Option<&CalibSweep>,
     singleton: SingletonRule,
 ) -> RResult<Vec<(String, GlmResult)>> {
-    // Materialize by_col as strings, enumerate unique levels.
     let by_str_series = by_col.cast(&DataType::String)?;
     let by_str = by_str_series.str()?;
     let unique_groups = crate::estimation::sorted_groups(by_str)?;
 
-    // Domain fits are independent; fan them out over the rayon pool and collect
-    // in level order (deterministic, thread-count-independent — see the policy
-    // note in estimation/mod.rs). Each fit is a full, self-contained IRLS solve.
+    // Collected in level order, so the result does not depend on the thread count.
     let groups: Vec<&str> = unique_groups.iter().flatten().collect();
     let attempts: Vec<(String, RResult<GlmResult>)> = groups
         .par_iter()
         .map(|&group_val| {
             let mask_vec: Vec<bool> = by_str.iter().map(|v| v == Some(group_val)).collect();
 
-            // Clone the x_cols Vec for each domain fit. The Series themselves
-            // are cheap reference-counted handles in polars; the clone copies
-            // only the Vec, not the underlying data.
+            // Series are reference-counted: this copies only the Vec.
             let xs = x_cols.to_vec();
             let res = fit_one(
                 y,
@@ -1437,9 +1289,7 @@ pub fn fit_glm_by(
         })
         .collect();
 
-    // A level that fails to fit used to be dropped silently, so a caller
-    // asking for every level got a short list with no way to tell which one
-    // was missing or why.
+    // A failed level raises, naming the levels, rather than shortening the list unnoticed.
     let mut results = Vec::with_capacity(attempts.len());
     let mut failed: Vec<String> = Vec::new();
     let mut first_err: Option<RegressionError> = None;
@@ -1466,9 +1316,7 @@ pub fn fit_glm_by(
     Ok(results)
 }
 
-/// Coefficients (and separation) refitted under each replicate weight, in
-/// parallel. The negative binomial keeps its own fit; every other family skips
-/// the sandwich, which a replicate variance does not use.
+/// Parallel replicate refits of the coefficients and separation, skipping the unused sandwich except for negbin.
 #[allow(clippy::too_many_arguments)]
 pub fn fit_glm_reps(
     y: &Series,
@@ -1533,10 +1381,7 @@ pub fn fit_glm_reps(
         .collect()
 }
 
-/// Core GLM fit. When `domain_mask` is `None`, behavior is byte-identical to
-/// the original `fit_glm`. When `Some`, out-of-domain rows contribute 0 to
-/// both the IRLS loop and the sandwich meat, while the strata/PSU
-/// enumeration remains based on the full design.
+/// Core GLM fit: out-of-domain rows contribute 0 to IRLS and the meat, but strata and PSUs stay the full design's.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn fit_glm_domain(
     y: &Series,
@@ -1560,13 +1405,10 @@ pub(crate) fn fit_glm_domain(
     let link = Link::from_str(link_str)?;
     check_lengths(y, &x_cols, weights, [strata, psu, fpc, offset], domain_mask)?;
 
-    // 1) Data prep
     let n = y.len();
     let k = x_cols.len();
 
-    // Cast y/weights/x to Float64 (error, not panic, on incompatible dtypes),
-    // then reject nulls: a null anywhere would otherwise silently misalign
-    // the y/X/w rows via null-skipping iteration.
+    // Reject nulls: null-skipping iteration would silently misalign the y/X/w rows.
     let y_cast = y.cast(&DataType::Float64)?;
     let y_ca = y_cast.f64()?;
     let w_cast = weights.cast(&DataType::Float64)?;
@@ -1604,8 +1446,7 @@ pub(crate) fn fit_glm_domain(
     let y_vals = cols_to_vec(&[y_ca], n)?;
     let x = cols_to_vec(&x_ca_list, n)?;
 
-    // Known term on the link scale, coefficient fixed at 1. Absent -> all zero,
-    // which makes every offset expression below a no-op on the existing path.
+    // Known link-scale term with coefficient 1; all zero when absent.
     let offset_vals: Vec<f64> = match offset {
         Some(s) => {
             let cast = s.cast(&DataType::Float64)?;
@@ -1621,7 +1462,6 @@ pub(crate) fn fit_glm_domain(
         None => vec![0.0; n],
     };
 
-    // sampling weights
     let mut w_samp = vec![0.0; n];
     let mut w_sum = 0.0;
     for (i, v) in w_ca.iter().enumerate() {
@@ -1630,7 +1470,7 @@ pub(crate) fn fit_glm_domain(
         w_sum += v;
     }
 
-    // Normalize weights: sum(w)=n
+    // Scale to sum(w) = n for conditioning; the sandwich is invariant to it.
     if w_sum > 0.0 {
         let scale = (n as f64) / w_sum;
         for wi in &mut w_samp {
@@ -1639,10 +1479,7 @@ pub(crate) fn fit_glm_domain(
         w_sum = n as f64;
     }
 
-    // Rows that will actually carry the fit. An empty `where` domain or an
-    // all-zero weight column used to return a zero fit as `Ok`: the normal
-    // equations are then the zero matrix, whose SVD pseudoinverse is also
-    // zero, and beta = 0 passes the finite check below.
+    // Without this, no contributing rows gives zero normal equations, whose pseudoinverse yields a finite beta = 0.
     let n_obs = (0..n)
         .filter(|&i| domain_mask.is_none_or(|m| m[i]) && w_samp[i] > 0.0)
         .count();
@@ -1650,10 +1487,7 @@ pub(crate) fn fit_glm_domain(
         return Err(RegressionError::TooFewObservations { n_obs, k });
     }
 
-    // Nulls are rejected above; NaN/Inf are not, and Rust's `f64::max` returns
-    // the other operand for a NaN, so `.max(1e-12)` on the variance would hide
-    // one all the way to a NaN beta. Only contributing rows matter: a padded
-    // zero-weight row never enters an accumulation.
+    // `f64::max` drops a NaN, so `.max(1e-12)` on the variance would carry one to a NaN beta.
     for i in 0..n {
         if !(domain_mask.is_none_or(|m| m[i]) && w_samp[i] > 0.0) {
             continue;
@@ -1680,8 +1514,7 @@ pub(crate) fn fit_glm_domain(
         }
     }
 
-    // 2) IRLS init — only meaningful for in-domain rows; out-of-domain rows
-    //    get a neutral placeholder since they won't contribute.
+    // Out-of-domain rows get a placeholder start: they never contribute.
     let mut beta = Mat::<f64>::zeros(k, 1);
     let mut mu = vec![0.0; n];
     let mut eta = vec![0.0; n];
@@ -1690,22 +1523,16 @@ pub(crate) fn fit_glm_domain(
         let in_domain = domain_mask.is_none_or(|m| m[i]);
         let y_init = if in_domain { y_vals[i] } else { 0.5 };
         mu[i] = family.initial_mu(y_init, w_samp[i]);
-        // R seeds eta at linkfun(mustart) without the offset; it enters through
-        // the working response, and every later eta adds it back explicitly.
+        // As R, eta starts at linkfun(mustart) without the offset; later etas add it back.
         eta[i] = link.link(mu[i]);
     }
 
-    // work arrays
     let mut z_work = vec![0.0f64; n];
     let mut w_irls = vec![0.0; n];
     let mut XtWX = Mat::<f64>::zeros(k, k);
     let mut XtWz = Mat::<f64>::zeros(k, 1);
 
-    // 3) IRLS loop
-    //
-    // eta/mu enter each pass already evaluated at the current beta — step 4
-    // leaves them there and step 6 commits that beta — so there is no leading
-    // recomputation.
+    // eta/mu enter each pass already at the current beta.
     let mut iter_count = 0;
     let mut deviance = 0.0;
     let mut converged = false;
@@ -1713,7 +1540,6 @@ pub(crate) fn fit_glm_domain(
     for iter in 0..max_iter {
         iter_count += 1;
 
-        // 1) build normal equations at current beta
         build_irls_normal_eqs(
             family,
             link,
@@ -1732,18 +1558,14 @@ pub(crate) fn fit_glm_domain(
             &mut XtWz,
         );
 
-        // 2) an aliased column makes every SE that follows meaningless, so
-        //    say so once, at the first information matrix, instead of
-        //    returning a fit built on a pseudoinverse.
+        // Aliasing makes every later SE meaningless: raise at the first information matrix.
         if iter == 0 {
             check_rank(&XtWX, k, &x_cast)?;
         }
 
-        // 3) solve for beta_new
         let beta_new = solve_linear_system(XtWX.as_ref(), XtWz.as_ref());
 
-        // 4) eta/mu at beta_new, column-outer: each term is one contiguous
-        //    pass over x, where a row-outer loop strides by n per term.
+        // Column-outer: one contiguous pass over x per term.
         eta[..n].copy_from_slice(&offset_vals[..n]);
         for j in 0..k {
             let bj = beta_new[(j, 0)];
@@ -1765,7 +1587,6 @@ pub(crate) fn fit_glm_domain(
             }
         }
 
-        // 5) convergence check
         let mut max_delta = 0.0;
         for j in 0..k {
             let d = (beta_new[(j, 0)] - beta[(j, 0)]).abs();
@@ -1780,34 +1601,25 @@ pub(crate) fn fit_glm_domain(
             f64::INFINITY
         };
 
-        // 6) commit
         beta = beta_new;
         deviance = dev_new;
 
-        // R's glm.fit convergence test, and only that one:
-        //   abs(dev - devold) / (abs(dev) + 0.1) < epsilon.
-        // svy also stopped on `max_delta < tol`, which fires an iteration
-        // early wherever beta has settled while the deviance is still moving
-        // in its last few digits — cloglog on apistrat lands 3e-5 from R's
-        // coefficients that way. `max_delta` is only a backstop now, for a
-        // deviance that oscillates instead of settling (there is no
-        // step-halving here), at a threshold too tight to pre-empt R.
+        // R's glm.fit test, abs(dev - devold) / (abs(dev) + 0.1) < epsilon; `max_delta` only backstops an
+        // oscillating deviance, as there is no step-halving here.
         if iter > 0 && (rel_dev < tol || max_delta < tol) {
             converged = true;
             break;
         }
     }
 
-    // A degenerate system (e.g. constant response under binomial) must
-    // surface as an error, not NaN coefficients or a panic downstream.
+    // A degenerate system (e.g. a constant binomial response) is an error, not NaN coefficients.
     for j in 0..k {
         if !beta[(j, 0)].is_finite() {
             return Err(RegressionError::NonFiniteCoefficients);
         }
     }
 
-    // The negative binomial's theta loop and replicate refits need beta (and,
-    // for refits, separation) only; the sandwich below is the costly part.
+    // The theta loop and replicate refits skip the costly sandwich.
     if !want_variance {
         let separation = separation_check(
             family,
@@ -1842,8 +1654,7 @@ pub(crate) fn fit_glm_domain(
     // 4) Sandwich variance (R-alignment: rebuild XtWX at FINAL beta)
     // =========================================================================
 
-    // eta/mu are already at the converged beta (step 4 of the last pass).
-    // rebuild XtWX at final beta (bread must match fisherinf)
+    // The bread must be R's fisherinf at the converged beta, where eta/mu already are.
     build_irls_normal_eqs(
         family,
         link,
@@ -1862,12 +1673,7 @@ pub(crate) fn fit_glm_domain(
         &mut XtWz,
     );
 
-    // strata/psu indices — FULL design (not affected by domain).
-    //
-    // The Python layer already hands the kernel dense integer code columns
-    // (the PSU code encodes the (stratum, psu) pair), so this reuses the
-    // estimation namespace's factorizers instead of casting to String and
-    // hashing a (&str, &str) per row.
+    // The full design, whatever the domain.
     let (strata_idx, n_strata) = match strata {
         Some(_) => design_codes(strata, None, n)?,
         None => (vec![0usize; n], 1usize),
@@ -1878,15 +1684,12 @@ pub(crate) fn fit_glm_domain(
         None => ((0..n).collect::<Vec<_>>(), n),
     };
 
-    // Pre-build strata → obs index
     let mut strata_obs: Vec<Vec<usize>> = vec![Vec::new(); n_strata];
     for i in 0..n {
         strata_obs[strata_idx[i]].push(i);
     }
 
-    // Per-row FPC factor (1 - f_h), constant within a stratum; each
-    // stratum's meat contribution is multiplied by its factor (matches R
-    // svyglm on a design with fpc=). Missing/absent -> 1.0 (no correction).
+    // Per-row (1 - f_h), scaling its stratum's meat as R svyglm with fpc=; missing means no correction.
     let fpc_rows: Option<Vec<f64>> = match fpc {
         Some(s) => {
             let s_cast = s.cast(&DataType::Float64)?;
@@ -1896,12 +1699,7 @@ pub(crate) fn fit_glm_domain(
         None => None,
     };
 
-    // Score contribution (estimating function) for row i: w (y - mu) (dmu/deta) / V.
-    // Computed directly instead of w_irls * working_resid: the working-residual
-    // guard (d + eps) biased scores wherever dmu/deta is small (visible at ~1e-7
-    // in SEs), while for canonical links d/V cancels exactly.
-    //
-    // Domain-aware: w_irls[i] is 0 for out-of-domain rows, which therefore score 0.
+    // w (y - mu) (dmu/deta) / V directly: w_irls * working_resid carries the (d + eps) guard, ~1e-7 off in SEs.
     let score_at = |i: usize| -> f64 {
         let w_i = w_samp[i];
         if w_i <= 0.0 || w_irls[i] <= 0.0 {
@@ -1913,21 +1711,8 @@ pub(crate) fn fit_glm_domain(
         w_i * (y_vals[i] - mu_i) * d / v
     };
 
-    // Calibration-aware variance. R centres the INFLUENCE functions --
-    // `svyrecvar(estfun %*% Ainv, ..., postStrata=)` in `svy.varcoef` -- but every
-    // sweep branch is a left multiplication by an operator fixed by the weights,
-    // cells and aux matrix alone, applied identically to each column. It therefore
-    // commutes with the bread: S(E A) = (S E) A, so centring the estimating
-    // functions here and sandwiching afterwards is the same estimator. Checked
-    // against survey 4.5 on apiclus1 (both routes agree to 1.6e-14).
-    //
-    // Two things the sweep needs that the uncentred path does not. Every row must
-    // be materialised, zero-score ones included: their weight carries the cell
-    // denominators. And every row must then be ACCUMULATED, because centring
-    // leaves a zero-score row nonzero -- it is charged its cell's mean. Skipping
-    // them is what makes a nearly-right SE.
-    //
-    // Column-major so each column hands `apply` a contiguous slice.
+    // R sweeps the influence (svy.varcoef); the sweep commutes with the bread, S(E A) = (S E) A, so sweeping here matches.
+    // Every row is kept and accumulated: a zero-score row is charged its cell's mean once swept.
     let ef: Option<Vec<f64>> = calib.map(|c| {
         let mut m = vec![0.0; n * k];
         for i in 0..n {
@@ -1944,13 +1729,7 @@ pub(crate) fn fit_glm_domain(
         m
     });
 
-    // MEAT = sum_h Var_h( PSU totals ) with svytotal-style centering.
-    //
-    // The calibrated path already has the influence functions materialised, so
-    // it hands them straight to the shared svyrecvar. The uncalibrated path
-    // does not materialise them: at 1e6 x 20 an n x k score matrix is 160 MB,
-    // and the PSU total of row i is just score_at(i) times its X row, so the
-    // same accumulation runs off X with the score folded into the row weight.
+    // Uncalibrated, the n x k scores are not materialised (160 MB at 1e6 x 20): the score folds into the row weight.
     let psu_opt = if psu.is_some() {
         Some(psu_idx.as_slice())
     } else {
@@ -1981,9 +1760,7 @@ pub(crate) fn fit_glm_domain(
             let mut upper = vec![0.0f64; k * k];
 
             if psu.is_none() {
-                // Every row is its own PSU: the centred cross-product
-                // telescopes into one weighted pass over all rows plus a
-                // k-vector per stratum.
+                // Every row its own PSU: the centred cross-product telescopes to one pass plus a k-vector per stratum.
                 let mut row_w = vec![0.0f64; n];
                 for i in 0..n {
                     row_w[i] = scale_h[strata_idx[i]] * scores[i] * scores[i];
@@ -2085,8 +1862,7 @@ pub(crate) fn fit_glm_domain(
                     out[b * k + a] = v;
                 }
             }
-            // The domain's rows whatever their weight (R's subset() keeps
-            // zero-weight rows); missing values are out of `domain_mask`.
+            // The domain's rows whatever their weight, as R's subset() keeps zero-weight rows.
             let active = (singleton != SingletonRule::NONE).then(|| {
                 (0..n)
                     .map(|i| domain_mask.is_none_or(|m| m[i]))
@@ -2115,17 +1891,12 @@ pub(crate) fn fit_glm_domain(
         }
     }
 
-    // BREAD = (XtWX)^-1 at final beta
     let bread = invert_matrix(XtWX.as_ref(), k)?;
 
-    // Cov = bread * meat * bread
     let tmp = &bread * &meat;
     let cov = &tmp * &bread;
 
-    // df_resid — domain-aware, NaN when the domain leaves no df (as R's p-values are). We restrict the PSU and stratum counts to
-    // those with at least one in-domain row with positive weight. This
-    // matches R's behavior: domains shrink the effective df when entire
-    // PSUs/strata fall outside the domain.
+    // As R, df counts only PSUs and strata with a positive-weight domain row; NaN when none is left.
     use std::collections::HashSet;
     let df_resid = if psu.is_some() && strata.is_some() {
         let mut total_psus: usize = 0;
@@ -2151,7 +1922,6 @@ pub(crate) fn fit_glm_domain(
         let m = psus_in_dom.len() as isize;
         if m <= 1 { f64::NAN } else { (m - 1) as f64 }
     } else if strata.is_some() {
-        // Count rows in domain and strata containing in-domain rows.
         let mut n_dom: isize = 0;
         let mut strata_in_dom: HashSet<usize> = HashSet::new();
         for i in 0..n {
@@ -2174,15 +1944,8 @@ pub(crate) fn fit_glm_domain(
         }
     };
 
-    // Dispersion (phi), reporting only: the Pearson estimate
-    //   sum_i w_i (y_i - mu_i)^2 / V(mu_i) / (n_obs - k),
-    // over in-domain positive-weight rows, on the fit's own weight scale.
-    // This is R glm()'s and Stata glm's "(1/df) Pearson" for every family,
-    // binomial and poisson included: reporting the estimate is the
-    // overdispersion diagnostic a count model needs, and design-based SEs
-    // never use it, so nothing else moves. The divisor is n_obs - k, not the
-    // design df_resid: the dispersion is a moment estimate, while the design
-    // df belongs to the t reference distribution.
+    // Reporting-only Pearson phi, R/Stata glm's "(1/df) Pearson" for every family; design SEs never use it.
+    // Divided by n_obs - k, not the design df: a moment estimate, while the design df is the t reference's.
     let scale = {
         let mut pearson = 0.0;
         for i in 0..n {
@@ -2196,14 +1959,7 @@ pub(crate) fn fit_glm_domain(
         pearson / ((n_obs - k) as f64)
     };
 
-    // Null deviance — family unit deviance at the intercept-only fit. For a
-    // GLM with only an intercept the MLE of mu is the weighted mean of y
-    // regardless of link (the constant score sum_i w_i (y_i - mu) c = 0), so
-    // this reproduces R's null.deviance on the same weight scale.
-    //
-    // That shortcut dies with an offset: mu then varies by row and the null fit
-    // is a genuine one-parameter IRLS, which is why R's glm() refits the
-    // intercept-only model with the offset instead of taking a mean.
+    // Without an offset the intercept-only MLE is the weighted mean for any link; with one it needs IRLS, as R's glm().
     let null_deviance = if offset.is_some() {
         null_deviance_with_offset(
             family,
@@ -2217,7 +1973,6 @@ pub(crate) fn fit_glm_domain(
             max_iter,
         )
     } else {
-        // domain-restricted weighted mean
         let mut sum_wy = 0.0;
         let mut sum_w = 0.0;
         for i in 0..n {
@@ -2246,7 +2001,6 @@ pub(crate) fn fit_glm_domain(
         dev0
     };
 
-    // Suppress unused-var warning when no domain restriction is active.
     let _ = w_sum;
 
     let separation = separation_check(
@@ -2262,7 +2016,6 @@ pub(crate) fn fit_glm_domain(
         tol,
     );
 
-    // flatten
     let params: Vec<f64> = (0..k).map(|i| beta[(i, 0)]).collect();
     let mut cov_flat = Vec::with_capacity(k * k);
     let mut naive_flat = Vec::with_capacity(k * k);
@@ -2290,21 +2043,9 @@ pub(crate) fn fit_glm_domain(
     })
 }
 
-/// Quasi-complete separation, read off the converged fit.
+/// Quasi-complete separation: boundary rows whose deviance share is below what convergence can resolve.
 ///
-/// When the response is perfectly predicted on some rows, the likelihood keeps
-/// rising as beta moves off to infinity along a direction that pushes those
-/// rows to 0 or 1 (0 for counts) and leaves every other row alone. IRLS stops
-/// anyway, once the deviance stops moving, so the coefficients along that
-/// direction are wherever it stopped and their variance is a near-singular
-/// bread's rounding.
-///
-/// The rows the fit has pushed there are those at the boundary of y whose
-/// deviance contribution is below what the convergence test can resolve.
-/// Directions of recession change only those rows, so they are exactly the
-/// directions the remaining rows cannot see: the null space of their Gram
-/// matrix, which is returned for the caller to read. Nothing is returned when
-/// no row is at the boundary, which is the case for every ordinary fit.
+/// Recession directions move only those rows, so they are the null space of the other rows' Gram matrix, returned.
 #[allow(clippy::too_many_arguments)]
 fn separation_check(
     family: Family,
@@ -2380,7 +2121,6 @@ mod tests {
     use super::*;
 
     /// R: pnorm(x) at 17 significant digits.
-    /// The erfc route agrees to ~1e-14 relative across the whole range.
     #[test]
     #[allow(clippy::excessive_precision)] // as R prints them
     fn norm_cdf_matches_r_pnorm() {
@@ -2409,8 +2149,7 @@ mod tests {
         }
     }
 
-    /// The links must invert each other. Probit's forward link is Acklam's
-    /// qnorm (~1.15e-9), which only ever seeds IRLS, hence the looser bound.
+    /// Probit's forward link is Acklam's qnorm (~1.15e-9), which only seeds IRLS: hence the looser bound.
     #[test]
     fn link_roundtrips() {
         for (link, tol) in [
@@ -2446,8 +2185,7 @@ mod tests {
         }
     }
 
-    /// Level-coded data: 'c' (every third row) never has an event, so its
-    /// dummy drifts to -infinity; the other rows keep the rest identified.
+    /// Level 'c' (every third row) has no event but row 2's `y_c`; at 0 its dummy drifts to -infinity.
     fn separated_fit(y_c: f64) -> GlmResult {
         let n = 90;
         let ones = vec![1.0; n];

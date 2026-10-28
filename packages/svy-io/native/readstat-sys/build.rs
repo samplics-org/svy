@@ -150,8 +150,7 @@ fn link_static_z_from_dir(dir: &Path) {
     }
 }
 
-/// Configure zlib; enable ONLY if we have headers/paths.
-/// Prefer DEP_Z_* (from libz-sys dependency), then pkg-config, then sysroot probe.
+/// Enable zlib only when its headers are found: libz-sys's DEP_Z_*, then pkg-config, then the sysroot.
 fn configure_zlib(build: &mut cc::Build) -> bool {
     if let Ok(v) = env::var("READSTAT_WITH_ZLIB") {
         let on = v != "0";
@@ -165,7 +164,6 @@ fn configure_zlib(build: &mut cc::Build) -> bool {
         return on;
     }
 
-    // 0) libz-sys (target) exports
     let dep_z_include = env::var("DEP_Z_INCLUDE").ok();
     let dep_z_root = env::var("DEP_Z_ROOT").ok();
     let dep_z_lib = env::var("DEP_Z_LIB").ok();
@@ -197,7 +195,6 @@ fn configure_zlib(build: &mut cc::Build) -> bool {
         return true;
     }
 
-    // 1) pkg-config (native)
     if let Ok(lib) = pkg_config::Config::new().env_metadata(true).probe("zlib") {
         diag!("Found zlib via pkg-config");
         for p in &lib.include_paths {
@@ -212,7 +209,6 @@ fn configure_zlib(build: &mut cc::Build) -> bool {
         return true;
     }
 
-    // 2) sysroot probe (cross or native): only enable if header actually exists
     let target = env::var("TARGET").unwrap_or_default();
     let _host = env::var("HOST").unwrap_or_default();
     if let Some(sysroot) = detect_sysroot_for_target(&target) {
@@ -245,7 +241,6 @@ fn configure_zlib(build: &mut cc::Build) -> bool {
         }
     }
 
-    // No headers => do NOT pretend zlib exists
     diag!("zlib headers not found; building WITHOUT zlib (.zsav disabled)");
     false
 }
@@ -265,7 +260,6 @@ fn build_vendored(rs_dir: &Path) {
 
     let mut build = cc::Build::new();
 
-    // diagnostics
     let target = env::var("TARGET").unwrap_or_default();
     let host = env::var("HOST").unwrap_or_default();
     dump_env(&[
@@ -304,19 +298,16 @@ fn build_vendored(rs_dir: &Path) {
     build.define("HAVE_STRING_H", Some("1"));
     build.define("HAVE_STRINGS_H", Some("1"));
 
-    // Hardening: ReadStat parses untrusted binary files, so enable stack
-    // protectors and fortified libc wrappers where the toolchain supports them.
+    // ReadStat parses untrusted binary files, so harden where the toolchain allows.
     if !cfg!(target_env = "msvc") {
         build.flag_if_supported("-fstack-protector-strong");
-        // _FORTIFY_SOURCE requires optimization to be effective; glibc warns
-        // if it is defined at -O0, so only enable it for optimized builds.
+        // _FORTIFY_SOURCE does nothing at -O0, where glibc warns about it.
         if env::var("OPT_LEVEL").map(|v| v != "0").unwrap_or(false) {
             build.flag_if_supported("-U_FORTIFY_SOURCE");
             build.define("_FORTIFY_SOURCE", Some("2"));
         }
     }
 
-    // zlib detection
     let has_zlib = configure_zlib(&mut build);
     if has_zlib {
         build.define("READSTAT_HAVE_ZLIB", Some("1"));
@@ -328,7 +319,6 @@ fn build_vendored(rs_dir: &Path) {
         diag!("Building WITHOUT zlib support (.zsav disabled)");
     }
 
-    // iconv / Windows stubs
     if cfg!(target_os = "windows") {
         build.define("HAVE_ICONV", Some("0"));
         let stub_h = out_dir.join("iconv.h");
@@ -382,14 +372,12 @@ readstat_io_t* unistd_io_init(void) { return NULL; }
         }
     }
 
-    // Force-include readstat.h
     if cfg!(target_env = "msvc") {
         build.flag("/FIreadstat.h");
     } else {
         build.flag("-include").flag("readstat.h");
     }
 
-    // Collect C files
     let mut files: Vec<PathBuf> = Vec::new();
     let mut skipped_files: Vec<String> = Vec::new();
 
@@ -455,7 +443,6 @@ readstat_io_t* unistd_io_init(void) { return NULL; }
     build.define("READSTAT_VERSION", Some("\"vendored\""));
     build.warnings(false).compile("readstat");
 
-    // Generate Rust bindings
     bindgen_with_includes(&inc_dir);
 }
 
@@ -486,7 +473,6 @@ fn link_from_pkg_config() -> bool {
 // --- main -------------------------------------------------------------------
 
 fn main() {
-    // Re-run on env changes
     for k in [
         "READSTAT_BUILD_DEBUG",
         "READSTAT_SRC",
