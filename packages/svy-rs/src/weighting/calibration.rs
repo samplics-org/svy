@@ -64,8 +64,13 @@ pub fn calibrate_linear(
         None => Array1::ones(n_obs),
     };
 
-    // Avoid division by zero
-    let s = s.mapv(|x| if x <= 0.0 { 1e-10 } else { x });
+    if let Some((row, &value)) = s
+        .iter()
+        .enumerate()
+        .find(|(_, x)| !(x.is_finite() && **x > 0.0))
+    {
+        return Err(WeightingError::ScaleNotPositive { row, value });
+    }
 
     // Calibrate each replicate IN PARALLEL using rayon
     let results: std::result::Result<Vec<_>, WeightingError> = (0..n_reps)
@@ -216,9 +221,7 @@ fn solve_linear_system(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> 
 fn solve_pseudoinverse(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> {
     let n = a.nrows();
     let m = faer::Mat::<f64>::from_fn(n, n, |i, j| a[[i, j]]);
-    let svd = m.thin_svd().map_err(|_| {
-        WeightingError::InvalidInput("calibration system: the SVD did not converge".to_string())
-    })?;
+    let svd = m.thin_svd().map_err(|_| WeightingError::SvdNotConverged)?;
     let (u, v) = (svd.U(), svd.V());
     let s = svd.S().column_vector();
     let s_max = (0..n).map(|k| s[k]).fold(0.0, f64::max);
@@ -297,13 +300,16 @@ pub fn calibrate_by_domain(
     let boundaries = find_domain_boundaries(&domain_sorted);
 
     // Collect domain info for parallel processing
+    if let Some(&dom_val) = boundaries
+        .keys()
+        .filter(|d| !controls.contains_key(d))
+        .min()
+    {
+        return Err(WeightingError::MissingControls(dom_val));
+    }
     let domain_tasks: Vec<_> = boundaries
         .iter()
-        .filter_map(|(&dom_val, &(start, end))| {
-            controls
-                .get(&dom_val)
-                .map(|totals| (dom_val, start, end, totals.clone()))
-        })
+        .map(|(&dom_val, &(start, end))| (dom_val, start, end, controls[&dom_val].clone()))
         .collect();
 
     // Process each domain IN PARALLEL

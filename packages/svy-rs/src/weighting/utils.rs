@@ -3,6 +3,8 @@
 use ndarray::{Array2, ArrayView2};
 use thiserror::Error;
 
+use crate::errors::{Coded, KERNEL_INTERNAL};
+
 #[derive(Error, Debug)]
 pub enum WeightingError {
     #[error("Invalid input: {0}")]
@@ -19,9 +21,39 @@ pub enum WeightingError {
          to carry it (weight column {column})"
     )]
     NoRespondents { class: i64, column: usize },
+
+    #[error("Raking exceeded weight bounds{}", if *.converged { "" } else { " (max_iter reached without convergence)" })]
+    BoundsExceeded { converged: bool },
+
+    #[error("calibration scale must be finite and positive, got {value} at row {row}")]
+    ScaleNotPositive { row: usize, value: f64 },
+
+    #[error("calibration domain {0} has no control totals")]
+    MissingControls(i64),
+
+    #[error("calibration system: the SVD did not converge")]
+    SvdNotConverged,
 }
 
 pub type Result<T> = std::result::Result<T, WeightingError>;
+
+impl Coded for WeightingError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidInput(_) | Self::MissingControls(_) => "INVALID_VALUE",
+            Self::DimensionMismatch { .. } => "SHAPE_MISMATCH",
+            Self::ZeroWeights(_) => "ZERO_WEIGHT",
+            Self::NoRespondents { .. } => "NO_RESPONDENTS",
+            Self::BoundsExceeded { .. } => "BOUNDS_EXCEEDED",
+            Self::ScaleNotPositive { .. } => "INVALID_RANGE",
+            Self::SvdNotConverged => KERNEL_INTERNAL,
+        }
+    }
+
+    fn invalid_input(&self) -> bool {
+        !matches!(self, Self::BoundsExceeded { .. } | Self::SvdNotConverged)
+    }
+}
 
 /// Sum weights by group for a 2D array (each column separately)
 pub fn sum_by_group_2d(

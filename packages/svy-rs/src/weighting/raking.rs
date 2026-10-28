@@ -133,11 +133,7 @@ pub fn rake_impl(
     // violations ARE errors, converged or not (the non-converged path
     // previously skipped this check and returned violating weights).
     if !check_bounds(raked_weights.view(), wgt, ll_bound, up_bound) {
-        return Err(WeightingError::InvalidInput(if converged {
-            "Raking exceeded weight bounds".to_string()
-        } else {
-            "Raking exceeded weight bounds (max_iter reached without convergence)".to_string()
-        }));
+        return Err(WeightingError::BoundsExceeded { converged });
     }
     Ok(raked_weights)
 }

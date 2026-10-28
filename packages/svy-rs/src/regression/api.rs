@@ -15,7 +15,7 @@ use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 
-use crate::estimation::calib_sweep::{CalibSpec, CalibSweep, build_calib_sweep};
+use crate::estimation::calib_sweep::make_calib;
 use crate::estimation::into_contiguous;
 use crate::estimation::taylor::SingletonRule;
 use crate::regression::glm::{
@@ -240,17 +240,17 @@ pub fn fit_glm_rs(
     // is normally the active weight; a subpopulation filter zeroes that column in
     // place, so Python snapshots the full-sample calibrated weights and names the
     // snapshot here.
-    let calib: Option<CalibSweep> = calib_kind.and_then(|kind| {
-        let spec = CalibSpec {
-            kind,
-            cells_cols: calib_cells.unwrap_or_default(),
-            aux_cols: calib_aux.unwrap_or_default(),
-            prev_wgt_col: calib_prev_wgt?,
-            new_wgt_col: calib_new_wgt.unwrap_or_else(|| weight_name.clone()),
-            pins_total: calib_pins_total.unwrap_or(true),
-        };
-        build_calib_sweep(&df, &spec)
-    });
+    let calib = make_calib(
+        &df,
+        &weight_name,
+        calib_kind,
+        calib_cells,
+        calib_aux,
+        calib_prev_wgt,
+        calib_pins_total,
+        calib_new_wgt,
+    )
+    .map_err(|e| to_py_err(&e))?;
     let calib = calib.as_ref();
 
     // A `where=` domain is one fit. It used to be routed through `fit_glm_by`

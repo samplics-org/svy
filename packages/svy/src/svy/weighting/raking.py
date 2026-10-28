@@ -66,9 +66,8 @@ def _rake_or_raise(*args, where: str = "Sample.weighting.rake"):
     assert rust_rake is not None  # noqa: S101
     try:
         return rust_rake(*args)
-    except ValueError as e:
-        msg = str(e)
-        if "exceeded weight bounds" in msg or "Raking exceeded" in msg:
+    except RuntimeError as e:
+        if getattr(e, "code", None) == Code.BOUNDS_EXCEEDED:
             raise WeightingError.bounds_exceeded(where=where, bounds=(args[3], args[4])) from None
         raise
 
