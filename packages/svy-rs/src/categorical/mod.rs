@@ -1,7 +1,7 @@
 //! Design-based tabulation, t-tests and rank tests.
-pub mod api;
-pub mod error;
-pub mod ranktest;
-pub mod replicate;
-pub mod tabulation;
-pub mod ttest;
+pub(crate) mod api;
+pub(crate) mod error;
+pub(crate) mod ranktest;
+pub(crate) mod replicate;
+pub(crate) mod tabulation;
+pub(crate) mod ttest;

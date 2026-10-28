@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 /// Solves (X' diag(w/s) X) λ = t - X'w per column and returns w * g, with g = 1 + Xλ / s.
 /// With `additive`, returns g itself.
-pub fn calibrate_linear(
+pub(crate) fn calibrate_linear(
     wgt: ArrayView2<f64>,
     x_matrix: ArrayView2<f64>,
     totals: ArrayView1<f64>,
@@ -216,7 +216,7 @@ fn solve_pseudoinverse(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> 
 }
 
 /// `calibrate_linear` separately within each domain, against that domain's control totals.
-pub fn calibrate_by_domain(
+pub(crate) fn calibrate_by_domain(
     wgt: ArrayView2<f64>,
     x_matrix: ArrayView2<f64>,
     domain: ArrayView1<i64>,
@@ -364,7 +364,7 @@ fn find_domain_boundaries(domain_sorted: &Array1<i64>) -> HashMap<i64, (usize, u
 }
 
 /// `calibrate_linear` with `additive = false`.
-pub fn calibrate_parallel(
+pub(crate) fn calibrate_parallel(
     wgt: ArrayView2<f64>,
     x_matrix: ArrayView2<f64>,
     totals: ArrayView1<f64>,

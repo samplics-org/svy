@@ -5,7 +5,7 @@ use super::utils::{Result, WeightingError};
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 
 /// Normalization requiring exactly one non-negative control per stratum, in sorted stratum order.
-pub fn poststratify_impl(
+pub(crate) fn poststratify_impl(
     wgt: ArrayView2<f64>,
     by_arr: ArrayView1<i64>,
     control: &Array1<f64>,

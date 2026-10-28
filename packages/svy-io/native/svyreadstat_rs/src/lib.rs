@@ -1,3 +1,4 @@
+#![warn(unreachable_pub)]
 mod core;
 mod errors;
 mod sas_read;

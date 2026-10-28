@@ -4,7 +4,7 @@
 use ndarray::{Array2, array};
 
 /// The hardcoded Hadamard matrix of order `n`, or `None` when the table has none.
-pub fn get_hardcoded_hadamard(n: usize) -> Option<Array2<f64>> {
+pub(crate) fn get_hardcoded_hadamard(n: usize) -> Option<Array2<f64>> {
     match n {
         36 => Some(
             array![

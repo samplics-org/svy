@@ -10,7 +10,7 @@ use rayon::prelude::*;
 
 use crate::estimation::replication::{VarianceCenter, covariance_from_replicates};
 
-pub struct RepSpec {
+pub(crate) struct RepSpec {
     /// One weight vector per replicate.
     pub weights: Vec<Vec<f64>>,
     pub coefs: Vec<f64>,
@@ -20,7 +20,7 @@ pub struct RepSpec {
 }
 
 impl RepSpec {
-    pub fn from_frame(
+    pub(crate) fn from_frame(
         df: &DataFrame,
         cols: &[String],
         coefs: Vec<f64>,
@@ -56,12 +56,12 @@ impl RepSpec {
     }
 
     /// Covariance of k estimates from their replicate values (k × n_reps).
-    pub fn cov(&self, full: &[f64], reps: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    pub(crate) fn cov(&self, full: &[f64], reps: &[Vec<f64>]) -> Vec<Vec<f64>> {
         covariance_from_replicates(full, reps, &self.coefs, self.center)
     }
 
     /// Weighted mean of `y` over `mask`, full-sample and per replicate.
-    pub fn means(&self, y: &[f64], w: &[f64], mask: &[bool]) -> (f64, Vec<f64>) {
+    pub(crate) fn means(&self, y: &[f64], w: &[f64], mask: &[bool]) -> (f64, Vec<f64>) {
         let mean = |wt: &[f64]| {
             let (mut num, mut den) = (0.0, 0.0);
             for i in 0..y.len() {
@@ -79,7 +79,7 @@ impl RepSpec {
     }
 
     /// Replicate totals over `mask` of an n × k row-major matrix, as k × n_reps.
-    pub fn totals(&self, x: &[f64], k: usize, mask: &[bool]) -> Vec<Vec<f64>> {
+    pub(crate) fn totals(&self, x: &[f64], k: usize, mask: &[bool]) -> Vec<Vec<f64>> {
         let per_rep: Vec<Vec<f64>> = self
             .weights
             .par_iter()
@@ -102,7 +102,7 @@ impl RepSpec {
 }
 
 /// Cells of a tabulation with a replication covariance.
-pub struct RepCells {
+pub(crate) struct RepCells {
     pub proportions: Vec<f64>,
     pub prop_cov: Vec<Vec<f64>>,
     pub totals: Vec<f64>,
@@ -110,7 +110,7 @@ pub struct RepCells {
 }
 
 /// Cell proportions and totals per replicate; a row counts when in the domain and its key is in `levels`.
-pub fn replicate_cells(
+pub(crate) fn replicate_cells(
     y: &StringChunked,
     weights: &Float64Chunked,
     domain: Option<&BooleanChunked>,

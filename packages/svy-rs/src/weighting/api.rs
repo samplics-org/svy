@@ -27,7 +27,7 @@ type TrimOutput = (
 #[pyfunction]
 #[pyo3(signature = (wgt, margin_indices, margin_targets, ll_bound=None, up_bound=None, tol=1e-6, max_iter=100))]
 #[allow(clippy::too_many_arguments)]
-pub fn rake(
+pub(crate) fn rake(
     py: Python<'_>,
     wgt: PyReadonlyArray2<f64>,
     margin_indices: Vec<PyReadonlyArray1<i64>>,
@@ -61,7 +61,7 @@ pub fn rake(
 
 #[pyfunction]
 #[pyo3(signature = (wgts, adj_class, resp_status, unknown_to_inelig=true))]
-pub fn adjust_nr(
+pub(crate) fn adjust_nr(
     py: Python<'_>,
     wgts: PyReadonlyArray2<f64>,
     adj_class: PyReadonlyArray1<i64>,
@@ -85,7 +85,7 @@ pub fn adjust_nr(
 
 #[pyfunction]
 #[pyo3(signature = (wgt, by_arr=None, control=None))]
-pub fn normalize(
+pub(crate) fn normalize(
     py: Python<'_>,
     wgt: PyReadonlyArray2<f64>,
     by_arr: Option<PyReadonlyArray1<i64>>,
@@ -106,7 +106,7 @@ pub fn normalize(
 // ============================================================================
 
 #[pyfunction]
-pub fn poststratify(
+pub(crate) fn poststratify(
     py: Python<'_>,
     wgt: PyReadonlyArray2<f64>,
     by_arr: PyReadonlyArray1<i64>,
@@ -129,7 +129,7 @@ pub fn poststratify(
 
 #[pyfunction]
 #[pyo3(signature = (wgt, x_matrix, totals, scale=None, additive=false))]
-pub fn calibrate(
+pub(crate) fn calibrate(
     py: Python<'_>,
     wgt: PyReadonlyArray2<f64>,
     x_matrix: PyReadonlyArray2<f64>,
@@ -154,7 +154,7 @@ pub fn calibrate(
 
 #[pyfunction]
 #[pyo3(signature = (wgt, x_matrix, domain, controls_dict, scale=None, additive=false))]
-pub fn calibrate_by_domain(
+pub(crate) fn calibrate_by_domain(
     py: Python<'_>,
     wgt: PyReadonlyArray2<f64>,
     x_matrix: PyReadonlyArray2<f64>,
@@ -186,7 +186,7 @@ pub fn calibrate_by_domain(
 
 #[pyfunction]
 #[pyo3(signature = (wgt, x_matrix, totals, scale=None))]
-pub fn calibrate_parallel(
+pub(crate) fn calibrate_parallel(
     py: Python<'_>,
     wgt: PyReadonlyArray2<f64>,
     x_matrix: PyReadonlyArray2<f64>,
@@ -213,7 +213,7 @@ pub fn calibrate_parallel(
 
 /// BRR Hadamard order (max distinct replicates) for `n_strata`, so Python validates n_reps first.
 #[pyfunction]
-pub fn brr_hadamard_size(n_strata: usize) -> PyResult<usize> {
+pub(crate) fn brr_hadamard_size(n_strata: usize) -> PyResult<usize> {
     let (_h, size) =
         crate::weighting::replication::get_hadamard_for_brr(n_strata).map_err(|e| to_py_err(&e))?;
     Ok(size)
@@ -221,7 +221,7 @@ pub fn brr_hadamard_size(n_strata: usize) -> PyResult<usize> {
 
 #[pyfunction]
 #[pyo3(signature = (wgt, stratum, psu, n_reps=None, fay_coef=0.0, seed=None))]
-pub fn create_brr_wgts(
+pub(crate) fn create_brr_wgts(
     py: Python<'_>,
     wgt: PyReadonlyArray1<f64>,
     stratum: PyReadonlyArray1<i64>,
@@ -245,7 +245,7 @@ pub fn create_brr_wgts(
 
 #[pyfunction]
 #[pyo3(signature = (wgt, psu, stratum=None, paired=false, seed=None))]
-pub fn create_jk_wgts(
+pub(crate) fn create_jk_wgts(
     py: Python<'_>,
     wgt: PyReadonlyArray1<f64>,
     psu: PyReadonlyArray1<i64>,
@@ -268,7 +268,7 @@ pub fn create_jk_wgts(
 
 #[pyfunction]
 #[pyo3(signature = (wgt, psu, n_reps, stratum=None, seed=None))]
-pub fn create_bootstrap_wgts(
+pub(crate) fn create_bootstrap_wgts(
     py: Python<'_>,
     wgt: PyReadonlyArray1<f64>,
     psu: PyReadonlyArray1<i64>,
@@ -293,7 +293,7 @@ pub fn create_bootstrap_wgts(
 
 #[pyfunction]
 #[pyo3(signature = (wgt, n_reps, seed=None))]
-pub fn create_poisson_bootstrap_wgts(
+pub(crate) fn create_poisson_bootstrap_wgts(
     py: Python<'_>,
     wgt: PyReadonlyArray1<f64>,
     n_reps: usize,
@@ -313,7 +313,7 @@ pub fn create_poisson_bootstrap_wgts(
 
 #[pyfunction]
 #[pyo3(signature = (wgt, n_reps, stratum=None, order=None))]
-pub fn create_sdr_wgts(
+pub(crate) fn create_sdr_wgts(
     py: Python<'_>,
     wgt: PyReadonlyArray1<f64>,
     n_reps: usize,
@@ -340,7 +340,7 @@ pub fn create_sdr_wgts(
 
 #[pyfunction]
 #[pyo3(signature = (weights, upper=None, lower=None, redistribute=true, max_iter=10, tol=1e-6))]
-pub fn trim_weights(
+pub(crate) fn trim_weights(
     py: Python<'_>,
     weights: PyReadonlyArray1<f64>,
     upper: Option<f64>,
@@ -374,7 +374,7 @@ pub fn trim_weights(
 
 #[pyfunction]
 #[pyo3(signature = (weights, upper=None, lower=None, redistribute=true, max_iter=10, tol=1e-6))]
-pub fn trim_weights_matrix(
+pub(crate) fn trim_weights_matrix(
     py: Python<'_>,
     weights: PyReadonlyArray2<f64>,
     upper: Option<f64>,

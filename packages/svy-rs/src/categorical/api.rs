@@ -283,7 +283,7 @@ where
     calib_pins_total=None, calib_new_wgt=None,
     rep_weight_cols=None, rep_coefs=None, rep_df=None, variance_center="rep_mean"))]
 #[allow(clippy::too_many_arguments)]
-pub fn ttest_rs(
+pub(crate) fn ttest_rs(
     _py: Python,
     data: PyDataFrame,
     y_col: String,
@@ -616,7 +616,7 @@ fn compute_svyttest_single(
     scores_given=false,
 ))]
 #[allow(clippy::too_many_arguments)]
-pub fn ranktest_rs(
+pub(crate) fn ranktest_rs(
     _py: Python,
     data: PyDataFrame,
     y_col: String,
@@ -911,7 +911,7 @@ fn compute_svyranktest_single(
     rep_weight_cols=None, rep_coefs=None, rep_df=None, variance_center="rep_mean",
 ))]
 #[allow(clippy::too_many_arguments)]
-pub fn tabulate_rs(
+pub(crate) fn tabulate_rs(
     _py: Python,
     data: PyDataFrame,
     rowvar_col: String,

@@ -83,7 +83,7 @@ fn parse_variance_center(center: &str) -> PyResult<VarianceCenter> {
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn replicate_mean(
+pub(crate) fn replicate_mean(
     _py: Python,
     data: PyDataFrame,
     value_col: String,
@@ -244,7 +244,7 @@ fn compute_replicate_mean_grouped(
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn replicate_total(
+pub(crate) fn replicate_total(
     _py: Python,
     data: PyDataFrame,
     value_col: String,
@@ -406,7 +406,7 @@ fn compute_replicate_total_grouped(
 #[pyfunction]
 #[pyo3(signature = (data, y_cols, x_cols, kind, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn replicate_assoc(
+pub(crate) fn replicate_assoc(
     _py: Python,
     data: PyDataFrame,
     y_cols: Vec<String>,
@@ -591,7 +591,7 @@ fn compute_replicate_assoc(
 #[pyfunction]
 #[pyo3(signature = (data, numerator_col, denominator_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn replicate_ratio(
+pub(crate) fn replicate_ratio(
     _py: Python,
     data: PyDataFrame,
     numerator_col: String,
@@ -763,7 +763,7 @@ fn compute_replicate_ratio_grouped(
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn replicate_prop(
+pub(crate) fn replicate_prop(
     _py: Python,
     data: PyDataFrame,
     value_col: String,
@@ -794,7 +794,7 @@ pub fn replicate_prop(
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn replicate_factor_total(
+pub(crate) fn replicate_factor_total(
     _py: Python,
     data: PyDataFrame,
     value_col: String,
@@ -1092,7 +1092,7 @@ fn compute_replicate_prop_grouped(
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, probs, center="rep_mean", degrees_of_freedom=None, by_col=None, quantile_method=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn replicate_quantile(
+pub(crate) fn replicate_quantile(
     _py: Python,
     data: PyDataFrame,
     value_col: String,
@@ -1154,7 +1154,7 @@ pub fn replicate_quantile(
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, quantile_method=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn replicate_median(
+pub(crate) fn replicate_median(
     _py: Python,
     data: PyDataFrame,
     value_col: String,

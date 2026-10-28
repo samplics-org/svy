@@ -78,7 +78,7 @@ const MAX_PREALLOC_ROWS: usize = 65_536;
 /// ---------- Metadata we ship back to Python ----------
 
 #[derive(Serialize, Clone)]
-pub struct UserMissing {
+pub(crate) struct UserMissing {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub values: Vec<MissingValue>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -88,13 +88,13 @@ pub struct UserMissing {
 /// A discrete user-missing code: a number, or a string variable's text.
 #[derive(Serialize, Clone)]
 #[serde(untagged)]
-pub enum MissingValue {
+pub(crate) enum MissingValue {
     Num(f64),
     Str(String),
 }
 
 #[derive(Serialize, Clone)]
-pub struct VarMeta {
+pub(crate) struct VarMeta {
     pub name: String,
     pub label: Option<String>,
     pub label_set: Option<String>,
@@ -108,20 +108,20 @@ pub struct VarMeta {
 }
 
 #[derive(Serialize)]
-pub struct ValueLabels {
+pub(crate) struct ValueLabels {
     pub set_name: String,
     pub mapping: BTreeMap<String, String>,
 }
 
 #[derive(Serialize)]
-pub struct MissingRule {
+pub(crate) struct MissingRule {
     pub var: String,
     pub discrete: Vec<String>,
     pub ranges: Vec<(String, String)>,
 }
 
 #[derive(Serialize)]
-pub struct MetaOut {
+pub(crate) struct MetaOut {
     pub file_label: Option<String>,
     pub vars: Vec<VarMeta>,
     pub value_labels: Vec<ValueLabels>,
@@ -140,7 +140,7 @@ pub struct MetaOut {
 }
 
 #[derive(serde::Serialize)]
-pub struct TaggedSpec {
+pub(crate) struct TaggedSpec {
     pub col: String,
     pub rows: Vec<usize>,
     pub tags: Vec<String>,

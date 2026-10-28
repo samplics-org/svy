@@ -682,7 +682,7 @@ fn write_stata_minimal(
     user_missing_json=None
 ))]
 #[allow(clippy::too_many_arguments)]
-pub fn df_write_dta_file(
+pub(crate) fn df_write_dta_file(
     ipc_bytes: Bound<'_, PyBytes>,
     out_path: &str,
     version: i32,

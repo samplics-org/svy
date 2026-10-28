@@ -130,7 +130,7 @@ fn run_parse(
 
 #[pyfunction]
 #[pyo3(signature = (data_path, cols_skip=None, n_max=None, rows_skip=0, encoding=None, lossy_utf8=false))]
-pub fn df_parse_dta_file<'py>(
+pub(crate) fn df_parse_dta_file<'py>(
     py: Python<'py>,
     data_path: &str,
     cols_skip: Option<Vec<String>>,

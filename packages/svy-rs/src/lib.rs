@@ -1,16 +1,29 @@
 //! Rust survey kernels exposed to Python as the `_internal` module.
+#![warn(unreachable_pub)]
 use pyo3::prelude::*;
 
 mod categorical;
 mod errors;
-// `pub` only so the benches, which link this crate as an rlib, reach the kernels.
-pub mod estimation;
+mod estimation;
 mod regression;
 mod rng;
 mod sampling;
 #[cfg(test)]
 mod test_fixtures;
 mod weighting;
+
+/// The kernels the criterion benches call; they link this crate as an rlib.
+#[doc(hidden)]
+pub mod bench {
+    pub use crate::estimation::association::{
+        AssocKind, PairProducts, bivar_moments, multi_moments, point_estimate_corr,
+        replicate_association,
+    };
+    pub use crate::estimation::taylor::{
+        SrsRef, index_categorical, index_categorical_pair, point_estimate_mean, scores_mean,
+        srs_variance_mean, taylor_variance,
+    };
+}
 
 // ============================================================================
 // Module Registration

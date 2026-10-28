@@ -575,7 +575,7 @@ fn write_spss_minimal(
 
 #[pyfunction]
 #[pyo3(signature = (ipc_bytes, out_path, file_label=None, compress="byte", var_labels=None, user_missing=None, value_labels=None))]
-pub fn df_write_sav_file(
+pub(crate) fn df_write_sav_file(
     ipc_bytes: Bound<'_, PyBytes>,
     out_path: &str,
     file_label: Option<&str>,

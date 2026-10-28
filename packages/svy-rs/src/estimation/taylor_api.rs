@@ -51,7 +51,7 @@ fn parse_srs_ref(deff_ref: Option<&str>, deff_pop_total: Option<f64>) -> EResult
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn taylor_mean(
+pub(crate) fn taylor_mean(
     _py: Python,
     data: PyDataFrame,
     value_col: String,
@@ -135,7 +135,7 @@ pub fn taylor_mean(
 #[pyfunction]
 #[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn taylor_mean_multi(
+pub(crate) fn taylor_mean_multi(
     _py: Python,
     data: PyDataFrame,
     value_cols: Vec<String>,
@@ -506,7 +506,7 @@ fn compute_mean_grouped(
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn taylor_total(
+pub(crate) fn taylor_total(
     _py: Python,
     data: PyDataFrame,
     value_col: String,
@@ -585,7 +585,7 @@ pub fn taylor_total(
 #[pyfunction]
 #[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn taylor_total_multi(
+pub(crate) fn taylor_total_multi(
     _py: Python,
     data: PyDataFrame,
     value_cols: Vec<String>,
@@ -867,7 +867,7 @@ fn compute_total_grouped(
 #[pyfunction]
 #[pyo3(signature = (data, numerator_col, denominator_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn taylor_ratio(
+pub(crate) fn taylor_ratio(
     _py: Python,
     data: PyDataFrame,
     numerator_col: String,
@@ -949,7 +949,7 @@ pub fn taylor_ratio(
 #[pyfunction]
 #[pyo3(signature = (data, numerator_cols, denominator_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn taylor_ratio_multi(
+pub(crate) fn taylor_ratio_multi(
     _py: Python,
     data: PyDataFrame,
     numerator_cols: Vec<String>,
@@ -1273,7 +1273,7 @@ fn compute_ratio_grouped(
 #[pyfunction]
 #[pyo3(signature = (data, y_cols, x_cols, kind, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn taylor_assoc(
+pub(crate) fn taylor_assoc(
     _py: Python,
     data: PyDataFrame,
     y_cols: Vec<String>,
@@ -1475,7 +1475,7 @@ enum LevelScale {
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn taylor_prop(
+pub(crate) fn taylor_prop(
     _py: Python,
     data: PyDataFrame,
     value_col: String,
@@ -1526,7 +1526,7 @@ pub fn taylor_prop(
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn taylor_factor_total(
+pub(crate) fn taylor_factor_total(
     _py: Python,
     data: PyDataFrame,
     value_col: String,
@@ -1656,7 +1656,7 @@ fn taylor_levels(
 #[pyfunction]
 #[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn taylor_prop_multi(
+pub(crate) fn taylor_prop_multi(
     _py: Python,
     data: PyDataFrame,
     value_cols: Vec<String>,
@@ -2098,7 +2098,7 @@ fn compute_levels_grouped(
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, probs, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn taylor_quantile(
+pub(crate) fn taylor_quantile(
     _py: Python,
     data: PyDataFrame,
     value_col: String,
@@ -2180,7 +2180,7 @@ pub fn taylor_quantile(
 #[pyfunction]
 #[pyo3(signature = (data, value_cols, weight_col, probs, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn taylor_quantile_multi(
+pub(crate) fn taylor_quantile_multi(
     _py: Python,
     data: PyDataFrame,
     value_cols: Vec<String>,
@@ -2245,7 +2245,7 @@ pub fn taylor_quantile_multi(
 /// Python's Woodruff limits reuse this rule, as R uses one `method`/`f` for estimate and endpoints.
 #[pyfunction]
 #[pyo3(signature = (values_sorted, cdf, probs, quantile_method=None))]
-pub fn weighted_quantile_at(
+pub(crate) fn weighted_quantile_at(
     values_sorted: PyReadonlyArray1<f64>,
     cdf: PyReadonlyArray1<f64>,
     probs: Vec<f64>,
@@ -2280,7 +2280,7 @@ fn without_prob(mut df: DataFrame) -> EResult<DataFrame> {
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn taylor_median(
+pub(crate) fn taylor_median(
     _py: Python,
     data: PyDataFrame,
     value_col: String,
@@ -2331,7 +2331,7 @@ pub fn taylor_median(
 #[pyfunction]
 #[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn taylor_median_multi(
+pub(crate) fn taylor_median_multi(
     _py: Python,
     data: PyDataFrame,
     value_cols: Vec<String>,

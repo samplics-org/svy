@@ -4,7 +4,7 @@ use super::utils::{Result, WeightingError, sum_by_group_2d};
 use ndarray::{Array1, Array2, ArrayView2, Axis};
 
 /// Scales weights to `control` totals (default: row counts), globally or per sorted `by_arr` group.
-pub fn normalize_impl(
+pub(crate) fn normalize_impl(
     wgt: ArrayView2<f64>,
     by_arr: Option<&Array1<i64>>,
     control: Option<&Array1<f64>>,

@@ -86,7 +86,7 @@ type RepFit = (Option<Vec<f64>>, Option<(usize, Vec<f64>)>, Option<String>);
     max_iter=100,
 ))]
 #[allow(clippy::too_many_arguments)]
-pub fn fit_glm_reps_rs(
+pub(crate) fn fit_glm_reps_rs(
     _py: Python,
     y_name: String,
     x_names: Vec<String>,
@@ -182,7 +182,7 @@ pub fn fit_glm_reps_rs(
     singleton_method=None,
 ))]
 #[allow(clippy::too_many_arguments)]
-pub fn fit_glm_rs(
+pub(crate) fn fit_glm_rs(
     _py: Python,
     y_name: String,
     x_names: Vec<String>,
@@ -326,7 +326,7 @@ pub fn fit_glm_rs(
 /// Design covariance (`p x p`, row-major) of totals of already-weighted influence columns: R's `svyrecvar`.
 #[pyfunction]
 #[pyo3(signature = (data, value_cols, strata_col=None, psu_col=None, fpc_col=None))]
-pub fn design_vcov_rs(
+pub(crate) fn design_vcov_rs(
     _py: Python,
     data: PyDataFrame,
     value_cols: Vec<String>,

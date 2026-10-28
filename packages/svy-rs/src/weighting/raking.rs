@@ -22,7 +22,7 @@ impl MarginSpec {
 }
 
 /// Raking where non-convergence returns the last weights but a bound violation is an error.
-pub fn rake_impl(
+pub(crate) fn rake_impl(
     wgt: ArrayView2<f64>,
     margin_indices: &[Array1<i64>],
     margin_targets: &[Array1<f64>],
