@@ -439,6 +439,7 @@ pub fn calibrate_parallel(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::assert_abs_diff_eq;
     use ndarray::array;
 
     #[test]
@@ -499,7 +500,7 @@ mod tests {
         for i in 0..4 {
             x_cal += x[[i, 0]] * result[[i, 0]];
         }
-        assert!((x_cal - 15.0).abs() < 1e-6);
+        assert_abs_diff_eq!(x_cal, 15.0, epsilon = 1e-12);
     }
 
     // Regression: these used to panic (index out of bounds) instead of
@@ -518,12 +519,30 @@ mod tests {
             totals.view(),
             Some(short_scale.view()),
         );
-        assert!(res.is_err());
+        assert!(
+            matches!(
+                &res,
+                Err(WeightingError::DimensionMismatch {
+                    expected: 3,
+                    got: 1
+                })
+            ),
+            "got {res:?}"
+        );
 
         // totals longer than n_aux
         let long_totals = array![10.0, 20.0];
         let res = calibrate_parallel(wgt.view(), x.view(), long_totals.view(), None);
-        assert!(res.is_err());
+        assert!(
+            matches!(
+                &res,
+                Err(WeightingError::DimensionMismatch {
+                    expected: 1,
+                    got: 2
+                })
+            ),
+            "got {res:?}"
+        );
     }
 
     #[test]
@@ -543,7 +562,16 @@ mod tests {
             None,
             false,
         );
-        assert!(res.is_err());
+        assert!(
+            matches!(
+                &res,
+                Err(WeightingError::DimensionMismatch {
+                    expected: 3,
+                    got: 2
+                })
+            ),
+            "got {res:?}"
+        );
 
         let x = array![[1.0], [2.0], [3.0]];
         let short_scale = array![1.0];
@@ -555,6 +583,15 @@ mod tests {
             Some(short_scale.view()),
             false,
         );
-        assert!(res.is_err());
+        assert!(
+            matches!(
+                &res,
+                Err(WeightingError::DimensionMismatch {
+                    expected: 3,
+                    got: 1
+                })
+            ),
+            "got {res:?}"
+        );
     }
 }

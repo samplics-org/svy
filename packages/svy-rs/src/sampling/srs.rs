@@ -263,10 +263,18 @@ mod tests {
     fn test_stratum_length_mismatch_rejected() {
         let frame = vec![1, 2];
         let stratum_long = vec![0, 0, 0];
-        assert!(select_srs(&frame, SrsN::Scalar(1), Some(&stratum_long), false, 0).is_err());
+        let err = select_srs(&frame, SrsN::Scalar(1), Some(&stratum_long), false, 0).unwrap_err();
+        assert!(
+            matches!(&err, SamplingError::InvalidInput(m) if m.contains("stratum length (3)")),
+            "got {err:?}"
+        );
 
         let frame = vec![1, 2, 3];
         let stratum_short = vec![0, 0];
-        assert!(select_srs(&frame, SrsN::Scalar(1), Some(&stratum_short), false, 0).is_err());
+        let err = select_srs(&frame, SrsN::Scalar(1), Some(&stratum_short), false, 0).unwrap_err();
+        assert!(
+            matches!(&err, SamplingError::InvalidInput(m) if m.contains("stratum length (2)")),
+            "got {err:?}"
+        );
     }
 }

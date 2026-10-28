@@ -1641,6 +1641,7 @@ pub fn matrix_median_by_domain(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::{abs_diff_eq, assert_abs_diff_eq};
 
     #[test]
     fn test_variance_center_from_str() {
@@ -1670,7 +1671,7 @@ mod tests {
     fn test_sdr_coefficients() {
         let coefs = replicate_coefficients(RepMethod::SDR, 80, 0.0);
         assert_eq!(coefs.len(), 80);
-        assert!((coefs[0] - 4.0 / 80.0).abs() < 1e-10);
+        assert_abs_diff_eq!(coefs[0], 4.0 / 80.0, epsilon = 1e-10);
     }
 
     #[test]
@@ -1688,7 +1689,7 @@ mod tests {
             &rep_coefs,
             VarianceCenter::ReplicateMean,
         );
-        assert!((var - 10.0).abs() < 1e-10);
+        assert_abs_diff_eq!(var, 10.0, epsilon = 1e-10);
     }
 
     #[test]
@@ -1706,7 +1707,7 @@ mod tests {
             &rep_coefs,
             VarianceCenter::FullSample,
         );
-        assert!((var - 110.0).abs() < 1e-10);
+        assert_abs_diff_eq!(var, 110.0, epsilon = 1e-10);
     }
 
     // ---- Contract pinned before removing `method` from the FFI layer -------
@@ -1747,31 +1748,46 @@ mod tests {
         //        = 0.5*4 + 1.0*4 + 1.5*1 + 2.0*1 = 2 + 4 + 1.5 + 2 = 9.5
         let var =
             variance_from_replicates(100.0, &theta_reps, &coefs, VarianceCenter::ReplicateMean);
-        assert!((var - 9.5).abs() < 1e-12, "got {var}");
+        assert!(abs_diff_eq!(var, 9.5, epsilon = 1e-12), "got {var}");
     }
 
     #[test]
     fn bootstrap_coefficients_are_one_over_b() {
         let coefs = replicate_coefficients(RepMethod::Bootstrap, 500, 0.0);
         assert_eq!(coefs.len(), 500);
-        assert!(coefs.iter().all(|c| (c - 1.0 / 500.0).abs() < 1e-15));
+        assert!(
+            coefs
+                .iter()
+                .all(|c| abs_diff_eq!(*c, 1.0 / 500.0, epsilon = 1e-15))
+        );
     }
 
     #[test]
     fn jackknife_coefficients_are_b_minus_one_over_b() {
         let coefs = replicate_coefficients(RepMethod::Jackknife, 20, 0.0);
-        assert!(coefs.iter().all(|c| (c - 19.0 / 20.0).abs() < 1e-15));
+        assert!(
+            coefs
+                .iter()
+                .all(|c| abs_diff_eq!(*c, 19.0 / 20.0, epsilon = 1e-15))
+        );
     }
 
     #[test]
     fn brr_coefficients_collapse_to_one_over_b_at_fay_zero() {
         // Plain BRR *is* Fay's BRR at 0: 1/(B(1-0)^2) = 1/B.
         let plain = replicate_coefficients(RepMethod::BRR, 32, 0.0);
-        assert!(plain.iter().all(|c| (c - 1.0 / 32.0).abs() < 1e-15));
+        assert!(
+            plain
+                .iter()
+                .all(|c| abs_diff_eq!(*c, 1.0 / 32.0, epsilon = 1e-15))
+        );
 
         let fay = replicate_coefficients(RepMethod::BRR, 32, 0.5);
         let expected = 1.0 / (32.0 * 0.25);
-        assert!(fay.iter().all(|c| (c - expected).abs() < 1e-15));
+        assert!(
+            fay.iter()
+                .all(|c| abs_diff_eq!(*c, expected, epsilon = 1e-15))
+        );
     }
 
     #[test]
@@ -1801,30 +1817,23 @@ mod tests {
 
     #[test]
     fn test_weighted_median_vec_uniform() {
+        // R svyquantile(qrule = "hf4") gives 2.5.
         let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let w = vec![1.0, 1.0, 1.0, 1.0, 1.0];
 
         let median = weighted_median_vec(&y, &w, 5, SvyQuantileMethod::Linear);
-        assert!(
-            (2.5..=3.5).contains(&median),
-            "Median {} should be around 3",
-            median
-        );
+        assert_abs_diff_eq!(median, 2.5, epsilon = 1e-15);
     }
 
     #[test]
     fn test_weighted_median_vec_nonuniform() {
-        // Heavy weight on 5.0
+        // cdf = [1, 2, 3, 4, 14] / 14: the median interpolates 30% of the way
+        // from 4 to 5. R svyquantile(qrule = "hf4") gives 4.3.
         let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let w = vec![1.0, 1.0, 1.0, 1.0, 10.0];
 
         let median = weighted_median_vec(&y, &w, 5, SvyQuantileMethod::Linear);
-        // With weight 10 on 5.0, median should be pulled towards 5
-        assert!(
-            median >= 4.0,
-            "Median {} should be >= 4 with heavy weight on 5",
-            median
-        );
+        assert_abs_diff_eq!(median, 4.3, epsilon = 1e-14);
     }
 
     #[test]
@@ -1914,9 +1923,13 @@ mod tests {
         assert_eq!(levels, vec!["no".to_string(), "yes".to_string()]);
         let no_idx = 0;
         let yes_idx = 1;
-        assert!((theta_full[no_idx] - 2.0 / 6.0).abs() < 1e-10);
-        assert!((theta_full[yes_idx] - 4.0 / 6.0).abs() < 1e-10);
-        assert!((theta_full[no_idx] + theta_full[yes_idx] - 1.0).abs() < 1e-10);
+        assert_abs_diff_eq!(theta_full[no_idx], 2.0 / 6.0, epsilon = 1e-10);
+        assert_abs_diff_eq!(theta_full[yes_idx], 4.0 / 6.0, epsilon = 1e-10);
+        assert_abs_diff_eq!(
+            theta_full[no_idx] + theta_full[yes_idx],
+            1.0,
+            epsilon = 1e-10
+        );
         assert_eq!(theta_reps[no_idx].len(), 2);
         assert_eq!(theta_reps[yes_idx].len(), 2);
     }
@@ -1958,11 +1971,17 @@ mod tests {
 
         assert_eq!(levels, vec!["no".to_string(), "yes".to_string()]);
         // Domain A: no=0.5, yes=0.5
-        assert!((theta_full[0][0] - 0.5).abs() < 1e-10, "A no");
-        assert!((theta_full[0][1] - 0.5).abs() < 1e-10, "A yes");
+        assert!(abs_diff_eq!(theta_full[0][0], 0.5, epsilon = 1e-10), "A no");
+        assert!(
+            abs_diff_eq!(theta_full[0][1], 0.5, epsilon = 1e-10),
+            "A yes"
+        );
         // Domain B: no=1.0, yes=0.0
-        assert!((theta_full[1][0] - 1.0).abs() < 1e-10, "B no");
-        assert!((theta_full[1][1] - 0.0).abs() < 1e-10, "B yes");
+        assert!(abs_diff_eq!(theta_full[1][0], 1.0, epsilon = 1e-10), "B no");
+        assert!(
+            abs_diff_eq!(theta_full[1][1], 0.0, epsilon = 1e-10),
+            "B yes"
+        );
         assert_eq!(counts, vec![2, 2]);
     }
 }

@@ -303,8 +303,12 @@ mod tests {
         assert_eq!(ctx.cols[0].label_set.as_deref(), Some("WORKSHOP"));
     }
 
+    fn fixture(name: &str) -> String {
+        format!("{}/../../tests/data/sas/{name}", env!("CARGO_MANIFEST_DIR"))
+    }
+
     #[test]
-    fn test_parse_sas_validates_path() {
+    fn test_parse_sas_missing_file_is_an_io_error() {
         let result = parse_sas_impl(
             "nonexistent.sas7bdat",
             None,
@@ -315,40 +319,59 @@ mod tests {
             None,
             false,
         );
-        assert!(result.is_err());
+        assert!(
+            matches!(&result, Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound),
+            "{:?}",
+            result.err()
+        );
     }
 
+    // Expected values from R haven::read_sas on the same file: 8 rows, columns
+    // id, workshop, gender, q1..q4.
     #[test]
-    fn test_parse_sas_handles_skip_params() {
-        // Test that skip parameters are properly configured
-        let cols_skip = Some(vec!["var1".to_string(), "var2".to_string()]);
-        let result = parse_sas_impl(
-            "test.sas7bdat",
+    fn test_parse_sas_applies_skip_params() {
+        let cols_skip = Some(vec!["id".to_string(), "q4".to_string()]);
+        let (_, meta) = parse_sas_impl(
+            &fixture("hadley.sas7bdat"),
             None,
             None,
             None,
-            10,
-            Some(50),
+            2,
+            Some(3),
             cols_skip,
             false,
-        );
-        // Will fail on nonexistent file, but tests parameter handling
-        assert!(result.is_err());
+        )
+        .unwrap();
+        assert_eq!(meta.n_rows, 3);
+        let names: Vec<&str> = meta.vars.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, ["workshop", "gender", "q1", "q2", "q3"]);
     }
 
     #[test]
     fn test_parse_sas_with_catalog() {
-        let result = parse_sas_impl(
-            "test.sas7bdat",
-            Some("test.sas7bcat"),
+        let (_, meta) = parse_sas_impl(
+            &fixture("hadley.sas7bdat"),
+            Some(&fixture("formats.sas7bcat")),
             None,
             None,
             0,
             None,
             None,
             false,
-        );
-        // Will fail on nonexistent files, but tests catalog parameter
-        assert!(result.is_err());
+        )
+        .unwrap();
+        assert_eq!(meta.n_rows, 8);
+        let set_of = |name: &str| {
+            let var = meta.vars.iter().find(|v| v.name == name).unwrap();
+            let set = var.label_set.as_deref().unwrap();
+            let labels = meta
+                .value_labels
+                .iter()
+                .find(|l| l.set_name == set)
+                .unwrap();
+            labels.mapping.values().cloned().collect::<Vec<_>>()
+        };
+        assert_eq!(set_of("gender"), ["Female", "Male"]);
+        assert_eq!(set_of("workshop"), ["R", "SAS"]);
     }
 }

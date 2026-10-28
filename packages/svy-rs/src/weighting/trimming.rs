@@ -404,7 +404,11 @@ mod tests {
             10,
             1e-6,
         );
-        assert!(result.is_err());
+        assert!(
+            matches!(&result, Err(WeightingError::InvalidInput(m)) if m.contains("Negative weights")),
+            "got {:?}",
+            result.as_ref().err()
+        );
     }
 
     #[test]
@@ -417,7 +421,11 @@ mod tests {
             10,
             1e-6,
         );
-        assert!(result.is_err());
+        assert!(
+            matches!(&result, Err(WeightingError::InvalidInput(m)) if m.contains("NaN weights")),
+            "got {:?}",
+            result.as_ref().err()
+        );
     }
 
     #[test]
@@ -430,7 +438,11 @@ mod tests {
             10,
             1e-6,
         );
-        assert!(result.is_err());
+        assert!(
+            matches!(&result, Err(WeightingError::InvalidInput(m)) if m.contains("lower (20.000000) >= upper (10.000000)")),
+            "got {:?}",
+            result.as_ref().err()
+        );
     }
 
     #[test]
@@ -474,7 +486,7 @@ mod tests {
             1e-6,
         )
         .unwrap();
-        assert_relative_eq!(out.weight_sum_after, out.weight_sum_before, epsilon = 1e-6);
+        assert_relative_eq!(out.weight_sum_after, out.weight_sum_before, epsilon = 1e-12);
     }
 
     #[test]

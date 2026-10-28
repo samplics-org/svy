@@ -859,17 +859,25 @@ fn build_stratum_sorted_indices(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::assert_abs_diff_eq;
     use ndarray::array;
 
     #[test]
     fn test_brr_basic() {
-        let wgt = array![1.0, 1.0, 1.0, 1.0];
+        // 2 strata -> Sylvester H4; strata take rows 1 = (+-+-) and 2 = (++--).
+        // Fay 0.5: the PSU picked by the row's sign gets 1.5w, the other 0.5w.
+        let wgt = array![1.0, 2.0, 3.0, 4.0];
         let stratum = array![1, 1, 2, 2];
         let psu = array![1, 2, 1, 2];
-        // 2 strata -> Hadamard order 4 (rows 1..3 usable; row 0 skipped).
         let (rep_wgt, df) =
-            create_brr_weights(wgt.view(), stratum.view(), psu.view(), Some(4), 0.0, None).unwrap();
-        assert_eq!(rep_wgt.dim(), (4, 4));
+            create_brr_weights(wgt.view(), stratum.view(), psu.view(), Some(4), 0.5, None).unwrap();
+        let expected = array![
+            [1.5, 0.5, 1.5, 0.5],
+            [1.0, 3.0, 1.0, 3.0],
+            [4.5, 4.5, 1.5, 1.5],
+            [2.0, 2.0, 6.0, 6.0],
+        ];
+        assert_eq!(rep_wgt, expected);
         assert_eq!(df, 2.0);
     }
 
@@ -880,9 +888,11 @@ mod tests {
         let wgt = array![1.0, 1.0, 1.0, 1.0];
         let stratum = array![1, 1, 2, 2];
         let psu = array![1, 2, 1, 2];
-        let err = create_brr_weights(wgt.view(), stratum.view(), psu.view(), Some(8), 0.0, None)
-            .unwrap_err();
-        assert!(err.to_string().contains("Hadamard"), "got: {err}");
+        let res = create_brr_weights(wgt.view(), stratum.view(), psu.view(), Some(8), 0.0, None);
+        assert!(
+            matches!(&res, Err(ReplicationError::InvalidInput(m)) if m.contains("exceeds the Hadamard matrix order 4")),
+            "got {res:?}"
+        );
     }
 
     #[test]
@@ -919,48 +929,103 @@ mod tests {
 
     #[test]
     fn test_jkn_basic() {
-        let wgt = array![1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+        // Same matrix and rscales as R as.svrepdesign(type = "JKn").
+        let wgt = array![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let stratum = array![1, 1, 1, 2, 2, 2];
         let psu = array![1, 2, 3, 1, 2, 3];
         let (rep_wgt, df, rscales) =
             create_jkn_weights(wgt.view(), Some(stratum.view()), psu.view()).unwrap();
-        assert_eq!(rep_wgt.dim(), (6, 6));
-        // Stratified jackknife df = #PSUs - #strata (was: total PSUs).
+        let expected = array![
+            [0.0, 1.5, 1.5, 1.0, 1.0, 1.0],
+            [3.0, 0.0, 3.0, 2.0, 2.0, 2.0],
+            [4.5, 4.5, 0.0, 3.0, 3.0, 3.0],
+            [4.0, 4.0, 4.0, 0.0, 6.0, 6.0],
+            [5.0, 5.0, 5.0, 7.5, 0.0, 7.5],
+            [6.0, 6.0, 6.0, 9.0, 9.0, 0.0],
+        ];
+        assert_eq!(rep_wgt, expected);
         assert_eq!(df, 4.0);
-        // R's JKn rscales: (n_h - 1)/n_h per replicate; 3 PSUs per stratum.
         assert_eq!(rscales, vec![2.0 / 3.0; 6]);
     }
 
     #[test]
     fn test_jk2_paired() {
-        let wgt = array![1.0, 1.0, 1.0, 1.0];
-        let stratum = array![1, 1, 2, 2];
-        let psu = array![1, 2, 1, 2];
+        // Replicate r touches stratum r only: one PSU (seeded) drops to 0,
+        // the other doubles.
+        let wgt = array![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let stratum = array![1, 1, 1, 2, 2, 2];
+        let psu = array![1, 1, 2, 3, 4, 4];
         let (rep_wgt, df, rscales) =
             create_jk_weights(wgt.view(), Some(stratum.view()), psu.view(), true, Some(42))
                 .unwrap();
-        assert_eq!(rep_wgt.dim(), (4, 2)); // 2 strata = 2 replicates
+        assert_eq!(rep_wgt.ncols(), 2);
+        for (r, rows) in [[0, 1, 2], [3, 4, 5]].iter().enumerate() {
+            let other: Vec<usize> = (0..6).filter(|i| !rows.contains(i)).collect();
+            for &i in &other {
+                assert_eq!(rep_wgt[[i, r]], wgt[i]);
+            }
+            let dropped_first = rep_wgt[[rows[0], r]] == 0.0;
+            for &i in rows {
+                let same_psu = psu[i] == psu[rows[0]];
+                let expected = if same_psu == dropped_first {
+                    0.0
+                } else {
+                    2.0 * wgt[i]
+                };
+                assert_eq!(rep_wgt[[i, r]], expected, "obs {i}, replicate {r}");
+            }
+        }
         assert_eq!(df, 2.0);
         assert_eq!(rscales, vec![1.0; 2]);
     }
 
     #[test]
     fn test_bootstrap_basic() {
-        let wgt = array![1.0, 1.0, 1.0, 1.0];
-        let stratum = array![1, 1, 2, 2];
-        let psu = array![1, 2, 1, 2];
+        // Rao-Wu: each replicate draws n_h - 1 PSUs with replacement per
+        // stratum, so a PSU's weight is w * c * n_h / (n_h - 1) with c an
+        // integer draw count, shared by its rows, summing to n_h - 1.
+        let wgt = array![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+        let stratum = array![1, 1, 1, 2, 2, 2, 2];
+        let psu = array![1, 1, 2, 3, 4, 5, 5];
+        let strata: [(f64, &[&[usize]]); 2] =
+            [(2.0, &[&[0, 1], &[2]]), (3.0, &[&[3], &[4], &[5, 6]])];
         let (rep_wgt, df) =
             create_bootstrap_weights(wgt.view(), Some(stratum.view()), psu.view(), 10, 42).unwrap();
-        assert_eq!(rep_wgt.dim(), (4, 10));
+        assert_eq!(rep_wgt.ncols(), 10);
+        for r in 0..10 {
+            for (n_h, psus) in strata {
+                let adj = n_h / (n_h - 1.0);
+                let mut total_draws = 0.0;
+                for rows in psus {
+                    let c = rep_wgt[[rows[0], r]] / (wgt[rows[0]] * adj);
+                    assert_eq!(c, c.round(), "replicate {r}: non-integer count {c}");
+                    for &i in *rows {
+                        assert_eq!(rep_wgt[[i, r]], wgt[i] * c * adj);
+                    }
+                    total_draws += c;
+                }
+                assert_eq!(total_draws, n_h - 1.0, "replicate {r}");
+            }
+        }
         assert_eq!(df, 9.0);
     }
 
     #[test]
     fn test_sdr_basic() {
-        let wgt = array![1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+        // H4 rows 1..3 are paired cyclically: units k = 0..5 take (1,2), (2,3),
+        // (3,1), (1,2), ... and f = 1 + 2^{-3/2} (h_a - h_b) per column.
+        let wgt = array![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let order = array![0, 1, 2, 3, 4, 5];
         let (rep_wgt, df) = create_sdr_weights(wgt.view(), None, Some(order.view()), 4).unwrap();
-        assert_eq!(rep_wgt.dim(), (6, 4));
+        let hi = 1.0 + std::f64::consts::FRAC_1_SQRT_2;
+        let lo = 1.0 - std::f64::consts::FRAC_1_SQRT_2;
+        let factors = [[1.0, lo, hi, 1.0], [1.0, hi, 1.0, lo], [1.0, 1.0, lo, hi]];
+        for i in 0..6 {
+            for r in 0..4 {
+                // a few ulps from computing 2^{-3/2} * 2 instead of 2^{-1/2}
+                assert_abs_diff_eq!(rep_wgt[[i, r]], wgt[i] * factors[i % 3][r], epsilon = 1e-14);
+            }
+        }
         assert_eq!(df, 4.0);
     }
 
@@ -970,7 +1035,11 @@ mod tests {
     fn test_bootstrap_zero_reps_is_error() {
         let wgt = array![1.0, 1.0];
         let psu = array![1, 2];
-        assert!(create_bootstrap_weights(wgt.view(), None, psu.view(), 0, 42).is_err());
+        let res = create_bootstrap_weights(wgt.view(), None, psu.view(), 0, 42);
+        assert!(
+            matches!(&res, Err(ReplicationError::InvalidInput(m)) if m.contains("n_reps >= 1")),
+            "got {res:?}"
+        );
     }
 
     #[test]
@@ -978,8 +1047,16 @@ mod tests {
         let wgt = array![1.0, 1.0];
         let psu = array![1, 2];
         let stratum = array![1, 1, 2];
+        let res = create_bootstrap_weights(wgt.view(), Some(stratum.view()), psu.view(), 5, 42);
         assert!(
-            create_bootstrap_weights(wgt.view(), Some(stratum.view()), psu.view(), 5, 42).is_err()
+            matches!(
+                &res,
+                Err(ReplicationError::DimensionMismatch {
+                    expected: 2,
+                    got: 3
+                })
+            ),
+            "got {res:?}"
         );
     }
 
@@ -988,7 +1065,17 @@ mod tests {
         let wgt = array![1.0, 1.0];
         let psu = array![1, 2];
         let stratum = array![1, 1, 2];
-        assert!(create_jkn_weights(wgt.view(), Some(stratum.view()), psu.view()).is_err());
+        let res = create_jkn_weights(wgt.view(), Some(stratum.view()), psu.view());
+        assert!(
+            matches!(
+                &res,
+                Err(ReplicationError::DimensionMismatch {
+                    expected: 2,
+                    got: 3
+                })
+            ),
+            "got {res:?}"
+        );
     }
 
     #[test]
@@ -1020,9 +1107,29 @@ mod tests {
     fn test_sdr_length_mismatch_is_error() {
         let wgt = array![1.0, 1.0, 1.0, 1.0];
         let stratum_long = array![0, 0, 0, 0, 0, 0];
-        assert!(create_sdr_weights(wgt.view(), Some(stratum_long.view()), None, 4).is_err());
+        let res = create_sdr_weights(wgt.view(), Some(stratum_long.view()), None, 4);
+        assert!(
+            matches!(
+                &res,
+                Err(ReplicationError::DimensionMismatch {
+                    expected: 4,
+                    got: 6
+                })
+            ),
+            "got {res:?}"
+        );
         let order_short = array![0, 1];
-        assert!(create_sdr_weights(wgt.view(), None, Some(order_short.view()), 4).is_err());
+        let res = create_sdr_weights(wgt.view(), None, Some(order_short.view()), 4);
+        assert!(
+            matches!(
+                &res,
+                Err(ReplicationError::DimensionMismatch {
+                    expected: 4,
+                    got: 2
+                })
+            ),
+            "got {res:?}"
+        );
     }
 
     // Rao-Wu rescaled bootstrap: for a stratified design with 2 PSUs per

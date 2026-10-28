@@ -3090,6 +3090,7 @@ pub fn taylor_variance_matrix_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::{abs_diff_eq, assert_abs_diff_eq, assert_relative_eq, relative_eq};
 
     /// Build a String design column for the variance kernels, which now take
     /// `&Column` (dtype-polymorphic since Phase C).
@@ -3234,11 +3235,11 @@ mod tests {
             let var_b = taylor_variance_apply(&b, d);
             let var_c = taylor_variance_apply(&combined, d);
             assert!(
-                (cov[0][0] - var_a).abs() < 1e-10 * var_a.abs().max(1.0),
+                relative_eq!(cov[0][0], var_a, epsilon = 1e-10, max_relative = 1e-10),
                 "diag a, design {i}"
             );
             assert!(
-                (cov[1][1] - var_b).abs() < 1e-10 * var_b.abs().max(1.0),
+                relative_eq!(cov[1][1], var_b, epsilon = 1e-10, max_relative = 1e-10),
                 "diag b, design {i}"
             );
             assert_eq!(
@@ -3248,7 +3249,7 @@ mod tests {
             );
             let var_from_cov = cov[0][0] - 2.0 * cov[0][1] + cov[1][1];
             assert!(
-                (var_from_cov - var_c).abs() < 1e-10 * var_c.abs().max(1.0),
+                relative_eq!(var_from_cov, var_c, epsilon = 1e-10, max_relative = 1e-10),
                 "contrast variance, design {i}: {var_from_cov} vs {var_c}"
             );
         }
@@ -3269,9 +3270,9 @@ mod tests {
         let cov = taylor_covariance_apply(&[a.clone(), b.clone()], &d);
         let var_a = taylor_variance_apply(&a, &d);
         let var_c = taylor_variance_apply(&combined, &d);
-        assert!((cov[0][0] - var_a).abs() < 1e-10 * var_a.abs().max(1.0));
+        assert_relative_eq!(cov[0][0], var_a, epsilon = 1e-10, max_relative = 1e-10);
         let var_from_cov = cov[0][0] + 2.0 * cov[0][1] + cov[1][1];
-        assert!((var_from_cov - var_c).abs() < 1e-10 * var_c.abs().max(1.0));
+        assert_relative_eq!(var_from_cov, var_c, epsilon = 1e-10, max_relative = 1e-10);
     }
 
     #[test]
@@ -3292,7 +3293,7 @@ mod tests {
             let var_c = taylor_variance_apply(&combined, d);
             let var_from_cov = cov[0][0] + cov[1][1];
             assert!(
-                (var_from_cov - var_c).abs() < 1e-10 * var_c.abs().max(1.0),
+                relative_eq!(var_from_cov, var_c, epsilon = 1e-10, max_relative = 1e-10),
                 "design {i}"
             );
         }
@@ -3316,49 +3317,33 @@ mod tests {
 
     #[test]
     fn test_weighted_quantile_uniform_weights() {
-        let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let w = [1.0, 1.0, 1.0, 1.0, 1.0];
+        // cdf = [0.2, 0.4, 0.6, 0.8, 1.0]; p = 0.5 lies between y = 2 and y = 3.
+        // R svyquantile: qrule="math" gives 3, qrule="hf4" gives 2.5.
+        let y = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let cdf = [0.2, 0.4, 0.6, 0.8, 1.0];
+        let median = |method| weighted_quantile(&y, &cdf, 0.5, method);
 
-        // CDF = [0.2, 0.4, 0.6, 0.8, 1.0]
-        let total: f64 = w.iter().sum();
-        let cdf: Vec<f64> = w
-            .iter()
-            .scan(0.0, |acc, &x| {
-                *acc += x;
-                Some(*acc / total)
-            })
-            .collect();
-
-        let median_lower = weighted_quantile(&y, &cdf, 0.5, SvyQuantileMethod::Lower);
-        let median_higher = weighted_quantile(&y, &cdf, 0.5, SvyQuantileMethod::Higher);
-        let median_linear = weighted_quantile(&y, &cdf, 0.5, SvyQuantileMethod::Linear);
-
-        assert!(median_lower <= 3.0);
-        assert!(median_higher >= 3.0);
-        // Linear should interpolate
-        assert!((2.0..=3.0).contains(&median_linear));
+        assert_eq!(median(SvyQuantileMethod::Lower), 2.0);
+        assert_eq!(median(SvyQuantileMethod::Higher), 3.0);
+        assert_eq!(median(SvyQuantileMethod::Middle), 2.5);
+        assert_eq!(median(SvyQuantileMethod::Nearest), 2.0);
+        assert_abs_diff_eq!(median(SvyQuantileMethod::Linear), 2.5, epsilon = 1e-15);
     }
 
     #[test]
     fn test_weighted_quantile_nonuniform_weights() {
-        let y = vec![1.0, 2.0, 3.0];
-        let w = [1.0, 2.0, 1.0]; // value 2 has more weight
+        // Weights [1, 2, 1] give cdf = [0.25, 0.75, 1.0]; p = 0.5 is equidistant
+        // from cdf[0] and cdf[1], so Nearest takes the lower value.
+        // R svyquantile: qrule="math" gives 2, qrule="hf4" gives 1.5.
+        let y = [1.0, 2.0, 3.0];
+        let cdf = [0.25, 0.75, 1.0];
+        let median = |method| weighted_quantile(&y, &cdf, 0.5, method);
 
-        // CDF = [0.25, 0.75, 1.0]
-        let total: f64 = w.iter().sum();
-        let cdf: Vec<f64> = w
-            .iter()
-            .scan(0.0, |acc, &x| {
-                *acc += x;
-                Some(*acc / total)
-            })
-            .collect();
-
-        let median_linear = weighted_quantile(&y, &cdf, 0.5, SvyQuantileMethod::Linear);
-
-        // p=0.5 falls between 0.25 and 0.75
-        // Should interpolate between y[0]=1 and y[1]=2
-        assert!((1.0..=2.0).contains(&median_linear));
+        assert_eq!(median(SvyQuantileMethod::Lower), 1.0);
+        assert_eq!(median(SvyQuantileMethod::Higher), 2.0);
+        assert_eq!(median(SvyQuantileMethod::Middle), 1.5);
+        assert_eq!(median(SvyQuantileMethod::Nearest), 1.0);
+        assert_eq!(median(SvyQuantileMethod::Linear), 1.5);
     }
 
     #[test]
@@ -3441,9 +3426,17 @@ mod tests {
         )
         .unwrap();
 
-        assert!((var_reused - 1.25).abs() < 1e-12, "got {}", var_reused);
-        assert!((var_unique - 1.25).abs() < 1e-12, "got {}", var_unique);
-        assert!((var_reused - var_unique).abs() < 1e-12);
+        assert!(
+            abs_diff_eq!(var_reused, 1.25, epsilon = 1e-12),
+            "got {}",
+            var_reused
+        );
+        assert!(
+            abs_diff_eq!(var_unique, 1.25, epsilon = 1e-12),
+            "got {}",
+            var_unique
+        );
+        assert_abs_diff_eq!(var_reused, var_unique, epsilon = 1e-12);
 
         // The full covariance matrix path must agree with the scalar path.
         let cov_reused = taylor_variance_matrix(
@@ -3455,7 +3448,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            (cov_reused[0][0] - 1.25).abs() < 1e-12,
+            abs_diff_eq!(cov_reused[0][0], 1.25, epsilon = 1e-12),
             "got {}",
             cov_reused[0][0]
         );
@@ -3512,8 +3505,12 @@ mod tests {
         )
         .unwrap();
 
-        assert!((var_nostrata - 2.8).abs() < 1e-12, "got {}", var_nostrata);
-        assert!((var_nostrata - var_conststrata).abs() < 1e-12);
+        assert!(
+            abs_diff_eq!(var_nostrata, 2.8, epsilon = 1e-12),
+            "got {}",
+            var_nostrata
+        );
+        assert_abs_diff_eq!(var_nostrata, var_conststrata, epsilon = 1e-12);
     }
 
     #[test]
@@ -3546,7 +3543,10 @@ mod tests {
         let wor =
             srs_variance_mean(&y, &w, SrsRef::WithoutReplacement { pop_total: None }).unwrap();
         let expected_fpc = 1.0 - 6.0 / 600.0;
-        assert!((wor / wr - expected_fpc).abs() < 1e-12, "{wor} / {wr}");
+        assert!(
+            abs_diff_eq!(wor / wr, expected_fpc, epsilon = 1e-12),
+            "{wor} / {wr}"
+        );
     }
 
     /// The with-replacement reference ignores the scale of the weights. This is
@@ -3565,7 +3565,10 @@ mod tests {
             )
             .unwrap();
             if let Some(p) = prev {
-                assert!((v - p).abs() < 1e-12, "scale {scale} changed the reference");
+                assert!(
+                    abs_diff_eq!(v, p, epsilon = 1e-12),
+                    "scale {scale} changed the reference"
+                );
             }
             prev = Some(v);
         }
@@ -3604,7 +3607,7 @@ mod tests {
         )
         .unwrap();
         let wr = srs_variance_mean(&y, &norm, SrsRef::WithReplacement).unwrap();
-        assert!((with_pop / wr - (1.0 - 6.0 / 600.0)).abs() < 1e-12);
+        assert_abs_diff_eq!(with_pop / wr, 1.0 - 6.0 / 600.0, epsilon = 1e-12);
     }
 
     /// Without a declared population size, normalized weights make the
