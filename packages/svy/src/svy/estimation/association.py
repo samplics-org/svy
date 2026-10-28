@@ -223,6 +223,9 @@ def result_to_param_est(
     se_arr = result_df["se"].to_numpy()
     df_arr = result_df["df"].to_numpy().astype(np.float64)
     deff_arr = result_df["deff"].to_numpy() if (deff and "deff" in result_df.columns) else None
+    # A constant column has no corr and no deff under either reference: not the rescaling case.
+    if deff_arr is not None:
+        est._raise_if_deff_not_computable(deff_arr[np.isfinite(est_arr)])
     t_crits = est._t_crit_arr(alpha, df_arr)
 
     with np.errstate(divide="ignore", invalid="ignore"):

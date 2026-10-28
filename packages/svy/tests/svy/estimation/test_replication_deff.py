@@ -111,3 +111,21 @@ def test_wr_is_invariant_to_rescaled_weights(frame, case):
     got = CASES[case](_sample(_rescaled(frame), "jkn").estimation, "wr").to_dicts()
     want = R["jkn"]["wr"][case]
     np.testing.assert_allclose([r["deff"] for r in got], _want(want, "deff"), rtol=REL, atol=0)
+
+
+@pytest.mark.parametrize("kind", ["corr", "cov"])
+@pytest.mark.parametrize("method", ["taylor", "replication"])
+def test_assoc_wor_raises_under_rescaled_weights(frame, method, kind):
+    est = _sample(_rescaled(frame), "jkn").estimation
+    with pytest.raises(EstimationError) as exc:
+        getattr(est, kind)(("y", "y2"), method=method, deff="wor")
+    assert "DEFF_NOT_COMPUTABLE" in str(exc.value)
+    assert "deff='wr'" in str(exc.value)
+
+
+@pytest.mark.parametrize("method", ["taylor", "replication"])
+def test_constant_column_corr_is_not_reported_as_rescaled_weights(frame, method):
+    """A constant column has no corr and no deff under either reference."""
+    est = _sample(frame.with_columns(pl.lit(1.0).alias("c")), "jkn").estimation
+    rows = est.corr(("y", "c"), method=method, deff="wor").to_dicts()
+    assert np.isnan(rows[0]["est"]) and np.isnan(rows[0]["deff"])

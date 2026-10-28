@@ -862,34 +862,9 @@ class Estimation:
         f_lower = f_dist.ppf(alpha / 2, v1, v2)
         return ((v1 * f_lower) / (v2 + v1 * f_lower), 1.0)
 
-    def _polars_result_to_param_est(
-        self,
-        result_df: pl.DataFrame,
-        y_name: str,
-        param: PopParam,
-        alpha: float,
-        deff: bool,
-        by_col: str | None,
-        as_factor: bool,
-        x_name: str | None = None,
-        ci_method: str = "logit",
-    ) -> list[ParamEst]:
-        n_rows = result_df.height
-        if n_rows == 0:
-            return []
-
-        est_arr = result_df["est"].to_numpy()
-        se_arr = result_df["se"].to_numpy()
-        df_arr = result_df["df"].to_numpy().astype(np.float64)
-        n_arr = (
-            result_df["n"].to_numpy()
-            if "n" in result_df.columns
-            else np.zeros(n_rows, dtype=np.int64)
-        )
-        n_list = row_counts(result_df)
-        deff_arr = result_df["deff"].to_numpy() if (deff and "deff" in result_df.columns) else None
-
-        if deff_arr is not None and n_rows and bool(np.all(np.isnan(deff_arr))):
+    @staticmethod
+    def _raise_if_deff_not_computable(deff_arr: np.ndarray | None) -> None:
+        if deff_arr is not None and deff_arr.size and bool(np.all(np.isnan(deff_arr))):
             # The with-replacement reference has no N in it and cannot go
             # degenerate, so an entirely missing design effect means the
             # without-replacement correction 1 - n/N collapsed: the weights sum
@@ -920,6 +895,35 @@ class Estimation:
                     "rescaled weights."
                 ),
             )
+
+    def _polars_result_to_param_est(
+        self,
+        result_df: pl.DataFrame,
+        y_name: str,
+        param: PopParam,
+        alpha: float,
+        deff: bool,
+        by_col: str | None,
+        as_factor: bool,
+        x_name: str | None = None,
+        ci_method: str = "logit",
+    ) -> list[ParamEst]:
+        n_rows = result_df.height
+        if n_rows == 0:
+            return []
+
+        est_arr = result_df["est"].to_numpy()
+        se_arr = result_df["se"].to_numpy()
+        df_arr = result_df["df"].to_numpy().astype(np.float64)
+        n_arr = (
+            result_df["n"].to_numpy()
+            if "n" in result_df.columns
+            else np.zeros(n_rows, dtype=np.int64)
+        )
+        n_list = row_counts(result_df)
+        deff_arr = result_df["deff"].to_numpy() if (deff and "deff" in result_df.columns) else None
+
+        self._raise_if_deff_not_computable(deff_arr)
 
         t_crits = self._t_crit_arr(alpha, df_arr)
 
