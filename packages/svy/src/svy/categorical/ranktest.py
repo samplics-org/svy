@@ -758,19 +758,6 @@ class RankTestByResult:
         by_frame = pl.DataFrame([cols] * frame.height)
         return pl.concat([frame.select("y"), by_frame, frame.drop("y")], how="horizontal")
 
-    def _with_by(self, frame: pl.DataFrame, by_level: Any, *, tidy: bool) -> pl.DataFrame:
-        """``frame`` with its domain's columns after ``y``, as a two-sample member has them."""
-        import polars as pl
-
-        by = self._by_list[0] if len(self._by_list) == 1 else self._by_list
-        if tidy:
-            cols = dict(by_cells(by, by_level))
-        else:
-            b, level = untidy_by(by, by_level)
-            cols = {"by": b, "by_level": level}
-        by_frame = pl.DataFrame([cols] * frame.height)
-        return pl.concat([frame.select("y"), by_frame, frame.drop("y")], how="horizontal")
-
     # ── Printing ─────────────────────────────────────────────────────────
 
     def __rich_console__(self, console, options):
