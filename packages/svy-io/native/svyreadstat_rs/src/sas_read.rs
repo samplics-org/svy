@@ -4,14 +4,14 @@ use std::collections::HashMap;
 use std::os::raw::c_void;
 
 use readstat_sys::{
-    readstat_parse_sas7bcat, readstat_parse_sas7bdat, readstat_parser_free, readstat_parser_init,
-    readstat_set_error_handler, readstat_set_metadata_handler, readstat_set_value_handler,
-    readstat_set_value_label_handler, readstat_set_variable_handler,
+    readstat_parse_sas7bcat, readstat_parse_sas7bdat, readstat_set_error_handler,
+    readstat_set_metadata_handler, readstat_set_value_handler, readstat_set_value_label_handler,
+    readstat_set_variable_handler,
 };
 
 use crate::core::{
-    ParseCtx, check_parse, finalize_to_ipc, on_error_cb, on_metadata_cb, on_value_cb,
-    on_value_label_cb, on_variable_cb,
+    ParseCtx, ParserGuard, check_parse, configure_parser, finalize_to_ipc, on_error_cb,
+    on_metadata_cb, on_value_cb, on_value_label_cb, on_variable_cb,
 };
 use crate::errors::{Error, Op, Result};
 
@@ -70,37 +70,28 @@ fn parse_sas_impl(
         None => None,
     };
 
-    // Before the parser exists, so a bad path cannot return without freeing it.
     let c_path = crate::core::c_path(data_path)?;
-    // SAFETY: the parser is freed once on every path out; `ctx`, the path and `_keep_enc`
-    // outlive the parse, and only the callbacks touch `ctx` until it returns.
+    let parser = ParserGuard::new()?;
+    // SAFETY: `parser` is live and each handler matches ReadStat's callback type.
     unsafe {
-        let parser = readstat_parser_init();
-        if parser.is_null() {
-            return Err(Error::Internal("readstat_parser_init() failed".into()));
-        }
-
-        // Set up all handlers for data file
-        readstat_set_error_handler(parser, Some(on_error_cb));
-        readstat_set_metadata_handler(parser, Some(on_metadata_cb));
-        readstat_set_variable_handler(parser, Some(on_variable_cb));
-        readstat_set_value_handler(parser, Some(on_value_cb));
-
-        let enc = crate::core::input_encoding(encoding, lossy_utf8);
-        let _keep_enc = match crate::core::configure_parser(parser, enc, rows_skip, n_max) {
-            Ok(k) => k,
-            Err(e) => {
-                readstat_parser_free(parser);
-                return Err(e);
-            }
-        };
-
-        let rc =
-            readstat_parse_sas7bdat(parser, c_path.as_ptr(), &mut ctx as *mut _ as *mut c_void);
-
-        readstat_parser_free(parser);
-        check_parse(rc, &mut ctx, data_path, encoding)?;
+        readstat_set_error_handler(parser.as_ptr(), Some(on_error_cb));
+        readstat_set_metadata_handler(parser.as_ptr(), Some(on_metadata_cb));
+        readstat_set_variable_handler(parser.as_ptr(), Some(on_variable_cb));
+        readstat_set_value_handler(parser.as_ptr(), Some(on_value_cb));
     }
+    let enc = crate::core::input_encoding(encoding, lossy_utf8);
+    let _keep_enc = configure_parser(&parser, enc, rows_skip, n_max)?;
+    // SAFETY: `ctx`, the path and `_keep_enc` outlive the parse, and only the callbacks
+    // touch `ctx` until it returns.
+    let rc = unsafe {
+        readstat_parse_sas7bdat(
+            parser.as_ptr(),
+            c_path.as_ptr(),
+            &mut ctx as *mut _ as *mut c_void,
+        )
+    };
+    drop(parser);
+    check_parse(rc, &mut ctx, data_path, encoding)?;
 
     resolve_format_label_sets(&mut ctx);
 
@@ -121,36 +112,29 @@ pub(crate) fn parse_catalog(
     lossy_utf8: bool,
 ) -> Result<Option<String>> {
     let c_path = crate::core::c_path(cat_path)?;
-    // SAFETY: the parser is freed once on every path out; `ctx`, the path and `_keep_enc`
-    // outlive the parse, and only the callbacks touch `ctx` until it returns.
+    let parser = ParserGuard::new()?;
+    // SAFETY: `parser` is live and each handler matches ReadStat's callback type.
     unsafe {
-        let parser = readstat_parser_init();
-        if parser.is_null() {
-            return Err(Error::Internal("readstat_parser_init() failed".into()));
-        }
-
-        // Only need value label handler for catalog
-        readstat_set_value_label_handler(parser, Some(on_value_label_cb));
-
-        let cat_enc = crate::core::input_encoding(catalog_encoding, lossy_utf8);
-        let _keep_enc = match crate::core::configure_parser(parser, cat_enc, 0, None) {
-            Ok(k) => k,
-            Err(e) => {
-                readstat_parser_free(parser);
-                return Err(e);
-            }
-        };
-
-        let rc = readstat_parse_sas7bcat(parser, c_path.as_ptr(), ctx as *mut _ as *mut c_void);
-
-        readstat_parser_free(parser);
-        match check_parse(rc, ctx, cat_path, catalog_encoding) {
-            Ok(()) => Ok(None),
-            Err(e @ Error::Internal(_)) => Err(e),
-            Err(e) => Ok(Some(format!(
-                "SAS catalog {cat_path:?} gave no value labels: {e}"
-            ))),
-        }
+        readstat_set_value_label_handler(parser.as_ptr(), Some(on_value_label_cb));
+    }
+    let enc = crate::core::input_encoding(catalog_encoding, lossy_utf8);
+    let _keep_enc = configure_parser(&parser, enc, 0, None)?;
+    // SAFETY: `ctx`, the path and `_keep_enc` outlive the parse, and only the callbacks
+    // touch `ctx` until it returns.
+    let rc = unsafe {
+        readstat_parse_sas7bcat(
+            parser.as_ptr(),
+            c_path.as_ptr(),
+            ctx as *mut _ as *mut c_void,
+        )
+    };
+    drop(parser);
+    match check_parse(rc, ctx, cat_path, catalog_encoding) {
+        Ok(()) => Ok(None),
+        Err(e @ Error::Internal(_)) => Err(e),
+        Err(e) => Ok(Some(format!(
+            "SAS catalog {cat_path:?} gave no value labels: {e}"
+        ))),
     }
 }
 
