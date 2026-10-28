@@ -29,7 +29,7 @@ from svy.core.design import Design, PopSize
 from svy.errors._model import ModelError
 from svy.errors._serialization import SerializationError
 from svy.estimation.contrast import Contrast
-from svy.estimation.estimate import Estimate, EstimateList
+from svy.estimation.estimate import Estimate, EstimateList, as_df
 from svy.regression.glm import GLMFit
 from svy.regression.prediction import GLMPred
 from svy.serialize.structs import (
@@ -141,7 +141,7 @@ def _param_est_to_data(p: Any) -> ParamEstData:
         x=p.x,
         x_level=p.x_level,
         deff=_f(p.deff) if p.deff is not None else None,
-        df=int(p.df) if p.df is not None else None,
+        df=as_df(p.df) if p.df is not None else None,
         prob=_f(p.prob) if getattr(p, "prob", None) is not None else None,
         n=p.n,
     )

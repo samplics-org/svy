@@ -111,7 +111,7 @@ class ParamEstData(msgspec.Struct, kw_only=True, frozen=True):
     x: str | None = None
     x_level: CatValue | None = None
     deff: float | None = None
-    df: int | None = None
+    df: int | float | None = None
     prob: float | None = None
     n: int | None = None
 

@@ -336,6 +336,21 @@ def _test_denominator(*, epsilon: float, delta: float, two_sides: bool) -> float
             f"epsilon - delta is (near) zero (epsilon={epsilon}, delta={delta}); "
             "the required sample size is unbounded."
         )
+    # Squaring the denominator would hide its sign and return a finite n for a
+    # test whose power stays below alpha however large the sample.
+    if not two_sides and delta != 0.0 and denom < 0.0:
+        raise SelectionError.ValueError(
+            title="One-sided test cannot be powered",
+            detail=(
+                f"A one-sided test against the margin delta={delta} has H0: epsilon <= delta, "
+                f"but the expected difference epsilon={epsilon} does not exceed it."
+            ),
+            code=Code.INFEASIBLE_DESIGN,
+            where="SampleSize.compare",
+            param="delta",
+            got=delta,
+            hint="Use a negative delta for non-inferiority, or a margin below the expected difference.",
+        )
     return denom
 
 

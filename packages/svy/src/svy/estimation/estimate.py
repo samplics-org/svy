@@ -95,6 +95,11 @@ def _row_levels(est: Any, names: Sequence[str], n_by: int) -> list[tuple[str, An
     return out
 
 
+def as_df(df: float) -> Number:
+    """Integral df stay int so tables and serialized results keep their dtype."""
+    return int(df) if float(df).is_integer() else float(df)
+
+
 def row_counts(result_df: pl.DataFrame) -> list[int | None]:
     """Per-row record counts from a kernel result frame (its ``n`` column)."""
     if "n" not in result_df.columns:
@@ -402,7 +407,7 @@ class ParamEst(msgspec.Struct, frozen=True):
     x: str | None = None
     x_level: Category | None = None
     deff: Number | None = None
-    df: int | None = None
+    df: Number | None = None
     #: Target probability, set only for quantile estimates (0.5 for the median).
     prob: Number | None = None
     #: Records behind this row: in its domain, with a nonzero weight and the
@@ -493,7 +498,7 @@ class Estimate:
         #: Full design degrees of freedom (R's ``degf``), as opposed to the
         #: per-row domain-aware df. Cross-domain contrasts are referred to
         #: this value.
-        self.design_df: int | None = None
+        self.design_df: Number | None = None
         #: What the call found about the design that affects these estimates,
         #: e.g. strata with a single PSU in a domain (``DOMAIN_SINGLETON_PSU``);
         #: printed as notes under the table.

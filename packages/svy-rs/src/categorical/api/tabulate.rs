@@ -186,7 +186,7 @@ fn compute_tabulate(
                 ses,
                 cells.prop_cov.clone(),
                 vec![f64::NAN; k],
-                rep.map_or(0, |s| s.df.max(0.0) as u32),
+                rep.map_or(0.0, |s| s.df.max(0.0)),
             )
         }
         None => estimate_proportions(
@@ -200,7 +200,8 @@ fn compute_tabulate(
             singleton_method,
             calib,
             domain.as_ref(),
-        )?,
+        )
+        .map(|(l, p, s, c, d, df)| (l, p, s, c, d, df as f64))?,
     };
 
     let k = levels.len();

@@ -34,7 +34,11 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+from scipy.special import expit, logit
+from scipy.stats import t as t_dist
+
 from svy import Design, RepWeights, Sample, col
+from svy.serialize import from_json, to_json
 
 
 TOL = 1e-8
@@ -143,3 +147,52 @@ def test_user_supplied_rep_df_is_honoured(jkn_data):
         "y", where=col("dom") == 1, method="replication"
     )
     _assert_values(est, 14.8967920329, 0.6111067974, 13.5143724139, 16.2792116518)
+
+
+def test_fractional_rep_df_is_not_truncated(jkn_data):
+    """df=16.9 uses t(16.9), not t(16); the estimate and SE are R's."""
+    est_, se = 15.265747356692955, 0.4173341860719779
+    t = t_dist.ppf(0.975, 16.9)
+    est = _rep_sample(jkn_data, df=16.9).estimation.mean("y", method="replication")
+    _assert_values(est, est_, se, est_ - t * se, est_ + t * se)
+    assert est.estimates[0].df == 16.9
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda e: e.total("y", method="replication"),
+        lambda e: e.mean("y", by="dom", method="replication"),
+        lambda e: e.ratio("y", "obs", method="replication"),
+        lambda e: e.median("y", method="replication"),
+    ],
+    ids=["total", "mean by", "ratio", "median"],
+)
+def test_fractional_rep_df_reaches_every_estimator(jkn_data, call):
+    est = call(_rep_sample(jkn_data, df=16.9).estimation)
+    for p in est.estimates:
+        assert p.df == 16.9
+        assert (p.uci - p.lci) / (2 * p.se) == pytest.approx(t_dist.ppf(0.975, 16.9), rel=TOL)
+
+
+def test_fractional_rep_df_reaches_tabulate(jkn_data):
+    """Cells use the logit interval, expit(logit(p) -/+ t * se / (p (1 - p)))."""
+    tab = _rep_sample(jkn_data, df=16.9).categorical.tabulate("dom", method="replication")
+    t = t_dist.ppf(0.975, 16.9)
+    for c in tab.estimates:
+        half = t * c.se / (c.est * (1 - c.est))
+        assert c.lci == pytest.approx(expit(logit(c.est) - half), rel=TOL)
+        assert c.uci == pytest.approx(expit(logit(c.est) + half), rel=TOL)
+
+
+def test_fractional_rep_df_reaches_glm(jkn_data):
+    """Residual df is 16.9 - (k - 1) = 15.9 with an intercept and one slope."""
+    fit = _rep_sample(jkn_data, df=16.9).glm.fit(y="y", x=["obs"], method="replication")
+    for c in fit.coefs:
+        assert c.wald.df == pytest.approx(15.9, rel=TOL)
+        assert (c.uci - c.lci) / (2 * c.se) == pytest.approx(t_dist.ppf(0.975, 15.9), rel=TOL)
+
+
+def test_fractional_rep_df_survives_serialization(jkn_data):
+    est = _rep_sample(jkn_data, df=16.9).estimation.mean("y", method="replication")
+    assert from_json(to_json(est)).estimates[0].df == 16.9

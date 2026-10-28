@@ -232,6 +232,61 @@ def test_one_sided_test_needs_fewer_units():
     assert S().compare_means(mu1=1, mu2=2, sigma1=1, two_sides=False).n == (13.0, 13.0)
 
 
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: S().compare_props(p1=0.65, p2=0.85, two_sides=False, delta=0.2001),
+        lambda: S().compare_means(mu1=1, mu2=2, sigma1=1, two_sides=False, delta=1.5),
+        lambda: S().compare_means(
+            mu1={"x": 1, "y": 1},
+            mu2={"x": 2, "y": 2},
+            sigma1=1,
+            two_sides=False,
+            delta={"x": 0.5, "y": 1.5},
+        ),
+    ],
+    ids=["props", "means", "means by stratum"],
+)
+def test_one_sided_margin_above_the_effect_cannot_be_powered(call):
+    _raises(
+        SelectionError,
+        ValueError,
+        Code.INFEASIBLE_DESIGN,
+        call,
+        param="delta",
+        says="does not exceed",
+    )
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: S().compare_props(p1=0.25, p2=0.75, two_sides=False, delta=0.5),
+        lambda: S().compare_means(mu1=1, mu2=2, sigma1=1, two_sides=False, delta=1.0),
+    ],
+    ids=["props", "means"],
+)
+def test_one_sided_margin_equal_to_the_effect_is_unbounded(call):
+    _raises(SelectionError, ValueError, Code.INFEASIBLE_DESIGN, call, says="unbounded")
+
+
+@pytest.mark.parametrize(
+    "delta, expected",
+    [
+        # n = ceil(2 * ((1.6449 + 0.8416) / (1 - delta))^2)
+        (0.5, (50.0, 50.0)),  # superiority: 2 * 4.9729^2 = 49.46
+        (-0.5, (6.0, 6.0)),  # non-inferiority: 2 * 1.6576^2 = 5.50
+    ],
+    ids=["superiority", "non-inferiority"],
+)
+def test_one_sided_margin_below_the_effect(delta, expected):
+    assert S().compare_means(mu1=0, mu2=1, sigma1=1, two_sides=False, delta=delta).n == expected
+
+
+def test_one_sided_without_margin_tests_in_the_direction_of_the_effect():
+    assert S().compare_means(mu1=2, mu2=1, sigma1=1, two_sides=False).n == (13.0, 13.0)
+
+
 @pytest.mark.parametrize("labels", [["a", "b", "c"], ["a"], []], ids=["three", "one", "empty"])
 @pytest.mark.parametrize("goal", ["compare_props", "compare_means"])
 def test_two_group_labels(goal, labels):

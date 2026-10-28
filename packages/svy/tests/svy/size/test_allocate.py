@@ -4,6 +4,8 @@ Moved from tests/svy/selection/test_allocation.py (round 8, SZ11; power from
 #245) when allocation left sample.sampling: same inputs and expected values.
 """
 
+import warnings
+
 import pytest
 
 import svy
@@ -78,6 +80,32 @@ def test_neyman_n_exceeding_frame_warns_and_caps():
     with pytest.warns(UserWarning, match="exceeds the total frame"):
         out = alloc(100, {"a": 10, "b": 20}, method="neyman", sigma={"a": 1.0, "b": 1.0})
     assert out == {"a": 10, "b": 20}
+
+
+_OVER_FRAME = [
+    # 500 * 100/300 = 166.67 and 500 * 200/300 = 333.33; the larger remainder rounds up.
+    ({}, {"a": 167, "b": 333}),
+    ({"method": "neyman", "sigma": 1.0}, {"a": 167, "b": 333}),
+    ({"method": "equal"}, {"a": 250, "b": 250}),
+]
+
+
+@pytest.mark.parametrize("kw, expected", _OVER_FRAME, ids=["proportional", "neyman", "equal"])
+def test_n_exceeding_frame_is_kept_when_uncapped(kw, expected):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out = alloc(500, {"a": 100, "b": 200}, cap_at_population=False, **kw)
+    assert out == expected
+    assert not [w for w in caught if "exceeds the total frame" in str(w.message)]
+
+
+@pytest.mark.parametrize(
+    "kw", [kw for kw, _ in _OVER_FRAME], ids=["proportional", "neyman", "equal"]
+)
+def test_n_exceeding_frame_is_capped_by_default(kw):
+    with pytest.warns(UserWarning, match="exceeds the total frame"):
+        out = alloc(500, {"a": 100, "b": 200}, **kw)
+    assert out == {"a": 100, "b": 200}
 
 
 # =============================================================================
