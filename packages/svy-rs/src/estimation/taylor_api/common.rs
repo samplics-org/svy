@@ -5,7 +5,7 @@ pub(super) type GroupRow<'a> = (&'a str, f64, f64, f64, u32, f64, Vec<f64>);
 
 /// The SRS reference for the design effect: wor with N = sum of weights unless told otherwise.
 /// `deff_pop_total`, the declared population size, keeps it right under rescaled weights.
-pub(super) fn parse_srs_ref(
+pub(crate) fn parse_srs_ref(
     deff_ref: Option<&str>,
     deff_pop_total: Option<f64>,
 ) -> EResult<SrsRef> {

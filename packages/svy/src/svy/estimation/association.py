@@ -223,6 +223,9 @@ def result_to_param_est(
     se_arr = result_df["se"].to_numpy()
     df_arr = result_df["df"].to_numpy().astype(np.float64)
     deff_arr = result_df["deff"].to_numpy() if (deff and "deff" in result_df.columns) else None
+    # A constant column has no corr and no deff under either reference: not the rescaling case.
+    if deff_arr is not None:
+        est._raise_if_deff_not_computable(deff_arr[np.isfinite(est_arr)])
     t_crits = est._t_crit_arr(alpha, df_arr)
 
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -332,6 +335,7 @@ def replicate_assoc(
     variance_center: str = "rep_mean",
     alpha: float = 0.05,
     ci_method: str = "fisher",
+    deff_ref: str | None = None,
 ) -> Estimate:
     """Replicate-weight correlation or covariance over ``pairs``."""
     rep_weight_cols, df_val, rep_coefs = _get_rep_params(est, fay_coef)
@@ -348,11 +352,12 @@ def replicate_assoc(
         degrees_of_freedom=df_val,
         by_col=prep.by_col,
         domain_mask_col=prep.domain_mask_col,
+        deff_ref=deff_ref,
     )
 
-    # The replicate kernel reports no deff (no SRS reference on that path),
-    # so `deff` is never populated here.
-    est_list = result_to_param_est(est, result_df, param, alpha, False, prep.by_col, ci_method)
+    est_list = result_to_param_est(
+        est, result_df, param, alpha, deff_ref is not None, prep.by_col, ci_method
+    )
     est_cov = np.diag(result_df["var"].to_numpy())
     return est._build_estimate_result_light(
         est_list,
@@ -362,5 +367,6 @@ def replicate_assoc(
         prep.by_cols,
         as_factor=False,
         method=method,
+        deff_ref=deff_ref,
         ci_method=ci_method,
     )

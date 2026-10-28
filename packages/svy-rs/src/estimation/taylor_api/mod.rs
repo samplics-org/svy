@@ -34,6 +34,7 @@ mod ratio;
 mod total;
 
 pub(crate) use assoc::*;
+pub(crate) use common::parse_srs_ref;
 use common::*;
 pub(crate) use mean::*;
 pub(crate) use prop::*;

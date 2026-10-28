@@ -8,6 +8,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **`deff=` works with `method="replication"`.** `mean`, `total` (also `as_factor=True`), `prop`, `ratio`, `corr` and `cov`, with `by=` and `where=`, report the replicate variance over the same SRS reference as Taylor (`"wor"` = R `deff=TRUE`, `"wr"` = `deff="replace"`); it was silently `None`. Mean, total and proportions match R `svrepdesign` to 1e-8. The ratio's deff uses the replicate variance svy reports, where R's replicate `svyratio` deffs the linearized total. `"wor"` raises `DEFF_NOT_COMPUTABLE` under rescaled weights, as on Taylor.
 - **`svy.io.write_sav` takes text user-missing codes for string columns**, as haven's `write_sav` does (`user_missing={"s": {"na_values": ["x"]}}`); a range on a string column, which SAV cannot store, raises instead of being dropped.
 - **`svy.utils.deprecated_param(old, new, since=, remove_in=)`** keeps a renamed keyword working through a deprecation period: `old=` warns (`DeprecationWarning` naming `new=`, at the user's line) and is passed on as `new=`; both together raise `UsageError.TypeError` (`PARAM_GIVEN_TWICE`). Stack one per renamed keyword.
 - **`@experimental` (`svy.utils`) and `svy.errors.ExperimentalWarning`.** A decorated function warns once per session (`EXPERIMENTAL`), notes every result it returns (`note: Experimental method [EXPERIMENTAL]`, kept in saved payloads) and says so in its docstring. The warning is not recorded in `sample.warnings`, and filtering it out keeps the result note. An experimental feature may change in any release without a deprecation period.
@@ -61,6 +62,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **`corr` and `cov` with `deff="wor"` raise `DEFF_NOT_COMPUTABLE` when the weights sum to no more than the sample size**, as `mean`, `total`, `prop` and `ratio` do, instead of returning a NaN design effect. A constant column still gives a NaN row.
 - **Integer weight columns work everywhere**, as a CSV's often are: `tabulate(units="count")` raised `expected Float64, got i64`, and `calibrate` (and `rake` with integer replicate weights) raised `'ndarray' object is not an instance of 'ndarray'`.
 - **A `Cat` term on an integer column keeps its level names when another covariate has a missing value.** The covariates were cast to Float64, so the dummies were named `race_2.0` and `contrast(estd("race_2"))` failed.
 - **`pps_brewer` selects with the probabilities it reports for any `n`.** Above `n = 2` it drew with the two-unit rule, so the realised inclusion probabilities missed the reported n·p (by up to 1.3% relative at `n = 3`) and the design weights were off; after certainty units were taken, it also drew with the full-frame p. It now uses Brewer's general draw-by-draw rule. A seed gives the same sample as before at `n = 2` without certainties, and a different one otherwise.

@@ -3,12 +3,16 @@
 use crate::errors::to_py_err;
 use crate::estimation::error::{EResult, EstimationError};
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::hash::Hash;
 
 use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 
-use crate::estimation::association::{AssocKind, PairProducts, replicate_association};
+use crate::estimation::association::{
+    AssocKind, PairProducts, replicate_association, srs_variance_assoc_of,
+};
 use crate::estimation::into_contiguous;
 use crate::estimation::replication::{
     VarianceCenter, covariance_from_replicates, extract_rep_weights_matrix, index_domains,
@@ -20,7 +24,11 @@ use crate::estimation::replication::{
     matrix_total_by_domain_cols, matrix_total_estimates, matrix_total_estimates_cols,
     quantile_by_domain_cols, quantile_estimates_cols, variance_from_replicates,
 };
-use crate::estimation::taylor::{SvyQuantileMethod, active_count};
+use crate::estimation::taylor::{
+    SrsRef, SvyQuantileMethod, active_count, srs_variance_mean, srs_variance_mean_domain,
+    srs_variance_ratio, srs_variance_ratio_domain, srs_variance_total, srs_variance_total_domain,
+};
+use crate::estimation::taylor_api::parse_srs_ref;
 
 /// Row-major flat k×k covariance for the FFI boundary.
 fn flatten_cov(cov: Vec<Vec<f64>>) -> Vec<f64> {
@@ -76,12 +84,88 @@ fn parse_variance_center(center: &str) -> PyResult<VarianceCenter> {
         .ok_or_else(|| to_py_err(&EstimationError::UnknownCenter(center.to_string())))
 }
 
+/// The SRS reference when a design effect is asked for; `None` leaves the `deff` column out.
+fn parse_deff_ref(deff_ref: Option<&str>) -> PyResult<Option<SrsRef>> {
+    deff_ref
+        .map(|r| parse_srs_ref(Some(r), None))
+        .transpose()
+        .map_err(|e| to_py_err(&e))
+}
+
+/// The replicate variance over the SRS reference, as in the Taylor kernels.
+fn deff_ratio(variance: f64, srs_var: f64) -> f64 {
+    if srs_var > 0.0 {
+        variance / srs_var
+    } else {
+        f64::NAN
+    }
+}
+
+/// The weights the SRS reference counts: `where=` rows only, as R's `subset()` keeps.
+fn srs_weights(weights: &Float64Chunked, mask: Option<&[f64]>) -> Float64Chunked {
+    match mask {
+        None => weights.clone(),
+        Some(m) => weights
+            .iter()
+            .zip(m)
+            .map(|(w, d)| w.map(|w| w * d))
+            .collect(),
+    }
+}
+
+/// One row mask per domain, in `index_domains` order.
+fn domain_masks(domain_ids: &[u32], n_domains: usize) -> Vec<BooleanChunked> {
+    (0..n_domains as u32)
+        .map(|k| domain_ids.iter().map(|&id| id == k).collect())
+        .collect()
+}
+
+/// Each row's position in `levels`; rows of no listed level get `usize::MAX`.
+fn level_positions<T: Eq + Hash>(y: &[T], levels: &[T]) -> Vec<usize> {
+    let pos: HashMap<&T, usize> = levels.iter().enumerate().map(|(i, l)| (l, i)).collect();
+    y.iter()
+        .map(|v| pos.get(v).copied().unwrap_or(usize::MAX))
+        .collect()
+}
+
+/// SRS variance of each level's indicator: as a mean for shares, as a total for counts.
+fn level_srs_vars(
+    positions: &[usize],
+    n_levels: usize,
+    weights: &Float64Chunked,
+    domain: Option<&BooleanChunked>,
+    normalize: bool,
+    srs: SrsRef,
+) -> EResult<Vec<f64>> {
+    (0..n_levels)
+        .map(|l| {
+            let ind = Float64Chunked::from_vec(
+                "indicator".into(),
+                positions.iter().map(|&p| f64::from(p == l)).collect(),
+            );
+            match (normalize, domain) {
+                (true, None) => srs_variance_mean(&ind, weights, srs),
+                (true, Some(d)) => srs_variance_mean_domain(&ind, weights, d, srs),
+                (false, None) => srs_variance_total(&ind, weights, srs),
+                (false, Some(d)) => srs_variance_total_domain(&ind, weights, d, srs),
+            }
+        })
+        .collect()
+}
+
+fn with_deff(mut out: DataFrame, deffs: Option<Vec<f64>>) -> EResult<DataFrame> {
+    if let Some(d) = deffs {
+        out.with_column(Column::new("deff".into(), d))?;
+    }
+    Ok(out)
+}
+
 // ============================================================================
 // Mean
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
+#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None, deff_ref=None))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn replicate_mean(
     _py: Python,
@@ -94,8 +178,10 @@ pub(crate) fn replicate_mean(
     degrees_of_freedom: Option<f64>,
     by_col: Option<String>,
     domain_mask_col: Option<String>,
+    deff_ref: Option<String>,
 ) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
     let df = into_contiguous(data);
+    let srs = parse_deff_ref(deff_ref.as_deref())?;
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
     // Coefficients come from the RepWeights variant on the Python side.
@@ -117,6 +203,7 @@ pub(crate) fn replicate_mean(
             variance_center,
             df_val,
             domain_mask_col.as_deref(),
+            srs,
         )
         .map(|out| (out, None)),
         Some(by) => compute_replicate_mean_grouped(
@@ -128,6 +215,7 @@ pub(crate) fn replicate_mean(
             variance_center,
             df_val,
             by,
+            srs,
         )
         .map(|(out, cov)| (out, Some(cov))),
     });
@@ -146,6 +234,7 @@ fn compute_replicate_mean_ungrouped(
     center: VarianceCenter,
     df_val: f64,
     domain_mask_col: Option<&str>,
+    srs: Option<SrsRef>,
 ) -> EResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -166,11 +255,16 @@ fn compute_replicate_mean_ungrouped(
     };
     let variance = variance_from_replicates(theta_full, &theta_reps, rep_coefs, center);
     let se = variance.sqrt();
+    let deff = srs
+        .map(|r| -> EResult<Vec<f64>> {
+            let srs_var = srs_variance_mean(y, &srs_weights(weights, mask), r)?;
+            Ok(vec![deff_ratio(variance, srs_var)])
+        })
+        .transpose()?;
 
-    Ok(
-        df!["y" => vec![value_col], "est" => vec![theta_full], "se" => vec![se],
-        "var" => vec![variance], "df" => vec![df_val], "n" => vec![active_count(weights, None)]]?,
-    )
+    let out = df!["y" => vec![value_col], "est" => vec![theta_full], "se" => vec![se],
+        "var" => vec![variance], "df" => vec![df_val], "n" => vec![active_count(weights, None)]]?;
+    with_deff(out, deff)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -183,6 +277,7 @@ fn compute_replicate_mean_grouped(
     center: VarianceCenter,
     df_val: f64,
     by_col: &str,
+    srs: Option<SrsRef>,
 ) -> EResult<(DataFrame, Vec<f64>)> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -226,6 +321,15 @@ fn compute_replicate_mean_grouped(
         dfs.push(df_val);
         ns.push(counts[k]);
     }
+    let deffs = srs
+        .map(|r| -> EResult<Vec<f64>> {
+            domain_masks(&domain_ids, n_domains)
+                .iter()
+                .zip(&variances)
+                .map(|(m, &v)| Ok(deff_ratio(v, srs_variance_mean_domain(y, weights, m, r)?)))
+                .collect()
+        })
+        .transpose()?;
     let cov = flatten_cov(covariance_from_replicates(
         &theta_full_vec,
         &theta_reps_vec,
@@ -234,7 +338,7 @@ fn compute_replicate_mean_grouped(
     ));
     let out = df![by_col => by_vals, "y" => vec![value_col; n_domains], "est" => estimates,
         "se" => ses, "var" => variances, "df" => dfs, "n" => ns]?;
-    Ok((out, cov))
+    Ok((with_deff(out, deffs)?, cov))
 }
 
 // ============================================================================
@@ -242,7 +346,7 @@ fn compute_replicate_mean_grouped(
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
+#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None, deff_ref=None))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn replicate_total(
     _py: Python,
@@ -255,8 +359,10 @@ pub(crate) fn replicate_total(
     degrees_of_freedom: Option<f64>,
     by_col: Option<String>,
     domain_mask_col: Option<String>,
+    deff_ref: Option<String>,
 ) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
     let df = into_contiguous(data);
+    let srs = parse_deff_ref(deff_ref.as_deref())?;
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
     // Coefficients come from the RepWeights variant on the Python side.
@@ -278,6 +384,7 @@ pub(crate) fn replicate_total(
             variance_center,
             df_val,
             domain_mask_col.as_deref(),
+            srs,
         )
         .map(|out| (out, None)),
         Some(by) => compute_replicate_total_grouped(
@@ -289,6 +396,7 @@ pub(crate) fn replicate_total(
             variance_center,
             df_val,
             by,
+            srs,
         )
         .map(|(out, cov)| (out, Some(cov))),
     });
@@ -307,6 +415,7 @@ fn compute_replicate_total_ungrouped(
     center: VarianceCenter,
     df_val: f64,
     domain_mask_col: Option<&str>,
+    srs: Option<SrsRef>,
 ) -> EResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -326,11 +435,16 @@ fn compute_replicate_total_ungrouped(
     };
     let variance = variance_from_replicates(theta_full, &theta_reps, rep_coefs, center);
     let se = variance.sqrt();
+    let deff = srs
+        .map(|r| -> EResult<Vec<f64>> {
+            let srs_var = srs_variance_total(y, &srs_weights(weights, mask), r)?;
+            Ok(vec![deff_ratio(variance, srs_var)])
+        })
+        .transpose()?;
 
-    Ok(
-        df!["y" => vec![value_col], "est" => vec![theta_full], "se" => vec![se],
-        "var" => vec![variance], "df" => vec![df_val], "n" => vec![active_count(weights, None)]]?,
-    )
+    let out = df!["y" => vec![value_col], "est" => vec![theta_full], "se" => vec![se],
+        "var" => vec![variance], "df" => vec![df_val], "n" => vec![active_count(weights, None)]]?;
+    with_deff(out, deff)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -343,6 +457,7 @@ fn compute_replicate_total_grouped(
     center: VarianceCenter,
     df_val: f64,
     by_col: &str,
+    srs: Option<SrsRef>,
 ) -> EResult<(DataFrame, Vec<f64>)> {
     let y = df.column(value_col)?.f64()?;
     let weights = df.column(weight_col)?.f64()?;
@@ -386,6 +501,15 @@ fn compute_replicate_total_grouped(
         dfs.push(df_val);
         ns.push(counts[k]);
     }
+    let deffs = srs
+        .map(|r| -> EResult<Vec<f64>> {
+            domain_masks(&domain_ids, n_domains)
+                .iter()
+                .zip(&variances)
+                .map(|(m, &v)| Ok(deff_ratio(v, srs_variance_total_domain(y, weights, m, r)?)))
+                .collect()
+        })
+        .transpose()?;
     let cov = flatten_cov(covariance_from_replicates(
         &theta_full_vec,
         &theta_reps_vec,
@@ -394,7 +518,7 @@ fn compute_replicate_total_grouped(
     ));
     let out = df![by_col => by_vals, "y" => vec![value_col; n_domains], "est" => estimates,
         "se" => ses, "var" => variances, "df" => dfs, "n" => ns]?;
-    Ok((out, cov))
+    Ok((with_deff(out, deffs)?, cov))
 }
 
 // ============================================================================
@@ -404,7 +528,7 @@ fn compute_replicate_total_grouped(
 /// Replicate-weight covariance or correlation over one or more column pairs.
 /// Replicates re-centre on their own means but keep the full-sample Kish `n`, like R's `svrepvar`.
 #[pyfunction]
-#[pyo3(signature = (data, y_cols, x_cols, kind, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
+#[pyo3(signature = (data, y_cols, x_cols, kind, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None, deff_ref=None))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn replicate_assoc(
     _py: Python,
@@ -419,8 +543,10 @@ pub(crate) fn replicate_assoc(
     degrees_of_freedom: Option<f64>,
     by_col: Option<String>,
     domain_mask_col: Option<String>,
+    deff_ref: Option<String>,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
+    let srs = parse_deff_ref(deff_ref.as_deref())?;
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
     // Coefficients come from the RepWeights variant on the Python side.
@@ -452,10 +578,14 @@ pub(crate) fn replicate_assoc(
             df_val,
             by_col.as_deref(),
             domain_mask_col.as_deref(),
+            srs,
         )
     });
     result.map(PyDataFrame).map_err(|e| to_py_err(&e))
 }
+
+/// Group, pair, estimate, SE, variance, n and deff.
+type AssocRow = (usize, usize, f64, f64, f64, u32, f64);
 
 #[allow(clippy::too_many_arguments)]
 fn compute_replicate_assoc(
@@ -470,6 +600,7 @@ fn compute_replicate_assoc(
     df_val: f64,
     by_col: Option<&str>,
     domain_mask_col: Option<&str>,
+    srs: Option<SrsRef>,
 ) -> EResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
 
@@ -535,7 +666,7 @@ fn compute_replicate_assoc(
     let w_full: Vec<f64> = weights.iter().map(|v| v.unwrap_or(0.0)).collect();
     let rows = combos
         .iter()
-        .map(|&(gi, pi)| -> EResult<(usize, usize, f64, f64, f64, u32)> {
+        .map(|&(gi, pi)| -> EResult<AssocRow> {
             let mask = group_masks[gi].as_deref();
             let products = PairProducts::new(ys[pi], xs[pi], weights, mask)?;
             let theta_full = products.estimate(&w_full, kind);
@@ -549,7 +680,17 @@ fn compute_replicate_assoc(
                     .count() as u32,
                 None => active_count(weights, None),
             };
-            Ok((gi, pi, theta_full, variance.sqrt(), variance, n_rows))
+            let deff = match srs {
+                None => f64::NAN,
+                Some(r) => {
+                    let domain: Option<BooleanChunked> =
+                        mask.map(|m| m.iter().map(|&d| d != 0.0).collect());
+                    let srs_var =
+                        srs_variance_assoc_of(kind, ys[pi], xs[pi], weights, domain.as_ref(), r)?;
+                    deff_ratio(variance, srs_var)
+                }
+            };
+            Ok((gi, pi, theta_full, variance.sqrt(), variance, n_rows, deff))
         })
         .collect::<EResult<Vec<_>>>()?;
 
@@ -561,7 +702,8 @@ fn compute_replicate_assoc(
     let mut ses: Vec<f64> = Vec::with_capacity(nv);
     let mut variances: Vec<f64> = Vec::with_capacity(nv);
     let mut ns: Vec<u32> = Vec::with_capacity(nv);
-    for (gi, pi, est, se, var, n_rows) in rows {
+    let mut deffs: Vec<f64> = Vec::with_capacity(nv);
+    for (gi, pi, est, se, var, n_rows, deff) in rows {
         if let Some(g) = group_names[gi] {
             by_vals.push(g);
         }
@@ -571,6 +713,7 @@ fn compute_replicate_assoc(
         ses.push(se);
         variances.push(var);
         ns.push(n_rows);
+        deffs.push(deff);
     }
 
     let mut out = df![
@@ -581,7 +724,7 @@ fn compute_replicate_assoc(
     if let Some(name) = by_col {
         out.insert_column(0, Column::new(name.into(), by_vals))?;
     }
-    Ok(out)
+    with_deff(out, srs.map(|_| deffs))
 }
 
 // ============================================================================
@@ -589,7 +732,7 @@ fn compute_replicate_assoc(
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, numerator_col, denominator_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
+#[pyo3(signature = (data, numerator_col, denominator_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None, deff_ref=None))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn replicate_ratio(
     _py: Python,
@@ -603,8 +746,10 @@ pub(crate) fn replicate_ratio(
     degrees_of_freedom: Option<f64>,
     by_col: Option<String>,
     domain_mask_col: Option<String>,
+    deff_ref: Option<String>,
 ) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
     let df = into_contiguous(data);
+    let srs = parse_deff_ref(deff_ref.as_deref())?;
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
     // Coefficients come from the RepWeights variant on the Python side.
@@ -627,6 +772,7 @@ pub(crate) fn replicate_ratio(
             variance_center,
             df_val,
             domain_mask_col.as_deref(),
+            srs,
         )
         .map(|out| (out, None)),
         Some(by) => compute_replicate_ratio_grouped(
@@ -639,6 +785,7 @@ pub(crate) fn replicate_ratio(
             variance_center,
             df_val,
             by,
+            srs,
         )
         .map(|(out, cov)| (out, Some(cov))),
     });
@@ -658,6 +805,7 @@ fn compute_replicate_ratio_ungrouped(
     center: VarianceCenter,
     df_val: f64,
     domain_mask_col: Option<&str>,
+    srs: Option<SrsRef>,
 ) -> EResult<DataFrame> {
     let y = df.column(numerator_col)?.f64()?;
     let x = df.column(denominator_col)?.f64()?;
@@ -679,11 +827,16 @@ fn compute_replicate_ratio_ungrouped(
     };
     let variance = variance_from_replicates(theta_full, &theta_reps, rep_coefs, center);
     let se = variance.sqrt();
+    let deff = srs
+        .map(|r| -> EResult<Vec<f64>> {
+            let srs_var = srs_variance_ratio(y, x, &srs_weights(weights, mask), r)?;
+            Ok(vec![deff_ratio(variance, srs_var)])
+        })
+        .transpose()?;
 
-    Ok(
-        df!["y" => vec![numerator_col], "x" => vec![denominator_col], "est" => vec![theta_full],
-        "se" => vec![se], "var" => vec![variance], "df" => vec![df_val], "n" => vec![active_count(weights, None)]]?,
-    )
+    let out = df!["y" => vec![numerator_col], "x" => vec![denominator_col], "est" => vec![theta_full],
+        "se" => vec![se], "var" => vec![variance], "df" => vec![df_val], "n" => vec![active_count(weights, None)]]?;
+    with_deff(out, deff)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -697,6 +850,7 @@ fn compute_replicate_ratio_grouped(
     center: VarianceCenter,
     df_val: f64,
     by_col: &str,
+    srs: Option<SrsRef>,
 ) -> EResult<(DataFrame, Vec<f64>)> {
     let y = df.column(numerator_col)?.f64()?;
     let x = df.column(denominator_col)?.f64()?;
@@ -745,6 +899,20 @@ fn compute_replicate_ratio_grouped(
         dfs.push(df_val);
         ns.push(counts[k]);
     }
+    let deffs = srs
+        .map(|r| -> EResult<Vec<f64>> {
+            domain_masks(&domain_ids, n_domains)
+                .iter()
+                .zip(&variances)
+                .map(|(m, &v)| {
+                    Ok(deff_ratio(
+                        v,
+                        srs_variance_ratio_domain(y, x, weights, m, r)?,
+                    ))
+                })
+                .collect()
+        })
+        .transpose()?;
     let cov = flatten_cov(covariance_from_replicates(
         &theta_full_vec,
         &theta_reps_vec,
@@ -753,7 +921,7 @@ fn compute_replicate_ratio_grouped(
     ));
     let out = df![by_col => by_vals, "y" => vec![numerator_col; n_domains], "x" => vec![denominator_col; n_domains],
         "est" => estimates, "se" => ses, "var" => variances, "df" => dfs, "n" => ns]?;
-    Ok((out, cov))
+    Ok((with_deff(out, deffs)?, cov))
 }
 
 // ============================================================================
@@ -761,7 +929,7 @@ fn compute_replicate_ratio_grouped(
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
+#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None, deff_ref=None))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn replicate_prop(
     _py: Python,
@@ -774,6 +942,7 @@ pub(crate) fn replicate_prop(
     degrees_of_freedom: Option<f64>,
     by_col: Option<String>,
     domain_mask_col: Option<String>,
+    deff_ref: Option<String>,
 ) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
     replicate_levels(
         _py,
@@ -786,13 +955,14 @@ pub(crate) fn replicate_prop(
         degrees_of_freedom,
         by_col,
         domain_mask_col,
+        deff_ref,
         true,
     )
 }
 
 /// Count per level (R `svytotal(~factor(y))`) with the joint covariance across levels and groups.
 #[pyfunction]
-#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
+#[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None, deff_ref=None))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn replicate_factor_total(
     _py: Python,
@@ -805,6 +975,7 @@ pub(crate) fn replicate_factor_total(
     degrees_of_freedom: Option<f64>,
     by_col: Option<String>,
     domain_mask_col: Option<String>,
+    deff_ref: Option<String>,
 ) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
     replicate_levels(
         _py,
@@ -817,6 +988,7 @@ pub(crate) fn replicate_factor_total(
         degrees_of_freedom,
         by_col,
         domain_mask_col,
+        deff_ref,
         false,
     )
 }
@@ -834,9 +1006,11 @@ fn replicate_levels(
     degrees_of_freedom: Option<f64>,
     by_col: Option<String>,
     domain_mask_col: Option<String>,
+    deff_ref: Option<String>,
     normalize: bool,
 ) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
     let df = into_contiguous(data);
+    let srs = parse_deff_ref(deff_ref.as_deref())?;
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
     // Coefficients come from the RepWeights variant on the Python side.
@@ -859,6 +1033,7 @@ fn replicate_levels(
             df_val,
             domain_mask_col.as_deref(),
             normalize,
+            srs,
         ),
         Some(by) => compute_replicate_prop_grouped(
             &df,
@@ -870,6 +1045,7 @@ fn replicate_levels(
             df_val,
             by,
             normalize,
+            srs,
         ),
     });
     result
@@ -888,6 +1064,7 @@ fn compute_replicate_prop_ungrouped(
     df_val: f64,
     domain_mask_col: Option<&str>,
     normalize: bool,
+    srs: Option<SrsRef>,
 ) -> EResult<(DataFrame, Vec<f64>)> {
     let y_series = df.column(value_col)?;
     let weights = df.column(weight_col)?.f64()?;
@@ -904,7 +1081,7 @@ fn compute_replicate_prop_ungrouped(
         DataType::String | DataType::Categorical(_, _)
     );
 
-    let (n_levels, level_strs, estimates, variances, theta_reps) = if is_string {
+    let (n_levels, level_strs, estimates, variances, theta_reps, positions) = if is_string {
         let y_cast = y_series.cast(&DataType::String)?;
         let y_arr: Vec<String> = y_cast
             .str()?
@@ -922,7 +1099,8 @@ fn compute_replicate_prop_ungrouped(
         let vars: Vec<f64> = (0..n_l)
             .map(|l| variance_from_replicates(theta_full[l], &theta_reps[l], rep_coefs, center))
             .collect();
-        (n_l, levels, theta_full, vars, theta_reps)
+        let positions = srs.map(|_| level_positions(&y_arr, &levels));
+        (n_l, levels, theta_full, vars, theta_reps, positions)
     } else {
         let y_arr: Vec<i64> = if y_series.dtype().is_integer() {
             y_series.i64()?.iter().map(|v| v.unwrap_or(0)).collect()
@@ -952,7 +1130,8 @@ fn compute_replicate_prop_ungrouped(
             .map(|l| variance_from_replicates(theta_full[l], &theta_reps[l], rep_coefs, center))
             .collect();
         let str_levels: Vec<String> = levels.iter().map(|l| l.to_string()).collect();
-        (n_l, str_levels, theta_full, vars, theta_reps)
+        let positions = srs.map(|_| level_positions(&y_arr, &levels));
+        (n_l, str_levels, theta_full, vars, theta_reps, positions)
     };
 
     let cov = flatten_cov(covariance_from_replicates(
@@ -961,12 +1140,26 @@ fn compute_replicate_prop_ungrouped(
         rep_coefs,
         center,
     ));
+    let deffs = match (srs, positions) {
+        (Some(r), Some(pos)) => {
+            let w = srs_weights(weights, mask);
+            let srs_vars = level_srs_vars(&pos, n_levels, &w, None, normalize, r)?;
+            Some(
+                variances
+                    .iter()
+                    .zip(&srs_vars)
+                    .map(|(&v, &s)| deff_ratio(v, s))
+                    .collect(),
+            )
+        }
+        _ => None,
+    };
     let ses: Vec<f64> = variances.iter().map(|v| v.sqrt()).collect();
     let ns: Vec<u32> = vec![active_count(weights, None); n_levels];
     let dfs: Vec<f64> = vec![df_val; n_levels];
     let out = df!["y" => vec![value_col; n_levels], "level" => level_strs, "est" => estimates,
         "se" => ses, "var" => variances, "df" => dfs, "n" => ns]?;
-    Ok((out, cov))
+    Ok((with_deff(out, deffs)?, cov))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -980,6 +1173,7 @@ fn compute_replicate_prop_grouped(
     df_val: f64,
     by_col: &str,
     normalize: bool,
+    srs: Option<SrsRef>,
 ) -> EResult<(DataFrame, Vec<f64>)> {
     let y_series = df.column(value_col)?;
     let weights = df.column(weight_col)?.f64()?;
@@ -996,7 +1190,7 @@ fn compute_replicate_prop_grouped(
         DataType::String | DataType::Categorical(_, _)
     );
 
-    let (levels_str, theta_full_mat, theta_reps_mat, counts) = if is_string {
+    let (levels_str, theta_full_mat, theta_reps_mat, counts, positions) = if is_string {
         let y_cast = y_series.cast(&DataType::String)?;
         let y_arr: Vec<String> = y_cast
             .str()?
@@ -1013,7 +1207,8 @@ fn compute_replicate_prop_grouped(
             n_reps,
             normalize,
         );
-        (levels, tf, tr, counts)
+        let positions = srs.map(|_| level_positions(&y_arr, &levels));
+        (levels, tf, tr, counts, positions)
     } else {
         let y_arr: Vec<i64> = if y_series.dtype().is_integer() {
             y_series.i64()?.iter().map(|v| v.unwrap_or(0)).collect()
@@ -1042,7 +1237,8 @@ fn compute_replicate_prop_grouped(
             normalize,
         );
         let str_levels: Vec<String> = levels.iter().map(|l| l.to_string()).collect();
-        (str_levels, tf, tr, counts)
+        let positions = srs.map(|_| level_positions(&y_arr, &levels));
+        (str_levels, tf, tr, counts, positions)
     };
 
     let mut by_vals: Vec<String> = Vec::new();
@@ -1070,6 +1266,30 @@ fn compute_replicate_prop_grouped(
             theta_reps_flat.push(theta_reps_mat[d][l].clone());
         }
     }
+    // Domain-major, levels within: the row order above.
+    let deffs = match (srs, positions) {
+        (Some(r), Some(pos)) => {
+            let mut srs_vars = Vec::with_capacity(variances.len());
+            for m in domain_masks(&domain_ids, n_domains) {
+                srs_vars.extend(level_srs_vars(
+                    &pos,
+                    levels_str.len(),
+                    weights,
+                    Some(&m),
+                    normalize,
+                    r,
+                )?);
+            }
+            Some(
+                variances
+                    .iter()
+                    .zip(&srs_vars)
+                    .map(|(&v, &s)| deff_ratio(v, s))
+                    .collect(),
+            )
+        }
+        _ => None,
+    };
     let cov = flatten_cov(covariance_from_replicates(
         &estimates,
         &theta_reps_flat,
@@ -1079,7 +1299,7 @@ fn compute_replicate_prop_grouped(
     let n_rows = by_vals.len();
     let out = df![by_col => by_vals, "y" => vec![value_col; n_rows], "level" => level_strs,
         "est" => estimates, "se" => ses, "var" => variances, "df" => dfs, "n" => ns]?;
-    Ok((out, cov))
+    Ok((with_deff(out, deffs)?, cov))
 }
 
 // ============================================================================
