@@ -4,6 +4,10 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ## [Unreleased]
 
+### Added
+
+- `replicate_mean`, `replicate_total`, `replicate_ratio`, `replicate_prop`, `replicate_factor_total` and `replicate_assoc` take `deff_ref` (`"wor"`/`"wr"`); when given they add a `deff` column, the replicate variance over the Taylor kernels' SRS reference, per by-domain.
+
 ### Changed
 
 - `taylor_api`, `glm` and `categorical::api` are directory modules split along their old sections; every path stays the same and no code changed. `taylor.rs` stays one file: splitting it cost 3–7% on the Taylor kernels.
