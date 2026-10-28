@@ -13,6 +13,7 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 - **A file that failed to parse read as an empty frame when `n_max=0`**, through `read_xpt` or the native readers.
 - **A SAS catalog that failed to parse was reported only on stderr.** `read_sas`, `read_xpt` and `read_sas_arrow` now raise a `UserWarning` and read the data without value labels.
 - **A failed write left a truncated file behind.** The output file is now removed.
+- **A disk error during `write_sav`, `write_dta` or `write_xpt` went unreported**, leaving a truncated file. It now raises `READSTAT_WRITE_FAILED` and removes the file.
 - **A crafted file with two variables of the same name failed with an Arrow message.** Values are now routed by variable index, and the read raises naming the variable.
 
 - **`.zsav` files could not be read, and `write_sav(compress="zsav")` wrote a plain `.sav`.** The bundled zlib was built without its default allocator, so every zlib stream failed to open. Both directions now work and read back in haven; an unknown `compress` value raises instead of falling back to byte compression.

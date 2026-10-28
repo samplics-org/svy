@@ -1039,6 +1039,25 @@ impl Drop for OutputFile {
     }
 }
 
+/// ReadStat data sink writing to the `std::fs::File` behind `ctx`.
+pub(crate) unsafe extern "C" fn data_writer_cb(
+    data: *const c_void,
+    len: usize,
+    ctx: *mut c_void,
+) -> isize {
+    use std::io::Write;
+    // ReadStat stores the result in a size_t, so -1 would pass as success; a short count is the failure.
+    if data.is_null() || ctx.is_null() {
+        return 0;
+    }
+    let file = unsafe { &mut *(ctx as *mut std::fs::File) };
+    let bytes = unsafe { std::slice::from_raw_parts(data as *const u8, len) };
+    match file.write_all(bytes) {
+        Ok(_) => len as isize,
+        Err(_) => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1274,6 +1293,30 @@ mod tests {
 
         OutputFile::create(p).unwrap().finish();
         assert!(path.exists());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn data_writer_cb_reports_a_failed_write_as_zero_bytes() {
+        let path = std::env::temp_dir().join("svy_io_data_writer_cb.bin");
+        std::fs::write(&path, b"").unwrap();
+        let mut read_only = std::fs::File::open(&path).unwrap();
+        let ctx = &mut read_only as *mut std::fs::File as *mut c_void;
+        let bytes = b"abc";
+
+        let n = unsafe { data_writer_cb(bytes.as_ptr() as *const c_void, bytes.len(), ctx) };
+        assert_eq!(n, 0);
+        let n = unsafe { data_writer_cb(std::ptr::null(), bytes.len(), ctx) };
+        assert_eq!(n, 0);
+        let n = unsafe { data_writer_cb(bytes.as_ptr() as *const c_void, 3, std::ptr::null_mut()) };
+        assert_eq!(n, 0);
+
+        let mut writable = std::fs::File::create(&path).unwrap();
+        let ctx = &mut writable as *mut std::fs::File as *mut c_void;
+        let n = unsafe { data_writer_cb(bytes.as_ptr() as *const c_void, bytes.len(), ctx) };
+        assert_eq!(n, 3);
+        drop(writable);
+        assert_eq!(std::fs::read(&path).unwrap(), b"abc");
         std::fs::remove_file(&path).unwrap();
     }
 
