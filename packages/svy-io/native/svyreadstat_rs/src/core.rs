@@ -1147,6 +1147,32 @@ impl Drop for OutputFile {
     }
 }
 
+/// ReadStat data sink writing to the `std::fs::File` behind `ctx`.
+///
+/// # Safety
+///
+/// Called only by ReadStat: `data` is null or `len` readable bytes, and `ctx` is null or
+/// the pointer `OutputFile::as_ctx` returned.
+pub(crate) unsafe extern "C" fn data_writer_cb(
+    data: *const c_void,
+    len: usize,
+    ctx: *mut c_void,
+) -> isize {
+    use std::io::Write;
+    // ReadStat stores the result in a size_t, so -1 would pass as success; a short count is the failure.
+    if data.is_null() || ctx.is_null() {
+        return 0;
+    }
+    // SAFETY: `ctx` is the `OutputFile`'s `File`, alive and otherwise untouched while writing.
+    let file = unsafe { &mut *(ctx as *mut std::fs::File) };
+    // SAFETY: ReadStat passes a buffer of `len` readable bytes, valid for the call.
+    let bytes = unsafe { std::slice::from_raw_parts(data as *const u8, len) };
+    match file.write_all(bytes) {
+        Ok(_) => len as isize,
+        Err(_) => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1386,6 +1412,30 @@ mod tests {
 
         OutputFile::create(p).unwrap().finish();
         assert!(path.exists());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn data_writer_cb_reports_a_failed_write_as_zero_bytes() {
+        let sink = |data: *const c_void, len: usize, ctx: *mut c_void| {
+            // SAFETY: each call passes null or 3 readable bytes, and null or a live `File`.
+            unsafe { data_writer_cb(data, len, ctx) }
+        };
+        let path = std::env::temp_dir().join("svy_io_data_writer_cb.bin");
+        std::fs::write(&path, b"").unwrap();
+        let mut read_only = std::fs::File::open(&path).unwrap();
+        let ctx = &mut read_only as *mut std::fs::File as *mut c_void;
+        let bytes = b"abc".as_ptr() as *const c_void;
+
+        assert_eq!(sink(bytes, 3, ctx), 0);
+        assert_eq!(sink(std::ptr::null(), 3, ctx), 0);
+        assert_eq!(sink(bytes, 3, std::ptr::null_mut()), 0);
+
+        let mut writable = std::fs::File::create(&path).unwrap();
+        let ctx = &mut writable as *mut std::fs::File as *mut c_void;
+        assert_eq!(sink(bytes, 3, ctx), 3);
+        drop(writable);
+        assert_eq!(std::fs::read(&path).unwrap(), b"abc");
         std::fs::remove_file(&path).unwrap();
     }
 

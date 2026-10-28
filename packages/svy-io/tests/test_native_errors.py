@@ -243,3 +243,25 @@ def test_failed_write_removes_the_partial_file(tmp_path, write, fmt, ext, kwargs
     assert exc.value.code == "READSTAT_WRITE_FAILED"
     assert str(exc.value).startswith(f'Failed to write {fmt} file "{path}": ')
     assert not path.exists()
+
+
+@pytest.mark.parametrize(("writer", "fmt", "ext"), WRITERS)
+def test_disk_write_error_raises_and_removes_the_partial_file(tmp_path, writer, fmt, ext):
+    resource = pytest.importorskip("resource")
+    import signal
+
+    path = tmp_path / f"big.{ext}"
+    df = pl.DataFrame({"x": [float(i) for i in range(50_000)]})
+    soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+    # Without SIG_IGN, writing past the limit kills the process instead of failing with EFBIG.
+    handler = signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+    resource.setrlimit(resource.RLIMIT_FSIZE, (8192, hard))
+    try:
+        with pytest.raises(native.ReadStatRuntimeError) as exc:
+            writer(df, path)
+    finally:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
+        signal.signal(signal.SIGXFSZ, handler)
+    assert exc.value.code == "READSTAT_WRITE_FAILED"
+    assert str(exc.value).startswith(f'Failed to write {fmt} file "{path}": ')
+    assert not path.exists()

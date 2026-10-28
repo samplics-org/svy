@@ -4,9 +4,8 @@ use pyo3::types::PyBytes;
 
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::fs::File;
-use std::io::{Cursor, Write as IoWrite};
-use std::os::raw::{c_char, c_void};
+use std::io::Cursor;
+use std::os::raw::c_char;
 
 use arrow::array::{
     Array, BooleanArray, Date32Array, Date64Array, DictionaryArray, Float32Array, Float64Array,
@@ -36,30 +35,8 @@ use readstat_sys::{
     readstat_writer_set_file_label, readstat_writer_t,
 };
 
-use crate::core::{OutputFile, WriterGuard, write_rc};
+use crate::core::{OutputFile, WriterGuard, data_writer_cb, write_rc};
 use crate::errors::{Error, Op, Result};
-
-/// # Safety
-///
-/// Called only by ReadStat: `data` is null or `len` readable bytes, and `ctx` is null or
-/// the pointer `OutputFile::as_ctx` returned.
-unsafe extern "C" fn data_writer_cb(
-    data: *const std::os::raw::c_void,
-    len: usize,
-    ctx: *mut c_void,
-) -> isize {
-    if data.is_null() || ctx.is_null() {
-        return -1;
-    }
-    // SAFETY: `ctx` is the `OutputFile`'s `File`, alive and otherwise untouched while writing.
-    let file = unsafe { &mut *(ctx as *mut File) };
-    // SAFETY: ReadStat passes a buffer of `len` readable bytes, valid for the call.
-    let bytes = unsafe { std::slice::from_raw_parts(data as *const u8, len) };
-    match file.write_all(bytes) {
-        Ok(_) => len as isize,
-        Err(_) => -1,
-    }
-}
 
 fn ipc_to_batches(buf: &[u8]) -> arrow::error::Result<Vec<RecordBatch>> {
     let mut batches = Vec::new();
