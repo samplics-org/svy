@@ -14,7 +14,7 @@ from svy.errors import EstimationError
 from svy.errors._api import guided_getattr
 from svy.errors._findings import SvyWarning, merge_findings
 from svy.estimation import ParamEst
-from svy.estimation.estimate import _display_level, checked_print_width
+from svy.estimation.estimate import VarLabels, _display_level, checked_print_width
 
 # Import central UI helpers (consistent with estimate.py)
 from svy.ui.printing import (
@@ -38,6 +38,8 @@ log = logging.getLogger(__name__)
 
 # Keys used by the central UI for styling
 _UI_KEY_RESULTS = "ttest.results"
+# How several by variables' levels are joined into one by_level.
+_BY_SEP = "__by__"
 
 
 def _level_text(value: Any) -> str:
@@ -917,7 +919,6 @@ class TTestByResult:
         For multi-by, levels are stored as 'v1__by__v2__by__v3'.
         Splits on '__by__' and zips with by variable names.
         """
-        _BY_SEP = "__by__"
         level_str = _level_text(by_level)
         parts = level_str.split(_BY_SEP)
         if len(parts) == len(self._by_list) and len(parts) > 1:
@@ -931,6 +932,27 @@ class TTestByResult:
     def _by_text(self, var: str, text: str) -> str:
         labels = self.by_labels.get(var)
         return text if labels is None else labels.display(text)
+
+    def _labels(self) -> dict[str, VarLabels]:
+        """The label of each labelled ``by`` variable, and of each of its levels present.
+
+        Empty without labels; what a serialized result stores.
+        """
+        present: dict[str, set[str]] = {var: set() for var in self._by_list}
+        for r in self.results:
+            if not r.diff:
+                continue
+            text = _level_text(r.diff[0].by_level)
+            parts = text.split(_BY_SEP) if len(self._by_list) > 1 else [text]
+            for var, part in zip(self._by_list, parts):
+                present[var].add(part)
+        return {
+            var: VarLabels(
+                lab.var_label,
+                {c: v for c, v in lab.labels.items() if _level_text(c) in present.get(var, ())},
+            )
+            for var, lab in self.by_labels.items()
+        }
 
     # ── Width configuration ──────────────────────────────────────────────
 

@@ -30,7 +30,7 @@ from svy.errors import Code, EstimationError
 from svy.errors._api import guided_getattr
 from svy.errors._findings import merge_findings
 from svy.estimation import ParamEst
-from svy.estimation.estimate import checked_print_width
+from svy.estimation.estimate import VarLabels, checked_print_width
 
 # Import central UI helpers (consistent with estimate.py and ttest.py)
 from svy.ui.printing import (
@@ -308,8 +308,15 @@ class Table:
         """Get value label or fall back to string representation."""
         if isinstance(value, str):
             value = self._source_value(var, value)
-        if not self._resolve_use_labels() or self._metadata is None:
+        if not self._resolve_use_labels():
             return _level_text(value)
+        label = self._value_label(var, value)
+        return _level_text(value) if label is None else label
+
+    def _value_label(self, var: str, value: Category) -> str | None:
+        """`value`'s label in the metadata, or None."""
+        if self._metadata is None:
+            return None
         resolved = self._metadata._resolve(var)
         # Try the value as-is first
         label = resolved.display(value)
@@ -321,7 +328,26 @@ class Table:
                 label = resolved.display(int_value)
             except (ValueError, TypeError):
                 pass
-        return _level_text(value) if label == str(value) else label
+        return None if label == str(value) else label
+
+    def _labels(self) -> dict[str, VarLabels]:
+        """The label of the row and column variables, and of each of their levels present.
+
+        Empty without metadata; what a serialized table stores.
+        """
+        if self._metadata is None:
+            return {}
+        out: dict[str, VarLabels] = {}
+        for var, levels in ((self.rowvar, self.rowvals), (self.colvar, self.colvals)):
+            if var is None:
+                continue
+            resolved = self._metadata._resolve(var)
+            values = {
+                v: lab for v in levels or () if (lab := self._value_label(var, v)) is not None
+            }
+            if resolved.has_var_label or values:
+                out[var] = VarLabels(resolved.var_label if resolved.has_var_label else "", values)
+        return out
 
     def _get_row_display(self, value: Category) -> str:
         """Get display string for a row value."""

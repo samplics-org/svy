@@ -64,7 +64,7 @@ gets one kind per member type instead.
 ### 2.5 `schema_version` on top-level structs
 
 Every top-level struct carries `schema_version: str = SCHEMA_VERSION` where
-`SCHEMA_VERSION = "svy-result/0.12"`. Consumers can check the version to know
+`SCHEMA_VERSION = "svy-result/0.13"`. Consumers can check the version to know
 what fields to expect.
 
 **Versioning policy:** bump the minor version (0.1 → 0.2) when fields are added
@@ -119,6 +119,11 @@ ignore unknown fields.
   `hint`, `var`, `got`); None when there were none, or decoded from an older payload.
 - `0.12` — `ParamEstData.df` widened to `int | float`: a replicate design's df can be
   fractional (`RepWeights(df=16.9)`); an integral df stays an int.
+- `0.13` — `EstimateData.covariance` (rows and columns in `estimates` order) and
+  `covariance_filled` (False when each row was estimated alone and the off-diagonals
+  are zeros, not a covariance); `labels` on `TableData` (row and column variables)
+  and on the two t-test-by kinds (the `by` variables), in the estimate's shape. All
+  optional: older payloads decode with `None`.
 
 ### 2.6 Sub-structs are untagged
 
@@ -132,7 +137,6 @@ Internal or large fields not needed for rendering, comparison, or reporting:
 
 | Source class   | Excluded field  | Reason                          |
 | -------------- | --------------- | ------------------------------- |
-| `Estimate`     | `covariance`    | Large ndarray; internal         |
 | `Estimate`     | `strata`        | Internal list of strata labels  |
 | `Estimate`     | `singletons`    | Internal singleton tracking     |
 | `Estimate`     | `domains`       | Internal domain tracking        |
@@ -275,8 +279,10 @@ Source: `svy.estimation.estimate.Estimate` (not msgspec; `__slots__`)
 | `deff_ref`        | `str \| None`           | `deff_ref`             |
 | `as_factor`       | `bool`                  | `as_factor`            |
 | `level_orders`    | `dict[str, list[str]] \| None` | `level_orders` |
+| `covariance`      | `list[list[float]] \| None` | `covariance` (None when empty) |
+| `covariance_filled` | `bool \| None`        | `_cov_filled`          |
 
-Excluded: `covariance`, `strata`, `singletons`, `domains`.
+Excluded: `strata`, `singletons`, `domains`.
 
 #### TTestOneGroupData (`kind = "ttest_one_group"`)
 
@@ -324,6 +330,7 @@ Source: `svy.categorical.ttest.TTestByResult`, by the type of its members.
 | `alpha`        | `float`                                | `alpha`          |
 | `where_clause` | `str \| None`                          | `where_clause`   |
 | `results`      | `list[TTestOneGroupData]` / `list[TTestTwoGroupsData]` | one per `by` level; its rows carry `by_level` |
+| `labels`       | `list[VarLabelsData] \| None`          | the `by` variables' value labels (`_labels()`) |
 
 #### ChiSquareData (`kind = "chi_square"`)
 
@@ -353,6 +360,7 @@ Source: `svy.categorical.table.Table` (not msgspec; `__slots__`)
 | `colvals`      | `list[str \| int \| float \| bool] \| None` | `colvals` |
 | `share_of`     | `str` (default `"total"`)    | `share_of`       |
 | `units`        | `str \| None`                | `units`          |
+| `labels`       | `list[VarLabelsData] \| None` | row and column variables' labels (`_labels()`) |
 
 #### GLMFitData (`kind = "glm_fit"`)
 
