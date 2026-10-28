@@ -4,6 +4,8 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-10-28
+
 ### Added
 
 - **`write_sav` takes text user-missing codes for string columns**, up to SAV's 8 bytes. A text code on a numeric column, or an `na_range` on a string column (which the writer silently dropped), raises `ValueError`.
@@ -185,7 +187,8 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 First release tracked in this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-io-v0.7.1...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-io-v0.8.0...HEAD
+[0.8.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.8.0
 [0.7.1]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.7.1
 [0.7.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.7.0
 [0.6.1]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.6.1
