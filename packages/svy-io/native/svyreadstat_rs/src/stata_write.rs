@@ -642,7 +642,8 @@ fn write_stata_minimal(
                     } else {
                         as_f64_opt(arr.as_ref(), i)
                     };
-                    match v {
+                    // Stata has no infinity or NaN; haven writes them as missing too.
+                    match v.filter(|v| v.is_finite()) {
                         // SAFETY: `rvars[j]` belongs to the live `writer`.
                         Some(v) => unsafe { readstat_insert_double_value(writer, rvars[j], v) },
                         // SAFETY: `rvars[j]` belongs to the live `writer`.

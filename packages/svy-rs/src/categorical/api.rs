@@ -612,6 +612,8 @@ fn compute_svyttest_single(
     strata_col=None, psu_col=None, ssu_col=None,
     fpc_col=None, fpc_ssu_col=None, score_method=None,
     singleton_method=None, domain_col=None, domain_val=None, by_col=None,
+    calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None,
+    calib_pins_total=None, calib_new_wgt=None,
     rep_weight_cols=None, rep_coefs=None, rep_df=None, variance_center="rep_mean",
     scores_given=false,
 ))]
@@ -632,6 +634,12 @@ pub(crate) fn ranktest_rs(
     domain_col: Option<String>,
     domain_val: Option<String>,
     by_col: Option<String>,
+    calib_kind: Option<String>,
+    calib_cells: Option<Vec<String>>,
+    calib_aux: Option<Vec<String>>,
+    calib_prev_wgt: Option<String>,
+    calib_pins_total: Option<bool>,
+    calib_new_wgt: Option<String>,
     rep_weight_cols: Option<Vec<String>>,
     rep_coefs: Option<Vec<f64>>,
     rep_df: Option<f64>,
@@ -646,6 +654,17 @@ pub(crate) fn ranktest_rs(
             "scores_given requires rep_weight_cols",
         )));
     }
+    let calib = make_calib(
+        &df,
+        &weight_col,
+        calib_kind,
+        calib_cells,
+        calib_aux,
+        calib_prev_wgt,
+        calib_pins_total,
+        calib_new_wgt,
+    )
+    .map_err(|e| to_py_err(&e))?;
     let result = compute_svyranktest(
         &df,
         &y_col,
@@ -661,6 +680,7 @@ pub(crate) fn ranktest_rs(
         domain_col.as_deref(),
         domain_val.as_deref(),
         by_col.as_deref(),
+        calib.as_ref(),
         rep.as_ref(),
         scores_given,
     )
@@ -684,6 +704,7 @@ fn compute_svyranktest(
     domain_col: Option<&str>,
     domain_val: Option<&str>,
     by_col: Option<&str>,
+    calib: Option<&CalibSweep>,
     rep: Option<&RepSpec>,
     scores_given: bool,
 ) -> CResult<DataFrame> {
@@ -702,6 +723,7 @@ fn compute_svyranktest(
             singleton_method,
             domain_col,
             domain_val,
+            calib,
             rep,
             scores_given,
             None,
@@ -726,6 +748,7 @@ fn compute_svyranktest(
                     singleton_method,
                     d_col,
                     d_val,
+                    calib,
                     rep,
                     scores_given,
                     Some(&frame_levels),
@@ -750,6 +773,7 @@ fn compute_svyranktest_single(
     singleton_method: Option<&str>,
     domain_col: Option<&str>,
     domain_val: Option<&str>,
+    calib: Option<&CalibSweep>,
     rep: Option<&RepSpec>,
     scores_given: bool,
     // By-group only: the frame's levels, so fewer than two weighted groups yields a NaN row, not an error.
@@ -839,6 +863,7 @@ fn compute_svyranktest_single(
                 fpc_ssu,
                 method,
                 singleton_method,
+                calib,
                 levels,
                 &rows,
             )?,
@@ -876,6 +901,7 @@ fn compute_svyranktest_single(
                 fpc_ssu,
                 method,
                 singleton_method,
+                calib,
                 levels,
                 &rows,
             )?,

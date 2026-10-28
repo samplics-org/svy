@@ -249,10 +249,17 @@ fn compute_string_metadata(batches: &[RecordBatch]) -> Vec<Option<StringColStats
     all_stats
 }
 
+/// A user-missing code as Python sends it: a number, or a string column's text.
+#[derive(Debug, Clone, FromPyObject)]
+enum MissingCode {
+    Num(f64),
+    Text(String),
+}
+
 #[derive(Debug, Clone)]
 struct UserMissingInfo {
     col: String,
-    values: Vec<f64>,
+    values: Vec<MissingCode>,
     range: Option<(f64, f64)>,
 }
 
@@ -397,15 +404,26 @@ fn write_spss_minimal(
                                 width
                             )));
                         }
-                        for val in &um.values {
-                            // `1`, not `1.0`, for whole numbers.
-                            let val_string = if val.fract() == 0.0 {
-                                format!("{:.0}", val)
-                            } else {
-                                val.to_string()
+                        for code in &um.values {
+                            let text = match code {
+                                MissingCode::Text(t) => t.clone(),
+                                // `1`, not `1.0`, for whole numbers.
+                                MissingCode::Num(v) if v.fract() == 0.0 => format!("{v:.0}"),
+                                MissingCode::Num(v) => v.to_string(),
                             };
-                            let c_val =
-                                CString::new(val_string).expect("a formatted number holds no NUL");
+                            if text.len() > 8 {
+                                return Err(Error::Invalid(format!(
+                                    "user-missing code '{text}' for column '{}' is longer than \
+                                     the 8 bytes SPSS stores",
+                                    field.name()
+                                )));
+                            }
+                            let c_val = CString::new(text).map_err(|_| {
+                                Error::Invalid(format!(
+                                    "a user-missing code for column '{}' contains a NUL byte",
+                                    field.name()
+                                ))
+                            })?;
                             // SAFETY: `var` is live; `_keep_missing` holds `c_val` until begin_writing reads it.
                             rcs.push(unsafe {
                                 readstat_variable_add_missing_string_value(var, c_val.as_ptr())
@@ -414,10 +432,16 @@ fn write_spss_minimal(
                         }
                         // ReadStat has no string-range API, so `um.range` is ignored.
                     } else {
-                        for &val in &um.values {
+                        for code in &um.values {
+                            let MissingCode::Num(val) = code else {
+                                return Err(Error::Invalid(format!(
+                                    "column '{}' is numeric; its user-missing codes must be numbers",
+                                    field.name()
+                                )));
+                            };
                             // SAFETY: `var` lives as long as `writer`.
                             rcs.push(unsafe {
-                                readstat_variable_add_missing_double_value(var, val)
+                                readstat_variable_add_missing_double_value(var, *val)
                             });
                         }
                         if let Some((low, high)) = um.range {
@@ -601,7 +625,7 @@ pub(crate) fn df_write_sav_file(
                         .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("col"))?
                         .extract::<String>(py)?;
                     let values = match um_dict.get("values") {
-                        Some(v) if !v.is_none(py) => v.extract::<Vec<f64>>(py)?,
+                        Some(v) if !v.is_none(py) => v.extract::<Vec<MissingCode>>(py)?,
                         _ => Vec::new(),
                     };
                     let range = match um_dict.get("range") {

@@ -21,6 +21,7 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ### Fixed
 
+- `ranktest_rs` takes the `calib_*` arguments and sweeps the rank-score influence values, two-sample and k-sample, as `ttest_rs` does.
 - `ranktest_rs` k-sample applies `fpc_col`, `ssu_col` and `fpc_ssu_col`: `influence_covariance` takes them and builds the two-stage, FPC-aware design.
 - `probit` refines Acklam's approximation with one Halley step, so van der Waerden rank scores and the probit link match R `qnorm` to rounding instead of 1e-9.
 - Kernel inputs whose lengths disagree raise `SHAPE_MISMATCH` instead of panicking or zero-padding: GLM and negative binomial fits (weights, design columns, offset, domain mask, predictors) and the t-test and rank-test WOLS. svy always passes equal lengths.

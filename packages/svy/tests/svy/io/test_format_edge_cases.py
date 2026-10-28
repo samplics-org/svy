@@ -72,17 +72,11 @@ def test_string_null_becomes_empty_string(tmp_path, fmt):
     assert back.data["s"].to_list() == ["a", "", ""]
 
 
-@pytest.mark.parametrize("fmt", ["sav", "dta"])
+@pytest.mark.parametrize("fmt", ["sav", "dta", "xpt"])
 def test_nan_and_infinity_become_missing(tmp_path, fmt):
     df = pl.DataFrame({"x": [math.nan, math.inf, -math.inf, 1.0]})
     back, _ = _roundtrip(tmp_path, svy.Sample(df), fmt)
     assert back.data["x"].to_list() == [None, None, None, 1.0]
-
-
-def test_xpt_keeps_infinity_and_drops_nan(tmp_path):
-    df = pl.DataFrame({"x": [math.nan, math.inf, -math.inf, 1.0]})
-    back, _ = _roundtrip(tmp_path, svy.Sample(df), "xpt")
-    assert back.data["x"].to_list() == [None, math.inf, -math.inf, 1.0]
 
 
 @pytest.mark.parametrize("fmt", FORMATS)

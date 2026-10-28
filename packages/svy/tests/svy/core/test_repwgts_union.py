@@ -116,7 +116,7 @@ def test_fay_is_a_value_not_a_type():
 # ---------------------------------------------------------------------------
 
 
-def test_coefficients_match_the_rust_kernel():
+def test_coefficients_by_method():
     """Each method's coefficients: 1/B, 1/(B(1-fay)^2) and (B-1)/B."""
     n = 64
     assert BootstrapWgts(prefix="w", n_reps=n).coefficients() == [1.0 / n] * n

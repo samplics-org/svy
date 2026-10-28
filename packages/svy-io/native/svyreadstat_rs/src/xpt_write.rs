@@ -293,7 +293,9 @@ fn write_xpt_impl(
                         },
                     }
                 } else {
-                    match as_f64_opt(arr.as_ref(), i) {
+                    // XPT's IBM floats hold no infinity or NaN (NaN came out as +inf); haven writes
+                    // them as missing too.
+                    match as_f64_opt(arr.as_ref(), i).filter(|v| v.is_finite()) {
                         // SAFETY: `rvars[j]` belongs to the live `writer`.
                         Some(v) => unsafe { readstat_insert_double_value(writer, rvars[j], v) },
                         // SAFETY: `rvars[j]` belongs to the live `writer`.

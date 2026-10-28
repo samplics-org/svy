@@ -127,7 +127,10 @@ def _ipc(df):
     ("kwargs", "message"),
     [
         ({"user_missing": [{"values": [9.0]}]}, r"bad user_missing entry: .*'col'"),
-        ({"user_missing": [{"col": "x", "values": ["nine"]}]}, "bad user_missing entry"),
+        (
+            {"user_missing": [{"col": "x", "values": ["nine"]}]},
+            "column 'x' is numeric; its user-missing codes must be numbers",
+        ),
         ({"value_labels": [{"col": "x"}]}, r"bad value_labels entry: .*'labels'"),
     ],
 )

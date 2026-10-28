@@ -8,6 +8,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Added
 
+- **`svy.io.write_sav` takes text user-missing codes for string columns**, as haven's `write_sav` does (`user_missing={"s": {"na_values": ["x"]}}`); a range on a string column, which SAV cannot store, raises instead of being dropped.
 - **`svy.utils.deprecated_param(old, new, since=, remove_in=)`** keeps a renamed keyword working through a deprecation period: `old=` warns (`DeprecationWarning` naming `new=`, at the user's line) and is passed on as `new=`; both together raise `UsageError.TypeError` (`PARAM_GIVEN_TWICE`). Stack one per renamed keyword.
 - **`@experimental` (`svy.utils`) and `svy.errors.ExperimentalWarning`.** A decorated function warns once per session (`EXPERIMENTAL`), notes every result it returns (`note: Experimental method [EXPERIMENTAL]`, kept in saved payloads) and says so in its docstring. The warning is not recorded in `sample.warnings`, and filtering it out keeps the result note. An experimental feature may change in any release without a deprecation period.
 - **Every error and warning links to its code.** `docs_url` defaults to the code's entry in the new reference page, https://svylab.com/docs/svy/reference/codes.html, and errors print it as `Docs:`. The page lists every code with the class it is raised as, its message and hint; `scripts/render_codes.py` writes it from the source.
@@ -59,6 +60,8 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **`svy.io.write_xpt` writes infinity and NaN as missing**, as haven does; infinities were stored as values and NaN came back as +inf. `write_dta` now does the same explicitly (its files already read back as missing).
+- **`ranktest` credits a calibration in its variance**, as R's `svyranktest` does through `svyglm`, for two-sample, k-sample and custom `score_fn` tests. After `poststratify`, `rake` or `calibrate` it answered as if the weights were fixed.
 - **`ranktest` applies the design's finite population correction**, as R's `svyranktest` does, for two-sample, k-sample and custom `score_fn` tests. With `pop_size` it answered the FPC-free question; results on designs without `pop_size` are unchanged.
 - **`svy.io.read_sav` now reads a string variable's user-missing codes as missing**, as haven and SPSS do; they came through as data.
 - **Selecting again from a selected sample raises instead of writing `*_right` columns.** A second `srs` or `pps_*` call wrote its probabilities and hits next to the first ones as `svy_prob_selection_right` and `svy_number_of_hits_right`, left the design and the weight on the first draw's, and a third call failed with a raw polars `DuplicateError`. Selection now raises `SelectionError.ValueError` (`METHOD_NOT_APPLICABLE`) when a column it would write already exists, naming the columns and `prob_name=`, `wgt_name=`, `hit_name=`, or `svy_certainty` for PPS, and pointing to `add_stage()`. Once the design has a probability, the weight column it would write counts too. With new names, the probability is the product of the earlier one and this draw's, and the design points at the new columns; `srs` on a design with `prob=` writes `svy_prob_selection` and keeps the given column, as `pps_*` does.
