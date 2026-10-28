@@ -658,3 +658,38 @@ def test_verify_scale_calibrated_counts_every_stratum(center_domain):
     g3 = svy.col("dom") == "g3"
     assert ps.estimation.total("y", where=g3).estimates[0].se == pytest.approx(257.9743863549)
     assert ps.categorical.ttest("y", mean_h0=4, where=g3).stats.t == pytest.approx(0.0225441528)
+
+
+@pytest.mark.parametrize(
+    "method, se, df",
+    [
+        ("self_representing", 0.3862424541, 14),
+        ("collapse", 0.3572137243, 10),
+        ("pool", 0.5415416977, 9),
+    ],
+)
+@pytest.mark.parametrize("psu", ["psu", "unique_psu"])
+def test_verify_relabelling_rules_with_psu_ids_repeated_across_strata(method, se, df, psu):
+    """R golden values on designs recoded by hand; PSU ids 1-3 repeat in every stratum.
+
+    single <- df$stratum %in% c(2, 5); df$upsu <- paste(df$stratum, df$psu)
+    self_representing: ids = ifelse(single, paste(upsu, ssu), upsu), strata = stratum
+    collapse: ids = upsu, strata 2 -> 1 and 5 -> 3; pool: ids = upsu, strata 2, 5 -> 0
+    svymean(~y, svydesign(ids = ..., strata = ..., weights = ~wgt, data = df))
+    """
+    data = pl.read_csv(DATA_DIR / "singleton_repeated_psu_28102026.csv").with_columns(
+        unique_psu=pl.col("stratum") * 10 + pl.col("psu")
+    )
+    design = svy.Design(stratum="stratum", psu=psu, ssu="ssu", wgt="wgt", singleton=method)
+    mean = svy.Sample(data, design).estimation.mean("y").estimates[0]
+    assert mean.est == pytest.approx(14.9428874324, abs=1e-9)
+    assert mean.se == pytest.approx(se, abs=1e-9)
+    assert mean.df == df
+
+
+def test_collapse_counts_merged_psus_with_ids_repeated_across_strata():
+    # Stratum 1 holds four PSUs once stratum 2 joins it, so stratum 5 goes to 3.
+    data = pl.read_csv(DATA_DIR / "singleton_repeated_psu_28102026.csv")
+    design = svy.Design(stratum="stratum", psu="psu", ssu="ssu", wgt="wgt", singleton="collapse")
+    handled = svy.Sample(data, design).singletons["handled"].to_list()
+    assert handled == ["collapse -> 1", "collapse -> 3"]
