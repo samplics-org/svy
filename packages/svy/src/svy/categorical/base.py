@@ -476,18 +476,20 @@ class Categorical:
         # in the kernel, so the "sum to 1" contract refers to in-domain rows.
         in_dom = concat_data[domain_col].to_numpy() if domain_col else None
         base = wgt_arr if in_dom is None else wgt_arr[in_dom]
-        if count_total is not None:
-            wgt_arr = wgt_arr / float(base.sum())
-            _display_scale = float(count_total)
-        elif _units is _TableUnits.PERCENT:
-            wgt_arr = wgt_arr / float(base.sum())
-            _display_scale = 100.0
-        elif _units is _TableUnits.PROPORTION:
-            wgt_arr = wgt_arr / float(base.sum())
-            _display_scale = 1.0
-        else:
-            # bare COUNT: raw weights, totals.
-            _display_scale = 1.0
+        # A zero-weight domain divides by 0 on purpose: its estimates come out NaN.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            if count_total is not None:
+                wgt_arr = wgt_arr / float(base.sum())
+                _display_scale = float(count_total)
+            elif _units is _TableUnits.PERCENT:
+                wgt_arr = wgt_arr / float(base.sum())
+                _display_scale = 100.0
+            elif _units is _TableUnits.PROPORTION:
+                wgt_arr = wgt_arr / float(base.sum())
+                _display_scale = 1.0
+            else:
+                # bare COUNT: raw weights, totals.
+                _display_scale = 1.0
         concat_data = concat_data.with_columns(
             pl.Series(name="__svy_scaled_wgt__", values=wgt_arr)
         )
