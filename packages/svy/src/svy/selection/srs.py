@@ -26,6 +26,7 @@ except ImportError:
     _select_srs_batch_rs = None
 
 from svy.core.constants import (
+    SVY_CERTAINTY,
     SVY_HIT,
     SVY_PROB,
     SVY_PROB_STAGE1,
@@ -131,31 +132,54 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+def _output_cols(
+    sample, design, *, prob_name: str | None, wgt_name: str | None, hit_name: str | None
+) -> tuple[str, str, str]:
+    """The probability, weight and hit columns a selection writes."""
+    prob_col = prob_name or getattr(sample, "_stage_out_prob", None) or SVY_PROB
+    wgt_col = wgt_name or getattr(sample, "_stage_out_wgt", None) or design.wgt or SVY_WEIGHT
+    hit_col = hit_name or design.hit or SVY_HIT
+    return prob_col, wgt_col, hit_col
+
+
 def _check_output_col_names(
-    df,
+    sample,
     *,
     prob_name: str | None,
     wgt_name: str | None,
     hit_name: str | None,
+    pps: bool,
     where: str,
 ) -> None:
     """
-    Raise SelectionError if any user-supplied output column name already exists
-    in the frame.  This prevents silently overwriting existing data.
+    Raise SelectionError if any output column already exists in the frame.
+    This prevents silently overwriting existing data.
     """
-    existing = set(df.columns)
-    for col, param in [
-        (prob_name, "prob_name"),
-        (wgt_name, "wgt_name"),
-        (hit_name, "hit_name"),
-    ]:
-        if col is not None and col in existing:
-            raise SelectionError.not_applicable(
-                where=where,
-                method="selection",
-                reason=f"Column {col!r} already exists in the frame.",
-                hint=(f"Choose a different {param}= or rename/drop the existing column first."),
-            )
+    design = sample._design
+    prob_col, wgt_col, hit_col = _output_cols(
+        sample, design, prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name
+    )
+    outputs = [(prob_col, "prob_name"), (hit_col, "hit_name")]
+    # Before any probability exists, the design's weight column takes the sampling weight.
+    if wgt_name is not None or design.prob is not None:
+        outputs.append((wgt_col, "wgt_name"))
+    existing = set(sample._data.columns)
+    taken = [(col, param) for col, param in outputs if col in existing]
+    certainty_taken = pps and SVY_CERTAINTY in existing
+    if not taken and not certainty_taken:
+        return
+    cols = [col for col, _ in taken] + ([SVY_CERTAINTY] if certainty_taken else [])
+    hint = "Use add_stage() to select within a selected sample"
+    if taken:
+        hint += ", or pass " + ", ".join(f"{param}=" for _, param in taken) + " with new names"
+    if certainty_taken:
+        hint += f", or drop {SVY_CERTAINTY!r}"
+    raise SelectionError.not_applicable(
+        where=where,
+        method="selection",
+        reason=f"Column(s) {', '.join(map(repr, cols))} already exist in the frame.",
+        hint=hint + ".",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -375,10 +399,11 @@ def _srs_prepare(
 
     # -- Guard: reject names that already exist in the frame -------------
     _check_output_col_names(
-        src_df,
+        sample,
         prob_name=prob_name,
         wgt_name=wgt_name,
         hit_name=hit_name,
+        pps=False,
         where="Sample.sampling.srs",
     )
 
@@ -495,9 +520,9 @@ def _srs_empty_writeback(sample, src_df, design, *, prob_name, wgt_name, hit_nam
     Rather than raising, we add null prob/weight/hit columns to preserve
     the invariant that the output always has the same rows as the input.
     """
-    prob_col = prob_name or design.prob or SVY_PROB
-    wgt_col = wgt_name or design.wgt or SVY_WEIGHT
-    hit_col = hit_name or design.hit or SVY_HIT
+    prob_col, wgt_col, hit_col = _output_cols(
+        sample, design, prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name
+    )
 
     df_new = src_df.with_columns(
         [
@@ -507,7 +532,7 @@ def _srs_empty_writeback(sample, src_df, design, *, prob_name, wgt_name, hit_nam
         ]
     )
     sample._data = df_new
-    sample._design = design.fill_missing(prob=prob_col, wgt=wgt_col, hit=hit_col, wr=wr)
+    sample._design = design.update(prob=prob_col, wgt=wgt_col, hit=hit_col, wr=wr)
     return sample
 
 
@@ -533,12 +558,11 @@ def _srs_writeback(
     where_mask,
 ):
     """Merge SRS selection results back onto the Sample."""
-    is_chaining = design.prob == SVY_PROB_STAGE1
-    out_prob_col = prob_name or getattr(sample, "_stage_out_prob", None) or SVY_PROB
-    wgt_col = wgt_name or getattr(sample, "_stage_out_wgt", None) or design.wgt or SVY_WEIGHT
-    hit_col = hit_name or design.hit or SVY_HIT
+    out_prob_col, wgt_col, hit_col = _output_cols(
+        sample, design, prob_name=prob_name, wgt_name=wgt_name, hit_name=hit_name
+    )
 
-    if is_chaining:
+    if design.prob == SVY_PROB_STAGE1:
         temp = _apply_chaining_writeback(
             src_df=src_df,
             sel_idx=sel_idx,
@@ -561,20 +585,18 @@ def _srs_writeback(
             maintain_order="left",
         )
     else:
-        prob_col = prob_name or design.prob or SVY_PROB
         if design.prob is not None:
             # data already has row_col; use searchsorted instead of a join
             row_arr = data[row_col].to_numpy()
-            prob_arr = data[prob_col].to_numpy().astype(np.float64)
+            prob_arr = data[design.prob].to_numpy().astype(np.float64)
             order = np.argsort(row_arr, kind="stable")
             positions = np.searchsorted(row_arr[order], sel_idx)
             prev_probs = prob_arr[order[positions]]
             probs = probs * prev_probs
-        design = design.fill_missing(prob=prob_col)
         temp = pl.DataFrame(
             {
                 row_col: sel_idx,
-                prob_col: probs.astype(np.float64, copy=False),
+                out_prob_col: probs.astype(np.float64, copy=False),
                 hit_col: hits.astype(np.int_, copy=False),
             }
         )
@@ -590,20 +612,16 @@ def _srs_writeback(
         if join_how == "left":
             # weight is 1/prob only where prob is not null
             df_new = df_new.with_columns(
-                pl.when(pl.col(prob_col).is_not_null())
-                .then(1.0 / pl.col(prob_col))
+                pl.when(pl.col(out_prob_col).is_not_null())
+                .then(1.0 / pl.col(out_prob_col))
                 .otherwise(None)
                 .alias(wgt_col)
             )
         else:
-            df_new = df_new.with_columns((1.0 / pl.col(prob_col)).alias(wgt_col))
-        out_prob_col = prob_col
+            df_new = df_new.with_columns((1.0 / pl.col(out_prob_col)).alias(wgt_col))
 
     sample._data = df_new
-    if is_chaining:
-        sample._design = design.update(wgt=wgt_col, prob=out_prob_col, hit=hit_col, wr=wr)
-    else:
-        sample._design = design.fill_missing(wgt=wgt_col, prob=out_prob_col, hit=hit_col, wr=wr)
+    sample._design = design.update(wgt=wgt_col, prob=out_prob_col, hit=hit_col, wr=wr)
     for attr in ("_stage_out_prob", "_stage_out_wgt"):
         if hasattr(sample, attr):
             delattr(sample, attr)
