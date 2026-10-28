@@ -36,7 +36,6 @@ polars = { version = "0.55", default-features = false, features = [
     "dtype-u16",
 ] }
 faer = "0.24"
-ahash = "0.8"
 numpy = "0.29"
 # Must stay within what numpy accepts (`>= 0.15, <=0.17`): a bump past that
 # range leaves two ArrayBase types in one graph and every ndarray-typed call
