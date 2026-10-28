@@ -201,7 +201,7 @@ def _not_identified(
     return flagged, [(coef, value)]
 
 
-def _residual_df(design_df: int, k: int) -> int | float:
+def _residual_df(design_df: float, k: int) -> float:
     """R svyglm's ``degf(design) - (k - 1)``; NaN when nothing is left, so tests are NaN."""
     df = design_df - (k - 1)
     return df if df > 0 else math.nan

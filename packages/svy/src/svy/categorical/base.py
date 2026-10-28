@@ -591,7 +591,7 @@ class Categorical:
             )
 
         # Unpack cells DataFrame into CellEst objects — vectorized CI computation
-        df_val = int(cells_df["df"][0]) if cells_df.height > 0 else 1
+        df_val = float(cells_df["df"][0]) if cells_df.height > 0 else 1
         t_crit = float(t_dist.ppf(1 - alpha / 2, df_val))
 
         import re

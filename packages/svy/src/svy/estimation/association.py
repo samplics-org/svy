@@ -26,7 +26,7 @@ from svy.core.enumerations import PopParam
 from svy.core.repwgts import RepWgts
 from svy.errors import Code, EstimationError
 
-from .estimate import Estimate, ParamEst, row_counts
+from .estimate import Estimate, ParamEst, as_df, row_counts
 from .replication import _get_rep_params
 
 
@@ -252,7 +252,7 @@ def result_to_param_est(
             lci=float(lci_arr[i]),
             uci=float(uci_arr[i]),
             deff=float(deff_arr[i]) if deff_arr is not None else None,
-            df=int(df_arr[i]),
+            df=as_df(df_arr[i]),
             by=by_tuple,
             by_level=by_levels[i],
             n=n_list[i],
