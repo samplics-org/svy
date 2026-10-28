@@ -59,8 +59,9 @@ def normalize_user_missing(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
         um = var.get("user_missing")
         if not name or not um:
             continue
-        na_values = [_maybe_float(v) for v in um.get("values") or []]
-        na_range = tuple(_maybe_float(v) for v in um["range"]) if um.get("range") else None
+        # Typed by the native reader: a string variable's "99" is a string code.
+        na_values = list(um.get("values") or [])
+        na_range = tuple(um["range"]) if um.get("range") else None
         if na_values or na_range:
             by_col[name] = {"col": name, "na_values": na_values, "na_range": na_range}
 

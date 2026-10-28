@@ -99,9 +99,17 @@ const MAX_PREALLOC_ROWS: usize = 65_536;
 #[derive(Serialize, Clone)]
 pub struct UserMissing {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub values: Vec<f64>,
+    pub values: Vec<MissingValue>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub range: Option<Vec<f64>>,
+}
+
+/// A discrete user-missing code: a number, or a string variable's text.
+#[derive(Serialize, Clone)]
+#[serde(untagged)]
+pub enum MissingValue {
+    Num(f64),
+    Str(String),
 }
 
 #[derive(Serialize, Clone)]
@@ -662,7 +670,16 @@ unsafe fn on_variable_impl(
                 };
 
                 if is_string {
-                    continue;
+                    // SAV has no string ranges, so `lo_val` is the code.
+                    // SAFETY: a string variable's missing value is a string, and its text lives
+                    // as long as `var`.
+                    let sp = unsafe { readstat_string_value(lo_val) };
+                    if !sp.is_null() {
+                        // SAFETY: non-null ReadStat strings are NUL-terminated.
+                        let code = rctx.decode(unsafe { CStr::from_ptr(sp) });
+                        // SAV pads codes to 8 bytes; the data values carry no padding.
+                        values.push(MissingValue::Str(code.trim_end().to_string()));
+                    }
                 } else {
                     // SAFETY: a numeric value is read by value; no pointer is followed.
                     let (lo, hi) =
@@ -672,7 +689,7 @@ unsafe fn on_variable_impl(
                     }
 
                     if (lo - hi).abs() < 1e-10 {
-                        values.push(lo);
+                        values.push(MissingValue::Num(lo));
                     } else {
                         range = Some(vec![lo, hi]);
                     }

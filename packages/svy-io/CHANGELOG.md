@@ -10,6 +10,7 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 ### Fixed
 
+- **`read_sav` ignored string user-missing codes**, keeping them as ordinary values. They now read as haven does: null by default, kept and listed in `na_values` with `user_na=True`, and in `meta["user_missing"]` as strings, so `zap_missing` finds them (a code such as `"99"` stayed `"99"`, not `99.0`).
 - **`write_dta` skipped the strL error for a string over 2 GiB**, whose length wrapped negative, and a native format version outside 0-255 wrapped to another version. The version now raises `INVALID_VALUE`.
 - **A file that failed to parse read as an empty frame when `n_max=0`**, through `read_xpt` or the native readers.
 - **A SAS catalog that failed to parse was reported only on stderr.** `read_sas`, `read_xpt` and `read_sas_arrow` now raise a `UserWarning` and read the data without value labels.
