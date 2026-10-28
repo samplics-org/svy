@@ -11,8 +11,8 @@ from typing import Any, Callable, Literal
 import msgspec
 import polars as pl
 
-from svy.categorical.table import table_frame
-from svy.categorical.ttest import ttest_one_group_frame, ttest_two_groups_frame
+from svy.categorical.table import Table, table_frame
+from svy.categorical.ttest import ttest_one_group_frame, ttest_two_groups_frame, with_by_labels
 from svy.core.containers import _chisq_frame
 from svy.core.describe import _describe_frame, _flatten_by
 from svy.errors._serialization import SerializationError
@@ -45,7 +45,9 @@ def _indexed(df: pl.DataFrame, row_index: str | None) -> pl.DataFrame:
     return df.with_row_index(row_index) if row_index else df
 
 
-def _labels(d: EstimateData) -> dict[str, VarLabels]:
+def _labels(
+    d: EstimateData | TableData | TTestOneGroupByData | TTestTwoGroupsByData,
+) -> dict[str, VarLabels]:
     return {
         v.var: VarLabels(v.var_label, {lv.code: lv.label for lv in v.values})
         for v in d.labels or []
@@ -102,8 +104,10 @@ def _ttest_two_groups(
     row_index: str | None = None,
     component: Literal["test", "estimates"] = "test",
     tidy: bool = True,
+    use_labels: bool = True,
 ) -> pl.DataFrame:
-    return _indexed(ttest_two_groups_frame(d, component, tidy=tidy), row_index)
+    frame = ttest_two_groups_frame(d, component, tidy=tidy, use_labels=use_labels)
+    return _indexed(frame, row_index)
 
 
 def _ttest_by(
@@ -112,20 +116,38 @@ def _ttest_by(
     row_index: str | None = None,
     component: Literal["test", "estimates"] = "test",
     tidy: bool = True,
+    use_labels: bool = True,
 ) -> pl.DataFrame:
-    member = _ttest_one_group if isinstance(d, TTestOneGroupByData) else _ttest_two_groups
+    two = isinstance(d, TTestTwoGroupsByData)
     frames, offset = [], 0
     for r in d.results:
-        f = member(r, row_index=row_index, component=component, tidy=tidy)
+        opts: dict[str, Any] = dict(row_index=row_index, component=component, tidy=tidy)
+        f = (
+            _ttest_two_groups(r, use_labels=use_labels, **opts)
+            if two
+            else _ttest_one_group(r, **opts)
+        )
         if row_index and not f.is_empty():
             f = f.with_columns(pl.col(row_index) + offset)
         frames.append(f)
         offset += len(r.diff if component == "test" else r.estimates)
-    return pl.concat(frames, how="diagonal") if frames else pl.DataFrame()
+    if not frames:
+        return pl.DataFrame()
+    df = pl.concat(frames, how="diagonal")
+    if not use_labels:
+        return df
+    return with_by_labels(df, d.by, _labels(d), tidy=tidy, where="TTestByResult.to_polars")
 
 
-def _table(d: TableData, *, row_index: str | None = None, tidy: bool = True) -> pl.DataFrame:
-    return _indexed(table_frame(d, tidy=tidy), row_index)
+def _table(
+    d: TableData,
+    *,
+    row_index: str | None = None,
+    tidy: bool = True,
+    use_labels: bool | None = None,
+) -> pl.DataFrame:
+    resolve = use_labels if use_labels is not None else Table.USE_LABELS
+    return _indexed(table_frame(d, tidy=tidy, labels=_labels(d) if resolve else None), row_index)
 
 
 def _glm_fit(
@@ -186,10 +208,10 @@ def to_polars(data: ResultData, *, row_index: str | None = None, **options: Any)
         display, so this column is the way back to a payload row.
     **options
         The live ``to_polars()`` options: ``tidy`` (estimate, table,
-        t-tests), ``use_labels`` (estimate, estimate list), ``component``
-        (t-tests) and ``exponentiate`` (GLM fit). An estimate stores the
-        labels of the levels it holds, so its ``<var>_label`` columns come
-        back as the live result gives them.
+        t-tests), ``use_labels`` (estimate, estimate list, table, two-group
+        and by-domain t-tests), ``component`` (t-tests) and ``exponentiate``
+        (GLM fit). A payload stores the labels of the levels it holds, so its
+        ``<var>_label`` columns come back as the live result gives them.
 
     Raises
     ------

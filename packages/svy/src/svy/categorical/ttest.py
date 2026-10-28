@@ -14,7 +14,13 @@ from svy.errors import EstimationError
 from svy.errors._api import guided_getattr
 from svy.errors._findings import SvyWarning, merge_findings
 from svy.estimation import ParamEst
-from svy.estimation.estimate import VarLabels, _display_level, checked_print_width
+from svy.estimation.estimate import (
+    VarLabels,
+    _display_level,
+    _label_of,
+    checked_print_width,
+    with_label_columns,
+)
 
 # Import central UI helpers (consistent with estimate.py)
 from svy.ui.printing import (
@@ -78,6 +84,31 @@ def untidy_by(by: str | Sequence[str], by_level: Any) -> tuple[Any, Any]:
     if isinstance(by, str):
         return by, by_level
     return list(by), dict(by_cells(by, by_level))
+
+
+def with_by_labels(
+    df: pl.DataFrame,
+    by: str | Sequence[str],
+    labels: Mapping[str, VarLabels],
+    *,
+    tidy: bool,
+    where: str,
+) -> pl.DataFrame:
+    """A by-domain frame with its levels' labels: ``<var>_label`` columns, or ``by_label`` untidy."""
+    import polars as pl
+
+    if tidy:
+        return with_label_columns(df, labels, where=where)
+    by_vars = [by] if isinstance(by, str) else list(by)
+    if "by_level" not in df.columns or not any(v in labels and labels[v].values for v in by_vars):
+        return df
+    values = [
+        {v: _label_of(labels.get(v), x) for v, x in level.items()}
+        if isinstance(level, dict)
+        else _label_of(labels.get(by_vars[0]), level)
+        for level in df.get_column("by_level").to_list()
+    ]
+    return df.insert_column(df.get_column_index("by_level") + 1, pl.Series("by_label", values))
 
 
 def untidy_records(estimates: Sequence[Any]) -> list[dict[str, Any]]:
@@ -494,8 +525,9 @@ class TTestTwoGroups(msgspec.Struct, tag="two", tag_field="kind", kw_only=True, 
         component: Literal["test", "estimates"] = "test",
         *,
         tidy: bool = True,
+        use_labels: bool = True,
     ) -> pl.DataFrame:
-        return ttest_two_groups_frame(self, component, tidy=tidy)
+        return ttest_two_groups_frame(self, component, tidy=tidy, use_labels=use_labels)
 
     # ---------------- Presentation ----------------
 
@@ -753,6 +785,7 @@ def ttest_two_groups_frame(
     component: Literal["test", "estimates"] = "test",
     *,
     tidy: bool = True,
+    use_labels: bool = True,
 ) -> pl.DataFrame:
     """The table of a ``TTestTwoGroups``, shared with its serialized form (same field names)."""
     import polars as pl
@@ -818,7 +851,7 @@ def ttest_two_groups_frame(
                 }
             )
 
-        labels = getattr(r.groups, "labels", None)
+        labels = getattr(r.groups, "labels", None) if use_labels else None
         if not tidy:
             df = pl.DataFrame(untidy_records(r.estimates))
             if "by" in df.columns and df["by"].is_null().all():
@@ -952,17 +985,18 @@ class TTestByResult:
 
         Empty without labels; what a serialized result stores.
         """
-        present: dict[str, set[str]] = {var: set() for var in self._by_list}
+        present: dict[str, set[Any]] = {var: set() for var in self._by_list}
         for r in self.results:
             if not r.diff:
                 continue
             d = r.diff[0]
             for var, level in by_cells(d.by, d.by_level):
-                present[var].add(_level_text(level))
+                present[var].add(level)
+        # By value, not text: a float level 1.0 has its label under the code 1.
         return {
             var: VarLabels(
                 lab.var_label,
-                {c: v for c, v in lab.labels.items() if _level_text(c) in present.get(var, ())},
+                {c: v for c, v in lab.labels.items() if c in present.get(var, ())},
             )
             for var, lab in self.by_labels.items()
         }
@@ -984,13 +1018,24 @@ class TTestByResult:
         component: Literal["test", "estimates"] = "test",
         *,
         tidy: bool = True,
+        use_labels: bool = True,
     ) -> "pl.DataFrame":
         import polars as pl
 
-        frames = [r.to_polars(component, tidy=tidy) for r in self.results]
+        frames = [
+            ttest_two_groups_frame(r, component, tidy=tidy, use_labels=use_labels)
+            if isinstance(r, TTestTwoGroups)
+            else ttest_one_group_frame(r, component, tidy=tidy)
+            for r in self.results
+        ]
         if not frames:
             return pl.DataFrame()
-        return pl.concat(frames, how="diagonal")
+        df = pl.concat(frames, how="diagonal")
+        if not use_labels:
+            return df
+        return with_by_labels(
+            df, self.by, self._labels(), tidy=tidy, where="TTestByResult.to_polars"
+        )
 
     # ── Printing ─────────────────────────────────────────────────────────
 

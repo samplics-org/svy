@@ -169,6 +169,27 @@ def _label_of(lab: VarLabels | None, raw: Any) -> str | None:
     return lab.values.get(raw, _display_level(raw)) if lab is not None else _display_level(raw)
 
 
+def with_label_columns(
+    df: pl.DataFrame, labels: Mapping[str, VarLabels] | None, *, where: str
+) -> pl.DataFrame:
+    """``df`` with a ``<var>_label`` column after each of its columns that has value labels."""
+    for var, lab in (labels or {}).items():
+        if var not in df.columns or not lab.values:
+            continue
+        name = f"{var}_label"
+        if name in df.columns:
+            raise EstimationError.ValueError(
+                title="Label column clashes with a variable",
+                detail=f"The labels of '{var}' would go in '{name}', which is also a variable here.",
+                code=Code.LABEL_COLUMN_CLASH,
+                where=where,
+                hint="Rename the variable, or pass use_labels=False.",
+            )
+        values = [_label_of(lab, v) for v in df.get_column(var).to_list()]
+        df = df.insert_column(df.get_column_index(var) + 1, pl.Series(name, values, pl.String))
+    return df
+
+
 def estimate_frame(
     estimates: Sequence[Any] | None,
     *,
@@ -261,19 +282,6 @@ def estimate_frame(
                 r[(lab.var_label if lab else "") or col] = _label_of(lab, raw)
                 continue
             r[col] = raw
-            if col in labelled:
-                name = f"{col}_label"
-                if name in r or name in names:
-                    from svy.errors import EstimationError
-
-                    raise EstimationError.ValueError(
-                        title="Label column clashes with a variable",
-                        detail=f"The labels of '{col}' would go in '{name}', which is also a variable here.",
-                        code=Code.LABEL_COLUMN_CLASH,
-                        where="Estimate.to_polars",
-                        hint="Rename the variable, or pass use_labels=False.",
-                    )
-                r[name] = _label_of(lab, raw)
         if pair:
             for col in _PAIR_COLS:
                 var = getattr(est, col)
@@ -301,7 +309,7 @@ def estimate_frame(
         # Pairs keep the order they were requested in within each domain.
         skip |= {*_PAIR_COLS, *(f"{c}_label" for c in _PAIR_COLS)}
     if not display:
-        skip |= {"df"} | {f"{c}_label" for c in labelled}
+        skip |= {"df"}
     code_ranks = level_ranks(orders)
     if display:
         code_ranks |= _code_ranks(estimates, names, n_by, labelled - code_ranks.keys())
@@ -321,6 +329,8 @@ def estimate_frame(
     sort_display_rows(rows, numeric_keys=skip, ranks=ranks)
     order = [r.pop(_ROW_POS) for r in rows]
     df = pl.from_dicts(rows)
+    if not display:
+        df = with_label_columns(df, {c: labels[c] for c in labelled}, where="Estimate.to_polars")
     if row_index:
         df = df.insert_column(0, pl.Series(row_index, order, dtype=pl.UInt32))
     return df

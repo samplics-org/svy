@@ -251,6 +251,27 @@ LABELLED_CASES = [
     ("mean_as_factor", lambda s: s.estimation.mean("zone", as_factor=True), {}),
     ("unlabelled_by", lambda s: s.estimation.mean("y", by="region"), {}),
     ("mean_list", lambda s: s.estimation.mean(["y", "z"], by="zone"), {}),
+    ("table_one", lambda s: s.categorical.tabulate("zone"), {}),
+    ("table_two", lambda s: s.categorical.tabulate("zone", "sex"), {}),
+    ("table_two_off", lambda s: s.categorical.tabulate("zone", "sex"), {"use_labels": False}),
+    ("table_two_raw", lambda s: s.categorical.tabulate("zone", "sex"), {"tidy": False}),
+    ("ttest_two_by", lambda s: s.categorical.ttest("y", group="sex", by="zone"), {}),
+    (
+        "ttest_one_by_raw",
+        lambda s: s.categorical.ttest("y", mean_h0=50, by="zone"),
+        {"tidy": False},
+    ),
+    (
+        "ttest_two_by_est",
+        lambda s: s.categorical.ttest("y", group="sex", by="zone"),
+        {"component": "estimates"},
+    ),
+    (
+        "ttest_two_by_off",
+        lambda s: s.categorical.ttest("y", group="sex", by="zone"),
+        {"component": "estimates", "use_labels": False},
+    ),
+    ("ttest_two_by2", lambda s: s.categorical.ttest("y", group="d", by=["zone", "sex"]), {}),
 ]
 
 

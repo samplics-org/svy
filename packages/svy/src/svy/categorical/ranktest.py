@@ -32,12 +32,13 @@ from svy.categorical.ttest import (
     by_cells,
     untidy_by,
     untidy_records,
+    with_by_labels,
 )
 from svy.core.containers import FDist, TDist
 from svy.core.types import Category
 from svy.errors import EstimationError
 from svy.errors._findings import SvyWarning, merge_findings
-from svy.estimation.estimate import checked_print_width
+from svy.estimation.estimate import VarLabels, checked_print_width
 from svy.ui.printing import (
     finding_notes,
     make_panel,
@@ -722,6 +723,7 @@ class RankTestByResult:
         component: Literal["test", "estimates"] = "test",
         *,
         tidy: bool = True,
+        use_labels: bool = True,
     ) -> "pl.DataFrame":
         import polars as pl
 
@@ -735,7 +737,13 @@ class RankTestByResult:
             else f
             for r, f, level in zip(self.results, frames, self.by_levels)
         ]
-        return pl.concat(frames, how="diagonal")
+        df = pl.concat(frames, how="diagonal")
+        if not use_labels:
+            return df
+        labels = {
+            v: VarLabels(lab.var_label, dict(lab.labels)) for v, lab in self.by_labels.items()
+        }
+        return with_by_labels(df, self.by, labels, tidy=tidy, where="RankTestByResult.to_polars")
 
     def _with_by(self, frame: pl.DataFrame, by_level: Any, *, tidy: bool) -> pl.DataFrame:
         """``frame`` with its domain's columns after ``y``, as a two-sample member has them."""
