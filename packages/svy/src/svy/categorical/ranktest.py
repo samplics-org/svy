@@ -29,6 +29,9 @@ from svy.categorical.ttest import (
     TtestEst,
     _groups_header,
     _level_text,
+    by_cells,
+    untidy_by,
+    untidy_records,
 )
 from svy.core.containers import FDist, TDist
 from svy.core.types import Category
@@ -162,10 +165,9 @@ class RankTestTwoSample(
                 row: dict[str, Any] = {"y": d.y}
                 if d.by is not None:
                     if tidy:
-                        row[d.by] = d.by_level
+                        row.update(by_cells(d.by, d.by_level))
                     else:
-                        row["by"] = d.by
-                        row["by_level"] = d.by_level
+                        row["by"], row["by_level"] = untidy_by(d.by, d.by_level)
                 row.update(
                     {
                         "group_var": self.groups.var,
@@ -203,7 +205,7 @@ class RankTestTwoSample(
                 )
 
             if not tidy:
-                df = pl.DataFrame(msgspec.to_builtins(self.estimates))
+                df = pl.DataFrame(untidy_records(self.estimates))
                 for col_pair in [("by", "by_level"), ("group", "group_level")]:
                     if col_pair[0] in df.columns and df[col_pair[0]].is_null().all():
                         df = df.drop(*col_pair)
@@ -215,7 +217,7 @@ class RankTestTwoSample(
             for e in self.estimates:
                 row: dict[str, Any] = {}
                 if e.by is not None:
-                    row[e.by] = e.by_level
+                    row.update(by_cells(e.by, e.by_level))
                 if e.group is not None:
                     row[e.group] = e.group_level
                 row.update(
@@ -459,7 +461,7 @@ class RankTestKSample(msgspec.Struct, tag="rank_k", tag_field="kind", kw_only=Tr
                 )
 
             if not tidy:
-                df = pl.DataFrame(msgspec.to_builtins(self.estimates))
+                df = pl.DataFrame(untidy_records(self.estimates))
                 for col_pair in [("by", "by_level"), ("group", "group_level")]:
                     if col_pair[0] in df.columns and df[col_pair[0]].is_null().all():
                         df = df.drop(*col_pair)
@@ -471,7 +473,7 @@ class RankTestKSample(msgspec.Struct, tag="rank_k", tag_field="kind", kw_only=Tr
             for e in self.estimates:
                 row: dict[str, Any] = {}
                 if e.by is not None:
-                    row[e.by] = e.by_level
+                    row.update(by_cells(e.by, e.by_level))
                 if e.group is not None:
                     row[e.group] = e.group_level
                 row.update(
@@ -699,21 +701,19 @@ class RankTestByResult:
     # ── Helpers ──────────────────────────────────────────────────────────
 
     def _format_level(self, by_level) -> str:
-        """Format a by-level value for display, handling multi-by."""
-        _BY_SEP = "__by__"
-        level_str = _level_text(by_level)
-        parts = level_str.split(_BY_SEP)
-        if len(parts) == len(self._by_list) and len(parts) > 1:
+        """Format a by-level value for display; several by variables carry a tuple."""
+        if isinstance(by_level, tuple):
             return ", ".join(
-                f"{var} = {self._by_text(var, val)}" for var, val in zip(self._by_list, parts)
+                f"{var} = {self._by_text(var, val)}" for var, val in zip(self._by_list, by_level)
             )
+        level_str = _level_text(by_level)
         if len(self._by_list) == 1:
             level_str = self._by_text(self._by_list[0], level_str)
         return f"{', '.join(self._by_list)} = {level_str}"
 
-    def _by_text(self, var: str, text: str) -> str:
+    def _by_text(self, var: str, value: Any) -> str:
         labels = self.by_labels.get(var)
-        return text if labels is None else labels.display(text)
+        return _level_text(value) if labels is None else labels.display(value)
 
     # ── Export ───────────────────────────────────────────────────────────
 
@@ -728,7 +728,27 @@ class RankTestByResult:
         frames = [r.to_polars(component, tidy=tidy) for r in self.results]
         if not frames:
             return pl.DataFrame()
+        # A k-sample member's rows do not carry their domain; it is the matching by level.
+        frames = [
+            self._with_by(f, level, tidy=tidy)
+            if isinstance(r, RankTestKSample) and not f.is_empty()
+            else f
+            for r, f, level in zip(self.results, frames, self.by_levels)
+        ]
         return pl.concat(frames, how="diagonal")
+
+    def _with_by(self, frame: pl.DataFrame, by_level: Any, *, tidy: bool) -> pl.DataFrame:
+        """``frame`` with its domain's columns after ``y``, as a two-sample member has them."""
+        import polars as pl
+
+        by = self._by_list[0] if len(self._by_list) == 1 else self._by_list
+        if tidy:
+            cols = dict(by_cells(by, by_level))
+        else:
+            b, level = untidy_by(by, by_level)
+            cols = {"by": b, "by_level": level}
+        by_frame = pl.DataFrame([cols] * frame.height)
+        return pl.concat([frame.select("y"), by_frame, frame.drop("y")], how="horizontal")
 
     # ── Printing ─────────────────────────────────────────────────────────
 

@@ -144,15 +144,16 @@ class DiffEstData(msgspec.Struct, kw_only=True, frozen=True):
     se: float
     lci: float
     uci: float
-    by: str | None = None
-    by_level: CatValue | None = None
+    #: A list, with ``by_level`` a list of levels, when there are several by variables.
+    by: str | list[str] | None = None
+    by_level: CatValue | list[CatValue] | None = None
 
 
 class TtestEstData(msgspec.Struct, kw_only=True, frozen=True):
     """Estimate for a (y, group) cell in a t-test (mirrors ``svy.categorical.ttest.TtestEst``)."""
 
-    by: str | None
-    by_level: CatValue | None
+    by: str | list[str] | None
+    by_level: CatValue | list[CatValue] | None
     group: str | None
     group_level: CatValue | None
     y: str
@@ -402,7 +403,7 @@ class TTestOneGroupByData(msgspec.Struct, kw_only=True, frozen=True):
     #: The two variables of a paired test, y first; ``y`` is their difference.
     #: None when unpaired, or decoded from an older payload.
     pair: list[str] | None = None
-    by: str
+    by: str | list[str]
     alpha: float = 0.05
     where_clause: str | None = None
     results: list[TTestOneGroupData] = []
@@ -424,7 +425,7 @@ class TTestTwoGroupsByData(msgspec.Struct, kw_only=True, frozen=True):
     #: The two variables of a paired test, y first; ``y`` is their difference.
     #: None when unpaired, or decoded from an older payload.
     pair: list[str] | None = None
-    by: str
+    by: str | list[str]
     alpha: float = 0.05
     where_clause: str | None = None
     results: list[TTestTwoGroupsData] = []

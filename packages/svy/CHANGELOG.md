@@ -6,6 +6,11 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ttest` and `ranktest` by several variables export their domains.** `to_polars()` raised `unhashable type: 'list'`; it now gives one column per `by` variable, in the column's type (a struct keyed by variable with `tidy=False`). The rows carry the levels as a tuple, no longer as joined text, and a saved multi-by t-test loads back.
+- **A k-sample `ranktest` by domain names each row's domain** in `to_polars()`; its rows had no `by` column at all.
+
 ## [0.36.0] — 2026-10-28
 
 Requires [`svy-rs`](../svy-rs/CHANGELOG.md) 0.20.0 and [`svy-io`](../svy-io/CHANGELOG.md) 0.8.0, which carry the kernel and reader/writer changes below.
