@@ -24,7 +24,7 @@ use crate::categorical::ranktest::{
 };
 use crate::categorical::replicate::{RepSpec, replicate_cells};
 use crate::categorical::tabulation::{
-    count_strata_psus, domain_levels, estimate_proportions, estimate_totals, rao_scott,
+    cell_se, count_strata_psus, domain_levels, estimate_proportions, estimate_totals, rao_scott,
 };
 use crate::categorical::ttest::{
     ttest_one_sample, ttest_one_sample_domain, ttest_one_sample_rep, ttest_two_sample,
@@ -1108,7 +1108,7 @@ fn compute_tabulate(
         Some((levels, cells)) => {
             let k = levels.len();
             let ses: Vec<f64> = (0..k)
-                .map(|j| cells.prop_cov[j][j].max(0.0).sqrt())
+                .map(|j| cell_se(cells.proportions[j], cells.prop_cov[j][j]))
                 .collect();
             (
                 levels.clone(),
