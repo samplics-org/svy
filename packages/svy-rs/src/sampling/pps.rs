@@ -356,14 +356,18 @@ fn pps_sys(
             ));
         }
 
-        cum.push(0.0_f64);
+        let mut acc = 0.0_f64;
+        cum.push(acc);
         for (i, &c) in cert_mask.iter().enumerate() {
             if !c {
-                cum.push(cum.last().unwrap() + p0[i] / total_rem);
+                acc += p0[i] / total_rem;
+                cum.push(acc);
                 rem_positions.push(i);
             }
         }
-        *cum.last_mut().unwrap() = 1.0;
+        if let Some(last) = cum.last_mut() {
+            *last = 1.0;
+        }
 
         let interval = 1.0 / n_rem as f64;
         let start = rng.next_f64() * interval;
@@ -386,13 +390,18 @@ fn pps_sys(
 // PPS With Replacement
 // ---------------------------------------------------------------------------
 
+fn draw_one(rng: &mut Rng, weights: &[f64]) -> Result<usize> {
+    rng.weighted_choice(weights)
+        .ok_or_else(|| SamplingError::InvalidInput("sum(MOS) must be > 0".into()))
+}
+
 fn pps_wr(frame: &[i64], positions: &[usize], p0: &[f64], n: usize, seed: u64) -> Result<PpsDraw> {
     let cap = positions.len();
     let mut rng = Rng::new(seed);
     let mut hits = vec![0i64; cap];
 
     for _ in 0..n {
-        hits[rng.weighted_choice(p0)] += 1;
+        hits[draw_one(&mut rng, p0)?] += 1;
     }
 
     // WR inclusion probability: 1 - (1 - p_i)^n
@@ -513,7 +522,7 @@ fn pps_murphy(frame: &[i64], positions: &[usize], p0: &[f64], seed: u64) -> Resu
     }
     let mut rng = Rng::new(seed);
 
-    let first = rng.weighted_choice(p0);
+    let first = draw_one(&mut rng, p0)?;
 
     // Second draw: skip first, renormalise in-place with a temp total
     let rem_total: f64 = p0
@@ -592,7 +601,7 @@ fn pps_rs(
             let p_rem: Vec<f64> = rem_idx.iter().map(|&i| p0[i] / total_rem).collect();
 
             if n_rem == 1 {
-                hits[rem_idx[rng.weighted_choice(&p_rem)]] = 1;
+                hits[rem_idx[draw_one(&mut rng, &p_rem)?]] = 1;
             } else {
                 // Sampford requires n*p_i < 1 for every remaining unit.
                 // extract_certainty should have pulled larger units out as
@@ -634,12 +643,12 @@ fn pps_rs(
                     }
                     selected_buf.clear();
 
-                    let first_local = rng.weighted_choice(&p_rem);
+                    let first_local = draw_one(&mut rng, &p_rem)?;
                     selected_buf.push(first_local);
                     selected_mask[first_local] = true;
 
                     for _ in 1..n_rem {
-                        let pick = rng.weighted_choice(&lambda);
+                        let pick = draw_one(&mut rng, &lambda)?;
                         if selected_mask[pick] {
                             // Duplicate anywhere -> reject the WHOLE sample.
                             continue 'outer;

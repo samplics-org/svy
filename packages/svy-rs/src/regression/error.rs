@@ -49,6 +49,13 @@ pub enum RegressionError {
     #[error("GLM {what} contains a non-finite value at row {row}")]
     NonFinite { what: String, row: usize },
 
+    #[error("{what} has length {got}, expected {expected}")]
+    DimensionMismatch {
+        what: &'static str,
+        expected: usize,
+        got: usize,
+    },
+
     #[error("GLM needs more observations than parameters: n_obs={n_obs}, k={k}")]
     TooFewObservations { n_obs: usize, k: usize },
 
@@ -103,6 +110,7 @@ impl Coded for RegressionError {
             Self::NullValues { .. } => "MISSING_VALUES",
             Self::NonFinite { .. } => "NON_FINITE_INPUT",
             Self::TooFewObservations { .. } => "INSUFFICIENT_OBSERVATIONS",
+            Self::DimensionMismatch { .. } => "SHAPE_MISMATCH",
             Self::LevelsFailed { source, .. } => source.code(),
             Self::Estimation(e) => e.code(),
             Self::Polars(_) => KERNEL_INTERNAL,
@@ -119,6 +127,7 @@ impl Coded for RegressionError {
             | Self::NullValues { .. }
             | Self::NonFinite { .. }
             | Self::TooFewObservations { .. }
+            | Self::DimensionMismatch { .. }
             | Self::WolsEmpty
             | Self::MissingData
             | Self::InputColumn(_) => true,

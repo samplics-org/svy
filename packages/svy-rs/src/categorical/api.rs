@@ -1200,8 +1200,7 @@ fn compute_tabulate(
         "n" => vec![active_count(weights, None); k],
     ]?;
 
-    let stats_df = if is_two_way {
-        let cv_col = colvar_col.unwrap();
+    let stats_df = if let Some(cv_col) = colvar_col {
         let colvar_series = df.column(cv_col)?.as_materialized_series();
         let colvar_str2 = colvar_series.cast(&DataType::String)?;
         let colvar_ca2 = colvar_str2.str()?;

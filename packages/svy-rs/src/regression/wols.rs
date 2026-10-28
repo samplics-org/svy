@@ -203,6 +203,15 @@ pub fn fit_wols(y: &[f64], x: &[f64], w: &[f64], n: usize, k: usize) -> RResult<
     if n == 0 || k == 0 {
         return Err(RegressionError::WolsEmpty);
     }
+    for (what, expected, got) in [("y", n, y.len()), ("w", n, w.len()), ("x", n * k, x.len())] {
+        if got != expected {
+            return Err(RegressionError::DimensionMismatch {
+                what,
+                expected,
+                got,
+            });
+        }
+    }
 
     // Build X'WX (k x k) and X'Wy (k x 1)
     let mut xtwx = vec![0.0; k * k];
@@ -400,4 +409,26 @@ pub fn influence_covariance(
         .into_iter()
         .flatten()
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slices_that_disagree_with_n_and_k_raise_dimension_mismatch() {
+        let (y, w, x) = ([1.0, 2.0, 3.0], [1.0; 3], [1.0, 1.0, 1.0, 0.0, 1.0, 2.0]);
+        let cases = [
+            (&y[..2], &w[..], &x[..], "y", 3, 2),
+            (&y[..], &w[..2], &x[..], "w", 3, 2),
+            (&y[..], &w[..], &x[..5], "x", 6, 5),
+        ];
+        for (y, w, x, what, expected, got) in cases {
+            let err = fit_wols(y, x, w, 3, 2).err().expect("mismatch must fail");
+            assert_eq!(
+                err.to_string(),
+                format!("{what} has length {got}, expected {expected}")
+            );
+        }
+    }
 }
