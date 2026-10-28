@@ -1,12 +1,11 @@
 // native/svyreadstat_rs/src/core.rs
-use anyhow::Result;
 use arrow::array::{ArrayRef, Float64Builder, Int64Builder, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
 use serde::Serialize;
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_void};
 use std::sync::Arc;
@@ -23,11 +22,13 @@ use readstat_sys::{
     readstat_type_e_READSTAT_TYPE_STRING_REF as T_STRING_REF, readstat_value_is_system_missing,
     readstat_value_is_tagged_missing, readstat_value_t, readstat_value_tag,
     readstat_value_type as rs_value_type, readstat_variable_get_format,
-    readstat_variable_get_label, readstat_variable_get_measure,
+    readstat_variable_get_index, readstat_variable_get_label, readstat_variable_get_measure,
     readstat_variable_get_missing_range_hi, readstat_variable_get_missing_range_lo,
     readstat_variable_get_missing_ranges_count, readstat_variable_get_name,
     readstat_variable_get_type, readstat_variable_get_type_class, readstat_variable_t,
 };
+
+use crate::errors::{Error, Op, Result, readstat_message};
 
 pub(crate) const HANDLER_OK: c_int = 0;
 
@@ -44,13 +45,17 @@ pub(crate) unsafe fn configure_parser(
     encoding: Option<&str>,
     rows_skip: usize,
     n_max: Option<usize>,
-) -> Result<Option<std::ffi::CString>, String> {
+) -> Result<Option<std::ffi::CString>> {
     let mut keep_enc = None;
     if let Some(enc) = encoding {
-        let c = std::ffi::CString::new(enc).map_err(|_| format!("invalid encoding {enc:?}"))?;
+        let c = std::ffi::CString::new(enc)
+            .map_err(|_| Error::Invalid(format!("encoding {enc:?} contains an embedded NUL")))?;
         let rc = unsafe { readstat_sys::readstat_set_file_character_encoding(parser, c.as_ptr()) };
         if rc != readstat_sys::readstat_error_e_READSTAT_OK {
-            return Err(format!("unsupported encoding {enc:?} (rc={rc})"));
+            return Err(Error::UnsupportedEncoding {
+                encoding: enc.to_string(),
+                detail: readstat_message(rc),
+            });
         }
         keep_enc = Some(c);
     }
@@ -140,6 +145,9 @@ pub struct MetaOut {
     /// (Stata: explicit, detected, or the format's fixed UTF-8).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encoding: Option<String>,
+    /// Why the SAS format catalog gave no value labels; the data still read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalog_error: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -173,7 +181,9 @@ pub(crate) enum ColKind {
 
 pub(crate) struct ParseCtx {
     pub(crate) cols: Vec<ColBuilders>,
-    pub(crate) name_to_idx: HashMap<String, usize>,
+    /// Column of each file variable, by ReadStat index; `None` when skipped. Duplicate
+    /// names in a crafted file must not share a column.
+    pub(crate) var_cols: Vec<Option<usize>>,
     pub(crate) cols_skip: Option<HashMap<String, ()>>,
     pub(crate) rows_skip: usize,
     pub(crate) n_max: Option<usize>,
@@ -240,23 +250,66 @@ pub(crate) fn input_encoding(encoding: Option<&str>, lossy_utf8: bool) -> Option
     }
 }
 
-/// Describe a failed parse: readstat's text for the return code, plus the
-/// last message its error handler delivered, if any.
-pub(crate) fn parse_failure(
+pub(crate) fn c_path(path: &str) -> Result<std::ffi::CString> {
+    std::ffi::CString::new(path)
+        .map_err(|_| Error::Invalid(format!("path {path:?} contains an embedded NUL")))
+}
+
+/// A reader's return value: the Arrow IPC bytes and the metadata as JSON.
+pub(crate) fn to_python(
+    py: pyo3::Python<'_>,
+    ipc: &[u8],
+    meta: &MetaOut,
+    format: &str,
+    path: &str,
+) -> pyo3::PyResult<(pyo3::Py<pyo3::PyAny>, String)> {
+    let meta_json = serde_json::to_string(meta).map_err(|e| {
+        Error::Internal(format!("metadata JSON: {e}")).into_py(Op::Read, format, path)
+    })?;
+    Ok((
+        pyo3::types::PyBytes::new(py, ipc).into_any().unbind(),
+        meta_json,
+    ))
+}
+
+/// The outcome of `readstat_parse_*`. `USER_ABORT` is the `n_max` stop; a caught panic
+/// aborts too, so it is checked first. `encoding` is the caller's: one iconv lacks is
+/// their input, not the file's.
+pub(crate) fn check_parse(
     rc: readstat_sys::readstat_error_t,
-    last_err: Option<String>,
-) -> String {
-    let p = unsafe { readstat_sys::readstat_error_message(rc) };
-    let mut msg = if p.is_null() {
-        format!("rc={rc}")
-    } else {
-        let text = unsafe { CStr::from_ptr(p) }.to_string_lossy();
-        format!("{text} (rc={rc})")
-    };
-    if let Some(err) = last_err {
+    ctx: &mut ParseCtx,
+    path: &str,
+    encoding: Option<&str>,
+) -> Result<()> {
+    if let Some(msg) = ctx.panic_err.take() {
+        return Err(Error::Internal(format!(
+            "internal error in readstat callback: {msg}"
+        )));
+    }
+    if rc == readstat_sys::readstat_error_e_READSTAT_OK
+        || rc == readstat_sys::readstat_error_e_READSTAT_ERROR_USER_ABORT
+    {
+        return Ok(());
+    }
+    let mut msg = readstat_message(rc);
+    if let Some(err) = ctx.last_err.take() {
         msg = format!("{msg}: {err}");
     }
-    msg
+    Err(match rc {
+        readstat_sys::readstat_error_e_READSTAT_ERROR_OPEN => match std::fs::File::open(path) {
+            Err(e) => Error::Io(e),
+            Ok(_) => Error::Parse(msg),
+        },
+        readstat_sys::readstat_error_e_READSTAT_ERROR_CONVERT_BAD_STRING => Error::BadString(msg),
+        readstat_sys::readstat_error_e_READSTAT_ERROR_UNSUPPORTED_CHARSET => match encoding {
+            Some(enc) => Error::UnsupportedEncoding {
+                encoding: enc.to_string(),
+                detail: msg,
+            },
+            None => Error::Parse(msg),
+        },
+        _ => Error::Parse(msg),
+    })
 }
 
 #[inline(always)]
@@ -456,30 +509,20 @@ unsafe fn on_variable_impl(
         }
     };
 
-    let cap = safe_capacity(rctx.row_capacity);
+    let Ok(var_index) = usize::try_from(readstat_variable_get_index(var)) else {
+        return HANDLER_OK;
+    };
+    if rctx.var_cols.len() <= var_index {
+        rctx.var_cols.resize(var_index + 1, None);
+    }
 
     if let Some(skip) = &rctx.cols_skip
         && skip.contains_key(&name)
     {
-        let b = ColBuilders {
-            kind: ColKind::Str,
-            name: name.clone(),
-            label: None,
-            label_set: None,
-            fmt: None,
-            measure: None,
-            user_missing: None,
-            sb: Some(StringBuilder::with_capacity(
-                cap,
-                cap * STRING_CAPACITY_MULTIPLIER,
-            )),
-            fb: None,
-            ib: None,
-        };
-        rctx.name_to_idx.insert(name, rctx.cols.len());
-        rctx.cols.push(b);
         return HANDLER_OK;
     }
+
+    let cap = safe_capacity(rctx.row_capacity);
 
     let label = {
         let p = readstat_variable_get_label(var);
@@ -628,7 +671,7 @@ unsafe fn on_variable_impl(
         },
     };
 
-    rctx.name_to_idx.insert(name, rctx.cols.len());
+    rctx.var_cols[var_index] = Some(rctx.cols.len());
     rctx.cols.push(col);
     HANDLER_OK
 }
@@ -677,19 +720,13 @@ unsafe fn on_value_impl(
         rctx.n_rows_emitted += 1;
     }
 
-    let name = {
-        let p = readstat_variable_get_name(var);
-        if p.is_null() {
-            return HANDLER_OK;
-        }
-        rctx.decode(CStr::from_ptr(p)).trim().to_string()
-    };
-
-    if let Some(skip) = &rctx.cols_skip
-        && skip.contains_key(&name)
+    let idx = match usize::try_from(readstat_variable_get_index(var))
+        .ok()
+        .and_then(|i| rctx.var_cols.get(i).copied().flatten())
     {
-        return HANDLER_OK;
-    }
+        Some(i) => i,
+        None => return HANDLER_OK,
+    };
 
     let is_tagged = rctx.detect_tagged && readstat_value_is_tagged_missing(value) != 0;
     let is_missing = readstat_value_is_system_missing(value) != 0;
@@ -708,10 +745,6 @@ unsafe fn on_value_impl(
         None
     };
 
-    let idx = match rctx.name_to_idx.get(&name) {
-        Some(i) => *i,
-        None => return HANDLER_OK,
-    };
     let col = match rctx.cols.get_mut(idx) {
         Some(c) => c,
         None => return HANDLER_OK,
@@ -721,7 +754,7 @@ unsafe fn on_value_impl(
         let tag_ch = readstat_value_tag(value) as u8 as char;
         let (rows, tags) = rctx
             .tagged
-            .entry(name.clone())
+            .entry(col.name.clone())
             .or_insert_with(|| (Vec::new(), Vec::new()));
         rows.push(row as usize);
         tags.push(tag_ch.to_string());
@@ -808,19 +841,24 @@ unsafe fn on_value_label_impl(
 }
 
 pub(crate) fn finalize_to_ipc(mut ctx: ParseCtx) -> Result<(Vec<u8>, MetaOut)> {
-    use anyhow::anyhow;
+    let internal = |what: &str| Error::Internal(format!("{what} builder missing"));
+    let arrow = |e: arrow::error::ArrowError| Error::Internal(format!("Arrow IPC: {e}"));
+
+    {
+        let mut seen = HashSet::with_capacity(ctx.cols.len());
+        if let Some(dup) = ctx.cols.iter().find(|c| !seen.insert(c.name.as_str())) {
+            return Err(Error::Parse(format!(
+                "the file has more than one variable named {:?}",
+                dup.name
+            )));
+        }
+    }
 
     let mut fields = Vec::new();
     let mut arrays: Vec<ArrayRef> = Vec::new();
     let mut vars_meta = Vec::with_capacity(ctx.cols.len());
 
     for mut col in ctx.cols.drain(..) {
-        if let Some(skip) = &ctx.cols_skip
-            && skip.contains_key(&col.name)
-        {
-            continue;
-        }
-
         let mut fmeta: HashMap<String, String> = HashMap::new();
         if let Some(lbl) = col.label.as_ref() {
             fmeta.insert("label".to_string(), lbl.clone());
@@ -834,12 +872,8 @@ pub(crate) fn finalize_to_ipc(mut ctx: ParseCtx) -> Result<(Vec<u8>, MetaOut)> {
 
         match col.kind {
             ColKind::Str => {
-                let arr = Arc::new(
-                    col.sb
-                        .take()
-                        .ok_or_else(|| anyhow!("string builder missing"))?
-                        .finish(),
-                ) as ArrayRef;
+                let arr =
+                    Arc::new(col.sb.take().ok_or_else(|| internal("string"))?.finish()) as ArrayRef;
                 let mut field = Field::new(&col.name, DataType::Utf8, true);
                 if !fmeta.is_empty() {
                     field = field.with_metadata(fmeta);
@@ -857,12 +891,8 @@ pub(crate) fn finalize_to_ipc(mut ctx: ParseCtx) -> Result<(Vec<u8>, MetaOut)> {
                 });
             }
             ColKind::F64 { float32 } => {
-                let arr = Arc::new(
-                    col.fb
-                        .take()
-                        .ok_or_else(|| anyhow!("float builder missing"))?
-                        .finish(),
-                ) as ArrayRef;
+                let arr =
+                    Arc::new(col.fb.take().ok_or_else(|| internal("float"))?.finish()) as ArrayRef;
                 let mut field = Field::new(&col.name, DataType::Float64, true);
                 if !fmeta.is_empty() {
                     field = field.with_metadata(fmeta);
@@ -880,12 +910,8 @@ pub(crate) fn finalize_to_ipc(mut ctx: ParseCtx) -> Result<(Vec<u8>, MetaOut)> {
                 });
             }
             ColKind::I64 { storage } => {
-                let arr = Arc::new(
-                    col.ib
-                        .take()
-                        .ok_or_else(|| anyhow!("integer builder missing"))?
-                        .finish(),
-                ) as ArrayRef;
+                let arr = Arc::new(col.ib.take().ok_or_else(|| internal("integer"))?.finish())
+                    as ArrayRef;
                 let mut field = Field::new(&col.name, DataType::Int64, true);
                 if !fmeta.is_empty() {
                     field = field.with_metadata(fmeta);
@@ -906,15 +932,16 @@ pub(crate) fn finalize_to_ipc(mut ctx: ParseCtx) -> Result<(Vec<u8>, MetaOut)> {
     }
 
     let schema = Arc::new(Schema::new(fields));
-    let batch = RecordBatch::try_new(schema.clone(), arrays)?;
+    let batch = RecordBatch::try_new(schema.clone(), arrays).map_err(arrow)?;
 
     // Use uncompressed IPC for faster write (if compression isn't needed)
     let write_options = IpcWriteOptions::default();
     let mut buf = Vec::new();
     {
-        let mut w = FileWriter::try_new_with_options(&mut buf, &schema, write_options)?;
-        w.write(&batch)?;
-        w.finish()?;
+        let mut w =
+            FileWriter::try_new_with_options(&mut buf, &schema, write_options).map_err(arrow)?;
+        w.write(&batch).map_err(arrow)?;
+        w.finish().map_err(arrow)?;
     }
 
     let vlabels = ctx
@@ -938,6 +965,7 @@ pub(crate) fn finalize_to_ipc(mut ctx: ParseCtx) -> Result<(Vec<u8>, MetaOut)> {
         notes: ctx.notes,
         had_invalid_utf8: ctx.had_invalid_utf8,
         encoding: None,
+        catalog_error: None,
     };
 
     Ok((buf, meta))
@@ -954,6 +982,59 @@ impl Drop for WriterGuard {
     fn drop(&mut self) {
         if !self.0.is_null() {
             unsafe { readstat_sys::readstat_writer_free(self.0) };
+        }
+    }
+}
+
+/// `Ok` for `READSTAT_OK`, else a write failure naming `what` with ReadStat's text.
+#[inline]
+pub(crate) fn write_rc(
+    rc: readstat_sys::readstat_error_t,
+    what: impl FnOnce() -> String,
+) -> Result<()> {
+    if rc == readstat_sys::readstat_error_e_READSTAT_OK {
+        return Ok(());
+    }
+    Err(Error::Write(format!(
+        "{}: {}",
+        what(),
+        readstat_message(rc)
+    )))
+}
+
+/// A writer's output file, removed on drop unless `finish` ran, so a failed write
+/// leaves no truncated file behind.
+pub(crate) struct OutputFile {
+    file: Option<std::fs::File>,
+    path: std::path::PathBuf,
+}
+
+impl OutputFile {
+    pub(crate) fn create(path: &str) -> Result<Self> {
+        Ok(Self {
+            file: Some(std::fs::File::create(path)?),
+            path: path.into(),
+        })
+    }
+
+    /// The `ctx` pointer for `readstat_begin_writing_*`; valid while `self` lives.
+    pub(crate) fn as_ctx(&mut self) -> *mut c_void {
+        match self.file.as_mut() {
+            Some(f) => f as *mut std::fs::File as *mut c_void,
+            None => std::ptr::null_mut(),
+        }
+    }
+
+    pub(crate) fn finish(mut self) {
+        self.file.take();
+    }
+}
+
+impl Drop for OutputFile {
+    fn drop(&mut self) {
+        // Closed before removal: Windows cannot delete an open file.
+        if self.file.take().is_some() {
+            let _ = std::fs::remove_file(&self.path);
         }
     }
 }
@@ -1013,7 +1094,7 @@ mod tests {
     fn guard_cb_converts_panic_into_abort_and_stored_error() {
         let mut ctx = ParseCtx {
             cols: Vec::new(),
-            name_to_idx: HashMap::new(),
+            var_cols: Vec::new(),
             cols_skip: None,
             rows_skip: 0,
             n_max: None,
@@ -1041,5 +1122,170 @@ mod tests {
         let rc = unsafe { guard_cb(ctx_ptr, |_| HANDLER_OK) };
         assert_eq!(rc, HANDLER_OK);
         assert!(ctx.panic_err.is_none());
+    }
+
+    fn empty_ctx() -> ParseCtx {
+        ParseCtx {
+            cols: Vec::new(),
+            var_cols: Vec::new(),
+            cols_skip: None,
+            rows_skip: 0,
+            n_max: None,
+            n_rows_seen: 0,
+            n_rows_emitted: 0,
+            last_counted_row: None,
+            had_invalid_utf8: false,
+            lossy_utf8: false,
+            label_sets: HashMap::new(),
+            file_label: None,
+            last_err: None,
+            tagged: HashMap::new(),
+            notes: Vec::new(),
+            detect_tagged: false,
+            row_capacity: None,
+            panic_err: None,
+        }
+    }
+
+    fn f64_col(name: &str) -> ColBuilders {
+        ColBuilders {
+            kind: ColKind::F64 { float32: false },
+            name: name.to_string(),
+            label: None,
+            label_set: None,
+            fmt: None,
+            measure: None,
+            user_missing: None,
+            sb: None,
+            fb: Some(Float64Builder::new()),
+            ib: None,
+        }
+    }
+
+    use readstat_sys::{
+        readstat_error_e_READSTAT_ERROR_CONVERT_BAD_STRING as RC_BAD_STRING,
+        readstat_error_e_READSTAT_ERROR_OPEN as RC_OPEN,
+        readstat_error_e_READSTAT_ERROR_PARSE as RC_PARSE,
+        readstat_error_e_READSTAT_ERROR_UNSUPPORTED_CHARSET as RC_CHARSET,
+        readstat_error_e_READSTAT_ERROR_USER_ABORT as RC_ABORT,
+        readstat_error_e_READSTAT_OK as RC_OK,
+    };
+
+    #[test]
+    fn check_parse_accepts_success_and_the_n_max_abort() {
+        for rc in [RC_OK, RC_ABORT] {
+            assert!(check_parse(rc, &mut empty_ctx(), "f.sav", None).is_ok());
+        }
+    }
+
+    #[test]
+    fn check_parse_reports_a_caught_panic_before_the_return_code() {
+        let mut ctx = empty_ctx();
+        ctx.panic_err = Some("boom".into());
+        let err = check_parse(RC_OK, &mut ctx, "f.sav", None).unwrap_err();
+        assert!(
+            matches!(&err, Error::Internal(m) if m == "internal error in readstat callback: boom"),
+            "{err:?}"
+        );
+        assert!(ctx.panic_err.is_none());
+    }
+
+    #[test]
+    fn check_parse_appends_readstats_last_message() {
+        let mut ctx = empty_ctx();
+        ctx.last_err = Some("bad header".into());
+        let err = check_parse(RC_PARSE, &mut ctx, "f.sav", None).unwrap_err();
+        let want = "Invalid file, or file has unsupported features (rc=5): bad header";
+        assert!(matches!(&err, Error::Parse(m) if m == want), "{err:?}");
+    }
+
+    #[test]
+    fn check_parse_codes_an_undecodable_string() {
+        let err = check_parse(RC_BAD_STRING, &mut empty_ctx(), "f.dta", None).unwrap_err();
+        let want =
+            "Unable to convert string to the requested encoding (invalid byte sequence) (rc=17)";
+        assert!(matches!(&err, Error::BadString(m) if m == want), "{err:?}");
+    }
+
+    #[test]
+    fn check_parse_blames_an_unsupported_charset_on_the_callers_encoding_only() {
+        let want = "File has an unsupported character set (rc=7)";
+        let err = check_parse(RC_CHARSET, &mut empty_ctx(), "f.sav", Some("nope")).unwrap_err();
+        assert!(
+            matches!(&err, Error::UnsupportedEncoding { encoding, detail }
+                if encoding == "nope" && detail == want),
+            "{err:?}"
+        );
+        let err = check_parse(RC_CHARSET, &mut empty_ctx(), "f.sav", None).unwrap_err();
+        assert!(matches!(&err, Error::Parse(m) if m == want), "{err:?}");
+    }
+
+    #[test]
+    fn check_parse_turns_an_unopenable_path_into_an_io_error() {
+        let missing = std::env::temp_dir().join("svy_io_check_parse_missing.sav");
+        let _ = std::fs::remove_file(&missing);
+        let err =
+            check_parse(RC_OPEN, &mut empty_ctx(), missing.to_str().unwrap(), None).unwrap_err();
+        assert!(
+            matches!(&err, Error::Io(e) if e.kind() == std::io::ErrorKind::NotFound),
+            "{err:?}"
+        );
+
+        // A path that opens fine leaves ReadStat's own report.
+        let present = std::env::temp_dir().join("svy_io_check_parse_present.sav");
+        std::fs::write(&present, b"x").unwrap();
+        let err =
+            check_parse(RC_OPEN, &mut empty_ctx(), present.to_str().unwrap(), None).unwrap_err();
+        std::fs::remove_file(&present).unwrap();
+        assert!(
+            matches!(&err, Error::Parse(m) if m == "Unable to open file (rc=1)"),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn finalize_rejects_two_variables_with_one_name() {
+        let mut ctx = empty_ctx();
+        ctx.cols = vec![f64_col("a"), f64_col("b"), f64_col("a")];
+        let err = finalize_to_ipc(ctx).err().unwrap();
+        assert!(
+            matches!(&err, Error::Parse(m) if m == "the file has more than one variable named \"a\""),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn write_rc_passes_ok_and_names_the_failed_step() {
+        assert!(write_rc(RC_OK, || unreachable!()).is_ok());
+        let err = write_rc(RC_PARSE, || "ending row 3".into()).unwrap_err();
+        let want = "ending row 3: Invalid file, or file has unsupported features (rc=5)";
+        assert!(matches!(&err, Error::Write(m) if m == want), "{err:?}");
+    }
+
+    #[test]
+    fn output_file_is_removed_unless_finished() {
+        let path = std::env::temp_dir().join("svy_io_output_file.bin");
+        let p = path.to_str().unwrap();
+
+        let out = OutputFile::create(p).unwrap();
+        assert!(path.exists());
+        drop(out);
+        assert!(!path.exists());
+
+        OutputFile::create(p).unwrap().finish();
+        assert!(path.exists());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn output_file_in_a_missing_directory_is_an_io_error() {
+        let path = std::env::temp_dir()
+            .join("svy_io_no_such_dir")
+            .join("x.sav");
+        let err = OutputFile::create(path.to_str().unwrap()).err().unwrap();
+        assert!(
+            matches!(&err, Error::Io(e) if e.kind() == std::io::ErrorKind::NotFound),
+            "{err:?}"
+        );
     }
 }

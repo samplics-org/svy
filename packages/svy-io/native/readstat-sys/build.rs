@@ -45,13 +45,13 @@ fn detect_sysroot_for_target(target: &str) -> Option<PathBuf> {
         "gcc".to_string(),
         "clang".to_string(),
     ] {
-        if let Ok(out) = Command::new(&cc).arg("-print-sysroot").output() {
-            if out.status.success() {
-                let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !s.is_empty() && Path::new(&s).exists() {
-                    diag!("Detected sysroot from {cc}: {s}");
-                    return Some(PathBuf::from(s));
-                }
+        if let Ok(out) = Command::new(&cc).arg("-print-sysroot").output()
+            && out.status.success()
+        {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !s.is_empty() && Path::new(&s).exists() {
+                diag!("Detected sysroot from {cc}: {s}");
+                return Some(PathBuf::from(s));
             }
         }
     }
@@ -72,24 +72,24 @@ fn bindgen_with_includes(include_dir: &Path) {
         .layout_tests(false)
         .clang_arg(format!("-I{}", include_dir.display()));
 
-    if target != host && target.contains("linux") {
-        if let Some(sysroot) = detect_sysroot_for_target(&target) {
-            builder = builder
-                .clang_arg(format!("--sysroot={}", sysroot.display()))
-                .clang_arg(format!("-I{}/usr/include", sysroot.display()));
-            let trip = if target.starts_with("aarch64") {
-                "aarch64-linux-gnu"
-            } else if target.starts_with("x86_64") {
-                "x86_64-linux-gnu"
-            } else {
-                ""
-            };
-            if !trip.is_empty() {
-                builder =
-                    builder.clang_arg(format!("-I{}/usr/include/{}", sysroot.display(), trip));
-            }
-            diag!("bindgen using sysroot {}", sysroot.display());
+    if target != host
+        && target.contains("linux")
+        && let Some(sysroot) = detect_sysroot_for_target(&target)
+    {
+        builder = builder
+            .clang_arg(format!("--sysroot={}", sysroot.display()))
+            .clang_arg(format!("-I{}/usr/include", sysroot.display()));
+        let trip = if target.starts_with("aarch64") {
+            "aarch64-linux-gnu"
+        } else if target.starts_with("x86_64") {
+            "x86_64-linux-gnu"
+        } else {
+            ""
+        };
+        if !trip.is_empty() {
+            builder = builder.clang_arg(format!("-I{}/usr/include/{}", sysroot.display(), trip));
         }
+        diag!("bindgen using sysroot {}", sysroot.display());
     }
 
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -294,7 +294,7 @@ fn build_vendored(rs_dir: &Path) {
     // OUT_DIR first so our stubs win where needed
     build.include(&out_dir);
     build.include(&inc_dir);
-    build.include(&rs_dir);
+    build.include(rs_dir);
 
     // Minimal config.h
     build.define("HAVE_STDDEF_H", Some("1"));
@@ -472,7 +472,7 @@ fn link_from_prefix(prefix: &str) {
 fn link_from_pkg_config() -> bool {
     match pkg_config::Config::new().probe("readstat") {
         Ok(lib) => {
-            if let Some(inc) = lib.include_paths.get(0) {
+            if let Some(inc) = lib.include_paths.first() {
                 bindgen_with_includes(inc);
             } else {
                 bindgen_with_includes(Path::new("."));

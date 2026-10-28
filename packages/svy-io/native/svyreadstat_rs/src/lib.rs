@@ -1,6 +1,7 @@
 // native/svyreadstat_rs/src/lib.rs
 #![allow(unsafe_op_in_unsafe_fn)]
 mod core;
+mod errors;
 mod sas_read;
 mod spss_read;
 mod spss_write;
@@ -13,6 +14,16 @@ use pyo3::prelude::*;
 
 #[pymodule]
 fn svyreadstat_rs(m: &Bound<PyModule>) -> PyResult<()> {
+    let py = m.py();
+    m.add(
+        "ReadStatValueError",
+        py.get_type::<errors::ReadStatValueError>(),
+    )?;
+    m.add(
+        "ReadStatRuntimeError",
+        py.get_type::<errors::ReadStatRuntimeError>(),
+    )?;
+
     // SAS functions
     m.add_function(wrap_pyfunction!(sas_read::df_parse_sas_file, m)?)?;
 

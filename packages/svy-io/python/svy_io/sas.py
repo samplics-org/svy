@@ -23,6 +23,7 @@ from .helpers import (
     _normalize_n_max,
     _reject_nul,
     _split_encoding,
+    _warn_catalog_error,
     _with_bad_string_hint,
 )
 from .metadata import normalize_user_missing
@@ -523,6 +524,7 @@ def read_xpt(
         df = pl.read_ipc_stream(bio)  # Fallback: IPC stream
 
     meta: Dict[str, Any] = json.loads(meta_json)
+    _warn_catalog_error(meta)
     meta["user_missing"] = normalize_user_missing(meta)
 
     # Optional post-processing (same order as read_sas)
@@ -629,13 +631,6 @@ def read_sas(
                 ordered=ordered,
             )
 
-        # n_max=0: still open and validate the file, returning the full schema
-        # and metadata with zero rows (haven behavior). The native layer treats
-        # n_max=0 as 1, so fetch one row and truncate after parsing.
-        zero_rows = n_max == 0
-        if zero_rows:
-            n_max = 1
-
         enc, lossy = _split_encoding(encoding)
         try:
             ipc_bytes, meta_json = native.df_parse_sas_file(  # type: ignore[attr-defined]
@@ -644,24 +639,12 @@ def read_sas(
         except RuntimeError as e:
             raise _with_bad_string_hint(e) from e
 
-    # Robust loader: try FILE first; if footer is missing, use STREAM.
-    bio = io.BytesIO(ipc_bytes)
-    try:
-        df = pl.read_ipc(bio)
-    except ComputeError as e:
-        if "InvalidFooter" in str(e):
-            bio.seek(0)
-            df = pl.read_ipc_stream(bio)
-        else:
-            raise
+    df = pl.read_ipc(io.BytesIO(ipc_bytes))
 
     # Decode metadata JSON
     meta: Dict[str, Any] = json.loads(meta_json)
+    _warn_catalog_error(meta)
     meta["user_missing"] = normalize_user_missing(meta)
-
-    if zero_rows:
-        df = df.head(0)
-        meta["n_rows"] = 0
 
     # Optional post-processing (order chosen to mirror typical haven workflows)
     if coerce_temporals:
@@ -724,12 +707,6 @@ def read_sas_arrow(
     is_xpt = kind == "xport" or (kind is None and data_path.lower().endswith((".xpt", ".xport")))
 
     n_max = _normalize_n_max(n_max)
-    # n_max=0: still open and validate the file, returning the full schema
-    # and metadata with zero rows (haven behavior). The native layer treats
-    # n_max=0 as 1, so fetch one row and truncate after parsing.
-    zero_rows = n_max == 0
-    if zero_rows:
-        n_max = 1
 
     enc, lossy = _split_encoding(encoding)
     try:
@@ -760,10 +737,8 @@ def read_sas_arrow(
         table = pa_ipc.open_stream(bio).read_all()
 
     meta = json.loads(meta_json)
+    _warn_catalog_error(meta)
     meta["user_missing"] = normalize_user_missing(meta)
-    if zero_rows:
-        table = table.slice(0, 0)
-        meta["n_rows"] = 0
     return table, meta
 
 
@@ -892,18 +867,10 @@ def write_xpt(
         fields.append(field.with_metadata(meta) if meta else field)
     table = table.cast(pa.schema(fields))
 
-    def _ipc(new_writer) -> bytes:
-        sink = pa.BufferOutputStream()
-        with new_writer(sink, table.schema) as writer:
-            writer.write_table(table)
-        return sink.getvalue().to_pybytes()
-
-    try:
-        _try_native(_ipc(pa_ipc.new_file))
-    except RuntimeError as e:
-        if "footer" not in str(e):
-            raise
-        _try_native(_ipc(pa_ipc.new_stream))
+    sink = pa.BufferOutputStream()
+    with pa_ipc.new_file(sink, table.schema) as writer:
+        writer.write_table(table)
+    _try_native(sink.getvalue().to_pybytes())
 
     # If we got here without exception but the file is empty, the native layer didn't finalize.
     if os.path.exists(path) and os.stat(path).st_size == 0:

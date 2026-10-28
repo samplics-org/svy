@@ -1,23 +1,19 @@
 // native/svyreadstat_rs/src/sas_read.rs
-use anyhow::{Result, anyhow};
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
 use std::collections::HashMap;
-use std::ffi::CString;
 use std::os::raw::c_void;
 
 use readstat_sys::{
-    readstat_error_e_READSTAT_ERROR_USER_ABORT as RS_USER_ABORT,
-    readstat_error_e_READSTAT_OK as RS_OK, readstat_parse_sas7bcat, readstat_parse_sas7bdat,
-    readstat_parser_free, readstat_parser_init, readstat_set_error_handler,
-    readstat_set_metadata_handler, readstat_set_value_handler, readstat_set_value_label_handler,
-    readstat_set_variable_handler,
+    readstat_parse_sas7bcat, readstat_parse_sas7bdat, readstat_parser_free, readstat_parser_init,
+    readstat_set_error_handler, readstat_set_metadata_handler, readstat_set_value_handler,
+    readstat_set_value_label_handler, readstat_set_variable_handler,
 };
 
 use crate::core::{
-    ParseCtx, finalize_to_ipc, on_error_cb, on_metadata_cb, on_value_cb, on_value_label_cb,
-    on_variable_cb,
+    ParseCtx, check_parse, finalize_to_ipc, on_error_cb, on_metadata_cb, on_value_cb,
+    on_value_label_cb, on_variable_cb,
 };
+use crate::errors::{Error, Op, Result};
 
 /// Optimized SAS file parser
 ///
@@ -50,7 +46,7 @@ fn parse_sas_impl(
 
     let mut ctx = ParseCtx {
         cols: Vec::with_capacity(128), // SAS files often have many columns
-        name_to_idx: HashMap::with_capacity(128),
+        var_cols: Vec::with_capacity(128),
         cols_skip: cols_skip_set,
         rows_skip,
         n_max,
@@ -69,18 +65,17 @@ fn parse_sas_impl(
         panic_err: None,
     };
 
-    // Step 1: Parse catalog file if provided (for value labels)
-    if let Some(cat_path) = catalog_path {
-        parse_catalog(&mut ctx, cat_path, catalog_encoding, lossy_utf8)?;
-    }
+    let catalog_error = match catalog_path {
+        Some(cat_path) => parse_catalog(&mut ctx, cat_path, catalog_encoding, lossy_utf8)?,
+        None => None,
+    };
 
-    // Step 2: Parse data file
     // Before the parser exists, so a bad path cannot return without freeing it.
-    let c_path = CString::new(data_path)?;
+    let c_path = crate::core::c_path(data_path)?;
     unsafe {
         let parser = readstat_parser_init();
         if parser.is_null() {
-            return Err(anyhow!("readstat_parser_init() failed for data"));
+            return Err(Error::Internal("readstat_parser_init() failed".into()));
         }
 
         // Set up all handlers for data file
@@ -92,9 +87,9 @@ fn parse_sas_impl(
         let enc = crate::core::input_encoding(encoding, lossy_utf8);
         let _keep_enc = match crate::core::configure_parser(parser, enc, rows_skip, n_max) {
             Ok(k) => k,
-            Err(msg) => {
+            Err(e) => {
                 readstat_parser_free(parser);
-                return Err(anyhow!(msg));
+                return Err(e);
             }
         };
 
@@ -102,47 +97,32 @@ fn parse_sas_impl(
             readstat_parse_sas7bdat(parser, c_path.as_ptr(), &mut ctx as *mut _ as *mut c_void);
 
         readstat_parser_free(parser);
-
-        // A panic caught inside a handler callback is an internal error.
-        if let Some(msg) = ctx.panic_err.take() {
-            return Err(anyhow!("internal error in readstat callback: {msg}"));
-        }
-
-        // Check for early termination (user requested n_max rows)
-        let early_ok = ctx
-            .n_max
-            .map(|nm| ctx.n_rows_emitted >= nm)
-            .unwrap_or(false);
-
-        // Handle errors
-        if rc != RS_OK && !early_ok && rc != RS_USER_ABORT {
-            let msg = crate::core::parse_failure(rc, ctx.last_err.take());
-            return Err(anyhow!("Failed to parse SAS data file: {msg}"));
-        }
+        check_parse(rc, &mut ctx, data_path, encoding)?;
     }
 
     resolve_format_label_sets(&mut ctx);
 
-    // Convert to Arrow IPC format
-    finalize_to_ipc(ctx)
+    let (ipc, mut meta) = finalize_to_ipc(ctx)?;
+    meta.catalog_error = catalog_error;
+    Ok((ipc, meta))
 }
 
 /// Load a .sas7bcat catalog's value labels into `ctx.label_sets`.
 ///
 /// Shared by the sas7bdat and XPT readers: both name a variable's label set
-/// after its format. A catalog that fails to parse only warns, so the data
+/// after its format. A catalog that fails to parse returns why, so the data
 /// still reads without labels.
 pub(crate) fn parse_catalog(
     ctx: &mut ParseCtx,
     cat_path: &str,
     catalog_encoding: Option<&str>,
     lossy_utf8: bool,
-) -> Result<()> {
-    let c_path = CString::new(cat_path)?;
+) -> Result<Option<String>> {
+    let c_path = crate::core::c_path(cat_path)?;
     unsafe {
         let parser = readstat_parser_init();
         if parser.is_null() {
-            return Err(anyhow!("readstat_parser_init() failed for catalog"));
+            return Err(Error::Internal("readstat_parser_init() failed".into()));
         }
 
         // Only need value label handler for catalog
@@ -151,30 +131,23 @@ pub(crate) fn parse_catalog(
         let cat_enc = crate::core::input_encoding(catalog_encoding, lossy_utf8);
         let _keep_enc = match crate::core::configure_parser(parser, cat_enc, 0, None) {
             Ok(k) => k,
-            Err(msg) => {
+            Err(e) => {
                 readstat_parser_free(parser);
-                return Err(anyhow!(msg));
+                return Err(e);
             }
         };
 
         let rc = readstat_parse_sas7bcat(parser, c_path.as_ptr(), ctx as *mut _ as *mut c_void);
 
         readstat_parser_free(parser);
-
-        // A panic caught inside a handler callback is an internal error.
-        if let Some(msg) = ctx.panic_err.take() {
-            return Err(anyhow!("internal error in readstat callback: {msg}"));
-        }
-
-        if rc != RS_OK && rc != RS_USER_ABORT {
-            let msg = ctx
-                .last_err
-                .take()
-                .unwrap_or_else(|| format!("Catalog parse failed with code {rc}"));
-            eprintln!("Warning: Failed to parse catalog: {msg}");
+        match check_parse(rc, ctx, cat_path, catalog_encoding) {
+            Ok(()) => Ok(None),
+            Err(e @ Error::Internal(_)) => Err(e),
+            Err(e) => Ok(Some(format!(
+                "SAS catalog {cat_path:?} gave no value labels: {e}"
+            ))),
         }
     }
-    Ok(())
 }
 
 /// Strip the display width and decimals ReadStat appends to a format name:
@@ -260,20 +233,8 @@ pub fn df_parse_sas_file<'py>(
         )
     });
 
-    let (ipc, meta) =
-        result.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-
-    // Serialize metadata to JSON
-    let meta_json = serde_json::to_string(&meta)
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-
-    // Return Arrow IPC bytes and metadata
-    let pybytes = PyBytes::new(py, &ipc)
-        .into_pyobject(py)
-        .unwrap()
-        .into_any()
-        .unbind();
-    Ok((pybytes, meta_json))
+    let (ipc, meta) = result.map_err(|e| e.into_py(Op::Read, "SAS", data_path))?;
+    crate::core::to_python(py, &ipc, &meta, "SAS", data_path)
 }
 
 #[cfg(test)]
@@ -308,7 +269,7 @@ mod tests {
             .collect();
         ParseCtx {
             cols,
-            name_to_idx: HashMap::new(),
+            var_cols: Vec::new(),
             cols_skip: None,
             rows_skip: 0,
             n_max: None,

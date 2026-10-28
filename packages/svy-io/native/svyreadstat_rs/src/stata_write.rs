@@ -1,5 +1,4 @@
 // native/svyreadstat_rs/src/stata_write.rs
-use anyhow::{Result, anyhow};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -8,7 +7,6 @@ use std::ffi::CString;
 use std::fs::File;
 use std::io::{Cursor, Write as IoWrite};
 use std::os::raw::{c_char, c_void};
-use std::path::Path;
 
 use arrow::array::{
     Array, BooleanArray, Date32Array, Date64Array, DictionaryArray, Float32Array, Float64Array,
@@ -38,7 +36,8 @@ use readstat_sys::{
     readstat_writer_set_file_label, readstat_writer_t,
 };
 
-use crate::core::WriterGuard;
+use crate::core::{OutputFile, WriterGuard, write_rc};
+use crate::errors::{Error, Op, Result};
 
 unsafe extern "C" fn data_writer_cb(
     data: *const std::os::raw::c_void,
@@ -56,7 +55,7 @@ unsafe extern "C" fn data_writer_cb(
     }
 }
 
-fn ipc_to_batches(buf: &[u8]) -> Result<Vec<RecordBatch>> {
+fn ipc_to_batches(buf: &[u8]) -> arrow::error::Result<Vec<RecordBatch>> {
     let mut batches = Vec::new();
     let schema = if buf.starts_with(b"ARROW1") {
         let mut fr = FileReader::try_new(Cursor::new(buf), None)?;
@@ -340,40 +339,37 @@ fn tags_by_column(
     let mut by_col = vec![HashMap::new(); names.len()];
     for spec in specs {
         let Some(j) = names.iter().position(|n| *n == spec.col) else {
-            return Err(anyhow!(
+            return Err(Error::Invalid(format!(
                 "tagged missings name column '{}', which is not in the data",
                 spec.col
-            ));
+            )));
         };
         if is_str_col[j] {
-            return Err(anyhow!(
+            return Err(Error::Invalid(format!(
                 "column '{}' holds strings; tagged missings apply only to numeric variables",
                 spec.col
-            ));
+            )));
         }
         if spec.rows.len() != spec.tags.len() {
-            return Err(anyhow!(
+            return Err(Error::Invalid(format!(
                 "column '{}': {} tagged rows but {} tags",
                 spec.col,
                 spec.rows.len(),
                 spec.tags.len()
-            ));
+            )));
         }
         for (&row, tag) in spec.rows.iter().zip(&spec.tags) {
             let &[b @ b'a'..=b'z'] = tag.as_bytes() else {
-                return Err(anyhow!(
+                return Err(Error::Invalid(format!(
                     "column '{}': tag {:?} is not one of the Stata tags a-z",
-                    spec.col,
-                    tag
-                ));
+                    spec.col, tag
+                )));
             };
             if row >= n_rows {
-                return Err(anyhow!(
+                return Err(Error::Invalid(format!(
                     "column '{}': tagged row {} is past the last row ({})",
-                    spec.col,
-                    row,
-                    n_rows
-                ));
+                    spec.col, row, n_rows
+                )));
             }
             by_col[j].insert(row, b as c_char);
         }
@@ -405,12 +401,12 @@ fn write_stata_minimal(
     tagged_missings: &[TaggedMissing],
 ) -> Result<()> {
     if batches.is_empty() {
-        return Err(anyhow!("no record batches to write"));
+        return Err(Error::Invalid("no record batches to write".into()));
     }
 
     let writer = unsafe { readstat_writer_init() };
     if writer.is_null() {
-        return Err(anyhow!("readstat_writer_init() failed"));
+        return Err(Error::Internal("readstat_writer_init() failed".into()));
     }
     // Frees the writer on every exit path (including early `?` returns).
     let _writer_guard = WriterGuard(writer);
@@ -420,7 +416,8 @@ fn write_stata_minimal(
     }
 
     if let Some(lbl) = file_label {
-        let c = CString::new(lbl)?;
+        let c = CString::new(lbl)
+            .map_err(|_| Error::Invalid(format!("file label {lbl:?} contains an embedded NUL")))?;
         unsafe {
             readstat_writer_set_file_label(writer, c.as_ptr());
         }
@@ -469,7 +466,7 @@ fn write_stata_minimal(
             let needs_strl = (stats.max_len as i32) > strl_threshold;
 
             if needs_strl {
-                return Err(anyhow!(
+                return Err(Error::Invalid(format!(
                     "Column '{}' contains strings longer than {} bytes (max: {}).\n\
                      \n\
                      strL support is currently unavailable due to a bug in ReadStat library v1.1.9\n\
@@ -483,24 +480,29 @@ fn write_stata_minimal(
                     strl_threshold,
                     stats.max_len,
                     strl_threshold
-                ));
+                )));
             }
 
             typ = T_STRING;
             width = stats.max_len.clamp(1, 2045);
         }
 
-        let cname = CString::new(field.name().as_str())?;
+        let cname = CString::new(field.name().as_str()).map_err(|_| {
+            Error::Invalid(format!(
+                "column name {:?} contains an embedded NUL",
+                field.name()
+            ))
+        })?;
         let var = unsafe { readstat_add_variable(writer, cname.as_ptr(), typ, width as _) };
         if var.is_null() {
-            return Err(anyhow!(
-                "readstat_add_variable failed for '{}'",
+            return Err(Error::Write(format!(
+                "adding column '{}' failed",
                 field.name()
-            ));
+            )));
         }
 
         if let Some(fmt) = stata_temporal_format(field.data_type()) {
-            let c = CString::new(fmt)?;
+            let c = CString::new(fmt).expect("Stata format names hold no NUL");
             unsafe {
                 readstat_variable_set_format(var, c.as_ptr());
             }
@@ -511,10 +513,10 @@ fn write_stata_minimal(
             && !lbl.is_empty()
         {
             let c = CString::new(lbl.as_str()).map_err(|_| {
-                anyhow!(
+                Error::Invalid(format!(
                     "variable label of column '{}' contains an embedded NUL",
                     field.name()
-                )
+                ))
             })?;
             unsafe {
                 readstat_variable_set_label(var, c.as_ptr());
@@ -531,11 +533,11 @@ fn write_stata_minimal(
             && !labels.is_empty()
         {
             if is_str_col[j] {
-                return Err(anyhow!(
+                return Err(Error::Invalid(format!(
                     "column '{}' holds strings; Stata value labels apply only to \
                      numeric variables",
                     field.name()
-                ));
+                )));
             }
 
             // Sorted so the emitted table is byte-stable across runs.
@@ -543,34 +545,34 @@ fn write_stata_minimal(
             let mut entries: Vec<(f64, &str)> = Vec::with_capacity(labels.len());
             for (value, label) in labels {
                 let code: f64 = value.parse().map_err(|_| {
-                    anyhow!(
+                    Error::Invalid(format!(
                         "value label code {:?} on column '{}' is not numeric",
                         value,
                         field.name()
-                    )
+                    ))
                 })?;
                 entries.push((code, label.as_str()));
             }
             entries.sort_by(|a, b| a.0.total_cmp(&b.0));
 
-            let c_set_name = CString::new(field.name().as_str())?;
+            let c_set_name = cname.clone();
             let label_set =
                 unsafe { readstat_add_label_set(writer, T_DOUBLE, c_set_name.as_ptr()) };
             if label_set.is_null() {
-                return Err(anyhow!(
+                return Err(Error::Write(format!(
                     "readstat_add_label_set failed for '{}'",
                     field.name()
-                ));
+                )));
             }
 
             let mut c_labels = Vec::with_capacity(entries.len());
             for (code, label) in entries {
                 let c_label = CString::new(label).map_err(|_| {
-                    anyhow!(
+                    Error::Invalid(format!(
                         "value label {:?} on column '{}' contains an embedded NUL",
                         label,
                         field.name()
-                    )
+                    ))
                 })?;
                 unsafe {
                     readstat_label_double_value(label_set, code, c_label.as_ptr());
@@ -590,72 +592,40 @@ fn write_stata_minimal(
         rvars.push(var);
     }
 
-    let mut outfile = File::create(Path::new(out_path))?;
     let total_rows: i64 = batches.iter().map(|b| b.num_rows() as i64).sum();
     #[allow(clippy::useless_conversion)] // c_long is 32-bit on Windows
     let row_count = total_rows
         .try_into()
-        .map_err(|_| anyhow!("row count {total_rows} exceeds platform limit"))?;
-    unsafe {
-        let rc =
-            readstat_begin_writing_dta(writer, &mut outfile as *mut File as *mut c_void, row_count);
-        if rc != 0 {
-            return Err(anyhow!("readstat_begin_writing_dta failed with rc={}", rc));
-        }
-    }
+        .map_err(|_| Error::Invalid(format!("{total_rows} rows exceed this platform's limit")))?;
+    let mut out = OutputFile::create(out_path)?;
+    write_rc(
+        unsafe { readstat_begin_writing_dta(writer, out.as_ctx(), row_count) },
+        || "beginning the file".into(),
+    )?;
 
     let mut row_offset = 0;
     for b in batches {
         for i in 0..b.num_rows() {
             let row = row_offset + i;
-            unsafe {
-                let rc = readstat_begin_row(writer);
-                if rc != 0 {
-                    return Err(anyhow!("readstat_begin_row failed with rc={}", rc));
-                }
-            };
+            write_rc(unsafe { readstat_begin_row(writer) }, || {
+                format!("beginning row {row}")
+            })?;
 
             for (j, arr) in b.columns().iter().enumerate() {
-                if is_str_col[j] {
-                    if let Some(s) = get_string_value(arr.as_ref(), i) {
-                        unsafe {
-                            match CString::new(s) {
-                                Ok(cs) => {
-                                    let rc =
-                                        readstat_insert_string_value(writer, rvars[j], cs.as_ptr());
-                                    if rc != 0 {
-                                        return Err(anyhow!(
-                                            "insert_string_value failed with rc={}",
-                                            rc
-                                        ));
-                                    }
-                                }
-                                Err(_) => {
-                                    let rc = readstat_insert_missing_value(writer, rvars[j]);
-                                    if rc != 0 {
-                                        return Err(anyhow!(
-                                            "insert_missing_value (embedded NUL) failed with rc={}",
-                                            rc
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        unsafe {
-                            let rc = readstat_insert_missing_value(writer, rvars[j]);
-                            if rc != 0 {
-                                return Err(anyhow!(
-                                    "insert_missing_value (null) failed with rc={}",
-                                    rc
-                                ));
-                            }
-                        }
+                let rc = if is_str_col[j] {
+                    match get_string_value(arr.as_ref(), i).map(CString::new) {
+                        Some(Ok(cs)) => unsafe {
+                            readstat_insert_string_value(writer, rvars[j], cs.as_ptr())
+                        },
+                        // A NUL cannot be stored, so the value is written as missing.
+                        Some(Err(_)) | None => unsafe {
+                            readstat_insert_missing_value(writer, rvars[j])
+                        },
                     }
                 } else if col_types[j] != T_DOUBLE {
                     // The storage type was chosen from this column's range, so
                     // the narrowing casts below cannot truncate.
-                    let rc = match as_i64_opt(arr.as_ref(), i) {
+                    match as_i64_opt(arr.as_ref(), i) {
                         Some(v) => unsafe {
                             match col_types[j] {
                                 T_INT8 => readstat_insert_int8_value(writer, rvars[j], v as i8),
@@ -664,13 +634,6 @@ fn write_stata_minimal(
                             }
                         },
                         None => unsafe { insert_missing(writer, rvars[j], tags[j].get(&row)) },
-                    };
-                    if rc != 0 {
-                        return Err(anyhow!(
-                            "insert integer value into '{}' failed with rc={}",
-                            schema.field(j).name(),
-                            rc
-                        ));
                     }
                 } else {
                     let v = if is_temporal_col[j] {
@@ -678,45 +641,27 @@ fn write_stata_minimal(
                     } else {
                         as_f64_opt(arr.as_ref(), i)
                     };
-                    if let Some(v) = v {
-                        unsafe {
-                            let rc = readstat_insert_double_value(writer, rvars[j], v);
-                            if rc != 0 {
-                                return Err(anyhow!("insert_double_value failed with rc={}", rc));
-                            }
-                        }
-                    } else {
-                        unsafe {
-                            let rc = insert_missing(writer, rvars[j], tags[j].get(&row));
-                            if rc != 0 {
-                                return Err(anyhow!(
-                                    "insert missing value into '{}' failed with rc={}",
-                                    schema.field(j).name(),
-                                    rc
-                                ));
-                            }
-                        }
+                    match v {
+                        Some(v) => unsafe { readstat_insert_double_value(writer, rvars[j], v) },
+                        None => unsafe { insert_missing(writer, rvars[j], tags[j].get(&row)) },
                     }
-                }
+                };
+                write_rc(rc, || {
+                    format!("writing column '{}' at row {row}", schema.field(j).name())
+                })?;
             }
 
-            unsafe {
-                let rc = readstat_end_row(writer);
-                if rc != 0 {
-                    return Err(anyhow!("readstat_end_row failed with rc={}", rc));
-                }
-            }
+            write_rc(unsafe { readstat_end_row(writer) }, || {
+                format!("ending row {row}")
+            })?;
         }
         row_offset += b.num_rows();
     }
 
-    unsafe {
-        let rc = readstat_end_writing(writer);
-        if rc != 0 {
-            return Err(anyhow!("readstat_end_writing failed with rc={}", rc));
-        }
-    }
-
+    write_rc(unsafe { readstat_end_writing(writer) }, || {
+        "finishing the file".into()
+    })?;
+    out.finish();
     Ok(())
 }
 
@@ -742,15 +687,37 @@ pub fn df_write_dta_file(
     strl_threshold: i32,
     user_missing_json: Option<&str>,
 ) -> PyResult<()> {
-    let buf = ipc_bytes.as_bytes();
-    let batches = ipc_to_batches(buf).map_err(|e| {
-        pyo3::exceptions::PyRuntimeError::new_err(format!("Arrow IPC decode failed: {}", e))
-    })?;
+    write_dta_impl(
+        ipc_bytes.as_bytes(),
+        out_path,
+        version,
+        file_label,
+        var_labels_json,
+        value_labels_json,
+        strl_threshold,
+        user_missing_json,
+    )
+    .map_err(|e| e.into_py(Op::Write, "DTA", out_path))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_dta_impl(
+    buf: &[u8],
+    out_path: &str,
+    version: i32,
+    file_label: Option<&str>,
+    var_labels_json: Option<&str>,
+    value_labels_json: Option<&str>,
+    strl_threshold: i32,
+    user_missing_json: Option<&str>,
+) -> Result<()> {
+    let batches =
+        ipc_to_batches(buf).map_err(|e| Error::Invalid(format!("Arrow IPC decode failed: {e}")))?;
 
     let var_labels: Option<HashMap<String, String>> = if let Some(js) = var_labels_json {
         Some(
             serde_json::from_str::<HashMap<String, String>>(js).map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!(
+                Error::Invalid(format!(
                     "var_labels_json must be a JSON object of {{col: label}} strings: {e}"
                 ))
             })?,
@@ -764,7 +731,7 @@ pub fn df_write_dta_file(
     let value_labels: Option<HashMap<String, HashMap<String, String>>> =
         if let Some(js) = value_labels_json {
             Some(serde_json::from_str(js).map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!(
+                Error::Invalid(format!(
                     "value_labels_json must be a JSON object of {{col: {{code: label}}}}: {e}"
                 ))
             })?)
@@ -774,7 +741,7 @@ pub fn df_write_dta_file(
 
     let tagged_missings: Vec<TaggedMissing> = match user_missing_json {
         Some(js) => serde_json::from_str(js).map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!(
+            Error::Invalid(format!(
                 "user_missing_json must be a JSON list of {{col, rows, tags}}: {e}"
             ))
         })?,
@@ -791,7 +758,6 @@ pub fn df_write_dta_file(
         value_labels.as_ref(),
         &tagged_missings,
     )
-    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("df_write_dta_file: {}", e)))
 }
 
 #[cfg(test)]

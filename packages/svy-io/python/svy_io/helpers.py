@@ -16,7 +16,7 @@ from typing import Any
 
 _LOSSY_ENCODINGS = frozenset({"utf8-lossy", "utf-8-lossy"})
 
-# Appended to the parse error for READSTAT_ERROR_CONVERT_BAD_STRING (rc=17).
+# Appended to the READSTAT_BAD_STRING parse error.
 BAD_STRING_HINT = (
     "pass encoding='utf8-lossy' to replace undecodable bytes with U+FFFD "
     "(flagged in meta['had_invalid_utf8']), or the file's actual encoding if "
@@ -32,10 +32,20 @@ def _split_encoding(encoding: str | None) -> tuple[str | None, bool]:
 
 
 def _with_bad_string_hint(e: RuntimeError, hint: str = BAD_STRING_HINT) -> RuntimeError:
-    """Attach a ``Hint:`` naming the encoding option to an rc=17 parse error."""
-    if "(rc=17)" in str(e):
-        return RuntimeError(f"{e}. Hint: {hint}.")
-    return e
+    """Attach a ``Hint:`` naming the encoding option to an undecodable-string parse error."""
+    code = getattr(e, "code", None)
+    if code != "READSTAT_BAD_STRING":
+        return e
+    hinted = type(e)(f"{e}. Hint: {hint}.")
+    hinted.code = code  # type: ignore[attr-defined]
+    return hinted
+
+
+def _warn_catalog_error(meta: dict) -> None:
+    """Warn when the native reader could not take value labels from the SAS catalog."""
+    msg = meta.pop("catalog_error", None)
+    if msg is not None:
+        warnings.warn(msg, UserWarning, stacklevel=_caller_stacklevel())
 
 
 def _reject_nul(what: str, named_texts: Iterable[tuple[str, object]]) -> None:
