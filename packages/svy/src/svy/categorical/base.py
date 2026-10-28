@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, Literal, cast
 
@@ -235,6 +235,21 @@ def _is_rank_score(value: object) -> bool:
 
 def _score_label(value: object) -> str:
     return value.value if isinstance(value, _RankScoreMethod) else str(value)
+
+
+def _by_key(by: str | Sequence[str] | None) -> str | tuple[str, ...] | None:
+    """``by`` as a test's rows carry it: a name, or a tuple of names when several."""
+    if by is None or isinstance(by, str):
+        return by
+    names = tuple(by)
+    return names[0] if len(names) == 1 else names
+
+
+def _by_lookup(data: pl.DataFrame | pl.LazyFrame, by_key: str | tuple[str, ...] | None) -> dict:
+    """The kernel's ``by`` keys mapped to their levels, a tuple of them when several."""
+    if by_key is None:
+        return {}
+    return level_lookup(data, [by_key] if isinstance(by_key, str) else list(by_key))
 
 
 # -------------------------------------------
@@ -917,7 +932,8 @@ class Categorical:
 
         # The kernel returns by and group levels as strings; restore the
         # source columns' types.
-        by_lookup = level_lookup(self._sample._data, [by]) if by is not None else {}
+        by_key = _by_key(by)
+        by_lookup = _by_lookup(self._sample._data, by_key)
         group_lookup = level_lookup(self._sample._data, [group]) if group is not None else {}
 
         # Unpack result rows into Python containers
@@ -935,7 +951,7 @@ class Categorical:
                     mean_h0=mean_h0,
                     alpha=alpha,
                     alternative=alternative,
-                    by=by,
+                    by=by_key,
                     by_level=by_level,
                     group_lookup=group_lookup,
                     group_labels=group_labels,
@@ -986,7 +1002,7 @@ class Categorical:
         mean_h0: Number,
         alpha: float,
         alternative: str,
-        by: str | None,
+        by: str | tuple[str, ...] | None,
         by_level: object,
         group_lookup: dict[str, object] | None = None,
         group_labels: ResolvedLabels | None = None,
@@ -1248,7 +1264,8 @@ class Categorical:
                     by_col=prep.by_col,
                 )
 
-        by_lookup = level_lookup(self._sample._data, [by]) if by is not None else {}
+        by_key = _by_key(by)
+        by_lookup = _by_lookup(self._sample._data, by_key)
         group_lookup = level_lookup(self._sample._data, [group])
 
         # Group levels actually used by the Rust kernel: rows in-domain with
@@ -1295,7 +1312,7 @@ class Categorical:
                     group_levels=by_group_levels if len(by_group_levels) >= 2 else _group_levels,
                     alpha=alpha,
                     alternative=alternative,
-                    by=by,
+                    by=by_key,
                     by_level=by_lookup.get(raw_level, raw_level),
                 )
                 results.append(res)
@@ -1347,7 +1364,7 @@ class Categorical:
         group_levels: list[Category],
         alpha: float,
         alternative: str,
-        by: str | None,
+        by: str | tuple[str, ...] | None,
         by_level: object,
     ) -> RankTestTwoSample | RankTestKSample:
         """Unpack a single row from the ranktest result DataFrame into a Python container."""
@@ -1572,7 +1589,8 @@ class Categorical:
                     by_col=prep.by_col,
                 )
 
-        by_lookup = level_lookup(self._sample._data, [by]) if by is not None else {}
+        by_key = _by_key(by)
+        by_lookup = _by_lookup(self._sample._data, by_key)
         group_lookup = level_lookup(self._sample._data, [group])
 
         def _unpack_row(row_idx: int, by_level: object) -> RankTestTwoSample:
@@ -1606,7 +1624,7 @@ class Categorical:
                 se=se,
                 lci=diff_value - t_crit * se,
                 uci=diff_value + t_crit * se,
-                by=by,
+                by=by_key,
                 by_level=by_level if by else None,
             )
 
