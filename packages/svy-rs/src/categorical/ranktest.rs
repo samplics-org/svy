@@ -1,17 +1,6 @@
-// src/categorical/ranktest.rs
-//
-// Design-based rank tests for complex survey data.
-//
-// Implements Lumley & Scott (2013), Biometrika 100(4), 831-842.
-//
-// Algorithm (aligned with R survey::svyranktest):
-//   1. Compute estimated population mid-ranks using survey weights.
-//   2. Apply rank-score transformation (Wilcoxon, van der Waerden, median).
-//   3. Fit weighted OLS: rankscore ~ group (via wols).
-//   4. Compute influence functions from the OLS fit.
-//   5. Design-based variance via taylor_variance on influence functions.
-//   6. Two-sample: t = coef[1] / SE(infn)[1], df = degf(design) - 1.
-//      K-sample: Wald F-test on contrast covariance.
+//! Design-based rank tests (Lumley & Scott 2013, Biometrika 100(4)), matching R's `svyranktest`.
+//!
+//! - Weighted mid-ranks are scored, regressed on the groups by WLS, and tested with the design variance of the influence.
 
 use crate::categorical::error::{CResult, CategoricalError};
 use crate::estimation::error::{EResult, EstimationError};
@@ -54,13 +43,8 @@ impl RankScoreMethod {
 // Rank computation
 // ============================================================================
 
-/// Compute estimated population mid-ranks.
-///
-/// Matches R's:
-///   ii <- order(y)
-///   rankhat[ii] <- ave(cumsum(w[ii]) - w[ii]/2, factor(y[ii]))
+/// Estimated population mid-ranks: R's `rankhat[ii] <- ave(cumsum(w[ii]) - w[ii]/2, factor(y[ii]))`.
 fn compute_midranks(y: &[f64], w: &[f64], n: usize) -> Vec<f64> {
-    // Sort by y
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| y[a].partial_cmp(&y[b]).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -71,7 +55,6 @@ fn compute_midranks(y: &[f64], w: &[f64], n: usize) -> Vec<f64> {
         cumw[pos] = running - w[idx] / 2.0;
     }
 
-    // Average over ties (same y value)
     let mut midrank_sorted = vec![0.0; n];
     let mut i = 0;
     while i < n {
@@ -80,8 +63,7 @@ fn compute_midranks(y: &[f64], w: &[f64], n: usize) -> Vec<f64> {
         while j < n && y[indices[j]] == y_val {
             j += 1;
         }
-        // Zero-weight rows (out of domain, missing y) are not in R's subset
-        // design, so they must not join the tie average.
+        // Zero-weight rows are not in R's subset design, so they must not join the tie average.
         let (sum, count) = (i..j)
             .filter(|&pos| w[indices[pos]] > 0.0)
             .fold((0.0, 0usize), |(s, c), pos| (s + cumw[pos], c + 1));
@@ -94,7 +76,6 @@ fn compute_midranks(y: &[f64], w: &[f64], n: usize) -> Vec<f64> {
         i = j;
     }
 
-    // Map back to original order
     let mut rankhat = vec![0.0; n];
     for (pos, &idx) in indices.iter().enumerate() {
         rankhat[idx] = midrank_sorted[pos];
@@ -102,7 +83,6 @@ fn compute_midranks(y: &[f64], w: &[f64], n: usize) -> Vec<f64> {
     rankhat
 }
 
-/// Apply rank-score transformation.
 fn apply_score(rankhat: &[f64], n_hat: f64, method: RankScoreMethod) -> Vec<f64> {
     match method {
         RankScoreMethod::Wilcoxon | RankScoreMethod::KruskalWallis => {
@@ -112,8 +92,8 @@ fn apply_score(rankhat: &[f64], n_hat: f64, method: RankScoreMethod) -> Vec<f64>
             rankhat
                 .iter()
                 .map(|&r| {
+                    // Clamped so the extreme ranks keep a finite score.
                     let u = (r / n_hat).clamp(1e-10, 1.0 - 1e-10);
-                    // Probit (inverse normal CDF) - rational approximation
                     probit(u)
                 })
                 .collect()
@@ -125,9 +105,7 @@ fn apply_score(rankhat: &[f64], n_hat: f64, method: RankScoreMethod) -> Vec<f64>
     }
 }
 
-/// Inverse standard normal CDF: Acklam's rational approximation (~1.15e-9), then one
-/// Halley step against `norm_cdf`, which leaves it as accurate as `norm_cdf`.
-/// Reference: https://web.archive.org/web/20151030215612/http://home.online.no/~pjacklam/notes/invnorm/
+/// Inverse normal CDF: Acklam's rational approximation (~1.15e-9), then one Halley step to `norm_cdf`'s accuracy.
 pub(crate) fn probit(p: f64) -> f64 {
     if p <= 0.0 {
         return f64::NEG_INFINITY;
@@ -136,7 +114,6 @@ pub(crate) fn probit(p: f64) -> f64 {
         return f64::INFINITY;
     }
 
-    // Coefficients for rational approximation
     #[allow(clippy::excessive_precision)] // as published
     const A: [f64; 6] = [
         -3.969683028665376e+01,
@@ -210,46 +187,35 @@ pub(crate) fn probit(p: f64) -> f64 {
 /// Result for a two-sample rank test.
 #[allow(dead_code)]
 pub struct RankTestTwoResult {
-    /// Difference in mean rank scores (group1 effect)
+    /// Group 1 minus group 0 mean rank score.
     pub delta: f64,
-    /// Design-based SE of delta
     pub se: f64,
-    /// t-statistic: delta / se
     pub t_stat: f64,
-    /// Degrees of freedom: degf(design) - 1
+    /// degf(design) - 1
     pub df: f64,
-    /// Two-sided p-value
     pub p_value: f64,
-    /// Group labels (sorted)
+    /// Sorted.
     pub levels: Vec<String>,
-    /// Per-group mean rank scores
     pub group_means: Vec<f64>,
-    /// Per-group SEs
     pub group_ses: Vec<f64>,
-    /// Number of observations
     pub n_obs: usize,
 }
 
 /// Result for a k-sample rank test.
 #[allow(dead_code)]
 pub struct RankTestKResult {
-    /// Numerator df (k - 1)
+    /// k - 1
     pub ndf: usize,
-    /// Denominator df: degf(design) - ndf
+    /// degf(design) - ndf
     pub ddf: f64,
-    /// Wald chi-square statistic
     pub chisq: f64,
-    /// F-statistic: chisq / ndf
+    /// chisq / ndf
     pub f_stat: f64,
-    /// p-value from F distribution
     pub p_value: f64,
-    /// Group labels (sorted)
+    /// Sorted.
     pub levels: Vec<String>,
-    /// Per-group mean rank scores
     pub group_means: Vec<f64>,
-    /// Per-group SEs
     pub group_ses: Vec<f64>,
-    /// Number of observations
     pub n_obs: usize,
 }
 
@@ -257,16 +223,7 @@ pub struct RankTestKResult {
 // Two-sample rank test
 // ============================================================================
 
-/// Two-sample design-based rank test.
-///
-/// Matches R's svyranktest for 2 groups:
-///   1. rankhat[ii] <- ave(cumsum(w[ii]) - w[ii]/2, factor(y[ii]))
-///   2. rankscore <- testf(rankhat, N)
-///   3. m <- lm(rankscore ~ g, weights = w)
-///   4. infn <- (xmat * (rankscore - fitted(m))) %*% summary(m)$cov.unscaled
-///   5. tot.infn <- svytotal(infn, design)
-///   6. t = coef(m)[2] / SE(tot.infn)[2]
-///   7. df = degf(design) - 1
+/// Two-sample rank test as R svyranktest: t = coef(m)[2] / SE(svytotal(infn))[2], df = degf(design) - 1.
 #[allow(clippy::too_many_arguments)]
 pub fn ranktest_two_sample(
     y: &[f64],
@@ -284,23 +241,19 @@ pub fn ranktest_two_sample(
     // The domain's rows for the singleton rules, whatever their weight.
     rows: &[bool],
 ) -> CResult<RankTestTwoResult> {
-    // 1 & 2. Compute rank scores
     let n_hat: f64 = w.iter().sum();
     let rankhat = compute_midranks(y, w, n);
     let rankscore = apply_score(&rankhat, n_hat, score_method);
 
-    // 3. Build design matrix: [1, indicator(g == 1)]
     let k = 2;
     let mut xmat = vec![0.0; n * k];
     for i in 0..n {
-        xmat[i * k] = 1.0; // intercept
-        xmat[i * k + 1] = g[i] as f64; // group indicator
+        xmat[i * k] = 1.0;
+        xmat[i * k + 1] = g[i] as f64;
     }
 
-    // Fit weighted OLS
     let wols = fit_wols(&rankscore, &xmat, w, n, k)?;
 
-    // 4 & 5. Design-based SE via influence functions + taylor_variance
     let active = singleton_rows(singleton_method, false, strata.is_some(), rows)?;
     let ses = influence_se(
         &wols.influence,
@@ -317,7 +270,6 @@ pub fn ranktest_two_sample(
         active.as_deref(),
     )?;
 
-    // 6. Test statistic
     let delta = wols.beta[1];
     let se_delta = ses[1];
     let t_stat = if se_delta > 0.0 {
@@ -326,15 +278,12 @@ pub fn ranktest_two_sample(
         f64::NAN
     };
 
-    // 7. Degrees of freedom
     let weights_chunked = Float64Chunked::from_slice("w".into(), w);
     let design_df = degrees_of_freedom(&weights_chunked, strata, psu)? as f64;
     let df = (design_df - 1.0).max(1.0);
 
-    // p-value (two-sided, t-distribution)
     let p_value = two_sided_t_pvalue(t_stat, df);
 
-    // Per-group means: beta[0] = mean of group 0, beta[0] + beta[1] = mean of group 1
     let group_means = vec![wols.beta[0], wols.beta[0] + wols.beta[1]];
     let group_ses = vec![ses[0], ses[1]]; // approximate
 
@@ -355,14 +304,7 @@ pub fn ranktest_two_sample(
 // K-sample rank test
 // ============================================================================
 
-/// K-sample design-based rank test (Kruskal-Wallis style).
-///
-/// Matches R's multiranktest:
-///   1. Compute rank scores
-///   2. m <- glm(rankscore ~ factor(g), weights = w)
-///   3. V <- svy.varcoef(m, design)
-///   4. Wald test: beta[-1]' V[-1,-1]^{-1} beta[-1]
-///   5. F = chisq / ndf, p from F(ndf, ddf)
+/// K-sample rank test as R multiranktest: Wald beta[-1]' V[-1,-1]^{-1} beta[-1], F = chisq / ndf.
 #[allow(clippy::too_many_arguments)]
 pub fn ranktest_k_sample(
     y: &[f64],
@@ -386,27 +328,22 @@ pub fn ranktest_k_sample(
     }
     let ndf = n_groups - 1;
 
-    // 1 & 2. Compute rank scores
     let n_hat: f64 = w.iter().sum();
     let rankhat = compute_midranks(y, w, n);
     let rankscore = apply_score(&rankhat, n_hat, score_method);
 
-    // 3. Build design matrix: intercept + (k-1) dummy indicators
-    // Reference group = 0
-    let k = 1 + ndf; // intercept + (n_groups - 1) dummies
+    let k = 1 + ndf; // group 0 is the reference
     let mut xmat = vec![0.0; n * k];
     for i in 0..n {
-        xmat[i * k] = 1.0; // intercept
+        xmat[i * k] = 1.0;
         let gi = g[i] as usize;
         if gi > 0 && gi < n_groups {
-            xmat[i * k + gi] = 1.0; // dummy for group gi
+            xmat[i * k + gi] = 1.0;
         }
     }
 
-    // Fit weighted OLS
     let wols = fit_wols(&rankscore, &xmat, w, n, k)?;
 
-    // 4. Design-based covariance of coefficients
     let active = singleton_rows(singleton_method, false, strata.is_some(), rows)?;
     let cov_flat = influence_covariance(
         &wols.influence,
@@ -420,8 +357,6 @@ pub fn ranktest_k_sample(
         active.as_deref(),
     )?;
 
-    // 5. Wald test on non-intercept coefficients
-    // Extract beta[-1] and V[-1,-1]
     let beta_test: Vec<f64> = wols.beta[1..].to_vec();
     let mut v_test = vec![0.0; ndf * ndf];
     for a in 0..ndf {
@@ -430,7 +365,6 @@ pub fn ranktest_k_sample(
         }
     }
 
-    // chisq = beta' V^{-1} beta
     let chisq = match crate::regression::wols::solve_kxk(&v_test, &beta_test, ndf) {
         Some(v_inv_beta) => beta_test
             .iter()
@@ -440,16 +374,13 @@ pub fn ranktest_k_sample(
         None => f64::NAN,
     };
 
-    // Degrees of freedom
     let weights_chunked = Float64Chunked::from_slice("w".into(), w);
     let design_df = degrees_of_freedom(&weights_chunked, strata, psu)? as f64;
     let ddf = (design_df - ndf as f64).max(1.0);
 
-    // F-statistic and p-value
     let f_stat = chisq / ndf as f64;
     let p_value = f_survival(f_stat, ndf as f64, ddf);
 
-    // Per-group means and SEs
     let ses = influence_se(
         &wols.influence,
         w,
@@ -489,11 +420,9 @@ pub fn ranktest_k_sample(
 // Replication variance
 // ============================================================================
 
-/// The WLS of the rank scores on the group dummies, and the replication
-/// covariance of its coefficients: R's `svytotal(infn, design)` on a
-/// replicate design, which re-totals the full-sample influence values with
-/// each replicate weight rather than re-ranking. `score_method = None` means
-/// `y` already holds the scores (a caller-supplied score function).
+/// Rank-score WLS with R's replicate `svytotal(infn)` covariance: re-totals the influence, never re-ranks.
+///
+/// `score_method = None` means `y` already holds caller-supplied scores.
 #[allow(clippy::too_many_arguments)]
 fn rep_fit(
     y: &[f64],
@@ -536,8 +465,7 @@ fn rep_fit(
     Ok((wols.beta, cov))
 }
 
-/// Two-sample rank test with a replication variance (R's svyranktest on a
-/// svyrep.design). df = replicate df - 1.
+/// Two-sample rank test on a replicate design (R's svyranktest on svyrep.design); df = replicate df - 1.
 #[allow(clippy::too_many_arguments)]
 pub fn ranktest_two_sample_rep(
     y: &[f64],
@@ -571,8 +499,7 @@ pub fn ranktest_two_sample_rep(
     })
 }
 
-/// K-sample rank test with a replication variance (R's multiranktest on a
-/// svyrep.design). ddf = replicate df - (k - 1).
+/// K-sample rank test on a replicate design (R's multiranktest); ddf = replicate df - (k - 1).
 #[allow(clippy::too_many_arguments)]
 pub fn ranktest_k_sample_rep(
     y: &[f64],
@@ -635,8 +562,7 @@ pub fn two_sided_t_pvalue(t: f64, df: f64) -> f64 {
     if t.is_nan() || df <= 0.0 {
         return f64::NAN;
     }
-    // P(|T| > |t|) = 2 * P(T > |t|) for symmetric t-distribution
-    // Using the relationship: P(T > t) = 0.5 * I_{df/(df + t^2)}(df/2, 1/2)
+    // P(T > t) = 0.5 * I_{df/(df + t^2)}(df/2, 1/2)
     let x = df / (df + t * t);
 
     regularized_incomplete_beta(x, df / 2.0, 0.5) // This gives 2 * P(T > |t|) directly
@@ -655,8 +581,7 @@ pub fn f_survival(x: f64, d1: f64, d2: f64) -> f64 {
     regularized_incomplete_beta(z, d2 / 2.0, d1 / 2.0)
 }
 
-/// Regularized incomplete beta function I_x(a, b) using continued fraction.
-/// Uses Lentz's algorithm for the continued fraction expansion.
+/// Regularized incomplete beta I_x(a, b) by Lentz's continued fraction.
 fn regularized_incomplete_beta(x: f64, a: f64, b: f64) -> f64 {
     if x <= 0.0 {
         return 0.0;
@@ -675,7 +600,6 @@ fn regularized_incomplete_beta(x: f64, a: f64, b: f64) -> f64 {
     let log_prefix = a * x.ln() + b * (1.0 - x).ln() - (a.ln() + ln_beta(a, b));
     let prefix = log_prefix.exp();
 
-    // Continued fraction (Lentz's method)
     let max_iter = 200;
     let eps = 1e-14;
     let tiny = 1e-30;
@@ -684,8 +608,7 @@ fn regularized_incomplete_beta(x: f64, a: f64, b: f64) -> f64 {
     let mut c = 1.0_f64;
     let mut d;
 
-    // a_1 / (b_1 + a_2 / (b_2 + ...))
-    // All b_i = 1 for the standard expansion
+    // All b_i = 1 in the standard expansion.
     d = 1.0 - (a + b) * x / (a + 1.0);
     if d.abs() < tiny {
         d = tiny;

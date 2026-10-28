@@ -1,8 +1,4 @@
-// src/sampling/api.rs
-//
-// PyO3-facing wrappers for SRS and PPS selection.
-// Arrays arrive as numpy arrays (read in place) or sequences (copied).
-// Returned as tuples of Vec<T> which PyO3 converts to Python lists.
+//! PyO3 wrappers for SRS and PPS selection.
 
 use numpy::{Element, PyReadonlyArray1};
 use pyo3::prelude::*;
@@ -55,20 +51,7 @@ fn parse_n<N>(
 // SRS
 // ---------------------------------------------------------------------------
 
-/// Simple Random Sampling.
-///
-/// Parameters
-/// ----------
-/// frame    : row index values (svy_row_index column as i64 array)
-/// n_scalar : sample size when unstratified or scalar broadcast
-/// n_map    : per-stratum {stratum_label: n} — mutually exclusive with n_scalar
-/// stratum  : stratum label per row (None for unstratified)
-/// wr       : sampling with replacement
-/// seed     : RNG seed (required)
-///
-/// Returns
-/// -------
-/// (selected_indices, hits, probs) as Python lists
+/// SRS of the row indices in `frame`: (selected, hits, probs); pass `n_scalar` or `n_map`.
 #[pyfunction]
 #[pyo3(signature = (frame, n_scalar=None, n_map=None, stratum=None, wr=false, seed=None))]
 pub fn select_srs_rs(
@@ -91,22 +74,8 @@ pub fn select_srs_rs(
 // PPS
 // ---------------------------------------------------------------------------
 
-/// Probability Proportional to Size sampling.
-///
-/// Parameters
-/// ----------
-/// frame               : row index values (i64)
-/// mos                 : measure of size per row (f64)
-/// n_scalar            : sample size (scalar or broadcast)
-/// n_map               : per-stratum {stratum_label: n}
-/// stratum             : stratum label per row (None for unstratified)
-/// method              : "sys" | "wr" | "brewer" | "murphy" | "rs"
-/// certainty_threshold : units with pi >= threshold selected with certainty
-/// seed                : RNG seed
-///
-/// Returns
-/// -------
-/// (selected_indices, hits, probs, certainty_flags)
+/// PPS of the row indices in `frame` by `mos`: (selected, hits, probs, certainty flags).
+/// Units with pi >= `certainty_threshold` are taken with certainty.
 #[pyfunction]
 #[pyo3(signature = (
     frame,

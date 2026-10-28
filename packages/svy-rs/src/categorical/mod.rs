@@ -1,4 +1,4 @@
-// src/categorical/mod.rs
+//! Design-based tabulation, t-tests and rank tests.
 pub mod api;
 pub mod error;
 pub mod ranktest;

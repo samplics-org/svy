@@ -1,9 +1,4 @@
-// src/weighting/api.rs
-//
-// PyO3-facing wrappers for all weighting functions: raking, non-response
-// adjustment, normalization, post-stratification, calibration, and replicate
-// weight creation.  The actual algorithms live in the weighting sub-modules;
-// this file only handles ndarray / PyO3 glue.
+//! PyO3 glue for the weighting kernels; the algorithms live in the sibling modules.
 
 use ndarray::{Array1, ArrayView1};
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
@@ -216,9 +211,7 @@ pub fn calibrate_parallel(
 // Replicate weight creation
 // ============================================================================
 
-/// Hadamard matrix size used for BRR with `n_strata` strata — the maximum
-/// number of distinct replicates. Lets the Python layer validate a
-/// requested n_reps (raising a typed svy error) before calling into Rust.
+/// BRR Hadamard order (max distinct replicates) for `n_strata`, so Python validates n_reps first.
 #[pyfunction]
 pub fn brr_hadamard_size(n_strata: usize) -> PyResult<usize> {
     let (_h, size) =

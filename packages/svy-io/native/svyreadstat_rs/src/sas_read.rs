@@ -1,4 +1,3 @@
-// native/svyreadstat_rs/src/sas_read.rs
 use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::os::raw::c_void;
@@ -15,14 +14,6 @@ use crate::core::{
 };
 use crate::errors::{Error, Op, Result};
 
-/// Optimized SAS file parser
-///
-/// Performance optimizations:
-/// - Separate catalog parsing for efficient label loading
-/// - Pre-allocates buffers based on file metadata
-/// - Early abort on row limit
-/// - Efficient column skipping
-/// - GIL released during parsing for Python concurrency
 #[inline]
 #[allow(clippy::too_many_arguments)]
 fn parse_sas_impl(
@@ -35,7 +26,6 @@ fn parse_sas_impl(
     cols_skip: Option<Vec<String>>,
     lossy_utf8: bool,
 ) -> Result<(Vec<u8>, crate::core::MetaOut)> {
-    // Pre-calculate skip set for O(1) lookup
     let cols_skip_set = cols_skip.map(|v| {
         let mut map = HashMap::with_capacity(v.len());
         for col in v {
@@ -45,7 +35,7 @@ fn parse_sas_impl(
     });
 
     let mut ctx = ParseCtx {
-        cols: Vec::with_capacity(128), // SAS files often have many columns
+        cols: Vec::with_capacity(128),
         var_cols: Vec::with_capacity(128),
         cols_skip: cols_skip_set,
         rows_skip,
@@ -55,10 +45,10 @@ fn parse_sas_impl(
         last_counted_row: None,
         had_invalid_utf8: false,
         lossy_utf8,
-        label_sets: HashMap::with_capacity(64), // Pre-allocate for value labels
+        label_sets: HashMap::with_capacity(64),
         file_label: None,
         last_err: None,
-        tagged: HashMap::new(), // SAS doesn't use tagged missing
+        tagged: HashMap::new(),
         notes: Vec::with_capacity(4),
         detect_tagged: false, // SAS: no tagged-missing semantics like Stata
         row_capacity: None,   // Will be filled by on_metadata_cb
@@ -81,8 +71,7 @@ fn parse_sas_impl(
     }
     let enc = crate::core::input_encoding(encoding, lossy_utf8);
     let _keep_enc = configure_parser(&parser, enc, rows_skip, n_max)?;
-    // SAFETY: `ctx`, the path and `_keep_enc` outlive the parse, and only the callbacks
-    // touch `ctx` until it returns.
+    // SAFETY: `ctx`, the path and `_keep_enc` outlive the parse; only the callbacks touch `ctx`.
     let rc = unsafe {
         readstat_parse_sas7bdat(
             parser.as_ptr(),
@@ -100,11 +89,7 @@ fn parse_sas_impl(
     Ok((ipc, meta))
 }
 
-/// Load a .sas7bcat catalog's value labels into `ctx.label_sets`.
-///
-/// Shared by the sas7bdat and XPT readers: both name a variable's label set
-/// after its format. A catalog that fails to parse returns why, so the data
-/// still reads without labels.
+/// A catalog that fails to parse returns why, so the data still reads without labels.
 pub(crate) fn parse_catalog(
     ctx: &mut ParseCtx,
     cat_path: &str,
@@ -119,8 +104,7 @@ pub(crate) fn parse_catalog(
     }
     let enc = crate::core::input_encoding(catalog_encoding, lossy_utf8);
     let _keep_enc = configure_parser(&parser, enc, 0, None)?;
-    // SAFETY: `ctx`, the path and `_keep_enc` outlive the parse, and only the callbacks
-    // touch `ctx` until it returns.
+    // SAFETY: `ctx`, the path and `_keep_enc` outlive the parse; only the callbacks touch `ctx`.
     let rc = unsafe {
         readstat_parse_sas7bcat(
             parser.as_ptr(),
@@ -138,8 +122,7 @@ pub(crate) fn parse_catalog(
     }
 }
 
-/// Strip the display width and decimals ReadStat appends to a format name:
-/// `WORKSHOP5` -> `WORKSHOP`, `DOLLAR10.2` -> `DOLLAR`.
+/// Strips the width and decimals ReadStat appends: `WORKSHOP5` -> `WORKSHOP`, `DOLLAR10.2` -> `DOLLAR`.
 fn format_base_name(fmt: &str) -> &str {
     let s = match fmt.rfind('.') {
         Some(i) if fmt[i + 1..].bytes().all(|b| b.is_ascii_digit()) => &fmt[..i],
@@ -148,11 +131,7 @@ fn format_base_name(fmt: &str) -> &str {
     s.trim_end_matches(|c: char| c.is_ascii_digit())
 }
 
-/// Point each column at its catalog label set when only the width differs.
-///
-/// A column formatted `WORKSHOP5.` arrives with label set `WORKSHOP5`, while
-/// the catalog defines `WORKSHOP`. SAS format names cannot end in a digit, so
-/// the trailing digits are always the width.
+/// Label set `WORKSHOP5` is the catalog's `WORKSHOP`: SAS format names cannot end in a digit.
 pub(crate) fn resolve_format_label_sets(ctx: &mut ParseCtx) {
     if ctx.label_sets.is_empty() {
         return;
@@ -171,19 +150,7 @@ pub(crate) fn resolve_format_label_sets(ctx: &mut ParseCtx) {
     }
 }
 
-/// Python interface for parsing SAS files
-///
-/// Arguments:
-///   data_path: Path to .sas7bdat file
-///   catalog_path: Optional path to .sas7bcat catalog file for value labels
-///   encoding: Optional input character encoding (iconv name) for the data file
-///   catalog_encoding: Optional input character encoding for the catalog file
-///   cols_skip: Optional list of column names to skip
-///   n_max: Optional maximum number of rows to read
-///   rows_skip: Number of rows to skip from start (default: 0)
-///
-/// Returns:
-///   Tuple of (Arrow IPC bytes, metadata JSON string)
+/// Parse a .sas7bdat file, with value labels from an optional .sas7bcat catalog.
 #[pyfunction]
 #[pyo3(signature = (
     data_path,
@@ -326,8 +293,7 @@ mod tests {
         );
     }
 
-    // Expected values from R haven::read_sas on the same file: 8 rows, columns
-    // id, workshop, gender, q1..q4.
+    // haven::read_sas gives 8 rows and columns id, workshop, gender, q1..q4.
     #[test]
     fn test_parse_sas_applies_skip_params() {
         let cols_skip = Some(vec!["id".to_string(), "q4".to_string()]);

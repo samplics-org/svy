@@ -1,26 +1,10 @@
-// src/weighting/poststratification.rs
+//! Post-stratification.
 
 use super::normalization::normalize_impl;
 use super::utils::{Result, WeightingError};
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 
-/// Post-stratification adjustment
-///
-/// Post-stratification is a special case of normalization where:
-/// 1. Each stratum must have a control total
-/// 2. The controls must match the data strata exactly (bijective mapping)
-///
-/// # Arguments
-/// * `wgt` - Weight matrix (n_obs, n_reps)
-/// * `by_arr` - Post-stratification variable (n_obs,)
-/// * `control` - Target totals for each stratum (one per unique value in by_arr)
-///
-/// # Returns
-/// Post-stratified weight matrix
-///
-/// # Notes
-/// This is essentially normalization with strict validation that all
-/// strata in the data have corresponding controls and vice versa.
+/// Normalization requiring exactly one non-negative control per stratum, in sorted stratum order.
 pub fn poststratify_impl(
     wgt: ArrayView2<f64>,
     by_arr: ArrayView1<i64>,
@@ -35,7 +19,6 @@ pub fn poststratify_impl(
         });
     }
 
-    // Validate that control has exactly one entry per unique stratum
     let unique_strata = get_unique_sorted(&by_arr);
     let n_strata = unique_strata.len();
 
@@ -47,7 +30,6 @@ pub fn poststratify_impl(
         )));
     }
 
-    // Validate controls are non-negative
     for (i, &ctrl) in control.iter().enumerate() {
         if ctrl < 0.0 {
             return Err(WeightingError::InvalidInput(format!(
@@ -57,11 +39,9 @@ pub fn poststratify_impl(
         }
     }
 
-    // Post-stratification is just normalization with these validated controls
     normalize_impl(wgt, Some(&by_arr.to_owned()), Some(control))
 }
 
-/// Get unique values from array, sorted
 fn get_unique_sorted(arr: &ArrayView1<i64>) -> Vec<i64> {
     use std::collections::BTreeSet;
 
@@ -83,11 +63,9 @@ mod tests {
 
         let result = poststratify_impl(wgt.view(), strata.view(), &controls).unwrap();
 
-        // Stratum 0 should sum to 10.0
         let sum_s0_r0 = result[[0, 0]] + result[[1, 0]];
         assert_relative_eq!(sum_s0_r0, 10.0, epsilon = 1e-12);
 
-        // Stratum 1 should sum to 20.0
         let sum_s1_r0 = result[[2, 0]] + result[[3, 0]];
         assert_relative_eq!(sum_s1_r0, 20.0, epsilon = 1e-12);
     }
@@ -96,7 +74,7 @@ mod tests {
     fn test_poststratify_validation() {
         let wgt = array![[1.0], [1.0], [1.0]];
         let strata = array![0, 0, 1];
-        let controls = array![10.0]; // Wrong: need 2 controls for 2 strata
+        let controls = array![10.0];
 
         let result = poststratify_impl(wgt.view(), strata.view(), &controls);
         assert!(

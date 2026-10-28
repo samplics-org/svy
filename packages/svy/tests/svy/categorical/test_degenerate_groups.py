@@ -53,6 +53,19 @@ def test_tabulate_over_a_zero_weight_domain_is_nan_without_warnings(scaling):
     assert all(math.isnan(v) for v in table.to_polars()["est"])
 
 
+@pytest.mark.parametrize("colvar", [None, "c"], ids=["one_way", "two_way"])
+@pytest.mark.parametrize("method", ["taylor", "replication"])
+def test_tabulate_over_a_zero_weight_domain_has_nan_se(colvar, method):
+    sample = _sample()
+    if method == "replication":
+        sample = sample.weighting.create_jk_wgts()
+    table = sample.categorical.tabulate(
+        rowvar="r", colvar=colvar, where=svy.col("s") == "1", method=method
+    )
+
+    assert all(math.isnan(v) for v in table.to_polars()["se"])
+
+
 def test_tabulate_with_one_row_level_has_no_test():
     stats = _sample().categorical.tabulate(rowvar="r", colvar="c", where=svy.col("r") == "a").stats
 

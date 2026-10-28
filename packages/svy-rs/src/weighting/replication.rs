@@ -1,10 +1,4 @@
-// src/weighting/replication.rs
-//
-// Replicate weight creation for variance estimation methods:
-// - BRR (Balanced Repeated Replication)
-// - Jackknife (JK1/JKn and JK2 paired)
-// - Bootstrap (stratified)
-// - SDR (Successive Difference Replication)
+//! Replicate weights: BRR, jackknife (JKn, JK2), Rao-Wu and Poisson bootstrap, and SDR.
 
 use super::hadamard_tables::get_hardcoded_hadamard;
 use crate::errors::Coded;
@@ -17,10 +11,8 @@ use thiserror::Error;
 /// Each stratum's index and PSUs, and each (stratum, PSU)'s position within its stratum.
 type BrrStratumMap = (HashMap<i64, (i64, Vec<i64>)>, HashMap<(i64, i64), usize>);
 
-/// Result type for replication functions
 pub type Result<T> = std::result::Result<T, ReplicationError>;
 
-/// Errors that can occur during replicate weight creation
 #[derive(Error, Debug, Clone)]
 pub enum ReplicationError {
     #[error("Dimension mismatch: expected {expected}, got {got}")]
@@ -59,15 +51,8 @@ impl Coded for ReplicationError {
 // Hadamard Matrix Generation
 // ============================================================================
 
-/// Get a Hadamard matrix for BRR with `n_strata` strata. Returns
-/// (matrix, order); the order is the number of replicates.
-///
-/// The order must EXCEED n_strata because strata are assigned to rows
-/// 1..order-1, skipping row 0: in a normalized Hadamard matrix row 0 is
-/// all +1s, and a stratum assigned to it would keep the same PSU doubled
-/// in every replicate — its partner PSU would carry zero weight in all
-/// replicates and silently vanish from variance estimation (the previous
-/// behavior for the stratum mapped to row 0).
+/// BRR Hadamard matrix and its order (the replicate count), which must exceed `n_strata`:
+/// strata take rows 1.., since one on the all-ones row 0 would lose a PSU in every replicate.
 pub fn get_hadamard_for_brr(n_strata: usize) -> Result<(Array2<f64>, usize)> {
     let need = n_strata + 1;
     if let Some(h) = try_get_hadamard(need) {
@@ -82,21 +67,16 @@ pub fn get_hadamard_for_brr(n_strata: usize) -> Result<(Array2<f64>, usize)> {
     Ok((generate_hadamard_sylvester(pow2), pow2))
 }
 
-/// Get Hadamard matrix for n strata. Returns (matrix, actual_size).
-/// Used by SDR, which assigns rows 1..size-1 cyclically (row 0 of a
-/// normalized Hadamard matrix is all ones and is never assigned).
+/// Hadamard matrix of the smallest available order >= `n_strata`, and that order.
 pub fn get_hadamard_for_strata(n_strata: usize) -> Result<(Array2<f64>, usize)> {
-    // Try exact size
     if let Some(h) = try_get_hadamard(n_strata) {
         return Ok((h, n_strata));
     }
-    // Try nearby sizes
     for size in (n_strata + 1)..=(n_strata * 2) {
         if let Some(h) = try_get_hadamard(size) {
             return Ok((h, size));
         }
     }
-    // Fall back to next power of 2
     let pow2 = next_power_of_2(n_strata);
     Ok((generate_hadamard_sylvester(pow2), pow2))
 }
@@ -114,11 +94,9 @@ fn try_get_hadamard(n: usize) -> Option<Array2<f64>> {
     if !n.is_multiple_of(4) {
         return None;
     }
-    // Try Paley Type I (n-1 prime, ≡ 3 mod 4)
     if is_prime(n - 1) && (n - 1) % 4 == 3 {
         return Some(generate_hadamard_paley(n));
     }
-    // Try hardcoded
     get_hardcoded_hadamard(n)
 }
 
@@ -142,15 +120,12 @@ fn generate_hadamard_sylvester(n: usize) -> Array2<f64> {
 
 fn generate_hadamard_paley(n: usize) -> Array2<f64> {
     let p = n - 1;
-    // Compute quadratic residues
     let mut is_residue = vec![false; p];
     for i in 1..p {
         is_residue[(i * i) % p] = true;
     }
 
-    // Build Paley matrix
     let mut h = Array2::zeros((n, n));
-    // First row and column: all 1s
     for j in 0..n {
         h[[0, j]] = 1.0;
     }
@@ -204,7 +179,7 @@ fn next_power_of_2(n: usize) -> usize {
 // BRR (Balanced Repeated Replication)
 // ============================================================================
 
-/// Create BRR replicate weights with optional random seed for PSU ordering.
+/// BRR replicate weights with Fay's coefficient; `seed` shuffles which PSU of each pair is first.
 pub fn create_brr_weights(
     wgt: ArrayView1<f64>,
     stratum: ArrayView1<i64>,
@@ -229,10 +204,7 @@ pub fn create_brr_weights(
     let (stratum_map, psu_to_idx) = build_brr_stratum_map(&stratum, &psu, seed)?;
     let n_strata = stratum_map.len();
     let (hadamard, h_size) = get_hadamard_for_brr(n_strata)?;
-    // n_reps below the Hadamard order is rounded UP to it (balance requires
-    // a full Hadamard set). Requesting MORE would silently duplicate columns
-    // via `r % h_size` — duplicated replicates add no information while
-    // looking like more — so that is an error.
+    // Balance needs the full Hadamard set, so n_reps rounds up to it; more would duplicate columns.
     if let Some(r) = n_reps
         && r > h_size
     {
@@ -256,8 +228,7 @@ pub fn create_brr_weights(
                 let p = psu[i];
                 let stratum_idx = stratum_map[&s].0 as usize;
                 let psu_idx = psu_to_idx[&(s, p)];
-                // Rows 1..h_size: row 0 (all +1s) is never assigned — see
-                // get_hadamard_for_brr.
+                // Row 0 (all +1s) is never assigned; see get_hadamard_for_brr.
                 let h_val = hadamard[[(stratum_idx + 1) % h_size, r % h_size]];
                 let mult = if (h_val > 0.0 && psu_idx == 0) || (h_val < 0.0 && psu_idx == 1) {
                     k_plus
@@ -282,7 +253,6 @@ fn build_brr_stratum_map(
     psu: &ArrayView1<i64>,
     seed: Option<u64>,
 ) -> Result<BrrStratumMap> {
-    // Use HashSet for O(1) PSU deduplication, then convert to sorted Vec
     use std::collections::HashSet as HSet;
     let mut stratum_set: HashMap<i64, HSet<i64>> = HashMap::new();
     for i in 0..stratum.len() {
@@ -308,8 +278,7 @@ fn build_brr_stratum_map(
 
     if let Some(seed) = seed {
         let mut rng = Rng::new(seed);
-        // Sort keys first so RNG is consumed in a deterministic order
-        // across runs (HashMap iteration order is otherwise nondeterministic).
+        // Sorted keys: HashMap order would make the seeded shuffle differ between runs.
         let mut keys: Vec<i64> = stratum_psus.keys().copied().collect();
         keys.sort_unstable();
         for k in &keys {
@@ -338,7 +307,7 @@ fn build_brr_stratum_map(
 // Jackknife (JK1/JKn and JK2)
 // ============================================================================
 
-/// Create Jackknife weights. paired=false for JK1/JKn, paired=true for JK2.
+/// Jackknife weights: delete-one-PSU JKn, or JK2 when `paired`.
 pub fn create_jk_weights(
     wgt: ArrayView1<f64>,
     stratum: Option<ArrayView1<i64>>,
@@ -353,15 +322,8 @@ pub fn create_jk_weights(
     }
 }
 
-/// JKn: delete-one-PSU-at-a-time.
-///
-/// Returns (replicate weights, design df, per-replicate rscales).
-/// df is the stratified-jackknife convention #PSUs - #strata (n - 1 for
-/// unstratified JK1); the previous total-PSU df was anti-conservative.
-/// rscales[r] = (n_h - 1)/n_h for the stratum whose PSU replicate r
-/// deletes — R's svrepdesign(type="JKn") convention. The estimation layer
-/// previously applied a global (R-1)/R to every replicate, which is only
-/// correct for unstratified JK1.
+/// Delete-one-PSU jackknife; returns (weights, df = #PSUs - #strata, rscales).
+/// rscales[r] = (n_h - 1) / n_h of the stratum r deletes from, as R `svrepdesign(type = "JKn")`.
 pub fn create_jkn_weights(
     wgt: ArrayView1<f64>,
     stratum: Option<ArrayView1<i64>>,
@@ -449,12 +411,8 @@ pub fn create_jkn_weights(
     Ok((result, df, rscales))
 }
 
-/// JK2: paired jackknife (one replicate per stratum)
-/// Returns (replicate weights, design df, per-replicate rscales).
-/// One random delete-one replicate per stratum with the surviving PSUs
-/// reweighted by n_h/(n_h-1): the single-replicate-per-stratum jackknife,
-/// whose variance coefficient is 1.0 per replicate (a global (R-1)/R
-/// would understate the variance by that factor).
+/// JK2: per stratum, one replicate drops a seeded random PSU and scales the rest by n_h/(n_h - 1).
+/// Each rscale is 1.0; a global (R-1)/R would understate the variance.
 fn create_jk2_weights(
     wgt: ArrayView1<f64>,
     stratum: Option<ArrayView1<i64>>,
@@ -579,17 +537,11 @@ pub fn create_bootstrap_weights(
         .unwrap_or_else(|| Array1::ones(n_obs));
     let stratum_psus = build_stratum_psu_list(&stratum_vec, &psu);
 
-    // Materialize a sorted (stratum_key, &psus) list so the parallel loop
-    // iterates strata in a deterministic order across runs.  HashMap
-    // iteration order is otherwise nondeterministic, which would cause the
-    // per-replicate RNG to be consumed in a different order on each call
-    // and produce different replicate weights despite using the same seed.
+    // Sorted strata: HashMap order would consume each replicate's RNG differently per call.
     let mut strata_sorted: Vec<(i64, &Vec<i64>)> =
         stratum_psus.iter().map(|(&s, v)| (s, v)).collect();
     strata_sorted.sort_unstable_by_key(|(s, _)| *s);
 
-    // Pre-build PSU → observation indices map once, shared across replicates.
-    // Avoids O(N) full-scan per stratum per replicate.
     let mut psu_obs: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
     for i in 0..n_obs {
         psu_obs.entry((stratum_vec[i], psu[i])).or_default().push(i);
@@ -603,13 +555,9 @@ pub fn create_bootstrap_weights(
 
             for &(s, psus) in &strata_sorted {
                 let n_psu = psus.len();
-                // Rao-Wu-Yue rescaling bootstrap: draw m_h = n_h - 1 PSUs
-                // with replacement and rescale by n_h / (n_h - 1).  The naive
-                // n_h-draw scheme without rescaling understates variance by a
-                // factor of (n_h - 1) / n_h per stratum (50% for 2-PSU strata).
+                // Rao-Wu: n_h - 1 draws scaled by n_h / (n_h - 1); n_h unscaled draws bias low.
                 if n_psu == 1 {
-                    // Single-PSU stratum: no resampling variability; keep the
-                    // original weights.
+                    // A single-PSU stratum has nothing to resample.
                     if let Some(obs) = psu_obs.get(&(s, psus[0])) {
                         for &i in obs {
                             rep_wgt[i] = wgt[i];
@@ -623,7 +571,6 @@ pub fn create_bootstrap_weights(
                 for _ in 0..m {
                     counts[rng.next_index(n_psu)] += 1;
                 }
-                // Apply counts via pre-built index — no O(N) scan
                 for (pi, &p) in psus.iter().enumerate() {
                     let c = counts[pi] as f64;
                     if c > 0.0
@@ -650,27 +597,8 @@ pub fn create_bootstrap_weights(
 // Poisson bootstrap (Beaumont & Patak 2012)
 // ============================================================================
 
-/// Poisson bootstrap replicate weights for files with no design information.
-///
-/// A special case of the generalized bootstrap: adjustment factors are drawn
-/// independently per unit with mean 1 and variance `(w - 1) / w`, the design
-/// variance of a Poisson sample in which unit `k` has inclusion probability
-/// `1 / w_k`.  Because the draws are independent across units, the resulting
-/// weights encode no stratum or PSU structure, which is why producers can
-/// release them on public use files where Rao-Wu weights would be disclosive.
-///
-/// Equations (1) and (2) of the method, and nothing else:
-///
-/// ```text
-/// bsw_kb = w_k + f_kb * w_k * sqrt((w_k - 1) / w_k),   f_kb = +/-1 w.p. 1/2
-/// ```
-///
-/// Calibrating the replicates afterwards is a separate, optional step -- the
-/// source guide introduces it as "a calibrated version" that "can" bring the
-/// variance closer to a master-file estimate -- and is not performed here.  It
-/// is ordinary post-stratification and belongs with the other weighting
-/// adjustments, where it applies to any replicate method rather than only this
-/// one.
+/// bsw = w ± w·sqrt((w - 1) / w), signs w.p. 1/2 per unit: no stratum or PSU structure to disclose.
+/// The optional calibration of these replicates is left to the general weighting adjustments.
 pub fn create_poisson_bootstrap_weights(
     wgt: ArrayView1<f64>,
     n_reps: usize,
@@ -688,8 +616,7 @@ pub fn create_poisson_bootstrap_weights(
         ));
     }
 
-    // sqrt((w - 1) / w) is not real below 1, and a NaN here would propagate
-    // silently into every downstream estimate.  `!(w >= 1.0)` also rejects NaN.
+    // sqrt((w - 1) / w) is not real below 1; `!(w >= 1.0)` also rejects NaN.
     #[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN takes this branch on purpose
     if let Some(bad) = wgt.iter().position(|&w| !(w >= 1.0)) {
         return Err(ReplicationError::InvalidInput(format!(
@@ -699,19 +626,15 @@ pub fn create_poisson_bootstrap_weights(
         )));
     }
 
-    // adj_k = w_k * sqrt((w_k - 1) / w_k), so bsw = w +/- adj is strictly
-    // positive: sqrt((w - 1) / w) < 1 for every finite w >= 1.
+    // bsw = w ± adj stays positive: sqrt((w - 1) / w) < 1 for finite w >= 1.
     let adj: Vec<f64> = wgt.iter().map(|&w| w * ((w - 1.0) / w).sqrt()).collect();
 
-    // One flat buffer, filled column-wise, then handed to a Fortran-ordered
-    // Array2.  Building `Vec<Array1>` and copying into an Array2 (as the
-    // Rao-Wu path does) would hold two full matrices at once.
+    // One column-major buffer: `Vec<Array1>` then a copy would hold two full matrices at once.
     let mut buf = vec![0.0f64; n_obs * n_reps];
     buf.par_chunks_mut(n_obs).enumerate().for_each(|(r, col)| {
         let mut rng = Rng::new(seed.wrapping_add(r as u64));
 
-        // One u64 supplies 64 sign bits; drawing a full word per unit would
-        // cost 64x the RNG calls for the same one bit of entropy each.
+        // One u64 supplies 64 sign bits, not one RNG call per unit.
         let mut bits = 0u64;
         let mut n_bits = 0u32;
         for i in 0..n_obs {
@@ -774,18 +697,8 @@ pub fn create_sdr_weights(
     let sorted_indices = build_stratum_sorted_indices(&stratum_vec, &order_vec);
     let (hadamard, h_size) = get_hadamard_for_strata(n_reps)?;
 
-    // Fay–Train successive difference replication: unit k (in systematic
-    // order within its stratum) is assigned the cyclic Hadamard-row pair
-    // (row(k), row(k+1)) over rows 1..h_size-1 — row 0 of a normalized
-    // Hadamard matrix is all ones and would give a constant adjustment
-    // with zero between-replicate variance. Each unit gets ONE additive
-    // factor per replicate:
-    //     f = 1 + 2^{-3/2} (h[row(k), r] - h[row(k+1), r])
-    // so f is in {1, 1 +- 2^{-1/2}}. Successive units share a row, which
-    // is what makes the resulting variance (with the 4/R coefficient) the
-    // successive-difference estimator. The previous construction instead
-    // composed pair adjustments multiplicatively (introducing a spurious
-    // +-1/2 cross-term on interior units) and used rows from 0.
+    // Fay-Train: unit k (stratum order) gets f = 1 + 2^{-3/2} (h[row k, r] - h[row k+1, r]), rows
+    // cycling over 1..h_size-1 (all-ones row 0 adds no variance); with 4/R this is the SDR estimator.
     let n_rows = h_size - 1;
     let sqrt2_over_4 = std::f64::consts::SQRT_2 / 4.0; // 2^{-3/2}
 
@@ -823,8 +736,6 @@ pub fn create_sdr_weights(
 
 fn build_stratum_psu_list(stratum: &Array1<i64>, psu: &ArrayView1<i64>) -> HashMap<i64, Vec<i64>> {
     use std::collections::HashSet;
-    // Two-pass: first collect unique PSUs per stratum using HashSet (O(1) lookup),
-    // then convert to sorted Vec for deterministic replicate assignment.
     let mut set_map: HashMap<i64, HashSet<i64>> = HashMap::new();
     for i in 0..stratum.len() {
         set_map.entry(stratum[i]).or_default().insert(psu[i]);
@@ -883,8 +794,6 @@ mod tests {
 
     #[test]
     fn test_brr_n_reps_beyond_hadamard_is_error() {
-        // Requesting more replicates than the Hadamard order used to silently
-        // duplicate columns (r % h_size); it is now an error.
         let wgt = array![1.0, 1.0, 1.0, 1.0];
         let stratum = array![1, 1, 2, 2];
         let psu = array![1, 2, 1, 2];
@@ -897,10 +806,6 @@ mod tests {
 
     #[test]
     fn test_brr_is_balanced_every_psu_participates() {
-        // Balance: every PSU must carry weight in exactly half the
-        // replicates, so the mean replicate weight equals the base weight.
-        // Previously the stratum assigned to the all-ones Hadamard row had
-        // one PSU zeroed in EVERY replicate.
         for n_strata in 2..=6usize {
             let n_obs = n_strata * 2;
             let wgt = Array1::from_elem(n_obs, 1.0);
@@ -950,8 +855,7 @@ mod tests {
 
     #[test]
     fn test_jk2_paired() {
-        // Replicate r touches stratum r only: one PSU (seeded) drops to 0,
-        // the other doubles.
+        // Replicate r touches stratum r only: one seeded PSU drops to 0, the other doubles.
         let wgt = array![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let stratum = array![1, 1, 1, 2, 2, 2];
         let psu = array![1, 1, 2, 3, 4, 4];
@@ -981,9 +885,7 @@ mod tests {
 
     #[test]
     fn test_bootstrap_basic() {
-        // Rao-Wu: each replicate draws n_h - 1 PSUs with replacement per
-        // stratum, so a PSU's weight is w * c * n_h / (n_h - 1) with c an
-        // integer draw count, shared by its rows, summing to n_h - 1.
+        // A PSU's rows get w * c * n_h / (n_h - 1), with integer draw counts c summing to n_h - 1.
         let wgt = array![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
         let stratum = array![1, 1, 1, 2, 2, 2, 2];
         let psu = array![1, 1, 2, 3, 4, 5, 5];
@@ -1012,8 +914,7 @@ mod tests {
 
     #[test]
     fn test_sdr_basic() {
-        // H4 rows 1..3 are paired cyclically: units k = 0..5 take (1,2), (2,3),
-        // (3,1), (1,2), ... and f = 1 + 2^{-3/2} (h_a - h_b) per column.
+        // H4 rows pair cyclically as (1,2), (2,3), (3,1), ... with f = 1 + 2^{-3/2} (h_a - h_b).
         let wgt = array![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let order = array![0, 1, 2, 3, 4, 5];
         let (rep_wgt, df) = create_sdr_weights(wgt.view(), None, Some(order.view()), 4).unwrap();
@@ -1029,8 +930,6 @@ mod tests {
         assert_eq!(df, 4.0);
     }
 
-    // Regression: mismatched stratum/order lengths used to panic with an
-    // index out of bounds; n_reps=0 underflowed the df computation.
     #[test]
     fn test_bootstrap_zero_reps_is_error() {
         let wgt = array![1.0, 1.0];
@@ -1080,10 +979,7 @@ mod tests {
 
     #[test]
     fn test_sdr_factors_are_fay_train() {
-        // Every replicate factor must be one of {1, 1 +- 2^{-1/2}}, and with
-        // n_reps equal to the Hadamard order the mean replicate weight over
-        // all replicates equals the full-sample weight exactly (each
-        // non-first Hadamard row sums to zero).
+        // At n_reps = Hadamard order the factors average to 1: every non-first row sums to 0.
         let wgt = array![2.0, 2.0, 2.0, 2.0, 2.0, 2.0];
         let order = array![0, 1, 2, 3, 4, 5];
         let (rep, _) = create_sdr_weights(wgt.view(), None, Some(order.view()), 8).unwrap();
@@ -1132,11 +1028,7 @@ mod tests {
         );
     }
 
-    // Rao-Wu rescaled bootstrap: for a stratified design with 2 PSUs per
-    // stratum, the bootstrap variance of the estimated total must match the
-    // standard paired estimator sum_h (t_h1 - t_h2)^2.  Here the PSU totals
-    // are (2, 3) and (2, 5), so the target variance is 1 + 9 = 10.  The old
-    // unrescaled scheme converged to 5 (biased low by (n_h-1)/n_h = 1/2).
+    // PSU totals (2, 3) and (2, 5): the paired estimator sum_h (t_h1 - t_h2)^2 gives 1 + 9 = 10.
     #[test]
     fn test_bootstrap_variance_matches_paired_estimator() {
         let wgt = array![1.0, 1.0, 3.0, 2.0, 5.0];

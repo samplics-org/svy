@@ -1,4 +1,4 @@
-// src/weighting/mod.rs
+//! Weight adjustment, calibration, trimming and replicate-weight kernels.
 pub mod api;
 pub mod calibration;
 pub mod hadamard_tables;

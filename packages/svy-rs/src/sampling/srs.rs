@@ -1,4 +1,4 @@
-// src/sampling/srs.rs
+//! Simple random selection, stratified or not.
 
 use crate::errors::Coded;
 use crate::rng::Rng;
@@ -134,7 +134,6 @@ fn srs_unstratified_indexed(
     }
 
     let mut rng = Rng::new(seed);
-    // hits[i] counts how many times positions[i] was selected
     let mut hits = vec![0i64; cap];
 
     if wr {
@@ -142,8 +141,7 @@ fn srs_unstratified_indexed(
             hits[rng.next_index(cap)] += 1;
         }
     } else {
-        // Fisher-Yates partial shuffle over local indices [0..cap)
-        // We never copy frame data — just shuffle an index permutation
+        // Partial Fisher-Yates: only the first n slots need shuffling.
         let mut perm: Vec<usize> = (0..cap).collect();
         for i in 0..n {
             let j = i + rng.next_index(cap - i);
@@ -188,7 +186,6 @@ fn select_srs_stratified(
     wr: bool,
     seed: u64,
 ) -> Result<SrsDraw> {
-    // Group positions by stratum — one pass, no per-stratum alloc of frame values
     let mut strat_map: HashMap<i64, Vec<usize>> = HashMap::new();
     for (pos, &s) in stratum.iter().enumerate() {
         strat_map.entry(s).or_default().push(pos);
@@ -201,7 +198,6 @@ fn select_srs_stratified(
         check_n_map(map, &strat_map)?;
     }
 
-    // Build (stratum_label, positions, n_s, child_seed) tuples
     let tasks: Vec<(i64, &Vec<usize>, usize, u64)> = strata
         .iter()
         .enumerate()
@@ -219,7 +215,7 @@ fn select_srs_stratified(
         })
         .collect();
 
-    // Parallel execution when there are enough strata to justify the overhead
+    // With few strata, rayon's overhead outweighs the gain.
     use rayon::prelude::*;
     let results: Vec<Result<SrsDraw>> = if tasks.len() >= 4 {
         tasks
@@ -237,7 +233,6 @@ fn select_srs_stratified(
             .collect()
     };
 
-    // Merge — pre-size output from n totals
     let total_n: usize = tasks.iter().map(|(_, _, n_s, _)| n_s).sum();
     let mut selected = Vec::with_capacity(total_n);
     let mut out_hits = Vec::with_capacity(total_n);
@@ -257,8 +252,6 @@ fn select_srs_stratified(
 mod tests {
     use super::*;
 
-    // Regression: stratum length mismatch used to panic (longer) or silently
-    // truncate the frame (shorter); both must now be clean errors.
     #[test]
     fn test_stratum_length_mismatch_rejected() {
         let frame = vec![1, 2];

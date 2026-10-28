@@ -1,4 +1,3 @@
-// native/svyreadstat_rs/src/stata_write.rs
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -90,8 +89,7 @@ fn dict_string_at_any(a: &dyn Array, row: usize) -> Option<&str> {
                 if !is_text_dt(d.values().data_type()) || d.is_null(row) {
                     return None;
                 }
-                // A corrupt dictionary can hold a negative or out-of-range
-                // key; a plain `as usize` cast would wrap and panic below.
+                // A corrupt dictionary can hold a negative or out-of-range key; `as usize` would wrap.
                 let key_usize = usize::try_from(d.keys().value(row)).ok()?;
                 let values = d.values();
                 if key_usize >= values.len() {
@@ -151,8 +149,7 @@ fn stata_temporal_format(dt: &DataType) -> Option<&'static str> {
     }
 }
 
-/// Days (`%td`) or milliseconds (`%tc`) since 1960-01-01. Timestamps are
-/// floored to the millisecond, Stata's resolution; a zoned one is its UTC instant.
+/// Days (`%td`) or ms (`%tc`) since 1960-01-01, floored to Stata's millisecond; a zoned time is its UTC instant.
 fn temporal_as_stata(a: &dyn Array, row: usize) -> Option<f64> {
     if a.is_null(row) {
         return None;
@@ -208,9 +205,7 @@ fn as_i64_opt(a: &dyn Array, row: usize) -> Option<i64> {
     }
 }
 
-/// Smallest and largest non-null value of an integer or boolean column across batches;
-/// `None` when the column is not an integer type. An all-null integer column
-/// reports `Some(None)`.
+/// `None` when the column is not integer or boolean; `Some(None)` when it is all null.
 fn int_col_range(batches: &[RecordBatch], j: usize) -> Option<Option<(i128, i128)>> {
     use arrow::compute::{max, min};
     let mut range: Option<(i128, i128)> = None;
@@ -245,11 +240,9 @@ fn int_col_range(batches: &[RecordBatch], j: usize) -> Option<Option<(i128, i128
     Some(range)
 }
 
-/// Stata storage for an integer column: the smallest of byte/int/long whose
-/// non-missing span holds every value, else double. The upper bounds stop
-/// short of the type maximum because Stata reserves the top codes for `.`
-/// and `.a`-`.z`; the lower bounds exclude the two's-complement minimum.
+/// The smallest of byte/int/long whose non-missing span holds every value, else double.
 fn dta_int_storage(range: Option<(i128, i128)>) -> readstat_type_t {
+    // Upper bounds leave the top codes to `.` and `.a`-`.z`; lower bounds skip the two's-complement minimum.
     const SPANS: [(readstat_type_t, i128, i128); 3] = [
         (T_INT8, -127, 100),
         (T_INT16, -32_767, 32_740),
@@ -409,7 +402,6 @@ fn write_stata_minimal(
     if writer.is_null() {
         return Err(Error::Internal("readstat_writer_init() failed".into()));
     }
-    // Frees the writer on every exit path (including early `?` returns).
     let _writer_guard = WriterGuard(writer);
     // SAFETY: `writer` is live until `_writer_guard` drops.
     unsafe {
@@ -452,7 +444,6 @@ fn write_stata_minimal(
     let mut _keep_names: Vec<CString> = Vec::with_capacity(ncols);
     let mut _keep_label_sets: Vec<(*const readstat_label_set_t, Vec<CString>)> = Vec::new();
 
-    // Define variables
     for (j, field) in schema.fields().iter().enumerate() {
         let mut typ = match int_col_range(batches, j) {
             Some(range) => dta_int_storage(range),
@@ -529,11 +520,8 @@ fn write_stata_minimal(
             }
         }
 
-        // Value labels. Stata attaches a *named* label set to a variable, so
-        // the set is named after the column, matching Stata's own
-        // `label values v106 v106` convention. Do not decorate the name (the
-        // SAV writer uses "{col}_labels"): dta 113-117 give the name 33 bytes,
-        // and a longer one is truncated by ReadStat without an error.
+        // Named after the column, as Stata's `label values v106 v106`; no SAV-style "_labels"
+        // suffix, since dta 113-117 cap the name at 33 bytes and ReadStat truncates silently.
         if let Some(map) = value_labels
             && let Some(labels) = map.get(field.name())
             && !labels.is_empty()
@@ -546,8 +534,7 @@ fn write_stata_minimal(
                 )));
             }
 
-            // Sorted so the emitted table is byte-stable across runs.
-            // ReadStat re-sorts by value for dta >= 117 but not below.
+            // Sorted for byte-stable output: ReadStat sorts by value only for dta >= 117.
             let mut entries: Vec<(f64, &str)> = Vec::with_capacity(labels.len());
             for (value, label) in labels {
                 let code: f64 = value.parse().map_err(|_| {
@@ -636,8 +623,7 @@ fn write_stata_minimal(
                         },
                     }
                 } else if col_types[j] != T_DOUBLE {
-                    // The storage type was chosen from this column's range, so
-                    // the narrowing casts below cannot truncate.
+                    // Storage was chosen from this column's range, so these casts cannot truncate.
                     match as_i64_opt(arr.as_ref(), i) {
                         // SAFETY: `rvars[j]` belongs to the live `writer`.
                         Some(v) => unsafe {
@@ -745,8 +731,7 @@ fn write_dta_impl(
         None
     };
 
-    // JSON object keys are always strings, so integer codes arrive as e.g.
-    // {"v106": {"0": "None"}} and are parsed back to f64 by the writer.
+    // JSON keys are strings, so codes arrive as {"v106": {"0": "None"}} and are parsed back to f64.
     let value_labels: Option<HashMap<String, HashMap<String, String>>> =
         if let Some(js) = value_labels_json {
             Some(serde_json::from_str(js).map_err(|e| {

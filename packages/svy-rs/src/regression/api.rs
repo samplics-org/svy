@@ -1,13 +1,6 @@
-// src/regression/api.rs
-//
-// PyO3-facing wrapper for the GLM regression function.
-// The actual fitting logic lives in regression/glm.rs.
-//
-// Return shape: Vec<(level, params, cov_params, naive_cov, scale, df_resid,
-//                    deviance, null_deviance, iterations, n_obs, converged,
-//                    ((theta, theta_se) | None, (boundary_rows, gram) | None))>.
-// When neither by_col nor where_col is given, a single-element vec with
-// level="" is returned, so the Python side can treat every case uniformly.
+//! PyO3 wrappers for the GLM fits in `glm.rs`.
+//!
+//! - Without `by_col` or `where_col` the result is one element with level "", so Python handles every case alike.
 
 use crate::errors::to_py_err;
 use crate::regression::error::RegressionError;
@@ -35,10 +28,7 @@ type GlmTuple = (
     u32,
     usize,
     bool,
-    // (theta, theta_se) when the family has a dispersion parameter; theta_se
-    // is None when theta was supplied rather than estimated. Then the
-    // separation record, if any. Nested because pyo3 only converts tuples up
-    // to twelve long.
+    // (theta, theta_se: None when supplied) and the separation record; nested as pyo3 tuples stop at 12.
     (Option<(f64, Option<f64>)>, Option<(usize, Vec<f64>)>),
 );
 
@@ -78,8 +68,7 @@ fn optional_column_to_series(df: &DataFrame, name: &Option<String>) -> PyResult<
 /// One replicate refit: coefficients and separation record, or the error.
 type RepFit = (Option<Vec<f64>>, Option<(usize, Vec<f64>)>, Option<String>);
 
-/// Refit the model under each replicate weight column, in parallel: the
-/// coefficients a replicate variance needs, without each fit's sandwich.
+/// Refit the coefficients under each replicate weight, in parallel, skipping each fit's sandwich.
 #[pyfunction]
 #[pyo3(signature = (
     y_name,
@@ -236,10 +225,7 @@ pub fn fit_glm_rs(
     let fpc = optional_column_to_series(&df, &fpc_name)?;
     let offset = optional_column_to_series(&df, &offset_name)?;
 
-    // The weight-adjustment record, when Python judged it still valid. `new_wgt`
-    // is normally the active weight; a subpopulation filter zeroes that column in
-    // place, so Python snapshots the full-sample calibrated weights and names the
-    // snapshot here.
+    // `new_wgt` names a snapshot: a subpopulation filter zeroes the active weight column in place.
     let calib = make_calib(
         &df,
         &weight_name,
@@ -253,9 +239,7 @@ pub fn fit_glm_rs(
     .map_err(|e| to_py_err(&e))?;
     let calib = calib.as_ref();
 
-    // A `where=` domain is one fit. It used to be routed through `fit_glm_by`
-    // on a "true"/"false" string column, which fitted the complement as well
-    // and discarded it.
+    // A `where=` domain is one fit; going through `fit_glm_by` would also fit the complement.
     if let Some(name) = where_col {
         let mask = column_to_series(&df, &name)?;
         let result = _py
@@ -283,9 +267,7 @@ pub fn fit_glm_rs(
         return Ok(vec![to_tuple(String::new(), result)]);
     }
 
-    // No by_col: single fit, wrap in one-element vec for API uniformity.
     let Some(by_col) = by_col else {
-        // Release the GIL for the (iterative, CPU-bound) IRLS solve.
         let result = _py
             .detach(|| {
                 fit_one(
@@ -311,8 +293,6 @@ pub fn fit_glm_rs(
         return Ok(vec![to_tuple(String::new(), result)]);
     };
 
-    // by_col supplied: one fit per domain level (fanned out in parallel, GIL
-    // released — the domain fits are independent).
     let by_series = column_to_series(&df, &by_col)?;
 
     let results = _py
@@ -343,18 +323,7 @@ pub fn fit_glm_rs(
         .collect())
 }
 
-/// Design-based variance-covariance of the totals of several already-weighted
-/// columns — R survey's `svyrecvar`.
-///
-/// Returns the full symmetric `p x p` matrix, row-major. The columns are
-/// influence functions, so the weights are already folded into them; this
-/// computes only the design part (PSU totals centred within stratum, the
-/// with-replacement factor, the stratum FPC).
-///
-/// The GLM sandwich uses the same code internally. It is exposed because the
-/// negative binomial's joint (theta, beta) variance is assembled on the Python
-/// side, where digamma and trigamma live — svy-rs carries no math dependency —
-/// and only this part belongs in the kernel.
+/// Design covariance (`p x p`, row-major) of totals of already-weighted influence columns: R's `svyrecvar`.
 #[pyfunction]
 #[pyo3(signature = (data, value_cols, strata_col=None, psu_col=None, fpc_col=None))]
 pub fn design_vcov_rs(

@@ -1,30 +1,12 @@
-// src/weighting/calibration.rs
+//! Linear (Deville-Särndal) calibration, overall and by domain.
 
 use super::utils::{Result, WeightingError};
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2, s};
 use rayon::prelude::*;
 use std::collections::HashMap;
 
-/// Linear calibration using Deville-Särndal method
-///
-/// Calibrates weights to match auxiliary information using linear calibration.
-/// This solves for Lagrange multipliers λ and computes: g = 1 + (X'λ)/s
-/// where the calibrated weights are: w_cal = w * g
-///
-/// # Arguments
-/// * `wgt` - Initial weights matrix (n_obs, n_reps)
-/// * `x_matrix` - Auxiliary variables matrix (n_obs, n_aux)
-/// * `totals` - Known population totals for auxiliary variables (n_aux,)
-/// * `scale` - Scale factors for distance function (n_obs,). Default is 1.0
-/// * `additive` - If true, return g-factors instead of calibrated weights
-///
-/// # Returns
-/// Calibrated weight matrix (or g-factors if additive=true)
-///
-/// # Algorithm
-/// Solves the system: (X' diag(w/s) X) λ = (tx - X' w)
-/// Then computes: g = 1 + (X λ) / s
-/// Calibrated weights: w_cal = w * g
+/// Solves (X' diag(w/s) X) λ = t - X'w per column and returns w * g, with g = 1 + Xλ / s.
+/// With `additive`, returns g itself.
 pub fn calibrate_linear(
     wgt: ArrayView2<f64>,
     x_matrix: ArrayView2<f64>,
@@ -35,7 +17,6 @@ pub fn calibrate_linear(
     let (n_obs, n_reps) = wgt.dim();
     let (n_obs_x, n_aux) = x_matrix.dim();
 
-    // Validate inputs
     if n_obs_x != n_obs {
         return Err(WeightingError::DimensionMismatch {
             expected: n_obs,
@@ -50,7 +31,6 @@ pub fn calibrate_linear(
         });
     }
 
-    // Handle scale factors
     let s = match scale {
         Some(s_arr) => {
             if s_arr.len() != n_obs {
@@ -72,7 +52,6 @@ pub fn calibrate_linear(
         return Err(WeightingError::ScaleNotPositive { row, value });
     }
 
-    // Calibrate each replicate IN PARALLEL using rayon
     let results: std::result::Result<Vec<_>, WeightingError> = (0..n_reps)
         .into_par_iter()
         .map(|r| {
@@ -83,7 +62,6 @@ pub fn calibrate_linear(
 
     let cal_cols = results?;
 
-    // Assemble result matrix
     let mut result = Array2::zeros((n_obs, n_reps));
     for (col_idx, col) in cal_cols.into_iter().enumerate() {
         result.column_mut(col_idx).assign(&col);
@@ -92,7 +70,6 @@ pub fn calibrate_linear(
     Ok(result)
 }
 
-/// Calibrate a single replicate using linear method
 fn calibrate_linear_single(
     wgt: ArrayView1<f64>,
     x_matrix: ArrayView2<f64>,
@@ -103,7 +80,6 @@ fn calibrate_linear_single(
     let n_obs = wgt.len();
     let n_aux = totals.len();
 
-    // 1. Compute current weighted totals: x_w = X' w
     let mut x_w: Array1<f64> = Array1::zeros(n_aux);
     for j in 0..n_aux {
         for i in 0..n_obs {
@@ -111,7 +87,6 @@ fn calibrate_linear_single(
         }
     }
 
-    // 2. Construct system matrix: A = X' diag(w/s) X
     let mut a_matrix = Array2::zeros((n_aux, n_aux));
     for j1 in 0..n_aux {
         for j2 in 0..n_aux {
@@ -123,13 +98,10 @@ fn calibrate_linear_single(
         }
     }
 
-    // 3. Construct RHS: b = totals - x_w
     let b = &totals - &x_w;
 
-    // 4. Solve for Lagrange multipliers: A λ = b
     let lambda = solve_linear_system(&a_matrix, &b)?;
 
-    // 5. Compute g-factors: g = 1 + (X λ) / s
     let mut g_factors = Array1::ones(n_obs);
     for i in 0..n_obs {
         let mut x_lambda_i = 0.0;
@@ -139,7 +111,6 @@ fn calibrate_linear_single(
         g_factors[i] = 1.0 + x_lambda_i / scale[i];
     }
 
-    // 6. Return result
     if additive {
         Ok(g_factors)
     } else {
@@ -147,7 +118,7 @@ fn calibrate_linear_single(
     }
 }
 
-/// Solve linear system Ax = b using Gaussian elimination with partial pivoting
+/// Gaussian elimination with partial pivoting; a singular system gets the minimum-norm solution.
 fn solve_linear_system(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> {
     let n = a.nrows();
 
@@ -157,9 +128,8 @@ fn solve_linear_system(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> 
         ));
     }
 
-    // Solve on D A D with D = diag(A)^(-1/2), so no auxiliary's units decide whether
-    // the system counts as singular or which directions the pseudo-inverse keeps.
-    // A zero diagonal (an auxiliary with no weight) is left unscaled.
+    // Solve D A D, D = diag(A)^(-1/2): an auxiliary's units then decide neither singularity nor
+    // which directions the pseudo-inverse keeps. A zero diagonal (no weight) stays unscaled.
     let d: Array1<f64> = (0..n)
         .map(|i| {
             let v = a[[i, i]];
@@ -169,7 +139,6 @@ fn solve_linear_system(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> 
     let scaled_a = Array2::from_shape_fn((n, n), |(i, j)| a[[i, j]] * d[i] * d[j]);
     let scaled_b = b * &d;
 
-    // Create augmented matrix [D A D | D b]
     let mut aug = Array2::zeros((n, n + 1));
     for i in 0..n {
         for j in 0..n {
@@ -181,9 +150,7 @@ fn solve_linear_system(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> 
     // Relative to the scaled system, whose nonzero diagonal entries are 1.
     let pivot_tol = 256.0 * f64::EPSILON;
 
-    // Forward elimination with partial pivoting
     for k in 0..n {
-        // Find pivot
         let mut max_val = aug[[k, k]].abs();
         let mut max_row = k;
 
@@ -200,7 +167,6 @@ fn solve_linear_system(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> 
             return Ok(solve_pseudoinverse(&scaled_a, &scaled_b)? * &d);
         }
 
-        // Swap rows
         if max_row != k {
             for j in 0..=n {
                 let temp = aug[[k, j]];
@@ -209,7 +175,6 @@ fn solve_linear_system(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> 
             }
         }
 
-        // Eliminate
         for i in (k + 1)..n {
             let factor = aug[[i, k]] / aug[[k, k]];
             for j in k..=n {
@@ -218,7 +183,6 @@ fn solve_linear_system(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> 
         }
     }
 
-    // Back substitution
     let mut x = Array1::zeros(n);
     for i in (0..n).rev() {
         let mut sum = aug[[i, n]];
@@ -232,8 +196,7 @@ fn solve_linear_system(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> 
     Ok(x)
 }
 
-/// `A⁺ b` through the SVD, dropping singular values at or below 256·ε times the largest,
-/// as R's `MASS::ginv(tol = 256 * .Machine$double.eps)` in `grake`.
+/// `A⁺ b` by SVD, dropping singular values <= 256·ε·max, as `MASS::ginv` in R's `grake`.
 fn solve_pseudoinverse(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> {
     let n = a.nrows();
     let m = faer::Mat::<f64>::from_fn(n, n, |i, j| a[[i, j]]);
@@ -252,21 +215,7 @@ fn solve_pseudoinverse(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> 
     Ok(x)
 }
 
-/// Domain-specific calibration
-///
-/// Calibrates weights separately within each domain (group).
-/// Processes domains in parallel using rayon for better performance.
-///
-/// # Arguments
-/// * `wgt` - Initial weights matrix (n_obs, n_reps)
-/// * `x_matrix` - Auxiliary variables matrix (n_obs, n_aux)
-/// * `domain` - Domain identifiers for each observation (n_obs,)
-/// * `controls` - Map from domain ID to control totals array
-/// * `scale` - Optional scale factors
-/// * `additive` - If true, return g-factors
-///
-/// # Returns
-/// Calibrated weight matrix
+/// `calibrate_linear` separately within each domain, against that domain's control totals.
 pub fn calibrate_by_domain(
     wgt: ArrayView2<f64>,
     x_matrix: ArrayView2<f64>,
@@ -298,24 +247,19 @@ pub fn calibrate_by_domain(
         });
     }
 
-    // Handle scale
     let s = match scale {
         Some(s_arr) => s_arr.to_owned(),
         None => Array1::ones(n_obs),
     };
 
-    // Sort data by domain for efficient processing
     let (domain_sorted, sort_idx, unsort_idx) = sort_by_domain(&domain);
 
-    // Apply sort
     let wgt_sorted = reorder_rows(wgt, &sort_idx);
     let x_sorted = reorder_rows_2d(x_matrix, &sort_idx);
     let s_sorted = reorder_array(&s.view(), &sort_idx);
 
-    // Find domain boundaries
     let boundaries = find_domain_boundaries(&domain_sorted);
 
-    // Collect domain info for parallel processing
     if let Some(&dom_val) = boundaries
         .keys()
         .filter(|d| !controls.contains_key(d))
@@ -328,7 +272,6 @@ pub fn calibrate_by_domain(
         .map(|(&dom_val, &(start, end))| (dom_val, start, end, controls[&dom_val].clone()))
         .collect();
 
-    // Process each domain IN PARALLEL
     let domain_results: std::result::Result<Vec<_>, WeightingError> = domain_tasks
         .par_iter()
         .map(|(_, start, end, totals)| {
@@ -345,7 +288,6 @@ pub fn calibrate_by_domain(
 
     let calibrated_domains = domain_results?;
 
-    // Assemble result matrix
     let mut result_sorted = if additive {
         Array2::ones((n_obs, n_reps))
     } else {
@@ -358,7 +300,6 @@ pub fn calibrate_by_domain(
             .assign(&cal_slice);
     }
 
-    // Restore original order
     let result = reorder_rows(result_sorted.view(), &unsort_idx);
 
     Ok(result)
@@ -422,11 +363,7 @@ fn find_domain_boundaries(domain_sorted: &Array1<i64>) -> HashMap<i64, (usize, u
     boundaries
 }
 
-/// Parallel calibration
-///
-/// Identical computation to `calibrate_linear` with `additive=false`;
-/// delegates so all input validation (dimension checks, scale sanitization)
-/// lives in one place.
+/// `calibrate_linear` with `additive = false`.
 pub fn calibrate_parallel(
     wgt: ArrayView2<f64>,
     x_matrix: ArrayView2<f64>,
@@ -452,8 +389,7 @@ mod tests {
 
     #[test]
     fn redundant_controls_calibrate_like_the_reduced_set() {
-        // Intercept + female + male spans what intercept + female spans; linear
-        // calibration weights depend only on that span.
+        // Linear calibration depends only on the span of X, which adding male leaves unchanged.
         let wgt = array![[1.0], [2.0], [1.5], [1.0], [2.5], [1.0]];
         let female = [1.0, 0.0, 1.0, 1.0, 0.0, 0.0];
         let full = Array2::from_shape_fn((6, 3), |(i, j)| match j {
@@ -495,7 +431,6 @@ mod tests {
 
         let result = calibrate_linear(wgt.view(), x.view(), totals.view(), None, false).unwrap();
 
-        // Check calibrated totals
         let mut x_cal = 0.0;
         for i in 0..4 {
             x_cal += x[[i, 0]] * result[[i, 0]];
@@ -503,8 +438,6 @@ mod tests {
         assert_abs_diff_eq!(x_cal, 15.0, epsilon = 1e-12);
     }
 
-    // Regression: these used to panic (index out of bounds) instead of
-    // returning clean errors.
     #[test]
     fn test_calibrate_parallel_bad_dims_are_errors() {
         let wgt = array![[1.0], [1.0], [1.0]];

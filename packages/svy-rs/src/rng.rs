@@ -1,14 +1,6 @@
-// src/rng.rs
-//
-// Shared xoshiro256** RNG used across sampling and weighting modules.
-// No external rand crate needed — this is consistent with the rest of
-// the codebase (weighting/replication.rs uses the same algorithm).
+//! Seedable xoshiro256** RNG shared by sampling and weighting, with no external rand crate.
 
-/// Fast, seedable xoshiro256** pseudo-random number generator.
-///
-/// Used for reproducible random sampling. Seeded from a u64; child
-/// generators for independent strata are derived via wrapping addition
-/// on the seed so each stratum gets a deterministic but independent stream.
+/// xoshiro256** generator: a given seed always yields the same stream, so draws are reproducible.
 #[derive(Clone)]
 pub struct Rng {
     state: [u64; 4],
@@ -41,12 +33,7 @@ impl Rng {
         result
     }
 
-    /// Uniform random integer in [0, n), exactly uniform.
-    ///
-    /// Lemire's nearly-divisionless bounded sampling. The previous
-    /// `next_u64() % n` had modulo bias: values below 2^64 mod n were
-    /// selected slightly more often (negligible for small n, but free to
-    /// avoid). NOTE: this changed the sampled units for a given seed.
+    /// Uniform integer in [0, n) without modulo bias (Lemire's nearly-divisionless method).
     pub fn next_index(&mut self, n: usize) -> usize {
         debug_assert!(n > 0, "next_index requires n > 0");
         let n = n as u64;
@@ -67,7 +54,6 @@ impl Rng {
 
     /// Uniform random f64 in [0, 1).
     pub fn next_f64(&mut self) -> f64 {
-        // Use upper 53 bits for a uniform double
         (self.next_u64() >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
     }
 
@@ -79,8 +65,7 @@ impl Rng {
         }
     }
 
-    /// Weighted random choice: draw one index from `weights` (unnormalised).
-    /// `None` when there is nothing to draw: no weights, or a total that is not positive.
+    /// One index drawn proportional to unnormalised `weights`; `None` unless the total is positive.
     pub fn weighted_choice(&mut self, weights: &[f64]) -> Option<usize> {
         let total: f64 = weights.iter().sum();
         if total.is_nan() || total <= 0.0 {
@@ -101,6 +86,77 @@ impl Rng {
 mod tests {
     use super::*;
 
+    // Expected values: the public-domain reference splitmix64.c and
+    // xoshiro256starstar.c, compiled; the seeding also matches Java's SplittableRandom.
+    #[test]
+    fn seeding_is_splitmix64() {
+        let rng = Rng::new(42);
+        assert_eq!(
+            rng.state,
+            [
+                0xbdd732262feb6e95,
+                0x28efe333b266f103,
+                0x47526757130f9f52,
+                0x581ce1ff0e4ae394,
+            ]
+        );
+    }
+
+    #[test]
+    fn next_u64_matches_reference_xoshiro256starstar() {
+        let cases: [(u64, [u64; 4]); 3] = [
+            (
+                0,
+                [
+                    0x99ec5f36cb75f2b4,
+                    0xbf6e1f784956452a,
+                    0x1a5f849d4933e6e0,
+                    0x6aa594f1262d2d2c,
+                ],
+            ),
+            (
+                42,
+                [
+                    0x15780b2e0c2ec716,
+                    0x6104d9866d113a7e,
+                    0xae17533239e499a1,
+                    0xecb8ad4703b360a1,
+                ],
+            ),
+            (
+                u64::MAX,
+                [
+                    0x8f5520d52a7ead08,
+                    0xc476a018caa1802d,
+                    0x81de31c0d260469e,
+                    0xbf658d7e065f3c2f,
+                ],
+            ),
+        ];
+        for (seed, expected) in cases {
+            let mut rng = Rng::new(seed);
+            let got: Vec<u64> = (0..4).map(|_| rng.next_u64()).collect();
+            assert_eq!(got, expected, "seed {seed}");
+        }
+    }
+
+    // Expected: (x >> 11) * 2^-53 and Lemire's bounded draw on the reference stream.
+    #[test]
+    fn next_f64_and_next_index_match_reference() {
+        let mut rng = Rng::new(7);
+        let floats: Vec<f64> = (0..3).map(|_| rng.next_f64()).collect();
+        assert_eq!(
+            floats,
+            [0.7005764821796896, 0.2787512294737843, 0.8396274618764198]
+        );
+        let indices: Vec<usize> = (0..8).map(|_| rng.next_index(10)).collect();
+        assert_eq!(indices, [9, 9, 8, 0, 1, 4, 1, 5]);
+
+        let mut rng = Rng::new(123);
+        let indices: Vec<usize> = (0..8).map(|_| rng.next_index(3)).collect();
+        assert_eq!(indices, [0, 2, 1, 0, 1, 2, 1, 1]);
+    }
+
     #[test]
     fn next_index_stays_in_range() {
         let mut rng = Rng::new(42);
@@ -113,8 +169,7 @@ mod tests {
 
     #[test]
     fn next_index_is_close_to_uniform() {
-        // 60k draws over 3 buckets: each expected 20k, sd ~ 115. A bound of
-        // 5 sd catches gross non-uniformity without being flaky.
+        // Expected 20k per bucket with sd ~115: a 600 bound (~5 sd) is not flaky.
         let mut rng = Rng::new(7);
         let n = 3usize;
         let draws = 60_000;

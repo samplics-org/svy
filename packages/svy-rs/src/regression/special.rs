@@ -1,21 +1,11 @@
-// src/regression/special.rs
-//
-// lgamma, digamma and trigamma.
-//
-// The crate carries no math dependency on purpose, so these are written out
-// the way `norm_cdf` is in regression/glm.rs — and, like it, are checked
-// against R to ~1e-14 relative in the tests below. The negative binomial needs
-// all three: the profile likelihood in theta is digamma, its information is
-// trigamma, and the log-likelihood itself is lgamma.
-//
-// Each uses the same shape: recur up to where the asymptotic series is good,
-// then sum it.
+//! lgamma, digamma and trigamma for the negative binomial.
+//!
+//! - Hand-written because the crate carries no math dependency; checked against R to ~1e-14.
+//! - Each recurs up to where the asymptotic series is good, then sums it.
 
 use std::f64::consts::PI;
 
-/// Where digamma and trigamma switch from the recurrence to the asymptotic
-/// series. High enough that the first dropped term is below f64 resolution;
-/// the recurrence costs at most twenty divisions.
+/// Recurrence-to-series switch: the first dropped term is below f64 resolution.
 const ASYMPTOTIC_FROM: f64 = 20.0;
 
 /// Lanczos coefficients, g = 7, n = 9 — the usual set, good to ~1e-15.
@@ -51,9 +41,7 @@ pub fn lgamma(x: f64) -> f64 {
 pub fn digamma(mut x: f64) -> f64 {
     let mut result = 0.0;
 
-    // Recur up to the threshold with psi(x) = psi(x+1) - 1/x. At x >= 20 the
-    // first term the series below drops is ~5e-18 relative, which is what
-    // buys the 1e-14 agreement with R asserted in the tests.
+    // psi(x) = psi(x+1) - 1/x; at x >= 20 the dropped series term is ~5e-18 relative.
     while x < ASYMPTOTIC_FROM {
         result -= 1.0 / x;
         x += 1.0;
@@ -185,8 +173,7 @@ mod tests {
         check("lgamma", &LGAMMA, lgamma, 1e-14);
     }
 
-    /// psi(x+1) - psi(x) = 1/x, and psi'(x) - psi'(x+1) = 1/x^2, across the
-    /// recurrence boundary the implementations use.
+    /// psi(x+1) - psi(x) = 1/x and psi'(x) - psi'(x+1) = 1/x^2 across the recurrence boundary.
     #[test]
     fn recurrences_hold_across_the_boundary() {
         for x in [0.3, 1.0, 2.7, 5.5, 5.999, 6.0, 6.001, 9.0, 40.0] {
@@ -205,7 +192,6 @@ mod tests {
         }
     }
 
-    /// trigamma is the derivative of digamma.
     #[test]
     fn trigamma_matches_a_numeric_derivative_of_digamma() {
         let h = 1e-6;

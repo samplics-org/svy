@@ -1,4 +1,3 @@
-// native/svyreadstat_rs/src/stata_read.rs
 use crate::core::{
     ParseCtx, ParserGuard, check_parse, configure_parser, finalize_to_ipc, on_error_cb,
     on_metadata_cb, on_note_cb, on_value_cb, on_value_label_cb, on_variable_cb,
@@ -9,8 +8,7 @@ use readstat_sys::*;
 use std::collections::HashMap;
 use std::os::raw::c_void;
 
-/// Stata format code from the file header; None when the header cannot be
-/// read, in which case readstat reports the real problem.
+/// Stata format code from the header; None if unreadable, leaving readstat to report the real problem.
 fn dta_format(data_path: &str) -> Option<u32> {
     use std::io::Read;
     const TAG: &[u8] = b"<stata_dta><header><release>";
@@ -25,13 +23,7 @@ fn dta_format(data_path: &str) -> Option<u32> {
     }
 }
 
-/// Parse a Stata .dta file into Arrow IPC format.
-///
-/// Files of format 117 and older declare no encoding. Without an explicit
-/// `encoding`, they are validated as strict UTF-8 first (a legacy code page
-/// accepts nearly any byte, so it would turn UTF-8 into mojibake silently);
-/// only a file that fails that check is read as readstat's Windows-1252
-/// default. The resolved encoding is reported in the metadata.
+/// Format 117 and older declare no encoding: strict UTF-8 is tried before Windows-1252, which would garble UTF-8 silently.
 #[inline]
 pub(crate) fn parse_dta_impl(
     data_path: &str,
@@ -83,7 +75,7 @@ fn run_parse(
     lossy_utf8: bool,
 ) -> Result<(Vec<u8>, crate::core::MetaOut)> {
     let mut ctx = ParseCtx {
-        cols: Vec::with_capacity(64), // Pre-allocate for typical files
+        cols: Vec::with_capacity(64),
         var_cols: Vec::with_capacity(64),
         cols_skip: cols_skip.map(|v| {
             let mut map = HashMap::with_capacity(v.len());
@@ -99,10 +91,10 @@ fn run_parse(
         last_counted_row: None,
         had_invalid_utf8: false,
         lossy_utf8,
-        label_sets: HashMap::with_capacity(32), // Pre-allocate
+        label_sets: HashMap::with_capacity(32),
         file_label: None,
         last_err: None,
-        tagged: HashMap::with_capacity(16), // Pre-allocate
+        tagged: HashMap::with_capacity(16),
         notes: Vec::with_capacity(8),
         detect_tagged: true,
         row_capacity: None, // Filled in metadata callback
@@ -122,8 +114,7 @@ fn run_parse(
     }
     let enc = crate::core::input_encoding(attempt, lossy_utf8);
     let _keep_enc = configure_parser(&parser, enc, rows_skip, n_max)?;
-    // SAFETY: `ctx`, the path and `_keep_enc` outlive the parse, and only the callbacks
-    // touch `ctx` until it returns.
+    // SAFETY: `ctx`, the path and `_keep_enc` outlive the parse; only the callbacks touch `ctx`.
     let rc = unsafe {
         readstat_parse_dta(
             parser.as_ptr(),

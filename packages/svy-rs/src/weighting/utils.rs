@@ -1,4 +1,4 @@
-// src/weighting/utils.rs
+//! Weighting errors and shared group helpers.
 
 use ndarray::{Array2, ArrayView2};
 use thiserror::Error;
@@ -55,7 +55,7 @@ impl Coded for WeightingError {
     }
 }
 
-/// Sum weights by group for a 2D array (each column separately)
+/// Column-wise weight sums per group.
 pub fn sum_by_group_2d(
     weights: ArrayView2<f64>,
     indices: &[usize],
@@ -73,7 +73,7 @@ pub fn sum_by_group_2d(
     sums
 }
 
-/// Check if weights are within bounds
+/// True when every ratio raked / initial (initial > 0) lies within the bounds.
 pub fn check_bounds(
     raked: ArrayView2<f64>,
     initial: ArrayView2<f64>,

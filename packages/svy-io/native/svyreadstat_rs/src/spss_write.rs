@@ -1,4 +1,3 @@
-// native/svyreadstat_rs/src/spss_write.rs
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -91,8 +90,7 @@ fn dict_string_at_any(a: &dyn Array, row: usize) -> Option<&str> {
                 if !is_text_dt(d.values().data_type()) || d.is_null(row) {
                     return None;
                 }
-                // A corrupt dictionary can hold a negative or out-of-range
-                // key; a plain `as usize` cast would wrap and panic below.
+                // A corrupt dictionary can hold a negative or out-of-range key; `as usize` would wrap.
                 let key_usize = usize::try_from(d.keys().value(row)).ok()?;
                 let values = d.values();
                 if key_usize >= values.len() {
@@ -282,7 +280,6 @@ fn write_spss_minimal(
     if writer.is_null() {
         return Err(Error::Internal("readstat_writer_init() failed".into()));
     }
-    // Frees the writer on every exit path (including early `?` returns).
     let _writer_guard = WriterGuard(writer);
 
     let compress_type = match compress {
@@ -325,7 +322,6 @@ fn write_spss_minimal(
     // ReadStat stores string missing values by pointer and reads them in begin_writing.
     let mut _keep_missing: Vec<CString> = Vec::new();
 
-    // Define variables
     for (j, field) in schema.fields().iter().enumerate() {
         let dt = batches[0].column(j).data_type();
         let mut typ = T_DOUBLE;
@@ -333,8 +329,7 @@ fn write_spss_minimal(
 
         if is_str_col[j] {
             let stats = str_stats[j].unwrap_or(StringColStats { max_len: 1 });
-            // Validate up front: silently capping at 2000 produced a
-            // confusing readstat rc error at row-insert time.
+            // Checked here; ReadStat would fail later with an opaque rc at row insert.
             if stats.max_len > 2000 {
                 return Err(Error::Invalid(format!(
                     "column '{}' contains strings up to {} bytes; the SAV \
@@ -362,7 +357,6 @@ fn write_spss_minimal(
             )));
         }
 
-        // SPSS display format for temporal columns
         let want_fmt = match dt {
             DataType::Date32 | DataType::Date64 => Some("DATE10"),
             DataType::Timestamp(_, _) => Some("DATETIME20"),
@@ -375,7 +369,6 @@ fn write_spss_minimal(
             unsafe { readstat_variable_set_format(var, cfmt.as_ptr()) };
         }
 
-        // Variable label
         if let Some(map) = var_labels
             && let Some(lbl) = map.get(field.name())
             && !lbl.is_empty()
@@ -390,7 +383,6 @@ fn write_spss_minimal(
             unsafe { readstat_variable_set_label(var, c.as_ptr()) };
         }
 
-        // User-defined missing values
         if let Some(user_miss) = user_missing {
             for um in user_miss {
                 if um.col == field.name().as_str() {
@@ -405,9 +397,8 @@ fn write_spss_minimal(
                                 width
                             )));
                         }
-                        // String: only discrete user-missing values are supported
                         for val in &um.values {
-                            // To string (avoid trailing .0 for whole numbers)
+                            // `1`, not `1.0`, for whole numbers.
                             let val_string = if val.fract() == 0.0 {
                                 format!("{:.0}", val)
                             } else {
@@ -415,16 +406,14 @@ fn write_spss_minimal(
                             };
                             let c_val =
                                 CString::new(val_string).expect("a formatted number holds no NUL");
-                            // SAFETY: `var` is live; ReadStat keeps this pointer until it begins
-                            // writing, so `c_val` is kept in `_keep_missing`.
+                            // SAFETY: `var` is live; `_keep_missing` holds `c_val` until begin_writing reads it.
                             rcs.push(unsafe {
                                 readstat_variable_add_missing_string_value(var, c_val.as_ptr())
                             });
                             _keep_missing.push(c_val);
                         }
-                        // Note: SPSS (ReadStat) does not expose a "string range" API; ignore um.range for strings.
+                        // ReadStat has no string-range API, so `um.range` is ignored.
                     } else {
-                        // Numeric: discrete + range
                         for &val in &um.values {
                             // SAFETY: `var` lives as long as `writer`.
                             rcs.push(unsafe {
@@ -447,7 +436,6 @@ fn write_spss_minimal(
             }
         }
 
-        // Value labels
         if let Some(val_labs) = value_labels {
             for vl in val_labs {
                 if vl.col == field.name().as_str() && !vl.labels.is_empty() {
@@ -602,7 +590,6 @@ pub fn df_write_sav_file(
 
     let bad_entry = |what: &str, e: PyErr| to_py(Error::Invalid(format!("bad {what} entry: {e}")));
 
-    // Convert user_missing from Python-friendly dicts
     let user_missing_converted: Option<Vec<UserMissingInfo>> = match &user_missing {
         None => None,
         Some(um_vec) => Some(Python::attach(|py| {
@@ -628,7 +615,6 @@ pub fn df_write_sav_file(
         })?),
     };
 
-    // Convert value_labels from Python-friendly dicts
     let value_labels_converted: Option<Vec<ValueLabelsInfo>> = match &value_labels {
         None => None,
         Some(vl_vec) => Some(Python::attach(|py| {

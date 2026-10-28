@@ -1,10 +1,4 @@
-// src/categorical/api.rs
-//
-// PyO3-facing wrappers and compute helpers for categorical tests and
-// tabulation.  The statistical implementations live in categorical/ttest.rs,
-// categorical/ranktest.rs, and categorical/tabulation.rs; this file only
-// handles DataFrame I/O, argument parsing, domain/by-group orchestration,
-// and building the result DataFrames.
+//! PyO3 wrappers for the t-tests, rank tests and tabulation: frame I/O, domains and by-groups only.
 
 use crate::categorical::error::{CResult, CategoricalError};
 use crate::errors::to_py_err;
@@ -24,7 +18,7 @@ use crate::categorical::ranktest::{
 };
 use crate::categorical::replicate::{RepSpec, replicate_cells};
 use crate::categorical::tabulation::{
-    count_strata_psus, domain_levels, estimate_proportions, estimate_totals, rao_scott,
+    cell_se, count_strata_psus, domain_levels, estimate_proportions, estimate_totals, rao_scott,
 };
 use crate::categorical::ttest::{
     ttest_one_sample, ttest_one_sample_domain, ttest_one_sample_rep, ttest_two_sample,
@@ -34,9 +28,9 @@ use crate::categorical::ttest::{
 /// What `prepare_two_sample_data` hands the two-sample and rank tests.
 type TwoSampleData = (
     Vec<f64>,    // y
-    Vec<f64>,    // w (zeroed for non-domain/NA)
-    Vec<u32>,    // g (0-based group indices)
-    Vec<String>, // sorted unique group labels
+    Vec<f64>,    // w, zeroed out of domain and where y is missing
+    Vec<u32>,    // g
+    Vec<String>, // sorted group labels
     usize,       // n
     Vec<bool>,   // the domain's rows (in the domain, y present), whatever the weight
 );
@@ -45,9 +39,7 @@ type TwoSampleData = (
 // Shared column-extraction helpers
 // ============================================================================
 
-/// Fetch an optional design column as a `&Column` (dtype-agnostic). The
-/// downstream variance/df kernels dispatch on dtype: String is hashed, integer
-/// codes (Phase C) are densified.
+/// An optional design column, any dtype: the kernels hash strings and densify integer codes.
 pub(crate) fn get_opt_col<'a>(df: &'a DataFrame, col: Option<&str>) -> CResult<Option<&'a Column>> {
     match col {
         Some(c) => Ok(Some(df.column(c)?)),
@@ -92,8 +84,7 @@ fn rep_spec(
 // Two-sample / k-sample data preparation helper
 // ============================================================================
 
-/// Order labels by value when the source column is numeric, so 2 sorts before
-/// 10; lexically otherwise.
+/// Numeric source columns sort by value, so 2 comes before 10; others lexically.
 fn sort_labels(labels: &mut [String], dtype: &DataType) {
     if dtype.is_primitive_numeric() {
         let key = |s: &String| s.parse::<f64>().unwrap_or(f64::NAN);
@@ -103,10 +94,7 @@ fn sort_labels(labels: &mut [String], dtype: &DataType) {
     }
 }
 
-/// Prepare data arrays for two-sample / k-sample tests.
-///
-/// For domain estimation: zeros weights for non-domain obs but keeps all rows
-/// so strata/PSU structure is preserved for correct variance estimation.
+/// Arrays for the two- and k-sample tests; out-of-domain rows get weight 0 but stay, keeping the PSU structure.
 #[allow(clippy::too_many_arguments)]
 fn prepare_two_sample_data(
     df: &DataFrame,
@@ -135,7 +123,6 @@ fn prepare_two_sample_data(
         _ => None,
     };
 
-    // Collect unique group labels (sorted), considering domain
     let mut level_set: Vec<String> = Vec::new();
     {
         let mut seen = std::collections::HashSet::new();
@@ -172,7 +159,6 @@ fn prepare_two_sample_data(
 
         rows.push(in_domain && !yi.is_nan());
         if yi.is_nan() {
-            // NaN y: zero everything
             y_arr.push(0.0);
             w_arr.push(0.0);
             g_arr.push(0);
@@ -217,9 +203,7 @@ fn level_counts(w: &[f64], g: &[u32], levels: &[String], frame_levels: &[String]
 // Generic by-group helper
 // ============================================================================
 
-/// Run a single-test function for each level of `by_col`, combining with an
-/// existing domain mask if present.  Returns a vertically stacked DataFrame
-/// with a `by_col` column appended.
+/// Run `run_single` per level of `by_col`, within any domain, stacking the results with a `by_col` column.
 fn compute_by_groups<F>(
     df: &DataFrame,
     by_col: &str,
@@ -256,9 +240,7 @@ where
                 by_mask
             };
 
-        // Build the domain mask column without cloning the full DataFrame.
-        // DataFrame::with_column requires ownership so we use hstack on a
-        // single-column DataFrame — avoids copying all existing columns.
+        // hstack, not with_column: the latter needs an owned frame, i.e. a full clone.
         let mask_col: Series = combined_mask
             .iter()
             .map(|v| if v.unwrap_or(false) { "true" } else { "false" })
@@ -266,7 +248,6 @@ where
             .with_name("__svy_by_domain__".into())
             .into_series();
 
-        // hstack adds columns without touching existing data; clone is shallow (Arc)
         let temp_df = df.hstack(&[mask_col.into()])?;
 
         let mut single = run_single(&temp_df, Some("__svy_by_domain__"), Some("true"))?;
@@ -453,8 +434,7 @@ fn compute_svyttest_single(
     domain_val: Option<&str>,
     calib: Option<&CalibSweep>,
     rep: Option<&RepSpec>,
-    // Some inside a by-group: the group's levels over the whole frame. A by-group
-    // without weight, or without both groups, then gives a NaN row, not an error.
+    // By-group only: the frame's levels, so a group lacking weight or a level yields a NaN row, not an error.
     frame_levels: Option<&[String]>,
 ) -> CResult<DataFrame> {
     let strata = get_opt_col(df, strata_col)?;
@@ -466,7 +446,6 @@ fn compute_svyttest_single(
 
     match group_col {
         None => {
-            // One-sample test
             let y = df.column(y_col)?.as_materialized_series().f64()?;
             let weights = df.column(weight_col)?.as_materialized_series().f64()?;
             let mask = match (domain_col, domain_val) {
@@ -538,7 +517,6 @@ fn compute_svyttest_single(
             ]?)
         }
         Some(g_col) => {
-            // Two-sample test
             let (y_arr, w_arr, g_arr, levels, n, rows) = prepare_two_sample_data(
                 df, y_col, weight_col, g_col, strata_col, psu_col, domain_col, domain_val,
             )?;
@@ -658,8 +636,7 @@ pub fn ranktest_rs(
     rep_coefs: Option<Vec<f64>>,
     rep_df: Option<f64>,
     variance_center: &str,
-    // `y_col` already holds the rank scores (a caller-supplied score function).
-    // Replication only: on Taylor the facade tests such scores with ttest_rs.
+    // `y_col` holds caller-supplied scores; replication only, as Taylor routes them to ttest_rs.
     scores_given: bool,
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
@@ -775,8 +752,7 @@ fn compute_svyranktest_single(
     domain_val: Option<&str>,
     rep: Option<&RepSpec>,
     scores_given: bool,
-    // Some inside a by-group: the group's levels over the whole frame. A by-group
-    // with fewer than two weighted groups then gives a NaN row, not an error.
+    // By-group only: the frame's levels, so fewer than two weighted groups yields a NaN row, not an error.
     frame_levels: Option<&[String]>,
 ) -> CResult<DataFrame> {
     let method = score_method
@@ -1010,10 +986,7 @@ fn compute_tabulate(
     domain_col: Option<&str>,
     rep: Option<&RepSpec>,
 ) -> CResult<(DataFrame, DataFrame)> {
-    // Domain (`where=`): out-of-domain rows keep their design columns and
-    // get weight 0, exactly R's subset() on a survey design, so the PSU
-    // structure and the df are those of the full design restricted to the
-    // units with an in-domain row.
+    // As R's subset(): out-of-domain rows get weight 0 but keep the PSU structure; df counts units with an in-domain row.
     let domain: Option<BooleanChunked> = domain_col
         .map(|c| {
             df.column(c).and_then(|s| {
@@ -1044,8 +1017,6 @@ fn compute_tabulate(
         }
         None => raw_weights,
     };
-    // Design columns as owned Columns (cheap Arc clone); the variance/df kernels
-    // dispatch on dtype. Tabulate always supplies String columns today.
     let strata = strata_col.map(|c| df.column(c).cloned()).transpose()?;
     let psu = psu_col.map(|c| df.column(c).cloned()).transpose()?;
     let ssu = ssu_col.map(|c| df.column(c).cloned()).transpose()?;
@@ -1095,7 +1066,6 @@ fn compute_tabulate(
         y_effective = &combined_key;
     }
 
-    // Replication: cell shares and totals re-estimated with every replicate.
     let rep_cells = match rep {
         Some(spec) => {
             let levels = domain_levels(y_effective, domain.as_ref())?;
@@ -1108,7 +1078,7 @@ fn compute_tabulate(
         Some((levels, cells)) => {
             let k = levels.len();
             let ses: Vec<f64> = (0..k)
-                .map(|j| cells.prop_cov[j][j].max(0.0).sqrt())
+                .map(|j| cell_se(cells.proportions[j], cells.prop_cov[j][j]))
                 .collect();
             (
                 levels.clone(),
