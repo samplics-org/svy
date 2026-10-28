@@ -2,7 +2,7 @@
 
 use crate::rng::Rng;
 pub use crate::sampling::srs::Result;
-use crate::sampling::srs::SamplingError;
+use crate::sampling::srs::{SamplingError, check_n_map};
 use std::collections::HashMap;
 
 /// Selected rows, their hits, inclusion probabilities and certainty flags.
@@ -56,7 +56,7 @@ pub fn select_pps(
     stratum: Option<&[i64]>,
     method: PpsMethod,
     certainty_threshold: f64,
-    seed: Option<u64>,
+    seed: u64,
 ) -> Result<PpsDraw> {
     if !(certainty_threshold > 0.0 && certainty_threshold <= 1.0) {
         return Err(SamplingError::InvalidInput(
@@ -169,7 +169,7 @@ fn pps_indexed(
     n: usize,
     method: PpsMethod,
     certainty_threshold: f64,
-    seed: Option<u64>,
+    seed: u64,
 ) -> Result<PpsDraw> {
     let cap = positions.len();
 
@@ -233,7 +233,7 @@ fn select_pps_stratified(
     stratum: &[i64],
     method: PpsMethod,
     certainty_threshold: f64,
-    seed: Option<u64>,
+    seed: u64,
 ) -> Result<PpsDraw> {
     let mut strat_map: HashMap<i64, Vec<usize>> = HashMap::new();
     for (pos, &s) in stratum.iter().enumerate() {
@@ -243,7 +243,9 @@ fn select_pps_stratified(
     let mut strata: Vec<i64> = strat_map.keys().copied().collect();
     strata.sort_unstable();
 
-    let base_seed = seed.unwrap_or(0);
+    if let PpsN::PerStratum(map) = &n {
+        check_n_map(map, &strat_map)?;
+    }
 
     let tasks: Vec<(&Vec<usize>, usize, u64)> = strata
         .iter()
@@ -252,13 +254,12 @@ fn select_pps_stratified(
             let positions = &strat_map[&s];
             let n_s = match &n {
                 PpsN::Scalar(v) => *v,
-                PpsN::PerStratum(map) => *map.get(&s).unwrap_or(&0),
+                PpsN::PerStratum(map) => map[&s],
             };
             if n_s == 0 {
                 return None;
             }
-            let child_seed =
-                base_seed.wrapping_add((strat_idx as u64).wrapping_mul(0x9e3779b97f4a7c15));
+            let child_seed = seed.wrapping_add((strat_idx as u64).wrapping_mul(0x9e3779b97f4a7c15));
             Some((positions, n_s, child_seed))
         })
         .collect();
@@ -275,7 +276,7 @@ fn select_pps_stratified(
                     *n_s,
                     method,
                     certainty_threshold,
-                    Some(*child_seed),
+                    *child_seed,
                 )
             })
             .collect()
@@ -290,7 +291,7 @@ fn select_pps_stratified(
                     *n_s,
                     method,
                     certainty_threshold,
-                    Some(*child_seed),
+                    *child_seed,
                 )
             })
             .collect()
@@ -323,12 +324,12 @@ fn pps_sys(
     p0: &[f64],
     n: usize,
     certainty_threshold: f64,
-    seed: Option<u64>,
+    seed: u64,
 ) -> Result<PpsDraw> {
     let cap = positions.len();
     let (cert_mask, n_rem) = extract_certainty(p0, n, certainty_threshold);
     let mut hits = vec![0i64; cap];
-    let mut rng = Rng::new(seed.unwrap_or(0));
+    let mut rng = Rng::new(seed);
 
     for (i, &c) in cert_mask.iter().enumerate() {
         if c {
@@ -385,15 +386,9 @@ fn pps_sys(
 // PPS With Replacement
 // ---------------------------------------------------------------------------
 
-fn pps_wr(
-    frame: &[i64],
-    positions: &[usize],
-    p0: &[f64],
-    n: usize,
-    seed: Option<u64>,
-) -> Result<PpsDraw> {
+fn pps_wr(frame: &[i64], positions: &[usize], p0: &[f64], n: usize, seed: u64) -> Result<PpsDraw> {
     let cap = positions.len();
-    let mut rng = Rng::new(seed.unwrap_or(0));
+    let mut rng = Rng::new(seed);
     let mut hits = vec![0i64; cap];
 
     for _ in 0..n {
@@ -428,13 +423,13 @@ fn pps_brewer(
     p0: &[f64],
     n: usize,
     certainty_threshold: f64,
-    seed: Option<u64>,
+    seed: u64,
 ) -> Result<PpsDraw> {
     let cap = p0.len();
     let (cert_mask, n_rem) = extract_certainty(p0, n, certainty_threshold);
     let mut hits = vec![0i64; cap];
     let mut available = vec![true; cap]; // true = eligible (not yet selected, not cert)
-    let mut rng = Rng::new(seed.unwrap_or(0));
+    let mut rng = Rng::new(seed);
 
     for (i, &c) in cert_mask.iter().enumerate() {
         if c {
@@ -509,19 +504,14 @@ fn pps_brewer(
 // PPS Murphy (n=2 only)
 // ---------------------------------------------------------------------------
 
-fn pps_murphy(
-    frame: &[i64],
-    positions: &[usize],
-    p0: &[f64],
-    seed: Option<u64>,
-) -> Result<PpsDraw> {
+fn pps_murphy(frame: &[i64], positions: &[usize], p0: &[f64], seed: u64) -> Result<PpsDraw> {
     let cap = p0.len();
     if cap < 2 || p0.iter().filter(|&&p| p > 0.0).count() < 2 {
         return Err(SamplingError::InvalidInput(
             "Murphy PPS requires at least two units with positive MOS".into(),
         ));
     }
-    let mut rng = Rng::new(seed.unwrap_or(0));
+    let mut rng = Rng::new(seed);
 
     let first = rng.weighted_choice(p0);
 
@@ -573,13 +563,13 @@ fn pps_rs(
     p0: &[f64],
     n: usize,
     certainty_threshold: f64,
-    seed: Option<u64>,
+    seed: u64,
 ) -> Result<PpsDraw> {
     const MAX_ATTEMPTS: usize = 1000;
     let cap = p0.len();
     let (cert_mask, n_rem) = extract_certainty(p0, n, certainty_threshold);
     let mut hits = vec![0i64; cap];
-    let mut rng = Rng::new(seed.unwrap_or(0));
+    let mut rng = Rng::new(seed);
 
     for (i, &c) in cert_mask.iter().enumerate() {
         if c {
@@ -746,7 +736,7 @@ mod tests {
             let frame = vec![10, 20, 30];
             let mos = vec![100.0, 1.0, 1.0];
             let (sel, _hits, probs, cert) =
-                select_pps(&frame, PpsN::Scalar(2), &mos, None, method, 1.0, Some(7)).unwrap();
+                select_pps(&frame, PpsN::Scalar(2), &mos, None, method, 1.0, 7).unwrap();
             assert_eq!(sel.len(), 2, "{method:?}: expected 2 selected units");
             for (i, &s) in sel.iter().enumerate() {
                 if s == 10 {
@@ -790,7 +780,7 @@ mod tests {
         for method in [PpsMethod::Sys, PpsMethod::Brewer, PpsMethod::Rs] {
             let frame = vec![1, 2, 3, 4];
             let mos = vec![5.0, 5.0, 0.0, 0.0];
-            let res = select_pps(&frame, PpsN::Scalar(3), &mos, None, method, 1.0, Some(1));
+            let res = select_pps(&frame, PpsN::Scalar(3), &mos, None, method, 1.0, 1);
             assert!(res.is_err(), "{method:?}: expected error, got {res:?}");
         }
     }
@@ -799,15 +789,7 @@ mod tests {
     fn test_mos_nan_rejected() {
         let frame = vec![1, 2, 3];
         let mos = vec![1.0, f64::NAN, 1.0];
-        let res = select_pps(
-            &frame,
-            PpsN::Scalar(2),
-            &mos,
-            None,
-            PpsMethod::Sys,
-            1.0,
-            None,
-        );
+        let res = select_pps(&frame, PpsN::Scalar(2), &mos, None, PpsMethod::Sys, 1.0, 0);
         assert!(res.is_err());
     }
 
@@ -815,15 +797,7 @@ mod tests {
     fn test_mos_length_mismatch_rejected() {
         let frame = vec![1, 2, 3];
         let mos = vec![1.0];
-        let res = select_pps(
-            &frame,
-            PpsN::Scalar(2),
-            &mos,
-            None,
-            PpsMethod::Sys,
-            1.0,
-            None,
-        );
+        let res = select_pps(&frame, PpsN::Scalar(2), &mos, None, PpsMethod::Sys, 1.0, 0);
         assert!(res.is_err());
     }
 
@@ -839,7 +813,7 @@ mod tests {
             Some(&stratum),
             PpsMethod::Sys,
             1.0,
-            None,
+            0,
         );
         assert!(res.is_err());
     }
@@ -860,7 +834,7 @@ mod sampford_tests {
             None,
             PpsMethod::Murphy,
             1.0,
-            Some(1),
+            1,
         )
         .unwrap_err();
         assert!(err.to_string().contains("exactly 2"), "got: {err}");
@@ -871,7 +845,7 @@ mod sampford_tests {
             None,
             PpsMethod::Murphy,
             1.0,
-            Some(1),
+            1,
         )
         .unwrap();
         assert_eq!(sel.len(), 2);
@@ -883,16 +857,8 @@ mod sampford_tests {
         // shortcut previously returned each unit once with pi = 1.
         let frame = vec![1, 2, 3];
         let mos = vec![1.0, 1.0, 2.0];
-        let (_sel, hits, _probs, _cert) = select_pps(
-            &frame,
-            PpsN::Scalar(7),
-            &mos,
-            None,
-            PpsMethod::Wr,
-            1.0,
-            Some(3),
-        )
-        .unwrap();
+        let (_sel, hits, _probs, _cert) =
+            select_pps(&frame, PpsN::Scalar(7), &mos, None, PpsMethod::Wr, 1.0, 3).unwrap();
         assert_eq!(
             hits.iter().sum::<i64>(),
             7,
@@ -907,15 +873,7 @@ mod sampford_tests {
         // acceptance collapses; must error, not fall back to a shuffle.
         let frame = vec![1, 2, 3, 4];
         let mos = vec![0.499, 0.167, 0.167, 0.167];
-        let result = select_pps(
-            &frame,
-            PpsN::Scalar(2),
-            &mos,
-            None,
-            PpsMethod::Rs,
-            1.0,
-            Some(5),
-        );
+        let result = select_pps(&frame, PpsN::Scalar(2), &mos, None, PpsMethod::Rs, 1.0, 5);
         if let Err(e) = result {
             let msg = e.to_string();
             assert!(
@@ -957,7 +915,7 @@ mod sampford_tests {
                 None,
                 PpsMethod::Rs,
                 1.0,
-                Some(seed),
+                seed,
             )
             .unwrap();
             // `sel` holds the selected frame ids (= positions here).

@@ -21,7 +21,7 @@
 //! R to twelve significant figures, and a poststratified margin total giving
 //! exactly zero.
 
-use crate::estimation::error::EResult;
+use crate::estimation::error::{EResult, EstimationError};
 use crate::regression::wols::solve_kxk;
 
 /// Marks a row outside the adjustment: factor 1, no centring.
@@ -102,9 +102,12 @@ impl CalibSweep {
     /// `subset()` zeroes the design weights and leaves `postStrata` alone.
     /// Restricting instead was measured at 9% off R on apiclus1.
     pub fn apply(&self, x: &mut [f64]) {
-        if x.len() != self.new_w.len() {
-            return;
-        }
+        // Built from the frame the scores come from, so a mismatch is a kernel bug.
+        assert_eq!(
+            x.len(),
+            self.new_w.len(),
+            "calibration sweep length mismatch"
+        );
         match self.kind {
             SweepKind::Cells => {
                 if self.cells.is_empty() {
@@ -332,42 +335,49 @@ fn floats_from(df: &DataFrame, name: &str) -> EResult<Vec<f64>> {
     Ok(s.f64()?.iter().map(|v| v.unwrap_or(f64::NAN)).collect())
 }
 
-/// Build a sweep, or `None` when the record is provenance-only, its columns are
-/// gone, or the active weight no longer matches what the record describes.
-///
-/// Returning `None` is the documented fallback: variance reverts to treating
-/// weights as fixed, which is what it does today, rather than centring against
-/// a structure that may no longer hold.
-pub fn build_calib_sweep(df: &DataFrame, spec: &CalibSpec) -> Option<CalibSweep> {
+/// Build the sweep for a record Python has already checked still describes the data.
+pub fn build_calib_sweep(df: &DataFrame, spec: &CalibSpec) -> EResult<CalibSweep> {
     let kind = match spec.kind.as_str() {
         "poststratification" | "standardization" => SweepKind::Cells,
         "raking" => SweepKind::Raking,
         "calibration" => SweepKind::Greg,
-        _ => return None,
+        other => {
+            return Err(EstimationError::InvalidChoice {
+                what: "calibration kind",
+                got: other.to_string(),
+                expected: "'poststratification', 'standardization', 'raking' or 'calibration'",
+            });
+        }
     };
 
-    let prev_w = floats_from(df, &spec.prev_wgt_col).ok()?;
-    let new_w = floats_from(df, &spec.new_wgt_col).ok()?;
+    let prev_w = floats_from(df, &spec.prev_wgt_col)?;
+    let new_w = floats_from(df, &spec.new_wgt_col)?;
 
     let (mut cells, mut n_cells) = (Vec::new(), Vec::new());
     for name in &spec.cells_cols {
-        let (c, k) = codes_from(df, name).ok()?;
+        let (c, k) = codes_from(df, name)?;
         cells.push(c);
         n_cells.push(k);
     }
 
     let mut aux = Vec::new();
     for name in &spec.aux_cols {
-        aux.push(floats_from(df, name).ok()?);
+        aux.push(floats_from(df, name)?);
     }
 
     match kind {
-        SweepKind::Greg if aux.is_empty() => return None,
-        SweepKind::Cells | SweepKind::Raking if cells.is_empty() => return None,
+        SweepKind::Greg if aux.is_empty() => {
+            return Err(EstimationError::Empty(
+                "a calibration sweep needs calib_aux",
+            ));
+        }
+        SweepKind::Cells | SweepKind::Raking if cells.is_empty() => {
+            return Err(EstimationError::Empty("a cell sweep needs calib_cells"));
+        }
         _ => {}
     }
 
-    Some(CalibSweep::new(
+    Ok(CalibSweep::new(
         kind,
         cells,
         n_cells,
@@ -376,6 +386,38 @@ pub fn build_calib_sweep(df: &DataFrame, spec: &CalibSpec) -> Option<CalibSweep>
         new_w,
         spec.pins_total,
     ))
+}
+
+/// The sweep for a wrapper's `calib_*` arguments; `None` when no record was passed.
+///
+/// `new_wgt` normally IS `weight_col`, since the record is only honoured when
+/// its new_wgt is the active weight. The exception is a subpopulation filter,
+/// which zeroes the weight column in place: the sweep still needs the
+/// full-sample calibrated weights, so Python snapshots them before zeroing and
+/// names the snapshot here.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn make_calib(
+    df: &DataFrame,
+    weight_col: &str,
+    kind: Option<String>,
+    cells: Option<Vec<String>>,
+    aux: Option<Vec<String>>,
+    prev_wgt: Option<String>,
+    pins_total: Option<bool>,
+    new_wgt: Option<String>,
+) -> EResult<Option<CalibSweep>> {
+    let Some(kind) = kind else {
+        return Ok(None);
+    };
+    let spec = CalibSpec {
+        kind,
+        cells_cols: cells.unwrap_or_default(),
+        aux_cols: aux.unwrap_or_default(),
+        prev_wgt_col: prev_wgt.ok_or(EstimationError::Empty("calib_kind needs calib_prev_wgt"))?,
+        new_wgt_col: new_wgt.unwrap_or_else(|| weight_col.to_string()),
+        pins_total: pins_total.unwrap_or(true),
+    };
+    build_calib_sweep(df, &spec).map(Some)
 }
 
 /// Centre a score column, for callers that hold `Float64Chunked` rather than a

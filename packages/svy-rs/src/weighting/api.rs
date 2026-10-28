@@ -9,6 +9,9 @@ use ndarray::{Array1, ArrayView1};
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
+use crate::errors::to_py_err;
+use crate::weighting::replication::ReplicationError;
+
 /// What `trim_weights` returns to Python.
 type TrimOutput = (
     Py<numpy::PyArray1<f64>>, // trimmed weights
@@ -52,7 +55,7 @@ pub fn rake(
     let result = crate::weighting::raking::rake_impl(
         wgt_arr, &indices, &targets, ll_bound, up_bound, tol, max_iter,
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    .map_err(|e| to_py_err(&e))?;
 
     Ok(result.into_pyarray(py).to_owned().into())
 }
@@ -76,7 +79,7 @@ pub fn adjust_nr(
         resp_status.as_array(),
         unknown_to_inelig,
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    .map_err(|e| to_py_err(&e))?;
 
     Ok(result.into_pyarray(py).to_owned().into())
 }
@@ -98,7 +101,7 @@ pub fn normalize(
 
     let result =
         crate::weighting::normalization::normalize_impl(wgt.as_array(), by.as_ref(), ctrl.as_ref())
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+            .map_err(|e| to_py_err(&e))?;
 
     Ok(result.into_pyarray(py).to_owned().into())
 }
@@ -120,7 +123,7 @@ pub fn poststratify(
         by_arr.as_array(),
         &ctrl,
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    .map_err(|e| to_py_err(&e))?;
 
     Ok(result.into_pyarray(py).to_owned().into())
 }
@@ -149,7 +152,7 @@ pub fn calibrate(
         scale_view,
         additive,
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    .map_err(|e| to_py_err(&e))?;
 
     Ok(result.into_pyarray(py).to_owned().into())
 }
@@ -181,7 +184,7 @@ pub fn calibrate_by_domain(
         scale_view,
         additive,
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    .map_err(|e| to_py_err(&e))?;
 
     Ok(result.into_pyarray(py).to_owned().into())
 }
@@ -204,7 +207,7 @@ pub fn calibrate_parallel(
         totals.as_array(),
         scale_view,
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    .map_err(|e| to_py_err(&e))?;
 
     Ok(result.into_pyarray(py).to_owned().into())
 }
@@ -218,8 +221,8 @@ pub fn calibrate_parallel(
 /// requested n_reps (raising a typed svy error) before calling into Rust.
 #[pyfunction]
 pub fn brr_hadamard_size(n_strata: usize) -> PyResult<usize> {
-    let (_h, size) = crate::weighting::replication::get_hadamard_for_brr(n_strata)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    let (_h, size) =
+        crate::weighting::replication::get_hadamard_for_brr(n_strata).map_err(|e| to_py_err(&e))?;
     Ok(size)
 }
 
@@ -242,7 +245,7 @@ pub fn create_brr_wgts(
         fay_coef,
         seed,
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    .map_err(|e| to_py_err(&e))?;
 
     Ok((result.into_pyarray(py).to_owned().into(), df))
 }
@@ -265,7 +268,7 @@ pub fn create_jk_wgts(
         paired,
         seed,
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    .map_err(|e| to_py_err(&e))?;
 
     Ok((result.into_pyarray(py).to_owned().into(), df, rscales))
 }
@@ -281,12 +284,7 @@ pub fn create_bootstrap_wgts(
     seed: Option<u64>,
 ) -> PyResult<(Py<PyArray2<f64>>, f64)> {
     let stratum_view = stratum.as_ref().map(|s| s.as_array());
-    let seed = seed.unwrap_or_else(|| {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(42)
-    });
+    let seed = seed.ok_or_else(|| to_py_err(&ReplicationError::MissingSeed))?;
 
     let (result, df) = crate::weighting::replication::create_bootstrap_weights(
         wgt.as_array(),
@@ -295,7 +293,7 @@ pub fn create_bootstrap_wgts(
         n_reps,
         seed,
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    .map_err(|e| to_py_err(&e))?;
 
     Ok((result.into_pyarray(py).to_owned().into(), df))
 }
@@ -308,19 +306,14 @@ pub fn create_poisson_bootstrap_wgts(
     n_reps: usize,
     seed: Option<u64>,
 ) -> PyResult<(Py<PyArray2<f64>>, f64)> {
-    let seed = seed.unwrap_or_else(|| {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(42)
-    });
+    let seed = seed.ok_or_else(|| to_py_err(&ReplicationError::MissingSeed))?;
 
     let (result, df) = crate::weighting::replication::create_poisson_bootstrap_weights(
         wgt.as_array(),
         n_reps,
         seed,
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    .map_err(|e| to_py_err(&e))?;
 
     Ok((result.into_pyarray(py).to_owned().into(), df))
 }
@@ -343,7 +336,7 @@ pub fn create_sdr_wgts(
         order_view,
         n_reps,
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    .map_err(|e| to_py_err(&e))?;
 
     Ok((result.into_pyarray(py).to_owned().into(), df))
 }
@@ -371,7 +364,7 @@ pub fn trim_weights(
         max_iter,
         tol,
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    .map_err(|e| to_py_err(&e))?;
 
     Ok((
         out.weights.into_pyarray(py).to_owned().into(),
@@ -405,7 +398,7 @@ pub fn trim_weights_matrix(
         max_iter,
         tol,
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    .map_err(|e| to_py_err(&e))?;
 
     Ok(out.into_pyarray(py).to_owned().into())
 }

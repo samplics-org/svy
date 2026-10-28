@@ -15,7 +15,7 @@ use rayon::prelude::*;
 use crate::estimation::association::{
     AssocKind, point_estimate_assoc, scores_assoc, srs_variance_assoc_of,
 };
-use crate::estimation::calib_sweep::{CalibSpec, CalibSweep, build_calib_sweep};
+use crate::estimation::calib_sweep::{CalibSweep, make_calib};
 use crate::estimation::into_contiguous;
 use crate::estimation::taylor::{
     SrsRef, SvyQuantileMethod, TaylorDesign, active_count, build_taylor_design, degrees_of_freedom,
@@ -91,7 +91,8 @@ pub fn taylor_mean(
         calib_prev_wgt,
         calib_pins_total,
         calib_new_wgt,
-    );
+    )
+    .map_err(|e| to_py_err(&e))?;
     let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total).map_err(|e| to_py_err(&e))?;
 
     if by_col.is_none() {
@@ -183,35 +184,6 @@ pub fn taylor_mean_multi(
         })
         .map_err(|e| to_py_err(&e))?;
     Ok(PyDataFrame(result))
-}
-
-/// Build a score-centring sweep from the record columns Python passes.
-///
-/// `new_wgt` normally IS `weight_col`, since the record is only honoured when
-/// its new_wgt is the active weight. The exception is a subpopulation filter,
-/// which zeroes the weight column in place: the sweep still needs the
-/// full-sample calibrated weights, so Python snapshots them before zeroing and
-/// names the snapshot here.
-#[allow(clippy::too_many_arguments)]
-fn make_calib(
-    df: &DataFrame,
-    weight_col: &str,
-    kind: Option<String>,
-    cells: Option<Vec<String>>,
-    aux: Option<Vec<String>>,
-    prev_wgt: Option<String>,
-    pins_total: Option<bool>,
-    new_wgt: Option<String>,
-) -> Option<CalibSweep> {
-    let spec = CalibSpec {
-        kind: kind?,
-        cells_cols: cells.unwrap_or_default(),
-        aux_cols: aux.unwrap_or_default(),
-        prev_wgt_col: prev_wgt?,
-        new_wgt_col: new_wgt.unwrap_or_else(|| weight_col.to_string()),
-        pins_total: pins_total.unwrap_or(true),
-    };
-    build_calib_sweep(df, &spec)
 }
 
 /// Shared skeleton for the ungrouped single-estimate Taylor kernels.
@@ -615,7 +587,8 @@ pub fn taylor_total(
         calib_prev_wgt,
         calib_pins_total,
         calib_new_wgt,
-    );
+    )
+    .map_err(|e| to_py_err(&e))?;
     let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total).map_err(|e| to_py_err(&e))?;
     if by_col.is_none() {
         let result = compute_total_ungrouped(
@@ -981,7 +954,8 @@ pub fn taylor_ratio(
         calib_prev_wgt,
         calib_pins_total,
         calib_new_wgt,
-    );
+    )
+    .map_err(|e| to_py_err(&e))?;
     let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total).map_err(|e| to_py_err(&e))?;
     if by_col.is_none() {
         let result = compute_ratio_ungrouped(
@@ -1704,7 +1678,8 @@ fn taylor_levels(
         calib_prev_wgt,
         calib_pins_total,
         calib_new_wgt,
-    );
+    )
+    .map_err(|e| to_py_err(&e))?;
     let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total).map_err(|e| to_py_err(&e))?;
     if by_col.is_none() {
         let (result, cov) = compute_levels_ungrouped(
@@ -2238,7 +2213,8 @@ pub fn taylor_quantile(
         calib_prev_wgt,
         calib_pins_total,
         calib_new_wgt,
-    );
+    )
+    .map_err(|e| to_py_err(&e))?;
     let q_method = quantile_method
         .as_deref()
         .map(SvyQuantileMethod::parse)
@@ -2318,7 +2294,8 @@ pub fn taylor_quantile_multi(
         calib_prev_wgt,
         calib_pins_total,
         calib_new_wgt,
-    );
+    )
+    .map_err(|e| to_py_err(&e))?;
     let q_method = quantile_method
         .as_deref()
         .map(SvyQuantileMethod::parse)

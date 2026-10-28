@@ -7,10 +7,12 @@
 // - SDR (Successive Difference Replication)
 
 use super::hadamard_tables::get_hardcoded_hadamard;
+use crate::errors::Coded;
 use crate::rng::Rng;
 use ndarray::{Array1, Array2, ArrayView1, ShapeBuilder};
 use rayon::prelude::*;
 use std::collections::HashMap;
+use thiserror::Error;
 
 /// Each stratum's index and PSUs, and each (stratum, PSU)'s position within its stratum.
 type BrrStratumMap = (HashMap<i64, (i64, Vec<i64>)>, HashMap<(i64, i64), usize>);
@@ -19,40 +21,39 @@ type BrrStratumMap = (HashMap<i64, (i64, Vec<i64>)>, HashMap<(i64, i64), usize>)
 pub type Result<T> = std::result::Result<T, ReplicationError>;
 
 /// Errors that can occur during replicate weight creation
-#[derive(Debug, Clone)]
+#[derive(Error, Debug, Clone)]
 pub enum ReplicationError {
+    #[error("Dimension mismatch: expected {expected}, got {got}")]
     DimensionMismatch { expected: usize, got: usize },
+
+    #[error("Invalid input: {0}")]
     InvalidInput(String),
+
+    #[error("BRR requires 2 PSUs per stratum, stratum {stratum} has {count}")]
     BrrPsuCount { stratum: i64, count: usize },
+
+    #[error("Paired JK requires ≥2 PSUs per stratum, stratum {stratum} has {count}")]
     PairedJkPsuCount { stratum: i64, count: usize },
+
+    #[error("Insufficient PSUs: required {required}, got {got}")]
     InsufficientPsus { required: usize, got: usize },
+
+    #[error("a seed is required: the replicates would otherwise repeat on every call")]
+    MissingSeed,
 }
 
-impl std::fmt::Display for ReplicationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Coded for ReplicationError {
+    fn code(&self) -> &'static str {
         match self {
-            Self::DimensionMismatch { expected, got } => {
-                write!(f, "Dimension mismatch: expected {}, got {}", expected, got)
-            }
-            Self::InvalidInput(msg) => write!(f, "Invalid input: {}", msg),
-            Self::BrrPsuCount { stratum, count } => write!(
-                f,
-                "BRR requires 2 PSUs per stratum, stratum {} has {}",
-                stratum, count
-            ),
-            Self::PairedJkPsuCount { stratum, count } => write!(
-                f,
-                "Paired JK requires ≥2 PSUs per stratum, stratum {} has {}",
-                stratum, count
-            ),
-            Self::InsufficientPsus { required, got } => {
-                write!(f, "Insufficient PSUs: required {}, got {}", required, got)
-            }
+            Self::DimensionMismatch { .. } => "SHAPE_MISMATCH",
+            _ => "INVALID_VALUE",
         }
     }
-}
 
-impl std::error::Error for ReplicationError {}
+    fn invalid_input(&self) -> bool {
+        true
+    }
+}
 
 // ============================================================================
 // Hadamard Matrix Generation
@@ -492,7 +493,7 @@ fn create_jk2_weights(
     strata.sort();
     let n_reps = strata.len();
 
-    let mut rng = Rng::new(seed.unwrap_or(0));
+    let mut rng = Rng::new(seed.ok_or(ReplicationError::MissingSeed)?);
     let deleted_psu_idx: HashMap<i64, usize> = strata
         .iter()
         .map(|&s| (s, rng.next_index(stratum_psus[&s].len())))

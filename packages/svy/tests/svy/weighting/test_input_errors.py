@@ -97,6 +97,22 @@ def test_calibration_scale_of_wrong_type(sample, scale):
 
 
 @pytest.mark.parametrize(
+    "scale",
+    [0, -1.0, float("nan"), float("inf"), [1.0] * (N - 1) + [0.0]],
+    ids=["zero", "negative", "nan", "inf", "one row zero"],
+)
+def test_calibration_scale_not_positive(sample, scale):
+    _raises(
+        WeightingError,
+        ValueError,
+        Code.INVALID_RANGE,
+        lambda: sample.weighting.calibrate(controls={"x": 60.0}, scale=scale),
+        param="scale",
+        says="must be finite and greater than 0",
+    )
+
+
+@pytest.mark.parametrize(
     "n_reps, kind, code",
     [
         (1, ValueError, Code.INVALID_RANGE),

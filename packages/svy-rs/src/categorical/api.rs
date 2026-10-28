@@ -14,7 +14,7 @@ use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 
-use crate::estimation::calib_sweep::{CalibSpec, CalibSweep, build_calib_sweep};
+use crate::estimation::calib_sweep::{CalibSweep, make_calib};
 use crate::estimation::into_contiguous;
 use crate::estimation::taylor::active_count;
 
@@ -331,19 +331,17 @@ pub fn ttest_rs(
 ) -> PyResult<PyDataFrame> {
     let df = into_contiguous(data);
     let rep = rep_spec(&df, rep_weight_cols, rep_coefs, rep_df, variance_center)?;
-    let calib = calib_kind.zip(calib_prev_wgt).and_then(|(kind, prev)| {
-        build_calib_sweep(
-            &df,
-            &CalibSpec {
-                kind,
-                cells_cols: calib_cells.unwrap_or_default(),
-                aux_cols: calib_aux.unwrap_or_default(),
-                prev_wgt_col: prev,
-                new_wgt_col: calib_new_wgt.unwrap_or_else(|| weight_col.clone()),
-                pins_total: calib_pins_total.unwrap_or(true),
-            },
-        )
-    });
+    let calib = make_calib(
+        &df,
+        &weight_col,
+        calib_kind,
+        calib_cells,
+        calib_aux,
+        calib_prev_wgt,
+        calib_pins_total,
+        calib_new_wgt,
+    )
+    .map_err(|e| to_py_err(&e))?;
     let result = compute_svyttest(
         &df,
         &y_col,
@@ -963,19 +961,17 @@ pub fn tabulate_rs(
 ) -> PyResult<(PyDataFrame, PyDataFrame)> {
     let df = into_contiguous(data);
     let rep = rep_spec(&df, rep_weight_cols, rep_coefs, rep_df, variance_center)?;
-    let calib = calib_kind.zip(calib_prev_wgt).and_then(|(kind, prev)| {
-        build_calib_sweep(
-            &df,
-            &CalibSpec {
-                kind,
-                cells_cols: calib_cells.unwrap_or_default(),
-                aux_cols: calib_aux.unwrap_or_default(),
-                prev_wgt_col: prev,
-                new_wgt_col: calib_new_wgt.unwrap_or_else(|| weight_col.clone()),
-                pins_total: calib_pins_total.unwrap_or(true),
-            },
-        )
-    });
+    let calib = make_calib(
+        &df,
+        &weight_col,
+        calib_kind,
+        calib_cells,
+        calib_aux,
+        calib_prev_wgt,
+        calib_pins_total,
+        calib_new_wgt,
+    )
+    .map_err(|e| to_py_err(&e))?;
     let result = compute_tabulate(
         &df,
         &rowvar_col,

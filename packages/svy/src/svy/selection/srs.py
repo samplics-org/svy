@@ -73,7 +73,7 @@ def _encode_stratum(stratum: pl.Series | None) -> tuple[dict[str, int], np.ndarr
 
 def _remap_n_map(n_map, label_to_int):
     """Remap string n_map keys to their i64 encoding."""
-    return {label_to_int[k]: v for k, v in n_map.items() if k in label_to_int}
+    return {label_to_int[k]: v for k, v in n_map.items()}
 
 
 def _srs_kernel_args(frame, n, stratum) -> dict:

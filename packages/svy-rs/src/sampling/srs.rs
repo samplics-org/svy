@@ -1,34 +1,66 @@
 // src/sampling/srs.rs
 
+use crate::errors::Coded;
 use crate::rng::Rng;
 use std::collections::HashMap;
+use thiserror::Error;
 
 /// Selected rows, their hits and inclusion probabilities.
 pub type SrsDraw = (Vec<i64>, Vec<i64>, Vec<f64>);
 
-#[derive(Debug, Clone)]
+#[derive(Error, Debug, Clone)]
 pub enum SamplingError {
+    #[error("Cannot sample from an empty frame")]
     EmptyFrame,
+
+    #[error("Cannot draw n={n} without replacement from population of {pop}")]
     OversamplingWor { n: usize, pop: usize },
+
+    #[error("a seed is required: the draw would otherwise repeat on every call")]
+    MissingSeed,
+
+    #[error("n_map has no entry for stratum {0}")]
+    NMapMissingStratum(i64),
+
+    #[error("n_map names stratum {0}, which is not in the frame")]
+    NMapUnknownStratum(i64),
+
+    #[error("Unknown PPS method {0:?}. Use: sys, wr, brewer, murphy, rs")]
+    UnknownMethod(String),
+
+    #[error("Invalid input: {0}")]
     InvalidInput(String),
 }
 
-impl std::fmt::Display for SamplingError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Coded for SamplingError {
+    fn code(&self) -> &'static str {
         match self {
-            Self::EmptyFrame => write!(f, "Cannot sample from an empty frame"),
-            Self::OversamplingWor { n, pop } => write!(
-                f,
-                "Cannot draw n={n} without replacement from population of {pop}"
-            ),
-            Self::InvalidInput(msg) => write!(f, "Invalid input: {msg}"),
+            Self::EmptyFrame
+            | Self::MissingSeed
+            | Self::NMapMissingStratum(_)
+            | Self::InvalidInput(_) => "INVALID_VALUE",
+            Self::OversamplingWor { .. } => "SELECTION_N_EXCEEDS_GROUP",
+            Self::NMapUnknownStratum(_) | Self::UnknownMethod(_) => "INVALID_CHOICE",
         }
+    }
+
+    fn invalid_input(&self) -> bool {
+        true
     }
 }
 
-impl std::error::Error for SamplingError {}
-
 pub type Result<T> = std::result::Result<T, SamplingError>;
+
+/// Every stratum needs its n, and every n its stratum.
+pub(crate) fn check_n_map<V>(map: &HashMap<i64, usize>, strata: &HashMap<i64, V>) -> Result<()> {
+    if let Some(&s) = map.keys().filter(|s| !strata.contains_key(s)).min() {
+        return Err(SamplingError::NMapUnknownStratum(s));
+    }
+    if let Some(&s) = strata.keys().filter(|s| !map.contains_key(s)).min() {
+        return Err(SamplingError::NMapMissingStratum(s));
+    }
+    Ok(())
+}
 
 #[derive(Clone)]
 pub enum SrsN {
@@ -45,7 +77,7 @@ pub fn select_srs(
     n: SrsN,
     stratum: Option<&[i64]>,
     wr: bool,
-    seed: Option<u64>,
+    seed: u64,
 ) -> Result<SrsDraw> {
     match stratum {
         None => {
@@ -87,7 +119,7 @@ fn srs_unstratified_indexed(
     positions: &[usize],
     n: usize,
     wr: bool,
-    seed: Option<u64>,
+    seed: u64,
 ) -> Result<SrsDraw> {
     let cap = positions.len();
 
@@ -101,7 +133,7 @@ fn srs_unstratified_indexed(
         return Ok((vec![], vec![], vec![]));
     }
 
-    let mut rng = Rng::new(seed.unwrap_or(0));
+    let mut rng = Rng::new(seed);
     // hits[i] counts how many times positions[i] was selected
     let mut hits = vec![0i64; cap];
 
@@ -154,7 +186,7 @@ fn select_srs_stratified(
     n: SrsN,
     stratum: &[i64],
     wr: bool,
-    seed: Option<u64>,
+    seed: u64,
 ) -> Result<SrsDraw> {
     // Group positions by stratum — one pass, no per-stratum alloc of frame values
     let mut strat_map: HashMap<i64, Vec<usize>> = HashMap::new();
@@ -165,7 +197,9 @@ fn select_srs_stratified(
     let mut strata: Vec<i64> = strat_map.keys().copied().collect();
     strata.sort_unstable();
 
-    let base_seed = seed.unwrap_or(0);
+    if let SrsN::PerStratum(map) = &n {
+        check_n_map(map, &strat_map)?;
+    }
 
     // Build (stratum_label, positions, n_s, child_seed) tuples
     let tasks: Vec<(i64, &Vec<usize>, usize, u64)> = strata
@@ -175,13 +209,12 @@ fn select_srs_stratified(
             let positions = &strat_map[&s];
             let n_s = match &n {
                 SrsN::Scalar(v) => *v,
-                SrsN::PerStratum(map) => *map.get(&s).unwrap_or(&0),
+                SrsN::PerStratum(map) => map[&s],
             };
             if n_s == 0 {
                 return None;
             }
-            let child_seed =
-                base_seed.wrapping_add((strat_idx as u64).wrapping_mul(0x9e3779b97f4a7c15));
+            let child_seed = seed.wrapping_add((strat_idx as u64).wrapping_mul(0x9e3779b97f4a7c15));
             Some((s, positions, n_s, child_seed))
         })
         .collect();
@@ -192,14 +225,14 @@ fn select_srs_stratified(
         tasks
             .par_iter()
             .map(|(_, positions, n_s, child_seed)| {
-                srs_unstratified_indexed(frame, positions, *n_s, wr, Some(*child_seed))
+                srs_unstratified_indexed(frame, positions, *n_s, wr, *child_seed)
             })
             .collect()
     } else {
         tasks
             .iter()
             .map(|(_, positions, n_s, child_seed)| {
-                srs_unstratified_indexed(frame, positions, *n_s, wr, Some(*child_seed))
+                srs_unstratified_indexed(frame, positions, *n_s, wr, *child_seed)
             })
             .collect()
     };
@@ -230,10 +263,10 @@ mod tests {
     fn test_stratum_length_mismatch_rejected() {
         let frame = vec![1, 2];
         let stratum_long = vec![0, 0, 0];
-        assert!(select_srs(&frame, SrsN::Scalar(1), Some(&stratum_long), false, None).is_err());
+        assert!(select_srs(&frame, SrsN::Scalar(1), Some(&stratum_long), false, 0).is_err());
 
         let frame = vec![1, 2, 3];
         let stratum_short = vec![0, 0];
-        assert!(select_srs(&frame, SrsN::Scalar(1), Some(&stratum_short), false, None).is_err());
+        assert!(select_srs(&frame, SrsN::Scalar(1), Some(&stratum_short), false, 0).is_err());
     }
 }

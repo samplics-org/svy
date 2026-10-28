@@ -636,6 +636,14 @@ def calibrate_matrix(
                 got=scale,
                 expected="a number or one number per row",
             ) from e
+    if not np.all(np.isfinite(scale_arr) & (scale_arr > 0)):
+        raise WeightingError.invalid_range(
+            where=where,
+            param="scale",
+            got=scale,
+            detail="Parameter 'scale' must be finite and greater than 0 in every row.",
+            hint="The linear distance divides by scale; give each row a positive value.",
+        )
 
     totals_arr: np.ndarray = np.empty(0, dtype=np.float64)
     controls_dict_main: dict[int, list[float]] = {}

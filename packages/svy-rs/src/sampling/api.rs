@@ -9,8 +9,9 @@ use pyo3::prelude::*;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
+use crate::errors::to_py_err;
 use crate::sampling::pps::{PpsDraw, PpsMethod, PpsN, select_pps};
-use crate::sampling::srs::{SrsDraw, SrsN, select_srs};
+use crate::sampling::srs::{SamplingError, SrsDraw, SrsN, select_srs};
 
 /// A 1-D input: a numpy array of exactly `T`, or any sequence (older callers pass lists).
 #[derive(FromPyObject)]
@@ -41,12 +42,12 @@ fn parse_n<N>(
     match (n_scalar, n_map) {
         (Some(v), None) => Ok(scalar(v)),
         (None, Some(m)) => Ok(per_stratum(m)),
-        (Some(_), Some(_)) => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Provide either n_scalar or n_map, not both",
-        )),
-        (None, None) => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Provide either n_scalar or n_map",
-        )),
+        (Some(_), Some(_)) => Err(to_py_err(&SamplingError::InvalidInput(
+            "Provide either n_scalar or n_map, not both".into(),
+        ))),
+        (None, None) => Err(to_py_err(&SamplingError::InvalidInput(
+            "Provide either n_scalar or n_map".into(),
+        ))),
     }
 }
 
@@ -63,7 +64,7 @@ fn parse_n<N>(
 /// n_map    : per-stratum {stratum_label: n} — mutually exclusive with n_scalar
 /// stratum  : stratum label per row (None for unstratified)
 /// wr       : sampling with replacement
-/// seed     : RNG seed (None → 0)
+/// seed     : RNG seed (required)
 ///
 /// Returns
 /// -------
@@ -82,8 +83,8 @@ pub fn select_srs_rs(
 
     let stratum = stratum.as_ref().map(Array1::values);
 
-    select_srs(&frame.values(), n, stratum.as_deref(), wr, seed)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+    let seed = seed.ok_or_else(|| to_py_err(&SamplingError::MissingSeed))?;
+    select_srs(&frame.values(), n, stratum.as_deref(), wr, seed).map_err(|e| to_py_err(&e))
 }
 
 // ---------------------------------------------------------------------------
@@ -128,16 +129,14 @@ pub fn select_pps_rs(
     certainty_threshold: f64,
     seed: Option<u64>,
 ) -> PyResult<PpsDraw> {
-    let pps_method = PpsMethod::from_str(method).ok_or_else(|| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "Unknown PPS method {method:?}. Use: sys, wr, brewer, murphy, rs"
-        ))
-    })?;
+    let pps_method = PpsMethod::from_str(method)
+        .ok_or_else(|| to_py_err(&SamplingError::UnknownMethod(method.to_string())))?;
 
     let n = parse_n(n_scalar, n_map, PpsN::Scalar, PpsN::PerStratum)?;
 
     let stratum = stratum.as_ref().map(Array1::values);
 
+    let seed = seed.ok_or_else(|| to_py_err(&SamplingError::MissingSeed))?;
     select_pps(
         &frame.values(),
         n,
@@ -147,7 +146,7 @@ pub fn select_pps_rs(
         certainty_threshold,
         seed,
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+    .map_err(|e| to_py_err(&e))
 }
 
 // ---------------------------------------------------------------------------
@@ -171,9 +170,9 @@ pub fn select_srs_batch_rs(
     let stratum = stratum.as_ref().map(Array1::values);
     seeds
         .par_iter()
-        .map(|&seed| select_srs(&frame, n.clone(), stratum.as_deref(), wr, Some(seed)))
+        .map(|&seed| select_srs(&frame, n.clone(), stratum.as_deref(), wr, seed))
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+        .map_err(|e| to_py_err(&e))
 }
 
 /// `select_pps_rs` once per seed, in parallel; draw r is that call with `seeds[r]`.
@@ -200,11 +199,8 @@ pub fn select_pps_batch_rs(
     certainty_threshold: f64,
 ) -> PyResult<Vec<PpsDraw>> {
     use rayon::prelude::*;
-    let pps_method = PpsMethod::from_str(method).ok_or_else(|| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "Unknown PPS method {method:?}. Use: sys, wr, brewer, murphy, rs"
-        ))
-    })?;
+    let pps_method = PpsMethod::from_str(method)
+        .ok_or_else(|| to_py_err(&SamplingError::UnknownMethod(method.to_string())))?;
     let n = parse_n(n_scalar, n_map, PpsN::Scalar, PpsN::PerStratum)?;
     let frame = frame.values();
     let mos = mos.values();
@@ -219,9 +215,9 @@ pub fn select_pps_batch_rs(
                 stratum.as_deref(),
                 pps_method,
                 certainty_threshold,
-                Some(seed),
+                seed,
             )
         })
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+        .map_err(|e| to_py_err(&e))
 }
