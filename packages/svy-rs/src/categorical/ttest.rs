@@ -127,7 +127,7 @@ pub fn ttest_one_sample(
         strata.is_some(),
         y.len(),
         None,
-    );
+    )?;
     let variance = taylor_variance_in(
         &scores,
         strata,
@@ -185,7 +185,7 @@ pub fn ttest_one_sample_domain(
         strata.is_some(),
         y.len(),
         Some(domain_mask),
-    );
+    )?;
     let variance = taylor_variance_in(
         &scores,
         strata,
@@ -264,7 +264,7 @@ pub fn ttest_two_sample(
     let wols = fit_wols(y, &xmat, w, n, k)?;
 
     // Design-based SE via influence functions
-    let active = singleton_rows(singleton_method, calib.is_some(), strata.is_some(), rows);
+    let active = singleton_rows(singleton_method, calib.is_some(), strata.is_some(), rows)?;
     let ses = influence_se(
         &wols.influence,
         w,
@@ -368,7 +368,7 @@ fn compute_per_group_ses(
             strata.is_some(),
             in_group.len(),
             Some(&BooleanChunked::from_slice("rows".into(), &in_group)),
-        );
+        )?;
         let var = taylor_variance_in(
             &scores,
             strata,

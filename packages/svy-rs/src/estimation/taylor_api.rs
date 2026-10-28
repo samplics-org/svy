@@ -2218,6 +2218,8 @@ pub fn taylor_quantile(
     let q_method = quantile_method
         .as_deref()
         .map(SvyQuantileMethod::parse)
+        .transpose()
+        .map_err(|e| to_py_err(&e))?
         .unwrap_or(SvyQuantileMethod::Higher);
 
     let result = match by_col.as_deref() {
@@ -2299,6 +2301,8 @@ pub fn taylor_quantile_multi(
     let q_method = quantile_method
         .as_deref()
         .map(SvyQuantileMethod::parse)
+        .transpose()
+        .map_err(|e| to_py_err(&e))?
         .unwrap_or(SvyQuantileMethod::Higher);
     let result = _py
         .detach(|| {
@@ -2349,6 +2353,8 @@ pub fn weighted_quantile_at(
     let q_method = quantile_method
         .as_deref()
         .map(SvyQuantileMethod::parse)
+        .transpose()
+        .map_err(|e| to_py_err(&e))?
         .unwrap_or(SvyQuantileMethod::Higher);
     Ok(probs
         .iter()

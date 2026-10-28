@@ -218,7 +218,7 @@ pub fn fit_glm_rs(
     calib_new_wgt: Option<String>,
     singleton_method: Option<String>,
 ) -> PyResult<Vec<GlmTuple>> {
-    let singleton = SingletonRule::parse(singleton_method.as_deref());
+    let singleton = SingletonRule::parse(singleton_method.as_deref()).map_err(|e| to_py_err(&e))?;
     let df: DataFrame = data
         .ok_or_else(|| to_py_err(&RegressionError::MissingData))?
         .into();
