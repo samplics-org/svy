@@ -8,6 +8,7 @@ use polars::prelude::*;
 
 use crate::categorical::replicate::RepSpec;
 use crate::estimation::taylor::{degrees_of_freedom, singleton_rows};
+use crate::regression::glm::norm_cdf;
 use crate::regression::wols::{fit_wols, influence_covariance, influence_se};
 
 // ============================================================================
@@ -104,7 +105,7 @@ fn apply_score(rankhat: &[f64], n_hat: f64, method: RankScoreMethod) -> Vec<f64>
     }
 }
 
-/// Inverse normal CDF by Acklam's rational approximation (~1.15e-9); the GLM probit link only seeds IRLS with it.
+/// Inverse normal CDF: Acklam's rational approximation (~1.15e-9), then one Halley step to `norm_cdf`'s accuracy.
 pub(crate) fn probit(p: f64) -> f64 {
     if p <= 0.0 {
         return f64::NEG_INFINITY;
@@ -147,7 +148,7 @@ pub(crate) fn probit(p: f64) -> f64 {
     const P_LOW: f64 = 0.02425;
     const P_HIGH: f64 = 1.0 - P_LOW;
 
-    if p < P_LOW {
+    let x = if p < P_LOW {
         // Lower tail
         let q = (-2.0 * p.ln()).sqrt();
         (((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
@@ -163,7 +164,20 @@ pub(crate) fn probit(p: f64) -> f64 {
         let q = (-2.0 * (1.0 - p).ln()).sqrt();
         -(((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
             / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
+    };
+
+    // Phi(x) - p cancels near p = 1; there 1 - p is exact and Phi(-x) is a lower tail.
+    let e = if p > 0.5 {
+        (1.0 - p) - norm_cdf(-x)
+    } else {
+        norm_cdf(x) - p
+    };
+    let u = e * (2.0 * std::f64::consts::PI).sqrt() * (0.5 * x * x).exp();
+    // exp(x^2 / 2) overflows only past p ~ 1e-308, where Acklam's value stands.
+    if !u.is_finite() {
+        return x;
     }
+    x - u / (1.0 + 0.5 * x * u)
 }
 
 // ============================================================================
@@ -671,11 +685,10 @@ mod tests {
                 [0.52190476190476187, 2.6772257470943535, 0.11578344739370217],
                 1e-12,
             ),
-            // Scores go through `probit`, which is only good to Acklam's 1.15e-9.
             (
                 RankScoreMethod::VanDerWaerden,
                 [1.053451041609837, 3.5426270371692969, 0.071267043498771748],
-                1.15e-9,
+                1e-12,
             ),
         ];
         for (method, [delta, t, p], tol) in cases {
@@ -739,14 +752,24 @@ mod tests {
     }
 
     #[test]
-    fn probit_is_within_acklams_bound_of_qnorm() {
-        // Acklam's published relative error is 1.15e-9.
-        for (p, q) in [
-            (0.025, -1.95996398454005383),
-            (0.3, -0.52440051270804078),
-            (0.9, 1.28155156554460059),
-        ] {
-            assert_relative_eq!(probit(p), q, max_relative = 1.15e-9);
+    fn probit_matches_r_qnorm() {
+        let cases = [
+            (9.9999999999999936e-301, -37.047096299361201),
+            (9.9999999999999998e-13, -7.0344838253011321),
+            (9.9999999999999995e-07, -4.7534243088228987),
+            (0.001, -3.0902323061678132),
+            (0.024250000000000001, -1.9729610513118845),
+            (0.025000000000000001, -1.9599639845400538),
+            (0.29999999999999999, -0.52440051270804078),
+            (0.5, 0.0),
+            (0.90000000000000002, 1.2815515655446006),
+            (0.97499999999999998, 1.9599639845400534),
+            (0.98999999999999999, 2.3263478740408408),
+            (0.99999899999999997, 4.7534243088170864),
+        ];
+        for (p, q) in cases {
+            // As accurate as norm_cdf, which matches pnorm to 1e-14.
+            assert_relative_eq!(probit(p), q, epsilon = 1e-15, max_relative = 1e-14);
         }
     }
 }
