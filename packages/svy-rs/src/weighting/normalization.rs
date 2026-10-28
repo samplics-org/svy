@@ -60,9 +60,9 @@ fn normalize_global(
     // Calculate factors
     let mut factors = Array1::zeros(n_reps);
     for r in 0..n_reps {
-        if current_sums[r] > 1e-10 {
+        if current_sums[r] > 0.0 {
             factors[r] = targets[r] / current_sums[r];
-        } else if targets[r] > 1e-10 {
+        } else if targets[r] > 0.0 {
             return Err(WeightingError::InvalidInput(format!(
                 "Cannot normalize: current sum is 0 but target is {}",
                 targets[r]
@@ -127,9 +127,9 @@ fn normalize_by_group(
     for g in 0..n_groups {
         let tgt = group_targets[g];
         for r in 0..n_reps {
-            if current_sums[[g, r]] > 1e-10 {
+            if current_sums[[g, r]] > 0.0 {
                 factors[[g, r]] = tgt / current_sums[[g, r]];
-            } else if tgt > 1e-10 {
+            } else if tgt > 0.0 {
                 return Err(WeightingError::InvalidInput(format!(
                     "Cannot normalize group {}: current sum is 0 but target is {}",
                     g, tgt

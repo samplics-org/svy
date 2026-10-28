@@ -85,7 +85,7 @@ pub fn check_bounds(
     }
 
     for (&raked_w, &init_w) in raked.iter().zip(initial.iter()) {
-        if init_w > 1e-10 {
+        if init_w > 0.0 {
             let ratio = raked_w / init_w;
 
             if let Some(ll) = ll_bound

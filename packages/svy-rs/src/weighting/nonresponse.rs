@@ -83,7 +83,7 @@ pub fn adjust_nr_impl(
             if unknown_to_inelig {
                 // Unknowns distributed over eligible (IN + RR + NR)
                 let denom_uk = sum_in[[c, r]] + sum_rr[[c, r]] + sum_nr[[c, r]];
-                let adj_uk = if denom_uk > 1e-10 {
+                let adj_uk = if denom_uk > 0.0 {
                     (denom_uk + sum_uk[[c, r]]) / denom_uk
                 } else if r == 0 && sum_uk[[c, r]] > 0.0 {
                     return Err(no_respondents(c, r));
@@ -93,7 +93,7 @@ pub fn adjust_nr_impl(
 
                 // NR distributed over RR
                 let denom_rr = sum_rr[[c, r]];
-                let adj_rr = if denom_rr > 1e-10 {
+                let adj_rr = if denom_rr > 0.0 {
                     (sum_rr[[c, r]] + sum_nr[[c, r]]) / denom_rr
                 } else if r == 0 && sum_nr[[c, r]] > 0.0 {
                     return Err(no_respondents(c, r));
@@ -106,7 +106,7 @@ pub fn adjust_nr_impl(
             } else {
                 // Unknowns join NR pool -> distributed to RR
                 let denom_rr = sum_rr[[c, r]];
-                let adj_rr = if denom_rr > 1e-10 {
+                let adj_rr = if denom_rr > 0.0 {
                     (sum_rr[[c, r]] + sum_nr[[c, r]] + sum_uk[[c, r]]) / denom_rr
                 } else if r == 0 && sum_nr[[c, r]] + sum_uk[[c, r]] > 0.0 {
                     return Err(no_respondents(c, r));
