@@ -326,7 +326,7 @@ Source: `svy.categorical.ttest.TTestByResult`, by the type of its members.
 | `schema_version` | `str`                                | constant         |
 | `y`            | `str`                                  | `y`              |
 | `pair`         | `list[str] \| None`                    | `pair`           |
-| `by`           | `str`                                  | `by`             |
+| `by`           | `str \| list[str]` (several variables) | `by`             |
 | `alpha`        | `float`                                | `alpha`          |
 | `where_clause` | `str \| None`                          | `where_clause`   |
 | `results`      | `list[TTestOneGroupData]` / `list[TTestTwoGroupsData]` | one per `by` level; its rows carry `by_level` |
@@ -463,8 +463,8 @@ Source: `svy.categorical.ttest.DiffEst`
 | `se`       | `float`                                    |
 | `lci`      | `float`                                    |
 | `uci`      | `float`                                    |
-| `by`       | `str \| None`                              |
-| `by_level` | `str \| int \| float \| bool \| None`     |
+| `by`       | `str \| list[str] \| None` (a list with several variables) |
+| `by_level` | `str \| int \| float \| bool \| list[...] \| None` (a list with several variables) |
 
 #### TtestEstData
 
@@ -472,8 +472,8 @@ Source: `svy.categorical.ttest.TtestEst`
 
 | Field         | Type                                       |
 | ------------- | ------------------------------------------ |
-| `by`          | `str \| None`                              |
-| `by_level`    | `str \| int \| float \| bool \| None`     |
+| `by`          | `str \| list[str] \| None` (a list with several variables) |
+| `by_level`    | `str \| int \| float \| bool \| list[...] \| None` (a list with several variables) |
 | `group`       | `str \| None`                              |
 | `group_level` | `str \| int \| float \| bool \| None`     |
 | `y`           | `str`                                      |

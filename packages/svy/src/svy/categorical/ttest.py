@@ -38,8 +38,6 @@ log = logging.getLogger(__name__)
 
 # Keys used by the central UI for styling
 _UI_KEY_RESULTS = "ttest.results"
-# How several by variables' levels are joined into one by_level.
-_BY_SEP = "__by__"
 
 
 def _level_text(value: Any) -> str:
@@ -68,6 +66,29 @@ def _group_level_text(groups: Any, level: Any) -> str:
     return _level_text(level) if label is None else label
 
 
+def by_cells(by: str | Sequence[str], by_level: Any) -> list[tuple[str, Any]]:
+    """Each ``by`` variable with its level; several variables carry their levels in order."""
+    if isinstance(by, str):
+        return [(by, by_level)]
+    return list(zip(by, by_level))
+
+
+def untidy_by(by: str | Sequence[str], by_level: Any) -> tuple[Any, Any]:
+    """``by`` and ``by_level`` of an untidy row; several levels go in a struct keyed by variable."""
+    if isinstance(by, str):
+        return by, by_level
+    return list(by), dict(by_cells(by, by_level))
+
+
+def untidy_records(estimates: Sequence[Any]) -> list[dict[str, Any]]:
+    """Estimate rows as records, their ``by`` as an untidy row has it."""
+    recs = msgspec.to_builtins(estimates)
+    for rec, e in zip(recs, estimates):
+        if e.by is not None and not isinstance(e.by, str):
+            rec["by"], rec["by_level"] = untidy_by(e.by, e.by_level)
+    return recs
+
+
 # =============================================================================
 # Data structures
 # =============================================================================
@@ -76,8 +97,8 @@ def _group_level_text(groups: Any, level: Any) -> str:
 class TtestEst(msgspec.Struct):
     """Estimate for a (y, group) cell in a t-test context."""
 
-    by: str | None
-    by_level: Category | None
+    by: str | tuple[str, ...] | None
+    by_level: Category | tuple[Category, ...] | None
     group: str | None
     group_level: Category | None
     y: str
@@ -121,8 +142,8 @@ class DiffEst(msgspec.Struct, frozen=True):
     se: Number
     lci: Number
     uci: Number
-    by: str | None = None
-    by_level: Category | None = None
+    by: str | tuple[str, ...] | None = None
+    by_level: Category | tuple[Category, ...] | None = None
 
 
 class TTestStats(msgspec.Struct, frozen=True):
@@ -660,10 +681,9 @@ def ttest_one_group_frame(
             row: dict[str, Any] = {"y": d.y}
             if d.by is not None:
                 if tidy:
-                    row[d.by] = d.by_level
+                    row.update(by_cells(d.by, d.by_level))
                 else:
-                    row["by"] = d.by
-                    row["by_level"] = d.by_level
+                    row["by"], row["by_level"] = untidy_by(d.by, d.by_level)
             row.update({"diff": d.diff, "se": d.se, "lci": d.lci, "uci": d.uci})
             if r.stats is not None:
                 row["t"] = r.stats.t
@@ -690,7 +710,7 @@ def ttest_one_group_frame(
             )
 
         if not tidy:
-            df = pl.DataFrame(msgspec.to_builtins(r.estimates))
+            df = pl.DataFrame(untidy_records(r.estimates))
             for col_pair in [("by", "by_level"), ("group", "group_level")]:
                 if col_pair[0] in df.columns and df[col_pair[0]].is_null().all():
                     df = df.drop(*col_pair)
@@ -703,7 +723,7 @@ def ttest_one_group_frame(
         for e in r.estimates:
             row: dict[str, Any] = {}
             if e.by is not None:
-                row[e.by] = e.by_level
+                row.update(by_cells(e.by, e.by_level))
             if e.group is not None:
                 row[e.group] = e.group_level
             if e.y_level is not None:
@@ -759,10 +779,9 @@ def ttest_two_groups_frame(
             row: dict[str, Any] = {"y": d.y}
             if d.by is not None:
                 if tidy:
-                    row[d.by] = d.by_level
+                    row.update(by_cells(d.by, d.by_level))
                 else:
-                    row["by"] = d.by
-                    row["by_level"] = d.by_level
+                    row["by"], row["by_level"] = untidy_by(d.by, d.by_level)
             row.update(
                 {
                     "group_var": r.groups.var,
@@ -801,7 +820,7 @@ def ttest_two_groups_frame(
 
         labels = getattr(r.groups, "labels", None)
         if not tidy:
-            df = pl.DataFrame(msgspec.to_builtins(r.estimates))
+            df = pl.DataFrame(untidy_records(r.estimates))
             if "by" in df.columns and df["by"].is_null().all():
                 df = df.drop("by", "by_level")
             if "y_level" in df.columns and df["y_level"].is_null().all():
@@ -820,7 +839,7 @@ def ttest_two_groups_frame(
         for e in r.estimates:
             row: dict[str, Any] = {}
             if e.by is not None:
-                row[e.by] = e.by_level
+                row.update(by_cells(e.by, e.by_level))
             # group is always present for two-sample
             if e.group is not None:
                 row[e.group] = e.group_level
@@ -914,24 +933,19 @@ class TTestByResult:
     # ── Helpers ──────────────────────────────────────────────────────────
 
     def _format_level(self, by_level) -> str:
-        """Format a by-level value for display.
-
-        For multi-by, levels are stored as 'v1__by__v2__by__v3'.
-        Splits on '__by__' and zips with by variable names.
-        """
-        level_str = _level_text(by_level)
-        parts = level_str.split(_BY_SEP)
-        if len(parts) == len(self._by_list) and len(parts) > 1:
+        """Format a by-level value for display; several by variables carry a tuple."""
+        if isinstance(by_level, tuple):
             return ", ".join(
-                f"{var} = {self._by_text(var, val)}" for var, val in zip(self._by_list, parts)
+                f"{var} = {self._by_text(var, val)}" for var, val in zip(self._by_list, by_level)
             )
+        level_str = _level_text(by_level)
         if len(self._by_list) == 1:
             level_str = self._by_text(self._by_list[0], level_str)
         return f"{', '.join(self._by_list)} = {level_str}"
 
-    def _by_text(self, var: str, text: str) -> str:
+    def _by_text(self, var: str, value: Any) -> str:
         labels = self.by_labels.get(var)
-        return text if labels is None else labels.display(text)
+        return _level_text(value) if labels is None else labels.display(value)
 
     def _labels(self) -> dict[str, VarLabels]:
         """The label of each labelled ``by`` variable, and of each of its levels present.
@@ -942,10 +956,9 @@ class TTestByResult:
         for r in self.results:
             if not r.diff:
                 continue
-            text = _level_text(r.diff[0].by_level)
-            parts = text.split(_BY_SEP) if len(self._by_list) > 1 else [text]
-            for var, part in zip(self._by_list, parts):
-                present[var].add(part)
+            d = r.diff[0]
+            for var, level in by_cells(d.by, d.by_level):
+                present[var].add(_level_text(level))
         return {
             var: VarLabels(
                 lab.var_label,
