@@ -389,9 +389,16 @@ impl Kahan {
 ///
 /// Nulls are rejected upstream in `fit_glm_domain`, so each chunk's value
 /// slice is dense and copies wholesale.
-pub(crate) fn cols_to_vec(cols: &[&Float64Chunked], nrows: usize) -> Vec<f64> {
+pub(crate) fn cols_to_vec(cols: &[&Float64Chunked], nrows: usize) -> RResult<Vec<f64>> {
     let mut out = vec![0.0; nrows * cols.len()];
     for (j, col) in cols.iter().enumerate() {
+        if col.len() != nrows {
+            return Err(RegressionError::DimensionMismatch {
+                what: "column",
+                expected: nrows,
+                got: col.len(),
+            });
+        }
         let dst = &mut out[j * nrows..(j + 1) * nrows];
         let mut off = 0usize;
         for arr in col.downcast_iter() {
@@ -401,7 +408,39 @@ pub(crate) fn cols_to_vec(cols: &[&Float64Chunked], nrows: usize) -> Vec<f64> {
             off = end;
         }
     }
-    out
+    Ok(out)
+}
+
+/// Every per-row input must have `y`'s length: the fits index them all by row.
+pub(crate) fn check_lengths(
+    y: &Series,
+    x_cols: &[Series],
+    weights: &Series,
+    design: [Option<&Series>; 4], // strata, psu, fpc, offset
+    domain_mask: Option<&[bool]>,
+) -> RResult<()> {
+    let expected = y.len();
+    let named = [
+        ("weights", Some(weights.len())),
+        ("strata", design[0].map(|s| s.len())),
+        ("psu", design[1].map(|s| s.len())),
+        ("fpc", design[2].map(|s| s.len())),
+        ("offset", design[3].map(|s| s.len())),
+        ("domain mask", domain_mask.map(<[bool]>::len)),
+    ];
+    let predictors = x_cols.iter().map(|s| ("predictor", Some(s.len())));
+    for (what, len) in named.into_iter().chain(predictors) {
+        if let Some(got) = len
+            && got != expected
+        {
+            return Err(RegressionError::DimensionMismatch {
+                what,
+                expected,
+                got,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Dense 0-based design codes for `strata` (and, when given, PSUs nested
@@ -1519,6 +1558,7 @@ pub(crate) fn fit_glm_domain(
 ) -> RResult<GlmResult> {
     let family = Family::from_str(family_str, theta)?;
     let link = Link::from_str(link_str)?;
+    check_lengths(y, &x_cols, weights, [strata, psu, fpc, offset], domain_mask)?;
 
     // 1) Data prep
     let n = y.len();
@@ -1561,8 +1601,8 @@ pub(crate) fn fit_glm_domain(
         }
     }
 
-    let y_vals = cols_to_vec(&[y_ca], n);
-    let x = cols_to_vec(&x_ca_list, n);
+    let y_vals = cols_to_vec(&[y_ca], n)?;
+    let x = cols_to_vec(&x_ca_list, n)?;
 
     // Known term on the link scale, coefficient fixed at 1. Absent -> all zero,
     // which makes every offset expression below a no-op on the existing path.
@@ -2463,5 +2503,82 @@ mod tests {
     fn no_separation_record_on_an_identified_fit() {
         // One event in level 'c' makes the MLE finite.
         assert!(separated_fit(1.0).separation.is_none());
+    }
+
+    #[test]
+    fn short_or_long_inputs_raise_dimension_mismatch() {
+        use crate::errors::Coded;
+        let y = Series::new("y".into(), vec![0.0, 1.0, 2.0, 1.0, 3.0, 2.0]);
+        let inputs = [
+            "weights",
+            "strata",
+            "psu",
+            "fpc",
+            "offset",
+            "domain mask",
+            "predictor",
+        ];
+        for family in ["poisson", "negativebinomial"] {
+            for (what, got) in inputs.iter().flat_map(|&w| [(w, 5), (w, 7)]) {
+                let len = |name: &str| if name == what { got } else { 6 };
+                let col = |name: &str| Series::new(name.into(), vec![1.0; len(name)]);
+                let mask = vec![true; len("domain mask")];
+                let err = fit_one(
+                    &y,
+                    vec![col("predictor")],
+                    &col("weights"),
+                    Some(&col("strata")),
+                    Some(&col("psu")),
+                    Some(&col("fpc")),
+                    Some(&col("offset")),
+                    Some(&mask),
+                    family,
+                    "log",
+                    None,
+                    1e-8,
+                    100,
+                    None,
+                    SingletonRule::NONE,
+                )
+                .err()
+                .expect("mismatch must fail");
+                assert!(
+                    matches!(
+                        err,
+                        RegressionError::DimensionMismatch { what: w, expected: 6, got: g }
+                            if w == what && g == got
+                    ),
+                    "{family} {what}: {err:?}"
+                );
+                assert_eq!(
+                    err.to_string(),
+                    format!("{what} has length {got}, expected 6")
+                );
+                assert_eq!(err.code(), "SHAPE_MISMATCH");
+                assert!(err.invalid_input());
+            }
+        }
+    }
+
+    #[test]
+    fn cols_to_vec_copies_every_chunk_and_refuses_other_lengths() {
+        let mut chunked = Float64Chunked::from_slice("a".into(), &[1.0, 2.0]);
+        chunked
+            .append(&Float64Chunked::from_slice("a".into(), &[3.0]))
+            .unwrap();
+        let other = Float64Chunked::from_slice("b".into(), &[4.0, 5.0, 6.0]);
+        assert_eq!(
+            cols_to_vec(&[&chunked, &other], 3).unwrap(),
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        );
+
+        for (vals, got) in [(&[4.0, 5.0][..], 2), (&[4.0, 5.0, 6.0, 7.0][..], 4)] {
+            let bad = Float64Chunked::from_slice("b".into(), vals);
+            let err = cols_to_vec(&[&chunked, &bad], 3).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!("column has length {got}, expected 3")
+            );
+        }
     }
 }

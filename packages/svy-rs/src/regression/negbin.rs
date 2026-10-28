@@ -31,7 +31,8 @@ use polars::prelude::*;
 use crate::estimation::calib_sweep::CalibSweep;
 use crate::estimation::taylor::SingletonRule;
 use crate::regression::glm::{
-    GlmResult, Link, design_codes, design_vcov_of_totals, fit_glm_domain, invert_matrix,
+    GlmResult, Link, check_lengths, design_codes, design_vcov_of_totals, fit_glm_domain,
+    invert_matrix,
 };
 use crate::regression::special::{digamma, lgamma, trigamma};
 
@@ -176,6 +177,7 @@ pub(crate) fn fit_negbin(
     }
 
     let link = Link::from_str(link_str)?;
+    check_lengths(y, &x_cols, weights, [strata, psu, fpc, offset], domain_mask)?;
     let n = y.len();
     let k = x_cols.len();
 

@@ -95,7 +95,7 @@ pub fn taylor_mean(
     .map_err(|e| to_py_err(&e))?;
     let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total).map_err(|e| to_py_err(&e))?;
 
-    if by_col.is_none() {
+    let Some(by) = by_col else {
         // Detach for the ungrouped path too: `compute_mean_ungrouped` overlaps
         // the design build with the score pass via `rayon::join`, and holding
         // the GIL would keep the rayon worker from ever picking up the second
@@ -119,9 +119,7 @@ pub fn taylor_mean(
             })
             .map_err(|e| to_py_err(&e))?;
         return Ok((PyDataFrame(result), None));
-    }
-
-    let by = by_col.unwrap();
+    };
     let (result, cov) = _py
         .detach(|| {
             compute_mean_grouped(
@@ -590,7 +588,7 @@ pub fn taylor_total(
     )
     .map_err(|e| to_py_err(&e))?;
     let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total).map_err(|e| to_py_err(&e))?;
-    if by_col.is_none() {
+    let Some(by) = by_col else {
         let result = compute_total_ungrouped(
             &df,
             &value_col,
@@ -607,8 +605,7 @@ pub fn taylor_total(
         )
         .map_err(|e| to_py_err(&e))?;
         return Ok((PyDataFrame(result), None));
-    }
-    let by = by_col.unwrap();
+    };
     let (result, cov) = _py
         .detach(|| {
             compute_total_grouped(
@@ -957,7 +954,7 @@ pub fn taylor_ratio(
     )
     .map_err(|e| to_py_err(&e))?;
     let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total).map_err(|e| to_py_err(&e))?;
-    if by_col.is_none() {
+    let Some(by) = by_col else {
         let result = compute_ratio_ungrouped(
             &df,
             &numerator_col,
@@ -975,8 +972,7 @@ pub fn taylor_ratio(
         )
         .map_err(|e| to_py_err(&e))?;
         return Ok((PyDataFrame(result), None));
-    }
-    let by = by_col.unwrap();
+    };
     let (result, cov) = _py
         .detach(|| {
             compute_ratio_grouped(
@@ -1681,7 +1677,7 @@ fn taylor_levels(
     )
     .map_err(|e| to_py_err(&e))?;
     let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total).map_err(|e| to_py_err(&e))?;
-    if by_col.is_none() {
+    let Some(by) = by_col else {
         let (result, cov) = compute_levels_ungrouped(
             &df,
             &value_col,
@@ -1699,8 +1695,7 @@ fn taylor_levels(
         )
         .map_err(|e| to_py_err(&e))?;
         return Ok((PyDataFrame(result), Some(cov)));
-    }
-    let by = by_col.unwrap();
+    };
     let (result, cov) = _py
         .detach(|| {
             compute_levels_grouped(

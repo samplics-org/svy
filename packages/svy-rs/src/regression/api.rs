@@ -284,7 +284,7 @@ pub fn fit_glm_rs(
     }
 
     // No by_col: single fit, wrap in one-element vec for API uniformity.
-    if by_col.is_none() {
+    let Some(by_col) = by_col else {
         // Release the GIL for the (iterative, CPU-bound) IRLS solve.
         let result = _py
             .detach(|| {
@@ -309,11 +309,11 @@ pub fn fit_glm_rs(
             .map_err(|e| to_py_err(&e))?;
 
         return Ok(vec![to_tuple(String::new(), result)]);
-    }
+    };
 
     // by_col supplied: one fit per domain level (fanned out in parallel, GIL
     // released — the domain fits are independent).
-    let by_series = column_to_series(&df, &by_col.unwrap())?;
+    let by_series = column_to_series(&df, &by_col)?;
 
     let results = _py
         .detach(|| {

@@ -80,17 +80,20 @@ impl Rng {
     }
 
     /// Weighted random choice: draw one index from `weights` (unnormalised).
-    /// Returns the chosen index. Panics if weights is empty or all-zero.
-    pub fn weighted_choice(&mut self, weights: &[f64]) -> usize {
+    /// `None` when there is nothing to draw: no weights, or a total that is not positive.
+    pub fn weighted_choice(&mut self, weights: &[f64]) -> Option<usize> {
         let total: f64 = weights.iter().sum();
+        if total.is_nan() || total <= 0.0 {
+            return None;
+        }
         let mut u = self.next_f64() * total;
         for (i, &w) in weights.iter().enumerate() {
             u -= w;
             if u <= 0.0 {
-                return i;
+                return Some(i);
             }
         }
-        weights.len() - 1
+        Some(weights.len() - 1)
     }
 }
 
@@ -137,5 +140,23 @@ mod tests {
             (0..16).map(|_| r.next_index(10)).collect()
         };
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn weighted_choice_is_none_without_positive_total() {
+        let mut rng = Rng::new(1);
+        let cases: [&[f64]; 4] = [&[], &[0.0, 0.0], &[-1.0, 0.5], &[f64::NAN, 1.0]];
+        for weights in cases {
+            assert_eq!(rng.weighted_choice(weights), None, "{weights:?}");
+        }
+    }
+
+    #[test]
+    fn weighted_choice_never_draws_a_zero_weight() {
+        let mut rng = Rng::new(9);
+        for _ in 0..1000 {
+            assert_eq!(rng.weighted_choice(&[0.0, 2.5, 0.0]), Some(1));
+        }
+        assert_eq!(rng.weighted_choice(&[3.0]), Some(0));
     }
 }
