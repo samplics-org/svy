@@ -218,9 +218,6 @@ class MeasurementType(StrEnum):
 class OnePropSizeMethod(StrEnum):
     WALD = "Wald"
     FLEISS = "Fleiss"
-    WILSON = "Wilson"
-    AGRESTI_COULL = "Agresti-Coull"
-    CLOPPER_PEARSON = "Clopper-Pearson"
 
 
 @unique
