@@ -62,6 +62,7 @@
 // estimate, per the determinism policy in `mod.rs`: output must stay
 // bit-identical across rayon thread counts.
 
+use crate::estimation::error::{EResult, EstimationError};
 use polars::prelude::*;
 
 use crate::estimation::taylor::SrsRef;
@@ -145,7 +146,7 @@ pub fn bivar_moments(
     x: &Float64Chunked,
     weights: &Float64Chunked,
     domain: Option<&BooleanChunked>,
-) -> PolarsResult<BivarMoments> {
+) -> EResult<BivarMoments> {
     let mut sum_w = 0.0f64;
     let mut sum_wy = 0.0f64;
     let mut sum_wx = 0.0f64;
@@ -259,14 +260,9 @@ pub fn point_estimate_cov(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     let m = bivar_moments(y, x, weights, None)?;
-    if m.sum_w == 0.0 {
-        return Err(PolarsError::ComputeError(
-            "Sum of weights is zero; covariance is undefined".into(),
-        ));
-    }
-    Ok(m.cov())
+    Ok(if m.sum_w == 0.0 { f64::NAN } else { m.cov() })
 }
 
 pub fn point_estimate_cov_domain(
@@ -274,7 +270,7 @@ pub fn point_estimate_cov_domain(
     x: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     // Domains degrade to NaN rather than erroring: one empty by-group must not
     // fail the whole grouped call, matching `scores_ratio_domain`.
     let m = bivar_moments(y, x, weights, Some(domain_mask))?;
@@ -285,14 +281,9 @@ pub fn point_estimate_corr(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     let m = bivar_moments(y, x, weights, None)?;
-    if m.sum_w == 0.0 {
-        return Err(PolarsError::ComputeError(
-            "Sum of weights is zero; correlation is undefined".into(),
-        ));
-    }
-    Ok(m.corr())
+    Ok(if m.sum_w == 0.0 { f64::NAN } else { m.corr() })
 }
 
 pub fn point_estimate_corr_domain(
@@ -300,7 +291,7 @@ pub fn point_estimate_corr_domain(
     x: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     let m = bivar_moments(y, x, weights, Some(domain_mask))?;
     Ok(if m.sum_w == 0.0 { f64::NAN } else { m.corr() })
 }
@@ -320,11 +311,12 @@ pub fn scores_cov(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
-) -> PolarsResult<Float64Chunked> {
+) -> EResult<Float64Chunked> {
     let m = bivar_moments(y, x, weights, None)?;
     if m.sum_w == 0.0 {
-        return Err(PolarsError::ComputeError(
-            "Sum of weights is zero; covariance is undefined".into(),
+        return Ok(Float64Chunked::from_slice(
+            "scores".into(),
+            &vec![0.0; y.len()],
         ));
     }
     Ok(assoc_score_values(y, x, weights, &m, None, AssocKind::Cov))
@@ -335,7 +327,7 @@ pub fn scores_cov_domain(
     x: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
-) -> PolarsResult<Float64Chunked> {
+) -> EResult<Float64Chunked> {
     let m = bivar_moments(y, x, weights, Some(domain_mask))?;
     if m.sum_w == 0.0 {
         return Ok(Float64Chunked::from_slice(
@@ -364,11 +356,12 @@ pub fn scores_corr(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
-) -> PolarsResult<Float64Chunked> {
+) -> EResult<Float64Chunked> {
     let m = bivar_moments(y, x, weights, None)?;
     if m.sum_w == 0.0 {
-        return Err(PolarsError::ComputeError(
-            "Sum of weights is zero; correlation is undefined".into(),
+        return Ok(Float64Chunked::from_slice(
+            "scores".into(),
+            &vec![0.0; y.len()],
         ));
     }
     // A constant column leaves the correlation (point_estimate_corr) NaN, with no scores.
@@ -386,7 +379,7 @@ pub fn scores_corr_domain(
     x: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
-) -> PolarsResult<Float64Chunked> {
+) -> EResult<Float64Chunked> {
     let m = bivar_moments(y, x, weights, Some(domain_mask))?;
     if m.sum_w == 0.0 || !(m.m_yy > 0.0 && m.m_xx > 0.0) {
         return Ok(Float64Chunked::from_slice(
@@ -535,7 +528,7 @@ fn srs_variance_assoc(
     domain: Option<&BooleanChunked>,
     kind: AssocKind,
     srs: SrsRef,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     let m = bivar_moments(y, x, weights, domain)?;
     if m.sum_w == 0.0 || (kind == AssocKind::Corr && !(m.m_yy > 0.0 && m.m_xx > 0.0)) {
         return Ok(f64::NAN);
@@ -576,7 +569,7 @@ pub fn srs_variance_corr(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     srs_variance_assoc(
         y,
         x,
@@ -592,7 +585,7 @@ pub fn srs_variance_corr_domain(
     x: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     srs_variance_assoc(
         y,
         x,
@@ -607,7 +600,7 @@ pub fn srs_variance_cov(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     srs_variance_assoc(
         y,
         x,
@@ -623,7 +616,7 @@ pub fn srs_variance_cov_domain(
     x: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     srs_variance_assoc(
         y,
         x,
@@ -700,22 +693,19 @@ pub fn multi_moments(
     cols: &[&Float64Chunked],
     weights: &Float64Chunked,
     domain: Option<&BooleanChunked>,
-) -> PolarsResult<MomentMatrix> {
+) -> EResult<MomentMatrix> {
     let k = cols.len();
     if k == 0 {
-        return Err(PolarsError::ComputeError(
-            "multi_moments requires at least one column".into(),
+        return Err(EstimationError::Empty(
+            "multi_moments requires at least one column",
         ));
     }
     let len = weights.len();
     if let Some(bad) = cols.iter().find(|c| c.len() != len) {
-        return Err(PolarsError::ComputeError(
-            format!(
-                "column length {} does not match weights length {len}",
-                bad.len()
-            )
-            .into(),
-        ));
+        return Err(EstimationError::ColumnLength {
+            got: bad.len(),
+            expected: len,
+        });
     }
 
     // Contiguous, null-free, undomained input takes a raw-slice path. Going
@@ -879,13 +869,15 @@ impl AssocKind {
     /// Parse the selector the Python layer sends. Aliases are accepted the way
     /// `_normalize_ci_method` accepts them: case-insensitive, underscores and
     /// hyphens interchangeable.
-    pub fn from_name(s: &str) -> PolarsResult<Self> {
+    pub fn from_name(s: &str) -> EResult<Self> {
         match s.to_lowercase().replace('_', "-").as_str() {
             "corr" | "correlation" | "pearson" => Ok(AssocKind::Corr),
             "cov" | "covariance" => Ok(AssocKind::Cov),
-            other => Err(PolarsError::ComputeError(
-                format!("unknown association kind '{other}'; expected 'corr' or 'cov'").into(),
-            )),
+            other => Err(EstimationError::InvalidChoice {
+                what: "association kind",
+                got: other.to_string(),
+                expected: "'corr' or 'cov'",
+            }),
         }
     }
 
@@ -912,7 +904,7 @@ pub fn point_estimate_assoc(
     x: &Float64Chunked,
     weights: &Float64Chunked,
     domain: Option<&BooleanChunked>,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     match (kind, domain) {
         (AssocKind::Corr, None) => point_estimate_corr(y, x, weights),
         (AssocKind::Corr, Some(d)) => point_estimate_corr_domain(y, x, weights, d),
@@ -927,7 +919,7 @@ pub fn scores_assoc(
     x: &Float64Chunked,
     weights: &Float64Chunked,
     domain: Option<&BooleanChunked>,
-) -> PolarsResult<Float64Chunked> {
+) -> EResult<Float64Chunked> {
     match (kind, domain) {
         (AssocKind::Corr, None) => scores_corr(y, x, weights),
         (AssocKind::Corr, Some(d)) => scores_corr_domain(y, x, weights, d),
@@ -944,7 +936,7 @@ pub fn srs_variance_assoc_of(
     weights: &Float64Chunked,
     domain: Option<&BooleanChunked>,
     srs: SrsRef,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     srs_variance_assoc(y, x, weights, domain, kind, srs)
 }
 
@@ -981,7 +973,7 @@ impl PairProducts {
         x: &Float64Chunked,
         weights: &Float64Chunked,
         domain: Option<&[f64]>,
-    ) -> PolarsResult<Self> {
+    ) -> EResult<Self> {
         // Fold the domain into the weights for the full-sample moments: a
         // zeroed weight is exactly how an out-of-domain row drops out, and
         // `bivar_moments` already keeps zero-weight rows out of `n`.

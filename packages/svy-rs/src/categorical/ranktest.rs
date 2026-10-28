@@ -13,6 +13,7 @@
 //   6. Two-sample: t = coef[1] / SE(infn)[1], df = degf(design) - 1.
 //      K-sample: Wald F-test on contrast covariance.
 
+use crate::categorical::error::{CResult, CategoricalError};
 use polars::prelude::*;
 
 use crate::categorical::replicate::RepSpec;
@@ -266,7 +267,7 @@ pub fn ranktest_two_sample(
     levels: Vec<String>,
     // The domain's rows for the singleton rules, whatever their weight.
     rows: &[bool],
-) -> PolarsResult<RankTestTwoResult> {
+) -> CResult<RankTestTwoResult> {
     // 1 & 2. Compute rank scores
     let n_hat: f64 = w.iter().sum();
     let rankhat = compute_midranks(y, w, n);
@@ -281,8 +282,7 @@ pub fn ranktest_two_sample(
     }
 
     // Fit weighted OLS
-    let wols =
-        fit_wols(&rankscore, &xmat, w, n, k).map_err(|e| PolarsError::ComputeError(e.into()))?;
+    let wols = fit_wols(&rankscore, &xmat, w, n, k).map_err(CategoricalError::Wols)?;
 
     // 4 & 5. Design-based SE via influence functions + taylor_variance
     let active = singleton_rows(singleton_method, false, strata.is_some(), rows);
@@ -364,15 +364,9 @@ pub fn ranktest_k_sample(
     levels: Vec<String>,
     // The domain's rows for the singleton rules, whatever their weight.
     rows: &[bool],
-) -> PolarsResult<RankTestKResult> {
+) -> CResult<RankTestKResult> {
     if n_groups < 2 {
-        return Err(PolarsError::ComputeError(
-            format!(
-                "Rank test requires at least 2 groups with positive weight, found {}",
-                n_groups
-            )
-            .into(),
-        ));
+        return Err(CategoricalError::TooFewGroups(n_groups));
     }
     let ndf = n_groups - 1;
 
@@ -394,8 +388,7 @@ pub fn ranktest_k_sample(
     }
 
     // Fit weighted OLS
-    let wols =
-        fit_wols(&rankscore, &xmat, w, n, k).map_err(|e| PolarsError::ComputeError(e.into()))?;
+    let wols = fit_wols(&rankscore, &xmat, w, n, k).map_err(CategoricalError::Wols)?;
 
     // 4. Design-based covariance of coefficients
     let active = singleton_rows(singleton_method, false, strata.is_some(), rows);
@@ -495,7 +488,7 @@ fn rep_fit(
     score_method: Option<RankScoreMethod>,
     rows: &[bool],
     spec: &RepSpec,
-) -> PolarsResult<(Vec<f64>, Vec<Vec<f64>>)> {
+) -> CResult<(Vec<f64>, Vec<Vec<f64>>)> {
     let rankscore = match score_method {
         Some(m) => {
             let n_hat: f64 = w.iter().sum();
@@ -512,8 +505,7 @@ fn rep_fit(
             xmat[i * k + gi] = 1.0;
         }
     }
-    let wols =
-        fit_wols(&rankscore, &xmat, w, n, k).map_err(|e| PolarsError::ComputeError(e.into()))?;
+    let wols = fit_wols(&rankscore, &xmat, w, n, k).map_err(CategoricalError::Wols)?;
     // Rows outside the domain, or zero-weighted, are not in R's subset design.
     let mask: Vec<bool> = rows.iter().zip(w).map(|(&r, &wi)| r && wi != 0.0).collect();
     let full: Vec<f64> = (0..k)
@@ -540,7 +532,7 @@ pub fn ranktest_two_sample_rep(
     levels: Vec<String>,
     rows: &[bool],
     spec: &RepSpec,
-) -> PolarsResult<RankTestTwoResult> {
+) -> CResult<RankTestTwoResult> {
     let (beta, cov) = rep_fit(y, g, w, n, 2, score_method, rows, spec)?;
     let ses: Vec<f64> = (0..2).map(|j| cov[j][j].max(0.0).sqrt()).collect();
     let delta = beta[1];
@@ -576,15 +568,9 @@ pub fn ranktest_k_sample_rep(
     levels: Vec<String>,
     rows: &[bool],
     spec: &RepSpec,
-) -> PolarsResult<RankTestKResult> {
+) -> CResult<RankTestKResult> {
     if n_groups < 2 {
-        return Err(PolarsError::ComputeError(
-            format!(
-                "Rank test requires at least 2 groups with positive weight, found {}",
-                n_groups
-            )
-            .into(),
-        ));
+        return Err(CategoricalError::TooFewGroups(n_groups));
     }
     let ndf = n_groups - 1;
     let (beta, cov) = rep_fit(y, g, w, n, n_groups, score_method, rows, spec)?;

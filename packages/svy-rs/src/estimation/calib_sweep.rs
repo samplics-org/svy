@@ -21,6 +21,7 @@
 //! R to twelve significant figures, and a poststratified margin total giving
 //! exactly zero.
 
+use crate::estimation::error::EResult;
 use crate::regression::wols::solve_kxk;
 
 /// Marks a row outside the adjustment: factor 1, no centring.
@@ -286,7 +287,7 @@ pub struct CalibSpec {
     pub pins_total: bool,
 }
 
-fn codes_from(df: &DataFrame, name: &str) -> PolarsResult<(Vec<u32>, usize)> {
+fn codes_from(df: &DataFrame, name: &str) -> EResult<(Vec<u32>, usize)> {
     let col = df.column(name)?;
     // Cells are written as Int32; casting to Int64 first would allocate a
     // second full-length array before the collect below.
@@ -314,7 +315,7 @@ fn codes_from(df: &DataFrame, name: &str) -> PolarsResult<(Vec<u32>, usize)> {
     Ok((out, (max + 1) as usize))
 }
 
-fn floats_from(df: &DataFrame, name: &str) -> PolarsResult<Vec<f64>> {
+fn floats_from(df: &DataFrame, name: &str) -> EResult<Vec<f64>> {
     let col = df.column(name)?;
     // Weight columns are Float64 and complete in every path that reaches here,
     // so take the memcpy rather than an option-yielding iterator collect: this

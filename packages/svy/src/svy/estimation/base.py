@@ -1506,24 +1506,6 @@ class Estimation:
     # Unified Public APIs
     # ----------------------------------------------------------------
 
-    def _empty_estimate(
-        self,
-        param: PopParam,
-        alpha: float,
-        by_cols: list[str],
-        method: RepWgts | None,
-        q_method: _QuantileMethod | None = None,
-    ) -> Estimate:
-        """Return an empty Estimate for cases like zero-weight domains."""
-        metadata = getattr(self._sample, "_metadata", None)
-        est = Estimate(param, alpha=alpha, metadata=metadata)
-        est.method = method.method if method is not None else "Taylor"
-        if q_method is not None:
-            est.q_method = q_method
-        est.estimates = []
-        est.covariance = np.array([])
-        return est
-
     def _taylor_multi(
         self,
         items: list,
@@ -2167,34 +2149,28 @@ class Estimation:
             domain_mask_for_replication=(target_method is not None and by is None),
         )
 
-        try:
-            if target_method is None:
-                result = _taylor_assoc(
-                    self,
-                    prep=prep,
-                    pairs=pairs,
-                    param=param,
-                    deff_ref=deff_ref,
-                    alpha=alpha,
-                    ci_method=ci_method,
-                )
-            else:
-                result = _replicate_assoc(
-                    self,
-                    prep=prep,
-                    pairs=pairs,
-                    param=param,
-                    method=target_method,
-                    fay_coef=fay_coef,
-                    variance_center=variance_center,
-                    alpha=alpha,
-                    ci_method=ci_method,
-                )
-        except RuntimeError as e:
-            if "weights is zero" in str(e).lower() or "sum of weights" in str(e).lower():
-                result = self._empty_estimate(param, alpha, _colspec_to_list(by), target_method)
-            else:
-                raise
+        if target_method is None:
+            result = _taylor_assoc(
+                self,
+                prep=prep,
+                pairs=pairs,
+                param=param,
+                deff_ref=deff_ref,
+                alpha=alpha,
+                ci_method=ci_method,
+            )
+        else:
+            result = _replicate_assoc(
+                self,
+                prep=prep,
+                pairs=pairs,
+                param=param,
+                method=target_method,
+                fay_coef=fay_coef,
+                variance_center=variance_center,
+                alpha=alpha,
+                ci_method=ci_method,
+            )
 
         if where is not None:
             result.where_clause = format_where_clause(where)
@@ -2450,42 +2426,27 @@ class Estimation:
             select_columns=True,
         )
 
-        try:
-            if target_method is None:
-                results = _taylor_quantile(
-                    self,
-                    prep=prep,
-                    y=y,
-                    probs=probs,
-                    q_method=resolved_q_method,
-                    alpha=alpha,
-                )
-            else:
-                results = _replicate_quantile(
-                    self,
-                    prep=prep,
-                    y=y,
-                    probs=probs,
-                    method=target_method,
-                    fay_coef=fay_coef,
-                    q_method=resolved_q_method,
-                    variance_center=variance_center,
-                    alpha=alpha,
-                )
-        except RuntimeError as e:
-            if "weights is zero" in str(e).lower() or "sum of weights" in str(e).lower():
-                results = [
-                    self._empty_estimate(
-                        PopParam.QUANTILE,
-                        alpha,
-                        _colspec_to_list(by),
-                        target_method,
-                        q_method=resolved_q_method,
-                    )
-                    for _ in probs
-                ]
-            else:
-                raise
+        if target_method is None:
+            results = _taylor_quantile(
+                self,
+                prep=prep,
+                y=y,
+                probs=probs,
+                q_method=resolved_q_method,
+                alpha=alpha,
+            )
+        else:
+            results = _replicate_quantile(
+                self,
+                prep=prep,
+                y=y,
+                probs=probs,
+                method=target_method,
+                fay_coef=fay_coef,
+                q_method=resolved_q_method,
+                variance_center=variance_center,
+                alpha=alpha,
+            )
 
         if where is not None:
             wc = format_where_clause(where)
@@ -2568,37 +2529,25 @@ class Estimation:
             select_columns=True,
         )
 
-        try:
-            if target_method is None:
-                result = _taylor_median(
-                    self,
-                    prep=prep,
-                    y=y,
-                    q_method=resolved_q_method,
-                    alpha=alpha,
-                )
-            else:
-                result = _replicate_median(
-                    self,
-                    prep=prep,
-                    y=y,
-                    method=target_method,
-                    fay_coef=fay_coef,
-                    q_method=resolved_q_method,
-                    variance_center=variance_center,
-                    alpha=alpha,
-                )
-        except RuntimeError as e:
-            if "weights is zero" in str(e).lower() or "sum of weights" in str(e).lower():
-                result = self._empty_estimate(
-                    PopParam.MEDIAN,
-                    alpha,
-                    _colspec_to_list(by),
-                    target_method,
-                    q_method=resolved_q_method,
-                )
-            else:
-                raise
+        if target_method is None:
+            result = _taylor_median(
+                self,
+                prep=prep,
+                y=y,
+                q_method=resolved_q_method,
+                alpha=alpha,
+            )
+        else:
+            result = _replicate_median(
+                self,
+                prep=prep,
+                y=y,
+                method=target_method,
+                fay_coef=fay_coef,
+                q_method=resolved_q_method,
+                variance_center=variance_center,
+                alpha=alpha,
+            )
 
         if where is not None:
             result.where_clause = format_where_clause(where)

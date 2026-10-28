@@ -8,6 +8,8 @@
 // The stratum, PSU, FPC, singleton and calibration inputs of the Taylor path
 // play no part here: the replicate weights carry the design.
 
+use crate::categorical::error::CResult;
+use crate::estimation::error::EstimationError;
 use polars::prelude::*;
 use rayon::prelude::*;
 
@@ -30,22 +32,16 @@ impl RepSpec {
         coefs: Vec<f64>,
         center: &str,
         rep_df: Option<f64>,
-    ) -> PolarsResult<Self> {
+    ) -> CResult<Self> {
         if coefs.len() != cols.len() {
-            return Err(PolarsError::ComputeError(
-                format!(
-                    "rep_coefs has {} entries but there are {} replicate weight columns",
-                    coefs.len(),
-                    cols.len()
-                )
-                .into(),
-            ));
+            return Err(EstimationError::RepCoefsLength {
+                got: coefs.len(),
+                expected: cols.len(),
+            }
+            .into());
         }
-        let center = VarianceCenter::parse(center).ok_or_else(|| {
-            PolarsError::ComputeError(
-                format!("Unknown center: {center}. Use 'rep_mean' or 'estimate'").into(),
-            )
-        })?;
+        let center = VarianceCenter::parse(center)
+            .ok_or_else(|| EstimationError::UnknownCenter(center.to_string()))?;
         let weights = cols
             .iter()
             .map(|c| {
@@ -55,7 +51,7 @@ impl RepSpec {
                     .cast(&DataType::Float64)?;
                 Ok(s.f64()?.iter().map(|v| v.unwrap_or(0.0)).collect())
             })
-            .collect::<PolarsResult<Vec<Vec<f64>>>>()?;
+            .collect::<CResult<Vec<Vec<f64>>>>()?;
         let df_val = rep_df.unwrap_or(cols.len().saturating_sub(1) as f64);
         Ok(Self {
             weights,

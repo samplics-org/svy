@@ -1,4 +1,5 @@
 pub mod calib_sweep;
+pub mod error;
 // src/estimation/mod.rs
 //
 // # Parallelism & determinism policy
@@ -32,7 +33,8 @@ pub use taylor::{
     taylor_variance_matrix, taylor_variance_matrix_in,
 };
 
-use polars::prelude::{ChunkSort, ChunkUnique, DataFrame, PolarsResult, StringChunked};
+use crate::estimation::error::EResult;
+use polars::prelude::{ChunkSort, ChunkUnique, DataFrame, StringChunked};
 use pyo3_polars::PyDataFrame;
 
 /// The incoming frame with one chunk per column: kernels read contiguous columns
@@ -47,7 +49,7 @@ pub(crate) fn into_contiguous(data: PyDataFrame) -> DataFrame {
 }
 
 /// Unique by-group levels, sorted: `unique()` is hash-ordered and varies by process.
-pub(crate) fn sorted_groups(by: &StringChunked) -> PolarsResult<StringChunked> {
+pub(crate) fn sorted_groups(by: &StringChunked) -> EResult<StringChunked> {
     Ok(by.unique()?.sort(false))
 }
 

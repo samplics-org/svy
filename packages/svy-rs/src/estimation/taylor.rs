@@ -1,5 +1,6 @@
 // src/estimation/taylor.rs
 
+use crate::estimation::error::{EResult, EstimationError};
 use polars::prelude::*;
 
 use crate::estimation::calib_sweep::CalibSweep;
@@ -134,7 +135,7 @@ fn cont_pair<'a>(a: &'a Float64Chunked, b: &'a Float64Chunked) -> Option<(&'a [f
     None
 }
 
-pub fn point_estimate_mean(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult<f64> {
+pub fn point_estimate_mean(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<f64> {
     // Fast path: single fused pass over contiguous null-free slices. Summation
     // order is unchanged (sequential 0..n; f64 add is not auto-vectorized
     // without fast-math), so the result is bit-identical to the fallback.
@@ -164,7 +165,7 @@ pub fn point_estimate_mean(y: &Float64Chunked, weights: &Float64Chunked) -> Pola
     };
 
     if sum_w == 0.0 {
-        return Err(PolarsError::ComputeError("Sum of weights is zero".into()));
+        return Err(EstimationError::ZeroWeight { in_domain: false });
     }
     Ok(sum_wy / sum_w)
 }
@@ -173,7 +174,7 @@ pub fn point_estimate_mean_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     // Fast path: y/weights are contiguous null-free (post-prepare_data), so
     // index them as slices while iterating the mask once — no per-element
     // Option unwrap on y/w, and a single pass. Bit-identical (same rows, order).
@@ -203,14 +204,12 @@ pub fn point_estimate_mean_domain(
     };
 
     if sum_w == 0.0 {
-        return Err(PolarsError::ComputeError(
-            "Sum of weights is zero in domain".into(),
-        ));
+        return Err(EstimationError::ZeroWeight { in_domain: true });
     }
     Ok(sum_wy / sum_w)
 }
 
-pub fn point_estimate_total(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult<f64> {
+pub fn point_estimate_total(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<f64> {
     if let Some((ys, ws)) = cont_pair(y, weights) {
         let mut sum_wy = 0.0f64;
         for i in 0..ys.len() {
@@ -228,7 +227,7 @@ pub fn point_estimate_total_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     if let Some((ys, ws)) = cont_pair(y, weights) {
         let mut sum_wy = 0.0f64;
         for (i, m) in mask_flags(domain_mask).into_iter().enumerate() {
@@ -249,7 +248,7 @@ pub fn point_estimate_ratio(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     // Fast path only when y, x and w are all contiguous and null-free.
     let fast = match (cont_pair(y, weights), x.null_count() == 0) {
         (Some((ys, ws)), true) => x.cont_slice().ok().map(|xs| (ys, ws, xs)),
@@ -278,9 +277,7 @@ pub fn point_estimate_ratio(
     };
 
     if sum_wx == 0.0 {
-        return Err(PolarsError::ComputeError(
-            "Weighted sum of denominator (x) is zero".into(),
-        ));
+        return Err(EstimationError::ZeroDenominator { in_domain: false });
     }
     Ok(sum_wy / sum_wx)
 }
@@ -290,7 +287,7 @@ pub fn point_estimate_ratio_domain(
     x: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     let fast = match (cont_pair(y, weights), x.null_count() == 0) {
         (Some((ys, ws)), true) => x.cont_slice().ok().map(|xs| (ys, ws, xs)),
         _ => None,
@@ -322,9 +319,7 @@ pub fn point_estimate_ratio_domain(
     };
 
     if sum_wx == 0.0 {
-        return Err(PolarsError::ComputeError(
-            "Weighted sum of denominator (x) is zero in domain".into(),
-        ));
+        return Err(EstimationError::ZeroDenominator { in_domain: true });
     }
     Ok(sum_wy / sum_wx)
 }
@@ -455,7 +450,7 @@ pub fn weighted_median(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     method: SvyQuantileMethod,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     weighted_quantile_chunked(y, weights, 0.5, method)
 }
 
@@ -466,7 +461,7 @@ pub fn weighted_quantile_domain(
     domain_mask: &BooleanChunked,
     p: f64,
     method: SvyQuantileMethod,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     match sorted_weighted_cdf(quantile_pairs(y, weights, Some(domain_mask))) {
         None => Ok(f64::NAN),
         Some((y_sorted, cdf, _)) => Ok(weighted_quantile(&y_sorted, &cdf, p, method)),
@@ -479,7 +474,7 @@ pub fn weighted_median_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
     method: SvyQuantileMethod,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     weighted_quantile_domain(y, weights, domain_mask, 0.5, method)
 }
 
@@ -489,7 +484,7 @@ pub fn weighted_quantile_chunked(
     weights: &Float64Chunked,
     p: f64,
     method: SvyQuantileMethod,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     match sorted_weighted_cdf(quantile_pairs(y, weights, None)) {
         None => Ok(f64::NAN),
         Some((y_sorted, cdf, _)) => Ok(weighted_quantile(&y_sorted, &cdf, p, method)),
@@ -500,7 +495,7 @@ pub fn weighted_quantile_chunked(
 // Linearization Scores
 // ============================================================================
 
-pub fn scores_mean(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult<Float64Chunked> {
+pub fn scores_mean(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<Float64Chunked> {
     // Fast path: contiguous null-free slices → two branch-free passes and a
     // plain Vec<f64> output, skipping the Vec<Option<(f64,f64)>> the fallback
     // must allocate. Summation order is unchanged, so results are bit-identical.
@@ -512,7 +507,7 @@ pub fn scores_mean(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult
             sum_w += ws[i];
         }
         if sum_w == 0.0 {
-            return Err(PolarsError::ComputeError("Sum of weights is zero".into()));
+            return Err(EstimationError::ZeroWeight { in_domain: false });
         }
         let est = sum_wy / sum_w;
         let scores: Vec<f64> = (0..ys.len())
@@ -540,7 +535,7 @@ pub fn scores_mean(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult
     }
 
     if sum_w == 0.0 {
-        return Err(PolarsError::ComputeError("Sum of weights is zero".into()));
+        return Err(EstimationError::ZeroWeight { in_domain: false });
     }
     let est = sum_wy / sum_w;
 
@@ -559,7 +554,7 @@ pub fn scores_mean(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult
 /// pure round-trip: one copy into an arrow buffer and one copy back out, 2 x 8 MB
 /// at 1M rows. Callers that only need the array skip both. Null positions map to
 /// 0.0 exactly as `taylor_variance` does, so the variance is bit-identical.
-pub fn scores_mean_arr(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult<Vec<f64>> {
+pub fn scores_mean_arr(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<Vec<f64>> {
     if let Some((ys, ws)) = cont_pair(y, weights) {
         let mut sum_wy = 0.0f64;
         let mut sum_w = 0.0f64;
@@ -568,7 +563,7 @@ pub fn scores_mean_arr(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsRe
             sum_w += ws[i];
         }
         if sum_w == 0.0 {
-            return Err(PolarsError::ComputeError("Sum of weights is zero".into()));
+            return Err(EstimationError::ZeroWeight { in_domain: false });
         }
         let est = sum_wy / sum_w;
         return Ok((0..ys.len())
@@ -587,7 +582,7 @@ pub fn scores_mean_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
-) -> PolarsResult<Float64Chunked> {
+) -> EResult<Float64Chunked> {
     // Fast path: contiguous null-free y/weights. Materialise the in-domain flag
     // once (a Vec<bool>, vs the fallback's Vec<Option<(f64,f64)>>), then two
     // branch-free slice passes. Same rows/order → bit-identical.
@@ -656,7 +651,7 @@ pub fn scores_mean_domain(
 
 /// [`scores_total`] flattened for the variance, nulls as 0.0, without the
 /// `Float64Chunked` round-trip on contiguous input.
-pub fn scores_total_arr(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult<Vec<f64>> {
+pub fn scores_total_arr(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<Vec<f64>> {
     if let Some((ys, ws)) = cont_pair(y, weights) {
         return Ok(ys.iter().zip(ws).map(|(y, w)| w * y).collect());
     }
@@ -666,7 +661,7 @@ pub fn scores_total_arr(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsR
         .collect())
 }
 
-pub fn scores_total(y: &Float64Chunked, weights: &Float64Chunked) -> PolarsResult<Float64Chunked> {
+pub fn scores_total(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<Float64Chunked> {
     let scores: Vec<Option<f64>> = y
         .iter()
         .zip(weights.iter())
@@ -682,7 +677,7 @@ pub fn scores_total_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
-) -> PolarsResult<Float64Chunked> {
+) -> EResult<Float64Chunked> {
     if let Some((ys, ws)) = cont_pair(y, weights) {
         let scores: Vec<f64> = mask_flags(domain_mask)
             .into_iter()
@@ -707,7 +702,7 @@ pub fn scores_ratio(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
-) -> PolarsResult<Float64Chunked> {
+) -> EResult<Float64Chunked> {
     // Single pass: accumulate sum_wy, sum_wx and collect (y,x,w) triples.
     let n = y.len();
     let mut sum_wy = 0.0f64;
@@ -726,9 +721,7 @@ pub fn scores_ratio(
     }
 
     if sum_wx == 0.0 {
-        return Err(PolarsError::ComputeError(
-            "Weighted sum of denominator (x) is zero".into(),
-        ));
+        return Err(EstimationError::ZeroDenominator { in_domain: false });
     }
     let r_hat = sum_wy / sum_wx;
 
@@ -744,7 +737,7 @@ pub fn scores_ratio_domain(
     x: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
-) -> PolarsResult<Float64Chunked> {
+) -> EResult<Float64Chunked> {
     let fast = match (cont_pair(y, weights), x.null_count() == 0) {
         (Some((ys, ws)), true) => x.cont_slice().ok().map(|xs| (ys, ws, xs)),
         _ => None,
@@ -900,7 +893,7 @@ pub fn scores_quantile(
     weights: &Float64Chunked,
     p: f64,
     method: SvyQuantileMethod,
-) -> PolarsResult<Float64Chunked> {
+) -> EResult<Float64Chunked> {
     let q = weighted_quantile_chunked(y, weights, p, method)?;
 
     if q.is_nan() {
@@ -923,7 +916,7 @@ pub fn scores_median(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     method: SvyQuantileMethod,
-) -> PolarsResult<Float64Chunked> {
+) -> EResult<Float64Chunked> {
     scores_quantile(y, weights, 0.5, method)
 }
 
@@ -934,7 +927,7 @@ pub fn scores_quantile_domain(
     domain_mask: &BooleanChunked,
     p: f64,
     method: SvyQuantileMethod,
-) -> PolarsResult<Float64Chunked> {
+) -> EResult<Float64Chunked> {
     let q = weighted_quantile_domain(y, weights, domain_mask, p, method)?;
 
     if q.is_nan() {
@@ -963,7 +956,7 @@ pub fn scores_median_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
     method: SvyQuantileMethod,
-) -> PolarsResult<Float64Chunked> {
+) -> EResult<Float64Chunked> {
     scores_quantile_domain(y, weights, domain_mask, 0.5, method)
 }
 
@@ -1029,7 +1022,7 @@ pub fn index_categorical_pair(a: &StringChunked, b: &StringChunked) -> (Vec<u32>
 /// df results are bit-identical to the string path regardless of the incoming
 /// code values (which may be sparse or arbitrarily ordered). Integer hashing is
 /// ~10× cheaper than hashing the label strings, which is the whole point.
-fn densify_int_codes(col: &Column) -> PolarsResult<(Vec<u32>, u32)> {
+fn densify_int_codes(col: &Column) -> EResult<(Vec<u32>, u32)> {
     if let Ok(ca) = col.u32()
         && let Some(codes) = densify_small_u32(ca)
     {
@@ -1086,16 +1079,17 @@ fn densify_small_u32(ca: &UInt32Chunked) -> Option<(Vec<u32>, u32)> {
 /// treated as pre-factorized codes and densified. This is the fallback-safe
 /// polymorphic entry — the String path keeps svy-rs's public API working for
 /// direct callers, the integer path is the Phase C fast path.
-pub(crate) fn design_col_codes(col: &Column) -> PolarsResult<(Vec<u32>, u32)> {
+pub(crate) fn design_col_codes(col: &Column) -> EResult<(Vec<u32>, u32)> {
     let dt = col.dtype();
     if matches!(dt, DataType::String) {
         Ok(index_categorical(col.str()?))
     } else if dt.is_integer() {
         densify_int_codes(col)
     } else {
-        Err(PolarsError::ComputeError(
-            format!("design column must be String or integer, got {dt:?}").into(),
-        ))
+        Err(EstimationError::DesignDtype {
+            col: "design",
+            dtype: format!("{dt:?}"),
+        })
     }
 }
 
@@ -1106,16 +1100,17 @@ pub(crate) fn design_col_codes(col: &Column) -> PolarsResult<(Vec<u32>, u32)> {
 /// columns the PSU code is assumed already pair-nested by the Python layer
 /// (`__svy_psu_code__` encodes the (stratum, psu) pair), so it is densified
 /// directly — matching the string pair's first-appearance order.
-pub(crate) fn design_pair_codes(strata: &Column, psu: &Column) -> PolarsResult<(Vec<u32>, u32)> {
+pub(crate) fn design_pair_codes(strata: &Column, psu: &Column) -> EResult<(Vec<u32>, u32)> {
     let dt = psu.dtype();
     if matches!(dt, DataType::String) {
         Ok(index_categorical_pair(strata.str()?, psu.str()?))
     } else if dt.is_integer() {
         densify_int_codes(psu)
     } else {
-        Err(PolarsError::ComputeError(
-            format!("psu column must be String or integer, got {dt:?}").into(),
-        ))
+        Err(EstimationError::DesignDtype {
+            col: "psu",
+            dtype: format!("{dt:?}"),
+        })
     }
 }
 
@@ -1650,7 +1645,7 @@ pub fn build_taylor_design(
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
-) -> PolarsResult<TaylorDesign> {
+) -> EResult<TaylorDesign> {
     let (sm_enum, domain_rule) = SingletonMethod::parse_rule(singleton_method);
 
     let fpc_arr: Option<Vec<f64>> = fpc.map(|f| f.iter().map(|v| v.unwrap_or(1.0)).collect());
@@ -1856,7 +1851,7 @@ pub fn taylor_variance(
     fpc: Option<&Float64Chunked>,
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     taylor_variance_in(
         scores,
         strata,
@@ -1880,7 +1875,7 @@ pub fn taylor_variance_in(
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
     active: Option<&[bool]>,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     if scores.is_empty() {
         return Ok(0.0);
     }
@@ -1937,7 +1932,7 @@ pub fn singleton_rows(
 }
 
 /// The boolean domain-row column `col` of `df` ([`row_mask`]'s `rows`).
-pub fn rows_column(df: &DataFrame, col: Option<&str>) -> PolarsResult<Option<BooleanChunked>> {
+pub fn rows_column(df: &DataFrame, col: Option<&str>) -> EResult<Option<BooleanChunked>> {
     col.map(|c| {
         let s = df.column(c)?.as_materialized_series();
         let b = match s.dtype() {
@@ -2331,7 +2326,7 @@ pub fn degrees_of_freedom(
     weights: &Float64Chunked,
     strata: Option<&Column>,
     psu: Option<&Column>,
-) -> PolarsResult<u32> {
+) -> EResult<u32> {
     degrees_of_freedom_in_domain(weights, strata, psu, None)
 }
 
@@ -2346,7 +2341,7 @@ pub fn degrees_of_freedom_in_domain(
     strata: Option<&Column>,
     psu: Option<&Column>,
     domain: Option<&BooleanChunked>,
-) -> PolarsResult<u32> {
+) -> EResult<u32> {
     let n = weights.len();
     if n == 0 {
         return Ok(0);
@@ -2574,7 +2569,7 @@ pub fn quantiles_woodruff(
     design: &TaylorDesign,
     probs: &[f64],
     quantile_method: SvyQuantileMethod,
-) -> PolarsResult<Vec<(f64, f64, f64)>> {
+) -> EResult<Vec<(f64, f64, f64)>> {
     let nan_rows = || vec![(f64::NAN, f64::NAN, f64::NAN); probs.len()];
 
     let Some((y_sorted, cdf, sum_w)) = sorted_weighted_cdf(quantile_pairs(y, weights, domain_mask))
@@ -2620,7 +2615,7 @@ pub fn median_variance_woodruff(
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
     quantile_method: SvyQuantileMethod,
-) -> PolarsResult<(f64, f64)> {
+) -> EResult<(f64, f64)> {
     let q = weighted_median(y, weights, quantile_method)?;
 
     if q.is_nan() {
@@ -2665,7 +2660,7 @@ pub fn median_variance_woodruff_domain(
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
     quantile_method: SvyQuantileMethod,
-) -> PolarsResult<(f64, f64)> {
+) -> EResult<(f64, f64)> {
     let q = weighted_median_domain(y, weights, domain_mask, quantile_method)?;
 
     if q.is_nan() {
@@ -2752,7 +2747,7 @@ pub(crate) fn weighted_s2(y: &[f64], wn: &[f64]) -> f64 {
     (n / (n - 1.0)) * ss
 }
 
-fn srs_mean_from(yv: &[f64], wv: &[f64], srs: SrsRef) -> PolarsResult<f64> {
+fn srs_mean_from(yv: &[f64], wv: &[f64], srs: SrsRef) -> EResult<f64> {
     let n = yv.len() as f64;
     if n < 2.0 {
         return Ok(f64::NAN);
@@ -2770,7 +2765,7 @@ pub fn srs_variance_mean(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     srs: SrsRef,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     // Zero-weight rows (out-of-domain / missing-y under domain semantics)
     // carry no information and must not inflate n — matching R's deff on
     // subset()/na.rm designs, and the *_domain variants below.
@@ -2811,7 +2806,7 @@ pub fn srs_variance_mean_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
     srs: SrsRef,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     let (yv, wv) = if let Some((ys, ws)) = cont_pair(y, weights) {
         // Fast path: slice-index y/weights while filtering by the mask.
         let mut yv = Vec::new();
@@ -2856,7 +2851,7 @@ pub fn srs_variance_total(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     srs: SrsRef,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     // Zero-weight rows are excluded from n (see srs_variance_mean).
     if let Some((ys, ws)) = cont_pair(y, weights)
         && ws.iter().all(|&w| w > 0.0)
@@ -2875,7 +2870,7 @@ pub fn srs_variance_total(
     srs_total_from(&yv, &wv, srs)
 }
 
-fn srs_total_from(yv: &[f64], wv: &[f64], srs: SrsRef) -> PolarsResult<f64> {
+fn srs_total_from(yv: &[f64], wv: &[f64], srs: SrsRef) -> EResult<f64> {
     let n = yv.len() as f64;
     if n < 2.0 {
         return Ok(f64::NAN);
@@ -2894,7 +2889,7 @@ pub fn srs_variance_total_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
     srs: SrsRef,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     let (yv, wv) = if let Some((ys, ws)) = cont_pair(y, weights) {
         let mut yv = Vec::new();
         let mut wv = Vec::new();
@@ -2929,7 +2924,7 @@ pub fn srs_variance_ratio(
     x: &Float64Chunked,
     weights: &Float64Chunked,
     srs: SrsRef,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     // Zero-weight rows are excluded from n (see srs_variance_mean).
     let mut yv: Vec<f64> = Vec::new();
     let mut xv: Vec<f64> = Vec::new();
@@ -2972,7 +2967,7 @@ pub fn srs_variance_ratio_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
     srs: SrsRef,
-) -> PolarsResult<f64> {
+) -> EResult<f64> {
     let fast = match (cont_pair(y, weights), x.null_count() == 0) {
         (Some((ys, ws)), true) => x.cont_slice().ok().map(|xs| (ys, ws, xs)),
         _ => None,
@@ -3052,7 +3047,7 @@ pub fn taylor_variance_matrix(
     psu: Option<&Column>,
     fpc: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
-) -> PolarsResult<Vec<Vec<f64>>> {
+) -> EResult<Vec<Vec<f64>>> {
     taylor_variance_matrix_in(score_columns, strata, psu, fpc, singleton_method, None)
 }
 
@@ -3065,7 +3060,7 @@ pub fn taylor_variance_matrix_in(
     fpc: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
     active: Option<&[bool]>,
-) -> PolarsResult<Vec<Vec<f64>>> {
+) -> EResult<Vec<Vec<f64>>> {
     let k = score_columns.len();
     if k == 0 {
         return Ok(vec![]);
