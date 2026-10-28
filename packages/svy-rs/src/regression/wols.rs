@@ -286,6 +286,9 @@ pub fn influence_covariance(
     k: usize,
     strata: Option<&Column>,
     psu: Option<&Column>,
+    ssu: Option<&Column>,
+    fpc: Option<&Float64Chunked>,
+    fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
     // Swept on `influence * w`, which is R svy.varcoef's `estfun %*% Ainv`; the sweep commutes with the bread.
     calib: Option<&CalibSweep>,
@@ -313,12 +316,13 @@ pub fn influence_covariance(
     };
     let strata = strata.map(labels).transpose()?;
     let psu = psu.map(labels).transpose()?;
+    let ssu = ssu.map(labels).transpose()?;
     let design = build_taylor_design(
         strata.as_ref(),
         psu.as_ref(),
-        None,
-        None,
-        None,
+        ssu.as_ref(),
+        fpc,
+        fpc_ssu,
         singleton_method,
     )?;
     Ok(taylor_covariance_apply_in(&cols, &design, active)
