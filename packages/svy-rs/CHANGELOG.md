@@ -22,6 +22,7 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ### Fixed
 
+- Brewer PPS draws with Brewer's general draw-r rule, so inclusion probabilities equal the reported n·p for any n, not only n = 2 (the n = 2 rule was off by up to 1.3% relative at n = 3). After certainty extraction the remaining draws use n_rem·p over the remaining measure of size instead of the full-frame p.
 - `ranktest_rs` takes the `calib_*` arguments and sweeps the rank-score influence values, two-sample and k-sample, as `ttest_rs` does.
 - `ranktest_rs` k-sample applies `fpc_col`, `ssu_col` and `fpc_ssu_col`: `influence_covariance` takes them and builds the two-stage, FPC-aware design.
 - `probit` refines Acklam's approximation with one Halley step, so van der Waerden rank scores and the probit link match R `qnorm` to rounding instead of 1e-9.

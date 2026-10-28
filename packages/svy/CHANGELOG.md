@@ -60,6 +60,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **`pps_brewer` selects with the probabilities it reports for any `n`.** Above `n = 2` it drew with the two-unit rule, so the realised inclusion probabilities missed the reported n·p (by up to 1.3% relative at `n = 3`) and the design weights were off; after certainty units were taken, it also drew with the full-frame p. It now uses Brewer's general draw-by-draw rule. A seed gives the same sample as before at `n = 2` without certainties, and a different one otherwise.
 - **`svy.io.write_xpt` writes infinity and NaN as missing**, as haven does; infinities were stored as values and NaN came back as +inf. `write_dta` now does the same explicitly (its files already read back as missing).
 - **`ranktest` credits a calibration in its variance**, as R's `svyranktest` does through `svyglm`, for two-sample, k-sample and custom `score_fn` tests. After `poststratify`, `rake` or `calibrate` it answered as if the weights were fixed.
 - **`ranktest` applies the design's finite population correction**, as R's `svyranktest` does, for two-sample, k-sample and custom `score_fn` tests. With `pop_size` it answered the FPC-free question; results on designs without `pop_size` are unchanged.
