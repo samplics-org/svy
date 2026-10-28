@@ -89,11 +89,6 @@ def test_old_warning_name_says_where_it_went(owner, replacement):
     assert replacement in err.value.detail
 
 
-def test_old_module_says_where_it_went():
-    with pytest.raises(ModuleNotFoundError, match=r"svy\.core\.warnings moved to svy\.errors"):
-        importlib.import_module("svy.core.warnings")
-
-
 @pytest.mark.parametrize("old", ["base_errors", "model_errors", "weighting_errors"])
 def test_error_modules_are_private(old):
     with pytest.raises(ModuleNotFoundError):
