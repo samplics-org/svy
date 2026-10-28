@@ -336,15 +336,14 @@ class TestCertainty:
         result_strata = set(result._data.get_column(names["stratum"]).unique().to_list())
         assert original_strata == result_strata
 
-    def test_certainty_variance_stratum_uses_psu(self, sample, names):
-        """For singletons, the variance stratum should be the original PSU."""
+    def test_certainty_variance_stratum_is_the_singleton_stratum(self, sample, names):
+        # Its one PSU (101) becomes the stratum, labelled by the stratum key: PSU ids may repeat.
         result = _declare(sample, "self_representing")
         df = result._data
 
-        # For singleton North__by__A (PSU=101), variance stratum should be "101"
         north_a = df.filter(pl.col(names["stratum"]) == "North__by__A")
         var_strata = north_a.get_column(_VAR_STRATUM_COL).unique().to_list()
-        assert var_strata == ["101"]
+        assert var_strata == ["North__by__A"]
 
     def test_certainty_variance_psu_uses_row_index(self, sample):
         """For singletons, the variance PSU should be the row index."""
@@ -352,9 +351,10 @@ class TestCertainty:
         df = result._data
 
         # Check that variance PSUs are unique per row for singletons
-        singleton_rows = df.filter(pl.col(_VAR_STRATUM_COL) == "101")
+        singleton_rows = df.filter(pl.col(_VAR_STRATUM_COL) == "North__by__A")
         n_rows = singleton_rows.height
         n_unique_psus = singleton_rows.get_column(_VAR_PSU_COL).n_unique()
+        assert n_rows > 0
         assert n_unique_psus == n_rows
 
     def test_certainty_preserves_non_singleton_structure(self, sample, names):

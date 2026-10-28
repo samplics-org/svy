@@ -45,6 +45,12 @@ _VAR_EXCLUDE_COL = SVY_VAR_EXCLUDE
 _VAR_IS_SINGLETON_COL = SVY_VAR_IS_SINGLETON  # For CENTER method
 _VAR_COLS = (_VAR_STRATUM_COL, _VAR_PSU_COL, _VAR_EXCLUDE_COL, _VAR_IS_SINGLETON_COL)
 
+
+def _psu_within_stratum(stratum_col: str, psu_col: str) -> pl.Expr:
+    """PSU label keyed by its original stratum, so PSUs merged across strata stay distinct."""
+    return pl.concat_str([pl.col(stratum_col), pl.col(psu_col)], separator="\x1f")
+
+
 #: For the collapse options read per stratum: error code, what the column is
 #: for, and an example of a column that fits.
 _STRATUM_COLUMN_ROLES = {
@@ -320,7 +326,7 @@ class _Engine:
 
         # Build aggregation
         agg_exprs = [
-            pl.col(psu_col).n_unique().alias("n_psus"),
+            _psu_within_stratum(stratum_col, psu_col).n_unique().alias("n_psus"),
             pl.len().alias("n_obs"),
         ]
 
@@ -624,15 +630,11 @@ class _Engine:
 
         is_singleton = pl.col(stratum_col).is_in(singleton_keys)
 
-        # Create internal variance columns:
-        # - For singletons: stratum = original PSU, PSU = SSU or row index
-        # - For non-singletons: keep original stratum and PSU
+        # Singletons: the PSU becomes the stratum and its SSUs (or rows) the PSUs.
         data = data.with_columns(
-            # Effective stratum for variance: singleton PSU becomes stratum
-            pl.when(is_singleton)
-            .then(pl.col(psu_col).cast(pl.Utf8))
-            .otherwise(pl.col(stratum_col).cast(pl.Utf8))
-            .alias(_VAR_STRATUM_COL),
+            # A singleton stratum holds one PSU, so its key labels that PSU as a
+            # stratum; PSU ids may repeat across strata and must not be used.
+            pl.col(stratum_col).cast(pl.Utf8).alias(_VAR_STRATUM_COL),
             # Effective PSU for variance: SSU or row index becomes PSU
             pl.when(is_singleton)
             .then(pl.col(effective_psu_source).cast(pl.Utf8))
@@ -928,8 +930,7 @@ class _Engine:
         data = data.with_columns(
             # Effective stratum for variance: remapped stratum keys
             pl.col(_WORKING_STRATUM).cast(pl.Utf8).alias(_VAR_STRATUM_COL),
-            # Effective PSU for variance: same as original
-            pl.col(psu_col).cast(pl.Utf8).alias(_VAR_PSU_COL),
+            _psu_within_stratum(stratum_col, psu_col).alias(_VAR_PSU_COL),
             # Not excluded
             pl.lit(False).alias(_VAR_EXCLUDE_COL),
         )
@@ -993,8 +994,7 @@ class _Engine:
             .then(pl.lit(name))
             .otherwise(pl.col(stratum_col).cast(pl.Utf8))
             .alias(_VAR_STRATUM_COL),
-            # Effective PSU for variance: same as original
-            pl.col(psu_col).cast(pl.Utf8).alias(_VAR_PSU_COL),
+            _psu_within_stratum(stratum_col, psu_col).alias(_VAR_PSU_COL),
             # Not excluded
             pl.lit(False).alias(_VAR_EXCLUDE_COL),
         )
