@@ -4,6 +4,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-10-28
+
 ### Added
 
 - `replicate_mean`, `replicate_total`, `replicate_ratio`, `replicate_prop`, `replicate_factor_total` and `replicate_assoc` take `deff_ref` (`"wor"`/`"wr"`); when given they add a `deff` column, the replicate variance over the Taylor kernels' SRS reference, per by-domain.
@@ -335,7 +337,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 Baseline for this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.19.1...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.20.0...HEAD
+[0.20.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.20.0
 [0.19.1]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.19.1
 [0.19.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.19.0
 [0.18.1]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.18.1
