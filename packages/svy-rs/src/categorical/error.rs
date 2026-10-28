@@ -3,6 +3,7 @@ use thiserror::Error;
 
 use crate::errors::{Coded, KERNEL_INTERNAL};
 use crate::estimation::error::EstimationError;
+use crate::regression::error::RegressionError;
 
 #[derive(Error, Debug)]
 pub enum CategoricalError {
@@ -15,8 +16,8 @@ pub enum CategoricalError {
     #[error("{0}")]
     MissingInput(&'static str),
 
-    #[error("{0}")]
-    Wols(String),
+    #[error(transparent)]
+    Regression(#[from] RegressionError),
 
     #[error(transparent)]
     Estimation(#[from] EstimationError),
@@ -32,8 +33,8 @@ impl Coded for CategoricalError {
         match self {
             Self::TwoGroups(_) | Self::TooFewGroups(_) => "TEST_GROUP_COUNT",
             Self::MissingInput(_) => "INVALID_VALUE",
-            Self::Wols(_) => "RANK_DEFICIENT",
             Self::Estimation(e) => e.code(),
+            Self::Regression(e) => e.code(),
             Self::Polars(_) => KERNEL_INTERNAL,
         }
     }
@@ -41,8 +42,9 @@ impl Coded for CategoricalError {
     fn invalid_input(&self) -> bool {
         match self {
             Self::TwoGroups(_) | Self::TooFewGroups(_) | Self::MissingInput(_) => true,
-            Self::Wols(_) | Self::Polars(_) => false,
+            Self::Polars(_) => false,
             Self::Estimation(e) => e.invalid_input(),
+            Self::Regression(e) => e.invalid_input(),
         }
     }
 }

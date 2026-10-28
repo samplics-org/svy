@@ -24,6 +24,7 @@
 //   l = lgamma(theta + y) - lgamma(theta) - lgamma(y + 1)
 //       + theta log theta + y log mu - (theta + y) log(theta + mu)
 
+use crate::regression::error::{RResult, RegressionError};
 use faer::Mat;
 use polars::prelude::*;
 
@@ -89,7 +90,7 @@ fn theta_score_info(y: &[f64], mu: &[f64], theta: f64, w: &[f64]) -> (f64, f64) 
 ///
 /// Newton from the method-of-moments start `sum(w) / sum(w (y/mu - 1)^2)`.
 /// Scale-invariant in the weights: a global factor cancels out of the root.
-fn theta_ml(y: &[f64], mu: &[f64], w: &[f64], eps: f64, limit: usize) -> PolarsResult<f64> {
+fn theta_ml(y: &[f64], mu: &[f64], w: &[f64], eps: f64, limit: usize) -> RResult<f64> {
     let mut w_sum = 0.0;
     let mut denom = 0.0;
     for i in 0..y.len() {
@@ -102,11 +103,7 @@ fn theta_ml(y: &[f64], mu: &[f64], w: &[f64], eps: f64, limit: usize) -> PolarsR
     }
     #[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN takes this branch on purpose
     if !(denom > 0.0) {
-        return Err(PolarsError::ComputeError(
-            "negative binomial: the Pearson statistic is zero, so theta has no \
-             moment estimate — the response does not vary around the fitted mean"
-                .into(),
-        ));
+        return Err(RegressionError::PearsonZero);
     }
 
     let mut t = w_sum / denom;
@@ -125,14 +122,7 @@ fn theta_ml(y: &[f64], mu: &[f64], w: &[f64], eps: f64, limit: usize) -> PolarsR
     }
 
     if !(t.is_finite() && t > 0.0) {
-        return Err(PolarsError::ComputeError(
-            format!(
-                "negative binomial: the profile likelihood in theta reached {t}. \
-                 The counts are probably not overdispersed — fit family='poisson', \
-                 or pass theta to fit at a known value."
-            )
-            .into(),
-        ));
+        return Err(RegressionError::ThetaDiverged(t));
     }
     Ok(t)
 }
@@ -154,7 +144,7 @@ pub(crate) fn fit_negbin(
     max_iter: usize,
     calib: Option<&CalibSweep>,
     singleton: SingletonRule,
-) -> PolarsResult<GlmResult> {
+) -> RResult<GlmResult> {
     let fit_at = |family: &str, th: Option<f64>, want_variance: bool| {
         fit_glm_domain(
             y,
@@ -268,7 +258,7 @@ fn materialise(
     domain_mask: Option<&[bool]>,
     n: usize,
     k: usize,
-) -> PolarsResult<Materialised> {
+) -> RResult<Materialised> {
     let y_cast = y.cast(&DataType::Float64)?;
     let y_vals: Vec<f64> = y_cast.f64()?.iter().map(|v| v.unwrap_or(0.0)).collect();
 
@@ -327,7 +317,7 @@ fn joint_vcov(
     fpc: Option<&Series>,
     singleton: SingletonRule,
     domain_mask: Option<&[bool]>,
-) -> PolarsResult<(Vec<f64>, f64)> {
+) -> RResult<(Vec<f64>, f64)> {
     let p = k + 1;
     let dg_theta = digamma(theta);
     let tg_theta = trigamma(theta);

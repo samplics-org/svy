@@ -15,6 +15,7 @@
 //   tot.infn <- svytotal(infn, design)
 //   SE(tot.infn)  # design-based SE for each coefficient
 
+use crate::regression::error::{RResult, RegressionError};
 use polars::prelude::*;
 
 use crate::estimation::calib_sweep::CalibSweep;
@@ -198,9 +199,9 @@ fn invert_kxk(a: &[f64], k: usize) -> Option<Vec<f64>> {
 /// * `w` - Sampling weights, length n (must be positive)
 /// * `n` - Number of observations
 /// * `k` - Number of predictors (columns of X)
-pub fn fit_wols(y: &[f64], x: &[f64], w: &[f64], n: usize, k: usize) -> Result<WolsResult, String> {
+pub fn fit_wols(y: &[f64], x: &[f64], w: &[f64], n: usize, k: usize) -> RResult<WolsResult> {
     if n == 0 || k == 0 {
-        return Err("Empty data or no predictors".to_string());
+        return Err(RegressionError::WolsEmpty);
     }
 
     // Build X'WX (k x k) and X'Wy (k x 1)
@@ -228,7 +229,7 @@ pub fn fit_wols(y: &[f64], x: &[f64], w: &[f64], n: usize, k: usize) -> Result<W
     }
 
     // Solve for beta
-    let beta = solve_kxk(&xtwx, &xtwy, k).ok_or_else(|| "Singular X'WX matrix".to_string())?;
+    let beta = solve_kxk(&xtwx, &xtwy, k).ok_or(RegressionError::WolsSingular)?;
 
     // Compute fitted values and residuals
     let mut fitted = vec![0.0; n];
@@ -243,7 +244,7 @@ pub fn fit_wols(y: &[f64], x: &[f64], w: &[f64], n: usize, k: usize) -> Result<W
     }
 
     // cov_unscaled = (X'WX)^{-1}
-    let cov_unscaled = invert_kxk(&xtwx, k).ok_or_else(|| "Cannot invert X'WX".to_string())?;
+    let cov_unscaled = invert_kxk(&xtwx, k).ok_or(RegressionError::WolsNotInvertible)?;
 
     // Influence functions: infn[i, j] = sum_p (x[i,p] * resid[i]) * cov_unscaled[p, j]
     // This matches R's: (xmat * (rankscore - fitted(m))) %*% summary(m)$cov.unscaled
@@ -308,7 +309,7 @@ pub fn influence_se(
     // S(E A) = (S E) A. Confirmed against survey 4.5 on apiclus1.
     calib: Option<&CalibSweep>,
     active: Option<&[bool]>,
-) -> PolarsResult<Vec<f64>> {
+) -> RResult<Vec<f64>> {
     let mut ses = Vec::with_capacity(k);
 
     for j in 0..k {
@@ -363,7 +364,7 @@ pub fn influence_covariance(
     // S(E A) = (S E) A. Confirmed against survey 4.5 on apiclus1.
     calib: Option<&CalibSweep>,
     active: Option<&[bool]>,
-) -> PolarsResult<Vec<f64>> {
+) -> RResult<Vec<f64>> {
     // Weight-scaled influence: infn_i * w_i (matches R svytotal).
     let cols: Vec<Vec<f64>> = (0..k)
         .map(|j| {
@@ -376,7 +377,7 @@ pub fn influence_covariance(
         .collect();
 
     // A missing stratum or PSU label is a group of its own here.
-    let labels = |c: &Column| -> PolarsResult<Column> {
+    let labels = |c: &Column| -> RResult<Column> {
         let s = c.cast(&DataType::String)?;
         let filled: StringChunked = s
             .str()?
