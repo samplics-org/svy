@@ -11,6 +11,7 @@ from typing import (
     Iterable,
     Iterator,
     Literal,
+    Mapping,
     Self,
     Sequence,
     TypeGuard,
@@ -30,7 +31,7 @@ from svy.errors import Code, EstimationError
 from svy.errors._api import guided_getattr
 from svy.errors._findings import merge_findings
 from svy.estimation import ParamEst
-from svy.estimation.estimate import VarLabels, checked_print_width
+from svy.estimation.estimate import VarLabels, checked_print_width, with_label_columns
 
 # Import central UI helpers (consistent with estimate.py and ttest.py)
 from svy.ui.printing import (
@@ -768,8 +769,10 @@ class Table:
             rows.append(rec)
         return rows
 
-    def to_polars(self, *, tidy: bool = True) -> Any:
-        return table_frame(self, tidy=tidy)
+    def to_polars(self, *, tidy: bool = True, use_labels: bool | None = None) -> pl.DataFrame:
+        """One row per cell, levels in their column's type; ``use_labels`` adds ``<var>_label`` columns."""
+        resolve = use_labels if use_labels is not None else self._resolve_use_labels()
+        return table_frame(self, tidy=tidy, labels=self._labels() if resolve else None)
 
     def to_dict(self) -> dict[str, object]:
         stats_payload: dict[str, object] | None
@@ -1170,7 +1173,9 @@ def _ensure_numeric(df: pl.DataFrame, col: str) -> pl.DataFrame:
     return df
 
 
-def table_frame(r: Any, *, tidy: bool = True) -> pl.DataFrame:
+def table_frame(
+    r: Any, *, tidy: bool = True, labels: Mapping[str, VarLabels] | None = None
+) -> pl.DataFrame:
     """The table of a ``Table``, shared with its serialized form (same field names)."""
     meta = {"table_type": _enum_label(r.type), "alpha": r.alpha}
     df = pl.DataFrame([{f: getattr(c, f) for f in _CELL_FIELDS} | meta for c in r.estimates or []])
@@ -1181,9 +1186,14 @@ def table_frame(r: Any, *, tidy: bool = True) -> pl.DataFrame:
         df = df.drop(drop_cols)
     if not tidy:
         return df
+    for col, values in (("rowvar", r.rowvals), ("colvar", r.colvals)):
+        if values and col in df.columns:
+            # Cells spell their levels as text; the table's levels hold the values.
+            source = {_level_text(v): v for v in values}
+            df = df.with_columns(pl.Series(col, [source.get(t, t) for t in df[col].to_list()]))
     rename = {"rowvar": r.rowvar}
     if r.colvar is not None and "colvar" in df.columns:
         rename["colvar"] = r.colvar
     elif "colvar" in df.columns:
         df = df.drop("colvar")
-    return df.rename(rename)
+    return with_label_columns(df.rename(rename), labels, where="Table.to_polars")
