@@ -64,7 +64,7 @@ gets one kind per member type instead.
 ### 2.5 `schema_version` on top-level structs
 
 Every top-level struct carries `schema_version: str = SCHEMA_VERSION` where
-`SCHEMA_VERSION = "svy-result/0.11"`. Consumers can check the version to know
+`SCHEMA_VERSION = "svy-result/0.12"`. Consumers can check the version to know
 what fields to expect.
 
 **Versioning policy:** bump the minor version (0.1 → 0.2) when fields are added
@@ -117,6 +117,8 @@ ignore unknown fields.
 - `0.11` — `findings` on the estimate, table, t-test and GLM fit kinds: the
   WARNING-level warnings the call raised (`code`, `level`, `title`, `detail`,
   `hint`, `var`, `got`); None when there were none, or decoded from an older payload.
+- `0.12` — `ParamEstData.df` widened to `int | float`: a replicate design's df can be
+  fractional (`RepWeights(df=16.9)`); an integral df stays an int.
 
 ### 2.6 Sub-structs are untagged
 
