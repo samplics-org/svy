@@ -343,3 +343,121 @@ pub fn df_write_xpt_file(
     write_xpt_impl(ipc_bytes.as_bytes(), path, version, name, label)
         .map_err(|e| e.into_py(Op::Write, "XPT", path))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::{Field, Schema};
+    use arrow::ipc::writer::FileWriter;
+    use arrow::record_batch::RecordBatch;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn ipc(fields: Vec<Field>, columns: Vec<ArrayRef>) -> Vec<u8> {
+        let schema = Arc::new(Schema::new(fields));
+        let batch = RecordBatch::try_new(schema.clone(), columns).unwrap();
+        let mut buf = Vec::new();
+        let mut w = FileWriter::try_new(&mut buf, &schema).unwrap();
+        w.write(&batch).unwrap();
+        w.finish().unwrap();
+        drop(w);
+        buf
+    }
+
+    fn one_double(name: &str) -> Vec<u8> {
+        ipc(
+            vec![Field::new(name, DataType::Float64, true)],
+            vec![Arc::new(Float64Array::from(vec![1.0]))],
+        )
+    }
+
+    fn fresh_path(stem: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("svy_io_{stem}.xpt"));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    fn invalid(
+        bytes: &[u8],
+        stem: &str,
+        version: i32,
+        name: Option<&str>,
+        label: Option<&str>,
+    ) -> String {
+        let path = fresh_path(stem);
+        let err = write_xpt_impl(bytes, path.to_str().unwrap(), version, name, label).unwrap_err();
+        assert!(!path.exists(), "{stem}: a rejected write left a file");
+        match err {
+            Error::Invalid(m) => m,
+            other => panic!("{stem}: expected Error::Invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_valid_frame_writes_a_file() {
+        let path = fresh_path("xpt_valid");
+        write_xpt_impl(&one_double("x"), path.to_str().unwrap(), 8, None, None).unwrap();
+        assert!(path.exists());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn bytes_that_are_not_arrow_ipc_are_rejected() {
+        let m = invalid(b"not arrow", "xpt_not_ipc", 8, None, None);
+        assert!(m.starts_with("Arrow IPC decode failed"), "{m}");
+    }
+
+    #[test]
+    fn only_versions_5_and_8_are_written() {
+        for version in [4, 6, 9] {
+            let m = invalid(&one_double("x"), "xpt_version", version, None, None);
+            assert_eq!(m, format!("XPT version must be 5 or 8, got {version}"));
+        }
+    }
+
+    #[test]
+    fn an_embedded_nul_is_rejected_wherever_it_appears() {
+        let m = invalid(&one_double("x"), "xpt_nul_label", 8, None, Some("a\0b"));
+        assert!(m.starts_with("file label"), "{m}");
+        let m = invalid(&one_double("x"), "xpt_nul_member", 8, Some("a\0b"), None);
+        assert!(m.starts_with("member name"), "{m}");
+        let m = invalid(&one_double("a\0b"), "xpt_nul_column", 8, None, None);
+        assert!(m.starts_with("column name"), "{m}");
+
+        let labelled = Field::new("x", DataType::Float64, true)
+            .with_metadata(HashMap::from([("label".to_string(), "a\0b".to_string())]));
+        let bytes = ipc(
+            vec![labelled],
+            vec![Arc::new(Float64Array::from(vec![1.0]))],
+        );
+        let m = invalid(&bytes, "xpt_nul_var_label", 8, None, None);
+        assert_eq!(m, "variable label of column 'x' contains an embedded NUL");
+    }
+
+    #[test]
+    fn a_string_over_200_bytes_is_rejected_before_writing() {
+        let bytes = ipc(
+            vec![Field::new("s", DataType::Utf8, true)],
+            vec![Arc::new(StringArray::from(vec!["a".repeat(201)]))],
+        );
+        let m = invalid(&bytes, "xpt_long_string", 8, None, None);
+        assert!(
+            m.contains("column 's' contains strings up to 201 bytes") && m.contains("at most 200"),
+            "{m}"
+        );
+    }
+
+    #[test]
+    fn a_missing_directory_is_an_io_error() {
+        let path = std::env::temp_dir()
+            .join("svy_io_no_such_dir")
+            .join("out.xpt");
+        let err =
+            write_xpt_impl(&one_double("x"), path.to_str().unwrap(), 8, None, None).unwrap_err();
+        assert!(
+            matches!(&err, Error::Io(e) if e.kind() == std::io::ErrorKind::NotFound),
+            "{err:?}"
+        );
+    }
+}

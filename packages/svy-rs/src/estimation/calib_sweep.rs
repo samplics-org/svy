@@ -436,3 +436,123 @@ pub fn sweep_scores(scores: &Float64Chunked, calib: Option<&CalibSweep>) -> Floa
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::excessive_precision)] // as R prints them
+mod tests {
+    use super::*;
+    use crate::estimation::taylor::taylor_variance_in;
+    use crate::test_fixtures::{COL, N, ROW, W, X2, Y, floats, psu, strata};
+    use approx::{assert_abs_diff_eq, assert_relative_eq};
+
+    // R values: tests/golden/kernel_unit_r.R, the weights after postStratify(~r),
+    // rake(~r, ~cc) to convergence and calibrate(~x2), and SE(svytotal(~y)) on each design.
+    const PS_W: [f64; N] = [
+        2.0454545454545454,
+        2.1666666666666665,
+        1.3636363636363635,
+        3.2500000000000000,
+        2.7083333333333330,
+        1.3636363636363635,
+        2.7272727272727271,
+        1.6250000000000000,
+        4.0909090909090908,
+        1.0833333333333333,
+        2.1666666666666665,
+        3.4090909090909083,
+    ];
+    const RAKE_W: [f64; N] = [
+        2.7879891732526709,
+        2.9022342519414766,
+        1.1697565653253983,
+        2.7398033344261865,
+        2.5501935821109289,
+        1.8586594488351140,
+        2.3395131306507966,
+        1.5301161492665580,
+        3.9196902686225128,
+        1.4511171259707383,
+        1.8265355562841237,
+        2.9243914133134958,
+    ];
+    const GREG_W: [f64; N] = [
+        1.6184497694783024,
+        2.1780172009801078,
+        1.0756191504840289,
+        3.2770678889746803,
+        2.7141530949713686,
+        1.0823138754870414,
+        2.1981013759891450,
+        1.6435549882395994,
+        3.2328827039547976,
+        1.0803054579861375,
+        2.1820340359819150,
+        2.7175004574728749,
+    ];
+
+    fn sweep(kind: SweepKind, new_w: &[f64; N]) -> CalibSweep {
+        let (cells, n_cells, aux) = match kind {
+            SweepKind::Cells => (vec![ROW.to_vec()], vec![2], vec![]),
+            SweepKind::Raking => (vec![ROW.to_vec(), COL.to_vec()], vec![2, 3], vec![]),
+            SweepKind::Greg => (vec![], vec![], vec![vec![1.0; N], X2.to_vec()]),
+        };
+        CalibSweep::new(kind, cells, n_cells, aux, W.to_vec(), new_w.to_vec(), true)
+    }
+
+    fn total_se(calib: &CalibSweep, new_w: &[f64; N]) -> f64 {
+        let scores: Vec<f64> = (0..N).map(|i| new_w[i] * Y[i]).collect();
+        let swept = sweep_scores(&floats("y", &scores), Some(calib));
+        let (st, ps) = (strata(), psu());
+        taylor_variance_in(&swept, Some(&st), Some(&ps), None, None, None, None, None)
+            .unwrap()
+            .sqrt()
+    }
+
+    #[test]
+    fn calibrated_total_se_matches_r() {
+        for (kind, new_w, r_se) in [
+            (SweepKind::Cells, &PS_W, 11.966464599547782),
+            (SweepKind::Raking, &RAKE_W, 6.6548047086310138),
+            (SweepKind::Greg, &GREG_W, 2.4903047805585312),
+        ] {
+            let got = total_se(&sweep(kind, new_w), new_w);
+            assert_relative_eq!(got, r_se, max_relative = 1e-12);
+        }
+    }
+
+    #[test]
+    fn a_pinned_total_has_nothing_left_to_vary() {
+        // A poststratified cell's own total, and a calibrated auxiliary's.
+        let cell: Vec<f64> = (0..N)
+            .map(|i| if ROW[i] == 0 { PS_W[i] } else { 0.0 })
+            .collect();
+        let mut x = cell.clone();
+        sweep(SweepKind::Cells, &PS_W).apply(&mut x);
+        assert!(x.iter().all(|&v| v == 0.0), "{x:?}");
+
+        let mut x: Vec<f64> = (0..N).map(|i| GREG_W[i] * X2[i]).collect();
+        sweep(SweepKind::Greg, &GREG_W).apply(&mut x);
+        for v in x {
+            assert_abs_diff_eq!(v, 0.0, epsilon = 1e-13);
+        }
+    }
+
+    #[test]
+    fn rows_out_of_scope_are_left_alone() {
+        let mut codes = ROW.to_vec();
+        codes[0] = OUT_OF_SCOPE;
+        let calib = CalibSweep::new(
+            SweepKind::Cells,
+            vec![codes],
+            vec![2],
+            vec![],
+            W.to_vec(),
+            PS_W.to_vec(),
+            true,
+        );
+        let mut x: Vec<f64> = (0..N).map(|i| PS_W[i] * Y[i]).collect();
+        let before = x[0];
+        calib.apply(&mut x);
+        assert_eq!(x[0], before);
+    }
+}

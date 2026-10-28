@@ -461,3 +461,79 @@ fn joint_vcov(
     }
     Ok((beta_block, vcov[k * p + k].max(0.0).sqrt()))
 }
+
+#[cfg(test)]
+#[allow(clippy::excessive_precision)] // as R prints them
+mod tests {
+    use super::*;
+    use crate::test_fixtures::{COUNTS, N, W, X2};
+    use approx::assert_relative_eq;
+
+    // R values: tests/golden/kernel_unit_r.R. MU is fitted(glm.nb(k ~ x2, weights = w)).
+    const MU: [f64; N] = [
+        1.31966039014371339,
+        5.59202755573744525,
+        0.81550471125073876,
+        9.04909213164547133,
+        3.45568060631963991,
+        2.13549170383493614,
+        23.69607545826351469,
+        14.64335924507248521,
+        1.08854878806191757,
+        1.59983968051159087,
+        7.46432820635814487,
+        4.18936189830055117,
+    ];
+
+    #[test]
+    fn loglik_matches_r_dnbinom() {
+        // sum(w * dnbinom(k, size = 2, mu = MU, log = TRUE))
+        assert_relative_eq!(
+            loglik(&COUNTS, &MU, 2.0, &W),
+            -59.122499592789872,
+            max_relative = 1e-13
+        );
+    }
+
+    #[test]
+    fn theta_ml_matches_mass() {
+        // MASS::theta.ml(k, MU, weights = w, eps = 1e-14): both stop on a Newton step below 1e-14.
+        let theta = theta_ml(&COUNTS, &MU, &W, 1e-14, 100).unwrap();
+        assert_relative_eq!(theta, 1.43185951150404, max_relative = 1e-12);
+    }
+
+    #[test]
+    fn joint_fit_matches_mass_glm_nb() {
+        // glm.nb at epsilon = 1e-15 sits at the optimum (score ~1e-14). IRLS here stops
+        // on R's relative-deviance rule at tol = 1e-12, and the deviance is quadratic
+        // at the optimum, so beta, and theta through it, are good to sqrt(tol).
+        let series = |name: &str, v: &[f64]| Series::new(name.into(), v);
+        let result = fit_negbin(
+            &series("k", &COUNTS),
+            vec![series("one", &[1.0; N]), series("x2", &X2)],
+            &series("w", &W),
+            None,
+            None,
+            None,
+            None,
+            None,
+            "log",
+            None,
+            1e-12,
+            100,
+            None,
+            SingletonRule::NONE,
+        )
+        .unwrap();
+        let beta = [-0.68527058038375366, 0.96264500512689399];
+        for (got, want) in result.params.iter().zip(beta) {
+            assert_relative_eq!(*got, want, max_relative = 1e-6);
+        }
+        assert_relative_eq!(
+            result.theta.unwrap(),
+            1.4318595117498649,
+            max_relative = 1e-6
+        );
+        assert!(result.converged);
+    }
+}

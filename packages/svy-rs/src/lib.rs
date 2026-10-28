@@ -11,6 +11,8 @@ pub mod estimation;
 mod regression;
 mod rng;
 mod sampling;
+#[cfg(test)]
+mod test_fixtures;
 mod weighting;
 
 // ============================================================================
