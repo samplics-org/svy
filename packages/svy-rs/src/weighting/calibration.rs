@@ -157,14 +157,29 @@ fn solve_linear_system(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> 
         ));
     }
 
-    // Create augmented matrix [A|b]
+    // Solve on D A D with D = diag(A)^(-1/2), so no auxiliary's units decide whether
+    // the system counts as singular or which directions the pseudo-inverse keeps.
+    // A zero diagonal (an auxiliary with no weight) is left unscaled.
+    let d: Array1<f64> = (0..n)
+        .map(|i| {
+            let v = a[[i, i]];
+            if v > 0.0 { 1.0 / v.sqrt() } else { 1.0 }
+        })
+        .collect();
+    let scaled_a = Array2::from_shape_fn((n, n), |(i, j)| a[[i, j]] * d[i] * d[j]);
+    let scaled_b = b * &d;
+
+    // Create augmented matrix [D A D | D b]
     let mut aug = Array2::zeros((n, n + 1));
     for i in 0..n {
         for j in 0..n {
-            aug[[i, j]] = a[[i, j]];
+            aug[[i, j]] = scaled_a[[i, j]];
         }
-        aug[[i, n]] = b[i];
+        aug[[i, n]] = scaled_b[i];
     }
+
+    // Relative to the scaled system, whose nonzero diagonal entries are 1.
+    let pivot_tol = 256.0 * f64::EPSILON;
 
     // Forward elimination with partial pivoting
     for k in 0..n {
@@ -181,8 +196,8 @@ fn solve_linear_system(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> 
         }
 
         // Singular, e.g. controls that imply one another: the minimum-norm solution.
-        if max_val < 1e-10 {
-            return solve_pseudoinverse(a, b);
+        if max_val <= pivot_tol {
+            return Ok(solve_pseudoinverse(&scaled_a, &scaled_b)? * &d);
         }
 
         // Swap rows
@@ -212,6 +227,7 @@ fn solve_linear_system(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> 
         }
         x[i] = sum / aug[[i, i]];
     }
+    x *= &d;
 
     Ok(x)
 }

@@ -98,9 +98,9 @@ pub fn rake_impl(
                 for r in 0..n_reps {
                     let current_sum = current_sums[[g, r]];
                     let target = margin.targets[g];
-                    if current_sum > 1e-10 {
+                    if current_sum > 0.0 {
                         factors[[g, r]] = target / current_sum;
-                    } else if target > 1e-10 {
+                    } else if target > 0.0 {
                         return Err(WeightingError::ZeroWeights(g));
                     } else {
                         factors[[g, r]] = 1.0;
