@@ -1,7 +1,7 @@
 // native/svyreadstat_rs/src/stata_read.rs
 use crate::core::{
-    ParseCtx, check_parse, finalize_to_ipc, on_error_cb, on_metadata_cb, on_note_cb, on_value_cb,
-    on_value_label_cb, on_variable_cb,
+    ParseCtx, ParserGuard, check_parse, configure_parser, finalize_to_ipc, on_error_cb,
+    on_metadata_cb, on_note_cb, on_value_cb, on_value_label_cb, on_variable_cb,
 };
 use crate::errors::{Error, Op, Result};
 use pyo3::prelude::*;
@@ -109,35 +109,30 @@ fn run_parse(
         panic_err: None,
     };
 
-    // Before the parser exists, so a bad path cannot return without freeing it.
     let c_path = crate::core::c_path(data_path)?;
-    // SAFETY: the parser is freed once on every path out; `ctx`, the path and `_keep_enc`
-    // outlive the parse, and only the callbacks touch `ctx` until it returns.
+    let parser = ParserGuard::new()?;
+    // SAFETY: `parser` is live and each handler matches ReadStat's callback type.
     unsafe {
-        let p = readstat_parser_init();
-        if p.is_null() {
-            return Err(Error::Internal("readstat_parser_init() failed".into()));
-        }
-        readstat_set_error_handler(p, Some(on_error_cb));
-        readstat_set_metadata_handler(p, Some(on_metadata_cb));
-        readstat_set_variable_handler(p, Some(on_variable_cb));
-        readstat_set_value_handler(p, Some(on_value_cb));
-
-        let enc = crate::core::input_encoding(attempt, lossy_utf8);
-        let _keep_enc = match crate::core::configure_parser(p, enc, rows_skip, n_max) {
-            Ok(k) => k,
-            Err(e) => {
-                readstat_parser_free(p);
-                return Err(e);
-            }
-        };
-        readstat_set_value_label_handler(p, Some(on_value_label_cb));
-        readstat_set_note_handler(p, Some(on_note_cb));
-
-        let rc = readstat_parse_dta(p, c_path.as_ptr(), &mut ctx as *mut _ as *mut c_void);
-        readstat_parser_free(p);
-        check_parse(rc, &mut ctx, data_path, encoding)?;
+        readstat_set_error_handler(parser.as_ptr(), Some(on_error_cb));
+        readstat_set_metadata_handler(parser.as_ptr(), Some(on_metadata_cb));
+        readstat_set_variable_handler(parser.as_ptr(), Some(on_variable_cb));
+        readstat_set_value_handler(parser.as_ptr(), Some(on_value_cb));
+        readstat_set_value_label_handler(parser.as_ptr(), Some(on_value_label_cb));
+        readstat_set_note_handler(parser.as_ptr(), Some(on_note_cb));
     }
+    let enc = crate::core::input_encoding(attempt, lossy_utf8);
+    let _keep_enc = configure_parser(&parser, enc, rows_skip, n_max)?;
+    // SAFETY: `ctx`, the path and `_keep_enc` outlive the parse, and only the callbacks
+    // touch `ctx` until it returns.
+    let rc = unsafe {
+        readstat_parse_dta(
+            parser.as_ptr(),
+            c_path.as_ptr(),
+            &mut ctx as *mut _ as *mut c_void,
+        )
+    };
+    drop(parser);
+    check_parse(rc, &mut ctx, data_path, encoding)?;
 
     finalize_to_ipc(ctx)
 }

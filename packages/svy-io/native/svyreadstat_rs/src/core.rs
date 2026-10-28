@@ -40,12 +40,8 @@ pub(crate) const HANDLER_OK: c_int = 0;
 /// U+FFFD-riddled lossy UTF-8. The row limit backstops the callback-side
 /// n_max abort for untrusted files. Returns the CString holding the
 /// encoding so it outlives the parse.
-///
-/// # Safety
-///
-/// `parser` must come from `readstat_parser_init` and not be freed yet.
-pub(crate) unsafe fn configure_parser(
-    parser: *mut readstat_sys::readstat_parser_t,
+pub(crate) fn configure_parser(
+    parser: &ParserGuard,
     encoding: Option<&str>,
     rows_skip: usize,
     n_max: Option<usize>,
@@ -55,7 +51,8 @@ pub(crate) unsafe fn configure_parser(
         let c = std::ffi::CString::new(enc)
             .map_err(|_| Error::Invalid(format!("encoding {enc:?} contains an embedded NUL")))?;
         // SAFETY: `parser` is live; ReadStat keeps this pointer, so `c` goes back to the caller.
-        let rc = unsafe { readstat_sys::readstat_set_file_character_encoding(parser, c.as_ptr()) };
+        let rc =
+            unsafe { readstat_sys::readstat_set_file_character_encoding(parser.0, c.as_ptr()) };
         if rc != readstat_sys::readstat_error_e_READSTAT_OK {
             return Err(Error::UnsupportedEncoding {
                 encoding: enc.to_string(),
@@ -65,8 +62,8 @@ pub(crate) unsafe fn configure_parser(
         keep_enc = Some(c);
     }
     if let Some(limit) = n_max.and_then(|nm| row_limit(rows_skip, nm)) {
-        // SAFETY: `parser` is live (caller's guarantee).
-        unsafe { readstat_sys::readstat_set_row_limit(parser, limit) };
+        // SAFETY: `parser` is live.
+        unsafe { readstat_sys::readstat_set_row_limit(parser.0, limit) };
     }
     Ok(keep_enc)
 }
@@ -1076,6 +1073,33 @@ pub(crate) fn finalize_to_ipc(mut ctx: ParseCtx) -> Result<(Vec<u8>, MetaOut)> {
     };
 
     Ok((buf, meta))
+}
+
+// ---------- Parser guard ----------
+
+/// A live readstat parser, freed on drop so no return path leaks it.
+pub(crate) struct ParserGuard(*mut readstat_sys::readstat_parser_t);
+
+impl ParserGuard {
+    pub(crate) fn new() -> Result<Self> {
+        // SAFETY: no preconditions; a null return is refused below.
+        let p = unsafe { readstat_sys::readstat_parser_init() };
+        if p.is_null() {
+            return Err(Error::Internal("readstat_parser_init() failed".into()));
+        }
+        Ok(Self(p))
+    }
+
+    pub(crate) fn as_ptr(&self) -> *mut readstat_sys::readstat_parser_t {
+        self.0
+    }
+}
+
+impl Drop for ParserGuard {
+    fn drop(&mut self) {
+        // SAFETY: the pointer came from `readstat_parser_init` and is freed only here.
+        unsafe { readstat_sys::readstat_parser_free(self.0) };
+    }
 }
 
 // ---------- Writer guard ----------
