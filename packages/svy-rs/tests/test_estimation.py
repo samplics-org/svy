@@ -3,9 +3,9 @@ Tests for svy-rs survey estimation functions, exercised through the current
 ``_internal`` API re-exported at the ``svy_rs`` top level:
 ``taylor_mean`` / ``taylor_total`` / ``taylor_ratio`` / ``taylor_prop``.
 
-Expected values from the R survey package / the svy library. These are golden
-tests on the monorepo's shared test data (packages/svy/tests/test_data/), complementing
-the svy-package suite which drives the same kernels through the Python layer.
+Expected values come from R survey via golden/estimation_r.R, run on the monorepo's
+shared test data (packages/svy/tests/test_data/). The svy-package suite drives the
+same kernels through the Python layer.
 
 Note: the ``_internal`` functions do NOT auto-cast — the svy Python layer owns
 that. So the caller must hand the kernel Float64 value/weight columns and String
@@ -13,6 +13,7 @@ strata/psu/by columns (see ``_cast_for_kernel``). The removed ``df.svy`` polars
 accessor used to do this implicitly.
 """
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -20,7 +21,8 @@ import polars as pl
 import pytest
 import svy_rs as ps
 
-TOL = 1e-7  # For overall estimates
+# R and Rust sum ~1000 rows in different orders: rounding is bounded by about n * eps.
+TOL = 1e-12
 
 # Shared with the svy package; data/ directories are gitignored repo-wide.
 DATA_DIR = Path(__file__).parents[2] / "svy" / "tests" / "test_data"
@@ -72,52 +74,35 @@ def _cast_for_kernel(df, design_kwargs, *, by_col=None, float_cols=()):
 
 
 # =============================================================================
+# R GOLDEN VALUES: golden/estimation_r.R (survey 4.5) on the rows each test keeps
+# =============================================================================
+
+GOLDEN = json.loads((Path(__file__).parent / "golden" / "estimation_r.json").read_text())
+
+DESIGNS = {
+    "none": dict(weight="samp_wgt"),
+    "strata": dict(weight="samp_wgt", strata="region"),
+    "psu": dict(weight="samp_wgt", psu="cluster"),
+    "strata_psu": dict(weight="samp_wgt", strata="region", psu="cluster"),
+}
+BY_EDUC = DESIGNS["strata_psu"]
+# resp2_new is Float64, so the kernel labels its levels "0.0"/"1.0"; R's are "0"/"1".
+R_LEVEL = {"0.0": "0", "1.0": "1"}
+
+
+def _assert_matches(row, expected, label):
+    assert row["est"] == pytest.approx(expected["est"], rel=TOL), f"est for {label}"
+    assert row["se"] == pytest.approx(expected["se"], rel=TOL), f"se for {label}"
+
+
+# =============================================================================
 # MEAN ESTIMATION TESTS
 # =============================================================================
 
 
-@pytest.mark.parametrize(
-    "design_kwargs,expected",
-    [
-        (
-            dict(weight="samp_wgt"),
-            dict(
-                est=50074.677523194,
-                se=559.6724463009815,
-            ),
-        ),
-        (
-            dict(weight="samp_wgt", strata="region"),
-            dict(
-                est=50074.677523194,
-                se=559.3284439465469,
-            ),
-        ),
-        (
-            dict(weight="samp_wgt", psu="cluster"),
-            dict(
-                est=50074.677523194,
-                se=504.498568055472,
-            ),
-        ),
-        (
-            dict(weight="samp_wgt", strata="region", psu="cluster"),
-            dict(
-                est=50074.677523194,
-                se=495.280768426878,
-            ),
-        ),
-    ],
-    ids=[
-        "no_strat_no_cluster",
-        "strat_only",
-        "cluster_only",
-        "strat_and_cluster",
-    ],
-)
-def test_mean_estimation_variants(synthetic_sample_df, design_kwargs, expected):
-    """Test mean estimation under different survey design configurations."""
-    # Drop nulls from y and weight
+@pytest.mark.parametrize("design", DESIGNS)
+def test_mean_estimation_variants(synthetic_sample_df, design):
+    design_kwargs = DESIGNS[design]
     df = synthetic_sample_df.filter(
         pl.col("income").is_not_null() & pl.col("samp_wgt").is_not_null()
     )
@@ -131,72 +116,30 @@ def test_mean_estimation_variants(synthetic_sample_df, design_kwargs, expected):
         psu_col=design_kwargs.get("psu"),
     )
 
-    assert result["est"][0] == pytest.approx(expected["est"], rel=TOL)
-    assert result["se"][0] == pytest.approx(expected["se"], rel=TOL)
+    _assert_matches(result.row(0, named=True), GOLDEN["mean"][design], design)
 
 
-@pytest.mark.parametrize(
-    "design_kwargs,expected",
-    [
-        (
-            dict(weight="samp_wgt", strata="region", psu="cluster"),
-            {
-                "High School": {
-                    "est": 49668.86660548509,
-                    "se": 954.9981380890723,
-                },
-                "Less than High School": {
-                    "est": 49045.36478627392,
-                    "se": 1766.9673064945998,
-                },
-                "None": {
-                    "est": 48783.45141575658,
-                    "se": 3569.0910333184715,
-                },
-                "Other Training": {
-                    "est": 48590.49772572005,
-                    "se": 2362.0782172028103,
-                },
-                "Postgraduate": {
-                    "est": 51736.21867040831,
-                    "se": 1340.8678476746595,
-                },
-                "Undergraduate": {
-                    "est": 50396.049897858386,
-                    "se": 937.773912184483,
-                },
-            },
-        ),
-    ],
-    ids=["mean_by_education"],
-)
-def test_mean_domain_estimates(synthetic_sample_df, design_kwargs, expected):
-    """Test mean estimation by education domain."""
-    # Drop nulls from y, weight, and domain
+def test_mean_domain_estimates(synthetic_sample_df):
     df = synthetic_sample_df.filter(
         pl.col("income").is_not_null()
         & pl.col("samp_wgt").is_not_null()
         & pl.col("educ").is_not_null()
     )
-    df = _cast_for_kernel(df, design_kwargs, by_col="educ")
+    df = _cast_for_kernel(df, BY_EDUC, by_col="educ")
 
     result, _ = ps.taylor_mean(
         df,
         value_col="income",
-        weight_col=design_kwargs["weight"],
-        strata_col=design_kwargs.get("strata"),
-        psu_col=design_kwargs.get("psu"),
+        weight_col=BY_EDUC["weight"],
+        strata_col=BY_EDUC["strata"],
+        psu_col=BY_EDUC["psu"],
         by_col="educ",
     )
 
+    expected = GOLDEN["mean_by_educ"]
+    assert sorted(result["educ"]) == sorted(expected)
     for row in result.iter_rows(named=True):
-        domain = row["educ"]
-        if domain not in expected:
-            continue
-
-        exp = expected[domain]
-        assert row["est"] == pytest.approx(exp["est"], rel=TOL), f"Failed for domain {domain}"
-        assert row["se"] == pytest.approx(exp["se"], rel=TOL), f"Failed for domain {domain}"
+        _assert_matches(row, expected[row["educ"]], row["educ"])
 
 
 # =============================================================================
@@ -204,48 +147,9 @@ def test_mean_domain_estimates(synthetic_sample_df, design_kwargs, expected):
 # =============================================================================
 
 
-@pytest.mark.parametrize(
-    "design_kwargs,expected",
-    [
-        (
-            dict(weight="samp_wgt"),
-            dict(
-                est=430882.7569272894,
-                se=18155.244686691767,
-            ),
-        ),
-        (
-            dict(weight="samp_wgt", strata="region"),
-            dict(
-                est=430882.7569272894,
-                se=18179.23128608681,
-            ),
-        ),
-        (
-            dict(weight="samp_wgt", psu="cluster"),
-            dict(
-                est=430882.7569272894,
-                se=22066.51218304301,
-            ),
-        ),
-        (
-            dict(weight="samp_wgt", strata="region", psu="cluster"),
-            dict(
-                est=430882.7569272894,
-                se=22282.627163143527,
-            ),
-        ),
-    ],
-    ids=[
-        "no_strat_no_cluster",
-        "strat_only",
-        "cluster_only",
-        "strat_and_cluster",
-    ],
-)
-def test_total_estimation_variants(synthetic_sample_df, design_kwargs, expected):
-    """Test total estimation under different survey design configurations."""
-    # Drop nulls from y and weight
+@pytest.mark.parametrize("design", DESIGNS)
+def test_total_estimation_variants(synthetic_sample_df, design):
+    design_kwargs = DESIGNS[design]
     df = synthetic_sample_df.filter(
         pl.col("resp2_new").is_not_null() & pl.col("samp_wgt").is_not_null()
     )
@@ -259,72 +163,30 @@ def test_total_estimation_variants(synthetic_sample_df, design_kwargs, expected)
         psu_col=design_kwargs.get("psu"),
     )
 
-    assert result["est"][0] == pytest.approx(expected["est"], rel=TOL)
-    assert result["se"][0] == pytest.approx(expected["se"], rel=TOL)
+    _assert_matches(result.row(0, named=True), GOLDEN["total"][design], design)
 
 
-@pytest.mark.parametrize(
-    "design_kwargs,expected",
-    [
-        (
-            dict(weight="samp_wgt", strata="region", psu="cluster"),
-            {
-                "High School": {
-                    "est": 126011.02459107367,
-                    "se": 12278.350285279997,
-                },
-                "Less than High School": {
-                    "est": 50085.11096341969,
-                    "se": 7671.249179217489,
-                },
-                "None": {
-                    "est": 4031.5713053827712,
-                    "se": 2400.7352274310388,
-                },
-                "Other Training": {
-                    "est": 38881.681425075614,
-                    "se": 7166.346673501455,
-                },
-                "Postgraduate": {
-                    "est": 79852.96630730784,
-                    "se": 10548.404342620915,
-                },
-                "Undergraduate": {
-                    "est": 132020.40233502985,
-                    "se": 12297.752124110806,
-                },
-            },
-        ),
-    ],
-    ids=["total_by_education"],
-)
-def test_total_domain_estimates(synthetic_sample_df, design_kwargs, expected):
-    """Test total estimation by education domain."""
-    # Drop nulls from y, weight, and domain
+def test_total_domain_estimates(synthetic_sample_df):
     df = synthetic_sample_df.filter(
         pl.col("resp2_new").is_not_null()
         & pl.col("samp_wgt").is_not_null()
         & pl.col("educ").is_not_null()
     )
-    df = _cast_for_kernel(df, design_kwargs, by_col="educ")
+    df = _cast_for_kernel(df, BY_EDUC, by_col="educ")
 
     result, _ = ps.taylor_total(
         df,
         value_col="resp2_new",
-        weight_col=design_kwargs["weight"],
-        strata_col=design_kwargs.get("strata"),
-        psu_col=design_kwargs.get("psu"),
+        weight_col=BY_EDUC["weight"],
+        strata_col=BY_EDUC["strata"],
+        psu_col=BY_EDUC["psu"],
         by_col="educ",
     )
 
+    expected = GOLDEN["total_by_educ"]
+    assert sorted(result["educ"]) == sorted(expected)
     for row in result.iter_rows(named=True):
-        domain = row["educ"]
-        if domain not in expected:
-            continue
-
-        exp = expected[domain]
-        assert row["est"] == pytest.approx(exp["est"], rel=TOL), f"Failed for domain {domain}"
-        assert row["se"] == pytest.approx(exp["se"], rel=TOL), f"Failed for domain {domain}"
+        _assert_matches(row, expected[row["educ"]], row["educ"])
 
 
 # =============================================================================
@@ -332,48 +194,9 @@ def test_total_domain_estimates(synthetic_sample_df, design_kwargs, expected):
 # =============================================================================
 
 
-@pytest.mark.parametrize(
-    "design_kwargs,expected",
-    [
-        (
-            dict(weight="samp_wgt"),
-            dict(
-                est=16672.1357678339,
-                se=459.843564734807,
-            ),
-        ),
-        (
-            dict(weight="samp_wgt", strata="region"),
-            dict(
-                est=16672.1357678339,
-                se=430.583615215761,
-            ),
-        ),
-        (
-            dict(weight="samp_wgt", psu="cluster"),
-            dict(
-                est=16672.1357678339,
-                se=755.063112238264,
-            ),
-        ),
-        (
-            dict(weight="samp_wgt", strata="region", psu="cluster"),
-            dict(
-                est=16672.1357678339,
-                se=388.084327446482,
-            ),
-        ),
-    ],
-    ids=[
-        "no_strat_no_cluster",
-        "strat_only",
-        "cluster_only",
-        "strat_and_cluster",
-    ],
-)
-def test_ratio_estimation_variants(synthetic_sample_df, design_kwargs, expected):
-    """Test ratio estimation under different survey design configurations."""
-    # Drop nulls from y, x, and weight
+@pytest.mark.parametrize("design", DESIGNS)
+def test_ratio_estimation_variants(synthetic_sample_df, design):
+    design_kwargs = DESIGNS[design]
     df = synthetic_sample_df.filter(
         pl.col("income").is_not_null()
         & pl.col("fam_size").is_not_null()
@@ -391,74 +214,32 @@ def test_ratio_estimation_variants(synthetic_sample_df, design_kwargs, expected)
         psu_col=design_kwargs.get("psu"),
     )
 
-    assert result["est"][0] == pytest.approx(expected["est"], rel=TOL)
-    assert result["se"][0] == pytest.approx(expected["se"], rel=TOL)
+    _assert_matches(result.row(0, named=True), GOLDEN["ratio"][design], design)
 
 
-@pytest.mark.parametrize(
-    "design_kwargs,expected",
-    [
-        (
-            dict(weight="samp_wgt", strata="region", psu="cluster"),
-            {
-                "High School": {
-                    "est": 15449.60988187744,
-                    "se": 664.9105168839737,
-                },
-                "Less than High School": {
-                    "est": 17164.92902701146,
-                    "se": 1242.1601118033134,
-                },
-                "None": {
-                    "est": 17595.50594658943,
-                    "se": 5795.347009380558,
-                },
-                "Other Training": {
-                    "est": 16594.93903142071,
-                    "se": 1442.3602663088564,
-                },
-                "Postgraduate": {
-                    "est": 18242.280746003547,
-                    "se": 944.7243230547681,
-                },
-                "Undergraduate": {
-                    "est": 16923.420157731118,
-                    "se": 927.1297397098011,
-                },
-            },
-        ),
-    ],
-    ids=["ratio_by_education"],
-)
-def test_ratio_domain_estimates(synthetic_sample_df, design_kwargs, expected):
-    """Test ratio estimation by education domain."""
-    # Drop nulls from y, x, weight, and domain
+def test_ratio_domain_estimates(synthetic_sample_df):
     df = synthetic_sample_df.filter(
         pl.col("income").is_not_null()
         & pl.col("fam_size").is_not_null()
         & pl.col("samp_wgt").is_not_null()
         & pl.col("educ").is_not_null()
     )
-    df = _cast_for_kernel(df, design_kwargs, by_col="educ", float_cols=("fam_size",))
+    df = _cast_for_kernel(df, BY_EDUC, by_col="educ", float_cols=("fam_size",))
 
     result, _ = ps.taylor_ratio(
         df,
         numerator_col="income",
         denominator_col="fam_size",
-        weight_col=design_kwargs["weight"],
-        strata_col=design_kwargs.get("strata"),
-        psu_col=design_kwargs.get("psu"),
+        weight_col=BY_EDUC["weight"],
+        strata_col=BY_EDUC["strata"],
+        psu_col=BY_EDUC["psu"],
         by_col="educ",
     )
 
+    expected = GOLDEN["ratio_by_educ"]
+    assert sorted(result["educ"]) == sorted(expected)
     for row in result.iter_rows(named=True):
-        domain = row["educ"]
-        if domain not in expected:
-            continue
-
-        exp = expected[domain]
-        assert row["est"] == pytest.approx(exp["est"], rel=TOL), f"Failed for domain {domain}"
-        assert row["se"] == pytest.approx(exp["se"], rel=TOL), f"Failed for domain {domain}"
+        _assert_matches(row, expected[row["educ"]], row["educ"])
 
 
 # =============================================================================
@@ -539,7 +320,9 @@ def test_ratio():
         }
     )
 
-    result, _ = ps.taylor_ratio(df, numerator_col="num", denominator_col="denom", weight_col="weight")
+    result, _ = ps.taylor_ratio(
+        df, numerator_col="num", denominator_col="denom", weight_col="weight"
+    )
 
     # Ratio: (100+200+300) / (10+20+30) = 600/60 = 10
     assert result["est"][0] == pytest.approx(10.0, rel=1e-10)
@@ -550,53 +333,12 @@ def test_ratio():
 # =============================================================================
 
 
-@pytest.mark.parametrize(
-    "design_kwargs,expected",
-    [
-        (
-            dict(weight="samp_wgt"),
-            {
-                "0": {"est": 0.4919919717111689, "se": 0.01881570868400254},
-                "1": {"est": 0.5080080282888311, "se": 0.01881570868400254},
-            },
-        ),
-        (
-            dict(weight="samp_wgt", strata="region"),
-            {
-                "0": {"est": 0.4919919717111689, "se": 0.01883380889343362},
-                "1": {"est": 0.5080080282888311, "se": 0.01883380889343362},
-            },
-        ),
-        (
-            dict(weight="samp_wgt", psu="cluster"),
-            {
-                "0": {"est": 0.4919919717111689, "se": 0.016460751406429497},
-                "1": {"est": 0.5080080282888311, "se": 0.016460751406429497},
-            },
-        ),
-        (
-            dict(weight="samp_wgt", strata="region", psu="cluster"),
-            {
-                "0": {"est": 0.4919919717111689, "se": 0.016684696308476837},
-                "1": {"est": 0.5080080282888311, "se": 0.016684696308476837},
-            },
-        ),
-    ],
-    ids=[
-        "no_strat_no_cluster",
-        "strat_only",
-        "cluster_only",
-        "strat_and_cluster",
-    ],
-)
-def test_prop_estimation_variants(synthetic_sample_df, design_kwargs, expected):
-    """Test proportion estimation for both levels under different survey design configurations."""
-    # Drop nulls from y and weight
+@pytest.mark.parametrize("design", DESIGNS)
+def test_prop_estimation_variants(synthetic_sample_df, design):
+    design_kwargs = DESIGNS[design]
     df = synthetic_sample_df.filter(
         pl.col("resp2_new").is_not_null() & pl.col("samp_wgt").is_not_null()
     )
-
-    # Cast columns
     df = _cast_for_kernel(df, design_kwargs)
 
     result, _ = ps.taylor_prop(
@@ -607,84 +349,35 @@ def test_prop_estimation_variants(synthetic_sample_df, design_kwargs, expected):
         psu_col=design_kwargs.get("psu"),
     )
 
+    expected = GOLDEN["prop"][design]
+    assert sorted(result["level"]) == sorted(R_LEVEL)
     for row in result.iter_rows(named=True):
-        level = row["level"]
-        if level not in expected:
-            continue
-
-        exp = expected[level]
-        assert row["est"] == pytest.approx(exp["est"], rel=TOL), f"Failed est for level {level}"
-        assert row["se"] == pytest.approx(exp["se"], rel=TOL), f"Failed se for level {level}"
+        _assert_matches(row, expected[R_LEVEL[row["level"]]], f"{design}/{row['level']}")
 
 
-@pytest.mark.parametrize(
-    "design_kwargs,expected",
-    [
-        (
-            dict(weight="samp_wgt", strata="region", psu="cluster"),
-            {
-                "High School": {
-                    "0": {"est": 0.517386057398944, "se": 0.034773319122857166},
-                    "1": {"est": 0.4826139426010561, "se": 0.03477331912285716},
-                },
-                "Less than High School": {
-                    "0": {"est": 0.47352270517357975, "se": 0.053246062258294605},
-                    "1": {"est": 0.5264772948264204, "se": 0.0532460622582946},
-                },
-                "None": {
-                    "0": {"est": 0.6156279866192711, "se": 0.19552519488724335},
-                    "1": {"est": 0.38437201338072857, "se": 0.19552519488724335},
-                },
-                "Other Training": {
-                    "0": {"est": 0.5197329291594812, "se": 0.05605898285334822},
-                    "1": {"est": 0.4802670708405189, "se": 0.05605898285334822},
-                },
-                "Postgraduate": {
-                    "0": {"est": 0.48954863443781704, "se": 0.04238496022685627},
-                    "1": {"est": 0.5104513655621832, "se": 0.04238496022685627},
-                },
-                "Undergraduate": {
-                    "0": {"est": 0.45907514946963485, "se": 0.031146967724424917},
-                    "1": {"est": 0.5409248505303652, "se": 0.031146967724424917},
-                },
-            },
-        ),
-    ],
-    ids=["proportion_by_education"],
-)
-def test_prop_domain_estimates(synthetic_sample_df, design_kwargs, expected):
-    """Test proportion estimates by education domain and response level."""
-    # Drop nulls from y, weight, and domain
+def test_prop_domain_estimates(synthetic_sample_df):
     df = synthetic_sample_df.filter(
         pl.col("resp2_new").is_not_null()
         & pl.col("samp_wgt").is_not_null()
         & pl.col("educ").is_not_null()
     )
-
-    # Cast columns
-    df = _cast_for_kernel(df, design_kwargs, by_col="educ")
+    df = _cast_for_kernel(df, BY_EDUC, by_col="educ")
 
     result, _ = ps.taylor_prop(
         df,
         value_col="resp2_new",
-        weight_col=design_kwargs["weight"],
-        strata_col=design_kwargs.get("strata"),
-        psu_col=design_kwargs.get("psu"),
+        weight_col=BY_EDUC["weight"],
+        strata_col=BY_EDUC["strata"],
+        psu_col=BY_EDUC["psu"],
         by_col="educ",
     )
 
+    expected = GOLDEN["prop_by_educ"]
+    cells = sorted(zip(result["educ"], result["level"], strict=True))
+    assert cells == sorted((d, lvl) for d in expected for lvl in R_LEVEL)
     for row in result.iter_rows(named=True):
-        domain = row["educ"]
-        level = row["level"]
-
-        if domain not in expected:
-            continue
-        if level not in expected[domain]:
-            continue
-
-        exp = expected[domain][level]
-        assert row["est"] == pytest.approx(exp["est"], rel=TOL), f"Failed est for {domain}/{level}"
-        assert row["se"] == pytest.approx(exp["se"], rel=TOL), f"Failed se for {domain}/{level}"
+        label = f"{row['educ']}/{row['level']}"
+        _assert_matches(row, expected[row["educ"]][R_LEVEL[row["level"]]], label)
 
 
 # =============================================================================
@@ -703,12 +396,84 @@ def test_prop_domain_estimates(synthetic_sample_df, design_kwargs, expected):
 # moment means, so it is an independent check of our linearization.
 # =============================================================================
 
-_ASSOC_Y = [12, 15, 11, 22, 25, 19, 31, 29, 35, 41, 44, 39,
-            18, 16, 21, 27, 30, 24, 36, 33, 38, 45, 49, 43]
-_ASSOC_X = [9, 4, 14, 6, 17, 8, 21, 11, 13, 12, 26, 7,
-            19, 5, 23, 10, 28, 15, 8, 22, 16, 18, 31, 20]
-_ASSOC_W = [2, 2, 2, 3, 3, 3, 1.5, 1.5, 1.5, 4, 4, 4,
-            2.5, 2.5, 2.5, 3.5, 3.5, 3.5, 1, 1, 1, 5, 5, 5]
+_ASSOC_Y = [
+    12,
+    15,
+    11,
+    22,
+    25,
+    19,
+    31,
+    29,
+    35,
+    41,
+    44,
+    39,
+    18,
+    16,
+    21,
+    27,
+    30,
+    24,
+    36,
+    33,
+    38,
+    45,
+    49,
+    43,
+]
+_ASSOC_X = [
+    9,
+    4,
+    14,
+    6,
+    17,
+    8,
+    21,
+    11,
+    13,
+    12,
+    26,
+    7,
+    19,
+    5,
+    23,
+    10,
+    28,
+    15,
+    8,
+    22,
+    16,
+    18,
+    31,
+    20,
+]
+_ASSOC_W = [
+    2,
+    2,
+    2,
+    3,
+    3,
+    3,
+    1.5,
+    1.5,
+    1.5,
+    4,
+    4,
+    4,
+    2.5,
+    2.5,
+    2.5,
+    3.5,
+    3.5,
+    3.5,
+    1,
+    1,
+    1,
+    5,
+    5,
+    5,
+]
 
 
 @pytest.fixture
@@ -737,9 +502,7 @@ def assoc_df():
 )
 def test_assoc_matches_r(assoc_df, kind, strata, expected):
     """Point estimate and SE both match R; the SE is what validates the score."""
-    result = ps.taylor_assoc(
-        assoc_df, ["y"], ["x"], kind, "w", strata_col=strata, psu_col="psu"
-    )
+    result = ps.taylor_assoc(assoc_df, ["y"], ["x"], kind, "w", strata_col=strata, psu_col="psu")
     assert result["est"][0] == pytest.approx(expected["est"], rel=1e-10)
     assert result["se"][0] == pytest.approx(expected["se"], rel=1e-9)
     assert result["kind"][0] == kind
@@ -755,9 +518,7 @@ def test_assoc_is_symmetric(assoc_df):
 
 def test_assoc_batches_pairs(assoc_df):
     """One row per pair, in the order requested; corr(y,y) is 1 by definition."""
-    result = ps.taylor_assoc(
-        assoc_df, ["y", "y"], ["x", "y"], "corr", "w", psu_col="psu"
-    )
+    result = ps.taylor_assoc(assoc_df, ["y", "y"], ["x", "y"], "corr", "w", psu_col="psu")
     assert result.height == 2
     assert list(result["y"]) == ["y", "y"]
     assert list(result["x"]) == ["x", "y"]
@@ -766,9 +527,7 @@ def test_assoc_batches_pairs(assoc_df):
 
 def test_assoc_by_group(assoc_df):
     """`by` yields one row per (group, pair) with the group column first."""
-    result = ps.taylor_assoc(
-        assoc_df, ["y"], ["x"], "corr", "w", psu_col="psu", by_col="grp"
-    )
+    result = ps.taylor_assoc(assoc_df, ["y"], ["x"], "corr", "w", psu_col="psu", by_col="grp")
     assert result.height == 2
     assert result.columns[0] == "grp"
     assert sorted(result["grp"]) == ["A", "B"]
@@ -791,18 +550,14 @@ def test_replicate_assoc_matches_r_jk1(assoc_df, kind, expected_est):
     29.751032168261617.
     """
     reps = {
-        f"rep{r}": [
-            0.0 if i // 3 == r else _ASSOC_W[i] * 8 / 7 for i in range(24)
-        ]
+        f"rep{r}": [0.0 if i // 3 == r else _ASSOC_W[i] * 8 / 7 for i in range(24)]
         for r in range(8)
     }
     df = assoc_df.with_columns([pl.Series(k, v) for k, v in reps.items()])
     # The kernel takes coefficients, not a method label: JK1 is (R-1)/R per replicate.
     n_reps = len(reps)
     jk1_coefs = [(n_reps - 1) / n_reps] * n_reps
-    result = ps.replicate_assoc(
-        df, ["y"], ["x"], kind, "w", list(reps), jk1_coefs
-    )
+    result = ps.replicate_assoc(df, ["y"], ["x"], kind, "w", list(reps), jk1_coefs)
     assert result["est"][0] == pytest.approx(expected_est, rel=1e-10)
     if kind == "cov":
         assert result["se"][0] == pytest.approx(29.751032168261617, rel=1e-9)
@@ -810,14 +565,16 @@ def test_replicate_assoc_matches_r_jk1(assoc_df, kind, expected_est):
 
 def test_assoc_rejects_unknown_kind(assoc_df):
     """An unimplemented coefficient must say so, not fall back silently."""
-    with pytest.raises(Exception, match="unknown association kind"):
+    with pytest.raises(ps.KernelValueError, match="unknown association kind 'spearman'") as info:
         ps.taylor_assoc(assoc_df, ["y"], ["x"], "spearman", "w")
+    assert info.value.code == "INVALID_CHOICE"
 
 
 def test_assoc_rejects_mismatched_pairs(assoc_df):
     """Pair columns are positional, so unequal lengths are a caller error."""
-    with pytest.raises(Exception, match="equal length"):
+    with pytest.raises(ps.KernelValueError, match="equal length, got 2 and 1") as info:
         ps.taylor_assoc(assoc_df, ["y", "x"], ["x"], "corr", "w")
+    assert info.value.code == "SHAPE_MISMATCH"
 
 
 # =============================================================================
@@ -858,17 +615,40 @@ def _call(fn, df, **kw):
 _ESTIMATORS = [
     ("mean", lambda df, **kw: _call(ps.taylor_mean, df, value_col="y", **kw)[0]),
     ("total", lambda df, **kw: _call(ps.taylor_total, df, value_col="y", **kw)[0]),
-    ("ratio", lambda df, **kw: _call(ps.taylor_ratio, df, numerator_col="y", denominator_col="x", **kw)[0]),
+    (
+        "ratio",
+        lambda df, **kw: _call(ps.taylor_ratio, df, numerator_col="y", denominator_col="x", **kw)[
+            0
+        ],
+    ),
     ("prop", lambda df, **kw: _call(ps.taylor_prop, df, value_col="flag", **kw)[0]),
-    ("assoc", lambda df, **kw: ps.taylor_assoc(df, ["y"], ["x"], "corr", "w", strata_col="stratum", psu_col="psu", **kw)),
+    (
+        "assoc",
+        lambda df, **kw: ps.taylor_assoc(
+            df, ["y"], ["x"], "corr", "w", strata_col="stratum", psu_col="psu", **kw
+        ),
+    ),
     # Batched entry points are a separate plumbing route from the single-variable
     # ones -- they build the design once and fan out over columns -- so the
     # reference has to reach them independently. Row 0 is the first variable.
     ("mean_multi", lambda df, **kw: _call(ps.taylor_mean_multi, df, value_cols=["y", "x"], **kw)),
-    ("total_multi", lambda df, **kw: _call(ps.taylor_total_multi, df, value_cols=["y", "x"], **kw)),
-    ("ratio_multi", lambda df, **kw: _call(ps.taylor_ratio_multi, df, numerator_cols=["y"], denominator_cols=["x"], **kw)),
+    (
+        "total_multi",
+        lambda df, **kw: _call(ps.taylor_total_multi, df, value_cols=["y", "x"], **kw),
+    ),
+    (
+        "ratio_multi",
+        lambda df, **kw: _call(
+            ps.taylor_ratio_multi, df, numerator_cols=["y"], denominator_cols=["x"], **kw
+        ),
+    ),
     ("prop_multi", lambda df, **kw: _call(ps.taylor_prop_multi, df, value_cols=["flag"], **kw)),
-    ("assoc_multi", lambda df, **kw: ps.taylor_assoc(df, ["y", "y"], ["x", "x"], "corr", "w", strata_col="stratum", psu_col="psu", **kw)),
+    (
+        "assoc_multi",
+        lambda df, **kw: ps.taylor_assoc(
+            df, ["y", "y"], ["x", "x"], "corr", "w", strata_col="stratum", psu_col="psu", **kw
+        ),
+    ),
 ]
 
 
@@ -932,8 +712,9 @@ def test_declared_pop_total_survives_normalized_weights(srs_ref_df, name, fn):
 
 @pytest.mark.parametrize("name,fn", _ESTIMATORS, ids=[e[0] for e in _ESTIMATORS])
 def test_unknown_reference_is_rejected(srs_ref_df, name, fn):
-    with pytest.raises(Exception, match="unknown deff reference"):
+    with pytest.raises(ps.KernelValueError, match="unknown deff reference 'srswor'") as info:
         fn(srs_ref_df, deff_ref="srswor")
+    assert info.value.code == "INVALID_CHOICE", name
 
 
 # =============================================================================
@@ -1018,11 +799,7 @@ def test_deff_matches_r_across_designs(key, ref):
         by_col="sch.wide" if domain else None,
         deff_ref=ref,
     )
-    row = (
-        [r for r in out.to_dicts() if r["sch.wide"] == "Yes"][0]
-        if domain
-        else out.to_dicts()[0]
-    )
+    row = [r for r in out.to_dicts() if r["sch.wide"] == "Yes"][0] if domain else out.to_dicts()[0]
     assert row["se"] == pytest.approx(se, rel=1e-9)
     assert row["deff"] == pytest.approx(deff_wor if ref == "wor" else deff_wr, rel=1e-10)
 
