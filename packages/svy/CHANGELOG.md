@@ -60,6 +60,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **`pps_brewer` selects with the probabilities it reports for any `n`.** Above `n = 2` it drew with the two-unit rule, so the realised inclusion probabilities missed the reported n·p (by up to 1.3% relative at `n = 3`) and the design weights were off; after certainty units were taken, it also drew with the full-frame p. It now uses Brewer's general draw-by-draw rule. A seed gives the same sample as before at `n = 2` without certainties, and a different one otherwise.
 - **A fractional replicate df is kept.** `RepWeights(df=16.9)` used t(16), so intervals came out slightly too wide; every replication estimator, `tabulate` and the GLM now use t(16.9), and `ParamEst.df` reports it (an integral df stays an int; saved results widen `df` to `int | float`, `svy-result/0.12`). The default `n_reps - 1` is unchanged.
 - **Proportional allocation honours `cap_at_population=False`**, as Neyman and equal allocation do: an `n` above the frame size is split in full (500 over frames of 100 and 200 gives 167/333, not 100/200), and `ALLOCATION_EXCEEDS_FRAME` is raised only when it caps.
 - **One-sided sizing against a margin the effect does not clear raises** `SelectionError.ValueError` (`INFEASIBLE_DESIGN`, `param="delta"`) in `compare_props` and `compare_means`. The test has H0: epsilon <= delta, so `compare_props(0.65, 0.85, two_sides=False, delta=0.2001)` cannot be powered; it returned n = 219,480,782.
