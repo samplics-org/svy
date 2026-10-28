@@ -1,35 +1,28 @@
 # src/svy/datasets/base.py
 """
-Dataset loader.
+Dataset loader: resolve a slug to its file and registry entry, return a ``Sample``.
 
-Consumes the catalog API (``svy.datasets.api``) to resolve a slug into a
-``Dataset`` record, ensures the parquet file is cached + verified
-(``svy.datasets._cache``), then builds a lazy Polars pipeline for filtering,
-column selection, ordering, and slicing.
-
-Loading is intentionally decoupled from survey design: this function returns
-a bare ``DataFrame`` (or ``LazyFrame``).  To attach a design and run sampling,
-pass the result to ``svy.Sample`` and use ``sample.selection.srs(...)``.
+- The file and the entry always come from the same source, so the labels describe that file.
+- The design and the variable and value labels come from ``Dataset.design`` and ``Dataset.variables``.
 """
 
 from __future__ import annotations
 
 import logging
-import numbers
 import os
 
-from typing import Any, Literal, Mapping, Sequence, get_args, overload
+from typing import Any, Literal, Mapping, get_args
 
-import numpy as np
 import polars as pl
 
-from svy.core.data_prep import extract_where_cols
-from svy.core.types import Category, RandomState, WhereArg
+from svy.core.design import Design
+from svy.core.sample import Sample
 from svy.datasets import _bundled, _cache, api
-from svy.errors import Code, DatasetWarning, UsageError
+from svy.datasets.types import Dataset
+from svy.engine.io.core import import_labels_from_svyio_meta
+from svy.errors import Code, DatasetWarning
 from svy.errors._dataset import DatasetError
 from svy.errors._findings import emit_finding
-from svy.utils.where import _compile_where
 
 
 log = logging.getLogger(__name__)
@@ -52,8 +45,26 @@ def _offline_env() -> bool:
     return os.getenv("SVYLAB_OFFLINE", "").strip().lower() in _TRUTHY
 
 
-def _scan_remote(name: str, *, force_download: bool) -> pl.LazyFrame:
-    """Resolve a slug from the remote catalog, download+cache, and scan it."""
+def _check_source(source: object, *, where: str) -> None:
+    if source not in get_args(Source):
+        raise DatasetError.invalid_choice(
+            where=where, param="source", got=source, allowed=list(get_args(Source))
+        )
+
+
+def _from_bundled(name: str) -> tuple[pl.DataFrame, Dataset]:
+    ds = _bundled.describe(name)
+    if ds is None:
+        raise DatasetError.not_bundled(
+            where="datasets.load(source='bundled')",
+            slug=name,
+            bundled=sorted(_bundled.slugs()),
+        )
+    return _bundled.read(name), ds
+
+
+def _from_remote(name: str, *, force_download: bool) -> tuple[pl.DataFrame, Dataset]:
+    """Resolve a slug from the remote catalog, download+cache, and read it."""
     ds = api.describe(name)
     path = _cache.ensure_cached(
         slug=ds.slug,
@@ -62,11 +73,12 @@ def _scan_remote(name: str, *, force_download: bool) -> pl.LazyFrame:
         sha256=ds.sha256,
         force=force_download,
     )
-    return pl.scan_parquet(path)
+    _cache.write_entry(path, ds)
+    return pl.read_parquet(path), ds
 
 
-def _resolve_source(name: str, *, source: Source, force_download: bool) -> pl.LazyFrame:
-    """Return a LazyFrame for ``name`` per the requested ``source`` policy.
+def _resolve(name: str, *, source: Source, force_download: bool) -> tuple[pl.DataFrame, Dataset]:
+    """Return the frame and registry entry for ``name`` per the ``source`` policy.
 
     - ``"bundled"``: read the packaged subset; never touch the network.
     - ``"remote"``: require the online catalog; error if unreachable.
@@ -81,48 +93,67 @@ def _resolve_source(name: str, *, source: Source, force_download: bool) -> pl.La
         source = "bundled"
 
     if source == "bundled":
-        if not _bundled.has(name):
-            raise DatasetError.not_bundled(
-                where="datasets.load(source='bundled')",
-                slug=name,
-                bundled=sorted(_bundled.slugs()),
-            )
-        return _bundled.read_lazy(name)
+        return _from_bundled(name)
 
     if source == "remote":
-        return _scan_remote(name, force_download=force_download)
+        return _from_remote(name, force_download=force_download)
 
     if not force_download:
         cached = _cache.latest_cached(name)
         if cached is not None:
-            return pl.scan_parquet(cached)
+            path, ds = cached
+            return pl.read_parquet(path), ds
 
     # auto: remote, then bundled fallback on network/catalog failure. A slug
     # the catalog does not know but the wheel carries is bundled-only (the
     # synthetic panel): the bundled file IS the dataset, no warning.
     try:
-        return _scan_remote(name, force_download=force_download)
+        return _from_remote(name, force_download=force_download)
     except DatasetError as exc:
         if exc.code == "DATASET_NOT_FOUND" and _bundled.has(name):
-            return _bundled.read_lazy(name)
+            return _from_bundled(name)
         # force_download asks for a download, so it is not silently swapped.
         if exc.code == "REMOTE_UNAVAILABLE" and not force_download and _bundled.has(name):
-            return _bundled.read_lazy(name)
+            return _from_bundled(name)
         if exc.code in _FALLBACK_CODES and _bundled.has(name):
-            b = _bundled.describe(name)
+            df, ds = _from_bundled(name)
             emit_finding(
                 DatasetWarning(
                     code=Code.DATASET_BUNDLED_SUBSET,
                     title="Using the bundled subset",
                     detail=f"Could not reach the dataset catalog; using the bundled subset of "
-                    f"{name!r} ({b.n_rows:,} rows). This is a reduced dataset — results "
+                    f"{name!r} ({ds.n_rows:,} rows). This is a reduced dataset — results "
                     f"will differ from the full online data. Use source='remote' once "
                     f"online, or set source='bundled' to silence this.",
                     where="datasets.load",
                 )
             )
-            return _bundled.read_lazy(name)
+            return df, ds
         raise
+
+
+def _typed_codes(values: Mapping[Any, str], dtype: pl.DataType) -> dict[Any, str]:
+    # JSON keys are strings; a "11" key never matches the integer 11 in the data.
+    if dtype.is_integer():
+        return {int(code): label for code, label in values.items()}
+    if dtype.is_float():
+        return {float(code): label for code, label in values.items()}
+    return dict(values)
+
+
+def _to_sample(df: pl.DataFrame, ds: Dataset) -> Sample:
+    sample = Sample(data=df, design=Design(**ds.design) if ds.design else None)
+    variables = {
+        var: {
+            "label": spec.get("label"),
+            "values": _typed_codes(spec.get("values") or {}, df.schema[var]),
+        }
+        for var, spec in ds.variables.items()
+        if var in df.columns
+    }
+    if variables:
+        import_labels_from_svyio_meta(sample.meta, {"variables": variables}, df)
+    return sample
 
 
 # --------------------------------------------------------------------------- #
@@ -130,81 +161,19 @@ def _resolve_source(name: str, *, source: Source, force_download: bool) -> pl.La
 # --------------------------------------------------------------------------- #
 
 
-@overload
-def load(
-    name: str,
-    *,
-    lazy: Literal[False] = False,
-    **kwargs,
-) -> pl.DataFrame: ...
-
-
-@overload
-def load(
-    name: str,
-    *,
-    lazy: Literal[True],
-    **kwargs,
-) -> pl.LazyFrame: ...
-
-
-def load(
-    name: str,
-    *,
-    n: int | Mapping[Category, int] | None = None,
-    rate: float | Mapping[Category, float] | None = None,
-    by: str | Sequence[str] | None = None,
-    where: WhereArg = None,
-    select: Sequence[str] | None = None,
-    order_by: str | Sequence[str] | None = None,
-    order_type: Literal["ascending", "descending", "random"] = "ascending",
-    rstate: RandomState = None,
-    lazy: bool = False,
-    force_download: bool = False,
-    source: Source = "auto",
-) -> pl.DataFrame | pl.LazyFrame:
+def load(name: str, *, source: Source = "auto", force_download: bool = False) -> Sample:
     """
-    Load an example dataset from the svylab catalog.
+    Load an example dataset as a ready ``Sample``.
+
+    The data holds the numeric codes; variable and value labels are in
+    ``sample.meta`` and the design is the dataset's own (``info(name).design``).
+    Subset with the ``Sample`` tools or ``where=`` at estimation; the raw frame
+    is ``load(name).data``.
 
     Parameters
     ----------
     name : str
-        Dataset slug, e.g. ``"ea_listing"``.
-    n : int or Mapping[Category, int], optional
-        Number of rows to return.  With ``by`` set, an int applies per group;
-        a mapping gives per-group counts explicitly.  Mutually exclusive with
-        ``rate``.
-    rate : float or Mapping[Category, float], optional
-        Sampling fraction in ``(0, 1]``.  Scalar applies globally or per
-        group (with ``by``); a mapping gives per-group fractions.  Mutually
-        exclusive with ``n``.
-    by : str or Sequence[str], optional
-        Grouping column(s) for ``n`` / ``rate``.
-    where : WhereArg, optional
-        Row filter. Forms accepted:
-
-        - ``pl.col("age") >= 18``                     — Polars expression
-        - ``[pl.col("a") > 0, pl.col("b") < 10]``     — list, AND-combined
-        - ``{"region": "north"}``                     — scalar equality
-        - ``{"region": ["north", "south"]}``          — collection membership
-        - ``{"region": "north", "age": [18, 19, 20]}`` — multiple cols, AND-combined
-
-        For anything more complex (between, comparisons, string matching,
-        OR combinations), use Polars expressions directly.
-    select : Sequence[str], optional
-        Columns to keep.  Applied after filtering to maximize Parquet I/O
-        savings via column pruning.
-    order_by : str or Sequence[str], optional
-        Sort key(s) applied before slicing.
-    order_type : {"ascending", "descending", "random"}, default "ascending"
-        Sort direction.  ``"random"`` uses a reproducible hash-based shuffle.
-    rstate : RandomState, optional
-        Seed or Generator for reproducible random ordering.
-    lazy : bool, default False
-        Return a ``LazyFrame`` if True; collect to ``DataFrame`` otherwise.
-    force_download : bool, default False
-        Re-download the parquet file even if cached.  Applies to remote data
-        only; ignored when the bundled subset is used.
+        Dataset slug, e.g. ``"hld_sample_wb_2023"``; ``info()`` lists them.
     source : {"auto", "remote", "bundled"}, default "auto"
         Where to load the data from.
 
@@ -222,276 +191,14 @@ def load(
           subset silently. Set the ``SVYLAB_OFFLINE`` environment variable
           to make ``"auto"`` prefer the bundled subset without any network
           attempt.
+    force_download : bool, default False
+        Re-download the parquet file even if cached.  Applies to remote data
+        only; ignored when the bundled subset is used.
 
     Returns
     -------
-    pl.DataFrame or pl.LazyFrame
-
-    Notes
-    -----
-    For proper probability sampling (with design-consistent inclusion
-    probabilities and weights), use ``svy.Sample(...).selection.srs(...)``
-    or the ``pps_*`` methods.  This function only slices for convenience.
+    Sample
     """
-    _validate_args(n=n, rate=rate, by=by, order_type=order_type)
     _check_source(source, where="datasets.load")
-    if isinstance(rate, numbers.Real):
-        rate = float(rate)
-    if isinstance(n, numbers.Integral):
-        n = int(n)
-
-    # 1. Resolve the slug to a LazyFrame per the source policy (remote /
-    #    bundled / auto-with-offline-fallback).
-    lf = _resolve_source(name, source=source, force_download=force_download)
-
-    # Filter first so Polars can push predicates into the Parquet reader.
-    available = lf.collect_schema().names()
-    for param, cols in (
-        ("where", extract_where_cols(where)),
-        ("select", list(select or ())),
-        ("order_by", _normalize_by(order_by) or []),
-        ("by", _normalize_by(by) or []),
-    ):
-        missing = [c for c in cols if c not in available]
-        if missing:
-            raise DatasetError.missing_columns(
-                where="datasets.load", param=param, missing=missing, available=available
-            )
-
-    if where is not None:
-        pred = _compile_where(where)
-        if pred is not None:
-            lf = lf.filter(pred)
-
-    # Column pruning: let Polars skip reading unneeded columns entirely.
-    if select is not None:
-        lf = lf.select(list(select))
-
-    # Ordering (or shuffling) — must precede slicing so head(n) is meaningful.
-    lf = _apply_order(lf, order_by=order_by, order_type=order_type, rstate=rstate)
-
-    # Slicing — global or per-group via `by`.
-    lf = _apply_slice(lf, n=n, rate=rate, by=by)
-
-    return lf if lazy else lf.collect()
-
-
-# --------------------------------------------------------------------------- #
-# Validation
-# --------------------------------------------------------------------------- #
-
-
-def _validate_args(
-    *,
-    n: int | Mapping[Category, int] | None,
-    rate: float | Mapping[Category, float] | None,
-    by: str | Sequence[str] | None,
-    order_type: str,
-) -> None:
-    if n is not None and rate is not None:
-        raise DatasetError.invalid_value(
-            where="datasets.load",
-            param="n",
-            got=n,
-            detail="`n` and `rate` are mutually exclusive; pass only one.",
-        )
-    if by is None and isinstance(n, Mapping):
-        raise DatasetError.invalid_value(
-            where="datasets.load",
-            param="n",
-            got=n,
-            detail="`n` as a mapping requires `by` to be set.",
-        )
-    if by is None and isinstance(rate, Mapping):
-        raise DatasetError.invalid_value(
-            where="datasets.load",
-            param="rate",
-            got=rate,
-            detail="`rate` as a mapping requires `by` to be set.",
-        )
-    if order_type not in ("ascending", "descending", "random"):
-        raise DatasetError.invalid_choice(
-            where="datasets.load",
-            param="order_type",
-            got=order_type,
-            allowed=["ascending", "descending", "random"],
-        )
-    n_values: list[Any] = list(n.values()) if isinstance(n, Mapping) else [] if n is None else [n]
-    for v in n_values:
-        if isinstance(v, bool) or not isinstance(v, numbers.Integral):
-            raise DatasetError.invalid_type(
-                where="datasets.load", param="n", got=v, expected="a whole number of rows"
-            )
-        if int(v) < 0:
-            raise DatasetError.invalid_range(where="datasets.load", param="n", got=v, min_=0)
-    per_group = isinstance(rate, Mapping)
-    rate_values: list[Any] = (
-        list(rate.values()) if isinstance(rate, Mapping) else [] if rate is None else [rate]
-    )
-    for v in rate_values:
-        if isinstance(v, bool) or not isinstance(v, numbers.Real):
-            raise DatasetError.invalid_type(
-                where="datasets.load", param="rate", got=v, expected="a fraction"
-            )
-        x = float(v)
-        low_ok = x >= 0 if per_group else x > 0
-        if not (low_ok and x <= 1):
-            raise DatasetError.invalid_range(
-                where="datasets.load",
-                param="rate",
-                got=v,
-                detail=(
-                    f"per-group rate must be in [0, 1]; got {v!r}"
-                    if per_group
-                    else f"rate must be in (0, 1]; got {v!r}"
-                ),
-            )
-
-
-def _check_source(source: object, *, where: str) -> None:
-    if source not in get_args(Source):
-        raise DatasetError.invalid_choice(
-            where=where, param="source", got=source, allowed=list(get_args(Source))
-        )
-
-
-# --------------------------------------------------------------------------- #
-# Ordering
-# --------------------------------------------------------------------------- #
-
-
-def _apply_order(
-    lf: pl.LazyFrame,
-    *,
-    order_by: str | Sequence[str] | None,
-    order_type: Literal["ascending", "descending", "random"],
-    rstate: RandomState,
-) -> pl.LazyFrame:
-    if order_type == "random":
-        seed = _seed_from_rstate(rstate) & (2**64 - 1)
-        n = lf.select(pl.len()).collect().item()
-        # Legacy RandomState: NumPy freezes its stream, so a seed gives the same
-        # rows on every NumPy and polars version (polars' hash() does not).
-        perm = np.random.RandomState([seed & 0xFFFFFFFF, seed >> 32]).permutation(n)
-        return lf.select(pl.all().gather(perm))
-
-    if order_by is None:
-        return lf
-
-    return lf.sort(order_by, descending=(order_type == "descending"), maintain_order=True)
-
-
-# --------------------------------------------------------------------------- #
-# Slicing
-# --------------------------------------------------------------------------- #
-
-
-def _apply_slice(
-    lf: pl.LazyFrame,
-    *,
-    n: int | Mapping[Category, int] | None,
-    rate: float | Mapping[Category, float] | None,
-    by: str | Sequence[str] | None,
-) -> pl.LazyFrame:
-    if n is None and rate is None:
-        return lf
-
-    by_cols = _normalize_by(by)
-
-    # --- No grouping: global head or fractional head -------------------- #
-    if by_cols is None:
-        if isinstance(n, int):
-            return lf.head(n)
-        if isinstance(rate, float):
-            # Rate needs a height; collect once.  For teaching datasets this
-            # is trivial; power users can apply where/select first to shrink
-            # before rate-slicing.
-            df = lf.collect()
-            return df.head(int(round(len(df) * rate))).lazy()
-        return lf  # unreachable given validation, but defensive.
-
-    # --- Per-group slicing ---------------------------------------------- #
-    # Polars' lazy API doesn't expose a clean per-group head/sample, so we
-    # materialize here.  Filter/select/order have already pruned the frame.
-    df = lf.collect()
-
-    if isinstance(n, int):
-        return df.group_by(by_cols, maintain_order=True).head(n).lazy()
-
-    if isinstance(n, Mapping):
-        return _slice_per_group_mapping(df, by_cols, n, kind="n").lazy()
-
-    if isinstance(rate, float):
-        parts = [
-            part.head(int(round(len(part) * rate)))
-            for _, part in df.group_by(by_cols, maintain_order=True)
-        ]
-        return (pl.concat(parts) if parts else df.head(0)).lazy()
-
-    if isinstance(rate, Mapping):
-        return _slice_per_group_mapping(df, by_cols, rate, kind="rate").lazy()
-
-    return df.lazy()
-
-
-def _slice_per_group_mapping(
-    df: pl.DataFrame,
-    by_cols: list[str],
-    spec: Mapping[Category, int] | Mapping[Category, float],
-    *,
-    kind: Literal["n", "rate"],
-) -> pl.DataFrame:
-    """
-    Apply a per-group ``n`` or ``rate`` mapping.
-
-    Keys must match the group identifier exactly: a scalar for single-column
-    ``by``, a tuple for multi-column ``by``.  Groups not in the mapping are
-    dropped (explicit-is-better-than-implicit).
-
-    For ``rate``, values must be in ``[0, 1]``.  Zero is allowed here (as
-    opposed to the global-rate case) to let users express "exclude this
-    group" without removing it from the mapping.
-    """
-    parts: list[pl.DataFrame] = []
-    for group_key, part in df.group_by(by_cols, maintain_order=True):
-        key = group_key[0] if len(by_cols) == 1 else group_key
-        if key not in spec:
-            continue
-        value = spec[key]
-        if kind == "n":
-            parts.append(part.head(int(value)))
-        else:
-            r = float(value)
-            parts.append(part.head(int(round(len(part) * r))))
-    return pl.concat(parts) if parts else df.head(0)
-
-
-# --------------------------------------------------------------------------- #
-# Helpers
-# --------------------------------------------------------------------------- #
-
-
-def _normalize_by(by: str | Sequence[str] | None) -> list[str] | None:
-    if by is None:
-        return None
-    if isinstance(by, str):
-        return [by]
-    return list(by)
-
-
-def _seed_from_rstate(rstate: RandomState) -> int:
-    """Derive a 64-bit seed from any svy RandomState value."""
-    if rstate is None:
-        return int(np.random.default_rng().integers(0, 2**63 - 1))
-    if isinstance(rstate, numbers.Integral) and not isinstance(rstate, bool):
-        return int(rstate)
-    if isinstance(rstate, np.random.Generator):
-        return int(rstate.integers(0, 2**63 - 1))
-    if isinstance(rstate, np.random.RandomState):
-        return int(rstate.randint(0, 2**31 - 1))
-    raise UsageError.invalid_type(
-        where="datasets.load",
-        param="rstate",
-        got=rstate,
-        expected="an int seed, a numpy Generator or None",
-    )
+    df, ds = _resolve(name, source=source, force_download=force_download)
+    return _to_sample(df, ds)

@@ -46,12 +46,24 @@ from svy import col
 
 OUT = Path(__file__).resolve().parents[1] / "src" / "svy" / "datasets" / "_bundled"
 SLUG = "panel_syn_2026"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 SEED = 20260906
 
 N_STRATA, N_PSU, N_CASES = 6, 10, 20
 INCL_PROB = [0.02, 0.03, 0.025, 0.015, 0.04, 0.02]
 P_URBAN = [0.9, 0.7, 0.6, 0.3, 0.2, 0.5]
+
+# Value-label codes are JSON keys, hence strings; svy.datasets.load casts them back.
+VARIABLES = {
+    "urban": {"label": "Area of residence", "values": {"0": "Rural", "1": "Urban"}},
+    "age_grp": {
+        "label": "Age group",
+        "values": {"1": "15-29", "2": "30-44", "3": "45-59", "4": "60+"},
+    },
+    "sex": {"label": "Sex", "values": {"1": "Male", "2": "Female"}},
+    "resp": {"label": "Response status", "values": {"rr": "Respondent", "nr": "Nonrespondent"}},
+    "emp": {"label": "Employed", "values": {"0": "No", "1": "Yes"}},
+}
 
 
 def _wave1(rng: np.random.Generator) -> pl.DataFrame:
@@ -191,7 +203,7 @@ def main() -> None:
             "psu": "psu",
             "wgt": "w1",
         },
-        "variables": {},
+        "variables": VARIABLES,
         "tags": ["synthetic", "panel", "longitudinal", "bundled"],
         "notes": (
             "resp is 'rr' on interviewed rows and 'nr' on contacted-but-not-interviewed "

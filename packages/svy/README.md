@@ -51,14 +51,8 @@ It links the skills into `.claude/skills/`, so upgrading svy updates them. Rerun
 ```python
 import svy
 
-# Load example data
-hld_data = svy.datasets.load("hld_sample_wb_2023")
-
-# Define the survey design
-hld_design = svy.Design(stratum=("geo1", "urbrur"), psu="ea", wgt="hhweight")
-
-# Create a sample object
-hld_sample = svy.Sample(data=hld_data, design=hld_design)
+# Load example data, with its survey design and labels
+hld_sample = svy.datasets.load("hld_sample_wb_2023")
 
 # Estimate the mean of total expenditure
 tot_exp_mean = hld_sample.estimation.mean(y="tot_exp")

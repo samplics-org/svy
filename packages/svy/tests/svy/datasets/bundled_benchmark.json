@@ -11,10 +11,13 @@
     "n_rows": 133,
     "numeric_sums": {
       "ea": 4130644.0,
-      "n_hlds_census": 57867.0
+      "geo1": 364.0,
+      "geo2": 4120.0,
+      "n_hlds_census": 57867.0,
+      "urbrur": 209.0
     },
-    "sha256": "cf32c38f7df0cd44b7dda80ca7012ac09e6fb9e00ebb365267820f6a62823fea",
-    "size_bytes": 2806
+    "sha256": "1bc3ef6b2b3d2e73d64a78bb54eaaf2ecd7bd2f2c643e698863c1d688d3da34f",
+    "size_bytes": 2883
   },
   "hld_pop_wb_2023": {
     "columns": [
@@ -38,15 +41,22 @@
     "n_rows": 57867,
     "numeric_sums": {
       "ea": 1785146504.0,
+      "electricity": 49093.0,
+      "geo1": 156235.0,
+      "geo2": 1780637.0,
       "hhsize": 222551.0,
       "pc_exp": 220359541.6149,
+      "quint_nat": 204448.0,
       "rooms": 159504.0,
       "share_food": 20384.47,
+      "toilet": 1200781.0,
       "tot_exp": 694678977.0,
-      "tot_food": 208475312.0
+      "tot_food": 208475312.0,
+      "urbrur": 96189.0,
+      "water": 1251467.0
     },
-    "sha256": "7458321d93dd02893c3c69543b39432f689140b555393f2e5959abec9d4f1110",
-    "size_bytes": 1043122
+    "sha256": "4f776f1186691d3b0c2a7dc4b9d4e9934806a22a716bf5fe75d55282bc04452c",
+    "size_bytes": 1043524
   },
   "hld_sample_wb_2023": {
     "columns": [
@@ -68,26 +78,33 @@
       "hhweight"
     ],
     "design_mean": {
-      "est": 3810.0716,
+      "est": 3816.038,
       "n_psus": 33,
       "n_strata": 7,
-      "se": 216.5374,
+      "se": 283.3524,
       "y": "pc_exp"
     },
     "n_cols": 16,
     "n_rows": 825,
     "numeric_sums": {
-      "ea": 25602975.0,
-      "hhsize": 3246.0,
+      "ea": 25408600.0,
+      "electricity": 718.0,
+      "geo1": 2250.0,
+      "geo2": 25350.0,
+      "hhsize": 3140.0,
       "hhweight": 57867.0,
-      "pc_exp": 2951820.9974,
-      "rooms": 2318.0,
-      "share_food": 290.004,
-      "tot_exp": 9779653.0,
-      "tot_food": 2946226.0
+      "pc_exp": 3002100.7103,
+      "quint_nat": 2900.0,
+      "rooms": 2248.0,
+      "share_food": 287.537,
+      "toilet": 18040.0,
+      "tot_exp": 9514475.0,
+      "tot_food": 2933985.0,
+      "urbrur": 1300.0,
+      "water": 17971.0
     },
-    "sha256": "c3a00bb37705ade0807543efeda2109e5b472141f6df2d73d17aa8445971a015",
-    "size_bytes": 24210
+    "sha256": "4646a3a018cf364b9a601d9c74f0269ef68f5c2d17b7cc71fff403c8a47d0d49",
+    "size_bytes": 23751
   },
   "ind_sample_wb_2023": {
     "columns": [
@@ -108,23 +125,32 @@
       "hhweight"
     ],
     "design_mean": {
-      "est": 28.9891,
+      "est": 28.4176,
       "n_psus": 33,
       "n_strata": 7,
-      "se": 1.9687,
+      "se": 1.8602,
       "y": "age"
     },
     "n_cols": 15,
-    "n_rows": 3246,
+    "n_rows": 3140,
     "numeric_sums": {
-      "age": 92915.0,
-      "ea": 97623977.0,
-      "hhweight": 223821.028,
-      "idno": 9852.0,
-      "yrs_school": 13295.0
+      "act_status": 4667.0,
+      "age": 89078.0,
+      "ea": 95327448.0,
+      "educ_attain": 4513.0,
+      "geo1": 8409.0,
+      "geo2": 95118.0,
+      "hhweight": 216367.578,
+      "idno": 9213.0,
+      "labor_force": 2942.0,
+      "literacy": 3267.0,
+      "marstat": 5041.0,
+      "sex": 4751.0,
+      "urbrur": 4940.0,
+      "yrs_school": 13027.0
     },
-    "sha256": "31f0be4f3083c6d853e8d469e3c04cf5e68b13117b1c7a5a92e12fe4857618f9",
-    "size_bytes": 30121
+    "sha256": "216181293686bd881bccd455dabe756c77e8850f9e752a99f06b4dd9387f4068",
+    "size_bytes": 29783
   },
   "panel_syn_2026": {
     "columns": [

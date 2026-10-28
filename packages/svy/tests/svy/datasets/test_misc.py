@@ -9,8 +9,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from svy.datasets import _cache, api, load
-from svy.datasets.base import _normalize_by
+from svy.datasets import _cache, api
 from svy.errors._dataset import DatasetError
 
 
@@ -81,92 +80,6 @@ class TestNetworkFailure:
             api.catalog()
         assert exc_info.value.code == "CATALOG_UNREACHABLE"
         assert "simulated" in exc_info.value.detail
-
-
-# --------------------------------------------------------------------------- #
-# base: argument validation paths
-# --------------------------------------------------------------------------- #
-
-
-class TestArgValidation:
-    def test_rate_mapping_without_by_raises(self, routes):
-        # No need to wire the dataset — validation happens first.
-        with pytest.raises(ValueError, match="requires `by`"):
-            load("toy", rate={"north": 0.1})
-
-    def test_per_group_rate_out_of_range_raises(self, routes, make_parquet, make_dataset_dict):
-        data, sha = make_parquet(n_rows=100)
-        routes.add_json(
-            "/api/data/examples/registry",
-            [
-                make_dataset_dict(
-                    slug="toy",
-                    download_url="https://svylab.test/data/toy.parquet",
-                    sha256=sha,
-                )
-            ],
-        )
-        routes.add_bytes("/data/toy.parquet", data)
-
-        with pytest.raises(ValueError, match="per-group rate"):
-            load("toy", rate={"north": 1.5}, by="region")
-
-        with pytest.raises(ValueError, match="per-group rate"):
-            load("toy", rate={"north": -0.1}, by="region")
-
-
-# --------------------------------------------------------------------------- #
-# base: by with multiple columns
-# --------------------------------------------------------------------------- #
-
-
-class TestMultiColumnBy:
-    def test_n_int_with_multi_column_by(self, routes, make_parquet, make_dataset_dict):
-        """`by` as a list of columns should stratify on the cross."""
-
-        # Build a fixture with two grouping columns.
-        data, sha = make_parquet(
-            n_rows=80,
-            extra={
-                "tier": [["A", "B"][i // 40] for i in range(80)],  # first 40 A, rest B
-            },
-        )
-        routes.add_json(
-            "/api/data/examples/registry",
-            [
-                make_dataset_dict(
-                    slug="toy",
-                    download_url="https://svylab.test/data/toy.parquet",
-                    sha256=sha,
-                    n_rows=80,
-                )
-            ],
-        )
-        routes.add_bytes("/data/toy.parquet", data)
-
-        result = load("toy", n=2, by=["region", "tier"])
-        # Each (region, tier) combination that exists should have exactly 2 rows.
-        counts = result.group_by(["region", "tier"]).len().sort(["region", "tier"])
-        assert all(c == 2 for c in counts["len"].to_list())
-
-
-# --------------------------------------------------------------------------- #
-# base: tiny internal helper
-# --------------------------------------------------------------------------- #
-
-
-class TestNormalizeBy:
-    def test_none_returns_none(self):
-        assert _normalize_by(None) is None
-
-    def test_string_wraps_in_list(self):
-        assert _normalize_by("region") == ["region"]
-
-    def test_list_is_passed_through(self):
-        assert _normalize_by(["region", "tier"]) == ["region", "tier"]
-
-    def test_tuple_is_converted(self):
-        assert _normalize_by(("a", "b")) == ["a", "b"]
 
 
 # --------------------------------------------------------------------------- #

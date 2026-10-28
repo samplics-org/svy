@@ -1,7 +1,7 @@
 # tests/svy/datasets/test_bundled_source.py
 """
-Tests for the ``source`` policy on ``svy.datasets.load`` / ``catalog`` /
-``describe`` and the offline fallback.
+Tests for the ``source`` policy on ``svy.datasets.load`` / ``info`` and the
+offline fallback.
 
 The autouse ``isolate_module_state`` fixture points the client at a mock
 transport with no routes, so every catalog request 404s — i.e. this simulates
@@ -32,8 +32,7 @@ def _simulate_offline(routes) -> None:
 
 
 def test_source_bundled_reads_package_without_network(routes):
-    df = d.load(SLUG, source="bundled")
-    assert df.height == BUNDLED_ROWS
+    assert d.load(SLUG, source="bundled").n_records == BUNDLED_ROWS
     assert routes.hits == []  # never touched the network
 
 
@@ -47,14 +46,14 @@ def test_source_remote_raises_when_catalog_unreachable(routes):
 def test_source_auto_falls_back_to_bundled_with_warning(routes):
     _simulate_offline(routes)
     with pytest.warns(UserWarning, match="bundled subset"):
-        df = d.load(SLUG, source="auto")
-    assert df.height == BUNDLED_ROWS
+        sample = d.load(SLUG, source="auto")
+    assert sample.n_records == BUNDLED_ROWS
 
 
 def test_offline_env_makes_auto_use_bundled_without_network(monkeypatch, routes):
     monkeypatch.setenv("SVYLAB_OFFLINE", "1")
-    df = d.load(SLUG)  # default source="auto"
-    assert df.height == BUNDLED_ROWS
+    sample = d.load(SLUG)  # default source="auto"
+    assert sample.n_records == BUNDLED_ROWS
     assert routes.hits == []
 
 
@@ -73,25 +72,18 @@ def test_online_only_dataset_bundled_raises_clean_not_bundled():
     assert "remote" in (ei.value.hint or "")
 
 
-def test_catalog_bundled_lists_only_bundled(routes):
-    slugs = {ds.slug for ds in d.catalog(source="bundled")}
+def test_info_bundled_lists_only_bundled(routes):
+    slugs = {ds.slug for ds in d.info(source="bundled")}
     assert SLUG in slugs
     assert routes.hits == []
 
 
-def test_describe_auto_falls_back_to_bundled_metadata(routes):
+def test_info_auto_falls_back_to_bundled_metadata(routes):
     _simulate_offline(routes)
     with pytest.warns(UserWarning):
-        info = d.describe(SLUG, source="auto")
+        info = d.info(SLUG, source="auto")
     assert info.slug == SLUG
     assert info.design == {"stratum": ["geo1", "urbrur"], "psu": "ea", "wgt": "hhweight"}
-
-
-def test_load_bundled_applies_pipeline_args():
-    # bundled data still supports the normal load() pipeline (select + n)
-    df = d.load(SLUG, source="bundled", select=["ea", "geo1", "pc_exp"], n=10)
-    assert df.columns == ["ea", "geo1", "pc_exp"]
-    assert df.height == 10
 
 
 # --------------------------------------------------------------------------- #
@@ -116,8 +108,8 @@ def test_source_remote_download_failure_raises_typed_error(routes, make_backend_
 def test_source_auto_falls_back_to_bundled_on_download_failure(routes, make_backend_entry):
     _wire_download_failure(routes, make_backend_entry)
     with pytest.warns(UserWarning, match="bundled subset"):
-        df = d.load(SLUG, source="auto")
-    assert df.height == BUNDLED_ROWS
+        sample = d.load(SLUG, source="auto")
+    assert sample.n_records == BUNDLED_ROWS
 
 
 # --------------------------------------------------------------------------- #
@@ -156,10 +148,10 @@ def test_corrupt_registry_degrades_to_no_bundled(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 
-def test_catalog_is_dataset_catalog_and_tuple():
+def test_info_is_dataset_catalog_and_tuple():
     from svy.datasets import DatasetCatalog
 
-    cat = d.catalog(source="bundled")
+    cat = d.info(source="bundled")
     assert isinstance(cat, DatasetCatalog)
     assert isinstance(cat, tuple)  # backward compatible: still indexable/iterable
     assert cat.get(SLUG).slug == SLUG
@@ -167,19 +159,19 @@ def test_catalog_is_dataset_catalog_and_tuple():
 
 
 def test_catalog_get_returns_dataset():
-    ds = d.catalog(source="bundled").get(SLUG)
+    ds = d.info(source="bundled").get(SLUG)
     assert ds.slug == SLUG
     assert ds.design == {"stratum": ["geo1", "urbrur"], "psu": "ea", "wgt": "hhweight"}
 
 
 def test_catalog_get_unknown_raises_not_found():
     with pytest.raises(DatasetError) as ei:
-        d.catalog(source="bundled").get("does_not_exist")
+        d.info(source="bundled").get("does_not_exist")
     assert ei.value.code == "DATASET_NOT_FOUND"
 
 
 def test_catalog_to_polars():
-    df = d.catalog(source="bundled").to_polars()
+    df = d.info(source="bundled").to_polars()
     assert df.height == 5
     assert {"slug", "title", "rows", "cols", "size_mb"}.issubset(df.columns)
 
@@ -187,7 +179,7 @@ def test_catalog_to_polars():
 def test_bundled_datasets_carry_notes():
     # Every bundled slice of a remote dataset says so; the synthetic panel is
     # generated locally and documents its own mechanism instead.
-    for ds in d.catalog(source="bundled"):
+    for ds in d.info(source="bundled"):
         assert ds.notes
         if "wb" in ds.tags:
             assert "remote" in ds.notes
@@ -195,8 +187,8 @@ def test_bundled_datasets_carry_notes():
             assert "synthetic" in ds.tags
 
 
-def test_catalog_and_dataset_str_render():
-    cat = d.catalog(source="bundled")
+def test_info_catalog_and_entry_str_render():
+    cat = d.info(source="bundled")
     # DatasetCatalog renders a table listing the slugs
     assert SLUG in str(cat)
     # A single Dataset renders a panel with its slug and a Description field

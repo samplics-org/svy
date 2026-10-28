@@ -28,7 +28,10 @@ from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit
 
+import msgspec
+
 from svy.datasets._http import load_httpx
+from svy.datasets.types import Dataset
 from svy.errors._dataset import DatasetError
 
 
@@ -231,13 +234,31 @@ def ensure_cached(
         return str(local_path)
 
 
-def latest_cached(slug: str) -> Path | None:
+def _entry_path(local_path: Path) -> Path:
+    """Sidecar holding the registry entry the cached file was downloaded under."""
+    return local_path.with_name(local_path.name + ".json")
+
+
+def write_entry(local_path: Path | str, ds: Dataset) -> None:
+    """Record ``ds`` next to its cached file, so a later offline read gets the same labels."""
+    _entry_path(Path(local_path)).write_bytes(msgspec.json.encode(ds))
+
+
+def _read_entry(local_path: Path) -> Dataset | None:
+    try:
+        return msgspec.json.decode(_entry_path(local_path).read_bytes(), type=Dataset)
+    except (OSError, msgspec.DecodeError, msgspec.ValidationError):
+        return None
+
+
+def latest_cached(slug: str) -> tuple[Path, Dataset] | None:
     """
-    Return the most recently downloaded cached copy of ``slug``, or None.
+    Return the most recently downloaded cached copy of ``slug`` and its entry, or None.
 
     Used by ``source="auto"`` to load a full dataset without touching the
-    network.  Any version qualifies; a copy whose TOFU pin no longer matches
-    is skipped.  Never raises for an unusable slug: it simply has no cache.
+    network.  Any version qualifies; a copy whose TOFU pin no longer matches,
+    or that has no recorded registry entry, is skipped.  Never raises for an
+    unusable slug: it simply has no cache.
     """
     if not _SLUG_RE.fullmatch(slug) or ".." in slug or not CACHE_DIR.is_dir():
         return None
@@ -247,20 +268,23 @@ def latest_cached(slug: str) -> Path | None:
         reverse=True,
     )
     for path in candidates:
+        ds = _read_entry(path)
+        if ds is None:
+            continue
         pin = _read_pin(path)
         if not pin:
-            return path
+            return path, ds
         key = (str(path), pin)
         if key in _verified or _sha256_of(path) == pin:
             _mark_verified(key)
-            return path
+            return path, ds
         log.warning("Cached file %s failed its pinned hash check; ignoring it.", path)
     return None
 
 
 def clear(slug: str | None = None) -> int:
     """
-    Remove cached files (parquet + TOFU hash pins).  If ``slug`` is given,
+    Remove cached files (parquet + TOFU hash pins + registry entries).  If ``slug`` is given,
     only that dataset's files (all versions) are removed.  Returns the
     number of parquet files deleted.
     """
@@ -276,6 +300,7 @@ def clear(slug: str | None = None) -> int:
         except OSError:
             log.warning("Could not remove %s", f)
         _pin_path(f).unlink(missing_ok=True)
+        _entry_path(f).unlink(missing_ok=True)
     with _verified_lock:
         if slug is None:
             _verified.clear()

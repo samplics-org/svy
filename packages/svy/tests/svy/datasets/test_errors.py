@@ -62,9 +62,9 @@ class TestNotFound:
         assert e.got == "missing"
         assert e.param == "name"
 
-    def test_hint_mentions_catalog_function(self):
+    def test_hint_names_info(self):
         e = DatasetError.not_found(where="w", slug="x")
-        assert "catalog" in (e.hint or "")
+        assert e.hint == "Call svy.datasets.info() to see available slugs."
 
 
 class TestShaMismatch:

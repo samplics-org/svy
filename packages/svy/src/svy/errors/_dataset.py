@@ -91,7 +91,7 @@ class DatasetError(SvyError):
         *,
         where: Optional[str],
         slug: str,
-        hint: Optional[str] = "Call svy.datasets.catalog() to see available slugs.",
+        hint: Optional[str] = "Call svy.datasets.info() to see available slugs.",
         docs_url: Optional[str] = None,
     ) -> "DatasetError":
         return cls.KeyError(
