@@ -1,6 +1,3 @@
-// native/svyreadstat_rs/src/xpt_write.rs
-// COMPLETE REWRITE - must use readstat row-by-row API
-
 use arrow::array::*;
 use arrow::datatypes::{
     DataType, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type,
@@ -58,8 +55,7 @@ fn dict_string_at_any(a: &dyn Array, row: usize) -> Option<&str> {
                 if !is_text_dt(d.values().data_type()) || d.is_null(row) {
                     return None;
                 }
-                // A corrupt dictionary can hold a negative or out-of-range
-                // key; a plain `as usize` cast would wrap and panic below.
+                // A corrupt dictionary can hold a negative or out-of-range key; `as usize` would wrap.
                 let key_usize = usize::try_from(d.keys().value(row)).ok()?;
                 let values = d.values();
                 if key_usize >= values.len() {
@@ -128,7 +124,6 @@ fn write_xpt_impl(
     if writer.is_null() {
         return Err(Error::Internal("readstat_writer_init() failed".into()));
     }
-    // Frees the writer on every exit path (including early `?` returns).
     let _writer_guard = WriterGuard(writer);
 
     if version != 5 && version != 8 {
@@ -171,7 +166,6 @@ fn write_xpt_impl(
         readstat_writer_set_table_name(writer, member_cstr.as_ptr());
     }
 
-    // Add variables
     let ncols = schema.fields().len();
     let mut is_str_col: Vec<bool> = vec![false; ncols];
     let mut rvars: Vec<*mut readstat_variable_t> = Vec::with_capacity(ncols);
@@ -182,10 +176,7 @@ fn write_xpt_impl(
             || matches!(field.data_type(), DataType::Dictionary(_, v) if is_text_dt(v.as_ref()));
     }
 
-    // Derive string widths from the data and validate BEFORE any bytes are
-    // written. The transport format caps character fields at 200 bytes; the
-    // old hardcoded width failed at insert time, leaving a truncated file
-    // on disk.
+    // XPT caps character fields at 200 bytes; checked before any byte is written.
     const XPT_MAX_STR_BYTES: usize = 200;
     let mut str_widths: Vec<usize> = vec![0; ncols];
     for b in &batches {
@@ -266,8 +257,7 @@ fn write_xpt_impl(
         rvars.push(var);
     }
 
-    // All record batches are written; a large frame is commonly split into
-    // several batches by Arrow IPC serialization.
+    // Arrow IPC commonly splits a large frame into several batches.
     let total_rows: i64 = batches.iter().map(|b| b.num_rows() as i64).sum();
     #[allow(clippy::useless_conversion)] // c_long is 32-bit on Windows
     let row_count = total_rows

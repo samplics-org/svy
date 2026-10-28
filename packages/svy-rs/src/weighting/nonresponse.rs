@@ -1,28 +1,15 @@
-// src/weighting/nonresponse.rs
+//! Nonresponse adjustment within adjustment classes.
 
 use super::utils::{Result, WeightingError};
 use ndarray::{Array2, ArrayView1, ArrayView2};
 
-/// Response status codes (numeric encoding)
 const RR: i64 = 0; // Respondent
 const NR: i64 = 1; // Non-respondent
 const IN: i64 = 2; // Ineligible
 const UK: i64 = 3; // Unknown
 
-/// Non-response adjustment
-///
-/// Adjusts weights for non-response by redistributing NR/UK weights
-/// to respondents within adjustment classes.
-///
-/// # Arguments
-/// * `wgts` - Weight matrix (n_obs, n_reps)
-/// * `adj_class` - Adjustment class for each observation (n_obs,)
-/// * `resp_status` - Response status: 0=RR, 1=NR, 2=IN, 3=UK (n_obs,)
-/// * `unknown_to_inelig` - If true, distribute UK to eligible (IN+RR+NR);
-///   If false, UK joins NR pool (distributed to RR only)
-///
-/// # Returns
-/// Adjusted weight matrix. Non-respondents and unknowns get weight=0.
+/// Moves NR and UK weight onto respondents within each class; NR and UK end at zero.
+/// With `unknown_to_inelig`, UK weight first spreads over IN, RR and NR instead of joining NR.
 pub fn adjust_nr_impl(
     wgts: ArrayView2<f64>,
     adj_class: ArrayView1<i64>,
@@ -31,7 +18,6 @@ pub fn adjust_nr_impl(
 ) -> Result<Array2<f64>> {
     let (n_obs, n_reps) = wgts.dim();
 
-    // Validate inputs
     if adj_class.len() != n_obs {
         return Err(WeightingError::DimensionMismatch {
             expected: n_obs,
@@ -46,27 +32,22 @@ pub fn adjust_nr_impl(
         });
     }
 
-    // Create masks for each status
     let is_rr: Vec<bool> = resp_status.iter().map(|&s| s == RR).collect();
     let is_nr: Vec<bool> = resp_status.iter().map(|&s| s == NR).collect();
     let is_in: Vec<bool> = resp_status.iter().map(|&s| s == IN).collect();
     let is_uk: Vec<bool> = resp_status.iter().map(|&s| s == UK).collect();
 
-    // Map adjustment classes to integer indices
     let (class_indices, n_classes) = create_class_mapping(&adj_class);
 
-    // Sum weights by class and status
     let sum_rr = sum_by_class_and_status(wgts, &class_indices, &is_rr, n_classes);
     let sum_nr = sum_by_class_and_status(wgts, &class_indices, &is_nr, n_classes);
     let sum_in = sum_by_class_and_status(wgts, &class_indices, &is_in, n_classes);
     let sum_uk = sum_by_class_and_status(wgts, &class_indices, &is_uk, n_classes);
 
-    // Calculate adjustment factors for each class
     let mut factor_rr = Array2::ones((n_classes, n_reps));
     let mut factor_in = Array2::ones((n_classes, n_reps));
 
-    // A class with weight to move but nowhere to move it loses that weight. Column 0 is
-    // the full-sample weight, where that is an error; svy warns about a replicate's.
+    // Weight with nowhere to go is lost: an error in column 0 (full sample); svy warns for replicates.
     let no_respondents = |c: usize, r: usize| {
         let row = class_indices
             .iter()
@@ -81,7 +62,6 @@ pub fn adjust_nr_impl(
     for c in 0..n_classes {
         for r in 0..n_reps {
             if unknown_to_inelig {
-                // Unknowns distributed over eligible (IN + RR + NR)
                 let denom_uk = sum_in[[c, r]] + sum_rr[[c, r]] + sum_nr[[c, r]];
                 let adj_uk = if denom_uk > 0.0 {
                     (denom_uk + sum_uk[[c, r]]) / denom_uk
@@ -91,7 +71,6 @@ pub fn adjust_nr_impl(
                     1.0
                 };
 
-                // NR distributed over RR
                 let denom_rr = sum_rr[[c, r]];
                 let adj_rr = if denom_rr > 0.0 {
                     (sum_rr[[c, r]] + sum_nr[[c, r]]) / denom_rr
@@ -104,7 +83,6 @@ pub fn adjust_nr_impl(
                 factor_rr[[c, r]] = adj_rr * adj_uk;
                 factor_in[[c, r]] = adj_uk;
             } else {
-                // Unknowns join NR pool -> distributed to RR
                 let denom_rr = sum_rr[[c, r]];
                 let adj_rr = if denom_rr > 0.0 {
                     (sum_rr[[c, r]] + sum_nr[[c, r]] + sum_uk[[c, r]]) / denom_rr
@@ -120,7 +98,6 @@ pub fn adjust_nr_impl(
         }
     }
 
-    // Apply factors to weights
     let mut adj_weights = Array2::zeros((n_obs, n_reps));
 
     for i in 0..n_obs {
@@ -135,13 +112,12 @@ pub fn adjust_nr_impl(
                 adj_weights[[i, r]] = wgts[[i, r]] * factor_in[[class_id, r]];
             }
         }
-        // NR and UK get weight = 0 (already initialized to zero)
+        // NR and UK stay at zero.
     }
 
     Ok(adj_weights)
 }
 
-/// Create integer mapping for adjustment classes
 fn create_class_mapping(adj_class: &ArrayView1<i64>) -> (Vec<usize>, usize) {
     use std::collections::HashMap;
 
@@ -161,7 +137,6 @@ fn create_class_mapping(adj_class: &ArrayView1<i64>) -> (Vec<usize>, usize) {
     (indices, next_id)
 }
 
-/// Sum weights by class for observations with a given status
 fn sum_by_class_and_status(
     wgts: ArrayView2<f64>,
     class_indices: &[usize],
@@ -191,8 +166,6 @@ mod tests {
 
     #[test]
     fn test_simple_nr_adjustment() {
-        // 4 observations: 2 RR, 1 NR, 1 IN
-        // All in same class, equal weights
         let wgts = array![[1.0], [1.0], [1.0], [1.0]];
         let adj_class = array![0, 0, 0, 0];
         let resp_status = array![RR, RR, NR, IN];
@@ -209,16 +182,13 @@ mod tests {
         assert_relative_eq!(result[[0, 0]], 1.5, epsilon = 1e-12);
         assert_relative_eq!(result[[1, 0]], 1.5, epsilon = 1e-12);
 
-        // NR gets 0
         assert_relative_eq!(result[[2, 0]], 0.0, epsilon = 1e-12);
 
-        // IN keeps weight
         assert_relative_eq!(result[[3, 0]], 1.0, epsilon = 1e-12);
     }
 
     #[test]
     fn test_multiple_classes() {
-        // 6 observations: 2 classes
         let wgts = array![[1.0], [1.0], [1.0], [2.0], [2.0], [2.0]];
         let adj_class = array![0, 0, 0, 1, 1, 1];
         let resp_status = array![RR, RR, NR, RR, NR, NR];

@@ -1,4 +1,3 @@
-// native/svyreadstat_rs/src/spss_read.rs
 use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::os::raw::c_void;
@@ -59,7 +58,6 @@ pub fn df_parse_por_file(
     crate::core::to_python(py, &ipc, &meta, "POR", path)
 }
 
-/// Internal implementation for parsing .sav files
 #[inline]
 fn parse_sav_impl(
     path: &str,
@@ -69,7 +67,6 @@ fn parse_sav_impl(
     rows_skip: usize,
     lossy_utf8: bool,
 ) -> Result<(Vec<u8>, crate::core::MetaOut)> {
-    // Pre-calculate skip set for O(1) lookup
     let cols_skip_map = cols_skip.map(|v| {
         let mut map = HashMap::with_capacity(v.len());
         for k in v {
@@ -79,7 +76,7 @@ fn parse_sav_impl(
     });
 
     let mut ctx = ParseCtx {
-        cols: Vec::with_capacity(128), // SPSS files often have many columns
+        cols: Vec::with_capacity(128),
         var_cols: Vec::with_capacity(128),
         cols_skip: cols_skip_map,
         rows_skip,
@@ -89,10 +86,10 @@ fn parse_sav_impl(
         last_counted_row: None,
         had_invalid_utf8: false,
         lossy_utf8,
-        label_sets: HashMap::with_capacity(64), // Pre-allocate for value labels
+        label_sets: HashMap::with_capacity(64),
         file_label: None,
         last_err: None,
-        tagged: HashMap::new(), // SPSS: no tagged-missing semantics
+        tagged: HashMap::new(),
         notes: Vec::with_capacity(8),
         detect_tagged: false, // SPSS: no tagged-missing semantics
         row_capacity: None,   // Set via on_metadata_cb
@@ -111,8 +108,7 @@ fn parse_sav_impl(
     }
     let enc = crate::core::input_encoding(encoding, lossy_utf8);
     let _keep_enc = configure_parser(&parser, enc, rows_skip, n_max)?;
-    // SAFETY: `ctx`, the path and `_keep_enc` outlive the parse, and only the callbacks
-    // touch `ctx` until it returns.
+    // SAFETY: `ctx`, the path and `_keep_enc` outlive the parse; only the callbacks touch `ctx`.
     let rc = unsafe {
         readstat_parse_sav(
             parser.as_ptr(),
@@ -126,7 +122,6 @@ fn parse_sav_impl(
     finalize_to_ipc(ctx)
 }
 
-/// Internal implementation for parsing .por files
 #[inline]
 fn parse_por_impl(
     path: &str,
@@ -136,7 +131,6 @@ fn parse_por_impl(
     rows_skip: usize,
     lossy_utf8: bool,
 ) -> Result<(Vec<u8>, crate::core::MetaOut)> {
-    // Pre-calculate skip set for O(1) lookup
     let cols_skip_map = cols_skip.map(|v| {
         let mut map = HashMap::with_capacity(v.len());
         for k in v {
@@ -146,7 +140,7 @@ fn parse_por_impl(
     });
 
     let mut ctx = ParseCtx {
-        cols: Vec::with_capacity(128), // SPSS files often have many columns
+        cols: Vec::with_capacity(128),
         var_cols: Vec::with_capacity(128),
         cols_skip: cols_skip_map,
         rows_skip,
@@ -156,10 +150,10 @@ fn parse_por_impl(
         last_counted_row: None,
         had_invalid_utf8: false,
         lossy_utf8,
-        label_sets: HashMap::with_capacity(64), // Pre-allocate for value labels
+        label_sets: HashMap::with_capacity(64),
         file_label: None,
         last_err: None,
-        tagged: HashMap::new(), // SPSS: no tagged-missing semantics
+        tagged: HashMap::new(),
         notes: Vec::with_capacity(8),
         detect_tagged: false,
         row_capacity: None, // Set via on_metadata_cb
@@ -178,8 +172,7 @@ fn parse_por_impl(
     }
     let enc = crate::core::input_encoding(encoding, lossy_utf8);
     let _keep_enc = configure_parser(&parser, enc, rows_skip, n_max)?;
-    // SAFETY: `ctx`, the path and `_keep_enc` outlive the parse, and only the callbacks
-    // touch `ctx` until it returns.
+    // SAFETY: `ctx`, the path and `_keep_enc` outlive the parse; only the callbacks touch `ctx`.
     let rc = unsafe {
         readstat_parse_por(
             parser.as_ptr(),

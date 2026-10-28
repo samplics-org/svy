@@ -1,25 +1,7 @@
-// src/estimation/calib_sweep.rs
-//! Calibration-aware score centering, the analogue of R's `svyrecvar`
-//! `postStrata` loop.
+//! Calibration-aware score centering, the analogue of R's `svyrecvar` `postStrata` loop.
 //!
-//! A calibrating adjustment pins quantities in the population, which removes
-//! sampling variability the uncentred estimator still charges for. Feeding the
-//! stratified PSU-total formula the *cell-centred* scores accounts for it:
-//!
-//! ```text
-//! e_i = w*_i (z_i - z_c(i))     z_c = sum_{i in c} w_i z_i / sum_{i in c} w_i
-//! ```
-//!
-//! Cell means use the PREVIOUS weights throughout. For a plain
-//! poststratification that choice is immaterial -- the adjustment factor is
-//! constant within a cell and cancels -- but it changes the answer wherever the
-//! factor varies inside a sweep's cell: raking after the first margin, and GREG,
-//! whose factor varies row by row. R uses the previous weights in every branch.
-//!
-//! Verified against survey 4.5 on apiclus1 before being written here: cells
-//! 23.875658304826, GREG 3.295880912157, raking 23.745841047537, each matching
-//! R to twelve significant figures, and a poststratified margin total giving
-//! exactly zero.
+//! - Scores are cell-centred: `e_i = w*_i (z_i - z_c(i))`, `z_c` the weighted cell mean of `z`.
+//! - Cell means use the PREVIOUS weights, as R does; that matters for raking and GREG only.
 
 use crate::estimation::error::{EResult, EstimationError};
 use crate::regression::wols::solve_kxk;
@@ -27,8 +9,7 @@ use crate::regression::wols::solve_kxk;
 /// Marks a row outside the adjustment: factor 1, no centring.
 pub const OUT_OF_SCOPE: u32 = u32::MAX;
 
-/// How many iterations R runs its raking sweep. Not a convergence loop -- a
-/// fixed count, matched here so the two agree.
+/// R's raking sweep count: a fixed number, not a convergence loop.
 const RAKE_ITERATIONS: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,15 +28,12 @@ pub struct CalibSweep {
     /// One code vector per margin. `Cells` and `Greg` use at most one.
     pub cells: Vec<Vec<u32>>,
     pub n_cells: Vec<usize>,
-    /// Auxiliary matrix, column-major, for `Greg`. Non-finite entries mark a
-    /// row outside the calibration.
+    /// `Greg` auxiliary matrix, column-major; a non-finite entry marks a row outside it.
     pub aux: Vec<Vec<f64>>,
     pub prev_w: Vec<f64>,
-    /// Current weights, already carrying R's `psw == 0 & oldw == 0 -> psw = 1`
-    /// guard so zero-weight rows cannot divide by zero.
+    /// Current weights after R's `psw == 0 & oldw == 0 -> psw = 1` guard against dividing by zero.
     pub new_w: Vec<f64>,
-    /// False when only the composition was pinned (`shares`), leaving the
-    /// grand total's variability intact.
+    /// False when only the composition was pinned (`shares`), so the grand total stays variable.
     pub pins_total: bool,
 }
 
@@ -69,9 +47,7 @@ impl CalibSweep {
         mut new_w: Vec<f64>,
         pins_total: bool,
     ) -> Self {
-        // R's guard, and only R's guard: a row with no weight either side
-        // cannot divide. Rows excluded by a subpopulation filter are NOT
-        // dropped here -- see `apply`.
+        // R's guard only: rows outside a subpopulation are kept (see `apply`).
         for i in 0..new_w.len() {
             if new_w[i] == 0.0 && prev_w[i] == 0.0 {
                 new_w[i] = 1.0;
@@ -88,19 +64,8 @@ impl CalibSweep {
         }
     }
 
-    /// Centre `x` in place.
-    ///
-    /// Cell means are always taken over the FULL sample, never restricted to a
-    /// subpopulation or by-group. The adjustment was performed on the whole
-    /// sample, so the constraint being removed is a whole-sample constraint;
-    /// restricting the means would treat the calibration as though it had been
-    /// carried out inside the subpopulation, which it was not.
-    ///
-    /// Out-of-domain rows need no special handling: their scores arrive as
-    /// zero, so they add nothing to a cell's numerator while still carrying
-    /// their weight in its denominator -- which is exactly what R does, since
-    /// `subset()` zeroes the design weights and leaves `postStrata` alone.
-    /// Restricting instead was measured at 9% off R on apiclus1.
+    /// Centre `x` in place, with cell means over the FULL sample: the calibration was whole-sample.
+    /// Out-of-domain rows add zero score but keep their weight in the denominator, as in R.
     pub fn apply(&self, x: &mut [f64]) {
         // Built from the frame the scores come from, so a mismatch is a kernel bug.
         assert_eq!(
@@ -156,16 +121,8 @@ impl CalibSweep {
         }
     }
 
-    /// `shares` pin the composition but not the level.
-    ///
-    /// The constraints are `sum_{i in c} w*_i = s_c * sum_i w*_i`, so the pinned
-    /// directions are `u_c = delta_c - s_c`, which sum to zero and therefore
-    /// span k-1 dimensions rather than k. Projecting those out is exactly the
-    /// GREG residual against `u_1..u_{k-1}`, so this reuses that solver rather
-    /// than being a sweep of its own.
-    ///
-    /// `s_c` is not carried on the record because it does not need to be: the
-    /// achieved composition IS the shares, by construction.
+    /// `shares` pin composition, not level: the GREG residual on `u_c = delta_c - s_c`, c < k.
+    /// `s_c` is not on the record because the achieved composition IS the shares.
     fn sweep_shares(&self, x: &mut [f64]) {
         let codes = &self.cells[0];
         let k = self.n_cells[0];
@@ -200,8 +157,7 @@ impl CalibSweep {
         self.wls_residual(x, &aux);
     }
 
-    /// R rakes with the UNWEIGHTED group mean of `x / w`, unlike the
-    /// poststratification branch. Matched deliberately.
+    /// R rakes with the UNWEIGHTED group mean of `x / w`, unlike poststratification; matched.
     fn sweep_raking(&self, x: &mut [f64], margin: usize) {
         let codes = &self.cells[margin];
         let k = self.n_cells[margin];
@@ -227,10 +183,8 @@ impl CalibSweep {
         }
     }
 
-    /// GREG: `w*(z - X b)` with `b` the WLS fit of `z` on `X` weighted by the
-    /// PREVIOUS weights. R stores `qr(X * sqrt(oldw))` and `w = g * sqrt(oldw)`,
-    /// which unwinds to exactly this; using the calibrated weights instead is
-    /// close but wrong (3.2631 against 3.2959 on apiclus1).
+    /// GREG: `w*(z - X b)`, `b` the WLS fit weighted by the PREVIOUS weights, which R's
+    /// `qr(X * sqrt(oldw))` unwinds to; the calibrated weights give a close but wrong answer.
     fn sweep_greg(&self, x: &mut [f64]) {
         self.wls_residual(x, &self.aux)
     }
@@ -292,8 +246,7 @@ pub struct CalibSpec {
 
 fn codes_from(df: &DataFrame, name: &str) -> EResult<(Vec<u32>, usize)> {
     let col = df.column(name)?;
-    // Cells are written as Int32; casting to Int64 first would allocate a
-    // second full-length array before the collect below.
+    // Cells arrive as Int32; casting to Int64 first would allocate a second full-length array.
     let s = if matches!(col.dtype(), DataType::Int32) {
         col.clone()
     } else {
@@ -320,9 +273,7 @@ fn codes_from(df: &DataFrame, name: &str) -> EResult<(Vec<u32>, usize)> {
 
 fn floats_from(df: &DataFrame, name: &str) -> EResult<Vec<f64>> {
     let col = df.column(name)?;
-    // Weight columns are Float64 and complete in every path that reaches here,
-    // so take the memcpy rather than an option-yielding iterator collect: this
-    // runs over the full frame once per estimation call, per column.
+    // Always complete Float64 here: memcpy beats an option collect on this per-call path.
     if matches!(col.dtype(), DataType::Float64) {
         let ca = col.f64()?;
         if ca.null_count() == 0
@@ -389,12 +340,7 @@ pub fn build_calib_sweep(df: &DataFrame, spec: &CalibSpec) -> EResult<CalibSweep
 }
 
 /// The sweep for a wrapper's `calib_*` arguments; `None` when no record was passed.
-///
-/// `new_wgt` normally IS `weight_col`, since the record is only honoured when
-/// its new_wgt is the active weight. The exception is a subpopulation filter,
-/// which zeroes the weight column in place: the sweep still needs the
-/// full-sample calibrated weights, so Python snapshots them before zeroing and
-/// names the snapshot here.
+/// `new_wgt` is `weight_col` except under a subpopulation filter: then it is the pre-zeroing copy.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn make_calib(
     df: &DataFrame,
@@ -420,12 +366,7 @@ pub(crate) fn make_calib(
     build_calib_sweep(df, &spec).map(Some)
 }
 
-/// Centre a score column, for callers that hold `Float64Chunked` rather than a
-/// slice (the categorical estimators, which hand score columns to
-/// `taylor_variance` / `taylor_variance_matrix`).
-///
-/// Sweeping at the call site means those variance functions stay exactly as
-/// they are: the scores they receive are already centred.
+/// Centre a `Float64Chunked` score column, so `taylor_variance` callers receive centred scores.
 pub fn sweep_scores(scores: &Float64Chunked, calib: Option<&CalibSweep>) -> Float64Chunked {
     match calib {
         None => scores.clone(),

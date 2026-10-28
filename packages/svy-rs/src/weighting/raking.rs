@@ -1,4 +1,4 @@
-// src/weighting/raking.rs
+//! Raking by iterative proportional fitting.
 
 use super::utils::{Result, WeightingError, check_bounds, sum_by_group_2d};
 use ndarray::{Array1, Array2, ArrayView2};
@@ -21,10 +21,7 @@ impl MarginSpec {
     }
 }
 
-/// Core raking algorithm (Iterative Proportional Fitting)
-///
-/// Non-convergence is NOT an error — the best weights reached after
-/// max_iter are returned.  Bounds violations ARE errors.
+/// Raking where non-convergence returns the last weights but a bound violation is an error.
 pub fn rake_impl(
     wgt: ArrayView2<f64>,
     margin_indices: &[Array1<i64>],
@@ -55,8 +52,7 @@ pub fn rake_impl(
                 got: indices.len(),
             });
         }
-        // Negative indices would wrap to huge usize values in MarginSpec::new
-        // and abort on allocation — reject them with a clean error.
+        // Negative ids would wrap to huge usize values in MarginSpec::new and abort on allocation.
         if indices.iter().any(|&x| x < 0) {
             return Err(WeightingError::InvalidInput(
                 "Margin indices must be non-negative".to_string(),
@@ -70,8 +66,7 @@ pub fn rake_impl(
         .map(|(idx, tgt)| MarginSpec::new(idx.clone(), tgt.clone()))
         .collect();
 
-    // Each group id present in a margin must have a target — a short target
-    // array would panic on `margin.targets[g]` below.
+    // A short target array would panic on `margin.targets[g]` below.
     for margin in &margins {
         if margin.targets.len() < margin.n_groups {
             return Err(WeightingError::DimensionMismatch {
@@ -85,8 +80,7 @@ pub fn rake_impl(
 
     let mut converged = false;
     for _ in 0..max_iter {
-        // Track max relative change inline — avoids cloning the full N×R matrix
-        // on every iteration for convergence checking.
+        // Tracked inline so the N×R matrix is not cloned every iteration.
         let mut max_rel_diff = 0.0f64;
 
         for margin in &margins {
@@ -114,7 +108,6 @@ pub fn rake_impl(
                     let f = factors[[group_id, col_idx]];
                     let next = prev * f;
                     raked_weights[[row_idx, col_idx]] = next;
-                    // Track convergence: relative change = |f - 1|
                     let rel = (f - 1.0).abs();
                     if rel > max_rel_diff {
                         max_rel_diff = rel;
@@ -129,9 +122,7 @@ pub fn rake_impl(
         }
     }
 
-    // The documented bounds contract applies on BOTH exit paths: bounds
-    // violations ARE errors, converged or not (the non-converged path
-    // previously skipped this check and returned violating weights).
+    // Bounds hold on both exit paths, converged or not.
     if !check_bounds(raked_weights.view(), wgt, ll_bound, up_bound) {
         return Err(WeightingError::BoundsExceeded { converged });
     }
@@ -169,8 +160,7 @@ mod tests {
             100,
         )
         .unwrap();
-        // Independent margins converge in one pass to the product
-        // row_total * col_total / 30, e.g. 10 * 12 / 30 = 4.
+        // Independent margins give row_total * col_total / 30 in one pass, e.g. 10 * 12 / 30 = 4.
         let expected = [4.0, 6.0, 8.0, 12.0];
         for (got, want) in result.column(0).iter().zip(expected) {
             assert_relative_eq!(*got, want, epsilon = 1e-12);

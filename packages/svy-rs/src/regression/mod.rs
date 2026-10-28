@@ -1,4 +1,4 @@
-// src/regression/mod.rs
+//! Survey-weighted GLM fitting and its Python bindings.
 pub mod api;
 pub mod error;
 pub mod glm;

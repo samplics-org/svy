@@ -63,8 +63,7 @@ fn parse_xpt_impl(
     }
     let enc = crate::core::input_encoding(encoding, lossy_utf8);
     let _keep_enc = configure_parser(&parser, enc, rows_skip, n_max)?;
-    // SAFETY: `ctx`, the path and `_keep_enc` outlive the parse, and only the callbacks
-    // touch `ctx` until it returns.
+    // SAFETY: `ctx`, the path and `_keep_enc` outlive the parse; only the callbacks touch `ctx`.
     let rc = unsafe {
         readstat_parse_xport(
             parser.as_ptr(),

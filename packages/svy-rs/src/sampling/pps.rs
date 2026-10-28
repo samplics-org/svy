@@ -1,4 +1,4 @@
-// src/sampling/pps.rs
+//! PPS selection: systematic, with replacement, Brewer, Murphy and Rao-Sampford.
 
 use crate::rng::Rng;
 pub use crate::sampling::srs::Result;
@@ -110,11 +110,7 @@ pub fn select_pps(
 // Shared: iterative certainty extraction — no per-iteration allocation
 // ---------------------------------------------------------------------------
 
-/// Returns (cert_mask, n_rem).
-///
-/// Uses a `remaining` boolean mask and running sum instead of rebuilding
-/// index vecs on each pass. O(passes * N) time, O(N) extra space, 0 heap
-/// allocations inside the loop.
+/// Repeatedly marks units with n * p >= threshold as certainties; returns (cert_mask, n_rem).
 fn extract_certainty(p0: &[f64], n: usize, threshold: f64) -> (Vec<bool>, usize) {
     let big = p0.len();
     let mut cert_mask = vec![false; big];
@@ -127,18 +123,13 @@ fn extract_certainty(p0: &[f64], n: usize, threshold: f64) -> (Vec<bool>, usize)
             break;
         }
         let n_rem_f = n_rem as f64;
-        // Snapshot denominator at pass start — critical correctness requirement.
-        // If we updated total_rem mid-pass as units are extracted, the shrinking
-        // denominator would artificially inflate remaining units' ratios and cause
-        // over-extraction within a single pass.  Instead we commit extractions to
-        // total_rem but evaluate all units against the pass-start snapshot.
+        // Judge a whole pass against its starting total: shrinking it mid-pass over-extracts.
         let total_rem_pass = total_rem;
         let threshold_scaled = threshold - 1e-12;
         let mut found_any = false;
 
         for i in 0..big {
-            // Never mark more than n units certain: once the remaining sample
-            // size is exhausted, stop extracting even mid-pass.
+            // Never mark more than n units certain, even mid-pass.
             if n_rem == 0 {
                 break;
             }
@@ -176,19 +167,14 @@ fn pps_indexed(
     if cap == 0 || n == 0 {
         return Ok((vec![], vec![], vec![], vec![]));
     }
-    // Murphy is defined for exactly two draws; silently returning 2 units
-    // for any requested n was a footgun.
     if matches!(method, PpsMethod::Murphy) && n != 2 {
         return Err(SamplingError::InvalidInput(format!(
             "Murphy PPS selects exactly 2 units; got n={n}. Use method='wr' or \
              'rs' for other sample sizes."
         )));
     }
-    // With-replacement sampling legitimately draws n >= population size
-    // (units can be selected multiple times), so the take-all shortcut
-    // below must not apply to it.
+    // WR may legitimately draw n >= N, so the take-all shortcut is for WOR methods only.
     if n >= cap && !matches!(method, PpsMethod::Wr) {
-        // Select all (without-replacement methods)
         let sel: Vec<i64> = positions.iter().map(|&p| frame[p]).collect();
         let hits = vec![1i64; cap];
         let probs = vec![1.0f64; cap];
@@ -196,7 +182,6 @@ fn pps_indexed(
         return Ok((sel, hits, probs, cert));
     }
 
-    // Validate and compute normalised probabilities from positions
     if positions
         .iter()
         .any(|&p| !mos[p].is_finite() || mos[p] < 0.0)
@@ -210,7 +195,6 @@ fn pps_indexed(
         return Err(SamplingError::InvalidInput("sum(MOS) must be > 0".into()));
     }
 
-    // p0[i] = normalised probability for positions[i] — one allocation here
     let p0: Vec<f64> = positions.iter().map(|&p| mos[p] / total_mos).collect();
 
     match method {
@@ -338,8 +322,6 @@ fn pps_sys(
     }
 
     if n_rem > 0 {
-        // Build cumulative array over non-certainty units only
-        // rem_count known upfront — one allocation
         let rem_count = cert_mask.iter().filter(|&&c| !c).count();
         let mut cum = Vec::with_capacity(rem_count + 1);
         let mut rem_positions = Vec::with_capacity(rem_count); // local indices
@@ -404,7 +386,6 @@ fn pps_wr(frame: &[i64], positions: &[usize], p0: &[f64], n: usize, seed: u64) -
         hits[draw_one(&mut rng, p0)?] += 1;
     }
 
-    // WR inclusion probability: 1 - (1 - p_i)^n
     let n_f = n as f64;
     let mut sel = Vec::with_capacity(n);
     let mut ohits = Vec::with_capacity(n);
@@ -456,7 +437,6 @@ fn pps_brewer(
         }
     }
 
-    // Pre-allocate working weight buffer — reused across iterations, no heap alloc in loop
     let mut w_buf = vec![0.0f64; cap];
 
     let mut to_draw = n_rem;
@@ -464,7 +444,6 @@ fn pps_brewer(
         let t = to_draw as f64;
         let mut w_total = 0.0f64;
 
-        // Fill weights for available units in-place
         for i in 0..cap {
             if available[i] {
                 let p = p0[i];
@@ -485,7 +464,6 @@ fn pps_brewer(
             break;
         }
 
-        // Weighted pick over w_buf — single pass, no allocation
         let mut u = rng.next_f64() * w_total;
         let pick = {
             let mut chosen = cap - 1;
@@ -524,7 +502,6 @@ fn pps_murphy(frame: &[i64], positions: &[usize], p0: &[f64], seed: u64) -> Resu
 
     let first = draw_one(&mut rng, p0)?;
 
-    // Second draw: skip first, renormalise in-place with a temp total
     let rem_total: f64 = p0
         .iter()
         .enumerate()
@@ -532,7 +509,6 @@ fn pps_murphy(frame: &[i64], positions: &[usize], p0: &[f64], seed: u64) -> Resu
         .map(|(_, &p)| p)
         .sum();
 
-    // Walk the weights without allocating a rem vec
     let mut u = rng.next_f64() * rem_total;
     let second = {
         let mut chosen = if first == cap - 1 { cap - 2 } else { cap - 1 };
@@ -587,7 +563,6 @@ fn pps_rs(
     }
 
     if n_rem > 0 {
-        // Build rem_idx once
         let rem_idx: Vec<usize> = (0..cap).filter(|&i| !cert_mask[i]).collect();
         let rem_len = rem_idx.len();
 
@@ -603,10 +578,7 @@ fn pps_rs(
             if n_rem == 1 {
                 hits[rem_idx[draw_one(&mut rng, &p_rem)?]] = 1;
             } else {
-                // Sampford requires n*p_i < 1 for every remaining unit.
-                // extract_certainty should have pulled larger units out as
-                // certainties; anything left violating the condition is an
-                // input we cannot honour with exact pi_i = n*p_i.
+                // Sampford needs n*p_i < 1; larger units should already be certainties.
                 if let Some(bad) = p_rem.iter().position(|&p| n_rem as f64 * p >= 1.0) {
                     return Err(SamplingError::InvalidInput(format!(
                         "Rao-Sampford requires n*p < 1 for all non-certainty units; \
@@ -617,8 +589,7 @@ fn pps_rs(
                     )));
                 }
 
-                // Sampford lambda weights for the n-1 WITH-replacement draws:
-                // lambda_i proportional to p_i / (1 - n*p_i).
+                // Sampford weights for the n-1 WR draws: lambda_i ∝ p_i / (1 - n*p_i).
                 let lam_raw: Vec<f64> = p_rem
                     .iter()
                     .map(|&p| p / (1.0 - n_rem as f64 * p))
@@ -626,13 +597,7 @@ fn pps_rs(
                 let lam_total: f64 = lam_raw.iter().sum();
                 let lambda: Vec<f64> = lam_raw.iter().map(|&w| w / lam_total).collect();
 
-                // True Sampford rejective sampling: first draw with p_i, the
-                // remaining n-1 WITH replacement with lambda_i, accepting only
-                // fully distinct samples. (The previous implementation drew
-                // without replacement, making the acceptance check vacuous —
-                // its own comment admitted "always true here" — and fell back
-                // to a plain equal-probability shuffle on failure, so the
-                // claimed pi_i = n*p_i never held.)
+                // Rejective: first draw by p_i, the rest WR by lambda_i, until all are distinct.
                 let mut selected_mask = vec![false; rem_len];
                 let mut selected_buf: Vec<usize> = Vec::with_capacity(n_rem);
                 let mut found = false;
@@ -665,9 +630,7 @@ fn pps_rs(
                 }
 
                 if !found {
-                    // Acceptance degenerated (can happen when some n*p_i is
-                    // very close to 1). Erroring beats silently switching to
-                    // an equal-probability design with the wrong weights.
+                    // Erroring beats an equal-probability fallback with wrong weights.
                     return Err(SamplingError::InvalidInput(format!(
                         "Rao-Sampford rejective sampling did not accept a sample \
                          within {MAX_ATTEMPTS} attempts; the largest n*p is likely \
@@ -695,11 +658,7 @@ fn assemble_pps_output(
     cert_mask: &[bool],
     n_rem: usize,
 ) -> Result<PpsDraw> {
-    // Non-certainty units were selected via n_rem draws over the *remaining*
-    // pool, so their inclusion probability must be renormalised over the
-    // remaining MOS mass: pi_i = n_rem * p0_i / total_rem, not n * p0_i.
-    // With no certainties (the common case) total_rem == 1 and this reduces
-    // to n * p0_i as before.
+    // Non-certainties come from n_rem draws over the rest: pi_i = n_rem * p0_i / total_rem.
     let total_rem: f64 = p0
         .iter()
         .zip(cert_mask.iter())
@@ -734,11 +693,7 @@ fn assemble_pps_output(
 mod tests {
     use super::*;
 
-    // Regression: reported pi for non-certainty units must be renormalised
-    // over the remaining pool after certainty extraction.
-    // MOS [100, 1, 1], n=2: unit 0 is a certainty (pi=1); one of the two
-    // remaining units is drawn with true pi = 1 * (1/102)/(2/102) = 0.5.
-    // The old code reported min(1, 2*100/102) share = 0.0196 (weight ~51).
+    // MOS [100, 1, 1], n=2: unit 0 is certain; the others have pi = 1 * (1/102) / (2/102) = 0.5.
     #[test]
     fn test_pi_renormalised_after_certainty_extraction() {
         for method in [PpsMethod::Sys, PpsMethod::Brewer, PpsMethod::Rs] {
@@ -763,7 +718,6 @@ mod tests {
         }
     }
 
-    // Regression: certainty extraction must never mark more than n units.
     #[test]
     fn test_certainty_extraction_capped_at_n_equal_units() {
         let p0 = vec![0.1; 10];
@@ -782,8 +736,6 @@ mod tests {
         assert_eq!(n_rem, 0);
     }
 
-    // Regression: n larger than the number of positive-MOS units must be a
-    // clean error, not NaN probabilities selecting zero-MOS units with pi=0.
     #[test]
     fn test_n_exceeding_positive_mos_units_errors() {
         for method in [PpsMethod::Sys, PpsMethod::Brewer, PpsMethod::Rs] {
@@ -877,8 +829,6 @@ mod sampford_tests {
 
     #[test]
     fn wr_draws_n_even_beyond_population() {
-        // With replacement: n > population is legitimate; the take-all
-        // shortcut previously returned each unit once with pi = 1.
         let frame = vec![1, 2, 3];
         let mos = vec![1.0, 1.0, 2.0];
         let (_sel, hits, _probs, _cert) =
@@ -893,10 +843,7 @@ mod sampford_tests {
 
     #[test]
     fn sampford_degenerate_np_close_to_1_errors() {
-        // n = 3 and n*p = 1 - 1e-9 for the first unit, just under the certainty
-        // threshold: lambda puts all but ~4e-9 on it, so two distinct lambda
-        // draws have probability ~1e-8 per attempt and all 1000 attempts fail.
-        // It must error, not fall back to a shuffle.
+        // n*p = 1 - 1e-9 for unit 0 leaves ~1e-8 odds of distinct lambda draws per attempt.
         let frame = vec![1, 2, 3, 4, 5];
         let small = 0.5 + 0.25e-9;
         let mos = vec![1.0 - 1e-9, small, small, small, small];
@@ -917,14 +864,13 @@ mod sampford_tests {
         }
     }
 
-    /// Empirical inclusion probabilities over many replicates must match
-    /// pi_i = n * p_i. Quick version for the normal test run.
+    /// Monte Carlo inclusion frequencies match pi_i = n * p_i.
     #[test]
     fn sampford_inclusion_probabilities_quick() {
         run_sampford_mc(20_000, 0.03);
     }
 
-    /// Tight Monte Carlo — run explicitly with `cargo test -- --ignored`.
+    /// Tight version; run with `cargo test -- --ignored`.
     #[test]
     #[ignore]
     fn sampford_inclusion_probabilities_full() {
@@ -932,8 +878,7 @@ mod sampford_tests {
     }
 
     fn run_sampford_mc(reps: u64, tol: f64) {
-        // Skewed MOS, no certainties at threshold 1.0 with n=3:
-        // p = mos/60; n*p_max = 3*20/60 = 1.0 -> use max 15 => n*p = 0.75.
+        // Largest n*p is 3 * 15/60 = 0.75: skewed, yet no certainties.
         let frame: Vec<i64> = (0..8).collect();
         let mos = vec![15.0, 11.0, 9.0, 8.0, 6.0, 5.0, 4.0, 2.0];
         let total: f64 = mos.iter().sum();
@@ -951,7 +896,7 @@ mod sampford_tests {
                 seed,
             )
             .unwrap();
-            // `sel` holds the selected frame ids (= positions here).
+            // Frame ids equal positions here.
             for &s in &sel {
                 counts[s as usize] += 1;
             }

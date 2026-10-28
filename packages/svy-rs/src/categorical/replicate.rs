@@ -1,12 +1,7 @@
-// src/categorical/replicate.rs
-//
-// Replication variance for tabulate, ttest and ranktest: R's svyrep.design
-// methods. Cell proportions, totals and means are re-estimated with every
-// replicate weight (svymean/svytotal/svrepglm); rank tests re-total the
-// full-sample influence values instead (svyranktest calls svytotal(infn)).
-//
-// The stratum, PSU, FPC, singleton and calibration inputs of the Taylor path
-// play no part here: the replicate weights carry the design.
+//! Replication variance for tabulate, ttest and ranktest, after R's svyrep.design methods.
+//!
+//! - Estimates are refit per replicate; rank tests re-total the full-sample influence values (svyranktest's svytotal(infn)).
+//! - Strata, PSUs, FPC, singletons and calibration play no part: the replicate weights carry the design.
 
 use crate::categorical::error::CResult;
 use crate::estimation::error::EstimationError;
@@ -20,8 +15,7 @@ pub struct RepSpec {
     pub weights: Vec<Vec<f64>>,
     pub coefs: Vec<f64>,
     pub center: VarianceCenter,
-    /// Design df: the recorded one, or n_reps - 1. It does not shrink on a
-    /// domain.
+    /// The recorded design df, else n_reps - 1; it does not shrink on a domain.
     pub df: f64,
 }
 
@@ -66,8 +60,7 @@ impl RepSpec {
         covariance_from_replicates(full, reps, &self.coefs, self.center)
     }
 
-    /// Weighted mean of `y` over `mask`, with the full-sample weights and with
-    /// each replicate's.
+    /// Weighted mean of `y` over `mask`, full-sample and per replicate.
     pub fn means(&self, y: &[f64], w: &[f64], mask: &[bool]) -> (f64, Vec<f64>) {
         let mean = |wt: &[f64]| {
             let (mut num, mut den) = (0.0, 0.0);
@@ -85,8 +78,7 @@ impl RepSpec {
         )
     }
 
-    /// Replicate totals of the columns of an n × k row-major matrix over
-    /// `mask`, as k × n_reps.
+    /// Replicate totals over `mask` of an n × k row-major matrix, as k × n_reps.
     pub fn totals(&self, x: &[f64], k: usize, mask: &[bool]) -> Vec<Vec<f64>> {
         let per_rep: Vec<Vec<f64>> = self
             .weights
@@ -117,9 +109,7 @@ pub struct RepCells {
     pub total_cov: Vec<Vec<f64>>,
 }
 
-/// Cell proportions (svymean of the cell indicators) and totals (svytotal),
-/// re-estimated with every replicate. A row counts when it is in the domain
-/// and its key is one of `levels`.
+/// Cell proportions and totals per replicate; a row counts when in the domain and its key is in `levels`.
 pub fn replicate_cells(
     y: &StringChunked,
     weights: &Float64Chunked,

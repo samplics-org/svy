@@ -1,8 +1,4 @@
-// src/estimation/replication_api.rs
-//
-// PyO3-facing wrappers and `compute_replicate_*` helpers for replication-based
-// variance estimation.  The matrix math lives in replication.rs; this file
-// only handles DataFrame I/O, argument parsing, and looping over by-groups.
+//! PyO3 wrappers for replicate-weight variance; the matrix math lives in `replication`.
 
 use crate::errors::to_py_err;
 use crate::estimation::error::{EResult, EstimationError};
@@ -35,10 +31,7 @@ fn flatten_cov(cov: Vec<Vec<f64>>) -> Vec<f64> {
 // Shared helpers
 // ============================================================================
 
-/// Borrow every replicate-weight column as a contiguous null-free slice, or
-/// `None` if any column is chunked/nullable (→ caller uses the flat-matrix
-/// fallback). Lets the ungrouped estimators accumulate straight from the
-/// columns with no n×R matrix materialised.
+/// Each replicate-weight column as a contiguous null-free slice; `None` means use the flat matrix.
 fn get_cont_rep_cols<'a>(
     df: &'a DataFrame,
     rep_weight_cols: &[String],
@@ -67,11 +60,7 @@ fn rep_columns<'a>(df: &'a DataFrame, rep_weight_cols: &[String]) -> EResult<Vec
         .collect()
 }
 
-/// Materialise the `where=` domain mask as a dense `Vec<f64>` (1.0 inside the
-/// domain, 0.0 outside), or `None` when no domain is set. Passed to the
-/// ungrouped replicate kernels so they zero out-of-domain replicate weights on
-/// the fly — replacing the R materialised zeroed columns the Python side would
-/// otherwise build per `where=` call.
+/// The `where=` mask as 1.0/0.0, so kernels zero out-of-domain replicate weights on the fly.
 fn get_domain_mask(df: &DataFrame, mask_col: Option<&str>) -> EResult<Option<Vec<f64>>> {
     match mask_col {
         None => Ok(None),
@@ -109,8 +98,7 @@ pub fn replicate_mean(
     let df = into_contiguous(data);
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
-    // Coefficients are computed by the RepWeights variant on the Python side;
-    // the kernel no longer re-derives them from a method label.
+    // Coefficients come from the RepWeights variant on the Python side.
     if rep_coefs.len() != n_reps {
         return Err(to_py_err(&EstimationError::RepCoefsLength {
             got: rep_coefs.len(),
@@ -168,8 +156,7 @@ fn compute_replicate_mean_ungrouped(
     let domain_mask = get_domain_mask(df, domain_mask_col)?;
     let mask = domain_mask.as_deref();
 
-    // No-materialisation path: accumulate from the contiguous replicate columns
-    // (parallel over replicates); flat-matrix fallback for chunked/nullable.
+    // Contiguous replicate columns are read in place; chunked or nullable ones use the flat matrix.
     let (theta_full, theta_reps) = match get_cont_rep_cols(df, rep_weight_cols)? {
         Some(cols) => matrix_mean_estimates_cols(&y_arr, &w_arr, &cols, n, mask),
         None => {
@@ -272,8 +259,7 @@ pub fn replicate_total(
     let df = into_contiguous(data);
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
-    // Coefficients are computed by the RepWeights variant on the Python side;
-    // the kernel no longer re-derives them from a method label.
+    // Coefficients come from the RepWeights variant on the Python side.
     if rep_coefs.len() != n_reps {
         return Err(to_py_err(&EstimationError::RepCoefsLength {
             got: rep_coefs.len(),
@@ -416,13 +402,7 @@ fn compute_replicate_total_grouped(
 // ============================================================================
 
 /// Replicate-weight covariance or correlation over one or more column pairs.
-///
-/// Every replicate re-centers on its own weighted means -- that is what R's
-/// `svrepvar` does inside its `v(w)` closure -- while `n` for the covariance's
-/// Kish factor stays fixed at the full-sample value, as R fixes it outside that
-/// closure. Both fall out of `PairProducts`, which forms the weight-independent
-/// products once so each replicate costs six dot products rather than a full
-/// recomputation.
+/// Replicates re-centre on their own means but keep the full-sample Kish `n`, like R's `svrepvar`.
 #[pyfunction]
 #[pyo3(signature = (data, y_cols, x_cols, kind, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
 #[allow(clippy::too_many_arguments)]
@@ -443,8 +423,7 @@ pub fn replicate_assoc(
     let df = into_contiguous(data);
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
-    // Coefficients are computed by the RepWeights variant on the Python side;
-    // the kernel no longer re-derives them from a method label.
+    // Coefficients come from the RepWeights variant on the Python side.
     if rep_coefs.len() != n_reps {
         return Err(to_py_err(&EstimationError::RepCoefsLength {
             got: rep_coefs.len(),
@@ -503,8 +482,6 @@ fn compute_replicate_assoc(
         .map(|c| df.column(c).and_then(|s| s.f64()))
         .collect::<PolarsResult<Vec<_>>>()?;
 
-    // Replicate weights as slices; materialize only when they are not already
-    // contiguous, so the common case borrows straight from the frame.
     let cont = get_cont_rep_cols(df, rep_weight_cols)?;
     let owned: Option<Vec<Vec<f64>>> = if cont.is_none() {
         Some(
@@ -554,9 +531,7 @@ fn compute_replicate_assoc(
         .flat_map(|gi| (0..n_pairs).map(move |pi| (gi, pi)))
         .collect();
 
-    // Sequential over (group, pair): `replicate_association` already fans out
-    // across replicates, which is the wide axis. Nesting a second rayon level
-    // here would oversubscribe without adding usable parallelism.
+    // Sequential: `replicate_association` already fans out over replicates; nesting oversubscribes.
     let w_full: Vec<f64> = weights.iter().map(|v| v.unwrap_or(0.0)).collect();
     let rows = combos
         .iter()
@@ -632,8 +607,7 @@ pub fn replicate_ratio(
     let df = into_contiguous(data);
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
-    // Coefficients are computed by the RepWeights variant on the Python side;
-    // the kernel no longer re-derives them from a method label.
+    // Coefficients come from the RepWeights variant on the Python side.
     if rep_coefs.len() != n_reps {
         return Err(to_py_err(&EstimationError::RepCoefsLength {
             got: rep_coefs.len(),
@@ -816,8 +790,7 @@ pub fn replicate_prop(
     )
 }
 
-/// Estimated count of each level (`svytotal(~factor(y))` on a replicate
-/// design), with the joint covariance across levels (and by-groups).
+/// Count per level (R `svytotal(~factor(y))`) with the joint covariance across levels and groups.
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, center="rep_mean", degrees_of_freedom=None, by_col=None, domain_mask_col=None))]
 #[allow(clippy::too_many_arguments)]
@@ -848,8 +821,7 @@ pub fn replicate_factor_total(
     )
 }
 
-/// `normalize` reports each level as a share of the (domain) weight; without
-/// it, as the level's weighted count.
+/// `normalize` gives each level's share of the (domain) weight instead of its weighted count.
 #[allow(clippy::too_many_arguments)]
 fn replicate_levels(
     _py: Python,
@@ -867,8 +839,7 @@ fn replicate_levels(
     let df = into_contiguous(data);
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
-    // Coefficients are computed by the RepWeights variant on the Python side;
-    // the kernel no longer re-derives them from a method label.
+    // Coefficients come from the RepWeights variant on the Python side.
     if rep_coefs.len() != n_reps {
         return Err(to_py_err(&EstimationError::RepCoefsLength {
             got: rep_coefs.len(),
@@ -927,8 +898,7 @@ fn compute_replicate_prop_ungrouped(
     let domain_mask = get_domain_mask(df, domain_mask_col)?;
     let mask = domain_mask.as_deref();
 
-    // String/Categorical: use string-keyed level functions so level labels are
-    // preserved as-is without any numeric cast.
+    // String/Categorical levels keep their labels, with no numeric cast.
     let is_string = matches!(
         y_series.dtype(),
         DataType::String | DataType::Categorical(_, _)
@@ -954,7 +924,6 @@ fn compute_replicate_prop_ungrouped(
             .collect();
         (n_l, levels, theta_full, vars, theta_reps)
     } else {
-        // Integer or boolean: convert to i64 category codes.
         let y_arr: Vec<i64> = if y_series.dtype().is_integer() {
             y_series.i64()?.iter().map(|v| v.unwrap_or(0)).collect()
         } else if y_series.dtype() == &DataType::Boolean {
@@ -1085,8 +1054,7 @@ fn compute_replicate_prop_grouped(
     let mut dfs: Vec<u32> = Vec::new();
     let mut ns: Vec<u32> = Vec::new();
 
-    // Rows and covariance axes share one (domain, level) order: domain-major,
-    // levels within.
+    // Rows and covariance axes share one (domain, level) order: domain-major, levels within.
     let mut theta_reps_flat: Vec<Vec<f64>> = Vec::new();
     for (d, domain_name) in domain_names.iter().enumerate() {
         for (l, level) in levels_str.iter().enumerate() {
@@ -1120,8 +1088,7 @@ fn compute_replicate_prop_grouped(
 // Quantiles (median is the p = 0.5 case)
 // ============================================================================
 
-/// Replicate-weight quantiles. One row per probability (and per domain when
-/// `by_col` is set), carrying the probability in a `prob` column.
+/// Replicate-weight quantiles: one row per probability (and domain), with a `prob` column.
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, rep_weight_cols, rep_coefs, probs, center="rep_mean", degrees_of_freedom=None, by_col=None, quantile_method=None))]
 #[allow(clippy::too_many_arguments)]
@@ -1141,8 +1108,7 @@ pub fn replicate_quantile(
     let df = into_contiguous(data);
     let n_reps = rep_weight_cols.len();
     let variance_center = parse_variance_center(center)?;
-    // Coefficients are computed by the RepWeights variant on the Python side;
-    // the kernel no longer re-derives them from a method label.
+    // Coefficients come from the RepWeights variant on the Python side.
     if rep_coefs.len() != n_reps {
         return Err(to_py_err(&EstimationError::RepCoefsLength {
             got: rep_coefs.len(),
@@ -1213,7 +1179,7 @@ pub fn replicate_median(
         by_col,
         quantile_method,
     )?;
-    // Keep the legacy median schema: drop the probability column.
+    // The median schema has no probability column.
     let mut result = out.0;
     result
         .drop_in_place("prob")

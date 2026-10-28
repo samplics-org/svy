@@ -1,66 +1,7 @@
-// src/estimation/association.rs
-//
-// Bivariate association estimators: covariance and Pearson correlation.
-//
-// Both are smooth functions of the same six weighted totals, so they share one
-// moment kernel and differ only in the final combination and in the
-// linearization handed to the variance machinery.
-//
-// # Estimands
-//
-// With W = sum(w), ybar = sum(w y)/W, a = y - ybar, b = x - xbar:
-//
-//   m_yx = sum(w a b) / W          (and m_yy, m_xx likewise)
-//   cov  = m_yx * n/(n-1)
-//   corr = m_yx / sqrt(m_yy * m_xx)
-//
-// The n/(n-1) factor on the covariance matches R's `svyvar`, which builds the
-// estimate as `svymean(a*b*n/(n-1))` (survey 4.5, R/survey.R:703-723) with the
-// source comment "Kish uses the n-1 divisor, so it affects design effects".
-// `n` there is the count of rows with NONZERO SAMPLING WEIGHT and no missing
-// value -- not the frame height -- so `where=`/`drop_nulls` rows, which reach
-// this kernel zero-weighted rather than deleted, are excluded exactly as R
-// excludes them. The correlation needs no such choice: any common divisor
-// cancels between numerator and denominator, so corr is divisor-invariant.
-//
-// # Linearization
-//
-// For the covariance, R centers by the ESTIMATED mean and then treats the
-// cross-product as a fixed analysis variable. That looks like it drops the
-// contribution of having estimated ybar and xbar, but those terms cancel
-// identically:
-//
-//   IF = (yx - mu_yx) - xbar(y - ybar) - ybar(x - xbar) = a*b - m_yx
-//
-// so the shortcut is exactly the delta-method influence function, and our
-// covariance SE agrees with `svyvar` rather than merely approximating it.
-//
-// For the correlation the terms do NOT cancel, because the standard deviations
-// in the denominator are themselves estimated. Writing rho as a function of the
-// six totals and applying the chain rule collapses to
-//
-//   IF = yt*xt - (rho/2)(yt^2 + xt^2),   yt = a/s_y,  xt = b/s_x
-//
-// which is the classic Pearson influence function. Feeding the covariance-style
-// score to a correlation would understate its variance.
-//
-// In both cases the score handed to the variance kernel is z_i = (w_i/W) * IF_i,
-// matching the convention already used by `scores_mean` and `scores_ratio`.
-//
-// # Numerical stability
-//
-// Moments are accumulated in two passes (means, then centered sums) rather than
-// from raw sums of squares. The textbook one-pass form
-// `sum(w y^2)/W - ybar^2` cancels catastrophically whenever the mean is large
-// relative to the spread -- for income-like data (mean 5e4, sd 1e4) it discards
-// roughly seven significant digits, and for a covariance that error lands
-// directly in the reported estimate. Two passes cost one extra sweep of memory
-// that the Taylor path pays anyway, since the scores cannot be formed until
-// rho, the means and the standard deviations are known.
-//
-// Accumulation is strictly row-ordered and never parallelized within a single
-// estimate, per the determinism policy in `mod.rs`: output must stay
-// bit-identical across rayon thread counts.
+//! Design-based covariance and Pearson correlation, sharing one weighted moment kernel.
+//!
+//! - `cov = m_yx * n/(n-1)` as R's `svyvar`, `n` the nonzero-weight rows; corr is divisor-free.
+//! - Two-pass moments: the one-pass `sum(w y^2)/W - ybar^2` cancels catastrophically.
 
 use crate::estimation::error::{EResult, EstimationError};
 use polars::prelude::*;
@@ -72,9 +13,7 @@ use crate::estimation::taylor::SrsRef;
 pub struct BivarMoments {
     /// Sum of weights over contributing rows.
     pub sum_w: f64,
-    /// Weighted mean of y.
     pub mean_y: f64,
-    /// Weighted mean of x.
     pub mean_x: f64,
     /// sum(w (y-ybar)^2) / W
     pub m_yy: f64,
@@ -82,8 +21,7 @@ pub struct BivarMoments {
     pub m_xx: f64,
     /// sum(w (y-ybar)(x-xbar)) / W
     pub m_yx: f64,
-    /// Count of rows with nonzero weight and no missing value, matching the
-    /// `n` R's `svyvar` uses for its n/(n-1) factor.
+    /// Rows with nonzero weight and no missing value: R `svyvar`'s `n` in n/(n-1).
     pub n: usize,
 }
 
@@ -104,8 +42,7 @@ impl BivarMoments {
         self.m_yx * self.kish_factor()
     }
 
-    /// Design-based Pearson correlation. NaN when either variable is constant,
-    /// which is the same answer `cov2cor` gives a zero-variance diagonal.
+    /// Design-based Pearson correlation; NaN for a constant variable, as `cov2cor` gives.
     #[inline]
     pub fn corr(&self) -> f64 {
         let denom = (self.m_yy * self.m_xx).sqrt();
@@ -133,14 +70,8 @@ fn cont_triple<'a>(
     None
 }
 
-/// Accumulate weighted bivariate moments over the rows selected by `domain`
-/// (all rows when `None`).
-///
-/// Rows that are null in y, x or w, and rows outside the domain, contribute
-/// nothing and are not counted in `n`. Zero-weight rows contribute nothing to
-/// the sums and are likewise excluded from `n` -- that is how `where=` and
-/// `drop_nulls` filtering, which arrive here as zeroed weights, stay consistent
-/// with R's definition of `n`.
+/// Weighted bivariate moments over `domain` (all rows when `None`).
+/// Null, out-of-domain and zero-weight rows add nothing and stay out of `n`, as in R.
 pub fn bivar_moments(
     y: &Float64Chunked,
     x: &Float64Chunked,
@@ -271,8 +202,7 @@ pub fn point_estimate_cov_domain(
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> EResult<f64> {
-    // Domains degrade to NaN rather than erroring: one empty by-group must not
-    // fail the whole grouped call, matching `scores_ratio_domain`.
+    // An empty domain gives NaN, not an error, so one by-group cannot fail the call.
     let m = bivar_moments(y, x, weights, Some(domain_mask))?;
     Ok(if m.sum_w == 0.0 { f64::NAN } else { m.cov() })
 }
@@ -300,13 +230,8 @@ pub fn point_estimate_corr_domain(
 // Linearization scores
 // ============================================================================
 
-/// Per-unit linearized values for the covariance.
-///
-/// z_i = (w_i/W)(a_i b_i - m_yx) * n/(n-1)
-///
-/// The Kish factor is a constant multiplier, so it scales the score -- and
-/// hence the SE -- exactly as it scales the estimate, keeping the two on the
-/// same footing as R's `svyvar`.
+/// Covariance scores `(w_i/W)(a_i b_i - m_yx) * n/(n-1)`; the estimated-mean terms of the
+/// influence function cancel exactly, so this is `svyvar`'s SE, not an approximation of it.
 pub fn scores_cov(
     y: &Float64Chunked,
     x: &Float64Chunked,
@@ -345,13 +270,8 @@ pub fn scores_cov_domain(
     ))
 }
 
-/// Per-unit linearized values for the Pearson correlation.
-///
-/// z_i = (w_i/W)[ yt_i xt_i - (rho/2)(yt_i^2 + xt_i^2) ]
-///
-/// with yt, xt the weighted-standardized residuals. Verified against a numeric
-/// delta method over the six underlying totals; the scores sum to zero, as they
-/// must for a scale-free statistic.
+/// Pearson scores `(w_i/W)[yt xt - (rho/2)(yt^2 + xt^2)]`, yt and xt standardized residuals.
+/// The estimated SDs do not cancel: a covariance-style score would understate the SE.
 pub fn scores_corr(
     y: &Float64Chunked,
     x: &Float64Chunked,
@@ -397,11 +317,7 @@ pub fn scores_corr_domain(
     ))
 }
 
-/// Shared score writer: applies `f` to each contributing row, 0.0 elsewhere.
-///
-/// Out-of-domain rows emit 0.0 rather than null so the score vector stays
-/// full-length against the shared design build, exactly as the ratio domain
-/// kernels do.
+/// Score writer: `f` on contributing rows, 0.0 elsewhere so the vector spans the design build.
 fn score_values(
     y: &Float64Chunked,
     x: &Float64Chunked,
@@ -430,9 +346,7 @@ fn score_values(
     }
 }
 
-/// Score kernel for either association: `z_i = (w_i/W) * u_i`, with `u` the
-/// shared influence function so the SE and the deff denominator can never be
-/// built from different linearizations.
+/// `z_i = (w_i/W) * u_i`, with `u` the one influence function the SE and deff reference share.
 fn assoc_score_values(
     y: &Float64Chunked,
     x: &Float64Chunked,
@@ -452,12 +366,7 @@ fn assoc_score_values(
 // SRS reference variance (the denominator of deff)
 // ============================================================================
 
-/// Loop-invariant pieces of an influence function, hoisted out of the row loop.
-///
-/// This is the single definition of `u`: the bracket the score kernels weight
-/// by `w/W`, and the variable whose population variance forms the SRS reference
-/// below. Keeping one definition is what stops a deff from being computed
-/// against a different linearization than the SE it is compared with.
+/// Loop-invariant parts of the influence function `u`, the single definition SE and deff use.
 #[derive(Debug, Clone, Copy)]
 struct Influence {
     kind: AssocKind,
@@ -500,27 +409,8 @@ impl Influence {
     }
 }
 
-/// SRS reference variance for a design effect.
-///
-/// svy computes deff as `V_design / V_srs`, where `V_srs` is a plug-in: the
-/// estimated population variance of the estimator's influence function, divided
-/// by the nominal `n`, times the finite-population correction `1 - n/N_hat`.
-/// That is the rule `srs_variance_mean` and `srs_variance_ratio` already apply
-/// (taylor.rs), and it is R's rule too -- `svymean` builds its reference as
-/// `svyvar(x, design)/nobs * (psum-nobs)/psum` (R/survey.R:557-562).
-///
-/// Note R offers no deff for `svyvar`, so there is no upstream behaviour to
-/// match for an association; this follows svy's own established pattern rather
-/// than porting anything.
-///
-/// Taking the *empirical* variance of the influence function, rather than the
-/// textbook `(1-rho^2)^2/n`, is deliberate. The two agree asymptotically -- the
-/// textbook form is exactly what this converges to under bivariate normality --
-/// but the empirical version needs no distributional assumption, which is very
-/// likely why R declined to define deff here at all.
-///
-/// For the covariance the Kish factor enters the influence function and the
-/// estimate alike, so it cancels out of deff entirely.
+/// SRS reference for deff: var(u)/n * (1 - n/N_hat), as `srs_variance_mean` and R's `svymean`.
+/// R defines no deff for `svyvar`; the empirical var(u) needs no normality, unlike `(1-rho^2)^2/n`.
 fn srs_variance_assoc(
     y: &Float64Chunked,
     x: &Float64Chunked,
@@ -534,9 +424,7 @@ fn srs_variance_assoc(
         return Ok(f64::NAN);
     }
 
-    // Only positive-weight rows carry information, matching srs_variance_mean:
-    // zero-weight rows (out-of-domain, or nulls under domain semantics) must
-    // not inflate n and so must not deflate deff.
+    // Positive-weight rows only, as srs_variance_mean: zero-weight rows must not inflate n.
     let inf = Influence::new(kind, &m);
     let mut uv: Vec<f64> = Vec::new();
     let mut wv: Vec<f64> = Vec::new();
@@ -631,15 +519,7 @@ pub fn srs_variance_cov_domain(
 // All-pairs moments: one sweep for every pair
 // ============================================================================
 
-/// Centered second moments for every pair among `k` columns.
-///
-/// Computing `k` columns pairwise runs `k(k+1)/2` independent two-pass kernels,
-/// each re-reading its two columns: `2k(k+1)` column reads in total. Building
-/// the whole matrix in one sweep reads each column twice regardless of `k`, so
-/// traffic falls from O(k^2) to O(k) -- for ten variables, 110 column reads
-/// become 20. The arithmetic is unchanged (the same k^2/2 cross-products), but
-/// the kernel is memory-bound at scale, so the traffic is what shows up on the
-/// clock.
+/// Centred second moments of all pairs among `k` columns in one sweep: O(k) column reads.
 #[derive(Debug, Clone)]
 pub struct MomentMatrix {
     pub sum_w: f64,
@@ -683,12 +563,7 @@ impl MomentMatrix {
     }
 }
 
-/// Accumulate the full moment matrix for `cols` in two sweeps.
-///
-/// A row contributes only when every column, and the weight, is non-null and
-/// the row is in-domain; that is the multivariate reading of the complete-pairs
-/// rule the bivariate kernel applies, and it matches R's `svyvar`, which drops
-/// a row from the whole matrix when any column is missing.
+/// Moment matrix for `cols` in two sweeps; a row missing any column drops out, as in `svyvar`.
 pub fn multi_moments(
     cols: &[&Float64Chunked],
     weights: &Float64Chunked,
@@ -708,10 +583,8 @@ pub fn multi_moments(
         });
     }
 
-    // Contiguous, null-free, undomained input takes a raw-slice path. Going
-    // through `ChunkedArray::get` per element costs more than the O(k^2)->O(k)
-    // traffic saving is worth: measured, the `get`-based loop ran ~1.8x SLOWER
-    // than repeated pairwise kernels, which use `cont_slice` throughout.
+    // Contiguous, null-free, undomained input reads raw slices: per-element `get` ran ~1.8x slower
+    // than the pairwise kernels, wiping out the traffic saving.
     let slices: Option<(Vec<&[f64]>, &[f64])> = if domain.is_none()
         && weights.null_count() == 0
         && cols.iter().all(|c| c.null_count() == 0)
@@ -858,7 +731,6 @@ pub fn multi_moments(
 // Replication: precomputed products, one dot product set per replicate
 // ============================================================================
 
-/// Which association is being estimated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssocKind {
     Corr,
@@ -866,9 +738,7 @@ pub enum AssocKind {
 }
 
 impl AssocKind {
-    /// Parse the selector the Python layer sends. Aliases are accepted the way
-    /// `_normalize_ci_method` accepts them: case-insensitive, underscores and
-    /// hyphens interchangeable.
+    /// Parse the Python selector: case-insensitive, `_` and `-` alike, as `_normalize_ci_method`.
     pub fn from_name(s: &str) -> EResult<Self> {
         match s.to_lowercase().replace('_', "-").as_str() {
             "corr" | "correlation" | "pearson" => Ok(AssocKind::Corr),
@@ -892,10 +762,6 @@ impl AssocKind {
 
 // ---------------------------------------------------------------------------
 // Kind-dispatching entry points
-//
-// The API layer works in terms of (kind, optional domain) rather than four
-// separately-named functions per statistic, so the dispatch lives here once
-// instead of being rebuilt at every call site.
 // ---------------------------------------------------------------------------
 
 pub fn point_estimate_assoc(
@@ -940,28 +806,15 @@ pub fn srs_variance_assoc_of(
     srs_variance_assoc(y, x, weights, domain, kind, srs)
 }
 
-/// Full-sample-centered products for one pair, reused across every replicate.
-///
-/// `y*x`, `y^2` and `x^2` do not depend on the weights, so forming them once
-/// turns each replicate into six weighted dot products instead of redoing
-/// `R * n` multiplications. Centering by the full-sample mean first is free
-/// here and matters: covariance and correlation are translation-invariant, so
-/// the estimate is unchanged, but each replicate's `S/W - mean^2` subtraction
-/// is then taken between small numbers instead of cancelling two large ones.
-///
-/// R recomputes the mean inside every replicate (`svrepvar`'s `v(w)` closure,
-/// R/surveyrep.R:800-806); that is preserved exactly, because the per-replicate
-/// means reappear as the `mean_a`/`mean_b` terms below. What R fixes once,
-/// outside the closure, is `n` for the Kish factor -- so this does too.
+/// Full-sample-centred products: six dot products per replicate, no cancellation in `S/W - mean^2`.
+/// As R's `svrepvar`, each replicate recomputes its means but keeps the full-sample Kish `n`.
 pub struct PairProducts {
     a: Vec<f64>,
     b: Vec<f64>,
     aa: Vec<f64>,
     bb: Vec<f64>,
     ab: Vec<f64>,
-    /// Domain indicator as a 0/1 float, matching the replication layer's
-    /// convention. Held rather than baked into the products because the
-    /// per-replicate weight sum must also exclude out-of-domain rows.
+    /// 0/1 domain indicator, kept apart so per-replicate weight sums exclude out-of-domain rows.
     mask: Option<Vec<f64>>,
     /// Full-sample n, held fixed across replicates as R holds it.
     n: usize,
@@ -974,9 +827,7 @@ impl PairProducts {
         weights: &Float64Chunked,
         domain: Option<&[f64]>,
     ) -> EResult<Self> {
-        // Fold the domain into the weights for the full-sample moments: a
-        // zeroed weight is exactly how an out-of-domain row drops out, and
-        // `bivar_moments` already keeps zero-weight rows out of `n`.
+        // Zeroed weights drop out-of-domain rows, and `bivar_moments` keeps them out of `n`.
         let masked: Option<Float64Chunked> = domain.map(|m| {
             let v: Vec<f64> = (0..y.len())
                 .map(|i| weights.get(i).unwrap_or(0.0) * m.get(i).copied().unwrap_or(0.0))
@@ -998,8 +849,7 @@ impl PairProducts {
         let mut ab = Vec::with_capacity(len);
 
         for i in 0..len {
-            // A null row contributes zero to every replicate sum, which drops
-            // it without disturbing the design structure.
+            // A null row adds zero to every replicate sum without disturbing the design.
             let (av, bv) = match (y.get(i), x.get(i)) {
                 (Some(yv), Some(xv)) => (yv - mean_y, xv - mean_x),
                 _ => (0.0, 0.0),
@@ -1022,19 +872,12 @@ impl PairProducts {
         })
     }
 
-    /// Recompute the association under one replicate weight column.
-    ///
-    /// Six row-ordered dot products; the summation order is a function of the
-    /// data alone, so this stays bit-identical across thread counts even though
-    /// replicates run concurrently.
+    /// The association under one replicate weight column, by six row-ordered dot products.
     pub fn estimate(&self, rep_w: &[f64], kind: AssocKind) -> f64 {
         let (mut sw, mut sa, mut sb) = (0.0f64, 0.0f64, 0.0f64);
         let (mut saa, mut sbb, mut sab) = (0.0f64, 0.0f64, 0.0f64);
 
-        // Pre-slicing all six arrays to a common length lets the bounds checks
-        // fall out of the loop body. The traversal is six-way parallel, so an
-        // index walk expresses it more directly than nested zips would. The
-        // domain branch is hoisted out of the loop rather than tested per row.
+        // Common-length slices let bounds checks leave the loop; the domain branch is hoisted out.
         let n = self.a.len().min(rep_w.len());
         let (w_s, a_s, b_s) = (&rep_w[..n], &self.a[..n], &self.b[..n]);
         let (aa_s, bb_s, ab_s) = (&self.aa[..n], &self.bb[..n], &self.ab[..n]);
@@ -1078,10 +921,7 @@ impl PairProducts {
     }
 }
 
-/// Recompute the association across every replicate weight column.
-///
-/// Parallel over replicates -- an independent axis, so this respects the
-/// determinism policy in `mod.rs` while still using every core.
+/// The association under every replicate weight column, parallel over replicates.
 pub fn replicate_association(
     products: &PairProducts,
     rep_cols: &[&[f64]],
@@ -1107,8 +947,6 @@ mod tests {
         Float64Chunked::from_slice(name.into(), v)
     }
 
-    /// y, x and weights from a small fixture whose moments are easy to verify
-    /// independently.
     fn fixture() -> (Float64Chunked, Float64Chunked, Float64Chunked) {
         let y = fc("y", &[1.0, 2.0, 3.0, 4.0, 5.0, 7.0]);
         let x = fc("x", &[2.0, 1.0, 4.0, 3.0, 7.0, 6.0]);
@@ -1116,9 +954,7 @@ mod tests {
         (y, x, w)
     }
 
-    /// Reference moments computed straight from the definitions, independent of
-    /// the two-pass kernel under test.
-    /// Returns (sum_w, m_yy, m_xx, m_yx, mean_y).
+    /// Independent oracle from the definitions: `(sum_w, m_yy, m_xx, m_yx, mean_y)`.
     fn reference(y: &[f64], x: &[f64], w: &[f64]) -> (f64, f64, f64, f64, f64) {
         let sw: f64 = w.iter().sum();
         let my: f64 = y.iter().zip(w).map(|(v, wi)| v * wi).sum::<f64>() / sw;
@@ -1203,9 +1039,7 @@ mod tests {
         );
     }
 
-    /// The two-pass kernel must survive a large offset that would destroy the
-    /// naive sum-of-squares form. With an offset of 1e9 on data of order 1, the
-    /// one-pass formula loses essentially all precision.
+    /// An offset of 1e9 on order-1 data would wipe out the one-pass sum-of-squares form.
     #[test]
     fn test_corr_stable_under_large_offset() {
         let (y, x, w) = fixture();
@@ -1221,8 +1055,7 @@ mod tests {
         );
     }
 
-    /// A linearization for a scale-free statistic must have scores summing to
-    /// zero; a nonzero sum means the estimator drifts under the design.
+    /// Scores of a scale-free statistic must sum to zero.
     #[test]
     fn test_corr_scores_sum_to_zero() {
         let (y, x, w) = fixture();
@@ -1245,8 +1078,7 @@ mod tests {
         );
     }
 
-    /// Zero-weight rows must not shift the estimate and must not inflate `n`;
-    /// this is how `where=` and `drop_nulls` reach the kernel.
+    /// `where=` and `drop_nulls` reach the kernel as zero-weight rows.
     #[test]
     fn test_zero_weight_rows_are_excluded() {
         let (y, x, w) = fixture();
@@ -1266,8 +1098,6 @@ mod tests {
         assert_abs_diff_eq!(base.cov(), padded.cov(), epsilon = 1e-12);
     }
 
-    /// A domain restricted to a subset must reproduce the estimate computed on
-    /// that subset alone.
     #[test]
     fn test_domain_matches_subset() {
         let (y, x, w) = fixture();
@@ -1287,8 +1117,7 @@ mod tests {
         );
     }
 
-    /// Out-of-domain rows carry a zero score so the vector stays aligned with
-    /// the shared design build.
+    /// Zero scores keep the vector aligned with the shared design build.
     #[test]
     fn test_domain_scores_zero_outside() {
         let (y, x, w) = fixture();
@@ -1306,8 +1135,6 @@ mod tests {
         );
     }
 
-    /// A constant column has no correlation to report; the ungrouped path says
-    /// so explicitly rather than emitting a silently meaningless number.
     #[test]
     fn test_constant_column_has_nan_correlation_and_no_scores() {
         let (y, _, w) = fixture();
@@ -1319,18 +1146,8 @@ mod tests {
 
     // ------------------------------------------------------------------
     // R golden fixtures
-    //
-    // survey 4.5, single-stage cluster design (8 PSUs x 3 rows, unequal
-    // weights). Covariance targets come from `svyvar(~y+x, d)`; the
-    // correlation targets come from `svycontrast` applied to the moment
-    // means, which is R computing the same delta method independently of our
-    // linearization:
-    //
-    //   mns <- svymean(~y+x+yy+xx+yx, d)
-    //   svycontrast(mns, quote((yx - y*x)/sqrt((yy-y^2)*(xx-x^2))))
-    //
-    // The SE comparisons are the load-bearing ones: a wrong score still
-    // reproduces the point estimate, but cannot reproduce the SE.
+    // R golden fixtures: survey 4.5, 8 PSUs x 3 rows, unequal weights; cov from `svyvar(~y+x, d)`.
+    // corr: svycontrast(svymean(~y+x+yy+xx+yx, d), quote((yx-y*x)/sqrt((yy-y^2)*(xx-x^2))))
     // ------------------------------------------------------------------
 
     const G_Y: [f64; 24] = [
@@ -1381,8 +1198,6 @@ mod tests {
         );
     }
 
-    /// The diagonal of `svyvar` is the variance, so cov(y,y) must reproduce it
-    /// through exactly the same code path.
     #[test]
     #[allow(clippy::excessive_precision)] // as R prints them
     fn test_golden_variance_matches_r_svyvar_diagonal() {
@@ -1400,9 +1215,7 @@ mod tests {
         );
     }
 
-    /// The decisive test for the correlation linearization: R computes this SE
-    /// by its own delta method over the five moment means, with no shared code
-    /// or algebra with our score.
+    /// R gets this SE by its own delta method over the moment means, sharing nothing with ours.
     #[test]
     #[allow(clippy::excessive_precision)] // as R prints them
     fn test_golden_corr_matches_r_svycontrast() {
@@ -1420,8 +1233,6 @@ mod tests {
         );
     }
 
-    /// Stratification is handled by the shared variance kernel, but the score
-    /// must stay correct underneath it.
     #[test]
     #[allow(clippy::excessive_precision)] // as R prints them
     fn test_golden_cov_stratified_matches_r() {
@@ -1441,10 +1252,7 @@ mod tests {
     // SRS reference / deff
     // ------------------------------------------------------------------
 
-    /// With equal weights and neither strata nor clusters, the design IS simple
-    /// random sampling, so the design variance must land on the SRS reference
-    /// and deff must be 1. Weights are large enough that the finite-population
-    /// correction is negligible, isolating the comparison from the FPC.
+    /// Equal weights with no strata or clusters IS SRS; large weights make the FPC negligible.
     #[test]
     fn test_deff_is_one_under_srs() {
         let (y, x) = (fc("y", &G_Y), fc("x", &G_X));
@@ -1468,8 +1276,7 @@ mod tests {
         }
     }
 
-    /// The golden fixture is clustered with substantial between-PSU spread, so
-    /// its design effect must exceed 1 -- the whole point of reporting one.
+    /// The golden fixture's between-PSU spread must give deff > 1.
     #[test]
     fn test_deff_exceeds_one_under_clustering() {
         let (y, x, w) = (fc("y", &G_Y), fc("x", &G_X), fc("w", &G_W));
@@ -1480,10 +1287,7 @@ mod tests {
         assert!(deff.is_finite(), "deff must be finite, got {deff}");
     }
 
-    /// deff is a ratio of two variances of the same estimator, so rescaling the
-    /// inputs must leave it untouched. For the covariance this also pins the
-    /// claim that the Kish factor cancels: it multiplies the influence function
-    /// and the estimate alike, so it cannot survive into deff.
+    /// deff is a variance ratio, invariant to scale; this also pins that the Kish factor cancels.
     #[test]
     fn test_deff_is_scale_invariant() {
         let (y, x, w) = (fc("y", &G_Y), fc("x", &G_X), fc("w", &G_W));
@@ -1504,10 +1308,8 @@ mod tests {
         );
     }
 
-    /// The empirical SRS reference is claimed to converge to the textbook
-    /// `(1-rho^2)^2/n` under bivariate normality. Check that on generated
-    /// near-normal data; the tolerance is loose because this is an asymptotic
-    /// identity being checked at finite n, not an exact algebraic one.
+    /// The empirical SRS reference nears `(1-rho^2)^2/n` on near-normal data; the identity is
+    /// asymptotic, hence the loose tolerance.
     #[test]
     fn test_srs_corr_approaches_normal_theory() {
         let n = 20_000usize;
@@ -1548,8 +1350,7 @@ mod tests {
         );
     }
 
-    /// Zero-weight rows must not enter n in the SRS reference either, or deff
-    /// would shrink simply because a filter left rows behind.
+    /// Otherwise deff would shrink just because a filter left zero-weight rows behind.
     #[test]
     fn test_srs_excludes_zero_weight_rows() {
         let (y, x, w) = (fc("y", &G_Y), fc("x", &G_X), fc("w", &G_W));
@@ -1573,9 +1374,7 @@ mod tests {
     // All-pairs kernel
     // ------------------------------------------------------------------
 
-    /// The one-sweep matrix must agree with the bivariate kernel pair for pair.
-    /// That kernel is the R-validated one, so agreement carries the validation
-    /// across without needing separate R fixtures per pair.
+    /// The bivariate kernel is R-validated, so agreeing with it carries that over to every pair.
     #[test]
     fn test_multi_moments_matches_pairwise() {
         let y = fc("y", &G_Y);
@@ -1607,7 +1406,6 @@ mod tests {
         }
     }
 
-    /// The matrix must be symmetric and carry unit correlations on the diagonal.
     #[test]
     #[allow(clippy::excessive_precision)] // as R prints them
     fn test_multi_moments_symmetry_and_diagonal() {
@@ -1622,8 +1420,7 @@ mod tests {
         assert_abs_diff_eq!(mm.cov(0, 1), 50.138658078368209, epsilon = 1e-10);
     }
 
-    /// A row missing in ANY column leaves the whole matrix, matching how
-    /// `svyvar` drops an incomplete row from every cell.
+    /// Matches `svyvar`, which drops an incomplete row from every cell.
     #[test]
     fn test_multi_moments_drops_row_missing_any_column() {
         let y = Float64Chunked::from_slice_options(
@@ -1644,8 +1441,7 @@ mod tests {
     // Replication kernel
     // ------------------------------------------------------------------
 
-    /// JK1 over the 8 golden PSUs: replicate r drops PSU r and inflates the
-    /// survivors by 8/7, which is what `as.svrepdesign(type="JK1")` produced.
+    /// JK1 over the 8 golden PSUs as `as.svrepdesign(type="JK1")`: drop PSU r, the rest times 8/7.
     fn jk1_rep_weights() -> Vec<Vec<f64>> {
         (0..8usize)
             .map(|r| {
@@ -1715,9 +1511,7 @@ mod tests {
         }
     }
 
-    /// The precomputed-products path must agree with recomputing from scratch
-    /// under each replicate's weights. Correlation is divisor-free, so this is
-    /// an exact cross-check of the optimization against the direct kernel.
+    /// Correlation is divisor-free, so the products path must match the direct kernel exactly.
     #[test]
     fn test_precomputed_products_match_direct_recompute() {
         let (y, x, w) = (fc("y", &G_Y), fc("x", &G_X), fc("w", &G_W));
@@ -1734,9 +1528,7 @@ mod tests {
         }
     }
 
-    /// R fixes `n` once outside its replicate closure, so a replicate that
-    /// zeroes a PSU keeps the full-sample Kish factor rather than shrinking it.
-    /// Recomputing `n` per replicate would silently rescale every covariance.
+    /// R fixes `n` outside its replicate closure; a per-replicate `n` rescales every covariance.
     #[test]
     fn test_replicate_cov_holds_n_fixed() {
         let (y, x, w) = (fc("y", &G_Y), fc("x", &G_X), fc("w", &G_W));

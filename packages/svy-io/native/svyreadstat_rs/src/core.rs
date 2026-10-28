@@ -1,4 +1,3 @@
-// native/svyreadstat_rs/src/core.rs
 use arrow::array::{ArrayRef, Float64Builder, Int64Builder, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
@@ -32,14 +31,7 @@ use crate::errors::{Error, Op, Result, readstat_message};
 
 pub(crate) const HANDLER_OK: c_int = 0;
 
-/// Apply optional input character encoding and a defensive row limit to a
-/// freshly initialized parser.
-///
-/// The encoding goes through readstat's iconv support, so legacy code-page
-/// files (e.g. "WINDOWS-1252") decode correctly instead of arriving as
-/// U+FFFD-riddled lossy UTF-8. The row limit backstops the callback-side
-/// n_max abort for untrusted files. Returns the CString holding the
-/// encoding so it outlives the parse.
+/// Sets the iconv input encoding and a row limit backing up n_max; keep the returned CString alive through the parse.
 pub(crate) fn configure_parser(
     parser: &ParserGuard,
     encoding: Option<&str>,
@@ -68,8 +60,7 @@ pub(crate) fn configure_parser(
     Ok(keep_enc)
 }
 
-/// The parser's row limit, or `None` for no limit: zero, or too many rows for a C `long`
-/// (32 bits on Windows), which no file can hold.
+/// `None` for no limit: zero, or past a C `long` (32 bits on Windows), which no file can hold.
 fn row_limit(rows_skip: usize, n_max: usize) -> Option<::std::os::raw::c_long> {
     let limit = rows_skip.saturating_add(n_max);
     if limit == 0 {
@@ -79,16 +70,9 @@ fn row_limit(rows_skip: usize, n_max: usize) -> Option<::std::os::raw::c_long> {
 }
 pub(crate) const HANDLER_ABORT: c_int = 1;
 
-// Performance tuning constants
 const DEFAULT_CAPACITY: usize = 8192;
 const STRING_CAPACITY_MULTIPLIER: usize = 16;
-/// Upper bound on the number of rows used for builder *pre-allocation*.
-///
-/// The row count comes from untrusted file metadata: a crafted file can
-/// declare billions of rows in its header, which would otherwise drive
-/// multi-gigabyte eager allocations before any data is read. Arrow builders
-/// grow dynamically, so this clamp only affects pre-reservation, never
-/// correctness or `n_max` semantics.
+/// Caps builder pre-allocation only: the header's row count is untrusted and may claim billions.
 const MAX_PREALLOC_ROWS: usize = 65_536;
 
 /// ---------- Metadata we ship back to Python ----------
@@ -116,10 +100,7 @@ pub struct VarMeta {
     pub label_set: Option<String>,
     pub fmt: Option<String>,
     pub kind: String,
-    /// The measurement level the file declares: "nominal", "ordinal", or
-    /// "scale". `None` when the format carries no such attribute (Stata) or
-    /// the writer never set one. Note that SPSS defaults numeric variables to
-    /// "scale", so only "nominal"/"ordinal" are positive declarations.
+    /// `None` when undeclared (always in Stata); SPSS defaults numerics to "scale", so only nominal/ordinal are deliberate.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub measure: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -148,12 +129,9 @@ pub struct MetaOut {
     pub n_rows: usize,
     pub tagged_missings: Vec<TaggedSpec>,
     pub notes: Vec<String>,
-    /// True when any string decoded from the file contained invalid UTF-8
-    /// (replaced with U+FFFD). Usually means the file uses a legacy code
-    /// page: re-read with an explicit `encoding=` to decode it correctly.
+    /// Invalid UTF-8 was replaced by U+FFFD: usually a legacy code page needing an explicit `encoding=`.
     pub had_invalid_utf8: bool,
-    /// The encoding the strings were decoded from, where the reader knows it
-    /// (Stata: explicit, detected, or the format's fixed UTF-8).
+    /// Where the reader knows it (Stata: explicit, detected, or the format's fixed UTF-8).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encoding: Option<String>,
     /// Why the SAS format catalog gave no value labels; the data still read.
@@ -182,8 +160,7 @@ pub(crate) struct ColBuilders {
     pub(crate) ib: Option<Int64Builder>,
 }
 
-/// Every integer storage type (Stata byte/int/long) is widened to Int64:
-/// arithmetic on the narrow polars types overflows silently.
+/// Stata byte/int/long all widen to Int64: arithmetic on narrow polars types overflows silently.
 pub(crate) enum ColKind {
     Str,
     F64 { float32: bool },
@@ -192,22 +169,17 @@ pub(crate) enum ColKind {
 
 pub(crate) struct ParseCtx {
     pub(crate) cols: Vec<ColBuilders>,
-    /// Column of each file variable, by ReadStat index; `None` when skipped. Duplicate
-    /// names in a crafted file must not share a column.
+    /// By ReadStat variable index, not name: duplicate names in a crafted file must not share a column.
     pub(crate) var_cols: Vec<Option<usize>>,
     pub(crate) cols_skip: Option<HashMap<String, ()>>,
     pub(crate) rows_skip: usize,
     pub(crate) n_max: Option<usize>,
     pub(crate) n_rows_seen: usize,
     pub(crate) n_rows_emitted: usize,
-    /// Last row index counted into n_rows_emitted (rows are counted once,
-    /// on their first delivered value, regardless of which columns are kept).
+    /// Rows count once, on their first delivered value, whichever columns are kept.
     pub(crate) last_counted_row: Option<usize>,
-    /// Any string in the file failed strict UTF-8 decoding (lossy-replaced).
     pub(crate) had_invalid_utf8: bool,
-    /// Decode every string as UTF-8 with U+FFFD replacement. The parser must
-    /// then be configured with ISO-8859-1 input, which maps each source byte
-    /// to one char so `decode` can recover the raw bytes.
+    /// Needs ISO-8859-1 parser input, one char per byte, so `decode` can recover the raw bytes.
     pub(crate) lossy_utf8: bool,
     pub(crate) label_sets: HashMap<String, BTreeMap<String, String>>,
     pub(crate) file_label: Option<String>,
@@ -216,10 +188,7 @@ pub(crate) struct ParseCtx {
     pub(crate) notes: Vec<String>,
     pub(crate) detect_tagged: bool,
     pub(crate) row_capacity: Option<usize>,
-    /// Set when a Rust panic was caught inside a readstat handler callback.
-    /// Panicking across the C FFI boundary would abort the whole process, so
-    /// callbacks catch panics, record the message here, and abort the parse;
-    /// callers must check this after `readstat_parse_*` returns.
+    /// A panic caught in a callback (unwinding into C aborts the process); check it after `readstat_parse_*`.
     pub(crate) panic_err: Option<String>,
 }
 
@@ -250,9 +219,7 @@ impl ParseCtx {
     }
 }
 
-/// Input encoding to hand readstat. ISO-8859-1 is byte-transparent, so the
-/// lossy path receives the raw bytes and decodes them itself (see
-/// `ParseCtx::decode`).
+/// ISO-8859-1 is byte-transparent, so the lossy path gets the raw bytes to decode itself.
 pub(crate) fn input_encoding(encoding: Option<&str>, lossy_utf8: bool) -> Option<&str> {
     if lossy_utf8 {
         Some("ISO-8859-1")
@@ -283,9 +250,7 @@ pub(crate) fn to_python(
     ))
 }
 
-/// The outcome of `readstat_parse_*`. `USER_ABORT` is the `n_max` stop; a caught panic
-/// aborts too, so it is checked first. `encoding` is the caller's: one iconv lacks is
-/// their input, not the file's.
+/// `USER_ABORT` is the `n_max` stop; a caught panic aborts too, so it is checked first.
 pub(crate) fn check_parse(
     rc: readstat_sys::readstat_error_t,
     ctx: &mut ParseCtx,
@@ -312,6 +277,7 @@ pub(crate) fn check_parse(
             Ok(_) => Error::Parse(msg),
         },
         readstat_sys::readstat_error_e_READSTAT_ERROR_CONVERT_BAD_STRING => Error::BadString(msg),
+        // An encoding iconv lacks is the caller's input, not the file's fault.
         readstat_sys::readstat_error_e_READSTAT_ERROR_UNSUPPORTED_CHARSET => match encoding {
             Some(enc) => Error::UnsupportedEncoding {
                 encoding: enc.to_string(),
@@ -332,9 +298,7 @@ fn safe_capacity(maybe: Option<usize>) -> usize {
 }
 
 /// ---------- Helpers on builders ----------
-// These are called from readstat handler callbacks; they must not panic on a
-// kind/builder mismatch (the mismatch cannot happen by construction, but a
-// panic here would otherwise cross the FFI boundary).
+// Called from FFI callbacks, so a kind/builder mismatch is skipped rather than panicking.
 impl ColBuilders {
     #[inline(always)]
     pub(crate) fn push_missing(&mut self) {
@@ -424,19 +388,13 @@ fn describe_panic(p: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
-/// Run a handler callback body with a panic guard.
-///
-/// Panicking across the `extern "C"` boundary into readstat would abort the
-/// whole process (e.g. Arrow's "offset overflow" panic when a malicious file
-/// feeds >2 GiB of string data into one column). Instead, catch the panic,
-/// record it on the context, and tell readstat to abort the parse; callers
-/// surface `panic_err` as a regular error after `readstat_parse_*` returns.
+/// Turns a callback panic into `panic_err` and a parse abort; unwinding into C would abort the process.
+/// A crafted file can trigger one: Arrow panics past 2 GiB of strings in one column.
 ///
 /// # Safety
 ///
-/// `ctx` must point to a live `ParseCtx` that nothing else accesses during the call.
-/// The readers guarantee this by passing `&mut ctx` to `readstat_parse_*`, which hands
-/// it back unchanged to each callback, one at a time.
+/// `ctx` must be a live `ParseCtx` nothing else touches during the call; `readstat_parse_*`
+/// hands it to one callback at a time.
 #[inline]
 unsafe fn guard_cb(ctx: *mut c_void, f: impl FnOnce(&mut ParseCtx) -> c_int) -> c_int {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -605,9 +563,7 @@ unsafe fn on_variable_impl(
         }
     };
 
-    // The measurement level the file declares. SPSS carries this; Stata has
-    // no equivalent and always reports UNKNOWN, which we surface as None so a
-    // caller can tell "not declared" from "declared as scale".
+    // Stata always reports UNKNOWN; None keeps "not declared" apart from "scale".
     // SAFETY: `var` is live (caller's guarantee).
     let measure = match unsafe { readstat_variable_get_measure(var) } {
         m if m == MEASURE_NOMINAL => Some("nominal".to_string()),
@@ -668,8 +624,7 @@ unsafe fn on_variable_impl(
 
                 if is_string {
                     // SAV has no string ranges, so `lo_val` is the code.
-                    // SAFETY: a string variable's missing value is a string, and its text lives
-                    // as long as `var`.
+                    // SAFETY: a string variable's missing value is a string whose text lives as long as `var`.
                     let sp = unsafe { readstat_string_value(lo_val) };
                     if !sp.is_null() {
                         // SAFETY: non-null ReadStat strings are NUL-terminated.
@@ -794,9 +749,7 @@ unsafe fn on_value_impl(
         }
     }
 
-    // Count each included row exactly once, independent of which columns are
-    // kept (the old `idx == 0` check reported n_rows = 0 whenever cols_skip
-    // dropped the first column).
+    // Counted before the column lookup, so skipped columns cannot hide a row.
     if rctx.last_counted_row != Some(row_us) {
         rctx.last_counted_row = Some(row_us);
         rctx.n_rows_emitted += 1;
@@ -1055,7 +1008,7 @@ pub(crate) fn finalize_to_ipc(mut ctx: ParseCtx) -> Result<(Vec<u8>, MetaOut)> {
     let schema = Arc::new(Schema::new(fields));
     let batch = RecordBatch::try_new(schema.clone(), arrays).map_err(arrow)?;
 
-    // Use uncompressed IPC for faster write (if compression isn't needed)
+    // Uncompressed: faster to write.
     let write_options = IpcWriteOptions::default();
     let mut buf = Vec::new();
     {
@@ -1121,9 +1074,7 @@ impl Drop for ParserGuard {
 
 // ---------- Writer guard ----------
 
-/// RAII guard that frees a readstat writer on drop, so early `?`/error
-/// returns in the write paths cannot leak the writer (and everything it
-/// owns: variables, label sets, row buffers).
+/// Freed on drop, so an early return cannot leak the writer and everything it owns.
 pub(crate) struct WriterGuard(pub(crate) *mut readstat_sys::readstat_writer_t);
 
 impl Drop for WriterGuard {
@@ -1151,8 +1102,7 @@ pub(crate) fn write_rc(
     )))
 }
 
-/// A writer's output file, removed on drop unless `finish` ran, so a failed write
-/// leaves no truncated file behind.
+/// Removed on drop unless `finish` ran, so a failed write leaves no truncated file.
 pub(crate) struct OutputFile {
     file: Option<std::fs::File>,
     path: std::path::PathBuf,
@@ -1248,8 +1198,7 @@ mod tests {
 
     #[test]
     fn safe_capacity_clamps_untrusted_huge_counts() {
-        // A crafted header may declare billions of rows; pre-allocation must
-        // stay bounded (~1 MB of string data per column, not tens of GB).
+        // At most ~1 MB of string data per column, not tens of GB.
         assert_eq!(safe_capacity(Some(999_999_999)), MAX_PREALLOC_ROWS);
         assert_eq!(safe_capacity(Some(usize::MAX)), MAX_PREALLOC_ROWS);
         const { assert!(MAX_PREALLOC_ROWS * STRING_CAPACITY_MULTIPLIER <= 16 * 1024 * 1024) };

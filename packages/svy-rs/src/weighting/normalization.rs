@@ -1,21 +1,9 @@
-// src/weighting/normalization.rs
+//! Weight normalization to target totals, globally or by group.
 
 use super::utils::{Result, WeightingError, sum_by_group_2d};
 use ndarray::{Array1, Array2, ArrayView2, Axis};
 
-/// Normalize weights to sum to a target
-///
-/// # Arguments
-/// * `wgt` - Weight matrix (n_obs, n_reps)
-/// * `by_arr` - Optional grouping variable (n_obs,). If None, normalize globally.
-/// * `control` - Optional target sums. If None, target = count of observations.
-///   Can be:
-///   - None: target = n (or counts by group)
-///   - Single value: same target for all groups
-///   - Array: one target per group
-///
-/// # Returns
-/// Normalized weight matrix
+/// Scales weights to `control` totals (default: row counts), globally or per sorted `by_arr` group.
 pub fn normalize_impl(
     wgt: ArrayView2<f64>,
     by_arr: Option<&Array1<i64>>,
@@ -29,7 +17,6 @@ pub fn normalize_impl(
     }
 }
 
-/// Global normalization (no grouping)
 fn normalize_global(
     wgt: ArrayView2<f64>,
     control: Option<&Array1<f64>>,
@@ -37,7 +24,6 @@ fn normalize_global(
 ) -> Result<Array2<f64>> {
     let (_, n_reps) = wgt.dim();
 
-    // Determine target for each replicate
     let targets: Vec<f64> = match control {
         None => vec![n_obs as f64; n_reps],
         Some(ctrl) => {
@@ -54,10 +40,8 @@ fn normalize_global(
         }
     };
 
-    // Calculate current sums
     let current_sums = wgt.sum_axis(Axis(0));
 
-    // Calculate factors
     let mut factors = Array1::zeros(n_reps);
     for r in 0..n_reps {
         if current_sums[r] > 0.0 {
@@ -72,7 +56,6 @@ fn normalize_global(
         }
     }
 
-    // Apply factors (broadcast multiply)
     let mut normalized = wgt.to_owned();
     for r in 0..n_reps {
         normalized.column_mut(r).mapv_inplace(|x| x * factors[r]);
@@ -81,7 +64,6 @@ fn normalize_global(
     Ok(normalized)
 }
 
-/// Normalization by groups
 fn normalize_by_group(
     wgt: ArrayView2<f64>,
     by_arr: &Array1<i64>,
@@ -96,13 +78,10 @@ fn normalize_by_group(
         });
     }
 
-    // Map groups to indices
     let (group_indices, n_groups) = create_group_mapping(by_arr);
 
-    // Sum weights by group
     let current_sums = sum_by_group_2d(wgt, &group_indices, n_groups);
 
-    // Determine per-group targets (one value per group, same across all replicates)
     let group_targets: Vec<f64> = match control {
         None => {
             let mut counts = vec![0usize; n_groups];
@@ -122,7 +101,6 @@ fn normalize_by_group(
         }
     };
 
-    // Calculate factors: target is the same across replicates so no n_groups×n_reps matrix needed
     let mut factors = Array2::zeros((n_groups, n_reps));
     for g in 0..n_groups {
         let tgt = group_targets[g];
@@ -140,7 +118,6 @@ fn normalize_by_group(
         }
     }
 
-    // Apply factors
     let mut normalized = Array2::zeros((n_obs, n_reps));
     for i in 0..n_obs {
         let g = group_indices[i];
@@ -152,14 +129,7 @@ fn normalize_by_group(
     Ok(normalized)
 }
 
-/// Create integer mapping for groups.
-///
-/// Group ids follow SORTED group-value order — the same convention
-/// `poststratify` validates controls against. (This previously used
-/// first-appearance order, so a direct caller passing sorted controls to
-/// `normalize_by_group` silently normalized against the wrong targets
-/// whenever the data's first-appearance order differed from sorted order;
-/// the svy Python caller was safe only because it pre-encodes labels.)
+/// Group ids in sorted value order, the order controls are given in (as `poststratify` validates).
 fn create_group_mapping(groups: &Array1<i64>) -> (Vec<usize>, usize) {
     use std::collections::HashMap;
 
@@ -205,11 +175,9 @@ mod tests {
         // Normalize each group to its count (2.0)
         let result = normalize_impl(wgt.view(), Some(&groups), None).unwrap();
 
-        // Group 0: sum should be 2.0
         let sum_g0 = result[[0, 0]] + result[[1, 0]];
         assert_relative_eq!(sum_g0, 2.0, epsilon = 1e-12);
 
-        // Group 1: sum should be 2.0
         let sum_g1 = result[[2, 0]] + result[[3, 0]];
         assert_relative_eq!(sum_g1, 2.0, epsilon = 1e-12);
     }
@@ -222,11 +190,9 @@ mod tests {
 
         let result = normalize_impl(wgt.view(), Some(&groups), Some(&targets)).unwrap();
 
-        // Group 0: sum should be 10.0
         let sum_g0 = result[[0, 0]] + result[[1, 0]];
         assert_relative_eq!(sum_g0, 10.0, epsilon = 1e-12);
 
-        // Group 1: sum should be 5.0
         assert_relative_eq!(result[[2, 0]], 5.0, epsilon = 1e-12);
     }
 }

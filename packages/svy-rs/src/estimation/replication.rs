@@ -1,11 +1,9 @@
-// src/estimation/replication.rs
 //! Replication-based variance estimation (BRR, Bootstrap, Jackknife)
 
 use crate::estimation::error::EResult;
 use polars::prelude::*;
 use std::collections::HashMap;
 
-// Import from taylor module for median functions
 use super::taylor::{SvyQuantileMethod, weighted_quantile};
 
 /// Per domain: full-sample estimates `[K][P]`, replicate estimates `[K][P][R]`, row counts `[K]`.
@@ -14,7 +12,6 @@ pub type DomainReps = (Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>);
 /// The levels found, then [`DomainReps`] over them.
 pub type LevelReps<L> = (Vec<L>, Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>);
 
-/// Replication method
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RepMethod {
     BRR,
@@ -35,10 +32,9 @@ impl RepMethod {
     }
 }
 
-/// Centering method for variance estimation
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum VarianceCenter {
-    /// Center on mean of replicate estimates (default, matches Stata and R survey default)
+    /// Mean of the replicate estimates, the default in R `survey` and Stata.
     #[default]
     ReplicateMean,
     /// Center on full sample estimate (matches R survey mse=TRUE)
@@ -59,7 +55,6 @@ impl VarianceCenter {
     }
 }
 
-/// Compute replicate coefficients based on method
 pub fn replicate_coefficients(method: RepMethod, n_reps: usize, fay_coef: f64) -> Vec<f64> {
     match method {
         RepMethod::Bootstrap => vec![1.0 / n_reps as f64; n_reps],
@@ -72,19 +67,12 @@ pub fn replicate_coefficients(method: RepMethod, n_reps: usize, fay_coef: f64) -
             vec![coef; n_reps]
         }
         RepMethod::SDR => {
-            // SDR (e.g. ACS): coefficient = 4/R for each replicate
             vec![4.0 / n_reps as f64; n_reps]
         }
     }
 }
 
-/// Compute variance from replicate estimates
-///
-/// # Arguments
-/// * `theta_full` - Full sample estimate
-/// * `theta_reps` - Vector of replicate estimates
-/// * `rep_coefs` - Replicate coefficients
-/// * `center` - Centering method (ReplicateMean or FullSample)
+/// `sum_r c_r (theta_r - center)^2` for every method, as R's `svrVar`; `FullSample` is mse=TRUE.
 pub fn variance_from_replicates(
     theta_full: f64,
     theta_reps: &[f64],
@@ -96,18 +84,7 @@ pub fn variance_from_replicates(
         return 0.0;
     }
 
-    // One formula for every replication method (R's svrVar):
-    //   v = sum_r c_r * (theta_r - center)^2
-    // with c_r the per-replicate coefficient (scale * rscales_r) and the
-    // center either the replicate mean (mse=FALSE) or the full-sample
-    // estimate (mse=TRUE).
-    //
-    // The jackknife previously went through an equivalent pseudo-value
-    // construction that (a) silently ignored `center`, so requesting R's
-    // mse=TRUE returned the mse=FALSE estimator, and (b) degenerated for
-    // any coefficient >= 1 (factor -> inf contributed 0), which broke
-    // per-stratum JKn/JK2 rscales. For uniform coefficients and
-    // replicate-mean centering the two are algebraically identical.
+    // Not via jackknife pseudo-values: they ignore `center` and break for coefficients >= 1.
     let center_value = match center {
         VarianceCenter::ReplicateMean => theta_reps.iter().sum::<f64>() / n_reps as f64,
         VarianceCenter::FullSample => theta_full,
@@ -123,12 +100,7 @@ pub fn variance_from_replicates(
         .sum()
 }
 
-/// Full k×k covariance between k estimates from their replicate-estimate rows.
-///
-/// The between-estimate analogue of `variance_from_replicates`, using the same
-/// per-replicate coefficients and centering rule applied cross-wise:
-/// `cov_ab = sum_r c_r (theta_r,a - center_a)(theta_r,b - center_b)`. The
-/// diagonal equals `variance_from_replicates` per estimate.
+/// k×k covariance of k estimates: `variance_from_replicates` applied cross-wise, same diagonal.
 pub fn covariance_from_replicates(
     theta_fulls: &[f64],
     theta_reps: &[Vec<f64>], // k estimates × n_reps
@@ -170,17 +142,8 @@ pub fn covariance_from_replicates(
 // Matrix-based computation for efficiency
 // ============================================================================
 
-/// Extract replicate weights matrix from DataFrame columns
-/// Returns flattened row-major matrix (n × R)
-///
-/// The naive build (column-outer loop writing `matrix[i*n_reps + r]`) is a
-/// strided write — a cache miss on essentially every store — and dominated the
-/// whole replication call (~530 ms at 1M rows × 40 reps). Instead, when the
-/// replicate columns are contiguous and null-free (the common post-`prepare_data`
-/// case) this does a **cache-blocked parallel transpose**: each row block's
-/// slice of the row-major matrix (BLOCK × R floats) fits in L2, so its writes
-/// stay hot, and blocks are filled in parallel. The output matrix is byte-for-
-/// byte identical to the naive build, so downstream results are unchanged.
+/// Replicate weights as a flat row-major n × R matrix, built by a cache-blocked parallel
+/// transpose: the naive strided write dominated the whole replication call.
 pub fn extract_rep_weights_matrix(
     df: &DataFrame,
     rep_weight_cols: &[String],
@@ -197,7 +160,6 @@ pub fn extract_rep_weights_matrix(
         .map(|c| df.column(c)?.f64())
         .collect::<PolarsResult<_>>()?;
 
-    // Borrow each column as one contiguous null-free slice, if possible.
     let contiguous: Option<Vec<&[f64]>> = f64_cols.iter().map(|c| c.cont_slice().ok()).collect();
 
     match contiguous {
@@ -220,7 +182,7 @@ pub fn extract_rep_weights_matrix(
                 });
         }
         None => {
-            // Fallback for chunked/nullable columns — identical semantics.
+            // Fallback for chunked or nullable columns.
             for (r, col) in f64_cols.iter().enumerate() {
                 for (i, v) in col.iter().enumerate() {
                     matrix[i * n_reps + r] = v.unwrap_or(0.0);
@@ -232,8 +194,7 @@ pub fn extract_rep_weights_matrix(
     Ok((matrix, n, n_reps))
 }
 
-/// Compute mean estimates for all replicates simultaneously
-/// Returns (full_estimate, vec of replicate estimates)
+/// Full-sample and replicate means in one pass over the flat matrix.
 pub fn matrix_mean_estimates(
     y: &[f64],
     full_weights: &[f64],
@@ -242,7 +203,6 @@ pub fn matrix_mean_estimates(
     n_reps: usize,
     domain_mask: Option<&[f64]>,
 ) -> (f64, Vec<f64>) {
-    // Full sample estimate
     let sum_wy: f64 = y
         .iter()
         .zip(full_weights.iter())
@@ -255,9 +215,7 @@ pub fn matrix_mean_estimates(
         f64::NAN
     };
 
-    // Replicate estimates - single pass. `domain_mask` (1.0 inside the domain,
-    // 0.0 outside) zeroes the replicate weight on the fly for `where=` domains,
-    // avoiding materialising R zeroed columns upstream. mask=None ⇒ mi=1.0.
+    // `domain_mask` zeroes out-of-domain replicate weights on the fly; `None` means 1.0.
     let mut rep_sum_wy = vec![0.0; n_reps];
     let mut rep_sum_w = vec![0.0; n_reps];
 
@@ -272,7 +230,6 @@ pub fn matrix_mean_estimates(
         }
     }
 
-    // Compute means
     let theta_reps: Vec<f64> = rep_sum_wy
         .iter()
         .zip(rep_sum_w.iter())
@@ -282,14 +239,7 @@ pub fn matrix_mean_estimates(
     (theta_full, theta_reps)
 }
 
-/// Replicate mean estimates computed directly from the (contiguous) replicate
-/// weight columns — no n×R matrix is materialised.
-///
-/// Each replicate is summed over rows in order, in parallel across replicates,
-/// so the result is bit-identical to `matrix_mean_estimates`. Reading each
-/// column once, contiguously, avoids both the 3× memory traffic (zero + write +
-/// read) of building the flat matrix and its strided gather, which dominate at
-/// large replicate counts.
+/// `matrix_mean_estimates` from the replicate columns, bit-identical without the n×R matrix.
 pub fn matrix_mean_estimates_cols(
     y: &[f64],
     full_weights: &[f64],
@@ -306,9 +256,7 @@ pub fn matrix_mean_estimates_cols(
     };
 
     use rayon::prelude::*;
-    // `domain_mask` zeroes the replicate weight for `where=` domain rows in the
-    // accumulation loop, so no R zeroed columns are materialised upstream. The
-    // mask=None path stays multiply-free (the hot, non-domain case).
+    // `None` skips the mask multiply on the hot, non-domain path.
     let theta_reps: Vec<f64> = rep_cols
         .par_iter()
         .map(|col| {
@@ -337,7 +285,6 @@ pub fn matrix_mean_estimates_cols(
     (theta_full, theta_reps)
 }
 
-/// Compute total estimates for all replicates
 pub fn matrix_total_estimates(
     y: &[f64],
     full_weights: &[f64],
@@ -366,7 +313,6 @@ pub fn matrix_total_estimates(
     (theta_full, theta_reps)
 }
 
-/// Compute ratio estimates for all replicates
 pub fn matrix_ratio_estimates(
     y: &[f64],
     x: &[f64],
@@ -416,8 +362,7 @@ pub fn matrix_ratio_estimates(
     (theta_full, theta_reps)
 }
 
-/// Replicate total estimates from the contiguous replicate columns (no matrix).
-/// Bit-identical to `matrix_total_estimates`; see `matrix_mean_estimates_cols`.
+/// `matrix_total_estimates` from the replicate columns, bit-identical without the n×R matrix.
 pub fn matrix_total_estimates_cols(
     y: &[f64],
     full_weights: &[f64],
@@ -451,8 +396,7 @@ pub fn matrix_total_estimates_cols(
     (theta_full, theta_reps)
 }
 
-/// Replicate ratio estimates from the contiguous replicate columns (no matrix).
-/// Bit-identical to `matrix_ratio_estimates`; see `matrix_mean_estimates_cols`.
+/// `matrix_ratio_estimates` from the replicate columns, bit-identical without the n×R matrix.
 pub fn matrix_ratio_estimates_cols(
     y: &[f64],
     x: &[f64],
@@ -502,8 +446,7 @@ pub fn matrix_ratio_estimates_cols(
 // Domain-level computation
 // ============================================================================
 
-/// Index categorical column to integers 0..K-1
-/// Returns (indices, domain_names, n_domains)
+/// Index a categorical column to 0..K-1: `(indices, domain_names, n_domains)`.
 pub fn index_domains(by: &StringChunked) -> (Vec<u32>, Vec<String>, usize) {
     let mut map: HashMap<&str, u32> = HashMap::new();
     let mut names: Vec<String> = Vec::new();
@@ -525,8 +468,7 @@ pub fn index_domains(by: &StringChunked) -> (Vec<u32>, Vec<String>, usize) {
     (indices, names, next_idx as usize)
 }
 
-/// Compute mean estimates by domain for all replicates
-/// Returns (full_estimates[K], replicate_estimates[K][R], domain_counts[K])
+/// By-domain means: `(full[K], replicates[K][R], counts[K])`.
 pub fn matrix_mean_by_domain(
     y: &[f64],
     full_weights: &[f64],
@@ -584,10 +526,7 @@ pub fn matrix_mean_by_domain(
     (theta_full, theta_reps, counts)
 }
 
-/// By-domain replicate mean from the contiguous replicate columns (no matrix).
-/// Each replicate accumulates per-domain sums over rows in order, in parallel
-/// across replicates; the per-replicate results are reshaped to the
-/// `[domain][rep]` layout `matrix_mean_by_domain` returns. Bit-identical.
+/// `matrix_mean_by_domain` from the replicate columns, bit-identical without the n×R matrix.
 pub fn matrix_mean_by_domain_cols(
     y: &[f64],
     full_weights: &[f64],
@@ -649,8 +588,7 @@ pub fn matrix_mean_by_domain_cols(
     (theta_full, theta_reps, counts)
 }
 
-/// By-domain replicate total from the contiguous replicate columns (no matrix).
-/// Bit-identical to `matrix_total_by_domain`.
+/// `matrix_total_by_domain` from the replicate columns, bit-identical without the n×R matrix.
 pub fn matrix_total_by_domain_cols(
     y: &[f64],
     full_weights: &[f64],
@@ -693,8 +631,7 @@ pub fn matrix_total_by_domain_cols(
     (sum_wy, theta_reps, counts)
 }
 
-/// By-domain replicate ratio from the contiguous replicate columns (no matrix).
-/// Bit-identical to `matrix_ratio_by_domain`.
+/// `matrix_ratio_by_domain` from the replicate columns, bit-identical without the n×R matrix.
 pub fn matrix_ratio_by_domain_cols(
     y: &[f64],
     x: &[f64],
@@ -761,7 +698,6 @@ pub fn matrix_ratio_by_domain_cols(
     (theta_full, theta_reps, counts)
 }
 
-/// Compute total estimates by domain
 pub fn matrix_total_by_domain(
     y: &[f64],
     full_weights: &[f64],
@@ -798,7 +734,6 @@ pub fn matrix_total_by_domain(
     (sum_wy, theta_reps, counts)
 }
 
-/// Compute ratio estimates by domain
 #[allow(clippy::too_many_arguments)]
 pub fn matrix_ratio_by_domain(
     y: &[f64],
@@ -874,11 +809,9 @@ fn level_value(w_level: f64, w_total: f64, normalize: bool) -> f64 {
     }
 }
 
-/// Compute proportion estimates by level for all replicates.
-/// Category values are integers (Boolean or numeric columns).
-/// Returns (levels, full_estimates[L], replicate_estimates[L][R])
+/// Proportions per integer level: `(levels, full[L], replicates[L][R])`.
 pub fn matrix_prop_estimates(
-    y: &[i64], // Category values
+    y: &[i64],
     full_weights: &[f64],
     rep_weights: &[f64],
     n: usize,
@@ -886,7 +819,6 @@ pub fn matrix_prop_estimates(
     domain_mask: Option<&[f64]>,
     normalize: bool,
 ) -> (Vec<i64>, Vec<f64>, Vec<Vec<f64>>) {
-    // Find unique levels
     let mut level_map: HashMap<i64, usize> = HashMap::new();
     let mut levels: Vec<i64> = Vec::new();
 
@@ -898,14 +830,12 @@ pub fn matrix_prop_estimates(
     }
     levels.sort();
 
-    // Re-index after sorting
     for (idx, &lev) in levels.iter().enumerate() {
         level_map.insert(lev, idx);
     }
 
     let n_levels = levels.len();
 
-    // Accumulate weighted counts per level
     let mut sum_w_level = vec![0.0; n_levels];
     let mut sum_w_total = 0.0;
     let mut rep_sum_w_level = vec![vec![0.0; n_reps]; n_levels];
@@ -927,7 +857,6 @@ pub fn matrix_prop_estimates(
         }
     }
 
-    // Compute proportions
     let theta_full: Vec<f64> = sum_w_level
         .iter()
         .map(|&w_l| level_value(w_l, sum_w_total, normalize))
@@ -965,9 +894,7 @@ fn prop_level_index(y: &[i64]) -> (Vec<i64>, Vec<usize>) {
     (levels, lev_idx)
 }
 
-/// `matrix_prop_estimates` from the contiguous replicate columns (no matrix).
-/// Bit-identical: each replicate accumulates per-level weight in row order,
-/// parallel over replicates, reshaped to `[level][rep]`.
+/// `matrix_prop_estimates` from the replicate columns, bit-identical without the n×R matrix.
 pub fn matrix_prop_estimates_cols(
     y: &[i64],
     full_weights: &[f64],
@@ -1026,8 +953,7 @@ pub fn matrix_prop_estimates_cols(
     (levels, theta_full, theta_reps)
 }
 
-/// `matrix_prop_estimates_str` from the contiguous replicate columns. Same as
-/// the integer version but with string category levels. Bit-identical.
+/// `matrix_prop_estimates_str` from the replicate columns, bit-identical without the n×R matrix.
 pub fn matrix_prop_estimates_str_cols(
     y: &[String],
     full_weights: &[f64],
@@ -1098,8 +1024,7 @@ pub fn matrix_prop_estimates_str_cols(
     (levels, theta_full, theta_reps)
 }
 
-/// Compute proportion estimates by level and domain.
-/// Category values are integers (Boolean or numeric columns).
+/// Proportions per integer level and domain.
 #[allow(clippy::too_many_arguments)]
 pub fn matrix_prop_by_domain(
     y: &[i64],
@@ -1111,7 +1036,6 @@ pub fn matrix_prop_by_domain(
     n_reps: usize,
     normalize: bool,
 ) -> LevelReps<i64> {
-    // Find unique levels
     let mut level_map: HashMap<i64, usize> = HashMap::new();
     let mut levels: Vec<i64> = Vec::new();
 
@@ -1158,7 +1082,7 @@ pub fn matrix_prop_by_domain(
         }
     }
 
-    // Compute proportions [domain][level]
+    // [domain][level]
     let theta_full: Vec<Vec<f64>> = sum_w_level
         .iter()
         .zip(sum_w_total.iter())
@@ -1191,10 +1115,7 @@ pub fn matrix_prop_by_domain(
     (levels, theta_full, theta_reps, counts)
 }
 
-/// Compute proportion estimates by level for all replicates.
-/// Category values are strings (String or Categorical columns).
-/// Levels are sorted lexicographically and preserved as-is in the output.
-/// Returns (levels, full_estimates[L], replicate_estimates[L][R])
+/// Proportions per string level, sorted lexicographically: `(levels, full[L], reps[L][R])`.
 pub fn matrix_prop_estimates_str(
     y: &[String],
     full_weights: &[f64],
@@ -1204,7 +1125,6 @@ pub fn matrix_prop_estimates_str(
     domain_mask: Option<&[f64]>,
     normalize: bool,
 ) -> (Vec<String>, Vec<f64>, Vec<Vec<f64>>) {
-    // Find unique levels
     let mut level_map: HashMap<&str, usize> = HashMap::new();
     let mut levels: Vec<String> = Vec::new();
 
@@ -1216,14 +1136,12 @@ pub fn matrix_prop_estimates_str(
     }
     levels.sort();
 
-    // Re-index after sorting
     for (idx, lev) in levels.iter().enumerate() {
         level_map.insert(lev.as_str(), idx);
     }
 
     let n_levels = levels.len();
 
-    // Accumulate weighted counts per level
     let mut sum_w_level = vec![0.0f64; n_levels];
     let mut sum_w_total = 0.0f64;
     let mut rep_sum_w_level = vec![vec![0.0f64; n_reps]; n_levels];
@@ -1245,7 +1163,6 @@ pub fn matrix_prop_estimates_str(
         }
     }
 
-    // Compute proportions
     let theta_full: Vec<f64> = sum_w_level
         .iter()
         .map(|&w_l| level_value(w_l, sum_w_total, normalize))
@@ -1265,9 +1182,7 @@ pub fn matrix_prop_estimates_str(
     (levels, theta_full, theta_reps)
 }
 
-/// Compute proportion estimates by level and domain.
-/// Category values are strings (String or Categorical columns).
-/// Returns (levels, full_estimates[D][L], replicate_estimates[D][L][R], counts[D])
+/// Proportions per string level and domain: `(levels, full[D][L], reps[D][L][R], counts[D])`.
 #[allow(clippy::too_many_arguments)]
 pub fn matrix_prop_by_domain_str(
     y: &[String],
@@ -1279,7 +1194,6 @@ pub fn matrix_prop_by_domain_str(
     n_reps: usize,
     normalize: bool,
 ) -> LevelReps<String> {
-    // Find unique levels
     let mut level_map: HashMap<&str, usize> = HashMap::new();
     let mut levels: Vec<String> = Vec::new();
 
@@ -1291,7 +1205,6 @@ pub fn matrix_prop_by_domain_str(
     }
     levels.sort();
 
-    // Re-index after sorting
     for (idx, lev) in levels.iter().enumerate() {
         level_map.insert(lev.as_str(), idx);
     }
@@ -1327,7 +1240,7 @@ pub fn matrix_prop_by_domain_str(
         }
     }
 
-    // Compute proportions [domain][level]
+    // [domain][level]
     let theta_full: Vec<Vec<f64>> = sum_w_level
         .iter()
         .zip(sum_w_total.iter())
@@ -1364,10 +1277,7 @@ pub fn matrix_prop_by_domain_str(
 // Median Estimation Functions
 // ============================================================================
 
-/// Compute weighted quantiles for a single set of weights (used by replication).
-///
-/// Sorts once and evaluates every probability against the same CDF, returning
-/// one value per entry of `probs`.
+/// Weighted quantiles for one weight set, sorting once for every probability in `probs`.
 #[cfg(test)]
 fn weighted_quantiles_vec(
     y: &[f64],
@@ -1376,7 +1286,6 @@ fn weighted_quantiles_vec(
     probs: &[f64],
     q_method: SvyQuantileMethod,
 ) -> Vec<f64> {
-    // Collect (y, w) pairs, filtering zeros/NaN
     let mut pairs: Vec<(f64, f64)> = Vec::with_capacity(n);
     for i in 0..n {
         let yi = y[i];
@@ -1390,13 +1299,11 @@ fn weighted_quantiles_vec(
         return vec![f64::NAN; probs.len()];
     }
 
-    // Sort by y value
     pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
     let y_sorted: Vec<f64> = pairs.iter().map(|(y, _)| *y).collect();
     let w_sorted: Vec<f64> = pairs.iter().map(|(_, w)| *w).collect();
 
-    // Compute CDF
     let total_w: f64 = w_sorted.iter().sum();
     if total_w <= 0.0 {
         return vec![f64::NAN; probs.len()];
@@ -1415,15 +1322,13 @@ fn weighted_quantiles_vec(
         .collect()
 }
 
-/// Compute a weighted median for a single set of weights. The production paths
-/// all go through `weighted_quantiles_vec`; this shorthand is for the tests.
+/// Weighted median for one weight set; a test shorthand for `weighted_quantiles_vec`.
 #[cfg(test)]
 fn weighted_median_vec(y: &[f64], weights: &[f64], n: usize, q_method: SvyQuantileMethod) -> f64 {
     weighted_quantiles_vec(y, weights, n, &[0.5], q_method)[0]
 }
 
-/// Finite-`y` indices of `rows`, stably sorted by `y`. Restricted to any one set of
-/// weights it is the order `weighted_quantiles_vec` sorts that set into.
+/// Finite-`y` indices of `rows`, stably sorted by `y`: the order `weighted_quantiles_vec` uses.
 fn sorted_finite(y: &[f64], rows: impl Iterator<Item = usize>) -> Vec<usize> {
     let mut order: Vec<usize> = rows.filter(|&i| y[i].is_finite()).collect();
     order.sort_by(|&a, &b| y[a].partial_cmp(&y[b]).unwrap_or(std::cmp::Ordering::Equal));
@@ -1465,10 +1370,7 @@ fn quantiles_in_order(
         .collect()
 }
 
-/// Quantile estimates for the full sample and every replicate column.
-///
-/// Returns `(full_estimates[P], replicate_estimates[P][R])`, indexed by the
-/// position of each probability in `probs`.
+/// Full-sample and per-replicate quantiles: `(full[P], replicates[P][R])`, in `probs` order.
 pub fn quantile_estimates_cols(
     y: &[f64],
     full_weights: &[f64],
@@ -1489,9 +1391,7 @@ pub fn quantile_estimates_cols(
     (theta_full, theta_reps)
 }
 
-/// Quantile estimates by domain for the full sample and every replicate column.
-///
-/// Returns `(full_estimates[K][P], replicate_estimates[K][P][R], domain_counts[K])`.
+/// By-domain quantiles: `(full[K][P], replicates[K][P][R], counts[K])`.
 pub fn quantile_by_domain_cols(
     y: &[f64],
     full_weights: &[f64],
@@ -1586,8 +1486,7 @@ pub fn matrix_quantile_by_domain(
     )
 }
 
-/// Compute median estimates for all replicates simultaneously
-/// Returns (full_estimate, vec of replicate estimates)
+/// Full-sample and replicate medians from the flat matrix.
 pub fn matrix_median_estimates(
     y: &[f64],
     full_weights: &[f64],
@@ -1601,8 +1500,7 @@ pub fn matrix_median_estimates(
     (full[0], reps.into_iter().next().unwrap_or_default())
 }
 
-/// Compute median estimates by domain for all replicates
-/// Returns (full_estimates[K], replicate_estimates[K][R], domain_counts[K])
+/// By-domain medians: `(full[K], replicates[K][R], counts[K])`.
 #[allow(clippy::too_many_arguments)]
 pub fn matrix_median_by_domain(
     y: &[f64],
@@ -1676,13 +1574,11 @@ mod tests {
 
     #[test]
     fn test_sdr_variance_replicate_mean() {
-        // Test with default centering (replicate mean)
         let theta_full = 100.0;
         let theta_reps = vec![98.0, 102.0, 99.0, 101.0];
         let rep_coefs = replicate_coefficients(RepMethod::SDR, 4, 0.0);
 
-        // Mean of replicates = 100.0
-        // Var = (4/4) * sum((rep - 100)^2) = 1.0 * (4 + 4 + 1 + 1) = 10.0
+        // Var = (4/4) * (4 + 4 + 1 + 1) = 10.0
         let var = variance_from_replicates(
             theta_full,
             &theta_reps,
@@ -1694,13 +1590,11 @@ mod tests {
 
     #[test]
     fn test_sdr_variance_full_sample() {
-        // Test with mse=TRUE centering (full sample estimate)
         let theta_full = 105.0; // Different from mean of replicates
         let theta_reps = vec![98.0, 102.0, 99.0, 101.0];
         let rep_coefs = replicate_coefficients(RepMethod::SDR, 4, 0.0);
 
-        // Var = (4/4) * sum((rep - 105)^2)
-        //     = 1.0 * (49 + 9 + 36 + 16) = 110.0
+        // Var = 1.0 * (49 + 9 + 36 + 16) = 110.0
         let var = variance_from_replicates(
             theta_full,
             &theta_reps,
@@ -1710,26 +1604,17 @@ mod tests {
         assert_abs_diff_eq!(var, 110.0, epsilon = 1e-10);
     }
 
-    // ---- Contract pinned before removing `method` from the FFI layer -------
-    //
-    // Python computes the per-replicate coefficients from the RepWeights
-    // variant and passes the vector across. These tests fix the two facts that
-    // makes safe: the variance formula does not consult the method, and the
-    // coefficients each method implies are exactly what the Python side
-    // reproduces.
+    // Python passes the coefficients: the variance depends on them alone, never on the method.
 
     #[test]
     fn variance_is_independent_of_the_method_label() {
-        // Same coefficients, every method: the label must not change the result.
         let theta_full = 105.0;
         let theta_reps = vec![98.0, 102.0, 99.0, 101.0];
         let coefs = vec![0.25, 0.25, 0.25, 0.25];
 
         for center in [VarianceCenter::ReplicateMean, VarianceCenter::FullSample] {
             let expected = variance_from_replicates(theta_full, &theta_reps, &coefs, center);
-            // The signature no longer admits a method at all; this pins the
-            // property that made removing it safe -- the coefficients are the
-            // only thing that distinguishes one replication scheme from another.
+            // The coefficients alone distinguish one replication scheme from another.
             for coefs_same in [coefs.clone(), coefs.clone()] {
                 assert_eq!(
                     variance_from_replicates(theta_full, &theta_reps, &coefs_same, center),
@@ -1744,8 +1629,7 @@ mod tests {
         // The stratified-JKn / user-rscales path: coefficients vary per replicate.
         let theta_reps = vec![98.0, 102.0, 99.0, 101.0];
         let coefs = vec![0.5, 1.0, 1.5, 2.0];
-        // center = mean = 100; sum c_r * (rep - 100)^2
-        //        = 0.5*4 + 1.0*4 + 1.5*1 + 2.0*1 = 2 + 4 + 1.5 + 2 = 9.5
+        // center = 100: 0.5*4 + 1.0*4 + 1.5*1 + 2.0*1 = 9.5
         let var =
             variance_from_replicates(100.0, &theta_reps, &coefs, VarianceCenter::ReplicateMean);
         assert!(abs_diff_eq!(var, 9.5, epsilon = 1e-12), "got {var}");
@@ -1792,7 +1676,6 @@ mod tests {
 
     #[test]
     fn fay_coefficient_only_affects_brr() {
-        // Which is why it has no business crossing the boundary for the others.
         for method in [RepMethod::Bootstrap, RepMethod::Jackknife, RepMethod::SDR] {
             assert_eq!(
                 replicate_coefficients(method, 16, 0.0),
@@ -1827,8 +1710,7 @@ mod tests {
 
     #[test]
     fn test_weighted_median_vec_nonuniform() {
-        // cdf = [1, 2, 3, 4, 14] / 14: the median interpolates 30% of the way
-        // from 4 to 5. R svyquantile(qrule = "hf4") gives 4.3.
+        // cdf = [1, 2, 3, 4, 14] / 14: 30% from 4 to 5; R svyquantile(qrule = "hf4") gives 4.3.
         let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let w = vec![1.0, 1.0, 1.0, 1.0, 10.0];
 
@@ -1954,8 +1836,7 @@ mod tests {
 
     #[test]
     fn test_matrix_prop_by_domain_str_basic() {
-        // 4 obs: domain A (obs 0,1), domain B (obs 2,3)
-        // y: A→["yes","no"], B→["no","no"]
+        // Domain A = obs 0,1 (yes, no); domain B = obs 2,3 (no, no).
         let y = vec![
             "yes".to_string(),
             "no".to_string(),

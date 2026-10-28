@@ -1,18 +1,6 @@
-// benches/kernel_bench.rs
-//
-// Criterion micro-benchmarks for the Taylor estimation kernel, measured on
-// native polars `ChunkedArray`s with NO Python/PyO3 boundary. This isolates the
-// exact functions the PERF_PLAN Phase B/C optimizations touch, so a change to
-// (say) the design-indexing hash or the point-estimate summation loop can be
-// proven in nanoseconds-per-element instead of being lost in end-to-end noise.
-//
-// Run (host build, extension-module off so it links as a normal binary):
-//   PYO3_PYTHON=../../.venv/bin/python cargo bench --no-default-features
-// or `make bench-svy-rs` from the repo root.
-//
-// Design shape mirrors the WB workload used in the Python harness and the
-// PERF_PLAN baseline table: ~20 strata, ~50 PSUs per stratum. Inputs are
-// single-chunk and null-free (the common post-`prepare_data` case).
+//! Criterion benchmarks of the estimation kernels on native polars arrays, with no PyO3 boundary.
+//! - `make bench-svy-rs`, or `PYO3_PYTHON=../../.venv/bin/python cargo bench --no-default-features`.
+//! - Inputs: ~20 strata of ~50 PSUs, single-chunk and null-free, as after `prepare_data`.
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use polars::prelude::*;
@@ -73,7 +61,7 @@ fn make_psu(n: usize, long: bool) -> StringChunked {
     StringChunked::from_slice("p".into(), &refs)
 }
 
-// ── Design indexing (Phase B FxHashMap / Phase C integer codes target) ──────
+// ── Design indexing ─────────────────────────────────────────────────────────
 
 fn bench_index_categorical(c: &mut Criterion) {
     let mut g = c.benchmark_group("index_categorical");
@@ -108,7 +96,7 @@ fn bench_index_categorical_pair(c: &mut Criterion) {
     g.finish();
 }
 
-// ── Point estimates & scores (Phase B fused no-null loop target) ────────────
+// ── Point estimates & scores ────────────────────────────────────────────────
 
 fn bench_point_estimates(c: &mut Criterion) {
     let mut g = c.benchmark_group("point_estimate_mean");
@@ -149,8 +137,7 @@ fn bench_taylor_variance(c: &mut Criterion) {
         let w = make_w(n);
         let scores = scores_mean(&y, &w).unwrap();
         for &long in &[false, true] {
-            // taylor_variance takes design columns; build them outside the
-            // timed closure so the conversion is not measured.
+            // Built outside the timed closure so the conversion is not measured.
             let strata = Column::from(make_strata(n, long).into_series());
             let psu = Column::from(make_psu(n, long).into_series());
             let id = format!("{n}/{}", if long { "long" } else { "short" });
@@ -178,9 +165,7 @@ fn bench_taylor_variance(c: &mut Criterion) {
 
 // ── Association: all-pairs sweep vs repeated pairwise kernels ───────────────
 //
-// Pairwise costs k(k+1)/2 two-pass kernels, each re-reading its two columns;
-// the matrix form reads each column twice regardless of k. This measures how
-// much of that O(k^2) → O(k) traffic reduction survives to the clock.
+// Pairwise runs k(k+1)/2 two-pass kernels; the matrix form reads each column twice whatever k is.
 
 fn make_col(n: usize, seed: usize) -> Float64Chunked {
     let v: Vec<f64> = (0..n)
@@ -232,9 +217,7 @@ fn bench_all_pairs(c: &mut Criterion) {
 
 // ── Association: replicate recomputation, precomputed vs from scratch ──────
 //
-// y*x, y^2 and x^2 do not depend on the weights. Forming them once turns each
-// replicate into six weighted dot products; recomputing them per replicate
-// repeats R*n multiplications.
+// y*x, y^2 and x^2 ignore the weights: formed once, each replicate is six weighted dot products.
 
 fn bench_replicate_association(c: &mut Criterion) {
     let mut g = c.benchmark_group("association_replicates");

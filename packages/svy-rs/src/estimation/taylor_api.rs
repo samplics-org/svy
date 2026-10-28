@@ -1,8 +1,4 @@
-// src/estimation/taylor_api.rs
-//
-// PyO3-facing wrappers and `compute_*` helpers for Taylor linearization.
-// The heavy math lives in taylor.rs; this file only handles DataFrame I/O,
-// argument parsing, and looping over by-groups.
+//! PyO3 wrappers for Taylor linearisation; the heavy math lives in `taylor`.
 
 use crate::errors::to_py_err;
 use crate::estimation::error::{EResult, EstimationError};
@@ -32,12 +28,8 @@ use crate::estimation::taylor::{
 /// One by-group: label, estimate, SE, variance, n, deff and scores.
 type GroupRow<'a> = (&'a str, f64, f64, f64, u32, f64, Vec<f64>);
 
-/// Resolve the SRS reference the design effect is measured against.
-///
-/// `None` keeps the historical behaviour -- without replacement, with the
-/// population size inferred from the sum of weights. `deff_pop_total` is the
-/// design's declared population size when it has one, which is what keeps the
-/// without-replacement reference correct after weights have been rescaled.
+/// The SRS reference for the design effect: wor with N = sum of weights unless told otherwise.
+/// `deff_pop_total`, the declared population size, keeps it right under rescaled weights.
 fn parse_srs_ref(deff_ref: Option<&str>, deff_pop_total: Option<f64>) -> EResult<SrsRef> {
     match deff_ref.unwrap_or("wor") {
         "wr" => Ok(SrsRef::WithReplacement),
@@ -96,10 +88,7 @@ pub fn taylor_mean(
     let srs = parse_srs_ref(deff_ref.as_deref(), deff_pop_total).map_err(|e| to_py_err(&e))?;
 
     let Some(by) = by_col else {
-        // Detach for the ungrouped path too: `compute_mean_ungrouped` overlaps
-        // the design build with the score pass via `rayon::join`, and holding
-        // the GIL would keep the rayon worker from ever picking up the second
-        // half (see the policy note in estimation/mod.rs).
+        // Detach here too: the GIL would serialise `compute_mean_ungrouped`'s `rayon::join`.
         let result = _py
             .detach(|| {
                 compute_mean_ungrouped(
@@ -142,8 +131,7 @@ pub fn taylor_mean(
     Ok((PyDataFrame(result), Some(cov)))
 }
 
-/// Batched ungrouped mean over many variables sharing one design (see
-/// `compute_mean_multi`). Returns one row per variable, in input order.
+/// Batched ungrouped mean over many variables sharing one design; one row per variable, in order.
 #[pyfunction]
 #[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None))]
 #[allow(clippy::too_many_arguments)]
@@ -184,24 +172,8 @@ pub fn taylor_mean_multi(
     Ok(PyDataFrame(result))
 }
 
-/// Shared skeleton for the ungrouped single-estimate Taylor kernels.
-///
-/// Two overlaps, both free of any effect on the numbers:
-///
-/// 1. Indexing the design (densify strata, nest PSU codes, per-stratum maps)
-///    reads none of the response columns, and the point estimate / scores / SRS
-///    variance read none of the design columns. They run concurrently.
-/// 2. The variance and the df both read the finished design but neither feeds
-///    the other, so they run concurrently too — and taking df from the design's
-///    codes drops the second densification pass over the same columns, which at
-///    1M rows was on its own about a third of the kernel.
-///
-/// Every half is internally unchanged and still accumulates in row order, so the
-/// output is bit-identical and independent of `RAYON_NUM_THREADS`, as
-/// `estimation/mod.rs` requires.
-///
-/// `value_work` returns the score vector plus whatever else the caller needs out
-/// of the response columns.
+/// Ungrouped single-estimate skeleton: design build overlaps the score pass, variance overlaps df.
+/// Each half still sums in row order, so output is bit-identical at any thread count.
 #[allow(clippy::too_many_arguments)]
 fn ungrouped_estimate<T: Send>(
     weights: &Float64Chunked,
@@ -230,8 +202,7 @@ fn ungrouped_estimate<T: Send>(
     Ok((variance, df_val, extra))
 }
 
-/// Flatten a score `Float64Chunked` to the array the variance consumes, mapping
-/// nulls to 0.0 exactly as `taylor_variance` did.
+/// Scores with nulls as 0.0, as `taylor_variance` treats them.
 fn scores_to_arr(scores: &Float64Chunked) -> Vec<f64> {
     scores.iter().map(|s| s.unwrap_or(0.0)).collect()
 }
@@ -241,11 +212,8 @@ fn flatten_cov(cov: Vec<Vec<f64>>) -> Vec<f64> {
     cov.into_iter().flatten().collect()
 }
 
-// The point estimate of a mean or ratio fails only on a zero denominator: a
-// domain carrying no weight, or a ratio whose weighted x sums to zero. That
-// domain keeps its row, NaN as in R's svymean(subset()) and on the replication
-// path, instead of failing the call and taking every other domain with it. Its
-// scores are zero, so the variance and covariance are masked explicitly.
+// A zero denominator (weightless domain, or ratio with zero weighted x) gives a NaN row, as R's
+// svymean(subset()), instead of failing every domain; its zero scores need the variance masked.
 
 /// Variance and SE of an estimate, both NaN when the estimate is undefined.
 fn var_se(estimate: f64, variance: f64) -> (f64, f64) {
@@ -342,13 +310,8 @@ fn compute_mean_ungrouped(
     )
 }
 
-/// Batched ungrouped means: build the design ONCE and estimate every variable
-/// against it, in parallel. The design build (index strata/PSU, per-stratum
-/// maps, FPC) is ~half the cost of a single call and identical across variables,
-/// so amortising it over N variables is the whole win. Each variable is still
-/// computed with the same kernels as `compute_mean_ungrouped`, so every row is
-/// bit-identical to the corresponding single-variable call. Output is one row
-/// per variable, in input order.
+/// Batched ungrouped means: one design build amortised over the variables, which run in parallel.
+/// Each row is bit-identical to the corresponding `compute_mean_ungrouped` call.
 #[allow(clippy::too_many_arguments)]
 fn compute_mean_multi(
     df: &DataFrame,
@@ -375,19 +338,13 @@ fn compute_mean_multi(
         .map(|c| df.column(c).and_then(|s| s.f64()))
         .transpose()?;
 
-    // Serial head, previously ~22 ms of a ~35 ms kernel at 1M rows and the whole
-    // reason the batched path stalled well under its available width: the design
-    // was indexed once here and *again* inside `degrees_of_freedom`. Building it
-    // once and deriving df from the same codes roughly halves the head, which is
-    // the term Amdahl's law was multiplying.
+    // Take df off the design's codes: indexing twice would dominate this serial head.
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let df_val = degrees_of_freedom_from_design(weights, &design, None);
     let active = design.domain_rows(weights.len(), rows.as_ref(), None);
 
-    // Resolve every response column to its typed slice BEFORE fanning out.
-    // `df.column()` mutates the frame's internal schema cache, so calling it
-    // from parallel closures is a data race; hoisting it makes each worker read
-    // only already-borrowed, immutable `&Float64Chunked`s (deterministic).
+    // Resolve columns before fanning out: `df.column()` mutates the frame's schema cache,
+    // so calling it from the parallel closures would race.
     let y_cols: Vec<&Float64Chunked> = value_cols
         .iter()
         .map(|vc| df.column(vc).and_then(|c| c.f64()))
@@ -473,16 +430,12 @@ fn compute_mean_grouped(
     );
     let unique_groups = unique_groups?;
 
-    // Index the design once — it is identical across by-groups; only the
-    // domain-masked scores change per group.
+    // One design for every group; only the domain-masked scores change.
     let design = design?.with_calib(calib);
 
-    // Groups are independent; fan the per-group work out over the rayon pool
-    // and collect in group order (deterministic, thread-count-independent).
+    // Groups fan out over rayon and are collected in group order, independent of thread count.
     let groups: Vec<&str> = unique_groups.iter().flatten().collect();
-    // A by-group is a domain, so its df must be counted on its own active
-    // PSUs/strata. Broadcasting one frame-level df here would hand every group
-    // the df of the surrounding analysis mask instead (issue #3).
+    // A by-group is a domain: its df counts its own active PSUs/strata, not the frame's.
     let masks: Vec<BooleanChunked> = groups.par_iter().map(|&g| by_str.equal(g)).collect();
     let (group_dfs, rows) = rayon::join(
         || {
@@ -729,8 +682,7 @@ fn compute_total_ungrouped(
     )
 }
 
-/// Batched ungrouped totals: design built once, variables in parallel. See
-/// `compute_mean_multi`. Each row is bit-identical to `compute_total_ungrouped`.
+/// Batched ungrouped totals, as `compute_mean_multi`; rows match `compute_total_ungrouped` exactly.
 #[allow(clippy::too_many_arguments)]
 fn compute_total_multi(
     df: &DataFrame,
@@ -757,8 +709,7 @@ fn compute_total_multi(
         .map(|c| df.column(c).and_then(|s| s.f64()))
         .transpose()?;
 
-    // Design indexed once; df taken off its codes rather than densifying the
-    // same strata/PSU columns a second time (see `compute_mean_multi`).
+    // Design indexed once, df taken off its codes (see `compute_mean_multi`).
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let df_val = degrees_of_freedom_from_design(weights, &design, None);
     let active = design.domain_rows(weights.len(), rows.as_ref(), None);
@@ -848,9 +799,7 @@ fn compute_total_grouped(
     let design = design?.with_calib(calib);
 
     let groups: Vec<&str> = unique_groups.iter().flatten().collect();
-    // A by-group is a domain, so its df must be counted on its own active
-    // PSUs/strata. Broadcasting one frame-level df here would hand every group
-    // the df of the surrounding analysis mask instead (issue #3).
+    // A by-group is a domain: its df counts its own active PSUs/strata, not the frame's.
     let masks: Vec<BooleanChunked> = groups.par_iter().map(|&g| by_str.equal(g)).collect();
     let (group_dfs, rows) = rayon::join(
         || {
@@ -996,8 +945,7 @@ pub fn taylor_ratio(
     Ok((PyDataFrame(result), Some(cov)))
 }
 
-/// Batched ungrouped ratio over paired numerator/denominator columns sharing one
-/// design build. `numerator_cols` and `denominator_cols` must be equal length.
+/// Batched ungrouped ratios over equal-length numerator/denominator column lists, one design build.
 #[pyfunction]
 #[pyo3(signature = (data, numerator_cols, denominator_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None))]
 #[allow(clippy::too_many_arguments)]
@@ -1104,8 +1052,7 @@ fn compute_ratio_ungrouped(
     )
 }
 
-/// Batched ungrouped ratios: design built once, (numerator, denominator) pairs
-/// estimated in parallel. See `compute_mean_multi`. One row per pair, in order.
+/// Batched ungrouped ratios, as `compute_mean_multi`: one row per (numerator, denominator) pair.
 #[allow(clippy::too_many_arguments)]
 fn compute_ratio_multi(
     df: &DataFrame,
@@ -1133,8 +1080,7 @@ fn compute_ratio_multi(
         .map(|c| df.column(c).and_then(|s| s.f64()))
         .transpose()?;
 
-    // Design indexed once; df taken off its codes rather than densifying the
-    // same strata/PSU columns a second time (see `compute_mean_multi`).
+    // Design indexed once, df taken off its codes (see `compute_mean_multi`).
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
     let df_val = degrees_of_freedom_from_design(weights, &design, None);
     let active = design.domain_rows(weights.len(), rows.as_ref(), None);
@@ -1253,9 +1199,7 @@ fn compute_ratio_grouped(
     let design = design?.with_calib(calib);
 
     let groups: Vec<&str> = unique_groups.iter().flatten().collect();
-    // A by-group is a domain, so its df must be counted on its own active
-    // PSUs/strata. Broadcasting one frame-level df here would hand every group
-    // the df of the surrounding analysis mask instead (issue #3).
+    // A by-group is a domain: its df counts its own active PSUs/strata, not the frame's.
     let masks: Vec<BooleanChunked> = groups.par_iter().map(|&g| by_str.equal(g)).collect();
     let (group_dfs, rows) = rayon::join(
         || {
@@ -1324,14 +1268,8 @@ fn compute_ratio_grouped(
 // Association (covariance / correlation)
 // ============================================================================
 
-/// Covariance or correlation over one or more column pairs sharing one design.
-///
-/// Pairs are always plural at this boundary. `corr`/`cov` take a set of columns
-/// and report every requested pair, so unlike `ratio` there is no single-pair
-/// entry point to mirror -- `taylor_assoc` covers the batched and grouped cases
-/// alike. With `by_col` set the result carries one row per (group, pair); the
-/// pair columns are named `y`/`x` positionally, and carry no directional
-/// meaning, since both statistics are symmetric.
+/// Covariance or correlation over column pairs sharing one design, ungrouped or by group.
+/// The pair columns `y`/`x` are positional only: both statistics are symmetric.
 #[pyfunction]
 #[pyo3(signature = (data, y_cols, x_cols, kind, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None))]
 #[allow(clippy::too_many_arguments)]
@@ -1419,8 +1357,7 @@ fn compute_assoc(
         .map(|c| df.column(c).and_then(|s| s.f64()))
         .transpose()?;
 
-    // Hoist column resolution out of the parallel region, as the other multi
-    // kernels do.
+    // Resolve columns outside the parallel region, as the other multi kernels do.
     let ys: Vec<&Float64Chunked> = y_cols
         .iter()
         .map(|c| df.column(c).and_then(|s| s.f64()))
@@ -1432,8 +1369,7 @@ fn compute_assoc(
 
     let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
 
-    // Ungrouped is modelled as a single group with no domain mask, so the
-    // (group x pair) fan-out below covers both shapes with one code path.
+    // Ungrouped runs as a single unmasked group, so one fan-out covers both shapes.
     let by_str = by_col
         .map(|c| df.column(c).and_then(|s| s.str()))
         .transpose()?;
@@ -1443,8 +1379,7 @@ fn compute_assoc(
         None => vec![None],
     };
 
-    // A by-group is a domain, so its df is counted on its own active
-    // PSUs/strata rather than inherited from the frame (issue #3).
+    // A by-group is a domain: its df counts its own active PSUs/strata, not the frame's.
     let group_dfs: Vec<u32> = groups
         .par_iter()
         .map(|g| match (g, by_str) {
@@ -1530,8 +1465,7 @@ fn compute_assoc(
 // Proportion
 // ============================================================================
 
-/// What a categorical estimate reports per level: its share of the (domain)
-/// weight, or its estimated count.
+/// A categorical level's share of the (domain) weight, or its estimated count.
 #[derive(Clone, Copy)]
 enum LevelScale {
     Share,
@@ -1588,8 +1522,7 @@ pub fn taylor_prop(
     )
 }
 
-/// Estimated count of each level (`svytotal(~factor(y))`), with the joint
-/// covariance across levels (and by-groups).
+/// Count per level (R `svytotal(~factor(y))`) with the joint covariance across levels and groups.
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
@@ -1719,8 +1652,7 @@ fn taylor_levels(
     Ok((PyDataFrame(result), Some(cov)))
 }
 
-/// Batched ungrouped proportions over many category columns sharing one design
-/// build. Rows are (variable, level), grouped by variable in input order.
+/// Batched ungrouped proportions over many category columns; rows (variable, level) in input order.
 #[pyfunction]
 #[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, deff_ref=None, deff_pop_total=None))]
 #[allow(clippy::too_many_arguments)]
@@ -1808,8 +1740,7 @@ fn compute_levels_ungrouped(
     let mut deffs: Vec<f64> = Vec::new();
     let mut score_cols: Vec<Vec<f64>> = Vec::new();
     let n = active_count(weights, None);
-    // Design is identical across levels; index it once — and take the df off its
-    // codes rather than densifying the same columns a second time.
+    // One design for every level; df comes off its codes rather than a second densification.
     let design =
         build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?.with_calib(calib);
     let df_val = degrees_of_freedom_from_design(weights, &design, None);
@@ -1871,10 +1802,7 @@ fn compute_levels_ungrouped(
     Ok((out, cov))
 }
 
-/// Batched ungrouped proportions: design built once, variables estimated in
-/// parallel (each variable loops its own category levels). See
-/// `compute_mean_multi`. Rows are (variable, level), grouped by variable in
-/// input order, levels sorted — identical to per-variable `compute_levels_ungrouped`.
+/// Batched ungrouped proportions, as `compute_mean_multi`; rows match `compute_levels_ungrouped`.
 #[allow(clippy::too_many_arguments)]
 fn compute_prop_multi(
     df: &DataFrame,
@@ -1907,9 +1835,7 @@ fn compute_prop_multi(
     let df_val = degrees_of_freedom_from_design(weights, &design, None);
     let active = design.domain_rows(weights.len(), rows.as_ref(), None);
 
-    // Hoist String-cast + level enumeration out of the parallel region: keep the
-    // owned casted columns alive, borrow their StringChunked, and precompute each
-    // variable's sorted levels. Closures then only read immutable data.
+    // Cast to String and enumerate sorted levels before the parallel region; closures only read.
     let value_series_str: Vec<Column> = value_cols
         .iter()
         .map(|vc| df.column(vc)?.cast(&DataType::String))
@@ -2054,13 +1980,10 @@ fn compute_levels_grouped(
     // Design is identical across all (group, level) cells; index it once.
     let design = design?.with_calib(calib);
 
-    // Fan out over groups; each group emits its level rows in `levels` order,
-    // then flatten in group order for a deterministic layout.
+    // Groups emit level rows in `levels` order, flattened in group order.
     type PropRow = (String, String, f64, f64, f64, u32, f64, Vec<f64>);
     let groups: Vec<&str> = unique_groups.iter().flatten().collect();
-    // A by-group is a domain, so its df must be counted on its own active
-    // PSUs/strata. Broadcasting one frame-level df here would hand every group
-    // the df of the surrounding analysis mask instead (issue #3).
+    // A by-group is a domain: its df counts its own active PSUs/strata, not the frame's.
     let masks: Vec<BooleanChunked> = groups.par_iter().map(|&g| by_str.equal(g)).collect();
     let group_dfs: Vec<u32> = masks
         .par_iter()
@@ -2171,8 +2094,7 @@ fn compute_levels_grouped(
 // Quantiles (median is the p = 0.5 case)
 // ============================================================================
 
-/// Woodruff quantiles for one variable. One row per probability (and per
-/// domain when `by_col` is set), carrying the probability in a `prob` column.
+/// Woodruff quantiles for one variable: one row per probability (and domain), with a `prob` column.
 #[pyfunction]
 #[pyo3(signature = (data, value_col, weight_col, probs, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, by_col=None, singleton_method=None, domain_rows_col=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
@@ -2254,9 +2176,7 @@ pub fn taylor_quantile(
     Ok(PyDataFrame(result))
 }
 
-/// Batched ungrouped quantiles over many variables (run in parallel; see
-/// `compute_quantile_multi`). Rows are ordered variable-major, then by
-/// probability, matching the input order of both.
+/// Batched ungrouped quantiles in parallel; rows variable-major, then by probability.
 #[pyfunction]
 #[pyo3(signature = (data, value_cols, weight_col, probs, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
@@ -2321,14 +2241,8 @@ pub fn taylor_quantile_multi(
     Ok(PyDataFrame(result))
 }
 
-/// Evaluate the weighted quantile rule at arbitrary probabilities, given a
-/// pre-sorted variable and its normalised weighted CDF.
-///
-/// Exposed so the Python side can invert the CDF for Woodruff confidence
-/// limits using the *same* interpolation rule as the point estimate, the way
-/// R's `oldsvyquantile` passes one `method`/`f` pair to both its point
-/// `approxfun` and its endpoint `approx`. Keeping the rule in one place stops
-/// the two from drifting.
+/// The weighted quantile rule at arbitrary probabilities, over a sorted variable and its CDF.
+/// Python's Woodruff limits reuse this rule, as R uses one `method`/`f` for estimate and endpoints.
 #[pyfunction]
 #[pyo3(signature = (values_sorted, cdf, probs, quantile_method=None))]
 pub fn weighted_quantile_at(
@@ -2357,8 +2271,7 @@ pub fn weighted_quantile_at(
         .collect())
 }
 
-/// Drop the `prob` column so the legacy median entry points keep their exact
-/// pre-quantile schema.
+/// Drop the `prob` column: the median entry points report no probability.
 fn without_prob(mut df: DataFrame) -> EResult<DataFrame> {
     let _ = df.drop_in_place("prob")?;
     Ok(df)
@@ -2414,8 +2327,7 @@ pub fn taylor_median(
     Ok(PyDataFrame(result))
 }
 
-/// Batched ungrouped median over many variables. One row per variable, in
-/// input order.
+/// Batched ungrouped median over many variables; one row per variable, in input order.
 #[pyfunction]
 #[pyo3(signature = (data, value_cols, weight_col, strata_col=None, psu_col=None, ssu_col=None, fpc_col=None, fpc_ssu_col=None, singleton_method=None, domain_rows_col=None, quantile_method=None, calib_kind=None, calib_cells=None, calib_aux=None, calib_prev_wgt=None, calib_pins_total=None, calib_new_wgt=None))]
 #[allow(clippy::too_many_arguments)]
@@ -2498,8 +2410,7 @@ fn resolve_quantile_cols<'a>(
         .map(|c| df.column(c).and_then(|s| s.f64()))
         .transpose()?;
 
-    // The design is independent of both the variable and the probability, so
-    // indexing it once serves every (variable, prob) pair below.
+    // One design build serves every (variable, prob) pair.
     let design =
         build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?.with_calib(calib);
     Ok(QuantileCols {
@@ -2561,10 +2472,7 @@ fn compute_quantile_ungrouped(
     )
 }
 
-/// Batched ungrouped quantiles: variables fanned out over rayon. Quantiles are
-/// sort-bound, so unlike mean/total this amortises no design work beyond the
-/// shared `TaylorDesign` — the win is running independent variables in
-/// parallel. Each row is identical to `compute_quantile_ungrouped`.
+/// Batched ungrouped quantiles: sort-bound, so the win is parallel variables, not design reuse.
 #[allow(clippy::too_many_arguments)]
 fn compute_quantile_multi(
     df: &DataFrame,

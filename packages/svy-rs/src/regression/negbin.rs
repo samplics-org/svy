@@ -1,28 +1,7 @@
-// src/regression/negbin.rs
-//
-// The negative binomial's dispersion, and the joint (beta, theta) variance.
-//
-// The family arm in glm.rs fits beta by IRLS at a KNOWN theta, which is all a
-// family can do — theta is a second parameter, not a property of the mean.
-// This module adds the two things that need:
-//
-//   * `theta_ml`, Newton on the weighted profile likelihood (MASS::theta.ml),
-//     driven by an outer loop that alternates with the IRLS the way
-//     MASS::glm.nb does. The pair it converges to is the joint MLE.
-//
-//   * the design-based variance over BOTH parameters, which is R survey's
-//     `svymle` route — the method Lumley gives for this model in *Complex
-//     Surveys* (Appendix E) and what `sjstats::svyglm.nb` implements.
-//     Conditioning on theta-hat instead is the cheaper composition of
-//     `glm.nb` with `svyglm`, and it is a different number: on apistrat the
-//     two run from 25% under to 13% over each other. The orthogonality that
-//     makes them agree asymptotically is a property of the model, and a
-//     design-based sandwich is the thing that declines to assume it.
-//
-// The log-likelihood, dropping terms free of (mu, theta):
-//
-//   l = lgamma(theta + y) - lgamma(theta) - lgamma(y + 1)
-//       + theta log theta + y log mu - (theta + y) log(theta + mu)
+//! Negative binomial theta by ML, alternating with IRLS as MASS::glm.nb, and the joint (beta, theta) variance.
+//!
+//! - The variance is svymle's (Lumley, *Complex Surveys* App. E; `sjstats::svyglm.nb`), not glm.nb + svyglm, which conditions on theta-hat and differs by up to 25% on apistrat.
+//! - l = lgamma(theta + y) - lgamma(theta) - lgamma(y + 1) + theta log theta + y log mu - (theta + y) log(theta + mu).
 
 use crate::regression::error::{RResult, RegressionError};
 use faer::Mat;
@@ -39,8 +18,7 @@ use crate::regression::special::{digamma, lgamma, trigamma};
 /// y, X (column-major), the contributing-row weights, and the offset.
 type Materialised = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
 
-/// The identity and sqrt links can push mu to zero, and y/mu is the first
-/// thing the score does.
+/// The identity and sqrt links can push mu to zero, and the score divides by it.
 const MU_FLOOR: f64 = 1e-10;
 
 fn contributing(w: f64) -> bool {
@@ -87,10 +65,7 @@ fn theta_score_info(y: &[f64], mu: &[f64], theta: f64, w: &[f64]) -> (f64, f64) 
     (score, info)
 }
 
-/// Maximum-likelihood theta at fixed mu — `MASS::theta.ml`.
-///
-/// Newton from the method-of-moments start `sum(w) / sum(w (y/mu - 1)^2)`.
-/// Scale-invariant in the weights: a global factor cancels out of the root.
+/// ML theta at fixed mu (`MASS::theta.ml`): Newton from `sum(w) / sum(w (y/mu - 1)^2)`; weight-scale invariant.
 fn theta_ml(y: &[f64], mu: &[f64], w: &[f64], eps: f64, limit: usize) -> RResult<f64> {
     let mut w_sum = 0.0;
     let mut denom = 0.0;
@@ -167,9 +142,7 @@ pub(crate) fn fit_negbin(
         )
     };
 
-    // A theta the caller knows is not a parameter: the ordinary sandwich,
-    // which holds it fixed, is the right variance and there is no row to
-    // report a standard error for.
+    // A known theta is not a parameter: the ordinary sandwich holds it fixed and it gets no SE.
     if let Some(th) = theta {
         let mut result = fit_at("negativebinomial", Some(th), true)?;
         result.theta = Some(th);
@@ -181,8 +154,6 @@ pub(crate) fn fit_negbin(
     let n = y.len();
     let k = x_cols.len();
 
-    // The same materialisation fit_glm_domain does, needed again here for the
-    // profile likelihood and the joint bread.
     let (y_vals, x, w, offset_vals) = materialise(y, &x_cols, weights, offset, domain_mask, n, k)?;
 
     let eps = tol.max(1e-14);
@@ -202,10 +173,7 @@ pub(crate) fn fit_negbin(
     let mut mu = mu_of(&fit_at("poisson", None, false)?.params);
     let mut theta = theta_ml(&y_vals, &mu, &w, eps, max_iter)?;
 
-    // MASS::glm.nb's alternation, with its convergence test made relative —
-    // the weighted log-likelihood here is O(1e4), so its own rounding is
-    // ~1e-10 and an absolute test could never reach a tol of 1e-12 however
-    // converged theta is.
+    // MASS::glm.nb's alternation with a relative test: an O(1e4) loglik rounds at ~1e-10, above a 1e-12 tol.
     let mut delta: f64 = 1.0;
     let mut ll = loglik(&y_vals, &mu, theta, &w);
     let mut ll_prev = ll + 2.0 * ll.abs().max(1.0);
@@ -272,8 +240,7 @@ fn materialise(
         }
     }
 
-    // Out-of-domain and non-positive-weight rows carry no information, but
-    // stay in the frame: the design structure is the full design's.
+    // Rows without weight carry no information but stay: the design structure is the full design's.
     let w_cast = weights.cast(&DataType::Float64)?;
     let w: Vec<f64> = w_cast
         .f64()?
@@ -300,9 +267,7 @@ fn materialise(
     Ok((y_vals, x, w, offset_vals))
 }
 
-/// The joint (beta, theta) design variance: `svyrecvar(scores %*% -H^-1)`.
-///
-/// Returns the beta block, row-major k*k, and the standard error of theta.
+/// Joint design variance `svyrecvar(scores %*% -H^-1)`: the beta block (row-major k*k) and theta's SE.
 #[allow(clippy::too_many_arguments)]
 fn joint_vcov(
     y: &[f64],
@@ -324,7 +289,6 @@ fn joint_vcov(
     let dg_theta = digamma(theta);
     let tg_theta = trigamma(theta);
 
-    // Per-row score and second-derivative pieces.
     let mut s_eta = vec![0.0; n]; // w dl/deta
     let mut s_theta = vec![0.0; n]; // w dl/dtheta
     let mut h_eta = vec![0.0; n]; // w d2l/deta2
@@ -386,7 +350,7 @@ fn joint_vcov(
 
     let a_inv = invert_matrix(bread.as_ref(), p)?;
 
-    // Influence functions, column-major n x p.
+    // Column-major n x p.
     let mut influence = vec![0.0; n * p];
     for col in 0..p {
         let dst_off = col * n;
@@ -408,7 +372,6 @@ fn joint_vcov(
         }
     }
 
-    // Design variance of the column totals.
     let (strata_idx, n_strata) = match strata {
         Some(_) => design_codes(strata, None, n)?,
         None => (vec![0usize; n], 1usize),

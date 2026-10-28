@@ -1,13 +1,6 @@
-// src/categorical/tabulation.rs
+//! Design-based one- and two-way tabulation with the Rao-Scott chi-square test.
 //!
-//! Design-based categorical tabulation with Rao-Scott corrections.
-//!
-//! Computes one-way or two-way frequency tables with:
-//!   - Proportion estimates and Taylor-linearized SEs
-//!   - Optional total estimates (when weights are not normalized)
-//!   - Rao-Scott adjusted Pearson chi-square test (two-way)
-//!
-//! Matches R's `survey::svytable` + `survey::svychisq`.
+//! - Matches R's `survey::svytable` + `survey::svychisq`.
 
 use crate::categorical::error::CResult;
 use faer::Mat;
@@ -203,12 +196,7 @@ fn beta_cf(x: f64, a: f64, b: f64) -> f64 {
 // Proportion estimation with covariance matrix
 // ============================================================================
 
-/// Compute proportion estimates and full covariance matrix for all levels.
-///
-/// Uses a single multivariate Taylor variance computation (matching R's approach)
-/// rather than separate per-level calls + polarization identity.
-///
-/// Returns (levels, proportions, SEs, covariance_matrix, deff_vec, df).
+/// Proportions of every level with one joint Taylor covariance, as R does (no per-level polarization).
 #[allow(clippy::too_many_arguments)]
 pub fn estimate_proportions(
     y: &StringChunked,
@@ -231,22 +219,17 @@ pub fn estimate_proportions(
     let active =
         singleton_domain_rows(sm, calib.is_some(), strata.is_some(), weights.len(), domain)?;
 
-    // Build all k indicator columns in a SINGLE pass over y.
-    // Previously: k separate passes (one per level). Now: one pass, O(N) regardless of k.
     let n_rows = y.len();
-    // level_idx[i] = index of level that row i belongs to, or u32::MAX for null
     let level_map: std::collections::HashMap<&str, usize> = levels
         .iter()
         .enumerate()
         .map(|(i, s)| (s.as_str(), i))
         .collect();
 
-    // indicators[j][i] = value for level j at row i (0.0, 1.0, or NaN-sentinel None)
+    // indicators[j][i]: None marks a missing key.
     let mut indicators: Vec<Vec<Option<f64>>> = vec![vec![Some(0.0); n_rows]; k];
     for (i, opt_val) in y.iter().enumerate() {
-        // Out-of-domain rows keep every indicator at 0 (their weight is 0):
-        // they stay in the frame so the PSU structure is intact, and a null
-        // key there is not missing data.
+        // Out-of-domain rows stay at 0 to keep the PSU structure; a null key there is not missing data.
         if !in_domain(domain, i) {
             continue;
         }
@@ -260,7 +243,6 @@ pub fn estimate_proportions(
                 if let Some(&j) = level_map.get(val) {
                     indicators[j][i] = Some(1.0);
                 }
-                // rows with a value not in levels stay 0.0 (already initialised)
             }
         }
     }
@@ -301,11 +283,8 @@ pub fn estimate_proportions(
         deff_vec.push(deff);
     }
 
-    // Full k×k covariance, with the same PSU indexing and variance formula as
-    // taylor_variance.
     let cov = taylor_variance_matrix_in(&score_columns, strata, psu, fpc, sm, active.as_deref())?;
 
-    // Extract SEs from diagonal
     let ses: Vec<f64> = (0..k).map(|j| cell_se(proportions[j], cov[j][j])).collect();
 
     Ok((levels, proportions, ses, cov, deff_vec, df_val))
@@ -326,8 +305,7 @@ pub fn in_domain(domain: Option<&BooleanChunked>, i: usize) -> bool {
     domain.is_none_or(|m| m.get(i).unwrap_or(false))
 }
 
-/// Sorted distinct keys among the in-domain rows: an out-of-domain row's
-/// category never forms a cell.
+/// Sorted distinct in-domain keys: an out-of-domain row's category never forms a cell.
 pub fn domain_levels(y: &StringChunked, domain: Option<&BooleanChunked>) -> CResult<Vec<String>> {
     let mut levels: Vec<String> = match domain {
         None => y
@@ -375,7 +353,6 @@ pub fn estimate_totals(
         domain,
     )?;
 
-    // Single pass over y to build all indicator columns at once
     let n_rows = y.len();
     let level_map: std::collections::HashMap<&str, usize> = levels
         .iter()
@@ -427,8 +404,7 @@ pub fn estimate_totals(
 // Rao-Scott chi-square adjustments
 // ============================================================================
 
-/// Compute Rao-Scott adjusted chi-square statistics for a two-way table.
-/// Returns the 7 Pearson-based statistics: (chisq, df, p, adj_f, adj_ndf, adj_ddf, adj_p).
+/// Rao-Scott Pearson statistics: (chisq, df, p, adj_f, adj_ndf, adj_ddf, adj_p).
 pub fn rao_scott(
     proportions: &[f64],
     cov_survey: &[Vec<f64>],
@@ -444,8 +420,7 @@ pub fn rao_scott(
     let df_base = (nr.saturating_sub(1) * nc.saturating_sub(1)) as f64;
     let nan = f64::NAN;
 
-    // No association to test with one row or column level, and no proportions
-    // when the domain has no weight (they arrive as NaN).
+    // One row or column level, or a weightless domain (NaN proportions): nothing to test.
     if df_base == 0.0 || p.iter().any(|v| !v.is_finite()) {
         return (nan, df_base, nan, nan, nan, nan, nan);
     }
@@ -481,9 +456,7 @@ pub fn rao_scott(
         }
     }
 
-    // 3. Build full interaction model matrix X12 = [X1 | X2]
-    //    Then extract Cmat = QR residuals of X2 columns projected off X1
-    //    This matches R: Cmat <- qr.resid(qr(X1), X12[,-(1:(nr+nc-1))])
+    // 3. R: Cmat <- qr.resid(qr(X1), X12[,-(1:(nr+nc-1))])
     let Ok(x1_qr) = x1.rb().thin_svd() else {
         return (nan, df_base, nan, nan, nan, nan, nan);
     };
@@ -503,10 +476,7 @@ pub fn rao_scott(
         }
     }
 
-    // 5. Delta computation (matches R lines 100-102):
-    //    denom = Cmat' * (iDmat / N) * Cmat
-    //    numr  = Cmat' * iDmat * V * iDmat * Cmat
-    //    Delta = solve(denom, numr)
+    // 5. As R: Delta = solve(Cmat' (iDmat/N) Cmat, Cmat' iDmat V iDmat Cmat)
     let idmat_over_n = {
         let mut m = idmat.clone();
         for i in 0..k {
@@ -551,21 +521,17 @@ pub fn rao_scott(
     let d2 = &delta * &delta;
     let trace_d2: f64 = (0..dd).map(|i| d2[(i, i)]).sum();
 
-    // Without design variance there is nothing to correct by: the X² is kept,
-    // its corrected p-value and the F are undefined.
+    // No design variance to correct by: X² is kept, the corrected p and F are undefined.
     #[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN takes this branch on purpose
     if !(trace_d > 1e-9) {
         return (chisq_p, df_base, nan, nan, nan, nan, nan);
     }
 
-    // First-order Rao-Scott correction (matches R's svychisq statistic="Chisq"):
-    //   R reports the RAW X² as the displayed "X-squared" value, but computes
-    //   the p-value from X²/mean(delta) evaluated against chi2(df_base).
+    // As R svychisq "Chisq": report the raw X², take p from X²/mean(delta) on chi2(df_base).
     let mean_delta = trace_d / df_base;
     let chisq_p_for_p = chisq_p / mean_delta;
 
-    // Second-order (F) correction: F = X² / trace(delta), with Satterthwaite df
-    // R only computes F from the Pearson X² (see surveychisq.R line 111).
+    // F = X² / trace(delta) with Satterthwaite df; R computes F from the Pearson X² only.
     let f_p = chisq_p / trace_d;
     let ndf = trace_d.powi(2) / trace_d2;
     let ddf = nu * ndf;
@@ -660,8 +626,7 @@ mod tests {
 
     #[test]
     fn no_design_variance_keeps_x2_and_leaves_the_corrections_undefined() {
-        // Margins 0.5/0.5, so every expected cell is 0.25:
-        // X2 = 100 * 4 * (0.4 - 0.25)^2 / 0.25 = 36.
+        // Expected cells 0.25: X2 = 100 * 4 * (0.4 - 0.25)^2 / 0.25 = 36.
         let p = [0.4, 0.1, 0.1, 0.4];
         let (chisq, df, p_chisq, f, ndf, ddf, p_f) = rao_scott(&p, &zero_cov(4), 2, 2, 100, 3.0);
         assert!((chisq - 36.0).abs() < 1e-12);
