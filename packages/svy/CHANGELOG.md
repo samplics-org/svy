@@ -6,6 +6,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+## [0.36.0] — 2026-10-28
+
+Requires [`svy-rs`](../svy-rs/CHANGELOG.md) 0.20.0 and [`svy-io`](../svy-io/CHANGELOG.md) 0.8.0, which carry the kernel and reader/writer changes below.
+
 ### Added
 
 - **`Power().compare_means` and `compare_props` give the power of the two-group comparisons.** `n` is group 1's size (group 2 gets `alloc_ratio * n`) or the `(n1, n2)` pair `SampleSize().compare_*` returns; `deff`, `resp_rate` and `pop_size` take one value or a `(group 1, group 2)` pair; `var_mode`, `rho`, `overlap`, `delta` and `two_sides` mean what they mean in sizing, and full overlap reproduces a paired test (Stata `power pairedmeans`). Experimental, like the rest of `Power`.
@@ -1319,7 +1323,8 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.35.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.36.0...HEAD
+[0.36.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.36.0
 [0.35.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.35.0
 [0.34.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.34.0
 [0.33.1]: https://github.com/samplics-org/svy/releases/tag/svy-v0.33.1

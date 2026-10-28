@@ -223,7 +223,7 @@ def test_removed_names_point_to_info(name, target):
     e = err.value
     assert isinstance(e, AttributeError)
     assert e.code == Code.NAME_MOVED
-    assert e.detail == f"svy.datasets.{name} moved to {target} in 2026.0."
+    assert e.detail == f"svy.datasets.{name} moved to {target} in 0.36.0."
     assert e.expected == target
     assert e.hint == f"Use {target}."
     assert name not in d.__all__
