@@ -122,7 +122,9 @@ ignore unknown fields.
 - `0.13` — `EstimateData.covariance` (rows and columns in `estimates` order) and
   `covariance_filled` (False when each row was estimated alone and the off-diagonals
   are zeros, not a covariance); `labels` on `TableData` (row and column variables)
-  and on the two t-test-by kinds (the `by` variables), in the estimate's shape. All
+  and on the two t-test-by kinds (the `by` variables), in the estimate's shape;
+  `variance` (`"Taylor"` or the replicate method, as `EstimateData.method`) on
+  `TableData`, the one- and two-group t-tests, `GLMFitData` and `GLMPredData`. All
   optional: older payloads decode with `None`.
 
 ### 2.6 Sub-structs are untagged
@@ -296,6 +298,7 @@ Source: `svy.categorical.ttest.TTestOneGroup` (msgspec.Struct)
 | `mean_h0`      | `float`                     | `mean_h0`        |
 | `alternative`  | `str`                       | `alternative`    |
 | `alpha`        | `float`                     | `alpha`          |
+| `variance`     | `str \| None` (None from older payloads) | `variance`       |
 | `diff`         | `list[DiffEstData]`         | `diff`           |
 | `estimates`    | `list[TtestEstData]`        | `estimates`      |
 | `stats`        | `TTestStatsData \| None`    | `stats`          |
@@ -313,6 +316,7 @@ Source: `svy.categorical.ttest.TTestTwoGroups` (msgspec.Struct)
 | `pair`         | `list[str] \| None`         | `pair`           |
 | `alternative`  | `str`                       | `alternative`    |
 | `alpha`        | `float`                     | `alpha`          |
+| `variance`     | `str \| None` (None from older payloads) | `variance`       |
 | `diff`         | `list[DiffEstData]`         | `diff`           |
 | `estimates`    | `list[TtestEstData]`        | `estimates`      |
 | `stats`        | `TTestStatsData \| None`    | `stats`          |
@@ -354,6 +358,7 @@ Source: `svy.categorical.table.Table` (not msgspec; `__slots__`)
 | `rowvar`       | `str`                        | `rowvar`         |
 | `colvar`       | `str \| None`                | `colvar`         |
 | `alpha`        | `float`                      | `alpha`          |
+| `variance`     | `str \| None` (None from older payloads) | `variance`       |
 | `estimates`    | `list[CellEstData]`          | `estimates`      |
 | `stats`        | `TableStatsData \| None`     | `stats`          |
 | `rowvals`      | `list[str \| int \| float \| bool] \| None` | `rowvals` |
@@ -376,6 +381,7 @@ Source: `svy.regression.glm.GLMFit` (msgspec.Struct)
 | `coefs`         | `list[GLMCoefData]`   | `coefs`            |
 | `feature_names` | `list[str]`           | `feature_names`    |
 | `alpha`         | `float` (default 0.05) | `alpha`           |
+| `variance`     | `str \| None` (None from older payloads) | `variance`       |
 | `where_clause`  | `str \| None`         | `where_clause`     |
 | `offset`        | `str \| None`         | `offset`           |
 | `terms`         | `list[TermData] \| None` | `term_info`     |
@@ -391,6 +397,7 @@ Source: `svy.regression.prediction.GLMPred` (msgspec.Struct)
 | `schema_version` | `str`           | constant         |
 | `df`           | `float`           | `df`             |
 | `alpha`        | `float`           | `alpha`          |
+| `variance`     | `str \| None` (None from older payloads) | `variance`       |
 | `yhat`         | `list[float]`     | `yhat` (ndarray) |
 | `se`           | `list[float]`     | `se` (ndarray)   |
 | `lci`          | `list[float]`     | `lci` (ndarray)  |

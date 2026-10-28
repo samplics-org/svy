@@ -38,5 +38,6 @@
     "p_value": 0.001,
     "t": 5.0
   },
+  "variance": "Taylor",
   "y": "income"
 }

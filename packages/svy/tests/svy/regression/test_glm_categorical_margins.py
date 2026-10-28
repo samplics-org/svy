@@ -114,8 +114,8 @@ class TestExponentiatedCoefficients:
         out = model.fitted.to_polars(exponentiate=True)
 
         np.testing.assert_allclose(out["odds_ratio"].to_numpy(), self.OR, rtol=RTOL)
-        np.testing.assert_allclose(out["conf_low"].to_numpy(), self.LCI, rtol=RTOL)
-        np.testing.assert_allclose(out["conf_high"].to_numpy(), self.UCI, rtol=RTOL)
+        np.testing.assert_allclose(out["lci"].to_numpy(), self.LCI, rtol=RTOL)
+        np.testing.assert_allclose(out["uci"].to_numpy(), self.UCI, rtol=RTOL)
 
     def test_interval_is_exp_of_the_link_scale_bounds(self, model):
         """Not est +/- t*se on the ratio scale — the interval is asymmetric."""
@@ -123,16 +123,16 @@ class TestExponentiatedCoefficients:
         out = model.fitted.to_polars(exponentiate=True)
 
         np.testing.assert_allclose(
-            out["conf_low"].to_numpy(), np.exp(plain["conf_low"].to_numpy()), rtol=0, atol=1e-12
+            out["lci"].to_numpy(), np.exp(plain["lci"].to_numpy()), rtol=0, atol=1e-12
         )
         ratio = out["odds_ratio"].to_numpy()
-        assert not np.allclose(ratio - out["conf_low"], out["conf_high"] - ratio)
+        assert not np.allclose(ratio - out["lci"], out["uci"] - ratio)
 
     def test_inference_columns_stay_on_the_link_scale(self, model):
         plain = model.fitted.to_polars()
         out = model.fitted.to_polars(exponentiate=True)
 
-        for col in ("std_err", "statistic", "p_value", "df"):
+        for col in ("se", "t", "p_value", "df"):
             np.testing.assert_array_equal(out[col].to_numpy(), plain[col].to_numpy())
 
     def test_column_is_named_for_the_link(self, api_binary):
@@ -175,5 +175,5 @@ class TestExponentiatedCoefficients:
         assert "20.56124" in text
 
     def test_default_is_unchanged(self, model):
-        assert "estimate" in model.fitted.to_polars().columns
+        assert "est" in model.fitted.to_polars().columns
         assert "Coef." in model.fitted.__plain_str__()

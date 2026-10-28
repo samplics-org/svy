@@ -1199,6 +1199,7 @@ class GLM:
             term_info=term_info,
             feature_names=feature_names,
             alpha=alpha,
+            variance="Taylor" if _rep is None else str(_rep.method),
             where_clause=format_where_clause(where),
             findings=tuple(findings),
         )
@@ -1402,6 +1403,7 @@ class GLM:
             df=df,
             residuals=residuals,
             alpha=alpha,
+            variance=self.fitted.variance,
         )
 
     def margins(
@@ -1571,9 +1573,9 @@ class GLM:
         """Build design matrix for prediction."""
         return self._build_term_matrix(new_data, fit, [c.term for c in fit.coefs])
 
-    def to_polars(self) -> pl.DataFrame:
-        """Export fitted coefficients to a Polars DataFrame."""
-        return self._ensure_fitted().to_polars()
+    def to_polars(self, *, exponentiate: bool = False) -> pl.DataFrame:
+        """The fitted coefficients, as ``GLMFit.to_polars()`` gives them."""
+        return self._ensure_fitted().to_polars(exponentiate=exponentiate)
 
     # =========================================================================
     # Helpers

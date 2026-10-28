@@ -26,6 +26,7 @@ import polars as pl
 
 from svy.errors import Code, EstimationError
 from svy.errors._api import guided_getattr
+from svy.estimation.estimate import with_settings
 from svy.ui.printing import (
     make_panel,
     render_plain_table,
@@ -378,9 +379,7 @@ class Contrast:
         return [c.to_dict() for c in self.estimates]
 
     def to_polars(self) -> pl.DataFrame:
-        if not self.estimates:
-            return pl.DataFrame()
-        return pl.from_dicts(self.to_dicts())
+        return contrast_frame(self)
 
     # --- Rendering (mirrors Estimate's plain/rich split) ---
 
@@ -671,3 +670,20 @@ def linear_contrast(
         for i, name in enumerate(named)
     ]
     return Contrast(rows, c_cov, alpha=alpha, df=float(df), method=method)
+
+
+_CONTRAST_KEYS = ("est", "se", "lci", "uci", "cv", "t", "df", "p_value")
+_CONTRAST_SCHEMA = {"contrast": pl.String, "y_var": pl.String} | dict.fromkeys(
+    _CONTRAST_KEYS, pl.Float64
+)
+
+
+def contrast_frame(r: Any) -> pl.DataFrame:
+    """The table of a ``Contrast``, shared with its serialized form (same field names)."""
+    rows = [
+        {"contrast": c.contrast, "y_var": r.y} | {k: float(getattr(c, k)) for k in _CONTRAST_KEYS}
+        for c in r.estimates
+    ]
+    df = pl.DataFrame(rows, schema=_CONTRAST_SCHEMA)
+    settings = {"param": r.param, "variance": r.method, "alpha": float(r.alpha)}
+    return with_settings(df, settings, where="Contrast.to_polars")

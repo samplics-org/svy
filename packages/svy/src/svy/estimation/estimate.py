@@ -57,6 +57,9 @@ _QUANTILE_PARAMS = (PopParam.QUANTILE, PopParam.MEDIAN)
 # Correlation and covariance rows are identified by their (y, x) pair.
 _ASSOC_PARAMS = (PopParam.CORR, PopParam.COV)
 _PAIR_COLS = ("y", "x")
+_IDENTITY_COLS = ("y_var", "x_var")
+# What follows an estimate's levels, in order; settings come last.
+_TAIL_COLS = (*_DECIMAL_KEYS, "df", "n", "param", "variance", "alpha")
 
 # Carried by to_polars() but kept out of the printed table: df is a per-row
 # value that is constant for most results, so a column would repeat one number
@@ -169,6 +172,26 @@ def _label_of(lab: VarLabels | None, raw: Any) -> str | None:
     return lab.values.get(raw, _display_level(raw)) if lab is not None else _display_level(raw)
 
 
+def result_column_clash(name: str, *, where: str) -> EstimationError:
+    return EstimationError.ValueError(
+        title="Variable clashes with a result column",
+        detail=f"Every row of this result carries '{name}', which is also a variable here.",
+        code=Code.RESULT_COLUMN_CLASH,
+        where=where,
+        hint="Rename the variable before the analysis.",
+    )
+
+
+def with_settings(df: pl.DataFrame, settings: Mapping[str, Any], *, where: str) -> pl.DataFrame:
+    """``df`` with each setting as a trailing column, the same on every row."""
+    for name in settings:
+        if name in df.columns:
+            raise result_column_clash(name, where=where)
+    return df.with_columns(
+        pl.lit(v, dtype=pl.String if v is None else None).alias(k) for k, v in settings.items()
+    )
+
+
 def with_label_columns(
     df: pl.DataFrame, labels: Mapping[str, VarLabels] | None, *, where: str
 ) -> pl.DataFrame:
@@ -200,6 +223,7 @@ def estimate_frame(
     display: bool = False,
     row_index: str | None = None,
     orders: Mapping[str, Sequence[Any]] | None = None,
+    settings: Mapping[str, Any] | None = None,
 ) -> pl.DataFrame:
     """The table of an estimate's rows, shared by ``Estimate`` and its serialized form.
 
@@ -248,12 +272,13 @@ def estimate_frame(
     pair_labelled = pair and any(
         labels.get(v) and labels[v].var_label for e in estimates for v in (e.y, e.x)
     )
-    if pair:
-        shown = (
-            [((labels[c].var_label if c in labels else "") or c) for c in names]
-            if display
-            else names
-        )
+    has_x = any(e.x is not None for e in estimates)
+    if not display:
+        taken = sorted(set(_IDENTITY_COLS) & set(names))
+        if taken:
+            raise result_column_clash(taken[0], where="Estimate.to_polars")
+    if pair and display:
+        shown = [((labels[c].var_label if c in labels else "") or c) for c in names]
         clash = sorted(set(_PAIR_COLS) & set(shown))
         if clash:
             from svy.errors import EstimationError
@@ -273,6 +298,13 @@ def estimate_frame(
     rows = []
     for pos, est in enumerate(estimates):
         r: dict[str, Any] = {_ROW_POS: pos}
+        if not display:
+            for col, var in zip(_IDENTITY_COLS, (est.y, est.x)):
+                if col == "x_var" and not has_x:
+                    continue
+                r[col] = var
+                if pair_labelled:
+                    r[f"{col}_label"] = (labels[var].var_label if var in labels else "") or var
         if show_prob and est.prob is not None:
             # Leading column, so quantiles read p → estimate left to right.
             r["prob"] = est.prob
@@ -282,22 +314,16 @@ def estimate_frame(
                 r[(lab.var_label if lab else "") or col] = _label_of(lab, raw)
                 continue
             r[col] = raw
-        if pair:
+        if pair and display:
             for col in _PAIR_COLS:
                 var = getattr(est, col)
-                var_label = labels[var].var_label if var in labels else ""
-                if display:
-                    r[col] = var_label or var
-                    continue
-                r[col] = var
-                if pair_labelled:
-                    r[f"{col}_label"] = var_label or var
+                r[col] = (labels[var].var_label if var in labels else "") or var
         for key in _DECIMAL_KEYS:
             val = getattr(est, key, None)
             if val is not None:
                 r[key] = val
         if est.df is not None:
-            r["df"] = est.df
+            r["df"] = float(est.df) if not display else est.df
         if est.n is not None:
             r["n"] = est.n
         rows.append(r)
@@ -309,7 +335,7 @@ def estimate_frame(
         # Pairs keep the order they were requested in within each domain.
         skip |= {*_PAIR_COLS, *(f"{c}_label" for c in _PAIR_COLS)}
     if not display:
-        skip |= {"df"}
+        skip |= {"df", *_IDENTITY_COLS, *(f"{c}_label" for c in _IDENTITY_COLS)}
     code_ranks = level_ranks(orders)
     if display:
         code_ranks |= _code_ranks(estimates, names, n_by, labelled - code_ranks.keys())
@@ -331,31 +357,20 @@ def estimate_frame(
     df = pl.from_dicts(rows)
     if not display:
         df = with_label_columns(df, {c: labels[c] for c in labelled}, where="Estimate.to_polars")
+        df = with_settings(df, settings or {}, where="Estimate.to_polars")
     if row_index:
         df = df.insert_column(0, pl.Series(row_index, order, dtype=pl.UInt32))
     return df
 
 
-def stack_estimate_frames(members: Sequence[tuple[str, str | None, pl.DataFrame]]) -> pl.DataFrame:
-    """Stack an estimate list's ``(y, x, frame)`` members, one row per estimate.
-
-    A leading ``y`` column is added when the members' variables differ, and an
-    ``x`` column when their denominators do, so every row stays identifiable.
-    """
-    frames = [(y, x, f) for y, x, f in members if not f.is_empty()]
+def stack_estimate_frames(frames: Sequence[pl.DataFrame]) -> pl.DataFrame:
+    """Stack an estimate list's member frames, one row per estimate, levels before the numbers."""
+    frames = [f for f in frames if not f.is_empty()]
     if not frames:
         return pl.DataFrame()
-    show_y = len({y for y, _, _ in frames}) > 1
-    show_x = len({x for _, x, _ in frames}) > 1
-    out = []
-    for y, x, f in frames:
-        lead = []
-        if show_y and "y" not in f.columns:
-            lead.append(pl.lit(y, dtype=pl.String).alias("y"))
-        if show_x and "x" not in f.columns:
-            lead.append(pl.lit(x, dtype=pl.String).alias("x"))
-        out.append(f.select(*lead, pl.all()) if lead else f)
-    return pl.concat(out, how="diagonal_relaxed")
+    df = pl.concat(frames, how="diagonal_relaxed")
+    tail = [c for c in _TAIL_COLS if c in df.columns]
+    return df.select(pl.exclude(tail), *tail)
 
 
 def _header_plain(lines: Sequence[tuple[str, str]]) -> list[str]:
@@ -678,7 +693,9 @@ class Estimate:
         """
         The estimates as a DataFrame, one row per estimate.
 
-        Levels keep their codes under the variable's name. With labels on,
+        Each row leads with its variable (``y_var``, and ``x_var`` for a ratio
+        or a pair) and ends with ``param``, ``variance`` and ``alpha``, so the
+        frame reads on its own. Levels keep their codes under the variable's name. With labels on,
         each variable that has value labels gets a ``<var>_label`` column
         next to it. With ``tidy=False``, ``by_level`` (and ``by_label``) is a
         struct keyed by variable, and ``y_level_label`` follows ``y_level``.
@@ -701,6 +718,11 @@ class Estimate:
             tidy=tidy,
             labels=self._labels() if resolve else None,
             orders=self.level_orders,
+            settings={
+                "param": str(self.param),
+                "variance": self.method,
+                "alpha": float(self.alpha),
+            },
         )
 
     def to_polars_printable(self, *, use_labels: bool | None = None) -> pl.DataFrame:
@@ -1207,17 +1229,8 @@ class EstimateList(list):
         )
 
     def to_polars(self, *, use_labels: bool | None = None) -> pl.DataFrame:
-        """Concatenate the members into one frame, one row per estimate.
-
-        Leads with ``y`` when the members' variables differ and ``x`` when
-        their denominators do, so each row names the estimate it came from.
-        """
-        return stack_estimate_frames(
-            [
-                (m.estimates[0].y, m.estimates[0].x, m.to_polars(use_labels=use_labels))
-                for m in self._members()
-            ]
-        )
+        """The members' frames stacked, one row per estimate; ``y_var`` names each row's variable."""
+        return stack_estimate_frames([m.to_polars(use_labels=use_labels) for m in self._members()])
 
     def _combined(self, *, use_labels: bool | None = None) -> pl.DataFrame:
         """The printable frame, with ``y`` and ``x`` columns added when they differ.

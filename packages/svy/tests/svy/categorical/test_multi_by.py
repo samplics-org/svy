@@ -103,7 +103,7 @@ def test_k_sample_frame_names_its_domain_with_one_by_variable(sample, tidy):
     else:
         assert df["by"].to_list() == ["a"] * len(A)
         assert sorted(df["by_level"].to_list()) == A
-    assert df.columns[0] == "y"
+    assert df.columns[0] == "y_var"
 
 
 @pytest.mark.parametrize("call", ["ttest_two", "ttest_one", "rank_two"])
@@ -112,7 +112,7 @@ def test_each_by_cell_equals_its_where_subset(sample, call):
     for a, b in _expected_levels(["a", "b"]):
         sub = CALLS[call](sample, None, where=(svy.col("a") == a) & (svy.col("b") == b))
         got = df.filter((pl.col("a") == a) & (pl.col("b") == b)).row(0, named=True)
-        assert math.isclose(got["diff"], sub.diff[0].diff, rel_tol=1e-12)
+        assert math.isclose(got["est"], sub.diff[0].diff, rel_tol=1e-12)
         assert math.isclose(got["se"], sub.diff[0].se, rel_tol=1e-12)
 
 

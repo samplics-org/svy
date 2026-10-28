@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Any, Callable, Literal
 
-import msgspec
 import polars as pl
 
 from svy.categorical.table import Table, table_frame
@@ -16,6 +15,7 @@ from svy.categorical.ttest import ttest_one_group_frame, ttest_two_groups_frame,
 from svy.core.containers import _chisq_frame
 from svy.core.describe import _describe_frame, _flatten_by
 from svy.errors._serialization import SerializationError
+from svy.estimation.contrast import contrast_frame
 from svy.estimation.estimate import (
     Estimate,
     VarLabels,
@@ -70,6 +70,7 @@ def _estimate(
         labels=_labels(d) if resolve else None,
         row_index=row_index,
         orders=d.level_orders,
+        settings={"param": d.param, "variance": d.method, "alpha": d.alpha},
     )
 
 
@@ -81,8 +82,7 @@ def _estimate_list(
         f = _estimate(m, row_index=row_index, use_labels=use_labels)
         if row_index and not f.is_empty():
             f = f.with_columns(pl.col(row_index) + offset)
-        if m.estimates:
-            members.append((m.estimates[0].y, m.estimates[0].x, f))
+        members.append(f)
         offset += len(m.estimates)
     df = stack_estimate_frames(members)
     return df.select(row_index, pl.exclude(row_index)) if row_index and not df.is_empty() else df
@@ -169,8 +169,7 @@ def _describe(d: DescribeResultData, *, row_index: str | None = None) -> pl.Data
 
 
 def _contrast(d: ContrastData, *, row_index: str | None = None) -> pl.DataFrame:
-    rows = [msgspec.structs.asdict(c) for c in d.estimates]
-    return _indexed(pl.from_dicts(rows) if rows else pl.DataFrame(), row_index)
+    return _indexed(contrast_frame(d), row_index)
 
 
 _TABLES: dict[type, Callable[..., pl.DataFrame]] = {

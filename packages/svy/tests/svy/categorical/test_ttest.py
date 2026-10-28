@@ -261,12 +261,38 @@ def test_ttest_one_sample_to_polars(synthetic_sample_df):
     # Test output (combined diff + stats) - default
     df = result.to_polars()
     assert df.shape[0] == 1
-    assert set(df.columns) == {"y", "diff", "se", "lci", "uci", "df", "t", "p_value"}
+    assert set(df.columns) == {
+        "y_var",
+        "est",
+        "se",
+        "lci",
+        "uci",
+        "t",
+        "df",
+        "p_value",
+        "alternative",
+        "mean_h0",
+        "variance",
+        "alpha",
+    }
 
     # Explicit "test" component - same as default
     df_test = result.to_polars("test")
     assert df_test.shape[0] == 1
-    assert set(df_test.columns) == {"y", "diff", "se", "lci", "uci", "df", "t", "p_value"}
+    assert set(df_test.columns) == {
+        "y_var",
+        "est",
+        "se",
+        "lci",
+        "uci",
+        "t",
+        "df",
+        "p_value",
+        "alternative",
+        "mean_h0",
+        "variance",
+        "alpha",
+    }
 
     # Estimates output (raw)
     df_est = result.to_polars("estimates")
@@ -286,10 +312,10 @@ def test_ttest_two_sample_to_polars(synthetic_sample_df):
     # Test output (combined diff + stats) - default
     df = result.to_polars()
     assert df.shape[0] == 1
-    assert "y" in df.columns
+    assert "y_var" in df.columns
     assert "group_var" in df.columns
     assert "paired" in df.columns
-    assert "diff" in df.columns
+    assert "est" in df.columns
     assert "t" in df.columns
     assert "p_value" in df.columns
 

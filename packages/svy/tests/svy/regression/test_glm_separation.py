@@ -491,13 +491,13 @@ def test_margins_keep_identified_standard_errors(sep_model):
     g = ame["g"].to_polars()
     assert np.isfinite(g["se"].to_numpy()).all()
     pm = sep_model.margins(at={"g": ["a", "b", "c"]}).to_polars()
-    by = dict(zip(pm["g"].to_list(), pm["margin"].to_list()))
+    by = dict(zip(pm["g"].to_list(), pm["est"].to_list()))
     se = dict(zip(pm["g"].to_list(), pm["se"].to_list()))
     assert by["c"] < 1e-6 and se["c"] < 1e-6
     assert np.isfinite(se["a"]) and se["a"] > 1e-3
     # c - a is minus a's margin, with its standard error.
     ca = g.filter(pl.col("contrast") == "c - a").row(0, named=True)
-    assert ca["margin"] == pytest.approx(-by["a"], abs=1e-6)
+    assert ca["est"] == pytest.approx(-by["a"], abs=1e-6)
     assert ca["se"] == pytest.approx(se["a"], rel=1e-6)
 
 
@@ -516,8 +516,8 @@ def test_delta_var():
 
 def test_to_polars_carries_nan(sep_model):
     row = sep_model.to_polars().filter(pl.col("term") == "g_c").row(0, named=True)
-    assert np.isfinite(row["estimate"])
-    for col in ("std_err", "conf_low", "conf_high", "statistic", "p_value"):
+    assert np.isfinite(row["est"])
+    for col in ("se", "lci", "uci", "t", "p_value"):
         assert np.isnan(row[col])
 
 

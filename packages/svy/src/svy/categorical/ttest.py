@@ -20,6 +20,7 @@ from svy.estimation.estimate import (
     _label_of,
     checked_print_width,
     with_label_columns,
+    with_settings,
 )
 
 # Import central UI helpers (consistent with estimate.py)
@@ -271,6 +272,7 @@ class TTestOneGroup(msgspec.Struct, tag="one", tag_field="kind", kw_only=True, f
     estimates: list[TtestEst] = field(default_factory=list)
     stats: TTestStats | None = None
     alpha: float = 0.05
+    variance: str = "Taylor"  # or the replicate method
     #: What the call found that bears on the result (e.g. DOMAIN_SINGLETON_PSU).
     findings: tuple[SvyWarning, ...] = ()
 
@@ -483,6 +485,7 @@ class TTestTwoGroups(msgspec.Struct, tag="two", tag_field="kind", kw_only=True, 
     estimates: list[TtestEst] = field(default_factory=list)
     stats: TTestStats | None = None
     alpha: float = 0.05
+    variance: str = "Taylor"  # or the replicate method
     #: What the call found that bears on the result (e.g. DOMAIN_SINGLETON_PSU).
     findings: tuple[SvyWarning, ...] = ()
 
@@ -684,6 +687,110 @@ class TTestTwoGroups(msgspec.Struct, tag="two", tag_field="kind", kw_only=True, 
         return msgspec.structs.replace(self, findings=merge_findings(self.findings, found))
 
 
+_TEST_COLS = ("est", "se", "lci", "uci", "t", "df", "p_value")
+_ESTIMATE_COLS = ("est", "se", "lci", "uci", "cv", "n")
+
+
+def diff_rows(
+    diffs: Sequence[Any], stats: tuple[Any, Any, Any] | None, *, group_var: str | None, tidy: bool
+) -> list[dict[str, Any]]:
+    """A test's rows: its variables, its domain, the difference and ``(t, df, p_value)``."""
+    t, df, p_value = stats if stats is not None else (None, None, None)
+    rows = []
+    for d in diffs:
+        row: dict[str, Any] = {"y_var": d.y}
+        if group_var is not None:
+            row["group_var"] = group_var
+        if d.by is not None and tidy:
+            row.update(by_cells(d.by, d.by_level))
+        elif d.by is not None:
+            row["by"], row["by_level"] = untidy_by(d.by, d.by_level)
+        row |= {"est": d.diff, "se": d.se, "lci": d.lci, "uci": d.uci}
+        row |= {"t": t, "df": None if df is None else float(df), "p_value": p_value}
+        rows.append(row)
+    return rows
+
+
+def numbers_frame(
+    rows: list[dict[str, Any]], numbers: Sequence[str], *, group: bool
+) -> pl.DataFrame:
+    """``rows`` as a frame, numbers as Float64; the typed empty frame when there are none."""
+    import polars as pl
+
+    if not rows:
+        lead = ["y_var", "group_var"] if group else ["y_var"]
+        return pl.DataFrame(
+            schema=dict.fromkeys(lead, pl.String) | dict.fromkeys(numbers, pl.Float64)
+        )
+    df = pl.DataFrame(rows)
+    return df.with_columns(pl.col(c).cast(pl.Int64 if c == "n" else pl.Float64) for c in numbers)
+
+
+def _estimate_rows(estimates: Sequence[Any], *, tidy: bool) -> list[dict[str, Any]]:
+    if not tidy:
+        return untidy_records(estimates)
+    rows = []
+    for e in estimates:
+        row: dict[str, Any] = {"y_var": e.y}
+        if e.by is not None:
+            row.update(by_cells(e.by, e.by_level))
+        if e.group is not None:
+            row[e.group] = e.group_level
+        if e.y_level is not None:
+            row[e.y] = e.y_level
+        rows.append(row | {k: getattr(e, k) for k in _ESTIMATE_COLS})
+    return rows
+
+
+def _group_labels(groups: Any) -> dict[str, VarLabels]:
+    """The group's level labels in the shape frames take; empty when it has none."""
+    labels = getattr(groups, "labels", None)
+    if groups is None or labels is None:
+        return {}
+    return {groups.var: VarLabels("", dict(zip(groups.levels, labels)))}
+
+
+def _ttest_frame(
+    r: Any,
+    component: str,
+    *,
+    tidy: bool,
+    settings: Mapping[str, Any],
+    groups: Any = None,
+    use_labels: bool = True,
+) -> pl.DataFrame:
+    if component not in ("test", "estimates"):
+        raise EstimationError.invalid_choice(
+            where="to_polars", param="component", got=component, allowed=["test", "estimates"]
+        )
+    import polars as pl
+
+    labels = _group_labels(groups) if use_labels else {}
+    if component == "test":
+        stats = (r.stats.t, r.stats.df, r.stats.p_value) if r.stats is not None else None
+        group_var = groups.var if groups is not None else None
+        rows = diff_rows(r.diff, stats, group_var=group_var, tidy=tidy)
+        df = numbers_frame(rows, _TEST_COLS, group=group_var is not None)
+    else:
+        df = numbers_frame(_estimate_rows(r.estimates, tidy=tidy), _ESTIMATE_COLS, group=False)
+        if not tidy:
+            # Unused fields of the raw rows: no domain, no group, a numeric y.
+            for cols in (("by", "by_level"), ("group", "group_level"), ("y_level",)):
+                if cols[0] in df.columns and df[cols[0]].is_null().all():
+                    df = df.drop(*cols)
+        if tidy:
+            df = with_label_columns(df, labels, where="to_polars")
+        elif labels and "group_level" in df.columns:
+            (lab,) = labels.values()
+            values = [_label_of(lab, v) for v in df["group_level"].to_list()]
+            df = df.insert_column(
+                df.get_column_index("group_level") + 1, pl.Series("group_level_label", values)
+            )
+    if component == "estimates":
+        settings = {k: settings[k] for k in ("variance", "alpha")}
+    return with_settings(df, settings, where="to_polars")
+
+
 def ttest_one_group_frame(
     r: Any,
     component: Literal["test", "estimates"] = "test",
@@ -691,93 +798,13 @@ def ttest_one_group_frame(
     tidy: bool = True,
 ) -> pl.DataFrame:
     """The table of a ``TTestOneGroup``, shared with its serialized form (same field names)."""
-    import polars as pl
-
-    if component == "test":
-        if not r.diff:
-            return pl.DataFrame(
-                schema={
-                    "y": pl.Utf8,
-                    "diff": pl.Float64,
-                    "se": pl.Float64,
-                    "lci": pl.Float64,
-                    "uci": pl.Float64,
-                    "t": pl.Float64,
-                    "df": pl.Float64,
-                    "p_value": pl.Float64,
-                }
-            )
-
-        rows: list[dict[str, Any]] = []
-        for d in r.diff:
-            row: dict[str, Any] = {"y": d.y}
-            if d.by is not None:
-                if tidy:
-                    row.update(by_cells(d.by, d.by_level))
-                else:
-                    row["by"], row["by_level"] = untidy_by(d.by, d.by_level)
-            row.update({"diff": d.diff, "se": d.se, "lci": d.lci, "uci": d.uci})
-            if r.stats is not None:
-                row["t"] = r.stats.t
-                row["df"] = float(r.stats.df)
-                row["p_value"] = r.stats.p_value
-            rows.append(row)
-
-        df = pl.DataFrame(rows)
-        if not tidy and "by" in df.columns and df["by"].is_null().all():
-            df = df.drop("by", "by_level")
-        return df
-
-    elif component == "estimates":
-        if not r.estimates:
-            return pl.DataFrame(
-                schema={
-                    "y": pl.Utf8,
-                    "est": pl.Float64,
-                    "se": pl.Float64,
-                    "cv": pl.Float64,
-                    "lci": pl.Float64,
-                    "uci": pl.Float64,
-                }
-            )
-
-        if not tidy:
-            df = pl.DataFrame(untidy_records(r.estimates))
-            for col_pair in [("by", "by_level"), ("group", "group_level")]:
-                if col_pair[0] in df.columns and df[col_pair[0]].is_null().all():
-                    df = df.drop(*col_pair)
-            if "y_level" in df.columns and df["y_level"].is_null().all():
-                df = df.drop("y_level")
-            return df
-
-        # tidy=True: promote group/by/y to named columns
-        rows = []
-        for e in r.estimates:
-            row: dict[str, Any] = {}
-            if e.by is not None:
-                row.update(by_cells(e.by, e.by_level))
-            if e.group is not None:
-                row[e.group] = e.group_level
-            if e.y_level is not None:
-                row[e.y] = e.y_level
-            row.update(
-                {
-                    "est": e.est,
-                    "se": e.se,
-                    "cv": e.cv,
-                    "lci": e.lci,
-                    "uci": e.uci,
-                }
-            )
-            if e.n is not None:
-                row["n"] = e.n
-            rows.append(row)
-        return pl.DataFrame(rows)
-
-    else:
-        raise EstimationError.invalid_choice(
-            where="to_polars", param="component", got=component, allowed=["test", "estimates"]
-        )
+    settings = {
+        "alternative": r.alternative,
+        "mean_h0": float(r.mean_h0),
+        "variance": r.variance,
+        "alpha": float(r.alpha),
+    }
+    return _ttest_frame(r, component, tidy=tidy, settings=settings)
 
 
 def ttest_two_groups_frame(
@@ -788,116 +815,15 @@ def ttest_two_groups_frame(
     use_labels: bool = True,
 ) -> pl.DataFrame:
     """The table of a ``TTestTwoGroups``, shared with its serialized form (same field names)."""
-    import polars as pl
-
-    if component == "test":
-        if not r.diff:
-            return pl.DataFrame(
-                schema={
-                    "y": pl.Utf8,
-                    "group_var": pl.Utf8,
-                    "paired": pl.Boolean,
-                    "diff": pl.Float64,
-                    "se": pl.Float64,
-                    "lci": pl.Float64,
-                    "uci": pl.Float64,
-                    "t": pl.Float64,
-                    "df": pl.Float64,
-                    "p_value": pl.Float64,
-                }
-            )
-
-        rows: list[dict[str, Any]] = []
-        for d in r.diff:
-            row: dict[str, Any] = {"y": d.y}
-            if d.by is not None:
-                if tidy:
-                    row.update(by_cells(d.by, d.by_level))
-                else:
-                    row["by"], row["by_level"] = untidy_by(d.by, d.by_level)
-            row.update(
-                {
-                    "group_var": r.groups.var,
-                    "paired": r.paired,
-                    "diff": d.diff,
-                    "se": d.se,
-                    "lci": d.lci,
-                    "uci": d.uci,
-                }
-            )
-            if r.stats is not None:
-                row["t"] = r.stats.t
-                row["df"] = float(r.stats.df)
-                row["p_value"] = r.stats.p_value
-            rows.append(row)
-
-        df = pl.DataFrame(rows)
-        if not tidy and "by" in df.columns and df["by"].is_null().all():
-            df = df.drop("by", "by_level")
-        return df
-
-    elif component == "estimates":
-        if not r.estimates:
-            return pl.DataFrame(
-                schema={
-                    "y": pl.Utf8,
-                    "group": pl.Utf8,
-                    "group_level": pl.Utf8,
-                    "est": pl.Float64,
-                    "se": pl.Float64,
-                    "cv": pl.Float64,
-                    "lci": pl.Float64,
-                    "uci": pl.Float64,
-                }
-            )
-
-        labels = getattr(r.groups, "labels", None) if use_labels else None
-        if not tidy:
-            df = pl.DataFrame(untidy_records(r.estimates))
-            if "by" in df.columns and df["by"].is_null().all():
-                df = df.drop("by", "by_level")
-            if "y_level" in df.columns and df["y_level"].is_null().all():
-                df = df.drop("y_level")
-            if labels is not None:
-                df = df.with_columns(
-                    pl.Series(
-                        "group_level_label",
-                        [r.groups.label_of(e.group_level) for e in r.estimates],
-                    )
-                )
-            return df
-
-        # tidy=True: promote group/by/y to named columns
-        rows = []
-        for e in r.estimates:
-            row: dict[str, Any] = {}
-            if e.by is not None:
-                row.update(by_cells(e.by, e.by_level))
-            # group is always present for two-sample
-            if e.group is not None:
-                row[e.group] = e.group_level
-                if labels is not None:
-                    row[f"{e.group}_label"] = r.groups.label_of(e.group_level)
-            if e.y_level is not None:
-                row[e.y] = e.y_level
-            row.update(
-                {
-                    "est": e.est,
-                    "se": e.se,
-                    "cv": e.cv,
-                    "lci": e.lci,
-                    "uci": e.uci,
-                }
-            )
-            if e.n is not None:
-                row["n"] = e.n
-            rows.append(row)
-        return pl.DataFrame(rows)
-
-    else:
-        raise EstimationError.invalid_choice(
-            where="to_polars", param="component", got=component, allowed=["test", "estimates"]
-        )
+    settings = {
+        "alternative": r.alternative,
+        "paired": bool(r.paired),
+        "variance": r.variance,
+        "alpha": float(r.alpha),
+    }
+    return _ttest_frame(
+        r, component, tidy=tidy, settings=settings, groups=r.groups, use_labels=use_labels
+    )
 
 
 def _where_arg_to_str(where) -> str | None:

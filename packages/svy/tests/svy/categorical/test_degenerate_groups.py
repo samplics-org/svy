@@ -77,13 +77,13 @@ def test_tabulate_with_one_row_level_has_no_test():
 # R survey 4.5: d <- svydesign(ids=~p, strata=~s, weights=~w, data=df); sub <- subset(d, s == "2")
 #   svyttest(y ~ 0, sub); svyttest(y ~ g, sub)
 _R_ONE = {
-    "diff": 4.8235294117647056,
+    "est": 4.8235294117647056,
     "t": 5.1968638444836097,
     "df": 4.0,
     "p_value": 0.0065301862359392927,
 }
 _R_TWO = {
-    "diff": 0.13888888888888948,
+    "est": 0.13888888888888948,
     "t": 0.075635630802096981,
     "df": 4.0,
     "p_value": 0.94334078371936436,
@@ -95,7 +95,7 @@ def test_ttest_zero_weight_by_group_is_a_nan_row(group, golden):
     out = _sample().categorical.ttest(y="y", group=group, by="s").to_polars()
 
     empty = _row(out, "1")
-    assert all(math.isnan(empty[k]) for k in ("diff", "se", "t", "df", "p_value"))
+    assert all(math.isnan(empty[k]) for k in ("est", "se", "t", "df", "p_value"))
     other = _row(out, "2")
     assert {k: other[k] for k in golden} == pytest.approx(golden, rel=1e-12)
 

@@ -34,14 +34,15 @@ def labelled(sample) -> Sample:
 
 
 def _pairs(df: pl.DataFrame) -> list[tuple[str, str]]:
-    return list(zip(df["y"], df["x"]))
+    y, x = ("y_var", "x_var") if "y_var" in df.columns else ("y", "x")  # data or printed view
+    return list(zip(df[y], df[x]))
 
 
 @pytest.mark.parametrize("verb", ["corr", "cov"])
 def test_frame_leads_with_the_pair(sample, verb):
     r = getattr(sample.estimation, verb)(COLS)
     df = r.to_polars()
-    assert df.columns[:3] == ["y", "x", "est"]
+    assert df.columns[:3] == ["y_var", "x_var", "est"]
     assert _pairs(df) == PAIRS
     assert df["est"].to_list() == [p.est for p in r.estimates]
 
@@ -53,11 +54,13 @@ def test_single_pair_is_named(sample):
 
 def test_pairs_follow_the_domain_in_request_order(sample):
     r = sample.estimation.corr(COLS, by="stype")
-    for df in (r.to_polars(), r.to_polars_printable()):
-        assert df.columns[:3] == ["stype", "y", "x"]
-        assert list(zip(df["stype"], df["y"], df["x"])) == [
-            (g, y, x) for g in "EHM" for y, x in PAIRS
-        ]
+    wanted = [(g, y, x) for g in "EHM" for y, x in PAIRS]
+    df = r.to_polars()
+    assert df.columns[:3] == ["y_var", "x_var", "stype"]
+    assert list(zip(df["stype"], df["y_var"], df["x_var"])) == wanted
+    df = r.to_polars_printable()
+    assert df.columns[:3] == ["stype", "y", "x"]
+    assert list(zip(df["stype"], df["y"], df["x"])) == wanted
 
 
 def test_pairs_are_not_sorted_alphabetically(sample):
@@ -87,14 +90,15 @@ def test_display_uses_variable_labels(labelled):
 
 def test_data_view_adds_pair_label_columns(labelled):
     df = labelled.estimation.corr(COLS).to_polars()
-    assert df.columns[:4] == ["y", "y_label", "x", "x_label"]
+    assert df.columns[:4] == ["y_var", "y_var_label", "x_var", "x_var_label"]
     assert _pairs(df) == PAIRS
-    assert df["y_label"].to_list() == ["API 2000", "API 2000", "api99"]
-    assert "y_label" not in labelled.estimation.corr(COLS).to_polars(use_labels=False).columns
+    assert df["y_var_label"].to_list() == ["API 2000", "API 2000", "api99"]
+    off = labelled.estimation.corr(COLS).to_polars(use_labels=False)
+    assert "y_var_label" not in off.columns
 
 
 def test_no_pair_label_columns_without_variable_labels(sample):
-    assert sample.estimation.corr(COLS).to_polars().columns[:3] == ["y", "x", "est"]
+    assert sample.estimation.corr(COLS).to_polars().columns[:3] == ["y_var", "x_var", "est"]
 
 
 @pytest.mark.parametrize("use_labels", [True, False])
@@ -105,11 +109,11 @@ def test_saved_frame_matches_the_live_frame(labelled, use_labels, by):
     assert_frame_equal(to_polars(back, use_labels=use_labels), r.to_polars(use_labels=use_labels))
 
 
-def test_domain_named_like_a_pair_column_raises(sample):
+def test_domain_named_like_a_printed_pair_column_raises(sample):
     s = sample.wrangling.rename_columns({"stype": "x"})
     r = s.estimation.corr(COLS, by="x")
     with pytest.raises(EstimationError) as exc:
-        r.to_polars()
+        r.to_polars_printable()
     assert exc.value.code == "PAIR_COLUMN_CLASH"
 
 

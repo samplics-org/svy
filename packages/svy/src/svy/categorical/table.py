@@ -31,7 +31,12 @@ from svy.errors import Code, EstimationError
 from svy.errors._api import guided_getattr
 from svy.errors._findings import merge_findings
 from svy.estimation import ParamEst
-from svy.estimation.estimate import VarLabels, checked_print_width, with_label_columns
+from svy.estimation.estimate import (
+    VarLabels,
+    checked_print_width,
+    with_label_columns,
+    with_settings,
+)
 
 # Import central UI helpers (consistent with estimate.py and ttest.py)
 from svy.ui.printing import (
@@ -183,6 +188,7 @@ _TBL_SLOTS: tuple[str, ...] = (
     "findings",
     "share_of",
     "units",
+    "variance",
     "_frozen",
     # presentation-only fields (mutable through properties)
     "_decimals",
@@ -214,6 +220,7 @@ class Table:
     colvals: Sequence[Category] | None
     share_of: Literal["total", "row", "col"]  # what each cell is a share of
     units: Literal["proportion", "percent", "count"]
+    variance: str  # "Taylor", or the replicate method
     _frozen: bool
     _decimals: int | dict[str, int] | None
     _print_width: int | None
@@ -235,6 +242,7 @@ class Table:
         findings: Sequence[SvyWarning] = (),
         share_of: Literal["total", "row", "col"] = "total",
         units: Literal["proportion", "percent", "count"] = "proportion",
+        variance: str = "Taylor",
     ) -> None:
         if not (0.0 < float(alpha) < 1.0):
             raise EstimationError.invalid_range(
@@ -275,6 +283,7 @@ class Table:
         object.__setattr__(self, "findings", tuple(findings))
         object.__setattr__(self, "share_of", share_of)
         object.__setattr__(self, "units", units)
+        object.__setattr__(self, "variance", variance)
         # presentation defaults (mutable through properties even when frozen)
         object.__setattr__(self, "_decimals", None)
         object.__setattr__(self, "_print_width", None)
@@ -715,6 +724,7 @@ class Table:
             findings=_pick(self.findings, findings),
             share_of=self.share_of,
             units=self.units,
+            variance=self.variance,
         )
 
     def update(self, **kw) -> Self:
@@ -1177,23 +1187,21 @@ def table_frame(
     r: Any, *, tidy: bool = True, labels: Mapping[str, VarLabels] | None = None
 ) -> pl.DataFrame:
     """The table of a ``Table``, shared with its serialized form (same field names)."""
-    meta = {"table_type": _enum_label(r.type), "alpha": r.alpha}
-    df = pl.DataFrame([{f: getattr(c, f) for f in _CELL_FIELDS} | meta for c in r.estimates or []])
-    drop_cols = [c for c in ("cv", "deff") if c in df.columns]
-    if "n" in df.columns and df["n"].null_count() == df.height:
-        drop_cols.append("n")
-    if drop_cols:
-        df = df.drop(drop_cols)
-    if not tidy:
-        return df
-    for col, values in (("rowvar", r.rowvals), ("colvar", r.colvals)):
-        if values and col in df.columns:
-            # Cells spell their levels as text; the table's levels hold the values.
-            source = {_level_text(v): v for v in values}
-            df = df.with_columns(pl.Series(col, [source.get(t, t) for t in df[col].to_list()]))
-    rename = {"rowvar": r.rowvar}
-    if r.colvar is not None and "colvar" in df.columns:
-        rename["colvar"] = r.colvar
-    elif "colvar" in df.columns:
+    if not r.estimates:
+        return pl.DataFrame()
+    cols = ("rowvar", "colvar", "est", "se", "lci", "uci", "cv", "n")
+    df = pl.DataFrame([{f: getattr(c, f) for f in cols} for c in r.estimates])
+    if r.colvar is None:
         df = df.drop("colvar")
-    return with_label_columns(df.rename(rename), labels, where="Table.to_polars")
+    if df["n"].null_count() == df.height:  # a payload saved before cells carried n
+        df = df.drop("n")
+    if tidy:
+        for col, values in (("rowvar", r.rowvals), ("colvar", r.colvals)):
+            if values and col in df.columns:
+                # Cells spell their levels as text; the table's levels hold the values.
+                source = {_level_text(v): v for v in values}
+                df = df.with_columns(pl.Series(col, [source.get(t, t) for t in df[col].to_list()]))
+        df = df.rename({"rowvar": r.rowvar} | ({"colvar": r.colvar} if r.colvar else {}))
+        df = with_label_columns(df, labels, where="Table.to_polars")
+    settings = {"share_of": r.share_of, "units": r.units, "variance": r.variance, "alpha": r.alpha}
+    return with_settings(df, settings, where="Table.to_polars")
