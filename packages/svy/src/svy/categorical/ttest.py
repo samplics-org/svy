@@ -80,11 +80,9 @@ def by_cells(by: str | Sequence[str], by_level: Any) -> list[tuple[str, Any]]:
     return list(zip(by, by_level))
 
 
-def untidy_by(by: str | Sequence[str], by_level: Any) -> tuple[Any, Any]:
-    """``by`` and ``by_level`` of an untidy row; several levels go in a struct keyed by variable."""
-    if isinstance(by, str):
-        return by, by_level
-    return list(by), dict(by_cells(by, by_level))
+def untidy_by(by: str | Sequence[str], by_level: Any) -> tuple[list[str], dict[str, Any]]:
+    """``by`` and ``by_level`` of an untidy row, as an estimate's: names, levels keyed by variable."""
+    return ([by] if isinstance(by, str) else list(by)), dict(by_cells(by, by_level))
 
 
 def with_by_labels(
@@ -105,8 +103,6 @@ def with_by_labels(
         return df
     values = [
         {v: _label_of(labels.get(v), x) for v, x in level.items()}
-        if isinstance(level, dict)
-        else _label_of(labels.get(by_vars[0]), level)
         for level in df.get_column("by_level").to_list()
     ]
     return df.insert_column(df.get_column_index("by_level") + 1, pl.Series("by_label", values))
@@ -116,7 +112,7 @@ def untidy_records(estimates: Sequence[Any]) -> list[dict[str, Any]]:
     """Estimate rows as records, their ``by`` as an untidy row has it."""
     recs = msgspec.to_builtins(estimates)
     for rec, e in zip(recs, estimates):
-        if e.by is not None and not isinstance(e.by, str):
+        if e.by is not None:
             rec["by"], rec["by_level"] = untidy_by(e.by, e.by_level)
     return recs
 

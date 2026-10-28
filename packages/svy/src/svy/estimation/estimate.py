@@ -58,6 +58,11 @@ _QUANTILE_PARAMS = (PopParam.QUANTILE, PopParam.MEDIAN)
 _ASSOC_PARAMS = (PopParam.CORR, PopParam.COV)
 _PAIR_COLS = ("y", "x")
 _IDENTITY_COLS = ("y_var", "x_var")
+_EMPTY_SCHEMA = (
+    {"y_var": pl.String}
+    | dict.fromkeys(("est", "se", "lci", "uci", "cv", "df"), pl.Float64)
+    | {"n": pl.Int64}
+)
 # What follows an estimate's levels, in order; settings come last.
 _TAIL_COLS = (*_DECIMAL_KEYS, "df", "n", "param", "variance", "alpha")
 
@@ -240,7 +245,12 @@ def estimate_frame(
     column holding each row's position in ``estimates``.
     """
     if not estimates:
-        return pl.DataFrame()
+        if display or not tidy:
+            return pl.DataFrame()
+        # An empty result has no levels to type, but its numbers and settings are known.
+        df = pl.DataFrame(schema=_EMPTY_SCHEMA)
+        df = with_settings(df, settings or {}, where="Estimate.to_polars")
+        return df.insert_column(0, pl.Series(row_index, [], pl.UInt32)) if row_index else df
     labels = labels or {}
     first = estimates[0]
     n_by = len(first.by) if first.by else 0

@@ -1187,13 +1187,19 @@ def table_frame(
     r: Any, *, tidy: bool = True, labels: Mapping[str, VarLabels] | None = None
 ) -> pl.DataFrame:
     """The table of a ``Table``, shared with its serialized form (same field names)."""
-    if not r.estimates:
-        return pl.DataFrame()
     cols = ("rowvar", "colvar", "est", "se", "lci", "uci", "cv", "n")
-    df = pl.DataFrame([{f: getattr(c, f) for f in cols} for c in r.estimates])
+    if r.estimates:
+        df = pl.DataFrame([{f: getattr(c, f) for f in cols} for c in r.estimates])
+    else:
+        # No levels to type: the level columns are Null.
+        df = pl.DataFrame(
+            schema=dict.fromkeys(cols[:2], pl.Null)
+            | dict.fromkeys(cols[2:7], pl.Float64)
+            | {"n": pl.Int64}
+        )
     if r.colvar is None:
         df = df.drop("colvar")
-    if df["n"].null_count() == df.height:  # a payload saved before cells carried n
+    if r.estimates and df["n"].null_count() == df.height:  # a payload saved before cells carried n
         df = df.drop("n")
     if tidy:
         for col, values in (("rowvar", r.rowvals), ("colvar", r.colvals)):

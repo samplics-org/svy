@@ -101,8 +101,8 @@ def test_k_sample_frame_names_its_domain_with_one_by_variable(sample, tidy):
         assert df.schema["a"] == pl.Int64
         assert sorted(df["a"].to_list()) == A
     else:
-        assert df["by"].to_list() == ["a"] * len(A)
-        assert sorted(df["by_level"].to_list()) == A
+        assert df["by"].to_list() == [["a"]] * len(A)
+        assert sorted(lv["a"] for lv in df["by_level"].to_list()) == A
     assert df.columns[0] == "y_var"
 
 
