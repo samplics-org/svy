@@ -1,22 +1,19 @@
 // native/svyreadstat_rs/src/spss_read.rs
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
 use std::collections::HashMap;
-use std::ffi::CString;
 use std::os::raw::c_void;
 
 use readstat_sys::{
-    readstat_error_e_READSTAT_ERROR_USER_ABORT as RS_USER_ABORT,
-    readstat_error_e_READSTAT_OK as RS_OK, readstat_parse_por, readstat_parse_sav,
-    readstat_parser_free, readstat_parser_init, readstat_set_error_handler,
-    readstat_set_metadata_handler, readstat_set_value_handler, readstat_set_value_label_handler,
-    readstat_set_variable_handler,
+    readstat_parse_por, readstat_parse_sav, readstat_parser_free, readstat_parser_init,
+    readstat_set_error_handler, readstat_set_metadata_handler, readstat_set_value_handler,
+    readstat_set_value_label_handler, readstat_set_variable_handler,
 };
 
 use crate::core::{
-    ParseCtx, finalize_to_ipc, on_error_cb, on_metadata_cb, on_value_cb, on_value_label_cb,
-    on_variable_cb,
+    ParseCtx, check_parse, finalize_to_ipc, on_error_cb, on_metadata_cb, on_value_cb,
+    on_value_label_cb, on_variable_cb,
 };
+use crate::errors::{Error, Op, Result};
 
 /// Parse SPSS .sav file
 #[pyfunction]
@@ -36,16 +33,8 @@ pub fn df_parse_sav_file(
     let result =
         py.detach(|| parse_sav_impl(path, encoding, cols_skip, n_max, rows_skip, lossy_utf8));
 
-    let (ipc, meta) = result?;
-    let meta_json = serde_json::to_string(&meta).map_err(|e| {
-        pyo3::exceptions::PyRuntimeError::new_err(format!("JSON serialize metadata: {e}"))
-    })?;
-    let pybytes = PyBytes::new(py, &ipc)
-        .into_pyobject(py)
-        .unwrap()
-        .into_any()
-        .unbind();
-    Ok((pybytes, meta_json))
+    let (ipc, meta) = result.map_err(|e| e.into_py(Op::Read, "SAV", path))?;
+    crate::core::to_python(py, &ipc, &meta, "SAV", path)
 }
 
 /// Parse SPSS portable (.por) file
@@ -66,16 +55,8 @@ pub fn df_parse_por_file(
     let result =
         py.detach(|| parse_por_impl(path, encoding, cols_skip, n_max, rows_skip, lossy_utf8));
 
-    let (ipc, meta) = result?;
-    let meta_json = serde_json::to_string(&meta).map_err(|e| {
-        pyo3::exceptions::PyRuntimeError::new_err(format!("JSON serialize metadata: {e}"))
-    })?;
-    let pybytes = PyBytes::new(py, &ipc)
-        .into_pyobject(py)
-        .unwrap()
-        .into_any()
-        .unbind();
-    Ok((pybytes, meta_json))
+    let (ipc, meta) = result.map_err(|e| e.into_py(Op::Read, "POR", path))?;
+    crate::core::to_python(py, &ipc, &meta, "POR", path)
 }
 
 /// Internal implementation for parsing .sav files
@@ -87,7 +68,7 @@ fn parse_sav_impl(
     n_max: Option<usize>,
     rows_skip: usize,
     lossy_utf8: bool,
-) -> PyResult<(Vec<u8>, crate::core::MetaOut)> {
+) -> Result<(Vec<u8>, crate::core::MetaOut)> {
     // Pre-calculate skip set for O(1) lookup
     let cols_skip_map = cols_skip.map(|v| {
         let mut map = HashMap::with_capacity(v.len());
@@ -99,7 +80,7 @@ fn parse_sav_impl(
 
     let mut ctx = ParseCtx {
         cols: Vec::with_capacity(128), // SPSS files often have many columns
-        name_to_idx: HashMap::with_capacity(128),
+        var_cols: Vec::with_capacity(128),
         cols_skip: cols_skip_map,
         rows_skip,
         n_max,
@@ -119,14 +100,11 @@ fn parse_sav_impl(
     };
 
     // Before the parser exists, so a bad path cannot return without freeing it.
-    let cpath = CString::new(path)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid path: {e}")))?;
+    let cpath = crate::core::c_path(path)?;
     unsafe {
         let p = readstat_parser_init();
         if p.is_null() {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "readstat_parser_init() failed",
-            ));
+            return Err(Error::Internal("readstat_parser_init() failed".into()));
         }
 
         readstat_set_error_handler(p, Some(on_error_cb));
@@ -138,36 +116,18 @@ fn parse_sav_impl(
         let enc = crate::core::input_encoding(encoding, lossy_utf8);
         let _keep_enc = match crate::core::configure_parser(p, enc, rows_skip, n_max) {
             Ok(k) => k,
-            Err(msg) => {
+            Err(e) => {
                 readstat_parser_free(p);
-                return Err(pyo3::exceptions::PyValueError::new_err(msg));
+                return Err(e);
             }
         };
 
         let rc = readstat_parse_sav(p, cpath.as_ptr(), &mut ctx as *mut _ as *mut c_void);
         readstat_parser_free(p);
-
-        // A panic caught inside a handler callback is an internal error.
-        if let Some(msg) = ctx.panic_err.take() {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-                "internal error in readstat callback: {msg}"
-            )));
-        }
-
-        let early_ok = ctx
-            .n_max
-            .map(|nm| ctx.n_rows_emitted >= nm)
-            .unwrap_or(false);
-        if rc != RS_OK && !early_ok && rc != RS_USER_ABORT {
-            let msg = crate::core::parse_failure(rc, ctx.last_err.take());
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-                "Failed to parse SAV: {msg}"
-            )));
-        }
+        check_parse(rc, &mut ctx, path, encoding)?;
     }
 
     finalize_to_ipc(ctx)
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("finalize_to_ipc: {e}")))
 }
 
 /// Internal implementation for parsing .por files
@@ -179,7 +139,7 @@ fn parse_por_impl(
     n_max: Option<usize>,
     rows_skip: usize,
     lossy_utf8: bool,
-) -> PyResult<(Vec<u8>, crate::core::MetaOut)> {
+) -> Result<(Vec<u8>, crate::core::MetaOut)> {
     // Pre-calculate skip set for O(1) lookup
     let cols_skip_map = cols_skip.map(|v| {
         let mut map = HashMap::with_capacity(v.len());
@@ -191,7 +151,7 @@ fn parse_por_impl(
 
     let mut ctx = ParseCtx {
         cols: Vec::with_capacity(128), // SPSS files often have many columns
-        name_to_idx: HashMap::with_capacity(128),
+        var_cols: Vec::with_capacity(128),
         cols_skip: cols_skip_map,
         rows_skip,
         n_max,
@@ -211,14 +171,11 @@ fn parse_por_impl(
     };
 
     // Before the parser exists, so a bad path cannot return without freeing it.
-    let cpath = CString::new(path)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid path: {e}")))?;
+    let cpath = crate::core::c_path(path)?;
     unsafe {
         let p = readstat_parser_init();
         if p.is_null() {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "readstat_parser_init() failed",
-            ));
+            return Err(Error::Internal("readstat_parser_init() failed".into()));
         }
 
         readstat_set_error_handler(p, Some(on_error_cb));
@@ -230,34 +187,35 @@ fn parse_por_impl(
         let enc = crate::core::input_encoding(encoding, lossy_utf8);
         let _keep_enc = match crate::core::configure_parser(p, enc, rows_skip, n_max) {
             Ok(k) => k,
-            Err(msg) => {
+            Err(e) => {
                 readstat_parser_free(p);
-                return Err(pyo3::exceptions::PyValueError::new_err(msg));
+                return Err(e);
             }
         };
 
         let rc = readstat_parse_por(p, cpath.as_ptr(), &mut ctx as *mut _ as *mut c_void);
         readstat_parser_free(p);
-
-        // A panic caught inside a handler callback is an internal error.
-        if let Some(msg) = ctx.panic_err.take() {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-                "internal error in readstat callback: {msg}"
-            )));
-        }
-
-        let early_ok = ctx
-            .n_max
-            .map(|nm| ctx.n_rows_emitted >= nm)
-            .unwrap_or(false);
-        if rc != RS_OK && !early_ok && rc != RS_USER_ABORT {
-            let msg = crate::core::parse_failure(rc, ctx.last_err.take());
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-                "Failed to parse POR: {msg}"
-            )));
-        }
+        check_parse(rc, &mut ctx, path, encoding)?;
     }
 
     finalize_to_ipc(ctx)
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("finalize_to_ipc: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_file_that_fails_to_parse_errs_even_for_zero_rows() {
+        let path = std::env::temp_dir().join("svy_io_garbage_zero_rows.sav");
+        std::fs::write(&path, b"not a data file".repeat(20)).unwrap();
+        let got = parse_sav_impl(path.to_str().unwrap(), None, None, Some(0), 0, false);
+        std::fs::remove_file(&path).unwrap();
+        let want = "Invalid file, or file has unsupported features (rc=5)";
+        assert!(
+            matches!(&got, Err(Error::Parse(m)) if m == want),
+            "{:?}",
+            got.err()
+        );
+    }
 }

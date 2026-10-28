@@ -155,16 +155,14 @@ def test_native_sav_writer_rejects_malformed_specs(tmp_path, kwargs, message):
 def test_native_sav_writer_rejects_bad_labels(tmp_path, kwargs, message):
     from svy_io import svyreadstat_rs as native
 
-    with pytest.raises(RuntimeError, match=message):
+    with pytest.raises(ValueError, match=message):
         native.df_write_sav_file(_ipc(_df()), str(tmp_path / "n.sav"), **kwargs)
 
 
 def test_native_dta_writer_rejects_nul_in_variable_label(tmp_path):
     from svy_io import svyreadstat_rs as native
 
-    with pytest.raises(
-        RuntimeError, match="variable label of column 'x' contains an embedded NUL"
-    ):
+    with pytest.raises(ValueError, match="variable label of column 'x' contains an embedded NUL"):
         native.df_write_dta_file(
             _ipc(_df()), str(tmp_path / "n.dta"), 118, None, '{"x": "a\\u0000b"}', None, 2045, None
         )
@@ -182,5 +180,5 @@ def test_native_xpt_writer_rejects_bad_header(tmp_path, kwargs, message):
     from svy_io import svyreadstat_rs as native
 
     args = {"version": 8, "name": "DATA", "label": None, **kwargs}
-    with pytest.raises(RuntimeError, match=message):
+    with pytest.raises(ValueError, match=message):
         native.df_write_xpt_file(_ipc(_df()), str(tmp_path / "n.xpt"), **args)

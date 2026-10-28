@@ -65,7 +65,7 @@ def test_sav_valid_utf8_is_unchanged_under_lossy(tmp_path: Path):
 
 def test_sav_unknown_encoding_raises(tmp_path: Path):
     path = _sav_with_bytes(tmp_path, b"VALUE")
-    with pytest.raises(RuntimeError, match=r"unsupported character set \(rc=7\)"):
+    with pytest.raises(ValueError, match=r"unsupported character set \(rc=7\)"):
         read_sav(path, encoding="no-such-codec")
 
 
@@ -85,5 +85,5 @@ def test_sas_utf8_lossy_round_trips_clean_data():
 
 
 def test_sas_unknown_encoding_raises():
-    with pytest.raises(RuntimeError, match=r"unsupported character set \(rc=7\)"):
+    with pytest.raises(ValueError, match=r"unsupported character set \(rc=7\)"):
         read_sas(str(HERE / "data/sas/hadley.sas7bdat"), encoding="no-such-codec")

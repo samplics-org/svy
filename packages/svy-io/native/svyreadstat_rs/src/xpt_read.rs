@@ -1,21 +1,18 @@
-use anyhow::{Result, anyhow};
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
 use std::collections::HashMap;
-use std::ffi::CString;
 use std::os::raw::c_void;
 
 use readstat_sys::{
-    readstat_error_e_READSTAT_ERROR_USER_ABORT as RS_USER_ABORT,
-    readstat_error_e_READSTAT_OK as RS_OK, readstat_parse_xport, readstat_parser_free,
-    readstat_parser_init, readstat_set_error_handler, readstat_set_metadata_handler,
-    readstat_set_value_handler, readstat_set_value_label_handler, readstat_set_variable_handler,
+    readstat_parse_xport, readstat_parser_free, readstat_parser_init, readstat_set_error_handler,
+    readstat_set_metadata_handler, readstat_set_value_handler, readstat_set_value_label_handler,
+    readstat_set_variable_handler,
 };
 
 use crate::core::{
-    ParseCtx, finalize_to_ipc, on_error_cb, on_metadata_cb, on_value_cb, on_value_label_cb,
-    on_variable_cb,
+    ParseCtx, check_parse, finalize_to_ipc, on_error_cb, on_metadata_cb, on_value_cb,
+    on_value_label_cb, on_variable_cb,
 };
+use crate::errors::{Error, Op, Result};
 use crate::sas_read::{parse_catalog, resolve_format_label_sets};
 
 #[allow(clippy::too_many_arguments)]
@@ -31,7 +28,7 @@ fn parse_xpt_impl(
 ) -> Result<(Vec<u8>, crate::core::MetaOut)> {
     let mut ctx = ParseCtx {
         cols: Vec::new(),
-        name_to_idx: HashMap::new(),
+        var_cols: Vec::new(),
         cols_skip: cols_skip.map(|v| v.into_iter().map(|k| (k, ())).collect()),
         rows_skip,
         n_max,
@@ -50,16 +47,17 @@ fn parse_xpt_impl(
         panic_err: None,
     };
 
-    if let Some(cat_path) = catalog_path {
-        parse_catalog(&mut ctx, cat_path, catalog_encoding, lossy_utf8)?;
-    }
+    let catalog_error = match catalog_path {
+        Some(cat_path) => parse_catalog(&mut ctx, cat_path, catalog_encoding, lossy_utf8)?,
+        None => None,
+    };
 
     // Before the parser exists, so a bad path cannot return without freeing it.
-    let c_path = CString::new(data_path)?;
+    let c_path = crate::core::c_path(data_path)?;
     unsafe {
         let p = readstat_parser_init();
         if p.is_null() {
-            return Err(anyhow!("readstat_parser_init() failed"));
+            return Err(Error::Internal("readstat_parser_init() failed".into()));
         }
         readstat_set_error_handler(p, Some(on_error_cb));
         readstat_set_metadata_handler(p, Some(on_metadata_cb));
@@ -71,33 +69,22 @@ fn parse_xpt_impl(
         let enc = crate::core::input_encoding(encoding, lossy_utf8);
         let _keep_enc = match crate::core::configure_parser(p, enc, rows_skip, n_max) {
             Ok(k) => k,
-            Err(msg) => {
+            Err(e) => {
                 readstat_parser_free(p);
-                return Err(pyo3::exceptions::PyValueError::new_err(msg).into());
+                return Err(e);
             }
         };
         readstat_set_value_label_handler(p, Some(on_value_label_cb));
 
         let rc = readstat_parse_xport(p, c_path.as_ptr(), &mut ctx as *mut _ as *mut c_void);
         readstat_parser_free(p);
-
-        // A panic caught inside a handler callback is an internal error.
-        if let Some(msg) = ctx.panic_err.take() {
-            return Err(anyhow!("internal error in readstat callback: {msg}"));
-        }
-
-        let early_ok = ctx
-            .n_max
-            .map(|nm| ctx.n_rows_emitted >= nm)
-            .unwrap_or(false);
-        if rc != RS_OK && !early_ok && rc != RS_USER_ABORT {
-            let msg = crate::core::parse_failure(rc, ctx.last_err.take());
-            return Err(anyhow!("Failed to parse XPT: {msg}"));
-        }
+        check_parse(rc, &mut ctx, data_path, encoding)?;
     }
 
     resolve_format_label_sets(&mut ctx);
-    finalize_to_ipc(ctx)
+    let (ipc, mut meta) = finalize_to_ipc(ctx)?;
+    meta.catalog_error = catalog_error;
+    Ok((ipc, meta))
 }
 
 #[pyfunction]
@@ -133,12 +120,6 @@ pub fn df_parse_xpt_file<'py>(
         catalog_encoding,
         lossy_utf8,
     )
-    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-    let meta_json = serde_json::to_string(&meta).unwrap();
-    let pybytes = PyBytes::new(py, &ipc)
-        .into_pyobject(py)
-        .unwrap()
-        .into_any()
-        .unbind();
-    Ok((pybytes, meta_json))
+    .map_err(|e| e.into_py(Op::Read, "XPT", data_path))?;
+    crate::core::to_python(py, &ipc, &meta, "XPT", data_path)
 }

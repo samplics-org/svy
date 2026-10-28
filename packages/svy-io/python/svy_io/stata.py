@@ -13,8 +13,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import polars as pl
 
-from polars.exceptions import ComputeError
-
 import svy_io.svyreadstat_rs as native
 
 from .helpers import (
@@ -185,12 +183,6 @@ def read_dta(
         from svy_io.sas import apply_value_labels  # reuse shared impl
 
     n_max = _normalize_n_max(n_max)
-    # n_max=0: still open and validate the file, returning the full schema
-    # and metadata with zero rows (haven behavior). The native layer treats
-    # n_max=0 as 1, so fetch one row and truncate after parsing.
-    zero_rows = n_max == 0
-    if zero_rows:
-        n_max = 1
 
     # Rust does the heavy lifting here (with GIL released).
     with _as_data_path(data_path, (".dta",)) as _path:
@@ -200,20 +192,7 @@ def read_dta(
     meta: Dict[str, Any] = json.loads(meta_json)
     meta["user_missing"] = normalize_user_missing(meta)
 
-    # Read IPC with proper error handling
-    bio = io.BytesIO(ipc_bytes)
-    try:
-        df = pl.read_ipc(bio)
-    except ComputeError as e:
-        if "InvalidFooter" in str(e):
-            bio.seek(0)
-            df = pl.read_ipc_stream(bio)
-        else:
-            raise
-
-    if zero_rows:
-        df = df.head(0)
-        meta["n_rows"] = 0
+    df = pl.read_ipc(io.BytesIO(ipc_bytes))
 
     # Apply transformations
     if coerce_temporals:
@@ -247,12 +226,6 @@ def read_stata_arrow(
     from pyarrow import ArrowInvalid
 
     n_max = _normalize_n_max(n_max)
-    # n_max=0: still open and validate the file, returning the full schema
-    # and metadata with zero rows (haven behavior). The native layer treats
-    # n_max=0 as 1, so fetch one row and truncate after parsing.
-    zero_rows = n_max == 0
-    if zero_rows:
-        n_max = 1
 
     with _as_data_path(data_path, (".dta",)) as _path:
         ipc_bytes, meta_json = _parse_dta_native(_path, cols_skip, n_max, rows_skip, encoding)
@@ -266,9 +239,6 @@ def read_stata_arrow(
 
     meta = json.loads(meta_json)
     meta["user_missing"] = normalize_user_missing(meta)
-    if zero_rows:
-        table = table.slice(0, 0)
-        meta["n_rows"] = 0
     return table, meta
 
 

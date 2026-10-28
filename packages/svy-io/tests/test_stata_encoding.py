@@ -137,5 +137,5 @@ def test_stata14_invalid_utf8_is_lossy_by_default(tmp_path: Path):
 
 def test_unknown_encoding_raises(tmp_path: Path):
     path = _dta_with_bytes(tmp_path, 117, b"VALUE")
-    with pytest.raises(RuntimeError, match="unsupported character set"):
+    with pytest.raises(ValueError, match="unsupported character set"):
         read_dta(path, encoding="no-such-codec")

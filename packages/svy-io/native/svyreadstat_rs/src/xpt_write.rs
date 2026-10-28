@@ -1,7 +1,6 @@
 // native/svyreadstat_rs/src/xpt_write.rs
 // COMPLETE REWRITE - must use readstat row-by-row API
 
-use anyhow::{Result, anyhow};
 use arrow::array::*;
 use arrow::datatypes::{
     DataType, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type,
@@ -26,7 +25,8 @@ use readstat_sys::{
     readstat_writer_set_table_name,
 };
 
-use crate::core::WriterGuard;
+use crate::core::{OutputFile, WriterGuard, write_rc};
+use crate::errors::{Error, Op, Result};
 
 unsafe extern "C" fn data_writer_cb(data: *const c_void, len: usize, ctx: *mut c_void) -> isize {
     if data.is_null() || ctx.is_null() {
@@ -177,10 +177,13 @@ fn write_xpt_impl(
     name: Option<&str>,
     label: Option<&str>,
 ) -> Result<()> {
-    let cursor = Cursor::new(ipc_bytes);
-    let reader = FileReader::try_new(cursor, None)?;
+    let ipc_err =
+        |e: arrow::error::ArrowError| Error::Invalid(format!("Arrow IPC decode failed: {e}"));
+    let reader = FileReader::try_new(Cursor::new(ipc_bytes), None).map_err(ipc_err)?;
     let schema = reader.schema();
-    let mut batches: Vec<_> = reader.collect::<std::result::Result<_, _>>()?;
+    let mut batches: Vec<_> = reader
+        .collect::<std::result::Result<_, _>>()
+        .map_err(ipc_err)?;
     // A zero-row frame arrives with no batches; the writer still needs its columns.
     if batches.is_empty() {
         batches.push(RecordBatch::new_empty(schema.clone()));
@@ -188,13 +191,15 @@ fn write_xpt_impl(
 
     let writer = unsafe { readstat_writer_init() };
     if writer.is_null() {
-        return Err(anyhow!("readstat_writer_init() failed"));
+        return Err(Error::Internal("readstat_writer_init() failed".into()));
     }
     // Frees the writer on every exit path (including early `?` returns).
     let _writer_guard = WriterGuard(writer);
 
     if version != 5 && version != 8 {
-        return Err(anyhow!("XPT version must be 5 or 8, got {version}"));
+        return Err(Error::Invalid(format!(
+            "XPT version must be 5 or 8, got {version}"
+        )));
     }
     unsafe {
         readstat_writer_set_file_format_version(writer, version as u8);
@@ -203,7 +208,7 @@ fn write_xpt_impl(
 
     if let Some(lbl) = label {
         let lbl_cstr = CString::new(lbl)
-            .map_err(|_| anyhow!("file label {lbl:?} contains an embedded NUL"))?;
+            .map_err(|_| Error::Invalid(format!("file label {lbl:?} contains an embedded NUL")))?;
         unsafe {
             readstat_writer_set_file_label(writer, lbl_cstr.as_ptr());
         }
@@ -219,8 +224,11 @@ fn write_xpt_impl(
         })
         .unwrap_or_else(|| "DATA".to_string());
 
-    let member_cstr = CString::new(member_name.as_str())
-        .map_err(|_| anyhow!("member name {member_name:?} contains an embedded NUL"))?;
+    let member_cstr = CString::new(member_name.as_str()).map_err(|_| {
+        Error::Invalid(format!(
+            "member name {member_name:?} contains an embedded NUL"
+        ))
+    })?;
     unsafe {
         readstat_writer_set_table_name(writer, member_cstr.as_ptr());
     }
@@ -257,18 +265,23 @@ fn write_xpt_impl(
     }
     for (j, field) in schema.fields().iter().enumerate() {
         if is_str_col[j] && str_widths[j] > XPT_MAX_STR_BYTES {
-            return Err(anyhow!(
+            return Err(Error::Invalid(format!(
                 "column '{}' contains strings up to {} bytes; the XPT transport \
                  format supports at most {} bytes per character value",
                 field.name(),
                 str_widths[j],
                 XPT_MAX_STR_BYTES
-            ));
+            )));
         }
     }
 
     for (j, field) in schema.fields().iter().enumerate() {
-        let col_name = CString::new(field.name().as_str())?;
+        let col_name = CString::new(field.name().as_str()).map_err(|_| {
+            Error::Invalid(format!(
+                "column name {:?} contains an embedded NUL",
+                field.name()
+            ))
+        })?;
 
         let (var_type, width) = if is_str_col[j] {
             (readstat_type_e_READSTAT_TYPE_STRING, str_widths[j].max(1))
@@ -278,16 +291,19 @@ fn write_xpt_impl(
 
         let var = unsafe { readstat_add_variable(writer, col_name.as_ptr(), var_type, width) };
         if var.is_null() {
-            return Err(anyhow!("Failed to add variable: {}", field.name()));
+            return Err(Error::Write(format!(
+                "adding column '{}' failed",
+                field.name()
+            )));
         }
 
         let metadata = field.metadata();
         if let Some(label_str) = metadata.get("label") {
             let label_cstr = CString::new(label_str.as_str()).map_err(|_| {
-                anyhow!(
+                Error::Invalid(format!(
                     "variable label of column '{}' contains an embedded NUL",
                     field.name()
-                )
+                ))
             })?;
             unsafe {
                 readstat_variable_set_label(var, label_cstr.as_ptr());
@@ -295,10 +311,10 @@ fn write_xpt_impl(
         }
         if let Some(format_str) = metadata.get("format") {
             let format_cstr = CString::new(format_str.as_str()).map_err(|_| {
-                anyhow!(
+                Error::Invalid(format!(
                     "format of column '{}' contains an embedded NUL",
                     field.name()
-                )
+                ))
             })?;
             unsafe {
                 readstat_variable_set_format(var, format_cstr.as_ptr());
@@ -309,107 +325,60 @@ fn write_xpt_impl(
         rvars.push(var);
     }
 
-    // Create file and begin writing
-    let mut outfile = File::create(Path::new(path))?;
-
     // All record batches are written; a large frame is commonly split into
     // several batches by Arrow IPC serialization.
     let total_rows: i64 = batches.iter().map(|b| b.num_rows() as i64).sum();
     #[allow(clippy::useless_conversion)] // c_long is 32-bit on Windows
     let row_count = total_rows
         .try_into()
-        .map_err(|_| anyhow!("row count {total_rows} exceeds platform limit"))?;
+        .map_err(|_| Error::Invalid(format!("{total_rows} rows exceed this platform's limit")))?;
+    let mut out = OutputFile::create(path)?;
+    write_rc(
+        unsafe { readstat_begin_writing_xport(writer, out.as_ctx(), row_count) },
+        || "beginning the file".into(),
+    )?;
 
-    unsafe {
-        let rc = readstat_begin_writing_xport(
-            writer,
-            &mut outfile as *mut File as *mut c_void,
-            row_count,
-        );
-        if rc != 0 {
-            return Err(anyhow!(
-                "readstat_begin_writing_xport failed with rc={}",
-                rc
-            ));
-        }
-    }
-
-    // NOW write data row by row using readstat API
+    let mut row_offset = 0;
     for batch in &batches {
         for i in 0..batch.num_rows() {
-            unsafe {
-                let rc = readstat_begin_row(writer);
-                if rc != 0 {
-                    return Err(anyhow!("readstat_begin_row failed at row {}", i));
-                }
-            }
+            let row = row_offset + i;
+            write_rc(unsafe { readstat_begin_row(writer) }, || {
+                format!("beginning row {row}")
+            })?;
 
             for (j, arr) in batch.columns().iter().enumerate() {
-                unsafe {
-                    if is_str_col[j] {
-                        if let Some(s) = get_string_value(arr.as_ref(), i) {
-                            match CString::new(s) {
-                                Ok(cs) => {
-                                    let rc =
-                                        readstat_insert_string_value(writer, rvars[j], cs.as_ptr());
-                                    if rc != 0 {
-                                        return Err(anyhow!(
-                                            "insert_string_value failed at row {}, col {}",
-                                            i,
-                                            j
-                                        ));
-                                    }
-                                }
-                                Err(_) => {
-                                    let rc = readstat_insert_missing_value(writer, rvars[j]);
-                                    if rc != 0 {
-                                        return Err(anyhow!("insert_missing_value failed"));
-                                    }
-                                }
-                            }
-                        } else {
-                            let rc = readstat_insert_missing_value(writer, rvars[j]);
-                            if rc != 0 {
-                                return Err(anyhow!("insert_missing_value failed"));
-                            }
-                        }
-                    } else {
-                        if let Some(v) = as_f64_opt(arr.as_ref(), i) {
-                            let rc = readstat_insert_double_value(writer, rvars[j], v);
-                            if rc != 0 {
-                                return Err(anyhow!(
-                                    "insert_double_value failed at row {}, col {}",
-                                    i,
-                                    j
-                                ));
-                            }
-                        } else {
-                            let rc = readstat_insert_missing_value(writer, rvars[j]);
-                            if rc != 0 {
-                                return Err(anyhow!("insert_missing_value failed"));
-                            }
-                        }
+                let rc = if is_str_col[j] {
+                    match get_string_value(arr.as_ref(), i).map(CString::new) {
+                        Some(Ok(cs)) => unsafe {
+                            readstat_insert_string_value(writer, rvars[j], cs.as_ptr())
+                        },
+                        // A NUL cannot be stored, so the value is written as missing.
+                        Some(Err(_)) | None => unsafe {
+                            readstat_insert_missing_value(writer, rvars[j])
+                        },
                     }
-                }
+                } else {
+                    match as_f64_opt(arr.as_ref(), i) {
+                        Some(v) => unsafe { readstat_insert_double_value(writer, rvars[j], v) },
+                        None => unsafe { readstat_insert_missing_value(writer, rvars[j]) },
+                    }
+                };
+                write_rc(rc, || {
+                    format!("writing column '{}' at row {row}", schema.field(j).name())
+                })?;
             }
 
-            unsafe {
-                let rc = readstat_end_row(writer);
-                if rc != 0 {
-                    return Err(anyhow!("readstat_end_row failed at row {}", i));
-                }
-            }
+            write_rc(unsafe { readstat_end_row(writer) }, || {
+                format!("ending row {row}")
+            })?;
         }
+        row_offset += batch.num_rows();
     }
 
-    // Finalize
-    unsafe {
-        let rc = readstat_end_writing(writer);
-        if rc != 0 {
-            return Err(anyhow!("readstat_end_writing failed with rc={}", rc));
-        }
-    }
-
+    write_rc(unsafe { readstat_end_writing(writer) }, || {
+        "finishing the file".into()
+    })?;
+    out.finish();
     Ok(())
 }
 
@@ -422,7 +391,6 @@ pub fn df_write_xpt_file(
     name: Option<&str>,
     label: Option<&str>,
 ) -> PyResult<()> {
-    let buf = ipc_bytes.as_bytes();
-    write_xpt_impl(buf, path, version, name, label)
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    write_xpt_impl(ipc_bytes.as_bytes(), path, version, name, label)
+        .map_err(|e| e.into_py(Op::Write, "XPT", path))
 }

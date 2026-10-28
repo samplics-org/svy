@@ -653,7 +653,7 @@ def test_native_tagged_missing_spec_is_checked(tmp_path, spec, message):
 
     bio = io.BytesIO()
     pl.DataFrame({"x": [1.0, None], "s": ["a", "b"]}).write_ipc(bio)
-    with pytest.raises(RuntimeError, match=message):
+    with pytest.raises(ValueError, match=message):
         native.df_write_dta_file(
             bio.getvalue(),
             str(tmp_path / "n.dta"),

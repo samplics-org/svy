@@ -1,5 +1,4 @@
 // native/svyreadstat_rs/src/spss_write.rs
-use anyhow::{Result, anyhow};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -8,7 +7,6 @@ use std::ffi::CString;
 use std::fs::File;
 use std::io::{Cursor, Write as IoWrite};
 use std::os::raw::c_void;
-use std::path::Path;
 
 use arrow::array::{
     Array, BooleanArray, Date32Array, Date64Array, DictionaryArray, DurationMicrosecondArray,
@@ -41,7 +39,8 @@ use readstat_sys::{
     readstat_writer_set_file_label,
 };
 
-use crate::core::WriterGuard;
+use crate::core::{OutputFile, WriterGuard, write_rc};
+use crate::errors::{Error, Op, Result};
 
 /// ReadStat data sink: write to a std::fs::File
 unsafe extern "C" fn data_writer_cb(
@@ -60,7 +59,7 @@ unsafe extern "C" fn data_writer_cb(
     }
 }
 
-fn ipc_to_batches(buf: &[u8]) -> Result<Vec<RecordBatch>> {
+fn ipc_to_batches(buf: &[u8]) -> arrow::error::Result<Vec<RecordBatch>> {
     let mut batches = Vec::new();
     let schema = if buf.starts_with(b"ARROW1") {
         let mut fr = FileReader::try_new(Cursor::new(buf), None)?;
@@ -315,12 +314,12 @@ fn write_spss_minimal(
     value_labels: Option<&[ValueLabelsInfo]>,
 ) -> Result<()> {
     if batches.is_empty() {
-        return Err(anyhow!("no record batches to write"));
+        return Err(Error::Invalid("no record batches to write".into()));
     }
 
     let writer = unsafe { readstat_writer_init() };
     if writer.is_null() {
-        return Err(anyhow!("readstat_writer_init() failed"));
+        return Err(Error::Internal("readstat_writer_init() failed".into()));
     }
     // Frees the writer on every exit path (including early `?` returns).
     let _writer_guard = WriterGuard(writer);
@@ -330,9 +329,9 @@ fn write_spss_minimal(
         "byte" => COMPRESS_ROWS,
         "zsav" => COMPRESS_BINARY,
         other => {
-            return Err(anyhow!(
+            return Err(Error::Invalid(format!(
                 "unknown compress {other:?}; expected 'none', 'byte' or 'zsav'"
-            ));
+            )));
         }
     };
     unsafe {
@@ -341,7 +340,8 @@ fn write_spss_minimal(
     }
 
     if let Some(lbl) = file_label {
-        let c = CString::new(lbl)?;
+        let c = CString::new(lbl)
+            .map_err(|_| Error::Invalid(format!("file label {lbl:?} contains an embedded NUL")))?;
         unsafe { readstat_writer_set_file_label(writer, c.as_ptr()) };
     }
 
@@ -373,24 +373,29 @@ fn write_spss_minimal(
             // Validate up front: silently capping at 2000 produced a
             // confusing readstat rc error at row-insert time.
             if stats.max_len > 2000 {
-                return Err(anyhow!(
+                return Err(Error::Invalid(format!(
                     "column '{}' contains strings up to {} bytes; the SAV \
                      writer supports at most 2000 bytes per string value",
                     field.name(),
                     stats.max_len
-                ));
+                )));
             }
             typ = T_STRING;
             width = std::cmp::max(1, stats.max_len);
         }
 
-        let cname = CString::new(field.name().as_str())?;
+        let cname = CString::new(field.name().as_str()).map_err(|_| {
+            Error::Invalid(format!(
+                "column name {:?} contains an embedded NUL",
+                field.name()
+            ))
+        })?;
         let var = unsafe { readstat_add_variable(writer, cname.as_ptr(), typ, width as _) };
         if var.is_null() {
-            return Err(anyhow!(
-                "readstat_add_variable failed for '{}'",
+            return Err(Error::Write(format!(
+                "adding column '{}' failed",
                 field.name()
-            ));
+            )));
         }
 
         // SPSS display format for temporal columns
@@ -401,7 +406,7 @@ fn write_spss_minimal(
             _ => None,
         };
         if let Some(fmt) = want_fmt {
-            let cfmt = CString::new(fmt)?;
+            let cfmt = CString::new(fmt).expect("SPSS format names hold no NUL");
             unsafe { readstat_variable_set_format(var, cfmt.as_ptr()) };
         }
 
@@ -411,10 +416,10 @@ fn write_spss_minimal(
             && !lbl.is_empty()
         {
             let c = CString::new(lbl.as_str()).map_err(|_| {
-                anyhow!(
+                Error::Invalid(format!(
                     "variable label of column '{}' contains an embedded NUL",
                     field.name()
-                )
+                ))
             })?;
             unsafe { readstat_variable_set_label(var, c.as_ptr()) };
         }
@@ -427,12 +432,12 @@ fn write_spss_minimal(
                     if is_str_col[j] {
                         // SAV stores string missing values only for strings of at most 8 bytes.
                         if width > 8 {
-                            return Err(anyhow!(
+                            return Err(Error::Invalid(format!(
                                 "column '{}' holds strings up to {} bytes; SPSS user-missing \
                                  values apply only to string columns of at most 8 bytes",
                                 field.name(),
                                 width
-                            ));
+                            )));
                         }
                         // String: only discrete user-missing values are supported
                         for val in &um.values {
@@ -442,7 +447,8 @@ fn write_spss_minimal(
                             } else {
                                 val.to_string()
                             };
-                            let c_val = CString::new(val_string)?;
+                            let c_val =
+                                CString::new(val_string).expect("a formatted number holds no NUL");
                             rcs.push(unsafe {
                                 readstat_variable_add_missing_string_value(var, c_val.as_ptr())
                             });
@@ -462,12 +468,10 @@ fn write_spss_minimal(
                             });
                         }
                     }
-                    if let Some(rc) = rcs.into_iter().find(|&rc| rc != 0) {
-                        return Err(anyhow!(
-                            "adding user-missing values to column '{}' failed with rc={}",
-                            field.name(),
-                            rc
-                        ));
+                    for rc in rcs {
+                        write_rc(rc, || {
+                            format!("adding user-missing values to column '{}'", field.name())
+                        })?;
                     }
                 }
             }
@@ -478,34 +482,35 @@ fn write_spss_minimal(
             for vl in val_labs {
                 if vl.col == field.name().as_str() && !vl.labels.is_empty() {
                     let label_set_name = format!("{}_labels", field.name());
-                    let c_label_set_name = CString::new(label_set_name.as_str())?;
+                    let c_label_set_name = CString::new(label_set_name)
+                        .expect("the column name was checked for NUL above");
 
                     let label_set =
                         unsafe { readstat_add_label_set(writer, typ, c_label_set_name.as_ptr()) };
 
                     if label_set.is_null() {
-                        return Err(anyhow!(
-                            "readstat_add_label_set failed for '{}'",
+                        return Err(Error::Write(format!(
+                            "adding the value labels of column '{}' failed",
                             field.name()
-                        ));
+                        )));
                     }
                     let mut c_strings = Vec::new();
 
                     for (value, label) in &vl.labels {
                         let c_label = CString::new(label.as_str()).map_err(|_| {
-                            anyhow!(
+                            Error::Invalid(format!(
                                 "value label {:?} on column '{}' contains an embedded NUL",
                                 label,
                                 field.name()
-                            )
+                            ))
                         })?;
                         if is_str_col[j] {
                             let c_val = CString::new(value.as_str()).map_err(|_| {
-                                anyhow!(
+                                Error::Invalid(format!(
                                     "value label code {:?} on column '{}' contains an embedded NUL",
                                     value,
                                     field.name()
-                                )
+                                ))
                             })?;
                             unsafe {
                                 readstat_label_string_value(
@@ -517,11 +522,11 @@ fn write_spss_minimal(
                             c_strings.push(c_val);
                         } else {
                             let num_val: f64 = value.parse().map_err(|_| {
-                                anyhow!(
+                                Error::Invalid(format!(
                                     "value label code {:?} on column '{}' is not numeric",
                                     value,
                                     field.name()
-                                )
+                                ))
                             })?;
                             unsafe {
                                 readstat_label_double_value(label_set, num_val, c_label.as_ptr());
@@ -543,104 +548,58 @@ fn write_spss_minimal(
         rvars.push(var);
     }
 
-    // Open output and begin writing
-    let mut outfile = File::create(Path::new(out_path))?;
     let total_rows: i64 = batches.iter().map(|b| b.num_rows() as i64).sum();
     #[allow(clippy::useless_conversion)] // c_long is 32-bit on Windows
     let row_count = total_rows
         .try_into()
-        .map_err(|_| anyhow!("row count {total_rows} exceeds platform limit"))?;
-    unsafe {
-        let rc =
-            readstat_begin_writing_sav(writer, &mut outfile as *mut File as *mut c_void, row_count);
-        if rc != 0 {
-            return Err(anyhow!("readstat_begin_writing_sav failed with rc={}", rc));
-        }
-    }
+        .map_err(|_| Error::Invalid(format!("{total_rows} rows exceed this platform's limit")))?;
+    let mut out = OutputFile::create(out_path)?;
+    write_rc(
+        unsafe { readstat_begin_writing_sav(writer, out.as_ctx(), row_count) },
+        || "beginning the file".into(),
+    )?;
 
-    // Write rows
+    let mut row_offset = 0;
     for b in batches {
         for i in 0..b.num_rows() {
-            unsafe {
-                let rc = readstat_begin_row(writer);
-                if rc != 0 {
-                    return Err(anyhow!("readstat_begin_row failed with rc={}", rc));
-                }
-            }
+            let row = row_offset + i;
+            write_rc(unsafe { readstat_begin_row(writer) }, || {
+                format!("beginning row {row}")
+            })?;
 
             for (j, arr) in b.columns().iter().enumerate() {
-                if is_str_col[j] {
-                    if let Some(s) = get_string_value(arr.as_ref(), i) {
-                        unsafe {
-                            match CString::new(s) {
-                                Ok(cs) => {
-                                    let rc =
-                                        readstat_insert_string_value(writer, rvars[j], cs.as_ptr());
-                                    if rc != 0 {
-                                        return Err(anyhow!(
-                                            "insert_string_value failed with rc={}",
-                                            rc
-                                        ));
-                                    }
-                                }
-                                Err(_) => {
-                                    let rc = readstat_insert_missing_value(writer, rvars[j]);
-                                    if rc != 0 {
-                                        return Err(anyhow!(
-                                            "insert_missing_value (embedded NUL) failed with rc={}",
-                                            rc
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        unsafe {
-                            let rc = readstat_insert_missing_value(writer, rvars[j]);
-                            if rc != 0 {
-                                return Err(anyhow!(
-                                    "insert_missing_value (null) failed with rc={}",
-                                    rc
-                                ));
-                            }
-                        }
-                    }
-                } else if let Some(v) = as_f64_opt(arr.as_ref(), i) {
-                    unsafe {
-                        let rc = readstat_insert_double_value(writer, rvars[j], v);
-                        if rc != 0 {
-                            return Err(anyhow!("insert_double_value failed with rc={}", rc));
-                        }
+                let rc = if is_str_col[j] {
+                    match get_string_value(arr.as_ref(), i).map(CString::new) {
+                        Some(Ok(cs)) => unsafe {
+                            readstat_insert_string_value(writer, rvars[j], cs.as_ptr())
+                        },
+                        // A NUL cannot be stored, so the value is written as missing.
+                        Some(Err(_)) | None => unsafe {
+                            readstat_insert_missing_value(writer, rvars[j])
+                        },
                     }
                 } else {
-                    unsafe {
-                        let rc = readstat_insert_missing_value(writer, rvars[j]);
-                        if rc != 0 {
-                            return Err(anyhow!(
-                                "insert_missing_value (double) failed with rc={}",
-                                rc
-                            ));
-                        }
+                    match as_f64_opt(arr.as_ref(), i) {
+                        Some(v) => unsafe { readstat_insert_double_value(writer, rvars[j], v) },
+                        None => unsafe { readstat_insert_missing_value(writer, rvars[j]) },
                     }
-                }
+                };
+                write_rc(rc, || {
+                    format!("writing column '{}' at row {row}", schema.field(j).name())
+                })?;
             }
 
-            unsafe {
-                let rc = readstat_end_row(writer);
-                if rc != 0 {
-                    return Err(anyhow!("readstat_end_row failed with rc={}", rc));
-                }
-            }
+            write_rc(unsafe { readstat_end_row(writer) }, || {
+                format!("ending row {row}")
+            })?;
         }
+        row_offset += b.num_rows();
     }
 
-    unsafe {
-        let rc = readstat_end_writing(writer);
-        if rc != 0 {
-            return Err(anyhow!("readstat_end_writing failed with rc={}", rc));
-        }
-    }
-
+    write_rc(unsafe { readstat_end_writing(writer) }, || {
+        "finishing the file".into()
+    })?;
+    out.finish();
     Ok(())
 }
 
@@ -655,14 +614,11 @@ pub fn df_write_sav_file(
     user_missing: Option<Vec<HashMap<String, Py<PyAny>>>>,
     value_labels: Option<Vec<HashMap<String, Py<PyAny>>>>,
 ) -> PyResult<()> {
-    let buf = ipc_bytes.as_bytes();
-    let batches = ipc_to_batches(buf).map_err(|e| {
-        pyo3::exceptions::PyRuntimeError::new_err(format!("Arrow IPC decode failed: {}", e))
-    })?;
+    let to_py = |e: Error| e.into_py(Op::Write, "SAV", out_path);
+    let batches = ipc_to_batches(ipc_bytes.as_bytes())
+        .map_err(|e| to_py(Error::Invalid(format!("Arrow IPC decode failed: {e}"))))?;
 
-    let bad_entry = |what: &str, e: PyErr| {
-        pyo3::exceptions::PyValueError::new_err(format!("df_write_sav_file: bad {what} entry: {e}"))
-    };
+    let bad_entry = |what: &str, e: PyErr| to_py(Error::Invalid(format!("bad {what} entry: {e}")));
 
     // Convert user_missing from Python-friendly dicts
     let user_missing_converted: Option<Vec<UserMissingInfo>> = match &user_missing {
@@ -720,7 +676,7 @@ pub fn df_write_sav_file(
         user_missing_converted.as_deref(),
         value_labels_converted.as_deref(),
     )
-    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("df_write_sav_file: {}", e)))
+    .map_err(to_py)
 }
 
 #[cfg(test)]

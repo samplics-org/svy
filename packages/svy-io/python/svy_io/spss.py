@@ -11,8 +11,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import polars as pl
 
-from polars.exceptions import ComputeError
-
 import svy_io.svyreadstat_rs as native
 
 from .helpers import (
@@ -303,13 +301,6 @@ def read_sav(
     """
     n_max = _normalize_n_max(n_max)
 
-    # n_max=0: still open and validate the file, returning the full schema
-    # and metadata with zero rows (haven behavior). The native layer treats
-    # n_max=0 as 1, so fetch one row and truncate below.
-    zero_rows = n_max == 0
-    if zero_rows:
-        n_max = 1
-
     normalized_cols_skip = _normalize_cols_skip(cols_skip)
 
     enc, lossy = _split_encoding(encoding)
@@ -324,19 +315,7 @@ def read_sav(
 
     meta: Dict[str, Any] = json.loads(meta_json)
 
-    bio = io.BytesIO(ipc_bytes)
-    try:
-        df = pl.read_ipc(bio)
-    except ComputeError as e:
-        if "InvalidFooter" in str(e):
-            bio.seek(0)
-            df = pl.read_ipc_stream(bio)
-        else:
-            raise
-
-    if zero_rows:
-        df = df.head(0)
-        meta["n_rows"] = 0
+    df = pl.read_ipc(io.BytesIO(ipc_bytes))
 
     # Normalize names BEFORE downstream processing
     if normalize_names:
@@ -376,13 +355,6 @@ def read_por(
     """
     n_max = _normalize_n_max(n_max)
 
-    # n_max=0: still open and validate the file, returning the full schema
-    # and metadata with zero rows (haven behavior). The native layer treats
-    # n_max=0 as 1, so fetch one row and truncate below.
-    zero_rows = n_max == 0
-    if zero_rows:
-        n_max = 1
-
     normalized_cols_skip = _normalize_cols_skip(cols_skip)
 
     enc, lossy = _split_encoding(encoding)
@@ -396,19 +368,7 @@ def read_por(
 
     meta: Dict[str, Any] = json.loads(meta_json)
 
-    bio = io.BytesIO(ipc_bytes)
-    try:
-        df = pl.read_ipc(bio)
-    except ComputeError as e:
-        if "InvalidFooter" in str(e):
-            bio.seek(0)
-            df = pl.read_ipc_stream(bio)
-        else:
-            raise
-
-    if zero_rows:
-        df = df.head(0)
-        meta["n_rows"] = 0
+    df = pl.read_ipc(io.BytesIO(ipc_bytes))
 
     if normalize_names:
         df, meta = _normalize_names(df, meta)
