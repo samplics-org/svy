@@ -29,6 +29,8 @@ Two conventions are pinned here, and they are deliberately different:
   the t-quantile differs.
 """
 
+import json
+
 from pathlib import Path
 
 import polars as pl
@@ -196,3 +198,12 @@ def test_fractional_rep_df_reaches_glm(jkn_data):
 def test_fractional_rep_df_survives_serialization(jkn_data):
     est = _rep_sample(jkn_data, df=16.9).estimation.mean("y", method="replication")
     assert from_json(to_json(est)).estimates[0].df == 16.9
+
+
+def test_integer_df_from_an_older_payload_decodes_as_int(jkn_data):
+    raw = json.loads(
+        to_json(_rep_sample(jkn_data, df=9).estimation.mean("y", method="replication"))
+    )
+    raw["schema_version"] = "svy-result/0.11"
+    df = from_json(json.dumps(raw)).estimates[0].df
+    assert df == 9 and type(df) is int
