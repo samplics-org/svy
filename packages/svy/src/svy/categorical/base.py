@@ -493,7 +493,7 @@ class Categorical:
         # 100 for percent) would route to the un-centered path and inflate the
         # SE by the dropped numerator/denominator covariance term.
         _units = _normalize_units(units)
-        wgt_arr = concat_data[weight_col].to_numpy().copy()
+        wgt_arr = concat_data[weight_col].to_numpy().astype(np.float64)
         # Normalization is over the domain: out-of-domain weights are zeroed
         # in the kernel, so the "sum to 1" contract refers to in-domain rows.
         in_dom = concat_data[domain_col].to_numpy() if domain_col else None

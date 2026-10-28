@@ -513,7 +513,7 @@ def rake(
 
         if rep_cols:
             n_reps = len(rep_cols)
-            wgts_arr = df.select(rep_cols).to_numpy()
+            wgts_arr = df.select(rep_cols).to_numpy().astype(np.float64)
 
             # Replicates: one rake pass with the final converged main weights
             # as starting point. Cycling replicates is not standard practice.

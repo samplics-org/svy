@@ -16,6 +16,7 @@ import numpy as np
 import polars as pl
 import pytest
 
+from svy import estd
 from svy.core.sample import Design, Sample
 from svy.core.terms import Cat, Cross
 from svy.errors._model import ModelError
@@ -223,3 +224,20 @@ class TestPredictionDataValidation:
 
         with pytest.raises(ModelError, match="never saw"):
             model.predict(new_data)
+
+
+def test_integer_cat_keeps_its_level_names_when_another_covariate_is_missing(api):
+    # A missing value in another covariate must not turn the dummy g_1 into g_1.0.
+    with_null = api.with_columns(
+        pl.when(pl.int_range(pl.len()) == 0).then(None).otherwise(pl.col("ell")).alias("ell")
+    )
+    ref = _fit(_coded(with_null, CODINGS["str"], pl.col("stype")), drop_nulls=True)
+    alt = _fit(_coded(with_null, CODINGS["int"], pl.col("stype")), drop_nulls=True)
+
+    assert [c.term for c in alt.fitted.coefs] == ["_intercept_", "ell", "g_1", "g_2"]
+    np.testing.assert_allclose(
+        [c.est for c in alt.fitted.coefs], [c.est for c in ref.fitted.coefs], rtol=0, atol=1e-12
+    )
+    coef = {c.term: c.est for c in alt.fitted.coefs}
+    diff = alt.contrast(estd("g_1") - estd("g_2")).estimates[0]
+    assert diff.est == pytest.approx(coef["g_1"] - coef["g_2"], abs=1e-12)

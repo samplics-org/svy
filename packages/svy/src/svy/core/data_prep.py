@@ -885,6 +885,15 @@ def prepare_data(
                 _miss_c = pl.col(c).is_null()
                 if df.schema[c] in (pl.Float32, pl.Float64):
                     _miss_c = _miss_c | pl.col(c).is_nan() | pl.col(c).is_infinite()
+                if df.schema[c].is_integer():
+                    # Kept integer: a Cat level names its dummy, and 2 must not become "2.0".
+                    exprs.append(
+                        pl.when(_miss_c)
+                        .then(pl.lit(0, dtype=df.schema[c]))
+                        .otherwise(pl.col(c))
+                        .alias(c)
+                    )
+                    continue
                 exprs.append(
                     pl.when(_miss_c).then(0.0).otherwise(pl.col(c).cast(pl.Float64)).alias(c)
                 )
