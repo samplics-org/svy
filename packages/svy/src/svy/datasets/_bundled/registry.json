@@ -3,10 +3,10 @@
     "slug": "ea_frame_wb_2023",
     "title": "WB Synthetic EA Frame 2023 (bundled subset)",
     "description": "Enumeration-area sampling frame: geography, urban/rural, and the census household count used as the PPS measure of size.",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "filename": "ea_frame_wb_2023.parquet",
-    "sha256": "cf32c38f7df0cd44b7dda80ca7012ac09e6fb9e00ebb365267820f6a62823fea",
-    "size_bytes": 2806,
+    "sha256": "1bc3ef6b2b3d2e73d64a78bb54eaaf2ecd7bd2f2c643e698863c1d688d3da34f",
+    "size_bytes": 2883,
     "n_rows": 133,
     "n_cols": 5,
     "license": "World Bank synthetic microdata terms",
@@ -20,7 +20,102 @@
       "psu": "ea",
       "mos": "n_hlds_census"
     },
-    "variables": {},
+    "variables": {
+      "geo1": {
+        "label": "Geographic area - Admin 1",
+        "values": {
+          "1": "geo_01",
+          "2": "geo_02",
+          "3": "geo_03",
+          "4": "geo_04",
+          "5": "geo_05",
+          "6": "geo_06",
+          "7": "geo_07",
+          "8": "geo_08",
+          "9": "geo_09",
+          "10": "geo_10"
+        }
+      },
+      "geo2": {
+        "label": "Geographic area - Admin 2",
+        "values": {
+          "11": "geo_01_01",
+          "12": "geo_01_02",
+          "13": "geo_01_03",
+          "14": "geo_01_04",
+          "15": "geo_01_05",
+          "16": "geo_01_06",
+          "17": "geo_01_07",
+          "18": "geo_01_08",
+          "21": "geo_02_01",
+          "22": "geo_02_02",
+          "23": "geo_02_03",
+          "24": "geo_02_04",
+          "25": "geo_02_05",
+          "26": "geo_02_06",
+          "27": "geo_02_07",
+          "28": "geo_02_08",
+          "31": "geo_03_01",
+          "32": "geo_03_02",
+          "33": "geo_03_03",
+          "34": "geo_03_04",
+          "35": "geo_03_05",
+          "41": "geo_04_01",
+          "42": "geo_04_02",
+          "43": "geo_04_03",
+          "44": "geo_04_04",
+          "51": "geo_05_01",
+          "52": "geo_05_02",
+          "53": "geo_05_03",
+          "54": "geo_05_04",
+          "55": "geo_05_05",
+          "56": "geo_05_06",
+          "57": "geo_05_07",
+          "61": "geo_06_01",
+          "62": "geo_06_02",
+          "63": "geo_06_03",
+          "64": "geo_06_04",
+          "71": "geo_07_01",
+          "72": "geo_07_02",
+          "73": "geo_07_03",
+          "74": "geo_07_04",
+          "81": "geo_08_01",
+          "82": "geo_08_02",
+          "83": "geo_08_03",
+          "84": "geo_08_04",
+          "91": "geo_09_01",
+          "92": "geo_09_02",
+          "93": "geo_09_03",
+          "94": "geo_09_04",
+          "95": "geo_09_05",
+          "96": "geo_09_06",
+          "97": "geo_09_07",
+          "98": "geo_09_08",
+          "101": "geo_10_01",
+          "102": "geo_10_02",
+          "103": "geo_10_03",
+          "104": "geo_10_04",
+          "105": "geo_10_05",
+          "106": "geo_10_06",
+          "107": "geo_10_07",
+          "108": "geo_10_08",
+          "109": "geo_10_09"
+        }
+      },
+      "urbrur": {
+        "label": "Residence (urban/rural)",
+        "values": {
+          "1": "Rural",
+          "2": "Urban"
+        }
+      },
+      "ea": {
+        "label": "Enumeration area"
+      },
+      "n_hlds_census": {
+        "label": "Number of households in the census (measure of size)"
+      }
+    },
     "tags": [
       "wb",
       "synthetic",
@@ -33,17 +128,181 @@
     "slug": "hld_pop_wb_2023",
     "title": "WB Synthetic Household Census 2023 (bundled)",
     "description": "The full household census (true population) over the frame's enumeration areas.",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "filename": "hld_pop_wb_2023.parquet",
-    "sha256": "7458321d93dd02893c3c69543b39432f689140b555393f2e5959abec9d4f1110",
-    "size_bytes": 1043122,
+    "sha256": "4f776f1186691d3b0c2a7dc4b9d4e9934806a22a716bf5fe75d55282bc04452c",
+    "size_bytes": 1043524,
     "n_rows": 57867,
     "n_cols": 15,
     "license": "World Bank synthetic microdata terms",
     "citation": "World Bank (2023). Synthetic Data for Household Surveys and Census (World Bank Synthetic Data 2023). https://doi.org/10.48529/78M1-AE09",
     "source": "World Bank Microdata Library (catalog 5906)",
     "design": null,
-    "variables": {},
+    "variables": {
+      "hid": {
+        "label": "Unique household identifier"
+      },
+      "geo1": {
+        "label": "Geographic area - Admin 1",
+        "values": {
+          "1": "geo_01",
+          "2": "geo_02",
+          "3": "geo_03",
+          "4": "geo_04",
+          "5": "geo_05",
+          "6": "geo_06",
+          "7": "geo_07",
+          "8": "geo_08",
+          "9": "geo_09",
+          "10": "geo_10"
+        }
+      },
+      "geo2": {
+        "label": "Geographic area - Admin 2",
+        "values": {
+          "11": "geo_01_01",
+          "12": "geo_01_02",
+          "13": "geo_01_03",
+          "14": "geo_01_04",
+          "15": "geo_01_05",
+          "16": "geo_01_06",
+          "17": "geo_01_07",
+          "18": "geo_01_08",
+          "21": "geo_02_01",
+          "22": "geo_02_02",
+          "23": "geo_02_03",
+          "24": "geo_02_04",
+          "25": "geo_02_05",
+          "26": "geo_02_06",
+          "27": "geo_02_07",
+          "28": "geo_02_08",
+          "31": "geo_03_01",
+          "32": "geo_03_02",
+          "33": "geo_03_03",
+          "34": "geo_03_04",
+          "35": "geo_03_05",
+          "41": "geo_04_01",
+          "42": "geo_04_02",
+          "43": "geo_04_03",
+          "44": "geo_04_04",
+          "51": "geo_05_01",
+          "52": "geo_05_02",
+          "53": "geo_05_03",
+          "54": "geo_05_04",
+          "55": "geo_05_05",
+          "56": "geo_05_06",
+          "57": "geo_05_07",
+          "61": "geo_06_01",
+          "62": "geo_06_02",
+          "63": "geo_06_03",
+          "64": "geo_06_04",
+          "71": "geo_07_01",
+          "72": "geo_07_02",
+          "73": "geo_07_03",
+          "74": "geo_07_04",
+          "81": "geo_08_01",
+          "82": "geo_08_02",
+          "83": "geo_08_03",
+          "84": "geo_08_04",
+          "91": "geo_09_01",
+          "92": "geo_09_02",
+          "93": "geo_09_03",
+          "94": "geo_09_04",
+          "95": "geo_09_05",
+          "96": "geo_09_06",
+          "97": "geo_09_07",
+          "98": "geo_09_08",
+          "101": "geo_10_01",
+          "102": "geo_10_02",
+          "103": "geo_10_03",
+          "104": "geo_10_04",
+          "105": "geo_10_05",
+          "106": "geo_10_06",
+          "107": "geo_10_07",
+          "108": "geo_10_08",
+          "109": "geo_10_09"
+        }
+      },
+      "ea": {
+        "label": "Enumeration area"
+      },
+      "urbrur": {
+        "label": "Residence (urban/rural)",
+        "values": {
+          "1": "Rural",
+          "2": "Urban"
+        }
+      },
+      "hhsize": {
+        "label": "Household size"
+      },
+      "rooms": {
+        "label": "Number of rooms in dwelling"
+      },
+      "electricity": {
+        "label": "Electricity",
+        "values": {
+          "0": "No",
+          "1": "Yes"
+        }
+      },
+      "water": {
+        "label": "Main source of drinking water",
+        "values": {
+          "11": "Piped into dwelling",
+          "12": "Piped to yard/plot",
+          "13": "Piped to neighbor",
+          "14": "Public tap/standpipe",
+          "21": "Tube well or borehole",
+          "31": "Protected well",
+          "32": "Unprotected well",
+          "41": "Protected spring",
+          "42": "Unprotected spring",
+          "43": "River/dam/lake/ponds/stream/canal/irrig",
+          "51": "Rainwater",
+          "61": "Tanker truck",
+          "62": "Cart with small tank",
+          "71": "Bottled water",
+          "96": "Other"
+        }
+      },
+      "toilet": {
+        "label": "Toilet facility",
+        "values": {
+          "11": "Flush to piped sewer system",
+          "12": "Flush to septic tank",
+          "13": "Flush to pit latrine",
+          "14": "Flush to somewhere else",
+          "21": "Ventilated improved pit latrine (vip)",
+          "22": "Pit latrine with slab",
+          "23": "Pit latrine without slab/open pit",
+          "31": "No facility/bush/field",
+          "96": "Other"
+        }
+      },
+      "tot_exp": {
+        "label": "Total annual household expenditure"
+      },
+      "tot_food": {
+        "label": "Total annual food expenditure"
+      },
+      "share_food": {
+        "label": "Share of food in household expenditure"
+      },
+      "pc_exp": {
+        "label": "Total annual per capita expenditure"
+      },
+      "quint_nat": {
+        "label": "Per capita expenditure quintiles, national",
+        "values": {
+          "1": "poorest",
+          "2": "poor",
+          "3": "average",
+          "4": "rich",
+          "5": "richest"
+        }
+      }
+    },
     "tags": [
       "wb",
       "synthetic",
@@ -57,10 +316,10 @@
     "slug": "hld_sample_wb_2023",
     "title": "WB Synthetic Household Sample 2023 (bundled subset)",
     "description": "Two-stage (PPS + SRS) household sample with design weights.",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "filename": "hld_sample_wb_2023.parquet",
-    "sha256": "c3a00bb37705ade0807543efeda2109e5b472141f6df2d73d17aa8445971a015",
-    "size_bytes": 24210,
+    "sha256": "4646a3a018cf364b9a601d9c74f0269ef68f5c2d17b7cc71fff403c8a47d0d49",
+    "size_bytes": 23751,
     "n_rows": 825,
     "n_cols": 16,
     "license": "World Bank synthetic microdata terms",
@@ -74,7 +333,174 @@
       "psu": "ea",
       "wgt": "hhweight"
     },
-    "variables": {},
+    "variables": {
+      "hid": {
+        "label": "Unique household identifier"
+      },
+      "geo1": {
+        "label": "Geographic area - Admin 1",
+        "values": {
+          "1": "geo_01",
+          "2": "geo_02",
+          "3": "geo_03",
+          "4": "geo_04",
+          "5": "geo_05",
+          "6": "geo_06",
+          "7": "geo_07",
+          "8": "geo_08",
+          "9": "geo_09",
+          "10": "geo_10"
+        }
+      },
+      "geo2": {
+        "label": "Geographic area - Admin 2",
+        "values": {
+          "11": "geo_01_01",
+          "12": "geo_01_02",
+          "13": "geo_01_03",
+          "14": "geo_01_04",
+          "15": "geo_01_05",
+          "16": "geo_01_06",
+          "17": "geo_01_07",
+          "18": "geo_01_08",
+          "21": "geo_02_01",
+          "22": "geo_02_02",
+          "23": "geo_02_03",
+          "24": "geo_02_04",
+          "25": "geo_02_05",
+          "26": "geo_02_06",
+          "27": "geo_02_07",
+          "28": "geo_02_08",
+          "31": "geo_03_01",
+          "32": "geo_03_02",
+          "33": "geo_03_03",
+          "34": "geo_03_04",
+          "35": "geo_03_05",
+          "41": "geo_04_01",
+          "42": "geo_04_02",
+          "43": "geo_04_03",
+          "44": "geo_04_04",
+          "51": "geo_05_01",
+          "52": "geo_05_02",
+          "53": "geo_05_03",
+          "54": "geo_05_04",
+          "55": "geo_05_05",
+          "56": "geo_05_06",
+          "57": "geo_05_07",
+          "61": "geo_06_01",
+          "62": "geo_06_02",
+          "63": "geo_06_03",
+          "64": "geo_06_04",
+          "71": "geo_07_01",
+          "72": "geo_07_02",
+          "73": "geo_07_03",
+          "74": "geo_07_04",
+          "81": "geo_08_01",
+          "82": "geo_08_02",
+          "83": "geo_08_03",
+          "84": "geo_08_04",
+          "91": "geo_09_01",
+          "92": "geo_09_02",
+          "93": "geo_09_03",
+          "94": "geo_09_04",
+          "95": "geo_09_05",
+          "96": "geo_09_06",
+          "97": "geo_09_07",
+          "98": "geo_09_08",
+          "101": "geo_10_01",
+          "102": "geo_10_02",
+          "103": "geo_10_03",
+          "104": "geo_10_04",
+          "105": "geo_10_05",
+          "106": "geo_10_06",
+          "107": "geo_10_07",
+          "108": "geo_10_08",
+          "109": "geo_10_09"
+        }
+      },
+      "ea": {
+        "label": "Enumeration area"
+      },
+      "urbrur": {
+        "label": "Residence (urban/rural)",
+        "values": {
+          "1": "Rural",
+          "2": "Urban"
+        }
+      },
+      "hhsize": {
+        "label": "Household size"
+      },
+      "rooms": {
+        "label": "Number of rooms in dwelling"
+      },
+      "electricity": {
+        "label": "Electricity",
+        "values": {
+          "0": "No",
+          "1": "Yes"
+        }
+      },
+      "water": {
+        "label": "Main source of drinking water",
+        "values": {
+          "11": "Piped into dwelling",
+          "12": "Piped to yard/plot",
+          "13": "Piped to neighbor",
+          "14": "Public tap/standpipe",
+          "21": "Tube well or borehole",
+          "31": "Protected well",
+          "32": "Unprotected well",
+          "41": "Protected spring",
+          "42": "Unprotected spring",
+          "43": "River/dam/lake/ponds/stream/canal/irrig",
+          "51": "Rainwater",
+          "61": "Tanker truck",
+          "62": "Cart with small tank",
+          "71": "Bottled water",
+          "96": "Other"
+        }
+      },
+      "toilet": {
+        "label": "Toilet facility",
+        "values": {
+          "11": "Flush to piped sewer system",
+          "12": "Flush to septic tank",
+          "13": "Flush to pit latrine",
+          "14": "Flush to somewhere else",
+          "21": "Ventilated improved pit latrine (vip)",
+          "22": "Pit latrine with slab",
+          "23": "Pit latrine without slab/open pit",
+          "31": "No facility/bush/field",
+          "96": "Other"
+        }
+      },
+      "tot_exp": {
+        "label": "Total annual household expenditure"
+      },
+      "tot_food": {
+        "label": "Total annual food expenditure"
+      },
+      "share_food": {
+        "label": "Share of food in household expenditure"
+      },
+      "pc_exp": {
+        "label": "Total annual per capita expenditure"
+      },
+      "quint_nat": {
+        "label": "Per capita expenditure quintiles, national",
+        "values": {
+          "1": "poorest",
+          "2": "poor",
+          "3": "average",
+          "4": "rich",
+          "5": "richest"
+        }
+      },
+      "hhweight": {
+        "label": "Household weight"
+      }
+    },
     "tags": [
       "wb",
       "synthetic",
@@ -88,11 +514,11 @@
     "slug": "ind_sample_wb_2023",
     "title": "WB Synthetic Individual Sample 2023 (bundled subset)",
     "description": "Individuals of the sampled households, enriched with household design variables (geo1/geo2/ea/urbrur) and weights.",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "filename": "ind_sample_wb_2023.parquet",
-    "sha256": "31f0be4f3083c6d853e8d469e3c04cf5e68b13117b1c7a5a92e12fe4857618f9",
-    "size_bytes": 30121,
-    "n_rows": 3246,
+    "sha256": "216181293686bd881bccd455dabe756c77e8850f9e752a99f06b4dd9387f4068",
+    "size_bytes": 29783,
+    "n_rows": 3140,
     "n_cols": 15,
     "license": "World Bank synthetic microdata terms",
     "citation": "World Bank (2023). Synthetic Data for Household Surveys and Census (World Bank Synthetic Data 2023). https://doi.org/10.48529/78M1-AE09",
@@ -105,7 +531,165 @@
       "psu": "ea",
       "wgt": "hhweight"
     },
-    "variables": {},
+    "variables": {
+      "hid": {
+        "label": "Unique household identifier"
+      },
+      "idno": {
+        "label": "Person identification number"
+      },
+      "geo1": {
+        "label": "Geographic area - Admin 1",
+        "values": {
+          "1": "geo_01",
+          "2": "geo_02",
+          "3": "geo_03",
+          "4": "geo_04",
+          "5": "geo_05",
+          "6": "geo_06",
+          "7": "geo_07",
+          "8": "geo_08",
+          "9": "geo_09",
+          "10": "geo_10"
+        }
+      },
+      "geo2": {
+        "label": "Geographic area - Admin 2",
+        "values": {
+          "11": "geo_01_01",
+          "12": "geo_01_02",
+          "13": "geo_01_03",
+          "14": "geo_01_04",
+          "15": "geo_01_05",
+          "16": "geo_01_06",
+          "17": "geo_01_07",
+          "18": "geo_01_08",
+          "21": "geo_02_01",
+          "22": "geo_02_02",
+          "23": "geo_02_03",
+          "24": "geo_02_04",
+          "25": "geo_02_05",
+          "26": "geo_02_06",
+          "27": "geo_02_07",
+          "28": "geo_02_08",
+          "31": "geo_03_01",
+          "32": "geo_03_02",
+          "33": "geo_03_03",
+          "34": "geo_03_04",
+          "35": "geo_03_05",
+          "41": "geo_04_01",
+          "42": "geo_04_02",
+          "43": "geo_04_03",
+          "44": "geo_04_04",
+          "51": "geo_05_01",
+          "52": "geo_05_02",
+          "53": "geo_05_03",
+          "54": "geo_05_04",
+          "55": "geo_05_05",
+          "56": "geo_05_06",
+          "57": "geo_05_07",
+          "61": "geo_06_01",
+          "62": "geo_06_02",
+          "63": "geo_06_03",
+          "64": "geo_06_04",
+          "71": "geo_07_01",
+          "72": "geo_07_02",
+          "73": "geo_07_03",
+          "74": "geo_07_04",
+          "81": "geo_08_01",
+          "82": "geo_08_02",
+          "83": "geo_08_03",
+          "84": "geo_08_04",
+          "91": "geo_09_01",
+          "92": "geo_09_02",
+          "93": "geo_09_03",
+          "94": "geo_09_04",
+          "95": "geo_09_05",
+          "96": "geo_09_06",
+          "97": "geo_09_07",
+          "98": "geo_09_08",
+          "101": "geo_10_01",
+          "102": "geo_10_02",
+          "103": "geo_10_03",
+          "104": "geo_10_04",
+          "105": "geo_10_05",
+          "106": "geo_10_06",
+          "107": "geo_10_07",
+          "108": "geo_10_08",
+          "109": "geo_10_09"
+        }
+      },
+      "ea": {
+        "label": "Enumeration area"
+      },
+      "urbrur": {
+        "label": "Residence (urban/rural)",
+        "values": {
+          "1": "Rural",
+          "2": "Urban"
+        }
+      },
+      "sex": {
+        "label": "Sex",
+        "values": {
+          "1": "Male",
+          "2": "Female"
+        }
+      },
+      "age": {
+        "label": "Age in years"
+      },
+      "marstat": {
+        "label": "Marital status",
+        "values": {
+          "1": "Single/never married",
+          "2": "Married/in union",
+          "3": "Divorced/separated",
+          "4": "Widowed"
+        }
+      },
+      "educ_attain": {
+        "label": "Education attainment",
+        "values": {
+          "0": "NIU (not in universe) or no education",
+          "1": "Less than primary",
+          "2": "Primary",
+          "3": "Secondary",
+          "4": "University"
+        }
+      },
+      "yrs_school": {
+        "label": "Years of schooling"
+      },
+      "literacy": {
+        "label": "Literacy status",
+        "values": {
+          "0": "Not in universe",
+          "1": "Yes",
+          "2": "No"
+        }
+      },
+      "act_status": {
+        "label": "Activity status",
+        "values": {
+          "0": "NIU (not in universe)",
+          "1": "Employed",
+          "2": "Unemployed",
+          "3": "Inactive"
+        }
+      },
+      "labor_force": {
+        "label": "Labor force status",
+        "values": {
+          "0": "Not in universe",
+          "1": "Yes",
+          "2": "No"
+        }
+      },
+      "hhweight": {
+        "label": "Household weight"
+      }
+    },
     "tags": [
       "wb",
       "synthetic",
@@ -119,7 +703,7 @@
     "slug": "panel_syn_2026",
     "title": "Synthetic three-wave household panel 2026 (bundled)",
     "description": "Long-format panel: 1200 cases at wave 1 in 6 strata x 10 PSUs, ~15% attrition per wave, producer longitudinal weights lw_12 and lw_123, a binary outcome for transitions and a continuous one for change.",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "filename": "panel_syn_2026.parquet",
     "sha256": "5b7968dc3b3df01efbe44bb2a18b219fa4680bc6c664ecb36e32c57d68e4c3d4",
     "size_bytes": 28924,
@@ -135,7 +719,45 @@
       "psu": "psu",
       "wgt": "w1"
     },
-    "variables": {},
+    "variables": {
+      "urban": {
+        "label": "Area of residence",
+        "values": {
+          "0": "Rural",
+          "1": "Urban"
+        }
+      },
+      "age_grp": {
+        "label": "Age group",
+        "values": {
+          "1": "15-29",
+          "2": "30-44",
+          "3": "45-59",
+          "4": "60+"
+        }
+      },
+      "sex": {
+        "label": "Sex",
+        "values": {
+          "1": "Male",
+          "2": "Female"
+        }
+      },
+      "resp": {
+        "label": "Response status",
+        "values": {
+          "rr": "Respondent",
+          "nr": "Nonrespondent"
+        }
+      },
+      "emp": {
+        "label": "Employed",
+        "values": {
+          "0": "No",
+          "1": "Yes"
+        }
+      }
+    },
     "tags": [
       "synthetic",
       "panel",

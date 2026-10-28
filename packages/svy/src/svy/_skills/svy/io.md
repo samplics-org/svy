@@ -64,5 +64,6 @@ analysed: a person weight for person estimates where the survey provides one.
 ## Example data
 
 `svy.datasets.load(name, source="bundled")` loads a bundled example dataset
-and `svy.datasets.describe(name, source="bundled").design` gives its design
-as keyword arguments for `svy.Design(**...)`.
+as a `Sample` with its design and labels; the data holds codes, so filter on
+codes (`svy.col("urbrur") == 2`), and `svy.datasets.info(name).variables`
+lists each code's label. `svy.datasets.info()` lists the datasets.

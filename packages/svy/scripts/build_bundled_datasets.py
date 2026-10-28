@@ -27,9 +27,14 @@ headline estimate lands close to the census truth (a representative — but stil
 genuine — random sample). Requires the full canonical parquet masters; point
 SVY_WB_SRC at the directory holding them.
 
+The files store codes; each registry entry's ``variables`` holds the variable
+and value labels of its columns, from the WB label file (SVY_WB_CODEBOOK).
+Masters that still store label text are encoded through that file.
+
 Usage
 -----
     SVY_WB_SRC=/path/to/wb/synthetic/v1.0.0 \
+    SVY_WB_CODEBOOK=/path/to/wb_codebook.json \
         uv run python scripts/build_bundled_datasets.py
 """
 
@@ -53,6 +58,13 @@ SRC = Path(
         "/Users/msdiallo/DEV/samplics-org/svylab/data/datasets/examples/wb/synthetic/v1.0.0",
     )
 )
+CODEBOOK = Path(
+    os.getenv(
+        "SVY_WB_CODEBOOK",
+        "/Users/msdiallo/DEV/samplics-org/svylab/data/demo_data/organizations/samplics/"
+        "library/registers/wb_codebook.json",
+    )
+)
 OUT = Path(__file__).resolve().parents[1] / "src" / "svy" / "datasets" / "_bundled"
 OUT.mkdir(parents=True, exist_ok=True)
 
@@ -62,7 +74,7 @@ N_MIN, N_MAX = 15, 20  # frame EAs per stratum (varying)
 K_HH = 25  # households selected per EA (stage-2 SRS)
 FRAME_SEED = 12345
 SAMPLE_SEEDS = range(30)  # candidate sample seeds; the most representative is kept
-VERSION = "1.0.0"
+VERSION = "2.0.0"
 
 # Curated columns (design vars + the variables the tutorials use). The full
 # schema stays available online via source="remote".
@@ -152,15 +164,53 @@ _META = {
 }
 
 
+# Built here, so not in the WB label file.
+_OWN_LABELS = {"n_hlds_census": "Number of households in the census (measure of size)"}
+
+
 def sha256_of(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _labels(level: str) -> dict[str, dict]:
+    """Per-variable ``{"label", "values"}`` of one level, shared value-label sets written out."""
+    book = json.loads(CODEBOOK.read_text())["levels"][level]
+    out = {var: {"label": label} for var, label in book["variable_labels"].items()}
+    for var, label_set in book["variable_to_label_set"].items():
+        out[var]["values"] = book["value_labels"][label_set]
+    return out
+
+
+# Individuals carry the household design variables (geo1, ea, ...), labelled there.
+HH_LABELS = _labels("household") | {v: {"label": t} for v, t in _OWN_LABELS.items()}
+IND_LABELS = HH_LABELS | _labels("individual")
+
+
+def encode(df: pl.DataFrame, labels: dict[str, dict]) -> pl.DataFrame:
+    """Replace label text with its code in every labelled text column."""
+    return df.with_columns(
+        pl.col(var).replace_strict(
+            {text: int(code) for code, text in labels[var]["values"].items()},
+            return_dtype=pl.Int64,
+        )
+        for var, dtype in df.schema.items()
+        if dtype == pl.String and "values" in labels.get(var, {})
+    )
+
+
+def variables(df: pl.DataFrame, labels: dict[str, dict]) -> dict[str, dict]:
+    """The registry's ``variables`` for the columns of ``df``, with each full label set."""
+    missing = [c for c in df.columns if c not in labels]
+    if missing:
+        raise SystemExit(f"No label for columns {missing}; add them to the label file.")
+    return {c: labels[c] for c in df.columns}
 
 
 def main() -> None:
     if not SRC.exists():
         raise SystemExit(f"Canonical WB source not found: {SRC}\nSet SVY_WB_SRC.")
 
-    ea = pl.read_parquet(SRC / "ea_frame_wb_2023.parquet")
+    ea = encode(pl.read_parquet(SRC / "ea_frame_wb_2023.parquet"), HH_LABELS)
     regions = sorted(ea["geo1"].unique().to_list())[:REGIONS_N]
     ea5 = ea.filter(pl.col("geo1").is_in(regions))
     strata = ea5.select("geo1", "urbrur").unique().sort(["geo1", "urbrur"])
@@ -184,6 +234,7 @@ def main() -> None:
         .filter(pl.col("ea").is_in(frame_set))
         .collect()
         .select(HH_COLS)
+        .pipe(encode, HH_LABELS)
     )
     mos = census.group_by("ea").len().rename({"len": "n_hlds_census"})
     frame = (
@@ -224,6 +275,7 @@ def main() -> None:
         pl.scan_parquet(SRC / "ind_pop_wb_2023.parquet")
         .filter(pl.col("hid").is_in(samp_hids))
         .collect()
+        .pipe(encode, IND_LABELS)
     )
     hh_geo = b_hld_s.select(["hid", "geo1", "geo2", "ea", "urbrur", "hhweight"])
     b_ind_s = (
@@ -278,7 +330,7 @@ def main() -> None:
                 "citation": _CITATION,
                 "source": _SOURCE,
                 "design": meta["design"],
-                "variables": {},
+                "variables": variables(df, IND_LABELS if slug.startswith("ind_") else HH_LABELS),
                 "tags": list(meta["tags"]),
                 "notes": meta["notes"],
             }

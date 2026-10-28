@@ -13,12 +13,12 @@ This module is intentionally dependency-light and network-free.  It exposes:
 - ``has(slug)``          -- whether a slug is bundled
 - ``describe(slug)``     -- bundled ``Dataset`` metadata (``download_url=""``)
 - ``catalog()``          -- all bundled ``Dataset`` records
-- ``read_lazy(slug)``    -- the bundled parquet as an in-memory ``LazyFrame``
+- ``read(slug)``         -- the bundled parquet as a ``DataFrame``
 
-``read_lazy`` reads the file eagerly and returns ``.lazy()`` so the result is
-detached from the packaged resource — this keeps it correct even when the
-package is imported from a zip (``importlib.resources.as_file`` may hand back a
-temporary path that is cleaned up on context exit).
+``read`` reads the file eagerly so the result is detached from the packaged
+resource — this keeps it correct even when the package is imported from a zip
+(``importlib.resources.as_file`` may hand back a temporary path that is cleaned
+up on context exit).
 """
 
 from __future__ import annotations
@@ -111,8 +111,8 @@ def catalog() -> DatasetCatalog:
     return DatasetCatalog(_to_dataset(e) for e in _registry().values())
 
 
-def read_lazy(slug: str) -> pl.LazyFrame:
-    """Read the bundled parquet for ``slug`` as an in-memory ``LazyFrame``.
+def read(slug: str) -> pl.DataFrame:
+    """Read the bundled parquet for ``slug``.
 
     Raises
     ------
@@ -133,6 +133,6 @@ def read_lazy(slug: str) -> pl.LazyFrame:
         raise
     except Exception as ex:  # missing file, unreadable parquet, extraction error
         raise DatasetError.bundled_unavailable(
-            where="datasets._bundled.read_lazy", slug=slug, reason=str(ex)
+            where="datasets._bundled.read", slug=slug, reason=str(ex)
         ) from ex
-    return df.lazy()
+    return df

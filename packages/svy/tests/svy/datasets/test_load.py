@@ -1,302 +1,93 @@
-# tests/datasets/test_load.py
-"""
-Tests for ``svy.datasets.load``.
-
-Covers the whole pipeline:
-  * catalog lookup + cache download
-  * where filtering
-  * column selection
-  * ordering (ascending / descending / random)
-  * slicing: n (int, mapping) and rate (float, mapping), globally and per-group
-  * lazy vs eager return
-  * argument validation
-"""
+# tests/svy/datasets/test_load.py
+"""``svy.datasets.load`` resolves a remote slug to a ``Sample`` with its design and labels."""
 
 from __future__ import annotations
 
-import numpy as np
 import polars as pl
 import pytest
 
+import svy
+
 from svy.datasets import load
-from svy.datasets.base import _seed_from_rstate
 from svy.errors._dataset import DatasetError
 
 
-# --------------------------------------------------------------------------- #
-# Shared setup
-# --------------------------------------------------------------------------- #
+URL = "https://svylab.test/data/toy.parquet"
 
 
 @pytest.fixture
-def wired(routes, make_parquet, make_dataset_dict):
-    """Register both the catalog entry and the parquet file."""
+def wired(routes, make_parquet, make_backend_entry):
+    """Register the catalog entry and the parquet; return a function to set the entry's fields."""
     data, sha = make_parquet(n_rows=200)  # 200 rows, 4 regions (50 each)
-    url = "https://svylab.test/data/toy.parquet"
-    routes.add_json(
-        "/api/data/examples/registry",
-        [make_dataset_dict(slug="toy", download_url=url, sha256=sha, n_rows=200)],
-    )
     routes.add_bytes("/data/toy.parquet", data)
-    return data
+
+    def _wire(**fields):
+        entry = make_backend_entry(slug="toy", download_url=URL, sha256=sha, **fields)
+        routes.add_json("/api/data/examples/registry", [entry])
+
+    return _wire
 
 
-# --------------------------------------------------------------------------- #
-# Return type
-# --------------------------------------------------------------------------- #
+class TestSample:
+    def test_returns_sample_holding_the_file(self, wired):
+        wired()
+        sample = load("toy")
+        assert isinstance(sample, svy.Sample)
+        assert sample.data.height == 200
+        assert sample.data.columns == ["id", "value", "region", "age"]
 
+    def test_design_comes_from_the_entry(self, wired):
+        wired(design={"stratum": "region", "psu": "id", "wgt": "value"})
+        design = load("toy").design
+        assert (design.stratum, design.psu, design.wgt) == ("region", "id", "value")
 
-class TestReturnType:
-    def test_default_returns_dataframe(self, wired):
-        result = load("toy")
-        assert isinstance(result, pl.DataFrame)
-        assert len(result) == 200
+    def test_no_design_gives_an_empty_design(self, wired):
+        wired()
+        design = load("toy").design
+        assert (design.stratum, design.psu, design.wgt) == (None, None, None)
 
-    def test_lazy_true_returns_lazyframe(self, wired):
-        result = load("toy", lazy=True)
-        assert isinstance(result, pl.LazyFrame)
-
-    def test_lazy_result_collects_to_same_data(self, wired):
-        eager = load("toy")
-        lazy = load("toy", lazy=True).collect()
-        assert eager.equals(lazy)
-
-
-# --------------------------------------------------------------------------- #
-# where
-# --------------------------------------------------------------------------- #
-
-
-class TestWhere:
-    def test_where_pl_expr(self, wired):
-        result = load("toy", where=pl.col("age") >= 40)
-        assert (result["age"] >= 40).all()
-
-    def test_where_dict(self, wired):
-        result = load("toy", where={"region": "north"})
-        assert (result["region"] == "north").all()
-
-    def test_where_dict_with_list_is_in(self, wired):
-        result = load("toy", where={"region": ["north", "south"]})
-        assert set(result["region"].unique()) <= {"north", "south"}
-
-    def test_where_list_of_exprs_is_anded(self, wired):
-        result = load(
-            "toy",
-            where=[pl.col("age") >= 30, pl.col("region") == "east"],
+    def test_labels_come_from_the_entry(self, wired):
+        wired(
+            variables={
+                "age": {"label": "Age in years"},
+                "region": {"label": "Region", "values": {"north": "North", "south": "South"}},
+            }
         )
-        assert (result["age"] >= 30).all()
-        assert (result["region"] == "east").all()
+        meta = load("toy").meta
+        assert dict(meta.var_labels) == {"age": "Age in years", "region": "Region"}
+        assert dict(meta.value_labels) == {"region": {"north": "North", "south": "South"}}
 
-    def test_where_none_returns_everything(self, wired):
-        result = load("toy", where=None)
-        assert len(result) == 200
-
-
-# --------------------------------------------------------------------------- #
-# select
-# --------------------------------------------------------------------------- #
-
-
-class TestSelect:
-    def test_select_subset_of_columns(self, wired):
-        result = load("toy", select=["id", "value"])
-        assert result.columns == ["id", "value"]
-
-    def test_select_ignores_extras_does_not_crash(self, wired):
-        # select with only valid columns
-        result = load("toy", select=["id"])
-        assert result.columns == ["id"]
-
-    def test_select_preserves_all_rows(self, wired):
-        result = load("toy", select=["id"])
-        assert len(result) == 200
-
-
-# --------------------------------------------------------------------------- #
-# ordering
-# --------------------------------------------------------------------------- #
-
-
-class TestOrdering:
-    def test_ascending(self, wired):
-        result = load("toy", order_by="value", order_type="ascending")
-        vals = result["value"].to_list()
-        assert vals == sorted(vals)
-
-    def test_descending(self, wired):
-        result = load("toy", order_by="value", order_type="descending")
-        vals = result["value"].to_list()
-        assert vals == sorted(vals, reverse=True)
-
-    def test_random_is_deterministic_with_seed(self, wired):
-        r1 = load("toy", order_type="random", rstate=42)
-        r2 = load("toy", order_type="random", rstate=42)
-        assert r1["id"].to_list() == r2["id"].to_list()
-
-    def test_random_changes_row_order(self, wired):
-        baseline = load("toy")["id"].to_list()
-        shuffled = load("toy", order_type="random", rstate=42)["id"].to_list()
-        # Same rows, different order (with overwhelming probability).
-        assert set(shuffled) == set(baseline)
-        assert shuffled != baseline
-
-    def test_random_order_is_pinned_for_a_seed(self, wired):
-        # Golden: a seed must give these rows on every polars and NumPy version.
-        ids = load("toy", order_type="random", rstate=42, n=8)["id"].to_list()
-        assert ids == [174, 34, 64, 188, 18, 5, 160, 123]
-
-    @pytest.mark.parametrize("seed", [2**40 + 3, -5])
-    def test_random_takes_wide_and_negative_seeds(self, wired, seed):
-        r1 = load("toy", order_type="random", rstate=seed)["id"].to_list()
-        r2 = load("toy", order_type="random", rstate=seed)["id"].to_list()
-        assert r1 == r2
-        assert sorted(r1) == list(range(200))
-
-    def test_invalid_order_type_raises(self, wired):
-        with pytest.raises(ValueError, match="order_type"):
-            load("toy", order_type="sideways")
-
-    def test_order_by_none_with_ascending_is_no_op(self, wired):
-        # No sort column provided, and order_type isn't 'random'.
-        result = load("toy", order_type="ascending")
-        # Should be identity order (as written by parquet).
-        assert result["id"].to_list() == list(range(200))
-
-
-# --------------------------------------------------------------------------- #
-# n slicing (global)
-# --------------------------------------------------------------------------- #
-
-
-class TestNGlobal:
-    def test_n_returns_first_rows(self, wired):
-        result = load("toy", n=10)
-        assert len(result) == 10
-        assert result["id"].to_list() == list(range(10))
-
-    def test_n_greater_than_total_returns_all(self, wired):
-        result = load("toy", n=10_000)
-        assert len(result) == 200
-
-    def test_n_zero(self, wired):
-        result = load("toy", n=0)
-        assert len(result) == 0
-
-
-# --------------------------------------------------------------------------- #
-# n slicing (per-group via `by`)
-# --------------------------------------------------------------------------- #
-
-
-class TestNByGroup:
-    def test_n_int_with_by_is_per_group(self, wired):
-        # 200 rows, 4 regions × 50 each.  n=5 per region → 20 total.
-        result = load("toy", n=5, by="region")
-        assert len(result) == 20
-        counts = result.group_by("region").len()
-        assert all(c == 5 for c in counts["len"].to_list())
-
-    def test_n_mapping_selects_per_group(self, wired):
-        result = load(
-            "toy",
-            n={"north": 3, "south": 7, "east": 2, "west": 0},
-            by="region",
+    @pytest.mark.parametrize(
+        "dtype, code", [(pl.Int64, 18), (pl.Int8, 18), (pl.Float64, 18.0)], ids=str
+    )
+    def test_json_codes_take_the_column_dtype(
+        self, routes, make_backend_entry, tmp_path, dtype, code
+    ):
+        path = tmp_path / "coded.parquet"
+        pl.DataFrame({"age": pl.Series([18, 19, 18], dtype=dtype)}).write_parquet(path)
+        routes.add_bytes("/data/coded.parquet", path.read_bytes())
+        entry = make_backend_entry(
+            slug="coded",
+            download_url="https://svylab.test/data/coded.parquet",
+            variables={"age": {"label": "Age", "values": {"18": "Eighteen", "19": "Nineteen"}}},
         )
-        # Build manually — group_by order not guaranteed
-        by_region = {
-            r: len(result.filter(pl.col("region") == r))
-            for r in ["north", "south", "east", "west"]
-        }
-        assert by_region == {"north": 3, "south": 7, "east": 2, "west": 0}
+        routes.add_json("/api/data/examples/registry", [entry])
+        labels = load("coded").meta.value_labels["age"]
+        assert labels == {code: "Eighteen", code + 1: "Nineteen"}
+        assert all(type(k) is type(code) for k in labels)
 
-    def test_n_mapping_unlisted_groups_excluded(self, wired):
-        result = load("toy", n={"north": 5}, by="region")
-        assert set(result["region"].unique()) == {"north"}
-        assert len(result) == 5
+    def test_labels_for_columns_not_in_the_file_are_ignored(self, wired):
+        wired(variables={"region": {"label": "Region"}, "gone": {"label": "Not in the file"}})
+        assert dict(load("toy").meta.var_labels) == {"region": "Region"}
 
-    def test_n_mapping_without_by_raises(self, wired):
-        with pytest.raises(ValueError, match="requires `by`"):
-            load("toy", n={"north": 5})
+    def test_cached_download_records_its_entry(self, wired):
+        from svy.datasets import _cache
 
-
-# --------------------------------------------------------------------------- #
-# rate slicing (global and per-group)
-# --------------------------------------------------------------------------- #
-
-
-class TestRate:
-    def test_rate_global(self, wired):
-        result = load("toy", rate=0.25)
-        # 200 * 0.25 = 50
-        assert len(result) == 50
-
-    def test_rate_per_group_uniform(self, wired):
-        result = load("toy", rate=0.1, by="region")
-        # 10% of each of the 4 groups of 50 → 5 per group → 20 total
-        assert len(result) == 20
-
-    def test_rate_mapping(self, wired):
-        result = load(
-            "toy",
-            rate={"north": 0.2, "south": 0.4, "east": 1.0, "west": 0.0},
-            by="region",
-        )
-        counts = {
-            r: len(result.filter(pl.col("region") == r))
-            for r in ["north", "south", "east", "west"]
-        }
-        # north: 50 * 0.2 = 10; south: 50*0.4=20; east: 50; west: 0
-        assert counts == {"north": 10, "south": 20, "east": 50, "west": 0}
-
-    def test_rate_out_of_range_raises(self, wired):
-        with pytest.raises(ValueError, match="rate"):
-            load("toy", rate=1.5)
-
-    def test_rate_zero_raises(self, wired):
-        with pytest.raises(ValueError, match="rate"):
-            load("toy", rate=0.0)
-
-    def test_n_and_rate_mutually_exclusive(self, wired):
-        with pytest.raises(ValueError, match="mutually exclusive"):
-            load("toy", n=5, rate=0.1)
-
-
-# --------------------------------------------------------------------------- #
-# Composition: filter + select + order + slice
-# --------------------------------------------------------------------------- #
-
-
-class TestComposition:
-    def test_where_then_n(self, wired):
-        result = load("toy", where={"region": "north"}, n=5)
-        assert len(result) == 5
-        assert (result["region"] == "north").all()
-
-    def test_where_then_select_then_order_then_n(self, wired):
-        result = load(
-            "toy",
-            where=pl.col("age") >= 30,
-            select=["id", "age", "region"],
-            order_by="age",
-            order_type="descending",
-            n=10,
-        )
-        assert result.columns == ["id", "age", "region"]
-        assert len(result) == 10
-        ages = result["age"].to_list()
-        assert ages == sorted(ages, reverse=True)
-        assert all(a >= 30 for a in ages)
-
-    def test_random_then_n_is_reproducible(self, wired):
-        r1 = load("toy", order_type="random", rstate=7, n=20)
-        r2 = load("toy", order_type="random", rstate=7, n=20)
-        assert r1.equals(r2)
-
-
-# --------------------------------------------------------------------------- #
-# Network / error path
-# --------------------------------------------------------------------------- #
+        wired(variables={"age": {"label": "Age in years"}})
+        load("toy", source="remote")
+        path, ds = _cache.latest_cached("toy")
+        assert ds.slug == "toy"
+        assert dict(ds.variables) == {"age": {"label": "Age in years"}}
 
 
 class TestErrors:
@@ -323,31 +114,7 @@ class TestErrors:
             load("bad")
         assert exc_info.value.code == "DATASET_SHA_MISMATCH"
 
-
-# --------------------------------------------------------------------------- #
-# Seed helper (internal but worth locking in)
-# --------------------------------------------------------------------------- #
-
-
-class TestSeedFromRstate:
-    def test_int_passthrough(self):
-        assert _seed_from_rstate(42) == 42
-
-    def test_none_produces_some_int(self):
-        s = _seed_from_rstate(None)
-        assert isinstance(s, int)
-        assert s >= 0
-
-    def test_generator_produces_int(self):
-        gen = np.random.default_rng(7)
-        s = _seed_from_rstate(gen)
-        assert isinstance(s, int)
-
-    def test_randomstate_produces_int(self):
-        rs = np.random.RandomState(7)
-        s = _seed_from_rstate(rs)
-        assert isinstance(s, int)
-
-    def test_unsupported_type_raises(self):
-        with pytest.raises(TypeError):
-            _seed_from_rstate("not a seed")
+    @pytest.mark.parametrize("kw", ["n", "where", "select", "lazy"])
+    def test_removed_options_are_not_accepted(self, kw):
+        with pytest.raises(TypeError, match=kw):
+            load("toy", **{kw: None})

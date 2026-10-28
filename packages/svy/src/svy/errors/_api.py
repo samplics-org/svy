@@ -275,6 +275,18 @@ class UnknownNameError(UsageError, AttributeError):
             hint=f"Use {home}.{name}, or `from {home} import {name}`.",
         )
 
+    @classmethod
+    def renamed(cls, *, label: str, name: str, new: str, since: str) -> "UnknownNameError":
+        return cls(
+            title=f"{label}.{name} moved",
+            detail=f"{label}.{name} moved to {new} in {since}.",
+            code=Code.NAME_MOVED,
+            where=label,
+            got=name,
+            expected=new,
+            hint=f"Use {new}.",
+        )
+
 
 def guided_getattr(owner: str, label: str) -> Callable[[Any, str], Any]:
     """A ``__getattr__`` raising UnknownNameError for public names a class lacks."""

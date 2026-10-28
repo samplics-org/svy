@@ -34,7 +34,6 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-import svy
 import svy.datasets as d
 
 
@@ -63,7 +62,7 @@ def _bundled_bytes(slug: str) -> bytes:
 
 
 def test_bundled_catalog_has_expected_slugs():
-    assert {ds.slug for ds in d.catalog(source="bundled")} == EXPECTED_SLUGS
+    assert {ds.slug for ds in d.info(source="bundled")} == EXPECTED_SLUGS
 
 
 def test_benchmark_covers_every_bundled_dataset():
@@ -92,7 +91,7 @@ def test_file_sha256_and_size_match_benchmark(slug):
 
 @pytest.mark.parametrize("slug", SLUGS)
 def test_shape_and_columns_match_benchmark(slug):
-    df = d.load(slug, source="bundled")
+    df = d.load(slug, source="bundled").data
     bench = BENCHMARK[slug]
     assert df.height == bench["n_rows"]
     assert df.width == bench["n_cols"]
@@ -101,7 +100,7 @@ def test_shape_and_columns_match_benchmark(slug):
 
 @pytest.mark.parametrize("slug", SLUGS)
 def test_numeric_sums_match_benchmark(slug):
-    df = d.load(slug, source="bundled")
+    df = d.load(slug, source="bundled").data
     for col, expected in BENCHMARK[slug]["numeric_sums"].items():
         got = df[col].sum()
         assert got == pytest.approx(expected, rel=1e-9, abs=1e-4), col
@@ -113,9 +112,7 @@ DESIGN_SLUGS = [s for s in SLUGS if "design_mean" in BENCHMARK[s]]
 @pytest.mark.parametrize("slug", DESIGN_SLUGS)
 def test_design_based_estimate_matches_benchmark(slug):
     bench = BENCHMARK[slug]["design_mean"]
-    info = d.describe(slug, source="bundled")
-    df = d.load(slug, source="bundled")
-    est = svy.Sample(data=df, design=svy.Design(**info.design)).estimation.mean(bench["y"])
+    est = d.load(slug, source="bundled").estimation.mean(bench["y"])
     row = est.to_dicts()[0]
     assert row["est"] == pytest.approx(bench["est"], rel=1e-6, abs=1e-4)
     assert row["se"] == pytest.approx(bench["se"], rel=1e-6, abs=1e-4)
@@ -131,15 +128,15 @@ def test_design_based_estimate_matches_benchmark(slug):
 def test_sample_is_subset_of_census():
     # The sample households are a subset of the census (the sample is drawn
     # from the census).
-    hh_s = d.load("hld_sample_wb_2023", source="bundled")
-    hh_p = d.load("hld_pop_wb_2023", source="bundled")
+    hh_s = d.load("hld_sample_wb_2023", source="bundled").data
+    hh_p = d.load("hld_pop_wb_2023", source="bundled").data
     assert set(hh_s["hid"]).issubset(set(hh_p["hid"]))
 
 
 def test_ea_sets_reconcile():
-    frame = d.load("ea_frame_wb_2023", source="bundled")
-    hh_s = d.load("hld_sample_wb_2023", source="bundled")
-    hh_p = d.load("hld_pop_wb_2023", source="bundled")
+    frame = d.load("ea_frame_wb_2023", source="bundled").data
+    hh_s = d.load("hld_sample_wb_2023", source="bundled").data
+    hh_p = d.load("hld_pop_wb_2023", source="bundled").data
     # The census covers exactly the frame's EAs; the sample's EAs are a subset.
     assert set(frame["ea"]) == set(hh_p["ea"])
     assert set(hh_s["ea"]).issubset(set(frame["ea"]))
@@ -150,33 +147,33 @@ def test_ea_sets_reconcile():
 
 
 def test_design_is_valid_no_singleton_strata():
-    hh_s = d.load("hld_sample_wb_2023", source="bundled")
+    hh_s = d.load("hld_sample_wb_2023", source="bundled").data
     psu = hh_s.group_by(["geo1", "urbrur"]).agg(pl.col("ea").n_unique().alias("n_psu"))
-    assert psu.height == 7  # 4 regions x urban/rural (geo_01 is urban-only)
+    assert psu.height == 7  # 4 regions x urban/rural (geo_01, code 1, is urban-only)
     assert psu["n_psu"].min() >= 2  # no singleton strata → variance is defined
 
 
 def test_sample_weights_sum_to_census():
     # The self-drawn design weights inflate to the bundled population.
-    hh_s = d.load("hld_sample_wb_2023", source="bundled")
-    hh_p = d.load("hld_pop_wb_2023", source="bundled")
+    hh_s = d.load("hld_sample_wb_2023", source="bundled").data
+    hh_p = d.load("hld_pop_wb_2023", source="bundled").data
     assert hh_s["hhweight"].sum() == pytest.approx(hh_p.height, rel=1e-9)
 
 
 @pytest.mark.parametrize("slug", ["hld_sample_wb_2023", "ind_sample_wb_2023"])
 def test_sample_has_design_metadata(slug):
-    info = d.describe(slug, source="bundled")
+    info = d.info(slug, source="bundled")
     assert info.design == {"stratum": ["geo1", "urbrur"], "psu": "ea", "wgt": "hhweight"}
 
 
 def test_individual_sample_carries_design_columns():
     # ind_sample is enriched with the household's design vars so design-based
     # estimation works without a manual join.
-    df = d.load("ind_sample_wb_2023", source="bundled")
+    df = d.load("ind_sample_wb_2023", source="bundled").data
     for col in ("geo1", "geo2", "ea", "urbrur", "hhweight"):
         assert col in df.columns
     # every individual's geo/ea matches its household in the household sample
-    hh = d.load("hld_sample_wb_2023", source="bundled").select(
+    hh = d.load("hld_sample_wb_2023", source="bundled").data.select(
         ["hid", "geo1", "geo2", "ea", "urbrur"]
     )
     joined = df.select(["hid", "geo1", "geo2", "ea", "urbrur"]).join(

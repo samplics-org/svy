@@ -23,7 +23,6 @@ from pathlib import Path
 
 import polars as pl
 
-import svy
 import svy.datasets as d
 
 
@@ -57,8 +56,9 @@ def _numeric_sums(df: pl.DataFrame) -> dict[str, float]:
 
 def main() -> None:
     benchmark: dict[str, dict] = {}
-    for ds in d.catalog(source="bundled"):
-        df = d.load(ds.slug, source="bundled")
+    for ds in d.info(source="bundled"):
+        smp = d.load(ds.slug, source="bundled")
+        df = smp.data
         sha, size = _sha(ds.slug, f"{ds.slug}.parquet")
         entry = {
             "sha256": sha,
@@ -70,7 +70,6 @@ def main() -> None:
         }
         y = DESIGN_Y.get(ds.slug)
         if ds.design and y:
-            smp = svy.Sample(data=df, design=svy.Design(**ds.design))
             est = smp.estimation.mean(y)
             row = est.to_dicts()[0]
             entry["design_mean"] = {

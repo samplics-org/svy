@@ -60,17 +60,15 @@ import numpy as np
 
 rng = np.random.default_rng(42)
 
-# A bundled example survey; its metadata carries the sampling design
-data = svy.datasets.load("ind_sample_wb_2023", source="bundled")
-info = svy.datasets.describe("ind_sample_wb_2023", source="bundled")
-sample = svy.Sample(data, svy.Design(**info.design))
+# A bundled example survey, with its sampling design and labels
+sample = svy.datasets.load("ind_sample_wb_2023", source="bundled")
 
 literacy_rate = (
     sample
     # 1. Wrangle: a 1/0 literacy indicator, plus a simulated response status
     .wrangling.mutate({
-        "literate": svy.when(svy.col("literacy") == "Yes").then(1)
-                       .when(svy.col("literacy") == "No").then(0)
+        "literate": svy.when(svy.col("literacy") == 1).then(1)  # 1 = Yes
+                       .when(svy.col("literacy") == 2).then(0)  # 2 = No
                        .otherwise(None),
         # simulated for illustration; the example data has 100% response
         "resp_status": rng.choice(
@@ -107,15 +105,15 @@ print(sample.estimation.mean("age", by="urbrur"))
 ```
 
 ```
-╭──────────────── Estimate: MEAN (TAYLOR) ─────────────────╮
-│ y: age                                                   │
-│                                                          │
-│  urbrur       est       se       lci       uci   cv (%)  │
-│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
-│  Rural    27.4893   3.1681   20.5163   34.4624    11.53  │
-│  Urban    29.7557   2.5016   24.4236   35.0877     8.41  │
-│                                                          │
-╰──────────────────────────────────────────────────────────╯
+╭───────────────────────── Estimate: MEAN (TAYLOR) ─────────────────────────╮
+│ y: Age in years                                                           │
+│                                                                           │
+│  Residence (urban/rural)       est       se       lci       uci   cv (%)  │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
+│  Rural                     29.4408   3.0461   22.7365   36.1452    10.35  │
+│  Urban                     27.8843   2.3395   22.8978   32.8708     8.39  │
+│                                                                           │
+╰───────────────────────────────────────────────────────────────────────────╯
 ```
 
 **Tabulation** with design-based standard errors (two-way tables add Rao-Scott tests automatically):

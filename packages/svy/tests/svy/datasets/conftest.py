@@ -88,6 +88,7 @@ def make_backend_entry() -> Callable[..., dict[str, Any]]:
         tags: tuple[str, ...] = ("examples",),
         subpath: str = "misc",
         design: dict | None = None,
+        variables: dict | None = None,
         sha256: str = "",  # backend may or may not provide
     ) -> dict[str, Any]:
         entry = {
@@ -107,6 +108,8 @@ def make_backend_entry() -> Callable[..., dict[str, Any]]:
         # Optional richer fields (backend may add these later).
         if design is not None:
             entry["design"] = design
+        if variables is not None:
+            entry["variables"] = variables
         if sha256:
             entry["sha256"] = sha256
         return entry
