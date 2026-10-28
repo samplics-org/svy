@@ -71,7 +71,7 @@ from svy.weighting import Threshold, TrimConfig
 # Ensure no “No handlers could be found” warnings in user apps
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
-__version__ = "0.35.0"
+__version__ = "0.36.0"
 
 __all__ = [
     # --- Modules ---
@@ -123,7 +123,7 @@ __all__ = [
     "SvyWarning",
 ]
 
-# Names that left the top level in 2026.0: the error says where each one went.
+# Names that left the top level in 0.36.0: the error says where each one went.
 _MOVED: dict[str, str] = {
     **dict.fromkeys(io.__all__, "svy.io"),
     **dict.fromkeys(
@@ -267,5 +267,5 @@ def __getattr__(name: str):
     from svy.errors._api import UnknownNameError
 
     if name in _MOVED:
-        raise UnknownNameError.moved(label="svy", name=name, home=_MOVED[name], since="2026.0")
+        raise UnknownNameError.moved(label="svy", name=name, home=_MOVED[name], since="0.36.0")
     raise UnknownNameError.unknown(owner="svy", label="svy", name=name, available=__all__)

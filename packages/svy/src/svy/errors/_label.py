@@ -137,7 +137,7 @@ class LabelError(SvyError):
 
 @dataclass(eq=False)
 class LabelAPIRemoved(LabelError, AttributeError):
-    """A label accessor removed in 2026.0; names its replacement.
+    """A label accessor removed in 0.36.0; names its replacement.
 
     Also an ``AttributeError``, so ``hasattr`` on the old name is False.
     """

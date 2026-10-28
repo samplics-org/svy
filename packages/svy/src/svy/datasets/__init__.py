@@ -155,7 +155,7 @@ def __getattr__(name: str):
         from svy.errors._api import UnknownNameError
 
         raise UnknownNameError.renamed(
-            label="svy.datasets", name=name, new=_MOVED[name], since="2026.0"
+            label="svy.datasets", name=name, new=_MOVED[name], since="0.36.0"
         )
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

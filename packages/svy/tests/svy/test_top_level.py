@@ -138,7 +138,7 @@ def test_moved_name_says_where_it_went(name, home):
         getattr(svy, name)
     assert isinstance(err.value, AttributeError)
     assert err.value.code == Code.NAME_MOVED
-    assert err.value.detail == f"svy.{name} moved to {home}.{name} in 2026.0."
+    assert err.value.detail == f"svy.{name} moved to {home}.{name} in 0.36.0."
     assert err.value.expected == f"{home}.{name}"
     assert not hasattr(svy, name)
     assert name not in dir(svy)

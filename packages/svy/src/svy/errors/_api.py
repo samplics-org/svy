@@ -28,7 +28,7 @@ _TO_POLARS = "result.to_polars()"
 # Names other software uses, or that are commonly guessed, mapped to svy's.
 _ALIASES: dict[str, dict[str, str]] = {
     "svy": {
-        "SvyUserWarning": "svy.SvyWarning, its name since 2026.0",
+        "SvyUserWarning": "svy.SvyWarning, its name since 0.36.0",
         "MethodError": "the error of the part of svy you called, in svy.errors (EstimationError, "
         "WeightingError, DataError, ...), or the builtin it also is (ValueError, TypeError)",
         "DimensionError": "the error of the part of svy you called, in svy.errors (DataError, "
@@ -43,9 +43,9 @@ _ALIASES: dict[str, dict[str, str]] = {
         "read_excel": "polars.read_excel(...), then svy.Sample(...)",
     },
     "svy.errors": {
-        "SvyUserWarning": "svy.errors.SvyWarning, its name since 2026.0",
-        "WarnCode": "svy.errors.Code, which lists every error and warning code since 2026.0",
-        # Split by area in 2026.0; the builtin kind (ValueError, ...) catches across areas.
+        "SvyUserWarning": "svy.errors.SvyWarning, its name since 0.36.0",
+        "WarnCode": "svy.errors.Code, which lists every error and warning code since 0.36.0",
+        # Split by area in 0.36.0; the builtin kind (ValueError, ...) catches across areas.
         "MethodError": "the error of the part of svy you called (EstimationError, "
         "WeightingError, DataError, ...), or the builtin it also is (ValueError, TypeError)",
         "DimensionError": "the error of the part of svy you called (DataError, "
