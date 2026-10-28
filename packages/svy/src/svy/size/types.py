@@ -128,7 +128,7 @@ class TargetTestProp(msgspec.Struct, frozen=True, tag="test_prop"):
 class TargetPower(msgspec.Struct, frozen=True, tag="power"):
     """The goal a ``Power`` call answered and every argument it got."""
 
-    goal: str  # "test_mean" | "test_prop"
+    goal: str  # "test_mean" | "test_prop" | "compare_means" | "compare_props"
     solve: str = "power"  # "power" | "effect"
     args: dict[str, Any] = msgspec.field(default_factory=dict)
 
@@ -173,8 +173,10 @@ class PowerRow(msgspec.Struct, frozen=True, tag="power_row"):
     """One stratum's power: ``n`` selected units, the ``n_eff`` they are worth, and the result."""
 
     stratum: Any = None
-    n: Number = 0  # units selected, as given
-    n_eff: Number = 0  # after nonresponse, FPC and deff: the n of the z formulas
+    n: Number | tuple[Number, Number] = 0  # units selected, as given; (n1, n2) for two groups
+    n_eff: Number | tuple[Number, Number] = (
+        0  # after nonresponse, FPC and deff: the n of the z formulas
+    )
     effect: Number = 0  # signed alt - null
     power: float = 0.0
 

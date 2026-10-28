@@ -67,6 +67,8 @@ _PROP_VAR_MODE_MAP = {
 
 def _normalize_prop_var_mode(
     var_mode: Literal["alt-props", "pooled-prop", "max-var"] | None,
+    *,
+    where: str = "SampleSize.compare_props",
 ) -> _PropVarMode:
     """
     Normalize user-facing var_mode string to internal PropVarMode enum.
@@ -80,7 +82,7 @@ def _normalize_prop_var_mode(
         return _PropVarMode.ALT_PROPS
     if not isinstance(var_mode, str):
         raise SelectionError.invalid_type(
-            where="SampleSize.compare_props",
+            where=where,
             param="var_mode",
             got=var_mode,
             expected="'alt-props', 'pooled-prop', 'max-var' or None",
@@ -88,7 +90,7 @@ def _normalize_prop_var_mode(
     result = _PROP_VAR_MODE_MAP.get(var_mode.strip().lower())
     if result is None:
         raise SelectionError.invalid_choice(
-            where="SampleSize.compare_props",
+            where=where,
             param="var_mode",
             got=var_mode,
             allowed=list(_PROP_VAR_MODE_MAP),
