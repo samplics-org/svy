@@ -40,6 +40,10 @@ pub(crate) const HANDLER_OK: c_int = 0;
 /// U+FFFD-riddled lossy UTF-8. The row limit backstops the callback-side
 /// n_max abort for untrusted files. Returns the CString holding the
 /// encoding so it outlives the parse.
+///
+/// # Safety
+///
+/// `parser` must come from `readstat_parser_init` and not be freed yet.
 pub(crate) unsafe fn configure_parser(
     parser: *mut readstat_sys::readstat_parser_t,
     encoding: Option<&str>,
@@ -50,6 +54,7 @@ pub(crate) unsafe fn configure_parser(
     if let Some(enc) = encoding {
         let c = std::ffi::CString::new(enc)
             .map_err(|_| Error::Invalid(format!("encoding {enc:?} contains an embedded NUL")))?;
+        // SAFETY: `parser` is live; ReadStat keeps this pointer, so `c` goes back to the caller.
         let rc = unsafe { readstat_sys::readstat_set_file_character_encoding(parser, c.as_ptr()) };
         if rc != readstat_sys::readstat_error_e_READSTAT_OK {
             return Err(Error::UnsupportedEncoding {
@@ -60,6 +65,7 @@ pub(crate) unsafe fn configure_parser(
         keep_enc = Some(c);
     }
     if let Some(limit) = n_max.and_then(|nm| row_limit(rows_skip, nm)) {
+        // SAFETY: `parser` is live (caller's guarantee).
         unsafe { readstat_sys::readstat_set_row_limit(parser, limit) };
     }
     Ok(keep_enc)
@@ -421,16 +427,21 @@ fn describe_panic(p: &(dyn std::any::Any + Send)) -> String {
 /// record it on the context, and tell readstat to abort the parse; callers
 /// surface `panic_err` as a regular error after `readstat_parse_*` returns.
 ///
-/// Safety: `ctx` must be a valid, non-null pointer to a `ParseCtx`.
+/// # Safety
+///
+/// `ctx` must point to a live `ParseCtx` that nothing else accesses during the call.
+/// The readers guarantee this by passing `&mut ctx` to `readstat_parse_*`, which hands
+/// it back unchanged to each callback, one at a time.
 #[inline]
 unsafe fn guard_cb(ctx: *mut c_void, f: impl FnOnce(&mut ParseCtx) -> c_int) -> c_int {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // SAFETY: the caller guarantees `ctx` is a live, unaliased `ParseCtx`.
         let rctx = unsafe { &mut *(ctx as *mut ParseCtx) };
         f(rctx)
     })) {
         Ok(rc) => rc,
         Err(p) => {
-            // The panicking closure (and its &mut borrow) has been unwound.
+            // SAFETY: as above; the panicking closure and its borrow have been unwound.
             let rctx = unsafe { &mut *(ctx as *mut ParseCtx) };
             rctx.panic_err = Some(describe_panic(p.as_ref()));
             HANDLER_ABORT
@@ -438,19 +449,28 @@ unsafe fn guard_cb(ctx: *mut c_void, f: impl FnOnce(&mut ParseCtx) -> c_int) -> 
     }
 }
 
+/// # Safety
+///
+/// Called only by ReadStat: `message` is null or a NUL-terminated string, and `ctx` is
+/// as `guard_cb` requires.
 pub(crate) unsafe extern "C" fn on_error_cb(message: *const c_char, ctx: *mut c_void) {
     if message.is_null() || ctx.is_null() {
         return;
     }
-    guard_cb(ctx, |rctx| {
-        let msg = unsafe { CStr::from_ptr(message) }
-            .to_string_lossy()
-            .into_owned();
-        rctx.last_err = Some(msg);
-        HANDLER_OK
-    });
+    // SAFETY: `ctx` is the reader's `ParseCtx`; `message` is non-null and NUL-terminated.
+    unsafe {
+        guard_cb(ctx, |rctx| {
+            let msg = CStr::from_ptr(message).to_string_lossy().into_owned();
+            rctx.last_err = Some(msg);
+            HANDLER_OK
+        })
+    };
 }
 
+/// # Safety
+///
+/// Called only by ReadStat: `metadata` is null or live for the call, and `ctx` is as
+/// `guard_cb` requires.
 pub(crate) unsafe extern "C" fn on_metadata_cb(
     metadata: *mut readstat_metadata_t,
     ctx: *mut c_void,
@@ -458,13 +478,21 @@ pub(crate) unsafe extern "C" fn on_metadata_cb(
     if metadata.is_null() || ctx.is_null() {
         return HANDLER_OK;
     }
-    guard_cb(ctx, |rctx| unsafe { on_metadata_impl(metadata, rctx) })
+    // SAFETY: `ctx` is the reader's `ParseCtx`; `metadata` is non-null and live.
+    unsafe { guard_cb(ctx, |rctx| on_metadata_impl(metadata, rctx)) }
 }
 
+/// # Safety
+///
+/// `metadata` must be non-null and live for the call.
 unsafe fn on_metadata_impl(metadata: *mut readstat_metadata_t, rctx: &mut ParseCtx) -> c_int {
-    let label_ptr = readstat_get_file_label(metadata);
+    // SAFETY: `metadata` is live (caller's guarantee).
+    let label_ptr = unsafe { readstat_get_file_label(metadata) };
     if !label_ptr.is_null() {
-        let label = rctx.decode(CStr::from_ptr(label_ptr)).into_owned();
+        // SAFETY: ReadStat's metadata strings are NUL-terminated and live for the call.
+        let label = rctx
+            .decode(unsafe { CStr::from_ptr(label_ptr) })
+            .into_owned();
         rctx.file_label = if label.trim().is_empty() {
             None
         } else {
@@ -472,7 +500,8 @@ unsafe fn on_metadata_impl(metadata: *mut readstat_metadata_t, rctx: &mut ParseC
         };
     }
 
-    let nrows = readstat_get_row_count(metadata);
+    // SAFETY: `metadata` is live (caller's guarantee).
+    let nrows = unsafe { readstat_get_row_count(metadata) };
     if nrows > 0 {
         rctx.row_capacity = Some(nrows as usize);
     }
@@ -480,6 +509,10 @@ unsafe fn on_metadata_impl(metadata: *mut readstat_metadata_t, rctx: &mut ParseC
     HANDLER_OK
 }
 
+/// # Safety
+///
+/// Called only by ReadStat: `var` is null or live for the call, `label_set_name` is null
+/// or NUL-terminated, and `ctx` is as `guard_cb` requires.
 pub(crate) unsafe extern "C" fn on_variable_cb(
     index: c_int,
     var: *mut readstat_variable_t,
@@ -489,11 +522,17 @@ pub(crate) unsafe extern "C" fn on_variable_cb(
     if var.is_null() || ctx.is_null() {
         return HANDLER_OK;
     }
-    guard_cb(ctx, |rctx| unsafe {
-        on_variable_impl(index, var, label_set_name, rctx)
-    })
+    // SAFETY: `ctx` is the reader's `ParseCtx`; `var` is non-null and live.
+    unsafe {
+        guard_cb(ctx, |rctx| {
+            on_variable_impl(index, var, label_set_name, rctx)
+        })
+    }
 }
 
+/// # Safety
+///
+/// `var` must be non-null and live for the call; `label_set_name` null or NUL-terminated.
 unsafe fn on_variable_impl(
     index: c_int,
     var: *mut readstat_variable_t,
@@ -501,15 +540,18 @@ unsafe fn on_variable_impl(
     rctx: &mut ParseCtx,
 ) -> c_int {
     let name = {
-        let p = readstat_variable_get_name(var);
+        // SAFETY: `var` is live (caller's guarantee).
+        let p = unsafe { readstat_variable_get_name(var) };
         if p.is_null() {
             format!("V{index}")
         } else {
-            rctx.decode(CStr::from_ptr(p)).trim().to_string()
+            // SAFETY: ReadStat's variable strings are NUL-terminated and live for the call.
+            rctx.decode(unsafe { CStr::from_ptr(p) }).trim().to_string()
         }
     };
 
-    let Ok(var_index) = usize::try_from(readstat_variable_get_index(var)) else {
+    // SAFETY: `var` is live (caller's guarantee).
+    let Ok(var_index) = usize::try_from(unsafe { readstat_variable_get_index(var) }) else {
         return HANDLER_OK;
     };
     if rctx.var_cols.len() <= var_index {
@@ -525,11 +567,13 @@ unsafe fn on_variable_impl(
     let cap = safe_capacity(rctx.row_capacity);
 
     let label = {
-        let p = readstat_variable_get_label(var);
+        // SAFETY: `var` is live (caller's guarantee).
+        let p = unsafe { readstat_variable_get_label(var) };
         if p.is_null() {
             None
         } else {
-            let s = rctx.decode(CStr::from_ptr(p)).into_owned();
+            // SAFETY: ReadStat's variable strings are NUL-terminated and live for the call.
+            let s = rctx.decode(unsafe { CStr::from_ptr(p) }).into_owned();
             let st = s.trim();
             if st.is_empty() {
                 None
@@ -540,11 +584,13 @@ unsafe fn on_variable_impl(
     };
 
     let fmt = {
-        let p = readstat_variable_get_format(var);
+        // SAFETY: `var` is live (caller's guarantee).
+        let p = unsafe { readstat_variable_get_format(var) };
         if p.is_null() {
             None
         } else {
-            let s = rctx.decode(CStr::from_ptr(p)).into_owned();
+            // SAFETY: ReadStat's variable strings are NUL-terminated and live for the call.
+            let s = rctx.decode(unsafe { CStr::from_ptr(p) }).into_owned();
             let st = s.trim();
             if st.is_empty() {
                 None
@@ -557,7 +603,8 @@ unsafe fn on_variable_impl(
     // The measurement level the file declares. SPSS carries this; Stata has
     // no equivalent and always reports UNKNOWN, which we surface as None so a
     // caller can tell "not declared" from "declared as scale".
-    let measure = match readstat_variable_get_measure(var) {
+    // SAFETY: `var` is live (caller's guarantee).
+    let measure = match unsafe { readstat_variable_get_measure(var) } {
         m if m == MEASURE_NOMINAL => Some("nominal".to_string()),
         m if m == MEASURE_ORDINAL => Some("ordinal".to_string()),
         m if m == MEASURE_SCALE => Some("scale".to_string()),
@@ -565,10 +612,12 @@ unsafe fn on_variable_impl(
     };
 
     // Only Stata stores integers; SAS and SPSS numerics are always doubles.
-    let kind = if readstat_variable_get_type_class(var) == TCLASS_STRING {
+    // SAFETY: `var` is live (caller's guarantee).
+    let kind = if unsafe { readstat_variable_get_type_class(var) } == TCLASS_STRING {
         ColKind::Str
     } else {
-        match readstat_variable_get_type(var) {
+        // SAFETY: `var` is live (caller's guarantee).
+        match unsafe { readstat_variable_get_type(var) } {
             t if t == T_INT8 => ColKind::I64 { storage: "int8" },
             t if t == T_INT16 => ColKind::I64 { storage: "int16" },
             t if t == T_INT32 => ColKind::I64 { storage: "int32" },
@@ -581,7 +630,10 @@ unsafe fn on_variable_impl(
     let label_set = if label_set_name.is_null() {
         None
     } else {
-        let s = rctx.decode(CStr::from_ptr(label_set_name)).into_owned();
+        // SAFETY: non-null, so NUL-terminated and live for the call (caller's guarantee).
+        let s = rctx
+            .decode(unsafe { CStr::from_ptr(label_set_name) })
+            .into_owned();
         let st = s.trim();
         if st.is_empty() {
             None
@@ -591,22 +643,30 @@ unsafe fn on_variable_impl(
     };
 
     let user_missing = {
-        let missing_count = readstat_variable_get_missing_ranges_count(var);
+        // SAFETY: `var` is live (caller's guarantee).
+        let missing_count = unsafe { readstat_variable_get_missing_ranges_count(var) };
         if missing_count > 0 {
             let mut values = Vec::new();
             let mut range: Option<Vec<f64>> = None;
 
-            let is_string = readstat_variable_get_type_class(var) == TCLASS_STRING;
+            // SAFETY: `var` is live (caller's guarantee).
+            let is_string = unsafe { readstat_variable_get_type_class(var) } == TCLASS_STRING;
 
             for i in 0..missing_count {
-                let lo_val = readstat_variable_get_missing_range_lo(var, i);
-                let hi_val = readstat_variable_get_missing_range_hi(var, i);
+                // SAFETY: `var` is live and `i` is below its range count.
+                let (lo_val, hi_val) = unsafe {
+                    (
+                        readstat_variable_get_missing_range_lo(var, i),
+                        readstat_variable_get_missing_range_hi(var, i),
+                    )
+                };
 
                 if is_string {
                     continue;
                 } else {
-                    let lo = readstat_double_value(lo_val);
-                    let hi = readstat_double_value(hi_val);
+                    // SAFETY: a numeric value is read by value; no pointer is followed.
+                    let (lo, hi) =
+                        unsafe { (readstat_double_value(lo_val), readstat_double_value(hi_val)) };
                     if lo.is_nan() || hi.is_nan() {
                         continue;
                     }
@@ -676,6 +736,10 @@ unsafe fn on_variable_impl(
     HANDLER_OK
 }
 
+/// # Safety
+///
+/// Called only by ReadStat: `var` is null or live for the call, `value` is live for the
+/// call, and `ctx` is as `guard_cb` requires.
 pub(crate) unsafe extern "C" fn on_value_cb(
     row: c_int,
     var: *mut readstat_variable_t,
@@ -685,9 +749,13 @@ pub(crate) unsafe extern "C" fn on_value_cb(
     if var.is_null() || ctx.is_null() {
         return HANDLER_OK;
     }
-    guard_cb(ctx, |rctx| unsafe { on_value_impl(row, var, value, rctx) })
+    // SAFETY: `ctx` is the reader's `ParseCtx`; `var` is non-null and live.
+    unsafe { guard_cb(ctx, |rctx| on_value_impl(row, var, value, rctx)) }
 }
 
+/// # Safety
+///
+/// `var` must be non-null and live for the call, and so must any string `value` holds.
 unsafe fn on_value_impl(
     row: c_int,
     var: *mut readstat_variable_t,
@@ -720,7 +788,8 @@ unsafe fn on_value_impl(
         rctx.n_rows_emitted += 1;
     }
 
-    let idx = match usize::try_from(readstat_variable_get_index(var))
+    // SAFETY: `var` is live (caller's guarantee).
+    let idx = match usize::try_from(unsafe { readstat_variable_get_index(var) })
         .ok()
         .and_then(|i| rctx.var_cols.get(i).copied().flatten())
     {
@@ -728,18 +797,25 @@ unsafe fn on_value_impl(
         None => return HANDLER_OK,
     };
 
-    let is_tagged = rctx.detect_tagged && readstat_value_is_tagged_missing(value) != 0;
-    let is_missing = readstat_value_is_system_missing(value) != 0;
-    let vt = rs_value_type(value);
+    // SAFETY: these read `value`'s tag and type fields; no pointer is followed.
+    let (is_tagged, is_missing, vt) = unsafe {
+        (
+            rctx.detect_tagged && readstat_value_is_tagged_missing(value) != 0,
+            readstat_value_is_system_missing(value) != 0,
+            rs_value_type(value),
+        )
+    };
     let is_str = vt == T_STRING || vt == T_STRING_REF;
 
     // Decoded before borrowing the column builder (decode needs &mut ctx).
     let str_val: Option<Cow<'_, str>> = if !is_tagged && !is_missing && is_str {
-        let sp = readstat_string_value(value);
+        // SAFETY: `value` is a string, so this reads its pointer field.
+        let sp = unsafe { readstat_string_value(value) };
         if sp.is_null() {
             None
         } else {
-            Some(rctx.decode(CStr::from_ptr(sp)))
+            // SAFETY: ReadStat's string values are NUL-terminated and live for the call.
+            Some(rctx.decode(unsafe { CStr::from_ptr(sp) }))
         }
     } else {
         None
@@ -751,7 +827,8 @@ unsafe fn on_value_impl(
     };
 
     if is_tagged {
-        let tag_ch = readstat_value_tag(value) as u8 as char;
+        // SAFETY: reads `value`'s tag field; no pointer is followed.
+        let tag_ch = unsafe { readstat_value_tag(value) } as u8 as char;
         let (rows, tags) = rctx
             .tagged
             .entry(col.name.clone())
@@ -767,15 +844,21 @@ unsafe fn on_value_impl(
             None => col.push_missing(),
         }
     } else if vt == T_INT8 || vt == T_INT16 || vt == T_INT32 {
-        col.push_i64(readstat_int32_value(value) as i64);
+        // SAFETY: a numeric value is read by value; no pointer is followed.
+        col.push_i64(unsafe { readstat_int32_value(value) } as i64);
     } else {
-        let d = readstat_double_value(value);
+        // SAFETY: a numeric value is read by value; no pointer is followed.
+        let d = unsafe { readstat_double_value(value) };
         col.push_f64(d);
     }
 
     HANDLER_OK
 }
 
+/// # Safety
+///
+/// Called only by ReadStat: `note` is null or NUL-terminated, and `ctx` is as `guard_cb`
+/// requires.
 pub(crate) unsafe extern "C" fn on_note_cb(
     _note_index: c_int,
     note: *const c_char,
@@ -784,13 +867,20 @@ pub(crate) unsafe extern "C" fn on_note_cb(
     if note.is_null() || ctx.is_null() {
         return HANDLER_OK;
     }
-    guard_cb(ctx, |rctx| {
-        let s = rctx.decode(unsafe { CStr::from_ptr(note) }).into_owned();
-        rctx.notes.push(s);
-        HANDLER_OK
-    })
+    // SAFETY: `ctx` is the reader's `ParseCtx`; `note` is non-null and NUL-terminated.
+    unsafe {
+        guard_cb(ctx, |rctx| {
+            let s = rctx.decode(CStr::from_ptr(note)).into_owned();
+            rctx.notes.push(s);
+            HANDLER_OK
+        })
+    }
 }
 
+/// # Safety
+///
+/// Called only by ReadStat: `set_name` and `label` are null or NUL-terminated, any string
+/// `val` holds is live for the call, and `ctx` is as `guard_cb` requires.
 pub(crate) unsafe extern "C" fn on_value_label_cb(
     set_name: *const c_char,
     val: readstat_value_t,
@@ -800,11 +890,14 @@ pub(crate) unsafe extern "C" fn on_value_label_cb(
     if ctx.is_null() {
         return HANDLER_OK;
     }
-    guard_cb(ctx, |rctx| unsafe {
-        on_value_label_impl(set_name, val, label, rctx)
-    })
+    // SAFETY: `ctx` is the reader's `ParseCtx`; the other arguments are ReadStat's.
+    unsafe { guard_cb(ctx, |rctx| on_value_label_impl(set_name, val, label, rctx)) }
 }
 
+/// # Safety
+///
+/// `set_name` and `label` must be null or NUL-terminated, and any string `val` holds
+/// must be live for the call.
 unsafe fn on_value_label_impl(
     set_name: *const c_char,
     val: readstat_value_t,
@@ -814,25 +907,39 @@ unsafe fn on_value_label_impl(
     let set = if set_name.is_null() {
         "__default__".to_string()
     } else {
-        rctx.decode(CStr::from_ptr(set_name)).trim().to_string()
+        // SAFETY: non-null, so NUL-terminated (caller's guarantee).
+        rctx.decode(unsafe { CStr::from_ptr(set_name) })
+            .trim()
+            .to_string()
     };
     let lab = if label.is_null() {
         String::new()
     } else {
-        rctx.decode(CStr::from_ptr(label)).into_owned()
+        // SAFETY: non-null, so NUL-terminated (caller's guarantee).
+        rctx.decode(unsafe { CStr::from_ptr(label) }).into_owned()
     };
 
-    let key = if readstat_value_is_system_missing(val) != 0 {
+    // SAFETY: these read `val`'s missing flag and type; no pointer is followed.
+    let (is_missing, vt) = unsafe {
+        (
+            readstat_value_is_system_missing(val) != 0,
+            rs_value_type(val),
+        )
+    };
+    let key = if is_missing {
         "".to_string()
-    } else if rs_value_type(val) == T_STRING || rs_value_type(val) == T_STRING_REF {
-        let sp = readstat_string_value(val);
+    } else if vt == T_STRING || vt == T_STRING_REF {
+        // SAFETY: `val` is a string, so this reads its pointer field.
+        let sp = unsafe { readstat_string_value(val) };
         if sp.is_null() {
             String::new()
         } else {
-            rctx.decode(CStr::from_ptr(sp)).into_owned()
+            // SAFETY: non-null and NUL-terminated, live for the call (caller's guarantee).
+            rctx.decode(unsafe { CStr::from_ptr(sp) }).into_owned()
         }
     } else {
-        format!("{}", readstat_double_value(val))
+        // SAFETY: a numeric value is read by value; no pointer is followed.
+        format!("{}", unsafe { readstat_double_value(val) })
     };
 
     let map = rctx.label_sets.entry(set).or_default();
@@ -981,6 +1088,7 @@ pub(crate) struct WriterGuard(pub(crate) *mut readstat_sys::readstat_writer_t);
 impl Drop for WriterGuard {
     fn drop(&mut self) {
         if !self.0.is_null() {
+            // SAFETY: the guard holds the pointer `readstat_writer_init` returned, freed only here.
             unsafe { readstat_sys::readstat_writer_free(self.0) };
         }
     }
@@ -1040,6 +1148,11 @@ impl Drop for OutputFile {
 }
 
 /// ReadStat data sink writing to the `std::fs::File` behind `ctx`.
+///
+/// # Safety
+///
+/// Called only by ReadStat: `data` is null or `len` readable bytes, and `ctx` is null or
+/// the pointer `OutputFile::as_ctx` returned.
 pub(crate) unsafe extern "C" fn data_writer_cb(
     data: *const c_void,
     len: usize,
@@ -1050,7 +1163,9 @@ pub(crate) unsafe extern "C" fn data_writer_cb(
     if data.is_null() || ctx.is_null() {
         return 0;
     }
+    // SAFETY: `ctx` is the `OutputFile`'s `File`, alive and otherwise untouched while writing.
     let file = unsafe { &mut *(ctx as *mut std::fs::File) };
+    // SAFETY: ReadStat passes a buffer of `len` readable bytes, valid for the call.
     let bytes = unsafe { std::slice::from_raw_parts(data as *const u8, len) };
     match file.write_all(bytes) {
         Ok(_) => len as isize,
@@ -1133,11 +1248,15 @@ mod tests {
         };
         let ctx_ptr = &mut ctx as *mut ParseCtx as *mut c_void;
 
+        // SAFETY: `ctx_ptr` points to the live `ctx`, untouched until the call returns.
         let rc = unsafe { guard_cb(ctx_ptr, |_| panic!("boom in callback")) };
         assert_eq!(rc, HANDLER_ABORT);
         assert_eq!(ctx.panic_err.as_deref(), Some("boom in callback"));
 
         ctx.panic_err = None;
+        // Re-derived: the write through `ctx` above invalidated the first pointer.
+        let ctx_ptr = &mut ctx as *mut ParseCtx as *mut c_void;
+        // SAFETY: `ctx_ptr` points to the live `ctx`, untouched until the call returns.
         let rc = unsafe { guard_cb(ctx_ptr, |_| HANDLER_OK) };
         assert_eq!(rc, HANDLER_OK);
         assert!(ctx.panic_err.is_none());
@@ -1298,23 +1417,23 @@ mod tests {
 
     #[test]
     fn data_writer_cb_reports_a_failed_write_as_zero_bytes() {
+        let sink = |data: *const c_void, len: usize, ctx: *mut c_void| {
+            // SAFETY: each call passes null or 3 readable bytes, and null or a live `File`.
+            unsafe { data_writer_cb(data, len, ctx) }
+        };
         let path = std::env::temp_dir().join("svy_io_data_writer_cb.bin");
         std::fs::write(&path, b"").unwrap();
         let mut read_only = std::fs::File::open(&path).unwrap();
         let ctx = &mut read_only as *mut std::fs::File as *mut c_void;
-        let bytes = b"abc";
+        let bytes = b"abc".as_ptr() as *const c_void;
 
-        let n = unsafe { data_writer_cb(bytes.as_ptr() as *const c_void, bytes.len(), ctx) };
-        assert_eq!(n, 0);
-        let n = unsafe { data_writer_cb(std::ptr::null(), bytes.len(), ctx) };
-        assert_eq!(n, 0);
-        let n = unsafe { data_writer_cb(bytes.as_ptr() as *const c_void, 3, std::ptr::null_mut()) };
-        assert_eq!(n, 0);
+        assert_eq!(sink(bytes, 3, ctx), 0);
+        assert_eq!(sink(std::ptr::null(), 3, ctx), 0);
+        assert_eq!(sink(bytes, 3, std::ptr::null_mut()), 0);
 
         let mut writable = std::fs::File::create(&path).unwrap();
         let ctx = &mut writable as *mut std::fs::File as *mut c_void;
-        let n = unsafe { data_writer_cb(bytes.as_ptr() as *const c_void, bytes.len(), ctx) };
-        assert_eq!(n, 3);
+        assert_eq!(sink(bytes, 3, ctx), 3);
         drop(writable);
         assert_eq!(std::fs::read(&path).unwrap(), b"abc");
         std::fs::remove_file(&path).unwrap();

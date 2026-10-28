@@ -23,6 +23,7 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 - **`write_dta` overflowed on datetimes near the int64 limit**, panicking in debug builds and writing a wrong date in release.
 - **On Windows, `rows_skip + n_max` beyond 2,147,483,647 wrapped**, so a reader could silently return too few rows. A limit that a C `long` cannot hold now means no limit.
 - **Readers leaked the ReadStat parser when the path contained a NUL**, about 190 bytes per call.
+- **A Rust unit test of the callback panic guard reused a raw pointer after writing through its source**, which is undefined behaviour; it now re-derives the pointer.
 
 ## [0.7.1] — 2026-10-16
 

@@ -361,13 +361,19 @@ fn tags_by_column(
 }
 
 /// A tagged missing (`.a`-`.z`) when the cell has a tag, else the system missing `.`.
+///
+/// # Safety
+///
+/// `writer` must be live and `var` one of its variables.
 unsafe fn insert_missing(
     writer: *mut readstat_writer_t,
     var: *const readstat_variable_t,
     tag: Option<&c_char>,
 ) -> readstat_error_t {
     match tag {
+        // SAFETY: `writer` and `var` are live (caller's guarantee).
         Some(&t) => unsafe { readstat_insert_tagged_missing_value(writer, var, t) },
+        // SAFETY: `writer` and `var` are live (caller's guarantee).
         None => unsafe { readstat_insert_missing_value(writer, var) },
     }
 }
@@ -387,12 +393,14 @@ fn write_stata_minimal(
         return Err(Error::Invalid("no record batches to write".into()));
     }
 
+    // SAFETY: no preconditions; a null result is checked below.
     let writer = unsafe { readstat_writer_init() };
     if writer.is_null() {
         return Err(Error::Internal("readstat_writer_init() failed".into()));
     }
     // Frees the writer on every exit path (including early `?` returns).
     let _writer_guard = WriterGuard(writer);
+    // SAFETY: `writer` is live until `_writer_guard` drops.
     unsafe {
         readstat_writer_set_file_format_version(writer, version_internal as u8);
         readstat_set_data_writer(writer, Some(data_writer_cb));
@@ -401,6 +409,7 @@ fn write_stata_minimal(
     if let Some(lbl) = file_label {
         let c = CString::new(lbl)
             .map_err(|_| Error::Invalid(format!("file label {lbl:?} contains an embedded NUL")))?;
+        // SAFETY: `writer` is live; ReadStat copies the label.
         unsafe {
             readstat_writer_set_file_label(writer, c.as_ptr());
         }
@@ -476,6 +485,7 @@ fn write_stata_minimal(
                 field.name()
             ))
         })?;
+        // SAFETY: `writer` is live; ReadStat copies the name.
         let var = unsafe { readstat_add_variable(writer, cname.as_ptr(), typ, width as _) };
         if var.is_null() {
             return Err(Error::Write(format!(
@@ -486,6 +496,7 @@ fn write_stata_minimal(
 
         if let Some(fmt) = stata_temporal_format(field.data_type()) {
             let c = CString::new(fmt).expect("Stata format names hold no NUL");
+            // SAFETY: `var` lives as long as `writer`; ReadStat copies the format.
             unsafe {
                 readstat_variable_set_format(var, c.as_ptr());
             }
@@ -501,6 +512,7 @@ fn write_stata_minimal(
                     field.name()
                 ))
             })?;
+            // SAFETY: `var` lives as long as `writer`; ReadStat copies the label.
             unsafe {
                 readstat_variable_set_label(var, c.as_ptr());
             }
@@ -540,6 +552,7 @@ fn write_stata_minimal(
 
             let c_set_name = cname.clone();
             let label_set =
+                // SAFETY: `writer` is live; ReadStat copies the name.
                 unsafe { readstat_add_label_set(writer, T_DOUBLE, c_set_name.as_ptr()) };
             if label_set.is_null() {
                 return Err(Error::Write(format!(
@@ -557,12 +570,14 @@ fn write_stata_minimal(
                         field.name()
                     ))
                 })?;
+                // SAFETY: `label_set` is live; ReadStat copies the label.
                 unsafe {
                     readstat_label_double_value(label_set, code, c_label.as_ptr());
                 }
                 c_labels.push(c_label);
             }
 
+            // SAFETY: `var` and `label_set` belong to the live `writer`.
             unsafe {
                 readstat_variable_set_label_set(var, label_set);
             }
@@ -582,6 +597,7 @@ fn write_stata_minimal(
         .map_err(|_| Error::Invalid(format!("{total_rows} rows exceed this platform's limit")))?;
     let mut out = OutputFile::create(out_path)?;
     write_rc(
+        // SAFETY: `writer` is live, and `out` outlives every write `data_writer_cb` makes into it.
         unsafe { readstat_begin_writing_dta(writer, out.as_ctx(), row_count) },
         || "beginning the file".into(),
     )?;
@@ -590,6 +606,7 @@ fn write_stata_minimal(
     for b in batches {
         for i in 0..b.num_rows() {
             let row = row_offset + i;
+            // SAFETY: `writer` is live.
             write_rc(unsafe { readstat_begin_row(writer) }, || {
                 format!("beginning row {row}")
             })?;
@@ -597,10 +614,12 @@ fn write_stata_minimal(
             for (j, arr) in b.columns().iter().enumerate() {
                 let rc = if is_str_col[j] {
                     match get_string_value(arr.as_ref(), i).map(CString::new) {
+                        // SAFETY: `rvars[j]` is live; ReadStat copies `cs` into the row.
                         Some(Ok(cs)) => unsafe {
                             readstat_insert_string_value(writer, rvars[j], cs.as_ptr())
                         },
                         // A NUL cannot be stored, so the value is written as missing.
+                        // SAFETY: `rvars[j]` belongs to the live `writer`.
                         Some(Err(_)) | None => unsafe {
                             readstat_insert_missing_value(writer, rvars[j])
                         },
@@ -609,6 +628,7 @@ fn write_stata_minimal(
                     // The storage type was chosen from this column's range, so
                     // the narrowing casts below cannot truncate.
                     match as_i64_opt(arr.as_ref(), i) {
+                        // SAFETY: `rvars[j]` belongs to the live `writer`.
                         Some(v) => unsafe {
                             match col_types[j] {
                                 T_INT8 => readstat_insert_int8_value(writer, rvars[j], v as i8),
@@ -616,6 +636,7 @@ fn write_stata_minimal(
                                 _ => readstat_insert_int32_value(writer, rvars[j], v as i32),
                             }
                         },
+                        // SAFETY: `rvars[j]` belongs to the live `writer`.
                         None => unsafe { insert_missing(writer, rvars[j], tags[j].get(&row)) },
                     }
                 } else {
@@ -625,7 +646,9 @@ fn write_stata_minimal(
                         as_f64_opt(arr.as_ref(), i)
                     };
                     match v {
+                        // SAFETY: `rvars[j]` belongs to the live `writer`.
                         Some(v) => unsafe { readstat_insert_double_value(writer, rvars[j], v) },
+                        // SAFETY: `rvars[j]` belongs to the live `writer`.
                         None => unsafe { insert_missing(writer, rvars[j], tags[j].get(&row)) },
                     }
                 };
@@ -634,6 +657,7 @@ fn write_stata_minimal(
                 })?;
             }
 
+            // SAFETY: `writer` is live.
             write_rc(unsafe { readstat_end_row(writer) }, || {
                 format!("ending row {row}")
             })?;
@@ -641,6 +665,7 @@ fn write_stata_minimal(
         row_offset += b.num_rows();
     }
 
+    // SAFETY: `writer` is live, and so is `out`.
     write_rc(unsafe { readstat_end_writing(writer) }, || {
         "finishing the file".into()
     })?;
