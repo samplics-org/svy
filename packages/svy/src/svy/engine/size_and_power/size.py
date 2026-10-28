@@ -314,7 +314,9 @@ def _infeasible(detail: str) -> SelectionError:
     )
 
 
-def _test_denominator(*, epsilon: float, delta: float, two_sides: bool) -> float:
+def _test_denominator(
+    *, epsilon: float, delta: float, two_sides: bool, where: str = "SampleSize.compare"
+) -> float:
     """
     Effect denominator for power-based sizing (Chow–Shao–Wang conventions,
     epsilon signed = true difference under the alternative):
@@ -346,7 +348,7 @@ def _test_denominator(*, epsilon: float, delta: float, two_sides: bool) -> float
                 f"but the expected difference epsilon={epsilon} does not exceed it."
             ),
             code=Code.INFEASIBLE_DESIGN,
-            where="SampleSize.compare",
+            where=where,
             param="delta",
             got=delta,
             hint="Use a negative delta for non-inferiority, or a margin below the expected difference.",

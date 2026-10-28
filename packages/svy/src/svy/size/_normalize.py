@@ -14,6 +14,9 @@ from svy.core.enumerations import (
     OnePropSizeMethod as _OnePropSizeMethod,
 )
 from svy.core.enumerations import (
+    OnePropTestMethod as _OnePropTestMethod,
+)
+from svy.core.enumerations import (
     PropVarMode as _PropVarMode,
 )
 from svy.errors import SelectionError
@@ -89,5 +92,34 @@ def _normalize_prop_var_mode(
             param="var_mode",
             got=var_mode,
             allowed=list(_PROP_VAR_MODE_MAP),
+        )
+    return result
+
+
+_ONE_PROP_TEST_METHOD_MAP = {
+    "wald": _OnePropTestMethod.WALD,
+    "score": _OnePropTestMethod.SCORE,
+    "arcsine": _OnePropTestMethod.ARCSINE,
+}
+
+
+def _normalize_one_prop_test_method(
+    method: Literal["wald", "score", "arcsine"], *, where: str
+) -> _OnePropTestMethod:
+    """Normalize the test of one proportion ("wald", "score", "arcsine"), case-insensitive."""
+    if not isinstance(method, str):
+        raise SelectionError.invalid_type(
+            where=where,
+            param="method",
+            got=method,
+            expected="'wald', 'score' or 'arcsine'",
+        )
+    result = _ONE_PROP_TEST_METHOD_MAP.get(method.strip().lower())
+    if result is None:
+        raise SelectionError.invalid_choice(
+            where=where,
+            param="method",
+            got=method,
+            allowed=list(_ONE_PROP_TEST_METHOD_MAP),
         )
     return result

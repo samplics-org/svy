@@ -31,6 +31,8 @@ from svy.size.comparison_goals import compare_means as _compare_means
 from svy.size.comparison_goals import compare_props as _compare_props
 from svy.size.estimation_goals import estimate_mean as _estimate_mean
 from svy.size.estimation_goals import estimate_prop as _estimate_prop
+from svy.size.one_sample_goals import test_mean as _test_mean
+from svy.size.one_sample_goals import test_prop as _test_prop
 from svy.size.types import Allocation, Size, Target
 from svy.ui.printing import make_panel, render_rich_to_str, resolve_width
 
@@ -737,6 +739,66 @@ class SampleSize:
             resp_rate=resp_rate,
             rho=rho,
             overlap=overlap,
+        )
+
+    def test_mean(
+        self,
+        mu0: Number | DomainScalarMap,
+        mu1: Number | DomainScalarMap,
+        sigma: Number | DomainScalarMap,
+        *,
+        pop_size: Number | DomainScalarMap | None = None,
+        two_sides: bool = True,
+        delta: Number | DomainScalarMap = 0.0,
+        method: Literal["wald"] = "wald",
+        alpha: Number | DomainScalarMap = 0.05,
+        power: Number | DomainScalarMap = 0.80,
+        deff: Number | DomainScalarMap = 1.0,
+        resp_rate: Number | DomainScalarMap = 1.0,
+    ) -> "SampleSize":
+        self._allocation = None
+        return _test_mean(
+            self,
+            mu0,
+            mu1,
+            sigma,
+            pop_size=pop_size,
+            two_sides=two_sides,
+            delta=delta,
+            method=method,
+            alpha=alpha,
+            power=power,
+            deff=deff,
+            resp_rate=resp_rate,
+        )
+
+    def test_prop(
+        self,
+        p0: Number | DomainScalarMap,
+        p1: Number | DomainScalarMap,
+        *,
+        pop_size: Number | DomainScalarMap | None = None,
+        two_sides: bool = True,
+        delta: Number | DomainScalarMap = 0.0,
+        method: Literal["wald", "score", "arcsine"] = "wald",
+        alpha: Number | DomainScalarMap = 0.05,
+        power: Number | DomainScalarMap = 0.80,
+        deff: Number | DomainScalarMap = 1.0,
+        resp_rate: Number | DomainScalarMap = 1.0,
+    ) -> "SampleSize":
+        self._allocation = None
+        return _test_prop(
+            self,
+            p0,
+            p1,
+            pop_size=pop_size,
+            two_sides=two_sides,
+            delta=delta,
+            method=method,
+            alpha=alpha,
+            power=power,
+            deff=deff,
+            resp_rate=resp_rate,
         )
 
     def allocate(

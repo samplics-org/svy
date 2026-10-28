@@ -221,6 +221,18 @@ class OnePropSizeMethod(StrEnum):
 
 
 @unique
+class OnePropTestMethod(StrEnum):
+    WALD = "Wald"
+    """Statistic with the variance estimated under the alternative."""
+
+    SCORE = "Score"
+    """Statistic with the variance under the null."""
+
+    ARCSINE = "Arcsine"
+    """Variance-stabilizing statistic 2 asin(sqrt(p)) (Cohen's h)."""
+
+
+@unique
 class PopParam(StrEnum):
     MEAN = "Mean"
     TOTAL = "Total"

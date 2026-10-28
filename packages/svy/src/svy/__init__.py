@@ -60,7 +60,7 @@ from svy.core import (
 )
 from svy.errors import SvyError, SvyWarning
 from svy.estimation import estd
-from svy.size import SampleSize, TargetMean, TargetProp, TargetTwoMeans, TargetTwoProps
+from svy.size import Power, SampleSize, TargetMean, TargetProp, TargetTwoMeans, TargetTwoProps
 from svy.weighting import Threshold, TrimConfig
 
 
@@ -111,6 +111,7 @@ __all__ = [
     # --- Inputs ---
     "estd",
     "SampleSize",
+    "Power",
     "TargetMean",
     "TargetProp",
     "TargetTwoMeans",
