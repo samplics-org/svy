@@ -14,6 +14,7 @@
 //      K-sample: Wald F-test on contrast covariance.
 
 use crate::categorical::error::{CResult, CategoricalError};
+use crate::estimation::error::{EResult, EstimationError};
 use polars::prelude::*;
 
 use crate::categorical::replicate::RepSpec;
@@ -33,13 +34,17 @@ pub enum RankScoreMethod {
 }
 
 impl RankScoreMethod {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn from_str(s: &str) -> EResult<Self> {
         match s.to_lowercase().as_str() {
-            "wilcoxon" => Some(RankScoreMethod::Wilcoxon),
-            "vanderwaerden" | "vander_waerden" => Some(RankScoreMethod::VanDerWaerden),
-            "median" => Some(RankScoreMethod::Median),
-            "kruskalwallis" | "kruskal_wallis" => Some(RankScoreMethod::KruskalWallis),
-            _ => None,
+            "wilcoxon" => Ok(RankScoreMethod::Wilcoxon),
+            "vanderwaerden" | "vander_waerden" => Ok(RankScoreMethod::VanDerWaerden),
+            "median" => Ok(RankScoreMethod::Median),
+            "kruskalwallis" | "kruskal_wallis" => Ok(RankScoreMethod::KruskalWallis),
+            _ => Err(EstimationError::InvalidChoice {
+                what: "rank score method",
+                got: s.to_string(),
+                expected: "'wilcoxon', 'vanderwaerden', 'median' or 'kruskalwallis'",
+            }),
         }
     }
 }
@@ -285,7 +290,7 @@ pub fn ranktest_two_sample(
     let wols = fit_wols(&rankscore, &xmat, w, n, k)?;
 
     // 4 & 5. Design-based SE via influence functions + taylor_variance
-    let active = singleton_rows(singleton_method, false, strata.is_some(), rows);
+    let active = singleton_rows(singleton_method, false, strata.is_some(), rows)?;
     let ses = influence_se(
         &wols.influence,
         w,
@@ -391,7 +396,7 @@ pub fn ranktest_k_sample(
     let wols = fit_wols(&rankscore, &xmat, w, n, k)?;
 
     // 4. Design-based covariance of coefficients
-    let active = singleton_rows(singleton_method, false, strata.is_some(), rows);
+    let active = singleton_rows(singleton_method, false, strata.is_some(), rows)?;
     let cov_flat = influence_covariance(
         &wols.influence,
         w,

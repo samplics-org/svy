@@ -229,7 +229,7 @@ pub fn estimate_proportions(
 
     let sm = singleton_method;
     let active =
-        singleton_domain_rows(sm, calib.is_some(), strata.is_some(), weights.len(), domain);
+        singleton_domain_rows(sm, calib.is_some(), strata.is_some(), weights.len(), domain)?;
 
     // Build all k indicator columns in a SINGLE pass over y.
     // Previously: k separate passes (one per level). Now: one pass, O(N) regardless of k.
@@ -364,7 +364,7 @@ pub fn estimate_totals(
         strata.is_some(),
         weights.len(),
         domain,
-    );
+    )?;
 
     // Single pass over y to build all indicator columns at once
     let n_rows = y.len();

@@ -1152,6 +1152,8 @@ pub fn replicate_quantile(
     let q_method = quantile_method
         .as_deref()
         .map(SvyQuantileMethod::parse)
+        .transpose()
+        .map_err(|e| to_py_err(&e))?
         .unwrap_or(SvyQuantileMethod::Higher);
     let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
 

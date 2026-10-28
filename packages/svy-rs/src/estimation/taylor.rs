@@ -18,32 +18,33 @@ pub enum SingletonMethod {
 }
 
 impl SingletonMethod {
-    /// `"center"`/`"adjust"` and `"scale"`/`"average"` (R's names); anything
-    /// else leaves singleton strata out of the variance. A `":domains"` suffix
-    /// is read by [`SingletonMethod::parse_rule`].
-    pub fn parse(s: Option<&str>) -> Self {
-        Self::parse_rule(s).0
-    }
-
     /// The method and whether it also applies to strata with one PSU inside
     /// the domain (R's `options(survey.adjust.domain.lonely = TRUE)`), written
-    /// `"center:domains"`. `"none:domains"` drops those strata without scaling:
-    /// estimation applies `scale()`'s factor itself.
-    pub fn parse_rule(s: Option<&str>) -> (Self, bool) {
-        let (name, domains) = match s.and_then(|s| s.split_once(':')) {
-            Some((name, flag)) => (Some(name), flag.eq_ignore_ascii_case("domains")),
+    /// `"center:domains"`. `"center"`/`"adjust"` and `"scale"`/`"average"` are
+    /// R's names; `None` or `"none"` leaves singleton strata out of the variance,
+    /// and `"none:domains"` drops those strata without scaling: estimation
+    /// applies `scale()`'s factor itself.
+    pub fn parse_rule(s: Option<&str>) -> EResult<(Self, bool)> {
+        let Some(s) = s else {
+            return Ok((SingletonMethod::None, false));
+        };
+        let invalid = || EstimationError::InvalidChoice {
+            what: "singleton method",
+            got: s.to_string(),
+            expected: "'none', 'center' or 'scale', optionally followed by ':domains'",
+        };
+        let (name, domains) = match s.split_once(':') {
+            Some((name, flag)) if flag.eq_ignore_ascii_case("domains") => (name, true),
+            Some(_) => return Err(invalid()),
             None => (s, false),
         };
-        let method = match name {
-            Some(s) if s.eq_ignore_ascii_case("center") || s.eq_ignore_ascii_case("adjust") => {
-                SingletonMethod::Center
-            }
-            Some(s) if s.eq_ignore_ascii_case("scale") || s.eq_ignore_ascii_case("average") => {
-                SingletonMethod::Scale
-            }
-            _ => SingletonMethod::None,
+        let method = match name.to_ascii_lowercase().as_str() {
+            "none" => SingletonMethod::None,
+            "center" | "adjust" => SingletonMethod::Center,
+            "scale" | "average" => SingletonMethod::Scale,
+            _ => return Err(invalid()),
         };
-        (method, domains)
+        Ok((method, domains))
     }
 }
 
@@ -61,9 +62,9 @@ impl SingletonRule {
         domains: false,
     };
 
-    pub fn parse(s: Option<&str>) -> Self {
-        let (method, domains) = SingletonMethod::parse_rule(s);
-        Self { method, domains }
+    pub fn parse(s: Option<&str>) -> EResult<Self> {
+        let (method, domains) = SingletonMethod::parse_rule(s)?;
+        Ok(Self { method, domains })
     }
 }
 
@@ -85,14 +86,18 @@ pub enum SvyQuantileMethod {
 }
 
 impl SvyQuantileMethod {
-    pub fn parse(s: &str) -> Self {
+    pub fn parse(s: &str) -> EResult<Self> {
         match s.to_lowercase().as_str() {
-            "lower" => SvyQuantileMethod::Lower,
-            "higher" => SvyQuantileMethod::Higher,
-            "middle" => SvyQuantileMethod::Middle,
-            "nearest" => SvyQuantileMethod::Nearest,
-            "linear" => SvyQuantileMethod::Linear,
-            _ => SvyQuantileMethod::Higher, // default
+            "lower" => Ok(SvyQuantileMethod::Lower),
+            "higher" => Ok(SvyQuantileMethod::Higher),
+            "middle" => Ok(SvyQuantileMethod::Middle),
+            "nearest" => Ok(SvyQuantileMethod::Nearest),
+            "linear" => Ok(SvyQuantileMethod::Linear),
+            _ => Err(EstimationError::InvalidChoice {
+                what: "quantile method",
+                got: s.to_string(),
+                expected: "'lower', 'higher', 'middle', 'nearest' or 'linear'",
+            }),
         }
     }
 }
@@ -1646,7 +1651,7 @@ pub fn build_taylor_design(
     fpc_ssu: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
 ) -> EResult<TaylorDesign> {
-    let (sm_enum, domain_rule) = SingletonMethod::parse_rule(singleton_method);
+    let (sm_enum, domain_rule) = SingletonMethod::parse_rule(singleton_method)?;
 
     let fpc_arr: Option<Vec<f64>> = fpc.map(|f| f.iter().map(|v| v.unwrap_or(1.0)).collect());
     let fpc_ssu_arr: Option<Vec<f64>> =
@@ -1902,9 +1907,9 @@ fn singleton_rows_needed(
     singleton_method: Option<&str>,
     calibrated: bool,
     stratified: bool,
-) -> bool {
-    let (method, domain_rule) = SingletonMethod::parse_rule(singleton_method);
-    (method != SingletonMethod::None || domain_rule) && stratified && !calibrated
+) -> EResult<bool> {
+    let (method, domain_rule) = SingletonMethod::parse_rule(singleton_method)?;
+    Ok((method != SingletonMethod::None || domain_rule) && stratified && !calibrated)
 }
 
 /// [`TaylorDesign::domain_rows`] for kernels that sweep a calibration into the
@@ -1916,9 +1921,11 @@ pub fn singleton_domain_rows(
     stratified: bool,
     n: usize,
     domain: Option<&BooleanChunked>,
-) -> Option<Vec<bool>> {
-    singleton_rows_needed(singleton_method, calibrated, stratified)
-        .then(|| row_mask(n, None, domain))
+) -> EResult<Option<Vec<bool>>> {
+    Ok(
+        singleton_rows_needed(singleton_method, calibrated, stratified)?
+            .then(|| row_mask(n, None, domain)),
+    )
 }
 
 /// [`singleton_domain_rows`] with the domain's rows already resolved.
@@ -1927,8 +1934,8 @@ pub fn singleton_rows(
     calibrated: bool,
     stratified: bool,
     rows: &[bool],
-) -> Option<Vec<bool>> {
-    singleton_rows_needed(singleton_method, calibrated, stratified).then(|| rows.to_vec())
+) -> EResult<Option<Vec<bool>>> {
+    Ok(singleton_rows_needed(singleton_method, calibrated, stratified)?.then(|| rows.to_vec()))
 }
 
 /// The boolean domain-row column `col` of `df` ([`row_mask`]'s `rows`).
@@ -3647,19 +3654,23 @@ mod tests {
 
     #[test]
     fn test_quantile_method_from_str() {
-        assert_eq!(SvyQuantileMethod::parse("lower"), SvyQuantileMethod::Lower);
         assert_eq!(
-            SvyQuantileMethod::parse("HIGHER"),
+            SvyQuantileMethod::parse("lower").unwrap(),
+            SvyQuantileMethod::Lower
+        );
+        assert_eq!(
+            SvyQuantileMethod::parse("HIGHER").unwrap(),
             SvyQuantileMethod::Higher
         );
         assert_eq!(
-            SvyQuantileMethod::parse("Linear"),
+            SvyQuantileMethod::parse("Linear").unwrap(),
             SvyQuantileMethod::Linear
         );
+        let err = SvyQuantileMethod::parse("unknown").unwrap_err();
         assert_eq!(
-            SvyQuantileMethod::parse("unknown"),
-            SvyQuantileMethod::Higher
-        ); // default
+            err.to_string(),
+            "unknown quantile method 'unknown'; expected 'lower', 'higher', 'middle', 'nearest' or 'linear'"
+        );
     }
 
     /// `degrees_of_freedom_from_design` exists so the ungrouped kernels stop
