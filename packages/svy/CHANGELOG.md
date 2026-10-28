@@ -60,6 +60,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Fixed
 
+- **The `self_representing`, `collapse` and `pool` singleton rules no longer depend on how PSUs are labelled.** They built the variance strata and PSUs from bare PSU ids, so when ids repeat across strata (1, 2 in every stratum) singletons merged into unrelated strata, PSUs from different strata merged, and `collapse` miscounted a target's PSUs; standard errors and df were wrong without a word. They now match R on the equivalent recoded design.
 - **`svy.io.write_xpt` writes infinity and NaN as missing**, as haven does; infinities were stored as values and NaN came back as +inf. `write_dta` now does the same explicitly (its files already read back as missing).
 - **`ranktest` credits a calibration in its variance**, as R's `svyranktest` does through `svyglm`, for two-sample, k-sample and custom `score_fn` tests. After `poststratify`, `rake` or `calibrate` it answered as if the weights were fixed.
 - **`ranktest` applies the design's finite population correction**, as R's `svyranktest` does, for two-sample, k-sample and custom `score_fn` tests. With `pop_size` it answered the FPC-free question; results on designs without `pop_size` are unchanged.
