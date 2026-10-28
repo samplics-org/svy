@@ -28,6 +28,7 @@ from svy.core.containers import ChiSquare, FDist
 from svy.core.data_prep import (
     _ANALYSIS_MISSING_HINT,
     _DESIGN_MISSING_HINT,
+    PreparedData,
     calib_kwargs,
     check_columns,
     extract_where_cols,
@@ -35,6 +36,7 @@ from svy.core.data_prep import (
     prepare_data,
     record_columns,
 )
+from svy.core.design import PopSize
 from svy.core.enumerations import (
     RankScoreMethod as _RankScoreMethod,
 )
@@ -135,6 +137,26 @@ def _check_alternative(alternative: object, *, where: str) -> None:
         raise EstimationError.invalid_choice(
             where=where, param="alternative", got=alternative, allowed=_ALTERNATIVES
         )
+
+
+def _pop_size_columns(pop_size: str | PopSize | None) -> list[str]:
+    """The population-size columns prepare_data must keep for the FPC to be computable."""
+    if pop_size is None:
+        return []
+    psu = pop_size if isinstance(pop_size, str) else pop_size.psu
+    ssu = None if isinstance(pop_size, str) else pop_size.ssu
+    return [c for c in (psu, ssu) if isinstance(c, str)]
+
+
+def _with_fpc(
+    df: pl.DataFrame, pop_size: str | PopSize | None, prep: PreparedData
+) -> tuple[pl.DataFrame, str | None, str | None]:
+    """``df`` with the per-row FPC columns the Taylor kernels read, and their names."""
+    if pop_size is None:
+        return df, None, None
+    from svy.estimation._fpc import compute_fpc_columns
+
+    return compute_fpc_columns(df, pop_size, prep.strata_col, prep.psu_col, prep.ssu_col)
 
 
 @contextmanager
@@ -835,14 +857,6 @@ class Categorical:
         # The population-size column has to survive prepare_data's projection
         # for the FPC to be computable below.
         pop_size = self._sample._design.pop_size if rep_kw is None else None
-        pop_cols: list[str] = []
-        if pop_size is not None:
-            _pop = pop_size if isinstance(pop_size, str) else pop_size.psu
-            if isinstance(_pop, str):
-                pop_cols.append(_pop)
-            _ssu = None if isinstance(pop_size, str) else pop_size.ssu
-            if isinstance(_ssu, str):
-                pop_cols.append(_ssu)
 
         prep = prepare_data(
             self._sample,
@@ -851,7 +865,7 @@ class Categorical:
             y_pair=y_pair,
             by=by,
             where=where,
-            extra_cols=pop_cols,
+            extra_cols=_pop_size_columns(pop_size),
             drop_nulls=drop_nulls,
             cast_y_float=True,
             select_columns=True,
@@ -863,14 +877,7 @@ class Categorical:
         # skip it, so every t-test on a design with pop_size silently answered
         # the fpc-free question -- R's svyttest, which routes through svyglm on
         # the full design, applies it.
-        ttest_df = prep.df
-        fpc_col = fpc_ssu_col = None
-        if pop_size is not None:
-            from svy.estimation._fpc import compute_fpc_columns
-
-            ttest_df, fpc_col, fpc_ssu_col = compute_fpc_columns(
-                ttest_df, pop_size, prep.strata_col, prep.psu_col, prep.ssu_col
-            )
+        ttest_df, fpc_col, fpc_ssu_col = _with_fpc(prep.df, pop_size, prep)
 
         with _test_groups(where="Sample.categorical.ttest"):
             if rep_kw is not None:
@@ -1189,16 +1196,19 @@ class Categorical:
             _RankScoreMethod.MEDIAN: "median",
         }.get(_method, "wilcoxon")
 
+        pop_size = self._sample._design.pop_size if rep_kw is None else None
         prep = prepare_data(
             self._sample,
             y=y,
             group=group,
             by=by,
             where=where,
+            extra_cols=_pop_size_columns(pop_size),
             drop_nulls=drop_nulls,
             cast_y_float=True,
             select_columns=True,
         )
+        rank_df, fpc_col, fpc_ssu_col = _with_fpc(prep.df, pop_size, prep)
 
         with _test_groups(where="Sample.categorical.ranktest"):
             if rep_kw is not None:
@@ -1216,18 +1226,20 @@ class Categorical:
                 )
             else:
                 findings = self._domain_findings(
-                    prep, prep.df, where="Sample.categorical.ranktest"
+                    prep, rank_df, where="Sample.categorical.ranktest"
                 )
 
                 # Single Rust call — handles by-levels internally
                 result_df = rs.ranktest_rs(
-                    prep.df,
+                    rank_df,
                     y_col=prep.y_col,
                     group_col=group,
                     weight_col=prep.weight_col,
                     strata_col=prep.strata_col,
                     psu_col=prep.psu_col,
                     ssu_col=prep.ssu_col,
+                    fpc_col=fpc_col,
+                    fpc_ssu_col=fpc_ssu_col,
                     score_method=score_method_str,
                     singleton_method=prep.singleton_method,
                     domain_col=prep.domain_col,
@@ -1482,12 +1494,14 @@ class Categorical:
         from svy.core.containers import TDist
         from svy.errors import EstimationError
 
+        pop_size = self._sample._design.pop_size if rep_kw is None else None
         prep = prepare_data(
             self._sample,
             y=y,
             group=group,
             by=by,
             where=where,
+            extra_cols=_pop_size_columns(pop_size),
             drop_nulls=drop_nulls,
             cast_y_float=True,
             select_columns=True,
@@ -1517,6 +1531,7 @@ class Categorical:
         # Add scores as a column and use ttest_rs on scores ~ group
         score_col_name = "__svy_custom_rankscore__"
         df = prep.df.with_columns(pl.Series(name=score_col_name, values=scores_full))
+        df, fpc_col, fpc_ssu_col = _with_fpc(df, pop_size, prep)
 
         method_name = getattr(score_fn, "__name__", "custom")
         with _test_groups(where="Sample.categorical.ranktest"):
@@ -1546,6 +1561,8 @@ class Categorical:
                     strata_col=prep.strata_col,
                     psu_col=prep.psu_col,
                     ssu_col=prep.ssu_col,
+                    fpc_col=fpc_col,
+                    fpc_ssu_col=fpc_ssu_col,
                     singleton_method=prep.singleton_method,
                     null_value=0.0,
                     domain_col=prep.domain_col,
