@@ -24,21 +24,23 @@ import msgspec
 from msgspec import field
 
 from svy.categorical.ttest import (
+    _TEST_COLS,
     DiffEst,
     GroupLevels,
     TtestEst,
     _groups_header,
     _level_text,
     by_cells,
+    diff_rows,
+    numbers_frame,
     untidy_by,
-    untidy_records,
     with_by_labels,
 )
 from svy.core.containers import FDist, TDist
 from svy.core.types import Category
 from svy.errors import EstimationError
 from svy.errors._findings import SvyWarning, merge_findings
-from svy.estimation.estimate import VarLabels, checked_print_width
+from svy.estimation.estimate import VarLabels, checked_print_width, with_settings
 from svy.ui.printing import (
     finding_notes,
     make_panel,
@@ -63,7 +65,6 @@ log = logging.getLogger(__name__)
 
 
 def _validate_two_sample(rt: RankTestTwoSample) -> None:
-    from svy.errors import EstimationError
 
     if not (0.0 < float(rt.alpha) < 1.0):
         raise EstimationError.invalid_range(
@@ -84,7 +85,6 @@ def _validate_two_sample(rt: RankTestTwoSample) -> None:
 
 
 def _validate_k_sample(rt: RankTestKSample) -> None:
-    from svy.errors import EstimationError
 
     if not (0.0 < float(rt.alpha) < 1.0):
         raise EstimationError.invalid_range(
@@ -118,6 +118,7 @@ class RankTestTwoSample(
     estimates: list[TtestEst] = field(default_factory=list)
     stats: TDist | None = None
     alpha: float = 0.05
+    variance: str = "Taylor"  # or the replicate method
     #: What the call found that bears on the result (e.g. DOMAIN_SINGLETON_PSU).
     findings: tuple[SvyWarning, ...] = ()
 
@@ -136,107 +137,19 @@ class RankTestTwoSample(
     def to_dict(self) -> dict[str, Any]:
         return msgspec.to_builtins(self)
 
-    def to_polars(
-        self,
-        component: Literal["test", "estimates"] = "test",
-        *,
-        tidy: bool = True,
-    ) -> pl.DataFrame:
-        import polars as pl
-
-        if component == "test":
-            if not self.diff:
-                return pl.DataFrame(
-                    schema={
-                        "y": pl.Utf8,
-                        "group_var": pl.Utf8,
-                        "method": pl.Utf8,
-                        "diff": pl.Float64,
-                        "se": pl.Float64,
-                        "lci": pl.Float64,
-                        "uci": pl.Float64,
-                        "t": pl.Float64,
-                        "df": pl.Float64,
-                        "p_value": pl.Float64,
-                    }
-                )
-
-            rows: list[dict[str, Any]] = []
-            for d in self.diff:
-                row: dict[str, Any] = {"y": d.y}
-                if d.by is not None:
-                    if tidy:
-                        row.update(by_cells(d.by, d.by_level))
-                    else:
-                        row["by"], row["by_level"] = untidy_by(d.by, d.by_level)
-                row.update(
-                    {
-                        "group_var": self.groups.var,
-                        "method": self.method_name,
-                        "diff": d.diff,
-                        "se": d.se,
-                        "lci": d.lci,
-                        "uci": d.uci,
-                    }
-                )
-                if self.stats is not None:
-                    row["t"] = self.stats.value
-                    row["df"] = float(self.stats.df)
-                    row["p_value"] = self.stats.p_value
-                rows.append(row)
-
-            df = pl.DataFrame(rows)
-            if not tidy and "by" in df.columns and df["by"].is_null().all():
-                df = df.drop("by", "by_level")
-            return df
-
-        elif component == "estimates":
-            if not self.estimates:
-                return pl.DataFrame(
-                    schema={
-                        "y": pl.Utf8,
-                        "group": pl.Utf8,
-                        "group_level": pl.Utf8,
-                        "est": pl.Float64,
-                        "se": pl.Float64,
-                        "cv": pl.Float64,
-                        "lci": pl.Float64,
-                        "uci": pl.Float64,
-                    }
-                )
-
-            if not tidy:
-                df = pl.DataFrame(untidy_records(self.estimates))
-                for col_pair in [("by", "by_level"), ("group", "group_level")]:
-                    if col_pair[0] in df.columns and df[col_pair[0]].is_null().all():
-                        df = df.drop(*col_pair)
-                if "y_level" in df.columns and df["y_level"].is_null().all():
-                    df = df.drop("y_level")
-                return df
-
-            rows = []
-            for e in self.estimates:
-                row: dict[str, Any] = {}
-                if e.by is not None:
-                    row.update(by_cells(e.by, e.by_level))
-                if e.group is not None:
-                    row[e.group] = e.group_level
-                row.update(
-                    {
-                        "est": e.est,
-                        "se": e.se,
-                        "cv": e.cv,
-                        "lci": e.lci,
-                        "uci": e.uci,
-                    }
-                )
-                rows.append(row)
-            return pl.DataFrame(rows)
-
-        else:
-            raise EstimationError.invalid_choice(
-                where="to_polars", param="component", got=component, allowed=["test", "estimates"]
-            )
+    def to_polars(self, *, tidy: bool = True) -> pl.DataFrame:
+        """One row per domain: the difference in mean rank scores and its test."""
+        st = self.stats
+        stats = (st.value, st.df, st.p_value) if st is not None else None
+        rows = diff_rows(self.diff, stats, group_var=self.groups.var, tidy=tidy)
+        settings = {
+            "method": self.method_name,
+            "alternative": self.alternative,
+            "variance": self.variance,
+            "alpha": float(self.alpha),
+        }
+        df = numbers_frame(rows, _TEST_COLS, group=True)
+        return with_settings(df, settings, where="RankTestTwoSample.to_polars")
 
     # ---------------- Presentation ----------------
 
@@ -391,6 +304,7 @@ class RankTestKSample(msgspec.Struct, tag="rank_k", tag_field="kind", kw_only=Tr
     estimates: list[TtestEst] = field(default_factory=list)
     stats: FDist | None = None
     alpha: float = 0.05
+    variance: str = "Taylor"  # or the replicate method
     #: What the call found that bears on the result (e.g. DOMAIN_SINGLETON_PSU).
     findings: tuple[SvyWarning, ...] = ()
 
@@ -409,90 +323,25 @@ class RankTestKSample(msgspec.Struct, tag="rank_k", tag_field="kind", kw_only=Tr
     def to_dict(self) -> dict[str, Any]:
         return msgspec.to_builtins(self)
 
-    def to_polars(
-        self,
-        component: Literal["test", "estimates"] = "test",
-        *,
-        tidy: bool = True,
-    ) -> pl.DataFrame:
+    def to_polars(self) -> pl.DataFrame:
+        """One row: the k-group test on mean rank scores."""
         import polars as pl
 
-        if component == "test":
-            if self.stats is None:
-                return pl.DataFrame(
-                    schema={
-                        "y": pl.Utf8,
-                        "group_var": pl.Utf8,
-                        "method": pl.Utf8,
-                        "ndf": pl.Int64,
-                        "ddf": pl.Float64,
-                        "chisq": pl.Float64,
-                        "f_stat": pl.Float64,
-                        "p_value": pl.Float64,
-                    }
-                )
-
-            ndf = int(self.stats.df_num)
-            return pl.DataFrame(
-                {
-                    "y": [self.y],
-                    "group_var": [self.group_var],
-                    "method": [self.method_name],
-                    "ndf": [ndf],
-                    "ddf": [float(self.stats.df_den)],
-                    "chisq": [float(self.stats.value) * ndf],  # F * ndf = chisq
-                    "f_stat": [float(self.stats.value)],
-                    "p_value": [self.stats.p_value],
-                }
-            )
-
-        elif component == "estimates":
-            if not self.estimates:
-                return pl.DataFrame(
-                    schema={
-                        "y": pl.Utf8,
-                        "group": pl.Utf8,
-                        "group_level": pl.Utf8,
-                        "est": pl.Float64,
-                        "se": pl.Float64,
-                        "cv": pl.Float64,
-                        "lci": pl.Float64,
-                        "uci": pl.Float64,
-                    }
-                )
-
-            if not tidy:
-                df = pl.DataFrame(untidy_records(self.estimates))
-                for col_pair in [("by", "by_level"), ("group", "group_level")]:
-                    if col_pair[0] in df.columns and df[col_pair[0]].is_null().all():
-                        df = df.drop(*col_pair)
-                if "y_level" in df.columns and df["y_level"].is_null().all():
-                    df = df.drop("y_level")
-                return df
-
-            rows = []
-            for e in self.estimates:
-                row: dict[str, Any] = {}
-                if e.by is not None:
-                    row.update(by_cells(e.by, e.by_level))
-                if e.group is not None:
-                    row[e.group] = e.group_level
-                row.update(
-                    {
-                        "est": e.est,
-                        "se": e.se,
-                        "cv": e.cv,
-                        "lci": e.lci,
-                        "uci": e.uci,
-                    }
-                )
-                rows.append(row)
-            return pl.DataFrame(rows)
-
-        else:
-            raise EstimationError.invalid_choice(
-                where="to_polars", param="component", got=component, allowed=["test", "estimates"]
-            )
+        numbers = ("f", "df_num", "df_den", "p_value")
+        schema = {"y_var": pl.String, "group_var": pl.String} | dict.fromkeys(numbers, pl.Float64)
+        st = self.stats
+        rows = (
+            []
+            if st is None
+            else [(self.y, self.group_var, st.value, st.df_num, st.df_den, st.p_value)]
+        )
+        df = pl.DataFrame(rows, schema=schema, orient="row")
+        settings = {
+            "method": self.method_name,
+            "variance": self.variance,
+            "alpha": float(self.alpha),
+        }
+        return with_settings(df, settings, where="RankTestKSample.to_polars")
 
     # ---------------- Presentation ----------------
 
@@ -718,16 +567,13 @@ class RankTestByResult:
 
     # ── Export ───────────────────────────────────────────────────────────
 
-    def to_polars(
-        self,
-        component: Literal["test", "estimates"] = "test",
-        *,
-        tidy: bool = True,
-        use_labels: bool = True,
-    ) -> "pl.DataFrame":
+    def to_polars(self, *, tidy: bool = True, use_labels: bool = True) -> "pl.DataFrame":
         import polars as pl
 
-        frames = [r.to_polars(component, tidy=tidy) for r in self.results]
+        frames = [
+            r.to_polars(tidy=tidy) if isinstance(r, RankTestTwoSample) else r.to_polars()
+            for r in self.results
+        ]
         if not frames:
             return pl.DataFrame()
         # A k-sample member's rows do not carry their domain; it is the matching by level.
@@ -746,7 +592,7 @@ class RankTestByResult:
         return with_by_labels(df, self.by, labels, tidy=tidy, where="RankTestByResult.to_polars")
 
     def _with_by(self, frame: pl.DataFrame, by_level: Any, *, tidy: bool) -> pl.DataFrame:
-        """``frame`` with its domain's columns after ``y``, as a two-sample member has them."""
+        """``frame`` with its domain's columns after its variables, as a two-sample member has them."""
         import polars as pl
 
         by = self._by_list[0] if len(self._by_list) == 1 else self._by_list
@@ -755,21 +601,9 @@ class RankTestByResult:
         else:
             b, level = untidy_by(by, by_level)
             cols = {"by": b, "by_level": level}
+        lead = ["y_var", "group_var"]
         by_frame = pl.DataFrame([cols] * frame.height)
-        return pl.concat([frame.select("y"), by_frame, frame.drop("y")], how="horizontal")
-
-    def _with_by(self, frame: pl.DataFrame, by_level: Any, *, tidy: bool) -> pl.DataFrame:
-        """``frame`` with its domain's columns after ``y``, as a two-sample member has them."""
-        import polars as pl
-
-        by = self._by_list[0] if len(self._by_list) == 1 else self._by_list
-        if tidy:
-            cols = dict(by_cells(by, by_level))
-        else:
-            b, level = untidy_by(by, by_level)
-            cols = {"by": b, "by_level": level}
-        by_frame = pl.DataFrame([cols] * frame.height)
-        return pl.concat([frame.select("y"), by_frame, frame.drop("y")], how="horizontal")
+        return pl.concat([frame.select(lead), by_frame, frame.drop(lead)], how="horizontal")
 
     # ── Printing ─────────────────────────────────────────────────────────
 

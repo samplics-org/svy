@@ -185,17 +185,21 @@ TESTS = {
 COMPONENTS = {
     "ttest_two": ["test", "estimates"],
     "ttest_one": ["test", "estimates"],
-    "rank_two": ["test"],
-    "rank_k": ["test"],
+    "rank_two": [None],  # rank tests have only the test
+    "rank_k": [None],
 }
 TEST_CASES = [(t, c) for t in TESTS for c in COMPONENTS[t]]
+
+
+def _export(result, component, **kw):
+    return result.to_polars(**kw) if component is None else result.to_polars(component, **kw)
 
 
 @pytest.mark.parametrize("method", METHODS)
 @pytest.mark.parametrize("var", KINDS)
 @pytest.mark.parametrize("test,component", TEST_CASES)
 def test_by_levels_and_labels(sample, method, var, test, component):
-    df = TESTS[test](sample, by=var, method=method).to_polars(component)
+    df = _export(TESTS[test](sample, by=var, method=method), component)
     i = df.columns.index(var)
     assert df.columns[i + 1] == f"{var}_label"
     assert df.schema[var] == DTYPES[var]
@@ -205,7 +209,7 @@ def test_by_levels_and_labels(sample, method, var, test, component):
 
 @pytest.mark.parametrize("test,component", TEST_CASES)
 def test_several_by_variables_each_get_labels(sample, test, component):
-    df = TESTS[test](sample, by=["vi", "vs"]).to_polars(component)
+    df = _export(TESTS[test](sample, by=["vi", "vs"]), component)
     assert df["vi_label"].to_list() == _labels_of("vi", df["vi"].to_list())
     assert df["vs_label"].to_list() == _labels_of("vs", df["vs"].to_list())
 
@@ -215,7 +219,7 @@ def test_several_by_variables_each_get_labels(sample, test, component):
 def test_test_labels_off(sample, test, component, where):
     kw = {"use_labels": False}
     r = TESTS[test](sample, by="vi", **(kw if where == "call" else {}))
-    df = r.to_polars(component, **(kw if where == "to_polars" else {}))
+    df = _export(r, component, **(kw if where == "to_polars" else {}))
     assert not [c for c in df.columns if c.endswith("_label")]
     assert df.schema["vi"] == pl.Int64
 
@@ -231,22 +235,22 @@ def test_group_label_follows_to_polars_switch():
 
 @pytest.mark.parametrize("test,component", TEST_CASES)
 def test_untidy_rows_carry_by_label(sample, test, component):
-    df = TESTS[test](sample, by="vi").to_polars(component, tidy=False)
+    df = _export(TESTS[test](sample, by="vi"), component, tidy=False)
     assert df["by_label"].to_list() == _labels_of("vi", df["by_level"].to_list())
 
 
 @pytest.mark.parametrize("test,component", TEST_CASES)
 def test_untidy_rows_carry_a_label_struct_with_several_by(sample, test, component):
-    df = TESTS[test](sample, by=["vi", "vs"]).to_polars(component, tidy=False)
+    df = _export(TESTS[test](sample, by=["vi", "vs"]), component, tidy=False)
     for level, label in zip(df["by_level"].to_list(), df["by_label"].to_list()):
         assert label == {"vi": LABELS["vi"][level["vi"]], "vs": LABELS["vs"][level["vs"]]}
 
 
 @pytest.mark.parametrize("test,component", TEST_CASES)
 def test_unlabelled_by_has_no_label_column(sample, test, component):
-    df = TESTS[test](sample, by="u").to_polars(component)
+    df = _export(TESTS[test](sample, by="u"), component)
     assert "u_label" not in df.columns
-    assert "by_label" not in TESTS[test](sample, by="u").to_polars(component, tidy=False).columns
+    assert "by_label" not in _export(TESTS[test](sample, by="u"), component, tidy=False).columns
 
 
 def test_saved_t_test_keeps_labels_of_a_float_coded_by(sample):

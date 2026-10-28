@@ -20,7 +20,7 @@ import msgspec
 import numpy as np
 import polars as pl
 
-from svy.categorical.ranktest import RankTestKSample, RankTestTwoSample
+from svy.categorical.ranktest import RankTestByResult, RankTestKSample, RankTestTwoSample
 from svy.categorical.table import CellEst, Table, TableStats
 from svy.categorical.ttest import TTestByResult, TTestOneGroup, TTestTwoGroups
 from svy.core.constants import key_col
@@ -276,6 +276,10 @@ class Categorical:
     def _by_value_labels(self, by: Any, use_labels: bool | None) -> dict[str, ResolvedLabels]:
         names = [by] if isinstance(by, str) else list(by or [])
         return {v: lab for v in names if (lab := self._value_labels(v, use_labels)) is not None}
+
+    def _variance_name(self, rep_kw: dict | None) -> str:
+        """``"Taylor"``, or the replicate method a replication variance uses."""
+        return "Taylor" if rep_kw is None else str(self._sample.design.rep_wgts.method)
 
     def _replication(self, method: str | None, *, where: str) -> dict | None:
         """The kernel's replicate arguments, or None for a Taylor variance.
@@ -751,6 +755,7 @@ class Categorical:
             findings=findings,
             share_of=share_of,
             units=_units.value.lower(),
+            variance=self._variance_name(rep_kw),
         )
 
         if use_labels is not None:
@@ -962,7 +967,7 @@ class Categorical:
             _groups = first.groups if first and isinstance(first, TTestTwoGroups) else None
             _mean_h0 = mean_h0 if group is None else None
 
-            return TTestByResult(
+            result = TTestByResult(
                 results,
                 by=by,
                 y=y_name,
@@ -974,6 +979,7 @@ class Categorical:
                 findings=findings,
                 by_labels=self._by_value_labels(by, use_labels),
             )
+            return _with_variance(result, self._variance_name(rep_kw))
         else:
             one = self._unpack_ttest_row(
                 result_df=result_df,
@@ -989,7 +995,8 @@ class Categorical:
                 group_lookup=group_lookup,
                 group_labels=group_labels,
             )
-            return msgspec.structs.replace(one, findings=tuple(findings))
+            one = msgspec.structs.replace(one, findings=tuple(findings))
+            return _with_variance(one, self._variance_name(rep_kw))
 
     def _unpack_ttest_row(
         self,
@@ -1202,7 +1209,8 @@ class Categorical:
                 drop_nulls=drop_nulls,
                 rep_kw=rep_kw,
             )
-            return _label_rank_result(result, group_labels, by_labels)
+            result = _label_rank_result(result, group_labels, by_labels)
+            return _with_variance(result, self._variance_name(rep_kw))
 
         # Normalize and map to Rust string
         _method = _normalize_rank_method(score if score is not None else "kruskal-wallis")
@@ -1322,7 +1330,7 @@ class Categorical:
             _groups = first.groups if first and isinstance(first, RankTestTwoSample) else None
             _method = first.method_name if first else ""
             _by_levels = [by_lookup.get(v, v) for v in result_df[prep.by_col].to_list()]
-            return _label_rank_result(
+            result = _label_rank_result(
                 RankTestByResult(
                     results,
                     by=by,
@@ -1338,6 +1346,7 @@ class Categorical:
                 group_labels,
                 by_labels,
             )
+            return _with_variance(result, self._variance_name(rep_kw))
         else:
             one = self._unpack_ranktest_row(
                 result_df=result_df,
@@ -1350,9 +1359,10 @@ class Categorical:
                 by=None,
                 by_level=None,
             )
-            return _label_rank_result(
+            result = _label_rank_result(
                 msgspec.structs.replace(one, findings=tuple(findings)), group_labels, by_labels
             )
+            return _with_variance(result, self._variance_name(rep_kw))
 
     def _unpack_ranktest_row(
         self,
@@ -1663,6 +1673,14 @@ class Categorical:
             )
 
         return msgspec.structs.replace(_unpack_row(0, None), findings=tuple(findings))
+
+
+def _with_variance(result: Any, variance: str) -> Any:
+    """``result``, or each member of a by-domain result, naming its variance method."""
+    if isinstance(result, (TTestByResult, RankTestByResult)):
+        result.results = [msgspec.structs.replace(r, variance=variance) for r in result.results]
+        return result
+    return msgspec.structs.replace(result, variance=variance)
 
 
 def _label_rank_result(result: Any, group_labels: Any, by_labels: dict) -> Any:

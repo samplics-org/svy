@@ -366,6 +366,7 @@ class TTestOneGroupData(msgspec.Struct, kw_only=True, frozen=True):
     mean_h0: float = 0.0
     alternative: str = "two-sided"
     alpha: float = 0.05
+    variance: str | None = None  # "Taylor" or the replicate method; None from older payloads
     diff: list[DiffEstData] = []
     estimates: list[TtestEstData] = []
     stats: TTestStatsData | None = None
@@ -388,6 +389,7 @@ class TTestTwoGroupsData(msgspec.Struct, kw_only=True, frozen=True):
     pair: list[str] | None = None
     alternative: str = "two-sided"
     alpha: float = 0.05
+    variance: str | None = None  # "Taylor" or the replicate method; None from older payloads
     diff: list[DiffEstData] = []
     estimates: list[TtestEstData] = []
     stats: TTestStatsData | None = None
@@ -456,6 +458,7 @@ class TableData(msgspec.Struct, kw_only=True, frozen=True):
     rowvar: str
     colvar: str | None = None
     alpha: float = 0.05
+    variance: str | None = None  # "Taylor" or the replicate method; None from older payloads
     estimates: list[CellEstData] = []
     stats: TableStatsData | None = None
     rowvals: list[CatValue] | None = None
@@ -492,6 +495,7 @@ class GLMFitData(msgspec.Struct, kw_only=True, frozen=True):
     #: Significance level of the coefficient intervals. Optional so payloads
     #: written before it existed still decode, as the 0.05 they were fitted at.
     alpha: float = 0.05
+    variance: str | None = None  # "Taylor" or the replicate method; None from older payloads
     #: The fit's ``where=`` domain, formatted for display; None without one.
     where_clause: str | None = None
     #: The offset column the model was fitted with; None without one.
@@ -511,6 +515,7 @@ class GLMPredData(msgspec.Struct, kw_only=True, frozen=True):
     schema_version: str = SCHEMA_VERSION
     df: float
     alpha: float
+    variance: str | None = None  # "Taylor" or the replicate method; None from older payloads
     yhat: list[float]
     se: list[float]
     lci: list[float]

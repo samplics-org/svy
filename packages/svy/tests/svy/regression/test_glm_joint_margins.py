@@ -214,13 +214,36 @@ class TestJointMarginsOutput:
 
     def test_to_polars_has_one_column_per_variable(self, model):
         df = model.margins(at={("awards", "meals"): [("Yes", 20), ("No", 80)]}).to_polars()
-        assert df.columns == ["term", "awards", "meals", "margin", "se", "lci", "uci"]
+        assert df.columns == [
+            "term",
+            "awards",
+            "meals",
+            "est",
+            "se",
+            "lci",
+            "uci",
+            "df",
+            "margin_type",
+            "variance",
+            "alpha",
+        ]
         assert df["awards"].to_list() == ["Yes", "No"]
         assert df["meals"].to_list() == [20, 80]
 
     def test_to_polars_single_variable_is_named(self, model):
         df = model.margins(at={"meals": [20, 80]}).to_polars()
-        assert df.columns == ["term", "meals", "margin", "se", "lci", "uci"]
+        assert df.columns == [
+            "term",
+            "meals",
+            "est",
+            "se",
+            "lci",
+            "uci",
+            "df",
+            "margin_type",
+            "variance",
+            "alpha",
+        ]
         assert df["meals"].to_list() == [20, 80]
 
     def test_to_polars_effect_has_contrast_column(self, model):
@@ -229,10 +252,14 @@ class TestJointMarginsOutput:
             "term",
             "yr_rnd",
             "contrast",
-            "margin",
+            "est",
             "se",
             "lci",
             "uci",
+            "df",
+            "margin_type",
+            "variance",
+            "alpha",
         ]
 
     def test_values_is_guided_to_at_and_contrast(self, model):
@@ -290,7 +317,20 @@ class TestGLMMarginsList:
 
     def test_to_polars_stacks_with_null_at_columns(self, model):
         df = model.margins(at={"meals": [20, 80], ("awards", "yr_rnd"): None}).to_polars()
-        assert df.columns == ["term", "meals", "awards", "yr_rnd", "margin", "se", "lci", "uci"]
+        assert df.columns == [
+            "term",
+            "meals",
+            "awards",
+            "yr_rnd",
+            "est",
+            "se",
+            "lci",
+            "uci",
+            "df",
+            "margin_type",
+            "variance",
+            "alpha",
+        ]
         assert df["term"].to_list() == ["meals"] * 2 + ["awards#yr_rnd"] * 4
         assert df["meals"].to_list() == [20, 80, None, None, None, None]
         assert df["awards"].null_count() == 2
@@ -302,7 +342,19 @@ class TestGLMMarginsList:
 
     def test_to_polars_effects_stack_contrast_labels(self, model):
         df = model.margins(variables=["meals", "awards"], at={"yr_rnd": None}).to_polars()
-        assert df.columns == ["term", "yr_rnd", "contrast", "margin", "se", "lci", "uci"]
+        assert df.columns == [
+            "term",
+            "yr_rnd",
+            "contrast",
+            "est",
+            "se",
+            "lci",
+            "uci",
+            "df",
+            "margin_type",
+            "variance",
+            "alpha",
+        ]
         assert df["contrast"].to_list() == [None, None, "Yes - No", "Yes - No"]
 
     def test_stacked_matches_single_result_columns(self, model):

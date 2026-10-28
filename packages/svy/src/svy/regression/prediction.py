@@ -13,6 +13,7 @@ import msgspec
 import numpy as np
 import polars as pl
 
+from svy.estimation.estimate import with_settings
 from svy.regression.glm import _print_width
 from svy.ui.printing import make_panel, render_rich_to_str, resolve_width
 from svy.utils.formats import _fmt_conf_pct
@@ -33,6 +34,7 @@ class GLMPred(msgspec.Struct, frozen=True):
     df: float
     alpha: float
     residuals: np.ndarray | None = None
+    variance: str = "Taylor"  # the fit's: "Taylor" or the replicate method
 
     @classmethod
     def set_default_print_width(cls, width: int | None) -> None:
@@ -153,7 +155,9 @@ class GLMPred(msgspec.Struct, frozen=True):
 
 def glm_pred_frame(r: Any) -> pl.DataFrame:
     """The table of a ``GLMPred``, shared with its serialized form (same field names)."""
-    data = {"yhat": r.yhat, "se": r.se, "lci": r.lci, "uci": r.uci}
+    data = {"est": r.yhat, "se": r.se, "lci": r.lci, "uci": r.uci}
     if r.residuals is not None:
         data["residuals"] = r.residuals
-    return pl.DataFrame(data)
+    df = pl.DataFrame(data).with_columns(pl.all().cast(pl.Float64))
+    settings = {"df": float(r.df), "variance": r.variance, "alpha": float(r.alpha)}
+    return with_settings(df, settings, where="GLMPred.to_polars")

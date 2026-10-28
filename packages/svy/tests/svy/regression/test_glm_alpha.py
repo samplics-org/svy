@@ -188,7 +188,7 @@ class TestPrinting:
         # The printed bounds are exp() of the link-scale bounds at this alpha.
         frame = fit.to_polars(exponentiate=True)
         np.testing.assert_allclose(
-            frame["conf_low"].to_numpy(), np.exp([c.lci for c in fit.coefs]), rtol=1e-12
+            frame["lci"].to_numpy(), np.exp([c.lci for c in fit.coefs]), rtol=1e-12
         )
 
     def test_repr_unchanged(self, sample):
@@ -213,7 +213,7 @@ class TestSerialization:
         # The payload's table carries the same bounds as the live fit.
         live = fit.fitted.to_polars()
         np.testing.assert_allclose(
-            to_polars(back)["conf_low"].to_numpy(), live["conf_low"].to_numpy(), rtol=1e-12
+            to_polars(back)["lci"].to_numpy(), live["lci"].to_numpy(), rtol=1e-12
         )
 
     def test_replication_round_trip(self, jk_sample):

@@ -19,6 +19,7 @@ from msgspec import field
 from svy.core.containers import FDist, TDist
 from svy.errors import Code, ModelError
 from svy.errors._findings import SvyWarning
+from svy.estimation.estimate import with_settings
 from svy.ui.printing import (
     finding_notes,
     make_panel,
@@ -197,6 +198,7 @@ class GLMFit(msgspec.Struct, frozen=True):
     offset: str | None = None
     #: Significance level of the coefficient intervals.
     alpha: float = 0.05
+    variance: str = "Taylor"  # or the replicate method
     #: The fit's ``where=`` domain, formatted for display; None without one.
     where_clause: str | None = None
     #: What the call found that bears on the result (e.g. DOMAIN_SINGLETON_PSU).
@@ -329,8 +331,8 @@ class GLMFit(msgspec.Struct, frozen=True):
         returned on the ratio scale — an odds ratio for ``logit``, a rate ratio
         for ``log``, a hazard ratio for ``cloglog`` — and the estimate column is
         renamed accordingly. The bounds are the exponentiated *link-scale*
-        bounds, so they are not symmetric about the ratio. ``std_err``, the
-        statistic and the p-value are left on the link scale, where the Wald
+        bounds, so they are not symmetric about the ratio. ``se``, ``t`` and
+        the p-value are left on the link scale, where the Wald
         test is computed; a symmetric standard error around a ratio is the
         mistake this is meant to prevent.
         """
@@ -576,36 +578,35 @@ class GLMFit(msgspec.Struct, frozen=True):
 
 def glm_frame(r: Any, *, exponentiate: bool = False) -> pl.DataFrame:
     """The table of a ``GLMFit``, shared with its serialized form (same field names)."""
-    est_col = "estimate"
-    if exponentiate:
-        est_col, _ = _ratio_labels(r.link)
-
-    data = []
+    est_col = _ratio_labels(r.link)[0] if exponentiate else "est"
+    scale = math.exp if exponentiate else float
+    labelled = any(getattr(c, "label", None) for c in r.coefs)
+    rows = []
     for c in r.coefs:
-        row: dict[str, Any] = {
-            "term": c.term,
-            est_col: math.exp(c.est) if exponentiate else c.est,
-            "std_err": c.se,
-            "conf_low": math.exp(c.lci) if exponentiate else c.lci,
-            "conf_high": math.exp(c.uci) if exponentiate else c.uci,
+        row: dict[str, Any] = {"term": c.term}
+        if labelled:
+            row["term_label"] = getattr(c, "label", None) or c.term
+        row |= {"y_var": r.y, est_col: scale(c.est), "se": c.se}
+        row |= {"lci": scale(c.lci), "uci": scale(c.uci)}
+        wald = c.wald
+        row |= {
+            "t": wald.value if wald else None,
+            "df": float(wald.df) if wald else None,
+            "p_value": wald.p_value if wald else None,
         }
-        if c.wald:
-            row.update(
-                {
-                    "statistic": c.wald.value,
-                    "p_value": c.wald.p_value,
-                    "df": c.wald.df,
-                }
-            )
-        else:
-            row.update({"statistic": None, "p_value": None, "df": None})
         if c.wald_adj:
-            row["adj_statistic"] = c.wald_adj.value
-            row["adj_p_value"] = c.wald_adj.p_value
-            row["adj_df"] = c.wald_adj.df
-        data.append(row)
-    labels = [getattr(c, "label", None) for c in r.coefs]
-    if any(labels):
-        for row, c, lab in zip(data, r.coefs, labels):
-            row["term_label"] = lab or c.term
-    return pl.DataFrame(data)
+            row |= {
+                "adj_t": c.wald_adj.value,
+                "adj_df": float(c.wald_adj.df),
+                "adj_p_value": c.wald_adj.p_value,
+            }
+        rows.append(row)
+    numbers = [est_col, "se", "lci", "uci", "t", "df", "p_value"]
+    df = pl.DataFrame(rows).with_columns(pl.col(numbers).cast(pl.Float64))
+    settings = {
+        "family": r.family,
+        "link": r.link,
+        "variance": r.variance,
+        "alpha": float(r.alpha),
+    }
+    return with_settings(df, settings, where="GLMFit.to_polars")

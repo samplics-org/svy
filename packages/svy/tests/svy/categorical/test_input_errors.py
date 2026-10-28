@@ -180,14 +180,11 @@ def test_rank_score_of_wrong_type(sample):
 # ---- results ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "result", ["ttest one", "ttest two", "ranktest"], ids=["one group", "two groups", "rank"]
-)
+@pytest.mark.parametrize("result", ["ttest one", "ttest two"], ids=["one group", "two groups"])
 def test_unknown_frame_component(sample, result):
     r = {
         "ttest one": lambda: sample.categorical.ttest("y", mean_h0=0),
         "ttest two": lambda: sample.categorical.ttest("y", group="g"),
-        "ranktest": lambda: sample.categorical.ranktest("y", group="g"),
     }[result]()
     _raises(
         EstimationError,

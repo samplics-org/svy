@@ -8,7 +8,7 @@ from __future__ import annotations
 import itertools
 import logging
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import msgspec
 import numpy as np
@@ -16,6 +16,7 @@ import polars as pl
 
 from svy.errors import Code, ModelError
 from svy.errors._api import guided_getattr
+from svy.estimation.estimate import with_settings
 from svy.regression.glm import _print_width, delta_var, offset_values
 from svy.regression.links import link_inverse, link_mu_eta, link_mu_eta2
 from svy.ui.printing import make_panel, render_plain_table, render_rich_to_str, resolve_width
@@ -77,6 +78,7 @@ class GLMMargins(msgspec.Struct, frozen=True):
     df: float
     alpha: float
     margin_type: str
+    variance: str = "Taylor"  # the fit's: "Taylor" or the replicate method
 
     @classmethod
     def set_default_print_width(cls, width: int | None) -> None:
@@ -97,8 +99,14 @@ class GLMMargins(msgspec.Struct, frozen=True):
             data[var] = col
         if self.contrast is not None:
             data["contrast"] = self.contrast
-        data.update(margin=self.margin, se=self.se, lci=self.lci, uci=self.uci)
-        return pl.DataFrame(data)
+        data.update(est=self.margin, se=self.se, lci=self.lci, uci=self.uci)
+        settings = {
+            "df": float(self.df),
+            "margin_type": self.margin_type,
+            "variance": self.variance,
+            "alpha": float(self.alpha),
+        }
+        return with_settings(pl.DataFrame(data), settings, where="GLMMargins.to_polars")
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -224,7 +232,8 @@ class GLMMarginsList(list):
         if not frames:
             return pl.DataFrame()
         df = pl.concat(frames, how="diagonal_relaxed")
-        tail = [c for c in ("contrast", "margin", "se", "lci", "uci") if c in df.columns]
+        tail = ("contrast", "est", "se", "lci", "uci", "df", "margin_type", "variance", "alpha")
+        tail = tuple(c for c in tail if c in df.columns)
         return df.select("term", *[c for c in df.columns if c not in ("term", *tail)], *tail)
 
     def __plain_str__(self) -> str:
@@ -998,16 +1007,22 @@ def margins(
         raise ModelError.not_fitted(where="GLM.margins")
 
     if at is None:
-        return compute_average_marginal_effects(glm, variables, alpha)
+        result = compute_average_marginal_effects(glm, variables, alpha)
+    elif variables is not None:
+        result = compute_conditional_effects(glm, variables, _parse_at(glm, glm.fitted, at), alpha)
+    else:
+        results = [
+            compute_predictive_margins(glm, spec.key, [c[0] for c in spec.cells], alpha)
+            if isinstance(spec.key, str)
+            else compute_joint_predictive_margins(glm, spec, alpha)
+            for spec in _parse_at(glm, glm.fitted, at)
+        ]
+        result = results[0] if len(results) == 1 else GLMMarginsList(results)
+    return _with_variance(result, glm.fitted.variance)
 
-    specs = _parse_at(glm, glm.fitted, at)
-    if variables is not None:
-        return compute_conditional_effects(glm, variables, specs, alpha)
 
-    results = [
-        compute_predictive_margins(glm, spec.key, [c[0] for c in spec.cells], alpha)
-        if isinstance(spec.key, str)
-        else compute_joint_predictive_margins(glm, spec, alpha)
-        for spec in specs
-    ]
-    return results[0] if len(results) == 1 else GLMMarginsList(results)
+def _with_variance(result: Any, variance: str) -> Any:
+    """``result``, or each margin of a list, naming the fit's variance method."""
+    if isinstance(result, GLMMarginsList):
+        return GLMMarginsList(msgspec.structs.replace(m, variance=variance) for m in result)
+    return msgspec.structs.replace(result, variance=variance)

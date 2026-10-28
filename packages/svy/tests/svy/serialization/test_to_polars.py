@@ -223,10 +223,12 @@ def test_every_serializable_kind_has_a_table(sample):
 
 
 def test_stacked_list_names_each_member(sample):
-    """Several variables (or denominators) lead with y (or x)."""
-    assert sample.estimation.mean(["y", "z"], by="sex").to_polars().columns[0] == "y"
-    assert sample.estimation.ratio("y", ["w", "psu"]).to_polars().columns[0] == "x"
-    assert "y" not in sample.estimation.quantile("y", p=(0.25, 0.75)).to_polars().columns
+    """Each row names its variable, and its denominator for a ratio."""
+    means = sample.estimation.mean(["y", "z"], by="sex").to_polars()
+    assert means.columns[0] == "y_var" and set(means["y_var"]) == {"y", "z"}
+    ratios = sample.estimation.ratio("y", ["w", "psu"]).to_polars()
+    assert ratios.columns[:2] == ["y_var", "x_var"] and set(ratios["x_var"]) == {"w", "psu"}
+    assert set(sample.estimation.quantile("y", p=(0.25, 0.75)).to_polars()["y_var"]) == {"y"}
 
 
 def test_empty_estimate():
@@ -285,7 +287,7 @@ def test_labels_match_live_table(labelled, build, opts):
 
 def test_label_columns_follow_codes(labelled):
     table = labelled.estimation.mean("y", by=["zone", "sex"]).to_polars()
-    assert table.columns[:4] == ["zone", "zone_label", "sex", "sex_label"]
+    assert table.columns[1:5] == ["zone", "zone_label", "sex", "sex_label"]
     pairs = dict(zip(table["zone"], table["zone_label"]))
     assert pairs == {1: "Urban", 2: "Rural", 3: "Peri-urban"}
     assert table["zone"].to_list() == sorted(table["zone"].to_list())
@@ -298,7 +300,7 @@ def test_no_label_column_without_value_labels(labelled):
 
 def test_labels_off_gives_codes_only(labelled):
     table = labelled.estimation.mean("y", by="zone").to_polars(use_labels=False)
-    assert table.columns[0] == "zone" and "zone_label" not in table.columns
+    assert table.columns[1] == "zone" and "zone_label" not in table.columns
 
 
 def test_raw_rows_carry_label_lists(labelled):

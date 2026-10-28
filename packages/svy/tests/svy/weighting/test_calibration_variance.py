@@ -362,7 +362,7 @@ X_COLS = ["ell", "meals"]
 
 def _glm(sample):
     t = sample.glm.fit(y="api00", x=X_COLS).to_polars()
-    return t["estimate"].to_numpy(), t["std_err"].to_numpy()
+    return t["est"].to_numpy(), t["se"].to_numpy()
 
 
 def test_glm_poststratified_matches_r(design):
@@ -430,7 +430,7 @@ def design_nofpc(apiclus1):
 def test_two_sample_ttest_poststratified_matches_r(design_nofpc):
     ps = design_nofpc().weighting.poststratify(STYPE_POP, cells="stype")
     tt = ps.categorical.ttest("api00", group="sch.wide").to_polars()
-    assert_allclose(tt["diff"][0], R_TT2_PS_NOFPC_DIFF, rtol=1e-12)
+    assert_allclose(tt["est"][0], R_TT2_PS_NOFPC_DIFF, rtol=1e-12)
     assert_allclose(tt["t"][0], R_TT2_PS_NOFPC_T, rtol=1e-10)
 
 

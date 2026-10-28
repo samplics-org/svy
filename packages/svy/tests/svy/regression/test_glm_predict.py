@@ -673,7 +673,7 @@ class TestGLMPredictOutput:
         df = pred.to_polars()
 
         assert isinstance(df, pl.DataFrame)
-        assert "yhat" in df.columns
+        assert "est" in df.columns
         assert "se" in df.columns
         assert "lci" in df.columns
         assert "uci" in df.columns

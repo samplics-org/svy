@@ -478,7 +478,7 @@ class TestGLMMarginOutput:
         df = margins.to_polars()
 
         assert isinstance(df, pl.DataFrame)
-        assert "margin" in df.columns
+        assert "est" in df.columns
         assert "se" in df.columns
         assert "meals" in df.columns
         assert df.height == 3

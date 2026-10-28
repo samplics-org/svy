@@ -30,5 +30,6 @@
   "share_of": "total",
   "stats": null,
   "type": "Two-Way",
-  "units": "proportion"
+  "units": "proportion",
+  "variance": "Taylor"
 }

@@ -61,6 +61,7 @@
     }
   },
   "terms": [],
+  "variance": "Taylor",
   "where_clause": null,
   "y": "income"
 }
