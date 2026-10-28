@@ -306,9 +306,18 @@ pub fn estimate_proportions(
     let cov = taylor_variance_matrix_in(&score_columns, strata, psu, fpc, sm, active.as_deref())?;
 
     // Extract SEs from diagonal
-    let ses: Vec<f64> = (0..k).map(|j| cov[j][j].max(0.0).sqrt()).collect();
+    let ses: Vec<f64> = (0..k).map(|j| cell_se(proportions[j], cov[j][j])).collect();
 
     Ok((levels, proportions, ses, cov, deff_vec, df_val))
+}
+
+/// SE of a cell share, NaN when the share is: `f64::max` turns a NaN variance into 0.
+pub fn cell_se(estimate: f64, variance: f64) -> f64 {
+    if estimate.is_nan() {
+        f64::NAN
+    } else {
+        variance.max(0.0).sqrt()
+    }
 }
 
 /// Row `i` is in the tabulation domain (every row when there is no mask).
