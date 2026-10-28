@@ -6,6 +6,11 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Added
+
+- **A saved estimate keeps its covariance (`svy-result/0.13`).** `to_dict`/`to_json` write `covariance` (rows and columns in `estimates` order, so the variance of a difference of two domains is `c[i,i] + c[j,j] - 2 c[i,j]`) and `covariance_filled`, which is false when each row was estimated alone, as `median(by=)` does, and the off-diagonals are zeros rather than a covariance. Older payloads decode with `None`.
+- **A saved tabulation and t-test by domain keep their value labels (`svy-result/0.13`).** `TableData` stores the labels of its row and column variables, and the t-test-by kinds those of their `by` variables, for the levels present, in the estimate's `labels` shape. With the bundled datasets in codes, a payload no longer shows `1`/`2` where the sample says Rural/Urban. Older payloads decode with `None`.
+
 ### Fixed
 
 - **`ttest` and `ranktest` by several variables export their domains.** `to_polars()` raised `unhashable type: 'list'`; it now gives one column per `by` variable, in the column's type (a struct keyed by variable with `tidy=False`). The rows carry the levels as a tuple, no longer as joined text, and a saved multi-by t-test loads back.

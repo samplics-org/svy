@@ -14,7 +14,7 @@ from svy.errors import EstimationError
 from svy.errors._api import guided_getattr
 from svy.errors._findings import SvyWarning, merge_findings
 from svy.estimation import ParamEst
-from svy.estimation.estimate import _display_level, checked_print_width
+from svy.estimation.estimate import VarLabels, _display_level, checked_print_width
 
 # Import central UI helpers (consistent with estimate.py)
 from svy.ui.printing import (
@@ -946,6 +946,26 @@ class TTestByResult:
     def _by_text(self, var: str, value: Any) -> str:
         labels = self.by_labels.get(var)
         return _level_text(value) if labels is None else labels.display(value)
+
+    def _labels(self) -> dict[str, VarLabels]:
+        """The label of each labelled ``by`` variable, and of each of its levels present.
+
+        Empty without labels; what a serialized result stores.
+        """
+        present: dict[str, set[str]] = {var: set() for var in self._by_list}
+        for r in self.results:
+            if not r.diff:
+                continue
+            d = r.diff[0]
+            for var, level in by_cells(d.by, d.by_level):
+                present[var].add(_level_text(level))
+        return {
+            var: VarLabels(
+                lab.var_label,
+                {c: v for c, v in lab.labels.items() if _level_text(c) in present.get(var, ())},
+            )
+            for var, lab in self.by_labels.items()
+        }
 
     # ── Width configuration ──────────────────────────────────────────────
 

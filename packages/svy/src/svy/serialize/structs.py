@@ -21,7 +21,7 @@ import msgspec
 # Constants
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = "svy-result/0.12"
+SCHEMA_VERSION = "svy-result/0.13"
 
 #: A design is an input, read back into a live ``Design``: its own schema.
 DESIGN_SCHEMA_VERSION = "svy-design/0.1"
@@ -295,7 +295,7 @@ class EstimateData(msgspec.Struct, kw_only=True, frozen=True):
     """
     Serialization struct for ``svy.estimation.estimate.Estimate``.
 
-    Excludes: covariance, strata, singletons, domains.
+    Excludes: strata, singletons, domains.
     """
 
     kind: Literal["estimate"] = "estimate"
@@ -331,6 +331,12 @@ class EstimateData(msgspec.Struct, kw_only=True, frozen=True):
     #: The warnings the call raised, at WARNING level; None when there were none,
     #: or decoded from an older payload.
     findings: list[FindingData] | None = None
+    #: Covariance of the estimates, rows and columns in ``estimates`` order; None
+    #: when there is none or decoded from an older payload.
+    covariance: list[list[float]] | None = None
+    #: False when each row was estimated alone: the off-diagonals are then
+    #: zeros, not a covariance of 0, and no difference may use them.
+    covariance_filled: bool | None = None
 
 
 @_kinded("estimate_list")
@@ -410,6 +416,9 @@ class TTestOneGroupByData(msgspec.Struct, kw_only=True, frozen=True):
     #: The warnings the call raised, at WARNING level; None when there were none,
     #: or decoded from an older payload.
     findings: list[FindingData] | None = None
+    #: Labels of the ``by`` variables and of their levels present, from the
+    #: sample's metadata; None without labels or decoded from an older payload.
+    labels: list[VarLabelsData] | None = None
 
 
 @_kinded("ttest_two_groups_by")
@@ -432,6 +441,9 @@ class TTestTwoGroupsByData(msgspec.Struct, kw_only=True, frozen=True):
     #: The warnings the call raised, at WARNING level; None when there were none,
     #: or decoded from an older payload.
     findings: list[FindingData] | None = None
+    #: Labels of the ``by`` variables and of their levels present, from the
+    #: sample's metadata; None without labels or decoded from an older payload.
+    labels: list[VarLabelsData] | None = None
 
 
 @_kinded("table")
@@ -456,6 +468,9 @@ class TableData(msgspec.Struct, kw_only=True, frozen=True):
     #: The warnings the call raised, at WARNING level; None when there were none,
     #: or decoded from an older payload.
     findings: list[FindingData] | None = None
+    #: Labels of the row and column variables and of their levels present, from
+    #: the sample's metadata; None without labels or decoded from an older payload.
+    labels: list[VarLabelsData] | None = None
 
 
 @_kinded("glm_fit")

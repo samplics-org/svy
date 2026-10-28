@@ -320,6 +320,25 @@ def _findings_to_data(findings: Any) -> list[FindingData] | None:
     return out or None
 
 
+def _labels_to_data(labels: Mapping[str, Any]) -> list[VarLabelsData] | None:
+    return [
+        VarLabelsData(
+            var=var,
+            var_label=lab.var_label,
+            values=[LevelLabelData(code=c, label=v) for c, v in lab.values.items()],
+        )
+        for var, lab in labels.items()
+        if lab.var_label or lab.values
+    ] or None
+
+
+def _covariance_to_data(result: Estimate) -> dict[str, Any]:
+    cov = np.asarray(result.covariance, dtype=float)
+    if cov.size == 0:
+        return {}
+    return {"covariance": cov.tolist(), "covariance_filled": bool(result._cov_filled)}
+
+
 def _register(cls: type) -> Callable[[Callable[[Any], ResultData]], Callable[[Any], ResultData]]:
     """Decorator: register a serializer function for a result class."""
 
@@ -350,18 +369,10 @@ def _serialize_estimate(result: Estimate) -> EstimateData:
         ci_method=result.ci_method,
         deff_ref=result.deff_ref,
         as_factor=bool(result.as_factor),
-        labels=[
-            VarLabelsData(
-                var=var,
-                var_label=lab.var_label,
-                values=[LevelLabelData(code=c, label=v) for c, v in lab.values.items()],
-            )
-            for var, lab in result._labels().items()
-            if lab.var_label or lab.values
-        ]
-        or None,
+        labels=_labels_to_data(result._labels()),
         level_orders=dict(result.level_orders) or None,
         findings=_findings_to_data(result.findings),
+        **_covariance_to_data(result),
     )
 
 
@@ -414,6 +425,7 @@ def _serialize_ttest_by(result: TTestByResult) -> TTestOneGroupByData | TTestTwo
         alpha=_f(result.alpha),
         where_clause=result.where_clause,
         findings=_findings_to_data(result.findings),
+        labels=_labels_to_data(result._labels()),
     )
     # Every member is one kind: two-group when the call had a group=.
     if result.groups is not None or any(isinstance(r, TTestTwoGroups) for r in result):
@@ -444,6 +456,7 @@ def _serialize_table(result: Table) -> TableData:
         share_of=result.share_of,
         units=result.units,
         findings=_findings_to_data(result.findings),
+        labels=_labels_to_data(result._labels()),
     )
 
 

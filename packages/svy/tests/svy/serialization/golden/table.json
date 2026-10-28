@@ -19,13 +19,14 @@
   ],
   "findings": null,
   "kind": "table",
+  "labels": null,
   "rowvals": [
     "Low",
     "Med",
     "High"
   ],
   "rowvar": "education",
-  "schema_version": "svy-result/0.12",
+  "schema_version": "svy-result/0.13",
   "share_of": "total",
   "stats": null,
   "type": "Two-Way",
