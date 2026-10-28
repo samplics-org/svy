@@ -128,7 +128,7 @@ class TargetTestProp(msgspec.Struct, frozen=True, tag="test_prop"):
 class TargetPower(msgspec.Struct, frozen=True, tag="power"):
     """The goal a ``Power`` call answered and every argument it got."""
 
-    goal: str  # "test_mean" | "test_prop" | "compare_means" | "compare_props"
+    goal: str  # a Power method name
     solve: str = "power"  # "power" | "effect"
     args: dict[str, Any] = msgspec.field(default_factory=dict)
 
