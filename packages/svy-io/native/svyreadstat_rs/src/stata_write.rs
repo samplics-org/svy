@@ -3,18 +3,14 @@ use pyo3::types::PyBytes;
 
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::io::Cursor;
 use std::os::raw::c_char;
 
-use arrow::array::{
-    Array, AsArray, DictionaryArray, LargeStringArray, StringArray, StringViewArray,
-};
+use arrow::array::{Array, AsArray};
 use arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    DataType, Date32Type, Date64Type, Int8Type, Int16Type, Int32Type, Int64Type, TimeUnit,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
-use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::record_batch::RecordBatch;
 
 use readstat_sys::{
@@ -32,109 +28,11 @@ use readstat_sys::{
     readstat_writer_set_file_label, readstat_writer_t,
 };
 
-use crate::core::{OutputFile, WriterGuard, data_writer_cb, write_rc};
 use crate::errors::{Error, Op, Result};
-
-fn ipc_to_batches(buf: &[u8]) -> arrow::error::Result<Vec<RecordBatch>> {
-    let mut batches = Vec::new();
-    let schema = if buf.starts_with(b"ARROW1") {
-        let mut fr = FileReader::try_new(Cursor::new(buf), None)?;
-        for b in fr.by_ref() {
-            batches.push(b?);
-        }
-        fr.schema()
-    } else {
-        let mut sr = StreamReader::try_new(Cursor::new(buf), None)?;
-        for res in sr.by_ref() {
-            batches.push(res?);
-        }
-        sr.schema()
-    };
-    // A zero-row frame arrives with no batches; the writers still need its columns.
-    if batches.is_empty() {
-        batches.push(RecordBatch::new_empty(schema));
-    }
-    Ok(batches)
-}
-
-#[inline]
-fn is_text_dt(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-    )
-}
-
-fn get_string_value(a: &dyn Array, row: usize) -> Option<&str> {
-    if a.is_null(row) {
-        return None;
-    }
-    if let Some(s) = a.as_any().downcast_ref::<StringArray>() {
-        Some(s.value(row))
-    } else if let Some(s) = a.as_any().downcast_ref::<LargeStringArray>() {
-        Some(s.value(row))
-    } else if let Some(s) = a.as_any().downcast_ref::<StringViewArray>() {
-        Some(s.value(row))
-    } else if matches!(a.data_type(), DataType::Dictionary(_, _)) {
-        dict_string_at_any(a, row)
-    } else {
-        None
-    }
-}
-
-fn dict_string_at_any(a: &dyn Array, row: usize) -> Option<&str> {
-    macro_rules! try_dict {
-        ($T:ty) => {{
-            if let Some(d) = a.as_any().downcast_ref::<DictionaryArray<$T>>() {
-                if !is_text_dt(d.values().data_type()) || d.is_null(row) {
-                    return None;
-                }
-                // A corrupt dictionary can hold a negative or out-of-range key; `as usize` would wrap.
-                let key_usize = usize::try_from(d.keys().value(row)).ok()?;
-                let values = d.values();
-                if key_usize >= values.len() {
-                    return None;
-                }
-                return get_string_value(values.as_ref(), key_usize);
-            }
-        }};
-    }
-    try_dict!(Int8Type);
-    try_dict!(Int16Type);
-    try_dict!(Int32Type);
-    try_dict!(Int64Type);
-    try_dict!(UInt8Type);
-    try_dict!(UInt16Type);
-    try_dict!(UInt32Type);
-    try_dict!(UInt64Type);
-    None
-}
-
-fn as_f64_opt(a: &dyn Array, row: usize) -> Option<f64> {
-    if a.is_null(row) {
-        return None;
-    }
-    macro_rules! down {
-        ($T:ty) => {
-            a.as_primitive::<$T>().value(row)
-        };
-    }
-    use DataType::*;
-    match a.data_type() {
-        Float64 => Some(down!(Float64Type)),
-        Float32 => Some(down!(Float32Type) as f64),
-        Int64 => Some(down!(Int64Type) as f64),
-        Int32 => Some(down!(Int32Type) as f64),
-        Int16 => Some(down!(Int16Type) as f64),
-        Int8 => Some(down!(Int8Type) as f64),
-        UInt64 => Some(down!(UInt64Type) as f64),
-        UInt32 => Some(down!(UInt32Type) as f64),
-        UInt16 => Some(down!(UInt16Type) as f64),
-        UInt8 => Some(down!(UInt8Type) as f64),
-        Boolean => Some(if a.as_boolean().value(row) { 1.0 } else { 0.0 }),
-        _ => None,
-    }
-}
+use crate::write_common::{
+    OutputFile, StringColStats, WriterGuard, as_f64_opt, compute_string_metadata, data_writer_cb,
+    get_string_value, ipc_to_batches, is_text_dt, write_rc,
+};
 
 const MS_PER_DAY: i64 = 86_400_000;
 const UNIX_MINUS_STATA_DAYS: i64 = 3_653;
@@ -255,44 +153,6 @@ fn dta_int_storage(range: Option<(i128, i128)>) -> readstat_type_t {
         .iter()
         .find(|(_, min, max)| *min <= lo && hi <= *max)
         .map_or(T_DOUBLE, |(t, _, _)| *t)
-}
-
-#[derive(Clone, Copy, Default)]
-struct StringColStats {
-    max_len: usize,
-    has_nul: bool,
-}
-
-fn compute_string_metadata(batches: &[RecordBatch]) -> Vec<Option<StringColStats>> {
-    if batches.is_empty() {
-        return Vec::new();
-    }
-    let ncols = batches[0].schema().fields().len();
-    let mut all_stats: Vec<Option<StringColStats>> = vec![None; ncols];
-
-    for b in batches {
-        for (j, f) in b.schema().fields().iter().enumerate() {
-            let col = b.column(j);
-            let is_str = is_text_dt(f.data_type())
-                || matches!(f.data_type(), DataType::Dictionary(_, v) if is_text_dt(v.as_ref()));
-            if !is_str {
-                continue;
-            }
-            let stats = all_stats[j].get_or_insert(StringColStats::default());
-            for i in 0..col.len() {
-                if let Some(s) = get_string_value(col.as_ref(), i) {
-                    let blen = s.len();
-                    if blen > stats.max_len {
-                        stats.max_len = blen;
-                    }
-                    if !stats.has_nul && s.as_bytes().contains(&0) {
-                        stats.has_nul = true;
-                    }
-                }
-            }
-        }
-    }
-    all_stats
 }
 
 /// The cells of one column that hold a tagged missing (`TaggedNA`), from Python's `user_missing_json`.

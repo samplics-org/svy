@@ -10,6 +10,7 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 ### Changed
 
+- The SAV, DTA and XPT writers share one `write_common` module (Arrow input, cell access, string metadata, the ReadStat output guards) instead of three copies, and `core` is a directory module split along its old sections. Output is unchanged.
 - **BREAKING: native readers and writers raise coded exceptions that name the format and the file.** Bad input raises `ReadStatValueError`, a `ValueError`: an unknown `encoding`, and malformed native writer arguments such as a label with a NUL or an XPT version other than 5 or 8, which were `RuntimeError`s. A file that cannot be opened or created raises the matching `OSError` (`FileNotFoundError`, `PermissionError`, ...) with `filename` set, instead of `RuntimeError`. Parse and write failures raise `ReadStatRuntimeError`, a `RuntimeError`. Each exception has a `code`: `INVALID_VALUE`, `UNSUPPORTED_ENCODING`, `READSTAT_BAD_STRING`, `READSTAT_PARSE_FAILED`, `READSTAT_WRITE_FAILED`, `IO_READ_FAILED`, `IO_WRITE_FAILED` or `IO_INTERNAL`. Both classes live in `svy_io.svyreadstat_rs`.
 
 ### Fixed
