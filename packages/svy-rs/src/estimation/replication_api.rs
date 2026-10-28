@@ -1045,7 +1045,6 @@ fn compute_replicate_prop_grouped(
         (str_levels, tf, tr, counts)
     };
 
-    let n_levels = levels_str.len();
     let mut by_vals: Vec<String> = Vec::new();
     let mut level_strs: Vec<String> = Vec::new();
     let mut estimates: Vec<f64> = Vec::new();
@@ -1078,7 +1077,6 @@ fn compute_replicate_prop_grouped(
         center,
     ));
     let n_rows = by_vals.len();
-    let _ = n_levels; // used implicitly via levels_str iteration above
     let out = df![by_col => by_vals, "y" => vec![value_col; n_rows], "level" => level_strs,
         "est" => estimates, "se" => ses, "var" => variances, "df" => dfs, "n" => ns]?;
     Ok((out, cov))

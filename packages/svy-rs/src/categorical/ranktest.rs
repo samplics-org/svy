@@ -7,6 +7,7 @@ use crate::estimation::error::{EResult, EstimationError};
 use polars::prelude::*;
 
 use crate::categorical::replicate::RepSpec;
+use crate::estimation::calib_sweep::CalibSweep;
 use crate::estimation::taylor::{degrees_of_freedom, singleton_rows};
 use crate::regression::glm::norm_cdf;
 use crate::regression::wols::{fit_wols, influence_covariance, influence_se};
@@ -233,6 +234,7 @@ pub(crate) fn ranktest_two_sample(
     fpc_ssu: Option<&Float64Chunked>,
     score_method: RankScoreMethod,
     singleton_method: Option<&str>,
+    calib: Option<&CalibSweep>,
     levels: Vec<String>,
     // The domain's rows for the singleton rules, whatever their weight.
     rows: &[bool],
@@ -250,7 +252,7 @@ pub(crate) fn ranktest_two_sample(
 
     let wols = fit_wols(&rankscore, &xmat, w, n, k)?;
 
-    let active = singleton_rows(singleton_method, false, strata.is_some(), rows)?;
+    let active = singleton_rows(singleton_method, calib.is_some(), strata.is_some(), rows)?;
     let ses = influence_se(
         &wols.influence,
         w,
@@ -262,7 +264,7 @@ pub(crate) fn ranktest_two_sample(
         fpc,
         fpc_ssu,
         singleton_method,
-        None,
+        calib,
         active.as_deref(),
     )?;
 
@@ -310,6 +312,7 @@ pub(crate) fn ranktest_k_sample(
     fpc_ssu: Option<&Float64Chunked>,
     score_method: RankScoreMethod,
     singleton_method: Option<&str>,
+    calib: Option<&CalibSweep>,
     levels: Vec<String>,
     // The domain's rows for the singleton rules, whatever their weight.
     rows: &[bool],
@@ -335,7 +338,7 @@ pub(crate) fn ranktest_k_sample(
 
     let wols = fit_wols(&rankscore, &xmat, w, n, k)?;
 
-    let active = singleton_rows(singleton_method, false, strata.is_some(), rows)?;
+    let active = singleton_rows(singleton_method, calib.is_some(), strata.is_some(), rows)?;
     let cov_flat = influence_covariance(
         &wols.influence,
         w,
@@ -347,7 +350,7 @@ pub(crate) fn ranktest_k_sample(
         fpc,
         fpc_ssu,
         singleton_method,
-        None,
+        calib,
         active.as_deref(),
     )?;
 
@@ -662,6 +665,7 @@ mod tests {
             None,
             method,
             None,
+            None,
             vec!["0".into(), "1".into()],
             &[true; N],
         )
@@ -715,6 +719,7 @@ mod tests {
             None,
             None,
             RankScoreMethod::KruskalWallis,
+            None,
             None,
             vec!["a".into(), "b".into(), "c".into()],
             &[true; N],

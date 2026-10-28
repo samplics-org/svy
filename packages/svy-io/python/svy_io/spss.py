@@ -566,20 +566,30 @@ def write_sav(
         raise ValueError(
             f"value_labels/user_missing name columns that are not in the DataFrame: {unknown}"
         )
+
+    def is_text(col: str) -> bool:
+        return to_write.schema[col] == pl.String or isinstance(to_write.schema[col], pl.Enum)
+
     non_numeric = [
         m["col"]
         for m in missing_specs
-        if any(isinstance(v, str) for v in [*m["na_values"], *(m["na_range"] or ())])
+        if not is_text(m["col"])
+        and any(isinstance(v, str) for v in [*m["na_values"], *(m["na_range"] or ())])
     ]
     if non_numeric:
-        raise ValueError(f"user-missing values must be numeric; columns: {sorted(non_numeric)}")
+        raise ValueError(
+            f"user-missing values of numeric columns must be numbers; columns: {sorted(non_numeric)}"
+        )
+    # SAV stores a string column's codes as discrete values; ReadStat cannot write a range.
+    string_ranges = sorted(m["col"] for m in missing_specs if is_text(m["col"]) and m["na_range"])
+    if string_ranges:
+        raise ValueError(
+            f"SPSS string columns take discrete user-missing codes, not na_range; columns: {string_ranges}"
+        )
     too_wide = sorted(
         m["col"]
         for m in missing_specs
-        if (
-            to_write.schema[m["col"]] == pl.String
-            or isinstance(to_write.schema[m["col"]], pl.Enum)
-        )
+        if is_text(m["col"])
         and (to_write[m["col"]].cast(pl.String).str.len_bytes().max() or 0) > 8
     )
     if too_wide:
@@ -601,7 +611,7 @@ def write_sav(
     native_missing = [
         {
             "col": m["col"],
-            "values": [float(v) for v in m["na_values"]],
+            "values": [v if isinstance(v, str) else float(v) for v in m["na_values"]],
             "range": tuple(float(v) for v in m["na_range"]) if m["na_range"] else None,
         }
         for m in missing_specs
