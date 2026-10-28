@@ -5,7 +5,7 @@ use crate::errors::{Coded, KERNEL_INTERNAL};
 use crate::estimation::error::EstimationError;
 
 #[derive(Error, Debug)]
-pub enum RegressionError {
+pub(crate) enum RegressionError {
     #[error("Unsupported family: {0}")]
     UnsupportedFamily(String),
 
@@ -91,7 +91,7 @@ pub enum RegressionError {
     Polars(#[from] PolarsError),
 }
 
-pub type RResult<T> = Result<T, RegressionError>;
+pub(crate) type RResult<T> = Result<T, RegressionError>;
 
 impl Coded for RegressionError {
     fn code(&self) -> &'static str {

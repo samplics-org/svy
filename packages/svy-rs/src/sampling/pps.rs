@@ -1,15 +1,15 @@
 //! PPS selection: systematic, with replacement, Brewer, Murphy and Rao-Sampford.
 
 use crate::rng::Rng;
-pub use crate::sampling::srs::Result;
+pub(crate) use crate::sampling::srs::Result;
 use crate::sampling::srs::{SamplingError, check_n_map};
 use std::collections::HashMap;
 
 /// Selected rows, their hits, inclusion probabilities and certainty flags.
-pub type PpsDraw = (Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>);
+pub(crate) type PpsDraw = (Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PpsMethod {
+pub(crate) enum PpsMethod {
     Sys,
     Wr,
     Brewer,
@@ -18,7 +18,7 @@ pub enum PpsMethod {
 }
 
 impl PpsMethod {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub(crate) fn from_str(s: &str) -> Option<Self> {
         match s {
             s if s.eq_ignore_ascii_case("sys") || s.eq_ignore_ascii_case("systematic") => {
                 Some(PpsMethod::Sys)
@@ -40,7 +40,7 @@ impl PpsMethod {
 }
 
 #[derive(Clone)]
-pub enum PpsN {
+pub(crate) enum PpsN {
     Scalar(usize),
     PerStratum(HashMap<i64, usize>),
 }
@@ -49,7 +49,7 @@ pub enum PpsN {
 // Public entry point
 // ---------------------------------------------------------------------------
 
-pub fn select_pps(
+pub(crate) fn select_pps(
     frame: &[i64],
     n: PpsN,
     mos: &[f64],

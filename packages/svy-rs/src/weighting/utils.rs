@@ -6,7 +6,7 @@ use thiserror::Error;
 use crate::errors::{Coded, KERNEL_INTERNAL};
 
 #[derive(Error, Debug)]
-pub enum WeightingError {
+pub(crate) enum WeightingError {
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
@@ -35,7 +35,7 @@ pub enum WeightingError {
     SvdNotConverged,
 }
 
-pub type Result<T> = std::result::Result<T, WeightingError>;
+pub(crate) type Result<T> = std::result::Result<T, WeightingError>;
 
 impl Coded for WeightingError {
     fn code(&self) -> &'static str {
@@ -56,7 +56,7 @@ impl Coded for WeightingError {
 }
 
 /// Column-wise weight sums per group.
-pub fn sum_by_group_2d(
+pub(crate) fn sum_by_group_2d(
     weights: ArrayView2<f64>,
     indices: &[usize],
     n_groups: usize,
@@ -74,7 +74,7 @@ pub fn sum_by_group_2d(
 }
 
 /// True when every ratio raked / initial (initial > 0) lies within the bounds.
-pub fn check_bounds(
+pub(crate) fn check_bounds(
     raked: ArrayView2<f64>,
     initial: ArrayView2<f64>,
     ll_bound: Option<f64>,

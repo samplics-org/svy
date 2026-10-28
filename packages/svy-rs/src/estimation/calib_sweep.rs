@@ -7,13 +7,13 @@ use crate::estimation::error::{EResult, EstimationError};
 use crate::regression::wols::solve_kxk;
 
 /// Marks a row outside the adjustment: factor 1, no centring.
-pub const OUT_OF_SCOPE: u32 = u32::MAX;
+pub(crate) const OUT_OF_SCOPE: u32 = u32::MAX;
 
 /// R's raking sweep count: a fixed number, not a convergence loop.
 const RAKE_ITERATIONS: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SweepKind {
+pub(crate) enum SweepKind {
     /// One cell coding: poststratification and standardization.
     Cells,
     /// One coding per margin, swept in turn.
@@ -23,7 +23,7 @@ pub enum SweepKind {
 }
 
 #[derive(Debug, Clone)]
-pub struct CalibSweep {
+pub(crate) struct CalibSweep {
     pub kind: SweepKind,
     /// One code vector per margin. `Cells` and `Greg` use at most one.
     pub cells: Vec<Vec<u32>>,
@@ -38,7 +38,7 @@ pub struct CalibSweep {
 }
 
 impl CalibSweep {
-    pub fn new(
+    pub(crate) fn new(
         kind: SweepKind,
         cells: Vec<Vec<u32>>,
         n_cells: Vec<usize>,
@@ -66,7 +66,7 @@ impl CalibSweep {
 
     /// Centre `x` in place, with cell means over the FULL sample: the calibration was whole-sample.
     /// Out-of-domain rows add zero score but keep their weight in the denominator, as in R.
-    pub fn apply(&self, x: &mut [f64]) {
+    pub(crate) fn apply(&self, x: &mut [f64]) {
         // Built from the frame the scores come from, so a mismatch is a kernel bug.
         assert_eq!(
             x.len(),
@@ -235,7 +235,7 @@ use polars::prelude::*;
 
 /// Column names naming a weight-adjustment record, as passed from Python.
 #[derive(Debug, Clone, Default)]
-pub struct CalibSpec {
+pub(crate) struct CalibSpec {
     pub kind: String,
     pub cells_cols: Vec<String>,
     pub aux_cols: Vec<String>,
@@ -287,7 +287,7 @@ fn floats_from(df: &DataFrame, name: &str) -> EResult<Vec<f64>> {
 }
 
 /// Build the sweep for a record Python has already checked still describes the data.
-pub fn build_calib_sweep(df: &DataFrame, spec: &CalibSpec) -> EResult<CalibSweep> {
+pub(crate) fn build_calib_sweep(df: &DataFrame, spec: &CalibSpec) -> EResult<CalibSweep> {
     let kind = match spec.kind.as_str() {
         "poststratification" | "standardization" => SweepKind::Cells,
         "raking" => SweepKind::Raking,
@@ -367,7 +367,7 @@ pub(crate) fn make_calib(
 }
 
 /// Centre a `Float64Chunked` score column, so `taylor_variance` callers receive centred scores.
-pub fn sweep_scores(scores: &Float64Chunked, calib: Option<&CalibSweep>) -> Float64Chunked {
+pub(crate) fn sweep_scores(scores: &Float64Chunked, calib: Option<&CalibSweep>) -> Float64Chunked {
     match calib {
         None => scores.clone(),
         Some(c) => {

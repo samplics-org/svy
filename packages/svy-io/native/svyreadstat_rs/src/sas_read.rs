@@ -163,7 +163,7 @@ pub(crate) fn resolve_format_label_sets(ctx: &mut ParseCtx) {
     lossy_utf8=false
 ))]
 #[allow(clippy::too_many_arguments)]
-pub fn df_parse_sas_file<'py>(
+pub(crate) fn df_parse_sas_file<'py>(
     py: Python<'py>,
     data_path: &str,
     catalog_path: Option<&str>,

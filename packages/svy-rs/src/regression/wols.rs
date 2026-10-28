@@ -17,7 +17,7 @@ use crate::estimation::taylor::{
 
 /// Result of a weighted OLS fit with influence functions.
 #[allow(dead_code)]
-pub struct WolsResult {
+pub(crate) struct WolsResult {
     pub beta: Vec<f64>,
     pub fitted: Vec<f64>,
     pub residuals: Vec<f64>,
@@ -34,7 +34,7 @@ pub struct WolsResult {
 // ============================================================================
 
 /// Solve A x = b for a small row-major SPD A by Cholesky, falling back to LU.
-pub fn solve_kxk(a: &[f64], b: &[f64], k: usize) -> Option<Vec<f64>> {
+pub(crate) fn solve_kxk(a: &[f64], b: &[f64], k: usize) -> Option<Vec<f64>> {
     if let Some(x) = solve_cholesky(a, b, k) {
         return Some(x);
     }
@@ -154,7 +154,7 @@ fn invert_kxk(a: &[f64], k: usize) -> Option<Vec<f64>> {
 // ============================================================================
 
 /// Weighted OLS of `y` on row-major n x k `x`, with influence `(x_i * resid_i) %*% (X'WX)^{-1}`.
-pub fn fit_wols(y: &[f64], x: &[f64], w: &[f64], n: usize, k: usize) -> RResult<WolsResult> {
+pub(crate) fn fit_wols(y: &[f64], x: &[f64], w: &[f64], n: usize, k: usize) -> RResult<WolsResult> {
     if n == 0 || k == 0 {
         return Err(RegressionError::WolsEmpty);
     }
@@ -236,7 +236,7 @@ pub fn fit_wols(y: &[f64], x: &[f64], w: &[f64], n: usize, k: usize) -> RResult<
 
 /// Design SE per coefficient, R's `SE(svytotal(infn, design))`: hence the influence is scaled by w first.
 #[allow(clippy::too_many_arguments)]
-pub fn influence_se(
+pub(crate) fn influence_se(
     influence: &[f64],
     w: &[f64],
     n: usize,
@@ -279,7 +279,7 @@ pub fn influence_se(
 
 /// Row-major k x k design covariance of the coefficients: R's svyrecvar on the weight-scaled influence.
 #[allow(clippy::too_many_arguments)]
-pub fn influence_covariance(
+pub(crate) fn influence_covariance(
     influence: &[f64],
     w: &[f64],
     n: usize,

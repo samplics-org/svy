@@ -117,7 +117,7 @@ def test_fay_is_a_value_not_a_type():
 
 
 def test_coefficients_match_the_rust_kernel():
-    """The Python-side coefficients must agree with replicate_coefficients()."""
+    """Each method's coefficients: 1/B, 1/(B(1-fay)^2) and (B-1)/B."""
     n = 64
     assert BootstrapWgts(prefix="w", n_reps=n).coefficients() == [1.0 / n] * n
     assert BrrWgts(prefix="w", n_reps=n, fay_coef=0.3).coefficients() == pytest.approx(

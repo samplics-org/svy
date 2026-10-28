@@ -1,7 +1,7 @@
 //! Survey-weighted GLM fitting and its Python bindings.
-pub mod api;
-pub mod error;
-pub mod glm;
-pub mod negbin;
-pub mod special;
-pub mod wols;
+pub(crate) mod api;
+pub(crate) mod error;
+pub(crate) mod glm;
+pub(crate) mod negbin;
+pub(crate) mod special;
+pub(crate) mod wols;

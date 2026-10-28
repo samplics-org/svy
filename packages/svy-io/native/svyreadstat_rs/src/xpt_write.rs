@@ -323,7 +323,7 @@ fn write_xpt_impl(
 
 #[pyfunction]
 #[pyo3(signature = (ipc_bytes, path, version=8, name=None, label=None))]
-pub fn df_write_xpt_file(
+pub(crate) fn df_write_xpt_file(
     ipc_bytes: Bound<'_, PyBytes>,
     path: &str,
     version: i32,

@@ -1,11 +1,11 @@
 //! Weight adjustment, calibration, trimming and replicate-weight kernels.
-pub mod api;
-pub mod calibration;
-pub mod hadamard_tables;
-pub mod nonresponse;
-pub mod normalization;
-pub mod poststratification;
-pub mod raking;
-pub mod replication;
-pub mod trimming;
-pub mod utils;
+pub(crate) mod api;
+pub(crate) mod calibration;
+pub(crate) mod hadamard_tables;
+pub(crate) mod nonresponse;
+pub(crate) mod normalization;
+pub(crate) mod poststratification;
+pub(crate) mod raking;
+pub(crate) mod replication;
+pub(crate) mod trimming;
+pub(crate) mod utils;

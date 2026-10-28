@@ -7,7 +7,7 @@ use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 // Output type
 // ---------------------------------------------------------------------------
 
-pub struct TrimOutput {
+pub(crate) struct TrimOutput {
     pub weights: Array1<f64>,
     pub n_trimmed_upper: usize,
     pub n_trimmed_lower: usize,
@@ -139,7 +139,7 @@ fn trim_once(
 // ---------------------------------------------------------------------------
 
 /// Trims to caller-resolved bounds; converged once at most `tol` of nonzero weights change.
-pub fn trim_impl(
+pub(crate) fn trim_impl(
     weights: ArrayView1<f64>,
     upper: Option<f64>,
     lower: Option<f64>,
@@ -246,7 +246,7 @@ pub fn trim_impl(
 // ---------------------------------------------------------------------------
 
 /// Trims each replicate with the full-sample cutoffs, so variance reflects weighting, not cutoffs.
-pub fn trim_matrix_impl(
+pub(crate) fn trim_matrix_impl(
     weights: ArrayView2<f64>,
     upper: Option<f64>,
     lower: Option<f64>,

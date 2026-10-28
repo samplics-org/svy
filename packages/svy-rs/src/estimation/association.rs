@@ -187,7 +187,7 @@ fn mask_iter(domain: Option<&BooleanChunked>, len: usize) -> Box<dyn Iterator<It
 // Point estimates
 // ============================================================================
 
-pub fn point_estimate_cov(
+pub(crate) fn point_estimate_cov(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
@@ -196,7 +196,7 @@ pub fn point_estimate_cov(
     Ok(if m.sum_w == 0.0 { f64::NAN } else { m.cov() })
 }
 
-pub fn point_estimate_cov_domain(
+pub(crate) fn point_estimate_cov_domain(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
@@ -216,7 +216,7 @@ pub fn point_estimate_corr(
     Ok(if m.sum_w == 0.0 { f64::NAN } else { m.corr() })
 }
 
-pub fn point_estimate_corr_domain(
+pub(crate) fn point_estimate_corr_domain(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
@@ -232,7 +232,7 @@ pub fn point_estimate_corr_domain(
 
 /// Covariance scores `(w_i/W)(a_i b_i - m_yx) * n/(n-1)`; the estimated-mean terms of the
 /// influence function cancel exactly, so this is `svyvar`'s SE, not an approximation of it.
-pub fn scores_cov(
+pub(crate) fn scores_cov(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
@@ -247,7 +247,7 @@ pub fn scores_cov(
     Ok(assoc_score_values(y, x, weights, &m, None, AssocKind::Cov))
 }
 
-pub fn scores_cov_domain(
+pub(crate) fn scores_cov_domain(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
@@ -272,7 +272,7 @@ pub fn scores_cov_domain(
 
 /// Pearson scores `(w_i/W)[yt xt - (rho/2)(yt^2 + xt^2)]`, yt and xt standardized residuals.
 /// The estimated SDs do not cancel: a covariance-style score would understate the SE.
-pub fn scores_corr(
+pub(crate) fn scores_corr(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
@@ -294,7 +294,7 @@ pub fn scores_corr(
     Ok(assoc_score_values(y, x, weights, &m, None, AssocKind::Corr))
 }
 
-pub fn scores_corr_domain(
+pub(crate) fn scores_corr_domain(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
@@ -453,7 +453,8 @@ fn srs_variance_assoc(
     Ok((s2_u / n) * srs.fpc(n, sum_w))
 }
 
-pub fn srs_variance_corr(
+#[cfg(test)]
+pub(crate) fn srs_variance_corr(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
@@ -468,23 +469,8 @@ pub fn srs_variance_corr(
     )
 }
 
-pub fn srs_variance_corr_domain(
-    y: &Float64Chunked,
-    x: &Float64Chunked,
-    weights: &Float64Chunked,
-    domain_mask: &BooleanChunked,
-) -> EResult<f64> {
-    srs_variance_assoc(
-        y,
-        x,
-        weights,
-        Some(domain_mask),
-        AssocKind::Corr,
-        SrsRef::WithoutReplacement { pop_total: None },
-    )
-}
-
-pub fn srs_variance_cov(
+#[cfg(test)]
+pub(crate) fn srs_variance_cov(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
@@ -494,22 +480,6 @@ pub fn srs_variance_cov(
         x,
         weights,
         None,
-        AssocKind::Cov,
-        SrsRef::WithoutReplacement { pop_total: None },
-    )
-}
-
-pub fn srs_variance_cov_domain(
-    y: &Float64Chunked,
-    x: &Float64Chunked,
-    weights: &Float64Chunked,
-    domain_mask: &BooleanChunked,
-) -> EResult<f64> {
-    srs_variance_assoc(
-        y,
-        x,
-        weights,
-        Some(domain_mask),
         AssocKind::Cov,
         SrsRef::WithoutReplacement { pop_total: None },
     )
@@ -764,7 +734,7 @@ impl AssocKind {
 // Kind-dispatching entry points
 // ---------------------------------------------------------------------------
 
-pub fn point_estimate_assoc(
+pub(crate) fn point_estimate_assoc(
     kind: AssocKind,
     y: &Float64Chunked,
     x: &Float64Chunked,
@@ -779,7 +749,7 @@ pub fn point_estimate_assoc(
     }
 }
 
-pub fn scores_assoc(
+pub(crate) fn scores_assoc(
     kind: AssocKind,
     y: &Float64Chunked,
     x: &Float64Chunked,
@@ -795,7 +765,7 @@ pub fn scores_assoc(
 }
 
 /// SRS reference variance for either association, over an optional domain.
-pub fn srs_variance_assoc_of(
+pub(crate) fn srs_variance_assoc_of(
     kind: AssocKind,
     y: &Float64Chunked,
     x: &Float64Chunked,

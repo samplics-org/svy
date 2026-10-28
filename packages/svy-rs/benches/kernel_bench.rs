@@ -6,12 +6,9 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use polars::prelude::*;
 use std::hint::black_box;
 
-use _internal::estimation::association::{
-    AssocKind, PairProducts, bivar_moments, multi_moments, point_estimate_corr,
-    replicate_association,
-};
-use _internal::estimation::taylor::{
-    SrsRef, index_categorical, index_categorical_pair, point_estimate_mean, scores_mean,
+use _internal::bench::{
+    AssocKind, PairProducts, SrsRef, bivar_moments, index_categorical, index_categorical_pair,
+    multi_moments, point_estimate_corr, point_estimate_mean, replicate_association, scores_mean,
     srs_variance_mean, taylor_variance,
 };
 

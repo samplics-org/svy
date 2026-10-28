@@ -11,7 +11,7 @@ use crate::sampling::srs::{SamplingError, SrsDraw, SrsN, select_srs};
 
 /// A 1-D input: a numpy array of exactly `T`, or any sequence (older callers pass lists).
 #[derive(FromPyObject)]
-pub enum Array1<'py, T: Element> {
+pub(crate) enum Array1<'py, T: Element> {
     Array(PyReadonlyArray1<'py, T>),
     Seq(Vec<T>),
 }
@@ -54,7 +54,7 @@ fn parse_n<N>(
 /// SRS of the row indices in `frame`: (selected, hits, probs); pass `n_scalar` or `n_map`.
 #[pyfunction]
 #[pyo3(signature = (frame, n_scalar=None, n_map=None, stratum=None, wr=false, seed=None))]
-pub fn select_srs_rs(
+pub(crate) fn select_srs_rs(
     frame: Array1<'_, i64>,
     n_scalar: Option<usize>,
     n_map: Option<HashMap<i64, usize>>,
@@ -88,7 +88,7 @@ pub fn select_srs_rs(
     seed=None
 ))]
 #[allow(clippy::too_many_arguments)]
-pub fn select_pps_rs(
+pub(crate) fn select_pps_rs(
     frame: Array1<'_, i64>,
     mos: Array1<'_, f64>,
     n_scalar: Option<usize>,
@@ -125,7 +125,7 @@ pub fn select_pps_rs(
 /// `select_srs_rs` once per seed, in parallel; draw r is that call with `seeds[r]`.
 #[pyfunction]
 #[pyo3(signature = (frame, seeds, n_scalar=None, n_map=None, stratum=None, wr=false))]
-pub fn select_srs_batch_rs(
+pub(crate) fn select_srs_batch_rs(
     frame: Array1<'_, i64>,
     seeds: Vec<u64>,
     n_scalar: Option<usize>,
@@ -157,7 +157,7 @@ pub fn select_srs_batch_rs(
     certainty_threshold=1.0
 ))]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub fn select_pps_batch_rs(
+pub(crate) fn select_pps_batch_rs(
     frame: Array1<'_, i64>,
     mos: Array1<'_, f64>,
     seeds: Vec<u64>,

@@ -16,7 +16,7 @@ use crate::regression::wols::{fit_wols, influence_covariance, influence_se};
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum RankScoreMethod {
+pub(crate) enum RankScoreMethod {
     Wilcoxon,      // g(r) = r / N (same as KruskalWallis for 2 groups)
     VanDerWaerden, // g(r) = Φ⁻¹(r / N)
     Median,        // g(r) = I(r > N/2)
@@ -24,7 +24,7 @@ pub enum RankScoreMethod {
 }
 
 impl RankScoreMethod {
-    pub fn from_str(s: &str) -> EResult<Self> {
+    pub(crate) fn from_str(s: &str) -> EResult<Self> {
         match s.to_lowercase().as_str() {
             "wilcoxon" => Ok(RankScoreMethod::Wilcoxon),
             "vanderwaerden" | "vander_waerden" => Ok(RankScoreMethod::VanDerWaerden),
@@ -186,7 +186,7 @@ pub(crate) fn probit(p: f64) -> f64 {
 
 /// Result for a two-sample rank test.
 #[allow(dead_code)]
-pub struct RankTestTwoResult {
+pub(crate) struct RankTestTwoResult {
     /// Group 1 minus group 0 mean rank score.
     pub delta: f64,
     pub se: f64,
@@ -203,7 +203,7 @@ pub struct RankTestTwoResult {
 
 /// Result for a k-sample rank test.
 #[allow(dead_code)]
-pub struct RankTestKResult {
+pub(crate) struct RankTestKResult {
     /// k - 1
     pub ndf: usize,
     /// degf(design) - ndf
@@ -225,7 +225,7 @@ pub struct RankTestKResult {
 
 /// Two-sample rank test as R svyranktest: t = coef(m)[2] / SE(svytotal(infn))[2], df = degf(design) - 1.
 #[allow(clippy::too_many_arguments)]
-pub fn ranktest_two_sample(
+pub(crate) fn ranktest_two_sample(
     y: &[f64],
     g: &[u32], // group indices: 0 or 1
     w: &[f64],
@@ -306,7 +306,7 @@ pub fn ranktest_two_sample(
 
 /// K-sample rank test as R multiranktest: Wald beta[-1]' V[-1,-1]^{-1} beta[-1], F = chisq / ndf.
 #[allow(clippy::too_many_arguments)]
-pub fn ranktest_k_sample(
+pub(crate) fn ranktest_k_sample(
     y: &[f64],
     g: &[u32], // group indices: 0..k-1
     w: &[f64],
@@ -467,7 +467,7 @@ fn rep_fit(
 
 /// Two-sample rank test on a replicate design (R's svyranktest on svyrep.design); df = replicate df - 1.
 #[allow(clippy::too_many_arguments)]
-pub fn ranktest_two_sample_rep(
+pub(crate) fn ranktest_two_sample_rep(
     y: &[f64],
     g: &[u32],
     w: &[f64],
@@ -501,7 +501,7 @@ pub fn ranktest_two_sample_rep(
 
 /// K-sample rank test on a replicate design (R's multiranktest); ddf = replicate df - (k - 1).
 #[allow(clippy::too_many_arguments)]
-pub fn ranktest_k_sample_rep(
+pub(crate) fn ranktest_k_sample_rep(
     y: &[f64],
     g: &[u32],
     w: &[f64],
@@ -558,7 +558,7 @@ pub fn ranktest_k_sample_rep(
 // ============================================================================
 
 /// Two-sided p-value from t-distribution using the regularized incomplete beta function.
-pub fn two_sided_t_pvalue(t: f64, df: f64) -> f64 {
+pub(crate) fn two_sided_t_pvalue(t: f64, df: f64) -> f64 {
     if t.is_nan() || df <= 0.0 {
         return f64::NAN;
     }
@@ -569,7 +569,7 @@ pub fn two_sided_t_pvalue(t: f64, df: f64) -> f64 {
 }
 
 /// Survival function of F distribution: P(F > x) where F ~ F(d1, d2).
-pub fn f_survival(x: f64, d1: f64, d2: f64) -> f64 {
+pub(crate) fn f_survival(x: f64, d1: f64, d2: f64) -> f64 {
     if x.is_nan() || x < 0.0 || d1 <= 0.0 || d2 <= 0.0 {
         return f64::NAN;
     }

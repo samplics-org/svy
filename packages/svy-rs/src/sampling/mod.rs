@@ -1,4 +1,4 @@
 //! SRS and PPS selection kernels.
-pub mod api;
-pub mod pps;
-pub mod srs;
+pub(crate) mod api;
+pub(crate) mod pps;
+pub(crate) mod srs;

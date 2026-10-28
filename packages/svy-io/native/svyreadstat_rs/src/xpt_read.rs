@@ -92,7 +92,7 @@ fn parse_xpt_impl(
     catalog_encoding=None
 ))]
 #[allow(clippy::too_many_arguments)]
-pub fn df_parse_xpt_file<'py>(
+pub(crate) fn df_parse_xpt_file<'py>(
     py: Python<'py>,
     data_path: &str,
     n_max: Option<usize>,

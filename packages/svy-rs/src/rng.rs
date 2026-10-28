@@ -2,13 +2,13 @@
 
 /// xoshiro256** generator: a given seed always yields the same stream, so draws are reproducible.
 #[derive(Clone)]
-pub struct Rng {
+pub(crate) struct Rng {
     state: [u64; 4],
 }
 
 impl Rng {
     /// Create a new RNG from a 64-bit seed using SplitMix64 initialisation.
-    pub fn new(seed: u64) -> Self {
+    pub(crate) fn new(seed: u64) -> Self {
         let mut sm = seed;
         let mut state = [0u64; 4];
         for s in &mut state {
@@ -21,7 +21,7 @@ impl Rng {
         Rng { state }
     }
 
-    pub fn next_u64(&mut self) -> u64 {
+    pub(crate) fn next_u64(&mut self) -> u64 {
         let result = self.state[1].wrapping_mul(5).rotate_left(7).wrapping_mul(9);
         let t = self.state[1] << 17;
         self.state[2] ^= self.state[0];
@@ -34,7 +34,7 @@ impl Rng {
     }
 
     /// Uniform integer in [0, n) without modulo bias (Lemire's nearly-divisionless method).
-    pub fn next_index(&mut self, n: usize) -> usize {
+    pub(crate) fn next_index(&mut self, n: usize) -> usize {
         debug_assert!(n > 0, "next_index requires n > 0");
         let n = n as u64;
         let mut x = self.next_u64();
@@ -53,12 +53,12 @@ impl Rng {
     }
 
     /// Uniform random f64 in [0, 1).
-    pub fn next_f64(&mut self) -> f64 {
+    pub(crate) fn next_f64(&mut self) -> f64 {
         (self.next_u64() >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
     }
 
     /// Fisher-Yates shuffle.
-    pub fn shuffle<T>(&mut self, slice: &mut [T]) {
+    pub(crate) fn shuffle<T>(&mut self, slice: &mut [T]) {
         for i in (1..slice.len()).rev() {
             let j = self.next_index(i + 1);
             slice.swap(i, j);
@@ -66,7 +66,7 @@ impl Rng {
     }
 
     /// One index drawn proportional to unnormalised `weights`; `None` unless the total is positive.
-    pub fn weighted_choice(&mut self, weights: &[f64]) -> Option<usize> {
+    pub(crate) fn weighted_choice(&mut self, weights: &[f64]) -> Option<usize> {
         let total: f64 = weights.iter().sum();
         if total.is_nan() || total <= 0.0 {
             return None;

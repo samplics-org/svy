@@ -10,7 +10,7 @@ const UK: i64 = 3; // Unknown
 
 /// Moves NR and UK weight onto respondents within each class; NR and UK end at zero.
 /// With `unknown_to_inelig`, UK weight first spreads over IN, RR and NR instead of joining NR.
-pub fn adjust_nr_impl(
+pub(crate) fn adjust_nr_impl(
     wgts: ArrayView2<f64>,
     adj_class: ArrayView1<i64>,
     resp_status: ArrayView1<i64>,

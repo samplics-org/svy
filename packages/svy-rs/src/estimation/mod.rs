@@ -3,20 +3,19 @@
 //! - Parallel over by-groups and replicates only, each summed in row order: bit-identical output.
 //! - Entry points release the GIL (`Python::detach`); without it rayon silently runs serially.
 
-pub mod calib_sweep;
-pub mod error;
+pub(crate) mod calib_sweep;
+pub(crate) mod error;
 
-pub mod association;
-pub mod replication;
-pub mod replication_api;
-pub mod taylor;
-pub mod taylor_api;
+pub(crate) mod association;
+pub(crate) mod replication;
+pub(crate) mod replication_api;
+pub(crate) mod taylor;
+pub(crate) mod taylor_api;
 
 // Only what categorical/tabulation.rs uses; anything more warns as an unused import.
-pub use taylor::{
+pub(crate) use taylor::{
     degrees_of_freedom, point_estimate_mean, point_estimate_total, scores_mean, scores_total,
-    singleton_domain_rows, srs_variance_mean, taylor_variance, taylor_variance_in,
-    taylor_variance_matrix, taylor_variance_matrix_in,
+    singleton_domain_rows, srs_variance_mean, taylor_variance_in, taylor_variance_matrix_in,
 };
 
 use crate::estimation::error::EResult;

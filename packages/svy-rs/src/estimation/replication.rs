@@ -7,33 +7,13 @@ use std::collections::HashMap;
 use super::taylor::{SvyQuantileMethod, weighted_quantile};
 
 /// Per domain: full-sample estimates `[K][P]`, replicate estimates `[K][P][R]`, row counts `[K]`.
-pub type DomainReps = (Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>);
+pub(crate) type DomainReps = (Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>);
 
 /// The levels found, then [`DomainReps`] over them.
-pub type LevelReps<L> = (Vec<L>, Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>);
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum RepMethod {
-    BRR,
-    Bootstrap,
-    Jackknife,
-    SDR,
-}
-
-impl RepMethod {
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "brr" => Some(RepMethod::BRR),
-            "bootstrap" | "bs" => Some(RepMethod::Bootstrap),
-            "jackknife" | "jk" | "jk1" => Some(RepMethod::Jackknife),
-            "sdr" | "acs" | "successive-difference" => Some(RepMethod::SDR),
-            _ => None,
-        }
-    }
-}
+pub(crate) type LevelReps<L> = (Vec<L>, Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>);
 
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
-pub enum VarianceCenter {
+pub(crate) enum VarianceCenter {
     /// Mean of the replicate estimates, the default in R `survey` and Stata.
     #[default]
     ReplicateMean,
@@ -42,7 +22,7 @@ pub enum VarianceCenter {
 }
 
 impl VarianceCenter {
-    pub fn parse(s: &str) -> Option<Self> {
+    pub(crate) fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "rep_mean" | "repmean" | "mean" | "average" | "replicates" => {
                 Some(VarianceCenter::ReplicateMean)
@@ -55,25 +35,8 @@ impl VarianceCenter {
     }
 }
 
-pub fn replicate_coefficients(method: RepMethod, n_reps: usize, fay_coef: f64) -> Vec<f64> {
-    match method {
-        RepMethod::Bootstrap => vec![1.0 / n_reps as f64; n_reps],
-        RepMethod::BRR => {
-            let scale = 1.0 / (n_reps as f64 * (1.0 - fay_coef).powi(2));
-            vec![scale; n_reps]
-        }
-        RepMethod::Jackknife => {
-            let coef = (n_reps as f64 - 1.0) / n_reps as f64;
-            vec![coef; n_reps]
-        }
-        RepMethod::SDR => {
-            vec![4.0 / n_reps as f64; n_reps]
-        }
-    }
-}
-
 /// `sum_r c_r (theta_r - center)^2` for every method, as R's `svrVar`; `FullSample` is mse=TRUE.
-pub fn variance_from_replicates(
+pub(crate) fn variance_from_replicates(
     theta_full: f64,
     theta_reps: &[f64],
     rep_coefs: &[f64],
@@ -101,7 +64,7 @@ pub fn variance_from_replicates(
 }
 
 /// k×k covariance of k estimates: `variance_from_replicates` applied cross-wise, same diagonal.
-pub fn covariance_from_replicates(
+pub(crate) fn covariance_from_replicates(
     theta_fulls: &[f64],
     theta_reps: &[Vec<f64>], // k estimates × n_reps
     rep_coefs: &[f64],
@@ -144,7 +107,7 @@ pub fn covariance_from_replicates(
 
 /// Replicate weights as a flat row-major n × R matrix, built by a cache-blocked parallel
 /// transpose: the naive strided write dominated the whole replication call.
-pub fn extract_rep_weights_matrix(
+pub(crate) fn extract_rep_weights_matrix(
     df: &DataFrame,
     rep_weight_cols: &[String],
 ) -> EResult<(Vec<f64>, usize, usize)> {
@@ -195,7 +158,7 @@ pub fn extract_rep_weights_matrix(
 }
 
 /// Full-sample and replicate means in one pass over the flat matrix.
-pub fn matrix_mean_estimates(
+pub(crate) fn matrix_mean_estimates(
     y: &[f64],
     full_weights: &[f64],
     rep_weights: &[f64], // Flattened (n × R) row-major
@@ -240,7 +203,7 @@ pub fn matrix_mean_estimates(
 }
 
 /// `matrix_mean_estimates` from the replicate columns, bit-identical without the n×R matrix.
-pub fn matrix_mean_estimates_cols(
+pub(crate) fn matrix_mean_estimates_cols(
     y: &[f64],
     full_weights: &[f64],
     rep_cols: &[&[f64]],
@@ -285,7 +248,7 @@ pub fn matrix_mean_estimates_cols(
     (theta_full, theta_reps)
 }
 
-pub fn matrix_total_estimates(
+pub(crate) fn matrix_total_estimates(
     y: &[f64],
     full_weights: &[f64],
     rep_weights: &[f64],
@@ -313,7 +276,7 @@ pub fn matrix_total_estimates(
     (theta_full, theta_reps)
 }
 
-pub fn matrix_ratio_estimates(
+pub(crate) fn matrix_ratio_estimates(
     y: &[f64],
     x: &[f64],
     full_weights: &[f64],
@@ -363,7 +326,7 @@ pub fn matrix_ratio_estimates(
 }
 
 /// `matrix_total_estimates` from the replicate columns, bit-identical without the n×R matrix.
-pub fn matrix_total_estimates_cols(
+pub(crate) fn matrix_total_estimates_cols(
     y: &[f64],
     full_weights: &[f64],
     rep_cols: &[&[f64]],
@@ -397,7 +360,7 @@ pub fn matrix_total_estimates_cols(
 }
 
 /// `matrix_ratio_estimates` from the replicate columns, bit-identical without the n×R matrix.
-pub fn matrix_ratio_estimates_cols(
+pub(crate) fn matrix_ratio_estimates_cols(
     y: &[f64],
     x: &[f64],
     full_weights: &[f64],
@@ -447,7 +410,7 @@ pub fn matrix_ratio_estimates_cols(
 // ============================================================================
 
 /// Index a categorical column to 0..K-1: `(indices, domain_names, n_domains)`.
-pub fn index_domains(by: &StringChunked) -> (Vec<u32>, Vec<String>, usize) {
+pub(crate) fn index_domains(by: &StringChunked) -> (Vec<u32>, Vec<String>, usize) {
     let mut map: HashMap<&str, u32> = HashMap::new();
     let mut names: Vec<String> = Vec::new();
     let mut next_idx = 0u32;
@@ -469,7 +432,7 @@ pub fn index_domains(by: &StringChunked) -> (Vec<u32>, Vec<String>, usize) {
 }
 
 /// By-domain means: `(full[K], replicates[K][R], counts[K])`.
-pub fn matrix_mean_by_domain(
+pub(crate) fn matrix_mean_by_domain(
     y: &[f64],
     full_weights: &[f64],
     rep_weights: &[f64],
@@ -527,7 +490,7 @@ pub fn matrix_mean_by_domain(
 }
 
 /// `matrix_mean_by_domain` from the replicate columns, bit-identical without the n×R matrix.
-pub fn matrix_mean_by_domain_cols(
+pub(crate) fn matrix_mean_by_domain_cols(
     y: &[f64],
     full_weights: &[f64],
     rep_cols: &[&[f64]],
@@ -589,7 +552,7 @@ pub fn matrix_mean_by_domain_cols(
 }
 
 /// `matrix_total_by_domain` from the replicate columns, bit-identical without the n×R matrix.
-pub fn matrix_total_by_domain_cols(
+pub(crate) fn matrix_total_by_domain_cols(
     y: &[f64],
     full_weights: &[f64],
     rep_cols: &[&[f64]],
@@ -632,7 +595,7 @@ pub fn matrix_total_by_domain_cols(
 }
 
 /// `matrix_ratio_by_domain` from the replicate columns, bit-identical without the n×R matrix.
-pub fn matrix_ratio_by_domain_cols(
+pub(crate) fn matrix_ratio_by_domain_cols(
     y: &[f64],
     x: &[f64],
     full_weights: &[f64],
@@ -698,7 +661,7 @@ pub fn matrix_ratio_by_domain_cols(
     (theta_full, theta_reps, counts)
 }
 
-pub fn matrix_total_by_domain(
+pub(crate) fn matrix_total_by_domain(
     y: &[f64],
     full_weights: &[f64],
     rep_weights: &[f64],
@@ -735,7 +698,7 @@ pub fn matrix_total_by_domain(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn matrix_ratio_by_domain(
+pub(crate) fn matrix_ratio_by_domain(
     y: &[f64],
     x: &[f64],
     full_weights: &[f64],
@@ -810,7 +773,7 @@ fn level_value(w_level: f64, w_total: f64, normalize: bool) -> f64 {
 }
 
 /// Proportions per integer level: `(levels, full[L], replicates[L][R])`.
-pub fn matrix_prop_estimates(
+pub(crate) fn matrix_prop_estimates(
     y: &[i64],
     full_weights: &[f64],
     rep_weights: &[f64],
@@ -895,7 +858,7 @@ fn prop_level_index(y: &[i64]) -> (Vec<i64>, Vec<usize>) {
 }
 
 /// `matrix_prop_estimates` from the replicate columns, bit-identical without the n×R matrix.
-pub fn matrix_prop_estimates_cols(
+pub(crate) fn matrix_prop_estimates_cols(
     y: &[i64],
     full_weights: &[f64],
     rep_cols: &[&[f64]],
@@ -954,7 +917,7 @@ pub fn matrix_prop_estimates_cols(
 }
 
 /// `matrix_prop_estimates_str` from the replicate columns, bit-identical without the n×R matrix.
-pub fn matrix_prop_estimates_str_cols(
+pub(crate) fn matrix_prop_estimates_str_cols(
     y: &[String],
     full_weights: &[f64],
     rep_cols: &[&[f64]],
@@ -1026,7 +989,7 @@ pub fn matrix_prop_estimates_str_cols(
 
 /// Proportions per integer level and domain.
 #[allow(clippy::too_many_arguments)]
-pub fn matrix_prop_by_domain(
+pub(crate) fn matrix_prop_by_domain(
     y: &[i64],
     full_weights: &[f64],
     rep_weights: &[f64],
@@ -1116,7 +1079,7 @@ pub fn matrix_prop_by_domain(
 }
 
 /// Proportions per string level, sorted lexicographically: `(levels, full[L], reps[L][R])`.
-pub fn matrix_prop_estimates_str(
+pub(crate) fn matrix_prop_estimates_str(
     y: &[String],
     full_weights: &[f64],
     rep_weights: &[f64],
@@ -1184,7 +1147,7 @@ pub fn matrix_prop_estimates_str(
 
 /// Proportions per string level and domain: `(levels, full[D][L], reps[D][L][R], counts[D])`.
 #[allow(clippy::too_many_arguments)]
-pub fn matrix_prop_by_domain_str(
+pub(crate) fn matrix_prop_by_domain_str(
     y: &[String],
     full_weights: &[f64],
     rep_weights: &[f64],
@@ -1371,7 +1334,7 @@ fn quantiles_in_order(
 }
 
 /// Full-sample and per-replicate quantiles: `(full[P], replicates[P][R])`, in `probs` order.
-pub fn quantile_estimates_cols(
+pub(crate) fn quantile_estimates_cols(
     y: &[f64],
     full_weights: &[f64],
     rep_cols: &[&[f64]],
@@ -1392,7 +1355,7 @@ pub fn quantile_estimates_cols(
 }
 
 /// By-domain quantiles: `(full[K][P], replicates[K][P][R], counts[K])`.
-pub fn quantile_by_domain_cols(
+pub(crate) fn quantile_by_domain_cols(
     y: &[f64],
     full_weights: &[f64],
     rep_cols: &[&[f64]],
@@ -1438,100 +1401,6 @@ pub fn quantile_by_domain_cols(
     (theta_full, theta_reps, counts)
 }
 
-/// Columns of a row-major `n × n_reps` matrix.
-fn matrix_columns(rep_weights: &[f64], n: usize, n_reps: usize) -> Vec<Vec<f64>> {
-    (0..n_reps)
-        .map(|r| (0..n).map(|i| rep_weights[i * n_reps + r]).collect())
-        .collect()
-}
-
-/// [`quantile_estimates_cols`] on a flattened row-major `n × n_reps` matrix.
-pub fn matrix_quantile_estimates(
-    y: &[f64],
-    full_weights: &[f64],
-    rep_weights: &[f64],
-    n: usize,
-    n_reps: usize,
-    probs: &[f64],
-    q_method: SvyQuantileMethod,
-) -> (Vec<f64>, Vec<Vec<f64>>) {
-    let cols = matrix_columns(rep_weights, n, n_reps);
-    let refs: Vec<&[f64]> = cols.iter().map(|c| c.as_slice()).collect();
-    quantile_estimates_cols(&y[..n], &full_weights[..n], &refs, probs, q_method)
-}
-
-/// [`quantile_by_domain_cols`] on a flattened row-major `n × n_reps` matrix.
-#[allow(clippy::too_many_arguments)]
-pub fn matrix_quantile_by_domain(
-    y: &[f64],
-    full_weights: &[f64],
-    rep_weights: &[f64],
-    domain_ids: &[u32],
-    n_domains: usize,
-    n: usize,
-    n_reps: usize,
-    probs: &[f64],
-    q_method: SvyQuantileMethod,
-) -> DomainReps {
-    let cols = matrix_columns(rep_weights, n, n_reps);
-    let refs: Vec<&[f64]> = cols.iter().map(|c| c.as_slice()).collect();
-    quantile_by_domain_cols(
-        &y[..n],
-        &full_weights[..n],
-        &refs,
-        &domain_ids[..n],
-        n_domains,
-        probs,
-        q_method,
-    )
-}
-
-/// Full-sample and replicate medians from the flat matrix.
-pub fn matrix_median_estimates(
-    y: &[f64],
-    full_weights: &[f64],
-    rep_weights: &[f64], // Flattened (n × R) row-major
-    n: usize,
-    n_reps: usize,
-    q_method: SvyQuantileMethod,
-) -> (f64, Vec<f64>) {
-    let (full, reps) =
-        matrix_quantile_estimates(y, full_weights, rep_weights, n, n_reps, &[0.5], q_method);
-    (full[0], reps.into_iter().next().unwrap_or_default())
-}
-
-/// By-domain medians: `(full[K], replicates[K][R], counts[K])`.
-#[allow(clippy::too_many_arguments)]
-pub fn matrix_median_by_domain(
-    y: &[f64],
-    full_weights: &[f64],
-    rep_weights: &[f64],
-    domain_ids: &[u32],
-    n_domains: usize,
-    n: usize,
-    n_reps: usize,
-    q_method: SvyQuantileMethod,
-) -> (Vec<f64>, Vec<Vec<f64>>, Vec<u32>) {
-    let (full, reps, counts) = matrix_quantile_by_domain(
-        y,
-        full_weights,
-        rep_weights,
-        domain_ids,
-        n_domains,
-        n,
-        n_reps,
-        &[0.5],
-        q_method,
-    );
-    (
-        full.into_iter().map(|v| v[0]).collect(),
-        reps.into_iter()
-            .map(|v| v.into_iter().next().unwrap_or_default())
-            .collect(),
-        counts,
-    )
-}
-
 // ============================================================================
 // Tests
 // ============================================================================
@@ -1566,17 +1435,10 @@ mod tests {
     }
 
     #[test]
-    fn test_sdr_coefficients() {
-        let coefs = replicate_coefficients(RepMethod::SDR, 80, 0.0);
-        assert_eq!(coefs.len(), 80);
-        assert_abs_diff_eq!(coefs[0], 4.0 / 80.0, epsilon = 1e-10);
-    }
-
-    #[test]
     fn test_sdr_variance_replicate_mean() {
         let theta_full = 100.0;
         let theta_reps = vec![98.0, 102.0, 99.0, 101.0];
-        let rep_coefs = replicate_coefficients(RepMethod::SDR, 4, 0.0);
+        let rep_coefs = vec![4.0 / 4.0; 4];
 
         // Var = (4/4) * (4 + 4 + 1 + 1) = 10.0
         let var = variance_from_replicates(
@@ -1592,7 +1454,7 @@ mod tests {
     fn test_sdr_variance_full_sample() {
         let theta_full = 105.0; // Different from mean of replicates
         let theta_reps = vec![98.0, 102.0, 99.0, 101.0];
-        let rep_coefs = replicate_coefficients(RepMethod::SDR, 4, 0.0);
+        let rep_coefs = vec![4.0 / 4.0; 4];
 
         // Var = 1.0 * (49 + 9 + 36 + 16) = 110.0
         let var = variance_from_replicates(
@@ -1633,69 +1495,6 @@ mod tests {
         let var =
             variance_from_replicates(100.0, &theta_reps, &coefs, VarianceCenter::ReplicateMean);
         assert!(abs_diff_eq!(var, 9.5, epsilon = 1e-12), "got {var}");
-    }
-
-    #[test]
-    fn bootstrap_coefficients_are_one_over_b() {
-        let coefs = replicate_coefficients(RepMethod::Bootstrap, 500, 0.0);
-        assert_eq!(coefs.len(), 500);
-        assert!(
-            coefs
-                .iter()
-                .all(|c| abs_diff_eq!(*c, 1.0 / 500.0, epsilon = 1e-15))
-        );
-    }
-
-    #[test]
-    fn jackknife_coefficients_are_b_minus_one_over_b() {
-        let coefs = replicate_coefficients(RepMethod::Jackknife, 20, 0.0);
-        assert!(
-            coefs
-                .iter()
-                .all(|c| abs_diff_eq!(*c, 19.0 / 20.0, epsilon = 1e-15))
-        );
-    }
-
-    #[test]
-    fn brr_coefficients_collapse_to_one_over_b_at_fay_zero() {
-        // Plain BRR *is* Fay's BRR at 0: 1/(B(1-0)^2) = 1/B.
-        let plain = replicate_coefficients(RepMethod::BRR, 32, 0.0);
-        assert!(
-            plain
-                .iter()
-                .all(|c| abs_diff_eq!(*c, 1.0 / 32.0, epsilon = 1e-15))
-        );
-
-        let fay = replicate_coefficients(RepMethod::BRR, 32, 0.5);
-        let expected = 1.0 / (32.0 * 0.25);
-        assert!(
-            fay.iter()
-                .all(|c| abs_diff_eq!(*c, expected, epsilon = 1e-15))
-        );
-    }
-
-    #[test]
-    fn fay_coefficient_only_affects_brr() {
-        for method in [RepMethod::Bootstrap, RepMethod::Jackknife, RepMethod::SDR] {
-            assert_eq!(
-                replicate_coefficients(method, 16, 0.0),
-                replicate_coefficients(method, 16, 0.7),
-                "{:?} coefficients moved with fay_coef",
-                method
-            );
-        }
-    }
-
-    #[test]
-    fn test_sdr_from_str() {
-        assert_eq!(RepMethod::parse("sdr"), Some(RepMethod::SDR));
-        assert_eq!(RepMethod::parse("SDR"), Some(RepMethod::SDR));
-        assert_eq!(RepMethod::parse("acs"), Some(RepMethod::SDR));
-        assert_eq!(RepMethod::parse("ACS"), Some(RepMethod::SDR));
-        assert_eq!(
-            RepMethod::parse("successive-difference"),
-            Some(RepMethod::SDR)
-        );
     }
 
     #[test]
@@ -1760,28 +1559,6 @@ mod tests {
                 assert_eq!(bits(&got), bits(&want), "{q:?}");
             }
         }
-    }
-
-    #[test]
-    fn test_matrix_median_estimates() {
-        let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let full_w = vec![1.0, 1.0, 1.0, 1.0, 1.0];
-        // 2 replicates, flattened row-major
-        let rep_w = vec![
-            1.0, 1.0, // obs 0: rep0=1, rep1=1
-            2.0, 0.5, // obs 1: rep0=2, rep1=0.5
-            1.0, 1.0, // obs 2
-            0.5, 2.0, // obs 3
-            1.0, 1.0, // obs 4
-        ];
-
-        let (theta_full, theta_reps) =
-            matrix_median_estimates(&y, &full_w, &rep_w, 5, 2, SvyQuantileMethod::Linear);
-
-        assert!(theta_full.is_finite());
-        assert_eq!(theta_reps.len(), 2);
-        assert!(theta_reps[0].is_finite());
-        assert!(theta_reps[1].is_finite());
     }
 
     #[test]

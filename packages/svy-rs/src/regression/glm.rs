@@ -24,7 +24,7 @@ use rustc_hash::FxHashMap;
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Family {
+pub(crate) enum Family {
     Gaussian,
     Binomial,
     Poisson,
@@ -35,7 +35,7 @@ pub enum Family {
 }
 
 impl Family {
-    pub fn from_str(s: &str, theta: Option<f64>) -> RResult<Self> {
+    pub(crate) fn from_str(s: &str, theta: Option<f64>) -> RResult<Self> {
         match s.to_lowercase().as_str() {
             "gaussian" => Ok(Family::Gaussian),
             "binomial" => Ok(Family::Binomial),
@@ -137,7 +137,7 @@ fn cauchy_cdf(x: f64) -> f64 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Link {
+pub(crate) enum Link {
     Identity,
     Logit,
     Probit,
@@ -209,7 +209,7 @@ pub(crate) fn norm_cdf(x: f64) -> f64 {
 }
 
 impl Link {
-    pub fn from_str(s: &str) -> RResult<Self> {
+    pub(crate) fn from_str(s: &str) -> RResult<Self> {
         match s.to_lowercase().as_str() {
             "identity" => Ok(Link::Identity),
             "logit" => Ok(Link::Logit),
@@ -987,7 +987,7 @@ pub(crate) fn invert_matrix(A: MatRef<'_, f64>, k: usize) -> RResult<Mat<f64>> {
 // ============================================================================
 
 #[allow(dead_code)]
-pub struct GlmResult {
+pub(crate) struct GlmResult {
     pub params: Vec<f64>,
     pub cov_params: Vec<f64>,
     /// R svyglm's naive.cov, (X'WX)^-1 at the final beta, on the fit's mean-1 weight scale.
@@ -1008,7 +1008,7 @@ pub struct GlmResult {
 }
 
 /// Rows the fit drove to the boundary, and what is left to identify beta.
-pub struct Separation {
+pub(crate) struct Separation {
     /// Contributing rows whose fitted value the fit cannot tell from y.
     pub boundary_rows: usize,
     /// Row-major `sum_i w_i x_i x_i'` over the other rows; a coefficient outside its row space is not identified.
@@ -1160,7 +1160,7 @@ pub(crate) fn fit_one(
 /// Full-sample fit without singleton handling; the unit tests' entry point.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
-pub fn fit_glm(
+pub(crate) fn fit_glm(
     y: &Series,
     x_cols: Vec<Series>,
     weights: &Series,
@@ -1196,7 +1196,7 @@ pub fn fit_glm(
 
 /// One `where=` domain fit; `fit_glm_by` would also fit the complement, and fail on a degenerate one.
 #[allow(clippy::too_many_arguments)]
-pub fn fit_glm_where(
+pub(crate) fn fit_glm_where(
     y: &Series,
     x_cols: Vec<Series>,
     weights: &Series,
@@ -1238,7 +1238,7 @@ pub fn fit_glm_where(
 
 /// One fit per level of `by_col` over the full design, as R's `svyglm(..., design = subset(d, ...))`.
 #[allow(clippy::too_many_arguments)]
-pub fn fit_glm_by(
+pub(crate) fn fit_glm_by(
     y: &Series,
     x_cols: Vec<Series>,
     weights: &Series,
@@ -1318,7 +1318,7 @@ pub fn fit_glm_by(
 
 /// Parallel replicate refits of the coefficients and separation, skipping the unused sandwich except for negbin.
 #[allow(clippy::too_many_arguments)]
-pub fn fit_glm_reps(
+pub(crate) fn fit_glm_reps(
     y: &Series,
     x_cols: &[Series],
     rep_weights: &[Series],

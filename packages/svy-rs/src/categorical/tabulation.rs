@@ -37,7 +37,7 @@ fn numsort_key(s: &str) -> (u8, f64, String) {
     }
 }
 
-pub fn sort_levels(levels: &mut [String]) {
+pub(crate) fn sort_levels(levels: &mut [String]) {
     levels.sort_by(|a, b| {
         let ka = numsort_key(a);
         let kb = numsort_key(b);
@@ -198,7 +198,7 @@ fn beta_cf(x: f64, a: f64, b: f64) -> f64 {
 
 /// Proportions of every level with one joint Taylor covariance, as R does (no per-level polarization).
 #[allow(clippy::too_many_arguments)]
-pub fn estimate_proportions(
+pub(crate) fn estimate_proportions(
     y: &StringChunked,
     weights: &Float64Chunked,
     strata: Option<&Column>,
@@ -291,7 +291,7 @@ pub fn estimate_proportions(
 }
 
 /// SE of a cell share, NaN when the share is: `f64::max` turns a NaN variance into 0.
-pub fn cell_se(estimate: f64, variance: f64) -> f64 {
+pub(crate) fn cell_se(estimate: f64, variance: f64) -> f64 {
     if estimate.is_nan() {
         f64::NAN
     } else {
@@ -301,12 +301,15 @@ pub fn cell_se(estimate: f64, variance: f64) -> f64 {
 
 /// Row `i` is in the tabulation domain (every row when there is no mask).
 #[inline]
-pub fn in_domain(domain: Option<&BooleanChunked>, i: usize) -> bool {
+pub(crate) fn in_domain(domain: Option<&BooleanChunked>, i: usize) -> bool {
     domain.is_none_or(|m| m.get(i).unwrap_or(false))
 }
 
 /// Sorted distinct in-domain keys: an out-of-domain row's category never forms a cell.
-pub fn domain_levels(y: &StringChunked, domain: Option<&BooleanChunked>) -> CResult<Vec<String>> {
+pub(crate) fn domain_levels(
+    y: &StringChunked,
+    domain: Option<&BooleanChunked>,
+) -> CResult<Vec<String>> {
     let mut levels: Vec<String> = match domain {
         None => y
             .unique()?
@@ -330,7 +333,7 @@ pub fn domain_levels(y: &StringChunked, domain: Option<&BooleanChunked>) -> CRes
 
 /// Compute weighted totals and SEs for each level.
 #[allow(clippy::too_many_arguments)]
-pub fn estimate_totals(
+pub(crate) fn estimate_totals(
     y: &StringChunked,
     weights: &Float64Chunked,
     strata: Option<&Column>,
@@ -405,7 +408,7 @@ pub fn estimate_totals(
 // ============================================================================
 
 /// Rao-Scott Pearson statistics: (chisq, df, p, adj_f, adj_ndf, adj_ddf, adj_p).
-pub fn rao_scott(
+pub(crate) fn rao_scott(
     proportions: &[f64],
     cov_survey: &[Vec<f64>],
     nr: usize,
@@ -548,7 +551,7 @@ pub fn rao_scott(
 }
 
 /// Count unique strata and PSUs for Rao-Scott df calculation.
-pub fn count_strata_psus(
+pub(crate) fn count_strata_psus(
     strata: Option<&Column>,
     psu: Option<&Column>,
     n: usize,

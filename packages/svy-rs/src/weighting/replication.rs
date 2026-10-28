@@ -11,10 +11,10 @@ use thiserror::Error;
 /// Each stratum's index and PSUs, and each (stratum, PSU)'s position within its stratum.
 type BrrStratumMap = (HashMap<i64, (i64, Vec<i64>)>, HashMap<(i64, i64), usize>);
 
-pub type Result<T> = std::result::Result<T, ReplicationError>;
+pub(crate) type Result<T> = std::result::Result<T, ReplicationError>;
 
 #[derive(Error, Debug, Clone)]
-pub enum ReplicationError {
+pub(crate) enum ReplicationError {
     #[error("Dimension mismatch: expected {expected}, got {got}")]
     DimensionMismatch { expected: usize, got: usize },
 
@@ -53,7 +53,7 @@ impl Coded for ReplicationError {
 
 /// BRR Hadamard matrix and its order (the replicate count), which must exceed `n_strata`:
 /// strata take rows 1.., since one on the all-ones row 0 would lose a PSU in every replicate.
-pub fn get_hadamard_for_brr(n_strata: usize) -> Result<(Array2<f64>, usize)> {
+pub(crate) fn get_hadamard_for_brr(n_strata: usize) -> Result<(Array2<f64>, usize)> {
     let need = n_strata + 1;
     if let Some(h) = try_get_hadamard(need) {
         return Ok((h, need));
@@ -68,7 +68,7 @@ pub fn get_hadamard_for_brr(n_strata: usize) -> Result<(Array2<f64>, usize)> {
 }
 
 /// Hadamard matrix of the smallest available order >= `n_strata`, and that order.
-pub fn get_hadamard_for_strata(n_strata: usize) -> Result<(Array2<f64>, usize)> {
+pub(crate) fn get_hadamard_for_strata(n_strata: usize) -> Result<(Array2<f64>, usize)> {
     if let Some(h) = try_get_hadamard(n_strata) {
         return Ok((h, n_strata));
     }
@@ -180,7 +180,7 @@ fn next_power_of_2(n: usize) -> usize {
 // ============================================================================
 
 /// BRR replicate weights with Fay's coefficient; `seed` shuffles which PSU of each pair is first.
-pub fn create_brr_weights(
+pub(crate) fn create_brr_weights(
     wgt: ArrayView1<f64>,
     stratum: ArrayView1<i64>,
     psu: ArrayView1<i64>,
@@ -308,7 +308,7 @@ fn build_brr_stratum_map(
 // ============================================================================
 
 /// Jackknife weights: delete-one-PSU JKn, or JK2 when `paired`.
-pub fn create_jk_weights(
+pub(crate) fn create_jk_weights(
     wgt: ArrayView1<f64>,
     stratum: Option<ArrayView1<i64>>,
     psu: ArrayView1<i64>,
@@ -324,7 +324,7 @@ pub fn create_jk_weights(
 
 /// Delete-one-PSU jackknife; returns (weights, df = #PSUs - #strata, rscales).
 /// rscales[r] = (n_h - 1) / n_h of the stratum r deletes from, as R `svrepdesign(type = "JKn")`.
-pub fn create_jkn_weights(
+pub(crate) fn create_jkn_weights(
     wgt: ArrayView1<f64>,
     stratum: Option<ArrayView1<i64>>,
     psu: ArrayView1<i64>,
@@ -504,7 +504,7 @@ fn create_jk2_weights(
 // Bootstrap
 // ============================================================================
 
-pub fn create_bootstrap_weights(
+pub(crate) fn create_bootstrap_weights(
     wgt: ArrayView1<f64>,
     stratum: Option<ArrayView1<i64>>,
     psu: ArrayView1<i64>,
@@ -599,7 +599,7 @@ pub fn create_bootstrap_weights(
 
 /// bsw = w ± w·sqrt((w - 1) / w), signs w.p. 1/2 per unit: no stratum or PSU structure to disclose.
 /// The optional calibration of these replicates is left to the general weighting adjustments.
-pub fn create_poisson_bootstrap_weights(
+pub(crate) fn create_poisson_bootstrap_weights(
     wgt: ArrayView1<f64>,
     n_reps: usize,
     seed: u64,
@@ -658,7 +658,7 @@ pub fn create_poisson_bootstrap_weights(
 // SDR
 // ============================================================================
 
-pub fn create_sdr_weights(
+pub(crate) fn create_sdr_weights(
     wgt: ArrayView1<f64>,
     stratum: Option<ArrayView1<i64>>,
     order: Option<ArrayView1<i64>>,

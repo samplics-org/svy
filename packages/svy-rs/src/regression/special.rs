@@ -23,7 +23,7 @@ const LANCZOS: [f64; 9] = [
 ];
 
 /// log |Gamma(x)|, for x > 0.
-pub fn lgamma(x: f64) -> f64 {
+pub(crate) fn lgamma(x: f64) -> f64 {
     if x < 0.5 {
         // Reflection: Gamma(x) Gamma(1-x) = pi / sin(pi x).
         return (PI / (PI * x).sin()).abs().ln() - lgamma(1.0 - x);
@@ -38,7 +38,7 @@ pub fn lgamma(x: f64) -> f64 {
 }
 
 /// The digamma function, psi(x) = d/dx log Gamma(x), for x > 0.
-pub fn digamma(mut x: f64) -> f64 {
+pub(crate) fn digamma(mut x: f64) -> f64 {
     let mut result = 0.0;
 
     // psi(x) = psi(x+1) - 1/x; at x >= 20 the dropped series term is ~5e-18 relative.
@@ -64,7 +64,7 @@ pub fn digamma(mut x: f64) -> f64 {
 }
 
 /// The trigamma function, psi'(x), for x > 0.
-pub fn trigamma(mut x: f64) -> f64 {
+pub(crate) fn trigamma(mut x: f64) -> f64 {
     let mut result = 0.0;
 
     // psi'(x) = psi'(x+1) + 1/x^2.
