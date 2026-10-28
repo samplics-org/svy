@@ -30,13 +30,15 @@ if TYPE_CHECKING:
     from svy.size.power import Power
 
 
-def _selected_n(row: dict[str, Any], *, where: str) -> tuple[float, float]:
-    """(n, n_eff) of one stratum; a sample larger than its population is refused."""
-    n = _positive(row["n"], param="n", where=where, hint="n counts the units selected.")
+def _group_n(
+    *, n: Any, deff: Any, resp_rate: Any, pop_size: Any, where: str
+) -> tuple[float, float]:
+    """(n, n_eff) of one group; a sample larger than its population is refused."""
+    n = _positive(n, param="n", where=where, hint="n counts the units selected.")
     deff = _positive(
-        row["deff"], param="deff", where=where, hint="deff must be a positive finite number."
+        deff, param="deff", where=where, hint="deff must be a positive finite number."
     )
-    rr = _number(row["resp_rate"], param="resp_rate", where=where)
+    rr = _number(resp_rate, param="resp_rate", where=where)
     if not 0.0 < rr <= 1.0:
         raise SelectionError.invalid_range(
             where=where,
@@ -46,8 +48,7 @@ def _selected_n(row: dict[str, Any], *, where: str) -> tuple[float, float]:
             max_=1.0,
             hint="resp_rate is a fraction in (0, 1], e.g. 0.85 for 85% response.",
         )
-    pop = row["pop_size"]
-    pop = None if pop is None else _number(pop, param="pop_size", where=where)
+    pop = None if pop_size is None else _number(pop_size, param="pop_size", where=where)
     if pop is not None and n * rr > pop:
         raise SelectionError.ValueError(
             title="Sample larger than the population",
@@ -59,6 +60,16 @@ def _selected_n(row: dict[str, Any], *, where: str) -> tuple[float, float]:
             hint="n counts the units selected; it cannot give more respondents than the population has.",
         )
     return n, effective_n(n=n, resp_rate=rr, deff=deff, pop_size=pop)
+
+
+def _selected_n(row: dict[str, Any], *, where: str) -> tuple[float, float]:
+    return _group_n(
+        n=row["n"],
+        deff=row["deff"],
+        resp_rate=row["resp_rate"],
+        pop_size=row["pop_size"],
+        where=where,
+    )
 
 
 def _finish(pw: Power, *, goal: str, args: dict[str, Any], rows: list[PowerRow]) -> Power:

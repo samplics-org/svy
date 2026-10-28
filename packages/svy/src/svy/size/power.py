@@ -10,6 +10,8 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from svy.core.types import DomainScalarMap, Number
+from svy.size.power_compare_goals import power_compare_means as _power_compare_means
+from svy.size.power_compare_goals import power_compare_props as _power_compare_props
 from svy.size.power_goals import power_test_mean as _power_test_mean
 from svy.size.power_goals import power_test_prop as _power_test_prop
 from svy.size.types import PowerRow, TargetPower
@@ -174,18 +176,132 @@ class Power:
             resp_rate=resp_rate,
         )
 
+    @experimental
+    def compare_means(
+        self,
+        mu1: Number | DomainScalarMap,
+        mu2: Number | DomainScalarMap,
+        sigma1: Number | DomainScalarMap,
+        n: Number | tuple[Number, Number] | DomainScalarMap,
+        *,
+        sigma2: Number | DomainScalarMap | None = None,
+        pop_size: Number | DomainScalarMap | None = None,
+        two_sides: bool = True,
+        delta: Number | DomainScalarMap = 0.0,
+        alloc_ratio: Number | DomainScalarMap = 1.0,
+        method: Literal["wald"] = "wald",
+        alpha: Number | DomainScalarMap = 0.05,
+        deff: Number | DomainScalarMap = 1.0,
+        resp_rate: Number | DomainScalarMap = 1.0,
+        rho: Number | DomainScalarMap = 0.0,
+        overlap: Number | DomainScalarMap = 0.0,
+    ) -> Power:
+        """
+        Power of the z test comparing two means, ``epsilon = mu2 - mu1``.
+
+        ``n`` is the size of group 1 and group 2 has ``alloc_ratio * n``, or ``n`` is the
+        ``(n1, n2)`` pair that ``SampleSize().compare_means`` returns (then leave
+        ``alloc_ratio`` at 1). ``deff``, ``resp_rate`` and ``pop_size`` are one number for
+        both groups or a ``(group 1, group 2)`` pair. ``sigma2=None`` assumes equal
+        variances. ``rho`` and ``overlap`` are as in ``SampleSize.compare_means``. The rest
+        is as in ``test_mean``.
+
+        Raises
+        ------
+        SelectionError
+            ``POWER_N_EXCEEDS_POPULATION`` as in ``test_mean``; ``SIZE_NO_VARIANCE`` when
+            ``rho`` and ``overlap`` leave the difference no variance.
+        UsageError
+            ``PARAM_GIVEN_TWICE`` for an ``n`` pair with ``alloc_ratio != 1``.
+        """
+        return _power_compare_means(
+            self,
+            mu1,
+            mu2,
+            sigma1,
+            n,
+            sigma2=sigma2,
+            pop_size=pop_size,
+            two_sides=two_sides,
+            delta=delta,
+            alloc_ratio=alloc_ratio,
+            method=method,
+            alpha=alpha,
+            deff=deff,
+            resp_rate=resp_rate,
+            rho=rho,
+            overlap=overlap,
+        )
+
+    @experimental
+    def compare_props(
+        self,
+        p1: Number | DomainScalarMap,
+        p2: Number | DomainScalarMap,
+        n: Number | tuple[Number, Number] | DomainScalarMap,
+        *,
+        pop_size: Number | DomainScalarMap | None = None,
+        two_sides: bool = True,
+        delta: Number | DomainScalarMap = 0.0,
+        alloc_ratio: Number | DomainScalarMap = 1.0,
+        method: Literal["wald"] = "wald",
+        alpha: Number | DomainScalarMap = 0.05,
+        var_mode: Literal["alt-props", "pooled-prop", "max-var"] = "alt-props",
+        deff: Number | DomainScalarMap = 1.0,
+        resp_rate: Number | DomainScalarMap = 1.0,
+        rho: Number | DomainScalarMap = 0.0,
+        overlap: Number | DomainScalarMap = 0.0,
+    ) -> Power:
+        """
+        Power of the z test comparing two proportions, ``epsilon = p2 - p1``.
+
+        ``var_mode`` is the variance of the Wald statistic, as in
+        ``SampleSize.compare_props``; ``n``, ``deff``, ``resp_rate``, ``pop_size``,
+        ``rho`` and ``overlap`` are as in ``compare_means``.
+        """
+        return _power_compare_props(
+            self,
+            p1,
+            p2,
+            n,
+            pop_size=pop_size,
+            two_sides=two_sides,
+            delta=delta,
+            alloc_ratio=alloc_ratio,
+            method=method,
+            alpha=alpha,
+            var_mode=var_mode,
+            deff=deff,
+            resp_rate=resp_rate,
+            rho=rho,
+            overlap=overlap,
+        )
+
     # ---------- output ----------
 
     def to_polars(self):
-        """One row per stratum: ``stratum`` (when stratified), ``n``, ``n_eff``, ``effect``, ``power``."""
+        """One row per stratum: ``stratum`` (when stratified), ``n``, ``n_eff``, ``effect``, ``power``.
+
+        A comparison has two groups: ``n1``, ``n2``, ``n_eff1``, ``n_eff2`` replace ``n``, ``n_eff``.
+        """
         import polars as pl
 
         stratified = bool(self._rows) and self._rows[0].stratum is not None
-        cols = (["stratum"] if stratified else []) + list(_COLUMNS)
-        data = {
-            c: [(str(r.stratum) if c == "stratum" else float(getattr(r, c))) for r in self._rows]
-            for c in cols
-        }
+        paired = bool(self._rows) and isinstance(self._rows[0].n, tuple)
+        cols = (["stratum"] if stratified else []) + (
+            ["n1", "n2", "n_eff1", "n_eff2", "effect", "power"] if paired else list(_COLUMNS)
+        )
+
+        def cell(r: PowerRow, c: str):
+            if c == "stratum":
+                return str(r.stratum)
+            if c in ("n1", "n2"):
+                return float(r.n[int(c[-1]) - 1])  # type: ignore[index]
+            if c in ("n_eff1", "n_eff2"):
+                return float(r.n_eff[int(c[-1]) - 1])  # type: ignore[index]
+            return float(getattr(r, c))
+
+        data = {c: [cell(r, c) for r in self._rows] for c in cols}
         return pl.DataFrame(
             data, schema={c: pl.String if c == "stratum" else pl.Float64 for c in cols}
         )

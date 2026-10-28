@@ -1043,6 +1043,23 @@ def _choose_kappa(user_kappa: float | None, default_kappa: float) -> float:
 ## Two MEANS
 
 
+def _no_variance_error(
+    *, rho: float, overlap: float, var: float, where: str = "SampleSize.compare"
+) -> SelectionError:
+    return SelectionError.ValueError(
+        title="No variance left in the change",
+        detail=(
+            f"With rho={rho} and overlap={overlap}, the variance of the difference is "
+            f"{var:.3g} per unit: the two rounds would always agree."
+        ),
+        code=Code.SIZE_NO_VARIANCE,
+        where=where,
+        param="rho",
+        got=rho,
+        hint="Use a correlation below 1, or a partial overlap.",
+    )
+
+
 def _wald_two_group_sizes(
     *,
     v1: Number,
@@ -1068,18 +1085,7 @@ def _wald_two_group_sizes(
     # -2 rho m sqrt(V1 V2) / (n1 n2) to Var(d); per n1 that is the last term.
     var_factor = v1 + float(v2) / k - 2.0 * r * o * min(1.0, k) * math.sqrt(v1 * v2) / k
     if var_factor <= 0.0:
-        raise SelectionError.ValueError(
-            title="No variance left in the change",
-            detail=(
-                f"With rho={r} and overlap={o}, the variance of the difference is "
-                f"{var_factor:.3g} per unit: the two rounds would always agree."
-            ),
-            code=Code.SIZE_NO_VARIANCE,
-            where="SampleSize.compare",
-            param="rho",
-            got=r,
-            hint="Use a correlation below 1, or a partial overlap.",
-        )
+        raise _no_variance_error(rho=r, overlap=o, var=var_factor)
     n1 = _wald_n2_from_varfactor(var_factor=var_factor, denom=float(denom), z_a=z_a, z_b=z_b)
     n2 = int(math.ceil(float(kappa) * n1))
     return n1, n2
