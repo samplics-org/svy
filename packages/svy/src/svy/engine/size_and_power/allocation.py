@@ -150,7 +150,7 @@ def _proportional_allocation(
         raise ValueError("proportional_allocation: total frame size is 0.")
     if n_total <= 0:
         raise ValueError(f"proportional_allocation: n_total must be > 0, got {n_total}.")
-    if n_total > total_pop:
+    if cap_at_population and n_total > total_pop:
         emit_finding(
             SelectionWarning(
                 code=Code.ALLOCATION_EXCEEDS_FRAME,

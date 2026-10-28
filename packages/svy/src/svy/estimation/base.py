@@ -32,7 +32,7 @@ from svy.core.singleton import (
     require_singleton_rule,
     singleton_config,
 )
-from svy.core.types import WhereArg
+from svy.core.types import Number, WhereArg
 from svy.core.variance_method import normalize_variance_method, resolve_variance_method
 from svy.errors import Code, EstimationError, EstimationWarning
 from svy.errors._api import guided_getattr
@@ -41,6 +41,7 @@ from svy.estimation.estimate import (
     Estimate,
     EstimateList,
     ParamEst,
+    as_df,
     label_vars,
     row_counts,
     row_order,
@@ -951,7 +952,7 @@ class Estimation:
                     lci=float(lci_arr[i]),
                     uci=float(uci_arr[i]),
                     deff=float(deff_arr[i]) if deff_arr is not None else None,
-                    df=int(df_arr[i]),
+                    df=as_df(df_arr[i]),
                     by=by_tuple,
                     by_level=by_levels[i],
                     y_level=y_levels[i],
@@ -989,7 +990,7 @@ class Estimation:
                     p=float(est_arr[i]),
                     se=float(se_arr[i]),
                     alpha=alpha,
-                    df=int(df_arr[i]),
+                    df=as_df(df_arr[i]),
                     n=int(n_arr[i]),
                     method=ci_method_norm,
                 )
@@ -1003,7 +1004,7 @@ class Estimation:
                 lci=float(lci_arr[i]),
                 uci=float(uci_arr[i]),
                 deff=float(deff_arr[i]) if deff_arr is not None else None,
-                df=int(df_arr[i]),
+                df=as_df(df_arr[i]),
                 by=by_tuple,
                 by_level=by_levels[i],
                 y_level=y_levels[i],
@@ -1262,7 +1263,7 @@ class Estimation:
                 lci=float(lci_arr[i]),
                 uci=float(uci_arr[i]),
                 deff=None,
-                df=int(df_arr[i]),
+                df=as_df(df_arr[i]),
                 by=by_tuple,
                 by_level=by_levels[i],
                 y_level=None,
@@ -1351,7 +1352,7 @@ class Estimation:
         as_factor,
         method: RepWgts | None = None,
         deff_ref: str | None = None,
-        design_df: int | None = None,
+        design_df: Number | None = None,
         cov_filled: bool = False,
         q_method: _QuantileMethod | None = None,
         findings: Sequence[SvyWarning] = (),

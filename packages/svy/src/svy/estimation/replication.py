@@ -97,7 +97,7 @@ def _get_rep_params(est: Estimation, fay_coef: float = 0.0):
 
 def replicate_params(
     sample: Sample, fay_coef: float = 0.0, *, where: str
-) -> tuple[list[str], int, list[float]]:
+) -> tuple[list[str], float, list[float]]:
     """The replicate-weight columns, the design df and the per-replicate
     variance coefficients."""
     rw = sample._design.rep_wgts
@@ -107,7 +107,7 @@ def replicate_params(
     if not rep_cols:
         raise ValueError("No replicate weight columns found.")
     n_reps = len(rep_cols)
-    df_val = int(rw.df) if rw.df and rw.df > 0 else max(1, n_reps - 1)
+    df_val = rw.df if rw.df and rw.df > 0 else max(1, n_reps - 1)
     # Both coefficient channels are length-checked at construction against the
     # recorded n_reps; this catches the case that check cannot see -- a recorded
     # n_reps that disagrees with the columns actually resolved from the data.

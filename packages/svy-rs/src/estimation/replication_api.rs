@@ -91,7 +91,7 @@ pub(crate) fn replicate_mean(
     rep_weight_cols: Vec<String>,
     rep_coefs: Vec<f64>,
     center: &str,
-    degrees_of_freedom: Option<u32>,
+    degrees_of_freedom: Option<f64>,
     by_col: Option<String>,
     domain_mask_col: Option<String>,
 ) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
@@ -105,7 +105,7 @@ pub(crate) fn replicate_mean(
             expected: n_reps,
         }));
     }
-    let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
+    let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as f64);
 
     let result = _py.detach(|| match by_col.as_ref() {
         None => compute_replicate_mean_ungrouped(
@@ -144,7 +144,7 @@ fn compute_replicate_mean_ungrouped(
     rep_weight_cols: &[String],
     rep_coefs: &[f64],
     center: VarianceCenter,
-    df_val: u32,
+    df_val: f64,
     domain_mask_col: Option<&str>,
 ) -> EResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
@@ -181,7 +181,7 @@ fn compute_replicate_mean_grouped(
     rep_weight_cols: &[String],
     rep_coefs: &[f64],
     center: VarianceCenter,
-    df_val: u32,
+    df_val: f64,
     by_col: &str,
 ) -> EResult<(DataFrame, Vec<f64>)> {
     let y = df.column(value_col)?.f64()?;
@@ -213,7 +213,7 @@ fn compute_replicate_mean_grouped(
     let mut estimates: Vec<f64> = Vec::with_capacity(n_domains);
     let mut ses: Vec<f64> = Vec::with_capacity(n_domains);
     let mut variances: Vec<f64> = Vec::with_capacity(n_domains);
-    let mut dfs: Vec<u32> = Vec::with_capacity(n_domains);
+    let mut dfs: Vec<f64> = Vec::with_capacity(n_domains);
     let mut ns: Vec<u32> = Vec::with_capacity(n_domains);
 
     for (k, domain_name) in domain_names.iter().enumerate() {
@@ -252,7 +252,7 @@ pub(crate) fn replicate_total(
     rep_weight_cols: Vec<String>,
     rep_coefs: Vec<f64>,
     center: &str,
-    degrees_of_freedom: Option<u32>,
+    degrees_of_freedom: Option<f64>,
     by_col: Option<String>,
     domain_mask_col: Option<String>,
 ) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
@@ -266,7 +266,7 @@ pub(crate) fn replicate_total(
             expected: n_reps,
         }));
     }
-    let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
+    let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as f64);
 
     let result = _py.detach(|| match by_col.as_ref() {
         None => compute_replicate_total_ungrouped(
@@ -305,7 +305,7 @@ fn compute_replicate_total_ungrouped(
     rep_weight_cols: &[String],
     rep_coefs: &[f64],
     center: VarianceCenter,
-    df_val: u32,
+    df_val: f64,
     domain_mask_col: Option<&str>,
 ) -> EResult<DataFrame> {
     let y = df.column(value_col)?.f64()?;
@@ -341,7 +341,7 @@ fn compute_replicate_total_grouped(
     rep_weight_cols: &[String],
     rep_coefs: &[f64],
     center: VarianceCenter,
-    df_val: u32,
+    df_val: f64,
     by_col: &str,
 ) -> EResult<(DataFrame, Vec<f64>)> {
     let y = df.column(value_col)?.f64()?;
@@ -373,7 +373,7 @@ fn compute_replicate_total_grouped(
     let mut estimates: Vec<f64> = Vec::with_capacity(n_domains);
     let mut ses: Vec<f64> = Vec::with_capacity(n_domains);
     let mut variances: Vec<f64> = Vec::with_capacity(n_domains);
-    let mut dfs: Vec<u32> = Vec::with_capacity(n_domains);
+    let mut dfs: Vec<f64> = Vec::with_capacity(n_domains);
     let mut ns: Vec<u32> = Vec::with_capacity(n_domains);
 
     for (k, domain_name) in domain_names.iter().enumerate() {
@@ -416,7 +416,7 @@ pub(crate) fn replicate_assoc(
     rep_weight_cols: Vec<String>,
     rep_coefs: Vec<f64>,
     center: &str,
-    degrees_of_freedom: Option<u32>,
+    degrees_of_freedom: Option<f64>,
     by_col: Option<String>,
     domain_mask_col: Option<String>,
 ) -> PyResult<PyDataFrame> {
@@ -436,7 +436,7 @@ pub(crate) fn replicate_assoc(
             x: x_cols.len(),
         }));
     }
-    let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
+    let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as f64);
 
     let result = _py.detach(|| {
         let assoc_kind = AssocKind::from_name(&kind)?;
@@ -467,7 +467,7 @@ fn compute_replicate_assoc(
     rep_weight_cols: &[String],
     rep_coefs: &[f64],
     center: VarianceCenter,
-    df_val: u32,
+    df_val: f64,
     by_col: Option<&str>,
     domain_mask_col: Option<&str>,
 ) -> EResult<DataFrame> {
@@ -600,7 +600,7 @@ pub(crate) fn replicate_ratio(
     rep_weight_cols: Vec<String>,
     rep_coefs: Vec<f64>,
     center: &str,
-    degrees_of_freedom: Option<u32>,
+    degrees_of_freedom: Option<f64>,
     by_col: Option<String>,
     domain_mask_col: Option<String>,
 ) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
@@ -614,7 +614,7 @@ pub(crate) fn replicate_ratio(
             expected: n_reps,
         }));
     }
-    let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
+    let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as f64);
 
     let result = _py.detach(|| match by_col.as_ref() {
         None => compute_replicate_ratio_ungrouped(
@@ -656,7 +656,7 @@ fn compute_replicate_ratio_ungrouped(
     rep_weight_cols: &[String],
     rep_coefs: &[f64],
     center: VarianceCenter,
-    df_val: u32,
+    df_val: f64,
     domain_mask_col: Option<&str>,
 ) -> EResult<DataFrame> {
     let y = df.column(numerator_col)?.f64()?;
@@ -695,7 +695,7 @@ fn compute_replicate_ratio_grouped(
     rep_weight_cols: &[String],
     rep_coefs: &[f64],
     center: VarianceCenter,
-    df_val: u32,
+    df_val: f64,
     by_col: &str,
 ) -> EResult<(DataFrame, Vec<f64>)> {
     let y = df.column(numerator_col)?.f64()?;
@@ -732,7 +732,7 @@ fn compute_replicate_ratio_grouped(
     let mut estimates: Vec<f64> = Vec::with_capacity(n_domains);
     let mut ses: Vec<f64> = Vec::with_capacity(n_domains);
     let mut variances: Vec<f64> = Vec::with_capacity(n_domains);
-    let mut dfs: Vec<u32> = Vec::with_capacity(n_domains);
+    let mut dfs: Vec<f64> = Vec::with_capacity(n_domains);
     let mut ns: Vec<u32> = Vec::with_capacity(n_domains);
 
     for (k, domain_name) in domain_names.iter().enumerate() {
@@ -771,7 +771,7 @@ pub(crate) fn replicate_prop(
     rep_weight_cols: Vec<String>,
     rep_coefs: Vec<f64>,
     center: &str,
-    degrees_of_freedom: Option<u32>,
+    degrees_of_freedom: Option<f64>,
     by_col: Option<String>,
     domain_mask_col: Option<String>,
 ) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
@@ -802,7 +802,7 @@ pub(crate) fn replicate_factor_total(
     rep_weight_cols: Vec<String>,
     rep_coefs: Vec<f64>,
     center: &str,
-    degrees_of_freedom: Option<u32>,
+    degrees_of_freedom: Option<f64>,
     by_col: Option<String>,
     domain_mask_col: Option<String>,
 ) -> PyResult<(PyDataFrame, Option<Vec<f64>>)> {
@@ -831,7 +831,7 @@ fn replicate_levels(
     rep_weight_cols: Vec<String>,
     rep_coefs: Vec<f64>,
     center: &str,
-    degrees_of_freedom: Option<u32>,
+    degrees_of_freedom: Option<f64>,
     by_col: Option<String>,
     domain_mask_col: Option<String>,
     normalize: bool,
@@ -846,7 +846,7 @@ fn replicate_levels(
             expected: n_reps,
         }));
     }
-    let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
+    let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as f64);
 
     let result = _py.detach(|| match by_col.as_ref() {
         None => compute_replicate_prop_ungrouped(
@@ -885,7 +885,7 @@ fn compute_replicate_prop_ungrouped(
     rep_weight_cols: &[String],
     rep_coefs: &[f64],
     center: VarianceCenter,
-    df_val: u32,
+    df_val: f64,
     domain_mask_col: Option<&str>,
     normalize: bool,
 ) -> EResult<(DataFrame, Vec<f64>)> {
@@ -963,7 +963,7 @@ fn compute_replicate_prop_ungrouped(
     ));
     let ses: Vec<f64> = variances.iter().map(|v| v.sqrt()).collect();
     let ns: Vec<u32> = vec![active_count(weights, None); n_levels];
-    let dfs: Vec<u32> = vec![df_val; n_levels];
+    let dfs: Vec<f64> = vec![df_val; n_levels];
     let out = df!["y" => vec![value_col; n_levels], "level" => level_strs, "est" => estimates,
         "se" => ses, "var" => variances, "df" => dfs, "n" => ns]?;
     Ok((out, cov))
@@ -977,7 +977,7 @@ fn compute_replicate_prop_grouped(
     rep_weight_cols: &[String],
     rep_coefs: &[f64],
     center: VarianceCenter,
-    df_val: u32,
+    df_val: f64,
     by_col: &str,
     normalize: bool,
 ) -> EResult<(DataFrame, Vec<f64>)> {
@@ -1050,7 +1050,7 @@ fn compute_replicate_prop_grouped(
     let mut estimates: Vec<f64> = Vec::new();
     let mut ses: Vec<f64> = Vec::new();
     let mut variances: Vec<f64> = Vec::new();
-    let mut dfs: Vec<u32> = Vec::new();
+    let mut dfs: Vec<f64> = Vec::new();
     let mut ns: Vec<u32> = Vec::new();
 
     // Rows and covariance axes share one (domain, level) order: domain-major, levels within.
@@ -1099,7 +1099,7 @@ pub(crate) fn replicate_quantile(
     rep_coefs: Vec<f64>,
     probs: Vec<f64>,
     center: &str,
-    degrees_of_freedom: Option<u32>,
+    degrees_of_freedom: Option<f64>,
     by_col: Option<String>,
     quantile_method: Option<String>,
 ) -> PyResult<PyDataFrame> {
@@ -1119,7 +1119,7 @@ pub(crate) fn replicate_quantile(
         .transpose()
         .map_err(|e| to_py_err(&e))?
         .unwrap_or(SvyQuantileMethod::Higher);
-    let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as u32);
+    let df_val = degrees_of_freedom.unwrap_or(n_reps.saturating_sub(1) as f64);
 
     let result = _py.detach(|| match by_col.as_deref() {
         None => compute_replicate_quantile_ungrouped(
@@ -1160,7 +1160,7 @@ pub(crate) fn replicate_median(
     rep_weight_cols: Vec<String>,
     rep_coefs: Vec<f64>,
     center: &str,
-    degrees_of_freedom: Option<u32>,
+    degrees_of_freedom: Option<f64>,
     by_col: Option<String>,
     quantile_method: Option<String>,
 ) -> PyResult<PyDataFrame> {
@@ -1193,7 +1193,7 @@ fn compute_replicate_quantile_ungrouped(
     rep_weight_cols: &[String],
     rep_coefs: &[f64],
     center: VarianceCenter,
-    df_val: u32,
+    df_val: f64,
     probs: &[f64],
     q_method: SvyQuantileMethod,
 ) -> EResult<DataFrame> {
@@ -1226,7 +1226,7 @@ fn compute_replicate_quantile_grouped(
     rep_weight_cols: &[String],
     rep_coefs: &[f64],
     center: VarianceCenter,
-    df_val: u32,
+    df_val: f64,
     by_col: &str,
     probs: &[f64],
     q_method: SvyQuantileMethod,

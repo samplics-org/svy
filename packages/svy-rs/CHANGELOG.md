@@ -29,6 +29,7 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 - Kernel inputs whose lengths disagree raise `SHAPE_MISMATCH` instead of panicking or zero-padding: GLM and negative binomial fits (weights, design columns, offset, domain mask, predictors) and the t-test and rank-test WOLS. svy always passes equal lengths.
 - `rao_scott` returns NaN statistics instead of panicking on NaN proportions or a failed SVD, and instead of 0 and p = 1 when the test is undefined. The Taylor design df no longer underflows when strata outnumber PSUs.
 - `tabulate_rs` gives a NaN SE for a NaN cell share, Taylor and replication, instead of 0.
+- The `replicate_*` kernels take `degrees_of_freedom` as a float and return the `df` column as `Float64`, so a fractional replicate df is no longer truncated (was `u32`). `tabulate_rs` returns its cells' `df` as `Float64` too, Taylor and replication.
 - `ttest_rs` and `ranktest_rs` with `by_col` give a NaN row for a by-group with no weight or fewer than the groups the test needs.
 - `scores_corr` returns zero scores for a constant column instead of an error, and `taylor_assoc` reports a NaN SE, variance and deff for any NaN estimate.
 - `adjust_nr` returns `WeightingError::NoRespondents` when the full-sample column (column 0) has a class with nonrespondent or unknown weight but no units to carry it, instead of a factor of 1. Replicate columns keep the factor of 1.

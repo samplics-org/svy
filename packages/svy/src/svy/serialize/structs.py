@@ -21,7 +21,7 @@ import msgspec
 # Constants
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = "svy-result/0.11"
+SCHEMA_VERSION = "svy-result/0.12"
 
 #: A design is an input, read back into a live ``Design``: its own schema.
 DESIGN_SCHEMA_VERSION = "svy-design/0.1"
@@ -111,7 +111,7 @@ class ParamEstData(msgspec.Struct, kw_only=True, frozen=True):
     x: str | None = None
     x_level: CatValue | None = None
     deff: float | None = None
-    df: int | None = None
+    df: int | float | None = None
     prob: float | None = None
     n: int | None = None
 

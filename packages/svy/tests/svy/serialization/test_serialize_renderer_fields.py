@@ -54,7 +54,7 @@ def _round_trip(result):
 
 
 def test_schema_version():
-    assert SCHEMA_VERSION == "svy-result/0.11"
+    assert SCHEMA_VERSION == "svy-result/0.12"
 
 
 class TestTableUnits:
