@@ -44,6 +44,7 @@ KEEP = [
     "RE",
     "estd",
     "SampleSize",
+    "Power",
     "TargetMean",
     "TargetProp",
     "TargetTwoMeans",

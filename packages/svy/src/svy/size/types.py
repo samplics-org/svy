@@ -94,6 +94,45 @@ class TargetTwoMeans(msgspec.Struct, frozen=True, tag="two_mean"):
     overlap: NumberOrMap = 0.0
 
 
+class TargetTestMean(msgspec.Struct, frozen=True, tag="test_mean"):
+    """Every argument ``test_mean`` was called with."""
+
+    mu0: NumberOrMap
+    mu1: NumberOrMap
+    sigma: NumberOrMap
+    alpha: NumberOrMap = 0.05
+    power: NumberOrMap = 0.80
+    method: str = "wald"
+    two_sides: bool = True
+    delta: NumberOrMap = 0.0
+    pop_size: NumberOrMap | None = None
+    deff: NumberOrMap = 1.0
+    resp_rate: NumberOrMap = 1.0
+
+
+class TargetTestProp(msgspec.Struct, frozen=True, tag="test_prop"):
+    """Every argument ``test_prop`` was called with."""
+
+    p0: NumberOrMap
+    p1: NumberOrMap
+    alpha: NumberOrMap = 0.05
+    power: NumberOrMap = 0.80
+    method: str = "wald"
+    two_sides: bool = True
+    delta: NumberOrMap = 0.0
+    pop_size: NumberOrMap | None = None
+    deff: NumberOrMap = 1.0
+    resp_rate: NumberOrMap = 1.0
+
+
+class TargetPower(msgspec.Struct, frozen=True, tag="power"):
+    """The goal a ``Power`` call answered and every argument it got."""
+
+    goal: str  # "test_mean" | "test_prop" | "compare_means" | "compare_props"
+    solve: str = "power"  # "power" | "effect"
+    args: dict[str, Any] = msgspec.field(default_factory=dict)
+
+
 class TargetAllocation(msgspec.Struct, frozen=True, tag="allocation"):
     n: int
     method: str = "proportional"
@@ -104,7 +143,15 @@ class TargetAllocation(msgspec.Struct, frozen=True, tag="allocation"):
     from_n: Number | None = None
 
 
-Target = TargetProp | TargetMean | TargetTwoProps | TargetTwoMeans | TargetAllocation
+Target = (
+    TargetProp
+    | TargetMean
+    | TargetTwoProps
+    | TargetTwoMeans
+    | TargetTestMean
+    | TargetTestProp
+    | TargetAllocation
+)
 
 
 # =============================================================================
@@ -120,6 +167,18 @@ class Size(msgspec.Struct, frozen=True, tag="size"):
     n1_deff: Number | tuple[Number, Number] | None = None  # after DEFF
     n2_fpc: Number | tuple[Number, Number] | None = None  # after FPC (if pop_size provided)
     n: Number | tuple[Number, Number] = 0  # final after nonresponse adjustment
+
+
+class PowerRow(msgspec.Struct, frozen=True, tag="power_row"):
+    """One stratum's power: ``n`` selected units, the ``n_eff`` they are worth, and the result."""
+
+    stratum: Any = None
+    n: Number | tuple[Number, Number] = 0  # units selected, as given; (n1, n2) for two groups
+    n_eff: Number | tuple[Number, Number] = (
+        0  # after nonresponse, FPC and deff: the n of the z formulas
+    )
+    effect: Number = 0  # signed alt - null
+    power: float = 0.0
 
 
 class Allocation(msgspec.Struct, frozen=True, tag="allocation"):
