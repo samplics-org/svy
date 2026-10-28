@@ -574,7 +574,7 @@ def calibrate_matrix(
         raise WeightingError.wgt_name_exists(
             where=where, method="calibrate", wgt_name=wgt_name, existing=df.columns
         )
-    w = df.get_column(wgt_col).to_numpy()
+    w = df.get_column(wgt_col).to_numpy().astype(np.float64)
 
     X = np.asarray(aux_vars, dtype=float)
     if X.ndim == 1:
@@ -879,7 +879,7 @@ def calibrate_matrix(
     rep_missed: dict[str, dict[str, Any]] = {}
     if not ignore_reps and design.rep_wgts is not None and design.rep_wgts.columns:
         rep_cols = design.rep_wgts.columns
-        wgts_arr = df.select(rep_cols).to_numpy()
+        wgts_arr = df.select(rep_cols).to_numpy().astype(np.float64)
 
         if isinstance(scale, (int, float)):
             scale_arr = np.full(len(w), float(scale), dtype=np.float64)

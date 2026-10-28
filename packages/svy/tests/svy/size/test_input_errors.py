@@ -105,6 +105,12 @@ def test_options_ignore_case_and_spaces():
     assert S().compare_props(p1=0.5, p2=0.4, var_mode="Max-Var").n is not None
 
 
+@pytest.mark.parametrize("member", list(svy.enums.OnePropSizeMethod))
+def test_every_one_prop_size_method_is_accepted(member):
+    # n = ceil(1.96^2 * 0.25 / 0.1^2) = 97 for Wald; Fleiss's continuity term adds to it.
+    assert S().estimate_prop(p=0.5, moe=0.1, method=member.value).n >= 97.0
+
+
 # ---- Fleiss near its bound ------------------------------------------------------------
 
 
