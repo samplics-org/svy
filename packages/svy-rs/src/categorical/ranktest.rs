@@ -182,8 +182,6 @@ pub struct RankTestTwoResult {
     pub p_value: f64,
     /// Sorted.
     pub levels: Vec<String>,
-    pub group_means: Vec<f64>,
-    pub group_ses: Vec<f64>,
     pub n_obs: usize,
 }
 
@@ -200,8 +198,6 @@ pub struct RankTestKResult {
     pub p_value: f64,
     /// Sorted.
     pub levels: Vec<String>,
-    pub group_means: Vec<f64>,
-    pub group_ses: Vec<f64>,
     pub n_obs: usize,
 }
 
@@ -270,9 +266,6 @@ pub fn ranktest_two_sample(
 
     let p_value = two_sided_t_pvalue(t_stat, df);
 
-    let group_means = vec![wols.beta[0], wols.beta[0] + wols.beta[1]];
-    let group_ses = vec![ses[0], ses[1]]; // approximate
-
     Ok(RankTestTwoResult {
         delta,
         se: se_delta,
@@ -280,8 +273,6 @@ pub fn ranktest_two_sample(
         df,
         p_value,
         levels,
-        group_means,
-        group_ses,
         n_obs: n,
     })
 }
@@ -370,28 +361,6 @@ pub fn ranktest_k_sample(
     let f_stat = chisq / ndf as f64;
     let p_value = f_survival(f_stat, ndf as f64, ddf);
 
-    let ses = influence_se(
-        &wols.influence,
-        w,
-        n,
-        k,
-        strata,
-        psu,
-        ssu,
-        fpc,
-        fpc_ssu,
-        singleton_method,
-        None,
-        active.as_deref(),
-    )?;
-
-    let mut group_means = vec![wols.beta[0]]; // reference group mean
-    let mut group_ses = vec![ses[0]];
-    for (&b, &se) in wols.beta[1..k].iter().zip(&ses[1..k]) {
-        group_means.push(wols.beta[0] + b);
-        group_ses.push(se); // approximate
-    }
-
     Ok(RankTestKResult {
         ndf,
         ddf,
@@ -399,8 +368,6 @@ pub fn ranktest_k_sample(
         f_stat,
         p_value,
         levels,
-        group_means,
-        group_ses,
         n_obs: n,
     })
 }
@@ -482,8 +449,6 @@ pub fn ranktest_two_sample_rep(
         df,
         p_value: two_sided_t_pvalue(t_stat, df),
         levels,
-        group_means: vec![beta[0], beta[0] + beta[1]],
-        group_ses: ses,
         n_obs: n,
     })
 }
@@ -523,12 +488,6 @@ pub fn ranktest_k_sample_rep(
     };
     let ddf = (spec.df - ndf as f64).max(1.0);
     let f_stat = chisq / ndf as f64;
-    let mut group_means = vec![beta[0]];
-    let mut group_ses = vec![cov[0][0].max(0.0).sqrt()];
-    for j in 1..n_groups {
-        group_means.push(beta[0] + beta[j]);
-        group_ses.push(cov[j][j].max(0.0).sqrt());
-    }
     Ok(RankTestKResult {
         ndf,
         ddf,
@@ -536,8 +495,6 @@ pub fn ranktest_k_sample_rep(
         f_stat,
         p_value: f_survival(f_stat, ndf as f64, ddf),
         levels,
-        group_means,
-        group_ses,
         n_obs: n,
     })
 }
