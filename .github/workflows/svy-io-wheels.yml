@@ -1,9 +1,17 @@
 name: Build and Publish svy-io Wheels
 
+# Release tags and manual runs build every platform. A pull request builds the Linux x86_64
+# wheel only, which keeps the release build path tested without five ~10-minute jobs; main
+# builds every platform after a merge, so a Windows or macOS break shows up before release.
 on:
   push:
+    branches: [main]
     tags:
       - "svy-io-v[0-9]+.[0-9]+.[0-9]+*"
+    # Not applied to tag pushes.
+    paths:
+      - "packages/svy-io/**"
+      - ".github/workflows/svy-io-wheels.yml"
   pull_request:
     paths:
       - "packages/svy-io/**"
@@ -14,39 +22,39 @@ permissions:
   contents: read
 
 jobs:
+  platforms:
+    name: Platforms
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.pick.outputs.include }}
+    steps:
+      - id: pick
+        # macOS x86_64 is cross-compiled on the arm64 runner: GitHub's Intel macos-13
+        # runners are scarce and being retired.
+        env:
+          ALL: >-
+            [{"name": "linux-x86_64", "os": "ubuntu-22.04", "target": "x86_64-unknown-linux-gnu"},
+            {"name": "linux-aarch64", "os": "ubuntu-24.04-arm", "target": "aarch64-unknown-linux-gnu"},
+            {"name": "macos-arm64", "os": "macos-14", "target": "aarch64-apple-darwin"},
+            {"name": "macos-x86_64", "os": "macos-14", "target": "x86_64-apple-darwin"},
+            {"name": "windows-amd64", "os": "windows-latest", "target": "x86_64-pc-windows-msvc"}]
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            include=$(jq -c '[.[] | select(.name == "linux-x86_64")]' <<<"$ALL")
+          else
+            include=$(jq -c '.' <<<"$ALL")
+          fi
+          echo "include=$include" >> "$GITHUB_OUTPUT"
+
   build-wheels:
     name: Wheels (${{ matrix.name }})
+    needs: platforms
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # --- Linux x86_64 ---
-          - name: linux-x86_64
-            os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-
-          # --- Linux aarch64 (native ARM runner) ---
-          - name: linux-aarch64
-            os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-
-          # --- macOS (Apple Silicon) ---
-          - name: macos-arm64
-            os: macos-14
-            target: aarch64-apple-darwin
-
-          # --- macOS (Intel) — cross-compiled on the arm64 runner ---
-          # GitHub's Intel macos-13 runners are scarce/being retired, so build
-          # x86_64 on macos-14 via --target instead of a native Intel job.
-          - name: macos-x86_64
-            os: macos-14
-            target: x86_64-apple-darwin
-
-          # --- Windows ---
-          - name: windows-amd64
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
+        include: ${{ fromJSON(needs.platforms.outputs.include) }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
