@@ -6,6 +6,7 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ### Changed
 
+- `taylor_api`, `glm` and `categorical::api` are directory modules split along their old sections; every path stays the same and no code changed. `taylor.rs` stays one file: splitting it cost 3–7% on the Taylor kernels.
 - Kernel items are `pub(crate)`, enforced by `unreachable_pub`; the benches reach their kernels through `_internal::bench`. Removed, unused: `RepMethod` and `replicate_coefficients` (the coefficients come from Python's `RepWgts`), the `matrix_*` quantile/median replicate path, and the old Taylor quantile, median and Woodruff helpers.
 - **BREAKING: an unknown singleton method, quantile method or rank score raises** `INVALID_CHOICE` instead of falling back to none, `higher` or Wilcoxon; so does a singleton suffix other than `:domains`. `"none"` is accepted explicitly. svy only sends valid names.
 - **Calibration solves the unit-diagonal system `D A D`** (`D = diag(A)^-1/2`) in both the Gaussian solve and its pseudo-inverse fallback, so the units of the weights and auxiliaries no longer decide whether a system counts as singular. Redundant controls with inconsistent totals gave results that changed with the units (rounding noise from 1e3 up); they now get one answer at every scale, the minimum-norm solution of the scaled system rather than R `ginv`'s on the unscaled one. Consistent controls are unchanged.

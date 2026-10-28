@@ -1,13 +1,8 @@
 use arrow::array::*;
-use arrow::datatypes::{
-    DataType, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type,
-    UInt16Type, UInt32Type, UInt64Type,
-};
-use arrow::ipc::reader::FileReader;
+use arrow::datatypes::DataType;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use std::ffi::CString;
-use std::io::Cursor;
 use std::path::Path;
 
 use readstat_sys::{
@@ -20,85 +15,11 @@ use readstat_sys::{
     readstat_writer_set_table_name,
 };
 
-use crate::core::{OutputFile, WriterGuard, data_writer_cb, write_rc};
 use crate::errors::{Error, Op, Result};
-
-#[inline]
-fn is_text_dt(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-    )
-}
-
-fn get_string_value(arr: &dyn Array, row: usize) -> Option<&str> {
-    if arr.is_null(row) {
-        return None;
-    }
-    if let Some(s) = arr.as_any().downcast_ref::<StringArray>() {
-        Some(s.value(row))
-    } else if let Some(s) = arr.as_any().downcast_ref::<LargeStringArray>() {
-        Some(s.value(row))
-    } else if let Some(s) = arr.as_any().downcast_ref::<StringViewArray>() {
-        Some(s.value(row))
-    } else if matches!(arr.data_type(), DataType::Dictionary(_, _)) {
-        dict_string_at_any(arr, row)
-    } else {
-        None
-    }
-}
-
-fn dict_string_at_any(a: &dyn Array, row: usize) -> Option<&str> {
-    macro_rules! try_dict {
-        ($T:ty) => {{
-            if let Some(d) = a.as_any().downcast_ref::<DictionaryArray<$T>>() {
-                if !is_text_dt(d.values().data_type()) || d.is_null(row) {
-                    return None;
-                }
-                // A corrupt dictionary can hold a negative or out-of-range key; `as usize` would wrap.
-                let key_usize = usize::try_from(d.keys().value(row)).ok()?;
-                let values = d.values();
-                if key_usize >= values.len() {
-                    return None;
-                }
-                return get_string_value(values.as_ref(), key_usize);
-            }
-        }};
-    }
-    try_dict!(Int8Type);
-    try_dict!(Int16Type);
-    try_dict!(Int32Type);
-    try_dict!(Int64Type);
-    try_dict!(UInt8Type);
-    try_dict!(UInt16Type);
-    try_dict!(UInt32Type);
-    try_dict!(UInt64Type);
-    None
-}
-
-fn as_f64_opt(arr: &dyn Array, row: usize) -> Option<f64> {
-    if arr.is_null(row) {
-        return None;
-    }
-    match arr.data_type() {
-        DataType::Float64 => Some(arr.as_primitive::<Float64Type>().value(row)),
-        DataType::Float32 => Some(arr.as_primitive::<Float32Type>().value(row) as f64),
-        DataType::Int64 => Some(arr.as_primitive::<Int64Type>().value(row) as f64),
-        DataType::Int32 => Some(arr.as_primitive::<Int32Type>().value(row) as f64),
-        DataType::Int16 => Some(arr.as_primitive::<Int16Type>().value(row) as f64),
-        DataType::Int8 => Some(arr.as_primitive::<Int8Type>().value(row) as f64),
-        DataType::UInt64 => Some(arr.as_primitive::<UInt64Type>().value(row) as f64),
-        DataType::UInt32 => Some(arr.as_primitive::<UInt32Type>().value(row) as f64),
-        DataType::UInt16 => Some(arr.as_primitive::<UInt16Type>().value(row) as f64),
-        DataType::UInt8 => Some(arr.as_primitive::<UInt8Type>().value(row) as f64),
-        DataType::Boolean => Some(if arr.as_boolean().value(row) {
-            1.0
-        } else {
-            0.0
-        }),
-        _ => None,
-    }
-}
+use crate::write_common::{
+    OutputFile, WriterGuard, as_f64_opt, data_writer_cb, get_string_value, ipc_to_batches,
+    is_text_dt, write_rc,
+};
 
 fn write_xpt_impl(
     ipc_bytes: &[u8],
@@ -109,15 +30,8 @@ fn write_xpt_impl(
 ) -> Result<()> {
     let ipc_err =
         |e: arrow::error::ArrowError| Error::Invalid(format!("Arrow IPC decode failed: {e}"));
-    let reader = FileReader::try_new(Cursor::new(ipc_bytes), None).map_err(ipc_err)?;
-    let schema = reader.schema();
-    let mut batches: Vec<_> = reader
-        .collect::<std::result::Result<_, _>>()
-        .map_err(ipc_err)?;
-    // A zero-row frame arrives with no batches; the writer still needs its columns.
-    if batches.is_empty() {
-        batches.push(RecordBatch::new_empty(schema.clone()));
-    }
+    let batches = ipc_to_batches(ipc_bytes).map_err(ipc_err)?;
+    let schema = batches[0].schema();
 
     // SAFETY: no preconditions; a null result is checked below.
     let writer = unsafe { readstat_writer_init() };

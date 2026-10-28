@@ -6,6 +6,7 @@ mod spss_read;
 mod spss_write;
 mod stata_read;
 mod stata_write;
+mod write_common;
 mod xpt_read;
 mod xpt_write;
 
