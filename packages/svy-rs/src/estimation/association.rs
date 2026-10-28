@@ -1101,6 +1101,7 @@ pub fn replicate_association(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::{abs_diff_eq, assert_abs_diff_eq};
 
     fn fc(name: &str, v: &[f64]) -> Float64Chunked {
         Float64Chunked::from_slice(name.into(), v)
@@ -1142,11 +1143,11 @@ mod tests {
         let ws = w.cont_slice().unwrap();
         let (sw, m_yy, m_xx, m_yx, mean_y) = reference(ys, xs, ws);
 
-        assert!((m.sum_w - sw).abs() < 1e-12);
-        assert!((m.mean_y - mean_y).abs() < 1e-12);
-        assert!((m.m_yy - m_yy).abs() < 1e-12);
-        assert!((m.m_xx - m_xx).abs() < 1e-12);
-        assert!((m.m_yx - m_yx).abs() < 1e-12);
+        assert_abs_diff_eq!(m.sum_w, sw, epsilon = 1e-12);
+        assert_abs_diff_eq!(m.mean_y, mean_y, epsilon = 1e-12);
+        assert_abs_diff_eq!(m.m_yy, m_yy, epsilon = 1e-12);
+        assert_abs_diff_eq!(m.m_xx, m_xx, epsilon = 1e-12);
+        assert_abs_diff_eq!(m.m_yx, m_yx, epsilon = 1e-12);
         assert_eq!(m.n, 6);
     }
 
@@ -1154,7 +1155,7 @@ mod tests {
     fn test_corr_of_variable_with_itself_is_one() {
         let (y, _, w) = fixture();
         let r = point_estimate_corr(&y, &y, &w).unwrap();
-        assert!((r - 1.0).abs() < 1e-12, "corr(y,y) = {r}");
+        assert!(abs_diff_eq!(r, 1.0, epsilon = 1e-12), "corr(y,y) = {r}");
     }
 
     #[test]
@@ -1164,7 +1165,7 @@ mod tests {
         let m = bivar_moments(&y, &y, &w, None).unwrap();
         let expected = m.m_yy * (m.n as f64 / (m.n as f64 - 1.0));
         assert!(
-            (c - expected).abs() < 1e-12,
+            abs_diff_eq!(c, expected, epsilon = 1e-12),
             "cov(y,y) = {c}, var = {expected}"
         );
     }
@@ -1196,7 +1197,10 @@ mod tests {
             .collect();
         let shifted = point_estimate_corr(&fc("y", &ys), &fc("x", &xs), &w).unwrap();
 
-        assert!((base - shifted).abs() < 1e-12, "{base} vs {shifted}");
+        assert!(
+            abs_diff_eq!(base, shifted, epsilon = 1e-12),
+            "{base} vs {shifted}"
+        );
     }
 
     /// The two-pass kernel must survive a large offset that would destroy the
@@ -1212,7 +1216,7 @@ mod tests {
         let offset = point_estimate_corr(&fc("y", &ys), &fc("x", &xs), &w).unwrap();
 
         assert!(
-            (base - offset).abs() < 1e-9,
+            abs_diff_eq!(base, offset, epsilon = 1e-9),
             "offset broke stability: {base} vs {offset}"
         );
     }
@@ -1224,7 +1228,10 @@ mod tests {
         let (y, x, w) = fixture();
         let s = scores_corr(&y, &x, &w).unwrap();
         let total: f64 = s.cont_slice().unwrap().iter().sum();
-        assert!(total.abs() < 1e-14, "scores summed to {total}");
+        assert!(
+            abs_diff_eq!(total, 0.0, epsilon = 1e-14),
+            "scores summed to {total}"
+        );
     }
 
     #[test]
@@ -1232,7 +1239,10 @@ mod tests {
         let (y, x, w) = fixture();
         let s = scores_cov(&y, &x, &w).unwrap();
         let total: f64 = s.cont_slice().unwrap().iter().sum();
-        assert!(total.abs() < 1e-12, "scores summed to {total}");
+        assert!(
+            abs_diff_eq!(total, 0.0, epsilon = 1e-12),
+            "scores summed to {total}"
+        );
     }
 
     /// Zero-weight rows must not shift the estimate and must not inflate `n`;
@@ -1252,8 +1262,8 @@ mod tests {
         let padded = bivar_moments(&fc("y", &ys), &fc("x", &xs), &fc("w", &ws), None).unwrap();
 
         assert_eq!(base.n, padded.n, "zero-weight rows must not count toward n");
-        assert!((base.corr() - padded.corr()).abs() < 1e-12);
-        assert!((base.cov() - padded.cov()).abs() < 1e-12);
+        assert_abs_diff_eq!(base.corr(), padded.corr(), epsilon = 1e-12);
+        assert_abs_diff_eq!(base.cov(), padded.cov(), epsilon = 1e-12);
     }
 
     /// A domain restricted to a subset must reproduce the estimate computed on
@@ -1271,7 +1281,10 @@ mod tests {
         )
         .unwrap();
 
-        assert!((dom - sub).abs() < 1e-12, "domain {dom} vs subset {sub}");
+        assert!(
+            abs_diff_eq!(dom, sub, epsilon = 1e-12),
+            "domain {dom} vs subset {sub}"
+        );
     }
 
     /// Out-of-domain rows carry a zero score so the vector stays aligned with
@@ -1287,7 +1300,10 @@ mod tests {
             "tail not zeroed: {vals:?}"
         );
         let total: f64 = vals.iter().sum();
-        assert!(total.abs() < 1e-14, "in-domain scores summed to {total}");
+        assert!(
+            abs_diff_eq!(total, 0.0, epsilon = 1e-14),
+            "in-domain scores summed to {total}"
+        );
     }
 
     /// A constant column has no correlation to report; the ungrouped path says
@@ -1353,10 +1369,16 @@ mod tests {
     fn test_golden_cov_matches_r_svyvar() {
         let (y, x, w) = (fc("y", &G_Y), fc("x", &G_X), fc("w", &G_W));
         let est = point_estimate_cov(&y, &x, &w).unwrap();
-        assert!((est - 50.138658078368209).abs() < 1e-11, "cov est = {est}");
+        assert!(
+            abs_diff_eq!(est, 50.138658078368209, epsilon = 1e-11),
+            "cov est = {est}"
+        );
 
         let se = se_of(&scores_cov(&y, &x, &w).unwrap(), None, Some(&golden_psu()));
-        assert!((se - 21.498361515848689).abs() < 1e-9, "cov se = {se}");
+        assert!(
+            abs_diff_eq!(se, 21.498361515848689, epsilon = 1e-9),
+            "cov se = {se}"
+        );
     }
 
     /// The diagonal of `svyvar` is the variance, so cov(y,y) must reproduce it
@@ -1366,10 +1388,16 @@ mod tests {
     fn test_golden_variance_matches_r_svyvar_diagonal() {
         let (y, w) = (fc("y", &G_Y), fc("w", &G_W));
         let est = point_estimate_cov(&y, &y, &w).unwrap();
-        assert!((est - 139.54576489533011).abs() < 1e-11, "var est = {est}");
+        assert!(
+            abs_diff_eq!(est, 139.54576489533011, epsilon = 1e-11),
+            "var est = {est}"
+        );
 
         let se = se_of(&scores_cov(&y, &y, &w).unwrap(), None, Some(&golden_psu()));
-        assert!((se - 37.342191100127813).abs() < 1e-9, "var se = {se}");
+        assert!(
+            abs_diff_eq!(se, 37.342191100127813, epsilon = 1e-9),
+            "var se = {se}"
+        );
     }
 
     /// The decisive test for the correlation linearization: R computes this SE
@@ -1381,12 +1409,15 @@ mod tests {
         let (y, x, w) = (fc("y", &G_Y), fc("x", &G_X), fc("w", &G_W));
         let est = point_estimate_corr(&y, &x, &w).unwrap();
         assert!(
-            (est - 0.52860852253793722).abs() < 1e-12,
+            abs_diff_eq!(est, 0.52860852253793722, epsilon = 1e-12),
             "corr est = {est}"
         );
 
         let se = se_of(&scores_corr(&y, &x, &w).unwrap(), None, Some(&golden_psu()));
-        assert!((se - 0.15921590459764234).abs() < 1e-11, "corr se = {se}");
+        assert!(
+            abs_diff_eq!(se, 0.15921590459764234, epsilon = 1e-11),
+            "corr se = {se}"
+        );
     }
 
     /// Stratification is handled by the shared variance kernel, but the score
@@ -1401,7 +1432,7 @@ mod tests {
             Some(&golden_psu()),
         );
         assert!(
-            (se - 23.178556453025269).abs() < 1e-9,
+            abs_diff_eq!(se, 23.178556453025269, epsilon = 1e-9),
             "stratified cov se = {se}"
         );
     }
@@ -1431,7 +1462,7 @@ mod tests {
             };
             let deff = design / srs;
             assert!(
-                (deff - 1.0).abs() < 1e-4,
+                abs_diff_eq!(deff, 1.0, epsilon = 1e-4),
                 "{kind:?}: deff under SRS = {deff}"
             );
         }
@@ -1468,7 +1499,7 @@ mod tests {
         let base = deff(&y, &x);
         let scaled = deff(&y2, &x2);
         assert!(
-            (base - scaled).abs() < 1e-9,
+            abs_diff_eq!(base, scaled, epsilon = 1e-9),
             "deff moved under rescaling: {base} vs {scaled}"
         );
     }
@@ -1512,7 +1543,7 @@ mod tests {
         let ratio = srs / normal_theory;
 
         assert!(
-            (ratio - 1.0).abs() < 0.10,
+            abs_diff_eq!(ratio, 1.0, epsilon = 0.10),
             "empirical SRS variance {srs:.3e} vs normal theory {normal_theory:.3e} (ratio {ratio:.4})"
         );
     }
@@ -1532,7 +1563,10 @@ mod tests {
         ws.extend_from_slice(&[0.0, 0.0]);
         let padded = srs_variance_corr(&fc("y", &ys), &fc("x", &xs), &fc("w", &ws)).unwrap();
 
-        assert!((base - padded).abs() < 1e-12, "{base} vs {padded}");
+        assert!(
+            abs_diff_eq!(base, padded, epsilon = 1e-12),
+            "{base} vs {padded}"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -1558,13 +1592,13 @@ mod tests {
             for l in 0..3 {
                 let pair = bivar_moments(cols[j], cols[l], &w, None).unwrap();
                 assert!(
-                    (mm.corr(j, l) - pair.corr()).abs() < 1e-12,
+                    abs_diff_eq!(mm.corr(j, l), pair.corr(), epsilon = 1e-12),
                     "corr({j},{l}): {} vs {}",
                     mm.corr(j, l),
                     pair.corr()
                 );
                 assert!(
-                    (mm.cov(j, l) - pair.cov()).abs() < 1e-10,
+                    abs_diff_eq!(mm.cov(j, l), pair.cov(), epsilon = 1e-10),
                     "cov({j},{l}): {} vs {}",
                     mm.cov(j, l),
                     pair.cov()
@@ -1581,11 +1615,11 @@ mod tests {
         let mm = multi_moments(&[&y, &x], &w, None).unwrap();
         assert_eq!(mm.moment(0, 1).to_bits(), mm.moment(1, 0).to_bits());
         for j in 0..2 {
-            assert!((mm.corr(j, j) - 1.0).abs() < 1e-12);
+            assert_abs_diff_eq!(mm.corr(j, j), 1.0, epsilon = 1e-12);
         }
         // Diagonal covariance is the variance R reports on svyvar's diagonal.
-        assert!((mm.cov(0, 0) - 139.54576489533011).abs() < 1e-10);
-        assert!((mm.cov(0, 1) - 50.138658078368209).abs() < 1e-10);
+        assert_abs_diff_eq!(mm.cov(0, 0), 139.54576489533011, epsilon = 1e-10);
+        assert_abs_diff_eq!(mm.cov(0, 1), 50.138658078368209, epsilon = 1e-10);
     }
 
     /// A row missing in ANY column leaves the whole matrix, matching how
@@ -1603,7 +1637,7 @@ mod tests {
         let w = fc("w", &[1.0, 1.0, 1.0, 1.0]);
         let mm = multi_moments(&[&y, &x], &w, None).unwrap();
         assert_eq!(mm.n, 3, "row with a null in x must leave the matrix");
-        assert!((mm.sum_w - 3.0).abs() < 1e-12);
+        assert_abs_diff_eq!(mm.sum_w, 3.0, epsilon = 1e-12);
     }
 
     // ------------------------------------------------------------------
@@ -1658,7 +1692,10 @@ mod tests {
         let got = replicate_association(&p, &cols, AssocKind::Cov);
 
         for (r, (g, e)) in got.iter().zip(R_COV_REPS.iter()).enumerate() {
-            assert!((g - e).abs() < 1e-10, "replicate {r}: {g} vs R {e}");
+            assert!(
+                abs_diff_eq!(g, e, epsilon = 1e-10),
+                "replicate {r}: {g} vs R {e}"
+            );
         }
     }
 
@@ -1671,7 +1708,10 @@ mod tests {
         let got = replicate_association(&p, &cols, AssocKind::Corr);
 
         for (r, (g, e)) in got.iter().zip(R_CORR_REPS.iter()).enumerate() {
-            assert!((g - e).abs() < 1e-12, "replicate {r}: {g} vs R {e}");
+            assert!(
+                abs_diff_eq!(g, e, epsilon = 1e-12),
+                "replicate {r}: {g} vs R {e}"
+            );
         }
     }
 
@@ -1687,7 +1727,10 @@ mod tests {
             let rw = fc("rw", &rep);
             let direct = point_estimate_corr(&y, &x, &rw).unwrap();
             let fast = p.estimate(&rep, AssocKind::Corr);
-            assert!((direct - fast).abs() < 1e-12, "{direct} vs {fast}");
+            assert!(
+                abs_diff_eq!(direct, fast, epsilon = 1e-12),
+                "{direct} vs {fast}"
+            );
         }
     }
 
@@ -1707,9 +1750,12 @@ mod tests {
         let ratio = per_replicate_n / fast;
         let expected_drift = (21.0 / 20.0) / (24.0 / 23.0);
 
-        assert!((fast - R_COV_REPS[0]).abs() < 1e-10, "fixed-n must match R");
         assert!(
-            (ratio - expected_drift).abs() < 1e-9,
+            abs_diff_eq!(fast, R_COV_REPS[0], epsilon = 1e-10),
+            "fixed-n must match R"
+        );
+        assert!(
+            abs_diff_eq!(ratio, expected_drift, epsilon = 1e-9),
             "per-replicate n drifts by {ratio}, confirming why n is held fixed"
         );
     }
@@ -1729,7 +1775,7 @@ mod tests {
         let m = bivar_moments(&y, &x, &w, None).unwrap();
         assert_eq!(m.n, 3, "null row must not count toward n");
         assert!(
-            (m.sum_w - 3.0).abs() < 1e-12,
+            abs_diff_eq!(m.sum_w, 3.0, epsilon = 1e-12),
             "null row must not add weight"
         );
     }

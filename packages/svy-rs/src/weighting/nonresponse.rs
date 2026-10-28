@@ -206,14 +206,14 @@ mod tests {
         .unwrap();
 
         // RR should get weight * (RR+NR)/RR = 1.0 * 3/2 = 1.5
-        assert_relative_eq!(result[[0, 0]], 1.5, epsilon = 1e-6);
-        assert_relative_eq!(result[[1, 0]], 1.5, epsilon = 1e-6);
+        assert_relative_eq!(result[[0, 0]], 1.5, epsilon = 1e-12);
+        assert_relative_eq!(result[[1, 0]], 1.5, epsilon = 1e-12);
 
         // NR gets 0
-        assert_relative_eq!(result[[2, 0]], 0.0, epsilon = 1e-6);
+        assert_relative_eq!(result[[2, 0]], 0.0, epsilon = 1e-12);
 
         // IN keeps weight
-        assert_relative_eq!(result[[3, 0]], 1.0, epsilon = 1e-6);
+        assert_relative_eq!(result[[3, 0]], 1.0, epsilon = 1e-12);
     }
 
     #[test]
@@ -227,11 +227,11 @@ mod tests {
             adjust_nr_impl(wgts.view(), adj_class.view(), resp_status.view(), false).unwrap();
 
         // Class 0: RR gets (2+1)/2 = 1.5x
-        assert_relative_eq!(result[[0, 0]], 1.5, epsilon = 1e-6);
-        assert_relative_eq!(result[[1, 0]], 1.5, epsilon = 1e-6);
+        assert_relative_eq!(result[[0, 0]], 1.5, epsilon = 1e-12);
+        assert_relative_eq!(result[[1, 0]], 1.5, epsilon = 1e-12);
 
         // Class 1: RR gets (2+4)/2 = 3.0x
-        assert_relative_eq!(result[[3, 0]], 6.0, epsilon = 1e-6);
+        assert_relative_eq!(result[[3, 0]], 6.0, epsilon = 1e-12);
     }
 
     #[test]

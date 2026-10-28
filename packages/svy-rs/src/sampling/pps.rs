@@ -781,7 +781,10 @@ mod tests {
             let frame = vec![1, 2, 3, 4];
             let mos = vec![5.0, 5.0, 0.0, 0.0];
             let res = select_pps(&frame, PpsN::Scalar(3), &mos, None, method, 1.0, 1);
-            assert!(res.is_err(), "{method:?}: expected error, got {res:?}");
+            assert!(
+                matches!(&res, Err(SamplingError::InvalidInput(m)) if m.contains("positive measure of size")),
+                "{method:?}: got {res:?}"
+            );
         }
     }
 
@@ -790,7 +793,10 @@ mod tests {
         let frame = vec![1, 2, 3];
         let mos = vec![1.0, f64::NAN, 1.0];
         let res = select_pps(&frame, PpsN::Scalar(2), &mos, None, PpsMethod::Sys, 1.0, 0);
-        assert!(res.is_err());
+        assert!(
+            matches!(&res, Err(SamplingError::InvalidInput(m)) if m.contains("must be finite")),
+            "got {res:?}"
+        );
     }
 
     #[test]
@@ -798,7 +804,10 @@ mod tests {
         let frame = vec![1, 2, 3];
         let mos = vec![1.0];
         let res = select_pps(&frame, PpsN::Scalar(2), &mos, None, PpsMethod::Sys, 1.0, 0);
-        assert!(res.is_err());
+        assert!(
+            matches!(&res, Err(SamplingError::InvalidInput(m)) if m.contains("mos length (1)")),
+            "got {res:?}"
+        );
     }
 
     #[test]
@@ -815,7 +824,10 @@ mod tests {
             1.0,
             0,
         );
-        assert!(res.is_err());
+        assert!(
+            matches!(&res, Err(SamplingError::InvalidInput(m)) if m.contains("stratum length (4)")),
+            "got {res:?}"
+        );
     }
 }
 
@@ -837,7 +849,10 @@ mod sampford_tests {
             1,
         )
         .unwrap_err();
-        assert!(err.to_string().contains("exactly 2"), "got: {err}");
+        assert!(
+            matches!(&err, SamplingError::InvalidInput(m) if m.contains("exactly 2")),
+            "got {err:?}"
+        );
         let (sel, ..) = select_pps(
             &frame,
             PpsN::Scalar(2),
@@ -869,19 +884,28 @@ mod sampford_tests {
 
     #[test]
     fn sampford_degenerate_np_close_to_1_errors() {
-        // n*p ~ 1 for the largest unit but below the certainty threshold:
-        // acceptance collapses; must error, not fall back to a shuffle.
-        let frame = vec![1, 2, 3, 4];
-        let mos = vec![0.499, 0.167, 0.167, 0.167];
-        let result = select_pps(&frame, PpsN::Scalar(2), &mos, None, PpsMethod::Rs, 1.0, 5);
-        if let Err(e) = result {
-            let msg = e.to_string();
+        // n = 3 and n*p = 1 - 1e-9 for the first unit, just under the certainty
+        // threshold: lambda puts all but ~4e-9 on it, so two distinct lambda
+        // draws have probability ~1e-8 per attempt and all 1000 attempts fail.
+        // It must error, not fall back to a shuffle.
+        let frame = vec![1, 2, 3, 4, 5];
+        let small = 0.5 + 0.25e-9;
+        let mos = vec![1.0 - 1e-9, small, small, small, small];
+        for seed in 0..5 {
+            let res = select_pps(
+                &frame,
+                PpsN::Scalar(3),
+                &mos,
+                None,
+                PpsMethod::Rs,
+                1.0,
+                seed,
+            );
             assert!(
-                msg.contains("Sampford") || msg.contains("n*p"),
-                "unexpected error: {msg}"
+                matches!(&res, Err(SamplingError::InvalidInput(m)) if m.contains("did not accept")),
+                "seed {seed}: got {res:?}"
             );
         }
-        // (If it succeeds the sample was legitimately accepted — also fine.)
     }
 
     /// Empirical inclusion probabilities over many replicates must match

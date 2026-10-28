@@ -85,11 +85,11 @@ mod tests {
 
         // Stratum 0 should sum to 10.0
         let sum_s0_r0 = result[[0, 0]] + result[[1, 0]];
-        assert_relative_eq!(sum_s0_r0, 10.0, epsilon = 1e-6);
+        assert_relative_eq!(sum_s0_r0, 10.0, epsilon = 1e-12);
 
         // Stratum 1 should sum to 20.0
         let sum_s1_r0 = result[[2, 0]] + result[[3, 0]];
-        assert_relative_eq!(sum_s1_r0, 20.0, epsilon = 1e-6);
+        assert_relative_eq!(sum_s1_r0, 20.0, epsilon = 1e-12);
     }
 
     #[test]
@@ -99,6 +99,9 @@ mod tests {
         let controls = array![10.0]; // Wrong: need 2 controls for 2 strata
 
         let result = poststratify_impl(wgt.view(), strata.view(), &controls);
-        assert!(result.is_err());
+        assert!(
+            matches!(&result, Err(WeightingError::InvalidInput(m)) if m.contains("2 strata in data but 1 controls")),
+            "got {result:?}"
+        );
     }
 }

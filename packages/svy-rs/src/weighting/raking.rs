@@ -150,8 +150,10 @@ mod tests {
         let indices = array![0, 0, 1, 1];
         let targets = array![6.0, 2.0];
         let result = rake_impl(wgt.view(), &[indices], &[targets], None, None, 1e-6, 100).unwrap();
-        assert_relative_eq!(result[[0, 0]] + result[[1, 0]], 6.0, epsilon = 1e-6);
-        assert_relative_eq!(result[[2, 0]] + result[[3, 0]], 2.0, epsilon = 1e-6);
+        // Column 0 is split 6 / 2 across the two categories.
+        assert_eq!(result.column(0).to_vec(), [3.0, 3.0, 1.0, 1.0]);
+        assert_relative_eq!(result[[0, 1]] + result[[1, 1]], 6.0, epsilon = 1e-12);
+        assert_relative_eq!(result[[2, 1]] + result[[3, 1]], 2.0, epsilon = 1e-12);
     }
 
     #[test]
@@ -167,7 +169,12 @@ mod tests {
             100,
         )
         .unwrap();
-        assert_relative_eq!(result.sum(), 30.0, epsilon = 1e-6);
+        // Independent margins converge in one pass to the product
+        // row_total * col_total / 30, e.g. 10 * 12 / 30 = 4.
+        let expected = [4.0, 6.0, 8.0, 12.0];
+        for (got, want) in result.column(0).iter().zip(expected) {
+            assert_relative_eq!(*got, want, epsilon = 1e-12);
+        }
     }
 
     #[test]
@@ -197,7 +204,10 @@ mod tests {
             1e-6,
             100,
         );
-        assert!(result.is_err());
+        assert!(
+            matches!(&result, Err(WeightingError::InvalidInput(m)) if m.contains("must be non-negative")),
+            "got {result:?}"
+        );
     }
 
     #[test]
@@ -212,7 +222,16 @@ mod tests {
             1e-6,
             100,
         );
-        assert!(result.is_err());
+        assert!(
+            matches!(
+                &result,
+                Err(WeightingError::DimensionMismatch {
+                    expected: 3,
+                    got: 1
+                })
+            ),
+            "got {result:?}"
+        );
     }
 
     #[test]
@@ -227,6 +246,12 @@ mod tests {
             1e-6,
             100,
         );
-        assert!(result.is_err());
+        assert!(
+            matches!(
+                &result,
+                Err(WeightingError::BoundsExceeded { converged: true })
+            ),
+            "got {result:?}"
+        );
     }
 }

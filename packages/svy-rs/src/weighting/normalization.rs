@@ -193,8 +193,8 @@ mod tests {
         let sum_col0: f64 = result.column(0).sum();
         let sum_col1: f64 = result.column(1).sum();
 
-        assert_relative_eq!(sum_col0, 3.0, epsilon = 1e-6);
-        assert_relative_eq!(sum_col1, 3.0, epsilon = 1e-6);
+        assert_relative_eq!(sum_col0, 3.0, epsilon = 1e-12);
+        assert_relative_eq!(sum_col1, 3.0, epsilon = 1e-12);
     }
 
     #[test]
@@ -207,11 +207,11 @@ mod tests {
 
         // Group 0: sum should be 2.0
         let sum_g0 = result[[0, 0]] + result[[1, 0]];
-        assert_relative_eq!(sum_g0, 2.0, epsilon = 1e-6);
+        assert_relative_eq!(sum_g0, 2.0, epsilon = 1e-12);
 
         // Group 1: sum should be 2.0
         let sum_g1 = result[[2, 0]] + result[[3, 0]];
-        assert_relative_eq!(sum_g1, 2.0, epsilon = 1e-6);
+        assert_relative_eq!(sum_g1, 2.0, epsilon = 1e-12);
     }
 
     #[test]
@@ -224,9 +224,9 @@ mod tests {
 
         // Group 0: sum should be 10.0
         let sum_g0 = result[[0, 0]] + result[[1, 0]];
-        assert_relative_eq!(sum_g0, 10.0, epsilon = 1e-6);
+        assert_relative_eq!(sum_g0, 10.0, epsilon = 1e-12);
 
         // Group 1: sum should be 5.0
-        assert_relative_eq!(result[[2, 0]], 5.0, epsilon = 1e-6);
+        assert_relative_eq!(result[[2, 0]], 5.0, epsilon = 1e-12);
     }
 }
